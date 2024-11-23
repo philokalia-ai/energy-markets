@@ -1,11 +1,11 @@
 
 
 # Load required packages
-using CSV, DataFrames, JuMP, GLPK
+using CSV, DataFrames, JuMP, Gurobi #, GLPK
 
 
 # Set .csv files' directory
-csv_directory = ".//"
+csv_directory = pwd() * "/mpm-lab/"
 
 # Load .csv files
 generating_units = DataFrame(CSV.File(csv_directory * "generating_units.csv"))
@@ -44,7 +44,9 @@ Pmax_g      = Dict{String, Float64}(generating_units[g, "generating_unit"] => ge
 Pmin_g      = Dict{String, Float64}(generating_units[g, "generating_unit"] => generating_units[g, "p_min"] for g = 1 : total_units)
 
 # Define model
-m = Model(GLPK.Optimizer)
+# m = Model(GLPK.Optimizer)
+m = Model(Gurobi.Optimizer)
+
 
 
 # Define variables
