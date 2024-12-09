@@ -1,5 +1,7 @@
 using CSV, DataFrames, JuMP, HiGHS, Gurobi
-include("Orders.jl")
+include("Generators.jl")
+include("Scenario.jl")
+
 
 
 function solve_unit_commitment(
@@ -10,28 +12,49 @@ function solve_unit_commitment(
     # TODO: choose optimizer
     model = Model(HiGHS.Optimizer)
     set_silent(model)
-    N = length(units)
+    N = length(units[:, "unit"])
 
     # generation must be lower than maximum
-    @variable(model, 0 <= g[i = 1:N] <= generators[i].p_max)
+    @variable(model, 0 <= g[i = 1:N] <= units[i].p_max)
 
     # binary commitment variables 
     @variable(model, u[i = 1:N], Bin)
 
     # generation of commited units must be within limits
-    @constraint(model, [i = 1:N], g[i] <= generators[i].p_max * u[i])
-    @constraint(model, [i = 1:N], g[i] >= generators[i].p_min * u[i])
+    @constraint(model, [i = 1:N], g[i] <= units[i].p_max * u[i])
+    @constraint(model, [i = 1:N], g[i] >= units[i].p_min * u[i])
 
-    # papav, implementing block orders
-    # @expression(m, generation_cost, sum(P_gb[g,b] * q[g,b] for g in G,  b in B) )
-    # @objective(m, Min, generation_cost)
-    
+    # conventional Supply must equal Demand minus RES production
+    @constraint(model, sum(g[i] for i in 1:N) == scenario.demand - RES)
+
     @objective(
         model,
         Min,
-        # current example doesn't have costs
-        sum(generators[i].variable_cost * g[i] for i in 1:N) +
-        sum(generators[i].fixed_cost * u[i] for i in 1:N)
+        # currently random costs
+        sum(units[i].fixed_cost * u[i] for i in 1:N) + 
+        sum(units[i].variable_cost * g[i] for i in 1:N) 
     )
-    return
+
+    optimize!(model)
+    status = termination_status(model)
+    if status != OPTIMAL
+        return (status = status,)
+    end
+    @assert primal_status(model) == FEASIBLE_POINT
+    return (
+        status = status,
+        g = value.(g),
+        u = value.(u),
+        total_cost = objective_value(model),
+    )
+
 end
+
+units = get_generators(true)
+scenario = Scenario(62000.0, 1000.0)
+
+solution = solve_unit_commitment(units, scenario)
+
+println("Dispatch of Generators: ", solution.g, " MW")
+println("Commitments of Generators: ", solution.u)
+println("Total cost: \$", solution.total_cost)
