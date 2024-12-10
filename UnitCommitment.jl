@@ -15,14 +15,14 @@ function solve_unit_commitment(
     N = length(units[:, "unit"])
 
     # generation must be lower than maximum
-    @variable(model, 0 <= g[i = 1:N] <= units[i].p_max)
+    @variable(model, 0 <= g[i = 1:N] <= units.p_max[i])
 
     # binary commitment variables 
     @variable(model, u[i = 1:N], Bin)
 
     # generation of commited units must be within limits
-    @constraint(model, [i = 1:N], g[i] <= units[i].p_max * u[i])
-    @constraint(model, [i = 1:N], g[i] >= units[i].p_min * u[i])
+    @constraint(model, [i = 1:N], g[i] <= units.p_max[i] * u[i])
+    @constraint(model, [i = 1:N], g[i] >= units.p_min[i] * u[i])
 
     # conventional Supply must equal Demand minus RES production
     @constraint(model, sum(g[i] for i in 1:N) == scenario.demand - RES)
@@ -31,8 +31,8 @@ function solve_unit_commitment(
         model,
         Min,
         # currently random costs
-        sum(units[i].fixed_cost * u[i] for i in 1:N) + 
-        sum(units[i].variable_cost * g[i] for i in 1:N) 
+        sum(units.fixed_cost[i] * u[i] for i in 1:N) + 
+        sum(units.variable_cost[i] * g[i] for i in 1:N) 
     )
 
     optimize!(model)
