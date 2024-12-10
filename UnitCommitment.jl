@@ -25,7 +25,7 @@ function solve_unit_commitment(
     @constraint(model, [i = 1:N], g[i] >= units.p_min[i] * u[i])
 
     # conventional Supply must equal Demand minus RES production
-    @constraint(model, sum(g[i] for i in 1:N) == scenario.demand - RES)
+    @constraint(model, sum(g[i] for i in 1:N) == scenario.demand - scenario.RES)
 
     @objective(
         model,
