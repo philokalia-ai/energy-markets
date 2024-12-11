@@ -13,21 +13,30 @@ function solve_unit_commitment(
     model = Model(HiGHS.Optimizer)
     set_silent(model)
 
+    # TODO: initial coditions
+
     N = length(units[:, "unit"])
     T = length(scenario.demand) # TBD
 
     # generation must be lower than maximum
     @variable(model, 0 <= g[i = 1:N, t = 1:T] <= units.p_max[i])
 
-    # binary commitment variables 
+    # binary commitment variable 
     @variable(model, u[i = 1:N, t = 1:T], Bin)
 
-    # binary startup variable
-    #@variable(model, v[i = 1:N, t = 1:T], Bin)
+    # binary startup & shutdown variables
+    @variable(model, v[i = 1:N, t = 1:T], Bin)
+    @variable(model, z[i = 1:N, t = 1:T], Bin)
 
-    # generation of commited units must be within limits
+    # generation of commited units must be within limits at all times
     @constraint(model, [i = 1:N, t = 1:T], g[i, t] <= units.p_max[i] * u[i,t])
     @constraint(model, [i = 1:N, t = 1:T], g[i, t] >= units.p_min[i] * u[i,t])
+
+    # link commitment, startup, and shutdown
+    @constraint(model, [i in 1:N, t in 2:T], u[i, t] = u[i, t-1] + v[i, t] - z[i, t])
+
+    # startup & shutdown can't happen simultaneously (TODO: Ask prof)
+    @constraint(model, [i = 1:N, t = 1:T], v[i, t] + z[i, t] <= 1)
 
     # conventional Supply must equal Demand minus RES production at all times
     @constraint(model, [t in 1:T], sum(g[i, t] for i in 1:N) == scenario.demand[t] - scenario.RES)
