@@ -26,11 +26,11 @@ function solve_unit_commitment(
     #@variable(model, v[i = 1:N, t = 1:T], Bin)
 
     # generation of commited units must be within limits
-    @constraint(model, [i = 1:N, t = 1:T], g[i, t] <= units.p_max[i, t] * u[i,t])
-    @constraint(model, [i = 1:N, t = 1:T], g[i, t] >= units.p_min[i, t] * u[i,t])
+    @constraint(model, [i = 1:N, t = 1:T], g[i, t] <= units.p_max[i] * u[i,t])
+    @constraint(model, [i = 1:N, t = 1:T], g[i, t] >= units.p_min[i] * u[i,t])
 
-    # conventional Supply must equal Demand minus RES production
-    @constraint(model, sum(g[i, t] for i in 1:N, t in 1:T) == scenario.demand[t] - scenario.RES)
+    # conventional Supply must equal Demand minus RES production at all times
+    @constraint(model, [t in 1:T], sum(g[i, t] for i in 1:N) == scenario.demand[t] - scenario.RES)
 
     @objective(
         model,
