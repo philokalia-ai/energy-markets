@@ -44,7 +44,11 @@ function solve_unit_commitment(
 
     # minimum uptime
     @constraint(model, [i = 1:N, t = UT:T], 
-        u[i, τ] >= sum(v[i, τ] for τ in t:t-(UT+1)))
+        u[i, τ] >= sum(v[i, τ] for τ in t-UT+1:t))
+
+    # minimum downtime
+    @constraint(model, [i = 1:N, t = UT:T], 
+        u[i, τ] <= 1 - sum(z[i, τ] for τ in t-UT+1:t))
 
     # conventional Supply must equal Demand minus RES production at all times
     @constraint(model, [t in 1:T], sum(g[i, t] for i in 1:N) == scenario.demand[t] - scenario.RES)
