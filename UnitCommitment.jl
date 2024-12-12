@@ -17,6 +17,10 @@ function solve_unit_commitment(
 
     N = length(units[:, "unit"])
     T = length(scenario.demand) # TBD
+    
+    # uptime & downtime
+    UT = 2 
+    DT = 4
 
     # generation must be lower than maximum
     @variable(model, 0 <= g[i = 1:N, t = 1:T] <= units.p_max[i])
@@ -37,6 +41,10 @@ function solve_unit_commitment(
 
     # startup & shutdown can't happen simultaneously (TODO: Ask prof)
     @constraint(model, [i = 1:N, t = 1:T], v[i, t] + z[i, t] <= 1)
+
+    # minimum uptime
+    @constraint(model, [i = 1:N, t = UT:T], 
+        u[i, τ] >= sum(v[i, τ] for τ in t:t-(UT+1)))
 
     # conventional Supply must equal Demand minus RES production at all times
     @constraint(model, [t in 1:T], sum(g[i, t] for i in 1:N) == scenario.demand[t] - scenario.RES)
