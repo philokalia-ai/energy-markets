@@ -21,8 +21,11 @@ function solve_unit_commitment(
     # uptime & downtime
     UT = 2 
     DT = 4
+    
+    # temperature stages
+    Θ = [:cold, :warm, :hot]
 
-    # generation must be lower than maximum
+    # production variable, must be lower than maximum
     @variable(model, 0 <= g[i = 1:N, t = 1:T] <= units.p_max[i])
 
     # binary commitment variable 
@@ -32,6 +35,18 @@ function solve_unit_commitment(
     @variable(model, v[i = 1:N, t = 1:T], Bin)
     @variable(model, z[i = 1:N, t = 1:T], Bin)
 
+    # binary startup at given temperature stage variable 
+    @variable(model, v_θ[i = 1:N, θ in Θ, t = 1:T], Bin)
+    
+    # binary startup profile operation variable 
+    @variable(model, u_SU[i = 1:N, t = 1:T], Bin)
+
+    # binary shutdown profile operation variable 
+    @variable(model, u_SD[i = 1:N, t = 1:T], Bin)
+
+    # binary disposable profile operation variable 
+    @variable(model, u_DISP[i = 1:N, t = 1:T], Bin)
+
     # generation of commited units must be within limits at all times
     @constraint(model, [i = 1:N, t = 1:T], g[i, t] <= units.p_max[i] * u[i,t])
     @constraint(model, [i = 1:N, t = 1:T], g[i, t] >= units.p_min[i] * u[i,t])
@@ -39,7 +54,7 @@ function solve_unit_commitment(
     # link commitment, startup, and shutdown
     @constraint(model, [i in 1:N, t in 2:T], u[i, t] = u[i, t-1] + v[i, t] - z[i, t])
 
-    # startup & shutdown can't happen simultaneously (TODO: Ask prof)
+    # startup & shutdown can't happen simultaneously
     @constraint(model, [i = 1:N, t = 1:T], v[i, t] + z[i, t] <= 1)
 
     # minimum uptime
@@ -49,6 +64,14 @@ function solve_unit_commitment(
     # minimum downtime
     @constraint(model, [i = 1:N, t = UT:T], 
         u[i, τ] <= 1 - sum(z[i, τ] for τ in t-UT+1:t))
+
+    # startup can happen only on a single given temperature stage
+    @constraint(model, [i = 1:N, θ in Θ, t = 1:T], 
+        v[i, t] = sum(v_θ[i, θ, t] for t in 1:T))
+
+    # time constraint of startup at given temperature stage, TODO: mistake in book, rewrite
+    @constraint(model, [i = 1:N, θ in Θ, t = TA:TB], 
+       v_θ[i, θ, t] <= sum(z[i, τ] for τ in t-TA+1:t-TB))
 
     # conventional Supply must equal Demand minus RES production at all times
     @constraint(model, [t in 1:T], sum(g[i, t] for i in 1:N) == scenario.demand[t] - scenario.RES)
