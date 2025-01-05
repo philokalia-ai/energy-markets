@@ -1,0 +1,8 @@
+\documentclass{standalone}
+\usepackage{pgf}
+\pgfdeclareimage[interpolate=true]{letters}{mpla-letters}
+\pgfdeclareimage[interpolate=true,width=90pt]{logo}{mpla-logo}
+\begin{document}
+\pgfuseimage{letters}
+\pgfputat{\pgfxy(-2.5,1.9)}{\pgfbox[center,base]{\pgfuseimage{logo}}}
+\end{document}

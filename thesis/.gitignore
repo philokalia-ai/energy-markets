@@ -1,0 +1,45 @@
+# Backup files etc.
+
+*~
+\#*\#
+*.bak
+*.backup
+.*.sw[a-z]
+
+# Mac OS specific
+
+.DS_Store
+
+# Windows specific
+
+Thumbs.db*
+
+# LaTeX specific
+
+*.aux
+*.bbl
+*.blg
+*.dlog
+*.dvi
+*.fdb_latexmk
+*.fls
+*.idx
+*.lof
+*.log
+*.lol
+*.lot
+*.nav
+*.out
+*.snm
+*.spl
+*.svn
+*.toc
+*.tof
+*.tpt
+*.vrb
+
+# The example PDF file
+
+/thesis.pdf
+
+/_minted-*/
