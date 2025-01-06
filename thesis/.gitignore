@@ -39,7 +39,8 @@ Thumbs.db*
 *.vrb
 
 # The example PDF file
-
-/thesis.pdf
+# Track it
+ 
+#/thesis.pdf
 
 /_minted-*/
