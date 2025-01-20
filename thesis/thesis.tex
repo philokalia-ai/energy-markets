@@ -4,6 +4,9 @@
 %%%  Add and configure the packages that you need for your thesis
 %%%
 
+\usepackage{amsmath} % For math environments and tools
+\usepackage{amssymb} % For symbols like \mathbb
+
 \usepackage{minted}
 
 % Hyperref needs to be the last package to use!
@@ -44,7 +47,7 @@
 \committeethreepos{Καθηγητής Ε.Μ.Π.}
 
 \TRnumber{CSD-SW-TR-42-17}  % number-year, ask nickie for the number
-\department{Τομέας Ηλεκτρικής Ισχύος}
+\department{Τομέας Ηλεκτρικής Ισχύος} % am I sure?
 
 \maketitle
 
@@ -75,7 +78,7 @@
   Energy Markets,
   Day Ahead Energy Market,
   EUPHEMIA Algorithm,
-  open source
+  open source,
   Julia,
   JuMP,
   HiGHS
@@ -144,6 +147,11 @@
 
 \section{Προβλήματα κυρτής βελτιστοποίησης}
 
+Τα μοντέλα βελτιστοποίησης που περιγράφουν τα μοντέλα δέσμευσης μονάδων και EUPHEMIA, 
+αποτελούν υποπεριπτώσεις προβλημάτων κυρτής βελτιστοποίησης. \\
+Έστω ένα σύνολο σημείων $\chi_i \in \mathbb{R}^n, i = 1$. Ονομάζουμε κυρτό συνδιασμό αυτών των σημείων 
+ένα σημείο
+
 \section{Δυϊκότητα}
 
 \section{Συνθήκες Karush Kuhn Tucker}
@@ -152,7 +160,7 @@
 
 \section{Δέσμευση Μονάδων}
 
-Για να κατανοήσουμε τη φιλοσοφία του ευρωπαϊκού μοντέλου και του αλγορίθμου EUPHEMIA, πρέπει πρώτα να
+Για να κατανοήσουμε τη φιλοσοφία του ευρωπαϊκού μοντέλου και του αλγορίθμου EUPHEMIA,πρέπει πρώτα να
 εξετάσουμε το πρόβλημα δέσμευσης μονάδων. Το πρόβλημα δέσμευσης μονάδων (Unit Commitment Problem)
 στα Συστήματα Ηλεκτρικής Ενέργειας είναι το πρόβλημα προγραμματισμού της κατάστασης λειτουργίας των 
 μονάδων παραγωγής, το οποίο περιλαμβάνει τους χρονικά εξαρτημένους περιορισμούς, 
