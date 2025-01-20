@@ -272,8 +272,8 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 % roman font
-\def\font@roman{Times New Roman}
-%\def\font@roman{Liberation Serif}
+%\def\font@roman{Times New Roman} % for some reason, makin title all capitals
+\def\font@roman{Liberation Serif}
 %\def\font@roman{CMU Serif}
 %\def\font@roman{DejaVu Serif}
 %\def\font@roman{FreeSerif}
@@ -288,10 +288,10 @@
 %\def\font@sans{Linux Biolinum O}
 
 % typewriter font
-%\def\font@tt{Courier New}
+\def\font@tt{Courier New}
 %\def\font@tt{Liberation Mono}
 %\def\font@tt{CMU Typewriter Text}
-\def\font@tt{DejaVu Sans Mono}
+%\def\font@tt{DejaVu Sans Mono}
 %\def\font@tt{FreeMono}
 %\def\font@tt{Lucida Sans Typewriter}
 %\def\font@tt{Bitstream Vera Sans Mono}
