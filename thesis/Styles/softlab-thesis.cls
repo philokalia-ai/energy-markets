@@ -442,6 +442,7 @@
 \def\@TRnumber{}         \def\TRnumber#1{\gdef\@TRnumber{#1}}
 \def\@trurl{}            \def\trurl#1{\gdef\@trurl{\texttt{#1}}}
 \def\@trftp{}            \def\trftp#1{\gdef\@trftp{\texttt{#1}}}
+\def\@specialacknowlgr{} \def\specialacknowlgr#1{\gdef\@specialacknowlgr{#1}}
 
 \def\new@tpage{\newpage\thispagestyle{empty}\null}
 
@@ -1500,7 +1501,16 @@
     \end{tabular}
   }
   \fi
-  \newpage%
+  \ifx\@specialacknowlgr\@empty\else
+  \cleardoublepage%
+  \begin{flushright}
+    \vspace*{\dimexpr 0.66\textheight\relax}
+    \itshape% Italicize the text
+    \noindent\ignorespaces%
+    \@specialacknowlgr
+  \end{flushright}
+  \fi
+  \newpage
   \endgroup%
   \end{greek}%
 }
