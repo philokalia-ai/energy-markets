@@ -73,6 +73,14 @@ function solve_unit_commitment(
     @constraint(model, [i = 1:N, θ in Θ, t = TA:TB], 
        v_θ[i, θ, t] <= sum(z[i, τ] for τ in t-TA+1:t-TB))
 
+    ### 
+    ### startup / shutdown production profile (ramp constraints)
+    ###
+
+    # unit can be one of three stages: startup, at dispatch or at shutdown
+    @constraint(model, [i in 1:N, t in 1:T], 
+        u[i, t] = u_SU[i, t] + u_DISP[i, t] + u_SD[i, t])
+
     # conventional Supply must equal Demand minus RES production at all times
     @constraint(model, [t in 1:T], sum(g[i, t] for i in 1:N) == scenario.demand[t] - scenario.RES)
 
