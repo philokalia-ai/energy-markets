@@ -77,9 +77,19 @@ function solve_unit_commitment(
     ### startup / shutdown production profile (ramp constraints)
     ###
 
-    # unit can be one of three stages: startup, at dispatch or at shutdown
+    # unit can be one of three stages: startup, dispatch ready or at shutdown
     @constraint(model, [i in 1:N, t in 1:T],
         u[i, t] = u_SU[i, t] + u_DISP[i, t] + u_SD[i, t])
+
+    # startup operation profile duration depending on startup temperature stage
+    @constraint(model, [i in N, t in max(T_SU[i, θ] for θ in Θ):T],
+        u_SU[i, t] == sum(sum(v[i, θ, τ] for τ in max(1, t - T_SU[i, θ] + 1):t) for θ in Θ)
+    )
+
+    # startup operation profile depending on shutdown duration. TODO: ASK PROF (p.213)
+    @constraint(model, [i in N, t in 1:T-T_SD[i, θ]+1 for θ in Θ], #TODO: Book doesn't include θ
+        u_SU[i, t] == sum(z[i, τ] for τ in t:(t:T_SD[i, θ]-1))
+    )
 
     # conventional Supply must equal Demand minus RES production at all times
     @constraint(model, [t in 1:T], sum(g[i, t] for i in 1:N) == scenario.demand[t] - scenario.RES)
