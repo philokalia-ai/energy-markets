@@ -91,6 +91,16 @@ function solve_unit_commitment(
         u_SU[i, t] == sum(z[i, τ] for τ in t:(t:T_SD[i, θ]-1))
     )
 
+    # production constraint for startup operation profile
+    @constraint(model, [i in N, t in max(T_SU[i, θ] for θ in Θ):T],
+        p_SU[i, t] == sum(sum(P_SU[i, θ, t-τ+1] * v[i, θ, τ] for τ in max(1, t - T_SU[i, θ] + 1):t) for θ in Θ)
+    )
+
+    # production constraint for shutdown operation profile
+    @constraint(model, [i in N, t in 1:T-T_SD[i, θ] for θ in Θ], #TODO: Book doesn't include θ
+        p_SD[i, t] == sum(sum(P_SD[i, t-τ+1] * z[i, τ] for τ in t+1:t+T_SD[i, Θ]) for θ in Θ)
+    )
+
     # conventional Supply must equal Demand minus RES production at all times
     @constraint(model, [t in 1:T], sum(g[i, t] for i in 1:N) == scenario.demand[t] - scenario.RES)
 
