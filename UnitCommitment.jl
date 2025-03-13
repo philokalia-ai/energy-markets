@@ -110,6 +110,15 @@ function solve_unit_commitment(
         p[i, t] <= p_SU[i, t] + p_SD[i, t] + p_max[i, t] * u_DISP[i, t]
     )
 
+    # ramp constraints considering startup & shutdown profiles (R: Ramp Constraint)
+    @constraint(model, [i in N, t in 2:T], #TODO: ask about M parameter
+        p[i, t] - p[i, t-1] <= R_max[i] + M * u_SU[i, t]
+    )
+
+    @constraint(model, [i in N, t in 2:T],
+        p[i, t-1] - p[i, t] <= R_min[i] + M * u_SD[i, t]
+    )
+
     # conventional Supply must equal Demand minus RES production at all times
     @constraint(model, [t in 1:T], sum(g[i, t] for i in 1:N) == scenario.demand[t] - scenario.RES)
 
