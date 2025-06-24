@@ -4,7 +4,7 @@ using JuMP, HiGHS, Gurobi
 export calculate_market_clearing_price, commit_units  # Core functions
 
 export MarketOrder, SimpleOrder, BlockOrder  # Order types
-export Generator, Load  # Entityies
+export Generator, Load  # Entities
 export get_generators, get_loads  # Helper functions
 
 include("MarketOrders.jl")
@@ -18,11 +18,6 @@ function calculate_market_clearing_price() end
 
 # 
 function commit_units() end
-
-struct Load
-    bidding_zone::String
-    timeslot::String
-end
 
 # Σε τι τιμή θα παράξουν τα accepted generators
 function commit_units(generators::Vector{Generator}, load::Vector{Load})

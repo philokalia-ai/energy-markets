@@ -1,4 +1,4 @@
-module Orders
+module MarketOrders
 
 export SimpleOrder, BlockOrder, LinkedBlockOrder, ExclusiveBlockOrder, FlexibleOrder,
     AggregatedPeriodicOrder, MICOrder, LoadGradientOrder, MeritOrder, PUNOrder, MarketOrder

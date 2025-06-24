@@ -4,7 +4,7 @@ struct Generator
     fuel_type::Symbol
     name::String
     bidding_zone::String
-    marginal_cost::Floa64
+    marginal_cost::Float64
 end
 
 # TODO: Make get_generators return Vector{Generator}
