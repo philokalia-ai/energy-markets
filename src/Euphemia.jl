@@ -1,8 +1,9 @@
 module Euphemia
 
 using JuMP, HiGHS, Gurobi
-export calculate_market_clearing_price, commit_units  # Core functions
+using DataFrames, CSV
 
+export calculate_market_clearing_price, commit_units  # Core functions
 export MarketOrder, SimpleOrder, BlockOrder  # Order types
 export Generator, Load  # Entities
 export get_generators, get_loads  # Helper functions
@@ -11,6 +12,7 @@ include("MarketOrders.jl")
 using .MarketOrders: MarketOrder, SimpleOrder, BlockOrder
 
 include("Generators.jl")
+include("Loads.jl")
 
 # Αυτή η συνάρτηση πρέπει να διαβάζει τα market orders
 # και να υπολογίζει το clearing price για timeslot για bidding zone

@@ -4,5 +4,5 @@ struct Load
 end
 
 function get_loads()
-    return Load("GR", "20250624-00")
+    return [Load("GR", "20250624-00")]
 end
