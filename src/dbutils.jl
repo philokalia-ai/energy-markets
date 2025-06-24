@@ -1,7 +1,7 @@
 using LibPQ
 using ConcurrentUtilities: ConcurrentUtilities, Pools
 
-const poolsize = 1000
+const poolsize = 5
 cnxpool = Pools.Pool{LibPQ.Connection}(poolsize)
 
 function cnxisok(cnx::LibPQ.Connection)
@@ -10,7 +10,7 @@ end
 
 function newconnection()
     cnx = LibPQ.Connection(
-        get(ENV, "ENERGY_CONN_STRING", "")
+        get(ENV, "ENERGY_CONN_STR", "")
     )
     !isdefined(LibPQ, :setnonblocking) && return cnx
     LibPQ.setnonblocking(cnx) && return cnx
@@ -35,3 +35,9 @@ function withdb(f)
 
     return result
 end
+
+sql2df(sql, args=[]) =
+    withdb() do cnx
+        result = LibPQ.async_execute(cnx, sql, args)
+        return DataFrame(fetch(result))
+    end

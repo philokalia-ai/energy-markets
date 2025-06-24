@@ -9,12 +9,13 @@ export MarketOrder, SimpleOrder, BlockOrder  # Order types
 export Generator, Load  # Entities
 export get_generators, get_loads  # Helper functions
 
-DotEnv.load!(".")
 
 include("dbutils.jl")
 
 function __init__()
+    DotEnv.load!(".")
     preinit_pool()
+    @info "Initialization done"
 end
 
 include("MarketOrders.jl")
