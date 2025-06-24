@@ -1,11 +1,19 @@
 name = "Euphemia"
-author = "JKG"
 uuid = "2e9cd046-0924-5485-92f1-d5272153d98c"
+author = "JKG"
 
 [deps]
 CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
+ConcurrentUtilities = "f0e56b4a-5159-44fe-b623-3e5288b988bb"
 DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
+DotEnv = "4dc1fcf4-5e3b-5448-94ab-0c38ec0385c1"
 Gurobi = "2e9cd046-0924-5485-92f1-d5272153d98b"
 HiGHS = "87dc4568-4c63-4d18-b0c0-bb2238e4078b"
 JuMP = "4076af6c-e467-56ae-b986-b466b2749572"
 JuliaFormatter = "98e50ef6-434e-11e9-1051-2b60c6c9e899"
+LibPQ = "194296ae-ab2e-5f79-8cd4-7183a0a5a0d1"
+
+[compat]
+ConcurrentUtilities = "2.5.0"
+DotEnv = "1.0.0"
+LibPQ = "1.18.0"
