@@ -7,5 +7,15 @@ loads::Vector{Load} = get_loads()
 
 orders::Vector{MarketOrder} = commit_units(generators, loads)
 
-## Do we need to add orders?
+# Do we need to add orders?
 prices = calculate_market_clearing_price(orders)
+
+println("hello")
+
+using Dates
+
+loads::Vector{Load} = get_loads("GR", Date("2025-06-24"))
+
+for load in loads
+    println(load)
+end

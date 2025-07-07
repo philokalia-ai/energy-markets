@@ -2,11 +2,23 @@ module Euphemia
 
 using JuMP, HiGHS, Gurobi
 using DataFrames, CSV
+using DotEnv
+
+using Dates
 
 export calculate_market_clearing_price, commit_units  # Core functions
 export MarketOrder, SimpleOrder, BlockOrder  # Order types
 export Generator, Load  # Entities
 export get_generators, get_loads  # Helper functions
+
+
+include("dbutils.jl")
+
+function __init__()
+    DotEnv.load!(".")
+    preinit_pool()
+    @info "Initialization done"
+end
 
 include("MarketOrders.jl")
 using .MarketOrders: MarketOrder, SimpleOrder, BlockOrder
