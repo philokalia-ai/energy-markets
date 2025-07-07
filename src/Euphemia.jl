@@ -4,6 +4,8 @@ using JuMP, HiGHS, Gurobi
 using DataFrames, CSV
 using DotEnv
 
+using Dates
+
 export calculate_market_clearing_price, commit_units  # Core functions
 export MarketOrder, SimpleOrder, BlockOrder  # Order types
 export Generator, Load  # Entities
