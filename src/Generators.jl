@@ -59,4 +59,11 @@ function get_generators(day::Dates.Date)
         AND date(valid_from) <= '$day'
         AND date(valid_to) >= '$day'
     """
+
+    df = Euphemia.sql2df(query)
+    return [
+        Generator(
+        # Stuff
+        ) for row in eachrow(df)
+    ]
 end
