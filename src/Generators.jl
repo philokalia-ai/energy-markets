@@ -85,7 +85,7 @@ function get_generators(day::Dates.Date)
             BETWEEN DATE(valid_from) 
             AND COALESCE(
                     DATE(valid_to), 
-                    DATE('9999-12-31')
+                    DATE('$day') + INTERVAL '1 year'
                 )
 
     """
