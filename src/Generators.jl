@@ -49,15 +49,45 @@ end
 
 # pull from postgres, for now only active units of given date (I think)
 function get_generators(day::Dates.Date)
+    # TODO: fetch all for now, will choose to keep what needed later 
     query = """
     SELECT
-        *
+        valid_from,
+        valid_to,
+        production_unit_code,
+        production_unit_name,
+        production_unit_status,
+        production_unit_type,
+        production_unit_location,
+        production_unit_installed_capacity_mw,
+        production_unit_voltage_kv,
+        area_code,
+        area_display_name,
+        area_type_code,
+        map_code,
+        generation_unit_code,
+        generation_unit_name,
+        generation_unit_status,
+        generation_unit_type,
+        generation_unit_location,
+        generation_unit_installed_capacity_mw,
+        update_time_utc,
+        source
+
     FROM 
         entsoe.production_and_generation_units
     WHERE 
-        status = 'COMMISSIONED' -- Not sure about this
-        AND date(valid_from) <= '$day'
-        AND date(valid_to) >= '$day'
+        production_unit_status = 'COMMISSIONED'
+        AND generation_unit_status = 'COMMISSIONED'
+        AND area_type_code = 'BZN'
+        AND map_code = 'GR'
+        AND DATE('$day') 
+            BETWEEN DATE(valid_from) 
+            AND COALESCE(
+                    DATE(valid_to), 
+                    DATE('9999-12-31')
+                )
+
     """
 
     df = Euphemia.sql2df(query)
