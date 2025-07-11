@@ -46,3 +46,17 @@ function get_generators(source::Bool=false)
 
     return generators
 end
+
+# pull from postgres, for now only active units of given date (I think)
+function get_generators(day::Dates.Date)
+    query = """
+    SELECT
+        *
+    FROM 
+        entsoe.production_and_generation_units
+    WHERE 
+        status = 'COMMISSIONED' -- Not sure about this
+        AND date(valid_from) <= '$day'
+        AND date(valid_to) >= '$day'
+    """
+end
