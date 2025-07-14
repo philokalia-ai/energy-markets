@@ -110,19 +110,20 @@ function get_generators(day::Dates.Date)
     df = Euphemia.sql2df(query)
     return [
         Generator(
-            row.generation_unit_code,
-            row.generation_unit_name,
-            row.generation_unit_type,
-            row.generation_unit_location,
-            row.generation_unit_installed_capacity_mw,
-            get_min_active_capacity(row.generation_unit_installed_capacity_mw),
-            bidding_zone,
+            row.generation_unit_code,                    # code
+            row.generation_unit_name,                    # name
+            Symbol(row.generation_unit_type),            # fuel_type (convert to Symbol)
+            row.generation_unit_location,                # location
+            Float64(row.generation_unit_installed_capacity_mw), # p_max
+            get_min_active_capacity(
+                Float64(row.generation_unit_installed_capacity_mw)
+            ), # p_min
+            bidding_zone,                                # bidding_zone
             get_marginal_cost(
                 day, 
-                row.generation_unit_type,  # Assuming fuel_type is derived from production_unit_type
-                bidding_zone
-            )  # Placeholder for marginal cost, replace with actual logic
-            # what about individual generators?
+                row.generation_unit_type,  
+                row.area_display_name
+            )                                           # marginal_cost
         ) for row in eachrow(df)
     ]
 end

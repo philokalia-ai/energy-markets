@@ -20,7 +20,9 @@ for load in loads
     println(load)
 end
 
-generators::Vector{Generator} = get_generators(Date("2025-06-24"))
+generators::Vector{Generator} = get_generators(Date("2018-06-24"))
+
+println("Number of generators: ", length(generators))
 
 for generator in generators
     println(generator)
