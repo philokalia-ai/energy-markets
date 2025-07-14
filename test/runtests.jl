@@ -19,3 +19,11 @@ loads::Vector{Load} = get_loads("GR", Date("2025-06-24"))
 for load in loads
     println(load)
 end
+
+generators::Vector{Generator} = get_generators(Date("2018-06-24"))
+
+println("Number of generators: ", length(generators))
+
+for generator in generators
+    println(generator)
+end
