@@ -1,6 +1,8 @@
 struct Generator
+    code::String
     name::String
     fuel_type::Symbol
+    location::String
     p_max::Float64
     p_min::Float64
     bidding_zone::String
@@ -36,8 +38,10 @@ function get_generators(source::Bool=false)
 
     generators = [
         Generator(
+            DUMMY_CODE,                    # Placeholder for code
             row.generating_unit,           # Maps to 'name'
             DUMMY_FUEL_TYPE,               # Dummy value for fuel_type
+            DUMMY_LOCATION,                # Dummy value for location
             Float64(row.p_max),            # Convert Int64 to Float64 for p_max
             Float64(row.p_min),            # Convert Int64 to Float64 for p_min
             DUMMY_BIDDING_ZONE,            # Dummy value for bidding_zone
@@ -93,7 +97,15 @@ function get_generators(day::Dates.Date)
     df = Euphemia.sql2df(query)
     return [
         Generator(
-        # Stuff
+            row.produciton_unit_code,
+            row.production_unit_name,
+            row.production_unit_type,
+            row.production_unit_location,
+            row.production_unit_installed_capacity_mw,
+            pmin = row.production_unit_installed_capacity_mw * 0.1,  # Assuming 10% as p_min
+            bidding_zone,
+            marginal_cost = 999.9  # Placeholder for marginal cost
+            # what about individual generators?
         ) for row in eachrow(df)
     ]
 end
