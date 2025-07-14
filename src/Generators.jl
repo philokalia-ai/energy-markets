@@ -51,6 +51,17 @@ function get_generators(source::Bool=false)
     return generators
 end
 
+function get_min_active_capacity(max_capacity::Float64)
+    return 0.1 * max_capacity  # Example: 10% of max capacity
+end
+
+
+function get_marginal_cost(day::Dates.Date, fuel_type::String, bidding_zone::String = "GR")
+    # Placeholder function to fetch marginal costs
+    # This should be implemented based on your data source
+    return 50.0  # Example fixed value, replace with actual logic
+end
+
 # pull from postgres, for now only active units of given date (I think)
 function get_generators(day::Dates.Date)
     # TODO: fetch all for now, will choose to keep what needed later 
@@ -97,14 +108,18 @@ function get_generators(day::Dates.Date)
     df = Euphemia.sql2df(query)
     return [
         Generator(
-            row.produciton_unit_code,
-            row.production_unit_name,
-            row.production_unit_type,
-            row.production_unit_location,
-            row.production_unit_installed_capacity_mw,
-            pmin = row.production_unit_installed_capacity_mw * 0.1,  # Assuming 10% as p_min
+            row.generation_unit_code,
+            row.generation_unit_name,
+            row.generation_unit_type,
+            row.generation_unit_location,
+            row.generation_unit_installed_capacity_mw,
+            get_min_active_capacity(row.generation_unit_installed_capacity_mw),
             bidding_zone,
-            marginal_cost = 999.9  # Placeholder for marginal cost
+            get_marginal_cost(
+                day, 
+                row.generation_unit_type,  # Assuming fuel_type is derived from production_unit_type
+                bidding_zone
+            )  # Placeholder for marginal cost, replace with actual logic
             # what about individual generators?
         ) for row in eachrow(df)
     ]
