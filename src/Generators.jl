@@ -10,6 +10,8 @@ struct Generator
 end
 
 # Define your dummy values
+const DUMMY_CODE = "GEN-0000"
+const DUMMY_LOCATION = "Unknown Location"  # Placeholder for location
 const DUMMY_FUEL_TYPE = :UNKNOWN # Or :THERMAL, :RENEWABLE, etc. based on context
 const DUMMY_BIDDING_ZONE = "GR_DEFAULT"
 const DUMMY_MARGINAL_COST = 999.9 # A clearly identifiable dummy value
