@@ -96,7 +96,7 @@ function get_generators(day::Dates.Date)
     WHERE 
         production_unit_status = 'COMMISSIONED'
         AND generation_unit_status = 'COMMISSIONED'
-        AND area_type_code = 'BZN'
+        AND area_type_code IN  ('BZN', 'BZN/CTA')
         AND map_code = 'GR'
         AND DATE('$day') 
             BETWEEN DATE(valid_from) 
@@ -118,7 +118,7 @@ function get_generators(day::Dates.Date)
             get_min_active_capacity(
                 Float64(row.generation_unit_installed_capacity_mw)
             ), # p_min
-            bidding_zone,                                # bidding_zone
+            row.map_code,                                # bidding_zone
             get_marginal_cost(
                 day, 
                 row.generation_unit_type,  
