@@ -27,3 +27,12 @@ println("Number of generators: ", length(generators))
 for generator in generators
     println(generator)
 end
+
+renewables_generation::Vector{RenewablesGenerationForecast} = 
+    get_generation_forecast_for_wind_and_solar("BE", Date("2014-12-03"))
+
+println("Number of renewables generation forecasts: ", length(renewables_generation))
+
+for renewable in renewables_generation
+    println(renewable)
+end

@@ -8,8 +8,8 @@ using Dates
 
 export calculate_market_clearing_price, commit_units  # Core functions
 export MarketOrder, SimpleOrder, BlockOrder  # Order types
-export Generator, Load  # Entities
-export get_generators, get_loads  # Helper functions
+export Generator, Load, RenewablesGenerationForecast  # Entities
+export get_generators, get_loads, get_generation_forecast_for_wind_and_solar  # Helper functions
 
 
 include("dbutils.jl")
@@ -25,6 +25,7 @@ using .MarketOrders: MarketOrder, SimpleOrder, BlockOrder
 
 include("Generators.jl")
 include("Loads.jl")
+include("Renewables.jl")
 
 # Αυτή η συνάρτηση πρέπει να διαβάζει τα market orders
 # και να υπολογίζει το clearing price για timeslot για bidding zone
