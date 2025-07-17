@@ -112,6 +112,25 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date)
     # binary disposable profile operation variable 
     @variable(model, u_DISP[i=1:N, t=1:T], Bin)
 
+    # startup and shutdown production profile variables
+    @variable(model, g_SU[i=1:N, t=1:T] >= 0)  # startup generation profile
+    @variable(model, g_SD[i=1:N, t=1:T] >= 0)  # shutdown generation profile
+    
+    # Startup/shutdown time parameters (simplified for now)
+    T_SU = Dict{Tuple{Int, Symbol}, Int}()  # startup time by generator and temperature
+    T_SD = Dict{Tuple{Int, Symbol}, Int}()  # shutdown time by generator and temperature
+    
+    # Initialize with default values (1 period for now)
+    for i in 1:N, θ in Θ
+        T_SU[(i, θ)] = 1  # Default 1 period startup time
+        T_SD[(i, θ)] = 1  # Default 1 period shutdown time
+    end
+    
+    # Ramp rate parameters (30% of capacity per period as default)
+    ramp_up = [0.3 * generators[i].p_max for i in 1:N]  # ramp up rate
+    ramp_down = [0.3 * generators[i].p_max for i in 1:N]  # ramp down rate
+    M = 10000.0  # Big M parameter
+
     # ==== Model Constraints ====
 
     # generation of commited units must be within limits at all times
@@ -179,21 +198,21 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date)
 
     # production constraints for dispatch ready operation profile
     @constraint(model, [i in N, t in 1:T],
-        g[i, t] >= p_SU[i, t] + p_SD[i, t] + p_min[i, t] * u_DISP[i, t]
+        g[i, t] >= g_SU[i, t] + g_SD[i, t] + generators[i].p_min * u_DISP[i, t]
     )
 
     @constraint(model, [i in N, t in 1:T],
-        g[i, t] <= p_SU[i, t] + p_SD[i, t] + p_max[i, t] * u_DISP[i, t]
+        g[i, t] <= g_SU[i, t] + g_SD[i, t] + generators[i].p_max * u_DISP[i, t]
     )
 
     # ramp constraints considering startup & shutdown profiles (R: Ramp Constraint)
     # TODO: Add proper ramp rate parameters to Generator struct
     @constraint(model, [i in N, t in 2:T], #TODO: ask about M parameter
-        g[i, t] - g[i, t-1] <= R_max[i] + M * u_SU[i, t]
+        g[i, t] - g[i, t-1] <= ramp_up[i] + M * u_SU[i, t]
     )
 
     @constraint(model, [i in N, t in 2:T],
-        g[i, t-1] - g[i, t] <= R_min[i] + M * u_SD[i, t]
+        g[i, t-1] - g[i, t] <= ramp_down[i] + M * u_SD[i, t]
     )
 
     # Supply must equal net Demand (demand minus RES production) at all times
