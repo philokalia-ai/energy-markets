@@ -35,7 +35,8 @@ function get_generation_forecast_for_wind_and_solar(bidding_zone::String, day::D
     df = Euphemia.sql2df(query)
     return [
         RenewablesGenerationForecast(
-            Dates.format(row.date_time, "yyyymmdd-HH"),  # e.g. "20250624-00"
+            # Format datetime to match load data - include minutes for sub-hourly data
+            Dates.format(row.date_time, "yyyymmdd-HHMM"),  # e.g. "20250624-0030" for 30-min resolution
             row.resolution_code,
             row.map_code,
             row.production_type,  # convert to Symbol

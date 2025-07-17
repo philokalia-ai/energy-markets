@@ -23,12 +23,42 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date)
         error("No load data found for $bidding_zone on $day")
     end
     
+    # Validate resolution consistency
+    if !isempty(loads) && !isempty(renewables)
+        load_resolution = loads[1].resolution_code
+        renewable_resolutions = unique([r.resolution_code for r in renewables])
+        
+        if length(renewable_resolutions) > 1
+            @warn "Multiple resolution codes found in renewables data: $renewable_resolutions"
+        end
+        
+        if !isempty(renewable_resolutions) && renewable_resolutions[1] != load_resolution
+            @warn "Resolution mismatch: Loads ($load_resolution min) vs Renewables ($(renewable_resolutions[1]) min)"
+        end
+        
+        println("Using resolution: $load_resolution minutes")
+    end
+    
     # Create time mapping from loads (assuming loads define our time periods)
     time_slots = [load.timeslot for load in loads]
     T = length(time_slots)
     N = length(generators)
     
     println("Planning for $T time periods with $N generators")
+    
+    # Validate time slot consistency
+    if !isempty(renewables)
+        renewable_time_slots = unique([r.date_time for r in renewables])
+        missing_in_renewables = setdiff(time_slots, renewable_time_slots)
+        extra_in_renewables = setdiff(renewable_time_slots, time_slots)
+        
+        if !isempty(missing_in_renewables)
+            @warn "Missing renewable data for time slots: $missing_in_renewables"
+        end
+        if !isempty(extra_in_renewables)
+            @warn "Extra renewable data for time slots not in load data: $extra_in_renewables"
+        end
+    end
     
     # Create renewable generation lookup by timeslot
     renewable_by_time = Dict{String, Float64}()
@@ -58,6 +88,8 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date)
     # temperature stages
     Θ = [:cold, :warm, :hot]
 
+    # ==== Model Variables ====
+
     # production variable, must be lower than maximum
     @variable(model, 0 <= g[i=1:N, t=1:T] <= generators[i].p_max)
 
@@ -79,6 +111,8 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date)
 
     # binary disposable profile operation variable 
     @variable(model, u_DISP[i=1:N, t=1:T], Bin)
+
+    # ==== Model Constraints ====
 
     # generation of commited units must be within limits at all times
     @constraint(model, [i = 1:N, t = 1:T], g[i, t] <= generators[i].p_max * u[i, t])
@@ -132,33 +166,34 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date)
 
     # production constraint for startup operation profile
     @constraint(model, [i in N, t in max(T_SU[i, θ] for θ in Θ):T],
-        p_SU[i, t] == sum(sum(P_SU[i, θ, t-τ+1] * v[i, θ, τ] for τ in max(1, t - T_SU[i, θ] + 1):t) for θ in Θ)
+        g_SU[i, t] == sum(sum(P_SU[i, θ, t-τ+1] * v[i, θ, τ] for τ in max(1, t - T_SU[i, θ] + 1):t) for θ in Θ)
     )
 
     # TODO: Doesn't work. replace p_max with something from generators
     # production constraint for shutdown operation profile
-    @constraint(model, [i in N, t in 1:T-T_SD[i, θ] for θ in Θ], #TODO: Book doesn't include θ
+    @constraint(model, [i in N, t in 1:T-T_SD[i, θ] for θ in Θ], 
+    #TODO: Book doesn't include θ
         p_SD[i, t] == sum(
             sum(P_SD[i, t-τ+1] * z[i, τ] for τ in t+1:t+T_SD[i, θ]) for θ in Θ)
     )
 
     # production constraints for dispatch ready operation profile
     @constraint(model, [i in N, t in 1:T],
-        p[i, t] >= p_SU[i, t] + p_SD[i, t] + p_min[i, t] * u_DISP[i, t]
+        g[i, t] >= p_SU[i, t] + p_SD[i, t] + p_min[i, t] * u_DISP[i, t]
     )
 
     @constraint(model, [i in N, t in 1:T],
-        p[i, t] <= p_SU[i, t] + p_SD[i, t] + p_max[i, t] * u_DISP[i, t]
+        g[i, t] <= p_SU[i, t] + p_SD[i, t] + p_max[i, t] * u_DISP[i, t]
     )
 
     # ramp constraints considering startup & shutdown profiles (R: Ramp Constraint)
     # TODO: Add proper ramp rate parameters to Generator struct
     @constraint(model, [i in N, t in 2:T], #TODO: ask about M parameter
-        p[i, t] - p[i, t-1] <= R_max[i] + M * u_SU[i, t]
+        g[i, t] - g[i, t-1] <= R_max[i] + M * u_SU[i, t]
     )
 
     @constraint(model, [i in N, t in 2:T],
-        p[i, t-1] - p[i, t] <= R_min[i] + M * u_SD[i, t]
+        g[i, t-1] - g[i, t] <= R_min[i] + M * u_SD[i, t]
     )
 
     # Supply must equal net Demand (demand minus RES production) at all times
