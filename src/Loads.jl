@@ -27,7 +27,7 @@ function get_loads(bidding_zone::String, day::Dates.Date)
     df = Euphemia.sql2df(query)
     return [
         Load(
-            Dates.format(row.date_time, "yyyymmdd-HH"),  # e.g. "20250624-00"
+            Dates.format(row.date_time, "yyyymmdd-HHMM"),  # e.g. "20250624-0030" for 30-min resolution
             row.resolution_code,
             bidding_zone,
             row.total_load_value
