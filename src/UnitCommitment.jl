@@ -125,6 +125,37 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date)
         T_SD[i] = 1  # Default 1 period shutdown time
     end
 
+    # Startup production profile parameters - power output during startup phase
+    P_SU = Dict{Tuple{Int,Symbol,Int},Float64}()  # startup production profile P_SU[i, θ, t]
+
+    # Initialize startup production profiles (ramping from 0 to p_min over startup time)
+    for i in 1:N, θ in Θ
+        startup_time = T_SU[(i, θ)]
+        for t_su in 1:startup_time
+            # Linear ramp from 0 to p_min over startup time
+            P_SU[(i, θ, t_su)] = generators[i].p_min * (t_su / startup_time)
+        end
+    end
+
+    # Shutdown production profile parameters - power output during shutdown phase  
+    P_SD = Dict{Tuple{Int,Int},Float64}()  # shutdown production profile P_SD[i, t]
+
+    # Initialize shutdown production profiles (ramping from p_min to 0 over shutdown time)
+    for i in 1:N
+        shutdown_time = T_SD[i]
+        # Ensure we have enough entries for the maximum possible index
+        max_shutdown_periods = max(shutdown_time, T)  # Ensure we cover all possible τ-t+1 values
+        for t_sd in 1:max_shutdown_periods
+            if t_sd <= shutdown_time
+                # Linear ramp from p_min to 0 over shutdown time
+                P_SD[(i, t_sd)] = generators[i].p_min * (1 - (t_sd - 1) / shutdown_time)
+            else
+                # Beyond shutdown time, power is 0
+                P_SD[(i, t_sd)] = 0.0
+            end
+        end
+    end
+
     # Ramp rate parameters (30% of capacity per period as default)
     ramp_up = [0.3 * generators[i].p_max for i in 1:N]  # ramp up rate
     ramp_down = [0.3 * generators[i].p_max for i in 1:N]  # ramp down rate
@@ -170,24 +201,23 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date)
 
     # startup operation profile duration depending on startup temperature stage
     @constraint(model, [i in N, t in maximum(T_SU[i, θ] for θ in Θ):T],
-        u_SU[i, t] == sum(sum(v[i, θ, τ] for τ in max(1, t - T_SU[i, θ] + 1):t) for θ in Θ)
+        u_SU[i, t] == sum(sum(v_θ[i, θ, τ] for τ in max(1, t - T_SU[i, θ] + 1):t) for θ in Θ)
     )
 
     # startup operation profile depending on shutdown duration. TODO: ASK PROF (p.213) Έχει T_SD και με θ και χωρίς
     @constraint(model, [i in N, t in 1:T-T_SD[i]+1],
-        u_SU[i, t] == sum(z[i, τ] for τ in t:(t:T_SD[i]-1))
-    )
+        u_SD[i, t] == sum(z[i, τ] for τ in t:t+T_SD[i]-1)
+    ) # TODO: Ensure it's u_SD and not u_SU. Book writes u_SU. Copilot claims it's u_SD. Typo?
 
     # production constraint for startup operation profile
     @constraint(model, [i in N, t in maximum(T_SU[i, θ] for θ in Θ):T],
-        g_SU[i, t] == sum(sum(P_SU[i, θ, t-τ+1] * v[i, θ, τ] for τ in max(1, t - T_SU[i, θ] + 1):t) for θ in Θ)
+        g_SU[i, t] == sum(sum(P_SU[i, θ, t-τ+1] * v_θ[i, θ, τ] for τ in max(1, t - T_SU[i, θ] + 1):t) for θ in Θ)
     )
 
     # production constraint for shutdown operation profile
-    @constraint(model, [i in N, t in 1:T-T_SD[i, θ] for θ in Θ],
-        #TODO: Book doesn't include θ
-        g_SD[i, t] == sum(
-            sum(P_SD[i, t-τ+1] * z[i, τ] for τ in t+1:t+T_SD[i, θ]) for θ in Θ)
+    @constraint(model, [i in N, t in 1:T-T_SD[i]],
+        #T_SD independent of θ
+        g_SD[i, t] == sum(P_SD[i, τ] * z[i, τ] for τ in t+1:t+T_SD[i])
     )
 
     # production constraints for dispatch ready operation profile
