@@ -17,7 +17,7 @@ for (i, load) in enumerate(loads[1:min(3, end)])
 end
 
 println("\n=== Testing Renewables ===")
-renewables_generation::Vector{RenewablesGenerationForecast} = 
+renewables_generation::Vector{RenewablesGenerationForecast} =
     get_generation_forecast_for_wind_and_solar("BE", Date("2014-12-03"))
 println("Number of renewables generation forecasts: ", length(renewables_generation))
 for (i, renewable) in enumerate(renewables_generation[1:min(3, end)])
@@ -25,5 +25,4 @@ for (i, renewable) in enumerate(renewables_generation[1:min(3, end)])
 end
 
 println("\n=== Testing Unit Commitment ===")
-include("../src/UnitCommitment.jl")
 solution = test_unit_commitment()
