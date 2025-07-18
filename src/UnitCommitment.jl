@@ -140,13 +140,13 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date)
     # startup & shutdown can't happen simultaneously
     @constraint(model, [i = 1:N, t = 1:T], v[i, t] + z[i, t] <= 1)
 
-    # minimum uptime
+    # minimum uptime: if there was a startup in the last UT periods, unit must be on
     @constraint(model, [i = 1:N, t = UT:T],
-        u[i, τ] >= sum(v[i, τ] for τ in t-UT+1:t))
+        sum(v[i, τ] for τ in t-UT+1:t)) <= u[i, t]
 
-    # minimum downtime
-    @constraint(model, [i = 1:N, t = UT:T],
-        u[i, τ] <= 1 - sum(z[i, τ] for τ in t-UT+1:t))
+    # minimum downtime: if there was a shutdown in the last DT periods, unit must be off
+    @constraint(model, [i = 1:N, t = DT:T],
+        sum(z[i, τ] for τ in t-DT+1:t) <= 1 - u[i, t])
 
     # claude Proposal
     # @constraint(model, [i = 1:N, t = DT:T],
