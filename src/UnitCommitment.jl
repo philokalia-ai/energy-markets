@@ -115,12 +115,14 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date)
 
     # Startup/shutdown time parameters (simplified for now)
     T_SU = Dict{Tuple{Int,Symbol},Int}()  # startup time by generator and temperature
-    T_SD = Dict{Tuple{Int,Symbol},Int}()  # shutdown time by generator and temperature
+    T_SD = Dict{Int,Int}()  # shutdown time by generator - independent of temperature stage
 
     # Initialize with default values (1 period for now)
     for i in 1:N, θ in Θ
         T_SU[(i, θ)] = 1  # Default 1 period startup time
-        T_SD[(i, θ)] = 1  # Default 1 period shutdown time
+    end
+    for i in 1:N
+        T_SD[i] = 1  # Default 1 period shutdown time
     end
 
     # Ramp rate parameters (30% of capacity per period as default)
@@ -148,10 +150,6 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date)
     @constraint(model, [i = 1:N, t = DT:T],
         sum(z[i, τ] for τ in t-DT+1:t) <= 1 - u[i, t])
 
-    # claude Proposal
-    # @constraint(model, [i = 1:N, t = DT:T],
-    #     sum(1 - u[i, τ] for τ in t-DT+1:t) >= DT * z[i, t])
-
     # startup can happen only on a single given temperature stage
     @constraint(model, [i = 1:N, t = 1:T],
         v[i, t] == sum(v_θ[i, θ, t] for θ in Θ))
@@ -171,25 +169,24 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date)
         u[i, t] == u_SU[i, t] + u_DISP[i, t] + u_SD[i, t])
 
     # startup operation profile duration depending on startup temperature stage
-    @constraint(model, [i in N, t in max(T_SU[i, θ] for θ in Θ):T],
+    @constraint(model, [i in N, t in maximum(T_SU[i, θ] for θ in Θ):T],
         u_SU[i, t] == sum(sum(v[i, θ, τ] for τ in max(1, t - T_SU[i, θ] + 1):t) for θ in Θ)
     )
 
-    # startup operation profile depending on shutdown duration. TODO: ASK PROF (p.213)
-    @constraint(model, [i in N, t in 1:T-T_SD[i, θ]+1 for θ in Θ], #TODO: Book doesn't include θ
-        u_SU[i, t] == sum(z[i, τ] for τ in t:(t:T_SD[i, θ]-1))
+    # startup operation profile depending on shutdown duration. TODO: ASK PROF (p.213) Έχει T_SD και με θ και χωρίς
+    @constraint(model, [i in N, t in 1:T-T_SD[i]+1],
+        u_SU[i, t] == sum(z[i, τ] for τ in t:(t:T_SD[i]-1))
     )
 
     # production constraint for startup operation profile
-    @constraint(model, [i in N, t in max(T_SU[i, θ] for θ in Θ):T],
+    @constraint(model, [i in N, t in maximum(T_SU[i, θ] for θ in Θ):T],
         g_SU[i, t] == sum(sum(P_SU[i, θ, t-τ+1] * v[i, θ, τ] for τ in max(1, t - T_SU[i, θ] + 1):t) for θ in Θ)
     )
 
-    # TODO: Doesn't work. replace p_max with something from generators
     # production constraint for shutdown operation profile
     @constraint(model, [i in N, t in 1:T-T_SD[i, θ] for θ in Θ],
         #TODO: Book doesn't include θ
-        p_SD[i, t] == sum(
+        g_SD[i, t] == sum(
             sum(P_SD[i, t-τ+1] * z[i, τ] for τ in t+1:t+T_SD[i, θ]) for θ in Θ)
     )
 
