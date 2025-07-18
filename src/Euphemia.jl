@@ -27,6 +27,8 @@ include("Generators.jl")
 include("Loads.jl")
 include("Renewables.jl")
 
+include("UnitCommitment.jl")
+
 # Αυτή η συνάρτηση πρέπει να διαβάζει τα market orders
 # και να υπολογίζει το clearing price για timeslot για bidding zone
 function calculate_market_clearing_price() end

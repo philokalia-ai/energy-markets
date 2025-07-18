@@ -1,7 +1,4 @@
 using CSV, DataFrames, JuMP, HiGHS, Gurobi, Dates
-include("Generators.jl")
-include("Loads.jl")
-include("Renewables.jl")
 # TODO: Include Actual Generation Per Production Unit for Previous Day for initial conditions?
 
 function solve_unit_commitment(bidding_zone::String, day::Dates.Date)
@@ -14,7 +11,7 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date)
     generators = get_generators(day)
     loads = get_loads(bidding_zone, day)
     renewables = get_generation_forecast_for_wind_and_solar(bidding_zone, day)
-    
+
     # Check if we have data
     if isempty(generators)
         error("No generators found for $bidding_zone on $day")
@@ -22,36 +19,36 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date)
     if isempty(loads)
         error("No load data found for $bidding_zone on $day")
     end
-    
+
     # Validate resolution consistency
     if !isempty(loads) && !isempty(renewables)
         load_resolution = loads[1].resolution_code
         renewable_resolutions = unique([r.resolution_code for r in renewables])
-        
+
         if length(renewable_resolutions) > 1
             @warn "Multiple resolution codes found in renewables data: $renewable_resolutions"
         end
-        
+
         if !isempty(renewable_resolutions) && renewable_resolutions[1] != load_resolution
             @warn "Resolution mismatch: Loads ($load_resolution min) vs Renewables ($(renewable_resolutions[1]) min)"
         end
-        
+
         println("Using resolution: $load_resolution minutes")
     end
-    
+
     # Create time mapping from loads (assuming loads define our time periods)
     time_slots = [load.timeslot for load in loads]
     T = length(time_slots)
     N = length(generators)
-    
+
     println("Planning for $T time periods with $N generators")
-    
+
     # Validate time slot consistency
     if !isempty(renewables)
         renewable_time_slots = unique([r.date_time for r in renewables])
         missing_in_renewables = setdiff(time_slots, renewable_time_slots)
         extra_in_renewables = setdiff(renewable_time_slots, time_slots)
-        
+
         if !isempty(missing_in_renewables)
             @warn "Missing renewable data for time slots: $missing_in_renewables"
         end
@@ -59,9 +56,9 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date)
             @warn "Extra renewable data for time slots not in load data: $extra_in_renewables"
         end
     end
-    
+
     # Create renewable generation lookup by timeslot
-    renewable_by_time = Dict{String, Float64}()
+    renewable_by_time = Dict{String,Float64}()
     for renewable in renewables
         # renewable.date_time is already formatted as string in the struct
         timeslot = renewable.date_time
@@ -71,7 +68,7 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date)
             renewable_by_time[timeslot] = renewable.aggregated_generation_forecast
         end
     end
-    
+
     # Calculate net demand (load - renewables) for each time period
     net_demand = Float64[]
     for (t, load) in enumerate(loads)
@@ -115,17 +112,17 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date)
     # startup and shutdown production profile variables
     @variable(model, g_SU[i=1:N, t=1:T] >= 0)  # startup generation profile
     @variable(model, g_SD[i=1:N, t=1:T] >= 0)  # shutdown generation profile
-    
+
     # Startup/shutdown time parameters (simplified for now)
-    T_SU = Dict{Tuple{Int, Symbol}, Int}()  # startup time by generator and temperature
-    T_SD = Dict{Tuple{Int, Symbol}, Int}()  # shutdown time by generator and temperature
-    
+    T_SU = Dict{Tuple{Int,Symbol},Int}()  # startup time by generator and temperature
+    T_SD = Dict{Tuple{Int,Symbol},Int}()  # shutdown time by generator and temperature
+
     # Initialize with default values (1 period for now)
     for i in 1:N, θ in Θ
         T_SU[(i, θ)] = 1  # Default 1 period startup time
         T_SD[(i, θ)] = 1  # Default 1 period shutdown time
     end
-    
+
     # Ramp rate parameters (30% of capacity per period as default)
     ramp_up = [0.3 * generators[i].p_max for i in 1:N]  # ramp up rate
     ramp_down = [0.3 * generators[i].p_max for i in 1:N]  # ramp down rate
@@ -138,7 +135,7 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date)
     @constraint(model, [i = 1:N, t = 1:T], g[i, t] >= generators[i].p_min * u[i, t])
 
     # link commitment, startup, and shutdown
-    @constraint(model, [i in 1:N, t in 2:T], u[i, t] = u[i, t-1] + v[i, t] - z[i, t])
+    @constraint(model, [i in 1:N, t in 2:T], u[i, t] == u[i, t-1] + v[i, t] - z[i, t])
 
     # startup & shutdown can't happen simultaneously
     @constraint(model, [i = 1:N, t = 1:T], v[i, t] + z[i, t] <= 1)
@@ -190,8 +187,8 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date)
 
     # TODO: Doesn't work. replace p_max with something from generators
     # production constraint for shutdown operation profile
-    @constraint(model, [i in N, t in 1:T-T_SD[i, θ] for θ in Θ], 
-    #TODO: Book doesn't include θ
+    @constraint(model, [i in N, t in 1:T-T_SD[i, θ] for θ in Θ],
+        #TODO: Book doesn't include θ
         p_SD[i, t] == sum(
             sum(P_SD[i, t-τ+1] * z[i, τ] for τ in t+1:t+T_SD[i, θ]) for θ in Θ)
     )
@@ -231,7 +228,7 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date)
         return (status=status,)
     end
     @assert primal_status(model) == FEASIBLE_POINT
-    
+
     return (
         status=status,
         generators=generators,
@@ -248,10 +245,10 @@ end
 function test_unit_commitment()
     bidding_zone = "GR"
     day = Date("2018-06-24")
-    
+
     println("Solving unit commitment for $bidding_zone on $day")
     solution = solve_unit_commitment(bidding_zone, day)
-    
+
     if solution.status == OPTIMAL
         println("Solution found!")
         println("Total cost: €", round(solution.total_cost, digits=2))
@@ -259,7 +256,7 @@ function test_unit_commitment()
         println("Number of time periods: ", length(solution.time_slots))
         println("Dispatch of Generators: ", solution.g, " MW")
         println("Commitment of Generators: ", solution.u)
-        
+
         # Print some sample results
         for t in 1:min(5, length(solution.time_slots))
             println("Time $(solution.time_slots[t]): Net demand = $(solution.net_demand[t]) MW")
@@ -267,6 +264,6 @@ function test_unit_commitment()
     else
         println("Optimization failed with status: ", solution.status)
     end
-    
+
     return solution
 end
