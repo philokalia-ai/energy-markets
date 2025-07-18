@@ -142,7 +142,7 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date)
 
     # minimum uptime: if there was a startup in the last UT periods, unit must be on
     @constraint(model, [i = 1:N, t = UT:T],
-        sum(v[i, τ] for τ in t-UT+1:t)) <= u[i, t]
+        sum(v[i, τ] for τ in t-UT+1:t) <= u[i, t])
 
     # minimum downtime: if there was a shutdown in the last DT periods, unit must be off
     @constraint(model, [i = 1:N, t = DT:T],
