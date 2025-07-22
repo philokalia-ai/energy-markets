@@ -269,9 +269,10 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date)
 end
 
 # Example usage function (can be called from tests)
-function test_unit_commitment()
-    bidding_zone = "GR"
-    day = Date("2018-06-24")
+function test_unit_commitment(
+    bidding_zone="GR",
+    day=Date("2018-06-24")
+)
 
     println("Solving unit commitment for $bidding_zone on $day")
     solution = solve_unit_commitment(bidding_zone, day)
