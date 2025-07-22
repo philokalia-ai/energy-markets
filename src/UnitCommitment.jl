@@ -1,4 +1,8 @@
 using CSV, DataFrames, JuMP, HiGHS, Gurobi, Dates
+
+# Include fuel-type-specific parameters
+include("FuelTypeParameters.jl")
+
 # TODO: Include Actual Generation Per Production Unit for Previous Day for initial conditions?
 
 function solve_unit_commitment(bidding_zone::String, day::Dates.Date)
@@ -78,9 +82,23 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date)
 
     # TODO: initial conditions
 
-    # uptime & downtime
-    UT = 2
-    DT = 4
+    # Get fuel-type-specific parameters for each generator
+    fuel_params = Dict{Int, FuelTypeParameters}()
+    for (i, gen) in enumerate(generators)
+        fuel_params[i] = get_fuel_type_parameters(gen.fuel_type)
+    end
+
+    # Display fuel-type constraints being applied
+    println("\n=== Applying Fuel-Type-Specific Constraints ===")
+    fuel_type_counts = Dict{Symbol, Int}()
+    for gen in generators
+        fuel_type_counts[gen.fuel_type] = get(fuel_type_counts, gen.fuel_type, 0) + 1
+    end
+    
+    for (fuel_type, count) in fuel_type_counts
+        params = get_fuel_type_parameters(fuel_type)
+        println("$fuel_type ($count units): startup $(params.hot_startup_time)-$(params.cold_startup_time)h, uptime $(params.min_uptime)h, ramp $(round(params.ramp_up_rate*100, digits=1))%/h")
+    end
 
     # temperature stages
     Θ = [:cold, :warm, :hot]
@@ -113,16 +131,19 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date)
     @variable(model, g_SU[i=1:N, t=1:T] >= 0)  # startup generation profile
     @variable(model, g_SD[i=1:N, t=1:T] >= 0)  # shutdown generation profile
 
-    # Startup/shutdown time parameters (simplified for now)
+    # Startup/shutdown time parameters based on fuel type and temperature
     T_SU = Dict{Tuple{Int,Symbol},Int}()  # startup time by generator and temperature
     T_SD = Dict{Int,Int}()  # shutdown time by generator - independent of temperature stage
 
-    # Initialize with default values (1 period for now)
-    for i in 1:N, θ in Θ
-        T_SU[(i, θ)] = 1  # Default 1 period startup time
-    end
-    for i in 1:N
-        T_SD[i] = 1  # Default 1 period shutdown time
+    # Initialize with fuel-type-specific values
+    for (i, gen) in enumerate(generators)
+        params = fuel_params[i]
+        # Map temperature stages to startup times (in hours, converted to periods)
+        T_SU[(i, :hot)] = params.hot_startup_time
+        T_SU[(i, :warm)] = params.warm_startup_time  
+        T_SU[(i, :cold)] = params.cold_startup_time
+        # Shutdown time is typically same as hot startup time
+        T_SD[i] = params.hot_startup_time
     end
 
     # Startup production profile parameters - power output during startup phase
@@ -156,16 +177,29 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date)
         end
     end
 
-    # Ramp rate parameters (30% of capacity per period as default)
-    ramp_up = [0.3 * generators[i].p_max for i in 1:N]  # ramp up rate
-    ramp_down = [0.3 * generators[i].p_max for i in 1:N]  # ramp down rate
+    # Ramp rate parameters based on fuel type (as fraction of capacity per period)
+    ramp_up = Float64[]
+    ramp_down = Float64[]
+    for (i, gen) in enumerate(generators)
+        params = fuel_params[i]
+        push!(ramp_up, params.ramp_up_rate * gen.p_max)
+        push!(ramp_down, params.ramp_down_rate * gen.p_max)
+    end
+    
     M = 10000.0  # Big M parameter
 
     # ==== Model Constraints ====
 
     # generation of commited units must be within limits at all times
     @constraint(model, [i = 1:N, t = 1:T], g[i, t] <= generators[i].p_max * u[i, t])
-    @constraint(model, [i = 1:N, t = 1:T], g[i, t] >= generators[i].p_min * u[i, t])
+    
+    # Apply fuel-type-specific minimum load constraints
+    for (i, gen) in enumerate(generators)
+        params = fuel_params[i]
+        # Minimum generation when committed (considering fuel-type minimum load factor)
+        min_gen = max(gen.p_min, params.min_load_factor * gen.p_max)
+        @constraint(model, [t = 1:T], g[i, t] >= min_gen * u[i, t])
+    end
 
     # link commitment, startup, and shutdown
     @constraint(model, [i in 1:N, t in 2:T], u[i, t] == u[i, t-1] + v[i, t] - z[i, t])
@@ -174,22 +208,57 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date)
     @constraint(model, [i = 1:N, t = 1:T], v[i, t] + z[i, t] <= 1)
 
     # minimum uptime: if there was a startup in the last UT periods, unit must be on
-    @constraint(model, [i = 1:N, t = UT:T],
-        sum(v[i, τ] for τ in t-UT+1:t) <= u[i, t])
+    # Now fuel-type-specific
+    for (i, gen) in enumerate(generators)
+        UT = fuel_params[i].min_uptime
+        if UT > 1  # Only add constraint if minimum uptime > 1
+            @constraint(model, [t = UT:T],
+                sum(v[i, τ] for τ in t-UT+1:t) <= u[i, t])
+        end
+    end
 
     # minimum downtime: if there was a shutdown in the last DT periods, unit must be off
-    @constraint(model, [i = 1:N, t = DT:T],
-        sum(z[i, τ] for τ in t-DT+1:t) <= 1 - u[i, t])
+    # Now fuel-type-specific
+    for (i, gen) in enumerate(generators)
+        DT = fuel_params[i].min_downtime
+        if DT > 1  # Only add constraint if minimum downtime > 1
+            @constraint(model, [t = DT:T],
+                sum(z[i, τ] for τ in t-DT+1:t) <= 1 - u[i, t])
+        end
+    end
 
     # startup can happen only on a single given temperature stage
     @constraint(model, [i = 1:N, t = 1:T],
         v[i, t] == sum(v_θ[i, θ, t] for θ in Θ))
 
-    # TODO: Add time constraint of startup at given temperature stage based on downtime
-    # This would require tracking how long each unit has been offline 
-    # TODO: mistake in book, ask prof
-    # @constraint(model, [i = 1:N, θ in Θ, t = TA:TB],
-    #     v_θ[i, θ, t] <= sum(z[i, τ] for τ in t-TA+1:t-TB))
+    # Temperature-dependent startup constraints based on downtime
+    # Hot startup: unit offline for <= warm_threshold periods
+    # Warm startup: unit offline for warm_threshold < periods <= cold_threshold  
+    # Cold startup: unit offline for > cold_threshold periods
+    for (i, gen) in enumerate(generators)
+        params = fuel_params[i]
+        warm_thresh = params.warm_threshold
+        cold_thresh = params.cold_threshold
+        
+        # Hot startup constraints (short downtime)
+        for t in 2:min(warm_thresh+1, T)
+            @constraint(model, v_θ[i, :hot, t] <= 1 - sum(z[i, τ] for τ in max(1, t-warm_thresh):t-1))
+        end
+        
+        # Warm startup constraints (medium downtime)
+        if warm_thresh < cold_thresh
+            for t in max(2, warm_thresh+1):min(cold_thresh+1, T)
+                @constraint(model, v_θ[i, :warm, t] <= sum(z[i, τ] for τ in max(1, t-cold_thresh):max(1, t-warm_thresh-1)))
+            end
+        end
+        
+        # Cold startup constraints (long downtime)
+        if cold_thresh < T
+            for t in cold_thresh+2:T
+                @constraint(model, v_θ[i, :cold, t] <= sum(z[i, τ] for τ in max(1, t-cold_thresh-1):t-cold_thresh))
+            end
+        end
+    end
 
     ### 
     ### startup / shutdown production profile (ramp constraints)
