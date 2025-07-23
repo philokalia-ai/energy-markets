@@ -1,25 +1,43 @@
-#import "@preview/charged-ieee:0.1.3": ieee
-
-#show: ieee.with(
-  title: [Μοντελοποίηση Αγορών Ηλεκτρικής Ενέργειας με Julia/JuMP],
-  abstract: [
-    Σκοπός της παρούσας εργασίας είναι
-  ],
-  authors: (
-    (
-      name: "Ιωάννης Κ. Γεωργακόπουλος", 
-      department: [Τομέας Ηλεκτρικής Ισχύος],
-      organization: [Ε.Μ.Π.],
-      location: [Αθήνα, Ελλάδα],
-      email: "ioannis.georgakopoulos@example.com"
-    ),
-  ),
-  index-terms: ("Αγορές Ηλεκτρικής Ενέργειας", "Προημερήσια Αγορά Ηλεκτρικής Ενέργειας", "EUPHEMIA", "ανοιχτού κώδικα", "open source", "Julia", "JuMP", "HiGHS", "Μαθηματικός Προγραμματισμός", "Μοντέλα Βελτιστοποίησης"),
+// Set up document formatting
+#set page(
+  paper: "a4",
+  margin: (x: 2.5cm, y: 2.5cm),
+  numbering: "1"
 )
 
-// Set up Greek language and fonts
-#set text(lang: "el")
-#set page(numbering: "1")
+// Set up font and spacing  
+#set text(
+  size: 12pt,
+  lang: "el"
+)
+
+// Set line spacing to 1.5
+#set par(
+  leading: 0.65em,
+  justify: true,
+  first-line-indent: 1.2em
+)
+
+// Heading styles
+#set heading(numbering: "1.1")
+#show heading.where(level: 1): it => [
+  #set text(size: 16pt, weight: "bold")
+  #v(1em)
+  #it
+  #v(0.5em)
+]
+#show heading.where(level: 2): it => [
+  #set text(size: 14pt, weight: "bold")
+  #v(0.8em)
+  #it
+  #v(0.4em)
+]
+#show heading.where(level: 3): it => [
+  #set text(size: 12pt, weight: "bold")
+  #v(0.6em)
+  #it
+  #v(0.3em)
+]
 
 // Title page information
 #let thesis-info = (
@@ -39,43 +57,41 @@
 )
 
 // Custom title page
-#page(
-  background: none,
-  margin: (top: 2cm, bottom: 2cm, left: 2.5cm, right: 2.5cm)
-)[
+#page[
+  #set par(leading: 0.65em)
   #align(center)[
-    #text(size: 18pt, weight: "bold")[
+    #text(size: 16pt, weight: "bold")[
       Εθνικό Μετσόβιο Πολυτεχνείο \
       Σχολή Ηλεκτρολόγων Μηχανικών και Μηχανικών Υπολογιστών \
       #thesis-info.department
     ]
     
-    #v(3cm)
+    #v(4cm)
     
-    #text(size: 20pt, weight: "bold")[
+    #text(size: 18pt, weight: "bold")[
       #thesis-info.title
     ]
     
-    #v(2cm)
+    #v(2.5cm)
     
     #text(size: 14pt)[
       ΔΙΠΛΩΜΑΤΙΚΗ ΕΡΓΑΣΙΑ
     ]
     
-    #v(1cm)
+    #v(1.5cm)
     
-    #text(size: 16pt)[
+    #text(size: 14pt)[
       #thesis-info.author
     ]
     
-    #v(2cm)
+    #v(2.5cm)
     
     #text(size: 12pt)[
       Επιβλέπων: #thesis-info.supervisor \
       #thesis-info.supervisor-pos
     ]
     
-    #v(1cm)
+    #v(1.5cm)
     
     #text(size: 12pt)[
       Εξεταστική Επιτροπή: \
@@ -96,51 +112,39 @@
 #outline(title: "Περιεχόμενα", indent: 1em)
 
 // Greek Abstract
-#page(
-  header: align(center)[Περίληψη]
-)[
-  = Περίληψη
+#pagebreak()
+= Περίληψη
 
-  Σκοπός της παρούσας εργασίας είναι
+Σκοπός της παρούσας εργασίας είναι
 
-  *Λέξεις-Κλειδιά:* Αγορές Ηλεκτρικής Ενέργειας, Προημερήσια Αγορά Ηλεκτρικής Ενέργειας, EUPHEMIA, ανοιχτού κώδικα, open source, Julia, JuMP, HiGHS, Μαθηματικός Προγραμματισμός, Μοντέλα Βελτιστοποίησης.
-]
+*Λέξεις-Κλειδιά:* Αγορές Ηλεκτρικής Ενέργειας, Προημερήσια Αγορά Ηλεκτρικής Ενέργειας, EUPHEMIA, ανοιχτού κώδικα, open source, Julia, JuMP, HiGHS, Μαθηματικός Προγραμματισμός, Μοντέλα Βελτιστοποίησης.
 
 // English Abstract
-#page(
-  header: align(center)[Abstract]
-)[
-  = Abstract
+#pagebreak()
+= Abstract
 
-  The purpose of this diploma dissertation is
+The purpose of this diploma dissertation is
 
-  *Keywords:* Energy Markets, Day Ahead Energy Market, EUPHEMIA Algorithm, open source, Julia, JuMP, HiGHS, Mathematical Programming, Optimization Models.
-]
+*Keywords:* Energy Markets, Day Ahead Energy Market, EUPHEMIA Algorithm, open source, Julia, JuMP, HiGHS, Mathematical Programming, Optimization Models.
 
 // Greek Acknowledgments
-#page(
-  header: align(center)[Ευχαριστίες]
-)[
-  = Ευχαριστίες
+#pagebreak()
+= Ευχαριστίες
 
-  Ευχαριστώ θερμά τον επιβλέποντα καθηγητή αυτής της διατριβής, κ.~Νίκο Παπασπύρου, για τη συνεχή καθοδήγηση και εμπιστοσύνη του. Ευχαριστώ επίσης τα μέλη της συμβουλευτικής επιτροπής, κ.κ.~Νίκο Παπαδόπουλο και Γιώργο Νικολάου για την πρόθυμη και πάντα αποτελεσματική βοήθειά τους, τις πολύτιμες συμβουλές και τις χρήσιμες συζητήσεις που είχαμε. Θέλω να ευχαριστήσω ακόμα τον συμφοιτητή και φίλο Πέτρο Πετρόπουλο, ο οποίος με βοήθησε σε διάφορα στάδια αυτής της εργασίας. Θα ήθελα τέλος να ευχαριστήσω την οικογένειά μου και κυρίως τους γονείς μου, οι οποίοι με υποστήριξαν και έκαναν δυνατή την απερίσπαστη ενασχόλησή μου τόσο με την εκπόνηση της διπλωματικής μου, όσο και συνολικά με τις σπουδές μου, καθώς και το Νίκο Καζαντζάκη που αποτέλεσε για μένα μοναδική πηγή έμπνευσης, όταν δεν ήξερα τι να γράψω στην εισαγωγή της εργασίας μου.
+Ευχαριστώ θερμά τον επιβλέποντα καθηγητή αυτής της διατριβής, κ.~Νίκο Παπασπύρου, για τη συνεχή καθοδήγηση και εμπιστοσύνη του. Ευχαριστώ επίσης τα μέλη της συμβουλευτικής επιτροπής, κ.κ.~Νίκο Παπαδόπουλο και Γιώργο Νικολάου για την πρόθυμη και πάντα αποτελεσματική βοήθειά τους, τις πολύτιμες συμβουλές και τις χρήσιμες συζητήσεις που είχαμε. Θέλω να ευχαριστήσω ακόμα τον συμφοιτητή και φίλο Πέτρο Πετρόπουλο, ο οποίος με βοήθησε σε διάφορα στάδια αυτής της εργασίας. Θα ήθελα τέλος να ευχαριστήσω την οικογένειά μου και κυρίως τους γονείς μου, οι οποίοι με υποστήριξαν και έκαναν δυνατή την απερίσπαστη ενασχόλησή μου τόσο με την εκπόνηση της διπλωματικής μου, όσο και συνολικά με τις σπουδές μου, καθώς και το Νίκο Καζαντζάκη που αποτέλεσε για μένα μοναδική πηγή έμπνευσης, όταν δεν ήξερα τι να γράψω στην εισαγωγή της εργασίας μου.
 
-  _Στη μητέρα μου_
-]
+_Στη μητέρα μου_
 
 // English Acknowledgments  
-#page(
-  header: align(center)[Acknowledgments]
-)[
-  = Acknowledgments
+#pagebreak()
+= Acknowledgments
 
-  I would like to thank all the people who supported my work and helped me get results of better quality. I am also grateful to the supervisor of my thesis and the members of my committee for their patience and support in overcoming numerous obstacles I have been facing through my research. I would also like to thank my fellow students for their feedback, cooperation and of course friendship.
+I would like to thank all the people who supported my work and helped me get results of better quality. I am also grateful to the supervisor of my thesis and the members of my committee for their patience and support in overcoming numerous obstacles I have been facing through my research. I would also like to thank my fellow students for their feedback, cooperation and of course friendship.
 
-  Last but not least, I would like to thank my family, my parents and my sister, for supporting me spiritually throughout writing this thesis and my life in general, and Nikos Kazantzakis for providing the inspiration that I needed when I didn't know what to write in my introduction.
-]
+Last but not least, I would like to thank my family, my parents and my sister, for supporting me spiritually throughout writing this thesis and my life in general, and Nikos Kazantzakis for providing the inspiration that I needed when I didn't know what to write in my introduction.
 
-// Main content
-#set page(header: align(center)[#thesis-info.title])
+// Main content starts here
+#pagebreak()
 
 = Εισαγωγή
 
