@@ -1,8 +1,5 @@
 using CSV, DataFrames, JuMP, HiGHS, Gurobi, Dates
 
-# Include fuel-type-specific parameters
-include("FuelTypeParameters.jl")
-
 # TODO: Include Actual Generation Per Production Unit for Previous Day for initial conditions?
 
 function solve_unit_commitment(bidding_zone::String, day::Dates.Date)
@@ -83,18 +80,18 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date)
     # TODO: initial conditions
 
     # Get fuel-type-specific parameters for each generator
-    fuel_params = Dict{Int, FuelTypeParameters}()
+    fuel_params = Dict{Int,FuelTypeParameters}()
     for (i, gen) in enumerate(generators)
         fuel_params[i] = get_fuel_type_parameters(gen.fuel_type)
     end
 
     # Display fuel-type constraints being applied
     println("\n=== Applying Fuel-Type-Specific Constraints ===")
-    fuel_type_counts = Dict{Symbol, Int}()
+    fuel_type_counts = Dict{Symbol,Int}()
     for gen in generators
         fuel_type_counts[gen.fuel_type] = get(fuel_type_counts, gen.fuel_type, 0) + 1
     end
-    
+
     for (fuel_type, count) in fuel_type_counts
         params = get_fuel_type_parameters(fuel_type)
         println("$fuel_type ($count units): startup $(params.hot_startup_time)-$(params.cold_startup_time)h, uptime $(params.min_uptime)h, ramp $(round(params.ramp_up_rate*100, digits=1))%/h")
@@ -140,7 +137,7 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date)
         params = fuel_params[i]
         # Map temperature stages to startup times (in hours, converted to periods)
         T_SU[(i, :hot)] = params.hot_startup_time
-        T_SU[(i, :warm)] = params.warm_startup_time  
+        T_SU[(i, :warm)] = params.warm_startup_time
         T_SU[(i, :cold)] = params.cold_startup_time
         # Shutdown time is typically same as hot startup time
         T_SD[i] = params.hot_startup_time
@@ -185,14 +182,14 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date)
         push!(ramp_up, params.ramp_up_rate * gen.p_max)
         push!(ramp_down, params.ramp_down_rate * gen.p_max)
     end
-    
+
     M = 10000.0  # Big M parameter
 
     # ==== Model Constraints ====
 
     # generation of commited units must be within limits at all times
     @constraint(model, [i = 1:N, t = 1:T], g[i, t] <= generators[i].p_max * u[i, t])
-    
+
     # Apply fuel-type-specific minimum load constraints
     for (i, gen) in enumerate(generators)
         params = fuel_params[i]
@@ -239,23 +236,23 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date)
         params = fuel_params[i]
         warm_thresh = params.warm_threshold
         cold_thresh = params.cold_threshold
-        
+
         # Hot startup constraints (short downtime)
-        for t in 2:min(warm_thresh+1, T)
-            @constraint(model, v_θ[i, :hot, t] <= 1 - sum(z[i, τ] for τ in max(1, t-warm_thresh):t-1))
+        for t in 2:min(warm_thresh + 1, T)
+            @constraint(model, v_θ[i, :hot, t] <= 1 - sum(z[i, τ] for τ in max(1, t - warm_thresh):t-1))
         end
-        
+
         # Warm startup constraints (medium downtime)
         if warm_thresh < cold_thresh
-            for t in max(2, warm_thresh+1):min(cold_thresh+1, T)
-                @constraint(model, v_θ[i, :warm, t] <= sum(z[i, τ] for τ in max(1, t-cold_thresh):max(1, t-warm_thresh-1)))
+            for t in max(2, warm_thresh + 1):min(cold_thresh + 1, T)
+                @constraint(model, v_θ[i, :warm, t] <= sum(z[i, τ] for τ in max(1, t - cold_thresh):max(1, t - warm_thresh - 1)))
             end
         end
-        
+
         # Cold startup constraints (long downtime)
         if cold_thresh < T
             for t in cold_thresh+2:T
-                @constraint(model, v_θ[i, :cold, t] <= sum(z[i, τ] for τ in max(1, t-cold_thresh-1):t-cold_thresh))
+                @constraint(model, v_θ[i, :cold, t] <= sum(z[i, τ] for τ in max(1, t - cold_thresh - 1):t-cold_thresh))
             end
         end
     end
