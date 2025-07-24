@@ -24,6 +24,7 @@ include("MarketOrders.jl")
 using .MarketOrders: MarketOrder, SimpleOrder, BlockOrder
 
 include("Generators.jl")
+include("FuelTypeParameters.jl")
 include("Loads.jl")
 include("Renewables.jl")
 
