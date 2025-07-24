@@ -2,7 +2,7 @@ using Euphemia
 using Dates
 
 # Include the fuel type parameters
-include("src/FuelTypeParameters.jl")
+include("../src/FuelTypeParameters.jl")
 
 # Test date
 test_date = Date("2025-06-24")
