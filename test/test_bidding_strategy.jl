@@ -47,12 +47,12 @@ function test_bidding_strategy()
         # Show first few orders as examples
         println("\n📋 Sample Supply Orders:")
         for (i, order) in enumerate(result.supply_orders[1:min(3, length(result.supply_orders))])
-            println("  $i. $(order.quantity) MW @ €$(round(order.price, digits=2))/MWh ($(order.zone))")
+            println("  $i. $(order.date_time): $(order.quantity) MW @ €$(round(order.price, digits=2))/MWh ($(order.zone), $(order.resolution_code)min)")
         end
 
         println("\n📋 Sample Demand Orders:")
         for (i, order) in enumerate(result.demand_orders[1:min(3, length(result.demand_orders))])
-            println("  $i. $(order.quantity) MW @ €$(round(order.price, digits=2))/MWh ($(order.zone))")
+            println("  $i. $(order.date_time): $(order.quantity) MW @ €$(round(order.price, digits=2))/MWh ($(order.zone), $(order.resolution_code)min)")
         end
 
         # Basic validation

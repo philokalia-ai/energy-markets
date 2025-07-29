@@ -4,7 +4,7 @@ using Dates
 using JuMP: OPTIMAL
 # Note: MarketOrders and UnitCommitment should be included before this module
 import Main.MarketOrders: SimpleOrder
-import Main: solve_unit_commitment
+import Main: solve_unit_commitment, get_loads
 
 export generate_market_orders_from_uc, UCToBidsResult
 
@@ -88,11 +88,17 @@ function generate_market_orders_from_uc(
         commitment = uc_solution.u  # Commitment matrix [generator, time]
         net_demand = uc_solution.net_demand
         
+        # Get resolution from loads data (convert PT60M to 60)
+        loads = get_loads(bidding_zone, day)  # Get loads to extract resolution
+        resolution_str = loads[1].resolution_code  # e.g., "PT60M"
+        resolution_minutes = parse(Int, match(r"PT(\d+)M", resolution_str)[1])  # Extract 60 from "PT60M"
+        
         N = length(generators)
         T = length(time_slots)
         
         println("Converting UC solution to market orders...")
         println("- $N generators, $T time periods")
+        println("- Resolution: $(resolution_minutes) minutes")
         
         # Generate supply orders from committed generators
         total_supply_quantity = 0.0
@@ -105,13 +111,17 @@ function generate_market_orders_from_uc(
                     # Calculate bid price with markup
                     bid_price = gen.marginal_cost * markup_factor
                     bid_quantity = generation[i, t]
+                    time_slot = time_slots[t]  # Get the time slot for this period
                     
-                    # Create supply order
+                    # Parse time slot and create supply order with time and resolution information
+                    date_time = DateTime(time_slot, "yyyymmdd-HHMM")
                     order = SimpleOrder(
                         :supply,
                         bid_price,
                         bid_quantity,
-                        zone_symbol
+                        zone_symbol,
+                        date_time,
+                        resolution_minutes
                     )
                     
                     push!(supply_orders, order)
@@ -119,7 +129,7 @@ function generate_market_orders_from_uc(
                     
                     # Debug output for first few orders
                     if length(supply_orders) <= 5
-                        println("  Supply order: Gen$(i) T$(t) - $(bid_quantity)MW @ €$(round(bid_price, digits=2))/MWh")
+                        println("  Supply order: Gen$(i) $(time_slot) - $(bid_quantity)MW @ €$(round(bid_price, digits=2))/MWh")
                     end
                 end
             end
@@ -130,12 +140,17 @@ function generate_market_orders_from_uc(
         for t in 1:T
             if net_demand[t] > 0.01  # Small threshold for numerical precision
                 
-                # Create demand order with high price to ensure it's always served
+                time_slot = time_slots[t]  # Get the time slot for this period
+                
+                # Parse time slot and create demand order with high price to ensure it's always served
+                date_time = DateTime(time_slot, "yyyymmdd-HHMM")
                 order = SimpleOrder(
                     :demand,
                     demand_price,  # High price to ensure demand is met
                     net_demand[t],
-                    zone_symbol
+                    zone_symbol,
+                    date_time,
+                    resolution_minutes
                 )
                 
                 push!(demand_orders, order)
@@ -143,7 +158,7 @@ function generate_market_orders_from_uc(
                 
                 # Debug output for first few orders
                 if length(demand_orders) <= 5
-                    println("  Demand order: T$(t) - $(net_demand[t])MW @ €$(demand_price)/MWh")
+                    println("  Demand order: $(time_slot) - $(net_demand[t])MW @ €$(demand_price)/MWh")
                 end
             end
         end
@@ -235,6 +250,8 @@ function export_orders_to_csv(result::UCToBidsResult, filepath::String)
                 price = order.price,
                 quantity = order.quantity,
                 zone = string(order.zone),
+                date_time = string(order.date_time),
+                resolution_code = order.resolution_code,
                 day = string(result.day)
             ))
         end
@@ -247,6 +264,8 @@ function export_orders_to_csv(result::UCToBidsResult, filepath::String)
                 price = order.price,
                 quantity = order.quantity,
                 zone = string(order.zone),
+                date_time = string(order.date_time),
+                resolution_code = order.resolution_code,
                 day = string(result.day)
             ))
         end
@@ -254,11 +273,11 @@ function export_orders_to_csv(result::UCToBidsResult, filepath::String)
         # Write to CSV (simple implementation)
         open(filepath, "w") do file
             # Header
-            println(file, "order_id,type,price,quantity,zone,day")
+            println(file, "order_id,type,price,quantity,zone,date_time,resolution_code,day")
             
             # Data rows
             for row in orders_data
-                println(file, "$(row.order_id),$(row.type),$(row.price),$(row.quantity),$(row.zone),$(row.day)")
+                println(file, "$(row.order_id),$(row.type),$(row.price),$(row.quantity),$(row.zone),$(row.date_time),$(row.resolution_code),$(row.day)")
             end
         end
         

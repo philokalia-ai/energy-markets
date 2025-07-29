@@ -1,16 +1,20 @@
 module MarketOrders
 
-export SimpleOrder, BlockOrder, LinkedBlockOrder, ExclusiveBlockOrder, FlexibleOrder,
-    AggregatedPeriodicOrder, MICOrder, LoadGradientOrder, MeritOrder, PUNOrder, MarketOrder
+using Dates
+
+export MarketOrder, SimpleOrder, BlockOrder, LinkedBlockOrder, ExclusiveBlockOrder, FlexibleOrder,
+    AggregatedPeriodicOrder, MICOrder, LoadGradientOrder, MeritOrder, PUNOrder
 
 abstract type MarketOrder end  # Abstract base type for all orders
 
-# Simple Order
+# Simple Order (with time dimension for electricity markets)
 struct SimpleOrder <: MarketOrder
     type::Symbol # :supply or :demand for some reason called sense in EUPHEMIA's public description
     price::Float64
     quantity::Float64
     zone::Symbol
+    date_time::DateTime  # ENTSO-E style delivery date and time
+    resolution_code::Int  # Resolution in minutes (60, 30, 15)
 end
 
 # Aggregated Periodic Orders
