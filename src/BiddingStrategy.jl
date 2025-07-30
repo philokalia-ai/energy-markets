@@ -6,7 +6,7 @@ using JuMP: OPTIMAL
 import Main.MarketOrders: SimpleOrder
 import Main: solve_unit_commitment, get_loads
 
-export generate_market_orders_from_uc, UCToBidsResult
+export generate_market_orders_from_uc, apply_bidding_strategy_to_uc, UCToBidsResult
 
 """
     UCToBidsResult
@@ -151,14 +151,14 @@ function generate_market_orders_from_uc(
                 elseif bidding_strategy == :all_available_realistic
                     # UC-informed realistic: Bid all units with realistic quantities
                     should_bid = true
-                    
+
                     if commitment[i, t] > 0.5 && generation[i, t] > 0.01
                         # Committed unit: bid actual UC generation (what UC selected)
                         bid_quantity = generation[i, t]
                     else
                         # Uncommitted unit: bid realistic available capacity
                         # Consider what they could deliver if economic conditions changed slightly
-                        
+
                         # For uncommitted units, bid their minimum capacity as a conservative estimate
                         # This represents what they could deliver if called upon
                         if gen.p_min > 0.01
@@ -256,6 +256,186 @@ function generate_market_orders_from_uc(
 
     catch e
         error_msg = "Error in generate_market_orders_from_uc: $(string(e))"
+        println(error_msg)
+        return UCToBidsResult(
+            SimpleOrder[], SimpleOrder[], Symbol(bidding_zone), day,
+            0.0, 0.0, false, error_msg
+        )
+    end
+end
+
+"""
+    apply_bidding_strategy_to_uc(uc_solution, bidding_zone::String, day::Date; markup_factor::Float64=1.1, demand_price::Float64=3000.0, bidding_strategy::Symbol=:committed_only)
+
+Applies a bidding strategy to an already-solved unit commitment problem.
+This is more efficient than `generate_market_orders_from_uc` when testing multiple strategies 
+on the same UC solution, as it avoids re-solving the expensive optimization.
+
+# Arguments
+- `uc_solution`: Pre-solved unit commitment result from `solve_unit_commitment()`
+- `bidding_zone::String`: The bidding zone identifier (e.g., "GR")
+- `day::Date`: The target day for bidding
+- `markup_factor::Float64`: Markup factor for supply bids above marginal cost (default: 1.1 = 10% markup)
+- `demand_price::Float64`: Price for demand orders (default: €3000/MWh)
+- `bidding_strategy::Symbol`: Strategy for creating supply orders (same as generate_market_orders_from_uc)
+
+# Returns
+- `UCToBidsResult`: Contains supply orders, demand orders, and metadata
+
+# Example
+```julia
+# Solve UC once
+uc_solution = solve_unit_commitment("GR", Date("2018-06-24"))
+
+# Apply different strategies to the same solution (much faster!)
+result1 = apply_bidding_strategy_to_uc(uc_solution, "GR", Date("2018-06-24"), bidding_strategy=:committed_only)
+result2 = apply_bidding_strategy_to_uc(uc_solution, "GR", Date("2018-06-24"), bidding_strategy=:all_available_max)
+result3 = apply_bidding_strategy_to_uc(uc_solution, "GR", Date("2018-06-24"), bidding_strategy=:all_available_realistic)
+```
+"""
+function apply_bidding_strategy_to_uc(
+    uc_solution,
+    bidding_zone::String,
+    day::Date;
+    markup_factor::Float64=1.1,
+    demand_price::Float64=3000.0,
+    bidding_strategy::Symbol=:committed_only
+)
+
+    try
+        if uc_solution.status != OPTIMAL
+            return UCToBidsResult(
+                SimpleOrder[], SimpleOrder[], Symbol(bidding_zone), day,
+                0.0, 0.0, false, "Unit commitment optimization failed: $(uc_solution.status)"
+            )
+        end
+
+        zone_symbol = Symbol(bidding_zone)
+        supply_orders = SimpleOrder[]
+        demand_orders = SimpleOrder[]
+
+        # Extract solution data (no UC solving here!)
+        generators = uc_solution.generators
+        time_slots = uc_solution.time_slots
+        generation = uc_solution.g  # Generation matrix [generator, time]
+        commitment = uc_solution.u  # Commitment matrix [generator, time]
+        net_demand = uc_solution.net_demand
+
+        # Get resolution from loads data (convert PT60M to 60)
+        loads = get_loads(bidding_zone, day)  # Get loads to extract resolution
+        resolution_str = loads[1].resolution_code  # e.g., "PT60M"
+        resolution_minutes = parse(Int, match(r"PT(\d+)M", resolution_str)[1])  # Extract 60 from "PT60M"
+
+        N = length(generators)
+        T = length(time_slots)
+
+        println("Applying bidding strategy to existing UC solution...")
+        println("- $N generators, $T time periods")
+        println("- Resolution: $(resolution_minutes) minutes")
+        println("- Bidding strategy: $bidding_strategy")
+
+        # Generate supply orders from generators (same logic as before)
+        total_supply_quantity = 0.0
+        for i in 1:N
+            gen = generators[i]
+            for t in 1:T
+
+                # Determine if we should create an order based on strategy
+                should_bid = false
+                bid_quantity = 0.0
+
+                if bidding_strategy == :committed_only
+                    # Conservative: Only bid committed units with positive generation
+                    if commitment[i, t] > 0.5 && generation[i, t] > 0.01
+                        should_bid = true
+                        bid_quantity = generation[i, t]  # Bid actual optimized generation
+                    end
+                elseif bidding_strategy == :all_available_max
+                    # Maximum capacity: Bid all units at their theoretical maximum
+                    should_bid = true
+                    bid_quantity = gen.p_max  # Always bid maximum capacity
+                elseif bidding_strategy == :all_available_realistic
+                    # UC-informed realistic: Bid all units with realistic quantities
+                    should_bid = true
+
+                    if commitment[i, t] > 0.5 && generation[i, t] > 0.01
+                        # Committed unit: bid actual UC generation (what UC selected)
+                        bid_quantity = generation[i, t]
+                    else
+                        # Uncommitted unit: bid realistic available capacity
+                        if gen.p_min > 0.01
+                            bid_quantity = gen.p_min  # Minimum stable generation
+                        else
+                            # For units with very low p_min, use a small fraction of max capacity
+                            bid_quantity = gen.p_max * 0.2  # 20% of max capacity
+                        end
+                    end
+                else
+                    error("Unknown bidding strategy: $bidding_strategy. Valid options: :committed_only, :all_available_max, :all_available_realistic")
+                end
+
+                if should_bid
+                    # Calculate bid price with markup
+                    bid_price = gen.marginal_cost * markup_factor
+                    time_slot = time_slots[t]  # Get the time slot for this period
+
+                    # Parse time slot and create supply order with time and resolution information
+                    date_time = DateTime(time_slot, "yyyymmdd-HHMM")
+                    order = SimpleOrder(
+                        :supply,
+                        bid_price,
+                        bid_quantity,
+                        zone_symbol,
+                        date_time,
+                        resolution_minutes
+                    )
+
+                    push!(supply_orders, order)
+                    total_supply_quantity += bid_quantity
+                end
+            end
+        end
+
+        # Generate demand orders from net demand
+        total_demand_quantity = 0.0
+        for t in 1:T
+            if net_demand[t] > 0.01  # Small threshold for numerical precision
+
+                time_slot = time_slots[t]  # Get the time slot for this period
+
+                # Parse time slot and create demand order with high price to ensure it's always served
+                date_time = DateTime(time_slot, "yyyymmdd-HHMM")
+                order = SimpleOrder(
+                    :demand,
+                    demand_price,  # High price to ensure demand is met
+                    net_demand[t],
+                    zone_symbol,
+                    date_time,
+                    resolution_minutes
+                )
+
+                push!(demand_orders, order)
+                total_demand_quantity += net_demand[t]
+            end
+        end
+
+        println("Market orders generation completed:")
+        println("- $(length(supply_orders)) supply orders ($(round(total_supply_quantity, digits=1)) MW total)")
+        println("- $(length(demand_orders)) demand orders ($(round(total_demand_quantity, digits=1)) MW total)")
+
+        return UCToBidsResult(
+            supply_orders,
+            demand_orders,
+            zone_symbol,
+            day,
+            total_supply_quantity,
+            total_demand_quantity,
+            true,
+            "Successfully converted UC solution to $(length(supply_orders) + length(demand_orders)) market orders"
+        )
+
+    catch e
+        error_msg = "Error in apply_bidding_strategy_to_uc: $(string(e))"
         println(error_msg)
         return UCToBidsResult(
             SimpleOrder[], SimpleOrder[], Symbol(bidding_zone), day,
