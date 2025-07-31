@@ -6,6 +6,12 @@ using JuMP: OPTIMAL
 import Main.MarketOrders: SimpleOrder
 import Main: solve_unit_commitment, get_loads
 
+# Configuration constants
+const DEFAULT_UNCOMMITTED_UNIT_FRACTION = 0.2  # 20% of max capacity for uncommitted units with very low p_min
+const COMMITMENT_THRESHOLD = 0.5  # Threshold for determining if a unit is committed (u[i,t] > 0.5)
+const GENERATION_THRESHOLD = 0.01  # Minimum generation threshold in MW for numerical precision
+const DEMAND_THRESHOLD = 0.01  # Minimum demand threshold in MW for numerical precision
+
 export generate_market_orders_from_uc, apply_bidding_strategy_to_uc, UCToBidsResult
 
 """
@@ -37,6 +43,7 @@ Converts the unit commitment optimization results into simple market orders for 
   - `:committed_only` - Only bid committed units (conservative, respects UC constraints)
   - `:all_available_max` - Bid all units at maximum capacity (unrealistic but useful for testing)
   - `:all_available_realistic` - Bid all units with UC-informed realistic quantities (aggressive)
+- `uncommitted_unit_fraction::Float64`: Fraction of p_max to use for uncommitted units with very low p_min (default: 0.2 = 20%)
 
 # Returns
 - `UCToBidsResult`: Contains supply orders, demand orders, and metadata
@@ -47,7 +54,7 @@ Converts the unit commitment optimization results into simple market orders for 
 For each generator and time period where the unit is committed:
 - Creates SimpleOrder with price = marginal_cost × markup_factor
 - Quantity = optimized generation level for that period
-- Only creates orders for committed units (u[i,t] > 0.5)
+- Only creates orders for committed units (u[i,t] > COMMITMENT_THRESHOLD)
 - Respects complex UC constraints (startup times, ramping, minimum uptimes)
 
 ## :all_available_max (Maximum Capacity)
@@ -89,7 +96,8 @@ function generate_market_orders_from_uc(
     day::Date;
     markup_factor::Float64=1.1,
     demand_price::Float64=3000.0,
-    bidding_strategy::Symbol=:committed_only
+    bidding_strategy::Symbol=:committed_only,
+    uncommitted_unit_fraction::Float64=DEFAULT_UNCOMMITTED_UNIT_FRACTION
 )
 
     try
@@ -118,7 +126,11 @@ function generate_market_orders_from_uc(
         # Get resolution from loads data (convert PT60M to 60)
         loads = get_loads(bidding_zone, day)  # Get loads to extract resolution
         resolution_str = loads[1].resolution_code  # e.g., "PT60M"
-        resolution_minutes = parse(Int, match(r"PT(\d+)M", resolution_str)[1])  # Extract 60 from "PT60M"
+        match_result = match(r"PT(\d+)M", resolution_str)  # Attempt to match the pattern
+        if match_result === nothing
+            error("Invalid resolution format: $(resolution_str). Expected format: 'PT<number>M'.")
+        end
+        resolution_minutes = parse(Int, match_result[1])  # Extract 60 from "PT60M"
 
         N = length(generators)
         T = length(time_slots)
@@ -140,7 +152,7 @@ function generate_market_orders_from_uc(
 
                 if bidding_strategy == :committed_only
                     # Conservative: Only bid committed units with positive generation
-                    if commitment[i, t] > 0.5 && generation[i, t] > 0.01
+                    if commitment[i, t] > COMMITMENT_THRESHOLD && generation[i, t] > GENERATION_THRESHOLD
                         should_bid = true
                         bid_quantity = generation[i, t]  # Bid actual optimized generation
                     end
@@ -152,7 +164,7 @@ function generate_market_orders_from_uc(
                     # UC-informed realistic: Bid all units with realistic quantities
                     should_bid = true
 
-                    if commitment[i, t] > 0.5 && generation[i, t] > 0.01
+                    if commitment[i, t] > COMMITMENT_THRESHOLD && generation[i, t] > GENERATION_THRESHOLD
                         # Committed unit: bid actual UC generation (what UC selected)
                         bid_quantity = generation[i, t]
                     else
@@ -161,11 +173,11 @@ function generate_market_orders_from_uc(
 
                         # For uncommitted units, bid their minimum capacity as a conservative estimate
                         # This represents what they could deliver if called upon
-                        if gen.p_min > 0.01
+                        if gen.p_min > GENERATION_THRESHOLD
                             bid_quantity = gen.p_min  # Minimum stable generation
                         else
-                            # For units with very low p_min, use a small fraction of max capacity
-                            bid_quantity = gen.p_max * 0.2  # 20% of max capacity
+                            # For units with very low p_min, use a configurable fraction of max capacity
+                            bid_quantity = gen.p_max * uncommitted_unit_fraction
                         end
                     end
                 else
@@ -178,7 +190,13 @@ function generate_market_orders_from_uc(
                     time_slot = time_slots[t]  # Get the time slot for this period
 
                     # Parse time slot and create supply order with time and resolution information
-                    date_time = DateTime(time_slot, "yyyymmdd-HHMM")
+                    local date_time
+                    try
+                        date_time = DateTime(time_slot, "yyyymmdd-HHMM")
+                    catch e
+                        error("Invalid time_slot format: '$(time_slot)'. Expected format: 'YYYYMMDD-HHMM'. Error: $(e)")
+                    end
+
                     order = SimpleOrder(
                         :supply,
                         bid_price,
@@ -198,8 +216,8 @@ function generate_market_orders_from_uc(
                         elseif bidding_strategy == :all_available_max
                             strategy_label = "Max=$(round(bid_quantity, digits=1))MW"
                         else  # :all_available_realistic
-                            committed_status = commitment[i, t] > 0.5 ? "Committed" : "Uncommitted"
-                            if commitment[i, t] > 0.5
+                            committed_status = commitment[i, t] > COMMITMENT_THRESHOLD ? "Committed" : "Uncommitted"
+                            if commitment[i, t] > COMMITMENT_THRESHOLD
                                 strategy_label = "$(committed_status)=$(round(generation[i,t], digits=1))MW"
                             else
                                 strategy_label = "$(committed_status)=$(round(bid_quantity, digits=1))MW(min)"
@@ -214,12 +232,18 @@ function generate_market_orders_from_uc(
         # Generate demand orders from net demand
         total_demand_quantity = 0.0
         for t in 1:T
-            if net_demand[t] > 0.01  # Small threshold for numerical precision
+            if net_demand[t] > DEMAND_THRESHOLD  # Small threshold for numerical precision
 
                 time_slot = time_slots[t]  # Get the time slot for this period
 
                 # Parse time slot and create demand order with high price to ensure it's always served
-                date_time = DateTime(time_slot, "yyyymmdd-HHMM")
+                local date_time
+                try
+                    date_time = DateTime(time_slot, "yyyymmdd-HHMM")
+                catch e
+                    error("Invalid time_slot format: '$(time_slot)'. Expected format: 'YYYYMMDD-HHMM'. Error: $(e)")
+                end
+
                 order = SimpleOrder(
                     :demand,
                     demand_price,  # High price to ensure demand is met
@@ -278,6 +302,7 @@ on the same UC solution, as it avoids re-solving the expensive optimization.
 - `markup_factor::Float64`: Markup factor for supply bids above marginal cost (default: 1.1 = 10% markup)
 - `demand_price::Float64`: Price for demand orders (default: €3000/MWh)
 - `bidding_strategy::Symbol`: Strategy for creating supply orders (same as generate_market_orders_from_uc)
+- `uncommitted_unit_fraction::Float64`: Fraction of p_max to use for uncommitted units with very low p_min (default: 0.2 = 20%)
 
 # Returns
 - `UCToBidsResult`: Contains supply orders, demand orders, and metadata
@@ -299,7 +324,8 @@ function apply_bidding_strategy_to_uc(
     day::Date;
     markup_factor::Float64=1.1,
     demand_price::Float64=3000.0,
-    bidding_strategy::Symbol=:committed_only
+    bidding_strategy::Symbol=:committed_only,
+    uncommitted_unit_fraction::Float64=DEFAULT_UNCOMMITTED_UNIT_FRACTION
 )
 
     try
@@ -324,7 +350,11 @@ function apply_bidding_strategy_to_uc(
         # Get resolution from loads data (convert PT60M to 60)
         loads = get_loads(bidding_zone, day)  # Get loads to extract resolution
         resolution_str = loads[1].resolution_code  # e.g., "PT60M"
-        resolution_minutes = parse(Int, match(r"PT(\d+)M", resolution_str)[1])  # Extract 60 from "PT60M"
+        match_result = match(r"PT(\d+)M", resolution_str)  # Attempt to match the pattern
+        if match_result === nothing
+            error("Invalid resolution format: $(resolution_str). Expected format: 'PT<number>M'.")
+        end
+        resolution_minutes = parse(Int, match_result[1])  # Extract 60 from "PT60M"
 
         N = length(generators)
         T = length(time_slots)
@@ -346,7 +376,7 @@ function apply_bidding_strategy_to_uc(
 
                 if bidding_strategy == :committed_only
                     # Conservative: Only bid committed units with positive generation
-                    if commitment[i, t] > 0.5 && generation[i, t] > 0.01
+                    if commitment[i, t] > COMMITMENT_THRESHOLD && generation[i, t] > GENERATION_THRESHOLD
                         should_bid = true
                         bid_quantity = generation[i, t]  # Bid actual optimized generation
                     end
@@ -358,16 +388,16 @@ function apply_bidding_strategy_to_uc(
                     # UC-informed realistic: Bid all units with realistic quantities
                     should_bid = true
 
-                    if commitment[i, t] > 0.5 && generation[i, t] > 0.01
+                    if commitment[i, t] > COMMITMENT_THRESHOLD && generation[i, t] > GENERATION_THRESHOLD
                         # Committed unit: bid actual UC generation (what UC selected)
                         bid_quantity = generation[i, t]
                     else
                         # Uncommitted unit: bid realistic available capacity
-                        if gen.p_min > 0.01
+                        if gen.p_min > GENERATION_THRESHOLD
                             bid_quantity = gen.p_min  # Minimum stable generation
                         else
-                            # For units with very low p_min, use a small fraction of max capacity
-                            bid_quantity = gen.p_max * 0.2  # 20% of max capacity
+                            # For units with very low p_min, use a configurable fraction of max capacity
+                            bid_quantity = gen.p_max * uncommitted_unit_fraction
                         end
                     end
                 else
@@ -380,7 +410,13 @@ function apply_bidding_strategy_to_uc(
                     time_slot = time_slots[t]  # Get the time slot for this period
 
                     # Parse time slot and create supply order with time and resolution information
-                    date_time = DateTime(time_slot, "yyyymmdd-HHMM")
+                    local date_time
+                    try
+                        date_time = DateTime(time_slot, "yyyymmdd-HHMM")
+                    catch e
+                        error("Invalid time_slot format: '$(time_slot)'. Expected format: 'YYYYMMDD-HHMM'. Error: $(e)")
+                    end
+
                     order = SimpleOrder(
                         :supply,
                         bid_price,
@@ -399,12 +435,18 @@ function apply_bidding_strategy_to_uc(
         # Generate demand orders from net demand
         total_demand_quantity = 0.0
         for t in 1:T
-            if net_demand[t] > 0.01  # Small threshold for numerical precision
+            if net_demand[t] > DEMAND_THRESHOLD  # Small threshold for numerical precision
 
                 time_slot = time_slots[t]  # Get the time slot for this period
 
                 # Parse time slot and create demand order with high price to ensure it's always served
-                date_time = DateTime(time_slot, "yyyymmdd-HHMM")
+                local date_time
+                try
+                    date_time = DateTime(time_slot, "yyyymmdd-HHMM")
+                catch e
+                    error("Invalid time_slot format: '$(time_slot)'. Expected format: 'YYYYMMDD-HHMM'. Error: $(e)")
+                end
+
                 order = SimpleOrder(
                     :demand,
                     demand_price,  # High price to ensure demand is met

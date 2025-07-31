@@ -41,7 +41,7 @@ function test_bidding_strategy()
 
     if result.success
         # Export to CSV for analysis
-        csv_path = "/tmp/market_orders_$(bidding_zone)_$(day).csv"
+        csv_path = tempname() * "_market_orders_$(bidding_zone)_$(day).csv"
         export_orders_to_csv(result, csv_path)
 
         # Show first few orders as examples
