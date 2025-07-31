@@ -61,15 +61,53 @@ function make_model()
     # Define the model
     model = Model(HiGHS.Optimizer)
 
+    # EUPHEMIA master problem (Economic Surplus Maximization) as described in Annex C1
     @objective(
         model,
         Max,
-        -sum(step_orders.ACCEPT[z, t, s, o] * step_orders.q[z, t, s, o] * step_orders.p_0[z, t, s, o] * res(o)
-             for z in 1:2, t in 1:2, s in 1:2, o in 1:2)
+        # Term 1: Step Orders contribution
+        -sum(ACCEPT[z, t, s, o] * q[z, t, s, o] * p[z, t, s, o] * res(o)
+             for z in Z, t in T[z], s in S, o in step_orders[z, t, s])
+
+        # Term 2: Interpolated Orders contribution  
         -
-        sum(interpolated_orders.ACCEPT[z, t, s, o] * interpolated_orders.q[z, t, s, o] * (interpolated_orders.p_0[z, t, s, o] + interpolated_orders.ACCEPT[z, t, s, o] * (interpolated_orders.p_1[z, t, s, o] - interpolated_orders.p_0) / 2) * res(o) for z in 1:2, t in 1:2, s in 1:2, o in 1:2)
+        sum(ACCEPT[z, t, s, o] * q[z, t, s, o] *
+            (p[z, t, s, o] + ACCEPT[z, t, s, o] * (p1[z, t, s, o] - p[z, t, s, o]) / 2) * res(o)
+            for z in Z, t in T[z], s in S, o in interpolated_orders[z, t, s])
+
+        # Term 3: Block Orders contribution
         -
-        sum()
+        sum(ACCEPT[bo] * q[bo, t] * p[bo] * res(o)
+            for bo in block_orders, t in T_bo[bo])
+
+        # Term 4: Complex Orders contribution
+        -
+        sum(ACCEPT[z, co, t, o] * q[z, co, t, o] * p[z, co, t, o] * res(co)
+            for z in Z, co in complex_orders[z], t in T[z], o in suborders[z, co, t])
+
+        # Term 5: Scalable Complex Orders contribution
+        -
+        sum(ACCEPT[z, sco, t, o] * q[z, sco, t, o] * p[z, sco, t, o] * res(sco)
+            for z in Z, sco in scalable_complex_orders[z], t in T[z], o in suborders[z, sco, t])
+        -
+        sum(sign(type(sco)) * FixedTerm[sco] * B_ACCEPT[sco]
+            for sco in scalable_complex_orders)
+
+        # Term 6: Merit Orders contribution
+        -
+        sum(ACCEPT[mo] * q[mo] * p[mo] * res(mo)
+            for mo in merit_orders)
+
+        # Term 7: Tariffs impact
+        # Note: Annex C1 uses 'u' in formula, Annex C5 defines 'uu' - documentation inconsistency
+        -
+        sum(Tariff[l, t] * FLOW[l, u, t]
+            for l in lines, u in [0, 1], t in time_periods)
+
+        # Term 8: Price-taking hourly orders curtailment minimization
+        -
+        M * sum(MAX_CURTAILMENT_RATIO[z, t, o]
+                for z in Z, t in T[z], o in price_taking_hourly_orders[z, t])
     )
 
     # Solve the model
