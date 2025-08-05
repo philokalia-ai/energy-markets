@@ -1,6 +1,5 @@
 #------------------------------------------------------------------------------------------#
-using JuMP, Ipopt, Suppressor, JSON, Plots, ProgressBars, CSV, TickTock, Complementarity, CPLEX
-using Plots.PlotMeasures
+using JuMP, CPLEX
 
 ENV["TICKTOCK_MESSAGES"] = false
 #------------------------------------------------------------------------------------------#
