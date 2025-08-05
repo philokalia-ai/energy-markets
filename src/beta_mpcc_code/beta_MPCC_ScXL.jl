@@ -467,7 +467,7 @@ end
 # Solve optimization model
 println("\nSolving MPCC model...")
 println("Using solver: $solver_name")
-solve_time = @elapsed optimize!(euphemia_model)
+optimization_time = @elapsed optimize!(euphemia_model)
 
 # Display solver results
 println("\n" * "="^80)
@@ -475,7 +475,7 @@ println("OPTIMIZATION RESULTS")
 println("="^80)
 println("Solver: $solver_name")
 println("Solution Status: $(termination_status(euphemia_model))")
-println("Solve Time: $(round(solve_time, digits=3)) seconds")
+println("Solve Time: $(round(optimization_time, digits=3)) seconds")
 if has_values(euphemia_model)
     println("Objective Value (Total Market Welfare): $(round(JuMP.objective_value(euphemia_model), digits=3))")
 else
