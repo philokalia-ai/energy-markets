@@ -1,5 +1,39 @@
 #------------------------------------------------------------------------------------------#
-using JuMP, CPLEX
+# MPCC-based Euphemia Market Clearing Implementation
+# 
+# Solver Requirements (install at least one):
+# - HiGHS.jl (recommended, open-source): ] add HiGHS
+# - Gurobi.jl (commercial, requires license): ] add Gurobi
+# - CPLEX.jl (commercial, requires license): ] add CPLEX
+#
+# The script will automatically detect and use the first available solver.
+#------------------------------------------------------------------------------------------#
+using JuMP
+
+# Import solvers with error handling
+try
+    using HiGHS
+    global HIGHS_AVAILABLE = true
+catch
+    global HIGHS_AVAILABLE = false
+    println("Warning: HiGHS.jl not available")
+end
+
+try
+    using Gurobi
+    global GUROBI_AVAILABLE = true
+catch
+    global GUROBI_AVAILABLE = false
+    println("Warning: Gurobi.jl not available")
+end
+
+try
+    using CPLEX
+    global CPLEX_AVAILABLE = true
+catch
+    global CPLEX_AVAILABLE = false
+    println("Warning: CPLEX.jl not available")
+end
 
 ENV["TICKTOCK_MESSAGES"] = false
 #------------------------------------------------------------------------------------------#
@@ -62,8 +96,90 @@ end
 
 
 #-- MPCC Model with readable variable names ---------------------------------------------#
-euphemia_model = Model(CPLEX.Optimizer)
-#MOI.set(euphemia_model, MOI.Silent(), true)
+
+# Solver selection with fallback options
+function select_solver(preferred_solver::String="auto")
+    available_solvers = []
+
+    # Check which solvers are available
+    if HIGHS_AVAILABLE
+        push!(available_solvers, ("HiGHS", HiGHS.Optimizer))
+    end
+    if GUROBI_AVAILABLE
+        push!(available_solvers, ("Gurobi", Gurobi.Optimizer))
+    end
+    if CPLEX_AVAILABLE
+        push!(available_solvers, ("CPLEX", CPLEX.Optimizer))
+    end
+
+    if isempty(available_solvers)
+        error("No solvers available! Please install at least one of: HiGHS.jl (recommended), Gurobi.jl, or CPLEX.jl")
+    end
+
+    # Determine priority order based on preference
+    solvers_to_try = if preferred_solver == "auto"
+        # Default priority: HiGHS (open-source) -> Gurobi -> CPLEX
+        available_solvers
+    elseif lowercase(preferred_solver) == "highs" && HIGHS_AVAILABLE
+        [("HiGHS", HiGHS.Optimizer)] + filter(x -> x[1] != "HiGHS", available_solvers)
+    elseif lowercase(preferred_solver) == "gurobi" && GUROBI_AVAILABLE
+        [("Gurobi", Gurobi.Optimizer)] + filter(x -> x[1] != "Gurobi", available_solvers)
+    elseif lowercase(preferred_solver) == "cplex" && CPLEX_AVAILABLE
+        [("CPLEX", CPLEX.Optimizer)] + filter(x -> x[1] != "CPLEX", available_solvers)
+    elseif preferred_solver != "auto"
+        println("Warning: Preferred solver '$preferred_solver' not available. Using auto-selection.")
+        available_solvers
+    else
+        available_solvers
+    end
+
+    # Try solvers in order
+    for (solver_name, optimizer) in solvers_to_try
+        try
+            println("Trying $solver_name solver...")
+            # Test if solver is functional by creating a test model
+            test_model = Model(optimizer)
+            println("✓ Using $solver_name solver")
+            return optimizer
+        catch e
+            println("✗ $solver_name failed to initialize: $(typeof(e))")
+        end
+    end
+
+    error("All available solvers failed to initialize!")
+end
+
+# Create model with selected solver
+# You can change "auto" to "highs", "gurobi", or "cplex" to force a specific solver
+selected_optimizer = select_solver("auto")
+euphemia_model = Model(selected_optimizer)
+
+# Configure solver settings (silent mode and performance tuning)
+solver_name = string(selected_optimizer)
+if occursin("HiGHS", solver_name)
+    set_silent(euphemia_model)
+    println("HiGHS solver configured with default settings")
+    # HiGHS-specific settings for mixed-integer problems
+    # set_attribute(euphemia_model, "presolve", "on")
+    # set_attribute(euphemia_model, "parallel", "on")
+elseif occursin("Gurobi", solver_name)
+    set_silent(euphemia_model)
+    println("Gurobi solver configured with default settings")
+    # Gurobi-specific settings for MPCC problems
+    # set_attribute(euphemia_model, "MIPGap", 0.01)
+    # set_attribute(euphemia_model, "TimeLimit", 3600)
+elseif occursin("CPLEX", solver_name)
+    set_silent(euphemia_model)
+    println("CPLEX solver configured with default settings")
+    # CPLEX-specific settings
+    # set_attribute(euphemia_model, "CPXPARAM_MIP_Tolerances_MIPGap", 0.01)
+else
+    set_silent(euphemia_model)
+    println("Unknown solver type - using generic settings")
+end
+
+println("Model ready for optimization.")
+println("Note: Uncomment solver-specific settings above for performance tuning if needed.")
 
 big_m_parameter = 4000000  # Large number for Big-M constraints
 
@@ -349,14 +465,24 @@ end
 
 
 # Solve optimization model
-println(euphemia_model)
-optimize!(euphemia_model)
-#------------------------------------------------------------------------------------------#
+println("\nSolving MPCC model...")
+println("Using solver: $solver_name")
+solve_time = @elapsed optimize!(euphemia_model)
 
-
-#------------------------------------------------------------------------------------------#
-println()
-println("Total Market Welfare:", round(JuMP.objective_value(euphemia_model), digits=3))
+# Display solver results
+println("\n" * "="^80)
+println("OPTIMIZATION RESULTS")
+println("="^80)
+println("Solver: $solver_name")
+println("Solution Status: $(termination_status(euphemia_model))")
+println("Solve Time: $(round(solve_time, digits=3)) seconds")
+if has_values(euphemia_model)
+    println("Objective Value (Total Market Welfare): $(round(JuMP.objective_value(euphemia_model), digits=3))")
+else
+    println("No solution found!")
+    exit()
+end
+println("="^80)
 
 
 println()
