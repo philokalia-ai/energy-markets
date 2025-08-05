@@ -1,375 +1,384 @@
 #------------------------------------------------------------------------------------------#
-using JuMP, Ipopt, Suppressor,JSON, Plots, ProgressBars, CSV, TickTock,  Complementarity, CPLEX
+using JuMP, Ipopt, Suppressor, JSON, Plots, ProgressBars, CSV, TickTock, Complementarity, CPLEX
 using Plots.PlotMeasures
 
 ENV["TICKTOCK_MESSAGES"] = false
 #------------------------------------------------------------------------------------------#
 
-include("..//examples//beta_order_book_cexl.jl")
+include(".//examples//beta_order_book_cexl.jl")
 
+# Rename the main data structure for clarity
+order_book = Obk  # Original was "Obk" - now "order_book"
 
+#-- Data organization with readable names -----------------------------------------#
+stepwise_orders = filter((k, v)::Pair -> v["type"] == "stepwise", order_book["Orders"]) |> keys
 
-#-- data organization shortcuts (key collections) -----------------------------------------#
-stepwise_orders=filter((k, v)::Pair  ->  v["type"] == "stepwise", Obk["Orders"]) |> keys
+block_orders = filter((k, v)::Pair -> (v["type"] == "block" || v["type"] == "exclusive" || v["type"] == "linked"), order_book["Orders"]) |> keys
 
-block_orders=filter((k, v)::Pair  ->  (v["type"] == "block" || v["type"]=="exclusive" || v["type"]=="linked"), Obk["Orders"]) |> keys
+exclusive_block_orders = filter((k, v)::Pair -> v["type"] == "exclusive", order_book["Orders"]) |> keys
+linked_block_orders = filter((k, v)::Pair -> v["type"] == "linked", order_book["Orders"]) |> keys
 
-ex_block_orders=filter((k, v)::Pair  ->  v["type"] =="exclusive", Obk["Orders"]) |> keys
-lnkd_block_orders=filter((k, v)::Pair  ->  v["type"] =="linked", Obk["Orders"]) |> keys
+exclusive_order_groups = filter((k, v)::Pair -> v["type"] == "exclusive", order_book["ComplexOrders"]) |> keys
+linked_order_groups = filter((k, v)::Pair -> v["type"] == "linked", order_book["ComplexOrders"]) |> keys
 
-ex_order_groups=filter((k, v)::Pair  ->  v["type"] =="exclusive", Obk["ComplexOrders"]) |> keys
-lnkd_order_groups=filter((k, v)::Pair  ->  v["type"] =="linked", Obk["ComplexOrders"]) |> keys
- 
-parents=String[]
-children=String[]
-for gdx in lnkd_order_groups
-    push!(parents,Obk["ComplexOrders"][gdx]["parent"])
-    for cdx in Obk["ComplexOrders"][gdx]["children"]
-        push!(children,cdx)
+parent_orders = String[]
+child_orders = String[]
+for group_id in linked_order_groups
+    push!(parent_orders, order_book["ComplexOrders"][group_id]["parent"])
+    for child_id in order_book["ComplexOrders"][group_id]["children"]
+        push!(child_orders, child_id)
     end
 end
 
-nodal_keys=Dict{String,Any}()
-for ndx in Obk["Nodes"]
+orders_by_node = Dict{String,Any}()
+for node_id in order_book["Nodes"]
 
-    nodal_keys[ndx]=Dict{String,Any}()
-    nodal_keys[ndx]["stepwise_orders"]=Dict{String,Any}()
-    for tdx in Obk["Periods"]
-        nodal_keys[ndx]["stepwise_orders"][tdx]= filter((k, v)::Pair  ->  v["type"] == "stepwise" && v["node"]==ndx && haskey(v["qtity"],tdx)    , Obk["Orders"]) |> keys
+    orders_by_node[node_id] = Dict{String,Any}()
+    orders_by_node[node_id]["stepwise_orders"] = Dict{String,Any}()
+    for time_period in order_book["Periods"]
+        orders_by_node[node_id]["stepwise_orders"][time_period] = filter((k, v)::Pair -> v["type"] == "stepwise" && v["node"] == node_id && haskey(v["qtity"], time_period), order_book["Orders"]) |> keys
     end
 
-    nodal_keys[ndx]["block_orders"]=Dict{String,Any}()
-    for tdx in Obk["Periods"]
-        nodal_keys[ndx]["block_orders"][tdx]= filter((k, v)::Pair  ->  (v["type"] == "block" || v["type"]=="exclusive" || v["type"]=="linked") && v["node"]==ndx && haskey(v["qtity"],tdx)    , Obk["Orders"]) |> keys
+    orders_by_node[node_id]["block_orders"] = Dict{String,Any}()
+    for time_period in order_book["Periods"]
+        orders_by_node[node_id]["block_orders"][time_period] = filter((k, v)::Pair -> (v["type"] == "block" || v["type"] == "exclusive" || v["type"] == "linked") && v["node"] == node_id && haskey(v["qtity"], time_period), order_book["Orders"]) |> keys
     end
 
 
-    if haskey(Obk["ATC"],"Flows")
-        nodal_keys[ndx]["flows_from"]=filter((k, v)::Pair  ->  v["from"] == ndx    , Obk["ATC"]["Flows"]) |> keys
-        nodal_keys[ndx]["flows_to"]=filter((k, v)::Pair  ->  v["to"] == ndx    , Obk["ATC"]["Flows"]) |> keys
+    if haskey(order_book["ATC"], "Flows")
+        orders_by_node[node_id]["flows_from"] = filter((k, v)::Pair -> v["from"] == node_id, order_book["ATC"]["Flows"]) |> keys
+        orders_by_node[node_id]["flows_to"] = filter((k, v)::Pair -> v["to"] == node_id, order_book["ATC"]["Flows"]) |> keys
     end
 end
 
 
 
-if haskey(Obk["ATC"],"LmTs")
-    limit_keys=Dict{String,Any}()
-    for tdx in Obk["Periods"]
-        limit_keys[tdx]=filter((k, v)::Pair  ->  haskey(v["value"],tdx), Obk["ATC"]["LmTs"]) |> keys
+if haskey(order_book["ATC"], "LmTs")
+    transmission_limits_by_time = Dict{String,Any}()
+    for time_period in order_book["Periods"]
+        transmission_limits_by_time[time_period] = filter((k, v)::Pair -> haskey(v["value"], time_period), order_book["ATC"]["LmTs"]) |> keys
     end
 end
 #------------------------------------------------------------------------------------------#
 
 
-#-- mpcc model -----------------------------------------------------------------------------#
-mpcc_sxl_mdl = Model(CPLEX.Optimizer)
-#MOI.set(mpcc_sxl_mdl, MOI.Silent(), true)
+#-- MPCC Model with readable variable names ---------------------------------------------#
+euphemia_model = Model(CPLEX.Optimizer)
+#MOI.set(euphemia_model, MOI.Silent(), true)
 
-BigMe=4000000
+big_m_parameter = 4000000  # Large number for Big-M constraints
 
-#-[stepwise order acceptance]: primal variables & dual variables
-@variable(mpcc_sxl_mdl,0<=x[idx in stepwise_orders]) 
-@variable(mpcc_sxl_mdl,0<=xsw[idx in stepwise_orders]) 
-#--
+#-- Decision Variables with clear names --#
 
-#-[block order acceptance]: primal & dual variables
-@variable(mpcc_sxl_mdl,0<=y[idx in block_orders],Bin) 
-@variable(mpcc_sxl_mdl,0<=xb[idx in block_orders])         # M4c
-@variable(mpcc_sxl_mdl,0<=xb_low[idx in block_orders])         # M4c
-@variable(mpcc_sxl_mdl,0<=xb_upp[idx in block_orders])         # M4c
+# Stepwise order acceptance variables (0-1 continuous)
+@variable(euphemia_model, 0 <= stepwise_acceptance[order_id in stepwise_orders])
+@variable(euphemia_model, 0 <= stepwise_dual[order_id in stepwise_orders])
 
+# Block order variables
+@variable(euphemia_model, 0 <= block_activation[order_id in block_orders], Bin)  # Binary: activate block or not
+@variable(euphemia_model, 0 <= block_acceptance[order_id in block_orders])       # Continuous: how much to accept
+@variable(euphemia_model, 0 <= block_acceptance_lower_dual[order_id in block_orders])
+@variable(euphemia_model, 0 <= block_acceptance_upper_dual[order_id in block_orders])
 
-@variable(mpcc_sxl_mdl,0<=ysw[idx in block_orders; (!(idx in ex_block_orders) && !(idx in children))])  ## modified 
-@variable(mpcc_sxl_mdl,0<=yexsw[idx in ex_order_groups])  ## modified 
-@variable(mpcc_sxl_mdl,0<=ylnkd[idx in lnkd_order_groups, cdx in Obk["ComplexOrders"][idx]["children"]])  ## new
-#-
+# Dual variables for different constraint types
+@variable(euphemia_model, 0 <= block_activation_dual[order_id in block_orders; (!(order_id in exclusive_block_orders) && !(order_id in child_orders))])
+@variable(euphemia_model, 0 <= exclusive_group_dual[group_id in exclusive_order_groups])
+@variable(euphemia_model, 0 <= linked_group_dual[group_id in linked_order_groups, child_id in order_book["ComplexOrders"][group_id]["children"]])
 
-#-[ATC flow]: primal variables
-if haskey(Obk["ATC"],"Flows")
-    @variable(mpcc_sxl_mdl,atc_flow[idx in keys(Obk["ATC"]["Flows"]),tdx in Obk["Periods"]]) #-- ATC flow x(time periods)
+# Network flow variables (if transmission network exists)
+if haskey(order_book["ATC"], "Flows")
+    @variable(euphemia_model, transmission_flow[flow_id in keys(order_book["ATC"]["Flows"]), time_period in order_book["Periods"]])
 end
-#--
 
+# Market clearing prices (dual variables of power balance constraints)
+@variable(euphemia_model, market_price[node_id in order_book["Nodes"], time_period in order_book["Periods"]])
+#-- Constraints with readable names --#
 
-#-[(nodal) power balance]: dual variables
-@variable(mpcc_sxl_mdl,mu[ndx in Obk["Nodes"], tdx in Obk["Periods"]])
-#-
-
-
-#-[stepwise order acceptance]: primal & dual constraints
-@constraint(mpcc_sxl_mdl, xvar_upper[idx in stepwise_orders],
-    x[idx] <= 1
+# Stepwise order constraints
+@constraint(euphemia_model, stepwise_upper_bound[order_id in stepwise_orders],
+    stepwise_acceptance[order_id] <= 1
 )
 
-@expression(mpcc_sxl_mdl, xvar_rhs[idx in stepwise_orders], #- dual constraint right-hand-side
-    xsw[idx]
+# Calculate the dual constraint right-hand side for stepwise orders
+@expression(euphemia_model, stepwise_dual_rhs[order_id in stepwise_orders],
+    stepwise_dual[order_id]
     +
-    sum(Obk["Orders"][idx]["qtity"][tdx] * mu[Obk["Orders"][idx]["node"], tdx] for tdx in keys(Obk["Orders"][idx]["qtity"]))
+    sum(order_book["Orders"][order_id]["qtity"][time_period] *
+        market_price[order_book["Orders"][order_id]["node"], time_period]
+        for time_period in keys(order_book["Orders"][order_id]["qtity"]))
     -
-    sum(Obk["Orders"][idx]["qtity"][tdx] * Obk["Orders"][idx]["price"]["p0"] for tdx in keys(Obk["Orders"][idx]["qtity"]))
+    sum(order_book["Orders"][order_id]["qtity"][time_period] *
+        order_book["Orders"][order_id]["price"]["p0"]
+        for time_period in keys(order_book["Orders"][order_id]["qtity"]))
 )
 
-@constraint(mpcc_sxl_mdl, xvar_dual_cstr[idx in stepwise_orders],
-    0 <=
-    xvar_rhs[idx]
+@constraint(euphemia_model, stepwise_dual_constraint[order_id in stepwise_orders],
+    0 <= stepwise_dual_rhs[order_id]
 )
-#--
-
-#-[block order activation]: primal constraints
-@constraint(mpcc_sxl_mdl, block_order_upper[idx in block_orders; (!(idx in ex_block_orders) && !(idx in children))],
-    y[idx] <= 1
-)
-#--
-
-#-[block order aceptance]: primal constraints #(M4C)
-@constraint(mpcc_sxl_mdl, block_order_xupper[idx in block_orders], 
-    xb[idx] <= y[idx]
+# Block order activation constraints
+@constraint(euphemia_model, block_activation_upper_bound[order_id in block_orders; (!(order_id in exclusive_block_orders) && !(order_id in child_orders))],
+    block_activation[order_id] <= 1
 )
 
-@constraint(mpcc_sxl_mdl, block_order_lower[idx in block_orders],  
-Obk["Orders"][idx]["mar"]*y[idx] <= xb[idx]
+# Block order acceptance constraints
+@constraint(euphemia_model, block_acceptance_upper_bound[order_id in block_orders],
+    block_acceptance[order_id] <= block_activation[order_id]
 )
-#--
 
-#-[exclusive block order groups]: primal constraint
-@constraint(mpcc_sxl_mdl,ex_group[idx in ex_order_groups],
-    sum(y[odx] for odx in Obk["ComplexOrders"][idx]["members"])<=1
+@constraint(euphemia_model, block_acceptance_lower_bound[order_id in block_orders],
+    order_book["Orders"][order_id]["mar"] * block_activation[order_id] <= block_acceptance[order_id]
 )
-#--
+# Exclusive group constraints (only one block in group can be activated)
+@constraint(euphemia_model, exclusive_group_constraint[group_id in exclusive_order_groups],
+    sum(block_activation[order_id] for order_id in order_book["ComplexOrders"][group_id]["members"]) <= 1
+)
 
-#-[linked block order group]: primal constraint
-@constraint(mpcc_sxl_mdl,lnkd_group[idx in lnkd_order_groups,jdx in Obk["ComplexOrders"][idx]["children"]],
-    y[jdx]<=y[Obk["ComplexOrders"][idx]["parent"]]
+# Linked group constraints (child blocks depend on parent activation)
+@constraint(euphemia_model, linked_group_constraint[group_id in linked_order_groups, child_id in order_book["ComplexOrders"][group_id]["children"]],
+    block_activation[child_id] <= block_activation[order_book["ComplexOrders"][group_id]["parent"]]
 )
 #--
 
-#-[block order aceptance]: dual constraint (M4C)
-@expression(mpcc_sxl_mdl, xbvar_rhs[idx in block_orders], 
-    xb_upp[idx]-xb_low[idx]
+# Block order acceptance dual constraint (M4C)
+@expression(euphemia_model, block_acceptance_dual_rhs[order_idx in block_orders],
+    block_acceptance_upper_dual[order_idx] - block_acceptance_lower_dual[order_idx]
     +
-    sum(Obk["Orders"][idx]["qtity"][tdx] * mu[Obk["Orders"][idx]["node"], tdx] for tdx in keys(Obk["Orders"][idx]["qtity"]))
+    sum(order_book["Orders"][order_idx]["qtity"][time_period] * market_price[order_book["Orders"][order_idx]["node"], time_period] for time_period in keys(order_book["Orders"][order_idx]["qtity"]))
     -
-    sum(Obk["Orders"][idx]["qtity"][tdx] * Obk["Orders"][idx]["price"]["p0"] for tdx in keys(Obk["Orders"][idx]["qtity"]))
+    sum(order_book["Orders"][order_idx]["qtity"][time_period] * order_book["Orders"][order_idx]["price"]["p0"] for time_period in keys(order_book["Orders"][order_idx]["qtity"]))
 )
-@constraint(mpcc_sxl_mdl, xbvar_dual_cstr[idx in block_orders],        #(M4C)
+@constraint(euphemia_model, block_acceptance_dual_constraint[order_idx in block_orders],        #(M4C)
     0 <=
-    xbvar_rhs[idx]
+    block_acceptance_dual_rhs[order_idx]
 )
 #--
 
-#-[block order activation]: dual constraint -- REGULAR BLOCKS ONLY (M4C)
-@expression(mpcc_sxl_mdl, yvar_rhs[idx in block_orders; (!(idx in ex_block_orders) && !(idx in lnkd_block_orders))],
-    ysw[idx]
-    +Obk["Orders"][idx]["mar"]*xb_low[idx]-xb_upp[idx] 
+# Block order activation dual constraint -- REGULAR BLOCKS ONLY (M4C)
+@expression(euphemia_model, regular_block_activation_dual_rhs[order_idx in block_orders; (!(order_idx in exclusive_block_orders) && !(order_idx in linked_block_orders))],
+    block_activation_dual[order_idx]
+    +
+    order_book["Orders"][order_idx]["mar"] * block_acceptance_lower_dual[order_idx] - block_acceptance_upper_dual[order_idx]
 )
-@constraint(mpcc_sxl_mdl, yvar_dual_cstr[idx in block_orders; (!(idx in ex_block_orders) && !(idx in lnkd_block_orders))],
+@constraint(euphemia_model, regular_block_activation_dual_constraint[order_idx in block_orders; (!(order_idx in exclusive_block_orders) && !(order_idx in linked_block_orders))],
     0 <=
-    yvar_rhs[idx]
+    regular_block_activation_dual_rhs[order_idx]
 )
 #--
 
-#-[block order activation]: dual constraint -- EXCLUSIVE BLOCKS ONLY (M4C)
-@expression(mpcc_sxl_mdl, yexvar_rhs[idx in ex_block_orders], 
-    sum(yexsw[gdx] for gdx in ex_order_groups if idx in Obk["ComplexOrders"][gdx]["members"]) 
-    +Obk["Orders"][idx]["mar"]*xb_low[idx]-xb_upp[idx] 
+# Block order activation dual constraint -- EXCLUSIVE BLOCKS ONLY (M4C)
+@expression(euphemia_model, exclusive_block_activation_dual_rhs[order_idx in exclusive_block_orders],
+    sum(exclusive_group_dual[group_idx] for group_idx in exclusive_order_groups if order_idx in order_book["ComplexOrders"][group_idx]["members"])
+    +
+    order_book["Orders"][order_idx]["mar"] * block_acceptance_lower_dual[order_idx] - block_acceptance_upper_dual[order_idx]
 )
-@constraint(mpcc_sxl_mdl, yexvar_dual_cstr[idx in ex_block_orders],
+@constraint(euphemia_model, exclusive_block_activation_dual_constraint[order_idx in exclusive_block_orders],
     0 <=
-    yexvar_rhs[idx]
+    exclusive_block_activation_dual_rhs[order_idx]
 )
 #--
 
-#-[block order activation]: dual constraint -- PARENT BLOCKS ONLY (M4C)
-@expression(mpcc_sxl_mdl, ypar_rhs[idx in parents], 
-    ysw[idx]
-    -sum(sum(ylnkd[gdx,cdx] for cdx in Obk["ComplexOrders"][gdx]["children"]) for gdx in lnkd_order_groups if idx==Obk["ComplexOrders"][gdx]["parent"]) 
-    +Obk["Orders"][idx]["mar"]*xb_low[idx]-xb_upp[idx] 
+# Block order activation dual constraint -- PARENT BLOCKS ONLY (M4C)
+@expression(euphemia_model, parent_block_activation_dual_rhs[order_idx in parent_orders],
+    block_activation_dual[order_idx]
+    -
+    sum(sum(linked_group_dual[group_idx, child_idx] for child_idx in order_book["ComplexOrders"][group_idx]["children"]) for group_idx in linked_order_groups if order_idx == order_book["ComplexOrders"][group_idx]["parent"])
+    +
+    order_book["Orders"][order_idx]["mar"] * block_acceptance_lower_dual[order_idx] - block_acceptance_upper_dual[order_idx]
 )
-@constraint(mpcc_sxl_mdl, ypar_dual_cstr[idx in parents],
+@constraint(euphemia_model, parent_block_activation_dual_constraint[order_idx in parent_orders],
     0 <=
-    ypar_rhs[idx]
+    parent_block_activation_dual_rhs[order_idx]
 )
 #--
 
-#-[block order activation]: dual constraint -- CHILD BLOCKS ONLY (M4C)
-@expression(mpcc_sxl_mdl, ychild_rhs[idx in children], 
-    sum(ylnkd[gdx,idx] for gdx in lnkd_order_groups if idx in Obk["ComplexOrders"][gdx]["children"]) 
-    +Obk["Orders"][idx]["mar"]*xb_low[idx]-xb_upp[idx] 
+# Block order activation dual constraint -- CHILD BLOCKS ONLY (M4C)
+@expression(euphemia_model, child_block_activation_dual_rhs[order_idx in child_orders],
+    sum(linked_group_dual[group_idx, order_idx] for group_idx in linked_order_groups if order_idx in order_book["ComplexOrders"][group_idx]["children"])
+    +
+    order_book["Orders"][order_idx]["mar"] * block_acceptance_lower_dual[order_idx] - block_acceptance_upper_dual[order_idx]
 )
-@constraint(mpcc_sxl_mdl, ychild_dual_cstr[idx in children],
+@constraint(euphemia_model, child_block_activation_dual_constraint[order_idx in child_orders],
     0 <=
-    ychild_rhs[idx]
+    child_block_activation_dual_rhs[order_idx]
 )
 #--
 
-#-[stepwise order acceptance]: complementarity constraints
-@variable(mpcc_sxl_mdl,aux_x[idx in stepwise_orders],Bin)
-@variable(mpcc_sxl_mdl,aux_xsw[idx in stepwise_orders],Bin)
+# Stepwise order acceptance complementarity constraints
+@variable(euphemia_model, stepwise_acceptance_complementarity_aux[order_idx in stepwise_orders], Bin)
+@variable(euphemia_model, stepwise_acceptance_switch_complementarity_aux[order_idx in stepwise_orders], Bin)
 
-@constraint(mpcc_sxl_mdl,comp_x_ineq1[idx in stepwise_orders],    x[idx]<=aux_x[idx]*BigMe)
-@constraint(mpcc_sxl_mdl,comp_x_ineq2[idx in stepwise_orders],    xvar_rhs[idx]<=(1-aux_x[idx])*BigMe)
+@constraint(euphemia_model, stepwise_acceptance_complementarity_ineq1[order_idx in stepwise_orders], stepwise_acceptance[order_idx] <= stepwise_acceptance_complementarity_aux[order_idx] * big_m_parameter)
+@constraint(euphemia_model, stepwise_acceptance_complementarity_ineq2[order_idx in stepwise_orders], stepwise_dual_rhs[order_idx] <= (1 - stepwise_acceptance_complementarity_aux[order_idx]) * big_m_parameter)
 
-@constraint(mpcc_sxl_mdl,comp_xsw_ineq1[idx in stepwise_orders],xsw[idx]<=aux_xsw[idx]*BigMe)
-@constraint(mpcc_sxl_mdl,comp_xsw_ineq2[idx in stepwise_orders],x[idx]-1>=(aux_xsw[idx]-1)*BigMe)
+@constraint(euphemia_model, stepwise_acceptance_switch_complementarity_ineq1[order_idx in stepwise_orders], stepwise_dual[order_idx] <= stepwise_acceptance_switch_complementarity_aux[order_idx] * big_m_parameter)
+@constraint(euphemia_model, stepwise_acceptance_switch_complementarity_ineq2[order_idx in stepwise_orders], stepwise_acceptance[order_idx] - 1 >= (stepwise_acceptance_switch_complementarity_aux[order_idx] - 1) * big_m_parameter)
 #--
 
-#-[block order activation]: complementarity constraints
-@variable(mpcc_sxl_mdl,aux_y[idx in block_orders; (!(idx in ex_block_orders) && !(idx in lnkd_block_orders))],Bin)  #-- not for blocks in complex groups
-@constraint(mpcc_sxl_mdl,comp_y_ineq1[idx in block_orders; (!(idx in ex_block_orders) && !(idx in lnkd_block_orders))],    y[idx]<=aux_y[idx]*BigMe)
-@constraint(mpcc_sxl_mdl,comp_y_ineq2[idx in block_orders; (!(idx in ex_block_orders) && !(idx in lnkd_block_orders))],    yvar_rhs[idx]<=(1-aux_y[idx])*BigMe)
+# Block order activation complementarity constraints
+@variable(euphemia_model, block_activation_complementarity_aux[order_idx in block_orders; (!(order_idx in exclusive_block_orders) && !(order_idx in linked_block_orders))], Bin)  # Not for blocks in complex groups
+@constraint(euphemia_model, block_activation_complementarity_ineq1[order_idx in block_orders; (!(order_idx in exclusive_block_orders) && !(order_idx in linked_block_orders))], block_activation[order_idx] <= block_activation_complementarity_aux[order_idx] * big_m_parameter)
+@constraint(euphemia_model, block_activation_complementarity_ineq2[order_idx in block_orders; (!(order_idx in exclusive_block_orders) && !(order_idx in linked_block_orders))], regular_block_activation_dual_rhs[order_idx] <= (1 - block_activation_complementarity_aux[order_idx]) * big_m_parameter)
 
-#-[exclusive block order group welfare]: complementarity constraints
-@variable(mpcc_sxl_mdl,aux_yex[idx in ex_block_orders],Bin)  #--  blocks in exclusive groups
-@constraint(mpcc_sxl_mdl,comp_yex_ineq1[idx in ex_block_orders],    y[idx]<=aux_yex[idx]*BigMe)
-@constraint(mpcc_sxl_mdl,comp_yex_ineq2[idx in ex_block_orders],    yexvar_rhs[idx]<=(1-aux_yex[idx])*BigMe) 
+# Exclusive block order group welfare complementarity constraints
+@variable(euphemia_model, exclusive_block_complementarity_aux[order_idx in exclusive_block_orders], Bin)  # Blocks in exclusive groups
+@constraint(euphemia_model, exclusive_block_complementarity_ineq1[order_idx in exclusive_block_orders], block_activation[order_idx] <= exclusive_block_complementarity_aux[order_idx] * big_m_parameter)
+@constraint(euphemia_model, exclusive_block_complementarity_ineq2[order_idx in exclusive_block_orders], exclusive_block_activation_dual_rhs[order_idx] <= (1 - exclusive_block_complementarity_aux[order_idx]) * big_m_parameter)
 
-@variable(mpcc_sxl_mdl,aux_ex_groups[idx in ex_order_groups],Bin)  #--  blocks in exclusive groups
-@constraint(mpcc_sxl_mdl,comp_aux_ex_groups_ineq1[idx in ex_order_groups],    yexsw[idx]<=aux_ex_groups[idx]*BigMe)
-@constraint(mpcc_sxl_mdl,comp_aux_ex_groups_ineq2[idx in ex_order_groups],    1- sum(y[odx] for odx in Obk["ComplexOrders"][idx]["members"])<=(1-aux_ex_groups[idx])*BigMe)
+@variable(euphemia_model, exclusive_group_complementarity_aux[group_idx in exclusive_order_groups], Bin)  # Blocks in exclusive groups
+@constraint(euphemia_model, exclusive_group_complementarity_ineq1[group_idx in exclusive_order_groups], exclusive_group_dual[group_idx] <= exclusive_group_complementarity_aux[group_idx] * big_m_parameter)
+@constraint(euphemia_model, exclusive_group_complementarity_ineq2[group_idx in exclusive_order_groups], 1 - sum(block_activation[order_idx] for order_idx in order_book["ComplexOrders"][group_idx]["members"]) <= (1 - exclusive_group_complementarity_aux[group_idx]) * big_m_parameter)
 
-#-[linked block order group welfare]: complementarity constraints
-@variable(mpcc_sxl_mdl,aux_ypar[idx in parents],Bin)  #--  parent blocks
-@constraint(mpcc_sxl_mdl,comp_ypar_ineq1[idx in parents],    y[idx]<=aux_ypar[idx]*BigMe)
-@constraint(mpcc_sxl_mdl,comp_ypar_ineq2[idx in parents],    ypar_rhs[idx]<=(1-aux_ypar[idx])*BigMe)
+# Linked block order group welfare complementarity constraints
+@variable(euphemia_model, parent_block_complementarity_aux[order_idx in parent_orders], Bin)  # Parent blocks
+@constraint(euphemia_model, parent_block_complementarity_ineq1[order_idx in parent_orders], block_activation[order_idx] <= parent_block_complementarity_aux[order_idx] * big_m_parameter)
+@constraint(euphemia_model, parent_block_complementarity_ineq2[order_idx in parent_orders], parent_block_activation_dual_rhs[order_idx] <= (1 - parent_block_complementarity_aux[order_idx]) * big_m_parameter)
 
-@variable(mpcc_sxl_mdl,aux_ychild[idx in children],Bin)  #--  children blocks
-@constraint(mpcc_sxl_mdl,comp_ychild_ineq1[idx in children],    y[idx]<=aux_ychild[idx]*BigMe)
-@constraint(mpcc_sxl_mdl,comp_ychild_ineq2[idx in children],    ychild_rhs[idx]<=(1-aux_ychild[idx])*BigMe)
+@variable(euphemia_model, child_block_complementarity_aux[order_idx in child_orders], Bin)  # Child blocks
+@constraint(euphemia_model, child_block_complementarity_ineq1[order_idx in child_orders], block_activation[order_idx] <= child_block_complementarity_aux[order_idx] * big_m_parameter)
+@constraint(euphemia_model, child_block_complementarity_ineq2[order_idx in child_orders], child_block_activation_dual_rhs[order_idx] <= (1 - child_block_complementarity_aux[order_idx]) * big_m_parameter)
 
-@variable(mpcc_sxl_mdl,aux_lnkd[gdx in lnkd_order_groups,idx in Obk["ComplexOrders"][gdx]["children"]],Bin)
-@constraint(mpcc_sxl_mdl,comp_lnkd_group_ineq1[gdx in lnkd_order_groups,idx in Obk["ComplexOrders"][gdx]["children"]], ylnkd[gdx,idx]<=aux_lnkd[gdx,idx]*BigMe)
-@constraint(mpcc_sxl_mdl,comp_lnkd_group_ineq2[gdx in lnkd_order_groups,idx in Obk["ComplexOrders"][gdx]["children"]], y[Obk["ComplexOrders"][gdx]["parent"]]-y[idx]<=(1-aux_lnkd[gdx,idx])*BigMe)
+@variable(euphemia_model, linked_group_complementarity_aux[group_idx in linked_order_groups, order_idx in order_book["ComplexOrders"][group_idx]["children"]], Bin)
+@constraint(euphemia_model, linked_group_complementarity_ineq1[group_idx in linked_order_groups, order_idx in order_book["ComplexOrders"][group_idx]["children"]], linked_group_dual[group_idx, order_idx] <= linked_group_complementarity_aux[group_idx, order_idx] * big_m_parameter)
+@constraint(euphemia_model, linked_group_complementarity_ineq2[group_idx in linked_order_groups, order_idx in order_book["ComplexOrders"][group_idx]["children"]], block_activation[order_book["ComplexOrders"][group_idx]["parent"]] - block_activation[order_idx] <= (1 - linked_group_complementarity_aux[group_idx, order_idx]) * big_m_parameter)
 #--
 
 
-#-[block order acceptance]: complementarity constraints
-@variable(mpcc_sxl_mdl,aux_xb[idx in block_orders],Bin)  #(M4C)
-@constraint(mpcc_sxl_mdl,comp_xb_ineq1[idx in block_orders],    xb[idx]<=aux_xb[idx]*BigMe)   #(M4C)
-@constraint(mpcc_sxl_mdl,comp_xb_ineq2[idx in block_orders],    xbvar_rhs[idx]<=(1-aux_xb[idx])*BigMe) #(M4C)
+# Block order acceptance complementarity constraints
+@variable(euphemia_model, block_acceptance_complementarity_aux[order_idx in block_orders], Bin)  #(M4C)
+@constraint(euphemia_model, block_acceptance_complementarity_ineq1[order_idx in block_orders], block_acceptance[order_idx] <= block_acceptance_complementarity_aux[order_idx] * big_m_parameter)   #(M4C)
+@constraint(euphemia_model, block_acceptance_complementarity_ineq2[order_idx in block_orders], block_acceptance_dual_rhs[order_idx] <= (1 - block_acceptance_complementarity_aux[order_idx]) * big_m_parameter) #(M4C)
 
-@variable(mpcc_sxl_mdl,aux_xb_low[idx in block_orders],Bin)  #(M4C)
-@constraint(mpcc_sxl_mdl,comp_xb_low_ineq1[idx in block_orders],    xb_low[idx]<=aux_xb_low[idx]*BigMe)   #(M4C)
-@constraint(mpcc_sxl_mdl,comp_xb_low_ineq2[idx in block_orders],  xb[idx]-Obk["Orders"][idx]["mar"]*y[idx]<=(1-aux_xb_low[idx])*BigMe) #(M4C)
+@variable(euphemia_model, block_acceptance_lower_complementarity_aux[order_idx in block_orders], Bin)  #(M4C)
+@constraint(euphemia_model, block_acceptance_lower_complementarity_ineq1[order_idx in block_orders], block_acceptance_lower_dual[order_idx] <= block_acceptance_lower_complementarity_aux[order_idx] * big_m_parameter)   #(M4C)
+@constraint(euphemia_model, block_acceptance_lower_complementarity_ineq2[order_idx in block_orders], block_acceptance[order_idx] - order_book["Orders"][order_idx]["mar"] * block_activation[order_idx] <= (1 - block_acceptance_lower_complementarity_aux[order_idx]) * big_m_parameter) #(M4C)
 
-@variable(mpcc_sxl_mdl,aux_xb_upp[idx in block_orders],Bin)  #(M4C)
-@constraint(mpcc_sxl_mdl,comp_xb_upp_ineq1[idx in block_orders],    xb_upp[idx]<=aux_xb_upp[idx]*BigMe)   #(M4C)
-@constraint(mpcc_sxl_mdl,comp_xb_upp_ineq2[idx in block_orders],   y[idx]-xb[idx]<=(1-aux_xb_upp[idx])*BigMe) #(M4C)
+@variable(euphemia_model, block_acceptance_upper_complementarity_aux[order_idx in block_orders], Bin)  #(M4C)
+@constraint(euphemia_model, block_acceptance_upper_complementarity_ineq1[order_idx in block_orders], block_acceptance_upper_dual[order_idx] <= block_acceptance_upper_complementarity_aux[order_idx] * big_m_parameter)   #(M4C)
+@constraint(euphemia_model, block_acceptance_upper_complementarity_ineq2[order_idx in block_orders], block_activation[order_idx] - block_acceptance[order_idx] <= (1 - block_acceptance_upper_complementarity_aux[order_idx]) * big_m_parameter) #(M4C)
 #--
 
-#-[nodal power balance]: primal constraints (M4C)
-if haskey(Obk["ATC"], "Flows")
-    @constraint(mpcc_sxl_mdl, nodal_pb[ndx in Obk["Nodes"], tdx in Obk["Periods"]], 
-        sum(x[idx] * Obk["Orders"][idx]["qtity"][tdx] for idx in nodal_keys[ndx]["stepwise_orders"][tdx])
-        +sum(xb[idx] * Obk["Orders"][idx]["qtity"][tdx] for idx in nodal_keys[ndx]["block_orders"][tdx])
+# Nodal power balance constraints (M4C)
+if haskey(order_book["ATC"], "Flows")
+    @constraint(euphemia_model, nodal_power_balance[node_idx in order_book["Nodes"], time_period in order_book["Periods"]],
+        sum(stepwise_acceptance[order_idx] * order_book["Orders"][order_idx]["qtity"][time_period] for order_idx in orders_by_node[node_idx]["stepwise_orders"][time_period])
+        +
+        sum(block_acceptance[order_idx] * order_book["Orders"][order_idx]["qtity"][time_period] for order_idx in orders_by_node[node_idx]["block_orders"][time_period])
         ==
-        sum(atc_flow[fdx, tdx] for fdx in nodal_keys[ndx]["flows_to"])
+        sum(transmission_flow[flow_idx, time_period] for flow_idx in orders_by_node[node_idx]["flows_to"])
         -
-        sum(atc_flow[fdx, tdx] for fdx in nodal_keys[ndx]["flows_from"])
+        sum(transmission_flow[flow_idx, time_period] for flow_idx in orders_by_node[node_idx]["flows_from"])
     )
-    #- Nb: since supply quantities are negative => inbound flows are also negative (outbound flows are positive in the from --> to direction)
-else #- no network
-    @constraint(mpcc_sxl_mdl, nodal_pb[ndx in Obk["Nodes"], tdx in Obk["Periods"]],
-        sum(x[idx] * Obk["Orders"][idx]["qtity"][tdx] for idx in nodal_keys[ndx]["stepwise_orders"][tdx])
-        +sum(xb[idx] * Obk["Orders"][idx]["qtity"][tdx] for idx in nodal_keys[ndx]["block_orders"][tdx])
+    # Note: since supply quantities are negative => inbound flows are also negative (outbound flows are positive in the from --> to direction)
+else # no network
+    @constraint(euphemia_model, nodal_power_balance[node_idx in order_book["Nodes"], time_period in order_book["Periods"]],
+        sum(stepwise_acceptance[order_idx] * order_book["Orders"][order_idx]["qtity"][time_period] for order_idx in orders_by_node[node_idx]["stepwise_orders"][time_period])
+        +
+        sum(block_acceptance[order_idx] * order_book["Orders"][order_idx]["qtity"][time_period] for order_idx in orders_by_node[node_idx]["block_orders"][time_period])
         ==
         0)
 end
 #--
 
-#-[network security]: primal constraints
-if haskey(Obk["ATC"],"LmTs")
+# Network security constraints
+if haskey(order_book["ATC"], "LmTs")
 
-    @expression(mpcc_sxl_mdl, grid_lhs[kdx in keys(Obk["ATC"]["LmTs"]), tdx in Obk["Periods"]; haskey(Obk["ATC"]["LmTs"][kdx]["value"], tdx)],
-        sum(atc_flow[fdx, tdx] * Obk["ATC"]["LmTs"][kdx]["incidence"][fdx] for fdx in keys(Obk["ATC"]["Flows"]))
+    @expression(euphemia_model, transmission_security_lhs[security_idx in keys(order_book["ATC"]["LmTs"]), time_period in order_book["Periods"]; haskey(order_book["ATC"]["LmTs"][security_idx]["value"], time_period)],
+        sum(transmission_flow[flow_idx, time_period] * order_book["ATC"]["LmTs"][security_idx]["incidence"][flow_idx] for flow_idx in keys(order_book["ATC"]["Flows"]))
     )
 
-    @constraint(mpcc_sxl_mdl, grid_lim[kdx in keys(Obk["ATC"]["LmTs"]), tdx in Obk["Periods"]; haskey(Obk["ATC"]["LmTs"][kdx]["value"], tdx)],
-        grid_lhs[kdx, tdx] <= Obk["ATC"]["LmTs"][kdx]["value"][tdx]
+    @constraint(euphemia_model, transmission_security_limit[security_idx in keys(order_book["ATC"]["LmTs"]), time_period in order_book["Periods"]; haskey(order_book["ATC"]["LmTs"][security_idx]["value"], time_period)],
+        transmission_security_lhs[security_idx, time_period] <= order_book["ATC"]["LmTs"][security_idx]["value"][time_period]
     )
 end
 #--
 
-#--[network security]: dual variables
-if haskey(Obk["ATC"],"LmTs")
-    @variable(mpcc_sxl_mdl,0<=lambda[idx in keys(Obk["ATC"]["LmTs"]),tdx  in keys(Obk["ATC"]["LmTs"][idx]["value"])]) #-- security constraint 
+# Network security dual variables
+if haskey(order_book["ATC"], "LmTs")
+    @variable(euphemia_model, 0 <= security_constraint_dual[security_idx in keys(order_book["ATC"]["LmTs"]), time_period in keys(order_book["ATC"]["LmTs"][security_idx]["value"])]) # Security constraint dual
 end
 #--
 
-#--[network security]: complementarity constraints
-if haskey(Obk["ATC"], "LmTs")
-    @variable(mpcc_sxl_mdl, aux_grid[idx in keys(Obk["ATC"]["LmTs"]), tdx in keys(Obk["ATC"]["LmTs"][idx]["value"])], Bin)
+# Network security complementarity constraints
+if haskey(order_book["ATC"], "LmTs")
+    @variable(euphemia_model, security_complementarity_aux[security_idx in keys(order_book["ATC"]["LmTs"]), time_period in keys(order_book["ATC"]["LmTs"][security_idx]["value"])], Bin)
 
-    @constraint(mpcc_sxl_mdl, comp_grid_ineq1[idx in keys(Obk["ATC"]["LmTs"]), tdx in keys(Obk["ATC"]["LmTs"][idx]["value"])],
-        lambda[idx, tdx] <= aux_grid[idx, tdx] * BigMe)
-    @constraint(mpcc_sxl_mdl, comp_grid_ineq2[idx in keys(Obk["ATC"]["LmTs"]), tdx in keys(Obk["ATC"]["LmTs"][idx]["value"])],
-        grid_lhs[idx, tdx] - Obk["ATC"]["LmTs"][idx]["value"][tdx] >= (aux_grid[idx, tdx] - 1) * BigMe)
+    @constraint(euphemia_model, security_complementarity_ineq1[security_idx in keys(order_book["ATC"]["LmTs"]), time_period in keys(order_book["ATC"]["LmTs"][security_idx]["value"])],
+        security_constraint_dual[security_idx, time_period] <= security_complementarity_aux[security_idx, time_period] * big_m_parameter)
+    @constraint(euphemia_model, security_complementarity_ineq2[security_idx in keys(order_book["ATC"]["LmTs"]), time_period in keys(order_book["ATC"]["LmTs"][security_idx]["value"])],
+        transmission_security_lhs[security_idx, time_period] - order_book["ATC"]["LmTs"][security_idx]["value"][time_period] >= (security_complementarity_aux[security_idx, time_period] - 1) * big_m_parameter)
 end
 #-
 
-#-[ATC flow]: dual constraints
-if haskey(Obk["ATC"],"LmTs")
-    @constraint(mpcc_sxl_mdl,atc_flow_var[fdx in keys(Obk["ATC"]["Flows"]),tdx in Obk["Periods"]],
-    sum(lambda[sdx,tdx]* Obk["ATC"]["LmTs"][sdx]["incidence"][fdx] for sdx in limit_keys[tdx])
-    +mu[Obk["ATC"]["Flows"][fdx]["from"],tdx]
-    -mu[Obk["ATC"]["Flows"][fdx]["to"],tdx]
-    ==0
+# ATC flow dual constraints
+if haskey(order_book["ATC"], "LmTs")
+    @constraint(euphemia_model, atc_flow_dual_balance[flow_idx in keys(order_book["ATC"]["Flows"]), time_period in order_book["Periods"]],
+        sum(security_constraint_dual[security_idx, time_period] * order_book["ATC"]["LmTs"][security_idx]["incidence"][flow_idx] for security_idx in transmission_limits_by_time[time_period])
+        +
+        market_price[order_book["ATC"]["Flows"][flow_idx]["from"], time_period]
+        -
+        market_price[order_book["ATC"]["Flows"][flow_idx]["to"], time_period]
+        ==
+        0
     )
 else
-    @constraint(mpcc_sxl_mdl,atc_flow_var[fdx in keys(Obk["ATC"]["Flows"]),tdx in Obk["Periods"]],
-        +mu[Obk["ATC"]["Flows"][fdx]["from"],tdx]
-        -mu[Obk["ATC"]["Flows"][fdx]["to"],tdx]
-        ==0
+    @constraint(euphemia_model, atc_flow_dual_balance_simple[flow_idx in keys(order_book["ATC"]["Flows"]), time_period in order_book["Periods"]],
+        +market_price[order_book["ATC"]["Flows"][flow_idx]["from"], time_period]
+        -
+        market_price[order_book["ATC"]["Flows"][flow_idx]["to"], time_period]
+        ==
+        0
     )
 end
 #--
 
 
-#-[price range]: constraints
-if haskey(Obk,"Price_range")
-    @constraint(mpcc_sxl_mdl,lower_price[ndx in Obk["Nodes"], tdx in Obk["Periods"]],mu[ndx,tdx]>=Obk["Price_range"]["lower"])
-    @constraint(mpcc_sxl_mdl,upper_price[ndx in Obk["Nodes"], tdx in Obk["Periods"]],mu[ndx,tdx]<=Obk["Price_range"]["upper"])
+# Price range constraints
+if haskey(order_book, "Price_range")
+    @constraint(euphemia_model, minimum_price[node_idx in order_book["Nodes"], time_period in order_book["Periods"]], market_price[node_idx, time_period] >= order_book["Price_range"]["lower"])
+    @constraint(euphemia_model, maximum_price[node_idx in order_book["Nodes"], time_period in order_book["Periods"]], market_price[node_idx, time_period] <= order_book["Price_range"]["upper"])
 end
 
 
 
-#-- mpcc objective (M4C)
-@objective(mpcc_sxl_mdl,Max,
-sum(x[idx]*(sum(Obk["Orders"][idx]["qtity"][tdx] for tdx in Obk["Periods"] if haskey(Obk["Orders"][idx]["qtity"],tdx)))*Obk["Orders"][idx]["price"]["p0"]  for idx in stepwise_orders)
-+sum(xb[idx]*(sum(Obk["Orders"][idx]["qtity"][tdx] for tdx in Obk["Periods"] if haskey(Obk["Orders"][idx]["qtity"],tdx)))*Obk["Orders"][idx]["price"]["p0"]  for idx in block_orders)
+# MPCC objective function (Market for Complementarity)
+@objective(euphemia_model, Max,
+    sum(stepwise_acceptance[order_idx] * (sum(order_book["Orders"][order_idx]["qtity"][time_period] for time_period in order_book["Periods"] if haskey(order_book["Orders"][order_idx]["qtity"], time_period))) * order_book["Orders"][order_idx]["price"]["p0"] for order_idx in stepwise_orders)
+    +
+    sum(block_acceptance[order_idx] * (sum(order_book["Orders"][order_idx]["qtity"][time_period] for time_period in order_book["Periods"] if haskey(order_book["Orders"][order_idx]["qtity"], time_period))) * order_book["Orders"][order_idx]["price"]["p0"] for order_idx in block_orders)
 )
 
 
 
-#-- solve statements ----------------------------------------------------------------------#
-println(mpcc_sxl_mdl)
-optimize!(mpcc_sxl_mdl)
+# Solve optimization model
+println(euphemia_model)
+optimize!(euphemia_model)
 #------------------------------------------------------------------------------------------#
 
 
 #------------------------------------------------------------------------------------------#
 println()
-println("Welfare:",round(JuMP.objective_value(mpcc_sxl_mdl),digits=3))
+println("Total Market Welfare:", round(JuMP.objective_value(euphemia_model), digits=3))
 
 
 println()
-println("Stepwise order Acceptance")
-for idx in stepwise_orders
-println(idx, ": ", round(JuMP.value(x[idx]),digits=3), "/", round(JuMP.value(xsw[idx]),digits=3))
+println("Stepwise Order Acceptance")
+for order_idx in stepwise_orders
+    println(order_idx, ": ", round(JuMP.value(stepwise_acceptance[order_idx]), digits=3), "/", round(JuMP.value(stepwise_dual[order_idx]), digits=3))
 end
 
 
 println()
-println("Block order Acceptance")
-for idx in block_orders 
+println("Block Order Acceptance")
+for order_idx in block_orders
     try
-        println(idx, " [", Obk["Orders"][idx]["type"] , "] : ",round(JuMP.value(xb[idx]),digits=3),"<=", round(JuMP.value(y[idx]),digits=3), "/", round(JuMP.value(ysw[idx]),digits=3))
+        println(order_idx, " [", order_book["Orders"][order_idx]["type"], "] : ", round(JuMP.value(block_acceptance[order_idx]), digits=3), "<=", round(JuMP.value(block_activation[order_idx]), digits=3), "/", round(JuMP.value(block_activation_dual[order_idx]), digits=3))
     catch
-        if idx in ex_block_orders
-           println(idx," [", Obk["Orders"][idx]["type"] , "] : ",round(JuMP.value(xb[idx]),digits=3),"<=", round(JuMP.value(y[idx]),digits=3), "/", round(JuMP.value(y[idx]*sum(yexsw[gdx]  for gdx in ex_order_groups if idx in Obk["ComplexOrders"][gdx]["members"]    )),digits=3))
-        elseif idx in parents
-            println(idx, " [", Obk["Orders"][idx]["type"] , "] : ",round(JuMP.value(xb[idx]),digits=3),"<=", round(JuMP.value(y[idx]),digits=3), "/", round(JuMP.value(ypar[idx]),digits=3))
+        if order_idx in exclusive_block_orders
+            println(order_idx, " [", order_book["Orders"][order_idx]["type"], "] : ", round(JuMP.value(block_acceptance[order_idx]), digits=3), "<=", round(JuMP.value(block_activation[order_idx]), digits=3), "/", round(JuMP.value(block_activation[order_idx] * sum(exclusive_group_dual[group_idx] for group_idx in exclusive_order_groups if order_idx in order_book["ComplexOrders"][group_idx]["members"])), digits=3))
+        elseif order_idx in parent_orders
+            println(order_idx, " [", order_book["Orders"][order_idx]["type"], "] : ", round(JuMP.value(block_acceptance[order_idx]), digits=3), "<=", round(JuMP.value(block_activation[order_idx]), digits=3), "/", round(JuMP.value(block_activation_dual[order_idx]), digits=3))
         else
-            println(idx, " [", Obk["Orders"][idx]["type"] , "] : ",round(JuMP.value(xb[idx]),digits=3),"<=", round(JuMP.value(y[idx]),digits=3))
+            println(order_idx, " [", order_book["Orders"][order_idx]["type"], "] : ", round(JuMP.value(block_acceptance[order_idx]), digits=3), "<=", round(JuMP.value(block_activation[order_idx]), digits=3))
         end
     end
 end
@@ -379,21 +388,20 @@ end
 
 println()
 
-println("Nodal prices")
-for ndx in Obk["Nodes"]
-    for tdx in Obk["Periods"]
-        println("N$ndx@t$tdx: ",round(JuMP.value(mu[ndx,tdx]),digits=3))
+println("Nodal Market Prices")
+for node_idx in order_book["Nodes"]
+    for time_period in order_book["Periods"]
+        println("Node_$node_idx@time_$time_period: ", round(JuMP.value(market_price[node_idx, time_period]), digits=3))
     end
 end
 
-if haskey(Obk["ATC"], "Flows")
-println()
-    println("ATC flows")
-    for fdx in keys(sort(Obk["ATC"]["Flows"]))
-        for tdx in Obk["Periods"]
-            println("$fdx@t$tdx: ", round(JuMP.value(atc_flow[fdx,tdx]),digits=3))
+if haskey(order_book["ATC"], "Flows")
+    println()
+    println("ATC Transmission Flows")
+    for flow_idx in keys(sort(order_book["ATC"]["Flows"]))
+        for time_period in order_book["Periods"]
+            println("$flow_idx@time_$time_period: ", round(JuMP.value(transmission_flow[flow_idx, time_period]), digits=3))
         end
     end
 
 end
- 
