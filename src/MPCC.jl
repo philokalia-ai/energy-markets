@@ -1,6 +1,7 @@
 module MPCC
 
 using JuMP, Dates, DataFrames, CSV, DotEnv
+using JuMP: AffExpr
 
 # Import solvers with error handling
 try
@@ -25,12 +26,13 @@ catch
 end
 
 # Import required modules from parent Euphemia package
-import ..Euphemia.MarketOrders: MarketOrder, SimpleOrder
+import ..Euphemia.MarketOrders: MarketOrder, SimpleOrder, AggregatedPeriodicOrder
+import ..Euphemia.Network: NetworkTopology
 import ..Euphemia: get_loads, get_generators, get_generation_forecast_for_wind_and_solar
 import ..Euphemia.BiddingStrategy: generate_market_orders_from_uc, UCToBidsResult
 
 # Export main functions
-export MPCCResult, solve_mpcc_market_clearing, create_order_book_from_uc, select_solver
+export MPCCResult, MPCCOrderBook, solve_mpcc_market_clearing, create_typed_order_book, select_solver
 
 # Result structure
 struct MPCCResult
@@ -46,71 +48,19 @@ struct MPCCResult
     message::String
 end
 
+# Typed order book structure using existing MarketOrder types
+struct MPCCOrderBook
+    orders::Vector{MarketOrder}                # All market orders using existing types
+    nodes::Vector{String}                      # Bidding zone identifiers  
+    periods::Vector{String}                    # Time period identifiers (e.g., "1", "2", ..., "24")
+    price_limits::Tuple{Float64,Float64}       # (min_price, max_price) bounds
+    network_topology::Union{Nothing,NetworkTopology}  # Optional network constraints
+end
+
 # Configuration constants
 const DEFAULT_MARKUP_FACTOR = 1.1
 const BIG_M_PARAMETER = 4000000.0
 
-"""
-    validate_order_book(order_book::Dict{String,Any})
-
-Validates order book consistency and balance, provides warnings for potential issues.
-"""
-function validate_order_book(order_book::Dict{String,Any})
-    println("\n=== Order Book Validation ===")
-    
-    total_orders = length(order_book["Orders"])
-    println("Total orders: $total_orders")
-    
-    # Check supply/demand balance by hour
-    for period in order_book["Periods"]
-        supply_total = 0.0
-        demand_total = 0.0
-        supply_orders = 0
-        demand_orders = 0
-        
-        for (order_id, order) in order_book["Orders"]
-            if haskey(order["qtity"], period)
-                quantity = order["qtity"][period]
-                if quantity < 0  # Supply order
-                    supply_total += abs(quantity)
-                    supply_orders += (quantity != 0) ? 1 : 0
-                elseif quantity > 0  # Demand order
-                    demand_total += quantity
-                    demand_orders += 1
-                end
-            end
-        end
-        
-        balance = supply_total - demand_total
-        balance_pct = (abs(balance) / max(demand_total, 1.0)) * 100
-        
-        if balance_pct > 5.0  # More than 5% imbalance
-            if balance > 0
-                @warn "Period $period: Oversupply of $(round(balance, digits=1)) MW ($(round(balance_pct, digits=1))%)"
-            else
-                @warn "Period $period: Undersupply of $(round(abs(balance), digits=1)) MW ($(round(balance_pct, digits=1))%)"
-            end
-        else
-            println("Period $period: Balanced - Supply: $(round(supply_total, digits=1)) MW ($(supply_orders) orders), Demand: $(round(demand_total, digits=1)) MW ($(demand_orders) orders)")
-        end
-    end
-    
-    # Check price bounds
-    min_price = minimum(order["price"]["p0"] for (_, order) in order_book["Orders"])
-    max_price = maximum(order["price"]["p0"] for (_, order) in order_book["Orders"])
-    
-    println("Price range in orders: €$(round(min_price, digits=2)) - €$(round(max_price, digits=2))/MWh")
-    
-    if max_price > order_book["Price_range"]["upper"]
-        @warn "Some order prices (€$max_price) exceed upper bound (€$(order_book["Price_range"]["upper"]))"
-    end
-    
-    if min_price < order_book["Price_range"]["lower"]
-        @warn "Some order prices (€$min_price) below lower bound (€$(order_book["Price_range"]["lower"]))"
-    end
-    
-    println("=== Validation Complete ===\n")
-end
 
 """
     select_solver(preferred_solver::String="auto")
@@ -172,195 +122,98 @@ function select_solver(preferred_solver::String="auto")
     error("All available solvers failed to initialize!")
 end
 
-"""
-    create_order_book_from_uc(bidding_zone::String, day::Date; markup_factor::Float64=$DEFAULT_MARKUP_FACTOR)
 
-Creates an MPCC-compatible order book from real ENTSO-E unit commitment results and load data.
+"""
+    create_typed_order_book(bidding_zone::String, day::Date; markup_factor::Float64=DEFAULT_MARKUP_FACTOR)
+
+Creates a typed market order book from Unit Commitment results using existing MarketOrder types.
 
 # Arguments
-- `bidding_zone::String`: Bidding zone identifier (e.g., "GR")
-- `day::Date`: Target date for market data
-- `markup_factor::Float64`: Markup factor for supply bids above marginal cost
+- `bidding_zone::String`: Target bidding zone (e.g., "GR")  
+- `day::Date`: Day for which to create the order book
+- `markup_factor::Float64`: Markup factor for supply bids above marginal cost (default: 1.1 = 10% markup)
 
-# Returns
-- `Dict{String,Any}`: Order book structure compatible with MPCC solver
+# Returns  
+- `MPCCOrderBook`: Typed order book structure using existing MarketOrder types
 """
-function create_order_book_from_uc(bidding_zone::String, day::Date; markup_factor::Float64=DEFAULT_MARKUP_FACTOR)
+function create_typed_order_book(bidding_zone::String, day::Date; markup_factor::Float64=DEFAULT_MARKUP_FACTOR)
     try
         # Generate market orders from real unit commitment
         uc_to_bids = generate_market_orders_from_uc(bidding_zone, day; markup_factor=markup_factor)
-
+        
         if !uc_to_bids.success
             error("Failed to generate market orders: $(uc_to_bids.message)")
         end
 
-        # Get real hourly demand data from ENTSO-E database
-        loads = get_loads(bidding_zone, day)
-
-        # Convert to MPCC format
-        order_book = Dict{String,Any}()
-
-        # Initialize structure
-        order_book["Orders"] = Dict{String,Any}()
-        order_book["ComplexOrders"] = Dict{String,Any}()
-        order_book["Nodes"] = [bidding_zone]
-        order_book["Periods"] = [string(h) for h in 1:24]
-
-        # Convert supply orders (stepwise by default) - only for committed hours
-        order_id = 1
-        for supply_order in uc_to_bids.supply_orders
-            # Extract hour from the DateTime
-            hour_of_day = Dates.hour(supply_order.date_time) + 1  # Convert 0-23 to 1-24
-            
-            # Only create order for the specific hour this supply order is for
-            qtity_dict = Dict{String,Float64}()
-            for hour in 1:24
-                if hour == hour_of_day
-                    qtity_dict[string(hour)] = -supply_order.quantity  # Negative for supply in this hour only
-                else
-                    qtity_dict[string(hour)] = 0.0  # Zero for all other hours
-                end
-            end
-
-            order_book["Orders"][string(order_id)] = Dict(
-                "type" => "stepwise",
-                "node" => string(supply_order.zone),
-                "price" => Dict("p0" => supply_order.price),
-                "qtity" => qtity_dict,
-                "mar" => 1.0
-            )
-            order_id += 1
-        end
-
-        # Add demand orders using net_demand from UC solution (load - renewables)
-        # This ensures supply-demand balance matches the UC optimization
-        if !isempty(uc_to_bids.demand_orders)
-            for demand_order in uc_to_bids.demand_orders
-                # Extract hour from the DateTime
-                hour_of_day = Dates.hour(demand_order.date_time) + 1  # Convert 0-23 to 1-24
-                
-                # Only create demand order for the specific hour
-                qtity_dict = Dict{String,Float64}()
-                for hour in 1:24
-                    if hour == hour_of_day
-                        qtity_dict[string(hour)] = demand_order.quantity  # Positive for demand
-                    else
-                        qtity_dict[string(hour)] = 0.0  # Zero for all other hours
-                    end
-                end
-
-                order_book["Orders"][string(order_id)] = Dict(
-                    "type" => "stepwise",
-                    "node" => string(demand_order.zone),
-                    "price" => Dict("p0" => demand_order.price),  # Use the actual demand price
-                    "qtity" => qtity_dict,
-                    "mar" => 1.0
-                )
-                order_id += 1
-            end
-        else
-            # Fallback: if no demand orders from UC, use net load data but warn
-            @warn "No demand orders from UC solution, falling back to raw load data"
-            for (hour_idx, load) in enumerate(loads)
-                if hour_idx <= 24
-                    qtity_dict = Dict{String,Float64}()
-                    for h in 1:24
-                        qtity_dict[string(h)] = (h == hour_idx) ? load.value : 0.0
-                    end
-
-                    order_book["Orders"][string(order_id)] = Dict(
-                        "type" => "stepwise",
-                        "node" => load.bidding_zone,
-                        "price" => Dict("p0" => 500.0),
-                        "qtity" => qtity_dict,
-                        "mar" => 1.0
-                    )
-                    order_id += 1
-                end
-            end
-        end
-
-        # Add ATC structure (simplified single node)
-        order_book["ATC"] = Dict{String,Any}()
-        order_book["ATC"]["Flows"] = Dict{String,Any}()
-
-        # Add price range (realistic bounds: 0-500 €/MWh typical for European markets)
-        order_book["Price_range"] = Dict("lower" => 0.0, "upper" => 500.0)
-
-        # Validate order book consistency
-        validate_order_book(order_book)
-
-        return order_book
-
+        # Create typed order book using existing SimpleOrder types
+        all_orders = Vector{MarketOrder}()
+        
+        # Add all supply orders (already SimpleOrder types)
+        append!(all_orders, uc_to_bids.supply_orders)
+        
+        # Add all demand orders (already SimpleOrder types) 
+        append!(all_orders, uc_to_bids.demand_orders)
+        
+        # Create the typed order book
+        return MPCCOrderBook(
+            all_orders,                                    # All orders as MarketOrder types
+            [bidding_zone],                               # Single bidding zone
+            [string(h) for h in 1:24],                   # 24 hourly periods
+            (0.0, 500.0),                                 # Price limits (€/MWh)
+            nothing                                       # No network topology for single zone
+        )
+        
     catch e
-        error("Failed to create order book from unit commitment data: $e")
+        error("Failed to create typed order book from UC: $e")
     end
 end
 
+
 """
-    solve_mpcc_market_clearing(order_book::Dict{String,Any}; 
+    solve_mpcc_market_clearing(order_book::MPCCOrderBook; 
                               preferred_solver::String="auto", 
                               silent::Bool=true,
                               big_m::Float64=BIG_M_PARAMETER)
 
-Solves the MPCC-based market clearing problem using the Euphemia algorithm.
+Solves the MPCC-based market clearing problem using typed order book structure.
 
 # Arguments
-- `order_book::Dict{String,Any}`: Market order book structure
+- `order_book::MPCCOrderBook`: Typed market order book structure
 - `preferred_solver::String`: Preferred solver ("auto", "highs", "gurobi", or "cplex")
 - `silent::Bool`: Whether to suppress solver output
 - `big_m::Float64`: Big-M parameter for complementarity constraints
 
 # Returns
-- `MPCCResult`: Complete solution results including prices and quantities
+- `MPCCResult`: Market clearing results including prices and order acceptance
 """
-function solve_mpcc_market_clearing(order_book::Dict{String,Any}; 
+function solve_mpcc_market_clearing(order_book::MPCCOrderBook; 
                                    preferred_solver::String="auto", 
                                    silent::Bool=true,
                                    big_m::Float64=BIG_M_PARAMETER)
     
-    # Data organization
-    stepwise_orders = filter((k, v)::Pair -> v["type"] == "stepwise", order_book["Orders"]) |> keys |> collect
-    block_orders = filter((k, v)::Pair -> (v["type"] == "block" || v["type"] == "exclusive" || v["type"] == "linked"), order_book["Orders"]) |> keys |> collect
-    exclusive_block_orders = filter((k, v)::Pair -> v["type"] == "exclusive", order_book["Orders"]) |> keys |> collect
-
-    exclusive_order_groups = filter((k, v)::Pair -> v["type"] == "exclusive", order_book["ComplexOrders"]) |> keys |> collect
-    linked_order_groups = filter((k, v)::Pair -> v["type"] == "linked", order_book["ComplexOrders"]) |> keys |> collect
-
-    parent_orders = String[]
-    child_orders = String[]
-    for group_id in linked_order_groups
-        push!(parent_orders, order_book["ComplexOrders"][group_id]["parent"])
-        for child_id in order_book["ComplexOrders"][group_id]["children"]
-            push!(child_orders, child_id)
+    # Analyze orders by type - currently we only handle SimpleOrder types from UC conversion
+    simple_orders = filter(o -> isa(o, SimpleOrder), order_book.orders)
+    
+    # Create order mappings for efficient access
+    orders_by_node = Dict{String,Dict{String,Vector{SimpleOrder}}}()
+    for node_id in order_book.nodes
+        orders_by_node[node_id] = Dict{String,Vector{SimpleOrder}}()
+        for time_period in order_book.periods
+            orders_by_node[node_id][time_period] = SimpleOrder[]
         end
     end
-
-    # Create orders by node mapping
-    orders_by_node = Dict{String,Any}()
-    for node_id in order_book["Nodes"]
-        orders_by_node[node_id] = Dict{String,Any}()
-        orders_by_node[node_id]["stepwise_orders"] = Dict{String,Any}()
-        for time_period in order_book["Periods"]
-            orders_by_node[node_id]["stepwise_orders"][time_period] = filter((k, v)::Pair -> 
-                v["type"] == "stepwise" && v["node"] == node_id && haskey(v["qtity"], time_period), 
-                order_book["Orders"]) |> keys |> collect
-        end
-
-        orders_by_node[node_id]["block_orders"] = Dict{String,Any}()
-        for time_period in order_book["Periods"]
-            orders_by_node[node_id]["block_orders"][time_period] = filter((k, v)::Pair -> 
-                (v["type"] == "block" || v["type"] == "exclusive" || v["type"] == "linked") && 
-                v["node"] == node_id && haskey(v["qtity"], time_period), 
-                order_book["Orders"]) |> keys |> collect
-        end
-
-        if haskey(order_book["ATC"], "Flows")
-            orders_by_node[node_id]["flows_from"] = filter((k, v)::Pair -> v["from"] == node_id, order_book["ATC"]["Flows"]) |> keys |> collect
-            orders_by_node[node_id]["flows_to"] = filter((k, v)::Pair -> v["to"] == node_id, order_book["ATC"]["Flows"]) |> keys |> collect
+    
+    # Group orders by node and time period
+    for order in simple_orders
+        node_id = string(order.zone)
+        hour_of_day = Dates.hour(order.date_time) + 1  # Convert 0-23 to 1-24
+        time_period = string(hour_of_day)
+        
+        if haskey(orders_by_node, node_id) && haskey(orders_by_node[node_id], time_period)
+            push!(orders_by_node[node_id][time_period], order)
         end
     end
-
+    
     # Create and configure model
     optimizer, solver_name = select_solver(preferred_solver)
     model = Model(optimizer)
@@ -370,178 +223,139 @@ function solve_mpcc_market_clearing(order_book::Dict{String,Any};
     end
 
     start_time = time()
-
+    
     try
-        # Decision Variables
-        @variable(model, 0 <= stepwise_acceptance[order_id in stepwise_orders])
-        @variable(model, 0 <= stepwise_dual[order_id in stepwise_orders])
-
-        @variable(model, 0 <= block_activation[order_id in block_orders], Bin)
-        @variable(model, 0 <= block_acceptance[order_id in block_orders])
-        @variable(model, 0 <= block_acceptance_lower_dual[order_id in block_orders])
-        @variable(model, 0 <= block_acceptance_upper_dual[order_id in block_orders])
-
-        # Load shedding variables for market robustness (high penalty cost)
-        @variable(model, load_shed[node_id in order_book["Nodes"], time_period in order_book["Periods"]] >= 0)
-
-        @variable(model, 0 <= block_activation_dual[order_id in block_orders; (!(order_id in exclusive_block_orders) && !(order_id in child_orders))])
-        @variable(model, 0 <= exclusive_group_dual[group_id in exclusive_order_groups])
-        @variable(model, 0 <= linked_group_dual[group_id in linked_order_groups, child_id in order_book["ComplexOrders"][group_id]["children"]])
-
-        if haskey(order_book["ATC"], "Flows")
-            @variable(model, transmission_flow[flow_id in keys(order_book["ATC"]["Flows"]), time_period in order_book["Periods"]])
+        # Create unique indices for orders - use a unique string ID based on order properties
+        order_indices = Dict{SimpleOrder,String}()
+        order_ids = String[]
+        
+        for (i, order) in enumerate(simple_orders)
+            # Create a unique ID based on order properties and index
+            unique_id = "order_$(i)_$(string(order.zone))_$(Dates.hour(order.date_time))_$(round(Int, order.quantity))_$(round(Int, order.price))"
+            order_indices[order] = unique_id
+            push!(order_ids, unique_id)
         end
-
-        @variable(model, market_price[node_id in order_book["Nodes"], time_period in order_book["Periods"]])
-
+        
+        # Decision Variables
+        @variable(model, 0 <= stepwise_acceptance[order_id in order_ids])
+        @variable(model, 0 <= stepwise_dual[order_id in order_ids])
+        
+        # Load shedding variables for market robustness (high penalty cost)
+        @variable(model, load_shed[node_id in order_book.nodes, time_period in order_book.periods] >= 0)
+        
+        @variable(model, market_price[node_id in order_book.nodes, time_period in order_book.periods])
+        
         # Stepwise order constraints
-        @constraint(model, stepwise_upper_bound[order_id in stepwise_orders],
+        @constraint(model, stepwise_upper_bound[order_id in order_ids],
             stepwise_acceptance[order_id] <= 1
         )
-
-        @expression(model, stepwise_dual_rhs[order_id in stepwise_orders],
-            stepwise_dual[order_id] +
-            sum(order_book["Orders"][order_id]["qtity"][time_period] *
-                market_price[order_book["Orders"][order_id]["node"], time_period]
-                for time_period in keys(order_book["Orders"][order_id]["qtity"])) -
-            sum(order_book["Orders"][order_id]["qtity"][time_period] *
-                order_book["Orders"][order_id]["price"]["p0"]
-                for time_period in keys(order_book["Orders"][order_id]["qtity"]))
-        )
-
-        @constraint(model, stepwise_dual_constraint[order_id in stepwise_orders],
+        
+        # Create expressions for stepwise dual constraints - match dictionary formulation exactly
+        stepwise_dual_rhs = Dict{String,AffExpr}()
+        for (i, order) in enumerate(simple_orders)
+            order_id = order_ids[i]
+            node_id = string(order.zone)
+            hour_of_day = Dates.hour(order.date_time) + 1
+            time_period = string(hour_of_day)
+            
+            # Determine quantity sign: negative for supply, positive for demand
+            quantity = order.type == :supply ? -order.quantity : order.quantity
+            
+            # Match dictionary formulation: sum over time periods (but SimpleOrder only has one period)
+            # This should be equivalent since SimpleOrder represents single period
+            stepwise_dual_rhs[order_id] = @expression(model,
+                stepwise_dual[order_id] +
+                quantity * market_price[node_id, time_period] -
+                quantity * order.price
+            )
+        end
+        
+        @constraint(model, stepwise_dual_constraint[order_id in order_ids],
             0 <= stepwise_dual_rhs[order_id]
         )
-
-        # Block order constraints
-        if !isempty(block_orders)
-            @constraint(model, block_activation_upper_bound[order_id in block_orders; (!(order_id in exclusive_block_orders) && !(order_id in child_orders))],
-                block_activation[order_id] <= 1
-            )
-
-            @constraint(model, block_acceptance_upper_bound[order_id in block_orders],
-                block_acceptance[order_id] <= block_activation[order_id]
-            )
-
-            @constraint(model, block_acceptance_lower_bound[order_id in block_orders],
-                order_book["Orders"][order_id]["mar"] * block_activation[order_id] <= block_acceptance[order_id]
-            )
-        end
-
-        # Power balance constraints
-        if haskey(order_book["ATC"], "Flows") && !isempty(order_book["ATC"]["Flows"])
-            @constraint(model, nodal_power_balance[node_id in order_book["Nodes"], time_period in order_book["Periods"]],
-                sum(stepwise_acceptance[order_id] * order_book["Orders"][order_id]["qtity"][time_period] 
-                    for order_id in orders_by_node[node_id]["stepwise_orders"][time_period]) +
-                sum(block_acceptance[order_id] * order_book["Orders"][order_id]["qtity"][time_period] 
-                    for order_id in orders_by_node[node_id]["block_orders"][time_period]) + 
-                load_shed[node_id, time_period] ==
-                sum(transmission_flow[flow_id, time_period] 
-                    for flow_id in orders_by_node[node_id]["flows_to"]) -
-                sum(transmission_flow[flow_id, time_period] 
-                    for flow_id in orders_by_node[node_id]["flows_from"])
-            )
-        else
-            @constraint(model, nodal_power_balance[node_id in order_book["Nodes"], time_period in order_book["Periods"]],
-                sum(stepwise_acceptance[order_id] * order_book["Orders"][order_id]["qtity"][time_period] 
-                    for order_id in orders_by_node[node_id]["stepwise_orders"][time_period]) +
-                sum(block_acceptance[order_id] * order_book["Orders"][order_id]["qtity"][time_period] 
-                    for order_id in orders_by_node[node_id]["block_orders"][time_period]) + 
-                load_shed[node_id, time_period] == 0
-            )
-        end
-
-        # Complementarity constraints (simplified version for demonstration)
-        @variable(model, stepwise_acceptance_complementarity_aux[order_id in stepwise_orders], Bin)
-        @constraint(model, stepwise_acceptance_complementarity_ineq1[order_id in stepwise_orders], 
+        
+        # Power balance constraints (single node case - no transmission flows)
+        @constraint(model, nodal_power_balance[node_id in order_book.nodes, time_period in order_book.periods],
+            sum(stepwise_acceptance[order_ids[i]] * 
+                (order.type == :supply ? -order.quantity : order.quantity) 
+                for (i, order) in enumerate(simple_orders) 
+                if string(order.zone) == node_id && string(Dates.hour(order.date_time) + 1) == time_period) + 
+            load_shed[node_id, time_period] == 0
+        )
+        
+        # Complementarity constraints using Big-M reformulation
+        @variable(model, stepwise_acceptance_complementarity_aux[order_id in order_ids], Bin)
+        @constraint(model, stepwise_acceptance_complementarity_ineq1[order_id in order_ids], 
             stepwise_acceptance[order_id] <= stepwise_acceptance_complementarity_aux[order_id] * big_m)
-        @constraint(model, stepwise_acceptance_complementarity_ineq2[order_id in stepwise_orders], 
+        @constraint(model, stepwise_acceptance_complementarity_ineq2[order_id in order_ids], 
             stepwise_dual_rhs[order_id] <= (1 - stepwise_acceptance_complementarity_aux[order_id]) * big_m)
-
+        
         # Price range constraints
-        if haskey(order_book, "Price_range")
-            @constraint(model, minimum_price[node_id in order_book["Nodes"], time_period in order_book["Periods"]], 
-                market_price[node_id, time_period] >= order_book["Price_range"]["lower"])
-            @constraint(model, maximum_price[node_id in order_book["Nodes"], time_period in order_book["Periods"]], 
-                market_price[node_id, time_period] <= order_book["Price_range"]["upper"])
-        end
-
-        # Objective function (maximize social welfare minus load shedding penalty)
+        @constraint(model, minimum_price[node_id in order_book.nodes, time_period in order_book.periods], 
+            market_price[node_id, time_period] >= order_book.price_limits[1])
+        @constraint(model, maximum_price[node_id in order_book.nodes, time_period in order_book.periods], 
+            market_price[node_id, time_period] <= order_book.price_limits[2])
+        
+        # Objective function - match dictionary formulation exactly
+        # Dictionary version: stepwise_acceptance[order_id] * (sum of quantities) * price
+        # Need to use signed quantities: negative for supply, positive for demand
         load_shed_penalty = 10000.0  # High penalty for load shedding (€/MWh)
         @objective(model, Max,
-            sum(stepwise_acceptance[order_id] * 
-                (sum(order_book["Orders"][order_id]["qtity"][time_period] for time_period in order_book["Periods"] 
-                     if haskey(order_book["Orders"][order_id]["qtity"], time_period))) * 
-                order_book["Orders"][order_id]["price"]["p0"] for order_id in stepwise_orders) +
-            sum(block_acceptance[order_id] * 
-                (sum(order_book["Orders"][order_id]["qtity"][time_period] for time_period in order_book["Periods"] 
-                     if haskey(order_book["Orders"][order_id]["qtity"], time_period))) * 
-                order_book["Orders"][order_id]["price"]["p0"] for order_id in block_orders) -
+            sum(stepwise_acceptance[order_ids[i]] * 
+                (order.type == :supply ? -order.quantity : order.quantity) * order.price 
+                for (i, order) in enumerate(simple_orders)) -
             load_shed_penalty * sum(load_shed[node_id, time_period] 
-                for node_id in order_book["Nodes"], time_period in order_book["Periods"])
+                for node_id in order_book.nodes, time_period in order_book.periods)
         )
-
+        
         # Solve the model
         optimize!(model)
         solve_time = time() - start_time
-
+        
         # Extract results
         if has_values(model)
             market_prices = Dict{String,Dict{String,Float64}}()
-            for node_id in order_book["Nodes"]
+            for node_id in order_book.nodes
                 market_prices[node_id] = Dict{String,Float64}()
-                for time_period in order_book["Periods"]
+                for time_period in order_book.periods
                     market_prices[node_id][time_period] = value(market_price[node_id, time_period])
                 end
             end
-
+            
             stepwise_acceptance_values = Dict{String,Float64}()
-            for order_id in stepwise_orders
+            for (i, order) in enumerate(simple_orders)
+                order_id = order_ids[i]
                 stepwise_acceptance_values[order_id] = value(stepwise_acceptance[order_id])
             end
-
-            block_acceptance_values = Dict{String,Float64}()
-            block_activation_values = Dict{String,Float64}()
-            for order_id in block_orders
-                block_acceptance_values[order_id] = value(block_acceptance[order_id])
-                block_activation_values[order_id] = value(block_activation[order_id])
-            end
-
-            transmission_flows = Dict{String,Dict{String,Float64}}()
-            if haskey(order_book["ATC"], "Flows") && !isempty(order_book["ATC"]["Flows"])
-                for flow_id in keys(order_book["ATC"]["Flows"])
-                    transmission_flows[flow_id] = Dict{String,Float64}()
-                    for time_period in order_book["Periods"]
-                        transmission_flows[flow_id][time_period] = value(transmission_flow[flow_id, time_period])
-                    end
-                end
-            end
-
-            # Calculate total load shedding for reporting
-            total_load_shed = sum(value(load_shed[node_id, time_period]) 
-                for node_id in order_book["Nodes"], time_period in order_book["Periods"])
             
-            result_message = if total_load_shed > 0.01
-                "Successfully solved MPCC market clearing problem (Load shed: $(round(total_load_shed, digits=1)) MW)"
+            # Convert JuMP termination status to our expected Symbol
+            status_symbol = if string(termination_status(model)) == "OPTIMAL"
+                :optimal
+            elseif string(termination_status(model)) == "INFEASIBLE"
+                :infeasible
+            elseif string(termination_status(model)) == "UNBOUNDED"
+                :unbounded
+            elseif string(termination_status(model)) == "TIME_LIMIT"
+                :time_limit
             else
-                "Successfully solved MPCC market clearing problem"
+                :error
             end
             
             return MPCCResult(
-                :optimal,
+                status_symbol,
                 objective_value(model),
                 market_prices,
                 stepwise_acceptance_values,
-                block_acceptance_values,
-                block_activation_values,
-                transmission_flows,
+                Dict{String,Float64}(),  # Empty block acceptance
+                Dict{String,Float64}(),  # Empty block activation
+                Dict{String,Dict{String,Float64}}(),  # Empty transmission flows
                 solve_time,
                 solver_name,
-                result_message
+                string(termination_status(model))
             )
         else
             return MPCCResult(
-                Symbol(termination_status(model)),
+                termination_status(model),
                 0.0,
                 Dict{String,Dict{String,Float64}}(),
                 Dict{String,Float64}(),
@@ -550,10 +364,10 @@ function solve_mpcc_market_clearing(order_book::Dict{String,Any};
                 Dict{String,Dict{String,Float64}}(),
                 solve_time,
                 solver_name,
-                "No solution found: $(termination_status(model))"
+                "No solution available: $(termination_status(model))"
             )
         end
-
+        
     catch e
         solve_time = time() - start_time
         return MPCCResult(
@@ -566,7 +380,7 @@ function solve_mpcc_market_clearing(order_book::Dict{String,Any};
             Dict{String,Dict{String,Float64}}(),
             solve_time,
             solver_name,
-            "Error during optimization: $e"
+            "Optimization failed: $e"
         )
     end
 end
