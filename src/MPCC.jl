@@ -232,22 +232,51 @@ function create_order_book_from_uc(bidding_zone::String, day::Date; markup_facto
             order_id += 1
         end
 
-        # Add real hourly load data from ENTSO-E
-        for (hour_idx, load) in enumerate(loads)
-            if hour_idx <= 24
+        # Add demand orders using net_demand from UC solution (load - renewables)
+        # This ensures supply-demand balance matches the UC optimization
+        if !isempty(uc_to_bids.demand_orders)
+            for demand_order in uc_to_bids.demand_orders
+                # Extract hour from the DateTime
+                hour_of_day = Dates.hour(demand_order.date_time) + 1  # Convert 0-23 to 1-24
+                
+                # Only create demand order for the specific hour
                 qtity_dict = Dict{String,Float64}()
-                for h in 1:24
-                    qtity_dict[string(h)] = (h == hour_idx) ? load.value : 0.0
+                for hour in 1:24
+                    if hour == hour_of_day
+                        qtity_dict[string(hour)] = demand_order.quantity  # Positive for demand
+                    else
+                        qtity_dict[string(hour)] = 0.0  # Zero for all other hours
+                    end
                 end
 
                 order_book["Orders"][string(order_id)] = Dict(
                     "type" => "stepwise",
-                    "node" => load.bidding_zone,
-                    "price" => Dict("p0" => 500.0),  # High price for must-serve load (within bounds)
+                    "node" => string(demand_order.zone),
+                    "price" => Dict("p0" => demand_order.price),  # Use the actual demand price
                     "qtity" => qtity_dict,
                     "mar" => 1.0
                 )
                 order_id += 1
+            end
+        else
+            # Fallback: if no demand orders from UC, use net load data but warn
+            @warn "No demand orders from UC solution, falling back to raw load data"
+            for (hour_idx, load) in enumerate(loads)
+                if hour_idx <= 24
+                    qtity_dict = Dict{String,Float64}()
+                    for h in 1:24
+                        qtity_dict[string(h)] = (h == hour_idx) ? load.value : 0.0
+                    end
+
+                    order_book["Orders"][string(order_id)] = Dict(
+                        "type" => "stepwise",
+                        "node" => load.bidding_zone,
+                        "price" => Dict("p0" => 500.0),
+                        "qtity" => qtity_dict,
+                        "mar" => 1.0
+                    )
+                    order_id += 1
+                end
             end
         end
 
@@ -352,6 +381,9 @@ function solve_mpcc_market_clearing(order_book::Dict{String,Any};
         @variable(model, 0 <= block_acceptance_lower_dual[order_id in block_orders])
         @variable(model, 0 <= block_acceptance_upper_dual[order_id in block_orders])
 
+        # Load shedding variables for market robustness (high penalty cost)
+        @variable(model, load_shed[node_id in order_book["Nodes"], time_period in order_book["Periods"]] >= 0)
+
         @variable(model, 0 <= block_activation_dual[order_id in block_orders; (!(order_id in exclusive_block_orders) && !(order_id in child_orders))])
         @variable(model, 0 <= exclusive_group_dual[group_id in exclusive_order_groups])
         @variable(model, 0 <= linked_group_dual[group_id in linked_order_groups, child_id in order_book["ComplexOrders"][group_id]["children"]])
@@ -402,7 +434,8 @@ function solve_mpcc_market_clearing(order_book::Dict{String,Any};
                 sum(stepwise_acceptance[order_id] * order_book["Orders"][order_id]["qtity"][time_period] 
                     for order_id in orders_by_node[node_id]["stepwise_orders"][time_period]) +
                 sum(block_acceptance[order_id] * order_book["Orders"][order_id]["qtity"][time_period] 
-                    for order_id in orders_by_node[node_id]["block_orders"][time_period]) ==
+                    for order_id in orders_by_node[node_id]["block_orders"][time_period]) + 
+                load_shed[node_id, time_period] ==
                 sum(transmission_flow[flow_id, time_period] 
                     for flow_id in orders_by_node[node_id]["flows_to"]) -
                 sum(transmission_flow[flow_id, time_period] 
@@ -413,7 +446,8 @@ function solve_mpcc_market_clearing(order_book::Dict{String,Any};
                 sum(stepwise_acceptance[order_id] * order_book["Orders"][order_id]["qtity"][time_period] 
                     for order_id in orders_by_node[node_id]["stepwise_orders"][time_period]) +
                 sum(block_acceptance[order_id] * order_book["Orders"][order_id]["qtity"][time_period] 
-                    for order_id in orders_by_node[node_id]["block_orders"][time_period]) == 0
+                    for order_id in orders_by_node[node_id]["block_orders"][time_period]) + 
+                load_shed[node_id, time_period] == 0
             )
         end
 
@@ -432,7 +466,8 @@ function solve_mpcc_market_clearing(order_book::Dict{String,Any};
                 market_price[node_id, time_period] <= order_book["Price_range"]["upper"])
         end
 
-        # Objective function
+        # Objective function (maximize social welfare minus load shedding penalty)
+        load_shed_penalty = 10000.0  # High penalty for load shedding (€/MWh)
         @objective(model, Max,
             sum(stepwise_acceptance[order_id] * 
                 (sum(order_book["Orders"][order_id]["qtity"][time_period] for time_period in order_book["Periods"] 
@@ -441,7 +476,9 @@ function solve_mpcc_market_clearing(order_book::Dict{String,Any};
             sum(block_acceptance[order_id] * 
                 (sum(order_book["Orders"][order_id]["qtity"][time_period] for time_period in order_book["Periods"] 
                      if haskey(order_book["Orders"][order_id]["qtity"], time_period))) * 
-                order_book["Orders"][order_id]["price"]["p0"] for order_id in block_orders)
+                order_book["Orders"][order_id]["price"]["p0"] for order_id in block_orders) -
+            load_shed_penalty * sum(load_shed[node_id, time_period] 
+                for node_id in order_book["Nodes"], time_period in order_book["Periods"])
         )
 
         # Solve the model
@@ -480,6 +517,16 @@ function solve_mpcc_market_clearing(order_book::Dict{String,Any};
                 end
             end
 
+            # Calculate total load shedding for reporting
+            total_load_shed = sum(value(load_shed[node_id, time_period]) 
+                for node_id in order_book["Nodes"], time_period in order_book["Periods"])
+            
+            result_message = if total_load_shed > 0.01
+                "Successfully solved MPCC market clearing problem (Load shed: $(round(total_load_shed, digits=1)) MW)"
+            else
+                "Successfully solved MPCC market clearing problem"
+            end
+            
             return MPCCResult(
                 :optimal,
                 objective_value(model),
@@ -490,7 +537,7 @@ function solve_mpcc_market_clearing(order_book::Dict{String,Any};
                 transmission_flows,
                 solve_time,
                 solver_name,
-                "Successfully solved MPCC market clearing problem"
+                result_message
             )
         else
             return MPCCResult(
