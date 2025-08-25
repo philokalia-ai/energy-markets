@@ -11,6 +11,7 @@ export MarketOrder, SimpleOrder, BlockOrder  # Order types
 export Generator, Load, RenewablesGenerationForecast  # Entities
 export get_generators, get_loads, get_generation_forecast_for_wind_and_solar  # Helper functions
 export test_unit_commitment
+export NetworkTopology, create_example_network, add_atc_constraints!  # Network constraints
 
 include("dbutils.jl")
 
@@ -31,6 +32,9 @@ include("Renewables.jl")
 include("UnitCommitment.jl")
 
 include("BiddingStrategy.jl")
+
+include("Network.jl")
+using .Network: NetworkTopology, create_example_network, add_atc_constraints!
 
 # Αυτή η συνάρτηση πρέπει να διαβάζει τα market orders
 # και να υπολογίζει το clearing price για timeslot για bidding zone
@@ -60,6 +64,16 @@ function make_model()
 
     # Define the model
     model = Model(HiGHS.Optimizer)
+
+    # Create network topology (you can replace this with real data later)
+    network = create_example_network()
+
+    # Decision Variables
+    # FLOW variables for network flows [line, time_period]
+    @variable(model, FLOW[l in network.lines, t in network.time_periods])
+
+    # Add ATC constraints from Network module
+    add_atc_constraints!(model, network, FLOW)
 
     # EUPHEMIA master problem (Economic Surplus Maximization) as described in Annex C1
     @objective(

@@ -8,7 +8,10 @@
 #
 # The script will automatically detect and use the first available solver.
 #------------------------------------------------------------------------------------------#
-using JuMP
+using JuMP, Dates, DataFrames, CSV, DotEnv
+
+# Load environment variables first, before importing any database modules
+DotEnv.load!(".")
 
 # Import solvers with error handling
 try
@@ -38,10 +41,204 @@ end
 ENV["TICKTOCK_MESSAGES"] = false
 #------------------------------------------------------------------------------------------#
 
-include(".//examples//beta_order_book_cexl.jl")
+# Load real ENTSO-E market data modules
+include("../dbutils.jl")
+# Make sql2df available in Main scope so modules can reference Euphemia.sql2df
+const Euphemia = (sql2df=sql2df,)  # Create minimal Euphemia namespace
 
-# Rename the main data structure for clarity
-order_book = Obk  # Original was "Obk" - now "order_book"
+include("../MarketOrders.jl")
+using .MarketOrders: MarketOrder, SimpleOrder
+
+include("../Generators.jl")
+include("../FuelTypeParameters.jl")
+include("../Loads.jl")
+include("../Renewables.jl")
+include("../UnitCommitment.jl")
+include("../BiddingStrategy.jl")
+using .BiddingStrategy: generate_market_orders_from_uc, UCToBidsResult# Market data configuration
+const TARGET_DATE = Date(2025, 6, 24)  # Can be made configurable
+const BIDDING_ZONE = "GR"  # Can be made configurable
+const MARKUP_FACTOR = 1.1  # 10% markup for supply bids
+
+"""
+    create_order_book_from_uc(bidding_zone::String, day::Date)
+
+Creates an MPCC-compatible order book from real ENTSO-E unit commitment results and load data.
+"""
+function create_order_book_from_uc(bidding_zone::String, day::Date)
+    # Generate market orders from real unit commitment
+    println("Running unit commitment optimization for $bidding_zone on $day...")
+    try
+        # Convert UC results to market orders using real bidding strategy
+        uc_to_bids = generate_market_orders_from_uc(bidding_zone, day; markup_factor=MARKUP_FACTOR)
+
+        if !uc_to_bids.success
+            error("Failed to generate market orders: $(uc_to_bids.message)")
+        end
+
+        # Get real hourly demand data from ENTSO-E database
+        loads = get_loads(bidding_zone, day)
+        println("Retrieved $(length(loads)) load data points for $bidding_zone on $day from ENTSO-E database")
+
+        # Convert to MPCC format
+        order_book = Dict{String,Any}()
+
+        # Initialize structure
+        order_book["Orders"] = Dict{String,Any}()
+        order_book["ComplexOrders"] = Dict{String,Any}()
+        order_book["Nodes"] = [bidding_zone]  # Single node for now
+        order_book["Periods"] = [string(h) for h in 1:24]  # 24 hourly periods for day-ahead market
+
+        # Convert supply orders (stepwise by default) - extend to all 24 hours
+        order_id = 1
+        for supply_order in uc_to_bids.supply_orders
+            # Create quantity dictionary for all 24 hours
+            qtity_dict = Dict{String,Float64}()
+            for hour in 1:24
+                qtity_dict[string(hour)] = -supply_order.quantity  # Negative for supply
+            end
+
+            order_book["Orders"][string(order_id)] = Dict(
+                "type" => "stepwise",
+                "node" => string(supply_order.zone),
+                "price" => Dict("p0" => supply_order.price),
+                "qtity" => qtity_dict,
+                "mar" => 1.0  # Full acceptance for stepwise
+            )
+            order_id += 1
+        end
+
+        # Add real hourly load data from ENTSO-E
+        for (hour_idx, load) in enumerate(loads)
+            if hour_idx <= 24  # Ensure we don't exceed 24 hours
+                # Create a demand order for this hour's load
+                qtity_dict = Dict{String,Float64}()
+                # Only add quantity for the specific hour, zero for others
+                for h in 1:24
+                    qtity_dict[string(h)] = (h == hour_idx) ? load.value : 0.0
+                end
+
+                order_book["Orders"][string(order_id)] = Dict(
+                    "type" => "stepwise",
+                    "node" => load.bidding_zone,
+                    "price" => Dict("p0" => 3000.0),  # High price for must-serve load
+                    "qtity" => qtity_dict,
+                    "mar" => 1.0
+                )
+                order_id += 1
+            end
+        end
+
+        # Add ATC structure (simplified single node)
+        order_book["ATC"] = Dict{String,Any}()
+        order_book["ATC"]["Flows"] = Dict{String,Any}()  # No transmission for single node
+
+        # Add price range if needed
+        order_book["Price_range"] = Dict("lower" => -500.0, "upper" => 3000.0)
+
+        # Display market structure summary
+        println("Market structure created:")
+        println("  - $(length(uc_to_bids.supply_orders)) supply orders from unit commitment")
+        println("  - $(length(uc_to_bids.demand_orders)) demand orders from unit commitment")
+        println("  - $(length(loads)) hourly load data points from ENTSO-E")
+        println("  - Total orders in book: $(length(order_book["Orders"]))")
+        println("  - Time periods: $(length(order_book["Periods"])) hours")
+        println("  - Bidding zones: $(order_book["Nodes"])")
+
+        return order_book
+
+    catch e
+        println("Error accessing real data, falling back to mock data...")
+        println("Error details: $(e)")
+
+        # Fallback to simplified mock data if real modules fail
+        return create_mock_order_book(bidding_zone, day)
+    end
+end
+
+"""
+    create_mock_order_book(bidding_zone::String, day::Date)
+
+Fallback function to create mock order book if real data is unavailable.
+"""
+function create_mock_order_book(bidding_zone::String, day::Date)
+    # Mock supply orders - typical Greek generation mix
+    mock_supply_orders = [
+        (type=:supply, price=25.0, quantity=500.0, zone=Symbol(bidding_zone)),  # Nuclear/Hydro baseload  
+        (type=:supply, price=45.0, quantity=300.0, zone=Symbol(bidding_zone)),  # Lignite
+        (type=:supply, price=65.0, quantity=200.0, zone=Symbol(bidding_zone)),  # Gas CCGT
+        (type=:supply, price=85.0, quantity=150.0, zone=Symbol(bidding_zone)),  # Gas Peaker
+        (type=:supply, price=105.0, quantity=100.0, zone=Symbol(bidding_zone)), # Oil/Emergency
+    ]
+
+    # Mock 24-hour load profile for Greece
+    base_load = 4000.0  # MW
+    hourly_factors = [0.7, 0.65, 0.6, 0.58, 0.6, 0.65, 0.75, 0.85, 0.9, 0.95, 1.0, 1.05, 1.1, 1.08, 1.05, 1.0, 0.95, 1.0, 1.05, 1.0, 0.95, 0.9, 0.85, 0.75]
+    mock_loads = [(timeslot="$(day)-$(lpad(h,2,'0'))", resolution_code="60", bidding_zone=bidding_zone, value=base_load * factor) for (h, factor) in enumerate(hourly_factors)]
+
+    # Convert to MPCC format
+    order_book = Dict{String,Any}()
+    order_book["Orders"] = Dict{String,Any}()
+    order_book["ComplexOrders"] = Dict{String,Any}()
+    order_book["Nodes"] = [bidding_zone]
+    order_book["Periods"] = [string(h) for h in 1:24]
+
+    # Add supply orders
+    order_id = 1
+    for supply_order in mock_supply_orders
+        qtity_dict = Dict{String,Float64}()
+        for hour in 1:24
+            qtity_dict[string(hour)] = -supply_order.quantity  # Negative for supply
+        end
+
+        order_book["Orders"][string(order_id)] = Dict(
+            "type" => "stepwise",
+            "node" => string(supply_order.zone),
+            "price" => Dict("p0" => supply_order.price),
+            "qtity" => qtity_dict,
+            "mar" => 1.0
+        )
+        order_id += 1
+    end
+
+    # Add hourly load data  
+    for (hour_idx, load) in enumerate(mock_loads)
+        if hour_idx <= 24
+            qtity_dict = Dict{String,Float64}()
+            for h in 1:24
+                qtity_dict[string(h)] = (h == hour_idx) ? load.value : 0.0
+            end
+
+            order_book["Orders"][string(order_id)] = Dict(
+                "type" => "stepwise",
+                "node" => load.bidding_zone,
+                "price" => Dict("p0" => 3000.0),
+                "qtity" => qtity_dict,
+                "mar" => 1.0
+            )
+            order_id += 1
+        end
+    end
+
+    order_book["ATC"] = Dict{String,Any}()
+    order_book["ATC"]["Flows"] = Dict{String,Any}()
+    order_book["Price_range"] = Dict("lower" => -500.0, "upper" => 3000.0)
+
+    println("Mock market structure created:")
+    println("  - $(length(mock_supply_orders)) mock supply orders")
+    println("  - $(length(mock_loads)) mock demand orders (from load data)")
+    println("  - $(length(mock_loads)) mock hourly load data points")
+    println("  - Total orders in book: $(length(order_book["Orders"]))")
+    println("  - Time periods: $(length(order_book["Periods"])) hours")
+    println("  - Bidding zones: $(order_book["Nodes"])")
+
+    return order_book
+end
+
+# Create order book from real ENTSO-E data
+println("Creating order book from real ENTSO-E data for $BIDDING_ZONE on $TARGET_DATE...")
+println("Attempting to use real unit commitment and load data from database...")
+order_book = create_order_book_from_uc(BIDDING_ZONE, TARGET_DATE)
 
 #-- Data organization with readable names -----------------------------------------#
 stepwise_orders = filter((k, v)::Pair -> v["type"] == "stepwise", order_book["Orders"]) |> keys
