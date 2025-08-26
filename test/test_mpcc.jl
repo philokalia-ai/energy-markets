@@ -37,7 +37,7 @@ function calculate_euphemia_cost_from_mpcc(mpcc_result::MPCCResult, uc_solution)
                     if period_idx <= length(uc_solution.time_slots)
                         # Calculate the generation amount for this accepted order
                         # This is approximate - we estimate based on acceptance rate and generator capacity
-                        estimated_generation = acceptance_rate * generator.p_max / 10  # Assume 10 steps per generator
+                        estimated_generation = acceptance_rate * generator.p_max / STEPS_PER_GENERATOR  # Use named constant for steps per generator
                         
                         # Calculate cost at marginal cost
                         order_cost = estimated_generation * generator.marginal_cost
