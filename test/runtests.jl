@@ -106,3 +106,10 @@ if !isempty(failed_dates)
         println("  ... and $(length(failed_dates) - 5) more")
     end
 end
+
+# Run MPCC tests
+println("\n" * "="^80)
+println("=== Running MPCC Market Clearing Tests ===")
+println("="^80)
+
+include("test_mpcc.jl")

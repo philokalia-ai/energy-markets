@@ -2,6 +2,100 @@ using CSV, DataFrames, JuMP, HiGHS, Gurobi, Dates
 
 # TODO: Include Actual Generation Per Production Unit for Previous Day for initial conditions?
 
+function calculate_cost_breakdown(generators, g, u, T, N)
+    # Calculate per-generator costs
+    generator_costs = Dict{String, Float64}()
+    fuel_type_costs = Dict{Symbol, Float64}()
+    hourly_costs = Float64[]
+    
+    for i in 1:N
+        gen_total_cost = 0.0
+        for t in 1:T
+            cost = generators[i].marginal_cost * g[i, t]
+            gen_total_cost += cost
+        end
+        generator_costs[generators[i].name] = gen_total_cost
+        
+        # Aggregate by fuel type
+        fuel_type = generators[i].fuel_type
+        if haskey(fuel_type_costs, fuel_type)
+            fuel_type_costs[fuel_type] += gen_total_cost
+        else
+            fuel_type_costs[fuel_type] = gen_total_cost
+        end
+    end
+    
+    # Calculate hourly costs
+    for t in 1:T
+        hourly_cost = sum(generators[i].marginal_cost * g[i, t] for i in 1:N)
+        push!(hourly_costs, hourly_cost)
+    end
+    
+    # Calculate utilization statistics
+    total_capacity = sum(gen.p_max for gen in generators)
+    committed_capacity = sum(generators[i].p_max * sum(u[i, t] for t in 1:T) for i in 1:N) / T
+    actual_generation = sum(g[i, t] for i in 1:N, t in 1:T) / T
+    
+    return (
+        generator_costs = generator_costs,
+        fuel_type_costs = fuel_type_costs,
+        hourly_costs = hourly_costs,
+        total_capacity = total_capacity,
+        avg_committed_capacity = committed_capacity,
+        avg_generation = actual_generation,
+        capacity_utilization = actual_generation / total_capacity,
+        commitment_utilization = committed_capacity / total_capacity
+    )
+end
+
+function print_cost_report(solution, day)
+    println("\n" * "="^60)
+    println("UNIT COMMITMENT COST REPORT - $day")
+    println("="^60)
+    
+    total_cost = solution.total_cost
+    breakdown = solution.cost_breakdown
+    
+    println("📊 OVERALL ECONOMICS")
+    println("   Total cost: €$(round(total_cost, digits=2)) (€$(round(total_cost/1e6, digits=2))M)")
+    println("   Average hourly cost: €$(round(total_cost/length(solution.time_slots), digits=2))")
+    println("   Cost per MWh generated: €$(round(total_cost/sum(breakdown.avg_generation * length(solution.time_slots)), digits=2))")
+    
+    println("\n⚡ CAPACITY & GENERATION")
+    println("   Total installed capacity: $(round(breakdown.total_capacity)) MW")
+    println("   Average committed capacity: $(round(breakdown.avg_committed_capacity)) MW")
+    println("   Average generation: $(round(breakdown.avg_generation)) MW")
+    println("   Capacity utilization: $(round(breakdown.capacity_utilization * 100, digits=1))%")
+    println("   Commitment utilization: $(round(breakdown.commitment_utilization * 100, digits=1))%")
+    
+    println("\n🔥 COSTS BY FUEL TYPE")
+    sorted_fuel_costs = sort(collect(breakdown.fuel_type_costs), by=x->x[2], rev=true)
+    for (fuel_type, cost) in sorted_fuel_costs
+        percentage = cost / total_cost * 100
+        println("   $(fuel_type): €$(round(cost, digits=2)) ($(round(percentage, digits=1))%)")
+    end
+    
+    println("\n🏭 TOP GENERATOR COSTS")
+    sorted_gen_costs = sort(collect(breakdown.generator_costs), by=x->x[2], rev=true)
+    for (i, (gen_name, cost)) in enumerate(sorted_gen_costs[1:min(5, end)])
+        percentage = cost / total_cost * 100
+        println("   $i. $gen_name: €$(round(cost, digits=2)) ($(round(percentage, digits=1))%)")
+    end
+    
+    println("\n📈 HOURLY COST PROFILE")
+    hourly_costs = breakdown.hourly_costs
+    min_cost = minimum(hourly_costs)
+    max_cost = maximum(hourly_costs)
+    avg_cost = sum(hourly_costs) / length(hourly_costs)
+    
+    println("   Peak hourly cost: €$(round(max_cost, digits=2)) (hour $(argmax(hourly_costs)))")
+    println("   Minimum hourly cost: €$(round(min_cost, digits=2)) (hour $(argmin(hourly_costs)))")
+    println("   Average hourly cost: €$(round(avg_cost, digits=2))")
+    println("   Cost variability: $(round((max_cost-min_cost)/avg_cost * 100, digits=1))%")
+    
+    println("="^60)
+end
+
 function solve_unit_commitment(bidding_zone::String, day::Dates.Date)
 
     # TODO: choose optimizer
@@ -322,6 +416,9 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date)
     end
     @assert primal_status(model) == FEASIBLE_POINT
 
+    # Calculate detailed cost breakdown
+    cost_breakdown = calculate_cost_breakdown(generators, value.(g), value.(u), T, N)
+    
     return (
         status=status,
         generators=generators,
@@ -331,6 +428,7 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date)
         g=value.(g),
         u=value.(u),
         total_cost=objective_value(model),
+        cost_breakdown=cost_breakdown,
     )
 end
 
@@ -345,16 +443,7 @@ function test_unit_commitment(
 
     if solution.status == OPTIMAL
         println("Solution found!")
-        println("Total cost: €", round(solution.total_cost, digits=2))
-        println("Number of generators: ", length(solution.generators))
-        println("Number of time periods: ", length(solution.time_slots))
-        println("Dispatch of Generators: ", solution.g, " MW")
-        println("Commitment of Generators: ", solution.u)
-
-        # Print some sample results
-        for t in 1:min(5, length(solution.time_slots))
-            println("Time $(solution.time_slots[t]): Net demand = $(solution.net_demand[t]) MW")
-        end
+        print_cost_report(solution, day)
     else
         println("Optimization failed with status: ", solution.status)
     end

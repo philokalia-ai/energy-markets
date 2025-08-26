@@ -3,8 +3,8 @@ module BiddingStrategy
 using Dates
 using JuMP: OPTIMAL
 # Note: MarketOrders and UnitCommitment should be included before this module
-import Main.MarketOrders: SimpleOrder
-import Main: solve_unit_commitment, get_loads
+import ..Euphemia.MarketOrders: SimpleOrder
+import ..Euphemia: solve_unit_commitment, get_loads
 
 # Configuration constants
 const DEFAULT_UNCOMMITTED_UNIT_FRACTION = 0.2  # 20% of max capacity for uncommitted units with very low p_min
@@ -95,7 +95,7 @@ function generate_market_orders_from_uc(
     bidding_zone::String,
     day::Date;
     markup_factor::Float64=1.1,
-    demand_price::Float64=3000.0,
+    demand_price::Float64=500.0,
     bidding_strategy::Symbol=:committed_only,
     uncommitted_unit_fraction::Float64=DEFAULT_UNCOMMITTED_UNIT_FRACTION
 )
@@ -323,7 +323,7 @@ function apply_bidding_strategy_to_uc(
     bidding_zone::String,
     day::Date;
     markup_factor::Float64=1.1,
-    demand_price::Float64=3000.0,
+    demand_price::Float64=500.0,
     bidding_strategy::Symbol=:committed_only,
     uncommitted_unit_fraction::Float64=DEFAULT_UNCOMMITTED_UNIT_FRACTION
 )
