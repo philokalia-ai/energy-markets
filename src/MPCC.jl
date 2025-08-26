@@ -230,8 +230,8 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
         order_ids = String[]
         
         for (i, order) in enumerate(simple_orders)
-            # Create a unique ID based on order properties and index
-            unique_id = "order_$(i)_$(string(order.zone))_$(Dates.hour(order.date_time))_$(round(Int, order.quantity))_$(round(Int, order.price))"
+            # Create a unique ID based on order properties and index, with explicit field labels to avoid ambiguity
+            unique_id = "order_$(i)_z$(string(order.zone))_h$(Dates.hour(order.date_time))_q$(round(Int, order.quantity))_p$(round(Int, order.price))"
             order_indices[order] = unique_id
             push!(order_ids, unique_id)
         end
