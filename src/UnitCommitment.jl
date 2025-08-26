@@ -33,7 +33,7 @@ function calculate_cost_breakdown(generators, g, u, T, N)
     
     # Calculate utilization statistics
     total_capacity = sum(gen.p_max for gen in generators)
-    committed_capacity = sum(generators[i].p_max * u[i, t] for i in 1:N, t in 1:T) / T
+    committed_capacity = sum(generators[i].p_max * sum(u[i, t] for t in 1:T) for i in 1:N) / T
     actual_generation = sum(g[i, t] for i in 1:N, t in 1:T) / T
     
     return (
