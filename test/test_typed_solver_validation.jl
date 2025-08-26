@@ -43,7 +43,7 @@ function calculate_mpcc_comparison_number(mpcc_result::MPCCResult)::String
     
     # Combine all components and hash
     combined_string = join(components, "|")
-    hash_value = bytes2hex(sha256(combined_string))
+    hash_value = bytes2hex(SHA.sha256(combined_string))
     short_hash = hash_value[1:16]
     
     # Add human-readable metrics
