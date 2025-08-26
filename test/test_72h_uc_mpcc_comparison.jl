@@ -98,7 +98,7 @@ for every hour across three consecutive days.
                     
                     # Calculate differences
                     price_diff = mpcc_price - marginal_cost
-                    price_diff_pct = total_generation > 0 ? (abs(price_diff) / max(marginal_cost, 1.0) * 100) : 0.0
+                    price_diff_pct = total_generation > 0 ? (abs(price_diff) / max(marginal_cost, EPSILON) * 100) : 0.0
                     cost_diff = mpcc_cost - uc_marginal_cost
                     cost_diff_pct = total_generation > 0 ? (abs(cost_diff) / max(uc_marginal_cost, 1.0) * 100) : 0.0
                     
