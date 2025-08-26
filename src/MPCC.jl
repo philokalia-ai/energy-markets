@@ -274,12 +274,26 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
             0 <= stepwise_dual_rhs[order_id]
         )
         
+        # Precompute mapping from (node_id, time_period) to relevant order indices
+        orders_by_node_time = Dict{Tuple{String, String}, Vector{Int}}()
+        for (i, order) in enumerate(simple_orders)
+            node = string(order.zone)
+            period = string(Dates.hour(order.date_time) + 1)
+            key = (node, period)
+            if haskey(orders_by_node_time, key)
+                push!(orders_by_node_time[key], i)
+            else
+                orders_by_node_time[key] = [i]
+            end
+        end
+
         # Power balance constraints (single node case - no transmission flows)
         @constraint(model, nodal_power_balance[node_id in order_book.nodes, time_period in order_book.periods],
-            sum(stepwise_acceptance[order_ids[i]] * 
-                (order.type == :supply ? -order.quantity : order.quantity) 
-                for (i, order) in enumerate(simple_orders) 
-                if string(order.zone) == node_id && string(Dates.hour(order.date_time) + 1) == time_period) + 
+            sum(
+                stepwise_acceptance[order_ids[i]] *
+                (simple_orders[i].type == :supply ? -simple_orders[i].quantity : simple_orders[i].quantity)
+                for i in get(orders_by_node_time, (node_id, time_period), Int[])
+            ) + 
             load_shed[node_id, time_period] == 0
         )
         
