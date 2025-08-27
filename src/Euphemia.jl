@@ -13,6 +13,7 @@ export get_generators, get_loads, get_generation_forecast_for_wind_and_solar  # 
 export test_unit_commitment
 export NetworkTopology, create_example_network, add_atc_constraints!  # Network constraints
 export MPCCResult, solve_mpcc_market_clearing, create_typed_order_book, select_solver  # MPCC functionality
+export create_adjusted_order_book, AdjustedOrderBookResult, print_order_book_summary  # Alternative order book
 
 include("dbutils.jl")
 
@@ -39,6 +40,9 @@ using .Network: NetworkTopology, create_example_network, add_atc_constraints!
 
 include("MPCC.jl")
 using .MPCC: MPCCResult, solve_mpcc_market_clearing, create_typed_order_book, select_solver
+
+include("AlternativeOrderBook.jl")
+using .AlternativeOrderBook: create_adjusted_order_book, AdjustedOrderBookResult, print_order_book_summary
 
 # Αυτή η συνάρτηση πρέπει να διαβάζει τα market orders
 # και να υπολογίζει το clearing price για timeslot για bidding zone
