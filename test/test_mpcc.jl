@@ -70,7 +70,7 @@ end
 
     # Test configuration
     test_bidding_zone = "GR"
-    test_start_date = Date(2025, 6, 24)
+    test_start_date = Date(2025, 7, 21)
     test_dates = [test_start_date + Day(i) for i in 0:2]  # 3 consecutive days
 
     @testset "Solver Selection Tests" begin

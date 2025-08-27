@@ -5,8 +5,8 @@ using JuMP  # Import JuMP to access OPTIMAL status
 bidding_zone = "GR"  # Example bidding zone
 
 # Define date range for testing (just a few dates to verify the fix)
-start_date = Date("2025-06-24")
-end_date = Date("2025-06-26")
+start_date = Date("2025-07-21")
+end_date = Date("2025-07-25")
 dates_to_test = collect(start_date:Day(1):end_date)
 
 println("Testing Euphemia for bidding zone: $bidding_zone")
