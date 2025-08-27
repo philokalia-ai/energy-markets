@@ -1,5 +1,6 @@
 using Test
 using Euphemia
+using Euphemia.MPCC
 using Dates
 using JuMP
 
@@ -43,7 +44,7 @@ for every hour across three consecutive days.
                 
                 # Step 2: Create Order Book and run MPCC
                 println("📋 Creating Order Book...")
-                order_book = create_order_book_from_uc(test_bidding_zone, test_date)
+                order_book = create_typed_order_book(test_bidding_zone, test_date)
                 
                 println("⚖️  Running MPCC Market Clearing...")
                 mpcc_result = solve_mpcc_market_clearing(order_book; silent=true)

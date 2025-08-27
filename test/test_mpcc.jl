@@ -1,5 +1,6 @@
 using Test
 using Euphemia
+using Euphemia.MPCC
 using Dates
 using JuMP
 
@@ -102,25 +103,24 @@ end
                 @test begin
                     try
                         @info "Testing order book creation for $test_bidding_zone on $test_date"
-                        order_book = create_order_book_from_uc(test_bidding_zone, test_date)
+                        order_book = create_typed_order_book(test_bidding_zone, test_date)
 
-                        # Validate order book structure
-                        @test haskey(order_book, "Orders")
-                        @test haskey(order_book, "ComplexOrders")
-                        @test haskey(order_book, "Nodes")
-                        @test haskey(order_book, "Periods")
-                        @test haskey(order_book, "ATC")
-                        @test haskey(order_book, "Price_range")
+                        # Validate typed order book structure
+                        @test isa(order_book, MPCCOrderBook)
+                        @test isa(order_book.orders, Vector)
+                        @test isa(order_book.nodes, Vector{String})
+                        @test isa(order_book.periods, Vector{String})
+                        @test isa(order_book.price_limits, Tuple{Float64,Float64})
 
                         # Check that we have nodes and periods
-                        @test !isempty(order_book["Nodes"])
-                        @test !isempty(order_book["Periods"])
-                        @test length(order_book["Periods"]) == 24  # 24 hourly periods
+                        @test !isempty(order_book.nodes)
+                        @test !isempty(order_book.periods)
+                        @test length(order_book.periods) == 24  # 24 hourly periods
 
                         # Check that we have some orders
-                        @test !isempty(order_book["Orders"])
+                        @test !isempty(order_book.orders)
 
-                        @info "Day $day_idx: Order book created successfully with $(length(order_book["Orders"])) orders"
+                        @info "Day $day_idx: Typed order book created successfully with $(length(order_book.orders)) orders"
                         @info "Day $day_idx: Nodes: $(order_book["Nodes"])"
                         @info "Day $day_idx: Time periods: $(length(order_book["Periods"]))"
 
@@ -154,7 +154,7 @@ end
                         end
 
                         # Create order book from real data
-                        order_book = create_order_book_from_uc(test_bidding_zone, test_date)
+                        order_book = create_typed_order_book(test_bidding_zone, test_date)
 
                         # Solve MPCC problem
                         @info "Step 2: Running MPCC Market Clearing for $test_date"

@@ -360,42 +360,42 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date)
         u[i, t] == u_SU[i, t] + u_DISP[i, t] + u_SD[i, t])
 
     # startup operation profile duration depending on startup temperature stage
-    @constraint(model, [i in N, t in maximum(T_SU[i, θ] for θ in Θ):T],
+    @constraint(model, [i in 1:N, t in maximum(T_SU[i, θ] for θ in Θ):T],
         u_SU[i, t] == sum(sum(v_θ[i, θ, τ] for τ in max(1, t - T_SU[i, θ] + 1):t) for θ in Θ)
     )
 
     # startup operation profile depending on shutdown duration. TODO: ASK PROF (p.213) Έχει T_SD και με θ και χωρίς
-    @constraint(model, [i in N, t in 1:T-T_SD[i]+1],
+    @constraint(model, [i in 1:N, t in 1:T-T_SD[i]+1],
         u_SD[i, t] == sum(z[i, τ] for τ in t:t+T_SD[i]-1)
     ) # TODO: Ensure it's u_SD and not u_SU. Book writes u_SU. Copilot claims it's u_SD. Typo?
 
     # production constraint for startup operation profile
-    @constraint(model, [i in N, t in maximum(T_SU[i, θ] for θ in Θ):T],
+    @constraint(model, [i in 1:N, t in maximum(T_SU[i, θ] for θ in Θ):T],
         g_SU[i, t] == sum(sum(P_SU[i, θ, t-τ+1] * v_θ[i, θ, τ] for τ in max(1, t - T_SU[i, θ] + 1):t) for θ in Θ)
     )
 
     # production constraint for shutdown operation profile
-    @constraint(model, [i in N, t in 1:T-T_SD[i]],
+    @constraint(model, [i in 1:N, t in 1:T-T_SD[i]],
         #T_SD independent of θ
-        g_SD[i, t] == sum(P_SD[i, τ] * z[i, τ] for τ in t+1:t+T_SD[i])
+        g_SD[i, t] == sum(P_SD[i, τ-t] * z[i, τ] for τ in t+1:t+T_SD[i])
     )
 
     # production constraints for dispatch ready operation profile
-    @constraint(model, [i in N, t in 1:T],
+    @constraint(model, [i in 1:N, t in 1:T],
         g[i, t] >= g_SU[i, t] + g_SD[i, t] + generators[i].p_min * u_DISP[i, t]
     )
 
-    @constraint(model, [i in N, t in 1:T],
+    @constraint(model, [i in 1:N, t in 1:T],
         g[i, t] <= g_SU[i, t] + g_SD[i, t] + generators[i].p_max * u_DISP[i, t]
     )
 
     # ramp constraints considering startup & shutdown profiles (R: Ramp Constraint)
     # TODO: Add proper ramp rate parameters to Generator struct
-    @constraint(model, [i in N, t in 2:T], #TODO: ask about M parameter
+    @constraint(model, [i in 1:N, t in 2:T], #TODO: ask about M parameter
         g[i, t] - g[i, t-1] <= ramp_up[i] + M * u_SU[i, t]
     )
 
-    @constraint(model, [i in N, t in 2:T],
+    @constraint(model, [i in 1:N, t in 2:T],
         g[i, t-1] - g[i, t] <= ramp_down[i] + M * u_SD[i, t]
     )
 
