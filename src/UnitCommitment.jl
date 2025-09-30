@@ -2,6 +2,73 @@ using CSV, DataFrames, JuMP, HiGHS, Gurobi, Dates
 
 # TODO: Include Actual Generation Per Production Unit for Previous Day for initial conditions?
 
+"""
+    disaggregate_renewables_to_load_resolution(renewables, time_slots)
+
+Disaggregates hourly renewable data to match the resolution of load data.
+Distributes hourly renewable generation evenly across all load time slots within that hour.
+
+# Arguments
+- `renewables`: Vector of RenewablesGenerationForecast with hourly data
+- `time_slots`: Vector of time slot strings from load data (e.g., 15-minute resolution)
+
+# Returns
+- `Dict{String,Float64}`: Mapping from time slot to renewable generation value
+"""
+function disaggregate_renewables_to_load_resolution(renewables, time_slots)
+    renewable_by_time = Dict{String,Float64}()
+    
+    # Group renewables by hour for processing
+    renewables_by_hour = Dict{String,Float64}()
+    for renewable in renewables
+        # Extract hour from renewable timestamp (e.g., "20240618-01" -> "20240618-01")
+        hour_key = renewable.date_time
+        if haskey(renewables_by_hour, hour_key)
+            renewables_by_hour[hour_key] += renewable.aggregated_generation_forecast
+        else
+            renewables_by_hour[hour_key] = renewable.aggregated_generation_forecast
+        end
+    end
+    
+    # For each hour with renewable data, find matching load time slots
+    for (hour_key, hourly_value) in renewables_by_hour
+        # Find all load time slots that belong to this hour
+        # hour_key format: "20240618-0000", "20240618-0100", etc.
+        # load slots format: "20240618-0000", "20240618-0015", "20240618-0030", "20240618-0045", "20240618-0100", etc.
+        matching_slots = String[]
+        
+        # Extract the hour part from renewable data (e.g., "20240618-0000" -> "20240618-00")
+        if length(hour_key) >= 11
+            hour_prefix = hour_key[1:11]  # "20240618-00" from "20240618-0000"
+            
+            for slot in time_slots
+                # Check if load slot belongs to this hour by comparing the hour prefix
+                if length(slot) >= 11 && slot[1:11] == hour_prefix
+                    push!(matching_slots, slot)
+                end
+            end
+        end
+        
+        # Distribute hourly renewable value evenly across matching slots
+        if !isempty(matching_slots)
+            value_per_slot = hourly_value / length(matching_slots)
+            for slot in matching_slots
+                if haskey(renewable_by_time, slot)
+                    renewable_by_time[slot] += value_per_slot
+                else
+                    renewable_by_time[slot] = value_per_slot
+                end
+            end
+            
+            println("📊 Disaggregated $(round(hourly_value, digits=2)) MW renewable for hour $hour_key into $(length(matching_slots)) slots ($(round(value_per_slot, digits=2)) MW each)")
+        else
+            @warn "No matching load slots found for renewable hour: $hour_key"
+        end
+    end
+    
+    return renewable_by_time
+end
+
 function calculate_cost_breakdown(generators, g, u, T, N)
     # Calculate per-generator costs
     generator_costs = Dict{String, Float64}()
@@ -152,17 +219,8 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date)
         end
     end
 
-    # Create renewable generation lookup by timeslot
-    renewable_by_time = Dict{String,Float64}()
-    for renewable in renewables
-        # renewable.date_time is already formatted as string in the struct
-        timeslot = renewable.date_time
-        if haskey(renewable_by_time, timeslot)
-            renewable_by_time[timeslot] += renewable.aggregated_generation_forecast
-        else
-            renewable_by_time[timeslot] = renewable.aggregated_generation_forecast
-        end
-    end
+    # Disaggregate renewable generation to match load resolution
+    renewable_by_time = disaggregate_renewables_to_load_resolution(renewables, time_slots)
 
     # Calculate net demand (load - renewables) for each time period
     net_demand = Float64[]
