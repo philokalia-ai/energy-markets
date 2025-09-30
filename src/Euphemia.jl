@@ -11,7 +11,9 @@ export MarketOrder, SimpleOrder, BlockOrder  # Order types
 export Generator, Load, RenewablesGenerationForecast  # Entities
 export get_generators, get_loads, get_generation_forecast_for_wind_and_solar  # Helper functions
 export test_unit_commitment
-export NetworkTopology, create_example_network, add_atc_constraints!  # Network constraints
+export NetworkTopology, create_example_network, add_atc_constraints!  # Network constraints (legacy)
+export TransferCapacity, create_transfer_capacity_from_entsoe, add_transfer_capacity_constraints!  # Transfer capacity constraints
+export create_example_transfer_capacity, create_greek_transfer_capacity_from_entsoe, euphemia_market_clearing_with_entsoe
 export MPCCResult, solve_mpcc_market_clearing, create_typed_order_book, select_solver  # MPCC functionality
 export create_adjusted_order_book, AdjustedOrderBookResult, print_order_book_summary  # Alternative order book
 export calculate_cost_breakdown, solve_unit_commitment
@@ -38,6 +40,7 @@ include("BiddingStrategy.jl")
 
 include("Network.jl")
 using .Network: NetworkTopology, create_example_network, add_atc_constraints!
+using .Network: TransferCapacity, create_transfer_capacity_from_entsoe, add_transfer_capacity_constraints!, create_example_transfer_capacity
 
 include("MPCC.jl")
 using .MPCC: MPCCResult, solve_mpcc_market_clearing, create_typed_order_book, select_solver
@@ -74,15 +77,19 @@ function make_model()
     # Define the model
     model = Model(HiGHS.Optimizer)
 
-    # Create network topology (you can replace this with real data later)
-    network = create_example_network()
+    # Create transfer capacity structure (using real ENTSO-E data when available)
+    transfer_capacity = create_example_transfer_capacity()
+    
+    # Extract bidding zones and time periods
+    zones = transfer_capacity.bidding_zones
+    time_periods = transfer_capacity.time_periods
 
     # Decision Variables
-    # FLOW variables for network flows [line, time_period]
-    @variable(model, FLOW[l in network.lines, t in network.time_periods])
+    # TRANSFER_FLOW variables for zone-to-zone transfers [source_zone, sink_zone, time_period]
+    @variable(model, TRANSFER_FLOW[source in zones, sink in zones, t in time_periods; source != sink])
 
-    # Add ATC constraints from Network module
-    add_atc_constraints!(model, network, FLOW)
+    # Add transfer capacity constraints from Network module
+    add_transfer_capacity_constraints!(model, transfer_capacity, TRANSFER_FLOW)
 
     # EUPHEMIA master problem (Economic Surplus Maximization) as described in Annex C1
     @objective(
@@ -121,11 +128,12 @@ function make_model()
         sum(ACCEPT[mo] * q[mo] * p[mo] * res(mo)
             for mo in merit_orders)
 
-        # Term 7: Tariffs impact
-        # Note: Annex C1 uses 'u' in formula, Annex C5 defines 'uu' - documentation inconsistency
-        -
-        sum(Tariff[l, t] * FLOW[l, u, t]
-            for l in lines, u in [0, 1], t in time_periods)
+        # Term 7: Tariffs impact (adapted for zone-to-zone transfers)
+        # Note: Original formula uses line-based tariffs, adapted for zone transfers
+        # TODO: Define zone-to-zone tariff structure
+        # -
+        # sum(Tariff[source, sink, t] * TRANSFER_FLOW[source, sink, t]
+        #     for source in zones, sink in zones, t in time_periods if source != sink)
 
         # Term 8: Price-taking hourly orders curtailment minimization
         -
@@ -135,5 +143,44 @@ function make_model()
 
     # Solve the model
     optimize!(model)
+end
+
+"""
+    euphemia_market_clearing_with_entsoe(date::Date, bidding_zones::Vector{String}=String[])
+
+Market clearing using real ENTSO-E transfer capacity data for the specified date.
+
+# Arguments
+- `date::Date`: Date for which to retrieve ENTSO-E transfer capacities
+- `bidding_zones::Vector{String}`: Optional filter for specific bidding zones
+
+# Returns
+- JuMP model with transfer capacity constraints from real ENTSO-E data
+"""
+function euphemia_market_clearing_with_entsoe(date::Date, bidding_zones::Vector{String}=String[])
+    model = Model(HiGHS.Optimizer)
+
+    # Create transfer capacity structure using real ENTSO-E data
+    transfer_capacity = create_transfer_capacity_from_entsoe(date, bidding_zones)
+    
+    # Extract bidding zones and time periods
+    zones = transfer_capacity.bidding_zones
+    time_periods = transfer_capacity.time_periods
+
+    # Decision Variables
+    # TRANSFER_FLOW variables for zone-to-zone transfers [source_zone, sink_zone, time_period]
+    @variable(model, TRANSFER_FLOW[source in zones, sink in zones, t in time_periods; source != sink])
+
+    # Add transfer capacity constraints from real ENTSO-E data
+    add_transfer_capacity_constraints!(model, transfer_capacity, TRANSFER_FLOW)
+
+    println("✅ Created EUPHEMIA model with real ENTSO-E data:")
+    println("   🌍 Bidding zones: $(length(zones)) ($(join(zones, ", ")))")
+    println("   🕐 Time periods: $(length(time_periods))")
+    println("   🔗 Transfer variables: $(length(zones) * (length(zones)-1) * length(time_periods))")
+
+    # TODO: Add order processing and objective function (same as main function)
+    # For now, return the model with transfer capacity constraints
+    return model, transfer_capacity
 end
 end
