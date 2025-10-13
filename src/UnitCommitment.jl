@@ -2,6 +2,167 @@ using CSV, DataFrames, JuMP, HiGHS, Gurobi, Dates
 
 # TODO: Include Actual Generation Per Production Unit for Previous Day for initial conditions?
 
+"""
+    disaggregate_renewables_to_load_resolution(renewables, time_slots)
+
+Disaggregates hourly renewable data to match the resolution of load data.
+Distributes hourly renewable generation evenly across all load time slots within that hour.
+
+# Arguments
+- `renewables`: Vector of RenewablesGenerationForecast with hourly data
+- `time_slots`: Vector of time slot strings from load data (e.g., 15-minute resolution)
+
+# Returns
+- `Dict{String,Float64}`: Mapping from time slot to renewable generation value
+"""
+function disaggregate_renewables_to_load_resolution(renewables, time_slots)
+    renewable_by_time = Dict{String,Float64}()
+    
+    # Group renewables by hour for processing
+    renewables_by_hour = Dict{String,Float64}()
+    for renewable in renewables
+        # Extract hour from renewable timestamp (e.g., "20240618-01" -> "20240618-01")
+        hour_key = renewable.date_time
+        if haskey(renewables_by_hour, hour_key)
+            renewables_by_hour[hour_key] += renewable.aggregated_generation_forecast
+        else
+            renewables_by_hour[hour_key] = renewable.aggregated_generation_forecast
+        end
+    end
+    
+    # For each hour with renewable data, find matching load time slots
+    for (hour_key, hourly_value) in renewables_by_hour
+        # Find all load time slots that belong to this hour
+        # hour_key format: "20240618-0000", "20240618-0100", etc.
+        # load slots format: "20240618-0000", "20240618-0015", "20240618-0030", "20240618-0045", "20240618-0100", etc.
+        matching_slots = String[]
+        
+        # Extract the hour part from renewable data (e.g., "20240618-0000" -> "20240618-00")
+        if length(hour_key) >= 11
+            hour_prefix = hour_key[1:11]  # "20240618-00" from "20240618-0000"
+            
+            for slot in time_slots
+                # Check if load slot belongs to this hour by comparing the hour prefix
+                if length(slot) >= 11 && slot[1:11] == hour_prefix
+                    push!(matching_slots, slot)
+                end
+            end
+        end
+        
+        # Distribute hourly renewable value evenly across matching slots
+        if !isempty(matching_slots)
+            value_per_slot = hourly_value / length(matching_slots)
+            for slot in matching_slots
+                if haskey(renewable_by_time, slot)
+                    renewable_by_time[slot] += value_per_slot
+                else
+                    renewable_by_time[slot] = value_per_slot
+                end
+            end
+            
+            println("📊 Disaggregated $(round(hourly_value, digits=2)) MW renewable for hour $hour_key into $(length(matching_slots)) slots ($(round(value_per_slot, digits=2)) MW each)")
+        else
+            @warn "No matching load slots found for renewable hour: $hour_key"
+        end
+    end
+    
+    return renewable_by_time
+end
+
+function calculate_cost_breakdown(generators, g, u, T, N)
+    # Calculate per-generator costs
+    generator_costs = Dict{String, Float64}()
+    fuel_type_costs = Dict{Symbol, Float64}()
+    hourly_costs = Float64[]
+    
+    for i in 1:N
+        gen_total_cost = 0.0
+        for t in 1:T
+            cost = generators[i].marginal_cost * g[i, t]
+            gen_total_cost += cost
+        end
+        generator_costs[generators[i].name] = gen_total_cost
+        
+        # Aggregate by fuel type
+        fuel_type = generators[i].fuel_type
+        if haskey(fuel_type_costs, fuel_type)
+            fuel_type_costs[fuel_type] += gen_total_cost
+        else
+            fuel_type_costs[fuel_type] = gen_total_cost
+        end
+    end
+    
+    # Calculate hourly costs
+    for t in 1:T
+        hourly_cost = sum(generators[i].marginal_cost * g[i, t] for i in 1:N)
+        push!(hourly_costs, hourly_cost)
+    end
+    
+    # Calculate utilization statistics
+    total_capacity = sum(gen.p_max for gen in generators)
+    committed_capacity = sum(generators[i].p_max * sum(u[i, t] for t in 1:T) for i in 1:N) / T
+    actual_generation = sum(g[i, t] for i in 1:N, t in 1:T) / T
+    
+    return (
+        generator_costs = generator_costs,
+        fuel_type_costs = fuel_type_costs,
+        hourly_costs = hourly_costs,
+        total_capacity = total_capacity,
+        avg_committed_capacity = committed_capacity,
+        avg_generation = actual_generation,
+        capacity_utilization = actual_generation / total_capacity,
+        commitment_utilization = committed_capacity / total_capacity
+    )
+end
+
+function print_cost_report(solution, day)
+    println("\n" * "="^60)
+    println("UNIT COMMITMENT COST REPORT - $day")
+    println("="^60)
+    
+    total_cost = solution.total_cost
+    breakdown = solution.cost_breakdown
+    
+    println("📊 OVERALL ECONOMICS")
+    println("   Total cost: €$(round(total_cost, digits=2)) (€$(round(total_cost/1e6, digits=2))M)")
+    println("   Average hourly cost: €$(round(total_cost/length(solution.time_slots), digits=2))")
+    println("   Cost per MWh generated: €$(round(total_cost/sum(breakdown.avg_generation * length(solution.time_slots)), digits=2))")
+    
+    println("\n⚡ CAPACITY & GENERATION")
+    println("   Total installed capacity: $(round(breakdown.total_capacity)) MW")
+    println("   Average committed capacity: $(round(breakdown.avg_committed_capacity)) MW")
+    println("   Average generation: $(round(breakdown.avg_generation)) MW")
+    println("   Capacity utilization: $(round(breakdown.capacity_utilization * 100, digits=1))%")
+    println("   Commitment utilization: $(round(breakdown.commitment_utilization * 100, digits=1))%")
+    
+    println("\n🔥 COSTS BY FUEL TYPE")
+    sorted_fuel_costs = sort(collect(breakdown.fuel_type_costs), by=x->x[2], rev=true)
+    for (fuel_type, cost) in sorted_fuel_costs
+        percentage = cost / total_cost * 100
+        println("   $(fuel_type): €$(round(cost, digits=2)) ($(round(percentage, digits=1))%)")
+    end
+    
+    println("\n🏭 TOP GENERATOR COSTS")
+    sorted_gen_costs = sort(collect(breakdown.generator_costs), by=x->x[2], rev=true)
+    for (i, (gen_name, cost)) in enumerate(sorted_gen_costs[1:min(5, end)])
+        percentage = cost / total_cost * 100
+        println("   $i. $gen_name: €$(round(cost, digits=2)) ($(round(percentage, digits=1))%)")
+    end
+    
+    println("\n📈 HOURLY COST PROFILE")
+    hourly_costs = breakdown.hourly_costs
+    min_cost = minimum(hourly_costs)
+    max_cost = maximum(hourly_costs)
+    avg_cost = sum(hourly_costs) / length(hourly_costs)
+    
+    println("   Peak hourly cost: €$(round(max_cost, digits=2)) (hour $(argmax(hourly_costs)))")
+    println("   Minimum hourly cost: €$(round(min_cost, digits=2)) (hour $(argmin(hourly_costs)))")
+    println("   Average hourly cost: €$(round(avg_cost, digits=2))")
+    println("   Cost variability: $(round((max_cost-min_cost)/avg_cost * 100, digits=1))%")
+    
+    println("="^60)
+end
+
 function solve_unit_commitment(bidding_zone::String, day::Dates.Date)
 
     # TODO: choose optimizer
@@ -58,17 +219,8 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date)
         end
     end
 
-    # Create renewable generation lookup by timeslot
-    renewable_by_time = Dict{String,Float64}()
-    for renewable in renewables
-        # renewable.date_time is already formatted as string in the struct
-        timeslot = renewable.date_time
-        if haskey(renewable_by_time, timeslot)
-            renewable_by_time[timeslot] += renewable.aggregated_generation_forecast
-        else
-            renewable_by_time[timeslot] = renewable.aggregated_generation_forecast
-        end
-    end
+    # Disaggregate renewable generation to match load resolution
+    renewable_by_time = disaggregate_renewables_to_load_resolution(renewables, time_slots)
 
     # Calculate net demand (load - renewables) for each time period
     net_demand = Float64[]
@@ -266,42 +418,42 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date)
         u[i, t] == u_SU[i, t] + u_DISP[i, t] + u_SD[i, t])
 
     # startup operation profile duration depending on startup temperature stage
-    @constraint(model, [i in N, t in maximum(T_SU[i, θ] for θ in Θ):T],
+    @constraint(model, [i in 1:N, t in maximum(T_SU[i, θ] for θ in Θ):T],
         u_SU[i, t] == sum(sum(v_θ[i, θ, τ] for τ in max(1, t - T_SU[i, θ] + 1):t) for θ in Θ)
     )
 
     # startup operation profile depending on shutdown duration. TODO: ASK PROF (p.213) Έχει T_SD και με θ και χωρίς
-    @constraint(model, [i in N, t in 1:T-T_SD[i]+1],
+    @constraint(model, [i in 1:N, t in 1:T-T_SD[i]+1],
         u_SD[i, t] == sum(z[i, τ] for τ in t:t+T_SD[i]-1)
     ) # TODO: Ensure it's u_SD and not u_SU. Book writes u_SU. Copilot claims it's u_SD. Typo?
 
     # production constraint for startup operation profile
-    @constraint(model, [i in N, t in maximum(T_SU[i, θ] for θ in Θ):T],
+    @constraint(model, [i in 1:N, t in maximum(T_SU[i, θ] for θ in Θ):T],
         g_SU[i, t] == sum(sum(P_SU[i, θ, t-τ+1] * v_θ[i, θ, τ] for τ in max(1, t - T_SU[i, θ] + 1):t) for θ in Θ)
     )
 
     # production constraint for shutdown operation profile
-    @constraint(model, [i in N, t in 1:T-T_SD[i]],
+    @constraint(model, [i in 1:N, t in 1:T-T_SD[i]],
         #T_SD independent of θ
-        g_SD[i, t] == sum(P_SD[i, τ] * z[i, τ] for τ in t+1:t+T_SD[i])
+        g_SD[i, t] == sum(P_SD[i, τ-t] * z[i, τ] for τ in t+1:t+T_SD[i])
     )
 
     # production constraints for dispatch ready operation profile
-    @constraint(model, [i in N, t in 1:T],
+    @constraint(model, [i in 1:N, t in 1:T],
         g[i, t] >= g_SU[i, t] + g_SD[i, t] + generators[i].p_min * u_DISP[i, t]
     )
 
-    @constraint(model, [i in N, t in 1:T],
+    @constraint(model, [i in 1:N, t in 1:T],
         g[i, t] <= g_SU[i, t] + g_SD[i, t] + generators[i].p_max * u_DISP[i, t]
     )
 
     # ramp constraints considering startup & shutdown profiles (R: Ramp Constraint)
     # TODO: Add proper ramp rate parameters to Generator struct
-    @constraint(model, [i in N, t in 2:T], #TODO: ask about M parameter
+    @constraint(model, [i in 1:N, t in 2:T], #TODO: ask about M parameter
         g[i, t] - g[i, t-1] <= ramp_up[i] + M * u_SU[i, t]
     )
 
-    @constraint(model, [i in N, t in 2:T],
+    @constraint(model, [i in 1:N, t in 2:T],
         g[i, t-1] - g[i, t] <= ramp_down[i] + M * u_SD[i, t]
     )
 
@@ -322,6 +474,9 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date)
     end
     @assert primal_status(model) == FEASIBLE_POINT
 
+    # Calculate detailed cost breakdown
+    cost_breakdown = calculate_cost_breakdown(generators, value.(g), value.(u), T, N)
+    
     return (
         status=status,
         generators=generators,
@@ -331,6 +486,7 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date)
         g=value.(g),
         u=value.(u),
         total_cost=objective_value(model),
+        cost_breakdown=cost_breakdown,
     )
 end
 
@@ -345,16 +501,7 @@ function test_unit_commitment(
 
     if solution.status == OPTIMAL
         println("Solution found!")
-        println("Total cost: €", round(solution.total_cost, digits=2))
-        println("Number of generators: ", length(solution.generators))
-        println("Number of time periods: ", length(solution.time_slots))
-        println("Dispatch of Generators: ", solution.g, " MW")
-        println("Commitment of Generators: ", solution.u)
-
-        # Print some sample results
-        for t in 1:min(5, length(solution.time_slots))
-            println("Time $(solution.time_slots[t]): Net demand = $(solution.net_demand[t]) MW")
-        end
+        print_cost_report(solution, day)
     else
         println("Optimization failed with status: ", solution.status)
     end

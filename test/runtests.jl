@@ -5,8 +5,8 @@ using JuMP  # Import JuMP to access OPTIMAL status
 bidding_zone = "GR"  # Example bidding zone
 
 # Define date range for testing (just a few dates to verify the fix)
-start_date = Date("2025-06-24")
-end_date = Date("2025-06-26")
+start_date = Date("2025-07-21")
+end_date = Date("2025-07-25")
 dates_to_test = collect(start_date:Day(1):end_date)
 
 println("Testing Euphemia for bidding zone: $bidding_zone")
@@ -47,27 +47,27 @@ results = Dict{Date,Any}()
 
 for (i, date) in enumerate(dates_to_test)
     println("\n[$i/$(length(dates_to_test))] Testing Unit Commitment for $date...")
-    
+
     try
         solution = test_unit_commitment(bidding_zone, date)
-        
+
         if solution.status == OPTIMAL
             results[date] = (
-                status = :optimal,
-                cost = solution.total_cost,
-                generators = length(solution.generators),
-                net_demand = sum(solution.net_demand),
-                renewable_total = sum(values(solution.renewable_generation))
+                status=:optimal,
+                cost=solution.total_cost,
+                generators=length(solution.generators),
+                net_demand=sum(solution.net_demand),
+                renewable_total=sum(values(solution.renewable_generation))
             )
-            
+
             println("  ✅ SUCCESS: Total cost = €$(round(solution.total_cost/1e6, digits=2))M, Net demand = $(round(sum(solution.net_demand))) MW")
         else
-            results[date] = (status = :failed, reason = solution.status)
+            results[date] = (status=:failed, reason=solution.status)
             println("  ❌ FAILED: Optimization status = $(solution.status)")
         end
-        
+
     catch e
-        results[date] = (status = :error, reason = string(e))
+        results[date] = (status=:error, reason=string(e))
         println("  ❌ ERROR: $e")
     end
 end
@@ -85,12 +85,12 @@ println("Failed optimizations: $(length(failed_dates))")
 if !isempty(successful_dates)
     costs = [results[date].cost for date in successful_dates]
     demands = [results[date].net_demand for date in successful_dates]
-    
+
     println("\nCost Statistics:")
     println("  Average daily cost: €$(round(sum(costs)/length(costs)/1e6, digits=2))M")
     println("  Minimum daily cost: €$(round(minimum(costs)/1e6, digits=2))M on $(successful_dates[argmin(costs)])")
     println("  Maximum daily cost: €$(round(maximum(costs)/1e6, digits=2))M on $(successful_dates[argmax(costs)])")
-    
+
     println("\nDemand Statistics:")
     println("  Average daily net demand: $(round(sum(demands)/length(demands))) MW")
     println("  Minimum daily net demand: $(round(minimum(demands))) MW on $(successful_dates[argmin(demands)])")
@@ -106,3 +106,17 @@ if !isempty(failed_dates)
         println("  ... and $(length(failed_dates) - 5) more")
     end
 end
+
+# Run MPCC tests
+println("\n" * "="^80)
+println("=== Running MPCC Market Clearing Tests ===")
+println("="^80)
+
+include("test_mpcc.jl")
+
+# Run Network tests
+println("\n" * "="^80)
+println("=== Running Network Module Tests ===")
+println("="^80)
+
+include("test_network_module.jl")
