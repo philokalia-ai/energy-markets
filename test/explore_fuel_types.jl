@@ -11,7 +11,7 @@ println("=== Exploring Generator Fuel Types ===")
 println("Date: $test_date")
 
 # Get generators from database (this uses the actual ENTSO-E data)
-generators = get_generators(test_date)
+generators = get_generators("GR", test_date)  # Use GR as default for this exploration
 
 println("\nTotal generators: $(length(generators))")
 

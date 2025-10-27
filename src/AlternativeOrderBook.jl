@@ -64,7 +64,7 @@ function create_adjusted_order_book(
         println("📊 Creating adjusted order book for $bidding_zone on $day")
         
         # Get real data
-        generators = get_generators(day)
+        generators = get_generators(bidding_zone, day)
         loads = get_loads(bidding_zone, day)
         renewables = get_generation_forecast_for_wind_and_solar(bidding_zone, day)
         
