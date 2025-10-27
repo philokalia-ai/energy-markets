@@ -29,14 +29,14 @@ println("\n=== Detailed Generator Breakdown ===")
 for fuel_type in sort(fuel_types)
     println("\n$fuel_type generators:")
     fuel_generators = filter(gen -> gen.fuel_type == fuel_type, generators)
-    
+
     # Sort by capacity (descending)
-    sort!(fuel_generators, by = gen -> gen.p_max, rev = true)
-    
+    sort!(fuel_generators, by=gen -> gen.p_max, rev=true)
+
     for (i, gen) in enumerate(fuel_generators[1:min(5, end)])  # Show top 5
         println("  $(gen.name): $(gen.p_max) MW (min: $(gen.p_min) MW)")
     end
-    
+
     if length(fuel_generators) > 5
         println("  ... and $(length(fuel_generators) - 5) more generators")
     end
@@ -61,7 +61,7 @@ for fuel_type in sort(fuel_types)
     params = get_fuel_type_parameters(fuel_type)
     fuel_generators = filter(gen -> gen.fuel_type == fuel_type, generators)
     fuel_capacity = sum(gen.p_max for gen in fuel_generators)
-    
+
     println("\n🏭 $fuel_type ($(length(fuel_generators)) units, $(round(fuel_capacity, digits=1)) MW)")
     println("   Operational Characteristics:")
     println("     • Startup Times: $(params.hot_startup_time)h (hot) → $(params.warm_startup_time)h (warm) → $(params.cold_startup_time)h (cold)")
@@ -70,7 +70,7 @@ for fuel_type in sort(fuel_types)
     println("     • Ramping: $(round(params.ramp_up_rate*100, digits=1))% capacity/hour up, $(round(params.ramp_down_rate*100, digits=1))% capacity/hour down")
     println("     • Operating Range: $(round(params.min_load_factor*100, digits=1))% - 100% of rated capacity")
     println("     • Flexibility Rating: $(params.ramp_up_rate >= 0.5 ? "Very High" : params.ramp_up_rate >= 0.2 ? "High" : params.ramp_up_rate >= 0.1 ? "Medium" : "Low")")
-    
+
     # Show economic implications
     if params.startup_cost_multiplier > 1.5
         println("     • Economic: High startup costs - suited for baseload operation")
