@@ -1,5 +1,37 @@
 using CSV, DataFrames, JuMP, HiGHS, Gurobi, Dates
 
+"""
+    format_time(seconds::Float64) -> String
+
+Formats time in seconds to a readable format (e.g., "5m 23s", "1h 2m 15s", "45s").
+"""
+function format_time(seconds::Float64)
+    if seconds < 60
+        return "$(round(seconds, digits=1))s"
+    elseif seconds < 3600  # Less than 1 hour
+        minutes = floor(Int, seconds / 60)
+        remaining_seconds = seconds - minutes * 60
+        if remaining_seconds < 1
+            return "$(minutes)m"
+        else
+            return "$(minutes)m $(round(remaining_seconds, digits=1))s"
+        end
+    else  # 1 hour or more
+        hours = floor(Int, seconds / 3600)
+        remaining_seconds = seconds - hours * 3600
+        minutes = floor(Int, remaining_seconds / 60)
+        remaining_seconds = remaining_seconds - minutes * 60
+
+        if minutes == 0 && remaining_seconds < 1
+            return "$(hours)h"
+        elseif remaining_seconds < 1
+            return "$(hours)h $(minutes)m"
+        else
+            return "$(hours)h $(minutes)m $(round(remaining_seconds, digits=1))s"
+        end
+    end
+end
+
 # TODO: Include Actual Generation Per Production Unit for Previous Day for initial conditions?
 
 """
@@ -168,14 +200,18 @@ end
 
 function solve_unit_commitment(bidding_zone::String, day::Dates.Date)
 
+    timing_start = time()
+
     # TODO: choose optimizer
     model = Model(HiGHS.Optimizer)
     set_silent(model)
 
     # Get data from the database
+    data_fetch_start = time()
     generators = get_generators(bidding_zone, day)
     loads = get_loads(bidding_zone, day)
     renewables = get_generation_forecast_for_wind_and_solar(bidding_zone, day)
+    data_fetch_time = time() - data_fetch_start
 
     # Check if we have data
     if isempty(generators)
@@ -231,6 +267,8 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date)
         renewable_gen = get(renewable_by_time, load.timeslot, 0.0)
         push!(net_demand, max(0.0, load.value - renewable_gen))  # Ensure non-negative
     end
+
+    setup_start = time()
 
     # TODO: initial conditions
 
@@ -470,15 +508,31 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date)
         sum(generators[i].marginal_cost * g[i, t] for i in 1:N, t in 1:T)
     )
 
+    setup_time = time() - setup_start
+
+    # Solve the optimization problem
+    solve_start = time()
     optimize!(model)
+    solve_time = time() - solve_start
+
     status = termination_status(model)
     if status != OPTIMAL
+        total_time = time() - timing_start
+        @info "Optimization failed" bidding_zone = bidding_zone status = status data_fetch_time = format_time(data_fetch_time) setup_time = format_time(setup_time) solve_time = format_time(solve_time) total_time = format_time(total_time)
         return (status=status,)
     end
     @assert primal_status(model) == FEASIBLE_POINT
 
+    # Post-processing
+    postprocess_start = time()
     # Calculate detailed cost breakdown
     cost_breakdown = calculate_cost_breakdown(generators, value.(g), value.(u), T, N)
+    postprocess_time = time() - postprocess_start
+
+    total_time = time() - timing_start
+
+    # Log detailed timing information
+    @info "Unit commitment completed" bidding_zone = bidding_zone status = status data_fetch_time = format_time(data_fetch_time) setup_time = format_time(setup_time) solve_time = format_time(solve_time) postprocess_time = format_time(postprocess_time) total_time = format_time(total_time)
 
     return (
         status=status,
