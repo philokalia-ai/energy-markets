@@ -60,7 +60,10 @@ function disaggregate_renewables_to_load_resolution(renewables, time_slots)
                 end
             end
 
-            println("📊 Disaggregated $(round(hourly_value, digits=2)) MW renewable for hour $hour_key into $(length(matching_slots)) slots ($(round(value_per_slot, digits=2)) MW each)")
+            # Only print disaggregation message when actual disaggregation occurs (more than 1 slot)
+            if length(matching_slots) > 1
+                println("📊 Disaggregated $(round(hourly_value, digits=2)) MW renewable for hour $hour_key into $(length(matching_slots)) slots ($(round(value_per_slot, digits=2)) MW each)")
+            end
         else
             @warn "No matching load slots found for renewable hour: $hour_key"
         end
