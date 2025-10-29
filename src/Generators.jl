@@ -101,7 +101,7 @@ function get_marginal_cost(day::Dates.Date, fuel_type::String, bidding_zone::Str
 end
 
 # pull from postgres, for now only active units of given date (I think)
-function get_generators(day::Dates.Date)
+function get_generators(map_code::String, day::Dates.Date)
     # TODO: fetch all for now, will choose to keep what needed later 
     query = """
     SELECT
@@ -133,7 +133,7 @@ function get_generators(day::Dates.Date)
         production_unit_status = 'COMMISSIONED'
         AND generation_unit_status = 'COMMISSIONED'
         AND area_type_code IN  ('BZN', 'BZN/CTA')
-        AND map_code = 'GR'
+        AND map_code = '$map_code'
         AND DATE('$day') 
             BETWEEN DATE(valid_from) 
             AND COALESCE(
@@ -162,4 +162,9 @@ function get_generators(day::Dates.Date)
             )                                           # marginal_cost
         ) for row in eachrow(df)
     ]
+end
+
+# Convenience function for backward compatibility - defaults to GR
+function get_generators(day::Dates.Date)
+    return get_generators("GR", day)
 end

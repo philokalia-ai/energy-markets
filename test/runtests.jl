@@ -17,7 +17,7 @@ test_date = Date("2025-06-24")
 println("\n=== Testing Data Components for $(test_date) ===")
 
 println("=== Testing Generators ===")
-generators::Vector{Generator} = get_generators(test_date)
+generators::Vector{Generator} = get_generators(bidding_zone, test_date)
 println("Number of generators: ", length(generators))
 for (i, generator) in enumerate(generators[1:min(3, end)])
     println("Generator $i: $(generator.name) - $(generator.p_max) MW")
