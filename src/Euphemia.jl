@@ -17,6 +17,7 @@ export create_example_transfer_capacity, create_greek_transfer_capacity_from_ent
 export MPCCResult, solve_mpcc_market_clearing, create_typed_order_book, select_solver  # MPCC functionality
 export create_adjusted_order_book, AdjustedOrderBookResult, print_order_book_summary  # Alternative order book
 export calculate_cost_breakdown, solve_unit_commitment
+export generate_energy_prices  # Unified energy price generation
 
 include("dbutils.jl")
 
@@ -79,7 +80,7 @@ function make_model()
 
     # Create transfer capacity structure (using real ENTSO-E data when available)
     transfer_capacity = create_example_transfer_capacity()
-    
+
     # Extract bidding zones and time periods
     zones = transfer_capacity.bidding_zones
     time_periods = transfer_capacity.time_periods
@@ -162,7 +163,7 @@ function euphemia_market_clearing_with_entsoe(date::Date, bidding_zones::Vector{
 
     # Create transfer capacity structure using real ENTSO-E data
     transfer_capacity = create_transfer_capacity_from_entsoe(date, bidding_zones)
-    
+
     # Extract bidding zones and time periods
     zones = transfer_capacity.bidding_zones
     time_periods = transfer_capacity.time_periods
@@ -183,4 +184,132 @@ function euphemia_market_clearing_with_entsoe(date::Date, bidding_zones::Vector{
     # For now, return the model with transfer capacity constraints
     return model, transfer_capacity
 end
+
+"""
+    generate_energy_prices(bidding_zone::String, date::Date; 
+                          order_method::Symbol=:uc_based, 
+                          model::Symbol=:mpcc,
+                          markup_factor::Float64=1.1,
+                          random_seed::Union{Int,Nothing}=nothing,
+                          silent::Bool=true)
+
+Unified function to generate energy prices for a bidding zone on a specific date through market clearing optimization.
+
+# Arguments
+- `bidding_zone::String`: The bidding zone code (e.g., "GR", "DE", "FR")
+- `date::Date`: The date for which to generate prices
+- `order_method::Symbol`: Method for creating orders - `:uc_based` or `:alternative`
+- `model::Symbol`: Market clearing model - `:mpcc` (more models may be added later)
+- `markup_factor::Float64`: Price markup factor for UC-based orders (default: 1.1)
+- `random_seed::Union{Int,Nothing}`: Random seed for alternative order book (default: nothing)
+- `silent::Bool`: Whether to suppress solver output (default: true)
+
+# Returns
+- `Dict{String,Float64}`: Dictionary mapping hour ("1", "2", ..., "24") to energy price (€/MWh)
+  Returns empty dict if any step fails.
+
+# Examples
+```julia
+# Generate prices using UC-based orders and MPCC clearing
+prices = generate_energy_prices("GR", Date(2025, 7, 24))
+
+# Generate prices using alternative order book
+prices = generate_energy_prices("GR", Date(2025, 7, 24); order_method=:alternative, random_seed=12345)
+
+# Access hourly prices
+println("Hour 1 price: €\$(prices["1"])/MWh")
+```
+"""
+function generate_energy_prices(bidding_zone::String, date::Date;
+    order_method::Symbol=:uc_based,
+    model::Symbol=:mpcc,
+    markup_factor::Float64=1.1,
+    random_seed::Union{Int,Nothing}=nothing,
+    silent::Bool=true)
+
+    # Validate inputs
+    if !(order_method in [:uc_based, :alternative])
+        error("Invalid order_method: $order_method. Must be :uc_based or :alternative")
+    end
+
+    if !(model in [:mpcc])
+        error("Invalid model: $model. Currently only :mpcc is supported")
+    end
+
+    try
+        println("🔄 Generating energy prices for $bidding_zone on $date")
+        println("   📋 Order method: $order_method")
+        println("   ⚖️  Model: $model")
+
+        # Step 1: Create Order Book
+        println("\n📋 Step 1: Creating Order Book...")
+        order_book = nothing
+
+        if order_method == :uc_based
+            println("   Using UC-based order creation")
+            order_book = create_typed_order_book(bidding_zone, date; markup_factor=markup_factor)
+
+        elseif order_method == :alternative
+            println("   Using alternative order book creation")
+            order_book_result = create_adjusted_order_book(
+                bidding_zone,
+                date;
+                random_seed=random_seed
+            )
+
+            if !order_book_result.success
+                error("Alternative order book creation failed: $(order_book_result.message)")
+            end
+
+            order_book = order_book_result.order_book
+        end
+
+        if order_book === nothing
+            error("Failed to create order book")
+        end
+
+        println("   ✅ Order book created with $(length(order_book.orders)) orders")
+
+        # Step 2: Run Market Clearing Model  
+        println("\n⚖️  Step 2: Running Market Clearing ($model)...")
+
+        if model == :mpcc
+            mpcc_result = solve_mpcc_market_clearing(order_book; silent=silent)
+
+            if mpcc_result.status != :optimal
+                error("MPCC optimization failed with status: $(mpcc_result.status)")
+            end
+
+            println("   ✅ MPCC optimization successful")
+            println("   📊 Objective value: $(round(mpcc_result.objective_value, digits=2))")
+
+            # Step 3: Extract Energy Prices
+            println("\n💰 Step 3: Extracting Energy Prices...")
+
+            if isempty(mpcc_result.market_prices)
+                error("No market prices found in MPCC result")
+            end
+
+            # Get prices for the bidding zone
+            if !haskey(mpcc_result.market_prices, bidding_zone)
+                error("No prices found for bidding zone: $bidding_zone")
+            end
+
+            prices = mpcc_result.market_prices[bidding_zone]
+
+            println("   ✅ Energy prices extracted for 24 hours")
+            println("   📈 Price range: €$(round(minimum(values(prices)), digits=2)) - €$(round(maximum(values(prices)), digits=2))/MWh")
+
+            return prices
+
+        else
+            error("Model $model not implemented yet")
+        end
+
+    catch e
+        println("❌ Error generating energy prices: $e")
+        return Dict{String,Float64}()
+    end
+end
+
 end
