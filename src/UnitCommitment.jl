@@ -1,4 +1,5 @@
-using CSV, DataFrames, JuMP, HiGHS, Gurobi, Dates
+using JuMP, Dates
+using .Euphemia: select_solver
 
 """
     format_time(seconds::Float64) -> String
@@ -198,12 +199,13 @@ function print_cost_report(solution, day)
     println("="^60)
 end
 
-function solve_unit_commitment(bidding_zone::String, day::Dates.Date)
+function solve_unit_commitment(bidding_zone::String, day::Dates.Date; optimizer::String="auto")
 
     timing_start = time()
 
-    # TODO: choose optimizer
-    model = Model(HiGHS.Optimizer)
+    # Select optimizer using shared solver selection
+    optimizer_func, solver_name = select_solver(optimizer)
+    model = Model(optimizer_func)
     set_silent(model)
 
     # Get data from the database

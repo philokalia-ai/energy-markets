@@ -1,29 +1,10 @@
 module MPCC
 
-using JuMP, Dates, DataFrames, CSV, DotEnv
+using JuMP, Dates, DataFrames
 using JuMP: AffExpr
 
-# Import solvers with error handling
-try
-    using HiGHS
-    global HIGHS_AVAILABLE = true
-catch
-    global HIGHS_AVAILABLE = false
-end
-
-try
-    using Gurobi
-    global GUROBI_AVAILABLE = true
-catch
-    global GUROBI_AVAILABLE = false
-end
-
-try
-    using CPLEX
-    global CPLEX_AVAILABLE = true
-catch
-    global CPLEX_AVAILABLE = false
-end
+# Import shared solver selection from parent module
+import ..select_solver
 
 # Import required modules from parent Euphemia package
 import ..Euphemia.MarketOrders: MarketOrder, SimpleOrder, AggregatedPeriodicOrder
@@ -63,74 +44,7 @@ const BIG_M_PARAMETER = 4000000.0
 
 
 """
-    select_solver(preferred_solver::String="auto")
-
-Automatically selects the best available optimization solver for MPCC problems.
-Returns the optimizer constructor for use with JuMP.
-
-# Arguments
-- `preferred_solver::String`: "auto" (default), "highs", "gurobi", or "cplex"
-
-# Returns
-- Optimizer constructor function
-"""
-function select_solver(preferred_solver::String="auto")
-    available_solvers = []
-
-    # Check which solvers are available
-    if HIGHS_AVAILABLE
-        push!(available_solvers, ("HiGHS", HiGHS.Optimizer))
-    end
-    if GUROBI_AVAILABLE
-        push!(available_solvers, ("Gurobi", Gurobi.Optimizer))
-    end
-    if CPLEX_AVAILABLE
-        push!(available_solvers, ("CPLEX", CPLEX.Optimizer))
-    end
-
-    if isempty(available_solvers)
-        error("No solvers available! Please install at least one of: HiGHS.jl (recommended), Gurobi.jl, or CPLEX.jl")
-    end
-
-    # Determine priority order based on preference
-    solvers_to_try = if preferred_solver == "auto"
-        available_solvers
-    elseif lowercase(preferred_solver) == "highs" && HIGHS_AVAILABLE
-        vcat([("HiGHS", HiGHS.Optimizer)], filter(x -> x[1] != "HiGHS", available_solvers))
-    elseif lowercase(preferred_solver) == "gurobi" && GUROBI_AVAILABLE
-        vcat([("Gurobi", Gurobi.Optimizer)], filter(x -> x[1] != "Gurobi", available_solvers))
-    elseif lowercase(preferred_solver) == "cplex" && CPLEX_AVAILABLE
-        vcat([("CPLEX", CPLEX.Optimizer)], filter(x -> x[1] != "CPLEX", available_solvers))
-    elseif preferred_solver != "auto"
-        @warn "Preferred solver '$preferred_solver' not available. Using auto-selection."
-        available_solvers
-    else
-        available_solvers
-    end
-
-    # Try solvers in order
-    for (i, (solver_name, optimizer)) in enumerate(solvers_to_try)
-        try
-            # Test if solver is functional by creating a test model
-            _ = Model(optimizer)
-
-            # If this isn't the first solver tried, announce the successful fallback
-            if i > 1
-                @info "✅ Using $solver_name solver as fallback"
-            end
-
-            return (optimizer, solver_name)
-        catch e
-            @warn "$solver_name failed to initialize: $(typeof(e))"
-        end
-    end
-
-    error("All available solvers failed to initialize!")
-end
-
-
-"""
-    create_typed_order_book(bidding_zone::String, day::Date; markup_factor::Float64=DEFAULT_MARKUP_FACTOR)
+    create_typed_order_book(bidding_zone::String, day::Date; markup_factor::Float64=DEFAULT_MARKUP_FACTOR, optimizer::String="auto")
 
 Creates a typed market order book from Unit Commitment results using existing MarketOrder types.
 
@@ -138,14 +52,15 @@ Creates a typed market order book from Unit Commitment results using existing Ma
 - `bidding_zone::String`: Target bidding zone (e.g., "GR")  
 - `day::Date`: Day for which to create the order book
 - `markup_factor::Float64`: Markup factor for supply bids above marginal cost (default: 1.1 = 10% markup)
+- `optimizer::String`: Solver preference for unit commitment ("auto", "highs", "gurobi", "cplex")
 
 # Returns  
 - `MPCCOrderBook`: Typed order book structure using existing MarketOrder types
 """
-function create_typed_order_book(bidding_zone::String, day::Date; markup_factor::Float64=DEFAULT_MARKUP_FACTOR)
+function create_typed_order_book(bidding_zone::String, day::Date; markup_factor::Float64=DEFAULT_MARKUP_FACTOR, optimizer::String="auto")
     try
         # Generate market orders from real unit commitment
-        uc_to_bids = generate_market_orders_from_uc(bidding_zone, day; markup_factor=markup_factor)
+        uc_to_bids = generate_market_orders_from_uc(bidding_zone, day; markup_factor=markup_factor, optimizer=optimizer)
 
         if !uc_to_bids.success
             error("Failed to generate market orders: $(uc_to_bids.message)")

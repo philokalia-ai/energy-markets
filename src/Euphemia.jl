@@ -1,11 +1,34 @@
 module Euphemia
 
-using JuMP, HiGHS, Gurobi
+# Core dependencies
+using JuMP
 using DataFrames, CSV
 using DotEnv
-
 using Dates
 
+# Import optimization solvers with error handling
+try
+    using HiGHS
+    global HIGHS_AVAILABLE = true
+catch
+    global HIGHS_AVAILABLE = false
+end
+
+try
+    using Gurobi
+    global GUROBI_AVAILABLE = true
+catch
+    global GUROBI_AVAILABLE = false
+end
+
+try
+    using CPLEX
+    global CPLEX_AVAILABLE = true
+catch
+    global CPLEX_AVAILABLE = false
+end
+
+# Exports
 export calculate_market_clearing_price, commit_units  # Core functions
 export MarketOrder, SimpleOrder, BlockOrder  # Order types
 export Generator, Load, RenewablesGenerationForecast  # Entities
@@ -25,6 +48,78 @@ function __init__()
     DotEnv.load!(".")
     preinit_pool()
     @info "Initialization done"
+end
+
+"""
+    select_solver(preferred_solver::String="auto")
+
+Automatically selects the best available optimization solver for energy market problems.
+Returns the optimizer constructor for use with JuMP.
+
+# Arguments
+- `preferred_solver::String`: "auto" (default), "highs", "gurobi", or "cplex"
+
+# Returns
+- Tuple of (optimizer_constructor, solver_name)
+
+# Examples
+```julia
+optimizer, name = select_solver("highs")
+model = Model(optimizer)
+```
+"""
+function select_solver(preferred_solver::String="auto")
+    available_solvers = []
+
+    # Check which solvers are available
+    if HIGHS_AVAILABLE
+        push!(available_solvers, ("HiGHS", HiGHS.Optimizer))
+    end
+    if GUROBI_AVAILABLE
+        push!(available_solvers, ("Gurobi", Gurobi.Optimizer))
+    end
+    if CPLEX_AVAILABLE
+        push!(available_solvers, ("CPLEX", CPLEX.Optimizer))
+    end
+
+    if isempty(available_solvers)
+        error("No solvers available! Please install at least one of: HiGHS.jl (recommended), Gurobi.jl, or CPLEX.jl")
+    end
+
+    # Determine priority order based on preference
+    solvers_to_try = if preferred_solver == "auto"
+        available_solvers
+    elseif lowercase(preferred_solver) == "highs" && HIGHS_AVAILABLE
+        vcat([("HiGHS", HiGHS.Optimizer)], filter(x -> x[1] != "HiGHS", available_solvers))
+    elseif lowercase(preferred_solver) == "gurobi" && GUROBI_AVAILABLE
+        vcat([("Gurobi", Gurobi.Optimizer)], filter(x -> x[1] != "Gurobi", available_solvers))
+    elseif lowercase(preferred_solver) == "cplex" && CPLEX_AVAILABLE
+        vcat([("CPLEX", CPLEX.Optimizer)], filter(x -> x[1] != "CPLEX", available_solvers))
+    elseif preferred_solver != "auto"
+        @warn "Preferred solver '$preferred_solver' not available. Using auto-selection."
+        available_solvers
+    else
+        available_solvers
+    end
+
+    # Try solvers in order
+    for (i, (solver_name, optimizer)) in enumerate(solvers_to_try)
+        try
+            # Test if solver is functional by creating a test model
+            _ = Model(optimizer)
+
+            # If this isn't the first solver tried, announce the successful fallback
+            if i > 1
+                @info "✅ Using $solver_name solver as fallback"
+            end
+
+            return (optimizer, solver_name)
+        catch e
+            @warn "$solver_name failed to initialize: $(typeof(e))"
+        end
+    end
+
+    error("All available solvers failed to initialize!")
 end
 
 include("MarketOrders.jl")
@@ -250,7 +345,7 @@ function generate_energy_prices(bidding_zone::String, date::Date;
 
         if order_method == :uc_based
             println("   Using UC-based order creation")
-            order_book = create_typed_order_book(bidding_zone, date; markup_factor=markup_factor)
+            order_book = create_typed_order_book(bidding_zone, date; markup_factor=markup_factor, optimizer=optimizer)
 
         elseif order_method == :alternative
             println("   Using alternative order book creation")
