@@ -96,11 +96,11 @@ function select_solver(preferred_solver::String="auto")
     solvers_to_try = if preferred_solver == "auto"
         available_solvers
     elseif lowercase(preferred_solver) == "highs" && HIGHS_AVAILABLE
-        [("HiGHS", HiGHS.Optimizer)] + filter(x -> x[1] != "HiGHS", available_solvers)
+        vcat([("HiGHS", HiGHS.Optimizer)], filter(x -> x[1] != "HiGHS", available_solvers))
     elseif lowercase(preferred_solver) == "gurobi" && GUROBI_AVAILABLE
-        [("Gurobi", Gurobi.Optimizer)] + filter(x -> x[1] != "Gurobi", available_solvers)
+        vcat([("Gurobi", Gurobi.Optimizer)], filter(x -> x[1] != "Gurobi", available_solvers))
     elseif lowercase(preferred_solver) == "cplex" && CPLEX_AVAILABLE
-        [("CPLEX", CPLEX.Optimizer)] + filter(x -> x[1] != "CPLEX", available_solvers)
+        vcat([("CPLEX", CPLEX.Optimizer)], filter(x -> x[1] != "CPLEX", available_solvers))
     elseif preferred_solver != "auto"
         @warn "Preferred solver '$preferred_solver' not available. Using auto-selection."
         available_solvers
@@ -109,10 +109,16 @@ function select_solver(preferred_solver::String="auto")
     end
 
     # Try solvers in order
-    for (solver_name, optimizer) in solvers_to_try
+    for (i, (solver_name, optimizer)) in enumerate(solvers_to_try)
         try
             # Test if solver is functional by creating a test model
             _ = Model(optimizer)
+
+            # If this isn't the first solver tried, announce the successful fallback
+            if i > 1
+                @info "✅ Using $solver_name solver as fallback"
+            end
+
             return (optimizer, solver_name)
         catch e
             @warn "$solver_name failed to initialize: $(typeof(e))"
@@ -140,20 +146,20 @@ function create_typed_order_book(bidding_zone::String, day::Date; markup_factor:
     try
         # Generate market orders from real unit commitment
         uc_to_bids = generate_market_orders_from_uc(bidding_zone, day; markup_factor=markup_factor)
-        
+
         if !uc_to_bids.success
             error("Failed to generate market orders: $(uc_to_bids.message)")
         end
 
         # Create typed order book using existing SimpleOrder types
         all_orders = Vector{MarketOrder}()
-        
+
         # Add all supply orders (already SimpleOrder types)
         append!(all_orders, uc_to_bids.supply_orders)
-        
+
         # Add all demand orders (already SimpleOrder types) 
         append!(all_orders, uc_to_bids.demand_orders)
-        
+
         # Create the typed order book
         return MPCCOrderBook(
             all_orders,                                    # All orders as MarketOrder types
@@ -162,7 +168,7 @@ function create_typed_order_book(bidding_zone::String, day::Date; markup_factor:
             (0.0, 500.0),                                 # Price limits (€/MWh)
             nothing                                       # No network topology for single zone
         )
-        
+
     catch e
         error("Failed to create typed order book from UC: $e")
     end
@@ -186,14 +192,14 @@ Solves the MPCC-based market clearing problem using typed order book structure.
 # Returns
 - `MPCCResult`: Market clearing results including prices and order acceptance
 """
-function solve_mpcc_market_clearing(order_book::MPCCOrderBook; 
-                                   preferred_solver::String="auto", 
-                                   silent::Bool=true,
-                                   big_m::Float64=BIG_M_PARAMETER)
-    
+function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
+    preferred_solver::String="auto",
+    silent::Bool=true,
+    big_m::Float64=BIG_M_PARAMETER)
+
     # Analyze orders by type - currently we only handle SimpleOrder types from UC conversion
     simple_orders = filter(o -> isa(o, SimpleOrder), order_book.orders)
-    
+
     # Create order mappings for efficient access
     orders_by_node = Dict{String,Dict{String,Vector{SimpleOrder}}}()
     for node_id in order_book.nodes
@@ -202,54 +208,54 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
             orders_by_node[node_id][time_period] = SimpleOrder[]
         end
     end
-    
+
     # Group orders by node and time period
     for order in simple_orders
         node_id = string(order.zone)
         hour_of_day = Dates.hour(order.date_time) + 1  # Convert 0-23 to 1-24
         time_period = string(hour_of_day)
-        
+
         if haskey(orders_by_node, node_id) && haskey(orders_by_node[node_id], time_period)
             push!(orders_by_node[node_id][time_period], order)
         end
     end
-    
+
     # Create and configure model
     optimizer, solver_name = select_solver(preferred_solver)
     model = Model(optimizer)
-    
+
     if silent
         set_silent(model)
     end
 
     start_time = time()
-    
+
     try
         # Create unique indices for orders - use a unique string ID based on order properties
         order_indices = Dict{SimpleOrder,String}()
         order_ids = String[]
-        
+
         for (i, order) in enumerate(simple_orders)
             # Create a unique ID based on order properties and index, with explicit field labels to avoid ambiguity
             unique_id = "order_$(i)_z$(string(order.zone))_h$(Dates.hour(order.date_time))_q$(round(Int, order.quantity))_p$(round(Int, order.price))"
             order_indices[order] = unique_id
             push!(order_ids, unique_id)
         end
-        
+
         # Decision Variables
         @variable(model, 0 <= stepwise_acceptance[order_id in order_ids])
         @variable(model, 0 <= stepwise_dual[order_id in order_ids])
-        
+
         # Load shedding variables for market robustness (high penalty cost)
         @variable(model, load_shed[node_id in order_book.nodes, time_period in order_book.periods] >= 0)
-        
+
         @variable(model, market_price[node_id in order_book.nodes, time_period in order_book.periods])
-        
+
         # Stepwise order constraints
         @constraint(model, stepwise_upper_bound[order_id in order_ids],
             stepwise_acceptance[order_id] <= 1
         )
-        
+
         # Create expressions for stepwise dual constraints - match dictionary formulation exactly
         stepwise_dual_rhs = Dict{String,AffExpr}()
         for (i, order) in enumerate(simple_orders)
@@ -257,10 +263,10 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
             node_id = string(order.zone)
             hour_of_day = Dates.hour(order.date_time) + 1
             time_period = string(hour_of_day)
-            
+
             # Determine quantity sign: negative for supply, positive for demand
             quantity = order.type == :supply ? -order.quantity : order.quantity
-            
+
             # Match dictionary formulation: sum over time periods (but SimpleOrder only has one period)
             # This should be equivalent since SimpleOrder represents single period
             stepwise_dual_rhs[order_id] = @expression(model,
@@ -269,13 +275,13 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
                 quantity * order.price
             )
         end
-        
+
         @constraint(model, stepwise_dual_constraint[order_id in order_ids],
             0 <= stepwise_dual_rhs[order_id]
         )
-        
+
         # Precompute mapping from (node_id, time_period) to relevant order indices
-        orders_by_node_time = Dict{Tuple{String, String}, Vector{Int}}()
+        orders_by_node_time = Dict{Tuple{String,String},Vector{Int}}()
         for (i, order) in enumerate(simple_orders)
             node = string(order.zone)
             period = string(Dates.hour(order.date_time) + 1)
@@ -293,39 +299,39 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
                 stepwise_acceptance[order_ids[i]] *
                 (simple_orders[i].type == :supply ? -simple_orders[i].quantity : simple_orders[i].quantity)
                 for i in get(orders_by_node_time, (node_id, time_period), Int[])
-            ) + 
+            ) +
             load_shed[node_id, time_period] == 0
         )
-        
+
         # Complementarity constraints using Big-M reformulation
         @variable(model, stepwise_acceptance_complementarity_aux[order_id in order_ids], Bin)
-        @constraint(model, stepwise_acceptance_complementarity_ineq1[order_id in order_ids], 
+        @constraint(model, stepwise_acceptance_complementarity_ineq1[order_id in order_ids],
             stepwise_acceptance[order_id] <= stepwise_acceptance_complementarity_aux[order_id] * big_m)
-        @constraint(model, stepwise_acceptance_complementarity_ineq2[order_id in order_ids], 
+        @constraint(model, stepwise_acceptance_complementarity_ineq2[order_id in order_ids],
             stepwise_dual_rhs[order_id] <= (1 - stepwise_acceptance_complementarity_aux[order_id]) * big_m)
-        
+
         # Price range constraints
-        @constraint(model, minimum_price[node_id in order_book.nodes, time_period in order_book.periods], 
+        @constraint(model, minimum_price[node_id in order_book.nodes, time_period in order_book.periods],
             market_price[node_id, time_period] >= order_book.price_limits[1])
-        @constraint(model, maximum_price[node_id in order_book.nodes, time_period in order_book.periods], 
+        @constraint(model, maximum_price[node_id in order_book.nodes, time_period in order_book.periods],
             market_price[node_id, time_period] <= order_book.price_limits[2])
-        
+
         # Objective function - match dictionary formulation exactly
         # Dictionary version: stepwise_acceptance[order_id] * (sum of quantities) * price
         # Need to use signed quantities: negative for supply, positive for demand
         load_shed_penalty = 10000.0  # High penalty for load shedding (€/MWh)
         @objective(model, Max,
-            sum(stepwise_acceptance[order_ids[i]] * 
-                (order.type == :supply ? -order.quantity : order.quantity) * order.price 
+            sum(stepwise_acceptance[order_ids[i]] *
+                (order.type == :supply ? -order.quantity : order.quantity) * order.price
                 for (i, order) in enumerate(simple_orders)) -
-            load_shed_penalty * sum(load_shed[node_id, time_period] 
-                for node_id in order_book.nodes, time_period in order_book.periods)
+            load_shed_penalty * sum(load_shed[node_id, time_period]
+                                    for node_id in order_book.nodes, time_period in order_book.periods)
         )
-        
+
         # Solve the model
         optimize!(model)
         solve_time = time() - start_time
-        
+
         # Extract results
         if has_values(model)
             market_prices = Dict{String,Dict{String,Float64}}()
@@ -335,13 +341,13 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
                     market_prices[node_id][time_period] = value(market_price[node_id, time_period])
                 end
             end
-            
+
             stepwise_acceptance_values = Dict{String,Float64}()
             for (i, order) in enumerate(simple_orders)
                 order_id = order_ids[i]
                 stepwise_acceptance_values[order_id] = value(stepwise_acceptance[order_id])
             end
-            
+
             # Convert JuMP termination status to our expected Symbol
             status_symbol = if string(termination_status(model)) == "OPTIMAL"
                 :optimal
@@ -354,7 +360,7 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
             else
                 :error
             end
-            
+
             return MPCCResult(
                 status_symbol,
                 objective_value(model),
@@ -381,7 +387,7 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
                 "No solution available: $(termination_status(model))"
             )
         end
-        
+
     catch e
         solve_time = time() - start_time
         return MPCCResult(
