@@ -189,6 +189,7 @@ end
     generate_energy_prices(bidding_zone::String, date::Date; 
                           order_method::Symbol=:uc_based, 
                           model::Symbol=:mpcc,
+                          optimizer::String="highs",
                           markup_factor::Float64=1.1,
                           random_seed::Union{Int,Nothing}=nothing,
                           silent::Bool=true)
@@ -200,6 +201,7 @@ Unified function to generate energy prices for a bidding zone on a specific date
 - `date::Date`: The date for which to generate prices
 - `order_method::Symbol`: Method for creating orders - `:uc_based` or `:alternative`
 - `model::Symbol`: Market clearing model - `:mpcc` (more models may be added later)
+- `optimizer::String`: Optimization solver - "highs" (default), "gurobi", "cplex", "auto"
 - `markup_factor::Float64`: Price markup factor for UC-based orders (default: 1.1)
 - `random_seed::Union{Int,Nothing}`: Random seed for alternative order book (default: nothing)
 - `silent::Bool`: Whether to suppress solver output (default: true)
@@ -210,11 +212,11 @@ Unified function to generate energy prices for a bidding zone on a specific date
 
 # Examples
 ```julia
-# Generate prices using UC-based orders and MPCC clearing
+# Generate prices using UC-based orders and MPCC clearing with auto solver selection
 prices = generate_energy_prices("GR", Date(2025, 7, 24))
 
-# Generate prices using alternative order book
-prices = generate_energy_prices("GR", Date(2025, 7, 24); order_method=:alternative, random_seed=12345)
+# Generate prices using alternative order book with Gurobi
+prices = generate_energy_prices("GR", Date(2025, 7, 24); order_method=:alternative, optimizer="gurobi", random_seed=12345)
 
 # Access hourly prices
 println("Hour 1 price: €\$(prices["1"])/MWh")
@@ -223,6 +225,7 @@ println("Hour 1 price: €\$(prices["1"])/MWh")
 function generate_energy_prices(bidding_zone::String, date::Date;
     order_method::Symbol=:uc_based,
     model::Symbol=:mpcc,
+    optimizer::String="highs",
     markup_factor::Float64=1.1,
     random_seed::Union{Int,Nothing}=nothing,
     silent::Bool=true)
@@ -271,10 +274,10 @@ function generate_energy_prices(bidding_zone::String, date::Date;
         println("   ✅ Order book created with $(length(order_book.orders)) orders")
 
         # Step 2: Run Market Clearing Model  
-        println("\n⚖️  Step 2: Running Market Clearing ($model)...")
+        println("\n⚖️  Step 2: Running Market Clearing ($model with $optimizer)...")
 
         if model == :mpcc
-            mpcc_result = solve_mpcc_market_clearing(order_book; silent=silent)
+            mpcc_result = solve_mpcc_market_clearing(order_book; preferred_solver=optimizer, silent=silent)
 
             if mpcc_result.status != :optimal
                 error("MPCC optimization failed with status: $(mpcc_result.status)")
