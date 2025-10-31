@@ -23,8 +23,8 @@ function get_loads(bidding_zone::String, day::Dates.Date)
         AND date(date_time) = '$day'
     ORDER BY date_time;
     """
-    
-    df = Euphemia.sql2df(query)
+
+    df = Euphemia.sql2df_with_retry(query)
     return [
         Load(
             Dates.format(row.date_time, "yyyymmdd-HHMM"),  # e.g. "20250624-0030" for 30-min resolution

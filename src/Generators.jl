@@ -143,7 +143,7 @@ function get_generators(map_code::String, day::Dates.Date)
 
     """
 
-    df = Euphemia.sql2df(query)
+    df = Euphemia.sql2df_with_retry(query)
     return [
         Generator(
             row.generation_unit_code,                    # code

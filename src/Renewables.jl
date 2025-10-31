@@ -31,8 +31,8 @@ function get_generation_forecast_for_wind_and_solar(bidding_zone::String, day::D
         AND date(date_time) = '$day'
     ORDER BY date_time, map_code
     """
-    
-    df = Euphemia.sql2df(query)
+
+    df = Euphemia.sql2df_with_retry(query)
     return [
         RenewablesGenerationForecast(
             # Format datetime to match load data - include minutes for sub-hourly data
