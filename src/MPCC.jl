@@ -42,6 +42,60 @@ end
 const DEFAULT_MARKUP_FACTOR = 1.1
 const BIG_M_PARAMETER = 4000000.0
 
+"""
+    extract_time_period(order_datetime::DateTime, order_book_periods::Vector{String})
+
+Extracts the appropriate time period identifier for an order based on the order book's period structure.
+Supports both hourly (1-24) and sub-hourly (timeslot strings) periods.
+"""
+function extract_time_period(order_datetime::DateTime, order_book_periods::Vector{String})
+    # Check if periods are timeslot strings (sub-hourly) or simple numbers (hourly)
+    if !isempty(order_book_periods)
+        sample_period = order_book_periods[1]
+
+        # If periods look like timeslot strings (e.g., "20180624-0015")
+        if length(sample_period) > 5 && contains(sample_period, "-")
+            # Format DateTime to match timeslot format: "YYYYMMDD-HHMM"
+            date_str = Dates.format(order_datetime, "yyyymmdd")
+            time_str = Dates.format(order_datetime, "HHMM")
+            timeslot = "$(date_str)-$(time_str)"
+
+            # Return the timeslot if it exists in periods, otherwise find closest match
+            if timeslot in order_book_periods
+                return timeslot
+            else
+                # Fallback: find the period with matching hour
+                hour = Dates.hour(order_datetime)
+                minute = Dates.minute(order_datetime)
+                target_time = hour * 100 + minute
+
+                for period in order_book_periods
+                    if length(period) >= 13
+                        period_hour = parse(Int, period[10:11])
+                        period_min = parse(Int, period[12:13])
+                        period_time = period_hour * 100 + period_min
+
+                        if period_time >= target_time
+                            return period
+                        end
+                    end
+                end
+
+                # Ultimate fallback: return first period of the day
+                return order_book_periods[1]
+            end
+        else
+            # Periods are simple hour numbers (1-24) - use original logic
+            hour_of_day = Dates.hour(order_datetime) + 1  # Convert 0-23 to 1-24
+            return string(hour_of_day)
+        end
+    else
+        # Fallback for empty periods
+        hour_of_day = Dates.hour(order_datetime) + 1
+        return string(hour_of_day)
+    end
+end
+
 
 """
     create_typed_order_book(bidding_zone::String, day::Date; markup_factor::Float64=DEFAULT_MARKUP_FACTOR, optimizer::String="auto")
@@ -127,8 +181,7 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
     # Group orders by node and time period
     for order in simple_orders
         node_id = string(order.zone)
-        hour_of_day = Dates.hour(order.date_time) + 1  # Convert 0-23 to 1-24
-        time_period = string(hour_of_day)
+        time_period = extract_time_period(order.date_time, order_book.periods)
 
         if haskey(orders_by_node, node_id) && haskey(orders_by_node[node_id], time_period)
             push!(orders_by_node[node_id][time_period], order)
@@ -176,8 +229,7 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
         for (i, order) in enumerate(simple_orders)
             order_id = order_ids[i]
             node_id = string(order.zone)
-            hour_of_day = Dates.hour(order.date_time) + 1
-            time_period = string(hour_of_day)
+            time_period = extract_time_period(order.date_time, order_book.periods)
 
             # Determine quantity sign: negative for supply, positive for demand
             quantity = order.type == :supply ? -order.quantity : order.quantity
