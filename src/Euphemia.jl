@@ -130,6 +130,8 @@ include("FuelTypeParameters.jl")
 include("Loads.jl")
 include("Renewables.jl")
 
+include("TemporalResolutionUtilities.jl")
+
 include("UnitCommitment.jl")
 
 include("BiddingStrategy.jl")

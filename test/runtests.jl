@@ -114,6 +114,13 @@ println("="^80)
 
 include("test_mpcc.jl")
 
+# Run Temporal Utilities tests
+println("\n" * "="^80)
+println("=== Running Temporal Resolution Utilities Tests ===")
+println("="^80)
+
+include("test_temporal_utilities.jl")
+
 # Run Network tests
 println("\n" * "="^80)
 println("=== Running Network Module Tests ===")

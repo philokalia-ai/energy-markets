@@ -1,5 +1,6 @@
 using JuMP, Dates
 using .Euphemia: select_solver
+using .Euphemia: disaggregate_temporal_data
 
 """
     format_time(seconds::Float64) -> String
@@ -34,76 +35,6 @@ function format_time(seconds::Float64)
 end
 
 # TODO: Include Actual Generation Per Production Unit for Previous Day for initial conditions?
-
-"""
-    disaggregate_renewables_to_load_resolution(renewables, time_slots)
-
-Disaggregates hourly renewable data to match the resolution of load data.
-Distributes hourly renewable generation evenly across all load time slots within that hour.
-
-# Arguments
-- `renewables`: Vector of RenewablesGenerationForecast with hourly data
-- `time_slots`: Vector of time slot strings from load data (e.g., 15-minute resolution)
-
-# Returns
-- `Dict{String,Float64}`: Mapping from time slot to renewable generation value
-"""
-function disaggregate_renewables_to_load_resolution(renewables, time_slots)
-    renewable_by_time = Dict{String,Float64}()
-
-    # Group renewables by hour for processing
-    renewables_by_hour = Dict{String,Float64}()
-    for renewable in renewables
-        # Extract hour from renewable timestamp (e.g., "20240618-01" -> "20240618-01")
-        hour_key = renewable.date_time
-        if haskey(renewables_by_hour, hour_key)
-            renewables_by_hour[hour_key] += renewable.aggregated_generation_forecast
-        else
-            renewables_by_hour[hour_key] = renewable.aggregated_generation_forecast
-        end
-    end
-
-    # For each hour with renewable data, find matching load time slots
-    for (hour_key, hourly_value) in renewables_by_hour
-        # Find all load time slots that belong to this hour
-        # hour_key format: "20240618-0000", "20240618-0100", etc.
-        # load slots format: "20240618-0000", "20240618-0015", "20240618-0030", "20240618-0045", "20240618-0100", etc.
-        matching_slots = String[]
-
-        # Extract the hour part from renewable data (e.g., "20240618-0000" -> "20240618-00")
-        if length(hour_key) >= 11
-            hour_prefix = hour_key[1:11]  # "20240618-00" from "20240618-0000"
-
-            for slot in time_slots
-                # Check if load slot belongs to this hour by comparing the hour prefix
-                if length(slot) >= 11 && slot[1:11] == hour_prefix
-                    push!(matching_slots, slot)
-                end
-            end
-        end
-
-        # Distribute hourly renewable value evenly across matching slots
-        if !isempty(matching_slots)
-            value_per_slot = hourly_value / length(matching_slots)
-            for slot in matching_slots
-                if haskey(renewable_by_time, slot)
-                    renewable_by_time[slot] += value_per_slot
-                else
-                    renewable_by_time[slot] = value_per_slot
-                end
-            end
-
-            # Only print disaggregation message when actual disaggregation occurs (more than 1 slot)
-            if length(matching_slots) > 1
-                println("📊 Disaggregated $(round(hourly_value, digits=2)) MW renewable for hour $hour_key into $(length(matching_slots)) slots ($(round(value_per_slot, digits=2)) MW each)")
-            end
-        else
-            @warn "No matching load slots found for renewable hour: $hour_key"
-        end
-    end
-
-    return renewable_by_time
-end
 
 function calculate_cost_breakdown(generators, g, u, T, N)
     # Calculate per-generator costs
@@ -223,51 +154,20 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date; optimizer:
         error("No load data found for $bidding_zone on $day")
     end
 
-    # Validate resolution consistency
-    if !isempty(loads) && !isempty(renewables)
-        load_resolution = loads[1].resolution_code
-        renewable_resolutions = unique([r.resolution_code for r in renewables])
+    # Disaggregate all temporal data to finest resolution using centralized utilities
+    target_time_slots, load_by_time, renewable_by_time = disaggregate_temporal_data(loads, renewables)
 
-        if length(renewable_resolutions) > 1
-            @warn "Multiple resolution codes found in renewables data: $renewable_resolutions"
-        end
-
-        if !isempty(renewable_resolutions) && renewable_resolutions[1] != load_resolution
-            @warn "Resolution mismatch: Loads ($load_resolution min) vs Renewables ($(renewable_resolutions[1]) min)"
-        end
-
-        println("Using resolution: $load_resolution minutes")
-    end
-
-    # Create time mapping from loads (assuming loads define our time periods)
-    time_slots = [load.timeslot for load in loads]
-    T = length(time_slots)
+    T = length(target_time_slots)
     N = length(generators)
 
     println("Planning for $T time periods with $N generators")
 
-    # Validate time slot consistency
-    if !isempty(renewables)
-        renewable_time_slots = unique([r.date_time for r in renewables])
-        missing_in_renewables = setdiff(time_slots, renewable_time_slots)
-        extra_in_renewables = setdiff(renewable_time_slots, time_slots)
-
-        if !isempty(missing_in_renewables)
-            @warn "Missing renewable data for time slots: $missing_in_renewables"
-        end
-        if !isempty(extra_in_renewables)
-            @warn "Extra renewable data for time slots not in load data: $extra_in_renewables"
-        end
-    end
-
-    # Disaggregate renewable generation to match load resolution
-    renewable_by_time = disaggregate_renewables_to_load_resolution(renewables, time_slots)
-
     # Calculate net demand (load - renewables) for each time period
     net_demand = Float64[]
-    for (t, load) in enumerate(loads)
-        renewable_gen = get(renewable_by_time, load.timeslot, 0.0)
-        push!(net_demand, max(0.0, load.value - renewable_gen))  # Ensure non-negative
+    for slot in target_time_slots
+        load_value = get(load_by_time, slot, 0.0)
+        renewable_gen = get(renewable_by_time, slot, 0.0)
+        push!(net_demand, max(0.0, load_value - renewable_gen))  # Ensure non-negative
     end
 
     setup_start = time()
@@ -539,7 +439,7 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date; optimizer:
     return (
         status=status,
         generators=generators,
-        time_slots=time_slots,
+        time_slots=target_time_slots,
         net_demand=net_demand,
         renewable_generation=renewable_by_time,
         g=value.(g),

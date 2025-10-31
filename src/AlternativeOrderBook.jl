@@ -12,8 +12,30 @@ using Dates, Random
 import ..get_generators, ..get_loads, ..get_generation_forecast_for_wind_and_solar
 import ..MarketOrders: SimpleOrder
 import ..MPCC: MPCCOrderBook
+import ..parse_resolution_to_minutes, ..determine_finest_resolution, ..generate_sub_slots_from_source, ..disaggregate_temporal_data
 
 export create_adjusted_order_book, AdjustedOrderBookResult
+
+"""
+    parse_timeslot_to_datetime(timeslot::String, day::Date)
+
+Parses a timeslot string (e.g., "20240618-0015") to DateTime.
+"""
+function parse_timeslot_to_datetime(timeslot::String, day::Date)
+    try
+        if length(timeslot) >= 13
+            hour_str = timeslot[10:11]
+            min_str = timeslot[12:13]
+            hour = parse(Int, hour_str)
+            minute = parse(Int, min_str)
+            return DateTime(day) + Hour(hour) + Minute(minute)
+        end
+    catch
+        # Fallback: return start of day
+        return DateTime(day)
+    end
+    return DateTime(day)
+end
 
 struct AdjustedOrderBookResult
     success::Bool
@@ -77,16 +99,8 @@ function create_adjusted_order_book(
 
         println("  📋 Base data: $(length(generators)) generators, $(length(loads)) load points")
 
-        # Calculate net demand (load - renewables) for each time period
-        renewable_by_time = Dict{String,Float64}()
-        for renewable in renewables
-            timeslot = renewable.date_time
-            if haskey(renewable_by_time, timeslot)
-                renewable_by_time[timeslot] += renewable.aggregated_generation_forecast
-            else
-                renewable_by_time[timeslot] = renewable.aggregated_generation_forecast
-            end
-        end
+        # Disaggregate all temporal data to finest resolution using centralized utilities
+        target_timeslots, load_by_time, renewable_by_time = disaggregate_temporal_data(loads, renewables)
 
         # Create orders vector
         orders = SimpleOrder[]
@@ -99,11 +113,19 @@ function create_adjusted_order_book(
             # Determine how many orders to create for this generator (spread across time periods)
             num_orders = rand(min_orders_per_generator:max_orders_per_generator)
 
-            # Select random time periods for this generator's orders
-            selected_hours = sort(rand(0:23, num_orders))
+            # Select random timeslots for this generator's orders
+            num_timeslots_to_select = min(num_orders, length(target_timeslots))
+            if num_timeslots_to_select == length(target_timeslots)
+                selected_timeslots = target_timeslots
+            else
+                # Use shuffle and take first n elements
+                shuffled_timeslots = shuffle(target_timeslots)
+                selected_timeslots = sort(shuffled_timeslots[1:num_timeslots_to_select])
+            end
 
-            for hour in selected_hours
-                date_time = DateTime(day) + Hour(hour)
+            for timeslot in selected_timeslots
+                # Parse timeslot to get DateTime
+                date_time = parse_timeslot_to_datetime(timeslot, day)
 
                 # Apply random adjustment to generator capacity and price
                 capacity_adjustment = 1.0 + rand() * (adjustment_range[2] - adjustment_range[1]) + adjustment_range[1]
@@ -113,7 +135,9 @@ function create_adjusted_order_book(
                 capacity_adjustment = max(0.1, min(2.0, capacity_adjustment))
                 price_adjustment = max(0.5, min(1.8, price_adjustment))
 
-                adjusted_capacity = generator.p_max * capacity_adjustment
+                # For sub-hourly intervals, scale generator capacity appropriately
+                capacity_scale_factor = resolution_minutes / 60.0  # Scale down for sub-hourly
+                adjusted_capacity = generator.p_max * capacity_adjustment * capacity_scale_factor
                 adjusted_price = generator.marginal_cost * price_adjustment
 
                 # Create supply order (capacity available for sale)
@@ -123,7 +147,7 @@ function create_adjusted_order_book(
                     adjusted_capacity,          # quantity
                     Symbol(bidding_zone),       # zone
                     date_time,                  # date_time
-                    60                          # resolution_code (60 minutes)
+                    resolution_minutes          # resolution_code (detected resolution)
                 )
 
                 push!(orders, supply_order)
@@ -132,16 +156,18 @@ function create_adjusted_order_book(
             end
         end
 
-        # Demand Orders: Create orders based on adjusted load data
+        # Demand Orders: Create orders based on adjusted load data at finest resolution
         demand_orders_count = 0
         total_demand_quantity = 0.0
 
-        for (hour_idx, load) in enumerate(loads[1:min(24, end)])  # Ensure max 24 hours
-            date_time = DateTime(day) + Hour(hour_idx - 1)
+        for timeslot in target_timeslots
+            # Parse timeslot to get DateTime
+            date_time = parse_timeslot_to_datetime(timeslot, day)
 
-            # Get renewable generation for this time slot
-            renewable_gen = get(renewable_by_time, load.timeslot, 0.0)
-            net_demand = max(10.0, load.value - renewable_gen)  # Ensure minimum demand
+            # Get load and renewable data for this time slot
+            load_value = get(load_by_time, timeslot, 0.0)
+            renewable_gen = get(renewable_by_time, timeslot, 0.0)
+            net_demand = max(10.0, load_value - renewable_gen)  # Ensure minimum demand
 
             # Apply random adjustment to demand
             demand_adjustment = 1.0 + rand() * (adjustment_range[2] - adjustment_range[1]) + adjustment_range[1]
@@ -159,7 +185,7 @@ function create_adjusted_order_book(
                 adjusted_demand,            # quantity
                 Symbol(bidding_zone),       # zone
                 date_time,                  # date_time
-                60                          # resolution_code (60 minutes)
+                resolution_minutes          # resolution_code (detected resolution)
             )
 
             push!(orders, demand_order)
@@ -169,7 +195,7 @@ function create_adjusted_order_book(
 
         # Create the MPCC order book
         nodes = [bidding_zone]
-        periods = [string(h) for h in 1:24]
+        periods = target_timeslots  # Use actual target timeslots at finest resolution
         price_limits = (-500.0, 3000.0)  # Typical European market price limits
 
         order_book = MPCCOrderBook(orders, nodes, periods, price_limits, nothing)
