@@ -96,6 +96,24 @@ function get_fuel_type_parameters(fuel_type::Symbol)::FuelTypeParameters
             0.25    # no_load_cost_fraction: High no-load costs
         )
 
+    elseif fuel_type == Symbol("Fossil Peat")
+        # Peat - Similar to lignite but less efficient, primarily used in Nordic countries
+        return FuelTypeParameters(
+            18,     # cold_startup_time: 18 hours for cold start
+            10,     # warm_startup_time: 10 hours for warm start
+            5,      # hot_startup_time: 5 hours for hot start
+            12,     # min_uptime: 12 hours minimum run time
+            6,      # min_downtime: 6 hours minimum off time
+            0.06,   # ramp_up_rate: 6% per hour - very inflexible
+            0.06,   # ramp_down_rate: 6% per hour
+            0.55,   # min_load_factor: Cannot operate below 55% efficiently
+            0.70,   # part_load_efficiency: 70% efficiency at minimum load
+            12,     # warm_threshold: Warm after 12 hours offline
+            72,     # cold_threshold: Cold after 72 hours offline
+            2.2,    # startup_cost_multiplier: High startup costs
+            0.30    # no_load_cost_fraction: High no-load costs
+        )
+
     elseif fuel_type == Symbol("Fossil Coal-derived gas")
         # Coal-derived gas (syngas) - Similar to coal but slightly more flexible
         return FuelTypeParameters(
@@ -330,10 +348,64 @@ function get_fuel_type_parameters(fuel_type::Symbol)::FuelTypeParameters
             0.14    # no_load_cost_fraction: Low no-load costs
         )
 
+    elseif fuel_type == Symbol("Energy storage")
+        # Battery Energy Storage Systems (BESS) - Extremely flexible, fast response
+        return FuelTypeParameters(
+            1,      # cold_startup_time: 1 period for cold start - instant
+            1,      # warm_startup_time: 1 period for warm start
+            1,      # hot_startup_time: 1 period for hot start
+            1,      # min_uptime: 1 period minimum run time
+            1,      # min_downtime: 1 period minimum off time
+            1.00,   # ramp_up_rate: 100% per period - instant ramp
+            1.00,   # ramp_down_rate: 100% per period - instant ramp
+            0.00,   # min_load_factor: Can operate at any level
+            1.00,   # part_load_efficiency: 100% efficiency at all loads
+            1,      # warm_threshold: Always warm
+            1,      # cold_threshold: Never truly cold
+            0.0,    # startup_cost_multiplier: No fuel-based startup costs
+            0.00    # no_load_cost_fraction: No no-load costs
+        )
+
+    elseif fuel_type == Symbol("Other renewable")
+        # Other renewable sources (e.g., tidal, wave) - Variable but clean
+        return FuelTypeParameters(
+            2,      # cold_startup_time: 2 periods for cold start
+            1,      # warm_startup_time: 1 period for warm start
+            1,      # hot_startup_time: 1 period for hot start
+            1,      # min_uptime: 1 period minimum run time
+            1,      # min_downtime: 1 period minimum off time
+            0.80,   # ramp_up_rate: 80% per period - quite flexible
+            0.80,   # ramp_down_rate: 80% per period
+            0.00,   # min_load_factor: Can follow resource availability
+            1.00,   # part_load_efficiency: 100% efficiency (no fuel)
+            4,      # warm_threshold: Warm after 4 hours offline
+            24,     # cold_threshold: Cold after 24 hours offline
+            0.1,    # startup_cost_multiplier: Very low startup costs
+            0.02    # no_load_cost_fraction: Minimal no-load costs
+        )
+
+    elseif fuel_type == Symbol("Other")
+        # Other/unspecified technologies - Conservative default parameters
+        @warn "Fuel type category listed as 'Other'. Using conservative default parameters."
+        return FuelTypeParameters(
+            8,      # cold_startup_time: 8 hours for cold start
+            5,      # warm_startup_time: 5 hours for warm start
+            2,      # hot_startup_time: 2 hours for hot start
+            6,      # min_uptime: 6 hours minimum run time
+            3,      # min_downtime: 3 hours minimum off time
+            0.15,   # ramp_up_rate: 15% per hour - moderate flexibility
+            0.15,   # ramp_down_rate: 15% per hour
+            0.40,   # min_load_factor: 40% minimum load
+            0.85,   # part_load_efficiency: 85% efficiency at minimum load
+            12,     # warm_threshold: Warm after 12 hours offline
+            48,     # cold_threshold: Cold after 48 hours offline
+            1.5,    # startup_cost_multiplier: Moderate startup costs
+            0.20    # no_load_cost_fraction: Moderate no-load costs
+        )
 
     else
         # Default parameters for unknown fuel types
-        @warn "Unknown fuel type: $fuel_type. Using default parameters."
+        @warn "Unknown fuel type: $fuel_type. Using conservative default parameters."
         return FuelTypeParameters(
             8,      # cold_startup_time
             4,      # warm_startup_time
