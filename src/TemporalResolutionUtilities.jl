@@ -208,7 +208,7 @@ function disaggregate_temporal_data(loads, renewables)
         end
     end
 
-    return target_timeslots, load_by_time, renewable_by_time
+    return target_timeslots, load_by_time, renewable_by_time, resolution_minutes
 end
 
 # Export the utilities
