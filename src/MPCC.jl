@@ -101,6 +101,7 @@ end
     create_typed_order_book(bidding_zone::String, day::Date; markup_factor::Float64=DEFAULT_MARKUP_FACTOR, optimizer::String="auto")
 
 Creates a typed market order book from Unit Commitment results using existing MarketOrder types.
+Preserves the native temporal resolution from Unit Commitment optimization (15/30/60 minutes).
 
 # Arguments
 - `bidding_zone::String`: Target bidding zone (e.g., "GR")  
@@ -109,7 +110,7 @@ Creates a typed market order book from Unit Commitment results using existing Ma
 - `optimizer::String`: Solver preference for unit commitment ("auto", "highs", "gurobi", "cplex")
 
 # Returns  
-- `MPCCOrderBook`: Typed order book structure using existing MarketOrder types
+- `MPCCOrderBook`: Typed order book structure using existing MarketOrder types with native UC temporal resolution
 """
 function create_typed_order_book(bidding_zone::String, day::Date; markup_factor::Float64=DEFAULT_MARKUP_FACTOR, optimizer::String="auto")
     try
@@ -129,11 +130,44 @@ function create_typed_order_book(bidding_zone::String, day::Date; markup_factor:
         # Add all demand orders (already SimpleOrder types) 
         append!(all_orders, uc_to_bids.demand_orders)
 
-        # Create the typed order book
+        # Extract unique time periods from the actual orders to preserve UC's native resolution
+        time_periods = Set{String}()
+        for order in all_orders
+            if isa(order, SimpleOrder)
+                # Format DateTime to timeslot string: "YYYYMMDD-HHMM"
+                date_str = Dates.format(order.date_time, "yyyymmdd")
+                time_str = Dates.format(order.date_time, "HHMM")
+                timeslot = "$(date_str)-$(time_str)"
+                push!(time_periods, timeslot)
+            end
+        end
+
+        # Convert to sorted vector for consistent ordering
+        periods_vector = sort(collect(time_periods))
+
+        # Log the detected resolution
+        if length(periods_vector) > 1
+            println("   📊 Detected $(length(periods_vector)) time periods from UC orders")
+            if length(periods_vector) == 24
+                println("   ⏰ Resolution: Hourly (24 periods)")
+            elseif length(periods_vector) == 48
+                println("   ⏰ Resolution: 30-minute (48 periods)")
+            elseif length(periods_vector) == 96
+                println("   ⏰ Resolution: 15-minute (96 periods)")
+            else
+                println("   ⏰ Resolution: Custom ($(length(periods_vector)) periods)")
+            end
+        else
+            # Fallback to hourly if no orders found
+            periods_vector = [string(h) for h in 1:24]
+            println("   ⚠️  No orders found, defaulting to 24 hourly periods")
+        end
+
+        # Create the typed order book with native UC resolution
         return MPCCOrderBook(
             all_orders,                                    # All orders as MarketOrder types
             [bidding_zone],                               # Single bidding zone
-            [string(h) for h in 1:24],                   # 24 hourly periods
+            periods_vector,                               # Preserve UC's native temporal resolution
             (0.0, 500.0),                                 # Price limits (€/MWh)
             nothing                                       # No network topology for single zone
         )
@@ -251,7 +285,8 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
         orders_by_node_time = Dict{Tuple{String,String},Vector{Int}}()
         for (i, order) in enumerate(simple_orders)
             node = string(order.zone)
-            period = string(Dates.hour(order.date_time) + 1)
+            # Use the extract_time_period function to get the correct period mapping
+            period = extract_time_period(order.date_time, order_book.periods)
             key = (node, period)
             if haskey(orders_by_node_time, key)
                 push!(orders_by_node_time[key], i)

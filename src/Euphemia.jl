@@ -292,11 +292,14 @@ end
                           silent::Bool=true)
 
 Unified function to generate energy prices for a bidding zone on a specific date through market clearing optimization.
+Supports both hourly and sub-hourly temporal resolutions depending on the order method used.
 
 # Arguments
 - `bidding_zone::String`: The bidding zone code (e.g., "GR", "DE", "FR")
 - `date::Date`: The date for which to generate prices
 - `order_method::Symbol`: Method for creating orders - `:uc_based` or `:alternative`
+  - `:uc_based`: Creates orders preserving Unit Commitment's native temporal resolution (15/30/60 minutes)
+  - `:alternative`: Creates orders at finest available resolution (15/30/60 minutes) from real load/renewable data
 - `model::Symbol`: Market clearing model - `:mpcc` (more models may be added later)
 - `optimizer::String`: Optimization solver - "highs" (default), "gurobi", "cplex", "auto"
 - `markup_factor::Float64`: Price markup factor for UC-based orders (default: 1.1)
@@ -304,19 +307,40 @@ Unified function to generate energy prices for a bidding zone on a specific date
 - `silent::Bool`: Whether to suppress solver output (default: true)
 
 # Returns
-- `Dict{String,Float64}`: Dictionary mapping hour ("1", "2", ..., "24") to energy price (€/MWh)
+- `Dict{String,Float64}`: Dictionary mapping time periods to energy price (€/MWh)
+  - Keys are timeslots in format "YYYYMMDD-HHMM" (e.g., "20240618-0000", "20240618-0015")
+  - Both `:uc_based` and `:alternative` methods use consistent timeslot formatting
   Returns empty dict if any step fails.
+
+# Temporal Resolution
+The output resolution depends on the order method and underlying data resolution:
+- **UC-based**: Preserves the native resolution from load/renewable data (15/30/60 minutes)
+- **Alternative**: Automatically detects finest resolution from load/renewable data:
+  - 15-minute data → 96 periods per day
+  - 30-minute data → 48 periods per day  
+  - 60-minute data → 24 periods per day
+
+Both methods now support sub-hourly resolution and will automatically use the finest temporal 
+resolution available in the underlying load and renewable generation data.
 
 # Examples
 ```julia
-# Generate prices using UC-based orders and MPCC clearing with auto solver selection
+# Generate prices using UC-based orders (hourly or sub-hourly depending on data)
 prices = generate_energy_prices("GR", Date(2025, 7, 24))
+println("Noon price: €\$(prices["20250724-1200"])/MWh")
 
-# Generate prices using alternative order book with Gurobi
-prices = generate_energy_prices("GR", Date(2025, 7, 24); order_method=:alternative, optimizer="gurobi", random_seed=12345)
+# Generate prices using alternative order book (auto-detects temporal resolution)
+prices_alternative = generate_energy_prices("AL", Date(2024, 6, 18); order_method=:alternative)
+println("Number of price periods: \$(length(prices_alternative))")  # Could be 24, 48, or 96 depending on data
 
-# Access hourly prices
-println("Hour 1 price: €\$(prices["1"])/MWh")
+# Access specific time periods by timeslot
+if haskey(prices_alternative, "20240618-1200")
+    println("Noon price: €\$(prices_alternative["20240618-1200"])/MWh")
+end
+
+# Convert to vectors for analysis
+price_values = collect(values(prices))
+avg_price = sum(price_values) / length(price_values)
 ```
 """
 function generate_energy_prices(bidding_zone::String, date::Date;
@@ -397,7 +421,7 @@ function generate_energy_prices(bidding_zone::String, date::Date;
 
             prices = mpcc_result.market_prices[bidding_zone]
 
-            println("   ✅ Energy prices extracted for 24 hours")
+            println("   ✅ Energy prices extracted for $(length(prices)) time periods")
             println("   📈 Price range: €$(round(minimum(values(prices)), digits=2)) - €$(round(maximum(values(prices)), digits=2))/MWh")
 
             return prices
