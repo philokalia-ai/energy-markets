@@ -11,7 +11,7 @@ Tests for Network.jl module including:
 using Test
 using JuMP, HiGHS
 using Dates, DataFrames
-using Euphemia.Network
+using Euphemia
 
 @testset "Network Module Tests" begin
 

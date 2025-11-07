@@ -2,9 +2,6 @@ module MarketOrders
 
 using Dates
 
-export MarketOrder, SimpleOrder, BlockOrder, LinkedBlockOrder, ExclusiveBlockOrder, FlexibleOrder,
-    AggregatedPeriodicOrder, MICOrder, LoadGradientOrder, MeritOrder, PUNOrder
-
 abstract type MarketOrder end  # Abstract base type for all orders
 
 # Simple Order (with time dimension for electricity markets)

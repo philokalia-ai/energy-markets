@@ -455,6 +455,3 @@ function apply_fuel_type_constraints!(model, generators, N, T)
 
     return fuel_params
 end
-
-# Export the functions
-export FuelTypeParameters, get_fuel_type_parameters, apply_fuel_type_constraints!

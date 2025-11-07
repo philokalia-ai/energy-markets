@@ -210,6 +210,3 @@ function disaggregate_temporal_data(loads, renewables)
 
     return target_timeslots, load_by_time, renewable_by_time, resolution_minutes
 end
-
-# Export the utilities
-export parse_resolution_to_minutes, determine_finest_resolution, generate_sub_slots_from_source, disaggregate_temporal_data

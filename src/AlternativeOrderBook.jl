@@ -14,8 +14,6 @@ import ..MarketOrders: SimpleOrder
 import ..MPCC: MPCCOrderBook
 import ..parse_resolution_to_minutes, ..determine_finest_resolution, ..generate_sub_slots_from_source, ..disaggregate_temporal_data
 
-export create_adjusted_order_book, AdjustedOrderBookResult
-
 """
     parse_timeslot_to_datetime(timeslot::String, day::Date)
 

@@ -28,21 +28,6 @@ catch
     global CPLEX_AVAILABLE = false
 end
 
-# Exports
-export calculate_market_clearing_price, commit_units  # Core functions
-export MarketOrder, SimpleOrder, BlockOrder  # Order types
-export Generator, Load, RenewablesGenerationForecast  # Entities
-export get_generators, get_loads, get_generation_forecast_for_wind_and_solar  # Helper functions
-export test_unit_commitment
-export NetworkTopology, create_example_network, add_atc_constraints!  # Network constraints (legacy)
-export TransferCapacity, create_transfer_capacity_from_entsoe, add_transfer_capacity_constraints!  # Transfer capacity constraints
-export create_example_transfer_capacity, create_greek_transfer_capacity_from_entsoe, euphemia_market_clearing_with_entsoe
-export MPCCResult, solve_mpcc_market_clearing, create_typed_order_book, select_solver  # MPCC functionality
-export create_adjusted_order_book, AdjustedOrderBookResult, print_order_book_summary  # Alternative order book
-export calculate_cost_breakdown, solve_unit_commitment
-export generate_energy_prices  # Unified energy price generation
-export save_energy_prices, ensure_energy_prices_table, withdb  # Database functions
-
 include("dbutils.jl")
 
 function __init__()
@@ -124,28 +109,87 @@ function select_solver(preferred_solver::String="auto")
 end
 
 include("MarketOrders.jl")
-using .MarketOrders: MarketOrder, SimpleOrder, BlockOrder
+using .MarketOrders: MarketOrder, SimpleOrder, BlockOrder, LinkedBlockOrder, ExclusiveBlockOrder, 
+    FlexibleOrder, AggregatedPeriodicOrder, MICOrder, LoadGradientOrder, MeritOrder, PUNOrder
 
 include("Generators.jl")
 include("FuelTypeParameters.jl")
+# FuelTypeParameters functions are included directly
+
 include("Loads.jl")
 include("Renewables.jl")
 
 include("TemporalResolutionUtilities.jl")
+# TemporalResolutionUtilities functions are included directly
 
 include("UnitCommitment.jl")
 
 include("BiddingStrategy.jl")
+using .BiddingStrategy: generate_market_orders_from_uc, apply_bidding_strategy_to_uc, UCToBidsResult
 
 include("Network.jl")
 using .Network: NetworkTopology, create_example_network, add_atc_constraints!
 using .Network: TransferCapacity, create_transfer_capacity_from_entsoe, add_transfer_capacity_constraints!, create_example_transfer_capacity
+using .Network: create_network_from_entsoe, create_greek_network_from_entsoe, get_entsoe_transfer_capacities
+using .Network: get_bidding_zones, get_outgoing_lines, get_incoming_lines, create_greek_transfer_capacity_from_entsoe
 
 include("MPCC.jl")
-using .MPCC: MPCCResult, solve_mpcc_market_clearing, create_typed_order_book, select_solver
+using .MPCC: MPCCResult, MPCCOrderBook, solve_mpcc_market_clearing, create_typed_order_book, select_solver
 
 include("AlternativeOrderBook.jl")
 using .AlternativeOrderBook: create_adjusted_order_book, AdjustedOrderBookResult, print_order_book_summary
+
+# ===== EXPORTS =====
+# All module exports are centralized here following Julia best practices
+# Exports come after includes so all symbols are defined before being exported
+
+# Core market clearing functionality
+export calculate_market_clearing_price, commit_units
+
+# Market order types and utilities
+export MarketOrder, SimpleOrder, BlockOrder
+export LinkedBlockOrder, ExclusiveBlockOrder, FlexibleOrder, AggregatedPeriodicOrder
+export MICOrder, LoadGradientOrder, MeritOrder, PUNOrder
+
+# Entity types
+export Generator, Load, RenewablesGenerationForecast
+
+# Helper functions for data retrieval
+export get_generators, get_loads, get_generation_forecast_for_wind_and_solar
+
+# Unit commitment functionality
+export test_unit_commitment, calculate_cost_breakdown, solve_unit_commitment
+
+# Network topology and transfer capacity
+export NetworkTopology, create_example_network, add_atc_constraints!  # Network constraints (legacy)
+export TransferCapacity, create_transfer_capacity_from_entsoe, add_transfer_capacity_constraints!
+export create_example_transfer_capacity, create_greek_transfer_capacity_from_entsoe
+export create_network_from_entsoe, create_greek_network_from_entsoe, get_entsoe_transfer_capacities
+export get_bidding_zones, get_outgoing_lines, get_incoming_lines
+
+# MPCC optimization functionality
+export MPCCResult, MPCCOrderBook, solve_mpcc_market_clearing, create_typed_order_book, select_solver
+
+# Alternative order book functionality
+export create_adjusted_order_book, AdjustedOrderBookResult, print_order_book_summary
+
+# Bidding strategy functionality
+export generate_market_orders_from_uc, apply_bidding_strategy_to_uc, UCToBidsResult
+
+# Fuel type parameters
+export FuelTypeParameters, get_fuel_type_parameters, apply_fuel_type_constraints!
+
+# Temporal resolution utilities
+export parse_resolution_to_minutes, determine_finest_resolution, generate_sub_slots_from_source, disaggregate_temporal_data
+
+# Market clearing with ENTSO-E integration
+export euphemia_market_clearing_with_entsoe
+
+# Energy price generation (unified interface)
+export generate_energy_prices
+
+# Database utilities
+export save_energy_prices, ensure_energy_prices_table, withdb
 
 # Αυτή η συνάρτηση πρέπει να διαβάζει τα market orders
 # και να υπολογίζει το clearing price για timeslot για bidding zone
