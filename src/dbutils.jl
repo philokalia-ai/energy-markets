@@ -109,10 +109,10 @@ function ensure_energy_prices_table()
             contract_type VARCHAR(50) NOT NULL,
             price_eur_mwh NUMERIC(10,2) NOT NULL,
             currency VARCHAR(3) NOT NULL,
-            update_time_utc TIMESTAMP NOT NULL,
-            code_version INTEGER NOT NULL,
             order_method VARCHAR(20) NOT NULL,
-            UNIQUE(date_time_utc, bidding_zone, contract_type, order_method)
+            code_version INTEGER NOT NULL,
+            update_time_utc TIMESTAMP NOT NULL,
+            UNIQUE(date_time_utc, bidding_zone, contract_type, order_method, code_version)
         )
         """
 
@@ -134,9 +134,49 @@ CREATE INDEX IF NOT EXISTS idx_energy_prices_zone_contract
 ON simulations.energy_prices (bidding_zone, contract_type, date_time_utc)
 """
         )
+
+        # Create optimization runs table for tracking all optimization attempts
+        create_optimization_runs_sql = """
+        CREATE TABLE IF NOT EXISTS simulations.optimization_runs (
+            id SERIAL PRIMARY KEY,
+            bidding_zone VARCHAR(10) NOT NULL,
+            optimization_date DATE NOT NULL,
+            order_method VARCHAR(20) NOT NULL,
+            model_type VARCHAR(20) NOT NULL,
+            optimizer VARCHAR(20) NOT NULL,
+            status VARCHAR(20) NOT NULL,
+            objective_value NUMERIC(15,2),
+            solve_time_seconds NUMERIC(10,3),
+            num_orders INTEGER,
+            num_price_periods INTEGER,
+            error_message TEXT,
+            code_version INTEGER NOT NULL,
+            created_at TIMESTAMP NOT NULL,
+            UNIQUE(bidding_zone, optimization_date, order_method, model_type, code_version)
+        )
+        """
+
+        LibPQ.execute(cnx, create_optimization_runs_sql)
+
+        # Create useful indexes for optimization runs
+        LibPQ.execute(
+            cnx,
+            """
+CREATE INDEX IF NOT EXISTS idx_optimization_runs_zone_date 
+ON simulations.optimization_runs (bidding_zone, optimization_date)
+"""
+        )
+
+        LibPQ.execute(
+            cnx,
+            """
+CREATE INDEX IF NOT EXISTS idx_optimization_runs_status 
+ON simulations.optimization_runs (status, optimization_date)
+"""
+        )
     end
 
-    @info "Energy prices table schema verified/created"
+    @info "Energy prices and optimization runs tables schema verified/created"
 end
 
 """
@@ -162,8 +202,8 @@ Assumes connection is already to the 'energy' database.
 - `price_eur_mwh`: Energy price in EUR/MWh
 - `currency`: Always "EUR" for now
 - `update_time_utc`: Timestamp when record was inserted
-- `code_version`: Version code, set to 1 for now
 - `order_method`: Method used to generate prices
+- `code_version`: Version code, set to 1 for now
 """
 function save_energy_prices(prices::Dict{String,Float64}, bidding_zone::String, day::Date, order_method::Symbol; batch_size::Int=100, create_schema::Bool=true)
     if isempty(prices)
@@ -190,7 +230,7 @@ function save_energy_prices(prices::Dict{String,Float64}, bidding_zone::String, 
     end
 
     # Prepare data for batch insertion
-    records = Vector{Tuple{DateTime,String,String,String,Float64,String,DateTime,Int,String}}()
+    records = Vector{Tuple{DateTime,String,String,String,Float64,String,String,Int,DateTime}}()
     sizehint!(records, length(prices))  # Pre-allocate for efficiency
     update_time = now(UTC)
     order_method_str = string(order_method)  # Convert once
@@ -208,9 +248,9 @@ function save_energy_prices(prices::Dict{String,Float64}, bidding_zone::String, 
                 "Day-Ahead",
                 price,
                 "EUR",
-                update_time,
+                order_method_str,
                 1,  # code_version
-                order_method_str
+                update_time
             ))
         catch e
             @error "Failed to parse timeslot '$timeslot': $e"
@@ -228,7 +268,7 @@ function save_energy_prices(prices::Dict{String,Float64}, bidding_zone::String, 
 
     sql = """
     INSERT INTO simulations.energy_prices 
-    (date_time_utc, resolution_code, bidding_zone, contract_type, price_eur_mwh, currency, update_time_utc, code_version, order_method)
+    (date_time_utc, resolution_code, bidding_zone, contract_type, price_eur_mwh, currency, order_method, code_version, update_time_utc)
     VALUES (\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8, \$9)
     """
 
@@ -263,4 +303,78 @@ function save_energy_prices(prices::Dict{String,Float64}, bidding_zone::String, 
 
     @info "Successfully saved $total_inserted energy price records for $bidding_zone on $day using $order_method method"
     return total_inserted
+end
+
+"""
+    save_optimization_run(bidding_zone::String, date::Date, order_method::Symbol, model_type::Symbol, 
+                          optimizer::String, status::Symbol; objective_value=nothing, solve_time_seconds=nothing, 
+                          num_orders=nothing, num_price_periods=nothing, error_message=nothing, 
+                          code_version::Int=1, create_schema::Bool=true)
+
+Save optimization run metadata to track all optimization attempts (successful and failed).
+
+# Arguments
+- `bidding_zone`: Bidding zone code (e.g., "GR", "AL")
+- `date`: Date of the optimization
+- `order_method`: Method used (:uc_based or :alternative)
+- `model_type`: Model used (:mpcc, etc.)
+- `optimizer`: Solver used ("highs", "gurobi", "cplex")
+- `status`: Optimization status (:optimal, :infeasible, :time_limit, etc.)
+- `objective_value`: Final objective value (nothing for failed runs)
+- `solve_time_seconds`: Solution time in seconds
+- `num_orders`: Number of orders in the order book
+- `num_price_periods`: Number of price periods generated (nothing for failed runs)
+- `error_message`: Error details for failed runs (nothing for successful runs)
+- `code_version`: Version code (default: 1)
+- `create_schema`: Whether to create schema/table if missing (default: true)
+"""
+function save_optimization_run(bidding_zone::String, date::Date, order_method::Symbol, model_type::Symbol,
+    optimizer::String, status::Symbol;
+    objective_value=nothing,
+    solve_time_seconds=nothing,
+    num_orders=nothing,
+    num_price_periods=nothing,
+    error_message=nothing,
+    code_version::Int=1,
+    create_schema::Bool=true)
+
+    # Create schema and table if requested
+    if create_schema
+        ensure_energy_prices_table()  # This now creates both tables
+    end
+
+    try
+        withdb() do cnx
+            sql = """
+            INSERT INTO simulations.optimization_runs 
+            (bidding_zone, optimization_date, order_method, model_type, optimizer, status, 
+             objective_value, solve_time_seconds, num_orders, num_price_periods, error_message, 
+             code_version, created_at)
+            VALUES (\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8, \$9, \$10, \$11, \$12, \$13)
+            """
+
+            LibPQ.execute(cnx, sql, [
+                bidding_zone,
+                date,
+                string(order_method),
+                string(model_type),
+                optimizer,
+                string(status),
+                objective_value === nothing ? missing : objective_value,
+                solve_time_seconds === nothing ? missing : solve_time_seconds,
+                num_orders === nothing ? missing : num_orders,
+                num_price_periods === nothing ? missing : num_price_periods,
+                error_message === nothing ? missing : error_message,
+                code_version,
+                now(UTC)
+            ])
+        end
+
+        @info "Saved optimization run: $bidding_zone on $date ($status)"
+        return 1
+
+    catch e
+        @error "Failed to save optimization run for $bidding_zone on $date: $e"
+        return 0
+    end
 end

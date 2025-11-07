@@ -109,18 +109,15 @@ function select_solver(preferred_solver::String="auto")
 end
 
 include("MarketOrders.jl")
-using .MarketOrders: MarketOrder, SimpleOrder, BlockOrder, LinkedBlockOrder, ExclusiveBlockOrder, 
+using .MarketOrders: MarketOrder, SimpleOrder, BlockOrder, LinkedBlockOrder, ExclusiveBlockOrder,
     FlexibleOrder, AggregatedPeriodicOrder, MICOrder, LoadGradientOrder, MeritOrder, PUNOrder
 
 include("Generators.jl")
 include("FuelTypeParameters.jl")
-# FuelTypeParameters functions are included directly
-
 include("Loads.jl")
 include("Renewables.jl")
 
 include("TemporalResolutionUtilities.jl")
-# TemporalResolutionUtilities functions are included directly
 
 include("UnitCommitment.jl")
 
@@ -189,7 +186,7 @@ export euphemia_market_clearing_with_entsoe
 export generate_energy_prices
 
 # Database utilities
-export save_energy_prices, ensure_energy_prices_table, withdb
+export save_energy_prices, ensure_energy_prices_table, withdb, save_optimization_run
 
 # Αυτή η συνάρτηση πρέπει να διαβάζει τα market orders
 # και να υπολογίζει το clearing price για timeslot για bidding zone
@@ -394,7 +391,8 @@ function generate_energy_prices(bidding_zone::String, date::Date;
     optimizer::String="highs",
     markup_factor::Float64=1.1,
     random_seed::Union{Int,Nothing}=nothing,
-    silent::Bool=true)
+    silent::Bool=true,
+    save_to_db::Bool=false)
 
     # Validate inputs
     if !(order_method in [:uc_based, :alternative])
@@ -443,33 +441,87 @@ function generate_energy_prices(bidding_zone::String, date::Date;
         println("\n⚖️  Step 2: Running Market Clearing ($model with $optimizer)...")
 
         if model == :mpcc
-            mpcc_result = solve_mpcc_market_clearing(order_book; preferred_solver=optimizer, silent=silent)
+            optimization_start_time = time()
 
-            if mpcc_result.status != :optimal
-                error("MPCC optimization failed with status: $(mpcc_result.status)")
+            try
+                mpcc_result = solve_mpcc_market_clearing(order_book; preferred_solver=optimizer, silent=silent)
+                solve_time_seconds = time() - optimization_start_time
+
+                if mpcc_result.status != :optimal
+                    # Save failed optimization run
+                    save_optimization_run(bidding_zone, date, order_method, model, optimizer, mpcc_result.status;
+                        solve_time_seconds=solve_time_seconds,
+                        num_orders=length(order_book.orders),
+                        error_message="MPCC optimization failed with status: $(mpcc_result.status)")
+
+                    error("MPCC optimization failed with status: $(mpcc_result.status)")
+                end
+
+                println("   ✅ MPCC optimization successful")
+                println("   📊 Objective value: $(round(mpcc_result.objective_value, digits=2))")
+
+                # Step 3: Extract Energy Prices
+                println("\n💰 Step 3: Extracting Energy Prices...")
+
+                if isempty(mpcc_result.market_prices)
+                    # Save failed optimization run (successful solve but no prices)
+                    save_optimization_run(bidding_zone, date, order_method, model, optimizer, :no_prices;
+                        objective_value=mpcc_result.objective_value,
+                        solve_time_seconds=solve_time_seconds,
+                        num_orders=length(order_book.orders),
+                        error_message="No market prices found in MPCC result")
+
+                    error("No market prices found in MPCC result")
+                end
+
+                # Get prices for the bidding zone
+                if !haskey(mpcc_result.market_prices, bidding_zone)
+                    # Save failed optimization run (successful solve but no prices for zone)
+                    save_optimization_run(bidding_zone, date, order_method, model, optimizer, :no_zone_prices;
+                        objective_value=mpcc_result.objective_value,
+                        solve_time_seconds=solve_time_seconds,
+                        num_orders=length(order_book.orders),
+                        error_message="No prices found for bidding zone: $bidding_zone")
+
+                    error("No prices found for bidding zone: $bidding_zone")
+                end
+
+                prices = mpcc_result.market_prices[bidding_zone]
+
+                println("   ✅ Energy prices extracted for $(length(prices)) time periods")
+                println("   📈 Price range: €$(round(minimum(values(prices)), digits=2)) - €$(round(maximum(values(prices)), digits=2))/MWh")
+
+                # Save successful optimization run
+                save_optimization_run(bidding_zone, date, order_method, model, optimizer, :optimal;
+                    objective_value=mpcc_result.objective_value,
+                    solve_time_seconds=solve_time_seconds,
+                    num_orders=length(order_book.orders),
+                    num_price_periods=length(prices))
+
+                # Save energy prices to database if requested
+                if save_to_db
+                    try
+                        println("   💾 Saving $(length(prices)) price records to database...")
+                        records_saved = save_energy_prices(prices, bidding_zone, date, order_method)
+                        println("   ✅ Successfully saved $records_saved records to database")
+                    catch db_error
+                        println("   ⚠️  Warning: Failed to save prices to database: $db_error")
+                    end
+                end
+
+                return prices
+
+            catch mpcc_error
+                solve_time_seconds = time() - optimization_start_time
+
+                # Save failed optimization run with error details
+                save_optimization_run(bidding_zone, date, order_method, model, optimizer, :error;
+                    solve_time_seconds=solve_time_seconds,
+                    num_orders=length(order_book.orders),
+                    error_message=string(mpcc_error))
+
+                rethrow(mpcc_error)
             end
-
-            println("   ✅ MPCC optimization successful")
-            println("   📊 Objective value: $(round(mpcc_result.objective_value, digits=2))")
-
-            # Step 3: Extract Energy Prices
-            println("\n💰 Step 3: Extracting Energy Prices...")
-
-            if isempty(mpcc_result.market_prices)
-                error("No market prices found in MPCC result")
-            end
-
-            # Get prices for the bidding zone
-            if !haskey(mpcc_result.market_prices, bidding_zone)
-                error("No prices found for bidding zone: $bidding_zone")
-            end
-
-            prices = mpcc_result.market_prices[bidding_zone]
-
-            println("   ✅ Energy prices extracted for $(length(prices)) time periods")
-            println("   📈 Price range: €$(round(minimum(values(prices)), digits=2)) - €$(round(maximum(values(prices)), digits=2))/MWh")
-
-            return prices
 
         else
             error("Model $model not implemented yet")
