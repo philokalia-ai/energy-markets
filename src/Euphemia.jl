@@ -41,6 +41,7 @@ export MPCCResult, solve_mpcc_market_clearing, create_typed_order_book, select_s
 export create_adjusted_order_book, AdjustedOrderBookResult, print_order_book_summary  # Alternative order book
 export calculate_cost_breakdown, solve_unit_commitment
 export generate_energy_prices  # Unified energy price generation
+export save_energy_prices, ensure_energy_prices_table, withdb  # Database functions
 
 include("dbutils.jl")
 
