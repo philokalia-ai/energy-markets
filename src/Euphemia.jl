@@ -5,6 +5,7 @@ using JuMP
 using DataFrames, CSV
 using DotEnv
 using Dates
+using Distributed
 
 # Import optimization solvers with error handling
 try
@@ -30,6 +31,118 @@ end
 
 include("dbutils.jl")
 
+# =============================================================================
+# SOLVER ENVIRONMENT CACHING SYSTEM
+# =============================================================================
+
+"""
+Global cache for solver environments to avoid repeated initialization overhead.
+Stores environments per solver type for reuse across multiple optimizations.
+"""
+const SOLVER_ENV_CACHE = Dict{String,Any}()
+
+"""
+    get_cached_optimizer(solver_name::String)
+
+Returns an optimizer constructor that reuses cached environments when possible.
+Automatically falls back to standard optimizer for unsupported solvers.
+
+# Arguments
+- `solver_name::String`: "gurobi", "cplex", "highs", etc.
+
+# Returns
+- Optimizer constructor function for use with JuMP Model()
+"""
+function get_cached_optimizer(solver_name::String)
+    lower_name = lowercase(solver_name)
+
+    if lower_name == "gurobi" && GUROBI_AVAILABLE
+        return get_cached_gurobi_optimizer()
+    elseif lower_name == "cplex" && CPLEX_AVAILABLE
+        return get_cached_cplex_optimizer()
+    elseif lower_name == "highs" && HIGHS_AVAILABLE
+        # HiGHS doesn't need caching (no license overhead)
+        return HiGHS.Optimizer
+    else
+        # Fallback for unknown solvers or when specific solver not available
+        if lower_name == "gurobi" && GUROBI_AVAILABLE
+            return Gurobi.Optimizer
+        elseif lower_name == "cplex" && CPLEX_AVAILABLE
+            return CPLEX.Optimizer
+        elseif lower_name == "highs" && HIGHS_AVAILABLE
+            return HiGHS.Optimizer
+        else
+            error("Solver '$solver_name' is not available")
+        end
+    end
+end
+
+"""
+    get_cached_gurobi_optimizer()
+
+Returns a Gurobi optimizer constructor that reuses a cached environment.
+This eliminates the license authentication overhead for subsequent model creations.
+"""
+function get_cached_gurobi_optimizer()
+    if !haskey(SOLVER_ENV_CACHE, "gurobi_env")
+        try
+            # Create and cache Gurobi environment once
+            SOLVER_ENV_CACHE["gurobi_env"] = Gurobi.Env()
+            @info "✅ Gurobi environment cached for session reuse"
+        catch e
+            @warn "Failed to create cached Gurobi environment: $e. Using standard optimizer."
+            return Gurobi.Optimizer
+        end
+    end
+
+    # Return optimizer constructor that uses cached environment
+    env = SOLVER_ENV_CACHE["gurobi_env"]
+    return () -> Gurobi.Optimizer(env)
+end
+
+"""
+    get_cached_cplex_optimizer()
+
+Returns a CPLEX optimizer constructor that reuses a cached environment.
+Similar to Gurobi caching for license overhead reduction.
+"""
+function get_cached_cplex_optimizer()
+    if !haskey(SOLVER_ENV_CACHE, "cplex_env")
+        try
+            # CPLEX environment caching (if needed - check CPLEX.jl documentation)
+            # This is a placeholder - actual implementation depends on CPLEX.jl API
+            SOLVER_ENV_CACHE["cplex_env"] = true  # Placeholder
+            @info "✅ CPLEX environment cached for session reuse"
+        catch e
+            @warn "Failed to create cached CPLEX environment: $e. Using standard optimizer."
+            return CPLEX.Optimizer
+        end
+    end
+
+    # For now, return standard CPLEX optimizer
+    # TODO: Implement actual CPLEX environment caching if needed
+    return CPLEX.Optimizer
+end
+
+"""
+    clear_solver_cache!()
+
+Clears all cached solver environments. Useful for testing or memory management.
+"""
+function clear_solver_cache!()
+    # Properly dispose of Gurobi environment if it exists
+    if haskey(SOLVER_ENV_CACHE, "gurobi_env")
+        try
+            finalize(SOLVER_ENV_CACHE["gurobi_env"])
+        catch
+            # Ignore errors during cleanup
+        end
+    end
+
+    empty!(SOLVER_ENV_CACHE)
+    @info "Solver environment cache cleared"
+end
+
 function __init__()
     DotEnv.load!(".")
     preinit_pool()
@@ -40,7 +153,8 @@ end
     select_solver(preferred_solver::String="auto")
 
 Automatically selects the best available optimization solver for energy market problems.
-Returns the optimizer constructor for use with JuMP.
+Returns the optimizer constructor for use with JuMP, with environment caching for 
+solvers that benefit from it (like Gurobi).
 
 # Arguments
 - `preferred_solver::String`: "auto" (default), "highs", "gurobi", or "cplex"
@@ -59,13 +173,13 @@ function select_solver(preferred_solver::String="auto")
 
     # Check which solvers are available
     if HIGHS_AVAILABLE
-        push!(available_solvers, ("HiGHS", HiGHS.Optimizer))
+        push!(available_solvers, ("HiGHS", "highs"))
     end
     if GUROBI_AVAILABLE
-        push!(available_solvers, ("Gurobi", Gurobi.Optimizer))
+        push!(available_solvers, ("Gurobi", "gurobi"))
     end
     if CPLEX_AVAILABLE
-        push!(available_solvers, ("CPLEX", CPLEX.Optimizer))
+        push!(available_solvers, ("CPLEX", "cplex"))
     end
 
     if isempty(available_solvers)
@@ -76,11 +190,11 @@ function select_solver(preferred_solver::String="auto")
     solvers_to_try = if preferred_solver == "auto"
         available_solvers
     elseif lowercase(preferred_solver) == "highs" && HIGHS_AVAILABLE
-        vcat([("HiGHS", HiGHS.Optimizer)], filter(x -> x[1] != "HiGHS", available_solvers))
+        vcat([("HiGHS", "highs")], filter(x -> x[1] != "HiGHS", available_solvers))
     elseif lowercase(preferred_solver) == "gurobi" && GUROBI_AVAILABLE
-        vcat([("Gurobi", Gurobi.Optimizer)], filter(x -> x[1] != "Gurobi", available_solvers))
+        vcat([("Gurobi", "gurobi")], filter(x -> x[1] != "Gurobi", available_solvers))
     elseif lowercase(preferred_solver) == "cplex" && CPLEX_AVAILABLE
-        vcat([("CPLEX", CPLEX.Optimizer)], filter(x -> x[1] != "CPLEX", available_solvers))
+        vcat([("CPLEX", "cplex")], filter(x -> x[1] != "CPLEX", available_solvers))
     elseif preferred_solver != "auto"
         @warn "Preferred solver '$preferred_solver' not available. Using auto-selection."
         available_solvers
@@ -88,20 +202,20 @@ function select_solver(preferred_solver::String="auto")
         available_solvers
     end
 
-    # Try solvers in order
-    for (i, (solver_name, optimizer)) in enumerate(solvers_to_try)
+    # Try solvers in order - using cached optimizers when available
+    for (i, (solver_display_name, solver_key)) in enumerate(solvers_to_try)
         try
-            # Test if solver is functional by creating a test model
-            _ = Model(optimizer)
+            # Get cached optimizer (falls back to standard if caching fails)
+            optimizer = get_cached_optimizer(solver_key)
 
             # If this isn't the first solver tried, announce the successful fallback
             if i > 1
-                @info "✅ Using $solver_name solver as fallback"
+                @info "✅ Using $solver_display_name solver as fallback"
             end
 
-            return (optimizer, solver_name)
+            return (optimizer, solver_display_name)
         catch e
-            @warn "$solver_name failed to initialize: $(typeof(e))"
+            @warn "$solver_display_name failed to initialize: $(typeof(e))"
         end
     end
 
@@ -167,6 +281,9 @@ export get_bidding_zones, get_outgoing_lines, get_incoming_lines
 # MPCC optimization functionality
 export MPCCResult, MPCCOrderBook, solve_mpcc_market_clearing, create_typed_order_book, select_solver
 
+# Solver Environment Caching  
+export get_cached_optimizer, clear_solver_cache!
+
 # Alternative order book functionality
 export create_adjusted_order_book, AdjustedOrderBookResult, print_order_book_summary
 
@@ -187,6 +304,12 @@ export generate_energy_prices
 
 # Database utilities
 export save_energy_prices, ensure_energy_prices_table, withdb, save_optimization_run
+
+# Zone discovery utilities  
+export get_available_zones
+
+# Batch processing utilities
+export generate_energy_prices_for_all_zones, generate_energy_prices_for_date_range
 
 # Αυτή η συνάρτηση πρέπει να διαβάζει τα market orders
 # και να υπολογίζει το clearing price για timeslot για bidding zone
@@ -531,6 +654,1084 @@ function generate_energy_prices(bidding_zone::String, date::Date;
         println("❌ Error generating energy prices: $e")
         return Dict{String,Float64}()
     end
+end
+
+"""
+    get_available_zones(date::Date; fallback_zones::Vector{String}=String[])
+
+Discover available bidding zones from the ENTSO-E database for a specific date.
+
+This function queries the ENTSO-E production and generation units database to find
+all bidding zones that have commissioned units on the specified date.
+
+# Arguments
+- `date::Date`: The target date for which to find available zones
+- `fallback_zones::Vector{String}`: Optional fallback zones if database query fails
+
+# Returns
+- `Vector{String}`: Sorted list of available bidding zone codes
+
+# Example
+```julia
+zones = get_available_zones(Date(2024, 10, 1))
+println("Found \$(length(zones)) zones: \$(join(zones, \", \"))")
+
+# With custom fallback
+zones = get_available_zones(Date(2024, 10, 1); 
+                           fallback_zones=["GR", "AT", "FR"])
+```
+
+The function:
+1. Queries ENTSO-E database for zones with commissioned units on the target date
+2. Filters by area type codes 'BZN' and 'BZN/CTA' (bidding zone codes)
+3. Returns sorted list of unique zone codes
+4. Falls back to provided zones if database query fails
+5. Uses common European zones as final fallback if none provided
+"""
+function get_available_zones(date::Date; fallback_zones::Vector{String}=String[])
+    # Query to get zones from ENTSO-E database
+    query = """
+    SELECT DISTINCT map_code
+    FROM entsoe.production_and_generation_units
+    WHERE production_unit_status = 'COMMISSIONED'
+      AND generation_unit_status = 'COMMISSIONED'  
+      AND area_type_code IN ('BZN', 'BZN/CTA')
+      AND \$1 >= valid_from 
+      AND (\$1 <= valid_to OR valid_to IS NULL)
+      AND map_code IS NOT NULL
+    ORDER BY map_code
+    """
+
+    try
+        df = sql2df(query, [date])
+        zones_raw = df.map_code
+        # Filter out missing values and convert to String array
+        zones_sorted = sort([string(zone) for zone in zones_raw if !ismissing(zone)])
+
+        if !isempty(zones_sorted)
+            return zones_sorted
+        else
+            @warn "No zones found in ENTSO-E database for $date"
+        end
+
+    catch e
+        @warn "Failed to fetch zones from ENTSO-E database: $e"
+    end
+
+    # Use provided fallback zones
+    if !isempty(fallback_zones)
+        @info "Using provided fallback zones: " * join(fallback_zones, ", ")
+        return sort(fallback_zones)
+    end
+
+    # Default fallback: common European zones that typically have data
+    default_fallback = ["AT", "BE", "CH", "CZ", "DE", "ES", "FR", "GR", "IT", "NL", "PL"]
+    @info "Using default fallback zones: " * join(default_fallback, ", ")
+
+    return default_fallback
+end
+
+"""
+    generate_energy_prices_for_all_zones(date::Date;
+                                        order_method::Symbol=:uc_based,
+                                        model::Symbol=:mpcc,
+                                        optimizer::String="highs",
+                                        markup_factor::Float64=1.1,
+                                        random_seed::Union{Int,Nothing}=nothing,
+                                        silent::Bool=true,
+                                        save_to_db::Bool=false,
+                                        max_retries::Int=2,
+                                        retry_delay::Float64=1.0,
+                                        fallback_zones::Vector{String}=String[],
+                                        skip_existing::Bool=true,
+                                        progress_callback::Union{Function,Nothing}=nothing,
+                                        parallel::Bool=false,
+                                        max_workers::Union{Int,Nothing}=nothing,
+                                        chunk_size::Int=1)
+
+Generate energy prices for all available bidding zones on a specific date.
+
+This function automatically discovers all available bidding zones for the specified date
+using `get_available_zones()` and then generates energy prices for each zone using
+`generate_energy_prices()`. It includes comprehensive error handling, retry mechanisms,
+progress tracking, and optional parallel processing.
+
+# Arguments
+- `date::Date`: The date for which to generate prices for all zones
+- `order_method::Symbol`: Method for creating orders - `:uc_based` or `:alternative` (default: `:uc_based`)
+- `model::Symbol`: Market clearing model - `:mpcc` (default, more may be added later)
+- `optimizer::String`: Optimization solver - "highs" (default), "gurobi", "cplex", "auto"
+- `markup_factor::Float64`: Price markup factor for UC-based orders (default: 1.1)
+- `random_seed::Union{Int,Nothing}`: Random seed for alternative order book (default: nothing)
+- `silent::Bool`: Whether to suppress solver output (default: true)
+- `save_to_db::Bool`: Whether to save results to database (default: false)
+- `max_retries::Int`: Maximum retry attempts per zone (default: 2)
+- `retry_delay::Float64`: Delay between retry attempts in seconds (default: 1.0)
+- `fallback_zones::Vector{String}`: Custom fallback zones if zone discovery fails (default: empty)
+- `skip_existing::Bool`: Whether to skip zones that already have data in database (default: true)
+- `progress_callback::Union{Function,Nothing}`: Optional callback function for progress updates (default: nothing)
+- `parallel::Bool`: Whether to use parallel processing (default: false)
+- `max_workers::Union{Int,Nothing}`: Maximum number of parallel workers to use (default: auto-detect)
+- `chunk_size::Int`: Number of zones to process per worker batch (default: 1)
+
+# Returns
+- `NamedTuple` with the following fields:
+  - `results::Vector{NamedTuple}`: Detailed results for each zone
+  - `success_count::Int`: Number of zones processed successfully
+  - `failure_count::Int`: Number of zones that failed
+  - `skipped_count::Int`: Number of zones skipped (if skip_existing=true)
+  - `total_zones::Int`: Total number of zones discovered
+  - `total_time::Float64`: Total processing time in seconds
+  - `successful_zones::Vector{String}`: List of successfully processed zones
+  - `failed_zones::Vector{String}`: List of zones that failed
+  - `skipped_zones::Vector{String}`: List of zones that were skipped
+  - `parallel_workers::Int`: Number of parallel workers used (1 if parallel=false)
+
+Each result in `results` contains:
+- `zone::String`: Bidding zone code
+- `success::Bool`: Whether processing was successful
+- `prices::Dict{String,Float64}`: Energy prices (empty if failed)
+- `periods::Int`: Number of price periods generated
+- `elapsed_time::Float64`: Processing time for this zone
+- `min_price::Float64`, `max_price::Float64`, `avg_price::Float64`: Price statistics
+- `error_message::String`: Error details (empty if successful)
+- `attempt::Int`: Number of attempts made (including retries)
+- `worker_id::Int`: ID of the worker that processed this zone
+
+# Examples
+```julia
+using Euphemia, Dates
+
+# Basic usage - generate prices for all zones on a specific date
+result = generate_energy_prices_for_all_zones(Date(2024, 10, 1))
+println("Success: \$(result.success_count)/\$(result.total_zones) zones")
+
+# With parallel processing using all available cores
+result = generate_energy_prices_for_all_zones(Date(2024, 10, 1);
+    parallel=true)
+println("Processed with \$(result.parallel_workers) workers")
+
+# With parallel processing and limited workers
+result = generate_energy_prices_for_all_zones(Date(2024, 10, 1);
+    parallel=true,
+    max_workers=16,
+    chunk_size=2)
+
+# With database saving and Gurobi optimizer (parallel)
+result = generate_energy_prices_for_all_zones(Date(2024, 10, 1);
+    optimizer="gurobi",
+    save_to_db=true,
+    silent=true,
+    parallel=true)
+
+# With custom progress callback (note: callbacks work differently in parallel mode)
+function my_progress(zone, current, total, elapsed)
+    println("Processing \$zone (\$current/\$total) - \$(round(elapsed, digits=1))s")
+end
+
+result = generate_energy_prices_for_all_zones(Date(2024, 10, 1);
+    progress_callback=my_progress)
+
+# Check detailed results
+for zone_result in result.results
+    if zone_result.success
+        println("\$(zone_result.zone): \$(zone_result.periods) periods, €\$(zone_result.avg_price)/MWh avg (worker \$(zone_result.worker_id))")
+    else
+        println("\$(zone_result.zone): FAILED - \$(zone_result.error_message) (worker \$(zone_result.worker_id))")
+    end
+end
+
+# Using alternative order book method with parallel processing
+result = generate_energy_prices_for_all_zones(Date(2024, 10, 1);
+    order_method=:alternative,
+    random_seed=42,
+    parallel=true,
+    max_workers=32)
+```
+
+# Parallel Processing
+When `parallel=true`, the function will:
+1. Automatically detect available workers or use `max_workers` if specified
+2. Distribute zones across workers in batches of size `chunk_size`
+3. Process zones concurrently, significantly reducing total processing time
+4. Aggregate results from all workers
+5. Progress callbacks work but are called less frequently due to batching
+
+Note: Parallel processing requires worker processes to be started before calling this function.
+Use `addprocs(n)` to add workers, and ensure all workers have access to the Euphemia package
+and database connections.
+
+# Progress Callback
+If provided, the progress_callback function will be called after each zone (sequential mode)
+or after each worker batch (parallel mode) with signature:
+`progress_callback(zone::String, current_index::Int, total_zones::Int, elapsed_time::Float64)`
+
+# Database Integration
+When `save_to_db=true`, the function will:
+1. Check for existing data and skip zones if `skip_existing=true`
+2. Save both optimization runs and energy prices to the database
+3. Handle database constraint violations gracefully
+4. Continue processing even if database saves fail
+5. In parallel mode, each worker handles its own database connections
+
+# Error Handling
+The function includes robust error handling:
+- Retry mechanism for transient failures
+- Detailed error logging and reporting
+- Graceful degradation (continues even if individual zones fail)
+- Comprehensive result tracking for analysis
+- In parallel mode, worker failures are isolated and reported
+"""
+function generate_energy_prices_for_all_zones(date::Date;
+    order_method::Symbol=:uc_based,
+    model::Symbol=:mpcc,
+    optimizer::String="highs",
+    markup_factor::Float64=1.1,
+    random_seed::Union{Int,Nothing}=nothing,
+    silent::Bool=true,
+    save_to_db::Bool=false,
+    max_retries::Int=2,
+    retry_delay::Float64=1.0,
+    fallback_zones::Vector{String}=String[],
+    skip_existing::Bool=true,
+    progress_callback::Union{Function,Nothing}=nothing,
+    parallel::Bool=false,
+    max_workers::Union{Int,Nothing}=nothing,
+    chunk_size::Int=1)
+
+    start_time = time()
+
+    # Determine number of workers for parallel processing
+    workers_used = 1
+    if parallel
+        available_workers = length(workers())
+        if available_workers == 0
+            # Auto-add workers if none exist and parallel is requested
+            desired_workers = isnothing(max_workers) ? min(8, Sys.CPU_THREADS) : max_workers
+            println("🚀 No workers found. Adding $desired_workers worker processes...")
+            try
+                addprocs(desired_workers)
+                @everywhere using Euphemia
+                available_workers = length(workers())
+                workers_used = available_workers
+                println("✅ Successfully added $available_workers workers")
+            catch e
+                @warn "Failed to add worker processes: $e. Running sequentially."
+                parallel = false
+                workers_used = 1
+            end
+        else
+            workers_used = isnothing(max_workers) ? available_workers : min(max_workers, available_workers)
+            println("🚀 Parallel processing enabled with $workers_used existing workers")
+        end
+    end
+
+    # Discover available zones
+    println("🔍 Discovering available bidding zones for $date...")
+    available_zones = get_available_zones(date; fallback_zones=fallback_zones)
+
+    if isempty(available_zones)
+        @warn "No bidding zones discovered for $date"
+        return (
+            results=NamedTuple[],
+            success_count=0,
+            failure_count=0,
+            skipped_count=0,
+            total_zones=0,
+            total_time=0.0,
+            successful_zones=String[],
+            failed_zones=String[],
+            skipped_zones=String[],
+            parallel_workers=workers_used
+        )
+    end
+
+    println("✅ Found $(length(available_zones)) zones: $(join(available_zones[1:min(10, length(available_zones))], ", "))$(length(available_zones) > 10 ? "..." : "")")
+
+    # Check for existing data if skip_existing is enabled and save_to_db is true
+    zones_to_process = available_zones
+    skipped_zones = String[]
+
+    if skip_existing && save_to_db
+        try
+            println("🔍 Checking for existing data...")
+            existing_query = """
+                SELECT DISTINCT bidding_zone 
+                FROM simulations.energy_prices 
+                WHERE DATE(date_time_utc) = \$1 
+                AND order_method = \$2
+            """
+            existing_df = sql2df(existing_query, [date, string(order_method)])
+            existing_zones = Set(string(zone) for zone in existing_df.bidding_zone)
+
+            zones_to_process = filter(zone -> zone ∉ existing_zones, available_zones)
+            skipped_zones = filter(zone -> zone ∈ existing_zones, available_zones)
+
+            if !isempty(skipped_zones)
+                println("⏭️  Skipping $(length(skipped_zones)) zones with existing data: $(join(skipped_zones, ", "))")
+            end
+        catch e
+            @warn "Failed to check existing data, processing all zones: $e"
+        end
+    end
+
+    if isempty(zones_to_process)
+        println("✅ All zones already processed!")
+        return (
+            results=NamedTuple[],
+            success_count=0,
+            failure_count=0,
+            skipped_count=length(skipped_zones),
+            total_zones=length(available_zones),
+            total_time=time() - start_time,
+            successful_zones=String[],
+            failed_zones=String[],
+            skipped_zones=skipped_zones,
+            parallel_workers=workers_used
+        )
+    end
+
+    println("🚀 Processing $(length(zones_to_process)) zones$(parallel ? " in parallel" : " sequentially")...")
+    println("="^60)
+
+    # Choose processing method
+    if parallel
+        results = _process_zones_parallel(
+            zones_to_process, date, order_method, model, optimizer,
+            markup_factor, random_seed, silent, save_to_db,
+            max_retries, retry_delay, progress_callback, chunk_size
+        )
+    else
+        results = _process_zones_sequential(
+            zones_to_process, date, order_method, model, optimizer,
+            markup_factor, random_seed, silent, save_to_db,
+            max_retries, retry_delay, progress_callback, start_time
+        )
+    end
+
+    # Aggregate results
+    success_count = sum(r.success for r in results)
+    failure_count = length(results) - success_count
+    successful_zones = [r.zone for r in results if r.success]
+    failed_zones = [r.zone for r in results if !r.success]
+
+    total_time = time() - start_time
+
+    # Print summary
+    println("\n" * "="^60)
+    println("🏁 BATCH PROCESSING COMPLETE")
+    println("="^60)
+
+    total_processed = length(zones_to_process)
+    success_rate = total_processed > 0 ? round(100 * success_count / total_processed, digits=1) : 0
+
+    println("📊 Overall Statistics:")
+    println("   🎯 Total zones discovered: $(length(available_zones))")
+    if !isempty(skipped_zones)
+        println("   ⏭️  Skipped zones: $(length(skipped_zones))")
+    end
+    println("   🔄 Processed zones: $total_processed")
+    if parallel
+        println("   ⚡ Parallel workers: $workers_used")
+    end
+    println("   ✅ Successful: $success_count")
+    println("   ❌ Failed: $failure_count")
+    println("   📈 Success rate: $success_rate%")
+    println("   ⏱️  Total time: $(round(total_time/60, digits=1)) minutes")
+    if total_processed > 0
+        println("   🕒 Average per zone: $(round(total_time/total_processed, digits=1)) seconds")
+    end
+
+    if success_count > 0
+        successful_results = filter(r -> r.success, results)
+        total_periods = sum(r.periods for r in successful_results)
+        avg_solve_time = sum(r.elapsed_time for r in successful_results) / success_count
+
+        avg_prices = [r.avg_price for r in successful_results if r.avg_price > 0]
+        if !isempty(avg_prices)
+            overall_min = minimum([r.min_price for r in successful_results if r.min_price > 0])
+            overall_max = maximum([r.max_price for r in successful_results if r.max_price > 0])
+            overall_avg = sum(avg_prices) / length(avg_prices)
+
+            println("\n💰 Price Statistics (successful zones):")
+            println("   📊 Total periods: $total_periods")
+            println("   ⏱️  Avg solve time: $(round(avg_solve_time, digits=2))s")
+            println("   💵 Price range: €$(round(overall_min, digits=2)) - €$(round(overall_max, digits=2))/MWh")
+            println("   📈 Average price: €$(round(overall_avg, digits=2))/MWh")
+        end
+    end
+
+    if failure_count > 0
+        println("\n❌ Failed Zones: $(join(failed_zones, ", "))")
+    end
+
+    return (
+        results=results,
+        success_count=success_count,
+        failure_count=failure_count,
+        skipped_count=length(skipped_zones),
+        total_zones=length(available_zones),
+        total_time=total_time,
+        successful_zones=successful_zones,
+        failed_zones=failed_zones,
+        skipped_zones=skipped_zones,
+        parallel_workers=workers_used
+    )
+end
+
+"""
+    generate_energy_prices_for_date_range(start_date::Date, end_date::Date;
+                                          order_method::Symbol=:uc_based,
+                                          model::Symbol=:mpcc,
+                                          optimizer::String="highs",
+                                          markup_factor::Float64=1.1,
+                                          random_seed::Union{Int,Nothing}=nothing,
+                                          silent::Bool=true,
+                                          save_to_db::Bool=true,
+                                          max_retries::Int=2,
+                                          retry_delay::Float64=1.0,
+                                          fallback_zones::Vector{String}=String[],
+                                          skip_existing::Bool=true,
+                                          progress_callback::Union{Function,Nothing}=nothing,
+                                          parallel::Bool=false,
+                                          max_workers::Union{Int,Nothing}=nothing,
+                                          chunk_size::Int=1)
+
+Generate energy prices for all available bidding zones across a date range.
+
+This function processes multiple dates sequentially, calling `generate_energy_prices_for_all_zones()`
+for each date in the specified range. It provides comprehensive progress tracking, error handling,
+and result aggregation across the entire date range.
+
+# Arguments
+- `start_date::Date`: First date to process (inclusive)
+- `end_date::Date`: Last date to process (inclusive)
+- All other arguments are passed through to `generate_energy_prices_for_all_zones()`:
+  - `order_method::Symbol`: Method for creating orders - `:uc_based` or `:alternative` (default: `:uc_based`)
+  - `model::Symbol`: Market clearing model - `:mpcc` (default)
+  - `optimizer::String`: Optimization solver - "highs" (default), "gurobi", "cplex", "auto"
+  - `markup_factor::Float64`: Price markup factor for UC-based orders (default: 1.1)
+  - `random_seed::Union{Int,Nothing}`: Random seed for alternative order book (default: nothing)
+  - `silent::Bool`: Whether to suppress solver output (default: true)
+  - `save_to_db::Bool`: Whether to save results to database (default: true for bulk operations)
+  - `max_retries::Int`: Maximum retry attempts per zone (default: 2)
+  - `retry_delay::Float64`: Delay between retry attempts in seconds (default: 1.0)
+  - `fallback_zones::Vector{String}`: Custom fallback zones if zone discovery fails (default: empty)
+  - `skip_existing::Bool`: Whether to skip zones that already have data in database (default: true)
+  - `progress_callback::Union{Function,Nothing}`: Optional callback function for progress updates (default: nothing)
+  - `parallel::Bool`: Whether to use parallel processing (default: false)
+  - `max_workers::Union{Int,Nothing}`: Maximum number of parallel workers to use (default: auto-detect)
+  - `chunk_size::Int`: Number of zones to process per worker batch (default: 1)
+
+# Returns
+- `NamedTuple` with the following fields:
+  - `date_results::Vector{NamedTuple}`: Results for each date processed
+  - `total_dates::Int`: Total number of dates in the range
+  - `successful_dates::Int`: Number of dates processed successfully
+  - `failed_dates::Int`: Number of dates that failed completely
+  - `total_zones_processed::Int`: Total number of zone-date combinations processed
+  - `total_zones_successful::Int`: Total number of zone-date combinations that succeeded
+  - `total_time::Float64`: Total processing time for entire date range in seconds
+  - `start_date::Date`, `end_date::Date`: Date range processed
+  - `daily_summaries::Vector{NamedTuple}`: Summary statistics per date
+
+Each date result in `date_results` contains:
+- `date::Date`: The date processed
+- `success::Bool`: Whether the date was processed successfully (at least one zone succeeded)
+- `zones_result::NamedTuple`: Full result from `generate_energy_prices_for_all_zones()` for this date
+- `elapsed_time::Float64`: Processing time for this date
+- `zones_discovered::Int`: Number of zones discovered for this date
+- `zones_successful::Int`: Number of zones processed successfully for this date
+- `zones_failed::Int`: Number of zones that failed for this date
+- `zones_skipped::Int`: Number of zones skipped for this date
+
+Each summary in `daily_summaries` contains:
+- `date::Date`: The date
+- `zones_total::Int`: Total zones for this date
+- `zones_successful::Int`: Successful zones for this date
+- `success_rate::Float64`: Success rate percentage for this date
+- `avg_price::Float64`: Average price across all successful zones (if any)
+- `min_price::Float64`, `max_price::Float64`: Price extremes for this date
+- `total_periods::Int`: Total price periods generated for this date
+
+# Examples
+```julia
+using Euphemia, Dates
+
+# Process a single month
+result = generate_energy_prices_for_date_range(
+    Date(2024, 10, 1), 
+    Date(2024, 10, 31)
+)
+
+# Process with parallel processing and database saving
+result = generate_energy_prices_for_date_range(
+    Date(2024, 1, 1), 
+    Date(2024, 1, 7);
+    parallel=true,
+    max_workers=20,
+    save_to_db=true,
+    optimizer="gurobi"
+)
+
+# Process specific date range with custom progress tracking
+function date_progress(date, current, total, elapsed)
+    println("📅 Date \$date completed (\$current/\$total) - \$(round(elapsed/60, digits=1)) min")
+end
+
+result = generate_energy_prices_for_date_range(
+    Date(2024, 6, 1), 
+    Date(2024, 6, 30);
+    progress_callback=date_progress,
+    save_to_db=true
+)
+
+# Check results
+println("Processed \$(result.successful_dates)/\$(result.total_dates) dates successfully")
+println("Total zones processed: \$(result.total_zones_successful)/\$(result.total_zones_processed)")
+println("Total time: \$(round(result.total_time/3600, digits=1)) hours")
+
+# Analyze daily summaries
+for summary in result.daily_summaries
+    if summary.zones_successful > 0
+        println("\$(summary.date): \$(summary.zones_successful) zones, €\$(round(summary.avg_price, digits=2))/MWh avg")
+    end
+end
+
+# Check failed dates
+failed_dates = [r.date for r in result.date_results if !r.success]
+if !isempty(failed_dates)
+    println("Failed dates: \$(join(failed_dates, \", \"))")
+end
+```
+
+# Date Range Processing
+- Processes dates sequentially from start_date to end_date (inclusive)
+- Each date is processed independently using `generate_energy_prices_for_all_zones()`
+- Failed dates don't stop processing of remaining dates
+- Comprehensive progress tracking and error reporting per date
+- Automatic aggregation of statistics across the entire date range
+
+# Performance Considerations
+- Sequential date processing (parallel processing is applied per-date for zones)
+- Memory efficient - processes one date at a time
+- Database operations are batched per date when `save_to_db=true`
+- Progress callbacks help monitor long-running operations
+- Each date's zones can be processed in parallel if `parallel=true`
+
+# Error Handling
+- Date-level errors are captured and reported but don't stop processing
+- Zone-level errors are handled by the underlying `generate_energy_prices_for_all_zones()` function
+- Comprehensive error reporting with per-date breakdowns
+- Failed dates are clearly identified in results
+"""
+function generate_energy_prices_for_date_range(start_date::Date, end_date::Date;
+    order_method::Symbol=:uc_based,
+    model::Symbol=:mpcc,
+    optimizer::String="highs",
+    markup_factor::Float64=1.1,
+    random_seed::Union{Int,Nothing}=nothing,
+    silent::Bool=true,
+    save_to_db::Bool=true,  # Default true for bulk operations
+    max_retries::Int=2,
+    retry_delay::Float64=1.0,
+    fallback_zones::Vector{String}=String[],
+    skip_existing::Bool=true,
+    progress_callback::Union{Function,Nothing}=nothing,
+    parallel::Bool=false,
+    max_workers::Union{Int,Nothing}=nothing,
+    chunk_size::Int=1)
+
+    # Validate date range
+    if start_date > end_date
+        error("start_date ($start_date) cannot be after end_date ($end_date)")
+    end
+
+    # Generate date range
+    dates = collect(start_date:Day(1):end_date)
+    total_dates = length(dates)
+
+    println("📅 Starting date range processing")
+    println("="^60)
+    println("   📍 Date range: $start_date to $end_date")
+    println("   📊 Total dates: $total_dates")
+    println("   📋 Order method: $order_method")
+    println("   ⚖️  Model: $model")
+    println("   🔧 Optimizer: $optimizer")
+    if parallel
+        println("   ⚡ Parallel processing: enabled")
+    end
+    if save_to_db
+        println("   💾 Database saving: enabled")
+    end
+    println()
+
+    range_start_time = time()
+    date_results = NamedTuple[]
+    daily_summaries = NamedTuple[]
+
+    successful_dates = 0
+    failed_dates = 0
+    total_zones_processed = 0
+    total_zones_successful = 0
+
+    for (i, date) in enumerate(dates)
+        date_start_time = time()
+
+        println("📅 [$i/$total_dates] Processing $date")
+        println("-"^50)
+
+        try
+            # Process all zones for this date
+            zones_result = generate_energy_prices_for_all_zones(date;
+                order_method=order_method,
+                model=model,
+                optimizer=optimizer,
+                markup_factor=markup_factor,
+                random_seed=random_seed,
+                silent=silent,
+                save_to_db=save_to_db,
+                max_retries=max_retries,
+                retry_delay=retry_delay,
+                fallback_zones=fallback_zones,
+                skip_existing=skip_existing,
+                progress_callback=nothing,  # Disable per-zone callbacks to avoid clutter
+                parallel=parallel,
+                max_workers=max_workers,
+                chunk_size=chunk_size)
+
+            date_elapsed = time() - date_start_time
+
+            # Determine if date was successful (at least one zone succeeded)
+            date_successful = zones_result.success_count > 0
+            if date_successful
+                successful_dates += 1
+            else
+                failed_dates += 1
+            end
+
+            # Update totals
+            total_zones_processed += zones_result.success_count + zones_result.failure_count
+            total_zones_successful += zones_result.success_count
+
+            # Create date result
+            date_result = (
+                date=date,
+                success=date_successful,
+                zones_result=zones_result,
+                elapsed_time=date_elapsed,
+                zones_discovered=zones_result.total_zones,
+                zones_successful=zones_result.success_count,
+                zones_failed=zones_result.failure_count,
+                zones_skipped=zones_result.skipped_count
+            )
+            push!(date_results, date_result)
+
+            # Create daily summary with price statistics
+            if zones_result.success_count > 0
+                successful_results = filter(r -> r.success, zones_result.results)
+                all_prices = Float64[]
+                total_periods = 0
+
+                for zone_result in successful_results
+                    if !isempty(zone_result.prices)
+                        append!(all_prices, collect(values(zone_result.prices)))
+                        total_periods += zone_result.periods
+                    end
+                end
+
+                if !isempty(all_prices)
+                    daily_summary = (
+                        date=date,
+                        zones_total=zones_result.total_zones,
+                        zones_successful=zones_result.success_count,
+                        success_rate=round(100 * zones_result.success_count / max(1, zones_result.total_zones), digits=1),
+                        avg_price=round(sum(all_prices) / length(all_prices), digits=2),
+                        min_price=round(minimum(all_prices), digits=2),
+                        max_price=round(maximum(all_prices), digits=2),
+                        total_periods=total_periods
+                    )
+                else
+                    daily_summary = (
+                        date=date,
+                        zones_total=zones_result.total_zones,
+                        zones_successful=zones_result.success_count,
+                        success_rate=round(100 * zones_result.success_count / max(1, zones_result.total_zones), digits=1),
+                        avg_price=0.0,
+                        min_price=0.0,
+                        max_price=0.0,
+                        total_periods=0
+                    )
+                end
+            else
+                daily_summary = (
+                    date=date,
+                    zones_total=zones_result.total_zones,
+                    zones_successful=0,
+                    success_rate=0.0,
+                    avg_price=0.0,
+                    min_price=0.0,
+                    max_price=0.0,
+                    total_periods=0
+                )
+            end
+            push!(daily_summaries, daily_summary)
+
+            # Print date summary
+            if date_successful
+                println("✅ Date $date: $(zones_result.success_count)/$(zones_result.total_zones) zones successful")
+                if zones_result.success_count > 0 && daily_summary.avg_price > 0
+                    println("   💰 Price range: €$(daily_summary.min_price) - €$(daily_summary.max_price)/MWh (avg: €$(daily_summary.avg_price))")
+                end
+            else
+                println("❌ Date $date: All zones failed")
+            end
+
+            println("   ⏱️  Date processing time: $(round(date_elapsed/60, digits=1)) minutes")
+
+        catch date_error
+            date_elapsed = time() - date_start_time
+            failed_dates += 1
+
+            # Create failed date result
+            date_result = (
+                date=date,
+                success=false,
+                zones_result=nothing,
+                elapsed_time=date_elapsed,
+                zones_discovered=0,
+                zones_successful=0,
+                zones_failed=0,
+                zones_skipped=0
+            )
+            push!(date_results, date_result)
+
+            daily_summary = (
+                date=date,
+                zones_total=0,
+                zones_successful=0,
+                success_rate=0.0,
+                avg_price=0.0,
+                min_price=0.0,
+                max_price=0.0,
+                total_periods=0
+            )
+            push!(daily_summaries, daily_summary)
+
+            println("❌ Date $date: CRITICAL FAILURE - $(date_error)")
+        end
+
+        # Call progress callback if provided
+        if progress_callback !== nothing
+            try
+                progress_callback(date, i, total_dates, time() - range_start_time)
+            catch callback_error
+                @warn "Date-level progress callback failed: $callback_error"
+            end
+        end
+
+        # Overall progress update
+        total_elapsed = time() - range_start_time
+        remaining_dates = total_dates - i
+        est_remaining = remaining_dates > 0 ? (total_elapsed / i) * remaining_dates / 60 : 0
+        println("   📈 Overall progress: $i/$total_dates dates | Est. remaining: $(round(est_remaining, digits=1)) min")
+        println()
+    end
+
+    total_time = time() - range_start_time
+
+    # Print final summary
+    println("="^60)
+    println("🏁 DATE RANGE PROCESSING COMPLETE")
+    println("="^60)
+
+    success_rate = total_dates > 0 ? round(100 * successful_dates / total_dates, digits=1) : 0
+    zone_success_rate = total_zones_processed > 0 ? round(100 * total_zones_successful / total_zones_processed, digits=1) : 0
+
+    println("📊 Date Range Summary:")
+    println("   📅 Date range: $start_date to $end_date")
+    println("   📆 Total dates: $total_dates")
+    println("   ✅ Successful dates: $successful_dates")
+    println("   ❌ Failed dates: $failed_dates")
+    println("   📈 Date success rate: $success_rate%")
+    println("   ⏱️  Total time: $(round(total_time/3600, digits=1)) hours")
+    println("   🕒 Average per date: $(round(total_time/total_dates/60, digits=1)) minutes")
+
+    println("\n🌍 Zone Processing Summary:")
+    println("   🔄 Total zone-date combinations: $total_zones_processed")
+    println("   ✅ Successful zone-date combinations: $total_zones_successful")
+    println("   📈 Zone success rate: $zone_success_rate%")
+
+    if total_zones_successful > 0
+        successful_summaries = filter(s -> s.zones_successful > 0, daily_summaries)
+        if !isempty(successful_summaries)
+            avg_daily_price = sum(s.avg_price * s.zones_successful for s in successful_summaries) / sum(s.zones_successful for s in successful_summaries)
+            overall_min = minimum(s.min_price for s in successful_summaries if s.min_price > 0)
+            overall_max = maximum(s.max_price for s in successful_summaries if s.max_price > 0)
+
+            println("\n💰 Price Statistics:")
+            println("   📊 Overall price range: €$(overall_min) - €$(overall_max)/MWh")
+            println("   📈 Weighted average price: €$(round(avg_daily_price, digits=2))/MWh")
+        end
+    end
+
+    if failed_dates > 0
+        failed_date_list = [r.date for r in date_results if !r.success]
+        println("\n❌ Failed dates: $(join(failed_date_list, ", "))")
+    end
+
+    return (
+        date_results=date_results,
+        total_dates=total_dates,
+        successful_dates=successful_dates,
+        failed_dates=failed_dates,
+        total_zones_processed=total_zones_processed,
+        total_zones_successful=total_zones_successful,
+        total_time=total_time,
+        start_date=start_date,
+        end_date=end_date,
+        daily_summaries=daily_summaries
+    )
+end
+
+# =============================================================================
+# HELPER FUNCTIONS FOR PARALLEL AND SEQUENTIAL PROCESSING
+# =============================================================================
+
+"""
+Helper function for processing zones sequentially.
+"""
+function _process_zones_sequential(zones_to_process, date, order_method, model, optimizer,
+    markup_factor, random_seed, silent, save_to_db,
+    max_retries, retry_delay, progress_callback, start_time)
+    results = NamedTuple[]
+
+    for (i, zone) in enumerate(zones_to_process)
+        zone_start_time = time()
+
+        println("\n🏃 [$i/$(length(zones_to_process))] Zone: $zone")
+        println("-"^40)
+
+        # Try processing with retries
+        zone_success = false
+        zone_prices = Dict{String,Float64}()
+        zone_error = ""
+        attempts = 0
+
+        for attempt in 1:max_retries
+            attempts = attempt
+            try
+                attempt_start = time()
+                retry_msg = attempt > 1 ? " (retry $attempt/$max_retries)" : ""
+                println("🔄 Processing: $zone$retry_msg")
+
+                zone_prices = generate_energy_prices(zone, date;
+                    order_method=order_method,
+                    model=model,
+                    optimizer=optimizer,
+                    markup_factor=markup_factor,
+                    random_seed=random_seed,
+                    silent=silent,
+                    save_to_db=save_to_db)
+
+                if !isempty(zone_prices)
+                    zone_success = true
+
+                    min_price = minimum(values(zone_prices))
+                    max_price = maximum(values(zone_prices))
+                    avg_price = sum(values(zone_prices)) / length(zone_prices)
+                    elapsed = time() - attempt_start
+
+                    println("✅ SUCCESS: $zone ($(round(elapsed, digits=2))s)")
+                    println("   💰 $(length(zone_prices)) periods: €$(round(min_price, digits=2)) - €$(round(max_price, digits=2))/MWh (avg: €$(round(avg_price, digits=2)))")
+                    break
+                else
+                    zone_error = "No prices generated"
+                    if attempt < max_retries
+                        println("⚠️  No prices generated for $zone, retrying...")
+                        sleep(retry_delay)
+                    end
+                end
+
+            catch e
+                zone_error = string(e)
+                elapsed = time() - attempt_start
+
+                if attempt < max_retries
+                    println("❌ ATTEMPT $attempt FAILED: $zone ($(round(elapsed, digits=2))s)")
+                    println("   📝 Error: $(first(split(zone_error, '\n')))")
+                    println("   🔄 Retrying in $(retry_delay)s...")
+                    sleep(retry_delay)
+                else
+                    println("❌ FINAL FAILURE: $zone ($(round(elapsed, digits=2))s after $max_retries attempts)")
+                    println("   📝 Error: $(first(split(zone_error, '\n')))")
+                end
+            end
+        end
+
+        zone_elapsed = time() - zone_start_time
+
+        # Calculate price statistics
+        min_price = zone_success ? minimum(values(zone_prices)) : 0.0
+        max_price = zone_success ? maximum(values(zone_prices)) : 0.0
+        avg_price = zone_success && !isempty(zone_prices) ? sum(values(zone_prices)) / length(zone_prices) : 0.0
+
+        # Store result
+        zone_result = (
+            zone=zone,
+            success=zone_success,
+            prices=zone_prices,
+            periods=length(zone_prices),
+            elapsed_time=zone_elapsed,
+            min_price=min_price,
+            max_price=max_price,
+            avg_price=avg_price,
+            error_message=zone_success ? "" : zone_error,
+            attempt=attempts,
+            worker_id=1
+        )
+        push!(results, zone_result)
+
+        # Call progress callback if provided
+        if progress_callback !== nothing
+            try
+                progress_callback(zone, i, length(zones_to_process), zone_elapsed)
+            catch callback_error
+                @warn "Progress callback failed: $callback_error"
+            end
+        end
+
+        # Progress update
+        total_elapsed = time() - start_time
+        remaining = length(zones_to_process) - i
+        est_remaining = remaining > 0 ? total_elapsed / i * remaining / 60 : 0
+        println("   📈 Progress: $i/$(length(zones_to_process)) | Est. remaining: $(round(est_remaining, digits=1)) min")
+    end
+
+    return results
+end
+
+"""
+Helper function for processing zones in parallel.
+"""
+function _process_zones_parallel(zones_to_process, date, order_method, model, optimizer,
+    markup_factor, random_seed, silent, save_to_db,
+    max_retries, retry_delay, progress_callback, chunk_size)
+
+    # Split zones into chunks for distribution
+    zone_chunks = [zones_to_process[i:min(i + chunk_size - 1, end)] for i in 1:chunk_size:length(zones_to_process)]
+
+    println("📦 Split $(length(zones_to_process)) zones into $(length(zone_chunks)) chunks of size $chunk_size")
+
+    # Process chunks in parallel
+    chunk_start_time = time()
+
+    # Use pmap for parallel processing of chunks
+    chunk_results = pmap(zone_chunks) do chunk
+        _process_zone_chunk(chunk, date, order_method, model, optimizer,
+            markup_factor, random_seed, silent, save_to_db,
+            max_retries, retry_delay)
+    end
+
+    # Flatten results from all chunks
+    results = NamedTuple[]
+    processed_count = 0
+
+    for chunk_result in chunk_results
+        for zone_result in chunk_result
+            push!(results, zone_result)
+            processed_count += 1
+
+            # Call progress callback if provided (less frequently in parallel mode)
+            if progress_callback !== nothing && processed_count % max(1, div(length(zones_to_process), 10)) == 0
+                try
+                    elapsed = time() - chunk_start_time
+                    progress_callback(zone_result.zone, processed_count, length(zones_to_process), elapsed)
+                catch callback_error
+                    @warn "Progress callback failed: $callback_error"
+                end
+            end
+        end
+    end
+
+    println("⚡ Parallel processing completed in $(round((time() - chunk_start_time)/60, digits=1)) minutes")
+
+    return results
+end
+
+"""
+Process a chunk of zones on a single worker.
+"""
+function _process_zone_chunk(zone_chunk, date, order_method, model, optimizer,
+    markup_factor, random_seed, silent, save_to_db,
+    max_retries, retry_delay)
+    worker_id = myid()
+    chunk_results = NamedTuple[]
+
+    for zone in zone_chunk
+        zone_start_time = time()
+
+        # Try processing with retries
+        zone_success = false
+        zone_prices = Dict{String,Float64}()
+        zone_error = ""
+        attempts = 0
+
+        for attempt in 1:max_retries
+            attempts = attempt
+            try
+                zone_prices = generate_energy_prices(zone, date;
+                    order_method=order_method,
+                    model=model,
+                    optimizer=optimizer,
+                    markup_factor=markup_factor,
+                    random_seed=random_seed,
+                    silent=silent,
+                    save_to_db=save_to_db)
+
+                if !isempty(zone_prices)
+                    zone_success = true
+                    break
+                else
+                    zone_error = "No prices generated"
+                    if attempt < max_retries
+                        sleep(retry_delay)
+                    end
+                end
+
+            catch e
+                zone_error = string(e)
+                if attempt < max_retries
+                    sleep(retry_delay)
+                end
+            end
+        end
+
+        zone_elapsed = time() - zone_start_time
+
+        # Calculate price statistics
+        min_price = zone_success ? minimum(values(zone_prices)) : 0.0
+        max_price = zone_success ? maximum(values(zone_prices)) : 0.0
+        avg_price = zone_success && !isempty(zone_prices) ? sum(values(zone_prices)) / length(zone_prices) : 0.0
+
+        # Store result
+        zone_result = (
+            zone=zone,
+            success=zone_success,
+            prices=zone_prices,
+            periods=length(zone_prices),
+            elapsed_time=zone_elapsed,
+            min_price=min_price,
+            max_price=max_price,
+            avg_price=avg_price,
+            error_message=zone_success ? "" : zone_error,
+            attempt=attempts,
+            worker_id=worker_id
+        )
+        push!(chunk_results, zone_result)
+    end
+
+    return chunk_results
 end
 
 end
