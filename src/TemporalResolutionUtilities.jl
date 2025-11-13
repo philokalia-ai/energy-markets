@@ -100,10 +100,18 @@ function disaggregate_temporal_data(loads, renewables)
         println("  📊 Resolution analysis:")
         for res in all_resolutions
             minutes = parse_resolution_to_minutes(res)
-            data_type = if !isempty(loads) && loads[1].resolution_code == res
+            # Determine which data sources have this resolution
+            in_loads = !isempty(loads) && any(load.resolution_code == res for load in loads)
+            in_renewables = !isempty(renewables) && any(ren.resolution_code == res for ren in renewables)
+
+            data_type = if in_loads && in_renewables
+                "Loads & Renewables"
+            elseif in_loads
                 "Loads"
-            else
+            elseif in_renewables
                 "Renewables"
+            else
+                "Unknown"
             end
             println("     - $data_type: $res ($(minutes) minutes)")
         end
