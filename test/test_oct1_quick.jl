@@ -110,7 +110,7 @@ function main()
         avg_solve_time = round(sum(r.elapsed for r in successful_results) / success_count, digits=2)
         total_periods = sum(r.periods for r in successful_results)
 
-        println("\\n💰 Success Statistics:")
+        println("\n💰 Success Statistics:")
         println("   ⏱️  Average solve time: $(avg_solve_time)s")
         println("   📊 Total periods: $total_periods")
 
@@ -123,12 +123,12 @@ function main()
     if failure_count > 0
         failed_results = filter(r -> !r.success, results)
         failed_zones = [r.zone for r in failed_results]
-        println("\\n❌ Failed zones: $failed_zones")
+        println("\n❌ Failed zones: $failed_zones")
     end
 
     # Check database
     if SAVE_TO_DB && success_count > 0
-        println("\\n🗄️  Database Check:")
+        println("\n🗄️  Database Check:")
         try
             runs = Euphemia.sql2df("
                 SELECT bidding_zone, status, ROUND(solve_time_seconds::numeric, 2) as solve_time
