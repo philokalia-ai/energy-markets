@@ -190,11 +190,11 @@ function select_solver(preferred_solver::String="auto")
     solvers_to_try = if preferred_solver == "auto"
         available_solvers
     elseif lowercase(preferred_solver) == "highs" && HIGHS_AVAILABLE
-        vcat([("HiGHS", "highs")], filter(x -> x[1] != "HiGHS", available_solvers))
+        [("HiGHS", "highs"); filter(x -> x[1] != "HiGHS", available_solvers)]
     elseif lowercase(preferred_solver) == "gurobi" && GUROBI_AVAILABLE
-        vcat([("Gurobi", "gurobi")], filter(x -> x[1] != "Gurobi", available_solvers))
+        [("Gurobi", "gurobi"); filter(x -> x[1] != "Gurobi", available_solvers)]
     elseif lowercase(preferred_solver) == "cplex" && CPLEX_AVAILABLE
-        vcat([("CPLEX", "cplex")], filter(x -> x[1] != "CPLEX", available_solvers))
+        [("CPLEX", "cplex"); filter(x -> x[1] != "CPLEX", available_solvers)]
     elseif preferred_solver != "auto"
         @warn "Preferred solver '$preferred_solver' not available. Using auto-selection."
         available_solvers
