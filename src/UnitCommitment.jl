@@ -155,7 +155,7 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date; optimizer:
     end
 
     # Disaggregate all temporal data to finest resolution using centralized utilities
-    target_time_slots, load_by_time, renewable_by_time = disaggregate_temporal_data(loads, renewables)
+    target_time_slots, load_by_time, renewable_by_time, resolution_minutes = disaggregate_temporal_data(loads, renewables)
 
     T = length(target_time_slots)
     N = length(generators)
