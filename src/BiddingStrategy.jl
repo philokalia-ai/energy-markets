@@ -12,8 +12,6 @@ const COMMITMENT_THRESHOLD = 0.5  # Threshold for determining if a unit is commi
 const GENERATION_THRESHOLD = 0.01  # Minimum generation threshold in MW for numerical precision
 const DEMAND_THRESHOLD = 0.01  # Minimum demand threshold in MW for numerical precision
 
-export generate_market_orders_from_uc, apply_bidding_strategy_to_uc, UCToBidsResult
-
 """
     UCToBidsResult
 
@@ -97,13 +95,14 @@ function generate_market_orders_from_uc(
     markup_factor::Float64=1.1,
     demand_price::Float64=500.0,
     bidding_strategy::Symbol=:committed_only,
-    uncommitted_unit_fraction::Float64=DEFAULT_UNCOMMITTED_UNIT_FRACTION
+    uncommitted_unit_fraction::Float64=DEFAULT_UNCOMMITTED_UNIT_FRACTION,
+    optimizer::String="auto"
 )
 
     try
         # Solve unit commitment first
         println("Solving unit commitment for $bidding_zone on $day...")
-        uc_solution = solve_unit_commitment(bidding_zone, day)
+        uc_solution = solve_unit_commitment(bidding_zone, day; optimizer=optimizer)
 
         if uc_solution.status != OPTIMAL
             return UCToBidsResult(

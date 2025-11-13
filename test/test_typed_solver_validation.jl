@@ -1,7 +1,5 @@
 using Test
 using Euphemia
-using Euphemia.MPCC: create_typed_order_book
-using Euphemia.MarketOrders: SimpleOrder, AggregatedPeriodicOrder
 using Dates
 using SHA
 using JuMP
