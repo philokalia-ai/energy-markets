@@ -911,7 +911,9 @@ function generate_energy_prices_for_all_zones(date::Date;
             println("🚀 No workers found. Adding $desired_workers worker processes...")
             try
                 addprocs(desired_workers)
-                @everywhere using Euphemia
+                if myid() == 1
+                    @everywhere include("Euphemia.jl")
+                end
                 available_workers = length(workers())
                 workers_used = available_workers
                 println("✅ Successfully added $available_workers workers")
@@ -1623,15 +1625,14 @@ function _process_zones_parallel(zones_to_process, date, order_method, model, op
 
     println("📦 Split $(length(zones_to_process)) zones into $(length(zone_chunks)) chunks of size $chunk_size")
 
+    # Prepare arguments for pmap
+    pmap_args = [(chunk, date, order_method, model, optimizer, markup_factor, random_seed, silent, save_to_db, max_retries, retry_delay) for chunk in zone_chunks]
+
     # Process chunks in parallel
     chunk_start_time = time()
 
     # Use pmap for parallel processing of chunks
-    chunk_results = pmap(zone_chunks) do chunk
-        _process_zone_chunk(chunk, date, order_method, model, optimizer,
-            markup_factor, random_seed, silent, save_to_db,
-            max_retries, retry_delay)
-    end
+    chunk_results = pmap(_parallel_chunk_processor, pmap_args)
 
     # Flatten results from all chunks
     results = NamedTuple[]
@@ -1657,6 +1658,16 @@ function _process_zones_parallel(zones_to_process, date, order_method, model, op
     println("⚡ Parallel processing completed in $(round((time() - chunk_start_time)/60, digits=1)) minutes")
 
     return results
+end
+
+"""
+Wrapper function for pmap to process a chunk of zones.
+"""
+function _parallel_chunk_processor(args)
+    zone_chunk, date, order_method, model, optimizer, markup_factor, random_seed, silent, save_to_db, max_retries, retry_delay = args
+    return _process_zone_chunk(zone_chunk, date, order_method, model, optimizer,
+        markup_factor, random_seed, silent, save_to_db,
+        max_retries, retry_delay)
 end
 
 """
