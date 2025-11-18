@@ -89,7 +89,7 @@ jobs:
 
       - name: Setup database connection
         env:
-          DATABASE_URL: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@localhost:5432/energy_markets
+          ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
         run: |
           # Test database connection
           julia --project=. -e "
@@ -107,7 +107,7 @@ jobs:
       - name: Generate energy prices
         id: generate
         env:
-          DATABASE_URL: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@localhost:5432/energy_markets
+          ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
         run: |
           # Set default dates if manual trigger without inputs
           if [ "${{ github.event_name }}" = "schedule" ]; then
