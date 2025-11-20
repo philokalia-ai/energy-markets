@@ -71,14 +71,20 @@ jobs:
       - name: Setup Gurobi license (if using Gurobi)
         if: ${{ github.event.inputs.optimizer == 'gurobi' }}
         env:
-          GUROBI_LICENSE_KEY: ${{ secrets.GUROBI_LICENSE_KEY }}
+          GUROBI_ACCESS_ID: ${{ secrets.WLSACCESSID }}
+          GUROBI_WLS_SECRET: ${{ secrets.WLSSECRET }}
+          GUROBI_LICENSE_ID: ${{ secrets.LICENSEID }}
         run: |
-          if [ -n "$GUROBI_LICENSE_KEY" ]; then
-            echo "$GUROBI_LICENSE_KEY" > gurobi.lic
+          if [ -n "$GUROBI_ACCESS_ID" ] && [ -n "$GUROBI_WLS_SECRET" ] && [ -n "$GUROBI_LICENSE_ID" ]; then
+            # Create gurobi.lic file for Web License Service
+            echo "WLSACCESSID=$GUROBI_ACCESS_ID" > gurobi.lic
+            echo "WLSSECRET=$GUROBI_WLS_SECRET" >> gurobi.lic
+            echo "LICENSEID=$GUROBI_LICENSE_ID" >> gurobi.lic
             echo "GRB_LICENSE_FILE=$PWD/gurobi.lic" >> $GITHUB_ENV
-            echo "✅ Gurobi license configured"
+            echo "✅ Gurobi WLS license configured with ID: $GUROBI_LICENSE_ID"
           else
-            echo "⚠️ No Gurobi license found, will fallback to HiGHS"
+            echo "⚠️ Missing Gurobi WLS credentials, will fallback to HiGHS"
+            echo "   Required: WLSACCESSID, WLSSECRET, LICENSEID"
           fi
 
       - name: Install Julia dependencies
