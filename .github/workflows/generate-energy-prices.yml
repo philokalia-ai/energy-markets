@@ -81,6 +81,8 @@ jobs:
         run: |
           julia --project=. -e "
             using Pkg
+            println(\"📦 Resolving dependencies...\")
+            Pkg.resolve()
             println(\"📦 Installing dependencies...\")
             Pkg.instantiate()
             Pkg.precompile()
