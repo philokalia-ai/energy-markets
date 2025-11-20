@@ -908,19 +908,33 @@ function generate_energy_prices_for_all_zones(date::Date;
     println("🔍 Debug: Current workers: $(workers())")
 
     if parallel
-        available_workers = length(workers())
+        # Filter out the main process (ID 1) to get only actual worker processes
+        worker_ids = filter(id -> id != 1, workers())
+        available_workers = length(worker_ids)
+        println("🔍 Debug: Filtered worker IDs (excluding main process): $worker_ids")
+
         if available_workers == 0
             # Auto-add workers if none exist and parallel is requested
-            desired_workers = isnothing(max_workers) ? min(8, Sys.CPU_THREADS) : max_workers
+            # For machines with many cores, use more workers for better throughput
+            default_workers = if Sys.CPU_THREADS >= 64
+                min(20, Sys.CPU_THREADS ÷ 4)  # Use 1/4 of cores for shared machines
+            elseif Sys.CPU_THREADS >= 16
+                min(12, Sys.CPU_THREADS ÷ 2)   # Use 1/2 of cores for medium machines (increased cap)
+            else
+                min(6, Sys.CPU_THREADS)        # Less conservative for small machines
+            end
+
+            desired_workers = isnothing(max_workers) ? default_workers : max_workers
             println("🚀 No workers found. Adding $desired_workers worker processes...")
             try
                 addprocs(desired_workers)
                 if myid() == 1
                     @everywhere include("Euphemia.jl")
                 end
-                available_workers = length(workers())
+                worker_ids = filter(id -> id != 1, workers())
+                available_workers = length(worker_ids)
                 workers_used = available_workers
-                println("✅ Successfully added $available_workers workers")
+                println("✅ Successfully added $available_workers workers: $worker_ids")
             catch e
                 @warn "Failed to add worker processes: $e. Running sequentially."
                 parallel = false
@@ -928,7 +942,6 @@ function generate_energy_prices_for_all_zones(date::Date;
             end
         else
             workers_used = isnothing(max_workers) ? available_workers : min(max_workers, available_workers)
-            worker_ids = workers()
             println("🚀 Parallel processing enabled with $workers_used existing workers: $worker_ids")
         end
     end
