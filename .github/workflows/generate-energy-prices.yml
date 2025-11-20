@@ -48,10 +48,6 @@ env:
   JULIA_VERSION: "1.11"
   JULIA_NUM_THREADS: 4
 
-concurrency:
-  group: energy-markets-runner
-  cancel-in-progress: false
-
 jobs:
   generate-prices:
     runs-on: [self-hosted, linux, ARM64]
