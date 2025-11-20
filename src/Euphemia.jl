@@ -825,9 +825,9 @@ result = generate_energy_prices_for_all_zones(Date(2024, 10, 1);
     parallel=true)
 
 # With custom progress callback (note: callbacks work differently in parallel mode)
-# function my_progress(zone, current, total, elapsed)
-#     println("Processing \$zone (\$current/\$total) - \$(round(elapsed, digits=1))s")
-# end
+function my_progress(zone, current, total, elapsed)
+    println("Processing \$zone (\$current/\$total) - \$(round(elapsed, digits=1))s")
+end
 
 result = generate_energy_prices_for_all_zones(Date(2024, 10, 1);
     progress_callback=my_progress)
@@ -928,27 +928,14 @@ function generate_energy_prices_for_all_zones(date::Date;
             println("🚀 No workers found. Adding $desired_workers worker processes...")
             try
                 addprocs(desired_workers)
-
-                # Properly initialize workers with the project environment
-                @everywhere using Pkg
-                @everywhere Pkg.activate(".")
-                @everywhere Pkg.instantiate()
-
-                # Load the module on all workers
-                @everywhere include(joinpath(@__DIR__, "Euphemia.jl"))
-
-                # Test that workers can access the module
-                test_results = @sync [@spawnat w haskey(Base.loaded_modules, Base.PkgId(Base.UUID("2e9cd046-0924-5485-92f1-d5272153d98c"), "Euphemia")) for w in workers()]
+                if myid() == 1
+                    @everywhere include(joinpath(@__DIR__, "Euphemia.jl"))
+                end
 
                 worker_ids = filter(id -> id != 1, workers())
                 available_workers = length(worker_ids)
-
-                if all(test_results)
-                    workers_used = available_workers
-                    println("✅ Successfully added $available_workers workers with Euphemia module loaded: $worker_ids")
-                else
-                    error("Failed to load Euphemia module on all workers")
-                end
+                workers_used = available_workers
+                println("✅ Successfully added $available_workers workers: $worker_ids")
             catch e
                 @warn "Failed to add worker processes: $e. Running sequentially with 1 worker."
                 parallel = false
