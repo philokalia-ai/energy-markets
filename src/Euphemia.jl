@@ -548,7 +548,8 @@ function generate_energy_prices(bidding_zone::String, date::Date;
             )
 
             if !order_book_result.success
-                error("Alternative order book creation failed: $(order_book_result.message)")
+                @warn "Alternative order book creation failed for $bidding_zone on $date: $(order_book_result.message)"
+                return Dict{String,Float64}()  # Return empty result instead of throwing error
             end
 
             order_book = order_book_result.order_book

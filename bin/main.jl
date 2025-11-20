@@ -93,8 +93,13 @@ if total_zones_successful > 0
     successful_summaries = filter(s -> s.zones_successful > 0, result.daily_summaries)
     if !isempty(successful_summaries)
     avg_price = sum(s.avg_price * s.zones_successful for s in successful_summaries) / sum(s.zones_successful for s in successful_summaries)
-    min_price = minimum(s.min_price for s in successful_summaries if s.min_price > 0)
-    max_price = maximum(s.max_price for s in successful_summaries if s.max_price > 0)
+    
+    # Get valid prices (avoiding empty collection errors)
+    valid_min_prices = [s.min_price for s in successful_summaries if s.min_price > 0]
+    valid_max_prices = [s.max_price for s in successful_summaries if s.max_price > 0]
+    
+    min_price = isempty(valid_min_prices) ? 0.0 : minimum(valid_min_prices)
+    max_price = isempty(valid_max_prices) ? 0.0 : maximum(valid_max_prices)
     
     println("💰 Price Analysis:")
     println("   📊 Range: €$(min_price) - €$(max_price)/MWh")
