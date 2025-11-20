@@ -10,13 +10,15 @@ function cnxisok(cnx::LibPQ.Connection)
 end
 
 function newconnection()
-    cnx = LibPQ.Connection(
-        get(ENV, "ENERGY_CONN_STR", "");
-        connect_timeout=30,  # 30 second connection timeout
-        keepalives_idle=300,  # Start sending keepalives after 5 minutes
-        keepalives_interval=30,  # Send keepalive every 30 seconds
-        keepalives_count=3   # Close connection after 3 failed keepalives
-    )
+    conn_str = get(ENV, "ENERGY_CONN_STR", "")
+
+    # Add connection parameters to the connection string instead of constructor kwargs
+    if !contains(conn_str, "connect_timeout")
+        conn_str = conn_str * (contains(conn_str, "?") ? "&" : "?") *
+                   "connect_timeout=30&keepalives_idle=300&keepalives_interval=30&keepalives_count=3"
+    end
+
+    cnx = LibPQ.Connection(conn_str)
     !isdefined(LibPQ, :setnonblocking) && return cnx
     LibPQ.setnonblocking(cnx) && return cnx
     error("Could not set connection to nonblocking")
