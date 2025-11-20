@@ -32,6 +32,20 @@ end
 include("dbutils.jl")
 
 # =============================================================================
+# CUSTOM EXCEPTION TYPES
+# =============================================================================
+
+"""
+Custom exception for data availability issues that should not trigger retries.
+Used when essential data (loads, generators) is missing for a specific zone/date.
+"""
+struct DataUnavailableError <: Exception
+    message::String
+end
+
+Base.showerror(io::IO, e::DataUnavailableError) = print(io, "DataUnavailableError: ", e.message)
+
+# =============================================================================
 # SOLVER ENVIRONMENT CACHING SYSTEM
 # =============================================================================
 
@@ -548,8 +562,13 @@ function generate_energy_prices(bidding_zone::String, date::Date;
             )
 
             if !order_book_result.success
-                @warn "Alternative order book creation failed for $bidding_zone on $date: $(order_book_result.message)"
-                return Dict{String,Float64}()  # Return empty result instead of throwing error
+                # Check if this is a data availability issue (non-retryable)
+                if contains(order_book_result.message, "No load data found") ||
+                   contains(order_book_result.message, "No generators found")
+                    throw(DataUnavailableError("$(order_book_result.message) for $bidding_zone on $date"))
+                else
+                    error("Alternative order book creation failed: $(order_book_result.message)")
+                end
             end
 
             order_book = order_book_result.order_book
@@ -1604,14 +1623,25 @@ function _process_zones_sequential(zones_to_process, date, order_method, model, 
                 zone_error = string(e)
                 elapsed = time() - attempt_start
 
-                if attempt < max_retries
+                # Check if this is a non-retryable error (data availability)
+                is_retryable = !(e isa DataUnavailableError)
+
+                if is_retryable && attempt < max_retries
                     println("❌ ATTEMPT $attempt FAILED: $zone ($(round(elapsed, digits=2))s)")
                     println("   📝 Error: $(first(split(zone_error, '\n')))")
                     println("   🔄 Retrying in $(retry_delay)s...")
                     sleep(retry_delay)
+                    +
                 else
-                    println("❌ FINAL FAILURE: $zone ($(round(elapsed, digits=2))s after $max_retries attempts)")
-                    println("   📝 Error: $(first(split(zone_error, '\n')))")
+                    if e isa DataUnavailableError
+                        println("❌ DATA NOT AVAILABLE: $zone ($(round(elapsed, digits=2))s)")
+                        println("   📝 Reason: $(first(split(zone_error, '\n')))")
+                        println("   ⚠️  Skipping retries - data availability issue")
+                    else
+                        println("❌ FINAL FAILURE: $zone ($(round(elapsed, digits=2))s after $max_retries attempts)")
+                        println("   📝 Error: $(first(split(zone_error, '\n')))")
+                    end
+                    break  # Exit retry loop
                 end
             end
         end
