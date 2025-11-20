@@ -11,7 +11,11 @@ end
 
 function newconnection()
     cnx = LibPQ.Connection(
-        get(ENV, "ENERGY_CONN_STR", "")
+        get(ENV, "ENERGY_CONN_STR", "");
+        connect_timeout=30,  # 30 second connection timeout
+        keepalives_idle=300,  # Start sending keepalives after 5 minutes
+        keepalives_interval=30,  # Send keepalive every 30 seconds
+        keepalives_count=3   # Close connection after 3 failed keepalives
     )
     !isdefined(LibPQ, :setnonblocking) && return cnx
     LibPQ.setnonblocking(cnx) && return cnx
@@ -105,7 +109,7 @@ function ensure_energy_prices_table()
             id SERIAL PRIMARY KEY,
             date_time_utc TIMESTAMP NOT NULL,
             resolution_code VARCHAR(10) NOT NULL,
-            bidding_zone VARCHAR(10) NOT NULL,
+            bidding_zone VARCHAR(20) NOT NULL,
             contract_type VARCHAR(50) NOT NULL,
             price_eur_mwh NUMERIC(10,2) NOT NULL,
             currency VARCHAR(3) NOT NULL,
@@ -139,7 +143,7 @@ ON simulations.energy_prices (bidding_zone, contract_type, date_time_utc)
         create_optimization_runs_sql = """
         CREATE TABLE IF NOT EXISTS simulations.optimization_runs (
             id SERIAL PRIMARY KEY,
-            bidding_zone VARCHAR(10) NOT NULL,
+            bidding_zone VARCHAR(20) NOT NULL,
             optimization_date DATE NOT NULL,
             order_method VARCHAR(20) NOT NULL,
             model_type VARCHAR(20) NOT NULL,
