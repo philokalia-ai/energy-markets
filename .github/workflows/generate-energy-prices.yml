@@ -77,9 +77,11 @@ jobs:
         run: |
           if [ -n "$GUROBI_ACCESS_ID" ] && [ -n "$GUROBI_WLS_SECRET" ] && [ -n "$GUROBI_LICENSE_ID" ]; then
             # Create gurobi.lic file for Web License Service
-            echo "WLSACCESSID=$GUROBI_ACCESS_ID" > gurobi.lic
-            echo "WLSSECRET=$GUROBI_WLS_SECRET" >> gurobi.lic
-            echo "LICENSEID=$GUROBI_LICENSE_ID" >> gurobi.lic
+            {
+              echo "WLSACCESSID=$GUROBI_ACCESS_ID"
+              echo "WLSSECRET=$GUROBI_WLS_SECRET"
+              echo "LICENSEID=$GUROBI_LICENSE_ID"
+            } > gurobi.lic
             echo "GRB_LICENSE_FILE=$PWD/gurobi.lic" >> $GITHUB_ENV
             echo "✅ Gurobi WLS license configured with ID: $GUROBI_LICENSE_ID"
           else
