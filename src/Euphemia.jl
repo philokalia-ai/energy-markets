@@ -929,7 +929,7 @@ function generate_energy_prices_for_all_zones(date::Date;
             try
                 addprocs(desired_workers)
                 if myid() == 1
-                    @everywhere include("Euphemia.jl")
+                    @everywhere include(joinpath(@__DIR__, "Euphemia.jl"))
                 end
                 worker_ids = filter(id -> id != 1, workers())
                 available_workers = length(worker_ids)
