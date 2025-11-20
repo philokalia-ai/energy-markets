@@ -936,7 +936,7 @@ function generate_energy_prices_for_all_zones(date::Date;
                 workers_used = available_workers
                 println("✅ Successfully added $available_workers workers: $worker_ids")
             catch e
-                @warn "Failed to add worker processes: $e. Running sequentially."
+                @warn "Failed to add worker processes: $e. Running sequentially with 1 worker."
                 parallel = false
                 workers_used = 1
             end
@@ -1011,7 +1011,7 @@ function generate_energy_prices_for_all_zones(date::Date;
         )
     end
 
-    println("🚀 Processing $(length(zones_to_process)) zones$(parallel ? " in parallel" : " sequentially")...")
+    println("🚀 Processing $(length(zones_to_process)) zones$(parallel ? " in parallel with $workers_used workers" : " sequentially with 1 worker")...")
     println("="^60)
 
     # Choose processing method
