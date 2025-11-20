@@ -928,13 +928,27 @@ function generate_energy_prices_for_all_zones(date::Date;
             println("🚀 No workers found. Adding $desired_workers worker processes...")
             try
                 addprocs(desired_workers)
-                if myid() == 1
-                    @everywhere include(joinpath(@__DIR__, "Euphemia.jl"))
-                end
+                
+                # Properly initialize workers with the project environment
+                @everywhere using Pkg
+                @everywhere Pkg.activate(".")
+                @everywhere Pkg.instantiate()
+                
+                # Load the module on all workers
+                @everywhere include(joinpath(@__DIR__, "Euphemia.jl"))
+                
+                # Test that workers can access the module
+                test_results = @sync [@spawnat w haskey(Base.loaded_modules, Base.PkgId(Base.UUID("2e9cd046-0924-5485-92f1-d5272153d98c"), "Euphemia")) for w in workers()]
+                
                 worker_ids = filter(id -> id != 1, workers())
                 available_workers = length(worker_ids)
-                workers_used = available_workers
-                println("✅ Successfully added $available_workers workers: $worker_ids")
+                
+                if all(test_results)
+                    workers_used = available_workers
+                    println("✅ Successfully added $available_workers workers with Euphemia module loaded: $worker_ids")
+                else
+                    error("Failed to load Euphemia module on all workers")
+                end
             catch e
                 @warn "Failed to add worker processes: $e. Running sequentially with 1 worker."
                 parallel = false
@@ -1296,6 +1310,8 @@ function generate_energy_prices_for_date_range(start_date::Date, end_date::Date;
     failed_dates = 0
     total_zones_processed = 0
     total_zones_successful = 0
+    consecutive_failures = 0  # Track consecutive date failures
+    max_consecutive_failures = 5  # Stop after 5 consecutive date failures
 
     for (i, date) in enumerate(dates)
         date_start_time = time()
@@ -1328,8 +1344,18 @@ function generate_energy_prices_for_date_range(start_date::Date, end_date::Date;
             date_successful = zones_result.success_count > 0
             if date_successful
                 successful_dates += 1
+                consecutive_failures = 0  # Reset consecutive failure counter
             else
                 failed_dates += 1
+                consecutive_failures += 1
+            end
+
+            # Early termination if too many consecutive failures (likely systematic issue)
+            if consecutive_failures >= max_consecutive_failures
+                println("🛑 EARLY TERMINATION: $consecutive_failures consecutive date failures detected.")
+                println("   This suggests a systematic issue (e.g., worker initialization problem).")
+                println("   Stopping to prevent infinite loop and resource waste.")
+                break
             end
 
             # Update totals
@@ -1414,6 +1440,15 @@ function generate_energy_prices_for_date_range(start_date::Date, end_date::Date;
         catch date_error
             date_elapsed = time() - date_start_time
             failed_dates += 1
+            consecutive_failures += 1
+
+            # Early termination check for critical errors
+            if consecutive_failures >= max_consecutive_failures
+                println("🛑 EARLY TERMINATION: $consecutive_failures consecutive critical failures.")
+                println("   Error: $date_error")
+                println("   Stopping to prevent infinite loop and resource waste.")
+                break
+            end
 
             # Create failed date result
             date_result = (
