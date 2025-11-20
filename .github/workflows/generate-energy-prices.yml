@@ -55,7 +55,7 @@ concurrency:
 jobs:
   generate-prices:
     runs-on: [self-hosted, linux, ARM64]
-    timeout-minutes: 480 # 8 hours timeout
+    timeout-minutes: 2880 # 48 hours timeout - very generous for long processing
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
