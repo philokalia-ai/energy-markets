@@ -194,7 +194,8 @@ jobs:
             fi
           else
             echo "### ❌ Failure" >> $GITHUB_STEP_SUMMARY
-            echo "- **Error**: ${{ steps.generate.outputs.error_message || 'Unknown error' }}" >> $GITHUB_STEP_SUMMARY
+            ERROR_MSG="${{ steps.generate.outputs.error_message || 'Unknown error' }}"
+            echo "- **Error**: ${ERROR_MSG}" >> $GITHUB_STEP_SUMMARY
           fi
 
       - name: Notify on failure
