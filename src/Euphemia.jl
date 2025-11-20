@@ -903,6 +903,10 @@ function generate_energy_prices_for_all_zones(date::Date;
 
     # Determine number of workers for parallel processing
     workers_used = 1
+    println("🔍 Debug: parallel=$parallel, max_workers=$max_workers")
+    println("🔍 Debug: CPU threads detected: $(Sys.CPU_THREADS)")
+    println("🔍 Debug: Current workers: $(workers())")
+
     if parallel
         available_workers = length(workers())
         if available_workers == 0
@@ -924,7 +928,8 @@ function generate_energy_prices_for_all_zones(date::Date;
             end
         else
             workers_used = isnothing(max_workers) ? available_workers : min(max_workers, available_workers)
-            println("🚀 Parallel processing enabled with $workers_used existing workers")
+            worker_ids = workers()
+            println("🚀 Parallel processing enabled with $workers_used existing workers: $worker_ids")
         end
     end
 
