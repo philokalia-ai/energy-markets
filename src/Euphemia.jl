@@ -1069,8 +1069,10 @@ function generate_energy_prices_for_all_zones(date::Date;
 
         avg_prices = [r.avg_price for r in successful_results if r.avg_price > 0]
         if !isempty(avg_prices)
-            overall_min = minimum([r.min_price for r in successful_results if r.min_price > 0])
-            overall_max = maximum([r.max_price for r in successful_results if r.max_price > 0])
+            min_prices = [r.min_price for r in successful_results if r.min_price > 0]
+            max_prices = [r.max_price for r in successful_results if r.max_price > 0]
+            overall_min = isempty(min_prices) ? 0.0 : minimum(min_prices)
+            overall_max = isempty(max_prices) ? 0.0 : maximum(max_prices)
             overall_avg = sum(avg_prices) / length(avg_prices)
 
             println("\n💰 Price Statistics (successful zones):")
@@ -1486,8 +1488,10 @@ function generate_energy_prices_for_date_range(start_date::Date, end_date::Date;
         successful_summaries = filter(s -> s.zones_successful > 0, daily_summaries)
         if !isempty(successful_summaries)
             avg_daily_price = sum(s.avg_price * s.zones_successful for s in successful_summaries) / sum(s.zones_successful for s in successful_summaries)
-            overall_min = minimum(s.min_price for s in successful_summaries if s.min_price > 0)
-            overall_max = maximum(s.max_price for s in successful_summaries if s.max_price > 0)
+            min_prices = [s.min_price for s in successful_summaries if s.min_price > 0]
+            max_prices = [s.max_price for s in successful_summaries if s.max_price > 0]
+            overall_min = isempty(min_prices) ? 0.0 : minimum(min_prices)
+            overall_max = isempty(max_prices) ? 0.0 : maximum(max_prices)
 
             println("\n💰 Price Statistics:")
             println("   📊 Overall price range: €$(overall_min) - €$(overall_max)/MWh")
