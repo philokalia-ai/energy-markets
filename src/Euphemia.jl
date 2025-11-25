@@ -671,8 +671,13 @@ function generate_energy_prices(bidding_zone::String, date::Date;
         end
 
     catch e
-        println("❌ Error generating energy prices: $e")
-        return Dict{String,Float64}()
+        # Let DataUnavailableError bubble up to retry logic, handle all others
+        if e isa DataUnavailableError
+            rethrow(e)
+        else
+            println("❌ Error generating energy prices: $e")
+            return Dict{String,Float64}()
+        end
     end
 end
 
@@ -1060,7 +1065,7 @@ function generate_energy_prices_for_all_zones(date::Date;
 
     # Print summary
     println("\n" * "="^60)
-    println("🏁 BATCH PROCESSING COMPLETE")
+    println("🏁 PROCESSING OF AVAILABLE BIDDING ZONES FOR $date COMPLETE")
     println("="^60)
 
     total_processed = length(zones_to_process)
