@@ -883,8 +883,18 @@ When `parallel=true`, the function will:
 5. Progress callbacks work but are called less frequently due to batching
 
 Note: Parallel processing requires worker processes to be started before calling this function.
-Use `addprocs(n)` to add workers, and ensure all workers have access to the Euphemia package
-and database connections.
+Workers should be set up externally using `addprocs(n)` or `julia -p n`, and the Euphemia 
+package should be loaded on all workers using `@everywhere using Euphemia`.
+
+Example setup:
+```julia
+using Distributed
+addprocs(4)
+@everywhere using Euphemia
+
+# Now call parallel batch processing
+result = generate_energy_prices_for_all_zones(date; parallel=true)
+```
 
 # Progress Callback
 If provided, the progress_callback function will be called after each zone (sequential mode)
@@ -933,39 +943,15 @@ function generate_energy_prices_for_all_zones(date::Date;
     println("🔍 Debug: Current workers: $(workers())")
 
     if parallel
-        # Filter out the main process (ID 1) to get only actual worker processes
+        # Check for existing worker processes (user should have set these up)
         worker_ids = filter(id -> id != 1, workers())
         available_workers = length(worker_ids)
         println("🔍 Debug: Filtered worker IDs (excluding main process): $worker_ids")
 
         if available_workers == 0
-            # Auto-add workers if none exist and parallel is requested
-            # For machines with many cores, use more workers for better throughput
-            default_workers = if Sys.CPU_THREADS >= 64
-                min(20, Sys.CPU_THREADS ÷ 4)  # Use 1/4 of cores for shared machines
-            elseif Sys.CPU_THREADS >= 16
-                min(12, Sys.CPU_THREADS ÷ 2)   # Use 1/2 of cores for medium machines (increased cap)
-            else
-                min(6, Sys.CPU_THREADS)        # Less conservative for small machines
-            end
-
-            desired_workers = isnothing(max_workers) ? default_workers : max_workers
-            println("🚀 No workers found. Adding $desired_workers worker processes...")
-            try
-                addprocs(desired_workers)
-                if myid() == 1
-                    @everywhere include(joinpath(@__DIR__, "Euphemia.jl"))
-                end
-
-                worker_ids = filter(id -> id != 1, workers())
-                available_workers = length(worker_ids)
-                workers_used = available_workers
-                println("✅ Successfully added $available_workers workers: $worker_ids")
-            catch e
-                @warn "Failed to add worker processes: $e. Running sequentially with 1 worker."
-                parallel = false
-                workers_used = 1
-            end
+            @warn "Parallel processing requested but no worker processes found. Please start workers before calling this function. Falling back to sequential processing."
+            parallel = false
+            workers_used = 1
         else
             workers_used = isnothing(max_workers) ? available_workers : min(max_workers, available_workers)
             println("🚀 Parallel processing enabled with $workers_used existing workers: $worker_ids")
@@ -1261,11 +1247,11 @@ end
 - Automatic aggregation of statistics across the entire date range
 
 # Performance Considerations
-- Sequential date processing (parallel processing is applied per-date for zones)
-- Memory efficient - processes one date at a time
-- Database operations are batched per date when `save_to_db=true`
+- Parallel date processing when `parallel=true` (zones within each date are processed sequentially)
+- Sequential date processing when `parallel=false` (zones within each date are also processed sequentially)
+- Memory efficient - each worker processes one date's zones sequentially
+- Database operations are distributed across parallel date workers when `save_to_db=true`
 - Progress callbacks help monitor long-running operations
-- Each date's zones can be processed in parallel if `parallel=true`
 
 # Error Handling
 - Date-level errors are captured and reported but don't stop processing
@@ -1322,17 +1308,51 @@ function generate_energy_prices_for_date_range(start_date::Date, end_date::Date;
     failed_dates = 0
     total_zones_processed = 0
     total_zones_successful = 0
-    consecutive_failures = 0  # Track consecutive date failures
-    max_consecutive_failures = 5  # Stop after 5 consecutive date failures
 
-    for (i, date) in enumerate(dates)
+    # Choose processing method: parallel dates vs sequential dates
+    if parallel
+        # Check for existing worker processes
+        worker_ids = filter(id -> id != 1, workers())
+        available_workers = length(worker_ids)
+        
+        if available_workers == 0
+            @warn "Parallel date processing requested but no worker processes found. Please start workers before calling this function. Falling back to sequential date processing."
+            parallel = false
+        else
+            workers_used = isnothing(max_workers) ? available_workers : min(max_workers, available_workers)
+            println("🚀 Processing dates in parallel with $workers_used workers")
+            
+            # Process dates in parallel using pmap
+            date_results = _process_dates_parallel(
+                dates, order_method, model, optimizer, markup_factor, 
+                random_seed, silent, save_to_db, max_retries, retry_delay, 
+                fallback_zones, skip_existing, range_start_time
+            )
+            
+            # Aggregate results from parallel processing
+            successful_dates = sum(r.success for r in date_results)
+            failed_dates = length(date_results) - successful_dates
+            total_zones_processed = sum(r.zones_discovered for r in date_results)
+            total_zones_successful = sum(r.zones_successful for r in date_results)
+            
+            # Generate daily summaries from results
+            daily_summaries = _generate_daily_summaries(date_results)
+        end
+    end
+    
+    # Sequential date processing (fallback or when parallel=false)
+    if !parallel
+        consecutive_failures = 0  # Track consecutive date failures
+        max_consecutive_failures = 5  # Stop after 5 consecutive date failures
+        
+        for (i, date) in enumerate(dates)
         date_start_time = time()
 
         println("📅 [$i/$total_dates] Processing $date")
         println("-"^50)
 
         try
-            # Process all zones for this date
+            # Process all zones for this date (always sequential when in date loop)
             zones_result = generate_energy_prices_for_all_zones(date;
                 order_method=order_method,
                 model=model,
@@ -1346,9 +1366,9 @@ function generate_energy_prices_for_date_range(start_date::Date, end_date::Date;
                 fallback_zones=fallback_zones,
                 skip_existing=skip_existing,
                 progress_callback=nothing,  # Disable per-zone callbacks to avoid clutter
-                parallel=parallel,
-                max_workers=max_workers,
-                chunk_size=chunk_size)
+                parallel=false,  # Force sequential zones when processing dates in sequence
+                max_workers=1,
+                chunk_size=1)
 
             date_elapsed = time() - date_start_time
 
@@ -1505,7 +1525,8 @@ function generate_energy_prices_for_date_range(start_date::Date, end_date::Date;
         est_remaining = remaining_dates > 0 ? (total_elapsed / i) * remaining_dates / 60 : 0
         println("   📈 Overall progress: $i/$total_dates dates | Est. remaining: $(round(est_remaining, digits=1)) min")
         println()
-    end
+        end  # End sequential processing loop
+    end  # End sequential processing block
 
     total_time = time() - range_start_time
 
@@ -1568,6 +1589,172 @@ end
 # =============================================================================
 # HELPER FUNCTIONS FOR PARALLEL AND SEQUENTIAL PROCESSING
 # =============================================================================
+
+"""
+Helper function for processing dates in parallel.
+"""
+function _process_dates_parallel(dates, order_method, model, optimizer, markup_factor,
+    random_seed, silent, save_to_db, max_retries, retry_delay, 
+    fallback_zones, skip_existing, range_start_time)
+    
+    println("📦 Processing $(length(dates)) dates in parallel...")
+    
+    # Create arguments tuple for each date
+    date_args = [(date, order_method, model, optimizer, markup_factor, random_seed, 
+                  silent, save_to_db, max_retries, retry_delay, fallback_zones, 
+                  skip_existing, range_start_time) for date in dates]
+    
+    # Process dates in parallel using pmap
+    date_results = pmap(_parallel_date_processor, date_args)
+    
+    return date_results
+end
+
+"""
+Wrapper function for pmap to process a single date.
+"""
+function _parallel_date_processor(args)
+    date, order_method, model, optimizer, markup_factor, random_seed, 
+    silent, save_to_db, max_retries, retry_delay, fallback_zones, 
+    skip_existing, range_start_time = args
+    
+    date_start_time = time()
+    worker_id = myid()
+    
+    try
+        println("📅 [Worker $worker_id] Processing $date")
+        
+        # Process all zones for this date (always sequential in parallel date mode)
+        zones_result = generate_energy_prices_for_all_zones(date;
+            order_method=order_method,
+            model=model,
+            optimizer=optimizer,
+            markup_factor=markup_factor,
+            random_seed=random_seed,
+            silent=silent,
+            save_to_db=save_to_db,
+            max_retries=max_retries,
+            retry_delay=retry_delay,
+            fallback_zones=fallback_zones,
+            skip_existing=skip_existing,
+            progress_callback=nothing,  # No callbacks in parallel mode
+            parallel=false,  # Always sequential zones in parallel date mode
+            max_workers=1,
+            chunk_size=1)
+        
+        date_elapsed = time() - date_start_time
+        date_successful = zones_result.success_count > 0
+        
+        if date_successful
+            println("✅ [Worker $worker_id] Date $date: $(zones_result.success_count)/$(zones_result.total_zones) zones successful ($(round(date_elapsed/60, digits=1)) min)")
+        else
+            println("❌ [Worker $worker_id] Date $date: All zones failed ($(round(date_elapsed/60, digits=1)) min)")
+        end
+        
+        return (
+            date=date,
+            success=date_successful,
+            zones_result=zones_result,
+            elapsed_time=date_elapsed,
+            zones_discovered=zones_result.total_zones,
+            zones_successful=zones_result.success_count,
+            zones_failed=zones_result.failure_count,
+            zones_skipped=zones_result.skipped_count,
+            worker_id=worker_id
+        )
+        
+    catch date_error
+        date_elapsed = time() - date_start_time
+        println("❌ [Worker $worker_id] Date $date: CRITICAL FAILURE - $date_error ($(round(date_elapsed/60, digits=1)) min)")
+        
+        return (
+            date=date,
+            success=false,
+            zones_result=nothing,
+            elapsed_time=date_elapsed,
+            zones_discovered=0,
+            zones_successful=0,
+            zones_failed=0,
+            zones_skipped=0,
+            worker_id=worker_id
+        )
+    end
+end
+
+"""
+Generate daily summaries from parallel date processing results.
+"""
+function _generate_daily_summaries(date_results)
+    daily_summaries = NamedTuple[]
+    
+    for result in date_results
+        if result.success && result.zones_result !== nothing
+            zones_result = result.zones_result
+            
+            if zones_result.success_count > 0
+                successful_results = filter(r -> r.success, zones_result.results)
+                all_prices = Float64[]
+                total_periods = 0
+                
+                for zone_result in successful_results
+                    if !isempty(zone_result.prices)
+                        append!(all_prices, collect(values(zone_result.prices)))
+                        total_periods += zone_result.periods
+                    end
+                end
+                
+                if !isempty(all_prices)
+                    daily_summary = (
+                        date=result.date,
+                        zones_total=zones_result.total_zones,
+                        zones_successful=zones_result.success_count,
+                        success_rate=round(100 * zones_result.success_count / max(1, zones_result.total_zones), digits=1),
+                        avg_price=round(sum(all_prices) / length(all_prices), digits=2),
+                        min_price=round(minimum(all_prices), digits=2),
+                        max_price=round(maximum(all_prices), digits=2),
+                        total_periods=total_periods
+                    )
+                else
+                    daily_summary = (
+                        date=result.date,
+                        zones_total=zones_result.total_zones,
+                        zones_successful=0,
+                        success_rate=0.0,
+                        avg_price=0.0,
+                        min_price=0.0,
+                        max_price=0.0,
+                        total_periods=0
+                    )
+                end
+            else
+                daily_summary = (
+                    date=result.date,
+                    zones_total=zones_result.total_zones,
+                    zones_successful=0,
+                    success_rate=0.0,
+                    avg_price=0.0,
+                    min_price=0.0,
+                    max_price=0.0,
+                    total_periods=0
+                )
+            end
+        else
+            daily_summary = (
+                date=result.date,
+                zones_total=0,
+                zones_successful=0,
+                success_rate=0.0,
+                avg_price=0.0,
+                min_price=0.0,
+                max_price=0.0,
+                total_periods=0
+            )
+        end
+        push!(daily_summaries, daily_summary)
+    end
+    
+    return daily_summaries
+end
 
 """
 Helper function for processing zones sequentially.
