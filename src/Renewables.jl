@@ -22,7 +22,7 @@ function get_generation_forecast_for_wind_and_solar(bidding_zone::String, day::D
         resolution_code,
         area_map_code,
         production_type,
-        day_ahead_generation_forecast_mw -- 2 new columns as of 2025/11/26: IntradayGenerationForecast[MW], CurrentGenerationForecast[MW]	
+        day_ahead_generation_forecast_mw -- Note: Table also has intraday_generation_forecast_mw, current_generation_forecast_mw (discovered 2025-11-26)
     FROM 
         entsoe.generation_forecasts_for_wind_and_solar
     WHERE
