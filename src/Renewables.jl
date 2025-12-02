@@ -18,18 +18,18 @@ end
 function get_generation_forecast_for_wind_and_solar(bidding_zone::String, day::Dates.Date)
     query = """
     SELECT
-        date_time,
+        date_time_utc,
         resolution_code,
-        map_code,
+        area_map_code,
         production_type,
-        aggregated_generation_forecast
+        day_ahead_generation_forecast_mw -- 2 new columns as of 2025/11/26: IntradayGenerationForecast[MW], CurrentGenerationForecast[MW]	
     FROM 
-        entsoe.day_ahead_generation_forecast_for_wind_and_solar
+        entsoe.generation_forecasts_for_wind_and_solar
     WHERE 
-        area_type_code = 'BZN' -- BZN, CTY, CTA
-        AND map_code = '$bidding_zone'
-        AND date(date_time) = '$day'
-    ORDER BY date_time, map_code
+        area_type_code = 'BZN' -- BZN, CTY, CTA, TODO: check if others are needed, e.g. 'BZN/CTA/CTY' for all three
+        AND area_map_code = '$bidding_zone'
+        AND date(date_time_utc) = '$day'
+    ORDER BY date_time_utc, area_map_code
     """
 
     df = Euphemia.sql2df_with_retry(query)

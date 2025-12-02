@@ -12,16 +12,16 @@ end
 function get_loads(bidding_zone::String, day::Dates.Date)
     query = """
     SELECT
-        date_time,
+        date_time_utc,
         resolution_code,
-        total_load_value
+        total_load_mw
     FROM 
-        entsoe.ACTUAL_TOTAL_LOAD
+        entsoe.actual_total_load
     WHERE 
-        map_code = '$bidding_zone'
-        AND area_type_code = 'BZN'
-        AND date(date_time) = '$day'
-    ORDER BY date_time;
+        area_map_code = '$bidding_zone'
+        AND area_type_code = 'BZN' -- BZN, CTY, CTA, TODO: MIGHT NEED OTHERS, BZN/CTA, or BZN/CTA/CTY for all three 
+        AND date(date_time_utc) = '$day'
+    ORDER BY date_time_utc;
     """
 
     df = Euphemia.sql2df_with_retry(query)
