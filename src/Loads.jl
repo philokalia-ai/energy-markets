@@ -17,10 +17,10 @@ function get_loads(bidding_zone::String, day::Dates.Date)
         total_load_mw
     FROM 
         entsoe.actual_total_load
-    WHERE 
-        area_map_code = '$bidding_zone'
-        AND area_type_code = 'BZN' -- BZN, CTY, CTA, TODO: MIGHT NEED OTHERS, BZN/CTA, or BZN/CTA/CTY for all three 
-        AND date(date_time_utc) = '$day'
+    WHERE
+        date(date_time_utc) = '$day'
+        AND area_map_code = '$bidding_zone'
+        AND area_type_code IN ('BZN', 'BZN/CTA', 'BZN/CTY', 'BZN/CTA/CTY') 
     ORDER BY date_time_utc;
     """
 

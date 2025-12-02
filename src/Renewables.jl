@@ -25,10 +25,10 @@ function get_generation_forecast_for_wind_and_solar(bidding_zone::String, day::D
         day_ahead_generation_forecast_mw -- 2 new columns as of 2025/11/26: IntradayGenerationForecast[MW], CurrentGenerationForecast[MW]	
     FROM 
         entsoe.generation_forecasts_for_wind_and_solar
-    WHERE 
-        area_type_code = 'BZN' -- BZN, CTY, CTA, TODO: check if others are needed, e.g. 'BZN/CTA/CTY' for all three
+    WHERE
+        date(date_time_utc) = '$day'
         AND area_map_code = '$bidding_zone'
-        AND date(date_time_utc) = '$day'
+        AND area_type_code IN ('BZN', 'BZN/CTA', 'BZN/CTY', 'BZN/CTA/CTY') 
     ORDER BY date_time_utc, area_map_code
     """
 
