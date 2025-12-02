@@ -12,13 +12,14 @@ end
 function newconnection()
     conn_str = get(ENV, "ENERGY_CONN_STR", "")
 
-    # Add connection parameters to the connection string instead of constructor kwargs
-    if !contains(conn_str, "connect_timeout")
-        conn_str = conn_str * (contains(conn_str, "?") ? "&" : "?") *
-                   "connect_timeout=30&keepalives_idle=300&keepalives_interval=30&keepalives_count=3"
-    end
-
-    cnx = LibPQ.Connection(conn_str)
+    # Pass connection parameters as keyword arguments to LibPQ.Connection
+    # This approach works with both URL format and key=value format connection strings
+    cnx = LibPQ.Connection(conn_str;
+        connect_timeout=30,
+        keepalives_idle=300,
+        keepalives_interval=30,
+        keepalives_count=3
+    )
     !isdefined(LibPQ, :setnonblocking) && return cnx
     LibPQ.setnonblocking(cnx) && return cnx
     error("Could not set connection to nonblocking")
