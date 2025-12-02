@@ -108,7 +108,7 @@ The project uses PostgreSQL with two main schemas:
 
 ### ENTSO-E Schema (`entsoe.*`)
 - `entsoe.production_and_generation_units` - Production unit data with commissioning status and bidding zone mapping
-- `entsoe.ACTUAL_TOTAL_LOAD` - Historical electricity demand data by bidding zone (filtered by area_type_code: BZN, BZN/CTA, BZN/CTY, BZN/CTA/CTY)
+- `entsoe.actual_total_load` - Historical electricity demand data by bidding zone (filtered by area_type_code: BZN, BZN/CTA, BZN/CTY, BZN/CTA/CTY)
 - `entsoe.generation_forecasts_for_wind_and_solar` - Renewable generation forecasts (filtered by same area_type_code values)
 - `entsoe.offered_transfer_capacities_implicit` - Cross-border transfer capacity data between bidding zones
 
