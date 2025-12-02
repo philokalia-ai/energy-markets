@@ -1821,7 +1821,6 @@ function _process_zones_sequential(zones_to_process, date, order_method, model, 
                     println("   📝 Error: $(first(split(zone_error, '\n')))")
                     println("   🔄 Retrying in $(retry_delay)s...")
                     sleep(retry_delay)
-                    +
                 else
                     if e isa DataUnavailableError
                         println("❌ DATA NOT AVAILABLE: $zone ($(round(elapsed, digits=2))s)")
