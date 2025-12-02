@@ -122,7 +122,20 @@ jobs:
               Euphemia.sql2df(\"ALTER TABLE simulations.optimization_runs ALTER COLUMN bidding_zone TYPE VARCHAR(20);\")
               println(\"✅ Schema updated successfully\")
             catch e
-              println(\"ℹ️  Schema update not needed or already applied: \$e\")
+              msg = string(e)
+              # Expected/harmless errors that we can ignore
+              if occursin(\"already exists\", msg) || 
+                 occursin(\"does not exist\", msg) || 
+                 occursin(\"cannot alter type of a column\", msg) ||
+                 occursin(\"type \\\"varchar\\\" already exists\", msg) ||
+                 occursin(\"column \\\"bidding_zone\\\" of relation\", msg)
+                println(\"ℹ️  Schema update not needed or already applied: \$e\")
+              else
+                # Unexpected errors should fail the workflow
+                println(\"❌ Schema update failed with unexpected error: \$e\")
+                println(\"❌ This indicates a real problem (connection, permissions, etc.)\")
+                exit(1)
+              end
             end
           "
           
