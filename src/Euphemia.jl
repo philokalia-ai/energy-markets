@@ -1314,139 +1314,188 @@ function generate_energy_prices_for_date_range(start_date::Date, end_date::Date;
         # Check for existing worker processes
         worker_ids = filter(id -> id != 1, workers())
         available_workers = length(worker_ids)
-        
+
         if available_workers == 0
             @warn "Parallel date processing requested but no worker processes found. Please start workers before calling this function. Falling back to sequential date processing."
             parallel = false
         else
             workers_used = isnothing(max_workers) ? available_workers : min(max_workers, available_workers)
             println("🚀 Processing dates in parallel with $workers_used workers")
-            
+
             # Process dates in parallel using pmap
             date_results = _process_dates_parallel(
-                dates, order_method, model, optimizer, markup_factor, 
-                random_seed, silent, save_to_db, max_retries, retry_delay, 
+                dates, order_method, model, optimizer, markup_factor,
+                random_seed, silent, save_to_db, max_retries, retry_delay,
                 fallback_zones, skip_existing, range_start_time
             )
-            
+
             # Aggregate results from parallel processing
             successful_dates = sum(r.success for r in date_results)
             failed_dates = length(date_results) - successful_dates
             total_zones_processed = sum(r.zones_discovered for r in date_results)
             total_zones_successful = sum(r.zones_successful for r in date_results)
-            
+
             # Generate daily summaries from results
             daily_summaries = _generate_daily_summaries(date_results)
         end
-    end
-    
-    # Sequential date processing (fallback or when parallel=false)
-    if !parallel
+    else
+        # Sequential date processing (fallback or when parallel=false)
         consecutive_failures = 0  # Track consecutive date failures
         max_consecutive_failures = 5  # Stop after 5 consecutive date failures
-        
+
         for (i, date) in enumerate(dates)
-        date_start_time = time()
+            date_start_time = time()
 
-        println("📅 [$i/$total_dates] Processing $date")
-        println("-"^50)
+            println("📅 [$i/$total_dates] Processing $date")
+            println("-"^50)
 
-        try
-            # Process all zones for this date (always sequential when in date loop)
-            zones_result = generate_energy_prices_for_all_zones(date;
-                order_method=order_method,
-                model=model,
-                optimizer=optimizer,
-                markup_factor=markup_factor,
-                random_seed=random_seed,
-                silent=silent,
-                save_to_db=save_to_db,
-                max_retries=max_retries,
-                retry_delay=retry_delay,
-                fallback_zones=fallback_zones,
-                skip_existing=skip_existing,
-                progress_callback=nothing,  # Disable per-zone callbacks to avoid clutter
-                parallel=false,  # Force sequential zones when processing dates in sequence
-                max_workers=1,
-                chunk_size=1)
+            try
+                # Process all zones for this date (always sequential when in date loop)
+                zones_result = generate_energy_prices_for_all_zones(date;
+                    order_method=order_method,
+                    model=model,
+                    optimizer=optimizer,
+                    markup_factor=markup_factor,
+                    random_seed=random_seed,
+                    silent=silent,
+                    save_to_db=save_to_db,
+                    max_retries=max_retries,
+                    retry_delay=retry_delay,
+                    fallback_zones=fallback_zones,
+                    skip_existing=skip_existing,
+                    progress_callback=nothing,  # Disable per-zone callbacks to avoid clutter
+                    parallel=false,  # Force sequential zones when processing dates in sequence
+                    max_workers=1,
+                    chunk_size=1)
 
-            date_elapsed = time() - date_start_time
+                date_elapsed = time() - date_start_time
 
-            # Determine if date was successful (at least one zone succeeded)
-            date_successful = zones_result.success_count > 0
-            if date_successful
-                successful_dates += 1
-                consecutive_failures = 0  # Reset consecutive failure counter
-            else
-                failed_dates += 1
-                consecutive_failures += 1
-            end
-
-            # Early termination if too many consecutive failures (likely systematic issue)
-            if consecutive_failures >= max_consecutive_failures
-                println("🛑 EARLY TERMINATION: $consecutive_failures consecutive date failures detected.")
-                println("   This suggests a systematic issue (e.g., worker initialization problem).")
-                println("   Stopping to prevent infinite loop and resource waste.")
-                break
-            end
-
-            # Update totals
-            total_zones_processed += zones_result.success_count + zones_result.failure_count
-            total_zones_successful += zones_result.success_count
-
-            # Create date result
-            date_result = (
-                date=date,
-                success=date_successful,
-                zones_result=zones_result,
-                elapsed_time=date_elapsed,
-                zones_discovered=zones_result.total_zones,
-                zones_successful=zones_result.success_count,
-                zones_failed=zones_result.failure_count,
-                zones_skipped=zones_result.skipped_count
-            )
-            push!(date_results, date_result)
-
-            # Create daily summary with price statistics
-            if zones_result.success_count > 0
-                successful_results = filter(r -> r.success, zones_result.results)
-                all_prices = Float64[]
-                total_periods = 0
-
-                for zone_result in successful_results
-                    if !isempty(zone_result.prices)
-                        append!(all_prices, collect(values(zone_result.prices)))
-                        total_periods += zone_result.periods
-                    end
+                # Determine if date was successful (at least one zone succeeded)
+                date_successful = zones_result.success_count > 0
+                if date_successful
+                    successful_dates += 1
+                    consecutive_failures = 0  # Reset consecutive failure counter
+                else
+                    failed_dates += 1
+                    consecutive_failures += 1
                 end
 
-                if !isempty(all_prices)
-                    daily_summary = (
-                        date=date,
-                        zones_total=zones_result.total_zones,
-                        zones_successful=zones_result.success_count,
-                        success_rate=round(100 * zones_result.success_count / max(1, zones_result.total_zones), digits=1),
-                        avg_price=round(sum(all_prices) / length(all_prices), digits=2),
-                        min_price=round(minimum(all_prices), digits=2),
-                        max_price=round(maximum(all_prices), digits=2),
-                        total_periods=total_periods
-                    )
+                # Early termination if too many consecutive failures (likely systematic issue)
+                if consecutive_failures >= max_consecutive_failures
+                    println("🛑 EARLY TERMINATION: $consecutive_failures consecutive date failures detected.")
+                    println("   This suggests a systematic issue (e.g., worker initialization problem).")
+                    println("   Stopping to prevent infinite loop and resource waste.")
+                    break
+                end
+
+                # Update totals
+                total_zones_processed += zones_result.success_count + zones_result.failure_count
+                total_zones_successful += zones_result.success_count
+
+                # Create date result
+                date_result = (
+                    date=date,
+                    success=date_successful,
+                    zones_result=zones_result,
+                    elapsed_time=date_elapsed,
+                    zones_discovered=zones_result.total_zones,
+                    zones_successful=zones_result.success_count,
+                    zones_failed=zones_result.failure_count,
+                    zones_skipped=zones_result.skipped_count
+                )
+                push!(date_results, date_result)
+
+                # Create daily summary with price statistics
+                if zones_result.success_count > 0
+                    successful_results = filter(r -> r.success, zones_result.results)
+                    all_prices = Float64[]
+                    total_periods = 0
+
+                    for zone_result in successful_results
+                        if !isempty(zone_result.prices)
+                            append!(all_prices, collect(values(zone_result.prices)))
+                            total_periods += zone_result.periods
+                        end
+                    end
+
+                    if !isempty(all_prices)
+                        daily_summary = (
+                            date=date,
+                            zones_total=zones_result.total_zones,
+                            zones_successful=zones_result.success_count,
+                            success_rate=round(100 * zones_result.success_count / max(1, zones_result.total_zones), digits=1),
+                            avg_price=round(sum(all_prices) / length(all_prices), digits=2),
+                            min_price=round(minimum(all_prices), digits=2),
+                            max_price=round(maximum(all_prices), digits=2),
+                            total_periods=total_periods
+                        )
+                    else
+                        daily_summary = (
+                            date=date,
+                            zones_total=zones_result.total_zones,
+                            zones_successful=zones_result.success_count,
+                            success_rate=round(100 * zones_result.success_count / max(1, zones_result.total_zones), digits=1),
+                            avg_price=0.0,
+                            min_price=0.0,
+                            max_price=0.0,
+                            total_periods=0
+                        )
+                    end
                 else
                     daily_summary = (
                         date=date,
                         zones_total=zones_result.total_zones,
-                        zones_successful=zones_result.success_count,
-                        success_rate=round(100 * zones_result.success_count / max(1, zones_result.total_zones), digits=1),
+                        zones_successful=0,
+                        success_rate=0.0,
                         avg_price=0.0,
                         min_price=0.0,
                         max_price=0.0,
                         total_periods=0
                     )
                 end
-            else
+                push!(daily_summaries, daily_summary)
+
+                # Print date summary
+                if date_successful
+                    println("✅ Date $date: $(zones_result.success_count)/$(zones_result.total_zones) zones successful")
+                    if zones_result.success_count > 0 && daily_summary.avg_price > 0
+                        println("   💰 Price range: €$(daily_summary.min_price) - €$(daily_summary.max_price)/MWh (avg: €$(daily_summary.avg_price))")
+                    end
+                else
+                    println("❌ Date $date: All zones failed")
+                end
+
+                println("   ⏱️  Date processing time: $(round(date_elapsed/60, digits=1)) minutes")
+
+            catch date_error
+                date_elapsed = time() - date_start_time
+                failed_dates += 1
+                consecutive_failures += 1
+
+                # Early termination check for critical errors
+                if consecutive_failures >= max_consecutive_failures
+                    println("🛑 EARLY TERMINATION: $consecutive_failures consecutive critical failures.")
+                    println("   Error: $date_error")
+                    println("   Stopping to prevent infinite loop and resource waste.")
+                    break
+                end
+
+                # Create failed date result
+                date_result = (
+                    date=date,
+                    success=false,
+                    zones_result=nothing,
+                    elapsed_time=date_elapsed,
+                    zones_discovered=0,
+                    zones_successful=0,
+                    zones_failed=0,
+                    zones_skipped=0
+                )
+                push!(date_results, date_result)
+
                 daily_summary = (
                     date=date,
-                    zones_total=zones_result.total_zones,
+                    zones_total=0,
                     zones_successful=0,
                     success_rate=0.0,
                     avg_price=0.0,
@@ -1454,77 +1503,26 @@ function generate_energy_prices_for_date_range(start_date::Date, end_date::Date;
                     max_price=0.0,
                     total_periods=0
                 )
-            end
-            push!(daily_summaries, daily_summary)
+                push!(daily_summaries, daily_summary)
 
-            # Print date summary
-            if date_successful
-                println("✅ Date $date: $(zones_result.success_count)/$(zones_result.total_zones) zones successful")
-                if zones_result.success_count > 0 && daily_summary.avg_price > 0
-                    println("   💰 Price range: €$(daily_summary.min_price) - €$(daily_summary.max_price)/MWh (avg: €$(daily_summary.avg_price))")
+                println("❌ Date $date: CRITICAL FAILURE - $(date_error)")
+            end
+
+            # Call progress callback if provided
+            if progress_callback !== nothing
+                try
+                    progress_callback(date, i, total_dates, time() - range_start_time)
+                catch callback_error
+                    @warn "Date-level progress callback failed: $callback_error"
                 end
-            else
-                println("❌ Date $date: All zones failed")
             end
 
-            println("   ⏱️  Date processing time: $(round(date_elapsed/60, digits=1)) minutes")
-
-        catch date_error
-            date_elapsed = time() - date_start_time
-            failed_dates += 1
-            consecutive_failures += 1
-
-            # Early termination check for critical errors
-            if consecutive_failures >= max_consecutive_failures
-                println("🛑 EARLY TERMINATION: $consecutive_failures consecutive critical failures.")
-                println("   Error: $date_error")
-                println("   Stopping to prevent infinite loop and resource waste.")
-                break
-            end
-
-            # Create failed date result
-            date_result = (
-                date=date,
-                success=false,
-                zones_result=nothing,
-                elapsed_time=date_elapsed,
-                zones_discovered=0,
-                zones_successful=0,
-                zones_failed=0,
-                zones_skipped=0
-            )
-            push!(date_results, date_result)
-
-            daily_summary = (
-                date=date,
-                zones_total=0,
-                zones_successful=0,
-                success_rate=0.0,
-                avg_price=0.0,
-                min_price=0.0,
-                max_price=0.0,
-                total_periods=0
-            )
-            push!(daily_summaries, daily_summary)
-
-            println("❌ Date $date: CRITICAL FAILURE - $(date_error)")
-        end
-
-        # Call progress callback if provided
-        if progress_callback !== nothing
-            try
-                progress_callback(date, i, total_dates, time() - range_start_time)
-            catch callback_error
-                @warn "Date-level progress callback failed: $callback_error"
-            end
-        end
-
-        # Overall progress update
-        total_elapsed = time() - range_start_time
-        remaining_dates = total_dates - i
-        est_remaining = remaining_dates > 0 ? (total_elapsed / i) * remaining_dates / 60 : 0
-        println("   📈 Overall progress: $i/$total_dates dates | Est. remaining: $(round(est_remaining, digits=1)) min")
-        println()
+            # Overall progress update
+            total_elapsed = time() - range_start_time
+            remaining_dates = total_dates - i
+            est_remaining = remaining_dates > 0 ? (total_elapsed / i) * remaining_dates / 60 : 0
+            println("   📈 Overall progress: $i/$total_dates dates | Est. remaining: $(round(est_remaining, digits=1)) min")
+            println()
         end  # End sequential processing loop
     end  # End sequential processing block
 
@@ -1594,19 +1592,19 @@ end
 Helper function for processing dates in parallel.
 """
 function _process_dates_parallel(dates, order_method, model, optimizer, markup_factor,
-    random_seed, silent, save_to_db, max_retries, retry_delay, 
+    random_seed, silent, save_to_db, max_retries, retry_delay,
     fallback_zones, skip_existing, range_start_time)
-    
+
     println("📦 Processing $(length(dates)) dates in parallel...")
-    
+
     # Create arguments tuple for each date
-    date_args = [(date, order_method, model, optimizer, markup_factor, random_seed, 
-                  silent, save_to_db, max_retries, retry_delay, fallback_zones, 
-                  skip_existing, range_start_time) for date in dates]
-    
+    date_args = [(date, order_method, model, optimizer, markup_factor, random_seed,
+        silent, save_to_db, max_retries, retry_delay, fallback_zones,
+        skip_existing, range_start_time) for date in dates]
+
     # Process dates in parallel using pmap
     date_results = pmap(_parallel_date_processor, date_args)
-    
+
     return date_results
 end
 
@@ -1614,16 +1612,16 @@ end
 Wrapper function for pmap to process a single date.
 """
 function _parallel_date_processor(args)
-    date, order_method, model, optimizer, markup_factor, random_seed, 
-    silent, save_to_db, max_retries, retry_delay, fallback_zones, 
+    date, order_method, model, optimizer, markup_factor, random_seed,
+    silent, save_to_db, max_retries, retry_delay, fallback_zones,
     skip_existing, range_start_time = args
-    
+
     date_start_time = time()
     worker_id = myid()
-    
+
     try
         println("📅 [Worker $worker_id] Processing $date")
-        
+
         # Process all zones for this date (always sequential in parallel date mode)
         zones_result = generate_energy_prices_for_all_zones(date;
             order_method=order_method,
@@ -1641,16 +1639,16 @@ function _parallel_date_processor(args)
             parallel=false,  # Always sequential zones in parallel date mode
             max_workers=1,
             chunk_size=1)
-        
+
         date_elapsed = time() - date_start_time
         date_successful = zones_result.success_count > 0
-        
+
         if date_successful
             println("✅ [Worker $worker_id] Date $date: $(zones_result.success_count)/$(zones_result.total_zones) zones successful ($(round(date_elapsed/60, digits=1)) min)")
         else
             println("❌ [Worker $worker_id] Date $date: All zones failed ($(round(date_elapsed/60, digits=1)) min)")
         end
-        
+
         return (
             date=date,
             success=date_successful,
@@ -1662,11 +1660,11 @@ function _parallel_date_processor(args)
             zones_skipped=zones_result.skipped_count,
             worker_id=worker_id
         )
-        
+
     catch date_error
         date_elapsed = time() - date_start_time
         println("❌ [Worker $worker_id] Date $date: CRITICAL FAILURE - $date_error ($(round(date_elapsed/60, digits=1)) min)")
-        
+
         return (
             date=date,
             success=false,
@@ -1686,23 +1684,23 @@ Generate daily summaries from parallel date processing results.
 """
 function _generate_daily_summaries(date_results)
     daily_summaries = NamedTuple[]
-    
+
     for result in date_results
         if result.success && result.zones_result !== nothing
             zones_result = result.zones_result
-            
+
             if zones_result.success_count > 0
                 successful_results = filter(r -> r.success, zones_result.results)
                 all_prices = Float64[]
                 total_periods = 0
-                
+
                 for zone_result in successful_results
                     if !isempty(zone_result.prices)
                         append!(all_prices, collect(values(zone_result.prices)))
                         total_periods += zone_result.periods
                     end
                 end
-                
+
                 if !isempty(all_prices)
                     daily_summary = (
                         date=result.date,
@@ -1752,7 +1750,7 @@ function _generate_daily_summaries(date_results)
         end
         push!(daily_summaries, daily_summary)
     end
-    
+
     return daily_summaries
 end
 
