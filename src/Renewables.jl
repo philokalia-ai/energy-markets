@@ -26,13 +26,13 @@ function get_generation_forecast_for_wind_and_solar(bidding_zone::String, day::D
     FROM 
         entsoe.generation_forecasts_for_wind_and_solar
     WHERE
-        date(date_time_utc) = '$day'
-        AND area_map_code = '$bidding_zone'
+        date(date_time_utc) = \$1
+        AND area_map_code = \$2
         AND area_type_code IN ('BZN', 'BZN/CTA', 'BZN/CTY', 'BZN/CTA/CTY') -- All codes corresponding to bzns
     ORDER BY date_time_utc, area_map_code
     """
 
-    df = Euphemia.sql2df_with_retry(query)
+    df = Euphemia.sql2df_with_retry(query, [day, bidding_zone])
     return [
         RenewablesGenerationForecast(
             # Format datetime to match load data - include minutes for sub-hourly data
