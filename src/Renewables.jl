@@ -36,11 +36,11 @@ function get_generation_forecast_for_wind_and_solar(bidding_zone::String, day::D
     return [
         RenewablesGenerationForecast(
             # Format datetime to match load data - include minutes for sub-hourly data
-            Dates.format(row.date_time, "yyyymmdd-HHMM"),  # e.g. "20250624-0030" for 30-min resolution
+            Dates.format(row.date_time_utc, "yyyymmdd-HHMM"),  # Fixed: use date_time_utc
             row.resolution_code,
-            row.map_code,
-            row.production_type,  # convert to Symbol
-            row.aggregated_generation_forecast
+            row.area_map_code,  # Fixed: use area_map_code
+            row.production_type,
+            row.day_ahead_generation_forecast_mw  # Fixed: use day_ahead_generation_forecast_mw
         ) for row in eachrow(df)
     ]
 end
