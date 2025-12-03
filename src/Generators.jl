@@ -133,17 +133,17 @@ function get_generators(map_code::String, day::Dates.Date)
         production_unit_status = 'COMMISSIONED'
         AND generation_unit_status = 'COMMISSIONED'
         AND area_type_code IN  ('BZN', 'BZN/CTA')
-        AND map_code = '$map_code'
-        AND DATE('$day') 
+        AND map_code = \$1
+        AND DATE(\$2) 
             BETWEEN DATE(valid_from) 
             AND COALESCE(
                     DATE(valid_to), 
-                    DATE('$day') + INTERVAL '1 year'
+                    DATE(\$2) + INTERVAL '1 year'
                 )
 
     """
 
-    df = Euphemia.sql2df_with_retry(query)
+    df = Euphemia.sql2df_with_retry(query, [map_code, day])
     return [
         Generator(
             row.generation_unit_code,                    # code

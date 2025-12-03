@@ -12,19 +12,19 @@ end
 function get_loads(bidding_zone::String, day::Dates.Date)
     query = """
     SELECT
-        date_time,
+        date_time_utc,
         resolution_code,
-        total_load_value
+        total_load_mw
     FROM 
-        entsoe.ACTUAL_TOTAL_LOAD
-    WHERE 
-        map_code = '$bidding_zone'
-        AND area_type_code = 'BZN'
-        AND date(date_time) = '$day'
-    ORDER BY date_time;
+        entsoe.actual_total_load
+    WHERE
+        date(date_time_utc) = \$1
+        AND area_map_code = \$2
+        AND area_type_code IN ('BZN', 'BZN/CTA', 'BZN/CTY', 'BZN/CTA/CTY') 
+    ORDER BY date_time_utc;
     """
 
-    df = Euphemia.sql2df_with_retry(query)
+    df = Euphemia.sql2df_with_retry(query, [day, bidding_zone])
     return [
         Load(
             Dates.format(row.date_time, "yyyymmdd-HHMM"),  # e.g. "20250624-0030" for 30-min resolution

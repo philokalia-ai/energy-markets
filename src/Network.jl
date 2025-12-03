@@ -12,11 +12,11 @@ end
 """
 Helper function to safely call database query.
 """
-function safe_sql2df(query::String)
+function safe_sql2df(query::String, params=[])
     if !is_database_available()
         throw(ErrorException("Database function not available - Main.Euphemia.sql2df not found"))
     end
-    return Main.Euphemia.sql2df(query)
+    return Main.Euphemia.sql2df(query, params)
 end
 
 # =============================================================================
@@ -233,13 +233,13 @@ function create_transfer_capacity_from_entsoe(date::Date, bidding_zones::Vector{
             EXTRACT(HOUR FROM date_time_utc) + 1 as time_period,
             capacity_mw as capacity
         FROM entsoe.offered_transfer_capacities_implicit 
-        WHERE DATE(date_time_utc) = '$date'
+        WHERE DATE(date_time_utc) = \$1
         $zone_filter
         ORDER BY out_area_code, in_area_code, date_time_utc
         """
 
         println("📊 Fetching ENTSO-E transfer capacity data for $date...")
-        df = safe_sql2df(query)
+        df = safe_sql2df(query, [date])
 
         if nrow(df) == 0
             @warn "No ENTSO-E transfer capacity data found for $date"
@@ -332,13 +332,13 @@ function get_entsoe_transfer_capacities(date::Date, source_zone::String, sink_zo
             capacity_mw as capacity_forward,
             0.0 as capacity_backward
         FROM entsoe.offered_transfer_capacities_implicit 
-        WHERE DATE(date_time_utc) = '$date'
-          AND out_area_code = '$source_zone'  
-          AND in_area_code = '$sink_zone'
+        WHERE DATE(date_time_utc) = \$1
+          AND out_area_code = \$2
+          AND in_area_code = \$3
         ORDER BY hour
         """
 
-        return safe_sql2df(query)
+        return safe_sql2df(query, [date, source_zone, sink_zone])
     catch e
         @error "Failed to fetch transfer capacity data for $source_zone → $sink_zone on $date: $e"
         return DataFrame(hour=Int[], capacity_forward=Float64[], capacity_backward=Float64[])
@@ -415,13 +415,13 @@ function create_network_from_entsoe(date::Date, bidding_zones::Vector{String}=St
             EXTRACT(HOUR FROM date_time_utc) + 1 as time_period,
             capacity_mw as capacity
         FROM entsoe.offered_transfer_capacities_implicit 
-        WHERE DATE(date_time_utc) = '$date'
+        WHERE DATE(date_time_utc) = \$1
         $zone_filter
         ORDER BY out_area_code, in_area_code, date_time_utc
         """
 
         println("📊 Fetching ENTSO-E transfer capacity data for $date...")
-        df = safe_sql2df(query)
+        df = safe_sql2df(query, [date])
 
         if nrow(df) == 0
             @warn "No ENTSO-E transfer capacity data found for $date"
