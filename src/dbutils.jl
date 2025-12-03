@@ -12,14 +12,21 @@ end
 function newconnection()
     conn_str = get(ENV, "ENERGY_CONN_STR", "")
 
-    # Pass connection parameters as keyword arguments to LibPQ.Connection
-    # This approach works with both URL format and key=value format connection strings
-    cnx = LibPQ.Connection(conn_str;
-        connect_timeout=30,
-        keepalives_idle=300,
-        keepalives_interval=30,
-        keepalives_count=3
-    )
+    # Add PostgreSQL connection parameters to improve connection reliability
+    # These parameters work with both URL and key=value connection string formats
+    if !contains(conn_str, "connect_timeout")
+        # Detect connection string format and append parameters appropriately
+        if contains(conn_str, "postgresql://") || contains(conn_str, "postgres://")
+            # URL format: add query parameters
+            separator = contains(conn_str, "?") ? "&" : "?"
+            conn_str = conn_str * separator * "connect_timeout=30&keepalives_idle=300&keepalives_interval=30&keepalives_count=3"
+        else
+            # Key=value format: add space-separated parameters
+            conn_str = conn_str * " connect_timeout=30 keepalives_idle=300 keepalives_interval=30 keepalives_count=3"
+        end
+    end
+
+    cnx = LibPQ.Connection(conn_str)
     !isdefined(LibPQ, :setnonblocking) && return cnx
     LibPQ.setnonblocking(cnx) && return cnx
     error("Could not set connection to nonblocking")
