@@ -1776,8 +1776,8 @@ function _process_zones_sequential(zones_to_process, date, order_method, model, 
 
         for attempt in 1:max_retries
             attempts = attempt
+            attempt_start = time()  # Move outside try block
             try
-                attempt_start = time()
                 retry_msg = attempt > 1 ? " (retry $attempt/$max_retries)" : ""
                 println("🔄 Processing: $zone$retry_msg")
 

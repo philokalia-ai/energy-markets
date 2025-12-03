@@ -27,10 +27,10 @@ function get_loads(bidding_zone::String, day::Dates.Date)
     df = Euphemia.sql2df_with_retry(query, [day, bidding_zone])
     return [
         Load(
-            Dates.format(row.date_time, "yyyymmdd-HHMM"),  # e.g. "20250624-0030" for 30-min resolution
+            Dates.format(row.date_time_utc, "yyyymmdd-HHMM"),  # Fixed: use date_time_utc
             row.resolution_code,
             bidding_zone,
-            row.total_load_value
+            row.total_load_mw  # Fixed: use total_load_mw
         ) for row in eachrow(df)
     ]
 end
