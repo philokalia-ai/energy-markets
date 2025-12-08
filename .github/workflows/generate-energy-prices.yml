@@ -165,7 +165,7 @@ jobs:
             PARALLEL=true
             OPTIMIZER="highs"
             MAX_WORKERS=16
-            ORDER_METHOD="uc_based"
+            ORDER_METHOD="alternative"
           else
             # For manual runs, use inputs
             START_DATE="${{ github.event.inputs.start_date }}"
