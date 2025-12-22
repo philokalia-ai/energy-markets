@@ -277,11 +277,30 @@ function save_energy_prices(prices::Dict{String,Float64}, bidding_zone::String, 
         return 0
     end
 
+    # Delete existing records for this bidding_zone/date/order_method/code_version before inserting
+    # This ensures we replace incomplete data from previous failed runs
+    try
+        withdb() do cnx
+            delete_sql = """
+            DELETE FROM simulations.energy_prices
+            WHERE bidding_zone = \$1
+              AND DATE(date_time_utc) = \$2
+              AND order_method = \$3
+              AND code_version = \$4
+            """
+            LibPQ.execute(cnx, delete_sql, [bidding_zone, day, order_method_str, 1])
+            @info "Deleted existing price records for $bidding_zone on $day (order_method: $order_method) if any existed"
+        end
+    catch delete_error
+        @error "Failed to delete existing records: $delete_error"
+        rethrow(delete_error)
+    end
+
     # Insert in batches
     total_inserted = 0
 
     sql = """
-    INSERT INTO simulations.energy_prices 
+    INSERT INTO simulations.energy_prices
     (date_time_utc, resolution_code, bidding_zone, contract_type, price_eur_mwh, currency, order_method, code_version, update_time_utc)
     VALUES (\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8, \$9)
     """
