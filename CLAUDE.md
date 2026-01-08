@@ -14,17 +14,65 @@ The main module `Euphemia` provides:
 - **Unit commitment solver**: Optimizes generator dispatch with technical constraints
 - **Bidding strategy engine**: Converts unit commitment results to market orders
 - **Network modeling**: Handles Available Transfer Capacity (ATC) constraints between bidding zones
+- **Multi-zone market clearing**: Simultaneous clearing across multiple zones with cross-border transmission flows
 - **Data access layer**: Database utilities for energy market data
 
 ### Key Modules
 
-- `src/Euphemia.jl` - Main module with market clearing functions
+- `src/Euphemia.jl` - Main module with market clearing functions and orchestration
+- `src/MPCC.jl` - MPCC (Mathematical Program with Complementarity Constraints) solver for market clearing
 - `src/UnitCommitment.jl` - Unit commitment optimization using JuMP/HiGHS
 - `src/BiddingStrategy.jl` - Converts UC solutions to market bids
-- `src/Network.jl` - Network topology and ATC constraints
+- `src/Network.jl` - Network topology, TransferCapacity, and ATC constraints
 - `src/MarketOrders.jl` - Order types (SimpleOrder, BlockOrder)
+- `src/AlternativeOrderBook.jl` - Alternative (faster) order book generation
 - `src/Generators.jl`, `src/Loads.jl`, `src/Renewables.jl` - Data models
 - `src/dbutils.jl` - Database connection and data access
+
+### Key Functions
+
+**Single-zone market clearing:**
+```julia
+# Generate prices for a single zone
+prices = generate_energy_prices("GR", Date(2024, 6, 15);
+    order_method=:uc_based,  # or :alternative (faster)
+    save_to_db=true)
+
+# Process all zones for a single date
+result = generate_energy_prices_for_all_zones(Date(2024, 6, 15))
+
+# Process a date range
+result = generate_energy_prices_for_date_range(Date(2024, 6, 1), Date(2024, 6, 7))
+```
+
+**Multi-zone market clearing with transmission flows:**
+```julia
+# Clear multiple zones simultaneously with cross-border ATC constraints
+result = run_multi_zone_market_clearing(Date(2024, 6, 15);
+    zones=["GR", "BG", "RO"],  # or empty for auto-discover
+    order_method=:alternative,  # :uc_based or :alternative
+    save_to_db=true)
+
+# Access results
+result.market_prices["GR"]      # Zonal prices
+result.transmission_flows       # Cross-border flows
+result.solve_time              # Solver time
+result.total_time              # Total processing time
+
+# Process multiple dates with multi-zone clearing
+result = run_multi_zone_for_date_range(Date(2024, 6, 1), Date(2024, 6, 7);
+    order_method=:alternative,
+    save_to_db=true)
+```
+
+**Zone discovery:**
+```julia
+# Zones with generator data (for UC/bidding)
+zones = get_available_zones(date)
+
+# Zones with transfer capacity data (for multi-zone clearing)
+zones = get_zones_with_transfer_capacity(date)
+```
 
 ## Development Commands
 
@@ -44,12 +92,37 @@ julia -e "using Pkg; Pkg.update()"
 ### Running Tests
 
 ```bash
-# Run all tests
+# Run all core tests (211 tests, ~4 minutes)
 julia --project=. test/runtests.jl
 
-# Test specific functionality
-julia --project=. test/test_bidding_strategy.jl
-julia --project=. test/compare_bidding_strategies.jl
+# Run specific test files
+julia --project=. -e "using Test, Euphemia; include(\"test/test_mpcc.jl\")"
+julia --project=. -e "using Test, Euphemia; include(\"test/test_network_module.jl\")"
+julia --project=. -e "using Test, Euphemia; include(\"test/test_multi_zone_mpcc.jl\")"
+```
+
+### Test Organization
+
+```
+test/
+├── runtests.jl              # Main test runner (includes core tests)
+├── test_mpcc.jl             # MPCC solver tests (50 tests)
+├── test_multi_zone_mpcc.jl  # Multi-zone transmission tests (21 tests)
+├── test_network_module.jl   # Network/ATC tests (140 tests)
+│
+├── manual/                  # DB-dependent, long-running tests (run manually)
+│   ├── test_database_integration.jl
+│   ├── test_date_range_processing.jl
+│   ├── test_*_all_zones.jl
+│   └── ...
+│
+├── scripts/                 # Debug, benchmarks, infrastructure scripts
+│   ├── test_gurobi.jl
+│   ├── test_optimizer_comparison.jl
+│   ├── test_parallel_*.jl
+│   └── ...
+│
+└── archive/                 # Deprecated/broken tests
 ```
 
 ### Optimization Solvers
@@ -58,7 +131,10 @@ The project supports multiple optimization solvers:
 - **HiGHS** (default): Open-source linear/mixed-integer solver
 - **Gurobi**: Commercial solver (requires license)
 
-Configure solver selection in the optimization model creation.
+Configure solver selection via the `optimizer` parameter:
+```julia
+result = run_multi_zone_market_clearing(date; optimizer="highs")  # or "gurobi"
+```
 
 ### Database Configuration
 
@@ -88,7 +164,7 @@ make distclean    # Clean all generated files
 
 Key Julia packages:
 - **JuMP.jl**: Mathematical optimization modeling
-- **HiGHS.jl**, **Gurobi.jl**: Optimization solvers  
+- **HiGHS.jl**, **Gurobi.jl**: Optimization solvers
 - **DataFrames.jl**, **CSV.jl**: Data manipulation
 - **LibPQ.jl**: PostgreSQL database access
 - **Dates.jl**: Date/time handling
@@ -110,19 +186,26 @@ The project uses PostgreSQL with two main schemas:
 - `entsoe.production_and_generation_units` - Production unit data with commissioning status and bidding zone mapping
 - `entsoe.actual_total_load` - Historical electricity demand data by bidding zone (filtered by area_type_code: BZN, BZN/CTA, BZN/CTY, BZN/CTA/CTY)
 - `entsoe.generation_forecasts_for_wind_and_solar` - Renewable generation forecasts (filtered by same area_type_code values)
+- `entsoe.offered_transfer_capacities_implicit` - Cross-border transfer capacity data between bidding zones
+
+**Important column notes for transfer capacities:**
+- Use `out_map_code` and `in_map_code` for short zone codes (e.g., "GR", "BG")
+- Use `out_area_code` and `in_area_code` for EIC codes (e.g., "10YGR-HTSO-----Y")
+- The short codes (`map_code`) match the generator/load data zone codes
 
 **Note on area_type_code filtering**: The combined codes like 'BZN/CTA', 'BZN/CTY', 'BZN/CTA/CTY' capture cases where bidding zones overlap with control areas (CTA) or countries (CTY). These combined values are present in the database and necessary for comprehensive data retrieval.
-- `entsoe.offered_transfer_capacities_implicit` - Cross-border transfer capacity data between bidding zones
 
 ### Simulations Schema (`simulations.*`)
 - `simulations.energy_prices` - Generated energy price results by bidding zone, date, and time period
 - `simulations.optimization_runs` - Optimization run metadata including status, solver info, and performance metrics
+- `simulations.transmission_flows` - Cross-border transmission flow results from multi-zone clearing
 
 ## Testing Strategy
 
 Tests focus on:
+- Network topology and ATC constraint handling
+- Multi-zone market clearing with transmission flows
+- MPCC solver correctness and UC comparison
 - Unit commitment optimization correctness
 - Bidding strategy validation
-- Network constraint satisfaction  
 - Data integrity and consistency
-- Multi-day simulation stability
