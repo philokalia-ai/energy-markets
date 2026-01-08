@@ -411,3 +411,140 @@ function save_optimization_run(bidding_zone::String, date::Date, order_method::S
         return 0
     end
 end
+
+"""
+    ensure_transmission_flows_table()
+
+Creates the simulations.transmission_flows table if it doesn't exist.
+Used to store cross-border transmission flow results from multi-zone market clearing.
+"""
+function ensure_transmission_flows_table()
+    withdb() do cnx
+        create_table_sql = """
+        CREATE TABLE IF NOT EXISTS simulations.transmission_flows (
+            id SERIAL PRIMARY KEY,
+            date_time_utc TIMESTAMP NOT NULL,
+            source_zone VARCHAR(20) NOT NULL,
+            sink_zone VARCHAR(20) NOT NULL,
+            flow_mw NUMERIC(10,2) NOT NULL,
+            code_version INTEGER NOT NULL,
+            update_time_utc TIMESTAMP NOT NULL,
+            UNIQUE(date_time_utc, source_zone, sink_zone, code_version)
+        )
+        """
+
+        LibPQ.execute(cnx, create_table_sql)
+
+        # Create useful indexes
+        LibPQ.execute(
+            cnx,
+            """
+CREATE INDEX IF NOT EXISTS idx_transmission_flows_datetime
+ON simulations.transmission_flows (date_time_utc)
+"""
+        )
+
+        LibPQ.execute(
+            cnx,
+            """
+CREATE INDEX IF NOT EXISTS idx_transmission_flows_zones
+ON simulations.transmission_flows (source_zone, sink_zone, date_time_utc)
+"""
+        )
+    end
+
+    @info "Transmission flows table schema verified/created"
+end
+
+"""
+    save_transmission_flows(flows::Dict{String,Dict{String,Float64}}, date::Date;
+                           code_version::Int=1, create_schema::Bool=true)
+
+Save transmission flow results to the database in the simulations.transmission_flows table.
+
+# Arguments
+- `flows`: Dictionary with flow_id keys ("SOURCE_to_SINK") and inner Dict of period → MW values
+- `date`: Date of the optimization
+- `code_version`: Version code (default: 1)
+- `create_schema`: Whether to create table if missing (default: true)
+
+# Returns
+- Number of records inserted
+"""
+function save_transmission_flows(flows::Dict{String,Dict{String,Float64}}, date::Date;
+                                 code_version::Int=1, create_schema::Bool=true)
+    if isempty(flows)
+        @warn "No transmission flows to save"
+        return 0
+    end
+
+    # Create table if requested
+    if create_schema
+        ensure_transmission_flows_table()
+    end
+
+    update_time = now(UTC)
+    total_inserted = 0
+
+    sql = """
+    INSERT INTO simulations.transmission_flows
+    (date_time_utc, source_zone, sink_zone, flow_mw, code_version, update_time_utc)
+    VALUES (\$1, \$2, \$3, \$4, \$5, \$6)
+    ON CONFLICT (date_time_utc, source_zone, sink_zone, code_version)
+    DO UPDATE SET flow_mw = EXCLUDED.flow_mw, update_time_utc = EXCLUDED.update_time_utc
+    """
+
+    try
+        withdb() do cnx
+            LibPQ.execute(cnx, "BEGIN")
+
+            try
+                for (flow_id, period_flows) in flows
+                    # Parse flow_id: "SOURCE_to_SINK"
+                    parts = split(flow_id, "_to_")
+                    if length(parts) != 2
+                        @warn "Invalid flow_id format: $flow_id (expected SOURCE_to_SINK)"
+                        continue
+                    end
+                    source_zone = parts[1]
+                    sink_zone = parts[2]
+
+                    for (period, flow_mw) in period_flows
+                        # Parse period: "YYYYMMDD-HHMM" or hourly "1"-"24"
+                        if length(period) >= 13 && contains(period, "-")
+                            # Parse timeslot format "YYYYMMDD-HHMM"
+                            date_time_utc = DateTime(period, dateformat"yyyymmdd-HHMM")
+                        else
+                            # Parse hourly format "1"-"24"
+                            hour = parse(Int, period) - 1  # Convert 1-24 to 0-23
+                            date_time_utc = DateTime(date) + Hour(hour)
+                        end
+
+                        LibPQ.execute(cnx, sql, [
+                            date_time_utc,
+                            source_zone,
+                            sink_zone,
+                            flow_mw,
+                            code_version,
+                            update_time
+                        ])
+                        total_inserted += 1
+                    end
+                end
+
+                LibPQ.execute(cnx, "COMMIT")
+                @info "Successfully saved $total_inserted transmission flow records"
+
+            catch batch_error
+                LibPQ.execute(cnx, "ROLLBACK")
+                @error "Transmission flow insertion failed: $batch_error"
+                rethrow(batch_error)
+            end
+        end
+    catch e
+        @error "Database error saving transmission flows: $e"
+        rethrow(e)
+    end
+
+    return total_inserted
+end
