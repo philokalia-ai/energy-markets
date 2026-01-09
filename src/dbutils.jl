@@ -264,7 +264,7 @@ end
 
 """
     save_energy_prices(prices::Dict{String,Float64}, bidding_zone::String, day::Date, order_method::Symbol;
-                       clearing_mode::String="single_zone", optimization_run_id::Union{Int,Nothing}=nothing,
+                       clearing_mode::String="single_zone", optimization_run_id::Union{Integer,Nothing}=nothing,
                        batch_size::Int=100, create_schema::Bool=true)
 
 Save energy prices to the database in the simulations.energy_prices table.
@@ -295,7 +295,7 @@ Assumes connection is already to the 'energy' database.
 - `code_version`: Version code, set to 1 for now
 """
 function save_energy_prices(prices::Dict{String,Float64}, bidding_zone::String, day::Date, order_method::Symbol;
-                            clearing_mode::String="single_zone", optimization_run_id::Union{Int,Nothing}=nothing,
+                            clearing_mode::String="single_zone", optimization_run_id::Union{Integer,Nothing}=nothing,
                             batch_size::Int=100, create_schema::Bool=true)
     if isempty(prices)
         @warn "No prices to save for $bidding_zone on $day"
