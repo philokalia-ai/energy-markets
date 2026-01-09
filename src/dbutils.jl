@@ -124,13 +124,30 @@ function ensure_energy_prices_table()
             price_eur_mwh NUMERIC(10,2) NOT NULL,
             currency VARCHAR(3) NOT NULL,
             order_method VARCHAR(20) NOT NULL,
+            clearing_mode VARCHAR(20) NOT NULL DEFAULT 'single_zone',
             code_version INTEGER NOT NULL,
             update_time_utc TIMESTAMP NOT NULL,
-            UNIQUE(date_time_utc, bidding_zone, contract_type, order_method, code_version)
+            UNIQUE(date_time_utc, bidding_zone, contract_type, order_method, clearing_mode, code_version)
         )
         """
 
         LibPQ.execute(cnx, create_table_sql)
+
+        # Add clearing_mode column if it doesn't exist (for existing tables)
+        LibPQ.execute(cnx, """
+            DO \$\$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_schema = 'simulations'
+                    AND table_name = 'energy_prices'
+                    AND column_name = 'clearing_mode'
+                ) THEN
+                    ALTER TABLE simulations.energy_prices
+                    ADD COLUMN clearing_mode VARCHAR(20) NOT NULL DEFAULT 'single_zone';
+                END IF;
+            END \$\$;
+        """)
 
         # Create useful indexes
         LibPQ.execute(
@@ -144,8 +161,16 @@ ON simulations.energy_prices (date_time_utc, bidding_zone)
         LibPQ.execute(
             cnx,
             """
-CREATE INDEX IF NOT EXISTS idx_energy_prices_zone_contract 
+CREATE INDEX IF NOT EXISTS idx_energy_prices_zone_contract
 ON simulations.energy_prices (bidding_zone, contract_type, date_time_utc)
+"""
+        )
+
+        LibPQ.execute(
+            cnx,
+            """
+CREATE INDEX IF NOT EXISTS idx_energy_prices_clearing_mode
+ON simulations.energy_prices (clearing_mode, date_time_utc)
 """
         )
 
@@ -194,7 +219,8 @@ ON simulations.optimization_runs (status, optimization_date)
 end
 
 """
-    save_energy_prices(prices::Dict{String,Float64}, bidding_zone::String, day::Date, order_method::Symbol; batch_size::Int=100, create_schema::Bool=true)
+    save_energy_prices(prices::Dict{String,Float64}, bidding_zone::String, day::Date, order_method::Symbol;
+                       clearing_mode::String="single_zone", batch_size::Int=100, create_schema::Bool=true)
 
 Save energy prices to the database in the simulations.energy_prices table.
 Creates the schema and table if they don't exist (when create_schema=true).
@@ -202,9 +228,10 @@ Assumes connection is already to the 'energy' database.
 
 # Arguments
 - `prices`: Dictionary with timeslot keys ("YYYYMMDD-HHMM") and price values in EUR/MWh
-- `bidding_zone`: Bidding zone code (e.g., "GR", "AL") 
+- `bidding_zone`: Bidding zone code (e.g., "GR", "AL")
 - `day`: Date of the prices
 - `order_method`: Method used (:uc_based or :alternative)
+- `clearing_mode`: Market clearing mode ("single_zone" or "multi_zone", default: "single_zone")
 - `batch_size`: Number of records to insert per batch (default: 100)
 - `create_schema`: Whether to create schema/table if missing (default: true)
 
@@ -217,9 +244,11 @@ Assumes connection is already to the 'energy' database.
 - `currency`: Always "EUR" for now
 - `update_time_utc`: Timestamp when record was inserted
 - `order_method`: Method used to generate prices
+- `clearing_mode`: Market clearing mode (single_zone or multi_zone)
 - `code_version`: Version code, set to 1 for now
 """
-function save_energy_prices(prices::Dict{String,Float64}, bidding_zone::String, day::Date, order_method::Symbol; batch_size::Int=100, create_schema::Bool=true)
+function save_energy_prices(prices::Dict{String,Float64}, bidding_zone::String, day::Date, order_method::Symbol;
+                            clearing_mode::String="single_zone", batch_size::Int=100, create_schema::Bool=true)
     if isempty(prices)
         @warn "No prices to save for $bidding_zone on $day"
         return 0
@@ -244,7 +273,7 @@ function save_energy_prices(prices::Dict{String,Float64}, bidding_zone::String, 
     end
 
     # Prepare data for batch insertion
-    records = Vector{Tuple{DateTime,String,String,String,Float64,String,String,Int,DateTime}}()
+    records = Vector{Tuple{DateTime,String,String,String,Float64,String,String,String,Int,DateTime}}()
     sizehint!(records, length(prices))  # Pre-allocate for efficiency
     update_time = now(UTC)
     order_method_str = string(order_method)  # Convert once
@@ -263,6 +292,7 @@ function save_energy_prices(prices::Dict{String,Float64}, bidding_zone::String, 
                 price,
                 "EUR",
                 order_method_str,
+                clearing_mode,
                 1,  # code_version
                 update_time
             ))
@@ -277,7 +307,7 @@ function save_energy_prices(prices::Dict{String,Float64}, bidding_zone::String, 
         return 0
     end
 
-    # Delete existing records for this bidding_zone/date/order_method/code_version before inserting
+    # Delete existing records for this bidding_zone/date/order_method/clearing_mode/code_version before inserting
     # This ensures we replace incomplete data from previous failed runs
     try
         withdb() do cnx
@@ -286,10 +316,11 @@ function save_energy_prices(prices::Dict{String,Float64}, bidding_zone::String, 
             WHERE bidding_zone = \$1
               AND DATE(date_time_utc) = \$2
               AND order_method = \$3
-              AND code_version = \$4
+              AND clearing_mode = \$4
+              AND code_version = \$5
             """
-            LibPQ.execute(cnx, delete_sql, [bidding_zone, day, order_method_str, 1])
-            @info "Deleted existing price records for $bidding_zone on $day (order_method: $order_method) if any existed"
+            LibPQ.execute(cnx, delete_sql, [bidding_zone, day, order_method_str, clearing_mode, 1])
+            @info "Deleted existing price records for $bidding_zone on $day (order_method: $order_method, clearing_mode: $clearing_mode) if any existed"
         end
     catch delete_error
         @error "Failed to delete existing records: $delete_error"
@@ -301,8 +332,8 @@ function save_energy_prices(prices::Dict{String,Float64}, bidding_zone::String, 
 
     sql = """
     INSERT INTO simulations.energy_prices
-    (date_time_utc, resolution_code, bidding_zone, contract_type, price_eur_mwh, currency, order_method, code_version, update_time_utc)
-    VALUES (\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8, \$9)
+    (date_time_utc, resolution_code, bidding_zone, contract_type, price_eur_mwh, currency, order_method, clearing_mode, code_version, update_time_utc)
+    VALUES (\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8, \$9, \$10)
     """
 
     for batch_start in 1:batch_size:length(records)
@@ -334,7 +365,7 @@ function save_energy_prices(prices::Dict{String,Float64}, bidding_zone::String, 
         end
     end
 
-    @info "Successfully saved $total_inserted energy price records for $bidding_zone on $day using $order_method method"
+    @info "Successfully saved $total_inserted energy price records for $bidding_zone on $day (order_method: $order_method, clearing_mode: $clearing_mode)"
     return total_inserted
 end
 

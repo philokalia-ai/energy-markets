@@ -650,7 +650,8 @@ function generate_energy_prices(bidding_zone::String, date::Date;
                 if save_to_db
                     try
                         println("   💾 Saving $(length(prices)) price records to database...")
-                        records_saved = save_energy_prices(prices, bidding_zone, date, order_method)
+                        records_saved = save_energy_prices(prices, bidding_zone, date, order_method;
+                                                           clearing_mode="single_zone")
                         println("   ✅ Successfully saved $records_saved records to database")
                     catch db_error
                         println("   ⚠️  Warning: Failed to save prices to database: $db_error")
@@ -1018,7 +1019,8 @@ function run_multi_zone_market_clearing(date::Date;
                 # Save prices for each zone
                 for zone in order_book.nodes
                     if haskey(result.market_prices, zone)
-                        save_energy_prices(result.market_prices[zone], zone, date, order_method)
+                        save_energy_prices(result.market_prices[zone], zone, date, order_method;
+                                           clearing_mode="multi_zone")
                     end
                 end
 
@@ -1171,11 +1173,12 @@ function run_multi_zone_for_date_range(start_date::Date, end_date::Date;
     if skip_existing && save_to_db
         try
             println("🔍 Checking for existing multi-zone data...")
-            # Check which dates already have data for MULTI_ZONE runs
+            # Check which dates already have data for multi_zone clearing mode
             existing_query = """
                 SELECT DISTINCT DATE(date_time_utc) as run_date
                 FROM simulations.energy_prices
                 WHERE order_method = \$1
+                AND clearing_mode = 'multi_zone'
                 AND DATE(date_time_utc) >= \$2
                 AND DATE(date_time_utc) <= \$3
             """
@@ -1558,10 +1561,11 @@ function generate_energy_prices_for_all_zones(date::Date;
         try
             println("🔍 Checking for existing data...")
             existing_query = """
-                SELECT DISTINCT bidding_zone 
-                FROM simulations.energy_prices 
-                WHERE DATE(date_time_utc) = \$1 
+                SELECT DISTINCT bidding_zone
+                FROM simulations.energy_prices
+                WHERE DATE(date_time_utc) = \$1
                 AND order_method = \$2
+                AND clearing_mode = 'single_zone'
             """
             existing_df = sql2df(existing_query, [date, string(order_method)])
             existing_zones = Set(string(zone) for zone in existing_df.bidding_zone)
