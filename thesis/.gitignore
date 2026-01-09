@@ -1,46 +1,34 @@
-# Backup files etc.
+# Source files (external)
+sources
 
-*~
-\#*\#
-*.bak
-*.backup
-.*.sw[a-z]
-
-# Mac OS specific
-
-.DS_Store
-
-# Windows specific
-
-Thumbs.db*
-
-# LaTeX specific
-
+# LaTeX auxiliary files
 *.aux
 *.bbl
 *.blg
-*.dlog
-*.dvi
 *.fdb_latexmk
 *.fls
-*.idx
 *.lof
 *.log
-*.lol
 *.lot
-*.nav
 *.out
-*.snm
-*.spl
-*.svn
 *.toc
-*.tof
-*.tpt
-*.vrb
+*.dvi
+*.synctex.gz
 
-# The example PDF file
-# Track it
- 
-#/thesis.pdf
+# minted cache
+_minted-*/
 
-/_minted-*/
+# Backup files
+*.bak
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+*.swp
+*.swo
+
+# Output
+thesis.pdf
