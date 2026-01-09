@@ -74,6 +74,21 @@ zones = get_available_zones(date)
 zones = get_zones_with_transfer_capacity(date)
 ```
 
+**Generator unavailability filtering:**
+```julia
+# Get generators with outage filtering (default behavior)
+generators = get_generators("GR", Date(2024, 6, 15))
+
+# Disable filtering to get all commissioned generators
+generators = get_generators("GR", Date(2024, 6, 15); exclude_unavailable=false)
+```
+
+The `exclude_unavailable` parameter (default: `true`) filters generators based on outage data:
+- **Complete outages** (`available_capacity_mw = 0`): Generator excluded entirely
+- **Partial outages** (`available_capacity_mw > 0`): Generator's `p_max` reduced to available capacity
+- Only `status = 'Active'` outages are considered (ignores `Cancelled`/`Withdrawn`)
+- Uses `MIN(available_capacity_mw)` when multiple outage records exist (conservative)
+
 ## Development Commands
 
 ### Julia Package Management
@@ -187,6 +202,7 @@ The project uses PostgreSQL with two main schemas:
 - `entsoe.actual_total_load` - Historical electricity demand data by bidding zone (filtered by area_type_code: BZN, BZN/CTA, BZN/CTY, BZN/CTA/CTY)
 - `entsoe.generation_forecasts_for_wind_and_solar` - Renewable generation forecasts (filtered by same area_type_code values)
 - `entsoe.offered_transfer_capacities_implicit` - Cross-border transfer capacity data between bidding zones
+- `entsoe.unavailability_of_production_and_generation_units` - Generator outage data (planned/forced)
 
 **Important column notes for transfer capacities:**
 - Use `out_map_code` and `in_map_code` for short zone codes (e.g., "GR", "BG")
@@ -194,6 +210,13 @@ The project uses PostgreSQL with two main schemas:
 - The short codes (`map_code`) match the generator/load data zone codes
 
 **Note on area_type_code filtering**: The combined codes like 'BZN/CTA', 'BZN/CTY', 'BZN/CTA/CTY' capture cases where bidding zones overlap with control areas (CTA) or countries (CTY). These combined values are present in the database and necessary for comprehensive data retrieval.
+
+**Unavailability table columns:**
+- `asset_code`: Matches `generation_unit_code` in production_and_generation_units table
+- `start_outage_utc`, `end_outage_utc`: Outage period (text, parsed as timestamp)
+- `status`: `'Active'` (confirmed), `'Cancelled'`, or `'Withdrawn'`
+- `type`: `'Planned'` (maintenance) or `'Forced'` (unexpected)
+- `available_capacity_mw`: Remaining capacity during outage (0 = complete outage)
 
 ### Simulations Schema (`simulations.*`)
 
