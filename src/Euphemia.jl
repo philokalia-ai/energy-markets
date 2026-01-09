@@ -639,8 +639,8 @@ function generate_energy_prices(bidding_zone::String, date::Date;
                 println("   ✅ Energy prices extracted for $(length(prices)) time periods")
                 println("   📈 Price range: €$(round(minimum(values(prices)), digits=2)) - €$(round(maximum(values(prices)), digits=2))/MWh")
 
-                # Save successful optimization run
-                save_optimization_run(bidding_zone, date, order_method, model, optimizer, :optimal;
+                # Save successful optimization run and get the ID
+                optimization_run_id = save_optimization_run(bidding_zone, date, order_method, model, optimizer, :optimal;
                     objective_value=mpcc_result.objective_value,
                     solve_time_seconds=solve_time_seconds,
                     num_orders=length(order_book.orders),
@@ -651,7 +651,8 @@ function generate_energy_prices(bidding_zone::String, date::Date;
                     try
                         println("   💾 Saving $(length(prices)) price records to database...")
                         records_saved = save_energy_prices(prices, bidding_zone, date, order_method;
-                                                           clearing_mode="single_zone")
+                                                           clearing_mode="single_zone",
+                                                           optimization_run_id=optimization_run_id)
                         println("   ✅ Successfully saved $records_saved records to database")
                     catch db_error
                         println("   ⚠️  Warning: Failed to save prices to database: $db_error")
@@ -1016,16 +1017,8 @@ function run_multi_zone_market_clearing(date::Date;
         if save_to_db
             println("\n💾 Saving results to database...")
             try
-                # Save prices for each zone
-                for zone in order_book.nodes
-                    if haskey(result.market_prices, zone)
-                        save_energy_prices(result.market_prices[zone], zone, date, order_method;
-                                           clearing_mode="multi_zone")
-                    end
-                end
-
-                # Save optimization run record
-                save_optimization_run(
+                # Save optimization run record first and get the ID
+                optimization_run_id = save_optimization_run(
                     "MULTI_ZONE",  # Use special identifier for multi-zone runs
                     date,
                     order_method,
@@ -1037,6 +1030,15 @@ function run_multi_zone_market_clearing(date::Date;
                     num_orders=length(order_book.orders),
                     num_price_periods=length(order_book.periods)
                 )
+
+                # Save prices for each zone with the optimization run ID
+                for zone in order_book.nodes
+                    if haskey(result.market_prices, zone)
+                        save_energy_prices(result.market_prices[zone], zone, date, order_method;
+                                           clearing_mode="multi_zone",
+                                           optimization_run_id=optimization_run_id)
+                    end
+                end
 
                 # Save transmission flows
                 if !isempty(result.transmission_flows)
