@@ -101,47 +101,115 @@ function get_marginal_cost(day::Dates.Date, fuel_type::String, bidding_zone::Str
 end
 
 # pull from postgres, for now only active units of given date (I think)
-function get_generators(map_code::String, day::Dates.Date)
-    # TODO: fetch all for now, will choose to keep what needed later 
-    query = """
-    SELECT
-        valid_from,
-        valid_to,
-        production_unit_code,
-        production_unit_name,
-        production_unit_status,
-        production_unit_type,
-        production_unit_location,
-        production_unit_installed_capacity_mw,
-        production_unit_voltage_kv,
-        area_code,
-        area_display_name,
-        area_type_code,
-        area_map_code,
-        generation_unit_code,
-        generation_unit_name,
-        generation_unit_status,
-        generation_unit_type,
-        generation_unit_location,
-        generation_unit_installed_capacity_mw,
-        update_time_utc,
-        source
+# exclude_unavailable: if true, excludes generators with active outages and reduces capacity for partial outages
+function get_generators(map_code::String, day::Dates.Date; exclude_unavailable::Bool=true)
+    if exclude_unavailable
+        # Query with unavailability filtering:
+        # - Excludes generators with complete outages (available_capacity_mw = 0)
+        # - Reduces p_max for partial outages (available_capacity_mw > 0)
+        # - Only considers 'Active' status outages (ignores Cancelled/Withdrawn)
+        # - Uses MIN available capacity when multiple outage records exist (conservative)
+        query = """
+        WITH active_outages AS (
+            SELECT
+                asset_code,
+                MIN(available_capacity_mw) AS available_capacity_mw
+            FROM entsoe.unavailability_of_production_and_generation_units
+            WHERE status = 'Active'
+              AND area_map_code = \$1
+              AND \$2::timestamp >= start_outage_utc::timestamp
+              AND \$2::timestamp < end_outage_utc::timestamp
+            GROUP BY asset_code
+        )
+        SELECT
+            g.valid_from,
+            g.valid_to,
+            g.production_unit_code,
+            g.production_unit_name,
+            g.production_unit_status,
+            g.production_unit_type,
+            g.production_unit_location,
+            g.production_unit_installed_capacity_mw,
+            g.production_unit_voltage_kv,
+            g.area_code,
+            g.area_display_name,
+            g.area_type_code,
+            g.area_map_code,
+            g.generation_unit_code,
+            g.generation_unit_name,
+            g.generation_unit_status,
+            g.generation_unit_type,
+            g.generation_unit_location,
+            -- Use available capacity if partial outage, otherwise installed capacity
+            COALESCE(
+                CASE
+                    WHEN o.available_capacity_mw > 0 THEN o.available_capacity_mw
+                    ELSE NULL
+                END,
+                g.generation_unit_installed_capacity_mw
+            ) AS generation_unit_installed_capacity_mw,
+            g.update_time_utc,
+            g.source,
+            -- Include outage info for debugging/logging
+            o.available_capacity_mw AS outage_available_capacity
+        FROM
+            entsoe.production_and_generation_units g
+        LEFT JOIN active_outages o ON g.generation_unit_code = o.asset_code
+        WHERE
+            g.production_unit_status = 'COMMISSIONED'
+            AND g.generation_unit_status = 'COMMISSIONED'
+            AND g.area_type_code IN ('BZN', 'BZN/CTA')
+            AND g.area_map_code = \$1
+            AND DATE(\$2)
+                BETWEEN DATE(g.valid_from)
+                AND COALESCE(
+                        DATE(g.valid_to),
+                        DATE(\$2) + INTERVAL '1 year'
+                    )
+            -- Exclude complete outages (available_capacity = 0)
+            AND (o.asset_code IS NULL OR o.available_capacity_mw > 0)
+        """
+    else
+        # Original query without unavailability filtering
+        query = """
+        SELECT
+            valid_from,
+            valid_to,
+            production_unit_code,
+            production_unit_name,
+            production_unit_status,
+            production_unit_type,
+            production_unit_location,
+            production_unit_installed_capacity_mw,
+            production_unit_voltage_kv,
+            area_code,
+            area_display_name,
+            area_type_code,
+            area_map_code,
+            generation_unit_code,
+            generation_unit_name,
+            generation_unit_status,
+            generation_unit_type,
+            generation_unit_location,
+            generation_unit_installed_capacity_mw,
+            update_time_utc,
+            source
 
-    FROM 
-        entsoe.production_and_generation_units
-    WHERE 
-        production_unit_status = 'COMMISSIONED'
-        AND generation_unit_status = 'COMMISSIONED'
-        AND area_type_code IN  ('BZN', 'BZN/CTA')
-        AND area_map_code = \$1
-        AND DATE(\$2) 
-            BETWEEN DATE(valid_from) 
-            AND COALESCE(
-                    DATE(valid_to), 
-                    DATE(\$2) + INTERVAL '1 year'
-                )
-
-    """
+        FROM
+            entsoe.production_and_generation_units
+        WHERE
+            production_unit_status = 'COMMISSIONED'
+            AND generation_unit_status = 'COMMISSIONED'
+            AND area_type_code IN  ('BZN', 'BZN/CTA')
+            AND area_map_code = \$1
+            AND DATE(\$2)
+                BETWEEN DATE(valid_from)
+                AND COALESCE(
+                        DATE(valid_to),
+                        DATE(\$2) + INTERVAL '1 year'
+                    )
+        """
+    end
 
     df = Euphemia.sql2df_with_retry(query, [map_code, day])
     return [
