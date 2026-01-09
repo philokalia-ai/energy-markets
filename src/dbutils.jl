@@ -344,7 +344,7 @@ function save_energy_prices(prices::Dict{String,Float64}, bidding_zone::String, 
                 order_method_str,
                 clearing_mode,
                 opt_run_id,
-                1,  # code_version
+                2,  # code_version
                 update_time
             ))
         catch e
@@ -370,7 +370,7 @@ function save_energy_prices(prices::Dict{String,Float64}, bidding_zone::String, 
               AND clearing_mode = \$4
               AND code_version = \$5
             """
-            LibPQ.execute(cnx, delete_sql, [bidding_zone, day, order_method_str, clearing_mode, 1])
+            LibPQ.execute(cnx, delete_sql, [bidding_zone, day, order_method_str, clearing_mode, 2])
             @info "Deleted existing price records for $bidding_zone on $day (order_method: $order_method, clearing_mode: $clearing_mode) if any existed"
         end
     catch delete_error
@@ -424,7 +424,7 @@ end
     save_optimization_run(bidding_zone::String, date::Date, order_method::Symbol, model_type::Symbol,
                           optimizer::String, status::Symbol; objective_value=nothing, solve_time_seconds=nothing,
                           num_orders=nothing, num_price_periods=nothing, error_message=nothing,
-                          code_version::Int=1, create_schema::Bool=true) -> Union{Int, Nothing}
+                          code_version::Int=2, create_schema::Bool=true) -> Union{Int, Nothing}
 
 Save optimization run metadata to track all optimization attempts (successful and failed).
 
@@ -453,7 +453,7 @@ function save_optimization_run(bidding_zone::String, date::Date, order_method::S
     num_orders=nothing,
     num_price_periods=nothing,
     error_message=nothing,
-    code_version::Int=1,
+    code_version::Int=2,
     create_schema::Bool=true)
 
     # Create schema and table if requested
@@ -548,7 +548,7 @@ end
 
 """
     save_transmission_flows(flows::Dict{String,Dict{String,Float64}}, date::Date;
-                           code_version::Int=1, create_schema::Bool=true)
+                           code_version::Int=2, create_schema::Bool=true)
 
 Save transmission flow results to the database in the simulations.transmission_flows table.
 
@@ -562,7 +562,7 @@ Save transmission flow results to the database in the simulations.transmission_f
 - Number of records inserted
 """
 function save_transmission_flows(flows::Dict{String,Dict{String,Float64}}, date::Date;
-                                 code_version::Int=1, create_schema::Bool=true)
+                                 code_version::Int=2, create_schema::Bool=true)
     if isempty(flows)
         @warn "No transmission flows to save"
         return 0
