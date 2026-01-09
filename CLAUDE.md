@@ -196,9 +196,25 @@ The project uses PostgreSQL with two main schemas:
 **Note on area_type_code filtering**: The combined codes like 'BZN/CTA', 'BZN/CTY', 'BZN/CTA/CTY' capture cases where bidding zones overlap with control areas (CTA) or countries (CTY). These combined values are present in the database and necessary for comprehensive data retrieval.
 
 ### Simulations Schema (`simulations.*`)
-- `simulations.energy_prices` - Generated energy price results by bidding zone, date, and time period
-- `simulations.optimization_runs` - Optimization run metadata including status, solver info, and performance metrics
-- `simulations.transmission_flows` - Cross-border transmission flow results from multi-zone clearing
+
+**`simulations.energy_prices`** - Generated energy price results by bidding zone, date, and time period
+- `clearing_mode`: Distinguishes between `'single_zone'` (independent zone clearing) and `'multi_zone'` (joint clearing with transmission)
+- `optimization_run_id`: Foreign key to `optimization_runs` table for traceability
+- `code_version`: Schema version (current: 2)
+
+**`simulations.optimization_runs`** - Optimization run metadata including status, solver info, and performance metrics
+- For single-zone runs: `bidding_zone` contains the zone code (e.g., "GR")
+- For multi-zone runs: `bidding_zone` is set to "MULTI_ZONE"
+- Contains `optimizer`, `solve_time_seconds`, `objective_value`, etc.
+
+**`simulations.transmission_flows`** - Cross-border transmission flow results from multi-zone clearing
+
+**Joining prices with optimization metadata:**
+```sql
+SELECT ep.*, opr.optimizer, opr.solve_time_seconds
+FROM simulations.energy_prices ep
+JOIN simulations.optimization_runs opr ON ep.optimization_run_id = opr.id
+```
 
 ## Testing Strategy
 
