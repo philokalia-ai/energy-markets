@@ -8,7 +8,7 @@ import ..select_solver
 
 # Import required modules from parent Euphemia package
 import ..Euphemia.MarketOrders: MarketOrder, SimpleOrder, AggregatedPeriodicOrder
-import ..Euphemia.Network: NetworkTopology
+import ..Euphemia.Network: NetworkTopology, TransferCapacity, get_connected_zones, get_zone_pairs, create_transfer_capacity_from_entsoe
 import ..Euphemia: get_loads, get_generators, get_generation_forecast_for_wind_and_solar
 import ..Euphemia.BiddingStrategy: generate_market_orders_from_uc, UCToBidsResult
 
@@ -21,18 +21,41 @@ struct MPCCResult
     block_acceptance::Dict{String,Float64}
     block_activation::Dict{String,Float64}
     transmission_flows::Dict{String,Dict{String,Float64}}
-    solve_time::Float64
+    solve_time::Float64              # Time spent in optimization solver
+    total_time::Float64              # Total processing time (including order book creation)
     solver_name::String
     message::String
+end
+
+"""
+    with_total_time(result::MPCCResult, total_time::Float64) -> MPCCResult
+
+Create a copy of MPCCResult with updated total_time.
+Useful for setting the total processing time after order book creation.
+"""
+function with_total_time(result::MPCCResult, total_time::Float64)
+    return MPCCResult(
+        result.status,
+        result.objective_value,
+        result.market_prices,
+        result.stepwise_acceptance,
+        result.block_acceptance,
+        result.block_activation,
+        result.transmission_flows,
+        result.solve_time,
+        total_time,
+        result.solver_name,
+        result.message
+    )
 end
 
 # Typed order book structure using existing MarketOrder types
 struct MPCCOrderBook
     orders::Vector{MarketOrder}                # All market orders using existing types
-    nodes::Vector{String}                      # Bidding zone identifiers  
+    nodes::Vector{String}                      # Bidding zone identifiers
     periods::Vector{String}                    # Time period identifiers (e.g., "1", "2", ..., "24")
     price_limits::Tuple{Float64,Float64}       # (min_price, max_price) bounds
-    network_topology::Union{Nothing,NetworkTopology}  # Optional network constraints
+    network_topology::Union{Nothing,NetworkTopology,TransferCapacity}  # Optional network constraints (TransferCapacity for multi-zone)
 end
 
 # Configuration constants
@@ -176,6 +199,120 @@ end
 
 
 """
+    create_multi_zone_order_book(zones::Vector{String}, day::Date;
+                                  markup_factor::Float64=DEFAULT_MARKUP_FACTOR,
+                                  optimizer::String="auto")
+
+Creates a multi-zone market order book by aggregating orders from multiple bidding zones
+and attaching transfer capacity constraints between zones.
+
+# Arguments
+- `zones::Vector{String}`: List of bidding zones to include (e.g., ["GR", "BG", "IT"])
+- `day::Date`: Day for which to create the order book
+- `markup_factor::Float64`: Markup factor for supply bids above marginal cost (default: 1.1)
+- `optimizer::String`: Solver preference for unit commitment ("auto", "highs", "gurobi", "cplex")
+
+# Returns
+- `MPCCOrderBook`: Multi-zone order book with transfer capacity constraints attached
+"""
+function create_multi_zone_order_book(zones::Vector{String}, day::Date;
+                                      markup_factor::Float64=DEFAULT_MARKUP_FACTOR,
+                                      optimizer::String="auto")
+    if isempty(zones)
+        error("At least one bidding zone must be specified")
+    end
+
+    println("🌍 Creating multi-zone order book for $(length(zones)) zones: $(join(zones, ", "))")
+
+    # Aggregate orders from all zones
+    all_orders = Vector{MarketOrder}()
+    all_periods = Set{String}()
+    failed_zones = String[]
+
+    for zone in zones
+        try
+            println("   📊 Processing zone $zone...")
+
+            # Generate market orders from real unit commitment for this zone
+            uc_to_bids = generate_market_orders_from_uc(zone, day; markup_factor=markup_factor, optimizer=optimizer)
+
+            if !uc_to_bids.success
+                @warn "Failed to generate market orders for zone $zone: $(uc_to_bids.message)"
+                push!(failed_zones, zone)
+                continue
+            end
+
+            # Append supply and demand orders
+            append!(all_orders, uc_to_bids.supply_orders)
+            append!(all_orders, uc_to_bids.demand_orders)
+
+            # Collect time periods from orders
+            for order in uc_to_bids.supply_orders
+                if isa(order, SimpleOrder)
+                    date_str = Dates.format(order.date_time, "yyyymmdd")
+                    time_str = Dates.format(order.date_time, "HHMM")
+                    timeslot = "$(date_str)-$(time_str)"
+                    push!(all_periods, timeslot)
+                end
+            end
+
+            println("      ✅ Added $(length(uc_to_bids.supply_orders)) supply + $(length(uc_to_bids.demand_orders)) demand orders")
+
+        catch e
+            @error "Error processing zone $zone: $e"
+            push!(failed_zones, zone)
+        end
+    end
+
+    # Determine successful zones
+    successful_zones = filter(z -> !(z in failed_zones), zones)
+
+    if isempty(successful_zones)
+        error("Failed to generate orders for any zone")
+    end
+
+    if !isempty(failed_zones)
+        @warn "Some zones failed: $(join(failed_zones, ", ")). Proceeding with: $(join(successful_zones, ", "))"
+    end
+
+    # Convert periods to sorted vector
+    periods_vector = sort(collect(all_periods))
+
+    if isempty(periods_vector)
+        periods_vector = [string(h) for h in 1:24]
+        @warn "No periods found in orders, defaulting to 24 hourly periods"
+    end
+
+    println("   📊 Detected $(length(periods_vector)) time periods")
+
+    # Fetch transfer capacity from ENTSO-E for connections between these zones
+    println("   🔌 Fetching transfer capacities between zones...")
+    transfer_capacity = create_transfer_capacity_from_entsoe(day, successful_zones)
+
+    # Log connectivity info
+    zone_pairs = get_zone_pairs(transfer_capacity)
+    println("   ✅ Found $(length(zone_pairs)) directional transfer capacity links")
+
+    # Create the multi-zone order book
+    order_book = MPCCOrderBook(
+        all_orders,
+        successful_zones,
+        periods_vector,
+        (0.0, 500.0),           # Price limits (€/MWh)
+        transfer_capacity       # Attach transfer capacity for multi-zone clearing
+    )
+
+    println("✅ Created multi-zone order book:")
+    println("   🌍 Zones: $(length(successful_zones))")
+    println("   📝 Total orders: $(length(all_orders))")
+    println("   🕐 Time periods: $(length(periods_vector))")
+    println("   🔌 Transfer links: $(length(zone_pairs))")
+
+    return order_book
+end
+
+
+"""
     solve_mpcc_market_clearing(order_book::MPCCOrderBook; 
                               preferred_solver::String="auto", 
                               silent::Bool=true,
@@ -250,6 +387,65 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
 
         @variable(model, market_price[node_id in order_book.nodes, time_period in order_book.periods])
 
+        # Multi-zone transmission flow variables and constraints (if TransferCapacity is provided)
+        flow = nothing  # Initialize as nothing for single-zone case
+        zone_pairs = Tuple{String,String}[]  # Empty for single-zone
+        zones_to = Dict{String,Vector{String}}()   # zones that can send TO each zone
+        zones_from = Dict{String,Vector{String}}() # zones that can receive FROM each zone
+
+        if order_book.network_topology isa TransferCapacity
+            tc = order_book.network_topology
+
+            # Get all zone pairs with transfer capacity
+            zone_pairs = get_zone_pairs(tc)
+
+            if !isempty(zone_pairs)
+                println("   🔌 Adding transmission flow variables for $(length(zone_pairs)) zone pairs")
+
+                # Create flow variables for each zone pair and time period
+                @variable(model, flow[pair in zone_pairs, t in order_book.periods])
+
+                # Add ATC constraints: -backward <= flow <= forward
+                for pair in zone_pairs
+                    source, sink = pair
+                    for t in order_book.periods
+                        # Get capacity limits (using hourly period format for lookup)
+                        # Convert timeslot period to hourly if needed
+                        lookup_period = t
+                        if length(t) > 5 && contains(t, "-")
+                            # Extract hour from "YYYYMMDD-HHMM" format
+                            hour = parse(Int, t[10:11]) + 1
+                            lookup_period = string(hour)
+                        end
+
+                        forward_cap = get(tc.capacity_forward, (source, sink, lookup_period), 0.0)
+                        backward_cap = get(tc.capacity_backward, (source, sink, lookup_period), 0.0)
+
+                        # ATC bounds: -backward <= flow <= forward
+                        set_lower_bound(flow[pair, t], -backward_cap)
+                        set_upper_bound(flow[pair, t], forward_cap)
+                    end
+                end
+
+                # Precompute connected zones for power balance
+                for node in order_book.nodes
+                    zones_to[node] = String[]   # Zones that can send TO this node
+                    zones_from[node] = String[] # Zones that can receive FROM this node
+
+                    for (s, d) in zone_pairs
+                        if d == node
+                            push!(zones_to[node], s)   # s can send TO node
+                        end
+                        if s == node
+                            push!(zones_from[node], d) # node can send TO d
+                        end
+                    end
+                end
+
+                println("   ✅ Added $(length(zone_pairs) * length(order_book.periods)) flow variables with ATC bounds")
+            end
+        end
+
         # Stepwise order constraints
         @constraint(model, stepwise_upper_bound[order_id in order_ids],
             stepwise_acceptance[order_id] <= 1
@@ -292,15 +488,39 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
             end
         end
 
-        # Power balance constraints (single node case - no transmission flows)
-        @constraint(model, nodal_power_balance[node_id in order_book.nodes, time_period in order_book.periods],
-            sum(
-                stepwise_acceptance[order_ids[i]] *
-                (simple_orders[i].type == :supply ? -simple_orders[i].quantity : simple_orders[i].quantity)
-                for i in get(orders_by_node_time, (node_id, time_period), Int[])
-            ) +
-            load_shed[node_id, time_period] == 0
-        )
+        # Power balance constraints with optional transmission flows
+        # For multi-zone: supply - demand + inflows - outflows + load_shed = 0
+        # For single-zone: supply - demand + load_shed = 0
+        if flow !== nothing && !isempty(zone_pairs)
+            # Multi-zone power balance with transmission flows
+            @constraint(model, nodal_power_balance[node_id in order_book.nodes, time_period in order_book.periods],
+                # Order contribution: supply (negative) + demand (positive)
+                sum(
+                    stepwise_acceptance[order_ids[i]] *
+                    (simple_orders[i].type == :supply ? -simple_orders[i].quantity : simple_orders[i].quantity)
+                    for i in get(orders_by_node_time, (node_id, time_period), Int[]);
+                    init=0.0
+                ) +
+                # Load shedding (emergency)
+                load_shed[node_id, time_period] +
+                # Inflows: power coming INTO this zone (flow[source, this_zone])
+                sum(flow[(z, node_id), time_period] for z in get(zones_to, node_id, String[]); init=0.0) -
+                # Outflows: power going OUT of this zone (flow[this_zone, sink])
+                sum(flow[(node_id, z), time_period] for z in get(zones_from, node_id, String[]); init=0.0)
+                == 0
+            )
+        else
+            # Single-zone power balance (no transmission flows)
+            @constraint(model, nodal_power_balance[node_id in order_book.nodes, time_period in order_book.periods],
+                sum(
+                    stepwise_acceptance[order_ids[i]] *
+                    (simple_orders[i].type == :supply ? -simple_orders[i].quantity : simple_orders[i].quantity)
+                    for i in get(orders_by_node_time, (node_id, time_period), Int[]);
+                    init=0.0
+                ) +
+                load_shed[node_id, time_period] == 0
+            )
+        end
 
         # Complementarity constraints using Big-M reformulation
         @variable(model, stepwise_acceptance_complementarity_aux[order_id in order_ids], Bin)
@@ -347,6 +567,21 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
                 stepwise_acceptance_values[order_id] = value(stepwise_acceptance[order_id])
             end
 
+            # Extract transmission flow values if multi-zone
+            transmission_flow_values = Dict{String,Dict{String,Float64}}()
+            if flow !== nothing && !isempty(zone_pairs)
+                for pair in zone_pairs
+                    source, sink = pair
+                    flow_id = "$(source)_to_$(sink)"
+                    transmission_flow_values[flow_id] = Dict{String,Float64}()
+
+                    for t in order_book.periods
+                        transmission_flow_values[flow_id][t] = value(flow[pair, t])
+                    end
+                end
+                println("   📊 Extracted flows for $(length(zone_pairs)) zone pairs")
+            end
+
             # Convert JuMP termination status to our expected Symbol
             status_symbol = if string(termination_status(model)) == "OPTIMAL"
                 :optimal
@@ -367,8 +602,9 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
                 stepwise_acceptance_values,
                 Dict{String,Float64}(),  # Empty block acceptance
                 Dict{String,Float64}(),  # Empty block activation
-                Dict{String,Dict{String,Float64}}(),  # Empty transmission flows
+                transmission_flow_values,  # Transmission flows (populated if multi-zone)
                 solve_time,
+                solve_time,  # total_time (will be updated by caller if needed)
                 solver_name,
                 string(termination_status(model))
             )
@@ -382,6 +618,7 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
                 Dict{String,Float64}(),
                 Dict{String,Dict{String,Float64}}(),
                 solve_time,
+                solve_time,  # total_time (will be updated by caller if needed)
                 solver_name,
                 "No solution available: $(termination_status(model))"
             )
@@ -398,6 +635,7 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
             Dict{String,Float64}(),
             Dict{String,Dict{String,Float64}}(),
             solve_time,
+            solve_time,  # total_time (will be updated by caller if needed)
             solver_name,
             "Optimization failed: $e"
         )

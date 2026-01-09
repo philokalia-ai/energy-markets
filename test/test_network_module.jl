@@ -184,17 +184,18 @@ using Euphemia
             @test "hour" in names(capacities_df) || nrow(capacities_df) == 0
         end
 
-        @testset "Fallback Mechanism" begin
+        @testset "Error on Missing Data" begin
             # Test with a future date that definitely won't have data
+            # Functions should throw errors (no silent fallback to example data)
             future_date = Date("2030-01-01")
 
+            # Network still falls back (legacy behavior)
             network = create_network_from_entsoe(future_date)
             @test isa(network, NetworkTopology)
-            @test length(network.lines) == 3  # Should fallback to example network
+            @test length(network.lines) == 3  # Falls back to example network
 
-            transfer_cap = create_transfer_capacity_from_entsoe(future_date)
-            @test isa(transfer_cap, TransferCapacity)
-            @test length(transfer_cap.bidding_zones) == 4  # Should fallback to example
+            # TransferCapacity should throw an error (no silent fallback)
+            @test_throws ErrorException create_transfer_capacity_from_entsoe(future_date)
         end
     end
 

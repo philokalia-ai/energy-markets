@@ -257,9 +257,11 @@ using .Network: NetworkTopology, create_example_network, add_atc_constraints!
 using .Network: TransferCapacity, create_transfer_capacity_from_entsoe, add_transfer_capacity_constraints!, create_example_transfer_capacity
 using .Network: create_network_from_entsoe, create_greek_network_from_entsoe, get_entsoe_transfer_capacities
 using .Network: get_bidding_zones, get_outgoing_lines, get_incoming_lines, create_greek_transfer_capacity_from_entsoe
+using .Network: get_zones_with_transfer_capacity, get_connected_zones, get_zone_pairs  # Multi-zone support
 
 include("MPCC.jl")
 using .MPCC: MPCCResult, MPCCOrderBook, solve_mpcc_market_clearing, create_typed_order_book, select_solver
+using .MPCC: create_multi_zone_order_book, with_total_time  # Multi-zone support
 
 include("AlternativeOrderBook.jl")
 using .AlternativeOrderBook: create_adjusted_order_book, AdjustedOrderBookResult, print_order_book_summary
@@ -291,9 +293,11 @@ export TransferCapacity, create_transfer_capacity_from_entsoe, add_transfer_capa
 export create_example_transfer_capacity, create_greek_transfer_capacity_from_entsoe
 export create_network_from_entsoe, create_greek_network_from_entsoe, get_entsoe_transfer_capacities
 export get_bidding_zones, get_outgoing_lines, get_incoming_lines
+export get_zones_with_transfer_capacity, get_connected_zones, get_zone_pairs  # Multi-zone support
 
 # MPCC optimization functionality
 export MPCCResult, MPCCOrderBook, solve_mpcc_market_clearing, create_typed_order_book, select_solver
+export create_multi_zone_order_book, run_multi_zone_market_clearing, run_multi_zone_for_date_range  # Multi-zone market clearing
 
 # Solver Environment Caching  
 export get_cached_optimizer, clear_solver_cache!
@@ -318,6 +322,7 @@ export generate_energy_prices
 
 # Database utilities
 export save_energy_prices, ensure_energy_prices_table, withdb, save_optimization_run
+export save_transmission_flows, ensure_transmission_flows_table  # Multi-zone transmission flows
 
 # Zone discovery utilities  
 export get_available_zones
@@ -634,8 +639,8 @@ function generate_energy_prices(bidding_zone::String, date::Date;
                 println("   ✅ Energy prices extracted for $(length(prices)) time periods")
                 println("   📈 Price range: €$(round(minimum(values(prices)), digits=2)) - €$(round(maximum(values(prices)), digits=2))/MWh")
 
-                # Save successful optimization run
-                save_optimization_run(bidding_zone, date, order_method, model, optimizer, :optimal;
+                # Save successful optimization run and get the ID
+                optimization_run_id = save_optimization_run(bidding_zone, date, order_method, model, optimizer, :optimal;
                     objective_value=mpcc_result.objective_value,
                     solve_time_seconds=solve_time_seconds,
                     num_orders=length(order_book.orders),
@@ -645,7 +650,9 @@ function generate_energy_prices(bidding_zone::String, date::Date;
                 if save_to_db
                     try
                         println("   💾 Saving $(length(prices)) price records to database...")
-                        records_saved = save_energy_prices(prices, bidding_zone, date, order_method)
+                        records_saved = save_energy_prices(prices, bidding_zone, date, order_method;
+                                                           clearing_mode="single_zone",
+                                                           optimization_run_id=optimization_run_id)
                         println("   ✅ Successfully saved $records_saved records to database")
                     catch db_error
                         println("   ⚠️  Warning: Failed to save prices to database: $db_error")
@@ -716,20 +723,20 @@ The function:
 function get_available_zones(date::Date; fallback_zones::Vector{String}=String[])
     # Query to get zones from ENTSO-E database
     query = """
-    SELECT DISTINCT map_code
+    SELECT DISTINCT area_map_code
     FROM entsoe.production_and_generation_units
     WHERE production_unit_status = 'COMMISSIONED'
-      AND generation_unit_status = 'COMMISSIONED'  
+      AND generation_unit_status = 'COMMISSIONED'
       AND area_type_code IN ('BZN', 'BZN/CTA')
-      AND \$1 >= valid_from 
+      AND \$1 >= valid_from
       AND (\$1 <= valid_to OR valid_to IS NULL)
-      AND map_code IS NOT NULL
-    ORDER BY map_code
+      AND area_map_code IS NOT NULL
+    ORDER BY area_map_code
     """
 
     try
         df = sql2df(query, [date])
-        zones_raw = df.map_code
+        zones_raw = df.area_map_code
         # Filter out missing values and convert to String array
         zones_sorted = sort([string(zone) for zone in zones_raw if !ismissing(zone)])
 
@@ -754,6 +761,574 @@ function get_available_zones(date::Date; fallback_zones::Vector{String}=String[]
     @info "Using default fallback zones: " * join(default_fallback, ", ")
 
     return default_fallback
+end
+
+# =============================================================================
+# MULTI-ZONE MARKET CLEARING WITH TRANSMISSION FLOWS
+# =============================================================================
+
+"""
+    _create_multi_zone_order_book_alternative(zones::Vector{String}, day::Date; random_seed=nothing)
+
+Internal helper to create a multi-zone order book using the alternative (faster) order generation method.
+Uses `create_adjusted_order_book` for each zone and combines the results.
+"""
+function _create_multi_zone_order_book_alternative(zones::Vector{String}, day::Date; random_seed::Union{Int,Nothing}=nothing)
+    if isempty(zones)
+        error("At least one bidding zone must be specified")
+    end
+
+    println("🌍 Creating multi-zone order book (alternative method) for $(length(zones)) zones")
+
+    # Aggregate orders from all zones
+    all_orders = Vector{MarketOrders.MarketOrder}()
+    all_periods = Set{String}()
+    failed_zones = String[]
+
+    for zone in zones
+        try
+            println("   📊 Processing zone $zone...")
+
+            # Generate orders using alternative order book method
+            result = create_adjusted_order_book(zone, day; random_seed=random_seed)
+
+            if !result.success
+                @warn "Failed to generate orders for zone $zone: $(result.message)"
+                push!(failed_zones, zone)
+                continue
+            end
+
+            # Extract orders from the result's order book
+            append!(all_orders, result.order_book.orders)
+
+            # Collect time periods
+            for period in result.order_book.periods
+                push!(all_periods, period)
+            end
+
+            println("      ✅ Added $(result.supply_orders) supply + $(result.demand_orders) demand orders")
+
+        catch e
+            @error "Error processing zone $zone: $e"
+            push!(failed_zones, zone)
+        end
+    end
+
+    # Determine successful zones
+    successful_zones = filter(z -> !(z in failed_zones), zones)
+
+    if isempty(successful_zones)
+        error("Failed to generate orders for any zone")
+    end
+
+    if !isempty(failed_zones)
+        @warn "Some zones failed: $(join(failed_zones, ", ")). Proceeding with: $(join(successful_zones, ", "))"
+    end
+
+    # Convert periods to sorted vector
+    periods_vector = sort(collect(all_periods))
+
+    if isempty(periods_vector)
+        periods_vector = [string(h) for h in 1:24]
+        @warn "No periods found in orders, defaulting to 24 hourly periods"
+    end
+
+    println("   📊 Detected $(length(periods_vector)) time periods")
+
+    # Fetch transfer capacity from ENTSO-E for connections between these zones
+    println("   🔌 Fetching transfer capacities between zones...")
+    transfer_capacity = Network.create_transfer_capacity_from_entsoe(day, successful_zones)
+
+    # Log connectivity info
+    zone_pairs = Network.get_zone_pairs(transfer_capacity)
+    println("   ✅ Found $(length(zone_pairs)) directional transfer capacity links")
+
+    # Create the multi-zone order book
+    order_book = MPCC.MPCCOrderBook(
+        all_orders,
+        successful_zones,
+        periods_vector,
+        (0.0, 500.0),           # Price limits (€/MWh)
+        transfer_capacity       # Attach transfer capacity for multi-zone clearing
+    )
+
+    println("✅ Created multi-zone order book (alternative):")
+    println("   🌍 Zones: $(length(successful_zones))")
+    println("   📝 Total orders: $(length(all_orders))")
+    println("   🕐 Time periods: $(length(periods_vector))")
+    println("   🔌 Transfer links: $(length(zone_pairs))")
+
+    return order_book
+end
+
+"""
+    run_multi_zone_market_clearing(date::Date;
+                                   zones::Vector{String}=String[],
+                                   order_method::Symbol=:uc_based,
+                                   optimizer::String="highs",
+                                   markup_factor::Float64=1.1,
+                                   silent::Bool=true,
+                                   save_to_db::Bool=false)
+
+Run simultaneous multi-zone market clearing with cross-border transmission flows.
+
+Unlike `generate_energy_prices_for_all_zones()` which processes zones independently,
+this function solves all zones together in a single optimization problem with
+transmission flow constraints between zones based on ENTSO-E ATC data.
+
+# Arguments
+- `date::Date`: The date for which to run market clearing
+- `zones::Vector{String}`: List of bidding zones to include (default: auto-discover from DB)
+- `order_method::Symbol`: Method for creating orders - `:uc_based` or `:alternative` (default: `:uc_based`)
+- `optimizer::String`: Optimization solver - "highs" (default), "gurobi", "cplex", "auto"
+- `markup_factor::Float64`: Price markup factor for supply bids (default: 1.1)
+- `silent::Bool`: Whether to suppress solver output (default: true)
+- `save_to_db::Bool`: Whether to save results to database (default: false)
+
+# Returns
+- `MPCCResult`: Market clearing results including:
+  - `market_prices`: Dict of prices per zone per time period
+  - `transmission_flows`: Dict of cross-border flows per zone pair per period
+  - `status`: Optimization status (:optimal, :infeasible, etc.)
+  - `solve_time`: Time taken to solve the optimization
+
+# Example
+```julia
+using Euphemia, Dates
+
+# Auto-discover zones and run multi-zone clearing
+result = run_multi_zone_market_clearing(Date(2024, 6, 15))
+
+# Check zonal prices
+for (zone, prices) in result.market_prices
+    avg_price = mean(values(prices))
+    println("\$zone: avg price = €\$(round(avg_price, digits=2))/MWh")
+end
+
+# Check transmission flows
+for (flow_id, flows) in result.transmission_flows
+    avg_flow = mean(values(flows))
+    println("\$flow_id: avg flow = \$(round(avg_flow, digits=1)) MW")
+end
+
+# Run with specific zones
+result = run_multi_zone_market_clearing(Date(2024, 6, 15);
+    zones=["GR", "BG", "IT_SOUTH"],
+    save_to_db=true)
+```
+
+# Notes
+- Zones must have transfer capacity data in `entsoe.offered_transfer_capacities_implicit`
+- Zones without UC data will be skipped with a warning
+- ATC constraints bound flows: -backward_cap ≤ flow ≤ forward_cap
+- Transmission is modeled as lossless (no losses on flows)
+"""
+function run_multi_zone_market_clearing(date::Date;
+                                        zones::Vector{String}=String[],
+                                        order_method::Symbol=:uc_based,
+                                        optimizer::String="highs",
+                                        markup_factor::Float64=1.1,
+                                        silent::Bool=true,
+                                        save_to_db::Bool=false)
+
+    start_time = time()
+
+    println("=" ^ 60)
+    println("🌍 MULTI-ZONE MARKET CLEARING WITH TRANSMISSION FLOWS")
+    println("   Date: $date")
+    println("=" ^ 60)
+
+    # Discover zones if not provided
+    if isempty(zones)
+        println("\n🔍 Discovering available zones from transfer capacity data...")
+        zones = Network.get_zones_with_transfer_capacity(date)
+
+        if isempty(zones)
+            error("No zones found in transfer capacity data for $date")
+        end
+    end
+
+    println("\n📋 Target zones: $(join(zones, ", "))")
+    println("   📋 Order method: $order_method")
+
+    # Create multi-zone order book based on order_method
+    println("\n📊 Creating multi-zone order book...")
+    order_book = if order_method == :uc_based
+        # UC-based: runs full unit commitment for each zone (slower but more accurate)
+        MPCC.create_multi_zone_order_book(zones, date;
+                                          markup_factor=markup_factor,
+                                          optimizer=optimizer)
+    elseif order_method == :alternative
+        # Alternative: uses simplified order generation (faster)
+        _create_multi_zone_order_book_alternative(zones, date)
+    else
+        error("Invalid order_method: $order_method. Must be :uc_based or :alternative")
+    end
+
+    # Run MPCC market clearing with transmission constraints
+    println("\n⚡ Running multi-zone market clearing optimization...")
+    mpcc_result = MPCC.solve_mpcc_market_clearing(order_book;
+                                                   preferred_solver=optimizer,
+                                                   silent=silent)
+
+    total_time = time() - start_time
+
+    # Update result with correct total_time (includes order book creation)
+    result = MPCC.with_total_time(mpcc_result, total_time)
+
+    # Report results
+    println("\n" * "=" ^ 60)
+    println("📊 MULTI-ZONE CLEARING RESULTS")
+    println("=" ^ 60)
+    println("   Status: $(result.status)")
+    println("   Solve time: $(round(result.solve_time, digits=2))s (total: $(round(result.total_time, digits=2))s)")
+
+    if result.status == :optimal
+        println("   Objective value: $(round(result.objective_value, digits=2))")
+
+        # Report zonal prices
+        println("\n💰 Zonal Clearing Prices (avg):")
+        for zone in order_book.nodes
+            if haskey(result.market_prices, zone)
+                prices = values(result.market_prices[zone])
+                avg_price = isempty(prices) ? 0.0 : sum(prices) / length(prices)
+                min_price = isempty(prices) ? 0.0 : minimum(prices)
+                max_price = isempty(prices) ? 0.0 : maximum(prices)
+                println("   $zone: avg=€$(round(avg_price, digits=2))/MWh (min=$(round(min_price, digits=2)), max=$(round(max_price, digits=2)))")
+            end
+        end
+
+        # Report transmission flows
+        if !isempty(result.transmission_flows)
+            println("\n🔌 Cross-Border Flows (avg):")
+            for (flow_id, flows) in result.transmission_flows
+                flow_values = values(flows)
+                avg_flow = isempty(flow_values) ? 0.0 : sum(flow_values) / length(flow_values)
+                min_flow = isempty(flow_values) ? 0.0 : minimum(flow_values)
+                max_flow = isempty(flow_values) ? 0.0 : maximum(flow_values)
+                # Only print if there's significant flow
+                if abs(avg_flow) > 0.1 || abs(max_flow) > 0.1
+                    println("   $flow_id: avg=$(round(avg_flow, digits=1))MW (min=$(round(min_flow, digits=1)), max=$(round(max_flow, digits=1)))")
+                end
+            end
+        end
+
+        # Save to database if requested
+        if save_to_db
+            println("\n💾 Saving results to database...")
+            try
+                # Save optimization run record first and get the ID
+                optimization_run_id = save_optimization_run(
+                    "MULTI_ZONE",  # Use special identifier for multi-zone runs
+                    date,
+                    order_method,
+                    :mpcc_multi_zone,
+                    result.solver_name,
+                    result.status;
+                    objective_value=result.objective_value,
+                    solve_time_seconds=result.solve_time,
+                    num_orders=length(order_book.orders),
+                    num_price_periods=length(order_book.periods)
+                )
+
+                # Save prices for each zone with the optimization run ID
+                for zone in order_book.nodes
+                    if haskey(result.market_prices, zone)
+                        save_energy_prices(result.market_prices[zone], zone, date, order_method;
+                                           clearing_mode="multi_zone",
+                                           optimization_run_id=optimization_run_id)
+                    end
+                end
+
+                # Save transmission flows
+                if !isempty(result.transmission_flows)
+                    save_transmission_flows(result.transmission_flows, date)
+                end
+
+                println("   ✅ Results saved to database")
+            catch e
+                @error "Failed to save results to database: $e"
+            end
+        end
+    else
+        println("   ⚠️  Optimization did not find optimal solution")
+        println("   Message: $(result.message)")
+    end
+
+    println("\n" * "=" ^ 60)
+
+    return result
+end
+
+"""
+    run_multi_zone_for_date_range(start_date::Date, end_date::Date;
+                                  zones::Vector{String}=String[],
+                                  order_method::Symbol=:uc_based,
+                                  optimizer::String="highs",
+                                  markup_factor::Float64=1.1,
+                                  silent::Bool=true,
+                                  save_to_db::Bool=false,
+                                  skip_existing::Bool=true)
+
+Run multi-zone market clearing with cross-border transmission flows for a date range.
+
+Processes multiple dates sequentially, running `run_multi_zone_market_clearing()` for each date.
+Provides comprehensive progress tracking and timing statistics.
+
+# Arguments
+- `start_date::Date`: First date to process (inclusive)
+- `end_date::Date`: Last date to process (inclusive)
+- `zones::Vector{String}`: List of bidding zones to include (default: auto-discover from DB)
+- `order_method::Symbol`: Method for creating orders - `:uc_based` or `:alternative` (default: `:uc_based`)
+- `optimizer::String`: Optimization solver - "highs" (default), "gurobi", "cplex", "auto"
+- `markup_factor::Float64`: Price markup factor for supply bids (default: 1.1)
+- `silent::Bool`: Whether to suppress solver output (default: true)
+- `save_to_db::Bool`: Whether to save results to database (default: false)
+- `skip_existing::Bool`: Whether to skip dates that already have data (default: true)
+
+# Returns
+- `NamedTuple` with the following fields:
+  - `date_results::Vector{NamedTuple}`: Results for each date processed
+  - `total_dates::Int`: Total number of dates in the range
+  - `successful_dates::Int`: Number of dates processed successfully
+  - `failed_dates::Int`: Number of dates that failed
+  - `skipped_dates::Int`: Number of dates skipped (if skip_existing=true)
+  - `total_time::Float64`: Total processing time for entire date range in seconds
+  - `avg_time_per_date::Float64`: Average processing time per date in seconds
+
+Each date result contains:
+- `date::Date`: The date processed
+- `success::Bool`: Whether the date was processed successfully
+- `result::Union{MPCCResult,Nothing}`: The MPCC result (or nothing if failed)
+- `elapsed_time::Float64`: Processing time for this date
+- `num_zones::Int`: Number of zones processed
+- `error_message::String`: Error details (empty if successful)
+
+# Example
+```julia
+using Euphemia, Dates
+
+# Process a week of multi-zone market clearing
+result = run_multi_zone_for_date_range(
+    Date(2024, 6, 1),
+    Date(2024, 6, 7);
+    save_to_db=true
+)
+
+println("Processed \$(result.successful_dates)/\$(result.total_dates) dates")
+println("Total time: \$(round(result.total_time/60, digits=1)) minutes")
+println("Average per date: \$(round(result.avg_time_per_date, digits=1)) seconds")
+
+# Analyze results
+for dr in result.date_results
+    if dr.success
+        println("\$(dr.date): \$(dr.num_zones) zones, \$(round(dr.elapsed_time, digits=1))s")
+    else
+        println("\$(dr.date): FAILED - \$(dr.error_message)")
+    end
+end
+```
+"""
+function run_multi_zone_for_date_range(start_date::Date, end_date::Date;
+                                       zones::Vector{String}=String[],
+                                       order_method::Symbol=:uc_based,
+                                       optimizer::String="highs",
+                                       markup_factor::Float64=1.1,
+                                       silent::Bool=true,
+                                       save_to_db::Bool=false,
+                                       skip_existing::Bool=true)
+
+    # Validate date range
+    if start_date > end_date
+        error("start_date ($start_date) cannot be after end_date ($end_date)")
+    end
+
+    # Generate date range
+    dates = collect(start_date:Day(1):end_date)
+    total_dates = length(dates)
+
+    println("=" ^ 70)
+    println("🌍 MULTI-ZONE MARKET CLEARING FOR DATE RANGE")
+    println("=" ^ 70)
+    println("   📅 Date range: $start_date to $end_date ($total_dates days)")
+    println("   📋 Order method: $order_method")
+    println("   🔧 Optimizer: $optimizer")
+    if !isempty(zones)
+        println("   🗺️  Zones: $(join(zones, ", "))")
+    else
+        println("   🗺️  Zones: auto-discover")
+    end
+    if save_to_db
+        println("   💾 Database saving: enabled")
+    end
+    println()
+
+    range_start_time = time()
+    date_results = NamedTuple[]
+
+    successful_dates = 0
+    failed_dates = 0
+    skipped_dates = 0
+
+    # Check for existing data if skip_existing is enabled
+    dates_to_process = dates
+    if skip_existing && save_to_db
+        try
+            println("🔍 Checking for existing multi-zone data...")
+            # Check which dates already have data for multi_zone clearing mode
+            existing_query = """
+                SELECT DISTINCT DATE(date_time_utc) as run_date
+                FROM simulations.energy_prices
+                WHERE order_method = \$1
+                AND clearing_mode = 'multi_zone'
+                AND DATE(date_time_utc) >= \$2
+                AND DATE(date_time_utc) <= \$3
+            """
+            existing_df = sql2df(existing_query, [string(order_method), start_date, end_date])
+            existing_dates = Set(Date.(existing_df.run_date))
+
+            dates_to_process = filter(d -> d ∉ existing_dates, dates)
+            skipped_count = length(dates) - length(dates_to_process)
+
+            if skipped_count > 0
+                skipped_dates = skipped_count
+                println("⏭️  Skipping $skipped_count dates with existing data")
+            end
+        catch e
+            @warn "Failed to check existing data, processing all dates: $e"
+        end
+    end
+
+    if isempty(dates_to_process)
+        println("✅ All dates already processed!")
+        return (
+            date_results=date_results,
+            total_dates=total_dates,
+            successful_dates=0,
+            failed_dates=0,
+            skipped_dates=skipped_dates,
+            total_time=time() - range_start_time,
+            avg_time_per_date=0.0
+        )
+    end
+
+    println("🚀 Processing $(length(dates_to_process)) dates...")
+    println()
+
+    for (i, date) in enumerate(dates_to_process)
+        date_start_time = time()
+
+        println("=" ^ 60)
+        println("📅 [$i/$(length(dates_to_process))] Processing $date")
+        println("=" ^ 60)
+
+        try
+            result = run_multi_zone_market_clearing(date;
+                                                    zones=zones,
+                                                    order_method=order_method,
+                                                    optimizer=optimizer,
+                                                    markup_factor=markup_factor,
+                                                    silent=silent,
+                                                    save_to_db=save_to_db)
+
+            date_elapsed = time() - date_start_time
+
+            if result.status == :optimal
+                successful_dates += 1
+                num_zones = length(keys(result.market_prices))
+
+                push!(date_results, (
+                    date=date,
+                    success=true,
+                    result=result,
+                    elapsed_time=date_elapsed,
+                    num_zones=num_zones,
+                    error_message=""
+                ))
+
+                println("\n✅ Date $date completed successfully")
+                println("   ⏱️  Time: $(round(date_elapsed, digits=1))s (solver: $(round(result.solve_time, digits=1))s)")
+                println("   🗺️  Zones: $num_zones")
+            else
+                failed_dates += 1
+
+                push!(date_results, (
+                    date=date,
+                    success=false,
+                    result=result,
+                    elapsed_time=date_elapsed,
+                    num_zones=0,
+                    error_message=result.message
+                ))
+
+                println("\n❌ Date $date: optimization failed - $(result.message)")
+            end
+
+        catch e
+            date_elapsed = time() - date_start_time
+            failed_dates += 1
+            error_msg = string(e)
+
+            push!(date_results, (
+                date=date,
+                success=false,
+                result=nothing,
+                elapsed_time=date_elapsed,
+                num_zones=0,
+                error_message=error_msg
+            ))
+
+            println("\n❌ Date $date: EXCEPTION - $(first(split(error_msg, '\n')))")
+        end
+
+        # Progress update
+        total_elapsed = time() - range_start_time
+        remaining_dates = length(dates_to_process) - i
+        if i > 0 && remaining_dates > 0
+            avg_per_date = total_elapsed / i
+            est_remaining = avg_per_date * remaining_dates / 60
+            println("   📈 Progress: $i/$(length(dates_to_process)) | Est. remaining: $(round(est_remaining, digits=1)) min")
+        end
+        println()
+    end
+
+    total_time = time() - range_start_time
+    processed_count = successful_dates + failed_dates
+    avg_time_per_date = processed_count > 0 ? total_time / processed_count : 0.0
+
+    # Print final summary
+    println("=" ^ 70)
+    println("🏁 MULTI-ZONE DATE RANGE PROCESSING COMPLETE")
+    println("=" ^ 70)
+
+    success_rate = total_dates > 0 ? round(100 * successful_dates / (successful_dates + failed_dates + 0.001), digits=1) : 0
+
+    println("📊 Summary:")
+    println("   📅 Date range: $start_date to $end_date")
+    println("   📆 Total dates: $total_dates")
+    if skipped_dates > 0
+        println("   ⏭️  Skipped: $skipped_dates")
+    end
+    println("   ✅ Successful: $successful_dates")
+    println("   ❌ Failed: $failed_dates")
+    println("   📈 Success rate: $success_rate%")
+    println("   ⏱️  Total time: $(round(total_time/60, digits=1)) minutes")
+    println("   🕒 Average per date: $(round(avg_time_per_date, digits=1)) seconds")
+
+    if failed_dates > 0
+        failed_date_list = [r.date for r in date_results if !r.success]
+        println("\n❌ Failed dates: $(join(failed_date_list, ", "))")
+    end
+
+    return (
+        date_results=date_results,
+        total_dates=total_dates,
+        successful_dates=successful_dates,
+        failed_dates=failed_dates,
+        skipped_dates=skipped_dates,
+        total_time=total_time,
+        avg_time_per_date=avg_time_per_date
+    )
 end
 
 """
@@ -988,10 +1563,11 @@ function generate_energy_prices_for_all_zones(date::Date;
         try
             println("🔍 Checking for existing data...")
             existing_query = """
-                SELECT DISTINCT bidding_zone 
-                FROM simulations.energy_prices 
-                WHERE DATE(date_time_utc) = \$1 
+                SELECT DISTINCT bidding_zone
+                FROM simulations.energy_prices
+                WHERE DATE(date_time_utc) = \$1
                 AND order_method = \$2
+                AND clearing_mode = 'single_zone'
             """
             existing_df = sql2df(existing_query, [date, string(order_method)])
             existing_zones = Set(string(zone) for zone in existing_df.bidding_zone)

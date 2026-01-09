@@ -221,52 +221,55 @@ More suitable for market clearing applications than NetworkTopology.
 - `TransferCapacity`: Transfer capacity data between bidding zones
 """
 function create_transfer_capacity_from_entsoe(date::Date, bidding_zones::Vector{String}=String[])
-    try
-        # Build SQL query to get transfer capacities for the specified date
-        zone_filter = isempty(bidding_zones) ? "" :
-                      "AND (out_area_code IN ('" * join(bidding_zones, "','") * "') OR in_area_code IN ('" * join(bidding_zones, "','") * "'))"
+    # Build SQL query to get transfer capacities for the specified date
+    # Use out_map_code/in_map_code for short zone codes (e.g., "GR") instead of EIC codes
+    zone_filter = isempty(bidding_zones) ? "" :
+                  "AND (out_map_code IN ('" * join(bidding_zones, "','") * "') OR in_map_code IN ('" * join(bidding_zones, "','") * "'))"
 
-        query = """
-        SELECT 
-            out_area_code as source_zone,
-            in_area_code as sink_zone,
-            EXTRACT(HOUR FROM date_time_utc) + 1 as time_period,
-            capacity_mw as capacity
-        FROM entsoe.offered_transfer_capacities_implicit 
-        WHERE DATE(date_time_utc) = \$1
-        $zone_filter
-        ORDER BY out_area_code, in_area_code, date_time_utc
-        """
+    query = """
+    SELECT
+        out_map_code as source_zone,
+        in_map_code as sink_zone,
+        EXTRACT(HOUR FROM date_time_utc) + 1 as time_period,
+        capacity_mw as capacity
+    FROM entsoe.offered_transfer_capacities_implicit
+    WHERE DATE(date_time_utc) = \$1
+    $zone_filter
+    ORDER BY out_map_code, in_map_code, date_time_utc
+    """
 
-        println("📊 Fetching ENTSO-E transfer capacity data for $date...")
-        df = safe_sql2df(query, [date])
+    println("📊 Fetching ENTSO-E transfer capacity data for $date...")
+    df = safe_sql2df(query, [date])
 
-        if nrow(df) == 0
-            @warn "No ENTSO-E transfer capacity data found for $date"
-            return create_example_transfer_capacity()  # Fallback to example
-        end
-
-        println("✅ Found $(nrow(df)) transfer capacity records")
-        return build_transfer_capacity_from_dataframe(df)
-
-    catch e
-        @error "Failed to fetch ENTSO-E transfer capacity data: $e"
-        @warn "Falling back to example transfer capacity"
-        return create_example_transfer_capacity()
+    if nrow(df) == 0
+        zones_str = isempty(bidding_zones) ? "all zones" : join(bidding_zones, ", ")
+        error("No ENTSO-E transfer capacity data found for $date (zones: $zones_str). " *
+              "Check that data exists in entsoe.offered_transfer_capacities_implicit table.")
     end
+
+    println("✅ Found $(nrow(df)) transfer capacity records")
+    return build_transfer_capacity_from_dataframe(df)
 end
 
 """
     build_transfer_capacity_from_dataframe(df::DataFrame)
 
 Converts ENTSO-E transfer capacity DataFrame into TransferCapacity structure.
+
+ENTSO-E data provides directional capacities, so:
+- A→B record with capacity X means forward capacity from A to B is X
+- B→A record with capacity Y means forward capacity from B to A is Y
+
+For the flow variable flow[A,B,t]:
+- Positive flow: A→B direction, bounded by capacity_forward[(A,B,t)]
+- Negative flow: B→A direction, bounded by capacity_backward[(A,B,t)] = capacity_forward[(B,A,t)]
 """
 function build_transfer_capacity_from_dataframe(df::DataFrame)
     zones = Set{String}()
     time_periods = Set{String}()
     capacity_forward = Dict{Tuple{String,String,String},Float64}()
-    capacity_backward = Dict{Tuple{String,String,String},Float64}()
 
+    # First pass: collect all forward capacities from the data
     for row in eachrow(df)
         source = row.source_zone
         sink = row.sink_zone
@@ -277,24 +280,39 @@ function build_transfer_capacity_from_dataframe(df::DataFrame)
         push!(zones, source, sink)
         push!(time_periods, period)
 
-        # Store forward capacity
+        # Store forward capacity (source → sink)
         capacity_forward[(source, sink, period)] = capacity
-
-        # Initialize backward capacity to 0 if not already set
-        if !haskey(capacity_backward, (source, sink, period))
-            capacity_backward[(source, sink, period)] = 0.0
-        end
     end
 
     # Convert to sorted vectors
     zones_vec = sort(collect(zones))
     periods_vec = sort(collect(time_periods), by=x -> parse(Int, x))
 
+    # Second pass: compute backward capacities
+    # For flow[A,B,t], backward capacity = forward capacity of reverse direction (B→A)
+    capacity_backward = Dict{Tuple{String,String,String},Float64}()
+
+    for (source, sink, period) in keys(capacity_forward)
+        # Backward capacity for (A,B) = forward capacity for (B,A)
+        reverse_key = (sink, source, period)
+        if haskey(capacity_forward, reverse_key)
+            capacity_backward[(source, sink, period)] = capacity_forward[reverse_key]
+        else
+            # No reverse direction data - assume 0 (unidirectional link)
+            capacity_backward[(source, sink, period)] = 0.0
+        end
+    end
+
+    # Count bidirectional links
+    bidirectional_count = count(v -> v > 0, values(capacity_backward))
+    unidirectional_count = length(capacity_forward) - bidirectional_count
+
     println("✅ Created transfer capacity structure:")
     println("   🌍 Bidding zones: $(length(zones_vec)) ($(join(zones_vec, ", ")))")
     println("   🕐 Time periods: $(length(periods_vec))")
-    println("   ➡️  Forward capacities: $(count(v -> v > 0, values(capacity_forward)))")
-    println("   ⬅️  Backward capacities: $(count(v -> v > 0, values(capacity_backward)))")
+    println("   ➡️  Forward capacities: $(length(capacity_forward)) entries")
+    println("   ↔️  Bidirectional links: $bidirectional_count")
+    println("   ➡️  Unidirectional links: $unidirectional_count")
 
     return TransferCapacity(
         zones_vec,
@@ -390,6 +408,114 @@ Returns lines terminating at the specified bidding zone.
 """
 function get_incoming_lines(network::NetworkTopology, zone::String)
     return [line for (line, sink) in network.sink_zone if sink == zone]
+end
+
+# =============================================================================
+# MULTI-ZONE SUPPORT FUNCTIONS
+# =============================================================================
+
+"""
+    get_zones_with_transfer_capacity(date::Date)
+
+Discovers bidding zones that have cross-border transfer capacity data for a given date.
+These are zones connected by transmission links in the ENTSO-E data.
+
+Note: This is different from `get_available_zones()` which finds zones with generators.
+For multi-zone market clearing, you need zones that have BOTH generators AND transfer capacity.
+
+# Arguments
+- `date::Date`: The date for which to discover interconnected zones
+
+# Returns
+- `Vector{String}`: Sorted list of zone codes with transfer capacity data
+"""
+function get_zones_with_transfer_capacity(date::Date)
+    try
+        # Use out_map_code/in_map_code for short zone codes (e.g., "GR") instead of EIC codes
+        query = """
+        SELECT DISTINCT zone_code FROM (
+            SELECT out_map_code as zone_code FROM entsoe.offered_transfer_capacities_implicit
+            WHERE DATE(date_time_utc) = \$1
+            UNION
+            SELECT in_map_code as zone_code FROM entsoe.offered_transfer_capacities_implicit
+            WHERE DATE(date_time_utc) = \$1
+        ) AS zones
+        ORDER BY zone_code
+        """
+
+        df = safe_sql2df(query, [date])
+
+        if nrow(df) == 0
+            @warn "No transfer capacity data found for $date - no zones discovered"
+            return String[]
+        end
+
+        zones = String.(df.zone_code)
+        println("🌍 Discovered $(length(zones)) bidding zones from ENTSO-E data: $(join(zones, ", "))")
+        return zones
+
+    catch e
+        @error "Failed to discover zones from ENTSO-E data: $e"
+        return String[]
+    end
+end
+
+"""
+    get_connected_zones(transfer_capacity::TransferCapacity, zone::String)
+
+Returns zones connected to the specified zone via transfer capacity.
+
+# Returns
+- Tuple of two vectors: (zones_with_flow_to_this_zone, zones_with_flow_from_this_zone)
+  - zones_with_flow_to: zones that can send power TO the specified zone
+  - zones_with_flow_from: zones that can receive power FROM the specified zone
+"""
+function get_connected_zones(transfer_capacity::TransferCapacity, zone::String)
+    zones_with_flow_to = String[]   # Zones that can send TO this zone
+    zones_with_flow_from = String[] # Zones that can receive FROM this zone
+
+    # Get a sample period to check connectivity
+    sample_period = isempty(transfer_capacity.time_periods) ? "1" : first(transfer_capacity.time_periods)
+
+    for other_zone in transfer_capacity.bidding_zones
+        if other_zone == zone
+            continue
+        end
+
+        # Check if other_zone can send TO this zone (other_zone → zone)
+        if haskey(transfer_capacity.capacity_forward, (other_zone, zone, sample_period)) ||
+           haskey(transfer_capacity.capacity_backward, (zone, other_zone, sample_period))
+            push!(zones_with_flow_to, other_zone)
+        end
+
+        # Check if this zone can send TO other_zone (zone → other_zone)
+        if haskey(transfer_capacity.capacity_forward, (zone, other_zone, sample_period)) ||
+           haskey(transfer_capacity.capacity_backward, (other_zone, zone, sample_period))
+            push!(zones_with_flow_from, other_zone)
+        end
+    end
+
+    return (zones_with_flow_to, zones_with_flow_from)
+end
+
+"""
+    get_zone_pairs(transfer_capacity::TransferCapacity)
+
+Returns all zone pairs that have transfer capacity defined.
+Each pair is represented as (source_zone, sink_zone) tuple.
+
+# Returns
+- `Vector{Tuple{String,String}}`: List of zone pairs with transfer capacity
+"""
+function get_zone_pairs(transfer_capacity::TransferCapacity)
+    pairs = Set{Tuple{String,String}}()
+
+    for key in keys(transfer_capacity.capacity_forward)
+        source, sink, _ = key
+        push!(pairs, (source, sink))
+    end
+
+    return collect(pairs)
 end
 
 # =============================================================================

@@ -124,13 +124,47 @@ function ensure_energy_prices_table()
             price_eur_mwh NUMERIC(10,2) NOT NULL,
             currency VARCHAR(3) NOT NULL,
             order_method VARCHAR(20) NOT NULL,
+            clearing_mode VARCHAR(20) NOT NULL DEFAULT 'single_zone',
+            optimization_run_id INTEGER,
             code_version INTEGER NOT NULL,
             update_time_utc TIMESTAMP NOT NULL,
-            UNIQUE(date_time_utc, bidding_zone, contract_type, order_method, code_version)
+            UNIQUE(date_time_utc, bidding_zone, contract_type, order_method, clearing_mode, code_version)
         )
         """
 
         LibPQ.execute(cnx, create_table_sql)
+
+        # Add clearing_mode column if it doesn't exist (for existing tables)
+        LibPQ.execute(cnx, """
+            DO \$\$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_schema = 'simulations'
+                    AND table_name = 'energy_prices'
+                    AND column_name = 'clearing_mode'
+                ) THEN
+                    ALTER TABLE simulations.energy_prices
+                    ADD COLUMN clearing_mode VARCHAR(20) NOT NULL DEFAULT 'single_zone';
+                END IF;
+            END \$\$;
+        """)
+
+        # Add optimization_run_id column if it doesn't exist (for existing tables)
+        LibPQ.execute(cnx, """
+            DO \$\$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_schema = 'simulations'
+                    AND table_name = 'energy_prices'
+                    AND column_name = 'optimization_run_id'
+                ) THEN
+                    ALTER TABLE simulations.energy_prices
+                    ADD COLUMN optimization_run_id INTEGER;
+                END IF;
+            END \$\$;
+        """)
 
         # Create useful indexes
         LibPQ.execute(
@@ -144,8 +178,24 @@ ON simulations.energy_prices (date_time_utc, bidding_zone)
         LibPQ.execute(
             cnx,
             """
-CREATE INDEX IF NOT EXISTS idx_energy_prices_zone_contract 
+CREATE INDEX IF NOT EXISTS idx_energy_prices_zone_contract
 ON simulations.energy_prices (bidding_zone, contract_type, date_time_utc)
+"""
+        )
+
+        LibPQ.execute(
+            cnx,
+            """
+CREATE INDEX IF NOT EXISTS idx_energy_prices_clearing_mode
+ON simulations.energy_prices (clearing_mode, date_time_utc)
+"""
+        )
+
+        LibPQ.execute(
+            cnx,
+            """
+CREATE INDEX IF NOT EXISTS idx_energy_prices_optimization_run_id
+ON simulations.energy_prices (optimization_run_id)
 """
         )
 
@@ -184,17 +234,38 @@ ON simulations.optimization_runs (bidding_zone, optimization_date)
         LibPQ.execute(
             cnx,
             """
-CREATE INDEX IF NOT EXISTS idx_optimization_runs_status 
+CREATE INDEX IF NOT EXISTS idx_optimization_runs_status
 ON simulations.optimization_runs (status, optimization_date)
 """
         )
+
+        # Add foreign key constraint if it doesn't exist
+        LibPQ.execute(cnx, """
+            DO \$\$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.table_constraints
+                    WHERE constraint_schema = 'simulations'
+                    AND table_name = 'energy_prices'
+                    AND constraint_name = 'fk_energy_prices_optimization_run'
+                ) THEN
+                    ALTER TABLE simulations.energy_prices
+                    ADD CONSTRAINT fk_energy_prices_optimization_run
+                    FOREIGN KEY (optimization_run_id)
+                    REFERENCES simulations.optimization_runs(id)
+                    ON DELETE SET NULL;
+                END IF;
+            END \$\$;
+        """)
     end
 
     @info "Energy prices and optimization runs tables schema verified/created"
 end
 
 """
-    save_energy_prices(prices::Dict{String,Float64}, bidding_zone::String, day::Date, order_method::Symbol; batch_size::Int=100, create_schema::Bool=true)
+    save_energy_prices(prices::Dict{String,Float64}, bidding_zone::String, day::Date, order_method::Symbol;
+                       clearing_mode::String="single_zone", optimization_run_id::Union{Integer,Nothing}=nothing,
+                       batch_size::Int=100, create_schema::Bool=true)
 
 Save energy prices to the database in the simulations.energy_prices table.
 Creates the schema and table if they don't exist (when create_schema=true).
@@ -202,9 +273,11 @@ Assumes connection is already to the 'energy' database.
 
 # Arguments
 - `prices`: Dictionary with timeslot keys ("YYYYMMDD-HHMM") and price values in EUR/MWh
-- `bidding_zone`: Bidding zone code (e.g., "GR", "AL") 
+- `bidding_zone`: Bidding zone code (e.g., "GR", "AL")
 - `day`: Date of the prices
 - `order_method`: Method used (:uc_based or :alternative)
+- `clearing_mode`: Market clearing mode ("single_zone" or "multi_zone", default: "single_zone")
+- `optimization_run_id`: Foreign key to simulations.optimization_runs (default: nothing)
 - `batch_size`: Number of records to insert per batch (default: 100)
 - `create_schema`: Whether to create schema/table if missing (default: true)
 
@@ -217,9 +290,13 @@ Assumes connection is already to the 'energy' database.
 - `currency`: Always "EUR" for now
 - `update_time_utc`: Timestamp when record was inserted
 - `order_method`: Method used to generate prices
+- `clearing_mode`: Market clearing mode (single_zone or multi_zone)
+- `optimization_run_id`: Foreign key to the optimization run that generated these prices
 - `code_version`: Version code, set to 1 for now
 """
-function save_energy_prices(prices::Dict{String,Float64}, bidding_zone::String, day::Date, order_method::Symbol; batch_size::Int=100, create_schema::Bool=true)
+function save_energy_prices(prices::Dict{String,Float64}, bidding_zone::String, day::Date, order_method::Symbol;
+                            clearing_mode::String="single_zone", optimization_run_id::Union{Integer,Nothing}=nothing,
+                            batch_size::Int=100, create_schema::Bool=true)
     if isempty(prices)
         @warn "No prices to save for $bidding_zone on $day"
         return 0
@@ -244,10 +321,12 @@ function save_energy_prices(prices::Dict{String,Float64}, bidding_zone::String, 
     end
 
     # Prepare data for batch insertion
-    records = Vector{Tuple{DateTime,String,String,String,Float64,String,String,Int,DateTime}}()
+    # Tuple: (date_time_utc, resolution_code, bidding_zone, contract_type, price_eur_mwh, currency, order_method, clearing_mode, optimization_run_id, code_version, update_time_utc)
+    records = Vector{Tuple{DateTime,String,String,String,Float64,String,String,String,Union{Int,Missing},Int,DateTime}}()
     sizehint!(records, length(prices))  # Pre-allocate for efficiency
     update_time = now(UTC)
     order_method_str = string(order_method)  # Convert once
+    opt_run_id = optimization_run_id === nothing ? missing : optimization_run_id
 
     for (timeslot, price) in prices
         # Parse timeslot "YYYYMMDD-HHMM" to DateTime using DateFormat for efficiency
@@ -263,7 +342,9 @@ function save_energy_prices(prices::Dict{String,Float64}, bidding_zone::String, 
                 price,
                 "EUR",
                 order_method_str,
-                1,  # code_version
+                clearing_mode,
+                opt_run_id,
+                2,  # code_version
                 update_time
             ))
         catch e
@@ -277,13 +358,33 @@ function save_energy_prices(prices::Dict{String,Float64}, bidding_zone::String, 
         return 0
     end
 
+    # Delete existing records for this bidding_zone/date/order_method/clearing_mode/code_version before inserting
+    # This ensures we replace incomplete data from previous failed runs
+    try
+        withdb() do cnx
+            delete_sql = """
+            DELETE FROM simulations.energy_prices
+            WHERE bidding_zone = \$1
+              AND DATE(date_time_utc) = \$2
+              AND order_method = \$3
+              AND clearing_mode = \$4
+              AND code_version = \$5
+            """
+            LibPQ.execute(cnx, delete_sql, [bidding_zone, day, order_method_str, clearing_mode, 2])
+            @info "Deleted existing price records for $bidding_zone on $day (order_method: $order_method, clearing_mode: $clearing_mode) if any existed"
+        end
+    catch delete_error
+        @error "Failed to delete existing records: $delete_error"
+        rethrow(delete_error)
+    end
+
     # Insert in batches
     total_inserted = 0
 
     sql = """
-    INSERT INTO simulations.energy_prices 
-    (date_time_utc, resolution_code, bidding_zone, contract_type, price_eur_mwh, currency, order_method, code_version, update_time_utc)
-    VALUES (\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8, \$9)
+    INSERT INTO simulations.energy_prices
+    (date_time_utc, resolution_code, bidding_zone, contract_type, price_eur_mwh, currency, order_method, clearing_mode, optimization_run_id, code_version, update_time_utc)
+    VALUES (\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8, \$9, \$10, \$11)
     """
 
     for batch_start in 1:batch_size:length(records)
@@ -315,23 +416,23 @@ function save_energy_prices(prices::Dict{String,Float64}, bidding_zone::String, 
         end
     end
 
-    @info "Successfully saved $total_inserted energy price records for $bidding_zone on $day using $order_method method"
+    @info "Successfully saved $total_inserted energy price records for $bidding_zone on $day (order_method: $order_method, clearing_mode: $clearing_mode)"
     return total_inserted
 end
 
 """
-    save_optimization_run(bidding_zone::String, date::Date, order_method::Symbol, model_type::Symbol, 
-                          optimizer::String, status::Symbol; objective_value=nothing, solve_time_seconds=nothing, 
-                          num_orders=nothing, num_price_periods=nothing, error_message=nothing, 
-                          code_version::Int=1, create_schema::Bool=true)
+    save_optimization_run(bidding_zone::String, date::Date, order_method::Symbol, model_type::Symbol,
+                          optimizer::String, status::Symbol; objective_value=nothing, solve_time_seconds=nothing,
+                          num_orders=nothing, num_price_periods=nothing, error_message=nothing,
+                          code_version::Int=2, create_schema::Bool=true) -> Union{Int, Nothing}
 
 Save optimization run metadata to track all optimization attempts (successful and failed).
 
 # Arguments
-- `bidding_zone`: Bidding zone code (e.g., "GR", "AL")
+- `bidding_zone`: Bidding zone code (e.g., "GR", "AL", or "MULTI_ZONE" for multi-zone runs)
 - `date`: Date of the optimization
 - `order_method`: Method used (:uc_based or :alternative)
-- `model_type`: Model used (:mpcc, etc.)
+- `model_type`: Model used (:mpcc, :mpcc_multi_zone, etc.)
 - `optimizer`: Solver used ("highs", "gurobi", "cplex")
 - `status`: Optimization status (:optimal, :infeasible, :time_limit, etc.)
 - `objective_value`: Final objective value (nothing for failed runs)
@@ -341,6 +442,9 @@ Save optimization run metadata to track all optimization attempts (successful an
 - `error_message`: Error details for failed runs (nothing for successful runs)
 - `code_version`: Version code (default: 1)
 - `create_schema`: Whether to create schema/table if missing (default: true)
+
+# Returns
+- `Int`: The ID of the inserted optimization run record, or `nothing` if insertion failed
 """
 function save_optimization_run(bidding_zone::String, date::Date, order_method::Symbol, model_type::Symbol,
     optimizer::String, status::Symbol;
@@ -349,7 +453,7 @@ function save_optimization_run(bidding_zone::String, date::Date, order_method::S
     num_orders=nothing,
     num_price_periods=nothing,
     error_message=nothing,
-    code_version::Int=1,
+    code_version::Int=2,
     create_schema::Bool=true)
 
     # Create schema and table if requested
@@ -358,16 +462,17 @@ function save_optimization_run(bidding_zone::String, date::Date, order_method::S
     end
 
     try
-        withdb() do cnx
+        run_id = withdb() do cnx
             sql = """
-            INSERT INTO simulations.optimization_runs 
-            (bidding_zone, optimization_date, order_method, model_type, optimizer, status, 
-             objective_value, solve_time_seconds, num_orders, num_price_periods, error_message, 
+            INSERT INTO simulations.optimization_runs
+            (bidding_zone, optimization_date, order_method, model_type, optimizer, status,
+             objective_value, solve_time_seconds, num_orders, num_price_periods, error_message,
              code_version, created_at)
             VALUES (\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8, \$9, \$10, \$11, \$12, \$13)
+            RETURNING id
             """
 
-            LibPQ.execute(cnx, sql, [
+            result = LibPQ.execute(cnx, sql, [
                 bidding_zone,
                 date,
                 string(order_method),
@@ -382,13 +487,154 @@ function save_optimization_run(bidding_zone::String, date::Date, order_method::S
                 code_version,
                 now(UTC)
             ])
+
+            # Get the returned ID
+            df = DataFrame(result)
+            return df.id[1]
         end
 
-        @info "Saved optimization run: $bidding_zone on $date ($status)"
-        return 1
+        @info "Saved optimization run: $bidding_zone on $date ($status) with id=$run_id"
+        return run_id
 
     catch e
         @error "Failed to save optimization run for $bidding_zone on $date: $e"
+        return nothing
+    end
+end
+
+"""
+    ensure_transmission_flows_table()
+
+Creates the simulations.transmission_flows table if it doesn't exist.
+Used to store cross-border transmission flow results from multi-zone market clearing.
+"""
+function ensure_transmission_flows_table()
+    withdb() do cnx
+        create_table_sql = """
+        CREATE TABLE IF NOT EXISTS simulations.transmission_flows (
+            id SERIAL PRIMARY KEY,
+            date_time_utc TIMESTAMP NOT NULL,
+            source_zone VARCHAR(20) NOT NULL,
+            sink_zone VARCHAR(20) NOT NULL,
+            flow_mw NUMERIC(10,2) NOT NULL,
+            code_version INTEGER NOT NULL,
+            update_time_utc TIMESTAMP NOT NULL,
+            UNIQUE(date_time_utc, source_zone, sink_zone, code_version)
+        )
+        """
+
+        LibPQ.execute(cnx, create_table_sql)
+
+        # Create useful indexes
+        LibPQ.execute(
+            cnx,
+            """
+CREATE INDEX IF NOT EXISTS idx_transmission_flows_datetime
+ON simulations.transmission_flows (date_time_utc)
+"""
+        )
+
+        LibPQ.execute(
+            cnx,
+            """
+CREATE INDEX IF NOT EXISTS idx_transmission_flows_zones
+ON simulations.transmission_flows (source_zone, sink_zone, date_time_utc)
+"""
+        )
+    end
+
+    @info "Transmission flows table schema verified/created"
+end
+
+"""
+    save_transmission_flows(flows::Dict{String,Dict{String,Float64}}, date::Date;
+                           code_version::Int=2, create_schema::Bool=true)
+
+Save transmission flow results to the database in the simulations.transmission_flows table.
+
+# Arguments
+- `flows`: Dictionary with flow_id keys ("SOURCE_to_SINK") and inner Dict of period → MW values
+- `date`: Date of the optimization
+- `code_version`: Version code (default: 1)
+- `create_schema`: Whether to create table if missing (default: true)
+
+# Returns
+- Number of records inserted
+"""
+function save_transmission_flows(flows::Dict{String,Dict{String,Float64}}, date::Date;
+                                 code_version::Int=2, create_schema::Bool=true)
+    if isempty(flows)
+        @warn "No transmission flows to save"
         return 0
     end
+
+    # Create table if requested
+    if create_schema
+        ensure_transmission_flows_table()
+    end
+
+    update_time = now(UTC)
+    total_inserted = 0
+
+    sql = """
+    INSERT INTO simulations.transmission_flows
+    (date_time_utc, source_zone, sink_zone, flow_mw, code_version, update_time_utc)
+    VALUES (\$1, \$2, \$3, \$4, \$5, \$6)
+    ON CONFLICT (date_time_utc, source_zone, sink_zone, code_version)
+    DO UPDATE SET flow_mw = EXCLUDED.flow_mw, update_time_utc = EXCLUDED.update_time_utc
+    """
+
+    try
+        withdb() do cnx
+            LibPQ.execute(cnx, "BEGIN")
+
+            try
+                for (flow_id, period_flows) in flows
+                    # Parse flow_id: "SOURCE_to_SINK"
+                    parts = split(flow_id, "_to_")
+                    if length(parts) != 2
+                        @warn "Invalid flow_id format: $flow_id (expected SOURCE_to_SINK)"
+                        continue
+                    end
+                    source_zone = parts[1]
+                    sink_zone = parts[2]
+
+                    for (period, flow_mw) in period_flows
+                        # Parse period: "YYYYMMDD-HHMM" or hourly "1"-"24"
+                        if length(period) >= 13 && contains(period, "-")
+                            # Parse timeslot format "YYYYMMDD-HHMM"
+                            date_time_utc = DateTime(period, dateformat"yyyymmdd-HHMM")
+                        else
+                            # Parse hourly format "1"-"24"
+                            hour = parse(Int, period) - 1  # Convert 1-24 to 0-23
+                            date_time_utc = DateTime(date) + Hour(hour)
+                        end
+
+                        LibPQ.execute(cnx, sql, [
+                            date_time_utc,
+                            source_zone,
+                            sink_zone,
+                            flow_mw,
+                            code_version,
+                            update_time
+                        ])
+                        total_inserted += 1
+                    end
+                end
+
+                LibPQ.execute(cnx, "COMMIT")
+                @info "Successfully saved $total_inserted transmission flow records"
+
+            catch batch_error
+                LibPQ.execute(cnx, "ROLLBACK")
+                @error "Transmission flow insertion failed: $batch_error"
+                rethrow(batch_error)
+            end
+        end
+    catch e
+        @error "Database error saving transmission flows: $e"
+        rethrow(e)
+    end
+
+    return total_inserted
 end
