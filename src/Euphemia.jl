@@ -723,20 +723,20 @@ The function:
 function get_available_zones(date::Date; fallback_zones::Vector{String}=String[])
     # Query to get zones from ENTSO-E database
     query = """
-    SELECT DISTINCT map_code
+    SELECT DISTINCT area_map_code
     FROM entsoe.production_and_generation_units
     WHERE production_unit_status = 'COMMISSIONED'
-      AND generation_unit_status = 'COMMISSIONED'  
+      AND generation_unit_status = 'COMMISSIONED'
       AND area_type_code IN ('BZN', 'BZN/CTA')
-      AND \$1 >= valid_from 
+      AND \$1 >= valid_from
       AND (\$1 <= valid_to OR valid_to IS NULL)
-      AND map_code IS NOT NULL
-    ORDER BY map_code
+      AND area_map_code IS NOT NULL
+    ORDER BY area_map_code
     """
 
     try
         df = sql2df(query, [date])
-        zones_raw = df.map_code
+        zones_raw = df.area_map_code
         # Filter out missing values and convert to String array
         zones_sorted = sort([string(zone) for zone in zones_raw if !ismissing(zone)])
 

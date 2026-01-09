@@ -117,7 +117,7 @@ function get_generators(map_code::String, day::Dates.Date)
         area_code,
         area_display_name,
         area_type_code,
-        map_code,
+        area_map_code,
         generation_unit_code,
         generation_unit_name,
         generation_unit_status,
@@ -133,7 +133,7 @@ function get_generators(map_code::String, day::Dates.Date)
         production_unit_status = 'COMMISSIONED'
         AND generation_unit_status = 'COMMISSIONED'
         AND area_type_code IN  ('BZN', 'BZN/CTA')
-        AND map_code = \$1
+        AND area_map_code = \$1
         AND DATE(\$2) 
             BETWEEN DATE(valid_from) 
             AND COALESCE(
@@ -154,7 +154,7 @@ function get_generators(map_code::String, day::Dates.Date)
             get_min_active_capacity(
                 Float64(row.generation_unit_installed_capacity_mw)
             ), # p_min
-            row.map_code,                                # bidding_zone
+            row.area_map_code,                           # bidding_zone
             get_marginal_cost(
                 day,
                 row.generation_unit_type,
