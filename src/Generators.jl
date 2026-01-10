@@ -7,6 +7,15 @@ struct Generator
     p_min::Float64
     bidding_zone::String
     marginal_cost::Float64
+    ramp_up::Union{Float64, Nothing}    # MW/hour (nothing = use fuel-type default)
+    ramp_down::Union{Float64, Nothing}  # MW/hour (nothing = use fuel-type default)
+
+    # Constructor with ramp rates defaulting to nothing
+    function Generator(code, name, fuel_type, location, p_max, p_min, bidding_zone, marginal_cost,
+                       ramp_up::Union{Float64, Nothing}=nothing,
+                       ramp_down::Union{Float64, Nothing}=nothing)
+        new(code, name, fuel_type, location, p_max, p_min, bidding_zone, marginal_cost, ramp_up, ramp_down)
+    end
 end
 
 # Define your dummy values
@@ -16,6 +25,72 @@ const DUMMY_FUEL_TYPE = :UNKNOWN # Or :THERMAL, :RENEWABLE, etc. based on contex
 const DUMMY_BIDDING_ZONE = "GR_DEFAULT"
 const DUMMY_MARGINAL_COST = 999.9 # A clearly identifiable dummy value
 
+# Minimum data points required for ramp rate inference
+const MIN_DATA_POINTS_FOR_RAMP_INFERENCE = 100
+
+"""
+    get_historical_generation(generator_code::String, end_date::Date; months_back::Int=3)
+
+Fetch historical actual generation data for a specific generator.
+
+Returns a DataFrame with columns: datetime_utc, resolution_code, actual_generation_mw
+"""
+function get_historical_generation(generator_code::String, end_date::Dates.Date; months_back::Int=3)
+    start_date = end_date - Dates.Month(months_back)
+    query = """
+    SELECT date_time_utc, resolution_code, actual_generation_output_mw
+    FROM entsoe.actual_generation_output_per_generation_unit
+    WHERE generation_unit_code = \$1
+      AND date_time_utc >= \$2
+      AND date_time_utc < \$3
+      AND actual_generation_output_mw IS NOT NULL
+    ORDER BY date_time_utc
+    """
+    return Euphemia.sql2df_with_retry(query, [generator_code, start_date, end_date])
+end
+
+"""
+    infer_ramp_rates(historical_data::DataFrame; percentile::Float64=0.95)
+
+Infer ramp-up and ramp-down rates from historical generation data.
+
+Returns a NamedTuple (ramp_up, ramp_down) with rates in MW/hour.
+Returns (nothing, nothing) if insufficient data.
+"""
+function infer_ramp_rates(historical_data::DataFrame; percentile::Float64=0.95)
+    if nrow(historical_data) < MIN_DATA_POINTS_FOR_RAMP_INFERENCE
+        return (ramp_up=nothing, ramp_down=nothing)
+    end
+
+    # Sort by time and calculate deltas
+    sort!(historical_data, :date_time_utc)
+    gen_values = historical_data.actual_generation_output_mw
+    deltas = diff(gen_values)
+
+    # Separate ramp-up (positive) and ramp-down (negative)
+    ramp_ups = filter(x -> x > 0, deltas)
+    ramp_downs = map(abs, filter(x -> x < 0, deltas))
+
+    # Normalize to hourly rate based on resolution
+    resolution_code = historical_data.resolution_code[1]
+    resolution_minutes = parse_resolution_to_minutes(resolution_code)
+    hourly_factor = 60.0 / resolution_minutes
+
+    # Calculate percentile (default 95th)
+    ramp_up_rate = if isempty(ramp_ups)
+        nothing
+    else
+        Statistics.quantile(ramp_ups, percentile) * hourly_factor
+    end
+
+    ramp_down_rate = if isempty(ramp_downs)
+        nothing
+    else
+        Statistics.quantile(ramp_downs, percentile) * hourly_factor
+    end
+
+    return (ramp_up=ramp_up_rate, ramp_down=ramp_down_rate)
+end
 
 # TODO: Make get_generators return Vector{Generator}
 
@@ -102,7 +177,10 @@ end
 
 # pull from postgres, for now only active units of given date (I think)
 # exclude_unavailable: if true, excludes generators with active outages and reduces capacity for partial outages
-function get_generators(map_code::String, day::Dates.Date; exclude_unavailable::Bool=true)
+# infer_ramp_rates: if true, infer ramp rates from historical generation data (3 months)
+function get_generators(map_code::String, day::Dates.Date;
+                       exclude_unavailable::Bool=true,
+                       infer_ramp_rates_flag::Bool=false)
     if exclude_unavailable
         # Query with unavailability filtering:
         # - Excludes generators with complete outages (available_capacity_mw = 0)
@@ -212,8 +290,11 @@ function get_generators(map_code::String, day::Dates.Date; exclude_unavailable::
     end
 
     df = Euphemia.sql2df_with_retry(query, [map_code, day])
-    return [
-        Generator(
+
+    # Build generators (without ramp rates initially)
+    generators = Generator[]
+    for row in eachrow(df)
+        gen = Generator(
             row.generation_unit_code,                    # code
             row.generation_unit_name,                    # name
             Symbol(row.generation_unit_type),            # fuel_type (convert to Symbol)
@@ -228,8 +309,51 @@ function get_generators(map_code::String, day::Dates.Date; exclude_unavailable::
                 row.generation_unit_type,
                 row.area_display_name
             )                                           # marginal_cost
-        ) for row in eachrow(df)
-    ]
+        )
+        push!(generators, gen)
+    end
+
+    # Optionally infer ramp rates from historical data
+    if infer_ramp_rates_flag
+        generators = infer_ramp_rates_for_generators(generators, day)
+    end
+
+    return generators
+end
+
+"""
+    infer_ramp_rates_for_generators(generators::Vector{Generator}, day::Date)
+
+Infer ramp rates for a list of generators from their historical generation data.
+Returns a new vector of Generator objects with ramp_up and ramp_down fields populated.
+"""
+function infer_ramp_rates_for_generators(generators::Vector{Generator}, day::Dates.Date)
+    updated_generators = Generator[]
+
+    for gen in generators
+        # Fetch historical generation data
+        historical = get_historical_generation(gen.code, day)
+
+        # Infer ramp rates
+        rates = infer_ramp_rates(historical)
+
+        # Create new generator with ramp rates
+        updated_gen = Generator(
+            gen.code,
+            gen.name,
+            gen.fuel_type,
+            gen.location,
+            gen.p_max,
+            gen.p_min,
+            gen.bidding_zone,
+            gen.marginal_cost,
+            rates.ramp_up,
+            rates.ramp_down
+        )
+        push!(updated_generators, updated_gen)
+    end
+
+    return updated_generators
 end
 
 # Convenience function for backward compatibility - defaults to GR

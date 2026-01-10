@@ -6,6 +6,7 @@ using DataFrames, CSV
 using DotEnv
 using Dates
 using Distributed
+using Statistics
 
 # Import optimization solvers with error handling
 try

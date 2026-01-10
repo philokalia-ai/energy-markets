@@ -269,13 +269,23 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date; optimizer:
         end
     end
 
-    # Ramp rate parameters based on fuel type (as fraction of capacity per period)
+    # Ramp rate parameters - use per-generator rates if available, otherwise fuel-type defaults
     ramp_up = Float64[]
     ramp_down = Float64[]
     for (i, gen) in enumerate(generators)
         params = fuel_params[i]
-        push!(ramp_up, params.ramp_up_rate * gen.p_max)
-        push!(ramp_down, params.ramp_down_rate * gen.p_max)
+        # Use generator's inferred ramp_up if available, otherwise use fuel-type default
+        if gen.ramp_up !== nothing
+            push!(ramp_up, gen.ramp_up)
+        else
+            push!(ramp_up, params.ramp_up_rate * gen.p_max)
+        end
+        # Use generator's inferred ramp_down if available, otherwise use fuel-type default
+        if gen.ramp_down !== nothing
+            push!(ramp_down, gen.ramp_down)
+        else
+            push!(ramp_down, params.ramp_down_rate * gen.p_max)
+        end
     end
 
     M = 10000.0  # Big M parameter
