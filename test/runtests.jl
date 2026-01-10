@@ -50,6 +50,17 @@ println()
     end
 
     # -------------------------------------------------------------------------
+    # Initial Conditions Tests
+    # Tests for generator initial state determination for UC optimization
+    # -------------------------------------------------------------------------
+    @testset "Initial Conditions" begin
+        println("\n" * "=" ^ 60)
+        println("Running Initial Conditions Tests...")
+        println("=" ^ 60)
+        include(joinpath(@__DIR__, "test_initial_conditions.jl"))
+    end
+
+    # -------------------------------------------------------------------------
     # Network Module Tests
     # Tests for network topology, transfer capacity, and ATC constraints
     # -------------------------------------------------------------------------

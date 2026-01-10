@@ -135,6 +135,40 @@ Min uptime/downtime inference:
   - Gas CCGT: uptime 2-12h, downtime 1-8h
   - Gas OCGT: uptime 1-4h, downtime 1-4h
 
+**Generator initial conditions for unit commitment:**
+```julia
+# Get initial conditions for all generators (state at t=0)
+conditions = get_initial_conditions(generators, Date(2024, 6, 15))
+
+# Each generator has:
+ic = conditions["GEN-CODE"]
+ic.is_on        # Bool: was generator running at market day start?
+ic.output       # Float64: MW output at t=0 (0 if off)
+ic.hours_on     # Int: consecutive hours already running
+ic.hours_off    # Int: consecutive hours already off
+ic.thermal_state # Symbol: :hot, :warm, or :cold
+```
+
+Initial conditions inference:
+- Queries 72 hours of historical data before market day start (00:00 CET)
+- Determines commitment status from most recent output (> 1 MW = on)
+- Counts consecutive hours in current state for uptime/downtime constraints
+- Thermal state based on hours_off:
+  - Hot: hours_off <= 8 (quick restart)
+  - Warm: 8 < hours_off <= 48
+  - Cold: hours_off > 48 (full cold start)
+
+Fallback defaults when no historical data:
+- Baseload (coal, lignite, nuclear): Assume running
+- Mid-merit (CCGT): Assume off but warm
+- Peakers (OCGT): Assume off, potentially cold
+- Flexible (hydro, batteries): Assume off, ready (hot)
+
+Unit commitment integration:
+- Links t=1 commitment to initial state u₀
+- Constrains t=1 ramps from initial output g₀
+- Enforces remaining uptime/downtime based on T_on₀/T_off₀
+
 ## Development Commands
 
 ### Julia Package Management
@@ -169,6 +203,7 @@ test/
 ├── runtests.jl                  # Main test runner (includes core tests)
 ├── test_generator_inference.jl  # Generator parameter inference tests (58 tests)
 ├── test_data_fetching.jl        # DB integration for loads/renewables/etc (23 tests)
+├── test_initial_conditions.jl   # Generator initial state tests (69 tests)
 ├── test_mpcc.jl                 # MPCC solver tests (50 tests)
 ├── test_multi_zone_mpcc.jl      # Multi-zone transmission tests (21 tests)
 ├── test_network_module.jl       # Network/ATC tests (140 tests)

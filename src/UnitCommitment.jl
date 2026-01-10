@@ -130,7 +130,9 @@ function print_cost_report(solution, day)
     println("="^60)
 end
 
-function solve_unit_commitment(bidding_zone::String, day::Dates.Date; optimizer::String="auto")
+function solve_unit_commitment(bidding_zone::String, day::Dates.Date;
+                               optimizer::String="auto",
+                               use_initial_conditions::Bool=true)
 
     timing_start = time()
 
@@ -144,6 +146,14 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date; optimizer:
     generators = get_generators(bidding_zone, day)
     loads = get_loads(bidding_zone, day)
     renewables = get_generation_forecast_for_wind_and_solar(bidding_zone, day)
+
+    # Get initial conditions for generators (state at t=0)
+    if use_initial_conditions
+        initial_conditions = get_initial_conditions(generators, day; use_historical=true)
+        println("Loaded initial conditions for $(length(initial_conditions)) generators")
+    else
+        initial_conditions = nothing
+    end
     data_fetch_time = time() - data_fetch_start
 
     # Check if we have data
@@ -172,7 +182,28 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date; optimizer:
 
     setup_start = time()
 
-    # TODO: initial conditions
+    # ============================================================================
+    # Initial Conditions Setup
+    # ============================================================================
+    # Extract initial conditions into arrays for constraint formulation
+    u0 = zeros(Int, N)        # Initial commitment (0 or 1)
+    g0 = zeros(Float64, N)    # Initial generation (MW)
+    T_on0 = zeros(Int, N)     # Hours already on at t=0
+    T_off0 = zeros(Int, N)    # Hours already off at t=0
+
+    if initial_conditions !== nothing
+        for (i, gen) in enumerate(generators)
+            if haskey(initial_conditions, gen.code)
+                ic = initial_conditions[gen.code]
+                u0[i] = ic.is_on ? 1 : 0
+                g0[i] = ic.output
+                T_on0[i] = ic.hours_on
+                T_off0[i] = ic.hours_off
+            end
+        end
+        on_count = sum(u0)
+        println("Initial state: $on_count generators ON, $(N - on_count) OFF")
+    end
 
     # Get fuel-type-specific parameters for each generator
     fuel_params = Dict{Int,FuelTypeParameters}()
@@ -307,6 +338,11 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date; optimizer:
     end
 
     # link commitment, startup, and shutdown
+    # For t=1: link to initial condition u0
+    if initial_conditions !== nothing
+        @constraint(model, [i in 1:N], u[i, 1] == u0[i] + v[i, 1] - z[i, 1])
+    end
+    # For t >= 2: link to previous period
     @constraint(model, [i in 1:N, t in 2:T], u[i, t] == u[i, t-1] + v[i, t] - z[i, t])
 
     # startup & shutdown can't happen simultaneously
@@ -314,21 +350,49 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date; optimizer:
 
     # minimum uptime: if there was a startup in the last UT periods, unit must be on
     # Use generator's inferred value if available, otherwise fuel-type default
+    # Also account for initial hours on (T_on0) - if unit was already running for some hours
     for (i, gen) in enumerate(generators)
         UT = gen.min_uptime !== nothing ? gen.min_uptime : fuel_params[i].min_uptime
         if UT > 1  # Only add constraint if minimum uptime > 1
+            # Standard constraint for later periods
             @constraint(model, [t = UT:T],
                 sum(v[i, τ] for τ in t-UT+1:t) <= u[i, t])
+
+            # Initial condition constraint: if unit was on but hasn't met min uptime yet,
+            # it must stay on for the remaining periods
+            if initial_conditions !== nothing && u0[i] == 1
+                remaining_uptime = max(0, UT - T_on0[i])
+                if remaining_uptime > 0
+                    # Unit must stay on for the remaining uptime periods
+                    for t in 1:min(remaining_uptime, T)
+                        @constraint(model, u[i, t] == 1)
+                    end
+                end
+            end
         end
     end
 
     # minimum downtime: if there was a shutdown in the last DT periods, unit must be off
     # Use generator's inferred value if available, otherwise fuel-type default
+    # Also account for initial hours off (T_off0) - if unit was already off for some hours
     for (i, gen) in enumerate(generators)
         DT = gen.min_downtime !== nothing ? gen.min_downtime : fuel_params[i].min_downtime
         if DT > 1  # Only add constraint if minimum downtime > 1
+            # Standard constraint for later periods
             @constraint(model, [t = DT:T],
                 sum(z[i, τ] for τ in t-DT+1:t) <= 1 - u[i, t])
+
+            # Initial condition constraint: if unit was off but hasn't met min downtime yet,
+            # it must stay off for the remaining periods
+            if initial_conditions !== nothing && u0[i] == 0
+                remaining_downtime = max(0, DT - T_off0[i])
+                if remaining_downtime > 0
+                    # Unit must stay off for the remaining downtime periods
+                    for t in 1:min(remaining_downtime, T)
+                        @constraint(model, u[i, t] == 0)
+                    end
+                end
+            end
         end
     end
 
@@ -404,8 +468,17 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date; optimizer:
     )
 
     # ramp constraints considering startup & shutdown profiles (R: Ramp Constraint)
-    # TODO: Add proper ramp rate parameters to Generator struct
-    @constraint(model, [i in 1:N, t in 2:T], #TODO: ask about M parameter
+    # For t=1: constrain ramp from initial generation g0
+    if initial_conditions !== nothing
+        @constraint(model, [i in 1:N],
+            g[i, 1] - g0[i] <= ramp_up[i] + M * u_SU[i, 1]
+        )
+        @constraint(model, [i in 1:N],
+            g0[i] - g[i, 1] <= ramp_down[i] + M * u_SD[i, 1]
+        )
+    end
+    # For t >= 2: standard ramp constraints
+    @constraint(model, [i in 1:N, t in 2:T],
         g[i, t] - g[i, t-1] <= ramp_up[i] + M * u_SU[i, t]
     )
 
@@ -459,6 +532,7 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date; optimizer:
         u=value.(u),
         total_cost=objective_value(model),
         cost_breakdown=cost_breakdown,
+        initial_conditions=initial_conditions,
     )
 end
 
