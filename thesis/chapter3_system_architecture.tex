@@ -135,6 +135,7 @@ $\downarrow$ \\
 \midrule
 \texttt{production\_and\_generation\_units} & Στοιχεία μονάδων παραγωγής \\
 \texttt{actual\_total\_load} & Ιστορικά δεδομένα κατανάλωσης \\
+\texttt{actual\_generation\_output\_per\_generation\_unit} & Ιστορική παραγωγή ανά μονάδα \\
 \texttt{generation\_forecasts\_for\_wind\_and\_solar} & Προβλέψεις παραγωγής ΑΠΕ \\
 \texttt{offered\_transfer\_capacities\_implicit} & Διαθέσιμη ικανότητα μεταφοράς \\
 \texttt{unavailability\_of\_production\_and\_generation\_units} & Μη διαθεσιμότητα μονάδων \\
@@ -153,6 +154,9 @@ $\downarrow$ \\
 \paragraph{Πίνακας actual\_total\_load}
 Ο πίνακας αυτός περιέχει χρονοσειρές κατανάλωσης με τα πεδία: \texttt{datetime\_utc} (χρονοσφραγίδα σε UTC), \texttt{area\_map\_code} (ζώνη προσφοράς), \texttt{total\_load\_mw} (κατανάλωση σε MW), και \texttt{resolution} (χρονική ανάλυση).
 
+\paragraph{Πίνακας actual\_generation\_output\_per\_generation\_unit}
+Ο πίνακας αυτός περιέχει ιστορικά δεδομένα πραγματικής παραγωγής ανά μονάδα με τα πεδία: \texttt{generation\_unit\_code} (κωδικός μονάδας), \texttt{datetime\_utc} (χρονοσφραγίδα σε UTC), \texttt{actual\_generation\_output\_mw} (μετρούμενη παραγωγή σε MW), και \texttt{resolution} (χρονική ανάλυση, συνήθως 15 λεπτά ή 1 ώρα). Τα δεδομένα αυτά χρησιμοποιούνται για την εξαγωγή τεχνικών παραμέτρων (ρυθμοί μεταβολής, ελάχιστη ισχύς, χρόνοι λειτουργίας/αδράνειας) μέσω στατιστικής ανάλυσης, όπως περιγράφεται στην Ενότητα~\ref{subsec:parameter-inference}.
+
 \paragraph{Πίνακας unavailability\_of\_production\_and\_generation\_units}
 Ο πίνακας αυτός περιέχει πληροφορίες διακοπών με τα πεδία: \texttt{asset\_code} (αντιστοιχεί στο \texttt{generation\_unit\_code}), \texttt{start\_outage\_utc} και \texttt{end\_outage\_utc} (περίοδος διακοπής), \texttt{type} (``Planned'' ή ``Forced''), \texttt{status} (``Active'', ``Cancelled'', ``Withdrawn''), και \texttt{available\_capacity\_mw} (εναπομένουσα διαθέσιμη ισχύς).
 
@@ -165,13 +169,14 @@ $\downarrow$ \\
 \centering
 \caption{Κύριοι πίνακες του σχήματος \texttt{simulations}}
 \label{tab:simulations-tables}
-\begin{tabular}{@{}p{4cm}p{9cm}@{}}
+\begin{tabular}{@{}p{5cm}p{8cm}@{}}
 \toprule
 \textbf{Πίνακας} & \textbf{Περιγραφή} \\
 \midrule
 \texttt{energy\_prices} & Υπολογισμένες τιμές εκκαθάρισης \\
 \texttt{optimization\_runs} & Μεταδεδομένα εκτελέσεων βελτιστοποίησης \\
 \texttt{transmission\_flows} & Διασυνοριακές ροές ισχύος \\
+\texttt{generator\_inferred\_parameters} & Εξαχθείσες τεχνικές παράμετροι μονάδων \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -181,6 +186,9 @@ $\downarrow$ \\
 
 \paragraph{Πίνακας transmission\_flows}
 Ο πίνακας αυτός αποθηκεύει τις υπολογισμένες διασυνοριακές ροές με τα πεδία: \texttt{source\_zone} και \texttt{target\_zone} (ζώνες προέλευσης και προορισμού), \texttt{date} (ημερομηνία), \texttt{hour} (ώρα), \texttt{flow\_mw} (ροή σε MW), και \texttt{run\_id}.
+
+\paragraph{Πίνακας generator\_inferred\_parameters}
+Ο πίνακας αυτός λειτουργεί ως κρυφή μνήμη (cache) για τις τεχνικές παραμέτρους μονάδων παραγωγής που εξάγονται από ιστορικά δεδομένα. Τα βασικά πεδία περιλαμβάνουν: \texttt{generator\_code} (κωδικός μονάδας), \texttt{ramp\_up} και \texttt{ramp\_down} (ρυθμοί μεταβολής ως κλάσμα της $P^{\max}$ ανά ώρα), \texttt{p\_min} (ελάχιστη ισχύς ως κλάσμα της $P^{\max}$), \texttt{min\_uptime} και \texttt{min\_downtime} (ελάχιστοι χρόνοι λειτουργίας/αδράνειας σε ώρες), και \texttt{inference\_date} (ημερομηνία εξαγωγής για έλεγχο λήξης). Η χρήση του πίνακα αυτού μειώνει τον χρόνο ανάκτησης παραμέτρων από περίπου 17 λεπτά σε 2 δευτερόλεπτα.
 
 
 % =============================================================================
