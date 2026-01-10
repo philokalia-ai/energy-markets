@@ -28,6 +28,17 @@ println()
 @testset "Euphemia Core Tests" begin
 
     # -------------------------------------------------------------------------
+    # Generator Inference Tests
+    # Tests for inferring ramp rates, p_min, uptime/downtime from synthetic data
+    # -------------------------------------------------------------------------
+    @testset "Generator Inference" begin
+        println("\n" * "=" ^ 60)
+        println("Running Generator Inference Tests...")
+        println("=" ^ 60)
+        include(joinpath(@__DIR__, "test_generator_inference.jl"))
+    end
+
+    # -------------------------------------------------------------------------
     # Network Module Tests
     # Tests for network topology, transfer capacity, and ATC constraints
     # -------------------------------------------------------------------------
