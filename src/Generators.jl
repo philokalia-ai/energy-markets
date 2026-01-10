@@ -7,8 +7,8 @@ struct Generator
     p_min::Float64
     bidding_zone::String
     marginal_cost::Float64
-    ramp_up::Union{Float64, Nothing}    # MW/hour (nothing = use fuel-type default)
-    ramp_down::Union{Float64, Nothing}  # MW/hour (nothing = use fuel-type default)
+    ramp_up::Union{Float64, Nothing}    # fraction of p_max per hour (nothing = use fuel-type default)
+    ramp_down::Union{Float64, Nothing}  # fraction of p_max per hour (nothing = use fuel-type default)
 
     # Constructor with ramp rates defaulting to nothing
     function Generator(code, name, fuel_type, location, p_max, p_min, bidding_zone, marginal_cost,
@@ -50,15 +50,21 @@ function get_historical_generation(generator_code::String, end_date::Dates.Date;
 end
 
 """
-    infer_ramp_rates(historical_data::DataFrame; percentile::Float64=0.95)
+    infer_ramp_rates(historical_data::DataFrame, p_max::Float64; percentile::Float64=0.95)
 
 Infer ramp-up and ramp-down rates from historical generation data.
 
-Returns a NamedTuple (ramp_up, ramp_down) with rates in MW/hour.
+Returns a NamedTuple (ramp_up, ramp_down) with rates as fraction of p_max per hour.
 Returns (nothing, nothing) if insufficient data.
+
+Example: ramp_up = 0.20 means the generator can ramp up 20% of its capacity per hour.
 """
-function infer_ramp_rates(historical_data::DataFrame; percentile::Float64=0.95)
+function infer_ramp_rates(historical_data::DataFrame, p_max::Float64; percentile::Float64=0.95)
     if nrow(historical_data) < MIN_DATA_POINTS_FOR_RAMP_INFERENCE
+        return (ramp_up=nothing, ramp_down=nothing)
+    end
+
+    if p_max <= 0
         return (ramp_up=nothing, ramp_down=nothing)
     end
 
@@ -76,17 +82,17 @@ function infer_ramp_rates(historical_data::DataFrame; percentile::Float64=0.95)
     resolution_minutes = parse_resolution_to_minutes(resolution_code)
     hourly_factor = 60.0 / resolution_minutes
 
-    # Calculate percentile (default 95th)
+    # Calculate percentile (default 95th) and convert to fraction of p_max per hour
     ramp_up_rate = if isempty(ramp_ups)
         nothing
     else
-        Statistics.quantile(ramp_ups, percentile) * hourly_factor
+        (Statistics.quantile(ramp_ups, percentile) * hourly_factor) / p_max
     end
 
     ramp_down_rate = if isempty(ramp_downs)
         nothing
     else
-        Statistics.quantile(ramp_downs, percentile) * hourly_factor
+        (Statistics.quantile(ramp_downs, percentile) * hourly_factor) / p_max
     end
 
     return (ramp_up=ramp_up_rate, ramp_down=ramp_down_rate)
@@ -334,8 +340,8 @@ function infer_ramp_rates_for_generators(generators::Vector{Generator}, day::Dat
         # Fetch historical generation data
         historical = get_historical_generation(gen.code, day)
 
-        # Infer ramp rates
-        rates = infer_ramp_rates(historical)
+        # Infer ramp rates (as fraction of p_max per hour)
+        rates = infer_ramp_rates(historical, gen.p_max)
 
         # Create new generator with ramp rates
         updated_gen = Generator(

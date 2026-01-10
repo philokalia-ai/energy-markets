@@ -270,21 +270,24 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date; optimizer:
     end
 
     # Ramp rate parameters - use per-generator rates if available, otherwise fuel-type defaults
+    # All rates are stored as fraction/hour, so we scale by period duration
+    period_hours = resolution_minutes / 60.0
     ramp_up = Float64[]
     ramp_down = Float64[]
     for (i, gen) in enumerate(generators)
         params = fuel_params[i]
         # Use generator's inferred ramp_up if available, otherwise use fuel-type default
+        # Both are fraction/hour, so multiply by p_max and period_hours to get MW/period
         if gen.ramp_up !== nothing
-            push!(ramp_up, gen.ramp_up)
+            push!(ramp_up, gen.ramp_up * gen.p_max * period_hours)
         else
-            push!(ramp_up, params.ramp_up_rate * gen.p_max)
+            push!(ramp_up, params.ramp_up_rate * gen.p_max * period_hours)
         end
         # Use generator's inferred ramp_down if available, otherwise use fuel-type default
         if gen.ramp_down !== nothing
-            push!(ramp_down, gen.ramp_down)
+            push!(ramp_down, gen.ramp_down * gen.p_max * period_hours)
         else
-            push!(ramp_down, params.ramp_down_rate * gen.p_max)
+            push!(ramp_down, params.ramp_down_rate * gen.p_max * period_hours)
         end
     end
 
