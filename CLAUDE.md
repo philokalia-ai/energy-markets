@@ -107,10 +107,15 @@ Ramp rate inference:
 - Falls back to fuel-type defaults in `FuelTypeParameters` if insufficient data
 
 p_min inference strategy (robust to data quality issues):
-- Filters zeros (plant off) and transients (startup/shutdown ramps)
-- Transient detection: points where |delta| > 5% of p_max
-- Takes 5th percentile of remaining stable values
-- Clamps to 5-60% of p_max for sanity
+- **Flexible resources** (hydro, batteries): p_min = 0 (no inference needed)
+- **Thermal plants**: Infers from historical stable operation
+  - Filters zeros (plant off) and transients (startup/shutdown ramps)
+  - Transient detection: points where |delta| > 5% of p_max
+  - Takes 5th percentile of remaining stable values
+  - Fuel-type-specific clamp bounds:
+    - Coal/Lignite: 30-60% of p_max
+    - Gas CCGT: 25-50% of p_max
+    - Gas OCGT: 10-40% of p_max
 
 ## Development Commands
 
