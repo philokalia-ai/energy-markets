@@ -91,7 +91,13 @@ The `exclude_unavailable` parameter (default: `true`) filters generators based o
 
 **Generator parameter inference from historical data:**
 ```julia
-# Infer ramp rates and p_min from 3 months of historical generation data
+# Get generators with inferred parameters (uses DB cache, ~2 sec)
+generators = get_generators_with_inferred_params("GR", Date(2024, 6, 15))
+
+# Force fresh inference (slow, ~17 min, but updates cache)
+generators = get_generators_with_inferred_params("GR", Date(2024, 6, 15); use_cache=false)
+
+# Manual inference without caching
 generators = get_generators("GR", Date(2024, 6, 15))
 generators_with_inferred = infer_parameters_for_generators(generators, Date(2024, 6, 15))
 ```
@@ -278,6 +284,14 @@ The project uses PostgreSQL with two main schemas:
 - Contains `optimizer`, `solve_time_seconds`, `objective_value`, etc.
 
 **`simulations.transmission_flows`** - Cross-border transmission flow results from multi-zone clearing
+
+**`simulations.generator_inferred_parameters`** - Cached inferred generator parameters
+- `generator_code`, `bidding_zone`: Primary key
+- `inference_date`: When inference was run (for cache expiration)
+- `ramp_up`, `ramp_down`: Inferred ramp rates (fraction/hour)
+- `p_min`: Inferred minimum generation (MW)
+- `min_uptime`, `min_downtime`: Inferred cycle constraints (hours)
+- `data_points_used`: Number of historical data points used for inference
 
 **Joining prices with optimization metadata:**
 ```sql
