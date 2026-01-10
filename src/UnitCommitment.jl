@@ -170,7 +170,12 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date;
     T = length(target_time_slots)
     N = length(generators)
 
-    println("Planning for $T time periods with $N generators")
+    # Calculate conversion factor from hours to periods
+    # All fuel-type parameters (startup times, uptime, downtime) are in HOURS
+    # but constraints operate on PERIODS (which may be 15min, 30min, or 60min)
+    periods_per_hour = 60 / resolution_minutes
+
+    println("Planning for $T time periods with $N generators ($(resolution_minutes)min resolution, $(periods_per_hour) periods/hour)")
 
     # Calculate net demand (load - renewables) for each time period
     net_demand = Float64[]
@@ -255,18 +260,19 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date;
     @variable(model, g_SD[i=1:N, t=1:T] >= 0)  # shutdown generation profile
 
     # Startup/shutdown time parameters based on fuel type and temperature
-    T_SU = Dict{Tuple{Int,Symbol},Int}()  # startup time by generator and temperature
-    T_SD = Dict{Int,Int}()  # shutdown time by generator - independent of temperature stage
+    # FuelTypeParameters stores times in HOURS - convert to PERIODS here
+    T_SU = Dict{Tuple{Int,Symbol},Int}()  # startup time by generator and temperature (in periods)
+    T_SD = Dict{Int,Int}()  # shutdown time by generator (in periods) - independent of temperature stage
 
-    # Initialize with fuel-type-specific values
-    for (i, gen) in enumerate(generators)
+    # Initialize with fuel-type-specific values, converting hours to periods
+    for i in 1:N
         params = fuel_params[i]
-        # Map temperature stages to startup times (in hours, converted to periods)
-        T_SU[(i, :hot)] = params.hot_startup_time
-        T_SU[(i, :warm)] = params.warm_startup_time
-        T_SU[(i, :cold)] = params.cold_startup_time
+        # Map temperature stages to startup times (hours → periods, minimum 1 period)
+        T_SU[(i, :hot)] = max(1, ceil(Int, params.hot_startup_time * periods_per_hour))
+        T_SU[(i, :warm)] = max(1, ceil(Int, params.warm_startup_time * periods_per_hour))
+        T_SU[(i, :cold)] = max(1, ceil(Int, params.cold_startup_time * periods_per_hour))
         # Shutdown time is typically same as hot startup time
-        T_SD[i] = params.hot_startup_time
+        T_SD[i] = max(1, ceil(Int, params.hot_startup_time * periods_per_hour))
     end
 
     # Startup production profile parameters - power output during startup phase
@@ -350,10 +356,14 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date;
 
     # minimum uptime: if there was a startup in the last UT periods, unit must be on
     # Use generator's inferred value if available, otherwise fuel-type default
+    # All values are in HOURS - convert to PERIODS for constraints
     # Also account for initial hours on (T_on0) - if unit was already running for some hours
     for (i, gen) in enumerate(generators)
-        UT = gen.min_uptime !== nothing ? gen.min_uptime : fuel_params[i].min_uptime
-        if UT > 1  # Only add constraint if minimum uptime > 1
+        # Get uptime in hours, then convert to periods
+        UT_hours = gen.min_uptime !== nothing ? gen.min_uptime : fuel_params[i].min_uptime
+        UT = max(1, ceil(Int, UT_hours * periods_per_hour))  # Convert hours → periods
+
+        if UT > 1  # Only add constraint if minimum uptime > 1 period
             # Standard constraint for later periods
             @constraint(model, [t = UT:T],
                 sum(v[i, τ] for τ in t-UT+1:t) <= u[i, t])
@@ -361,7 +371,9 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date;
             # Initial condition constraint: if unit was on but hasn't met min uptime yet,
             # it must stay on for the remaining periods
             if initial_conditions !== nothing && u0[i] == 1
-                remaining_uptime = max(0, UT - T_on0[i])
+                # T_on0 is in hours, convert to periods for comparison
+                T_on0_periods = ceil(Int, T_on0[i] * periods_per_hour)
+                remaining_uptime = max(0, UT - T_on0_periods)
                 if remaining_uptime > 0
                     # Unit must stay on for the remaining uptime periods
                     for t in 1:min(remaining_uptime, T)
@@ -374,10 +386,14 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date;
 
     # minimum downtime: if there was a shutdown in the last DT periods, unit must be off
     # Use generator's inferred value if available, otherwise fuel-type default
+    # All values are in HOURS - convert to PERIODS for constraints
     # Also account for initial hours off (T_off0) - if unit was already off for some hours
     for (i, gen) in enumerate(generators)
-        DT = gen.min_downtime !== nothing ? gen.min_downtime : fuel_params[i].min_downtime
-        if DT > 1  # Only add constraint if minimum downtime > 1
+        # Get downtime in hours, then convert to periods
+        DT_hours = gen.min_downtime !== nothing ? gen.min_downtime : fuel_params[i].min_downtime
+        DT = max(1, ceil(Int, DT_hours * periods_per_hour))  # Convert hours → periods
+
+        if DT > 1  # Only add constraint if minimum downtime > 1 period
             # Standard constraint for later periods
             @constraint(model, [t = DT:T],
                 sum(z[i, τ] for τ in t-DT+1:t) <= 1 - u[i, t])
@@ -385,7 +401,9 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date;
             # Initial condition constraint: if unit was off but hasn't met min downtime yet,
             # it must stay off for the remaining periods
             if initial_conditions !== nothing && u0[i] == 0
-                remaining_downtime = max(0, DT - T_off0[i])
+                # T_off0 is in hours, convert to periods for comparison
+                T_off0_periods = ceil(Int, T_off0[i] * periods_per_hour)
+                remaining_downtime = max(0, DT - T_off0_periods)
                 if remaining_downtime > 0
                     # Unit must stay off for the remaining downtime periods
                     for t in 1:min(remaining_downtime, T)
@@ -401,13 +419,15 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date;
         v[i, t] == sum(v_θ[i, θ, t] for θ in Θ))
 
     # Temperature-dependent startup constraints based on downtime
+    # FuelTypeParameters thresholds are in HOURS - convert to PERIODS
     # Hot startup: unit offline for <= warm_threshold periods
-    # Warm startup: unit offline for warm_threshold < periods <= cold_threshold  
+    # Warm startup: unit offline for warm_threshold < periods <= cold_threshold
     # Cold startup: unit offline for > cold_threshold periods
-    for (i, gen) in enumerate(generators)
+    for i in 1:N
         params = fuel_params[i]
-        warm_thresh = params.warm_threshold
-        cold_thresh = params.cold_threshold
+        # Convert thresholds from hours to periods
+        warm_thresh = max(1, ceil(Int, params.warm_threshold * periods_per_hour))
+        cold_thresh = max(1, ceil(Int, params.cold_threshold * periods_per_hour))
 
         # Hot startup constraints (short downtime)
         for t in 2:min(warm_thresh + 1, T)
