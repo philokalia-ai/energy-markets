@@ -7,6 +7,20 @@ struct Generator
     p_min::Float64
     bidding_zone::String
     marginal_cost::Float64
+    ramp_up::Union{Float64, Nothing}      # fraction of p_max per hour (nothing = use fuel-type default)
+    ramp_down::Union{Float64, Nothing}    # fraction of p_max per hour (nothing = use fuel-type default)
+    min_uptime::Union{Int, Nothing}       # minimum hours unit must stay on (nothing = use fuel-type default)
+    min_downtime::Union{Int, Nothing}     # minimum hours unit must stay off (nothing = use fuel-type default)
+
+    # Constructor with optional parameters defaulting to nothing
+    function Generator(code, name, fuel_type, location, p_max, p_min, bidding_zone, marginal_cost,
+                       ramp_up::Union{Float64, Nothing}=nothing,
+                       ramp_down::Union{Float64, Nothing}=nothing,
+                       min_uptime::Union{Int, Nothing}=nothing,
+                       min_downtime::Union{Int, Nothing}=nothing)
+        new(code, name, fuel_type, location, p_max, p_min, bidding_zone, marginal_cost,
+            ramp_up, ramp_down, min_uptime, min_downtime)
+    end
 end
 
 # Define your dummy values
@@ -16,6 +30,275 @@ const DUMMY_FUEL_TYPE = :UNKNOWN # Or :THERMAL, :RENEWABLE, etc. based on contex
 const DUMMY_BIDDING_ZONE = "GR_DEFAULT"
 const DUMMY_MARGINAL_COST = 999.9 # A clearly identifiable dummy value
 
+# Minimum data points required for ramp rate inference
+const MIN_DATA_POINTS_FOR_RAMP_INFERENCE = 100
+
+# Flexible fuel types that can operate at 0 MW (no minimum generation constraint)
+# These should NOT have p_min inferred from historical data
+const FLEXIBLE_FUEL_TYPES = Set([
+    Symbol("Hydro Pumped Storage"),
+    Symbol("Hydro Run-of-river and pondage"),
+    Symbol("Hydro Water Reservoir"),
+    Symbol("Battery"),
+    Symbol("Other"),
+])
+
+"""
+    get_historical_generation(generator_code::String, end_date::Date; months_back::Int=3)
+
+Fetch historical actual generation data for a specific generator.
+
+Returns a DataFrame with columns: datetime_utc, resolution_code, actual_generation_mw
+"""
+function get_historical_generation(generator_code::String, end_date::Dates.Date; months_back::Int=3)
+    start_date = end_date - Dates.Month(months_back)
+    query = """
+    SELECT date_time_utc, resolution_code, actual_generation_output_mw
+    FROM entsoe.actual_generation_output_per_generation_unit
+    WHERE generation_unit_code = \$1
+      AND date_time_utc >= \$2
+      AND date_time_utc < \$3
+      AND actual_generation_output_mw IS NOT NULL
+    ORDER BY date_time_utc
+    """
+    return Euphemia.sql2df_with_retry(query, [generator_code, start_date, end_date])
+end
+
+"""
+    infer_ramp_rates(historical_data::DataFrame, p_max::Float64; percentile::Float64=0.95)
+
+Infer ramp-up and ramp-down rates from historical generation data.
+
+Returns a NamedTuple (ramp_up, ramp_down) with rates as fraction of p_max per hour.
+Returns (nothing, nothing) if insufficient data.
+
+Example: ramp_up = 0.20 means the generator can ramp up 20% of its capacity per hour.
+"""
+function infer_ramp_rates(historical_data::DataFrame, p_max::Float64; percentile::Float64=0.95)
+    if nrow(historical_data) < MIN_DATA_POINTS_FOR_RAMP_INFERENCE
+        return (ramp_up=nothing, ramp_down=nothing)
+    end
+
+    if p_max <= 0
+        return (ramp_up=nothing, ramp_down=nothing)
+    end
+
+    # Sort by time and calculate deltas
+    sort!(historical_data, :date_time_utc)
+    gen_values = historical_data.actual_generation_output_mw
+    deltas = diff(gen_values)
+
+    # Separate ramp-up (positive) and ramp-down (negative)
+    ramp_ups = filter(x -> x > 0, deltas)
+    ramp_downs = map(abs, filter(x -> x < 0, deltas))
+
+    # Normalize to hourly rate based on resolution
+    resolution_code = historical_data.resolution_code[1]
+    resolution_minutes = parse_resolution_to_minutes(resolution_code)
+    hourly_factor = 60.0 / resolution_minutes
+
+    # Calculate percentile (default 95th) and convert to fraction of p_max per hour
+    ramp_up_rate = if isempty(ramp_ups)
+        nothing
+    else
+        (Statistics.quantile(ramp_ups, percentile) * hourly_factor) / p_max
+    end
+
+    ramp_down_rate = if isempty(ramp_downs)
+        nothing
+    else
+        (Statistics.quantile(ramp_downs, percentile) * hourly_factor) / p_max
+    end
+
+    return (ramp_up=ramp_up_rate, ramp_down=ramp_down_rate)
+end
+
+# Sanity check bounds for p_min by fuel type category (fraction of p_max)
+# Lower bounds aligned with FuelTypeParameters.min_load_factor
+# Format: fuel_type => (min_bound, max_bound)
+const P_MIN_BOUNDS = Dict(
+    :coal => (0.45, 0.65),      # Coal/Lignite: high minimum load (FuelTypeParams: 0.45-0.50)
+    :gas_ccgt => (0.35, 0.55),  # Combined cycle gas: moderate minimum (FuelTypeParams: 0.35)
+    :gas_ocgt => (0.20, 0.45),  # Open cycle gas turbine: more flexible
+    :default => (0.30, 0.60),   # Default for unknown thermal
+)
+
+"""
+Map fuel type symbol to p_min bounds category.
+"""
+function get_p_min_bounds_category(fuel_type::Symbol)::Symbol
+    fuel_str = string(fuel_type)
+    if occursin("Lignite", fuel_str) || occursin("coal", lowercase(fuel_str))
+        return :coal
+    elseif occursin("Gas", fuel_str)
+        # Heuristic: larger gas plants tend to be CCGT
+        return :gas_ccgt
+    else
+        return :default
+    end
+end
+
+"""
+    infer_p_min(historical_data::DataFrame, p_max::Float64, fuel_type::Symbol; percentile::Float64=0.05)
+
+Infer minimum stable generation (p_min) from historical generation data.
+
+Strategy:
+1. Filter out zeros (plant off)
+2. Filter out transients (values during startup/shutdown ramps)
+3. Take low percentile (default 5th) of remaining stable values
+4. Clamp to fuel-type-specific reasonable range
+
+Returns the inferred p_min in MW, or nothing if insufficient data.
+"""
+function infer_p_min(historical_data::DataFrame, p_max::Float64, fuel_type::Symbol; percentile::Float64=0.05)
+    if nrow(historical_data) < MIN_DATA_POINTS_FOR_RAMP_INFERENCE
+        return nothing
+    end
+
+    if p_max <= 0
+        return nothing
+    end
+
+    # Sort by time
+    sort!(historical_data, :date_time_utc)
+    gen_values = historical_data.actual_generation_output_mw
+
+    # Calculate deltas to identify transients
+    deltas = diff(gen_values)
+
+    # Define ramp threshold: if |delta| > 5% of p_max, consider it a transient
+    ramp_threshold = 0.05 * p_max
+
+    # Collect stable non-zero values
+    # A value is "stable" if both adjacent deltas are small (not ramping)
+    stable_values = Float64[]
+    for i in 2:(length(gen_values) - 1)
+        value = gen_values[i]
+        delta_before = abs(deltas[i-1])
+        delta_after = abs(deltas[i])
+
+        # Include if: non-zero AND not ramping (stable operation)
+        if value > 0 && delta_before < ramp_threshold && delta_after < ramp_threshold
+            push!(stable_values, value)
+        end
+    end
+
+    # Need enough stable values for meaningful inference
+    if length(stable_values) < 50
+        return nothing
+    end
+
+    # Take the specified percentile (default 5th) of stable values
+    inferred_p_min = Statistics.quantile(stable_values, percentile)
+
+    # Sanity check: clamp to fuel-type-specific reasonable range
+    bounds_category = get_p_min_bounds_category(fuel_type)
+    (min_frac, max_frac) = get(P_MIN_BOUNDS, bounds_category, P_MIN_BOUNDS[:default])
+    min_bound = min_frac * p_max
+    max_bound = max_frac * p_max
+
+    return clamp(inferred_p_min, min_bound, max_bound)
+end
+
+# Sanity check bounds for uptime/downtime by fuel type category (hours)
+# Format: fuel_type => (min_uptime_bounds, min_downtime_bounds) where each is (min, max)
+const UPTIME_DOWNTIME_BOUNDS = Dict(
+    :coal => ((8, 48), (4, 24)),       # Coal: long cycles, high min uptime/downtime
+    :gas_ccgt => ((2, 12), (1, 8)),    # CCGT: moderate flexibility
+    :gas_ocgt => ((1, 4), (1, 4)),     # OCGT: very flexible, short cycles
+    :default => ((2, 24), (1, 12)),    # Default: moderate bounds
+)
+
+"""
+    infer_uptime_downtime(historical_data::DataFrame, fuel_type::Symbol; percentile::Float64=0.05)
+
+Infer minimum uptime and downtime from historical generation data.
+
+Strategy:
+1. Identify "on" periods (consecutive non-zero output) → min uptime
+2. Identify "off" periods (consecutive zero output) → min downtime
+3. Take low percentile of durations (excluding very short blips)
+4. Clamp to fuel-type-specific reasonable ranges
+
+Returns (min_uptime, min_downtime) in hours, or (nothing, nothing) if insufficient data.
+"""
+function infer_uptime_downtime(historical_data::DataFrame, fuel_type::Symbol; percentile::Float64=0.05)
+    if nrow(historical_data) < MIN_DATA_POINTS_FOR_RAMP_INFERENCE
+        return (nothing, nothing)
+    end
+
+    # Sort by time
+    sort!(historical_data, :date_time_utc)
+    gen_values = historical_data.actual_generation_output_mw
+
+    # Determine resolution in hours
+    resolution_code = historical_data.resolution_code[1]
+    resolution_minutes = parse_resolution_to_minutes(resolution_code)
+    period_hours = resolution_minutes / 60.0
+
+    # Identify on/off states (threshold: > 1 MW considered "on")
+    is_on = gen_values .> 1.0
+
+    # Find durations of consecutive on/off periods
+    on_durations = Float64[]
+    off_durations = Float64[]
+
+    current_state = is_on[1]
+    current_duration = 1
+
+    for i in 2:length(is_on)
+        if is_on[i] == current_state
+            current_duration += 1
+        else
+            # State changed, record duration
+            duration_hours = current_duration * period_hours
+            if current_state  # was ON
+                push!(on_durations, duration_hours)
+            else  # was OFF
+                push!(off_durations, duration_hours)
+            end
+            current_state = is_on[i]
+            current_duration = 1
+        end
+    end
+    # Don't forget the last period
+    duration_hours = current_duration * period_hours
+    if current_state
+        push!(on_durations, duration_hours)
+    else
+        push!(off_durations, duration_hours)
+    end
+
+    # Filter out very short periods (likely data glitches)
+    # Minimum 2 periods to count as a real on/off event
+    min_duration = 2 * period_hours
+    on_durations = filter(d -> d >= min_duration, on_durations)
+    off_durations = filter(d -> d >= min_duration, off_durations)
+
+    # Need enough cycles for meaningful inference
+    min_cycles = 5
+    min_uptime = nothing
+    min_downtime = nothing
+
+    # Get bounds for this fuel type
+    bounds_category = get_p_min_bounds_category(fuel_type)
+    bounds = get(UPTIME_DOWNTIME_BOUNDS, bounds_category, UPTIME_DOWNTIME_BOUNDS[:default])
+    (uptime_min, uptime_max) = bounds[1]
+    (downtime_min, downtime_max) = bounds[2]
+
+    if length(on_durations) >= min_cycles
+        inferred_uptime = Statistics.quantile(on_durations, percentile)
+        min_uptime = round(Int, clamp(inferred_uptime, uptime_min, uptime_max))
+    end
+
+    if length(off_durations) >= min_cycles
+        inferred_downtime = Statistics.quantile(off_durations, percentile)
+        min_downtime = round(Int, clamp(inferred_downtime, downtime_min, downtime_max))
+    end
+
+    return (min_uptime, min_downtime)
+end
 
 # TODO: Make get_generators return Vector{Generator}
 
@@ -102,7 +385,10 @@ end
 
 # pull from postgres, for now only active units of given date (I think)
 # exclude_unavailable: if true, excludes generators with active outages and reduces capacity for partial outages
-function get_generators(map_code::String, day::Dates.Date; exclude_unavailable::Bool=true)
+# infer_ramp_rates: if true, infer ramp rates from historical generation data (3 months)
+function get_generators(map_code::String, day::Dates.Date;
+                       exclude_unavailable::Bool=true,
+                       infer_ramp_rates_flag::Bool=false)
     if exclude_unavailable
         # Query with unavailability filtering:
         # - Excludes generators with complete outages (available_capacity_mw = 0)
@@ -212,8 +498,11 @@ function get_generators(map_code::String, day::Dates.Date; exclude_unavailable::
     end
 
     df = Euphemia.sql2df_with_retry(query, [map_code, day])
-    return [
-        Generator(
+
+    # Build generators (without ramp rates initially)
+    generators = Generator[]
+    for row in eachrow(df)
+        gen = Generator(
             row.generation_unit_code,                    # code
             row.generation_unit_name,                    # name
             Symbol(row.generation_unit_type),            # fuel_type (convert to Symbol)
@@ -228,11 +517,253 @@ function get_generators(map_code::String, day::Dates.Date; exclude_unavailable::
                 row.generation_unit_type,
                 row.area_display_name
             )                                           # marginal_cost
-        ) for row in eachrow(df)
-    ]
+        )
+        push!(generators, gen)
+    end
+
+    # Optionally infer ramp rates from historical data
+    if infer_ramp_rates_flag
+        generators = infer_ramp_rates_for_generators(generators, day)
+    end
+
+    return generators
 end
+
+"""
+    infer_parameters_for_generators(generators::Vector{Generator}, day::Date)
+
+Infer technical parameters (ramp rates, p_min, uptime/downtime) for generators from historical data.
+Returns a new vector of Generator objects with inferred parameters populated.
+
+Parameters inferred:
+- ramp_up, ramp_down: from 95th percentile of observed ramps (fraction/hour)
+- p_min: from 5th percentile of stable non-zero operation (MW)
+- min_uptime, min_downtime: from 5th percentile of on/off cycle durations (hours)
+"""
+function infer_parameters_for_generators(generators::Vector{Generator}, day::Dates.Date)
+    updated_generators = Generator[]
+
+    for gen in generators
+        # Fetch historical generation data
+        historical = get_historical_generation(gen.code, day)
+
+        # Infer ramp rates (as fraction of p_max per hour)
+        rates = infer_ramp_rates(historical, gen.p_max)
+
+        # Determine parameters based on fuel type
+        if gen.fuel_type in FLEXIBLE_FUEL_TYPES
+            # Flexible resources (hydro, batteries) can operate at 0 MW
+            # and have no meaningful uptime/downtime constraints
+            final_p_min = 0.0
+            final_uptime = nothing
+            final_downtime = nothing
+        else
+            # Thermal plants: infer from stable operation
+            inferred_p_min = infer_p_min(historical, gen.p_max, gen.fuel_type)
+            final_p_min = inferred_p_min !== nothing ? inferred_p_min : gen.p_min
+
+            # Infer uptime/downtime from on/off cycles
+            (inferred_uptime, inferred_downtime) = infer_uptime_downtime(historical, gen.fuel_type)
+            final_uptime = inferred_uptime
+            final_downtime = inferred_downtime
+        end
+
+        # Create new generator with inferred parameters
+        updated_gen = Generator(
+            gen.code,
+            gen.name,
+            gen.fuel_type,
+            gen.location,
+            gen.p_max,
+            final_p_min,
+            gen.bidding_zone,
+            gen.marginal_cost,
+            rates.ramp_up,
+            rates.ramp_down,
+            final_uptime,
+            final_downtime
+        )
+        push!(updated_generators, updated_gen)
+    end
+
+    return updated_generators
+end
+
+# Alias for backward compatibility
+infer_ramp_rates_for_generators(generators::Vector{Generator}, day::Dates.Date) =
+    infer_parameters_for_generators(generators, day)
 
 # Convenience function for backward compatibility - defaults to GR
 function get_generators(day::Dates.Date)
     return get_generators("GR", day)
+end
+
+# ============================================================================
+# Cached Inferred Parameters (Database Persistence)
+# ============================================================================
+
+"""
+    save_inferred_parameters(generators::Vector{Generator}, bidding_zone::String, reference_date::Date)
+
+Save inferred generator parameters to the database cache.
+Uses UPSERT to update existing records or insert new ones.
+The inference_date is set to today (when inference was run), not the reference market day.
+"""
+function save_inferred_parameters(generators::Vector{Generator}, bidding_zone::String, reference_date::Dates.Date)
+    sql = """
+    INSERT INTO simulations.generator_inferred_parameters
+    (generator_code, bidding_zone, inference_date, ramp_up, ramp_down, p_min, min_uptime, min_downtime, data_points_used, created_at)
+    VALUES (\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8, \$9, NOW())
+    ON CONFLICT (generator_code, bidding_zone) DO UPDATE SET
+        inference_date = EXCLUDED.inference_date,
+        ramp_up = EXCLUDED.ramp_up,
+        ramp_down = EXCLUDED.ramp_down,
+        p_min = EXCLUDED.p_min,
+        min_uptime = EXCLUDED.min_uptime,
+        min_downtime = EXCLUDED.min_downtime,
+        data_points_used = EXCLUDED.data_points_used,
+        created_at = NOW()
+    """
+
+    # Helper to convert nothing to missing for PostgreSQL NULL
+    to_pg(x) = x === nothing ? missing : x
+
+    # Use today's date as the inference date (when we ran the inference)
+    today = Dates.today()
+
+    saved_count = 0
+    Euphemia.withdb() do conn
+        for gen in generators
+            # Count data points (estimate from historical query)
+            historical = get_historical_generation(gen.code, reference_date)
+            data_points = nrow(historical)
+
+            params = [
+                gen.code,
+                bidding_zone,
+                today,  # inference_date = when we ran the inference
+                to_pg(gen.ramp_up),
+                to_pg(gen.ramp_down),
+                gen.p_min,
+                to_pg(gen.min_uptime),
+                to_pg(gen.min_downtime),
+                data_points
+            ]
+            LibPQ.execute(conn, sql, params)
+            saved_count += 1
+        end
+    end
+
+    @info "Saved inferred parameters for $saved_count generators in zone $bidding_zone"
+    return saved_count
+end
+
+"""
+    load_cached_parameters(bidding_zone::String; max_age_days::Int=7)
+
+Load cached inferred parameters from the database.
+Returns a Dict mapping generator_code => (ramp_up, ramp_down, p_min, min_uptime, min_downtime).
+Only returns parameters that are not older than max_age_days.
+"""
+function load_cached_parameters(bidding_zone::String; max_age_days::Int=7)
+    query = """
+    SELECT generator_code, ramp_up, ramp_down, p_min, min_uptime, min_downtime, inference_date
+    FROM simulations.generator_inferred_parameters
+    WHERE bidding_zone = \$1
+      AND inference_date >= CURRENT_DATE - INTERVAL '\$2 days'
+    """
+
+    # Replace $2 with actual value since PostgreSQL doesn't parameterize intervals well
+    query = replace(query, "\$2" => string(max_age_days))
+    df = Euphemia.sql2df_with_retry(query, [bidding_zone])
+
+    cache = Dict{String, NamedTuple{(:ramp_up, :ramp_down, :p_min, :min_uptime, :min_downtime),
+                                     Tuple{Union{Float64,Nothing}, Union{Float64,Nothing}, Union{Float64,Nothing}, Union{Int,Nothing}, Union{Int,Nothing}}}}()
+
+    for row in eachrow(df)
+        cache[row.generator_code] = (
+            ramp_up = ismissing(row.ramp_up) ? nothing : row.ramp_up,
+            ramp_down = ismissing(row.ramp_down) ? nothing : row.ramp_down,
+            p_min = ismissing(row.p_min) ? nothing : row.p_min,
+            min_uptime = ismissing(row.min_uptime) ? nothing : Int(row.min_uptime),
+            min_downtime = ismissing(row.min_downtime) ? nothing : Int(row.min_downtime)
+        )
+    end
+
+    return cache
+end
+
+"""
+    get_generators_with_inferred_params(map_code::String, day::Date;
+                                        use_cache::Bool=true,
+                                        max_cache_age_days::Int=7,
+                                        exclude_unavailable::Bool=true)
+
+Get generators with inferred parameters, using cached values when available.
+
+If use_cache=true (default):
+1. Load cached parameters from DB
+2. For generators with cached values, apply them
+3. For generators without cache (or stale cache), run inference and save to DB
+
+If use_cache=false: Always run fresh inference (slow but guaranteed fresh).
+"""
+function get_generators_with_inferred_params(map_code::String, day::Dates.Date;
+                                             use_cache::Bool=true,
+                                             max_cache_age_days::Int=7,
+                                             exclude_unavailable::Bool=true)
+    # Get base generators
+    generators = get_generators(map_code, day; exclude_unavailable=exclude_unavailable)
+
+    if !use_cache
+        # Fresh inference for all
+        println("  🔄 Running fresh parameter inference for all generators...")
+        inferred = infer_parameters_for_generators(generators, day)
+        save_inferred_parameters(inferred, map_code, day)
+        return inferred
+    end
+
+    # Load cached parameters
+    cache = load_cached_parameters(map_code; max_age_days=max_cache_age_days)
+    println("  📦 Found $(length(cache)) cached parameter sets for zone $map_code")
+
+    # Separate generators into cached and uncached
+    cached_gens = Generator[]
+    uncached_gens = Generator[]
+
+    for gen in generators
+        if haskey(cache, gen.code)
+            params = cache[gen.code]
+            # Apply cached parameters
+            updated_gen = Generator(
+                gen.code,
+                gen.name,
+                gen.fuel_type,
+                gen.location,
+                gen.p_max,
+                params.p_min !== nothing ? params.p_min : gen.p_min,
+                gen.bidding_zone,
+                gen.marginal_cost,
+                params.ramp_up,
+                params.ramp_down,
+                params.min_uptime,
+                params.min_downtime
+            )
+            push!(cached_gens, updated_gen)
+        else
+            push!(uncached_gens, gen)
+        end
+    end
+
+    println("  ✓ Using cached params for $(length(cached_gens)) generators")
+
+    # Run inference for uncached generators
+    if !isempty(uncached_gens)
+        println("  🔄 Running inference for $(length(uncached_gens)) uncached generators...")
+        newly_inferred = infer_parameters_for_generators(uncached_gens, day)
+        save_inferred_parameters(newly_inferred, map_code, day)
+        append!(cached_gens, newly_inferred)
+    end
+
+    return cached_gens
 end

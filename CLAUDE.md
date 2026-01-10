@@ -89,6 +89,52 @@ The `exclude_unavailable` parameter (default: `true`) filters generators based o
 - Only `status = 'Active'` outages are considered (ignores `Cancelled`/`Withdrawn`)
 - Uses `MIN(available_capacity_mw)` when multiple outage records exist (conservative)
 
+**Generator parameter inference from historical data:**
+```julia
+# Get generators with inferred parameters (uses DB cache, ~2 sec)
+generators = get_generators_with_inferred_params("GR", Date(2024, 6, 15))
+
+# Force fresh inference (slow, ~17 min, but updates cache)
+generators = get_generators_with_inferred_params("GR", Date(2024, 6, 15); use_cache=false)
+
+# Manual inference without caching
+generators = get_generators("GR", Date(2024, 6, 15))
+generators_with_inferred = infer_parameters_for_generators(generators, Date(2024, 6, 15))
+```
+
+The `infer_parameters_for_generators()` function analyzes historical generation from `entsoe.actual_generation_output_per_generation_unit` to infer:
+
+- **Ramp rates** (`ramp_up`, `ramp_down`): 95th percentile of observed ramps, stored as fraction of p_max per hour
+- **Minimum generation** (`p_min`): 5th percentile of stable non-zero operation
+- **Min uptime/downtime** (`min_uptime`, `min_downtime`): 5th percentile of on/off cycle durations (hours)
+
+Ramp rate inference:
+- Queries 3 months of historical generation data
+- Normalizes to hourly rates regardless of source resolution (PT15M, PT60M, etc.)
+- Falls back to fuel-type defaults in `FuelTypeParameters` if insufficient data
+
+p_min inference strategy (robust to data quality issues):
+- **Flexible resources** (hydro, batteries): p_min = 0 (no inference needed)
+- **Thermal plants**: Infers from historical stable operation
+  - Filters zeros (plant off) and transients (startup/shutdown ramps)
+  - Transient detection: points where |delta| > 5% of p_max
+  - Takes 5th percentile of remaining stable values
+  - Fuel-type-specific clamp bounds (aligned with FuelTypeParameters):
+    - Coal/Lignite: 45-65% of p_max
+    - Gas CCGT: 35-55% of p_max
+    - Gas OCGT: 20-45% of p_max
+
+Min uptime/downtime inference:
+- Identifies consecutive "on" periods (output > 1 MW) for uptime
+- Identifies consecutive "off" periods (output = 0) for downtime
+- Filters out short glitches (< 2 periods)
+- Requires at least 5 on/off cycles for meaningful inference
+- Baseload plants (coal) often return N/A (rarely cycle)
+- Fuel-type-specific clamp bounds:
+  - Coal: uptime 8-48h, downtime 4-24h
+  - Gas CCGT: uptime 2-12h, downtime 1-8h
+  - Gas OCGT: uptime 1-4h, downtime 1-4h
+
 ## Development Commands
 
 ### Julia Package Management
@@ -120,12 +166,14 @@ julia --project=. -e "using Test, Euphemia; include(\"test/test_multi_zone_mpcc.
 
 ```
 test/
-├── runtests.jl              # Main test runner (includes core tests)
-├── test_mpcc.jl             # MPCC solver tests (50 tests)
-├── test_multi_zone_mpcc.jl  # Multi-zone transmission tests (21 tests)
-├── test_network_module.jl   # Network/ATC tests (140 tests)
+├── runtests.jl                  # Main test runner (includes core tests)
+├── test_generator_inference.jl  # Generator parameter inference tests (58 tests)
+├── test_data_fetching.jl        # DB integration for loads/renewables/etc (23 tests)
+├── test_mpcc.jl                 # MPCC solver tests (50 tests)
+├── test_multi_zone_mpcc.jl      # Multi-zone transmission tests (21 tests)
+├── test_network_module.jl       # Network/ATC tests (140 tests)
 │
-├── manual/                  # DB-dependent, long-running tests (run manually)
+├── manual/                      # DB-dependent, long-running tests (run manually)
 │   ├── test_database_integration.jl
 │   ├── test_date_range_processing.jl
 │   ├── test_*_all_zones.jl
@@ -203,6 +251,7 @@ The project uses PostgreSQL with two main schemas:
 - `entsoe.generation_forecasts_for_wind_and_solar` - Renewable generation forecasts (filtered by same area_type_code values)
 - `entsoe.offered_transfer_capacities_implicit` - Cross-border transfer capacity data between bidding zones
 - `entsoe.unavailability_of_production_and_generation_units` - Generator outage data (planned/forced)
+- `entsoe.actual_generation_output_per_generation_unit` - Historical generation output (used for parameter inference)
 
 **Important column notes for transfer capacities:**
 - Use `out_map_code` and `in_map_code` for short zone codes (e.g., "GR", "BG")
@@ -218,6 +267,12 @@ The project uses PostgreSQL with two main schemas:
 - `type`: `'Planned'` (maintenance) or `'Forced'` (unexpected)
 - `available_capacity_mw`: Remaining capacity during outage (0 = complete outage)
 
+**Actual generation output table columns:**
+- `generation_unit_code`: Matches generator code in production_and_generation_units
+- `date_time_utc`: Timestamp of the measurement
+- `resolution_code`: Temporal resolution (PT15M, PT30M, PT60M)
+- `actual_generation_output_mw`: Output in MW at each timestamp
+
 ### Simulations Schema (`simulations.*`)
 
 **`simulations.energy_prices`** - Generated energy price results by bidding zone, date, and time period
@@ -231,6 +286,14 @@ The project uses PostgreSQL with two main schemas:
 - Contains `optimizer`, `solve_time_seconds`, `objective_value`, etc.
 
 **`simulations.transmission_flows`** - Cross-border transmission flow results from multi-zone clearing
+
+**`simulations.generator_inferred_parameters`** - Cached inferred generator parameters
+- `generator_code`, `bidding_zone`: Primary key
+- `inference_date`: When inference was run (for cache expiration)
+- `ramp_up`, `ramp_down`: Inferred ramp rates (fraction/hour)
+- `p_min`: Inferred minimum generation (MW)
+- `min_uptime`, `min_downtime`: Inferred cycle constraints (hours)
+- `data_points_used`: Number of historical data points used for inference
 
 **Joining prices with optimization metadata:**
 ```sql

@@ -269,13 +269,26 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date; optimizer:
         end
     end
 
-    # Ramp rate parameters based on fuel type (as fraction of capacity per period)
+    # Ramp rate parameters - use per-generator rates if available, otherwise fuel-type defaults
+    # All rates are stored as fraction/hour, so we scale by period duration
+    period_hours = resolution_minutes / 60.0
     ramp_up = Float64[]
     ramp_down = Float64[]
     for (i, gen) in enumerate(generators)
         params = fuel_params[i]
-        push!(ramp_up, params.ramp_up_rate * gen.p_max)
-        push!(ramp_down, params.ramp_down_rate * gen.p_max)
+        # Use generator's inferred ramp_up if available, otherwise use fuel-type default
+        # Both are fraction/hour, so multiply by p_max and period_hours to get MW/period
+        if gen.ramp_up !== nothing
+            push!(ramp_up, gen.ramp_up * gen.p_max * period_hours)
+        else
+            push!(ramp_up, params.ramp_up_rate * gen.p_max * period_hours)
+        end
+        # Use generator's inferred ramp_down if available, otherwise use fuel-type default
+        if gen.ramp_down !== nothing
+            push!(ramp_down, gen.ramp_down * gen.p_max * period_hours)
+        else
+            push!(ramp_down, params.ramp_down_rate * gen.p_max * period_hours)
+        end
     end
 
     M = 10000.0  # Big M parameter
@@ -300,9 +313,9 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date; optimizer:
     @constraint(model, [i = 1:N, t = 1:T], v[i, t] + z[i, t] <= 1)
 
     # minimum uptime: if there was a startup in the last UT periods, unit must be on
-    # Now fuel-type-specific
+    # Use generator's inferred value if available, otherwise fuel-type default
     for (i, gen) in enumerate(generators)
-        UT = fuel_params[i].min_uptime
+        UT = gen.min_uptime !== nothing ? gen.min_uptime : fuel_params[i].min_uptime
         if UT > 1  # Only add constraint if minimum uptime > 1
             @constraint(model, [t = UT:T],
                 sum(v[i, τ] for τ in t-UT+1:t) <= u[i, t])
@@ -310,9 +323,9 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date; optimizer:
     end
 
     # minimum downtime: if there was a shutdown in the last DT periods, unit must be off
-    # Now fuel-type-specific
+    # Use generator's inferred value if available, otherwise fuel-type default
     for (i, gen) in enumerate(generators)
-        DT = fuel_params[i].min_downtime
+        DT = gen.min_downtime !== nothing ? gen.min_downtime : fuel_params[i].min_downtime
         if DT > 1  # Only add constraint if minimum downtime > 1
             @constraint(model, [t = DT:T],
                 sum(z[i, τ] for τ in t-DT+1:t) <= 1 - u[i, t])
