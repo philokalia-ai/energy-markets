@@ -89,6 +89,29 @@ The `exclude_unavailable` parameter (default: `true`) filters generators based o
 - Only `status = 'Active'` outages are considered (ignores `Cancelled`/`Withdrawn`)
 - Uses `MIN(available_capacity_mw)` when multiple outage records exist (conservative)
 
+**Generator parameter inference from historical data:**
+```julia
+# Infer ramp rates and p_min from 3 months of historical generation data
+generators = get_generators("GR", Date(2024, 6, 15))
+generators_with_inferred = infer_parameters_for_generators(generators, Date(2024, 6, 15))
+```
+
+The `infer_parameters_for_generators()` function analyzes historical generation from `entsoe.actual_generation_output_per_generation_unit` to infer:
+
+- **Ramp rates** (`ramp_up`, `ramp_down`): 95th percentile of observed ramps, stored as fraction of p_max per hour
+- **Minimum generation** (`p_min`): 5th percentile of stable non-zero operation
+
+Ramp rate inference:
+- Queries 3 months of historical generation data
+- Normalizes to hourly rates regardless of source resolution (PT15M, PT60M, etc.)
+- Falls back to fuel-type defaults in `FuelTypeParameters` if insufficient data
+
+p_min inference strategy (robust to data quality issues):
+- Filters zeros (plant off) and transients (startup/shutdown ramps)
+- Transient detection: points where |delta| > 5% of p_max
+- Takes 5th percentile of remaining stable values
+- Clamps to 5-60% of p_max for sanity
+
 ## Development Commands
 
 ### Julia Package Management
@@ -203,6 +226,7 @@ The project uses PostgreSQL with two main schemas:
 - `entsoe.generation_forecasts_for_wind_and_solar` - Renewable generation forecasts (filtered by same area_type_code values)
 - `entsoe.offered_transfer_capacities_implicit` - Cross-border transfer capacity data between bidding zones
 - `entsoe.unavailability_of_production_and_generation_units` - Generator outage data (planned/forced)
+- `entsoe.actual_generation_output_per_generation_unit` - Historical generation output (used for parameter inference)
 
 **Important column notes for transfer capacities:**
 - Use `out_map_code` and `in_map_code` for short zone codes (e.g., "GR", "BG")
@@ -217,6 +241,12 @@ The project uses PostgreSQL with two main schemas:
 - `status`: `'Active'` (confirmed), `'Cancelled'`, or `'Withdrawn'`
 - `type`: `'Planned'` (maintenance) or `'Forced'` (unexpected)
 - `available_capacity_mw`: Remaining capacity during outage (0 = complete outage)
+
+**Actual generation output table columns:**
+- `generation_unit_code`: Matches generator code in production_and_generation_units
+- `date_time_utc`: Timestamp of the measurement
+- `resolution_code`: Temporal resolution (PT15M, PT30M, PT60M)
+- `actual_generation_output_mw`: Output in MW at each timestamp
 
 ### Simulations Schema (`simulations.*`)
 
