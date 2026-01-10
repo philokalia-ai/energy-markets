@@ -112,10 +112,10 @@ p_min inference strategy (robust to data quality issues):
   - Filters zeros (plant off) and transients (startup/shutdown ramps)
   - Transient detection: points where |delta| > 5% of p_max
   - Takes 5th percentile of remaining stable values
-  - Fuel-type-specific clamp bounds:
-    - Coal/Lignite: 30-60% of p_max
-    - Gas CCGT: 25-50% of p_max
-    - Gas OCGT: 10-40% of p_max
+  - Fuel-type-specific clamp bounds (aligned with FuelTypeParameters):
+    - Coal/Lignite: 45-65% of p_max
+    - Gas CCGT: 35-55% of p_max
+    - Gas OCGT: 20-45% of p_max
 
 ## Development Commands
 

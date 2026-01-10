@@ -109,12 +109,13 @@ function infer_ramp_rates(historical_data::DataFrame, p_max::Float64; percentile
 end
 
 # Sanity check bounds for p_min by fuel type category (fraction of p_max)
+# Lower bounds aligned with FuelTypeParameters.min_load_factor
 # Format: fuel_type => (min_bound, max_bound)
 const P_MIN_BOUNDS = Dict(
-    :coal => (0.30, 0.60),      # Coal/Lignite: high minimum load
-    :gas_ccgt => (0.25, 0.50),  # Combined cycle gas: moderate minimum
-    :gas_ocgt => (0.10, 0.40),  # Open cycle gas turbine: more flexible
-    :default => (0.05, 0.60),   # Default for unknown thermal
+    :coal => (0.45, 0.65),      # Coal/Lignite: high minimum load (FuelTypeParams: 0.45-0.50)
+    :gas_ccgt => (0.35, 0.55),  # Combined cycle gas: moderate minimum (FuelTypeParams: 0.35)
+    :gas_ocgt => (0.20, 0.45),  # Open cycle gas turbine: more flexible
+    :default => (0.30, 0.60),   # Default for unknown thermal
 )
 
 """

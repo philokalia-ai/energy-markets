@@ -88,7 +88,7 @@ function get_fuel_type_parameters(fuel_type::Symbol)::FuelTypeParameters
             8,      # min_downtime: 8 hours minimum off time
             0.05,   # ramp_up_rate: 5% per hour - very inflexible
             0.05,   # ramp_down_rate: 5% per hour
-            0.50,   # min_load_factor: Cannot operate below 50% efficiently
+            0.45,   # min_load_factor: Cannot operate below 45% efficiently
             0.75,   # part_load_efficiency: 75% efficiency at minimum load
             12,     # warm_threshold: Warm after 12 hours offline
             72,     # cold_threshold: Cold after 72 hours offline
@@ -178,7 +178,7 @@ function get_fuel_type_parameters(fuel_type::Symbol)::FuelTypeParameters
             1,      # min_downtime: Very flexible
             1.0,    # ramp_up_rate: Can ramp to full capacity instantly
             1.0,    # ramp_down_rate: Can ramp down instantly
-            0.10,   # min_load_factor: Can operate at very low loads
+            0.0,    # min_load_factor: Can operate at any level (flexible resource)
             1.0,    # part_load_efficiency: No efficiency penalty
             1,      # warm_threshold: Always ready
             1,      # cold_threshold: Always ready
@@ -196,7 +196,7 @@ function get_fuel_type_parameters(fuel_type::Symbol)::FuelTypeParameters
             1,      # min_downtime: Can cycle frequently
             1.0,    # ramp_up_rate: Full ramp capability
             1.0,    # ramp_down_rate: Full ramp capability
-            0.20,   # min_load_factor: Can operate at low loads
+            0.0,    # min_load_factor: Can operate at any level (flexible resource)
             0.95,   # part_load_efficiency: Slight efficiency loss at part load
             1,      # warm_threshold: Always ready
             1,      # cold_threshold: Always ready
@@ -214,7 +214,7 @@ function get_fuel_type_parameters(fuel_type::Symbol)::FuelTypeParameters
             1,      # min_downtime: Flexible
             0.8,    # ramp_up_rate: Fast but not instant (mechanical limits)
             0.8,    # ramp_down_rate: Fast ramping
-            0.15,   # min_load_factor: Can operate at low flows
+            0.0,    # min_load_factor: Can operate at any level (flexible resource)
             0.98,   # part_load_efficiency: Minimal efficiency loss
             1,      # warm_threshold: Always ready
             1,      # cold_threshold: Always ready
@@ -395,7 +395,7 @@ function get_fuel_type_parameters(fuel_type::Symbol)::FuelTypeParameters
             3,      # min_downtime: 3 hours minimum off time
             0.15,   # ramp_up_rate: 15% per hour - moderate flexibility
             0.15,   # ramp_down_rate: 15% per hour
-            0.40,   # min_load_factor: 40% minimum load
+            0.30,   # min_load_factor: 30% minimum load (aligned with P_MIN_BOUNDS default)
             0.85,   # part_load_efficiency: 85% efficiency at minimum load
             12,     # warm_threshold: Warm after 12 hours offline
             48,     # cold_threshold: Cold after 48 hours offline
@@ -414,7 +414,7 @@ function get_fuel_type_parameters(fuel_type::Symbol)::FuelTypeParameters
             3,      # min_downtime
             0.15,   # ramp_up_rate
             0.15,   # ramp_down_rate
-            0.40,   # min_load_factor
+            0.30,   # min_load_factor (aligned with P_MIN_BOUNDS default)
             0.85,   # part_load_efficiency
             12,     # warm_threshold
             48,     # cold_threshold
