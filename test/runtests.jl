@@ -39,6 +39,17 @@ println()
     end
 
     # -------------------------------------------------------------------------
+    # Data Fetching Tests
+    # DB integration tests for generators, loads, renewables, transfer capacities
+    # -------------------------------------------------------------------------
+    @testset "Data Fetching" begin
+        println("\n" * "=" ^ 60)
+        println("Running Data Fetching Tests...")
+        println("=" ^ 60)
+        include(joinpath(@__DIR__, "test_data_fetching.jl"))
+    end
+
+    # -------------------------------------------------------------------------
     # Network Module Tests
     # Tests for network topology, transfer capacity, and ATC constraints
     # -------------------------------------------------------------------------
