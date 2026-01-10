@@ -7,14 +7,19 @@ struct Generator
     p_min::Float64
     bidding_zone::String
     marginal_cost::Float64
-    ramp_up::Union{Float64, Nothing}    # fraction of p_max per hour (nothing = use fuel-type default)
-    ramp_down::Union{Float64, Nothing}  # fraction of p_max per hour (nothing = use fuel-type default)
+    ramp_up::Union{Float64, Nothing}      # fraction of p_max per hour (nothing = use fuel-type default)
+    ramp_down::Union{Float64, Nothing}    # fraction of p_max per hour (nothing = use fuel-type default)
+    min_uptime::Union{Int, Nothing}       # minimum hours unit must stay on (nothing = use fuel-type default)
+    min_downtime::Union{Int, Nothing}     # minimum hours unit must stay off (nothing = use fuel-type default)
 
-    # Constructor with ramp rates defaulting to nothing
+    # Constructor with optional parameters defaulting to nothing
     function Generator(code, name, fuel_type, location, p_max, p_min, bidding_zone, marginal_cost,
                        ramp_up::Union{Float64, Nothing}=nothing,
-                       ramp_down::Union{Float64, Nothing}=nothing)
-        new(code, name, fuel_type, location, p_max, p_min, bidding_zone, marginal_cost, ramp_up, ramp_down)
+                       ramp_down::Union{Float64, Nothing}=nothing,
+                       min_uptime::Union{Int, Nothing}=nothing,
+                       min_downtime::Union{Int, Nothing}=nothing)
+        new(code, name, fuel_type, location, p_max, p_min, bidding_zone, marginal_cost,
+            ramp_up, ramp_down, min_uptime, min_downtime)
     end
 end
 
@@ -194,6 +199,105 @@ function infer_p_min(historical_data::DataFrame, p_max::Float64, fuel_type::Symb
     max_bound = max_frac * p_max
 
     return clamp(inferred_p_min, min_bound, max_bound)
+end
+
+# Sanity check bounds for uptime/downtime by fuel type category (hours)
+# Format: fuel_type => (min_uptime_bounds, min_downtime_bounds) where each is (min, max)
+const UPTIME_DOWNTIME_BOUNDS = Dict(
+    :coal => ((8, 48), (4, 24)),       # Coal: long cycles, high min uptime/downtime
+    :gas_ccgt => ((2, 12), (1, 8)),    # CCGT: moderate flexibility
+    :gas_ocgt => ((1, 4), (1, 4)),     # OCGT: very flexible, short cycles
+    :default => ((2, 24), (1, 12)),    # Default: moderate bounds
+)
+
+"""
+    infer_uptime_downtime(historical_data::DataFrame, fuel_type::Symbol; percentile::Float64=0.05)
+
+Infer minimum uptime and downtime from historical generation data.
+
+Strategy:
+1. Identify "on" periods (consecutive non-zero output) → min uptime
+2. Identify "off" periods (consecutive zero output) → min downtime
+3. Take low percentile of durations (excluding very short blips)
+4. Clamp to fuel-type-specific reasonable ranges
+
+Returns (min_uptime, min_downtime) in hours, or (nothing, nothing) if insufficient data.
+"""
+function infer_uptime_downtime(historical_data::DataFrame, fuel_type::Symbol; percentile::Float64=0.05)
+    if nrow(historical_data) < MIN_DATA_POINTS_FOR_RAMP_INFERENCE
+        return (nothing, nothing)
+    end
+
+    # Sort by time
+    sort!(historical_data, :date_time_utc)
+    gen_values = historical_data.actual_generation_output_mw
+
+    # Determine resolution in hours
+    resolution_code = historical_data.resolution_code[1]
+    resolution_minutes = parse_resolution_to_minutes(resolution_code)
+    period_hours = resolution_minutes / 60.0
+
+    # Identify on/off states (threshold: > 1 MW considered "on")
+    is_on = gen_values .> 1.0
+
+    # Find durations of consecutive on/off periods
+    on_durations = Float64[]
+    off_durations = Float64[]
+
+    current_state = is_on[1]
+    current_duration = 1
+
+    for i in 2:length(is_on)
+        if is_on[i] == current_state
+            current_duration += 1
+        else
+            # State changed, record duration
+            duration_hours = current_duration * period_hours
+            if current_state  # was ON
+                push!(on_durations, duration_hours)
+            else  # was OFF
+                push!(off_durations, duration_hours)
+            end
+            current_state = is_on[i]
+            current_duration = 1
+        end
+    end
+    # Don't forget the last period
+    duration_hours = current_duration * period_hours
+    if current_state
+        push!(on_durations, duration_hours)
+    else
+        push!(off_durations, duration_hours)
+    end
+
+    # Filter out very short periods (likely data glitches)
+    # Minimum 2 periods to count as a real on/off event
+    min_duration = 2 * period_hours
+    on_durations = filter(d -> d >= min_duration, on_durations)
+    off_durations = filter(d -> d >= min_duration, off_durations)
+
+    # Need enough cycles for meaningful inference
+    min_cycles = 5
+    min_uptime = nothing
+    min_downtime = nothing
+
+    # Get bounds for this fuel type
+    bounds_category = get_p_min_bounds_category(fuel_type)
+    bounds = get(UPTIME_DOWNTIME_BOUNDS, bounds_category, UPTIME_DOWNTIME_BOUNDS[:default])
+    (uptime_min, uptime_max) = bounds[1]
+    (downtime_min, downtime_max) = bounds[2]
+
+    if length(on_durations) >= min_cycles
+        inferred_uptime = Statistics.quantile(on_durations, percentile)
+        min_uptime = round(Int, clamp(inferred_uptime, uptime_min, uptime_max))
+    end
+
+    if length(off_durations) >= min_cycles
+        inferred_downtime = Statistics.quantile(off_durations, percentile)
+        min_downtime = round(Int, clamp(inferred_downtime, downtime_min, downtime_max))
+    end
+
+    return (min_uptime, min_downtime)
 end
 
 # TODO: Make get_generators return Vector{Generator}
@@ -428,12 +532,13 @@ end
 """
     infer_parameters_for_generators(generators::Vector{Generator}, day::Date)
 
-Infer technical parameters (ramp rates, p_min) for generators from historical data.
+Infer technical parameters (ramp rates, p_min, uptime/downtime) for generators from historical data.
 Returns a new vector of Generator objects with inferred parameters populated.
 
 Parameters inferred:
 - ramp_up, ramp_down: from 95th percentile of observed ramps (fraction/hour)
 - p_min: from 5th percentile of stable non-zero operation (MW)
+- min_uptime, min_downtime: from 5th percentile of on/off cycle durations (hours)
 """
 function infer_parameters_for_generators(generators::Vector{Generator}, day::Dates.Date)
     updated_generators = Generator[]
@@ -445,15 +550,22 @@ function infer_parameters_for_generators(generators::Vector{Generator}, day::Dat
         # Infer ramp rates (as fraction of p_max per hour)
         rates = infer_ramp_rates(historical, gen.p_max)
 
-        # Determine p_min based on fuel type
+        # Determine parameters based on fuel type
         if gen.fuel_type in FLEXIBLE_FUEL_TYPES
             # Flexible resources (hydro, batteries) can operate at 0 MW
+            # and have no meaningful uptime/downtime constraints
             final_p_min = 0.0
+            final_uptime = nothing
+            final_downtime = nothing
         else
-            # Thermal plants: infer p_min from stable operation
+            # Thermal plants: infer from stable operation
             inferred_p_min = infer_p_min(historical, gen.p_max, gen.fuel_type)
-            # Use inferred value if available, otherwise keep original
             final_p_min = inferred_p_min !== nothing ? inferred_p_min : gen.p_min
+
+            # Infer uptime/downtime from on/off cycles
+            (inferred_uptime, inferred_downtime) = infer_uptime_downtime(historical, gen.fuel_type)
+            final_uptime = inferred_uptime
+            final_downtime = inferred_downtime
         end
 
         # Create new generator with inferred parameters
@@ -467,7 +579,9 @@ function infer_parameters_for_generators(generators::Vector{Generator}, day::Dat
             gen.bidding_zone,
             gen.marginal_cost,
             rates.ramp_up,
-            rates.ramp_down
+            rates.ramp_down,
+            final_uptime,
+            final_downtime
         )
         push!(updated_generators, updated_gen)
     end
