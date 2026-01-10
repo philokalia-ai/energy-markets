@@ -100,6 +100,7 @@ The `infer_parameters_for_generators()` function analyzes historical generation 
 
 - **Ramp rates** (`ramp_up`, `ramp_down`): 95th percentile of observed ramps, stored as fraction of p_max per hour
 - **Minimum generation** (`p_min`): 5th percentile of stable non-zero operation
+- **Min uptime/downtime** (`min_uptime`, `min_downtime`): 5th percentile of on/off cycle durations (hours)
 
 Ramp rate inference:
 - Queries 3 months of historical generation data
@@ -116,6 +117,17 @@ p_min inference strategy (robust to data quality issues):
     - Coal/Lignite: 45-65% of p_max
     - Gas CCGT: 35-55% of p_max
     - Gas OCGT: 20-45% of p_max
+
+Min uptime/downtime inference:
+- Identifies consecutive "on" periods (output > 1 MW) for uptime
+- Identifies consecutive "off" periods (output = 0) for downtime
+- Filters out short glitches (< 2 periods)
+- Requires at least 5 on/off cycles for meaningful inference
+- Baseload plants (coal) often return N/A (rarely cycle)
+- Fuel-type-specific clamp bounds:
+  - Coal: uptime 8-48h, downtime 4-24h
+  - Gas CCGT: uptime 2-12h, downtime 1-8h
+  - Gas OCGT: uptime 1-4h, downtime 1-4h
 
 ## Development Commands
 
