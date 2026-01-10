@@ -166,12 +166,14 @@ julia --project=. -e "using Test, Euphemia; include(\"test/test_multi_zone_mpcc.
 
 ```
 test/
-├── runtests.jl              # Main test runner (includes core tests)
-├── test_mpcc.jl             # MPCC solver tests (50 tests)
-├── test_multi_zone_mpcc.jl  # Multi-zone transmission tests (21 tests)
-├── test_network_module.jl   # Network/ATC tests (140 tests)
+├── runtests.jl                  # Main test runner (includes core tests)
+├── test_generator_inference.jl  # Generator parameter inference tests (58 tests)
+├── test_data_fetching.jl        # DB integration for loads/renewables/etc (23 tests)
+├── test_mpcc.jl                 # MPCC solver tests (50 tests)
+├── test_multi_zone_mpcc.jl      # Multi-zone transmission tests (21 tests)
+├── test_network_module.jl       # Network/ATC tests (140 tests)
 │
-├── manual/                  # DB-dependent, long-running tests (run manually)
+├── manual/                      # DB-dependent, long-running tests (run manually)
 │   ├── test_database_integration.jl
 │   ├── test_date_range_processing.jl
 │   ├── test_*_all_zones.jl
