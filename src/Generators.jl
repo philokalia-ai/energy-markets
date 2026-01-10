@@ -98,6 +98,67 @@ function infer_ramp_rates(historical_data::DataFrame, p_max::Float64; percentile
     return (ramp_up=ramp_up_rate, ramp_down=ramp_down_rate)
 end
 
+"""
+    infer_p_min(historical_data::DataFrame, p_max::Float64; percentile::Float64=0.05)
+
+Infer minimum stable generation (p_min) from historical generation data.
+
+Strategy:
+1. Filter out zeros (plant off)
+2. Filter out transients (values during startup/shutdown ramps)
+3. Take low percentile (default 5th) of remaining stable values
+4. Clamp to reasonable range (5-60% of p_max)
+
+Returns the inferred p_min in MW, or nothing if insufficient data.
+"""
+function infer_p_min(historical_data::DataFrame, p_max::Float64; percentile::Float64=0.05)
+    if nrow(historical_data) < MIN_DATA_POINTS_FOR_RAMP_INFERENCE
+        return nothing
+    end
+
+    if p_max <= 0
+        return nothing
+    end
+
+    # Sort by time
+    sort!(historical_data, :date_time_utc)
+    gen_values = historical_data.actual_generation_output_mw
+
+    # Calculate deltas to identify transients
+    deltas = diff(gen_values)
+
+    # Define ramp threshold: if |delta| > 5% of p_max, consider it a transient
+    ramp_threshold = 0.05 * p_max
+
+    # Collect stable non-zero values
+    # A value is "stable" if both adjacent deltas are small (not ramping)
+    stable_values = Float64[]
+    for i in 2:(length(gen_values) - 1)
+        value = gen_values[i]
+        delta_before = abs(deltas[i-1])
+        delta_after = abs(deltas[i])
+
+        # Include if: non-zero AND not ramping (stable operation)
+        if value > 0 && delta_before < ramp_threshold && delta_after < ramp_threshold
+            push!(stable_values, value)
+        end
+    end
+
+    # Need enough stable values for meaningful inference
+    if length(stable_values) < 50
+        return nothing
+    end
+
+    # Take the specified percentile (default 5th) of stable values
+    inferred_p_min = Statistics.quantile(stable_values, percentile)
+
+    # Sanity check: clamp to reasonable range (5-60% of p_max)
+    min_bound = 0.05 * p_max
+    max_bound = 0.60 * p_max
+
+    return clamp(inferred_p_min, min_bound, max_bound)
+end
+
 # TODO: Make get_generators return Vector{Generator}
 
 # TODO: 1o pass: static list
@@ -328,12 +389,16 @@ function get_generators(map_code::String, day::Dates.Date;
 end
 
 """
-    infer_ramp_rates_for_generators(generators::Vector{Generator}, day::Date)
+    infer_parameters_for_generators(generators::Vector{Generator}, day::Date)
 
-Infer ramp rates for a list of generators from their historical generation data.
-Returns a new vector of Generator objects with ramp_up and ramp_down fields populated.
+Infer technical parameters (ramp rates, p_min) for generators from historical data.
+Returns a new vector of Generator objects with inferred parameters populated.
+
+Parameters inferred:
+- ramp_up, ramp_down: from 95th percentile of observed ramps (fraction/hour)
+- p_min: from 5th percentile of stable non-zero operation (MW)
 """
-function infer_ramp_rates_for_generators(generators::Vector{Generator}, day::Dates.Date)
+function infer_parameters_for_generators(generators::Vector{Generator}, day::Dates.Date)
     updated_generators = Generator[]
 
     for gen in generators
@@ -343,14 +408,19 @@ function infer_ramp_rates_for_generators(generators::Vector{Generator}, day::Dat
         # Infer ramp rates (as fraction of p_max per hour)
         rates = infer_ramp_rates(historical, gen.p_max)
 
-        # Create new generator with ramp rates
+        # Infer p_min from stable operation
+        inferred_p_min = infer_p_min(historical, gen.p_max)
+        # Use inferred value if available, otherwise keep original
+        final_p_min = inferred_p_min !== nothing ? inferred_p_min : gen.p_min
+
+        # Create new generator with inferred parameters
         updated_gen = Generator(
             gen.code,
             gen.name,
             gen.fuel_type,
             gen.location,
             gen.p_max,
-            gen.p_min,
+            final_p_min,
             gen.bidding_zone,
             gen.marginal_cost,
             rates.ramp_up,
@@ -361,6 +431,10 @@ function infer_ramp_rates_for_generators(generators::Vector{Generator}, day::Dat
 
     return updated_generators
 end
+
+# Alias for backward compatibility
+infer_ramp_rates_for_generators(generators::Vector{Generator}, day::Dates.Date) =
+    infer_parameters_for_generators(generators, day)
 
 # Convenience function for backward compatibility - defaults to GR
 function get_generators(day::Dates.Date)
