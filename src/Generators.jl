@@ -597,3 +597,173 @@ infer_ramp_rates_for_generators(generators::Vector{Generator}, day::Dates.Date) 
 function get_generators(day::Dates.Date)
     return get_generators("GR", day)
 end
+
+# ============================================================================
+# Cached Inferred Parameters (Database Persistence)
+# ============================================================================
+
+"""
+    save_inferred_parameters(generators::Vector{Generator}, bidding_zone::String, reference_date::Date)
+
+Save inferred generator parameters to the database cache.
+Uses UPSERT to update existing records or insert new ones.
+The inference_date is set to today (when inference was run), not the reference market day.
+"""
+function save_inferred_parameters(generators::Vector{Generator}, bidding_zone::String, reference_date::Dates.Date)
+    sql = """
+    INSERT INTO simulations.generator_inferred_parameters
+    (generator_code, bidding_zone, inference_date, ramp_up, ramp_down, p_min, min_uptime, min_downtime, data_points_used, created_at)
+    VALUES (\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8, \$9, NOW())
+    ON CONFLICT (generator_code, bidding_zone) DO UPDATE SET
+        inference_date = EXCLUDED.inference_date,
+        ramp_up = EXCLUDED.ramp_up,
+        ramp_down = EXCLUDED.ramp_down,
+        p_min = EXCLUDED.p_min,
+        min_uptime = EXCLUDED.min_uptime,
+        min_downtime = EXCLUDED.min_downtime,
+        data_points_used = EXCLUDED.data_points_used,
+        created_at = NOW()
+    """
+
+    # Helper to convert nothing to missing for PostgreSQL NULL
+    to_pg(x) = x === nothing ? missing : x
+
+    # Use today's date as the inference date (when we ran the inference)
+    today = Dates.today()
+
+    saved_count = 0
+    Euphemia.withdb() do conn
+        for gen in generators
+            # Count data points (estimate from historical query)
+            historical = get_historical_generation(gen.code, reference_date)
+            data_points = nrow(historical)
+
+            params = [
+                gen.code,
+                bidding_zone,
+                today,  # inference_date = when we ran the inference
+                to_pg(gen.ramp_up),
+                to_pg(gen.ramp_down),
+                gen.p_min,
+                to_pg(gen.min_uptime),
+                to_pg(gen.min_downtime),
+                data_points
+            ]
+            LibPQ.execute(conn, sql, params)
+            saved_count += 1
+        end
+    end
+
+    @info "Saved inferred parameters for $saved_count generators in zone $bidding_zone"
+    return saved_count
+end
+
+"""
+    load_cached_parameters(bidding_zone::String; max_age_days::Int=7)
+
+Load cached inferred parameters from the database.
+Returns a Dict mapping generator_code => (ramp_up, ramp_down, p_min, min_uptime, min_downtime).
+Only returns parameters that are not older than max_age_days.
+"""
+function load_cached_parameters(bidding_zone::String; max_age_days::Int=7)
+    query = """
+    SELECT generator_code, ramp_up, ramp_down, p_min, min_uptime, min_downtime, inference_date
+    FROM simulations.generator_inferred_parameters
+    WHERE bidding_zone = \$1
+      AND inference_date >= CURRENT_DATE - INTERVAL '\$2 days'
+    """
+
+    # Replace $2 with actual value since PostgreSQL doesn't parameterize intervals well
+    query = replace(query, "\$2" => string(max_age_days))
+    df = Euphemia.sql2df_with_retry(query, [bidding_zone])
+
+    cache = Dict{String, NamedTuple{(:ramp_up, :ramp_down, :p_min, :min_uptime, :min_downtime),
+                                     Tuple{Union{Float64,Nothing}, Union{Float64,Nothing}, Union{Float64,Nothing}, Union{Int,Nothing}, Union{Int,Nothing}}}}()
+
+    for row in eachrow(df)
+        cache[row.generator_code] = (
+            ramp_up = ismissing(row.ramp_up) ? nothing : row.ramp_up,
+            ramp_down = ismissing(row.ramp_down) ? nothing : row.ramp_down,
+            p_min = ismissing(row.p_min) ? nothing : row.p_min,
+            min_uptime = ismissing(row.min_uptime) ? nothing : Int(row.min_uptime),
+            min_downtime = ismissing(row.min_downtime) ? nothing : Int(row.min_downtime)
+        )
+    end
+
+    return cache
+end
+
+"""
+    get_generators_with_inferred_params(map_code::String, day::Date;
+                                        use_cache::Bool=true,
+                                        max_cache_age_days::Int=7,
+                                        exclude_unavailable::Bool=true)
+
+Get generators with inferred parameters, using cached values when available.
+
+If use_cache=true (default):
+1. Load cached parameters from DB
+2. For generators with cached values, apply them
+3. For generators without cache (or stale cache), run inference and save to DB
+
+If use_cache=false: Always run fresh inference (slow but guaranteed fresh).
+"""
+function get_generators_with_inferred_params(map_code::String, day::Dates.Date;
+                                             use_cache::Bool=true,
+                                             max_cache_age_days::Int=7,
+                                             exclude_unavailable::Bool=true)
+    # Get base generators
+    generators = get_generators(map_code, day; exclude_unavailable=exclude_unavailable)
+
+    if !use_cache
+        # Fresh inference for all
+        println("  🔄 Running fresh parameter inference for all generators...")
+        inferred = infer_parameters_for_generators(generators, day)
+        save_inferred_parameters(inferred, map_code, day)
+        return inferred
+    end
+
+    # Load cached parameters
+    cache = load_cached_parameters(map_code; max_age_days=max_cache_age_days)
+    println("  📦 Found $(length(cache)) cached parameter sets for zone $map_code")
+
+    # Separate generators into cached and uncached
+    cached_gens = Generator[]
+    uncached_gens = Generator[]
+
+    for gen in generators
+        if haskey(cache, gen.code)
+            params = cache[gen.code]
+            # Apply cached parameters
+            updated_gen = Generator(
+                gen.code,
+                gen.name,
+                gen.fuel_type,
+                gen.location,
+                gen.p_max,
+                params.p_min !== nothing ? params.p_min : gen.p_min,
+                gen.bidding_zone,
+                gen.marginal_cost,
+                params.ramp_up,
+                params.ramp_down,
+                params.min_uptime,
+                params.min_downtime
+            )
+            push!(cached_gens, updated_gen)
+        else
+            push!(uncached_gens, gen)
+        end
+    end
+
+    println("  ✓ Using cached params for $(length(cached_gens)) generators")
+
+    # Run inference for uncached generators
+    if !isempty(uncached_gens)
+        println("  🔄 Running inference for $(length(uncached_gens)) uncached generators...")
+        newly_inferred = infer_parameters_for_generators(uncached_gens, day)
+        save_inferred_parameters(newly_inferred, map_code, day)
+        append!(cached_gens, newly_inferred)
+    end
+
+    return cached_gens
+end
