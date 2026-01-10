@@ -169,6 +169,53 @@ Unit commitment integration:
 - Constrains t=1 ramps from initial output g₀
 - Enforces remaining uptime/downtime based on T_on₀/T_off₀
 
+**Unit commitment solver:**
+```julia
+# Run unit commitment optimization
+solution = solve_unit_commitment("GR", Date(2024, 6, 15))
+
+# Access solution fields
+solution.status              # JuMP termination status (OPTIMAL, INFEASIBLE, etc.)
+solution.solver              # Solver used ("HiGHS" or "Gurobi")
+solution.resolution_minutes  # Time period resolution (15, 30, or 60)
+solution.total_cost          # Total cost (production + startup + no-load)
+solution.g                   # Generation matrix [generator × time]
+solution.u                   # Commitment matrix [generator × time]
+solution.v                   # Startup decisions [generator × time]
+solution.cost_breakdown      # Detailed cost breakdown (see below)
+```
+
+Unit commitment objective function components:
+- **Production costs**: `marginal_cost × generation` for each generator and period
+- **Startup costs**: Temperature-dependent (hot × 1.0, warm × 1.5, cold × 2.5 base cost)
+  - Base startup cost = `startup_cost_multiplier × marginal_cost × p_max`
+  - From `FuelTypeParameters` for each fuel type
+- **No-load costs**: Fixed cost when committed = `no_load_cost_fraction × marginal_cost × p_min × period_hours`
+
+Cost breakdown fields:
+```julia
+cb = solution.cost_breakdown
+cb.production_cost        # Total production costs (€)
+cb.startup_cost           # Total startup costs (€)
+cb.noload_cost            # Total no-load costs (€)
+cb.startup_costs_by_type  # Dict{Symbol,Float64} - costs by :hot/:warm/:cold
+cb.startup_counts         # Dict{Symbol,Int} - count of each startup type
+cb.generator_costs        # Dict{String,Float64} - production cost by generator
+cb.fuel_type_costs        # Dict{Symbol,Float64} - production cost by fuel type
+cb.period_costs           # Vector{Float64} - total cost per time period
+```
+
+Time resolution handling:
+- All parameters in `FuelTypeParameters` are stored in HOURS
+- The UC solver converts to PERIODS based on actual data resolution
+- Conversion factor: `periods_per_hour = 60 / resolution_minutes`
+- Affected parameters: startup times, min uptime/downtime, temperature thresholds
+- Example: At 15min resolution, `min_uptime=4` hours → 16 periods
+
+Big M parameter:
+- Used in ramp constraints to relax them during startup/shutdown
+- Scaled to problem size: `M = 2 × max(p_max)` for numerical stability
+
 ## Development Commands
 
 ### Julia Package Management
