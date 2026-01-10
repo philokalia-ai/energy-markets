@@ -28,6 +28,16 @@ const DUMMY_MARGINAL_COST = 999.9 # A clearly identifiable dummy value
 # Minimum data points required for ramp rate inference
 const MIN_DATA_POINTS_FOR_RAMP_INFERENCE = 100
 
+# Flexible fuel types that can operate at 0 MW (no minimum generation constraint)
+# These should NOT have p_min inferred from historical data
+const FLEXIBLE_FUEL_TYPES = Set([
+    Symbol("Hydro Pumped Storage"),
+    Symbol("Hydro Run-of-river and pondage"),
+    Symbol("Hydro Water Reservoir"),
+    Symbol("Battery"),
+    Symbol("Other"),
+])
+
 """
     get_historical_generation(generator_code::String, end_date::Date; months_back::Int=3)
 
@@ -98,8 +108,32 @@ function infer_ramp_rates(historical_data::DataFrame, p_max::Float64; percentile
     return (ramp_up=ramp_up_rate, ramp_down=ramp_down_rate)
 end
 
+# Sanity check bounds for p_min by fuel type category (fraction of p_max)
+# Format: fuel_type => (min_bound, max_bound)
+const P_MIN_BOUNDS = Dict(
+    :coal => (0.30, 0.60),      # Coal/Lignite: high minimum load
+    :gas_ccgt => (0.25, 0.50),  # Combined cycle gas: moderate minimum
+    :gas_ocgt => (0.10, 0.40),  # Open cycle gas turbine: more flexible
+    :default => (0.05, 0.60),   # Default for unknown thermal
+)
+
 """
-    infer_p_min(historical_data::DataFrame, p_max::Float64; percentile::Float64=0.05)
+Map fuel type symbol to p_min bounds category.
+"""
+function get_p_min_bounds_category(fuel_type::Symbol)::Symbol
+    fuel_str = string(fuel_type)
+    if occursin("Lignite", fuel_str) || occursin("coal", lowercase(fuel_str))
+        return :coal
+    elseif occursin("Gas", fuel_str)
+        # Heuristic: larger gas plants tend to be CCGT
+        return :gas_ccgt
+    else
+        return :default
+    end
+end
+
+"""
+    infer_p_min(historical_data::DataFrame, p_max::Float64, fuel_type::Symbol; percentile::Float64=0.05)
 
 Infer minimum stable generation (p_min) from historical generation data.
 
@@ -107,11 +141,11 @@ Strategy:
 1. Filter out zeros (plant off)
 2. Filter out transients (values during startup/shutdown ramps)
 3. Take low percentile (default 5th) of remaining stable values
-4. Clamp to reasonable range (5-60% of p_max)
+4. Clamp to fuel-type-specific reasonable range
 
 Returns the inferred p_min in MW, or nothing if insufficient data.
 """
-function infer_p_min(historical_data::DataFrame, p_max::Float64; percentile::Float64=0.05)
+function infer_p_min(historical_data::DataFrame, p_max::Float64, fuel_type::Symbol; percentile::Float64=0.05)
     if nrow(historical_data) < MIN_DATA_POINTS_FOR_RAMP_INFERENCE
         return nothing
     end
@@ -152,9 +186,11 @@ function infer_p_min(historical_data::DataFrame, p_max::Float64; percentile::Flo
     # Take the specified percentile (default 5th) of stable values
     inferred_p_min = Statistics.quantile(stable_values, percentile)
 
-    # Sanity check: clamp to reasonable range (5-60% of p_max)
-    min_bound = 0.05 * p_max
-    max_bound = 0.60 * p_max
+    # Sanity check: clamp to fuel-type-specific reasonable range
+    bounds_category = get_p_min_bounds_category(fuel_type)
+    (min_frac, max_frac) = get(P_MIN_BOUNDS, bounds_category, P_MIN_BOUNDS[:default])
+    min_bound = min_frac * p_max
+    max_bound = max_frac * p_max
 
     return clamp(inferred_p_min, min_bound, max_bound)
 end
@@ -408,10 +444,16 @@ function infer_parameters_for_generators(generators::Vector{Generator}, day::Dat
         # Infer ramp rates (as fraction of p_max per hour)
         rates = infer_ramp_rates(historical, gen.p_max)
 
-        # Infer p_min from stable operation
-        inferred_p_min = infer_p_min(historical, gen.p_max)
-        # Use inferred value if available, otherwise keep original
-        final_p_min = inferred_p_min !== nothing ? inferred_p_min : gen.p_min
+        # Determine p_min based on fuel type
+        if gen.fuel_type in FLEXIBLE_FUEL_TYPES
+            # Flexible resources (hydro, batteries) can operate at 0 MW
+            final_p_min = 0.0
+        else
+            # Thermal plants: infer p_min from stable operation
+            inferred_p_min = infer_p_min(historical, gen.p_max, gen.fuel_type)
+            # Use inferred value if available, otherwise keep original
+            final_p_min = inferred_p_min !== nothing ? inferred_p_min : gen.p_min
+        end
 
         # Create new generator with inferred parameters
         updated_gen = Generator(
