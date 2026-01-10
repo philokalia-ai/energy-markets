@@ -191,6 +191,12 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date;
     set_optimizer_attribute(model, MOI.RelativeGapTolerance(), mip_gap)
     set_optimizer_attribute(model, MOI.TimeLimitSec(), time_limit)
 
+    # PERFORMANCE NOTE (Gurobi): Avoid querying model attributes (num_constraints,
+    # lower_bound, etc.) while building the model. Gurobi buffers modifications and
+    # calls GRBupdatemodel on any query, causing O(n²) behavior in loops.
+    # Pattern to avoid: for i in 1:N; @constraint(...); println(num_constraints(model)); end
+    # Our code follows the correct pattern: build all constraints, then optimize, then query.
+
     # Get data from the database
     data_fetch_start = time()
     generators = get_generators(bidding_zone, day)
