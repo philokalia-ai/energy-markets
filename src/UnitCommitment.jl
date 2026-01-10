@@ -2,6 +2,9 @@ using JuMP, Dates
 using .Euphemia: select_solver
 using .Euphemia: disaggregate_temporal_data
 
+# MOI is re-exported by JuMP
+const MOI = JuMP.MOI
+
 """
     format_time(seconds::Float64) -> String
 
@@ -171,7 +174,9 @@ end
 
 function solve_unit_commitment(bidding_zone::String, day::Dates.Date;
                                optimizer::String="auto",
-                               use_initial_conditions::Bool=true)
+                               use_initial_conditions::Bool=true,
+                               mip_gap::Float64=0.01,
+                               time_limit::Float64=600.0)
 
     timing_start = time()
 
@@ -179,6 +184,12 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date;
     optimizer_func, solver_name = select_solver(optimizer)
     model = Model(optimizer_func)
     set_silent(model)
+
+    # Solver tuning parameters (solver-agnostic via MOI)
+    # MIP gap: Accept solution within X% of optimal (default 1%)
+    # Time limit: Maximum solve time in seconds (default 600s = 10 min)
+    set_optimizer_attribute(model, MOI.RelativeGapTolerance(), mip_gap)
+    set_optimizer_attribute(model, MOI.TimeLimitSec(), time_limit)
 
     # Get data from the database
     data_fetch_start = time()

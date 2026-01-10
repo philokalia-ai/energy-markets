@@ -174,6 +174,11 @@ Unit commitment integration:
 # Run unit commitment optimization
 solution = solve_unit_commitment("GR", Date(2024, 6, 15))
 
+# With custom solver tuning
+solution = solve_unit_commitment("GR", Date(2024, 6, 15);
+    mip_gap=0.01,       # Accept 1% optimality gap (default)
+    time_limit=600.0)   # Max solve time in seconds (default 10 min)
+
 # Access solution fields
 solution.status              # JuMP termination status (OPTIMAL, INFEASIBLE, etc.)
 solution.solver              # Solver used ("HiGHS" or "Gurobi")
@@ -184,6 +189,10 @@ solution.u                   # Commitment matrix [generator × time]
 solution.v                   # Startup decisions [generator × time]
 solution.cost_breakdown      # Detailed cost breakdown (see below)
 ```
+
+Solver tuning parameters (solver-agnostic via MOI):
+- `mip_gap`: Relative optimality gap tolerance (default 0.01 = 1%). Solver stops when it finds a solution within this percentage of proven optimal.
+- `time_limit`: Maximum solve time in seconds (default 600 = 10 min). Returns best solution found within time budget.
 
 Unit commitment objective function components:
 - **Production costs**: `marginal_cost × generation` for each generator and period
