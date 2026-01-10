@@ -841,6 +841,73 @@ function get_recent_generation(generator_code::String, end_datetime::DateTime; h
 end
 
 """
+    get_recent_generation_batch(generator_codes::Vector{String}, end_datetime::DateTime; hours_back::Int=72)
+
+Fetch recent actual generation data for multiple generators in a single query.
+This is much faster than calling get_recent_generation() for each generator separately.
+
+Returns a DataFrame with columns: generation_unit_code, date_time_utc, resolution_code, actual_generation_output_mw
+"""
+function get_recent_generation_batch(generator_codes::Vector{String}, end_datetime::DateTime; hours_back::Int=72)
+    if isempty(generator_codes)
+        return DataFrame(
+            generation_unit_code=String[],
+            date_time_utc=DateTime[],
+            resolution_code=String[],
+            actual_generation_output_mw=Float64[]
+        )
+    end
+
+    start_datetime = end_datetime - Dates.Hour(hours_back)
+
+    query = """
+    SELECT generation_unit_code, date_time_utc, resolution_code, actual_generation_output_mw
+    FROM entsoe.actual_generation_output_per_generation_unit
+    WHERE generation_unit_code = ANY(\$1)
+      AND date_time_utc >= \$2
+      AND date_time_utc < \$3
+      AND actual_generation_output_mw IS NOT NULL
+    ORDER BY generation_unit_code, date_time_utc DESC
+    """
+    return Euphemia.sql2df_with_retry(query, [generator_codes, start_datetime, end_datetime])
+end
+
+"""
+    infer_initial_conditions_from_data(historical::DataFrame, fuel_type::Symbol)
+
+Infer initial conditions from pre-fetched historical data.
+This is the core logic used by both single-generator and batch processing.
+
+Historical data should be ordered DESC (most recent first).
+"""
+function infer_initial_conditions_from_data(historical::DataFrame, fuel_type::Symbol)
+    if nrow(historical) == 0
+        return get_default_initial_conditions(fuel_type)
+    end
+
+    # Data is ordered DESC, so first row is most recent (closest to start time)
+    latest_output = historical.actual_generation_output_mw[1]
+    is_on = latest_output > 1.0  # Consider > 1 MW as "on"
+    output = is_on ? latest_output : 0.0
+
+    # Count consecutive hours on or off
+    if is_on
+        hours_on = count_consecutive_state(historical, true)
+        hours_off = 0
+        thermal_state = :hot
+    else
+        hours_on = 0
+        hours_off = count_consecutive_state(historical, false)
+        params = get_fuel_type_parameters(fuel_type)
+        thermal_state = determine_thermal_state(hours_off;
+                                                 warm_threshold=params.warm_threshold,
+                                                 cold_threshold=params.cold_threshold)
+    end
+
+    return InitialConditions(is_on, output, hours_on, hours_off, thermal_state)
+end
+
+"""
     infer_initial_conditions(generator_code::String, market_day::Date, fuel_type::Symbol)
 
 Infer initial conditions for a generator by analyzing generation data from the day before.
@@ -855,46 +922,21 @@ Returns InitialConditions with:
 - hours_on: How many consecutive hours the unit has been running
 - hours_off: How many consecutive hours the unit has been off
 - thermal_state: :hot, :warm, or :cold based on hours_off
+
+Note: For batch processing of multiple generators, use get_initial_conditions() which
+uses a single SQL query for all generators instead of one query per generator.
 """
 function infer_initial_conditions(generator_code::String, market_day::Dates.Date, fuel_type::Symbol)
     # Market day starts at 00:00 CET
     # CET = UTC+1 in winter, CEST = UTC+2 in summer
     # For simplicity, assume 23:00 UTC on day before is close to 00:00 CET
-    # A proper implementation would check DST
     day_before = market_day - Dates.Day(1)
     start_of_market_day_utc = DateTime(day_before, Time(23, 0, 0))  # ~00:00 CET
 
     # Get 72 hours of data leading up to the market day start
     historical = get_recent_generation(generator_code, start_of_market_day_utc; hours_back=72)
 
-    if nrow(historical) == 0
-        # No data - fall back to fuel-type-based defaults
-        return get_default_initial_conditions(fuel_type)
-    end
-
-    # Data is ordered DESC, so first row is most recent (closest to start time)
-    # Determine if unit was on at t=0
-    latest_output = historical.actual_generation_output_mw[1]
-    is_on = latest_output > 1.0  # Consider > 1 MW as "on"
-    output = is_on ? latest_output : 0.0
-
-    # Count consecutive hours on or off
-    # We need to trace back through historical data
-    if is_on
-        hours_on = count_consecutive_state(historical, true)
-        hours_off = 0
-        thermal_state = :hot  # Currently running, so "hot" if it needs to restart
-    else
-        hours_on = 0
-        hours_off = count_consecutive_state(historical, false)
-        # Get fuel-type-specific thresholds
-        params = get_fuel_type_parameters(fuel_type)
-        thermal_state = determine_thermal_state(hours_off;
-                                                 warm_threshold=params.warm_threshold,
-                                                 cold_threshold=params.cold_threshold)
-    end
-
-    return InitialConditions(is_on, output, hours_on, hours_off, thermal_state)
+    return infer_initial_conditions_from_data(historical, fuel_type)
 end
 
 """
@@ -965,7 +1007,8 @@ end
 Get initial conditions for all generators for a given market day.
 
 If use_historical=true (default), queries actual generation data from the day before
-to determine the state of each generator at market day start.
+to determine the state of each generator at market day start. Uses a single batch SQL
+query for all generators (instead of N separate queries) for much better performance.
 
 If use_historical=false, uses fuel-type-based defaults.
 
@@ -975,22 +1018,47 @@ function get_initial_conditions(generators::Vector{Generator}, market_day::Dates
                                 use_historical::Bool=true)
     conditions = Dict{String, InitialConditions}()
 
-    for gen in generators
-        if use_historical
-            ic = infer_initial_conditions(gen.code, market_day, gen.fuel_type)
+    if use_historical && !isempty(generators)
+        # Batch fetch: single SQL query for all generators (N queries → 1 query)
+        day_before = market_day - Dates.Day(1)
+        start_of_market_day_utc = DateTime(day_before, Time(23, 0, 0))  # ~00:00 CET
+
+        generator_codes = [gen.code for gen in generators]
+        all_historical = get_recent_generation_batch(generator_codes, start_of_market_day_utc; hours_back=72)
+
+        # Process each generator's data from the batch result
+        for gen in generators
+            # Filter data for this generator
+            gen_data = filter(row -> row.generation_unit_code == gen.code, all_historical)
+
+            # Convert to DataFrame with expected columns (without generation_unit_code)
+            if nrow(gen_data) > 0
+                historical = select(gen_data, [:date_time_utc, :resolution_code, :actual_generation_output_mw])
+            else
+                historical = DataFrame(
+                    date_time_utc=DateTime[],
+                    resolution_code=String[],
+                    actual_generation_output_mw=Float64[]
+                )
+            end
+
+            ic = infer_initial_conditions_from_data(historical, gen.fuel_type)
+
             # If the generator was on but we got default output, use a fraction of p_max
             if ic.is_on && ic.output == 0.0
-                # Default running generators to 70% of capacity
                 ic = InitialConditions(true, 0.7 * gen.p_max, ic.hours_on, ic.hours_off, ic.thermal_state)
             end
-        else
+            conditions[gen.code] = ic
+        end
+    else
+        # Use defaults (no DB query)
+        for gen in generators
             ic = get_default_initial_conditions(gen.fuel_type)
-            # Set output for running generators
             if ic.is_on
                 ic = InitialConditions(true, 0.7 * gen.p_max, ic.hours_on, ic.hours_off, ic.thermal_state)
             end
+            conditions[gen.code] = ic
         end
-        conditions[gen.code] = ic
     end
 
     return conditions

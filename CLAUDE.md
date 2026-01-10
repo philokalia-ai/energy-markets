@@ -112,6 +112,7 @@ Ramp rate inference:
 - Queries 3 months of historical generation data
 - Normalizes to hourly rates regardless of source resolution (PT15M, PT60M, etc.)
 - Falls back to fuel-type defaults in `FuelTypeParameters` if insufficient data
+- **Note on 3-month window**: Physical parameters (ramp rates, p_min) are plant characteristics that shouldn't vary by season. However, seasonal dispatch patterns may affect uptime/downtime inference for plants that operate differently in summer vs winter. A longer window (6-12 months) could capture more operating conditions but would increase query time and include potentially stale data. The 95th/5th percentile approach mitigates this by capturing extreme values even from limited data.
 
 p_min inference strategy (robust to data quality issues):
 - **Flexible resources** (hydro, batteries): p_min = 0 (no inference needed)
