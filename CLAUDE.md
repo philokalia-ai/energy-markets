@@ -151,6 +151,7 @@ ic.thermal_state # Symbol: :hot, :warm, or :cold
 ```
 
 Initial conditions inference:
+- Uses batch query (`get_recent_generation_batch()`) to fetch all generator history in one SQL call
 - Queries 72 hours of historical data before market day start (00:00 CET)
 - Determines commitment status from most recent output (> 1 MW = on)
 - Counts consecutive hours in current state for uptime/downtime constraints
@@ -158,6 +159,11 @@ Initial conditions inference:
   - Hot: hours_off <= 8 (quick restart)
   - Warm: 8 < hours_off <= 48
   - Cold: hours_off > 48 (full cold start)
+
+Performance optimization:
+- Batch query instead of N individual queries (~36x speedup)
+- For ~40 generators: ~15 sec vs ~9 min with individual queries
+- Uses `WHERE generation_unit_code = ANY($1)` for efficient batch lookup
 
 Fallback defaults when no historical data:
 - Baseload (coal, lignite, nuclear): Assume running
@@ -261,6 +267,7 @@ test/
 ├── test_generator_inference.jl  # Generator parameter inference tests (58 tests)
 ├── test_data_fetching.jl        # DB integration for loads/renewables/etc (23 tests)
 ├── test_initial_conditions.jl   # Generator initial state tests (69 tests)
+├── test_uc_enhancements.jl      # UC cost breakdown, solver tuning, batch query tests
 ├── test_mpcc.jl                 # MPCC solver tests (50 tests)
 ├── test_multi_zone_mpcc.jl      # Multi-zone transmission tests (21 tests)
 ├── test_network_module.jl       # Network/ATC tests (140 tests)
