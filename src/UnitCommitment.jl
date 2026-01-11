@@ -2,6 +2,9 @@ using JuMP, Dates
 using .Euphemia: select_solver
 using .Euphemia: disaggregate_temporal_data
 
+# MOI is re-exported by JuMP
+const MOI = JuMP.MOI
+
 """
     format_time(seconds::Float64) -> String
 
@@ -34,21 +37,20 @@ function format_time(seconds::Float64)
     end
 end
 
-# TODO: Include Actual Generation Per Production Unit for Previous Day for initial conditions?
-
-function calculate_cost_breakdown(generators, g, u, T, N)
-    # Calculate per-generator costs
-    generator_costs = Dict{String,Float64}()
+function calculate_cost_breakdown(generators, g, u, v_θ, Θ, C_SU, C_NL, T, N)
+    # Calculate per-generator costs (production only)
+    generator_production_costs = Dict{String,Float64}()
     fuel_type_costs = Dict{Symbol,Float64}()
-    hourly_costs = Float64[]
+    period_costs = Float64[]  # Cost per time period (may be 15min, 30min, or 60min)
 
+    # Production costs by generator
     for i in 1:N
         gen_total_cost = 0.0
         for t in 1:T
             cost = generators[i].marginal_cost * g[i, t]
             gen_total_cost += cost
         end
-        generator_costs[generators[i].name] = gen_total_cost
+        generator_production_costs[generators[i].name] = gen_total_cost
 
         # Aggregate by fuel type
         fuel_type = generators[i].fuel_type
@@ -59,10 +61,25 @@ function calculate_cost_breakdown(generators, g, u, T, N)
         end
     end
 
-    # Calculate hourly costs
+    # Calculate total production cost
+    total_production_cost = sum(values(generator_production_costs))
+
+    # Calculate startup costs by temperature stage
+    startup_costs = Dict{Symbol,Float64}(:hot => 0.0, :warm => 0.0, :cold => 0.0)
+    for i in 1:N, θ in Θ, t in 1:T
+        startup_costs[θ] += C_SU[(i, θ)] * v_θ[i, θ, t]
+    end
+    total_startup_cost = sum(values(startup_costs))
+
+    # Calculate no-load costs
+    total_noload_cost = sum(C_NL[i] * u[i, t] for i in 1:N, t in 1:T)
+
+    # Calculate per-period total costs (production + startup + no-load)
     for t in 1:T
-        hourly_cost = sum(generators[i].marginal_cost * g[i, t] for i in 1:N)
-        push!(hourly_costs, hourly_cost)
+        production = sum(generators[i].marginal_cost * g[i, t] for i in 1:N)
+        startup = sum(C_SU[(i, θ)] * v_θ[i, θ, t] for i in 1:N, θ in Θ)
+        noload = sum(C_NL[i] * u[i, t] for i in 1:N)
+        push!(period_costs, production + startup + noload)
     end
 
     # Calculate utilization statistics
@@ -70,67 +87,96 @@ function calculate_cost_breakdown(generators, g, u, T, N)
     committed_capacity = sum(generators[i].p_max * sum(u[i, t] for t in 1:T) for i in 1:N) / T
     actual_generation = sum(g[i, t] for i in 1:N, t in 1:T) / T
 
+    # Count startups by temperature
+    startup_counts = Dict{Symbol,Int}(:hot => 0, :warm => 0, :cold => 0)
+    for i in 1:N, θ in Θ, t in 1:T
+        if v_θ[i, θ, t] > 0.5  # Binary variable
+            startup_counts[θ] += 1
+        end
+    end
+
     return (
-        generator_costs=generator_costs,
+        generator_costs=generator_production_costs,
         fuel_type_costs=fuel_type_costs,
-        hourly_costs=hourly_costs,
+        period_costs=period_costs,
         total_capacity=total_capacity,
         avg_committed_capacity=committed_capacity,
         avg_generation=actual_generation,
         capacity_utilization=actual_generation / total_capacity,
-        commitment_utilization=committed_capacity / total_capacity
+        commitment_utilization=committed_capacity / total_capacity,
+        # New cost breakdown fields
+        production_cost=total_production_cost,
+        startup_cost=total_startup_cost,
+        startup_costs_by_type=startup_costs,
+        startup_counts=startup_counts,
+        noload_cost=total_noload_cost
     )
 end
 
-function print_cost_report(solution, day)
+function print_cost_report(solution, day; resolution_minutes::Int=60)
     println("\n" * "="^60)
     println("UNIT COMMITMENT COST REPORT - $day")
     println("="^60)
 
     total_cost = solution.total_cost
     breakdown = solution.cost_breakdown
+    num_periods = length(solution.time_slots)
+    periods_per_hour = 60 / resolution_minutes
 
-    println("📊 OVERALL ECONOMICS")
-    println("   Total cost: €$(round(total_cost, digits=2)) (€$(round(total_cost/1e6, digits=2))M)")
-    println("   Average hourly cost: €$(round(total_cost/length(solution.time_slots), digits=2))")
-    println("   Cost per MWh generated: €$(round(total_cost/sum(breakdown.avg_generation * length(solution.time_slots)), digits=2))")
+    println("OVERALL ECONOMICS")
+    println("   Total cost: $(round(total_cost, digits=2)) EUR ($(round(total_cost/1e6, digits=2))M EUR)")
+    println("   Average cost per period ($(resolution_minutes)min): $(round(total_cost/num_periods, digits=2)) EUR")
+    println("   Cost per MWh generated: $(round(total_cost/sum(breakdown.avg_generation * num_periods / periods_per_hour), digits=2)) EUR")
 
-    println("\n⚡ CAPACITY & GENERATION")
+    # Cost breakdown by component
+    println("\nCOST COMPONENTS")
+    println("   Production costs: $(round(breakdown.production_cost, digits=2)) EUR ($(round(breakdown.production_cost/total_cost*100, digits=1))%)")
+    println("   Startup costs:    $(round(breakdown.startup_cost, digits=2)) EUR ($(round(breakdown.startup_cost/total_cost*100, digits=1))%)")
+    println("      Hot startups:  $(breakdown.startup_counts[:hot]) @ $(round(breakdown.startup_costs_by_type[:hot], digits=2)) EUR")
+    println("      Warm startups: $(breakdown.startup_counts[:warm]) @ $(round(breakdown.startup_costs_by_type[:warm], digits=2)) EUR")
+    println("      Cold startups: $(breakdown.startup_counts[:cold]) @ $(round(breakdown.startup_costs_by_type[:cold], digits=2)) EUR")
+    println("   No-load costs:    $(round(breakdown.noload_cost, digits=2)) EUR ($(round(breakdown.noload_cost/total_cost*100, digits=1))%)")
+
+    println("\nCAPACITY & GENERATION")
     println("   Total installed capacity: $(round(breakdown.total_capacity)) MW")
     println("   Average committed capacity: $(round(breakdown.avg_committed_capacity)) MW")
     println("   Average generation: $(round(breakdown.avg_generation)) MW")
     println("   Capacity utilization: $(round(breakdown.capacity_utilization * 100, digits=1))%")
     println("   Commitment utilization: $(round(breakdown.commitment_utilization * 100, digits=1))%")
 
-    println("\n🔥 COSTS BY FUEL TYPE")
+    println("\nPRODUCTION COSTS BY FUEL TYPE")
     sorted_fuel_costs = sort(collect(breakdown.fuel_type_costs), by=x -> x[2], rev=true)
     for (fuel_type, cost) in sorted_fuel_costs
-        percentage = cost / total_cost * 100
-        println("   $(fuel_type): €$(round(cost, digits=2)) ($(round(percentage, digits=1))%)")
+        percentage = cost / breakdown.production_cost * 100
+        println("   $(fuel_type): $(round(cost, digits=2)) EUR ($(round(percentage, digits=1))%)")
     end
 
-    println("\n🏭 TOP GENERATOR COSTS")
+    println("\nTOP GENERATOR PRODUCTION COSTS")
     sorted_gen_costs = sort(collect(breakdown.generator_costs), by=x -> x[2], rev=true)
     for (i, (gen_name, cost)) in enumerate(sorted_gen_costs[1:min(5, end)])
-        percentage = cost / total_cost * 100
-        println("   $i. $gen_name: €$(round(cost, digits=2)) ($(round(percentage, digits=1))%)")
+        percentage = cost / breakdown.production_cost * 100
+        println("   $i. $gen_name: $(round(cost, digits=2)) EUR ($(round(percentage, digits=1))%)")
     end
 
-    println("\n📈 HOURLY COST PROFILE")
-    hourly_costs = breakdown.hourly_costs
-    min_cost = minimum(hourly_costs)
-    max_cost = maximum(hourly_costs)
-    avg_cost = sum(hourly_costs) / length(hourly_costs)
+    println("\nCOST PROFILE ($(resolution_minutes)min periods)")
+    period_costs = breakdown.period_costs
+    min_cost = minimum(period_costs)
+    max_cost = maximum(period_costs)
+    avg_cost = sum(period_costs) / length(period_costs)
 
-    println("   Peak hourly cost: €$(round(max_cost, digits=2)) (hour $(argmax(hourly_costs)))")
-    println("   Minimum hourly cost: €$(round(min_cost, digits=2)) (hour $(argmin(hourly_costs)))")
-    println("   Average hourly cost: €$(round(avg_cost, digits=2))")
+    println("   Peak period cost: $(round(max_cost, digits=2)) EUR (period $(argmax(period_costs)))")
+    println("   Minimum period cost: $(round(min_cost, digits=2)) EUR (period $(argmin(period_costs)))")
+    println("   Average period cost: $(round(avg_cost, digits=2)) EUR")
     println("   Cost variability: $(round((max_cost-min_cost)/avg_cost * 100, digits=1))%")
 
     println("="^60)
 end
 
-function solve_unit_commitment(bidding_zone::String, day::Dates.Date; optimizer::String="auto")
+function solve_unit_commitment(bidding_zone::String, day::Dates.Date;
+                               optimizer::String="auto",
+                               use_initial_conditions::Bool=true,
+                               mip_gap::Float64=0.01,
+                               time_limit::Float64=600.0)
 
     timing_start = time()
 
@@ -139,11 +185,31 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date; optimizer:
     model = Model(optimizer_func)
     set_silent(model)
 
+    # Solver tuning parameters (solver-agnostic via MOI)
+    # MIP gap: Accept solution within X% of optimal (default 1%)
+    # Time limit: Maximum solve time in seconds (default 600s = 10 min)
+    set_optimizer_attribute(model, MOI.RelativeGapTolerance(), mip_gap)
+    set_optimizer_attribute(model, MOI.TimeLimitSec(), time_limit)
+
+    # PERFORMANCE NOTE (Gurobi): Avoid querying model attributes (num_constraints,
+    # lower_bound, etc.) while building the model. Gurobi buffers modifications and
+    # calls GRBupdatemodel on any query, causing O(n²) behavior in loops.
+    # Pattern to avoid: for i in 1:N; @constraint(...); println(num_constraints(model)); end
+    # Our code follows the correct pattern: build all constraints, then optimize, then query.
+
     # Get data from the database
     data_fetch_start = time()
     generators = get_generators(bidding_zone, day)
     loads = get_loads(bidding_zone, day)
     renewables = get_generation_forecast_for_wind_and_solar(bidding_zone, day)
+
+    # Get initial conditions for generators (state at t=0)
+    if use_initial_conditions
+        initial_conditions = get_initial_conditions(generators, day; use_historical=true)
+        println("Loaded initial conditions for $(length(initial_conditions)) generators")
+    else
+        initial_conditions = nothing
+    end
     data_fetch_time = time() - data_fetch_start
 
     # Check if we have data
@@ -160,7 +226,12 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date; optimizer:
     T = length(target_time_slots)
     N = length(generators)
 
-    println("Planning for $T time periods with $N generators")
+    # Calculate conversion factor from hours to periods
+    # All fuel-type parameters (startup times, uptime, downtime) are in HOURS
+    # but constraints operate on PERIODS (which may be 15min, 30min, or 60min)
+    periods_per_hour = 60 / resolution_minutes
+
+    println("Planning for $T time periods with $N generators ($(resolution_minutes)min resolution, $(periods_per_hour) periods/hour)")
 
     # Calculate net demand (load - renewables) for each time period
     net_demand = Float64[]
@@ -172,7 +243,28 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date; optimizer:
 
     setup_start = time()
 
-    # TODO: initial conditions
+    # ============================================================================
+    # Initial Conditions Setup
+    # ============================================================================
+    # Extract initial conditions into arrays for constraint formulation
+    u0 = zeros(Int, N)        # Initial commitment (0 or 1)
+    g0 = zeros(Float64, N)    # Initial generation (MW)
+    T_on0 = zeros(Int, N)     # Hours already on at t=0
+    T_off0 = zeros(Int, N)    # Hours already off at t=0
+
+    if initial_conditions !== nothing
+        for (i, gen) in enumerate(generators)
+            if haskey(initial_conditions, gen.code)
+                ic = initial_conditions[gen.code]
+                u0[i] = ic.is_on ? 1 : 0
+                g0[i] = ic.output
+                T_on0[i] = ic.hours_on
+                T_off0[i] = ic.hours_off
+            end
+        end
+        on_count = sum(u0)
+        println("Initial state: $on_count generators ON, $(N - on_count) OFF")
+    end
 
     # Get fuel-type-specific parameters for each generator
     fuel_params = Dict{Int,FuelTypeParameters}()
@@ -224,18 +316,19 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date; optimizer:
     @variable(model, g_SD[i=1:N, t=1:T] >= 0)  # shutdown generation profile
 
     # Startup/shutdown time parameters based on fuel type and temperature
-    T_SU = Dict{Tuple{Int,Symbol},Int}()  # startup time by generator and temperature
-    T_SD = Dict{Int,Int}()  # shutdown time by generator - independent of temperature stage
+    # FuelTypeParameters stores times in HOURS - convert to PERIODS here
+    T_SU = Dict{Tuple{Int,Symbol},Int}()  # startup time by generator and temperature (in periods)
+    T_SD = Dict{Int,Int}()  # shutdown time by generator (in periods) - independent of temperature stage
 
-    # Initialize with fuel-type-specific values
-    for (i, gen) in enumerate(generators)
+    # Initialize with fuel-type-specific values, converting hours to periods
+    for i in 1:N
         params = fuel_params[i]
-        # Map temperature stages to startup times (in hours, converted to periods)
-        T_SU[(i, :hot)] = params.hot_startup_time
-        T_SU[(i, :warm)] = params.warm_startup_time
-        T_SU[(i, :cold)] = params.cold_startup_time
+        # Map temperature stages to startup times (hours → periods, minimum 1 period)
+        T_SU[(i, :hot)] = max(1, ceil(Int, params.hot_startup_time * periods_per_hour))
+        T_SU[(i, :warm)] = max(1, ceil(Int, params.warm_startup_time * periods_per_hour))
+        T_SU[(i, :cold)] = max(1, ceil(Int, params.cold_startup_time * periods_per_hour))
         # Shutdown time is typically same as hot startup time
-        T_SD[i] = params.hot_startup_time
+        T_SD[i] = max(1, ceil(Int, params.hot_startup_time * periods_per_hour))
     end
 
     # Startup production profile parameters - power output during startup phase
@@ -291,7 +384,40 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date; optimizer:
         end
     end
 
-    M = 10000.0  # Big M parameter
+    # Big M parameter - scaled to problem size for numerical stability
+    # Using 2x max capacity ensures M is large enough but not excessively so
+    max_p_max = maximum(gen.p_max for gen in generators)
+    M = 2.0 * max_p_max
+
+    # ==== Cost Parameters ====
+
+    # Startup costs by generator and temperature stage (€)
+    # Hot startup is cheapest, cold startup is most expensive
+    # Base cost = startup_cost_multiplier * marginal_cost * p_max
+    # Temperature multipliers: hot=1.0, warm=1.5, cold=2.5 (typical values from literature)
+    C_SU = Dict{Tuple{Int,Symbol},Float64}()
+    for i in 1:N
+        params = fuel_params[i]
+        gen = generators[i]
+        base_startup_cost = params.startup_cost_multiplier * gen.marginal_cost * gen.p_max
+        C_SU[(i, :hot)] = base_startup_cost * 1.0
+        C_SU[(i, :warm)] = base_startup_cost * 1.5
+        C_SU[(i, :cold)] = base_startup_cost * 2.5
+    end
+
+    # No-load costs by generator (€/period)
+    # Cost incurred when unit is committed, regardless of output level
+    # = no_load_cost_fraction * marginal_cost * period_hours
+    # The period_hours factor converts from €/MWh-equivalent to €/period
+    C_NL = Float64[]
+    for i in 1:N
+        params = fuel_params[i]
+        gen = generators[i]
+        # No-load cost per period = fraction * marginal_cost * (typical output hours equivalent)
+        # Using p_min as reference: no_load_cost = fraction * marginal_cost * p_min * period_hours
+        no_load_cost = params.no_load_cost_fraction * gen.marginal_cost * gen.p_min * period_hours
+        push!(C_NL, no_load_cost)
+    end
 
     # ==== Model Constraints ====
 
@@ -307,6 +433,11 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date; optimizer:
     end
 
     # link commitment, startup, and shutdown
+    # For t=1: link to initial condition u0
+    if initial_conditions !== nothing
+        @constraint(model, [i in 1:N], u[i, 1] == u0[i] + v[i, 1] - z[i, 1])
+    end
+    # For t >= 2: link to previous period
     @constraint(model, [i in 1:N, t in 2:T], u[i, t] == u[i, t-1] + v[i, t] - z[i, t])
 
     # startup & shutdown can't happen simultaneously
@@ -314,21 +445,61 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date; optimizer:
 
     # minimum uptime: if there was a startup in the last UT periods, unit must be on
     # Use generator's inferred value if available, otherwise fuel-type default
+    # All values are in HOURS - convert to PERIODS for constraints
+    # Also account for initial hours on (T_on0) - if unit was already running for some hours
     for (i, gen) in enumerate(generators)
-        UT = gen.min_uptime !== nothing ? gen.min_uptime : fuel_params[i].min_uptime
-        if UT > 1  # Only add constraint if minimum uptime > 1
+        # Get uptime in hours, then convert to periods
+        UT_hours = gen.min_uptime !== nothing ? gen.min_uptime : fuel_params[i].min_uptime
+        UT = max(1, ceil(Int, UT_hours * periods_per_hour))  # Convert hours → periods
+
+        if UT > 1  # Only add constraint if minimum uptime > 1 period
+            # Standard constraint for later periods
             @constraint(model, [t = UT:T],
                 sum(v[i, τ] for τ in t-UT+1:t) <= u[i, t])
+
+            # Initial condition constraint: if unit was on but hasn't met min uptime yet,
+            # it must stay on for the remaining periods
+            if initial_conditions !== nothing && u0[i] == 1
+                # T_on0 is in hours, convert to periods for comparison
+                T_on0_periods = ceil(Int, T_on0[i] * periods_per_hour)
+                remaining_uptime = max(0, UT - T_on0_periods)
+                if remaining_uptime > 0
+                    # Unit must stay on for the remaining uptime periods
+                    for t in 1:min(remaining_uptime, T)
+                        @constraint(model, u[i, t] == 1)
+                    end
+                end
+            end
         end
     end
 
     # minimum downtime: if there was a shutdown in the last DT periods, unit must be off
     # Use generator's inferred value if available, otherwise fuel-type default
+    # All values are in HOURS - convert to PERIODS for constraints
+    # Also account for initial hours off (T_off0) - if unit was already off for some hours
     for (i, gen) in enumerate(generators)
-        DT = gen.min_downtime !== nothing ? gen.min_downtime : fuel_params[i].min_downtime
-        if DT > 1  # Only add constraint if minimum downtime > 1
+        # Get downtime in hours, then convert to periods
+        DT_hours = gen.min_downtime !== nothing ? gen.min_downtime : fuel_params[i].min_downtime
+        DT = max(1, ceil(Int, DT_hours * periods_per_hour))  # Convert hours → periods
+
+        if DT > 1  # Only add constraint if minimum downtime > 1 period
+            # Standard constraint for later periods
             @constraint(model, [t = DT:T],
                 sum(z[i, τ] for τ in t-DT+1:t) <= 1 - u[i, t])
+
+            # Initial condition constraint: if unit was off but hasn't met min downtime yet,
+            # it must stay off for the remaining periods
+            if initial_conditions !== nothing && u0[i] == 0
+                # T_off0 is in hours, convert to periods for comparison
+                T_off0_periods = ceil(Int, T_off0[i] * periods_per_hour)
+                remaining_downtime = max(0, DT - T_off0_periods)
+                if remaining_downtime > 0
+                    # Unit must stay off for the remaining downtime periods
+                    for t in 1:min(remaining_downtime, T)
+                        @constraint(model, u[i, t] == 0)
+                    end
+                end
+            end
         end
     end
 
@@ -337,13 +508,15 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date; optimizer:
         v[i, t] == sum(v_θ[i, θ, t] for θ in Θ))
 
     # Temperature-dependent startup constraints based on downtime
+    # FuelTypeParameters thresholds are in HOURS - convert to PERIODS
     # Hot startup: unit offline for <= warm_threshold periods
-    # Warm startup: unit offline for warm_threshold < periods <= cold_threshold  
+    # Warm startup: unit offline for warm_threshold < periods <= cold_threshold
     # Cold startup: unit offline for > cold_threshold periods
-    for (i, gen) in enumerate(generators)
+    for i in 1:N
         params = fuel_params[i]
-        warm_thresh = params.warm_threshold
-        cold_thresh = params.cold_threshold
+        # Convert thresholds from hours to periods
+        warm_thresh = max(1, ceil(Int, params.warm_threshold * periods_per_hour))
+        cold_thresh = max(1, ceil(Int, params.cold_threshold * periods_per_hour))
 
         # Hot startup constraints (short downtime)
         for t in 2:min(warm_thresh + 1, T)
@@ -404,8 +577,17 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date; optimizer:
     )
 
     # ramp constraints considering startup & shutdown profiles (R: Ramp Constraint)
-    # TODO: Add proper ramp rate parameters to Generator struct
-    @constraint(model, [i in 1:N, t in 2:T], #TODO: ask about M parameter
+    # For t=1: constrain ramp from initial generation g0
+    if initial_conditions !== nothing
+        @constraint(model, [i in 1:N],
+            g[i, 1] - g0[i] <= ramp_up[i] + M * u_SU[i, 1]
+        )
+        @constraint(model, [i in 1:N],
+            g0[i] - g[i, 1] <= ramp_down[i] + M * u_SD[i, 1]
+        )
+    end
+    # For t >= 2: standard ramp constraints
+    @constraint(model, [i in 1:N, t in 2:T],
         g[i, t] - g[i, t-1] <= ramp_up[i] + M * u_SU[i, t]
     )
 
@@ -416,11 +598,17 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date; optimizer:
     # Supply must equal net Demand (demand minus RES production) at all times
     @constraint(model, [t in 1:T], sum(g[i, t] for i in 1:N) == net_demand[t])
 
+    # ==== Objective Function ====
+    # Total cost = Production costs + Startup costs + No-load costs
     @objective(
         model,
         Min,
-        # Use marginal costs from generators
+        # 1. Production costs (variable cost based on marginal cost × generation)
         sum(generators[i].marginal_cost * g[i, t] for i in 1:N, t in 1:T)
+        # 2. Startup costs (temperature-dependent: hot < warm < cold)
+        + sum(C_SU[(i, θ)] * v_θ[i, θ, t] for i in 1:N, θ in Θ, t in 1:T)
+        # 3. No-load costs (fixed cost when committed)
+        + sum(C_NL[i] * u[i, t] for i in 1:N, t in 1:T)
     )
 
     setup_time = time() - setup_start
@@ -440,8 +628,10 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date; optimizer:
 
     # Post-processing
     postprocess_start = time()
-    # Calculate detailed cost breakdown
-    cost_breakdown = calculate_cost_breakdown(generators, value.(g), value.(u), T, N)
+    # Calculate detailed cost breakdown (including startup and no-load costs)
+    cost_breakdown = calculate_cost_breakdown(
+        generators, value.(g), value.(u), value.(v_θ), Θ, C_SU, C_NL, T, N
+    )
     postprocess_time = time() - postprocess_start
 
     total_time = time() - timing_start
@@ -451,14 +641,18 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date; optimizer:
 
     return (
         status=status,
+        solver=solver_name,
         generators=generators,
         time_slots=target_time_slots,
+        resolution_minutes=resolution_minutes,
         net_demand=net_demand,
         renewable_generation=renewable_by_time,
         g=value.(g),
         u=value.(u),
+        v=value.(v),  # startup decisions
         total_cost=objective_value(model),
         cost_breakdown=cost_breakdown,
+        initial_conditions=initial_conditions,
     )
 end
 
@@ -473,7 +667,7 @@ function test_unit_commitment(
 
     if solution.status == OPTIMAL
         println("Solution found!")
-        print_cost_report(solution, day)
+        print_cost_report(solution, day; resolution_minutes=solution.resolution_minutes)
     else
         println("Optimization failed with status: ", solution.status)
     end

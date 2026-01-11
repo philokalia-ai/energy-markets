@@ -50,6 +50,28 @@ println()
     end
 
     # -------------------------------------------------------------------------
+    # Initial Conditions Tests
+    # Tests for generator initial state determination for UC optimization
+    # -------------------------------------------------------------------------
+    @testset "Initial Conditions" begin
+        println("\n" * "=" ^ 60)
+        println("Running Initial Conditions Tests...")
+        println("=" ^ 60)
+        include(joinpath(@__DIR__, "test_initial_conditions.jl"))
+    end
+
+    # -------------------------------------------------------------------------
+    # UC Enhancements Tests
+    # Tests for cost breakdown, solver tuning, and batch query optimization
+    # -------------------------------------------------------------------------
+    @testset "UC Enhancements" begin
+        println("\n" * "=" ^ 60)
+        println("Running UC Enhancements Tests...")
+        println("=" ^ 60)
+        include(joinpath(@__DIR__, "test_uc_enhancements.jl"))
+    end
+
+    # -------------------------------------------------------------------------
     # Network Module Tests
     # Tests for network topology, transfer capacity, and ATC constraints
     # -------------------------------------------------------------------------

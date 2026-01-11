@@ -112,6 +112,7 @@ Ramp rate inference:
 - Queries 3 months of historical generation data
 - Normalizes to hourly rates regardless of source resolution (PT15M, PT60M, etc.)
 - Falls back to fuel-type defaults in `FuelTypeParameters` if insufficient data
+- **Note on 3-month window**: Physical parameters (ramp rates, p_min) are plant characteristics that shouldn't vary by season. However, seasonal dispatch patterns may affect uptime/downtime inference for plants that operate differently in summer vs winter. A longer window (6-12 months) could capture more operating conditions but would increase query time and include potentially stale data. The 95th/5th percentile approach mitigates this by capturing extreme values even from limited data.
 
 p_min inference strategy (robust to data quality issues):
 - **Flexible resources** (hydro, batteries): p_min = 0 (no inference needed)
@@ -134,6 +135,102 @@ Min uptime/downtime inference:
   - Coal: uptime 8-48h, downtime 4-24h
   - Gas CCGT: uptime 2-12h, downtime 1-8h
   - Gas OCGT: uptime 1-4h, downtime 1-4h
+
+**Generator initial conditions for unit commitment:**
+```julia
+# Get initial conditions for all generators (state at t=0)
+conditions = get_initial_conditions(generators, Date(2024, 6, 15))
+
+# Each generator has:
+ic = conditions["GEN-CODE"]
+ic.is_on        # Bool: was generator running at market day start?
+ic.output       # Float64: MW output at t=0 (0 if off)
+ic.hours_on     # Int: consecutive hours already running
+ic.hours_off    # Int: consecutive hours already off
+ic.thermal_state # Symbol: :hot, :warm, or :cold
+```
+
+Initial conditions inference:
+- Uses batch query (`get_recent_generation_batch()`) to fetch all generator history in one SQL call
+- Queries 72 hours of historical data before market day start (00:00 CET)
+- Determines commitment status from most recent output (> 1 MW = on)
+- Counts consecutive hours in current state for uptime/downtime constraints
+- Thermal state based on hours_off:
+  - Hot: hours_off <= 8 (quick restart)
+  - Warm: 8 < hours_off <= 48
+  - Cold: hours_off > 48 (full cold start)
+
+Performance optimization:
+- Batch query instead of N individual queries (~36x speedup)
+- For ~40 generators: ~15 sec vs ~9 min with individual queries
+- Uses `WHERE generation_unit_code = ANY($1)` for efficient batch lookup
+
+Fallback defaults when no historical data:
+- Baseload (coal, lignite, nuclear): Assume running
+- Mid-merit (CCGT): Assume off but warm
+- Peakers (OCGT): Assume off, potentially cold
+- Flexible (hydro, batteries): Assume off, ready (hot)
+
+Unit commitment integration:
+- Links t=1 commitment to initial state u₀
+- Constrains t=1 ramps from initial output g₀
+- Enforces remaining uptime/downtime based on T_on₀/T_off₀
+
+**Unit commitment solver:**
+```julia
+# Run unit commitment optimization
+solution = solve_unit_commitment("GR", Date(2024, 6, 15))
+
+# With custom solver tuning
+solution = solve_unit_commitment("GR", Date(2024, 6, 15);
+    mip_gap=0.01,       # Accept 1% optimality gap (default)
+    time_limit=600.0)   # Max solve time in seconds (default 10 min)
+
+# Access solution fields
+solution.status              # JuMP termination status (OPTIMAL, INFEASIBLE, etc.)
+solution.solver              # Solver used ("HiGHS" or "Gurobi")
+solution.resolution_minutes  # Time period resolution (15, 30, or 60)
+solution.total_cost          # Total cost (production + startup + no-load)
+solution.g                   # Generation matrix [generator × time]
+solution.u                   # Commitment matrix [generator × time]
+solution.v                   # Startup decisions [generator × time]
+solution.cost_breakdown      # Detailed cost breakdown (see below)
+```
+
+Solver tuning parameters (solver-agnostic via MOI):
+- `mip_gap`: Relative optimality gap tolerance (default 0.01 = 1%). Solver stops when it finds a solution within this percentage of proven optimal.
+- `time_limit`: Maximum solve time in seconds (default 600 = 10 min). Returns best solution found within time budget.
+
+Unit commitment objective function components:
+- **Production costs**: `marginal_cost × generation` for each generator and period
+- **Startup costs**: Temperature-dependent (hot × 1.0, warm × 1.5, cold × 2.5 base cost)
+  - Base startup cost = `startup_cost_multiplier × marginal_cost × p_max`
+  - From `FuelTypeParameters` for each fuel type
+- **No-load costs**: Fixed cost when committed = `no_load_cost_fraction × marginal_cost × p_min × period_hours`
+
+Cost breakdown fields:
+```julia
+cb = solution.cost_breakdown
+cb.production_cost        # Total production costs (€)
+cb.startup_cost           # Total startup costs (€)
+cb.noload_cost            # Total no-load costs (€)
+cb.startup_costs_by_type  # Dict{Symbol,Float64} - costs by :hot/:warm/:cold
+cb.startup_counts         # Dict{Symbol,Int} - count of each startup type
+cb.generator_costs        # Dict{String,Float64} - production cost by generator
+cb.fuel_type_costs        # Dict{Symbol,Float64} - production cost by fuel type
+cb.period_costs           # Vector{Float64} - total cost per time period
+```
+
+Time resolution handling:
+- All parameters in `FuelTypeParameters` are stored in HOURS
+- The UC solver converts to PERIODS based on actual data resolution
+- Conversion factor: `periods_per_hour = 60 / resolution_minutes`
+- Affected parameters: startup times, min uptime/downtime, temperature thresholds
+- Example: At 15min resolution, `min_uptime=4` hours → 16 periods
+
+Big M parameter:
+- Used in ramp constraints to relax them during startup/shutdown
+- Scaled to problem size: `M = 2 × max(p_max)` for numerical stability
 
 ## Development Commands
 
@@ -169,6 +266,8 @@ test/
 ├── runtests.jl                  # Main test runner (includes core tests)
 ├── test_generator_inference.jl  # Generator parameter inference tests (58 tests)
 ├── test_data_fetching.jl        # DB integration for loads/renewables/etc (23 tests)
+├── test_initial_conditions.jl   # Generator initial state tests (69 tests)
+├── test_uc_enhancements.jl      # UC cost breakdown, solver tuning, batch query tests
 ├── test_mpcc.jl                 # MPCC solver tests (50 tests)
 ├── test_multi_zone_mpcc.jl      # Multi-zone transmission tests (21 tests)
 ├── test_network_module.jl       # Network/ATC tests (140 tests)

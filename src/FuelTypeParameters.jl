@@ -7,26 +7,30 @@
     FuelTypeParameters
 
 Struct containing fuel-type-specific operational parameters for unit commitment modeling.
+
+IMPORTANT: All time-based parameters are in HOURS (not periods).
+The UnitCommitment solver converts these to periods based on the actual
+time resolution (15min, 30min, 60min) of the input data.
 """
 struct FuelTypeParameters
-    # Startup characteristics
-    cold_startup_time::Int          # Time periods for cold startup
-    warm_startup_time::Int          # Time periods for warm startup  
-    hot_startup_time::Int           # Time periods for hot startup
+    # Startup characteristics (all in HOURS)
+    cold_startup_time::Int          # Hours required for cold startup
+    warm_startup_time::Int          # Hours required for warm startup
+    hot_startup_time::Int           # Hours required for hot startup
 
-    # Minimum operating constraints
-    min_uptime::Int                 # Minimum time periods unit must stay on
-    min_downtime::Int               # Minimum time periods unit must stay off
+    # Minimum operating constraints (all in HOURS)
+    min_uptime::Int                 # Minimum hours unit must stay on after startup
+    min_downtime::Int               # Minimum hours unit must stay off after shutdown
 
-    # Ramp rate constraints (as fraction of capacity per period)
-    ramp_up_rate::Float64          # Maximum ramp up rate (fraction/period)
-    ramp_down_rate::Float64        # Maximum ramp down rate (fraction/period)
+    # Ramp rate constraints (as fraction of capacity per HOUR)
+    ramp_up_rate::Float64          # Maximum ramp up rate (fraction/hour)
+    ramp_down_rate::Float64        # Maximum ramp down rate (fraction/hour)
 
     # Operating flexibility
     min_load_factor::Float64       # Minimum load as fraction of capacity
     part_load_efficiency::Float64  # Efficiency penalty at minimum load
 
-    # Temperature transition thresholds (hours offline)
+    # Temperature transition thresholds (in HOURS offline)
     warm_threshold::Int            # Hours offline before becoming warm
     cold_threshold::Int            # Hours offline before becoming cold
 
