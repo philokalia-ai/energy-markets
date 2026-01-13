@@ -879,7 +879,9 @@ end
                                    optimizer::String="highs",
                                    markup_factor::Float64=1.1,
                                    silent::Bool=true,
-                                   save_to_db::Bool=false)
+                                   save_to_db::Bool=false,
+                                   force_rerun::Bool=false,
+                                   parallel::Bool=false)
 
 Run simultaneous multi-zone market clearing with cross-border transmission flows.
 
@@ -895,6 +897,8 @@ transmission flow constraints between zones based on ENTSO-E ATC data.
 - `markup_factor::Float64`: Price markup factor for supply bids (default: 1.1)
 - `silent::Bool`: Whether to suppress solver output (default: true)
 - `save_to_db::Bool`: Whether to save results to database (default: false)
+- `force_rerun::Bool`: Whether to force UC re-solve, bypassing cache (default: false)
+- `parallel::Bool`: Whether to run UC for each zone in parallel using Distributed.jl (default: false)
 
 # Returns
 - `MPCCResult`: Market clearing results including:
@@ -941,7 +945,8 @@ function run_multi_zone_market_clearing(date::Date;
                                         markup_factor::Float64=1.1,
                                         silent::Bool=true,
                                         save_to_db::Bool=false,
-                                        force_rerun::Bool=false)
+                                        force_rerun::Bool=false,
+                                        parallel::Bool=false)
 
     start_time = time()
 
@@ -970,7 +975,8 @@ function run_multi_zone_market_clearing(date::Date;
         MPCC.create_multi_zone_order_book(zones, date;
                                           markup_factor=markup_factor,
                                           optimizer=optimizer,
-                                          force_rerun=force_rerun)
+                                          force_rerun=force_rerun,
+                                          parallel=parallel)
     elseif order_method == :alternative
         # Alternative: uses simplified order generation (faster)
         _create_multi_zone_order_book_alternative(zones, date)
