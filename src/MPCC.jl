@@ -132,10 +132,19 @@ Preserves the native temporal resolution from Unit Commitment optimization (15/3
 # Returns  
 - `MPCCOrderBook`: Typed order book structure using existing MarketOrder types with native UC temporal resolution
 """
-function create_typed_order_book(bidding_zone::String, day::Date; markup_factor::Float64=DEFAULT_MARKUP_FACTOR, optimizer::String="auto")
+function create_typed_order_book(bidding_zone::String, day::Date;
+                                  markup_factor::Float64=DEFAULT_MARKUP_FACTOR,
+                                  optimizer::String="auto",
+                                  use_cache::Bool=true,
+                                  force_rerun::Bool=false)
     try
-        # Generate market orders from real unit commitment
-        uc_to_bids = generate_market_orders_from_uc(bidding_zone, day; markup_factor=markup_factor, optimizer=optimizer)
+        # Generate market orders from real unit commitment (will use cache if available)
+        uc_to_bids = generate_market_orders_from_uc(bidding_zone, day;
+            markup_factor=markup_factor,
+            optimizer=optimizer,
+            use_cache=use_cache,
+            force_rerun=force_rerun
+        )
 
         if !uc_to_bids.success
             error("Failed to generate market orders: $(uc_to_bids.message)")
@@ -217,7 +226,9 @@ and attaching transfer capacity constraints between zones.
 """
 function create_multi_zone_order_book(zones::Vector{String}, day::Date;
                                       markup_factor::Float64=DEFAULT_MARKUP_FACTOR,
-                                      optimizer::String="auto")
+                                      optimizer::String="auto",
+                                      use_cache::Bool=true,
+                                      force_rerun::Bool=false)
     if isempty(zones)
         error("At least one bidding zone must be specified")
     end
@@ -233,8 +244,13 @@ function create_multi_zone_order_book(zones::Vector{String}, day::Date;
         try
             println("   📊 Processing zone $zone...")
 
-            # Generate market orders from real unit commitment for this zone
-            uc_to_bids = generate_market_orders_from_uc(zone, day; markup_factor=markup_factor, optimizer=optimizer)
+            # Generate market orders from real unit commitment for this zone (will use cache if available)
+            uc_to_bids = generate_market_orders_from_uc(zone, day;
+                markup_factor=markup_factor,
+                optimizer=optimizer,
+                use_cache=use_cache,
+                force_rerun=force_rerun
+            )
 
             if !uc_to_bids.success
                 @warn "Failed to generate market orders for zone $zone: $(uc_to_bids.message)"

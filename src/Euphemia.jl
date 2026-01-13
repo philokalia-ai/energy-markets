@@ -325,6 +325,10 @@ export generate_energy_prices
 # Database utilities
 export save_energy_prices, ensure_energy_prices_table, withdb, save_optimization_run
 export save_transmission_flows, ensure_transmission_flows_table  # Multi-zone transmission flows
+export ensure_uc_results_tables  # UC results caching tables
+
+# UC results caching
+export has_cached_uc_results, save_uc_results, load_uc_results
 
 # Zone discovery utilities  
 export get_available_zones
@@ -536,7 +540,8 @@ function generate_energy_prices(bidding_zone::String, date::Date;
     markup_factor::Float64=1.1,
     random_seed::Union{Int,Nothing}=nothing,
     silent::Bool=true,
-    save_to_db::Bool=false)
+    save_to_db::Bool=false,
+    force_rerun::Bool=false)
 
     # Validate inputs
     if !(order_method in [:uc_based, :alternative])
@@ -558,7 +563,11 @@ function generate_energy_prices(bidding_zone::String, date::Date;
 
         if order_method == :uc_based
             println("   Using UC-based order creation")
-            order_book = create_typed_order_book(bidding_zone, date; markup_factor=markup_factor, optimizer=optimizer)
+            order_book = create_typed_order_book(bidding_zone, date;
+                markup_factor=markup_factor,
+                optimizer=optimizer,
+                force_rerun=force_rerun
+            )
 
         elseif order_method == :alternative
             println("   Using alternative order book creation")
@@ -931,7 +940,8 @@ function run_multi_zone_market_clearing(date::Date;
                                         optimizer::String="highs",
                                         markup_factor::Float64=1.1,
                                         silent::Bool=true,
-                                        save_to_db::Bool=false)
+                                        save_to_db::Bool=false,
+                                        force_rerun::Bool=false)
 
     start_time = time()
 
@@ -959,7 +969,8 @@ function run_multi_zone_market_clearing(date::Date;
         # UC-based: runs full unit commitment for each zone (slower but more accurate)
         MPCC.create_multi_zone_order_book(zones, date;
                                           markup_factor=markup_factor,
-                                          optimizer=optimizer)
+                                          optimizer=optimizer,
+                                          force_rerun=force_rerun)
     elseif order_method == :alternative
         # Alternative: uses simplified order generation (faster)
         _create_multi_zone_order_book_alternative(zones, date)

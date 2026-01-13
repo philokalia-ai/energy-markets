@@ -72,6 +72,17 @@ println()
     end
 
     # -------------------------------------------------------------------------
+    # UC Caching Tests
+    # Tests for caching Unit Commitment results in the database
+    # -------------------------------------------------------------------------
+    @testset "UC Caching" begin
+        println("\n" * "=" ^ 60)
+        println("Running UC Caching Tests...")
+        println("=" ^ 60)
+        include(joinpath(@__DIR__, "test_uc_caching.jl"))
+    end
+
+    # -------------------------------------------------------------------------
     # Network Module Tests
     # Tests for network topology, transfer capacity, and ATC constraints
     # -------------------------------------------------------------------------

@@ -638,3 +638,102 @@ function save_transmission_flows(flows::Dict{String,Dict{String,Float64}}, date:
 
     return total_inserted
 end
+
+"""
+    ensure_uc_results_tables()
+
+Creates the simulations.uc_results, simulations.uc_generation, and simulations.uc_net_demand tables
+if they don't exist. Used to cache Unit Commitment optimization results.
+"""
+function ensure_uc_results_tables()
+    withdb() do cnx
+        # Create schema if not exists
+        LibPQ.execute(cnx, "CREATE SCHEMA IF NOT EXISTS simulations")
+
+        # Create uc_results summary table
+        create_uc_results_sql = """
+        CREATE TABLE IF NOT EXISTS simulations.uc_results (
+            id SERIAL PRIMARY KEY,
+            bidding_zone VARCHAR(20) NOT NULL,
+            market_date DATE NOT NULL,
+            status VARCHAR(30) NOT NULL,
+            solver VARCHAR(20) NOT NULL,
+            resolution_minutes INTEGER NOT NULL,
+            num_generators INTEGER NOT NULL,
+            num_periods INTEGER NOT NULL,
+            total_cost NUMERIC(15,2),
+            production_cost NUMERIC(15,2),
+            startup_cost NUMERIC(15,2),
+            noload_cost NUMERIC(15,2),
+            hot_startups INTEGER DEFAULT 0,
+            warm_startups INTEGER DEFAULT 0,
+            cold_startups INTEGER DEFAULT 0,
+            mip_gap NUMERIC(6,4) DEFAULT 0.01,
+            time_limit_seconds NUMERIC(10,2) DEFAULT 600.0,
+            code_version INTEGER NOT NULL DEFAULT 2,
+            created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+            UNIQUE(bidding_zone, market_date, code_version)
+        )
+        """
+        LibPQ.execute(cnx, create_uc_results_sql)
+
+        # Create uc_generation detail table
+        create_uc_generation_sql = """
+        CREATE TABLE IF NOT EXISTS simulations.uc_generation (
+            id SERIAL PRIMARY KEY,
+            uc_result_id INTEGER NOT NULL REFERENCES simulations.uc_results(id) ON DELETE CASCADE,
+            generator_code VARCHAR(50) NOT NULL,
+            generator_idx INTEGER NOT NULL,
+            period_idx INTEGER NOT NULL,
+            time_slot_utc TIMESTAMP NOT NULL,
+            generation_mw NUMERIC(10,2) NOT NULL,
+            commitment INTEGER NOT NULL,
+            startup INTEGER NOT NULL,
+            UNIQUE(uc_result_id, generator_code, period_idx)
+        )
+        """
+        LibPQ.execute(cnx, create_uc_generation_sql)
+
+        # Create uc_net_demand table
+        create_uc_net_demand_sql = """
+        CREATE TABLE IF NOT EXISTS simulations.uc_net_demand (
+            id SERIAL PRIMARY KEY,
+            uc_result_id INTEGER NOT NULL REFERENCES simulations.uc_results(id) ON DELETE CASCADE,
+            period_idx INTEGER NOT NULL,
+            time_slot_utc TIMESTAMP NOT NULL,
+            net_demand_mw NUMERIC(10,2) NOT NULL,
+            renewable_generation_mw NUMERIC(10,2),
+            UNIQUE(uc_result_id, period_idx)
+        )
+        """
+        LibPQ.execute(cnx, create_uc_net_demand_sql)
+
+        # Create indexes for efficient queries
+        LibPQ.execute(cnx, """
+            CREATE INDEX IF NOT EXISTS idx_uc_results_zone_date
+            ON simulations.uc_results (bidding_zone, market_date)
+        """)
+
+        LibPQ.execute(cnx, """
+            CREATE INDEX IF NOT EXISTS idx_uc_results_status
+            ON simulations.uc_results (status)
+        """)
+
+        LibPQ.execute(cnx, """
+            CREATE INDEX IF NOT EXISTS idx_uc_generation_result_id
+            ON simulations.uc_generation (uc_result_id)
+        """)
+
+        LibPQ.execute(cnx, """
+            CREATE INDEX IF NOT EXISTS idx_uc_generation_generator
+            ON simulations.uc_generation (generator_code)
+        """)
+
+        LibPQ.execute(cnx, """
+            CREATE INDEX IF NOT EXISTS idx_uc_net_demand_result_id
+            ON simulations.uc_net_demand (uc_result_id)
+        """)
+    end
+
+    @info "UC results tables schema verified/created"
+end
