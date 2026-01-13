@@ -232,6 +232,39 @@ Big M parameter:
 - Used in ramp constraints to relax them during startup/shutdown
 - Scaled to problem size: `M = 2 × max(p_max)` for numerical stability
 
+**UC results caching:**
+```julia
+# Run UC with caching (default - uses cached results if available)
+solution = solve_unit_commitment("GR", Date(2024, 6, 15))
+
+# Force fresh solve, bypassing and replacing cache
+solution = solve_unit_commitment("GR", Date(2024, 6, 15); force_rerun=true)
+
+# Disable caching entirely (neither load nor save)
+solution = solve_unit_commitment("GR", Date(2024, 6, 15); use_cache=false)
+
+# Check if cached results exist
+has_cache = has_cached_uc_results("GR", Date(2024, 6, 15))
+
+# Load cached results directly (returns nothing if not found)
+cached = load_uc_results("GR", Date(2024, 6, 15))
+
+# Cached solutions have from_cache=true field
+cached.from_cache  # true for loaded results, not present for fresh solves
+```
+
+Caching behavior:
+- **Default** (`use_cache=true, force_rerun=false`): Check cache first, return cached if exists, else solve and save
+- **Force rerun** (`force_rerun=true`): Solve fresh, replace cache entry
+- **No caching** (`use_cache=false`): Solve fresh, don't save to cache
+- Cache is stored in PostgreSQL (`simulations.uc_results`, `uc_generation`, `uc_net_demand`)
+- Cache key: `(bidding_zone, market_date, code_version)`
+- Storage: ~195 KB per zone/day (~700 MB/year for 10 zones)
+
+The `force_rerun` parameter is passed through the entire call chain:
+- `generate_energy_prices()` → `create_typed_order_book()` → `generate_market_orders_from_uc()` → `solve_unit_commitment()`
+- `run_multi_zone_market_clearing()` → `create_multi_zone_order_book()` → `generate_market_orders_from_uc()` → `solve_unit_commitment()`
+
 ## Development Commands
 
 ### Julia Package Management
@@ -268,6 +301,7 @@ test/
 ├── test_data_fetching.jl        # DB integration for loads/renewables/etc (23 tests)
 ├── test_initial_conditions.jl   # Generator initial state tests (69 tests)
 ├── test_uc_enhancements.jl      # UC cost breakdown, solver tuning, batch query tests
+├── test_uc_caching.jl           # UC results caching tests (17 tests)
 ├── test_mpcc.jl                 # MPCC solver tests (50 tests)
 ├── test_multi_zone_mpcc.jl      # Multi-zone transmission tests (21 tests)
 ├── test_network_module.jl       # Network/ATC tests (140 tests)
@@ -393,6 +427,24 @@ The project uses PostgreSQL with two main schemas:
 - `p_min`: Inferred minimum generation (MW)
 - `min_uptime`, `min_downtime`: Inferred cycle constraints (hours)
 - `data_points_used`: Number of historical data points used for inference
+
+**`simulations.uc_results`** - Cached unit commitment optimization results (summary)
+- `bidding_zone`, `market_date`, `code_version`: Unique key
+- `status`: JuMP termination status (e.g., "OPTIMAL")
+- `solver`: Solver used ("HiGHS" or "Gurobi")
+- `resolution_minutes`: Time period resolution (15, 30, or 60)
+- `total_cost`, `production_cost`, `startup_cost`, `noload_cost`: Cost components
+- `hot_startups`, `warm_startups`, `cold_startups`: Startup counts by type
+
+**`simulations.uc_generation`** - Detailed generation data per generator per period
+- `uc_result_id`: Foreign key to `uc_results`
+- `generator_code`, `generator_idx`, `period_idx`: Generator and time indices
+- `generation_mw`, `commitment`, `startup`: Values from g, u, v matrices
+
+**`simulations.uc_net_demand`** - Net demand data per period
+- `uc_result_id`: Foreign key to `uc_results`
+- `period_idx`, `time_slot_utc`: Time period identification
+- `net_demand_mw`, `renewable_generation_mw`: Demand and renewable data
 
 **Joining prices with optimization metadata:**
 ```sql

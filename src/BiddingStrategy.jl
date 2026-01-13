@@ -96,13 +96,19 @@ function generate_market_orders_from_uc(
     demand_price::Float64=500.0,
     bidding_strategy::Symbol=:committed_only,
     uncommitted_unit_fraction::Float64=DEFAULT_UNCOMMITTED_UNIT_FRACTION,
-    optimizer::String="auto"
+    optimizer::String="auto",
+    use_cache::Bool=true,
+    force_rerun::Bool=false
 )
 
     try
-        # Solve unit commitment first
+        # Solve unit commitment first (will use cache if available)
         println("Solving unit commitment for $bidding_zone on $day...")
-        uc_solution = solve_unit_commitment(bidding_zone, day; optimizer=optimizer)
+        uc_solution = solve_unit_commitment(bidding_zone, day;
+            optimizer=optimizer,
+            use_cache=use_cache,
+            force_rerun=force_rerun
+        )
 
         if uc_solution.status != OPTIMAL
             return UCToBidsResult(

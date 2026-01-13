@@ -176,7 +176,18 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date;
                                optimizer::String="auto",
                                use_initial_conditions::Bool=true,
                                mip_gap::Float64=0.01,
-                               time_limit::Float64=600.0)
+                               time_limit::Float64=600.0,
+                               use_cache::Bool=true,
+                               force_rerun::Bool=false)
+
+    # Check cache first (unless disabled or force_rerun)
+    if use_cache && !force_rerun
+        cached = load_uc_results(bidding_zone, day)
+        if cached !== nothing
+            println("Using cached UC results for $bidding_zone on $day")
+            return cached
+        end
+    end
 
     timing_start = time()
 
@@ -639,7 +650,7 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date;
     # Log detailed timing information
     @info "Unit commitment completed" bidding_zone = bidding_zone status = status data_fetch_time = format_time(data_fetch_time) setup_time = format_time(setup_time) solve_time = format_time(solve_time) postprocess_time = format_time(postprocess_time) total_time = format_time(total_time)
 
-    return (
+    solution = (
         status=status,
         solver=solver_name,
         generators=generators,
@@ -653,6 +664,318 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date;
         total_cost=objective_value(model),
         cost_breakdown=cost_breakdown,
         initial_conditions=initial_conditions,
+    )
+
+    # Save to cache if caching is enabled
+    if use_cache
+        save_uc_results(solution, bidding_zone, day)
+    end
+
+    return solution
+end
+
+# =============================================================================
+# UC Results Caching Functions
+# =============================================================================
+
+"""
+    has_cached_uc_results(bidding_zone::String, day::Date; code_version::Int=2) -> Bool
+
+Check if valid cached UC results exist for the given zone and date.
+Returns true if OPTIMAL results exist, false otherwise.
+"""
+function has_cached_uc_results(bidding_zone::String, day::Dates.Date; code_version::Int=2)::Bool
+    query = """
+    SELECT EXISTS(
+        SELECT 1 FROM simulations.uc_results
+        WHERE bidding_zone = \$1
+          AND market_date = \$2
+          AND code_version = \$3
+          AND status = 'OPTIMAL'
+    ) AS has_cache
+    """
+
+    try
+        df = Euphemia.sql2df_with_retry(query, [bidding_zone, day, code_version])
+        return !isempty(df) && df.has_cache[1]
+    catch e
+        # Table might not exist yet - that's fine, no cache
+        @debug "Cache check failed (table may not exist): $e"
+        return false
+    end
+end
+
+"""
+    save_uc_results(solution::NamedTuple, bidding_zone::String, day::Date;
+                    code_version::Int=2) -> Union{Int,Nothing}
+
+Save UC solution to database cache. Returns the uc_result_id or nothing on failure.
+
+Uses delete-before-insert pattern for clean replacement of existing results.
+"""
+function save_uc_results(solution::NamedTuple, bidding_zone::String, day::Dates.Date;
+                         code_version::Int=2)::Union{Int,Nothing}
+    # Ensure tables exist
+    Euphemia.ensure_uc_results_tables()
+
+    try
+        result_id = Euphemia.withdb() do cnx
+            # Start transaction
+            LibPQ.execute(cnx, "BEGIN")
+
+            try
+                # Delete existing results for this zone/date/version
+                delete_sql = """
+                DELETE FROM simulations.uc_results
+                WHERE bidding_zone = \$1
+                  AND market_date = \$2
+                  AND code_version = \$3
+                """
+                LibPQ.execute(cnx, delete_sql, [bidding_zone, day, code_version])
+
+                # Insert summary record
+                cb = solution.cost_breakdown
+                insert_summary_sql = """
+                INSERT INTO simulations.uc_results
+                (bidding_zone, market_date, status, solver, resolution_minutes,
+                 num_generators, num_periods, total_cost, production_cost,
+                 startup_cost, noload_cost, hot_startups, warm_startups,
+                 cold_startups, code_version)
+                VALUES (\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8, \$9, \$10, \$11, \$12, \$13, \$14, \$15)
+                RETURNING id
+                """
+
+                result = LibPQ.execute(cnx, insert_summary_sql, [
+                    bidding_zone,
+                    day,
+                    string(solution.status),
+                    solution.solver,
+                    solution.resolution_minutes,
+                    length(solution.generators),
+                    length(solution.time_slots),
+                    solution.total_cost,
+                    cb.production_cost,
+                    cb.startup_cost,
+                    cb.noload_cost,
+                    cb.startup_counts[:hot],
+                    cb.startup_counts[:warm],
+                    cb.startup_counts[:cold],
+                    code_version
+                ])
+
+                df = DataFrame(result)
+                uc_result_id = df.id[1]
+
+                # Batch insert generation data
+                N = length(solution.generators)
+                T = length(solution.time_slots)
+
+                gen_insert_sql = """
+                    INSERT INTO simulations.uc_generation
+                    (uc_result_id, generator_code, generator_idx, period_idx,
+                     time_slot_utc, generation_mw, commitment, startup)
+                    VALUES (\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8)
+                """
+
+                for i in 1:N
+                    gen = solution.generators[i]
+                    for t in 1:T
+                        time_slot_str = solution.time_slots[t]
+                        time_slot_dt = DateTime(time_slot_str, dateformat"yyyymmdd-HHMM")
+
+                        LibPQ.execute(cnx, gen_insert_sql, [
+                            uc_result_id,
+                            gen.code,
+                            i,
+                            t,
+                            time_slot_dt,
+                            solution.g[i, t],
+                            round(Int, solution.u[i, t]),
+                            round(Int, solution.v[i, t])
+                        ])
+                    end
+                end
+
+                # Insert net demand data
+                demand_insert_sql = """
+                    INSERT INTO simulations.uc_net_demand
+                    (uc_result_id, period_idx, time_slot_utc, net_demand_mw, renewable_generation_mw)
+                    VALUES (\$1, \$2, \$3, \$4, \$5)
+                """
+
+                for t in 1:T
+                    time_slot_str = solution.time_slots[t]
+                    time_slot_dt = DateTime(time_slot_str, dateformat"yyyymmdd-HHMM")
+                    renewable_gen = get(solution.renewable_generation, time_slot_str, missing)
+
+                    LibPQ.execute(cnx, demand_insert_sql, [
+                        uc_result_id,
+                        t,
+                        time_slot_dt,
+                        solution.net_demand[t],
+                        renewable_gen === nothing ? missing : renewable_gen
+                    ])
+                end
+
+                LibPQ.execute(cnx, "COMMIT")
+                return uc_result_id
+
+            catch e
+                LibPQ.execute(cnx, "ROLLBACK")
+                rethrow(e)
+            end
+        end
+
+        @info "Saved UC results for $bidding_zone on $day (id=$result_id)"
+        return result_id
+
+    catch e
+        @error "Failed to save UC results: $e"
+        return nothing
+    end
+end
+
+"""
+    load_uc_results(bidding_zone::String, day::Date; code_version::Int=2) -> Union{NamedTuple,Nothing}
+
+Load cached UC results from database. Returns a NamedTuple compatible with the
+solve_unit_commitment() return structure, or nothing if no cache exists.
+
+Note: Generator objects are fetched fresh to ensure current data.
+"""
+function load_uc_results(bidding_zone::String, day::Dates.Date; code_version::Int=2)
+    # 1. Load summary record
+    summary_query = """
+    SELECT * FROM simulations.uc_results
+    WHERE bidding_zone = \$1
+      AND market_date = \$2
+      AND code_version = \$3
+      AND status = 'OPTIMAL'
+    """
+
+    summary_df = Euphemia.sql2df_with_retry(summary_query, [bidding_zone, day, code_version])
+
+    if isempty(summary_df)
+        return nothing
+    end
+
+    uc_result_id = summary_df.id[1]
+
+    # 2. Get fresh generators (needed for BiddingStrategy - includes current p_max, marginal_cost, etc.)
+    generators = get_generators(bidding_zone, day)
+
+    # Create generator lookup by code
+    gen_by_code = Dict(gen.code => gen for gen in generators)
+
+    # 3. Load generation data
+    gen_query = """
+    SELECT * FROM simulations.uc_generation
+    WHERE uc_result_id = \$1
+    ORDER BY generator_idx, period_idx
+    """
+
+    gen_df = Euphemia.sql2df_with_retry(gen_query, [uc_result_id])
+
+    # 4. Load net demand data
+    demand_query = """
+    SELECT * FROM simulations.uc_net_demand
+    WHERE uc_result_id = \$1
+    ORDER BY period_idx
+    """
+
+    demand_df = Euphemia.sql2df_with_retry(demand_query, [uc_result_id])
+
+    # 5. Reconstruct matrices and vectors
+    N = summary_df.num_generators[1]
+    T = summary_df.num_periods[1]
+
+    # Initialize matrices
+    g = zeros(Float64, N, T)
+    u = zeros(Float64, N, T)
+    v = zeros(Float64, N, T)
+
+    # Build ordered list of generators based on stored order
+    unique_codes_df = Euphemia.sql2df_with_retry("""
+        SELECT DISTINCT generator_code, generator_idx
+        FROM simulations.uc_generation
+        WHERE uc_result_id = \$1
+        ORDER BY generator_idx
+    """, [uc_result_id])
+
+    ordered_generators = Generator[]
+    for row in eachrow(unique_codes_df)
+        code = row.generator_code
+        if haskey(gen_by_code, code)
+            push!(ordered_generators, gen_by_code[code])
+        else
+            @warn "Generator $code from cache not found in current data"
+        end
+    end
+
+    # Fill matrices from generation data
+    for row in eachrow(gen_df)
+        i = row.generator_idx
+        t = row.period_idx
+        if i <= N && t <= T
+            g[i, t] = row.generation_mw
+            u[i, t] = Float64(row.commitment)
+            v[i, t] = Float64(row.startup)
+        end
+    end
+
+    # Reconstruct time_slots and net_demand
+    time_slots = String[]
+    net_demand = Float64[]
+    renewable_generation = Dict{String,Float64}()
+
+    for row in eachrow(demand_df)
+        time_slot = Dates.format(row.time_slot_utc, dateformat"yyyymmdd-HHMM")
+        push!(time_slots, time_slot)
+        push!(net_demand, row.net_demand_mw)
+        if !ismissing(row.renewable_generation_mw)
+            renewable_generation[time_slot] = row.renewable_generation_mw
+        end
+    end
+
+    # Reconstruct cost breakdown (partial - some fields not stored)
+    cost_breakdown = (
+        production_cost=summary_df.production_cost[1],
+        startup_cost=summary_df.startup_cost[1],
+        noload_cost=summary_df.noload_cost[1],
+        startup_counts=Dict{Symbol,Int}(
+            :hot => summary_df.hot_startups[1],
+            :warm => summary_df.warm_startups[1],
+            :cold => summary_df.cold_startups[1]
+        ),
+        # Placeholder fields (not stored in cache, can be recalculated if needed)
+        generator_costs=Dict{String,Float64}(),
+        fuel_type_costs=Dict{Symbol,Float64}(),
+        period_costs=Float64[],
+        total_capacity=sum(gen.p_max for gen in ordered_generators; init=0.0),
+        avg_committed_capacity=0.0,
+        avg_generation=isempty(net_demand) ? 0.0 : sum(net_demand) / length(net_demand),
+        capacity_utilization=0.0,
+        commitment_utilization=0.0,
+        startup_costs_by_type=Dict{Symbol,Float64}(:hot => 0.0, :warm => 0.0, :cold => 0.0)
+    )
+
+    @info "Loaded UC results from cache for $bidding_zone on $day ($(length(ordered_generators)) generators, $T periods)"
+
+    return (
+        status=OPTIMAL,  # Only OPTIMAL results are cached
+        solver=summary_df.solver[1],
+        generators=ordered_generators,
+        time_slots=time_slots,
+        resolution_minutes=summary_df.resolution_minutes[1],
+        net_demand=net_demand,
+        renewable_generation=renewable_generation,
+        g=g,
+        u=u,
+        v=v,
+        total_cost=summary_df.total_cost[1],
+        cost_breakdown=cost_breakdown,
+        initial_conditions=nothing,  # Not stored, can be re-fetched if needed
+        from_cache=true  # Indicator that this is a cached result
     )
 end
 
