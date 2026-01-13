@@ -63,6 +63,16 @@ result.total_time              # Total processing time
 result = run_multi_zone_for_date_range(Date(2024, 6, 1), Date(2024, 6, 7);
     order_method=:alternative,
     save_to_db=true)
+
+# Parallel UC execution for multi-zone clearing (requires workers)
+using Distributed
+addprocs(4)
+@everywhere using Euphemia
+
+result = run_multi_zone_market_clearing(Date(2024, 6, 15);
+    zones=["GR", "BG", "RO", "HU"],
+    order_method=:uc_based,
+    parallel=true)  # UC solves run in parallel, MPCC runs after all complete
 ```
 
 **Zone discovery:**
@@ -264,6 +274,14 @@ Caching behavior:
 The `force_rerun` parameter is passed through the entire call chain:
 - `generate_energy_prices()` → `create_typed_order_book()` → `generate_market_orders_from_uc()` → `solve_unit_commitment()`
 - `run_multi_zone_market_clearing()` → `create_multi_zone_order_book()` → `generate_market_orders_from_uc()` → `solve_unit_commitment()`
+
+**Parallel UC execution:**
+When `parallel=true` in `run_multi_zone_market_clearing()`:
+- UC solves for each zone run concurrently using `Distributed.pmap`
+- Requires workers: `addprocs(n)` + `@everywhere using Euphemia`
+- Falls back to sequential if no workers available
+- Cache reads/writes are safe (zone-specific keys, PostgreSQL transactions)
+- Gurobi users: respect license limits (typically 1-4 concurrent tokens)
 
 ## Development Commands
 

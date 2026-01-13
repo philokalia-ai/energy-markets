@@ -2,6 +2,7 @@ module MPCC
 
 using JuMP, Dates, DataFrames
 using JuMP: AffExpr
+using Distributed: myid, workers, pmap
 
 # Import shared solver selection from parent module
 import ..select_solver
@@ -208,9 +209,75 @@ end
 
 
 """
+    _process_zone_for_order_book(args::Tuple) -> NamedTuple
+
+Worker function for parallel zone processing in multi-zone order book creation.
+Processes a single zone and returns market orders as a named tuple.
+
+# Arguments (unpacked from tuple)
+- `zone::String`: Bidding zone to process
+- `day::Date`: Market day
+- `markup_factor::Float64`: Markup factor for supply bids
+- `optimizer::String`: Solver preference
+- `use_cache::Bool`: Whether to use UC result caching
+- `force_rerun::Bool`: Whether to force UC re-solve
+
+# Returns
+Named tuple with fields:
+- `zone`: Zone identifier
+- `success`: Whether processing succeeded
+- `supply_orders`: Supply orders from UC
+- `demand_orders`: Demand orders from UC
+- `message`: Status message
+- `elapsed_time`: Processing time in seconds
+- `worker_id`: ID of the worker that processed this zone
+"""
+function _process_zone_for_order_book(args)
+    zone, day, markup_factor, optimizer, use_cache, force_rerun = args
+    worker_id = myid()
+    start_time = time()
+
+    try
+        uc_to_bids = generate_market_orders_from_uc(zone, day;
+            markup_factor=markup_factor,
+            optimizer=optimizer,
+            use_cache=use_cache,
+            force_rerun=force_rerun
+        )
+
+        elapsed = time() - start_time
+
+        return (
+            zone=zone,
+            success=uc_to_bids.success,
+            supply_orders=uc_to_bids.success ? uc_to_bids.supply_orders : SimpleOrder[],
+            demand_orders=uc_to_bids.success ? uc_to_bids.demand_orders : SimpleOrder[],
+            message=uc_to_bids.message,
+            elapsed_time=elapsed,
+            worker_id=worker_id
+        )
+    catch e
+        elapsed = time() - start_time
+        return (
+            zone=zone,
+            success=false,
+            supply_orders=SimpleOrder[],
+            demand_orders=SimpleOrder[],
+            message="Error: $e",
+            elapsed_time=elapsed,
+            worker_id=worker_id
+        )
+    end
+end
+
+
+"""
     create_multi_zone_order_book(zones::Vector{String}, day::Date;
                                   markup_factor::Float64=DEFAULT_MARKUP_FACTOR,
-                                  optimizer::String="auto")
+                                  optimizer::String="auto",
+                                  use_cache::Bool=true,
+                                  force_rerun::Bool=false,
+                                  parallel::Bool=false)
 
 Creates a multi-zone market order book by aggregating orders from multiple bidding zones
 and attaching transfer capacity constraints between zones.
@@ -220,15 +287,24 @@ and attaching transfer capacity constraints between zones.
 - `day::Date`: Day for which to create the order book
 - `markup_factor::Float64`: Markup factor for supply bids above marginal cost (default: 1.1)
 - `optimizer::String`: Solver preference for unit commitment ("auto", "highs", "gurobi", "cplex")
+- `use_cache::Bool`: Whether to use cached UC results (default: true)
+- `force_rerun::Bool`: Whether to force UC re-solve, bypassing cache (default: false)
+- `parallel::Bool`: Whether to process zones in parallel using Distributed.jl (default: false)
 
 # Returns
 - `MPCCOrderBook`: Multi-zone order book with transfer capacity constraints attached
+
+# Parallel Execution
+When `parallel=true`, zones are processed concurrently using `pmap`. Requires workers to be
+set up externally via `addprocs(n)` and `@everywhere using Euphemia`. Falls back to
+sequential processing if no workers are available.
 """
 function create_multi_zone_order_book(zones::Vector{String}, day::Date;
                                       markup_factor::Float64=DEFAULT_MARKUP_FACTOR,
                                       optimizer::String="auto",
                                       use_cache::Bool=true,
-                                      force_rerun::Bool=false)
+                                      force_rerun::Bool=false,
+                                      parallel::Bool=false)
     if isempty(zones)
         error("At least one bidding zone must be specified")
     end
@@ -240,43 +316,88 @@ function create_multi_zone_order_book(zones::Vector{String}, day::Date;
     all_periods = Set{String}()
     failed_zones = String[]
 
-    for zone in zones
-        try
-            println("   📊 Processing zone $zone...")
+    # Check for parallel execution
+    use_parallel = parallel
+    if use_parallel
+        worker_ids = filter(id -> id != 1, workers())
+        available_workers = length(worker_ids)
 
-            # Generate market orders from real unit commitment for this zone (will use cache if available)
-            uc_to_bids = generate_market_orders_from_uc(zone, day;
-                markup_factor=markup_factor,
-                optimizer=optimizer,
-                use_cache=use_cache,
-                force_rerun=force_rerun
-            )
+        if available_workers == 0
+            @warn "Parallel processing requested but no workers available. Falling back to sequential."
+            use_parallel = false
+        else
+            println("   ⚡ Parallel mode enabled with $available_workers workers")
+        end
+    end
 
-            if !uc_to_bids.success
-                @warn "Failed to generate market orders for zone $zone: $(uc_to_bids.message)"
-                push!(failed_zones, zone)
-                continue
-            end
+    if use_parallel
+        # Parallel path: process all zones concurrently using pmap
+        println("   📊 Processing $(length(zones)) zones in parallel...")
+        pmap_args = [(zone, day, markup_factor, optimizer, use_cache, force_rerun) for zone in zones]
+        zone_results = pmap(_process_zone_for_order_book, pmap_args)
 
-            # Append supply and demand orders
-            append!(all_orders, uc_to_bids.supply_orders)
-            append!(all_orders, uc_to_bids.demand_orders)
+        # Aggregate results from parallel execution
+        for result in zone_results
+            if result.success
+                append!(all_orders, result.supply_orders)
+                append!(all_orders, result.demand_orders)
 
-            # Collect time periods from orders
-            for order in uc_to_bids.supply_orders
-                if isa(order, SimpleOrder)
-                    date_str = Dates.format(order.date_time, "yyyymmdd")
-                    time_str = Dates.format(order.date_time, "HHMM")
-                    timeslot = "$(date_str)-$(time_str)"
-                    push!(all_periods, timeslot)
+                # Collect time periods from supply orders
+                for order in result.supply_orders
+                    if isa(order, SimpleOrder)
+                        date_str = Dates.format(order.date_time, "yyyymmdd")
+                        time_str = Dates.format(order.date_time, "HHMM")
+                        timeslot = "$(date_str)-$(time_str)"
+                        push!(all_periods, timeslot)
+                    end
                 end
+
+                println("      [Worker $(result.worker_id)] $(result.zone): $(length(result.supply_orders)) supply + $(length(result.demand_orders)) demand ($(round(result.elapsed_time, digits=1))s)")
+            else
+                @warn "Failed zone $(result.zone): $(result.message)"
+                push!(failed_zones, result.zone)
             end
+        end
+    else
+        # Sequential path: process zones one at a time (original behavior)
+        for zone in zones
+            try
+                println("   📊 Processing zone $zone...")
 
-            println("      ✅ Added $(length(uc_to_bids.supply_orders)) supply + $(length(uc_to_bids.demand_orders)) demand orders")
+                # Generate market orders from real unit commitment for this zone (will use cache if available)
+                uc_to_bids = generate_market_orders_from_uc(zone, day;
+                    markup_factor=markup_factor,
+                    optimizer=optimizer,
+                    use_cache=use_cache,
+                    force_rerun=force_rerun
+                )
 
-        catch e
-            @error "Error processing zone $zone: $e"
-            push!(failed_zones, zone)
+                if !uc_to_bids.success
+                    @warn "Failed to generate market orders for zone $zone: $(uc_to_bids.message)"
+                    push!(failed_zones, zone)
+                    continue
+                end
+
+                # Append supply and demand orders
+                append!(all_orders, uc_to_bids.supply_orders)
+                append!(all_orders, uc_to_bids.demand_orders)
+
+                # Collect time periods from orders
+                for order in uc_to_bids.supply_orders
+                    if isa(order, SimpleOrder)
+                        date_str = Dates.format(order.date_time, "yyyymmdd")
+                        time_str = Dates.format(order.date_time, "HHMM")
+                        timeslot = "$(date_str)-$(time_str)"
+                        push!(all_periods, timeslot)
+                    end
+                end
+
+                println("      ✅ Added $(length(uc_to_bids.supply_orders)) supply + $(length(uc_to_bids.demand_orders)) demand orders")
+
+            catch e
+                @error "Error processing zone $zone: $e"
+                push!(failed_zones, zone)
+            end
         end
     end
 
