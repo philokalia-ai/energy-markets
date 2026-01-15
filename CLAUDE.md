@@ -64,15 +64,23 @@ result = run_multi_zone_for_date_range(Date(2024, 6, 1), Date(2024, 6, 7);
     order_method=:alternative,
     save_to_db=true)
 
-# Parallel UC execution for multi-zone clearing (requires workers)
+# Parallel UC execution (requires workers)
 using Distributed
 addprocs(4)
 @everywhere using Euphemia
 
+# Single date with parallel UC
 result = run_multi_zone_market_clearing(Date(2024, 6, 15);
     zones=["GR", "BG", "RO", "HU"],
     order_method=:uc_based,
     parallel=true)  # UC solves run in parallel, MPCC runs after all complete
+
+# Date range with parallel UC
+result = run_multi_zone_for_date_range(Date(2023, 1, 1), Date(2024, 12, 31);
+    order_method=:uc_based,
+    parallel=true,       # UC solves run in parallel per date
+    force_rerun=false,   # Set true to bypass UC cache
+    save_to_db=true)
 ```
 
 **Zone discovery:**
