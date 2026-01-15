@@ -1087,7 +1087,9 @@ end
                                   markup_factor::Float64=1.1,
                                   silent::Bool=true,
                                   save_to_db::Bool=false,
-                                  skip_existing::Bool=true)
+                                  skip_existing::Bool=true,
+                                  force_rerun::Bool=false,
+                                  parallel::Bool=false)
 
 Run multi-zone market clearing with cross-border transmission flows for a date range.
 
@@ -1104,6 +1106,8 @@ Provides comprehensive progress tracking and timing statistics.
 - `silent::Bool`: Whether to suppress solver output (default: true)
 - `save_to_db::Bool`: Whether to save results to database (default: false)
 - `skip_existing::Bool`: Whether to skip dates that already have data (default: true)
+- `force_rerun::Bool`: Whether to force UC re-solve, bypassing cache (default: false)
+- `parallel::Bool`: Whether to run UC for each zone in parallel using Distributed.jl (default: false)
 
 # Returns
 - `NamedTuple` with the following fields:
@@ -1155,7 +1159,9 @@ function run_multi_zone_for_date_range(start_date::Date, end_date::Date;
                                        markup_factor::Float64=1.1,
                                        silent::Bool=true,
                                        save_to_db::Bool=false,
-                                       skip_existing::Bool=true)
+                                       skip_existing::Bool=true,
+                                       force_rerun::Bool=false,
+                                       parallel::Bool=false)
 
     # Validate date range
     if start_date > end_date
@@ -1248,7 +1254,9 @@ function run_multi_zone_for_date_range(start_date::Date, end_date::Date;
                                                     optimizer=optimizer,
                                                     markup_factor=markup_factor,
                                                     silent=silent,
-                                                    save_to_db=save_to_db)
+                                                    save_to_db=save_to_db,
+                                                    force_rerun=force_rerun,
+                                                    parallel=parallel)
 
             date_elapsed = time() - date_start_time
 
