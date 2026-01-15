@@ -1534,7 +1534,8 @@ function generate_energy_prices_for_all_zones(date::Date;
     progress_callback::Union{Function,Nothing}=nothing,
     parallel::Bool=false,
     max_workers::Union{Int,Nothing}=nothing,
-    chunk_size::Int=1)
+    chunk_size::Int=1,
+    force_rerun::Bool=false)
 
     start_time = time()
 
@@ -1877,7 +1878,8 @@ function generate_energy_prices_for_date_range(start_date::Date, end_date::Date;
     progress_callback::Union{Function,Nothing}=nothing,
     parallel::Bool=false,
     max_workers::Union{Int,Nothing}=nothing,
-    chunk_size::Int=1)
+    chunk_size::Int=1,
+    force_rerun::Bool=false)
 
     # Validate date range
     if start_date > end_date
@@ -1929,7 +1931,7 @@ function generate_energy_prices_for_date_range(start_date::Date, end_date::Date;
             date_results = _process_dates_parallel(
                 dates, order_method, model, optimizer, markup_factor,
                 random_seed, silent, save_to_db, max_retries, retry_delay,
-                fallback_zones, skip_existing, range_start_time
+                fallback_zones, skip_existing, range_start_time, force_rerun
             )
 
             # Aggregate results from parallel processing
@@ -1969,7 +1971,8 @@ function generate_energy_prices_for_date_range(start_date::Date, end_date::Date;
                     progress_callback=nothing,  # Disable per-zone callbacks to avoid clutter
                     parallel=false,  # Force sequential zones when processing dates in sequence
                     max_workers=1,
-                    chunk_size=1)
+                    chunk_size=1,
+                    force_rerun=force_rerun)
 
                 date_elapsed = time() - date_start_time
 
@@ -2196,14 +2199,14 @@ Helper function for processing dates in parallel.
 """
 function _process_dates_parallel(dates, order_method, model, optimizer, markup_factor,
     random_seed, silent, save_to_db, max_retries, retry_delay,
-    fallback_zones, skip_existing, range_start_time)
+    fallback_zones, skip_existing, range_start_time, force_rerun)
 
     println("📦 Processing $(length(dates)) dates in parallel...")
 
     # Create arguments tuple for each date
     date_args = [(date, order_method, model, optimizer, markup_factor, random_seed,
         silent, save_to_db, max_retries, retry_delay, fallback_zones,
-        skip_existing, range_start_time) for date in dates]
+        skip_existing, range_start_time, force_rerun) for date in dates]
 
     # Process dates in parallel using pmap
     date_results = pmap(_parallel_date_processor, date_args)
@@ -2217,7 +2220,7 @@ Wrapper function for pmap to process a single date.
 function _parallel_date_processor(args)
     date, order_method, model, optimizer, markup_factor, random_seed,
     silent, save_to_db, max_retries, retry_delay, fallback_zones,
-    skip_existing, range_start_time = args
+    skip_existing, range_start_time, force_rerun = args
 
     date_start_time = time()
     worker_id = myid()
@@ -2241,7 +2244,8 @@ function _parallel_date_processor(args)
             progress_callback=nothing,  # No callbacks in parallel mode
             parallel=false,  # Always sequential zones in parallel date mode
             max_workers=1,
-            chunk_size=1)
+            chunk_size=1,
+            force_rerun=force_rerun)
 
         date_elapsed = time() - date_start_time
         date_successful = zones_result.success_count > 0
@@ -2391,7 +2395,8 @@ function _process_zones_sequential(zones_to_process, date, order_method, model, 
                     markup_factor=markup_factor,
                     random_seed=random_seed,
                     silent=silent,
-                    save_to_db=save_to_db)
+                    save_to_db=save_to_db,
+                    force_rerun=force_rerun)
 
                 if !isempty(zone_prices)
                     zone_success = true
@@ -2565,7 +2570,8 @@ function _process_zone_chunk(zone_chunk, date, order_method, model, optimizer,
                     markup_factor=markup_factor,
                     random_seed=random_seed,
                     silent=silent,
-                    save_to_db=save_to_db)
+                    save_to_db=save_to_db,
+                    force_rerun=force_rerun)
 
                 if !isempty(zone_prices)
                     zone_success = true

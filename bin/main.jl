@@ -12,6 +12,7 @@
 # - OPTIMIZER: Optimizer to use (highs/gurobi/cplex)
 # - MAX_WORKERS: Maximum parallel workers (0 for auto-detect)
 # - ORDER_METHOD: Order generation method (uc_based/alternative)
+# - FORCE_RERUN: Force UC re-solve, bypassing cache (true/false)
 
 using Euphemia, Dates
 using Distributed  # Add this for parallel processing
@@ -23,6 +24,7 @@ use_parallel = parse(Bool, ENV["PARALLEL"])
 optimizer = ENV["OPTIMIZER"]
 max_workers_input = ENV["MAX_WORKERS"]
 order_method = Symbol(ENV["ORDER_METHOD"])
+force_rerun = parse(Bool, get(ENV, "FORCE_RERUN", "false"))
 
 # Parse max_workers (0 means auto-detect)
 max_workers = if max_workers_input == "0"
@@ -37,6 +39,7 @@ println("⚡ Parallel: $use_parallel")
 println("👥 Max workers: $(max_workers === nothing ? "auto" : max_workers)")
 println("⚖️ Optimizer: $optimizer")
 println("📋 Order method: $order_method")
+println("🔄 Force rerun: $force_rerun")
 println()
 
 # Set up parallel processing if requested
@@ -78,7 +81,8 @@ try
         chunk_size=3,
         silent=true,
         max_retries=3,
-        retry_delay=2.0
+        retry_delay=2.0,
+        force_rerun=force_rerun
     )
 
     # Extract metrics
