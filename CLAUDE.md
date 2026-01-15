@@ -296,9 +296,9 @@ When `parallel=true` in `run_multi_zone_market_clearing()`:
 **Gurobi license constraints:**
 - WLS (Web License Service) limits concurrent solver sessions (check "session baseline" in your Gurobi profile)
 - Each parallel UC worker consumes 1 session while actively solving
-- Example: With 2-session baseline, use `max_workers=2` maximum for Gurobi
+- **Automatic cap**: Scripts automatically limit `max_workers` to 2 when using Gurobi with parallel mode
 - "Max distributed workers" is unrelated (for Gurobi's distributed MIP, not parallel independent solves)
-- Recommendation: Use HiGHS for parallel runs (unlimited, open-source), Gurobi for sequential/single-zone
+- To change the cap, edit `gurobi_max` in `bin/main.jl` and `bin/multi_zone_main.jl`
 
 ## Development Commands
 
