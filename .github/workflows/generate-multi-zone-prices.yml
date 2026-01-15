@@ -1,0 +1,218 @@
+name: Generate Multi-Zone Prices
+
+on:
+  schedule:
+    # Run daily at 3 AM UTC for previous day (offset from single-zone workflow)
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+    inputs:
+      start_date:
+        description: "Start date (YYYY-MM-DD)"
+        required: true
+        default: "2025-11-01"
+        type: string
+      end_date:
+        description: "End date (YYYY-MM-DD)"
+        required: true
+        default: "2025-11-07"
+        type: string
+      parallel:
+        description: "Use parallel UC processing"
+        required: false
+        default: true
+        type: boolean
+      optimizer:
+        description: "Optimizer to use"
+        required: false
+        default: "highs"
+        type: choice
+        options:
+          - highs
+          - gurobi
+          - cplex
+      max_workers:
+        description: "Maximum parallel workers (0 = auto-detect)"
+        required: false
+        default: "20"
+        type: string
+      order_method:
+        description: "Order generation method"
+        required: false
+        default: "uc_based"
+        type: choice
+        options:
+          - uc_based
+          - alternative
+
+env:
+  JULIA_VERSION: "1.11"
+  JULIA_NUM_THREADS: 4
+
+jobs:
+  generate-multi-zone-prices:
+    runs-on: [self-hosted, linux, ARM64]
+    timeout-minutes: 2880 # 48 hours timeout
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Julia
+        uses: julia-actions/setup-julia@v1
+        with:
+          version: ${{ env.JULIA_VERSION }}
+
+      - name: Cache Julia packages
+        uses: julia-actions/cache@v1
+
+      - name: Setup Gurobi license (if using Gurobi)
+        if: ${{ github.event.inputs.optimizer == 'gurobi' }}
+        env:
+          GUROBI_ACCESS_ID: ${{ secrets.WLSACCESSID }}
+          GUROBI_WLS_SECRET: ${{ secrets.WLSSECRET }}
+          GUROBI_LICENSE_ID: ${{ secrets.LICENSEID }}
+        run: |
+          if [ -n "$GUROBI_ACCESS_ID" ] && [ -n "$GUROBI_WLS_SECRET" ] && [ -n "$GUROBI_LICENSE_ID" ]; then
+            echo "::add-mask::$GUROBI_ACCESS_ID"
+            echo "::add-mask::$GUROBI_WLS_SECRET"
+            echo "::add-mask::$GUROBI_LICENSE_ID"
+
+            umask 077
+            {
+              echo "WLSACCESSID=$GUROBI_ACCESS_ID"
+              echo "WLSSECRET=$GUROBI_WLS_SECRET"
+              echo "LICENSEID=$GUROBI_LICENSE_ID"
+            } > gurobi.lic
+            chmod 600 gurobi.lic
+
+            trap 'rm -f gurobi.lic' EXIT
+
+            echo "GRB_LICENSE_FILE=$PWD/gurobi.lic" >> $GITHUB_ENV
+            echo "✅ Gurobi WLS license configured"
+          else
+            echo "⚠️ Missing Gurobi WLS credentials, will fallback to HiGHS"
+          fi
+
+      - name: Install Julia dependencies
+        run: |
+          julia --project=. -e "
+            using Pkg
+            println(\"📦 Resolving dependencies...\")
+            Pkg.resolve()
+            println(\"📦 Installing dependencies...\")
+            Pkg.instantiate()
+            Pkg.precompile()
+            println(\"✅ Dependencies installed successfully\")
+          "
+
+      - name: Setup database connection
+        env:
+          ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
+        run: |
+          julia --project=. -e "
+            using Euphemia
+            println(\"🔗 Testing database connection...\")
+            try
+              result = Euphemia.sql2df(\"SELECT 1 as test\")
+              println(\"✅ Database connection successful\")
+            catch e
+              println(\"❌ Database connection failed: \$e\")
+              exit(1)
+            end
+          "
+
+      - name: Generate multi-zone prices
+        id: generate
+        env:
+          ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
+        run: |
+          # Set default dates if scheduled trigger
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            START_DATE=$(date -d "yesterday" +%Y-%m-%d)
+            END_DATE=$START_DATE
+            PARALLEL=true
+            OPTIMIZER="highs"
+            MAX_WORKERS=16
+            ORDER_METHOD="uc_based"
+          else
+            START_DATE="${{ github.event.inputs.start_date }}"
+            END_DATE="${{ github.event.inputs.end_date }}"
+            PARALLEL="${{ github.event.inputs.parallel }}"
+            OPTIMIZER="${{ github.event.inputs.optimizer }}"
+            MAX_WORKERS="${{ github.event.inputs.max_workers }}"
+            ORDER_METHOD="${{ github.event.inputs.order_method }}"
+          fi
+
+          echo "🌍 Multi-zone market clearing"
+          echo "📅 Date range: $START_DATE to $END_DATE"
+          echo "⚖️ Optimizer: $OPTIMIZER"
+          echo "⚡ Parallel UC: $PARALLEL"
+          echo "👥 Max workers: $MAX_WORKERS"
+          echo "📋 Order method: $ORDER_METHOD"
+
+          export START_DATE END_DATE PARALLEL OPTIMIZER MAX_WORKERS ORDER_METHOD
+
+          julia --project=. bin/multi_zone_main.jl
+
+      - name: Create execution summary
+        if: always()
+        run: |
+          echo "## 🌍 Multi-Zone Market Clearing Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            TRIGGER="⏰ Scheduled (daily)"
+            DATE_RANGE="$(date -d "yesterday" +%Y-%m-%d)"
+          else
+            TRIGGER="🖱️ Manual"
+            DATE_RANGE="${{ github.event.inputs.start_date }} to ${{ github.event.inputs.end_date }}"
+          fi
+
+          echo "### Execution Details" >> $GITHUB_STEP_SUMMARY
+          echo "- **Trigger**: $TRIGGER" >> $GITHUB_STEP_SUMMARY
+          echo "- **Date Range**: $DATE_RANGE" >> $GITHUB_STEP_SUMMARY
+          echo "- **Optimizer**: ${{ github.event.inputs.optimizer || 'highs' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Parallel UC**: ${{ github.event.inputs.parallel || 'true' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Order Method**: ${{ github.event.inputs.order_method || 'uc_based' }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ steps.generate.outputs.status }}" = "success" ]; then
+            echo "### ✅ Results" >> $GITHUB_STEP_SUMMARY
+            echo "- **Date Success**: ${{ steps.generate.outputs.successful_dates }}/${{ steps.generate.outputs.total_dates }} (${{ steps.generate.outputs.date_success_rate }}%)" >> $GITHUB_STEP_SUMMARY
+            echo "- **Skipped**: ${{ steps.generate.outputs.skipped_dates }}" >> $GITHUB_STEP_SUMMARY
+            echo "- **Failed**: ${{ steps.generate.outputs.failed_dates }}" >> $GITHUB_STEP_SUMMARY
+            echo "- **Processing Time**: ${{ steps.generate.outputs.processing_time_hours }} hours" >> $GITHUB_STEP_SUMMARY
+
+            if [ -n "${{ steps.generate.outputs.avg_price }}" ]; then
+              echo "- **Price Range**: €${{ steps.generate.outputs.min_price }} - €${{ steps.generate.outputs.max_price }}/MWh" >> $GITHUB_STEP_SUMMARY
+              echo "- **Average Price**: €${{ steps.generate.outputs.avg_price }}/MWh" >> $GITHUB_STEP_SUMMARY
+              echo "- **Zone-Days Processed**: ${{ steps.generate.outputs.total_zone_days }}" >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo "### ❌ Failure" >> $GITHUB_STEP_SUMMARY
+            ERROR_MSG="${{ steps.generate.outputs.error_message || 'Unknown error' }}"
+            echo "- **Error**: ${ERROR_MSG}" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Notify on failure
+        if: failure()
+        uses: 8398a7/action-slack@v3
+        with:
+          status: failure
+          webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          text: |
+            🚨 Multi-zone market clearing failed!
+            📅 Date range: ${{ github.event.inputs.start_date || 'yesterday' }} to ${{ github.event.inputs.end_date || 'yesterday' }}
+            🔗 View details: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        continue-on-error: true
+
+      - name: Notify on success
+        if: success()
+        uses: 8398a7/action-slack@v3
+        with:
+          status: success
+          webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          text: |
+            ✅ Multi-zone market clearing completed!
+            📅 Processed: ${{ steps.generate.outputs.successful_dates }}/${{ steps.generate.outputs.total_dates }} dates
+            ⏱️ Time: ${{ steps.generate.outputs.processing_time_hours }} hours
+        continue-on-error: true
