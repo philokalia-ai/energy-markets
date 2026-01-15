@@ -48,6 +48,11 @@ on:
         required: false
         default: false
         type: boolean
+      markup_factor:
+        description: "Price markup factor for supply bids"
+        required: false
+        default: "1.1"
+        type: string
 
 env:
   JULIA_VERSION: "1.11"
@@ -172,6 +177,7 @@ jobs:
             MAX_WORKERS=16
             ORDER_METHOD="alternative"
             FORCE_RERUN=false
+            MARKUP_FACTOR="1.1"
           else
             # For manual runs, use inputs
             START_DATE="${{ github.event.inputs.start_date }}"
@@ -181,6 +187,7 @@ jobs:
             MAX_WORKERS="${{ github.event.inputs.max_workers }}"
             ORDER_METHOD="${{ github.event.inputs.order_method }}"
             FORCE_RERUN="${{ github.event.inputs.force_rerun }}"
+            MARKUP_FACTOR="${{ github.event.inputs.markup_factor }}"
           fi
 
           echo "📅 Processing date range: $START_DATE to $END_DATE"
@@ -189,9 +196,10 @@ jobs:
           echo "👥 Max workers: $MAX_WORKERS"
           echo "📋 Order method: $ORDER_METHOD"
           echo "🔄 Force rerun: $FORCE_RERUN"
+          echo "💹 Markup factor: $MARKUP_FACTOR"
 
           # Export environment variables for Julia script
-          export START_DATE END_DATE PARALLEL OPTIMIZER MAX_WORKERS ORDER_METHOD FORCE_RERUN
+          export START_DATE END_DATE PARALLEL OPTIMIZER MAX_WORKERS ORDER_METHOD FORCE_RERUN MARKUP_FACTOR
 
           # Execute the price generation script
           julia --project=. bin/main.jl
