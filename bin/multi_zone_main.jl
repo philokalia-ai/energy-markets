@@ -38,6 +38,16 @@ else
     parse(Int, max_workers_input)
 end
 
+# Limit workers to 2 for Gurobi (WLS license session baseline constraint)
+if optimizer == "gurobi" && use_parallel
+    gurobi_max = 2
+    if max_workers === nothing || max_workers > gurobi_max
+        println("⚠️ Gurobi WLS license limits concurrent sessions to $gurobi_max")
+        println("   Capping max_workers from $(max_workers === nothing ? "auto" : max_workers) to $gurobi_max")
+        max_workers = gurobi_max
+    end
+end
+
 println("🌍 Starting multi-zone market clearing")
 println("📅 Date range: $start_date to $end_date")
 println("⚡ Parallel UC: $use_parallel")
