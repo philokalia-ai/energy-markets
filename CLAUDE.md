@@ -36,13 +36,16 @@ The main module `Euphemia` provides:
 # Generate prices for a single zone
 prices = generate_energy_prices("GR", Date(2024, 6, 15);
     order_method=:uc_based,  # or :alternative (faster)
-    save_to_db=true)
+    save_to_db=true,
+    force_rerun=false)       # Set true to bypass UC cache
 
 # Process all zones for a single date
-result = generate_energy_prices_for_all_zones(Date(2024, 6, 15))
+result = generate_energy_prices_for_all_zones(Date(2024, 6, 15);
+    force_rerun=false)       # Propagates to all zone solves
 
 # Process a date range
-result = generate_energy_prices_for_date_range(Date(2024, 6, 1), Date(2024, 6, 7))
+result = generate_energy_prices_for_date_range(Date(2024, 6, 1), Date(2024, 6, 7);
+    force_rerun=false)       # Propagates to all date/zone solves
 ```
 
 **Multi-zone market clearing with transmission flows:**
@@ -280,8 +283,8 @@ Caching behavior:
 - Storage: ~195 KB per zone/day (~700 MB/year for 10 zones)
 
 The `force_rerun` parameter is passed through the entire call chain:
-- `generate_energy_prices()` → `create_typed_order_book()` → `generate_market_orders_from_uc()` → `solve_unit_commitment()`
-- `run_multi_zone_market_clearing()` → `create_multi_zone_order_book()` → `generate_market_orders_from_uc()` → `solve_unit_commitment()`
+- `generate_energy_prices_for_date_range()` → `generate_energy_prices_for_all_zones()` → `generate_energy_prices()` → `create_typed_order_book()` → `generate_market_orders_from_uc()` → `solve_unit_commitment()`
+- `run_multi_zone_for_date_range()` → `run_multi_zone_market_clearing()` → `create_multi_zone_order_book()` → `generate_market_orders_from_uc()` → `solve_unit_commitment()`
 
 **Parallel UC execution:**
 When `parallel=true` in `run_multi_zone_market_clearing()`:
