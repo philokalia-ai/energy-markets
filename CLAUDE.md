@@ -292,7 +292,13 @@ When `parallel=true` in `run_multi_zone_market_clearing()`:
 - Requires workers: `addprocs(n)` + `@everywhere using Euphemia`
 - Falls back to sequential if no workers available
 - Cache reads/writes are safe (zone-specific keys, PostgreSQL transactions)
-- Gurobi users: respect license limits (typically 1-4 concurrent tokens)
+
+**Gurobi license constraints:**
+- WLS (Web License Service) limits concurrent solver sessions (check "session baseline" in your Gurobi profile)
+- Each parallel UC worker consumes 1 session while actively solving
+- Example: With 2-session baseline, use `max_workers=2` maximum for Gurobi
+- "Max distributed workers" is unrelated (for Gurobi's distributed MIP, not parallel independent solves)
+- Recommendation: Use HiGHS for parallel runs (unlimited, open-source), Gurobi for sequential/single-zone
 
 ## Development Commands
 
