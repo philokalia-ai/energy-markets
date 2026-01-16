@@ -513,6 +513,7 @@ The project uses PostgreSQL with two main schemas:
 - `resolution_minutes`: Time period resolution (15, 30, or 60)
 - `total_cost`, `production_cost`, `startup_cost`, `noload_cost`: Cost components
 - `hot_startups`, `warm_startups`, `cold_startups`: Startup counts by type
+- `total_curtailment_mwh`, `curtailment_cost`: Renewable curtailment summary
 
 **`simulations.uc_generation`** - Detailed generation data per generator per period
 - `uc_result_id`: Foreign key to `uc_results`
@@ -523,6 +524,7 @@ The project uses PostgreSQL with two main schemas:
 - `uc_result_id`: Foreign key to `uc_results`
 - `period_idx`, `time_slot_utc`: Time period identification
 - `net_demand_mw`, `renewable_generation_mw`: Demand and renewable data
+- `curtailment_mw`: Renewable curtailment per period (MW)
 
 **Joining prices with optimization metadata:**
 ```sql
