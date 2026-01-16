@@ -234,6 +234,41 @@ Unit commitment objective function components:
   - Base startup cost = `startup_cost_multiplier × marginal_cost × p_max`
   - From `FuelTypeParameters` for each fuel type
 - **No-load costs**: Fixed cost when committed = `no_load_cost_fraction × marginal_cost × p_min × period_hours`
+- **Curtailment costs**: Penalty for spilling renewable generation (default 1 €/MWh)
+
+**Renewable curtailment:**
+
+The UC solver allows renewable curtailment to handle infeasibility when thermal P_min constraints exceed net demand. This is common in high-RES penetration scenarios.
+
+```julia
+# Default: curtailment allowed with 1 €/MWh penalty
+solution = solve_unit_commitment("GR", Date(2024, 6, 15))
+
+# Custom curtailment penalty (higher = less curtailment)
+solution = solve_unit_commitment("GR", Date(2024, 6, 15);
+    curtailment_penalty=5.0)  # 5 €/MWh penalty
+
+# Access curtailment data
+solution.curtailment      # Vector of curtailment per period (MWh)
+solution.curtailment_cost # Total curtailment cost (€)
+solution.load_values      # Raw load values (before net demand)
+solution.renewable_values # Raw renewable forecast values
+```
+
+How curtailment works:
+- **Balance constraint**: `Generation = Load - Renewables + Curtailment`
+- **Curtailment bounds**: `0 ≤ Curtailment[t] ≤ Renewables[t]`
+- **Objective**: Adds `curtailment_penalty × sum(Curtailment)` to minimize unnecessary spilling
+
+When curtailment is needed:
+- Sum of committed thermal P_min exceeds net demand
+- High renewable generation + low load periods
+- Min uptime constraints prevent thermal unit shutdown
+
+The curtailment penalty should reflect:
+- `0 €/MWh`: Free curtailment (pure technical feasibility)
+- `1-5 €/MWh`: Typical values (political/subsidy signal)
+- Higher values reduce curtailment but may cause infeasibility
 
 Cost breakdown fields:
 ```julia

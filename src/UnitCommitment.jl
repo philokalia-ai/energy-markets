@@ -137,6 +137,14 @@ function print_cost_report(solution, day; resolution_minutes::Int=60)
     println("      Cold startups: $(breakdown.startup_counts[:cold]) @ $(round(breakdown.startup_costs_by_type[:cold], digits=2)) EUR")
     println("   No-load costs:    $(round(breakdown.noload_cost, digits=2)) EUR ($(round(breakdown.noload_cost/total_cost*100, digits=1))%)")
 
+    # Curtailment info (if available)
+    if hasproperty(solution, :curtailment) && sum(solution.curtailment) > 0.1
+        curtailment_mwh = sum(solution.curtailment)
+        curtailment_cost = solution.curtailment_cost
+        println("   Curtailment cost: $(round(curtailment_cost, digits=2)) EUR ($(round(curtailment_cost/total_cost*100, digits=1))%)")
+        println("      Total curtailed: $(round(curtailment_mwh, digits=1)) MWh")
+    end
+
     println("\nCAPACITY & GENERATION")
     println("   Total installed capacity: $(round(breakdown.total_capacity)) MW")
     println("   Average committed capacity: $(round(breakdown.avg_committed_capacity)) MW")
@@ -178,7 +186,8 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date;
                                mip_gap::Float64=0.01,
                                time_limit::Float64=600.0,
                                use_cache::Bool=true,
-                               force_rerun::Bool=false)
+                               force_rerun::Bool=false,
+                               curtailment_penalty::Float64=1.0)
 
     # Check cache first (unless disabled or force_rerun)
     if use_cache && !force_rerun
@@ -244,12 +253,13 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date;
 
     println("Planning for $T time periods with $N generators ($(resolution_minutes)min resolution, $(periods_per_hour) periods/hour)")
 
-    # Calculate net demand (load - renewables) for each time period
-    net_demand = Float64[]
+    # Store raw load and renewable values for each time period
+    # These are needed for the curtailment formulation
+    load_values = Float64[]
+    renewable_values = Float64[]
     for slot in target_time_slots
-        load_value = get(load_by_time, slot, 0.0)
-        renewable_gen = get(renewable_by_time, slot, 0.0)
-        push!(net_demand, max(0.0, load_value - renewable_gen))  # Ensure non-negative
+        push!(load_values, get(load_by_time, slot, 0.0))
+        push!(renewable_values, get(renewable_by_time, slot, 0.0))
     end
 
     setup_start = time()
@@ -325,6 +335,10 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date;
     # startup and shutdown production profile variables
     @variable(model, g_SU[i=1:N, t=1:T] >= 0)  # startup generation profile
     @variable(model, g_SD[i=1:N, t=1:T] >= 0)  # shutdown generation profile
+
+    # Renewable curtailment variable (allows spilling excess renewable generation)
+    # This resolves infeasibility when thermal P_min constraints exceed net demand
+    @variable(model, 0 <= curtailment[t=1:T] <= renewable_values[t])
 
     # Startup/shutdown time parameters based on fuel type and temperature
     # FuelTypeParameters stores times in HOURS - convert to PERIODS here
@@ -606,11 +620,15 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date;
         g[i, t-1] - g[i, t] <= ramp_down[i] + M * u_SD[i, t]
     )
 
-    # Supply must equal net Demand (demand minus RES production) at all times
-    @constraint(model, [t in 1:T], sum(g[i, t] for i in 1:N) == net_demand[t])
+    # Supply must equal net Demand (demand minus RES production plus curtailment) at all times
+    # Curtailment allows spilling excess renewable generation when thermal P_min > net demand
+    # Formulation: Generation = Load - Renewables + Curtailment
+    # where 0 <= Curtailment <= Renewables (can only curtail what's available)
+    @constraint(model, [t in 1:T],
+        sum(g[i, t] for i in 1:N) == load_values[t] - renewable_values[t] + curtailment[t])
 
     # ==== Objective Function ====
-    # Total cost = Production costs + Startup costs + No-load costs
+    # Total cost = Production costs + Startup costs + No-load costs + Curtailment costs
     @objective(
         model,
         Min,
@@ -620,6 +638,8 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date;
         + sum(C_SU[(i, θ)] * v_θ[i, θ, t] for i in 1:N, θ in Θ, t in 1:T)
         # 3. No-load costs (fixed cost when committed)
         + sum(C_NL[i] * u[i, t] for i in 1:N, t in 1:T)
+        # 4. Curtailment costs (penalty for spilling renewable generation)
+        + curtailment_penalty * sum(curtailment[t] for t in 1:T)
     )
 
     setup_time = time() - setup_start
@@ -639,6 +659,21 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date;
 
     # Post-processing
     postprocess_start = time()
+
+    # Extract curtailment values
+    curtailment_values = value.(curtailment)
+    total_curtailment = sum(curtailment_values)
+    curtailment_cost = curtailment_penalty * total_curtailment
+
+    # Calculate net demand (actual, after curtailment decisions)
+    net_demand = [load_values[t] - renewable_values[t] + curtailment_values[t] for t in 1:T]
+
+    # Log curtailment if any (convert MW-periods to MWh)
+    if total_curtailment > 0.1
+        curtailment_mwh = total_curtailment * period_hours
+        @info "Renewable curtailment applied" energy_mwh=round(curtailment_mwh, digits=1) cost_eur=round(curtailment_cost, digits=2) max_mw=round(maximum(curtailment_values), digits=1) periods_with_curtailment=count(x -> x > 0.1, curtailment_values)
+    end
+
     # Calculate detailed cost breakdown (including startup and no-load costs)
     cost_breakdown = calculate_cost_breakdown(
         generators, value.(g), value.(u), value.(v_θ), Θ, C_SU, C_NL, T, N
@@ -657,7 +692,11 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date;
         time_slots=target_time_slots,
         resolution_minutes=resolution_minutes,
         net_demand=net_demand,
+        load_values=load_values,
+        renewable_values=renewable_values,
         renewable_generation=renewable_by_time,
+        curtailment=curtailment_values,
+        curtailment_cost=curtailment_cost,
         g=value.(g),
         u=value.(u),
         v=value.(v),  # startup decisions
@@ -961,6 +1000,16 @@ function load_uc_results(bidding_zone::String, day::Dates.Date; code_version::In
 
     @info "Loaded UC results from cache for $bidding_zone on $day ($(length(ordered_generators)) generators, $T periods)"
 
+    # Reconstruct load_values from net_demand + renewable_generation
+    # Note: Curtailment is not stored in cache, so we assume zeros
+    load_values = Float64[]
+    renewable_values = Float64[]
+    for (i, slot) in enumerate(time_slots)
+        renewable_val = get(renewable_generation, slot, 0.0)
+        push!(renewable_values, renewable_val)
+        push!(load_values, net_demand[i] + renewable_val)  # Load = NetDemand + Renewables (assuming no curtailment in cache)
+    end
+
     return (
         status=OPTIMAL,  # Only OPTIMAL results are cached
         solver=summary_df.solver[1],
@@ -968,7 +1017,11 @@ function load_uc_results(bidding_zone::String, day::Dates.Date; code_version::In
         time_slots=time_slots,
         resolution_minutes=summary_df.resolution_minutes[1],
         net_demand=net_demand,
+        load_values=load_values,
+        renewable_values=renewable_values,
         renewable_generation=renewable_generation,
+        curtailment=zeros(Float64, T),  # Not stored in cache
+        curtailment_cost=0.0,           # Not stored in cache
         g=g,
         u=u,
         v=v,
