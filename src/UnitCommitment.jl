@@ -774,13 +774,17 @@ function save_uc_results(solution::NamedTuple, bidding_zone::String, day::Dates.
 
                 # Insert summary record
                 cb = solution.cost_breakdown
+                # Calculate curtailment energy in MWh
+                period_hours = solution.resolution_minutes / 60.0
+                total_curtailment_mwh = sum(solution.curtailment) * period_hours
+
                 insert_summary_sql = """
                 INSERT INTO simulations.uc_results
                 (bidding_zone, market_date, status, solver, resolution_minutes,
                  num_generators, num_periods, total_cost, production_cost,
                  startup_cost, noload_cost, hot_startups, warm_startups,
-                 cold_startups, code_version)
-                VALUES (\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8, \$9, \$10, \$11, \$12, \$13, \$14, \$15)
+                 cold_startups, total_curtailment_mwh, curtailment_cost, code_version)
+                VALUES (\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8, \$9, \$10, \$11, \$12, \$13, \$14, \$15, \$16, \$17)
                 RETURNING id
                 """
 
@@ -799,6 +803,8 @@ function save_uc_results(solution::NamedTuple, bidding_zone::String, day::Dates.
                     cb.startup_counts[:hot],
                     cb.startup_counts[:warm],
                     cb.startup_counts[:cold],
+                    total_curtailment_mwh,
+                    solution.curtailment_cost,
                     code_version
                 ])
 
@@ -835,11 +841,11 @@ function save_uc_results(solution::NamedTuple, bidding_zone::String, day::Dates.
                     end
                 end
 
-                # Insert net demand data
+                # Insert net demand data (including curtailment per period)
                 demand_insert_sql = """
                     INSERT INTO simulations.uc_net_demand
-                    (uc_result_id, period_idx, time_slot_utc, net_demand_mw, renewable_generation_mw)
-                    VALUES (\$1, \$2, \$3, \$4, \$5)
+                    (uc_result_id, period_idx, time_slot_utc, net_demand_mw, renewable_generation_mw, curtailment_mw)
+                    VALUES (\$1, \$2, \$3, \$4, \$5, \$6)
                 """
 
                 for t in 1:T
@@ -852,7 +858,8 @@ function save_uc_results(solution::NamedTuple, bidding_zone::String, day::Dates.
                         t,
                         time_slot_dt,
                         solution.net_demand[t],
-                        renewable_gen === nothing ? missing : renewable_gen
+                        renewable_gen === nothing ? missing : renewable_gen,
+                        solution.curtailment[t]
                     ])
                 end
 
@@ -962,19 +969,26 @@ function load_uc_results(bidding_zone::String, day::Dates.Date; code_version::In
         end
     end
 
-    # Reconstruct time_slots and net_demand
+    # Reconstruct time_slots, net_demand, and curtailment
     time_slots = String[]
     net_demand = Float64[]
+    curtailment = Float64[]
     renewable_generation = Dict{String,Float64}()
 
     for row in eachrow(demand_df)
         time_slot = Dates.format(row.time_slot_utc, dateformat"yyyymmdd-HHMM")
         push!(time_slots, time_slot)
         push!(net_demand, row.net_demand_mw)
+        # Read curtailment (default to 0 for backwards compatibility with old cache entries)
+        curtail_val = hasproperty(row, :curtailment_mw) && !ismissing(row.curtailment_mw) ? row.curtailment_mw : 0.0
+        push!(curtailment, curtail_val)
         if !ismissing(row.renewable_generation_mw)
             renewable_generation[time_slot] = row.renewable_generation_mw
         end
     end
+
+    # Read curtailment cost from summary (default to 0 for backwards compatibility)
+    curtailment_cost = hasproperty(summary_df, :curtailment_cost) && !ismissing(summary_df.curtailment_cost[1]) ? summary_df.curtailment_cost[1] : 0.0
 
     # Reconstruct cost breakdown (partial - some fields not stored)
     cost_breakdown = (
@@ -1000,14 +1014,14 @@ function load_uc_results(bidding_zone::String, day::Dates.Date; code_version::In
 
     @info "Loaded UC results from cache for $bidding_zone on $day ($(length(ordered_generators)) generators, $T periods)"
 
-    # Reconstruct load_values from net_demand + renewable_generation
-    # Note: Curtailment is not stored in cache, so we assume zeros
+    # Reconstruct load_values from net_demand + renewable_generation - curtailment
+    # Note: net_demand = load - renewables + curtailment, so load = net_demand + renewables - curtailment
     load_values = Float64[]
     renewable_values = Float64[]
     for (i, slot) in enumerate(time_slots)
         renewable_val = get(renewable_generation, slot, 0.0)
         push!(renewable_values, renewable_val)
-        push!(load_values, net_demand[i] + renewable_val)  # Load = NetDemand + Renewables (assuming no curtailment in cache)
+        push!(load_values, net_demand[i] + renewable_val - curtailment[i])
     end
 
     return (
@@ -1020,8 +1034,8 @@ function load_uc_results(bidding_zone::String, day::Dates.Date; code_version::In
         load_values=load_values,
         renewable_values=renewable_values,
         renewable_generation=renewable_generation,
-        curtailment=zeros(Float64, T),  # Not stored in cache
-        curtailment_cost=0.0,           # Not stored in cache
+        curtailment=curtailment,
+        curtailment_cost=curtailment_cost,
         g=g,
         u=u,
         v=v,

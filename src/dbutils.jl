@@ -733,6 +733,36 @@ function ensure_uc_results_tables()
             CREATE INDEX IF NOT EXISTS idx_uc_net_demand_result_id
             ON simulations.uc_net_demand (uc_result_id)
         """)
+
+        # Add curtailment columns (schema migration for existing tables)
+        # Using DO block to conditionally add columns if they don't exist
+        LibPQ.execute(cnx, """
+            DO \$\$
+            BEGIN
+                -- Add curtailment columns to uc_results summary table
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                               WHERE table_schema = 'simulations'
+                               AND table_name = 'uc_results'
+                               AND column_name = 'total_curtailment_mwh') THEN
+                    ALTER TABLE simulations.uc_results ADD COLUMN total_curtailment_mwh NUMERIC(12,2) DEFAULT 0;
+                END IF;
+
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                               WHERE table_schema = 'simulations'
+                               AND table_name = 'uc_results'
+                               AND column_name = 'curtailment_cost') THEN
+                    ALTER TABLE simulations.uc_results ADD COLUMN curtailment_cost NUMERIC(12,2) DEFAULT 0;
+                END IF;
+
+                -- Add curtailment column to uc_net_demand table
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                               WHERE table_schema = 'simulations'
+                               AND table_name = 'uc_net_demand'
+                               AND column_name = 'curtailment_mw') THEN
+                    ALTER TABLE simulations.uc_net_demand ADD COLUMN curtailment_mw NUMERIC(10,2) DEFAULT 0;
+                END IF;
+            END \$\$;
+        """)
     end
 
     @info "UC results tables schema verified/created"
