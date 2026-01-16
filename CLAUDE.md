@@ -36,13 +36,16 @@ The main module `Euphemia` provides:
 # Generate prices for a single zone
 prices = generate_energy_prices("GR", Date(2024, 6, 15);
     order_method=:uc_based,  # or :alternative (faster)
-    save_to_db=true)
+    save_to_db=true,
+    force_rerun=false)       # Set true to bypass UC cache
 
 # Process all zones for a single date
-result = generate_energy_prices_for_all_zones(Date(2024, 6, 15))
+result = generate_energy_prices_for_all_zones(Date(2024, 6, 15);
+    force_rerun=false)       # Propagates to all zone solves
 
 # Process a date range
-result = generate_energy_prices_for_date_range(Date(2024, 6, 1), Date(2024, 6, 7))
+result = generate_energy_prices_for_date_range(Date(2024, 6, 1), Date(2024, 6, 7);
+    force_rerun=false)       # Propagates to all date/zone solves
 ```
 
 **Multi-zone market clearing with transmission flows:**
@@ -280,8 +283,8 @@ Caching behavior:
 - Storage: ~195 KB per zone/day (~700 MB/year for 10 zones)
 
 The `force_rerun` parameter is passed through the entire call chain:
-- `generate_energy_prices()` → `create_typed_order_book()` → `generate_market_orders_from_uc()` → `solve_unit_commitment()`
-- `run_multi_zone_market_clearing()` → `create_multi_zone_order_book()` → `generate_market_orders_from_uc()` → `solve_unit_commitment()`
+- `generate_energy_prices_for_date_range()` → `generate_energy_prices_for_all_zones()` → `generate_energy_prices()` → `create_typed_order_book()` → `generate_market_orders_from_uc()` → `solve_unit_commitment()`
+- `run_multi_zone_for_date_range()` → `run_multi_zone_market_clearing()` → `create_multi_zone_order_book()` → `generate_market_orders_from_uc()` → `solve_unit_commitment()`
 
 **Parallel UC execution:**
 When `parallel=true` in `run_multi_zone_market_clearing()`:
@@ -289,7 +292,13 @@ When `parallel=true` in `run_multi_zone_market_clearing()`:
 - Requires workers: `addprocs(n)` + `@everywhere using Euphemia`
 - Falls back to sequential if no workers available
 - Cache reads/writes are safe (zone-specific keys, PostgreSQL transactions)
-- Gurobi users: respect license limits (typically 1-4 concurrent tokens)
+
+**Gurobi license constraints:**
+- WLS (Web License Service) limits concurrent solver sessions (check "session baseline" in your Gurobi profile)
+- Each parallel UC worker consumes 1 session while actively solving
+- **Automatic cap**: Scripts automatically limit `max_workers` to 2 when using Gurobi with parallel mode
+- "Max distributed workers" is unrelated (for Gurobi's distributed MIP, not parallel independent solves)
+- To change the cap, edit `gurobi_max` in `bin/main.jl` and `bin/multi_zone_main.jl`
 
 ## Development Commands
 
@@ -339,6 +348,7 @@ test/
 │   └── ...
 │
 ├── scripts/                 # Debug, benchmarks, infrastructure scripts
+│   ├── benchmark_gurobi_vs_highs.jl  # Compare Gurobi (2 workers) vs HiGHS (50 workers)
 │   ├── test_gurobi.jl
 │   ├── test_optimizer_comparison.jl
 │   ├── test_parallel_*.jl

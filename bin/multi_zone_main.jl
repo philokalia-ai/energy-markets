@@ -1,14 +1,17 @@
 #!/usr/bin/env julia
 #
-# Energy Price Generation Script
+# Multi-Zone Market Clearing Script
 #
 # This script is invoked by the GitHub Action defined in:
-# .github/workflows/generate-energy-prices.yml
+# .github/workflows/generate-multi-zone-prices.yml
+#
+# Runs multi-zone market clearing with cross-border transmission flows.
+# Zones are auto-discovered from transfer capacity data in the database.
 #
 # Required environment variables:
 # - START_DATE: Start date in YYYY-MM-DD format
 # - END_DATE: End date in YYYY-MM-DD format
-# - PARALLEL: Boolean for parallel processing (true/false)
+# - PARALLEL: Boolean for parallel UC processing (true/false)
 # - OPTIMIZER: Optimizer to use (highs/gurobi/cplex)
 # - MAX_WORKERS: Maximum parallel workers (0 for auto-detect)
 # - ORDER_METHOD: Order generation method (uc_based/alternative)
@@ -16,7 +19,7 @@
 # - MARKUP_FACTOR: Price markup factor for supply bids (default: 1.1)
 
 using Euphemia, Dates
-using Distributed  # Add this for parallel processing
+using Distributed
 
 # Parse inputs
 start_date = Date(ENV["START_DATE"])
@@ -45,9 +48,9 @@ if optimizer == "gurobi" && use_parallel
     end
 end
 
-println("🚀 Starting energy price generation")
+println("🌍 Starting multi-zone market clearing")
 println("📅 Date range: $start_date to $end_date")
-println("⚡ Parallel: $use_parallel")
+println("⚡ Parallel UC: $use_parallel")
 println("👥 Max workers: $(max_workers === nothing ? "auto" : max_workers)")
 println("⚖️ Optimizer: $optimizer")
 println("📋 Order method: $order_method")
@@ -76,47 +79,42 @@ if use_parallel
     # Load Euphemia on all workers
     println("📦 Loading Euphemia package on all workers...")
     @everywhere using Euphemia
-    println("✅ All workers ready for parallel processing")
+    println("✅ All workers ready for parallel UC processing")
     println()
 end
 
 try
-    # Generate energy prices for date range
-    result = generate_energy_prices_for_date_range(
+    # Run multi-zone market clearing for date range
+    result = run_multi_zone_for_date_range(
         start_date, end_date;
         order_method=order_method,
-        model=:mpcc,
         optimizer=optimizer,
         save_to_db=true,
         skip_existing=true,
         parallel=use_parallel,
-        max_workers=max_workers,
-        chunk_size=3,
-        silent=true,
-        max_retries=3,
-        retry_delay=2.0,
         force_rerun=force_rerun,
-        markup_factor=markup_factor
+        markup_factor=markup_factor,
+        silent=true
     )
 
     # Extract metrics
     successful_dates = result.successful_dates
     total_dates = result.total_dates
-    total_zones_processed = result.total_zones_processed
-    total_zones_successful = result.total_zones_successful
+    failed_dates = result.failed_dates
+    skipped_dates = result.skipped_dates
     total_time_hours = round(result.total_time / 3600, digits=2)
 
-    # Calculate success rates
+    # Calculate success rate
     date_success_rate = total_dates > 0 ? round(100 * successful_dates / total_dates, digits=1) : 0.0
-    zone_success_rate = total_zones_processed > 0 ? round(100 * total_zones_successful / total_zones_processed, digits=1) : 0.0
 
     # Log success metrics
     println()
     println("="^60)
-    println("🎉 GENERATION COMPLETED SUCCESSFULLY")
+    println("🎉 MULTI-ZONE CLEARING COMPLETED")
     println("="^60)
     println("✅ Date success: $successful_dates/$total_dates ($date_success_rate%)")
-    println("✅ Zone success: $total_zones_successful/$total_zones_processed ($zone_success_rate%)")
+    println("⏭️  Skipped (existing): $skipped_dates")
+    println("❌ Failed: $failed_dates")
     println("⏱️ Total time: $total_time_hours hours")
     println()
 
@@ -124,51 +122,59 @@ try
     open(ENV["GITHUB_OUTPUT"], "a") do io
         println(io, "successful_dates=$successful_dates")
         println(io, "total_dates=$total_dates")
+        println(io, "failed_dates=$failed_dates")
+        println(io, "skipped_dates=$skipped_dates")
         println(io, "date_success_rate=$date_success_rate")
-        println(io, "zone_success_rate=$zone_success_rate")
         println(io, "processing_time_hours=$total_time_hours")
-        println(io, "total_zones_processed=$total_zones_processed")
-        println(io, "total_zones_successful=$total_zones_successful")
         println(io, "status=success")
     end
 
-    # Detailed analysis
-    if total_zones_successful > 0
-        successful_summaries = filter(s -> s.zones_successful > 0, result.daily_summaries)
-        if !isempty(successful_summaries)
-            avg_price = sum(s.avg_price * s.zones_successful for s in successful_summaries) / sum(s.zones_successful for s in successful_summaries)
+    # Analyze successful results for price statistics
+    successful_results = filter(r -> r.success, result.date_results)
+    if !isempty(successful_results)
+        # Collect all prices across all zones and dates
+        all_prices = Float64[]
+        total_zones = 0
 
-            # Get valid prices (avoiding empty collection errors)
-            valid_min_prices = [s.min_price for s in successful_summaries if s.min_price > 0]
-            valid_max_prices = [s.max_price for s in successful_summaries if s.max_price > 0]
+        for dr in successful_results
+            if dr.success && haskey(dr, :result) && dr.result !== nothing
+                for (zone, prices) in dr.result.market_prices
+                    append!(all_prices, values(prices))
+                    total_zones += 1
+                end
+            end
+        end
 
-            min_price = isempty(valid_min_prices) ? 0.0 : minimum(valid_min_prices)
-            max_price = isempty(valid_max_prices) ? 0.0 : maximum(valid_max_prices)
+        if !isempty(all_prices)
+            avg_price = round(sum(all_prices) / length(all_prices), digits=2)
+            min_price = round(minimum(all_prices), digits=2)
+            max_price = round(maximum(all_prices), digits=2)
 
-            println("💰 Price Analysis:")
-            println("   📊 Range: €$(min_price) - €$(max_price)/MWh")
-            println("   📈 Weighted average: €$(round(avg_price, digits=2))/MWh")
+            println("💰 Price Analysis (across all zones):")
+            println("   📊 Range: €$min_price - €$max_price/MWh")
+            println("   📈 Average: €$avg_price/MWh")
+            println("   🌍 Total zone-days: $total_zones")
 
             # Set price outputs
             open(ENV["GITHUB_OUTPUT"], "a") do io
-                println(io, "avg_price=$(round(avg_price, digits=2))")
-                println(io, "min_price=$(min_price)")
-                println(io, "max_price=$(max_price)")
+                println(io, "avg_price=$avg_price")
+                println(io, "min_price=$min_price")
+                println(io, "max_price=$max_price")
+                println(io, "total_zone_days=$total_zones")
             end
         end
     end
 
     # Check for any failures
-    if successful_dates < total_dates
+    if failed_dates > 0
         println()
         println("⚠️ PARTIAL SUCCESS - Some dates failed:")
-        failed_dates = [r.date for r in result.date_results if !r.success]
-        println("❌ Failed dates: $(join(failed_dates, ", "))")
+        failed_date_list = [r.date for r in result.date_results if !r.success]
+        println("❌ Failed dates: $(join(failed_date_list, ", "))")
 
         # Still exit successfully if we got some results
         if successful_dates > 0
             println("✅ Continuing as $successful_dates dates were processed successfully")
-            # Cleanup workers before exit
             if use_parallel
                 println("🧹 Cleaning up worker processes...")
                 rmprocs(filter(id -> id > 1, workers()))
@@ -176,7 +182,6 @@ try
             exit(0)
         else
             println("❌ All dates failed - marking as failure")
-            # Cleanup workers before exit
             if use_parallel
                 println("🧹 Cleaning up worker processes...")
                 rmprocs(filter(id -> id > 1, workers()))
@@ -194,7 +199,7 @@ try
 
 catch e
     println()
-    println("❌ CRITICAL ERROR during energy price generation:")
+    println("❌ CRITICAL ERROR during multi-zone market clearing:")
     println("Error: $e")
 
     # Set failure outputs

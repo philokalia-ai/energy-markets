@@ -1,9 +1,9 @@
-name: Generate Energy Prices
+name: Generate Multi-Zone Prices
 
 on:
   schedule:
-    # Run daily at 2 AM UTC for previous day
-    - cron: "0 2 * * *"
+    # Run daily at 3 AM UTC for previous day (offset from single-zone workflow)
+    - cron: "0 3 * * *"
   workflow_dispatch:
     inputs:
       start_date:
@@ -17,7 +17,7 @@ on:
         default: "2025-11-07"
         type: string
       parallel:
-        description: "Use parallel processing"
+        description: "Use parallel UC processing"
         required: false
         default: true
         type: boolean
@@ -59,9 +59,9 @@ env:
   JULIA_NUM_THREADS: 4
 
 jobs:
-  generate-prices:
+  generate-multi-zone-prices:
     runs-on: [self-hosted, linux, ARM64]
-    timeout-minutes: 2880 # 48 hours timeout - very generous for long processing
+    timeout-minutes: 2880 # 48 hours timeout
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -82,12 +82,10 @@ jobs:
           GUROBI_LICENSE_ID: ${{ secrets.LICENSEID }}
         run: |
           if [ -n "$GUROBI_ACCESS_ID" ] && [ -n "$GUROBI_WLS_SECRET" ] && [ -n "$GUROBI_LICENSE_ID" ]; then
-            # Mask secrets in logs first
             echo "::add-mask::$GUROBI_ACCESS_ID"
             echo "::add-mask::$GUROBI_WLS_SECRET"
             echo "::add-mask::$GUROBI_LICENSE_ID"
-            
-            # Create gurobi.lic file with restricted permissions
+
             umask 077
             {
               echo "WLSACCESSID=$GUROBI_ACCESS_ID"
@@ -95,15 +93,13 @@ jobs:
               echo "LICENSEID=$GUROBI_LICENSE_ID"
             } > gurobi.lic
             chmod 600 gurobi.lic
-            
-            # Ensure cleanup on exit
+
             trap 'rm -f gurobi.lic' EXIT
-            
+
             echo "GRB_LICENSE_FILE=$PWD/gurobi.lic" >> $GITHUB_ENV
-            echo "✅ Gurobi WLS license configured with ID: $GUROBI_LICENSE_ID"
+            echo "✅ Gurobi WLS license configured"
           else
             echo "⚠️ Missing Gurobi WLS credentials, will fallback to HiGHS"
-            echo "   Required: WLSACCESSID, WLSSECRET, LICENSEID"
           fi
 
       - name: Install Julia dependencies
@@ -122,34 +118,6 @@ jobs:
         env:
           ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
         run: |
-          # Update database schema if needed
-          julia --project=. -e "
-            using Euphemia
-            println(\"🔧 Updating database schema...\")
-            try
-              # Update bidding_zone column length if needed
-              Euphemia.sql2df(\"ALTER TABLE simulations.energy_prices ALTER COLUMN bidding_zone TYPE VARCHAR(20);\")
-              Euphemia.sql2df(\"ALTER TABLE simulations.optimization_runs ALTER COLUMN bidding_zone TYPE VARCHAR(20);\")
-              println(\"✅ Schema updated successfully\")
-            catch e
-              msg = string(e)
-              # Expected/harmless errors that we can ignore
-              if occursin(\"already exists\", msg) || 
-                 occursin(\"does not exist\", msg) || 
-                 occursin(\"cannot alter type of a column\", msg) ||
-                 occursin(\"type \\\"varchar\\\" already exists\", msg) ||
-                 occursin(\"column \\\"bidding_zone\\\" of relation\", msg)
-                println(\"ℹ️  Schema update not needed or already applied: \$e\")
-              else
-                # Unexpected errors should fail the workflow
-                println(\"❌ Schema update failed with unexpected error: \$e\")
-                println(\"❌ This indicates a real problem (connection, permissions, etc.)\")
-                exit(1)
-              end
-            end
-          "
-          
-          # Test database connection
           julia --project=. -e "
             using Euphemia
             println(\"🔗 Testing database connection...\")
@@ -162,24 +130,22 @@ jobs:
             end
           "
 
-      - name: Generate energy prices
+      - name: Generate multi-zone prices
         id: generate
         env:
           ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
         run: |
-          # Set default dates if manual trigger without inputs
+          # Set default dates if scheduled trigger
           if [ "${{ github.event_name }}" = "schedule" ]; then
-            # For scheduled runs, process previous day
             START_DATE=$(date -d "yesterday" +%Y-%m-%d)
             END_DATE=$START_DATE
             PARALLEL=true
             OPTIMIZER="highs"
             MAX_WORKERS=16
-            ORDER_METHOD="alternative"
+            ORDER_METHOD="uc_based"
             FORCE_RERUN=false
             MARKUP_FACTOR="1.1"
           else
-            # For manual runs, use inputs
             START_DATE="${{ github.event.inputs.start_date }}"
             END_DATE="${{ github.event.inputs.end_date }}"
             PARALLEL="${{ github.event.inputs.parallel }}"
@@ -190,24 +156,23 @@ jobs:
             MARKUP_FACTOR="${{ github.event.inputs.markup_factor }}"
           fi
 
-          echo "📅 Processing date range: $START_DATE to $END_DATE"
+          echo "🌍 Multi-zone market clearing"
+          echo "📅 Date range: $START_DATE to $END_DATE"
           echo "⚖️ Optimizer: $OPTIMIZER"
-          echo "⚡ Parallel: $PARALLEL"
+          echo "⚡ Parallel UC: $PARALLEL"
           echo "👥 Max workers: $MAX_WORKERS"
           echo "📋 Order method: $ORDER_METHOD"
           echo "🔄 Force rerun: $FORCE_RERUN"
           echo "💹 Markup factor: $MARKUP_FACTOR"
 
-          # Export environment variables for Julia script
           export START_DATE END_DATE PARALLEL OPTIMIZER MAX_WORKERS ORDER_METHOD FORCE_RERUN MARKUP_FACTOR
 
-          # Execute the price generation script
-          julia --project=. bin/main.jl
+          julia --project=. bin/multi_zone_main.jl
 
       - name: Create execution summary
         if: always()
         run: |
-          echo "## 📊 Energy Price Generation Report" >> $GITHUB_STEP_SUMMARY
+          echo "## 🌍 Multi-Zone Market Clearing Report" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
           if [ "${{ github.event_name }}" = "schedule" ]; then
@@ -222,19 +187,23 @@ jobs:
           echo "- **Trigger**: $TRIGGER" >> $GITHUB_STEP_SUMMARY
           echo "- **Date Range**: $DATE_RANGE" >> $GITHUB_STEP_SUMMARY
           echo "- **Optimizer**: ${{ github.event.inputs.optimizer || 'highs' }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Parallel**: ${{ github.event.inputs.parallel || 'true' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Parallel UC**: ${{ github.event.inputs.parallel || 'true' }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Order Method**: ${{ github.event.inputs.order_method || 'uc_based' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Force Rerun**: ${{ github.event.inputs.force_rerun || 'false' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Markup Factor**: ${{ github.event.inputs.markup_factor || '1.1' }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
           if [ "${{ steps.generate.outputs.status }}" = "success" ]; then
             echo "### ✅ Results" >> $GITHUB_STEP_SUMMARY
             echo "- **Date Success**: ${{ steps.generate.outputs.successful_dates }}/${{ steps.generate.outputs.total_dates }} (${{ steps.generate.outputs.date_success_rate }}%)" >> $GITHUB_STEP_SUMMARY
-            echo "- **Zone Success**: ${{ steps.generate.outputs.total_zones_successful }}/${{ steps.generate.outputs.total_zones_processed }} (${{ steps.generate.outputs.zone_success_rate }}%)" >> $GITHUB_STEP_SUMMARY
+            echo "- **Skipped**: ${{ steps.generate.outputs.skipped_dates }}" >> $GITHUB_STEP_SUMMARY
+            echo "- **Failed**: ${{ steps.generate.outputs.failed_dates }}" >> $GITHUB_STEP_SUMMARY
             echo "- **Processing Time**: ${{ steps.generate.outputs.processing_time_hours }} hours" >> $GITHUB_STEP_SUMMARY
-            
+
             if [ -n "${{ steps.generate.outputs.avg_price }}" ]; then
               echo "- **Price Range**: €${{ steps.generate.outputs.min_price }} - €${{ steps.generate.outputs.max_price }}/MWh" >> $GITHUB_STEP_SUMMARY
               echo "- **Average Price**: €${{ steps.generate.outputs.avg_price }}/MWh" >> $GITHUB_STEP_SUMMARY
+              echo "- **Zone-Days Processed**: ${{ steps.generate.outputs.total_zone_days }}" >> $GITHUB_STEP_SUMMARY
             fi
           else
             echo "### ❌ Failure" >> $GITHUB_STEP_SUMMARY
@@ -249,7 +218,7 @@ jobs:
           status: failure
           webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
           text: |
-            🚨 Energy price generation failed!
+            🚨 Multi-zone market clearing failed!
             📅 Date range: ${{ github.event.inputs.start_date || 'yesterday' }} to ${{ github.event.inputs.end_date || 'yesterday' }}
             🔗 View details: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         continue-on-error: true
@@ -261,8 +230,7 @@ jobs:
           status: success
           webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
           text: |
-            ✅ Energy price generation completed successfully!
+            ✅ Multi-zone market clearing completed!
             📅 Processed: ${{ steps.generate.outputs.successful_dates }}/${{ steps.generate.outputs.total_dates }} dates
-            🌍 Zone success: ${{ steps.generate.outputs.zone_success_rate }}%
             ⏱️ Time: ${{ steps.generate.outputs.processing_time_hours }} hours
         continue-on-error: true
