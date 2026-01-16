@@ -348,6 +348,7 @@ test/
 │   └── ...
 │
 ├── scripts/                 # Debug, benchmarks, infrastructure scripts
+│   ├── benchmark_gurobi_vs_highs.jl  # Compare Gurobi (2 workers) vs HiGHS (50 workers)
 │   ├── test_gurobi.jl
 │   ├── test_optimizer_comparison.jl
 │   ├── test_parallel_*.jl
