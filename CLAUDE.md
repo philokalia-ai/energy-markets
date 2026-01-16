@@ -110,6 +110,12 @@ The `exclude_unavailable` parameter (default: `true`) filters generators based o
 - Only `status = 'Active'` outages are considered (ignores `Cancelled`/`Withdrawn`)
 - Uses `MIN(available_capacity_mw)` when multiple outage records exist (conservative)
 
+The `exclude_variable_renewables` parameter (default: `true`) filters out wind and solar generators:
+- **Variable renewables** (Wind Onshore, Wind Offshore, Solar) are excluded from UC
+- These generators' output is non-dispatchable and handled via renewable forecasts
+- Renewable generation is subtracted from load to calculate net demand for UC
+- This prevents double-counting (generator in UC + forecast subtracted from load)
+
 **Generator parameter inference from historical data:**
 ```julia
 # Get generators with inferred parameters (uses DB cache, ~2 sec)
@@ -416,7 +422,8 @@ The project uses PostgreSQL with two main schemas:
 
 ### ENTSO-E Schema (`entsoe.*`)
 - `entsoe.production_and_generation_units` - Production unit data with commissioning status and bidding zone mapping
-- `entsoe.actual_total_load` - Historical electricity demand data by bidding zone (filtered by area_type_code: BZN, BZN/CTA, BZN/CTY, BZN/CTA/CTY)
+- `entsoe.day_ahead_total_load_forecast` - Day-ahead load forecast used for UC planning (consistent with renewable forecast horizon)
+- `entsoe.actual_total_load` - Historical electricity demand (for backtesting/validation, not used in UC)
 - `entsoe.generation_forecasts_for_wind_and_solar` - Renewable generation forecasts (filtered by same area_type_code values)
 - `entsoe.offered_transfer_capacities_implicit` - Cross-border transfer capacity data between bidding zones
 - `entsoe.unavailability_of_production_and_generation_units` - Generator outage data (planned/forced)

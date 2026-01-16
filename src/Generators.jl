@@ -43,6 +43,14 @@ const FLEXIBLE_FUEL_TYPES = Set([
     Symbol("Other"),
 ])
 
+# Variable renewable types that should be excluded from Unit Commitment
+# Their generation is handled via forecasts subtracted from load (net demand)
+const VARIABLE_RENEWABLE_TYPES = Set([
+    Symbol("Wind Onshore"),
+    Symbol("Wind Offshore"),
+    Symbol("Solar"),
+])
+
 """
     get_historical_generation(generator_code::String, end_date::Date; months_back::Int=3)
 
@@ -388,6 +396,7 @@ end
 # infer_ramp_rates: if true, infer ramp rates from historical generation data (3 months)
 function get_generators(map_code::String, day::Dates.Date;
                        exclude_unavailable::Bool=true,
+                       exclude_variable_renewables::Bool=true,
                        infer_ramp_rates_flag::Bool=false)
     if exclude_unavailable
         # Query with unavailability filtering:
@@ -519,6 +528,17 @@ function get_generators(map_code::String, day::Dates.Date;
             )                                           # marginal_cost
         )
         push!(generators, gen)
+    end
+
+    # Filter out variable renewables (wind, solar) if requested
+    # These are handled separately via renewable forecasts subtracted from load
+    if exclude_variable_renewables
+        pre_filter_count = length(generators)
+        generators = filter(g -> g.fuel_type ∉ VARIABLE_RENEWABLE_TYPES, generators)
+        filtered_count = pre_filter_count - length(generators)
+        if filtered_count > 0
+            @info "Filtered out $filtered_count variable renewable generators (Wind/Solar) from UC"
+        end
     end
 
     # Optionally infer ramp rates from historical data
