@@ -59,7 +59,8 @@ result = run_multi_zone_market_clearing(
     optimizer=optimizer,
     save_to_db=false,
     parallel=true,
-    silent=false
+    silent=false,
+    force_rerun=true  # Force fresh UC solves to use new shortage variable
 )
 elapsed = time() - start_time
 
@@ -83,8 +84,9 @@ infeasible_zones = String[]
 
 for zone in sort(zones)
     prices = result.market_prices[zone]
-    if !isempty(prices) && all(p -> !isnan(p) && !isinf(p), prices)
-        feasible_count += 1
+    price_values = prices isa Dict ? collect(values(prices)) : prices
+    if !isempty(price_values) && all(p -> !isnan(p) && !isinf(p), price_values)
+        global feasible_count += 1
     else
         push!(infeasible_zones, zone)
     end
@@ -106,8 +108,9 @@ println("Sample prices (first 4 periods):")
 sample_zones = sort(zones)[1:min(5, length(zones))]
 for zone in sample_zones
     prices = result.market_prices[zone]
-    if !isempty(prices) && length(prices) >= 4
-        sample = round.(prices[1:4], digits=2)
+    price_values = prices isa Dict ? sort(collect(values(prices))) : prices
+    if !isempty(price_values) && length(price_values) >= 4
+        sample = round.(price_values[1:4], digits=2)
         println("  $zone: $sample ...")
     end
 end

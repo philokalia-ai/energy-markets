@@ -256,7 +256,7 @@ solution.renewable_values # Raw renewable forecast values
 ```
 
 How curtailment works:
-- **Balance constraint**: `Generation = Load - Renewables + Curtailment`
+- **Balance constraint**: `Generation + Shortage = Load - Renewables + Curtailment + Excess`
 - **Curtailment bounds**: `0 ≤ Curtailment[t] ≤ Renewables[t]`
 - **Objective**: Adds `curtailment_penalty × sum(Curtailment)` to minimize unnecessary spilling
 
@@ -269,6 +269,67 @@ The curtailment penalty should reflect:
 - `0 €/MWh`: Free curtailment (pure technical feasibility)
 - `1-5 €/MWh`: Typical values (political/subsidy signal)
 - Higher values reduce curtailment but may cause infeasibility
+
+**Excess generation (structural oversupply):**
+
+When curtailment alone cannot achieve feasibility (e.g., sum of thermal P_min > load even with all renewables curtailed), the UC solver allows "excess generation" as a last resort. This guarantees feasibility for all zones.
+
+```julia
+# Default: excess allowed with 10,000 €/MWh penalty
+solution = solve_unit_commitment("GR", Date(2024, 6, 15))
+
+# Custom excess penalty (higher = less excess, but may cause infeasibility)
+solution = solve_unit_commitment("GR", Date(2024, 6, 15);
+    excess_penalty=5000.0)  # 5,000 €/MWh penalty
+
+# Access excess data
+solution.excess      # Vector of excess generation per period (MWh)
+solution.excess_cost # Total excess cost (€)
+```
+
+How excess generation works:
+- **Balance constraint**: `Generation + Shortage = Load - Renewables + Curtailment + Excess`
+- **Excess bounds**: `Excess[t] ≥ 0` (unbounded above)
+- **Objective**: Adds `excess_penalty × sum(Excess)` to minimize structural oversupply
+
+When excess is needed:
+- Thermal P_min constraints force generation above what load can absorb
+- Even after curtailing all renewables, thermal minimum > load
+- Typically indicates grid has more baseload capacity than demand
+
+The excess penalty should be high (default 10,000 €/MWh) to ensure it's only used as a last resort, after all curtailment options are exhausted. If excess generation appears, it indicates a structural oversupply problem in the zone.
+
+**Shortage (load shedding):**
+
+When total generation capacity is insufficient to meet demand (total P_max < net demand), the UC solver allows "load shedding" via a shortage variable. This guarantees feasibility for all zones.
+
+```julia
+# Default: shortage allowed with 10,000 €/MWh penalty
+solution = solve_unit_commitment("GR", Date(2024, 6, 15))
+
+# Custom shortage penalty
+solution = solve_unit_commitment("GR", Date(2024, 6, 15);
+    shortage_penalty=5000.0)  # 5,000 €/MWh penalty
+
+# Access shortage data
+solution.shortage      # Vector of load shedding per period (MWh)
+solution.shortage_cost # Total shortage cost (€)
+```
+
+How shortage (load shedding) works:
+- **Balance constraint**: `Generation + Shortage = Load - Renewables + Curtailment + Excess`
+- **Shortage bounds**: `Shortage[t] ≥ 0` (unbounded above)
+- **Objective**: Adds `shortage_penalty × sum(Shortage)` to minimize load shedding
+
+When shortage is needed:
+- Total available generation capacity (P_max) is less than net demand
+- Even with all generators running at full capacity, demand cannot be met
+- Typically indicates zone has insufficient generation capacity or data issues
+
+The shortage penalty should be high (default 10,000 €/MWh) to ensure it's only used as a last resort. If shortage appears, it indicates either:
+1. A capacity shortage in the zone (insufficient installed capacity)
+2. Data quality issues (missing generators or incorrect load data)
+3. The zone aggregates multiple sub-zones with different data availability
 
 Cost breakdown fields:
 ```julia
@@ -514,6 +575,8 @@ The project uses PostgreSQL with two main schemas:
 - `total_cost`, `production_cost`, `startup_cost`, `noload_cost`: Cost components
 - `hot_startups`, `warm_startups`, `cold_startups`: Startup counts by type
 - `total_curtailment_mwh`, `curtailment_cost`: Renewable curtailment summary
+- `total_excess_mwh`, `excess_cost`: Excess generation summary (structural oversupply)
+- `total_shortage_mwh`, `shortage_cost`: Load shedding summary (capacity shortage)
 
 **`simulations.uc_generation`** - Detailed generation data per generator per period
 - `uc_result_id`: Foreign key to `uc_results`
@@ -525,6 +588,8 @@ The project uses PostgreSQL with two main schemas:
 - `period_idx`, `time_slot_utc`: Time period identification
 - `net_demand_mw`, `renewable_generation_mw`: Demand and renewable data
 - `curtailment_mw`: Renewable curtailment per period (MW)
+- `excess_mw`: Excess generation per period (MW, structural oversupply)
+- `shortage_mw`: Load shedding per period (MW, capacity shortage)
 
 **Joining prices with optimization metadata:**
 ```sql

@@ -734,7 +734,7 @@ function ensure_uc_results_tables()
             ON simulations.uc_net_demand (uc_result_id)
         """)
 
-        # Add curtailment columns (schema migration for existing tables)
+        # Add curtailment and excess columns (schema migration for existing tables)
         # Using DO block to conditionally add columns if they don't exist
         LibPQ.execute(cnx, """
             DO \$\$
@@ -754,12 +754,58 @@ function ensure_uc_results_tables()
                     ALTER TABLE simulations.uc_results ADD COLUMN curtailment_cost NUMERIC(12,2) DEFAULT 0;
                 END IF;
 
+                -- Add excess generation columns to uc_results summary table
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                               WHERE table_schema = 'simulations'
+                               AND table_name = 'uc_results'
+                               AND column_name = 'total_excess_mwh') THEN
+                    ALTER TABLE simulations.uc_results ADD COLUMN total_excess_mwh NUMERIC(12,2) DEFAULT 0;
+                END IF;
+
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                               WHERE table_schema = 'simulations'
+                               AND table_name = 'uc_results'
+                               AND column_name = 'excess_cost') THEN
+                    ALTER TABLE simulations.uc_results ADD COLUMN excess_cost NUMERIC(15,2) DEFAULT 0;
+                END IF;
+
                 -- Add curtailment column to uc_net_demand table
                 IF NOT EXISTS (SELECT 1 FROM information_schema.columns
                                WHERE table_schema = 'simulations'
                                AND table_name = 'uc_net_demand'
                                AND column_name = 'curtailment_mw') THEN
                     ALTER TABLE simulations.uc_net_demand ADD COLUMN curtailment_mw NUMERIC(10,2) DEFAULT 0;
+                END IF;
+
+                -- Add excess column to uc_net_demand table
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                               WHERE table_schema = 'simulations'
+                               AND table_name = 'uc_net_demand'
+                               AND column_name = 'excess_mw') THEN
+                    ALTER TABLE simulations.uc_net_demand ADD COLUMN excess_mw NUMERIC(10,2) DEFAULT 0;
+                END IF;
+
+                -- Add shortage (load shedding) columns to uc_results summary table
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                               WHERE table_schema = 'simulations'
+                               AND table_name = 'uc_results'
+                               AND column_name = 'total_shortage_mwh') THEN
+                    ALTER TABLE simulations.uc_results ADD COLUMN total_shortage_mwh NUMERIC(12,2) DEFAULT 0;
+                END IF;
+
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                               WHERE table_schema = 'simulations'
+                               AND table_name = 'uc_results'
+                               AND column_name = 'shortage_cost') THEN
+                    ALTER TABLE simulations.uc_results ADD COLUMN shortage_cost NUMERIC(15,2) DEFAULT 0;
+                END IF;
+
+                -- Add shortage column to uc_net_demand table
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                               WHERE table_schema = 'simulations'
+                               AND table_name = 'uc_net_demand'
+                               AND column_name = 'shortage_mw') THEN
+                    ALTER TABLE simulations.uc_net_demand ADD COLUMN shortage_mw NUMERIC(10,2) DEFAULT 0;
                 END IF;
             END \$\$;
         """)
