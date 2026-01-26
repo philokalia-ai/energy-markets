@@ -35,16 +35,27 @@ struct Generator
     p_min::Float64         # Ελάχιστη ισχύς (MW)
     bidding_zone::String   # Ζώνη προσφοράς (π.χ. "GR")
     marginal_cost::Float64 # Οριακό κόστος (€/MWh)
-    # Παράμετροι από εξαγωγή ιστορικών δεδομένων
-    ramp_up::Float64       # Ρυθμός αύξησης (κλάσμα p_max/ώρα)
-    ramp_down::Float64     # Ρυθμός μείωσης (κλάσμα p_max/ώρα)
-    min_uptime::Int        # Ελάχιστος χρόνος λειτουργίας (ώρες)
-    min_downtime::Int      # Ελάχιστος χρόνος αδράνειας (ώρες)
+    # Προαιρετικές παράμετροι από εξαγωγή ιστορικών δεδομένων
+    # nothing = χρήση προεπιλεγμένων τιμών ανά τύπο καυσίμου
+    ramp_up::Union{Float64, Nothing}    # Ρυθμός αύξησης (κλάσμα p_max/ώρα)
+    ramp_down::Union{Float64, Nothing}  # Ρυθμός μείωσης (κλάσμα p_max/ώρα)
+    min_uptime::Union{Int, Nothing}     # Ελάχιστος χρόνος λειτουργίας (ώρες)
+    min_downtime::Union{Int, Nothing}   # Ελάχιστος χρόνος αδράνειας (ώρες)
+
+    # Κατασκευαστής με προεπιλεγμένες τιμές nothing
+    function Generator(code, name, fuel_type, location, p_max, p_min,
+                       bidding_zone, marginal_cost,
+                       ramp_up=nothing, ramp_down=nothing,
+                       min_uptime=nothing, min_downtime=nothing)
+        new(code, name, fuel_type, location, p_max, p_min,
+            bidding_zone, marginal_cost,
+            ramp_up, ramp_down, min_uptime, min_downtime)
+    end
 end
 \end{minted}
 \end{samepage}
 
-Ο τύπος καυσίμου (\texttt{fuel\_type}) αποθηκεύεται ως \texttt{Symbol} για αποτελεσματική σύγκριση και χρησιμοποιείται για την ανάκτηση παραμέτρων ειδικών ανά τύπο καυσίμου. Τα πεδία \texttt{ramp\_up}, \texttt{ramp\_down}, \texttt{min\_uptime} και \texttt{min\_downtime} αποθηκεύουν τεχνικές παραμέτρους που εξάγονται αυτόματα από ιστορικά δεδομένα παραγωγής, όπως περιγράφεται στην Ενότητα~\ref{subsec:parameter-inference}.
+Ο τύπος καυσίμου (\texttt{fuel\_type}) αποθηκεύεται ως \texttt{Symbol} για αποτελεσματική σύγκριση και χρησιμοποιείται για την ανάκτηση παραμέτρων ειδικών ανά τύπο καυσίμου. Τα πεδία \texttt{ramp\_up}, \texttt{ramp\_down}, \texttt{min\_uptime} και \texttt{min\_downtime} ορίζονται ως \texttt{Union\{T, Nothing\}}, γεγονός που επιτρέπει τη χρήση της τιμής \texttt{nothing} ως σημαίας (sentinel) για την ενεργοποίηση των προεπιλεγμένων τιμών ανά τύπο καυσίμου. Ο εσωτερικός κατασκευαστής (inner constructor) ορίζει αυτά τα πεδία με προεπιλεγμένη τιμή \texttt{nothing}, διατηρώντας τη συμβατότητα με τον υπάρχοντα κώδικα. Οι τεχνικές παράμετροι εξάγονται αυτόματα από ιστορικά δεδομένα παραγωγής, όπως περιγράφεται στην Ενότητα~\ref{subsec:parameter-inference}.
 
 Η ανάκτηση μονάδων παραγωγής από τη βάση δεδομένων πραγματοποιείται με τη συνάρτηση \texttt{get\_generators}, η οποία υποστηρίζει φιλτράρισμα μη διαθεσιμοτήτων:
 
@@ -141,27 +152,31 @@ end
 
 \begin{samepage}
 \begin{minted}[fontsize=\small,linenos,frame=lines]{julia}
-function infer_ramp_rates(generation_data::Vector{Float64}, p_max::Float64;
-                          resolution_minutes::Int=60)
-    # Υπολογισμός μεταβολών μεταξύ διαδοχικών μετρήσεων
-    deltas = diff(generation_data)
+function infer_ramp_rates(historical_data::DataFrame, p_max::Float64;
+                          percentile::Float64=0.95)
+    if nrow(historical_data) < MIN_DATA_POINTS_FOR_RAMP_INFERENCE
+        return (ramp_up=nothing, ramp_down=nothing)
+    end
+
+    # Ταξινόμηση κατά χρόνο και υπολογισμός μεταβολών
+    sort!(historical_data, :date_time_utc)
+    gen_values = historical_data.actual_generation_output_mw
+    deltas = diff(gen_values)
 
     # Διαχωρισμός σε αυξήσεις και μειώσεις
-    ramp_up_values = filter(x -> x > 0, deltas)
-    ramp_down_values = filter(x -> x < 0, deltas) .|> abs
+    ramp_ups = filter(x -> x > 0, deltas)
+    ramp_downs = map(abs, filter(x -> x < 0, deltas))
 
-    # 95ο εκατοστημόριο (αγνόηση ακραίων τιμών)
-    ramp_up_mw = length(ramp_up_values) >= 100 ?
-        quantile(ramp_up_values, 0.95) : nothing
-    ramp_down_mw = length(ramp_down_values) >= 100 ?
-        quantile(ramp_down_values, 0.95) : nothing
+    # Κανονικοποίηση σε ωριαίο ρυθμό βάσει ανάλυσης δεδομένων
+    resolution_code = historical_data.resolution_code[1]
+    resolution_minutes = parse_resolution_to_minutes(resolution_code)
+    hourly_factor = 60.0 / resolution_minutes
 
-    # Κανονικοποίηση σε κλάσμα της p_max ανά ώρα
-    hours_per_period = resolution_minutes / 60
-    ramp_up = ramp_up_mw !== nothing ?
-        (ramp_up_mw / p_max) / hours_per_period : nothing
-    ramp_down = ramp_down_mw !== nothing ?
-        (ramp_down_mw / p_max) / hours_per_period : nothing
+    # 95ο εκατοστημόριο, μετατροπή σε κλάσμα p_max/ώρα
+    ramp_up = isempty(ramp_ups) ? nothing :
+        (quantile(ramp_ups, percentile) * hourly_factor) / p_max
+    ramp_down = isempty(ramp_downs) ? nothing :
+        (quantile(ramp_downs, percentile) * hourly_factor) / p_max
 
     return (ramp_up=ramp_up, ramp_down=ramp_down)
 end
@@ -175,30 +190,39 @@ end
 
 \begin{samepage}
 \begin{minted}[fontsize=\small,linenos,frame=lines]{julia}
-function infer_p_min(generation_data::Vector{Float64}, p_max::Float64;
-                     fuel_type::Symbol=:unknown)
-    # Φιλτράρισμα μηδενικών τιμών (μονάδα εκτός λειτουργίας)
-    non_zero = filter(x -> x > 0, generation_data)
+function infer_p_min(historical_data::DataFrame, p_max::Float64,
+                     fuel_type::Symbol; percentile::Float64=0.05)
+    if nrow(historical_data) < MIN_DATA_POINTS_FOR_RAMP_INFERENCE
+        return nothing
+    end
+
+    sort!(historical_data, :date_time_utc)
+    gen_values = historical_data.actual_generation_output_mw
+    deltas = diff(gen_values)
 
     # Ανίχνευση μεταβατικών καταστάσεων (|Δ| > 5% της p_max)
-    deltas = diff(generation_data)
-    transient_threshold = 0.05 * p_max
-    stable_indices = findall(i -> abs(deltas[i]) <= transient_threshold,
-                             1:length(deltas))
+    ramp_threshold = 0.05 * p_max
 
-    stable_values = generation_data[stable_indices .+ 1]
-    stable_non_zero = filter(x -> x > 0, stable_values)
+    # Συλλογή σταθερών μη-μηδενικών τιμών
+    stable_values = Float64[]
+    for i in 2:(length(gen_values) - 1)
+        value = gen_values[i]
+        if value > 0 && abs(deltas[i-1]) < ramp_threshold &&
+                        abs(deltas[i]) < ramp_threshold
+            push!(stable_values, value)
+        end
+    end
 
-    if length(stable_non_zero) < 50
+    if length(stable_values) < 50
         return nothing  # Ανεπαρκή δεδομένα
     end
 
     # 5ο εκατοστημόριο της σταθερής λειτουργίας
-    p_min_raw = quantile(stable_non_zero, 0.05) / p_max
+    inferred_p_min = quantile(stable_values, percentile)
 
-    # Εφαρμογή ορίων ανά τύπο καυσίμου
-    bounds = get_p_min_bounds(fuel_type)
-    return clamp(p_min_raw, bounds.min, bounds.max)
+    # Εφαρμογή ορίων ανά τύπο καυσίμου (clamp σε MW)
+    (min_frac, max_frac) = P_MIN_BOUNDS[get_p_min_bounds_category(fuel_type)]
+    return clamp(inferred_p_min, min_frac * p_max, max_frac * p_max)
 end
 \end{minted}
 \end{samepage}
@@ -223,45 +247,123 @@ end
 \end{tabular}
 \end{table}
 
-Οι ευέλικτοι πόροι (υδροηλεκτρικά, μπαταρίες) λαμβάνουν $P^{\min} = 0$ χωρίς εξαγωγή, καθώς μπορούν να λειτουργήσουν σε οποιοδήποτε επίπεδο ισχύος.
+Οι ευέλικτοι πόροι (υδροηλεκτρικά, μπαταρίες) λαμβάνουν $P^{\min} = 0$ χωρίς εξαγωγή, καθώς μπορούν να λειτουργήσουν σε οποιοδήποτε επίπεδο ισχύος. Η αντίστοιχη σταθερά \texttt{FLEXIBLE\_FUEL\_TYPES} περιλαμβάνει τους τύπους \texttt{Hydro Pumped Storage}, \texttt{Hydro Run-of-river}, \texttt{Hydro Water Reservoir}, \texttt{Battery} και \texttt{Other}. Αξίζει να σημειωθεί ότι οι προεπιλεγμένες τιμές \texttt{min\_load\_factor} στη δομή \texttt{FuelTypeParameters} ευθυγραμμίστηκαν με τα όρια εξαγωγής (π.χ. λιγνίτης: 0.45, ευέλικτοι πόροι: 0.0).
 
 \paragraph{Εξαγωγή Ελάχιστων Χρόνων Λειτουργίας/Αδράνειας}
 Οι ελάχιστοι χρόνοι υπολογίζονται αναλύοντας τους κύκλους λειτουργίας (on/off) της μονάδας:
 
 \begin{samepage}
 \begin{minted}[fontsize=\small,linenos,frame=lines]{julia}
-function infer_uptime_downtime(generation_data::Vector{Float64};
-                               resolution_minutes::Int=60)
+function infer_uptime_downtime(historical_data::DataFrame, fuel_type::Symbol;
+                               percentile::Float64=0.05)
+    if nrow(historical_data) < MIN_DATA_POINTS_FOR_RAMP_INFERENCE
+        return (nothing, nothing)
+    end
+
+    sort!(historical_data, :date_time_utc)
+    gen_values = historical_data.actual_generation_output_mw
+
+    # Υπολογισμός διάρκειας περιόδου σε ώρες
+    resolution_minutes = parse_resolution_to_minutes(
+        historical_data.resolution_code[1])
+    period_hours = resolution_minutes / 60.0
+
     # Προσδιορισμός κατάστασης (on: > 1 MW, off: = 0)
-    on_off = generation_data .> 1.0
+    is_on = gen_values .> 1.0
 
     # Εντοπισμός κύκλων λειτουργίας
-    uptime_durations = Float64[]
-    downtime_durations = Float64[]
-    current_duration = 0
+    on_durations, off_durations = Float64[], Float64[]
+    current_state = is_on[1]
+    current_duration = 1
 
-    for i in 2:length(on_off)
-        if on_off[i] == on_off[i-1]
+    for i in 2:length(is_on)
+        if is_on[i] == current_state
             current_duration += 1
         else
-            # Τέλος κύκλου
-            hours = current_duration * resolution_minutes / 60
-            if on_off[i-1]  # Ήταν on
-                push!(uptime_durations, hours)
-            else            # Ήταν off
-                push!(downtime_durations, hours)
+            duration_hours = current_duration * period_hours
+            if current_state
+                push!(on_durations, duration_hours)
+            else
+                push!(off_durations, duration_hours)
             end
+            current_state = is_on[i]
             current_duration = 1
         end
     end
 
-    # 5ο εκατοστημόριο (φιλτράρισμα σύντομων διακοπών/glitches)
-    min_uptime = length(uptime_durations) >= 10 ?
-        quantile(uptime_durations, 0.05) : nothing
-    min_downtime = length(downtime_durations) >= 10 ?
-        quantile(downtime_durations, 0.05) : nothing
+    # Φιλτράρισμα σύντομων glitches (< 2 περιόδων)
+    min_dur = 2 * period_hours
+    filter!(d -> d >= min_dur, on_durations)
+    filter!(d -> d >= min_dur, off_durations)
 
-    return (min_uptime=min_uptime, min_downtime=min_downtime)
+    # Απαίτηση τουλάχιστον 5 κύκλων για αξιόπιστη εξαγωγή
+    # Εφαρμογή ορίων ανά τύπο καυσίμου (βλ. Πίνακα~\ref{tab:uptime-downtime-bounds})
+    bounds = UPTIME_DOWNTIME_BOUNDS[get_p_min_bounds_category(fuel_type)]
+    min_uptime = length(on_durations) >= 5 ?
+        round(Int, clamp(quantile(on_durations, percentile),
+                         bounds[1]...)) : nothing
+    min_downtime = length(off_durations) >= 5 ?
+        round(Int, clamp(quantile(off_durations, percentile),
+                         bounds[2]...)) : nothing
+
+    return (min_uptime, min_downtime)
+end
+\end{minted}
+\end{samepage}
+
+Ομοίως με τα όρια $P^{\min}$, εφαρμόζονται όρια ανά τύπο καυσίμου για τους χρόνους λειτουργίας και αδράνειας, όπως παρουσιάζονται στον Πίνακα~\ref{tab:uptime-downtime-bounds}.
+
+\begin{table}[htbp]
+\centering
+\caption{Όρια ελάχιστων χρόνων λειτουργίας/αδράνειας ανά τύπο καυσίμου (ώρες)}
+\label{tab:uptime-downtime-bounds}
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+\textbf{Τύπος Καυσίμου} & \multicolumn{2}{c}{\textbf{Χρόνος Λειτουργίας}} & \multicolumn{2}{c}{\textbf{Χρόνος Αδράνειας}} \\
+\cmidrule(lr){2-3} \cmidrule(lr){4-5}
+& \textbf{Ελάχ.} & \textbf{Μέγ.} & \textbf{Ελάχ.} & \textbf{Μέγ.} \\
+\midrule
+Λιγνίτης/Άνθρακας & 8 & 48 & 4 & 24 \\
+Φυσικό αέριο (CCGT) & 2 & 12 & 1 & 8 \\
+Φυσικό αέριο (OCGT) & 1 & 4 & 1 & 4 \\
+Προεπιλογή & 2 & 24 & 1 & 12 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Η εφαρμογή ορίων διασφαλίζει ότι οι εξαχθείσες τιμές παραμένουν εντός τεχνικά ρεαλιστικού εύρους. Για μονάδες βάσης (π.χ. λιγνιτικές), η εξαγωγή χρόνων συχνά δεν είναι εφικτή λόγω σπάνιων κύκλων λειτουργίας/αδράνειας, οπότε χρησιμοποιούνται οι προεπιλεγμένες τιμές τύπου καυσίμου.
+
+\paragraph{Ενοποίηση Εξαγωγής Παραμέτρων}
+Η κεντρική συνάρτηση \texttt{infer\_parameters\_for\_generators} ενορχηστρώνει την εξαγωγή για ένα σύνολο μονάδων, εφαρμόζοντας διαφορετική λογική ανάλογα με τον τύπο καυσίμου:
+
+\begin{samepage}
+\begin{minted}[fontsize=\small,linenos,frame=lines]{julia}
+function infer_parameters_for_generators(generators::Vector{Generator},
+                                         day::Date)
+    updated = Generator[]
+    for gen in generators
+        historical = get_historical_generation(gen.code, day)
+        rates = infer_ramp_rates(historical, gen.p_max)
+
+        if gen.fuel_type in FLEXIBLE_FUEL_TYPES
+            # Ευέλικτοι πόροι: p_min = 0, χωρίς uptime/downtime
+            push!(updated, Generator(gen.code, gen.name, gen.fuel_type,
+                gen.location, gen.p_max, 0.0, gen.bidding_zone,
+                gen.marginal_cost, rates.ramp_up, rates.ramp_down,
+                nothing, nothing))
+        else
+            # Θερμικές μονάδες: εξαγωγή όλων των παραμέτρων
+            p_min = infer_p_min(historical, gen.p_max, gen.fuel_type)
+            (uptime, downtime) = infer_uptime_downtime(historical,
+                                                        gen.fuel_type)
+            push!(updated, Generator(gen.code, gen.name, gen.fuel_type,
+                gen.location, gen.p_max,
+                p_min !== nothing ? p_min : gen.p_min,
+                gen.bidding_zone, gen.marginal_cost,
+                rates.ramp_up, rates.ramp_down, uptime, downtime))
+        end
+    end
+    return updated
 end
 \end{minted}
 \end{samepage}
@@ -384,18 +486,18 @@ end
 # Αποκλεισμός ταυτόχρονης εκκίνησης και τερματισμού
 @constraint(model, [i = 1:N, t = 1:T], v[i, t] + z[i, t] <= 1)
 
-# Ελάχιστος χρόνος λειτουργίας: προτίμηση σε εξαχθείσες τιμές
+# Ελάχιστος χρόνος λειτουργίας: εξαχθείσα τιμή ή προεπιλογή τύπου καυσίμου
 for (i, gen) in enumerate(generators)
-    UT = gen.min_uptime > 0 ? gen.min_uptime : fuel_params[i].min_uptime
+    UT = gen.min_uptime !== nothing ? gen.min_uptime : fuel_params[i].min_uptime
     if UT > 1
         @constraint(model, [t = UT:T],
             sum(v[i, τ] for τ in t-UT+1:t) <= u[i, t])
     end
 end
 
-# Ελάχιστος χρόνος αδράνειας: προτίμηση σε εξαχθείσες τιμές
+# Ελάχιστος χρόνος αδράνειας: εξαχθείσα τιμή ή προεπιλογή τύπου καυσίμου
 for (i, gen) in enumerate(generators)
-    DT = gen.min_downtime > 0 ? gen.min_downtime : fuel_params[i].min_downtime
+    DT = gen.min_downtime !== nothing ? gen.min_downtime : fuel_params[i].min_downtime
     if DT > 1
         @constraint(model, [t = DT:T],
             sum(z[i, τ] for τ in t-DT+1:t) <= 1 - u[i, t])
@@ -411,14 +513,24 @@ end
 
 \begin{samepage}
 \begin{minted}[fontsize=\small,linenos,frame=lines]{julia}
-# Υπολογισμός ρυθμών μεταβολής: προτίμηση σε εξαχθείσες τιμές
-# με fallback σε παραμέτρους τύπου καυσίμου
-ramp_up = [gen.ramp_up > 0 ? gen.ramp_up * gen.p_max * period_hours :
-           fuel_params[i].ramp_up_rate * gen.p_max * period_hours
-           for (i, gen) in enumerate(generators)]
-ramp_down = [gen.ramp_down > 0 ? gen.ramp_down * gen.p_max * period_hours :
-             fuel_params[i].ramp_down_rate * gen.p_max * period_hours
-             for (i, gen) in enumerate(generators)]
+# Υπολογισμός ρυθμών μεταβολής ανά μονάδα:
+# εξαχθείσα τιμή (fraction/hour) ή προεπιλογή τύπου καυσίμου
+# Μετατροπή σε MW/περίοδο: rate × p_max × period_hours
+period_hours = resolution_minutes / 60.0
+ramp_up = Float64[]
+ramp_down = Float64[]
+for (i, gen) in enumerate(generators)
+    if gen.ramp_up !== nothing
+        push!(ramp_up, gen.ramp_up * gen.p_max * period_hours)
+    else
+        push!(ramp_up, fuel_params[i].ramp_up_rate * gen.p_max * period_hours)
+    end
+    if gen.ramp_down !== nothing
+        push!(ramp_down, gen.ramp_down * gen.p_max * period_hours)
+    else
+        push!(ramp_down, fuel_params[i].ramp_down_rate * gen.p_max * period_hours)
+    end
+end
 
 M = 10000.0  # Παράμετρος Big-M
 
