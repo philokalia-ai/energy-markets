@@ -95,17 +95,30 @@ end
 \begin{samepage}
 \begin{minted}[fontsize=\small,linenos,frame=lines]{julia}
 struct FuelTypeParameters
-    cold_startup_time::Int      # Περίοδοι για ψυχρή εκκίνηση
-    warm_startup_time::Int      # Περίοδοι για θερμή εκκίνηση
-    hot_startup_time::Int       # Περίοδοι για καυτή εκκίνηση
-    min_uptime::Int             # Ελάχιστος χρόνος λειτουργίας (ώρες)
-    min_downtime::Int           # Ελάχιστος χρόνος αδράνειας (ώρες)
-    ramp_up_rate::Float64       # Ρυθμός αύξησης (κλάσμα/περίοδο)
-    ramp_down_rate::Float64     # Ρυθμός μείωσης (κλάσμα/περίοδο)
-    min_load_factor::Float64    # Ελάχιστο φορτίο (% της δυναμικότητας)
+    # Χαρακτηριστικά εκκίνησης (σε ΩΡΕΣ)
+    cold_startup_time::Int          # Ώρες για ψυχρή εκκίνηση
+    warm_startup_time::Int          # Ώρες για θερμή εκκίνηση
+    hot_startup_time::Int           # Ώρες για καυτή εκκίνηση
+    # Ελάχιστοι χρόνοι λειτουργίας (σε ΩΡΕΣ)
+    min_uptime::Int                 # Ελάχιστες ώρες λειτουργίας
+    min_downtime::Int               # Ελάχιστες ώρες αδράνειας
+    # Ρυθμοί μεταβολής (κλάσμα δυναμικότητας ανά ΩΡΑ)
+    ramp_up_rate::Float64           # Ρυθμός αύξησης (κλάσμα/ώρα)
+    ramp_down_rate::Float64         # Ρυθμός μείωσης (κλάσμα/ώρα)
+    # Λειτουργική ευελιξία
+    min_load_factor::Float64        # Ελάχιστο φορτίο (κλάσμα)
+    part_load_efficiency::Float64   # Απόδοση στο ελάχιστο φορτίο
+    # Κατώφλια θερμοκρασιακής μετάβασης (ΩΡΕΣ εκτός)
+    warm_threshold::Int             # Ώρες αδράνειας → θερμή κατάσταση
+    cold_threshold::Int             # Ώρες αδράνειας → ψυχρή κατάσταση
+    # Οικονομικές παράμετροι
+    startup_cost_multiplier::Float64  # Πολλαπλασιαστής κόστους εκκίνησης
+    no_load_cost_fraction::Float64    # Κόστος χωρίς φορτίο (κλάσμα)
 end
 \end{minted}
 \end{samepage}
+
+Σημαντικό σχεδιαστικό χαρακτηριστικό είναι ότι όλες οι χρονικές παράμετροι αποθηκεύονται σε \textbf{ώρες} (όχι σε περιόδους). Ο επιλυτής UC μετατρέπει αυτόματα σε περιόδους βάσει της πραγματικής χρονικής ανάλυσης των δεδομένων ($\text{periods\_per\_hour} = 60 / \text{resolution\_minutes}$). Τα πεδία \texttt{warm\_threshold} και \texttt{cold\_threshold} χρησιμοποιούνται τόσο στον προσδιορισμό θερμοκρασιακής κατάστασης εκκίνησης (Ενότητα~\ref{subsec:initial-conditions}) όσο και στους αντίστοιχους περιορισμούς του μοντέλου UC. Τα πεδία \texttt{startup\_cost\_multiplier} και \texttt{no\_load\_cost\_fraction} τροφοδοτούν τον υπολογισμό κόστους εκκίνησης και κόστους χωρίς φορτίο στην αντικειμενική συνάρτηση (Ενότητα~\ref{subsec:uc-balance-objective}).
 
 Η συνάρτηση \texttt{get\_fuel\_type\_parameters} επιστρέφει τις κατάλληλες παραμέτρους για κάθε τύπο καυσίμου. Για παράδειγμα, οι λιγνιτικές μονάδες έχουν μεγαλύτερους χρόνους εκκίνησης και χαμηλότερους ρυθμούς μεταβολής σε σύγκριση με τις μονάδες συνδυασμένου κύκλου φυσικού αερίου.
 
@@ -384,6 +397,58 @@ generators = get_generators_with_inferred_params("GR", Date(2024, 6, 15);
 Η χρήση της κρυφής μνήμης μειώνει τον χρόνο ανάκτησης από περίπου 17 λεπτά σε περίπου 2 δευτερόλεπτα---βελτίωση κατά 525 φορές.
 
 
+\subsection{Αρχικές Συνθήκες Μονάδων Παραγωγής}
+\label{subsec:initial-conditions}
+
+Για τη ρεαλιστική μοντελοποίηση του προβλήματος Unit Commitment, η κατάσταση κάθε μονάδας κατά τη χρονική στιγμή $t=0$ (έναρξη του ορίζοντα βελτιστοποίησης) πρέπει να είναι γνωστή. Οι αρχικές συνθήκες καθορίζουν αν η μονάδα λειτουργούσε, σε ποιο επίπεδο ισχύος, και για πόσο χρόνο βρισκόταν στην τρέχουσα κατάστασή της. Αυτή η πληροφορία είναι απαραίτητη για τη σωστή επιβολή περιορισμών στις πρώτες περιόδους του ορίζοντα.
+
+\paragraph{Δομή Αρχικών Συνθηκών}
+Η δομή \texttt{InitialConditions} αναπαριστά την κατάσταση μιας μονάδας στο $t=0$:
+
+\begin{samepage}
+\begin{minted}[fontsize=\small,linenos,frame=lines]{julia}
+struct InitialConditions
+    is_on::Bool           # Λειτουργούσε η μονάδα στο t=0;
+    output::Float64       # Ισχύς εξόδου σε MW (0 αν εκτός λειτουργίας)
+    hours_on::Int         # Συνεχόμενες ώρες λειτουργίας
+    hours_off::Int        # Συνεχόμενες ώρες αδράνειας
+    thermal_state::Symbol # Θερμοκρασιακή κατάσταση (:hot, :warm, :cold)
+end
+\end{minted}
+\end{samepage}
+
+Η θερμοκρασιακή κατάσταση προσδιορίζεται από τον χρόνο αδράνειας: \texttt{:hot} αν $T_{\text{off}} \leq 8$ ώρες, \texttt{:warm} αν $8 < T_{\text{off}} \leq 48$ ώρες, και \texttt{:cold} αν $T_{\text{off}} > 48$ ώρες. Τα κατώφλια αυτά προσαρμόζονται ανά τύπο καυσίμου μέσω των αντίστοιχων πεδίων \texttt{warm\_threshold} και \texttt{cold\_threshold} της δομής \texttt{FuelTypeParameters}.
+
+\paragraph{Εξαγωγή από Ιστορικά Δεδομένα}
+Η κεντρική συνάρτηση \texttt{get\_initial\_conditions} εξάγει τις αρχικές συνθήκες για ένα σύνολο μονάδων χρησιμοποιώντας ένα μαζικό ερώτημα SQL (batch query) αντί $N$ ξεχωριστών ερωτημάτων. Η τεχνική αυτή επιτυγχάνει βελτίωση ταχύτητας κατά 36 φορές (από $\sim$9 λεπτά σε $\sim$15 δευτερόλεπτα για 40 μονάδες):
+
+\begin{samepage}
+\begin{minted}[fontsize=\small,linenos,frame=lines]{julia}
+function get_initial_conditions(generators::Vector{Generator},
+                                market_day::Date;
+                                use_historical::Bool=true)
+    # Μαζική ανάκτηση 72 ωρών ιστορικού για όλες τις μονάδες
+    # σε ένα ερώτημα SQL (WHERE generation_unit_code = ANY($1))
+    day_before = market_day - Day(1)
+    start_utc = DateTime(day_before, Time(23, 0, 0))  # ~00:00 CET
+    codes = [gen.code for gen in generators]
+    all_historical = get_recent_generation_batch(codes, start_utc)
+
+    conditions = Dict{String, InitialConditions}()
+    for gen in generators
+        gen_data = filter(r -> r.generation_unit_code == gen.code,
+                          all_historical)
+        ic = infer_initial_conditions_from_data(gen_data, gen.fuel_type)
+        conditions[gen.code] = ic
+    end
+    return conditions
+end
+\end{minted}
+\end{samepage}
+
+Ο αλγόριθμος εξαγωγής αναλύει τα δεδομένα σε φθίνουσα χρονική σειρά: η πιο πρόσφατη μέτρηση $> 1$ MW δηλώνει ότι η μονάδα ήταν σε λειτουργία. Στη συνέχεια, μετρούνται οι συνεχόμενες περίοδοι στην ίδια κατάσταση για τον υπολογισμό του $T_{\text{on}}$ ή $T_{\text{off}}$. Σε περίπτωση απουσίας δεδομένων, χρησιμοποιούνται ευρετικές προεπιλεγμένες τιμές ανά τύπο καυσίμου: οι μονάδες βάσης (λιγνίτης, πυρηνικά) θεωρούνται σε λειτουργία, οι μονάδες μέσου φορτίου (CCGT) εκτός λειτουργίας αλλά θερμές, οι μονάδες αιχμής (OCGT) εκτός λειτουργίας και ψυχρές, και οι ευέλικτοι πόροι (υδροηλεκτρικά, μπαταρίες) εκτός λειτουργίας αλλά έτοιμοι.
+
+
 \subsection{Τύποι Εντολών Αγοράς}
 \label{subsec:market-orders}
 
@@ -420,31 +485,51 @@ end
 
 \begin{samepage}
 \begin{minted}[fontsize=\small,linenos,frame=lines]{julia}
-function solve_unit_commitment(bidding_zone::String, day::Date)
+function solve_unit_commitment(bidding_zone::String, day::Date;
+                               optimizer::String="auto",
+                               mip_gap::Float64=0.01,
+                               time_limit::Float64=600.0)
     # Φόρτωση δεδομένων
     generators = get_generators(bidding_zone, day)
     loads = get_loads(bidding_zone, day)
     renewables = get_generation_forecast_for_wind_and_solar(bidding_zone, day)
-    
+    initial_conditions = get_initial_conditions(generators, day)
+
     N = length(generators)  # Αριθμός μονάδων
-    T = 24                  # Χρονικές περίοδοι (ώρες)
-    
-    # Δημιουργία μοντέλου με τον επιλυτή HiGHS
-    model = Model(HiGHS.Optimizer)
+    T = 24                  # Χρονικές περίοδοι
+    periods_per_hour = 60 / resolution_minutes
+
+    # Δημιουργία μοντέλου με ρύθμιση παραμέτρων επιλυτή
+    model = Model(optimizer_func)
     set_silent(model)
-    
+    set_optimizer_attribute(model, MOI.RelativeGapTolerance(), mip_gap)
+    set_optimizer_attribute(model, MOI.TimeLimitSec(), time_limit)
+
+    # Εξαγωγή αρχικών συνθηκών σε πίνακες
+    u0 = zeros(Int, N)      # Αρχική δέσμευση (0 ή 1)
+    g0 = zeros(Float64, N)  # Αρχική παραγωγή (MW)
+    T_on0 = zeros(Int, N)   # Ώρες ήδη σε λειτουργία
+    T_off0 = zeros(Int, N)  # Ώρες ήδη εκτός λειτουργίας
+    for (i, gen) in enumerate(generators)
+        ic = initial_conditions[gen.code]
+        u0[i] = ic.is_on ? 1 : 0
+        g0[i] = ic.output
+        T_on0[i] = ic.hours_on
+        T_off0[i] = ic.hours_off
+    end
+
     # Μεταβλητές παραγωγής (συνεχείς)
     @variable(model, 0 <= g[i=1:N, t=1:T] <= generators[i].p_max)
-    
+
     # Μεταβλητές δέσμευσης (δυαδικές)
     @variable(model, u[i=1:N, t=1:T], Bin)  # Κατάσταση λειτουργίας
     @variable(model, v[i=1:N, t=1:T], Bin)  # Εκκίνηση
     @variable(model, z[i=1:N, t=1:T], Bin)  # Τερματισμός
-    
+
     # Μεταβλητές για θερμοκρασιακές καταστάσεις εκκίνησης
     Θ = [:cold, :warm, :hot]
     @variable(model, v_θ[i=1:N, θ in Θ, t=1:T], Bin)
-    
+
     # ... περαιτέρω μεταβλητές
 end
 \end{minted}
@@ -475,36 +560,62 @@ end
 \subsection{Περιορισμοί Δέσμευσης}
 \label{subsec:impl-uc-commitment-constraints}
 
-Η σχέση μεταξύ κατάστασης λειτουργίας, εκκίνησης και τερματισμού υλοποιείται ως εξής:
+Η σχέση μεταξύ κατάστασης λειτουργίας, εκκίνησης και τερματισμού υλοποιείται ως εξής, με ενσωμάτωση αρχικών συνθηκών στην περίοδο $t=1$:
 
 \begin{samepage}
 \begin{minted}[fontsize=\small,linenos,frame=lines]{julia}
-# Σύνδεση μεταβλητών δέσμευσης
-@constraint(model, [i in 1:N, t in 2:T], 
+# Σύνδεση t=1 με αρχική κατάσταση u0
+if initial_conditions !== nothing
+    @constraint(model, [i in 1:N],
+        u[i, 1] == u0[i] + v[i, 1] - z[i, 1])
+end
+
+# Σύνδεση μεταβλητών δέσμευσης (t ≥ 2)
+@constraint(model, [i in 1:N, t in 2:T],
     u[i, t] == u[i, t-1] + v[i, t] - z[i, t])
 
 # Αποκλεισμός ταυτόχρονης εκκίνησης και τερματισμού
 @constraint(model, [i = 1:N, t = 1:T], v[i, t] + z[i, t] <= 1)
 
-# Ελάχιστος χρόνος λειτουργίας: εξαχθείσα τιμή ή προεπιλογή τύπου καυσίμου
+# Ελάχιστος χρόνος λειτουργίας (ώρες → περίοδοι)
 for (i, gen) in enumerate(generators)
-    UT = gen.min_uptime !== nothing ? gen.min_uptime : fuel_params[i].min_uptime
+    UT_hours = gen.min_uptime !== nothing ?
+        gen.min_uptime : fuel_params[i].min_uptime
+    UT = max(1, ceil(Int, UT_hours * periods_per_hour))
     if UT > 1
         @constraint(model, [t = UT:T],
             sum(v[i, τ] for τ in t-UT+1:t) <= u[i, t])
+        # Αρχική συνθήκη: εναπομένων χρόνος λειτουργίας
+        if initial_conditions !== nothing && u0[i] == 1
+            remaining = max(0, UT - ceil(Int, T_on0[i] * periods_per_hour))
+            for t in 1:min(remaining, T)
+                @constraint(model, u[i, t] == 1)
+            end
+        end
     end
 end
 
-# Ελάχιστος χρόνος αδράνειας: εξαχθείσα τιμή ή προεπιλογή τύπου καυσίμου
+# Ελάχιστος χρόνος αδράνειας (ώρες → περίοδοι)
 for (i, gen) in enumerate(generators)
-    DT = gen.min_downtime !== nothing ? gen.min_downtime : fuel_params[i].min_downtime
+    DT_hours = gen.min_downtime !== nothing ?
+        gen.min_downtime : fuel_params[i].min_downtime
+    DT = max(1, ceil(Int, DT_hours * periods_per_hour))
     if DT > 1
         @constraint(model, [t = DT:T],
             sum(z[i, τ] for τ in t-DT+1:t) <= 1 - u[i, t])
+        # Αρχική συνθήκη: εναπομένων χρόνος αδράνειας
+        if initial_conditions !== nothing && u0[i] == 0
+            remaining = max(0, DT - ceil(Int, T_off0[i] * periods_per_hour))
+            for t in 1:min(remaining, T)
+                @constraint(model, u[i, t] == 0)
+            end
+        end
     end
 end
 \end{minted}
 \end{samepage}
+
+Η μετατροπή $\texttt{UT\_hours} \times \texttt{periods\_per\_hour}$ διασφαλίζει ότι οι περιορισμοί εφαρμόζονται σωστά ανεξάρτητα από τη χρονική ανάλυση (15, 30 ή 60 λεπτά). Οι αρχικές συνθήκες επιβάλλουν τη συνέχιση της τρέχουσας κατάστασης κάθε μονάδας: αν μια μονάδα λειτουργούσε αλλά δεν έχει συμπληρώσει τον ελάχιστο χρόνο λειτουργίας, εξαναγκάζεται να παραμείνει σε λειτουργία για τις εναπομένουσες περιόδους.
 
 \subsection{Περιορισμοί Ρυθμού Μεταβολής}
 \label{subsec:impl-uc-ramping}
@@ -532,13 +643,15 @@ for (i, gen) in enumerate(generators)
     end
 end
 
-M = 10000.0  # Παράμετρος Big-M
+# Big-M: κλιμακούμενο βάσει μεγέθους προβλήματος
+max_p_max = maximum(gen.p_max for gen in generators)
+M = 2.0 * max_p_max
 
-# Περιορισμός αύξησης
+# Περιορισμός αύξησης (t ≥ 2)
 @constraint(model, [i in 1:N, t in 2:T],
     g[i, t] - g[i, t-1] <= ramp_up[i] + M * u_SU[i, t])
 
-# Περιορισμός μείωσης
+# Περιορισμός μείωσης (t ≥ 2)
 @constraint(model, [i in 1:N, t in 2:T],
     g[i, t-1] - g[i, t] <= ramp_down[i] + M * u_SD[i, t])
 \end{minted}
@@ -551,20 +664,53 @@ M = 10000.0  # Παράμετρος Big-M
 
 \begin{samepage}
 \begin{minted}[fontsize=\small,linenos,frame=lines]{julia}
-# Υπολογισμός καθαρής ζήτησης (ζήτηση - παραγωγή ΑΠΕ)
-net_demand = [loads[t].value - sum(r.aggregated_generation_forecast 
-              for r in renewables if hour(r.date_time) == t)
-              for t in 1:T]
-
 # Περιορισμός ισορροπίας
-@constraint(model, [t in 1:T], 
+@constraint(model, [t in 1:T],
     sum(g[i, t] for i in 1:N) == net_demand[t])
-
-# Αντικειμενική συνάρτηση: ελαχιστοποίηση κόστους
-@objective(model, Min,
-    sum(generators[i].marginal_cost * g[i, t] for i in 1:N, t in 1:T))
 \end{minted}
 \end{samepage}
+
+Η αντικειμενική συνάρτηση αποτελείται από τρεις συνιστώσες κόστους: κόστος παραγωγής, κόστος εκκίνησης και κόστος χωρίς φορτίο. Πριν τη διαμόρφωση, υπολογίζονται οι παράμετροι κόστους:
+
+\begin{samepage}
+\begin{minted}[fontsize=\small,linenos,frame=lines]{julia}
+# Κόστος εκκίνησης ανά μονάδα και θερμοκρασιακή κατάσταση (€)
+# Βασικό κόστος = startup_cost_multiplier × marginal_cost × p_max
+# Πολλαπλασιαστές: hot=1.0, warm=1.5, cold=2.5
+C_SU = Dict{Tuple{Int,Symbol},Float64}()
+for i in 1:N
+    params = fuel_params[i]
+    gen = generators[i]
+    base = params.startup_cost_multiplier * gen.marginal_cost * gen.p_max
+    C_SU[(i, :hot)]  = base * 1.0
+    C_SU[(i, :warm)] = base * 1.5
+    C_SU[(i, :cold)] = base * 2.5
+end
+
+# Κόστος χωρίς φορτίο ανά μονάδα (€/περίοδο)
+# Πάγιο κόστος δέσμευσης ανεξάρτητο από παραγωγή
+period_hours = resolution_minutes / 60.0
+C_NL = Float64[]
+for i in 1:N
+    params = fuel_params[i]
+    gen = generators[i]
+    push!(C_NL, params.no_load_cost_fraction *
+                gen.marginal_cost * gen.p_min * period_hours)
+end
+
+# Αντικειμενική: ελαχιστοποίηση συνολικού κόστους
+@objective(model, Min,
+    # 1. Κόστος παραγωγής (μεταβλητό)
+    sum(generators[i].marginal_cost * g[i, t] for i in 1:N, t in 1:T)
+    # 2. Κόστος εκκίνησης (εξαρτώμενο από θερμοκρασία)
+    + sum(C_SU[(i, θ)] * v_θ[i, θ, t] for i in 1:N, θ in Θ, t in 1:T)
+    # 3. Κόστος χωρίς φορτίο (πάγιο κόστος δέσμευσης)
+    + sum(C_NL[i] * u[i, t] for i in 1:N, t in 1:T)
+)
+\end{minted}
+\end{samepage}
+
+Η τρισδιάστατη δομή κόστους αποτυπώνει ρεαλιστικά τα κίνητρα λειτουργίας: το κόστος εκκίνησης αποθαρρύνει τις συχνές εκκινήσεις/τερματισμούς (ιδιαίτερα τις ψυχρές εκκινήσεις, που κοστίζουν 2,5 φορές περισσότερο από τις θερμές), ενώ το κόστος χωρίς φορτίο αντανακλά τα πάγια λειτουργικά κόστη δέσμευσης μιας μονάδας ανεξάρτητα από το επίπεδο παραγωγής της.
 
 \subsection{Επίλυση και Επιστροφή Αποτελεσμάτων}
 \label{subsec:uc-solution}
@@ -591,6 +737,40 @@ else
 end
 \end{minted}
 \end{samepage}
+
+\subsection{Αποθήκευση Αποτελεσμάτων σε Κρυφή Μνήμη}
+\label{subsec:uc-caching}
+
+Η επίλυση του προβλήματος Unit Commitment απαιτεί 10--15 λεπτά ανά ζώνη. Για την αποφυγή επαναληπτικών υπολογισμών, τα αποτελέσματα αποθηκεύονται σε τρεις πίνακες PostgreSQL (\texttt{uc\_results}, \texttt{uc\_generation}, \texttt{uc\_net\_demand}) με κλειδί \texttt{(bidding\_zone, market\_date, code\_version)}. Η συνάρτηση \texttt{solve\_unit\_commitment} ελέγχει αυτόματα τη διαθεσιμότητα αποθηκευμένων αποτελεσμάτων:
+
+\begin{samepage}
+\begin{minted}[fontsize=\small,linenos,frame=lines]{julia}
+function solve_unit_commitment(bidding_zone::String, day::Date;
+                               optimizer::String="auto",
+                               use_cache::Bool=true,
+                               force_rerun::Bool=false,
+                               # ... λοιπές παράμετροι
+                               )
+    # Έλεγχος κρυφής μνήμης (εκτός αν απενεργοποιημένη)
+    if use_cache && !force_rerun
+        cached = load_uc_results(bidding_zone, day)
+        if cached !== nothing
+            return cached   # Επιστροφή σε ~2 δευτερόλεπτα
+        end
+    end
+
+    # ... κανονική επίλυση (10-15 λεπτά) ...
+
+    # Αποθήκευση αποτελεσμάτων (delete-before-insert)
+    if use_cache
+        save_uc_results(solution, bidding_zone, day)
+    end
+    return solution
+end
+\end{minted}
+\end{samepage}
+
+Η παράμετρος \texttt{force\_rerun} διαδίδεται μέσω ολόκληρης της αλυσίδας κλήσεων (\texttt{generate\_energy\_prices} $\to$ \texttt{create\_typed\_order\_book} $\to$ \texttt{generate\_market\_orders\_from\_uc} $\to$ \texttt{solve\_unit\_commitment}), επιτρέποντας τον επανυπολογισμό αποτελεσμάτων όταν αλλάξει ο κώδικας ή τα δεδομένα εισόδου. Η αποθήκευση ανέρχεται σε περίπου 195 KB ανά ζώνη/ημέρα---κόστος αμελητέο σε σύγκριση με την εξοικονόμηση χρόνου.
 
 
 % =============================================================================
@@ -1125,6 +1305,11 @@ end
 \end{minted}
 \end{samepage}
 
+\paragraph{Παράλληλη Εκτέλεση UC}
+Κατά την πολυζωνική εκκαθάριση με τη μέθοδο \texttt{:uc\_based}, η επίλυση Unit Commitment εκτελείται ανεξάρτητα για κάθε ζώνη. Η παράμετρος \texttt{parallel=true} ενεργοποιεί την ταυτόχρονη εκτέλεση αυτών των ανεξάρτητων υπολογισμών μέσω της συνάρτησης \texttt{pmap} του module \texttt{Distributed.jl}. Κάθε ζώνη ανατίθεται σε έναν ξεχωριστό εργάτη (worker process), ο οποίος εκτελεί πλήρως τον κύκλο ανάκτησης δεδομένων, επίλυσης UC και μετατροπής σε εντολές αγοράς. Η μέθοδος \texttt{pmap} εξασφαλίζει δυναμική κατανομή εργασιών: μόλις ένας εργάτης ολοκληρώσει μια ζώνη, αναλαμβάνει την επόμενη διαθέσιμη.
+
+Σε περίπτωση που δεν υπάρχουν διαθέσιμοι εργάτες (\texttt{nworkers() == 0}), το σύστημα υποβαθμίζεται αυτόματα σε σειριακή εκτέλεση χωρίς σφάλμα. Η ασφάλεια νημάτων (thread safety) εξασφαλίζεται από το γεγονός ότι κάθε εργάτης λειτουργεί σε ξεχωριστό address space και τα κλειδιά κρυφής μνήμης είναι ειδικά ανά ζώνη, ενώ οι εγγραφές στη βάση δεδομένων χρησιμοποιούν συναλλαγές PostgreSQL. Η εκκαθάριση MPCC εκτελείται πάντα σειριακά μετά την ολοκλήρωση όλων των UC, καθώς απαιτεί το ενοποιημένο βιβλίο εντολών όλων των ζωνών.
+
 \subsection{Αποθήκευση Αποτελεσμάτων}
 \label{subsec:saving-results}
 
@@ -1164,22 +1349,21 @@ end
 \begin{minted}[fontsize=\small,linenos,frame=lines]{julia}
 function run_multi_zone_for_date_range(start_date::Date, end_date::Date;
                                        zones::Vector{String}=String[],
-                                       order_method::Symbol=:alternative)
+                                       order_method::Symbol=:alternative,
+                                       force_rerun::Bool=false,
+                                       parallel::Bool=false)
     results = Dict{Date,MPCCResult}()
-    
+
     for date in start_date:Day(1):end_date
-        println("\n📅 Processing $date")
         try
             result = run_multi_zone_market_clearing(date;
-                                                    zones=zones,
-                                                    order_method=order_method)
+                zones=zones, order_method=order_method,
+                force_rerun=force_rerun, parallel=parallel)
             results[date] = result
         catch e
             @warn "Failed to process $date: $e"
         end
     end
-    
-    println("\n✅ Processed $(length(results))/$(Dates.value(end_date - start_date) + 1) days")
     return results
 end
 \end{minted}
@@ -1216,3 +1400,17 @@ for (flow_id, flows) in result.transmission_flows
 end
 \end{minted}
 \end{samepage}
+
+
+% =============================================================================
+\section{Αυτοματοποιημένη Εκτέλεση}
+\label{sec:automated-execution}
+
+Για τη συστηματική παραγωγή τιμών σε ημερήσια βάση, αναπτύχθηκε υποδομή αυτοματοποίησης βασισμένη σε GitHub Actions. Δύο ροές εργασιών (workflows) εκτελούνται σε αυτο-φιλοξενούμενο μηχάνημα (self-hosted runner):
+
+\begin{itemize}
+\item \texttt{generate-energy-prices.yml}: Μονοζωνική εκκαθάριση, προγραμματισμένη στις 02:00 UTC ημερησίως.
+\item \texttt{generate-multi-zone-prices.yml}: Πολυζωνική εκκαθάριση με διασυνοριακούς περιορισμούς, προγραμματισμένη στις 03:00 UTC ημερησίως.
+\end{itemize}
+
+Η πολυζωνική ροή εργασιών εκτελεί τα εξής βήματα: εγκατάσταση εξαρτήσεων Julia, ρύθμιση σύνδεσης βάσης δεδομένων, εκκίνηση παράλληλων εργατών (workers), εκτέλεση του σεναρίου \texttt{bin/multi\_zone\_main.jl} με τις κατάλληλες παραμέτρους, και αποστολή ειδοποιήσεων μέσω Slack σε περίπτωση επιτυχίας ή αποτυχίας. Κατά τη χρήση του εμπορικού επιλυτή Gurobi, ο αριθμός παράλληλων εργατών περιορίζεται αυτόματα σε 2, λόγω του ορίου ταυτόχρονων συνεδριών της άδειας WLS (Web License Service). Κάθε ροή εργασιών υποστηρίζει τόσο χειροκίνητη ενεργοποίηση (\texttt{workflow\_dispatch}) με παραμετροποιήσιμο εύρος ημερομηνιών, όσο και αυτόματη εκτέλεση μέσω χρονοπρογραμματισμού (\texttt{cron}).
