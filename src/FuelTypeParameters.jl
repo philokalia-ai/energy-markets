@@ -208,7 +208,7 @@ function get_fuel_type_parameters(fuel_type::Symbol)::FuelTypeParameters
             0.0     # no_load_cost_fraction: No fuel costs
         )
 
-    elseif fuel_type == Symbol("Hydro Run-of-river and poundage")
+    elseif fuel_type == Symbol("Hydro Run-of-river and pondage")
         # Run-of-river Hydro - Flexible but flow-dependent
         return FuelTypeParameters(
             1,      # cold_startup_time: Quick startup
