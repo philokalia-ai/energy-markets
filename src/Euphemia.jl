@@ -283,7 +283,8 @@ export MICOrder, LoadGradientOrder, MeritOrder, PUNOrder
 export Generator, Load, RenewablesGenerationForecast, InitialConditions
 
 # Helper functions for data retrieval
-export get_generators, get_loads, get_generation_forecast_for_wind_and_solar
+export get_generators, get_generators_with_inferred_params, infer_parameters_for_generators
+export get_loads, get_generation_forecast_for_wind_and_solar
 export get_initial_conditions, get_default_initial_conditions, determine_thermal_state
 
 # Unit commitment functionality

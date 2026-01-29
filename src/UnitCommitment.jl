@@ -189,7 +189,8 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date;
                                force_rerun::Bool=false,
                                curtailment_penalty::Float64=1.0,
                                excess_penalty::Float64=10000.0,
-                               shortage_penalty::Float64=10000.0)
+                               shortage_penalty::Float64=10000.0,
+                               use_inferred_params::Bool=true)
 
     # Check cache first (unless disabled or force_rerun)
     if use_cache && !force_rerun
@@ -221,7 +222,14 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date;
 
     # Get data from the database
     data_fetch_start = time()
-    generators = get_generators(bidding_zone, day)
+    if use_inferred_params
+        # Use inferred parameters from historical data (cached if available)
+        # This provides plant-specific ramp rates, p_min, and uptime/downtime
+        generators = get_generators_with_inferred_params(bidding_zone, day)
+    else
+        # Use default fuel-type parameters only
+        generators = get_generators(bidding_zone, day)
+    end
     loads = get_loads(bidding_zone, day)
     renewables = get_generation_forecast_for_wind_and_solar(bidding_zone, day)
 

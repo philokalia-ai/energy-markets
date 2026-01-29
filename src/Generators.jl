@@ -679,13 +679,16 @@ function save_inferred_parameters(generators::Vector{Generator}, bidding_zone::S
 end
 
 """
-    load_cached_parameters(bidding_zone::String; max_age_days::Int=7)
+    load_cached_parameters(bidding_zone::String; max_age_days::Int=30)
 
 Load cached inferred parameters from the database.
 Returns a Dict mapping generator_code => (ramp_up, ramp_down, p_min, min_uptime, min_downtime).
 Only returns parameters that are not older than max_age_days.
+
+Note: Physical parameters like ramp rates don't change frequently, so a longer cache
+period (30 days) is appropriate.
 """
-function load_cached_parameters(bidding_zone::String; max_age_days::Int=7)
+function load_cached_parameters(bidding_zone::String; max_age_days::Int=30)
     query = """
     SELECT generator_code, ramp_up, ramp_down, p_min, min_uptime, min_downtime, inference_date
     FROM simulations.generator_inferred_parameters
@@ -730,10 +733,13 @@ If use_cache=false: Always run fresh inference (slow but guaranteed fresh).
 """
 function get_generators_with_inferred_params(map_code::String, day::Dates.Date;
                                              use_cache::Bool=true,
-                                             max_cache_age_days::Int=7,
-                                             exclude_unavailable::Bool=true)
+                                             max_cache_age_days::Int=30,
+                                             exclude_unavailable::Bool=true,
+                                             exclude_variable_renewables::Bool=true)
     # Get base generators
-    generators = get_generators(map_code, day; exclude_unavailable=exclude_unavailable)
+    generators = get_generators(map_code, day;
+                               exclude_unavailable=exclude_unavailable,
+                               exclude_variable_renewables=exclude_variable_renewables)
 
     if !use_cache
         # Fresh inference for all

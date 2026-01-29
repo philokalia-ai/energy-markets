@@ -117,6 +117,9 @@ The `exclude_variable_renewables` parameter (default: `true`) filters out wind a
 - This prevents double-counting (generator in UC + forecast subtracted from load)
 
 **Generator parameter inference from historical data:**
+
+The UC solver uses inferred plant-specific parameters by default (`use_inferred_params=true`). This provides more accurate ramp rates, p_min, and uptime/downtime constraints based on historical generation data rather than generic fuel-type defaults.
+
 ```julia
 # Get generators with inferred parameters (uses DB cache, ~2 sec)
 generators = get_generators_with_inferred_params("GR", Date(2024, 6, 15))
@@ -128,6 +131,12 @@ generators = get_generators_with_inferred_params("GR", Date(2024, 6, 15); use_ca
 generators = get_generators("GR", Date(2024, 6, 15))
 generators_with_inferred = infer_parameters_for_generators(generators, Date(2024, 6, 15))
 ```
+
+Parameter cache:
+- Cached in PostgreSQL (`simulations.generator_inferred_parameters`)
+- Default cache expiry: 30 days (physical parameters don't change frequently)
+- For zones without cached data, inference runs automatically on first UC solve
+- Use `max_cache_age_days` parameter to adjust cache expiry
 
 The `infer_parameters_for_generators()` function analyzes historical generation from `entsoe.actual_generation_output_per_generation_unit` to infer:
 
@@ -213,6 +222,14 @@ solution = solve_unit_commitment("GR", Date(2024, 6, 15);
     mip_gap=0.01,       # Accept 1% optimality gap (default)
     time_limit=600.0)   # Max solve time in seconds (default 10 min)
 
+# With inferred parameters from historical data (default: enabled)
+solution = solve_unit_commitment("GR", Date(2024, 6, 15);
+    use_inferred_params=true)  # Use plant-specific ramp rates from historical data
+
+# Disable inferred parameters (use fuel-type defaults only)
+solution = solve_unit_commitment("GR", Date(2024, 6, 15);
+    use_inferred_params=false)  # Fall back to FuelTypeParameters defaults
+
 # Access solution fields
 solution.status              # JuMP termination status (OPTIMAL, INFEASIBLE, etc.)
 solution.solver              # Solver used ("HiGHS" or "Gurobi")
@@ -227,6 +244,7 @@ solution.cost_breakdown      # Detailed cost breakdown (see below)
 Solver tuning parameters (solver-agnostic via MOI):
 - `mip_gap`: Relative optimality gap tolerance (default 0.01 = 1%). Solver stops when it finds a solution within this percentage of proven optimal.
 - `time_limit`: Maximum solve time in seconds (default 600 = 10 min). Returns best solution found within time budget.
+- `use_inferred_params`: Use plant-specific parameters inferred from historical data (default: true). When enabled, the solver uses `get_generators_with_inferred_params()` which provides plant-specific ramp rates, p_min, and uptime/downtime constraints. When disabled, uses fuel-type defaults from `FuelTypeParameters`.
 
 Unit commitment objective function components:
 - **Production costs**: `marginal_cost × generation` for each generator and period
