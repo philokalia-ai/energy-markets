@@ -116,6 +116,39 @@ The `exclude_variable_renewables` parameter (default: `true`) filters out wind a
 - Renewable generation is subtracted from load to calculate net demand for UC
 - This prevents double-counting (generator in UC + forecast subtracted from load)
 
+**Fuel type inference from generator names:**
+
+Generators classified as "Other" in the ENTSO-E database may actually be known technology types. The `infer_fuel_type_from_name()` function attempts to reclassify them based on naming patterns:
+
+```julia
+# Automatic inference happens when loading generators
+generators = get_generators("FR", Date(2024, 6, 15))
+# Logs: "Inferred fuel type for BESS_AFD7_BARBAN: Other → Energy storage"
+```
+
+Currently recognized patterns:
+- **BESS/Battery** → `Symbol("Energy storage")`: Matches "BESS", "BATTERY", "BATTERIE", "BATTERI"
+
+Generators that cannot be inferred remain as "Other" with flexible parameters (see FuelTypeParameters below). Unknown "Other" generators are documented in `docs/unknown-other-generators.md` for future research.
+
+**Flexible fuel types:**
+
+The constant `FLEXIBLE_FUEL_TYPES` defines technologies that can operate at any output level (no minimum load factor):
+```julia
+FLEXIBLE_FUEL_TYPES = [
+    Symbol("Hydro Water Reservoir"),
+    Symbol("Hydro Run-of-river and poundage"),
+    Symbol("Hydro Pumped Storage"),
+    Symbol("Energy storage"),
+    Symbol("Other")
+]
+```
+
+These fuel types:
+- Have `min_load_factor = 0` (can operate at any level down to 0 MW)
+- Are excluded from thermal minimum generation constraints in UC
+- Include "Other" since the actual technology is unknown
+
 **Generator parameter inference from historical data:**
 
 The UC solver uses inferred plant-specific parameters by default (`use_inferred_params=true`). This provides more accurate ramp rates, p_min, and uptime/downtime constraints based on historical generation data rather than generic fuel-type defaults.
@@ -212,6 +245,17 @@ Unit commitment integration:
 - Constrains t=1 ramps from initial output g₀
 - Enforces remaining uptime/downtime based on T_on₀/T_off₀
 
+Initial output validation:
+- Historical output data may be outside the valid `[p_min, p_max]` range due to:
+  - Data quality issues (measurement errors)
+  - Capacity changes (derating, upgrades)
+  - Outages affecting available capacity
+- The UC solver validates and clamps initial output to prevent infeasibility:
+  - If `output > p_max`: clamp to `p_max`
+  - If `output < p_min` (for thermal plants): set to `max(0.7 × p_max, p_min)`
+  - Logs warnings when clamping occurs
+- This ensures ramp constraints from t=0 to t=1 are always feasible
+
 **Unit commitment solver:**
 ```julia
 # Run unit commitment optimization
@@ -253,6 +297,12 @@ Unit commitment objective function components:
   - From `FuelTypeParameters` for each fuel type
 - **No-load costs**: Fixed cost when committed = `no_load_cost_fraction × marginal_cost × p_min × period_hours`
 - **Curtailment costs**: Penalty for spilling renewable generation (default 1 €/MWh)
+
+"Other" fuel type handling:
+- Generators with unknown fuel type use flexible parameters (not conservative thermal)
+- Parameters: 1-2h startup, 1h min up/downtime, 50% ramp rate, 0% min load factor
+- This prevents infeasibility for miscategorized flexible resources (e.g., unidentified batteries)
+- See `docs/unknown-other-generators.md` for list of generators requiring manual classification
 
 **Renewable curtailment:**
 
@@ -373,6 +423,29 @@ Big M parameter:
 - Used in ramp constraints to relax them during startup/shutdown
 - Scaled to problem size: `M = 2 × max(p_max)` for numerical stability
 
+**Infeasibility diagnosis (Gurobi only):**
+
+When the UC solver returns INFEASIBLE with Gurobi, it automatically computes and prints the Irreducible Infeasible Subsystem (IIS):
+
+```julia
+# If infeasible, solver prints conflicting constraints:
+# Computing IIS (Irreducible Infeasible Subsystem)...
+# IN CONFLICT: min_uptime[GEN-CODE,5]: u[GEN-CODE,5] >= ...
+# IN CONFLICT: ramp_down[GEN-CODE,1]: g[GEN-CODE,1] - g₀ >= ...
+```
+
+The IIS identifies the minimal set of constraints that cannot all be satisfied simultaneously. Common causes:
+- **Ramp + initial conditions**: Generator output at t=0 too far from required t=1 range
+- **Min uptime/downtime**: Generator must be both ON and OFF due to conflicting constraints
+- **Startup profile**: Generator cannot complete startup within horizon
+
+For systematic diagnosis, use the diagnostic script:
+```bash
+julia --project=. test/scripts/diagnose_fr_infeasibility.jl
+```
+
+This analyzes capacity by status, thermal state, startup time, and identifies locked generators.
+
 **UC results caching:**
 ```julia
 # Run UC with caching (default - uses cached results if available)
@@ -468,6 +541,7 @@ test/
 │   └── ...
 │
 ├── scripts/                 # Debug, benchmarks, infrastructure scripts
+│   ├── diagnose_fr_infeasibility.jl  # UC infeasibility diagnosis for any zone
 │   ├── benchmark_gurobi_vs_highs.jl  # Compare Gurobi (2 workers) vs HiGHS (50 workers)
 │   ├── test_gurobi.jl
 │   ├── test_optimizer_comparison.jl

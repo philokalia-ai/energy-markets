@@ -40,6 +40,7 @@ const FLEXIBLE_FUEL_TYPES = Set([
     Symbol("Hydro Run-of-river and pondage"),
     Symbol("Hydro Water Reservoir"),
     Symbol("Battery"),
+    Symbol("Energy storage"),  # BESS and other storage technologies
     Symbol("Other"),
 ])
 
@@ -50,6 +51,40 @@ const VARIABLE_RENEWABLE_TYPES = Set([
     Symbol("Wind Offshore"),
     Symbol("Solar"),
 ])
+
+"""
+    infer_fuel_type_from_name(name::String, declared_type::Symbol) -> Symbol
+
+Attempt to infer the actual fuel type from the generator name when the declared
+type is ambiguous (e.g., "Other"). This handles cases where BESS units are
+miscategorized in the ENTSO-E database.
+
+Returns the inferred fuel type, or the original declared_type if no inference is possible.
+"""
+function infer_fuel_type_from_name(name::String, declared_type::Symbol)::Symbol
+    # Only attempt inference for "Other" fuel type
+    if declared_type != Symbol("Other")
+        return declared_type
+    end
+
+    name_upper = uppercase(name)
+
+    # Battery Energy Storage Systems
+    if occursin("BESS", name_upper) ||
+       occursin("BATTERY", name_upper) ||
+       occursin("BATTERIE", name_upper) ||  # German/French
+       occursin("BATTERI", name_upper)      # Nordic
+        return Symbol("Energy storage")
+    end
+
+    # Could add more patterns here in the future:
+    # - VPP patterns for virtual power plants
+    # - Interconnector patterns
+    # - etc.
+
+    # No inference possible, return original type
+    return declared_type
+end
 
 """
     get_historical_generation(generator_code::String, end_date::Date; months_back::Int=3)
@@ -511,10 +546,18 @@ function get_generators(map_code::String, day::Dates.Date;
     # Build generators (without ramp rates initially)
     generators = Generator[]
     for row in eachrow(df)
+        # Infer actual fuel type from name if declared as "Other"
+        declared_type = Symbol(row.generation_unit_type)
+        inferred_type = infer_fuel_type_from_name(row.generation_unit_name, declared_type)
+
+        if inferred_type != declared_type
+            @info "Reclassified generator $(row.generation_unit_name) from $declared_type to $inferred_type"
+        end
+
         gen = Generator(
             row.generation_unit_code,                    # code
             row.generation_unit_name,                    # name
-            Symbol(row.generation_unit_type),            # fuel_type (convert to Symbol)
+            inferred_type,                               # fuel_type (possibly inferred)
             row.generation_unit_location,                # location
             Float64(row.generation_unit_installed_capacity_mw), # p_max
             get_min_active_capacity(
@@ -523,7 +566,7 @@ function get_generators(map_code::String, day::Dates.Date;
             row.area_map_code,                           # bidding_zone
             get_marginal_cost(
                 day,
-                row.generation_unit_type,
+                row.generation_unit_type,  # Use original type for cost (BESS still has storage costs)
                 row.area_display_name
             )                                           # marginal_cost
         )
@@ -1070,9 +1113,26 @@ function get_initial_conditions(generators::Vector{Generator}, market_day::Dates
 
             ic = infer_initial_conditions_from_data(historical, gen.fuel_type)
 
-            # If the generator was on but we got default output, use a fraction of p_max
-            if ic.is_on && ic.output == 0.0
-                ic = InitialConditions(true, 0.7 * gen.p_max, ic.hours_on, ic.hours_off, ic.thermal_state)
+            # Validate and adjust initial conditions for ON generators
+            if ic.is_on
+                # Clamp output to valid range [p_min, p_max]
+                # This handles data quality issues where historical data shows:
+                # - output < p_min (below technical minimum)
+                # - output > p_max (above capacity, possible due to capacity changes)
+                min_valid_output = gen.p_min > 0 ? gen.p_min : 0.0
+                adjusted_output = ic.output
+
+                if ic.output > gen.p_max
+                    # Output above capacity - clamp to p_max
+                    adjusted_output = gen.p_max
+                elseif ic.output < min_valid_output
+                    # Output below minimum - use 70% of p_max as reasonable default
+                    adjusted_output = max(0.7 * gen.p_max, min_valid_output)
+                end
+
+                if adjusted_output != ic.output
+                    ic = InitialConditions(true, adjusted_output, ic.hours_on, ic.hours_off, ic.thermal_state)
+                end
             end
             conditions[gen.code] = ic
         end
@@ -1081,7 +1141,10 @@ function get_initial_conditions(generators::Vector{Generator}, market_day::Dates
         for gen in generators
             ic = get_default_initial_conditions(gen.fuel_type)
             if ic.is_on
-                ic = InitialConditions(true, 0.7 * gen.p_max, ic.hours_on, ic.hours_off, ic.thermal_state)
+                # Use 70% of p_max but ensure it's at least p_min
+                min_valid_output = gen.p_min > 0 ? gen.p_min : 0.0
+                adjusted_output = max(0.7 * gen.p_max, min_valid_output)
+                ic = InitialConditions(true, adjusted_output, ic.hours_on, ic.hours_off, ic.thermal_state)
             end
             conditions[gen.code] = ic
         end

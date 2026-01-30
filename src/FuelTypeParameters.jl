@@ -389,22 +389,23 @@ function get_fuel_type_parameters(fuel_type::Symbol)::FuelTypeParameters
         )
 
     elseif fuel_type == Symbol("Other")
-        # Other/unspecified technologies - Conservative default parameters
-        @warn "Fuel type category listed as 'Other'. Using conservative default parameters."
+        # Other/unspecified technologies - Flexible parameters since we don't know the actual type
+        # May include BESS, novel technologies, or miscategorized units
+        @warn "Fuel type category listed as 'Other'. Using flexible default parameters."
         return FuelTypeParameters(
-            8,      # cold_startup_time: 8 hours for cold start
-            5,      # warm_startup_time: 5 hours for warm start
-            2,      # hot_startup_time: 2 hours for hot start
-            6,      # min_uptime: 6 hours minimum run time
-            3,      # min_downtime: 3 hours minimum off time
-            0.15,   # ramp_up_rate: 15% per hour - moderate flexibility
-            0.15,   # ramp_down_rate: 15% per hour
-            0.30,   # min_load_factor: 30% minimum load (aligned with P_MIN_BOUNDS default)
-            0.85,   # part_load_efficiency: 85% efficiency at minimum load
-            12,     # warm_threshold: Warm after 12 hours offline
-            48,     # cold_threshold: Cold after 48 hours offline
-            1.5,    # startup_cost_multiplier: Moderate startup costs
-            0.20    # no_load_cost_fraction: Moderate no-load costs
+            2,      # cold_startup_time: 2 hours for cold start - assume flexible
+            1,      # warm_startup_time: 1 hour for warm start
+            1,      # hot_startup_time: 1 hour for hot start
+            1,      # min_uptime: 1 hour minimum run time - flexible
+            1,      # min_downtime: 1 hour minimum off time - flexible
+            0.50,   # ramp_up_rate: 50% per hour - assume moderately flexible
+            0.50,   # ramp_down_rate: 50% per hour
+            0.00,   # min_load_factor: 0% minimum load (flexible - can operate at any level)
+            1.00,   # part_load_efficiency: 100% (no penalty assumed)
+            4,      # warm_threshold: Warm after 4 hours offline
+            12,     # cold_threshold: Cold after 12 hours offline
+            0.5,    # startup_cost_multiplier: Low startup costs
+            0.05    # no_load_cost_fraction: Low no-load costs
         )
 
     else

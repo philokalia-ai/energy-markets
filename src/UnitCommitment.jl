@@ -1,6 +1,7 @@
 using JuMP, Dates
 using .Euphemia: select_solver
 using .Euphemia: disaggregate_temporal_data
+using .Euphemia: FLEXIBLE_FUEL_TYPES
 
 # MOI is re-exported by JuMP
 const MOI = JuMP.MOI
@@ -470,10 +471,18 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date;
     @constraint(model, [i = 1:N, t = 1:T], g[i, t] <= generators[i].p_max * u[i, t])
 
     # Apply fuel-type-specific minimum load constraints
+    # Note: Flexible resources (hydro, batteries, storage) should not have min_load_factor applied
+    # as they can operate at any output level including 0 MW
     for (i, gen) in enumerate(generators)
         params = fuel_params[i]
-        # Minimum generation when committed (considering fuel-type minimum load factor)
-        min_gen = max(gen.p_min, params.min_load_factor * gen.p_max)
+
+        if gen.fuel_type in FLEXIBLE_FUEL_TYPES
+            # Flexible resources: use generator's p_min directly (typically 0)
+            min_gen = gen.p_min
+        else
+            # Thermal resources: apply fuel-type minimum load factor
+            min_gen = max(gen.p_min, params.min_load_factor * gen.p_max)
+        end
         @constraint(model, [t = 1:T], g[i, t] >= min_gen * u[i, t])
     end
 
@@ -583,7 +592,7 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date;
         end
     end
 
-    ### 
+    ###
     ### startup / shutdown production profile (ramp constraints)
     ###
 
@@ -592,9 +601,27 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date;
         u[i, t] == u_SU[i, t] + u_DISP[i, t] + u_SD[i, t])
 
     # startup operation profile duration depending on startup temperature stage
-    @constraint(model, [i in 1:N, t in maximum(T_SU[i, θ] for θ in Θ):T],
-        u_SU[i, t] == sum(sum(v_θ[i, θ, τ] for τ in max(1, t - T_SU[i, θ] + 1):t) for θ in Θ)
-    )
+    # For periods t >= max(T_SU), the standard constraint applies
+    # For earlier periods (t < max(T_SU)), we still need to define u_SU properly
+    for i in 1:N
+        max_startup = maximum(T_SU[(i, θ)] for θ in Θ)
+
+        # Standard constraint for later periods
+        for t in max_startup:T
+            @constraint(model,
+                u_SU[i, t] == sum(sum(v_θ[i, θ, τ] for τ in max(1, t - T_SU[(i, θ)] + 1):t) for θ in Θ)
+            )
+        end
+
+        # For early periods (t < max_startup), the constraint needs to consider
+        # that startups at τ will keep the unit in startup mode for T_SU periods
+        # The formula is the same, but we need to explicitly add it for all t in 1:min(max_startup-1, T)
+        for t in 1:min(max_startup - 1, T)
+            @constraint(model,
+                u_SU[i, t] == sum(sum(v_θ[i, θ, τ] for τ in max(1, t - T_SU[(i, θ)] + 1):t) for θ in Θ)
+            )
+        end
+    end
 
     # startup operation profile depending on shutdown duration. TODO: ASK PROF (p.213) Έχει T_SD και με θ και χωρίς
     @constraint(model, [i in 1:N, t in 1:T-T_SD[i]+1],
@@ -602,9 +629,17 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date;
     ) # TODO: Ensure it's u_SD and not u_SU. Book writes u_SU. Copilot claims it's u_SD. Typo?
 
     # production constraint for startup operation profile
-    @constraint(model, [i in 1:N, t in maximum(T_SU[i, θ] for θ in Θ):T],
-        g_SU[i, t] == sum(sum(P_SU[i, θ, t-τ+1] * v_θ[i, θ, τ] for τ in max(1, t - T_SU[i, θ] + 1):t) for θ in Θ)
-    )
+    # Same fix: apply for all periods, not just t >= max_startup
+    for i in 1:N
+        max_startup = maximum(T_SU[(i, θ)] for θ in Θ)
+
+        # Apply constraint for all periods
+        for t in 1:T
+            @constraint(model,
+                g_SU[i, t] == sum(sum(P_SU[i, θ, t-τ+1] * v_θ[i, θ, τ] for τ in max(1, t - T_SU[(i, θ)] + 1):t) for θ in Θ)
+            )
+        end
+    end
 
     # production constraint for shutdown operation profile
     @constraint(model, [i in 1:N, t in 1:T-T_SD[i]],
@@ -678,6 +713,40 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date;
     if status != OPTIMAL
         total_time = time() - timing_start
         @info "Optimization failed" bidding_zone = bidding_zone status = status data_fetch_time = format_time(data_fetch_time) setup_time = format_time(setup_time) solve_time = format_time(solve_time) total_time = format_time(total_time)
+
+        # Attempt IIS analysis if model is infeasible (Gurobi only)
+        if (status == INFEASIBLE || status == INFEASIBLE_OR_UNBOUNDED) && solver_name == "Gurobi"
+            try
+                @info "Computing IIS (Irreducible Infeasible Subsystem)..."
+                compute_conflict!(model)
+
+                # Count constraints in conflict
+                iis_constraints = []
+                for (F, S) in list_of_constraint_types(model)
+                    for con in all_constraints(model, F, S)
+                        conflict_status = MOI.get(model, MOI.ConstraintConflictStatus(), con)
+                        if conflict_status == MOI.IN_CONFLICT
+                            push!(iis_constraints, (F, S, con))
+                        end
+                    end
+                end
+
+                @info "IIS analysis complete: $(length(iis_constraints)) constraints in conflict"
+
+                # Print first few conflicting constraints
+                for (i, (F, S, con)) in enumerate(iis_constraints)
+                    if i <= 20  # Limit output
+                        println("  IIS[$i]: $con")
+                    end
+                end
+                if length(iis_constraints) > 20
+                    println("  ... and $(length(iis_constraints) - 20) more")
+                end
+            catch e
+                @warn "IIS analysis failed: $e"
+            end
+        end
+
         return (status=status,)
     end
     @assert primal_status(model) == FEASIBLE_POINT
