@@ -87,13 +87,13 @@ function infer_fuel_type_from_name(name::String, declared_type::Symbol)::Symbol
 end
 
 """
-    get_historical_generation(generator_code::String, end_date::Date; months_back::Int=3)
+    get_historical_generation(generator_code::String, end_date::Date; months_back::Int=12)
 
 Fetch historical actual generation data for a specific generator.
 
 Returns a DataFrame with columns: datetime_utc, resolution_code, actual_generation_mw
 """
-function get_historical_generation(generator_code::String, end_date::Dates.Date; months_back::Int=3)
+function get_historical_generation(generator_code::String, end_date::Dates.Date; months_back::Int=12)
     start_date = end_date - Dates.Month(months_back)
     query = """
     SELECT date_time_utc, resolution_code, actual_generation_output_mw
@@ -606,63 +606,65 @@ function get_generators(map_code::String, day::Dates.Date;
 end
 
 """
-    infer_parameters_for_generators(generators::Vector{Generator}, day::Date)
+    infer_parameters_for_generator(gen::Generator, day::Date) -> Generator
 
-Infer technical parameters (ramp rates, p_min, uptime/downtime) for generators from historical data.
-Returns a new vector of Generator objects with inferred parameters populated.
+Infer parameters for a single generator from historical data.
+This is the core inference function that can be parallelized.
 
 Parameters inferred:
 - ramp_up, ramp_down: from 95th percentile of observed ramps (fraction/hour)
 - p_min: from 5th percentile of stable non-zero operation (MW)
 - min_uptime, min_downtime: from 5th percentile of on/off cycle durations (hours)
 """
-function infer_parameters_for_generators(generators::Vector{Generator}, day::Dates.Date)
-    updated_generators = Generator[]
+function infer_parameters_for_generator(gen::Generator, day::Dates.Date)
+    # Fetch historical generation data
+    historical = get_historical_generation(gen.code, day)
 
-    for gen in generators
-        # Fetch historical generation data
-        historical = get_historical_generation(gen.code, day)
+    # Infer ramp rates (as fraction of p_max per hour)
+    rates = infer_ramp_rates(historical, gen.p_max)
 
-        # Infer ramp rates (as fraction of p_max per hour)
-        rates = infer_ramp_rates(historical, gen.p_max)
+    # Determine parameters based on fuel type
+    if gen.fuel_type in FLEXIBLE_FUEL_TYPES
+        # Flexible resources (hydro, batteries) can operate at 0 MW
+        # and have no meaningful uptime/downtime constraints
+        final_p_min = 0.0
+        final_uptime = nothing
+        final_downtime = nothing
+    else
+        # Thermal plants: infer from stable operation
+        inferred_p_min = infer_p_min(historical, gen.p_max, gen.fuel_type)
+        final_p_min = inferred_p_min !== nothing ? inferred_p_min : gen.p_min
 
-        # Determine parameters based on fuel type
-        if gen.fuel_type in FLEXIBLE_FUEL_TYPES
-            # Flexible resources (hydro, batteries) can operate at 0 MW
-            # and have no meaningful uptime/downtime constraints
-            final_p_min = 0.0
-            final_uptime = nothing
-            final_downtime = nothing
-        else
-            # Thermal plants: infer from stable operation
-            inferred_p_min = infer_p_min(historical, gen.p_max, gen.fuel_type)
-            final_p_min = inferred_p_min !== nothing ? inferred_p_min : gen.p_min
-
-            # Infer uptime/downtime from on/off cycles
-            (inferred_uptime, inferred_downtime) = infer_uptime_downtime(historical, gen.fuel_type)
-            final_uptime = inferred_uptime
-            final_downtime = inferred_downtime
-        end
-
-        # Create new generator with inferred parameters
-        updated_gen = Generator(
-            gen.code,
-            gen.name,
-            gen.fuel_type,
-            gen.location,
-            gen.p_max,
-            final_p_min,
-            gen.bidding_zone,
-            gen.marginal_cost,
-            rates.ramp_up,
-            rates.ramp_down,
-            final_uptime,
-            final_downtime
-        )
-        push!(updated_generators, updated_gen)
+        # Infer uptime/downtime from on/off cycles
+        (inferred_uptime, inferred_downtime) = infer_uptime_downtime(historical, gen.fuel_type)
+        final_uptime = inferred_uptime
+        final_downtime = inferred_downtime
     end
 
-    return updated_generators
+    # Create new generator with inferred parameters
+    return Generator(
+        gen.code,
+        gen.name,
+        gen.fuel_type,
+        gen.location,
+        gen.p_max,
+        final_p_min,
+        gen.bidding_zone,
+        gen.marginal_cost,
+        rates.ramp_up,
+        rates.ramp_down,
+        final_uptime,
+        final_downtime
+    )
+end
+
+"""
+    infer_parameters_for_generators(generators::Vector{Generator}, day::Date) -> Vector{Generator}
+
+Infer parameters for multiple generators. Wrapper around `infer_parameters_for_generator`.
+"""
+function infer_parameters_for_generators(generators::Vector{Generator}, day::Dates.Date)
+    return [infer_parameters_for_generator(gen, day) for gen in generators]
 end
 
 # Alias for backward compatibility
@@ -789,7 +791,7 @@ If use_cache=false: Always run fresh inference (slow but guaranteed fresh).
 """
 function get_generators_with_inferred_params(map_code::String, day::Dates.Date;
                                              use_cache::Bool=true,
-                                             max_cache_age_days::Int=30,
+                                             max_cache_age_days::Int=365,
                                              exclude_unavailable::Bool=true,
                                              exclude_variable_renewables::Bool=true)
     # Get base generators
@@ -848,6 +850,192 @@ function get_generators_with_inferred_params(map_code::String, day::Dates.Date;
     end
 
     return cached_gens
+end
+
+"""
+    refresh_inference_cache(zones::Vector{String}, date::Date; parallel::Bool=false)
+
+Proactively refresh the generator parameter inference cache for specified zones.
+
+This function runs parameter inference for all generators in the given zones and
+saves results to the database cache. Use this before batch UC runs to ensure
+predictable solve times (avoids surprise 17+ minute inference during UC).
+
+When parallel=true, inference is parallelized at the **generator level** (not zone level),
+allowing full utilization of all available workers. Each generator's inference is
+completely independent.
+
+# Arguments
+- `zones`: List of bidding zone codes (e.g., ["GR", "BG", "RO"])
+- `date`: Reference date for inference (uses 12 months of historical data before this date)
+- `parallel`: If true, runs inference for all generators in parallel using available workers
+
+# Returns
+A NamedTuple with:
+- `successful_zones`: Number of zones successfully processed
+- `failed_zones`: Number of zones that failed
+- `total_generators`: Total number of generators processed
+- `successful_generators`: Number of generators successfully inferred
+- `failed_generators`: Number of generators that failed
+- `total_time`: Total processing time in seconds
+- `zone_results`: Dict mapping zone code to (success, generator_count, failed_count)
+
+# Example
+```julia
+# Refresh cache for specific zones
+result = refresh_inference_cache(["GR", "BG", "RO"], Date(2024, 6, 15))
+
+# Refresh all available zones with parallel processing
+using Distributed
+addprocs(80)  # Use all cores - inference is I/O bound
+@everywhere using Euphemia
+zones = get_available_zones(Date(2024, 6, 15))
+result = refresh_inference_cache(zones, Date(2024, 6, 15); parallel=true)
+```
+"""
+function refresh_inference_cache(zones::Vector{String}, date::Dates.Date; parallel::Bool=false)
+    start_time = time()
+
+    println("🔄 Refreshing inference cache for $(length(zones)) zones")
+    println("📅 Reference date: $date (using 12 months of historical data)")
+    println()
+
+    # Step 1: Collect all generators from all zones
+    println("📋 Collecting generators from all zones...")
+    all_generators = Tuple{String, Generator}[]  # (zone, generator) pairs
+    zone_generator_counts = Dict{String, Int}()
+
+    for zone in zones
+        try
+            gens = get_generators(zone, date)
+            zone_generator_counts[zone] = length(gens)
+            for gen in gens
+                push!(all_generators, (zone, gen))
+            end
+            println("  📍 $zone: $(length(gens)) generators")
+        catch e
+            println("  ❌ $zone: failed to load generators - $e")
+            zone_generator_counts[zone] = 0
+        end
+    end
+
+    total_generators = length(all_generators)
+    println()
+    println("📊 Total: $total_generators generators across $(length(zones)) zones")
+    println()
+
+    if total_generators == 0
+        return (
+            successful_zones = 0,
+            failed_zones = length(zones),
+            total_generators = 0,
+            successful_generators = 0,
+            failed_generators = 0,
+            total_time = round(time() - start_time, digits=1),
+            zone_results = Dict{String, NamedTuple{(:success, :generator_count, :failed_count), Tuple{Bool, Int, Int}}}()
+        )
+    end
+
+    # Step 2: Run inference for each generator (parallel or sequential)
+    println("⚙️  Running inference...")
+
+    function infer_single(zg::Tuple{String, Generator})
+        zone, gen = zg
+        try
+            inferred = infer_parameters_for_generator(gen, date)
+            return (zone, gen.code, inferred, nothing)  # (zone, code, result, error)
+        catch e
+            return (zone, gen.code, nothing, e)
+        end
+    end
+
+    if parallel && length(workers()) > 1
+        println("⚡ Using $(length(workers())) parallel workers for $total_generators generators")
+        results = pmap(infer_single, all_generators; on_error=ex -> (nothing, nothing, nothing, ex))
+    else
+        println("🔄 Sequential processing of $total_generators generators")
+        results = [infer_single(zg) for zg in all_generators]
+    end
+
+    # Step 3: Group results by zone and save to cache
+    println()
+    println("💾 Saving results to cache...")
+
+    zone_generators = Dict{String, Vector{Generator}}()
+    zone_failures = Dict{String, Int}()
+    successful_generators = 0
+    failed_generators = 0
+
+    for (zone, code, inferred, err) in results
+        if zone === nothing
+            failed_generators += 1
+            continue
+        end
+
+        if !haskey(zone_generators, zone)
+            zone_generators[zone] = Generator[]
+            zone_failures[zone] = 0
+        end
+
+        if err === nothing && inferred !== nothing
+            push!(zone_generators[zone], inferred)
+            successful_generators += 1
+        else
+            zone_failures[zone] += 1
+            failed_generators += 1
+            println("  ⚠️  $zone/$code: inference failed - $err")
+        end
+    end
+
+    # Save each zone's inferred generators to cache
+    zone_results = Dict{String, NamedTuple{(:success, :generator_count, :failed_count), Tuple{Bool, Int, Int}}}()
+
+    for zone in zones
+        gens = get(zone_generators, zone, Generator[])
+        failures = get(zone_failures, zone, 0)
+
+        if !isempty(gens)
+            try
+                save_inferred_parameters(gens, zone, date)
+                zone_results[zone] = (success=true, generator_count=length(gens), failed_count=failures)
+                println("  ✅ $zone: saved $(length(gens)) generators")
+            catch e
+                zone_results[zone] = (success=false, generator_count=0, failed_count=length(gens) + failures)
+                println("  ❌ $zone: failed to save - $e")
+            end
+        else
+            zone_results[zone] = (success=false, generator_count=0, failed_count=failures)
+            if zone_generator_counts[zone] > 0
+                println("  ❌ $zone: all $(zone_generator_counts[zone]) generators failed")
+            end
+        end
+    end
+
+    total_time = round(time() - start_time, digits=1)
+    successful_zones = count(r -> r.success, values(zone_results))
+    failed_zones = length(zones) - successful_zones
+
+    println()
+    println("="^50)
+    println("📊 Inference Cache Refresh Complete")
+    println("="^50)
+    println("✅ Zones: $successful_zones/$(length(zones)) successful")
+    println("✅ Generators: $successful_generators/$total_generators successful")
+    println("❌ Failed generators: $failed_generators")
+    println("⏱️  Total time: $(total_time)s")
+    if parallel && length(workers()) > 1
+        println("⚡ Throughput: $(round(total_generators / total_time, digits=1)) generators/sec")
+    end
+
+    return (
+        successful_zones = successful_zones,
+        failed_zones = failed_zones,
+        total_generators = total_generators,
+        successful_generators = successful_generators,
+        failed_generators = failed_generators,
+        total_time = total_time,
+        zone_results = zone_results
+    )
 end
 
 # ============================================================================

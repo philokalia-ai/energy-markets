@@ -813,3 +813,49 @@ function ensure_uc_results_tables()
 
     @info "UC results tables schema verified/created"
 end
+
+"""
+    ensure_indexes()
+
+Create indexes on ENTSOE tables to speed up common queries.
+This function is idempotent (safe to run multiple times).
+
+Indexes are created with CONCURRENTLY to avoid locking tables during creation.
+First run may take 30-60 minutes for large tables. Subsequent runs are instant.
+
+# Example
+```julia
+using Euphemia
+Euphemia.ensure_indexes()  # Run once after DB setup, or when queries are slow
+```
+"""
+function ensure_indexes()
+    @info "Ensuring indexes on ENTSOE tables..."
+
+    withdb() do cnx
+        # Index for parameter inference and initial conditions queries
+        # Table: 54 GB, 260M rows - queries by generator_code + date range
+        @info "Creating index on actual_generation_output_per_generation_unit (this may take 30-60 min first time)..."
+        LibPQ.execute(cnx, """
+            CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_actual_gen_unit_date
+            ON entsoe.actual_generation_output_per_generation_unit
+            (generation_unit_code, date_time_utc);
+        """)
+
+        # Index for outage/unavailability filtering in get_generators()
+        # Table: 4.4 GB, 9.5M rows - queries by asset_code + date range
+        @info "Creating index on unavailability_of_production_and_generation_units..."
+        LibPQ.execute(cnx, """
+            CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_unavail_asset_date
+            ON entsoe.unavailability_of_production_and_generation_units
+            (asset_code, start_outage_utc);
+        """)
+
+        # Add more indexes here as needed:
+        # - generation_forecasts_for_wind_and_solar (zone, date)
+        # - day_ahead_total_load_forecast (zone, date)
+        # - offered_transfer_capacities_implicit (zone pairs, date)
+    end
+
+    @info "Indexes ensured successfully"
+end

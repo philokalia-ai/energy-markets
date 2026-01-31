@@ -167,9 +167,37 @@ generators_with_inferred = infer_parameters_for_generators(generators, Date(2024
 
 Parameter cache:
 - Cached in PostgreSQL (`simulations.generator_inferred_parameters`)
-- Default cache expiry: 30 days (physical parameters don't change frequently)
+- Default cache expiry: 365 days (physical parameters don't change frequently)
 - For zones without cached data, inference runs automatically on first UC solve
 - Use `max_cache_age_days` parameter to adjust cache expiry
+
+**Proactive cache refresh:**
+
+To avoid surprise delays during UC solves, use `refresh_inference_cache()` to proactively update the cache. When `parallel=true`, inference is parallelized at the **generator level** (not zone level), allowing full utilization of all available CPU cores. Each generator's inference is completely independent (just DB queries + statistics).
+
+```julia
+# Refresh cache for specific zones (sequential)
+result = refresh_inference_cache(["GR", "BG", "RO"], Date(2024, 6, 15))
+
+# Parallel refresh - uses half the cores (leave room for other users)
+using Distributed
+addprocs(Sys.CPU_THREADS ÷ 2)  # e.g., 40 cores on 80-core machine
+@everywhere using Euphemia
+zones = get_available_zones(Date(2024, 6, 15))
+result = refresh_inference_cache(zones, Date(2024, 6, 15); parallel=true)
+# With 400 generators across 80 workers: ~5x faster than sequential
+```
+
+**Command-line script** (`bin/refresh_inference_cache.jl`):
+```bash
+# Run manually with environment variables
+REFERENCE_DATE="2026-01-01" PARALLEL="true" MAX_WORKERS="40" julia --project=. bin/refresh_inference_cache.jl
+```
+
+**GitHub Action** (`.github/workflows/refresh-inference-cache.yml`):
+- Runs annually on January 1st to keep cache fresh
+- Can be triggered manually before large batch runs
+- Auto-discovers all zones and uses generator-level parallelism
 
 The `infer_parameters_for_generators()` function analyzes historical generation from `entsoe.actual_generation_output_per_generation_unit` to infer:
 
@@ -178,10 +206,10 @@ The `infer_parameters_for_generators()` function analyzes historical generation 
 - **Min uptime/downtime** (`min_uptime`, `min_downtime`): 5th percentile of on/off cycle durations (hours)
 
 Ramp rate inference:
-- Queries 3 months of historical generation data
+- Queries 12 months of historical generation data to capture full seasonal variation
 - Normalizes to hourly rates regardless of source resolution (PT15M, PT60M, etc.)
 - Falls back to fuel-type defaults in `FuelTypeParameters` if insufficient data
-- **Note on 3-month window**: Physical parameters (ramp rates, p_min) are plant characteristics that shouldn't vary by season. However, seasonal dispatch patterns may affect uptime/downtime inference for plants that operate differently in summer vs winter. A longer window (6-12 months) could capture more operating conditions but would increase query time and include potentially stale data. The 95th/5th percentile approach mitigates this by capturing extreme values even from limited data.
+- The 12-month window captures all seasonal dispatch patterns while the 95th/5th percentile approach extracts robust parameter estimates
 
 Initial p_min (when loading from database):
 - **Flexible resources** (hydro, batteries, storage): `p_min = 0`
@@ -576,6 +604,21 @@ The project uses PostgreSQL with LibPQ.jl for data access. Create a `.env` file 
 ```
 DATABASE_URL=postgresql://user:password@host:port/database
 ```
+
+### Database Indexes
+
+The ENTSOE tables are populated by an external ETL process and don't have indexes by default. For fast queries, run:
+
+```julia
+using Euphemia
+Euphemia.ensure_indexes()
+```
+
+This creates indexes on frequently-queried tables:
+- `actual_generation_output_per_generation_unit` (54 GB) - for parameter inference
+- `unavailability_of_production_and_generation_units` (4.4 GB) - for outage filtering
+
+First run takes 30-60 minutes for large tables. Subsequent runs are instant (`IF NOT EXISTS`). Add more indexes to `ensure_indexes()` in `src/dbutils.jl` as needed.
 
 ## Code Formatting
 
