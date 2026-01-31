@@ -641,6 +641,12 @@ function infer_parameters_for_generator(gen::Generator, day::Dates.Date)
         final_downtime = inferred_downtime
     end
 
+    # Validate: p_min must not exceed p_max (can happen if outages reduce capacity)
+    if final_p_min > gen.p_max
+        @warn "Clamping inferred p_min to p_max (outage reduced capacity)" generator=gen.code inferred_p_min=final_p_min p_max=gen.p_max
+        final_p_min = gen.p_max
+    end
+
     # Create new generator with inferred parameters
     return Generator(
         gen.code,
@@ -818,14 +824,22 @@ function get_generators_with_inferred_params(map_code::String, day::Dates.Date;
     for gen in generators
         if haskey(cache, gen.code)
             params = cache[gen.code]
-            # Apply cached parameters
+            # Apply cached parameters with validation
+            candidate_p_min = params.p_min !== nothing ? params.p_min : gen.p_min
+
+            # Validate: p_min must not exceed p_max (can happen if outages reduce capacity)
+            if candidate_p_min > gen.p_max
+                @warn "Clamping cached p_min to p_max (outage reduced capacity)" generator=gen.code cached_p_min=candidate_p_min p_max=gen.p_max
+                candidate_p_min = gen.p_max
+            end
+
             updated_gen = Generator(
                 gen.code,
                 gen.name,
                 gen.fuel_type,
                 gen.location,
                 gen.p_max,
-                params.p_min !== nothing ? params.p_min : gen.p_min,
+                candidate_p_min,
                 gen.bidding_zone,
                 gen.marginal_cost,
                 params.ramp_up,
