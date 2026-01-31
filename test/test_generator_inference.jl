@@ -282,7 +282,7 @@ end
         @test :resolution_code in propertynames(historical)
         @test :actual_generation_output_mw in propertynames(historical)
 
-        # Should have some rows (3 months of data)
+        # Should have some rows (12 months of data)
         @test nrow(historical) > 0
         println("  Fetched $(nrow(historical)) rows for $(gen.name)")
     end
