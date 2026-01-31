@@ -424,7 +424,7 @@ end
     save_optimization_run(bidding_zone::String, date::Date, order_method::Symbol, model_type::Symbol,
                           optimizer::String, status::Symbol; objective_value=nothing, solve_time_seconds=nothing,
                           num_orders=nothing, num_price_periods=nothing, error_message=nothing,
-                          code_version::Int=2, create_schema::Bool=true) -> Union{Int, Nothing}
+                          code_version::Int=3, create_schema::Bool=true) -> Union{Int, Nothing}
 
 Save optimization run metadata to track all optimization attempts (successful and failed).
 
@@ -453,7 +453,7 @@ function save_optimization_run(bidding_zone::String, date::Date, order_method::S
     num_orders=nothing,
     num_price_periods=nothing,
     error_message=nothing,
-    code_version::Int=2,
+    code_version::Int=3,
     create_schema::Bool=true)
 
     # Create schema and table if requested
@@ -548,7 +548,7 @@ end
 
 """
     save_transmission_flows(flows::Dict{String,Dict{String,Float64}}, date::Date;
-                           code_version::Int=2, create_schema::Bool=true)
+                           code_version::Int=3, create_schema::Bool=true)
 
 Save transmission flow results to the database in the simulations.transmission_flows table.
 
@@ -562,7 +562,7 @@ Save transmission flow results to the database in the simulations.transmission_f
 - Number of records inserted
 """
 function save_transmission_flows(flows::Dict{String,Dict{String,Float64}}, date::Date;
-                                 code_version::Int=2, create_schema::Bool=true)
+                                 code_version::Int=3, create_schema::Bool=true)
     if isempty(flows)
         @warn "No transmission flows to save"
         return 0
@@ -670,7 +670,7 @@ function ensure_uc_results_tables()
             cold_startups INTEGER DEFAULT 0,
             mip_gap NUMERIC(6,4) DEFAULT 0.01,
             time_limit_seconds NUMERIC(10,2) DEFAULT 600.0,
-            code_version INTEGER NOT NULL DEFAULT 2,
+            code_version INTEGER NOT NULL DEFAULT 3,
             created_at TIMESTAMP NOT NULL DEFAULT NOW(),
             UNIQUE(bidding_zone, market_date, code_version)
         )

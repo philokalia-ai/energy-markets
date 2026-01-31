@@ -693,7 +693,7 @@ The project uses PostgreSQL with two main schemas:
 **`simulations.energy_prices`** - Generated energy price results by bidding zone, date, and time period
 - `clearing_mode`: Distinguishes between `'single_zone'` (independent zone clearing) and `'multi_zone'` (joint clearing with transmission)
 - `optimization_run_id`: Foreign key to `optimization_runs` table for traceability
-- `code_version`: Schema version (current: 2)
+- `code_version`: Schema version (current: 3)
 
 **`simulations.optimization_runs`** - Optimization run metadata including status, solver info, and performance metrics
 - For single-zone runs: `bidding_zone` contains the zone code (e.g., "GR")

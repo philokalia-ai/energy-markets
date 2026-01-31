@@ -840,12 +840,12 @@ end
 # =============================================================================
 
 """
-    has_cached_uc_results(bidding_zone::String, day::Date; code_version::Int=2) -> Bool
+    has_cached_uc_results(bidding_zone::String, day::Date; code_version::Int=3) -> Bool
 
 Check if valid cached UC results exist for the given zone and date.
 Returns true if OPTIMAL results exist, false otherwise.
 """
-function has_cached_uc_results(bidding_zone::String, day::Dates.Date; code_version::Int=2)::Bool
+function has_cached_uc_results(bidding_zone::String, day::Dates.Date; code_version::Int=3)::Bool
     query = """
     SELECT EXISTS(
         SELECT 1 FROM simulations.uc_results
@@ -868,14 +868,14 @@ end
 
 """
     save_uc_results(solution::NamedTuple, bidding_zone::String, day::Date;
-                    code_version::Int=2) -> Union{Int,Nothing}
+                    code_version::Int=3) -> Union{Int,Nothing}
 
 Save UC solution to database cache. Returns the uc_result_id or nothing on failure.
 
 Uses delete-before-insert pattern for clean replacement of existing results.
 """
 function save_uc_results(solution::NamedTuple, bidding_zone::String, day::Dates.Date;
-                         code_version::Int=2)::Union{Int,Nothing}
+                         code_version::Int=3)::Union{Int,Nothing}
     # Ensure tables exist
     Euphemia.ensure_uc_results_tables()
 
@@ -1013,14 +1013,14 @@ function save_uc_results(solution::NamedTuple, bidding_zone::String, day::Dates.
 end
 
 """
-    load_uc_results(bidding_zone::String, day::Date; code_version::Int=2) -> Union{NamedTuple,Nothing}
+    load_uc_results(bidding_zone::String, day::Date; code_version::Int=3) -> Union{NamedTuple,Nothing}
 
 Load cached UC results from database. Returns a NamedTuple compatible with the
 solve_unit_commitment() return structure, or nothing if no cache exists.
 
 Note: Generator objects are fetched fresh to ensure current data.
 """
-function load_uc_results(bidding_zone::String, day::Dates.Date; code_version::Int=2)
+function load_uc_results(bidding_zone::String, day::Dates.Date; code_version::Int=3)
     # 1. Load summary record
     summary_query = """
     SELECT * FROM simulations.uc_results
