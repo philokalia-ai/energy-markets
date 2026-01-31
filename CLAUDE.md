@@ -268,6 +268,15 @@ Min uptime/downtime inference:
   - Gas CCGT: uptime 2-12h, downtime 1-8h
   - Gas OCGT: uptime 1-4h, downtime 1-4h
 
+p_min validation (outage handling):
+- Inferred or cached p_min may exceed current p_max when outages reduce capacity
+- Example: Generator historically operates at min 80 MW, but outage reduces p_max to 70 MW
+- **Validation**: p_min is clamped to not exceed p_max in both:
+  - `infer_parameters_for_generator()`: After inference
+  - `get_generators_with_inferred_params()`: When applying cached parameters
+- Logs a warning when clamping occurs for tracking data issues
+- Without this validation, UC becomes infeasible (constraint p_min ≤ g ≤ p_max impossible)
+
 **Generator initial conditions for unit commitment:**
 ```julia
 # Get initial conditions for all generators (state at t=0)
