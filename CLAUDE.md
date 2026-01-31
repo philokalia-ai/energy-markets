@@ -91,24 +91,30 @@ result = run_multi_zone_for_date_range(Date(2023, 1, 1), Date(2024, 12, 31);
 # Standard approach: UC ignores interconnections, MPCC handles flows
 result = run_multi_zone_market_clearing(Date(2024, 6, 15); zones=["GR", "BG", "RO"])
 
-# Iterative approach: UC-MPCC feedback loop until flows converge
+# Iterative approach: UC-MPCC feedback loop until prices converge
 result = run_iterative_multi_zone_market_clearing(Date(2024, 6, 15);
-    zones=["GR", "BG", "RO"],
-    max_iterations=10,           # Stop after 10 iterations max
-    convergence_tolerance=10.0,  # Stop when max flow change < 10 MW
-    damping_factor=0.7,          # Update smoothing (0.7 = 70% new + 30% old)
-    parallel=true                # Parallelize UC within each iteration
+    zones=["GR", "IT-NORTH", "IT-SOUTH"],
+    max_iterations=10,       # Stop after 10 iterations max
+    price_tolerance=1.0,     # Stop when max price change < 1 €/MWh
+    damping_factor=0.7,      # Update smoothing (0.7 = 70% new + 30% old)
+    parallel=false           # Set false to respect Gurobi license limits
 )
 
 # Check convergence
-result.converged      # true if flow changes < tolerance
-result.iterations     # number of iterations performed
-result.final_net_imports  # converged net imports per zone
+result.converged              # true if price changes < tolerance
+result.iterations             # number of iterations performed
+result.convergence_metrics    # (price_change, flow_change_pct)
+result.final_net_imports      # final net imports per zone
 ```
+
+**Convergence criterion:** Uses price-based convergence (max |Δλ| < tolerance) rather
+than flow-based. This is preferred because prices are the economic fixed point of
+market coupling, while flows are derived quantities that can oscillate near binding
+constraints due to UC binary decisions.
 
 The iterative approach is recommended for tightly interconnected zones where
 cross-border flows significantly affect optimal unit commitment decisions.
-Typical convergence: 2-4 iterations. Runtime: 2-4× longer than non-iterative.
+Typical convergence: 2-5 iterations. Runtime: 2-4× longer than non-iterative.
 
 **Zone discovery:**
 ```julia
