@@ -86,6 +86,30 @@ result = run_multi_zone_for_date_range(Date(2023, 1, 1), Date(2024, 12, 31);
     save_to_db=true)
 ```
 
+**Iterative multi-zone clearing (accounts for interconnections in UC):**
+```julia
+# Standard approach: UC ignores interconnections, MPCC handles flows
+result = run_multi_zone_market_clearing(Date(2024, 6, 15); zones=["GR", "BG", "RO"])
+
+# Iterative approach: UC-MPCC feedback loop until flows converge
+result = run_iterative_multi_zone_market_clearing(Date(2024, 6, 15);
+    zones=["GR", "BG", "RO"],
+    max_iterations=10,           # Stop after 10 iterations max
+    convergence_tolerance=10.0,  # Stop when max flow change < 10 MW
+    damping_factor=0.7,          # Update smoothing (0.7 = 70% new + 30% old)
+    parallel=true                # Parallelize UC within each iteration
+)
+
+# Check convergence
+result.converged      # true if flow changes < tolerance
+result.iterations     # number of iterations performed
+result.final_net_imports  # converged net imports per zone
+```
+
+The iterative approach is recommended for tightly interconnected zones where
+cross-border flows significantly affect optimal unit commitment decisions.
+Typical convergence: 2-4 iterations. Runtime: 2-4× longer than non-iterative.
+
 **Zone discovery:**
 ```julia
 # Zones with generator data (for UC/bidding)

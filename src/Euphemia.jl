@@ -263,6 +263,7 @@ using .Network: get_zones_with_transfer_capacity, get_connected_zones, get_zone_
 include("MPCC.jl")
 using .MPCC: MPCCResult, MPCCOrderBook, solve_mpcc_market_clearing, create_typed_order_book, select_solver
 using .MPCC: create_multi_zone_order_book, with_total_time  # Multi-zone support
+using .MPCC: compute_net_imports_from_flows, compute_max_flow_change, apply_damping  # Iterative UC-MPCC utilities
 
 include("AlternativeOrderBook.jl")
 using .AlternativeOrderBook: create_adjusted_order_book, AdjustedOrderBookResult, print_order_book_summary
@@ -301,6 +302,8 @@ export get_zones_with_transfer_capacity, get_connected_zones, get_zone_pairs  # 
 # MPCC optimization functionality
 export MPCCResult, MPCCOrderBook, solve_mpcc_market_clearing, create_typed_order_book, select_solver
 export create_multi_zone_order_book, run_multi_zone_market_clearing, run_multi_zone_for_date_range  # Multi-zone market clearing
+export run_iterative_multi_zone_market_clearing  # Iterative UC-MPCC with flow feedback
+export compute_net_imports_from_flows, compute_max_flow_change, apply_damping  # Flow conversion utilities
 
 # Solver Environment Caching  
 export get_cached_optimizer, clear_solver_cache!
@@ -1079,6 +1082,229 @@ function run_multi_zone_market_clearing(date::Date;
     println("\n" * "=" ^ 60)
 
     return result
+end
+
+"""
+    run_iterative_multi_zone_market_clearing(date; kwargs...) -> NamedTuple
+
+Run multi-zone market clearing with iterative UC-MPCC to account for
+interconnection flows in unit commitment decisions.
+
+The algorithm iterates between:
+1. Solving UC for each zone (with adjusted demand based on expected flows)
+2. Running MPCC to determine actual market flows
+3. Updating expected flows based on MPCC results
+
+Iteration continues until flows converge or max iterations reached.
+
+# Arguments
+- `date::Date`: Market date
+- `zones::Vector{String}`: Zones to include (empty = auto-discover)
+- `optimizer::String`: Solver for MPCC ("highs" or "gurobi")
+- `max_iterations::Int`: Maximum iteration count (default: 10)
+- `convergence_tolerance::Float64`: Max flow change threshold in MW (default: 10.0)
+- `damping_factor::Float64`: Update damping α ∈ (0,1] (default: 0.7)
+- `markup_factor::Float64`: Bid markup over marginal cost (default: 1.1)
+- `silent::Bool`: Suppress solver output (default: true)
+- `save_to_db::Bool`: Save final results to database (default: false)
+- `parallel::Bool`: Parallelize UC across zones within each iteration (default: false)
+
+# Returns
+NamedTuple with all MPCCResult fields plus:
+- `iterations::Int`: Number of iterations performed
+- `converged::Bool`: Whether convergence was achieved
+- `final_net_imports::Dict`: Converged net imports per zone
+
+# Caching Behavior
+- Each iteration uses `force_rerun=true` to ensure fresh UC solves
+- Only the final converged result is retained in cache (DELETE-before-INSERT)
+- No database pollution: one cache entry per (zone, date, version)
+
+# Example
+```julia
+result = run_iterative_multi_zone_market_clearing(
+    Date(2025, 12, 10);
+    zones=["GR", "BG", "RO"],
+    optimizer="highs",
+    max_iterations=5,
+    convergence_tolerance=10.0,
+    parallel=true
+)
+
+println("Converged: \$(result.converged) in \$(result.iterations) iterations")
+```
+
+See also: [`run_multi_zone_market_clearing`](@ref), [`compute_net_imports_from_flows`](@ref)
+"""
+function run_iterative_multi_zone_market_clearing(date::Date;
+    zones::Vector{String}=String[],
+    optimizer::String="highs",
+    max_iterations::Int=10,
+    convergence_tolerance::Float64=10.0,
+    damping_factor::Float64=0.7,
+    markup_factor::Float64=1.1,
+    silent::Bool=true,
+    save_to_db::Bool=false,
+    parallel::Bool=false
+)
+    total_start_time = time()
+
+    println("\n" * "=" ^ 60)
+    println("🔄 ITERATIVE MULTI-ZONE MARKET CLEARING")
+    println("=" ^ 60)
+    println("📅 Date: $date")
+    println("⚙️  Max iterations: $max_iterations")
+    println("📏 Convergence tolerance: $convergence_tolerance MW")
+    println("🎚️  Damping factor: $damping_factor")
+
+    # Discover zones if not provided
+    if isempty(zones)
+        zones = Network.get_zones_with_transfer_capacity(date)
+        println("📍 Auto-discovered $(length(zones)) zones with transfer capacity")
+    else
+        println("📍 Using $(length(zones)) specified zones: $(join(zones, ", "))")
+    end
+
+    if length(zones) < 2
+        error("Iterative UC-MPCC requires at least 2 zones")
+    end
+
+    # NOTE: Transfer capacities (ATC) are loaded internally by create_multi_zone_order_book()
+    # from entsoe.offered_transfer_capacities_implicit - no explicit loading needed here
+
+    # Initialize iteration state
+    expected_net_imports = nothing  # No adjustment for iteration 1
+    previous_net_imports = nothing
+    best_result = nothing
+    converged = false
+    iteration = 0
+
+    for iter in 1:max_iterations
+        iteration = iter
+        iter_start_time = time()
+        println("\n" * "-" ^ 40)
+        println("📊 Iteration $iter / $max_iterations")
+
+        # Step 1: Create order book with current flow expectations
+        # Always use force_rerun=true to get fresh UC with current flow adjustments
+        order_book = MPCC.create_multi_zone_order_book(zones, date;
+            markup_factor=markup_factor,
+            optimizer=optimizer,
+            use_cache=true,
+            force_rerun=true,  # Always fresh solve
+            parallel=parallel,
+            net_imports_by_zone=expected_net_imports
+        )
+
+        # Step 2: Solve MPCC
+        mpcc_start = time()
+        result = MPCC.solve_mpcc_market_clearing(order_book;
+            preferred_solver=optimizer,
+            silent=silent
+        )
+        mpcc_time = time() - mpcc_start
+
+        if result.status != :optimal
+            @warn "MPCC failed at iteration $iter with status: $(result.status)"
+            if best_result !== nothing
+                println("⚠️  Returning best result from previous iteration")
+                break
+            else
+                error("MPCC failed on first iteration: $(result.status)")
+            end
+        end
+
+        best_result = result
+
+        # Step 3: Extract actual flows and convert to net imports
+        actual_net_imports = MPCC.compute_net_imports_from_flows(result.transmission_flows, zones)
+
+        # Step 4: Check convergence
+        max_change = MPCC.compute_max_flow_change(actual_net_imports, previous_net_imports)
+        iter_time = time() - iter_start_time
+
+        println("   MPCC solve: $(round(mpcc_time, digits=2))s")
+        println("   Max flow change: $(round(max_change, digits=1)) MW")
+        println("   Iteration time: $(round(iter_time, digits=2))s")
+
+        if max_change < convergence_tolerance
+            converged = true
+            println("✅ Converged! Max change $(round(max_change, digits=1)) MW < tolerance $convergence_tolerance MW")
+            break
+        end
+
+        # Step 5: Apply damping and update expected flows for next iteration
+        previous_net_imports = expected_net_imports
+        expected_net_imports = MPCC.apply_damping(actual_net_imports, expected_net_imports, damping_factor)
+    end
+
+    total_time = time() - total_start_time
+
+    println("\n" * "-" ^ 40)
+    if converged
+        println("✅ CONVERGED in $iteration iterations")
+    else
+        println("⚠️  Did NOT converge after $iteration iterations (max change > $convergence_tolerance MW)")
+    end
+    println("⏱️  Total time: $(round(total_time, digits=2))s")
+
+    # Save to database if requested (only final result)
+    if save_to_db && best_result !== nothing && best_result.status == :optimal
+        println("\n💾 Saving final results to database...")
+        try
+            # Save optimization run record first and get the ID
+            optimization_run_id = save_optimization_run(
+                "MULTI_ZONE_ITERATIVE",  # Use special identifier for iterative runs
+                date,
+                :uc_based,
+                :mpcc_iterative,
+                best_result.solver_name,
+                best_result.status;
+                objective_value=best_result.objective_value,
+                solve_time_seconds=best_result.solve_time,
+                num_orders=length(order_book.orders),
+                num_price_periods=length(order_book.periods)
+            )
+
+            # Save prices for each zone with the optimization run ID
+            for zone in zones
+                if haskey(best_result.market_prices, zone)
+                    save_energy_prices(best_result.market_prices[zone], zone, date, :uc_based;
+                                       clearing_mode="multi_zone_iterative",
+                                       optimization_run_id=optimization_run_id)
+                end
+            end
+
+            # Save transmission flows
+            if !isempty(best_result.transmission_flows)
+                save_transmission_flows(best_result.transmission_flows, date)
+            end
+
+            println("   ✅ Results saved to database")
+        catch e
+            @error "Failed to save results to database: $e"
+        end
+    end
+
+    # Return enriched result
+    return (
+        # All MPCCResult fields
+        status=best_result.status,
+        objective_value=best_result.objective_value,
+        market_prices=best_result.market_prices,
+        stepwise_acceptance=best_result.stepwise_acceptance,
+        block_acceptance=best_result.block_acceptance,
+        block_activation=best_result.block_activation,
+        transmission_flows=best_result.transmission_flows,
+        solve_time=best_result.solve_time,
+        total_time=total_time,
+        solver_name=best_result.solver_name,
+        message=best_result.message,
+        # Additional iteration metadata
+        iterations=iteration,
+        converged=converged,
+        final_net_imports=expected_net_imports
+    )
 end
 
 """

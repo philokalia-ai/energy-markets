@@ -191,7 +191,8 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date;
                                curtailment_penalty::Float64=1.0,
                                excess_penalty::Float64=10000.0,
                                shortage_penalty::Float64=10000.0,
-                               use_inferred_params::Bool=true)
+                               use_inferred_params::Bool=true,
+                               net_import_by_timeslot::Union{Dict{String,Float64}, Nothing}=nothing)
 
     # Check cache first (unless disabled or force_rerun)
     if use_cache && !force_rerun
@@ -271,6 +272,20 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date;
     for slot in target_time_slots
         push!(load_values, get(load_by_time, slot, 0.0))
         push!(renewable_values, get(renewable_by_time, slot, 0.0))
+    end
+
+    # Adjust load for expected net imports from interconnections (iterative UC-MPCC)
+    # Positive net_import = zone imports power → reduces generation needed
+    # Negative net_import = zone exports power → increases generation needed
+    if net_import_by_timeslot !== nothing
+        for (t, slot) in enumerate(target_time_slots)
+            net_import = get(net_import_by_timeslot, slot, 0.0)
+            load_values[t] = load_values[t] - net_import
+        end
+        total_adjustment = sum(values(net_import_by_timeslot))
+        if abs(total_adjustment) > 0.1
+            println("  Net import adjustment: $(round(total_adjustment, digits=1)) MWh total")
+        end
     end
 
     setup_start = time()
