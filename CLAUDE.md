@@ -699,6 +699,7 @@ The project uses PostgreSQL with two main schemas:
 - For single-zone runs: `bidding_zone` contains the zone code (e.g., "GR")
 - For multi-zone runs: `bidding_zone` is set to "MULTI_ZONE"
 - Contains `optimizer`, `solve_time_seconds`, `objective_value`, etc.
+- Unique on `(bidding_zone, optimization_date, order_method, model_type, code_version, optimizer)` - allows comparing different solvers
 
 **`simulations.transmission_flows`** - Cross-border transmission flow results from multi-zone clearing
 

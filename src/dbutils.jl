@@ -216,7 +216,7 @@ ON simulations.energy_prices (optimization_run_id)
             error_message TEXT,
             code_version INTEGER NOT NULL,
             created_at TIMESTAMP NOT NULL,
-            UNIQUE(bidding_zone, optimization_date, order_method, model_type, code_version)
+            UNIQUE(bidding_zone, optimization_date, order_method, model_type, code_version, optimizer)
         )
         """
 
