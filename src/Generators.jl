@@ -379,8 +379,20 @@ function get_generators(source::Bool=false)
     return generators
 end
 
-function get_min_active_capacity(max_capacity::Float64)
-    return 0.1 * max_capacity  # Example: 10% of max capacity
+"""
+    get_min_active_capacity(max_capacity::Float64, fuel_type::Symbol)
+
+Calculate minimum active capacity based on fuel type.
+Uses min_load_factor from FuelTypeParameters for thermal plants,
+returns 0 for flexible resources (hydro, storage).
+"""
+function get_min_active_capacity(max_capacity::Float64, fuel_type::Symbol)
+    if fuel_type in FLEXIBLE_FUEL_TYPES
+        return 0.0
+    else
+        params = get_fuel_type_parameters(fuel_type)
+        return params.min_load_factor * max_capacity
+    end
 end
 
 
@@ -561,8 +573,9 @@ function get_generators(map_code::String, day::Dates.Date;
             row.generation_unit_location,                # location
             Float64(row.generation_unit_installed_capacity_mw), # p_max
             get_min_active_capacity(
-                Float64(row.generation_unit_installed_capacity_mw)
-            ), # p_min
+                Float64(row.generation_unit_installed_capacity_mw),
+                inferred_type
+            ), # p_min (fuel-type-specific)
             row.area_map_code,                           # bidding_zone
             get_marginal_cost(
                 day,
@@ -1115,11 +1128,20 @@ function get_initial_conditions(generators::Vector{Generator}, market_day::Dates
 
             # Validate and adjust initial conditions for ON generators
             if ic.is_on
-                # Clamp output to valid range [p_min, p_max]
+                # Clamp output to valid range [effective_p_min, p_max]
                 # This handles data quality issues where historical data shows:
                 # - output < p_min (below technical minimum)
                 # - output > p_max (above capacity, possible due to capacity changes)
-                min_valid_output = gen.p_min > 0 ? gen.p_min : 0.0
+                #
+                # IMPORTANT: The UC model uses effective_p_min = max(gen.p_min, min_load_factor × p_max)
+                # for non-flexible fuel types. We must use the same effective p_min here to avoid
+                # infeasibility from ramp constraints.
+                if gen.fuel_type in FLEXIBLE_FUEL_TYPES
+                    min_valid_output = gen.p_min > 0 ? gen.p_min : 0.0
+                else
+                    params = get_fuel_type_parameters(gen.fuel_type)
+                    min_valid_output = max(gen.p_min, params.min_load_factor * gen.p_max)
+                end
                 adjusted_output = ic.output
 
                 if ic.output > gen.p_max
@@ -1127,7 +1149,9 @@ function get_initial_conditions(generators::Vector{Generator}, market_day::Dates
                     adjusted_output = gen.p_max
                 elseif ic.output < min_valid_output
                     # Output below minimum - use 70% of p_max as reasonable default
+                    # (but at least the effective p_min)
                     adjusted_output = max(0.7 * gen.p_max, min_valid_output)
+                    @warn "Initial output below effective p_min" generator=gen.name output=ic.output effective_p_min=min_valid_output adjusted_to=adjusted_output
                 end
 
                 if adjusted_output != ic.output
@@ -1141,8 +1165,14 @@ function get_initial_conditions(generators::Vector{Generator}, market_day::Dates
         for gen in generators
             ic = get_default_initial_conditions(gen.fuel_type)
             if ic.is_on
-                # Use 70% of p_max but ensure it's at least p_min
-                min_valid_output = gen.p_min > 0 ? gen.p_min : 0.0
+                # Use 70% of p_max but ensure it's at least effective p_min
+                # (same calculation as in UC model)
+                if gen.fuel_type in FLEXIBLE_FUEL_TYPES
+                    min_valid_output = gen.p_min > 0 ? gen.p_min : 0.0
+                else
+                    params = get_fuel_type_parameters(gen.fuel_type)
+                    min_valid_output = max(gen.p_min, params.min_load_factor * gen.p_max)
+                end
                 adjusted_output = max(0.7 * gen.p_max, min_valid_output)
                 ic = InitialConditions(true, adjusted_output, ic.hours_on, ic.hours_off, ic.thermal_state)
             end

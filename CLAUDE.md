@@ -183,6 +183,11 @@ Ramp rate inference:
 - Falls back to fuel-type defaults in `FuelTypeParameters` if insufficient data
 - **Note on 3-month window**: Physical parameters (ramp rates, p_min) are plant characteristics that shouldn't vary by season. However, seasonal dispatch patterns may affect uptime/downtime inference for plants that operate differently in summer vs winter. A longer window (6-12 months) could capture more operating conditions but would increase query time and include potentially stale data. The 95th/5th percentile approach mitigates this by capturing extreme values even from limited data.
 
+Initial p_min (when loading from database):
+- **Flexible resources** (hydro, batteries, storage): `p_min = 0`
+- **Thermal plants**: `p_min = min_load_factor × p_max` from `FuelTypeParameters`
+- This ensures consistency with what UC enforces, even before inference runs
+
 p_min inference strategy (robust to data quality issues):
 - **Flexible resources** (hydro, batteries): p_min = 0 (no inference needed)
 - **Thermal plants**: Infers from historical stable operation
@@ -246,14 +251,17 @@ Unit commitment integration:
 - Enforces remaining uptime/downtime based on T_on₀/T_off₀
 
 Initial output validation:
-- Historical output data may be outside the valid `[p_min, p_max]` range due to:
+- Historical output data may be outside the valid `[effective_p_min, p_max]` range due to:
   - Data quality issues (measurement errors)
   - Capacity changes (derating, upgrades)
   - Outages affecting available capacity
 - The UC solver validates and clamps initial output to prevent infeasibility:
   - If `output > p_max`: clamp to `p_max`
-  - If `output < p_min` (for thermal plants): set to `max(0.7 × p_max, p_min)`
+  - If `output < effective_p_min`: set to `max(0.7 × p_max, effective_p_min)`
   - Logs warnings when clamping occurs
+- **Important**: `effective_p_min = max(declared_p_min, min_load_factor × p_max)` for thermal plants
+  - This matches how the UC model calculates minimum generation
+  - Flexible fuel types (hydro, storage) use only `declared_p_min`
 - This ensures ramp constraints from t=0 to t=1 are always feasible
 
 **Unit commitment solver:**
