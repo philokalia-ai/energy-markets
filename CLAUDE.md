@@ -140,6 +140,13 @@ The `exclude_unavailable` parameter (default: `true`) filters generators based o
 - Only `status = 'Active'` outages are considered (ignores `Cancelled`/`Withdrawn`)
 - Uses `MIN(available_capacity_mw)` when multiple outage records exist (conservative)
 
+**Generator deduplication (overlapping validity periods):**
+- ENTSO-E data can have multiple rows for the same generator with overlapping `valid_from`/`valid_to` periods
+- This is a data quality issue where capacity changes create duplicate entries instead of properly versioned records
+- The query uses `DISTINCT ON (generation_unit_code)` to deduplicate
+- Priority: most recent `valid_from`, then highest capacity as tiebreaker
+- Example: Poland's "Dolna Odra B7" had 5 overlapping entries with capacities 210-232 MW
+
 The `exclude_variable_renewables` parameter (default: `true`) filters out wind and solar generators:
 - **Variable renewables** (Wind Onshore, Wind Offshore, Solar) are excluded from UC
 - These generators' output is non-dispatchable and handled via renewable forecasts

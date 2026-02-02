@@ -451,6 +451,9 @@ function get_generators(map_code::String, day::Dates.Date;
         # - Reduces p_max for partial outages (available_capacity_mw > 0)
         # - Only considers 'Active' status outages (ignores Cancelled/Withdrawn)
         # - Uses MIN available capacity when multiple outage records exist (conservative)
+        # Note: DISTINCT ON deduplicates by generation_unit_code since ENTSO-E data
+        # can have overlapping validity periods for the same generator (data quality issue).
+        # We take the most recent version (by valid_from) with highest capacity as tiebreaker.
         query = """
         WITH active_outages AS (
             SELECT
@@ -463,7 +466,7 @@ function get_generators(map_code::String, day::Dates.Date;
               AND \$2::timestamp < end_outage_utc::timestamp
             GROUP BY asset_code
         )
-        SELECT
+        SELECT DISTINCT ON (g.generation_unit_code)
             g.valid_from,
             g.valid_to,
             g.production_unit_code,
@@ -510,11 +513,14 @@ function get_generators(map_code::String, day::Dates.Date;
                     )
             -- Exclude complete outages (available_capacity = 0)
             AND (o.asset_code IS NULL OR o.available_capacity_mw > 0)
+        ORDER BY g.generation_unit_code, g.valid_from DESC, g.generation_unit_installed_capacity_mw DESC
         """
     else
         # Original query without unavailability filtering
+        # Note: DISTINCT ON deduplicates by generation_unit_code since ENTSO-E data
+        # can have overlapping validity periods for the same generator (data quality issue).
         query = """
-        SELECT
+        SELECT DISTINCT ON (generation_unit_code)
             valid_from,
             valid_to,
             production_unit_code,
@@ -550,6 +556,7 @@ function get_generators(map_code::String, day::Dates.Date;
                         DATE(valid_to),
                         DATE(\$2) + INTERVAL '1 year'
                     )
+        ORDER BY generation_unit_code, valid_from DESC, generation_unit_installed_capacity_mw DESC
         """
     end
 
