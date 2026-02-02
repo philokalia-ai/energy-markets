@@ -216,11 +216,67 @@ ON simulations.energy_prices (optimization_run_id)
             error_message TEXT,
             code_version INTEGER NOT NULL,
             created_at TIMESTAMP NOT NULL,
+            -- Iterative optimization metadata (added for UC-MPCC iterative runs)
+            is_iterative BOOLEAN DEFAULT FALSE,
+            total_time_seconds NUMERIC(12,3),
+            iterations INTEGER,
+            converged BOOLEAN,
+            final_price_change NUMERIC(10,3),
+            final_flow_change_pct NUMERIC(10,3),
             UNIQUE(bidding_zone, optimization_date, order_method, model_type, code_version, optimizer)
         )
         """
 
         LibPQ.execute(cnx, create_optimization_runs_sql)
+
+        # Add iterative columns to existing tables (migration for existing installations)
+        LibPQ.execute(cnx, """
+            DO \$\$
+            BEGIN
+                -- Add is_iterative column if it doesn't exist
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                               WHERE table_schema = 'simulations'
+                               AND table_name = 'optimization_runs'
+                               AND column_name = 'is_iterative') THEN
+                    ALTER TABLE simulations.optimization_runs ADD COLUMN is_iterative BOOLEAN DEFAULT FALSE;
+                END IF;
+                -- Add total_time_seconds column if it doesn't exist
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                               WHERE table_schema = 'simulations'
+                               AND table_name = 'optimization_runs'
+                               AND column_name = 'total_time_seconds') THEN
+                    ALTER TABLE simulations.optimization_runs ADD COLUMN total_time_seconds NUMERIC(12,3);
+                END IF;
+                -- Add iterations column if it doesn't exist
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                               WHERE table_schema = 'simulations'
+                               AND table_name = 'optimization_runs'
+                               AND column_name = 'iterations') THEN
+                    ALTER TABLE simulations.optimization_runs ADD COLUMN iterations INTEGER;
+                END IF;
+                -- Add converged column if it doesn't exist
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                               WHERE table_schema = 'simulations'
+                               AND table_name = 'optimization_runs'
+                               AND column_name = 'converged') THEN
+                    ALTER TABLE simulations.optimization_runs ADD COLUMN converged BOOLEAN;
+                END IF;
+                -- Add final_price_change column if it doesn't exist
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                               WHERE table_schema = 'simulations'
+                               AND table_name = 'optimization_runs'
+                               AND column_name = 'final_price_change') THEN
+                    ALTER TABLE simulations.optimization_runs ADD COLUMN final_price_change NUMERIC(10,3);
+                END IF;
+                -- Add final_flow_change_pct column if it doesn't exist
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                               WHERE table_schema = 'simulations'
+                               AND table_name = 'optimization_runs'
+                               AND column_name = 'final_flow_change_pct') THEN
+                    ALTER TABLE simulations.optimization_runs ADD COLUMN final_flow_change_pct NUMERIC(10,3);
+                END IF;
+            END \$\$;
+        """)
 
         # Create useful indexes for optimization runs
         LibPQ.execute(
@@ -422,9 +478,7 @@ end
 
 """
     save_optimization_run(bidding_zone::String, date::Date, order_method::Symbol, model_type::Symbol,
-                          optimizer::String, status::Symbol; objective_value=nothing, solve_time_seconds=nothing,
-                          num_orders=nothing, num_price_periods=nothing, error_message=nothing,
-                          code_version::Int=3, create_schema::Bool=true) -> Union{Int, Nothing}
+                          optimizer::String, status::Symbol; kwargs...) -> Union{Int, Nothing}
 
 Save optimization run metadata to track all optimization attempts (successful and failed).
 
@@ -432,16 +486,24 @@ Save optimization run metadata to track all optimization attempts (successful an
 - `bidding_zone`: Bidding zone code (e.g., "GR", "AL", or "MULTI_ZONE" for multi-zone runs)
 - `date`: Date of the optimization
 - `order_method`: Method used (:uc_based or :alternative)
-- `model_type`: Model used (:mpcc, :mpcc_multi_zone, etc.)
+- `model_type`: Model used (:mpcc, :mpcc_multi_zone, :mpcc_iterative, etc.)
 - `optimizer`: Solver used ("highs", "gurobi", "cplex")
 - `status`: Optimization status (:optimal, :infeasible, :time_limit, etc.)
 - `objective_value`: Final objective value (nothing for failed runs)
-- `solve_time_seconds`: Solution time in seconds
+- `solve_time_seconds`: Solution time in seconds (for iterative runs, this is the final MPCC solve time)
 - `num_orders`: Number of orders in the order book
 - `num_price_periods`: Number of price periods generated (nothing for failed runs)
 - `error_message`: Error details for failed runs (nothing for successful runs)
-- `code_version`: Version code (default: 1)
+- `code_version`: Version code (default: 3)
 - `create_schema`: Whether to create schema/table if missing (default: true)
+
+## Iterative optimization metadata (for UC-MPCC iterative runs)
+- `is_iterative`: Whether this was an iterative optimization run (default: false)
+- `total_time_seconds`: Total time for all iterations including UC solves (nothing for non-iterative)
+- `iterations`: Number of iterations performed (nothing for non-iterative)
+- `converged`: Whether the iterative algorithm converged (nothing for non-iterative)
+- `final_price_change`: Final max price change in €/MWh at convergence/termination
+- `final_flow_change_pct`: Final flow change percentage at convergence/termination
 
 # Returns
 - `Int`: The ID of the inserted optimization run record, or `nothing` if insertion failed
@@ -454,7 +516,14 @@ function save_optimization_run(bidding_zone::String, date::Date, order_method::S
     num_price_periods=nothing,
     error_message=nothing,
     code_version::Int=3,
-    create_schema::Bool=true)
+    create_schema::Bool=true,
+    # Iterative optimization metadata
+    is_iterative::Bool=false,
+    total_time_seconds=nothing,
+    iterations=nothing,
+    converged=nothing,
+    final_price_change=nothing,
+    final_flow_change_pct=nothing)
 
     # Create schema and table if requested
     if create_schema
@@ -467,8 +536,10 @@ function save_optimization_run(bidding_zone::String, date::Date, order_method::S
             INSERT INTO simulations.optimization_runs
             (bidding_zone, optimization_date, order_method, model_type, optimizer, status,
              objective_value, solve_time_seconds, num_orders, num_price_periods, error_message,
-             code_version, created_at)
-            VALUES (\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8, \$9, \$10, \$11, \$12, \$13)
+             code_version, created_at,
+             is_iterative, total_time_seconds, iterations, converged, final_price_change, final_flow_change_pct)
+            VALUES (\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8, \$9, \$10, \$11, \$12, \$13,
+                    \$14, \$15, \$16, \$17, \$18, \$19)
             RETURNING id
             """
 
@@ -485,7 +556,13 @@ function save_optimization_run(bidding_zone::String, date::Date, order_method::S
                 num_price_periods === nothing ? missing : num_price_periods,
                 error_message === nothing ? missing : error_message,
                 code_version,
-                now(UTC)
+                now(UTC),
+                is_iterative,
+                total_time_seconds === nothing ? missing : total_time_seconds,
+                iterations === nothing ? missing : iterations,
+                converged === nothing ? missing : converged,
+                final_price_change === nothing ? missing : final_price_change,
+                final_flow_change_pct === nothing ? missing : final_flow_change_pct
             ])
 
             # Get the returned ID

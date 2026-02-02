@@ -753,8 +753,16 @@ The project uses PostgreSQL with two main schemas:
 **`simulations.optimization_runs`** - Optimization run metadata including status, solver info, and performance metrics
 - For single-zone runs: `bidding_zone` contains the zone code (e.g., "GR")
 - For multi-zone runs: `bidding_zone` is set to "MULTI_ZONE"
+- For iterative runs: `bidding_zone` is set to "MULTI_ZONE_ITERATIVE"
 - Contains `optimizer`, `solve_time_seconds`, `objective_value`, etc.
 - Unique on `(bidding_zone, optimization_date, order_method, model_type, code_version, optimizer)` - allows comparing different solvers
+- **Iterative optimization metadata** (for UC-MPCC iterative runs):
+  - `is_iterative`: Boolean flag indicating iterative optimization
+  - `total_time_seconds`: Total time for all iterations including UC solves
+  - `iterations`: Number of iterations performed
+  - `converged`: Whether the algorithm achieved convergence
+  - `final_price_change`: Final max price change in €/MWh at termination
+  - `final_flow_change_pct`: Final flow change percentage at termination
 
 **`simulations.transmission_flows`** - Cross-border transmission flow results from multi-zone clearing
 

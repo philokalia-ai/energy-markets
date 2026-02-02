@@ -1291,6 +1291,7 @@ function run_iterative_multi_zone_market_clearing(date::Date;
         println("\n💾 Saving final results to database...")
         try
             # Save optimization run record first and get the ID
+            # Include iterative metadata for later analysis
             optimization_run_id = save_optimization_run(
                 "MULTI_ZONE_ITERATIVE",  # Use special identifier for iterative runs
                 date,
@@ -1301,7 +1302,14 @@ function run_iterative_multi_zone_market_clearing(date::Date;
                 objective_value=best_result.objective_value,
                 solve_time_seconds=best_result.solve_time,
                 num_orders=length(order_book.orders),
-                num_price_periods=length(order_book.periods)
+                num_price_periods=length(order_book.periods),
+                # Iterative optimization metadata
+                is_iterative=true,
+                total_time_seconds=total_time,
+                iterations=iteration,
+                converged=converged,
+                final_price_change=final_price_change,
+                final_flow_change_pct=final_flow_change_pct
             )
 
             # Save prices for each zone with the optimization run ID
