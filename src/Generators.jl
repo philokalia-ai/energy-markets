@@ -454,6 +454,12 @@ function get_generators(map_code::String, day::Dates.Date;
         # Note: DISTINCT ON deduplicates by generation_unit_code since ENTSO-E data
         # can have overlapping validity periods for the same generator (data quality issue).
         # We take the most recent version (by valid_from) with highest capacity as tiebreaker.
+        #
+        # Date validity filter relaxation:
+        # ENTSO-E data has stale valid_from/valid_to dates for many operating plants.
+        # Example: Spain nuclear has valid_from in 2026 (future!), Germany coal has valid_to in 2022.
+        # Solution: Include plants that EITHER pass date validity OR have recent actual generation.
+        # This uses hard evidence (actual_generation_output) to include operating plants.
         query = """
         WITH active_outages AS (
             SELECT
@@ -465,6 +471,15 @@ function get_generators(map_code::String, day::Dates.Date;
               AND \$2::timestamp >= start_outage_utc::timestamp
               AND \$2::timestamp < end_outage_utc::timestamp
             GROUP BY asset_code
+        ),
+        -- Find generators with recent actual generation (last 60 days)
+        -- This catches plants with stale validity dates that are still operating
+        recent_generation AS (
+            SELECT DISTINCT generation_unit_code
+            FROM entsoe.actual_generation_output_per_generation_unit
+            WHERE date_time_utc >= \$2::timestamp - INTERVAL '60 days'
+              AND date_time_utc < \$2::timestamp + INTERVAL '1 day'
+              AND actual_generation_output_mw > 0
         )
         SELECT DISTINCT ON (g.generation_unit_code)
             g.valid_from,
@@ -500,17 +515,22 @@ function get_generators(map_code::String, day::Dates.Date;
         FROM
             entsoe.production_and_generation_units g
         LEFT JOIN active_outages o ON g.generation_unit_code = o.asset_code
+        LEFT JOIN recent_generation rg ON g.generation_unit_code = rg.generation_unit_code
         WHERE
             g.production_unit_status = 'COMMISSIONED'
             AND g.generation_unit_status = 'COMMISSIONED'
             AND g.area_type_code IN ('BZN', 'BZN/CTA')
             AND g.area_map_code = \$1
-            AND DATE(\$2)
-                BETWEEN DATE(g.valid_from)
-                AND COALESCE(
-                        DATE(g.valid_to),
-                        DATE(\$2) + INTERVAL '1 year'
-                    )
+            -- Include if: passes date validity OR has recent actual generation
+            AND (
+                DATE(\$2)
+                    BETWEEN DATE(g.valid_from)
+                    AND COALESCE(
+                            DATE(g.valid_to),
+                            DATE(\$2) + INTERVAL '1 year'
+                        )
+                OR rg.generation_unit_code IS NOT NULL
+            )
             -- Exclude complete outages (available_capacity = 0)
             AND (o.asset_code IS NULL OR o.available_capacity_mw > 0)
         ORDER BY g.generation_unit_code, g.valid_from DESC, g.generation_unit_installed_capacity_mw DESC
@@ -519,44 +539,58 @@ function get_generators(map_code::String, day::Dates.Date;
         # Original query without unavailability filtering
         # Note: DISTINCT ON deduplicates by generation_unit_code since ENTSO-E data
         # can have overlapping validity periods for the same generator (data quality issue).
+        #
+        # Date validity filter relaxation (same as above):
+        # Include plants that EITHER pass date validity OR have recent actual generation.
         query = """
-        SELECT DISTINCT ON (generation_unit_code)
-            valid_from,
-            valid_to,
-            production_unit_code,
-            production_unit_name,
-            production_unit_status,
-            production_unit_type,
-            production_unit_location,
-            production_unit_installed_capacity_mw,
-            production_unit_voltage_kv,
-            area_code,
-            area_display_name,
-            area_type_code,
-            area_map_code,
-            generation_unit_code,
-            generation_unit_name,
-            generation_unit_status,
-            generation_unit_type,
-            generation_unit_location,
-            generation_unit_installed_capacity_mw,
-            update_time_utc,
-            source
-
+        WITH recent_generation AS (
+            SELECT DISTINCT generation_unit_code
+            FROM entsoe.actual_generation_output_per_generation_unit
+            WHERE date_time_utc >= \$2::timestamp - INTERVAL '60 days'
+              AND date_time_utc < \$2::timestamp + INTERVAL '1 day'
+              AND actual_generation_output_mw > 0
+        )
+        SELECT DISTINCT ON (g.generation_unit_code)
+            g.valid_from,
+            g.valid_to,
+            g.production_unit_code,
+            g.production_unit_name,
+            g.production_unit_status,
+            g.production_unit_type,
+            g.production_unit_location,
+            g.production_unit_installed_capacity_mw,
+            g.production_unit_voltage_kv,
+            g.area_code,
+            g.area_display_name,
+            g.area_type_code,
+            g.area_map_code,
+            g.generation_unit_code,
+            g.generation_unit_name,
+            g.generation_unit_status,
+            g.generation_unit_type,
+            g.generation_unit_location,
+            g.generation_unit_installed_capacity_mw,
+            g.update_time_utc,
+            g.source
         FROM
-            entsoe.production_and_generation_units
+            entsoe.production_and_generation_units g
+        LEFT JOIN recent_generation rg ON g.generation_unit_code = rg.generation_unit_code
         WHERE
-            production_unit_status = 'COMMISSIONED'
-            AND generation_unit_status = 'COMMISSIONED'
-            AND area_type_code IN  ('BZN', 'BZN/CTA')
-            AND area_map_code = \$1
-            AND DATE(\$2)
-                BETWEEN DATE(valid_from)
-                AND COALESCE(
-                        DATE(valid_to),
-                        DATE(\$2) + INTERVAL '1 year'
-                    )
-        ORDER BY generation_unit_code, valid_from DESC, generation_unit_installed_capacity_mw DESC
+            g.production_unit_status = 'COMMISSIONED'
+            AND g.generation_unit_status = 'COMMISSIONED'
+            AND g.area_type_code IN ('BZN', 'BZN/CTA')
+            AND g.area_map_code = \$1
+            -- Include if: passes date validity OR has recent actual generation
+            AND (
+                DATE(\$2)
+                    BETWEEN DATE(g.valid_from)
+                    AND COALESCE(
+                            DATE(g.valid_to),
+                            DATE(\$2) + INTERVAL '1 year'
+                        )
+                OR rg.generation_unit_code IS NOT NULL
+            )
+        ORDER BY g.generation_unit_code, g.valid_from DESC, g.generation_unit_installed_capacity_mw DESC
         """
     end
 

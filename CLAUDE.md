@@ -147,6 +147,15 @@ The `exclude_unavailable` parameter (default: `true`) filters generators based o
 - Priority: most recent `valid_from`, then highest capacity as tiebreaker
 - Example: Poland's "Dolna Odra B7" had 5 overlapping entries with capacities 210-232 MW
 
+**Date validity filter with recent generation fallback:**
+- ENTSO-E data has stale `valid_from`/`valid_to` dates for some operating plants
+- Example: Spain nuclear plants had `valid_from` in 2026 (future!) but were actively generating
+- Example: German coal plants had `valid_to` in 2022-2024 but were still operating in 2025
+- Solution: Include plants that EITHER pass the date validity filter OR have recent actual generation output
+- Recent generation = output > 0 MW within the last 60 days (from `actual_generation_output_per_generation_unit`)
+- This ensures operating plants are included regardless of stale validity dates
+- Plants with neither valid dates NOR recent generation are correctly excluded (truly decommissioned)
+
 The `exclude_variable_renewables` parameter (default: `true`) filters out wind and solar generators:
 - **Variable renewables** (Wind Onshore, Wind Offshore, Solar) are excluded from UC
 - These generators' output is non-dispatchable and handled via renewable forecasts
