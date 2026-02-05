@@ -2,7 +2,7 @@ module MPCC
 
 using JuMP, Dates, DataFrames
 using JuMP: AffExpr
-using Distributed: myid, workers, pmap
+using Distributed: myid, workers, pmap, WorkerPool
 
 # Import shared solver selection from parent module
 import ..select_solver
@@ -307,6 +307,7 @@ function create_multi_zone_order_book(zones::Vector{String}, day::Date;
                                       use_cache::Bool=true,
                                       force_rerun::Bool=false,
                                       parallel::Bool=false,
+                                      max_workers::Union{Int, Nothing}=nothing,
                                       net_imports_by_zone::Union{Dict{String, Dict{String, Float64}}, Nothing}=nothing)
     if isempty(zones)
         error("At least one bidding zone must be specified")
@@ -321,6 +322,7 @@ function create_multi_zone_order_book(zones::Vector{String}, day::Date;
 
     # Check for parallel execution
     use_parallel = parallel
+    selected_worker_ids = Int[]
     if use_parallel
         worker_ids = filter(id -> id != 1, workers())
         available_workers = length(worker_ids)
@@ -329,18 +331,34 @@ function create_multi_zone_order_book(zones::Vector{String}, day::Date;
             @warn "Parallel processing requested but no workers available. Falling back to sequential."
             use_parallel = false
         else
-            println("   ⚡ Parallel mode enabled with $available_workers workers")
+            # Determine max workers based on optimizer if not explicitly set
+            effective_max_workers = if !isnothing(max_workers)
+                max_workers
+            elseif lowercase(optimizer) == "gurobi"
+                # Gurobi WLS license typically limits concurrent sessions to 2
+                2
+            else
+                # HiGHS: use half of available workers (leave headroom for system)
+                max(1, available_workers ÷ 2)
+            end
+            workers_to_use = min(effective_max_workers, available_workers)
+            selected_worker_ids = worker_ids[1:workers_to_use]
+            reason = !isnothing(max_workers) ? "user-specified" :
+                     (lowercase(optimizer) == "gurobi" ? "Gurobi license limit" : "HiGHS default")
+            println("   ⚡ Parallel mode: $workers_to_use workers (of $available_workers available, $reason)")
         end
     end
 
     if use_parallel
-        # Parallel path: process all zones concurrently using pmap
+        # Parallel path: process all zones concurrently using pmap with WorkerPool
         println("   📊 Processing $(length(zones)) zones in parallel...")
         # Build args with zone-specific net imports
         pmap_args = [(zone, day, markup_factor, optimizer, use_cache, force_rerun,
                       net_imports_by_zone !== nothing ? get(net_imports_by_zone, zone, nothing) : nothing)
                      for zone in zones]
-        zone_results = pmap(_process_zone_for_order_book, pmap_args)
+        # Use WorkerPool to limit concurrent workers (important for Gurobi license limits)
+        pool = WorkerPool(selected_worker_ids)
+        zone_results = pmap(_process_zone_for_order_book, pool, pmap_args)
 
         # Aggregate results from parallel execution
         for result in zone_results

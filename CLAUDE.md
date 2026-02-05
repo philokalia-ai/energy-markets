@@ -97,7 +97,7 @@ result = run_iterative_multi_zone_market_clearing(Date(2024, 6, 15);
     max_iterations=10,       # Stop after 10 iterations max
     price_tolerance=1.0,     # Stop when max price change < 1 €/MWh
     damping_factor=0.7,      # Update smoothing (0.7 = 70% new + 30% old)
-    parallel=false           # Set false to respect Gurobi license limits
+    parallel=true            # Auto-limits: 2 workers for Gurobi, half for HiGHS
 )
 
 # Check convergence
@@ -580,9 +580,11 @@ When `parallel=true` in `run_multi_zone_market_clearing()`:
 **Gurobi license constraints:**
 - WLS (Web License Service) limits concurrent solver sessions (check "session baseline" in your Gurobi profile)
 - Each parallel UC worker consumes 1 session while actively solving
-- **Automatic cap**: Scripts automatically limit `max_workers` to 2 when using Gurobi with parallel mode
+- **Automatic cap**: When `parallel=true` and `max_workers` is not set:
+  - Gurobi: automatically limits to 2 workers (license limit)
+  - HiGHS: uses half of available workers (leaves headroom)
+- Override with explicit `max_workers=N` if needed
 - "Max distributed workers" is unrelated (for Gurobi's distributed MIP, not parallel independent solves)
-- To change the cap, edit `gurobi_max` in `bin/main.jl` and `bin/multi_zone_main.jl`
 
 ## Development Commands
 

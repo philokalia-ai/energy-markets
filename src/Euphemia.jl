@@ -953,7 +953,8 @@ function run_multi_zone_market_clearing(date::Date;
                                         silent::Bool=true,
                                         save_to_db::Bool=false,
                                         force_rerun::Bool=false,
-                                        parallel::Bool=false)
+                                        parallel::Bool=false,
+                                        max_workers::Union{Int, Nothing}=nothing)
 
     start_time = time()
 
@@ -983,7 +984,8 @@ function run_multi_zone_market_clearing(date::Date;
                                           markup_factor=markup_factor,
                                           optimizer=optimizer,
                                           force_rerun=force_rerun,
-                                          parallel=parallel)
+                                          parallel=parallel,
+                                          max_workers=max_workers)
     elseif order_method == :alternative
         # Alternative: uses simplified order generation (faster)
         _create_multi_zone_order_book_alternative(zones, date)
@@ -1163,7 +1165,8 @@ function run_iterative_multi_zone_market_clearing(date::Date;
     markup_factor::Float64=1.1,
     silent::Bool=true,
     save_to_db::Bool=false,
-    parallel::Bool=false
+    parallel::Bool=false,
+    max_workers::Union{Int, Nothing}=nothing
 )
     total_start_time = time()
 
@@ -1174,6 +1177,10 @@ function run_iterative_multi_zone_market_clearing(date::Date;
     println("⚙️  Max iterations: $max_iterations")
     println("💰 Price tolerance: $price_tolerance €/MWh")
     println("🎚️  Damping factor: $damping_factor")
+    if parallel
+        workers_info = isnothing(max_workers) ? "all available" : "max $max_workers"
+        println("⚡ Parallel: enabled ($workers_info workers)")
+    end
 
     # Discover zones if not provided
     if isempty(zones)
@@ -1215,6 +1222,7 @@ function run_iterative_multi_zone_market_clearing(date::Date;
             use_cache=true,
             force_rerun=true,  # Always fresh solve
             parallel=parallel,
+            max_workers=max_workers,
             net_imports_by_zone=expected_net_imports
         )
 
