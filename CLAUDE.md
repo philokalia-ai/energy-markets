@@ -586,6 +586,46 @@ When `parallel=true` in `run_multi_zone_market_clearing()`:
 - Override with explicit `max_workers=N` if needed
 - "Max distributed workers" is unrelated (for Gurobi's distributed MIP, not parallel independent solves)
 
+## GitHub Actions / CI
+
+The project includes several GitHub workflows for automated price generation:
+
+### Workflows
+
+| Workflow | Schedule | Description |
+|----------|----------|-------------|
+| `generate-energy-prices.yml` | Daily 2 AM UTC | Single-zone market clearing |
+| `generate-multi-zone-prices.yml` | Daily 3 AM UTC | Multi-zone clearing with transmission |
+| `generate-iterative-multi-zone-prices.yml` | Manual only | Iterative UC-MPCC (accounts for interconnections) |
+| `refresh-inference-cache.yml` | Annually Jan 1st | Refresh generator parameter inference cache |
+
+All workflows support `workflow_dispatch` for manual triggering with custom parameters.
+
+### Bin Scripts
+
+The workflows invoke Julia scripts in the `bin/` directory:
+
+- **`bin/multi_zone_main.jl`** - Non-iterative multi-zone clearing for date ranges
+- **`bin/iterative_multi_zone_main.jl`** - Iterative UC-MPCC clearing for date ranges
+
+**Running locally:**
+```bash
+# Set required environment variables
+export START_DATE="2025-01-01"
+export END_DATE="2025-01-07"
+export PARALLEL="true"
+export OPTIMIZER="highs"
+export MAX_WORKERS="0"  # 0 = auto-detect
+
+# For iterative (additional params)
+export MAX_ITERATIONS="10"
+export PRICE_TOLERANCE="1.0"
+export DAMPING_FACTOR="0.7"
+
+# Run
+julia --project=. bin/iterative_multi_zone_main.jl
+```
+
 ## Development Commands
 
 ### Julia Package Management
