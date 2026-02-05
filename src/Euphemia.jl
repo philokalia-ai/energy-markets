@@ -283,7 +283,8 @@ export MICOrder, LoadGradientOrder, MeritOrder, PUNOrder
 export Generator, Load, RenewablesGenerationForecast, InitialConditions
 
 # Helper functions for data retrieval
-export get_generators, get_loads, get_generation_forecast_for_wind_and_solar
+export get_generators, get_generators_with_inferred_params, infer_parameters_for_generator, infer_parameters_for_generators, refresh_inference_cache
+export get_loads, get_generation_forecast_for_wind_and_solar
 export get_initial_conditions, get_default_initial_conditions, determine_thermal_state
 
 # Unit commitment functionality
@@ -326,6 +327,7 @@ export generate_energy_prices
 export save_energy_prices, ensure_energy_prices_table, withdb, save_optimization_run
 export save_transmission_flows, ensure_transmission_flows_table  # Multi-zone transmission flows
 export ensure_uc_results_tables  # UC results caching tables
+export ensure_indexes  # Create indexes on ENTSOE tables for query performance
 
 # UC results caching
 export has_cached_uc_results, save_uc_results, load_uc_results

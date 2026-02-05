@@ -156,9 +156,9 @@ function disaggregate_temporal_data(loads, renewables)
                 end
 
                 if parent_load !== nothing
-                    # Distribute load evenly across sub-periods
-                    slots_per_load = load_resolution ÷ resolution_minutes
-                    load_by_time[target_slot] = parent_load / slots_per_load
+                    # Load forecast is in MW (power), not MWh (energy)
+                    # Each sub-period gets the SAME MW value as the parent period
+                    load_by_time[target_slot] = parent_load
                 end
             end
         end
@@ -198,9 +198,9 @@ function disaggregate_temporal_data(loads, renewables)
                 end
 
                 if parent_renewable > 0
-                    # Distribute renewable evenly across sub-periods
-                    slots_per_renewable = renewable_resolution ÷ resolution_minutes
-                    renewable_by_time[target_slot] = parent_renewable / slots_per_renewable
+                    # Renewable forecast is in MW (power), not MWh (energy)
+                    # Each sub-period gets the SAME MW value as the parent hour
+                    renewable_by_time[target_slot] = parent_renewable
                 end
             end
         end

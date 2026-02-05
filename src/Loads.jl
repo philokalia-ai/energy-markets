@@ -10,17 +10,18 @@ function get_loads()
 end
 
 function get_loads(bidding_zone::String, day::Dates.Date)
+    # Use day-ahead load forecast for UC planning (matches renewable forecast horizon)
     query = """
     SELECT
         date_time_utc,
         resolution_code,
         total_load_mw
-    FROM 
-        entsoe.actual_total_load
+    FROM
+        entsoe.day_ahead_total_load_forecast
     WHERE
         date(date_time_utc) = \$1
         AND area_map_code = \$2
-        AND area_type_code IN ('BZN', 'BZN/CTA', 'BZN/CTY', 'BZN/CTA/CTY') 
+        AND area_type_code IN ('BZN', 'BZN/CTA', 'BZN/CTY', 'BZN/CTA/CTY')
     ORDER BY date_time_utc;
     """
 

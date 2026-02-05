@@ -1,6 +1,7 @@
 using JuMP, Dates
 using .Euphemia: select_solver
 using .Euphemia: disaggregate_temporal_data
+using .Euphemia: FLEXIBLE_FUEL_TYPES
 
 # MOI is re-exported by JuMP
 const MOI = JuMP.MOI
@@ -137,6 +138,14 @@ function print_cost_report(solution, day; resolution_minutes::Int=60)
     println("      Cold startups: $(breakdown.startup_counts[:cold]) @ $(round(breakdown.startup_costs_by_type[:cold], digits=2)) EUR")
     println("   No-load costs:    $(round(breakdown.noload_cost, digits=2)) EUR ($(round(breakdown.noload_cost/total_cost*100, digits=1))%)")
 
+    # Curtailment info (if available)
+    if hasproperty(solution, :curtailment) && sum(solution.curtailment) > 0.1
+        curtailment_mwh = sum(solution.curtailment)
+        curtailment_cost = solution.curtailment_cost
+        println("   Curtailment cost: $(round(curtailment_cost, digits=2)) EUR ($(round(curtailment_cost/total_cost*100, digits=1))%)")
+        println("      Total curtailed: $(round(curtailment_mwh, digits=1)) MWh")
+    end
+
     println("\nCAPACITY & GENERATION")
     println("   Total installed capacity: $(round(breakdown.total_capacity)) MW")
     println("   Average committed capacity: $(round(breakdown.avg_committed_capacity)) MW")
@@ -178,7 +187,11 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date;
                                mip_gap::Float64=0.01,
                                time_limit::Float64=600.0,
                                use_cache::Bool=true,
-                               force_rerun::Bool=false)
+                               force_rerun::Bool=false,
+                               curtailment_penalty::Float64=1.0,
+                               excess_penalty::Float64=10000.0,
+                               shortage_penalty::Float64=10000.0,
+                               use_inferred_params::Bool=true)
 
     # Check cache first (unless disabled or force_rerun)
     if use_cache && !force_rerun
@@ -210,7 +223,14 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date;
 
     # Get data from the database
     data_fetch_start = time()
-    generators = get_generators(bidding_zone, day)
+    if use_inferred_params
+        # Use inferred parameters from historical data (cached if available)
+        # This provides plant-specific ramp rates, p_min, and uptime/downtime
+        generators = get_generators_with_inferred_params(bidding_zone, day)
+    else
+        # Use default fuel-type parameters only
+        generators = get_generators(bidding_zone, day)
+    end
     loads = get_loads(bidding_zone, day)
     renewables = get_generation_forecast_for_wind_and_solar(bidding_zone, day)
 
@@ -244,12 +264,13 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date;
 
     println("Planning for $T time periods with $N generators ($(resolution_minutes)min resolution, $(periods_per_hour) periods/hour)")
 
-    # Calculate net demand (load - renewables) for each time period
-    net_demand = Float64[]
+    # Store raw load and renewable values for each time period
+    # These are needed for the curtailment formulation
+    load_values = Float64[]
+    renewable_values = Float64[]
     for slot in target_time_slots
-        load_value = get(load_by_time, slot, 0.0)
-        renewable_gen = get(renewable_by_time, slot, 0.0)
-        push!(net_demand, max(0.0, load_value - renewable_gen))  # Ensure non-negative
+        push!(load_values, get(load_by_time, slot, 0.0))
+        push!(renewable_values, get(renewable_by_time, slot, 0.0))
     end
 
     setup_start = time()
@@ -325,6 +346,20 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date;
     # startup and shutdown production profile variables
     @variable(model, g_SU[i=1:N, t=1:T] >= 0)  # startup generation profile
     @variable(model, g_SD[i=1:N, t=1:T] >= 0)  # shutdown generation profile
+
+    # Renewable curtailment variable (allows spilling excess renewable generation)
+    # This resolves infeasibility when thermal P_min constraints exceed net demand
+    @variable(model, 0 <= curtailment[t=1:T] <= renewable_values[t])
+
+    # Excess generation variable (allows thermal generation to exceed demand)
+    # This handles feasibility when sum(P_min) > load - renewables + curtailment
+    # High penalty ensures it's only used as last resort
+    @variable(model, excess[t=1:T] >= 0)
+
+    # Shortage variable (allows load shedding when capacity is insufficient)
+    # This handles feasibility when total P_max < net demand (capacity shortage)
+    # High penalty ensures it's only used as last resort
+    @variable(model, shortage[t=1:T] >= 0)
 
     # Startup/shutdown time parameters based on fuel type and temperature
     # FuelTypeParameters stores times in HOURS - convert to PERIODS here
@@ -436,10 +471,18 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date;
     @constraint(model, [i = 1:N, t = 1:T], g[i, t] <= generators[i].p_max * u[i, t])
 
     # Apply fuel-type-specific minimum load constraints
+    # Note: Flexible resources (hydro, batteries, storage) should not have min_load_factor applied
+    # as they can operate at any output level including 0 MW
     for (i, gen) in enumerate(generators)
         params = fuel_params[i]
-        # Minimum generation when committed (considering fuel-type minimum load factor)
-        min_gen = max(gen.p_min, params.min_load_factor * gen.p_max)
+
+        if gen.fuel_type in FLEXIBLE_FUEL_TYPES
+            # Flexible resources: use generator's p_min directly (typically 0)
+            min_gen = gen.p_min
+        else
+            # Thermal resources: apply fuel-type minimum load factor
+            min_gen = max(gen.p_min, params.min_load_factor * gen.p_max)
+        end
         @constraint(model, [t = 1:T], g[i, t] >= min_gen * u[i, t])
     end
 
@@ -549,7 +592,7 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date;
         end
     end
 
-    ### 
+    ###
     ### startup / shutdown production profile (ramp constraints)
     ###
 
@@ -558,9 +601,27 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date;
         u[i, t] == u_SU[i, t] + u_DISP[i, t] + u_SD[i, t])
 
     # startup operation profile duration depending on startup temperature stage
-    @constraint(model, [i in 1:N, t in maximum(T_SU[i, θ] for θ in Θ):T],
-        u_SU[i, t] == sum(sum(v_θ[i, θ, τ] for τ in max(1, t - T_SU[i, θ] + 1):t) for θ in Θ)
-    )
+    # For periods t >= max(T_SU), the standard constraint applies
+    # For earlier periods (t < max(T_SU)), we still need to define u_SU properly
+    for i in 1:N
+        max_startup = maximum(T_SU[(i, θ)] for θ in Θ)
+
+        # Standard constraint for later periods
+        for t in max_startup:T
+            @constraint(model,
+                u_SU[i, t] == sum(sum(v_θ[i, θ, τ] for τ in max(1, t - T_SU[(i, θ)] + 1):t) for θ in Θ)
+            )
+        end
+
+        # For early periods (t < max_startup), the constraint needs to consider
+        # that startups at τ will keep the unit in startup mode for T_SU periods
+        # The formula is the same, but we need to explicitly add it for all t in 1:min(max_startup-1, T)
+        for t in 1:min(max_startup - 1, T)
+            @constraint(model,
+                u_SU[i, t] == sum(sum(v_θ[i, θ, τ] for τ in max(1, t - T_SU[(i, θ)] + 1):t) for θ in Θ)
+            )
+        end
+    end
 
     # startup operation profile depending on shutdown duration. TODO: ASK PROF (p.213) Έχει T_SD και με θ και χωρίς
     @constraint(model, [i in 1:N, t in 1:T-T_SD[i]+1],
@@ -568,9 +629,17 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date;
     ) # TODO: Ensure it's u_SD and not u_SU. Book writes u_SU. Copilot claims it's u_SD. Typo?
 
     # production constraint for startup operation profile
-    @constraint(model, [i in 1:N, t in maximum(T_SU[i, θ] for θ in Θ):T],
-        g_SU[i, t] == sum(sum(P_SU[i, θ, t-τ+1] * v_θ[i, θ, τ] for τ in max(1, t - T_SU[i, θ] + 1):t) for θ in Θ)
-    )
+    # Same fix: apply for all periods, not just t >= max_startup
+    for i in 1:N
+        max_startup = maximum(T_SU[(i, θ)] for θ in Θ)
+
+        # Apply constraint for all periods
+        for t in 1:T
+            @constraint(model,
+                g_SU[i, t] == sum(sum(P_SU[i, θ, t-τ+1] * v_θ[i, θ, τ] for τ in max(1, t - T_SU[(i, θ)] + 1):t) for θ in Θ)
+            )
+        end
+    end
 
     # production constraint for shutdown operation profile
     @constraint(model, [i in 1:N, t in 1:T-T_SD[i]],
@@ -606,11 +675,16 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date;
         g[i, t-1] - g[i, t] <= ramp_down[i] + M * u_SD[i, t]
     )
 
-    # Supply must equal net Demand (demand minus RES production) at all times
-    @constraint(model, [t in 1:T], sum(g[i, t] for i in 1:N) == net_demand[t])
+    # Supply must equal net Demand (with slack variables for feasibility)
+    # - Curtailment: spill excess renewable generation (bounded by renewable availability)
+    # - Excess: absorb thermal overgeneration when sum(P_min) > net demand (high penalty)
+    # - Shortage: load shedding when total P_max < net demand (capacity shortage, high penalty)
+    # Formulation: Generation + Shortage = Load - Renewables + Curtailment + Excess
+    @constraint(model, [t in 1:T],
+        sum(g[i, t] for i in 1:N) + shortage[t] == load_values[t] - renewable_values[t] + curtailment[t] + excess[t])
 
     # ==== Objective Function ====
-    # Total cost = Production costs + Startup costs + No-load costs
+    # Total cost = Production + Startup + No-load + Curtailment + Excess + Shortage penalties
     @objective(
         model,
         Min,
@@ -620,6 +694,12 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date;
         + sum(C_SU[(i, θ)] * v_θ[i, θ, t] for i in 1:N, θ in Θ, t in 1:T)
         # 3. No-load costs (fixed cost when committed)
         + sum(C_NL[i] * u[i, t] for i in 1:N, t in 1:T)
+        # 4. Curtailment costs (penalty for spilling renewable generation)
+        + curtailment_penalty * sum(curtailment[t] for t in 1:T)
+        # 5. Excess generation costs (high penalty for thermal oversupply)
+        + excess_penalty * sum(excess[t] for t in 1:T)
+        # 6. Shortage costs (high penalty for load shedding due to capacity shortage)
+        + shortage_penalty * sum(shortage[t] for t in 1:T)
     )
 
     setup_time = time() - setup_start
@@ -633,12 +713,85 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date;
     if status != OPTIMAL
         total_time = time() - timing_start
         @info "Optimization failed" bidding_zone = bidding_zone status = status data_fetch_time = format_time(data_fetch_time) setup_time = format_time(setup_time) solve_time = format_time(solve_time) total_time = format_time(total_time)
+
+        # Attempt IIS analysis if model is infeasible (Gurobi only)
+        if (status == INFEASIBLE || status == INFEASIBLE_OR_UNBOUNDED) && solver_name == "Gurobi"
+            try
+                @info "Computing IIS (Irreducible Infeasible Subsystem)..."
+                compute_conflict!(model)
+
+                # Count constraints in conflict
+                iis_constraints = []
+                for (F, S) in list_of_constraint_types(model)
+                    for con in all_constraints(model, F, S)
+                        conflict_status = MOI.get(model, MOI.ConstraintConflictStatus(), con)
+                        if conflict_status == MOI.IN_CONFLICT
+                            push!(iis_constraints, (F, S, con))
+                        end
+                    end
+                end
+
+                @info "IIS analysis complete: $(length(iis_constraints)) constraints in conflict"
+
+                # Print first few conflicting constraints
+                for (i, (F, S, con)) in enumerate(iis_constraints)
+                    if i <= 20  # Limit output
+                        println("  IIS[$i]: $con")
+                    end
+                end
+                if length(iis_constraints) > 20
+                    println("  ... and $(length(iis_constraints) - 20) more")
+                end
+            catch e
+                @warn "IIS analysis failed: $e"
+            end
+        end
+
         return (status=status,)
     end
     @assert primal_status(model) == FEASIBLE_POINT
 
     # Post-processing
     postprocess_start = time()
+
+    # Extract curtailment values
+    curtailment_values = value.(curtailment)
+    total_curtailment = sum(curtailment_values)
+    curtailment_cost_value = curtailment_penalty * total_curtailment
+
+    # Extract excess generation values
+    excess_values = value.(excess)
+    total_excess = sum(excess_values)
+    excess_cost_value = excess_penalty * total_excess
+
+    # Extract shortage (load shedding) values
+    shortage_values = value.(shortage)
+    total_shortage = sum(shortage_values)
+    shortage_cost_value = shortage_penalty * total_shortage
+
+    # Calculate net demand (actual, after curtailment, excess, and shortage decisions)
+    # Balance: Generation + Shortage = Load - Renewables + Curtailment + Excess
+    # So effective demand = Load - Renewables + Curtailment + Excess - Shortage
+    net_demand = [load_values[t] - renewable_values[t] + curtailment_values[t] + excess_values[t] - shortage_values[t] for t in 1:T]
+
+    # Log curtailment if any (convert MW-periods to MWh)
+    if total_curtailment > 0.1
+        curtailment_mwh = total_curtailment * period_hours
+        @info "Renewable curtailment applied" energy_mwh=round(curtailment_mwh, digits=1) cost_eur=round(curtailment_cost_value, digits=2) max_mw=round(maximum(curtailment_values), digits=1) periods_with_curtailment=count(x -> x > 0.1, curtailment_values)
+    end
+
+    # Log excess generation if any (indicates structural oversupply)
+    if total_excess > 0.1
+        excess_mwh = total_excess * period_hours
+        @warn "Excess generation required (structural oversupply)" energy_mwh=round(excess_mwh, digits=1) cost_eur=round(excess_cost_value, digits=2) max_mw=round(maximum(excess_values), digits=1) periods_with_excess=count(x -> x > 0.1, excess_values)
+    end
+
+    # Log shortage (load shedding) if any (indicates capacity shortage)
+    if total_shortage > 0.1
+        shortage_mwh = total_shortage * period_hours
+        @warn "Load shedding required (capacity shortage)" energy_mwh=round(shortage_mwh, digits=1) cost_eur=round(shortage_cost_value, digits=2) max_mw=round(maximum(shortage_values), digits=1) periods_with_shortage=count(x -> x > 0.1, shortage_values)
+    end
+
     # Calculate detailed cost breakdown (including startup and no-load costs)
     cost_breakdown = calculate_cost_breakdown(
         generators, value.(g), value.(u), value.(v_θ), Θ, C_SU, C_NL, T, N
@@ -657,7 +810,15 @@ function solve_unit_commitment(bidding_zone::String, day::Dates.Date;
         time_slots=target_time_slots,
         resolution_minutes=resolution_minutes,
         net_demand=net_demand,
+        load_values=load_values,
+        renewable_values=renewable_values,
         renewable_generation=renewable_by_time,
+        curtailment=curtailment_values,
+        curtailment_cost=curtailment_cost_value,
+        excess=excess_values,
+        excess_cost=excess_cost_value,
+        shortage=shortage_values,
+        shortage_cost=shortage_cost_value,
         g=value.(g),
         u=value.(u),
         v=value.(v),  # startup decisions
@@ -679,12 +840,12 @@ end
 # =============================================================================
 
 """
-    has_cached_uc_results(bidding_zone::String, day::Date; code_version::Int=2) -> Bool
+    has_cached_uc_results(bidding_zone::String, day::Date; code_version::Int=3) -> Bool
 
 Check if valid cached UC results exist for the given zone and date.
 Returns true if OPTIMAL results exist, false otherwise.
 """
-function has_cached_uc_results(bidding_zone::String, day::Dates.Date; code_version::Int=2)::Bool
+function has_cached_uc_results(bidding_zone::String, day::Dates.Date; code_version::Int=3)::Bool
     query = """
     SELECT EXISTS(
         SELECT 1 FROM simulations.uc_results
@@ -707,14 +868,14 @@ end
 
 """
     save_uc_results(solution::NamedTuple, bidding_zone::String, day::Date;
-                    code_version::Int=2) -> Union{Int,Nothing}
+                    code_version::Int=3) -> Union{Int,Nothing}
 
 Save UC solution to database cache. Returns the uc_result_id or nothing on failure.
 
 Uses delete-before-insert pattern for clean replacement of existing results.
 """
 function save_uc_results(solution::NamedTuple, bidding_zone::String, day::Dates.Date;
-                         code_version::Int=2)::Union{Int,Nothing}
+                         code_version::Int=3)::Union{Int,Nothing}
     # Ensure tables exist
     Euphemia.ensure_uc_results_tables()
 
@@ -735,13 +896,20 @@ function save_uc_results(solution::NamedTuple, bidding_zone::String, day::Dates.
 
                 # Insert summary record
                 cb = solution.cost_breakdown
+                # Calculate curtailment and excess energy in MWh
+                period_hours = solution.resolution_minutes / 60.0
+                total_curtailment_mwh = sum(solution.curtailment) * period_hours
+                total_excess_mwh = sum(solution.excess) * period_hours
+                total_shortage_mwh = sum(solution.shortage) * period_hours
+
                 insert_summary_sql = """
                 INSERT INTO simulations.uc_results
                 (bidding_zone, market_date, status, solver, resolution_minutes,
                  num_generators, num_periods, total_cost, production_cost,
                  startup_cost, noload_cost, hot_startups, warm_startups,
-                 cold_startups, code_version)
-                VALUES (\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8, \$9, \$10, \$11, \$12, \$13, \$14, \$15)
+                 cold_startups, total_curtailment_mwh, curtailment_cost,
+                 total_excess_mwh, excess_cost, total_shortage_mwh, shortage_cost, code_version)
+                VALUES (\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8, \$9, \$10, \$11, \$12, \$13, \$14, \$15, \$16, \$17, \$18, \$19, \$20, \$21)
                 RETURNING id
                 """
 
@@ -760,6 +928,12 @@ function save_uc_results(solution::NamedTuple, bidding_zone::String, day::Dates.
                     cb.startup_counts[:hot],
                     cb.startup_counts[:warm],
                     cb.startup_counts[:cold],
+                    total_curtailment_mwh,
+                    solution.curtailment_cost,
+                    total_excess_mwh,
+                    solution.excess_cost,
+                    total_shortage_mwh,
+                    solution.shortage_cost,
                     code_version
                 ])
 
@@ -796,11 +970,11 @@ function save_uc_results(solution::NamedTuple, bidding_zone::String, day::Dates.
                     end
                 end
 
-                # Insert net demand data
+                # Insert net demand data (including curtailment, excess, and shortage per period)
                 demand_insert_sql = """
                     INSERT INTO simulations.uc_net_demand
-                    (uc_result_id, period_idx, time_slot_utc, net_demand_mw, renewable_generation_mw)
-                    VALUES (\$1, \$2, \$3, \$4, \$5)
+                    (uc_result_id, period_idx, time_slot_utc, net_demand_mw, renewable_generation_mw, curtailment_mw, excess_mw, shortage_mw)
+                    VALUES (\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8)
                 """
 
                 for t in 1:T
@@ -813,7 +987,10 @@ function save_uc_results(solution::NamedTuple, bidding_zone::String, day::Dates.
                         t,
                         time_slot_dt,
                         solution.net_demand[t],
-                        renewable_gen === nothing ? missing : renewable_gen
+                        renewable_gen === nothing ? missing : renewable_gen,
+                        solution.curtailment[t],
+                        solution.excess[t],
+                        solution.shortage[t]
                     ])
                 end
 
@@ -836,14 +1013,14 @@ function save_uc_results(solution::NamedTuple, bidding_zone::String, day::Dates.
 end
 
 """
-    load_uc_results(bidding_zone::String, day::Date; code_version::Int=2) -> Union{NamedTuple,Nothing}
+    load_uc_results(bidding_zone::String, day::Date; code_version::Int=3) -> Union{NamedTuple,Nothing}
 
 Load cached UC results from database. Returns a NamedTuple compatible with the
 solve_unit_commitment() return structure, or nothing if no cache exists.
 
 Note: Generator objects are fetched fresh to ensure current data.
 """
-function load_uc_results(bidding_zone::String, day::Dates.Date; code_version::Int=2)
+function load_uc_results(bidding_zone::String, day::Dates.Date; code_version::Int=3)
     # 1. Load summary record
     summary_query = """
     SELECT * FROM simulations.uc_results
@@ -923,19 +1100,36 @@ function load_uc_results(bidding_zone::String, day::Dates.Date; code_version::In
         end
     end
 
-    # Reconstruct time_slots and net_demand
+    # Reconstruct time_slots, net_demand, curtailment, excess, and shortage
     time_slots = String[]
     net_demand = Float64[]
+    curtailment = Float64[]
+    excess = Float64[]
+    shortage = Float64[]
     renewable_generation = Dict{String,Float64}()
 
     for row in eachrow(demand_df)
         time_slot = Dates.format(row.time_slot_utc, dateformat"yyyymmdd-HHMM")
         push!(time_slots, time_slot)
         push!(net_demand, row.net_demand_mw)
+        # Read curtailment (default to 0 for backwards compatibility with old cache entries)
+        curtail_val = hasproperty(row, :curtailment_mw) && !ismissing(row.curtailment_mw) ? row.curtailment_mw : 0.0
+        push!(curtailment, curtail_val)
+        # Read excess (default to 0 for backwards compatibility with old cache entries)
+        excess_val = hasproperty(row, :excess_mw) && !ismissing(row.excess_mw) ? row.excess_mw : 0.0
+        push!(excess, excess_val)
+        # Read shortage (default to 0 for backwards compatibility with old cache entries)
+        shortage_val = hasproperty(row, :shortage_mw) && !ismissing(row.shortage_mw) ? row.shortage_mw : 0.0
+        push!(shortage, shortage_val)
         if !ismissing(row.renewable_generation_mw)
             renewable_generation[time_slot] = row.renewable_generation_mw
         end
     end
+
+    # Read curtailment, excess, and shortage costs from summary (default to 0 for backwards compatibility)
+    curtailment_cost = hasproperty(summary_df, :curtailment_cost) && !ismissing(summary_df.curtailment_cost[1]) ? summary_df.curtailment_cost[1] : 0.0
+    excess_cost = hasproperty(summary_df, :excess_cost) && !ismissing(summary_df.excess_cost[1]) ? summary_df.excess_cost[1] : 0.0
+    shortage_cost = hasproperty(summary_df, :shortage_cost) && !ismissing(summary_df.shortage_cost[1]) ? summary_df.shortage_cost[1] : 0.0
 
     # Reconstruct cost breakdown (partial - some fields not stored)
     cost_breakdown = (
@@ -961,6 +1155,16 @@ function load_uc_results(bidding_zone::String, day::Dates.Date; code_version::In
 
     @info "Loaded UC results from cache for $bidding_zone on $day ($(length(ordered_generators)) generators, $T periods)"
 
+    # Reconstruct load_values from net_demand + renewable_generation - curtailment - excess + shortage
+    # Note: net_demand = load - renewables + curtailment + excess - shortage, so load = net_demand + renewables - curtailment - excess + shortage
+    load_values = Float64[]
+    renewable_values = Float64[]
+    for (i, slot) in enumerate(time_slots)
+        renewable_val = get(renewable_generation, slot, 0.0)
+        push!(renewable_values, renewable_val)
+        push!(load_values, net_demand[i] + renewable_val - curtailment[i] - excess[i] + shortage[i])
+    end
+
     return (
         status=OPTIMAL,  # Only OPTIMAL results are cached
         solver=summary_df.solver[1],
@@ -968,7 +1172,15 @@ function load_uc_results(bidding_zone::String, day::Dates.Date; code_version::In
         time_slots=time_slots,
         resolution_minutes=summary_df.resolution_minutes[1],
         net_demand=net_demand,
+        load_values=load_values,
+        renewable_values=renewable_values,
         renewable_generation=renewable_generation,
+        curtailment=curtailment,
+        curtailment_cost=curtailment_cost,
+        excess=excess,
+        excess_cost=excess_cost,
+        shortage=shortage,
+        shortage_cost=shortage_cost,
         g=g,
         u=u,
         v=v,

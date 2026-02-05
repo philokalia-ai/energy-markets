@@ -40,17 +40,60 @@ const FLEXIBLE_FUEL_TYPES = Set([
     Symbol("Hydro Run-of-river and pondage"),
     Symbol("Hydro Water Reservoir"),
     Symbol("Battery"),
+    Symbol("Energy storage"),  # BESS and other storage technologies
     Symbol("Other"),
 ])
 
+# Variable renewable types that should be excluded from Unit Commitment
+# Their generation is handled via forecasts subtracted from load (net demand)
+const VARIABLE_RENEWABLE_TYPES = Set([
+    Symbol("Wind Onshore"),
+    Symbol("Wind Offshore"),
+    Symbol("Solar"),
+])
+
 """
-    get_historical_generation(generator_code::String, end_date::Date; months_back::Int=3)
+    infer_fuel_type_from_name(name::String, declared_type::Symbol) -> Symbol
+
+Attempt to infer the actual fuel type from the generator name when the declared
+type is ambiguous (e.g., "Other"). This handles cases where BESS units are
+miscategorized in the ENTSO-E database.
+
+Returns the inferred fuel type, or the original declared_type if no inference is possible.
+"""
+function infer_fuel_type_from_name(name::String, declared_type::Symbol)::Symbol
+    # Only attempt inference for "Other" fuel type
+    if declared_type != Symbol("Other")
+        return declared_type
+    end
+
+    name_upper = uppercase(name)
+
+    # Battery Energy Storage Systems
+    if occursin("BESS", name_upper) ||
+       occursin("BATTERY", name_upper) ||
+       occursin("BATTERIE", name_upper) ||  # German/French
+       occursin("BATTERI", name_upper)      # Nordic
+        return Symbol("Energy storage")
+    end
+
+    # Could add more patterns here in the future:
+    # - VPP patterns for virtual power plants
+    # - Interconnector patterns
+    # - etc.
+
+    # No inference possible, return original type
+    return declared_type
+end
+
+"""
+    get_historical_generation(generator_code::String, end_date::Date; months_back::Int=12)
 
 Fetch historical actual generation data for a specific generator.
 
 Returns a DataFrame with columns: datetime_utc, resolution_code, actual_generation_mw
 """
-function get_historical_generation(generator_code::String, end_date::Dates.Date; months_back::Int=3)
+function get_historical_generation(generator_code::String, end_date::Dates.Date; months_back::Int=12)
     start_date = end_date - Dates.Month(months_back)
     query = """
     SELECT date_time_utc, resolution_code, actual_generation_output_mw
@@ -336,8 +379,20 @@ function get_generators(source::Bool=false)
     return generators
 end
 
-function get_min_active_capacity(max_capacity::Float64)
-    return 0.1 * max_capacity  # Example: 10% of max capacity
+"""
+    get_min_active_capacity(max_capacity::Float64, fuel_type::Symbol)
+
+Calculate minimum active capacity based on fuel type.
+Uses min_load_factor from FuelTypeParameters for thermal plants,
+returns 0 for flexible resources (hydro, storage).
+"""
+function get_min_active_capacity(max_capacity::Float64, fuel_type::Symbol)
+    if fuel_type in FLEXIBLE_FUEL_TYPES
+        return 0.0
+    else
+        params = get_fuel_type_parameters(fuel_type)
+        return params.min_load_factor * max_capacity
+    end
 end
 
 
@@ -388,6 +443,7 @@ end
 # infer_ramp_rates: if true, infer ramp rates from historical generation data (3 months)
 function get_generators(map_code::String, day::Dates.Date;
                        exclude_unavailable::Bool=true,
+                       exclude_variable_renewables::Bool=true,
                        infer_ramp_rates_flag::Bool=false)
     if exclude_unavailable
         # Query with unavailability filtering:
@@ -502,23 +558,43 @@ function get_generators(map_code::String, day::Dates.Date;
     # Build generators (without ramp rates initially)
     generators = Generator[]
     for row in eachrow(df)
+        # Infer actual fuel type from name if declared as "Other"
+        declared_type = Symbol(row.generation_unit_type)
+        inferred_type = infer_fuel_type_from_name(row.generation_unit_name, declared_type)
+
+        if inferred_type != declared_type
+            @info "Reclassified generator $(row.generation_unit_name) from $declared_type to $inferred_type"
+        end
+
         gen = Generator(
             row.generation_unit_code,                    # code
             row.generation_unit_name,                    # name
-            Symbol(row.generation_unit_type),            # fuel_type (convert to Symbol)
+            inferred_type,                               # fuel_type (possibly inferred)
             row.generation_unit_location,                # location
             Float64(row.generation_unit_installed_capacity_mw), # p_max
             get_min_active_capacity(
-                Float64(row.generation_unit_installed_capacity_mw)
-            ), # p_min
+                Float64(row.generation_unit_installed_capacity_mw),
+                inferred_type
+            ), # p_min (fuel-type-specific)
             row.area_map_code,                           # bidding_zone
             get_marginal_cost(
                 day,
-                row.generation_unit_type,
+                row.generation_unit_type,  # Use original type for cost (BESS still has storage costs)
                 row.area_display_name
             )                                           # marginal_cost
         )
         push!(generators, gen)
+    end
+
+    # Filter out variable renewables (wind, solar) if requested
+    # These are handled separately via renewable forecasts subtracted from load
+    if exclude_variable_renewables
+        pre_filter_count = length(generators)
+        generators = filter(g -> g.fuel_type ∉ VARIABLE_RENEWABLE_TYPES, generators)
+        filtered_count = pre_filter_count - length(generators)
+        if filtered_count > 0
+            @info "Filtered out $filtered_count variable renewable generators (Wind/Solar) from UC"
+        end
     end
 
     # Optionally infer ramp rates from historical data
@@ -530,63 +606,65 @@ function get_generators(map_code::String, day::Dates.Date;
 end
 
 """
-    infer_parameters_for_generators(generators::Vector{Generator}, day::Date)
+    infer_parameters_for_generator(gen::Generator, day::Date) -> Generator
 
-Infer technical parameters (ramp rates, p_min, uptime/downtime) for generators from historical data.
-Returns a new vector of Generator objects with inferred parameters populated.
+Infer parameters for a single generator from historical data.
+This is the core inference function that can be parallelized.
 
 Parameters inferred:
 - ramp_up, ramp_down: from 95th percentile of observed ramps (fraction/hour)
 - p_min: from 5th percentile of stable non-zero operation (MW)
 - min_uptime, min_downtime: from 5th percentile of on/off cycle durations (hours)
 """
-function infer_parameters_for_generators(generators::Vector{Generator}, day::Dates.Date)
-    updated_generators = Generator[]
+function infer_parameters_for_generator(gen::Generator, day::Dates.Date)
+    # Fetch historical generation data
+    historical = get_historical_generation(gen.code, day)
 
-    for gen in generators
-        # Fetch historical generation data
-        historical = get_historical_generation(gen.code, day)
+    # Infer ramp rates (as fraction of p_max per hour)
+    rates = infer_ramp_rates(historical, gen.p_max)
 
-        # Infer ramp rates (as fraction of p_max per hour)
-        rates = infer_ramp_rates(historical, gen.p_max)
+    # Determine parameters based on fuel type
+    if gen.fuel_type in FLEXIBLE_FUEL_TYPES
+        # Flexible resources (hydro, batteries) can operate at 0 MW
+        # and have no meaningful uptime/downtime constraints
+        final_p_min = 0.0
+        final_uptime = nothing
+        final_downtime = nothing
+    else
+        # Thermal plants: infer from stable operation
+        inferred_p_min = infer_p_min(historical, gen.p_max, gen.fuel_type)
+        final_p_min = inferred_p_min !== nothing ? inferred_p_min : gen.p_min
 
-        # Determine parameters based on fuel type
-        if gen.fuel_type in FLEXIBLE_FUEL_TYPES
-            # Flexible resources (hydro, batteries) can operate at 0 MW
-            # and have no meaningful uptime/downtime constraints
-            final_p_min = 0.0
-            final_uptime = nothing
-            final_downtime = nothing
-        else
-            # Thermal plants: infer from stable operation
-            inferred_p_min = infer_p_min(historical, gen.p_max, gen.fuel_type)
-            final_p_min = inferred_p_min !== nothing ? inferred_p_min : gen.p_min
-
-            # Infer uptime/downtime from on/off cycles
-            (inferred_uptime, inferred_downtime) = infer_uptime_downtime(historical, gen.fuel_type)
-            final_uptime = inferred_uptime
-            final_downtime = inferred_downtime
-        end
-
-        # Create new generator with inferred parameters
-        updated_gen = Generator(
-            gen.code,
-            gen.name,
-            gen.fuel_type,
-            gen.location,
-            gen.p_max,
-            final_p_min,
-            gen.bidding_zone,
-            gen.marginal_cost,
-            rates.ramp_up,
-            rates.ramp_down,
-            final_uptime,
-            final_downtime
-        )
-        push!(updated_generators, updated_gen)
+        # Infer uptime/downtime from on/off cycles
+        (inferred_uptime, inferred_downtime) = infer_uptime_downtime(historical, gen.fuel_type)
+        final_uptime = inferred_uptime
+        final_downtime = inferred_downtime
     end
 
-    return updated_generators
+    # Create new generator with inferred parameters
+    return Generator(
+        gen.code,
+        gen.name,
+        gen.fuel_type,
+        gen.location,
+        gen.p_max,
+        final_p_min,
+        gen.bidding_zone,
+        gen.marginal_cost,
+        rates.ramp_up,
+        rates.ramp_down,
+        final_uptime,
+        final_downtime
+    )
+end
+
+"""
+    infer_parameters_for_generators(generators::Vector{Generator}, day::Date) -> Vector{Generator}
+
+Infer parameters for multiple generators. Wrapper around `infer_parameters_for_generator`.
+"""
+function infer_parameters_for_generators(generators::Vector{Generator}, day::Dates.Date)
+    return [infer_parameters_for_generator(gen, day) for gen in generators]
 end
 
 # Alias for backward compatibility
@@ -659,13 +737,16 @@ function save_inferred_parameters(generators::Vector{Generator}, bidding_zone::S
 end
 
 """
-    load_cached_parameters(bidding_zone::String; max_age_days::Int=7)
+    load_cached_parameters(bidding_zone::String; max_age_days::Int=30)
 
 Load cached inferred parameters from the database.
 Returns a Dict mapping generator_code => (ramp_up, ramp_down, p_min, min_uptime, min_downtime).
 Only returns parameters that are not older than max_age_days.
+
+Note: Physical parameters like ramp rates don't change frequently, so a longer cache
+period (30 days) is appropriate.
 """
-function load_cached_parameters(bidding_zone::String; max_age_days::Int=7)
+function load_cached_parameters(bidding_zone::String; max_age_days::Int=30)
     query = """
     SELECT generator_code, ramp_up, ramp_down, p_min, min_uptime, min_downtime, inference_date
     FROM simulations.generator_inferred_parameters
@@ -710,10 +791,13 @@ If use_cache=false: Always run fresh inference (slow but guaranteed fresh).
 """
 function get_generators_with_inferred_params(map_code::String, day::Dates.Date;
                                              use_cache::Bool=true,
-                                             max_cache_age_days::Int=7,
-                                             exclude_unavailable::Bool=true)
+                                             max_cache_age_days::Int=365,
+                                             exclude_unavailable::Bool=true,
+                                             exclude_variable_renewables::Bool=true)
     # Get base generators
-    generators = get_generators(map_code, day; exclude_unavailable=exclude_unavailable)
+    generators = get_generators(map_code, day;
+                               exclude_unavailable=exclude_unavailable,
+                               exclude_variable_renewables=exclude_variable_renewables)
 
     if !use_cache
         # Fresh inference for all
@@ -766,6 +850,192 @@ function get_generators_with_inferred_params(map_code::String, day::Dates.Date;
     end
 
     return cached_gens
+end
+
+"""
+    refresh_inference_cache(zones::Vector{String}, date::Date; parallel::Bool=false)
+
+Proactively refresh the generator parameter inference cache for specified zones.
+
+This function runs parameter inference for all generators in the given zones and
+saves results to the database cache. Use this before batch UC runs to ensure
+predictable solve times (avoids surprise 17+ minute inference during UC).
+
+When parallel=true, inference is parallelized at the **generator level** (not zone level),
+allowing full utilization of all available workers. Each generator's inference is
+completely independent.
+
+# Arguments
+- `zones`: List of bidding zone codes (e.g., ["GR", "BG", "RO"])
+- `date`: Reference date for inference (uses 12 months of historical data before this date)
+- `parallel`: If true, runs inference for all generators in parallel using available workers
+
+# Returns
+A NamedTuple with:
+- `successful_zones`: Number of zones successfully processed
+- `failed_zones`: Number of zones that failed
+- `total_generators`: Total number of generators processed
+- `successful_generators`: Number of generators successfully inferred
+- `failed_generators`: Number of generators that failed
+- `total_time`: Total processing time in seconds
+- `zone_results`: Dict mapping zone code to (success, generator_count, failed_count)
+
+# Example
+```julia
+# Refresh cache for specific zones
+result = refresh_inference_cache(["GR", "BG", "RO"], Date(2024, 6, 15))
+
+# Refresh all available zones with parallel processing
+using Distributed
+addprocs(80)  # Use all cores - inference is I/O bound
+@everywhere using Euphemia
+zones = get_available_zones(Date(2024, 6, 15))
+result = refresh_inference_cache(zones, Date(2024, 6, 15); parallel=true)
+```
+"""
+function refresh_inference_cache(zones::Vector{String}, date::Dates.Date; parallel::Bool=false)
+    start_time = time()
+
+    println("🔄 Refreshing inference cache for $(length(zones)) zones")
+    println("📅 Reference date: $date (using 12 months of historical data)")
+    println()
+
+    # Step 1: Collect all generators from all zones
+    println("📋 Collecting generators from all zones...")
+    all_generators = Tuple{String, Generator}[]  # (zone, generator) pairs
+    zone_generator_counts = Dict{String, Int}()
+
+    for zone in zones
+        try
+            gens = get_generators(zone, date)
+            zone_generator_counts[zone] = length(gens)
+            for gen in gens
+                push!(all_generators, (zone, gen))
+            end
+            println("  📍 $zone: $(length(gens)) generators")
+        catch e
+            println("  ❌ $zone: failed to load generators - $e")
+            zone_generator_counts[zone] = 0
+        end
+    end
+
+    total_generators = length(all_generators)
+    println()
+    println("📊 Total: $total_generators generators across $(length(zones)) zones")
+    println()
+
+    if total_generators == 0
+        return (
+            successful_zones = 0,
+            failed_zones = length(zones),
+            total_generators = 0,
+            successful_generators = 0,
+            failed_generators = 0,
+            total_time = round(time() - start_time, digits=1),
+            zone_results = Dict{String, NamedTuple{(:success, :generator_count, :failed_count), Tuple{Bool, Int, Int}}}()
+        )
+    end
+
+    # Step 2: Run inference for each generator (parallel or sequential)
+    println("⚙️  Running inference...")
+
+    function infer_single(zg::Tuple{String, Generator})
+        zone, gen = zg
+        try
+            inferred = infer_parameters_for_generator(gen, date)
+            return (zone, gen.code, inferred, nothing)  # (zone, code, result, error)
+        catch e
+            return (zone, gen.code, nothing, e)
+        end
+    end
+
+    if parallel && length(workers()) > 1
+        println("⚡ Using $(length(workers())) parallel workers for $total_generators generators")
+        results = pmap(infer_single, all_generators; on_error=ex -> (nothing, nothing, nothing, ex))
+    else
+        println("🔄 Sequential processing of $total_generators generators")
+        results = [infer_single(zg) for zg in all_generators]
+    end
+
+    # Step 3: Group results by zone and save to cache
+    println()
+    println("💾 Saving results to cache...")
+
+    zone_generators = Dict{String, Vector{Generator}}()
+    zone_failures = Dict{String, Int}()
+    successful_generators = 0
+    failed_generators = 0
+
+    for (zone, code, inferred, err) in results
+        if zone === nothing
+            failed_generators += 1
+            continue
+        end
+
+        if !haskey(zone_generators, zone)
+            zone_generators[zone] = Generator[]
+            zone_failures[zone] = 0
+        end
+
+        if err === nothing && inferred !== nothing
+            push!(zone_generators[zone], inferred)
+            successful_generators += 1
+        else
+            zone_failures[zone] += 1
+            failed_generators += 1
+            println("  ⚠️  $zone/$code: inference failed - $err")
+        end
+    end
+
+    # Save each zone's inferred generators to cache
+    zone_results = Dict{String, NamedTuple{(:success, :generator_count, :failed_count), Tuple{Bool, Int, Int}}}()
+
+    for zone in zones
+        gens = get(zone_generators, zone, Generator[])
+        failures = get(zone_failures, zone, 0)
+
+        if !isempty(gens)
+            try
+                save_inferred_parameters(gens, zone, date)
+                zone_results[zone] = (success=true, generator_count=length(gens), failed_count=failures)
+                println("  ✅ $zone: saved $(length(gens)) generators")
+            catch e
+                zone_results[zone] = (success=false, generator_count=0, failed_count=length(gens) + failures)
+                println("  ❌ $zone: failed to save - $e")
+            end
+        else
+            zone_results[zone] = (success=false, generator_count=0, failed_count=failures)
+            if zone_generator_counts[zone] > 0
+                println("  ❌ $zone: all $(zone_generator_counts[zone]) generators failed")
+            end
+        end
+    end
+
+    total_time = round(time() - start_time, digits=1)
+    successful_zones = count(r -> r.success, values(zone_results))
+    failed_zones = length(zones) - successful_zones
+
+    println()
+    println("="^50)
+    println("📊 Inference Cache Refresh Complete")
+    println("="^50)
+    println("✅ Zones: $successful_zones/$(length(zones)) successful")
+    println("✅ Generators: $successful_generators/$total_generators successful")
+    println("❌ Failed generators: $failed_generators")
+    println("⏱️  Total time: $(total_time)s")
+    if parallel && length(workers()) > 1
+        println("⚡ Throughput: $(round(total_generators / total_time, digits=1)) generators/sec")
+    end
+
+    return (
+        successful_zones = successful_zones,
+        failed_zones = failed_zones,
+        total_generators = total_generators,
+        successful_generators = successful_generators,
+        failed_generators = failed_generators,
+        total_time = total_time,
+        zone_results = zone_results
+    )
 end
 
 # ============================================================================
@@ -1044,9 +1314,37 @@ function get_initial_conditions(generators::Vector{Generator}, market_day::Dates
 
             ic = infer_initial_conditions_from_data(historical, gen.fuel_type)
 
-            # If the generator was on but we got default output, use a fraction of p_max
-            if ic.is_on && ic.output == 0.0
-                ic = InitialConditions(true, 0.7 * gen.p_max, ic.hours_on, ic.hours_off, ic.thermal_state)
+            # Validate and adjust initial conditions for ON generators
+            if ic.is_on
+                # Clamp output to valid range [effective_p_min, p_max]
+                # This handles data quality issues where historical data shows:
+                # - output < p_min (below technical minimum)
+                # - output > p_max (above capacity, possible due to capacity changes)
+                #
+                # IMPORTANT: The UC model uses effective_p_min = max(gen.p_min, min_load_factor × p_max)
+                # for non-flexible fuel types. We must use the same effective p_min here to avoid
+                # infeasibility from ramp constraints.
+                if gen.fuel_type in FLEXIBLE_FUEL_TYPES
+                    min_valid_output = gen.p_min > 0 ? gen.p_min : 0.0
+                else
+                    params = get_fuel_type_parameters(gen.fuel_type)
+                    min_valid_output = max(gen.p_min, params.min_load_factor * gen.p_max)
+                end
+                adjusted_output = ic.output
+
+                if ic.output > gen.p_max
+                    # Output above capacity - clamp to p_max
+                    adjusted_output = gen.p_max
+                elseif ic.output < min_valid_output
+                    # Output below minimum - use 70% of p_max as reasonable default
+                    # (but at least the effective p_min)
+                    adjusted_output = max(0.7 * gen.p_max, min_valid_output)
+                    @warn "Initial output below effective p_min" generator=gen.name output=ic.output effective_p_min=min_valid_output adjusted_to=adjusted_output
+                end
+
+                if adjusted_output != ic.output
+                    ic = InitialConditions(true, adjusted_output, ic.hours_on, ic.hours_off, ic.thermal_state)
+                end
             end
             conditions[gen.code] = ic
         end
@@ -1055,7 +1353,16 @@ function get_initial_conditions(generators::Vector{Generator}, market_day::Dates
         for gen in generators
             ic = get_default_initial_conditions(gen.fuel_type)
             if ic.is_on
-                ic = InitialConditions(true, 0.7 * gen.p_max, ic.hours_on, ic.hours_off, ic.thermal_state)
+                # Use 70% of p_max but ensure it's at least effective p_min
+                # (same calculation as in UC model)
+                if gen.fuel_type in FLEXIBLE_FUEL_TYPES
+                    min_valid_output = gen.p_min > 0 ? gen.p_min : 0.0
+                else
+                    params = get_fuel_type_parameters(gen.fuel_type)
+                    min_valid_output = max(gen.p_min, params.min_load_factor * gen.p_max)
+                end
+                adjusted_output = max(0.7 * gen.p_max, min_valid_output)
+                ic = InitialConditions(true, adjusted_output, ic.hours_on, ic.hours_off, ic.thermal_state)
             end
             conditions[gen.code] = ic
         end

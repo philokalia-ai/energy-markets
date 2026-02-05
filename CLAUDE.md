@@ -110,7 +110,49 @@ The `exclude_unavailable` parameter (default: `true`) filters generators based o
 - Only `status = 'Active'` outages are considered (ignores `Cancelled`/`Withdrawn`)
 - Uses `MIN(available_capacity_mw)` when multiple outage records exist (conservative)
 
+The `exclude_variable_renewables` parameter (default: `true`) filters out wind and solar generators:
+- **Variable renewables** (Wind Onshore, Wind Offshore, Solar) are excluded from UC
+- These generators' output is non-dispatchable and handled via renewable forecasts
+- Renewable generation is subtracted from load to calculate net demand for UC
+- This prevents double-counting (generator in UC + forecast subtracted from load)
+
+**Fuel type inference from generator names:**
+
+Generators classified as "Other" in the ENTSO-E database may actually be known technology types. The `infer_fuel_type_from_name()` function attempts to reclassify them based on naming patterns:
+
+```julia
+# Automatic inference happens when loading generators
+generators = get_generators("FR", Date(2024, 6, 15))
+# Logs: "Inferred fuel type for BESS_AFD7_BARBAN: Other → Energy storage"
+```
+
+Currently recognized patterns:
+- **BESS/Battery** → `Symbol("Energy storage")`: Matches "BESS", "BATTERY", "BATTERIE", "BATTERI"
+
+Generators that cannot be inferred remain as "Other" with flexible parameters (see FuelTypeParameters below). Unknown "Other" generators are documented in `docs/unknown-other-generators.md` for future research.
+
+**Flexible fuel types:**
+
+The constant `FLEXIBLE_FUEL_TYPES` defines technologies that can operate at any output level (no minimum load factor):
+```julia
+FLEXIBLE_FUEL_TYPES = [
+    Symbol("Hydro Water Reservoir"),
+    Symbol("Hydro Run-of-river and poundage"),
+    Symbol("Hydro Pumped Storage"),
+    Symbol("Energy storage"),
+    Symbol("Other")
+]
+```
+
+These fuel types:
+- Have `min_load_factor = 0` (can operate at any level down to 0 MW)
+- Are excluded from thermal minimum generation constraints in UC
+- Include "Other" since the actual technology is unknown
+
 **Generator parameter inference from historical data:**
+
+The UC solver uses inferred plant-specific parameters by default (`use_inferred_params=true`). This provides more accurate ramp rates, p_min, and uptime/downtime constraints based on historical generation data rather than generic fuel-type defaults.
+
 ```julia
 # Get generators with inferred parameters (uses DB cache, ~2 sec)
 generators = get_generators_with_inferred_params("GR", Date(2024, 6, 15))
@@ -123,6 +165,40 @@ generators = get_generators("GR", Date(2024, 6, 15))
 generators_with_inferred = infer_parameters_for_generators(generators, Date(2024, 6, 15))
 ```
 
+Parameter cache:
+- Cached in PostgreSQL (`simulations.generator_inferred_parameters`)
+- Default cache expiry: 365 days (physical parameters don't change frequently)
+- For zones without cached data, inference runs automatically on first UC solve
+- Use `max_cache_age_days` parameter to adjust cache expiry
+
+**Proactive cache refresh:**
+
+To avoid surprise delays during UC solves, use `refresh_inference_cache()` to proactively update the cache. When `parallel=true`, inference is parallelized at the **generator level** (not zone level), allowing full utilization of all available CPU cores. Each generator's inference is completely independent (just DB queries + statistics).
+
+```julia
+# Refresh cache for specific zones (sequential)
+result = refresh_inference_cache(["GR", "BG", "RO"], Date(2024, 6, 15))
+
+# Parallel refresh - uses half the cores (leave room for other users)
+using Distributed
+addprocs(Sys.CPU_THREADS ÷ 2)  # e.g., 40 cores on 80-core machine
+@everywhere using Euphemia
+zones = get_available_zones(Date(2024, 6, 15))
+result = refresh_inference_cache(zones, Date(2024, 6, 15); parallel=true)
+# With 400 generators across 80 workers: ~5x faster than sequential
+```
+
+**Command-line script** (`bin/refresh_inference_cache.jl`):
+```bash
+# Run manually with environment variables
+REFERENCE_DATE="2026-01-01" PARALLEL="true" MAX_WORKERS="40" julia --project=. bin/refresh_inference_cache.jl
+```
+
+**GitHub Action** (`.github/workflows/refresh-inference-cache.yml`):
+- Runs annually on January 1st to keep cache fresh
+- Can be triggered manually before large batch runs
+- Auto-discovers all zones and uses generator-level parallelism
+
 The `infer_parameters_for_generators()` function analyzes historical generation from `entsoe.actual_generation_output_per_generation_unit` to infer:
 
 - **Ramp rates** (`ramp_up`, `ramp_down`): 95th percentile of observed ramps, stored as fraction of p_max per hour
@@ -130,10 +206,15 @@ The `infer_parameters_for_generators()` function analyzes historical generation 
 - **Min uptime/downtime** (`min_uptime`, `min_downtime`): 5th percentile of on/off cycle durations (hours)
 
 Ramp rate inference:
-- Queries 3 months of historical generation data
+- Queries 12 months of historical generation data to capture full seasonal variation
 - Normalizes to hourly rates regardless of source resolution (PT15M, PT60M, etc.)
 - Falls back to fuel-type defaults in `FuelTypeParameters` if insufficient data
-- **Note on 3-month window**: Physical parameters (ramp rates, p_min) are plant characteristics that shouldn't vary by season. However, seasonal dispatch patterns may affect uptime/downtime inference for plants that operate differently in summer vs winter. A longer window (6-12 months) could capture more operating conditions but would increase query time and include potentially stale data. The 95th/5th percentile approach mitigates this by capturing extreme values even from limited data.
+- The 12-month window captures all seasonal dispatch patterns while the 95th/5th percentile approach extracts robust parameter estimates
+
+Initial p_min (when loading from database):
+- **Flexible resources** (hydro, batteries, storage): `p_min = 0`
+- **Thermal plants**: `p_min = min_load_factor × p_max` from `FuelTypeParameters`
+- This ensures consistency with what UC enforces, even before inference runs
 
 p_min inference strategy (robust to data quality issues):
 - **Flexible resources** (hydro, batteries): p_min = 0 (no inference needed)
@@ -197,6 +278,20 @@ Unit commitment integration:
 - Constrains t=1 ramps from initial output g₀
 - Enforces remaining uptime/downtime based on T_on₀/T_off₀
 
+Initial output validation:
+- Historical output data may be outside the valid `[effective_p_min, p_max]` range due to:
+  - Data quality issues (measurement errors)
+  - Capacity changes (derating, upgrades)
+  - Outages affecting available capacity
+- The UC solver validates and clamps initial output to prevent infeasibility:
+  - If `output > p_max`: clamp to `p_max`
+  - If `output < effective_p_min`: set to `max(0.7 × p_max, effective_p_min)`
+  - Logs warnings when clamping occurs
+- **Important**: `effective_p_min = max(declared_p_min, min_load_factor × p_max)` for thermal plants
+  - This matches how the UC model calculates minimum generation
+  - Flexible fuel types (hydro, storage) use only `declared_p_min`
+- This ensures ramp constraints from t=0 to t=1 are always feasible
+
 **Unit commitment solver:**
 ```julia
 # Run unit commitment optimization
@@ -206,6 +301,14 @@ solution = solve_unit_commitment("GR", Date(2024, 6, 15))
 solution = solve_unit_commitment("GR", Date(2024, 6, 15);
     mip_gap=0.01,       # Accept 1% optimality gap (default)
     time_limit=600.0)   # Max solve time in seconds (default 10 min)
+
+# With inferred parameters from historical data (default: enabled)
+solution = solve_unit_commitment("GR", Date(2024, 6, 15);
+    use_inferred_params=true)  # Use plant-specific ramp rates from historical data
+
+# Disable inferred parameters (use fuel-type defaults only)
+solution = solve_unit_commitment("GR", Date(2024, 6, 15);
+    use_inferred_params=false)  # Fall back to FuelTypeParameters defaults
 
 # Access solution fields
 solution.status              # JuMP termination status (OPTIMAL, INFEASIBLE, etc.)
@@ -221,6 +324,7 @@ solution.cost_breakdown      # Detailed cost breakdown (see below)
 Solver tuning parameters (solver-agnostic via MOI):
 - `mip_gap`: Relative optimality gap tolerance (default 0.01 = 1%). Solver stops when it finds a solution within this percentage of proven optimal.
 - `time_limit`: Maximum solve time in seconds (default 600 = 10 min). Returns best solution found within time budget.
+- `use_inferred_params`: Use plant-specific parameters inferred from historical data (default: true). When enabled, the solver uses `get_generators_with_inferred_params()` which provides plant-specific ramp rates, p_min, and uptime/downtime constraints. When disabled, uses fuel-type defaults from `FuelTypeParameters`.
 
 Unit commitment objective function components:
 - **Production costs**: `marginal_cost × generation` for each generator and period
@@ -228,6 +332,108 @@ Unit commitment objective function components:
   - Base startup cost = `startup_cost_multiplier × marginal_cost × p_max`
   - From `FuelTypeParameters` for each fuel type
 - **No-load costs**: Fixed cost when committed = `no_load_cost_fraction × marginal_cost × p_min × period_hours`
+- **Curtailment costs**: Penalty for spilling renewable generation (default 1 €/MWh)
+
+"Other" fuel type handling:
+- Generators with unknown fuel type use flexible parameters (not conservative thermal)
+- Parameters: 1-2h startup, 1h min up/downtime, 50% ramp rate, 0% min load factor
+- This prevents infeasibility for miscategorized flexible resources (e.g., unidentified batteries)
+- See `docs/unknown-other-generators.md` for list of generators requiring manual classification
+
+**Renewable curtailment:**
+
+The UC solver allows renewable curtailment to handle infeasibility when thermal P_min constraints exceed net demand. This is common in high-RES penetration scenarios.
+
+```julia
+# Default: curtailment allowed with 1 €/MWh penalty
+solution = solve_unit_commitment("GR", Date(2024, 6, 15))
+
+# Custom curtailment penalty (higher = less curtailment)
+solution = solve_unit_commitment("GR", Date(2024, 6, 15);
+    curtailment_penalty=5.0)  # 5 €/MWh penalty
+
+# Access curtailment data
+solution.curtailment      # Vector of curtailment per period (MWh)
+solution.curtailment_cost # Total curtailment cost (€)
+solution.load_values      # Raw load values (before net demand)
+solution.renewable_values # Raw renewable forecast values
+```
+
+How curtailment works:
+- **Balance constraint**: `Generation + Shortage = Load - Renewables + Curtailment + Excess`
+- **Curtailment bounds**: `0 ≤ Curtailment[t] ≤ Renewables[t]`
+- **Objective**: Adds `curtailment_penalty × sum(Curtailment)` to minimize unnecessary spilling
+
+When curtailment is needed:
+- Sum of committed thermal P_min exceeds net demand
+- High renewable generation + low load periods
+- Min uptime constraints prevent thermal unit shutdown
+
+The curtailment penalty should reflect:
+- `0 €/MWh`: Free curtailment (pure technical feasibility)
+- `1-5 €/MWh`: Typical values (political/subsidy signal)
+- Higher values reduce curtailment but may cause infeasibility
+
+**Excess generation (structural oversupply):**
+
+When curtailment alone cannot achieve feasibility (e.g., sum of thermal P_min > load even with all renewables curtailed), the UC solver allows "excess generation" as a last resort. This guarantees feasibility for all zones.
+
+```julia
+# Default: excess allowed with 10,000 €/MWh penalty
+solution = solve_unit_commitment("GR", Date(2024, 6, 15))
+
+# Custom excess penalty (higher = less excess, but may cause infeasibility)
+solution = solve_unit_commitment("GR", Date(2024, 6, 15);
+    excess_penalty=5000.0)  # 5,000 €/MWh penalty
+
+# Access excess data
+solution.excess      # Vector of excess generation per period (MWh)
+solution.excess_cost # Total excess cost (€)
+```
+
+How excess generation works:
+- **Balance constraint**: `Generation + Shortage = Load - Renewables + Curtailment + Excess`
+- **Excess bounds**: `Excess[t] ≥ 0` (unbounded above)
+- **Objective**: Adds `excess_penalty × sum(Excess)` to minimize structural oversupply
+
+When excess is needed:
+- Thermal P_min constraints force generation above what load can absorb
+- Even after curtailing all renewables, thermal minimum > load
+- Typically indicates grid has more baseload capacity than demand
+
+The excess penalty should be high (default 10,000 €/MWh) to ensure it's only used as a last resort, after all curtailment options are exhausted. If excess generation appears, it indicates a structural oversupply problem in the zone.
+
+**Shortage (load shedding):**
+
+When total generation capacity is insufficient to meet demand (total P_max < net demand), the UC solver allows "load shedding" via a shortage variable. This guarantees feasibility for all zones.
+
+```julia
+# Default: shortage allowed with 10,000 €/MWh penalty
+solution = solve_unit_commitment("GR", Date(2024, 6, 15))
+
+# Custom shortage penalty
+solution = solve_unit_commitment("GR", Date(2024, 6, 15);
+    shortage_penalty=5000.0)  # 5,000 €/MWh penalty
+
+# Access shortage data
+solution.shortage      # Vector of load shedding per period (MWh)
+solution.shortage_cost # Total shortage cost (€)
+```
+
+How shortage (load shedding) works:
+- **Balance constraint**: `Generation + Shortage = Load - Renewables + Curtailment + Excess`
+- **Shortage bounds**: `Shortage[t] ≥ 0` (unbounded above)
+- **Objective**: Adds `shortage_penalty × sum(Shortage)` to minimize load shedding
+
+When shortage is needed:
+- Total available generation capacity (P_max) is less than net demand
+- Even with all generators running at full capacity, demand cannot be met
+- Typically indicates zone has insufficient generation capacity or data issues
+
+The shortage penalty should be high (default 10,000 €/MWh) to ensure it's only used as a last resort. If shortage appears, it indicates either:
+1. A capacity shortage in the zone (insufficient installed capacity)
+2. Data quality issues (missing generators or incorrect load data)
+3. The zone aggregates multiple sub-zones with different data availability
 
 Cost breakdown fields:
 ```julia
@@ -252,6 +458,29 @@ Time resolution handling:
 Big M parameter:
 - Used in ramp constraints to relax them during startup/shutdown
 - Scaled to problem size: `M = 2 × max(p_max)` for numerical stability
+
+**Infeasibility diagnosis (Gurobi only):**
+
+When the UC solver returns INFEASIBLE with Gurobi, it automatically computes and prints the Irreducible Infeasible Subsystem (IIS):
+
+```julia
+# If infeasible, solver prints conflicting constraints:
+# Computing IIS (Irreducible Infeasible Subsystem)...
+# IN CONFLICT: min_uptime[GEN-CODE,5]: u[GEN-CODE,5] >= ...
+# IN CONFLICT: ramp_down[GEN-CODE,1]: g[GEN-CODE,1] - g₀ >= ...
+```
+
+The IIS identifies the minimal set of constraints that cannot all be satisfied simultaneously. Common causes:
+- **Ramp + initial conditions**: Generator output at t=0 too far from required t=1 range
+- **Min uptime/downtime**: Generator must be both ON and OFF due to conflicting constraints
+- **Startup profile**: Generator cannot complete startup within horizon
+
+For systematic diagnosis, use the diagnostic script:
+```bash
+julia --project=. test/scripts/diagnose_fr_infeasibility.jl
+```
+
+This analyzes capacity by status, thermal state, startup time, and identifies locked generators.
 
 **UC results caching:**
 ```julia
@@ -348,6 +577,7 @@ test/
 │   └── ...
 │
 ├── scripts/                 # Debug, benchmarks, infrastructure scripts
+│   ├── diagnose_fr_infeasibility.jl  # UC infeasibility diagnosis for any zone
 │   ├── benchmark_gurobi_vs_highs.jl  # Compare Gurobi (2 workers) vs HiGHS (50 workers)
 │   ├── test_gurobi.jl
 │   ├── test_optimizer_comparison.jl
@@ -374,6 +604,21 @@ The project uses PostgreSQL with LibPQ.jl for data access. Create a `.env` file 
 ```
 DATABASE_URL=postgresql://user:password@host:port/database
 ```
+
+### Database Indexes
+
+The ENTSOE tables are populated by an external ETL process and don't have indexes by default. For fast queries, run:
+
+```julia
+using Euphemia
+Euphemia.ensure_indexes()
+```
+
+This creates indexes on frequently-queried tables:
+- `actual_generation_output_per_generation_unit` (54 GB) - for parameter inference
+- `unavailability_of_production_and_generation_units` (4.4 GB) - for outage filtering
+
+First run takes 30-60 minutes for large tables. Subsequent runs are instant (`IF NOT EXISTS`). Add more indexes to `ensure_indexes()` in `src/dbutils.jl` as needed.
 
 ## Code Formatting
 
@@ -416,7 +661,8 @@ The project uses PostgreSQL with two main schemas:
 
 ### ENTSO-E Schema (`entsoe.*`)
 - `entsoe.production_and_generation_units` - Production unit data with commissioning status and bidding zone mapping
-- `entsoe.actual_total_load` - Historical electricity demand data by bidding zone (filtered by area_type_code: BZN, BZN/CTA, BZN/CTY, BZN/CTA/CTY)
+- `entsoe.day_ahead_total_load_forecast` - Day-ahead load forecast used for UC planning (consistent with renewable forecast horizon)
+- `entsoe.actual_total_load` - Historical electricity demand (for backtesting/validation, not used in UC)
 - `entsoe.generation_forecasts_for_wind_and_solar` - Renewable generation forecasts (filtered by same area_type_code values)
 - `entsoe.offered_transfer_capacities_implicit` - Cross-border transfer capacity data between bidding zones
 - `entsoe.unavailability_of_production_and_generation_units` - Generator outage data (planned/forced)
@@ -447,12 +693,13 @@ The project uses PostgreSQL with two main schemas:
 **`simulations.energy_prices`** - Generated energy price results by bidding zone, date, and time period
 - `clearing_mode`: Distinguishes between `'single_zone'` (independent zone clearing) and `'multi_zone'` (joint clearing with transmission)
 - `optimization_run_id`: Foreign key to `optimization_runs` table for traceability
-- `code_version`: Schema version (current: 2)
+- `code_version`: Schema version (current: 3)
 
 **`simulations.optimization_runs`** - Optimization run metadata including status, solver info, and performance metrics
 - For single-zone runs: `bidding_zone` contains the zone code (e.g., "GR")
 - For multi-zone runs: `bidding_zone` is set to "MULTI_ZONE"
 - Contains `optimizer`, `solve_time_seconds`, `objective_value`, etc.
+- Unique on `(bidding_zone, optimization_date, order_method, model_type, code_version, optimizer)` - allows comparing different solvers
 
 **`simulations.transmission_flows`** - Cross-border transmission flow results from multi-zone clearing
 
@@ -471,6 +718,9 @@ The project uses PostgreSQL with two main schemas:
 - `resolution_minutes`: Time period resolution (15, 30, or 60)
 - `total_cost`, `production_cost`, `startup_cost`, `noload_cost`: Cost components
 - `hot_startups`, `warm_startups`, `cold_startups`: Startup counts by type
+- `total_curtailment_mwh`, `curtailment_cost`: Renewable curtailment summary
+- `total_excess_mwh`, `excess_cost`: Excess generation summary (structural oversupply)
+- `total_shortage_mwh`, `shortage_cost`: Load shedding summary (capacity shortage)
 
 **`simulations.uc_generation`** - Detailed generation data per generator per period
 - `uc_result_id`: Foreign key to `uc_results`
@@ -481,6 +731,9 @@ The project uses PostgreSQL with two main schemas:
 - `uc_result_id`: Foreign key to `uc_results`
 - `period_idx`, `time_slot_utc`: Time period identification
 - `net_demand_mw`, `renewable_generation_mw`: Demand and renewable data
+- `curtailment_mw`: Renewable curtailment per period (MW)
+- `excess_mw`: Excess generation per period (MW, structural oversupply)
+- `shortage_mw`: Load shedding per period (MW, capacity shortage)
 
 **Joining prices with optimization metadata:**
 ```sql

@@ -216,7 +216,7 @@ ON simulations.energy_prices (optimization_run_id)
             error_message TEXT,
             code_version INTEGER NOT NULL,
             created_at TIMESTAMP NOT NULL,
-            UNIQUE(bidding_zone, optimization_date, order_method, model_type, code_version)
+            UNIQUE(bidding_zone, optimization_date, order_method, model_type, code_version, optimizer)
         )
         """
 
@@ -424,7 +424,7 @@ end
     save_optimization_run(bidding_zone::String, date::Date, order_method::Symbol, model_type::Symbol,
                           optimizer::String, status::Symbol; objective_value=nothing, solve_time_seconds=nothing,
                           num_orders=nothing, num_price_periods=nothing, error_message=nothing,
-                          code_version::Int=2, create_schema::Bool=true) -> Union{Int, Nothing}
+                          code_version::Int=3, create_schema::Bool=true) -> Union{Int, Nothing}
 
 Save optimization run metadata to track all optimization attempts (successful and failed).
 
@@ -453,7 +453,7 @@ function save_optimization_run(bidding_zone::String, date::Date, order_method::S
     num_orders=nothing,
     num_price_periods=nothing,
     error_message=nothing,
-    code_version::Int=2,
+    code_version::Int=3,
     create_schema::Bool=true)
 
     # Create schema and table if requested
@@ -548,7 +548,7 @@ end
 
 """
     save_transmission_flows(flows::Dict{String,Dict{String,Float64}}, date::Date;
-                           code_version::Int=2, create_schema::Bool=true)
+                           code_version::Int=3, create_schema::Bool=true)
 
 Save transmission flow results to the database in the simulations.transmission_flows table.
 
@@ -562,7 +562,7 @@ Save transmission flow results to the database in the simulations.transmission_f
 - Number of records inserted
 """
 function save_transmission_flows(flows::Dict{String,Dict{String,Float64}}, date::Date;
-                                 code_version::Int=2, create_schema::Bool=true)
+                                 code_version::Int=3, create_schema::Bool=true)
     if isempty(flows)
         @warn "No transmission flows to save"
         return 0
@@ -670,7 +670,7 @@ function ensure_uc_results_tables()
             cold_startups INTEGER DEFAULT 0,
             mip_gap NUMERIC(6,4) DEFAULT 0.01,
             time_limit_seconds NUMERIC(10,2) DEFAULT 600.0,
-            code_version INTEGER NOT NULL DEFAULT 2,
+            code_version INTEGER NOT NULL DEFAULT 3,
             created_at TIMESTAMP NOT NULL DEFAULT NOW(),
             UNIQUE(bidding_zone, market_date, code_version)
         )
@@ -733,7 +733,129 @@ function ensure_uc_results_tables()
             CREATE INDEX IF NOT EXISTS idx_uc_net_demand_result_id
             ON simulations.uc_net_demand (uc_result_id)
         """)
+
+        # Add curtailment and excess columns (schema migration for existing tables)
+        # Using DO block to conditionally add columns if they don't exist
+        LibPQ.execute(cnx, """
+            DO \$\$
+            BEGIN
+                -- Add curtailment columns to uc_results summary table
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                               WHERE table_schema = 'simulations'
+                               AND table_name = 'uc_results'
+                               AND column_name = 'total_curtailment_mwh') THEN
+                    ALTER TABLE simulations.uc_results ADD COLUMN total_curtailment_mwh NUMERIC(12,2) DEFAULT 0;
+                END IF;
+
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                               WHERE table_schema = 'simulations'
+                               AND table_name = 'uc_results'
+                               AND column_name = 'curtailment_cost') THEN
+                    ALTER TABLE simulations.uc_results ADD COLUMN curtailment_cost NUMERIC(12,2) DEFAULT 0;
+                END IF;
+
+                -- Add excess generation columns to uc_results summary table
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                               WHERE table_schema = 'simulations'
+                               AND table_name = 'uc_results'
+                               AND column_name = 'total_excess_mwh') THEN
+                    ALTER TABLE simulations.uc_results ADD COLUMN total_excess_mwh NUMERIC(12,2) DEFAULT 0;
+                END IF;
+
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                               WHERE table_schema = 'simulations'
+                               AND table_name = 'uc_results'
+                               AND column_name = 'excess_cost') THEN
+                    ALTER TABLE simulations.uc_results ADD COLUMN excess_cost NUMERIC(15,2) DEFAULT 0;
+                END IF;
+
+                -- Add curtailment column to uc_net_demand table
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                               WHERE table_schema = 'simulations'
+                               AND table_name = 'uc_net_demand'
+                               AND column_name = 'curtailment_mw') THEN
+                    ALTER TABLE simulations.uc_net_demand ADD COLUMN curtailment_mw NUMERIC(10,2) DEFAULT 0;
+                END IF;
+
+                -- Add excess column to uc_net_demand table
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                               WHERE table_schema = 'simulations'
+                               AND table_name = 'uc_net_demand'
+                               AND column_name = 'excess_mw') THEN
+                    ALTER TABLE simulations.uc_net_demand ADD COLUMN excess_mw NUMERIC(10,2) DEFAULT 0;
+                END IF;
+
+                -- Add shortage (load shedding) columns to uc_results summary table
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                               WHERE table_schema = 'simulations'
+                               AND table_name = 'uc_results'
+                               AND column_name = 'total_shortage_mwh') THEN
+                    ALTER TABLE simulations.uc_results ADD COLUMN total_shortage_mwh NUMERIC(12,2) DEFAULT 0;
+                END IF;
+
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                               WHERE table_schema = 'simulations'
+                               AND table_name = 'uc_results'
+                               AND column_name = 'shortage_cost') THEN
+                    ALTER TABLE simulations.uc_results ADD COLUMN shortage_cost NUMERIC(15,2) DEFAULT 0;
+                END IF;
+
+                -- Add shortage column to uc_net_demand table
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                               WHERE table_schema = 'simulations'
+                               AND table_name = 'uc_net_demand'
+                               AND column_name = 'shortage_mw') THEN
+                    ALTER TABLE simulations.uc_net_demand ADD COLUMN shortage_mw NUMERIC(10,2) DEFAULT 0;
+                END IF;
+            END \$\$;
+        """)
     end
 
     @info "UC results tables schema verified/created"
+end
+
+"""
+    ensure_indexes()
+
+Create indexes on ENTSOE tables to speed up common queries.
+This function is idempotent (safe to run multiple times).
+
+Indexes are created with CONCURRENTLY to avoid locking tables during creation.
+First run may take 30-60 minutes for large tables. Subsequent runs are instant.
+
+# Example
+```julia
+using Euphemia
+Euphemia.ensure_indexes()  # Run once after DB setup, or when queries are slow
+```
+"""
+function ensure_indexes()
+    @info "Ensuring indexes on ENTSOE tables..."
+
+    withdb() do cnx
+        # Index for parameter inference and initial conditions queries
+        # Table: 54 GB, 260M rows - queries by generator_code + date range
+        @info "Creating index on actual_generation_output_per_generation_unit (this may take 30-60 min first time)..."
+        LibPQ.execute(cnx, """
+            CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_actual_gen_unit_date
+            ON entsoe.actual_generation_output_per_generation_unit
+            (generation_unit_code, date_time_utc);
+        """)
+
+        # Index for outage/unavailability filtering in get_generators()
+        # Table: 4.4 GB, 9.5M rows - queries by asset_code + date range
+        @info "Creating index on unavailability_of_production_and_generation_units..."
+        LibPQ.execute(cnx, """
+            CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_unavail_asset_date
+            ON entsoe.unavailability_of_production_and_generation_units
+            (asset_code, start_outage_utc);
+        """)
+
+        # Add more indexes here as needed:
+        # - generation_forecasts_for_wind_and_solar (zone, date)
+        # - day_ahead_total_load_forecast (zone, date)
+        # - offered_transfer_capacities_implicit (zone pairs, date)
+    end
+
+    @info "Indexes ensured successfully"
 end
