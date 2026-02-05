@@ -98,7 +98,8 @@ function generate_market_orders_from_uc(
     uncommitted_unit_fraction::Float64=DEFAULT_UNCOMMITTED_UNIT_FRACTION,
     optimizer::String="auto",
     use_cache::Bool=true,
-    force_rerun::Bool=false
+    force_rerun::Bool=false,
+    net_import_by_timeslot::Union{Dict{String,Float64}, Nothing}=nothing
 )
 
     try
@@ -107,7 +108,8 @@ function generate_market_orders_from_uc(
         uc_solution = solve_unit_commitment(bidding_zone, day;
             optimizer=optimizer,
             use_cache=use_cache,
-            force_rerun=force_rerun
+            force_rerun=force_rerun,
+            net_import_by_timeslot=net_import_by_timeslot
         )
 
         if uc_solution.status != OPTIMAL

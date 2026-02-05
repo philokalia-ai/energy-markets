@@ -2,7 +2,7 @@ module MPCC
 
 using JuMP, Dates, DataFrames
 using JuMP: AffExpr
-using Distributed: myid, workers, pmap
+using Distributed: myid, workers, pmap, WorkerPool
 
 # Import shared solver selection from parent module
 import ..select_solver
@@ -221,6 +221,7 @@ Processes a single zone and returns market orders as a named tuple.
 - `optimizer::String`: Solver preference
 - `use_cache::Bool`: Whether to use UC result caching
 - `force_rerun::Bool`: Whether to force UC re-solve
+- `zone_net_imports::Union{Dict{String,Float64}, Nothing}`: Optional net imports for UC demand adjustment
 
 # Returns
 Named tuple with fields:
@@ -233,7 +234,7 @@ Named tuple with fields:
 - `worker_id`: ID of the worker that processed this zone
 """
 function _process_zone_for_order_book(args)
-    zone, day, markup_factor, optimizer, use_cache, force_rerun = args
+    zone, day, markup_factor, optimizer, use_cache, force_rerun, zone_net_imports = args
     worker_id = myid()
     start_time = time()
 
@@ -242,7 +243,8 @@ function _process_zone_for_order_book(args)
             markup_factor=markup_factor,
             optimizer=optimizer,
             use_cache=use_cache,
-            force_rerun=force_rerun
+            force_rerun=force_rerun,
+            net_import_by_timeslot=zone_net_imports
         )
 
         elapsed = time() - start_time
@@ -304,7 +306,9 @@ function create_multi_zone_order_book(zones::Vector{String}, day::Date;
                                       optimizer::String="auto",
                                       use_cache::Bool=true,
                                       force_rerun::Bool=false,
-                                      parallel::Bool=false)
+                                      parallel::Bool=false,
+                                      max_workers::Union{Int, Nothing}=nothing,
+                                      net_imports_by_zone::Union{Dict{String, Dict{String, Float64}}, Nothing}=nothing)
     if isempty(zones)
         error("At least one bidding zone must be specified")
     end
@@ -318,6 +322,7 @@ function create_multi_zone_order_book(zones::Vector{String}, day::Date;
 
     # Check for parallel execution
     use_parallel = parallel
+    selected_worker_ids = Int[]
     if use_parallel
         worker_ids = filter(id -> id != 1, workers())
         available_workers = length(worker_ids)
@@ -326,15 +331,34 @@ function create_multi_zone_order_book(zones::Vector{String}, day::Date;
             @warn "Parallel processing requested but no workers available. Falling back to sequential."
             use_parallel = false
         else
-            println("   ⚡ Parallel mode enabled with $available_workers workers")
+            # Determine max workers based on optimizer if not explicitly set
+            effective_max_workers = if !isnothing(max_workers)
+                max_workers
+            elseif lowercase(optimizer) == "gurobi"
+                # Gurobi WLS license typically limits concurrent sessions to 2
+                2
+            else
+                # HiGHS: use half of available workers (leave headroom for system)
+                max(1, available_workers ÷ 2)
+            end
+            workers_to_use = min(effective_max_workers, available_workers)
+            selected_worker_ids = worker_ids[1:workers_to_use]
+            reason = !isnothing(max_workers) ? "user-specified" :
+                     (lowercase(optimizer) == "gurobi" ? "Gurobi license limit" : "HiGHS default")
+            println("   ⚡ Parallel mode: $workers_to_use workers (of $available_workers available, $reason)")
         end
     end
 
     if use_parallel
-        # Parallel path: process all zones concurrently using pmap
+        # Parallel path: process all zones concurrently using pmap with WorkerPool
         println("   📊 Processing $(length(zones)) zones in parallel...")
-        pmap_args = [(zone, day, markup_factor, optimizer, use_cache, force_rerun) for zone in zones]
-        zone_results = pmap(_process_zone_for_order_book, pmap_args)
+        # Build args with zone-specific net imports
+        pmap_args = [(zone, day, markup_factor, optimizer, use_cache, force_rerun,
+                      net_imports_by_zone !== nothing ? get(net_imports_by_zone, zone, nothing) : nothing)
+                     for zone in zones]
+        # Use WorkerPool to limit concurrent workers (important for Gurobi license limits)
+        pool = WorkerPool(selected_worker_ids)
+        zone_results = pmap(_process_zone_for_order_book, pool, pmap_args)
 
         # Aggregate results from parallel execution
         for result in zone_results
@@ -364,12 +388,17 @@ function create_multi_zone_order_book(zones::Vector{String}, day::Date;
             try
                 println("   📊 Processing zone $zone...")
 
+                # Get zone-specific net imports (or nothing)
+                zone_net_imports = net_imports_by_zone !== nothing ?
+                    get(net_imports_by_zone, zone, nothing) : nothing
+
                 # Generate market orders from real unit commitment for this zone (will use cache if available)
                 uc_to_bids = generate_market_orders_from_uc(zone, day;
                     markup_factor=markup_factor,
                     optimizer=optimizer,
                     use_cache=use_cache,
-                    force_rerun=force_rerun
+                    force_rerun=force_rerun,
+                    net_import_by_timeslot=zone_net_imports
                 )
 
                 if !uc_to_bids.success
@@ -777,6 +806,210 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
             "Optimization failed: $e"
         )
     end
+end
+
+# =============================================================================
+# FLOW-TO-NET-IMPORT CONVERSION UTILITIES
+# =============================================================================
+
+"""
+    compute_net_imports_from_flows(transmission_flows, zones) -> Dict{String, Dict{String, Float64}}
+
+Convert MPCC transmission flows to per-zone net imports for UC demand adjustment.
+
+Net import for zone Z = sum(inflows to Z) - sum(outflows from Z)
+- Positive = zone is net importer (reduces UC demand)
+- Negative = zone is net exporter (increases UC demand)
+
+# Arguments
+- `transmission_flows::Dict{String, Dict{String, Float64}}`: MPCC output with keys like "GR_to_BG"
+- `zones::Vector{String}`: List of zone codes to compute net imports for
+
+# Returns
+- `Dict{String, Dict{String, Float64}}`: net_imports[zone][period] → MW
+
+# Example
+```julia
+flows = Dict("GR_to_BG" => Dict("1" => 100.0, "2" => 150.0))
+zones = ["GR", "BG"]
+net_imports = compute_net_imports_from_flows(flows, zones)
+# net_imports["GR"]["1"] == -100.0  (exporting)
+# net_imports["BG"]["1"] == 100.0   (importing)
+```
+"""
+function compute_net_imports_from_flows(
+    transmission_flows::Dict{String, Dict{String, Float64}},
+    zones::Vector{String}
+)::Dict{String, Dict{String, Float64}}
+
+    net_imports = Dict{String, Dict{String, Float64}}()
+
+    # Initialize all zones with empty dicts
+    for zone in zones
+        net_imports[zone] = Dict{String, Float64}()
+    end
+
+    # Process each flow
+    for (flow_id, period_flows) in transmission_flows
+        # Parse "SOURCE_to_SINK" format
+        parts = split(flow_id, "_to_")
+        if length(parts) != 2
+            @warn "Invalid flow_id format: $flow_id, expected SOURCE_to_SINK"
+            continue
+        end
+        source_zone = String(parts[1])
+        sink_zone = String(parts[2])
+
+        for (period, flow_mw) in period_flows
+            # Sink receives power (positive = import)
+            if haskey(net_imports, sink_zone)
+                current = get(net_imports[sink_zone], period, 0.0)
+                net_imports[sink_zone][period] = current + flow_mw
+            end
+
+            # Source sends power (negative = export)
+            if haskey(net_imports, source_zone)
+                current = get(net_imports[source_zone], period, 0.0)
+                net_imports[source_zone][period] = current - flow_mw
+            end
+        end
+    end
+
+    return net_imports
+end
+
+"""
+    compute_max_price_change(current_prices, previous_prices) -> Float64
+
+Compute maximum absolute change in market prices between iterations (€/MWh).
+This is the primary convergence criterion for iterative UC-MPCC.
+
+Price-based convergence is preferred over flow-based because:
+- Prices are the economic fixed point of market coupling
+- Flows are derived quantities that can oscillate near binding constraints
+- UC binaries can cause small flow changes even when prices are stable
+
+# Arguments
+- `current_prices::Dict{String, Dict{String, Float64}}`: Prices by zone and period
+- `previous_prices::Union{Dict{String, Dict{String, Float64}}, Nothing}`: Previous iteration prices
+
+# Returns
+- `Float64`: Maximum absolute price change across all zones and periods (€/MWh)
+"""
+function compute_max_price_change(
+    current_prices::Dict{String, Dict{String, Float64}},
+    previous_prices::Union{Dict{String, Dict{String, Float64}}, Nothing}
+)::Float64
+    if previous_prices === nothing
+        return Inf
+    end
+
+    max_change = 0.0
+    for (zone, periods) in current_prices
+        prev_zone = get(previous_prices, zone, Dict{String, Float64}())
+        for (period, price) in periods
+            prev_price = get(prev_zone, period, price)  # Default to same price if missing
+            change = abs(price - prev_price)
+            max_change = max(max_change, change)
+        end
+    end
+    return max_change
+end
+
+"""
+    compute_max_relative_flow_change(current_flows, previous_flows; min_flow::Float64=10.0) -> Float64
+
+Compute maximum relative change in transmission flows between iterations (fraction).
+Used as a diagnostic metric alongside price convergence.
+
+# Arguments
+- `current_flows::Dict{String, Dict{String, Float64}}`: Flows by corridor and period
+- `previous_flows::Union{Dict{String, Dict{String, Float64}}, Nothing}`: Previous iteration flows
+- `min_flow::Float64`: Minimum flow magnitude for denominator to avoid division issues (default: 10 MW)
+
+# Returns
+- `Float64`: Maximum relative flow change as a fraction (e.g., 0.02 = 2%)
+"""
+function compute_max_relative_flow_change(
+    current_flows::Dict{String, Dict{String, Float64}},
+    previous_flows::Union{Dict{String, Dict{String, Float64}}, Nothing};
+    min_flow::Float64=10.0
+)::Float64
+    if previous_flows === nothing
+        return Inf
+    end
+
+    max_relative_change = 0.0
+    for (flow_id, periods) in current_flows
+        prev_corridor = get(previous_flows, flow_id, Dict{String, Float64}())
+        for (period, flow) in periods
+            prev_flow = get(prev_corridor, period, 0.0)
+            abs_change = abs(flow - prev_flow)
+            # Use max of current and previous flow magnitude for denominator
+            denominator = max(abs(flow), abs(prev_flow), min_flow)
+            relative_change = abs_change / denominator
+            max_relative_change = max(max_relative_change, relative_change)
+        end
+    end
+    return max_relative_change
+end
+
+"""
+    compute_max_flow_change(current, previous) -> Float64
+
+Compute maximum absolute change in net imports between iterations.
+Kept for backward compatibility; prefer `compute_max_price_change` for convergence.
+
+Note: Absolute flow tolerance is problematic for UC-market coupling because:
+- Flow magnitudes vary widely (100s to 1000s of MW)
+- UC binaries cause discontinuous flow changes
+- Flows can oscillate even when prices are stable
+"""
+function compute_max_flow_change(
+    current::Dict{String, Dict{String, Float64}},
+    previous::Union{Dict{String, Dict{String, Float64}}, Nothing}
+)::Float64
+    if previous === nothing
+        # First iteration - return infinity to force at least one more iteration
+        return Inf
+    end
+
+    max_change = 0.0
+    for (zone, periods) in current
+        prev_zone = get(previous, zone, Dict{String, Float64}())
+        for (period, value) in periods
+            prev_value = get(prev_zone, period, 0.0)
+            change = abs(value - prev_value)
+            max_change = max(max_change, change)
+        end
+    end
+    return max_change
+end
+
+"""
+    apply_damping(current, previous, α) -> Dict{String, Dict{String, Float64}}
+
+Apply damping to net imports: new = α × current + (1-α) × previous
+"""
+function apply_damping(
+    current::Dict{String, Dict{String, Float64}},
+    previous::Union{Dict{String, Dict{String, Float64}}, Nothing},
+    α::Float64
+)::Dict{String, Dict{String, Float64}}
+    if previous === nothing || α >= 1.0
+        return current
+    end
+
+    damped = Dict{String, Dict{String, Float64}}()
+    for (zone, periods) in current
+        damped[zone] = Dict{String, Float64}()
+        prev_zone = get(previous, zone, Dict{String, Float64}())
+        for (period, value) in periods
+            prev_value = get(prev_zone, period, 0.0)
+            damped[zone][period] = α * value + (1 - α) * prev_value
+        end
+    end
+    return damped
 end
 
 end  # module MPCC

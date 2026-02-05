@@ -86,6 +86,36 @@ result = run_multi_zone_for_date_range(Date(2023, 1, 1), Date(2024, 12, 31);
     save_to_db=true)
 ```
 
+**Iterative multi-zone clearing (accounts for interconnections in UC):**
+```julia
+# Standard approach: UC ignores interconnections, MPCC handles flows
+result = run_multi_zone_market_clearing(Date(2024, 6, 15); zones=["GR", "BG", "RO"])
+
+# Iterative approach: UC-MPCC feedback loop until prices converge
+result = run_iterative_multi_zone_market_clearing(Date(2024, 6, 15);
+    zones=["GR", "IT-NORTH", "IT-SOUTH"],
+    max_iterations=10,       # Stop after 10 iterations max
+    price_tolerance=1.0,     # Stop when max price change < 1 €/MWh
+    damping_factor=0.7,      # Update smoothing (0.7 = 70% new + 30% old)
+    parallel=true            # Auto-limits: 2 workers for Gurobi, half for HiGHS
+)
+
+# Check convergence
+result.converged              # true if price changes < tolerance
+result.iterations             # number of iterations performed
+result.convergence_metrics    # (price_change, flow_change_pct)
+result.final_net_imports      # final net imports per zone
+```
+
+**Convergence criterion:** Uses price-based convergence (max |Δλ| < tolerance) rather
+than flow-based. This is preferred because prices are the economic fixed point of
+market coupling, while flows are derived quantities that can oscillate near binding
+constraints due to UC binary decisions.
+
+The iterative approach is recommended for tightly interconnected zones where
+cross-border flows significantly affect optimal unit commitment decisions.
+Typical convergence: 2-5 iterations. Runtime: 2-4× longer than non-iterative.
+
 **Zone discovery:**
 ```julia
 # Zones with generator data (for UC/bidding)
@@ -109,6 +139,22 @@ The `exclude_unavailable` parameter (default: `true`) filters generators based o
 - **Partial outages** (`available_capacity_mw > 0`): Generator's `p_max` reduced to available capacity
 - Only `status = 'Active'` outages are considered (ignores `Cancelled`/`Withdrawn`)
 - Uses `MIN(available_capacity_mw)` when multiple outage records exist (conservative)
+
+**Generator deduplication (overlapping validity periods):**
+- ENTSO-E data can have multiple rows for the same generator with overlapping `valid_from`/`valid_to` periods
+- This is a data quality issue where capacity changes create duplicate entries instead of properly versioned records
+- The query uses `DISTINCT ON (generation_unit_code)` to deduplicate
+- Priority: most recent `valid_from`, then highest capacity as tiebreaker
+- Example: Poland's "Dolna Odra B7" had 5 overlapping entries with capacities 210-232 MW
+
+**Date validity filter with recent generation fallback:**
+- ENTSO-E data has stale `valid_from`/`valid_to` dates for some operating plants
+- Example: Spain nuclear plants had `valid_from` in 2026 (future!) but were actively generating
+- Example: German coal plants had `valid_to` in 2022-2024 but were still operating in 2025
+- Solution: Include plants that EITHER pass the date validity filter OR have recent actual generation output
+- Recent generation = output > 0 MW within the last 60 days (from `actual_generation_output_per_generation_unit`)
+- This ensures operating plants are included regardless of stale validity dates
+- Plants with neither valid dates NOR recent generation are correctly excluded (truly decommissioned)
 
 The `exclude_variable_renewables` parameter (default: `true`) filters out wind and solar generators:
 - **Variable renewables** (Wind Onshore, Wind Offshore, Solar) are excluded from UC
@@ -237,6 +283,15 @@ Min uptime/downtime inference:
   - Coal: uptime 8-48h, downtime 4-24h
   - Gas CCGT: uptime 2-12h, downtime 1-8h
   - Gas OCGT: uptime 1-4h, downtime 1-4h
+
+p_min validation (outage handling):
+- Inferred or cached p_min may exceed current p_max when outages reduce capacity
+- Example: Generator historically operates at min 80 MW, but outage reduces p_max to 70 MW
+- **Validation**: p_min is clamped to not exceed p_max in both:
+  - `infer_parameters_for_generator()`: After inference
+  - `get_generators_with_inferred_params()`: When applying cached parameters
+- Logs a warning when clamping occurs for tracking data issues
+- Without this validation, UC becomes infeasible (constraint p_min ≤ g ≤ p_max impossible)
 
 **Generator initial conditions for unit commitment:**
 ```julia
@@ -525,9 +580,51 @@ When `parallel=true` in `run_multi_zone_market_clearing()`:
 **Gurobi license constraints:**
 - WLS (Web License Service) limits concurrent solver sessions (check "session baseline" in your Gurobi profile)
 - Each parallel UC worker consumes 1 session while actively solving
-- **Automatic cap**: Scripts automatically limit `max_workers` to 2 when using Gurobi with parallel mode
+- **Automatic cap**: When `parallel=true` and `max_workers` is not set:
+  - Gurobi: automatically limits to 2 workers (license limit)
+  - HiGHS: uses half of available workers (leaves headroom)
+- Override with explicit `max_workers=N` if needed
 - "Max distributed workers" is unrelated (for Gurobi's distributed MIP, not parallel independent solves)
-- To change the cap, edit `gurobi_max` in `bin/main.jl` and `bin/multi_zone_main.jl`
+
+## GitHub Actions / CI
+
+The project includes several GitHub workflows for automated price generation:
+
+### Workflows
+
+| Workflow | Schedule | Description |
+|----------|----------|-------------|
+| `generate-energy-prices.yml` | Daily 2 AM UTC | Single-zone market clearing |
+| `generate-multi-zone-prices.yml` | Daily 3 AM UTC | Multi-zone clearing with transmission |
+| `generate-iterative-multi-zone-prices.yml` | Manual only | Iterative UC-MPCC (accounts for interconnections) |
+| `refresh-inference-cache.yml` | Annually Jan 1st | Refresh generator parameter inference cache |
+
+All workflows support `workflow_dispatch` for manual triggering with custom parameters.
+
+### Bin Scripts
+
+The workflows invoke Julia scripts in the `bin/` directory:
+
+- **`bin/multi_zone_main.jl`** - Non-iterative multi-zone clearing for date ranges
+- **`bin/iterative_multi_zone_main.jl`** - Iterative UC-MPCC clearing for date ranges
+
+**Running locally:**
+```bash
+# Set required environment variables
+export START_DATE="2025-01-01"
+export END_DATE="2025-01-07"
+export PARALLEL="true"
+export OPTIMIZER="highs"
+export MAX_WORKERS="0"  # 0 = auto-detect
+
+# For iterative (additional params)
+export MAX_ITERATIONS="10"
+export PRICE_TOLERANCE="1.0"
+export DAMPING_FACTOR="0.7"
+
+# Run
+julia --project=. bin/iterative_multi_zone_main.jl
+```
 
 ## Development Commands
 
@@ -698,8 +795,16 @@ The project uses PostgreSQL with two main schemas:
 **`simulations.optimization_runs`** - Optimization run metadata including status, solver info, and performance metrics
 - For single-zone runs: `bidding_zone` contains the zone code (e.g., "GR")
 - For multi-zone runs: `bidding_zone` is set to "MULTI_ZONE"
+- For iterative runs: `bidding_zone` is set to "MULTI_ZONE_ITERATIVE"
 - Contains `optimizer`, `solve_time_seconds`, `objective_value`, etc.
 - Unique on `(bidding_zone, optimization_date, order_method, model_type, code_version, optimizer)` - allows comparing different solvers
+- **Iterative optimization metadata** (for UC-MPCC iterative runs):
+  - `is_iterative`: Boolean flag indicating iterative optimization
+  - `total_time_seconds`: Total time for all iterations including UC solves
+  - `iterations`: Number of iterations performed
+  - `converged`: Whether the algorithm achieved convergence
+  - `final_price_change`: Final max price change in €/MWh at termination
+  - `final_flow_change_pct`: Final flow change percentage at termination
 
 **`simulations.transmission_flows`** - Cross-border transmission flow results from multi-zone clearing
 
