@@ -2,6 +2,9 @@ using LibPQ
 using ConcurrentUtilities: ConcurrentUtilities, Pools
 using Dates
 
+# Unified code version — bump when cost model or schema changes
+const CURRENT_CODE_VERSION = 4
+
 const poolsize = 5
 cnxpool = Pools.Pool{LibPQ.Connection}(poolsize)
 
@@ -189,6 +192,47 @@ function ensure_energy_prices_table()
             END \$\$;
         """)
 
+        # Add optimizer column to energy_prices if it doesn't exist
+        LibPQ.execute(cnx, """
+            DO \$\$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_schema = 'simulations'
+                    AND table_name = 'energy_prices'
+                    AND column_name = 'optimizer'
+                ) THEN
+                    ALTER TABLE simulations.energy_prices
+                    ADD COLUMN optimizer VARCHAR(20);
+                END IF;
+            END \$\$;
+        """)
+
+        # Migrate unique constraint to include optimizer (so HiGHS vs Gurobi results coexist)
+        LibPQ.execute(cnx, """
+            DO \$\$
+            BEGIN
+                -- Check if the current constraint does NOT include optimizer
+                IF EXISTS (
+                    SELECT 1 FROM pg_constraint
+                    WHERE conname = 'energy_prices_unique_record'
+                    AND conrelid = 'simulations.energy_prices'::regclass
+                ) AND NOT EXISTS (
+                    SELECT 1 FROM pg_indexes
+                    WHERE schemaname = 'simulations'
+                    AND tablename = 'energy_prices'
+                    AND indexname = 'energy_prices_unique_record'
+                    AND indexdef LIKE '%optimizer%'
+                ) THEN
+                    ALTER TABLE simulations.energy_prices
+                    DROP CONSTRAINT energy_prices_unique_record;
+                    ALTER TABLE simulations.energy_prices
+                    ADD CONSTRAINT energy_prices_unique_record
+                    UNIQUE (date_time_utc, bidding_zone, contract_type, order_method, clearing_mode, code_version, optimizer);
+                END IF;
+            END \$\$;
+        """)
+
         # Create useful indexes
         LibPQ.execute(
             cnx,
@@ -301,6 +345,119 @@ ON simulations.energy_prices (optimization_run_id)
             END \$\$;
         """)
 
+        # Add clearing_mode and Tier 2/3 parameter columns to optimization_runs
+        LibPQ.execute(cnx, """
+            DO \$\$
+            BEGIN
+                -- clearing_mode (Tier 1, currently missing from this table)
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                               WHERE table_schema = 'simulations'
+                               AND table_name = 'optimization_runs'
+                               AND column_name = 'clearing_mode') THEN
+                    ALTER TABLE simulations.optimization_runs ADD COLUMN clearing_mode VARCHAR(20);
+                END IF;
+                -- Tier 2: methodology parameters
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                               WHERE table_schema = 'simulations'
+                               AND table_name = 'optimization_runs'
+                               AND column_name = 'markup_factor') THEN
+                    ALTER TABLE simulations.optimization_runs ADD COLUMN markup_factor NUMERIC(5,3) DEFAULT 1.1;
+                END IF;
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                               WHERE table_schema = 'simulations'
+                               AND table_name = 'optimization_runs'
+                               AND column_name = 'bidding_strategy') THEN
+                    ALTER TABLE simulations.optimization_runs ADD COLUMN bidding_strategy VARCHAR(30) DEFAULT 'committed_only';
+                END IF;
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                               WHERE table_schema = 'simulations'
+                               AND table_name = 'optimization_runs'
+                               AND column_name = 'demand_price') THEN
+                    ALTER TABLE simulations.optimization_runs ADD COLUMN demand_price NUMERIC(10,2) DEFAULT 500.0;
+                END IF;
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                               WHERE table_schema = 'simulations'
+                               AND table_name = 'optimization_runs'
+                               AND column_name = 'mip_gap') THEN
+                    ALTER TABLE simulations.optimization_runs ADD COLUMN mip_gap NUMERIC(6,4) DEFAULT 0.01;
+                END IF;
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                               WHERE table_schema = 'simulations'
+                               AND table_name = 'optimization_runs'
+                               AND column_name = 'time_limit_seconds') THEN
+                    ALTER TABLE simulations.optimization_runs ADD COLUMN time_limit_seconds NUMERIC(10,1) DEFAULT 600.0;
+                END IF;
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                               WHERE table_schema = 'simulations'
+                               AND table_name = 'optimization_runs'
+                               AND column_name = 'curtailment_penalty') THEN
+                    ALTER TABLE simulations.optimization_runs ADD COLUMN curtailment_penalty NUMERIC(10,2) DEFAULT 1.0;
+                END IF;
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                               WHERE table_schema = 'simulations'
+                               AND table_name = 'optimization_runs'
+                               AND column_name = 'excess_penalty') THEN
+                    ALTER TABLE simulations.optimization_runs ADD COLUMN excess_penalty NUMERIC(10,2) DEFAULT 10000.0;
+                END IF;
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                               WHERE table_schema = 'simulations'
+                               AND table_name = 'optimization_runs'
+                               AND column_name = 'shortage_penalty') THEN
+                    ALTER TABLE simulations.optimization_runs ADD COLUMN shortage_penalty NUMERIC(10,2) DEFAULT 10000.0;
+                END IF;
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                               WHERE table_schema = 'simulations'
+                               AND table_name = 'optimization_runs'
+                               AND column_name = 'use_inferred_params') THEN
+                    ALTER TABLE simulations.optimization_runs ADD COLUMN use_inferred_params BOOLEAN DEFAULT TRUE;
+                END IF;
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                               WHERE table_schema = 'simulations'
+                               AND table_name = 'optimization_runs'
+                               AND column_name = 'cost_model_version') THEN
+                    ALTER TABLE simulations.optimization_runs ADD COLUMN cost_model_version VARCHAR(10) DEFAULT 'v2';
+                END IF;
+                -- Tier 3: iterative input settings
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                               WHERE table_schema = 'simulations'
+                               AND table_name = 'optimization_runs'
+                               AND column_name = 'price_tolerance') THEN
+                    ALTER TABLE simulations.optimization_runs ADD COLUMN price_tolerance NUMERIC(6,2);
+                END IF;
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                               WHERE table_schema = 'simulations'
+                               AND table_name = 'optimization_runs'
+                               AND column_name = 'damping_factor') THEN
+                    ALTER TABLE simulations.optimization_runs ADD COLUMN damping_factor NUMERIC(4,2);
+                END IF;
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                               WHERE table_schema = 'simulations'
+                               AND table_name = 'optimization_runs'
+                               AND column_name = 'max_iterations_setting') THEN
+                    ALTER TABLE simulations.optimization_runs ADD COLUMN max_iterations_setting INTEGER;
+                END IF;
+            END \$\$;
+        """)
+
+        # Migrate optimization_runs unique constraint to include clearing_mode
+        LibPQ.execute(cnx, """
+            DO \$\$
+            BEGIN
+                -- Check if the current unique constraint does NOT include clearing_mode
+                IF EXISTS (
+                    SELECT 1 FROM pg_constraint
+                    WHERE conname = 'optimization_runs_bidding_zone_optimization_date_order_method_key'
+                    AND conrelid = 'simulations.optimization_runs'::regclass
+                ) THEN
+                    ALTER TABLE simulations.optimization_runs
+                    DROP CONSTRAINT optimization_runs_bidding_zone_optimization_date_order_method_key;
+                    ALTER TABLE simulations.optimization_runs
+                    ADD CONSTRAINT optimization_runs_unique_record
+                    UNIQUE (bidding_zone, optimization_date, order_method, model_type, clearing_mode, code_version, optimizer);
+                END IF;
+            END \$\$;
+        """)
+
         # Create useful indexes for optimization runs
         LibPQ.execute(
             cnx,
@@ -343,38 +500,27 @@ end
 
 """
     save_energy_prices(prices::Dict{String,Float64}, bidding_zone::String, day::Date, order_method::Symbol;
-                       clearing_mode::String="single_zone", optimization_run_id::Union{Integer,Nothing}=nothing,
+                       clearing_mode::String="single_zone", optimizer::Union{String,Nothing}=nothing,
+                       optimization_run_id::Union{Integer,Nothing}=nothing,
                        batch_size::Int=100, create_schema::Bool=true)
 
 Save energy prices to the database in the simulations.energy_prices table.
 Creates the schema and table if they don't exist (when create_schema=true).
-Assumes connection is already to the 'energy' database.
 
 # Arguments
 - `prices`: Dictionary with timeslot keys ("YYYYMMDD-HHMM") and price values in EUR/MWh
 - `bidding_zone`: Bidding zone code (e.g., "GR", "AL")
 - `day`: Date of the prices
 - `order_method`: Method used (:uc_based or :alternative)
-- `clearing_mode`: Market clearing mode ("single_zone" or "multi_zone", default: "single_zone")
+- `clearing_mode`: Market clearing mode ("single_zone", "multi_zone", or "multi_zone_iterative")
+- `optimizer`: Solver used ("highs", "gurobi", etc.) — part of unique constraint
 - `optimization_run_id`: Foreign key to simulations.optimization_runs (default: nothing)
 - `batch_size`: Number of records to insert per batch (default: 100)
 - `create_schema`: Whether to create schema/table if missing (default: true)
-
-# Table Schema
-- `date_time_utc`: Timestamp in UTC
-- `resolution_code`: Temporal resolution (15M, 30M, 1H)
-- `bidding_zone`: Bidding zone code
-- `contract_type`: Always "Day-Ahead" for now
-- `price_eur_mwh`: Energy price in EUR/MWh
-- `currency`: Always "EUR" for now
-- `update_time_utc`: Timestamp when record was inserted
-- `order_method`: Method used to generate prices
-- `clearing_mode`: Market clearing mode (single_zone or multi_zone)
-- `optimization_run_id`: Foreign key to the optimization run that generated these prices
-- `code_version`: Version code, set to 1 for now
 """
 function save_energy_prices(prices::Dict{String,Float64}, bidding_zone::String, day::Date, order_method::Symbol;
-                            clearing_mode::String="single_zone", optimization_run_id::Union{Integer,Nothing}=nothing,
+                            clearing_mode::String="single_zone", optimizer::Union{String,Nothing}=nothing,
+                            optimization_run_id::Union{Integer,Nothing}=nothing,
                             batch_size::Int=100, create_schema::Bool=true)
     if isempty(prices)
         @warn "No prices to save for $bidding_zone on $day"
@@ -400,20 +546,19 @@ function save_energy_prices(prices::Dict{String,Float64}, bidding_zone::String, 
     end
 
     # Prepare data for batch insertion
-    # Tuple: (date_time_utc, resolution_code, bidding_zone, contract_type, price_eur_mwh, currency, order_method, clearing_mode, optimization_run_id, code_version, update_time_utc)
-    records = Vector{Tuple{DateTime,String,String,String,Float64,String,String,String,Union{Int,Missing},Int,DateTime}}()
-    sizehint!(records, length(prices))  # Pre-allocate for efficiency
     update_time = now(UTC)
-    order_method_str = string(order_method)  # Convert once
+    order_method_str = string(order_method)
     opt_run_id = optimization_run_id === nothing ? missing : optimization_run_id
+    opt_str = optimizer === nothing ? missing : optimizer
+
+    records = Vector{Any}()
+    sizehint!(records, length(prices))
 
     for (timeslot, price) in prices
-        # Parse timeslot "YYYYMMDD-HHMM" to DateTime using DateFormat for efficiency
         try
-            # More efficient: use DateFormat instead of manual parsing
             date_time_utc = DateTime(timeslot, dateformat"yyyymmdd-HHMM")
 
-            push!(records, (
+            push!(records, [
                 date_time_utc,
                 resolution_code,
                 bidding_zone,
@@ -423,9 +568,10 @@ function save_energy_prices(prices::Dict{String,Float64}, bidding_zone::String, 
                 order_method_str,
                 clearing_mode,
                 opt_run_id,
-                2,  # code_version
-                update_time
-            ))
+                CURRENT_CODE_VERSION,
+                update_time,
+                opt_str
+            ])
         catch e
             @error "Failed to parse timeslot '$timeslot': $e"
             continue
@@ -437,8 +583,7 @@ function save_energy_prices(prices::Dict{String,Float64}, bidding_zone::String, 
         return 0
     end
 
-    # Delete existing records for this bidding_zone/date/order_method/clearing_mode/code_version before inserting
-    # This ensures we replace incomplete data from previous failed runs
+    # Delete existing records for this bidding_zone/date/order_method/clearing_mode/code_version/optimizer before inserting
     try
         withdb() do cnx
             delete_sql = """
@@ -448,9 +593,10 @@ function save_energy_prices(prices::Dict{String,Float64}, bidding_zone::String, 
               AND order_method = \$3
               AND clearing_mode = \$4
               AND code_version = \$5
+              AND (optimizer = \$6 OR (\$6 IS NULL AND optimizer IS NULL))
             """
-            LibPQ.execute(cnx, delete_sql, [bidding_zone, day, order_method_str, clearing_mode, 2])
-            @info "Deleted existing price records for $bidding_zone on $day (order_method: $order_method, clearing_mode: $clearing_mode) if any existed"
+            LibPQ.execute(cnx, delete_sql, [bidding_zone, day, order_method_str, clearing_mode, CURRENT_CODE_VERSION, opt_str])
+            @info "Deleted existing price records for $bidding_zone on $day (order_method=$order_method, clearing_mode=$clearing_mode, optimizer=$optimizer)"
         end
     catch delete_error
         @error "Failed to delete existing records: $delete_error"
@@ -462,8 +608,8 @@ function save_energy_prices(prices::Dict{String,Float64}, bidding_zone::String, 
 
     sql = """
     INSERT INTO simulations.energy_prices
-    (date_time_utc, resolution_code, bidding_zone, contract_type, price_eur_mwh, currency, order_method, clearing_mode, optimization_run_id, code_version, update_time_utc)
-    VALUES (\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8, \$9, \$10, \$11)
+    (date_time_utc, resolution_code, bidding_zone, contract_type, price_eur_mwh, currency, order_method, clearing_mode, optimization_run_id, code_version, update_time_utc, optimizer)
+    VALUES (\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8, \$9, \$10, \$11, \$12)
     """
 
     for batch_start in 1:batch_size:length(records)
@@ -538,7 +684,7 @@ function save_optimization_run(bidding_zone::String, date::Date, order_method::S
     num_orders=nothing,
     num_price_periods=nothing,
     error_message=nothing,
-    code_version::Int=3,
+    code_version::Int=CURRENT_CODE_VERSION,
     create_schema::Bool=true,
     # Iterative optimization metadata
     is_iterative::Bool=false,
@@ -546,12 +692,31 @@ function save_optimization_run(bidding_zone::String, date::Date, order_method::S
     iterations=nothing,
     converged=nothing,
     final_price_change=nothing,
-    final_flow_change_pct=nothing)
+    final_flow_change_pct=nothing,
+    # Tier 1: clearing mode
+    clearing_mode::Union{String,Nothing}=nothing,
+    # Tier 2: methodology parameters
+    markup_factor::Union{Float64,Nothing}=nothing,
+    bidding_strategy::Union{String,Nothing}=nothing,
+    demand_price::Union{Float64,Nothing}=nothing,
+    mip_gap::Union{Float64,Nothing}=nothing,
+    time_limit_seconds_param::Union{Float64,Nothing}=nothing,
+    curtailment_penalty::Union{Float64,Nothing}=nothing,
+    excess_penalty::Union{Float64,Nothing}=nothing,
+    shortage_penalty::Union{Float64,Nothing}=nothing,
+    use_inferred_params::Union{Bool,Nothing}=nothing,
+    cost_model_version::Union{String,Nothing}=nothing,
+    # Tier 3: iterative input settings
+    price_tolerance::Union{Float64,Nothing}=nothing,
+    damping_factor::Union{Float64,Nothing}=nothing,
+    max_iterations_setting::Union{Int,Nothing}=nothing)
 
     # Create schema and table if requested
     if create_schema
         ensure_energy_prices_table()  # This now creates both tables
     end
+
+    _or_missing(x) = x === nothing ? missing : x
 
     try
         run_id = withdb() do cnx
@@ -560,9 +725,19 @@ function save_optimization_run(bidding_zone::String, date::Date, order_method::S
             (bidding_zone, optimization_date, order_method, model_type, optimizer, status,
              objective_value, solve_time_seconds, num_orders, num_price_periods, error_message,
              code_version, created_at,
-             is_iterative, total_time_seconds, iterations, converged, final_price_change, final_flow_change_pct)
+             is_iterative, total_time_seconds, iterations, converged, final_price_change, final_flow_change_pct,
+             clearing_mode,
+             markup_factor, bidding_strategy, demand_price, mip_gap, time_limit_seconds,
+             curtailment_penalty, excess_penalty, shortage_penalty,
+             use_inferred_params, cost_model_version,
+             price_tolerance, damping_factor, max_iterations_setting)
             VALUES (\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8, \$9, \$10, \$11, \$12, \$13,
-                    \$14, \$15, \$16, \$17, \$18, \$19)
+                    \$14, \$15, \$16, \$17, \$18, \$19,
+                    \$20,
+                    \$21, \$22, \$23, \$24, \$25,
+                    \$26, \$27, \$28,
+                    \$29, \$30,
+                    \$31, \$32, \$33)
             RETURNING id
             """
 
@@ -573,19 +748,33 @@ function save_optimization_run(bidding_zone::String, date::Date, order_method::S
                 string(model_type),
                 optimizer,
                 string(status),
-                objective_value === nothing ? missing : objective_value,
-                solve_time_seconds === nothing ? missing : solve_time_seconds,
-                num_orders === nothing ? missing : num_orders,
-                num_price_periods === nothing ? missing : num_price_periods,
-                error_message === nothing ? missing : error_message,
+                _or_missing(objective_value),
+                _or_missing(solve_time_seconds),
+                _or_missing(num_orders),
+                _or_missing(num_price_periods),
+                _or_missing(error_message),
                 code_version,
                 now(UTC),
                 is_iterative,
-                total_time_seconds === nothing ? missing : total_time_seconds,
-                iterations === nothing ? missing : iterations,
-                converged === nothing ? missing : converged,
-                final_price_change === nothing ? missing : final_price_change,
-                final_flow_change_pct === nothing ? missing : final_flow_change_pct
+                _or_missing(total_time_seconds),
+                _or_missing(iterations),
+                _or_missing(converged),
+                _or_missing(final_price_change),
+                _or_missing(final_flow_change_pct),
+                _or_missing(clearing_mode),
+                _or_missing(markup_factor),
+                _or_missing(bidding_strategy),
+                _or_missing(demand_price),
+                _or_missing(mip_gap),
+                _or_missing(time_limit_seconds_param),
+                _or_missing(curtailment_penalty),
+                _or_missing(excess_penalty),
+                _or_missing(shortage_penalty),
+                _or_missing(use_inferred_params),
+                _or_missing(cost_model_version),
+                _or_missing(price_tolerance),
+                _or_missing(damping_factor),
+                _or_missing(max_iterations_setting),
             ])
 
             # Get the returned ID
@@ -958,4 +1147,38 @@ function ensure_indexes()
     end
 
     @info "Indexes ensured successfully"
+end
+
+"""
+    get_actual_day_ahead_prices(bidding_zone::String, day::Date) -> Dict{String, Float64}
+
+Fetch actual ENTSO-E day-ahead prices from `entsoe.energy_prices` and return them
+in the same `Dict{String, Float64}` format as simulated prices (timeslot "YYYYMMDD-HHMM" => price).
+
+Returns an empty Dict if no data is found.
+"""
+function get_actual_day_ahead_prices(bidding_zone::String, day::Dates.Date)::Dict{String, Float64}
+    query = """
+    SELECT date_time_utc, resolution_code, price_currency_mwh
+    FROM entsoe.energy_prices
+    WHERE map_code = \$1
+      AND DATE(date_time_utc) = \$2
+    ORDER BY date_time_utc
+    """
+
+    df = sql2df_with_retry(query, [bidding_zone, day])
+
+    if nrow(df) == 0
+        @warn "No actual day-ahead prices found for $bidding_zone on $day"
+        return Dict{String, Float64}()
+    end
+
+    prices = Dict{String, Float64}()
+    for row in eachrow(df)
+        dt = row.date_time_utc
+        timeslot = Dates.format(DateTime(dt), dateformat"yyyymmdd-HHMM")
+        prices[timeslot] = Float64(row.price_currency_mwh)
+    end
+
+    return prices
 end

@@ -186,7 +186,7 @@ function create_adjusted_order_book(
         # Create the MPCC order book
         nodes = [bidding_zone]
         periods = target_timeslots  # Use actual target timeslots at finest resolution
-        price_limits = (-1000.0, 3000.0)  # Allow more negative prices to see natural market clearing
+        price_limits = (-500.0, 3000.0)  # Aligned with European day-ahead market limits
 
         order_book = MPCCOrderBook(orders, nodes, periods, price_limits, nothing)
 

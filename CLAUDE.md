@@ -27,7 +27,8 @@ The main module `Euphemia` provides:
 - `src/MarketOrders.jl` - Order types (SimpleOrder, BlockOrder)
 - `src/AlternativeOrderBook.jl` - Alternative (faster) order book generation
 - `src/Generators.jl`, `src/Loads.jl`, `src/Renewables.jl` - Data models
-- `src/dbutils.jl` - Database connection and data access
+- `src/PriceValidation.jl` - Price comparison and validation against actual ENTSO-E prices
+- `src/dbutils.jl` - Database connection and data access (`CURRENT_CODE_VERSION = 4`)
 
 ### Key Functions
 
@@ -381,6 +382,25 @@ Solver tuning parameters (solver-agnostic via MOI):
 - `time_limit`: Maximum solve time in seconds (default 600 = 10 min). Returns best solution found within time budget.
 - `use_inferred_params`: Use plant-specific parameters inferred from historical data (default: true). When enabled, the solver uses `get_generators_with_inferred_params()` which provides plant-specific ramp rates, p_min, and uptime/downtime constraints. When disabled, uses fuel-type defaults from `FuelTypeParameters`.
 
+**Marginal cost model (heat-rate-based):**
+
+Generator marginal costs are calculated using a physically grounded heat-rate model:
+```
+marginal_cost = fuel_price / efficiency + CO2_price × emission_factor / efficiency + VOM
+```
+
+Key functions in `src/Generators.jl`:
+- `get_marginal_cost(day, fuel_type, bidding_zone)` — returns EUR/MWh_e for a generator
+- `get_fuel_price(day, fuel_type)` — annual-average fuel prices (EUR/MWh_thermal) by year
+- `get_co2_price(day)` — EU ETS CO2 price (EUR/tonne) by year
+- `CostParameters` struct with per-fuel-type efficiency, emission factor, and VOM
+- `COST_PARAMETERS` dict mapping fuel type strings to `CostParameters`
+
+Expected prices (2024): Gas CCGT ~84, Lignite ~86, Hard coal ~103, Nuclear ~31 EUR/MWh.
+
+The BiddingStrategy module applies a separate 10% markup (`markup_factor=1.1`) when
+converting UC results to market bids. This is the only markup applied.
+
 Unit commitment objective function components:
 - **Production costs**: `marginal_cost × generation` for each generator and period
 - **Startup costs**: Temperature-dependent (hot × 1.0, warm × 1.5, cold × 2.5 base cost)
@@ -586,6 +606,25 @@ When `parallel=true` in `run_multi_zone_market_clearing()`:
 - Override with explicit `max_workers=N` if needed
 - "Max distributed workers" is unrelated (for Gurobi's distributed MIP, not parallel independent solves)
 
+**Price validation:**
+```julia
+# Fetch actual ENTSO-E day-ahead prices
+actual = get_actual_day_ahead_prices("GR", Date(2024, 6, 15))
+
+# Compare simulated vs actual prices
+result = compare_prices(simulated_prices, actual_prices)
+result.mae          # Mean Absolute Error (EUR/MWh)
+result.rmse         # Root Mean Squared Error
+result.mape         # Mean Absolute Percentage Error (%)
+result.correlation  # Pearson correlation
+result.bias         # Mean bias (simulated - actual)
+
+# Convenience wrapper (fetches from DB)
+validate_energy_prices("GR", Date(2024, 6, 15); order_method=:uc_based)
+```
+
+Batch validation script: `julia --project=. test/scripts/validate_prices.jl`
+
 ## GitHub Actions / CI
 
 The project includes several GitHub workflows for automated price generation:
@@ -789,16 +828,24 @@ The project uses PostgreSQL with two main schemas:
 
 **`simulations.energy_prices`** - Generated energy price results by bidding zone, date, and time period
 - `clearing_mode`: Distinguishes between `'single_zone'` (independent zone clearing), `'multi_zone'` (joint clearing with transmission), and `'multi_zone_iterative'` (iterative UC-MPCC feedback loop)
+- `optimizer`: Solver used ("highs", "gurobi", etc.) — part of unique constraint so HiGHS vs Gurobi results coexist
 - `optimization_run_id`: Foreign key to `optimization_runs` table for traceability
-- `code_version`: Schema version (current: 3)
-- Unique on `(date_time_utc, bidding_zone, contract_type, order_method, clearing_mode, code_version)` - allows storing results from different clearing modes side by side
+- `code_version`: Schema version (current: `CURRENT_CODE_VERSION = 4`)
+- Unique on `(date_time_utc, bidding_zone, contract_type, order_method, clearing_mode, code_version, optimizer)` - allows storing results from different clearing modes and solvers side by side
 
 **`simulations.optimization_runs`** - Optimization run metadata including status, solver info, and performance metrics
 - For single-zone runs: `bidding_zone` contains the zone code (e.g., "GR")
 - For multi-zone runs: `bidding_zone` is set to "MULTI_ZONE"
 - For iterative runs: `bidding_zone` is set to "MULTI_ZONE_ITERATIVE"
 - Contains `optimizer`, `solve_time_seconds`, `objective_value`, etc.
-- Unique on `(bidding_zone, optimization_date, order_method, model_type, code_version, optimizer)` - allows comparing different solvers
+- Unique on `(bidding_zone, optimization_date, order_method, model_type, clearing_mode, code_version, optimizer)`
+- **Tier 1 identifier**: `clearing_mode` — `'single_zone'`, `'multi_zone'`, `'multi_zone_iterative'`
+- **Tier 2 methodology parameters** (stored as individual typed columns):
+  - `markup_factor` (default 1.1), `bidding_strategy` (default 'committed_only')
+  - `demand_price` (default 500.0), `mip_gap` (default 0.01), `time_limit_seconds` (default 600.0)
+  - `curtailment_penalty` (default 1.0), `excess_penalty` (default 10000.0), `shortage_penalty` (default 10000.0)
+  - `use_inferred_params` (default true), `cost_model_version` (default 'v2')
+- **Tier 3 iterative input settings**: `price_tolerance`, `damping_factor`, `max_iterations_setting`
 - **Iterative optimization metadata** (for UC-MPCC iterative runs):
   - `is_iterative`: Boolean flag indicating iterative optimization
   - `total_time_seconds`: Total time for all iterations including UC solves

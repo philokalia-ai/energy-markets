@@ -396,46 +396,155 @@ function get_min_active_capacity(max_capacity::Float64, fuel_type::Symbol)
 end
 
 
-function get_marginal_cost(day::Dates.Date, fuel_type::String, bidding_zone::String="GR")
-    # Realistic marginal costs based on fuel type and market conditions
-    # Updated for 2025 European energy crisis and carbon pricing
+"""
+    CostParameters
 
-    # Base fuel costs (€/MWh) - post-Ukraine war pricing with carbon costs
-    fuel_costs = Dict(
-        "Hydro Water Reservoir" => 12.0,           # Low but includes O&M + opportunity cost
-        "Hydro Run-of-river and poundage" => 8.0,  # Low but includes O&M
-        "Hydro Pumped Storage" => 25.0,            # Higher due to pumping costs
-        "Fossil Brown coal/Lignite" => 95.0,       # High due to carbon pricing (€80/tonne CO₂)
-        "Fossil Gas" => 140.0,                     # High gas prices + carbon costs
-        "Nuclear" => 35.0,                         # Low fuel but high fixed costs
-        "Fossil Oil" => 180.0,                     # Very expensive fuel + carbon
-        "Fossil Hard coal" => 110.0,               # Coal price + carbon pricing
-        "Wind Onshore" => 5.0,                     # Very low - no fuel cost, just O&M
-        "Wind Offshore" => 8.0,                    # Very low - no fuel cost, higher O&M
-        "Solar" => 3.0,                           # Very low - no fuel cost
-        "Biomass" => 85.0,                        # Biomass fuel cost + carbon neutral benefit
-        "Waste" => 65.0,                          # Waste processing costs
-        "Geothermal" => 25.0,                     # Low - geothermal energy + O&M
-        "Other" => 120.0                          # Default fallback - assume gas-like
+Per-fuel-type cost model parameters for heat-rate-based marginal cost calculation.
+
+Fields:
+- `efficiency`: Thermal efficiency (MWh_e / MWh_th), 1.0 for non-thermal
+- `emission_factor`: CO2 emissions per unit of thermal input (tCO2/MWh_th)
+- `vom`: Variable operations & maintenance cost (EUR/MWh_e)
+"""
+struct CostParameters
+    efficiency::Float64
+    emission_factor::Float64  # tCO2/MWh_thermal
+    vom::Float64              # EUR/MWh_electric
+end
+
+"""
+    COST_PARAMETERS
+
+Per-fuel-type cost parameters for heat-rate-based marginal cost calculation.
+
+Efficiency values represent typical fleet averages for European power plants.
+Emission factors are based on IPCC defaults for each fuel type.
+VOM costs include maintenance, consumables, and (for hydro reservoir) opportunity cost.
+"""
+const COST_PARAMETERS = Dict{String, CostParameters}(
+    "Fossil Gas"                       => CostParameters(0.55, 0.202, 2.0),
+    "Fossil Hard coal"                 => CostParameters(0.40, 0.341, 3.0),
+    "Fossil Brown coal/Lignite"        => CostParameters(0.35, 0.364, 4.0),
+    "Nuclear"                          => CostParameters(0.33, 0.0,   10.0),
+    "Fossil Oil"                       => CostParameters(0.38, 0.264, 3.5),
+    "Fossil Oil shale"                 => CostParameters(0.35, 0.264, 4.0),
+    "Fossil Peat"                      => CostParameters(0.35, 0.364, 4.0),
+    "Fossil Coal-derived gas"          => CostParameters(0.42, 0.341, 3.0),
+    "Hydro Water Reservoir"            => CostParameters(1.0,  0.0,   15.0),  # includes opportunity cost
+    "Hydro Run-of-river and poundage"  => CostParameters(1.0,  0.0,   2.0),
+    "Hydro Run-of-river and pondage"   => CostParameters(1.0,  0.0,   2.0),
+    "Hydro Pumped Storage"             => CostParameters(0.78, 0.0,   2.0),
+    "Wind Onshore"                     => CostParameters(1.0,  0.0,   1.5),
+    "Wind Offshore"                    => CostParameters(1.0,  0.0,   2.5),
+    "Solar"                            => CostParameters(1.0,  0.0,   0.5),
+    "Biomass"                          => CostParameters(0.30, 0.0,   5.0),
+    "Waste"                            => CostParameters(0.30, 0.0,   4.0),
+    "Geothermal"                       => CostParameters(1.0,  0.0,   5.0),
+    "Energy storage"                   => CostParameters(0.90, 0.0,   1.0),
+    "Other renewable"                  => CostParameters(1.0,  0.0,   2.0),
+    "Other"                            => CostParameters(0.45, 0.15,  3.0),
+)
+
+"""
+    get_fuel_price(day::Date, fuel_type::String) -> Float64
+
+Returns the fuel price in EUR/MWh_thermal for the given fuel type and year.
+Uses annual-average commodity prices as a pragmatic first step.
+
+For zero-fuel-cost technologies (hydro, wind, solar, etc.) returns 0.0.
+"""
+function get_fuel_price(day::Dates.Date, fuel_type::String)::Float64
+    year = Dates.year(day)
+
+    # Technologies with zero fuel cost
+    zero_fuel_types = Set([
+        "Hydro Water Reservoir", "Hydro Run-of-river and poundage",
+        "Hydro Run-of-river and pondage", "Hydro Pumped Storage",
+        "Wind Onshore", "Wind Offshore", "Solar",
+        "Geothermal", "Energy storage", "Other renewable"
+    ])
+    if fuel_type in zero_fuel_types
+        return 0.0
+    end
+
+    # Annual-average fuel prices (EUR/MWh_thermal)
+    # Sources: TTF hub for gas, ARA for coal, Platts for oil, industry estimates for others
+    fuel_prices_by_year = Dict{String, Dict{Int, Float64}}(
+        "Fossil Gas"              => Dict(2022 => 120.0, 2023 => 40.0, 2024 => 32.0, 2025 => 35.0, 2026 => 35.0),
+        "Fossil Hard coal"        => Dict(2022 => 50.0,  2023 => 25.0, 2024 => 18.0, 2025 => 16.0, 2026 => 16.0),
+        "Fossil Brown coal/Lignite" => Dict(2022 => 6.0, 2023 => 5.0,  2024 => 5.0,  2025 => 5.0,  2026 => 5.0),
+        "Fossil Peat"             => Dict(2022 => 7.0,   2023 => 6.0,  2024 => 6.0,  2025 => 6.0,  2026 => 6.0),
+        "Fossil Coal-derived gas" => Dict(2022 => 50.0,  2023 => 25.0, 2024 => 18.0, 2025 => 16.0, 2026 => 16.0),
+        "Fossil Oil"              => Dict(2022 => 55.0,  2023 => 45.0, 2024 => 40.0, 2025 => 38.0, 2026 => 38.0),
+        "Fossil Oil shale"        => Dict(2022 => 55.0,  2023 => 45.0, 2024 => 40.0, 2025 => 38.0, 2026 => 38.0),
+        "Nuclear"                 => Dict(2022 => 7.0,   2023 => 7.0,  2024 => 7.0,  2025 => 7.0,  2026 => 7.0),
+        "Biomass"                 => Dict(2022 => 30.0,  2023 => 25.0, 2024 => 22.0, 2025 => 20.0, 2026 => 20.0),
+        "Waste"                   => Dict(2022 => 10.0,  2023 => 8.0,  2024 => 8.0,  2025 => 8.0,  2026 => 8.0),
+        "Other"                   => Dict(2022 => 60.0,  2023 => 30.0, 2024 => 25.0, 2025 => 25.0, 2026 => 25.0),
     )
 
-    # Market bid markup (generators don't bid marginal cost in real markets)
-    bid_markup_multiplier = 2.2  # Generators typically bid 1.5-3x marginal cost
+    prices = get(fuel_prices_by_year, fuel_type, nothing)
+    if prices === nothing
+        @warn "No fuel price data for fuel type '$fuel_type', using gas prices as fallback"
+        prices = fuel_prices_by_year["Fossil Gas"]
+    end
 
-    # Add seasonal/temporal variations (summer 2025)
-    summer_multiplier = 1.15  # Higher costs in summer due to cooling demand + tight supply
+    # Clamp to available year range
+    available_years = sort(collect(keys(prices)))
+    clamped_year = clamp(year, first(available_years), last(available_years))
+    return prices[clamped_year]
+end
 
-    # Get base cost for fuel type
-    base_cost = get(fuel_costs, fuel_type, 120.0)  # Default to gas-like if not found
+"""
+    get_co2_price(day::Date) -> Float64
 
-    # Apply market markup and seasonal adjustment
-    market_cost = base_cost * bid_markup_multiplier * summer_multiplier
+Returns the EU ETS CO2 allowance price in EUR/tonne for the given year.
+Uses annual-average EUA settlement prices.
+"""
+function get_co2_price(day::Dates.Date)::Float64
+    year = Dates.year(day)
 
-    # Add some daily variation based on day of year (simple sine wave)
-    day_of_year = Dates.dayofyear(day)
-    daily_variation = 1.0 + 0.15 * sin(2π * day_of_year / 365)  # ±15% variation
+    co2_prices = Dict{Int, Float64}(
+        2022 => 80.0,
+        2023 => 85.0,
+        2024 => 65.0,
+        2025 => 70.0,
+        2026 => 70.0,
+    )
 
-    return market_cost * daily_variation
+    available_years = sort(collect(keys(co2_prices)))
+    clamped_year = clamp(year, first(available_years), last(available_years))
+    return co2_prices[clamped_year]
+end
+
+"""
+    get_marginal_cost(day::Date, fuel_type::String, bidding_zone::String="") -> Float64
+
+Calculate marginal cost using a heat-rate-based model:
+
+    marginal_cost = fuel_price / efficiency + CO2_price × emission_factor / efficiency + VOM
+
+This produces physically grounded costs (e.g., gas CCGT ~84 EUR/MWh in 2024)
+rather than the previous hardcoded approach. The BiddingStrategy module applies
+a separate 10% markup when converting to market bids.
+"""
+function get_marginal_cost(day::Dates.Date, fuel_type::String, bidding_zone::String="")
+    # Look up cost parameters for this fuel type
+    params = get(COST_PARAMETERS, fuel_type, nothing)
+    if params === nothing
+        @warn "No cost parameters for fuel type '$fuel_type', using 'Other' defaults"
+        params = COST_PARAMETERS["Other"]
+    end
+
+    fuel_price = get_fuel_price(day, fuel_type)
+    co2_price = get_co2_price(day)
+
+    # Heat-rate-based marginal cost formula
+    marginal_cost = fuel_price / params.efficiency +
+                    co2_price * params.emission_factor / params.efficiency +
+                    params.vom
+
+    return marginal_cost
 end
 
 # pull from postgres, for now only active units of given date (I think)

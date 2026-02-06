@@ -269,6 +269,8 @@ using .MPCC: compute_max_price_change, compute_max_relative_flow_change  # Price
 include("AlternativeOrderBook.jl")
 using .AlternativeOrderBook: create_adjusted_order_book, AdjustedOrderBookResult, print_order_book_summary
 
+include("PriceValidation.jl")
+
 # ===== EXPORTS =====
 # All module exports are centralized here following Julia best practices
 # Exports come after includes so all symbols are defined before being exported
@@ -319,6 +321,9 @@ export generate_market_orders_from_uc, apply_bidding_strategy_to_uc, UCToBidsRes
 # Fuel type parameters
 export FuelTypeParameters, get_fuel_type_parameters, apply_fuel_type_constraints!
 
+# Cost model
+export CostParameters, COST_PARAMETERS, get_fuel_price, get_co2_price, get_marginal_cost
+
 # Temporal resolution utilities
 export parse_resolution_to_minutes, determine_finest_resolution, generate_sub_slots_from_source, disaggregate_temporal_data
 
@@ -328,7 +333,12 @@ export euphemia_market_clearing_with_entsoe
 # Energy price generation (unified interface)
 export generate_energy_prices
 
+# Price validation
+export PriceComparisonResult, compare_prices, validate_energy_prices
+export get_actual_day_ahead_prices
+
 # Database utilities
+export CURRENT_CODE_VERSION
 export save_energy_prices, ensure_energy_prices_table, withdb, save_optimization_run
 export save_transmission_flows, ensure_transmission_flows_table  # Multi-zone transmission flows
 export ensure_uc_results_tables  # UC results caching tables
@@ -618,7 +628,8 @@ function generate_energy_prices(bidding_zone::String, date::Date;
                     save_optimization_run(bidding_zone, date, order_method, model, optimizer, mpcc_result.status;
                         solve_time_seconds=solve_time_seconds,
                         num_orders=length(order_book.orders),
-                        error_message="MPCC optimization failed with status: $(mpcc_result.status)")
+                        error_message="MPCC optimization failed with status: $(mpcc_result.status)",
+                        clearing_mode="single_zone")
 
                     error("MPCC optimization failed with status: $(mpcc_result.status)")
                 end
@@ -662,7 +673,10 @@ function generate_energy_prices(bidding_zone::String, date::Date;
                     objective_value=mpcc_result.objective_value,
                     solve_time_seconds=solve_time_seconds,
                     num_orders=length(order_book.orders),
-                    num_price_periods=length(prices))
+                    num_price_periods=length(prices),
+                    clearing_mode="single_zone",
+                    markup_factor=markup_factor,
+                    cost_model_version="v2")
 
                 # Save energy prices to database if requested
                 if save_to_db
@@ -670,6 +684,7 @@ function generate_energy_prices(bidding_zone::String, date::Date;
                         println("   💾 Saving $(length(prices)) price records to database...")
                         records_saved = save_energy_prices(prices, bidding_zone, date, order_method;
                                                            clearing_mode="single_zone",
+                                                           optimizer=optimizer,
                                                            optimization_run_id=optimization_run_id)
                         println("   ✅ Successfully saved $records_saved records to database")
                     catch db_error
@@ -1056,7 +1071,10 @@ function run_multi_zone_market_clearing(date::Date;
                     objective_value=result.objective_value,
                     solve_time_seconds=result.solve_time,
                     num_orders=length(order_book.orders),
-                    num_price_periods=length(order_book.periods)
+                    num_price_periods=length(order_book.periods),
+                    clearing_mode="multi_zone",
+                    markup_factor=markup_factor,
+                    cost_model_version="v2"
                 )
 
                 # Save prices for each zone with the optimization run ID
@@ -1064,6 +1082,7 @@ function run_multi_zone_market_clearing(date::Date;
                     if haskey(result.market_prices, zone)
                         save_energy_prices(result.market_prices[zone], zone, date, order_method;
                                            clearing_mode="multi_zone",
+                                           optimizer=result.solver_name,
                                            optimization_run_id=optimization_run_id)
                     end
                 end
@@ -1317,7 +1336,15 @@ function run_iterative_multi_zone_market_clearing(date::Date;
                 iterations=iteration,
                 converged=converged,
                 final_price_change=final_price_change,
-                final_flow_change_pct=final_flow_change_pct
+                final_flow_change_pct=final_flow_change_pct,
+                # Tier 1+2 parameters
+                clearing_mode="multi_zone_iterative",
+                markup_factor=markup_factor,
+                cost_model_version="v2",
+                # Tier 3: iterative input settings
+                price_tolerance=price_tolerance,
+                damping_factor=damping_factor,
+                max_iterations_setting=max_iterations
             )
 
             # Save prices for each zone with the optimization run ID
@@ -1325,6 +1352,7 @@ function run_iterative_multi_zone_market_clearing(date::Date;
                 if haskey(best_result.market_prices, zone)
                     save_energy_prices(best_result.market_prices[zone], zone, date, :uc_based;
                                        clearing_mode="multi_zone_iterative",
+                                       optimizer=best_result.solver_name,
                                        optimization_run_id=optimization_run_id)
                 end
             end
