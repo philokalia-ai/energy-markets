@@ -117,19 +117,19 @@ try
             )
 
             date_time = time() - date_start
-            total_time += date_time
+            global total_time += date_time
 
             # Track success
-            successful_dates += 1
+            global successful_dates += 1
             if result.converged
-                converged_dates += 1
+                global converged_dates += 1
             end
-            total_iterations += result.iterations
+            global total_iterations += result.iterations
 
             # Collect prices
             for (zone, prices) in result.market_prices
                 append!(all_prices, values(prices))
-                total_zones += 1
+                global total_zones += 1
             end
 
             push!(date_results, (
@@ -148,8 +148,8 @@ try
 
         catch e
             date_time = time() - date_start
-            total_time += date_time
-            failed_dates += 1
+            global total_time += date_time
+            global failed_dates += 1
 
             push!(date_results, (
                 date=date,
