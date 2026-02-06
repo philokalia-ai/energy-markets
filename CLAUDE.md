@@ -590,6 +590,9 @@ The `force_rerun` parameter is passed through the entire call chain:
 - `generate_energy_prices_for_date_range()` → `generate_energy_prices_for_all_zones()` → `generate_energy_prices()` → `create_typed_order_book()` → `generate_market_orders_from_uc()` → `solve_unit_commitment()`
 - `run_multi_zone_for_date_range()` → `run_multi_zone_market_clearing()` → `create_multi_zone_order_book()` → `generate_market_orders_from_uc()` → `solve_unit_commitment()`
 
+**Iterative solver and UC cache:**
+The iterative multi-zone solver uses `use_cache=false` for all UC solves. This is because each iteration adjusts net imports per zone, producing UC results that differ from standalone (no-interconnection) solves. Writing these back to the shared cache would pollute it — subsequent single-zone or multi-zone runs would load net-import-adjusted UC results, which is incorrect. The cache key `(bidding_zone, market_date, code_version)` has no clearing_mode dimension, so the iterative solver opts out entirely.
+
 **Parallel UC execution:**
 When `parallel=true` in `run_multi_zone_market_clearing()`:
 - UC solves for each zone run concurrently using `Distributed.pmap`
@@ -644,8 +647,23 @@ All workflows support `workflow_dispatch` for manual triggering with custom para
 
 The workflows invoke Julia scripts in the `bin/` directory:
 
+- **`bin/main.jl`** - Single-zone market clearing for date ranges
 - **`bin/multi_zone_main.jl`** - Non-iterative multi-zone clearing for date ranges
 - **`bin/iterative_multi_zone_main.jl`** - Iterative UC-MPCC clearing for date ranges
+
+**Common environment variables** (for `bin/main.jl` and `bin/multi_zone_main.jl`):
+- `START_DATE`, `END_DATE`: Date range in YYYY-MM-DD format
+- `PARALLEL`: Enable parallel processing (true/false)
+- `OPTIMIZER`: Solver to use (highs/gurobi)
+- `MAX_WORKERS`: Max parallel workers (0 = auto-detect)
+- `ORDER_METHOD`: Order generation method (uc_based/alternative)
+- `FORCE_RERUN`: Force UC re-solve, bypassing UC results cache (default: false)
+- `SKIP_EXISTING`: Skip dates/zones with existing price data in DB (default: true)
+- `MARKUP_FACTOR`: Price markup factor for supply bids (default: 1.1)
+
+`FORCE_RERUN` and `SKIP_EXISTING` are independent controls:
+- `SKIP_EXISTING` checks `simulations.energy_prices` — skips entire pipeline if prices exist for that date/zone/clearing_mode/code_version
+- `FORCE_RERUN` controls the UC cache in `simulations.uc_results` — re-solves UC fresh instead of loading cached results
 
 **Running locally:**
 ```bash
@@ -655,6 +673,10 @@ export END_DATE="2025-01-07"
 export PARALLEL="true"
 export OPTIMIZER="highs"
 export MAX_WORKERS="0"  # 0 = auto-detect
+export ORDER_METHOD="uc_based"
+export FORCE_RERUN="false"
+export SKIP_EXISTING="true"
+export MARKUP_FACTOR="1.1"
 
 # For iterative (additional params)
 export MAX_ITERATIONS="10"

@@ -1234,12 +1234,12 @@ function run_iterative_multi_zone_market_clearing(date::Date;
         println("📊 Iteration $iter / $max_iterations")
 
         # Step 1: Create order book with current flow expectations
-        # Always use force_rerun=true to get fresh UC with current flow adjustments
+        # Always fresh UC solve — don't load or save to cache, since iterative UC
+        # results include net import adjustments and would pollute the shared cache
         order_book = MPCC.create_multi_zone_order_book(zones, date;
             markup_factor=markup_factor,
             optimizer=optimizer,
-            use_cache=true,
-            force_rerun=true,  # Always fresh solve
+            use_cache=false,
             parallel=parallel,
             max_workers=max_workers,
             net_imports_by_zone=expected_net_imports
@@ -1520,10 +1520,11 @@ function run_multi_zone_for_date_range(start_date::Date, end_date::Date;
                 FROM simulations.energy_prices
                 WHERE order_method = \$1
                 AND clearing_mode = 'multi_zone'
+                AND code_version = \$4
                 AND DATE(date_time_utc) >= \$2
                 AND DATE(date_time_utc) <= \$3
             """
-            existing_df = sql2df(existing_query, [string(order_method), start_date, end_date])
+            existing_df = sql2df(existing_query, [string(order_method), start_date, end_date, CURRENT_CODE_VERSION])
             existing_dates = Set(Date.(existing_df.run_date))
 
             dates_to_process = filter(d -> d ∉ existing_dates, dates)
@@ -1910,8 +1911,9 @@ function generate_energy_prices_for_all_zones(date::Date;
                 WHERE DATE(date_time_utc) = \$1
                 AND order_method = \$2
                 AND clearing_mode = 'single_zone'
+                AND code_version = \$3
             """
-            existing_df = sql2df(existing_query, [date, string(order_method)])
+            existing_df = sql2df(existing_query, [date, string(order_method), CURRENT_CODE_VERSION])
             existing_zones = Set(string(zone) for zone in existing_df.bidding_zone)
 
             zones_to_process = filter(zone -> zone ∉ existing_zones, available_zones)

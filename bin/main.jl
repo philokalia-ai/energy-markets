@@ -13,6 +13,7 @@
 # - MAX_WORKERS: Maximum parallel workers (0 for auto-detect)
 # - ORDER_METHOD: Order generation method (uc_based/alternative)
 # - FORCE_RERUN: Force UC re-solve, bypassing cache (true/false)
+# - SKIP_EXISTING: Skip dates/zones with existing price data (default: true)
 # - MARKUP_FACTOR: Price markup factor for supply bids (default: 1.1)
 
 using Euphemia, Dates
@@ -26,6 +27,7 @@ optimizer = ENV["OPTIMIZER"]
 max_workers_input = ENV["MAX_WORKERS"]
 order_method = Symbol(ENV["ORDER_METHOD"])
 force_rerun = parse(Bool, get(ENV, "FORCE_RERUN", "false"))
+skip_existing = parse(Bool, get(ENV, "SKIP_EXISTING", "true"))
 markup_factor = parse(Float64, get(ENV, "MARKUP_FACTOR", "1.1"))
 
 # Parse max_workers (0 means auto-detect)
@@ -52,6 +54,7 @@ println("👥 Max workers: $(max_workers === nothing ? "auto" : max_workers)")
 println("⚖️ Optimizer: $optimizer")
 println("📋 Order method: $order_method")
 println("🔄 Force rerun: $force_rerun")
+println("⏭️  Skip existing: $skip_existing")
 println("💹 Markup factor: $markup_factor")
 println()
 
@@ -88,7 +91,7 @@ try
         model=:mpcc,
         optimizer=optimizer,
         save_to_db=true,
-        skip_existing=true,
+        skip_existing=skip_existing,
         parallel=use_parallel,
         max_workers=max_workers,
         chunk_size=3,
