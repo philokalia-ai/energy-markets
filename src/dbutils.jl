@@ -166,6 +166,29 @@ function ensure_energy_prices_table()
             END \$\$;
         """)
 
+        # Migrate unique constraint to include clearing_mode (for databases created before clearing_mode was added)
+        LibPQ.execute(cnx, """
+            DO \$\$
+            BEGIN
+                -- Check if the old constraint (without clearing_mode) exists
+                IF EXISTS (
+                    SELECT 1 FROM pg_indexes
+                    WHERE schemaname = 'simulations'
+                    AND tablename = 'energy_prices'
+                    AND indexdef LIKE '%date_time_utc, bidding_zone, contract_type, order_method, code_version)%'
+                    AND indexdef NOT LIKE '%clearing_mode%'
+                ) THEN
+                    -- Drop the old constraint
+                    ALTER TABLE simulations.energy_prices
+                    DROP CONSTRAINT energy_prices_date_time_utc_bidding_zone_contract_type_orde_key;
+                    -- Add the new constraint with clearing_mode
+                    ALTER TABLE simulations.energy_prices
+                    ADD CONSTRAINT energy_prices_unique_record
+                    UNIQUE (date_time_utc, bidding_zone, contract_type, order_method, clearing_mode, code_version);
+                END IF;
+            END \$\$;
+        """)
+
         # Create useful indexes
         LibPQ.execute(
             cnx,
