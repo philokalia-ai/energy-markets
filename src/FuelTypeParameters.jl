@@ -64,6 +64,25 @@ function get_fuel_type_parameters(fuel_type::Symbol)::FuelTypeParameters
             0.15    # no_load_cost_fraction
         )
 
+    elseif fuel_type == Symbol("Fossil Gas OCGT")
+        # Open Cycle Gas Turbine (OCGT) - Fast-start peaker technology
+        # Classified from "Fossil Gas" when capacity ≤ 200 MW
+        return FuelTypeParameters(
+            2,      # cold_startup_time: 2 hours for cold start - fast
+            1,      # warm_startup_time: 1 hour for warm start
+            1,      # hot_startup_time: 1 hour for hot start - very fast
+            1,      # min_uptime: 1 hour minimum run time - peaker
+            1,      # min_downtime: 1 hour minimum off time - peaker
+            0.50,   # ramp_up_rate: 50% per hour - very flexible
+            0.50,   # ramp_down_rate: 50% per hour
+            0.20,   # min_load_factor: Can operate down to 20% capacity
+            0.85,   # part_load_efficiency: 85% efficiency at minimum load
+            4,      # warm_threshold: Warm after 4 hours offline
+            24,     # cold_threshold: Cold after 24 hours offline
+            0.5,    # startup_cost_multiplier: Low startup costs (simple turbine)
+            0.08    # no_load_cost_fraction: Low no-load costs
+        )
+
     elseif fuel_type == Symbol("Fossil Hard coal")
         # Hard Coal - Baseload technology, slow startup, less flexible than gas
         return FuelTypeParameters(

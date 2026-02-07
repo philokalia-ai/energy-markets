@@ -33,6 +33,11 @@ const DUMMY_MARGINAL_COST = 999.9 # A clearly identifiable dummy value
 # Minimum data points required for ramp rate inference
 const MIN_DATA_POINTS_FOR_RAMP_INFERENCE = 100
 
+# Capacity threshold for classifying gas plants as OCGT vs CCGT
+# Plants ≤ this threshold are classified as "Fossil Gas OCGT" (open cycle gas turbines)
+# Plants above this threshold remain "Fossil Gas" (combined cycle)
+const GAS_OCGT_CAPACITY_THRESHOLD_MW = 200.0
+
 # Flexible fuel types that can operate at 0 MW (no minimum generation constraint)
 # These should NOT have p_min inferred from historical data
 const FLEXIBLE_FUEL_TYPES = Set([
@@ -84,6 +89,23 @@ function infer_fuel_type_from_name(name::String, declared_type::Symbol)::Symbol
 
     # No inference possible, return original type
     return declared_type
+end
+
+"""
+    classify_gas_subtype(fuel_type::Symbol, p_max::Float64) -> Symbol
+
+Classify "Fossil Gas" generators into CCGT or OCGT based on capacity.
+Plants ≤ GAS_OCGT_CAPACITY_THRESHOLD_MW (200 MW) are reclassified as
+`Symbol("Fossil Gas OCGT")` (open cycle gas turbines / peakers).
+Larger plants remain `Symbol("Fossil Gas")` (combined cycle).
+
+Non-gas fuel types are returned unchanged.
+"""
+function classify_gas_subtype(fuel_type::Symbol, p_max::Float64)::Symbol
+    if fuel_type != Symbol("Fossil Gas")
+        return fuel_type
+    end
+    return p_max <= GAS_OCGT_CAPACITY_THRESHOLD_MW ? Symbol("Fossil Gas OCGT") : fuel_type
 end
 
 """
@@ -173,8 +195,9 @@ function get_p_min_bounds_category(fuel_type::Symbol)::Symbol
     fuel_str = string(fuel_type)
     if occursin("Lignite", fuel_str) || occursin("coal", lowercase(fuel_str))
         return :coal
+    elseif fuel_type == Symbol("Fossil Gas OCGT")
+        return :gas_ocgt
     elseif occursin("Gas", fuel_str)
-        # Heuristic: larger gas plants tend to be CCGT
         return :gas_ccgt
     else
         return :default
@@ -422,7 +445,8 @@ Emission factors are based on IPCC defaults for each fuel type.
 VOM costs include maintenance, consumables, and (for hydro reservoir) opportunity cost.
 """
 const COST_PARAMETERS = Dict{String, CostParameters}(
-    "Fossil Gas"                       => CostParameters(0.55, 0.202, 2.0),
+    "Fossil Gas"                       => CostParameters(0.55, 0.202, 2.0),  # CCGT
+    "Fossil Gas OCGT"                  => CostParameters(0.35, 0.202, 3.0),  # OCGT: lower efficiency, higher VOM
     "Fossil Hard coal"                 => CostParameters(0.40, 0.341, 3.0),
     "Fossil Brown coal/Lignite"        => CostParameters(0.35, 0.364, 4.0),
     "Nuclear"                          => CostParameters(0.33, 0.0,   10.0),
@@ -471,6 +495,7 @@ function get_fuel_price(day::Dates.Date, fuel_type::String)::Float64
     # Sources: TTF hub for gas, ARA for coal, Platts for oil, industry estimates for others
     fuel_prices_by_year = Dict{String, Dict{Int, Float64}}(
         "Fossil Gas"              => Dict(2022 => 120.0, 2023 => 40.0, 2024 => 32.0, 2025 => 35.0, 2026 => 35.0),
+        "Fossil Gas OCGT"        => Dict(2022 => 120.0, 2023 => 40.0, 2024 => 32.0, 2025 => 35.0, 2026 => 35.0),
         "Fossil Hard coal"        => Dict(2022 => 50.0,  2023 => 25.0, 2024 => 18.0, 2025 => 16.0, 2026 => 16.0),
         "Fossil Brown coal/Lignite" => Dict(2022 => 6.0, 2023 => 5.0,  2024 => 5.0,  2025 => 5.0,  2026 => 5.0),
         "Fossil Peat"             => Dict(2022 => 7.0,   2023 => 6.0,  2024 => 6.0,  2025 => 6.0,  2026 => 6.0),
@@ -716,20 +741,25 @@ function get_generators(map_code::String, day::Dates.Date;
             @info "Reclassified generator $(row.generation_unit_name) from $declared_type to $inferred_type"
         end
 
+        # Classify gas plants into CCGT/OCGT based on capacity
+        p_max = Float64(row.generation_unit_installed_capacity_mw)
+        classified_type = classify_gas_subtype(inferred_type, p_max)
+
+        if classified_type != inferred_type
+            @info "Classified gas generator $(row.generation_unit_name) ($(p_max) MW) as OCGT (≤$(GAS_OCGT_CAPACITY_THRESHOLD_MW) MW)"
+        end
+
         gen = Generator(
             row.generation_unit_code,                    # code
             row.generation_unit_name,                    # name
-            inferred_type,                               # fuel_type (possibly inferred)
+            classified_type,                             # fuel_type (possibly inferred + classified)
             row.generation_unit_location,                # location
-            Float64(row.generation_unit_installed_capacity_mw), # p_max
-            get_min_active_capacity(
-                Float64(row.generation_unit_installed_capacity_mw),
-                inferred_type
-            ), # p_min (fuel-type-specific)
+            p_max,                                       # p_max
+            get_min_active_capacity(p_max, classified_type), # p_min (fuel-type-specific)
             row.area_map_code,                           # bidding_zone
             get_marginal_cost(
                 day,
-                row.generation_unit_type,  # Use original type for cost (BESS still has storage costs)
+                string(classified_type),                 # Use classified type for correct OCGT efficiency
                 row.area_display_name
             )                                           # marginal_cost
         )

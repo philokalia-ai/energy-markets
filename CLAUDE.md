@@ -28,7 +28,7 @@ The main module `Euphemia` provides:
 - `src/AlternativeOrderBook.jl` - Alternative (faster) order book generation
 - `src/Generators.jl`, `src/Loads.jl`, `src/Renewables.jl` - Data models
 - `src/PriceValidation.jl` - Price comparison and validation against actual ENTSO-E prices
-- `src/dbutils.jl` - Database connection and data access (`CURRENT_CODE_VERSION = 4`)
+- `src/dbutils.jl` - Database connection and data access (`CURRENT_CODE_VERSION = 5`)
 
 ### Key Functions
 
@@ -177,6 +177,31 @@ Currently recognized patterns:
 - **BESS/Battery** → `Symbol("Energy storage")`: Matches "BESS", "BATTERY", "BATTERIE", "BATTERI"
 
 Generators that cannot be inferred remain as "Other" with flexible parameters (see FuelTypeParameters below). Unknown "Other" generators are documented in `docs/unknown-other-generators.md` for future research.
+
+**Gas CCGT/OCGT classification:**
+
+ENTSO-E provides a single "Fossil Gas" fuel type with no CCGT/OCGT distinction. The `classify_gas_subtype()` function splits gas plants at generator load time based on capacity:
+
+- **≤ 200 MW** → `Symbol("Fossil Gas OCGT")` — open cycle gas turbine (peaker)
+- **> 200 MW** → `Symbol("Fossil Gas")` — combined cycle (mid-merit)
+
+The threshold `GAS_OCGT_CAPACITY_THRESHOLD_MW = 200.0` is defined in `src/Generators.jl`.
+
+Key parameter differences:
+
+| Parameter | CCGT (>200 MW) | OCGT (≤200 MW) |
+|-----------|----------------|-----------------|
+| Efficiency | 55% | 35% |
+| Marginal cost (2024) | ~84 EUR/MWh | ~140 EUR/MWh |
+| Ramp rate | 25%/h | 50%/h |
+| Min load factor | 35% | 20% |
+| Min uptime | 4h | 1h |
+| Min downtime | 2h | 1h |
+| Cold startup | 6h | 2h |
+
+Classification flows automatically through the entire pipeline — UC, bidding strategy, and market clearing all use the generator's `fuel_type` field, which is set once at load time.
+
+Validation script: `julia --project=. test/scripts/validate_gas_classification.jl`
 
 **Flexible fuel types:**
 
@@ -396,7 +421,7 @@ Key functions in `src/Generators.jl`:
 - `CostParameters` struct with per-fuel-type efficiency, emission factor, and VOM
 - `COST_PARAMETERS` dict mapping fuel type strings to `CostParameters`
 
-Expected prices (2024): Gas CCGT ~84, Lignite ~86, Hard coal ~103, Nuclear ~31 EUR/MWh.
+Expected prices (2024): Gas CCGT ~84, Gas OCGT ~140, Lignite ~86, Hard coal ~103, Nuclear ~31 EUR/MWh.
 
 The BiddingStrategy module applies a separate 10% markup (`markup_factor=1.1`) when
 converting UC results to market bids. This is the only markup applied.
@@ -852,7 +877,7 @@ The project uses PostgreSQL with two main schemas:
 - `clearing_mode`: Distinguishes between `'single_zone'` (independent zone clearing), `'multi_zone'` (joint clearing with transmission), and `'multi_zone_iterative'` (iterative UC-MPCC feedback loop)
 - `optimizer`: Solver used ("highs", "gurobi", etc.) — part of unique constraint so HiGHS vs Gurobi results coexist
 - `optimization_run_id`: Foreign key to `optimization_runs` table for traceability
-- `code_version`: Schema version (current: `CURRENT_CODE_VERSION = 4`)
+- `code_version`: Schema version (current: `CURRENT_CODE_VERSION = 5`)
 - Unique on `(date_time_utc, bidding_zone, contract_type, order_method, clearing_mode, code_version, optimizer)` - allows storing results from different clearing modes and solvers side by side
 
 **`simulations.optimization_runs`** - Optimization run metadata including status, solver info, and performance metrics

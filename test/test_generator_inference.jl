@@ -348,4 +348,71 @@ end
 
 end
 
+# =============================================================================
+# Test CCGT/OCGT Gas Classification
+# =============================================================================
+
+@testset "Gas CCGT/OCGT Classification" begin
+
+    @testset "classify_gas_subtype" begin
+        # Small gas plant → OCGT
+        @test Euphemia.classify_gas_subtype(Symbol("Fossil Gas"), 150.0) == Symbol("Fossil Gas OCGT")
+
+        # Exactly at threshold → OCGT
+        @test Euphemia.classify_gas_subtype(Symbol("Fossil Gas"), 200.0) == Symbol("Fossil Gas OCGT")
+
+        # Above threshold → stays CCGT
+        @test Euphemia.classify_gas_subtype(Symbol("Fossil Gas"), 201.0) == Symbol("Fossil Gas")
+        @test Euphemia.classify_gas_subtype(Symbol("Fossil Gas"), 500.0) == Symbol("Fossil Gas")
+
+        # Non-gas types are unchanged
+        @test Euphemia.classify_gas_subtype(Symbol("Fossil Hard coal"), 100.0) == Symbol("Fossil Hard coal")
+        @test Euphemia.classify_gas_subtype(Symbol("Nuclear"), 50.0) == Symbol("Nuclear")
+        @test Euphemia.classify_gas_subtype(Symbol("Other"), 100.0) == Symbol("Other")
+    end
+
+    @testset "get_p_min_bounds_category for OCGT" begin
+        @test Euphemia.get_p_min_bounds_category(Symbol("Fossil Gas OCGT")) == :gas_ocgt
+        # CCGT still maps correctly
+        @test Euphemia.get_p_min_bounds_category(Symbol("Fossil Gas")) == :gas_ccgt
+    end
+
+    @testset "OCGT FuelTypeParameters" begin
+        params = Euphemia.get_fuel_type_parameters(Symbol("Fossil Gas OCGT"))
+        ccgt_params = Euphemia.get_fuel_type_parameters(Symbol("Fossil Gas"))
+
+        # OCGT should be faster to start than CCGT
+        @test params.hot_startup_time <= ccgt_params.hot_startup_time
+        @test params.cold_startup_time <= ccgt_params.cold_startup_time
+
+        # OCGT should ramp faster
+        @test params.ramp_up_rate >= ccgt_params.ramp_up_rate
+        @test params.ramp_down_rate >= ccgt_params.ramp_down_rate
+
+        # OCGT should have lower min load factor
+        @test params.min_load_factor < ccgt_params.min_load_factor
+
+        # Specific OCGT values
+        @test params.min_load_factor == 0.20
+        @test params.ramp_up_rate == 0.50
+        @test params.min_uptime == 1
+        @test params.min_downtime == 1
+    end
+
+    @testset "OCGT marginal cost higher than CCGT" begin
+        # OCGT has lower efficiency → higher marginal cost for same fuel
+        ocgt_cost = Euphemia.get_marginal_cost(Date(2024, 6, 15), "Fossil Gas OCGT")
+        ccgt_cost = Euphemia.get_marginal_cost(Date(2024, 6, 15), "Fossil Gas")
+
+        @test ocgt_cost > ccgt_cost
+        # OCGT ~140 EUR/MWh vs CCGT ~84 EUR/MWh (2024)
+        @test ocgt_cost > 100.0
+        @test ccgt_cost < 100.0
+    end
+
+    @testset "GAS_OCGT_CAPACITY_THRESHOLD_MW constant" begin
+        @test Euphemia.GAS_OCGT_CAPACITY_THRESHOLD_MW == 200.0
+    end
+end
+
 println("Generator Inference Tests completed!")
