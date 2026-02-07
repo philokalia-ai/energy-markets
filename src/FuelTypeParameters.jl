@@ -64,6 +64,25 @@ function get_fuel_type_parameters(fuel_type::Symbol)::FuelTypeParameters
             0.15    # no_load_cost_fraction
         )
 
+    elseif fuel_type == Symbol("Fossil Gas CHP")
+        # Gas Combined Heat and Power - Heat-led operation with gas turbine
+        # Classified from "Fossil Gas" when name contains CHP keywords (HKW, BHKW, etc.)
+        return FuelTypeParameters(
+            6,      # cold_startup_time: 6 hours for cold start (same as CCGT)
+            4,      # warm_startup_time: 4 hours for warm start
+            2,      # hot_startup_time: 2 hours for hot start
+            6,      # min_uptime: 6 hours minimum run time - heat obligations
+            3,      # min_downtime: 3 hours minimum off time
+            0.20,   # ramp_up_rate: 20% per hour - heat extraction constrains ramping
+            0.20,   # ramp_down_rate: 20% per hour
+            0.40,   # min_load_factor: 40% - must maintain heat output
+            0.88,   # part_load_efficiency: 88% efficiency at minimum load
+            8,      # warm_threshold: Warm after 8 hours offline
+            48,     # cold_threshold: Cold after 48 hours offline
+            1.0,    # startup_cost_multiplier
+            0.18    # no_load_cost_fraction: slightly higher than CCGT (heat system)
+        )
+
     elseif fuel_type == Symbol("Fossil Gas OCGT")
         # Open Cycle Gas Turbine (OCGT) - Fast-start peaker technology
         # Classified from "Fossil Gas" when capacity ≤ 200 MW

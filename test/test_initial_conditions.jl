@@ -52,14 +52,21 @@ end
     end
 
     @testset "Mid-merit plants (CCGT)" begin
-        ic = Euphemia.get_default_initial_conditions(Symbol("Fossil Gas - CCGT"))
+        ic = Euphemia.get_default_initial_conditions(Symbol("Fossil Gas"))
         @test ic.is_on == false
         @test ic.hours_off > 0
         @test ic.thermal_state == :hot  # Recently off, still warm
     end
 
+    @testset "CHP plants (heat-led, assumed running)" begin
+        ic = Euphemia.get_default_initial_conditions(Symbol("Fossil Gas CHP"))
+        @test ic.is_on == true
+        @test ic.thermal_state == :hot
+        @test ic.hours_on > 0
+    end
+
     @testset "Peaker plants (OCGT)" begin
-        ic = Euphemia.get_default_initial_conditions(Symbol("Fossil Gas"))
+        ic = Euphemia.get_default_initial_conditions(Symbol("Fossil Gas OCGT"))
         @test ic.is_on == false
         @test ic.hours_off > 0
     end

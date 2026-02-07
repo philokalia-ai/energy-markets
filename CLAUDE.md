@@ -178,28 +178,33 @@ Currently recognized patterns:
 
 Generators that cannot be inferred remain as "Other" with flexible parameters (see FuelTypeParameters below). Unknown "Other" generators are documented in `docs/unknown-other-generators.md` for future research.
 
-**Gas CCGT/OCGT classification:**
+**Gas CCGT/CHP/OCGT 3-class classification:**
 
-ENTSO-E provides a single "Fossil Gas" fuel type with no CCGT/OCGT distinction. The `classify_gas_subtype()` function splits gas plants at generator load time based on capacity:
+ENTSO-E provides a single "Fossil Gas" fuel type. The `classify_gas_subtype()` function splits gas plants into 3 classes at generator load time using a two-stage pipeline:
 
-- **≤ 200 MW** → `Symbol("Fossil Gas OCGT")` — open cycle gas turbine (peaker)
-- **> 200 MW** → `Symbol("Fossil Gas")` — combined cycle (mid-merit)
+**Stage 1 — Name-based classification (at generator load time):**
+1. CCGT keywords (GuD, CCGT, "combined cycle", Combicycle) → `Symbol("Fossil Gas")` (CCGT)
+   - CCGT overrides CHP — a CCGT-CHP plant still has combined cycle efficiency
+2. CHP keywords (HKW, BHKW, KWK, CHP, Coge, Heizkraft, Elektrociep, Warmekraft, EC with word boundaries) → `Symbol("Fossil Gas CHP")`
+3. Capacity fallback: >200 MW → CCGT, ≤200 MW → `Symbol("Fossil Gas OCGT")`
 
-The threshold `GAS_OCGT_CAPACITY_THRESHOLD_MW = 200.0` is defined in `src/Generators.jl`.
+**Stage 2 — Behavioral validation (at inference time):**
+`validate_gas_classification()` runs inside `infer_parameters_for_generator()` and can correct misclassifications based on historical generation patterns (capacity factor, starts/week, run duration). CHP (name-based) is high-confidence and not overridden.
 
 Key parameter differences:
 
-| Parameter | CCGT (>200 MW) | OCGT (≤200 MW) |
-|-----------|----------------|-----------------|
-| Efficiency | 55% | 35% |
-| Marginal cost (2024) | ~84 EUR/MWh | ~140 EUR/MWh |
-| Ramp rate | 25%/h | 50%/h |
-| Min load factor | 35% | 20% |
-| Min uptime | 4h | 1h |
-| Min downtime | 2h | 1h |
-| Cold startup | 6h | 2h |
+| Parameter | CCGT | CHP | OCGT |
+|-----------|------|-----|------|
+| Symbol | `Fossil Gas` | `Fossil Gas CHP` | `Fossil Gas OCGT` |
+| Efficiency | 55% | 48% | 35% |
+| Marginal cost (2024) | ~84 EUR/MWh | ~97 EUR/MWh | ~140 EUR/MWh |
+| Ramp rate | 25%/h | 20%/h | 50%/h |
+| Min load factor | 35% | 40% | 20% |
+| Min uptime | 4h | 6h | 1h |
+| Min downtime | 2h | 3h | 1h |
+| Cold startup | 6h | 6h | 2h |
 
-Classification flows automatically through the entire pipeline — UC, bidding strategy, and market clearing all use the generator's `fuel_type` field, which is set once at load time.
+Classification flows automatically through the entire pipeline — UC, bidding strategy, and market clearing all use the generator's `fuel_type` field.
 
 Validation script: `julia --project=. test/scripts/validate_gas_classification.jl`
 
@@ -421,7 +426,7 @@ Key functions in `src/Generators.jl`:
 - `CostParameters` struct with per-fuel-type efficiency, emission factor, and VOM
 - `COST_PARAMETERS` dict mapping fuel type strings to `CostParameters`
 
-Expected prices (2024): Gas CCGT ~84, Gas OCGT ~140, Lignite ~86, Hard coal ~103, Nuclear ~31 EUR/MWh.
+Expected prices (2024): Gas CCGT ~84, Gas CHP ~97, Gas OCGT ~140, Lignite ~86, Hard coal ~103, Nuclear ~31 EUR/MWh.
 
 The BiddingStrategy module applies a separate 10% markup (`markup_factor=1.1`) when
 converting UC results to market bids. This is the only markup applied.

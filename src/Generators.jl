@@ -38,6 +38,19 @@ const MIN_DATA_POINTS_FOR_RAMP_INFERENCE = 100
 # Plants above this threshold remain "Fossil Gas" (combined cycle)
 const GAS_OCGT_CAPACITY_THRESHOLD_MW = 200.0
 
+# Name-based keyword patterns for 3-class gas plant classification (CCGT / CHP / OCGT)
+# CCGT keywords (match anywhere, case-insensitive) — combined cycle indicators
+const GAS_CCGT_NAME_PATTERNS = ["GUD", "CCGT", "COMBINED CYCLE", "COMBICYCLE"]
+
+# CHP keywords (match anywhere, case-insensitive) — combined heat and power indicators
+const GAS_CHP_NAME_PATTERNS = ["HKW", "BHKW", "KWK", "CHP", "COGE", "HEIZKRAFT", "ELEKTROCIEP", "WARMEKRAFT"]
+
+# Polish "EC" prefix requires word-boundary matching to avoid false positives (SECTOR, ELECTRIC)
+const GAS_CHP_EC_PATTERN = r"(^|[\s_\-])EC([\s_\-]|$)"i
+
+# Set of all gas fuel type symbols for quick membership checks
+const GAS_FUEL_TYPES = Set([Symbol("Fossil Gas"), Symbol("Fossil Gas CHP"), Symbol("Fossil Gas OCGT")])
+
 # Flexible fuel types that can operate at 0 MW (no minimum generation constraint)
 # These should NOT have p_min inferred from historical data
 const FLEXIBLE_FUEL_TYPES = Set([
@@ -92,20 +105,117 @@ function infer_fuel_type_from_name(name::String, declared_type::Symbol)::Symbol
 end
 
 """
-    classify_gas_subtype(fuel_type::Symbol, p_max::Float64) -> Symbol
+    classify_gas_subtype(fuel_type::Symbol, p_max::Float64, name::String="") -> Symbol
 
-Classify "Fossil Gas" generators into CCGT or OCGT based on capacity.
-Plants ≤ GAS_OCGT_CAPACITY_THRESHOLD_MW (200 MW) are reclassified as
-`Symbol("Fossil Gas OCGT")` (open cycle gas turbines / peakers).
-Larger plants remain `Symbol("Fossil Gas")` (combined cycle).
+Classify "Fossil Gas" generators into CCGT, CHP, or OCGT using a decision tree:
+1. Name has CCGT keyword (GuD, CCGT, combined cycle) → CCGT (stays "Fossil Gas")
+   CCGT overrides CHP — a CCGT-CHP plant still has combined cycle efficiency.
+2. Name has CHP keyword (HKW, BHKW, KWK, CHP, Coge, EC...) → "Fossil Gas CHP"
+3. Capacity fallback: >200 MW → CCGT, ≤200 MW → OCGT
 
 Non-gas fuel types are returned unchanged.
+The `name` parameter defaults to "" to preserve backward compatibility for 2-arg calls.
 """
-function classify_gas_subtype(fuel_type::Symbol, p_max::Float64)::Symbol
+function classify_gas_subtype(fuel_type::Symbol, p_max::Float64, name::String="")::Symbol
     if fuel_type != Symbol("Fossil Gas")
         return fuel_type
     end
-    return p_max <= GAS_OCGT_CAPACITY_THRESHOLD_MW ? Symbol("Fossil Gas OCGT") : fuel_type
+
+    name_upper = uppercase(name)
+
+    # Step 1: Check CCGT keywords (highest priority — overrides CHP)
+    for pattern in GAS_CCGT_NAME_PATTERNS
+        if occursin(pattern, name_upper)
+            return Symbol("Fossil Gas")  # CCGT
+        end
+    end
+
+    # Step 2: Check CHP keywords
+    for pattern in GAS_CHP_NAME_PATTERNS
+        if occursin(pattern, name_upper)
+            return Symbol("Fossil Gas CHP")
+        end
+    end
+    # Polish "EC" with word boundaries
+    if occursin(GAS_CHP_EC_PATTERN, name)
+        return Symbol("Fossil Gas CHP")
+    end
+
+    # Step 3: Capacity fallback
+    return p_max <= GAS_OCGT_CAPACITY_THRESHOLD_MW ? Symbol("Fossil Gas OCGT") : Symbol("Fossil Gas")
+end
+
+"""
+    validate_gas_classification(gen::Generator, historical::DataFrame) -> Symbol
+
+Behavioral validation of gas plant classification using historical generation data.
+Only reclassifies when behavioral signal STRONGLY contradicts the current class.
+
+Runs during parameter inference (which already has historical data loaded).
+CHP (name-based) is high-confidence and is NOT overridden by behavior.
+
+Returns the validated fuel_type symbol (may differ from gen.fuel_type).
+"""
+function validate_gas_classification(gen::Generator, historical::DataFrame)::Symbol
+    # Only validate gas plants with sufficient data
+    if !(gen.fuel_type in GAS_FUEL_TYPES) || nrow(historical) < MIN_DATA_POINTS_FOR_RAMP_INFERENCE
+        return gen.fuel_type
+    end
+
+    gen_values = historical.actual_generation_output_mw
+    non_zero = filter(v -> v > 1.0, gen_values)
+    if isempty(non_zero)
+        return gen.fuel_type
+    end
+
+    # Compute behavioral metrics
+    capacity_factor = Statistics.mean(non_zero) / gen.p_max
+    is_on = gen_values .> 1.0
+
+    # Count starts (off→on transitions)
+    starts = sum(is_on[i] && !is_on[i-1] for i in 2:length(is_on))
+    res_min = parse_resolution_to_minutes(historical.resolution_code[1])
+    total_hours = nrow(historical) * res_min / 60.0
+    weeks = total_hours / (7 * 24)
+    starts_per_week = weeks > 0 ? starts / weeks : 0.0
+
+    # Mean run duration (hours)
+    on_durations = Float64[]
+    current_run = 0
+    for i in 1:length(is_on)
+        if is_on[i]
+            current_run += 1
+        elseif current_run > 0
+            push!(on_durations, current_run * res_min / 60.0)
+            current_run = 0
+        end
+    end
+    if current_run > 0
+        push!(on_durations, current_run * res_min / 60.0)
+    end
+    mean_run = isempty(on_durations) ? 0.0 : Statistics.mean(on_durations)
+
+    # Conservative reclassification rules:
+    # Only override when behavioral signal STRONGLY contradicts current class
+    current = gen.fuel_type
+
+    if current == Symbol("Fossil Gas OCGT")
+        # Classified OCGT but behaves like CHP (baseload heat-led)
+        if capacity_factor > 0.50 && starts_per_week < 2.0
+            return Symbol("Fossil Gas CHP")
+        # Classified OCGT but behaves like mid-merit CCGT
+        elseif capacity_factor > 0.35 && mean_run > 12.0
+            return Symbol("Fossil Gas")
+        end
+    elseif current == Symbol("Fossil Gas")
+        # Classified CCGT but behaves like a peaker
+        if capacity_factor < 0.15 && starts_per_week > 5.0 && mean_run < 4.0
+            return Symbol("Fossil Gas OCGT")
+        end
+    end
+    # CHP (name-based) is high-confidence — not overridden by behavior
+
+    return current
 end
 
 """
@@ -184,6 +294,7 @@ end
 const P_MIN_BOUNDS = Dict(
     :coal => (0.45, 0.65),      # Coal/Lignite: high minimum load (FuelTypeParams: 0.45-0.50)
     :gas_ccgt => (0.35, 0.55),  # Combined cycle gas: moderate minimum (FuelTypeParams: 0.35)
+    :gas_chp => (0.35, 0.55),   # Gas CHP: similar to CCGT (heat obligations keep min load moderate)
     :gas_ocgt => (0.20, 0.45),  # Open cycle gas turbine: more flexible
     :default => (0.30, 0.60),   # Default for unknown thermal
 )
@@ -195,6 +306,8 @@ function get_p_min_bounds_category(fuel_type::Symbol)::Symbol
     fuel_str = string(fuel_type)
     if occursin("Lignite", fuel_str) || occursin("coal", lowercase(fuel_str))
         return :coal
+    elseif fuel_type == Symbol("Fossil Gas CHP")
+        return :gas_chp
     elseif fuel_type == Symbol("Fossil Gas OCGT")
         return :gas_ocgt
     elseif occursin("Gas", fuel_str)
@@ -272,6 +385,7 @@ end
 const UPTIME_DOWNTIME_BOUNDS = Dict(
     :coal => ((8, 48), (4, 24)),       # Coal: long cycles, high min uptime/downtime
     :gas_ccgt => ((2, 12), (1, 8)),    # CCGT: moderate flexibility
+    :gas_chp => ((3, 16), (2, 10)),    # CHP: longer than CCGT due to heat obligations
     :gas_ocgt => ((1, 4), (1, 4)),     # OCGT: very flexible, short cycles
     :default => ((2, 24), (1, 12)),    # Default: moderate bounds
 )
@@ -446,6 +560,7 @@ VOM costs include maintenance, consumables, and (for hydro reservoir) opportunit
 """
 const COST_PARAMETERS = Dict{String, CostParameters}(
     "Fossil Gas"                       => CostParameters(0.55, 0.202, 2.0),  # CCGT
+    "Fossil Gas CHP"                   => CostParameters(0.48, 0.202, 2.5),  # CHP: heat extraction reduces electrical efficiency
     "Fossil Gas OCGT"                  => CostParameters(0.35, 0.202, 3.0),  # OCGT: lower efficiency, higher VOM
     "Fossil Hard coal"                 => CostParameters(0.40, 0.341, 3.0),
     "Fossil Brown coal/Lignite"        => CostParameters(0.35, 0.364, 4.0),
@@ -495,6 +610,7 @@ function get_fuel_price(day::Dates.Date, fuel_type::String)::Float64
     # Sources: TTF hub for gas, ARA for coal, Platts for oil, industry estimates for others
     fuel_prices_by_year = Dict{String, Dict{Int, Float64}}(
         "Fossil Gas"              => Dict(2022 => 120.0, 2023 => 40.0, 2024 => 32.0, 2025 => 35.0, 2026 => 35.0),
+        "Fossil Gas CHP"         => Dict(2022 => 120.0, 2023 => 40.0, 2024 => 32.0, 2025 => 35.0, 2026 => 35.0),
         "Fossil Gas OCGT"        => Dict(2022 => 120.0, 2023 => 40.0, 2024 => 32.0, 2025 => 35.0, 2026 => 35.0),
         "Fossil Hard coal"        => Dict(2022 => 50.0,  2023 => 25.0, 2024 => 18.0, 2025 => 16.0, 2026 => 16.0),
         "Fossil Brown coal/Lignite" => Dict(2022 => 6.0, 2023 => 5.0,  2024 => 5.0,  2025 => 5.0,  2026 => 5.0),
@@ -741,12 +857,16 @@ function get_generators(map_code::String, day::Dates.Date;
             @info "Reclassified generator $(row.generation_unit_name) from $declared_type to $inferred_type"
         end
 
-        # Classify gas plants into CCGT/OCGT based on capacity
+        # Classify gas plants into CCGT/CHP/OCGT based on name keywords then capacity fallback
         p_max = Float64(row.generation_unit_installed_capacity_mw)
-        classified_type = classify_gas_subtype(inferred_type, p_max)
+        classified_type = classify_gas_subtype(inferred_type, p_max, row.generation_unit_name)
 
         if classified_type != inferred_type
-            @info "Classified gas generator $(row.generation_unit_name) ($(p_max) MW) as OCGT (≤$(GAS_OCGT_CAPACITY_THRESHOLD_MW) MW)"
+            if classified_type == Symbol("Fossil Gas CHP")
+                @info "Classified gas generator $(row.generation_unit_name) ($(p_max) MW) as CHP (name keyword)"
+            elseif classified_type == Symbol("Fossil Gas OCGT")
+                @info "Classified gas generator $(row.generation_unit_name) ($(p_max) MW) as OCGT (≤$(GAS_OCGT_CAPACITY_THRESHOLD_MW) MW)"
+            end
         end
 
         gen = Generator(
@@ -800,11 +920,17 @@ function infer_parameters_for_generator(gen::Generator, day::Dates.Date)
     # Fetch historical generation data
     historical = get_historical_generation(gen.code, day)
 
-    # Infer ramp rates (as fraction of p_max per hour)
+    # Step 1: Behavioral validation for gas plants (may correct fuel_type)
+    validated_fuel_type = validate_gas_classification(gen, historical)
+    if validated_fuel_type != gen.fuel_type
+        @info "Behavioral validation reclassified gas plant" code=gen.code name=gen.name from=gen.fuel_type to=validated_fuel_type
+    end
+
+    # Step 2: Infer ramp rates (not affected by fuel type)
     rates = infer_ramp_rates(historical, gen.p_max)
 
-    # Determine parameters based on fuel type
-    if gen.fuel_type in FLEXIBLE_FUEL_TYPES
+    # Step 3: Infer parameters using VALIDATED fuel type (correct bounds)
+    if validated_fuel_type in FLEXIBLE_FUEL_TYPES
         # Flexible resources (hydro, batteries) can operate at 0 MW
         # and have no meaningful uptime/downtime constraints
         final_p_min = 0.0
@@ -812,13 +938,19 @@ function infer_parameters_for_generator(gen::Generator, day::Dates.Date)
         final_downtime = nothing
     else
         # Thermal plants: infer from stable operation
-        inferred_p_min = infer_p_min(historical, gen.p_max, gen.fuel_type)
+        inferred_p_min = infer_p_min(historical, gen.p_max, validated_fuel_type)
         final_p_min = inferred_p_min !== nothing ? inferred_p_min : gen.p_min
 
         # Infer uptime/downtime from on/off cycles
-        (inferred_uptime, inferred_downtime) = infer_uptime_downtime(historical, gen.fuel_type)
+        (inferred_uptime, inferred_downtime) = infer_uptime_downtime(historical, validated_fuel_type)
         final_uptime = inferred_uptime
         final_downtime = inferred_downtime
+    end
+
+    # Step 4: Recalculate marginal cost if reclassified
+    final_marginal_cost = gen.marginal_cost
+    if validated_fuel_type != gen.fuel_type
+        final_marginal_cost = get_marginal_cost(day, string(validated_fuel_type))
     end
 
     # Validate: p_min must not exceed p_max (can happen if outages reduce capacity)
@@ -827,16 +959,16 @@ function infer_parameters_for_generator(gen::Generator, day::Dates.Date)
         final_p_min = gen.p_max
     end
 
-    # Create new generator with inferred parameters
+    # Create new generator with inferred parameters (possibly reclassified fuel_type)
     return Generator(
         gen.code,
         gen.name,
-        gen.fuel_type,
+        validated_fuel_type,
         gen.location,
         gen.p_max,
         final_p_min,
         gen.bidding_zone,
-        gen.marginal_cost,
+        final_marginal_cost,
         rates.ramp_up,
         rates.ramp_down,
         final_uptime,
@@ -873,11 +1005,30 @@ Save inferred generator parameters to the database cache.
 Uses UPSERT to update existing records or insert new ones.
 The inference_date is set to today (when inference was run), not the reference market day.
 """
-function save_inferred_parameters(generators::Vector{Generator}, bidding_zone::String, reference_date::Dates.Date)
+function save_inferred_parameters(generators::Vector{Generator}, bidding_zone::String, reference_date::Dates.Date;
+                                  original_fuel_types::Union{Dict{String,Symbol},Nothing}=nothing)
+    # Ensure validated_fuel_type column exists (idempotent migration)
+    Euphemia.withdb() do conn
+        LibPQ.execute(conn, """
+            DO \$\$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_schema = 'simulations'
+                    AND table_name = 'generator_inferred_parameters'
+                    AND column_name = 'validated_fuel_type'
+                ) THEN
+                    ALTER TABLE simulations.generator_inferred_parameters
+                    ADD COLUMN validated_fuel_type TEXT;
+                END IF;
+            END \$\$;
+        """)
+    end
+
     sql = """
     INSERT INTO simulations.generator_inferred_parameters
-    (generator_code, bidding_zone, inference_date, ramp_up, ramp_down, p_min, min_uptime, min_downtime, data_points_used, created_at)
-    VALUES (\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8, \$9, NOW())
+    (generator_code, bidding_zone, inference_date, ramp_up, ramp_down, p_min, min_uptime, min_downtime, data_points_used, validated_fuel_type, created_at)
+    VALUES (\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8, \$9, \$10, NOW())
     ON CONFLICT (generator_code, bidding_zone) DO UPDATE SET
         inference_date = EXCLUDED.inference_date,
         ramp_up = EXCLUDED.ramp_up,
@@ -886,6 +1037,7 @@ function save_inferred_parameters(generators::Vector{Generator}, bidding_zone::S
         min_uptime = EXCLUDED.min_uptime,
         min_downtime = EXCLUDED.min_downtime,
         data_points_used = EXCLUDED.data_points_used,
+        validated_fuel_type = EXCLUDED.validated_fuel_type,
         created_at = NOW()
     """
 
@@ -902,6 +1054,17 @@ function save_inferred_parameters(generators::Vector{Generator}, bidding_zone::S
             historical = get_historical_generation(gen.code, reference_date)
             data_points = nrow(historical)
 
+            # Determine if fuel_type was changed by behavioral validation
+            # If original_fuel_types is provided, compare; otherwise save current fuel_type
+            # only if it's a gas type (could have been reclassified)
+            validated_ft = if original_fuel_types !== nothing && haskey(original_fuel_types, gen.code)
+                orig = original_fuel_types[gen.code]
+                orig != gen.fuel_type ? string(gen.fuel_type) : missing
+            else
+                # No original map provided — save fuel_type for gas plants, NULL otherwise
+                gen.fuel_type in GAS_FUEL_TYPES ? string(gen.fuel_type) : missing
+            end
+
             params = [
                 gen.code,
                 bidding_zone,
@@ -911,7 +1074,8 @@ function save_inferred_parameters(generators::Vector{Generator}, bidding_zone::S
                 gen.p_min,
                 to_pg(gen.min_uptime),
                 to_pg(gen.min_downtime),
-                data_points
+                data_points,
+                validated_ft
             ]
             LibPQ.execute(conn, sql, params)
             saved_count += 1
@@ -934,7 +1098,7 @@ period (30 days) is appropriate.
 """
 function load_cached_parameters(bidding_zone::String; max_age_days::Int=30)
     query = """
-    SELECT generator_code, ramp_up, ramp_down, p_min, min_uptime, min_downtime, inference_date
+    SELECT generator_code, ramp_up, ramp_down, p_min, min_uptime, min_downtime, validated_fuel_type, inference_date
     FROM simulations.generator_inferred_parameters
     WHERE bidding_zone = \$1
       AND inference_date >= CURRENT_DATE - INTERVAL '\$2 days'
@@ -944,8 +1108,8 @@ function load_cached_parameters(bidding_zone::String; max_age_days::Int=30)
     query = replace(query, "\$2" => string(max_age_days))
     df = Euphemia.sql2df_with_retry(query, [bidding_zone])
 
-    cache = Dict{String, NamedTuple{(:ramp_up, :ramp_down, :p_min, :min_uptime, :min_downtime),
-                                     Tuple{Union{Float64,Nothing}, Union{Float64,Nothing}, Union{Float64,Nothing}, Union{Int,Nothing}, Union{Int,Nothing}}}}()
+    cache = Dict{String, NamedTuple{(:ramp_up, :ramp_down, :p_min, :min_uptime, :min_downtime, :validated_fuel_type),
+                                     Tuple{Union{Float64,Nothing}, Union{Float64,Nothing}, Union{Float64,Nothing}, Union{Int,Nothing}, Union{Int,Nothing}, Union{Symbol,Nothing}}}}()
 
     for row in eachrow(df)
         cache[row.generator_code] = (
@@ -953,7 +1117,8 @@ function load_cached_parameters(bidding_zone::String; max_age_days::Int=30)
             ramp_down = ismissing(row.ramp_down) ? nothing : row.ramp_down,
             p_min = ismissing(row.p_min) ? nothing : row.p_min,
             min_uptime = ismissing(row.min_uptime) ? nothing : Int(row.min_uptime),
-            min_downtime = ismissing(row.min_downtime) ? nothing : Int(row.min_downtime)
+            min_downtime = ismissing(row.min_downtime) ? nothing : Int(row.min_downtime),
+            validated_fuel_type = ismissing(row.validated_fuel_type) ? nothing : Symbol(row.validated_fuel_type)
         )
     end
 
@@ -1007,6 +1172,15 @@ function get_generators_with_inferred_params(map_code::String, day::Dates.Date;
             # Apply cached parameters with validation
             candidate_p_min = params.p_min !== nothing ? params.p_min : gen.p_min
 
+            # Apply validated fuel type from behavioral validation (if cached)
+            gen_fuel_type = gen.fuel_type
+            gen_marginal_cost = gen.marginal_cost
+            if params.validated_fuel_type !== nothing && params.validated_fuel_type != gen.fuel_type
+                gen_fuel_type = params.validated_fuel_type
+                gen_marginal_cost = get_marginal_cost(day, string(gen_fuel_type))
+                @info "Applied cached behavioral reclassification" generator=gen.code from=gen.fuel_type to=gen_fuel_type
+            end
+
             # Validate: p_min must not exceed p_max (can happen if outages reduce capacity)
             if candidate_p_min > gen.p_max
                 @warn "Clamping cached p_min to p_max (outage reduced capacity)" generator=gen.code cached_p_min=candidate_p_min p_max=gen.p_max
@@ -1016,12 +1190,12 @@ function get_generators_with_inferred_params(map_code::String, day::Dates.Date;
             updated_gen = Generator(
                 gen.code,
                 gen.name,
-                gen.fuel_type,
+                gen_fuel_type,
                 gen.location,
                 gen.p_max,
                 candidate_p_min,
                 gen.bidding_zone,
-                gen.marginal_cost,
+                gen_marginal_cost,
                 params.ramp_up,
                 params.ramp_down,
                 params.min_uptime,
@@ -1449,10 +1623,13 @@ function get_default_initial_conditions(fuel_type::Symbol)
        occursin("nuclear", lowercase(fuel_str))
         # Baseload: assume running
         return InitialConditions(true, 0.0, 24, 0, :hot)  # output will be set by caller
-    elseif occursin("gas", lowercase(fuel_str)) && occursin("ccgt", lowercase(fuel_str))
+    elseif fuel_type == Symbol("Fossil Gas")
         # CCGT: often off overnight but warm
         return InitialConditions(false, 0.0, 0, 6, :hot)
-    elseif occursin("gas", lowercase(fuel_str))
+    elseif fuel_type == Symbol("Fossil Gas CHP")
+        # CHP: heat-led, typically running (district heating obligations)
+        return InitialConditions(true, 0.0, 12, 0, :hot)
+    elseif fuel_type == Symbol("Fossil Gas OCGT")
         # OCGT/peakers: off and potentially cold
         return InitialConditions(false, 0.0, 0, 24, :warm)
     elseif fuel_type in FLEXIBLE_FUEL_TYPES

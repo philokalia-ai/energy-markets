@@ -1,9 +1,10 @@
-# Validation script for CCGT/OCGT gas classification
+# Validation script for 3-class gas classification (CCGT / CHP / OCGT)
 #
-# Queries actual generation data for gas plants classified as CCGT vs OCGT
+# Queries actual generation data for gas plants classified as CCGT, CHP, or OCGT
 # and compares dispatch patterns (capacity factor, run duration, starts/week).
 #
 # Expected: OCGTs show lower capacity factors, shorter runs, and more starts.
+# CHP plants should show high capacity factors and few starts (heat-led).
 #
 # Usage:
 #   julia --project=. test/scripts/validate_gas_classification.jl
@@ -14,9 +15,9 @@ using .Euphemia
 
 function validate_gas_classification(zones::Vector{String}, date::Date)
     println("=" ^ 70)
-    println("Gas CCGT/OCGT Classification Validation")
+    println("Gas 3-Class Classification Validation (CCGT / CHP / OCGT)")
     println("Reference date: $date")
-    println("Threshold: $(GAS_OCGT_CAPACITY_THRESHOLD_MW) MW")
+    println("Capacity threshold: $(GAS_OCGT_CAPACITY_THRESHOLD_MW) MW (fallback)")
     println("=" ^ 70)
     println()
 
@@ -32,20 +33,22 @@ function validate_gas_classification(zones::Vector{String}, date::Date)
             continue
         end
 
-        # Split gas generators
+        # Split gas generators into 3 classes
         ccgt = filter(g -> g.fuel_type == Symbol("Fossil Gas"), gens)
+        chp = filter(g -> g.fuel_type == Symbol("Fossil Gas CHP"), gens)
         ocgt = filter(g -> g.fuel_type == Symbol("Fossil Gas OCGT"), gens)
 
-        if isempty(ccgt) && isempty(ocgt)
+        if isempty(ccgt) && isempty(chp) && isempty(ocgt)
             println("  No gas generators found")
             continue
         end
 
-        println("  CCGT (>$(GAS_OCGT_CAPACITY_THRESHOLD_MW) MW): $(length(ccgt)) plants")
-        println("  OCGT (≤$(GAS_OCGT_CAPACITY_THRESHOLD_MW) MW): $(length(ocgt)) plants")
+        println("  CCGT (>$(GAS_OCGT_CAPACITY_THRESHOLD_MW) MW or name): $(length(ccgt)) plants")
+        println("  CHP  (name keyword):                    $(length(chp)) plants")
+        println("  OCGT (≤$(GAS_OCGT_CAPACITY_THRESHOLD_MW) MW fallback):         $(length(ocgt)) plants")
         println()
 
-        for (label, group) in [("CCGT", ccgt), ("OCGT", ocgt)]
+        for (label, group) in [("CCGT", ccgt), ("CHP", chp), ("OCGT", ocgt)]
             if isempty(group)
                 continue
             end

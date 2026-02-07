@@ -324,6 +324,8 @@ export FuelTypeParameters, get_fuel_type_parameters, apply_fuel_type_constraints
 # Cost model
 export CostParameters, COST_PARAMETERS, get_fuel_price, get_co2_price, get_marginal_cost
 export classify_gas_subtype, GAS_OCGT_CAPACITY_THRESHOLD_MW
+export GAS_CCGT_NAME_PATTERNS, GAS_CHP_NAME_PATTERNS, GAS_CHP_EC_PATTERN, GAS_FUEL_TYPES
+export validate_gas_classification
 
 # Temporal resolution utilities
 export parse_resolution_to_minutes, determine_finest_resolution, generate_sub_slots_from_source, disaggregate_temporal_data

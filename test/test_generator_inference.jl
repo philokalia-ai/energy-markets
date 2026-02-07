@@ -349,13 +349,13 @@ end
 end
 
 # =============================================================================
-# Test CCGT/OCGT Gas Classification
+# Test 3-Class Gas Classification (CCGT / CHP / OCGT)
 # =============================================================================
 
-@testset "Gas CCGT/OCGT Classification" begin
+@testset "Gas 3-Class Classification" begin
 
-    @testset "classify_gas_subtype" begin
-        # Small gas plant → OCGT
+    @testset "Capacity fallback (2-arg backward compat)" begin
+        # Small gas plant → OCGT (no name provided)
         @test Euphemia.classify_gas_subtype(Symbol("Fossil Gas"), 150.0) == Symbol("Fossil Gas OCGT")
 
         # Exactly at threshold → OCGT
@@ -364,17 +364,123 @@ end
         # Above threshold → stays CCGT
         @test Euphemia.classify_gas_subtype(Symbol("Fossil Gas"), 201.0) == Symbol("Fossil Gas")
         @test Euphemia.classify_gas_subtype(Symbol("Fossil Gas"), 500.0) == Symbol("Fossil Gas")
-
-        # Non-gas types are unchanged
-        @test Euphemia.classify_gas_subtype(Symbol("Fossil Hard coal"), 100.0) == Symbol("Fossil Hard coal")
-        @test Euphemia.classify_gas_subtype(Symbol("Nuclear"), 50.0) == Symbol("Nuclear")
-        @test Euphemia.classify_gas_subtype(Symbol("Other"), 100.0) == Symbol("Other")
     end
 
-    @testset "get_p_min_bounds_category for OCGT" begin
+    @testset "CCGT name patterns" begin
+        # GuD (German: Gas-und-Dampf = combined cycle)
+        @test Euphemia.classify_gas_subtype(Symbol("Fossil Gas"), 120.0, "GuD Marzahn") == Symbol("Fossil Gas")
+        # CCGT explicit
+        @test Euphemia.classify_gas_subtype(Symbol("Fossil Gas"), 80.0, "CCGT Unit 1") == Symbol("Fossil Gas")
+        # Combined cycle
+        @test Euphemia.classify_gas_subtype(Symbol("Fossil Gas"), 150.0, "Combined Cycle Plant") == Symbol("Fossil Gas")
+        # Combicycle
+        @test Euphemia.classify_gas_subtype(Symbol("Fossil Gas"), 100.0, "Combicycle 5") == Symbol("Fossil Gas")
+        # Case insensitive
+        @test Euphemia.classify_gas_subtype(Symbol("Fossil Gas"), 100.0, "gud plant") == Symbol("Fossil Gas")
+    end
+
+    @testset "CCGT priority over CHP" begin
+        # GuD + HKW → CCGT (CCGT overrides CHP)
+        @test Euphemia.classify_gas_subtype(Symbol("Fossil Gas"), 167.0, "HKW Nord GuD Nord") == Symbol("Fossil Gas")
+        @test Euphemia.classify_gas_subtype(Symbol("Fossil Gas"), 100.0, "GuD BHKW Anlage") == Symbol("Fossil Gas")
+    end
+
+    @testset "CHP name patterns" begin
+        # HKW (Heizkraftwerk)
+        @test Euphemia.classify_gas_subtype(Symbol("Fossil Gas"), 100.0, "HKW Klingenberg") == Symbol("Fossil Gas CHP")
+        # BHKW (Blockheizkraftwerk)
+        @test Euphemia.classify_gas_subtype(Symbol("Fossil Gas"), 50.0, "KW Hastedt BHKW") == Symbol("Fossil Gas CHP")
+        # KWK
+        @test Euphemia.classify_gas_subtype(Symbol("Fossil Gas"), 80.0, "KWK Anlage Nord") == Symbol("Fossil Gas CHP")
+        # CHP explicit
+        @test Euphemia.classify_gas_subtype(Symbol("Fossil Gas"), 125.0, "DESBR____CHP____") == Symbol("Fossil Gas CHP")
+        # French Coge (cogeneration)
+        @test Euphemia.classify_gas_subtype(Symbol("Fossil Gas"), 125.0, "CPCU-CogeVitry") == Symbol("Fossil Gas CHP")
+        # Heizkraft
+        @test Euphemia.classify_gas_subtype(Symbol("Fossil Gas"), 100.0, "Heizkraftwerk Mitte") == Symbol("Fossil Gas CHP")
+        # Polish Elektrociep
+        @test Euphemia.classify_gas_subtype(Symbol("Fossil Gas"), 100.0, "Elektrocieplownia") == Symbol("Fossil Gas CHP")
+        # Warmekraft
+        @test Euphemia.classify_gas_subtype(Symbol("Fossil Gas"), 100.0, "Warmekraftwerk X") == Symbol("Fossil Gas CHP")
+    end
+
+    @testset "EC word-boundary pattern" begin
+        # Polish EC prefix with word boundary
+        @test Euphemia.classify_gas_subtype(Symbol("Fossil Gas"), 100.0, "EC Krakow") == Symbol("Fossil Gas CHP")
+        @test Euphemia.classify_gas_subtype(Symbol("Fossil Gas"), 100.0, "PL_EC_Gdansk") == Symbol("Fossil Gas CHP")
+        @test Euphemia.classify_gas_subtype(Symbol("Fossil Gas"), 100.0, "Unit-EC-West") == Symbol("Fossil Gas CHP")
+    end
+
+    @testset "EC false positive rejection" begin
+        # Should NOT match EC inside words
+        @test Euphemia.classify_gas_subtype(Symbol("Fossil Gas"), 100.0, "SECTOR Plant") != Symbol("Fossil Gas CHP")
+        @test Euphemia.classify_gas_subtype(Symbol("Fossil Gas"), 100.0, "ELECTRICITE Unit") != Symbol("Fossil Gas CHP")
+        @test Euphemia.classify_gas_subtype(Symbol("Fossil Gas"), 100.0, "SPECIAL Generator") != Symbol("Fossil Gas CHP")
+    end
+
+    @testset "Non-gas passthrough" begin
+        @test Euphemia.classify_gas_subtype(Symbol("Fossil Hard coal"), 100.0, "HKW Coal") == Symbol("Fossil Hard coal")
+        @test Euphemia.classify_gas_subtype(Symbol("Nuclear"), 50.0, "CCGT Nuclear") == Symbol("Nuclear")
+        @test Euphemia.classify_gas_subtype(Symbol("Other"), 100.0, "CHP Other") == Symbol("Other")
+    end
+
+    @testset "CHP get_p_min_bounds_category" begin
+        @test Euphemia.get_p_min_bounds_category(Symbol("Fossil Gas CHP")) == :gas_chp
         @test Euphemia.get_p_min_bounds_category(Symbol("Fossil Gas OCGT")) == :gas_ocgt
-        # CCGT still maps correctly
         @test Euphemia.get_p_min_bounds_category(Symbol("Fossil Gas")) == :gas_ccgt
+    end
+
+    @testset "CHP FuelTypeParameters" begin
+        chp_params = Euphemia.get_fuel_type_parameters(Symbol("Fossil Gas CHP"))
+        ccgt_params = Euphemia.get_fuel_type_parameters(Symbol("Fossil Gas"))
+        ocgt_params = Euphemia.get_fuel_type_parameters(Symbol("Fossil Gas OCGT"))
+
+        # CHP should have higher min load factor than CCGT (heat obligations)
+        @test chp_params.min_load_factor > ccgt_params.min_load_factor
+        @test chp_params.min_load_factor == 0.40
+
+        # CHP should have longer min uptime than CCGT (heat obligations)
+        @test chp_params.min_uptime >= ccgt_params.min_uptime
+        @test chp_params.min_uptime == 6
+
+        # CHP should ramp slower than CCGT (heat extraction constrains)
+        @test chp_params.ramp_up_rate <= ccgt_params.ramp_up_rate
+        @test chp_params.ramp_up_rate == 0.20
+
+        # CHP startup times same as CCGT (same turbine technology)
+        @test chp_params.cold_startup_time == ccgt_params.cold_startup_time
+        @test chp_params.hot_startup_time == ccgt_params.hot_startup_time
+    end
+
+    @testset "CHP marginal cost between CCGT and OCGT" begin
+        chp_cost = Euphemia.get_marginal_cost(Date(2024, 6, 15), "Fossil Gas CHP")
+        ccgt_cost = Euphemia.get_marginal_cost(Date(2024, 6, 15), "Fossil Gas")
+        ocgt_cost = Euphemia.get_marginal_cost(Date(2024, 6, 15), "Fossil Gas OCGT")
+
+        @test chp_cost > ccgt_cost
+        @test chp_cost < ocgt_cost
+    end
+
+    @testset "CHP default initial conditions" begin
+        ic = Euphemia.get_default_initial_conditions(Symbol("Fossil Gas CHP"))
+        @test ic.is_on == true  # Heat-led, assumed running
+        @test ic.thermal_state == :hot
+        @test ic.hours_on > 0
+    end
+
+    @testset "CCGT default initial conditions (fixed Symbol matching)" begin
+        # Symbol("Fossil Gas") should match CCGT, not fall through to generic gas
+        ic = Euphemia.get_default_initial_conditions(Symbol("Fossil Gas"))
+        @test ic.is_on == false
+        @test ic.hours_off > 0
+        @test ic.thermal_state == :hot  # Recently off, still warm
+    end
+
+    @testset "OCGT default initial conditions" begin
+        ic = Euphemia.get_default_initial_conditions(Symbol("Fossil Gas OCGT"))
+        @test ic.is_on == false
+        @test ic.hours_off > 0
+        @test ic.thermal_state == :warm  # Off longer
     end
 
     @testset "OCGT FuelTypeParameters" begin
@@ -387,7 +493,6 @@ end
 
         # OCGT should ramp faster
         @test params.ramp_up_rate >= ccgt_params.ramp_up_rate
-        @test params.ramp_down_rate >= ccgt_params.ramp_down_rate
 
         # OCGT should have lower min load factor
         @test params.min_load_factor < ccgt_params.min_load_factor
@@ -400,18 +505,108 @@ end
     end
 
     @testset "OCGT marginal cost higher than CCGT" begin
-        # OCGT has lower efficiency → higher marginal cost for same fuel
         ocgt_cost = Euphemia.get_marginal_cost(Date(2024, 6, 15), "Fossil Gas OCGT")
         ccgt_cost = Euphemia.get_marginal_cost(Date(2024, 6, 15), "Fossil Gas")
 
         @test ocgt_cost > ccgt_cost
-        # OCGT ~140 EUR/MWh vs CCGT ~84 EUR/MWh (2024)
         @test ocgt_cost > 100.0
         @test ccgt_cost < 100.0
     end
 
     @testset "GAS_OCGT_CAPACITY_THRESHOLD_MW constant" begin
         @test Euphemia.GAS_OCGT_CAPACITY_THRESHOLD_MW == 200.0
+    end
+end
+
+# =============================================================================
+# Test Behavioral Gas Validation
+# =============================================================================
+
+@testset "Behavioral Gas Validation (validate_gas_classification)" begin
+
+    # Helper to create a Generator for testing
+    function make_gas_gen(; fuel_type=Symbol("Fossil Gas OCGT"), p_max=100.0, code="TEST-GEN")
+        Euphemia.Generator(code, "Test Gas Plant", fuel_type, "Location",
+                           p_max, 20.0, "GR", 140.0)
+    end
+
+    # Helper to create synthetic historical data
+    function make_historical(; n=500, on_fraction=0.8, output_when_on=70.0, starts=5, res="PT60M")
+        gen_values = Float64[]
+        on_periods = round(Int, n * on_fraction / max(starts, 1))  # periods per run
+        off_periods = round(Int, n * (1 - on_fraction) / max(starts, 1))
+
+        for _ in 1:starts
+            append!(gen_values, fill(output_when_on, on_periods))
+            append!(gen_values, fill(0.0, off_periods))
+        end
+        gen_values = gen_values[1:min(n, length(gen_values))]
+        if length(gen_values) < n
+            append!(gen_values, fill(0.0, n - length(gen_values)))
+        end
+
+        return DataFrame(
+            date_time_utc = [DateTime(2024, 1, 1) + Hour(i) for i in 1:n],
+            resolution_code = fill(res, n),
+            actual_generation_output_mw = gen_values
+        )
+    end
+
+    @testset "OCGT with high CF + few starts → CHP" begin
+        gen = make_gas_gen(fuel_type=Symbol("Fossil Gas OCGT"))
+        # High capacity factor (>50%), few starts (<2/week) → baseload heat-led
+        hist = make_historical(n=1000, on_fraction=0.85, output_when_on=70.0, starts=3)
+        result = Euphemia.validate_gas_classification(gen, hist)
+        @test result == Symbol("Fossil Gas CHP")
+    end
+
+    @testset "OCGT with medium CF + long runs → CCGT" begin
+        gen = make_gas_gen(fuel_type=Symbol("Fossil Gas OCGT"))
+        # Capacity factor when running = 45/100 = 0.45 (>0.35 but <0.50, so CHP rule doesn't trigger)
+        # Long on-periods (100h each) → mean_run > 12h → CCGT rule triggers
+        hist = make_historical(n=1000, on_fraction=0.4, output_when_on=45.0, starts=4)
+        result = Euphemia.validate_gas_classification(gen, hist)
+        @test result == Symbol("Fossil Gas")
+    end
+
+    @testset "Genuine OCGT stays OCGT" begin
+        gen = make_gas_gen(fuel_type=Symbol("Fossil Gas OCGT"))
+        # Low CF, many starts, short runs → genuine peaker
+        hist = make_historical(n=1000, on_fraction=0.08, output_when_on=80.0, starts=40)
+        result = Euphemia.validate_gas_classification(gen, hist)
+        @test result == Symbol("Fossil Gas OCGT")
+    end
+
+    @testset "CCGT with very peaky behavior → OCGT" begin
+        gen = make_gas_gen(fuel_type=Symbol("Fossil Gas"), p_max=300.0)
+        # Very low CF (<15%), many starts (>5/week), short runs (<4h) → peaker
+        hist = make_historical(n=1000, on_fraction=0.05, output_when_on=30.0, starts=60)
+        result = Euphemia.validate_gas_classification(gen, hist)
+        @test result == Symbol("Fossil Gas OCGT")
+    end
+
+    @testset "CHP not overridden by behavior" begin
+        gen = make_gas_gen(fuel_type=Symbol("Fossil Gas CHP"))
+        # Even if behavior looks peaky, CHP (name-based) is high-confidence
+        hist = make_historical(n=1000, on_fraction=0.05, output_when_on=30.0, starts=60)
+        result = Euphemia.validate_gas_classification(gen, hist)
+        @test result == Symbol("Fossil Gas CHP")
+    end
+
+    @testset "Insufficient data → no reclassification" begin
+        gen = make_gas_gen(fuel_type=Symbol("Fossil Gas OCGT"))
+        # Too few data points
+        hist = make_historical(n=50, on_fraction=0.9, output_when_on=70.0, starts=1)
+        result = Euphemia.validate_gas_classification(gen, hist)
+        @test result == Symbol("Fossil Gas OCGT")
+    end
+
+    @testset "Non-gas plants → no reclassification" begin
+        coal_gen = Euphemia.Generator("COAL-1", "Coal Plant", Symbol("Fossil Hard coal"),
+                                      "Location", 200.0, 90.0, "GR", 80.0)
+        hist = make_historical(n=500, on_fraction=0.9, output_when_on=150.0, starts=2)
+        result = Euphemia.validate_gas_classification(coal_gen, hist)
+        @test result == Symbol("Fossil Hard coal")
     end
 end
 

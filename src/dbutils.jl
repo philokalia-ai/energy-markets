@@ -3,7 +3,7 @@ using ConcurrentUtilities: ConcurrentUtilities, Pools
 using Dates
 
 # Unified code version — bump when cost model or schema changes
-const CURRENT_CODE_VERSION = 5
+const CURRENT_CODE_VERSION = 6
 
 const poolsize = 5
 cnxpool = Pools.Pool{LibPQ.Connection}(poolsize)
