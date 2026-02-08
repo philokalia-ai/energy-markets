@@ -53,6 +53,14 @@ on:
         required: false
         default: "1.1"
         type: string
+      bidding_strategy:
+        description: "Bidding strategy (merit_order, committed_only)"
+        required: false
+        default: "merit_order"
+        type: choice
+        options:
+          - merit_order
+          - committed_only
 
 env:
   JULIA_VERSION: "1.11"
@@ -145,6 +153,7 @@ jobs:
             ORDER_METHOD="uc_based"
             FORCE_RERUN=false
             MARKUP_FACTOR="1.1"
+            BIDDING_STRATEGY="merit_order"
           else
             START_DATE="${{ github.event.inputs.start_date }}"
             END_DATE="${{ github.event.inputs.end_date }}"
@@ -154,6 +163,7 @@ jobs:
             ORDER_METHOD="${{ github.event.inputs.order_method }}"
             FORCE_RERUN="${{ github.event.inputs.force_rerun }}"
             MARKUP_FACTOR="${{ github.event.inputs.markup_factor }}"
+            BIDDING_STRATEGY="${{ github.event.inputs.bidding_strategy }}"
           fi
 
           echo "🌍 Multi-zone market clearing"
@@ -164,8 +174,9 @@ jobs:
           echo "📋 Order method: $ORDER_METHOD"
           echo "🔄 Force rerun: $FORCE_RERUN"
           echo "💹 Markup factor: $MARKUP_FACTOR"
+          echo "📊 Bidding strategy: $BIDDING_STRATEGY"
 
-          export START_DATE END_DATE PARALLEL OPTIMIZER MAX_WORKERS ORDER_METHOD FORCE_RERUN MARKUP_FACTOR
+          export START_DATE END_DATE PARALLEL OPTIMIZER MAX_WORKERS ORDER_METHOD FORCE_RERUN MARKUP_FACTOR BIDDING_STRATEGY
 
           julia --project=. bin/multi_zone_main.jl
 

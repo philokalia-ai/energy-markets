@@ -51,6 +51,14 @@ on:
         required: false
         default: "1.1"
         type: string
+      bidding_strategy:
+        description: "Bidding strategy (merit_order, committed_only)"
+        required: false
+        default: "merit_order"
+        type: choice
+        options:
+          - merit_order
+          - committed_only
 
 env:
   JULIA_VERSION: "1.11"
@@ -142,6 +150,7 @@ jobs:
           PRICE_TOLERANCE="${{ github.event.inputs.price_tolerance }}"
           DAMPING_FACTOR="${{ github.event.inputs.damping_factor }}"
           MARKUP_FACTOR="${{ github.event.inputs.markup_factor }}"
+          BIDDING_STRATEGY="${{ github.event.inputs.bidding_strategy }}"
 
           echo "🔄 Iterative multi-zone market clearing"
           echo "📅 Date range: $START_DATE to $END_DATE"
@@ -152,9 +161,10 @@ jobs:
           echo "💰 Price tolerance: $PRICE_TOLERANCE €/MWh"
           echo "🎚️ Damping factor: $DAMPING_FACTOR"
           echo "💹 Markup factor: $MARKUP_FACTOR"
+          echo "📊 Bidding strategy: $BIDDING_STRATEGY"
 
           export START_DATE END_DATE PARALLEL OPTIMIZER MAX_WORKERS
-          export MAX_ITERATIONS PRICE_TOLERANCE DAMPING_FACTOR MARKUP_FACTOR
+          export MAX_ITERATIONS PRICE_TOLERANCE DAMPING_FACTOR MARKUP_FACTOR BIDDING_STRATEGY
 
           julia --project=. bin/iterative_multi_zone_main.jl
 

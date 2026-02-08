@@ -29,6 +29,7 @@ order_method = Symbol(ENV["ORDER_METHOD"])
 force_rerun = parse(Bool, get(ENV, "FORCE_RERUN", "false"))
 skip_existing = parse(Bool, get(ENV, "SKIP_EXISTING", "true"))
 markup_factor = parse(Float64, get(ENV, "MARKUP_FACTOR", "1.1"))
+bidding_strategy = Symbol(get(ENV, "BIDDING_STRATEGY", "merit_order"))
 
 # Parse max_workers (0 means auto-detect)
 max_workers = if max_workers_input == "0"
@@ -56,6 +57,7 @@ println("📋 Order method: $order_method")
 println("🔄 Force rerun: $force_rerun")
 println("⏭️  Skip existing: $skip_existing")
 println("💹 Markup factor: $markup_factor")
+println("📊 Bidding strategy: $bidding_strategy")
 println()
 
 # Set up parallel processing if requested
@@ -99,7 +101,8 @@ try
         max_retries=3,
         retry_delay=2.0,
         force_rerun=force_rerun,
-        markup_factor=markup_factor
+        markup_factor=markup_factor,
+        bidding_strategy=bidding_strategy
     )
 
     # Extract metrics

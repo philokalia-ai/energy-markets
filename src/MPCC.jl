@@ -137,14 +137,16 @@ function create_typed_order_book(bidding_zone::String, day::Date;
                                   markup_factor::Float64=DEFAULT_MARKUP_FACTOR,
                                   optimizer::String="auto",
                                   use_cache::Bool=true,
-                                  force_rerun::Bool=false)
+                                  force_rerun::Bool=false,
+                                  bidding_strategy::Symbol=:merit_order)
     try
         # Generate market orders from real unit commitment (will use cache if available)
         uc_to_bids = generate_market_orders_from_uc(bidding_zone, day;
             markup_factor=markup_factor,
             optimizer=optimizer,
             use_cache=use_cache,
-            force_rerun=force_rerun
+            force_rerun=force_rerun,
+            bidding_strategy=bidding_strategy
         )
 
         if !uc_to_bids.success
@@ -234,7 +236,7 @@ Named tuple with fields:
 - `worker_id`: ID of the worker that processed this zone
 """
 function _process_zone_for_order_book(args)
-    zone, day, markup_factor, optimizer, use_cache, force_rerun, zone_net_imports = args
+    zone, day, markup_factor, optimizer, use_cache, force_rerun, zone_net_imports, bidding_strategy = args
     worker_id = myid()
     start_time = time()
 
@@ -244,7 +246,8 @@ function _process_zone_for_order_book(args)
             optimizer=optimizer,
             use_cache=use_cache,
             force_rerun=force_rerun,
-            net_import_by_timeslot=zone_net_imports
+            net_import_by_timeslot=zone_net_imports,
+            bidding_strategy=bidding_strategy
         )
 
         elapsed = time() - start_time
@@ -308,7 +311,8 @@ function create_multi_zone_order_book(zones::Vector{String}, day::Date;
                                       force_rerun::Bool=false,
                                       parallel::Bool=false,
                                       max_workers::Union{Int, Nothing}=nothing,
-                                      net_imports_by_zone::Union{Dict{String, Dict{String, Float64}}, Nothing}=nothing)
+                                      net_imports_by_zone::Union{Dict{String, Dict{String, Float64}}, Nothing}=nothing,
+                                      bidding_strategy::Symbol=:merit_order)
     if isempty(zones)
         error("At least one bidding zone must be specified")
     end
@@ -354,7 +358,8 @@ function create_multi_zone_order_book(zones::Vector{String}, day::Date;
         println("   📊 Processing $(length(zones)) zones in parallel...")
         # Build args with zone-specific net imports
         pmap_args = [(zone, day, markup_factor, optimizer, use_cache, force_rerun,
-                      net_imports_by_zone !== nothing ? get(net_imports_by_zone, zone, nothing) : nothing)
+                      net_imports_by_zone !== nothing ? get(net_imports_by_zone, zone, nothing) : nothing,
+                      bidding_strategy)
                      for zone in zones]
         # Use WorkerPool to limit concurrent workers (important for Gurobi license limits)
         pool = WorkerPool(selected_worker_ids)
@@ -398,7 +403,8 @@ function create_multi_zone_order_book(zones::Vector{String}, day::Date;
                     optimizer=optimizer,
                     use_cache=use_cache,
                     force_rerun=force_rerun,
-                    net_import_by_timeslot=zone_net_imports
+                    net_import_by_timeslot=zone_net_imports,
+                    bidding_strategy=bidding_strategy
                 )
 
                 if !uc_to_bids.success

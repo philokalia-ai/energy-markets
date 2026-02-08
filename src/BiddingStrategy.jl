@@ -29,7 +29,7 @@ struct UCToBidsResult
 end
 
 """
-    generate_market_orders_from_uc(bidding_zone::String, day::Date; markup_factor::Float64=1.1, bidding_strategy::Symbol=:committed_only)
+    generate_market_orders_from_uc(bidding_zone::String, day::Date; markup_factor::Float64=1.1, bidding_strategy::Symbol=:merit_order)
 
 Converts the unit commitment optimization results into simple market orders for Euphemia.
 
@@ -38,7 +38,8 @@ Converts the unit commitment optimization results into simple market orders for 
 - `day::Date`: The target day for optimization and bidding
 - `markup_factor::Float64`: Markup factor for supply bids above marginal cost (default: 1.1 = 10% markup)
 - `bidding_strategy::Symbol`: Strategy for creating supply orders
-  - `:committed_only` - Only bid committed units (conservative, respects UC constraints)
+  - `:merit_order` - Committed units bid UC dispatch, uncommitted bid p_max for price discovery (default)
+  - `:committed_only` - Only bid committed units (produces degenerate 500 EUR prices)
   - `:all_available_max` - Bid all units at maximum capacity (unrealistic but useful for testing)
   - `:all_available_realistic` - Bid all units with UC-informed realistic quantities (aggressive)
 - `uncommitted_unit_fraction::Float64`: Fraction of p_max to use for uncommitted units with very low p_min (default: 0.2 = 20%)
@@ -48,16 +49,24 @@ Converts the unit commitment optimization results into simple market orders for 
 
 # Supply Strategies
 
-## :committed_only (Conservative)
+## :merit_order (Default — UC-informed supply curve)
+Builds a proper supply curve where committed generators bid their physically feasible
+UC dispatch and uncommitted generators bid their full capacity for price discovery:
+- **Committed** (u[i,t] > 0.5, g[i,t] > 0.01): bid g[i,t] at marginal_cost × markup_factor
+- **Uncommitted**: bid p_max at marginal_cost × markup_factor
+This creates surplus supply → the cheapest uncommitted generator becomes the marginal
+order that sets the price, producing realistic merit-order prices.
+
+## :committed_only (Conservative — produces degenerate prices)
 For each generator and time period where the unit is committed:
 - Creates SimpleOrder with price = marginal_cost × markup_factor
 - Quantity = optimized generation level for that period
 - Only creates orders for committed units (u[i,t] > COMMITMENT_THRESHOLD)
-- Respects complex UC constraints (startup times, ramping, minimum uptimes)
+- ⚠️ Supply exactly equals demand → price is underdetermined → solver picks 500 EUR
 
 ## :all_available_max (Maximum Capacity)
 For each generator and time period:
-- Creates SimpleOrder with price = marginal_cost × markup_factor  
+- Creates SimpleOrder with price = marginal_cost × markup_factor
 - Quantity = p_max (maximum capacity regardless of UC solution)
 - Bids all units at their theoretical maximum capacity
 - Unrealistic but useful for testing market clearing behavior
@@ -65,21 +74,21 @@ For each generator and time period:
 
 ## :all_available_realistic (UC-Informed Realistic)
 For each generator and time period:
-- Creates SimpleOrder with price = marginal_cost × markup_factor  
+- Creates SimpleOrder with price = marginal_cost × markup_factor
 - Quantity = available capacity considering operational constraints
 - Bids all units regardless of UC commitment decision
 - Uses UC solution to inform realistic bid quantities (not just p_max)
 - Lets Euphemia handle final dispatch optimization
 
-# Demand Strategy  
+# Demand Strategy
 For each time period:
 - Creates SimpleOrder representing the net demand that needs to be served
-- Price = high value (€3000/MWh) to ensure demand is always met
+- Price = demand_price (default: €500/MWh) to ensure demand is met
 - Quantity = net demand for that period
 
 # Example
 ```julia
-# Conservative approach (only committed units)
+# Merit order approach (default — produces realistic prices)
 result1 = generate_market_orders_from_uc("GR", Date("2018-06-24"))
 
 # Maximum capacity approach (all units at p_max)
@@ -94,7 +103,7 @@ function generate_market_orders_from_uc(
     day::Date;
     markup_factor::Float64=1.1,
     demand_price::Float64=500.0,
-    bidding_strategy::Symbol=:committed_only,
+    bidding_strategy::Symbol=:merit_order,
     uncommitted_unit_fraction::Float64=DEFAULT_UNCOMMITTED_UNIT_FRACTION,
     optimizer::String="auto",
     use_cache::Bool=true,
@@ -157,7 +166,17 @@ function generate_market_orders_from_uc(
                 should_bid = false
                 bid_quantity = 0.0
 
-                if bidding_strategy == :committed_only
+                if bidding_strategy == :merit_order
+                    # Merit order: Committed bid UC dispatch, uncommitted bid p_max for price discovery
+                    should_bid = true
+                    if commitment[i, t] > COMMITMENT_THRESHOLD && generation[i, t] > GENERATION_THRESHOLD
+                        # Committed: bid actual UC dispatch (physically feasible)
+                        bid_quantity = generation[i, t]
+                    else
+                        # Uncommitted: bid full capacity for price discovery
+                        bid_quantity = gen.p_max
+                    end
+                elseif bidding_strategy == :committed_only
                     # Conservative: Only bid committed units with positive generation
                     if commitment[i, t] > COMMITMENT_THRESHOLD && generation[i, t] > GENERATION_THRESHOLD
                         should_bid = true
@@ -188,7 +207,7 @@ function generate_market_orders_from_uc(
                         end
                     end
                 else
-                    error("Unknown bidding strategy: $bidding_strategy. Valid options: :committed_only, :all_available_max, :all_available_realistic")
+                    error("Unknown bidding strategy: $bidding_strategy. Valid options: :merit_order, :committed_only, :all_available_max, :all_available_realistic")
                 end
 
                 if should_bid
@@ -218,7 +237,10 @@ function generate_market_orders_from_uc(
 
                     # Debug output for first few orders
                     if length(supply_orders) <= 5
-                        if bidding_strategy == :committed_only
+                        if bidding_strategy == :merit_order
+                            committed_status = commitment[i, t] > COMMITMENT_THRESHOLD ? "Committed" : "Uncommitted"
+                            strategy_label = "$(committed_status)=$(round(bid_quantity, digits=1))MW"
+                        elseif bidding_strategy == :committed_only
                             strategy_label = "UC=$(round(generation[i,t], digits=1))MW"
                         elseif bidding_strategy == :all_available_max
                             strategy_label = "Max=$(round(bid_quantity, digits=1))MW"
@@ -296,10 +318,10 @@ function generate_market_orders_from_uc(
 end
 
 """
-    apply_bidding_strategy_to_uc(uc_solution, bidding_zone::String, day::Date; markup_factor::Float64=1.1, demand_price::Float64=3000.0, bidding_strategy::Symbol=:committed_only)
+    apply_bidding_strategy_to_uc(uc_solution, bidding_zone::String, day::Date; markup_factor::Float64=1.1, demand_price::Float64=500.0, bidding_strategy::Symbol=:merit_order)
 
 Applies a bidding strategy to an already-solved unit commitment problem.
-This is more efficient than `generate_market_orders_from_uc` when testing multiple strategies 
+This is more efficient than `generate_market_orders_from_uc` when testing multiple strategies
 on the same UC solution, as it avoids re-solving the expensive optimization.
 
 # Arguments
@@ -307,7 +329,7 @@ on the same UC solution, as it avoids re-solving the expensive optimization.
 - `bidding_zone::String`: The bidding zone identifier (e.g., "GR")
 - `day::Date`: The target day for bidding
 - `markup_factor::Float64`: Markup factor for supply bids above marginal cost (default: 1.1 = 10% markup)
-- `demand_price::Float64`: Price for demand orders (default: €3000/MWh)
+- `demand_price::Float64`: Price for demand orders (default: €500/MWh)
 - `bidding_strategy::Symbol`: Strategy for creating supply orders (same as generate_market_orders_from_uc)
 - `uncommitted_unit_fraction::Float64`: Fraction of p_max to use for uncommitted units with very low p_min (default: 0.2 = 20%)
 
@@ -320,9 +342,9 @@ on the same UC solution, as it avoids re-solving the expensive optimization.
 uc_solution = solve_unit_commitment("GR", Date("2018-06-24"))
 
 # Apply different strategies to the same solution (much faster!)
-result1 = apply_bidding_strategy_to_uc(uc_solution, "GR", Date("2018-06-24"), bidding_strategy=:committed_only)
-result2 = apply_bidding_strategy_to_uc(uc_solution, "GR", Date("2018-06-24"), bidding_strategy=:all_available_max)
-result3 = apply_bidding_strategy_to_uc(uc_solution, "GR", Date("2018-06-24"), bidding_strategy=:all_available_realistic)
+result1 = apply_bidding_strategy_to_uc(uc_solution, "GR", Date("2018-06-24"), bidding_strategy=:merit_order)
+result2 = apply_bidding_strategy_to_uc(uc_solution, "GR", Date("2018-06-24"), bidding_strategy=:committed_only)
+result3 = apply_bidding_strategy_to_uc(uc_solution, "GR", Date("2018-06-24"), bidding_strategy=:all_available_max)
 ```
 """
 function apply_bidding_strategy_to_uc(
@@ -331,7 +353,7 @@ function apply_bidding_strategy_to_uc(
     day::Date;
     markup_factor::Float64=1.1,
     demand_price::Float64=500.0,
-    bidding_strategy::Symbol=:committed_only,
+    bidding_strategy::Symbol=:merit_order,
     uncommitted_unit_fraction::Float64=DEFAULT_UNCOMMITTED_UNIT_FRACTION
 )
 
@@ -381,7 +403,17 @@ function apply_bidding_strategy_to_uc(
                 should_bid = false
                 bid_quantity = 0.0
 
-                if bidding_strategy == :committed_only
+                if bidding_strategy == :merit_order
+                    # Merit order: Committed bid UC dispatch, uncommitted bid p_max for price discovery
+                    should_bid = true
+                    if commitment[i, t] > COMMITMENT_THRESHOLD && generation[i, t] > GENERATION_THRESHOLD
+                        # Committed: bid actual UC dispatch (physically feasible)
+                        bid_quantity = generation[i, t]
+                    else
+                        # Uncommitted: bid full capacity for price discovery
+                        bid_quantity = gen.p_max
+                    end
+                elseif bidding_strategy == :committed_only
                     # Conservative: Only bid committed units with positive generation
                     if commitment[i, t] > COMMITMENT_THRESHOLD && generation[i, t] > GENERATION_THRESHOLD
                         should_bid = true
@@ -408,7 +440,7 @@ function apply_bidding_strategy_to_uc(
                         end
                     end
                 else
-                    error("Unknown bidding strategy: $bidding_strategy. Valid options: :committed_only, :all_available_max, :all_available_realistic")
+                    error("Unknown bidding strategy: $bidding_strategy. Valid options: :merit_order, :committed_only, :all_available_max, :all_available_realistic")
                 end
 
                 if should_bid

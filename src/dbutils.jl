@@ -367,7 +367,7 @@ ON simulations.energy_prices (optimization_run_id)
                                WHERE table_schema = 'simulations'
                                AND table_name = 'optimization_runs'
                                AND column_name = 'bidding_strategy') THEN
-                    ALTER TABLE simulations.optimization_runs ADD COLUMN bidding_strategy VARCHAR(30) DEFAULT 'committed_only';
+                    ALTER TABLE simulations.optimization_runs ADD COLUMN bidding_strategy VARCHAR(30) DEFAULT 'merit_order';
                 END IF;
                 IF NOT EXISTS (SELECT 1 FROM information_schema.columns
                                WHERE table_schema = 'simulations'

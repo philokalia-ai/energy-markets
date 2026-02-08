@@ -32,6 +32,7 @@ max_iterations = parse(Int, get(ENV, "MAX_ITERATIONS", "10"))
 price_tolerance = parse(Float64, get(ENV, "PRICE_TOLERANCE", "1.0"))
 damping_factor = parse(Float64, get(ENV, "DAMPING_FACTOR", "0.7"))
 markup_factor = parse(Float64, get(ENV, "MARKUP_FACTOR", "1.1"))
+bidding_strategy = Symbol(get(ENV, "BIDDING_STRATEGY", "merit_order"))
 
 # Parse max_workers (0 means auto-detect based on optimizer)
 max_workers = if max_workers_input == "0"
@@ -49,6 +50,7 @@ println("🔁 Max iterations: $max_iterations")
 println("💰 Price tolerance: $price_tolerance €/MWh")
 println("🎚️ Damping factor: $damping_factor")
 println("💹 Markup factor: $markup_factor")
+println("📊 Bidding strategy: $bidding_strategy")
 println()
 
 # Set up parallel processing if requested
@@ -110,6 +112,7 @@ try
                 price_tolerance=price_tolerance,
                 damping_factor=damping_factor,
                 markup_factor=markup_factor,
+                bidding_strategy=bidding_strategy,
                 silent=true,
                 save_to_db=true,
                 parallel=use_parallel,

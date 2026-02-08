@@ -561,7 +561,8 @@ function generate_energy_prices(bidding_zone::String, date::Date;
     random_seed::Union{Int,Nothing}=nothing,
     silent::Bool=true,
     save_to_db::Bool=false,
-    force_rerun::Bool=false)
+    force_rerun::Bool=false,
+    bidding_strategy::Symbol=:merit_order)
 
     # Validate inputs
     if !(order_method in [:uc_based, :alternative])
@@ -586,7 +587,8 @@ function generate_energy_prices(bidding_zone::String, date::Date;
             order_book = create_typed_order_book(bidding_zone, date;
                 markup_factor=markup_factor,
                 optimizer=optimizer,
-                force_rerun=force_rerun
+                force_rerun=force_rerun,
+                bidding_strategy=bidding_strategy
             )
 
         elseif order_method == :alternative
@@ -679,6 +681,7 @@ function generate_energy_prices(bidding_zone::String, date::Date;
                     num_price_periods=length(prices),
                     clearing_mode="single_zone",
                     markup_factor=markup_factor,
+                    bidding_strategy=string(bidding_strategy),
                     cost_model_version="v2")
 
                 # Save energy prices to database if requested
@@ -972,7 +975,8 @@ function run_multi_zone_market_clearing(date::Date;
                                         save_to_db::Bool=false,
                                         force_rerun::Bool=false,
                                         parallel::Bool=false,
-                                        max_workers::Union{Int, Nothing}=nothing)
+                                        max_workers::Union{Int, Nothing}=nothing,
+                                        bidding_strategy::Symbol=:merit_order)
 
     start_time = time()
 
@@ -1003,7 +1007,8 @@ function run_multi_zone_market_clearing(date::Date;
                                           optimizer=optimizer,
                                           force_rerun=force_rerun,
                                           parallel=parallel,
-                                          max_workers=max_workers)
+                                          max_workers=max_workers,
+                                          bidding_strategy=bidding_strategy)
     elseif order_method == :alternative
         # Alternative: uses simplified order generation (faster)
         _create_multi_zone_order_book_alternative(zones, date)
@@ -1077,6 +1082,7 @@ function run_multi_zone_market_clearing(date::Date;
                     num_price_periods=length(order_book.periods),
                     clearing_mode="multi_zone",
                     markup_factor=markup_factor,
+                    bidding_strategy=string(bidding_strategy),
                     cost_model_version="v2"
                 )
 
@@ -1188,7 +1194,8 @@ function run_iterative_multi_zone_market_clearing(date::Date;
     silent::Bool=true,
     save_to_db::Bool=false,
     parallel::Bool=false,
-    max_workers::Union{Int, Nothing}=nothing
+    max_workers::Union{Int, Nothing}=nothing,
+    bidding_strategy::Symbol=:merit_order
 )
     total_start_time = time()
 
@@ -1245,7 +1252,8 @@ function run_iterative_multi_zone_market_clearing(date::Date;
             use_cache=false,
             parallel=parallel,
             max_workers=max_workers,
-            net_imports_by_zone=expected_net_imports
+            net_imports_by_zone=expected_net_imports,
+            bidding_strategy=bidding_strategy
         )
 
         # Step 2: Solve MPCC
@@ -1343,6 +1351,7 @@ function run_iterative_multi_zone_market_clearing(date::Date;
                 # Tier 1+2 parameters
                 clearing_mode="multi_zone_iterative",
                 markup_factor=markup_factor,
+                bidding_strategy=string(bidding_strategy),
                 cost_model_version="v2",
                 # Tier 3: iterative input settings
                 price_tolerance=price_tolerance,
@@ -1478,7 +1487,8 @@ function run_multi_zone_for_date_range(start_date::Date, end_date::Date;
                                        save_to_db::Bool=false,
                                        skip_existing::Bool=true,
                                        force_rerun::Bool=false,
-                                       parallel::Bool=false)
+                                       parallel::Bool=false,
+                                       bidding_strategy::Symbol=:merit_order)
 
     # Validate date range
     if start_date > end_date
@@ -1574,7 +1584,8 @@ function run_multi_zone_for_date_range(start_date::Date, end_date::Date;
                                                     silent=silent,
                                                     save_to_db=save_to_db,
                                                     force_rerun=force_rerun,
-                                                    parallel=parallel)
+                                                    parallel=parallel,
+                                                    bidding_strategy=bidding_strategy)
 
             date_elapsed = time() - date_start_time
 
@@ -1853,7 +1864,8 @@ function generate_energy_prices_for_all_zones(date::Date;
     parallel::Bool=false,
     max_workers::Union{Int,Nothing}=nothing,
     chunk_size::Int=1,
-    force_rerun::Bool=false)
+    force_rerun::Bool=false,
+    bidding_strategy::Symbol=:merit_order)
 
     start_time = time()
 
@@ -1955,14 +1967,14 @@ function generate_energy_prices_for_all_zones(date::Date;
             zones_to_process, date, order_method, model, optimizer,
             markup_factor, random_seed, silent, save_to_db,
             max_retries, retry_delay, progress_callback, chunk_size,
-            force_rerun
+            force_rerun, bidding_strategy
         )
     else
         results = _process_zones_sequential(
             zones_to_process, date, order_method, model, optimizer,
             markup_factor, random_seed, silent, save_to_db,
             max_retries, retry_delay, progress_callback, start_time,
-            force_rerun
+            force_rerun, bidding_strategy
         )
     end
 
@@ -2200,7 +2212,8 @@ function generate_energy_prices_for_date_range(start_date::Date, end_date::Date;
     parallel::Bool=false,
     max_workers::Union{Int,Nothing}=nothing,
     chunk_size::Int=1,
-    force_rerun::Bool=false)
+    force_rerun::Bool=false,
+    bidding_strategy::Symbol=:merit_order)
 
     # Validate date range
     if start_date > end_date
@@ -2252,7 +2265,8 @@ function generate_energy_prices_for_date_range(start_date::Date, end_date::Date;
             date_results = _process_dates_parallel(
                 dates, order_method, model, optimizer, markup_factor,
                 random_seed, silent, save_to_db, max_retries, retry_delay,
-                fallback_zones, skip_existing, range_start_time, force_rerun
+                fallback_zones, skip_existing, range_start_time, force_rerun,
+                bidding_strategy
             )
 
             # Aggregate results from parallel processing
@@ -2293,7 +2307,8 @@ function generate_energy_prices_for_date_range(start_date::Date, end_date::Date;
                     parallel=false,  # Force sequential zones when processing dates in sequence
                     max_workers=1,
                     chunk_size=1,
-                    force_rerun=force_rerun)
+                    force_rerun=force_rerun,
+                    bidding_strategy=bidding_strategy)
 
                 date_elapsed = time() - date_start_time
 
@@ -2520,14 +2535,14 @@ Helper function for processing dates in parallel.
 """
 function _process_dates_parallel(dates, order_method, model, optimizer, markup_factor,
     random_seed, silent, save_to_db, max_retries, retry_delay,
-    fallback_zones, skip_existing, range_start_time, force_rerun)
+    fallback_zones, skip_existing, range_start_time, force_rerun, bidding_strategy)
 
     println("📦 Processing $(length(dates)) dates in parallel...")
 
     # Create arguments tuple for each date
     date_args = [(date, order_method, model, optimizer, markup_factor, random_seed,
         silent, save_to_db, max_retries, retry_delay, fallback_zones,
-        skip_existing, range_start_time, force_rerun) for date in dates]
+        skip_existing, range_start_time, force_rerun, bidding_strategy) for date in dates]
 
     # Process dates in parallel using pmap
     date_results = pmap(_parallel_date_processor, date_args)
@@ -2541,7 +2556,7 @@ Wrapper function for pmap to process a single date.
 function _parallel_date_processor(args)
     date, order_method, model, optimizer, markup_factor, random_seed,
     silent, save_to_db, max_retries, retry_delay, fallback_zones,
-    skip_existing, range_start_time, force_rerun = args
+    skip_existing, range_start_time, force_rerun, bidding_strategy = args
 
     date_start_time = time()
     worker_id = myid()
@@ -2566,7 +2581,8 @@ function _parallel_date_processor(args)
             parallel=false,  # Always sequential zones in parallel date mode
             max_workers=1,
             chunk_size=1,
-            force_rerun=force_rerun)
+            force_rerun=force_rerun,
+            bidding_strategy=bidding_strategy)
 
         date_elapsed = time() - date_start_time
         date_successful = zones_result.success_count > 0
@@ -2688,7 +2704,7 @@ Helper function for processing zones sequentially.
 function _process_zones_sequential(zones_to_process, date, order_method, model, optimizer,
     markup_factor, random_seed, silent, save_to_db,
     max_retries, retry_delay, progress_callback, start_time,
-    force_rerun)
+    force_rerun, bidding_strategy)
     results = NamedTuple[]
 
     for (i, zone) in enumerate(zones_to_process)
@@ -2718,7 +2734,8 @@ function _process_zones_sequential(zones_to_process, date, order_method, model, 
                     random_seed=random_seed,
                     silent=silent,
                     save_to_db=save_to_db,
-                    force_rerun=force_rerun)
+                    force_rerun=force_rerun,
+                    bidding_strategy=bidding_strategy)
 
                 if !isempty(zone_prices)
                     zone_success = true
@@ -2813,7 +2830,7 @@ Helper function for processing zones in parallel.
 function _process_zones_parallel(zones_to_process, date, order_method, model, optimizer,
     markup_factor, random_seed, silent, save_to_db,
     max_retries, retry_delay, progress_callback, chunk_size,
-    force_rerun)
+    force_rerun, bidding_strategy)
 
     # Split zones into chunks for distribution
     zone_chunks = [zones_to_process[i:min(i + chunk_size - 1, end)] for i in 1:chunk_size:length(zones_to_process)]
@@ -2821,7 +2838,7 @@ function _process_zones_parallel(zones_to_process, date, order_method, model, op
     println("📦 Split $(length(zones_to_process)) zones into $(length(zone_chunks)) chunks of size $chunk_size")
 
     # Prepare arguments for pmap
-    pmap_args = [(chunk, date, order_method, model, optimizer, markup_factor, random_seed, silent, save_to_db, max_retries, retry_delay, force_rerun) for chunk in zone_chunks]
+    pmap_args = [(chunk, date, order_method, model, optimizer, markup_factor, random_seed, silent, save_to_db, max_retries, retry_delay, force_rerun, bidding_strategy) for chunk in zone_chunks]
 
     # Process chunks in parallel
     chunk_start_time = time()
@@ -2859,10 +2876,10 @@ end
 Wrapper function for pmap to process a chunk of zones.
 """
 function _parallel_chunk_processor(args)
-    zone_chunk, date, order_method, model, optimizer, markup_factor, random_seed, silent, save_to_db, max_retries, retry_delay, force_rerun = args
+    zone_chunk, date, order_method, model, optimizer, markup_factor, random_seed, silent, save_to_db, max_retries, retry_delay, force_rerun, bidding_strategy = args
     return _process_zone_chunk(zone_chunk, date, order_method, model, optimizer,
         markup_factor, random_seed, silent, save_to_db,
-        max_retries, retry_delay, force_rerun)
+        max_retries, retry_delay, force_rerun, bidding_strategy)
 end
 
 """
@@ -2870,7 +2887,7 @@ Process a chunk of zones on a single worker.
 """
 function _process_zone_chunk(zone_chunk, date, order_method, model, optimizer,
     markup_factor, random_seed, silent, save_to_db,
-    max_retries, retry_delay, force_rerun)
+    max_retries, retry_delay, force_rerun, bidding_strategy)
     worker_id = myid()
     chunk_results = NamedTuple[]
 
@@ -2894,7 +2911,8 @@ function _process_zone_chunk(zone_chunk, date, order_method, model, optimizer,
                     random_seed=random_seed,
                     silent=silent,
                     save_to_db=save_to_db,
-                    force_rerun=force_rerun)
+                    force_rerun=force_rerun,
+                    bidding_strategy=bidding_strategy)
 
                 if !isempty(zone_prices)
                     zone_success = true

@@ -53,6 +53,14 @@ on:
         required: false
         default: "1.1"
         type: string
+      bidding_strategy:
+        description: "Bidding strategy (merit_order, committed_only)"
+        required: false
+        default: "merit_order"
+        type: choice
+        options:
+          - merit_order
+          - committed_only
 
 env:
   JULIA_VERSION: "1.11"
@@ -178,6 +186,7 @@ jobs:
             ORDER_METHOD="alternative"
             FORCE_RERUN=false
             MARKUP_FACTOR="1.1"
+            BIDDING_STRATEGY="merit_order"
           else
             # For manual runs, use inputs
             START_DATE="${{ github.event.inputs.start_date }}"
@@ -188,6 +197,7 @@ jobs:
             ORDER_METHOD="${{ github.event.inputs.order_method }}"
             FORCE_RERUN="${{ github.event.inputs.force_rerun }}"
             MARKUP_FACTOR="${{ github.event.inputs.markup_factor }}"
+            BIDDING_STRATEGY="${{ github.event.inputs.bidding_strategy }}"
           fi
 
           echo "📅 Processing date range: $START_DATE to $END_DATE"
@@ -197,9 +207,10 @@ jobs:
           echo "📋 Order method: $ORDER_METHOD"
           echo "🔄 Force rerun: $FORCE_RERUN"
           echo "💹 Markup factor: $MARKUP_FACTOR"
+          echo "📊 Bidding strategy: $BIDDING_STRATEGY"
 
           # Export environment variables for Julia script
-          export START_DATE END_DATE PARALLEL OPTIMIZER MAX_WORKERS ORDER_METHOD FORCE_RERUN MARKUP_FACTOR
+          export START_DATE END_DATE PARALLEL OPTIMIZER MAX_WORKERS ORDER_METHOD FORCE_RERUN MARKUP_FACTOR BIDDING_STRATEGY
 
           # Execute the price generation script
           julia --project=. bin/main.jl

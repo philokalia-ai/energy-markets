@@ -428,8 +428,21 @@ Key functions in `src/Generators.jl`:
 
 Expected prices (2024): Gas CCGT ~84, Gas CHP ~97, Gas OCGT ~140, Lignite ~86, Hard coal ~103, Nuclear ~31 EUR/MWh.
 
-The BiddingStrategy module applies a separate 10% markup (`markup_factor=1.1`) when
-converting UC results to market bids. This is the only markup applied.
+**Bidding strategy** (`bidding_strategy` parameter, default `:merit_order`):
+
+The BiddingStrategy module converts UC results to market bids. The default `:merit_order`
+strategy builds a proper supply curve for realistic price discovery:
+- **Committed generators** (UC says ON): bid their UC dispatch `g[i,t]` at `marginal_cost × markup_factor`
+- **Uncommitted generators** (UC says OFF): bid their full capacity `p_max` at `marginal_cost × markup_factor`
+
+This creates surplus supply above the clearing point. The MPCC accepts cheap committed
+supply first, then the cheapest uncommitted generator becomes the **marginal order** that
+sets the price — producing realistic merit-order prices (typically 50-150 EUR/MWh).
+
+The previous `:committed_only` strategy only bid committed generators, producing degenerate
+500 EUR/MWh prices because supply exactly equaled demand with no marginal order.
+
+The markup factor (`markup_factor=1.1`, 10% markup) is the only markup applied.
 
 Unit commitment objective function components:
 - **Production costs**: `marginal_cost × generation` for each generator and period
@@ -690,6 +703,7 @@ The workflows invoke Julia scripts in the `bin/` directory:
 - `FORCE_RERUN`: Force UC re-solve, bypassing UC results cache (default: false)
 - `SKIP_EXISTING`: Skip dates/zones with existing price data in DB (default: true)
 - `MARKUP_FACTOR`: Price markup factor for supply bids (default: 1.1)
+- `BIDDING_STRATEGY`: Bidding strategy for supply orders (default: merit_order). Options: merit_order, committed_only
 
 `FORCE_RERUN` and `SKIP_EXISTING` are independent controls:
 - `SKIP_EXISTING` checks `simulations.energy_prices` — skips entire pipeline if prices exist for that date/zone/clearing_mode/code_version
@@ -707,6 +721,7 @@ export ORDER_METHOD="uc_based"
 export FORCE_RERUN="false"
 export SKIP_EXISTING="true"
 export MARKUP_FACTOR="1.1"
+export BIDDING_STRATEGY="merit_order"
 
 # For iterative (additional params)
 export MAX_ITERATIONS="10"
@@ -893,7 +908,7 @@ The project uses PostgreSQL with two main schemas:
 - Unique on `(bidding_zone, optimization_date, order_method, model_type, clearing_mode, code_version, optimizer)`
 - **Tier 1 identifier**: `clearing_mode` — `'single_zone'`, `'multi_zone'`, `'multi_zone_iterative'`
 - **Tier 2 methodology parameters** (stored as individual typed columns):
-  - `markup_factor` (default 1.1), `bidding_strategy` (default 'committed_only')
+  - `markup_factor` (default 1.1), `bidding_strategy` (default 'merit_order')
   - `demand_price` (default 500.0), `mip_gap` (default 0.01), `time_limit_seconds` (default 600.0)
   - `curtailment_penalty` (default 1.0), `excess_penalty` (default 10000.0), `shortage_penalty` (default 10000.0)
   - `use_inferred_params` (default true), `cost_model_version` (default 'v2')
