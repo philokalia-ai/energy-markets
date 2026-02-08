@@ -444,6 +444,23 @@ The previous `:committed_only` strategy only bid committed generators, producing
 
 The markup factor (`markup_factor=1.1`, 10% markup) is the only markup applied.
 
+**MPCC price regularization:**
+
+The MPCC formulation uses `market_price` as a primal decision variable that appears in
+complementarity constraints but NOT in the objective function. Complementarity constraints
+only set lower bounds (`market_price ≥ accepted_supply_price`), which means the price is
+underdetermined — the solver can pick any value up to the upper bound (demand_price = 500).
+
+To fix this, a small regularization term is added to the objective:
+```
+Max welfare - ε × Σ market_price[node, time_period]    (ε = 1e-6)
+```
+
+This pushes `market_price` to the minimum feasible value = `max(accepted_supply_prices)`,
+which is exactly the correct merit-order clearing price. The coefficient ε = 1e-6 is small
+enough to not affect welfare-optimal order acceptance decisions (welfare is in millions of
+EUR, regularization adds ~0.012 EUR).
+
 Unit commitment objective function components:
 - **Production costs**: `marginal_cost × generation` for each generator and period
 - **Startup costs**: Temperature-dependent (hot × 1.0, warm × 1.5, cold × 2.5 base cost)

@@ -711,12 +711,23 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
         # Dictionary version: stepwise_acceptance[order_id] * (sum of quantities) * price
         # Need to use signed quantities: negative for supply, positive for demand
         load_shed_penalty = 10000.0  # High penalty for load shedding (€/MWh)
+
+        # Price regularization: small term to push market_price to the minimum feasible value.
+        # Without this, market_price is underdetermined — it only appears in complementarity
+        # constraints that set lower bounds (market_price ≥ accepted_supply_price), so the solver
+        # picks any value up to the upper bound (500 EUR). The regularization drives the price
+        # to max(accepted_supply_prices), which is the correct merit-order clearing price.
+        # ε = 1e-6 is small enough to not affect welfare-optimal acceptance decisions.
+        price_regularization = 1e-6
+
         @objective(model, Max,
             sum(stepwise_acceptance[order_ids[i]] *
                 (order.type == :supply ? -order.quantity : order.quantity) * order.price
                 for (i, order) in enumerate(simple_orders)) -
             load_shed_penalty * sum(load_shed[node_id, time_period]
-                                    for node_id in order_book.nodes, time_period in order_book.periods)
+                                    for node_id in order_book.nodes, time_period in order_book.periods) -
+            price_regularization * sum(market_price[node_id, time_period]
+                                       for node_id in order_book.nodes, time_period in order_book.periods)
         )
 
         # Solve the model
