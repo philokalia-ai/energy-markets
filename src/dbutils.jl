@@ -46,12 +46,12 @@ end
 
 function withdb(f)
     connection = Base.acquire(newconnection, cnxpool; isvalid=cnxisok)
-    result = f(connection)
-
-    !cnxisok(connection) && LibPQ.reset!(connection)
-    Base.release(cnxpool, connection)
-
-    return result
+    try
+        return f(connection)
+    finally
+        !cnxisok(connection) && LibPQ.reset!(connection)
+        Base.release(cnxpool, connection)
+    end
 end
 
 sql2df(sql, args=[]) =
