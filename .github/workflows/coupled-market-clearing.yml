@@ -1,6 +1,9 @@
-name: Generate Iterative Multi-Zone Prices
+name: Coupled Market Clearing
 
 on:
+  schedule:
+    # Run daily at 3 AM UTC for previous day (offset from single-zone workflow)
+    - cron: "0 3 * * *"
   workflow_dispatch:
     inputs:
       start_date:
@@ -26,26 +29,25 @@ on:
         options:
           - highs
           - gurobi
+          - cplex
       max_workers:
-        description: "Maximum parallel workers (0 = auto: 2 for Gurobi, half for HiGHS)"
+        description: "Maximum parallel workers (0 = auto-detect)"
         required: false
-        default: "0"
+        default: "20"
         type: string
-      max_iterations:
-        description: "Max UC-MPCC iterations per date"
+      order_method:
+        description: "Order generation method"
         required: false
-        default: "10"
-        type: string
-      price_tolerance:
-        description: "Convergence tolerance (EUR/MWh)"
+        default: "uc_based"
+        type: choice
+        options:
+          - uc_based
+          - alternative
+      force_rerun:
+        description: "Force UC re-solve, bypassing cache"
         required: false
-        default: "1.0"
-        type: string
-      damping_factor:
-        description: "Flow update damping factor (0-1)"
-        required: false
-        default: "0.7"
-        type: string
+        default: false
+        type: boolean
       markup_factor:
         description: "Price markup factor for supply bids"
         required: false
@@ -65,9 +67,9 @@ env:
   JULIA_NUM_THREADS: 4
 
 jobs:
-  generate-iterative-prices:
+  coupled-market-clearing:
     runs-on: [self-hosted, linux, ARM64]
-    timeout-minutes: 4320 # 72 hours timeout (iterative takes longer)
+    timeout-minutes: 2880 # 48 hours timeout
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -136,62 +138,76 @@ jobs:
             end
           "
 
-      - name: Generate iterative multi-zone prices
+      - name: Generate multi-zone prices
         id: generate
         env:
           ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
         run: |
-          START_DATE="${{ github.event.inputs.start_date }}"
-          END_DATE="${{ github.event.inputs.end_date }}"
-          PARALLEL="${{ github.event.inputs.parallel }}"
-          OPTIMIZER="${{ github.event.inputs.optimizer }}"
-          MAX_WORKERS="${{ github.event.inputs.max_workers }}"
-          MAX_ITERATIONS="${{ github.event.inputs.max_iterations }}"
-          PRICE_TOLERANCE="${{ github.event.inputs.price_tolerance }}"
-          DAMPING_FACTOR="${{ github.event.inputs.damping_factor }}"
-          MARKUP_FACTOR="${{ github.event.inputs.markup_factor }}"
-          BIDDING_STRATEGY="${{ github.event.inputs.bidding_strategy }}"
+          # Set default dates if scheduled trigger
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            START_DATE=$(date -d "yesterday" +%Y-%m-%d)
+            END_DATE=$START_DATE
+            PARALLEL=true
+            OPTIMIZER="highs"
+            MAX_WORKERS=16
+            ORDER_METHOD="uc_based"
+            FORCE_RERUN=false
+            MARKUP_FACTOR="1.1"
+            BIDDING_STRATEGY="merit_order"
+          else
+            START_DATE="${{ github.event.inputs.start_date }}"
+            END_DATE="${{ github.event.inputs.end_date }}"
+            PARALLEL="${{ github.event.inputs.parallel }}"
+            OPTIMIZER="${{ github.event.inputs.optimizer }}"
+            MAX_WORKERS="${{ github.event.inputs.max_workers }}"
+            ORDER_METHOD="${{ github.event.inputs.order_method }}"
+            FORCE_RERUN="${{ github.event.inputs.force_rerun }}"
+            MARKUP_FACTOR="${{ github.event.inputs.markup_factor }}"
+            BIDDING_STRATEGY="${{ github.event.inputs.bidding_strategy }}"
+          fi
 
-          echo "🔄 Iterative multi-zone market clearing"
+          echo "🌍 Multi-zone market clearing"
           echo "📅 Date range: $START_DATE to $END_DATE"
           echo "⚖️ Optimizer: $OPTIMIZER"
           echo "⚡ Parallel UC: $PARALLEL"
-          echo "👥 Max workers: $MAX_WORKERS (0 = auto)"
-          echo "🔁 Max iterations: $MAX_ITERATIONS"
-          echo "💰 Price tolerance: $PRICE_TOLERANCE €/MWh"
-          echo "🎚️ Damping factor: $DAMPING_FACTOR"
+          echo "👥 Max workers: $MAX_WORKERS"
+          echo "📋 Order method: $ORDER_METHOD"
+          echo "🔄 Force rerun: $FORCE_RERUN"
           echo "💹 Markup factor: $MARKUP_FACTOR"
           echo "📊 Bidding strategy: $BIDDING_STRATEGY"
 
-          export START_DATE END_DATE PARALLEL OPTIMIZER MAX_WORKERS
-          export MAX_ITERATIONS PRICE_TOLERANCE DAMPING_FACTOR MARKUP_FACTOR BIDDING_STRATEGY
+          export START_DATE END_DATE PARALLEL OPTIMIZER MAX_WORKERS ORDER_METHOD FORCE_RERUN MARKUP_FACTOR BIDDING_STRATEGY
 
-          julia --project=. bin/iterative_multi_zone_main.jl
+          julia --project=. bin/coupled_clearing_main.jl
 
       - name: Create execution summary
         if: always()
         run: |
-          echo "## 🔄 Iterative Multi-Zone Market Clearing Report" >> $GITHUB_STEP_SUMMARY
+          echo "## 🌍 Multi-Zone Market Clearing Report" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
-          TRIGGER="🖱️ Manual"
-          DATE_RANGE="${{ github.event.inputs.start_date }} to ${{ github.event.inputs.end_date }}"
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            TRIGGER="⏰ Scheduled (daily)"
+            DATE_RANGE="$(date -d "yesterday" +%Y-%m-%d)"
+          else
+            TRIGGER="🖱️ Manual"
+            DATE_RANGE="${{ github.event.inputs.start_date }} to ${{ github.event.inputs.end_date }}"
+          fi
 
           echo "### Execution Details" >> $GITHUB_STEP_SUMMARY
           echo "- **Trigger**: $TRIGGER" >> $GITHUB_STEP_SUMMARY
           echo "- **Date Range**: $DATE_RANGE" >> $GITHUB_STEP_SUMMARY
-          echo "- **Optimizer**: ${{ github.event.inputs.optimizer }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Parallel UC**: ${{ github.event.inputs.parallel }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Max Iterations**: ${{ github.event.inputs.max_iterations }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Price Tolerance**: ${{ github.event.inputs.price_tolerance }} €/MWh" >> $GITHUB_STEP_SUMMARY
-          echo "- **Damping Factor**: ${{ github.event.inputs.damping_factor }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Optimizer**: ${{ github.event.inputs.optimizer || 'highs' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Parallel UC**: ${{ github.event.inputs.parallel || 'true' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Order Method**: ${{ github.event.inputs.order_method || 'uc_based' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Force Rerun**: ${{ github.event.inputs.force_rerun || 'false' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Markup Factor**: ${{ github.event.inputs.markup_factor || '1.1' }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
           if [ "${{ steps.generate.outputs.status }}" = "success" ]; then
             echo "### ✅ Results" >> $GITHUB_STEP_SUMMARY
             echo "- **Date Success**: ${{ steps.generate.outputs.successful_dates }}/${{ steps.generate.outputs.total_dates }} (${{ steps.generate.outputs.date_success_rate }}%)" >> $GITHUB_STEP_SUMMARY
-            echo "- **Converged**: ${{ steps.generate.outputs.converged_dates }}/${{ steps.generate.outputs.successful_dates }} (${{ steps.generate.outputs.convergence_rate }}%)" >> $GITHUB_STEP_SUMMARY
-            echo "- **Total Iterations**: ${{ steps.generate.outputs.total_iterations }}" >> $GITHUB_STEP_SUMMARY
+            echo "- **Skipped**: ${{ steps.generate.outputs.skipped_dates }}" >> $GITHUB_STEP_SUMMARY
             echo "- **Failed**: ${{ steps.generate.outputs.failed_dates }}" >> $GITHUB_STEP_SUMMARY
             echo "- **Processing Time**: ${{ steps.generate.outputs.processing_time_hours }} hours" >> $GITHUB_STEP_SUMMARY
 
@@ -213,8 +229,8 @@ jobs:
           status: failure
           webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
           text: |
-            🚨 Iterative multi-zone market clearing failed!
-            📅 Date range: ${{ github.event.inputs.start_date }} to ${{ github.event.inputs.end_date }}
+            🚨 Multi-zone market clearing failed!
+            📅 Date range: ${{ github.event.inputs.start_date || 'yesterday' }} to ${{ github.event.inputs.end_date || 'yesterday' }}
             🔗 View details: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         continue-on-error: true
 
@@ -225,8 +241,7 @@ jobs:
           status: success
           webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
           text: |
-            ✅ Iterative multi-zone market clearing completed!
+            ✅ Multi-zone market clearing completed!
             📅 Processed: ${{ steps.generate.outputs.successful_dates }}/${{ steps.generate.outputs.total_dates }} dates
-            🔄 Converged: ${{ steps.generate.outputs.converged_dates }} dates
             ⏱️ Time: ${{ steps.generate.outputs.processing_time_hours }} hours
         continue-on-error: true

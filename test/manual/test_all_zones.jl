@@ -1,6 +1,6 @@
 #!/usr/bin/env julia
 
-# Test script for generate_energy_prices_for_all_zones()
+# Test script for run_independent_clearing_for_all_zones()
 
 using Pkg
 Pkg.activate(".")
@@ -9,7 +9,7 @@ using Dates
 using Euphemia
 
 println("=" ^ 60)
-println("Testing generate_energy_prices_for_all_zones()")
+println("Testing run_independent_clearing_for_all_zones()")
 println("=" ^ 60)
 
 # Test with a recent date
@@ -25,7 +25,7 @@ println()
 
 try
     # Call the function with basic parameters
-    result = Euphemia.generate_energy_prices_for_all_zones(
+    result = Euphemia.run_independent_clearing_for_all_zones(
         test_date;
         order_method=:alternative,
         model=:mpcc,

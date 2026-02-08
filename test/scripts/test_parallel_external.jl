@@ -58,7 +58,7 @@ println("   📦 Chunk size: 2 (process 2 zones per worker batch)")
 println()
 
 try
-    result = generate_energy_prices_for_all_zones(
+    result = run_independent_clearing_for_all_zones(
         test_date;
         order_method=:alternative,
         optimizer="highs",
@@ -126,7 +126,7 @@ catch e
     println("\n🔍 Debug Information:")
     println("   Workers: $(workers())")
     println("   Main process: $(myid())")
-    println("   Package loaded on workers? Run @everywhere @which generate_energy_prices_for_all_zones")
+    println("   Package loaded on workers? Run @everywhere @which run_independent_clearing_for_all_zones")
 end
 
 println("\n" * "="^60)

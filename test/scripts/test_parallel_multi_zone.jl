@@ -3,7 +3,7 @@
 """
 Test script for parallel UC execution in multi-zone market clearing.
 
-This script tests the `parallel` parameter in `run_multi_zone_market_clearing()`
+This script tests the `parallel` parameter in `run_coupled_market_clearing()`
 which runs UC solves concurrently across zones using Distributed.jl.
 
 Usage:
@@ -56,7 +56,7 @@ println("="^60)
 
 sequential_start = time()
 try
-    result_seq = run_multi_zone_market_clearing(test_date;
+    result_seq = run_coupled_market_clearing(test_date;
         zones=test_zones,
         order_method=:uc_based,
         optimizer="highs",
@@ -78,7 +78,7 @@ println("="^60)
 
 parallel_start = time()
 try
-    result_par = run_multi_zone_market_clearing(test_date;
+    result_par = run_coupled_market_clearing(test_date;
         zones=test_zones,
         order_method=:uc_based,
         optimizer="highs",

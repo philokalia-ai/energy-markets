@@ -53,7 +53,7 @@ println("=" ^ 70)
 println()
 
 start_time = time()
-result = run_multi_zone_market_clearing(
+result = run_coupled_market_clearing(
     TEST_DATE;
     order_method=ORDER_METHOD,
     optimizer=optimizer,

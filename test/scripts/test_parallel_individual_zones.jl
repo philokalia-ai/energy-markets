@@ -1,11 +1,11 @@
 #!/usr/bin/env julia
 """
-Test script for parallel processing using generate_energy_prices() with individual zones.
+Test script for parallel processing using run_independent_market_clearing() with individual zones.
 
 This script tests the external worker setup by:
 1. Setting up 4 worker processes externally
 2. Loading required packages on all workers
-3. Testing parallel processing with generate_energy_prices() for individual zones
+3. Testing parallel processing with run_independent_market_clearing() for individual zones
 4. Each worker processes one small bidding zone (AL, GR, BG, CZ)
 
 Usage:
@@ -78,15 +78,15 @@ for worker_id in [1; workers()]  # Include main process
         result = remotecall_fetch(worker_id) do
             try
                 # Check if Euphemia is loaded (check for module or imported functions)
-                has_euphemia = isdefined(Main, :Euphemia) || isdefined(Main, :generate_energy_prices)
+                has_euphemia = isdefined(Main, :Euphemia) || isdefined(Main, :run_independent_market_clearing)
 
-                # Check if generate_energy_prices function exists  
-                has_function = isdefined(Main, :generate_energy_prices)
+                # Check if run_independent_market_clearing function exists  
+                has_function = isdefined(Main, :run_independent_market_clearing)
 
                 # Get function info if available
                 func_info = if has_function
                     try
-                        "$(typeof(Main.generate_energy_prices))"
+                        "$(typeof(Main.run_independent_market_clearing))"
                     catch
                         "Function exists but type unavailable"
                     end
@@ -142,8 +142,8 @@ println("   📝 Zone assignments: $zone_assignments")
     try
         println("Worker $worker_id: 🔄 Processing zone $zone for date $date")
 
-        # Call generate_energy_prices for this specific zone
-        prices = generate_energy_prices(
+        # Call run_independent_market_clearing for this specific zone
+        prices = run_independent_market_clearing(
             zone,
             date;
             order_method=:alternative,
@@ -321,7 +321,7 @@ if success_count == total_zones
     println("🎉 SUCCESS: All $total_zones zones processed successfully!")
     println("   ⚡ Parallel processing is working correctly")
     println("   🚀 External worker setup is functioning properly")
-    println("   💪 generate_energy_prices() works well in parallel environment")
+    println("   💪 run_independent_market_clearing() works well in parallel environment")
 else
     println("⚠️  PARTIAL SUCCESS: $success_count/$total_zones zones succeeded")
     if failure_count > 0
@@ -339,7 +339,7 @@ if success_count > 0
 end
 
 println("\n🎯 Next steps:")
-println("   • This test validates that generate_energy_prices() works correctly in parallel")
+println("   • This test validates that run_independent_market_clearing() works correctly in parallel")
 println("   • The external worker setup is functioning as expected")
 println("   • Ready for production-scale parallel processing")
 println("   • Consider testing with larger zone sets for full validation")

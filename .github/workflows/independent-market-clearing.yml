@@ -1,4 +1,4 @@
-name: Generate Energy Prices
+name: Independent Market Clearing
 
 on:
   schedule:
@@ -67,7 +67,7 @@ env:
   JULIA_NUM_THREADS: 4
 
 jobs:
-  generate-prices:
+  independent-market-clearing:
     runs-on: [self-hosted, linux, ARM64]
     timeout-minutes: 2880 # 48 hours timeout - very generous for long processing
     steps:
@@ -213,7 +213,7 @@ jobs:
           export START_DATE END_DATE PARALLEL OPTIMIZER MAX_WORKERS ORDER_METHOD FORCE_RERUN MARKUP_FACTOR BIDDING_STRATEGY
 
           # Execute the price generation script
-          julia --project=. bin/main.jl
+          julia --project=. bin/independent_clearing_main.jl
 
       - name: Create execution summary
         if: always()

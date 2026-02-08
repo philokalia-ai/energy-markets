@@ -42,7 +42,7 @@ function test_worker_count(num_workers)
             # Quick test - just create order book, don't run full optimization
             println("Worker $worker_id: Testing zone $zone")
 
-            # This is much faster than full generate_energy_prices
+            # This is much faster than full run_independent_market_clearing
             # Just tests data loading and order book creation
             using Euphemia.AlternativeOrderBook
             result = create_adjusted_order_book(zone, Date(2024, 6, 18))
@@ -157,4 +157,4 @@ if length(results) >= 2
     println("   • Your 250GB RAM can easily support 50-80 workers")
 end
 
-println("\n🔍 Next step: Test with full generate_energy_prices() using recommended worker count")
+println("\n🔍 Next step: Test with full run_independent_market_clearing() using recommended worker count")

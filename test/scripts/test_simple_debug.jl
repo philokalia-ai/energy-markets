@@ -22,7 +22,7 @@ println("📅 Testing date $test_date (known working)...")
 for zone in test_zones
     println("  🌍 Testing $zone...")
     try
-        result = @timed generate_energy_prices(zone, test_date;
+        result = @timed run_independent_market_clearing(zone, test_date;
             order_method=:alternative,
             silent=true,
             save_to_db=false)
@@ -51,7 +51,7 @@ for zone in test_zones
 
         # Start a task that we can monitor
         task = @async begin
-            generate_energy_prices(zone, problem_date;
+            run_independent_market_clearing(zone, problem_date;
                 order_method=:alternative,
                 silent=true,
                 save_to_db=false)

@@ -37,7 +37,7 @@ end
         @testset "UC-based method with database save" begin
             # Generate prices using Unit Commitment method
             @info "Generating UC-based energy prices for $bidding_zone on $test_day"
-            prices_uc = generate_energy_prices(bidding_zone, test_day; order_method=:uc_based)
+            prices_uc = run_independent_market_clearing(bidding_zone, test_day; order_method=:uc_based)
 
             # Validate prices structure
             @test !isempty(prices_uc)
@@ -70,7 +70,7 @@ end
         @testset "Alternative method with database save" begin
             # Generate prices using Alternative Order Book method
             @info "Generating Alternative order book energy prices for $bidding_zone on $test_day"
-            prices_alt = generate_energy_prices(bidding_zone, test_day; order_method=:alternative)
+            prices_alt = run_independent_market_clearing(bidding_zone, test_day; order_method=:alternative)
 
             # Validate prices structure
             @test !isempty(prices_alt)

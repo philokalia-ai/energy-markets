@@ -3,7 +3,7 @@ using Dates
 using Euphemia
 
 """
-Test suite for generate_energy_prices_for_date_range function.
+Test suite for run_independent_clearing_for_date_range function.
 Tests the multi-date processing functionality with October 2025 as the target period.
 """
 
@@ -20,7 +20,7 @@ Tests the multi-date processing functionality with October 2025 as the target pe
         println("📊 Expected: 2 dates")
 
         # Test with basic parameters (sequential processing for reliability)
-        result = generate_energy_prices_for_date_range(
+        result = run_independent_clearing_for_date_range(
             start_date, end_date;
             order_method=:uc_based,
             model=:mpcc,
@@ -106,7 +106,7 @@ Tests the multi-date processing functionality with October 2025 as the target pe
         println("📊 Expected: 7 dates")
 
         # Test with parallel processing enabled
-        result = generate_energy_prices_for_date_range(
+        result = run_independent_clearing_for_date_range(
             start_date, end_date;
             order_method=:uc_based,
             model=:mpcc,
@@ -159,13 +159,13 @@ Tests the multi-date processing functionality with October 2025 as the target pe
         println("\n🧪 Testing error handling and edge cases")
 
         # Test invalid date range (start > end)
-        @test_throws ErrorException generate_energy_prices_for_date_range(
+        @test_throws ErrorException run_independent_clearing_for_date_range(
             Date(2025, 10, 31), Date(2025, 10, 1)
         )
 
         # Test single date (start == end)
         single_date = Date(2025, 10, 15)
-        result_single = generate_energy_prices_for_date_range(
+        result_single = run_independent_clearing_for_date_range(
             single_date, single_date;
             save_to_db=false,
             silent=true,
@@ -181,7 +181,7 @@ Tests the multi-date processing functionality with October 2025 as the target pe
         println("✅ Single date processing works correctly")
 
         # Test with custom fallback zones
-        fallback_result = generate_energy_prices_for_date_range(
+        fallback_result = run_independent_clearing_for_date_range(
             Date(2025, 10, 1), Date(2025, 10, 2);
             fallback_zones=["GR", "FR"],
             save_to_db=false,
@@ -203,7 +203,7 @@ Tests the multi-date processing functionality with October 2025 as the target pe
         end
 
         # Test short date range with progress callback
-        result = generate_energy_prices_for_date_range(
+        result = run_independent_clearing_for_date_range(
             Date(2025, 10, 1), Date(2025, 10, 3);
             progress_callback=test_progress_callback,
             save_to_db=false,

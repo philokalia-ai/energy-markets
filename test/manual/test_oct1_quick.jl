@@ -31,7 +31,7 @@ function test_single_zone(zone::String)
     start_time = time()
 
     try
-        prices = generate_energy_prices(zone, TEST_DATE;
+        prices = run_independent_market_clearing(zone, TEST_DATE;
             order_method=ORDER_METHOD,
             model=MODEL,
             optimizer=OPTIMIZER,

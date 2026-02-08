@@ -9,7 +9,7 @@ using Dates
 using Euphemia
 
 println("=" ^ 70)
-println("Testing generate_energy_prices() for Greece")
+println("Testing run_independent_market_clearing() for Greece")
 println("=" ^ 70)
 
 # Test parameters
@@ -25,7 +25,7 @@ println()
 
 try
     # Call the function
-    result = Euphemia.generate_energy_prices(
+    result = Euphemia.run_independent_market_clearing(
         bidding_zone,
         test_date;
         order_method=:alternative,

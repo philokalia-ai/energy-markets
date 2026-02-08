@@ -277,7 +277,7 @@ end
 
 
 """
-    create_multi_zone_order_book(zones::Vector{String}, day::Date;
+    create_coupled_order_book(zones::Vector{String}, day::Date;
                                   markup_factor::Float64=DEFAULT_MARKUP_FACTOR,
                                   optimizer::String="auto",
                                   use_cache::Bool=true,
@@ -304,7 +304,7 @@ When `parallel=true`, zones are processed concurrently using `pmap`. Requires wo
 set up externally via `addprocs(n)` and `@everywhere using Euphemia`. Falls back to
 sequential processing if no workers are available.
 """
-function create_multi_zone_order_book(zones::Vector{String}, day::Date;
+function create_coupled_order_book(zones::Vector{String}, day::Date;
                                       markup_factor::Float64=DEFAULT_MARKUP_FACTOR,
                                       optimizer::String="auto",
                                       use_cache::Bool=true,

@@ -35,7 +35,7 @@ function monitor_and_test(num_workers)
             println("Worker $worker_id: Processing $zone")
 
             # Quick order book test (faster than full optimization)
-            prices = generate_energy_prices(
+            prices = run_independent_market_clearing(
                 zone,
                 date;
                 order_method=:alternative,

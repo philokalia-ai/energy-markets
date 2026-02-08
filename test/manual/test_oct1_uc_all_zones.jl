@@ -106,7 +106,7 @@ function test_zone_with_retry(zone::String, max_retries::Int=MAX_RETRIES)
             retry_msg = attempt > 1 ? " (retry $attempt/$max_retries)" : ""
             println("🔄 Processing: $zone$retry_msg")
 
-            prices = generate_energy_prices(zone, TEST_DATE;
+            prices = run_independent_market_clearing(zone, TEST_DATE;
                 order_method=ORDER_METHOD,
                 model=MODEL,
                 optimizer=OPTIMIZER,

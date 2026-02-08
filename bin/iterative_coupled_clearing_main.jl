@@ -3,7 +3,7 @@
 # Iterative Multi-Zone Market Clearing Script
 #
 # This script is invoked by the GitHub Action defined in:
-# .github/workflows/generate-iterative-multi-zone-prices.yml
+# .github/workflows/iterative-coupled-market-clearing.yml
 #
 # Runs iterative UC-MPCC market clearing with feedback loop until price convergence.
 # This accounts for interconnection effects in unit commitment decisions.
@@ -106,7 +106,7 @@ try
         date_start = time()
 
         try
-            result = run_iterative_multi_zone_market_clearing(date;
+            result = run_iterative_coupled_market_clearing(date;
                 optimizer=optimizer,
                 max_iterations=max_iterations,
                 price_tolerance=price_tolerance,

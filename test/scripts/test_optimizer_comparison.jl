@@ -51,7 +51,7 @@ function run_single_test(optimizer::String, run_num::Int)
     try
         start_time = time()
 
-        prices = generate_energy_prices(TEST_ZONE, TEST_DATE;
+        prices = run_independent_market_clearing(TEST_ZONE, TEST_DATE;
             order_method=ORDER_METHOD,
             model=MODEL,
             optimizer=optimizer,

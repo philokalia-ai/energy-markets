@@ -32,27 +32,27 @@ The main module `Euphemia` provides:
 
 ### Key Functions
 
-**Single-zone market clearing:**
+**Independent market clearing (single-zone, no interconnections):**
 ```julia
 # Generate prices for a single zone
-prices = generate_energy_prices("GR", Date(2024, 6, 15);
+prices = run_independent_market_clearing("GR", Date(2024, 6, 15);
     order_method=:uc_based,  # or :alternative (faster)
     save_to_db=true,
     force_rerun=false)       # Set true to bypass UC cache
 
 # Process all zones for a single date
-result = generate_energy_prices_for_all_zones(Date(2024, 6, 15);
+result = run_independent_clearing_for_all_zones(Date(2024, 6, 15);
     force_rerun=false)       # Propagates to all zone solves
 
 # Process a date range
-result = generate_energy_prices_for_date_range(Date(2024, 6, 1), Date(2024, 6, 7);
+result = run_independent_clearing_for_date_range(Date(2024, 6, 1), Date(2024, 6, 7);
     force_rerun=false)       # Propagates to all date/zone solves
 ```
 
-**Multi-zone market clearing with transmission flows:**
+**Coupled market clearing (multi-zone with transmission flows):**
 ```julia
 # Clear multiple zones simultaneously with cross-border ATC constraints
-result = run_multi_zone_market_clearing(Date(2024, 6, 15);
+result = run_coupled_market_clearing(Date(2024, 6, 15);
     zones=["GR", "BG", "RO"],  # or empty for auto-discover
     order_method=:alternative,  # :uc_based or :alternative
     save_to_db=true)
@@ -64,7 +64,7 @@ result.solve_time              # Solver time
 result.total_time              # Total processing time
 
 # Process multiple dates with multi-zone clearing
-result = run_multi_zone_for_date_range(Date(2024, 6, 1), Date(2024, 6, 7);
+result = run_coupled_clearing_for_date_range(Date(2024, 6, 1), Date(2024, 6, 7);
     order_method=:alternative,
     save_to_db=true)
 
@@ -74,26 +74,26 @@ addprocs(4)
 @everywhere using Euphemia
 
 # Single date with parallel UC
-result = run_multi_zone_market_clearing(Date(2024, 6, 15);
+result = run_coupled_market_clearing(Date(2024, 6, 15);
     zones=["GR", "BG", "RO", "HU"],
     order_method=:uc_based,
     parallel=true)  # UC solves run in parallel, MPCC runs after all complete
 
 # Date range with parallel UC
-result = run_multi_zone_for_date_range(Date(2023, 1, 1), Date(2024, 12, 31);
+result = run_coupled_clearing_for_date_range(Date(2023, 1, 1), Date(2024, 12, 31);
     order_method=:uc_based,
     parallel=true,       # UC solves run in parallel per date
     force_rerun=false,   # Set true to bypass UC cache
     save_to_db=true)
 ```
 
-**Iterative multi-zone clearing (accounts for interconnections in UC):**
+**Iterative coupled clearing (accounts for interconnections in UC):**
 ```julia
 # Standard approach: UC ignores interconnections, MPCC handles flows
-result = run_multi_zone_market_clearing(Date(2024, 6, 15); zones=["GR", "BG", "RO"])
+result = run_coupled_market_clearing(Date(2024, 6, 15); zones=["GR", "BG", "RO"])
 
 # Iterative approach: UC-MPCC feedback loop until prices converge
-result = run_iterative_multi_zone_market_clearing(Date(2024, 6, 15);
+result = run_iterative_coupled_market_clearing(Date(2024, 6, 15);
     zones=["GR", "IT-NORTH", "IT-SOUTH"],
     max_iterations=10,       # Stop after 10 iterations max
     price_tolerance=1.0,     # Stop when max price change < 1 €/MWh
@@ -647,14 +647,14 @@ Caching behavior:
 - Storage: ~195 KB per zone/day (~700 MB/year for 10 zones)
 
 The `force_rerun` parameter is passed through the entire call chain:
-- `generate_energy_prices_for_date_range()` → `generate_energy_prices_for_all_zones()` → `generate_energy_prices()` → `create_typed_order_book()` → `generate_market_orders_from_uc()` → `solve_unit_commitment()`
-- `run_multi_zone_for_date_range()` → `run_multi_zone_market_clearing()` → `create_multi_zone_order_book()` → `generate_market_orders_from_uc()` → `solve_unit_commitment()`
+- `run_independent_clearing_for_date_range()` → `run_independent_clearing_for_all_zones()` → `run_independent_market_clearing()` → `create_typed_order_book()` → `generate_market_orders_from_uc()` → `solve_unit_commitment()`
+- `run_coupled_clearing_for_date_range()` → `run_coupled_market_clearing()` → `create_coupled_order_book()` → `generate_market_orders_from_uc()` → `solve_unit_commitment()`
 
 **Iterative solver and UC cache:**
 The iterative multi-zone solver uses `use_cache=false` for all UC solves. This is because each iteration adjusts net imports per zone, producing UC results that differ from standalone (no-interconnection) solves. Writing these back to the shared cache would pollute it — subsequent single-zone or multi-zone runs would load net-import-adjusted UC results, which is incorrect. The cache key `(bidding_zone, market_date, code_version)` has no clearing_mode dimension, so the iterative solver opts out entirely.
 
 **Parallel UC execution:**
-When `parallel=true` in `run_multi_zone_market_clearing()`:
+When `parallel=true` in `run_coupled_market_clearing()`:
 - UC solves for each zone run concurrently using `Distributed.pmap`
 - Requires workers: `addprocs(n)` + `@everywhere using Euphemia`
 - Falls back to sequential if no workers available
@@ -696,9 +696,9 @@ The project includes several GitHub workflows for automated price generation:
 
 | Workflow | Schedule | Description |
 |----------|----------|-------------|
-| `generate-energy-prices.yml` | Daily 2 AM UTC | Single-zone market clearing |
-| `generate-multi-zone-prices.yml` | Daily 3 AM UTC | Multi-zone clearing with transmission |
-| `generate-iterative-multi-zone-prices.yml` | Manual only | Iterative UC-MPCC (accounts for interconnections) |
+| `independent-market-clearing.yml` | Daily 2 AM UTC | Single-zone market clearing |
+| `coupled-market-clearing.yml` | Daily 3 AM UTC | Multi-zone clearing with transmission |
+| `iterative-coupled-market-clearing.yml` | Manual only | Iterative UC-MPCC (accounts for interconnections) |
 | `refresh-inference-cache.yml` | Annually Jan 1st | Refresh generator parameter inference cache |
 
 All workflows support `workflow_dispatch` for manual triggering with custom parameters.
@@ -707,11 +707,11 @@ All workflows support `workflow_dispatch` for manual triggering with custom para
 
 The workflows invoke Julia scripts in the `bin/` directory:
 
-- **`bin/main.jl`** - Single-zone market clearing for date ranges
-- **`bin/multi_zone_main.jl`** - Non-iterative multi-zone clearing for date ranges
-- **`bin/iterative_multi_zone_main.jl`** - Iterative UC-MPCC clearing for date ranges
+- **`bin/independent_clearing_main.jl`** - Single-zone market clearing for date ranges
+- **`bin/coupled_clearing_main.jl`** - Non-iterative multi-zone clearing for date ranges
+- **`bin/iterative_coupled_clearing_main.jl`** - Iterative UC-MPCC clearing for date ranges
 
-**Common environment variables** (for `bin/main.jl` and `bin/multi_zone_main.jl`):
+**Common environment variables** (for `bin/independent_clearing_main.jl` and `bin/coupled_clearing_main.jl`):
 - `START_DATE`, `END_DATE`: Date range in YYYY-MM-DD format
 - `PARALLEL`: Enable parallel processing (true/false)
 - `OPTIMIZER`: Solver to use (highs/gurobi)
@@ -746,7 +746,7 @@ export PRICE_TOLERANCE="1.0"
 export DAMPING_FACTOR="0.7"
 
 # Run
-julia --project=. bin/iterative_multi_zone_main.jl
+julia --project=. bin/iterative_coupled_clearing_main.jl
 ```
 
 ## Development Commands
@@ -815,7 +815,7 @@ The project supports multiple optimization solvers:
 
 Configure solver selection via the `optimizer` parameter:
 ```julia
-result = run_multi_zone_market_clearing(date; optimizer="highs")  # or "gurobi"
+result = run_coupled_market_clearing(date; optimizer="highs")  # or "gurobi"
 ```
 
 ### Database Configuration

@@ -38,7 +38,7 @@ println("Workers: $(workers())")
 println()
 
 gurobi_start = time()
-gurobi_result = run_multi_zone_market_clearing(
+gurobi_result = run_coupled_market_clearing(
     TEST_DATE;
     order_method=ORDER_METHOD,
     optimizer="gurobi",
@@ -80,7 +80,7 @@ println("Workers: $(length(workers()))")
 println()
 
 highs_start = time()
-highs_result = run_multi_zone_market_clearing(
+highs_result = run_coupled_market_clearing(
     TEST_DATE;
     order_method=ORDER_METHOD,
     optimizer="highs",

@@ -77,7 +77,7 @@ function test_euphemia_market_clearing(zone, date;
     save_to_db=true)
 
     # Generate energy prices using Euphemia
-    prices = generate_energy_prices(zone, date;
+    prices = run_independent_market_clearing(zone, date;
         order_method=order_method,
         model=model,
         optimizer=optimizer,

@@ -262,7 +262,7 @@ using .Network: get_zones_with_transfer_capacity, get_connected_zones, get_zone_
 
 include("MPCC.jl")
 using .MPCC: MPCCResult, MPCCOrderBook, solve_mpcc_market_clearing, create_typed_order_book, select_solver
-using .MPCC: create_multi_zone_order_book, with_total_time  # Multi-zone support
+using .MPCC: create_coupled_order_book, with_total_time  # Multi-zone support
 using .MPCC: compute_net_imports_from_flows, compute_max_flow_change, apply_damping  # Iterative UC-MPCC utilities
 using .MPCC: compute_max_price_change, compute_max_relative_flow_change  # Price-based convergence
 
@@ -304,8 +304,8 @@ export get_zones_with_transfer_capacity, get_connected_zones, get_zone_pairs  # 
 
 # MPCC optimization functionality
 export MPCCResult, MPCCOrderBook, solve_mpcc_market_clearing, create_typed_order_book, select_solver
-export create_multi_zone_order_book, run_multi_zone_market_clearing, run_multi_zone_for_date_range  # Multi-zone market clearing
-export run_iterative_multi_zone_market_clearing  # Iterative UC-MPCC with flow feedback
+export create_coupled_order_book, run_coupled_market_clearing, run_coupled_clearing_for_date_range  # Multi-zone market clearing
+export run_iterative_coupled_market_clearing  # Iterative UC-MPCC with flow feedback
 export compute_net_imports_from_flows, compute_max_flow_change, apply_damping  # Flow conversion utilities
 export compute_max_price_change, compute_max_relative_flow_change  # Price-based convergence
 
@@ -334,7 +334,7 @@ export parse_resolution_to_minutes, determine_finest_resolution, generate_sub_sl
 export euphemia_market_clearing_with_entsoe
 
 # Energy price generation (unified interface)
-export generate_energy_prices
+export run_independent_market_clearing
 
 # Price validation
 export PriceComparisonResult, compare_prices, validate_energy_prices
@@ -354,7 +354,7 @@ export has_cached_uc_results, save_uc_results, load_uc_results
 export get_available_zones
 
 # Batch processing utilities
-export generate_energy_prices_for_all_zones, generate_energy_prices_for_date_range
+export run_independent_clearing_for_all_zones, run_independent_clearing_for_date_range
 
 # Αυτή η συνάρτηση πρέπει να διαβάζει τα market orders
 # και να υπολογίζει το clearing price για timeslot για bidding zone
@@ -493,7 +493,7 @@ function euphemia_market_clearing_with_entsoe(date::Date, bidding_zones::Vector{
 end
 
 """
-    generate_energy_prices(bidding_zone::String, date::Date; 
+    run_independent_market_clearing(bidding_zone::String, date::Date; 
                           order_method::Symbol=:uc_based, 
                           model::Symbol=:mpcc,
                           optimizer::String="highs",
@@ -536,11 +536,11 @@ resolution available in the underlying load and renewable generation data.
 # Examples
 ```julia
 # Generate prices using UC-based orders (hourly or sub-hourly depending on data)
-prices = generate_energy_prices("GR", Date(2025, 7, 24))
+prices = run_independent_market_clearing("GR", Date(2025, 7, 24))
 println("Noon price: €\$(prices["20250724-1200"])/MWh")
 
 # Generate prices using alternative order book (auto-detects temporal resolution)
-prices_alternative = generate_energy_prices("AL", Date(2024, 6, 18); order_method=:alternative)
+prices_alternative = run_independent_market_clearing("AL", Date(2024, 6, 18); order_method=:alternative)
 println("Number of price periods: \$(length(prices_alternative))")  # Could be 24, 48, or 96 depending on data
 
 # Access specific time periods by timeslot
@@ -553,7 +553,7 @@ price_values = collect(values(prices))
 avg_price = sum(price_values) / length(price_values)
 ```
 """
-function generate_energy_prices(bidding_zone::String, date::Date;
+function run_independent_market_clearing(bidding_zone::String, date::Date;
     order_method::Symbol=:uc_based,
     model::Symbol=:mpcc,
     optimizer::String="highs",
@@ -807,12 +807,12 @@ end
 # =============================================================================
 
 """
-    _create_multi_zone_order_book_alternative(zones::Vector{String}, day::Date; random_seed=nothing)
+    _create_coupled_order_book_alternative(zones::Vector{String}, day::Date; random_seed=nothing)
 
 Internal helper to create a multi-zone order book using the alternative (faster) order generation method.
 Uses `create_adjusted_order_book` for each zone and combines the results.
 """
-function _create_multi_zone_order_book_alternative(zones::Vector{String}, day::Date; random_seed::Union{Int,Nothing}=nothing)
+function _create_coupled_order_book_alternative(zones::Vector{String}, day::Date; random_seed::Union{Int,Nothing}=nothing)
     if isempty(zones)
         error("At least one bidding zone must be specified")
     end
@@ -901,7 +901,7 @@ function _create_multi_zone_order_book_alternative(zones::Vector{String}, day::D
 end
 
 """
-    run_multi_zone_market_clearing(date::Date;
+    run_coupled_market_clearing(date::Date;
                                    zones::Vector{String}=String[],
                                    order_method::Symbol=:uc_based,
                                    optimizer::String="highs",
@@ -913,7 +913,7 @@ end
 
 Run simultaneous multi-zone market clearing with cross-border transmission flows.
 
-Unlike `generate_energy_prices_for_all_zones()` which processes zones independently,
+Unlike `run_independent_clearing_for_all_zones()` which processes zones independently,
 this function solves all zones together in a single optimization problem with
 transmission flow constraints between zones based on ENTSO-E ATC data.
 
@@ -940,7 +940,7 @@ transmission flow constraints between zones based on ENTSO-E ATC data.
 using Euphemia, Dates
 
 # Auto-discover zones and run multi-zone clearing
-result = run_multi_zone_market_clearing(Date(2024, 6, 15))
+result = run_coupled_market_clearing(Date(2024, 6, 15))
 
 # Check zonal prices
 for (zone, prices) in result.market_prices
@@ -955,7 +955,7 @@ for (flow_id, flows) in result.transmission_flows
 end
 
 # Run with specific zones
-result = run_multi_zone_market_clearing(Date(2024, 6, 15);
+result = run_coupled_market_clearing(Date(2024, 6, 15);
     zones=["GR", "BG", "IT_SOUTH"],
     save_to_db=true)
 ```
@@ -966,7 +966,7 @@ result = run_multi_zone_market_clearing(Date(2024, 6, 15);
 - ATC constraints bound flows: -backward_cap ≤ flow ≤ forward_cap
 - Transmission is modeled as lossless (no losses on flows)
 """
-function run_multi_zone_market_clearing(date::Date;
+function run_coupled_market_clearing(date::Date;
                                         zones::Vector{String}=String[],
                                         order_method::Symbol=:uc_based,
                                         optimizer::String="highs",
@@ -1002,7 +1002,7 @@ function run_multi_zone_market_clearing(date::Date;
     println("\n📊 Creating multi-zone order book...")
     order_book = if order_method == :uc_based
         # UC-based: runs full unit commitment for each zone (slower but more accurate)
-        MPCC.create_multi_zone_order_book(zones, date;
+        MPCC.create_coupled_order_book(zones, date;
                                           markup_factor=markup_factor,
                                           optimizer=optimizer,
                                           force_rerun=force_rerun,
@@ -1011,7 +1011,7 @@ function run_multi_zone_market_clearing(date::Date;
                                           bidding_strategy=bidding_strategy)
     elseif order_method == :alternative
         # Alternative: uses simplified order generation (faster)
-        _create_multi_zone_order_book_alternative(zones, date)
+        _create_coupled_order_book_alternative(zones, date)
     else
         error("Invalid order_method: $order_method. Must be :uc_based or :alternative")
     end
@@ -1117,7 +1117,7 @@ function run_multi_zone_market_clearing(date::Date;
 end
 
 """
-    run_iterative_multi_zone_market_clearing(date; kwargs...) -> NamedTuple
+    run_iterative_coupled_market_clearing(date; kwargs...) -> NamedTuple
 
 Run multi-zone market clearing with iterative UC-MPCC to account for
 interconnection flows in unit commitment decisions.
@@ -1169,7 +1169,7 @@ NamedTuple with all MPCCResult fields plus:
 
 # Example
 ```julia
-result = run_iterative_multi_zone_market_clearing(
+result = run_iterative_coupled_market_clearing(
     Date(2025, 12, 10);
     zones=["GR", "IT-NORTH", "IT-SOUTH"],
     optimizer="gurobi",
@@ -1182,9 +1182,9 @@ println("Converged: \$(result.converged) in \$(result.iterations) iterations")
 println("Final price change: \$(result.convergence_metrics.price_change) €/MWh")
 ```
 
-See also: [`run_multi_zone_market_clearing`](@ref), [`compute_max_price_change`](@ref)
+See also: [`run_coupled_market_clearing`](@ref), [`compute_max_price_change`](@ref)
 """
-function run_iterative_multi_zone_market_clearing(date::Date;
+function run_iterative_coupled_market_clearing(date::Date;
     zones::Vector{String}=String[],
     optimizer::String="highs",
     max_iterations::Int=10,
@@ -1223,7 +1223,7 @@ function run_iterative_multi_zone_market_clearing(date::Date;
         error("Iterative UC-MPCC requires at least 2 zones")
     end
 
-    # NOTE: Transfer capacities (ATC) are loaded internally by create_multi_zone_order_book()
+    # NOTE: Transfer capacities (ATC) are loaded internally by create_coupled_order_book()
     # from entsoe.offered_transfer_capacities_implicit - no explicit loading needed here
 
     # Initialize iteration state
@@ -1246,7 +1246,7 @@ function run_iterative_multi_zone_market_clearing(date::Date;
         # Step 1: Create order book with current flow expectations
         # Always fresh UC solve — don't load or save to cache, since iterative UC
         # results include net import adjustments and would pollute the shared cache
-        order_book = MPCC.create_multi_zone_order_book(zones, date;
+        order_book = MPCC.create_coupled_order_book(zones, date;
             markup_factor=markup_factor,
             optimizer=optimizer,
             use_cache=false,
@@ -1406,7 +1406,7 @@ function run_iterative_multi_zone_market_clearing(date::Date;
 end
 
 """
-    run_multi_zone_for_date_range(start_date::Date, end_date::Date;
+    run_coupled_clearing_for_date_range(start_date::Date, end_date::Date;
                                   zones::Vector{String}=String[],
                                   order_method::Symbol=:uc_based,
                                   optimizer::String="highs",
@@ -1419,7 +1419,7 @@ end
 
 Run multi-zone market clearing with cross-border transmission flows for a date range.
 
-Processes multiple dates sequentially, running `run_multi_zone_market_clearing()` for each date.
+Processes multiple dates sequentially, running `run_coupled_market_clearing()` for each date.
 Provides comprehensive progress tracking and timing statistics.
 
 # Arguments
@@ -1458,7 +1458,7 @@ Each date result contains:
 using Euphemia, Dates
 
 # Process a week of multi-zone market clearing
-result = run_multi_zone_for_date_range(
+result = run_coupled_clearing_for_date_range(
     Date(2024, 6, 1),
     Date(2024, 6, 7);
     save_to_db=true
@@ -1478,7 +1478,7 @@ for dr in result.date_results
 end
 ```
 """
-function run_multi_zone_for_date_range(start_date::Date, end_date::Date;
+function run_coupled_clearing_for_date_range(start_date::Date, end_date::Date;
                                        zones::Vector{String}=String[],
                                        order_method::Symbol=:uc_based,
                                        optimizer::String="highs",
@@ -1576,7 +1576,7 @@ function run_multi_zone_for_date_range(start_date::Date, end_date::Date;
         println("=" ^ 60)
 
         try
-            result = run_multi_zone_market_clearing(date;
+            result = run_coupled_market_clearing(date;
                                                     zones=zones,
                                                     order_method=order_method,
                                                     optimizer=optimizer,
@@ -1688,7 +1688,7 @@ function run_multi_zone_for_date_range(start_date::Date, end_date::Date;
 end
 
 """
-    generate_energy_prices_for_all_zones(date::Date;
+    run_independent_clearing_for_all_zones(date::Date;
                                         order_method::Symbol=:uc_based,
                                         model::Symbol=:mpcc,
                                         optimizer::String="highs",
@@ -1709,7 +1709,7 @@ Generate energy prices for all available bidding zones on a specific date.
 
 This function automatically discovers all available bidding zones for the specified date
 using `get_available_zones()` and then generates energy prices for each zone using
-`generate_energy_prices()`. It includes comprehensive error handling, retry mechanisms,
+`run_independent_market_clearing()`. It includes comprehensive error handling, retry mechanisms,
 progress tracking, and optional parallel processing.
 
 # Arguments
@@ -1759,22 +1759,22 @@ Each result in `results` contains:
 using Euphemia, Dates
 
 # Basic usage - generate prices for all zones on a specific date
-result = generate_energy_prices_for_all_zones(Date(2024, 10, 1))
+result = run_independent_clearing_for_all_zones(Date(2024, 10, 1))
 println("Success: \$(result.success_count)/\$(result.total_zones) zones")
 
 # With parallel processing using all available cores
-result = generate_energy_prices_for_all_zones(Date(2024, 10, 1);
+result = run_independent_clearing_for_all_zones(Date(2024, 10, 1);
     parallel=true)
 println("Processed with \$(result.parallel_workers) workers")
 
 # With parallel processing and limited workers
-result = generate_energy_prices_for_all_zones(Date(2024, 10, 1);
+result = run_independent_clearing_for_all_zones(Date(2024, 10, 1);
     parallel=true,
     max_workers=16,
     chunk_size=2)
 
 # With database saving and Gurobi optimizer (parallel)
-result = generate_energy_prices_for_all_zones(Date(2024, 10, 1);
+result = run_independent_clearing_for_all_zones(Date(2024, 10, 1);
     optimizer="gurobi",
     save_to_db=true,
     silent=true,
@@ -1785,7 +1785,7 @@ function my_progress(zone, current, total, elapsed)
     println("Processing \$zone (\$current/\$total) - \$(round(elapsed, digits=1))s")
 end
 
-result = generate_energy_prices_for_all_zones(Date(2024, 10, 1);
+result = run_independent_clearing_for_all_zones(Date(2024, 10, 1);
     progress_callback=my_progress)
 
 # Check detailed results
@@ -1798,7 +1798,7 @@ for zone_result in result.results
 end
 
 # Using alternative order book method with parallel processing
-result = generate_energy_prices_for_all_zones(Date(2024, 10, 1);
+result = run_independent_clearing_for_all_zones(Date(2024, 10, 1);
     order_method=:alternative,
     random_seed=42,
     parallel=true,
@@ -1824,7 +1824,7 @@ addprocs(4)
 @everywhere using Euphemia
 
 # Now call parallel batch processing
-result = generate_energy_prices_for_all_zones(date; parallel=true)
+result = run_independent_clearing_for_all_zones(date; parallel=true)
 ```
 
 # Progress Callback
@@ -1848,7 +1848,7 @@ The function includes robust error handling:
 - Comprehensive result tracking for analysis
 - In parallel mode, worker failures are isolated and reported
 """
-function generate_energy_prices_for_all_zones(date::Date;
+function run_independent_clearing_for_all_zones(date::Date;
     order_method::Symbol=:uc_based,
     model::Symbol=:mpcc,
     optimizer::String="highs",
@@ -2051,7 +2051,7 @@ function generate_energy_prices_for_all_zones(date::Date;
 end
 
 """
-    generate_energy_prices_for_date_range(start_date::Date, end_date::Date;
+    run_independent_clearing_for_date_range(start_date::Date, end_date::Date;
                                           order_method::Symbol=:uc_based,
                                           model::Symbol=:mpcc,
                                           optimizer::String="highs",
@@ -2070,14 +2070,14 @@ end
 
 Generate energy prices for all available bidding zones across a date range.
 
-This function processes multiple dates sequentially, calling `generate_energy_prices_for_all_zones()`
+This function processes multiple dates sequentially, calling `run_independent_clearing_for_all_zones()`
 for each date in the specified range. It provides comprehensive progress tracking, error handling,
 and result aggregation across the entire date range.
 
 # Arguments
 - `start_date::Date`: First date to process (inclusive)
 - `end_date::Date`: Last date to process (inclusive)
-- All other arguments are passed through to `generate_energy_prices_for_all_zones()`:
+- All other arguments are passed through to `run_independent_clearing_for_all_zones()`:
   - `order_method::Symbol`: Method for creating orders - `:uc_based` or `:alternative` (default: `:uc_based`)
   - `model::Symbol`: Market clearing model - `:mpcc` (default)
   - `optimizer::String`: Optimization solver - "highs" (default), "gurobi", "cplex", "auto"
@@ -2109,7 +2109,7 @@ and result aggregation across the entire date range.
 Each date result in `date_results` contains:
 - `date::Date`: The date processed
 - `success::Bool`: Whether the date was processed successfully (at least one zone succeeded)
-- `zones_result::NamedTuple`: Full result from `generate_energy_prices_for_all_zones()` for this date
+- `zones_result::NamedTuple`: Full result from `run_independent_clearing_for_all_zones()` for this date
 - `elapsed_time::Float64`: Processing time for this date
 - `zones_discovered::Int`: Number of zones discovered for this date
 - `zones_successful::Int`: Number of zones processed successfully for this date
@@ -2130,13 +2130,13 @@ Each summary in `daily_summaries` contains:
 using Euphemia, Dates
 
 # Process a single month
-result = generate_energy_prices_for_date_range(
+result = run_independent_clearing_for_date_range(
     Date(2024, 10, 1), 
     Date(2024, 10, 31)
 )
 
 # Process with parallel processing and database saving
-result = generate_energy_prices_for_date_range(
+result = run_independent_clearing_for_date_range(
     Date(2024, 1, 1), 
     Date(2024, 1, 7);
     parallel=true,
@@ -2150,7 +2150,7 @@ function date_progress(date, current, total, elapsed)
     println("📅 Date \$date completed (\$current/\$total) - \$(round(elapsed/60, digits=1)) min")
 end
 
-result = generate_energy_prices_for_date_range(
+result = run_independent_clearing_for_date_range(
     Date(2024, 6, 1), 
     Date(2024, 6, 30);
     progress_callback=date_progress,
@@ -2178,7 +2178,7 @@ end
 
 # Date Range Processing
 - Processes dates sequentially from start_date to end_date (inclusive)
-- Each date is processed independently using `generate_energy_prices_for_all_zones()`
+- Each date is processed independently using `run_independent_clearing_for_all_zones()`
 - Failed dates don't stop processing of remaining dates
 - Comprehensive progress tracking and error reporting per date
 - Automatic aggregation of statistics across the entire date range
@@ -2192,11 +2192,11 @@ end
 
 # Error Handling
 - Date-level errors are captured and reported but don't stop processing
-- Zone-level errors are handled by the underlying `generate_energy_prices_for_all_zones()` function
+- Zone-level errors are handled by the underlying `run_independent_clearing_for_all_zones()` function
 - Comprehensive error reporting with per-date breakdowns
 - Failed dates are clearly identified in results
 """
-function generate_energy_prices_for_date_range(start_date::Date, end_date::Date;
+function run_independent_clearing_for_date_range(start_date::Date, end_date::Date;
     order_method::Symbol=:uc_based,
     model::Symbol=:mpcc,
     optimizer::String="highs",
@@ -2291,7 +2291,7 @@ function generate_energy_prices_for_date_range(start_date::Date, end_date::Date;
 
             try
                 # Process all zones for this date (always sequential when in date loop)
-                zones_result = generate_energy_prices_for_all_zones(date;
+                zones_result = run_independent_clearing_for_all_zones(date;
                     order_method=order_method,
                     model=model,
                     optimizer=optimizer,
@@ -2565,7 +2565,7 @@ function _parallel_date_processor(args)
         println("📅 [Worker $worker_id] Processing $date")
 
         # Process all zones for this date (always sequential in parallel date mode)
-        zones_result = generate_energy_prices_for_all_zones(date;
+        zones_result = run_independent_clearing_for_all_zones(date;
             order_method=order_method,
             model=model,
             optimizer=optimizer,
@@ -2726,7 +2726,7 @@ function _process_zones_sequential(zones_to_process, date, order_method, model, 
                 retry_msg = attempt > 1 ? " (retry $attempt/$max_retries)" : ""
                 println("🔄 Processing: $zone$retry_msg")
 
-                zone_prices = generate_energy_prices(zone, date;
+                zone_prices = run_independent_market_clearing(zone, date;
                     order_method=order_method,
                     model=model,
                     optimizer=optimizer,
@@ -2903,7 +2903,7 @@ function _process_zone_chunk(zone_chunk, date, order_method, model, optimizer,
         for attempt in 1:max_retries
             attempts = attempt
             try
-                zone_prices = generate_energy_prices(zone, date;
+                zone_prices = run_independent_market_clearing(zone, date;
                     order_method=order_method,
                     model=model,
                     optimizer=optimizer,

@@ -1,7 +1,7 @@
 #!/usr/bin/env julia
 
 """
-Test script for the new parallel dates architecture in generate_energy_prices_for_date_range().
+Test script for the new parallel dates architecture in run_independent_clearing_for_date_range().
 
 This script tests both sequential and parallel date processing with a small set of dates
 to validate the architectural changes.
@@ -20,7 +20,7 @@ test_end_date = Date(2024, 6, 20)  # Just 3 days for testing
 test_zones = ["AL", "AL", "BG", "CZ"]  # Small set of zones
 
 # Create a custom test function that bypasses zone discovery
-function test_generate_energy_prices_for_date_range(start_date::Date, end_date::Date, forced_zones::Vector{String}; kwargs...)
+function test_run_independent_clearing_for_date_range(start_date::Date, end_date::Date, forced_zones::Vector{String}; kwargs...)
     println("🔧 Using forced test zones: $(join(forced_zones, ", "))")
 
     # Validate date range
@@ -71,7 +71,7 @@ function test_generate_energy_prices_for_date_range(start_date::Date, end_date::
 
             for zone in forced_zones
                 try
-                    prices = generate_energy_prices(zone, date;
+                    prices = run_independent_market_clearing(zone, date;
                         order_method=order_method,
                         model=model,
                         optimizer=optimizer,
@@ -203,7 +203,7 @@ println("🔧 TEST 1: Sequential Date Processing")
 println("-"^40)
 
 sequential_start = time()
-sequential_result = test_generate_energy_prices_for_date_range(
+sequential_result = test_run_independent_clearing_for_date_range(
     test_start_date, test_end_date, test_zones;
     order_method=:alternative,  # Use alternative order book for testing
     parallel=false,
@@ -243,7 +243,7 @@ println("🔧 TEST 3: Parallel Date Processing")
 println("-"^40)
 
 parallel_start = time()
-parallel_result = test_generate_energy_prices_for_date_range(
+parallel_result = test_run_independent_clearing_for_date_range(
     test_start_date, test_end_date, test_zones;
     order_method=:alternative,  # Use alternative order book for testing
     parallel=true,
@@ -312,7 +312,7 @@ println("🔧 TEST 4: Error Handling with Invalid Dates")
 println("-"^40)
 
 try
-    error_test_result = test_generate_energy_prices_for_date_range(
+    error_test_result = test_run_independent_clearing_for_date_range(
         Date(2030, 1, 1),  # Future date with no data
         Date(2030, 1, 2), ["XX"];  # Invalid zone
         order_method=:alternative,

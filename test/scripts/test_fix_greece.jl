@@ -52,7 +52,7 @@ println("=" ^ 70)
 
 try
     # Generate prices with save_to_db=true
-    result = Euphemia.generate_energy_prices(
+    result = Euphemia.run_independent_market_clearing(
         bidding_zone,
         test_date;
         order_method=:alternative,

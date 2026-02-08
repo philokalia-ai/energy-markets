@@ -28,7 +28,7 @@ function run_test(optimizer_name)
     start_time = time()
 
     try
-        prices = generate_energy_prices(TEST_ZONE, TEST_DATE;
+        prices = run_independent_market_clearing(TEST_ZONE, TEST_DATE;
             order_method=ORDER_METHOD,
             model=MODEL,
             optimizer=optimizer_name,
