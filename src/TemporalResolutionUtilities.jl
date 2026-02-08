@@ -13,6 +13,21 @@ function parse_resolution_to_minutes(resolution_code::String)::Int
             @warn "Failed to parse resolution code: $resolution_code, defaulting to 60 minutes"
             return 60
         end
+    # Handle short formats used in simulations.energy_prices: "15M", "30M", "1H"
+    elseif endswith(resolution_code, "M") && !startswith(resolution_code, "PT")
+        try
+            return parse(Int, resolution_code[1:end-1])
+        catch
+            @warn "Failed to parse resolution code: $resolution_code, defaulting to 60 minutes"
+            return 60
+        end
+    elseif endswith(resolution_code, "H")
+        try
+            return parse(Int, resolution_code[1:end-1]) * 60
+        catch
+            @warn "Failed to parse resolution code: $resolution_code, defaulting to 60 minutes"
+            return 60
+        end
     else
         @warn "Unknown resolution code format: $resolution_code, defaulting to 60 minutes"
         return 60
