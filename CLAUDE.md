@@ -123,9 +123,18 @@ Typical convergence: 2-5 iterations. Runtime: 2-4× longer than non-iterative.
 # Zones with generator data (for UC/bidding)
 zones = get_available_zones(date)
 
-# Zones with transfer capacity data (for multi-zone clearing)
+# Zones with Day-ahead transfer capacity data (for coupled clearing)
+# Returns ~24 zones (NTC-based corridors only, excludes FBMC region)
 zones = get_zones_with_transfer_capacity(date)
 ```
+
+**Mixed-resolution handling in coupled clearing:**
+
+When zones have different temporal resolutions (e.g., GR at PT15M, BG at PT60M), the
+coupled order book automatically replicates coarser-resolution orders to all sub-periods.
+A 100 MW bid for hour 01:00 becomes identical bids at 01:00, 01:15, 01:30, 01:45. This
+ensures proper power balance at every period — without replication, hourly zones would
+become phantom transit nodes at sub-hourly periods (no supply/demand, broken balance).
 
 **Generator unavailability filtering:**
 ```julia
@@ -885,7 +894,7 @@ The project uses PostgreSQL with two main schemas:
 - `entsoe.day_ahead_total_load_forecast` - Day-ahead load forecast used for UC planning (consistent with renewable forecast horizon)
 - `entsoe.actual_total_load` - Historical electricity demand (for backtesting/validation, not used in UC)
 - `entsoe.generation_forecasts_for_wind_and_solar` - Renewable generation forecasts (filtered by same area_type_code values)
-- `entsoe.offered_transfer_capacities_implicit` - Cross-border transfer capacity data between bidding zones
+- `entsoe.offered_transfer_capacities_implicit` - Cross-border transfer capacity data between bidding zones (contains both Day-ahead and Intraday records; **only Day-ahead is used**)
 - `entsoe.unavailability_of_production_and_generation_units` - Generator outage data (planned/forced)
 - `entsoe.actual_generation_output_per_generation_unit` - Historical generation output (used for parameter inference)
 
@@ -893,6 +902,9 @@ The project uses PostgreSQL with two main schemas:
 - Use `out_map_code` and `in_map_code` for short zone codes (e.g., "GR", "BG")
 - Use `out_area_code` and `in_area_code` for EIC codes (e.g., "10YGR-HTSO-----Y")
 - The short codes (`map_code`) match the generator/load data zone codes
+- **`contract_type`**: Must filter to `'Day-ahead'` — Intraday capacities are residual after DA allocation (often 0 MW)
+- **Resolution**: Day-ahead data is at PT15M resolution; periods are stored in `YYYYMMDD-HHMM` format matching the order book
+- **Coverage**: Only ~44 corridors have Day-ahead NTC data (24 zones). Central Western European borders (AT-CZ, BE-FR, DE-NL, etc.) use flow-based market coupling (FBMC with PTDFs/RAMs) and lack NTC data in this table
 
 **Note on area_type_code filtering**: The combined codes like 'BZN/CTA', 'BZN/CTY', 'BZN/CTA/CTY' capture cases where bidding zones overlap with control areas (CTA) or countries (CTY). These combined values are present in the database and necessary for comprehensive data retrieval.
 
