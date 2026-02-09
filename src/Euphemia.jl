@@ -1127,28 +1127,27 @@ The algorithm iterates between:
 2. Running MPCC to determine actual market flows
 3. Updating expected flows based on MPCC results
 
-Iteration continues until prices converge or max iterations reached.
+Iteration continues until flows converge or max iterations reached.
 
 # Convergence Criterion
 
-**Primary: Price-based convergence** (recommended by market coupling theory)
+**Primary: Flow-based convergence** (primal variable criterion)
 
-Convergence is declared when: `max|λᶻ(k) − λᶻ(k−1)| < price_tolerance`
+Convergence is declared when: `max|f(k) − f(k−1)| < flow_tolerance` (MW)
 
-Price-based convergence is preferred over flow-based because:
-- Prices are the economic fixed point of market coupling
-- Flows are derived quantities that can oscillate near binding constraints
-- UC binaries cause discontinuous flow changes even when prices are stable
-- This matches how real market coupling (e.g., Euphemia) operates
+Flow-based convergence is used because flows are the primal input variable
+fed back to UC via net import adjustments. Since the iterative algorithm's
+feedback loop operates on flows (MPCC → net imports → UC demand adjustment),
+convergence of flows directly indicates that the UC input has stabilized.
 
-Flow changes are logged as diagnostics but not used for convergence.
+Price changes are logged as diagnostics for monitoring.
 
 # Arguments
 - `date::Date`: Market date
 - `zones::Vector{String}`: Zones to include (empty = auto-discover)
 - `optimizer::String`: Solver for MPCC ("highs" or "gurobi")
 - `max_iterations::Int`: Maximum iteration count (default: 10)
-- `price_tolerance::Float64`: Max price change for convergence in €/MWh (default: 1.0)
+- `flow_tolerance::Float64`: Max absolute flow change for convergence in MW (default: 100.0)
 - `damping_factor::Float64`: Update damping α ∈ (0,1] (default: 0.7)
 - `markup_factor::Float64`: Bid markup over marginal cost (default: 1.1)
 - `silent::Bool`: Suppress solver output (default: true)
@@ -1160,7 +1159,7 @@ NamedTuple with all MPCCResult fields plus:
 - `iterations::Int`: Number of iterations performed
 - `converged::Bool`: Whether convergence was achieved
 - `final_net_imports::Dict`: Final net imports per zone
-- `convergence_metrics::NamedTuple`: Detailed convergence info (price_change, flow_change_pct)
+- `convergence_metrics::NamedTuple`: Detailed convergence info (flow_change_mw, price_change)
 
 # Caching Behavior
 - Each iteration uses `force_rerun=true` to ensure fresh UC solves
@@ -1174,21 +1173,21 @@ result = run_iterative_coupled_market_clearing(
     zones=["GR", "IT-NORTH", "IT-SOUTH"],
     optimizer="gurobi",
     max_iterations=10,
-    price_tolerance=1.0,  # €/MWh
+    flow_tolerance=100.0,  # MW
     parallel=false  # Respect Gurobi license limits
 )
 
 println("Converged: \$(result.converged) in \$(result.iterations) iterations")
-println("Final price change: \$(result.convergence_metrics.price_change) €/MWh")
+println("Final flow change: \$(result.convergence_metrics.flow_change_mw) MW")
 ```
 
-See also: [`run_coupled_market_clearing`](@ref), [`compute_max_price_change`](@ref)
+See also: [`run_coupled_market_clearing`](@ref), [`compute_max_flow_change`](@ref)
 """
 function run_iterative_coupled_market_clearing(date::Date;
     zones::Vector{String}=String[],
     optimizer::String="highs",
     max_iterations::Int=10,
-    price_tolerance::Float64=1.0,
+    flow_tolerance::Float64=100.0,
     damping_factor::Float64=0.7,
     markup_factor::Float64=1.1,
     silent::Bool=true,
@@ -1204,7 +1203,7 @@ function run_iterative_coupled_market_clearing(date::Date;
     println("=" ^ 60)
     println("📅 Date: $date")
     println("⚙️  Max iterations: $max_iterations")
-    println("💰 Price tolerance: $price_tolerance €/MWh")
+    println("🔌 Flow tolerance: $flow_tolerance MW")
     println("🎚️  Damping factor: $damping_factor")
     if parallel
         workers_info = isnothing(max_workers) ? "all available" : "max $max_workers"
@@ -1234,8 +1233,8 @@ function run_iterative_coupled_market_clearing(date::Date;
     order_book = nothing
     converged = false
     iteration = 0
+    final_flow_change_mw = Inf
     final_price_change = Inf
-    final_flow_change_pct = Inf
 
     for iter in 1:max_iterations
         iteration = iter
@@ -1277,11 +1276,11 @@ function run_iterative_coupled_market_clearing(date::Date;
         best_result = result
 
         # Step 3: Compute convergence metrics
-        # Primary: Price-based convergence (economic fixed point)
-        price_change = MPCC.compute_max_price_change(result.market_prices, previous_prices)
+        # Primary: Flow-based convergence (primal variable fed back to UC)
+        flow_change_mw = MPCC.compute_max_flow_change(result.transmission_flows, previous_flows)
 
-        # Secondary (diagnostic): Relative flow change
-        flow_change_pct = MPCC.compute_max_relative_flow_change(result.transmission_flows, previous_flows) * 100
+        # Secondary (diagnostic): Price change
+        price_change = MPCC.compute_max_price_change(result.market_prices, previous_prices)
 
         # Also compute net imports for UC adjustment
         actual_net_imports = MPCC.compute_net_imports_from_flows(result.transmission_flows, zones)
@@ -1290,18 +1289,18 @@ function run_iterative_coupled_market_clearing(date::Date;
 
         # Log metrics
         println("   MPCC solve: $(round(mpcc_time, digits=2))s")
-        println("   💰 Price change: $(round(price_change, digits=2)) €/MWh")
-        println("   🔌 Flow change: $(round(flow_change_pct, digits=1))% (diagnostic)")
+        println("   🔌 Flow change: $(round(flow_change_mw, digits=1)) MW")
+        println("   💰 Price change: $(round(price_change, digits=2)) €/MWh (diagnostic)")
         println("   Iteration time: $(round(iter_time, digits=2))s")
 
         # Store final metrics
+        final_flow_change_mw = flow_change_mw
         final_price_change = price_change
-        final_flow_change_pct = flow_change_pct
 
-        # Step 4: Check convergence (price-based)
-        if price_change < price_tolerance
+        # Step 4: Check convergence (flow-based)
+        if flow_change_mw < flow_tolerance
             converged = true
-            println("✅ Converged! Price change $(round(price_change, digits=2)) €/MWh < tolerance $price_tolerance €/MWh")
+            println("✅ Converged! Flow change $(round(flow_change_mw, digits=1)) MW < tolerance $flow_tolerance MW")
             break
         end
 
@@ -1316,11 +1315,12 @@ function run_iterative_coupled_market_clearing(date::Date;
     println("\n" * "-" ^ 40)
     if converged
         println("✅ CONVERGED in $iteration iterations")
+        println("   🔌 Final flow change: $(round(final_flow_change_mw, digits=1)) MW")
         println("   💰 Final price change: $(round(final_price_change, digits=2)) €/MWh")
-        println("   🔌 Final flow change: $(round(final_flow_change_pct, digits=1))%")
     else
         println("⚠️  Did NOT converge after $iteration iterations")
-        println("   💰 Final price change: $(round(final_price_change, digits=2)) €/MWh (tolerance: $price_tolerance)")
+        println("   🔌 Final flow change: $(round(final_flow_change_mw, digits=1)) MW (tolerance: $flow_tolerance)")
+        println("   💰 Final price change: $(round(final_price_change, digits=2)) €/MWh")
     end
     println("⏱️  Total time: $(round(total_time, digits=2))s")
 
@@ -1347,14 +1347,14 @@ function run_iterative_coupled_market_clearing(date::Date;
                 iterations=iteration,
                 converged=converged,
                 final_price_change=final_price_change,
-                final_flow_change_pct=final_flow_change_pct,
+                final_flow_change_mw=final_flow_change_mw,
                 # Tier 1+2 parameters
                 clearing_mode="multi_zone_iterative",
                 markup_factor=markup_factor,
                 bidding_strategy=string(bidding_strategy),
                 cost_model_version="v2",
                 # Tier 3: iterative input settings
-                price_tolerance=price_tolerance,
+                flow_tolerance=flow_tolerance,
                 damping_factor=damping_factor,
                 max_iterations_setting=max_iterations
             )
@@ -1399,8 +1399,8 @@ function run_iterative_coupled_market_clearing(date::Date;
         converged=converged,
         final_net_imports=expected_net_imports,
         convergence_metrics=(
-            price_change=final_price_change,
-            flow_change_pct=final_flow_change_pct
+            flow_change_mw=final_flow_change_mw,
+            price_change=final_price_change
         )
     )
 end

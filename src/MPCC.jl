@@ -974,13 +974,15 @@ end
 """
     compute_max_flow_change(current, previous) -> Float64
 
-Compute maximum absolute change in net imports between iterations.
-Kept for backward compatibility; prefer `compute_max_price_change` for convergence.
+Compute maximum absolute change in transmission flows between iterations (MW).
 
-Note: Absolute flow tolerance is problematic for UC-market coupling because:
-- Flow magnitudes vary widely (100s to 1000s of MW)
-- UC binaries cause discontinuous flow changes
-- Flows can oscillate even when prices are stable
+This is the primary convergence criterion for the iterative UC-MPCC algorithm.
+Flows are the primal input variable fed back to UC (via net imports adjusting demand),
+making them the natural fixed-point variable. Convergence is declared when:
+
+    max|f(k) - f(k-1)| < flow_tolerance
+
+A typical tolerance is 100 MW for European-scale market coupling (36 zones).
 """
 function compute_max_flow_change(
     current::Dict{String, Dict{String, Float64}},

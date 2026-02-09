@@ -36,10 +36,10 @@ on:
         required: false
         default: "10"
         type: string
-      price_tolerance:
-        description: "Convergence tolerance (EUR/MWh)"
+      flow_tolerance:
+        description: "Convergence tolerance (MW, max absolute flow change)"
         required: false
-        default: "1.0"
+        default: "100.0"
         type: string
       damping_factor:
         description: "Flow update damping factor (0-1)"
@@ -147,7 +147,7 @@ jobs:
           OPTIMIZER="${{ github.event.inputs.optimizer }}"
           MAX_WORKERS="${{ github.event.inputs.max_workers }}"
           MAX_ITERATIONS="${{ github.event.inputs.max_iterations }}"
-          PRICE_TOLERANCE="${{ github.event.inputs.price_tolerance }}"
+          FLOW_TOLERANCE="${{ github.event.inputs.flow_tolerance }}"
           DAMPING_FACTOR="${{ github.event.inputs.damping_factor }}"
           MARKUP_FACTOR="${{ github.event.inputs.markup_factor }}"
           BIDDING_STRATEGY="${{ github.event.inputs.bidding_strategy }}"
@@ -158,13 +158,13 @@ jobs:
           echo "⚡ Parallel UC: $PARALLEL"
           echo "👥 Max workers: $MAX_WORKERS (0 = auto)"
           echo "🔁 Max iterations: $MAX_ITERATIONS"
-          echo "💰 Price tolerance: $PRICE_TOLERANCE €/MWh"
+          echo "🔌 Flow tolerance: $FLOW_TOLERANCE MW"
           echo "🎚️ Damping factor: $DAMPING_FACTOR"
           echo "💹 Markup factor: $MARKUP_FACTOR"
           echo "📊 Bidding strategy: $BIDDING_STRATEGY"
 
           export START_DATE END_DATE PARALLEL OPTIMIZER MAX_WORKERS
-          export MAX_ITERATIONS PRICE_TOLERANCE DAMPING_FACTOR MARKUP_FACTOR BIDDING_STRATEGY
+          export MAX_ITERATIONS FLOW_TOLERANCE DAMPING_FACTOR MARKUP_FACTOR BIDDING_STRATEGY
 
           julia --project=. bin/iterative_coupled_clearing_main.jl
 
@@ -183,7 +183,7 @@ jobs:
           echo "- **Optimizer**: ${{ github.event.inputs.optimizer }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Parallel UC**: ${{ github.event.inputs.parallel }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Max Iterations**: ${{ github.event.inputs.max_iterations }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Price Tolerance**: ${{ github.event.inputs.price_tolerance }} €/MWh" >> $GITHUB_STEP_SUMMARY
+          echo "- **Flow Tolerance**: ${{ github.event.inputs.flow_tolerance }} MW" >> $GITHUB_STEP_SUMMARY
           echo "- **Damping Factor**: ${{ github.event.inputs.damping_factor }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 

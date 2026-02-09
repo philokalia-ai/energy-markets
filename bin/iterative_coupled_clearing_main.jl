@@ -15,7 +15,7 @@
 # - OPTIMIZER: Optimizer to use (highs/gurobi)
 # - MAX_WORKERS: Maximum parallel workers (0 for auto-detect based on optimizer)
 # - MAX_ITERATIONS: Maximum UC-MPCC iterations per date (default: 10)
-# - PRICE_TOLERANCE: Convergence tolerance in €/MWh (default: 1.0)
+# - FLOW_TOLERANCE: Convergence tolerance in MW (default: 100.0)
 # - DAMPING_FACTOR: Flow update damping factor (default: 0.7)
 # - MARKUP_FACTOR: Price markup factor for supply bids (default: 1.1)
 
@@ -29,7 +29,7 @@ use_parallel = parse(Bool, get(ENV, "PARALLEL", "true"))
 optimizer = get(ENV, "OPTIMIZER", "highs")
 max_workers_input = get(ENV, "MAX_WORKERS", "0")
 max_iterations = parse(Int, get(ENV, "MAX_ITERATIONS", "10"))
-price_tolerance = parse(Float64, get(ENV, "PRICE_TOLERANCE", "1.0"))
+flow_tolerance = parse(Float64, get(ENV, "FLOW_TOLERANCE", "100.0"))
 damping_factor = parse(Float64, get(ENV, "DAMPING_FACTOR", "0.7"))
 markup_factor = parse(Float64, get(ENV, "MARKUP_FACTOR", "1.1"))
 bidding_strategy = Symbol(get(ENV, "BIDDING_STRATEGY", "merit_order"))
@@ -47,7 +47,7 @@ println("⚡ Parallel UC: $use_parallel")
 println("👥 Max workers: $(max_workers === nothing ? "auto (2 for Gurobi, half for HiGHS)" : max_workers)")
 println("⚖️ Optimizer: $optimizer")
 println("🔁 Max iterations: $max_iterations")
-println("💰 Price tolerance: $price_tolerance €/MWh")
+println("🔌 Flow tolerance: $flow_tolerance MW")
 println("🎚️ Damping factor: $damping_factor")
 println("💹 Markup factor: $markup_factor")
 println("📊 Bidding strategy: $bidding_strategy")
@@ -109,7 +109,7 @@ try
             result = run_iterative_coupled_market_clearing(date;
                 optimizer=optimizer,
                 max_iterations=max_iterations,
-                price_tolerance=price_tolerance,
+                flow_tolerance=flow_tolerance,
                 damping_factor=damping_factor,
                 markup_factor=markup_factor,
                 bidding_strategy=bidding_strategy,
@@ -140,13 +140,13 @@ try
                 success=true,
                 converged=result.converged,
                 iterations=result.iterations,
-                price_change=result.convergence_metrics.price_change,
+                flow_change_mw=result.convergence_metrics.flow_change_mw,
                 time=date_time
             ))
 
             status_emoji = result.converged ? "✅" : "⚠️"
             println("$status_emoji $date: $(result.iterations) iterations, " *
-                    "Δλ=$(round(result.convergence_metrics.price_change, digits=2)) €/MWh, " *
+                    "Δf=$(round(result.convergence_metrics.flow_change_mw, digits=1)) MW, " *
                     "$(round(date_time/60, digits=1)) min")
 
         catch e
@@ -159,7 +159,7 @@ try
                 success=false,
                 converged=false,
                 iterations=0,
-                price_change=Inf,
+                flow_change_mw=Inf,
                 time=date_time,
                 error=string(e)
             ))

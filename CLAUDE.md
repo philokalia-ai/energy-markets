@@ -92,26 +92,27 @@ result = run_coupled_clearing_for_date_range(Date(2023, 1, 1), Date(2024, 12, 31
 # Standard approach: UC ignores interconnections, MPCC handles flows
 result = run_coupled_market_clearing(Date(2024, 6, 15); zones=["GR", "BG", "RO"])
 
-# Iterative approach: UC-MPCC feedback loop until prices converge
+# Iterative approach: UC-MPCC feedback loop until flows converge
 result = run_iterative_coupled_market_clearing(Date(2024, 6, 15);
     zones=["GR", "IT-NORTH", "IT-SOUTH"],
     max_iterations=10,       # Stop after 10 iterations max
-    price_tolerance=1.0,     # Stop when max price change < 1 €/MWh
+    flow_tolerance=100.0,    # Stop when max flow change < 100 MW
     damping_factor=0.7,      # Update smoothing (0.7 = 70% new + 30% old)
     parallel=true            # Auto-limits: 2 workers for Gurobi, half for HiGHS
 )
 
 # Check convergence
-result.converged              # true if price changes < tolerance
+result.converged              # true if flow changes < tolerance
 result.iterations             # number of iterations performed
-result.convergence_metrics    # (price_change, flow_change_pct)
+result.convergence_metrics    # (flow_change_mw, price_change)
 result.final_net_imports      # final net imports per zone
 ```
 
-**Convergence criterion:** Uses price-based convergence (max |Δλ| < tolerance) rather
-than flow-based. This is preferred because prices are the economic fixed point of
-market coupling, while flows are derived quantities that can oscillate near binding
-constraints due to UC binary decisions.
+**Convergence criterion:** Uses flow-based convergence (max |Δf| < tolerance in MW).
+Flows are the primal input variable in the UC-MPCC feedback loop — the MPCC produces
+transmission flows, which are converted to net imports that adjust UC demand. Convergence
+of flows directly indicates that the UC input has stabilized. Price changes are logged
+as diagnostics but not used for convergence.
 
 The iterative approach is recommended for tightly interconnected zones where
 cross-border flows significantly affect optimal unit commitment decisions.
@@ -742,7 +743,7 @@ export BIDDING_STRATEGY="merit_order"
 
 # For iterative (additional params)
 export MAX_ITERATIONS="10"
-export PRICE_TOLERANCE="1.0"
+export FLOW_TOLERANCE="100.0"
 export DAMPING_FACTOR="0.7"
 
 # Run
@@ -929,7 +930,7 @@ The project uses PostgreSQL with two main schemas:
   - `demand_price` (default 500.0), `mip_gap` (default 0.01), `time_limit_seconds` (default 600.0)
   - `curtailment_penalty` (default 1.0), `excess_penalty` (default 10000.0), `shortage_penalty` (default 10000.0)
   - `use_inferred_params` (default true), `cost_model_version` (default 'v2')
-- **Tier 3 iterative input settings**: `price_tolerance`, `damping_factor`, `max_iterations_setting`
+- **Tier 3 iterative input settings**: `flow_tolerance`, `damping_factor`, `max_iterations_setting`
 - **Iterative optimization metadata** (for UC-MPCC iterative runs):
   - `is_iterative`: Boolean flag indicating iterative optimization
   - `total_time_seconds`: Total time for all iterations including UC solves

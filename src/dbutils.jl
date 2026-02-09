@@ -427,6 +427,18 @@ ON simulations.energy_prices (optimization_run_id)
                 IF NOT EXISTS (SELECT 1 FROM information_schema.columns
                                WHERE table_schema = 'simulations'
                                AND table_name = 'optimization_runs'
+                               AND column_name = 'flow_tolerance') THEN
+                    ALTER TABLE simulations.optimization_runs ADD COLUMN flow_tolerance NUMERIC(8,2);
+                END IF;
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                               WHERE table_schema = 'simulations'
+                               AND table_name = 'optimization_runs'
+                               AND column_name = 'final_flow_change_mw') THEN
+                    ALTER TABLE simulations.optimization_runs ADD COLUMN final_flow_change_mw NUMERIC(10,2);
+                END IF;
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                               WHERE table_schema = 'simulations'
+                               AND table_name = 'optimization_runs'
                                AND column_name = 'damping_factor') THEN
                     ALTER TABLE simulations.optimization_runs ADD COLUMN damping_factor NUMERIC(4,2);
                 END IF;
@@ -692,7 +704,8 @@ function save_optimization_run(bidding_zone::String, date::Date, order_method::S
     iterations=nothing,
     converged=nothing,
     final_price_change=nothing,
-    final_flow_change_pct=nothing,
+    final_flow_change_pct=nothing,  # legacy, kept for backward compat
+    final_flow_change_mw=nothing,
     # Tier 1: clearing mode
     clearing_mode::Union{String,Nothing}=nothing,
     # Tier 2: methodology parameters
@@ -707,7 +720,8 @@ function save_optimization_run(bidding_zone::String, date::Date, order_method::S
     use_inferred_params::Union{Bool,Nothing}=nothing,
     cost_model_version::Union{String,Nothing}=nothing,
     # Tier 3: iterative input settings
-    price_tolerance::Union{Float64,Nothing}=nothing,
+    price_tolerance::Union{Float64,Nothing}=nothing,  # legacy, kept for backward compat
+    flow_tolerance::Union{Float64,Nothing}=nothing,
     damping_factor::Union{Float64,Nothing}=nothing,
     max_iterations_setting::Union{Int,Nothing}=nothing)
 
@@ -725,19 +739,19 @@ function save_optimization_run(bidding_zone::String, date::Date, order_method::S
             (bidding_zone, optimization_date, order_method, model_type, optimizer, status,
              objective_value, solve_time_seconds, num_orders, num_price_periods, error_message,
              code_version, created_at,
-             is_iterative, total_time_seconds, iterations, converged, final_price_change, final_flow_change_pct,
+             is_iterative, total_time_seconds, iterations, converged, final_price_change, final_flow_change_pct, final_flow_change_mw,
              clearing_mode,
              markup_factor, bidding_strategy, demand_price, mip_gap, time_limit_seconds,
              curtailment_penalty, excess_penalty, shortage_penalty,
              use_inferred_params, cost_model_version,
-             price_tolerance, damping_factor, max_iterations_setting)
+             price_tolerance, flow_tolerance, damping_factor, max_iterations_setting)
             VALUES (\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8, \$9, \$10, \$11, \$12, \$13,
-                    \$14, \$15, \$16, \$17, \$18, \$19,
-                    \$20,
-                    \$21, \$22, \$23, \$24, \$25,
-                    \$26, \$27, \$28,
-                    \$29, \$30,
-                    \$31, \$32, \$33)
+                    \$14, \$15, \$16, \$17, \$18, \$19, \$20,
+                    \$21,
+                    \$22, \$23, \$24, \$25, \$26,
+                    \$27, \$28, \$29,
+                    \$30, \$31,
+                    \$32, \$33, \$34, \$35)
             RETURNING id
             """
 
@@ -761,6 +775,7 @@ function save_optimization_run(bidding_zone::String, date::Date, order_method::S
                 _or_missing(converged),
                 _or_missing(final_price_change),
                 _or_missing(final_flow_change_pct),
+                _or_missing(final_flow_change_mw),
                 _or_missing(clearing_mode),
                 _or_missing(markup_factor),
                 _or_missing(bidding_strategy),
@@ -773,6 +788,7 @@ function save_optimization_run(bidding_zone::String, date::Date, order_method::S
                 _or_missing(use_inferred_params),
                 _or_missing(cost_model_version),
                 _or_missing(price_tolerance),
+                _or_missing(flow_tolerance),
                 _or_missing(damping_factor),
                 _or_missing(max_iterations_setting),
             ])
