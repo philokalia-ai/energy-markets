@@ -455,7 +455,70 @@ function create_coupled_order_book(zones::Vector{String}, day::Date;
         @warn "No periods found in orders, defaulting to 24 hourly periods"
     end
 
-    println("   📊 Detected $(length(periods_vector)) time periods")
+    # Determine finest resolution from the periods
+    # If we have sub-hourly periods (e.g., "20251210-0015"), the finest resolution is < 60 min
+    finest_resolution = 60  # default hourly
+    if length(periods_vector) >= 2 && length(periods_vector[1]) == 13 && contains(periods_vector[1], "-")
+        # Parse first two periods to determine resolution
+        try
+            t1 = DateTime(periods_vector[1], dateformat"yyyymmdd-HHMM")
+            t2 = DateTime(periods_vector[2], dateformat"yyyymmdd-HHMM")
+            diff_minutes = Dates.value(t2 - t1) ÷ 60000
+            if diff_minutes in (15, 30)
+                finest_resolution = diff_minutes
+            end
+        catch
+            # Keep default
+        end
+    end
+
+    # Replicate coarser-resolution orders to sub-periods
+    # An hourly order (100 MW at 50 EUR/MWh for hour 01:00) should appear at
+    # all sub-periods within that hour (01:00, 01:15, 01:30, 01:45) because
+    # power (MW) is a rate — the generator offers the same MW for the full hour.
+    # Without this, zones with hourly data become phantom transit nodes at
+    # sub-hourly periods (no supply/demand → broken power balance).
+    if finest_resolution < 60
+        sub_periods_per_hour = 60 ÷ finest_resolution
+        replicated_orders = SimpleOrder[]
+        n_replicated = 0
+
+        for order in all_orders
+            if isa(order, SimpleOrder) && order.resolution_code > finest_resolution
+                # This order covers a coarser interval — replicate to sub-periods
+                base_dt = order.date_time
+                for sub in 1:(sub_periods_per_hour - 1)
+                    sub_dt = base_dt + Dates.Minute(sub * finest_resolution)
+                    # Only replicate within the same day
+                    if Dates.Date(sub_dt) == Dates.Date(base_dt)
+                        new_order = SimpleOrder(
+                            order.type,
+                            order.price,
+                            order.quantity,
+                            order.zone,
+                            sub_dt,
+                            finest_resolution  # mark as finest resolution
+                        )
+                        push!(replicated_orders, new_order)
+
+                        # Add the new period to our set
+                        date_str = Dates.format(sub_dt, "yyyymmdd")
+                        time_str = Dates.format(sub_dt, "HHMM")
+                        push!(all_periods, "$(date_str)-$(time_str)")
+                    end
+                end
+                n_replicated += 1
+            end
+        end
+
+        if n_replicated > 0
+            append!(all_orders, replicated_orders)
+            periods_vector = sort(collect(all_periods))
+            println("   📊 Replicated $n_replicated coarser orders → $(length(replicated_orders)) new sub-period orders ($(finest_resolution)min resolution)")
+        end
+    end
+
+    println("   📊 Total time periods: $(length(periods_vector))")
 
     # Fetch transfer capacity from ENTSO-E for connections between these zones
     println("   🔌 Fetching transfer capacities between zones...")
@@ -578,20 +641,12 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
                 @variable(model, flow[pair in zone_pairs, t in order_book.periods])
 
                 # Add ATC constraints: -backward <= flow <= forward
+                # Period keys match directly (both use YYYYMMDD-HHMM format)
                 for pair in zone_pairs
                     source, sink = pair
                     for t in order_book.periods
-                        # Get capacity limits (using hourly period format for lookup)
-                        # Convert timeslot period to hourly if needed
-                        lookup_period = t
-                        if length(t) > 5 && contains(t, "-")
-                            # Extract hour from "YYYYMMDD-HHMM" format
-                            hour = parse(Int, t[10:11]) + 1
-                            lookup_period = string(hour)
-                        end
-
-                        forward_cap = get(tc.capacity_forward, (source, sink, lookup_period), 0.0)
-                        backward_cap = get(tc.capacity_backward, (source, sink, lookup_period), 0.0)
+                        forward_cap = get(tc.capacity_forward, (source, sink, t), 0.0)
+                        backward_cap = get(tc.capacity_backward, (source, sink, t), 0.0)
 
                         # ATC bounds: -backward <= flow <= forward
                         set_lower_bound(flow[pair, t], -backward_cap)

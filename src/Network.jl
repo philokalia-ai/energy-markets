@@ -226,14 +226,19 @@ function create_transfer_capacity_from_entsoe(date::Date, bidding_zones::Vector{
     zone_filter = isempty(bidding_zones) ? "" :
                   "AND (out_map_code IN ('" * join(bidding_zones, "','") * "') OR in_map_code IN ('" * join(bidding_zones, "','") * "'))"
 
+    # Filter to Day-ahead contract type only — Intraday capacities represent residual
+    # capacity after DA allocation and are much smaller (often 0 MW).
+    # Keep native resolution (PT15M/PT60M) — the MPCC matches periods directly
+    # using the same YYYYMMDD-HHMM timeslot format as the order book.
     query = """
     SELECT
         out_map_code as source_zone,
         in_map_code as sink_zone,
-        EXTRACT(HOUR FROM date_time_utc) + 1 as time_period,
+        to_char(date_time_utc AT TIME ZONE 'UTC', 'YYYYMMDD-HH24MI') as time_period,
         capacity_mw as capacity
     FROM entsoe.offered_transfer_capacities_implicit
     WHERE DATE(date_time_utc) = \$1
+    AND contract_type = 'Day-ahead'
     $zone_filter
     ORDER BY out_map_code, in_map_code, date_time_utc
     """
@@ -273,7 +278,7 @@ function build_transfer_capacity_from_dataframe(df::DataFrame)
     for row in eachrow(df)
         source = row.source_zone
         sink = row.sink_zone
-        period = string(Int(row.time_period))
+        period = string(row.time_period)
         capacity = row.capacity
 
         # Collect unique zones and time periods
@@ -286,7 +291,7 @@ function build_transfer_capacity_from_dataframe(df::DataFrame)
 
     # Convert to sorted vectors
     zones_vec = sort(collect(zones))
-    periods_vec = sort(collect(time_periods), by=x -> parse(Int, x))
+    periods_vec = sort(collect(time_periods))
 
     # Second pass: compute backward capacities
     # For flow[A,B,t], backward capacity = forward capacity of reverse direction (B→A)
@@ -435,10 +440,10 @@ function get_zones_with_transfer_capacity(date::Date)
         query = """
         SELECT DISTINCT zone_code FROM (
             SELECT out_map_code as zone_code FROM entsoe.offered_transfer_capacities_implicit
-            WHERE DATE(date_time_utc) = \$1
+            WHERE DATE(date_time_utc) = \$1 AND contract_type = 'Day-ahead'
             UNION
             SELECT in_map_code as zone_code FROM entsoe.offered_transfer_capacities_implicit
-            WHERE DATE(date_time_utc) = \$1
+            WHERE DATE(date_time_utc) = \$1 AND contract_type = 'Day-ahead'
         ) AS zones
         ORDER BY zone_code
         """
