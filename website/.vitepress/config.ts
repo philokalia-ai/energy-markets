@@ -36,7 +36,7 @@ export default defineConfig({
     },
 
     socialLinks: [
-      { icon: 'github', link: 'https://github.com/johnkgeorg/energy-markets' },
+      { icon: 'github', link: 'https://github.com/silentech-inc/energy-markets' },
     ],
   },
 })
