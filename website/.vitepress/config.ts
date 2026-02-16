@@ -1,7 +1,7 @@
 import { defineConfig } from 'vitepress'
 
 export default defineConfig({
-  title: 'Euphemia Energy Markets',
+  title: 'European Energy Markets',
   description: 'Day-ahead electricity market simulation and optimization',
 
   themeConfig: {

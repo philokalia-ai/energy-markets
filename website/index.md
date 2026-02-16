@@ -2,9 +2,9 @@
 layout: home
 
 hero:
-  name: Euphemia Energy Markets
+  name: European Energy Markets
   text: Day-ahead electricity market simulation
-  tagline: An open-source engine for market clearing, unit commitment, and price formation across European bidding zones
+  tagline: An open-source engine for market price formation across European bidding zones, using publicly available data
   actions:
     - theme: brand
       text: Browse Datasets
