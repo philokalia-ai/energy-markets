@@ -1,0 +1,55 @@
+:root {
+  --vp-c-brand-1: #3b82f6;
+  --vp-c-brand-2: #2563eb;
+  --vp-c-brand-3: #1d4ed8;
+}
+
+.dark {
+  --vp-c-brand-1: #60a5fa;
+  --vp-c-brand-2: #3b82f6;
+  --vp-c-brand-3: #2563eb;
+}
+
+/* Dataset card grid */
+.dataset-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 1rem;
+  margin: 1.5rem 0;
+}
+
+/* Zone summary table */
+.zone-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1rem 0;
+  font-size: 0.9rem;
+}
+
+.zone-table th,
+.zone-table td {
+  padding: 0.5rem 0.75rem;
+  text-align: right;
+  border-bottom: 1px solid var(--vp-c-divider);
+}
+
+.zone-table th {
+  text-align: right;
+  font-weight: 600;
+  background: var(--vp-c-bg-soft);
+  cursor: pointer;
+  user-select: none;
+}
+
+.zone-table th:first-child,
+.zone-table td:first-child {
+  text-align: left;
+}
+
+.zone-table th:hover {
+  background: var(--vp-c-bg-mute);
+}
+
+.zone-table tbody tr:hover {
+  background: var(--vp-c-bg-soft);
+}

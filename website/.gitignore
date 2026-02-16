@@ -1,0 +1,9 @@
+node_modules/
+.vitepress/dist/
+.vitepress/cache/
+
+# Generated data files (run Julia export to create)
+public/data/*.parquet
+public/data/*.json
+!public/data/sample-prices.json
+!public/data/.gitkeep
