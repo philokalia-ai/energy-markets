@@ -18,3 +18,12 @@ Validation metrics comparing simulated prices against actual ENTSO-E day-ahead p
 ---
 
 *These are placeholder values. Run the Julia export script to populate with actual validation results from the database.*
+
+## Metabase: Zone Statistics
+
+<script setup>
+import MetabaseEmbed from '../.vitepress/components/MetabaseEmbed.vue'
+import { metabaseEmbeds } from '../.vitepress/metabase.config'
+</script>
+
+<MetabaseEmbed :src="metabaseEmbeds.zoneStatistics" title="Zone statistics — Metabase" />

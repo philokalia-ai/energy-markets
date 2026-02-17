@@ -15,3 +15,12 @@ julia --project=. bin/export_website_data.jl
 ```
 
 This generates per-zone JSON files in `website/public/data/` that the chart components load automatically.
+
+## Metabase: Price Comparison
+
+<script setup>
+import MetabaseEmbed from '../.vitepress/components/MetabaseEmbed.vue'
+import { metabaseEmbeds } from '../.vitepress/metabase.config'
+</script>
+
+<MetabaseEmbed :src="metabaseEmbeds.priceComparison" title="Price comparison — Metabase" />
