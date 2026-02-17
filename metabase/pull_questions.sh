@@ -9,8 +9,7 @@
 #
 # Environment variables:
 #   METABASE_URL          — Base URL of your Metabase instance (required)
-#   METABASE_USER         — Metabase login email (required)
-#   METABASE_PASSWORD     — Metabase login password (required)
+#   METABASE_API_KEY      — Metabase API key (required; create in Admin > Settings > API Keys)
 #   METABASE_COLLECTION   — Collection name to pull from (default: "energy")
 
 set -euo pipefail
@@ -29,7 +28,7 @@ for cmd in curl jq; do
   fi
 done
 
-for var in METABASE_URL METABASE_USER METABASE_PASSWORD; do
+for var in METABASE_URL METABASE_API_KEY; do
   if [[ -z "${!var:-}" ]]; then
     echo "Error: $var is not set. Add it to .env and run: source .env" >&2
     exit 1
@@ -39,23 +38,9 @@ done
 # Strip trailing slash from URL
 METABASE_URL="${METABASE_URL%/}"
 
+auth_header="x-api-key: $METABASE_API_KEY"
+
 echo "Connecting to Metabase at $METABASE_URL ..."
-
-# --- Authenticate ---
-
-SESSION_TOKEN=$(curl -sf "$METABASE_URL/api/session" \
-  -H "Content-Type: application/json" \
-  -d "{\"username\": \"$METABASE_USER\", \"password\": \"$METABASE_PASSWORD\"}" \
-  | jq -r '.id')
-
-if [[ -z "$SESSION_TOKEN" || "$SESSION_TOKEN" == "null" ]]; then
-  echo "Error: Failed to authenticate with Metabase." >&2
-  exit 1
-fi
-
-echo "Authenticated successfully."
-
-auth_header="X-Metabase-Session: $SESSION_TOKEN"
 
 # --- Find collection ---
 

@@ -4,13 +4,14 @@ This directory contains SQL queries synced from the remote Metabase instance and
 
 ## Setup
 
-Add Metabase credentials to your `.env` (already in `.gitignore`):
+Add your Metabase URL and API key to `.env` (already in `.gitignore`):
 
 ```
 METABASE_URL=https://your-metabase-server:3000
-METABASE_USER=your@email.com
-METABASE_PASSWORD=your-password
+METABASE_API_KEY=mb_your_api_key_here
 ```
+
+To create an API key: **Metabase Admin > Settings > Authentication > API Keys**.
 
 ## Pulling Questions from Metabase
 
