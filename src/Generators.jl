@@ -455,45 +455,36 @@ function get_marginal_cost(day::Dates.Date, fuel_type::String, bidding_zone::Str
         @warn "No TTF price within 10 days of $day; using stylized gas cost" maxlog = 1
     end
 
-    # Realistic marginal costs based on fuel type and market conditions
-    # Updated for 2025 European energy crisis and carbon pricing
-
-    # Base fuel costs (€/MWh) - post-Ukraine war pricing with carbon costs
-    fuel_costs = Dict(
-        "Hydro Water Reservoir" => 12.0,           # Low but includes O&M + opportunity cost
-        "Hydro Run-of-river and poundage" => 8.0,  # Low but includes O&M
-        "Hydro Pumped Storage" => 25.0,            # Higher due to pumping costs
-        "Fossil Brown coal/Lignite" => 95.0,       # High due to carbon pricing (€80/tonne CO₂)
-        "Fossil Gas" => 140.0,                     # High gas prices + carbon costs
-        "Nuclear" => 35.0,                         # Low fuel but high fixed costs
-        "Fossil Oil" => 180.0,                     # Very expensive fuel + carbon
-        "Fossil Hard coal" => 110.0,               # Coal price + carbon pricing
-        "Wind Onshore" => 5.0,                     # Very low - no fuel cost, just O&M
-        "Wind Offshore" => 8.0,                    # Very low - no fuel cost, higher O&M
-        "Solar" => 3.0,                           # Very low - no fuel cost
-        "Biomass" => 85.0,                        # Biomass fuel cost + carbon neutral benefit
-        "Waste" => 65.0,                          # Waste processing costs
-        "Geothermal" => 25.0,                     # Low - geothermal energy + O&M
-        "Other" => 120.0                          # Default fallback - assume gas-like
+    # Short-run marginal costs (SRMC, €/MWh electric) including carbon at
+    # EUA_PRICE and variable O&M. No bid markup — bidding strategy is applied
+    # in the order book layer, not here (the UC objective also uses these
+    # costs and should see true costs, not bids).
+    #
+    # Thermal SRMC = fuel/efficiency + emission_factor(el) × EUA + VOM, e.g.:
+    #   Lignite (GR): fuel+VOM ≈ €25, EF ≈ 1.25 tCO₂/MWh_el → 25 + 1.25×70 ≈ 112
+    #   Hard coal:    ~€14/MWh_th at η=0.40 → 36 + 0.9×70 + 3 ≈ 100
+    #   Oil (HFO):    ~€40/MWh_th at η=0.38 → 105 + 0.75×70 ≈ 155
+    srmc = Dict(
+        "Hydro Water Reservoir" => 12.0,           # O&M only; water value applied in bidding layer
+        "Hydro Run-of-river and poundage" => 3.0,  # Must-run, near-zero variable cost
+        "Hydro Pumped Storage" => 60.0,            # Pumping energy cost at off-peak prices
+        "Fossil Brown coal/Lignite" => 112.0,      # Mostly carbon (EF ~1.25 tCO₂/MWh for GR lignite)
+        "Fossil Gas" => 105.0,                     # Fallback only — TTF path above is preferred
+        "Nuclear" => 10.0,                         # Fuel cycle cost
+        "Fossil Oil" => 155.0,                     # HFO/diesel fuel + carbon
+        "Fossil Hard coal" => 100.0,               # API2-level coal + carbon
+        "Fossil Coal-derived gas" => 110.0,
+        "Wind Onshore" => 1.0,
+        "Wind Offshore" => 2.0,
+        "Solar" => 1.0,
+        "Biomass" => 60.0,                         # Fuel cost, no carbon
+        "Waste" => 25.0,                           # Gate fees offset fuel cost
+        "Geothermal" => 20.0,
+        "Energy storage" => 90.0,                  # Charging-cost opportunity proxy
+        "Other" => 110.0                           # Assume gas-like when unknown
     )
 
-    # Market bid markup (generators don't bid marginal cost in real markets)
-    bid_markup_multiplier = 2.2  # Generators typically bid 1.5-3x marginal cost
-
-    # Add seasonal/temporal variations (summer 2025)
-    summer_multiplier = 1.15  # Higher costs in summer due to cooling demand + tight supply
-
-    # Get base cost for fuel type
-    base_cost = get(fuel_costs, fuel_type, 120.0)  # Default to gas-like if not found
-
-    # Apply market markup and seasonal adjustment
-    market_cost = base_cost * bid_markup_multiplier * summer_multiplier
-
-    # Add some daily variation based on day of year (simple sine wave)
-    day_of_year = Dates.dayofyear(day)
-    daily_variation = 1.0 + 0.15 * sin(2π * day_of_year / 365)  # ±15% variation
-
-    return market_cost * daily_variation
+    return get(srmc, fuel_type, 110.0)
 end
 
 # pull from postgres, for now only active units of given date (I think)
