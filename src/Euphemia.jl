@@ -269,6 +269,9 @@ using .MPCC: compute_max_price_change, compute_max_relative_flow_change  # Price
 include("AlternativeOrderBook.jl")
 using .AlternativeOrderBook: create_adjusted_order_book, AdjustedOrderBookResult, print_order_book_summary
 
+include("MeritOrderBook.jl")
+using .MeritOrderBook: create_merit_order_book
+
 # ===== EXPORTS =====
 # All module exports are centralized here following Julia best practices
 # Exports come after includes so all symbols are defined before being exported
@@ -312,6 +315,7 @@ export get_cached_optimizer, clear_solver_cache!
 
 # Alternative order book functionality
 export create_adjusted_order_book, AdjustedOrderBookResult, print_order_book_summary
+export create_merit_order_book
 
 # Bidding strategy functionality
 export generate_market_orders_from_uc, apply_bidding_strategy_to_uc, UCToBidsResult
@@ -551,8 +555,8 @@ function generate_energy_prices(bidding_zone::String, date::Date;
     force_rerun::Bool=false)
 
     # Validate inputs
-    if !(order_method in [:uc_based, :alternative])
-        error("Invalid order_method: $order_method. Must be :uc_based or :alternative")
+    if !(order_method in [:uc_based, :alternative, :merit_order])
+        error("Invalid order_method: $order_method. Must be :uc_based, :alternative or :merit_order")
     end
 
     if !(model in [:mpcc])
@@ -591,6 +595,21 @@ function generate_energy_prices(bidding_zone::String, date::Date;
                     throw(DataUnavailableError("$(order_book_result.message) for $bidding_zone on $date"))
                 else
                     error("Alternative order book creation failed: $(order_book_result.message)")
+                end
+            end
+
+            order_book = order_book_result.order_book
+
+        elseif order_method == :merit_order
+            println("   Using merit-order book creation")
+            order_book_result = create_merit_order_book(bidding_zone, date)
+
+            if !order_book_result.success
+                if contains(order_book_result.message, "No load data found") ||
+                   contains(order_book_result.message, "No generators found")
+                    throw(DataUnavailableError("$(order_book_result.message) for $bidding_zone on $date"))
+                else
+                    error("Merit-order book creation failed: $(order_book_result.message)")
                 end
             end
 

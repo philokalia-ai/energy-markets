@@ -705,12 +705,26 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
         # Dictionary version: stepwise_acceptance[order_id] * (sum of quantities) * price
         # Need to use signed quantities: negative for supply, positive for demand
         load_shed_penalty = 10000.0  # High penalty for load shedding (€/MWh)
+
+        # Price regularization: the complementarity constraints only pin
+        # market_price to the interval [max accepted supply price, min accepted
+        # demand price] — the welfare objective itself doesn't involve
+        # market_price, so without this term the solver returns an arbitrary
+        # point in that interval (often the demand-side end). An epsilon
+        # penalty selects the lowest feasible price, i.e. the marginal supply
+        # order — the competitive price, matching EU day-ahead convention.
+        # Epsilon is far below the welfare scale (~1e6 €) and the MIP gap, so
+        # it cannot change acceptance decisions.
+        price_regularization = 1e-6
+
         @objective(model, Max,
             sum(stepwise_acceptance[order_ids[i]] *
                 (order.type == :supply ? -order.quantity : order.quantity) * order.price
                 for (i, order) in enumerate(simple_orders)) -
             load_shed_penalty * sum(load_shed[node_id, time_period]
-                                    for node_id in order_book.nodes, time_period in order_book.periods)
+                                    for node_id in order_book.nodes, time_period in order_book.periods) -
+            price_regularization * sum(market_price[node_id, time_period]
+                                       for node_id in order_book.nodes, time_period in order_book.periods)
         )
 
         # Solve the model

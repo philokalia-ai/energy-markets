@@ -401,7 +401,7 @@ end
 const TTF_PRICE_CACHE = Dict{Dates.Date,Union{Float64,Nothing}}()
 
 # Gas plant cost model constants
-const GAS_PLANT_EFFICIENCY = 0.52   # blended CCGT/OCGT fleet efficiency (LHV basis)
+const GAS_PLANT_EFFICIENCY = 0.55   # CCGT-dominated fleet efficiency (LHV basis)
 const GAS_EMISSION_FACTOR = 0.202   # tCO₂ per MWh of gas burned
 const EUA_PRICE = 70.0              # €/tCO₂ carbon price (no EUA feed in DB yet)
 const GAS_VOM_COST = 2.0            # €/MWh variable O&M
