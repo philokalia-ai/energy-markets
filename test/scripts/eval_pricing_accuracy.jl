@@ -28,8 +28,8 @@ function fetch_actual_prices(zone::String, day::Date)
                price_currency_mwh
         FROM entsoe.energy_prices
         WHERE map_code = \$1 AND contract_type = 'Day-ahead'
-          AND (date_time_utc AT TIME ZONE 'UTC') >= \$2::date
-          AND (date_time_utc AT TIME ZONE 'UTC') < \$2::date + 1
+          AND date_time_utc >= (\$2::date::timestamp AT TIME ZONE 'UTC')
+          AND date_time_utc < ((\$2::date + 1)::timestamp AT TIME ZONE 'UTC')
           AND price_currency_mwh IS NOT NULL
         ORDER BY date_time_utc
         """,

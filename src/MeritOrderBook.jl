@@ -51,9 +51,10 @@ function get_net_imports(bidding_zone::String, day::Date)
     #    _IPS suffix and keep one row per (hour, counterparty, direction),
     #    deterministically preferring the larger flow (ORDER BY avg_flow
     #    DESC breaks ties so results are reproducible run to run).
-    # date_time_utc is timestamptz; both the hour key and the day window
-    # compare on (date_time_utc AT TIME ZONE 'UTC'), i.e. true UTC,
-    # regardless of the client session timezone.
+    # date_time_utc is timestamptz; the hour key converts it with
+    # AT TIME ZONE 'UTC' and the day window converts the BOUNDS to UTC
+    # instants (keeping the column bare so an index on it stays usable) —
+    # both are correct regardless of the client session timezone.
     df = sql2df_with_retry(
         """
         WITH border_hourly AS (
@@ -70,8 +71,8 @@ function get_net_imports(bidding_zone::String, day::Date)
                 FROM entsoe.physical_flows
                 WHERE (in_area_map_code = \$1 OR out_area_map_code = \$1)
                   AND in_area_type_code LIKE 'BZN%' AND out_area_type_code LIKE 'BZN%'
-                  AND (date_time_utc AT TIME ZONE 'UTC') >= \$2::date
-                  AND (date_time_utc AT TIME ZONE 'UTC') < \$2::date + 1
+                  AND date_time_utc >= (\$2::date::timestamp AT TIME ZONE 'UTC')
+                  AND date_time_utc < ((\$2::date + 1)::timestamp AT TIME ZONE 'UTC')
                 GROUP BY 1,
                          CASE WHEN in_area_map_code = \$1
                               THEN out_area_map_code ELSE in_area_map_code END,
@@ -198,8 +199,8 @@ function create_merit_order_book(
 
         orders = SimpleOrder[]
         supply_orders_count = 0
-        export_orders_count = 0
-        export_demand_quantity = 0.0
+        demand_orders_count = 0
+        total_demand_quantity = 0.0
         total_supply_capacity = 0.0
 
         for ts in target_timeslots
@@ -226,8 +227,8 @@ function create_merit_order_book(
             elseif ni < -0.1
                 push!(orders, SimpleOrder(:demand, price_cap, -ni,
                     Symbol(bidding_zone), date_time, resolution_minutes))
-                export_orders_count += 1
-                export_demand_quantity += -ni
+                demand_orders_count += 1
+                total_demand_quantity += -ni
             end
 
             # Normalized within-day demand position (0 = trough, 1 = peak)
@@ -296,8 +297,6 @@ function create_merit_order_book(
         end
 
         # Demand: inelastic tranche at the cap + small price-sensitive tail
-        demand_orders_count = export_orders_count
-        total_demand_quantity = export_demand_quantity
         for ts in target_timeslots
             date_time = parse_timeslot_to_datetime(ts, day)
             gd = gross_demand[ts]

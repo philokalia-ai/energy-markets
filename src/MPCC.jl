@@ -690,12 +690,27 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
 
         # Complementarity constraints using Big-M reformulation
         # Side 1: acceptance ⊥ dual_rhs — an accepted order earns no
-        # out-of-money surplus (acceptance > 0 ⟹ dual_rhs = 0)
+        # out-of-money surplus (acceptance > 0 ⟹ dual_rhs = 0).
+        # The rhs Big-M is per-order (quantity × price span bounds the rhs of
+        # any rejected order): a global constant would force the price to
+        # within global_M/quantity of a large rejected order's bid, silently
+        # raising the price floor for multi-GW price-taker orders.
         @variable(model, stepwise_acceptance_complementarity_aux[order_id in order_ids], Bin)
         @constraint(model, stepwise_acceptance_complementarity_ineq1[order_id in order_ids],
-            stepwise_acceptance[order_id] <= stepwise_acceptance_complementarity_aux[order_id] * big_m)
-        @constraint(model, stepwise_acceptance_complementarity_ineq2[order_id in order_ids],
-            stepwise_dual_rhs[order_id] <= (1 - stepwise_acceptance_complementarity_aux[order_id]) * big_m)
+            stepwise_acceptance[order_id] <= stepwise_acceptance_complementarity_aux[order_id] * 1.0)
+        for (i, order) in enumerate(simple_orders)
+            order_id = order_ids[i]
+            # widest span the rhs can attain, covering bids outside the limits
+            rhs_span = max(order.price, order_book.price_limits[2]) -
+                       min(order.price, order_book.price_limits[1])
+            # rhs = dual + |q|·(bid-vs-price gap); dual itself is bounded by
+            # the order's max surplus, so 2× the quantity-weighted span covers
+            # both terms
+            @constraint(model,
+                stepwise_dual_rhs[order_id] <=
+                (1 - stepwise_acceptance_complementarity_aux[order_id]) *
+                2.0 * order.quantity * rhs_span)
+        end
 
         # Side 2: dual ⊥ (1 - acceptance) — only a FULLY accepted order may
         # carry positive surplus (dual > 0 ⟹ acceptance = 1). Without this
@@ -775,10 +790,25 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
             # order pins the price to its bid exactly — including the demand
             # cap in shortage hours, per EU convention — and otherwise the
             # competitive (supply-side) end of the interval is used.
-            acceptance_atol = 1e-6
+            # Skipped for multi-zone books: this reconstruction only sees a
+            # zone's local orders, so it would ignore price coupling through
+            # transmission flows and could publish spurious cross-zone
+            # spreads. In multi-zone solves the flow variables tie zone
+            # prices together and the solver's values are kept as-is.
+            is_multi_zone = flow !== nothing && !isempty(zone_pairs)
+            # Well above solver feasibility tolerances (1e-6..1e-5), far
+            # below any economically meaningful partial acceptance
+            acceptance_atol = 1e-4
             for node_id in order_book.nodes, time_period in order_book.periods
                 order_idxs = get(orders_by_node_time, (node_id, time_period), Int[])
-                isempty(order_idxs) && continue
+                if isempty(order_idxs)
+                    # Orderless cell (data gap): nothing constrains the
+                    # solver's price value — pin it to the floor so the
+                    # output is at least deterministic and recognizable
+                    market_prices[node_id][time_period] = order_book.price_limits[1]
+                    continue
+                end
+                is_multi_zone && continue
                 lo = order_book.price_limits[1]
                 hi = order_book.price_limits[2]
                 marginal_price = nothing

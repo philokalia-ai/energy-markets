@@ -429,6 +429,7 @@ function get_ttf_price(day::Dates.Date)
             SELECT close
             FROM yfinance.ttf_f
             WHERE date < \$1 AND date > \$1::date - INTERVAL '10 days'
+              AND close IS NOT NULL
             ORDER BY date DESC
             LIMIT 1
             """,
