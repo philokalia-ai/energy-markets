@@ -5,9 +5,11 @@
 # whether pricing changes move simulated prices closer to reality.
 #
 # Usage:
-#   julia --project=. test/scripts/eval_pricing_accuracy.jl [order_method]
+#   julia --project=. test/scripts/eval_pricing_accuracy.jl [order_method] [days]
 #
 # order_method: alternative (default), merit_order, or uc_based
+# days: optional comma-separated list of dates (yyyy-mm-dd) to evaluate
+#       instead of the fixed benchmark days
 
 using Euphemia
 using Dates
@@ -72,13 +74,19 @@ end
 
 function main()
     order_method = length(ARGS) >= 1 ? Symbol(ARGS[1]) : :alternative
+    days = length(ARGS) >= 2 ? [Date(strip(s)) for s in split(ARGS[2], ",")] : EVAL_DAYS
 
-    println("Pricing accuracy eval | zone=$ZONE method=$order_method seed=$RANDOM_SEED")
+    println("Pricing accuracy eval | zone=$ZONE method=$order_method seed=$RANDOM_SEED n_days=$(length(days))")
     println("day          n     MAE    RMSE    bias    corr   act_mean  sim_mean   time")
 
     results = []
-    for day in EVAL_DAYS
-        r = eval_day(ZONE, day, order_method)
+    for day in days
+        r = try
+            eval_day(ZONE, day, order_method)
+        catch e
+            println(day, "  -- failed: ", sprint(showerror, e)[1:min(end, 80)], " --")
+            continue
+        end
         if r === nothing
             println(day, "  -- no overlapping data --")
             continue
