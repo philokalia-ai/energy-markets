@@ -175,7 +175,7 @@ ttf = Euphemia.get_ttf_price(Date(2024, 6, 15))
 mc = Euphemia.get_marginal_cost(Date(2024, 6, 15), "Fossil Gas")  # ≈ €97/MWh
 ```
 
-Cost model constants (in `src/Generators.jl`): `GAS_PLANT_EFFICIENCY = 0.52`,
+Cost model constants (in `src/Generators.jl`): `GAS_PLANT_EFFICIENCY = 0.55`,
 `GAS_EMISSION_FACTOR = 0.202` tCO₂/MWh gas, `EUA_PRICE = 70.0` €/tCO₂ (constant —
 no EUA price feed in the DB yet), `GAS_VOM_COST = 2.0` €/MWh.
 
@@ -814,7 +814,7 @@ The project uses PostgreSQL with two main schemas:
 **`simulations.energy_prices`** - Generated energy price results by bidding zone, date, and time period
 - `clearing_mode`: Distinguishes between `'single_zone'` (independent zone clearing), `'multi_zone'` (joint clearing with transmission), and `'multi_zone_iterative'` (iterative UC-MPCC feedback loop)
 - `optimization_run_id`: Foreign key to `optimization_runs` table for traceability
-- `code_version`: Schema version (current: 3)
+- `code_version`: Schema version (current: 3 for energy_prices, 4 for optimization_runs/uc_results — bumped July 2026 when marginal costs switched from stylized 2.2×-markup values to SRMC/TTF; earlier rows/caches under the old cost model keep their old version and are not mixed with new results)
 - Unique on `(date_time_utc, bidding_zone, contract_type, order_method, clearing_mode, code_version)` - allows storing results from different clearing modes side by side
 
 **`simulations.optimization_runs`** - Optimization run metadata including status, solver info, and performance metrics

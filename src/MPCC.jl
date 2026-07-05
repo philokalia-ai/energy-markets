@@ -689,11 +689,37 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
         end
 
         # Complementarity constraints using Big-M reformulation
+        # Side 1: acceptance ⊥ dual_rhs — an accepted order earns no
+        # out-of-money surplus (acceptance > 0 ⟹ dual_rhs = 0)
         @variable(model, stepwise_acceptance_complementarity_aux[order_id in order_ids], Bin)
         @constraint(model, stepwise_acceptance_complementarity_ineq1[order_id in order_ids],
             stepwise_acceptance[order_id] <= stepwise_acceptance_complementarity_aux[order_id] * big_m)
         @constraint(model, stepwise_acceptance_complementarity_ineq2[order_id in order_ids],
             stepwise_dual_rhs[order_id] <= (1 - stepwise_acceptance_complementarity_aux[order_id]) * big_m)
+
+        # Side 2: dual ⊥ (1 - acceptance) — only a FULLY accepted order may
+        # carry positive surplus (dual > 0 ⟹ acceptance = 1). Without this
+        # side, a partially accepted (marginal) order does not pin the price
+        # to its bid, and rejected orders don't constrain the price at all:
+        # the market price is then only bracketed, not determined, and the
+        # solver returns an arbitrary point of the feasible interval. With
+        # it, the marginal order sets the price exactly — including the
+        # demand price cap in shortage hours, per EU day-ahead convention.
+        # The dual equals the order's full surplus when fully accepted, so
+        # its Big-M must cover quantity × full price span (a global constant
+        # would silently cap large orders' surplus and distort the price).
+        # The acceptance side is bounded by 1, so its "Big-M" is exactly 1.
+        price_span = order_book.price_limits[2] - order_book.price_limits[1]
+        @variable(model, stepwise_dual_complementarity_aux[order_id in order_ids], Bin)
+        for (i, order) in enumerate(simple_orders)
+            order_id = order_ids[i]
+            @constraint(model,
+                stepwise_dual[order_id] <=
+                stepwise_dual_complementarity_aux[order_id] * order.quantity * price_span)
+            @constraint(model,
+                1 - stepwise_acceptance[order_id] <=
+                (1 - stepwise_dual_complementarity_aux[order_id]) * 1.0)
+        end
 
         # Price range constraints
         @constraint(model, minimum_price[node_id in order_book.nodes, time_period in order_book.periods],

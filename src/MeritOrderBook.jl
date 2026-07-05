@@ -42,15 +42,41 @@ double-reporting of the same border at CTA level (e.g. GR–IT vs GR–IT-SOUTH)
 Returns an empty Dict when no flow data exists for the day.
 """
 function get_net_imports(bidding_zone::String, day::Date)
+    # Two normalizations, both required for a correct MW value:
+    # 1. AVG per border within the hour — flow_mw is a power value, so a
+    #    border published at PT15M has 4 rows/hour; summing rows directly
+    #    would inflate that border 4x relative to a PT60M border.
+    # 2. Dedup counterparty aliases — some borders are reported twice under
+    #    two map codes for the same area (e.g. UA and UA_IPS); strip the
+    #    _IPS suffix and keep one row per (hour, counterparty, direction).
+    # date_time_utc is timestamptz, so AT TIME ZONE 'UTC' is a true
+    # conversion to UTC regardless of the client session timezone.
     df = sql2df_with_retry(
         """
-        SELECT EXTRACT(HOUR FROM date_time_utc AT TIME ZONE 'UTC')::int AS h,
-               SUM(CASE WHEN in_area_map_code = \$1 THEN flow_mw ELSE -flow_mw END) AS net_import
-        FROM entsoe.physical_flows
-        WHERE (in_area_map_code = \$1 OR out_area_map_code = \$1)
-          AND in_area_type_code LIKE 'BZN%' AND out_area_type_code LIKE 'BZN%'
-          AND date_time_utc >= \$2::date AND date_time_utc < \$2::date + 1
-        GROUP BY 1
+        WITH border_hourly AS (
+            SELECT DISTINCT ON (h, counterparty, direction)
+                   h, counterparty, direction, avg_flow
+            FROM (
+                SELECT EXTRACT(HOUR FROM date_time_utc AT TIME ZONE 'UTC')::int AS h,
+                       regexp_replace(
+                           CASE WHEN in_area_map_code = \$1
+                                THEN out_area_map_code ELSE in_area_map_code END,
+                           '_IPS\$', '') AS counterparty,
+                       CASE WHEN in_area_map_code = \$1 THEN 1 ELSE -1 END AS direction,
+                       AVG(flow_mw) AS avg_flow
+                FROM entsoe.physical_flows
+                WHERE (in_area_map_code = \$1 OR out_area_map_code = \$1)
+                  AND in_area_type_code LIKE 'BZN%' AND out_area_type_code LIKE 'BZN%'
+                  AND date_time_utc >= \$2::date AND date_time_utc < \$2::date + 1
+                GROUP BY 1,
+                         CASE WHEN in_area_map_code = \$1
+                              THEN out_area_map_code ELSE in_area_map_code END,
+                         CASE WHEN in_area_map_code = \$1 THEN 1 ELSE -1 END
+            ) per_code
+        )
+        SELECT h, SUM(direction * avg_flow) AS net_import
+        FROM border_hourly
+        GROUP BY h
         """,
         [bidding_zone, day]
     )
@@ -121,7 +147,7 @@ function create_merit_order_book(
         # backtesting treatment. Set include_net_imports=false for a pure
         # isolated-zone simulation (or when forecasting without flow data).
         net_imports = include_net_imports ? get_net_imports(bidding_zone, day) : Dict{Int,Float64}()
-        slot_import(ts) = get(net_imports, parse(Int, ts[10:11]), 0.0)
+        slot_import(ts) = get(net_imports, Dates.hour(parse_timeslot_to_datetime(ts, day)), 0.0)
 
         gross_demand = Dict{String,Float64}()
         net_demand = Dict{String,Float64}()
@@ -278,7 +304,9 @@ function create_merit_order_book(
         end
 
         nodes = [bidding_zone]
-        price_limits = (-1000.0, 4000.0)
+        # EU day-ahead floor is -500; ceiling is the demand cap so shortage
+        # hours can price exactly at the cap
+        price_limits = (-500.0, price_cap)
         order_book = MPCCOrderBook(orders, nodes, target_timeslots, price_limits, nothing)
 
         supply_per_slot = total_supply_capacity / length(target_timeslots)
@@ -294,7 +322,8 @@ function create_merit_order_book(
             total_demand_quantity, total_supply_capacity, ratio)
 
     catch e
-        error_msg = "Error creating merit-order book: $e"
+        e isa InterruptException && rethrow()
+        error_msg = "Error creating merit-order book: $(sprint(showerror, e))"
         println("  ❌ $error_msg")
         return AdjustedOrderBookResult(false, error_msg, nothing, 0, 0, 0, 0.0, 0.0, 0.0)
     end

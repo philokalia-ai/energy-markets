@@ -420,23 +420,33 @@ which is the price information available at day-ahead auction time.
 function get_ttf_price(day::Dates.Date)
     haskey(TTF_PRICE_CACHE, day) && return TTF_PRICE_CACHE[day]
 
-    price = try
-        df = Euphemia.sql2df_with_retry(
+    # Strictly before the delivery day: the day-ahead auction for D clears
+    # around noon on D-1, when D's own close does not exist yet. Using
+    # `date <= day` would leak future information into backtests.
+    df = try
+        Euphemia.sql2df_with_retry(
             """
             SELECT close
             FROM yfinance.ttf_f
-            WHERE date <= \$1 AND date > \$1::date - INTERVAL '10 days'
+            WHERE date < \$1 AND date > \$1::date - INTERVAL '10 days'
             ORDER BY date DESC
             LIMIT 1
             """,
             [day]
         )
-        isempty(df) ? nothing : Float64(df.close[1])
     catch e
+        # Transient DB failure: warn and fall back WITHOUT caching, so the
+        # next call retries instead of pinning this date to the fallback
         @warn "TTF price lookup failed for $day, falling back to stylized gas cost: $e"
-        nothing
+        return nothing
     end
 
+    price = isempty(df) ? nothing : Float64(df.close[1])
+    if price === nothing
+        @warn "No TTF price within 10 days before $day; using stylized gas cost"
+    end
+
+    # Cache both hits and genuine data absence (but never transient errors)
     TTF_PRICE_CACHE[day] = price
     return price
 end
@@ -452,40 +462,39 @@ function get_marginal_cost(day::Dates.Date, fuel_type::String, bidding_zone::Str
             carbon_cost = GAS_EMISSION_FACTOR / GAS_PLANT_EFFICIENCY * EUA_PRICE
             return fuel_cost + carbon_cost + GAS_VOM_COST
         end
-        @warn "No TTF price within 10 days of $day; using stylized gas cost" maxlog = 1
     end
 
-    # Short-run marginal costs (SRMC, €/MWh electric) including carbon at
-    # EUA_PRICE and variable O&M. No bid markup — bidding strategy is applied
-    # in the order book layer, not here (the UC objective also uses these
-    # costs and should see true costs, not bids).
-    #
-    # Thermal SRMC = fuel/efficiency + emission_factor(el) × EUA + VOM, e.g.:
-    #   Lignite (GR): fuel+VOM ≈ €25, EF ≈ 1.25 tCO₂/MWh_el → 25 + 1.25×70 ≈ 112
-    #   Hard coal:    ~€14/MWh_th at η=0.40 → 36 + 0.9×70 + 3 ≈ 100
-    #   Oil (HFO):    ~€40/MWh_th at η=0.38 → 105 + 0.75×70 ≈ 155
-    srmc = Dict(
-        "Hydro Water Reservoir" => 12.0,           # O&M only; water value applied in bidding layer
-        "Hydro Run-of-river and poundage" => 3.0,  # Must-run, near-zero variable cost
-        "Hydro Pumped Storage" => 60.0,            # Pumping energy cost at off-peak prices
-        "Fossil Brown coal/Lignite" => 112.0,      # Mostly carbon (EF ~1.25 tCO₂/MWh for GR lignite)
-        "Fossil Gas" => 105.0,                     # Fallback only — TTF path above is preferred
-        "Nuclear" => 10.0,                         # Fuel cycle cost
-        "Fossil Oil" => 155.0,                     # HFO/diesel fuel + carbon
-        "Fossil Hard coal" => 100.0,               # API2-level coal + carbon
-        "Fossil Coal-derived gas" => 110.0,
-        "Wind Onshore" => 1.0,
-        "Wind Offshore" => 2.0,
-        "Solar" => 1.0,
-        "Biomass" => 60.0,                         # Fuel cost, no carbon
-        "Waste" => 25.0,                           # Gate fees offset fuel cost
-        "Geothermal" => 20.0,
-        "Energy storage" => 90.0,                  # Charging-cost opportunity proxy
-        "Other" => 110.0                           # Assume gas-like when unknown
-    )
-
-    return get(srmc, fuel_type, 110.0)
+    return get(FUEL_SRMC, fuel_type, 110.0)
 end
+
+# Short-run marginal costs (SRMC, €/MWh electric) including carbon at
+# EUA_PRICE and variable O&M. No bid markup — bidding strategy is applied
+# in the order book layer, not here (the UC objective also uses these
+# costs and should see true costs, not bids).
+#
+# Thermal SRMC = fuel/efficiency + emission_factor(el) × EUA + VOM, e.g.:
+#   Lignite (GR): fuel+VOM ≈ €25, EF ≈ 1.25 tCO₂/MWh_el → 25 + 1.25×70 ≈ 112
+#   Hard coal:    ~€14/MWh_th at η=0.40 → 36 + 0.9×70 + 3 ≈ 100
+#   Oil (HFO):    ~€40/MWh_th at η=0.38 → 105 + 0.75×70 ≈ 155
+const FUEL_SRMC = Dict(
+    "Hydro Water Reservoir" => 12.0,           # O&M only; water value applied in bidding layer
+    "Hydro Run-of-river and poundage" => 3.0,  # Must-run, near-zero variable cost
+    "Hydro Pumped Storage" => 60.0,            # Pumping energy cost at off-peak prices
+    "Fossil Brown coal/Lignite" => 112.0,      # Mostly carbon (EF ~1.25 tCO₂/MWh for GR lignite)
+    "Fossil Gas" => 105.0,                     # Fallback only — TTF path is preferred
+    "Nuclear" => 10.0,                         # Fuel cycle cost
+    "Fossil Oil" => 155.0,                     # HFO/diesel fuel + carbon
+    "Fossil Hard coal" => 100.0,               # API2-level coal + carbon
+    "Fossil Coal-derived gas" => 110.0,
+    "Wind Onshore" => 1.0,
+    "Wind Offshore" => 2.0,
+    "Solar" => 1.0,
+    "Biomass" => 60.0,                         # Fuel cost, no carbon
+    "Waste" => 25.0,                           # Gate fees offset fuel cost
+    "Geothermal" => 20.0,
+    "Energy storage" => 90.0,                  # Charging-cost opportunity proxy
+    "Other" => 110.0                           # Assume gas-like when unknown
+)
 
 # pull from postgres, for now only active units of given date (I think)
 # exclude_unavailable: if true, excludes generators with active outages and reduces capacity for partial outages

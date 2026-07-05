@@ -7,7 +7,7 @@
 # Usage:
 #   julia --project=. test/scripts/eval_pricing_accuracy.jl [order_method]
 #
-# order_method: alternative (default) or uc_based
+# order_method: alternative (default), merit_order, or uc_based
 
 using Euphemia
 using Dates
