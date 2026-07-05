@@ -111,7 +111,8 @@ function create_merit_order_book(
     availability_factor::Float64=0.80,
     scarcity_threshold::Float64=1.4,
     scarcity_kappa::Float64=3.0,
-    peak_kappa::Float64=0.6,
+    peak_kappa::Float64=1.2,
+    peak_exponent::Float64=4.0,
     water_value_base::Float64=0.85,
     water_value_span::Float64=0.9,
     demand_elastic_share::Float64=0.02,
@@ -227,10 +228,13 @@ function create_merit_order_book(
             # margin below threshold) plus peak-hour strategic bidding —
             # participants know when the daily peak is and price their last
             # tranches accordingly, even when capacity is formally adequate.
+            # The high exponent concentrates the markup in the true peak
+            # hours: at norm_demand 0.5 (e.g. summer nights, where residual
+            # demand is mid-range) the markup is ~6% of peak_kappa, not 25%.
             margin = dispatchable_capacity / net_demand[ts]
             scarcity = 1.0 +
                        scarcity_kappa * max(0.0, scarcity_threshold - margin)^2 +
-                       peak_kappa * norm_demand^2
+                       peak_kappa * norm_demand^peak_exponent
 
             for g in generators
                 if g.fuel_type in WATER_VALUE_FUEL_TYPES
