@@ -957,6 +957,15 @@ function ensure_indexes()
             (asset_code, start_outage_utc);
         """)
 
+        # Index for hydro availability / per-type generation queries
+        # Table: 23 GB - queries by zone + production_type + date range
+        @info "Creating index on aggregated_generation_per_type..."
+        LibPQ.execute(cnx, """
+            CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_agg_gen_type_zone_date
+            ON entsoe.aggregated_generation_per_type
+            (area_map_code, production_type, date_time_utc);
+        """)
+
         # Add more indexes here as needed:
         # - generation_forecasts_for_wind_and_solar (zone, date)
         # - day_ahead_total_load_forecast (zone, date)

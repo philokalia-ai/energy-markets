@@ -886,6 +886,75 @@ function _create_multi_zone_order_book_alternative(zones::Vector{String}, day::D
 end
 
 """
+    _create_multi_zone_order_book_merit(zones::Vector{String}, day::Date)
+
+Multi-zone order book built from per-zone merit-order books.
+
+Flows between zones inside the clearing set are endogenous (ATC-constrained
+MPCC flow variables), so each zone's observed net-import injections are
+restricted to borders with zones OUTSIDE the set.
+"""
+function _create_multi_zone_order_book_merit(zones::Vector{String}, day::Date)
+    isempty(zones) && error("At least one bidding zone must be specified")
+
+    println("🌍 Creating multi-zone order book (merit-order method) for $(length(zones)) zones")
+
+    all_orders = Vector{MarketOrders.MarketOrder}()
+    all_periods = Set{String}()
+    failed_zones = String[]
+
+    for zone in zones
+        try
+            println("   📊 Processing zone $zone...")
+            result = create_merit_order_book(zone, day;
+                net_import_exclude=[z for z in zones if z != zone])
+
+            if !result.success
+                @warn "Failed to generate merit orders for zone $zone: $(result.message)"
+                push!(failed_zones, zone)
+                continue
+            end
+
+            append!(all_orders, result.order_book.orders)
+            for period in result.order_book.periods
+                push!(all_periods, period)
+            end
+            println("      ✅ Added $(result.supply_orders) supply + $(result.demand_orders) demand orders")
+        catch e
+            e isa InterruptException && rethrow()
+            @error "Error processing zone $zone: $e"
+            push!(failed_zones, zone)
+        end
+    end
+
+    successful_zones = filter(z -> !(z in failed_zones), zones)
+    isempty(successful_zones) && error("Failed to generate merit orders for any zone")
+    if !isempty(failed_zones)
+        @warn "Some zones failed: $(join(failed_zones, ", ")). Proceeding with: $(join(successful_zones, ", "))"
+    end
+
+    periods_vector = sort(collect(all_periods))
+
+    println("   🔌 Fetching transfer capacities between zones...")
+    transfer_capacity = Network.create_transfer_capacity_from_entsoe(day, successful_zones)
+    zone_pairs = Network.get_zone_pairs(transfer_capacity)
+    println("   ✅ Found $(length(zone_pairs)) directional transfer capacity links")
+
+    order_book = MPCC.MPCCOrderBook(
+        all_orders,
+        successful_zones,
+        periods_vector,
+        (-500.0, 3000.0),       # EU day-ahead floor / merit demand cap
+        transfer_capacity
+    )
+
+    println("✅ Created multi-zone order book (merit-order):")
+    println("   🌍 Zones: $(length(successful_zones))  📝 Orders: $(length(all_orders))  🕐 Periods: $(length(periods_vector))  🔌 Links: $(length(zone_pairs))")
+
+    return order_book
+end
+
+"""
     run_multi_zone_market_clearing(date::Date;
                                    zones::Vector{String}=String[],
                                    order_method::Symbol=:uc_based,
@@ -995,8 +1064,12 @@ function run_multi_zone_market_clearing(date::Date;
     elseif order_method == :alternative
         # Alternative: uses simplified order generation (faster)
         _create_multi_zone_order_book_alternative(zones, date)
+    elseif order_method == :merit_order
+        # Merit-order: deterministic strategy-based books per zone,
+        # cross-zone flows endogenous via ATC-constrained MPCC
+        _create_multi_zone_order_book_merit(zones, date)
     else
-        error("Invalid order_method: $order_method. Must be :uc_based or :alternative")
+        error("Invalid order_method: $order_method. Must be :uc_based, :alternative or :merit_order")
     end
 
     # Run MPCC market clearing with transmission constraints

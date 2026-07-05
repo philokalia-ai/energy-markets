@@ -40,8 +40,14 @@ borders; rows are restricted to BZN-level areas on both sides to avoid the
 double-reporting of the same border at CTA level (e.g. GR–IT vs GR–IT-SOUTH).
 
 Returns an empty Dict when no flow data exists for the day.
+
+`exclude_counterparties` drops borders to the listed zones — used in
+multi-zone clearing, where flows to zones inside the clearing set are
+endogenous (ATC-constrained MPCC variables) and only borders to zones
+OUTSIDE the set should enter as observed fixed injections.
 """
-function get_net_imports(bidding_zone::String, day::Date)
+function get_net_imports(bidding_zone::String, day::Date;
+    exclude_counterparties::Vector{String}=String[])
     # Two normalizations, both required for a correct MW value:
     # 1. AVG per border within the hour — flow_mw is a power value, so a
     #    border published at PT15M has 4 rows/hour; summing rows directly
@@ -82,9 +88,10 @@ function get_net_imports(bidding_zone::String, day::Date)
         )
         SELECT h, SUM(direction * avg_flow) AS net_import
         FROM border_hourly
+        WHERE counterparty <> ALL(\$3)
         GROUP BY h
         """,
-        [bidding_zone, day]
+        [bidding_zone, day, exclude_counterparties]
     )
     return Dict{Int,Float64}(row.h => row.net_import for row in eachrow(df))
 end
@@ -92,6 +99,45 @@ end
 # Fuel types priced at water value instead of SRMC
 const WATER_VALUE_FUEL_TYPES =
     [Symbol("Hydro Water Reservoir"), Symbol("Hydro Pumped Storage")]
+
+# ENTSO-E production_type strings for hydro availability lookup
+const HYDRO_PRODUCTION_TYPES =
+    ["Hydro Water Reservoir", "Hydro Pumped Storage", "Hydro Run-of-river and poundage"]
+
+"""
+    get_hydro_availability(bidding_zone::String, day::Date; lookback_days=30) -> Union{Float64,Nothing}
+
+Recent achievable hydro output as a fraction of what the fleet produced at
+its best over the trailing window: the 95th-percentile hourly total hydro
+output over the `lookback_days` before `day` (strictly before — no
+lookahead). Hydro is energy-limited, so recent peak output is a physical
+proxy for the water actually available — in dry periods (e.g. August 2024,
+May 2025 in SEE) reservoirs cannot sustain nameplate output regardless of
+price, which tightens the real capacity margin and drives scarcity pricing.
+
+Returns MW (the p95 hourly output), or `nothing` when no data exists.
+"""
+function get_hydro_availability(bidding_zone::String, day::Date; lookback_days::Int=30)
+    df = sql2df_with_retry(
+        """
+        SELECT percentile_cont(0.95) WITHIN GROUP (ORDER BY hydro_mw) AS p95
+        FROM (
+            SELECT date_time_utc, SUM(actual_generation_output_mw) AS hydro_mw
+            FROM entsoe.aggregated_generation_per_type
+            WHERE area_map_code = \$1
+              AND production_type = ANY(\$2)
+              AND area_type_code LIKE 'BZN%'
+              AND actual_generation_output_mw IS NOT NULL
+              AND date_time_utc >= (\$3::date::timestamp AT TIME ZONE 'UTC')
+              AND date_time_utc < (\$4::date::timestamp AT TIME ZONE 'UTC')
+            GROUP BY date_time_utc
+        ) hourly
+        """,
+        [bidding_zone, HYDRO_PRODUCTION_TYPES, day - Day(lookback_days), day]
+    )
+    (isempty(df) || ismissing(df.p95[1])) && return nothing
+    return Float64(df.p95[1])
+end
 
 """
     create_merit_order_book(bidding_zone::String, day::Date; kwargs...)
@@ -120,11 +166,13 @@ function create_merit_order_book(
     peak_kappa::Float64=1.2,
     peak_exponent::Float64=4.0,
     water_value_base::Float64=0.85,
+    water_value_dry_boost::Float64=1.0,
     water_value_span::Float64=0.9,
     demand_elastic_share::Float64=0.02,
     demand_elastic_price::Float64=250.0,
     price_cap::Float64=3000.0,
-    include_net_imports::Bool=true
+    include_net_imports::Bool=true,
+    net_import_exclude::Vector{String}=String[]
 )
     try
         println("📊 Creating merit-order order book for $bidding_zone on $day")
@@ -153,7 +201,9 @@ function create_merit_order_book(
         # hours; using the observed schedule is the standard single-zone
         # backtesting treatment. Set include_net_imports=false for a pure
         # isolated-zone simulation (or when forecasting without flow data).
-        net_imports = include_net_imports ? get_net_imports(bidding_zone, day) : Dict{Int,Float64}()
+        net_imports = include_net_imports ?
+                      get_net_imports(bidding_zone, day; exclude_counterparties=net_import_exclude) :
+                      Dict{Int,Float64}()
         slot_import(ts) = get(net_imports, Dates.hour(parse_timeslot_to_datetime(ts, day)), 0.0)
 
         gross_demand = Dict{String,Float64}()
@@ -172,10 +222,40 @@ function create_merit_order_book(
         # Gas SRMC anchors hydro water value (TTF-based when data exists)
         gas_srmc = get_marginal_cost(day, "Fossil Gas", bidding_zone)
 
+        # Hydro energy limitation: recent actual peak output caps what the
+        # hydro fleet can offer (dry periods → less water → tighter margin).
+        # Thermal keeps the flat availability derate; hydro gets a
+        # data-driven one.
+        is_hydro(g) = g.fuel_type in WATER_VALUE_FUEL_TYPES ||
+                      g.fuel_type == Symbol("Hydro Run-of-river and poundage")
+        hydro_pmax = sum((g.p_max for g in generators if is_hydro(g)); init=0.0)
+        hydro_scale = 1.0   # offered-quantity cap (fraction of nameplate)
+        hydro_dryness = 0.0 # 0 = normal water conditions, →1 = severe drought
+        if hydro_pmax > 1.0
+            hydro_avail = get_hydro_availability(bidding_zone, day)
+            hydro_norm = get_hydro_availability(bidding_zone, day; lookback_days=365)
+            if hydro_avail !== nothing
+                hydro_scale = clamp(hydro_avail / hydro_pmax, 0.2, 1.0)
+                # Dryness compares the recent achievable output to the
+                # zone's own long-run level — hydro habitually runs below
+                # nameplate, so nameplate is the wrong drought baseline
+                if hydro_norm !== nothing && hydro_norm > 1.0
+                    hydro_dryness = clamp(1.0 - hydro_avail / hydro_norm, 0.0, 1.0)
+                end
+                println("  💧 Hydro: recent p95 $(round(Int, hydro_avail)) MW, " *
+                        "1y p95 $(round(Int, something(hydro_norm, NaN))) MW, " *
+                        "nameplate $(round(Int, hydro_pmax)) MW → " *
+                        "offer scale $(round(hydro_scale, digits=2)), dryness $(round(hydro_dryness, digits=2))")
+            end
+        end
+        offered_pmax(g) = is_hydro(g) ? g.p_max * hydro_scale : g.p_max
+
         # Dispatchable capacity for the scarcity margin, derated for the
-        # realistic availability of the fleet (unreported outages, energy
-        # limits on hydro) — nameplate capacity never looks scarce.
-        dispatchable_capacity = availability_factor * sum(g.p_max for g in generators)
+        # realistic availability of the fleet (unreported outages) and for
+        # the hydro energy limit — nameplate capacity never looks scarce.
+        dispatchable_capacity =
+            availability_factor * sum((g.p_max for g in generators if !is_hydro(g)); init=0.0) +
+            hydro_scale * hydro_pmax
 
         # UC-lite commitment: only units that are actually running
         # self-schedule their minimum load. Approximate the committed set as
@@ -251,11 +331,16 @@ function create_merit_order_book(
                     # Hydro opportunity cost: cheap relative to gas off-peak,
                     # premium over gas at the peak. Single tranche — hydro
                     # dispatches all-or-nothing at its water value.
-                    water_value = gas_srmc * (water_value_base + water_value_span * norm_demand)
-                    push!(orders, SimpleOrder(:supply, water_value, g.p_max,
+                    # Dry-period boost: scarce water raises the opportunity
+                    # cost of releasing it — the same MWh could be sold in a
+                    # later, tighter hour. Dryness is the recent achievable
+                    # output vs the zone's own long-run level.
+                    water_value = gas_srmc * (1.0 + water_value_dry_boost * hydro_dryness) *
+                                  (water_value_base + water_value_span * norm_demand)
+                    push!(orders, SimpleOrder(:supply, water_value, offered_pmax(g),
                         Symbol(bidding_zone), date_time, resolution_minutes))
                     supply_orders_count += 1
-                    total_supply_capacity += g.p_max
+                    total_supply_capacity += offered_pmax(g)
                 else
                     # Must-run self-scheduling: baseload-ish units (SRMC not
                     # far above gas) bid their minimum-load block near zero —
@@ -264,7 +349,7 @@ function create_merit_order_book(
                     # collapse below thermal SRMC in renewable-surplus hours.
                     must_run_qty = 0.0
                     if g.code in committed
-                        must_run_qty = min(g.p_min, g.p_max)
+                        must_run_qty = min(g.p_min, offered_pmax(g))
                         # Graduated self-scheduling: the deepest block is
                         # near-free (never shut down), the rest bids half
                         # cost — real curves are convex, not a cliff
@@ -282,7 +367,7 @@ function create_merit_order_book(
                     # Remaining capacity: tranche ladder on SRMC, scarcity
                     # markup on the upper tranches (first tranche stays at
                     # cost so mid-merit keeps clearing)
-                    flexible_capacity = max(g.p_max - must_run_qty, 0.0)
+                    flexible_capacity = max(offered_pmax(g) - must_run_qty, 0.0)
                     for (i, (share, mult)) in enumerate(tranches)
                         price = g.marginal_cost * mult * (i == 1 ? 1.0 : scarcity)
                         qty = flexible_capacity * share
@@ -314,6 +399,22 @@ function create_merit_order_book(
             end
             total_demand_quantity += gd
         end
+
+        # Merge orders with identical (type, price, timeslot): all units of a
+        # fuel type bid the same SRMC-derived tranche prices, so a zone-day
+        # book collapses ~6x with market-equivalent clearing (partial
+        # acceptance of a merged block ≡ distributing it among the
+        # identically-priced originals). This directly cuts the MPCC binary
+        # count, which is what limits multi-zone solve times.
+        merged = Dict{Tuple{Symbol,Float64,DateTime},Float64}()
+        for o in orders
+            key = (o.type, round(o.price, digits=2), o.date_time)
+            merged[key] = get(merged, key, 0.0) + o.quantity
+        end
+        pre_merge_count = length(orders)
+        orders = [SimpleOrder(t, p, q, Symbol(bidding_zone), dt, resolution_minutes)
+                  for ((t, p, dt), q) in merged]
+        println("  🔗 Merged $(pre_merge_count) orders into $(length(orders)) price-distinct blocks")
 
         nodes = [bidding_zone]
         # EU day-ahead floor is -500; ceiling is the demand cap so shortage

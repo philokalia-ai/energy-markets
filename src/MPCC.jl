@@ -530,6 +530,15 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
         set_silent(model)
     end
 
+    # Safety limits for large (multi-zone) MIPs: accept a 1% optimality gap
+    # and cap the solve time; the best incumbent is still returned
+    set_time_limit_sec(model, 900.0)
+    try
+        set_attribute(model, MOI.RelativeGapTolerance(), 0.01)
+    catch
+        # attribute not supported by this solver version — proceed with defaults
+    end
+
     start_time = time()
 
     try
@@ -558,12 +567,17 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
         zone_pairs = Tuple{String,String}[]  # Empty for single-zone
         zones_to = Dict{String,Vector{String}}()   # zones that can send TO each zone
         zones_from = Dict{String,Vector{String}}() # zones that can receive FROM each zone
+        flow_caps = Dict{Tuple{Tuple{String,String},String},Tuple{Float64,Float64}}()
 
         if order_book.network_topology isa TransferCapacity
             tc = order_book.network_topology
 
-            # Get all zone pairs with transfer capacity
-            zone_pairs = get_zone_pairs(tc)
+            # Get zone pairs with transfer capacity, restricted to zones in
+            # this book: capacity data can include borders to zones outside
+            # the clearing set, and a flow to a zone with no power balance
+            # would act as a free, costless energy source/sink
+            zone_pairs = [p for p in get_zone_pairs(tc)
+                          if p[1] in order_book.nodes && p[2] in order_book.nodes]
 
             if !isempty(zone_pairs)
                 println("   🔌 Adding transmission flow variables for $(length(zone_pairs)) zone pairs")
@@ -590,8 +604,50 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
                         # ATC bounds: -backward <= flow <= forward
                         set_lower_bound(flow[pair, t], -backward_cap)
                         set_upper_bound(flow[pair, t], forward_cap)
+                        flow_caps[(pair, t)] = (forward_cap, backward_cap)
                     end
                 end
+
+                # Market-coupling price condition. Flows alone only move
+                # energy; without a price-side condition zone prices are
+                # completely uncoupled and the solver may publish arbitrary
+                # cross-zone spreads over uncongested links. EU coupling
+                # requires: price[sink] - price[source] equals the congestion
+                # rent — zero while the link is inside its ATC limits (prices
+                # equal), positive only at the forward limit, negative only
+                # at the backward limit. Complementarity via per-link
+                # binaries; the rent is bounded by the book's price span.
+                price_span_flows = order_book.price_limits[2] - order_book.price_limits[1]
+                @variable(model, congestion_fw[pair in zone_pairs, t in order_book.periods] >= 0)
+                @variable(model, congestion_bw[pair in zone_pairs, t in order_book.periods] >= 0)
+                @variable(model, congestion_fw_aux[pair in zone_pairs, t in order_book.periods], Bin)
+                @variable(model, congestion_bw_aux[pair in zone_pairs, t in order_book.periods], Bin)
+                for pair in zone_pairs
+                    source, sink = pair
+                    # capacity data can include borders to zones outside the
+                    # clearing set — no price variable exists for those
+                    (source in order_book.nodes && sink in order_book.nodes) || continue
+                    for t in order_book.periods
+                        forward_cap, backward_cap = flow_caps[(pair, t)]
+                        cap_span = forward_cap + backward_cap
+                        @constraint(model,
+                            market_price[sink, t] - market_price[source, t] ==
+                            congestion_fw[pair, t] - congestion_bw[pair, t])
+                        # fw rent > 0 only when flow is at the forward limit
+                        @constraint(model,
+                            congestion_fw[pair, t] <= congestion_fw_aux[pair, t] * price_span_flows)
+                        @constraint(model,
+                            forward_cap - flow[pair, t] <=
+                            (1 - congestion_fw_aux[pair, t]) * cap_span)
+                        # bw rent > 0 only when flow is at the backward limit
+                        @constraint(model,
+                            congestion_bw[pair, t] <= congestion_bw_aux[pair, t] * price_span_flows)
+                        @constraint(model,
+                            flow[pair, t] + backward_cap <=
+                            (1 - congestion_bw_aux[pair, t]) * cap_span)
+                    end
+                end
+                println("   🔗 Added market-coupling price conditions for $(length(zone_pairs)) links")
 
                 # Precompute connected zones for power balance
                 for node in order_book.nodes
@@ -802,10 +858,12 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
             for node_id in order_book.nodes, time_period in order_book.periods
                 order_idxs = get(orders_by_node_time, (node_id, time_period), Int[])
                 if isempty(order_idxs)
-                    # Orderless cell (data gap): nothing constrains the
-                    # solver's price value — pin it to the floor so the
-                    # output is at least deterministic and recognizable
-                    market_prices[node_id][time_period] = order_book.price_limits[1]
+                    # Orderless cell (data gap): in a single-zone book nothing
+                    # constrains the solver's price — pin it to the floor so
+                    # the output is at least deterministic and recognizable.
+                    # In multi-zone books the market-coupling conditions tie
+                    # the price to neighboring zones, so keep the solver value.
+                    is_multi_zone || (market_prices[node_id][time_period] = order_book.price_limits[1])
                     continue
                 end
                 is_multi_zone && continue
