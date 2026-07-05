@@ -162,6 +162,30 @@ The `exclude_variable_renewables` parameter (default: `true`) filters out wind a
 - Renewable generation is subtracted from load to calculate net demand for UC
 - This prevents double-counting (generator in UC + forecast subtracted from load)
 
+**Gas marginal costs from real TTF prices:**
+
+Gas-fired generators ("Fossil Gas") use real TTF front-month futures prices from
+`yfinance.ttf_f` (populated by the ceres yfinance ETL, updated Tue–Sat):
+
+```julia
+# Most recent TTF close at or before a date (€/MWh), nothing if no data within 10 days
+ttf = Euphemia.get_ttf_price(Date(2024, 6, 15))
+
+# Gas marginal cost = TTF/efficiency + carbon + O&M (no bid markup)
+mc = Euphemia.get_marginal_cost(Date(2024, 6, 15), "Fossil Gas")  # ≈ €97/MWh
+```
+
+Cost model constants (in `src/Generators.jl`): `GAS_PLANT_EFFICIENCY = 0.52`,
+`GAS_EMISSION_FACTOR = 0.202` tCO₂/MWh gas, `EUA_PRICE = 70.0` €/tCO₂ (constant —
+no EUA price feed in the DB yet), `GAS_VOM_COST = 2.0` €/MWh.
+
+TTF lookups are cached per date in `TTF_PRICE_CACHE`. If no TTF price exists
+within 10 days of the requested date (e.g., before the table's history starts
+in Feb 2023), the stylized fuel-cost table is used as fallback. All other fuel
+types still use the stylized cost table with its 2.2× bid markup — note this
+makes stylized lignite (€250/MWh) implausibly expensive relative to TTF-based
+gas (~€100/MWh), so lignite tends to become the price-setting unit.
+
 **Fuel type inference from generator names:**
 
 Generators classified as "Other" in the ENTSO-E database may actually be known technology types. The `infer_fuel_type_from_name()` function attempts to reclassify them based on naming patterns:

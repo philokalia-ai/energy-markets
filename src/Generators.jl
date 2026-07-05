@@ -396,7 +396,65 @@ function get_min_active_capacity(max_capacity::Float64, fuel_type::Symbol)
 end
 
 
+# TTF gas price lookup (yfinance.ttf_f, populated by the ceres yfinance ETL).
+# Cached per day because get_generators() calls get_marginal_cost once per generator.
+const TTF_PRICE_CACHE = Dict{Dates.Date,Union{Float64,Nothing}}()
+
+# Gas plant cost model constants
+const GAS_PLANT_EFFICIENCY = 0.52   # blended CCGT/OCGT fleet efficiency (LHV basis)
+const GAS_EMISSION_FACTOR = 0.202   # tCO₂ per MWh of gas burned
+const EUA_PRICE = 70.0              # €/tCO₂ carbon price (no EUA feed in DB yet)
+const GAS_VOM_COST = 2.0            # €/MWh variable O&M
+
+"""
+    get_ttf_price(day::Dates.Date) -> Union{Float64,Nothing}
+
+Most recent TTF front-month futures close (€/MWh) at or before `day`, from
+`yfinance.ttf_f`. Looks back up to 10 days to bridge weekends and holidays.
+Returns `nothing` when no data exists near `day` (e.g., before the table's
+history starts), in which case callers should fall back to stylized costs.
+
+For a market date D this returns the close of the last trading day before D,
+which is the price information available at day-ahead auction time.
+"""
+function get_ttf_price(day::Dates.Date)
+    haskey(TTF_PRICE_CACHE, day) && return TTF_PRICE_CACHE[day]
+
+    price = try
+        df = Euphemia.sql2df_with_retry(
+            """
+            SELECT close
+            FROM yfinance.ttf_f
+            WHERE date <= \$1 AND date > \$1::date - INTERVAL '10 days'
+            ORDER BY date DESC
+            LIMIT 1
+            """,
+            [day]
+        )
+        isempty(df) ? nothing : Float64(df.close[1])
+    catch e
+        @warn "TTF price lookup failed for $day, falling back to stylized gas cost: $e"
+        nothing
+    end
+
+    TTF_PRICE_CACHE[day] = price
+    return price
+end
+
 function get_marginal_cost(day::Dates.Date, fuel_type::String, bidding_zone::String="GR")
+    # Gas-fired units: use real TTF fuel prices when available.
+    # marginal cost = fuel cost / efficiency + carbon cost + variable O&M
+    # No bid markup here — the bidding layer applies its own markup_factor.
+    if fuel_type == "Fossil Gas"
+        ttf = get_ttf_price(day)
+        if ttf !== nothing
+            fuel_cost = ttf / GAS_PLANT_EFFICIENCY
+            carbon_cost = GAS_EMISSION_FACTOR / GAS_PLANT_EFFICIENCY * EUA_PRICE
+            return fuel_cost + carbon_cost + GAS_VOM_COST
+        end
+        @warn "No TTF price within 10 days of $day; using stylized gas cost" maxlog = 1
+    end
+
     # Realistic marginal costs based on fuel type and market conditions
     # Updated for 2025 European energy crisis and carbon pricing
 
