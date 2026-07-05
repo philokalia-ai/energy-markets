@@ -907,7 +907,9 @@ function _create_multi_zone_order_book_merit(zones::Vector{String}, day::Date)
         try
             println("   📊 Processing zone $zone...")
             result = create_merit_order_book(zone, day;
-                net_import_exclude=[z for z in zones if z != zone])
+                net_import_exclude=[z for z in zones if z != zone],
+                target_resolution_minutes=60,
+                fleet_completion=true)
 
             if !result.success
                 @warn "Failed to generate merit orders for zone $zone: $(result.message)"

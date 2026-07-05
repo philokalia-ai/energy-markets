@@ -25,7 +25,7 @@ order book moves with real fuel prices.
 
 using Dates
 import ..get_generators, ..get_loads, ..get_generation_forecast_for_wind_and_solar
-import ..get_marginal_cost, ..sql2df_with_retry
+import ..get_marginal_cost, ..sql2df_with_retry, ..Generator, ..normalize_fuel_type_name
 import ..MarketOrders: SimpleOrder
 import ..MPCC: MPCCOrderBook
 import ..disaggregate_temporal_data
@@ -140,6 +140,38 @@ function get_hydro_availability(bidding_zone::String, day::Date; lookback_days::
 end
 
 """
+    get_type_output_p95(bidding_zone::String, day::Date; lookback_days=30) -> Dict{String,Float64}
+
+95th-percentile hourly actual output per production type over the trailing
+window (strictly before `day` — no lookahead), from
+`entsoe.aggregated_generation_per_type`. Used for fleet completion: ENTSO-E's
+unit-level table only lists larger units, so for some zones (RO, BG, RS) the
+per-type aggregate output demonstrably exceeds the unit-level fleet capacity.
+"""
+function get_type_output_p95(bidding_zone::String, day::Date; lookback_days::Int=30)
+    df = sql2df_with_retry(
+        """
+        SELECT production_type,
+               percentile_cont(0.95) WITHIN GROUP (ORDER BY mw) AS p95
+        FROM (
+            SELECT production_type, date_time_utc, SUM(actual_generation_output_mw) AS mw
+            FROM entsoe.aggregated_generation_per_type
+            WHERE area_map_code = \$1
+              AND area_type_code LIKE 'BZN%'
+              AND actual_generation_output_mw IS NOT NULL
+              AND date_time_utc >= (\$2::date::timestamp AT TIME ZONE 'UTC')
+              AND date_time_utc < (\$3::date::timestamp AT TIME ZONE 'UTC')
+            GROUP BY production_type, date_time_utc
+        ) hourly
+        GROUP BY production_type
+        """,
+        [bidding_zone, day - Day(lookback_days), day]
+    )
+    return Dict{String,Float64}(row.production_type => Float64(row.p95)
+                                for row in eachrow(df) if !ismissing(row.p95))
+end
+
+"""
     get_reservoir_dryness(bidding_zone::String, day::Date) -> Union{Float64,Nothing}
 
 Hydrological dryness from ENTSO-E weekly reservoir filling levels
@@ -220,12 +252,45 @@ function create_merit_order_book(
     demand_elastic_price::Float64=250.0,
     price_cap::Float64=3000.0,
     include_net_imports::Bool=true,
-    net_import_exclude::Vector{String}=String[]
+    net_import_exclude::Vector{String}=String[],
+    target_resolution_minutes::Union{Int,Nothing}=nothing,
+    fleet_completion::Bool=false
 )
     try
         println("📊 Creating merit-order order book for $bidding_zone on $day")
 
         generators = get_generators(bidding_zone, day)
+
+        # Fleet completion (opt-in, used for multi-zone neighbor books):
+        # ENTSO-E's unit-level table only lists larger units, so for some
+        # zones (RO, BG, RS) the fleet is structurally undersized and the
+        # book clears at shortage prices. When the zone's recent per-type
+        # actual output (p95, trailing 30 days — strictly historical)
+        # exceeds the unit-level capacity of that type, the missing
+        # capacity demonstrably exists and produces: add it as one
+        # aggregate generator per fuel type. Wind/solar are excluded
+        # (netted via the RES forecast). Off by default: zones with good
+        # unit coverage (GR) only gain phantom supply from it.
+        type_p95 = fleet_completion ? get_type_output_p95(bidding_zone, day) : Dict{String,Float64}()
+        for (ptype_raw, p95) in type_p95
+            ptype = normalize_fuel_type_name(ptype_raw)
+            ptype in ("Wind Onshore", "Wind Offshore", "Solar") && continue
+            fleet = sum((g.p_max for g in generators
+                         if g.fuel_type == Symbol(ptype)); init=0.0)
+            gap = p95 - fleet
+            gap > 100.0 || continue
+            push!(generators, Generator(
+                "AGG-$(bidding_zone)-$(replace(ptype, " " => "_"))",
+                "Aggregate small units: $ptype",
+                Symbol(ptype),
+                bidding_zone,
+                gap,
+                0.0,
+                bidding_zone,
+                get_marginal_cost(day, ptype, bidding_zone)))
+            println("  ➕ Fleet completion: +$(round(Int, gap)) MW $ptype " *
+                    "(recent p95 $(round(Int, p95)) MW vs $(round(Int, fleet)) MW unit-level)")
+        end
         loads = get_loads(bidding_zone, day)
         renewables = get_generation_forecast_for_wind_and_solar(bidding_zone, day)
 
@@ -238,6 +303,31 @@ function create_merit_order_book(
 
         target_timeslots, load_by_time, renewable_by_time, resolution_minutes =
             disaggregate_temporal_data(loads, renewables)
+
+        # Resolution harmonization for multi-zone books: zones publish at
+        # different resolutions (e.g. RO/HU 15-min, GR/BG hourly) and a
+        # combined book with mixed timeslots isolates the hourly zones in
+        # sub-hour slots. Aggregate MW values to the coarser target by
+        # averaging sub-slots (MW is power — averaging preserves energy).
+        if target_resolution_minutes !== nothing && resolution_minutes < target_resolution_minutes
+            target_resolution_minutes == 60 ||
+                error("Only hourly (60) target resolution is supported, got $target_resolution_minutes")
+            hour_key(ts) = ts[1:11] * "00"
+            function aggregate_to_hours(d::Dict{String,Float64})
+                sums = Dict{String,Tuple{Float64,Int}}()
+                for (ts, v) in d
+                    k = hour_key(ts)
+                    s, n = get(sums, k, (0.0, 0))
+                    sums[k] = (s + v, n + 1)
+                end
+                return Dict{String,Float64}(k => s / n for (k, (s, n)) in sums)
+            end
+            load_by_time = aggregate_to_hours(load_by_time)
+            renewable_by_time = aggregate_to_hours(renewable_by_time)
+            target_timeslots = sort(collect(keys(load_by_time)))
+            println("  🕐 Aggregated $(resolution_minutes)-min data to hourly ($(length(target_timeslots)) slots)")
+            resolution_minutes = target_resolution_minutes
+        end
 
         # Residual demand per slot (load minus renewables) drives water value
         # and scarcity. Renewables themselves are offered as near-zero-price

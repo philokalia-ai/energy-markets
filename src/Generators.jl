@@ -53,6 +53,20 @@ const VARIABLE_RENEWABLE_TYPES = Set([
 ])
 
 """
+    normalize_fuel_type_name(fuel_type::AbstractString) -> String
+
+Fold ENTSO-E fuel-type spelling variants onto the canonical names used
+throughout the codebase (FuelTypeParameters, FUEL_SRMC, flexible/variable
+type lists). Example: Romanian units are published as
+"Hydro Run-of-river and pondage" while the canonical ENTSO-E spelling is
+"...poundage".
+"""
+function normalize_fuel_type_name(fuel_type::AbstractString)::String
+    fuel_type == "Hydro Run-of-river and pondage" && return "Hydro Run-of-river and poundage"
+    return String(fuel_type)
+end
+
+"""
     infer_fuel_type_from_name(name::String, declared_type::Symbol) -> Symbol
 
 Attempt to infer the actual fuel type from the generator name when the declared
@@ -524,7 +538,8 @@ function get_generators(map_code::String, day::Dates.Date;
         WITH active_outages AS (
             SELECT
                 asset_code,
-                MIN(available_capacity_mw) AS available_capacity_mw
+                MIN(available_capacity_mw) AS available_capacity_mw,
+                MIN(start_outage_utc::timestamp) AS earliest_start
             FROM entsoe.unavailability_of_production_and_generation_units
             WHERE status = 'Active'
               AND area_map_code = \$1
@@ -540,6 +555,19 @@ function get_generators(map_code::String, day::Dates.Date;
             WHERE date_time_utc >= \$2::timestamp - INTERVAL '60 days'
               AND date_time_utc < \$2::timestamp + INTERVAL '1 day'
               AND actual_generation_output_mw > 0
+        ),
+        -- Hard-evidence override for stale outage records: a unit that
+        -- produced power DURING its claimed complete outage (within the
+        -- last 7 days) proves the record wrong. ENTSO-E has multi-year
+        -- 'Active' 0-MW outage records for units that are actually running
+        -- (e.g. Romanian hydro), which would otherwise be excluded.
+        stale_outage_override AS (
+            SELECT DISTINCT a.generation_unit_code
+            FROM entsoe.actual_generation_output_per_generation_unit a
+            JOIN active_outages o ON o.asset_code = a.generation_unit_code
+            WHERE a.date_time_utc >= GREATEST(o.earliest_start, \$2::timestamp - INTERVAL '7 days')
+              AND a.date_time_utc < \$2::timestamp
+              AND a.actual_generation_output_mw > 1
         )
         SELECT DISTINCT ON (g.generation_unit_code)
             g.valid_from,
@@ -576,6 +604,7 @@ function get_generators(map_code::String, day::Dates.Date;
             entsoe.production_and_generation_units g
         LEFT JOIN active_outages o ON g.generation_unit_code = o.asset_code
         LEFT JOIN recent_generation rg ON g.generation_unit_code = rg.generation_unit_code
+        LEFT JOIN stale_outage_override so ON g.generation_unit_code = so.generation_unit_code
         WHERE
             g.production_unit_status = 'COMMISSIONED'
             AND g.generation_unit_status = 'COMMISSIONED'
@@ -591,8 +620,10 @@ function get_generators(map_code::String, day::Dates.Date;
                         )
                 OR rg.generation_unit_code IS NOT NULL
             )
-            -- Exclude complete outages (available_capacity = 0)
-            AND (o.asset_code IS NULL OR o.available_capacity_mw > 0)
+            -- Exclude complete outages (available_capacity = 0), unless the
+            -- unit demonstrably generated during the claimed outage
+            AND (o.asset_code IS NULL OR o.available_capacity_mw > 0
+                 OR so.generation_unit_code IS NOT NULL)
         ORDER BY g.generation_unit_code, g.valid_from DESC, g.generation_unit_installed_capacity_mw DESC
         """
     else
@@ -659,8 +690,11 @@ function get_generators(map_code::String, day::Dates.Date;
     # Build generators (without ramp rates initially)
     generators = Generator[]
     for row in eachrow(df)
-        # Infer actual fuel type from name if declared as "Other"
-        declared_type = Symbol(row.generation_unit_type)
+        # Infer actual fuel type from name if declared as "Other".
+        # normalize_fuel_type_name folds ENTSO-E spelling variants (e.g.
+        # Romania publishes "Hydro Run-of-river and pondage") onto the
+        # canonical names every downstream table keys on.
+        declared_type = Symbol(normalize_fuel_type_name(row.generation_unit_type))
         inferred_type = infer_fuel_type_from_name(row.generation_unit_name, declared_type)
 
         if inferred_type != declared_type
@@ -680,7 +714,7 @@ function get_generators(map_code::String, day::Dates.Date;
             row.area_map_code,                           # bidding_zone
             get_marginal_cost(
                 day,
-                row.generation_unit_type,  # Use original type for cost (BESS still has storage costs)
+                normalize_fuel_type_name(row.generation_unit_type),  # Original (not name-inferred) type for cost — BESS still has storage costs
                 row.area_display_name
             )                                           # marginal_cost
         )
