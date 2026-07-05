@@ -140,6 +140,54 @@ function get_hydro_availability(bidding_zone::String, day::Date; lookback_days::
 end
 
 """
+    get_reservoir_dryness(bidding_zone::String, day::Date) -> Union{Float64,Nothing}
+
+Hydrological dryness from ENTSO-E weekly reservoir filling levels
+(`entsoe.aggregated_hydro_storage_filling_rate`): the latest stored energy
+strictly before `day`'s ISO week, compared to the median stored energy for
+the same weeks (±2) of previous years. Returns `clamp(1 - current/norm, 0, 1)`
+— 0 in normal/wet conditions, approaching 1 in severe drought — or `nothing`
+when either value is unavailable.
+
+Unlike output-based dryness, this measures the water itself, so it is not
+confounded by dispatch incentives (hydro running hard *because* prices are
+high looks "wet" in output terms while reservoirs are actually draining).
+"""
+function get_reservoir_dryness(bidding_zone::String, day::Date)
+    iso_week = Int(Dates.week(day))
+    iso_year = year(day)
+
+    current = sql2df_with_retry(
+        """
+        SELECT stored_energy_mwh
+        FROM entsoe.aggregated_hydro_storage_filling_rate
+        WHERE area_map_code = \$1 AND area_type_code LIKE 'BZN%'
+          AND stored_energy_mwh IS NOT NULL
+          AND (year < \$2 OR (year = \$2 AND week < \$3))
+        ORDER BY year DESC, week DESC
+        LIMIT 1
+        """,
+        [bidding_zone, iso_year, iso_week]
+    )
+    (isempty(current) || ismissing(current.stored_energy_mwh[1])) && return nothing
+
+    norm = sql2df_with_retry(
+        """
+        SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY stored_energy_mwh) AS med
+        FROM entsoe.aggregated_hydro_storage_filling_rate
+        WHERE area_map_code = \$1 AND area_type_code LIKE 'BZN%'
+          AND stored_energy_mwh IS NOT NULL
+          AND year < \$2
+          AND week BETWEEN \$3 - 2 AND \$3 + 2
+        """,
+        [bidding_zone, iso_year, iso_week]
+    )
+    (isempty(norm) || ismissing(norm.med[1]) || Float64(norm.med[1]) <= 0.0) && return nothing
+
+    return clamp(1.0 - Float64(current.stored_energy_mwh[1]) / Float64(norm.med[1]), 0.0, 1.0)
+end
+
+"""
     create_merit_order_book(bidding_zone::String, day::Date; kwargs...)
 
 Create a deterministic merit-order-based order book for MPCC clearing.
@@ -236,17 +284,22 @@ function create_merit_order_book(
             hydro_norm = get_hydro_availability(bidding_zone, day; lookback_days=365)
             if hydro_avail !== nothing
                 hydro_scale = clamp(hydro_avail / hydro_pmax, 0.2, 1.0)
-                # Dryness compares the recent achievable output to the
-                # zone's own long-run level — hydro habitually runs below
-                # nameplate, so nameplate is the wrong drought baseline
-                if hydro_norm !== nothing && hydro_norm > 1.0
-                    hydro_dryness = clamp(1.0 - hydro_avail / hydro_norm, 0.0, 1.0)
-                end
-                println("  💧 Hydro: recent p95 $(round(Int, hydro_avail)) MW, " *
-                        "1y p95 $(round(Int, something(hydro_norm, NaN))) MW, " *
-                        "nameplate $(round(Int, hydro_pmax)) MW → " *
-                        "offer scale $(round(hydro_scale, digits=2)), dryness $(round(hydro_dryness, digits=2))")
             end
+            # Dryness: prefer reservoir filling levels vs seasonal norm
+            # (measures the water itself); fall back to recent-vs-1y output
+            # when filling data is unavailable for the zone. Output-based
+            # dryness is confounded by dispatch incentive: hydro running
+            # hard because prices are high looks "wet" while reservoirs
+            # are actually draining.
+            reservoir_dryness = get_reservoir_dryness(bidding_zone, day)
+            if reservoir_dryness !== nothing
+                hydro_dryness = reservoir_dryness
+            elseif hydro_avail !== nothing && hydro_norm !== nothing && hydro_norm > 1.0
+                hydro_dryness = clamp(1.0 - hydro_avail / hydro_norm, 0.0, 1.0)
+            end
+            println("  💧 Hydro: offer scale $(round(hydro_scale, digits=2)), " *
+                    "dryness $(round(hydro_dryness, digits=2))" *
+                    (reservoir_dryness !== nothing ? " (reservoir levels)" : " (output-based fallback)"))
         end
         offered_pmax(g) = is_hydro(g) ? g.p_max * hydro_scale : g.p_max
 
