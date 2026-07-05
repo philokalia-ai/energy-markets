@@ -706,16 +706,22 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
         # it, the marginal order sets the price exactly — including the
         # demand price cap in shortage hours, per EU day-ahead convention.
         # The dual equals the order's full surplus when fully accepted, so
-        # its Big-M must cover quantity × full price span (a global constant
-        # would silently cap large orders' surplus and distort the price).
-        # The acceptance side is bounded by 1, so its "Big-M" is exactly 1.
-        price_span = order_book.price_limits[2] - order_book.price_limits[1]
+        # its Big-M must cover the order's maximum possible surplus given
+        # the price bounds: q × (bid − floor) for demand, q × (ceiling − bid)
+        # for supply. Using quantity × price_span instead would make the
+        # model INFEASIBLE for orders bid outside the book's price limits
+        # (e.g. demand at 3000 in a book capped at 500), and a global
+        # constant would silently cap large orders' surplus and distort the
+        # price. The acceptance side is bounded by 1, so its "Big-M" is 1.
         @variable(model, stepwise_dual_complementarity_aux[order_id in order_ids], Bin)
         for (i, order) in enumerate(simple_orders)
             order_id = order_ids[i]
+            max_surplus = order.type == :supply ?
+                          order.quantity * max(0.0, order_book.price_limits[2] - order.price) :
+                          order.quantity * max(0.0, order.price - order_book.price_limits[1])
             @constraint(model,
                 stepwise_dual[order_id] <=
-                stepwise_dual_complementarity_aux[order_id] * order.quantity * price_span)
+                stepwise_dual_complementarity_aux[order_id] * max_surplus)
             @constraint(model,
                 1 - stepwise_acceptance[order_id] <=
                 (1 - stepwise_dual_complementarity_aux[order_id]) * 1.0)
@@ -731,26 +737,12 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
         # Dictionary version: stepwise_acceptance[order_id] * (sum of quantities) * price
         # Need to use signed quantities: negative for supply, positive for demand
         load_shed_penalty = 10000.0  # High penalty for load shedding (€/MWh)
-
-        # Price regularization: the complementarity constraints only pin
-        # market_price to the interval [max accepted supply price, min accepted
-        # demand price] — the welfare objective itself doesn't involve
-        # market_price, so without this term the solver returns an arbitrary
-        # point in that interval (often the demand-side end). An epsilon
-        # penalty selects the lowest feasible price, i.e. the marginal supply
-        # order — the competitive price, matching EU day-ahead convention.
-        # Epsilon is far below the welfare scale (~1e6 €) and the MIP gap, so
-        # it cannot change acceptance decisions.
-        price_regularization = 1e-6
-
         @objective(model, Max,
             sum(stepwise_acceptance[order_ids[i]] *
                 (order.type == :supply ? -order.quantity : order.quantity) * order.price
                 for (i, order) in enumerate(simple_orders)) -
             load_shed_penalty * sum(load_shed[node_id, time_period]
-                                    for node_id in order_book.nodes, time_period in order_book.periods) -
-            price_regularization * sum(market_price[node_id, time_period]
-                                       for node_id in order_book.nodes, time_period in order_book.periods)
+                                    for node_id in order_book.nodes, time_period in order_book.periods)
         )
 
         # Solve the model
@@ -771,6 +763,40 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
             for (i, order) in enumerate(simple_orders)
                 order_id = order_ids[i]
                 stepwise_acceptance_values[order_id] = value(stepwise_acceptance[order_id])
+            end
+
+            # Competitive price selection. The complementarity constraints
+            # only bracket the price — [max(accepted supply, rejected demand),
+            # min(accepted demand, rejected supply)] — and the welfare
+            # objective does not involve market_price, so the solver's value
+            # is an arbitrary point of that interval (and a tiny objective
+            # epsilon would drown in the MIP gap). Recompute the price from
+            # the acceptance pattern instead: a marginal (partially accepted)
+            # order pins the price to its bid exactly — including the demand
+            # cap in shortage hours, per EU convention — and otherwise the
+            # competitive (supply-side) end of the interval is used.
+            acceptance_atol = 1e-6
+            for node_id in order_book.nodes, time_period in order_book.periods
+                order_idxs = get(orders_by_node_time, (node_id, time_period), Int[])
+                isempty(order_idxs) && continue
+                lo = order_book.price_limits[1]
+                hi = order_book.price_limits[2]
+                marginal_price = nothing
+                for i in order_idxs
+                    o = simple_orders[i]
+                    a = stepwise_acceptance_values[order_ids[i]]
+                    if acceptance_atol < a < 1 - acceptance_atol
+                        marginal_price = marginal_price === nothing ? o.price :
+                                         (o.type == :supply ? max(marginal_price, o.price) :
+                                          min(marginal_price, o.price))
+                    elseif o.type == :supply
+                        a >= 1 - acceptance_atol ? (lo = max(lo, o.price)) : (hi = min(hi, o.price))
+                    else
+                        a >= 1 - acceptance_atol ? (hi = min(hi, o.price)) : (lo = max(lo, o.price))
+                    end
+                end
+                polished = marginal_price === nothing ? lo : marginal_price
+                market_prices[node_id][time_period] = clamp(polished, min(lo, hi), max(lo, hi))
             end
 
             # Extract transmission flow values if multi-zone

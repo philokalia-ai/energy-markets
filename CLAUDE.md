@@ -179,12 +179,14 @@ Cost model constants (in `src/Generators.jl`): `GAS_PLANT_EFFICIENCY = 0.55`,
 `GAS_EMISSION_FACTOR = 0.202` tCO₂/MWh gas, `EUA_PRICE = 70.0` €/tCO₂ (constant —
 no EUA price feed in the DB yet), `GAS_VOM_COST = 2.0` €/MWh.
 
-TTF lookups are cached per date in `TTF_PRICE_CACHE`. If no TTF price exists
-within 10 days of the requested date (e.g., before the table's history starts
-in Feb 2023), the stylized fuel-cost table is used as fallback. All other fuel
-types still use the stylized cost table with its 2.2× bid markup — note this
-makes stylized lignite (€250/MWh) implausibly expensive relative to TTF-based
-gas (~€100/MWh), so lignite tends to become the price-setting unit.
+TTF lookups use the close of the last trading day strictly before the market
+date (no lookahead) and are cached per date in `TTF_PRICE_CACHE` (transient DB
+errors are never cached). If no TTF price exists within 10 days before the
+requested date (e.g., before the table's history starts in Feb 2023), the
+`FUEL_SRMC` fallback value is used. All other fuel types use the `FUEL_SRMC`
+table in `src/Generators.jl` — true short-run marginal costs including carbon
+at `EUA_PRICE` (e.g., lignite ≈ €112/MWh), with no bid markup: bidding
+strategy belongs to the order-book layer, not the cost model.
 
 **Fuel type inference from generator names:**
 
@@ -773,7 +775,9 @@ Key Julia packages:
 Market data is sourced from:
 - ENTSO-e Transparency Platform (installed capacity, load)
 - EnEx Group (Greek market participants)
-- Weather data (renewable generation forecasts)
+- Weather data (renewable generation forecasts) — hourly temperature/wind/solar
+  for 1,851 GR cities in the separate `silentech` DB; see
+  [READING_WEATHER_DATA.md](READING_WEATHER_DATA.md) for how to query it
 - TTFS (natural gas prices)
 
 ## Database Schema

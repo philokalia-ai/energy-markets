@@ -48,9 +48,12 @@ function get_net_imports(bidding_zone::String, day::Date)
     #    would inflate that border 4x relative to a PT60M border.
     # 2. Dedup counterparty aliases — some borders are reported twice under
     #    two map codes for the same area (e.g. UA and UA_IPS); strip the
-    #    _IPS suffix and keep one row per (hour, counterparty, direction).
-    # date_time_utc is timestamptz, so AT TIME ZONE 'UTC' is a true
-    # conversion to UTC regardless of the client session timezone.
+    #    _IPS suffix and keep one row per (hour, counterparty, direction),
+    #    deterministically preferring the larger flow (ORDER BY avg_flow
+    #    DESC breaks ties so results are reproducible run to run).
+    # date_time_utc is timestamptz; both the hour key and the day window
+    # compare on (date_time_utc AT TIME ZONE 'UTC'), i.e. true UTC,
+    # regardless of the client session timezone.
     df = sql2df_with_retry(
         """
         WITH border_hourly AS (
@@ -67,12 +70,14 @@ function get_net_imports(bidding_zone::String, day::Date)
                 FROM entsoe.physical_flows
                 WHERE (in_area_map_code = \$1 OR out_area_map_code = \$1)
                   AND in_area_type_code LIKE 'BZN%' AND out_area_type_code LIKE 'BZN%'
-                  AND date_time_utc >= \$2::date AND date_time_utc < \$2::date + 1
+                  AND (date_time_utc AT TIME ZONE 'UTC') >= \$2::date
+                  AND (date_time_utc AT TIME ZONE 'UTC') < \$2::date + 1
                 GROUP BY 1,
                          CASE WHEN in_area_map_code = \$1
                               THEN out_area_map_code ELSE in_area_map_code END,
                          CASE WHEN in_area_map_code = \$1 THEN 1 ELSE -1 END
             ) per_code
+            ORDER BY h, counterparty, direction, avg_flow DESC
         )
         SELECT h, SUM(direction * avg_flow) AS net_import
         FROM border_hourly
@@ -193,6 +198,8 @@ function create_merit_order_book(
 
         orders = SimpleOrder[]
         supply_orders_count = 0
+        export_orders_count = 0
+        export_demand_quantity = 0.0
         total_supply_capacity = 0.0
 
         for ts in target_timeslots
@@ -219,6 +226,8 @@ function create_merit_order_book(
             elseif ni < -0.1
                 push!(orders, SimpleOrder(:demand, price_cap, -ni,
                     Symbol(bidding_zone), date_time, resolution_minutes))
+                export_orders_count += 1
+                export_demand_quantity += -ni
             end
 
             # Normalized within-day demand position (0 = trough, 1 = peak)
@@ -287,8 +296,8 @@ function create_merit_order_book(
         end
 
         # Demand: inelastic tranche at the cap + small price-sensitive tail
-        demand_orders_count = 0
-        total_demand_quantity = 0.0
+        demand_orders_count = export_orders_count
+        total_demand_quantity = export_demand_quantity
         for ts in target_timeslots
             date_time = parse_timeslot_to_datetime(ts, day)
             gd = gross_demand[ts]

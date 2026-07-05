@@ -409,7 +409,7 @@ const GAS_VOM_COST = 2.0            # €/MWh variable O&M
 """
     get_ttf_price(day::Dates.Date) -> Union{Float64,Nothing}
 
-Most recent TTF front-month futures close (€/MWh) at or before `day`, from
+Most recent TTF front-month futures close (€/MWh) strictly before `day`, from
 `yfinance.ttf_f`. Looks back up to 10 days to bridge weekends and holidays.
 Returns `nothing` when no data exists near `day` (e.g., before the table's
 history starts), in which case callers should fall back to stylized costs.
@@ -441,7 +441,8 @@ function get_ttf_price(day::Dates.Date)
         return nothing
     end
 
-    price = isempty(df) ? nothing : Float64(df.close[1])
+    # NULL closes arrive as `missing` — treat like absent data
+    price = (isempty(df) || ismissing(df.close[1])) ? nothing : Float64(df.close[1])
     if price === nothing
         @warn "No TTF price within 10 days before $day; using stylized gas cost"
     end

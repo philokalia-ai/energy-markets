@@ -2,6 +2,12 @@ using LibPQ
 using ConcurrentUtilities: ConcurrentUtilities, Pools
 using Dates
 
+# Version of the pricing/cost model that produced stored energy_prices rows.
+# Bump when the model changes incompatibly (e.g. v2 -> v3: stylized
+# 2.2x-markup marginal costs replaced by SRMC/TTF-based costs, July 2026)
+# so new results are never mixed with — or skipped because of — old rows.
+const ENERGY_PRICES_CODE_VERSION = 3
+
 const poolsize = 5
 cnxpool = Pools.Pool{LibPQ.Connection}(poolsize)
 
@@ -423,7 +429,7 @@ function save_energy_prices(prices::Dict{String,Float64}, bidding_zone::String, 
                 order_method_str,
                 clearing_mode,
                 opt_run_id,
-                3,  # code_version
+                ENERGY_PRICES_CODE_VERSION,
                 update_time
             ))
         catch e
@@ -449,7 +455,7 @@ function save_energy_prices(prices::Dict{String,Float64}, bidding_zone::String, 
               AND clearing_mode = \$4
               AND code_version = \$5
             """
-            LibPQ.execute(cnx, delete_sql, [bidding_zone, day, order_method_str, clearing_mode, 3])
+            LibPQ.execute(cnx, delete_sql, [bidding_zone, day, order_method_str, clearing_mode, ENERGY_PRICES_CODE_VERSION])
             @info "Deleted existing price records for $bidding_zone on $day (order_method: $order_method, clearing_mode: $clearing_mode) if any existed"
         end
     catch delete_error
@@ -517,7 +523,7 @@ Save optimization run metadata to track all optimization attempts (successful an
 - `num_orders`: Number of orders in the order book
 - `num_price_periods`: Number of price periods generated (nothing for failed runs)
 - `error_message`: Error details for failed runs (nothing for successful runs)
-- `code_version`: Version code (default: 3)
+- `code_version`: Version code (default: 4)
 - `create_schema`: Whether to create schema/table if missing (default: true)
 
 ## Iterative optimization metadata (for UC-MPCC iterative runs)
@@ -655,7 +661,7 @@ Save transmission flow results to the database in the simulations.transmission_f
 # Arguments
 - `flows`: Dictionary with flow_id keys ("SOURCE_to_SINK") and inner Dict of period → MW values
 - `date`: Date of the optimization
-- `code_version`: Version code (default: 1)
+- `code_version`: Version code (default: 4)
 - `create_schema`: Whether to create table if missing (default: true)
 
 # Returns
@@ -770,7 +776,7 @@ function ensure_uc_results_tables()
             cold_startups INTEGER DEFAULT 0,
             mip_gap NUMERIC(6,4) DEFAULT 0.01,
             time_limit_seconds NUMERIC(10,2) DEFAULT 600.0,
-            code_version INTEGER NOT NULL DEFAULT 3,
+            code_version INTEGER NOT NULL DEFAULT 4,
             created_at TIMESTAMP NOT NULL DEFAULT NOW(),
             UNIQUE(bidding_zone, market_date, code_version)
         )
