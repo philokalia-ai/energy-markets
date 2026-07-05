@@ -79,11 +79,15 @@ Create a deterministic merit-order-based order book for MPCC clearing.
 function create_merit_order_book(
     bidding_zone::String,
     day::Date;
-    tranches::Vector{Tuple{Float64,Float64}}=[(0.60, 0.98), (0.25, 1.08), (0.15, 1.25)],
-    scarcity_threshold::Float64=1.3,
-    scarcity_kappa::Float64=2.0,
-    water_value_base::Float64=0.9,
-    water_value_span::Float64=0.35,
+    tranches::Vector{Tuple{Float64,Float64}}=[(0.55, 0.95), (0.20, 1.05), (0.15, 1.25), (0.10, 1.60)],
+    must_run_price_factor::Float64=0.05,
+    must_run_srmc_threshold::Float64=1.15,
+    availability_factor::Float64=0.80,
+    scarcity_threshold::Float64=1.4,
+    scarcity_kappa::Float64=3.0,
+    peak_kappa::Float64=0.6,
+    water_value_base::Float64=0.85,
+    water_value_span::Float64=0.9,
     demand_elastic_share::Float64=0.02,
     demand_elastic_price::Float64=250.0,
     price_cap::Float64=3000.0,
@@ -135,8 +139,30 @@ function create_merit_order_book(
         # Gas SRMC anchors hydro water value (TTF-based when data exists)
         gas_srmc = get_marginal_cost(day, "Fossil Gas", bidding_zone)
 
-        # Total offered capacity (constant across slots) for scarcity margin
-        total_capacity = sum(g.p_max for g in generators)
+        # Dispatchable capacity for the scarcity margin, derated for the
+        # realistic availability of the fleet (unreported outages, energy
+        # limits on hydro) — nameplate capacity never looks scarce.
+        dispatchable_capacity = availability_factor * sum(g.p_max for g in generators)
+
+        # UC-lite commitment: only units that are actually running
+        # self-schedule their minimum load. Approximate the committed set as
+        # the cheapest eligible thermal units whose derated capacity covers
+        # the day's peak residual demand (commitment follows the peak; the
+        # p_min of that set is then must-run through the trough).
+        committed = Set{String}()
+        peak_residual = nd_max
+        eligible = sort(
+            [g for g in generators
+             if !(g.fuel_type in WATER_VALUE_FUEL_TYPES) &&
+                g.marginal_cost <= must_run_srmc_threshold * gas_srmc &&
+                g.p_min > 0.1],
+            by=g -> g.marginal_cost)
+        cum_capacity = 0.0
+        for g in eligible
+            cum_capacity >= 1.05 * peak_residual && break
+            push!(committed, g.code)
+            cum_capacity += availability_factor * g.p_max
+        end
 
         orders = SimpleOrder[]
         supply_orders_count = 0
@@ -168,13 +194,17 @@ function create_merit_order_book(
                     Symbol(bidding_zone), date_time, resolution_minutes))
             end
 
-            # Scarcity multiplier for this slot: 1.0 in comfortable hours,
-            # rising quadratically as the capacity margin drops below threshold
-            margin = total_capacity / net_demand[ts]
-            scarcity = 1.0 + scarcity_kappa * max(0.0, scarcity_threshold - margin)^2
-
             # Normalized within-day demand position (0 = trough, 1 = peak)
             norm_demand = (net_demand[ts] - nd_min) / nd_span
+
+            # Markup on upper supply tranches: absolute scarcity (capacity
+            # margin below threshold) plus peak-hour strategic bidding —
+            # participants know when the daily peak is and price their last
+            # tranches accordingly, even when capacity is formally adequate.
+            margin = dispatchable_capacity / net_demand[ts]
+            scarcity = 1.0 +
+                       scarcity_kappa * max(0.0, scarcity_threshold - margin)^2 +
+                       peak_kappa * norm_demand^2
 
             for g in generators
                 if g.fuel_type in WATER_VALUE_FUEL_TYPES
@@ -187,12 +217,35 @@ function create_merit_order_book(
                     supply_orders_count += 1
                     total_supply_capacity += g.p_max
                 else
-                    # Thermal / other: tranche ladder on SRMC, scarcity markup
-                    # on the upper tranches (first tranche stays at cost so
-                    # baseload keeps clearing)
+                    # Must-run self-scheduling: baseload-ish units (SRMC not
+                    # far above gas) bid their minimum-load block near zero —
+                    # shutting down and restarting costs more than running a
+                    # few hours below cost. This is what lets midday prices
+                    # collapse below thermal SRMC in renewable-surplus hours.
+                    must_run_qty = 0.0
+                    if g.code in committed
+                        must_run_qty = min(g.p_min, g.p_max)
+                        # Graduated self-scheduling: the deepest block is
+                        # near-free (never shut down), the rest bids half
+                        # cost — real curves are convex, not a cliff
+                        deep_qty = must_run_qty * 0.6
+                        push!(orders, SimpleOrder(:supply,
+                            g.marginal_cost * must_run_price_factor, deep_qty,
+                            Symbol(bidding_zone), date_time, resolution_minutes))
+                        push!(orders, SimpleOrder(:supply,
+                            g.marginal_cost * 0.5, must_run_qty - deep_qty,
+                            Symbol(bidding_zone), date_time, resolution_minutes))
+                        supply_orders_count += 2
+                        total_supply_capacity += must_run_qty
+                    end
+
+                    # Remaining capacity: tranche ladder on SRMC, scarcity
+                    # markup on the upper tranches (first tranche stays at
+                    # cost so mid-merit keeps clearing)
+                    flexible_capacity = max(g.p_max - must_run_qty, 0.0)
                     for (i, (share, mult)) in enumerate(tranches)
                         price = g.marginal_cost * mult * (i == 1 ? 1.0 : scarcity)
-                        qty = g.p_max * share
+                        qty = flexible_capacity * share
                         qty < 0.1 && continue
                         push!(orders, SimpleOrder(:supply, price, qty,
                             Symbol(bidding_zone), date_time, resolution_minutes))
