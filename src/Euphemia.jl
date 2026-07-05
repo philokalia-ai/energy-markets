@@ -269,6 +269,9 @@ using .MPCC: compute_max_price_change, compute_max_relative_flow_change  # Price
 include("AlternativeOrderBook.jl")
 using .AlternativeOrderBook: create_adjusted_order_book, AdjustedOrderBookResult, print_order_book_summary
 
+include("MeritOrderBook.jl")
+using .MeritOrderBook: create_merit_order_book
+
 # ===== EXPORTS =====
 # All module exports are centralized here following Julia best practices
 # Exports come after includes so all symbols are defined before being exported
@@ -312,6 +315,7 @@ export get_cached_optimizer, clear_solver_cache!
 
 # Alternative order book functionality
 export create_adjusted_order_book, AdjustedOrderBookResult, print_order_book_summary
+export create_merit_order_book
 
 # Bidding strategy functionality
 export generate_market_orders_from_uc, apply_bidding_strategy_to_uc, UCToBidsResult
@@ -494,7 +498,7 @@ Supports both hourly and sub-hourly temporal resolutions depending on the order 
 # Arguments
 - `bidding_zone::String`: The bidding zone code (e.g., "GR", "DE", "FR")
 - `date::Date`: The date for which to generate prices
-- `order_method::Symbol`: Method for creating orders - `:uc_based` or `:alternative`
+- `order_method::Symbol`: Method for creating orders - `:uc_based`, `:alternative` or `:merit_order`
   - `:uc_based`: Creates orders preserving Unit Commitment's native temporal resolution (15/30/60 minutes)
   - `:alternative`: Creates orders at finest available resolution (15/30/60 minutes) from real load/renewable data
 - `model::Symbol`: Market clearing model - `:mpcc` (more models may be added later)
@@ -551,8 +555,8 @@ function generate_energy_prices(bidding_zone::String, date::Date;
     force_rerun::Bool=false)
 
     # Validate inputs
-    if !(order_method in [:uc_based, :alternative])
-        error("Invalid order_method: $order_method. Must be :uc_based or :alternative")
+    if !(order_method in [:uc_based, :alternative, :merit_order])
+        error("Invalid order_method: $order_method. Must be :uc_based, :alternative or :merit_order")
     end
 
     if !(model in [:mpcc])
@@ -576,13 +580,11 @@ function generate_energy_prices(bidding_zone::String, date::Date;
                 force_rerun=force_rerun
             )
 
-        elseif order_method == :alternative
-            println("   Using alternative order book creation")
-            order_book_result = create_adjusted_order_book(
-                bidding_zone,
-                date;
-                random_seed=random_seed
-            )
+        elseif order_method in (:alternative, :merit_order)
+            println("   Using $(order_method == :alternative ? "alternative" : "merit-order") book creation")
+            order_book_result = order_method == :alternative ?
+                                create_adjusted_order_book(bidding_zone, date; random_seed=random_seed) :
+                                create_merit_order_book(bidding_zone, date)
 
             if !order_book_result.success
                 # Check if this is a data availability issue (non-retryable)
@@ -590,7 +592,7 @@ function generate_energy_prices(bidding_zone::String, date::Date;
                    contains(order_book_result.message, "No generators found")
                     throw(DataUnavailableError("$(order_book_result.message) for $bidding_zone on $date"))
                 else
-                    error("Alternative order book creation failed: $(order_book_result.message)")
+                    error("$(order_method) order book creation failed: $(order_book_result.message)")
                 end
             end
 
@@ -614,8 +616,10 @@ function generate_energy_prices(bidding_zone::String, date::Date;
                 solve_time_seconds = time() - optimization_start_time
 
                 if mpcc_result.status != :optimal
-                    # Save failed optimization run
-                    save_optimization_run(bidding_zone, date, order_method, model, optimizer, mpcc_result.status;
+                    # Save failed optimization run (only when persisting results —
+                    # eval/backtest runs with save_to_db=false must not touch
+                    # production run metadata)
+                    save_to_db && save_optimization_run(bidding_zone, date, order_method, model, optimizer, mpcc_result.status;
                         solve_time_seconds=solve_time_seconds,
                         num_orders=length(order_book.orders),
                         error_message="MPCC optimization failed with status: $(mpcc_result.status)")
@@ -631,7 +635,7 @@ function generate_energy_prices(bidding_zone::String, date::Date;
 
                 if isempty(mpcc_result.market_prices)
                     # Save failed optimization run (successful solve but no prices)
-                    save_optimization_run(bidding_zone, date, order_method, model, optimizer, :no_prices;
+                    save_to_db && save_optimization_run(bidding_zone, date, order_method, model, optimizer, :no_prices;
                         objective_value=mpcc_result.objective_value,
                         solve_time_seconds=solve_time_seconds,
                         num_orders=length(order_book.orders),
@@ -643,7 +647,7 @@ function generate_energy_prices(bidding_zone::String, date::Date;
                 # Get prices for the bidding zone
                 if !haskey(mpcc_result.market_prices, bidding_zone)
                     # Save failed optimization run (successful solve but no prices for zone)
-                    save_optimization_run(bidding_zone, date, order_method, model, optimizer, :no_zone_prices;
+                    save_to_db && save_optimization_run(bidding_zone, date, order_method, model, optimizer, :no_zone_prices;
                         objective_value=mpcc_result.objective_value,
                         solve_time_seconds=solve_time_seconds,
                         num_orders=length(order_book.orders),
@@ -657,12 +661,14 @@ function generate_energy_prices(bidding_zone::String, date::Date;
                 println("   ✅ Energy prices extracted for $(length(prices)) time periods")
                 println("   📈 Price range: €$(round(minimum(values(prices)), digits=2)) - €$(round(maximum(values(prices)), digits=2))/MWh")
 
-                # Save successful optimization run and get the ID
-                optimization_run_id = save_optimization_run(bidding_zone, date, order_method, model, optimizer, :optimal;
-                    objective_value=mpcc_result.objective_value,
-                    solve_time_seconds=solve_time_seconds,
-                    num_orders=length(order_book.orders),
-                    num_price_periods=length(prices))
+                # Save successful optimization run and get the ID (skipped for
+                # save_to_db=false runs so evals never touch production tables)
+                optimization_run_id = save_to_db ?
+                                      save_optimization_run(bidding_zone, date, order_method, model, optimizer, :optimal;
+                                          objective_value=mpcc_result.objective_value,
+                                          solve_time_seconds=solve_time_seconds,
+                                          num_orders=length(order_book.orders),
+                                          num_price_periods=length(prices)) : nothing
 
                 # Save energy prices to database if requested
                 if save_to_db
@@ -683,7 +689,7 @@ function generate_energy_prices(bidding_zone::String, date::Date;
                 solve_time_seconds = time() - optimization_start_time
 
                 # Save failed optimization run with error details
-                save_optimization_run(bidding_zone, date, order_method, model, optimizer, :error;
+                save_to_db && save_optimization_run(bidding_zone, date, order_method, model, optimizer, :error;
                     solve_time_seconds=solve_time_seconds,
                     num_orders=length(order_book.orders),
                     error_message=string(mpcc_error))
@@ -880,6 +886,75 @@ function _create_multi_zone_order_book_alternative(zones::Vector{String}, day::D
 end
 
 """
+    _create_multi_zone_order_book_merit(zones::Vector{String}, day::Date)
+
+Multi-zone order book built from per-zone merit-order books.
+
+Flows between zones inside the clearing set are endogenous (ATC-constrained
+MPCC flow variables), so each zone's observed net-import injections are
+restricted to borders with zones OUTSIDE the set.
+"""
+function _create_multi_zone_order_book_merit(zones::Vector{String}, day::Date)
+    isempty(zones) && error("At least one bidding zone must be specified")
+
+    println("🌍 Creating multi-zone order book (merit-order method) for $(length(zones)) zones")
+
+    all_orders = Vector{MarketOrders.MarketOrder}()
+    all_periods = Set{String}()
+    failed_zones = String[]
+
+    for zone in zones
+        try
+            println("   📊 Processing zone $zone...")
+            result = create_merit_order_book(zone, day;
+                net_import_exclude=[z for z in zones if z != zone])
+
+            if !result.success
+                @warn "Failed to generate merit orders for zone $zone: $(result.message)"
+                push!(failed_zones, zone)
+                continue
+            end
+
+            append!(all_orders, result.order_book.orders)
+            for period in result.order_book.periods
+                push!(all_periods, period)
+            end
+            println("      ✅ Added $(result.supply_orders) supply + $(result.demand_orders) demand orders")
+        catch e
+            e isa InterruptException && rethrow()
+            @error "Error processing zone $zone: $e"
+            push!(failed_zones, zone)
+        end
+    end
+
+    successful_zones = filter(z -> !(z in failed_zones), zones)
+    isempty(successful_zones) && error("Failed to generate merit orders for any zone")
+    if !isempty(failed_zones)
+        @warn "Some zones failed: $(join(failed_zones, ", ")). Proceeding with: $(join(successful_zones, ", "))"
+    end
+
+    periods_vector = sort(collect(all_periods))
+
+    println("   🔌 Fetching transfer capacities between zones...")
+    transfer_capacity = Network.create_transfer_capacity_from_entsoe(day, successful_zones)
+    zone_pairs = Network.get_zone_pairs(transfer_capacity)
+    println("   ✅ Found $(length(zone_pairs)) directional transfer capacity links")
+
+    order_book = MPCC.MPCCOrderBook(
+        all_orders,
+        successful_zones,
+        periods_vector,
+        (-500.0, 3000.0),       # EU day-ahead floor / merit demand cap
+        transfer_capacity
+    )
+
+    println("✅ Created multi-zone order book (merit-order):")
+    println("   🌍 Zones: $(length(successful_zones))  📝 Orders: $(length(all_orders))  🕐 Periods: $(length(periods_vector))  🔌 Links: $(length(zone_pairs))")
+
+    return order_book
+end
+
+"""
     run_multi_zone_market_clearing(date::Date;
                                    zones::Vector{String}=String[],
                                    order_method::Symbol=:uc_based,
@@ -899,7 +974,7 @@ transmission flow constraints between zones based on ENTSO-E ATC data.
 # Arguments
 - `date::Date`: The date for which to run market clearing
 - `zones::Vector{String}`: List of bidding zones to include (default: auto-discover from DB)
-- `order_method::Symbol`: Method for creating orders - `:uc_based` or `:alternative` (default: `:uc_based`)
+- `order_method::Symbol`: Method for creating orders - `:uc_based`, `:alternative` or `:merit_order` (default: `:uc_based`)
 - `optimizer::String`: Optimization solver - "highs" (default), "gurobi", "cplex", "auto"
 - `markup_factor::Float64`: Price markup factor for supply bids (default: 1.1)
 - `silent::Bool`: Whether to suppress solver output (default: true)
@@ -989,8 +1064,12 @@ function run_multi_zone_market_clearing(date::Date;
     elseif order_method == :alternative
         # Alternative: uses simplified order generation (faster)
         _create_multi_zone_order_book_alternative(zones, date)
+    elseif order_method == :merit_order
+        # Merit-order: deterministic strategy-based books per zone,
+        # cross-zone flows endogenous via ATC-constrained MPCC
+        _create_multi_zone_order_book_merit(zones, date)
     else
-        error("Invalid order_method: $order_method. Must be :uc_based or :alternative")
+        error("Invalid order_method: $order_method. Must be :uc_based, :alternative or :merit_order")
     end
 
     # Run MPCC market clearing with transmission constraints
@@ -1386,7 +1465,7 @@ Provides comprehensive progress tracking and timing statistics.
 - `start_date::Date`: First date to process (inclusive)
 - `end_date::Date`: Last date to process (inclusive)
 - `zones::Vector{String}`: List of bidding zones to include (default: auto-discover from DB)
-- `order_method::Symbol`: Method for creating orders - `:uc_based` or `:alternative` (default: `:uc_based`)
+- `order_method::Symbol`: Method for creating orders - `:uc_based`, `:alternative` or `:merit_order` (default: `:uc_based`)
 - `optimizer::String`: Optimization solver - "highs" (default), "gurobi", "cplex", "auto"
 - `markup_factor::Float64`: Price markup factor for supply bids (default: 1.1)
 - `silent::Bool`: Whether to suppress solver output (default: true)
@@ -1494,8 +1573,9 @@ function run_multi_zone_for_date_range(start_date::Date, end_date::Date;
                 AND clearing_mode = 'multi_zone'
                 AND DATE(date_time_utc) >= \$2
                 AND DATE(date_time_utc) <= \$3
+                AND code_version = \$4
             """
-            existing_df = sql2df(existing_query, [string(order_method), start_date, end_date])
+            existing_df = sql2df(existing_query, [string(order_method), start_date, end_date, ENERGY_PRICES_CODE_VERSION])
             existing_dates = Set(Date.(existing_df.run_date))
 
             dates_to_process = filter(d -> d ∉ existing_dates, dates)
@@ -1671,7 +1751,7 @@ progress tracking, and optional parallel processing.
 
 # Arguments
 - `date::Date`: The date for which to generate prices for all zones
-- `order_method::Symbol`: Method for creating orders - `:uc_based` or `:alternative` (default: `:uc_based`)
+- `order_method::Symbol`: Method for creating orders - `:uc_based`, `:alternative` or `:merit_order` (default: `:uc_based`)
 - `model::Symbol`: Market clearing model - `:mpcc` (default, more may be added later)
 - `optimizer::String`: Optimization solver - "highs" (default), "gurobi", "cplex", "auto"
 - `markup_factor::Float64`: Price markup factor for UC-based orders (default: 1.1)
@@ -1882,8 +1962,9 @@ function generate_energy_prices_for_all_zones(date::Date;
                 WHERE DATE(date_time_utc) = \$1
                 AND order_method = \$2
                 AND clearing_mode = 'single_zone'
+                AND code_version = \$3
             """
-            existing_df = sql2df(existing_query, [date, string(order_method)])
+            existing_df = sql2df(existing_query, [date, string(order_method), ENERGY_PRICES_CODE_VERSION])
             existing_zones = Set(string(zone) for zone in existing_df.bidding_zone)
 
             zones_to_process = filter(zone -> zone ∉ existing_zones, available_zones)
@@ -2031,7 +2112,7 @@ and result aggregation across the entire date range.
 - `start_date::Date`: First date to process (inclusive)
 - `end_date::Date`: Last date to process (inclusive)
 - All other arguments are passed through to `generate_energy_prices_for_all_zones()`:
-  - `order_method::Symbol`: Method for creating orders - `:uc_based` or `:alternative` (default: `:uc_based`)
+  - `order_method::Symbol`: Method for creating orders - `:uc_based`, `:alternative` or `:merit_order` (default: `:uc_based`)
   - `model::Symbol`: Market clearing model - `:mpcc` (default)
   - `optimizer::String`: Optimization solver - "highs" (default), "gurobi", "cplex", "auto"
   - `markup_factor::Float64`: Price markup factor for UC-based orders (default: 1.1)

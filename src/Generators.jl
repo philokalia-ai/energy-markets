@@ -396,47 +396,107 @@ function get_min_active_capacity(max_capacity::Float64, fuel_type::Symbol)
 end
 
 
-function get_marginal_cost(day::Dates.Date, fuel_type::String, bidding_zone::String="GR")
-    # Realistic marginal costs based on fuel type and market conditions
-    # Updated for 2025 European energy crisis and carbon pricing
+# TTF gas price lookup (yfinance.ttf_f, populated by the ceres yfinance ETL).
+# Cached per day because get_generators() calls get_marginal_cost once per generator.
+const TTF_PRICE_CACHE = Dict{Dates.Date,Union{Float64,Nothing}}()
 
-    # Base fuel costs (€/MWh) - post-Ukraine war pricing with carbon costs
-    fuel_costs = Dict(
-        "Hydro Water Reservoir" => 12.0,           # Low but includes O&M + opportunity cost
-        "Hydro Run-of-river and poundage" => 8.0,  # Low but includes O&M
-        "Hydro Pumped Storage" => 25.0,            # Higher due to pumping costs
-        "Fossil Brown coal/Lignite" => 95.0,       # High due to carbon pricing (€80/tonne CO₂)
-        "Fossil Gas" => 140.0,                     # High gas prices + carbon costs
-        "Nuclear" => 35.0,                         # Low fuel but high fixed costs
-        "Fossil Oil" => 180.0,                     # Very expensive fuel + carbon
-        "Fossil Hard coal" => 110.0,               # Coal price + carbon pricing
-        "Wind Onshore" => 5.0,                     # Very low - no fuel cost, just O&M
-        "Wind Offshore" => 8.0,                    # Very low - no fuel cost, higher O&M
-        "Solar" => 3.0,                           # Very low - no fuel cost
-        "Biomass" => 85.0,                        # Biomass fuel cost + carbon neutral benefit
-        "Waste" => 65.0,                          # Waste processing costs
-        "Geothermal" => 25.0,                     # Low - geothermal energy + O&M
-        "Other" => 120.0                          # Default fallback - assume gas-like
-    )
+# Gas plant cost model constants
+const GAS_PLANT_EFFICIENCY = 0.55   # CCGT-dominated fleet efficiency (LHV basis)
+const GAS_EMISSION_FACTOR = 0.202   # tCO₂ per MWh of gas burned
+const EUA_PRICE = 70.0              # €/tCO₂ carbon price (no EUA feed in DB yet)
+const GAS_VOM_COST = 2.0            # €/MWh variable O&M
 
-    # Market bid markup (generators don't bid marginal cost in real markets)
-    bid_markup_multiplier = 2.2  # Generators typically bid 1.5-3x marginal cost
+"""
+    get_ttf_price(day::Dates.Date) -> Union{Float64,Nothing}
 
-    # Add seasonal/temporal variations (summer 2025)
-    summer_multiplier = 1.15  # Higher costs in summer due to cooling demand + tight supply
+Most recent TTF front-month futures close (€/MWh) strictly before `day`, from
+`yfinance.ttf_f`. Looks back up to 10 days to bridge weekends and holidays.
+Returns `nothing` when no data exists near `day` (e.g., before the table's
+history starts), in which case callers should fall back to stylized costs.
 
-    # Get base cost for fuel type
-    base_cost = get(fuel_costs, fuel_type, 120.0)  # Default to gas-like if not found
+For a market date D this returns the close of the last trading day before D,
+which is the price information available at day-ahead auction time.
+"""
+function get_ttf_price(day::Dates.Date)
+    haskey(TTF_PRICE_CACHE, day) && return TTF_PRICE_CACHE[day]
 
-    # Apply market markup and seasonal adjustment
-    market_cost = base_cost * bid_markup_multiplier * summer_multiplier
+    # Strictly before the delivery day: the day-ahead auction for D clears
+    # around noon on D-1, when D's own close does not exist yet. Using
+    # `date <= day` would leak future information into backtests.
+    df = try
+        Euphemia.sql2df_with_retry(
+            """
+            SELECT close
+            FROM yfinance.ttf_f
+            WHERE date < \$1 AND date > \$1::date - INTERVAL '10 days'
+              AND close IS NOT NULL
+            ORDER BY date DESC
+            LIMIT 1
+            """,
+            [day]
+        )
+    catch e
+        # Transient DB failure: warn and fall back WITHOUT caching, so the
+        # next call retries instead of pinning this date to the fallback
+        @warn "TTF price lookup failed for $day, falling back to stylized gas cost: $e"
+        return nothing
+    end
 
-    # Add some daily variation based on day of year (simple sine wave)
-    day_of_year = Dates.dayofyear(day)
-    daily_variation = 1.0 + 0.15 * sin(2π * day_of_year / 365)  # ±15% variation
+    # NULL closes arrive as `missing` — treat like absent data
+    price = (isempty(df) || ismissing(df.close[1])) ? nothing : Float64(df.close[1])
+    if price === nothing
+        @warn "No TTF price within 10 days before $day; using stylized gas cost"
+    end
 
-    return market_cost * daily_variation
+    # Cache both hits and genuine data absence (but never transient errors)
+    TTF_PRICE_CACHE[day] = price
+    return price
 end
+
+function get_marginal_cost(day::Dates.Date, fuel_type::String, bidding_zone::String="GR")
+    # Gas-fired units: use real TTF fuel prices when available.
+    # marginal cost = fuel cost / efficiency + carbon cost + variable O&M
+    # No bid markup here — the bidding layer applies its own markup_factor.
+    if fuel_type == "Fossil Gas"
+        ttf = get_ttf_price(day)
+        if ttf !== nothing
+            fuel_cost = ttf / GAS_PLANT_EFFICIENCY
+            carbon_cost = GAS_EMISSION_FACTOR / GAS_PLANT_EFFICIENCY * EUA_PRICE
+            return fuel_cost + carbon_cost + GAS_VOM_COST
+        end
+    end
+
+    return get(FUEL_SRMC, fuel_type, 110.0)
+end
+
+# Short-run marginal costs (SRMC, €/MWh electric) including carbon at
+# EUA_PRICE and variable O&M. No bid markup — bidding strategy is applied
+# in the order book layer, not here (the UC objective also uses these
+# costs and should see true costs, not bids).
+#
+# Thermal SRMC = fuel/efficiency + emission_factor(el) × EUA + VOM, e.g.:
+#   Lignite (GR): fuel+VOM ≈ €25, EF ≈ 1.25 tCO₂/MWh_el → 25 + 1.25×70 ≈ 112
+#   Hard coal:    ~€14/MWh_th at η=0.40 → 36 + 0.9×70 + 3 ≈ 100
+#   Oil (HFO):    ~€40/MWh_th at η=0.38 → 105 + 0.75×70 ≈ 155
+const FUEL_SRMC = Dict(
+    "Hydro Water Reservoir" => 12.0,           # O&M only; water value applied in bidding layer
+    "Hydro Run-of-river and poundage" => 3.0,  # Must-run, near-zero variable cost
+    "Hydro Pumped Storage" => 60.0,            # Pumping energy cost at off-peak prices
+    "Fossil Brown coal/Lignite" => 112.0,      # Mostly carbon (EF ~1.25 tCO₂/MWh for GR lignite)
+    "Fossil Gas" => 105.0,                     # Fallback only — TTF path is preferred
+    "Nuclear" => 10.0,                         # Fuel cycle cost
+    "Fossil Oil" => 155.0,                     # HFO/diesel fuel + carbon
+    "Fossil Hard coal" => 100.0,               # API2-level coal + carbon
+    "Fossil Coal-derived gas" => 110.0,
+    "Wind Onshore" => 1.0,
+    "Wind Offshore" => 2.0,
+    "Solar" => 1.0,
+    "Biomass" => 60.0,                         # Fuel cost, no carbon
+    "Waste" => 25.0,                           # Gate fees offset fuel cost
+    "Geothermal" => 20.0,
+    "Energy storage" => 90.0,                  # Charging-cost opportunity proxy
+    "Other" => 110.0                           # Assume gas-like when unknown
+)
 
 # pull from postgres, for now only active units of given date (I think)
 # exclude_unavailable: if true, excludes generators with active outages and reduces capacity for partial outages

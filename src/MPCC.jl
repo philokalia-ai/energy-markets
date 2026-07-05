@@ -530,6 +530,15 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
         set_silent(model)
     end
 
+    # Safety limits for large (multi-zone) MIPs: accept a 1% optimality gap
+    # and cap the solve time; the best incumbent is still returned
+    set_time_limit_sec(model, 900.0)
+    try
+        set_attribute(model, MOI.RelativeGapTolerance(), 0.01)
+    catch
+        # attribute not supported by this solver version — proceed with defaults
+    end
+
     start_time = time()
 
     try
@@ -558,12 +567,17 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
         zone_pairs = Tuple{String,String}[]  # Empty for single-zone
         zones_to = Dict{String,Vector{String}}()   # zones that can send TO each zone
         zones_from = Dict{String,Vector{String}}() # zones that can receive FROM each zone
+        flow_caps = Dict{Tuple{Tuple{String,String},String},Tuple{Float64,Float64}}()
 
         if order_book.network_topology isa TransferCapacity
             tc = order_book.network_topology
 
-            # Get all zone pairs with transfer capacity
-            zone_pairs = get_zone_pairs(tc)
+            # Get zone pairs with transfer capacity, restricted to zones in
+            # this book: capacity data can include borders to zones outside
+            # the clearing set, and a flow to a zone with no power balance
+            # would act as a free, costless energy source/sink
+            zone_pairs = [p for p in get_zone_pairs(tc)
+                          if p[1] in order_book.nodes && p[2] in order_book.nodes]
 
             if !isempty(zone_pairs)
                 println("   🔌 Adding transmission flow variables for $(length(zone_pairs)) zone pairs")
@@ -590,8 +604,50 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
                         # ATC bounds: -backward <= flow <= forward
                         set_lower_bound(flow[pair, t], -backward_cap)
                         set_upper_bound(flow[pair, t], forward_cap)
+                        flow_caps[(pair, t)] = (forward_cap, backward_cap)
                     end
                 end
+
+                # Market-coupling price condition. Flows alone only move
+                # energy; without a price-side condition zone prices are
+                # completely uncoupled and the solver may publish arbitrary
+                # cross-zone spreads over uncongested links. EU coupling
+                # requires: price[sink] - price[source] equals the congestion
+                # rent — zero while the link is inside its ATC limits (prices
+                # equal), positive only at the forward limit, negative only
+                # at the backward limit. Complementarity via per-link
+                # binaries; the rent is bounded by the book's price span.
+                price_span_flows = order_book.price_limits[2] - order_book.price_limits[1]
+                @variable(model, congestion_fw[pair in zone_pairs, t in order_book.periods] >= 0)
+                @variable(model, congestion_bw[pair in zone_pairs, t in order_book.periods] >= 0)
+                @variable(model, congestion_fw_aux[pair in zone_pairs, t in order_book.periods], Bin)
+                @variable(model, congestion_bw_aux[pair in zone_pairs, t in order_book.periods], Bin)
+                for pair in zone_pairs
+                    source, sink = pair
+                    # capacity data can include borders to zones outside the
+                    # clearing set — no price variable exists for those
+                    (source in order_book.nodes && sink in order_book.nodes) || continue
+                    for t in order_book.periods
+                        forward_cap, backward_cap = flow_caps[(pair, t)]
+                        cap_span = forward_cap + backward_cap
+                        @constraint(model,
+                            market_price[sink, t] - market_price[source, t] ==
+                            congestion_fw[pair, t] - congestion_bw[pair, t])
+                        # fw rent > 0 only when flow is at the forward limit
+                        @constraint(model,
+                            congestion_fw[pair, t] <= congestion_fw_aux[pair, t] * price_span_flows)
+                        @constraint(model,
+                            forward_cap - flow[pair, t] <=
+                            (1 - congestion_fw_aux[pair, t]) * cap_span)
+                        # bw rent > 0 only when flow is at the backward limit
+                        @constraint(model,
+                            congestion_bw[pair, t] <= congestion_bw_aux[pair, t] * price_span_flows)
+                        @constraint(model,
+                            flow[pair, t] + backward_cap <=
+                            (1 - congestion_bw_aux[pair, t]) * cap_span)
+                    end
+                end
+                println("   🔗 Added market-coupling price conditions for $(length(zone_pairs)) links")
 
                 # Precompute connected zones for power balance
                 for node in order_book.nodes
@@ -689,11 +745,58 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
         end
 
         # Complementarity constraints using Big-M reformulation
+        # Side 1: acceptance ⊥ dual_rhs — an accepted order earns no
+        # out-of-money surplus (acceptance > 0 ⟹ dual_rhs = 0).
+        # The rhs Big-M is per-order (quantity × price span bounds the rhs of
+        # any rejected order): a global constant would force the price to
+        # within global_M/quantity of a large rejected order's bid, silently
+        # raising the price floor for multi-GW price-taker orders.
         @variable(model, stepwise_acceptance_complementarity_aux[order_id in order_ids], Bin)
         @constraint(model, stepwise_acceptance_complementarity_ineq1[order_id in order_ids],
-            stepwise_acceptance[order_id] <= stepwise_acceptance_complementarity_aux[order_id] * big_m)
-        @constraint(model, stepwise_acceptance_complementarity_ineq2[order_id in order_ids],
-            stepwise_dual_rhs[order_id] <= (1 - stepwise_acceptance_complementarity_aux[order_id]) * big_m)
+            stepwise_acceptance[order_id] <= stepwise_acceptance_complementarity_aux[order_id] * 1.0)
+        for (i, order) in enumerate(simple_orders)
+            order_id = order_ids[i]
+            # widest span the rhs can attain, covering bids outside the limits
+            rhs_span = max(order.price, order_book.price_limits[2]) -
+                       min(order.price, order_book.price_limits[1])
+            # rhs = dual + |q|·(bid-vs-price gap); dual itself is bounded by
+            # the order's max surplus, so 2× the quantity-weighted span covers
+            # both terms
+            @constraint(model,
+                stepwise_dual_rhs[order_id] <=
+                (1 - stepwise_acceptance_complementarity_aux[order_id]) *
+                2.0 * order.quantity * rhs_span)
+        end
+
+        # Side 2: dual ⊥ (1 - acceptance) — only a FULLY accepted order may
+        # carry positive surplus (dual > 0 ⟹ acceptance = 1). Without this
+        # side, a partially accepted (marginal) order does not pin the price
+        # to its bid, and rejected orders don't constrain the price at all:
+        # the market price is then only bracketed, not determined, and the
+        # solver returns an arbitrary point of the feasible interval. With
+        # it, the marginal order sets the price exactly — including the
+        # demand price cap in shortage hours, per EU day-ahead convention.
+        # The dual equals the order's full surplus when fully accepted, so
+        # its Big-M must cover the order's maximum possible surplus given
+        # the price bounds: q × (bid − floor) for demand, q × (ceiling − bid)
+        # for supply. Using quantity × price_span instead would make the
+        # model INFEASIBLE for orders bid outside the book's price limits
+        # (e.g. demand at 3000 in a book capped at 500), and a global
+        # constant would silently cap large orders' surplus and distort the
+        # price. The acceptance side is bounded by 1, so its "Big-M" is 1.
+        @variable(model, stepwise_dual_complementarity_aux[order_id in order_ids], Bin)
+        for (i, order) in enumerate(simple_orders)
+            order_id = order_ids[i]
+            max_surplus = order.type == :supply ?
+                          order.quantity * max(0.0, order_book.price_limits[2] - order.price) :
+                          order.quantity * max(0.0, order.price - order_book.price_limits[1])
+            @constraint(model,
+                stepwise_dual[order_id] <=
+                stepwise_dual_complementarity_aux[order_id] * max_surplus)
+            @constraint(model,
+                1 - stepwise_acceptance[order_id] <=
+                (1 - stepwise_dual_complementarity_aux[order_id]) * 1.0)
+        end
 
         # Price range constraints
         @constraint(model, minimum_price[node_id in order_book.nodes, time_period in order_book.periods],
@@ -731,6 +834,57 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
             for (i, order) in enumerate(simple_orders)
                 order_id = order_ids[i]
                 stepwise_acceptance_values[order_id] = value(stepwise_acceptance[order_id])
+            end
+
+            # Competitive price selection. The complementarity constraints
+            # only bracket the price — [max(accepted supply, rejected demand),
+            # min(accepted demand, rejected supply)] — and the welfare
+            # objective does not involve market_price, so the solver's value
+            # is an arbitrary point of that interval (and a tiny objective
+            # epsilon would drown in the MIP gap). Recompute the price from
+            # the acceptance pattern instead: a marginal (partially accepted)
+            # order pins the price to its bid exactly — including the demand
+            # cap in shortage hours, per EU convention — and otherwise the
+            # competitive (supply-side) end of the interval is used.
+            # Skipped for multi-zone books: this reconstruction only sees a
+            # zone's local orders, so it would ignore price coupling through
+            # transmission flows and could publish spurious cross-zone
+            # spreads. In multi-zone solves the flow variables tie zone
+            # prices together and the solver's values are kept as-is.
+            is_multi_zone = flow !== nothing && !isempty(zone_pairs)
+            # Well above solver feasibility tolerances (1e-6..1e-5), far
+            # below any economically meaningful partial acceptance
+            acceptance_atol = 1e-4
+            for node_id in order_book.nodes, time_period in order_book.periods
+                order_idxs = get(orders_by_node_time, (node_id, time_period), Int[])
+                if isempty(order_idxs)
+                    # Orderless cell (data gap): in a single-zone book nothing
+                    # constrains the solver's price — pin it to the floor so
+                    # the output is at least deterministic and recognizable.
+                    # In multi-zone books the market-coupling conditions tie
+                    # the price to neighboring zones, so keep the solver value.
+                    is_multi_zone || (market_prices[node_id][time_period] = order_book.price_limits[1])
+                    continue
+                end
+                is_multi_zone && continue
+                lo = order_book.price_limits[1]
+                hi = order_book.price_limits[2]
+                marginal_price = nothing
+                for i in order_idxs
+                    o = simple_orders[i]
+                    a = stepwise_acceptance_values[order_ids[i]]
+                    if acceptance_atol < a < 1 - acceptance_atol
+                        marginal_price = marginal_price === nothing ? o.price :
+                                         (o.type == :supply ? max(marginal_price, o.price) :
+                                          min(marginal_price, o.price))
+                    elseif o.type == :supply
+                        a >= 1 - acceptance_atol ? (lo = max(lo, o.price)) : (hi = min(hi, o.price))
+                    else
+                        a >= 1 - acceptance_atol ? (hi = min(hi, o.price)) : (lo = max(lo, o.price))
+                    end
+                end
+                polished = marginal_price === nothing ? lo : marginal_price
+                market_prices[node_id][time_period] = clamp(polished, min(lo, hi), max(lo, hi))
             end
 
             # Extract transmission flow values if multi-zone
