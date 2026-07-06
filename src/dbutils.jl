@@ -4,9 +4,13 @@ using Dates
 
 # Version of the pricing/cost model that produced stored energy_prices rows.
 # Bump when the model changes incompatibly (e.g. v2 -> v3: stylized
-# 2.2x-markup marginal costs replaced by SRMC/TTF-based costs, July 2026)
-# so new results are never mixed with — or skipped because of — old rows.
-const ENERGY_PRICES_CODE_VERSION = 3
+# 2.2x-markup marginal costs replaced by SRMC/TTF-based costs, July 2026;
+# v3 -> v7: multi-zone artifact fixes — tight MIP gap, component-wise price
+# reconstruction, border-aware net-import exclusion, July 2026; 4-6 were
+# already taken by legacy uc_based experiment rows) so new results are never
+# mixed with — or skipped because of — old rows. Each version is one
+# selectable "Run" in the Metabase counterfactual dashboard.
+const ENERGY_PRICES_CODE_VERSION = 7
 
 const poolsize = 5
 cnxpool = Pools.Pool{LibPQ.Connection}(poolsize)
@@ -964,6 +968,15 @@ function ensure_indexes()
             CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_agg_gen_type_zone_date
             ON entsoe.aggregated_generation_per_type
             (area_map_code, production_type, date_time_utc);
+        """)
+
+        # Index for actual DAM price lookups (eval harness, Metabase
+        # sim-vs-actual dashboard). Table: ~6.5M rows, ETL-populated
+        @info "Creating index on energy_prices (actuals)..."
+        LibPQ.execute(cnx, """
+            CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_entsoe_energy_prices_zone_contract_time
+            ON entsoe.energy_prices
+            (map_code, contract_type, date_time_utc);
         """)
 
         # Add more indexes here as needed:

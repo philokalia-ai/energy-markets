@@ -818,7 +818,7 @@ The project uses PostgreSQL with two main schemas:
 **`simulations.energy_prices`** - Generated energy price results by bidding zone, date, and time period
 - `clearing_mode`: Distinguishes between `'single_zone'` (independent zone clearing), `'multi_zone'` (joint clearing with transmission), and `'multi_zone_iterative'` (iterative UC-MPCC feedback loop)
 - `optimization_run_id`: Foreign key to `optimization_runs` table for traceability
-- `code_version`: Schema version (current: 3 for energy_prices, 4 for optimization_runs/uc_results — bumped July 2026 when marginal costs switched from stylized 2.2×-markup values to SRMC/TTF; earlier rows/caches under the old cost model keep their old version and are not mixed with new results)
+- `code_version`: Model version (current: 7 for energy_prices, 4 for optimization_runs/uc_results). energy_prices v3 = SRMC/TTF cost model (July 2026); v7 = multi-zone artifact fixes (tight MIP gap, component-wise price reconstruction, border-aware import exclusion, July 2026; 4–6 were taken by legacy uc_based experiment rows). Earlier rows keep their old version and are not mixed with new results. Each version is one selectable "Run" in the Metabase counterfactual dashboard — bump it for every model iteration that gets a backfill.
 - Unique on `(date_time_utc, bidding_zone, contract_type, order_method, clearing_mode, code_version)` - allows storing results from different clearing modes side by side
 
 **`simulations.optimization_runs`** - Optimization run metadata including status, solver info, and performance metrics
