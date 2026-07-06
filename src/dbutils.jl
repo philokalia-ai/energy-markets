@@ -1002,6 +1002,34 @@ function ensure_indexes()
             (map_code, contract_type, date_time_utc);
         """)
 
+        # Indexes for the merit-order book creation queries — these four
+        # tables are ETL-populated with no indexes, so every zone-day book
+        # build seq-scanned ~29 GB (loads, RES forecast, net imports, ATC)
+        @info "Creating index on day_ahead_total_load_forecast..."
+        LibPQ.execute(cnx, """
+            CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_load_fcst_zone_time
+            ON entsoe.day_ahead_total_load_forecast (area_map_code, date_time_utc);
+        """)
+        @info "Creating index on generation_forecasts_for_wind_and_solar..."
+        LibPQ.execute(cnx, """
+            CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_res_fcst_zone_time
+            ON entsoe.generation_forecasts_for_wind_and_solar (area_map_code, date_time_utc);
+        """)
+        @info "Creating indexes on physical_flows..."
+        LibPQ.execute(cnx, """
+            CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_physical_flows_in_time
+            ON entsoe.physical_flows (in_area_map_code, date_time_utc);
+        """)
+        LibPQ.execute(cnx, """
+            CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_physical_flows_out_time
+            ON entsoe.physical_flows (out_area_map_code, date_time_utc);
+        """)
+        @info "Creating index on offered_transfer_capacities_implicit..."
+        LibPQ.execute(cnx, """
+            CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_atc_borders_time
+            ON entsoe.offered_transfer_capacities_implicit (out_map_code, in_map_code, date_time_utc);
+        """)
+
         # Add more indexes here as needed:
         # - generation_forecasts_for_wind_and_solar (zone, date)
         # - day_ahead_total_load_forecast (zone, date)

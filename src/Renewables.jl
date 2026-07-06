@@ -16,6 +16,9 @@ struct RenewablesGenerationForecast
 end
 
 function get_generation_forecast_for_wind_and_solar(bidding_zone::String, day::Dates.Date)
+    # UTC day window as explicit range bounds: sargable (uses
+    # idx_res_fcst_zone_time instead of reading every row of the zone) and
+    # independent of the session timezone, unlike date(date_time_utc) = day
     query = """
     SELECT
         date_time_utc,
@@ -23,10 +26,11 @@ function get_generation_forecast_for_wind_and_solar(bidding_zone::String, day::D
         area_map_code,
         production_type,
         day_ahead_generation_forecast_mw -- Note: Table also has intraday_generation_forecast_mw, current_generation_forecast_mw (discovered 2025-11-26)
-    FROM 
+    FROM
         entsoe.generation_forecasts_for_wind_and_solar
     WHERE
-        date(date_time_utc) = \$1
+        date_time_utc >= (\$1::date::timestamp AT TIME ZONE 'UTC')
+        AND date_time_utc < ((\$1::date + 1)::timestamp AT TIME ZONE 'UTC')
         AND area_map_code = \$2
         AND area_type_code IN ('BZN', 'BZN/CTA', 'BZN/CTY', 'BZN/CTA/CTY') -- All codes corresponding to bzns
     ORDER BY date_time_utc, area_map_code
