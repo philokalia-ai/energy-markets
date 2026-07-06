@@ -38,11 +38,17 @@ on:
       order_method:
         description: "Order generation method"
         required: false
-        default: "uc_based"
+        default: "merit_order"
         type: choice
         options:
+          - merit_order
           - uc_based
           - alternative
+      zones:
+        description: "Comma-separated zones (empty = auto-discover; auto misses RS)"
+        required: false
+        default: "GR,BG,RO,RS,HU"
+        type: string
       force_rerun:
         description: "Force UC re-solve, bypassing cache"
         required: false
@@ -142,7 +148,8 @@ jobs:
             PARALLEL=true
             OPTIMIZER="highs"
             MAX_WORKERS=16
-            ORDER_METHOD="uc_based"
+            ORDER_METHOD="merit_order"
+            ZONES="GR,BG,RO,RS,HU"
             FORCE_RERUN=false
             MARKUP_FACTOR="1.1"
           else
@@ -152,6 +159,7 @@ jobs:
             OPTIMIZER="${{ github.event.inputs.optimizer }}"
             MAX_WORKERS="${{ github.event.inputs.max_workers }}"
             ORDER_METHOD="${{ github.event.inputs.order_method }}"
+            ZONES="${{ github.event.inputs.zones }}"
             FORCE_RERUN="${{ github.event.inputs.force_rerun }}"
             MARKUP_FACTOR="${{ github.event.inputs.markup_factor }}"
           fi
@@ -162,10 +170,11 @@ jobs:
           echo "⚡ Parallel UC: $PARALLEL"
           echo "👥 Max workers: $MAX_WORKERS"
           echo "📋 Order method: $ORDER_METHOD"
+          echo "🌍 Zones: ${ZONES:-auto-discover}"
           echo "🔄 Force rerun: $FORCE_RERUN"
           echo "💹 Markup factor: $MARKUP_FACTOR"
 
-          export START_DATE END_DATE PARALLEL OPTIMIZER MAX_WORKERS ORDER_METHOD FORCE_RERUN MARKUP_FACTOR
+          export START_DATE END_DATE PARALLEL OPTIMIZER MAX_WORKERS ORDER_METHOD ZONES FORCE_RERUN MARKUP_FACTOR
 
           julia --project=. bin/multi_zone_main.jl
 
