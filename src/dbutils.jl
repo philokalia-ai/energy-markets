@@ -7,10 +7,12 @@ using Dates
 # 2.2x-markup marginal costs replaced by SRMC/TTF-based costs, July 2026;
 # v3 -> v7: multi-zone artifact fixes — tight MIP gap, component-wise price
 # reconstruction, border-aware net-import exclusion, July 2026; 4-6 were
-# already taken by legacy uc_based experiment rows) so new results are never
-# mixed with — or skipped because of — old rows. Each version is one
-# selectable "Run" in the Metabase counterfactual dashboard.
-const ENERGY_PRICES_CODE_VERSION = 7
+# already taken by legacy uc_based experiment rows; v7 -> v8: daily EUA
+# carbon prices from yfinance.eua_co2 instead of yearly averages, July 2026)
+# so new results are never mixed with — or skipped because of — old rows.
+# Each version is one selectable "Run" in the Metabase counterfactual
+# dashboard.
+const ENERGY_PRICES_CODE_VERSION = 8
 
 const poolsize = 5
 cnxpool = Pools.Pool{LibPQ.Connection}(poolsize)
