@@ -44,7 +44,7 @@ function eval_day(zone::String, day::Date, order_method::Symbol)
     t0 = time()
     sim = generate_energy_prices(zone, day;
         order_method=order_method,
-        optimizer="highs",
+        optimizer="auto",
         save_to_db=false,
         random_seed=RANDOM_SEED)
     elapsed = time() - t0
