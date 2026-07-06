@@ -421,18 +421,71 @@ const GAS_EMISSION_FACTOR = 0.202   # tCO₂ per MWh of gas burned
 const GAS_VOM_COST = 2.0            # €/MWh variable O&M
 
 # EUA carbon price (€/tCO₂): approximate yearly averages of the EU ETS
-# December-contract price. No EUA feed exists in the DB yet, so this is a
-# documented public-knowledge lookup rather than a constant — carbon is the
+# December-contract price. Fallback for dates before the daily feed's
+# history starts (Nov 2021) and for transient DB failures — carbon is the
 # dominant cost component for lignite/coal, and the yearly swing (2023 ≈ 84
-# vs 2024 ≈ 65) moves their SRMC by ±15 €/MWh. Replace with a real price
-# feed when one lands (same ceres ETL pattern as TTF).
+# vs 2024 ≈ 65) moves their SRMC by ±15 €/MWh.
 const EUA_PRICE_BY_YEAR = Dict(
     2019 => 25.0, 2020 => 25.0, 2021 => 54.0, 2022 => 81.0,
     2023 => 84.0, 2024 => 65.0, 2025 => 72.0, 2026 => 80.0
 )
 const EUA_PRICE_DEFAULT = 70.0
 
-eua_price(day::Dates.Date) = get(EUA_PRICE_BY_YEAR, year(day), EUA_PRICE_DEFAULT)
+# Daily EUA carbon price lookup (yfinance.eua_co2, populated by the ceres
+# yfinance ETL from the SparkChange Physical Carbon ETC "CO2.L", EUR closes).
+# The ETC physically holds EU Allowances, so its close tracks EUA spot ~1:1.
+# Cached per day because get_generators() calls get_marginal_cost once per
+# generator.
+const EUA_PRICE_CACHE = Dict{Dates.Date,Union{Float64,Nothing}}()
+
+"""
+    get_daily_eua_price(day::Dates.Date) -> Union{Float64,Nothing}
+
+Most recent EUA close (€/tCO₂) strictly before `day`, from
+`yfinance.eua_co2`. Looks back up to 10 days to bridge weekends and
+holidays. Returns `nothing` when no data exists near `day` (e.g., before the
+feed's history starts in Nov 2021), in which case `eua_price` falls back to
+the yearly lookup.
+
+Like `get_ttf_price`, uses strictly `date < day`: the day-ahead auction for
+D clears around noon on D−1, when D's own close does not exist yet.
+"""
+function get_daily_eua_price(day::Dates.Date)
+    haskey(EUA_PRICE_CACHE, day) && return EUA_PRICE_CACHE[day]
+
+    df = try
+        Euphemia.sql2df_with_retry(
+            """
+            SELECT close
+            FROM yfinance.eua_co2
+            WHERE date < \$1 AND date > \$1::date - INTERVAL '10 days'
+              AND close IS NOT NULL
+            ORDER BY date DESC
+            LIMIT 1
+            """,
+            [day]
+        )
+    catch e
+        # Transient DB failure: warn and fall back WITHOUT caching, so the
+        # next call retries instead of pinning this date to the fallback
+        @warn "EUA price lookup failed for $day, falling back to yearly average: $e"
+        return nothing
+    end
+
+    price = (isempty(df) || ismissing(df.close[1])) ? nothing : Float64(df.close[1])
+    if price === nothing
+        @warn "No EUA price within 10 days before $day; using yearly average"
+    end
+
+    # Cache both hits and genuine data absence (but never transient errors)
+    EUA_PRICE_CACHE[day] = price
+    return price
+end
+
+function eua_price(day::Dates.Date)
+    daily = get_daily_eua_price(day)
+    return daily === nothing ? get(EUA_PRICE_BY_YEAR, year(day), EUA_PRICE_DEFAULT) : daily
+end
 
 """
     get_ttf_price(day::Dates.Date) -> Union{Float64,Nothing}

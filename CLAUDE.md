@@ -176,17 +176,25 @@ mc = Euphemia.get_marginal_cost(Date(2024, 6, 15), "Fossil Gas")  # ≈ €97/MW
 ```
 
 Cost model constants (in `src/Generators.jl`): `GAS_PLANT_EFFICIENCY = 0.55`,
-`GAS_EMISSION_FACTOR = 0.202` tCO₂/MWh gas, `EUA_PRICE = 70.0` €/tCO₂ (constant —
-no EUA price feed in the DB yet), `GAS_VOM_COST = 2.0` €/MWh.
+`GAS_EMISSION_FACTOR = 0.202` tCO₂/MWh gas, `GAS_VOM_COST = 2.0` €/MWh.
+
+EUA carbon prices come from `yfinance.eua_co2` (daily EUR closes of the
+SparkChange Physical Carbon ETC "CO2.L", populated by the ceres yfinance ETL
+alongside TTF; the ETC physically holds EU Allowances so its close tracks
+EUA spot ~1:1). `eua_price(day)` uses the close of the last trading day
+strictly before the market date (no lookahead), cached in
+`EUA_PRICE_CACHE`; before the feed's history starts (Nov 2021) or on DB
+failure it falls back to the `EUA_PRICE_BY_YEAR` yearly lookup.
 
 TTF lookups use the close of the last trading day strictly before the market
 date (no lookahead) and are cached per date in `TTF_PRICE_CACHE` (transient DB
 errors are never cached). If no TTF price exists within 10 days before the
 requested date (e.g., before the table's history starts in Feb 2023), the
 `FUEL_SRMC_BASE` fallback is used. All other fuel types use the `FUEL_SRMC_BASE`
-table in `src/Generators.jl` — true short-run marginal costs including carbon
-at `EUA_PRICE` (e.g., lignite ≈ €112/MWh), with no bid markup: bidding
-strategy belongs to the order-book layer, not the cost model.
+table in `src/Generators.jl` — true short-run marginal costs: non-carbon base
+plus `FUEL_EMISSION_FACTOR_EL × eua_price(day)` (e.g., lignite ≈ €112/MWh at
+EUA 70), with no bid markup: bidding strategy belongs to the order-book
+layer, not the cost model.
 
 **Fuel type inference from generator names:**
 
@@ -818,7 +826,7 @@ The project uses PostgreSQL with two main schemas:
 **`simulations.energy_prices`** - Generated energy price results by bidding zone, date, and time period
 - `clearing_mode`: Distinguishes between `'single_zone'` (independent zone clearing), `'multi_zone'` (joint clearing with transmission), and `'multi_zone_iterative'` (iterative UC-MPCC feedback loop)
 - `optimization_run_id`: Foreign key to `optimization_runs` table for traceability
-- `code_version`: Schema version (current: 3 for energy_prices, 4 for optimization_runs/uc_results — bumped July 2026 when marginal costs switched from stylized 2.2×-markup values to SRMC/TTF; earlier rows/caches under the old cost model keep their old version and are not mixed with new results)
+- `code_version`: Model version (current: 8 for energy_prices, 4 for optimization_runs/uc_results). energy_prices v3 = SRMC/TTF cost model (July 2026); v7 = multi-zone artifact fixes (tight MIP gap, component-wise price reconstruction, border-aware import exclusion, July 2026; 4–6 were taken by legacy uc_based experiment rows); v8 = daily EUA carbon prices from `yfinance.eua_co2` (July 2026). Earlier rows keep their old version and are not mixed with new results. Each version is one selectable "Run" in the Metabase counterfactual dashboard — bump it for every model iteration that gets a backfill.
 - Unique on `(date_time_utc, bidding_zone, contract_type, order_method, clearing_mode, code_version)` - allows storing results from different clearing modes side by side
 
 **`simulations.optimization_runs`** - Optimization run metadata including status, solver info, and performance metrics

@@ -116,8 +116,12 @@ Some are model/data debt (fix in Phase A), some are candidate findings
    real units (the old flattering number was error cancellation);
    availability/tranche level recalibration against the corrected fleet is
    pending.
-5. **No EUA/API2 price feeds** — yearly EUA constants (2026 value
-   approximate); add tickers to the ceres yfinance ETL (same pattern as TTF).
+5. ~~No EUA/API2 price feeds~~ **EUA resolved (July 2026)** — daily EUA
+   closes now come from `yfinance.eua_co2` (SparkChange Physical Carbon ETC
+   "CO2.L", ceres PR #477; history from Nov 2021, yearly-lookup fallback
+   before that). API2 coal evaluated and skipped: Yahoo's `MTF=F` is stale
+   since Feb 2025 and the SEE footprint is lignite-dominated (mine-mouth
+   pricing, not seaborne coal).
 6. **`:uc_based` is degenerate** (`committed_only` offers supply == demand,
    price pins to the most expensive committed unit) — needs a bidding
    strategy rework if UC-based pricing is wanted.
