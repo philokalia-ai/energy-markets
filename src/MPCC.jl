@@ -714,8 +714,15 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
             end
         end
 
-        # Power balance constraints with optional transmission flows
-        # For multi-zone: supply - demand + inflows - outflows + load_shed = 0
+        # Power balance constraints with optional transmission flows.
+        # Order contributions are signed supply-NEGATIVE / demand-POSITIVE, so
+        # the balance reads  -S + D + shed - inflows + outflows = 0, i.e.
+        # S + inflows = D + shed + outflows: an importing zone needs LESS
+        # local supply, an exporting zone needs MORE. (With the signs the
+        # other way round — inflows added, outflows subtracted — every flow
+        # acts physically mirrored: flow[(A,B)] > 0 drains B into A, so ATC
+        # bounds and congestion-rent conditions apply to the wrong direction
+        # and asymmetric borders force spurious shortages.)
         # For single-zone: supply - demand + load_shed = 0
         if flow !== nothing && !isempty(zone_pairs)
             # Multi-zone power balance with transmission flows
@@ -728,9 +735,9 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
                     init=0.0
                 ) +
                 # Load shedding (emergency)
-                load_shed[node_id, time_period] +
+                load_shed[node_id, time_period] -
                 # Inflows: power coming INTO this zone (flow[source, this_zone])
-                sum(flow[(z, node_id), time_period] for z in get(zones_to, node_id, String[]); init=0.0) -
+                sum(flow[(z, node_id), time_period] for z in get(zones_to, node_id, String[]); init=0.0) +
                 # Outflows: power going OUT of this zone (flow[this_zone, sink])
                 sum(flow[(node_id, z), time_period] for z in get(zones_from, node_id, String[]); init=0.0)
                 == 0

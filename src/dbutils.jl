@@ -8,11 +8,13 @@ using Dates
 # v3 -> v7: multi-zone artifact fixes — tight MIP gap, component-wise price
 # reconstruction, border-aware net-import exclusion, July 2026; 4-6 were
 # already taken by legacy uc_based experiment rows; v7 -> v8: daily EUA
-# carbon prices from yfinance.eua_co2 instead of yearly averages, July 2026)
-# so new results are never mixed with — or skipped because of — old rows.
-# Each version is one selectable "Run" in the Metabase counterfactual
-# dashboard.
-const ENERGY_PRICES_CODE_VERSION = 8
+# carbon prices from yfinance.eua_co2 instead of yearly averages, July 2026;
+# v8 -> v9: multi-zone nodal-balance flow signs fixed — flows were
+# physically mirrored, capping every border by the opposite direction's
+# ATC, July 2026) so new results are never mixed with — or skipped because
+# of — old rows. Each version is one selectable "Run" in the Metabase
+# counterfactual dashboard.
+const ENERGY_PRICES_CODE_VERSION = 9
 
 const poolsize = 5
 cnxpool = Pools.Pool{LibPQ.Connection}(poolsize)
