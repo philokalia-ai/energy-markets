@@ -53,6 +53,21 @@ const VARIABLE_RENEWABLE_TYPES = Set([
 ])
 
 """
+    normalize_fuel_type_name(fuel_type::AbstractString) -> String
+
+Fold fuel-type spelling variants onto the canonical names used throughout
+the codebase (FuelTypeParameters, FUEL_SRMC_BASE, flexible/variable type
+lists). The canonical spelling is the one ENTSO-E actually publishes:
+"Hydro Run-of-river and pondage" (uniform across all 34 zones in the DB).
+The English-correct "poundage" appears only in older ENTSO-E documentation
+and is folded back here defensively.
+"""
+function normalize_fuel_type_name(fuel_type::AbstractString)::String
+    fuel_type == "Hydro Run-of-river and poundage" && return "Hydro Run-of-river and pondage"
+    return String(fuel_type)
+end
+
+"""
     infer_fuel_type_from_name(name::String, declared_type::Symbol) -> Symbol
 
 Attempt to infer the actual fuel type from the generator name when the declared
@@ -403,8 +418,21 @@ const TTF_PRICE_CACHE = Dict{Dates.Date,Union{Float64,Nothing}}()
 # Gas plant cost model constants
 const GAS_PLANT_EFFICIENCY = 0.55   # CCGT-dominated fleet efficiency (LHV basis)
 const GAS_EMISSION_FACTOR = 0.202   # tCO₂ per MWh of gas burned
-const EUA_PRICE = 70.0              # €/tCO₂ carbon price (no EUA feed in DB yet)
 const GAS_VOM_COST = 2.0            # €/MWh variable O&M
+
+# EUA carbon price (€/tCO₂): approximate yearly averages of the EU ETS
+# December-contract price. No EUA feed exists in the DB yet, so this is a
+# documented public-knowledge lookup rather than a constant — carbon is the
+# dominant cost component for lignite/coal, and the yearly swing (2023 ≈ 84
+# vs 2024 ≈ 65) moves their SRMC by ±15 €/MWh. Replace with a real price
+# feed when one lands (same ceres ETL pattern as TTF).
+const EUA_PRICE_BY_YEAR = Dict(
+    2019 => 25.0, 2020 => 25.0, 2021 => 54.0, 2022 => 81.0,
+    2023 => 84.0, 2024 => 65.0, 2025 => 72.0, 2026 => 80.0
+)
+const EUA_PRICE_DEFAULT = 70.0
+
+eua_price(day::Dates.Date) = get(EUA_PRICE_BY_YEAR, year(day), EUA_PRICE_DEFAULT)
 
 """
     get_ttf_price(day::Dates.Date) -> Union{Float64,Nothing}
@@ -461,33 +489,34 @@ function get_marginal_cost(day::Dates.Date, fuel_type::String, bidding_zone::Str
         ttf = get_ttf_price(day)
         if ttf !== nothing
             fuel_cost = ttf / GAS_PLANT_EFFICIENCY
-            carbon_cost = GAS_EMISSION_FACTOR / GAS_PLANT_EFFICIENCY * EUA_PRICE
+            carbon_cost = GAS_EMISSION_FACTOR / GAS_PLANT_EFFICIENCY * eua_price(day)
             return fuel_cost + carbon_cost + GAS_VOM_COST
         end
     end
 
-    return get(FUEL_SRMC, fuel_type, 110.0)
+    base = get(FUEL_SRMC_BASE, fuel_type, 105.0 - 0.367 * EUA_PRICE_DEFAULT)
+    ef = get(FUEL_EMISSION_FACTOR_EL, fuel_type, fuel_type in ("Fossil Gas", "Other") ? 0.367 : 0.0)
+    return base + ef * eua_price(day)
 end
 
-# Short-run marginal costs (SRMC, €/MWh electric) including carbon at
-# EUA_PRICE and variable O&M. No bid markup — bidding strategy is applied
-# in the order book layer, not here (the UC objective also uses these
-# costs and should see true costs, not bids).
+# Non-carbon SRMC component (fuel/efficiency + VOM, €/MWh electric) and
+# electrical emission factors (tCO₂/MWh_el). Full SRMC = base + EF × EUA(t).
+# No bid markup — bidding strategy is applied in the order book layer, not
+# here (the UC objective also uses these costs and should see true costs).
 #
-# Thermal SRMC = fuel/efficiency + emission_factor(el) × EUA + VOM, e.g.:
-#   Lignite (GR): fuel+VOM ≈ €25, EF ≈ 1.25 tCO₂/MWh_el → 25 + 1.25×70 ≈ 112
-#   Hard coal:    ~€14/MWh_th at η=0.40 → 36 + 0.9×70 + 3 ≈ 100
-#   Oil (HFO):    ~€40/MWh_th at η=0.38 → 105 + 0.75×70 ≈ 155
-const FUEL_SRMC = Dict(
+# e.g. Lignite (GR): fuel+VOM ≈ €25, EF ≈ 1.25 → 25 + 1.25×70 ≈ 112 at EUA 70
+#      Hard coal: ~€14/MWh_th at η=0.40 → 37 + 0.90×70 ≈ 100
+#      Oil (HFO): ~€40/MWh_th at η=0.38 → 103 + 0.75×70 ≈ 155
+const FUEL_SRMC_BASE = Dict(
     "Hydro Water Reservoir" => 12.0,           # O&M only; water value applied in bidding layer
-    "Hydro Run-of-river and poundage" => 3.0,  # Must-run, near-zero variable cost
+    "Hydro Run-of-river and pondage" => 3.0,  # Must-run, near-zero variable cost
     "Hydro Pumped Storage" => 60.0,            # Pumping energy cost at off-peak prices
-    "Fossil Brown coal/Lignite" => 112.0,      # Mostly carbon (EF ~1.25 tCO₂/MWh for GR lignite)
-    "Fossil Gas" => 105.0,                     # Fallback only — TTF path is preferred
+    "Fossil Brown coal/Lignite" => 25.0,       # Mined fuel + VOM; carbon dominates via EF
+    "Fossil Gas" => 105.0 - 0.367 * 70.0,      # Fallback only — TTF path is preferred
     "Nuclear" => 10.0,                         # Fuel cycle cost
-    "Fossil Oil" => 155.0,                     # HFO/diesel fuel + carbon
-    "Fossil Hard coal" => 100.0,               # API2-level coal + carbon
-    "Fossil Coal-derived gas" => 110.0,
+    "Fossil Oil" => 103.0,                     # HFO/diesel fuel + VOM
+    "Fossil Hard coal" => 37.0,                # API2-level coal + VOM
+    "Fossil Coal-derived gas" => 47.0,
     "Wind Onshore" => 1.0,
     "Wind Offshore" => 2.0,
     "Solar" => 1.0,
@@ -495,7 +524,16 @@ const FUEL_SRMC = Dict(
     "Waste" => 25.0,                           # Gate fees offset fuel cost
     "Geothermal" => 20.0,
     "Energy storage" => 90.0,                  # Charging-cost opportunity proxy
-    "Other" => 110.0                           # Assume gas-like when unknown
+    "Other" => 110.0 - 0.367 * 70.0            # Assume gas-like when unknown
+)
+
+const FUEL_EMISSION_FACTOR_EL = Dict(
+    "Fossil Brown coal/Lignite" => 1.25,
+    "Fossil Hard coal" => 0.90,
+    "Fossil Oil" => 0.75,
+    "Fossil Coal-derived gas" => 0.90,
+    "Fossil Gas" => 0.367,   # 0.202 tCO₂/MWh_th at η=0.55 (fallback path)
+    "Other" => 0.367
 )
 
 # pull from postgres, for now only active units of given date (I think)
@@ -524,7 +562,8 @@ function get_generators(map_code::String, day::Dates.Date;
         WITH active_outages AS (
             SELECT
                 asset_code,
-                MIN(available_capacity_mw) AS available_capacity_mw
+                MIN(available_capacity_mw) AS available_capacity_mw,
+                MIN(start_outage_utc::timestamp) AS earliest_start
             FROM entsoe.unavailability_of_production_and_generation_units
             WHERE status = 'Active'
               AND area_map_code = \$1
@@ -533,13 +572,40 @@ function get_generators(map_code::String, day::Dates.Date;
             GROUP BY asset_code
         ),
         -- Find generators with recent actual generation (last 60 days)
-        -- This catches plants with stale validity dates that are still operating
+        -- This catches plants with stale validity dates that are still operating.
+        -- Restricting to the zone's unit codes lets the
+        -- (generation_unit_code, date_time_utc) index drive the lookup —
+        -- a date-only filter would scan the 54 GB table (~150 s per call).
         recent_generation AS (
             SELECT DISTINCT generation_unit_code
             FROM entsoe.actual_generation_output_per_generation_unit
-            WHERE date_time_utc >= \$2::timestamp - INTERVAL '60 days'
+            WHERE generation_unit_code IN (
+                    SELECT DISTINCT generation_unit_code
+                    FROM entsoe.production_and_generation_units
+                    WHERE area_map_code = \$1)
+              AND date_time_utc >= \$2::timestamp - INTERVAL '60 days'
               AND date_time_utc < \$2::timestamp + INTERVAL '1 day'
               AND actual_generation_output_mw > 0
+        ),
+        -- Hard-evidence override for stale outage records: a unit that
+        -- produced power DURING its claimed complete outage (within the
+        -- last 7 days) proves the record wrong. ENTSO-E has multi-year
+        -- 'Active' 0-MW outage records for units that are actually running
+        -- (e.g. Romanian hydro), which would otherwise be excluded.
+        -- Written as a correlated EXISTS (one index probe per outaged asset
+        -- via the (generation_unit_code, date_time_utc) index, early exit on
+        -- first hit) — a JOIN from the 54 GB output table takes ~70 s.
+        stale_outage_override AS (
+            SELECT o.asset_code AS generation_unit_code
+            FROM active_outages o
+            WHERE EXISTS (
+                SELECT 1
+                FROM entsoe.actual_generation_output_per_generation_unit a
+                WHERE a.generation_unit_code = o.asset_code
+                  AND a.date_time_utc >= GREATEST(o.earliest_start, \$2::timestamp - INTERVAL '7 days')
+                  AND a.date_time_utc < \$2::timestamp
+                  AND a.actual_generation_output_mw > 1
+            )
         )
         SELECT DISTINCT ON (g.generation_unit_code)
             g.valid_from,
@@ -576,6 +642,7 @@ function get_generators(map_code::String, day::Dates.Date;
             entsoe.production_and_generation_units g
         LEFT JOIN active_outages o ON g.generation_unit_code = o.asset_code
         LEFT JOIN recent_generation rg ON g.generation_unit_code = rg.generation_unit_code
+        LEFT JOIN stale_outage_override so ON g.generation_unit_code = so.generation_unit_code
         WHERE
             g.production_unit_status = 'COMMISSIONED'
             AND g.generation_unit_status = 'COMMISSIONED'
@@ -591,8 +658,10 @@ function get_generators(map_code::String, day::Dates.Date;
                         )
                 OR rg.generation_unit_code IS NOT NULL
             )
-            -- Exclude complete outages (available_capacity = 0)
-            AND (o.asset_code IS NULL OR o.available_capacity_mw > 0)
+            -- Exclude complete outages (available_capacity = 0), unless the
+            -- unit demonstrably generated during the claimed outage
+            AND (o.asset_code IS NULL OR o.available_capacity_mw > 0
+                 OR so.generation_unit_code IS NOT NULL)
         ORDER BY g.generation_unit_code, g.valid_from DESC, g.generation_unit_installed_capacity_mw DESC
         """
     else
@@ -606,7 +675,11 @@ function get_generators(map_code::String, day::Dates.Date;
         WITH recent_generation AS (
             SELECT DISTINCT generation_unit_code
             FROM entsoe.actual_generation_output_per_generation_unit
-            WHERE date_time_utc >= \$2::timestamp - INTERVAL '60 days'
+            WHERE generation_unit_code IN (
+                    SELECT DISTINCT generation_unit_code
+                    FROM entsoe.production_and_generation_units
+                    WHERE area_map_code = \$1)
+              AND date_time_utc >= \$2::timestamp - INTERVAL '60 days'
               AND date_time_utc < \$2::timestamp + INTERVAL '1 day'
               AND actual_generation_output_mw > 0
         )
@@ -659,8 +732,11 @@ function get_generators(map_code::String, day::Dates.Date;
     # Build generators (without ramp rates initially)
     generators = Generator[]
     for row in eachrow(df)
-        # Infer actual fuel type from name if declared as "Other"
-        declared_type = Symbol(row.generation_unit_type)
+        # Infer actual fuel type from name if declared as "Other".
+        # normalize_fuel_type_name folds ENTSO-E spelling variants (e.g.
+        # Romania publishes "Hydro Run-of-river and pondage") onto the
+        # canonical names every downstream table keys on.
+        declared_type = Symbol(normalize_fuel_type_name(row.generation_unit_type))
         inferred_type = infer_fuel_type_from_name(row.generation_unit_name, declared_type)
 
         if inferred_type != declared_type
@@ -680,7 +756,7 @@ function get_generators(map_code::String, day::Dates.Date;
             row.area_map_code,                           # bidding_zone
             get_marginal_cost(
                 day,
-                row.generation_unit_type,  # Use original type for cost (BESS still has storage costs)
+                normalize_fuel_type_name(row.generation_unit_type),  # Original (not name-inferred) type for cost — BESS still has storage costs
                 row.area_display_name
             )                                           # marginal_cost
         )

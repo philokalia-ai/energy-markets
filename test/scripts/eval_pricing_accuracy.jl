@@ -20,7 +20,7 @@ using Printf
 # complete GR DAM/load/renewables/TTF data). Do not tune on other days and
 # then eval here — these are the held-out benchmark.
 const EVAL_DAYS = [Date(2023, 12, 1), Date(2025, 4, 26), Date(2025, 7, 2), Date(2026, 1, 26)]
-const ZONE = "GR"
+const DEFAULT_ZONE = "GR"
 const RANDOM_SEED = 42
 
 function fetch_actual_prices(zone::String, day::Date)
@@ -44,7 +44,7 @@ function eval_day(zone::String, day::Date, order_method::Symbol)
     t0 = time()
     sim = generate_energy_prices(zone, day;
         order_method=order_method,
-        optimizer="highs",
+        optimizer="auto",
         save_to_db=false,
         random_seed=RANDOM_SEED)
     elapsed = time() - t0
@@ -74,15 +74,17 @@ end
 
 function main()
     order_method = length(ARGS) >= 1 ? Symbol(ARGS[1]) : :alternative
-    days = length(ARGS) >= 2 ? [Date(strip(s)) for s in split(ARGS[2], ",")] : EVAL_DAYS
+    days = length(ARGS) >= 2 && !isempty(strip(ARGS[2])) ?
+           [Date(strip(s)) for s in split(ARGS[2], ",")] : EVAL_DAYS
+    zone = length(ARGS) >= 3 ? String(strip(ARGS[3])) : DEFAULT_ZONE
 
-    println("Pricing accuracy eval | zone=$ZONE method=$order_method seed=$RANDOM_SEED n_days=$(length(days))")
+    println("Pricing accuracy eval | zone=$zone method=$order_method seed=$RANDOM_SEED n_days=$(length(days))")
     println("day          n     MAE    RMSE    bias    corr   act_mean  sim_mean   time")
 
     results = []
     for day in days
         r = try
-            eval_day(ZONE, day, order_method)
+            eval_day(zone, day, order_method)
         catch e
             println(day, "  -- failed: ", sprint(showerror, e)[1:min(end, 80)], " --")
             continue

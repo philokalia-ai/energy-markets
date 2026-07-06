@@ -100,14 +100,12 @@ This eliminates the license authentication overhead for subsequent model creatio
 """
 function get_cached_gurobi_optimizer()
     if !haskey(SOLVER_ENV_CACHE, "gurobi_env")
-        try
-            # Create and cache Gurobi environment once
-            SOLVER_ENV_CACHE["gurobi_env"] = Gurobi.Env()
-            @info "✅ Gurobi environment cached for session reuse"
-        catch e
-            @warn "Failed to create cached Gurobi environment: $e. Using standard optimizer."
-            return Gurobi.Optimizer
-        end
+        # Create and cache Gurobi environment once. A failure here means no
+        # usable license — let it propagate so select_solver falls back to
+        # the next solver, instead of returning an optimizer that would
+        # fail at solve time anyway.
+        SOLVER_ENV_CACHE["gurobi_env"] = Gurobi.Env()
+        @info "✅ Gurobi environment cached for session reuse"
     end
 
     # Return optimizer constructor that uses cached environment
@@ -201,9 +199,17 @@ function select_solver(preferred_solver::String="auto")
         error("No solvers available! Please install at least one of: HiGHS.jl (recommended), Gurobi.jl, or CPLEX.jl")
     end
 
-    # Determine priority order based on preference
+    # Determine priority order based on preference.
+    # "auto" prefers Gurobi when its package is installed: on multi-zone
+    # complementarity MIPs it is 10-100x faster than HiGHS (benchmarked
+    # 137.6s vs 1.1s on a 5-zone book). If no license is available at
+    # runtime (e.g. CI), Env creation fails and the loop below falls back
+    # to HiGHS with a warning — safe everywhere.
+    auto_order = [("Gurobi", "gurobi"), ("HiGHS", "highs"), ("CPLEX", "cplex")]
+    auto_available = filter(s -> s in available_solvers, auto_order)
+
     solvers_to_try = if preferred_solver == "auto"
-        available_solvers
+        auto_available
     elseif lowercase(preferred_solver) == "highs" && HIGHS_AVAILABLE
         [("HiGHS", "highs"); filter(x -> x[1] != "HiGHS", available_solvers)]
     elseif lowercase(preferred_solver) == "gurobi" && GUROBI_AVAILABLE
@@ -212,9 +218,9 @@ function select_solver(preferred_solver::String="auto")
         [("CPLEX", "cplex"); filter(x -> x[1] != "CPLEX", available_solvers)]
     elseif preferred_solver != "auto"
         @warn "Preferred solver '$preferred_solver' not available. Using auto-selection."
-        available_solvers
+        auto_available
     else
-        available_solvers
+        auto_available
     end
 
     # Try solvers in order - using cached optimizers when available
@@ -487,7 +493,7 @@ end
     generate_energy_prices(bidding_zone::String, date::Date; 
                           order_method::Symbol=:uc_based, 
                           model::Symbol=:mpcc,
-                          optimizer::String="highs",
+                          optimizer::String="auto",
                           markup_factor::Float64=1.1,
                           random_seed::Union{Int,Nothing}=nothing,
                           silent::Bool=true)
@@ -547,7 +553,7 @@ avg_price = sum(price_values) / length(price_values)
 function generate_energy_prices(bidding_zone::String, date::Date;
     order_method::Symbol=:uc_based,
     model::Symbol=:mpcc,
-    optimizer::String="highs",
+    optimizer::String="auto",
     markup_factor::Float64=1.1,
     random_seed::Union{Int,Nothing}=nothing,
     silent::Bool=true,
@@ -907,7 +913,9 @@ function _create_multi_zone_order_book_merit(zones::Vector{String}, day::Date)
         try
             println("   📊 Processing zone $zone...")
             result = create_merit_order_book(zone, day;
-                net_import_exclude=[z for z in zones if z != zone])
+                net_import_exclude=[z for z in zones if z != zone],
+                target_resolution_minutes=60,
+                fleet_completion=true)
 
             if !result.success
                 @warn "Failed to generate merit orders for zone $zone: $(result.message)"
@@ -958,7 +966,7 @@ end
     run_multi_zone_market_clearing(date::Date;
                                    zones::Vector{String}=String[],
                                    order_method::Symbol=:uc_based,
-                                   optimizer::String="highs",
+                                   optimizer::String="auto",
                                    markup_factor::Float64=1.1,
                                    silent::Bool=true,
                                    save_to_db::Bool=false,
@@ -1023,7 +1031,7 @@ result = run_multi_zone_market_clearing(Date(2024, 6, 15);
 function run_multi_zone_market_clearing(date::Date;
                                         zones::Vector{String}=String[],
                                         order_method::Symbol=:uc_based,
-                                        optimizer::String="highs",
+                                        optimizer::String="auto",
                                         markup_factor::Float64=1.1,
                                         silent::Bool=true,
                                         save_to_db::Bool=false,
@@ -1237,7 +1245,7 @@ See also: [`run_multi_zone_market_clearing`](@ref), [`compute_max_price_change`]
 """
 function run_iterative_multi_zone_market_clearing(date::Date;
     zones::Vector{String}=String[],
-    optimizer::String="highs",
+    optimizer::String="auto",
     max_iterations::Int=10,
     price_tolerance::Float64=1.0,
     damping_factor::Float64=0.7,
@@ -1448,7 +1456,7 @@ end
     run_multi_zone_for_date_range(start_date::Date, end_date::Date;
                                   zones::Vector{String}=String[],
                                   order_method::Symbol=:uc_based,
-                                  optimizer::String="highs",
+                                  optimizer::String="auto",
                                   markup_factor::Float64=1.1,
                                   silent::Bool=true,
                                   save_to_db::Bool=false,
@@ -1520,7 +1528,7 @@ end
 function run_multi_zone_for_date_range(start_date::Date, end_date::Date;
                                        zones::Vector{String}=String[],
                                        order_method::Symbol=:uc_based,
-                                       optimizer::String="highs",
+                                       optimizer::String="auto",
                                        markup_factor::Float64=1.1,
                                        silent::Bool=true,
                                        save_to_db::Bool=false,
@@ -1728,7 +1736,7 @@ end
     generate_energy_prices_for_all_zones(date::Date;
                                         order_method::Symbol=:uc_based,
                                         model::Symbol=:mpcc,
-                                        optimizer::String="highs",
+                                        optimizer::String="auto",
                                         markup_factor::Float64=1.1,
                                         random_seed::Union{Int,Nothing}=nothing,
                                         silent::Bool=true,
@@ -1888,7 +1896,7 @@ The function includes robust error handling:
 function generate_energy_prices_for_all_zones(date::Date;
     order_method::Symbol=:uc_based,
     model::Symbol=:mpcc,
-    optimizer::String="highs",
+    optimizer::String="auto",
     markup_factor::Float64=1.1,
     random_seed::Union{Int,Nothing}=nothing,
     silent::Bool=true,
@@ -2088,7 +2096,7 @@ end
     generate_energy_prices_for_date_range(start_date::Date, end_date::Date;
                                           order_method::Symbol=:uc_based,
                                           model::Symbol=:mpcc,
-                                          optimizer::String="highs",
+                                          optimizer::String="auto",
                                           markup_factor::Float64=1.1,
                                           random_seed::Union{Int,Nothing}=nothing,
                                           silent::Bool=true,
@@ -2233,7 +2241,7 @@ end
 function generate_energy_prices_for_date_range(start_date::Date, end_date::Date;
     order_method::Symbol=:uc_based,
     model::Symbol=:mpcc,
-    optimizer::String="highs",
+    optimizer::String="auto",
     markup_factor::Float64=1.1,
     random_seed::Union{Int,Nothing}=nothing,
     silent::Bool=true,

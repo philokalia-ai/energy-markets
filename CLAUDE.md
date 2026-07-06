@@ -183,7 +183,7 @@ TTF lookups use the close of the last trading day strictly before the market
 date (no lookahead) and are cached per date in `TTF_PRICE_CACHE` (transient DB
 errors are never cached). If no TTF price exists within 10 days before the
 requested date (e.g., before the table's history starts in Feb 2023), the
-`FUEL_SRMC` fallback value is used. All other fuel types use the `FUEL_SRMC`
+`FUEL_SRMC_BASE` fallback is used. All other fuel types use the `FUEL_SRMC_BASE`
 table in `src/Generators.jl` — true short-run marginal costs including carbon
 at `EUA_PRICE` (e.g., lignite ≈ €112/MWh), with no bid markup: bidding
 strategy belongs to the order-book layer, not the cost model.
@@ -209,7 +209,7 @@ The constant `FLEXIBLE_FUEL_TYPES` defines technologies that can operate at any 
 ```julia
 FLEXIBLE_FUEL_TYPES = [
     Symbol("Hydro Water Reservoir"),
-    Symbol("Hydro Run-of-river and poundage"),
+    Symbol("Hydro Run-of-river and pondage"),
     Symbol("Hydro Pumped Storage"),
     Symbol("Energy storage"),
     Symbol("Other")
