@@ -265,6 +265,38 @@ using Euphemia
         end
     end
 
+    @testset "Flow direction semantics (asymmetric ATC regression)" begin
+        # Regression for the inverted-balance bug: with the flow signs
+        # mirrored in the nodal balance, flow[(A,B)] > 0 physically drained
+        # B into A, ATC bounds applied to the opposite direction, and
+        # asymmetric borders produced spurious shortages (the importing
+        # zone priced at the cap). This toy only clears correctly with
+        # physical flow semantics: cheap A exports exactly the 50 MW
+        # forward ATC to expensive B, A prices at its marginal supply,
+        # B at its own (border congested), and the reported flow is
+        # positive in the A->B direction.
+        dt = DateTime(2026, 1, 1, 0)
+        slot = "20260101-0000"
+        orders = MarketOrder[
+            SimpleOrder(:supply, 10.0, 200.0, :A, dt, 60),
+            SimpleOrder(:demand, 3000.0, 100.0, :A, dt, 60),
+            SimpleOrder(:supply, 100.0, 100.0, :B, dt, 60),
+            SimpleOrder(:demand, 3000.0, 100.0, :B, dt, 60),
+        ]
+        # Strictly one-way border: A->B 50 MW, B->A 0 MW
+        tc = TransferCapacity(["A", "B"], ["1"],
+            Dict(("A", "B", "1") => 50.0),
+            Dict(("A", "B", "1") => 0.0))
+        ob = MPCCOrderBook(orders, ["A", "B"], [slot], (-500.0, 3000.0), tc)
+
+        result = solve_mpcc_market_clearing(ob; preferred_solver="highs")
+
+        @test result.status == :optimal
+        @test isapprox(result.market_prices["A"][slot], 10.0; atol=1.0)
+        @test isapprox(result.market_prices["B"][slot], 100.0; atol=1.0)
+        @test isapprox(result.transmission_flows["A_to_B"][slot], 50.0; atol=1.0)
+    end
+
 end
 
 println("\n✅ All multi-zone MPCC tests completed!")
