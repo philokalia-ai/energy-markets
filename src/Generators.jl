@@ -55,14 +55,15 @@ const VARIABLE_RENEWABLE_TYPES = Set([
 """
     normalize_fuel_type_name(fuel_type::AbstractString) -> String
 
-Fold ENTSO-E fuel-type spelling variants onto the canonical names used
-throughout the codebase (FuelTypeParameters, FUEL_SRMC, flexible/variable
-type lists). Example: Romanian units are published as
-"Hydro Run-of-river and pondage" while the canonical ENTSO-E spelling is
-"...poundage".
+Fold fuel-type spelling variants onto the canonical names used throughout
+the codebase (FuelTypeParameters, FUEL_SRMC_BASE, flexible/variable type
+lists). The canonical spelling is the one ENTSO-E actually publishes:
+"Hydro Run-of-river and pondage" (uniform across all 34 zones in the DB).
+The English-correct "poundage" appears only in older ENTSO-E documentation
+and is folded back here defensively.
 """
 function normalize_fuel_type_name(fuel_type::AbstractString)::String
-    fuel_type == "Hydro Run-of-river and pondage" && return "Hydro Run-of-river and poundage"
+    fuel_type == "Hydro Run-of-river and poundage" && return "Hydro Run-of-river and pondage"
     return String(fuel_type)
 end
 
@@ -417,8 +418,21 @@ const TTF_PRICE_CACHE = Dict{Dates.Date,Union{Float64,Nothing}}()
 # Gas plant cost model constants
 const GAS_PLANT_EFFICIENCY = 0.55   # CCGT-dominated fleet efficiency (LHV basis)
 const GAS_EMISSION_FACTOR = 0.202   # tCO₂ per MWh of gas burned
-const EUA_PRICE = 70.0              # €/tCO₂ carbon price (no EUA feed in DB yet)
 const GAS_VOM_COST = 2.0            # €/MWh variable O&M
+
+# EUA carbon price (€/tCO₂): approximate yearly averages of the EU ETS
+# December-contract price. No EUA feed exists in the DB yet, so this is a
+# documented public-knowledge lookup rather than a constant — carbon is the
+# dominant cost component for lignite/coal, and the yearly swing (2023 ≈ 84
+# vs 2024 ≈ 65) moves their SRMC by ±15 €/MWh. Replace with a real price
+# feed when one lands (same ceres ETL pattern as TTF).
+const EUA_PRICE_BY_YEAR = Dict(
+    2019 => 25.0, 2020 => 25.0, 2021 => 54.0, 2022 => 81.0,
+    2023 => 84.0, 2024 => 65.0, 2025 => 72.0, 2026 => 80.0
+)
+const EUA_PRICE_DEFAULT = 70.0
+
+eua_price(day::Dates.Date) = get(EUA_PRICE_BY_YEAR, year(day), EUA_PRICE_DEFAULT)
 
 """
     get_ttf_price(day::Dates.Date) -> Union{Float64,Nothing}
@@ -475,33 +489,34 @@ function get_marginal_cost(day::Dates.Date, fuel_type::String, bidding_zone::Str
         ttf = get_ttf_price(day)
         if ttf !== nothing
             fuel_cost = ttf / GAS_PLANT_EFFICIENCY
-            carbon_cost = GAS_EMISSION_FACTOR / GAS_PLANT_EFFICIENCY * EUA_PRICE
+            carbon_cost = GAS_EMISSION_FACTOR / GAS_PLANT_EFFICIENCY * eua_price(day)
             return fuel_cost + carbon_cost + GAS_VOM_COST
         end
     end
 
-    return get(FUEL_SRMC, fuel_type, 110.0)
+    base = get(FUEL_SRMC_BASE, fuel_type, 105.0 - 0.367 * EUA_PRICE_DEFAULT)
+    ef = get(FUEL_EMISSION_FACTOR_EL, fuel_type, fuel_type in ("Fossil Gas", "Other") ? 0.367 : 0.0)
+    return base + ef * eua_price(day)
 end
 
-# Short-run marginal costs (SRMC, €/MWh electric) including carbon at
-# EUA_PRICE and variable O&M. No bid markup — bidding strategy is applied
-# in the order book layer, not here (the UC objective also uses these
-# costs and should see true costs, not bids).
+# Non-carbon SRMC component (fuel/efficiency + VOM, €/MWh electric) and
+# electrical emission factors (tCO₂/MWh_el). Full SRMC = base + EF × EUA(t).
+# No bid markup — bidding strategy is applied in the order book layer, not
+# here (the UC objective also uses these costs and should see true costs).
 #
-# Thermal SRMC = fuel/efficiency + emission_factor(el) × EUA + VOM, e.g.:
-#   Lignite (GR): fuel+VOM ≈ €25, EF ≈ 1.25 tCO₂/MWh_el → 25 + 1.25×70 ≈ 112
-#   Hard coal:    ~€14/MWh_th at η=0.40 → 36 + 0.9×70 + 3 ≈ 100
-#   Oil (HFO):    ~€40/MWh_th at η=0.38 → 105 + 0.75×70 ≈ 155
-const FUEL_SRMC = Dict(
+# e.g. Lignite (GR): fuel+VOM ≈ €25, EF ≈ 1.25 → 25 + 1.25×70 ≈ 112 at EUA 70
+#      Hard coal: ~€14/MWh_th at η=0.40 → 37 + 0.90×70 ≈ 100
+#      Oil (HFO): ~€40/MWh_th at η=0.38 → 103 + 0.75×70 ≈ 155
+const FUEL_SRMC_BASE = Dict(
     "Hydro Water Reservoir" => 12.0,           # O&M only; water value applied in bidding layer
-    "Hydro Run-of-river and poundage" => 3.0,  # Must-run, near-zero variable cost
+    "Hydro Run-of-river and pondage" => 3.0,  # Must-run, near-zero variable cost
     "Hydro Pumped Storage" => 60.0,            # Pumping energy cost at off-peak prices
-    "Fossil Brown coal/Lignite" => 112.0,      # Mostly carbon (EF ~1.25 tCO₂/MWh for GR lignite)
-    "Fossil Gas" => 105.0,                     # Fallback only — TTF path is preferred
+    "Fossil Brown coal/Lignite" => 25.0,       # Mined fuel + VOM; carbon dominates via EF
+    "Fossil Gas" => 105.0 - 0.367 * 70.0,      # Fallback only — TTF path is preferred
     "Nuclear" => 10.0,                         # Fuel cycle cost
-    "Fossil Oil" => 155.0,                     # HFO/diesel fuel + carbon
-    "Fossil Hard coal" => 100.0,               # API2-level coal + carbon
-    "Fossil Coal-derived gas" => 110.0,
+    "Fossil Oil" => 103.0,                     # HFO/diesel fuel + VOM
+    "Fossil Hard coal" => 37.0,                # API2-level coal + VOM
+    "Fossil Coal-derived gas" => 47.0,
     "Wind Onshore" => 1.0,
     "Wind Offshore" => 2.0,
     "Solar" => 1.0,
@@ -509,7 +524,16 @@ const FUEL_SRMC = Dict(
     "Waste" => 25.0,                           # Gate fees offset fuel cost
     "Geothermal" => 20.0,
     "Energy storage" => 90.0,                  # Charging-cost opportunity proxy
-    "Other" => 110.0                           # Assume gas-like when unknown
+    "Other" => 110.0 - 0.367 * 70.0            # Assume gas-like when unknown
+)
+
+const FUEL_EMISSION_FACTOR_EL = Dict(
+    "Fossil Brown coal/Lignite" => 1.25,
+    "Fossil Hard coal" => 0.90,
+    "Fossil Oil" => 0.75,
+    "Fossil Coal-derived gas" => 0.90,
+    "Fossil Gas" => 0.367,   # 0.202 tCO₂/MWh_th at η=0.55 (fallback path)
+    "Other" => 0.367
 )
 
 # pull from postgres, for now only active units of given date (I think)

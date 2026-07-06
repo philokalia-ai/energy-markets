@@ -102,7 +102,7 @@ const WATER_VALUE_FUEL_TYPES =
 
 # ENTSO-E production_type strings for hydro availability lookup
 const HYDRO_PRODUCTION_TYPES =
-    ["Hydro Water Reservoir", "Hydro Pumped Storage", "Hydro Run-of-river and poundage"]
+    ["Hydro Water Reservoir", "Hydro Pumped Storage", "Hydro Run-of-river and pondage"]
 
 """
     get_hydro_availability(bidding_zone::String, day::Date; lookback_days=30) -> Union{Float64,Nothing}
@@ -254,23 +254,22 @@ function create_merit_order_book(
     include_net_imports::Bool=true,
     net_import_exclude::Vector{String}=String[],
     target_resolution_minutes::Union{Int,Nothing}=nothing,
-    fleet_completion::Bool=false
+    fleet_completion::Bool=true
 )
     try
         println("📊 Creating merit-order order book for $bidding_zone on $day")
 
         generators = get_generators(bidding_zone, day)
 
-        # Fleet completion (opt-in, used for multi-zone neighbor books):
-        # ENTSO-E's unit-level table only lists larger units, so for some
-        # zones (RO, BG, RS) the fleet is structurally undersized and the
-        # book clears at shortage prices. When the zone's recent per-type
-        # actual output (p95, trailing 30 days — strictly historical)
-        # exceeds the unit-level capacity of that type, the missing
-        # capacity demonstrably exists and produces: add it as one
-        # aggregate generator per fuel type. Wind/solar are excluded
-        # (netted via the RES forecast). Off by default: zones with good
-        # unit coverage (GR) only gain phantom supply from it.
+        # Fleet completion: ENTSO-E's unit-level table only lists larger
+        # units, so for some zones (RO, BG, RS) the fleet is structurally
+        # undersized and the book clears at spurious shortage-cap prices.
+        # When the zone's recent per-type actual output (p95, trailing 30
+        # days — strictly historical) exceeds the unit-level capacity of
+        # that type, the missing capacity demonstrably exists and produces:
+        # add it as one aggregate generator per fuel type. Wind/solar are
+        # excluded (netted via the RES forecast). Harmless for zones with
+        # good unit coverage — the gap is ~0 there (verified on GR).
         type_p95 = fleet_completion ? get_type_output_p95(bidding_zone, day) : Dict{String,Float64}()
         for (ptype_raw, p95) in type_p95
             ptype = normalize_fuel_type_name(ptype_raw)
@@ -365,7 +364,7 @@ function create_merit_order_book(
         # Thermal keeps the flat availability derate; hydro gets a
         # data-driven one.
         is_hydro(g) = g.fuel_type in WATER_VALUE_FUEL_TYPES ||
-                      g.fuel_type == Symbol("Hydro Run-of-river and poundage")
+                      g.fuel_type == Symbol("Hydro Run-of-river and pondage")
         hydro_pmax = sum((g.p_max for g in generators if is_hydro(g)); init=0.0)
         hydro_scale = 1.0   # offered-quantity cap (fraction of nameplate)
         hydro_dryness = 0.0 # 0 = normal water conditions, →1 = severe drought
