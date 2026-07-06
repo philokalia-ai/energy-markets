@@ -569,6 +569,10 @@ function save_optimization_run(bidding_zone::String, date::Date, order_method::S
 
     try
         run_id = withdb() do cnx
+            # Upsert: re-running the same configuration (e.g. a backfill after
+            # a model fix) replaces the run record instead of raising a
+            # UniqueViolation. The thrown violation used to abort the whole
+            # save mid-transaction and could poison the pooled connection.
             sql = """
             INSERT INTO simulations.optimization_runs
             (bidding_zone, optimization_date, order_method, model_type, optimizer, status,
@@ -577,6 +581,21 @@ function save_optimization_run(bidding_zone::String, date::Date, order_method::S
              is_iterative, total_time_seconds, iterations, converged, final_price_change, final_flow_change_pct)
             VALUES (\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8, \$9, \$10, \$11, \$12, \$13,
                     \$14, \$15, \$16, \$17, \$18, \$19)
+            ON CONFLICT (bidding_zone, optimization_date, order_method, model_type, code_version, optimizer)
+            DO UPDATE SET
+                status = EXCLUDED.status,
+                objective_value = EXCLUDED.objective_value,
+                solve_time_seconds = EXCLUDED.solve_time_seconds,
+                num_orders = EXCLUDED.num_orders,
+                num_price_periods = EXCLUDED.num_price_periods,
+                error_message = EXCLUDED.error_message,
+                created_at = EXCLUDED.created_at,
+                is_iterative = EXCLUDED.is_iterative,
+                total_time_seconds = EXCLUDED.total_time_seconds,
+                iterations = EXCLUDED.iterations,
+                converged = EXCLUDED.converged,
+                final_price_change = EXCLUDED.final_price_change,
+                final_flow_change_pct = EXCLUDED.final_flow_change_pct
             RETURNING id
             """
 
