@@ -90,15 +90,28 @@ Some are model/data debt (fix in Phase A), some are candidate findings
 1. **High-price coupled days (candidate finding).** GR actuals of €148–167
    on 2025-05-21 / 2024-08-27 / 2025-10-20 sit far above any competitive
    reconstruction we can build — single-zone (~88–115) or 5-zone coupled
-   (~90–102) — while GR≡BG to the decimal in actuals (coupled market). Either
-   the regional footprint is still too small (HU→CWE propagation), or these
-   are genuine scarcity rents above competitive levels. **This is exactly
-   the residual class Phase B should attribute per-unit.**
-2. **Multi-zone instability:** 2026-01-13 overshoots (311 vs 147) — neighbor
-   book calibration still swings; RS corr 0.56, RO bias +62.
-3. **HU is an import price-taker** (30–40% imported; price set by CWE):
-   single-zone HU cannot work; needs a wider footprint or a regional price
-   anchor.
+   (~85–132) — while GR≡BG to the decimal in actuals (coupled market).
+   After the July 2026 multi-zone fixes the residual is **uniform across
+   the region**: GR/BG/RO/RS all at −57…−77 bias with corr 0.6–0.9 on
+   these days — the whole SEE region clears one tranche below actuals
+   with the right hourly shape. **This is exactly the residual class
+   Phase B should attribute per-unit.**
+2. ~~Multi-zone instability~~ **resolved (July 2026, PR #79)** — the
+   2026-01-13 "overshoot" (311 vs 147) was a solver-tolerance artifact
+   (1% MIP gap on a cap-dominated objective let the incumbent curtail
+   demand at the €3000 cap), and the 2025-10-20 BG/RO explosion (487 vs
+   160) was phantom scarcity from excluding observed imports over borders
+   with no ATC links. Fixes: gap 1e-6, component-wise competitive price
+   reconstruction with rent-sign validation, border-aware import
+   exclusion. Structural fact learned: **HU–RO ATC data ends 2022-06-08
+   (Core flow-based coupling go-live) and RS has no implicitly coupled
+   borders at all** — post-2022 the honest ATC footprint is the GR–BG–RO
+   chain; RS/HU clear standalone with observed injections, which is the
+   actual market design, not a data gap.
+3. **HU is an import price-taker** (30–40% imported; price set by Core
+   via AT/SK/SI/HR): single-zone HU cannot work; needs a wider footprint
+   or a regional price anchor. Multi-zone confirms: HU bias −131…−174 on
+   regional scarcity days even when GR/BG/RO/RS are within −27…−88.
 4. **GR level bias −15:** appeared when the stale-outage fix re-included
    real units (the old flattering number was error cancellation);
    availability/tranche level recalibration against the corrected fleet is
