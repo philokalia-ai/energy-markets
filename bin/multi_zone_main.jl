@@ -30,6 +30,11 @@ max_workers_input = ENV["MAX_WORKERS"]
 order_method = Symbol(ENV["ORDER_METHOD"])
 force_rerun = parse(Bool, get(ENV, "FORCE_RERUN", "false"))
 markup_factor = parse(Float64, get(ENV, "MARKUP_FACTOR", "1.1"))
+# Comma-separated zone list; empty = auto-discover from transfer capacity
+# data. Auto-discovery misses RS (no implicit-coupling borders, so it never
+# appears in ATC data) and pulls in zones without validated order books, so
+# production runs pin the zone set explicitly.
+zones = [String(strip(z)) for z in split(get(ENV, "ZONES", ""), ",") if !isempty(strip(z))]
 
 # Parse max_workers (0 means auto-detect)
 max_workers = if max_workers_input == "0"
@@ -87,6 +92,7 @@ try
     # Run multi-zone market clearing for date range
     result = run_multi_zone_for_date_range(
         start_date, end_date;
+        zones=zones,
         order_method=order_method,
         optimizer=optimizer,
         save_to_db=true,
