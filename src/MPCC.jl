@@ -530,11 +530,15 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
         set_silent(model)
     end
 
-    # Safety limits for large (multi-zone) MIPs: accept a 1% optimality gap
-    # and cap the solve time; the best incumbent is still returned
+    # Safety limits for large (multi-zone) MIPs: cap the solve time; the
+    # best incumbent is still returned. The gap tolerance must be tight:
+    # the welfare objective is dominated by price-taker demand bid at the
+    # price cap, so even a 0.1% relative gap is millions of € — enough
+    # slack for the incumbent to curtail demand at the cap in some hour,
+    # which prices that hour at the cap instead of the competitive level.
     set_time_limit_sec(model, 900.0)
     try
-        set_attribute(model, MOI.RelativeGapTolerance(), 0.01)
+        set_attribute(model, MOI.RelativeGapTolerance(), 1e-6)
     catch
         # attribute not supported by this solver version — proceed with defaults
     end
@@ -846,45 +850,134 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
             # order pins the price to its bid exactly — including the demand
             # cap in shortage hours, per EU convention — and otherwise the
             # competitive (supply-side) end of the interval is used.
-            # Skipped for multi-zone books: this reconstruction only sees a
-            # zone's local orders, so it would ignore price coupling through
-            # transmission flows and could publish spurious cross-zone
-            # spreads. In multi-zone solves the flow variables tie zone
-            # prices together and the solver's values are kept as-is.
+            #
+            # Multi-zone books: zones are first grouped into price-coupled
+            # components per period — a link whose flow is strictly inside
+            # its ATC limits carries zero congestion rent, so its endpoint
+            # prices are equal and the coupled zones share one merged order
+            # stack. Links at a limit (including zero-capacity links, whose
+            # flow sits at both limits) decouple, and each component is
+            # priced from its own pooled acceptance pattern. Without this
+            # the solver's price at a degenerate hour is an arbitrary point
+            # of the coupling-feasible set (e.g. one zone at the cap and a
+            # neighbor at the floor, both within the MIP gap).
+            #
+            # Two consistency guards keep the reconstruction from publishing
+            # prices the solved model excludes:
+            # - flow_atol matches the solver's feasibility tolerance: the
+            #   congestion binaries only permit price separation when the
+            #   flow is AT its limit, so a link merely NEAR the limit is
+            #   still price-coupled and must stay in one component.
+            # - Congestion-rent signs are validated per period: at a
+            #   forward-binding link the sink's price may not fall below
+            #   the source's (and symmetrically at a backward-binding one;
+            #   links at both limits, i.e. zero capacity, are free). If any
+            #   sign check fails the period keeps the solver's prices,
+            #   which satisfy these constraints by construction.
             is_multi_zone = flow !== nothing && !isempty(zone_pairs)
             # Well above solver feasibility tolerances (1e-6..1e-5), far
             # below any economically meaningful partial acceptance
             acceptance_atol = 1e-4
-            for node_id in order_book.nodes, time_period in order_book.periods
-                order_idxs = get(orders_by_node_time, (node_id, time_period), Int[])
-                if isempty(order_idxs)
-                    # Orderless cell (data gap): in a single-zone book nothing
-                    # constrains the solver's price — pin it to the floor so
-                    # the output is at least deterministic and recognizable.
-                    # In multi-zone books the market-coupling conditions tie
-                    # the price to neighboring zones, so keep the solver value.
-                    is_multi_zone || (market_prices[node_id][time_period] = order_book.price_limits[1])
-                    continue
+            # A flow within this many MW of its ATC limit counts as binding.
+            # Must sit just above the solver's absolute feasibility
+            # tolerance (~1e-6): anything larger decouples links whose flow
+            # is strictly interior, where the model forced prices equal.
+            flow_atol = 1e-3
+            # Slack for the rent-sign checks (€/MWh), covering float noise
+            # without masking economically meaningful sign violations
+            price_atol = 0.01
+            parent = Dict{String,String}()
+            function find_root(z::String)
+                while parent[z] != z
+                    z = parent[z]
                 end
-                is_multi_zone && continue
-                lo = order_book.price_limits[1]
-                hi = order_book.price_limits[2]
-                marginal_price = nothing
-                for i in order_idxs
-                    o = simple_orders[i]
-                    a = stepwise_acceptance_values[order_ids[i]]
-                    if acceptance_atol < a < 1 - acceptance_atol
-                        marginal_price = marginal_price === nothing ? o.price :
-                                         (o.type == :supply ? max(marginal_price, o.price) :
-                                          min(marginal_price, o.price))
-                    elseif o.type == :supply
-                        a >= 1 - acceptance_atol ? (lo = max(lo, o.price)) : (hi = min(hi, o.price))
-                    else
-                        a >= 1 - acceptance_atol ? (hi = min(hi, o.price)) : (lo = max(lo, o.price))
+                return z
+            end
+            for time_period in order_book.periods
+                # Union-find over uncongested links → coupled components
+                for z in order_book.nodes
+                    parent[z] = z
+                end
+                if is_multi_zone
+                    for pair in zone_pairs
+                        fv = value(flow[pair, time_period])
+                        fwd_cap, bwd_cap = flow_caps[(pair, time_period)]
+                        interior = fv < fwd_cap - flow_atol && fv > -bwd_cap + flow_atol
+                        interior || continue
+                        ra, rb = find_root(pair[1]), find_root(pair[2])
+                        ra == rb || (parent[ra] = rb)
                     end
                 end
-                polished = marginal_price === nothing ? lo : marginal_price
-                market_prices[node_id][time_period] = clamp(polished, min(lo, hi), max(lo, hi))
+                components = Dict{String,Vector{String}}()
+                for z in order_book.nodes
+                    push!(get!(components, find_root(z), String[]), z)
+                end
+
+                candidate = Dict{String,Float64}()
+                for comp_zones in values(components)
+                    order_idxs = Int[]
+                    for z in comp_zones
+                        append!(order_idxs, get(orders_by_node_time, (z, time_period), Int[]))
+                    end
+                    if isempty(order_idxs)
+                        # Orderless component (data gap): nothing economic
+                        # constrains the price — pin it to the floor so the
+                        # output is at least deterministic and recognizable.
+                        # (If a binding link ties this component's price to a
+                        # neighbor, the rent-sign check below rejects the
+                        # floor and the period keeps the solver's prices.)
+                        for z in comp_zones
+                            candidate[z] = order_book.price_limits[1]
+                        end
+                        continue
+                    end
+                    lo = order_book.price_limits[1]
+                    hi = order_book.price_limits[2]
+                    marginal_price = nothing
+                    for i in order_idxs
+                        o = simple_orders[i]
+                        a = stepwise_acceptance_values[order_ids[i]]
+                        if acceptance_atol < a < 1 - acceptance_atol
+                            marginal_price = marginal_price === nothing ? o.price :
+                                             (o.type == :supply ? max(marginal_price, o.price) :
+                                              min(marginal_price, o.price))
+                        elseif o.type == :supply
+                            a >= 1 - acceptance_atol ? (lo = max(lo, o.price)) : (hi = min(hi, o.price))
+                        else
+                            a >= 1 - acceptance_atol ? (hi = min(hi, o.price)) : (lo = max(lo, o.price))
+                        end
+                    end
+                    polished = marginal_price === nothing ? lo : marginal_price
+                    price = clamp(polished, min(lo, hi), max(lo, hi))
+                    for z in comp_zones
+                        candidate[z] = price
+                    end
+                end
+
+                # Rent-sign validation across binding links; on violation the
+                # period keeps the solver's (coupling-consistent) prices
+                consistent = true
+                if is_multi_zone
+                    for pair in zone_pairs
+                        fv = value(flow[pair, time_period])
+                        fwd_cap, bwd_cap = flow_caps[(pair, time_period)]
+                        at_fwd = fv >= fwd_cap - flow_atol
+                        at_bwd = fv <= -bwd_cap + flow_atol
+                        p_src = candidate[pair[1]]
+                        p_snk = candidate[pair[2]]
+                        if at_fwd && !at_bwd
+                            p_snk >= p_src - price_atol || (consistent = false)
+                        elseif at_bwd && !at_fwd
+                            p_src >= p_snk - price_atol || (consistent = false)
+                        end
+                        consistent || break
+                    end
+                end
+                if consistent
+                    for (z, p) in candidate
+                        market_prices[z][time_period] = p
+                    end
+                end
             end
 
             # Extract transmission flow values if multi-zone

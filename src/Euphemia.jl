@@ -621,7 +621,11 @@ function generate_energy_prices(bidding_zone::String, date::Date;
                 mpcc_result = solve_mpcc_market_clearing(order_book; preferred_solver=optimizer, silent=silent)
                 solve_time_seconds = time() - optimization_start_time
 
-                if mpcc_result.status != :optimal
+                # A time-limited solve still returns its best incumbent —
+                # usable, but the optimality gap is unproven, so warn loudly
+                usable = mpcc_result.status == :optimal ||
+                         (mpcc_result.status == :time_limit && !isempty(mpcc_result.market_prices))
+                if !usable
                     # Save failed optimization run (only when persisting results —
                     # eval/backtest runs with save_to_db=false must not touch
                     # production run metadata)
@@ -632,6 +636,8 @@ function generate_energy_prices(bidding_zone::String, date::Date;
 
                     error("MPCC optimization failed with status: $(mpcc_result.status)")
                 end
+                mpcc_result.status == :time_limit &&
+                    @warn "MPCC hit the solve time limit for $bidding_zone $date — using best incumbent (optimality gap unproven; prices may contain tolerance artifacts)"
 
                 println("   ✅ MPCC optimization successful")
                 println("   📊 Objective value: $(round(mpcc_result.objective_value, digits=2))")
@@ -896,26 +902,60 @@ end
 
 Multi-zone order book built from per-zone merit-order books.
 
-Flows between zones inside the clearing set are endogenous (ATC-constrained
-MPCC flow variables), so each zone's observed net-import injections are
-restricted to borders with zones OUTSIDE the set.
+Flows over borders that have ATC data inside the clearing set are endogenous
+(ATC-constrained MPCC flow variables), so observed net-import injections are
+excluded for exactly those borders. In-set borders WITHOUT ATC links keep
+their observed injections: implicit-coupling capacity data does not exist for
+them (e.g. RS has no implicitly coupled borders, HU–RO moved to flow-based
+coupling in June 2022), so the model cannot reproduce those flows
+endogenously — excluding them would silently remove real energy from the
+books and price phantom scarcity.
 """
 function _create_multi_zone_order_book_merit(zones::Vector{String}, day::Date)
     isempty(zones) && error("At least one bidding zone must be specified")
 
     println("🌍 Creating multi-zone order book (merit-order method) for $(length(zones)) zones")
 
-    all_orders = Vector{MarketOrders.MarketOrder}()
+    println("   🔌 Fetching transfer capacities between zones...")
+    transfer_capacity = Network.create_transfer_capacity_from_entsoe(day, zones)
+    zone_pairs = Network.get_zone_pairs(transfer_capacity)
+    # A border only counts as endogenous if it can actually carry flow:
+    # ATC rows with zero capacity in both directions all day (e.g. an
+    # interconnector on full-day outage) bound the flow variable to zero,
+    # so excluding observed imports over such a border would remove real
+    # energy with no endogenous substitute
+    can_carry_flow = Set{Tuple{String,String}}()
+    for ((s, d, _), cap) in transfer_capacity.capacity_forward
+        cap > 0 && push!(can_carry_flow, (s, d))
+    end
+    for ((s, d, _), cap) in transfer_capacity.capacity_backward
+        cap > 0 && push!(can_carry_flow, (s, d))
+    end
+    atc_linked = Dict{String,Set{String}}(z => Set{String}() for z in zones)
+    for (a, b) in zone_pairs
+        (a in zones && b in zones && (a, b) in can_carry_flow) || continue
+        push!(atc_linked[a], b)
+        push!(atc_linked[b], a)
+    end
+
+    function build_zone_book(zone::String, exclude::Vector{String})
+        kept = sort([z for z in zones if z != zone && !(z in exclude)])
+        isempty(kept) ||
+            println("      ℹ️  No usable ATC link to $(join(kept, ", ")) — keeping observed net imports for those borders")
+        return create_merit_order_book(zone, day;
+            net_import_exclude=exclude,
+            target_resolution_minutes=60,
+            fleet_completion=true)
+    end
+
+    zone_orders = Dict{String,Vector{MarketOrders.MarketOrder}}()
     all_periods = Set{String}()
     failed_zones = String[]
 
     for zone in zones
         try
             println("   📊 Processing zone $zone...")
-            result = create_merit_order_book(zone, day;
-                net_import_exclude=[z for z in zones if z != zone],
-                target_resolution_minutes=60,
-                fleet_completion=true)
+            result = build_zone_book(zone, sort(collect(atc_linked[zone])))
 
             if !result.success
                 @warn "Failed to generate merit orders for zone $zone: $(result.message)"
@@ -923,7 +963,7 @@ function _create_multi_zone_order_book_merit(zones::Vector{String}, day::Date)
                 continue
             end
 
-            append!(all_orders, result.order_book.orders)
+            zone_orders[zone] = result.order_book.orders
             for period in result.order_book.periods
                 push!(all_periods, period)
             end
@@ -939,13 +979,34 @@ function _create_multi_zone_order_book_merit(zones::Vector{String}, day::Date)
     isempty(successful_zones) && error("Failed to generate merit orders for any zone")
     if !isempty(failed_zones)
         @warn "Some zones failed: $(join(failed_zones, ", ")). Proceeding with: $(join(successful_zones, ", "))"
+        # A failed zone contributes no node to the book, so the MPCC drops
+        # its flow variables — any surviving zone that excluded observed
+        # imports over a border to it would lose that border's energy
+        # entirely. Rebuild those zones' books keeping the observed imports.
+        for zone in successful_zones
+            affected = sort([c for c in atc_linked[zone] if c in failed_zones])
+            isempty(affected) && continue
+            @warn "Rebuilding $zone book: ATC-linked zone(s) $(join(affected, ", ")) failed — restoring their observed net imports"
+            exclude = sort([c for c in atc_linked[zone] if !(c in failed_zones)])
+            result = build_zone_book(zone, exclude)
+            result.success || error("Rebuild of $zone book failed: $(result.message)")
+            zone_orders[zone] = result.order_book.orders
+            for period in result.order_book.periods
+                push!(all_periods, period)
+            end
+        end
+    end
+
+    all_orders = Vector{MarketOrders.MarketOrder}()
+    for zone in successful_zones
+        append!(all_orders, zone_orders[zone])
     end
 
     periods_vector = sort(collect(all_periods))
 
-    println("   🔌 Fetching transfer capacities between zones...")
-    transfer_capacity = Network.create_transfer_capacity_from_entsoe(day, successful_zones)
-    zone_pairs = Network.get_zone_pairs(transfer_capacity)
+    # Transfer capacities were fetched up front (to decide which borders'
+    # observed net imports to exclude); links to failed zones are filtered
+    # out by the MPCC solver, which restricts pairs to the book's nodes.
     println("   ✅ Found $(length(zone_pairs)) directional transfer capacity links")
 
     order_book = MPCC.MPCCOrderBook(
@@ -1098,7 +1159,12 @@ function run_multi_zone_market_clearing(date::Date;
     println("   Status: $(result.status)")
     println("   Solve time: $(round(result.solve_time, digits=2))s (total: $(round(result.total_time, digits=2))s)")
 
-    if result.status == :optimal
+    # A time-limited solve still returns its best incumbent — usable, but
+    # the optimality gap is unproven, so warn loudly
+    result.status == :time_limit && !isempty(result.market_prices) &&
+        @warn "Multi-zone MPCC hit the solve time limit for $date — using best incumbent (optimality gap unproven; prices may contain tolerance artifacts)"
+    if result.status == :optimal ||
+       (result.status == :time_limit && !isempty(result.market_prices))
         println("   Objective value: $(round(result.objective_value, digits=2))")
 
         # Report zonal prices
