@@ -572,11 +572,18 @@ function get_generators(map_code::String, day::Dates.Date;
             GROUP BY asset_code
         ),
         -- Find generators with recent actual generation (last 60 days)
-        -- This catches plants with stale validity dates that are still operating
+        -- This catches plants with stale validity dates that are still operating.
+        -- Restricting to the zone's unit codes lets the
+        -- (generation_unit_code, date_time_utc) index drive the lookup —
+        -- a date-only filter would scan the 54 GB table (~150 s per call).
         recent_generation AS (
             SELECT DISTINCT generation_unit_code
             FROM entsoe.actual_generation_output_per_generation_unit
-            WHERE date_time_utc >= \$2::timestamp - INTERVAL '60 days'
+            WHERE generation_unit_code IN (
+                    SELECT DISTINCT generation_unit_code
+                    FROM entsoe.production_and_generation_units
+                    WHERE area_map_code = \$1)
+              AND date_time_utc >= \$2::timestamp - INTERVAL '60 days'
               AND date_time_utc < \$2::timestamp + INTERVAL '1 day'
               AND actual_generation_output_mw > 0
         ),
@@ -585,13 +592,20 @@ function get_generators(map_code::String, day::Dates.Date;
         -- last 7 days) proves the record wrong. ENTSO-E has multi-year
         -- 'Active' 0-MW outage records for units that are actually running
         -- (e.g. Romanian hydro), which would otherwise be excluded.
+        -- Written as a correlated EXISTS (one index probe per outaged asset
+        -- via the (generation_unit_code, date_time_utc) index, early exit on
+        -- first hit) — a JOIN from the 54 GB output table takes ~70 s.
         stale_outage_override AS (
-            SELECT DISTINCT a.generation_unit_code
-            FROM entsoe.actual_generation_output_per_generation_unit a
-            JOIN active_outages o ON o.asset_code = a.generation_unit_code
-            WHERE a.date_time_utc >= GREATEST(o.earliest_start, \$2::timestamp - INTERVAL '7 days')
-              AND a.date_time_utc < \$2::timestamp
-              AND a.actual_generation_output_mw > 1
+            SELECT o.asset_code AS generation_unit_code
+            FROM active_outages o
+            WHERE EXISTS (
+                SELECT 1
+                FROM entsoe.actual_generation_output_per_generation_unit a
+                WHERE a.generation_unit_code = o.asset_code
+                  AND a.date_time_utc >= GREATEST(o.earliest_start, \$2::timestamp - INTERVAL '7 days')
+                  AND a.date_time_utc < \$2::timestamp
+                  AND a.actual_generation_output_mw > 1
+            )
         )
         SELECT DISTINCT ON (g.generation_unit_code)
             g.valid_from,
@@ -661,7 +675,11 @@ function get_generators(map_code::String, day::Dates.Date;
         WITH recent_generation AS (
             SELECT DISTINCT generation_unit_code
             FROM entsoe.actual_generation_output_per_generation_unit
-            WHERE date_time_utc >= \$2::timestamp - INTERVAL '60 days'
+            WHERE generation_unit_code IN (
+                    SELECT DISTINCT generation_unit_code
+                    FROM entsoe.production_and_generation_units
+                    WHERE area_map_code = \$1)
+              AND date_time_utc >= \$2::timestamp - INTERVAL '60 days'
               AND date_time_utc < \$2::timestamp + INTERVAL '1 day'
               AND actual_generation_output_mw > 0
         )
