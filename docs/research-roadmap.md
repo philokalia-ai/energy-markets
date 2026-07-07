@@ -41,6 +41,22 @@ the signal set, and test for **cross-firm correlation beyond common signals**
 (the collusion test — coordinated behavior looks like correlated markup
 shifts that shared observables cannot explain).
 
+**Phase B status (steps 2–3, 2026-07, branch `analysis/phase-b-attribution`).**
+The pre-specified statistical attribution is done and written up in
+[`docs/phase-b-analysis.md`](phase-b-analysis.md) (four tests A–D, GR-only,
+support tables `simulations.phase_b_daily` / `rsi_hourly` / `phase_b_firm_dark`,
+code + captured output under `analysis/phase_b/`). Headline: the core
+withholding-markup hypotheses are **not supported** — after year FE and
+cost/demand/hydro controls, unfiled dark capacity does not significantly explain
+the GR daily residual (strong dark_mw +2.7 €/MWh per GW, 95% CI [−0.6, +6.0],
+p=0.11; sign flips negative once the 2022 regulated window is dropped), and
+pivotal (RSI_PPC<1) hours carry a *negative* residual (−19.8 €/MWh), the opposite
+of a pivotal-markup story — partly because the counterfactual itself climbs
+scarcity aggressively. Exploratory and cross-firm co-movement signals (C, D) are
+weak and equally consistent with common cost/weather drivers. A publishable null;
+next step is either sharpening the counterfactual's scarcity behaviour (so B is
+not confounded by model over-shoot) or richer firm mapping for D.
+
 ## Where we are (Phase A state)
 
 **Model:** `:merit_order` order books + MPCC clearing. Formulation is now
