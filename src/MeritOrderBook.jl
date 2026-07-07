@@ -233,6 +233,11 @@ Create a deterministic merit-order-based order book for MPCC clearing.
 - `demand_elastic_share` / `demand_elastic_price`: size and price of the
   price-sensitive demand tail
 - `price_cap`: price of the inelastic demand tranche
+- `fleet_completion`: add aggregate capacity where the type's recent output
+  (p95) exceeds the unit-level fleet (under-reported fleets: RO/BG/RS)
+- `fleet_truthing` / `derate_headroom`: derate baseload types whose
+  unit-level fleet exceeds `derate_headroom ×` recent p95 — phantom
+  capacity from unfiled derates or fuel constraints (2022 GR lignite)
 """
 function create_merit_order_book(
     bidding_zone::String,
@@ -254,7 +259,9 @@ function create_merit_order_book(
     include_net_imports::Bool=true,
     net_import_exclude::Vector{String}=String[],
     target_resolution_minutes::Union{Int,Nothing}=nothing,
-    fleet_completion::Bool=true
+    fleet_completion::Bool=true,
+    fleet_truthing::Bool=true,
+    derate_headroom::Float64=1.15
 )
     try
         println("📊 Creating merit-order order book for $bidding_zone on $day")
@@ -270,25 +277,95 @@ function create_merit_order_book(
         # add it as one aggregate generator per fuel type. Wind/solar are
         # excluded (netted via the RES forecast). Harmless for zones with
         # good unit coverage — the gap is ~0 there (verified on GR).
-        type_p95 = fleet_completion ? get_type_output_p95(bidding_zone, day) : Dict{String,Float64}()
-        for (ptype_raw, p95) in type_p95
-            ptype = normalize_fuel_type_name(ptype_raw)
-            ptype in ("Wind Onshore", "Wind Offshore", "Solar") && continue
-            fleet = sum((g.p_max for g in generators
-                         if g.fuel_type == Symbol(ptype)); init=0.0)
-            gap = p95 - fleet
-            gap > 100.0 || continue
-            push!(generators, Generator(
-                "AGG-$(bidding_zone)-$(replace(ptype, " " => "_"))",
-                "Aggregate small units: $ptype",
-                Symbol(ptype),
-                bidding_zone,
-                gap,
-                0.0,
-                bidding_zone,
-                get_marginal_cost(day, ptype, bidding_zone)))
-            println("  ➕ Fleet completion: +$(round(Int, gap)) MW $ptype " *
-                    "(recent p95 $(round(Int, p95)) MW vs $(round(Int, fleet)) MW unit-level)")
+        # Shared by fleet completion (upward) and fleet-truthing derate
+        # (downward); keys normalized once to canonical fuel names
+        type_p95_raw = (fleet_completion || fleet_truthing) ?
+                       get_type_output_p95(bidding_zone, day) : Dict{String,Float64}()
+        type_p95 = Dict{String,Float64}(
+            normalize_fuel_type_name(k) => v for (k, v) in type_p95_raw)
+        if fleet_completion
+            for (ptype, p95) in type_p95
+                ptype in ("Wind Onshore", "Wind Offshore", "Solar") && continue
+                fleet = sum((g.p_max for g in generators
+                             if g.fuel_type == Symbol(ptype)); init=0.0)
+                gap = p95 - fleet
+                gap > 100.0 || continue
+                push!(generators, Generator(
+                    "AGG-$(bidding_zone)-$(replace(ptype, " " => "_"))",
+                    "Aggregate small units: $ptype",
+                    Symbol(ptype),
+                    bidding_zone,
+                    gap,
+                    0.0,
+                    bidding_zone,
+                    get_marginal_cost(day, ptype, bidding_zone)))
+                println("  ➕ Fleet completion: +$(round(Int, gap)) MW $ptype " *
+                        "(recent p95 $(round(Int, p95)) MW vs $(round(Int, fleet)) MW unit-level)")
+            end
+        end
+
+        # Fleet-truthing derate — the symmetric case of fleet completion.
+        # When the unit-level fleet (after outage filtering) far exceeds
+        # what the type has recently delivered, the excess is phantom
+        # capacity: unfiled long-term derates, fuel-supply constraints, or
+        # stale unit records. 2022 GR lignite is the canonical case — the
+        # book offered ~2.2 GW at lignite SRMC while the real fleet's p95
+        # was ~1.2 GW, so cheap phantom lignite displaced gas from the
+        # margin and the whole crisis year cleared ~140 €/MWh low. Thermal
+        # types only: hydro availability is handled by the water-value
+        # offer scale, and RES never enters the thermal stack. The signal
+        # (trailing 30-day p95, strictly historical) is ex-ante; 15%
+        # headroom above p95 leaves room for genuinely tight days to call
+        # on more of the fleet than it recently ran.
+        #
+        # Baseload/fuel-constrained types ONLY. For a fuel whose SRMC sits
+        # below the market price, running under its capacity means it
+        # genuinely could not run (mining limits, fuel supply, unfiled
+        # derates) — it would have been dispatched otherwise. Mid-merit
+        # and peaking fuels (gas, oil) run below capacity simply because
+        # of their merit-order position; their capacity IS available at
+        # its SRMC, and derating them manufactures phantom scarcity.
+        derate_types = ("Fossil Brown coal/Lignite", "Fossil Hard coal",
+                        "Fossil Oil shale", "Fossil Coal-derived gas",
+                        "Fossil Peat", "Nuclear")
+        # One scale per fuel type, applied in a single pass. Iterates the
+        # FLEET's types (not type_p95's keys): a derate-listed type with a
+        # p95 of zero is a fully offline fleet and derates all the way
+        # down, while a type entirely absent from the aggregate table is
+        # ambiguous (never-reporting type vs ETL gap) and is skipped
+        # loudly rather than silently zeroed. Thermal orders offer raw
+        # p_max (availability_factor only shapes the scarcity margin), so
+        # the target compares against the raw fleet sum. p_min scales
+        # proportionally with p_max — clamping instead would balloon the
+        # must-run fraction of every derated unit.
+        derate_scale = Dict{Symbol,Float64}()
+        if fleet_truthing
+            for ptype in derate_types
+                fsym = Symbol(ptype)
+                fleet_raw = sum((g.p_max for g in generators if g.fuel_type == fsym); init=0.0)
+                fleet_raw > 0 || continue
+                if !haskey(type_p95, ptype)
+                    println("  ⚠️  Fleet-truthing: no recent output data for $ptype " *
+                            "($(round(Int, fleet_raw)) MW fleet) — derate skipped")
+                    continue
+                end
+                target = derate_headroom * type_p95[ptype]
+                fleet_raw > target + 100.0 || continue
+                derate_scale[fsym] = target / fleet_raw
+                println("  ➖ Fleet-truthing derate: $ptype ×$(round(target / fleet_raw, digits=2)) " *
+                        "(fleet $(round(Int, fleet_raw)) MW vs recent p95 $(round(Int, type_p95[ptype])) MW)")
+            end
+        end
+        if !isempty(derate_scale)
+            generators = [begin
+                s = get(derate_scale, g.fuel_type, 1.0)
+                s < 1.0 ?
+                    Generator(g.code, g.name, g.fuel_type, g.location,
+                              g.p_max * s, g.p_min * s,
+                              g.bidding_zone, g.marginal_cost,
+                              g.ramp_up, g.ramp_down, g.min_uptime, g.min_downtime) :
+                    g
+            end for g in generators]
         end
         loads = get_loads(bidding_zone, day)
         renewables = get_generation_forecast_for_wind_and_solar(bidding_zone, day)
@@ -493,14 +570,21 @@ function create_merit_order_book(
                     if g.code in committed
                         must_run_qty = min(g.p_min, offered_pmax(g))
                         # Graduated self-scheduling: the deepest block is
-                        # near-free (never shut down), the rest bids half
-                        # cost — real curves are convex, not a cliff
+                        # near-free (never shut down), the rest bids below
+                        # cost — real curves are convex, not a cliff. The
+                        # below-cost discount is ABSOLUTE (startup-cost
+                        # amortization is €/MWh over the p_min hours, not a
+                        # fraction of fuel cost): a proportional 0.5×SRMC
+                        # discount is benign at gas ≈ 90 (−45) but capped
+                        # crisis evenings at half the real gas cost
+                        # (−212 at TTF 218, 2022) and sank the whole year.
                         deep_qty = must_run_qty * 0.6
                         push!(orders, SimpleOrder(:supply,
                             g.marginal_cost * must_run_price_factor, deep_qty,
                             Symbol(bidding_zone), date_time, resolution_minutes))
                         push!(orders, SimpleOrder(:supply,
-                            g.marginal_cost * 0.5, must_run_qty - deep_qty,
+                            max(g.marginal_cost * 0.5, g.marginal_cost - 40.0),
+                            must_run_qty - deep_qty,
                             Symbol(bidding_zone), date_time, resolution_minutes))
                         supply_orders_count += 2
                         total_supply_capacity += must_run_qty
