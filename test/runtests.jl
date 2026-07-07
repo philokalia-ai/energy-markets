@@ -115,6 +115,13 @@ println()
         include(joinpath(@__DIR__, "test_mpcc.jl"))
     end
 
+    @testset "Scenario Hooks" begin
+        println("\n" * "=" ^ 60)
+        println("Running Scenario Hooks Tests...")
+        println("=" ^ 60)
+        include(joinpath(@__DIR__, "test_scenario_hooks.jl"))
+    end
+
 end
 
 # =============================================================================

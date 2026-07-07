@@ -158,7 +158,14 @@ end
 
 function __init__()
     DotEnv.load!(".")
-    preinit_pool()
+    # DuckDB backend via ENV: read from a self-contained extract and SKIP the
+    # eager LibPQ pool entirely so the library works with no Postgres at all.
+    if lowercase(get(ENV, "EUPHEMIA_DATA_STORE", "")) == "duckdb"
+        path = get(ENV, "EUPHEMIA_DUCKDB_PATH", "")
+        configure_data_store!(backend=:duckdb, duckdb_path=path)
+    else
+        preinit_pool()
+    end
     @info "Initialization done"
 end
 
@@ -316,8 +323,11 @@ export run_iterative_multi_zone_market_clearing  # Iterative UC-MPCC with flow f
 export compute_net_imports_from_flows, compute_max_flow_change, apply_damping  # Flow conversion utilities
 export compute_max_price_change, compute_max_relative_flow_change  # Price-based convergence
 
-# Solver Environment Caching  
+# Solver Environment Caching
 export get_cached_optimizer, clear_solver_cache!
+
+# Data store configuration (Postgres | DuckDB extract)
+export configure_data_store!
 
 # Alternative order book functionality
 export create_adjusted_order_book, AdjustedOrderBookResult, print_order_book_summary
@@ -558,7 +568,11 @@ function generate_energy_prices(bidding_zone::String, date::Date;
     random_seed::Union{Int,Nothing}=nothing,
     silent::Bool=true,
     save_to_db::Bool=false,
-    force_rerun::Bool=false)
+    force_rerun::Bool=false,
+    load_modifier::Union{Nothing,Function}=nothing,
+    renewable_modifier::Union{Nothing,Function}=nothing,
+    extra_orders::Union{Nothing,Function}=nothing,
+    strategist::Union{Nothing,Function}=nothing)
 
     # Validate inputs
     if !(order_method in [:uc_based, :alternative, :merit_order])
@@ -590,7 +604,11 @@ function generate_energy_prices(bidding_zone::String, date::Date;
             println("   Using $(order_method == :alternative ? "alternative" : "merit-order") book creation")
             order_book_result = order_method == :alternative ?
                                 create_adjusted_order_book(bidding_zone, date; random_seed=random_seed) :
-                                create_merit_order_book(bidding_zone, date)
+                                create_merit_order_book(bidding_zone, date;
+                                    load_modifier=load_modifier,
+                                    renewable_modifier=renewable_modifier,
+                                    extra_orders=extra_orders,
+                                    strategist=strategist)
 
             if !order_book_result.success
                 # Check if this is a data availability issue (non-retryable)

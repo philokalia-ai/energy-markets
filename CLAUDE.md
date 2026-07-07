@@ -620,6 +620,119 @@ When `parallel=true` in `run_multi_zone_market_clearing()`:
 - Override with explicit `max_workers=N` if needed
 - "Max distributed workers" is unrelated (for Gurobi's distributed MIP, not parallel independent solves)
 
+## Data stores and scenario hooks
+
+### Data store: Postgres or a DuckDB extract
+
+By default the library reads from the live Postgres `energy` database. It can
+instead read from a **self-contained DuckDB extract** — a single `.duckdb`
+file that mirrors the same `schema.table` names, so single-zone merit-order
+pricing and scenario analysis run fully offline with no Postgres available.
+
+```julia
+# Switch at runtime
+configure_data_store!(backend=:duckdb, duckdb_path="data/extracts/euphemia_2026_see.duckdb")
+generate_energy_prices("GR", Date(2026, 1, 26); order_method=:merit_order, save_to_db=false)
+configure_data_store!(backend=:postgres)   # switch back
+```
+
+Or select DuckDB from the environment at module load (this also **skips** the
+eager LibPQ pool entirely, so nothing needs Postgres):
+
+```bash
+EUPHEMIA_DATA_STORE=duckdb \
+EUPHEMIA_DUCKDB_PATH=data/extracts/euphemia_2026_see.duckdb \
+  julia --project=. test/scripts/eval_pricing_accuracy.jl merit_order "2026-01-26" GR
+```
+
+**v1 limitations:**
+- **Read-only.** Every write path (`save_energy_prices`, `save_optimization_run`,
+  UC caching, `ensure_indexes`, …) warns once and no-ops under DuckDB. Run
+  pricing with `save_to_db=false`.
+- **Single-zone only.** The extract and the scenario hooks target the
+  single-zone `:merit_order` path. Multi-zone clearing is not threaded.
+
+**How it works:** `sql2df` dispatches on `DATA_STORE[]`. The Postgres path is
+unchanged; the DuckDB path applies a small dialect rewrite to our SQL — strips
+` AT TIME ZONE 'UTC'` (the extract stores every timestamp as naive UTC),
+maps `= ANY($n)` → `IN (SELECT unnest($n))`, `<> ALL($n)` →
+`NOT IN (SELECT unnest($n))`, and `to_char(x,'YYYYMMDD-HH24MI')` →
+`strftime(x,'%Y%m%d-%H%M')` — then runs it against one lazily-opened,
+lock-guarded DuckDB connection. DuckDB prices are bit-identical to Postgres
+for the same day.
+
+### Building a DuckDB extract
+
+```bash
+ZONES="GR,BG,RO,RS,HU" START_DATE=2026-01-01 END_DATE=2026-06-30 \
+  OUT=data/extracts/euphemia_2026_see.duckdb \
+  julia --project=. bin/build_duckdb_extract.jl
+```
+
+The builder reads Postgres (normal `.env`), converts every timestamptz column
+to naive UTC, and writes the same `schema.table` names. Unit-level and
+per-type/output tables are windowed back 400 days (covers the 365-day ramp
+inference, 60-day recent-generation, and 30-day p95 lookbacks); the tiny
+weekly reservoir table is kept at full history so the prior-year
+reservoir-dryness comparison is exact. It prints per-table row counts and
+aborts if the projected size would exceed ~8 GB. The 2026 SEE extract is
+~96 MB (7.1M rows). `data/` is git-ignored — never commit the `.duckdb` file.
+
+### Scenario hooks on `create_merit_order_book` / `generate_energy_prices`
+
+Four optional `Function` kwargs let you run counterfactual scenarios. When all
+are `nothing` the code path is byte-identical to today (verified by the
+benchmark). All four thread through `generate_energy_prices` on the
+`:merit_order` path. Multi-zone propagation is out of scope (v1).
+
+- `load_modifier(timeslot::String, load_mw::Float64) -> Float64` — applied to
+  every `load_by_time` entry at the source, so it propagates to net demand,
+  scarcity margin, water value and demand orders.
+- `renewable_modifier(timeslot::String, mw::Float64) -> Float64` — same, on
+  `renewable_by_time`.
+- `extra_orders(ctx) -> Vector{SimpleOrder}` — appended before merging; `ctx =
+  (zone, day, timeslots, resolution_minutes, load_by_time, renewable_by_time)`.
+  Both `:supply` and `:demand` allowed (a new plant / ships requesting power).
+- `strategist(ctx) -> Vector{Tuple{SimpleOrder,String}}` — see below.
+
+```julia
+# "+300 MW of solar": add 300 MW to renewables during daylight slots
+solar = (ts, v) -> (8 <= parse(Int, ts[10:11]) <= 17) ? v + 300.0 : v
+prices = generate_energy_prices("GR", Date(2026, 1, 26);
+    order_method=:merit_order, save_to_db=false, renewable_modifier=solar)
+
+# "ships request 200 MW more power": extra inelastic demand at the cap
+ships = ctx -> [SimpleOrder(:demand, 3000.0, 200.0, Symbol(ctx.zone),
+                    DateTime(ts, dateformat"yyyymmdd-HHMM"), ctx.resolution_minutes)
+                for ts in ctx.timeslots]
+prices = generate_energy_prices("GR", Date(2026, 1, 26);
+    order_method=:merit_order, save_to_db=false, extra_orders=ships)
+```
+
+### Strategist hook (tagged orders + firm map)
+
+Every order in the merit book is tagged with an owner: the generator code for
+unit orders (including fleet-completion aggregates), `"RES"` for the renewable
+forecast, `"IMPORT"` for net-import injections, `"DEMAND"` for demand, `"EXTRA"`
+for `extra_orders`. The `strategist` hook runs after `extra_orders` and before
+merging; its returned set **replaces** the tagged order list. It receives
+`ctx = (tagged_orders, zone, day, timeslots, load_by_time, renewable_by_time,
+firm_of)` where `firm_of` is a `Dict{String,String}` unit_code→firm loaded from
+`simulations.unit_firms` (empty + warn if the table is missing). A plain
+`Vector{SimpleOrder}` return is also accepted and re-tagged `"STRATEGIST"`.
+
+```julia
+# "What would prices be if the incumbent PPC marked up its units 20%?"
+ppc_markup = ctx -> [
+    (o.type == :supply && get(ctx.firm_of, tag, "") == "PPC" ?
+        SimpleOrder(o.type, o.price * 1.2, o.quantity, o.zone, o.date_time, o.resolution_code) : o,
+     tag)
+    for (o, tag) in ctx.tagged_orders]
+
+prices = generate_energy_prices("GR", Date(2026, 1, 26);
+    order_method=:merit_order, save_to_db=false, strategist=ppc_markup)
+```
+
 ## GitHub Actions / CI
 
 The project includes several GitHub workflows for automated price generation:

@@ -96,6 +96,32 @@ function get_net_imports(bidding_zone::String, day::Date;
     return Dict{Int,Float64}(row.h => row.net_import for row in eachrow(df))
 end
 
+"""
+    get_firm_of(bidding_zone::String) -> Dict{String,String}
+
+Map of `unit_code => firm` for a zone, from `simulations.unit_firms` (a small
+read-only reference table, present on both backends). Returns an empty Dict
+(and warns once) when the table is missing — the strategist hook then simply
+has no firm information to key on.
+"""
+function get_firm_of(bidding_zone::String)
+    try
+        df = sql2df_with_retry(
+            """
+            SELECT unit_code, firm
+            FROM simulations.unit_firms
+            WHERE zone = \$1 AND unit_code IS NOT NULL AND firm IS NOT NULL
+            """,
+            [bidding_zone]
+        )
+        return Dict{String,String}(String(row.unit_code) => String(row.firm)
+                                   for row in eachrow(df))
+    catch e
+        @warn "simulations.unit_firms unavailable; strategist firm_of will be empty" exception=e
+        return Dict{String,String}()
+    end
+end
+
 # Fuel types priced at water value instead of SRMC
 const WATER_VALUE_FUEL_TYPES =
     [Symbol("Hydro Water Reservoir"), Symbol("Hydro Pumped Storage")]
@@ -233,6 +259,40 @@ Create a deterministic merit-order-based order book for MPCC clearing.
 - `demand_elastic_share` / `demand_elastic_price`: size and price of the
   price-sensitive demand tail
 - `price_cap`: price of the inelastic demand tranche
+
+# Scenario hooks (all default `nothing`; when all are `nothing` the code path
+# is byte-identical to the no-kwargs call)
+- `load_modifier::Union{Nothing,Function}`: `f(timeslot::String, load_mw::Float64) -> Float64`,
+  applied to every entry of `load_by_time` at the source (after temporal
+  disaggregation and any hourly aggregation), so the change propagates to net
+  demand, scarcity margin, water value and demand orders.
+- `renewable_modifier::Union{Nothing,Function}`: same signature, applied to
+  `renewable_by_time` at the same point (e.g. `(ts, v) -> v + 300` during
+  daylight slots models +300 MW of solar).
+- `extra_orders::Union{Nothing,Function}`: `f(ctx) -> Vector{SimpleOrder}`,
+  called after all standard orders are built and BEFORE merging. `ctx` is a
+  NamedTuple `(zone, day, timeslots, resolution_minutes, load_by_time,
+  renewable_by_time)`. Returned orders (`:supply` or `:demand`) are appended
+  (tagged `"EXTRA"`). Models "ships request more power" (cap-priced demand) or
+  "a new plant" (supply).
+- `strategist::Union{Nothing,Function}`: `f(ctx) -> Vector{Tuple{SimpleOrder,String}}`
+  (a plain `Vector{SimpleOrder}` is also accepted and re-tagged `"STRATEGIST"`),
+  called after `extra_orders` and before merging. `ctx` is a NamedTuple
+  `(tagged_orders, zone, day, timeslots, load_by_time, renewable_by_time,
+  firm_of)` where `firm_of` is a `Dict{String,String}` unit_code→firm from
+  `simulations.unit_firms`. The returned set REPLACES the tagged order list.
+
+  Example — "what if the incumbent PPC marked up its peakers' top tranches 20%?":
+  ```julia
+  strat = ctx -> [ (firm_of_ppc(ctx, o, tag) ? bump(o) : o, tag)
+                   for (o, tag) in ctx.tagged_orders ]
+  ```
+  A strategist that finds all orders whose `firm_of[tag] == "PPC"` and
+  multiplies their two top tranche prices by 1.2, returning everything else
+  unchanged.
+
+Only the single-zone (`:merit_order`) path threads these hooks; multi-zone
+clearing does not (v1 limitation).
 """
 function create_merit_order_book(
     bidding_zone::String,
@@ -254,7 +314,11 @@ function create_merit_order_book(
     include_net_imports::Bool=true,
     net_import_exclude::Vector{String}=String[],
     target_resolution_minutes::Union{Int,Nothing}=nothing,
-    fleet_completion::Bool=true
+    fleet_completion::Bool=true,
+    load_modifier::Union{Nothing,Function}=nothing,
+    renewable_modifier::Union{Nothing,Function}=nothing,
+    extra_orders::Union{Nothing,Function}=nothing,
+    strategist::Union{Nothing,Function}=nothing
 )
     try
         println("📊 Creating merit-order order book for $bidding_zone on $day")
@@ -326,6 +390,21 @@ function create_merit_order_book(
             target_timeslots = sort(collect(keys(load_by_time)))
             println("  🕐 Aggregated $(resolution_minutes)-min data to hourly ($(length(target_timeslots)) slots)")
             resolution_minutes = target_resolution_minutes
+        end
+
+        # Scenario demand/supply modifiers, applied at the SOURCE dictionaries
+        # (after disaggregation and any hourly aggregation) so the change
+        # propagates to net demand, scarcity margin, water value and demand
+        # orders. No-op when the hooks are nothing.
+        if load_modifier !== nothing
+            for ts in keys(load_by_time)
+                load_by_time[ts] = load_modifier(ts, load_by_time[ts])
+            end
+        end
+        if renewable_modifier !== nothing
+            for ts in keys(renewable_by_time)
+                renewable_by_time[ts] = renewable_modifier(ts, renewable_by_time[ts])
+            end
         end
 
         # Residual demand per slot (load minus renewables) drives water value
@@ -419,7 +498,13 @@ function create_merit_order_book(
             cum_capacity += availability_factor * g.p_max
         end
 
-        orders = SimpleOrder[]
+        # Every order is tagged with an owner (Feature 5, strategist hook):
+        # the generator code for unit orders, "RES" for the renewable
+        # forecast, "IMPORT" for net-import injections, "DEMAND" for demand
+        # orders, "EXTRA" for extra_orders, "STRATEGIST" for strategist
+        # replacements. Tags never affect the SimpleOrder values, so with no
+        # hooks the merged book is byte-identical to before.
+        tagged = Tuple{SimpleOrder,String}[]
         supply_orders_count = 0
         demand_orders_count = 0
         total_demand_quantity = 0.0
@@ -432,8 +517,8 @@ function create_merit_order_book(
             # price-taker; support schemes make it insensitive to price)
             res_qty = get(renewable_by_time, ts, 0.0)
             if res_qty > 0.1
-                push!(orders, SimpleOrder(:supply, 1.0, res_qty,
-                    Symbol(bidding_zone), date_time, resolution_minutes))
+                push!(tagged, (SimpleOrder(:supply, 1.0, res_qty,
+                    Symbol(bidding_zone), date_time, resolution_minutes), "RES"))
                 supply_orders_count += 1
                 total_supply_capacity += res_qty
             end
@@ -442,13 +527,13 @@ function create_merit_order_book(
             # demand (exports) — scheduled flows are committed either way
             ni = slot_import(ts)
             if ni > 0.1
-                push!(orders, SimpleOrder(:supply, 1.0, ni,
-                    Symbol(bidding_zone), date_time, resolution_minutes))
+                push!(tagged, (SimpleOrder(:supply, 1.0, ni,
+                    Symbol(bidding_zone), date_time, resolution_minutes), "IMPORT"))
                 supply_orders_count += 1
                 total_supply_capacity += ni
             elseif ni < -0.1
-                push!(orders, SimpleOrder(:demand, price_cap, -ni,
-                    Symbol(bidding_zone), date_time, resolution_minutes))
+                push!(tagged, (SimpleOrder(:demand, price_cap, -ni,
+                    Symbol(bidding_zone), date_time, resolution_minutes), "IMPORT"))
                 demand_orders_count += 1
                 total_demand_quantity += -ni
             end
@@ -479,8 +564,8 @@ function create_merit_order_book(
                     # output vs the zone's own long-run level.
                     water_value = gas_srmc * (1.0 + water_value_dry_boost * hydro_dryness) *
                                   (water_value_base + water_value_span * norm_demand)
-                    push!(orders, SimpleOrder(:supply, water_value, offered_pmax(g),
-                        Symbol(bidding_zone), date_time, resolution_minutes))
+                    push!(tagged, (SimpleOrder(:supply, water_value, offered_pmax(g),
+                        Symbol(bidding_zone), date_time, resolution_minutes), g.code))
                     supply_orders_count += 1
                     total_supply_capacity += offered_pmax(g)
                 else
@@ -496,12 +581,12 @@ function create_merit_order_book(
                         # near-free (never shut down), the rest bids half
                         # cost — real curves are convex, not a cliff
                         deep_qty = must_run_qty * 0.6
-                        push!(orders, SimpleOrder(:supply,
+                        push!(tagged, (SimpleOrder(:supply,
                             g.marginal_cost * must_run_price_factor, deep_qty,
-                            Symbol(bidding_zone), date_time, resolution_minutes))
-                        push!(orders, SimpleOrder(:supply,
+                            Symbol(bidding_zone), date_time, resolution_minutes), g.code))
+                        push!(tagged, (SimpleOrder(:supply,
                             g.marginal_cost * 0.5, must_run_qty - deep_qty,
-                            Symbol(bidding_zone), date_time, resolution_minutes))
+                            Symbol(bidding_zone), date_time, resolution_minutes), g.code))
                         supply_orders_count += 2
                         total_supply_capacity += must_run_qty
                     end
@@ -514,8 +599,8 @@ function create_merit_order_book(
                         price = g.marginal_cost * mult * (i == 1 ? 1.0 : scarcity)
                         qty = flexible_capacity * share
                         qty < 0.1 && continue
-                        push!(orders, SimpleOrder(:supply, price, qty,
-                            Symbol(bidding_zone), date_time, resolution_minutes))
+                        push!(tagged, (SimpleOrder(:supply, price, qty,
+                            Symbol(bidding_zone), date_time, resolution_minutes), g.code))
                         supply_orders_count += 1
                         total_supply_capacity += qty
                     end
@@ -529,18 +614,58 @@ function create_merit_order_book(
             gd = gross_demand[ts]
 
             inelastic_qty = gd * (1.0 - demand_elastic_share)
-            push!(orders, SimpleOrder(:demand, price_cap, inelastic_qty,
-                Symbol(bidding_zone), date_time, resolution_minutes))
+            push!(tagged, (SimpleOrder(:demand, price_cap, inelastic_qty,
+                Symbol(bidding_zone), date_time, resolution_minutes), "DEMAND"))
             demand_orders_count += 1
 
             elastic_qty = gd * demand_elastic_share
             if elastic_qty > 0.1
-                push!(orders, SimpleOrder(:demand, demand_elastic_price, elastic_qty,
-                    Symbol(bidding_zone), date_time, resolution_minutes))
+                push!(tagged, (SimpleOrder(:demand, demand_elastic_price, elastic_qty,
+                    Symbol(bidding_zone), date_time, resolution_minutes), "DEMAND"))
                 demand_orders_count += 1
             end
             total_demand_quantity += gd
         end
+
+        # Feature 3/4: extra scenario orders appended after all standard
+        # orders and BEFORE merging. Both :supply and :demand are allowed.
+        if extra_orders !== nothing
+            ctx = (zone=bidding_zone, day=day, timeslots=target_timeslots,
+                   resolution_minutes=resolution_minutes,
+                   load_by_time=load_by_time, renewable_by_time=renewable_by_time)
+            for o in extra_orders(ctx)
+                push!(tagged, (o, "EXTRA"))
+                if o.type == :supply
+                    supply_orders_count += 1
+                    total_supply_capacity += o.quantity
+                else
+                    demand_orders_count += 1
+                    total_demand_quantity += o.quantity
+                end
+            end
+        end
+
+        # Feature 5: strategist hook, called after extra_orders and before
+        # merging. It receives the full tagged order list plus a unit→firm
+        # map and RETURNS the replacement tagged list.
+        if strategist !== nothing
+            firm_of = get_firm_of(bidding_zone)
+            sctx = (tagged_orders=tagged, zone=bidding_zone, day=day,
+                    timeslots=target_timeslots, load_by_time=load_by_time,
+                    renewable_by_time=renewable_by_time, firm_of=firm_of)
+            result = strategist(sctx)
+            # Accept either Vector{Tuple{SimpleOrder,String}} or a plain
+            # Vector{SimpleOrder} (re-tagged "STRATEGIST").
+            tagged = Tuple{SimpleOrder,String}[
+                x isa Tuple ? (x[1], x[2]) : (x, "STRATEGIST") for x in result]
+            # Recount from the replacement set so summary stats stay accurate
+            supply_orders_count = count(t -> t[1].type == :supply, tagged)
+            demand_orders_count = count(t -> t[1].type == :demand, tagged)
+            total_supply_capacity = sum((t[1].quantity for t in tagged if t[1].type == :supply); init=0.0)
+            total_demand_quantity = sum((t[1].quantity for t in tagged if t[1].type == :demand); init=0.0)
+        end
+
+        orders = SimpleOrder[t[1] for t in tagged]
 
         # Merge orders with identical (type, price, timeslot): all units of a
         # fuel type bid the same SRMC-derived tranche prices, so a zone-day

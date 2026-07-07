@@ -891,6 +891,7 @@ Uses delete-before-insert pattern for clean replacement of existing results.
 """
 function save_uc_results(solution::NamedTuple, bidding_zone::String, day::Dates.Date;
                          code_version::Int=4)::Union{Int,Nothing}
+    Euphemia._duckdb_readonly_guard("save_uc_results") && return nothing
     # Ensure tables exist
     Euphemia.ensure_uc_results_tables()
 
