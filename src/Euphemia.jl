@@ -966,19 +966,55 @@ end
 # BZN borders directly and need no remap — audited.)
 const AGGREGATE_BORDER_REPRESENTATIVE = Dict{String,String}("IT" => "IT-NORTH")
 
-# Zones whose INTERNAL borders clear via flow-based capacity calculation
-# (Nordic CCR — flow-based DA since Oct 2024). The implicit table's ATC rows
-# for those borders are stale residuals far below physical capacity (audited
-# 2026-04: SE3→NO1 published as 0 MW, NO2→NO1 as ~733 MW vs a ~3,500 MW
-# physical border), which starves import-dependent sub-zones (NO1 fleet
-# 2.4 GW vs 3.3–3.9 GW load) into phantom scarcity at the cap. In the enriched
-# network these internal borders are dropped, so the book keeps observed net
-# imports for them — the same honest treatment as other borders the ATC data
-# cannot reproduce (RS, HU–RO). Borders from these zones to the OUTSIDE
-# (NO2–DE_LU/NL, DK1–DE_LU, SE4–PL, FI–EE, …) are NTC-published DC links and
-# stay endogenous.
-const NORDIC_FLOW_BASED_ZONES = ["NO1", "NO2", "NO3", "NO4", "NO5",
-                                 "SE1", "SE2", "SE3", "SE4", "FI", "DK1", "DK2"]
+# Nordic flow-based border handling. The Nordic CCR moved to flow-based DA
+# capacity calculation in Oct 2024, so the implicit table's "offered ATC" rows
+# for Nordic-internal borders are stale residuals. Where a zone's IMPORT
+# capability lives in those residuals, endogenizing the border starves it into
+# phantom scarcity at the cap (audited 2026-04: NO1 — fleet 2.4 GW vs 3.3–3.9
+# GW load, published import ATC ~1.25 GW incl. SE3→NO1 = 0 MW, vs real imports
+# ~2.3 GW; FI — SE1→FI published as 4 MW vs real imports ~2.3 GW). Dropping
+# those borders makes the book keep observed net imports for them — the same
+# honest treatment as other borders the ATC data cannot reproduce (RS, HU–RO).
+#
+# Deliberately NOT dropped: SE- and DK-internal borders. Their published rows
+# are residuals too (SE2→SE3 = 8 MW vs ~7.3 GW physical), but the constrained
+# EXPORT direction they impose fortuitously reproduces the real north–south
+# congestion that keeps SE1/SE2 structurally cheap; replacing them with
+# observed flows turns ~5 GW of exports into firm cap-priced demand against a
+# thin unit fleet and manufactures scarcity (measured: SE1/SE2 bias +7/+9 with
+# the borders endogenous vs +735/+710 with observed exports). A proper
+# flow-based domain model is the eventual fix; until then this asymmetric
+# treatment is the least-wrong ex-ante choice.
+const NORDIC_FB_ZONES = ["NO1", "NO2", "NO3", "NO4", "NO5",
+                         "SE1", "SE2", "SE3", "SE4", "FI", "DK1", "DK2"]
+const NORDIC_NO_ZONES = ["NO1", "NO2", "NO3", "NO4", "NO5"]
+
+"""
+    nordic_flow_based_drop_borders(footprint) -> Vector{Tuple{String,String}}
+
+Undirected border pairs whose stale flow-based ATC residuals must be dropped
+from the enriched network (falling back to observed net imports): every
+Nordic-internal border touching a Norwegian zone, plus Finland's import borders
+from Sweden. Only pairs with both endpoints in the footprint are returned;
+empty for footprints without Nordic zones (e.g. the 5-zone SEE set).
+"""
+function nordic_flow_based_drop_borders(footprint::AbstractVector{<:AbstractString})
+    fp = Set(String.(footprint))
+    pairs = Set{Tuple{String,String}}()
+    ordered(a, b) = a < b ? (a, b) : (b, a)
+    for no in NORDIC_NO_ZONES
+        no in fp || continue
+        for z in NORDIC_FB_ZONES
+            z != no && z in fp && push!(pairs, ordered(no, z))
+        end
+    end
+    if "FI" in fp
+        for se in ("SE1", "SE3")
+            se in fp && push!(pairs, ordered("FI", se))
+        end
+    end
+    return sort(collect(pairs))
+end
 
 """
     build_aggregate_remap(footprint) -> Dict{String,String}
@@ -1025,12 +1061,13 @@ function _create_multi_zone_order_book_merit(zones::Vector{String}, day::Date;
     # failing. Left off by default so the 5-zone SEE product is byte-identical.
     aggregate_remap = enrich_network ? build_aggregate_remap(zones) : Dict{String,String}()
 
-    flow_based_groups = enrich_network ? [NORDIC_FLOW_BASED_ZONES] : Vector{Vector{String}}()
+    drop_borders = enrich_network ? nordic_flow_based_drop_borders(zones) :
+                   Tuple{String,String}[]
 
     println("   🔌 Fetching transfer capacities between zones...")
     transfer_capacity = Network.create_transfer_capacity_from_entsoe(day, zones;
         include_explicit=enrich_network, aggregate_remap=aggregate_remap,
-        flow_based_groups=flow_based_groups)
+        drop_borders=drop_borders)
     zone_pairs = Network.get_zone_pairs(transfer_capacity)
     # A border only counts as endogenous if it can actually carry flow:
     # ATC rows with zero capacity in both directions all day (e.g. an

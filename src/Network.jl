@@ -223,18 +223,18 @@ More suitable for market clearing applications than NetworkTopology.
 function create_transfer_capacity_from_entsoe(date::Date, bidding_zones::Vector{String}=String[];
     include_explicit::Bool=false,
     aggregate_remap::AbstractDict=Dict{String,String}(),
-    flow_based_groups::Vector{Vector{String}}=Vector{Vector{String}}())
+    drop_borders::Vector{Tuple{String,String}}=Tuple{String,String}[])
 
     # ENRICHED PATH (opt-in): union the explicit (LT+DA-auction) ATC table,
     # remap aggregate-country borders onto a representative sub-zone, and drop
-    # borders internal to flow-based capacity-calculation regions. Kept
-    # strictly behind these keyword flags so the default call — used by the
-    # 5-zone SEE product — takes the original implicit-only path below and is
-    # byte-identical.
-    if include_explicit || !isempty(aggregate_remap) || !isempty(flow_based_groups)
+    # specific borders whose published ATC is a stale residual (flow-based
+    # regions). Kept strictly behind these keyword flags so the default call —
+    # used by the 5-zone SEE product — takes the original implicit-only path
+    # below and is byte-identical.
+    if include_explicit || !isempty(aggregate_remap) || !isempty(drop_borders)
         return _create_transfer_capacity_enriched(date, bidding_zones;
             include_explicit=include_explicit, aggregate_remap=aggregate_remap,
-            flow_based_groups=flow_based_groups)
+            drop_borders=drop_borders)
     end
 
     # Build SQL query to get transfer capacities for the specified date
@@ -336,7 +336,7 @@ Two extensions over the implicit-only default:
 function _create_transfer_capacity_enriched(date::Date, bidding_zones::Vector{String};
     include_explicit::Bool=false,
     aggregate_remap::AbstractDict=Dict{String,String}(),
-    flow_based_groups::Vector{Vector{String}}=Vector{Vector{String}}())
+    drop_borders::Vector{Tuple{String,String}}=Tuple{String,String}[])
 
     isempty(bidding_zones) &&
         error("Enriched transfer-capacity build requires an explicit footprint (bidding_zones)")
@@ -425,23 +425,25 @@ function _create_transfer_capacity_enriched(date::Date, bidding_zones::Vector{St
                       time_period=row.time_period, capacity=row.capacity))
     end
 
-    # Drop borders internal to a flow-based capacity-calculation region (e.g.
-    # the Nordic CCR since Oct 2024). For such regions the implicit table's
-    # "offered ATC" rows are stale residuals that cannot carry the real flows
-    # (audited 2026-04: SE3→NO1 published as 0 MW, NO2→NO1 as ~733 MW vs a
-    # ~3,500 MW physical border), so keeping them starves import-dependent
-    # sub-zones (NO1) into phantom scarcity. With the border dropped entirely,
-    # the multi-zone book falls back to observed net imports for it — the same
-    # honest treatment as other borders the ATC data cannot reproduce (RS,
-    # HU–RO). Borders from a group member to a zone OUTSIDE the group (DC
-    # links to the continent: NO2–DE_LU/NL, DK1–DE_LU, SE4–PL, FI–EE …) are
-    # genuine NTC-published borders and stay endogenous.
+    # Drop specific borders whose published ATC is a stale residual of a
+    # flow-based capacity-calculation region (Nordic CCR, flow-based DA since
+    # Oct 2024) and therefore cannot carry the real flows (audited 2026-04:
+    # SE3→NO1 published as 0 MW, SE1→FI as 4 MW, NO2→NO1 as ~733 MW vs a
+    # ~3,500 MW physical border). Keeping such a border endogenous starves
+    # import-dependent zones (NO1, FI) into phantom scarcity. With the border
+    # dropped entirely (both directions), the multi-zone book falls back to
+    # observed net imports for it — the same honest treatment as other borders
+    # the ATC data cannot reproduce (RS, HU–RO). The drop set is chosen by the
+    # caller; borders not listed (including other Nordic-internal ones and the
+    # NTC DC links to the continent) stay endogenous.
     n_fb_dropped = 0
-    if !isempty(flow_based_groups)
-        groups = [Set(g) for g in flow_based_groups]
-        internal(s, d) = any(gr -> (s in gr) && (d in gr), groups)
+    if !isempty(drop_borders)
+        dropset = Set{Tuple{String,String}}()
+        for (a, b) in drop_borders
+            push!(dropset, (a, b)); push!(dropset, (b, a))
+        end
         before = length(final)
-        final = [row for row in final if !internal(row.source_zone, row.sink_zone)]
+        final = [row for row in final if !((row.source_zone, row.sink_zone) in dropset)]
         n_fb_dropped = before - length(final)
     end
 
@@ -451,7 +453,7 @@ function _create_transfer_capacity_enriched(date::Date, bidding_zones::Vector{St
     df = DataFrame(final)
     println("✅ Enriched transfer capacity: $(nrow(imp)) implicit rows, " *
             "+$n_explicit_added explicit-only rows, $n_remapped aggregate endpoints remapped, " *
-            "-$n_fb_dropped flow-based-internal border-hours dropped, " *
+            "-$n_fb_dropped stale flow-based border-hours dropped, " *
             "$(nrow(df)) in-footprint border-hours")
     return build_transfer_capacity_from_dataframe(df)
 end
