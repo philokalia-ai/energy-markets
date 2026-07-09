@@ -157,6 +157,30 @@ Regions → zones (profiles authored as thin deltas over SEE):
   Nordic↔continent DC links (NO2–DE_LU/NL, DK1–DE_LU, SE4–PL, FI–EE, …) are
   genuine NTC borders and stay endogenous.
 
+## Phase 3, iteration 3 — asymmetric Nordic border drop
+
+Iteration 2's blanket Nordic-internal drop fixed the importers but created a
+new regression: **SE1/SE2 went from bias +7/+9 to +735/+710**. Replacing their
+borders with observed flows turns ~5 GW of exports into firm cap-priced demand
+against a thin unit fleet (SE2: 699 MW of listed units vs 5.8 GW hydro p95),
+manufacturing scarcity. Their SE-internal ATC rows are stale residuals too
+(SE2→SE3 published at 8 MW vs ~7.3 GW physical), but the constrained export
+direction *fortuitously reproduces the real north–south congestion* that keeps
+SE1/SE2 structurally cheap. DK1/DK2 similarly degraded (corr 0.89 → −0.12).
+
+Refined rule (`nordic_flow_based_drop_borders`): drop only borders whose
+residuals demonstrably starve **importers** — every Nordic-internal border
+touching a Norwegian zone, plus FI's import borders from Sweden (SE1→FI
+published at 4 MW vs ~2.3 GW real imports). SE-/DK-internal borders stay
+endogenous. A proper flow-based domain model is the eventual fix; this
+asymmetric treatment is the least-wrong ex-ante choice and is documented as a
+known limitation.
+
+Also fixed by iteration 2/3: the previously **INFEASIBLE** clearing day
+2026-04-02 (Gurobi INFEASIBLE_OR_UNBOUNDED under iteration-1 books) now solves
+optimal on all five days — the pathological stale Nordic ATC bounds were the
+cause.
+
 ## Per-zone metrics: baseline → Phase 1 → full (5 days, sim − actual)
 
 <!-- FILLED FROM compare.jl AFTER RUNS -->

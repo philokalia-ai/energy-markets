@@ -45,9 +45,20 @@ Returns an empty Dict when no flow data exists for the day.
 multi-zone clearing, where flows to zones inside the clearing set are
 endogenous (ATC-constrained MPCC variables) and only borders to zones
 OUTSIDE the set should enter as observed fixed injections.
+
+`import_only_counterparties` keeps only the IMPORT direction of the listed
+borders (per hour, `GREATEST(flow, 0)`), used for Nordic flow-based borders
+that were dropped from the endogenous network: the observed import supplies
+a starving importer (NO1), but the corresponding observed export must NOT
+become firm cap-priced demand in the exporter's book — against the thin
+Nordic unit fleets that manufactures scarcity that cascades down the
+endogenous SE chain (measured: SE3 bias −6.5 → +578 when its NO1/FI exports
+entered as firm demand). Empty by default — the single-zone and 5-zone SEE
+paths are unchanged.
 """
 function get_net_imports(bidding_zone::String, day::Date;
-    exclude_counterparties::Vector{String}=String[])
+    exclude_counterparties::Vector{String}=String[],
+    import_only_counterparties::Vector{String}=String[])
     # Two normalizations, both required for a correct MW value:
     # 1. AVG per border within the hour — flow_mw is a power value, so a
     #    border published at PT15M has 4 rows/hour; summing rows directly
@@ -86,12 +97,14 @@ function get_net_imports(bidding_zone::String, day::Date;
             ) per_code
             ORDER BY h, counterparty, direction, avg_flow DESC
         )
-        SELECT h, SUM(direction * avg_flow) AS net_import
+        SELECT h, SUM(CASE WHEN counterparty = ANY(\$4)
+                           THEN GREATEST(direction * avg_flow, 0)
+                           ELSE direction * avg_flow END) AS net_import
         FROM border_hourly
         WHERE counterparty <> ALL(\$3)
         GROUP BY h
         """,
-        [bidding_zone, day, exclude_counterparties]
+        [bidding_zone, day, exclude_counterparties, import_only_counterparties]
     )
     return Dict{Int,Float64}(row.h => row.net_import for row in eachrow(df))
 end
@@ -484,6 +497,7 @@ function create_merit_order_book(
     price_cap::Union{Nothing,Float64}=nothing,
     include_net_imports::Bool=true,
     net_import_exclude::Vector{String}=String[],
+    net_import_import_only::Vector{String}=String[],
     target_resolution_minutes::Union{Int,Nothing}=nothing,
     fleet_completion::Union{Nothing,Bool}=nothing,
     fleet_truthing::Union{Nothing,Bool}=nothing,
@@ -709,7 +723,9 @@ function create_merit_order_book(
         # backtesting treatment. Set include_net_imports=false for a pure
         # isolated-zone simulation (or when forecasting without flow data).
         net_imports = include_net_imports ?
-                      get_net_imports(bidding_zone, day; exclude_counterparties=net_import_exclude) :
+                      get_net_imports(bidding_zone, day;
+                          exclude_counterparties=net_import_exclude,
+                          import_only_counterparties=net_import_import_only) :
                       Dict{Int,Float64}()
         slot_import(ts) = get(net_imports, Dates.hour(parse_timeslot_to_datetime(ts, day)), 0.0)
 

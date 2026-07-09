@@ -1109,9 +1109,17 @@ function _create_multi_zone_order_book_merit(zones::Vector{String}, day::Date;
         # byte-identical; the EU footprint applies region-specific profiles.
         profile = (enrich_network && apply_zone_profiles) ?
                   MeritOrderBook.get_zone_profile(zone) : MeritOrderBook.SEE_PROFILE
+        # Over DROPPED flow-based borders, observed flows enter import-only:
+        # the import supplies a starving importer (NO1's 2.3 GW), but the
+        # corresponding export must not become firm cap-priced demand in the
+        # exporter's book (see get_net_imports docstring). Empty when no
+        # borders were dropped, so the SEE path is unchanged.
+        import_only = sort([other for (a, b) in drop_borders
+                            for other in ((a == zone) ? [b] : (b == zone) ? [a] : String[])])
         return create_merit_order_book(zone, day;
             profile=profile,
             net_import_exclude=exclude,
+            net_import_import_only=import_only,
             target_resolution_minutes=60,
             res_coalesce_missing=enrich_network)
     end
