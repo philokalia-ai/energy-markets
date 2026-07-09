@@ -1046,8 +1046,44 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
                 string(termination_status(model))
             )
         else
+            # A proven INFEASIBLE deserves diagnostics: compute the Gurobi IIS
+            # (same machinery as the UC solver) so the conflicting constraint
+            # set is printed instead of a blind failure.
+            if termination_status(model) == MOI.INFEASIBLE &&
+               occursin("Gurobi", solver_name)
+                try
+                    @info "MPCC model INFEASIBLE — computing IIS..."
+                    compute_conflict!(model)
+                    n = 0
+                    for (F, S) in list_of_constraint_types(model)
+                        for con in all_constraints(model, F, S)
+                            if MOI.get(model, MOI.ConstraintConflictStatus(), con) == MOI.IN_CONFLICT
+                                n += 1
+                                n <= 25 && println("  IIS[$n]: $con")
+                            end
+                        end
+                    end
+                    # Variable bounds can also be in conflict
+                    for v in all_variables(model)
+                        try
+                            if MOI.get(model, MOI.VariableInConflict(), v)
+                                n += 1
+                                n <= 25 && println("  IIS[$n]: variable bound $v ∈ [$(has_lower_bound(v) ? lower_bound(v) : -Inf), $(has_upper_bound(v) ? upper_bound(v) : Inf)]")
+                            end
+                        catch
+                        end
+                    end
+                    @info "IIS complete: $n constraints/bounds in conflict"
+                catch e
+                    @warn "IIS computation failed: $(sprint(showerror, e))"
+                end
+            end
+            # TerminationStatusCode does not convert to Symbol implicitly —
+            # returning the raw enum used to crash the result construction
+            # (MethodError(convert, (Symbol, MOI.INFEASIBLE))) and mask the
+            # true status as :error. Map it explicitly.
             return MPCCResult(
-                termination_status(model),
+                Symbol(lowercase(string(termination_status(model)))),
                 0.0,
                 Dict{String,Dict{String,Float64}}(),
                 Dict{String,Float64}(),
