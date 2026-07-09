@@ -122,6 +122,13 @@ println()
         include(joinpath(@__DIR__, "test_scenario_hooks.jl"))
     end
 
+    @testset "Zone Profiles" begin
+        println("\n" * "=" ^ 60)
+        println("Running Zone Profile Tests...")
+        println("=" ^ 60)
+        include(joinpath(@__DIR__, "test_zone_profiles.jl"))
+    end
+
 end
 
 # =============================================================================

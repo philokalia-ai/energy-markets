@@ -220,7 +220,20 @@ More suitable for market clearing applications than NetworkTopology.
 # Returns
 - `TransferCapacity`: Transfer capacity data between bidding zones
 """
-function create_transfer_capacity_from_entsoe(date::Date, bidding_zones::Vector{String}=String[])
+function create_transfer_capacity_from_entsoe(date::Date, bidding_zones::Vector{String}=String[];
+    include_explicit::Bool=false,
+    aggregate_remap::AbstractDict=Dict{String,String}())
+
+    # ENRICHED PATH (opt-in): union the explicit (LT+DA-auction) ATC table and
+    # remap aggregate-country borders onto a representative sub-zone. Kept
+    # strictly behind these keyword flags so the default call — used by the
+    # 5-zone SEE product — takes the original implicit-only path below and is
+    # byte-identical.
+    if include_explicit || !isempty(aggregate_remap)
+        return _create_transfer_capacity_enriched(date, bidding_zones;
+            include_explicit=include_explicit, aggregate_remap=aggregate_remap)
+    end
+
     # Build SQL query to get transfer capacities for the specified date
     # Use out_map_code/in_map_code for short zone codes (e.g., "GR") instead of EIC codes
     zone_filter = isempty(bidding_zones) ? "" :
@@ -248,6 +261,179 @@ function create_transfer_capacity_from_entsoe(date::Date, bidding_zones::Vector{
     end
 
     println("✅ Found $(nrow(df)) transfer capacity records")
+    return build_transfer_capacity_from_dataframe(df)
+end
+
+"""
+    _fetch_atc_aggregated(date, table, codes; contract_type=nothing) -> DataFrame
+
+Fetch directional ATC from an ENTSO-E offered-transfer-capacity table,
+averaged per (out_map_code, in_map_code, hour). Averaging collapses
+sub-hourly rows and duplicate sequences to one value per border-hour. When
+`contract_type` is given (used for the explicit table) only that auction
+horizon is kept — `'Day-ahead'` isolates the day-ahead offered capacity,
+excluding already-allocated long-term (year/month-ahead) products that would
+otherwise double-count.
+"""
+function _fetch_atc_aggregated(date::Date, table::String, codes::Vector{String};
+    contract_type::Union{String,Nothing}=nothing)
+    ct_filter = contract_type === nothing ? "" : "AND contract_type = \$3"
+    params = contract_type === nothing ? Any[date, codes] : Any[date, codes, contract_type]
+    query = """
+    SELECT out_map_code AS source_zone,
+           in_map_code AS sink_zone,
+           (EXTRACT(HOUR FROM date_time_utc) + 1)::int AS time_period,
+           AVG(capacity_mw)::float8 AS capacity
+    FROM entsoe.$table
+    WHERE DATE(date_time_utc) = \$1
+      AND (out_map_code = ANY(\$2) OR in_map_code = ANY(\$2))
+      AND capacity_mw IS NOT NULL
+      $ct_filter
+    GROUP BY out_map_code, in_map_code, (EXTRACT(HOUR FROM date_time_utc) + 1)::int
+    """
+    return safe_sql2df(query, params)
+end
+
+"""
+    _subzones_of(aggregate, footprint) -> Vector{String}
+
+Footprint nodes that are bidding-zone sub-nodes of an aggregate country code,
+identified by the `AGG-` or `AGG_` code prefix (e.g. aggregate `IT` →
+`IT-NORTH`, `IT-SOUTH`, …; aggregate `DE` → `DE_LU`).
+"""
+function _subzones_of(aggregate::String, footprint)
+    return [z for z in footprint
+            if z != aggregate &&
+               (startswith(z, aggregate * "-") || startswith(z, aggregate * "_"))]
+end
+
+"""
+    _create_transfer_capacity_enriched(date, bidding_zones; include_explicit, aggregate_remap)
+
+Enriched transfer-capacity build (opt-in via `create_transfer_capacity_from_entsoe`).
+
+Two extensions over the implicit-only default:
+
+1. **Explicit union.** When `include_explicit`, the day-ahead offered capacity
+   from `offered_transfer_capacities_explicit` is unioned in for directed
+   borders the implicit table does not cover (implicit is preferred where a
+   border exists in both). This restores borders that clear via explicit
+   auctions rather than SDAC implicit coupling — notably every Swiss border
+   (CH is outside implicit coupling) and Serbia's borders.
+
+2. **Aggregate → sub-zone remap.** Some countries file their *external*
+   borders only under an aggregate control-area code (e.g. Italy's
+   continental borders IT–FR/AT/SI/CH sit under `IT`, whose sub-zones are the
+   real bidding nodes). For each `aggregate => representative` entry, an
+   aggregate border `aggregate ↔ X` is rewritten to `representative ↔ X` —
+   *unless* `X` already borders one of the aggregate's sub-zones directly
+   (e.g. GR↔IT is physically GR↔IT-SOUTH and already present as a sub-zone
+   border), which prevents a phantom line to the representative.
+"""
+function _create_transfer_capacity_enriched(date::Date, bidding_zones::Vector{String};
+    include_explicit::Bool=false,
+    aggregate_remap::AbstractDict=Dict{String,String}())
+
+    isempty(bidding_zones) &&
+        error("Enriched transfer-capacity build requires an explicit footprint (bidding_zones)")
+
+    fpset = Set(bidding_zones)
+    codes = collect(union(fpset, Set(keys(aggregate_remap))))
+
+    println("📊 Fetching ENTSO-E transfer capacity (enriched: explicit=$include_explicit, " *
+            "remap=$(isempty(aggregate_remap) ? "none" : join(["$a→$s" for (a,s) in aggregate_remap], ","))) for $date...")
+
+    imp = _fetch_atc_aggregated(date, "offered_transfer_capacities_implicit", codes)
+    nrow(imp) == 0 && include_explicit == false &&
+        error("No implicit transfer capacity data for $date (footprint: $(join(bidding_zones, ", ")))")
+
+    # Directed borders already covered by implicit — explicit only fills gaps.
+    imp_pairs = Set{Tuple{String,String}}(
+        (r.source_zone, r.sink_zone) for r in eachrow(imp))
+
+    rows = NamedTuple{(:source_zone, :sink_zone, :time_period, :capacity),
+                      Tuple{String,String,Int,Float64}}[]
+    for r in eachrow(imp)
+        push!(rows, (source_zone=r.source_zone, sink_zone=r.sink_zone,
+                     time_period=Int(r.time_period), capacity=Float64(r.capacity)))
+    end
+    n_explicit_added = 0
+    if include_explicit
+        exp = _fetch_atc_aggregated(date, "offered_transfer_capacities_explicit", codes;
+                                    contract_type="Day-ahead")
+        for r in eachrow(exp)
+            (r.source_zone, r.sink_zone) in imp_pairs && continue
+            push!(rows, (source_zone=r.source_zone, sink_zone=r.sink_zone,
+                         time_period=Int(r.time_period), capacity=Float64(r.capacity)))
+            n_explicit_added += 1
+        end
+    end
+
+    # Apply aggregate → sub-zone remap. Precompute, per aggregate, the set of
+    # counterparties that already border one of its sub-zones directly (those
+    # aggregate borders are physically the sub-zone border and must be dropped
+    # rather than remapped, to avoid a phantom line to the representative).
+    remap_direct = Dict{String,Set{String}}()
+    for (agg, _) in aggregate_remap
+        subz = Set(_subzones_of(agg, bidding_zones))
+        direct = Set{String}()
+        for row in rows
+            if row.source_zone in subz && row.sink_zone in fpset &&
+               !(row.sink_zone in subz) && row.sink_zone != agg
+                push!(direct, row.sink_zone)
+            end
+            if row.sink_zone in subz && row.source_zone in fpset &&
+               !(row.source_zone in subz) && row.source_zone != agg
+                push!(direct, row.source_zone)
+            end
+        end
+        remap_direct[agg] = direct
+    end
+
+    function remap_endpoint(code::String)
+        # Returns (new_code, keep). keep=false drops the row.
+        haskey(aggregate_remap, code) || return (code, true)
+        return (String(aggregate_remap[code]), true)
+    end
+
+    final = NamedTuple{(:source_zone, :sink_zone, :time_period, :capacity),
+                       Tuple{String,String,Int,Float64}}[]
+    n_remapped = 0
+    for row in rows
+        s, d = row.source_zone, row.sink_zone
+        # Decide, for any aggregate endpoint, whether to drop (double-counted
+        # by a sub-zone border, or counterparty outside footprint) or remap.
+        drop = false
+        if haskey(aggregate_remap, s)
+            X = d
+            if X in get(remap_direct, s, Set{String}()) || !(X in fpset)
+                drop = true
+            else
+                s = String(aggregate_remap[s]); n_remapped += 1
+            end
+        end
+        if !drop && haskey(aggregate_remap, d)
+            X = row.source_zone
+            if X in get(remap_direct, d, Set{String}()) || !(X in fpset)
+                drop = true
+            else
+                d = String(aggregate_remap[d]); n_remapped += 1
+            end
+        end
+        drop && continue
+        # Keep only borders fully inside the footprint; drop self-loops.
+        (s in fpset && d in fpset && s != d) || continue
+        push!(final, (source_zone=s, sink_zone=d,
+                      time_period=row.time_period, capacity=row.capacity))
+    end
+
+    isempty(final) &&
+        error("Enriched transfer capacity produced no in-footprint borders for $date")
+
+    df = DataFrame(final)
+    println("✅ Enriched transfer capacity: $(nrow(imp)) implicit rows, " *
+            "+$n_explicit_added explicit-only rows, $n_remapped aggregate endpoints remapped, " *
+            "$(nrow(df)) in-footprint border-hours")
     return build_transfer_capacity_from_dataframe(df)
 end
 

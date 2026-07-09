@@ -130,6 +130,146 @@ const WATER_VALUE_FUEL_TYPES =
 const HYDRO_PRODUCTION_TYPES =
     ["Hydro Water Reservoir", "Hydro Pumped Storage", "Hydro Run-of-river and pondage"]
 
+# =============================================================================
+# ZONE PROFILES — per-region bid-construction calibration
+# =============================================================================
+"""
+    ZoneProfile
+
+Bundles the per-zone bid-construction / hydro / fleet / scarcity parameters of
+`create_merit_order_book` (previously ~18 loose kwargs) into one named value.
+The clearing machinery is region-agnostic; different European regions are
+governed by different price-forming forces, so each is calibrated with its own
+profile selected via `ZONE_PROFILES`, which **defaults to `SEE_PROFILE`**.
+
+`SEE_PROFILE` holds the exact v10 defaults, so the SEE core (GR/BG/RO/RS/HU) and
+Iberia are byte-identical to the pre-abstraction code — the non-negotiable
+regression guard (unit-tested: a GR book with `SEE_PROFILE` equals a GR book
+built with no profile). Region profiles are authored as thin deltas over SEE.
+
+Fields are data, not logic. Two levers extend the old kwargs:
+- `thermal_srmc_multiplier` scales non-hydro marginal costs (Italy's LNG /
+  older-fleet efficiency premium); `1.0` = unchanged.
+- `hydro_model` selects the hydro offer model: `:gas_anchored` (SEE default —
+  water value tied to gas SRMC and demand shape) or `:reservoir_opportunity`
+  (Nordic — water value from reservoir filling level, decoupled from gas).
+"""
+Base.@kwdef struct ZoneProfile
+    tranches::Vector{Tuple{Float64,Float64}} =
+        [(0.55, 0.95), (0.20, 1.05), (0.15, 1.25), (0.10, 1.60)]
+    must_run_price_factor::Float64 = 0.05
+    must_run_srmc_threshold::Float64 = 1.15
+    availability_factor::Float64 = 0.80
+    scarcity_threshold::Float64 = 1.4
+    scarcity_kappa::Float64 = 3.0
+    peak_kappa::Float64 = 1.2
+    peak_exponent::Float64 = 4.0
+    water_value_base::Float64 = 0.85
+    water_value_dry_boost::Float64 = 1.0
+    water_value_span::Float64 = 0.9
+    demand_elastic_share::Float64 = 0.02
+    demand_elastic_price::Float64 = 250.0
+    price_cap::Float64 = 3000.0
+    fleet_completion::Bool = true
+    fleet_truthing::Bool = true
+    derate_headroom::Float64 = 1.15
+    thermal_srmc_multiplier::Float64 = 1.0
+    hydro_model::Symbol = :gas_anchored
+end
+
+"SEE / default profile — the exact v10 parameters (regression baseline)."
+const SEE_PROFILE = ZoneProfile()
+
+"Iberia — near-isolated, already the best-fit region; identical to SEE (verified)."
+const IBERIA_PROFILE = SEE_PROFILE
+
+"""
+Continental core (DE/FR/BE/NL/AT/CH/PL/CZ/SK). High-RES thermal with heavy
+transit; genuine scarcity should be rare, so the scarcity/peak markups are
+softened relative to SEE. Adequacy is expected to come mostly from the Phase-1
+network fix (endogenous flows + the CH transit hub), not bid tuning.
+"""
+const CONTINENTAL_PROFILE = ZoneProfile(
+    scarcity_threshold = 1.25,
+    scarcity_kappa = 1.5,
+    peak_kappa = 0.6,
+)
+
+"""
+Italy. Gas-heavy but higher SRMC than SEE — older, less-efficient CCGTs burning
+premium-priced LNG — so thermal marginal costs carry an efficiency/LNG premium.
+"""
+const ITALY_PROFILE = ZoneProfile(
+    thermal_srmc_multiplier = 1.20,
+)
+
+"""
+Nordic (NO*/SE*/FI/DK*). Hydro-dominated: the price is the opportunity cost of
+stored water (reservoir level + export value), NOT a gas anchor. Uses the
+`:reservoir_opportunity` hydro model and softens scarcity so full reservoirs no
+longer slam into the price cap.
+"""
+const NORDIC_PROFILE = ZoneProfile(
+    hydro_model = :reservoir_opportunity,
+    scarcity_threshold = 1.2,
+    scarcity_kappa = 1.0,
+    peak_kappa = 0.5,
+    water_value_base = 0.35,
+    water_value_span = 0.6,
+)
+
+"""
+Baltic (EE/LT/LV). Tightly coupled to the Nordic hydro system and thermally
+thin; softened scarcity like the continental core. Left close to SEE otherwise —
+their residual error is expected to shrink once the Nordic zones are corrected.
+"""
+const BALTIC_PROFILE = ZoneProfile(
+    scarcity_threshold = 1.25,
+    scarcity_kappa = 1.5,
+    peak_kappa = 0.6,
+)
+
+"""
+    ZONE_PROFILES
+
+Registry mapping bidding-zone code → `ZoneProfile`. Zones absent from the
+registry fall back to `SEE_PROFILE` via `get_zone_profile`, so the default is
+always the validated SEE calibration.
+"""
+const ZONE_PROFILES = Dict{String,ZoneProfile}(
+    # SEE core (explicit for clarity; equal to the fallback)
+    "GR" => SEE_PROFILE, "BG" => SEE_PROFILE, "RO" => SEE_PROFILE,
+    "RS" => SEE_PROFILE, "HU" => SEE_PROFILE, "SI" => SEE_PROFILE,
+    # Iberia
+    "ES" => IBERIA_PROFILE, "PT" => IBERIA_PROFILE,
+    # Italy sub-zones
+    "IT-NORTH" => ITALY_PROFILE, "IT-CNORTH" => ITALY_PROFILE,
+    "IT-CSOUTH" => ITALY_PROFILE, "IT-SOUTH" => ITALY_PROFILE,
+    "IT-Calabria" => ITALY_PROFILE, "IT-Sicily" => ITALY_PROFILE,
+    "IT-Sardinia" => ITALY_PROFILE,
+    # Nordic
+    "NO1" => NORDIC_PROFILE, "NO2" => NORDIC_PROFILE, "NO3" => NORDIC_PROFILE,
+    "NO4" => NORDIC_PROFILE, "NO5" => NORDIC_PROFILE,
+    "SE1" => NORDIC_PROFILE, "SE2" => NORDIC_PROFILE, "SE3" => NORDIC_PROFILE,
+    "SE4" => NORDIC_PROFILE, "FI" => NORDIC_PROFILE,
+    "DK1" => NORDIC_PROFILE, "DK2" => NORDIC_PROFILE,
+    # Baltic
+    "EE" => BALTIC_PROFILE, "LT" => BALTIC_PROFILE, "LV" => BALTIC_PROFILE,
+    # Continental core
+    "DE_LU" => CONTINENTAL_PROFILE, "FR" => CONTINENTAL_PROFILE,
+    "BE" => CONTINENTAL_PROFILE, "NL" => CONTINENTAL_PROFILE,
+    "AT" => CONTINENTAL_PROFILE, "CH" => CONTINENTAL_PROFILE,
+    "PL" => CONTINENTAL_PROFILE, "CZ" => CONTINENTAL_PROFILE,
+    "SK" => CONTINENTAL_PROFILE,
+)
+
+"""
+    get_zone_profile(zone) -> ZoneProfile
+
+Profile for a zone, defaulting to `SEE_PROFILE` for any zone not in the registry.
+"""
+get_zone_profile(zone::AbstractString) = get(ZONE_PROFILES, String(zone), SEE_PROFILE)
+
 """
     get_hydro_availability(bidding_zone::String, day::Date; lookback_days=30) -> Union{Float64,Nothing}
 
@@ -302,31 +442,58 @@ clearing does not (v1 limitation).
 function create_merit_order_book(
     bidding_zone::String,
     day::Date;
-    tranches::Vector{Tuple{Float64,Float64}}=[(0.55, 0.95), (0.20, 1.05), (0.15, 1.25), (0.10, 1.60)],
-    must_run_price_factor::Float64=0.05,
-    must_run_srmc_threshold::Float64=1.15,
-    availability_factor::Float64=0.80,
-    scarcity_threshold::Float64=1.4,
-    scarcity_kappa::Float64=3.0,
-    peak_kappa::Float64=1.2,
-    peak_exponent::Float64=4.0,
-    water_value_base::Float64=0.85,
-    water_value_dry_boost::Float64=1.0,
-    water_value_span::Float64=0.9,
-    demand_elastic_share::Float64=0.02,
-    demand_elastic_price::Float64=250.0,
-    price_cap::Float64=3000.0,
+    profile::ZoneProfile=SEE_PROFILE,
+    tranches::Union{Nothing,Vector{Tuple{Float64,Float64}}}=nothing,
+    must_run_price_factor::Union{Nothing,Float64}=nothing,
+    must_run_srmc_threshold::Union{Nothing,Float64}=nothing,
+    availability_factor::Union{Nothing,Float64}=nothing,
+    scarcity_threshold::Union{Nothing,Float64}=nothing,
+    scarcity_kappa::Union{Nothing,Float64}=nothing,
+    peak_kappa::Union{Nothing,Float64}=nothing,
+    peak_exponent::Union{Nothing,Float64}=nothing,
+    water_value_base::Union{Nothing,Float64}=nothing,
+    water_value_dry_boost::Union{Nothing,Float64}=nothing,
+    water_value_span::Union{Nothing,Float64}=nothing,
+    demand_elastic_share::Union{Nothing,Float64}=nothing,
+    demand_elastic_price::Union{Nothing,Float64}=nothing,
+    price_cap::Union{Nothing,Float64}=nothing,
     include_net_imports::Bool=true,
     net_import_exclude::Vector{String}=String[],
     target_resolution_minutes::Union{Int,Nothing}=nothing,
-    fleet_completion::Bool=true,
-    fleet_truthing::Bool=true,
-    derate_headroom::Float64=1.15,
+    fleet_completion::Union{Nothing,Bool}=nothing,
+    fleet_truthing::Union{Nothing,Bool}=nothing,
+    derate_headroom::Union{Nothing,Float64}=nothing,
+    thermal_srmc_multiplier::Union{Nothing,Float64}=nothing,
+    hydro_model::Union{Nothing,Symbol}=nothing,
+    res_coalesce_missing::Bool=false,
     load_modifier::Union{Nothing,Function}=nothing,
     renewable_modifier::Union{Nothing,Function}=nothing,
     extra_orders::Union{Nothing,Function}=nothing,
     strategist::Union{Nothing,Function}=nothing
 )
+    # Resolve every bid parameter from the profile, letting an explicit keyword
+    # override its profile field. With no overrides and the default SEE_PROFILE
+    # this reproduces the pre-abstraction defaults exactly (byte-identical).
+    tranches = tranches === nothing ? profile.tranches : tranches
+    must_run_price_factor = must_run_price_factor === nothing ? profile.must_run_price_factor : must_run_price_factor
+    must_run_srmc_threshold = must_run_srmc_threshold === nothing ? profile.must_run_srmc_threshold : must_run_srmc_threshold
+    availability_factor = availability_factor === nothing ? profile.availability_factor : availability_factor
+    scarcity_threshold = scarcity_threshold === nothing ? profile.scarcity_threshold : scarcity_threshold
+    scarcity_kappa = scarcity_kappa === nothing ? profile.scarcity_kappa : scarcity_kappa
+    peak_kappa = peak_kappa === nothing ? profile.peak_kappa : peak_kappa
+    peak_exponent = peak_exponent === nothing ? profile.peak_exponent : peak_exponent
+    water_value_base = water_value_base === nothing ? profile.water_value_base : water_value_base
+    water_value_dry_boost = water_value_dry_boost === nothing ? profile.water_value_dry_boost : water_value_dry_boost
+    water_value_span = water_value_span === nothing ? profile.water_value_span : water_value_span
+    demand_elastic_share = demand_elastic_share === nothing ? profile.demand_elastic_share : demand_elastic_share
+    demand_elastic_price = demand_elastic_price === nothing ? profile.demand_elastic_price : demand_elastic_price
+    price_cap = price_cap === nothing ? profile.price_cap : price_cap
+    fleet_completion = fleet_completion === nothing ? profile.fleet_completion : fleet_completion
+    fleet_truthing = fleet_truthing === nothing ? profile.fleet_truthing : fleet_truthing
+    derate_headroom = derate_headroom === nothing ? profile.derate_headroom : derate_headroom
+    thermal_srmc_multiplier = thermal_srmc_multiplier === nothing ? profile.thermal_srmc_multiplier : thermal_srmc_multiplier
+    hydro_model = hydro_model === nothing ? profile.hydro_model : hydro_model
+
     try
         println("📊 Creating merit-order order book for $bidding_zone on $day")
 
@@ -420,19 +587,30 @@ function create_merit_order_book(
                         "(fleet $(round(Int, fleet_raw)) MW vs recent p95 $(round(Int, type_p95[ptype])) MW)")
             end
         end
-        if !isempty(derate_scale)
+        # Thermal SRMC premium (ITALY_PROFILE): scale the marginal cost of
+        # thermal fuels only — hydro/storage price at water value, not fuel
+        # cost, and RES never enters the thermal stack. gas_srmc (the hydro
+        # anchor) is computed separately and is unaffected. Default multiplier
+        # 1.0 leaves every cost untouched (byte-identical for SEE).
+        srmc_exempt_fuels = Set{Symbol}(vcat(WATER_VALUE_FUEL_TYPES,
+            [Symbol("Hydro Run-of-river and pondage"), Symbol("Energy storage")]))
+        apply_srmc_premium = thermal_srmc_multiplier != 1.0
+        if !isempty(derate_scale) || apply_srmc_premium
             generators = [begin
                 s = get(derate_scale, g.fuel_type, 1.0)
-                s < 1.0 ?
+                m = (apply_srmc_premium && !(g.fuel_type in srmc_exempt_fuels)) ?
+                    thermal_srmc_multiplier : 1.0
+                (s < 1.0 || m != 1.0) ?
                     Generator(g.code, g.name, g.fuel_type, g.location,
                               g.p_max * s, g.p_min * s,
-                              g.bidding_zone, g.marginal_cost,
+                              g.bidding_zone, g.marginal_cost * m,
                               g.ramp_up, g.ramp_down, g.min_uptime, g.min_downtime) :
                     g
             end for g in generators]
         end
         loads = get_loads(bidding_zone, day)
-        renewables = get_generation_forecast_for_wind_and_solar(bidding_zone, day)
+        renewables = get_generation_forecast_for_wind_and_solar(bidding_zone, day;
+            coalesce_missing=res_coalesce_missing)
 
         if isempty(generators)
             return AdjustedOrderBookResult(false, "No generators found", nothing, 0, 0, 0, 0.0, 0.0, 0.0)
@@ -632,15 +810,28 @@ function create_merit_order_book(
 
             for g in generators
                 if g.fuel_type in WATER_VALUE_FUEL_TYPES
-                    # Hydro opportunity cost: cheap relative to gas off-peak,
-                    # premium over gas at the peak. Single tranche — hydro
-                    # dispatches all-or-nothing at its water value.
-                    # Dry-period boost: scarce water raises the opportunity
-                    # cost of releasing it — the same MWh could be sold in a
-                    # later, tighter hour. Dryness is the recent achievable
-                    # output vs the zone's own long-run level.
-                    water_value = gas_srmc * (1.0 + water_value_dry_boost * hydro_dryness) *
-                                  (water_value_base + water_value_span * norm_demand)
+                    # Hydro water value. Two models:
+                    #
+                    # :gas_anchored (SEE default) — opportunity cost tied to gas
+                    # SRMC: cheap relative to gas off-peak, premium over gas at
+                    # the peak, boosted in dry periods. Correct where hydro
+                    # competes against a gas-set margin.
+                    #
+                    # :reservoir_opportunity (Nordic) — in a hydro-dominated
+                    # zone the price is the shadow value of stored water, NOT a
+                    # gas anchor: near-free when reservoirs are full, rising
+                    # toward the continental thermal alternative (gas SRMC as a
+                    # proxy for the export-market price) as they empty. This
+                    # stops full Nordic reservoirs from slamming into scarcity/
+                    # cap prices.
+                    water_value = if hydro_model == :reservoir_opportunity
+                        wv_floor = 2.0
+                        base = wv_floor + (gas_srmc - wv_floor) * hydro_dryness
+                        max(wv_floor, base * (water_value_base + water_value_span * norm_demand))
+                    else
+                        gas_srmc * (1.0 + water_value_dry_boost * hydro_dryness) *
+                        (water_value_base + water_value_span * norm_demand)
+                    end
                     push!(tagged, (SimpleOrder(:supply, water_value, offered_pmax(g),
                         Symbol(bidding_zone), date_time, resolution_minutes), g.code))
                     supply_orders_count += 1

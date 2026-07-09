@@ -283,7 +283,9 @@ include("AlternativeOrderBook.jl")
 using .AlternativeOrderBook: create_adjusted_order_book, AdjustedOrderBookResult, print_order_book_summary
 
 include("MeritOrderBook.jl")
-using .MeritOrderBook: create_merit_order_book
+using .MeritOrderBook: create_merit_order_book, ZoneProfile, get_zone_profile,
+    ZONE_PROFILES, SEE_PROFILE, IBERIA_PROFILE, CONTINENTAL_PROFILE,
+    ITALY_PROFILE, NORDIC_PROFILE, BALTIC_PROFILE
 
 # ===== EXPORTS =====
 # All module exports are centralized here following Julia best practices
@@ -332,6 +334,8 @@ export configure_data_store!
 # Alternative order book functionality
 export create_adjusted_order_book, AdjustedOrderBookResult, print_order_book_summary
 export create_merit_order_book
+export ZoneProfile, get_zone_profile, ZONE_PROFILES, SEE_PROFILE, IBERIA_PROFILE,
+    CONTINENTAL_PROFILE, ITALY_PROFILE, NORDIC_PROFILE, BALTIC_PROFILE
 
 # Bidding strategy functionality
 export generate_market_orders_from_uc, apply_bidding_strategy_to_uc, UCToBidsResult
@@ -954,6 +958,32 @@ function shadowed_aggregate_codes(footprint::AbstractVector{<:AbstractString})
     return sort(collect(setdiff(shadows, fp)))
 end
 
+# Aggregate country codes whose *external* borders are filed only under the
+# aggregate (not the bidding-zone sub-nodes), mapped to the sub-node that
+# physically carries those continental borders. Confirmed case: Italy — the
+# aggregate `IT` holds IT–FR/AT/SI/CH, all on the northern border, so they
+# remap onto `IT-NORTH`. (Germany's DE_LU and Denmark's DK1/DK2 file their own
+# BZN borders directly and need no remap — audited.)
+const AGGREGATE_BORDER_REPRESENTATIVE = Dict{String,String}("IT" => "IT-NORTH")
+
+"""
+    build_aggregate_remap(footprint) -> Dict{String,String}
+
+Aggregate→representative-sub-zone remap entries applicable to a footprint: an
+entry `agg => rep` is included only when the footprint contains `rep` (so the
+representative exists as a node) but not `agg` itself. Empty for footprints
+without split-country sub-zones (e.g. the 5-zone SEE set), so the enriched
+network loader is a no-op there.
+"""
+function build_aggregate_remap(footprint::AbstractVector{<:AbstractString})
+    fp = Set(String.(footprint))
+    remap = Dict{String,String}()
+    for (agg, rep) in AGGREGATE_BORDER_REPRESENTATIVE
+        (rep in fp) && !(agg in fp) && (remap[agg] = rep)
+    end
+    return remap
+end
+
 """
     _create_multi_zone_order_book_merit(zones::Vector{String}, day::Date)
 
@@ -968,13 +998,22 @@ coupling in June 2022), so the model cannot reproduce those flows
 endogenously — excluding them would silently remove real energy from the
 books and price phantom scarcity.
 """
-function _create_multi_zone_order_book_merit(zones::Vector{String}, day::Date)
+function _create_multi_zone_order_book_merit(zones::Vector{String}, day::Date;
+    enrich_network::Bool=false, apply_zone_profiles::Bool=true)
     isempty(zones) && error("At least one bidding zone must be specified")
 
     println("🌍 Creating multi-zone order book (merit-order method) for $(length(zones)) zones")
 
+    # Network enrichment (opt-in, EU-footprint only): union explicit ATC (adds
+    # CH + Serbia borders) and remap aggregate borders onto sub-zones (adds
+    # Italy's continental IT-NORTH↔FR/AT/SI/CH). Also coalesces missing RES
+    # forecasts so partial-coverage zones (CH, RS) build a book instead of
+    # failing. Left off by default so the 5-zone SEE product is byte-identical.
+    aggregate_remap = enrich_network ? build_aggregate_remap(zones) : Dict{String,String}()
+
     println("   🔌 Fetching transfer capacities between zones...")
-    transfer_capacity = Network.create_transfer_capacity_from_entsoe(day, zones)
+    transfer_capacity = Network.create_transfer_capacity_from_entsoe(day, zones;
+        include_explicit=enrich_network, aggregate_remap=aggregate_remap)
     zone_pairs = Network.get_zone_pairs(transfer_capacity)
     # A border only counts as endogenous if it can actually carry flow:
     # ATC rows with zero capacity in both directions all day (e.g. an
@@ -1010,10 +1049,17 @@ function _create_multi_zone_order_book_merit(zones::Vector{String}, day::Date)
         kept = sort([z for z in zones if z != zone && !(z in exclude)])
         isempty(kept) ||
             println("      ℹ️  No usable ATC link to $(join(kept, ", ")) — keeping observed net imports for those borders")
+        # Per-zone region profile selects the bid-construction calibration.
+        # In the SEE product (enrich_network=false) every zone resolves to
+        # SEE_PROFILE, which equals the pre-abstraction defaults, so the call is
+        # byte-identical; the EU footprint applies region-specific profiles.
+        profile = (enrich_network && apply_zone_profiles) ?
+                  MeritOrderBook.get_zone_profile(zone) : MeritOrderBook.SEE_PROFILE
         return create_merit_order_book(zone, day;
+            profile=profile,
             net_import_exclude=exclude,
             target_resolution_minutes=60,
-            fleet_completion=true)
+            res_coalesce_missing=enrich_network)
     end
 
     zone_orders = Dict{String,Vector{MarketOrders.MarketOrder}}()
@@ -1167,7 +1213,9 @@ function run_multi_zone_market_clearing(date::Date;
                                         force_rerun::Bool=false,
                                         parallel::Bool=false,
                                         max_workers::Union{Int, Nothing}=nothing,
-                                        clearing_mode::String="multi_zone")
+                                        clearing_mode::String="multi_zone",
+                                        enrich_network::Bool=false,
+                                        apply_zone_profiles::Bool=true)
 
     start_time = time()
     # Label the optimization_runs row so a non-standard footprint (e.g. the
@@ -1210,7 +1258,8 @@ function run_multi_zone_market_clearing(date::Date;
     elseif order_method == :merit_order
         # Merit-order: deterministic strategy-based books per zone,
         # cross-zone flows endogenous via ATC-constrained MPCC
-        _create_multi_zone_order_book_merit(zones, date)
+        _create_multi_zone_order_book_merit(zones, date; enrich_network=enrich_network,
+                                            apply_zone_profiles=apply_zone_profiles)
     else
         error("Invalid order_method: $order_method. Must be :uc_based, :alternative or :merit_order")
     end
