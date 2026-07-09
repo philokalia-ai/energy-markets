@@ -214,8 +214,11 @@ const NORDIC_PROFILE = ZoneProfile(
     scarcity_threshold = 1.2,
     scarcity_kappa = 1.0,
     peak_kappa = 0.5,
-    water_value_base = 0.35,
-    water_value_span = 0.6,
+    # Demand-shape band applied to the reservoir-opportunity water value
+    # (see the :reservoir_opportunity branch): 0.6 at the trough → 1.1 at the
+    # peak, so hydro is cheap off-peak but firms up into the evening.
+    water_value_base = 0.6,
+    water_value_span = 0.5,
 )
 
 """
@@ -720,9 +723,22 @@ function create_merit_order_book(
             elseif hydro_avail !== nothing && hydro_norm !== nothing && hydro_norm > 1.0
                 hydro_dryness = clamp(1.0 - hydro_avail / hydro_norm, 0.0, 1.0)
             end
+            # Reservoir-opportunity zones (Nordic) govern offered hydro QUANTITY
+            # by reservoir level, not by recent output. The p95-output cap above
+            # is a gas-world energy-limited heuristic; in a hydro-dominated,
+            # capacity-rich system it spuriously starves the book (e.g. NO1's
+            # standalone supply/demand ratio ≈ 0.95 → phantom shortage at the
+            # cap) even when reservoirs are full. Tie the offered fraction to
+            # reservoir fullness instead: full → near-nameplate, severe drought
+            # → half (inflow-only). Scarcity here is priced through the water
+            # value, not rationed through quantity.
+            if hydro_model == :reservoir_opportunity
+                hydro_scale = clamp(1.0 - hydro_dryness, 0.5, 1.0)
+            end
             println("  💧 Hydro: offer scale $(round(hydro_scale, digits=2)), " *
                     "dryness $(round(hydro_dryness, digits=2))" *
-                    (reservoir_dryness !== nothing ? " (reservoir levels)" : " (output-based fallback)"))
+                    (reservoir_dryness !== nothing ? " (reservoir levels)" : " (output-based fallback)") *
+                    (hydro_model == :reservoir_opportunity ? " [reservoir-opportunity]" : ""))
         end
         offered_pmax(g) = is_hydro(g) ? g.p_max * hydro_scale : g.p_max
 
@@ -825,9 +841,15 @@ function create_merit_order_book(
                     # stops full Nordic reservoirs from slamming into scarcity/
                     # cap prices.
                     water_value = if hydro_model == :reservoir_opportunity
-                        wv_floor = 2.0
-                        base = wv_floor + (gas_srmc - wv_floor) * hydro_dryness
-                        max(wv_floor, base * (water_value_base + water_value_span * norm_demand))
+                        # Stored water is worth a FRACTION of the continental
+                        # thermal price (gas SRMC proxy): an export-opportunity
+                        # floor (~0.35×) when reservoirs are full, rising to the
+                        # full thermal alternative (1.0×) as they empty. Then
+                        # shaped by within-day demand. NOT gas-anchored at parity
+                        # — full Nordic reservoirs price well below gas, which is
+                        # what stops the scarcity/cap blow-up.
+                        wv_frac = 0.35 + 0.65 * hydro_dryness
+                        gas_srmc * wv_frac * (water_value_base + water_value_span * norm_demand)
                     else
                         gas_srmc * (1.0 + water_value_dry_boost * hydro_dryness) *
                         (water_value_base + water_value_span * norm_demand)

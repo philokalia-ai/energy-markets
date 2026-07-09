@@ -390,12 +390,6 @@ function _create_transfer_capacity_enriched(date::Date, bidding_zones::Vector{St
         remap_direct[agg] = direct
     end
 
-    function remap_endpoint(code::String)
-        # Returns (new_code, keep). keep=false drops the row.
-        haskey(aggregate_remap, code) || return (code, true)
-        return (String(aggregate_remap[code]), true)
-    end
-
     final = NamedTuple{(:source_zone, :sink_zone, :time_period, :capacity),
                        Tuple{String,String,Int,Float64}}[]
     n_remapped = 0
