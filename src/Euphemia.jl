@@ -1174,21 +1174,25 @@ function _create_multi_zone_order_book_merit(zones::Vector{String}, day::Date;
         # corresponding export must not become firm cap-priced demand in the
         # exporter's book (see get_net_imports docstring). Empty when no
         # borders were dropped, so the SEE path is unchanged.
-        # Hydro-anchored zones in pass 2 keep their FULL observed net flows
-        # (imports AND exports) — their exports re-enter as ref-priced demand
-        # (see the export branch in create_merit_order_book), giving
-        # structural exporters (NO5) their outlet back without cap-priced
-        # firmness. Non-anchored zones keep the import-only clamp.
-        import_only = haskey(anchor_refs, zone) ? String[] :
-                      sort([other for (a, b) in drop_borders
+        # All zones keep the import-only clamp on dropped borders (measured:
+        # replacing it with net flows cost NO1 ~1 GW of import supply in
+        # mixed-direction hours — bias −23 → +134). Hydro-anchored zones in
+        # pass 2 additionally get their dropped-border EXPORT volume as a
+        # separate ref-priced demand block (see anchor_export_mw), giving
+        # structural exporters (NO5) their outlet without touching imports.
+        import_only = sort([other for (a, b) in drop_borders
                             for other in ((a == zone) ? [b] : (b == zone) ? [a] : String[])])
+        anchor_export_mw = haskey(anchor_refs, zone) && !isempty(import_only) ?
+            MeritOrderBook.get_dropped_border_exports(zone, day, import_only) :
+            Dict{Int,Float64}()
         return create_merit_order_book(zone, day;
             profile=profile,
             net_import_exclude=exclude,
             net_import_import_only=import_only,
             target_resolution_minutes=60,
             res_coalesce_missing=enrich_network,
-            anchor_prices=get(anchor_refs, zone, nothing))
+            anchor_prices=get(anchor_refs, zone, nothing),
+            anchor_export_mw=anchor_export_mw)
     end
 
     zone_orders = Dict{String,Vector{MarketOrders.MarketOrder}}()

@@ -110,6 +110,53 @@ function get_net_imports(bidding_zone::String, day::Date;
 end
 
 """
+    get_dropped_border_exports(zone, day, counterparties) -> Dict{Int,Float64}
+
+Per-UTC-hour EXPORT volume (MW, positive) over the borders to the listed
+counterparties, from `entsoe.physical_flows` — the mirror of the import-only
+clamp in `get_net_imports`. Used by the two-pass :hydro anchor to give
+structural exporters (NO5) their outlet back as ref-priced demand while the
+import supply stays separately clamped.
+"""
+function get_dropped_border_exports(bidding_zone::String, day::Date,
+    counterparties::Vector{String})
+    isempty(counterparties) && return Dict{Int,Float64}()
+    df = sql2df_with_retry(
+        """
+        WITH border_hourly AS (
+            SELECT DISTINCT ON (h, counterparty, direction)
+                   h, counterparty, direction, avg_flow
+            FROM (
+                SELECT EXTRACT(HOUR FROM date_time_utc AT TIME ZONE 'UTC')::int AS h,
+                       regexp_replace(
+                           CASE WHEN in_area_map_code = \$1
+                                THEN out_area_map_code ELSE in_area_map_code END,
+                           '_IPS\$', '') AS counterparty,
+                       CASE WHEN in_area_map_code = \$1 THEN 1 ELSE -1 END AS direction,
+                       AVG(flow_mw) AS avg_flow
+                FROM entsoe.physical_flows
+                WHERE (in_area_map_code = \$1 OR out_area_map_code = \$1)
+                  AND in_area_type_code LIKE 'BZN%' AND out_area_type_code LIKE 'BZN%'
+                  AND date_time_utc >= (\$2::date::timestamp AT TIME ZONE 'UTC')
+                  AND date_time_utc < ((\$2::date + 1)::timestamp AT TIME ZONE 'UTC')
+                GROUP BY 1,
+                         CASE WHEN in_area_map_code = \$1
+                              THEN out_area_map_code ELSE in_area_map_code END,
+                         CASE WHEN in_area_map_code = \$1 THEN 1 ELSE -1 END
+            ) per_code
+            ORDER BY h, counterparty, direction, avg_flow DESC
+        )
+        SELECT h, SUM(GREATEST(-direction * avg_flow, 0)) AS export_mw
+        FROM border_hourly
+        WHERE counterparty = ANY(\$3)
+        GROUP BY h
+        """,
+        [bidding_zone, day, counterparties]
+    )
+    return Dict{Int,Float64}(row.h => row.export_mw for row in eachrow(df))
+end
+
+"""
     get_firm_of(bidding_zone::String) -> Dict{String,String}
 
 Map of `unit_code => firm` for a zone, from `simulations.unit_firms` (a small
@@ -539,6 +586,7 @@ function create_merit_order_book(
     opportunity_anchor::Union{Nothing,Symbol}=nothing,
     anchor_share::Union{Nothing,Float64}=nothing,
     anchor_prices::Union{Nothing,Dict{String,Float64}}=nothing,
+    anchor_export_mw::Dict{Int,Float64}=Dict{Int,Float64}(),
     res_coalesce_missing::Bool=false,
     load_modifier::Union{Nothing,Function}=nothing,
     renewable_modifier::Union{Nothing,Function}=nothing,
@@ -910,22 +958,31 @@ function create_merit_order_book(
                 supply_orders_count += 1
                 total_supply_capacity += ni
             elseif ni < -0.1
-                # :hydro-anchored zones (pass 2): observed exports are priced
-                # at the coupled reference, NOT the cap. NO5 is the measured
-                # case — a structural exporter whose import-only clamp removed
-                # the export outlet entirely, collapsing its surplus onto a
-                # tiny local load (sim €36 vs actual €104). Ref-priced export
-                # demand clears only when the zone's price is at/below the
-                # coupled price, so it can never manufacture cap scarcity the
-                # way firm cap-priced exports did for SE1/SE2. Non-anchored
-                # zones keep the firm cap-priced treatment (unchanged).
-                export_price = (anchor_active && opportunity_anchor == :hydro &&
-                                haskey(anchor_prices, ts)) ?
-                               max(anchor_prices[ts], 1.0) : price_cap
-                push!(tagged, (SimpleOrder(:demand, export_price, -ni,
+                push!(tagged, (SimpleOrder(:demand, price_cap, -ni,
                     Symbol(bidding_zone), date_time, resolution_minutes), "IMPORT"))
                 demand_orders_count += 1
                 total_demand_quantity += -ni
+            end
+
+            # :hydro-anchored zones (pass 2): the export volume observed over
+            # the DROPPED flow-based borders re-enters as demand priced at the
+            # coupled reference — NOT the cap. NO5 is the measured case: a
+            # structural exporter whose import-only clamp removed the export
+            # outlet entirely, collapsing its surplus onto a tiny local load
+            # (sim €36 vs actual €104). Ref-priced demand clears only when the
+            # zone's price is at/below the coupled price, so it cannot
+            # manufacture cap scarcity; and it is SEPARATE from the clamped
+            # import supply, so it cannot net away import energy either
+            # (measured failure mode of netting: NO1 −23 → +134).
+            if anchor_active && opportunity_anchor == :hydro &&
+               haskey(anchor_prices, ts) && !isempty(anchor_export_mw)
+                ex_mw = get(anchor_export_mw, Dates.hour(date_time), 0.0)
+                if ex_mw > 0.1
+                    push!(tagged, (SimpleOrder(:demand, max(anchor_prices[ts], 1.0),
+                        ex_mw, Symbol(bidding_zone), date_time, resolution_minutes), "IMPORT"))
+                    demand_orders_count += 1
+                    total_demand_quantity += ex_mw
+                end
             end
 
             # Normalized within-day demand position (0 = trough, 1 = peak)
