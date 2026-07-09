@@ -1,6 +1,131 @@
 using LibPQ
 using ConcurrentUtilities: ConcurrentUtilities, Pools
 using Dates
+using DuckDB   # also brings DBInterface into scope
+
+# ============================================================================
+# Data store configuration (Postgres | DuckDB)
+# ============================================================================
+#
+# The library normally reads from the live Postgres `energy` database. For
+# offline / portable work it can instead read from a self-contained DuckDB
+# extract (see `bin/build_duckdb_extract.jl`) that mirrors the same
+# `schema.table` names, with every timestamp stored as naive UTC. The DuckDB
+# backend is READ-ONLY in v1: every write path (`save_*`, `ensure_*`, UC
+# caching) warns once and no-ops.
+#
+# Select the backend either programmatically with `configure_data_store!` or
+# via the environment at module init:
+#   EUPHEMIA_DATA_STORE=duckdb  EUPHEMIA_DUCKDB_PATH=/path/to/extract.duckdb
+# When DuckDB is selected via ENV the eager LibPQ pool is skipped entirely so
+# the library works with no Postgres available at all.
+
+const DATA_STORE = Ref{Symbol}(:postgres)
+const DUCKDB_PATH = Ref{String}("")
+const _DUCKDB_DB = Ref{Any}(nothing)
+const _DUCKDB_CONN = Ref{Any}(nothing)
+const _DUCKDB_LOCK = ReentrantLock()
+const _DUCKDB_READONLY_WARNED = Ref{Bool}(false)
+
+# Lazily open (and reuse) a single DuckDB connection, guarded by a lock.
+function _duckdb_connection()
+    lock(_DUCKDB_LOCK) do
+        if _DUCKDB_CONN[] === nothing
+            path = DUCKDB_PATH[]
+            isfile(path) || error("DuckDB extract file not found: $path")
+            db = DuckDB.DB(path)
+            _DUCKDB_DB[] = db
+            _DUCKDB_CONN[] = DBInterface.connect(db)
+        end
+        return _DUCKDB_CONN[]
+    end
+end
+
+"""
+    configure_data_store!(; backend::Symbol=:postgres, duckdb_path=nothing)
+
+Select the data backend used by all `sql2df` queries.
+
+- `backend=:postgres` (default): use the live Postgres connection pool.
+- `backend=:duckdb`: read from a self-contained DuckDB extract at
+  `duckdb_path` (the file must already exist). One DuckDB connection is
+  opened lazily and reused for the process. The DuckDB backend is read-only:
+  write paths warn once and no-op.
+
+Returns the active `DATA_STORE[]` symbol.
+"""
+function configure_data_store!(; backend::Symbol=:postgres,
+                               duckdb_path::Union{Nothing,String}=nothing)
+    backend in (:postgres, :duckdb) ||
+        error("Invalid backend: $backend (must be :postgres or :duckdb)")
+
+    if backend == :duckdb
+        duckdb_path === nothing && error("duckdb_path is required for the :duckdb backend")
+        isfile(duckdb_path) || error("DuckDB extract file not found: $duckdb_path")
+        lock(_DUCKDB_LOCK) do
+            # Drop a stale connection if the path changed
+            if _DUCKDB_CONN[] !== nothing && DUCKDB_PATH[] != duckdb_path
+                try
+                    DBInterface.close!(_DUCKDB_CONN[])
+                catch
+                end
+                _DUCKDB_CONN[] = nothing
+                _DUCKDB_DB[] = nothing
+            end
+            DUCKDB_PATH[] = duckdb_path
+        end
+        DATA_STORE[] = :duckdb
+        _DUCKDB_READONLY_WARNED[] = false
+        _duckdb_connection()  # open eagerly to validate the file
+        @info "Data store: DuckDB (read-only) — $duckdb_path"
+    else
+        DATA_STORE[] = :postgres
+        @info "Data store: PostgreSQL"
+    end
+    return DATA_STORE[]
+end
+
+# Our SQL is authored for Postgres; adapt the handful of dialect differences
+# for DuckDB. The extract stores every timestamp as naive UTC, which is what
+# makes stripping ` AT TIME ZONE 'UTC'` safe.
+function _duckdb_rewrite(sql::AbstractString)
+    s = String(sql)
+    s = replace(s, " AT TIME ZONE 'UTC'" => "")
+    # `col = ANY($n)`  -> `col IN (SELECT unnest($n))`
+    s = replace(s, r"=\s*ANY\((\$\d+)\)" => s"IN (SELECT unnest(\1))")
+    # `col <> ALL($n)` -> `col NOT IN (SELECT unnest($n))`
+    s = replace(s, r"<>\s*ALL\((\$\d+)\)" => s"NOT IN (SELECT unnest(\1))")
+    # to_char(x, 'YYYYMMDD-HH24MI') -> strftime(x, '%Y%m%d-%H%M') (same arg order)
+    s = replace(s, "'YYYYMMDD-HH24MI'" => "'%Y%m%d-%H%M'")
+    s = replace(s, "to_char(" => "strftime(")
+    return s
+end
+
+function _duckdb_sql2df(sql, args)
+    rewritten = _duckdb_rewrite(sql)
+    con = _duckdb_connection()
+    lock(_DUCKDB_LOCK) do
+        stmt = DBInterface.prepare(con, rewritten)
+        try
+            res = isempty(args) ? DBInterface.execute(stmt) :
+                  DBInterface.execute(stmt, collect(args))
+            return DataFrame(res)
+        finally
+            DBInterface.close!(stmt)
+        end
+    end
+end
+
+# Guard for write paths under the read-only DuckDB backend: warns once and
+# tells the caller to no-op. Returns `true` when running on DuckDB.
+function _duckdb_readonly_guard(fname::AbstractString)
+    DATA_STORE[] == :duckdb || return false
+    if !_DUCKDB_READONLY_WARNED[]
+        @warn "DuckDB data store is read-only (v1) — skipping database write" first_call=fname
+        _DUCKDB_READONLY_WARNED[] = true
+    end
+    return true
+end
 
 # Version of the pricing/cost model that produced stored energy_prices rows.
 # Bump when the model changes incompatibly (e.g. v2 -> v3: stylized
@@ -68,11 +193,15 @@ function withdb(f)
     return result
 end
 
-sql2df(sql, args=[]) =
-    withdb() do cnx
+function sql2df(sql, args=[])
+    if DATA_STORE[] == :duckdb
+        return _duckdb_sql2df(sql, args)
+    end
+    return withdb() do cnx
         result = LibPQ.async_execute(cnx, sql, args)
         return DataFrame(fetch(result))
     end
+end
 
 """
     sql2df_with_retry(sql, args=[]; max_retries=3, retry_delay=2.0)
@@ -126,6 +255,7 @@ Creates the simulations schema and energy_prices table if they don't exist.
 Assumes connection is already to the 'energy' database.
 """
 function ensure_energy_prices_table()
+    _duckdb_readonly_guard("ensure_energy_prices_table") && return nothing
     withdb() do cnx
         # Create schema if not exists (energy is the database, simulations is the schema)
         LibPQ.execute(cnx, "CREATE SCHEMA IF NOT EXISTS simulations")
@@ -393,6 +523,7 @@ Assumes connection is already to the 'energy' database.
 function save_energy_prices(prices::Dict{String,Float64}, bidding_zone::String, day::Date, order_method::Symbol;
                             clearing_mode::String="single_zone", optimization_run_id::Union{Integer,Nothing}=nothing,
                             batch_size::Int=100, create_schema::Bool=true)
+    _duckdb_readonly_guard("save_energy_prices") && return 0
     if isempty(prices)
         @warn "No prices to save for $bidding_zone on $day"
         return 0
@@ -565,6 +696,8 @@ function save_optimization_run(bidding_zone::String, date::Date, order_method::S
     final_price_change=nothing,
     final_flow_change_pct=nothing)
 
+    _duckdb_readonly_guard("save_optimization_run") && return nothing
+
     # Create schema and table if requested
     if create_schema
         ensure_energy_prices_table()  # This now creates both tables
@@ -645,6 +778,7 @@ Creates the simulations.transmission_flows table if it doesn't exist.
 Used to store cross-border transmission flow results from multi-zone market clearing.
 """
 function ensure_transmission_flows_table()
+    _duckdb_readonly_guard("ensure_transmission_flows_table") && return nothing
     withdb() do cnx
         create_table_sql = """
         CREATE TABLE IF NOT EXISTS simulations.transmission_flows (
@@ -699,6 +833,7 @@ Save transmission flow results to the database in the simulations.transmission_f
 """
 function save_transmission_flows(flows::Dict{String,Dict{String,Float64}}, date::Date;
                                  code_version::Int=4, create_schema::Bool=true)
+    _duckdb_readonly_guard("save_transmission_flows") && return 0
     if isempty(flows)
         @warn "No transmission flows to save"
         return 0
@@ -782,6 +917,7 @@ Creates the simulations.uc_results, simulations.uc_generation, and simulations.u
 if they don't exist. Used to cache Unit Commitment optimization results.
 """
 function ensure_uc_results_tables()
+    _duckdb_readonly_guard("ensure_uc_results_tables") && return nothing
     withdb() do cnx
         # Create schema if not exists
         LibPQ.execute(cnx, "CREATE SCHEMA IF NOT EXISTS simulations")
@@ -966,6 +1102,7 @@ Euphemia.ensure_indexes()  # Run once after DB setup, or when queries are slow
 ```
 """
 function ensure_indexes()
+    _duckdb_readonly_guard("ensure_indexes") && return nothing
     @info "Ensuring indexes on ENTSOE tables..."
 
     withdb() do cnx
