@@ -255,6 +255,12 @@ const FRANCE_PROFILE = ZoneProfile(
     peak_kappa = 0.6,
     nuclear_srmc_floor = 55.0,
     opportunity_anchor = :nuclear,
+    # Measured (cal5): share 0.9 against FR's neighbor-weighted ref carried
+    # the overpricing of CH/BE/ES into the nuclear base — corr jumped 0.76 →
+    # 0.83 (shape right) but bias went +8.5 → +33 (level too high). 0.7 keeps
+    # the coupled shape while pulling the level back toward EDF's observed
+    # off-peak position.
+    anchor_share = 0.7,
 )
 
 """
@@ -887,7 +893,18 @@ function create_merit_order_book(
             # demand (exports) — scheduled flows are committed either way
             ni = slot_import(ts)
             if ni > 0.1
-                push!(tagged, (SimpleOrder(:supply, 1.0, ni,
+                # :hydro-anchored zones (pass 2): observed imports arrive at
+                # the BORDER price, not free — pricing them near zero lets the
+                # import block set near-zero clearing prices in every
+                # import-covered hour (NO1's flat undershoot: sim ≈ €3 at
+                # night vs actual ≈ €88 tracking its neighbors). Priced at the
+                # anchor level the import-marginal hours clear at the coupled
+                # reference, as they do in reality. Everywhere else imports
+                # stay price-taking at €1 (unchanged).
+                import_price = (anchor_active && opportunity_anchor == :hydro &&
+                                haskey(anchor_prices, ts)) ?
+                               clamp(anchor_share * anchor_prices[ts], 1.0, gas_srmc) : 1.0
+                push!(tagged, (SimpleOrder(:supply, import_price, ni,
                     Symbol(bidding_zone), date_time, resolution_minutes), "IMPORT"))
                 supply_orders_count += 1
                 total_supply_capacity += ni
