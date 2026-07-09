@@ -1174,7 +1174,13 @@ function _create_multi_zone_order_book_merit(zones::Vector{String}, day::Date;
         # corresponding export must not become firm cap-priced demand in the
         # exporter's book (see get_net_imports docstring). Empty when no
         # borders were dropped, so the SEE path is unchanged.
-        import_only = sort([other for (a, b) in drop_borders
+        # Hydro-anchored zones in pass 2 keep their FULL observed net flows
+        # (imports AND exports) — their exports re-enter as ref-priced demand
+        # (see the export branch in create_merit_order_book), giving
+        # structural exporters (NO5) their outlet back without cap-priced
+        # firmness. Non-anchored zones keep the import-only clamp.
+        import_only = haskey(anchor_refs, zone) ? String[] :
+                      sort([other for (a, b) in drop_borders
                             for other in ((a == zone) ? [b] : (b == zone) ? [a] : String[])])
         return create_merit_order_book(zone, day;
             profile=profile,

@@ -255,12 +255,13 @@ const FRANCE_PROFILE = ZoneProfile(
     peak_kappa = 0.6,
     nuclear_srmc_floor = 55.0,
     opportunity_anchor = :nuclear,
-    # Measured (cal5): share 0.9 against FR's neighbor-weighted ref carried
-    # the overpricing of CH/BE/ES into the nuclear base — corr jumped 0.76 →
-    # 0.83 (shape right) but bias went +8.5 → +33 (level too high). 0.7 keeps
-    # the coupled shape while pulling the level back toward EDF's observed
-    # off-peak position.
-    anchor_share = 0.7,
+    # Measured: share 0.9 → bias +33 (cal5), share 0.7 → +21 (cal6), both
+    # with the coupled shape right (corr 0.76 → 0.80–0.83) — the neighbor-
+    # weighted ref imports the overpricing of CH/BE/ES, so the share must
+    # discount it. Extrapolating the measured share→bias line puts |bias|≤10
+    # at ≈0.55: EDF's off-peak position sits just above half the coupled
+    # neighbor price.
+    anchor_share = 0.55,
 )
 
 """
@@ -909,7 +910,19 @@ function create_merit_order_book(
                 supply_orders_count += 1
                 total_supply_capacity += ni
             elseif ni < -0.1
-                push!(tagged, (SimpleOrder(:demand, price_cap, -ni,
+                # :hydro-anchored zones (pass 2): observed exports are priced
+                # at the coupled reference, NOT the cap. NO5 is the measured
+                # case — a structural exporter whose import-only clamp removed
+                # the export outlet entirely, collapsing its surplus onto a
+                # tiny local load (sim €36 vs actual €104). Ref-priced export
+                # demand clears only when the zone's price is at/below the
+                # coupled price, so it can never manufacture cap scarcity the
+                # way firm cap-priced exports did for SE1/SE2. Non-anchored
+                # zones keep the firm cap-priced treatment (unchanged).
+                export_price = (anchor_active && opportunity_anchor == :hydro &&
+                                haskey(anchor_prices, ts)) ?
+                               max(anchor_prices[ts], 1.0) : price_cap
+                push!(tagged, (SimpleOrder(:demand, export_price, -ni,
                     Symbol(bidding_zone), date_time, resolution_minutes), "IMPORT"))
                 demand_orders_count += 1
                 total_demand_quantity += -ni
