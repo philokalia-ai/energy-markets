@@ -189,6 +189,8 @@ Base.@kwdef struct ZoneProfile
     thermal_srmc_multiplier::Float64 = 1.0
     hydro_model::Symbol = :gas_anchored
     nuclear_srmc_floor::Float64 = 0.0
+    opportunity_anchor::Symbol = :none
+    anchor_share::Float64 = 0.9
 end
 
 "SEE / default profile — the exact v10 parameters (regression baseline)."
@@ -252,6 +254,27 @@ const FRANCE_PROFILE = ZoneProfile(
     scarcity_kappa = 1.5,
     peak_kappa = 0.6,
     nuclear_srmc_floor = 55.0,
+    opportunity_anchor = :nuclear,
+)
+
+"""
+Southern/mid Norway (NO1/NO2/NO3/NO5). Same reservoir-opportunity hydro model
+as NORDIC, plus the `:hydro` opportunity anchor for two-pass clearing: these
+zones are coupled to the continent (2026-04 actuals €70–108 tracking DE/NL)
+and their stored water prices at the export opportunity — the pass-1 coupled
+continental price — not at a fraction of gas SRMC (iteration-1 result: flat
+−58…−92 residual with full reservoirs). NO4 (far north, actuals ≈ €18, NOT
+continentally coupled — congestion isolates it like SE1/SE2) deliberately
+stays on plain NORDIC_PROFILE.
+"""
+const NORWAY_PROFILE = ZoneProfile(
+    hydro_model = :reservoir_opportunity,
+    scarcity_threshold = 1.2,
+    scarcity_kappa = 1.0,
+    peak_kappa = 0.5,
+    water_value_base = 0.6,
+    water_value_span = 0.5,
+    opportunity_anchor = :hydro,
 )
 
 """
@@ -283,9 +306,10 @@ const ZONE_PROFILES = Dict{String,ZoneProfile}(
     "IT-CSOUTH" => ITALY_PROFILE, "IT-SOUTH" => ITALY_PROFILE,
     "IT-Calabria" => ITALY_PROFILE, "IT-Sicily" => ITALY_PROFILE,
     "IT-Sardinia" => ITALY_PROFILE,
-    # Nordic
-    "NO1" => NORDIC_PROFILE, "NO2" => NORDIC_PROFILE, "NO3" => NORDIC_PROFILE,
-    "NO4" => NORDIC_PROFILE, "NO5" => NORDIC_PROFILE,
+    # Norway — southern/mid zones carry the :hydro opportunity anchor;
+    # NO4 (far north, not continentally coupled) stays plain NORDIC
+    "NO1" => NORWAY_PROFILE, "NO2" => NORWAY_PROFILE, "NO3" => NORWAY_PROFILE,
+    "NO4" => NORDIC_PROFILE, "NO5" => NORWAY_PROFILE,
     "SE1" => NORDIC_PROFILE, "SE2" => NORDIC_PROFILE, "SE3" => NORDIC_PROFILE,
     "SE4" => NORDIC_PROFILE, "FI" => NORDIC_PROFILE,
     "DK1" => NORDIC_PROFILE, "DK2" => NORDIC_PROFILE,
@@ -505,6 +529,9 @@ function create_merit_order_book(
     thermal_srmc_multiplier::Union{Nothing,Float64}=nothing,
     hydro_model::Union{Nothing,Symbol}=nothing,
     nuclear_srmc_floor::Union{Nothing,Float64}=nothing,
+    opportunity_anchor::Union{Nothing,Symbol}=nothing,
+    anchor_share::Union{Nothing,Float64}=nothing,
+    anchor_prices::Union{Nothing,Dict{String,Float64}}=nothing,
     res_coalesce_missing::Bool=false,
     load_modifier::Union{Nothing,Function}=nothing,
     renewable_modifier::Union{Nothing,Function}=nothing,
@@ -534,6 +561,13 @@ function create_merit_order_book(
     thermal_srmc_multiplier = thermal_srmc_multiplier === nothing ? profile.thermal_srmc_multiplier : thermal_srmc_multiplier
     hydro_model = hydro_model === nothing ? profile.hydro_model : hydro_model
     nuclear_srmc_floor = nuclear_srmc_floor === nothing ? profile.nuclear_srmc_floor : nuclear_srmc_floor
+    opportunity_anchor = opportunity_anchor === nothing ? profile.opportunity_anchor : opportunity_anchor
+    anchor_share = anchor_share === nothing ? profile.anchor_share : anchor_share
+    # The opportunity anchor is active only when BOTH the profile opts in AND
+    # pass-1 reference prices were supplied (two-pass clearing, pass 2). With
+    # either missing the whole mechanism is dead code — pass 1 and every
+    # single-pass path (incl. SEE) are unchanged.
+    anchor_active = opportunity_anchor != :none && anchor_prices !== nothing
 
     try
         println("📊 Creating merit-order order book for $bidding_zone on $day")
@@ -640,7 +674,13 @@ function create_merit_order_book(
         # base to at least this level — nuclear-dominated exporters price their
         # modulating fleet at opportunity cost, not fuel SRMC. Default 0.0 is a
         # no-op (byte-identical for SEE).
-        apply_nuclear_floor = nuclear_srmc_floor > 0.0
+        # When the :nuclear anchor is ACTIVE the static floor is replaced by the
+        # per-slot anchor floor in the order loop (a static floor would hold the
+        # price up in exactly the RES-surplus hours where the coupled price —
+        # and EDF's opportunity cost — collapses: 2026-04 weekends, FR actual
+        # €9 vs the €55 floor).
+        apply_nuclear_floor = nuclear_srmc_floor > 0.0 &&
+                              !(anchor_active && opportunity_anchor == :nuclear)
         if !isempty(derate_scale) || apply_srmc_premium || apply_nuclear_floor
             generators = [begin
                 s = get(derate_scale, g.fuel_type, 1.0)
@@ -889,7 +929,18 @@ function create_merit_order_book(
                     # proxy for the export-market price) as they empty. This
                     # stops full Nordic reservoirs from slamming into scarcity/
                     # cap prices.
-                    water_value = if hydro_model == :reservoir_opportunity
+                    # :hydro opportunity anchor (two-pass, pass 2): stored
+                    # water prices at the export opportunity — the pass-1
+                    # coupled reference price (level AND hourly shape) — times
+                    # a share slightly below 1 when reservoirs are full
+                    # (willing to undercut the continent to export), rising
+                    # with dryness. Clamped to [2, gas SRMC].
+                    water_value = if anchor_active && opportunity_anchor == :hydro &&
+                                     haskey(anchor_prices, ts)
+                        clamp(anchor_prices[ts] *
+                              (anchor_share + water_value_dry_boost * hydro_dryness),
+                              2.0, gas_srmc)
+                    elseif hydro_model == :reservoir_opportunity
                         # Stored water is worth a FRACTION of the continental
                         # thermal price (gas SRMC proxy): an export-opportunity
                         # floor (~0.35×) when reservoirs are full, rising to the
@@ -908,6 +959,18 @@ function create_merit_order_book(
                     supply_orders_count += 1
                     total_supply_capacity += offered_pmax(g)
                 else
+                    # :nuclear opportunity anchor (two-pass, pass 2): nuclear's
+                    # effective bid base per slot is the export opportunity —
+                    # anchor_share × the pass-1 coupled reference price —
+                    # floored at fuel SRMC. It rises with the coupled price on
+                    # weekday nights and COLLAPSES with it in RES-surplus hours
+                    # (weekends/midday), which a static floor cannot do.
+                    # Everywhere else gmc ≡ g.marginal_cost.
+                    gmc = (anchor_active && opportunity_anchor == :nuclear &&
+                           g.fuel_type == Symbol("Nuclear") &&
+                           haskey(anchor_prices, ts)) ?
+                          max(g.marginal_cost, anchor_share * anchor_prices[ts]) :
+                          g.marginal_cost
                     # Must-run self-scheduling: baseload-ish units (SRMC not
                     # far above gas) bid their minimum-load block near zero —
                     # shutting down and restarting costs more than running a
@@ -927,10 +990,10 @@ function create_merit_order_book(
                         # (−212 at TTF 218, 2022) and sank the whole year.
                         deep_qty = must_run_qty * 0.6
                         push!(tagged, (SimpleOrder(:supply,
-                            g.marginal_cost * must_run_price_factor, deep_qty,
+                            gmc * must_run_price_factor, deep_qty,
                             Symbol(bidding_zone), date_time, resolution_minutes), g.code))
                         push!(tagged, (SimpleOrder(:supply,
-                            max(g.marginal_cost * 0.5, g.marginal_cost - 40.0),
+                            max(gmc * 0.5, gmc - 40.0),
                             must_run_qty - deep_qty,
                             Symbol(bidding_zone), date_time, resolution_minutes), g.code))
                         supply_orders_count += 2
@@ -942,7 +1005,7 @@ function create_merit_order_book(
                     # cost so mid-merit keeps clearing)
                     flexible_capacity = max(offered_pmax(g) - must_run_qty, 0.0)
                     for (i, (share, mult)) in enumerate(tranches)
-                        price = g.marginal_cost * mult * (i == 1 ? 1.0 : scarcity)
+                        price = gmc * mult * (i == 1 ? 1.0 : scarcity)
                         qty = flexible_capacity * share
                         qty < 0.1 && continue
                         push!(tagged, (SimpleOrder(:supply, price, qty,

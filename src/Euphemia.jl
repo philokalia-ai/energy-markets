@@ -285,7 +285,7 @@ using .AlternativeOrderBook: create_adjusted_order_book, AdjustedOrderBookResult
 include("MeritOrderBook.jl")
 using .MeritOrderBook: create_merit_order_book, ZoneProfile, get_zone_profile,
     ZONE_PROFILES, SEE_PROFILE, IBERIA_PROFILE, CONTINENTAL_PROFILE,
-    ITALY_PROFILE, NORDIC_PROFILE, BALTIC_PROFILE, FRANCE_PROFILE
+    ITALY_PROFILE, NORDIC_PROFILE, BALTIC_PROFILE, FRANCE_PROFILE, NORWAY_PROFILE
 
 # ===== EXPORTS =====
 # All module exports are centralized here following Julia best practices
@@ -335,7 +335,8 @@ export configure_data_store!
 export create_adjusted_order_book, AdjustedOrderBookResult, print_order_book_summary
 export create_merit_order_book
 export ZoneProfile, get_zone_profile, ZONE_PROFILES, SEE_PROFILE, IBERIA_PROFILE,
-    CONTINENTAL_PROFILE, ITALY_PROFILE, NORDIC_PROFILE, BALTIC_PROFILE, FRANCE_PROFILE
+    CONTINENTAL_PROFILE, ITALY_PROFILE, NORDIC_PROFILE, BALTIC_PROFILE, FRANCE_PROFILE,
+    NORWAY_PROFILE
 
 # Bidding strategy functionality
 export generate_market_orders_from_uc, apply_bidding_strategy_to_uc, UCToBidsResult
@@ -1035,6 +1036,63 @@ function build_aggregate_remap(footprint::AbstractVector{<:AbstractString})
 end
 
 """
+    compute_opportunity_anchor_refs(anchored_zones, market_prices, transfer_capacity)
+        -> Dict{String,Dict{String,Float64}}
+
+Per-zone reference prices for the two-pass opportunity anchor, extracted from
+pass-1 clearing prices: for each anchored zone, the capacity-weighted average
+pass-1 price of its ENDOGENOUS neighbors per timeslot (weight = total border
+ATC over the day, both directions). Zones without endogenous neighbors (the
+Norwegian zones — their flow-based borders are dropped) fall back to the
+continental proxy: the DE_LU/NL average. The result carries both the daily
+level and the hourly shape of the coupled price. All inputs are
+model-internal (pass-1 output), so the anchor keeps the counterfactual
+ex-ante — no observed prices enter.
+"""
+function compute_opportunity_anchor_refs(anchored_zones::Vector{String},
+    market_prices::Dict{String,Dict{String,Float64}},
+    transfer_capacity)
+
+    proxy_zones = [z for z in ("DE_LU", "NL") if haskey(market_prices, z)]
+    refs = Dict{String,Dict{String,Float64}}()
+    for z in anchored_zones
+        # Border-capacity weights toward endogenous neighbors
+        w = Dict{String,Float64}()
+        if transfer_capacity !== nothing
+            for ((a, b, _), cap) in transfer_capacity.capacity_forward
+                other = a == z ? b : (b == z ? a : nothing)
+                other === nothing && continue
+                haskey(market_prices, other) || continue
+                w[other] = get(w, other, 0.0) + max(cap, 0.0)
+            end
+        end
+        sources = if !isempty(w) && sum(values(w)) > 0
+            w
+        else
+            Dict{String,Float64}(pz => 1.0 for pz in proxy_zones)
+        end
+        isempty(sources) && continue
+        ref = Dict{String,Float64}()
+        # Weighted mean per timeslot over the sources that price that slot
+        slots = union((Set(keys(market_prices[src])) for src in keys(sources))...)
+        for ts in slots
+            num = 0.0; den = 0.0
+            for (src, wt) in sources
+                haskey(market_prices[src], ts) || continue
+                num += wt * market_prices[src][ts]; den += wt
+            end
+            den > 0 && (ref[ts] = num / den)
+        end
+        isempty(ref) || (refs[z] = ref)
+        src_desc = isempty(w) ? "continental proxy $(join(proxy_zones, "/"))" :
+                   join(sort(collect(keys(w))), ",")
+        println("   ⚓ Anchor ref for $z from $src_desc: " *
+                "mean=$(round(sum(values(ref))/max(length(ref),1), digits=1)) €/MWh")
+    end
+    return refs
+end
+
+"""
     _create_multi_zone_order_book_merit(zones::Vector{String}, day::Date)
 
 Multi-zone order book built from per-zone merit-order books.
@@ -1049,7 +1107,9 @@ endogenously — excluding them would silently remove real energy from the
 books and price phantom scarcity.
 """
 function _create_multi_zone_order_book_merit(zones::Vector{String}, day::Date;
-    enrich_network::Bool=false, apply_zone_profiles::Bool=true)
+    enrich_network::Bool=false, apply_zone_profiles::Bool=true,
+    anchor_refs::Dict{String,Dict{String,Float64}}=Dict{String,Dict{String,Float64}}(),
+    cached_zone_orders::Dict{String,Vector{MarketOrders.MarketOrder}}=Dict{String,Vector{MarketOrders.MarketOrder}}())
     isempty(zones) && error("At least one bidding zone must be specified")
 
     println("🌍 Creating multi-zone order book (merit-order method) for $(length(zones)) zones")
@@ -1121,7 +1181,8 @@ function _create_multi_zone_order_book_merit(zones::Vector{String}, day::Date;
             net_import_exclude=exclude,
             net_import_import_only=import_only,
             target_resolution_minutes=60,
-            res_coalesce_missing=enrich_network)
+            res_coalesce_missing=enrich_network,
+            anchor_prices=get(anchor_refs, zone, nothing))
     end
 
     zone_orders = Dict{String,Vector{MarketOrders.MarketOrder}}()
@@ -1130,6 +1191,16 @@ function _create_multi_zone_order_book_merit(zones::Vector{String}, day::Date;
 
     for zone in zones
         try
+            # Pass-2 reuse: zones without an anchor keep their pass-1 orders
+            # verbatim (books are deterministic; only anchored zones re-bid).
+            if haskey(cached_zone_orders, zone) && !haskey(anchor_refs, zone)
+                zone_orders[zone] = cached_zone_orders[zone]
+                for o in cached_zone_orders[zone]
+                    push!(all_periods, Dates.format(o.date_time, "yyyymmdd-HHMM"))
+                end
+                println("   ♻️  Zone $zone: reusing pass-1 book ($(length(cached_zone_orders[zone])) orders)")
+                continue
+            end
             println("   📊 Processing zone $zone...")
             result = build_zone_book(zone, zone_exclude(sort(collect(atc_linked[zone]))))
 
@@ -1277,7 +1348,8 @@ function run_multi_zone_market_clearing(date::Date;
                                         max_workers::Union{Int, Nothing}=nothing,
                                         clearing_mode::String="multi_zone",
                                         enrich_network::Bool=false,
-                                        apply_zone_profiles::Bool=true)
+                                        apply_zone_profiles::Bool=true,
+                                        passes::Int=1)
 
     start_time = time()
     # Label the optimization_runs row so a non-standard footprint (e.g. the
@@ -1331,6 +1403,52 @@ function run_multi_zone_market_clearing(date::Date;
     mpcc_result = MPCC.solve_mpcc_market_clearing(order_book;
                                                    preferred_solver=optimizer,
                                                    silent=silent)
+
+    # TWO-PASS opportunity-anchor clearing (opt-in via passes=2, merit-order
+    # only). Pass 1 above cleared the standard books; zones whose profile
+    # opts in (opportunity_anchor != :none — southern Norway :hydro, France
+    # :nuclear) now re-bid their dominant modulating resource at opportunity
+    # cost against the pass-1 coupled reference price, and the footprint is
+    # re-cleared. Non-anchored zones reuse their pass-1 books verbatim. With
+    # passes=1 (default) this block is dead code — SEE and the current EU
+    # paths are unchanged.
+    pass1_solve_time = mpcc_result.solve_time
+    if passes >= 2 && order_method == :merit_order &&
+       (mpcc_result.status == :optimal ||
+        (mpcc_result.status == :time_limit && !isempty(mpcc_result.market_prices)))
+        anchored = apply_zone_profiles ?
+            [z for z in order_book.nodes
+             if MeritOrderBook.get_zone_profile(z).opportunity_anchor != :none &&
+                haskey(mpcc_result.market_prices, z)] : String[]
+        if isempty(anchored)
+            println("\n⚓ passes=$passes requested but no zone profile opts into an opportunity anchor — keeping pass-1 result")
+        else
+            println("\n⚓ PASS 2: opportunity-anchored re-clear for $(join(anchored, ", "))")
+            refs = compute_opportunity_anchor_refs(anchored,
+                mpcc_result.market_prices, order_book.network_topology)
+            cached = Dict{String,Vector{MarketOrders.MarketOrder}}(
+                z => [o for o in order_book.orders if String(o.zone) == z]
+                for z in order_book.nodes)
+            order_book2 = _create_multi_zone_order_book_merit(zones, date;
+                enrich_network=enrich_network,
+                apply_zone_profiles=apply_zone_profiles,
+                anchor_refs=refs,
+                cached_zone_orders=cached)
+            println("\n⚡ Running pass-2 market clearing optimization...")
+            result2 = MPCC.solve_mpcc_market_clearing(order_book2;
+                preferred_solver=optimizer, silent=silent)
+            if result2.status == :optimal ||
+               (result2.status == :time_limit && !isempty(result2.market_prices))
+                order_book = order_book2
+                mpcc_result = result2
+                println("   ⚓ Pass 2 accepted (status=$(result2.status), " *
+                        "solve=$(round(result2.solve_time, digits=1))s; " *
+                        "pass 1 was $(round(pass1_solve_time, digits=1))s)")
+            else
+                @warn "Pass-2 clearing failed (status=$(result2.status)) — falling back to pass-1 result"
+            end
+        end
+    end
 
     total_time = time() - start_time
 
