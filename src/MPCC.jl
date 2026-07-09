@@ -829,6 +829,23 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
 
         # Solve the model
         optimize!(model)
+
+        # Gurobi's presolve can return the ambiguous INFEASIBLE_OR_UNBOUNDED
+        # on numerically borderline instances (observed: the 2026-04-02 EU
+        # book — a coin-flip outcome across otherwise identical runs). Retry
+        # once with DualReductions=0, which forces Gurobi to distinguish the
+        # two cases and, for this model class (bounded prices, bounded
+        # acceptances — it cannot actually be unbounded), typically proves
+        # optimality. No-op for every solve that doesn't hit this status.
+        if termination_status(model) == MOI.INFEASIBLE_OR_UNBOUNDED
+            @warn "MPCC solve returned INFEASIBLE_OR_UNBOUNDED — retrying with DualReductions=0"
+            try
+                set_optimizer_attribute(model, "DualReductions", 0)
+                optimize!(model)
+            catch e
+                @warn "DualReductions retry unavailable ($(sprint(showerror, e))) — keeping original status"
+            end
+        end
         solve_time = time() - start_time
 
         # Extract results
