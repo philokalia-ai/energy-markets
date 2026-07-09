@@ -175,6 +175,7 @@ Base.@kwdef struct ZoneProfile
     derate_headroom::Float64 = 1.15
     thermal_srmc_multiplier::Float64 = 1.0
     hydro_model::Symbol = :gas_anchored
+    nuclear_srmc_floor::Float64 = 0.0
 end
 
 "SEE / default profile — the exact v10 parameters (regression baseline)."
@@ -222,6 +223,25 @@ const NORDIC_PROFILE = ZoneProfile(
 )
 
 """
+France. Nuclear-dominated exporter. Diagnostics (2026-04): the fleet picture is
+CORRECT — nuclear unit fleet 50.9 GW vs trailing-30d p95 47.4 GW, within the
+derate headroom, so fleet-truthing rightly stays silent — yet the hourly
+residual shows a LEVEL gap concentrated off-peak: sim ≈ €10 (nuclear tranche-1
+at SRMC) overnight vs actual €55–70, while midday RES-surplus hours match. The
+observed French off-peak price reflects EDF's opportunity-cost *bidding* of the
+modulating nuclear fleet, not the ~€10 fuel SRMC — a bidding-layer position,
+which per the repo's cost-model convention belongs here, not in the SRMC table.
+`nuclear_srmc_floor` lifts the nuclear bid base to that observed level; peaks
+stay set by gas/hydro/scarcity as in CONTINENTAL.
+"""
+const FRANCE_PROFILE = ZoneProfile(
+    scarcity_threshold = 1.25,
+    scarcity_kappa = 1.5,
+    peak_kappa = 0.6,
+    nuclear_srmc_floor = 55.0,
+)
+
+"""
 Baltic (EE/LT/LV). Tightly coupled to the Nordic hydro system and thermally
 thin; softened scarcity like the continental core. Left close to SEE otherwise —
 their residual error is expected to shrink once the Nordic zones are corrected.
@@ -258,8 +278,10 @@ const ZONE_PROFILES = Dict{String,ZoneProfile}(
     "DK1" => NORDIC_PROFILE, "DK2" => NORDIC_PROFILE,
     # Baltic
     "EE" => BALTIC_PROFILE, "LT" => BALTIC_PROFILE, "LV" => BALTIC_PROFILE,
+    # France (nuclear-heavy: continental scarcity + nuclear bid position)
+    "FR" => FRANCE_PROFILE,
     # Continental core
-    "DE_LU" => CONTINENTAL_PROFILE, "FR" => CONTINENTAL_PROFILE,
+    "DE_LU" => CONTINENTAL_PROFILE,
     "BE" => CONTINENTAL_PROFILE, "NL" => CONTINENTAL_PROFILE,
     "AT" => CONTINENTAL_PROFILE, "CH" => CONTINENTAL_PROFILE,
     "PL" => CONTINENTAL_PROFILE, "CZ" => CONTINENTAL_PROFILE,
@@ -468,6 +490,7 @@ function create_merit_order_book(
     derate_headroom::Union{Nothing,Float64}=nothing,
     thermal_srmc_multiplier::Union{Nothing,Float64}=nothing,
     hydro_model::Union{Nothing,Symbol}=nothing,
+    nuclear_srmc_floor::Union{Nothing,Float64}=nothing,
     res_coalesce_missing::Bool=false,
     load_modifier::Union{Nothing,Function}=nothing,
     renewable_modifier::Union{Nothing,Function}=nothing,
@@ -496,6 +519,7 @@ function create_merit_order_book(
     derate_headroom = derate_headroom === nothing ? profile.derate_headroom : derate_headroom
     thermal_srmc_multiplier = thermal_srmc_multiplier === nothing ? profile.thermal_srmc_multiplier : thermal_srmc_multiplier
     hydro_model = hydro_model === nothing ? profile.hydro_model : hydro_model
+    nuclear_srmc_floor = nuclear_srmc_floor === nothing ? profile.nuclear_srmc_floor : nuclear_srmc_floor
 
     try
         println("📊 Creating merit-order order book for $bidding_zone on $day")
@@ -598,15 +622,24 @@ function create_merit_order_book(
         srmc_exempt_fuels = Set{Symbol}(vcat(WATER_VALUE_FUEL_TYPES,
             [Symbol("Hydro Run-of-river and pondage"), Symbol("Energy storage")]))
         apply_srmc_premium = thermal_srmc_multiplier != 1.0
-        if !isempty(derate_scale) || apply_srmc_premium
+        # Nuclear bid-position floor (FRANCE_PROFILE): raise the nuclear bid
+        # base to at least this level — nuclear-dominated exporters price their
+        # modulating fleet at opportunity cost, not fuel SRMC. Default 0.0 is a
+        # no-op (byte-identical for SEE).
+        apply_nuclear_floor = nuclear_srmc_floor > 0.0
+        if !isempty(derate_scale) || apply_srmc_premium || apply_nuclear_floor
             generators = [begin
                 s = get(derate_scale, g.fuel_type, 1.0)
                 m = (apply_srmc_premium && !(g.fuel_type in srmc_exempt_fuels)) ?
                     thermal_srmc_multiplier : 1.0
-                (s < 1.0 || m != 1.0) ?
+                mc = g.marginal_cost * m
+                if apply_nuclear_floor && g.fuel_type == Symbol("Nuclear")
+                    mc = max(mc, nuclear_srmc_floor)
+                end
+                (s < 1.0 || mc != g.marginal_cost) ?
                     Generator(g.code, g.name, g.fuel_type, g.location,
                               g.p_max * s, g.p_min * s,
-                              g.bidding_zone, g.marginal_cost * m,
+                              g.bidding_zone, mc,
                               g.ramp_up, g.ramp_down, g.min_uptime, g.min_downtime) :
                     g
             end for g in generators]

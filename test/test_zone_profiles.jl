@@ -43,6 +43,7 @@ const V10_TRANCHES = [(0.55, 0.95), (0.20, 1.05), (0.15, 1.25), (0.10, 1.60)]
         @test p.derate_headroom == 1.15
         @test p.thermal_srmc_multiplier == 1.0       # no premium
         @test p.hydro_model == :gas_anchored         # SEE hydro model
+        @test p.nuclear_srmc_floor == 0.0            # no nuclear position floor
     end
 
     @testset "registry defaults to SEE for the SEE core and unknowns" begin
@@ -64,6 +65,9 @@ const V10_TRANCHES = [(0.55, 0.95), (0.20, 1.05), (0.15, 1.25), (0.10, 1.60)]
         @test get_zone_profile("NO1") === NORDIC_PROFILE
         @test get_zone_profile("EE") === BALTIC_PROFILE
         @test get_zone_profile("DE_LU") === CONTINENTAL_PROFILE
+        @test FRANCE_PROFILE.nuclear_srmc_floor == 55.0
+        @test FRANCE_PROFILE.thermal_srmc_multiplier == 1.0
+        @test get_zone_profile("FR") === FRANCE_PROFILE
     end
 
     # ---- The regression guard: SEE byte-identical -----------------------------
@@ -96,7 +100,8 @@ const V10_TRANCHES = [(0.55, 0.95), (0.20, 1.05), (0.15, 1.25), (0.10, 1.60)]
             fleet_truthing=true,
             derate_headroom=1.15,
             thermal_srmc_multiplier=1.0,
-            hydro_model=:gas_anchored)
+            hydro_model=:gas_anchored,
+            nuclear_srmc_floor=0.0)
         @test book_explicit.success
 
         fp_default = zp_fingerprint(book_default.order_book)

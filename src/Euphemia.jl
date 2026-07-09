@@ -285,7 +285,7 @@ using .AlternativeOrderBook: create_adjusted_order_book, AdjustedOrderBookResult
 include("MeritOrderBook.jl")
 using .MeritOrderBook: create_merit_order_book, ZoneProfile, get_zone_profile,
     ZONE_PROFILES, SEE_PROFILE, IBERIA_PROFILE, CONTINENTAL_PROFILE,
-    ITALY_PROFILE, NORDIC_PROFILE, BALTIC_PROFILE
+    ITALY_PROFILE, NORDIC_PROFILE, BALTIC_PROFILE, FRANCE_PROFILE
 
 # ===== EXPORTS =====
 # All module exports are centralized here following Julia best practices
@@ -335,7 +335,7 @@ export configure_data_store!
 export create_adjusted_order_book, AdjustedOrderBookResult, print_order_book_summary
 export create_merit_order_book
 export ZoneProfile, get_zone_profile, ZONE_PROFILES, SEE_PROFILE, IBERIA_PROFILE,
-    CONTINENTAL_PROFILE, ITALY_PROFILE, NORDIC_PROFILE, BALTIC_PROFILE
+    CONTINENTAL_PROFILE, ITALY_PROFILE, NORDIC_PROFILE, BALTIC_PROFILE, FRANCE_PROFILE
 
 # Bidding strategy functionality
 export generate_market_orders_from_uc, apply_bidding_strategy_to_uc, UCToBidsResult
@@ -966,6 +966,20 @@ end
 # BZN borders directly and need no remap — audited.)
 const AGGREGATE_BORDER_REPRESENTATIVE = Dict{String,String}("IT" => "IT-NORTH")
 
+# Zones whose INTERNAL borders clear via flow-based capacity calculation
+# (Nordic CCR — flow-based DA since Oct 2024). The implicit table's ATC rows
+# for those borders are stale residuals far below physical capacity (audited
+# 2026-04: SE3→NO1 published as 0 MW, NO2→NO1 as ~733 MW vs a ~3,500 MW
+# physical border), which starves import-dependent sub-zones (NO1 fleet
+# 2.4 GW vs 3.3–3.9 GW load) into phantom scarcity at the cap. In the enriched
+# network these internal borders are dropped, so the book keeps observed net
+# imports for them — the same honest treatment as other borders the ATC data
+# cannot reproduce (RS, HU–RO). Borders from these zones to the OUTSIDE
+# (NO2–DE_LU/NL, DK1–DE_LU, SE4–PL, FI–EE, …) are NTC-published DC links and
+# stay endogenous.
+const NORDIC_FLOW_BASED_ZONES = ["NO1", "NO2", "NO3", "NO4", "NO5",
+                                 "SE1", "SE2", "SE3", "SE4", "FI", "DK1", "DK2"]
+
 """
     build_aggregate_remap(footprint) -> Dict{String,String}
 
@@ -1011,9 +1025,12 @@ function _create_multi_zone_order_book_merit(zones::Vector{String}, day::Date;
     # failing. Left off by default so the 5-zone SEE product is byte-identical.
     aggregate_remap = enrich_network ? build_aggregate_remap(zones) : Dict{String,String}()
 
+    flow_based_groups = enrich_network ? [NORDIC_FLOW_BASED_ZONES] : Vector{Vector{String}}()
+
     println("   🔌 Fetching transfer capacities between zones...")
     transfer_capacity = Network.create_transfer_capacity_from_entsoe(day, zones;
-        include_explicit=enrich_network, aggregate_remap=aggregate_remap)
+        include_explicit=enrich_network, aggregate_remap=aggregate_remap,
+        flow_based_groups=flow_based_groups)
     zone_pairs = Network.get_zone_pairs(transfer_capacity)
     # A border only counts as endogenous if it can actually carry flow:
     # ATC rows with zero capacity in both directions all day (e.g. an

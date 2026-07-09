@@ -121,6 +121,42 @@ Regions → zones (profiles authored as thin deltas over SEE):
 
 ---
 
+## Phase 3, iteration 2 — France and NO1 (diagnose-first)
+
+**France (the one underpriced zone).** Diagnostics on 2026-04:
+- Fleet picture is **correct**: nuclear unit fleet 50,852 MW (after outage
+  filtering) vs trailing-30d p95 of actual nuclear output 47,355 MW — within
+  the 1.15 derate headroom, so fleet-truthing rightly does not fire. No
+  blanket SRMC change is justified by availability.
+- Hourly residual shape (full run): the gap is a **level problem concentrated
+  off-peak** — sim ≈ €10–16 overnight (the nuclear tranche-1 price at €10
+  SRMC) vs actual €55–70, while midday RES-surplus hours match (sim 7.5 vs
+  actual 2.8–9) and peaks are only mildly low. The observed French off-peak
+  price is EDF's opportunity-cost *bidding* of its modulating nuclear fleet,
+  not fuel SRMC.
+- Fix: `FRANCE_PROFILE` — continental scarcity softening plus
+  `nuclear_srmc_floor = 55.0` (a bidding-layer position, where bid strategy
+  belongs per the repo's cost-model convention).
+
+**NO1 (the worst Nordic zone).** Diagnostics on 2026-04:
+- The reservoir-opportunity model *was* applying: `NORDIC_PROFILE` selected,
+  filling-rate data exists per NO1–NO5 BZN (weekly through 2026-W27), NO1
+  dryness = 0.0 → water value ≈ €25–46. Yet NO1 still cleared at €800–2300
+  most hours → **adequacy, not water value**.
+- Root cause: NO1's unit-level fleet is 2,430 MW vs load 3,287–3,861 MW — the
+  zone imports a third of its consumption — and the implicit table's ATC into
+  NO1 is ~1,254 MW total (NO2→NO1 733, NO5→NO1 490, NO3→NO1 31, **SE3→NO1
+  0**). The Nordic CCR moved to **flow-based** DA capacity calculation
+  (Oct 2024): the implicit "offered ATC" rows for Nordic-internal borders are
+  stale residuals far below physical capacity (NO1–NO2 physical ≈ 3,500 MW).
+  Endogenizing those borders starves NO1 into phantom scarcity.
+- Fix (network layer, gated): drop borders internal to the Nordic flow-based
+  group (`NORDIC_FLOW_BASED_ZONES`) from the enriched transfer-capacity build,
+  so the book keeps **observed net imports** for them — the same honest
+  treatment as other borders the ATC data cannot reproduce (RS, HU–RO).
+  Nordic↔continent DC links (NO2–DE_LU/NL, DK1–DE_LU, SE4–PL, FI–EE, …) are
+  genuine NTC borders and stay endogenous.
+
 ## Per-zone metrics: baseline → Phase 1 → full (5 days, sim − actual)
 
 <!-- FILLED FROM compare.jl AFTER RUNS -->
