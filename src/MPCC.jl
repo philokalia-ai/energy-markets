@@ -846,6 +846,24 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
                 @warn "DualReductions retry unavailable ($(sprint(showerror, e))) — keeping original status"
             end
         end
+        # A "proven" INFEASIBLE can be a FALSE certificate from presolve on
+        # this big-M complementarity model at scale. Measured on the
+        # 2026-04-02 EU book (~22k orders): the full-day model was declared
+        # INFEASIBLE, yet every period is independent and the hour the IIS
+        # blamed (15:00) solves OPTIMAL in isolation — and an earlier code
+        # version solved the same day optimally. Before trusting the
+        # certificate, retry once with presolve off and maximum numeric
+        # care. No-op for every solve that doesn't hit INFEASIBLE.
+        if termination_status(model) == MOI.INFEASIBLE
+            @warn "MPCC solve claims INFEASIBLE — verifying with Presolve=0, NumericFocus=3"
+            try
+                set_optimizer_attribute(model, "Presolve", 0)
+                set_optimizer_attribute(model, "NumericFocus", 3)
+                optimize!(model)
+            catch e
+                @warn "Numeric-verification retry unavailable ($(sprint(showerror, e))) — keeping INFEASIBLE"
+            end
+        end
         solve_time = time() - start_time
 
         # Extract results
