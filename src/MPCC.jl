@@ -498,7 +498,10 @@ Solves the MPCC-based market clearing problem using typed order book structure.
 function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
     preferred_solver::String="auto",
     silent::Bool=true,
-    big_m::Float64=BIG_M_PARAMETER)
+    big_m::Float64=BIG_M_PARAMETER,
+    time_limit::Float64=900.0,
+    mip_gap::Float64=1e-6,
+    heuristic_effort::Union{Float64,Nothing}=nothing)
 
     # Analyze orders by type - currently we only handle SimpleOrder types from UC conversion
     simple_orders = filter(o -> isa(o, SimpleOrder), order_book.orders)
@@ -536,11 +539,23 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
     # price cap, so even a 0.1% relative gap is millions of € — enough
     # slack for the incumbent to curtail demand at the cap in some hour,
     # which prices that hour at the cap instead of the competitive level.
-    set_time_limit_sec(model, 900.0)
+    # Defaults unchanged (900 s / 1e-6); callers may extend the budget for
+    # solvers that need longer to find a first incumbent on the 39-zone MIP
+    # (HiGHS) — see bin/reproduce.jl.
+    set_time_limit_sec(model, time_limit)
     try
-        set_attribute(model, MOI.RelativeGapTolerance(), 1e-6)
+        set_attribute(model, MOI.RelativeGapTolerance(), mip_gap)
     catch
         # attribute not supported by this solver version — proceed with defaults
+    end
+    # Optional: crank the solver's primal-heuristic effort (HiGHS
+    # "mip_heuristic_effort", default 0.05) to find a first incumbent sooner
+    # on the large multi-zone complementarity MIP. No-op if unsupported.
+    if heuristic_effort !== nothing && solver_name == "HiGHS"
+        try
+            set_optimizer_attribute(model, "mip_heuristic_effort", heuristic_effort)
+        catch
+        end
     end
 
     start_time = time()

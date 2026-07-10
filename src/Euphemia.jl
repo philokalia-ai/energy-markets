@@ -158,11 +158,21 @@ end
 
 function __init__()
     DotEnv.load!(".")
-    # DuckDB backend via ENV: read from a self-contained extract and SKIP the
-    # eager LibPQ pool entirely so the library works with no Postgres at all.
-    if lowercase(get(ENV, "EUPHEMIA_DATA_STORE", "")) == "duckdb"
-        path = get(ENV, "EUPHEMIA_DUCKDB_PATH", "")
-        configure_data_store!(backend=:duckdb, duckdb_path=path)
+    # Runtime (not precompile-time) environment overrides.
+    RESULTS_DB_PATH[] = get(ENV, "EUPHEMIA_RESULTS_DB", "data/results.duckdb")
+    # Backend selection (explicit env wins; else auto-detect the public extract;
+    # else Postgres; else a clear error). See `_resolve_data_store`. When DuckDB
+    # is selected the eager LibPQ pool is SKIPPED entirely so the library works
+    # with no Postgres available at all.
+    backend, path = _resolve_data_store(
+        data_store=get(ENV, "EUPHEMIA_DATA_STORE", ""),
+        duckdb_path=get(ENV, "EUPHEMIA_DUCKDB_PATH", ""),
+        energy_conn_str=get(ENV, "ENERGY_CONN_STR", ""))
+    if backend == :duckdb
+        # EUPHEMIA_DUCKDB_READONLY=true opens the extract in shared read-only
+        # mode (required for multi-process parallel workers; see bin/reproduce.jl).
+        ro = lowercase(get(ENV, "EUPHEMIA_DUCKDB_READONLY", "")) == "true"
+        configure_data_store!(backend=:duckdb, duckdb_path=path, read_only=ro)
     else
         preinit_pool()
     end
@@ -1413,7 +1423,15 @@ function run_multi_zone_market_clearing(date::Date;
                                         clearing_mode::String="multi_zone",
                                         enrich_network::Bool=false,
                                         apply_zone_profiles::Bool=true,
-                                        passes::Int=1)
+                                        passes::Int=1,
+                                        # MPCC solver budget. Defaults unchanged
+                                        # (900 s / 1e-6). HiGHS needs a longer
+                                        # budget than Gurobi to find a first
+                                        # incumbent on the 39-zone MIP — see
+                                        # bin/reproduce.jl.
+                                        mpcc_time_limit::Float64=900.0,
+                                        mpcc_mip_gap::Float64=1e-6,
+                                        mpcc_heuristic_effort::Union{Float64,Nothing}=nothing)
 
     start_time = time()
     # Label the optimization_runs row so a non-standard footprint (e.g. the
@@ -1466,7 +1484,10 @@ function run_multi_zone_market_clearing(date::Date;
     println("\n⚡ Running multi-zone market clearing optimization...")
     mpcc_result = MPCC.solve_mpcc_market_clearing(order_book;
                                                    preferred_solver=optimizer,
-                                                   silent=silent)
+                                                   silent=silent,
+                                                   time_limit=mpcc_time_limit,
+                                                   mip_gap=mpcc_mip_gap,
+                                                   heuristic_effort=mpcc_heuristic_effort)
 
     # TWO-PASS opportunity-anchor clearing (opt-in via passes=2, merit-order
     # only). Pass 1 above cleared the standard books; zones whose profile
@@ -1500,7 +1521,9 @@ function run_multi_zone_market_clearing(date::Date;
                 cached_zone_orders=cached)
             println("\n⚡ Running pass-2 market clearing optimization...")
             result2 = MPCC.solve_mpcc_market_clearing(order_book2;
-                preferred_solver=optimizer, silent=silent)
+                preferred_solver=optimizer, silent=silent,
+                time_limit=mpcc_time_limit, mip_gap=mpcc_mip_gap,
+                heuristic_effort=mpcc_heuristic_effort)
             if result2.status == :optimal ||
                (result2.status == :time_limit && !isempty(result2.market_prices))
                 order_book = order_book2
