@@ -381,6 +381,31 @@ const SWISS_PROFILE = ZoneProfile(
 )
 
 """
+Austria. Same alpine reservoir-opportunity + `:hydro` anchor as CH (the iter4
+joint rollout), but with its own `anchor_share` (iter5): measured on
+2026-04-01..05, CH's actual level sits AT its coupled reference (share 0.9 →
+bias −2.3, near-perfect) while AT's actual (≈€100) trades ~€19 ABOVE its
+coupled neighbors (DE_LU ≈€81) — a Core-FBMC premium the capacity-weighted ref
+cannot see. At the shared share 0.9 AT under-priced (bias −17.9) and its
+too-cheap hydro exports dragged IT-NORTH (−9.0) and SK (−11.0) negative — the
+iter4 "alpine-cheapening spillover". From the measured share→bias point
+(0.9 → −17.9 at sim ≈ 82), share 1.1 puts the AT hydro bid base at its
+observed premium — a calibrated bidding position like FRANCE_PROFILE's 0.55
+in the other direction. The water value stays clamped at gas SRMC, so a
+share > 1 cannot manufacture scarcity.
+"""
+const AUSTRIA_PROFILE = ZoneProfile(
+    hydro_model = :reservoir_opportunity,
+    scarcity_threshold = 1.2,
+    scarcity_kappa = 1.0,
+    peak_kappa = 0.5,
+    water_value_base = 0.6,
+    water_value_span = 0.5,
+    opportunity_anchor = :hydro,
+    anchor_share = 1.1,
+)
+
+"""
 Baltic (EE/LT/LV). Tightly coupled to the Nordic hydro system and thermally
 thin; softened scarcity like the continental core. Left close to SEE otherwise —
 their residual error is expected to shrink once the Nordic zones are corrected.
@@ -424,8 +449,9 @@ const ZONE_PROFILES = Dict{String,ZoneProfile}(
     # France (nuclear-heavy: continental scarcity + nuclear bid position)
     "FR" => FRANCE_PROFILE,
     # Alpine hydro (CH + AT): reservoir-opportunity + :hydro anchor, rolled out
-    # together (iter4) so the AT–CH border is anchored consistently
-    "CH" => SWISS_PROFILE, "AT" => SWISS_PROFILE,
+    # together (iter4) so the AT–CH border is anchored consistently; AT carries
+    # its own anchor_share for the Core-FBMC premium (iter5)
+    "CH" => SWISS_PROFILE, "AT" => AUSTRIA_PROFILE,
     # Continental core
     "DE_LU" => CONTINENTAL_PROFILE,
     "BE" => CONTINENTAL_PROFILE, "NL" => CONTINENTAL_PROFILE,
