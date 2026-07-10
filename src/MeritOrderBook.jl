@@ -406,6 +406,27 @@ const AUSTRIA_PROFILE = ZoneProfile(
 )
 
 """
+Belgium. Continental thermal zone whose Core-FBMC borders are dropped
+(iter5: BE–FR/NL/DE_LU in `flow_based_drop_borders` — import ATCs collapse to
+0–350 MW mid-morning while physical flows carry 1.4–1.9 GW). The drop alone
+(cal17) flipped BE from +46.5 starved-overpricing to −35 (the €1
+observed-import block price-setting in import-covered hours — the NO1/SE3
+failure mode). The `:hydro` opportunity anchor supplies the pricing half of
+the treatment: dropped-border imports at the border price (`share × ref`,
+ref = DE_LU/NL continental proxy since BE has no endogenous neighbors left;
+GB is outside the footprint), dropped-border exports as ref-priced demand.
+BE's actual mean (≈€77) sits at ~0.9× the proxy — the default share. The
+hydro side of the anchor touches only BE's small pumped fleet (ref-priced
+storage — if anything more honest than gas-anchored).
+"""
+const BELGIUM_PROFILE = ZoneProfile(
+    scarcity_threshold = 1.25,
+    scarcity_kappa = 1.5,
+    peak_kappa = 0.6,
+    opportunity_anchor = :hydro,
+)
+
+"""
 Baltic (EE/LT/LV). Tightly coupled to the Nordic hydro system and thermally
 thin; softened scarcity like the continental core. Left close to SEE otherwise —
 their residual error is expected to shrink once the Nordic zones are corrected.
@@ -454,7 +475,8 @@ const ZONE_PROFILES = Dict{String,ZoneProfile}(
     "CH" => SWISS_PROFILE, "AT" => AUSTRIA_PROFILE,
     # Continental core
     "DE_LU" => CONTINENTAL_PROFILE,
-    "BE" => CONTINENTAL_PROFILE, "NL" => CONTINENTAL_PROFILE,
+    # BE: dropped Core borders + :hydro anchor for import pricing (iter5)
+    "BE" => BELGIUM_PROFILE, "NL" => CONTINENTAL_PROFILE,
     "PL" => CONTINENTAL_PROFILE, "CZ" => CONTINENTAL_PROFILE,
     "SK" => CONTINENTAL_PROFILE,
 )

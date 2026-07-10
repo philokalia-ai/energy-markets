@@ -97,6 +97,11 @@ const V10_TRANCHES = [(0.55, 0.95), (0.20, 1.05), (0.15, 1.25), (0.10, 1.60)]
         @test get_zone_profile("SE4") === SWEDEN_SOUTH_PROFILE
         @test get_zone_profile("SE1") === NORDIC_PROFILE
         @test get_zone_profile("SE2") === NORDIC_PROFILE
+        # iter5: BE's dropped Core borders need the anchor's import pricing
+        # (thermal zone, continental params otherwise).
+        @test get_zone_profile("BE") === BELGIUM_PROFILE
+        @test BELGIUM_PROFILE.opportunity_anchor == :hydro
+        @test BELGIUM_PROFILE.hydro_model == :gas_anchored
     end
 
     @testset "opportunity anchor is a no-op without profile opt-in" begin
