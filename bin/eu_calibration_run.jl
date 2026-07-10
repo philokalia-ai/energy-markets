@@ -33,13 +33,33 @@ optimizer = get(ENV, "OPTIMIZER", "auto")
 apply_profiles = lowercase(get(ENV, "APPLY_PROFILES", "true")) == "true"
 passes = parse(Int, get(ENV, "PASSES", "1"))
 const CLEARING_MODE = get(ENV, "CLEARING_MODE", "multi_zone_eu_cal")
+# PIPELINE=true runs the whole date range through the producer/consumer
+# pipeline (book workers build ahead while the solver workers stay saturated).
+# It is inherently two-pass (opportunity anchors), so it supersedes PASSES and
+# saves ONLY energy_prices under CLEARING_MODE — exactly like the per-day loop
+# below. BOOK_WORKERS / SOLVER_WORKERS tune the pools (defaults min(10,CPU÷8) / 2).
+const USE_PIPELINE = lowercase(get(ENV, "PIPELINE", "false")) == "true"
+book_workers = parse(Int, get(ENV, "BOOK_WORKERS", "0"))
+solver_workers = parse(Int, get(ENV, "SOLVER_WORKERS", "2"))
 
 println("=" ^ 70)
 println("EU CALIBRATION RUN  zones=$(length(FOOTPRINT))  period=$start_date..$end_date")
 println("  clearing_mode=$CLEARING_MODE  apply_profiles=$apply_profiles  passes=$passes  save=$save_to_db")
 println("  code_version=$(Euphemia.ENERGY_PRICES_CODE_VERSION)  optimizer=$optimizer")
+println("  pipeline=$USE_PIPELINE")
 println("=" ^ 70)
 flush(stdout)
+
+if USE_PIPELINE
+    bw = book_workers <= 0 ? min(10, max(1, Sys.CPU_THREADS ÷ 8)) : book_workers
+    Euphemia.run_pipelined_backfill(collect(start_date:Day(1):end_date), FOOTPRINT;
+        solver_workers=solver_workers, book_workers=bw,
+        optimizer=optimizer, clearing_mode=CLEARING_MODE,
+        enrich_network=true, apply_zone_profiles=apply_profiles,
+        save_to_db=save_to_db, save_prices_only=true, resume=false)
+    println("\n✅ EU CALIBRATION RUN COMPLETE ($CLEARING_MODE, pipeline)")
+    exit(0)
+end
 
 for day in start_date:Day(1):end_date
     println("\n" * "#" ^ 70 * "\n# DAY $day\n" * "#" ^ 70)
