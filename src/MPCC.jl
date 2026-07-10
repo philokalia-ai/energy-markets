@@ -859,6 +859,7 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
             try
                 set_optimizer_attribute(model, "Presolve", 0)
                 set_optimizer_attribute(model, "NumericFocus", 3)
+                set_optimizer_attribute(model, "TimeLimit", 600.0)
                 optimize!(model)
             catch e
                 @warn "Numeric-verification retry unavailable ($(sprint(showerror, e))) — keeping INFEASIBLE"

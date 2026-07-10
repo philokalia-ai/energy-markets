@@ -184,20 +184,39 @@ equality chain propagates the impossibility network-wide.
 
 Crucially, the failing solve is **pass 1 — the iteration-1 configuration**
 (no anchors, no export orders; verified: the failing runs show zero pass-2
-activity, and a dedicated `passes=1` run reproduces the infeasibility). cal4
-cleared this day on 2026-07-05; the books are built from live ENTSO-E tables
-that have since been revised. No order in the day-2 book is outside the
-price limits (scanned: 0). This is a pre-existing MPCC formulation fragility
-surfaced by upstream data revision — not an iteration-2 regression.
+activity, and a dedicated `passes=1` run reproduces it). The bisection
+evidence localizes the root cause:
+
+- the hour the IIS blamed (15:00) solves **OPTIMAL as a standalone
+  single-period model** — a solution for that hour's books exists;
+- the full-day model is INFEASIBLE even with `Presolve=0` +
+  `NumericFocus=3` (the honest verifier, not a presolve artifact);
+- no day-2 rows in physical_flows / load forecast / RES forecast / implicit
+  ATC were revised after cal4 solved the day optimally (`update_time_utc`
+  check: 0 rows) — but the books also depend on trailing-window aggregates
+  (30-day p95, hydro availability, outages) that were not ruled out;
+- no order in the book is outside the price limits (scanned: 0).
+
+The reconciliation: the complementarity **Big-M constants are global-scale**
+— at full-book scale (~22k orders) the h15 complementarity system becomes
+infeasible, while the same books in a small standalone model (smaller M
+geometry) clear. The structural fix is **per-order Big-M sized from the
+actual price range** — an MPCC-formulation change that needs its own
+SEE-guard regression test, deferred to the next iteration. Two robustness
+fixes landed now in `solve_mpcc_market_clearing`: `DualReductions=0` retry
+disambiguates the former coin-flip INFEASIBLE_OR_UNBOUNDED, and a claimed
+INFEASIBLE is verified once with `Presolve=0` + `NumericFocus=3`
+(time-boxed) before being trusted; both are no-ops for solves that never
+hit those statuses. Pre-existing fragility (the same coin-flip hit cal2's
+first attempt in iteration 1), not an iteration-2 regression.
 
 ## Honest remaining gaps (recommended next iteration)
 
-1. **The h15 MPCC knife-edge**: single-hour bisection (drop one zone's h15
-   book at a time) to isolate the culprit zone, then a structural fix —
-   per-order Big-M sized from the coupled book's actual price range, or a
-   guaranteed per-zone-hour cap-priced slack so no book is literally
-   unclearable. This also needs an MPCC-level test so the SEE guard is
-   provably unaffected.
+1. **Per-order Big-M in the MPCC** (the 2026-04-02 root cause): size the
+   complementarity constants from each order's actual price range instead of
+   a global constant, with an MPCC-level regression test so the SEE guard is
+   provably unaffected. The verification retries landed this iteration are
+   mitigations, not the cure.
 2. **NO5 (−34)**: the continental proxy inherits the continent's weekend
    RES-surplus collapse, but the Nordic hydro system's actual price does not
    collapse (NO5 actual stays ≈ €100 through the weekend). The anchor needs a
