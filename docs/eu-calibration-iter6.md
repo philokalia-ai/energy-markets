@@ -137,7 +137,10 @@ flipped.
   p95-observed thermal capacity so idle plant stops looking scarce (DE gas 15 GW
   listed vs ~35 GW installed), and (b) revisit **peak_kappa** for exporters. Both
   touch the SEE core's shape and must be validated cross-zone. **Highest-value
-  iteration-7 item.**
+  iteration-7 item** — and it propagates: CH/AT/CZ/SI (+22–33) are largely
+  *downstream* of DE_LU, since their opportunity-anchor refs are built from the
+  inflated DE_LU/continental pass-1 prices, so lowering DE_LU should pull the
+  alpine/continental cluster down with it.
 - **LT–SE4 (NordBalt) residual** (ATC avg 200 vs 724 MW physical) is a genuine
   flow-based residual, but dropping it needs the drop+anchor treatment (else the
   €1-import collapse), and EE/LV don't touch SE4 — so it only partly helps the
