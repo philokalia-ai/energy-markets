@@ -45,6 +45,16 @@ The zones that moved (everything else within ±0.5 MAE):
 | EE | 0.47 / 125.8 / +84.2 | 0.47 / 128.6 / +83.5 | +2.8 MAE (same) |
 | NO4 | 0.19 / 29.8 / +0.2 | 0.19 / 29.8 / +0.2 | held (drawdown gated off) |
 
+### Held-out validation (no overfitting)
+Ran the final stack on **12 held-out days** (the 26th of each month, none in the
+frozen sample; `docs/iter6-results/holdout_12days.csv`). The structural fixes
+generalize cleanly to unseen days: **SK MAE 43.7 / bias −5.2** (catastrophic
+pre-fix on winter days like 2026-01-26/02-26), **SE1/SE2 bias −7.2** (was ~−24),
+**GR corr 0.86 / MAE 18.9 / bias −2.1** (Greece excellent). Aggregate mean MAE
+39.2, corr 0.57 (higher than the sample because the 26ths are less extreme than
+the sample's hard days). The SK and Nordic fixes are structural (border topology,
+reservoir physics), not day-fitted — the held-out numbers confirm it.
+
 ## 3. Accepted changes
 
 ### C1 — SK Core-FBMC drop + `:hydro` anchor (the blow-up)
