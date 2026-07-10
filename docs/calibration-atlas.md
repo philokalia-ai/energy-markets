@@ -80,7 +80,52 @@ price-setter and the alternative it prices against**.
 | **Belgium** | Continental thermal, but its Core-FBMC import ATC collapses exactly at its residual peak hours | `BELGIUM_PROFILE`: BE–FR/NL/DE_LU dropped + observed imports priced at the anchor ref (corr 0.68 → 0.95) |
 | **Baltic** (EE, LT, LV) | Thermally thin, rides the Nordic system | `BALTIC_PROFILE`: softened scarcity. LT and DK2 were cured purely by the SE fix propagating — no local change |
 
-## 3. Mechanism inventory
+## 3. The bid skeleton — what each unit offers, and why not UC
+
+The merit-order path does **not** run unit commitment. The counterfactual wants
+each unit's *rational competitive bid*, not a simulated central dispatch (UC
+answers "what would a planner run", pins prices to the most expensive committed
+unit, and is ~100× slower — impractical for a 39-zone two-pass clear). The one
+piece of dispatch logic that survives is **UC-lite commitment**: thermal units
+with SRMC ≤ `must_run_srmc_threshold` × gas-SRMC are stacked by marginal cost
+until derated capacity covers 1.05 × the day's **peak** residual demand; that
+set is "committed" (commitment follows the peak), so its minimum load is
+must-run through the overnight trough — which is what lets prices collapse
+below thermal SRMC in RES-surplus hours, as real self-scheduling does.
+
+Every zone-slot book uses the same skeleton; regions only change parameters:
+
+| Unit class | Quantity offered | Price rule |
+|---|---|---|
+| Wind / solar | Zone-level forecast (units excluded from the stack) | €1 — price-taker |
+| Reservoir & pumped hydro | p_max × hydro scale (reservoir levels / recent output) | **Water value** (three models, §2), never variable cost |
+| Committed thermal — minimum load | p_min in two blocks | Deepest 60% at 5% of SRMC; rest at max(0.5·SRMC, SRMC − 40) — an *absolute* startup-amortization discount (a proportional one sank crisis-2022 evenings) |
+| Same unit — flexible capacity | (p_max − p_min) × tranches 55/20/15/10% | Ladder at 0.95/1.05/1.25/1.60 × SRMC; tranche 1 at cost, upper tranches × the scarcity factor |
+| Uncommitted thermal | p_max × same tranches | Same ladder + scarcity |
+| Observed imports (non-endogenous borders) | Hourly net flow | €1 price-taker — anchored zones price them at the coupled reference instead |
+| Observed exports | Hourly net flow | Firm demand at the cap — over *dropped* borders, demand at the reference (cannot manufacture scarcity) |
+| Demand | 98% of gross load / 2% tail | €3,000 cap / €250 elastic |
+
+Scarcity factor on upper tranches:
+`1 + scarcity_kappa · max(0, scarcity_threshold − margin)² + peak_kappa · norm_demand^peak_exponent`
+— the first term fires when the derated capacity margin over residual demand
+genuinely tightens; the second is peak-hour strategic bidding (participants
+know when the peak is; the 4th power concentrates it there).
+
+Fleet honesty runs before any bidding: **fleet completion** (per-type aggregate
+capacity missing from the unit list is added back) and **fleet truthing**
+(baseload types derated to `derate_headroom` × trailing-30-day p95 output when
+the paper fleet exceeds what actually runs).
+
+Reading the region table in §2 against this skeleton: regional strategies are
+three families of deviation — (1) **cost truth** (Italy's SRMC multiplier,
+France's nuclear floor), (2) **opportunity-cost repricing** of the dominant
+flexible resource against the pass-1 coupled price (hydro anchors, the nuclear
+anchor, Belgian import pricing — all the same mechanism), and (3) **scarcity
+temperament** (how aggressively upper tranches mark up — a statement about how
+often each region is genuinely tight).
+
+## 4. Mechanism inventory
 
 Four orthogonal mechanisms carry all of the above:
 
@@ -100,7 +145,7 @@ Four orthogonal mechanisms carry all of the above:
    faster), gated INFEASIBLE retry ladder (NumericFocus first, seed last),
    IIS diagnostics printer.
 
-## 4. Calibration doctrine (learned the hard way)
+## 5. Calibration doctrine (learned the hard way)
 
 - **Calibrate in the coupled run, never per-zone in isolation.** Every failure
   migrated along a border chain (SE fixes cascading through DK/LT; CH's fix
@@ -120,7 +165,7 @@ Four orthogonal mechanisms carry all of the above:
   experiment became iteration 4's CH/AT win; rejected shapes (NO5's circular
   Nordic anchor) are recorded with the reason.
 
-## 5. Evaluation methodology
+## 6. Evaluation methodology
 
 Compare `simulations.energy_prices` (naive UTC) against `entsoe.energy_prices`
 Day-ahead with **resolution-aware actuals**: dedup to the latest revision
@@ -130,7 +175,7 @@ double-weighted :00 and diverges wildly for quarter-hourly zones (DK2, LT,
 SE3/SE4) — cross-iteration comparisons must state which methodology they use.
 Timezone rule everywhere: `entsoe_col = (sim_col AT TIME ZONE 'UTC')`.
 
-## 6. Known limitations / iteration-6 queue
+## 7. Known limitations / iteration-6 queue
 
 - **NO5 (−34) / NO4**: far-north storage arbitrages across days; a daily
   two-pass cannot represent the inter-day horizon. Candidate fixes: sequential
@@ -148,7 +193,7 @@ Timezone rule everywhere: `entsoe_col = (sim_col AT TIME ZONE 'UTC')`.
   the GR 2022–2026 ones) is the prerequisite before the EU footprint becomes
   the product.
 
-## 7. Where the knowledge lives
+## 8. Where the knowledge lives
 
 - This page — the synthesis.
 - `docs/eu-calibration-iter1..5.md` — chronological record: every audit,
