@@ -333,6 +333,7 @@ export get_zones_with_transfer_capacity, get_connected_zones, get_zone_pairs  # 
 export MPCCResult, MPCCOrderBook, solve_mpcc_market_clearing, create_typed_order_book, select_solver
 export create_multi_zone_order_book, run_multi_zone_market_clearing, run_multi_zone_for_date_range  # Multi-zone market clearing
 export run_iterative_multi_zone_market_clearing  # Iterative UC-MPCC with flow feedback
+export mz_build_books, mz_solve_pass, mz_extract_anchor_inputs, mz_rebuild_anchored  # Exposed clearing stages
 export compute_net_imports_from_flows, compute_max_flow_change, apply_damping  # Flow conversion utilities
 export compute_max_price_change, compute_max_relative_flow_change  # Price-based convergence
 
@@ -1344,6 +1345,100 @@ function _create_multi_zone_order_book_merit(zones::Vector{String}, day::Date;
     return order_book
 end
 
+# ---------------------------------------------------------------------------
+# Exposed multi-zone merit-order clearing STAGES.
+#
+# These are thin, behaviour-equivalent wrappers over the existing building
+# blocks (`_create_multi_zone_order_book_merit`, `MPCC.solve_mpcc_market_clearing`,
+# `compute_opportunity_anchor_refs`). The sequential two-pass path inside
+# `run_multi_zone_market_clearing` calls them, and the pipelined backfill
+# (`src/PipelinedBackfill.jl`) reuses the SAME functions on distributed workers —
+# so a pipelined day produces byte-identical books, anchors, and prices to the
+# sequential `passes=2` path. Only orchestration lives in the pipeline; all
+# model/book logic stays here.
+# ---------------------------------------------------------------------------
+
+"""
+    mz_build_books(zones, date; enrich_network, apply_zone_profiles) -> MPCCOrderBook
+
+Pass-1 multi-zone merit-order book build — identical to what
+`run_multi_zone_market_clearing` constructs for `order_method=:merit_order`.
+"""
+function mz_build_books(zones::Vector{String}, date::Date;
+    enrich_network::Bool=false, apply_zone_profiles::Bool=true)
+    return _create_multi_zone_order_book_merit(zones, date;
+        enrich_network=enrich_network, apply_zone_profiles=apply_zone_profiles)
+end
+
+"""
+    mz_solve_pass(order_book; optimizer, silent, mpcc_time_limit, mpcc_mip_gap,
+                  mpcc_heuristic_effort) -> MPCCResult
+
+Solve one MPCC pass over an order book (pass 1 or pass 2). Identical call to the
+one inside `run_multi_zone_market_clearing`.
+"""
+function mz_solve_pass(order_book::MPCC.MPCCOrderBook;
+    optimizer::String="auto", silent::Bool=true,
+    mpcc_time_limit::Float64=900.0, mpcc_mip_gap::Float64=1e-6,
+    mpcc_heuristic_effort::Union{Float64,Nothing}=nothing)
+    return MPCC.solve_mpcc_market_clearing(order_book;
+        preferred_solver=optimizer, silent=silent,
+        time_limit=mpcc_time_limit, mip_gap=mpcc_mip_gap,
+        heuristic_effort=mpcc_heuristic_effort)
+end
+
+"""
+    mz_extract_anchor_inputs(order_book, mpcc_result; apply_zone_profiles)
+        -> (anchored, refs, cached)
+
+Compute the pass-2 inputs from a pass-1 order book + result:
+- `anchored`  : zones whose profile opts into an opportunity anchor and were
+  priced in pass 1 (empty ⇒ pass 2 is a no-op, exactly as sequential),
+- `refs`      : their opportunity-anchor reference prices
+  (`compute_opportunity_anchor_refs`),
+- `cached`    : per-zone pass-1 orders, so pass 2 reuses every non-anchored
+  zone's book verbatim.
+
+Same computation as the sequential two-pass block; only lifted into a function
+so the pipeline's solver worker can run it between the two solves.
+"""
+function mz_extract_anchor_inputs(order_book::MPCC.MPCCOrderBook,
+    mpcc_result::MPCC.MPCCResult; apply_zone_profiles::Bool=true)
+    anchored = apply_zone_profiles ?
+        [z for z in order_book.nodes
+         if MeritOrderBook.get_zone_profile(z).opportunity_anchor != :none &&
+            haskey(mpcc_result.market_prices, z)] : String[]
+    if isempty(anchored)
+        return (anchored=anchored,
+            refs=Dict{String,Dict{String,Float64}}(),
+            cached=Dict{String,Vector{MarketOrders.MarketOrder}}())
+    end
+    refs = compute_opportunity_anchor_refs(anchored,
+        mpcc_result.market_prices, order_book.network_topology)
+    cached = Dict{String,Vector{MarketOrders.MarketOrder}}(
+        z => [o for o in order_book.orders if String(o.zone) == z]
+        for z in order_book.nodes)
+    return (anchored=anchored, refs=refs, cached=cached)
+end
+
+"""
+    mz_rebuild_anchored(zones, date, refs, cached; enrich_network,
+                        apply_zone_profiles) -> MPCCOrderBook
+
+Pass-2 book build: rebuild ONLY the anchored zones (those present in `refs`),
+reusing every other zone's pass-1 orders from `cached`. Identical to the
+`order_book2` constructed inside `run_multi_zone_market_clearing`'s two-pass
+block.
+"""
+function mz_rebuild_anchored(zones::Vector{String}, date::Date,
+    refs::Dict{String,Dict{String,Float64}},
+    cached::Dict{String,Vector{MarketOrders.MarketOrder}};
+    enrich_network::Bool=false, apply_zone_profiles::Bool=true)
+    return _create_multi_zone_order_book_merit(zones, date;
+        enrich_network=enrich_network, apply_zone_profiles=apply_zone_profiles,
+        anchor_refs=refs, cached_zone_orders=cached)
+end
+
 """
     run_multi_zone_market_clearing(date::Date;
                                    zones::Vector{String}=String[],
@@ -1501,29 +1596,21 @@ function run_multi_zone_market_clearing(date::Date;
     if passes >= 2 && order_method == :merit_order &&
        (mpcc_result.status == :optimal ||
         (mpcc_result.status == :time_limit && !isempty(mpcc_result.market_prices)))
-        anchored = apply_zone_profiles ?
-            [z for z in order_book.nodes
-             if MeritOrderBook.get_zone_profile(z).opportunity_anchor != :none &&
-                haskey(mpcc_result.market_prices, z)] : String[]
-        if isempty(anchored)
+        anchor_inputs = mz_extract_anchor_inputs(order_book, mpcc_result;
+            apply_zone_profiles=apply_zone_profiles)
+        if isempty(anchor_inputs.anchored)
             println("\n⚓ passes=$passes requested but no zone profile opts into an opportunity anchor — keeping pass-1 result")
         else
-            println("\n⚓ PASS 2: opportunity-anchored re-clear for $(join(anchored, ", "))")
-            refs = compute_opportunity_anchor_refs(anchored,
-                mpcc_result.market_prices, order_book.network_topology)
-            cached = Dict{String,Vector{MarketOrders.MarketOrder}}(
-                z => [o for o in order_book.orders if String(o.zone) == z]
-                for z in order_book.nodes)
-            order_book2 = _create_multi_zone_order_book_merit(zones, date;
+            println("\n⚓ PASS 2: opportunity-anchored re-clear for $(join(anchor_inputs.anchored, ", "))")
+            order_book2 = mz_rebuild_anchored(zones, date,
+                anchor_inputs.refs, anchor_inputs.cached;
                 enrich_network=enrich_network,
-                apply_zone_profiles=apply_zone_profiles,
-                anchor_refs=refs,
-                cached_zone_orders=cached)
+                apply_zone_profiles=apply_zone_profiles)
             println("\n⚡ Running pass-2 market clearing optimization...")
-            result2 = MPCC.solve_mpcc_market_clearing(order_book2;
-                preferred_solver=optimizer, silent=silent,
-                time_limit=mpcc_time_limit, mip_gap=mpcc_mip_gap,
-                heuristic_effort=mpcc_heuristic_effort)
+            result2 = mz_solve_pass(order_book2;
+                optimizer=optimizer, silent=silent,
+                mpcc_time_limit=mpcc_time_limit, mpcc_mip_gap=mpcc_mip_gap,
+                mpcc_heuristic_effort=mpcc_heuristic_effort)
             if result2.status == :optimal ||
                (result2.status == :time_limit && !isempty(result2.market_prices))
                 order_book = order_book2
