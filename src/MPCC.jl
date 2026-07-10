@@ -767,16 +767,29 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
             stepwise_acceptance[order_id] <= stepwise_acceptance_complementarity_aux[order_id] * 1.0)
         for (i, order) in enumerate(simple_orders)
             order_id = order_ids[i]
-            # widest span the rhs can attain, covering bids outside the limits
-            rhs_span = max(order.price, order_book.price_limits[2]) -
-                       min(order.price, order_book.price_limits[1])
-            # rhs = dual + |q|·(bid-vs-price gap); dual itself is bounded by
-            # the order's max surplus, so 2× the quantity-weighted span covers
-            # both terms
+            # TIGHT per-order bound on the rejected-order rhs. When aux = 0
+            # the acceptance is 0, which (via side 2's second constraint)
+            # forces aux2 = 0 and hence dual = 0 — so the rhs reduces to
+            # |q|·(bid-vs-price gap): q·(bid − floor) for supply,
+            # q·(ceiling − bid) for demand, both maximized at the far price
+            # bound. When aux = 1 the constraint pins rhs to 0 and the
+            # constant is unused. The previous 2·q·span headroom for the
+            # dual term was vacuous (dual is provably 0 in the aux = 0
+            # branch) and produced ~1e8 coefficients on multi-GW cap-priced
+            # demand blocks (2 × 60 GW × 3500), whose integrality-tolerance
+            # leakage (~1e-5 × 1e8 ≈ 4000 €·MW) is the measured source of
+            # false INFEASIBLE certificates on large books (2026-04-02: the
+            # blamed hour solves optimal in isolation). For a cap-priced
+            # demand block the tight constant is exactly 0 — the coefficient
+            # disappears entirely. Bids outside the price limits keep their
+            # documented behaviour: rejection is impossible via the rhs ≥ 0
+            # constraint itself, independent of this constant.
+            m1 = order.type == :supply ?
+                 order.quantity * max(0.0, order.price - order_book.price_limits[1]) :
+                 order.quantity * max(0.0, order_book.price_limits[2] - order.price)
             @constraint(model,
                 stepwise_dual_rhs[order_id] <=
-                (1 - stepwise_acceptance_complementarity_aux[order_id]) *
-                2.0 * order.quantity * rhs_span)
+                (1 - stepwise_acceptance_complementarity_aux[order_id]) * m1)
         end
 
         # Side 2: dual ⊥ (1 - acceptance) — only a FULLY accepted order may
@@ -829,6 +842,49 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
 
         # Solve the model
         optimize!(model)
+
+        # Gurobi's presolve can return the ambiguous INFEASIBLE_OR_UNBOUNDED
+        # on numerically borderline instances (observed: the 2026-04-02 EU
+        # book — a coin-flip outcome across otherwise identical runs). Retry
+        # once with DualReductions=0, which forces Gurobi to distinguish the
+        # two cases and, for this model class (bounded prices, bounded
+        # acceptances — it cannot actually be unbounded), typically proves
+        # optimality. No-op for every solve that doesn't hit this status.
+        if termination_status(model) == MOI.INFEASIBLE_OR_UNBOUNDED
+            @warn "MPCC solve returned INFEASIBLE_OR_UNBOUNDED — retrying with DualReductions=0"
+            try
+                set_optimizer_attribute(model, "DualReductions", 0)
+                optimize!(model)
+            catch e
+                @warn "DualReductions retry unavailable ($(sprint(showerror, e))) — keeping original status"
+            end
+        end
+        # A "proven" INFEASIBLE can be a false certificate on this big-M
+        # complementarity model at scale. Measured on the 2026-04-02 EU book
+        # (~22k orders): the periods are independent, the hour the IIS
+        # blamed (15:00) solves OPTIMAL in isolation, and earlier runs of
+        # the same day solved optimally — the outcome is an ordering
+        # coin-flip. Gated retry ladder (each time-boxed, none default-on):
+        # 1) maximum numeric care with presolve kept conservative, then
+        # 2) a different seed as last resort. The root fix — per-order
+        # Big-M sized from each order's price range — is deferred to its
+        # own change with an MPCC-level SEE-guard test.
+        if termination_status(model) == MOI.INFEASIBLE
+            try
+                @warn "MPCC solve claims INFEASIBLE — retrying with NumericFocus=3"
+                set_optimizer_attribute(model, "NumericFocus", 3)
+                set_optimizer_attribute(model, "Presolve", 1)
+                set_optimizer_attribute(model, "TimeLimit", 300.0)
+                optimize!(model)
+                if termination_status(model) == MOI.INFEASIBLE
+                    @warn "Still INFEASIBLE — last-resort retry with a different seed"
+                    set_optimizer_attribute(model, "Seed", 42)
+                    optimize!(model)
+                end
+            catch e
+                @warn "Numeric retry ladder unavailable ($(sprint(showerror, e))) — keeping INFEASIBLE"
+            end
+        end
         solve_time = time() - start_time
 
         # Extract results
@@ -1029,8 +1085,44 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
                 string(termination_status(model))
             )
         else
+            # A proven INFEASIBLE deserves diagnostics: compute the Gurobi IIS
+            # (same machinery as the UC solver) so the conflicting constraint
+            # set is printed instead of a blind failure.
+            if termination_status(model) == MOI.INFEASIBLE &&
+               occursin("Gurobi", solver_name)
+                try
+                    @info "MPCC model INFEASIBLE — computing IIS..."
+                    compute_conflict!(model)
+                    n = 0
+                    for (F, S) in list_of_constraint_types(model)
+                        for con in all_constraints(model, F, S)
+                            if MOI.get(model, MOI.ConstraintConflictStatus(), con) == MOI.IN_CONFLICT
+                                n += 1
+                                n <= 25 && println("  IIS[$n]: $con")
+                            end
+                        end
+                    end
+                    # Variable bounds can also be in conflict
+                    for v in all_variables(model)
+                        try
+                            if MOI.get(model, MOI.VariableInConflict(), v)
+                                n += 1
+                                n <= 25 && println("  IIS[$n]: variable bound $v ∈ [$(has_lower_bound(v) ? lower_bound(v) : -Inf), $(has_upper_bound(v) ? upper_bound(v) : Inf)]")
+                            end
+                        catch
+                        end
+                    end
+                    @info "IIS complete: $n constraints/bounds in conflict"
+                catch e
+                    @warn "IIS computation failed: $(sprint(showerror, e))"
+                end
+            end
+            # TerminationStatusCode does not convert to Symbol implicitly —
+            # returning the raw enum used to crash the result construction
+            # (MethodError(convert, (Symbol, MOI.INFEASIBLE))) and mask the
+            # true status as :error. Map it explicitly.
             return MPCCResult(
-                termination_status(model),
+                Symbol(lowercase(string(termination_status(model)))),
                 0.0,
                 Dict{String,Dict{String,Float64}}(),
                 Dict{String,Float64}(),

@@ -110,6 +110,53 @@ function get_net_imports(bidding_zone::String, day::Date;
 end
 
 """
+    get_dropped_border_exports(zone, day, counterparties) -> Dict{Int,Float64}
+
+Per-UTC-hour EXPORT volume (MW, positive) over the borders to the listed
+counterparties, from `entsoe.physical_flows` — the mirror of the import-only
+clamp in `get_net_imports`. Used by the two-pass :hydro anchor to give
+structural exporters (NO5) their outlet back as ref-priced demand while the
+import supply stays separately clamped.
+"""
+function get_dropped_border_exports(bidding_zone::String, day::Date,
+    counterparties::Vector{String})
+    isempty(counterparties) && return Dict{Int,Float64}()
+    df = sql2df_with_retry(
+        """
+        WITH border_hourly AS (
+            SELECT DISTINCT ON (h, counterparty, direction)
+                   h, counterparty, direction, avg_flow
+            FROM (
+                SELECT EXTRACT(HOUR FROM date_time_utc AT TIME ZONE 'UTC')::int AS h,
+                       regexp_replace(
+                           CASE WHEN in_area_map_code = \$1
+                                THEN out_area_map_code ELSE in_area_map_code END,
+                           '_IPS\$', '') AS counterparty,
+                       CASE WHEN in_area_map_code = \$1 THEN 1 ELSE -1 END AS direction,
+                       AVG(flow_mw) AS avg_flow
+                FROM entsoe.physical_flows
+                WHERE (in_area_map_code = \$1 OR out_area_map_code = \$1)
+                  AND in_area_type_code LIKE 'BZN%' AND out_area_type_code LIKE 'BZN%'
+                  AND date_time_utc >= (\$2::date::timestamp AT TIME ZONE 'UTC')
+                  AND date_time_utc < ((\$2::date + 1)::timestamp AT TIME ZONE 'UTC')
+                GROUP BY 1,
+                         CASE WHEN in_area_map_code = \$1
+                              THEN out_area_map_code ELSE in_area_map_code END,
+                         CASE WHEN in_area_map_code = \$1 THEN 1 ELSE -1 END
+            ) per_code
+            ORDER BY h, counterparty, direction, avg_flow DESC
+        )
+        SELECT h, SUM(GREATEST(-direction * avg_flow, 0)) AS export_mw
+        FROM border_hourly
+        WHERE counterparty = ANY(\$3)
+        GROUP BY h
+        """,
+        [bidding_zone, day, counterparties]
+    )
+    return Dict{Int,Float64}(row.h => row.export_mw for row in eachrow(df))
+end
+
+"""
     get_firm_of(bidding_zone::String) -> Dict{String,String}
 
 Map of `unit_code => firm` for a zone, from `simulations.unit_firms` (a small
@@ -189,6 +236,8 @@ Base.@kwdef struct ZoneProfile
     thermal_srmc_multiplier::Float64 = 1.0
     hydro_model::Symbol = :gas_anchored
     nuclear_srmc_floor::Float64 = 0.0
+    opportunity_anchor::Symbol = :none
+    anchor_share::Float64 = 0.9
 end
 
 "SEE / default profile — the exact v10 parameters (regression baseline)."
@@ -252,6 +301,129 @@ const FRANCE_PROFILE = ZoneProfile(
     scarcity_kappa = 1.5,
     peak_kappa = 0.6,
     nuclear_srmc_floor = 55.0,
+    opportunity_anchor = :nuclear,
+    # Measured: share 0.9 → bias +33 (cal5), share 0.7 → +21 (cal6), both
+    # with the coupled shape right (corr 0.76 → 0.80–0.83) — the neighbor-
+    # weighted ref imports the overpricing of CH/BE/ES, so the share must
+    # discount it. Extrapolating the measured share→bias line puts |bias|≤10
+    # at ≈0.55: EDF's off-peak position sits just above half the coupled
+    # neighbor price.
+    anchor_share = 0.55,
+)
+
+"""
+Southern/mid Norway (NO1/NO2/NO3/NO5). Same reservoir-opportunity hydro model
+as NORDIC, plus the `:hydro` opportunity anchor for two-pass clearing: these
+zones are coupled to the continent (2026-04 actuals €70–108 tracking DE/NL)
+and their stored water prices at the export opportunity — the pass-1 coupled
+continental price — not at a fraction of gas SRMC (iteration-1 result: flat
+−58…−92 residual with full reservoirs). NO4 (far north, actuals ≈ €18, NOT
+continentally coupled — congestion isolates it like SE1/SE2) deliberately
+stays on plain NORDIC_PROFILE.
+"""
+const NORWAY_PROFILE = ZoneProfile(
+    hydro_model = :reservoir_opportunity,
+    scarcity_threshold = 1.2,
+    scarcity_kappa = 1.0,
+    peak_kappa = 0.5,
+    water_value_base = 0.6,
+    water_value_span = 0.5,
+    opportunity_anchor = :hydro,
+)
+
+"""
+Mid/south Sweden (SE3/SE4). Same structural object as southern Norway once
+their flow-based-residual borders are dropped (iter5: SE2–SE3, SE3–SE4 in
+`flow_based_drop_borders`): the drop cured the +128/+147 continental-scarcity
+bias (MAE −99/−103) but reproduced NO1's iteration-2 failure mode — the €1
+observed-import block became price-setting (SE3 sim €1–9.5 all day vs actual
+€15–70, corr 0.51→−0.25). The `:hydro` opportunity anchor is the built cure:
+dropped-border imports price at the border price (`share × ref`), water value
+clamps to the coupled reference, and dropped-border exports re-enter as
+ref-priced demand. Anchor refs come from the remaining endogenous neighbors —
+DK1 for SE3, DK2/LT for SE4 — all well-calibrated after the SE drop.
+"""
+const SWEDEN_SOUTH_PROFILE = NORWAY_PROFILE
+
+"""
+Switzerland. Hydro-storage dominated (large reservoir + pumped fleet, thin
+thermal) but was on CONTINENTAL_PROFILE, so its storage was priced
+gas-anchored (~€119 base with scarcity markup) — measured cal8 residual +28
+to +78 in EVERY hour, worst at peaks and in RES-surplus midday where the
+actual price collapses to ~0 but the sim stays ~47. Same structural object
+as Norway: storage prices at the export opportunity. NORDIC-style
+reservoir-opportunity hydro plus the two-pass :hydro anchor; CH's neighbors
+(DE_LU, FR, IT-NORTH) are all endogenous and well-calibrated, so the anchor
+ref is the border-capacity-weighted mean of their pass-1 prices. Swiss
+reservoir filling data exists in entsoe.aggregated_hydro_storage_filling_rate
+(590 weekly rows, current), so dryness is real, not a proxy.
+
+SHARED WITH AUSTRIA (iteration 4). AT is also alpine-hydro dominated (~60%
+reservoir + run-of-river + pumped) and sits on the AT–CH border, so when CH
+alone carried the :hydro anchor (iter3 cal10) the anchored CH book propagated a
+shape regression into AT (corr 0.77→0.57). The iteration-4 fix is to roll CH
+and AT out TOGETHER on the same reservoir-opportunity :hydro anchor — AT's
+storage prices at the same coupled continental opportunity cost, so the two
+alpine zones are anchored consistently in the same pass instead of one dragging
+the other. Measured cumulatively on the HU-drop baseline (cal12→cal13):
+CH corr 0.82→0.86 / MAE 40→27 / bias +39→+10; AT held at corr 0.85 with bias
+improved (see docs/eu-calibration-iter4.md). Swiss/Austrian reservoir filling
+data exists in entsoe.aggregated_hydro_storage_filling_rate (weekly BZN rows).
+"""
+const SWISS_PROFILE = ZoneProfile(
+    hydro_model = :reservoir_opportunity,
+    scarcity_threshold = 1.2,
+    scarcity_kappa = 1.0,
+    peak_kappa = 0.5,
+    water_value_base = 0.6,
+    water_value_span = 0.5,
+    opportunity_anchor = :hydro,
+)
+
+"""
+Austria. Same alpine reservoir-opportunity + `:hydro` anchor as CH (the iter4
+joint rollout), but with its own `anchor_share` (iter5): measured on
+2026-04-01..05, CH's actual level sits AT its coupled reference (share 0.9 →
+bias −2.3, near-perfect) while AT's actual (≈€100) trades ~€19 ABOVE its
+coupled neighbors (DE_LU ≈€81) — a Core-FBMC premium the capacity-weighted ref
+cannot see. At the shared share 0.9 AT under-priced (bias −17.9) and its
+too-cheap hydro exports dragged IT-NORTH (−9.0) and SK (−11.0) negative — the
+iter4 "alpine-cheapening spillover". From the measured share→bias point
+(0.9 → −17.9 at sim ≈ 82), share 1.1 puts the AT hydro bid base at its
+observed premium — a calibrated bidding position like FRANCE_PROFILE's 0.55
+in the other direction. The water value stays clamped at gas SRMC, so a
+share > 1 cannot manufacture scarcity.
+"""
+const AUSTRIA_PROFILE = ZoneProfile(
+    hydro_model = :reservoir_opportunity,
+    scarcity_threshold = 1.2,
+    scarcity_kappa = 1.0,
+    peak_kappa = 0.5,
+    water_value_base = 0.6,
+    water_value_span = 0.5,
+    opportunity_anchor = :hydro,
+    anchor_share = 1.1,
+)
+
+"""
+Belgium. Continental thermal zone whose Core-FBMC borders are dropped
+(iter5: BE–FR/NL/DE_LU in `flow_based_drop_borders` — import ATCs collapse to
+0–350 MW mid-morning while physical flows carry 1.4–1.9 GW). The drop alone
+(cal17) flipped BE from +46.5 starved-overpricing to −35 (the €1
+observed-import block price-setting in import-covered hours — the NO1/SE3
+failure mode). The `:hydro` opportunity anchor supplies the pricing half of
+the treatment: dropped-border imports at the border price (`share × ref`,
+ref = DE_LU/NL continental proxy since BE has no endogenous neighbors left;
+GB is outside the footprint), dropped-border exports as ref-priced demand.
+BE's actual mean (≈€77) sits at ~0.9× the proxy — the default share. The
+hydro side of the anchor touches only BE's small pumped fleet (ref-priced
+storage — if anything more honest than gas-anchored).
+"""
+const BELGIUM_PROFILE = ZoneProfile(
+    scarcity_threshold = 1.25,
+    scarcity_kappa = 1.5,
+    peak_kappa = 0.6,
+    opportunity_anchor = :hydro,
 )
 
 """
@@ -283,20 +455,28 @@ const ZONE_PROFILES = Dict{String,ZoneProfile}(
     "IT-CSOUTH" => ITALY_PROFILE, "IT-SOUTH" => ITALY_PROFILE,
     "IT-Calabria" => ITALY_PROFILE, "IT-Sicily" => ITALY_PROFILE,
     "IT-Sardinia" => ITALY_PROFILE,
-    # Nordic
-    "NO1" => NORDIC_PROFILE, "NO2" => NORDIC_PROFILE, "NO3" => NORDIC_PROFILE,
-    "NO4" => NORDIC_PROFILE, "NO5" => NORDIC_PROFILE,
-    "SE1" => NORDIC_PROFILE, "SE2" => NORDIC_PROFILE, "SE3" => NORDIC_PROFILE,
-    "SE4" => NORDIC_PROFILE, "FI" => NORDIC_PROFILE,
+    # Norway — southern/mid zones carry the :hydro opportunity anchor;
+    # NO4 (far north, not continentally coupled) stays plain NORDIC
+    "NO1" => NORWAY_PROFILE, "NO2" => NORWAY_PROFILE, "NO3" => NORWAY_PROFILE,
+    "NO4" => NORDIC_PROFILE, "NO5" => NORWAY_PROFILE,
+    "SE1" => NORDIC_PROFILE, "SE2" => NORDIC_PROFILE,
+    # SE3/SE4: anchored after the iter5 SE2–SE3/SE3–SE4 border drop (see
+    # SWEDEN_SOUTH_PROFILE docstring)
+    "SE3" => SWEDEN_SOUTH_PROFILE, "SE4" => SWEDEN_SOUTH_PROFILE,
+    "FI" => NORDIC_PROFILE,
     "DK1" => NORDIC_PROFILE, "DK2" => NORDIC_PROFILE,
     # Baltic
     "EE" => BALTIC_PROFILE, "LT" => BALTIC_PROFILE, "LV" => BALTIC_PROFILE,
     # France (nuclear-heavy: continental scarcity + nuclear bid position)
     "FR" => FRANCE_PROFILE,
+    # Alpine hydro (CH + AT): reservoir-opportunity + :hydro anchor, rolled out
+    # together (iter4) so the AT–CH border is anchored consistently; AT carries
+    # its own anchor_share for the Core-FBMC premium (iter5)
+    "CH" => SWISS_PROFILE, "AT" => AUSTRIA_PROFILE,
     # Continental core
     "DE_LU" => CONTINENTAL_PROFILE,
-    "BE" => CONTINENTAL_PROFILE, "NL" => CONTINENTAL_PROFILE,
-    "AT" => CONTINENTAL_PROFILE, "CH" => CONTINENTAL_PROFILE,
+    # BE: dropped Core borders + :hydro anchor for import pricing (iter5)
+    "BE" => BELGIUM_PROFILE, "NL" => CONTINENTAL_PROFILE,
     "PL" => CONTINENTAL_PROFILE, "CZ" => CONTINENTAL_PROFILE,
     "SK" => CONTINENTAL_PROFILE,
 )
@@ -505,6 +685,10 @@ function create_merit_order_book(
     thermal_srmc_multiplier::Union{Nothing,Float64}=nothing,
     hydro_model::Union{Nothing,Symbol}=nothing,
     nuclear_srmc_floor::Union{Nothing,Float64}=nothing,
+    opportunity_anchor::Union{Nothing,Symbol}=nothing,
+    anchor_share::Union{Nothing,Float64}=nothing,
+    anchor_prices::Union{Nothing,Dict{String,Float64}}=nothing,
+    anchor_export_mw::Dict{Int,Float64}=Dict{Int,Float64}(),
     res_coalesce_missing::Bool=false,
     load_modifier::Union{Nothing,Function}=nothing,
     renewable_modifier::Union{Nothing,Function}=nothing,
@@ -534,6 +718,13 @@ function create_merit_order_book(
     thermal_srmc_multiplier = thermal_srmc_multiplier === nothing ? profile.thermal_srmc_multiplier : thermal_srmc_multiplier
     hydro_model = hydro_model === nothing ? profile.hydro_model : hydro_model
     nuclear_srmc_floor = nuclear_srmc_floor === nothing ? profile.nuclear_srmc_floor : nuclear_srmc_floor
+    opportunity_anchor = opportunity_anchor === nothing ? profile.opportunity_anchor : opportunity_anchor
+    anchor_share = anchor_share === nothing ? profile.anchor_share : anchor_share
+    # The opportunity anchor is active only when BOTH the profile opts in AND
+    # pass-1 reference prices were supplied (two-pass clearing, pass 2). With
+    # either missing the whole mechanism is dead code — pass 1 and every
+    # single-pass path (incl. SEE) are unchanged.
+    anchor_active = opportunity_anchor != :none && anchor_prices !== nothing
 
     try
         println("📊 Creating merit-order order book for $bidding_zone on $day")
@@ -640,7 +831,13 @@ function create_merit_order_book(
         # base to at least this level — nuclear-dominated exporters price their
         # modulating fleet at opportunity cost, not fuel SRMC. Default 0.0 is a
         # no-op (byte-identical for SEE).
-        apply_nuclear_floor = nuclear_srmc_floor > 0.0
+        # When the :nuclear anchor is ACTIVE the static floor is replaced by the
+        # per-slot anchor floor in the order loop (a static floor would hold the
+        # price up in exactly the RES-surplus hours where the coupled price —
+        # and EDF's opportunity cost — collapses: 2026-04 weekends, FR actual
+        # €9 vs the €55 floor).
+        apply_nuclear_floor = nuclear_srmc_floor > 0.0 &&
+                              !(anchor_active && opportunity_anchor == :nuclear)
         if !isempty(derate_scale) || apply_srmc_premium || apply_nuclear_floor
             generators = [begin
                 s = get(derate_scale, g.fuel_type, 1.0)
@@ -847,7 +1044,18 @@ function create_merit_order_book(
             # demand (exports) — scheduled flows are committed either way
             ni = slot_import(ts)
             if ni > 0.1
-                push!(tagged, (SimpleOrder(:supply, 1.0, ni,
+                # :hydro-anchored zones (pass 2): observed imports arrive at
+                # the BORDER price, not free — pricing them near zero lets the
+                # import block set near-zero clearing prices in every
+                # import-covered hour (NO1's flat undershoot: sim ≈ €3 at
+                # night vs actual ≈ €88 tracking its neighbors). Priced at the
+                # anchor level the import-marginal hours clear at the coupled
+                # reference, as they do in reality. Everywhere else imports
+                # stay price-taking at €1 (unchanged).
+                import_price = (anchor_active && opportunity_anchor == :hydro &&
+                                haskey(anchor_prices, ts)) ?
+                               clamp(anchor_share * anchor_prices[ts], 1.0, gas_srmc) : 1.0
+                push!(tagged, (SimpleOrder(:supply, import_price, ni,
                     Symbol(bidding_zone), date_time, resolution_minutes), "IMPORT"))
                 supply_orders_count += 1
                 total_supply_capacity += ni
@@ -856,6 +1064,27 @@ function create_merit_order_book(
                     Symbol(bidding_zone), date_time, resolution_minutes), "IMPORT"))
                 demand_orders_count += 1
                 total_demand_quantity += -ni
+            end
+
+            # :hydro-anchored zones (pass 2): the export volume observed over
+            # the DROPPED flow-based borders re-enters as demand priced at the
+            # coupled reference — NOT the cap. NO5 is the measured case: a
+            # structural exporter whose import-only clamp removed the export
+            # outlet entirely, collapsing its surplus onto a tiny local load
+            # (sim €36 vs actual €104). Ref-priced demand clears only when the
+            # zone's price is at/below the coupled price, so it cannot
+            # manufacture cap scarcity; and it is SEPARATE from the clamped
+            # import supply, so it cannot net away import energy either
+            # (measured failure mode of netting: NO1 −23 → +134).
+            if anchor_active && opportunity_anchor == :hydro &&
+               haskey(anchor_prices, ts) && !isempty(anchor_export_mw)
+                ex_mw = get(anchor_export_mw, Dates.hour(date_time), 0.0)
+                if ex_mw > 0.1
+                    push!(tagged, (SimpleOrder(:demand, max(anchor_prices[ts], 1.0),
+                        ex_mw, Symbol(bidding_zone), date_time, resolution_minutes), "IMPORT"))
+                    demand_orders_count += 1
+                    total_demand_quantity += ex_mw
+                end
             end
 
             # Normalized within-day demand position (0 = trough, 1 = peak)
@@ -889,7 +1118,18 @@ function create_merit_order_book(
                     # proxy for the export-market price) as they empty. This
                     # stops full Nordic reservoirs from slamming into scarcity/
                     # cap prices.
-                    water_value = if hydro_model == :reservoir_opportunity
+                    # :hydro opportunity anchor (two-pass, pass 2): stored
+                    # water prices at the export opportunity — the pass-1
+                    # coupled reference price (level AND hourly shape) — times
+                    # a share slightly below 1 when reservoirs are full
+                    # (willing to undercut the continent to export), rising
+                    # with dryness. Clamped to [2, gas SRMC].
+                    water_value = if anchor_active && opportunity_anchor == :hydro &&
+                                     haskey(anchor_prices, ts)
+                        clamp(anchor_prices[ts] *
+                              (anchor_share + water_value_dry_boost * hydro_dryness),
+                              2.0, gas_srmc)
+                    elseif hydro_model == :reservoir_opportunity
                         # Stored water is worth a FRACTION of the continental
                         # thermal price (gas SRMC proxy): an export-opportunity
                         # floor (~0.35×) when reservoirs are full, rising to the
@@ -908,6 +1148,18 @@ function create_merit_order_book(
                     supply_orders_count += 1
                     total_supply_capacity += offered_pmax(g)
                 else
+                    # :nuclear opportunity anchor (two-pass, pass 2): nuclear's
+                    # effective bid base per slot is the export opportunity —
+                    # anchor_share × the pass-1 coupled reference price —
+                    # floored at fuel SRMC. It rises with the coupled price on
+                    # weekday nights and COLLAPSES with it in RES-surplus hours
+                    # (weekends/midday), which a static floor cannot do.
+                    # Everywhere else gmc ≡ g.marginal_cost.
+                    gmc = (anchor_active && opportunity_anchor == :nuclear &&
+                           g.fuel_type == Symbol("Nuclear") &&
+                           haskey(anchor_prices, ts)) ?
+                          max(g.marginal_cost, anchor_share * anchor_prices[ts]) :
+                          g.marginal_cost
                     # Must-run self-scheduling: baseload-ish units (SRMC not
                     # far above gas) bid their minimum-load block near zero —
                     # shutting down and restarting costs more than running a
@@ -927,10 +1179,10 @@ function create_merit_order_book(
                         # (−212 at TTF 218, 2022) and sank the whole year.
                         deep_qty = must_run_qty * 0.6
                         push!(tagged, (SimpleOrder(:supply,
-                            g.marginal_cost * must_run_price_factor, deep_qty,
+                            gmc * must_run_price_factor, deep_qty,
                             Symbol(bidding_zone), date_time, resolution_minutes), g.code))
                         push!(tagged, (SimpleOrder(:supply,
-                            max(g.marginal_cost * 0.5, g.marginal_cost - 40.0),
+                            max(gmc * 0.5, gmc - 40.0),
                             must_run_qty - deep_qty,
                             Symbol(bidding_zone), date_time, resolution_minutes), g.code))
                         supply_orders_count += 2
@@ -942,7 +1194,7 @@ function create_merit_order_book(
                     # cost so mid-merit keeps clearing)
                     flexible_capacity = max(offered_pmax(g) - must_run_qty, 0.0)
                     for (i, (share, mult)) in enumerate(tranches)
-                        price = g.marginal_cost * mult * (i == 1 ? 1.0 : scarcity)
+                        price = gmc * mult * (i == 1 ? 1.0 : scarcity)
                         qty = flexible_capacity * share
                         qty < 0.1 && continue
                         push!(tagged, (SimpleOrder(:supply, price, qty,

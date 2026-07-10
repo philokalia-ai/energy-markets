@@ -31,11 +31,12 @@ end_date = Date(get(ENV, "END_DATE", "2026-04-05"))
 save_to_db = lowercase(get(ENV, "SAVE", "true")) == "true"
 optimizer = get(ENV, "OPTIMIZER", "auto")
 apply_profiles = lowercase(get(ENV, "APPLY_PROFILES", "true")) == "true"
+passes = parse(Int, get(ENV, "PASSES", "1"))
 const CLEARING_MODE = get(ENV, "CLEARING_MODE", "multi_zone_eu_cal")
 
 println("=" ^ 70)
 println("EU CALIBRATION RUN  zones=$(length(FOOTPRINT))  period=$start_date..$end_date")
-println("  clearing_mode=$CLEARING_MODE  apply_profiles=$apply_profiles  save=$save_to_db")
+println("  clearing_mode=$CLEARING_MODE  apply_profiles=$apply_profiles  passes=$passes  save=$save_to_db")
 println("  code_version=$(Euphemia.ENERGY_PRICES_CODE_VERSION)  optimizer=$optimizer")
 println("=" ^ 70)
 flush(stdout)
@@ -57,7 +58,8 @@ for day in start_date:Day(1):end_date
             save_to_db=false,
             clearing_mode=CLEARING_MODE,
             enrich_network=true,
-            apply_zone_profiles=apply_profiles)
+            apply_zone_profiles=apply_profiles,
+            passes=passes)
         elapsed = time() - t0
         if save_to_db && (result.status == :optimal ||
                           (result.status == :time_limit && !isempty(result.market_prices)))
