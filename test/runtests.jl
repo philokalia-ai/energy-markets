@@ -50,6 +50,18 @@ println()
     end
 
     # -------------------------------------------------------------------------
+    # Data Store Selection + Writable Offline Results
+    # Pure backend-selection logic and the DuckDB writable results roundtrip
+    # (self-contained: builds a synthetic DuckDB extract, needs no Postgres)
+    # -------------------------------------------------------------------------
+    @testset "Data Store Selection" begin
+        println("\n" * "=" ^ 60)
+        println("Running Data Store Selection Tests...")
+        println("=" ^ 60)
+        include(joinpath(@__DIR__, "test_data_store_selection.jl"))
+    end
+
+    # -------------------------------------------------------------------------
     # Initial Conditions Tests
     # Tests for generator initial state determination for UC optimization
     # -------------------------------------------------------------------------
