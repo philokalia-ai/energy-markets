@@ -92,10 +92,16 @@ function clear_multi_zone(zones::Vector{String}, days; order_method::Symbol, opt
     ok = 0
     for d in days
         try
-            run_multi_zone_market_clearing(d; zones=zones, order_method=order_method,
+            res = run_multi_zone_market_clearing(d; zones=zones, order_method=order_method,
                 optimizer=optimizer, enrich_network=true, passes=2,
-                clearing_mode="multi_zone", save_to_db=true, silent=true)
-            ok += 1
+                clearing_mode="multi_zone", save_to_db=true, silent=true,
+                mpcc_time_limit=mpcc_budget(optimizer),
+                mpcc_heuristic_effort=optimizer == "highs" ? 0.3 : nothing)
+            # A day only counts if it produced prices (TIME_LIMIT with no
+            # incumbent throws nothing but yields an empty result).
+            usable = res.status == :optimal ||
+                     (res.status == :time_limit && !isempty(res.market_prices))
+            usable ? (ok += 1) : @warn "multi-zone clear produced no prices" day=d status=res.status
         catch e
             @warn "multi-zone clear failed" day=d error=e
         end
@@ -103,6 +109,11 @@ function clear_multi_zone(zones::Vector{String}, days; order_method::Symbol, opt
     end
     println("  [$ok/$(length(days)) days]")
 end
+
+# MPCC time budget per solver: Gurobi closes the 39-zone MIP in ~10-60 s, so the
+# library default (900 s) is ample. HiGHS needs far longer to find its first
+# incumbent on the 39-zone complementarity MIP.
+mpcc_budget(optimizer::String) = optimizer == "highs" ? 3600.0 : 900.0
 
 # --------------------------------------------------------------------------
 # Day-parallel clearing. DuckDB is single-writer but supports any number of
@@ -155,7 +166,15 @@ function parallel_clear_multi(zones::Vector{String}, days; order_method::Symbol,
         try
             res = run_multi_zone_market_clearing(d; zones=zones, order_method=order_method,
                 optimizer=optimizer, enrich_network=true, passes=2,
-                clearing_mode="multi_zone", save_to_db=false, silent=true)
+                clearing_mode="multi_zone", save_to_db=false, silent=true,
+                mpcc_time_limit=mpcc_budget(optimizer),
+                mpcc_heuristic_effort=optimizer == "highs" ? 0.3 : nothing)
+            usable = res.status == :optimal ||
+                     (res.status == :time_limit && !isempty(res.market_prices))
+            usable ||
+                return (day=d, market_prices=nothing, flows=nothing, status=res.status,
+                        objective=nothing, solve_time=nothing, solver=nothing,
+                        err="no prices (status=$(res.status))")
             (day=d, market_prices=res.market_prices, flows=res.transmission_flows,
              status=res.status, objective=res.objective_value, solve_time=res.solve_time,
              solver=res.solver_name, err=nothing)
@@ -306,7 +325,10 @@ end
 # CLI
 # --------------------------------------------------------------------------
 function parse_args(argv)
-    opts = Dict{String,Any}("tier" => nothing, "optimizer" => "highs",
+    # Default optimizer "auto": Gurobi when installed, else HiGHS. Single-zone
+    # clears run fine on HiGHS; the 39-zone coupled MIP currently needs Gurobi
+    # to find an incumbent (HiGHS: none within 1 h — see docs/reproducibility.md).
+    opts = Dict{String,Any}("tier" => nothing, "optimizer" => "auto",
         "order_method" => :merit_order, "zones" => FOOTPRINT, "single" => nothing,
         "start" => nothing, "stop" => nothing, "workers" => "0")
     i = 1
@@ -340,7 +362,11 @@ function main(argv)
     opts = parse_args(argv)
     tier = opts["tier"]
     tier === nothing && (println("usage: julia --project=. bin/reproduce.jl [--quick | --range S E [--zones ...] [--single Z] | --full] [--optimizer highs|gurobi] [--workers N|auto]"); return 1)
-    om = opts["order_method"]; opt = opts["optimizer"]
+    om = opts["order_method"]
+    # Resolve "auto" to the concrete solver now, so the per-solver MPCC budget
+    # and the report metadata are exact.
+    opt = lowercase(Euphemia.select_solver(opts["optimizer"])[2])
+    println("Optimizer: ", opt)
 
     offline = ensure_duckdb_backend()
     println("Backend: ", Euphemia.DATA_STORE[], offline ? "  (offline reproduction)" : "")

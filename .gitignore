@@ -7,3 +7,7 @@ data/public/
 data/results.duckdb
 *.duckdb
 *.parquet
+
+# Reproduction outputs (committed reference lives in results/reference/)
+results/*
+!results/reference/

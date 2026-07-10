@@ -78,6 +78,23 @@ const EST_BYTES_PER_ROW = parse(Int, get(ENV, "EST_BYTES_PER_ROW", "40"))
 # (the 39-zone 3.5-year per-unit table is ~125M rows).
 const CHUNK_THRESHOLD = parse(Int, get(ENV, "CHUNK_THRESHOLD", "8000000"))
 
+# Abort the build (removing partial output) if free space on the OUTPUT
+# filesystem would drop below this floor. Everything is written under the repo's
+# data/ dirs (on /home) — never /tmp or /.
+const MIN_FREE_GB = parse(Float64, get(ENV, "MIN_FREE_GB", "60.0"))
+
+# Free gigabytes on the filesystem holding `path` (its nearest existing dir).
+function free_gb(path::AbstractString)
+    dir = isdir(path) ? path : dirname(path)
+    isempty(dir) && (dir = ".")
+    while !isdir(dir) && dir != "/" && !isempty(dir)
+        dir = dirname(dir)
+    end
+    out = readchomp(`df -Pk $dir`)
+    avail_kb = parse(Int, split(split(out, '\n')[end])[4])
+    return avail_kb / 1e6
+end
+
 # --------------------------------------------------------------------------
 # Postgres → naive-UTC projection helper
 # --------------------------------------------------------------------------
@@ -330,16 +347,38 @@ function main()
 
     db = DuckDB.DB(OUT)
     con = DBInterface.connect(db)
+    # Keep DuckDB's spill workspace on /home (next to OUT), never /tmp or /.
+    let tmp = joinpath(dirname(OUT) == "" ? "." : dirname(OUT), ".duckdb_tmp")
+        mkpath(tmp)
+        DBInterface.execute(con, "SET temp_directory = '$tmp'")
+    end
     for sch in unique(s.schema for s in specs)
         DBInterface.execute(con, "CREATE SCHEMA IF NOT EXISTS $sch")
     end
+
+    # Graceful abort: close, remove partial artifacts, return 1.
+    function abort_build(reason)
+        println("\nABORT: ", reason)
+        try; DBInterface.close!(con); catch; end
+        try; close(db); catch; end
+        try; isfile(OUT) && rm(OUT); catch; end
+        try; rm(OUT * ".wal", force=true); catch; end
+        try; !isempty(PARQUET_DIR) && isdir(PARQUET_DIR) && rm(PARQUET_DIR, recursive=true); catch; end
+        return 1
+    end
+
+    @printf("Disk free on target before build: %.1f GB (floor %.0f GB)\n", free_gb(OUT), MIN_FREE_GB)
 
     manifest_tables = NamedTuple[]
     for spec in specs
         fqtn = "$(spec.schema).$(spec.table)"
         expected = counts[fqtn]
         chunked = expected > CHUNK_THRESHOLD && !isempty(spec.chunk_col)
-        @printf("  loading %-55s %s\n", fqtn, chunked ? "(monthly chunks)" : "")
+        fg = free_gb(OUT)
+        if fg < MIN_FREE_GB
+            return abort_build("free space $(round(fg, digits=1)) GB < floor $(MIN_FREE_GB) GB before $fqtn")
+        end
+        @printf("  loading %-55s %s  [free %.1f GB]\n", fqtn, chunked ? "(monthly chunks)" : "", fg)
         flush(stdout)
         cols = projection(spec.schema, spec.table)
         n = build_table!(con, spec, cols, expected)
@@ -356,9 +395,13 @@ function main()
         end
         push!(manifest_tables, (name=fqtn, rows=n, parquet=parquet_rel,
                                 parquet_bytes=parquet_bytes, sha=sha))
-        @printf("      %10d rows%s\n", n,
-                parquet_bytes > 0 ? @sprintf("  parquet %.1f MB", parquet_bytes/1e6) : "")
+        fg2 = free_gb(OUT)
+        @printf("      %10d rows%s  [free %.1f GB]\n", n,
+                parquet_bytes > 0 ? @sprintf("  parquet %.1f MB", parquet_bytes/1e6) : "", fg2)
         flush(stdout)
+        if fg2 < MIN_FREE_GB
+            return abort_build("free space $(round(fg2, digits=1)) GB < floor $(MIN_FREE_GB) GB after $fqtn")
+        end
     end
 
     DBInterface.close!(con)

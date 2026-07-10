@@ -1423,7 +1423,15 @@ function run_multi_zone_market_clearing(date::Date;
                                         clearing_mode::String="multi_zone",
                                         enrich_network::Bool=false,
                                         apply_zone_profiles::Bool=true,
-                                        passes::Int=1)
+                                        passes::Int=1,
+                                        # MPCC solver budget. Defaults unchanged
+                                        # (900 s / 1e-6). HiGHS needs a longer
+                                        # budget than Gurobi to find a first
+                                        # incumbent on the 39-zone MIP — see
+                                        # bin/reproduce.jl.
+                                        mpcc_time_limit::Float64=900.0,
+                                        mpcc_mip_gap::Float64=1e-6,
+                                        mpcc_heuristic_effort::Union{Float64,Nothing}=nothing)
 
     start_time = time()
     # Label the optimization_runs row so a non-standard footprint (e.g. the
@@ -1476,7 +1484,10 @@ function run_multi_zone_market_clearing(date::Date;
     println("\n⚡ Running multi-zone market clearing optimization...")
     mpcc_result = MPCC.solve_mpcc_market_clearing(order_book;
                                                    preferred_solver=optimizer,
-                                                   silent=silent)
+                                                   silent=silent,
+                                                   time_limit=mpcc_time_limit,
+                                                   mip_gap=mpcc_mip_gap,
+                                                   heuristic_effort=mpcc_heuristic_effort)
 
     # TWO-PASS opportunity-anchor clearing (opt-in via passes=2, merit-order
     # only). Pass 1 above cleared the standard books; zones whose profile
@@ -1510,7 +1521,9 @@ function run_multi_zone_market_clearing(date::Date;
                 cached_zone_orders=cached)
             println("\n⚡ Running pass-2 market clearing optimization...")
             result2 = MPCC.solve_mpcc_market_clearing(order_book2;
-                preferred_solver=optimizer, silent=silent)
+                preferred_solver=optimizer, silent=silent,
+                time_limit=mpcc_time_limit, mip_gap=mpcc_mip_gap,
+                heuristic_effort=mpcc_heuristic_effort)
             if result2.status == :optimal ||
                (result2.status == :time_limit && !isempty(result2.market_prices))
                 order_book = order_book2
