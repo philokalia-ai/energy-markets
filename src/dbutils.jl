@@ -1124,6 +1124,21 @@ function ensure_indexes()
             (asset_code, start_outage_utc);
         """)
 
+        # Indexes for get_generators()'s per-zone unit lookup. The table has NO
+        # indexes, so both the main query's `area_map_code = $1` filter and the
+        # recent-generation CTE's unit-code subquery seq-scanned it (~280 ms each,
+        # 2-3x per zone). area_map_code drives the zone filter; generation_unit_code
+        # serves the DISTINCT-ON dedup / code lookups.
+        @info "Creating indexes on production_and_generation_units..."
+        LibPQ.execute(cnx, """
+            CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_prod_gen_units_area
+            ON entsoe.production_and_generation_units (area_map_code);
+        """)
+        LibPQ.execute(cnx, """
+            CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_prod_gen_units_gen_code
+            ON entsoe.production_and_generation_units (generation_unit_code);
+        """)
+
         # Index for hydro availability / per-type generation queries
         # Table: 23 GB - queries by zone + production_type + date range
         @info "Creating index on aggregated_generation_per_type..."
