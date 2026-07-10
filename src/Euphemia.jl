@@ -992,15 +992,29 @@ const NORDIC_FB_ZONES = ["NO1", "NO2", "NO3", "NO4", "NO5",
 const NORDIC_NO_ZONES = ["NO1", "NO2", "NO3", "NO4", "NO5"]
 
 """
-    nordic_flow_based_drop_borders(footprint) -> Vector{Tuple{String,String}}
+    flow_based_drop_borders(footprint) -> Vector{Tuple{String,String}}
 
 Undirected border pairs whose stale flow-based ATC residuals must be dropped
-from the enriched network (falling back to observed net imports): every
-Nordic-internal border touching a Norwegian zone, plus Finland's import borders
-from Sweden. Only pairs with both endpoints in the footprint are returned;
-empty for footprints without Nordic zones (e.g. the 5-zone SEE set).
+from the enriched network (falling back to observed net imports, import-only):
+
+- **Nordic**: every Nordic-internal border touching a Norwegian zone, plus
+  Finland's import borders from Sweden.
+- **Hungary (Core FBMC)**: HU–AT and HU–SK. The `offered_transfer_capacities_implicit`
+  values for HU are flow-based residual leftovers, not the real domain: measured
+  2026-04-01..05, HU's import ATCs collapse to 37–112 MW at the evening peak (vs
+  455–994 mid-morning) while the real Core domain carries GWs — the model starved
+  HU exactly at the peak residual hours. Same treatment as the Nordic flow-based
+  borders. HU–RO already moved to flow-based coupling (kept as observed imports),
+  and HU–HR is not in the footprint, so those flows were already retained.
+  HU–SI is deliberately KEPT endogenous: dropping it too (iter-4 cal11) fixed HU
+  identically but regressed SI's shape (corr 0.79→0.58) by stripping SI's HU
+  export outlet, while AT/SK-only (cal12) fixed HU (bias +70→+0.5, MAE 75→30)
+  and left SI within tolerance (corr 0.79→0.75).
+
+Only pairs with both endpoints in the footprint are returned; empty for
+footprints without Nordic or Hungarian zones (e.g. the 5-zone SEE set).
 """
-function nordic_flow_based_drop_borders(footprint::AbstractVector{<:AbstractString})
+function flow_based_drop_borders(footprint::AbstractVector{<:AbstractString})
     fp = Set(String.(footprint))
     pairs = Set{Tuple{String,String}}()
     ordered(a, b) = a < b ? (a, b) : (b, a)
@@ -1013,6 +1027,11 @@ function nordic_flow_based_drop_borders(footprint::AbstractVector{<:AbstractStri
     if "FI" in fp
         for se in ("SE1", "SE3")
             se in fp && push!(pairs, ordered("FI", se))
+        end
+    end
+    if "HU" in fp
+        for z in ("AT", "SK")
+            z in fp && push!(pairs, ordered("HU", z))
         end
     end
     return sort(collect(pairs))
@@ -1122,7 +1141,7 @@ function _create_multi_zone_order_book_merit(zones::Vector{String}, day::Date;
     # failing. Left off by default so the 5-zone SEE product is byte-identical.
     aggregate_remap = enrich_network ? build_aggregate_remap(zones) : Dict{String,String}()
 
-    drop_borders = enrich_network ? nordic_flow_based_drop_borders(zones) :
+    drop_borders = enrich_network ? flow_based_drop_borders(zones) :
                    Tuple{String,String}[]
 
     println("   🔌 Fetching transfer capacities between zones...")

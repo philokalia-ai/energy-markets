@@ -77,12 +77,13 @@ const V10_TRANCHES = [(0.55, 0.95), (0.20, 1.05), (0.15, 1.25), (0.10, 1.60)]
         end
         @test get_zone_profile("NO4") === NORDIC_PROFILE  # far north: no anchor
         @test NORDIC_PROFILE.opportunity_anchor == :none
-        @test SWISS_PROFILE.opportunity_anchor == :hydro   # iter3: defined,
-        @test SWISS_PROFILE.hydro_model == :reservoir_opportunity  # measured,
-        # ... and GATED: cal10 fixed CH (MAE 40→27) but regressed AT corr
-        # 0.77→0.57 through the AT-CH border — CH stays CONTINENTAL until an
-        # AT-aware rollout (see docs/eu-calibration-iter3.md).
-        @test get_zone_profile("CH") === CONTINENTAL_PROFILE
+        @test SWISS_PROFILE.opportunity_anchor == :hydro
+        @test SWISS_PROFILE.hydro_model == :reservoir_opportunity
+        # iter4: CH and AT rolled out TOGETHER on the alpine reservoir-opportunity
+        # :hydro anchor (the AT–CH border is anchored consistently, fixing the
+        # cal10 AT shape regression). See docs/eu-calibration-iter4.md.
+        @test get_zone_profile("CH") === SWISS_PROFILE
+        @test get_zone_profile("AT") === SWISS_PROFILE
     end
 
     @testset "opportunity anchor is a no-op without profile opt-in" begin

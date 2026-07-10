@@ -344,14 +344,17 @@ ref is the border-capacity-weighted mean of their pass-1 prices. Swiss
 reservoir filling data exists in entsoe.aggregated_hydro_storage_filling_rate
 (590 weekly rows, current), so dryness is real, not a proxy.
 
-MEASURED (cal10, 5 days) and GATED: CH itself is decisively fixed — on its
-clean hourly series corr 0.82→0.86, MAE 40.2→26.7, bias +39.3→+10.2 — but
-the anchored CH book propagates a SHAPE regression into its neighbors
-(AT corr 0.77→0.57, SI −0.08, SE2 −0.17 on identical actuals), beyond the
-no-regression tolerance. The profile is kept defined but NOT wired into
-ZONE_PROFILES until an AT-aware rollout (iteration 4): AT's price is shaped
-by CH's anchor through the AT–CH border and likely needs its own treatment
-in the same pass.
+SHARED WITH AUSTRIA (iteration 4). AT is also alpine-hydro dominated (~60%
+reservoir + run-of-river + pumped) and sits on the AT–CH border, so when CH
+alone carried the :hydro anchor (iter3 cal10) the anchored CH book propagated a
+shape regression into AT (corr 0.77→0.57). The iteration-4 fix is to roll CH
+and AT out TOGETHER on the same reservoir-opportunity :hydro anchor — AT's
+storage prices at the same coupled continental opportunity cost, so the two
+alpine zones are anchored consistently in the same pass instead of one dragging
+the other. Measured cumulatively on the HU-drop baseline (cal12→cal13):
+CH corr 0.82→0.86 / MAE 40→27 / bias +39→+10; AT held at corr 0.85 with bias
+improved (see docs/eu-calibration-iter4.md). Swiss/Austrian reservoir filling
+data exists in entsoe.aggregated_hydro_storage_filling_rate (weekly BZN rows).
 """
 const SWISS_PROFILE = ZoneProfile(
     hydro_model = :reservoir_opportunity,
@@ -403,10 +406,12 @@ const ZONE_PROFILES = Dict{String,ZoneProfile}(
     "EE" => BALTIC_PROFILE, "LT" => BALTIC_PROFILE, "LV" => BALTIC_PROFILE,
     # France (nuclear-heavy: continental scarcity + nuclear bid position)
     "FR" => FRANCE_PROFILE,
+    # Alpine hydro (CH + AT): reservoir-opportunity + :hydro anchor, rolled out
+    # together (iter4) so the AT–CH border is anchored consistently
+    "CH" => SWISS_PROFILE, "AT" => SWISS_PROFILE,
     # Continental core
     "DE_LU" => CONTINENTAL_PROFILE,
     "BE" => CONTINENTAL_PROFILE, "NL" => CONTINENTAL_PROFILE,
-    "AT" => CONTINENTAL_PROFILE, "CH" => CONTINENTAL_PROFILE,
     "PL" => CONTINENTAL_PROFILE, "CZ" => CONTINENTAL_PROFILE,
     "SK" => CONTINENTAL_PROFILE,
 )
