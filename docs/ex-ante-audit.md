@@ -95,9 +95,11 @@ mostly endogenous, so the hit propagates entirely through the coupled solve from
 its neighbours' shifted observed injections. The cost exceeds the "small" bar
 (< 5 MAE / < 0.03 corr) for ~15 of 39 zones — it is **not** negligible.
 
-(D-2 variant — recent-level, wrong-weekday — measured in
-`iter6_results/exante_d2_v2.csv`; expected between D-0 and D-7 on level, worse on
-the daily shape it scrambles.)
+**D-2 variant** (recent level, *wrong weekday*): mean MAE **45.4 → 59.2**
+(+13.8), mean bias +14.6 → +30.0 — markedly worse than D-7. Scrambling the
+weekday (a Tuesday's flows dropped onto a Sunday) hurts more than the two-day-
+older level helps. **D-7 same-weekday is the better forward lag**; the ordering
+is D-0 (45.4) < D-7 (50.7) < D-2 (59.2).
 
 **Read:** same-day observed flows are **load-bearing for accuracy**, and unevenly
 so. The aggregate cost of D-7 is modest (mean MAE +~5, mean corr −~0.02), but it
