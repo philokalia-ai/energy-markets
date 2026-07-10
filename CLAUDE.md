@@ -637,6 +637,64 @@ When `parallel=true` in `run_multi_zone_market_clearing()`:
 - Override with explicit `max_workers=N` if needed
 - "Max distributed workers" is unrelated (for Gurobi's distributed MIP, not parallel independent solves)
 
+### Pipelined multi-zone backfill (`run_pipelined_backfill`)
+
+For long multi-zone EU backfills the bottleneck is that the two-pass merit-order
+clear alternates a **slow book build** (39 zones of DB-heavy order construction)
+with a **fast Gurobi solve**, so the scarce solver sits idle during every build.
+`run_pipelined_backfill` (in `src/PipelinedBackfill.jl`) is a producer/consumer
+pipeline that keeps the solver saturated: book-builder workers build complete
+per-day 39-zone book sets **in memory, ahead of time**, and hand them to a small
+pool of solver workers that "never sit".
+
+```julia
+using Distributed  # the coordinator manages the worker pool internally
+result = run_pipelined_backfill(Date(2026,1,1):Day(1):Date(2026,6,30), FOOTPRINT;
+    solver_workers=2,           # concurrent Gurobi solves (== WLS session cap)
+    book_workers=10,            # default min(10, CPU_THREADS ÷ 8)
+    in_flight=8,                # bounded days-in-flight (RAM + backpressure)
+    optimizer="gurobi",
+    clearing_mode="multi_zone_eu",
+    save_to_db=true, resume=true)   # resumable: already-saved days are skipped
+result.days_per_hour            # throughput
+result.solver_utilization       # solve-busy / wall, per solver worker
+```
+
+Architecture (one flow per market day, with the pass-2 anchor feedback edge):
+`feeder → BOOK WORKERS build pass-1 → SOLVER pass-1 MPCC → extract anchor refs →
+BOOK WORKERS rebuild only the ~12 anchored zones (others reused verbatim) →
+SOLVER pass-2 → single WRITER on the coordinator saves`. Stages are wired with
+bounded `RemoteChannel`s; a counting-token semaphore caps days-in-flight at
+`in_flight` and every internal channel has that capacity, so no internal `put!`
+ever blocks (this breaks the pass-2 feedback cycle's deadlock potential) — only
+the feeder blocks, which is the intended backpressure.
+
+**Correctness (measured):** every model/book step reuses the exact functions the
+sequential `run_multi_zone_market_clearing(...; passes=2)` path uses — the
+exposed stages `mz_build_books`, `mz_solve_pass`, `mz_extract_anchor_inputs`,
+`mz_rebuild_anchored`. Acceptance test `test/scripts/pipeline_identity.jl`
+(3 days × 39 zones both ways): **bit-identical on the DuckDB extract** (2,808
+prices, max |Δ| = 0) and bit-identical on Postgres with serialized DB access.
+With *concurrent* book builds against live Postgres, SQL aggregate summation
+order can shift at the last ULP (≤1e-12 €/MWh; rarely flips a near-degenerate
+marginal tranche) — the same documented mechanism as the Postgres↔DuckDB
+residual, inherent to concurrent Postgres querying (also affects `--workers 2`),
+not a pipeline artifact. Benchmark (10 days, 2026-03): **1.43×** over the
+day-parallel 2-worker mode (202 s vs 289 s; solver utilization 73–78%).
+
+**Gurobi safety:** exactly `solver_workers` solver *processes* exist, each solving
+one problem at a time, so at most `solver_workers` Gurobi solves run at once — set
+it to the WLS concurrent-session cap (2 here), or **1 to coordinate with another
+running backfill**. Each solver process creates ONE persistent Gurobi env on its
+first solve (`SOLVER_ENV_CACHE`) and reuses it for every subsequent solve.
+
+Wired into the runners: `bin/reproduce.jl --pipeline [--book-workers M]
+[--solver-workers S]` (multi-zone jobs go through the pipeline; single-zone jobs
+still run sequentially), and `bin/eu_calibration_run.jl` via `PIPELINE=true`
+(with `BOOK_WORKERS` / `SOLVER_WORKERS`; saves energy_prices only under
+`CLEARING_MODE`). Under the DuckDB extract the workers open it read-only and the
+coordinator is the single writer, exactly like `--workers`.
+
 ## Data stores and scenario hooks
 
 ### Data store: Postgres or a DuckDB extract

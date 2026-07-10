@@ -113,6 +113,66 @@ Note the parallel cap depends on the solver: HiGHS has no license limit
 (single-zone scales to any worker count), while Gurobi WLS typically allows
 **2 concurrent sessions** — so multi-zone parallel runs cap at `--workers 2`.
 
+### Pipelined multi-zone backfill (`--pipeline`)
+
+`--workers 2` caps multi-zone throughput at 2 whole day-clears in flight, and
+each of those interleaves a slow 39-zone book build with a fast Gurobi solve —
+the two licensed solver sessions sit idle during every build. `--pipeline`
+decouples the stages: `--book-workers M` (default `min(10, CPU÷8)`) processes
+build complete per-day book sets in memory ahead of time, and
+`--solver-workers S` (default 2 = the WLS session cap) dedicated solver
+processes — each holding ONE persistent Gurobi env across all its solves —
+consume them back-to-back, including the pass-2 opportunity-anchor re-clears
+(only the ~12 anchored zones are rebuilt; every other zone's book is reused
+verbatim, exactly as the sequential `passes=2` path). Bounded queues (~8 days
+in flight) keep RAM flat; the run is resumable per day (already-saved days are
+skipped) and prints per-day
+`DAY d DONE status=… book=… waitq=… solve1=… rebuild=… solve2=…` lines plus a
+final throughput / solver-utilization summary.
+
+```bash
+julia --project=. bin/reproduce.jl --range 2026-01-01 2026-06-30 --pipeline \
+    --book-workers 10 --solver-workers 2
+```
+
+**Identity guarantee (measured).** The pipeline reuses the exact stage
+functions of the sequential path (`mz_build_books` / `mz_solve_pass` /
+`mz_extract_anchor_inputs` / `mz_rebuild_anchored`);
+`test/scripts/pipeline_identity.jl` verifies 3 days (2026-04-01..03) × 39
+zones end-to-end. Measured:
+
+- **DuckDB extract:** pipeline vs sequential **bit-identical** — 2,808
+  zone-hour prices, max |Δ| = 0.
+- **Postgres, serialized DB access** (`book_workers=1, in_flight=1`):
+  **bit-identical** (and sequential-vs-sequential re-runs are themselves
+  bit-identical).
+- **Postgres, concurrent book builds:** last-ULP noise (≤1e-12 €/MWh) with
+  rare near-degenerate marginal-tranche flips (1 zone-hour in 2,808) — the
+  same documented mechanism as the Postgres↔DuckDB residual (SQL aggregate
+  summation order shifts under concurrent query load), inherent to any
+  concurrent clearing against live Postgres (including `--workers 2`), not a
+  pipeline artifact. For exactly reproducible backfills, run against the
+  DuckDB extract.
+
+Measured on the 10-day 2026-03-01..10 window against a DuckDB extract
+(80-core box, Gurobi, 2 solver sessions; `test/scripts/pipeline_benchmark.jl`):
+
+| Mode | wall (10 d) | days/hour | speedup | solver utilization |
+|------|-----------:|----------:|--------:|-------------------:|
+| `--workers 2` (today's day-parallel) | 289 s | 124.6 | 1.00× | (interleaved) |
+| `--pipeline` (2 solvers, 10 book workers) | **202 s** | **178.0** | **1.43×** | 78% / 73% |
+
+The pipeline also absorbs hard days gracefully: 2026-03-01 needed 54 s + 41 s
+MPCC solves and the other days kept flowing through the second solver. RAM
+stayed flat (≥186 GB free of 256 GB) under the 8-day in-flight bound.
+
+Projected from the measured per-day cost: H1-2026 (181 d) **1.0 h** pipelined
+vs 1.5 h day-parallel; the full 3.5 y × 39 zones (1,277 d) **7.2 h** vs
+10.2 h. Against live Postgres the absolute times are ~5-10× larger (book
+builds dominate: ~200-380 s/day vs ~20 s on the extract), which makes the
+pipeline's build-ahead overlap matter even more there — but the extract is the
+recommended backfill substrate.
+
 Each run writes `results/<tier>_report.md` (per-zone corr / MAE / bias tables) and
 `results/<tier>_metrics.csv`. `--quick` additionally diffs against the committed
 reference at `results/reference/quick_metrics.csv` and flags any drift.
