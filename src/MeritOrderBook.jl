@@ -245,6 +245,38 @@ function get_dropped_border_exports(bidding_zone::String, day::Date,
 end
 
 """
+    get_import_atc_capacity(bidding_zone, day) -> Dict{Int,Float64}
+
+Per-UTC-hour total OFFERED import ATC into the zone (MW), summed over all its
+borders (`in_map_code = zone`) from `offered_transfer_capacities_implicit`. Used
+by the gated `scarcity_import_credit` to credit available import capacity in the
+scarcity margin — a zone that can import GWs is not domestically scarce. Offered
+ATC is published D-1, so this is ex-ante. AVG per (border, hour) before summing
+so a border reported sub-hourly is not over-counted.
+"""
+function get_import_atc_capacity(bidding_zone::String, day::Date)
+    df = sql2df_with_retry(
+        """
+        SELECT h, SUM(cap) AS total FROM (
+          SELECT EXTRACT(HOUR FROM date_time_utc AT TIME ZONE 'UTC')::int AS h,
+                 out_map_code, AVG(capacity_mw) AS cap
+          FROM entsoe.offered_transfer_capacities_implicit
+          WHERE in_map_code = \$1
+            AND date_time_utc >= (\$2::date::timestamp AT TIME ZONE 'UTC')
+            AND date_time_utc <  ((\$2::date + 1)::timestamp AT TIME ZONE 'UTC')
+          GROUP BY 1, out_map_code
+        ) s
+        GROUP BY h
+        """,
+        [bidding_zone, day])
+    out = Dict{Int,Float64}()
+    for r in eachrow(df)
+        ismissing(r.total) || (out[Int(r.h)] = Float64(r.total))
+    end
+    return out
+end
+
+"""
     get_firm_of(bidding_zone::String) -> Dict{String,String}
 
 Map of `unit_code => firm` for a zone, from `simulations.unit_firms` (a small
@@ -326,6 +358,15 @@ Base.@kwdef struct ZoneProfile
     nuclear_srmc_floor::Float64 = 0.0
     opportunity_anchor::Symbol = :none
     anchor_share::Float64 = 0.9
+    # Scarcity import credit (iter6): fraction of the zone's offered import ATC
+    # to add to dispatchable capacity in the scarcity margin. A thermal zone with
+    # GWs of available import capacity is NOT strategically scarce even when its
+    # own derated fleet looks tight (DE_LU is a NET EXPORTER yet priced €178) —
+    # the real scarcity, if any, arrives through the coupled import PRICE, not a
+    # domestic mark-up. 0 = off (SEE/guard unchanged and byte-identical). Uses
+    # offered ATC only (D-1 legal). Softens ONLY the scarcity margin; the actual
+    # imports still clear through the MPCC.
+    scarcity_import_credit::Float64 = 0.0
     # Seasonal water-value drawdown (reservoir_opportunity zones only): raise the
     # water-value floor with the absolute reservoir drawdown vs the trailing
     # 52-week peak, so winter depletion prices stored water as scarcer even when
@@ -351,6 +392,10 @@ const CONTINENTAL_PROFILE = ZoneProfile(
     scarcity_threshold = 1.25,
     scarcity_kappa = 1.5,
     peak_kappa = 0.6,
+    # iter6: DE_LU/NL/PL/CZ are meshed thermal zones with GWs of import capacity
+    # and are frequently net exporters — the domestic scarcity mark-up mis-fired
+    # (DE_LU +70, a NET EXPORTER, priced €178). Credit available import ATC.
+    scarcity_import_credit = 1.0,
 )
 
 """
@@ -569,6 +614,10 @@ const BALTIC_PROFILE = ZoneProfile(
     scarcity_threshold = 1.25,
     scarcity_kappa = 1.5,
     peak_kappa = 0.6,
+    # iter6: EE/LT/LV are import-dependent (thin domestic thermal riding the
+    # Nordic system via Estlink/NordBalt); the scarcity margin ignored those
+    # imports and priced +78-87. Credit available import ATC.
+    scarcity_import_credit = 1.0,
 )
 
 """
@@ -1188,6 +1237,11 @@ function create_merit_order_book(
             availability_factor * sum((g.p_max for g in generators if !is_hydro(g)); init=0.0) +
             hydro_scale * hydro_pmax
 
+        # Available import capacity per UTC hour, credited into the scarcity
+        # margin when the profile opts in (thermal import/export zones). 0 = off.
+        import_atc_by_hour = profile.scarcity_import_credit > 0.0 ?
+            get_import_atc_capacity(bidding_zone, day) : Dict{Int,Float64}()
+
         # UC-lite commitment: only units that are actually running
         # self-schedule their minimum load. Approximate the committed set as
         # the cheapest eligible thermal units whose derated capacity covers
@@ -1290,7 +1344,13 @@ function create_merit_order_book(
             # The high exponent concentrates the markup in the true peak
             # hours: at norm_demand 0.5 (e.g. summer nights, where residual
             # demand is mid-range) the markup is ~6% of peak_kappa, not 25%.
-            margin = dispatchable_capacity / net_demand[ts]
+            # Credit available import capacity (gated): a zone that can import
+            # GWs is not domestically scarce. Only the scarcity term is relieved;
+            # the peak strategic-bidding term is left intact.
+            import_credit = profile.scarcity_import_credit > 0.0 ?
+                profile.scarcity_import_credit *
+                get(import_atc_by_hour, Dates.hour(parse_timeslot_to_datetime(ts, day)), 0.0) : 0.0
+            margin = (dispatchable_capacity + import_credit) / net_demand[ts]
             scarcity = 1.0 +
                        scarcity_kappa * max(0.0, scarcity_threshold - margin)^2 +
                        peak_kappa * norm_demand^peak_exponent
