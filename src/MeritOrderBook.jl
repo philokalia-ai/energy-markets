@@ -332,6 +332,20 @@ const NORWAY_PROFILE = ZoneProfile(
 )
 
 """
+Mid/south Sweden (SE3/SE4). Same structural object as southern Norway once
+their flow-based-residual borders are dropped (iter5: SE2–SE3, SE3–SE4 in
+`flow_based_drop_borders`): the drop cured the +128/+147 continental-scarcity
+bias (MAE −99/−103) but reproduced NO1's iteration-2 failure mode — the €1
+observed-import block became price-setting (SE3 sim €1–9.5 all day vs actual
+€15–70, corr 0.51→−0.25). The `:hydro` opportunity anchor is the built cure:
+dropped-border imports price at the border price (`share × ref`), water value
+clamps to the coupled reference, and dropped-border exports re-enter as
+ref-priced demand. Anchor refs come from the remaining endogenous neighbors —
+DK1 for SE3, DK2/LT for SE4 — all well-calibrated after the SE drop.
+"""
+const SWEDEN_SOUTH_PROFILE = NORWAY_PROFILE
+
+"""
 Switzerland. Hydro-storage dominated (large reservoir + pumped fleet, thin
 thermal) but was on CONTINENTAL_PROFILE, so its storage was priced
 gas-anchored (~€119 base with scarcity markup) — measured cal8 residual +28
@@ -399,8 +413,11 @@ const ZONE_PROFILES = Dict{String,ZoneProfile}(
     # NO4 (far north, not continentally coupled) stays plain NORDIC
     "NO1" => NORWAY_PROFILE, "NO2" => NORWAY_PROFILE, "NO3" => NORWAY_PROFILE,
     "NO4" => NORDIC_PROFILE, "NO5" => NORWAY_PROFILE,
-    "SE1" => NORDIC_PROFILE, "SE2" => NORDIC_PROFILE, "SE3" => NORDIC_PROFILE,
-    "SE4" => NORDIC_PROFILE, "FI" => NORDIC_PROFILE,
+    "SE1" => NORDIC_PROFILE, "SE2" => NORDIC_PROFILE,
+    # SE3/SE4: anchored after the iter5 SE2–SE3/SE3–SE4 border drop (see
+    # SWEDEN_SOUTH_PROFILE docstring)
+    "SE3" => SWEDEN_SOUTH_PROFILE, "SE4" => SWEDEN_SOUTH_PROFILE,
+    "FI" => NORDIC_PROFILE,
     "DK1" => NORDIC_PROFILE, "DK2" => NORDIC_PROFILE,
     # Baltic
     "EE" => BALTIC_PROFILE, "LT" => BALTIC_PROFILE, "LV" => BALTIC_PROFILE,

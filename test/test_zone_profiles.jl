@@ -84,6 +84,14 @@ const V10_TRANCHES = [(0.55, 0.95), (0.20, 1.05), (0.15, 1.25), (0.10, 1.60)]
         # cal10 AT shape regression). See docs/eu-calibration-iter4.md.
         @test get_zone_profile("CH") === SWISS_PROFILE
         @test get_zone_profile("AT") === SWISS_PROFILE
+        # iter5: SE3/SE4 anchored after the SE2–SE3/SE3–SE4 flow-based border
+        # drop (the €1 observed-import block must not be price-setting — the
+        # NO1 iteration-2 lesson). SE1/SE2 stay plain NORDIC.
+        @test SWEDEN_SOUTH_PROFILE.opportunity_anchor == :hydro
+        @test get_zone_profile("SE3") === SWEDEN_SOUTH_PROFILE
+        @test get_zone_profile("SE4") === SWEDEN_SOUTH_PROFILE
+        @test get_zone_profile("SE1") === NORDIC_PROFILE
+        @test get_zone_profile("SE2") === NORDIC_PROFILE
     end
 
     @testset "opportunity anchor is a no-op without profile opt-in" begin
