@@ -160,6 +160,10 @@ function __init__()
     DotEnv.load!(".")
     # Runtime (not precompile-time) environment overrides.
     RESULTS_DB_PATH[] = get(ENV, "EUPHEMIA_RESULTS_DB", "data/results.duckdb")
+    # Ex-ante flow lag: read at runtime so the precompiled image doesn't bake in
+    # whatever EUPHEMIA_FLOW_ASOF_LAG was set (or unset) at precompile time.
+    MeritOrderBook.FLOW_ASOF_LAG[] =
+        something(tryparse(Int, get(ENV, "EUPHEMIA_FLOW_ASOF_LAG", "0")), 0)
     # Backend selection (explicit env wins; else auto-detect the public extract;
     # else Postgres; else a clear error). See `_resolve_data_store`. When DuckDB
     # is selected the eager LibPQ pool is SKIPPED entirely so the library works

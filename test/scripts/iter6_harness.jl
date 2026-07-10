@@ -134,7 +134,7 @@ function main()
     nworkers = parse(Int, get(ENV, "WORKERS", "2"))
     zones = haskey(ENV, "ZONES") ? Set(String[strip(z) for z in split(ENV["ZONES"], ",")]) : nothing
     days = load_sample()
-    println("ITER6 harness  label=$label  days=$(length(days))  workers=$nworkers  cv=$(Euphemia.ENERGY_PRICES_CODE_VERSION)")
+    println("ITER6 harness  label=$label  days=$(length(days))  workers=$nworkers  cv=$(Euphemia.ENERGY_PRICES_CODE_VERSION)  flow_asof_lag=$(Euphemia.MeritOrderBook.FLOW_ASOF_LAG[])")
     println("  span=$(minimum(days))..$(maximum(days))")
     t0 = time()
     results = clear_days(days, nworkers)

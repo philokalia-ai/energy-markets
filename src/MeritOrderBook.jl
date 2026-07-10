@@ -78,7 +78,10 @@ const _NET_IMPORTS_CACHE_LOCK = ReentrantLock()
 # information available before the auction. Default 0 = byte-identical to the
 # D-0 product (the counterfactual's committed behaviour is unchanged until a
 # forward product opts in). See docs/ex-ante-audit.md.
-const FLOW_ASOF_LAG = Ref{Int}(something(tryparse(Int, get(ENV, "EUPHEMIA_FLOW_ASOF_LAG", "0")), 0))
+# Initialized to 0 here (precompile time); Euphemia.__init__ sets it from
+# EUPHEMIA_FLOW_ASOF_LAG at RUNTIME so a cached precompiled image can't bake in
+# a stale value.
+const FLOW_ASOF_LAG = Ref{Int}(0)
 
 """
     set_flow_asof_lag!(n::Int)
