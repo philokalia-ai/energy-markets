@@ -156,6 +156,23 @@ The `exclude_unavailable` parameter (default: `true`) filters generators based o
 - This ensures operating plants are included regardless of stale validity dates
 - Plants with neither valid dates NOR recent generation are correctly excluded (truly decommissioned)
 
+**Day-level outage cache + per-zone memoization (`get_generators` performance):**
+- The `active_outages` aggregation and the `stale_outage_override` set are
+  **zone-independent day-level work**: a ~3 s seq-scan of the 9.4 GB
+  `unavailability_of_production_and_generation_units` table (text timestamps cast
+  per row). `get_day_outages(day)` computes this ONCE per market day across ALL
+  zones and caches it in a module-level `Dict{Date,DataFrame}` (thread-safe, like
+  `TTF_PRICE_CACHE`; never cached on DB error). Each zone's `get_generators` query
+  consumes its slice as array parameters (`unnest($3,$4,$5)`) — same rows as the
+  old per-zone CTEs (identity-tested for GR/DE_LU/NO1/FR + a 2022 crisis date in
+  `test/test_get_generators_identity.jl`). A 39-zone EU build hit the table once
+  instead of ~50 times (235 s → 145 s for the generator stage).
+- `get_generators` also memoizes its result per `(zone, day, exclude_unavailable,
+  exclude_variable_renewables, infer_ramp_rates_flag)` in a module-level `Dict`, so
+  pass-2 anchored rebuilds and repeated builds in one process are free (they
+  return a shallow copy — callers may mutate the returned vector, e.g. fleet
+  completion). `Euphemia.clear_generator_caches!()` clears both caches.
+
 The `exclude_variable_renewables` parameter (default: `true`) filters out wind and solar generators:
 - **Variable renewables** (Wind Onshore, Wind Offshore, Solar) are excluded from UC
 - These generators' output is non-dispatchable and handled via renewable forecasts
@@ -861,6 +878,11 @@ Euphemia.ensure_indexes()
 This creates indexes on frequently-queried tables:
 - `actual_generation_output_per_generation_unit` (54 GB) - for parameter inference
 - `unavailability_of_production_and_generation_units` (4.4 GB) - for outage filtering
+- `production_and_generation_units` `(area_map_code)` and `(generation_unit_code)` -
+  the unit registry had no indexes, so `get_generators`' per-zone `area_map_code`
+  filter and the recent-generation subquery seq-scanned it 2-3× per zone
+  (~280 ms each). The `area_map_code` index turns that into a bitmap index scan
+  (EXPLAIN: cost 4697 → 395, ~0.1 ms).
 
 First run takes 30-60 minutes for large tables. Subsequent runs are instant (`IF NOT EXISTS`). Add more indexes to `ensure_indexes()` in `src/dbutils.jl` as needed.
 
