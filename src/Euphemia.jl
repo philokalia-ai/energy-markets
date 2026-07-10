@@ -158,10 +158,15 @@ end
 
 function __init__()
     DotEnv.load!(".")
-    # DuckDB backend via ENV: read from a self-contained extract and SKIP the
-    # eager LibPQ pool entirely so the library works with no Postgres at all.
-    if lowercase(get(ENV, "EUPHEMIA_DATA_STORE", "")) == "duckdb"
-        path = get(ENV, "EUPHEMIA_DUCKDB_PATH", "")
+    # Backend selection (explicit env wins; else auto-detect the public extract;
+    # else Postgres; else a clear error). See `_resolve_data_store`. When DuckDB
+    # is selected the eager LibPQ pool is SKIPPED entirely so the library works
+    # with no Postgres available at all.
+    backend, path = _resolve_data_store(
+        data_store=get(ENV, "EUPHEMIA_DATA_STORE", ""),
+        duckdb_path=get(ENV, "EUPHEMIA_DUCKDB_PATH", ""),
+        energy_conn_str=get(ENV, "ENERGY_CONN_STR", ""))
+    if backend == :duckdb
         configure_data_store!(backend=:duckdb, duckdb_path=path)
     else
         preinit_pool()

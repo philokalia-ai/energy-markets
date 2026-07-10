@@ -22,6 +22,10 @@ using DuckDB   # also brings DBInterface into scope
 
 const DATA_STORE = Ref{Symbol}(:postgres)
 const DUCKDB_PATH = Ref{String}("")
+
+# Default location the auto-detector looks for the published public extract when
+# no backend is chosen explicitly. Overridable via EUPHEMIA_DUCKDB_PATH.
+const DEFAULT_PUBLIC_EXTRACT = "data/extracts/euphemia-public.duckdb"
 const _DUCKDB_DB = Ref{Any}(nothing)
 const _DUCKDB_CONN = Ref{Any}(nothing)
 const _DUCKDB_LOCK = ReentrantLock()
@@ -85,6 +89,51 @@ function configure_data_store!(; backend::Symbol=:postgres,
     return DATA_STORE[]
 end
 
+"""
+    _resolve_data_store(; data_store, duckdb_path, energy_conn_str, exists) -> Tuple
+
+Pure decision logic for which backend `__init__` should select. Kept separate
+from `__init__` so it can be unit-tested without opening any connection.
+
+- `data_store`   = value of ENV["EUPHEMIA_DATA_STORE"] (may be "").
+- `duckdb_path`  = value of ENV["EUPHEMIA_DUCKDB_PATH"] (may be "").
+- `energy_conn_str` = value of ENV["ENERGY_CONN_STR"] (may be "").
+- `exists(path)` = predicate telling whether a file exists (injected for tests;
+  defaults to `isfile`).
+
+Returns `(:duckdb, path)`, `(:postgres, "")`, or throws with actionable text.
+Rules: an explicit `EUPHEMIA_DATA_STORE` always wins. When unset, auto-select
+DuckDB if the default (or overridden) extract file exists, else Postgres if
+ENERGY_CONN_STR is set, else error.
+"""
+function _resolve_data_store(; data_store::AbstractString,
+                            duckdb_path::AbstractString,
+                            energy_conn_str::AbstractString,
+                            exists=isfile)
+    store = lowercase(strip(data_store))
+    default_path = isempty(duckdb_path) ? DEFAULT_PUBLIC_EXTRACT : duckdb_path
+    if store == "duckdb"
+        return (:duckdb, default_path)
+    elseif store == "postgres"
+        return (:postgres, "")
+    elseif isempty(store)
+        if exists(default_path)
+            return (:duckdb, default_path)
+        elseif !isempty(strip(energy_conn_str))
+            return (:postgres, "")
+        else
+            error("No data store available. Either:\n" *
+                  "  • download the public extract to $DEFAULT_PUBLIC_EXTRACT " *
+                  "(or set EUPHEMIA_DUCKDB_PATH to its location), or\n" *
+                  "  • set EUPHEMIA_DATA_STORE=duckdb with EUPHEMIA_DUCKDB_PATH=/path/to/extract.duckdb, or\n" *
+                  "  • set ENERGY_CONN_STR for the live Postgres backend.\n" *
+                  "See docs/reproducibility.md.")
+        end
+    else
+        error("Invalid EUPHEMIA_DATA_STORE=$(data_store) (expected \"duckdb\" or \"postgres\").")
+    end
+end
+
 # Our SQL is authored for Postgres; adapt the handful of dialect differences
 # for DuckDB. The extract stores every timestamp as naive UTC, which is what
 # makes stripping ` AT TIME ZONE 'UTC'` safe.
@@ -108,12 +157,22 @@ function _duckdb_rewrite(sql::AbstractString)
     # Single-array unnest with a Postgres array cast -> bare unnest (the param is
     # already bound as a DuckDB list). e.g. stale_outage_override's $5::text[].
     s = replace(s, r"unnest\((\$\d+)::text\[\]\)" => s"unnest(\1)")
+    # The three writable simulation-result tables do NOT live in the read-only
+    # extract (its `simulations` schema carries only generator_inferred_parameters
+    # and unit_firms). They live in a SEPARATE writable file ATTACHed as
+    # `results_db` (see _ensure_results_attached). Redirect reads/writes of them to
+    # that catalog so `save_*` persists offline and eval scripts read it back. The
+    # extract's own simulations.* tables are left untouched.
+    for t in ("energy_prices", "optimization_runs", "transmission_flows")
+        s = replace(s, "simulations.$t" => "results_db.simulations.$t")
+    end
     return s
 end
 
 function _duckdb_sql2df(sql, args)
     rewritten = _duckdb_rewrite(sql)
     con = _duckdb_connection()
+    occursin("results_db.", rewritten) && _ensure_results_attached(con)
     lock(_DUCKDB_LOCK) do
         stmt = DBInterface.prepare(con, rewritten)
         try
@@ -128,13 +187,215 @@ end
 
 # Guard for write paths under the read-only DuckDB backend: warns once and
 # tells the caller to no-op. Returns `true` when running on DuckDB.
+#
+# NOTE: this is now used ONLY for write paths with no offline equivalent — UC
+# caching (`ensure_uc_results_tables`) and `ensure_indexes`. The three
+# market-result writers (energy_prices / optimization_runs / transmission_flows)
+# instead persist to a separate writable results database so the full pipeline
+# (incl. save_to_db) and the eval scripts run end-to-end offline; see below.
 function _duckdb_readonly_guard(fname::AbstractString)
     DATA_STORE[] == :duckdb || return false
     if !_DUCKDB_READONLY_WARNED[]
-        @warn "DuckDB data store is read-only (v1) — skipping database write" first_call=fname
+        @warn "DuckDB data store is read-only for source data (entsoe/yfinance) — skipping this write" first_call=fname
         _DUCKDB_READONLY_WARNED[] = true
     end
     return true
+end
+
+# ============================================================================
+# Writable local results under the DuckDB backend
+# ============================================================================
+#
+# The published extract stays READ-ONLY: source data (entsoe.*, yfinance.*) can
+# never be written. Market RESULTS, however, must persist so the full pipeline
+# (save_to_db=true) and the eval scripts run fully offline. They are routed to a
+# SEPARATE local DuckDB file (default data/results.duckdb, override with env
+# EUPHEMIA_RESULTS_DB) ATTACHed to the extract connection as `results_db`. The
+# `_duckdb_rewrite` redirect above makes reads of `simulations.energy_prices`
+# etc. resolve there transparently.
+const RESULTS_DB_PATH = Ref{String}(get(ENV, "EUPHEMIA_RESULTS_DB", "data/results.duckdb"))
+const _RESULTS_ATTACHED = Ref{Bool}(false)
+
+# ATTACH the results DB (created on first attach) and create the result tables
+# IF NOT EXISTS. Idempotent; guarded by the DuckDB lock. `con` must be the
+# extract connection returned by _duckdb_connection().
+function _ensure_results_attached(con)
+    lock(_DUCKDB_LOCK) do
+        _RESULTS_ATTACHED[] && return
+        path = RESULTS_DB_PATH[]
+        dir = dirname(path)
+        !isempty(dir) && !isdir(dir) && mkpath(dir)
+        DBInterface.execute(con, "ATTACH IF NOT EXISTS '$(path)' AS results_db")
+        DBInterface.execute(con, "CREATE SCHEMA IF NOT EXISTS results_db.simulations")
+        DBInterface.execute(con, """
+            CREATE TABLE IF NOT EXISTS results_db.simulations.energy_prices (
+                date_time_utc TIMESTAMP, resolution_code VARCHAR, bidding_zone VARCHAR,
+                contract_type VARCHAR, price_eur_mwh DOUBLE, currency VARCHAR,
+                order_method VARCHAR, clearing_mode VARCHAR, optimization_run_id BIGINT,
+                code_version INTEGER, update_time_utc TIMESTAMP)""")
+        DBInterface.execute(con,
+            "CREATE SEQUENCE IF NOT EXISTS results_db.simulations.optimization_runs_id_seq START 1")
+        DBInterface.execute(con, """
+            CREATE TABLE IF NOT EXISTS results_db.simulations.optimization_runs (
+                id BIGINT, bidding_zone VARCHAR, optimization_date DATE, order_method VARCHAR,
+                model_type VARCHAR, optimizer VARCHAR, status VARCHAR, objective_value DOUBLE,
+                solve_time_seconds DOUBLE, num_orders INTEGER, num_price_periods INTEGER,
+                error_message VARCHAR, code_version INTEGER, created_at TIMESTAMP,
+                is_iterative BOOLEAN, total_time_seconds DOUBLE, iterations INTEGER,
+                converged BOOLEAN, final_price_change DOUBLE, final_flow_change_pct DOUBLE)""")
+        DBInterface.execute(con, """
+            CREATE TABLE IF NOT EXISTS results_db.simulations.transmission_flows (
+                date_time_utc TIMESTAMP, source_zone VARCHAR, sink_zone VARCHAR,
+                flow_mw DOUBLE, code_version INTEGER, update_time_utc TIMESTAMP)""")
+        _RESULTS_ATTACHED[] = true
+    end
+    return nothing
+end
+
+# Run a statement against the extract connection (results_db attached). Returns a
+# DataFrame (empty for non-SELECT). No dialect rewrite — callers write DuckDB SQL.
+function _results_exec(sql::AbstractString, params=[])
+    con = _duckdb_connection()
+    _ensure_results_attached(con)
+    lock(_DUCKDB_LOCK) do
+        stmt = DBInterface.prepare(con, sql)
+        try
+            res = isempty(params) ? DBInterface.execute(stmt) :
+                  DBInterface.execute(stmt, collect(params))
+            return DataFrame(res)
+        finally
+            DBInterface.close!(stmt)
+        end
+    end
+end
+
+# Bulk-insert a DataFrame into results_db.simulations.<table> (columns must match
+# the table definition order). Registers the frame and INSERT ... SELECT — fast.
+function _results_insert_df(df::DataFrame, table::AbstractString)
+    isempty(df) && return 0
+    con = _duckdb_connection()
+    _ensure_results_attached(con)
+    lock(_DUCKDB_LOCK) do
+        view = "_results_stage"
+        DuckDB.register_data_frame(con, df, view)
+        try
+            DBInterface.execute(con,
+                "INSERT INTO results_db.simulations.$table SELECT * FROM $view")
+        finally
+            DuckDB.unregister_data_frame(con, view)
+        end
+    end
+    return nrow(df)
+end
+
+# --- DuckDB implementations of the three market-result writers ---
+
+function _duckdb_save_energy_prices(prices::Dict{String,Float64}, bidding_zone::String,
+                                    day::Date, order_method::Symbol; clearing_mode::String,
+                                    optimization_run_id::Union{Integer,Nothing})
+    isempty(prices) && (@warn "No prices to save for $bidding_zone on $day"; return 0)
+    num_periods = length(prices)
+    resolution_code = num_periods == 96 ? "15M" : num_periods == 48 ? "30M" :
+                      num_periods == 24 ? "1H" : "1H"
+    order_method_str = string(order_method)
+    opt_run_id = optimization_run_id === nothing ? missing : Int64(optimization_run_id)
+    update_time = now(UTC)
+
+    dts = DateTime[]; res = String[]; bz = String[]; ct = String[]; px = Float64[]
+    cur = String[]; om = String[]; cm = String[]; ori = Union{Int64,Missing}[]
+    cv = Int[]; ut = DateTime[]
+    for (timeslot, price) in prices
+        local dt
+        try
+            dt = DateTime(timeslot, dateformat"yyyymmdd-HHMM")
+        catch e
+            @error "Failed to parse timeslot '$timeslot': $e"; continue
+        end
+        push!(dts, dt); push!(res, resolution_code); push!(bz, bidding_zone)
+        push!(ct, "Day-Ahead"); push!(px, price); push!(cur, "EUR")
+        push!(om, order_method_str); push!(cm, clearing_mode); push!(ori, opt_run_id)
+        push!(cv, ENERGY_PRICES_CODE_VERSION); push!(ut, update_time)
+    end
+    isempty(dts) && (@error "No valid records to insert"; return 0)
+
+    # Replace any existing rows for this (zone, day, method, mode, version).
+    _results_exec("""
+        DELETE FROM results_db.simulations.energy_prices
+        WHERE bidding_zone = \$1 AND CAST(date_time_utc AS DATE) = \$2
+          AND order_method = \$3 AND clearing_mode = \$4 AND code_version = \$5
+        """, Any[bidding_zone, day, order_method_str, clearing_mode, ENERGY_PRICES_CODE_VERSION])
+
+    df = DataFrame(date_time_utc=dts, resolution_code=res, bidding_zone=bz,
+                   contract_type=ct, price_eur_mwh=px, currency=cur,
+                   order_method=om, clearing_mode=cm, optimization_run_id=ori,
+                   code_version=cv, update_time_utc=ut)
+    n = _results_insert_df(df, "energy_prices")
+    @info "Saved $n energy price records to results_db for $bidding_zone on $day (order_method: $order_method, clearing_mode: $clearing_mode)"
+    return n
+end
+
+function _duckdb_save_optimization_run(bidding_zone::String, date::Date, order_method::Symbol,
+        model_type::Symbol, optimizer::String, status::Symbol; objective_value, solve_time_seconds,
+        num_orders, num_price_periods, error_message, code_version::Int, is_iterative::Bool,
+        total_time_seconds, iterations, converged, final_price_change, final_flow_change_pct)
+    try
+        # Upsert-by-replace: same config re-run replaces its row.
+        _results_exec("""
+            DELETE FROM results_db.simulations.optimization_runs
+            WHERE bidding_zone = \$1 AND optimization_date = \$2 AND order_method = \$3
+              AND model_type = \$4 AND code_version = \$5 AND optimizer = \$6
+            """, Any[bidding_zone, date, string(order_method), string(model_type), code_version, optimizer])
+        run_id = Int64(_results_exec("SELECT nextval('results_db.simulations.optimization_runs_id_seq') AS id").id[1])
+        m(x) = x === nothing ? missing : x
+        df = DataFrame(id=Int64[run_id], bidding_zone=[bidding_zone], optimization_date=[date],
+            order_method=[string(order_method)], model_type=[string(model_type)], optimizer=[optimizer],
+            status=[string(status)], objective_value=Union{Float64,Missing}[m(objective_value)],
+            solve_time_seconds=Union{Float64,Missing}[m(solve_time_seconds)],
+            num_orders=Union{Int,Missing}[m(num_orders)], num_price_periods=Union{Int,Missing}[m(num_price_periods)],
+            error_message=Union{String,Missing}[m(error_message)], code_version=[code_version],
+            created_at=[now(UTC)], is_iterative=[is_iterative],
+            total_time_seconds=Union{Float64,Missing}[m(total_time_seconds)],
+            iterations=Union{Int,Missing}[m(iterations)], converged=Union{Bool,Missing}[m(converged)],
+            final_price_change=Union{Float64,Missing}[m(final_price_change)],
+            final_flow_change_pct=Union{Float64,Missing}[m(final_flow_change_pct)])
+        _results_insert_df(df, "optimization_runs")
+        @info "Saved optimization run to results_db: $bidding_zone on $date ($status) id=$run_id"
+        return run_id
+    catch e
+        @error "Failed to save optimization run to results_db for $bidding_zone on $date: $e"
+        return nothing
+    end
+end
+
+function _duckdb_save_transmission_flows(flows::Dict{String,Dict{String,Float64}}, date::Date;
+                                         code_version::Int)
+    isempty(flows) && (@warn "No transmission flows to save"; return 0)
+    update_time = now(UTC)
+    dts = DateTime[]; src = String[]; snk = String[]; fmw = Float64[]; cv = Int[]; ut = DateTime[]
+    for (flow_id, period_flows) in flows
+        parts = split(flow_id, "_to_")
+        length(parts) != 2 && (@warn "Invalid flow_id format: $flow_id"; continue)
+        for (period, flow_mw) in period_flows
+            local dt
+            if length(period) >= 13 && contains(period, "-")
+                dt = DateTime(period, dateformat"yyyymmdd-HHMM")
+            else
+                dt = DateTime(date) + Hour(parse(Int, period) - 1)
+            end
+            push!(dts, dt); push!(src, String(parts[1])); push!(snk, String(parts[2]))
+            push!(fmw, flow_mw); push!(cv, code_version); push!(ut, update_time)
+        end
+    end
+    isempty(dts) && return 0
+    _results_exec("""
+        DELETE FROM results_db.simulations.transmission_flows
+        WHERE CAST(date_time_utc AS DATE) = \$1 AND code_version = \$2
+        """, Any[date, code_version])
+    df = DataFrame(date_time_utc=dts, source_zone=src, sink_zone=snk,
+                   flow_mw=fmw, code_version=cv, update_time_utc=ut)
+    n = _results_insert_df(df, "transmission_flows")
+    @info "Saved $n transmission flow records to results_db"
+    return n
 end
 
 # Version of the pricing/cost model that produced stored energy_prices rows.
@@ -533,7 +794,10 @@ Assumes connection is already to the 'energy' database.
 function save_energy_prices(prices::Dict{String,Float64}, bidding_zone::String, day::Date, order_method::Symbol;
                             clearing_mode::String="single_zone", optimization_run_id::Union{Integer,Nothing}=nothing,
                             batch_size::Int=100, create_schema::Bool=true)
-    _duckdb_readonly_guard("save_energy_prices") && return 0
+    if DATA_STORE[] == :duckdb
+        return _duckdb_save_energy_prices(prices, bidding_zone, day, order_method;
+            clearing_mode=clearing_mode, optimization_run_id=optimization_run_id)
+    end
     if isempty(prices)
         @warn "No prices to save for $bidding_zone on $day"
         return 0
@@ -706,7 +970,14 @@ function save_optimization_run(bidding_zone::String, date::Date, order_method::S
     final_price_change=nothing,
     final_flow_change_pct=nothing)
 
-    _duckdb_readonly_guard("save_optimization_run") && return nothing
+    if DATA_STORE[] == :duckdb
+        return _duckdb_save_optimization_run(bidding_zone, date, order_method, model_type,
+            optimizer, status; objective_value=objective_value, solve_time_seconds=solve_time_seconds,
+            num_orders=num_orders, num_price_periods=num_price_periods, error_message=error_message,
+            code_version=code_version, is_iterative=is_iterative, total_time_seconds=total_time_seconds,
+            iterations=iterations, converged=converged, final_price_change=final_price_change,
+            final_flow_change_pct=final_flow_change_pct)
+    end
 
     # Create schema and table if requested
     if create_schema
@@ -843,7 +1114,9 @@ Save transmission flow results to the database in the simulations.transmission_f
 """
 function save_transmission_flows(flows::Dict{String,Dict{String,Float64}}, date::Date;
                                  code_version::Int=4, create_schema::Bool=true)
-    _duckdb_readonly_guard("save_transmission_flows") && return 0
+    if DATA_STORE[] == :duckdb
+        return _duckdb_save_transmission_flows(flows, date; code_version=code_version)
+    end
     if isempty(flows)
         @warn "No transmission flows to save"
         return 0
