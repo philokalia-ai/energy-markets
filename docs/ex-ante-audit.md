@@ -61,7 +61,7 @@ directly onto the target day's hours; the cache keys on the queried day.
 
 `D-0` is the committed product; `D-7` replaces same-day flows with the same
 weekday one week earlier. (Numbers below: final-code run; see
-`iter6_results/exante_d7_final.csv`.)
+`docs/iter6-results/exante_D7.csv`.)
 
 **Aggregate (39 zones):** mean MAE **45.4 → 50.7** (+5.3), mean corr
 **0.513 → 0.50** (−0.01), mean bias **+14.6 → +21.1**.
