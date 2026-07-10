@@ -75,8 +75,17 @@ julia --project=. bin/reproduce.jl --range 2026-03-01 2026-03-07 --single GR
 julia --project=. bin/reproduce.jl --full --workers auto
 ```
 
-Uses **HiGHS** by default (open-source, no license). Gurobi is optional
-(`--optimizer gurobi`, needs a license) and typically a few times faster.
+The default optimizer is `auto`: **Gurobi** when installed, else **HiGHS**.
+
+**Solver reality check (measured):** single-zone clearing works fine on HiGHS
+(no license needed) and its metrics are identical to the Gurobi run's. The
+**39-zone coupled multi-zone MIP currently needs Gurobi**: on our 80-core box
+HiGHS found *no incumbent* within a 1-hour budget (the exact-Big-M
+complementarity MILP at MIP gap 1e-6 is hard for it), while Gurobi clears each
+day in seconds — the full offline `--quick` (5 single-zone + 5 × 39-zone
+multi-zone days) measured **243 s** end-to-end. A per-hour decomposition of the
+multi-zone MPCC (the 24 hours are independent in the merit-order book) is the
+planned fix to make the multi-zone tier HiGHS-viable.
 
 ### Parallel reproduction (`--workers N|auto`)
 
@@ -87,22 +96,22 @@ extract handle to read-only, spawns N workers that each open the extract
 read-only (with no Postgres environment at all), `pmap`s the days with
 `save_to_db=false`, then tears the pool down and persists all returned prices
 itself — the results DB is only ever written by one process. `auto` = half the
-machine's threads, capped at the day count. With HiGHS there is no license cap,
-so day-level parallelism scales freely.
+machine's threads, capped at the day count.
 
-Indicative wall-times (80-core box, HiGHS; a 39-zone multi-zone day is
-~10–15 min sequential — dominated by order-book scans of the 125M-row per-unit
-table — and a GR single-zone day is ~20 s):
+Wall-times (80-core box; `--quick` measured, larger tiers extrapolated from the
+measured per-day costs — GR single-zone ~5 s/day Gurobi / ~20 s/day HiGHS,
+39-zone multi-zone ~30–40 s/day Gurobi):
 
-| Tier | 1 worker (sequential) | 8 workers | 40 workers |
-|------|----------------------:|----------:|-----------:|
-| `--quick` (5 days, single + multi) | ~1 h | ~15 min (5-day cap) | ~15 min (5-day cap) |
-| `--range`, 1 week EU multi-zone | ~1.5 h | ~15 min | ~15 min (7-day cap) |
-| `--full`, GR 3.5 y single-zone part | ~8 h | ~1 h | ~15 min |
-| `--full`, EU sampled weeks (~290 days) | ~2–3 days | ~8 h | ~1.5–2 h |
-| full 3.5 y × 39 zones (1,277 days, via `--range`) | ~10 days | ~1.5 days | ~7 h |
+| Tier | sequential | parallel |
+|------|-----------:|---------:|
+| `--quick` (5 days, single + multi, Gurobi) | **243 s (measured)** | day-cap ~1–2 min |
+| `--full`, GR 3.5 y single-zone part (HiGHS) | ~7 h | ~20 min at 40 workers |
+| `--full`, EU sampled weeks (~290 days, Gurobi) | ~3 h | ~1.5 h at 2 workers |
+| full 3.5 y × 39 zones (1,277 days, Gurobi, via `--range`) | ~12 h | ~6 h at 2 workers |
 
-(Gurobi shortens the multi-zone solve further; book building is the floor.)
+Note the parallel cap depends on the solver: HiGHS has no license limit
+(single-zone scales to any worker count), while Gurobi WLS typically allows
+**2 concurrent sessions** — so multi-zone parallel runs cap at `--workers 2`.
 
 Each run writes `results/<tier>_report.md` (per-zone corr / MAE / bias tables) and
 `results/<tier>_metrics.csv`. `--quick` additionally diffs against the committed
@@ -120,14 +129,18 @@ reference at `results/reference/quick_metrics.csv` and flags any drift.
 
 ## Two honest caveats
 
-1. **Numerical reproducibility.** On the DuckDB path the results are **bit-identical**
-   for single-zone clears and match our Postgres production runs to **~1e-12 €/MWh**
-   for the multi-zone clear. The residual is last-ULP non-determinism in SQL
-   aggregate functions (`SUM`/`AVG`/`percentile_cont`): Postgres and DuckDB sum and
-   interpolate in different orders, and that reaches a price only through the
-   scarcity factor of a marginal tranche. Cross-border *flows* are a degenerate
-   primal (alternative optima) and are not part of the equivalence claim — the
-   prices (the duals) are.
+1. **Numerical reproducibility.** Measured on this artifact against our live
+   Postgres runs of the same days (same solver): single-zone prices are
+   **bit-identical** (480/480 rows over 5 GR days, Δ = 0); the 39-zone
+   multi-zone clear is ~95% bit-identical with the remainder within
+   **€0.01/MWh**. The root cause of the residual is last-ULP non-determinism in
+   SQL aggregate functions (`SUM`/`AVG`/`percentile_cont`): Postgres and DuckDB
+   sum and interpolate in different orders, which can flip which of two
+   near-degenerate marginal tranches sets a zone-hour's price (a discrete,
+   cent-level flip — invisible in every reported metric). Cross-border *flows*
+   are a degenerate primal (alternative optima) and are not part of the
+   equivalence claim — the prices are. Parallel (`--workers`) and sequential
+   runs are exactly identical (Δ = 0, verified).
 
 2. **Data licensing.** The ENTSO-E fundamentals and day-ahead prices are
    **ENTSO-E Transparency Platform** data, redistributed here with attribution under

@@ -162,13 +162,17 @@ end
 # pmap over days: multi-zone clears, results returned.
 function parallel_clear_multi(zones::Vector{String}, days; order_method::Symbol, optimizer::String)
     println("\n▶ Multi-zone EU ($(length(zones)) zones, parallel): $(first(days)) .. $(last(days))  ($(length(days)) days)")
+    # Capture plain VALUES (not Main functions) — pmap closures must not
+    # reference coordinator-only bindings.
+    tl = mpcc_budget(optimizer)
+    he = optimizer == "highs" ? 0.3 : nothing
     return pmap(collect(days)) do d
         try
             res = run_multi_zone_market_clearing(d; zones=zones, order_method=order_method,
                 optimizer=optimizer, enrich_network=true, passes=2,
                 clearing_mode="multi_zone", save_to_db=false, silent=true,
-                mpcc_time_limit=mpcc_budget(optimizer),
-                mpcc_heuristic_effort=optimizer == "highs" ? 0.3 : nothing)
+                mpcc_time_limit=tl,
+                mpcc_heuristic_effort=he)
             usable = res.status == :optimal ||
                      (res.status == :time_limit && !isempty(res.market_prices))
             usable ||
