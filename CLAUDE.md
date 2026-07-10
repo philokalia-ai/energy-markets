@@ -643,8 +643,9 @@ When `parallel=true` in `run_multi_zone_market_clearing()`:
 
 By default the library reads from the live Postgres `energy` database. It can
 instead read from a **self-contained DuckDB extract** — a single `.duckdb`
-file that mirrors the same `schema.table` names, so single-zone merit-order
-pricing and scenario analysis run fully offline with no Postgres available.
+file that mirrors the same `schema.table` names, so both single-zone
+merit-order pricing / scenario analysis **and the full 39-zone multi-zone EU
+clearing** run fully offline with no Postgres available.
 
 ```julia
 # Switch at runtime
@@ -662,37 +663,76 @@ EUPHEMIA_DUCKDB_PATH=data/extracts/euphemia_2026_see.duckdb \
   julia --project=. test/scripts/eval_pricing_accuracy.jl merit_order "2026-01-26" GR
 ```
 
-**v1 limitations:**
+**Limitations:**
 - **Read-only.** Every write path (`save_energy_prices`, `save_optimization_run`,
   UC caching, `ensure_indexes`, …) warns once and no-ops under DuckDB. Run
   pricing with `save_to_db=false`.
-- **Single-zone only.** The extract and the scenario hooks target the
-  single-zone `:merit_order` path. Multi-zone clearing is not threaded.
+- **Merit-order only.** The DuckDB path targets the `:merit_order` book
+  (single-zone and multi-zone). `:uc_based` / `:alternative` are not threaded
+  (they need write-heavy UC caching and the full 365-day ramp-inference window,
+  which the merit extract does not carry).
+- **Scenario hooks** remain single-zone only (v1).
+
+**Multi-zone under DuckDB.** `run_multi_zone_market_clearing(..., order_method=`
+`:merit_order, enrich_network=true, passes=2, save_to_db=false)` runs entirely
+against the extract — the enriched network build (implicit + explicit ATC union,
+aggregate remap, flow-based drops), `get_net_imports` with exclude/import-only
+arrays, reservoir dryness, per-type p95, and the day-level-outage-cached
+`get_generators` all dispatch through the DuckDB dialect. Prices match Postgres
+to floating-point precision: on the 39-zone 2026-04-03 clear, **~98% of the 936
+price rows are bit-identical** and the rest agree to **≤2e-12 €/MWh**
+(`test/scripts/eu_duckdb_parity.jl`). The residual is
+last-ULP non-determinism in SQL aggregate functions (`SUM`/`AVG` in
+`get_net_imports`, `percentile_cont` in `get_type_output_p95` /
+`get_hydro_availability`) — Postgres and DuckDB sum/interpolate in different
+orders — reaching the price only through the scarcity factor of a marginal
+tranche. Single-zone stays exactly bit-identical (its price never reads an
+aggregated quantity). Cross-border **flows** are a degenerate primal (alternative
+optima) and need not match; prices (the duals) are what the parity gate checks.
 
 **How it works:** `sql2df` dispatches on `DATA_STORE[]`. The Postgres path is
 unchanged; the DuckDB path applies a small dialect rewrite to our SQL — strips
 ` AT TIME ZONE 'UTC'` (the extract stores every timestamp as naive UTC),
 maps `= ANY($n)` → `IN (SELECT unnest($n))`, `<> ALL($n)` →
-`NOT IN (SELECT unnest($n))`, and `to_char(x,'YYYYMMDD-HH24MI')` →
+`NOT IN (SELECT unnest($n))`, rewrites `get_generators`' Postgres multi-arg
+table unnest of the day-outage arrays (`unnest($3::text[], $4::float8[]) AS
+t(...)`) into DuckDB's lockstep-unnest subquery form (plus the single
+`unnest($5::text[])`), and `to_char(x,'YYYYMMDD-HH24MI')` →
 `strftime(x,'%Y%m%d-%H%M')` — then runs it against one lazily-opened,
-lock-guarded DuckDB connection. DuckDB prices are bit-identical to Postgres
-for the same day.
+lock-guarded DuckDB connection. Single-zone DuckDB prices are bit-identical to
+Postgres; the multi-zone path matches to ≤2e-12 €/MWh (see the multi-zone note
+above). DuckDB's `DATE()`/`EXTRACT(HOUR …)` on the naive-UTC extract match
+Postgres because the DB session runs in UTC.
 
 ### Building a DuckDB extract
 
 ```bash
+# SEE 5-zone (single-zone pricing)
 ZONES="GR,BG,RO,RS,HU" START_DATE=2026-01-01 END_DATE=2026-06-30 \
   OUT=data/extracts/euphemia_2026_see.duckdb \
+  julia --project=. bin/build_duckdb_extract.jl
+
+# 39-zone EU footprint for offline multi-zone clearing (merit-order only, so the
+# huge per-unit output table is windowed to 90 days — see AGEN_BACK_DAYS below)
+ZONES="AT,BE,BG,CZ,DE_LU,DK1,DK2,EE,ES,FI,FR,GR,HU,LT,LV,NL,NO1,NO2,NO3,NO4,NO5,PL,PT,RO,RS,SE1,SE2,SE3,SE4,SI,SK,IT-NORTH,IT-CNORTH,IT-CSOUTH,IT-SOUTH,IT-Calabria,IT-Sicily,IT-Sardinia,CH" \
+  START_DATE=2026-04-01 END_DATE=2026-04-05 AGEN_BACK_DAYS=90 \
+  OUT=data/extracts/euphemia_2026_eu.duckdb \
   julia --project=. bin/build_duckdb_extract.jl
 ```
 
 The builder reads Postgres (normal `.env`), converts every timestamptz column
-to naive UTC, and writes the same `schema.table` names. Unit-level and
-per-type/output tables are windowed back 400 days (covers the 365-day ramp
-inference, 60-day recent-generation, and 30-day p95 lookbacks); the tiny
-weekly reservoir table is kept at full history so the prior-year
-reservoir-dryness comparison is exact. It prints per-table row counts and
-aborts if the projected size would exceed ~8 GB. The 2026 SEE extract is
+to naive UTC, and writes the same `schema.table` names. It carries both offered
+ATC tables (`_implicit` + `_explicit`, for the enriched network build),
+`physical_flows`, the per-type aggregate, the (windowed) unavailability table,
+and the unit registry. Per-type/output aggregate tables are windowed back 400
+days (covers the 365-day hydro-availability, 60-day recent-generation, and
+30-day p95 lookbacks); the tiny weekly reservoir table is kept at full history so
+the prior-year reservoir-dryness comparison is exact. **`AGEN_BACK_DAYS`**
+(default 400) windows only the huge per-unit `actual_generation_output` table —
+`:merit_order` never runs UC, so it only needs the 60-day recent-generation and
+7-day stale-override lookback; setting `AGEN_BACK_DAYS=90` keeps a 39-zone EU
+extract under the ~8 GB cap (~490 MB / 26M rows). It prints per-table row counts
+and aborts if the projected size would exceed ~8 GB. The 2026 SEE extract is
 ~96 MB (7.1M rows). `data/` is git-ignored — never commit the `.duckdb` file.
 
 ### Scenario hooks on `create_merit_order_book` / `generate_energy_prices`

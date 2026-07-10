@@ -98,6 +98,16 @@ function _duckdb_rewrite(sql::AbstractString)
     # to_char(x, 'YYYYMMDD-HH24MI') -> strftime(x, '%Y%m%d-%H%M') (same arg order)
     s = replace(s, "'YYYYMMDD-HH24MI'" => "'%Y%m%d-%H%M'")
     s = replace(s, "to_char(" => "strftime(")
+    # get_generators' day-outage arrays use Postgres multi-arg table unnest,
+    # which DuckDB does not support. DuckDB unnests multiple lists in one SELECT
+    # in lockstep, so rewrite the FROM fragment to that form. Must run before the
+    # single-unnest rule below (this pattern also contains `::text[]`).
+    s = replace(s,
+        r"unnest\((\$\d+)::text\[\],\s*(\$\d+)::float8\[\]\)\s*AS t\(asset_code, available_capacity_mw\)" =>
+        s"(SELECT unnest(\1) AS asset_code, unnest(\2) AS available_capacity_mw) AS t")
+    # Single-array unnest with a Postgres array cast -> bare unnest (the param is
+    # already bound as a DuckDB list). e.g. stale_outage_override's $5::text[].
+    s = replace(s, r"unnest\((\$\d+)::text\[\]\)" => s"unnest(\1)")
     return s
 end
 
