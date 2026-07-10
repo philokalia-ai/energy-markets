@@ -46,6 +46,9 @@ end
 # ---- parallel clear (read-only duckdb workers), returns Dict(day => market_prices)
 function clear_days(days::Vector{Date}, nworkers::Int)
     extract = abspath(Euphemia.DUCKDB_PATH[])
+    # Read-only throughout (this harness never writes) so concurrent diagnostic
+    # processes can also open the extract.
+    Euphemia.configure_data_store!(backend=:duckdb, duckdb_path=extract, read_only=true)
     tl = 900.0
     do_day(d) = begin
         try
@@ -65,7 +68,9 @@ function clear_days(days::Vector{Date}, nworkers::Int)
     Euphemia.configure_data_store!(backend=:duckdb, duckdb_path=extract, read_only=true)
     ws = addprocs(nworkers; exeflags="--project=$(dirname(Base.active_project()))",
         env=["EUPHEMIA_DATA_STORE"=>"duckdb","EUPHEMIA_DUCKDB_PATH"=>extract,
-             "EUPHEMIA_DUCKDB_READONLY"=>"true","ENERGY_CONN_STR"=>""])
+             "EUPHEMIA_DUCKDB_READONLY"=>"true","ENERGY_CONN_STR"=>"",
+             "EUPHEMIA_FLOW_ASOF_LAG"=>get(ENV,"EUPHEMIA_FLOW_ASOF_LAG","0"),
+             "EUPHEMIA_DUCKDB_NPROCS_HINT"=>get(ENV,"EUPHEMIA_DUCKDB_NPROCS_HINT","2")])
     try
         @everywhere ws @eval using Euphemia
         fp = FOOTPRINT   # capture as a local so pmap serializes it by value
@@ -83,7 +88,11 @@ function clear_days(days::Vector{Date}, nworkers::Int)
         end
     finally
         rmprocs(ws)
-        Euphemia.configure_data_store!(backend=:duckdb, duckdb_path=extract, read_only=false)
+        # Stay read-only after teardown: this harness never writes (save_to_db=
+        # false; scoring only reads), so leaving the extract read-only lets
+        # concurrent diagnostic processes open it too (DuckDB allows many
+        # read-only processes but only one writer).
+        Euphemia.configure_data_store!(backend=:duckdb, duckdb_path=extract, read_only=true)
     end
 end
 

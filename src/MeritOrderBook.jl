@@ -69,6 +69,31 @@ const _NetBorderRow = NamedTuple{(:h, :in_code, :out_code, :avg_flow),
 const _NET_IMPORTS_DAY_CACHE = Dict{Date,Vector{_NetBorderRow}}()
 const _NET_IMPORTS_CACHE_LOCK = ReentrantLock()
 
+# --- Ex-ante flow lag (issue: same-day observed physical flows are the ONE
+# forward-looking leak in the book). `entsoe.physical_flows` for the target day
+# are the REALIZED flows of that day — not knowable at the D-1 auction. When
+# FLOW_ASOF_LAG[] > 0, `_net_imports_day_relation` reads the flows of `day - lag`
+# instead (D-2, or D-7 for the same weekday), so the observed-import supply,
+# the dropped-border import-only clamp, and the ref-priced exports all use only
+# information available before the auction. Default 0 = byte-identical to the
+# D-0 product (the counterfactual's committed behaviour is unchanged until a
+# forward product opts in). See docs/ex-ante-audit.md.
+const FLOW_ASOF_LAG = Ref{Int}(something(tryparse(Int, get(ENV, "EUPHEMIA_FLOW_ASOF_LAG", "0")), 0))
+
+"""
+    set_flow_asof_lag!(n::Int)
+
+Days to lag the observed-physical-flow read (0 = same-day/D-0, the default and
+byte-identical product; 2 = D-2; 7 = D-7 same-weekday). Ex-ante correctness for
+the forward product — same-day realized flows are not knowable at the D-1
+auction. Clears the flow cache so the next build re-reads at the new lag.
+"""
+function set_flow_asof_lag!(n::Int)
+    FLOW_ASOF_LAG[] = n
+    clear_net_imports_cache!()
+    return n
+end
+
 """
     clear_net_imports_cache!()
 
@@ -89,8 +114,12 @@ _strip_ips(s::AbstractString) = replace(String(s), r"_IPS$" => "")
 # membership (and therefore the AVG) for any (hour, self, counterparty) pair is
 # identical to what the old per-zone query computed.
 function _net_imports_day_relation(day::Date)
+    # Ex-ante lag: read the flows of `day - lag` (D-0 default = byte-identical).
+    # The hour-of-day grouping is preserved, so the lagged day's hourly shape
+    # maps directly onto the target day's hours; cache under the queried day.
+    qday = day - Day(FLOW_ASOF_LAG[])
     cached = lock(_NET_IMPORTS_CACHE_LOCK) do
-        get(_NET_IMPORTS_DAY_CACHE, day, nothing)
+        get(_NET_IMPORTS_DAY_CACHE, qday, nothing)
     end
     cached !== nothing && return cached
     df = sql2df_with_retry(
@@ -105,7 +134,7 @@ function _net_imports_day_relation(day::Date)
           AND date_time_utc < ((\$1::date + 1)::timestamp AT TIME ZONE 'UTC')
         GROUP BY 1, in_area_map_code, out_area_map_code
         """,
-        [day])
+        [qday])
     rows = _NetBorderRow[]
     for r in eachrow(df)
         ismissing(r.avg_flow) && continue
@@ -113,7 +142,7 @@ function _net_imports_day_relation(day::Date)
                      out_code=String(r.out_code), avg_flow=Float64(r.avg_flow)))
     end
     lock(_NET_IMPORTS_CACHE_LOCK) do
-        _NET_IMPORTS_DAY_CACHE[day] = rows
+        _NET_IMPORTS_DAY_CACHE[qday] = rows
     end
     return rows
 end
@@ -483,6 +512,27 @@ const BELGIUM_PROFILE = ZoneProfile(
 )
 
 """
+Slovakia (iter6). Core FBMC transit hub whose import borders' implicit offered
+ATC are flow-based residuals (CZ→SK / PL→SK avg ~90 MW vs ~3 GW physical), so
+the endogenous model starved SK's thin fleet (4.15 GW vs 4.37 GW peak) into
+winter cap-clearing (sim €313 vs actual €118, bias +195 on the iter6 sample).
+The paired treatment (see `flow_based_drop_borders`): CZ–SK and PL–SK are
+dropped, restoring the real import supply as observed import-only flows, and
+the `:hydro` opportunity anchor prices those imports at the coupled Core
+reference (pass-1 CZ/PL/DE_LU proxy) rather than the €1 price-taker block —
+which would invert SK to a deep negative bias (the NO1/BE/SE3 failure mode
+seen three times when a border was dropped without re-pricing its flows).
+Continental scarcity temperament otherwise; the water value clamp keeps the
+anchor from manufacturing scarcity.
+"""
+const SLOVAKIA_PROFILE = ZoneProfile(
+    scarcity_threshold = 1.25,
+    scarcity_kappa = 1.5,
+    peak_kappa = 0.6,
+    opportunity_anchor = :hydro,
+)
+
+"""
 Baltic (EE/LT/LV). Tightly coupled to the Nordic hydro system and thermally
 thin; softened scarcity like the continental core. Left close to SEE otherwise —
 their residual error is expected to shrink once the Nordic zones are corrected.
@@ -534,7 +584,9 @@ const ZONE_PROFILES = Dict{String,ZoneProfile}(
     # BE: dropped Core borders + :hydro anchor for import pricing (iter5)
     "BE" => BELGIUM_PROFILE, "NL" => CONTINENTAL_PROFILE,
     "PL" => CONTINENTAL_PROFILE, "CZ" => CONTINENTAL_PROFILE,
-    "SK" => CONTINENTAL_PROFILE,
+    # SK: dropped Core import borders (CZ–SK, PL–SK) + :hydro anchor for import
+    # pricing (iter6) — the HU treatment applied to SK's own residual borders
+    "SK" => SLOVAKIA_PROFILE,
 )
 
 """
