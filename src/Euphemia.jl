@@ -1011,8 +1011,13 @@ from the enriched network (falling back to observed net imports, import-only):
   export outlet, while AT/SK-only (cal12) fixed HU (bias +70→+0.5, MAE 75→30)
   and left SI within tolerance (corr 0.79→0.75).
 
+- **Sweden-internal (SE2–SE3, SE3–SE4)**: the published implicit ATC into SE3
+  collapses to ~118 MW average while the physical Norrland transfer carries
+  ~5 GW (see inline comment) — the same flow-based-residual signature, starving
+  SE3/SE4 into continental scarcity pricing. SE1–SE2 stays endogenous.
+
 Only pairs with both endpoints in the footprint are returned; empty for
-footprints without Nordic or Hungarian zones (e.g. the 5-zone SEE set).
+footprints without Nordic, Hungarian, or Swedish zones (e.g. the 5-zone SEE set).
 """
 function flow_based_drop_borders(footprint::AbstractVector{<:AbstractString})
     fp = Set(String.(footprint))
@@ -1033,6 +1038,20 @@ function flow_based_drop_borders(footprint::AbstractVector{<:AbstractString})
         for z in ("AT", "SK")
             z in fp && push!(pairs, ordered("HU", z))
         end
+    end
+    # Swedish-internal flow-based cuts (SE2–SE3, SE3–SE4). The implicit
+    # offered ATC into SE3 from SE2 averages ~118 MW over 2026-04-01..05
+    # (min 0) while the physical flow averages 5,015 MW (max 7,759) — the
+    # model starves SE3/SE4 of the real Norrland hydro transfer and prices
+    # them at continental scarcity (cal13 bias +128/+147). SE3–SE4 shows the
+    # same signature (ATC avg 1,241 vs physical max 3,995), and the unused
+    # reverse directions are wide open (SE3→SE2 ATC avg 4,594, physical 0) —
+    # classic flow-based residual leftovers. SE1–SE2 is deliberately KEPT
+    # endogenous (its ATC is real: SE2→SE1 avg 2,702; SE1/SE2 sit at
+    # +0.4/+3.4 bias).
+    if "SE3" in fp
+        "SE2" in fp && push!(pairs, ordered("SE2", "SE3"))
+        "SE4" in fp && push!(pairs, ordered("SE3", "SE4"))
     end
     return sort(collect(pairs))
 end
