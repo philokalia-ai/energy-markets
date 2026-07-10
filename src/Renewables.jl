@@ -15,7 +15,8 @@ struct RenewablesGenerationForecast
     aggregated_generation_forecast::Float64
 end
 
-function get_generation_forecast_for_wind_and_solar(bidding_zone::String, day::Dates.Date)
+function get_generation_forecast_for_wind_and_solar(bidding_zone::String, day::Dates.Date;
+    coalesce_missing::Bool=false)
     # UTC day window as explicit range bounds: sargable (uses
     # idx_res_fcst_zone_time instead of reading every row of the zone) and
     # independent of the session timezone, unlike date(date_time_utc) = day
@@ -37,6 +38,12 @@ function get_generation_forecast_for_wind_and_solar(bidding_zone::String, day::D
     """
 
     df = Euphemia.sql2df_with_retry(query, [day, bidding_zone])
+    # `coalesce_missing` (opt-in) turns NULL day-ahead forecasts into 0 MW so a
+    # zone with partial RES coverage (e.g. CH, RS: no wind/solar forecast for
+    # some types) still yields a usable book instead of throwing on the
+    # Missing→Float64 conversion. Default `false` keeps the strict behaviour, so
+    # the single-zone and 5-zone SEE paths are unchanged (they error out on
+    # missing data exactly as before).
     return [
         RenewablesGenerationForecast(
             # Format datetime to match load data - include minutes for sub-hourly data
@@ -44,7 +51,8 @@ function get_generation_forecast_for_wind_and_solar(bidding_zone::String, day::D
             row.resolution_code,
             row.area_map_code,  # Fixed: use area_map_code
             row.production_type,
-            row.day_ahead_generation_forecast_mw  # Fixed: use day_ahead_generation_forecast_mw
+            coalesce_missing && ismissing(row.day_ahead_generation_forecast_mw) ?
+                0.0 : row.day_ahead_generation_forecast_mw  # Fixed: use day_ahead_generation_forecast_mw
         ) for row in eachrow(df)
     ]
 end
