@@ -727,6 +727,37 @@ Postgres; the multi-zone path matches to ≤2e-12 €/MWh (see the multi-zone no
 above). DuckDB's `DATE()`/`EXTRACT(HOUR …)` on the naive-UTC extract match
 Postgres because the DB session runs in UTC.
 
+**DuckDB query-path performance.** The read path is tuned so a 39-zone day book
+build runs in ~1–3 s (was ~14 s):
+- **Sorted extract (artifact v1.1).** Tables are materialized `ORDER BY (zone,
+  date)` so row-group zonemaps prune per-zone/per-day scans; the per-unit output
+  table is `(month, unit, date)`-ordered so the 60-day recent-generation probe
+  prunes. `Network.jl`'s ATC queries use the half-open day range
+  (`date_time_utc >= $1::date AND < $1::date + 1`) instead of the non-sargable
+  `DATE(date_time_utc) = $1`, so the sort is actually usable. See
+  `docs/reproducibility.md` for v1 vs v1.1.
+- **Day-level physical-flow cache.** `get_net_imports` / `get_dropped_border_exports`
+  scan `entsoe.physical_flows` ONCE per day for all zones (cached in
+  `MeritOrderBook._NET_IMPORTS_DAY_CACHE`, like `TTF_PRICE_CACHE`; never cached on
+  error); per-zone calls slice + apply the exclude / import-only filters in Julia.
+  Identity-tested against the original per-zone SQL in
+  `test/test_duckdb_perf_paths.jl` (bit-identical on integer flows; the raw
+  MW value can differ by ≤1e-12 on real data from last-ULP `SUM` reordering,
+  invisible to prices). `clear_net_imports_cache!()` empties it.
+- **Prepared-statement cache.** `_duckdb_sql2df` caches compiled statements per
+  connection (keyed by rewritten SQL), so the ~300 small per-day queries skip
+  re-parse/plan. Cleared when the connection is dropped/reopened.
+- **Per-process engine sizing.** `_duckdb_connection` issues `SET threads /
+  memory_limit / temp_directory` at open, sized for `EUPHEMIA_DUCKDB_NPROCS_HINT`
+  (the number of concurrent DuckDB processes, wired from `bin/reproduce.jl`'s
+  `--workers`) so N parallel workers don't each grab all cores / most of RAM.
+  Overridable via `EUPHEMIA_DUCKDB_THREADS`, `EUPHEMIA_DUCKDB_MEMORY`,
+  `EUPHEMIA_DUCKDB_TEMP`; `temp_directory` defaults to a dir next to the extract
+  (on /home, never /tmp). `sql2df_with_retry` never touches the LibPQ pool under
+  the DuckDB backend. `bin/reproduce.jl` persists each run segment in a single
+  `Euphemia.results_write_transaction`, so the results DB commits once instead of
+  per day.
+
 ### Building a DuckDB extract
 
 ```bash

@@ -26,6 +26,30 @@ local file, and scores them against the bundled day-ahead actuals.
 
 The 2026-04 SEE window is a subset; the full artifact is ~5 GB of parquet.
 
+### Artifact versions
+
+- **v1** — the original published extract.
+- **v1.1** — identical tables, rows and values as v1, but re-laid-out for query
+  speed: every table is materialized `ORDER BY (zone, date)` (the per-unit output
+  table by `(month, unit, date)`) so DuckDB row-group zonemaps actually prune
+  per-zone / per-day scans, and the unavailability table's text
+  `start/end_outage_utc` columns are cast to `TIMESTAMP` at build time. Row counts
+  match v1 exactly (227,848,227 rows); the runtime `.duckdb` is *smaller* (~2.6 GB
+  vs ~3.8 GB) because sorted data compresses better. Prices are unchanged to
+  floating-point precision: **single-zone clears are bit-identical to v1**, and
+  the 39-zone 2026-04-03 multi-zone clear matches v1 to **≤2e-12 €/MWh** (22 of
+  936 price cells flip in the last ULP). The residual is the same one documented
+  for the Postgres↔DuckDB multi-zone parity: re-ordering the rows changes the
+  order in which DuckDB's `SUM`/`AVG`/`percentile_cont` reduce, reaching a price
+  only through the scarcity factor of a marginal tranche — invisible in every
+  reported metric. v1.1 is
+  produced from the v1 parquet with `bin/build_duckdb_v11.jl` (no Postgres); the
+  canonical builder `bin/build_duckdb_extract.jl` emits the same sorted layout
+  directly from Postgres. **Combined with the query-path code changes
+  (`perf/duckdb-query-paths`), a 39-zone day book build drops from ~14 s to
+  ~1–3 s** (measured on this artifact; see the changelog / PR for the
+  before/after table).
+
 ## 1. Download
 
 ```bash
@@ -169,6 +193,22 @@ ZONES="AT,BE,BG,CZ,DE_LU,DK1,DK2,EE,ES,FI,FR,GR,HU,LT,LV,NL,NO1,NO2,NO3,NO4,NO5,
 PARITY_ONLY=true PARQUET_DIR=data/public/euphemia-data-v1 \
   VERIFY_AGAINST=data/public/euphemia-public.duckdb \
   julia --project=. bin/build_duckdb_from_parquet.jl
+```
+
+The canonical builder now materializes every table `ORDER BY (zone, date)` (the
+per-unit output table in monthly chunks sorted by `(unit, date)`), and casts the
+unavailability table's text `start/end_outage_utc` to `TIMESTAMP` — so a fresh
+Postgres build already produces the v1.1 layout.
+
+To produce **v1.1 from an existing v1 parquet dir** (no Postgres — just re-sorts
+and re-emits), run:
+
+```bash
+PARQUET_IN=data/public/euphemia-data-v1 \
+  PARQUET_OUT=data/public/euphemia-data-v1.1 \
+  OUT=data/public/euphemia-public-v1.1.duckdb \
+  ARTIFACT_VERSION=v1.1 \
+  julia --project=. bin/build_duckdb_v11.jl   # ~1 min; asserts row counts == v1
 ```
 
 The builder streams the ~125M-row per-unit table in monthly chunks, keeps DuckDB's

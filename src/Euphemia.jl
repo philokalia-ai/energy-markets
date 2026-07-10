@@ -296,7 +296,8 @@ include("MeritOrderBook.jl")
 using .MeritOrderBook: create_merit_order_book, ZoneProfile, get_zone_profile,
     ZONE_PROFILES, SEE_PROFILE, IBERIA_PROFILE, CONTINENTAL_PROFILE,
     ITALY_PROFILE, NORDIC_PROFILE, BALTIC_PROFILE, FRANCE_PROFILE, NORWAY_PROFILE,
-    SWISS_PROFILE, SWEDEN_SOUTH_PROFILE, AUSTRIA_PROFILE, BELGIUM_PROFILE
+    SWISS_PROFILE, SWEDEN_SOUTH_PROFILE, AUSTRIA_PROFILE, BELGIUM_PROFILE,
+    clear_net_imports_cache!
 
 # ===== EXPORTS =====
 # All module exports are centralized here following Julia best practices

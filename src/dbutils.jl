@@ -37,6 +37,88 @@ const _DUCKDB_DB = Ref{Any}(nothing)
 const _DUCKDB_CONN = Ref{Any}(nothing)
 const _DUCKDB_LOCK = ReentrantLock()
 const _DUCKDB_READONLY_WARNED = Ref{Bool}(false)
+# Per-connection prepared-statement cache, keyed by the (already dialect-
+# rewritten) SQL string. DuckDB re-parses/re-plans on every DBInterface.prepare,
+# and a 39-zone day book issues ~300 small queries drawn from a tiny fixed set
+# of SQL shapes, so caching the compiled statements removes that repeated
+# planning. Cleared whenever the connection is dropped/reopened (the statements
+# belong to the old connection). Guarded by _DUCKDB_LOCK.
+const _DUCKDB_STMT_CACHE = Dict{String,Any}()
+
+# Drop the cached connection, db handle and prepared statements. Caller must
+# hold _DUCKDB_LOCK.
+function _duckdb_drop_connection!()
+    empty!(_DUCKDB_STMT_CACHE)
+    if _DUCKDB_CONN[] !== nothing
+        try
+            DBInterface.close!(_DUCKDB_CONN[])
+        catch
+        end
+    end
+    if _DUCKDB_DB[] !== nothing
+        try
+            close(_DUCKDB_DB[])
+        catch
+        end
+    end
+    _DUCKDB_CONN[] = nothing
+    _DUCKDB_DB[] = nothing
+    _RESULTS_ATTACHED[] = false
+    return nothing
+end
+
+# Apply per-connection engine settings sized for the current process, so that N
+# parallel reproduce/backfill worker processes do not each grab all cores and
+# most of RAM (which oversubscribes the machine N-fold — thread thrashing and
+# OOM under `--workers`). The concurrency hint is the number of processes that
+# will run DuckDB queries at once; wired from reproduce.jl's --workers (env
+# EUPHEMIA_DUCKDB_NPROCS_HINT) and defaulting to 1 (a lone process may use the
+# whole box). All three are env-overridable. Every SET is best-effort so an
+# unsupported option never breaks opening the extract.
+function _duckdb_apply_settings!(con, path::AbstractString)
+    hp = tryparse(Int, get(ENV, "EUPHEMIA_DUCKDB_NPROCS_HINT", "1"))
+    nprocs_hint = max(1, hp === nothing ? 1 : hp)
+    # threads
+    threads_env = get(ENV, "EUPHEMIA_DUCKDB_THREADS", "")
+    threads = isempty(threads_env) ? max(1, Sys.CPU_THREADS ÷ nprocs_hint) :
+              max(1, something(tryparse(Int, threads_env), 1))
+    try
+        DBInterface.execute(con, "SET threads = $threads")
+    catch e
+        @debug "DuckDB SET threads failed" exception=e
+    end
+    # memory_limit: total physical RAM × 0.6 ÷ nprocs_hint (GB), env-overridable.
+    mem_env = get(ENV, "EUPHEMIA_DUCKDB_MEMORY", "")
+    if !isempty(mem_env)
+        try
+            DBInterface.execute(con, "SET memory_limit = '$mem_env'")
+        catch e
+            @debug "DuckDB SET memory_limit failed" exception=e
+        end
+    else
+        gb = max(1.0, (Sys.total_memory() / 1e9) * 0.6 / nprocs_hint)
+        try
+            DBInterface.execute(con, "SET memory_limit = '$(round(gb, digits=1))GB'")
+        catch e
+            @debug "DuckDB SET memory_limit failed" exception=e
+        end
+    end
+    # temp_directory: DuckDB's spill workspace. Keep it under the repo data dir
+    # (next to the extract, on /home), NEVER /tmp or / — the user's disk-space
+    # rule. Env-overridable.
+    tmp = get(ENV, "EUPHEMIA_DUCKDB_TEMP", "")
+    if isempty(tmp)
+        base = dirname(abspath(path))
+        tmp = joinpath(isempty(base) ? "." : base, ".duckdb_query_tmp")
+    end
+    try
+        !isdir(tmp) && mkpath(tmp)
+        DBInterface.execute(con, "SET temp_directory = '$tmp'")
+    catch e
+        @debug "DuckDB SET temp_directory failed" exception=e
+    end
+    return nothing
+end
 
 # Lazily open (and reuse) a single DuckDB connection, guarded by a lock.
 function _duckdb_connection()
@@ -45,8 +127,10 @@ function _duckdb_connection()
             path = DUCKDB_PATH[]
             isfile(path) || error("DuckDB extract file not found: $path")
             db = DuckDB.DB(path; readonly=DUCKDB_READ_ONLY[])
+            con = DBInterface.connect(db)
+            _duckdb_apply_settings!(con, path)
             _DUCKDB_DB[] = db
-            _DUCKDB_CONN[] = DBInterface.connect(db)
+            _DUCKDB_CONN[] = con
         end
         return _DUCKDB_CONN[]
     end
@@ -78,17 +162,7 @@ function configure_data_store!(; backend::Symbol=:postgres,
             # Drop a stale connection if the path OR access mode changed
             if _DUCKDB_CONN[] !== nothing &&
                (DUCKDB_PATH[] != duckdb_path || DUCKDB_READ_ONLY[] != read_only)
-                try
-                    DBInterface.close!(_DUCKDB_CONN[])
-                catch
-                end
-                try
-                    _DUCKDB_DB[] !== nothing && close(_DUCKDB_DB[])
-                catch
-                end
-                _DUCKDB_CONN[] = nothing
-                _DUCKDB_DB[] = nothing
-                _RESULTS_ATTACHED[] = false
+                _duckdb_drop_connection!()
             end
             DUCKDB_PATH[] = duckdb_path
             DUCKDB_READ_ONLY[] = read_only
@@ -185,18 +259,21 @@ function _duckdb_rewrite(sql::AbstractString)
 end
 
 function _duckdb_sql2df(sql, args)
+    # Dialect rewrite is pure CPU — do it outside the lock. The result is a
+    # stable function of the input SQL, so it is also the prepared-statement
+    # cache key.
     rewritten = _duckdb_rewrite(sql)
     con = _duckdb_connection()
     occursin("results_db.", rewritten) && _ensure_results_attached(con)
+    # Lock scope narrowed to prepare-once + execute + materialize. The compiled
+    # statement is cached per connection, so repeat calls skip parse/plan.
     lock(_DUCKDB_LOCK) do
-        stmt = DBInterface.prepare(con, rewritten)
-        try
-            res = isempty(args) ? DBInterface.execute(stmt) :
-                  DBInterface.execute(stmt, collect(args))
-            return DataFrame(res)
-        finally
-            DBInterface.close!(stmt)
+        stmt = get!(_DUCKDB_STMT_CACHE, rewritten) do
+            DBInterface.prepare(con, rewritten)
         end
+        res = isempty(args) ? DBInterface.execute(stmt) :
+              DBInterface.execute(stmt, collect(args))
+        return DataFrame(res)
     end
 end
 
@@ -314,6 +391,45 @@ function _results_insert_df(df::DataFrame, table::AbstractString)
         end
     end
     return nrow(df)
+end
+
+"""
+    results_write_transaction(f)
+
+Run a block of result writes (`save_energy_prices` / `save_optimization_run` /
+`save_transmission_flows`) inside a single DuckDB transaction on the
+results-attached connection, so a whole persist segment commits ONCE instead of
+autocommitting — and checkpointing — every per-day DELETE/INSERT. For a `--full`
+run (tens of thousands of tiny round-trips on the single-writer results DB) this
+collapses the post-clearing persist overhead to one commit. The per-day DELETE
++ INSERT (idempotent replace) logic is unchanged, so re-running a tier is still
+resumable. No-op on the Postgres backend (its writers batch their own way).
+"""
+function results_write_transaction(f)
+    DATA_STORE[] == :duckdb || return f()
+    con = _duckdb_connection()
+    _ensure_results_attached(con)
+    lock(_DUCKDB_LOCK) do
+        DBInterface.execute(con, "BEGIN TRANSACTION")
+    end
+    committed = false
+    try
+        r = f()
+        lock(_DUCKDB_LOCK) do
+            DBInterface.execute(con, "COMMIT")
+        end
+        committed = true
+        return r
+    finally
+        if !committed
+            lock(_DUCKDB_LOCK) do
+                try
+                    DBInterface.execute(con, "ROLLBACK")
+                catch
+                end
+            end
+        end
+    end
 end
 
 # --- DuckDB implementations of the three market-result writers ---
@@ -510,6 +626,12 @@ Execute SQL query with automatic retry on connection failures.
 """
 function sql2df_with_retry(sql, args=[]; max_retries=3, retry_delay=2.0)
     last_error = nothing
+    # Under the DuckDB backend there is NO Postgres pool to reset, and offline
+    # workers run with ENERGY_CONN_STR emptied — so the LibPQ connection-error
+    # classification (and preinit_pool, which opens 5 LibPQ connections with a
+    # 30 s connect_timeout each) must never run here. A transient DuckDB error
+    # is simply retried a couple of times without touching LibPQ.
+    is_duckdb = DATA_STORE[] == :duckdb
 
     for attempt in 1:max_retries
         try
@@ -517,9 +639,17 @@ function sql2df_with_retry(sql, args=[]; max_retries=3, retry_delay=2.0)
         catch e
             last_error = e
 
-            # Check if it's a connection-related error
-            if isa(e, LibPQ.Errors.JLConnectionError) ||
-               (isa(e, Exception) && occursin("connection", string(e)))
+            if is_duckdb
+                if attempt < max_retries
+                    @warn "DuckDB query failed (attempt $attempt/$max_retries): $e"
+                    sleep(retry_delay)
+                    continue
+                else
+                    @error "DuckDB query failed after $max_retries attempts: $e"
+                end
+            # Postgres: check if it's a connection-related error
+            elseif isa(e, LibPQ.Errors.JLConnectionError) ||
+                   (isa(e, Exception) && occursin("connection", string(e)))
 
                 if attempt < max_retries
                     @warn "Database connection failed (attempt $attempt/$max_retries): $e"
