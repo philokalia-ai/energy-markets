@@ -75,7 +75,14 @@ const V10_TRANCHES = [(0.55, 0.95), (0.20, 1.05), (0.15, 1.25), (0.10, 1.60)]
         for z in ("NO1", "NO2", "NO3", "NO5")
             @test get_zone_profile(z) === NORWAY_PROFILE
         end
-        @test get_zone_profile("NO4") === NORDIC_PROFILE  # far north: no anchor
+        # NO4 (far north): reservoir-opportunity, no anchor, but the seasonal
+        # drawdown is OFF (iter6) — its price is set by export congestion, not
+        # the winter water value, so it uses a dedicated NO4_PROFILE.
+        @test get_zone_profile("NO4") === Euphemia.MeritOrderBook.NO4_PROFILE
+        @test get_zone_profile("NO4").opportunity_anchor == :none
+        @test get_zone_profile("NO4").hydro_model == :reservoir_opportunity
+        @test get_zone_profile("NO4").seasonal_drawdown == false
+        @test NORDIC_PROFILE.seasonal_drawdown == true   # SE1/SE2/FI keep it
         @test NORDIC_PROFILE.opportunity_anchor == :none
         @test SWISS_PROFILE.opportunity_anchor == :hydro
         @test SWISS_PROFILE.hydro_model == :reservoir_opportunity
@@ -102,6 +109,11 @@ const V10_TRANCHES = [(0.55, 0.95), (0.20, 1.05), (0.15, 1.25), (0.10, 1.60)]
         @test get_zone_profile("BE") === BELGIUM_PROFILE
         @test BELGIUM_PROFILE.opportunity_anchor == :hydro
         @test BELGIUM_PROFILE.hydro_model == :gas_anchored
+        # iter6: SK's dropped Core import borders (CZ-SK/PL-SK) need the anchor's
+        # import pricing, like BE — continental params otherwise.
+        @test get_zone_profile("SK") === Euphemia.MeritOrderBook.SLOVAKIA_PROFILE
+        @test get_zone_profile("SK").opportunity_anchor == :hydro
+        @test get_zone_profile("SK").scarcity_kappa == CONTINENTAL_PROFILE.scarcity_kappa
     end
 
     @testset "opportunity anchor is a no-op without profile opt-in" begin
