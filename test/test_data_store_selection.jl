@@ -129,9 +129,35 @@ end
 
         # the results live in the SEPARATE file, not the extract
         @test isfile(results)
+
+        # --- read-only shared mode (multi-process parallel workers) ---
+        # Reopen the same extract read-only: reads still work, but result writes
+        # must fail loudly (workers are required to run save_to_db=false).
+        Euphemia._RESULTS_ATTACHED[] = false
+        Euphemia.configure_data_store!(backend=:duckdb, duckdb_path=extract, read_only=true)
+        @test Euphemia.DUCKDB_READ_ONLY[]
+        uf_ro = Euphemia.sql2df("SELECT count(*) c FROM simulations.unit_firms", Any[])
+        @test uf_ro.c[1] == 1
+        @test_throws ErrorException Euphemia.save_optimization_run(
+            "GR", day, :merit_order, :mpcc, "highs", :optimal)
+        # a second read-only PROCESS can share the file concurrently
+        code = """using DuckDB
+                  import DuckDB.DBInterface as DBI
+                  db = DuckDB.DB(raw"$extract"; readonly=true)
+                  con = DBI.connect(db)
+                  r = DBI.execute(con, "SELECT count(*) c FROM simulations.unit_firms")
+                  print(first(r).c)"""
+        out = read(`$(Base.julia_cmd()) --project=$(dirname(Base.active_project())) -e $code`, String)
+        @test strip(out) == "1"
+        # back to read-write: result writes work again
+        Euphemia._RESULTS_ATTACHED[] = false
+        Euphemia.configure_data_store!(backend=:duckdb, duckdb_path=extract, read_only=false)
+        rw_id = Euphemia.save_optimization_run("GR", day, :merit_order, :mpcc, "highs", :optimal)
+        @test rw_id isa Integer
     finally
         Euphemia._RESULTS_ATTACHED[] = false
         Euphemia.RESULTS_DB_PATH[] = prev_results
+        Euphemia.DUCKDB_READ_ONLY[] = false
         if prev == :postgres
             try; Euphemia.configure_data_store!(backend=:postgres); catch; end
         end

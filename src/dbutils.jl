@@ -22,6 +22,13 @@ using DuckDB   # also brings DBInterface into scope
 
 const DATA_STORE = Ref{Symbol}(:postgres)
 const DUCKDB_PATH = Ref{String}("")
+# Open the extract with DuckDB's READ_ONLY access mode. DuckDB is single-writer,
+# but any number of PROCESSES may share one file when every one of them opens it
+# read-only — this is what enables day-level parallel reproduction
+# (bin/reproduce.jl --workers): each worker opens the extract read-only, clears
+# with save_to_db=false, and the coordinator persists the returned prices.
+# Selected via configure_data_store!(read_only=true) or EUPHEMIA_DUCKDB_READONLY.
+const DUCKDB_READ_ONLY = Ref{Bool}(false)
 
 # Default location the auto-detector looks for the published public extract when
 # no backend is chosen explicitly. Overridable via EUPHEMIA_DUCKDB_PATH.
@@ -37,7 +44,7 @@ function _duckdb_connection()
         if _DUCKDB_CONN[] === nothing
             path = DUCKDB_PATH[]
             isfile(path) || error("DuckDB extract file not found: $path")
-            db = DuckDB.DB(path)
+            db = DuckDB.DB(path; readonly=DUCKDB_READ_ONLY[])
             _DUCKDB_DB[] = db
             _DUCKDB_CONN[] = DBInterface.connect(db)
         end
@@ -59,7 +66,8 @@ Select the data backend used by all `sql2df` queries.
 Returns the active `DATA_STORE[]` symbol.
 """
 function configure_data_store!(; backend::Symbol=:postgres,
-                               duckdb_path::Union{Nothing,String}=nothing)
+                               duckdb_path::Union{Nothing,String}=nothing,
+                               read_only::Bool=false)
     backend in (:postgres, :duckdb) ||
         error("Invalid backend: $backend (must be :postgres or :duckdb)")
 
@@ -67,21 +75,28 @@ function configure_data_store!(; backend::Symbol=:postgres,
         duckdb_path === nothing && error("duckdb_path is required for the :duckdb backend")
         isfile(duckdb_path) || error("DuckDB extract file not found: $duckdb_path")
         lock(_DUCKDB_LOCK) do
-            # Drop a stale connection if the path changed
-            if _DUCKDB_CONN[] !== nothing && DUCKDB_PATH[] != duckdb_path
+            # Drop a stale connection if the path OR access mode changed
+            if _DUCKDB_CONN[] !== nothing &&
+               (DUCKDB_PATH[] != duckdb_path || DUCKDB_READ_ONLY[] != read_only)
                 try
                     DBInterface.close!(_DUCKDB_CONN[])
                 catch
                 end
+                try
+                    _DUCKDB_DB[] !== nothing && close(_DUCKDB_DB[])
+                catch
+                end
                 _DUCKDB_CONN[] = nothing
                 _DUCKDB_DB[] = nothing
+                _RESULTS_ATTACHED[] = false
             end
             DUCKDB_PATH[] = duckdb_path
+            DUCKDB_READ_ONLY[] = read_only
         end
         DATA_STORE[] = :duckdb
         _DUCKDB_READONLY_WARNED[] = false
         _duckdb_connection()  # open eagerly to validate the file
-        @info "Data store: DuckDB (read-only) — $duckdb_path"
+        @info "Data store: DuckDB$(read_only ? " (read-only shared)" : "") — $duckdb_path"
     else
         DATA_STORE[] = :postgres
         @info "Data store: PostgreSQL"
@@ -219,9 +234,20 @@ const _RESULTS_ATTACHED = Ref{Bool}(false)
 # ATTACH the results DB (created on first attach) and create the result tables
 # IF NOT EXISTS. Idempotent; guarded by the DuckDB lock. `con` must be the
 # extract connection returned by _duckdb_connection().
+# Fail loudly when a result write is attempted in read-only shared mode.
+function _duckdb_assert_writable()
+    DUCKDB_READ_ONLY[] && error(
+        "The DuckDB data store is open in read-only shared mode " *
+        "(EUPHEMIA_DUCKDB_READONLY / configure_data_store!(read_only=true)); " *
+        "results cannot be written from this process. Parallel workers must run " *
+        "with save_to_db=false — the coordinator persists the returned prices.")
+    return nothing
+end
+
 function _ensure_results_attached(con)
     lock(_DUCKDB_LOCK) do
         _RESULTS_ATTACHED[] && return
+        DUCKDB_READ_ONLY[] && _duckdb_assert_writable()
         path = RESULTS_DB_PATH[]
         dir = dirname(path)
         !isempty(dir) && !isdir(dir) && mkpath(dir)
@@ -338,6 +364,7 @@ function _duckdb_save_optimization_run(bidding_zone::String, date::Date, order_m
         model_type::Symbol, optimizer::String, status::Symbol; objective_value, solve_time_seconds,
         num_orders, num_price_periods, error_message, code_version::Int, is_iterative::Bool,
         total_time_seconds, iterations, converged, final_price_change, final_flow_change_pct)
+    _duckdb_assert_writable()  # fail loudly (not silently) in read-only shared mode
     try
         # Upsert-by-replace: same config re-run replaces its row.
         _results_exec("""

@@ -167,7 +167,10 @@ function __init__()
         duckdb_path=get(ENV, "EUPHEMIA_DUCKDB_PATH", ""),
         energy_conn_str=get(ENV, "ENERGY_CONN_STR", ""))
     if backend == :duckdb
-        configure_data_store!(backend=:duckdb, duckdb_path=path)
+        # EUPHEMIA_DUCKDB_READONLY=true opens the extract in shared read-only
+        # mode (required for multi-process parallel workers; see bin/reproduce.jl).
+        ro = lowercase(get(ENV, "EUPHEMIA_DUCKDB_READONLY", "")) == "true"
+        configure_data_store!(backend=:duckdb, duckdb_path=path, read_only=ro)
     else
         preinit_pool()
     end
