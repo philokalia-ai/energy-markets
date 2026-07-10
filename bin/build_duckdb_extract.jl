@@ -30,6 +30,16 @@ const OUT = get(ENV, "OUT", "data/extracts/euphemia_2026_see.duckdb")
 # Lookbacks: 400 days back covers the 365-day ramp/output inference window,
 # the 60-day recent-generation filter, and the 30-day p95 hydro/type window.
 const BACK400 = START_DATE - Day(400)
+
+# Per-UNIT actual-generation output window. The 365-day lookback that forces the
+# 400-day default lives on the per-TYPE aggregate table (hydro availability) and
+# on UC ramp inference. The :merit_order path never runs UC, and its only use of
+# the huge per-unit table is get_generators' 60-day recent-generation filter and
+# get_day_outages' 7-day stale-override probe — so a merit-only EU extract can
+# window this table to ~90 days and stay well under the 8 GB cap while the
+# per-type/reservoir windows (which bit-identity needs) stay full. Default 400
+# preserves the original behavior for UC-based / single-zone extracts.
+const AGEN_BACK = START_DATE - Day(parse(Int, get(ENV, "AGEN_BACK_DAYS", "400")))
 # Window end is exclusive at END_DATE + 1 day (whole END_DATE included).
 const END_EXCL = END_DATE + Day(1)
 
@@ -94,6 +104,13 @@ function table_specs()
         where="(out_map_code = ANY(\$1) OR in_map_code = ANY(\$1)) AND date_time_utc >= (\$2::date::timestamp AT TIME ZONE 'UTC') AND date_time_utc < (\$3::date::timestamp AT TIME ZONE 'UTC')",
         args=Any[ZONES, START_DATE, END_EXCL]))
 
+    # Explicit (LT + DA-auction) ATC — required by the enriched multi-zone
+    # network build (CH is outside SDAC implicit coupling; Serbia's borders are
+    # auction-allocated). Same date window as implicit.
+    push!(specs, (schema="entsoe", table="offered_transfer_capacities_explicit",
+        where="(out_map_code = ANY(\$1) OR in_map_code = ANY(\$1)) AND date_time_utc >= (\$2::date::timestamp AT TIME ZONE 'UTC') AND date_time_utc < (\$3::date::timestamp AT TIME ZONE 'UTC')",
+        args=Any[ZONES, START_DATE, END_EXCL]))
+
     # physical_flows: match on either side, including _IPS-suffixed aliases
     push!(specs, (schema="entsoe", table="physical_flows",
         where="(regexp_replace(in_area_map_code, '_IPS\$', '') = ANY(\$1) OR regexp_replace(out_area_map_code, '_IPS\$', '') = ANY(\$1)) AND date_time_utc >= (\$2::date::timestamp AT TIME ZONE 'UTC') AND date_time_utc < (\$3::date::timestamp AT TIME ZONE 'UTC')",
@@ -126,10 +143,11 @@ function table_specs()
         args=Any[ZONES, END_DATE, BACK400]))
 
     # actual_generation_output_per_generation_unit: the big one — zones' unit
-    # codes, 400-day-back window
+    # codes, AGEN_BACK-day-back window (default 400; set AGEN_BACK_DAYS=90 for a
+    # merit-only extract, see AGEN_BACK note above)
     push!(specs, (schema="entsoe", table="actual_generation_output_per_generation_unit",
         where="generation_unit_code IN ($gen_codes) AND date_time_utc >= (\$2::date::timestamp AT TIME ZONE 'UTC') AND date_time_utc < (\$3::date::timestamp AT TIME ZONE 'UTC')",
-        args=Any[ZONES, BACK400, END_EXCL]))
+        args=Any[ZONES, AGEN_BACK, END_EXCL]))
 
     # yfinance: full history (no zone/date filter)
     push!(specs, (schema="yfinance", table="ttf_f", where="", args=Any[]))
@@ -156,7 +174,8 @@ select_sql(spec) = "SELECT $(projection(spec.schema, spec.table)) FROM $(spec.sc
 function main()
     println("Building DuckDB extract")
     println("  zones : ", join(ZONES, ", "))
-    println("  window: ", START_DATE, " .. ", END_DATE, "  (unit/output tables back to ", BACK400, ")")
+    println("  window: ", START_DATE, " .. ", END_DATE, "  (per-type/unit tables back to ", BACK400,
+            "; per-unit output back to ", AGEN_BACK, ")")
     println("  out   : ", OUT)
     println()
 

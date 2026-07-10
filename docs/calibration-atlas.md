@@ -186,6 +186,12 @@ Timezone rule everywhere: `entsoe_col = (sim_col AT TIME ZONE 'UTC')`.
   correlation is a weak metric for flat-price zones.
 - **Structural cleanup**: make ref-based import pricing the default for all
   dropped borders.
+- **Offline reproduction (available)**: the full 39-zone EU merit-order clear now
+  runs against a self-contained DuckDB extract (`bin/build_duckdb_extract.jl` with
+  the 39-zone footprint + `AGEN_BACK_DAYS=90`, ~490 MB), reproducing Postgres
+  prices to ≤2e-12 €/MWh (~98% of rows bit-identical; residual is last-ULP SQL
+  aggregate-order noise) at ~4–5× lower wall time. Useful for fast iteration and
+  for the multi-month backfill below without hammering the live DB.
 - **Validation breadth**: all EU-footprint numbers above rest on a single
   5-day window and the SEE core's long history. **We still need to produce
   validated numbers across more than five regions over materially longer
