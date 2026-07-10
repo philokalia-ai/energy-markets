@@ -846,23 +846,30 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
                 @warn "DualReductions retry unavailable ($(sprint(showerror, e))) — keeping original status"
             end
         end
-        # A "proven" INFEASIBLE can be a FALSE certificate from presolve on
-        # this big-M complementarity model at scale. Measured on the
-        # 2026-04-02 EU book (~22k orders): the full-day model was declared
-        # INFEASIBLE, yet every period is independent and the hour the IIS
-        # blamed (15:00) solves OPTIMAL in isolation — and an earlier code
-        # version solved the same day optimally. Before trusting the
-        # certificate, retry once with presolve off and maximum numeric
-        # care. No-op for every solve that doesn't hit INFEASIBLE.
+        # A "proven" INFEASIBLE can be a false certificate on this big-M
+        # complementarity model at scale. Measured on the 2026-04-02 EU book
+        # (~22k orders): the periods are independent, the hour the IIS
+        # blamed (15:00) solves OPTIMAL in isolation, and earlier runs of
+        # the same day solved optimally — the outcome is an ordering
+        # coin-flip. Gated retry ladder (each time-boxed, none default-on):
+        # 1) maximum numeric care with presolve kept conservative, then
+        # 2) a different seed as last resort. The root fix — per-order
+        # Big-M sized from each order's price range — is deferred to its
+        # own change with an MPCC-level SEE-guard test.
         if termination_status(model) == MOI.INFEASIBLE
-            @warn "MPCC solve claims INFEASIBLE — verifying with Presolve=0, NumericFocus=3"
             try
-                set_optimizer_attribute(model, "Presolve", 0)
+                @warn "MPCC solve claims INFEASIBLE — retrying with NumericFocus=3"
                 set_optimizer_attribute(model, "NumericFocus", 3)
-                set_optimizer_attribute(model, "TimeLimit", 600.0)
+                set_optimizer_attribute(model, "Presolve", 1)
+                set_optimizer_attribute(model, "TimeLimit", 300.0)
                 optimize!(model)
+                if termination_status(model) == MOI.INFEASIBLE
+                    @warn "Still INFEASIBLE — last-resort retry with a different seed"
+                    set_optimizer_attribute(model, "Seed", 42)
+                    optimize!(model)
+                end
             catch e
-                @warn "Numeric-verification retry unavailable ($(sprint(showerror, e))) — keeping INFEASIBLE"
+                @warn "Numeric retry ladder unavailable ($(sprint(showerror, e))) — keeping INFEASIBLE"
             end
         end
         solve_time = time() - start_time
