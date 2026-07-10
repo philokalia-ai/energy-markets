@@ -1,0 +1,209 @@
+
+==============================================================================
+LOAD DATA
+==============================================================================
+phase_b_daily: 1642 rows, 1641 with residual
+rsi_hourly: 39383 rows, 39359 with residual
+
+==============================================================================
+ANALYSIS A  (PRIMARY) — residual ~ dark_mw + controls + year FE
+==============================================================================
+
+[A: with regulated window]  n=1641  R2=0.304  adjR2=0.299  HAC lag=7
+                           coef          se  ...       ci_lo       ci_hi
+const                   23.1067     14.2201  ...     -4.7643     50.9777
+dark_mw                  0.0027      0.0017  ...     -0.0006      0.0060
+peak_net_demand          0.0022      0.0018  ...     -0.0013      0.0057
+res_share              -25.8943     10.0208  ...    -45.5347     -6.2539
+ttf_change_5d           -0.9612      0.2002  ...     -1.3536     -0.5688
+reservoir_deviation     -1.1081      0.1911  ...     -1.4826     -0.7336
+outage_mw                0.0048      0.0012  ...      0.0024      0.0072
+regulated_dummy        -10.5245     11.6813  ...    -33.4195     12.3704
+yr_2023                -29.2602      6.9129  ...    -42.8091    -15.7112
+yr_2024                -40.6777      7.2151  ...    -54.8191    -26.5364
+yr_2025                -51.5487      8.0819  ...    -67.3889    -35.7084
+yr_2026                -35.9852      7.5582  ...    -50.7990    -21.1715
+
+[12 rows x 6 columns]
+  >> dark_mw: +2.69 EUR/MWh per GW dark  (95% CI [-0.57, +5.96], p=0.106)
+
+[A: excluding regulated window (2022 H2)]  n=1457  R2=0.340  adjR2=0.336  HAC lag=7
+                           coef          se  ...       ci_lo       ci_hi
+const                   31.5055     13.7275  ...      4.6001     58.4108
+dark_mw                 -0.0008      0.0011  ...     -0.0029      0.0014
+peak_net_demand          0.0014      0.0016  ...     -0.0018      0.0045
+res_share              -18.9944      8.7820  ...    -36.2069     -1.7820
+ttf_change_5d           -0.7621      0.2633  ...     -1.2781     -0.2460
+reservoir_deviation     -1.2605      0.1842  ...     -1.6216     -0.8994
+outage_mw                0.0023      0.0009  ...      0.0006      0.0041
+yr_2023                -26.4973      7.0109  ...    -40.2384    -12.7563
+yr_2024                -40.3079      7.1003  ...    -54.2243    -26.3916
+yr_2025                -50.4116      7.8792  ...    -65.8546    -34.9686
+yr_2026                -33.4917      7.3476  ...    -47.8926    -19.0907
+
+[11 rows x 6 columns]
+  >> dark_mw: -0.79 EUR/MWh per GW dark  (95% CI [-2.92, +1.35], p=0.471)
+
+[A-robustness: dark_mw_all (strong not required)]  n=1641  R2=0.308  adjR2=0.304  HAC lag=7
+                           coef          se  ...       ci_lo       ci_hi
+const                   16.9845     13.9680  ...    -10.3924     44.3613
+dark_mw_all              0.0042      0.0014  ...      0.0014      0.0069
+peak_net_demand          0.0027      0.0017  ...     -0.0007      0.0061
+res_share              -25.7857      9.9467  ...    -45.2809     -6.2904
+ttf_change_5d           -0.9413      0.1979  ...     -1.3292     -0.5534
+reservoir_deviation     -1.0896      0.1892  ...     -1.4605     -0.7187
+outage_mw                0.0054      0.0012  ...      0.0030      0.0077
+regulated_dummy        -10.8127     11.5715  ...    -33.4924     11.8670
+yr_2023                -31.1765      6.8757  ...    -44.6527    -17.7004
+yr_2024                -41.0529      7.1428  ...    -55.0525    -27.0533
+yr_2025                -51.9984      8.0276  ...    -67.7322    -36.2646
+yr_2026                -36.3130      7.5015  ...    -51.0156    -21.6104
+
+[12 rows x 6 columns]
+  >> dark_mw_all: +4.15 EUR/MWh per GW dark  (95% CI [+1.37, +6.93], p=0.003)
+
+[A] Binned scatter (dark_mw deciles):
+ decile    dark_mid  resid_mean  resid_sem   n       ci
+      0    0.000000    6.687212   3.666960 165 7.187241
+      1    9.243902    1.353183   1.746348 164 3.422842
+      2  128.892073    1.292501   3.163922 164 6.201287
+      3  169.507317    5.921714   2.194034 164 4.300306
+      4  287.986585    5.470149   3.493007 164 6.846294
+      5  447.295732    2.379649   2.412660 164 4.728814
+      6  601.057927    5.158170   2.498533 164 4.897125
+      7  809.661585    9.247521   2.803564 164 5.494986
+      8 1059.256707   11.822418   2.889038 164 5.662515
+      9 1833.181707   -2.104343   2.139379 164 4.193183
+
+==============================================================================
+ANALYSIS B  (PRIMARY) — pivotality (RSI_PPC)
+==============================================================================
+
+[B] Share of hours with RSI_PPC < 1, by year (%):
+day
+2022    17.6
+2023    10.6
+2024    19.2
+2025    29.0
+2026    19.5
+
+[B] Hourly residual by RSI_PPC bin:
+rsi_bin  resid_mean  resid_sem     n       ci
+   <0.8  -16.615931   2.276535  2078 4.462009
+0.8-1.0   -7.742295   0.852266  4917 1.670442
+1.0-1.2    3.353289   0.711573  5917 1.394683
+   >1.2    9.588846   0.310372 24153 0.608329
+
+[B: hourly regression with RSI_PPC<1 dummy]  n=39359  R2=0.143  adjR2=0.142  HAC lag=24
+                           coef          se  ...       ci_lo       ci_hi
+const                   44.5318      3.4819  ...     37.7074     51.3562
+dark_mw                  0.0010      0.0010  ...     -0.0010      0.0031
+net_demand_mw            0.0006      0.0003  ...     -0.0000      0.0013
+res_share              -42.4978      5.0990  ...    -52.4917    -32.5039
+ttf_change_5d           -0.9276      0.1172  ...     -1.1573     -0.6978
+reservoir_deviation     -1.1615      0.0981  ...     -1.3538     -0.9693
+outage_mw                0.0036      0.0006  ...      0.0025      0.0048
+regulated_dummy        -11.3605      5.6199  ...    -22.3753     -0.3457
+rsi_lt1                -19.7728      1.9159  ...    -23.5279    -16.0178
+yr_2023                -28.9873      2.9692  ...    -34.8067    -23.1678
+yr_2024                -37.6649      3.0307  ...    -43.6049    -31.7249
+yr_2025                -45.3344      3.3707  ...    -51.9409    -38.7280
+yr_2026                -29.3912      3.2417  ...    -35.7447    -23.0376
+
+[13 rows x 6 columns]
+  >> dark_mw: +1.01 EUR/MWh per GW dark  (95% CI [-1.05, +3.06], p=0.336)
+  >> rsi_lt1 dummy: -19.77 EUR/MWh (95% CI [-23.53, -16.02], p=0.000)
+
+==============================================================================
+ANALYSIS C  [EXPLORATORY] — signal-catalogue variants
+==============================================================================
+
+[C1 [EXPLORATORY]: dark_mw x pivotal interaction]  n=1641  R2=0.325  adjR2=0.320  HAC lag=7
+                           coef          se  ...       ci_lo       ci_hi
+const                    5.1785     13.4421  ...    -21.1675     31.5246
+dark_mw                 -0.0003      0.0024  ...     -0.0049      0.0044
+dark_x_pivotal           0.0051      0.0028  ...     -0.0004      0.0107
+rsi_min_lt1            -17.8531      4.5065  ...    -26.6856     -9.0206
+peak_net_demand          0.0067      0.0018  ...      0.0032      0.0102
+res_share              -21.2863      9.3623  ...    -39.6360     -2.9365
+ttf_change_5d           -0.9089      0.1935  ...     -1.2882     -0.5297
+reservoir_deviation     -1.0187      0.1884  ...     -1.3880     -0.6495
+outage_mw                0.0053      0.0012  ...      0.0029      0.0077
+regulated_dummy         -9.6087     11.2748  ...    -31.7068     12.4895
+yr_2023                -28.3999      6.3134  ...    -40.7740    -16.0258
+yr_2024                -37.7749      6.6773  ...    -50.8622    -24.6875
+yr_2025                -45.9654      7.5211  ...    -60.7065    -31.2242
+yr_2026                -33.2294      6.9886  ...    -46.9269    -19.5319
+
+[14 rows x 6 columns]
+  >> dark_mw: -0.28 EUR/MWh per GW dark  (95% CI [-4.93, +4.36], p=0.905)
+  >> dark_x_pivotal: +5.15 EUR/MWh per GW extra when pivotal (95% CI [-0.38, +10.67], p=0.068)
+
+[C2 [EXPLORATORY]: dark_mw split by fuel]  n=1641  R2=0.304  adjR2=0.299  HAC lag=7
+                           coef          se  ...       ci_lo       ci_hi
+const                   23.9583     14.1787  ...     -3.8314     51.7481
+dark_gas                 0.0033      0.0024  ...     -0.0013      0.0080
+dark_lignite             0.0042      0.0035  ...     -0.0027      0.0110
+dark_hydro              -0.0003      0.0032  ...     -0.0065      0.0059
+peak_net_demand          0.0021      0.0018  ...     -0.0013      0.0056
+res_share              -26.9443     10.1005  ...    -46.7410     -7.1476
+ttf_change_5d           -0.9613      0.2006  ...     -1.3545     -0.5680
+reservoir_deviation     -1.1084      0.1904  ...     -1.4817     -0.7352
+outage_mw                0.0049      0.0013  ...      0.0024      0.0073
+regulated_dummy        -10.5751     11.6938  ...    -33.4945     12.3443
+yr_2023                -29.5302      6.8848  ...    -43.0241    -16.0363
+yr_2024                -40.7947      7.2140  ...    -54.9338    -26.6556
+yr_2025                -51.8495      8.1102  ...    -67.7451    -35.9538
+yr_2026                -36.4205      7.5435  ...    -51.2054    -21.6356
+
+[14 rows x 6 columns]
+  >> dark_gas: +3.35 EUR/MWh per GW (95% CI [-1.33, +8.03], p=0.161)
+  >> dark_lignite: +4.19 EUR/MWh per GW (95% CI [-2.67, +11.05], p=0.231)
+  >> dark_hydro: -0.31 EUR/MWh per GW (95% CI [-6.53, +5.90], p=0.921)
+
+[C3 EXPLORATORY] cross-correlogram corr(residual_t, dark_{t+k}):
+   k=-5: +0.012  (dark leads)
+   k=-4: +0.007  (dark leads)
+   k=-3: +0.019  (dark leads)
+   k=-2: +0.020  (dark leads)
+   k=-1: +0.010  (dark leads)
+   k=+0: -0.014  (same day)
+   k=+1: +0.024  (residual leads)
+   k=+2: +0.043  (residual leads)
+   k=+3: +0.044  (residual leads)
+   k=+4: +0.067  (residual leads)
+   k=+5: +0.064  (residual leads)
+
+==============================================================================
+ANALYSIS D  (PRIMARY, first-pass) — cross-firm residualised dark-share corr
+==============================================================================
+Firms (>=2 mapped units): ['Elpedison', 'Heron/GEK-TERNA', 'PPC']
+  Elpedison: residualised dark_share, n=1642, R2(signal model)=0.106
+  Heron/GEK-TERNA: residualised dark_share, n=1642, R2(signal model)=0.030
+  PPC: residualised dark_share, n=1642, R2(signal model)=0.118
+
+[D] Daily residualised-dark-share correlation matrix (n=1642 days):
+                 Elpedison  Heron/GEK-TERNA    PPC
+Elpedison            1.000            0.221  0.033
+Heron/GEK-TERNA      0.221            1.000  0.108
+PPC                  0.033            0.108  1.000
+
+[D] Pairwise Pearson r and p-values (daily):
+   Elpedison        x Heron/GEK-TERNA : r=+0.221  p=0.0000  n=1642
+   Elpedison        x PPC             : r=+0.033  p=0.1778  n=1642
+   Heron/GEK-TERNA  x PPC             : r=+0.108  p=0.0000  n=1642
+
+[D] Weekly-averaged residualised-dark-share correlation (n=236 weeks):
+                 Elpedison  Heron/GEK-TERNA    PPC
+Elpedison            1.000            0.170 -0.014
+Heron/GEK-TERNA      0.170            1.000  0.021
+PPC                 -0.014            0.021  1.000
+[D] Pairwise (weekly):
+   Elpedison        x Heron/GEK-TERNA : r=+0.170  p=0.0087  n=236
+   Elpedison        x PPC             : r=-0.014  p=0.8338  n=236
+   Heron/GEK-TERNA  x PPC             : r=+0.021  p=0.7439  n=236
+
+==============================================================================
+DONE
+==============================================================================
+Figures written to /home/pgeorgakopoulos/armada/energy-markets/.claude/worktrees/agent-a117107123f466ff5/docs/figures/phase_b
