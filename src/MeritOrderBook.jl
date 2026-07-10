@@ -343,6 +343,15 @@ reservoir-opportunity hydro plus the two-pass :hydro anchor; CH's neighbors
 ref is the border-capacity-weighted mean of their pass-1 prices. Swiss
 reservoir filling data exists in entsoe.aggregated_hydro_storage_filling_rate
 (590 weekly rows, current), so dryness is real, not a proxy.
+
+MEASURED (cal10, 5 days) and GATED: CH itself is decisively fixed — on its
+clean hourly series corr 0.82→0.86, MAE 40.2→26.7, bias +39.3→+10.2 — but
+the anchored CH book propagates a SHAPE regression into its neighbors
+(AT corr 0.77→0.57, SI −0.08, SE2 −0.17 on identical actuals), beyond the
+no-regression tolerance. The profile is kept defined but NOT wired into
+ZONE_PROFILES until an AT-aware rollout (iteration 4): AT's price is shaped
+by CH's anchor through the AT–CH border and likely needs its own treatment
+in the same pass.
 """
 const SWISS_PROFILE = ZoneProfile(
     hydro_model = :reservoir_opportunity,
@@ -397,7 +406,7 @@ const ZONE_PROFILES = Dict{String,ZoneProfile}(
     # Continental core
     "DE_LU" => CONTINENTAL_PROFILE,
     "BE" => CONTINENTAL_PROFILE, "NL" => CONTINENTAL_PROFILE,
-    "AT" => CONTINENTAL_PROFILE, "CH" => SWISS_PROFILE,
+    "AT" => CONTINENTAL_PROFILE, "CH" => CONTINENTAL_PROFILE,
     "PL" => CONTINENTAL_PROFILE, "CZ" => CONTINENTAL_PROFILE,
     "SK" => CONTINENTAL_PROFILE,
 )
