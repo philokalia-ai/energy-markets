@@ -663,10 +663,33 @@ EUPHEMIA_DUCKDB_PATH=data/extracts/euphemia_2026_see.duckdb \
   julia --project=. test/scripts/eval_pricing_accuracy.jl merit_order "2026-01-26" GR
 ```
 
+**Backend auto-detection.** When `EUPHEMIA_DATA_STORE` is *unset*, the module
+auto-selects at load (`_resolve_data_store`): DuckDB if the default public extract
+`data/extracts/euphemia-public.duckdb` exists (override the path with
+`EUPHEMIA_DUCKDB_PATH`), else Postgres if `ENERGY_CONN_STR` is set, else a clear
+error telling you to download the extract. **Explicit env always wins**, and
+configured environments (CI, the product) are unchanged — the extract file isn't
+present there, so Postgres is selected exactly as before.
+
+**Public reproducibility artifact.** A published 39-zone, 2023-01-01…2026-06-30
+extract lets anyone reproduce the counterfactual with no Postgres. Download it,
+verify `SHA256SUMS`, materialize a `.duckdb` from the canonical parquet dir, and
+run `bin/reproduce.jl --quick|--range|--full`. See
+[docs/reproducibility.md](docs/reproducibility.md).
+
+**Writable offline results.** The published extract stays **read-only** (source
+data can never be written), but the three market-result writers
+(`save_energy_prices`, `save_optimization_run`, `save_transmission_flows`) persist
+to a **separate** `data/results.duckdb` (override `EUPHEMIA_RESULTS_DB`) ATTACHed
+as `results_db`; reads of `simulations.energy_prices` / `optimization_runs` /
+`transmission_flows` are redirected there transparently. So the full pipeline with
+`save_to_db=true` **and** the eval scripts run end-to-end offline. UC caching and
+`ensure_indexes` remain read-only no-ops (Postgres-only).
+
 **Limitations:**
-- **Read-only.** Every write path (`save_energy_prices`, `save_optimization_run`,
-  UC caching, `ensure_indexes`, …) warns once and no-ops under DuckDB. Run
-  pricing with `save_to_db=false`.
+- **Source data is read-only** under DuckDB (entsoe.*/yfinance.* never written).
+  Market results persist to `data/results.duckdb` (see above); UC caching and
+  `ensure_indexes` still warn-and-no-op.
 - **Merit-order only.** The DuckDB path targets the `:merit_order` book
   (single-zone and multi-zone). `:uc_based` / `:alternative` are not threaded
   (they need write-heavy UC caching and the full 365-day ramp-inference window,
@@ -730,10 +753,23 @@ days (covers the 365-day hydro-availability, 60-day recent-generation, and
 the prior-year reservoir-dryness comparison is exact. **`AGEN_BACK_DAYS`**
 (default 400) windows only the huge per-unit `actual_generation_output` table —
 `:merit_order` never runs UC, so it only needs the 60-day recent-generation and
-7-day stale-override lookback; setting `AGEN_BACK_DAYS=90` keeps a 39-zone EU
-extract under the ~8 GB cap (~490 MB / 26M rows). It prints per-table row counts
-and aborts if the projected size would exceed ~8 GB. The 2026 SEE extract is
-~96 MB (7.1M rows). `data/` is git-ignored — never commit the `.duckdb` file.
+7-day stale-override lookback; setting `AGEN_BACK_DAYS=90` keeps a short-window
+39-zone EU extract small. It prints per-table row counts and aborts if the
+projected size would exceed the cap. The 2026 SEE extract is ~96 MB (7.1M rows).
+`data/` is git-ignored — never commit the `.duckdb`/`.parquet` files.
+
+**Public artifact mode.** Set `PARQUET_DIR` to also emit a canonical parquet
+directory (one zstd file per table) plus `MANIFEST.json` + `SHA256SUMS` — parquet
+is the engine-version-durable published format; `bin/build_duckdb_from_parquet.jl`
+rebuilds a bit-identical `.duckdb` from it (with `PARITY_ONLY=true` +
+`VERIFY_AGAINST=<duckdb>` to prove equivalence without a second copy). Tables above
+`CHUNK_THRESHOLD` (default 8M rows) are built in monthly chunks to bound memory
+(the 39-zone 3.5-year per-unit table is ~125M rows). `MAX_SIZE_GB` (default 12) and
+`EST_BYTES_PER_ROW` (default 40, reflecting on-disk compression) parameterize the
+size guard; `MIN_FREE_GB` (default 60) aborts gracefully if free space on the
+target filesystem would drop too low, and DuckDB's spill workspace is kept next to
+`OUT`. See [docs/reproducibility.md](docs/reproducibility.md) for the full public
+build + reproduce flow.
 
 ### Scenario hooks on `create_merit_order_book` / `generate_energy_prices`
 
