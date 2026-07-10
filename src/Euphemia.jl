@@ -334,6 +334,7 @@ export MPCCResult, MPCCOrderBook, solve_mpcc_market_clearing, create_typed_order
 export create_multi_zone_order_book, run_multi_zone_market_clearing, run_multi_zone_for_date_range  # Multi-zone market clearing
 export run_iterative_multi_zone_market_clearing  # Iterative UC-MPCC with flow feedback
 export mz_build_books, mz_solve_pass, mz_extract_anchor_inputs, mz_rebuild_anchored  # Exposed clearing stages
+export run_pipelined_backfill  # Producer-consumer pipelined multi-zone backfill
 export compute_net_imports_from_flows, compute_max_flow_change, apply_damping  # Flow conversion utilities
 export compute_max_price_change, compute_max_relative_flow_change  # Price-based convergence
 
@@ -3535,5 +3536,9 @@ function _process_zone_chunk(zone_chunk, date, order_method, model, optimizer,
 
     return chunk_results
 end
+
+# Producer/consumer pipelined multi-zone backfill (defined last so it can call
+# the exposed mz_* clearing stages and the save_* helpers).
+include("PipelinedBackfill.jl")
 
 end
