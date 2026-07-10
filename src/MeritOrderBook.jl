@@ -323,6 +323,13 @@ Base.@kwdef struct ZoneProfile
     nuclear_srmc_floor::Float64 = 0.0
     opportunity_anchor::Symbol = :none
     anchor_share::Float64 = 0.9
+    # Seasonal water-value drawdown (reservoir_opportunity zones only): raise the
+    # water-value floor with the absolute reservoir drawdown vs the trailing
+    # 52-week peak, so winter depletion prices stored water as scarcer even when
+    # the prior-year-relative dryness reads ~0. On for the mainland reservoir
+    # zones (SE1/SE2); off for far-north export-congested NO4, whose low price
+    # is set by export congestion, not the seasonal water value.
+    seasonal_drawdown::Bool = true
 end
 
 "SEE / default profile — the exact v10 parameters (regression baseline)."
@@ -367,6 +374,24 @@ const NORDIC_PROFILE = ZoneProfile(
     # peak, so hydro is cheap off-peak but firms up into the evening.
     water_value_base = 0.6,
     water_value_span = 0.5,
+)
+
+"""
+Far-north Norway (NO4). Same reservoir-opportunity hydro as NORDIC but with the
+seasonal drawdown OFF: NO4 is congestion-isolated (actuals ≈ €29 year-round —
+it exports into a constrained grid, so its price is set by the export bottleneck,
+not by the winter shadow value of its still-brimming reservoirs, which stay near
+80% full in February). With the drawdown on (iter6 c2), NO4 over-priced by +8.6
+in winter; off, it stays centered (+0.2) while SE1/SE2 keep the drawdown lift.
+"""
+const NO4_PROFILE = ZoneProfile(
+    hydro_model = :reservoir_opportunity,
+    scarcity_threshold = 1.2,
+    scarcity_kappa = 1.0,
+    peak_kappa = 0.5,
+    water_value_base = 0.6,
+    water_value_span = 0.5,
+    seasonal_drawdown = false,
 )
 
 """
@@ -564,7 +589,7 @@ const ZONE_PROFILES = Dict{String,ZoneProfile}(
     # Norway — southern/mid zones carry the :hydro opportunity anchor;
     # NO4 (far north, not continentally coupled) stays plain NORDIC
     "NO1" => NORWAY_PROFILE, "NO2" => NORWAY_PROFILE, "NO3" => NORWAY_PROFILE,
-    "NO4" => NORDIC_PROFILE, "NO5" => NORWAY_PROFILE,
+    "NO4" => NO4_PROFILE, "NO5" => NORWAY_PROFILE,
     "SE1" => NORDIC_PROFILE, "SE2" => NORDIC_PROFILE,
     # SE3/SE4: anchored after the iter5 SE2–SE3/SE3–SE4 border drop (see
     # SWEDEN_SOUTH_PROFILE docstring)
@@ -709,6 +734,46 @@ function get_reservoir_dryness(bidding_zone::String, day::Date)
     (isempty(norm) || ismissing(norm.med[1]) || Float64(norm.med[1]) <= 0.0) && return nothing
 
     return clamp(1.0 - Float64(current.stored_energy_mwh[1]) / Float64(norm.med[1]), 0.0, 1.0)
+end
+
+"""
+    get_reservoir_drawdown(bidding_zone::String, day::Date) -> Union{Float64,Nothing}
+
+Absolute reservoir DRAWDOWN: `clamp(1 - stored / trailing-52-week max, 0, 1)`,
+using the latest stored energy strictly before `day`'s ISO week and the maximum
+stored energy over the preceding 52 weeks (both ex-ante — only weeks before the
+market day enter). 0 at the seasonal reservoir peak (autumn), rising toward 1 as
+the reservoir empties through winter into spring.
+
+This is the SEASONAL complement to `get_reservoir_dryness`. Dryness normalizes
+against the *same week of prior years*, so a normal winter drawdown reads
+dryness ≈ 0 even though the water is absolutely scarce and its shadow value is
+high (measured: SE1/SE2 reservoirs draw down to 55–60% of the annual max by
+February at dryness 0, yet the model priced their water at the full-reservoir
+floor → SE1/SE2 clearing ≈ €18 vs actual ≈ €59). Drawdown restores that seasonal
+water-value signal from fundamentals (reservoir physics), with no month dummies.
+"""
+function get_reservoir_drawdown(bidding_zone::String, day::Date)
+    iso_week = Int(Dates.week(day))
+    iso_year = year(day)
+    df = sql2df_with_retry(
+        """
+        WITH hist AS (
+          SELECT year, week, stored_energy_mwh
+          FROM entsoe.aggregated_hydro_storage_filling_rate
+          WHERE area_map_code = \$1 AND area_type_code LIKE 'BZN%'
+            AND stored_energy_mwh IS NOT NULL
+            AND (year < \$2 OR (year = \$2 AND week < \$3))
+            AND (year > \$2 - 2 OR (year = \$2 - 1 AND week >= \$3))
+        )
+        SELECT (SELECT stored_energy_mwh FROM hist ORDER BY year DESC, week DESC LIMIT 1) AS cur,
+               (SELECT MAX(stored_energy_mwh) FROM hist) AS mx
+        """,
+        [bidding_zone, iso_year, iso_week]
+    )
+    (isempty(df) || ismissing(df.cur[1]) || ismissing(df.mx[1]) ||
+        Float64(df.mx[1]) <= 0.0) && return nothing
+    return clamp(1.0 - Float64(df.cur[1]) / Float64(df.mx[1]), 0.0, 1.0)
 end
 
 """
@@ -1059,6 +1124,7 @@ function create_merit_order_book(
         hydro_pmax = sum((g.p_max for g in generators if is_hydro(g)); init=0.0)
         hydro_scale = 1.0   # offered-quantity cap (fraction of nameplate)
         hydro_dryness = 0.0 # 0 = normal water conditions, →1 = severe drought
+        reservoir_drawdown = 0.0 # 0 = reservoir at seasonal peak, →1 = drawn down
         if hydro_pmax > 1.0
             hydro_avail = get_hydro_availability(bidding_zone, day)
             if hydro_avail !== nothing
@@ -1093,6 +1159,17 @@ function create_merit_order_book(
             # value, not rationed through quantity.
             if hydro_model == :reservoir_opportunity
                 hydro_scale = clamp(1.0 - hydro_dryness, 0.5, 1.0)
+                # Seasonal water-value signal: the absolute reservoir drawdown
+                # (vs the trailing-52-week peak) prices the water as scarcer
+                # through winter even when the prior-year-relative dryness reads
+                # ~0. Affects the PRICE (wv_frac below), never the offered
+                # quantity. Only the non-anchored reservoir zones
+                # (SE1/SE2/FI/DK1/DK2/NO4) reach the wv_frac branch — the
+                # Norway/alpine :hydro-anchored zones price off the anchor.
+                if profile.seasonal_drawdown
+                    dd = get_reservoir_drawdown(bidding_zone, day)
+                    dd !== nothing && (reservoir_drawdown = dd)
+                end
             end
             println("  💧 Hydro: offer scale $(round(hydro_scale, digits=2)), " *
                     "dryness $(round(hydro_dryness, digits=2))" *
@@ -1250,7 +1327,11 @@ function create_merit_order_book(
                         # shaped by within-day demand. NOT gas-anchored at parity
                         # — full Nordic reservoirs price well below gas, which is
                         # what stops the scarcity/cap blow-up.
-                        wv_frac = 0.35 + 0.65 * hydro_dryness
+                        # Floor rises with EITHER prior-year dryness OR the
+                        # absolute seasonal drawdown (winter reservoir depletion
+                        # raises the shadow value of stored water — SE1/SE2 draw
+                        # to 55–60% of the annual peak by February at dryness 0).
+                        wv_frac = 0.35 + 0.65 * max(hydro_dryness, reservoir_drawdown)
                         gas_srmc * wv_frac * (water_value_base + water_value_span * norm_demand)
                     else
                         gas_srmc * (1.0 + water_value_dry_boost * hydro_dryness) *
