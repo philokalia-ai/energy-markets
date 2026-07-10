@@ -1011,6 +1011,9 @@ from the enriched network (falling back to observed net imports, import-only):
   export outlet, while AT/SK-only (cal12) fixed HU (bias +70→+0.5, MAE 75→30)
   and left SI within tolerance (corr 0.79→0.75).
 
+- **Belgium (Core FBMC)**: BE–FR, BE–NL, BE–DE_LU — import ATCs collapse to
+  0–350 MW mid-morning while physical flows carry 1.4–1.9 GW (see inline
+  comment); BE's +46 residual peaks exactly in the collapse hours.
 - **Sweden-internal (SE2–SE3, SE3–SE4)**: the published implicit ATC into SE3
   collapses to ~118 MW average while the physical Norrland transfer carries
   ~5 GW (see inline comment) — the same flow-based-residual signature, starving
@@ -1037,6 +1040,18 @@ function flow_based_drop_borders(footprint::AbstractVector{<:AbstractString})
     if "HU" in fp
         for z in ("AT", "SK")
             z in fp && push!(pairs, ordered("HU", z))
+        end
+    end
+    # Belgium's Core FBMC borders (BE–FR, BE–NL, BE–DE_LU). Same audit as HU:
+    # measured 2026-04-01..05, the implicit import ATCs into BE collapse to
+    # 0–1 MW (DE_LU→BE at h08–09) and ~50–350 MW (FR/NL→BE mid-morning
+    # through midday) while the physical flows average 1.4–1.9 GW (max ~4.1
+    # GW) — and BE's residual peaks exactly there (+68…+94 at h07–h11,
+    # cal15 bias +46 all-day). GB is outside the footprint, so BE's observed
+    # GB flows were already retained as injections.
+    if "BE" in fp
+        for z in ("FR", "NL", "DE_LU")
+            z in fp && push!(pairs, ordered("BE", z))
         end
     end
     # Swedish-internal flow-based cuts (SE2–SE3, SE3–SE4). The implicit
