@@ -228,7 +228,9 @@ end
 # EUPHEMIA_RESULTS_DB) ATTACHed to the extract connection as `results_db`. The
 # `_duckdb_rewrite` redirect above makes reads of `simulations.energy_prices`
 # etc. resolve there transparently.
-const RESULTS_DB_PATH = Ref{String}(get(ENV, "EUPHEMIA_RESULTS_DB", "data/results.duckdb"))
+# NOTE: read from ENV in __init__ (not here) — top-level values are baked in at
+# PRECOMPILE time, so an ENV read here would ignore the runtime environment.
+const RESULTS_DB_PATH = Ref{String}("data/results.duckdb")
 const _RESULTS_ATTACHED = Ref{Bool}(false)
 
 # ATTACH the results DB (created on first attach) and create the result tables
