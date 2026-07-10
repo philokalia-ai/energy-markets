@@ -916,6 +916,45 @@ function _create_multi_zone_order_book_alternative(zones::Vector{String}, day::D
 end
 
 """
+    shadowed_aggregate_codes(footprint) -> Vector{String}
+
+When a country is represented in the clearing footprint by its bidding-zone
+sub-nodes (Italy: `IT-*`; Denmark: `DK1`/`DK2`), the ENTSO-E *aggregate* alias
+for the same physical area (`IT`, `DK`) — and, for the German bidding zone
+`DE_LU`, the four TSO control-area aliases — must never re-enter a footprint
+zone's observed net imports. If they did, that country's cross-border energy
+would be double-counted: once endogenously through the sub-node's power balance
+and cross-border flow variables, and once again as a fixed observed injection
+over the same physical interconnector filed under the aggregate code.
+
+Returns the set of aggregate/alias map codes to exclude from observed net
+imports for *every* footprint zone, given which sub-nodes are present. Codes
+that are themselves footprint nodes are never returned.
+
+Empirically these aliases are published at CTA/CTY area-type level and are
+therefore already dropped by `get_net_imports`' `BZN`-both-sides filter, so this
+is a defensive belt-and-suspenders layer: it is a no-op for the current data and
+for any footprint without split-country sub-zones (e.g. the 5-zone SEE set,
+which yields an empty result and is thus byte-identical to the prior behaviour).
+"""
+function shadowed_aggregate_codes(footprint::AbstractVector{<:AbstractString})
+    fp = Set(String.(footprint))
+    shadows = Set{String}()
+    # Italy: any IT sub-zone present → the aggregate "IT" is a shadow alias
+    any(z -> startswith(z, "IT-"), fp) && push!(shadows, "IT")
+    # Denmark: DK1/DK2 present → the aggregate "DK" is a shadow alias
+    (("DK1" in fp) || ("DK2" in fp)) && push!(shadows, "DK")
+    # Germany: DE_LU bidding zone present → its TSO control-area aliases are shadows
+    if "DE_LU" in fp
+        for c in ("DE_50HzT", "DE_Amprion", "DE_TenneT_GER", "DE_TransnetBW")
+            push!(shadows, c)
+        end
+    end
+    # Never shadow a code that is itself a real footprint node
+    return sort(collect(setdiff(shadows, fp)))
+end
+
+"""
     _create_multi_zone_order_book_merit(zones::Vector{String}, day::Date)
 
 Multi-zone order book built from per-zone merit-order books.
@@ -956,6 +995,17 @@ function _create_multi_zone_order_book_merit(zones::Vector{String}, day::Date)
         push!(atc_linked[b], a)
     end
 
+    # Aggregate/alias codes for countries represented here by sub-zones must be
+    # dropped from EVERY footprint zone's observed net imports (defensive — the
+    # BZN-both-sides filter in get_net_imports already excludes them). Empty for
+    # footprints without split-country sub-zones, so the 5-zone SEE path is
+    # unchanged.
+    shadow_codes = shadowed_aggregate_codes(zones)
+    isempty(shadow_codes) ||
+        println("   🚫 Shadowed aggregate codes excluded from observed imports: $(join(shadow_codes, ", "))")
+
+    zone_exclude(keep::Vector{String}) = sort(unique(vcat(keep, shadow_codes)))
+
     function build_zone_book(zone::String, exclude::Vector{String})
         kept = sort([z for z in zones if z != zone && !(z in exclude)])
         isempty(kept) ||
@@ -973,7 +1023,7 @@ function _create_multi_zone_order_book_merit(zones::Vector{String}, day::Date)
     for zone in zones
         try
             println("   📊 Processing zone $zone...")
-            result = build_zone_book(zone, sort(collect(atc_linked[zone])))
+            result = build_zone_book(zone, zone_exclude(sort(collect(atc_linked[zone]))))
 
             if !result.success
                 @warn "Failed to generate merit orders for zone $zone: $(result.message)"
@@ -1005,7 +1055,7 @@ function _create_multi_zone_order_book_merit(zones::Vector{String}, day::Date)
             affected = sort([c for c in atc_linked[zone] if c in failed_zones])
             isempty(affected) && continue
             @warn "Rebuilding $zone book: ATC-linked zone(s) $(join(affected, ", ")) failed — restoring their observed net imports"
-            exclude = sort([c for c in atc_linked[zone] if !(c in failed_zones)])
+            exclude = zone_exclude(sort([c for c in atc_linked[zone] if !(c in failed_zones)]))
             result = build_zone_book(zone, exclude)
             result.success || error("Rebuild of $zone book failed: $(result.message)")
             zone_orders[zone] = result.order_book.orders
@@ -1116,9 +1166,15 @@ function run_multi_zone_market_clearing(date::Date;
                                         save_to_db::Bool=false,
                                         force_rerun::Bool=false,
                                         parallel::Bool=false,
-                                        max_workers::Union{Int, Nothing}=nothing)
+                                        max_workers::Union{Int, Nothing}=nothing,
+                                        clearing_mode::String="multi_zone")
 
     start_time = time()
+    # Label the optimization_runs row so a non-standard footprint (e.g. the
+    # Europe-wide "multi_zone_eu" experiment) does not collide with the standard
+    # "MULTI_ZONE" run for the same date. Default preserves prior behaviour.
+    run_zone_label = clearing_mode == "multi_zone" ? "MULTI_ZONE" :
+                     "MULTI_ZONE_" * uppercase(replace(clearing_mode, "multi_zone_" => ""))
 
     println("=" ^ 60)
     println("🌍 MULTI-ZONE MARKET CLEARING WITH TRANSMISSION FLOWS")
@@ -1218,7 +1274,7 @@ function run_multi_zone_market_clearing(date::Date;
             try
                 # Save optimization run record first and get the ID
                 optimization_run_id = save_optimization_run(
-                    "MULTI_ZONE",  # Use special identifier for multi-zone runs
+                    run_zone_label,  # Special identifier for multi-zone runs (footprint-aware)
                     date,
                     order_method,
                     :mpcc_multi_zone,
@@ -1234,7 +1290,7 @@ function run_multi_zone_market_clearing(date::Date;
                 for zone in order_book.nodes
                     if haskey(result.market_prices, zone)
                         save_energy_prices(result.market_prices[zone], zone, date, order_method;
-                                           clearing_mode="multi_zone",
+                                           clearing_mode=clearing_mode,
                                            optimization_run_id=optimization_run_id)
                     end
                 end
