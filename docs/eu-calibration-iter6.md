@@ -27,9 +27,10 @@ so diagnostics run concurrently). `LABEL=… WORKERS=2 SUBSAMPLE=… BASELINE=�
 
 ## 2. Baseline → final on the sample (39-zone, v1.1 extract, D-0)
 
-Aggregate: **mean MAE 49.9 → 45.4, mean bias +18.8 → +14.6, mean corr
+Aggregate: **mean MAE 49.9 → 45.2, mean bias +18.8 → +13.9, mean corr
 0.507 → 0.513.** GR guard held at every step (corr 0.83, MAE 23.6; SEE 5-zone
-product byte-identical 131.34/84.96, RS dropped, 2026-04-03).
+product byte-identical 131.34/84.96, RS dropped, 2026-04-03). Three accepted
+changes: C1 (SK), C2 (Nordic drawdown), C3 (import-ATC scarcity credit).
 
 The zones that moved (everything else within ±0.5 MAE):
 
@@ -38,10 +39,10 @@ The zones that moved (everything else within ±0.5 MAE):
 | **SK** | 0.34 / 229.1 / +195.5 | 0.43 / **39.3** / −19.8 | **−189.8 MAE** — the win |
 | **SE1** | 0.46 / 31.6 / −23.5 | 0.50 / 29.7 / **−13.6** | seasonal drawdown |
 | **SE2** | 0.48 / 31.9 / −23.8 | 0.50 / 29.5 / **−13.8** | seasonal drawdown |
-| PL | 0.56 / 79.3 / +69.7 | 0.58 / 89.2 / +80.6 | +9.9 MAE (SK-drop reshuffle) |
-| LV | 0.47 / 123.3 / +74.6 | 0.47 / 126.5 / +77.9 | +3.2 MAE (same) |
-| LT | 0.46 / 122.2 / +78.2 | 0.47 / 125.4 / +81.6 | +3.1 MAE (same) |
-| EE | 0.47 / 125.8 / +84.2 | 0.47 / 128.9 / +87.5 | +3.2 MAE (same) |
+| PL | 0.56 / 79.3 / +69.7 | 0.57 / 86.0 / +75.7 | +6.7 MAE (SK-drop reshuffle, C3-healed) |
+| LV | 0.47 / 123.3 / +74.6 | 0.47 / 126.3 / +73.9 | +3.0 MAE (same) |
+| LT | 0.46 / 122.2 / +78.2 | 0.46 / 125.2 / +77.6 | +3.0 MAE (same) |
+| EE | 0.47 / 125.8 / +84.2 | 0.47 / 128.6 / +83.5 | +2.8 MAE (same) |
 | NO4 | 0.19 / 29.8 / +0.2 | 0.19 / 29.8 / +0.2 | held (drawdown gated off) |
 
 ## 3. Accepted changes
@@ -81,6 +82,19 @@ drawdown on it over-priced +8.6). Only reservoir-opportunity + drawdown zones ar
 touched; SEE is gas-anchored and untouched. **SE1/SE2 bias −24 → −14, MAE −2
 each.** No month dummies — pure reservoir fundamentals.
 
+### C3 — gated import-ATC scarcity credit (continental + Baltic)
+The scarcity margin (`dispatchable_capacity / net_demand`) ignored a zone's
+available import capacity, so import/export-capable thermal zones mis-fired the
+mark-up. `get_import_atc_capacity` + a gated `scarcity_import_credit` (default 0 =
+SEE byte-identical) credit offered import ATC into the margin (scarcity term only;
+the peak term is left intact). Enabled at 1.0 for CONTINENTAL (DE_LU/NL/PL/CZ) and
+BALTIC (EE/LT/LV). **PL bias +80.6 → +75.7** (partially healing the C1
+side-effect), EE/LT/LV −4.0 each, DE_LU −1.6, CZ −1.0; no regressions. Small but
+sound — and the diagnosis it produced is the key iter7 signal: DE_LU's +68 is
+**not** scarcity-term-driven (its margin only tightens at peak hours), so the
+residual is the fleet/merit + peak markup. This mechanism is the down-payment on
+the systemic fix in §5.
+
 ## 4. Ex-ante audit (`docs/ex-ante-audit.md`)
 
 Audited every book query. **One** forward-looking leak: same-day observed
@@ -106,11 +120,13 @@ flipped.
   excludes imports and export-capability, and the unit-level thermal fleet is
   under-represented (DE gas 15 GW unit-level vs ~35 GW installed; idle capacity
   never enters the p95-based fleet completion). The Baltics are the mirror: EE's
-  all-oil-shale fleet (1.06 GW vs 1.44 GW load) is import-dependent, but the
-  scarcity margin ignores the (mostly endogenous) FI/SE4 imports. **This is a
-  systemic scarcity-formula change** (credit imports / suppress scarcity for net
-  exporters / use installed rather than p95 capacity) that touches the SEE core
-  and must be validated cross-zone — too risky to land in a night. **Highest-value
+  all-oil-shale fleet (1.06 GW vs 1.44 GW load) is import-dependent. **C3
+  credited import ATC and confirmed the diagnosis**: it only moved DE_LU −1.6, so
+  the +68 is **not** the scarcity term (DE's margin tightens only at peak). The
+  remaining, higher-value iter7 work is (a) use **installed** rather than
+  p95-observed thermal capacity so idle plant stops looking scarce (DE gas 15 GW
+  listed vs ~35 GW installed), and (b) revisit **peak_kappa** for exporters. Both
+  touch the SEE core's shape and must be validated cross-zone. **Highest-value
   iteration-7 item.**
 - **LT–SE4 (NordBalt) residual** (ATC avg 200 vs 724 MW physical) is a genuine
   flow-based residual, but dropping it needs the drop+anchor treatment (else the
