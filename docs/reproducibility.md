@@ -65,19 +65,44 @@ never be mutated.
 ## 4. Reproduce
 
 ```bash
-# Quick: GR single-zone + the 39-zone EU multi-zone clear, 2026-04-01..05 (minutes)
+# Quick: GR single-zone + the 39-zone EU multi-zone clear, 2026-04-01..05
 julia --project=. bin/reproduce.jl --quick
 
 # A custom window (multi-zone over the footprint; add --single GR to also clear GR alone)
 julia --project=. bin/reproduce.jl --range 2026-03-01 2026-03-07 --single GR
 
-# Full: the 3.5-year GR single-zone backfill + monthly-sampled EU multi-zone weeks
-#   (hours). The complete 3.5y × 39 zones is ~24h — available, but not the default.
-julia --project=. bin/reproduce.jl --full
+# Full: the 3.5-year GR single-zone backfill + monthly-sampled EU multi-zone weeks.
+julia --project=. bin/reproduce.jl --full --workers auto
 ```
 
 Uses **HiGHS** by default (open-source, no license). Gurobi is optional
 (`--optimizer gurobi`, needs a license) and typically a few times faster.
+
+### Parallel reproduction (`--workers N|auto`)
+
+Reproduction wall-time lives in the number of DAYS, and days are independent —
+`--workers N` clears them in parallel. DuckDB is single-writer but supports any
+number of read-only *processes* on one file, so the coordinator drops its
+extract handle to read-only, spawns N workers that each open the extract
+read-only (with no Postgres environment at all), `pmap`s the days with
+`save_to_db=false`, then tears the pool down and persists all returned prices
+itself — the results DB is only ever written by one process. `auto` = half the
+machine's threads, capped at the day count. With HiGHS there is no license cap,
+so day-level parallelism scales freely.
+
+Indicative wall-times (80-core box, HiGHS; a 39-zone multi-zone day is
+~10–15 min sequential — dominated by order-book scans of the 125M-row per-unit
+table — and a GR single-zone day is ~20 s):
+
+| Tier | 1 worker (sequential) | 8 workers | 40 workers |
+|------|----------------------:|----------:|-----------:|
+| `--quick` (5 days, single + multi) | ~1 h | ~15 min (5-day cap) | ~15 min (5-day cap) |
+| `--range`, 1 week EU multi-zone | ~1.5 h | ~15 min | ~15 min (7-day cap) |
+| `--full`, GR 3.5 y single-zone part | ~8 h | ~1 h | ~15 min |
+| `--full`, EU sampled weeks (~290 days) | ~2–3 days | ~8 h | ~1.5–2 h |
+| full 3.5 y × 39 zones (1,277 days, via `--range`) | ~10 days | ~1.5 days | ~7 h |
+
+(Gurobi shortens the multi-zone solve further; book building is the floor.)
 
 Each run writes `results/<tier>_report.md` (per-zone corr / MAE / bias tables) and
 `results/<tier>_metrics.csv`. `--quick` additionally diffs against the committed
