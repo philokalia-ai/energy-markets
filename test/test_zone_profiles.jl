@@ -77,6 +77,9 @@ const V10_TRANCHES = [(0.55, 0.95), (0.20, 1.05), (0.15, 1.25), (0.10, 1.60)]
         end
         @test get_zone_profile("NO4") === NORDIC_PROFILE  # far north: no anchor
         @test NORDIC_PROFILE.opportunity_anchor == :none
+        @test SWISS_PROFILE.opportunity_anchor == :hydro   # iter3: CH storage
+        @test SWISS_PROFILE.hydro_model == :reservoir_opportunity
+        @test get_zone_profile("CH") === SWISS_PROFILE
     end
 
     @testset "opportunity anchor is a no-op without profile opt-in" begin

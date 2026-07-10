@@ -332,6 +332,29 @@ const NORWAY_PROFILE = ZoneProfile(
 )
 
 """
+Switzerland. Hydro-storage dominated (large reservoir + pumped fleet, thin
+thermal) but was on CONTINENTAL_PROFILE, so its storage was priced
+gas-anchored (~€119 base with scarcity markup) — measured cal8 residual +28
+to +78 in EVERY hour, worst at peaks and in RES-surplus midday where the
+actual price collapses to ~0 but the sim stays ~47. Same structural object
+as Norway: storage prices at the export opportunity. NORDIC-style
+reservoir-opportunity hydro plus the two-pass :hydro anchor; CH's neighbors
+(DE_LU, FR, IT-NORTH) are all endogenous and well-calibrated, so the anchor
+ref is the border-capacity-weighted mean of their pass-1 prices. Swiss
+reservoir filling data exists in entsoe.aggregated_hydro_storage_filling_rate
+(590 weekly rows, current), so dryness is real, not a proxy.
+"""
+const SWISS_PROFILE = ZoneProfile(
+    hydro_model = :reservoir_opportunity,
+    scarcity_threshold = 1.2,
+    scarcity_kappa = 1.0,
+    peak_kappa = 0.5,
+    water_value_base = 0.6,
+    water_value_span = 0.5,
+    opportunity_anchor = :hydro,
+)
+
+"""
 Baltic (EE/LT/LV). Tightly coupled to the Nordic hydro system and thermally
 thin; softened scarcity like the continental core. Left close to SEE otherwise —
 their residual error is expected to shrink once the Nordic zones are corrected.
@@ -374,7 +397,7 @@ const ZONE_PROFILES = Dict{String,ZoneProfile}(
     # Continental core
     "DE_LU" => CONTINENTAL_PROFILE,
     "BE" => CONTINENTAL_PROFILE, "NL" => CONTINENTAL_PROFILE,
-    "AT" => CONTINENTAL_PROFILE, "CH" => CONTINENTAL_PROFILE,
+    "AT" => CONTINENTAL_PROFILE, "CH" => SWISS_PROFILE,
     "PL" => CONTINENTAL_PROFILE, "CZ" => CONTINENTAL_PROFILE,
     "SK" => CONTINENTAL_PROFILE,
 )
