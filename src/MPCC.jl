@@ -767,16 +767,29 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
             stepwise_acceptance[order_id] <= stepwise_acceptance_complementarity_aux[order_id] * 1.0)
         for (i, order) in enumerate(simple_orders)
             order_id = order_ids[i]
-            # widest span the rhs can attain, covering bids outside the limits
-            rhs_span = max(order.price, order_book.price_limits[2]) -
-                       min(order.price, order_book.price_limits[1])
-            # rhs = dual + |q|·(bid-vs-price gap); dual itself is bounded by
-            # the order's max surplus, so 2× the quantity-weighted span covers
-            # both terms
+            # TIGHT per-order bound on the rejected-order rhs. When aux = 0
+            # the acceptance is 0, which (via side 2's second constraint)
+            # forces aux2 = 0 and hence dual = 0 — so the rhs reduces to
+            # |q|·(bid-vs-price gap): q·(bid − floor) for supply,
+            # q·(ceiling − bid) for demand, both maximized at the far price
+            # bound. When aux = 1 the constraint pins rhs to 0 and the
+            # constant is unused. The previous 2·q·span headroom for the
+            # dual term was vacuous (dual is provably 0 in the aux = 0
+            # branch) and produced ~1e8 coefficients on multi-GW cap-priced
+            # demand blocks (2 × 60 GW × 3500), whose integrality-tolerance
+            # leakage (~1e-5 × 1e8 ≈ 4000 €·MW) is the measured source of
+            # false INFEASIBLE certificates on large books (2026-04-02: the
+            # blamed hour solves optimal in isolation). For a cap-priced
+            # demand block the tight constant is exactly 0 — the coefficient
+            # disappears entirely. Bids outside the price limits keep their
+            # documented behaviour: rejection is impossible via the rhs ≥ 0
+            # constraint itself, independent of this constant.
+            m1 = order.type == :supply ?
+                 order.quantity * max(0.0, order.price - order_book.price_limits[1]) :
+                 order.quantity * max(0.0, order_book.price_limits[2] - order.price)
             @constraint(model,
                 stepwise_dual_rhs[order_id] <=
-                (1 - stepwise_acceptance_complementarity_aux[order_id]) *
-                2.0 * order.quantity * rhs_span)
+                (1 - stepwise_acceptance_complementarity_aux[order_id]) * m1)
         end
 
         # Side 2: dual ⊥ (1 - acceptance) — only a FULLY accepted order may
