@@ -11,3 +11,6 @@ data/results.duckdb
 # Reproduction outputs (committed reference lives in results/reference/)
 results/*
 !results/reference/
+
+# Results SPA: exported data is fetched at deploy time, never committed
+web/data/
