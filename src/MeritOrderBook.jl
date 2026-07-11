@@ -115,9 +115,11 @@ const FLOW_ASOF_CLASS = Ref{Symbol}(:all)
 # stay same-day. See docs/ex-ante-flows.md.
 const FLOW_ASOF_MODE = Ref{Symbol}(:d0)
 
-# Nordic hydro zones for the :v2 border split (recency beats climatology).
-const NORDIC_FLOW_ZONES = Set(["NO1", "NO2", "NO3", "NO4", "NO5",
-                               "SE1", "SE2", "SE3", "SE4", "FI", "DK1", "DK2"])
+# Norwegian reservoir zones for the :v2 border split (recency beats
+# climatology there). Measured refinement: with the full Nordic set (incl.
+# FI/SE/DK) FI regressed −0.13 corr — its SE1/SE3 imports prefer the
+# climatology; only the NO* reservoir regimes need the D-7 recency.
+const NORDIC_FLOW_ZONES = Set(["NO1", "NO2", "NO3", "NO4", "NO5"])
 
 """
     set_flow_asof_lag!(n::Int)
