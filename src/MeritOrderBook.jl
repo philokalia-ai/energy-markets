@@ -367,6 +367,26 @@ Base.@kwdef struct ZoneProfile
     # offered ATC only (D-1 legal). Softens ONLY the scarcity margin; the actual
     # imports still clear through the MPCC.
     scarcity_import_credit::Float64 = 0.0
+    # Fleet-truth mode (iter7). What each MARKET-ACTIVE fuel type's fleet is
+    # trued to (completed up to by fleet completion, never derated below by
+    # fleet truthing):
+    #   :p95       — trailing-30d p95 (default; the byte-identical v10/iter6
+    #                behaviour — GR/SEE must stay here: the crisis-honesty
+    #                derate depends on it).
+    #   :seasonal  — max(30d p95, trailing-365d p95): last-YEAR observed
+    #                capability. Captures merit-order-idle capacity that ran in
+    #                the previous winter but not the last 30 days, while
+    #                excluding closed plants and grid-reserve units that never
+    #                clear the market. Pure observed output, ex-ante.
+    #   :installed — the ENTSO-E registry's installed capacity (activity-gated
+    #                per type at 30d p95 > 100 MW). Largest fleet: also pulls
+    #                in mothballed/reserve capacity with stale COMMISSIONED
+    #                status (measured iter7: over-adds — broad negative bias).
+    # Fixes the under-counted idle thermal of the meshed continental core:
+    # units idle on merit order never enter the 30d-p95 completion, so the book
+    # cleared deep in the expensive tranches (DE_LU sim €178 vs actual €109
+    # with 44 GW modeled vs ~60 GW active-installed).
+    fleet_truth_mode::Symbol = :p95
     # Seasonal water-value drawdown (reservoir_opportunity zones only): raise the
     # water-value floor with the absolute reservoir drawdown vs the trailing
     # 52-week peak, so winter depletion prices stored water as scarcer even when
@@ -396,6 +416,23 @@ const CONTINENTAL_PROFILE = ZoneProfile(
     # and are frequently net exporters — the domestic scarcity mark-up mis-fired
     # (DE_LU +70, a NET EXPORTER, priced €178). Credit available import ATC.
     scarcity_import_credit = 1.0,
+    # iter7: idle-but-existing thermal (merit-order idle, not closed) never
+    # appears in the 30d-p95 completion, so the book cleared deep in the
+    # expensive tranches (DE_LU modeled 44 GW vs ~60 GW active-installed;
+    # measured gaps: DE hard coal 21.0 installed vs 9.8 GW modeled, lignite
+    # 19.6 vs 11.2, gas 19.5 vs 15.2; PL hard coal 18.6 vs 14.1).
+    #
+    # iter7 measured :installed here at a TRANSFORMATIVE gain (DE_LU MAE 73→22
+    # corr 0.62→0.80, PL 86→30, aggregate meanMAE 45→32) but it makes the
+    # coupled MIP infeasible on 1/36 sample days (2025-07-24; bisected to the
+    # DE_LU book — ~30 GW of added supply creates a degenerate/infeasible
+    # complementarity model that survives the whole retry ladder), and AT/DK2
+    # lose corr. :seasonal (trailing-365d p95) was measured a NO-OP on the
+    # winter failure days — the idle capacity never generates even across a
+    # year. Until the MPCC robustness issue is fixed, the continental core
+    # stays on :p95 (the measured iter6 state); the full evidence lives in
+    # docs/eu-calibration-iter7.md.
+    fleet_truth_mode = :p95,
 )
 
 """
@@ -618,6 +655,10 @@ const BALTIC_PROFILE = ZoneProfile(
     # Nordic system via Estlink/NordBalt); the scarcity margin ignored those
     # imports and priced +78-87. Credit available import ATC.
     scarcity_import_credit = 1.0,
+    # iter7: true active types to registry installed capacity (LT's Kruonis
+    # pumped storage is 900 MW installed but only 450 MW unit-listed / 349
+    # 30d-p95; EE oil shale 1,330 installed vs 1,060 listed).
+    fleet_truth_mode = :installed,
 )
 
 """
@@ -738,6 +779,49 @@ function get_type_output_p95(bidding_zone::String, day::Date; lookback_days::Int
     )
     return Dict{String,Float64}(row.production_type => Float64(row.p95)
                                 for row in eachrow(df) if !ismissing(row.p95))
+end
+
+"""
+    get_installed_capacity_by_type(bidding_zone::String) -> Dict{String,Float64}
+
+INSTALLED capacity (MW) per fuel type from the ENTSO-E unit registry
+(`entsoe.production_and_generation_units`): COMMISSIONED units deduplicated per
+`generation_unit_code` (most recent `valid_from`, highest capacity tiebreaker —
+the standard dedup for this table's overlapping-validity data-quality issue),
+summed per `generation_unit_type`. Deliberately does NOT apply the
+date-validity / recent-generation filter of `get_generators` — that filter is
+what removes idle-but-existing capacity; the caller (installed-aware fleet
+truth) gates each type on recent market activity instead, which is what
+excludes genuinely-decommissioned capacity with stale COMMISSIONED status
+(e.g. Germany's post-phase-out nuclear). Keys are normalized fuel names.
+The registry is slowly-changing reference data (same ex-ante treatment as
+`get_generators`' use of it).
+"""
+function get_installed_capacity_by_type(bidding_zone::String)
+    df = sql2df_with_retry(
+        """
+        SELECT generation_unit_type AS t, SUM(cap) AS mw FROM (
+          SELECT DISTINCT ON (generation_unit_code)
+                 generation_unit_type, generation_unit_installed_capacity_mw AS cap
+          FROM entsoe.production_and_generation_units
+          WHERE area_map_code = \$1
+            AND production_unit_status = 'COMMISSIONED'
+            AND generation_unit_status = 'COMMISSIONED'
+            AND generation_unit_installed_capacity_mw > 0
+          ORDER BY generation_unit_code, valid_from DESC,
+                   generation_unit_installed_capacity_mw DESC
+        ) s
+        GROUP BY generation_unit_type
+        """,
+        [bidding_zone]
+    )
+    out = Dict{String,Float64}()
+    for row in eachrow(df)
+        (ismissing(row.t) || ismissing(row.mw)) && continue
+        k = normalize_fuel_type_name(String(row.t))
+        out[k] = get(out, k, 0.0) + Float64(row.mw)
+    end
+    return out
 end
 
 """
@@ -971,12 +1055,32 @@ function create_merit_order_book(
                        get_type_output_p95(bidding_zone, day) : Dict{String,Float64}()
         type_p95 = Dict{String,Float64}(
             normalize_fuel_type_name(k) => v for (k, v) in type_p95_raw)
+        # Fleet-truth mode (iter7, gated — see the ZoneProfile field docstring).
+        # `fleet_truth_target` holds the per-type truth target of MARKET-ACTIVE
+        # types only (trailing-30d p95 > 100 MW): those types complete UP to it
+        # and are never derated below it. Types with no recent output (phantom
+        # post-closure capacity with stale COMMISSIONED status) never enter —
+        # that is the activity gate that replaces get_generators' validity
+        # filter for this purpose. Empty for :p95 (the default) — byte-identical
+        # v10/iter6 behaviour.
+        fleet_truth_target = Dict{String,Float64}()
+        if fleet_completion && profile.fleet_truth_mode != :p95
+            src = profile.fleet_truth_mode == :installed ?
+                  get_installed_capacity_by_type(bidding_zone) :
+                  Dict{String,Float64}(normalize_fuel_type_name(k) => v
+                      for (k, v) in get_type_output_p95(bidding_zone, day;
+                                                        lookback_days=365))
+            for (t, cap) in src
+                get(type_p95, t, 0.0) > 100.0 && (fleet_truth_target[t] = cap)
+            end
+        end
         if fleet_completion
             for (ptype, p95) in type_p95
                 ptype in ("Wind Onshore", "Wind Offshore", "Solar") && continue
                 fleet = sum((g.p_max for g in generators
                              if g.fuel_type == Symbol(ptype)); init=0.0)
-                gap = p95 - fleet
+                target = max(p95, get(fleet_truth_target, ptype, 0.0))
+                gap = target - fleet
                 gap > 100.0 || continue
                 push!(generators, Generator(
                     "AGG-$(bidding_zone)-$(replace(ptype, " " => "_"))",
@@ -987,8 +1091,10 @@ function create_merit_order_book(
                     0.0,
                     bidding_zone,
                     get_marginal_cost(day, ptype, bidding_zone)))
+                src = target > p95 ? "installed $(round(Int, target))" :
+                                     "recent p95 $(round(Int, p95))"
                 println("  ➕ Fleet completion: +$(round(Int, gap)) MW $ptype " *
-                        "(recent p95 $(round(Int, p95)) MW vs $(round(Int, fleet)) MW unit-level)")
+                        "($src MW vs $(round(Int, fleet)) MW unit-level)")
             end
         end
 
@@ -1037,7 +1143,14 @@ function create_merit_order_book(
                             "($(round(Int, fleet_raw)) MW fleet) — derate skipped")
                     continue
                 end
-                target = derate_headroom * type_p95[ptype]
+                # Fleet-truth mode: a market-active type never derates below
+                # its truth target (the completion above just trued it to
+                # exactly that — derating it back to 1.15×30d-p95 would cancel
+                # the mechanism for precisely the baseload derate-types it
+                # targets). :p95 zones (GR/SEE) have fleet_truth_target empty —
+                # byte-identical v10 behaviour.
+                target = max(derate_headroom * type_p95[ptype],
+                             get(fleet_truth_target, ptype, 0.0))
                 fleet_raw > target + 100.0 || continue
                 derate_scale[fsym] = target / fleet_raw
                 println("  ➖ Fleet-truthing derate: $ptype ×$(round(target / fleet_raw, digits=2)) " *
