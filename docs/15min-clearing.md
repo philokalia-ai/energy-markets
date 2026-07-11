@@ -128,14 +128,15 @@ period count — and remains tractable to proven optimality with Gurobi.
   `test/test_15min_resolution.jl` (core suite); coupled-solve acceptance in
   `test/scripts/test_15min_clearing.jl`.
 
-**Deferred (Increment 2): per-period decomposition.**
+**Increment 2 (DONE): per-period decomposition** — see
+[period-decomposition.md](period-decomposition.md).
 Because every period is independent, the monolithic 96-period MILP is exactly 96
-independent 1-period clears stacked into one solve. Increment 2 will solve them
-**separately** — each slice is ~1/96th the monolithic size. That is where true
-tractability and **HiGHS-viability** come from (many tiny independent MILPs
-instead of one large one, trivially parallelizable), and it removes the ~4×
-monolithic cost. This increment deliberately keeps the single monolithic solve so
-the machinery and its correctness proof land first.
+independent 1-period clears stacked into one solve. Increment 2 solves them
+**separately** (`decompose_periods` on `run_multi_zone_market_clearing`; auto-on
+for `optimizer="highs"`), which is where **HiGHS-viability** comes from — HiGHS
+cannot find an incumbent on the monolithic 39-zone MIP but solves each
+single-period slice fine. Verified bit-exact against the Gurobi monolith
+(`max|Δλ| = 0` at 60-min) at both resolutions.
 
 Also deferred: scenario-hook propagation and the single-zone / `:uc_based` /
 `:alternative` paths (Increment 1 is coupled merit-order only).
