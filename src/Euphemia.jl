@@ -1610,6 +1610,35 @@ function run_multi_zone_market_clearing(date::Date;
                                                    mip_gap=mpcc_mip_gap,
                                                    heuristic_effort=mpcc_heuristic_effort)
 
+    # PER-DAY ROBUSTNESS FALLBACK (iter8). If the coupled MPCC stays
+    # infeasible through the entire retry ladder (including the exact
+    # indicator-form rung) and any zone's profile uses a non-:p95 fleet-truth
+    # mode, re-clear the WHOLE day with baseline :p95 books (the measured
+    # iter6 state) rather than ship a missing day. Implemented as a guarded
+    # recursion with a process-wide override so pass 2's anchored rebuilds
+    # inherit the same fleet truth. Loud by design.
+    pass1_usable = mpcc_result.status == :optimal ||
+                   (mpcc_result.status == :time_limit && !isempty(mpcc_result.market_prices))
+    if !pass1_usable && order_method == :merit_order && apply_zone_profiles &&
+       MeritOrderBook.FLEET_TRUTH_OVERRIDE[] === nothing &&
+       any(MeritOrderBook.get_zone_profile(z).fleet_truth_mode != :p95 for z in zones)
+        @warn "MPCC unusable after the full retry ladder (status=$(mpcc_result.status)) — " *
+              "re-clearing $date with fleet_truth_mode=:p95 books (installed-fleet fallback)"
+        MeritOrderBook.FLEET_TRUTH_OVERRIDE[] = :p95
+        try
+            return run_multi_zone_market_clearing(date;
+                zones=zones, order_method=order_method, optimizer=optimizer,
+                markup_factor=markup_factor, silent=silent, save_to_db=save_to_db,
+                force_rerun=force_rerun, parallel=parallel, max_workers=max_workers,
+                clearing_mode=clearing_mode, enrich_network=enrich_network,
+                apply_zone_profiles=apply_zone_profiles, passes=passes,
+                mpcc_time_limit=mpcc_time_limit, mpcc_mip_gap=mpcc_mip_gap,
+                mpcc_heuristic_effort=mpcc_heuristic_effort)
+        finally
+            MeritOrderBook.FLEET_TRUTH_OVERRIDE[] = nothing
+        end
+    end
+
     # TWO-PASS opportunity-anchor clearing (opt-in via passes=2, merit-order
     # only). Pass 1 above cleared the standard books; zones whose profile
     # opts in (opportunity_anchor != :none — southern Norway :hydro, France

@@ -780,6 +780,12 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
         @variable(model, stepwise_acceptance_complementarity_aux[order_id in order_ids], Bin)
         @constraint(model, stepwise_acceptance_complementarity_ineq1[order_id in order_ids],
             stepwise_acceptance[order_id] <= stepwise_acceptance_complementarity_aux[order_id] * 1.0)
+        # Refs to the two Big-M constraint families, collected so the last
+        # retry rung can swap them for exact indicator constraints (see the
+        # ladder below). Only those two families carry the q×price-span
+        # constants; everything else is unit-coefficient.
+        side1_bigm_cons = JuMP.ConstraintRef[]
+        side2_bigm_cons = JuMP.ConstraintRef[]
         for (i, order) in enumerate(simple_orders)
             order_id = order_ids[i]
             # TIGHT per-order bound on the rejected-order rhs. When aux = 0
@@ -802,9 +808,9 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
             m1 = order.type == :supply ?
                  order.quantity * max(0.0, order.price - order_book.price_limits[1]) :
                  order.quantity * max(0.0, order_book.price_limits[2] - order.price)
-            @constraint(model,
+            push!(side1_bigm_cons, @constraint(model,
                 stepwise_dual_rhs[order_id] <=
-                (1 - stepwise_acceptance_complementarity_aux[order_id]) * m1)
+                (1 - stepwise_acceptance_complementarity_aux[order_id]) * m1))
         end
 
         # Side 2: dual ⊥ (1 - acceptance) — only a FULLY accepted order may
@@ -829,9 +835,9 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
             max_surplus = order.type == :supply ?
                           order.quantity * max(0.0, order_book.price_limits[2] - order.price) :
                           order.quantity * max(0.0, order.price - order_book.price_limits[1])
-            @constraint(model,
+            push!(side2_bigm_cons, @constraint(model,
                 stepwise_dual[order_id] <=
-                stepwise_dual_complementarity_aux[order_id] * max_surplus)
+                stepwise_dual_complementarity_aux[order_id] * max_surplus))
             @constraint(model,
                 1 - stepwise_acceptance[order_id] <=
                 (1 - stepwise_dual_complementarity_aux[order_id]) * 1.0)
@@ -898,6 +904,43 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
                 end
             catch e
                 @warn "Numeric retry ladder unavailable ($(sprint(showerror, e))) — keeping INFEASIBLE"
+            end
+        end
+        # FINAL rung: exact indicator complementarity. The two Big-M families
+        # carry q×price-span constants up to ~2.6e8 on multi-GW cap-priced
+        # demand blocks; integrality-tolerance leakage at that magnitude is
+        # the measured source of FALSE infeasible certificates on large books
+        # (2026-04-02 previously; 2025-07-01/07-08/10-21/12-12, 2026-02-06/07
+        # in the cv14 backfill; the DE_LU book under :installed fleet truth).
+        # Swap both families for Gurobi native indicator constraints — the
+        # SAME logical model with no constants at all (aux=1 ⟹ dual_rhs ≤ 0;
+        # aux2=0 ⟹ dual ≤ 0; integer solutions pin dual = surplus exactly as
+        # before via dual_rhs ≥ 0). Only reached when every Big-M solve has
+        # failed, so the default path stays byte-identical.
+        if termination_status(model) in (MOI.INFEASIBLE, MOI.INFEASIBLE_OR_UNBOUNDED) &&
+           occursin("Gurobi", solver_name)
+            @warn "Retry ladder exhausted — swapping Big-M complementarity for exact indicator constraints"
+            try
+                for c in side1_bigm_cons
+                    delete(model, c)
+                end
+                for c in side2_bigm_cons
+                    delete(model, c)
+                end
+                for (i, order) in enumerate(simple_orders)
+                    oid = order_ids[i]
+                    @constraint(model,
+                        stepwise_acceptance_complementarity_aux[oid] -->
+                        {stepwise_dual_rhs[oid] <= 0})
+                    @constraint(model,
+                        !stepwise_dual_complementarity_aux[oid] -->
+                        {stepwise_dual[oid] <= 0})
+                end
+                set_optimizer_attribute(model, "TimeLimit", 600.0)
+                optimize!(model)
+                @info "Indicator-form re-solve finished with status $(termination_status(model))"
+            catch e
+                @warn "Indicator retry unavailable ($(sprint(showerror, e))) — keeping INFEASIBLE"
             end
         end
         solve_time = time() - start_time
@@ -1152,6 +1195,10 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
         end
 
     catch e
+        # Never swallow silently — the :error status hides the true cause
+        # (measured: a MethodError in a retry rung masqueraded as "solver
+        # returned error" for a whole day).
+        @warn "MPCC solve raised an exception — returning :error" exception=(e, catch_backtrace())
         solve_time = time() - start_time
         return MPCCResult(
             :error,

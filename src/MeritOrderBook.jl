@@ -396,6 +396,20 @@ Base.@kwdef struct ZoneProfile
     seasonal_drawdown::Bool = true
 end
 
+"""
+    FLEET_TRUTH_OVERRIDE
+
+Process-wide override of every profile's `fleet_truth_mode` (`nothing` = use
+the profile's own mode). Set to `:p95` by the multi-zone per-day robustness
+fallback: when the coupled MPCC stays infeasible through the whole retry
+ladder, the day is re-cleared with baseline v10 fleet truth rather than
+shipped missing. Always reset in a `finally` — never left set.
+"""
+const FLEET_TRUTH_OVERRIDE = Ref{Union{Nothing,Symbol}}(nothing)
+
+_effective_fleet_truth_mode(profile) =
+    something(FLEET_TRUTH_OVERRIDE[], profile.fleet_truth_mode)
+
 "SEE / default profile — the exact v10 parameters (regression baseline)."
 const SEE_PROFILE = ZoneProfile()
 
@@ -423,16 +437,19 @@ const CONTINENTAL_PROFILE = ZoneProfile(
     # 19.6 vs 11.2, gas 19.5 vs 15.2; PL hard coal 18.6 vs 14.1).
     #
     # iter7 measured :installed here at a TRANSFORMATIVE gain (DE_LU MAE 73→22
-    # corr 0.62→0.80, PL 86→30, aggregate meanMAE 45→32) but it makes the
-    # coupled MIP infeasible on 1/36 sample days (2025-07-24; bisected to the
-    # DE_LU book — ~30 GW of added supply creates a degenerate/infeasible
-    # complementarity model that survives the whole retry ladder), and AT/DK2
-    # lose corr. :seasonal (trailing-365d p95) was measured a NO-OP on the
-    # winter failure days — the idle capacity never generates even across a
-    # year. Until the MPCC robustness issue is fixed, the continental core
-    # stays on :p95 (the measured iter6 state); the full evidence lives in
-    # docs/eu-calibration-iter7.md.
-    fleet_truth_mode = :p95,
+    # corr 0.62→0.80, PL 86→30, aggregate meanMAE 45→32) but parked it: the
+    # DE_LU book made 1/36 sample days FALSELY infeasible — Big-M q×price-span
+    # constants up to ~2.6e8 on multi-GW cap-priced demand blocks leak through
+    # the integrality tolerance and produce false certificates that survived
+    # the numeric retry ladder. iter8 fixes that at the root: a final MPCC
+    # retry rung swaps the Big-M complementarity for EXACT Gurobi indicator
+    # constraints (no constants), plus a per-day :p95-books fallback in
+    # run_multi_zone_market_clearing as the safety net — so :installed is now
+    # enabled. :seasonal (trailing-365d p95) was measured a NO-OP on winter
+    # failure days (idle capacity never generates even across a year;
+    # :installed stands in for offered-but-undispatched units and the unlisted
+    # <100 MW CHP fleet). Evidence: docs/eu-calibration-iter7.md + iter8.
+    fleet_truth_mode = :installed,
 )
 
 """
@@ -597,6 +614,13 @@ const AUSTRIA_PROFILE = ZoneProfile(
     water_value_base = 0.6,
     water_value_span = 0.5,
     opportunity_anchor = :hydro,
+    # iter8 re-tune attempt, measured and REJECTED: with the installed-fleet
+    # fix the coupled DE ref dropped to its true level and AT under-prices
+    # (bias −13.5); raising the share 1.1 → 1.25 moved AT only −0.4 MAE /
+    # +0.6 bias — the water value clamps at gas SRMC, so the share is no
+    # longer the binding lever under the corrected ref. AT's residual is
+    # shape (corr), queued for iteration 9; the share stays at its iter5
+    # calibration.
     anchor_share = 1.1,
 )
 
@@ -1064,8 +1088,9 @@ function create_merit_order_book(
         # filter for this purpose. Empty for :p95 (the default) — byte-identical
         # v10/iter6 behaviour.
         fleet_truth_target = Dict{String,Float64}()
-        if fleet_completion && profile.fleet_truth_mode != :p95
-            src = profile.fleet_truth_mode == :installed ?
+        fleet_truth_mode = _effective_fleet_truth_mode(profile)
+        if fleet_completion && fleet_truth_mode != :p95
+            src = fleet_truth_mode == :installed ?
                   get_installed_capacity_by_type(bidding_zone) :
                   Dict{String,Float64}(normalize_fuel_type_name(k) => v
                       for (k, v) in get_type_output_p95(bidding_zone, day;
