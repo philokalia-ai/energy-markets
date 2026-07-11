@@ -1368,6 +1368,31 @@ function _create_multi_zone_order_book_merit(zones::Vector{String}, day::Date;
         end
     end
 
+    # Trim the coupled grid to periods EVERY zone covers. A zone whose load
+    # forecast is missing a period builds no orders there — most commonly the
+    # last UTC hours of a day, which belong to the NEXT CET market day and are
+    # not yet published at D-1 (GR/BG/RS lose 22:00–23:00 UTC while EET zones
+    # like RO keep them). Left in the union grid, such a period is an EMPTY node
+    # for the uncovered zone and clears at the −500 floor. Intersection drops
+    # these incomplete boundary hours cleanly. No-op when every zone covers the
+    # same periods (fully-published days share 24 hourly slots), so complete
+    # historical clears stay byte-identical.
+    zone_periods = Dict(z => Set(Dates.format(o.date_time, "yyyymmdd-HHMM")
+                                 for o in zone_orders[z]) for z in successful_zones)
+    common_periods = reduce(intersect, values(zone_periods))
+    dropped_periods = setdiff(all_periods, common_periods)
+    if !isempty(dropped_periods)
+        @warn "Coupled clear: dropping $(length(dropped_periods)) period(s) not covered by all zones " *
+              "(incomplete inputs — e.g. unpublished next-CET-day tail): " *
+              "$(join(sort(collect(dropped_periods)), ", "))"
+        for z in successful_zones
+            zone_orders[z] = filter(
+                o -> Dates.format(o.date_time, "yyyymmdd-HHMM") in common_periods,
+                zone_orders[z])
+        end
+        all_periods = common_periods
+    end
+
     all_orders = Vector{MarketOrders.MarketOrder}()
     for zone in successful_zones
         append!(all_orders, zone_orders[zone])
