@@ -160,6 +160,10 @@ function __init__()
     DotEnv.load!(".")
     # Runtime (not precompile-time) environment overrides.
     RESULTS_DB_PATH[] = get(ENV, "EUPHEMIA_RESULTS_DB", "data/results.duckdb")
+    # Ex-ante flow lag: read at runtime so the precompiled image doesn't bake in
+    # whatever EUPHEMIA_FLOW_ASOF_LAG was set (or unset) at precompile time.
+    MeritOrderBook.FLOW_ASOF_LAG[] =
+        something(tryparse(Int, get(ENV, "EUPHEMIA_FLOW_ASOF_LAG", "0")), 0)
     # Backend selection (explicit env wins; else auto-detect the public extract;
     # else Postgres; else a clear error). See `_resolve_data_store`. When DuckDB
     # is selected the eager LibPQ pool is SKIPPED entirely so the library works
@@ -1080,6 +1084,26 @@ function flow_based_drop_borders(footprint::AbstractVector{<:AbstractString})
     if "SE3" in fp
         "SE2" in fp && push!(pairs, ordered("SE2", "SE3"))
         "SE4" in fp && push!(pairs, ordered("SE3", "SE4"))
+    end
+    # Slovakia (Core FBMC). Same flow-based-residual signature as HU, on SK's
+    # own import borders: measured 2026-01-20/02-03/12-04, the implicit offered
+    # ATC CZ→SK / PL→SK average 64/24, 60/75, 128/158 MW while the physical
+    # flows carry ~2,054/1,069, 1,715/1,043, 962/263 MW — SK is a transit hub
+    # that physically imports ~3 GW from CZ+PL and exports ~2 GW to HU+UA, yet
+    # the model saw only ~90 MW of import capacity against a 4.15 GW fleet /
+    # 4.37 GW peak load, so it priced structural scarcity (iter6 sample: SK sim
+    # €313 vs actual €118, bias +195, cap-clearing in winter peaks). HU–SK was
+    # already dropped for HU's sake (iter4), but SK exports to HU so that gave
+    # SK no import help. Dropping CZ–SK and PL–SK restores the real import
+    # supply as observed import-only flows; SK carries the :hydro opportunity
+    # anchor (SK_PROFILE) so those imports price at the coupled Core reference
+    # instead of the €1 price-taker block (which would invert SK to a deep
+    # negative bias — the NO1/BE failure mode) — the drop and the anchor are
+    # ONE treatment.
+    if "SK" in fp
+        for z in ("CZ", "PL")
+            z in fp && push!(pairs, ordered("SK", z))
+        end
     end
     return sort(collect(pairs))
 end

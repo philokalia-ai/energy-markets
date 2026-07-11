@@ -69,6 +69,34 @@ const _NetBorderRow = NamedTuple{(:h, :in_code, :out_code, :avg_flow),
 const _NET_IMPORTS_DAY_CACHE = Dict{Date,Vector{_NetBorderRow}}()
 const _NET_IMPORTS_CACHE_LOCK = ReentrantLock()
 
+# --- Ex-ante flow lag (issue: same-day observed physical flows are the ONE
+# forward-looking leak in the book). `entsoe.physical_flows` for the target day
+# are the REALIZED flows of that day — not knowable at the D-1 auction. When
+# FLOW_ASOF_LAG[] > 0, `_net_imports_day_relation` reads the flows of `day - lag`
+# instead (D-2, or D-7 for the same weekday), so the observed-import supply,
+# the dropped-border import-only clamp, and the ref-priced exports all use only
+# information available before the auction. Default 0 = byte-identical to the
+# D-0 product (the counterfactual's committed behaviour is unchanged until a
+# forward product opts in). See docs/ex-ante-audit.md.
+# Initialized to 0 here (precompile time); Euphemia.__init__ sets it from
+# EUPHEMIA_FLOW_ASOF_LAG at RUNTIME so a cached precompiled image can't bake in
+# a stale value.
+const FLOW_ASOF_LAG = Ref{Int}(0)
+
+"""
+    set_flow_asof_lag!(n::Int)
+
+Days to lag the observed-physical-flow read (0 = same-day/D-0, the default and
+byte-identical product; 2 = D-2; 7 = D-7 same-weekday). Ex-ante correctness for
+the forward product — same-day realized flows are not knowable at the D-1
+auction. Clears the flow cache so the next build re-reads at the new lag.
+"""
+function set_flow_asof_lag!(n::Int)
+    FLOW_ASOF_LAG[] = n
+    clear_net_imports_cache!()
+    return n
+end
+
 """
     clear_net_imports_cache!()
 
@@ -89,8 +117,12 @@ _strip_ips(s::AbstractString) = replace(String(s), r"_IPS$" => "")
 # membership (and therefore the AVG) for any (hour, self, counterparty) pair is
 # identical to what the old per-zone query computed.
 function _net_imports_day_relation(day::Date)
+    # Ex-ante lag: read the flows of `day - lag` (D-0 default = byte-identical).
+    # The hour-of-day grouping is preserved, so the lagged day's hourly shape
+    # maps directly onto the target day's hours; cache under the queried day.
+    qday = day - Day(FLOW_ASOF_LAG[])
     cached = lock(_NET_IMPORTS_CACHE_LOCK) do
-        get(_NET_IMPORTS_DAY_CACHE, day, nothing)
+        get(_NET_IMPORTS_DAY_CACHE, qday, nothing)
     end
     cached !== nothing && return cached
     df = sql2df_with_retry(
@@ -105,7 +137,7 @@ function _net_imports_day_relation(day::Date)
           AND date_time_utc < ((\$1::date + 1)::timestamp AT TIME ZONE 'UTC')
         GROUP BY 1, in_area_map_code, out_area_map_code
         """,
-        [day])
+        [qday])
     rows = _NetBorderRow[]
     for r in eachrow(df)
         ismissing(r.avg_flow) && continue
@@ -113,7 +145,7 @@ function _net_imports_day_relation(day::Date)
                      out_code=String(r.out_code), avg_flow=Float64(r.avg_flow)))
     end
     lock(_NET_IMPORTS_CACHE_LOCK) do
-        _NET_IMPORTS_DAY_CACHE[day] = rows
+        _NET_IMPORTS_DAY_CACHE[qday] = rows
     end
     return rows
 end
@@ -213,6 +245,38 @@ function get_dropped_border_exports(bidding_zone::String, day::Date,
 end
 
 """
+    get_import_atc_capacity(bidding_zone, day) -> Dict{Int,Float64}
+
+Per-UTC-hour total OFFERED import ATC into the zone (MW), summed over all its
+borders (`in_map_code = zone`) from `offered_transfer_capacities_implicit`. Used
+by the gated `scarcity_import_credit` to credit available import capacity in the
+scarcity margin — a zone that can import GWs is not domestically scarce. Offered
+ATC is published D-1, so this is ex-ante. AVG per (border, hour) before summing
+so a border reported sub-hourly is not over-counted.
+"""
+function get_import_atc_capacity(bidding_zone::String, day::Date)
+    df = sql2df_with_retry(
+        """
+        SELECT h, SUM(cap) AS total FROM (
+          SELECT EXTRACT(HOUR FROM date_time_utc AT TIME ZONE 'UTC')::int AS h,
+                 out_map_code, AVG(capacity_mw) AS cap
+          FROM entsoe.offered_transfer_capacities_implicit
+          WHERE in_map_code = \$1
+            AND date_time_utc >= (\$2::date::timestamp AT TIME ZONE 'UTC')
+            AND date_time_utc <  ((\$2::date + 1)::timestamp AT TIME ZONE 'UTC')
+          GROUP BY 1, out_map_code
+        ) s
+        GROUP BY h
+        """,
+        [bidding_zone, day])
+    out = Dict{Int,Float64}()
+    for r in eachrow(df)
+        ismissing(r.total) || (out[Int(r.h)] = Float64(r.total))
+    end
+    return out
+end
+
+"""
     get_firm_of(bidding_zone::String) -> Dict{String,String}
 
 Map of `unit_code => firm` for a zone, from `simulations.unit_firms` (a small
@@ -294,6 +358,42 @@ Base.@kwdef struct ZoneProfile
     nuclear_srmc_floor::Float64 = 0.0
     opportunity_anchor::Symbol = :none
     anchor_share::Float64 = 0.9
+    # Scarcity import credit (iter6): fraction of the zone's offered import ATC
+    # to add to dispatchable capacity in the scarcity margin. A thermal zone with
+    # GWs of available import capacity is NOT strategically scarce even when its
+    # own derated fleet looks tight (DE_LU is a NET EXPORTER yet priced €178) —
+    # the real scarcity, if any, arrives through the coupled import PRICE, not a
+    # domestic mark-up. 0 = off (SEE/guard unchanged and byte-identical). Uses
+    # offered ATC only (D-1 legal). Softens ONLY the scarcity margin; the actual
+    # imports still clear through the MPCC.
+    scarcity_import_credit::Float64 = 0.0
+    # Fleet-truth mode (iter7). What each MARKET-ACTIVE fuel type's fleet is
+    # trued to (completed up to by fleet completion, never derated below by
+    # fleet truthing):
+    #   :p95       — trailing-30d p95 (default; the byte-identical v10/iter6
+    #                behaviour — GR/SEE must stay here: the crisis-honesty
+    #                derate depends on it).
+    #   :seasonal  — max(30d p95, trailing-365d p95): last-YEAR observed
+    #                capability. Captures merit-order-idle capacity that ran in
+    #                the previous winter but not the last 30 days, while
+    #                excluding closed plants and grid-reserve units that never
+    #                clear the market. Pure observed output, ex-ante.
+    #   :installed — the ENTSO-E registry's installed capacity (activity-gated
+    #                per type at 30d p95 > 100 MW). Largest fleet: also pulls
+    #                in mothballed/reserve capacity with stale COMMISSIONED
+    #                status (measured iter7: over-adds — broad negative bias).
+    # Fixes the under-counted idle thermal of the meshed continental core:
+    # units idle on merit order never enter the 30d-p95 completion, so the book
+    # cleared deep in the expensive tranches (DE_LU sim €178 vs actual €109
+    # with 44 GW modeled vs ~60 GW active-installed).
+    fleet_truth_mode::Symbol = :p95
+    # Seasonal water-value drawdown (reservoir_opportunity zones only): raise the
+    # water-value floor with the absolute reservoir drawdown vs the trailing
+    # 52-week peak, so winter depletion prices stored water as scarcer even when
+    # the prior-year-relative dryness reads ~0. On for the mainland reservoir
+    # zones (SE1/SE2); off for far-north export-congested NO4, whose low price
+    # is set by export congestion, not the seasonal water value.
+    seasonal_drawdown::Bool = true
 end
 
 "SEE / default profile — the exact v10 parameters (regression baseline)."
@@ -312,6 +412,27 @@ const CONTINENTAL_PROFILE = ZoneProfile(
     scarcity_threshold = 1.25,
     scarcity_kappa = 1.5,
     peak_kappa = 0.6,
+    # iter6: DE_LU/NL/PL/CZ are meshed thermal zones with GWs of import capacity
+    # and are frequently net exporters — the domestic scarcity mark-up mis-fired
+    # (DE_LU +70, a NET EXPORTER, priced €178). Credit available import ATC.
+    scarcity_import_credit = 1.0,
+    # iter7: idle-but-existing thermal (merit-order idle, not closed) never
+    # appears in the 30d-p95 completion, so the book cleared deep in the
+    # expensive tranches (DE_LU modeled 44 GW vs ~60 GW active-installed;
+    # measured gaps: DE hard coal 21.0 installed vs 9.8 GW modeled, lignite
+    # 19.6 vs 11.2, gas 19.5 vs 15.2; PL hard coal 18.6 vs 14.1).
+    #
+    # iter7 measured :installed here at a TRANSFORMATIVE gain (DE_LU MAE 73→22
+    # corr 0.62→0.80, PL 86→30, aggregate meanMAE 45→32) but it makes the
+    # coupled MIP infeasible on 1/36 sample days (2025-07-24; bisected to the
+    # DE_LU book — ~30 GW of added supply creates a degenerate/infeasible
+    # complementarity model that survives the whole retry ladder), and AT/DK2
+    # lose corr. :seasonal (trailing-365d p95) was measured a NO-OP on the
+    # winter failure days — the idle capacity never generates even across a
+    # year. Until the MPCC robustness issue is fixed, the continental core
+    # stays on :p95 (the measured iter6 state); the full evidence lives in
+    # docs/eu-calibration-iter7.md.
+    fleet_truth_mode = :p95,
 )
 
 """
@@ -338,6 +459,24 @@ const NORDIC_PROFILE = ZoneProfile(
     # peak, so hydro is cheap off-peak but firms up into the evening.
     water_value_base = 0.6,
     water_value_span = 0.5,
+)
+
+"""
+Far-north Norway (NO4). Same reservoir-opportunity hydro as NORDIC but with the
+seasonal drawdown OFF: NO4 is congestion-isolated (actuals ≈ €29 year-round —
+it exports into a constrained grid, so its price is set by the export bottleneck,
+not by the winter shadow value of its still-brimming reservoirs, which stay near
+80% full in February). With the drawdown on (iter6 c2), NO4 over-priced by +8.6
+in winter; off, it stays centered (+0.2) while SE1/SE2 keep the drawdown lift.
+"""
+const NO4_PROFILE = ZoneProfile(
+    hydro_model = :reservoir_opportunity,
+    scarcity_threshold = 1.2,
+    scarcity_kappa = 1.0,
+    peak_kappa = 0.5,
+    water_value_base = 0.6,
+    water_value_span = 0.5,
+    seasonal_drawdown = false,
 )
 
 """
@@ -483,6 +622,27 @@ const BELGIUM_PROFILE = ZoneProfile(
 )
 
 """
+Slovakia (iter6). Core FBMC transit hub whose import borders' implicit offered
+ATC are flow-based residuals (CZ→SK / PL→SK avg ~90 MW vs ~3 GW physical), so
+the endogenous model starved SK's thin fleet (4.15 GW vs 4.37 GW peak) into
+winter cap-clearing (sim €313 vs actual €118, bias +195 on the iter6 sample).
+The paired treatment (see `flow_based_drop_borders`): CZ–SK and PL–SK are
+dropped, restoring the real import supply as observed import-only flows, and
+the `:hydro` opportunity anchor prices those imports at the coupled Core
+reference (pass-1 CZ/PL/DE_LU proxy) rather than the €1 price-taker block —
+which would invert SK to a deep negative bias (the NO1/BE/SE3 failure mode
+seen three times when a border was dropped without re-pricing its flows).
+Continental scarcity temperament otherwise; the water value clamp keeps the
+anchor from manufacturing scarcity.
+"""
+const SLOVAKIA_PROFILE = ZoneProfile(
+    scarcity_threshold = 1.25,
+    scarcity_kappa = 1.5,
+    peak_kappa = 0.6,
+    opportunity_anchor = :hydro,
+)
+
+"""
 Baltic (EE/LT/LV). Tightly coupled to the Nordic hydro system and thermally
 thin; softened scarcity like the continental core. Left close to SEE otherwise —
 their residual error is expected to shrink once the Nordic zones are corrected.
@@ -491,6 +651,14 @@ const BALTIC_PROFILE = ZoneProfile(
     scarcity_threshold = 1.25,
     scarcity_kappa = 1.5,
     peak_kappa = 0.6,
+    # iter6: EE/LT/LV are import-dependent (thin domestic thermal riding the
+    # Nordic system via Estlink/NordBalt); the scarcity margin ignored those
+    # imports and priced +78-87. Credit available import ATC.
+    scarcity_import_credit = 1.0,
+    # iter7: true active types to registry installed capacity (LT's Kruonis
+    # pumped storage is 900 MW installed but only 450 MW unit-listed / 349
+    # 30d-p95; EE oil shale 1,330 installed vs 1,060 listed).
+    fleet_truth_mode = :installed,
 )
 
 """
@@ -514,7 +682,7 @@ const ZONE_PROFILES = Dict{String,ZoneProfile}(
     # Norway — southern/mid zones carry the :hydro opportunity anchor;
     # NO4 (far north, not continentally coupled) stays plain NORDIC
     "NO1" => NORWAY_PROFILE, "NO2" => NORWAY_PROFILE, "NO3" => NORWAY_PROFILE,
-    "NO4" => NORDIC_PROFILE, "NO5" => NORWAY_PROFILE,
+    "NO4" => NO4_PROFILE, "NO5" => NORWAY_PROFILE,
     "SE1" => NORDIC_PROFILE, "SE2" => NORDIC_PROFILE,
     # SE3/SE4: anchored after the iter5 SE2–SE3/SE3–SE4 border drop (see
     # SWEDEN_SOUTH_PROFILE docstring)
@@ -534,7 +702,9 @@ const ZONE_PROFILES = Dict{String,ZoneProfile}(
     # BE: dropped Core borders + :hydro anchor for import pricing (iter5)
     "BE" => BELGIUM_PROFILE, "NL" => CONTINENTAL_PROFILE,
     "PL" => CONTINENTAL_PROFILE, "CZ" => CONTINENTAL_PROFILE,
-    "SK" => CONTINENTAL_PROFILE,
+    # SK: dropped Core import borders (CZ–SK, PL–SK) + :hydro anchor for import
+    # pricing (iter6) — the HU treatment applied to SK's own residual borders
+    "SK" => SLOVAKIA_PROFILE,
 )
 
 """
@@ -612,6 +782,49 @@ function get_type_output_p95(bidding_zone::String, day::Date; lookback_days::Int
 end
 
 """
+    get_installed_capacity_by_type(bidding_zone::String) -> Dict{String,Float64}
+
+INSTALLED capacity (MW) per fuel type from the ENTSO-E unit registry
+(`entsoe.production_and_generation_units`): COMMISSIONED units deduplicated per
+`generation_unit_code` (most recent `valid_from`, highest capacity tiebreaker —
+the standard dedup for this table's overlapping-validity data-quality issue),
+summed per `generation_unit_type`. Deliberately does NOT apply the
+date-validity / recent-generation filter of `get_generators` — that filter is
+what removes idle-but-existing capacity; the caller (installed-aware fleet
+truth) gates each type on recent market activity instead, which is what
+excludes genuinely-decommissioned capacity with stale COMMISSIONED status
+(e.g. Germany's post-phase-out nuclear). Keys are normalized fuel names.
+The registry is slowly-changing reference data (same ex-ante treatment as
+`get_generators`' use of it).
+"""
+function get_installed_capacity_by_type(bidding_zone::String)
+    df = sql2df_with_retry(
+        """
+        SELECT generation_unit_type AS t, SUM(cap) AS mw FROM (
+          SELECT DISTINCT ON (generation_unit_code)
+                 generation_unit_type, generation_unit_installed_capacity_mw AS cap
+          FROM entsoe.production_and_generation_units
+          WHERE area_map_code = \$1
+            AND production_unit_status = 'COMMISSIONED'
+            AND generation_unit_status = 'COMMISSIONED'
+            AND generation_unit_installed_capacity_mw > 0
+          ORDER BY generation_unit_code, valid_from DESC,
+                   generation_unit_installed_capacity_mw DESC
+        ) s
+        GROUP BY generation_unit_type
+        """,
+        [bidding_zone]
+    )
+    out = Dict{String,Float64}()
+    for row in eachrow(df)
+        (ismissing(row.t) || ismissing(row.mw)) && continue
+        k = normalize_fuel_type_name(String(row.t))
+        out[k] = get(out, k, 0.0) + Float64(row.mw)
+    end
+    return out
+end
+
+"""
     get_reservoir_dryness(bidding_zone::String, day::Date) -> Union{Float64,Nothing}
 
 Hydrological dryness from ENTSO-E weekly reservoir filling levels
@@ -657,6 +870,46 @@ function get_reservoir_dryness(bidding_zone::String, day::Date)
     (isempty(norm) || ismissing(norm.med[1]) || Float64(norm.med[1]) <= 0.0) && return nothing
 
     return clamp(1.0 - Float64(current.stored_energy_mwh[1]) / Float64(norm.med[1]), 0.0, 1.0)
+end
+
+"""
+    get_reservoir_drawdown(bidding_zone::String, day::Date) -> Union{Float64,Nothing}
+
+Absolute reservoir DRAWDOWN: `clamp(1 - stored / trailing-52-week max, 0, 1)`,
+using the latest stored energy strictly before `day`'s ISO week and the maximum
+stored energy over the preceding 52 weeks (both ex-ante — only weeks before the
+market day enter). 0 at the seasonal reservoir peak (autumn), rising toward 1 as
+the reservoir empties through winter into spring.
+
+This is the SEASONAL complement to `get_reservoir_dryness`. Dryness normalizes
+against the *same week of prior years*, so a normal winter drawdown reads
+dryness ≈ 0 even though the water is absolutely scarce and its shadow value is
+high (measured: SE1/SE2 reservoirs draw down to 55–60% of the annual max by
+February at dryness 0, yet the model priced their water at the full-reservoir
+floor → SE1/SE2 clearing ≈ €18 vs actual ≈ €59). Drawdown restores that seasonal
+water-value signal from fundamentals (reservoir physics), with no month dummies.
+"""
+function get_reservoir_drawdown(bidding_zone::String, day::Date)
+    iso_week = Int(Dates.week(day))
+    iso_year = year(day)
+    df = sql2df_with_retry(
+        """
+        WITH hist AS (
+          SELECT year, week, stored_energy_mwh
+          FROM entsoe.aggregated_hydro_storage_filling_rate
+          WHERE area_map_code = \$1 AND area_type_code LIKE 'BZN%'
+            AND stored_energy_mwh IS NOT NULL
+            AND (year < \$2 OR (year = \$2 AND week < \$3))
+            AND (year > \$2 - 2 OR (year = \$2 - 1 AND week >= \$3))
+        )
+        SELECT (SELECT stored_energy_mwh FROM hist ORDER BY year DESC, week DESC LIMIT 1) AS cur,
+               (SELECT MAX(stored_energy_mwh) FROM hist) AS mx
+        """,
+        [bidding_zone, iso_year, iso_week]
+    )
+    (isempty(df) || ismissing(df.cur[1]) || ismissing(df.mx[1]) ||
+        Float64(df.mx[1]) <= 0.0) && return nothing
+    return clamp(1.0 - Float64(df.cur[1]) / Float64(df.mx[1]), 0.0, 1.0)
 end
 
 """
@@ -802,12 +1055,32 @@ function create_merit_order_book(
                        get_type_output_p95(bidding_zone, day) : Dict{String,Float64}()
         type_p95 = Dict{String,Float64}(
             normalize_fuel_type_name(k) => v for (k, v) in type_p95_raw)
+        # Fleet-truth mode (iter7, gated — see the ZoneProfile field docstring).
+        # `fleet_truth_target` holds the per-type truth target of MARKET-ACTIVE
+        # types only (trailing-30d p95 > 100 MW): those types complete UP to it
+        # and are never derated below it. Types with no recent output (phantom
+        # post-closure capacity with stale COMMISSIONED status) never enter —
+        # that is the activity gate that replaces get_generators' validity
+        # filter for this purpose. Empty for :p95 (the default) — byte-identical
+        # v10/iter6 behaviour.
+        fleet_truth_target = Dict{String,Float64}()
+        if fleet_completion && profile.fleet_truth_mode != :p95
+            src = profile.fleet_truth_mode == :installed ?
+                  get_installed_capacity_by_type(bidding_zone) :
+                  Dict{String,Float64}(normalize_fuel_type_name(k) => v
+                      for (k, v) in get_type_output_p95(bidding_zone, day;
+                                                        lookback_days=365))
+            for (t, cap) in src
+                get(type_p95, t, 0.0) > 100.0 && (fleet_truth_target[t] = cap)
+            end
+        end
         if fleet_completion
             for (ptype, p95) in type_p95
                 ptype in ("Wind Onshore", "Wind Offshore", "Solar") && continue
                 fleet = sum((g.p_max for g in generators
                              if g.fuel_type == Symbol(ptype)); init=0.0)
-                gap = p95 - fleet
+                target = max(p95, get(fleet_truth_target, ptype, 0.0))
+                gap = target - fleet
                 gap > 100.0 || continue
                 push!(generators, Generator(
                     "AGG-$(bidding_zone)-$(replace(ptype, " " => "_"))",
@@ -818,8 +1091,10 @@ function create_merit_order_book(
                     0.0,
                     bidding_zone,
                     get_marginal_cost(day, ptype, bidding_zone)))
+                src = target > p95 ? "installed $(round(Int, target))" :
+                                     "recent p95 $(round(Int, p95))"
                 println("  ➕ Fleet completion: +$(round(Int, gap)) MW $ptype " *
-                        "(recent p95 $(round(Int, p95)) MW vs $(round(Int, fleet)) MW unit-level)")
+                        "($src MW vs $(round(Int, fleet)) MW unit-level)")
             end
         end
 
@@ -868,7 +1143,14 @@ function create_merit_order_book(
                             "($(round(Int, fleet_raw)) MW fleet) — derate skipped")
                     continue
                 end
-                target = derate_headroom * type_p95[ptype]
+                # Fleet-truth mode: a market-active type never derates below
+                # its truth target (the completion above just trued it to
+                # exactly that — derating it back to 1.15×30d-p95 would cancel
+                # the mechanism for precisely the baseload derate-types it
+                # targets). :p95 zones (GR/SEE) have fleet_truth_target empty —
+                # byte-identical v10 behaviour.
+                target = max(derate_headroom * type_p95[ptype],
+                             get(fleet_truth_target, ptype, 0.0))
                 fleet_raw > target + 100.0 || continue
                 derate_scale[fsym] = target / fleet_raw
                 println("  ➖ Fleet-truthing derate: $ptype ×$(round(target / fleet_raw, digits=2)) " *
@@ -1007,6 +1289,7 @@ function create_merit_order_book(
         hydro_pmax = sum((g.p_max for g in generators if is_hydro(g)); init=0.0)
         hydro_scale = 1.0   # offered-quantity cap (fraction of nameplate)
         hydro_dryness = 0.0 # 0 = normal water conditions, →1 = severe drought
+        reservoir_drawdown = 0.0 # 0 = reservoir at seasonal peak, →1 = drawn down
         if hydro_pmax > 1.0
             hydro_avail = get_hydro_availability(bidding_zone, day)
             if hydro_avail !== nothing
@@ -1041,6 +1324,17 @@ function create_merit_order_book(
             # value, not rationed through quantity.
             if hydro_model == :reservoir_opportunity
                 hydro_scale = clamp(1.0 - hydro_dryness, 0.5, 1.0)
+                # Seasonal water-value signal: the absolute reservoir drawdown
+                # (vs the trailing-52-week peak) prices the water as scarcer
+                # through winter even when the prior-year-relative dryness reads
+                # ~0. Affects the PRICE (wv_frac below), never the offered
+                # quantity. Only the non-anchored reservoir zones
+                # (SE1/SE2/FI/DK1/DK2/NO4) reach the wv_frac branch — the
+                # Norway/alpine :hydro-anchored zones price off the anchor.
+                if profile.seasonal_drawdown
+                    dd = get_reservoir_drawdown(bidding_zone, day)
+                    dd !== nothing && (reservoir_drawdown = dd)
+                end
             end
             println("  💧 Hydro: offer scale $(round(hydro_scale, digits=2)), " *
                     "dryness $(round(hydro_dryness, digits=2))" *
@@ -1055,6 +1349,11 @@ function create_merit_order_book(
         dispatchable_capacity =
             availability_factor * sum((g.p_max for g in generators if !is_hydro(g)); init=0.0) +
             hydro_scale * hydro_pmax
+
+        # Available import capacity per UTC hour, credited into the scarcity
+        # margin when the profile opts in (thermal import/export zones). 0 = off.
+        import_atc_by_hour = profile.scarcity_import_credit > 0.0 ?
+            get_import_atc_capacity(bidding_zone, day) : Dict{Int,Float64}()
 
         # UC-lite commitment: only units that are actually running
         # self-schedule their minimum load. Approximate the committed set as
@@ -1158,7 +1457,13 @@ function create_merit_order_book(
             # The high exponent concentrates the markup in the true peak
             # hours: at norm_demand 0.5 (e.g. summer nights, where residual
             # demand is mid-range) the markup is ~6% of peak_kappa, not 25%.
-            margin = dispatchable_capacity / net_demand[ts]
+            # Credit available import capacity (gated): a zone that can import
+            # GWs is not domestically scarce. Only the scarcity term is relieved;
+            # the peak strategic-bidding term is left intact.
+            import_credit = profile.scarcity_import_credit > 0.0 ?
+                profile.scarcity_import_credit *
+                get(import_atc_by_hour, Dates.hour(parse_timeslot_to_datetime(ts, day)), 0.0) : 0.0
+            margin = (dispatchable_capacity + import_credit) / net_demand[ts]
             scarcity = 1.0 +
                        scarcity_kappa * max(0.0, scarcity_threshold - margin)^2 +
                        peak_kappa * norm_demand^peak_exponent
@@ -1198,7 +1503,11 @@ function create_merit_order_book(
                         # shaped by within-day demand. NOT gas-anchored at parity
                         # — full Nordic reservoirs price well below gas, which is
                         # what stops the scarcity/cap blow-up.
-                        wv_frac = 0.35 + 0.65 * hydro_dryness
+                        # Floor rises with EITHER prior-year dryness OR the
+                        # absolute seasonal drawdown (winter reservoir depletion
+                        # raises the shadow value of stored water — SE1/SE2 draw
+                        # to 55–60% of the annual peak by February at dryness 0).
+                        wv_frac = 0.35 + 0.65 * max(hydro_dryness, reservoir_drawdown)
                         gas_srmc * wv_frac * (water_value_base + water_value_span * norm_demand)
                     else
                         gas_srmc * (1.0 + water_value_dry_boost * hydro_dryness) *
