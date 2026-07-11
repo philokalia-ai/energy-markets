@@ -111,6 +111,18 @@ multi-zone days) measured **243 s** end-to-end. A per-hour decomposition of the
 multi-zone MPCC (the 24 hours are independent in the merit-order book) is the
 planned fix to make the multi-zone tier HiGHS-viable.
 
+**Re-tested on the cv15 model (iter8 books, 2026-04-03, 40-min solve budget):
+unchanged.** Two things had shifted that could have helped — tightened
+per-order Big-M constants and the deeper installed-truthed books — but HiGHS
+still finds **no incumbent** (886 B&B nodes, primal bound `-inf` at 30 min;
+dual bound stuck at the LP relaxation). The verdict stands: **multi-zone needs
+Gurobi**; single-zone remains fully HiGHS-viable. Two related notes for HiGHS
+runs of the multi-zone tier: (1) the iter8 *indicator-constraint* retry rung is
+**Gurobi-only** (HiGHS has no indicator constraints through JuMP) — the retry
+ladder detects the solver and skips that rung gracefully; (2) the per-day
+`:p95`-books fallback IS solver-agnostic and still fires. The per-hour MPCC
+decomposition remains the documented path to an open-solver multi-zone tier.
+
 ### Parallel reproduction (`--workers N|auto`)
 
 Reproduction wall-time lives in the number of DAYS, and days are independent —
