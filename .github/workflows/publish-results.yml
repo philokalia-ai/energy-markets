@@ -1,0 +1,68 @@
+name: Publish results SPA
+
+# Rebuilds and deploys the static results browser (web/) to GitHub Pages
+# whenever the "Daily ex-ante forecast" workflow completes, or on demand.
+on:
+  workflow_run:
+    workflows: ["Daily ex-ante forecast"]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+  actions: read # to download the forecast-data artifact from the other workflow
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # Skip when the triggering forecast run failed (manual dispatch always runs)
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download forecast-data artifact into web/data
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -x
+          run_id="${{ github.event.workflow_run.id }}"
+          if [ -z "$run_id" ]; then
+            # workflow_dispatch: take the latest successful forecast run
+            run_id=$(gh run list --repo "$GITHUB_REPOSITORY" \
+              --workflow "Daily ex-ante forecast" --status success \
+              --limit 1 --json databaseId --jq '.[0].databaseId' || true)
+          fi
+          if [ -n "$run_id" ] && [ "$run_id" != "null" ]; then
+            gh run download "$run_id" --repo "$GITHUB_REPOSITORY" \
+              --name forecast-data --dir web/data \
+              || echo "::warning::forecast-data artifact not found on run $run_id; SPA will fall back to fixtures"
+          else
+            echo "::warning::no successful 'Daily ex-ante forecast' run found; SPA will fall back to fixtures"
+          fi
+          ls -laR web/data || true
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: web
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    # GitHub Pages must be enabled in the repository settings
+    # (Settings -> Pages -> Source: "GitHub Actions"); until then this job
+    # fails harmlessly, so don't fail the whole workflow on it.
+    continue-on-error: true
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

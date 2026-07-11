@@ -14,4 +14,6 @@ results/*
 
 # Daily-forecast SPA data (exported by bin/export_forecast_json.jl, uploaded
 # as the forecast-data CI artifact)
+
+# Results SPA: exported data is fetched at deploy time, never committed
 web/data/

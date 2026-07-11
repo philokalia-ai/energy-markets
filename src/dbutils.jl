@@ -30,6 +30,16 @@ const DUCKDB_PATH = Ref{String}("")
 # Selected via configure_data_store!(read_only=true) or EUPHEMIA_DUCKDB_READONLY.
 const DUCKDB_READ_ONLY = Ref{Bool}(false)
 
+# When the source extract is opened read-only (DUCKDB_READ_ONLY) the pipelined
+# backfill coordinator STILL needs to persist market results — they go to the
+# SEPARATE writable `results_db` file, never to the source. This flag opts that
+# coordinator into result writes while keeping the source read-only: the
+# `results_db` ATTACH is issued READ_WRITE and `_duckdb_assert_writable()` permits
+# the write. Parallel worker processes leave it false, so their accidental writes
+# still fail loudly (they must run save_to_db=false). Set via
+# configure_data_store!(read_only=true, results_writable=true).
+const DUCKDB_RESULTS_WRITABLE = Ref{Bool}(false)
+
 # Default location the auto-detector looks for the published public extract when
 # no backend is chosen explicitly. Overridable via EUPHEMIA_DUCKDB_PATH.
 const DEFAULT_PUBLIC_EXTRACT = "data/extracts/euphemia-public.duckdb"
@@ -151,7 +161,8 @@ Returns the active `DATA_STORE[]` symbol.
 """
 function configure_data_store!(; backend::Symbol=:postgres,
                                duckdb_path::Union{Nothing,String}=nothing,
-                               read_only::Bool=false)
+                               read_only::Bool=false,
+                               results_writable::Bool=false)
     backend in (:postgres, :duckdb) ||
         error("Invalid backend: $backend (must be :postgres or :duckdb)")
 
@@ -166,13 +177,17 @@ function configure_data_store!(; backend::Symbol=:postgres,
             end
             DUCKDB_PATH[] = duckdb_path
             DUCKDB_READ_ONLY[] = read_only
+            DUCKDB_RESULTS_WRITABLE[] = results_writable
         end
         DATA_STORE[] = :duckdb
         _DUCKDB_READONLY_WARNED[] = false
         _duckdb_connection()  # open eagerly to validate the file
-        @info "Data store: DuckDB$(read_only ? " (read-only shared)" : "") — $duckdb_path"
+        mode = read_only ? (results_writable ? " (read-only source, writable results)" :
+                            " (read-only shared)") : ""
+        @info "Data store: DuckDB$(mode) — $duckdb_path"
     else
         DATA_STORE[] = :postgres
+        DUCKDB_RESULTS_WRITABLE[] = false
         @info "Data store: PostgreSQL"
     end
     return DATA_STORE[]
@@ -315,22 +330,28 @@ const _RESULTS_ATTACHED = Ref{Bool}(false)
 # extract connection returned by _duckdb_connection().
 # Fail loudly when a result write is attempted in read-only shared mode.
 function _duckdb_assert_writable()
-    DUCKDB_READ_ONLY[] && error(
+    (DUCKDB_READ_ONLY[] && !DUCKDB_RESULTS_WRITABLE[]) && error(
         "The DuckDB data store is open in read-only shared mode " *
         "(EUPHEMIA_DUCKDB_READONLY / configure_data_store!(read_only=true)); " *
         "results cannot be written from this process. Parallel workers must run " *
-        "with save_to_db=false — the coordinator persists the returned prices.")
+        "with save_to_db=false — the coordinator persists the returned prices. " *
+        "(The coordinator opts in via configure_data_store!(read_only=true, " *
+        "results_writable=true).)")
     return nothing
 end
 
 function _ensure_results_attached(con)
     lock(_DUCKDB_LOCK) do
         _RESULTS_ATTACHED[] && return
-        DUCKDB_READ_ONLY[] && _duckdb_assert_writable()
+        _duckdb_assert_writable()
         path = RESULTS_DB_PATH[]
         dir = dirname(path)
         !isempty(dir) && !isdir(dir) && mkpath(dir)
-        DBInterface.execute(con, "ATTACH IF NOT EXISTS '$(path)' AS results_db")
+        # A read-only source connection defaults its ATTACH to read-only too, so
+        # the separate results file must be attached with an explicit READ_WRITE
+        # override (DuckDB honours per-attachment access mode). Harmless when the
+        # source is already read-write.
+        DBInterface.execute(con, "ATTACH IF NOT EXISTS '$(path)' AS results_db (READ_WRITE)")
         DBInterface.execute(con, "CREATE SCHEMA IF NOT EXISTS results_db.simulations")
         DBInterface.execute(con, """
             CREATE TABLE IF NOT EXISTS results_db.simulations.energy_prices (
@@ -382,12 +403,20 @@ function _results_insert_df(df::DataFrame, table::AbstractString)
     _ensure_results_attached(con)
     lock(_DUCKDB_LOCK) do
         view = "_results_stage"
+        # register_data_frame creates a temp VIEW in the session's DEFAULT
+        # catalog. When the source extract is attached read-only that catalog
+        # can't take a CREATE, so switch the default to the writable results_db
+        # for the registration + insert, then restore it (source reads such as
+        # entsoe.* resolve against the original catalog's search path).
+        prev_db = DataFrame(DBInterface.execute(con, "SELECT current_database() AS d")).d[1]
+        DBInterface.execute(con, "USE results_db")
         DuckDB.register_data_frame(con, df, view)
         try
             DBInterface.execute(con,
                 "INSERT INTO results_db.simulations.$table SELECT * FROM $view")
         finally
             DuckDB.unregister_data_frame(con, view)
+            DBInterface.execute(con, "USE \"$(prev_db)\"")
         end
     end
     return nrow(df)

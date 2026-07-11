@@ -149,6 +149,22 @@ end
                   print(first(r).c)"""
         out = read(`$(Base.julia_cmd()) --project=$(dirname(Base.active_project())) -e $code`, String)
         @test strip(out) == "1"
+        # --- coordinator mode: read-only SOURCE + writable RESULTS ---------
+        # The pipelined-backfill coordinator shares the source read-only with its
+        # workers but must still persist results to the separate results_db. It
+        # opts in via results_writable=true; writes must succeed (unlike a plain
+        # read-only worker, tested just above, which still throws).
+        Euphemia._RESULTS_ATTACHED[] = false
+        Euphemia.configure_data_store!(backend=:duckdb, duckdb_path=extract,
+            read_only=true, results_writable=true)
+        @test Euphemia.DUCKDB_READ_ONLY[]
+        @test Euphemia.DUCKDB_RESULTS_WRITABLE[]
+        coord_id = Euphemia.save_optimization_run("GR", day, :merit_order, :mpcc, "highs", :optimal)
+        @test coord_id isa Integer
+        # source data is still untouched by the coordinator's writes
+        uf_c = Euphemia.sql2df("SELECT count(*) c FROM simulations.unit_firms", Any[])
+        @test uf_c.c[1] == 1
+
         # back to read-write: result writes work again
         Euphemia._RESULTS_ATTACHED[] = false
         Euphemia.configure_data_store!(backend=:duckdb, duckdb_path=extract, read_only=false)
@@ -158,6 +174,7 @@ end
         Euphemia._RESULTS_ATTACHED[] = false
         Euphemia.RESULTS_DB_PATH[] = prev_results
         Euphemia.DUCKDB_READ_ONLY[] = false
+        Euphemia.DUCKDB_RESULTS_WRITABLE[] = false
         if prev == :postgres
             try; Euphemia.configure_data_store!(backend=:postgres); catch; end
         end

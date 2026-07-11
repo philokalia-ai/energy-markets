@@ -312,8 +312,11 @@ function run_pipelined_backfill(days, zones::Vector{String}=String[];
                        "EUPHEMIA_DUCKDB_PATH" => extract,
                        "EUPHEMIA_DUCKDB_READONLY" => "true",
                        "ENERGY_CONN_STR" => ""]
-        # Coordinator itself needs read-write to save; workers are read-only.
-        configure_data_store!(backend=:duckdb, duckdb_path=extract, read_only=true)
+        # Workers share the source extract read-only; the coordinator keeps the
+        # source read-only too (so it can coexist with them) but opts into result
+        # writes, which land in the SEPARATE writable results_db file.
+        configure_data_store!(backend=:duckdb, duckdb_path=extract,
+                              read_only=true, results_writable=true)
     end
 
     nprocs_add = solver_workers + book_workers
@@ -368,6 +371,7 @@ function run_pipelined_backfill(days, zones::Vector{String}=String[];
                 if collect_prices
                     day_prices[r.day] = deepcopy(r.final.market_prices)
                 end
+                write_ok = true
                 if save_to_db
                     try
                         # save_prices_only mirrors the calibration runner: persist
@@ -390,15 +394,25 @@ function run_pipelined_backfill(days, zones::Vector{String}=String[];
                         !save_prices_only && !isempty(r.final.transmission_flows) &&
                             save_transmission_flows(r.final.transmission_flows, r.day)
                     catch e
+                        write_ok = false
                         @error "save failed for $(r.day)" error=e
                     end
                 end
-                saved += 1
                 _r1(x) = round(x, digits=1)
-                println("DAY $(r.day) DONE status=$(r.status) book=$(_r1(r.book_secs))s " *
-                    "waitq=$(_r1(r.waitq_secs))s solve1=$(_r1(r.solve1_secs))s " *
-                    "rebuild=$(_r1(r.rebuild_secs))s solve2=$(_r1(r.solve2_secs))s " *
-                    "total=$(_r1(total))s [$i/$N]")
+                if write_ok
+                    saved += 1
+                    println("DAY $(r.day) DONE status=$(r.status) book=$(_r1(r.book_secs))s " *
+                        "waitq=$(_r1(r.waitq_secs))s solve1=$(_r1(r.solve1_secs))s " *
+                        "rebuild=$(_r1(r.rebuild_secs))s solve2=$(_r1(r.solve2_secs))s " *
+                        "total=$(_r1(total))s [$i/$N]")
+                else
+                    # Solved fine but persistence failed — NOT a success. Count it
+                    # as failed and say so, so the run summary can never claim
+                    # saved=N while nothing reached the database.
+                    failed += 1
+                    println("DAY $(r.day) SAVE-FAILED status=$(r.status) " *
+                        "(solved but not persisted) [$i/$N]")
+                end
             else
                 failed += 1
                 println("DAY $(r.day) FAIL   status=$(r.status) err=$(something(r.err, "")) [$i/$N]")

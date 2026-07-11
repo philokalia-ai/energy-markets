@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Euphemia — ex-ante results browser</title>
+<link rel="stylesheet" href="./style.css">
+</head>
+<body>
+<div id="fixture-banner" class="fixture-banner" hidden>
+  FIXTURE DATA — synthetic example data for development, not model output
+</div>
+
+<header class="site-header">
+  <div class="header-inner">
+    <div class="title-block">
+      <h1>Euphemia results</h1>
+      <p class="subtitle">Ex-ante day-ahead price predictions vs settled actuals, per bidding zone</p>
+    </div>
+    <nav class="tabs" role="tablist" aria-label="Views">
+      <button id="tab-explorer" class="tab" role="tab" aria-selected="true" data-view="explorer">Zone explorer</button>
+      <button id="tab-board" class="tab" role="tab" aria-selected="false" data-view="board">Scoreboard</button>
+    </nav>
+  </div>
+</header>
+
+<main class="main">
+  <div id="load-error" class="load-error" hidden></div>
+
+  <!-- ============ Zone explorer ============ -->
+  <section id="view-explorer" class="view" role="tabpanel" aria-labelledby="tab-explorer">
+    <div class="filter-row">
+      <label class="filter">
+        <span class="filter-label">Zone</span>
+        <select id="zone-select" aria-label="Bidding zone"></select>
+      </label>
+      <div class="filter" id="lead-filter" hidden>
+        <span class="filter-label">Lead time</span>
+        <div id="lead-buttons" class="segmented" role="group" aria-label="Lead time"></div>
+      </div>
+    </div>
+
+    <div class="explorer-grid">
+      <aside class="day-panel">
+        <h2 class="panel-title">Recent days</h2>
+        <ul id="day-list" class="day-list"></ul>
+      </aside>
+
+      <div class="chart-card">
+        <div class="chart-head">
+          <h2 id="chart-title" class="chart-title"></h2>
+          <p id="chart-sub" class="chart-sub"></p>
+        </div>
+        <div id="day-stats" class="stat-row"></div>
+        <div id="chart-legend" class="legend"></div>
+        <div id="chart-wrap" class="chart-wrap"></div>
+        <details class="table-details">
+          <summary>Hourly values (table)</summary>
+          <div class="table-scroll"><table id="hour-table" class="data-table"></table></div>
+        </details>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ Scoreboard ============ -->
+  <section id="view-board" class="view" role="tabpanel" aria-labelledby="tab-board" hidden>
+    <div class="filter-row">
+      <label class="filter">
+        <span class="filter-label">Window</span>
+        <select id="window-select" aria-label="Scoring window"></select>
+      </label>
+    </div>
+    <div class="chart-card">
+      <div class="table-scroll">
+        <table id="scoreboard-table" class="data-table scoreboard"></table>
+      </div>
+      <p class="caption">
+        Metrics are computed on hourly day-ahead prices over realized (settled) days only.
+        <strong>MAE</strong> is mean absolute error in €/MWh; <strong>bias</strong> is
+        mean(simulated&nbsp;−&nbsp;actual) in €/MWh, so a negative bias means the model
+        under-prices; <strong>corr</strong> is the Pearson correlation of hourly prices.
+        Correlation is color-coded: <span class="dot dot-good" aria-hidden="true"></span>&nbsp;good&nbsp;≥&nbsp;0.75,
+        <span class="dot dot-mid" aria-hidden="true"></span>&nbsp;0.40–0.75,
+        <span class="dot dot-weak" aria-hidden="true"></span>&nbsp;weak&nbsp;&lt;&nbsp;0.40.
+        Click a column header to sort (bias sorts by distance from zero); GR stays pinned first.
+        Hover a cell for the number of scored days.
+      </p>
+    </div>
+  </section>
+
+  <!-- ============ About ============ -->
+  <section class="about-card">
+    <h2 class="panel-title">About these numbers</h2>
+    <p>
+      This is a <strong>no-fit, ex-ante competitive counterfactual</strong> — a
+      fundamentals-based market-clearing model, not a statistical forecaster. Predictions
+      are frozen before the delivery day and never revised; nothing here is fitted to the
+      outcomes it is scored against. Persistent gaps between simulated and actual prices are
+      therefore <em>findings</em> about how the real market deviates from competitive
+      behavior, not model errors to be tuned away.
+    </p>
+  </section>
+</main>
+
+<footer class="site-footer">
+  <span id="footer-meta"></span>
+</footer>
+
+<script src="./app.js"></script>
+</body>
+</html>
