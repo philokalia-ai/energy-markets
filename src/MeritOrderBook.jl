@@ -115,6 +115,14 @@ const FLOW_ASOF_CLASS = Ref{Symbol}(:all)
 # stay same-day. See docs/ex-ante-flows.md.
 const FLOW_ASOF_MODE = Ref{Symbol}(:d0)
 
+# Whether FLOW_ASOF_MODE was set EXPLICITLY (env EUPHEMIA_FLOW_ASOF_MODE
+# present, or a caller passed ex_ante_mode). When false, the EU-footprint
+# multi-zone path (enrich_network=true) defaults to :v2 — the forward product —
+# while the SEE legacy paths (single-zone, 5-zone multi_zone with
+# enrich_network=false) keep :d0 and their byte-identity. See
+# docs/ex-ante-flows.md and run_multi_zone_market_clearing.
+const FLOW_ASOF_MODE_EXPLICIT = Ref{Bool}(false)
+
 # Norwegian reservoir zones for the :v2 border split (recency beats
 # climatology there). Measured refinement: with the full Nordic set (incl.
 # FI/SE/DK) FI regressed −0.13 corr — its SE1/SE3 imports prefer the

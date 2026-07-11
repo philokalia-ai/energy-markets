@@ -168,6 +168,7 @@ function __init__()
         Symbol(get(ENV, "EUPHEMIA_FLOW_ASOF_CLASS", "all"))
     MeritOrderBook.FLOW_ASOF_MODE[] =
         Symbol(get(ENV, "EUPHEMIA_FLOW_ASOF_MODE", "d0"))
+    MeritOrderBook.FLOW_ASOF_MODE_EXPLICIT[] = haskey(ENV, "EUPHEMIA_FLOW_ASOF_MODE")
     # Backend selection (explicit env wins; else auto-detect the public extract;
     # else Postgres; else a clear error). See `_resolve_data_store`. When DuckDB
     # is selected the eager LibPQ pool is SKIPPED entirely so the library works
@@ -1549,6 +1550,19 @@ function run_multi_zone_market_clearing(date::Date;
                                         enrich_network::Bool=false,
                                         apply_zone_profiles::Bool=true,
                                         passes::Int=1,
+                                        # Ex-ante flow mode for this run.
+                                        # nothing (default) resolves to:
+                                        #   :v2 on the EU-footprint path
+                                        #        (enrich_network + merit_order)
+                                        #        — the forward product —
+                                        #   the process-wide FLOW_ASOF_MODE
+                                        #        otherwise (:d0 unless env
+                                        #        EUPHEMIA_FLOW_ASOF_MODE set),
+                                        # so SEE legacy paths (5-zone
+                                        # multi_zone, enrich_network=false)
+                                        # keep same-day flows byte-identical.
+                                        # An explicit env value always wins.
+                                        ex_ante_mode::Union{Nothing,Symbol}=nothing,
                                         # MPCC solver budget. Defaults unchanged
                                         # (900 s / 1e-6). HiGHS needs a longer
                                         # budget than Gurobi to find a first
@@ -1559,6 +1573,20 @@ function run_multi_zone_market_clearing(date::Date;
                                         mpcc_heuristic_effort::Union{Float64,Nothing}=nothing)
 
     start_time = time()
+    # Resolve the ex-ante flow mode (scoped :v2 default, iter8/Phase-2): the
+    # EU-footprint path (enriched network, merit order) defaults to the fully
+    # ex-ante :v2 flow rule; every other path keeps the process-wide mode
+    # (:d0 same-day unless the env set otherwise). Explicit kwarg > explicit
+    # env > scoped default. Restored in the finally at function end. Applies
+    # to saved EU-footprint results from cv16 onward (the cv15 backfill is :d0).
+    prev_flow_mode = MeritOrderBook.FLOW_ASOF_MODE[]
+    resolved_flow_mode = ex_ante_mode !== nothing ? ex_ante_mode :
+        (MeritOrderBook.FLOW_ASOF_MODE_EXPLICIT[] ? prev_flow_mode :
+         (enrich_network && order_method == :merit_order ? :v2 : prev_flow_mode))
+    MeritOrderBook.FLOW_ASOF_MODE[] = resolved_flow_mode
+    resolved_flow_mode != prev_flow_mode &&
+        println("   🔮 Ex-ante flow mode: $resolved_flow_mode (scoped default)")
+    try
     # Label the optimization_runs row so a non-standard footprint (e.g. the
     # Europe-wide "multi_zone_eu" experiment) does not collide with the standard
     # "MULTI_ZONE" run for the same date. Default preserves prior behaviour.
@@ -1636,6 +1664,7 @@ function run_multi_zone_market_clearing(date::Date;
                 force_rerun=force_rerun, parallel=parallel, max_workers=max_workers,
                 clearing_mode=clearing_mode, enrich_network=enrich_network,
                 apply_zone_profiles=apply_zone_profiles, passes=passes,
+                ex_ante_mode=resolved_flow_mode,
                 mpcc_time_limit=mpcc_time_limit, mpcc_mip_gap=mpcc_mip_gap,
                 mpcc_heuristic_effort=mpcc_heuristic_effort)
         finally
@@ -1775,6 +1804,10 @@ function run_multi_zone_market_clearing(date::Date;
     println("\n" * "=" ^ 60)
 
     return result
+    finally
+        # Restore the process-wide ex-ante flow mode (see resolution at top).
+        MeritOrderBook.FLOW_ASOF_MODE[] = prev_flow_mode
+    end
 end
 
 """

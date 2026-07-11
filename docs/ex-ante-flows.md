@@ -117,13 +117,23 @@ averages away (SI +0.36 corr, NO2 +0.13) while the D-7 recency preserves the
 Norwegian reservoir regimes that a median mis-states (NO1: clim +99 MAE,
 D-7 −20.6). The one leak can be removed at *negative* cost.
 
-## The v2 recommendation (measured, gated, default unchanged)
+## The v2 default — scoped (user decision, 2026-07-11)
 
-**`FLOW_ASOF_MODE = :v2`** (env `EUPHEMIA_FLOW_ASOF_MODE=v2`): flow climatology
+**`:v2` is now the DEFAULT for the EU-footprint path** —
+`run_multi_zone_market_clearing` with `enrich_network=true` + `:merit_order`
+(the forward product) resolves `ex_ante_mode` to `:v2` unless an explicit
+`EUPHEMIA_FLOW_ASOF_MODE` env or `ex_ante_mode` kwarg says otherwise. The
+**SEE legacy paths keep `:d0`**: single-zone `generate_energy_prices` and the
+5-zone `multi_zone` product (`enrich_network=false`) are byte-identical to the
+validated v10 output (SEE guard re-verified after the flip: GR/BG/RO = 131.34,
+HU = 84.96). The flipped default applies to saved EU-footprint results from
+**cv16 onward** — the cv15 full-year backfill was produced with `:d0`
+(see CLAUDE.md version history).
+
+**`FLOW_ASOF_MODE = :v2`** definition: flow climatology
 for every observed border, except D-7 same-weekday recency for borders touching
 a Norwegian reservoir zone (NO1–NO5). Fully ex-ante — every input strictly
-predates the D-1 auction. Default stays `:d0` (byte-identical committed
-product); flipping it is the product owner's call.
+predates the D-1 auction.
 
 ### Per-border strategy table
 
