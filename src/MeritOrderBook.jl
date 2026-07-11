@@ -614,6 +614,13 @@ const AUSTRIA_PROFILE = ZoneProfile(
     water_value_base = 0.6,
     water_value_span = 0.5,
     opportunity_anchor = :hydro,
+    # iter8 re-tune attempt, measured and REJECTED: with the installed-fleet
+    # fix the coupled DE ref dropped to its true level and AT under-prices
+    # (bias −13.5); raising the share 1.1 → 1.25 moved AT only −0.4 MAE /
+    # +0.6 bias — the water value clamps at gas SRMC, so the share is no
+    # longer the binding lever under the corrected ref. AT's residual is
+    # shape (corr), queued for iteration 9; the share stays at its iter5
+    # calibration.
     anchor_share = 1.1,
 )
 
