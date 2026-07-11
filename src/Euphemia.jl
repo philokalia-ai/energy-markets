@@ -371,7 +371,7 @@ export generate_market_orders_from_uc, apply_bidding_strategy_to_uc, UCToBidsRes
 export FuelTypeParameters, get_fuel_type_parameters, apply_fuel_type_constraints!
 
 # Temporal resolution utilities
-export parse_resolution_to_minutes, determine_finest_resolution, generate_sub_slots_from_source, disaggregate_temporal_data
+export parse_resolution_to_minutes, determine_finest_resolution, generate_sub_slots_from_source, disaggregate_temporal_data, replicate_to_finer_resolution
 
 # Market clearing with ENTSO-E integration
 export euphemia_market_clearing_with_entsoe
@@ -1211,6 +1211,7 @@ function _create_multi_zone_order_book_merit(zones::Vector{String}, day::Date;
     enrich_network::Bool=false, apply_zone_profiles::Bool=true,
     anchor_refs::Dict{String,Dict{String,Float64}}=Dict{String,Dict{String,Float64}}(),
     cached_zone_orders::Dict{String,Vector{MarketOrders.MarketOrder}}=Dict{String,Vector{MarketOrders.MarketOrder}}(),
+    clear_resolution_minutes::Int=60,
     scenario::Union{Nothing,ZoneScenario,Dict{String,ZoneScenario}}=nothing)
     isempty(zones) && error("At least one bidding zone must be specified")
 
@@ -1298,7 +1299,7 @@ function _create_multi_zone_order_book_merit(zones::Vector{String}, day::Date;
             profile=profile,
             net_import_exclude=exclude,
             net_import_import_only=import_only,
-            target_resolution_minutes=60,
+            target_resolution_minutes=clear_resolution_minutes,
             res_coalesce_missing=enrich_network,
             anchor_prices=get(anchor_refs, zone, nothing),
             anchor_export_mw=anchor_export_mw,
@@ -1440,9 +1441,11 @@ Pass-1 multi-zone merit-order book build — identical to what
 """
 function mz_build_books(zones::Vector{String}, date::Date;
     enrich_network::Bool=false, apply_zone_profiles::Bool=true,
+    clear_resolution_minutes::Int=60,
     scenario::Union{Nothing,ZoneScenario,Dict{String,ZoneScenario}}=nothing)
     return _create_multi_zone_order_book_merit(zones, date;
         enrich_network=enrich_network, apply_zone_profiles=apply_zone_profiles,
+        clear_resolution_minutes=clear_resolution_minutes,
         scenario=scenario)
 end
 
@@ -1510,10 +1513,12 @@ function mz_rebuild_anchored(zones::Vector{String}, date::Date,
     refs::Dict{String,Dict{String,Float64}},
     cached::Dict{String,Vector{MarketOrders.MarketOrder}};
     enrich_network::Bool=false, apply_zone_profiles::Bool=true,
+    clear_resolution_minutes::Int=60,
     scenario::Union{Nothing,ZoneScenario,Dict{String,ZoneScenario}}=nothing)
     return _create_multi_zone_order_book_merit(zones, date;
         enrich_network=enrich_network, apply_zone_profiles=apply_zone_profiles,
-        anchor_refs=refs, cached_zone_orders=cached, scenario=scenario)
+        anchor_refs=refs, cached_zone_orders=cached,
+        clear_resolution_minutes=clear_resolution_minutes, scenario=scenario)
 end
 
 """
@@ -1596,6 +1601,16 @@ function run_multi_zone_market_clearing(date::Date;
                                         enrich_network::Bool=false,
                                         apply_zone_profiles::Bool=true,
                                         passes::Int=1,
+                                        # Temporal resolution of the coupled
+                                        # clear. Default 60 (24 hourly periods)
+                                        # is byte-identical to the pre-existing
+                                        # path. Set 15 for a 96-period 15-minute
+                                        # clear: each zone's book is built on the
+                                        # shared 15-min grid, with coarser
+                                        # (hourly) zones replicated up per the
+                                        # replicate-not-divide rule. Merit-order
+                                        # path only.
+                                        clear_resolution_minutes::Int=60,
                                         # Ex-ante flow mode for this run.
                                         # nothing (default) resolves to:
                                         #   :v2 on the EU-footprint path
@@ -1682,6 +1697,7 @@ function run_multi_zone_market_clearing(date::Date;
         # cross-zone flows endogenous via ATC-constrained MPCC
         _create_multi_zone_order_book_merit(zones, date; enrich_network=enrich_network,
                                             apply_zone_profiles=apply_zone_profiles,
+                                            clear_resolution_minutes=clear_resolution_minutes,
                                             scenario=scenario)
     else
         error("Invalid order_method: $order_method. Must be :uc_based, :alternative or :merit_order")
@@ -1718,6 +1734,7 @@ function run_multi_zone_market_clearing(date::Date;
                 force_rerun=force_rerun, parallel=parallel, max_workers=max_workers,
                 clearing_mode=clearing_mode, enrich_network=enrich_network,
                 apply_zone_profiles=apply_zone_profiles, passes=passes,
+                clear_resolution_minutes=clear_resolution_minutes,
                 ex_ante_mode=resolved_flow_mode,
                 mpcc_time_limit=mpcc_time_limit, mpcc_mip_gap=mpcc_mip_gap,
                 mpcc_heuristic_effort=mpcc_heuristic_effort, scenario=scenario)
@@ -1748,6 +1765,7 @@ function run_multi_zone_market_clearing(date::Date;
                 anchor_inputs.refs, anchor_inputs.cached;
                 enrich_network=enrich_network,
                 apply_zone_profiles=apply_zone_profiles,
+                clear_resolution_minutes=clear_resolution_minutes,
                 scenario=scenario)
             println("\n⚡ Running pass-2 market clearing optimization...")
             result2 = mz_solve_pass(order_book2;

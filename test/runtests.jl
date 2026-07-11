@@ -174,6 +174,13 @@ println()
         include(joinpath(@__DIR__, "test_forecast_tracking.jl"))
     end
 
+    @testset "15-min Resolution" begin
+        println("\n" * "=" ^ 60)
+        println("Running 15-min Resolution (upsample) Tests...")
+        println("=" ^ 60)
+        include(joinpath(@__DIR__, "test_15min_resolution.jl"))
+    end
+
 end
 
 # =============================================================================
