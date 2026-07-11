@@ -924,6 +924,76 @@ ON simulations.optimization_runs (status, optimization_date)
 end
 
 """
+    ensure_forecast_tables()
+
+Creates the daily-forecast product tables if they don't exist (idempotent DDL):
+
+- `simulations.forecast_prices`: true ex-ante hourly price predictions. Unlike
+  `simulations.energy_prices` (backfills over realized days), every row carries
+  `prediction_made_utc` (when the prediction was produced) and `lead_days`
+  (market_date − prediction date, in days), so accuracy can be tracked HONESTLY
+  per region and per lead time — a prediction is only ever written for days that
+  had not yet realized at write time.
+- `simulations.forecast_scores`: per (market_date, zone, lead_days, code_version)
+  accuracy scores (MAE, bias = sim − actual, Pearson corr) computed once the
+  day's actual day-ahead prices realize.
+
+Postgres-only (no-op with a warning under the read-only DuckDB backend).
+Called by `bin/daily_forecast.jl` / `bin/score_forecasts.jl`.
+"""
+function ensure_forecast_tables()
+    _duckdb_readonly_guard("ensure_forecast_tables") && return nothing
+    withdb() do cnx
+        LibPQ.execute(cnx, "CREATE SCHEMA IF NOT EXISTS simulations")
+
+        LibPQ.execute(cnx, """
+        CREATE TABLE IF NOT EXISTS simulations.forecast_prices (
+            id BIGSERIAL PRIMARY KEY,
+            market_date DATE NOT NULL,
+            date_time_utc TIMESTAMPTZ NOT NULL,
+            bidding_zone TEXT NOT NULL,
+            price_eur_mwh DOUBLE PRECISION NOT NULL,
+            prediction_made_utc TIMESTAMPTZ NOT NULL,
+            lead_days INT NOT NULL,
+            clearing_mode TEXT NOT NULL DEFAULT 'multi_zone_eu',
+            code_version INT NOT NULL,
+            optimization_run_id BIGINT,
+            created_at TIMESTAMPTZ DEFAULT now(),
+            UNIQUE (date_time_utc, bidding_zone, lead_days, code_version)
+        )
+        """)
+
+        LibPQ.execute(cnx, """
+        CREATE TABLE IF NOT EXISTS simulations.forecast_scores (
+            market_date DATE NOT NULL,
+            bidding_zone TEXT NOT NULL,
+            lead_days INT NOT NULL,
+            code_version INT NOT NULL,
+            n_hours INT,
+            mae DOUBLE PRECISION,
+            bias DOUBLE PRECISION,  -- sim − actual
+            corr DOUBLE PRECISION,
+            scored_at TIMESTAMPTZ DEFAULT now(),
+            PRIMARY KEY (market_date, bidding_zone, lead_days, code_version)
+        )
+        """)
+
+        LibPQ.execute(cnx, """
+        CREATE INDEX IF NOT EXISTS idx_forecast_prices_market_date
+        ON simulations.forecast_prices (market_date, lead_days, code_version)
+        """)
+
+        LibPQ.execute(cnx, """
+        CREATE INDEX IF NOT EXISTS idx_forecast_prices_zone_time
+        ON simulations.forecast_prices (bidding_zone, date_time_utc)
+        """)
+    end
+
+    @info "Forecast tables schema verified/created"
+    return nothing
+end
+
+"""
     save_energy_prices(prices::Dict{String,Float64}, bidding_zone::String, day::Date, order_method::Symbol;
                        clearing_mode::String="single_zone", optimization_run_id::Union{Integer,Nothing}=nothing,
                        batch_size::Int=100, create_schema::Bool=true)
