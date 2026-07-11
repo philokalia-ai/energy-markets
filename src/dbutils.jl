@@ -554,11 +554,16 @@ end
 # physically mirrored, capping every border by the opposite direction's
 # ATC, July 2026; v9 -> v10: crisis-year honesty — fleet-truthing derate
 # of baseload types to trailing p95 (phantom 2022 lignite) and absolute
-# instead of proportional must-run below-cost discount, July 2026) so new
-# results are never mixed with — or skipped because of — old rows. Each
-# version is one selectable "Run" in the Metabase counterfactual
-# dashboard.
-const ENERGY_PRICES_CODE_VERSION = 14
+# instead of proportional must-run below-cost discount, July 2026;
+# v10 -> v14: the calibrated 39-zone EU-footprint model / v0.2.0, July 2026;
+# v14 -> v15: installed-capacity fleet truth (:installed fleet_truth_mode on
+# the continental core DE_LU/NL/PL/CZ and the Baltics), SK Core-border drop +
+# :hydro anchor, seasonal reservoir-drawdown water value, import-ATC scarcity
+# credit, and MPCC robustness — exact indicator-form complementarity retry +
+# per-day :p95-books fallback, July 2026) so new results are never mixed
+# with — or skipped because of — old rows. Each version is one selectable
+# "Run" in the Metabase counterfactual dashboard.
+const ENERGY_PRICES_CODE_VERSION = 15
 
 const poolsize = 5
 cnxpool = Pools.Pool{LibPQ.Connection}(poolsize)
