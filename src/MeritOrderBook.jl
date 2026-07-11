@@ -56,6 +56,104 @@ endogenous SE chain (measured: SE3 bias −6.5 → +578 when its NO1/FI exports
 entered as firm demand). Empty by default — the single-zone and 5-zone SEE
 paths are unchanged.
 """
+# --- Day-level physical-flow cache (shared by get_net_imports and
+#     get_dropped_border_exports) ---------------------------------------------
+# `entsoe.physical_flows` is scanned ONCE per day for ALL zones and cached; each
+# per-zone call then slices and filters the cached border relation in Julia.
+# Previously every zone (× two functions, × two passes) re-scanned the whole
+# day's flows, so a 39-zone book paid ~50 near-identical scans. Errors are never
+# cached (transient failures must be retried). Thread/process-safe via a lock;
+# each reproduce worker is its own process with its own per-day cache.
+const _NetBorderRow = NamedTuple{(:h, :in_code, :out_code, :avg_flow),
+                                 Tuple{Int,String,String,Float64}}
+const _NET_IMPORTS_DAY_CACHE = Dict{Date,Vector{_NetBorderRow}}()
+const _NET_IMPORTS_CACHE_LOCK = ReentrantLock()
+
+"""
+    clear_net_imports_cache!()
+
+Empty the day-level physical-flow border cache (tests / cold-start profiling).
+"""
+function clear_net_imports_cache!()
+    lock(_NET_IMPORTS_CACHE_LOCK) do
+        empty!(_NET_IMPORTS_DAY_CACHE)
+    end
+    return nothing
+end
+
+_strip_ips(s::AbstractString) = replace(String(s), r"_IPS$" => "")
+
+# The day's BZN-both-sides directed border relation: one AVG(flow_mw) per
+# (hour, in_area_map_code, out_area_map_code). This is the union, over all
+# zones, of every per-zone query's inner per-code aggregation — the group
+# membership (and therefore the AVG) for any (hour, self, counterparty) pair is
+# identical to what the old per-zone query computed.
+function _net_imports_day_relation(day::Date)
+    cached = lock(_NET_IMPORTS_CACHE_LOCK) do
+        get(_NET_IMPORTS_DAY_CACHE, day, nothing)
+    end
+    cached !== nothing && return cached
+    df = sql2df_with_retry(
+        """
+        SELECT EXTRACT(HOUR FROM date_time_utc AT TIME ZONE 'UTC')::int AS h,
+               in_area_map_code AS in_code,
+               out_area_map_code AS out_code,
+               AVG(flow_mw) AS avg_flow
+        FROM entsoe.physical_flows
+        WHERE in_area_type_code LIKE 'BZN%' AND out_area_type_code LIKE 'BZN%'
+          AND date_time_utc >= (\$1::date::timestamp AT TIME ZONE 'UTC')
+          AND date_time_utc < ((\$1::date + 1)::timestamp AT TIME ZONE 'UTC')
+        GROUP BY 1, in_area_map_code, out_area_map_code
+        """,
+        [day])
+    rows = _NetBorderRow[]
+    for r in eachrow(df)
+        ismissing(r.avg_flow) && continue
+        push!(rows, (h=Int(r.h), in_code=String(r.in_code),
+                     out_code=String(r.out_code), avg_flow=Float64(r.avg_flow)))
+    end
+    lock(_NET_IMPORTS_CACHE_LOCK) do
+        _NET_IMPORTS_DAY_CACHE[day] = rows
+    end
+    return rows
+end
+
+# Reconstruct the per-zone `border_hourly` CTE from the cached day relation:
+# `(hour, counterparty, direction) => avg_flow`, with the _IPS-alias dedup
+# resolved to the largest flow (the old `DISTINCT ON ... ORDER BY avg_flow
+# DESC`). `direction` = +1 when the zone is the importing (in) side, -1 when
+# exporting (out) side.
+function _zone_border_hourly(zone::String, day::Date)
+    rel = _net_imports_day_relation(day)
+    best = Dict{Tuple{Int,String,Int},Float64}()
+    for r in rel
+        if r.in_code == zone
+            cp = _strip_ips(r.out_code); dir = 1
+        elseif r.out_code == zone
+            cp = _strip_ips(r.in_code); dir = -1
+        else
+            continue
+        end
+        key = (r.h, cp, dir)
+        prev = get(best, key, nothing)
+        (prev === nothing || r.avg_flow > prev) && (best[key] = r.avg_flow)
+    end
+    return best
+end
+
+# Group border rows by hour with a deterministic per-hour ordering so the
+# floating-point SUM is reproducible run to run.
+function _border_rows_by_hour(bh::Dict{Tuple{Int,String,Int},Float64})
+    byh = Dict{Int,Vector{Tuple{String,Int,Float64}}}()
+    for ((h, cp, dir), avg) in bh
+        push!(get!(byh, h, Tuple{String,Int,Float64}[]), (cp, dir, avg))
+    end
+    for v in values(byh)
+        sort!(v)
+    end
+    return byh
+end
+
 function get_net_imports(bidding_zone::String, day::Date;
     exclude_counterparties::Vector{String}=String[],
     import_only_counterparties::Vector{String}=String[])
@@ -66,47 +164,24 @@ function get_net_imports(bidding_zone::String, day::Date;
     # 2. Dedup counterparty aliases — some borders are reported twice under
     #    two map codes for the same area (e.g. UA and UA_IPS); strip the
     #    _IPS suffix and keep one row per (hour, counterparty, direction),
-    #    deterministically preferring the larger flow (ORDER BY avg_flow
-    #    DESC breaks ties so results are reproducible run to run).
-    # date_time_utc is timestamptz; the hour key converts it with
-    # AT TIME ZONE 'UTC' and the day window converts the BOUNDS to UTC
-    # instants (keeping the column bare so an index on it stays usable) —
-    # both are correct regardless of the client session timezone.
-    df = sql2df_with_retry(
-        """
-        WITH border_hourly AS (
-            SELECT DISTINCT ON (h, counterparty, direction)
-                   h, counterparty, direction, avg_flow
-            FROM (
-                SELECT EXTRACT(HOUR FROM date_time_utc AT TIME ZONE 'UTC')::int AS h,
-                       regexp_replace(
-                           CASE WHEN in_area_map_code = \$1
-                                THEN out_area_map_code ELSE in_area_map_code END,
-                           '_IPS\$', '') AS counterparty,
-                       CASE WHEN in_area_map_code = \$1 THEN 1 ELSE -1 END AS direction,
-                       AVG(flow_mw) AS avg_flow
-                FROM entsoe.physical_flows
-                WHERE (in_area_map_code = \$1 OR out_area_map_code = \$1)
-                  AND in_area_type_code LIKE 'BZN%' AND out_area_type_code LIKE 'BZN%'
-                  AND date_time_utc >= (\$2::date::timestamp AT TIME ZONE 'UTC')
-                  AND date_time_utc < ((\$2::date + 1)::timestamp AT TIME ZONE 'UTC')
-                GROUP BY 1,
-                         CASE WHEN in_area_map_code = \$1
-                              THEN out_area_map_code ELSE in_area_map_code END,
-                         CASE WHEN in_area_map_code = \$1 THEN 1 ELSE -1 END
-            ) per_code
-            ORDER BY h, counterparty, direction, avg_flow DESC
-        )
-        SELECT h, SUM(CASE WHEN counterparty = ANY(\$4)
-                           THEN GREATEST(direction * avg_flow, 0)
-                           ELSE direction * avg_flow END) AS net_import
-        FROM border_hourly
-        WHERE counterparty <> ALL(\$3)
-        GROUP BY h
-        """,
-        [bidding_zone, day, exclude_counterparties, import_only_counterparties]
-    )
-    return Dict{Int,Float64}(row.h => row.net_import for row in eachrow(df))
+    #    deterministically preferring the larger flow.
+    # Both are done off the once-per-day cached border relation; the per-zone
+    # exclude / import-only filters are applied here in Julia.
+    bh = _zone_border_hourly(bidding_zone, day)
+    excl = Set(exclude_counterparties)
+    imponly = Set(import_only_counterparties)
+    out = Dict{Int,Float64}()
+    for (h, rows) in _border_rows_by_hour(bh)
+        s = 0.0
+        any_kept = false
+        for (cp, dir, avg) in rows
+            cp in excl && continue
+            any_kept = true
+            s += (cp in imponly) ? max(dir * avg, 0.0) : dir * avg
+        end
+        any_kept && (out[h] = s)
+    end
+    return out
 end
 
 """
@@ -121,39 +196,20 @@ import supply stays separately clamped.
 function get_dropped_border_exports(bidding_zone::String, day::Date,
     counterparties::Vector{String})
     isempty(counterparties) && return Dict{Int,Float64}()
-    df = sql2df_with_retry(
-        """
-        WITH border_hourly AS (
-            SELECT DISTINCT ON (h, counterparty, direction)
-                   h, counterparty, direction, avg_flow
-            FROM (
-                SELECT EXTRACT(HOUR FROM date_time_utc AT TIME ZONE 'UTC')::int AS h,
-                       regexp_replace(
-                           CASE WHEN in_area_map_code = \$1
-                                THEN out_area_map_code ELSE in_area_map_code END,
-                           '_IPS\$', '') AS counterparty,
-                       CASE WHEN in_area_map_code = \$1 THEN 1 ELSE -1 END AS direction,
-                       AVG(flow_mw) AS avg_flow
-                FROM entsoe.physical_flows
-                WHERE (in_area_map_code = \$1 OR out_area_map_code = \$1)
-                  AND in_area_type_code LIKE 'BZN%' AND out_area_type_code LIKE 'BZN%'
-                  AND date_time_utc >= (\$2::date::timestamp AT TIME ZONE 'UTC')
-                  AND date_time_utc < ((\$2::date + 1)::timestamp AT TIME ZONE 'UTC')
-                GROUP BY 1,
-                         CASE WHEN in_area_map_code = \$1
-                              THEN out_area_map_code ELSE in_area_map_code END,
-                         CASE WHEN in_area_map_code = \$1 THEN 1 ELSE -1 END
-            ) per_code
-            ORDER BY h, counterparty, direction, avg_flow DESC
-        )
-        SELECT h, SUM(GREATEST(-direction * avg_flow, 0)) AS export_mw
-        FROM border_hourly
-        WHERE counterparty = ANY(\$3)
-        GROUP BY h
-        """,
-        [bidding_zone, day, counterparties]
-    )
-    return Dict{Int,Float64}(row.h => row.export_mw for row in eachrow(df))
+    bh = _zone_border_hourly(bidding_zone, day)
+    keep = Set(counterparties)
+    out = Dict{Int,Float64}()
+    for (h, rows) in _border_rows_by_hour(bh)
+        s = 0.0
+        any_kept = false
+        for (cp, dir, avg) in rows
+            cp in keep || continue
+            any_kept = true
+            s += max(-dir * avg, 0.0)
+        end
+        any_kept && (out[h] = s)
+    end
+    return out
 end
 
 """
@@ -953,7 +1009,6 @@ function create_merit_order_book(
         hydro_dryness = 0.0 # 0 = normal water conditions, →1 = severe drought
         if hydro_pmax > 1.0
             hydro_avail = get_hydro_availability(bidding_zone, day)
-            hydro_norm = get_hydro_availability(bidding_zone, day; lookback_days=365)
             if hydro_avail !== nothing
                 hydro_scale = clamp(hydro_avail / hydro_pmax, 0.2, 1.0)
             end
@@ -966,8 +1021,14 @@ function create_merit_order_book(
             reservoir_dryness = get_reservoir_dryness(bidding_zone, day)
             if reservoir_dryness !== nothing
                 hydro_dryness = reservoir_dryness
-            elseif hydro_avail !== nothing && hydro_norm !== nothing && hydro_norm > 1.0
-                hydro_dryness = clamp(1.0 - hydro_avail / hydro_norm, 0.0, 1.0)
+            elseif hydro_avail !== nothing
+                # Fallback only when no reservoir filling data: the 365-day
+                # output norm is an expensive near-full scan of the per-type
+                # table, so compute it lazily here rather than unconditionally.
+                hydro_norm = get_hydro_availability(bidding_zone, day; lookback_days=365)
+                if hydro_norm !== nothing && hydro_norm > 1.0
+                    hydro_dryness = clamp(1.0 - hydro_avail / hydro_norm, 0.0, 1.0)
+                end
             end
             # Reservoir-opportunity zones (Nordic) govern offered hydro QUANTITY
             # by reservoir level, not by recent output. The p95-output cap above

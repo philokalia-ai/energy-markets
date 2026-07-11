@@ -62,6 +62,18 @@ println()
     end
 
     # -------------------------------------------------------------------------
+    # DuckDB query-path performance changes
+    # (self-contained: synthetic flows extract, no Postgres) — proves the
+    # day-level physical-flow cache is behavior-identical to the original SQL
+    # -------------------------------------------------------------------------
+    @testset "DuckDB Perf Paths" begin
+        println("\n" * "=" ^ 60)
+        println("Running DuckDB Perf Path Tests...")
+        println("=" ^ 60)
+        include(joinpath(@__DIR__, "test_duckdb_perf_paths.jl"))
+    end
+
+    # -------------------------------------------------------------------------
     # Initial Conditions Tests
     # Tests for generator initial state determination for UC optimization
     # -------------------------------------------------------------------------

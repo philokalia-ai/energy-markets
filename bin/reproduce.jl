@@ -144,6 +144,10 @@ function with_worker_pool(f, nworkers::Int)
         env=["EUPHEMIA_DATA_STORE" => "duckdb",
              "EUPHEMIA_DUCKDB_PATH" => extract,
              "EUPHEMIA_DUCKDB_READONLY" => "true",
+             # Size each worker's DuckDB engine for N-way process concurrency so
+             # the workers don't collectively oversubscribe cores/RAM (each grabs
+             # ~CPU÷N threads and ~60%RAM÷N). Env-overridable per the settings.
+             "EUPHEMIA_DUCKDB_NPROCS_HINT" => string(nworkers),
              "ENERGY_CONN_STR" => ""])
     try
         @everywhere ws @eval using Euphemia
@@ -202,16 +206,20 @@ end
 # Persist parallel single-zone results (coordinator, read-write, after teardown).
 function persist_single(zone::String, results; order_method::Symbol, optimizer::String)
     ok = 0
-    for r in results
-        if r.err !== nothing || r.prices === nothing
-            @warn "single-zone clear failed" zone=zone day=r.day error=r.err
-            continue
+    # One transaction for the whole segment — collapses ~N per-day DELETE+INSERT
+    # autocommits on the single-writer results DB into a single commit.
+    Euphemia.results_write_transaction() do
+        for r in results
+            if r.err !== nothing || r.prices === nothing
+                @warn "single-zone clear failed" zone=zone day=r.day error=r.err
+                continue
+            end
+            run_id = save_optimization_run(zone, r.day, order_method, :mpcc, optimizer, :optimal;
+                num_price_periods=length(r.prices))
+            save_energy_prices(r.prices, zone, r.day, order_method;
+                clearing_mode="single_zone", optimization_run_id=run_id)
+            ok += 1
         end
-        run_id = save_optimization_run(zone, r.day, order_method, :mpcc, optimizer, :optimal;
-            num_price_periods=length(r.prices))
-        save_energy_prices(r.prices, zone, r.day, order_method;
-            clearing_mode="single_zone", optimization_run_id=run_id)
-        ok += 1
     end
     println("  single-zone $zone: [$ok/$(length(results)) days saved]")
 end
@@ -219,20 +227,23 @@ end
 # Persist parallel multi-zone results (mirrors run_multi_zone's own save block).
 function persist_multi(results; order_method::Symbol, optimizer::String)
     ok = 0
-    for r in results
-        if r.err !== nothing || r.market_prices === nothing
-            @warn "multi-zone clear failed" day=r.day error=r.err
-            continue
+    # One transaction for the whole segment (see persist_single).
+    Euphemia.results_write_transaction() do
+        for r in results
+            if r.err !== nothing || r.market_prices === nothing
+                @warn "multi-zone clear failed" day=r.day error=r.err
+                continue
+            end
+            run_id = save_optimization_run("MULTI_ZONE", r.day, order_method,
+                :mpcc_multi_zone, something(r.solver, optimizer), something(r.status, :optimal);
+                objective_value=r.objective, solve_time_seconds=r.solve_time)
+            for (zone, prices) in r.market_prices
+                save_energy_prices(prices, zone, r.day, order_method;
+                    clearing_mode="multi_zone", optimization_run_id=run_id)
+            end
+            r.flows !== nothing && !isempty(r.flows) && save_transmission_flows(r.flows, r.day)
+            ok += 1
         end
-        run_id = save_optimization_run("MULTI_ZONE", r.day, order_method,
-            :mpcc_multi_zone, something(r.solver, optimizer), something(r.status, :optimal);
-            objective_value=r.objective, solve_time_seconds=r.solve_time)
-        for (zone, prices) in r.market_prices
-            save_energy_prices(prices, zone, r.day, order_method;
-                clearing_mode="multi_zone", optimization_run_id=run_id)
-        end
-        r.flows !== nothing && !isempty(r.flows) && save_transmission_flows(r.flows, r.day)
-        ok += 1
     end
     println("  multi-zone: [$ok/$(length(results)) days saved]")
 end

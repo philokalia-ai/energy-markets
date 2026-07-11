@@ -249,7 +249,8 @@ function create_transfer_capacity_from_entsoe(date::Date, bidding_zones::Vector{
         EXTRACT(HOUR FROM date_time_utc) + 1 as time_period,
         capacity_mw as capacity
     FROM entsoe.offered_transfer_capacities_implicit
-    WHERE DATE(date_time_utc) = \$1
+    WHERE date_time_utc >= (\$1::date::timestamp AT TIME ZONE 'UTC')
+          AND date_time_utc < ((\$1::date + 1)::timestamp AT TIME ZONE 'UTC')
     $zone_filter
     ORDER BY out_map_code, in_map_code, date_time_utc
     """
@@ -288,7 +289,8 @@ function _fetch_atc_aggregated(date::Date, table::String, codes::Vector{String};
            (EXTRACT(HOUR FROM date_time_utc) + 1)::int AS time_period,
            AVG(capacity_mw)::float8 AS capacity
     FROM entsoe.$table
-    WHERE DATE(date_time_utc) = \$1
+    WHERE date_time_utc >= (\$1::date::timestamp AT TIME ZONE 'UTC')
+          AND date_time_utc < ((\$1::date + 1)::timestamp AT TIME ZONE 'UTC')
       AND (out_map_code = ANY(\$2) OR in_map_code = ANY(\$2))
       AND capacity_mw IS NOT NULL
       $ct_filter
@@ -557,7 +559,8 @@ function get_entsoe_transfer_capacities(date::Date, source_zone::String, sink_zo
             capacity_mw as capacity_forward,
             0.0 as capacity_backward
         FROM entsoe.offered_transfer_capacities_implicit 
-        WHERE DATE(date_time_utc) = \$1
+        WHERE date_time_utc >= (\$1::date::timestamp AT TIME ZONE 'UTC')
+          AND date_time_utc < ((\$1::date + 1)::timestamp AT TIME ZONE 'UTC')
           AND out_area_code = \$2
           AND in_area_code = \$3
         ORDER BY hour
@@ -642,10 +645,12 @@ function get_zones_with_transfer_capacity(date::Date)
         query = """
         SELECT DISTINCT zone_code FROM (
             SELECT out_map_code as zone_code FROM entsoe.offered_transfer_capacities_implicit
-            WHERE DATE(date_time_utc) = \$1
+            WHERE date_time_utc >= (\$1::date::timestamp AT TIME ZONE 'UTC')
+          AND date_time_utc < ((\$1::date + 1)::timestamp AT TIME ZONE 'UTC')
             UNION
             SELECT in_map_code as zone_code FROM entsoe.offered_transfer_capacities_implicit
-            WHERE DATE(date_time_utc) = \$1
+            WHERE date_time_utc >= (\$1::date::timestamp AT TIME ZONE 'UTC')
+          AND date_time_utc < ((\$1::date + 1)::timestamp AT TIME ZONE 'UTC')
         ) AS zones
         ORDER BY zone_code
         """
@@ -748,7 +753,8 @@ function create_network_from_entsoe(date::Date, bidding_zones::Vector{String}=St
             EXTRACT(HOUR FROM date_time_utc) + 1 as time_period,
             capacity_mw as capacity
         FROM entsoe.offered_transfer_capacities_implicit 
-        WHERE DATE(date_time_utc) = \$1
+        WHERE date_time_utc >= (\$1::date::timestamp AT TIME ZONE 'UTC')
+          AND date_time_utc < ((\$1::date + 1)::timestamp AT TIME ZONE 'UTC')
         $zone_filter
         ORDER BY out_area_code, in_area_code, date_time_utc
         """
