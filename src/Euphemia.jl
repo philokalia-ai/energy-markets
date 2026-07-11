@@ -301,7 +301,7 @@ using .MeritOrderBook: create_merit_order_book, ZoneProfile, get_zone_profile,
     ZONE_PROFILES, SEE_PROFILE, IBERIA_PROFILE, CONTINENTAL_PROFILE,
     ITALY_PROFILE, NORDIC_PROFILE, BALTIC_PROFILE, FRANCE_PROFILE, NORWAY_PROFILE,
     SWISS_PROFILE, SWEDEN_SOUTH_PROFILE, AUSTRIA_PROFILE, BELGIUM_PROFILE,
-    clear_net_imports_cache!
+    clear_net_imports_cache!, ZoneScenario, zone_scenario, is_empty_scenario
 
 # ===== EXPORTS =====
 # All module exports are centralized here following Julia best practices
@@ -355,6 +355,9 @@ export create_merit_order_book
 export ZoneProfile, get_zone_profile, ZONE_PROFILES, SEE_PROFILE, IBERIA_PROFILE,
     CONTINENTAL_PROFILE, ITALY_PROFILE, NORDIC_PROFILE, BALTIC_PROFILE, FRANCE_PROFILE,
     NORWAY_PROFILE, SWISS_PROFILE, SWEDEN_SOUTH_PROFILE, AUSTRIA_PROFILE, BELGIUM_PROFILE
+
+# Counterfactual scenario primitive for the multi-zone footprint path
+export ZoneScenario
 
 # Bidding strategy functionality
 export generate_market_orders_from_uc, apply_bidding_strategy_to_uc, UCToBidsResult
@@ -595,7 +598,8 @@ function generate_energy_prices(bidding_zone::String, date::Date;
     load_modifier::Union{Nothing,Function}=nothing,
     renewable_modifier::Union{Nothing,Function}=nothing,
     extra_orders::Union{Nothing,Function}=nothing,
-    strategist::Union{Nothing,Function}=nothing)
+    strategist::Union{Nothing,Function}=nothing,
+    fleet_modifier::Union{Nothing,Function}=nothing)
 
     # Validate inputs
     if !(order_method in [:uc_based, :alternative, :merit_order])
@@ -631,7 +635,8 @@ function generate_energy_prices(bidding_zone::String, date::Date;
                                     load_modifier=load_modifier,
                                     renewable_modifier=renewable_modifier,
                                     extra_orders=extra_orders,
-                                    strategist=strategist)
+                                    strategist=strategist,
+                                    fleet_modifier=fleet_modifier)
 
             if !order_book_result.success
                 # Check if this is a data availability issue (non-retryable)
@@ -1200,7 +1205,8 @@ books and price phantom scarcity.
 function _create_multi_zone_order_book_merit(zones::Vector{String}, day::Date;
     enrich_network::Bool=false, apply_zone_profiles::Bool=true,
     anchor_refs::Dict{String,Dict{String,Float64}}=Dict{String,Dict{String,Float64}}(),
-    cached_zone_orders::Dict{String,Vector{MarketOrders.MarketOrder}}=Dict{String,Vector{MarketOrders.MarketOrder}}())
+    cached_zone_orders::Dict{String,Vector{MarketOrders.MarketOrder}}=Dict{String,Vector{MarketOrders.MarketOrder}}(),
+    scenario::Union{Nothing,ZoneScenario,Dict{String,ZoneScenario}}=nothing)
     isempty(zones) && error("At least one bidding zone must be specified")
 
     println("🌍 Creating multi-zone order book (merit-order method) for $(length(zones)) zones")
@@ -1276,6 +1282,13 @@ function _create_multi_zone_order_book_merit(zones::Vector{String}, day::Date;
         anchor_export_mw = haskey(anchor_refs, zone) && !isempty(import_only) ?
             MeritOrderBook.get_dropped_border_exports(zone, day, import_only) :
             Dict{Int,Float64}()
+        # Per-zone counterfactual scenario (nothing ⇒ byte-identical no-scenario
+        # book). Resolved for every (re)built zone, so an ANCHORED zone rebuilt
+        # in pass 2 re-applies its own scenario, and a scenario that changed a
+        # zone's pass-1 price propagates through the anchor refs to the pass-2
+        # water values of every zone that references it — scenario-consistent
+        # opportunity costs across the footprint.
+        sc = MeritOrderBook.zone_scenario(scenario, zone)
         return create_merit_order_book(zone, day;
             profile=profile,
             net_import_exclude=exclude,
@@ -1283,7 +1296,12 @@ function _create_multi_zone_order_book_merit(zones::Vector{String}, day::Date;
             target_resolution_minutes=60,
             res_coalesce_missing=enrich_network,
             anchor_prices=get(anchor_refs, zone, nothing),
-            anchor_export_mw=anchor_export_mw)
+            anchor_export_mw=anchor_export_mw,
+            load_modifier=(sc === nothing ? nothing : sc.load_modifier),
+            renewable_modifier=(sc === nothing ? nothing : sc.renewable_modifier),
+            extra_orders=(sc === nothing ? nothing : sc.extra_orders),
+            strategist=(sc === nothing ? nothing : sc.strategist),
+            fleet_modifier=(sc === nothing ? nothing : sc.fleet_modifier))
     end
 
     zone_orders = Dict{String,Vector{MarketOrders.MarketOrder}}()
@@ -1391,9 +1409,11 @@ Pass-1 multi-zone merit-order book build — identical to what
 `run_multi_zone_market_clearing` constructs for `order_method=:merit_order`.
 """
 function mz_build_books(zones::Vector{String}, date::Date;
-    enrich_network::Bool=false, apply_zone_profiles::Bool=true)
+    enrich_network::Bool=false, apply_zone_profiles::Bool=true,
+    scenario::Union{Nothing,ZoneScenario,Dict{String,ZoneScenario}}=nothing)
     return _create_multi_zone_order_book_merit(zones, date;
-        enrich_network=enrich_network, apply_zone_profiles=apply_zone_profiles)
+        enrich_network=enrich_network, apply_zone_profiles=apply_zone_profiles,
+        scenario=scenario)
 end
 
 """
@@ -1459,10 +1479,11 @@ block.
 function mz_rebuild_anchored(zones::Vector{String}, date::Date,
     refs::Dict{String,Dict{String,Float64}},
     cached::Dict{String,Vector{MarketOrders.MarketOrder}};
-    enrich_network::Bool=false, apply_zone_profiles::Bool=true)
+    enrich_network::Bool=false, apply_zone_profiles::Bool=true,
+    scenario::Union{Nothing,ZoneScenario,Dict{String,ZoneScenario}}=nothing)
     return _create_multi_zone_order_book_merit(zones, date;
         enrich_network=enrich_network, apply_zone_profiles=apply_zone_profiles,
-        anchor_refs=refs, cached_zone_orders=cached)
+        anchor_refs=refs, cached_zone_orders=cached, scenario=scenario)
 end
 
 """
@@ -1552,7 +1573,14 @@ function run_multi_zone_market_clearing(date::Date;
                                         # bin/reproduce.jl.
                                         mpcc_time_limit::Float64=900.0,
                                         mpcc_mip_gap::Float64=1e-6,
-                                        mpcc_heuristic_effort::Union{Float64,Nothing}=nothing)
+                                        mpcc_heuristic_effort::Union{Float64,Nothing}=nothing,
+                                        # Counterfactual scenario (merit-order
+                                        # path only). Either one `ZoneScenario`
+                                        # applied to every zone (hooks gate on
+                                        # `ctx.zone`) or a `Dict{String,ZoneScenario}`
+                                        # for per-zone targeting. `nothing` ⇒
+                                        # byte-identical to the no-scenario run.
+                                        scenario::Union{Nothing,ZoneScenario,Dict{String,ZoneScenario}}=nothing)
 
     start_time = time()
     # Label the optimization_runs row so a non-standard footprint (e.g. the
@@ -1596,7 +1624,8 @@ function run_multi_zone_market_clearing(date::Date;
         # Merit-order: deterministic strategy-based books per zone,
         # cross-zone flows endogenous via ATC-constrained MPCC
         _create_multi_zone_order_book_merit(zones, date; enrich_network=enrich_network,
-                                            apply_zone_profiles=apply_zone_profiles)
+                                            apply_zone_profiles=apply_zone_profiles,
+                                            scenario=scenario)
     else
         error("Invalid order_method: $order_method. Must be :uc_based, :alternative or :merit_order")
     end
@@ -1633,7 +1662,7 @@ function run_multi_zone_market_clearing(date::Date;
                 clearing_mode=clearing_mode, enrich_network=enrich_network,
                 apply_zone_profiles=apply_zone_profiles, passes=passes,
                 mpcc_time_limit=mpcc_time_limit, mpcc_mip_gap=mpcc_mip_gap,
-                mpcc_heuristic_effort=mpcc_heuristic_effort)
+                mpcc_heuristic_effort=mpcc_heuristic_effort, scenario=scenario)
         finally
             MeritOrderBook.FLEET_TRUTH_OVERRIDE[] = nothing
         end
@@ -1660,7 +1689,8 @@ function run_multi_zone_market_clearing(date::Date;
             order_book2 = mz_rebuild_anchored(zones, date,
                 anchor_inputs.refs, anchor_inputs.cached;
                 enrich_network=enrich_network,
-                apply_zone_profiles=apply_zone_profiles)
+                apply_zone_profiles=apply_zone_profiles,
+                scenario=scenario)
             println("\n⚡ Running pass-2 market clearing optimization...")
             result2 = mz_solve_pass(order_book2;
                 optimizer=optimizer, silent=silent,
