@@ -146,6 +146,18 @@ println()
         include(joinpath(@__DIR__, "test_scenario_hooks.jl"))
     end
 
+    @testset "Multi-Zone Scenario API" begin
+        println("\n" * "=" ^ 60)
+        println("Running Multi-Zone Scenario API Tests...")
+        println("=" ^ 60)
+        # Pure ZoneScenario-resolution tests always run; the book-level guards
+        # (SEE 5-zone, EU 39-zone, fleet_modifier, targeting) run when a DuckDB
+        # EU extract is available (EUPHEMIA_EU_EXTRACT or data/public/…), else
+        # skip cleanly. The solve-based two-pass propagation check is gated
+        # behind MZ_SCENARIO_SOLVE=1.
+        include(joinpath(@__DIR__, "test_multi_zone_scenario.jl"))
+    end
+
     @testset "Zone Profiles" begin
         println("\n" * "=" ^ 60)
         println("Running Zone Profile Tests...")

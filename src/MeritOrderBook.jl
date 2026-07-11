@@ -855,6 +855,78 @@ Profile for a zone, defaulting to `SEE_PROFILE` for any zone not in the registry
 """
 get_zone_profile(zone::AbstractString) = get(ZONE_PROFILES, String(zone), SEE_PROFILE)
 
+# =============================================================================
+# ZONE SCENARIO — counterfactual hooks bundled per zone
+# =============================================================================
+"""
+    ZoneScenario
+
+Bundles the counterfactual hooks that `create_merit_order_book` accepts into one
+named value, so a scenario can be attached to a zone on the multi-zone path
+(`run_multi_zone_market_clearing(...; scenario=...)`) exactly as the loose
+kwargs attach on the single-zone `generate_energy_prices` path.
+
+All fields default to `nothing`; an all-`nothing` scenario is a no-op and the
+built book is byte-identical to the no-scenario book (regression-guarded).
+
+Fields (see `create_merit_order_book`'s "Scenario hooks" docstring for the exact
+`ctx` shapes):
+- `load_modifier(timeslot, load_mw) -> Float64`     — reshape demand at source
+- `renewable_modifier(timeslot, mw) -> Float64`     — reshape RES at source
+- `extra_orders(ctx) -> Vector{SimpleOrder}`        — add supply/demand orders
+- `strategist(ctx) -> Vector{Tuple{SimpleOrder,String}}` — replace the tagged book
+- `fleet_modifier(zone, gens::Vector{Generator}) -> Vector{Generator}` — add /
+  remove / derate physical units. Runs AFTER fleet completion/truthing (see the
+  `fleet_modifier` note in `create_merit_order_book`), so a removed unit is not
+  silently re-added by the `:installed`/p95 truth-up.
+
+The `extra_orders` and `strategist` `ctx` both carry `ctx.zone`, so a single
+scenario object applied to a whole footprint can gate its edits on the zone
+(one function serving many zones); `load_modifier`/`renewable_modifier` reshape
+whatever zone they are attached to. To target specific zones with distinct
+edits, pass a `Dict{String,ZoneScenario}` — each zone gets its own scenario.
+"""
+Base.@kwdef struct ZoneScenario
+    load_modifier::Union{Nothing,Function} = nothing
+    renewable_modifier::Union{Nothing,Function} = nothing
+    extra_orders::Union{Nothing,Function} = nothing
+    strategist::Union{Nothing,Function} = nothing
+    fleet_modifier::Union{Nothing,Function} = nothing
+end
+
+"""
+    is_empty_scenario(s) -> Bool
+
+`true` when `s` is `nothing` or a `ZoneScenario` with every hook `nothing`
+(so the no-scenario code path is byte-identical). A `Dict` scenario is never
+"empty" here — emptiness is resolved per zone by `zone_scenario`.
+"""
+is_empty_scenario(::Nothing) = true
+is_empty_scenario(s::ZoneScenario) =
+    s.load_modifier === nothing && s.renewable_modifier === nothing &&
+    s.extra_orders === nothing && s.strategist === nothing &&
+    s.fleet_modifier === nothing
+
+"""
+    zone_scenario(scenario, zone) -> Union{Nothing,ZoneScenario}
+
+Resolve the `ZoneScenario` that applies to `zone`:
+- `nothing`                 → `nothing` (no scenario anywhere),
+- a single `ZoneScenario`   → the same scenario for EVERY zone (hooks gate on
+  `ctx.zone` themselves),
+- a `Dict{String,ZoneScenario}` → `get(dict, zone, nothing)` (per-zone targeting).
+An all-`nothing` `ZoneScenario` resolves to `nothing` so the byte-identical
+no-scenario path is taken.
+"""
+zone_scenario(::Nothing, ::AbstractString) = nothing
+function zone_scenario(s::ZoneScenario, ::AbstractString)
+    return is_empty_scenario(s) ? nothing : s
+end
+function zone_scenario(d::Dict{String,ZoneScenario}, zone::AbstractString)
+    s = get(d, String(zone), nothing)
+    return (s === nothing || is_empty_scenario(s)) ? nothing : s
+end
+
 """
     get_hydro_availability(bidding_zone::String, day::Date; lookback_days=30) -> Union{Float64,Nothing}
 
@@ -1103,9 +1175,18 @@ Create a deterministic merit-order-based order book for MPCC clearing.
   A strategist that finds all orders whose `firm_of[tag] == "PPC"` and
   multiplies their two top tranche prices by 1.2, returning everything else
   unchanged.
+- `fleet_modifier::Union{Nothing,Function}`: `f(zone::String, gens::Vector{Generator}) -> Vector{Generator}`,
+  a first-class capacity primitive — add, remove or derate physical units as
+  DATA (not orders). Called AFTER fleet completion and fleet-truthing, so a
+  removed unit is not re-added by the `:installed`/p95 truth-up and the offered
+  fleet is exactly what the modifier returns (scenario edits are physical
+  reality changes; truthing runs on the pre-scenario registry). Returning an
+  empty vector fails the build gracefully.
 
-Only the single-zone (`:merit_order`) path threads these hooks; multi-zone
-clearing does not (v1 limitation).
+Both the single-zone (`:merit_order`) `generate_energy_prices` path and the
+multi-zone `run_multi_zone_market_clearing(...; scenario=...)` path thread these
+hooks (the latter via `ZoneScenario`). When every hook is `nothing` the built
+book is byte-identical to the no-hook book.
 """
 function create_merit_order_book(
     bidding_zone::String,
@@ -1143,7 +1224,8 @@ function create_merit_order_book(
     load_modifier::Union{Nothing,Function}=nothing,
     renewable_modifier::Union{Nothing,Function}=nothing,
     extra_orders::Union{Nothing,Function}=nothing,
-    strategist::Union{Nothing,Function}=nothing
+    strategist::Union{Nothing,Function}=nothing,
+    fleet_modifier::Union{Nothing,Function}=nothing
 )
     # Resolve every bid parameter from the profile, letting an explicit keyword
     # override its profile field. With no overrides and the default SEE_PROFILE
@@ -1334,6 +1416,25 @@ function create_merit_order_book(
                               g.ramp_up, g.ramp_down, g.min_uptime, g.min_downtime) :
                     g
             end for g in generators]
+        end
+
+        # Scenario fleet_modifier — add / remove / derate physical units as
+        # DATA. Applied AFTER fleet completion and fleet-truthing (above) on
+        # purpose: those two mechanisms true the registry to the zone's
+        # recently-observed capability, and they must run on the PRE-scenario
+        # registry. If the modifier ran first, removing a 500 MW unit would
+        # enlarge the completion gap and the `:installed`/p95 truth-up would
+        # silently re-add the same aggregate MW — nullifying the edit. Running
+        # it last makes scenario edits genuine "physical reality changes": the
+        # offered fleet reflects exactly what the modifier returns. No-op when
+        # the hook is nothing (byte-identical).
+        if fleet_modifier !== nothing
+            generators = collect(fleet_modifier(bidding_zone, generators))
+            eltype(generators) <: Generator ||
+                error("fleet_modifier must return a Vector{Generator}, got eltype $(eltype(generators))")
+            isempty(generators) &&
+                return AdjustedOrderBookResult(false,
+                    "fleet_modifier removed all generators", nothing, 0, 0, 0, 0.0, 0.0, 0.0)
         end
         loads = get_loads(bidding_zone, day)
         renewables = get_generation_forecast_for_wind_and_solar(bidding_zone, day;
