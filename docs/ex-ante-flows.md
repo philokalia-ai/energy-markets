@@ -65,7 +65,39 @@ Three runtime switches (all env-configurable, default = byte-identical D-0):
 
 ## Per-class attribution of the D-7 cost (frozen 36-day sample, vs D-0 iter8)
 
-<!-- ATTRIBUTION -->
+The headline finding: **on the iteration-8 model the aggregate D-7 cost has
+essentially vanished** — both class-selective D-7 runs score meanMAE 31.9 vs
+31.9 (D-0), meanCorr 0.58–0.59 vs 0.59. The iteration-6 audit's +5.3 MAE /
+GR-corr-collapse was measured on the *pre-installed-fleet* model, whose thin
+books leaned heavily on the observed injections; the deep iter8 books absorb
+injection noise. (The GR D-7 corr collapse is **gone** — the TR/AL hypothesis
+is refuted on the current model; GR is not even a mover.)
+
+The residual cost is *concentrated*, not aggregate (movers at |ΔMAE| ≥ 3 or
+|Δcorr| ≥ 0.05):
+
+**Retained-class D-7** (out-of-footprint / no-ATC injections lagged):
+
+| zone | Δcorr | ΔMAE | reading |
+|---|---:|---:|---|
+| HU | **−0.35** | **+16.5** | HU's retained borders (HU–RO flow-based-coupled, HR, UA) are load-bearing |
+| SK | **−0.43** | +2.8 | the UA export border |
+| SI | **+0.33** | **−12.1** | its D-0 injection was *noise* — lagging helps |
+| NO2 | +0.11 | −0.8 | same |
+
+**Dropped-class D-7** (flow-based-drop borders lagged):
+
+| zone | Δcorr | ΔMAE | reading |
+|---|---:|---:|---|
+| SK | **−0.57** | +7.4 | the CZ/PL import clamp is day-specific |
+| FI | −0.13 | +1.2 | SE1/SE3 imports |
+| HU | −0.07 | +8.1 | AT/SK imports |
+| NO1 | +0.07 | **−20.5** | its D-0 observed flows were *hurting* it |
+| DK1 | +0.06 | −2.6 | |
+
+So the forward product's flow problem reduces to **two zones — HU and SK**
+(both Core-FBMC, both leaning on same-day flows over their dropped/retained
+borders), while two zones (SI, NO1) actually *prefer* an ex-ante flow.
 
 ## The v2 recommendation
 
