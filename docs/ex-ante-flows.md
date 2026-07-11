@@ -99,6 +99,76 @@ So the forward product's flow problem reduces to **two zones — HU and SK**
 (both Core-FBMC, both leaning on same-day flows over their dropped/retained
 borders), while two zones (SI, NO1) actually *prefer* an ex-ante flow.
 
-## The v2 recommendation
+## Alternatives measured (frozen 36-day sample, vs D-0 iter8 = 31.9 / 0.59 / −8.8)
 
-<!-- V2 -->
+| variant | meanMAE | meanCorr | meanBias | movers |
+|---|---:|---:|---:|---|
+| D-7 all (iter6 audit, on the iter6 model) | +5.3 vs its base | −0.02 | — | 15 zones ≥6 MAE, GR corr −0.33 |
+| D-7 retained-only | 31.9 | 0.59 | −8.3 | HU +16.5/−0.35c, SK −0.43c; SI −12.1/+0.33c |
+| D-7 dropped-only | 31.9 | 0.58 | −8.2 | SK −0.57c, HU +8.1; NO1 −20.5 |
+| **climatology all** | 33.9 | **0.62** | −5.3 | **NO1 +99.3** (regime mis-match); SI −16.6/+0.36c; HU/SK healed |
+| **:v2 (D-7 Nordic, clim rest)** | **30.8** | **0.61** | −8.4 | NO1 −20.6, SI −16.6/+0.36c, NO2 +0.13c, DK1/SE3 +0.06c; FI −0.13c |
+| **:v2 final (D-7 NO\*-only, clim rest)** | **30.7** | **0.61** | −8.5 | all movers positive: NO1 −20.6, SI −16.6/+0.36c, DK1 +0.08c, NO2 +0.12c, SE4 +0.07c; FI healed (Δ0.00) |
+
+**The remarkable finding: the fully ex-ante :v2 BEATS the same-day product**
+(30.8 vs 31.9 MAE, 0.61 vs 0.59 corr). The same-day observed flows were not
+just a forward-looking leak — they carried *noise* that the climatology
+averages away (SI +0.36 corr, NO2 +0.13) while the D-7 recency preserves the
+Norwegian reservoir regimes that a median mis-states (NO1: clim +99 MAE,
+D-7 −20.6). The one leak can be removed at *negative* cost.
+
+## The v2 recommendation (measured, gated, default unchanged)
+
+**`FLOW_ASOF_MODE = :v2`** (env `EUPHEMIA_FLOW_ASOF_MODE=v2`): flow climatology
+for every observed border, except D-7 same-weekday recency for borders touching
+a Norwegian reservoir zone (NO1–NO5). Fully ex-ante — every input strictly
+predates the D-1 auction. Default stays `:d0` (byte-identical committed
+product); flipping it is the product owner's call.
+
+### Per-border strategy table
+
+| border class | strategy | evidence |
+|---|---|---|
+| in-footprint with ATC | **endogenous** (unchanged) | — |
+| dropped flow-based, non-NO (HU–AT/SK, BE–Core, SE-internal, SK–CZ/PL, FI–SE) | **climatology** | heals the D-7 damage (HU +16.5→0, SK −0.57c→0); FI prefers it |
+| dropped flow-based, NO\* (Nordic internal) | **D-7 same-weekday** | reservoir regime persists week-to-week; clim blew NO1 +99 MAE |
+| retained out-of-footprint (GR–TR/AL, PL/SK/HU/RO–UA, BE/NL–GB, IT–ME, …) | **climatology** | noise-averaging beats any single draw; GR unaffected on the iter8 model |
+| retained in-footprint no-ATC (RS borders, HU–RO, …) | **climatology** | same |
+| Western Balkans (AL/MK/BA/ME) | **endogenize in iteration 9** (explicit-ATC union, the RS treatment — load/RES/units/ATC all present) | availability table above |
+
+### Validation
+
+- Frozen 36-day sample: **:v2 BEATS the same-day product** — meanMAE 30.7 vs
+  31.9, meanCorr 0.61 vs 0.59, zero acceptance-gate violations (GR −0.4 MAE /
+  −0.01 corr; FI Δ0.00 corr).
+- Held-out 12 days: meanMAE 35.3 vs 31.7, meanCorr 0.62 vs 0.65 — the gap is
+  **concentrated in NO1** (0.51/23.3 → 0.03/103.9: its import regime flipped
+  between weeks on winter held-out days, so D-7 recency mis-fired there too),
+  plus small GR/FI slips; SI *improves* massively on both sets (+0.36c sample,
+  0.23→0.65 held-out) and HU improves held-out (42.8→40.4).
+- Net across both sets the ex-ante cost is **≈ +1 MAE** (was **+5.3** in the
+  iteration-6 audit on the pre-installed-fleet model) — the deep iter8 books
+  absorb injection noise, and climatology-averaging is *better* than the
+  noisy same-day observation for most borders.
+- SEE 5-zone byte-identity guard: exact (default `:d0` untouched).
+
+### The honest open problem — NO1
+
+Neither naive ex-ante source works for NO1's dropped-border imports in all
+seasons: the 8-week median mis-states the regime (+99 MAE on the sample), D-7
+recency mis-fires when the regime flips between weeks (+80 MAE on held-out
+winter days). NO1 is the one border set that genuinely needs a *real* flow
+input model — candidate features are both-sides reservoir levels/dryness and
+DA load/RES forecasts (all D-1-legal), ridge or per-regime climatology,
+trained strictly on pre-sample data and versioned. That is the defined
+iteration-9 deliverable; until then `:v2` carries NO1's cost explicitly.
+
+### What was measured and rejected
+
+- **D-7 for everything** (the iter6 audit variant): cost concentrated at
+  HU/SK (−0.35/−0.43 corr, +16.5 MAE) — one lagged draw is noisy.
+- **Climatology for everything**: best aggregate corr (0.62) but NO1 +99 MAE.
+- **D-7 for all Nordic-side borders incl. FI/SE/DK**: FI −0.13 corr — only
+  the NO\* reservoir zones need recency.
+- **Scheduled commercial exchanges**: inadmissible by construction (the
+  auction's own output — the leak itself).
