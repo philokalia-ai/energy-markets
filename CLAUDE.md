@@ -752,7 +752,9 @@ as `results_db`; reads of `simulations.energy_prices` / `optimization_runs` /
   (single-zone and multi-zone). `:uc_based` / `:alternative` are not threaded
   (they need write-heavy UC caching and the full 365-day ramp-inference window,
   which the merit extract does not carry).
-- **Scenario hooks** remain single-zone only (v1).
+- **Scenario hooks** thread through both the single-zone `:merit_order` path and
+  the multi-zone footprint path (`run_multi_zone_market_clearing(...; scenario=)`);
+  `:uc_based` / `:alternative` are not wired.
 
 **Multi-zone under DuckDB.** `run_multi_zone_market_clearing(..., order_method=`
 `:merit_order, enrich_network=true, passes=2, save_to_db=false)` runs entirely
@@ -862,10 +864,11 @@ build + reproduce flow.
 
 ### Scenario hooks on `create_merit_order_book` / `generate_energy_prices`
 
-Four optional `Function` kwargs let you run counterfactual scenarios. When all
+Five optional `Function` kwargs let you run counterfactual scenarios. When all
 are `nothing` the code path is byte-identical to today (verified by the
-benchmark). All four thread through `generate_energy_prices` on the
-`:merit_order` path. Multi-zone propagation is out of scope (v1).
+benchmark). All five thread through `generate_energy_prices` on the
+`:merit_order` path **and** through the multi-zone footprint path (see
+"Multi-zone scenarios" below and [docs/scenario-api.md](docs/scenario-api.md)).
 
 - `load_modifier(timeslot::String, load_mw::Float64) -> Float64` — applied to
   every `load_by_time` entry at the source, so it propagates to net demand,
@@ -876,6 +879,11 @@ benchmark). All four thread through `generate_energy_prices` on the
   (zone, day, timeslots, resolution_minutes, load_by_time, renewable_by_time)`.
   Both `:supply` and `:demand` allowed (a new plant / ships requesting power).
 - `strategist(ctx) -> Vector{Tuple{SimpleOrder,String}}` — see below.
+- `fleet_modifier(zone::String, gens::Vector{Generator}) -> Vector{Generator}`
+  — first-class capacity primitive: add / remove / derate physical units as
+  DATA. Runs AFTER fleet completion/truthing, so a removed unit is not silently
+  re-added by the `:installed`/p95 truth-up (scenario edits are physical reality
+  changes; truthing runs on the pre-scenario registry).
 
 ```julia
 # "+300 MW of solar": add 300 MW to renewables during daylight slots
@@ -914,6 +922,38 @@ ppc_markup = ctx -> [
 prices = generate_energy_prices("GR", Date(2026, 1, 26);
     order_method=:merit_order, save_to_db=false, strategist=ppc_markup)
 ```
+
+### Multi-zone scenarios (EU footprint)
+
+The same hooks thread through the multi-zone path, bundled into a `ZoneScenario`
+(`Base.@kwdef` struct: `load_modifier`, `renewable_modifier`, `extra_orders`,
+`strategist`, `fleet_modifier`). Pass `scenario=` to
+`run_multi_zone_market_clearing`: either **one** `ZoneScenario` applied to every
+zone (the `ctx.zone` in `extra_orders`/`strategist` lets one function target
+zones), or a `Dict{String,ZoneScenario}` for per-zone targeting. `nothing`
+(default) is byte-identical to the no-scenario run (guarded on the single-zone
+GR book, the SEE 5-zone book, and the full 39-zone EU book).
+
+```julia
+# "Ships request 200 MW more power in GR" on the EU footprint
+ships = ctx -> ctx.zone == "GR" ?
+    [SimpleOrder(:demand, 3000.0, 200.0, Symbol(ctx.zone),
+        DateTime(ts, dateformat"yyyymmdd-HHMM"), ctx.resolution_minutes)
+     for ts in ctx.timeslots] : SimpleOrder[]
+result = run_multi_zone_market_clearing(Date(2026,4,3); zones=FOOTPRINT,
+    order_method=:merit_order, enrich_network=true, passes=2,
+    scenario=ZoneScenario(extra_orders=ships))
+```
+
+**Two-pass propagation (emergent).** The footprint clears in two passes;
+opportunity-anchored zones (`:hydro`/`:nuclear`) re-bid against the pass-1
+coupled price. Because a scenario applies on both passes, a change to one zone's
+pass-1 price flows through the anchor references into every anchored zone's
+pass-2 opportunity cost — scenario-consistent across the footprint. Measured:
++4,000 MW demand in DE_LU lifts NO2's anchored water value +€3.6/MWh though the
+scenario never touched NO2. See [docs/scenario-api.md](docs/scenario-api.md) for
+the three worked examples (ships / PPC markup / unit retirement) and measured
+deltas.
 
 ## GitHub Actions / CI
 
