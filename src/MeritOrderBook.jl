@@ -104,9 +104,20 @@ const FLOW_ASOF_CLASS = Ref{Symbol}(:all)
 #   :clim — flow climatology: per (border, hour) MEDIAN over the trailing
 #           8 same-weekday days (D-7, D-14, …, D-56 — all strictly before
 #           the D-1 auction). Interpretable, no fitting, versioned here.
+#   :v2   — the measured best ex-ante mix (docs/ex-ante-flows.md): D-7 for
+#           borders touching a NORDIC hydro zone (regime-switching flows —
+#           reservoir state persists week to week, so recency wins; the
+#           8-week median mis-states the current regime and blew NO1 up
+#           +99 MAE), flow climatology for everything else (thermal/transit
+#           borders are noisy — the median beats any single lagged draw; it
+#           healed HU/SK where D-7 cost −0.4/−0.6 corr).
 # FLOW_ASOF_CLASS selects WHICH borders get the ex-ante replacement; the rest
 # stay same-day. See docs/ex-ante-flows.md.
 const FLOW_ASOF_MODE = Ref{Symbol}(:d0)
+
+# Nordic hydro zones for the :v2 border split (recency beats climatology).
+const NORDIC_FLOW_ZONES = Set(["NO1", "NO2", "NO3", "NO4", "NO5",
+                               "SE1", "SE2", "SE3", "SE4", "FI", "DK1", "DK2"])
 
 """
     set_flow_asof_lag!(n::Int)
@@ -202,7 +213,7 @@ _lag_applies(cp::String, imponly::Set{String}) =
     ((FLOW_ASOF_CLASS[] == :dropped) == (cp in imponly))
 
 # Is any ex-ante replacement active at all?
-_exante_active() = FLOW_ASOF_MODE[] == :clim ||
+_exante_active() = FLOW_ASOF_MODE[] in (:clim, :v2) ||
                    (FLOW_ASOF_MODE[] == :dlag && FLOW_ASOF_LAG[] > 0) ||
                    # legacy: LAG>0 with mode :d0 keeps the iter6 audit behaviour
                    FLOW_ASOF_LAG[] > 0
@@ -229,9 +240,26 @@ end
 # The ex-ante source map for the selected class, merged with same-day flows
 # for the non-selected counterparties.
 function _zone_border_hourly_exante(zone::String, day::Date, imponly::Set{String})
-    alt = FLOW_ASOF_MODE[] == :clim ?
-          _zone_border_hourly_clim(zone, day) :
-          _zone_border_hourly(zone, day; lag=FLOW_ASOF_LAG[])
+    mode = FLOW_ASOF_MODE[]
+    alt = if mode == :clim
+        _zone_border_hourly_clim(zone, day)
+    elseif mode == :v2
+        # Measured best mix: D-7 for borders touching a Nordic hydro zone
+        # (regime persistence), climatology for the rest (noise averaging).
+        clim = _zone_border_hourly_clim(zone, day)
+        d7 = _zone_border_hourly(zone, day; lag=7)
+        mixed = Dict{Tuple{Int,String,Int},Float64}()
+        nordic_side(cp) = zone in NORDIC_FLOW_ZONES || cp in NORDIC_FLOW_ZONES
+        for (key, avg) in clim
+            nordic_side(key[2]) || (mixed[key] = avg)
+        end
+        for (key, avg) in d7
+            nordic_side(key[2]) && (mixed[key] = avg)
+        end
+        mixed
+    else
+        _zone_border_hourly(zone, day; lag=FLOW_ASOF_LAG[])
+    end
     bh0 = _zone_border_hourly(zone, day; lag=0)
     chosen = Dict{Tuple{Int,String,Int},Float64}()
     for (key, avg) in bh0
