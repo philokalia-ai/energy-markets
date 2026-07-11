@@ -165,6 +165,15 @@ println()
         include(joinpath(@__DIR__, "test_zone_profiles.jl"))
     end
 
+    @testset "Forecast Tracking" begin
+        println("\n" * "=" ^ 60)
+        println("Running Forecast Tracking Tests...")
+        println("=" ^ 60)
+        # Pure logic only (eligibility gate, lead-day arithmetic, realized-day
+        # write guard, scoring math, JSON serializer) — no DB, no solver.
+        include(joinpath(@__DIR__, "test_forecast_tracking.jl"))
+    end
+
 end
 
 # =============================================================================
