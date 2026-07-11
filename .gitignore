@@ -17,3 +17,9 @@ results/*
 
 # Results SPA: exported data is fetched at deploy time, never committed
 web/data/
+
+# wrangler files
+.wrangler
+.dev.vars*
+!.dev.vars.example
+!.env.example
