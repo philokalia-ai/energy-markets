@@ -24,6 +24,16 @@
 #                              and clear with save_to_db=false; the COORDINATOR
 #                              persists the returned prices, so the single-writer
 #                              results DB is only ever touched by one process.
+#   --pipeline                 run the multi-zone EU jobs through the
+#                              producer/consumer pipeline: book-builder workers
+#                              build the 39-zone two-pass books ahead in memory
+#                              while a small pool of solver workers stays
+#                              saturated with Gurobi (it "never sits"). Resumable
+#                              per day. Single-zone jobs still run sequentially.
+#         [--book-workers M]   book-builder processes (default min(10, CPU÷8))
+#         [--solver-workers S] concurrent Gurobi solver processes (default 2 =
+#                              WLS session cap; use 1 to share the license with
+#                              another running backfill)
 #
 # Backend: uses the DuckDB extract auto-detected by the module, or set
 #   EUPHEMIA_DATA_STORE=duckdb EUPHEMIA_DUCKDB_PATH=/path/to/extract.duckdb
@@ -334,7 +344,8 @@ function parse_args(argv)
     # to find an incumbent (HiGHS: none within 1 h — see docs/reproducibility.md).
     opts = Dict{String,Any}("tier" => nothing, "optimizer" => "auto",
         "order_method" => :merit_order, "zones" => FOOTPRINT, "single" => nothing,
-        "start" => nothing, "stop" => nothing, "workers" => "0")
+        "start" => nothing, "stop" => nothing, "workers" => "0",
+        "pipeline" => false, "book_workers" => "0", "solver_workers" => "2")
     i = 1
     while i <= length(argv)
         a = argv[i]
@@ -349,6 +360,9 @@ function parse_args(argv)
         elseif a == "--optimizer"; opts["optimizer"] = argv[i+1]; i += 1
         elseif a == "--order-method"; opts["order_method"] = Symbol(argv[i+1]); i += 1
         elseif a == "--workers"; opts["workers"] = argv[i+1]; i += 1
+        elseif a == "--pipeline"; opts["pipeline"] = true
+        elseif a == "--book-workers"; opts["book_workers"] = argv[i+1]; i += 1
+        elseif a == "--solver-workers"; opts["solver_workers"] = argv[i+1]; i += 1
         else; @warn "ignoring unknown argument: $a"
         end
         i += 1
@@ -365,7 +379,7 @@ end
 function main(argv)
     opts = parse_args(argv)
     tier = opts["tier"]
-    tier === nothing && (println("usage: julia --project=. bin/reproduce.jl [--quick | --range S E [--zones ...] [--single Z] | --full] [--optimizer highs|gurobi] [--workers N|auto]"); return 1)
+    tier === nothing && (println("usage: julia --project=. bin/reproduce.jl [--quick | --range S E [--zones ...] [--single Z] | --full] [--optimizer highs|gurobi] [--workers N|auto] [--pipeline [--book-workers M] [--solver-workers S]]"); return 1)
     om = opts["order_method"]
     # Resolve "auto" to the concrete solver now, so the per-solver MPCC budget
     # and the report metadata are exact.
@@ -408,6 +422,30 @@ function main(argv)
     end
 
     t0 = time()
+    # --pipeline: run the multi-zone EU jobs through the producer/consumer
+    # pipeline (book workers build ahead while a small pool of solver workers
+    # stays saturated with Gurobi). Single-zone jobs (no two-pass structure) run
+    # on the ordinary sequential path. Days already saved are skipped (resume).
+    if opts["pipeline"]
+        for (zone, days) in single_jobs
+            clear_single_zone(zone, days; order_method=om, optimizer=opt)
+        end
+        bw = parse(Int, opts["book_workers"])
+        bw <= 0 && (bw = min(10, max(1, Sys.CPU_THREADS ÷ 8)))
+        sw = parse(Int, opts["solver_workers"])
+        he = opt == "highs" ? 0.3 : nothing
+        for (zones, days) in multi_jobs
+            run_pipelined_backfill(collect(days), zones;
+                solver_workers=sw, book_workers=bw,
+                optimizer=opt, clearing_mode="multi_zone", save_to_db=true,
+                resume=true, mpcc_time_limit=mpcc_budget(opt),
+                mpcc_heuristic_effort=he)
+        end
+        @printf("\nClearing done in %.0f s. Scoring...\n", time() - t0)
+        score_and_report(sections, tier)
+        @printf("Total %.0f s.\n", time() - t0)
+        return 0
+    end
     nw = resolve_workers(opts["workers"], ndays)
     if nw > 0
         println("Parallel mode: $nw workers (day-level, DuckDB read-only sharing)")
