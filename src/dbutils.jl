@@ -563,7 +563,7 @@ end
 # per-day :p95-books fallback, July 2026) so new results are never mixed
 # with — or skipped because of — old rows. Each version is one selectable
 # "Run" in the Metabase counterfactual dashboard.
-const ENERGY_PRICES_CODE_VERSION = 15
+const ENERGY_PRICES_CODE_VERSION = 16
 
 const poolsize = 5
 cnxpool = Pools.Pool{LibPQ.Connection}(poolsize)
