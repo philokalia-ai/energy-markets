@@ -164,6 +164,10 @@ function __init__()
     # whatever EUPHEMIA_FLOW_ASOF_LAG was set (or unset) at precompile time.
     MeritOrderBook.FLOW_ASOF_LAG[] =
         something(tryparse(Int, get(ENV, "EUPHEMIA_FLOW_ASOF_LAG", "0")), 0)
+    MeritOrderBook.FLOW_ASOF_CLASS[] =
+        Symbol(get(ENV, "EUPHEMIA_FLOW_ASOF_CLASS", "all"))
+    MeritOrderBook.FLOW_ASOF_MODE[] =
+        Symbol(get(ENV, "EUPHEMIA_FLOW_ASOF_MODE", "d0"))
     # Backend selection (explicit env wins; else auto-detect the public extract;
     # else Postgres; else a clear error). See `_resolve_data_store`. When DuckDB
     # is selected the eager LibPQ pool is SKIPPED entirely so the library works
