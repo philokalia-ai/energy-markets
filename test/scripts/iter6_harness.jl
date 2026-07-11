@@ -67,10 +67,15 @@ function clear_days(days::Vector{Date}, nworkers::Int)
     end
     Euphemia.configure_data_store!(backend=:duckdb, duckdb_path=extract, read_only=true)
     ws = addprocs(nworkers; exeflags="--project=$(dirname(Base.active_project()))",
-        env=["EUPHEMIA_DATA_STORE"=>"duckdb","EUPHEMIA_DUCKDB_PATH"=>extract,
+        env=vcat(["EUPHEMIA_DATA_STORE"=>"duckdb","EUPHEMIA_DUCKDB_PATH"=>extract,
              "EUPHEMIA_DUCKDB_READONLY"=>"true","ENERGY_CONN_STR"=>"",
              "EUPHEMIA_FLOW_ASOF_LAG"=>get(ENV,"EUPHEMIA_FLOW_ASOF_LAG","0"),
-             "EUPHEMIA_DUCKDB_NPROCS_HINT"=>get(ENV,"EUPHEMIA_DUCKDB_NPROCS_HINT","2")])
+             "EUPHEMIA_DUCKDB_NPROCS_HINT"=>get(ENV,"EUPHEMIA_DUCKDB_NPROCS_HINT","2")],
+            # Only forward the mode/class envs when EXPLICITLY set — an
+            # unconditional default here would defeat the scoped :v2 default
+            # resolution (explicitness is significant).
+            [k=>ENV[k] for k in ("EUPHEMIA_FLOW_ASOF_CLASS","EUPHEMIA_FLOW_ASOF_MODE")
+             if haskey(ENV,k)]))
     try
         @everywhere ws @eval using Euphemia
         fp = FOOTPRINT   # capture as a local so pmap serializes it by value
@@ -134,7 +139,7 @@ function main()
     nworkers = parse(Int, get(ENV, "WORKERS", "2"))
     zones = haskey(ENV, "ZONES") ? Set(String[strip(z) for z in split(ENV["ZONES"], ",")]) : nothing
     days = load_sample()
-    println("ITER6 harness  label=$label  days=$(length(days))  workers=$nworkers  cv=$(Euphemia.ENERGY_PRICES_CODE_VERSION)  flow_asof_lag=$(Euphemia.MeritOrderBook.FLOW_ASOF_LAG[])")
+    println("ITER6 harness  label=$label  days=$(length(days))  workers=$nworkers  cv=$(Euphemia.ENERGY_PRICES_CODE_VERSION)  flow_asof_lag=$(Euphemia.MeritOrderBook.FLOW_ASOF_LAG[])  class=$(Euphemia.MeritOrderBook.FLOW_ASOF_CLASS[])  mode=$(Euphemia.MeritOrderBook.FLOW_ASOF_MODE[])")
     println("  span=$(minimum(days))..$(maximum(days))")
     t0 = time()
     results = clear_days(days, nworkers)
