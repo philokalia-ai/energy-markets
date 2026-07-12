@@ -14,10 +14,11 @@
     source: null,          // "data" | "fixtures"
     fixture: false,
     zoneCache: {},         // zone -> zone file json
-    view: "explorer",      // "explorer" | "board"
+    view: "horizon",       // "horizon" | "explorer" | "board"
     zone: "GR",
     lead: null,            // number
     day: null,             // "YYYY-MM-DD"
+    revDay: null,          // "YYYY-MM-DD" selected in the revision panel
     window: "all",
     sort: { lead: null, metric: "mae", dir: 1 }, // dir 1 = best first
     hoverIdx: null,
@@ -106,10 +107,11 @@
       var i = kv.indexOf("=");
       if (i > 0) params[decodeURIComponent(kv.slice(0, i))] = decodeURIComponent(kv.slice(i + 1));
     });
-    if (params.view === "board" || params.view === "explorer") state.view = params.view;
+    if (params.view === "board" || params.view === "explorer" || params.view === "horizon") state.view = params.view;
     if (params.zone) state.zone = params.zone;
     if (params.lead && !isNaN(+params.lead)) state.lead = +params.lead;
     if (params.day && /^\d{4}-\d{2}-\d{2}$/.test(params.day)) state.day = params.day;
+    if (params.rev && /^\d{4}-\d{2}-\d{2}$/.test(params.rev)) state.revDay = params.rev;
     if (params.window) state.window = params.window;
   }
 
@@ -118,6 +120,7 @@
     var parts = ["view=" + state.view, "zone=" + encodeURIComponent(state.zone)];
     if (state.lead !== null) parts.push("lead=" + state.lead);
     if (state.day) parts.push("day=" + state.day);
+    if (state.revDay) parts.push("rev=" + state.revDay);
     if (state.window && state.window !== "all") parts.push("window=" + encodeURIComponent(state.window));
     suppressHash = true;
     window.location.hash = parts.join("&");
@@ -159,6 +162,7 @@
     state.view = v;
     $("view-explorer").hidden = v !== "explorer";
     $("view-board").hidden = v !== "board";
+    $("view-horizon").hidden = v !== "horizon";
     document.querySelectorAll(".tab").forEach(function (t) {
       t.setAttribute("aria-selected", String(t.dataset.view === v));
     });
@@ -167,8 +171,6 @@
   // ---------- explorer rendering ----------
 
   function renderZoneSelect() {
-    var sel = $("zone-select");
-    sel.textContent = "";
     var zones = state.scoreboard.zones.slice();
     // GR pinned first
     zones.sort(function (a, b) {
@@ -176,12 +178,16 @@
       if (b === "GR") return 1;
       return a < b ? -1 : a > b ? 1 : 0;
     });
-    zones.forEach(function (z) {
-      var o = el("option", null, z);
-      o.value = z;
-      sel.appendChild(o);
+    ["zone-select", "hzone-select"].forEach(function (id) {
+      var sel = $(id);
+      sel.textContent = "";
+      zones.forEach(function (z) {
+        var o = el("option", null, z);
+        o.value = z;
+        sel.appendChild(o);
+      });
+      sel.value = state.zone;
     });
-    sel.value = state.zone;
   }
 
   function renderLeadButtons(leads) {
@@ -556,6 +562,315 @@
     renderHourTable(day);
   }
 
+  // ---------- horizon (next 7 days) + revision panel ----------
+
+  // Opacity by data age: fresh D-1 fully saturated, D-7 faint.
+  function leadOpacity(lead) {
+    return Math.max(0.3, 1 - (lead - 1) * 0.11);
+  }
+
+  function chartColors() {
+    var css = getComputedStyle(document.documentElement);
+    return {
+      grid: css.getPropertyValue("--grid").trim(),
+      baseline: css.getPropertyValue("--baseline").trim(),
+      muted: css.getPropertyValue("--text-muted").trim(),
+      surface: css.getPropertyValue("--surface-1").trim(),
+      sim: css.getPropertyValue("--series-sim").trim(),
+      act: css.getPropertyValue("--series-act").trim(),
+    };
+  }
+
+  // Shared scaffold: gridlines, y ticks, unit label. Returns {svg, X, Y, m, pw, ph, n}.
+  function chartScaffold(wrap, values, n, ariaLabel) {
+    var VBW = 900, VBH = 380;
+    var m = { t: 30, r: 16, b: 44, l: 54 };
+    var pw = VBW - m.l - m.r, ph = VBH - m.t - m.b;
+    var vMin = Math.min.apply(null, values), vMax = Math.max.apply(null, values);
+    if (vMin > 0) vMin = 0;
+    var pad = (vMax - vMin) * 0.06 || 10;
+    vMax += pad;
+    if (vMin < 0) vMin -= pad;
+    var step = niceStep(vMax - vMin, 6);
+    var y0 = Math.floor(vMin / step) * step;
+    var y1 = Math.ceil(vMax / step) * step;
+    function X(i) { return m.l + (n === 1 ? pw / 2 : (i / (n - 1)) * pw); }
+    function Y(v) { return m.t + ph - ((v - y0) / (y1 - y0)) * ph; }
+    var svg = svgEl("svg", { viewBox: "0 0 " + VBW + " " + VBH, role: "img", "aria-label": ariaLabel });
+    var C = chartColors();
+    for (var v = y0; v <= y1 + 1e-9; v += step) {
+      var yy = Y(v);
+      svg.appendChild(svgEl("line", {
+        x1: m.l, x2: m.l + pw, y1: yy, y2: yy,
+        stroke: Math.abs(v) < 1e-9 ? C.baseline : C.grid, "stroke-width": 1,
+        "shape-rendering": "crispEdges",
+      }));
+      var tick = svgEl("text", {
+        x: m.l - 8, y: yy + 4, "text-anchor": "end", fill: C.muted,
+        "font-size": 11.5, "font-variant-numeric": "tabular-nums",
+      });
+      tick.textContent = fmt(v, 0);
+      svg.appendChild(tick);
+    }
+    var unit = svgEl("text", { x: m.l - 8, y: m.t - 14, "text-anchor": "end", fill: C.muted, "font-size": 11 });
+    unit.textContent = "€/MWh";
+    svg.appendChild(unit);
+    return { svg: svg, X: X, Y: Y, m: m, pw: pw, ph: ph, n: n, VBW: VBW, C: C };
+  }
+
+  function pathString(arr, X, Y) {
+    var d = "", pen = false;
+    for (var i = 0; i < arr.length; i++) {
+      var v = arr[i];
+      if (v === null || v === undefined) { pen = false; continue; }
+      d += (pen ? " L" : " M") + X(i).toFixed(2) + " " + Y(v).toFixed(2);
+      pen = true;
+    }
+    return d.trim();
+  }
+
+  // Days grouped by date with the freshest (lowest-lead) entry per date.
+  function futureDays(zoneData) {
+    var byDate = {};
+    zoneData.days.forEach(function (d) {
+      if (!isPending(d)) return;                     // horizon = unsettled days only
+      var cur = byDate[d.date];
+      if (!cur || d.lead_days < cur.lead_days) byDate[d.date] = d;
+    });
+    return Object.keys(byDate).sort().map(function (k) { return byDate[k]; }).slice(0, 8);
+  }
+
+  function renderHorizon() {
+    var zoneData = state.zoneCache[state.zone];
+    if (!zoneData) return;
+    var days = futureDays(zoneData);
+    $("hz-title").textContent = state.zone + " — the next " + (days.length || 7) + " market days";
+    var wrap = $("hz-wrap");
+    wrap.textContent = "";
+    var lg = $("hz-legend");
+    lg.textContent = "";
+
+    if (!days.length) {
+      $("hz-sub").textContent = "";
+      wrap.appendChild(el("p", "pending-note",
+        "No unsettled forecast days available yet — the horizon fills as the daily runs accumulate."));
+      renderRevisions();
+      return;
+    }
+    $("hz-sub").textContent =
+      "Freshest published prediction per delivery day · solid = next-day model forecast (D-1), " +
+      "faded = further out · hours in Europe/Athens";
+
+    // legend
+    [["1", "D-1 (model, frozen the evening before)"],
+     ["4", "D-2…D-7 (weekly persistence of the model — fades with age)"]].forEach(function (it) {
+      var span = el("span");
+      var key = el("span", "key sim");
+      key.style.opacity = leadOpacity(+it[0]);
+      key.setAttribute("aria-hidden", "true");
+      span.appendChild(key);
+      span.appendChild(document.createTextNode(it[1]));
+      lg.appendChild(span);
+    });
+
+    // concatenated point list
+    var pts = [];   // {iso, v, day}
+    days.forEach(function (d) {
+      d.hours.forEach(function (h, i) {
+        pts.push({ iso: h, v: d.sim[i], day: d });
+      });
+    });
+    var n = pts.length;
+    var sc = chartScaffold(wrap, pts.map(function (p) { return p.v; }), n,
+      "Hourly price forecast for the next " + days.length + " market days, " + state.zone);
+    var svg = sc.svg, X = sc.X, Y = sc.Y, C = sc.C, m = sc.m;
+
+    // day separators + weekday labels
+    var idx0 = 0;
+    days.forEach(function (d) {
+      var idx1 = idx0 + d.hours.length - 1;
+      if (idx0 > 0) {
+        svg.appendChild(svgEl("line", {
+          x1: X(idx0) , x2: X(idx0), y1: m.t, y2: m.t + sc.ph,
+          stroke: C.baseline, "stroke-width": 1, "stroke-dasharray": "3 4",
+        }));
+      }
+      var lbl = svgEl("text", {
+        x: (X(idx0) + X(idx1)) / 2, y: m.t + sc.ph + 18, "text-anchor": "middle",
+        fill: C.muted, "font-size": 11.5,
+      });
+      lbl.textContent = dayLabel(d.date).slice(0, 3) + " " + d.date.slice(5);
+      svg.appendChild(lbl);
+      var lead = svgEl("text", {
+        x: (X(idx0) + X(idx1)) / 2, y: m.t + sc.ph + 32, "text-anchor": "middle",
+        fill: C.muted, "font-size": 10, "font-style": d.lead_days > 1 ? "italic" : "normal",
+      });
+      lead.textContent = "D-" + d.lead_days;
+      svg.appendChild(lead);
+
+      // per-day path with age fade
+      var seg = pts.slice(idx0, idx1 + 1).map(function (p) { return p.v; });
+      var Xoff = function (i) { return X(idx0 + i); };
+      svg.appendChild(svgEl("path", {
+        d: pathString(seg, Xoff, Y), fill: "none", stroke: C.sim,
+        "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round",
+        opacity: leadOpacity(d.lead_days),
+      }));
+      idx0 = idx1 + 1;
+    });
+
+    // hover
+    var hoverLine = svgEl("line", { y1: m.t, y2: m.t + sc.ph, stroke: C.baseline, "stroke-width": 1, visibility: "hidden" });
+    svg.appendChild(hoverLine);
+    var dot = svgEl("circle", { r: 4.5, fill: C.sim, stroke: C.surface, "stroke-width": 2, visibility: "hidden" });
+    svg.appendChild(dot);
+    var overlay = svgEl("rect", {
+      x: m.l, y: m.t, width: sc.pw, height: sc.ph, fill: "transparent",
+      class: "hover-rect", tabindex: "0", "aria-label": "Forecast values across the horizon.",
+    });
+    svg.appendChild(overlay);
+    var tooltip = el("div", "tooltip");
+    tooltip.style.display = "none";
+    wrap.appendChild(svg);
+    wrap.appendChild(tooltip);
+
+    function show(i) {
+      i = Math.max(0, Math.min(n - 1, i));
+      var p = pts[i];
+      var x = X(i);
+      hoverLine.setAttribute("x1", x); hoverLine.setAttribute("x2", x);
+      hoverLine.setAttribute("visibility", "visible");
+      dot.setAttribute("cx", x); dot.setAttribute("cy", Y(p.v));
+      dot.setAttribute("visibility", "visible");
+      tooltip.textContent = "";
+      tooltip.appendChild(el("div", "tt-head",
+        dayLabel(p.day.date) + " · " + hourLabel(p.iso) + "–" + hourEndLabel(p.iso) + " Athens"));
+      var row = el("div", "tt-row");
+      var key = el("span", "tt-key");
+      key.style.borderTopColor = C.sim;
+      row.appendChild(key);
+      row.appendChild(el("span", "tt-val", fmt(p.v, 2)));
+      row.appendChild(el("span", "tt-name", "forecast (D-" + p.day.lead_days + ")"));
+      tooltip.appendChild(row);
+      var rect = svg.getBoundingClientRect();
+      var scale = rect.width / sc.VBW;
+      var px = x * scale, tw;
+      tooltip.style.display = "block";
+      tw = tooltip.offsetWidth;
+      var left = px + 14;
+      if (left + tw > rect.width - 4) left = px - tw - 14;
+      tooltip.style.left = Math.max(0, left) + "px";
+      tooltip.style.top = Math.max(0, Y(p.v) * scale - 30) + "px";
+    }
+    overlay.addEventListener("pointermove", function (ev) {
+      var rect = svg.getBoundingClientRect();
+      var xVB = (ev.clientX - rect.left) * (sc.VBW / rect.width);
+      show(Math.round(((xVB - m.l) / sc.pw) * (n - 1)));
+    });
+    overlay.addEventListener("pointerleave", function () {
+      hoverLine.setAttribute("visibility", "hidden");
+      dot.setAttribute("visibility", "hidden");
+      tooltip.style.display = "none";
+    });
+
+    renderRevisions();
+  }
+
+  // Revision panel: every vintage we published for one delivery day.
+  function renderRevisions() {
+    var zoneData = state.zoneCache[state.zone];
+    if (!zoneData) return;
+    var byDate = {};
+    zoneData.days.forEach(function (d) {
+      (byDate[d.date] = byDate[d.date] || []).push(d);
+    });
+    // days worth showing: newest 14 (future first for defaults)
+    var dates = Object.keys(byDate).sort().slice(-14);
+    var wrap = $("rev-wrap");
+    var lg = $("rev-legend");
+    var btns = $("rev-daybtns");
+    wrap.textContent = ""; lg.textContent = ""; btns.textContent = "";
+    if (!dates.length) {
+      $("rev-title").textContent = "What we said, when";
+      return;
+    }
+    if (!state.revDay || dates.indexOf(state.revDay) === -1) {
+      // default: tomorrow-most future day with >1 vintage, else newest
+      var multi = dates.filter(function (dd) { return byDate[dd].length > 1; });
+      state.revDay = multi.length ? multi[multi.length - 1] : dates[dates.length - 1];
+    }
+    dates.forEach(function (dd) {
+      var b = el("button", null, dd.slice(5));
+      b.type = "button";
+      b.title = dayLabel(dd) + " · " + byDate[dd].length + " vintage" + (byDate[dd].length > 1 ? "s" : "");
+      b.setAttribute("aria-pressed", String(dd === state.revDay));
+      b.addEventListener("click", function () {
+        state.revDay = dd;
+        renderRevisions();
+        writeHash();
+      });
+      btns.appendChild(b);
+    });
+
+    var entries = byDate[state.revDay].slice().sort(function (a, b) { return b.lead_days - a.lead_days; });
+    var newest = entries[entries.length - 1];
+    $("rev-title").textContent = "What we said, when — " + state.zone + " · " + dayLabel(state.revDay);
+
+    var C = chartColors();
+    // legend: one chip per vintage + actual
+    entries.forEach(function (d) {
+      var span = el("span");
+      var key = el("span", "key sim");
+      key.style.opacity = leadOpacity(d.lead_days);
+      span.appendChild(key);
+      span.appendChild(document.createTextNode("D-" + d.lead_days));
+      lg.appendChild(span);
+    });
+    var hasActual = !isPending(newest);
+    if (hasActual) {
+      var span = el("span");
+      span.appendChild(el("span", "key act"));
+      span.appendChild(document.createTextNode("Actual (settled)"));
+      lg.appendChild(span);
+    }
+
+    // values pool for scale
+    var vals = [];
+    entries.forEach(function (d) { d.sim.forEach(function (v) { vals.push(v); }); });
+    newest.actual.forEach(function (a) { if (a !== null && a !== undefined) vals.push(a); });
+    var n = newest.hours.length;
+    var sc = chartScaffold(wrap, vals, n, "Forecast vintages for " + state.revDay + ", " + state.zone);
+    var svg = sc.svg, X = sc.X, Y = sc.Y;
+
+    for (var i = 0; i < n; i += 3) {
+      var tx = svgEl("text", {
+        x: X(i), y: sc.m.t + sc.ph + 20, "text-anchor": "middle",
+        fill: sc.C.muted, "font-size": 11.5, "font-variant-numeric": "tabular-nums",
+      });
+      tx.textContent = hourLabel(newest.hours[i]);
+      svg.appendChild(tx);
+    }
+    entries.forEach(function (d) {
+      svg.appendChild(svgEl("path", {
+        d: pathString(d.sim, X, Y), fill: "none", stroke: sc.C.sim,
+        "stroke-width": d.lead_days === 1 ? 2.4 : 1.8,
+        "stroke-linejoin": "round", "stroke-linecap": "round",
+        opacity: leadOpacity(d.lead_days),
+      }));
+    });
+    if (hasActual) {
+      svg.appendChild(svgEl("path", {
+        d: pathString(newest.actual, X, Y), fill: "none", stroke: sc.C.act,
+        "stroke-width": 2.4, "stroke-linejoin": "round", "stroke-linecap": "round",
+      }));
+    }
+    wrap.appendChild(svg);
+    if (entries.length === 1) {
+      wrap.appendChild(el("p", "pending-note",
+        "One vintage so far — earlier leads appear as the horizon runs accumulate day by day."));
+    }
+  }
+
   // ---------- scoreboard ----------
 
   function scoreboardWindows() {
@@ -714,10 +1029,13 @@
 
   function selectZone(zone, keepDay) {
     state.zone = zone;
-    if (!keepDay) state.day = null;
+    if (!keepDay) { state.day = null; state.revDay = null; }
     state.hoverIdx = null;
+    $("zone-select").value = zone;
+    $("hzone-select").value = zone;
     loadZone(zone).then(function () {
       renderExplorer();
+      renderHorizon();
       writeHash();
     }).catch(function (err) {
       $("chart-title").textContent = zone + " — failed to load zone data";
@@ -750,6 +1068,9 @@
       });
     });
     $("zone-select").addEventListener("change", function (ev) {
+      selectZone(ev.target.value);
+    });
+    $("hzone-select").addEventListener("change", function (ev) {
       selectZone(ev.target.value);
     });
     $("window-select").addEventListener("change", function (ev) {
