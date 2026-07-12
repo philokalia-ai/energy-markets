@@ -242,9 +242,19 @@ units), `load_modifier` / `renewable_modifier`.
 ## Live forecasting — live at [energy.philokalia.ai](https://energy.philokalia.ai)
 
 The same model now runs daily as a genuine forward product:
-**<https://energy.philokalia.ai>**. Every evening a **20:00 UTC pipeline**
-fills the evening ENTSO-E data (D-1 load and wind/solar forecasts, offered
-ATC), runs the 39-zone coupled clear, and publishes the upcoming market days.
+**<https://energy.philokalia.ai>**. The pipeline runs **twice a day**:
+
+- **08:00 UTC — the morning window.** Fill + forecast *before* the day-ahead
+  auction gate (SDAC closes 12:00 CET: 10:00 UTC summer / 11:00 UTC winter).
+  Any prediction written here is **pre-auction** — ex-ante with respect to the
+  market clearing itself, not just to delivery. Each row records
+  `prediction_made_utc`, so pre-gate rows are provable.
+- **17:30 UTC — the evening fill.** ENTSO-E's D-1 items propagate to the bulk
+  export late for the large zones (~19:00 UTC measured for DE/IT), so the
+  evening run fills whatever the morning couldn't see. Writes are
+  **no-clobber**: a morning (pre-auction) row is never overwritten by an
+  evening one.
+
 A delivery day is a **Europe/Athens market day** — the 24-hour window starting
 21:00/22:00 UTC the previous evening (DST-aware), stitched from two UTC-day
 solves; a day is published only when complete. An **hour-level ex-ante guard**
@@ -254,11 +264,35 @@ prediction time, and predictions are **frozen — never revised**; the record in
 they are scored per zone × lead time into `simulations.forecast_scores`,
 browsable in the SPA under `web/`.
 
-First live day (2026-07-12): **GR corr 0.92 / MAE €21.7 at lead 1**. Lead-1 is
-the honest ceiling: the decisive inputs (ENTSO-E 6.1.B load and 14.1.D
-wind/solar forecasts) are D-1-only items, so longer leads run on degraded
-inputs by construction. Because every input is D-1-legal, the backtest metrics
-above are the expected live performance — there is no train/serve gap to hide.
+First live day (2026-07-12): **GR corr 0.92 / MAE €21.7 at lead 1**. Because
+every input is D-1-legal, the backtest metrics above are the expected live
+performance — there is no train/serve gap to hide.
+
+### Weather → RES: cutting the dependence on late ENTSO-E forecasts
+
+The decisive inputs (ENTSO-E 6.1.B load and 14.1.D wind/solar forecasts) are
+D-1-only items that arrive *late* — which caps the product at lead 1 and
+pushes it toward the evening. The answer is predicting wind/solar ourselves
+from weather forecasts
+([docs/res-forecasting-investigation.md](docs/res-forecasting-investigation.md)):
+
+- **Wind**: a GFS+ECMWF+ICON lead-1 ensemble at wind-farm-sited grid cells
+  predicts ENTSO-E's own DA wind forecast at **corr 0.960** (0.872 vs actual).
+  Sites from the ELETAEN turbine registry for GR and an OSM extraction for the
+  full footprint — **115,390 turbines → 1,425 cells across all 39 zones**
+  (`ceres/geodata/eu_wind_cells.csv`).
+- **Solar**: GHI + sun geometry + hour-of-day calibration reaches **corr
+  0.988** vs the ENTSO-E forecast — ENTSO-E's own accuracy at half its MAE.
+- **Price impact**: swapping ENTSO-E RES for pure weather-RES costs corr
+  0.850 → 0.804 on the GR test days. So ENTSO-E stays the input at lead 1,
+  and weather-RES is the path to **lead 2–7** (lead-2 weather costs only
+  ~0.01) and to morning-window forecasts on days ENTSO-E hasn't published.
+- **Plumbing** (merged July 2026): the weather DB's forecast feed now carries
+  radiation (NULL since 2024), 100 m wind and cloud cover, archives
+  **forecast vintages** (past hours were silently overwritten — honest lead-N
+  backtesting was impossible), and refreshes on an evening schedule.
+  Remaining for live use: EU-wide weather fetch at the catalogue cells and a
+  temperature-driven load model for lead ≥ 2.
 
 ## Repository map
 

@@ -95,12 +95,19 @@
     <p>
       This is a <strong>no-fit, ex-ante competitive counterfactual</strong> — a
       fundamentals-based market-clearing model, not a statistical forecaster. Each delivery
-      day is a Europe/Athens market day; its prediction is frozen at ~20:00&nbsp;UTC the
-      evening before (an hour-level guard means no value is ever written after its delivery
-      hour has passed) and never revised, then scored honestly per zone and lead time as
-      days settle. Nothing is fitted to the outcomes it is scored against, so persistent
+      day is a Europe/Athens market day. The pipeline runs twice daily: a
+      <strong>morning window at 08:00&nbsp;UTC</strong>, before the day-ahead auction gate
+      (12:00&nbsp;CET), so predictions written there are <em>pre-auction</em> — ex-ante with
+      respect to the market clearing itself; and an evening fill at 17:30&nbsp;UTC for zones
+      whose inputs publish late. Every row records when it was made, writes are
+      never overwritten, and an hour-level guard means no value is ever written after its
+      delivery hour has passed. Predictions are then scored honestly per zone and lead time
+      as days settle. Nothing is fitted to the outcomes it is scored against, so persistent
       gaps between simulated and actual prices are <em>findings</em> about how the real
       market deviates from competitive behavior, not model errors to be tuned away.
+      A weather-driven wind/solar layer (GFS+ECMWF+ICON ensemble at wind-farm-sited
+      grid cells; solar from irradiance + sun geometry) is being wired in to extend the
+      horizon to lead 2–7 days, where no ENTSO-E inputs exist.
       Full methodology:
       <a href="https://github.com/philokalia-ai/energy-markets#readme">github.com/philokalia-ai/energy-markets</a>.
     </p>
