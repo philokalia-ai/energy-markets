@@ -28,6 +28,7 @@ include(joinpath(@__DIR__, "forecast_common.jl"))
 include(joinpath(@__DIR__, "..", "test", "scripts", "eu_eval_metrics.jl"))
 
 const RESCORE = lowercase(get(ENV, "RESCORE", "false")) == "true"
+const RESCORE_WINDOW_DAYS = parse(Int, get(ENV, "RESCORE_WINDOW_DAYS", "7"))
 
 """
 Slices of forecast_prices whose market day has realized actual DA prices.
@@ -37,12 +38,18 @@ readiness trigger (DA prices for a local delivery day publish as one batch —
 when any UTC-day-D row exists, the full Athens window is available).
 """
 function pending_slices()
+    # Self-healing window: a slice can legitimately be REWRITTEN after it was
+    # scored (e.g., the -500-tail fix regenerated 2026-07-12 but its stale
+    # scores survived, showing DE_LU corr -0.01 against a chart at 0.97).
+    # Always rescore recent days — upsert_score! makes this idempotent and the
+    # window is a handful of slices, so the cost is negligible.
     rescore_clause = RESCORE ? "" : """
-        AND NOT EXISTS (
+        AND (fp.market_date >= CURRENT_DATE - $(RESCORE_WINDOW_DAYS)
+             OR NOT EXISTS (
             SELECT 1 FROM simulations.forecast_scores s
             WHERE s.market_date = fp.market_date
               AND s.lead_days = fp.lead_days
-              AND s.code_version = fp.code_version)
+              AND s.code_version = fp.code_version))
     """
     return Euphemia.sql2df_with_retry("""
         SELECT DISTINCT fp.market_date, fp.lead_days, fp.code_version
