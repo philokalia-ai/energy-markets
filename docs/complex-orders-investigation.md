@@ -181,3 +181,140 @@ factories with buildup/builddown does NOT help hydro-dominated Greece (per-perio
 where plants genuinely cycle and per-period clearing can't represent it. So it's a
 targeted continental-thermal refinement, Gurobi-only, gated behind a fleet-capacity
 fix — not a global rewrite.
+
+## 8. The clean isolation — commitment-informed must-run (v17, `must_run_mode=:endogenous`)
+
+The 16-zone block-commitment canary (v17_block_canary.jl) showed
+`:block_commitment` losing to the calibrated merit book essentially everywhere.
+REVIEW VERDICT on that test: it swapped TWO things at once — it stripped the
+calibrated bidding layer (tranche ladder, scarcity factor, must-run split) AND
+changed the clearing mechanism, so "commitment loses" and "the calibration is
+doing the work" were confounded.
+
+**The isolation.** Keep the ENTIRE calibrated merit book and change exactly ONE
+variable: WHICH units self-schedule their p_min, per hour. Today's static rule
+picks a day-level set (cheapest thermal with SRMC ≤ 1.15×gas until capacity ≥
+1.05× peak residual — the same set in every timeslot). The new
+`must_run_mode = :endogenous` (a `ZoneProfile` field + `create_merit_order_book`
+kwarg) instead solves the BlockCommitment MILP on the book's exact fundamentals
+— same fleet, same costs, same net demand — **anchored to real initial
+conditions** (`get_initial_conditions`, 72 h lookback: u₀/g₀ enter the t=1
+startup and ramp constraints, and units already running serve out their
+remaining min-uptime; this closes the known free-hour-1 gap). A unit
+self-schedules its must-run split in slot *ts* iff u\*[unit, hour(ts)] = 1;
+uncommitted capacity still offers through the normal tranche ladder. Everything
+else — tranche ladder, scarcity factor, water values, demand, RES, imports, the
+must-run PRICE split itself — is byte-identical. Any MILP failure warns and
+falls back to `:static` (the clear never breaks).
+
+**Guards.** `:static` (the default) verified bit-identical in price on GR
+2026-01-14, DE_LU 2026-04-15, NO2 2026-06-15 (orders bit-identical except NO2
+quantity jitter ≤ 9.1e-13 MW — the documented last-ULP SQL-aggregate
+non-determinism, present on unmodified code too). All 46 MILPs solved OPTIMAL
+in ≤ ~2 s; zero fallbacks.
+
+### Canary (same 16 zones × 3 days, single-zone, same decision rule)
+
+Per-zone 3-day average, static vs endogenous committed set (improve = MAE
+−≥1 €/MWh AND corr not dropped). Harness:
+test/scripts/v17_endogenous_mustrun_canary.jl.
+
+| zone | s_corr | s_MAE | e_corr | e_MAE | ΔMAE | Δcorr | improves | mean Jaccard |
+|---|---|---|---|---|---|---|---|---|
+| GR | 0.896 | 44.9 | 0.783 | 40.6 | +4.3 | −0.113 | no | 0.53 |
+| BG | 0.513 | 464.4 | 0.511 | 463.9 | +0.5 | −0.003 | no | 0.67 |
+| RS | 0.671 | 64.1 | 0.645 | 48.6 | +15.5 | −0.026 | no | 0.46 |
+| RO | 0.715 | 78.6 | 0.693 | 73.6 | +5.1 | −0.022 | no | 0.47 |
+| DE_LU | 0.939 | 28.5 | 0.928 | 28.8 | −0.3 | −0.011 | no | 0.39 |
+| PL² | 0.838 | 22.5 | 0.735 | 17.5 | +5.0 | −0.103 | no | 0.32 |
+| CZ | 0.824 | 19.5 | 0.837 | 16.5 | +3.0 | +0.013 | **YES** | 0.47 |
+| NL | 0.582 | 26.2 | 0.590 | 29.6 | −3.5 | +0.009 | no | 0.32 |
+| FR | 0.849 | 25.7 | 0.870 | 24.8 | +0.9 | +0.021 | no | 0.79 |
+| ES² | 0.920 | 23.8 | 0.900 | 28.2 | −4.4 | −0.020 | no | 0.67 |
+| PT | 0.908 | 23.4 | 0.937 | 19.7 | +3.7 | +0.028 | **YES** | 0.52 |
+| IT-NORTH¹ | 0.780 | 29.0 | 0.713 | 25.1 | +3.8 | −0.068 | no | 0.03 |
+| FI | 0.697 | 25.8 | 0.781 | 26.1 | −0.3 | +0.084 | no | 0.30 |
+| NO2¹ | 0.778 | 469.3 | 0.778 | 469.3 | 0.0 | 0.000 | no | 1.00 |
+| AT³ | 0.599 | 183.7 | 0.616 | 178.8 | +4.8 | +0.017 | **YES** | 0.27 |
+| SK³ | 0.657 | 110.7 | 0.679 | 101.1 | +9.6 | +0.022 | **YES** | 0.77 |
+
+Aggregate: static mean MAE 102.5 / corr 0.76 → endogenous 99.5 / 0.75.
+**Improving zones under the rule: CZ, PT, AT, SK** (4/14 usable — BG's
+baseline is broken in both arms, NO2 is inert by construction; FR misses the
+gate by −0.9 MAE despite corr +0.021).
+
+¹ NO2 has zero must-run-eligible units (all hydro) → the two arms are
+identical by construction. IT-NORTH's STATIC set is empty on all three days
+(the Italy SRMC multiplier pushes every thermal unit above the 1.15×gas
+eligibility threshold), so there the experiment measures turning must-run ON,
+not re-timing it.
+² PL and ES 2026-06-15 excluded: the static book build itself fails on those
+days with a pre-existing Missing→Float64 data error (shared harness; both
+arms affected equally).
+³ Baseline trust: see the spot-check below — AT/SK/BG/NO2 baselines are
+dominated by single-zone scarcity-cap artifacts, so their verdicts carry
+little weight. The trustworthy improvements are **CZ (19.5→16.5)** and
+**PT (23.4→19.7)**.
+
+### Committed-set overlap (sanity)
+
+On the mild April day the endogenous set is broadly a SUBSET of the static set
+(Jaccard 0.30–0.84; e.g. GR 6.0 vs 15 units, CZ 12.5 vs 27, SK 8.6 vs 13):
+the MILP simply de-commits units the peak-sized static rule kept on — sensible,
+not a cost mismatch. Winter days flip in the tight zones: the MILP commits MORE
+than the static rule allows (BG 18.9 vs 5, PL 52.1 vs 11, RO 15.8 vs 8),
+because static's SRMC ≤ 1.15×gas eligibility cap excludes the expensive units
+that really do run on a tight day. Outliers (NL/DE_LU June, Jaccard ~0.03–0.05:
+near-total de-commitment in RES-heavy summer) are where the endogenous arm lost
+the most correlation.
+
+### KEY FINDING — the commitment signal is real but SEASONAL
+
+Splitting the same runs by day instead of by zone: on the **winter day
+(2026-01-14), 11 of 14 usable zones improve MAE** (RS −42.3, AT −11.2,
+RO −9.0, GR −7.1, PT −6.9, IT-NORTH −4.5, PL −4.3, CZ −3.5, DE_LU −3.4 …)
+with correlation held or up in most — exactly the conditions where thermal
+genuinely cycles and hour-by-hour commitment carries information the static
+peak-sized set cannot. The **summer day broadly hurts** (GR +16.2, NL +10.9,
+DE_LU +8.7): in RES-dominated conditions the MILP de-commits almost the whole
+must-run set (the Jaccard ~0.03–0.05 outliers above) and the resulting trough
+re-pricing distorts the daily shape. So endogenous commitment information is
+REAL, but conditionally so — it helps when the system is tight/thermal-cycling
+and misleads when RES sets the shape.
+
+### Baseline spot-check — BG 2026-01-14 (and what AT/SK/NO2 numbers mean)
+
+The anomalous merit baselines (BG 464, NO2 469, AT 184, SK 111) are **model
+artifacts of single-zone clearing, not harness artifacts**. BG 2026-01-14
+verified directly: the actuals are clean (one EUR sequence, 96 PT15M rows,
+day-avg €189 — a genuinely expensive winter day region-wide: RO €189/max 393,
+HU €182/max 346), but the single-zone sim prices hours 15–18 at the €3000 cap
+(phantom scarcity, supply/demand ratio 1.15 with no coupled imports at the
+peak) vs actual ~€250–283; those 4 cap-hours alone contribute ~€457 of the
+~€495 MAE. Off the cap episode the sim tracks actuals to ±€30–120. Both arms
+share the artifact, but per-zone verdicts on these zones are dominated by
+whether the committed set happens to shift a cap hour — hence footnote ³.
+
+### Verdict
+
+**Per the decision rule, only 4/14 usable zones improve (2 on trustworthy
+baselines: CZ 19.5→16.5, PT 23.4→19.7) — so NO blanket full-year backfill.**
+With the confound removed, the clean one-variable swap yields aggregate MAE
+−3 €/MWh (on 102.5, mostly artifact zones) at mean correlation −0.01, and the
+zone-level losses are real: GR (−0.113), PL (−0.103) and IT-NORTH (−0.068)
+lose correlation to the same shoulder-flattening distortion §6b found. The
+mechanism is now understood, not just scored: endogenous commitment lowers MAE
+by de-committing must-run in trough hours (prices rise toward SRMC where static
+under-priced), but that same re-timing distorts the daily shape — and whether
+it helps is SEASONAL, not zonal (winter 11/14 better, summer broadly worse).
+The static day-level heuristic — crude as it is — is calibrated WITH the rest
+of the book, and the MILP's unconditionally-"better" commitment is not better
+for prices.
+
+**The unconditional temporal-orders question is closed with a clean
+methodology**: neither the mechanism swap (§6b–6c, block canary) nor the
+committed-set-only swap (§8) beats the calibrated per-period book as a
+default. **The promising follow-up is a winter/tight-day-GATED endogenous
+must-run** (the lever is cheap: a per-zone-day 1–2 s Gurobi MILP behind a
+`ZoneProfile` field, with a guaranteed `:static` fallback), best tested next
+on the frozen 36-day stratified sample before committing to any 365-day run.
