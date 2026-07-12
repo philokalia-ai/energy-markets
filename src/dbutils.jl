@@ -592,7 +592,13 @@ end
 # per-day :p95-books fallback, July 2026) so new results are never mixed
 # with — or skipped because of — old rows. Each version is one selectable
 # "Run" in the Metabase counterfactual dashboard.
-const ENERGY_PRICES_CODE_VERSION = 16
+# v17 = block-commitment bidding mode (order_method=:block_commitment): a
+# Gurobi commitment + fix-and-reprice single-zone clear on the merit book's
+# exact fundamentals, for thermal-cycling zones where plants genuinely cycle
+# (measured DE_LU MAE −30% vs per-period; no help / slightly worse on
+# hydro/water-value zones — a SELECTIVE, zone-dependent refinement, not a
+# global change). The per-period :merit_order path is byte-identical to v16.
+const ENERGY_PRICES_CODE_VERSION = 17
 
 const poolsize = 5
 cnxpool = Pools.Pool{LibPQ.Connection}(poolsize)

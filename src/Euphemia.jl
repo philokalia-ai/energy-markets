@@ -308,6 +308,9 @@ using .MeritOrderBook: create_merit_order_book, ZoneProfile, get_zone_profile,
     SWISS_PROFILE, SWEDEN_SOUTH_PROFILE, AUSTRIA_PROFILE, BELGIUM_PROFILE,
     clear_net_imports_cache!, ZoneScenario, zone_scenario, is_empty_scenario
 
+include("BlockCommitment.jl")
+using .BlockCommitment: clear_block_commitment
+
 # ===== EXPORTS =====
 # All module exports are centralized here following Julia best practices
 # Exports come after includes so all symbols are defined before being exported
@@ -607,12 +610,48 @@ function generate_energy_prices(bidding_zone::String, date::Date;
     fleet_modifier::Union{Nothing,Function}=nothing)
 
     # Validate inputs
-    if !(order_method in [:uc_based, :alternative, :merit_order])
-        error("Invalid order_method: $order_method. Must be :uc_based, :alternative or :merit_order")
+    if !(order_method in [:uc_based, :alternative, :merit_order, :block_commitment])
+        error("Invalid order_method: $order_method. Must be :uc_based, :alternative, :merit_order or :block_commitment")
     end
 
     if !(model in [:mpcc])
         error("Invalid model: $model. Currently only :mpcc is supported")
+    end
+
+    # ---- v17 block-commitment path: commitment + fix-and-reprice clearing on
+    # the merit book's exact fundamentals (Gurobi-only). Bypasses the per-period
+    # MPCC entirely — the price is the balance dual of the repriced LP. Byte
+    # identity of the :merit_order path is untouched (separate branch).
+    if order_method == :block_commitment
+        try
+            println("🔄 Generating energy prices for $bidding_zone on $date")
+            println("   📋 Order method: block_commitment (commitment + fix-and-reprice)")
+            t0 = time()
+            prices = clear_block_commitment(bidding_zone, date;
+                load_modifier=load_modifier,
+                renewable_modifier=renewable_modifier,
+                extra_orders=extra_orders,
+                strategist=strategist,
+                fleet_modifier=fleet_modifier)
+            solve_time_seconds = time() - t0
+            println("   ✅ Block-commitment prices for $(length(prices)) periods in $(round(solve_time_seconds, digits=1))s")
+            if save_to_db
+                try
+                    optimization_run_id = save_optimization_run(bidding_zone, date, order_method, model, "gurobi", :optimal;
+                        solve_time_seconds=solve_time_seconds, num_price_periods=length(prices))
+                    records_saved = save_energy_prices(prices, bidding_zone, date, order_method;
+                        clearing_mode="single_zone", optimization_run_id=optimization_run_id)
+                    println("   ✅ Saved $records_saved block-commitment price records")
+                catch db_error
+                    println("   ⚠️  Warning: Failed to save block-commitment prices: $db_error")
+                end
+            end
+            return prices
+        catch e
+            e isa DataUnavailableError && rethrow(e)
+            println("❌ Error generating block-commitment prices: $e")
+            return Dict{String,Float64}()
+        end
     end
 
     try

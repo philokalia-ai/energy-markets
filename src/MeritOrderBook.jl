@@ -511,6 +511,15 @@ Base.@kwdef struct ZoneProfile
     # zones (SE1/SE2); off for far-north export-congested NO4, whose low price
     # is set by export congestion, not the seasonal water value.
     seasonal_drawdown::Bool = true
+    # Bidding mechanism (v17). `:per_period` (default) = the merit-order
+    # per-period tranche clear used everywhere today; `:block_commitment` =
+    # the Gurobi commitment + fix-and-reprice clear (BlockCommitment.jl) for
+    # thermal-cycling zones where plants genuinely cycle. This field only
+    # documents a zone's intended mechanism for batch/backfill selection; the
+    # single-zone `generate_energy_prices(...; order_method=:block_commitment)`
+    # path selects block clearing explicitly regardless. Default `:per_period`
+    # keeps every existing zone on the byte-identical merit path.
+    bidding_mode::Symbol = :per_period
 end
 
 """
@@ -1225,7 +1234,8 @@ function create_merit_order_book(
     renewable_modifier::Union{Nothing,Function}=nothing,
     extra_orders::Union{Nothing,Function}=nothing,
     strategist::Union{Nothing,Function}=nothing,
-    fleet_modifier::Union{Nothing,Function}=nothing
+    fleet_modifier::Union{Nothing,Function}=nothing,
+    return_inputs::Bool=false
 )
     # Resolve every bid parameter from the profile, letting an explicit keyword
     # override its profile field. With no overrides and the default SEE_PROFILE
@@ -1616,6 +1626,45 @@ function create_merit_order_book(
             cum_capacity >= 1.05 * peak_residual && break
             push!(committed, g.code)
             cum_capacity += availability_factor * g.p_max
+        end
+
+        # v17 block-commitment hook. When `return_inputs=true`, return every
+        # fundamental the merit clear has assembled — the SAME fleet (post
+        # fleet-completion / truthing / derate / scenario), the SAME net demand
+        # (load − RES − net imports), the SAME gas SRMC / water-value drivers,
+        # and the per-generator offered capacity — WITHOUT building the
+        # per-period tranche book. The block-commitment clearer consumes these
+        # so its commitment MILP sees byte-identical fundamentals and only the
+        # clearing mechanism differs (fair comparison). Default `false` skips
+        # this entirely, so every existing caller is byte-identical.
+        if return_inputs
+            offered = [offered_pmax(g) for g in generators]
+            return (
+                success = true,
+                generators = generators,
+                offered_pmax = offered,
+                timeslots = target_timeslots,
+                resolution_minutes = resolution_minutes,
+                net_demand = net_demand,
+                gross_demand = gross_demand,
+                nd_min = nd_min,
+                nd_span = nd_span,
+                gas_srmc = gas_srmc,
+                committed = committed,
+                hydro_dryness = hydro_dryness,
+                reservoir_drawdown = reservoir_drawdown,
+                hydro_model = hydro_model,
+                water_value_base = water_value_base,
+                water_value_span = water_value_span,
+                water_value_dry_boost = water_value_dry_boost,
+                anchor_active = anchor_active,
+                opportunity_anchor = opportunity_anchor,
+                anchor_prices = anchor_prices,
+                anchor_share = anchor_share,
+                price_cap = price_cap,
+                zone = bidding_zone,
+                day = day,
+            )
         end
 
         # Every order is tagged with an owner (Feature 5, strategist hook):
