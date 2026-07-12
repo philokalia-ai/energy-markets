@@ -115,6 +115,31 @@
       Writes never overwrite a morning row.</span></li>
   </ul>
 
+  <h2>The 7-day horizon and the vintage record</h2>
+  <p>
+    The <a href="./index.html">Next 7 days</a> view publishes an hourly price
+    forecast for every upcoming market day. Because the decisive ENTSO-E inputs
+    exist only for tomorrow, the leads are honest about their information:
+  </p>
+  <ul>
+    <li><strong>D&minus;1</strong> is the full model forecast on complete published
+      inputs — frozen the evening before delivery.</li>
+    <li><strong>D&minus;2 … D&minus;7</strong> are currently <em>weekly persistence of
+      the model</em>: the frozen model forecast from the same weekday one week
+      earlier. A deliberately simple baseline — when the weather layer lands, each
+      lead becomes a true re-forecast on fresh weather, and the per-lead scoreboard
+      will show the improvement against exactly this baseline.</li>
+  </ul>
+  <p>
+    Every day the pipeline writes the newly-due vintage for each future day and
+    <strong>never overwrites an earlier one</strong> — so for every delivery day D the
+    record holds what we said at D&minus;7, D&minus;6, …, D&minus;1, each stamped with
+    the moment it was made. The "What we said, when" panel shows exactly that:
+    all vintages overlaid, oldest faintest, against the settled actual once the day
+    realizes. Forecast revisions are data, not embarrassments — they are how the
+    model's information gain per day of lead time is measured.
+  </p>
+
   <h2>Scoring, honestly</h2>
   <p>
     As days settle, predictions are scored per zone and per lead time against the

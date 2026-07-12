@@ -34,13 +34,50 @@
     predictions frozen before delivery, never revised, scored honestly per bidding zone
     and lead time. <a class="more-link" href="./about.html">How it works &rarr;</a></p>
   <nav class="tabs" role="tablist" aria-label="Views">
-    <button id="tab-explorer" class="tab" role="tab" aria-selected="true" data-view="explorer">Zone explorer</button>
+    <button id="tab-horizon" class="tab" role="tab" aria-selected="true" data-view="horizon">Next 7 days</button>
+    <button id="tab-explorer" class="tab" role="tab" aria-selected="false" data-view="explorer">Zone explorer</button>
     <button id="tab-board" class="tab" role="tab" aria-selected="false" data-view="board">Scoreboard</button>
   </nav>
 </div>
 
 <main class="main">
   <div id="load-error" class="load-error" hidden></div>
+
+  <!-- ============ Next 7 days (horizon + revisions) ============ -->
+  <section id="view-horizon" class="view" role="tabpanel" aria-labelledby="tab-horizon" hidden>
+    <div class="filter-row">
+      <label class="filter">
+        <span class="filter-label">Zone</span>
+        <select id="hzone-select" aria-label="Bidding zone"></select>
+      </label>
+    </div>
+
+    <div class="chart-card">
+      <div class="chart-head">
+        <h2 id="hz-title" class="chart-title"></h2>
+        <p id="hz-sub" class="chart-sub"></p>
+      </div>
+      <div id="hz-legend" class="legend"></div>
+      <div id="hz-wrap" class="chart-wrap"></div>
+    </div>
+
+    <div class="chart-card" style="margin-top: 16px">
+      <div class="chart-head">
+        <h2 id="rev-title" class="chart-title"></h2>
+        <p class="chart-sub">Every vintage we published for this delivery day, oldest to newest —
+          the record of what we said at D&minus;7 &hellip; D&minus;1, plus the settled actual.
+          Predictions are frozen when written and never revised.</p>
+      </div>
+      <div class="filter-row" style="margin: 10px 0 4px">
+        <div class="filter">
+          <span class="filter-label">Delivery day</span>
+          <div id="rev-daybtns" class="segmented" role="group" aria-label="Delivery day"></div>
+        </div>
+      </div>
+      <div id="rev-legend" class="legend"></div>
+      <div id="rev-wrap" class="chart-wrap"></div>
+    </div>
+  </section>
 
   <!-- ============ Zone explorer ============ -->
   <section id="view-explorer" class="view" role="tabpanel" aria-labelledby="tab-explorer">
