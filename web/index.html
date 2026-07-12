@@ -35,6 +35,7 @@
     and lead time. <a class="more-link" href="./about.html">How it works &rarr;</a></p>
   <nav class="tabs" role="tablist" aria-label="Views">
     <button id="tab-horizon" class="tab" role="tab" aria-selected="true" data-view="horizon">Next 7 days</button>
+    <button id="tab-map" class="tab" role="tab" aria-selected="false" data-view="map">Map</button>
     <button id="tab-explorer" class="tab" role="tab" aria-selected="false" data-view="explorer">Zone explorer</button>
     <button id="tab-board" class="tab" role="tab" aria-selected="false" data-view="board">Scoreboard</button>
   </nav>
@@ -42,6 +43,36 @@
 
 <main class="main">
   <div id="load-error" class="load-error" hidden></div>
+
+  <!-- ============ Map ============ -->
+  <section id="view-map" class="view" role="tabpanel" aria-labelledby="tab-map" hidden>
+    <div class="filter-row">
+      <div class="filter">
+        <span class="filter-label">Show</span>
+        <div id="map-metric" class="segmented" role="group" aria-label="Map metric"></div>
+      </div>
+      <div class="filter map-day-filter">
+        <span class="filter-label">Market day — <span id="map-day-label"></span></span>
+        <input id="map-day-slider" type="range" min="0" max="0" step="1" value="0"
+               aria-label="Market day">
+      </div>
+    </div>
+
+    <div class="chart-card">
+      <div class="chart-head">
+        <h2 id="map-title" class="chart-title"></h2>
+        <p id="map-sub" class="chart-sub">Day-average day-ahead price per bidding zone ·
+          tiles are laid out geographically · click a zone to open it in the explorer</p>
+      </div>
+      <div id="map-wrap" class="chart-wrap map-wrap"></div>
+      <div class="map-legend-row">
+        <span id="map-legend-lo" class="map-legend-cap"></span>
+        <span id="map-legend-bar" class="map-legend-bar" aria-hidden="true"></span>
+        <span id="map-legend-hi" class="map-legend-cap"></span>
+      </div>
+      <p id="map-comment" class="day-comment"></p>
+    </div>
+  </section>
 
   <!-- ============ Next 7 days (horizon + revisions) ============ -->
   <section id="view-horizon" class="view" role="tabpanel" aria-labelledby="tab-horizon" hidden>
@@ -104,6 +135,7 @@
           <p id="chart-sub" class="chart-sub"></p>
         </div>
         <div id="day-stats" class="stat-row"></div>
+        <p id="day-comment" class="day-comment"></p>
         <div id="chart-legend" class="legend"></div>
         <div id="chart-wrap" class="chart-wrap"></div>
         <details class="table-details">

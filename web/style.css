@@ -570,3 +570,47 @@ select {
   color: var(--terracotta);
   white-space: nowrap;
 }
+
+/* ---------- map view ---------- */
+.map-wrap { max-width: 760px; }
+.map-wrap svg { display: block; width: 100%; height: auto; }
+.map-tile { cursor: pointer; }
+.map-tile:hover rect, .map-tile:focus-visible rect {
+  stroke: var(--deep-blue);
+  stroke-width: 2;
+}
+.map-tile:focus-visible { outline: none; }
+.map-tile text { pointer-events: none; font-family: var(--sans); }
+.map-day-filter { min-width: 260px; }
+.map-day-filter input[type="range"] {
+  width: 100%;
+  accent-color: var(--terracotta);
+  margin-top: 8px;
+}
+.map-legend-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  max-width: 420px;
+}
+.map-legend-bar {
+  flex: 1;
+  height: 10px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+}
+.map-legend-cap {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.day-comment {
+  margin: 10px 0 2px;
+  font-size: 13.5px;
+  color: var(--text-secondary);
+  max-width: 72em;
+  border-left: 3px solid var(--terracotta-soft);
+  padding-left: 10px;
+}

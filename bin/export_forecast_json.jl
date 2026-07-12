@@ -154,6 +154,79 @@ function export_zone_files()
     println("wrote $nz zone files to $zdir")
 end
 
+# web/data/map.json — the map view's data contract: one entry per market day
+# (last MAP_DAYS), each with per-zone day aggregates from the FRESHEST lead:
+#   {"days":[{"date","zones":{"GR":{"sim","act","mae","corr","lead","made"},…}},…]}
+# "sim"/"act" are day-average €/MWh (act null until settled); mae/corr are the
+# day scores for that zone-day at the same lead (null until scored).
+const MAP_DAYS = 60
+
+function export_map_json()
+    prices = Euphemia.sql2df_with_retry("""
+        WITH freshest AS (
+            SELECT bidding_zone, market_date, MIN(lead_days) AS lead
+            FROM simulations.forecast_prices
+            WHERE code_version = \$1
+            GROUP BY 1, 2)
+        SELECT p.bidding_zone AS z, p.market_date, p.lead_days,
+               (p.date_time_utc AT TIME ZONE 'UTC') AS t,
+               p.price_eur_mwh AS sim,
+               (p.prediction_made_utc AT TIME ZONE 'UTC') AS made
+        FROM simulations.forecast_prices p
+        JOIN freshest f ON f.bidding_zone = p.bidding_zone
+                       AND f.market_date = p.market_date AND f.lead = p.lead_days
+        WHERE p.code_version = \$1
+          AND p.market_date IN (
+            SELECT DISTINCT market_date FROM simulations.forecast_prices
+            WHERE code_version = \$1 ORDER BY market_date DESC LIMIT \$2)
+    """, [CV, MAP_DAYS])
+    if isempty(prices)
+        println("no forecast_prices rows for cv=$CV — no map.json written")
+        return
+    end
+    scores = Euphemia.sql2df_with_retry("""
+        SELECT bidding_zone AS z, market_date, lead_days, mae, corr
+        FROM simulations.forecast_scores WHERE code_version = \$1
+    """, [CV])
+    scoremap = Dict{Tuple{String,Date,Int},Any}(
+        (String(r.z), Date(r.market_date), Int(r.lead_days)) => r
+        for r in eachrow(scores))
+
+    sd, ed = extrema(Date.(prices.market_date))
+    act = resolution_aware_actuals(sd - Day(1), ed)
+    actmap = Dict{Tuple{String,DateTime},Float64}(
+        (String(a.z), DateTime(a.t)) => Float64(a.act) for a in eachrow(act))
+
+    days = Any[]
+    for d in sort(unique(Date.(prices.market_date)))
+        sub = prices[Date.(prices.market_date) .== d, :]
+        zones = Dict{String,Any}()
+        for zone in unique(String.(sub.z))
+            zp = sub[sub.z .== zone, :]
+            hours = [DateTime(t) for t in zp.t]
+            acts = [get(actmap, (zone, h), nothing) for h in hours]
+            settled = [a for a in acts if a !== nothing]
+            lead = Int(zp.lead_days[1])
+            sc = get(scoremap, (zone, d, lead), nothing)
+            zones[zone] = Dict(
+                "sim" => round(mean(Float64.(zp.sim)); digits=2),
+                "act" => length(settled) == length(hours) ?
+                         round(mean(Float64.(settled)); digits=2) : nothing,
+                "mae" => sc === nothing ? nothing : nn(sc.mae),
+                "corr" => sc === nothing ? nothing : nn(sc.corr),
+                "lead" => lead,
+                "made" => DateTime(zp.made[1]))
+        end
+        push!(days, Dict("date" => d, "zones" => zones))
+    end
+    path = joinpath(OUT_DIR, "map.json")
+    open(path, "w") do io
+        json_write(io, Dict("generated_utc" => now(UTC), "code_version" => CV,
+                            "market_day_tz" => "Europe/Athens", "days" => days))
+    end
+    println("wrote $path ($(length(days)) days)")
+end
+
 function main()
     println("=" ^ 70)
     println("EXPORT FORECAST JSON  cv=$CV  out=$OUT_DIR")
@@ -161,6 +234,7 @@ function main()
     mkpath(OUT_DIR)
     export_scoreboard()
     export_zone_files()
+    export_map_json()
     println("EXPORT COMPLETE")
 end
 

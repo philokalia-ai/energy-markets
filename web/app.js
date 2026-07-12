@@ -107,11 +107,12 @@
       var i = kv.indexOf("=");
       if (i > 0) params[decodeURIComponent(kv.slice(0, i))] = decodeURIComponent(kv.slice(i + 1));
     });
-    if (params.view === "board" || params.view === "explorer" || params.view === "horizon") state.view = params.view;
+    if (["board", "explorer", "horizon", "map"].indexOf(params.view) !== -1) state.view = params.view;
     if (params.zone) state.zone = params.zone;
     if (params.lead && !isNaN(+params.lead)) state.lead = +params.lead;
     if (params.day && /^\d{4}-\d{2}-\d{2}$/.test(params.day)) state.day = params.day;
     if (params.rev && /^\d{4}-\d{2}-\d{2}$/.test(params.rev)) state.revDay = params.rev;
+    if (params.metric && ["sim", "act", "err"].indexOf(params.metric) !== -1) mapState.metric = params.metric;
     if (params.window) state.window = params.window;
   }
 
@@ -121,6 +122,7 @@
     if (state.lead !== null) parts.push("lead=" + state.lead);
     if (state.day) parts.push("day=" + state.day);
     if (state.revDay) parts.push("rev=" + state.revDay);
+    if (state.view === "map" && mapState.metric !== "sim") parts.push("metric=" + mapState.metric);
     if (state.window && state.window !== "all") parts.push("window=" + encodeURIComponent(state.window));
     suppressHash = true;
     window.location.hash = parts.join("&");
@@ -163,6 +165,8 @@
     $("view-explorer").hidden = v !== "explorer";
     $("view-board").hidden = v !== "board";
     $("view-horizon").hidden = v !== "horizon";
+    $("view-map").hidden = v !== "map";
+    if (v === "map") loadMap().then(renderMap);
     document.querySelectorAll(".tab").forEach(function (t) {
       t.setAttribute("aria-selected", String(t.dataset.view === v));
     });
@@ -557,6 +561,7 @@
       "Lead time D-" + day.lead_days + madeAt +
       " · hours shown in Europe/Athens (market day)";
     renderDayStats(day);
+    renderDayComment(day);
     renderLegend(day);
     renderChart(day);
     renderHourTable(day);
@@ -871,6 +876,300 @@
     }
   }
 
+  // ---------- map view ----------
+
+  // Tile-grid layout: [col, row], geographically suggestive. One tile per zone.
+  var MAP_GRID = {
+    NO4: [2.4, 0], SE1: [4.2, 0], FI: [6.0, 0.4],
+    NO3: [2.6, 1], SE2: [4.2, 1],
+    NO5: [1.4, 2], NO1: [2.6, 2], SE3: [4.2, 2], EE: [6.6, 2],
+    NO2: [1.8, 3], DK1: [3.0, 3.2], SE4: [4.6, 3], LV: [6.6, 3],
+    DK2: [3.9, 4], LT: [6.6, 4],
+    NL: [2.2, 5], DE_LU: [3.6, 5], PL: [5.4, 5],
+    BE: [1.8, 6], CZ: [4.8, 6.2], SK: [6.0, 6.4],
+    FR: [1.4, 7.4], CH: [3.0, 7.2], AT: [4.4, 7.2], HU: [5.6, 7.4], RO: [6.8, 7.4],
+    PT: [0.0, 9.0], ES: [1.2, 9.0], SI: [4.2, 8.2], RS: [5.8, 8.4], BG: [7.0, 8.4],
+    "IT-NORTH": [3.2, 8.6], "IT-CNORTH": [3.6, 9.6], "IT-CSOUTH": [4.2, 10.5],
+    "IT-SOUTH": [5.0, 11.2], "IT-Calabria": [5.2, 12.2], "IT-Sicily": [4.3, 13.0],
+    "IT-Sardinia": [2.9, 11.2],
+    GR: [6.8, 10.6],
+  };
+
+  var mapState = { data: null, dayIdx: null, metric: "sim" };
+
+  var MAP_METRICS = [
+    ["sim", "Forecast"],
+    ["act", "Actual (settled)"],
+    ["err", "Error (fc − act)"],
+  ];
+
+  function loadMap() {
+    if (mapState.data) return Promise.resolve(mapState.data);
+    return loadWithFallback("map.json").then(function (res) {
+      mapState.data = res.json;
+      if (res.json && res.json.fixture) setFixtureBanner(true);
+      return res.json;
+    });
+  }
+
+  // color ramps (low -> high); diverging ramp for error
+  var RAMP_SEQ = ["#2C6BA8", "#7FA8CB", "#EAE2CF", "#DA9A6B", "#C4643C", "#8E2F1C"];
+  var RAMP_DIV = ["#16375F", "#2C6BA8", "#EAE2CF", "#C4643C", "#8E2F1C"];
+
+  function hex2rgb(h) {
+    return [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
+  }
+  function rampColor(ramp, t) {
+    t = Math.max(0, Math.min(1, t));
+    var seg = t * (ramp.length - 1);
+    var i = Math.min(ramp.length - 2, Math.floor(seg));
+    var f = seg - i;
+    var a = hex2rgb(ramp[i]), b = hex2rgb(ramp[i + 1]);
+    return "rgb(" + Math.round(a[0] + (b[0] - a[0]) * f) + "," +
+      Math.round(a[1] + (b[1] - a[1]) * f) + "," + Math.round(a[2] + (b[2] - a[2]) * f) + ")";
+  }
+  function rampCss(ramp) {
+    return "linear-gradient(90deg, " + ramp.join(", ") + ")";
+  }
+  function quantile(sorted, q) {
+    if (!sorted.length) return 0;
+    var pos = (sorted.length - 1) * q;
+    var lo = Math.floor(pos), hi = Math.ceil(pos);
+    return sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo);
+  }
+
+  function mapValue(z, metric) {
+    if (!z) return null;
+    if (metric === "sim") return z.sim;
+    if (metric === "act") return z.act;
+    if (z.act === null || z.act === undefined) return null;
+    return z.sim - z.act;
+  }
+
+  function metricDomain(metric) {
+    var vals = [];
+    mapState.data.days.forEach(function (d) {
+      Object.keys(d.zones).forEach(function (zn) {
+        var v = mapValue(d.zones[zn], metric);
+        if (v !== null && v !== undefined) vals.push(v);
+      });
+    });
+    vals.sort(function (a, b) { return a - b; });
+    if (metric === "err") {
+      var m = Math.max(Math.abs(quantile(vals, 0.05)), Math.abs(quantile(vals, 0.95)), 5);
+      return [-m, m];
+    }
+    return [Math.min(0, quantile(vals, 0.02)), Math.max(quantile(vals, 0.98), 10)];
+  }
+
+  function renderMapMetricButtons() {
+    var box = $("map-metric");
+    box.textContent = "";
+    MAP_METRICS.forEach(function (m) {
+      var b = el("button", null, m[1]);
+      b.type = "button";
+      b.setAttribute("aria-pressed", String(mapState.metric === m[0]));
+      b.addEventListener("click", function () {
+        mapState.metric = m[0];
+        renderMap();
+        writeHash();
+      });
+      box.appendChild(b);
+    });
+  }
+
+  function buildMapComment(day) {
+    var zones = Object.keys(day.zones);
+    var scored = zones.filter(function (z) {
+      return day.zones[z].corr !== null && day.zones[z].corr !== undefined;
+    });
+    if (!scored.length) {
+      var bySim = zones.slice().sort(function (a, b) { return day.zones[b].sim - day.zones[a].sim; });
+      var hi = bySim[0], lo = bySim[bySim.length - 1];
+      return "Forecast day — actuals settle after delivery. The model sees the priciest power in " +
+        hi + " (€" + fmt(day.zones[hi].sim, 0) + "/MWh on average) and the cheapest in " +
+        lo + " (€" + fmt(day.zones[lo].sim, 0) + "), a spread of €" +
+        fmt(day.zones[hi].sim - day.zones[lo].sim, 0) + " across the footprint.";
+    }
+    var corrs = scored.map(function (z) { return day.zones[z].corr; }).sort(function (a, b) { return a - b; });
+    var med = quantile(corrs, 0.5);
+    var best = scored.reduce(function (a, z) { return day.zones[z].corr > day.zones[a].corr ? z : a; });
+    var worst = scored.reduce(function (a, z) { return day.zones[z].corr < day.zones[a].corr ? z : a; });
+    var good = scored.filter(function (z) { return day.zones[z].corr >= 0.75; }).length;
+    var errs = scored
+      .filter(function (z) { return day.zones[z].act !== null && day.zones[z].act !== undefined; })
+      .map(function (z) { return day.zones[z].sim - day.zones[z].act; });
+    var meanErr = errs.length ? errs.reduce(function (a, b) { return a + b; }, 0) / errs.length : 0;
+    var lvl = med >= 0.85 ? "a strong day for the model" :
+              med >= 0.7 ? "a good day for the model" :
+              med >= 0.5 ? "a mixed day" : "a hard day";
+    var s = "Settled — " + lvl + ": median hourly correlation " + fmt(med, 2) +
+      " across " + scored.length + " zones (" + good + " above 0.75). Best: " + best +
+      " (" + fmt(day.zones[best].corr, 2) + "); hardest: " + worst +
+      " (" + fmt(day.zones[worst].corr, 2) + ").";
+    if (Math.abs(meanErr) >= 5) {
+      s += " On price levels the model read €" + fmt(Math.abs(meanErr), 0) + "/MWh " +
+        (meanErr > 0 ? "high" : "low") + " on average" +
+        (meanErr < 0 ? " — for a competitive counterfactual, under-pricing is signal, not noise." : ".");
+    }
+    return s;
+  }
+
+  function renderMap() {
+    if (!mapState.data || !mapState.data.days || !mapState.data.days.length) {
+      $("map-title").textContent = "No map data yet";
+      $("map-comment").textContent = "Map data arrives with the next forecast run.";
+      return;
+    }
+    var days = mapState.data.days;
+    if (mapState.dayIdx === null || mapState.dayIdx >= days.length) mapState.dayIdx = days.length - 1;
+    var day = days[mapState.dayIdx];
+    var metric = mapState.metric;
+
+    var slider = $("map-day-slider");
+    slider.max = days.length - 1;
+    slider.value = mapState.dayIdx;
+    $("map-day-label").textContent = dayLabel(day.date);
+    renderMapMetricButtons();
+
+    var mDef = MAP_METRICS.filter(function (m) { return m[0] === metric; })[0];
+    $("map-title").textContent = mDef[1] + " — " + dayLabel(day.date) +
+      (metric !== "err" ? " (€/MWh, day average)" : " (€/MWh)");
+
+    var dom = metricDomain(metric);
+    var ramp = metric === "err" ? RAMP_DIV : RAMP_SEQ;
+    $("map-legend-lo").textContent = "€" + fmt(dom[0], 0);
+    $("map-legend-hi").textContent = "€" + fmt(dom[1], 0) + (metric === "err" ? "" : "+");
+    $("map-legend-bar").style.backgroundImage = rampCss(ramp);
+
+    var wrap = $("map-wrap");
+    wrap.textContent = "";
+    var TW = 76, TH = 52, GX = 84, GY = 60, PAD = 10;
+    var maxC = 0, maxR = 0;
+    Object.keys(MAP_GRID).forEach(function (z) {
+      maxC = Math.max(maxC, MAP_GRID[z][0]);
+      maxR = Math.max(maxR, MAP_GRID[z][1]);
+    });
+    var VBW = PAD * 2 + maxC * GX + TW, VBH = PAD * 2 + maxR * GY + TH;
+    var svg = svgEl("svg", { viewBox: "0 0 " + VBW + " " + VBH, role: "img",
+      "aria-label": "Map of day-ahead prices by bidding zone" });
+    var css = getComputedStyle(document.documentElement);
+    var C = { muted: css.getPropertyValue("--text-muted").trim(),
+              line: css.getPropertyValue("--border").trim() };
+
+    var tooltip = el("div", "tooltip");
+    tooltip.style.display = "none";
+    wrap.appendChild(svg);
+    wrap.appendChild(tooltip);
+
+    Object.keys(MAP_GRID).forEach(function (zn) {
+      var pos = MAP_GRID[zn];
+      var x = PAD + pos[0] * GX, y = PAD + pos[1] * GY;
+      var z = day.zones[zn];
+      var v = mapValue(z, metric);
+      var has = v !== null && v !== undefined;
+      var t = has ? (v - dom[0]) / (dom[1] - dom[0]) : 0;
+      var g = svgEl("g", { class: "map-tile", tabindex: "0", role: "button",
+        "aria-label": zn + (has ? ": " + fmt(v, 1) + " €/MWh" : ": no data") });
+      g.appendChild(svgEl("rect", {
+        x: x, y: y, width: TW, height: TH, rx: 8,
+        fill: has ? rampColor(ramp, t) : "transparent",
+        stroke: C.line, "stroke-width": has ? 0.5 : 1,
+        "stroke-dasharray": has ? "none" : "3 3",
+      }));
+      var dark = has && (t < 0.28 || t > 0.78);
+      var name = svgEl("text", {
+        x: x + TW / 2, y: y + 21, "text-anchor": "middle",
+        "font-size": zn.length > 6 ? 10 : 12, "font-weight": 600,
+        fill: has ? (dark ? "#FBF8F1" : "#22303F") : C.muted,
+      });
+      name.textContent = zn.replace("IT-", "IT·").replace("DE_LU", "DE/LU");
+      g.appendChild(name);
+      var val = svgEl("text", {
+        x: x + TW / 2, y: y + 40, "text-anchor": "middle",
+        "font-size": 12, "font-variant-numeric": "tabular-nums",
+        fill: has ? (dark ? "#FBF8F1" : "#22303F") : C.muted,
+      });
+      val.textContent = has ? (metric === "err" && v > 0 ? "+" : "") + fmt(v, 0) : "—";
+      g.appendChild(val);
+
+      function showTip() {
+        tooltip.textContent = "";
+        tooltip.appendChild(el("div", "tt-head", zn + " · " + dayLabel(day.date) +
+          (z && z.lead ? " · D-" + z.lead : "")));
+        var rows = [];
+        if (z) {
+          rows.push(["forecast", z.sim]);
+          rows.push(["actual", z.act]);
+          if (z.act !== null && z.act !== undefined) rows.push(["error", z.sim - z.act]);
+          if (z.mae !== null && z.mae !== undefined) rows.push(["MAE", z.mae]);
+          if (z.corr !== null && z.corr !== undefined) rows.push(["corr", z.corr]);
+        }
+        rows.forEach(function (r) {
+          var row = el("div", "tt-row");
+          row.appendChild(el("span", "tt-val",
+            r[1] === null || r[1] === undefined ? "—" : fmt(r[1], r[0] === "corr" ? 2 : 1)));
+          row.appendChild(el("span", "tt-name", r[0]));
+          tooltip.appendChild(row);
+        });
+        var rect = svg.getBoundingClientRect();
+        var scale = rect.width / VBW;
+        tooltip.style.display = "block";
+        var left = (x + TW + 6) * scale;
+        if (left + tooltip.offsetWidth > rect.width) left = (x - 6) * scale - tooltip.offsetWidth;
+        tooltip.style.left = Math.max(0, left) + "px";
+        tooltip.style.top = Math.max(0, y * scale - 8) + "px";
+      }
+      g.addEventListener("pointerenter", showTip);
+      g.addEventListener("focus", showTip);
+      g.addEventListener("pointerleave", function () { tooltip.style.display = "none"; });
+      g.addEventListener("blur", function () { tooltip.style.display = "none"; });
+      g.addEventListener("click", function () {
+        state.zone = zn;
+        state.day = day.date;
+        setView("explorer");
+        selectZone(zn, true);
+        writeHash();
+      });
+      svg.appendChild(g);
+    });
+
+    $("map-comment").textContent = buildMapComment(day);
+  }
+
+  // ---------- day commentary (explorer) ----------
+
+  function renderDayComment(day) {
+    var p = $("day-comment");
+    if (isPending(day)) {
+      p.textContent = "Prediction only — frozen " +
+        (day.prediction_made_utc ? day.prediction_made_utc.replace("T", " ").replace("Z", " UTC") : "") +
+        ", never revised. Commentary appears once the day settles.";
+      return;
+    }
+    var tier = (day.corr >= 0.9 && day.mae < 15) ? "An excellent day for the model" :
+               day.corr >= 0.75 ? "A good day for the model" :
+               day.corr >= 0.5 ? "A mixed day" : "A hard day for the model";
+    var s = tier + ": hourly correlation " + fmt(day.corr, 2) +
+      " with a mean miss of €" + fmt(day.mae, 1) + "/MWh.";
+    if (day.bias !== null && day.bias !== undefined && Math.abs(day.bias) >= 8) {
+      s += " It ran €" + fmt(Math.abs(day.bias), 0) + " " + (day.bias > 0 ? "high" : "low") +
+        " on average" + (day.bias < 0 ? " — under-pricing is what a competitive counterfactual should do where the real market prices above competition." : ".");
+    }
+    var wi = -1, wv = 0;
+    day.hours.forEach(function (h, i) {
+      var a = day.actual[i];
+      if (a === null || a === undefined) return;
+      var e = Math.abs(day.sim[i] - a);
+      if (e > wv) { wv = e; wi = i; }
+    });
+    if (wi >= 0 && wv >= 15) {
+      s += " Largest miss: " + hourLabel(day.hours[wi]) + "–" + hourEndLabel(day.hours[wi]) +
+        " Athens (forecast €" + fmt(day.sim[wi], 0) + " vs actual €" + fmt(day.actual[wi], 0) + ").";
+    }
+    p.textContent = s;
+  }
+
   // ---------- scoreboard ----------
 
   function scoreboardWindows() {
@@ -1072,6 +1371,10 @@
     });
     $("hzone-select").addEventListener("change", function (ev) {
       selectZone(ev.target.value);
+    });
+    $("map-day-slider").addEventListener("input", function (ev) {
+      mapState.dayIdx = +ev.target.value;
+      renderMap();
     });
     $("window-select").addEventListener("change", function (ev) {
       state.window = ev.target.value;
