@@ -35,3 +35,15 @@ Findings summary: solar corr 0.92 with radiation + sun-elevation (ENTSO-E
 population-sited data, not the model; substituting weather-RES into the GR
 price model costs corr 0.850 → 0.686 — keep ENTSO-E at lead 1, use weather for
 earliness and lead 2–7 once the ceres data fixes land.
+
+## v2/v3 (100 m wind + honest vintages, public-API preview)
+
+| script | what it measures |
+|---|---|
+| `fetch_public.py` | pulls ERA5 100 m wind + GHI (archive API) and honest lead-1/2 GFS vintages (Previous-Runs API) for the selected cells |
+| `fit_res_v2.jl` | 40-cell 100 m wind ridge + 20-cell GHI solar, lead-1/2, targets actual & ENTSO-E DAfc |
+| `solar_hod_test.jl` | per-hour-of-day solar calibration (corr 0.958→0.988 vs DAfc) |
+
+Price ladder (12 OOS days): ENTSO-E inputs 0.850/€24.6 → v1 0.686 → v2 0.754 →
+v3 (hod solar) **0.802/€29.6**. Attribution: wind-only substitution 0.823,
+solar-only 0.778. See the investigation doc §4b.

@@ -72,18 +72,45 @@ input differs (ENTSO-E DA forecast vs our weather-RES via `renewable_modifier`).
 | RES input | price corr vs DAM | price MAE (€/MWh) |
 |---|---|---|
 | ENTSO-E DA forecasts (production) | **0.850** | **24.6** |
-| weather-RES (S2 solar + 20-cell wind) | 0.686 | 36.5 |
+| v1: 10 m city wind + ERA5 direct radiation | 0.686 | 36.5 |
+| v2: 100 m 40-cell wind + GHI (honest lead-1) | 0.754 | 33.8 |
+| — v2 wind only (ENTSO-E solar kept) | 0.823 | 27.4 |
+| — v2 solar only (ENTSO-E wind kept) | 0.778 | 30.7 |
+| **v3: v2 wind + hour-calibrated solar** | **0.802** | **29.6** |
 
 (pooled over 288 h; baseline matches the production GR record 0.86/€20.8 —
-sanity check). Per-day: weather-RES loses on 11 of 12 days, worst on
-high-wind-error days (2026-06-26: 0.90→0.63). **Wind error is the driver**
-(458 MW MAE vs ENTSO-E's 256; solar contributes little of the gap).
+sanity check).
 
-**Conclusion: at lead 1, keep ENTSO-E RES forecasts — do not substitute.**
-The weather path is worth ~0.69 corr *today*, which is the current price of
-(a) forecasting hours before ENTSO-E publishes and (b) any lead ≥ 2 forecast
-at all. The §6 data fixes (100 m wind, farm-sited points, forecast radiation)
-are what would close the gap.
+## 4b. Closing the gap — 100 m wind + honest vintages (public-API preview of the §6 fixes)
+
+Because the public open-meteo APIs already serve what §6 asks the pipeline to
+store, the fixes were measurable immediately: ERA5 archive → 100 m wind
+history; **Previous-Runs API** → honest lead-1/2 GFS vintages (no lookahead);
+40 correlation-selected cells; ridge over per-site power-curve + raw-speed
+features; solar = 20-cell GHI + sun elevation + per-hour-of-day slopes.
+Targets: both actual RES and the ENTSO-E DA forecast (the price-relevant
+series — the market clears on the forecast, not on actuals).
+
+| model (honest lead-1 inputs) | vs actual | vs ENTSO-E DAfc |
+|---|---|---|
+| wind, 40 cells @ 100 m | corr 0.839 / 365 MW | **corr 0.923 / 264 MW** |
+| wind, same @ lead-2 | 0.830 / 377 | 0.910 / 279 |
+| solar, GHI + hour-of-day calibration | **0.949 / 345 MW** | **0.988 / 337 MW** |
+| solar @ lead-2 | ≈ identical | ≈ identical |
+
+Notes: ENTSO-E's own wind forecast is 0.911/256 vs actual — our lead-1 wind
+now predicts *their input* at 0.923. Our calibrated solar matches ENTSO-E's
+correlation vs actual (0.949 vs 0.948) at **half** their MAE (345 vs 715 —
+theirs carries the curtailment bias). Weather-forecast horizon costs almost
+nothing (lead-1 → lead-2 loses ~0.01), so **lead 2–7 forecasts inherit
+essentially lead-1 RES quality**.
+
+**Conclusion: at lead 1, keep ENTSO-E RES forecasts — do not substitute**
+(0.850 vs 0.802). But the weather path now costs only ~0.05 price-corr, and
+that is the price of (a) forecasting hours before ENTSO-E publishes and
+(b) any lead ≥ 2 forecast at all — where the alternative is nothing. The §6
+fixes are validated: they move the full-weather price forecast from 0.686 to
+0.802 on identical days.
 
 ## 5. Do we need physical modelling (Dyad)?
 
@@ -102,6 +129,10 @@ are what would close the gap.
   then the next step is per-farm power curves, not Dyad.
 
 ## 6. What we need from ceres / infra (concrete, ordered by value)
+
+> Status: items 1–4 + 6 are implemented in **pankgeorg/ceres#491** (ETL columns,
+> schema migration, vintage table) and **pankgeorg/infra#9** (GFS sync variables,
+> evening ETL run). Item 5 (EU catalogue) is follow-up work.
 
 1. **Serve radiation on the forecast endpoint** (`pankgeorg/infra` →
    `manifests/weather`, open-meteo forecast sync): add `shortwave_radiation`
@@ -124,13 +155,19 @@ are what would close the gap.
 ## 7. Bottom line
 
 - **Do not substitute at lead 1**: ENTSO-E RES stays the input (price corr
-  0.850 vs 0.686). The measured degradation IS the honest price of earliness.
-- **Solar**: model-ready (corr 0.92, 3-term linear); blocked only on radiation
-  flowing in the forecast table (ceres #1).
-- **Wind**: corr 0.75 today; the fix list is data plumbing, not modelling.
-  With 100 m wind + farm-sited points, 0.85+ is plausible (predicting
-  ENTSO-E's own forecast already reaches 0.85 with 10 m city data).
-- **The prize** is (a) forecasting **hours earlier** in the afternoon and
-  (b) **lead 2–7**, where no ENTSO-E input exists — a degraded-but-real
-  forecast against zero. For lead ≥ 2 a load model is also required
+  0.850 vs 0.802 for the best full-weather model). The measured degradation
+  IS the honest price of earliness.
+- **Solar is solved**: GHI + sun elevation + hour-of-day calibration predicts
+  the ENTSO-E DA forecast at corr 0.988 (MAE 337 MW) and actuals at 0.949 —
+  ENTSO-E's own correlation at half its MAE. Blocked in production only on
+  radiation flowing in the forecast table (ceres#491 + infra#9).
+- **Wind at honest lead-1 is 0.923 vs the market's input** (0.839 vs actual)
+  with 40 cells @ 100 m — up from 0.746 with the 10 m city data. Remaining
+  ideas: real farm coordinates, more cells, direction features.
+- **Lead 2 is almost free** (−0.01 corr), so lead 2–7 price forecasts inherit
+  near-lead-1 RES quality. For lead ≥ 2 a load model is also required
   (temperature + calendar — same infra, likely easier than wind).
+- All v2/v3 numbers were measured through the **public** open-meteo archive +
+  Previous-Runs APIs — the same GFS/ERA5 data the fixed pipeline will store,
+  so they transfer, and `city_forecast_vintage` will keep the backtests
+  honest going forward.
