@@ -1,0 +1,541 @@
+% =============================================================================
+% ΚΕΦΑΛΑΙΟ 2: ΘΕΩΡΗΤΙΚΟ ΥΠΟΒΑΘΡΟ
+% =============================================================================
+% Αυτό το αρχείο περιέχει το πλήρες Κεφάλαιο 2 της διπλωματικής εργασίας
+% "Μοντελοποίηση Αγορών Ηλεκτρικής Ενέργειας με Julia/JuMP"
+% 
+% Για ενσωμάτωση στο thesis.tex, χρησιμοποιήστε: \input{chapter2_theoretical_background}
+% =============================================================================
+
+\chapter{Θεωρητικό Υπόβαθρο}
+\label{ch:theoretical-background}
+
+Στο παρόν κεφάλαιο παρουσιάζεται το θεωρητικό υπόβαθρο που απαιτείται για την κατανόηση της μοντελοποίησης των αγορών ηλεκτρικής ενέργειας. Αρχικά, εισάγονται οι βασικές έννοιες του μαθηματικού προγραμματισμού και οι κατηγορίες προβλημάτων βελτιστοποίησης που χρησιμοποιούνται στην εργασία. Στη συνέχεια, αναλύεται το πρόβλημα της Δέσμευσης Μονάδων (Unit Commitment), το οποίο αποτελεί θεμελιώδες πρόβλημα στη λειτουργία των συστημάτων ηλεκτρικής ενέργειας. Ακολουθεί η παρουσίαση του αλγορίθμου EUPHEMIA που χρησιμοποιείται για την εκκαθάριση της ευρωπαϊκής Προημερήσιας Αγοράς. Τέλος, περιγράφονται οι στρατηγικές υποβολής προσφορών που μετατρέπουν τα αποτελέσματα του Unit Commitment σε εντολές αγοράς.
+
+
+% =============================================================================
+\section{Μαθηματικός Προγραμματισμός}
+\label{sec:mathematical-programming}
+
+Ο μαθηματικός προγραμματισμός αποτελεί τον κλάδο των εφαρμοσμένων μαθηματικών που ασχολείται με την εύρεση της βέλτιστης λύσης ενός προβλήματος υπό περιορισμούς. Στο πλαίσιο της παρούσας εργασίας, χρησιμοποιούνται τρεις κύριες κατηγορίες προβλημάτων βελτιστοποίησης: ο Γραμμικός Προγραμματισμός (Linear Programming - LP), ο Μικτός Ακέραιος Προγραμματισμός (Mixed-Integer Programming - MIP) και ο Μαθηματικός Προγραμματισμός με Περιορισμούς Συμπληρωματικότητας (Mathematical Programming with Complementarity Constraints - MPCC).
+
+\subsection{Γραμμικός Προγραμματισμός}
+\label{subsec:linear-programming}
+
+Ο Γραμμικός Προγραμματισμός αποτελεί την απλούστερη και πιο ευρέως χρησιμοποιούμενη μορφή μαθηματικού προγραμματισμού. Σε ένα πρόβλημα LP, τόσο η αντικειμενική συνάρτηση όσο και οι περιορισμοί είναι γραμμικές συναρτήσεις των μεταβλητών απόφασης.
+
+Η γενική μορφή ενός προβλήματος γραμμικού προγραμματισμού είναι:
+\begin{equation}
+\label{eq:lp-general}
+\begin{aligned}
+\min_{\mathbf{x}} \quad & \mathbf{c}^\top \mathbf{x} \\
+\text{υπό τους περιορισμούς} \quad & \mathbf{A}\mathbf{x} \leq \mathbf{b} \\
+& \mathbf{x} \geq \mathbf{0}
+\end{aligned}
+\end{equation}
+όπου $\mathbf{x} \in \mathbb{R}^n$ είναι το διάνυσμα των μεταβλητών απόφασης, $\mathbf{c} \in \mathbb{R}^n$ είναι το διάνυσμα των συντελεστών κόστους, $\mathbf{A} \in \mathbb{R}^{m \times n}$ είναι ο πίνακας των συντελεστών των περιορισμών και $\mathbf{b} \in \mathbb{R}^m$ είναι το διάνυσμα των δεξιών μελών των περιορισμών.
+
+Τα προβλήματα LP επιλύονται αποτελεσματικά με τον αλγόριθμο Simplex ή με μεθόδους εσωτερικού σημείου (interior-point methods). Η χρονική πολυπλοκότητα των μεθόδων εσωτερικού σημείου είναι πολυωνυμική, καθιστώντας τον LP ιδανικό για προβλήματα μεγάλης κλίμακας~\cite{bertsimas-tsitsiklis1997}.
+
+Στο πλαίσιο των αγορών ηλεκτρικής ενέργειας, ο γραμμικός προγραμματισμός χρησιμοποιείται για την επίλυση του προβλήματος οικονομικής κατανομής (economic dispatch), όπου η παραγωγή κάθε μονάδας αντιμετωπίζεται ως συνεχής μεταβλητή και οι μη γραμμικότητες (όπως το κόστος εκκίνησης) αγνοούνται.
+
+\subsection{Μικτός Ακέραιος Προγραμματισμός}
+\label{subsec:mixed-integer-programming}
+
+Ο Μικτός Ακέραιος Προγραμματισμός αποτελεί επέκταση του γραμμικού προγραμματισμού όπου ορισμένες μεταβλητές απόφασης περιορίζονται να λαμβάνουν ακέραιες τιμές. Η γενική μορφή ενός προβλήματος MIP είναι:
+\begin{equation}
+\label{eq:mip-general}
+\begin{aligned}
+\min_{\mathbf{x}, \mathbf{y}} \quad & \mathbf{c}^\top \mathbf{x} + \mathbf{d}^\top \mathbf{y} \\
+\text{υπό τους περιορισμούς} \quad & \mathbf{A}\mathbf{x} + \mathbf{B}\mathbf{y} \leq \mathbf{b} \\
+& \mathbf{x} \geq \mathbf{0} \\
+& \mathbf{y} \in \mathbb{Z}^p
+\end{aligned}
+\end{equation}
+όπου $\mathbf{x} \in \mathbb{R}^n$ είναι οι συνεχείς μεταβλητές και $\mathbf{y} \in \mathbb{Z}^p$ είναι οι ακέραιες μεταβλητές.
+
+Μια ειδική κατηγορία του MIP είναι ο Μικτός Ακέραιος Γραμμικός Προγραμματισμός (Mixed-Integer Linear Programming - MILP), όπου η αντικειμενική συνάρτηση και οι περιορισμοί παραμένουν γραμμικοί. Τα προβλήματα MILP είναι NP-δύσκολα (NP-hard), αλλά οι σύγχρονοι επιλυτές (solvers) όπως ο HiGHS, ο Gurobi και ο CPLEX μπορούν να επιλύσουν προβλήματα μεγάλης κλίμακας χρησιμοποιώντας τεχνικές όπως branch-and-bound, branch-and-cut και cutting planes~\cite{wolsey1998}.
+
+Στο πλαίσιο των συστημάτων ηλεκτρικής ενέργειας, ο μικτός ακέραιος προγραμματισμός χρησιμοποιείται για το πρόβλημα Unit Commitment, όπου οι δυαδικές μεταβλητές αντιπροσωπεύουν την κατάσταση λειτουργίας (on/off) κάθε μονάδας παραγωγής.
+
+\subsection{Μαθηματικός Προγραμματισμός με Περιορισμούς Συμπληρωματικότητας}
+\label{subsec:mpcc}
+
+Ο Μαθηματικός Προγραμματισμός με Περιορισμούς Συμπληρωματικότητας (MPCC) αποτελεί μια κατηγορία προβλημάτων βελτιστοποίησης που περιλαμβάνει περιορισμούς της μορφής:
+\begin{equation}
+\label{eq:complementarity}
+0 \leq x \perp y \geq 0
+\end{equation}
+που σημαίνει ότι $x \geq 0$, $y \geq 0$ και $x \cdot y = 0$. Με άλλα λόγια, τουλάχιστον μία από τις δύο μεταβλητές πρέπει να είναι μηδέν.
+
+Η γενική μορφή ενός προβλήματος MPCC είναι:
+\begin{equation}
+\label{eq:mpcc-general}
+\begin{aligned}
+\min_{\mathbf{x}} \quad & f(\mathbf{x}) \\
+\text{υπό τους περιορισμούς} \quad & g(\mathbf{x}) \leq \mathbf{0} \\
+& h(\mathbf{x}) = \mathbf{0} \\
+& 0 \leq G(\mathbf{x}) \perp H(\mathbf{x}) \geq 0
+\end{aligned}
+\end{equation}
+
+Οι περιορισμοί συμπληρωματικότητας εμφανίζονται φυσικά σε προβλήματα ισορροπίας αγοράς, όπου αντιπροσωπεύουν τις συνθήκες βελτιστότητας Karush-Kuhn-Tucker (KKT) του υποκείμενου προβλήματος βελτιστοποίησης. Στο πλαίσιο της εκκαθάρισης της αγοράς ηλεκτρικής ενέργειας, οι περιορισμοί συμπληρωματικότητας χρησιμοποιούνται για να διασφαλίσουν ότι μια προσφορά γίνεται αποδεκτή μόνο εάν η τιμή αγοράς είναι τουλάχιστον ίση με την τιμή της προσφοράς.
+
+Για παράδειγμα, για μια προσφορά πώλησης με ποσότητα $q$ και τιμή $p$, η συνθήκη αποδοχής μπορεί να εκφραστεί ως:
+\begin{equation}
+\label{eq:mpcc-bid-acceptance}
+0 \leq a \perp (\pi - p) \geq 0
+\end{equation}
+όπου $a \in [0, 1]$ είναι ο βαθμός αποδοχής της προσφοράς και $\pi$ είναι η τιμή εκκαθάρισης της αγοράς. Αυτός ο περιορισμός εξασφαλίζει ότι:
+\begin{itemize}
+    \item Αν $\pi > p$ (η τιμή αγοράς υπερβαίνει την τιμή προσφοράς), τότε $a$ μπορεί να είναι θετικό
+    \item Αν $\pi < p$ (η τιμή αγοράς είναι κάτω από την τιμή προσφοράς), τότε $a = 0$
+    \item Αν $\pi = p$ (οριακή προσφορά), τότε $a \in [0, 1]$
+\end{itemize}
+
+Τα προβλήματα MPCC είναι γενικά δύσκολα στην επίλυση λόγω της μη κυρτότητας και της παραβίασης των τυπικών συνθηκών κανονικότητας (constraint qualification). Στην πράξη, μια κοινή προσέγγιση είναι η μετατροπή του MPCC σε MILP χρησιμοποιώντας τη μέθοδο Big-M:
+\begin{equation}
+\label{eq:big-m-complementarity}
+\begin{aligned}
+& x \leq M \cdot (1 - z) \\
+& y \leq M \cdot z \\
+& z \in \{0, 1\}
+\end{aligned}
+\end{equation}
+όπου $M$ είναι μια αρκετά μεγάλη σταθερά (Big-M parameter) και $z$ είναι μια βοηθητική δυαδική μεταβλητή~\cite{gabriel2013}.
+
+
+% =============================================================================
+\section{Πρόβλημα Δέσμευσης Μονάδων (Unit Commitment)}
+\label{sec:unit-commitment}
+
+Το πρόβλημα της Δέσμευσης Μονάδων (Unit Commitment - UC) αποτελεί ένα από τα θεμελιώδη προβλήματα βελτιστοποίησης στη λειτουργία των συστημάτων ηλεκτρικής ενέργειας. Ο στόχος είναι ο προσδιορισμός του βέλτιστου προγράμματος λειτουργίας των μονάδων παραγωγής ώστε να καλυφθεί η ζήτηση με το ελάχιστο συνολικό κόστος, τηρώντας παράλληλα τους τεχνικούς περιορισμούς κάθε μονάδας~\cite{padhy2004}.
+
+\subsection{Ορισμός του Προβλήματος}
+\label{subsec:uc-definition}
+
+Δεδομένου ενός συνόλου $\mathcal{G}$ μονάδων παραγωγής και ενός χρονικού ορίζοντα $\mathcal{T} = \{1, 2, \ldots, T\}$ περιόδων (συνήθως ωρών), το πρόβλημα UC καθορίζει για κάθε μονάδα $i \in \mathcal{G}$ και κάθε περίοδο $t \in \mathcal{T}$ την κατάσταση λειτουργίας (σε λειτουργία ή εκτός λειτουργίας) και το επίπεδο παραγωγής.
+
+Οι κύριες μεταβλητές απόφασης είναι:
+\begin{itemize}
+    \item $g_{i,t}$: Η παραγωγή ισχύος της μονάδας $i$ στην περίοδο $t$ (σε MW)
+    \item $u_{i,t}$: Δυαδική μεταβλητή που δηλώνει αν η μονάδα $i$ είναι σε λειτουργία στην περίοδο $t$
+    \item $v_{i,t}$: Δυαδική μεταβλητή εκκίνησης (startup) της μονάδας $i$ στην περίοδο $t$
+    \item $z_{i,t}$: Δυαδική μεταβλητή τερματισμού (shutdown) της μονάδας $i$ στην περίοδο $t$
+\end{itemize}
+
+\subsection{Αντικειμενική Συνάρτηση}
+\label{subsec:uc-objective}
+
+Η αντικειμενική συνάρτηση του προβλήματος UC εκφράζει το συνολικό κόστος λειτουργίας που πρέπει να ελαχιστοποιηθεί. Αυτό περιλαμβάνει το κόστος καυσίμου (ή οριακό κόστος) για την παραγωγή ενέργειας, το κόστος εκκίνησης των μονάδων και ενδεχομένως το κόστος λειτουργίας χωρίς φορτίο (no-load cost):
+
+\begin{equation}
+\label{eq:uc-objective}
+\min \sum_{t \in \mathcal{T}} \sum_{i \in \mathcal{G}} \left[ C_i \cdot g_{i,t} + SU_i \cdot v_{i,t} + NL_i \cdot u_{i,t} \right]
+\end{equation}
+
+όπου:
+\begin{itemize}
+    \item $C_i$: Το οριακό κόστος παραγωγής της μονάδας $i$ (€/MWh)
+    \item $SU_i$: Το κόστος εκκίνησης της μονάδας $i$ (€)
+    \item $NL_i$: Το κόστος λειτουργίας χωρίς φορτίο της μονάδας $i$ (€/h)
+\end{itemize}
+
+Στην υλοποίηση της παρούσας εργασίας, η αντικειμενική συνάρτηση απλοποιείται ως:
+\begin{equation}
+\label{eq:uc-objective-simplified}
+\min \sum_{t \in \mathcal{T}} \sum_{i \in \mathcal{G}} C_i \cdot g_{i,t}
+\end{equation}
+
+\subsection{Περιορισμοί Ισχύος}
+\label{subsec:uc-power-constraints}
+
+Η παραγωγή κάθε μονάδας περιορίζεται από τα τεχνικά της όρια. Όταν μια μονάδα βρίσκεται σε λειτουργία, η παραγωγή της πρέπει να κυμαίνεται μεταξύ ελάχιστου και μέγιστου ορίου:
+\begin{equation}
+\label{eq:uc-capacity-upper}
+g_{i,t} \leq P_i^{\max} \cdot u_{i,t}, \quad \forall i \in \mathcal{G}, \forall t \in \mathcal{T}
+\end{equation}
+\begin{equation}
+\label{eq:uc-capacity-lower}
+g_{i,t} \geq P_i^{\min} \cdot u_{i,t}, \quad \forall i \in \mathcal{G}, \forall t \in \mathcal{T}
+\end{equation}
+
+όπου $P_i^{\min}$ και $P_i^{\max}$ είναι η ελάχιστη και μέγιστη ισχύς της μονάδας $i$ αντίστοιχα.
+
+Στην υλοποίηση, το ελάχιστο όριο λαμβάνει υπόψη και τον τύπο καυσίμου της μονάδας μέσω ενός συντελεστή ελάχιστου φορτίου (minimum load factor):
+\begin{equation}
+\label{eq:uc-min-fuel}
+g_{i,t} \geq \max\left(P_i^{\min}, \lambda_i \cdot P_i^{\max}\right) \cdot u_{i,t}
+\end{equation}
+όπου $\lambda_i$ είναι ο συντελεστής ελάχιστου φορτίου που εξαρτάται από τον τύπο καυσίμου (π.χ. 0.4 για λιγνιτικές μονάδες, 0.3 για μονάδες φυσικού αερίου).
+
+\subsection{Περιορισμοί Δέσμευσης}
+\label{subsec:uc-commitment-constraints}
+
+Η σχέση μεταξύ της κατάστασης λειτουργίας, εκκίνησης και τερματισμού εκφράζεται ως:
+\begin{equation}
+\label{eq:uc-commitment-link}
+u_{i,t} = u_{i,t-1} + v_{i,t} - z_{i,t}, \quad \forall i \in \mathcal{G}, \forall t \in \mathcal{T} \setminus \{1\}
+\end{equation}
+
+Επιπλέον, μια μονάδα δεν μπορεί να εκκινήσει και να τερματίσει ταυτόχρονα:
+\begin{equation}
+\label{eq:uc-startup-shutdown-exclusive}
+v_{i,t} + z_{i,t} \leq 1, \quad \forall i \in \mathcal{G}, \forall t \in \mathcal{T}
+\end{equation}
+
+\subsection{Περιορισμοί Ελάχιστου Χρόνου Λειτουργίας και Αδράνειας}
+\label{subsec:uc-minupdown}
+
+Οι θερμικές μονάδες παραγωγής έχουν τεχνικούς περιορισμούς που απαιτούν να παραμείνουν σε λειτουργία ή εκτός λειτουργίας για ελάχιστο χρονικό διάστημα. Αυτοί οι περιορισμοί προκύπτουν από θερμικές καταπονήσεις των υλικών και την αποφυγή φθοράς.
+
+Ο περιορισμός ελάχιστου χρόνου λειτουργίας (minimum uptime) εξασφαλίζει ότι αν μια μονάδα εκκινήσει, θα παραμείνει σε λειτουργία για τουλάχιστον $UT_i$ περιόδους:
+\begin{equation}
+\label{eq:uc-min-uptime}
+\sum_{\tau = t - UT_i + 1}^{t} v_{i,\tau} \leq u_{i,t}, \quad \forall i \in \mathcal{G}, \forall t \in \{UT_i, \ldots, T\}
+\end{equation}
+
+Αντίστοιχα, ο περιορισμός ελάχιστου χρόνου αδράνειας (minimum downtime) εξασφαλίζει ότι αν μια μονάδα τερματίσει, θα παραμείνει εκτός λειτουργίας για τουλάχιστον $DT_i$ περιόδους:
+\begin{equation}
+\label{eq:uc-min-downtime}
+\sum_{\tau = t - DT_i + 1}^{t} z_{i,\tau} \leq 1 - u_{i,t}, \quad \forall i \in \mathcal{G}, \forall t \in \{DT_i, \ldots, T\}
+\end{equation}
+
+\subsection{Περιορισμοί Ρυθμού Μεταβολής}
+\label{subsec:uc-ramping}
+
+Οι θερμικές μονάδες δεν μπορούν να αλλάξουν αυθαίρετα γρήγορα το επίπεδο παραγωγής τους λόγω θερμικών και μηχανικών περιορισμών. Οι περιορισμοί ρυθμού μεταβολής (ramping constraints) περιορίζουν τη μέγιστη αύξηση ή μείωση της παραγωγής μεταξύ διαδοχικών περιόδων:
+\begin{equation}
+\label{eq:uc-rampup}
+g_{i,t} - g_{i,t-1} \leq RU_i + M \cdot u_{i,t}^{SU}, \quad \forall i \in \mathcal{G}, \forall t \in \mathcal{T} \setminus \{1\}
+\end{equation}
+\begin{equation}
+\label{eq:uc-rampdown}
+g_{i,t-1} - g_{i,t} \leq RD_i + M \cdot u_{i,t}^{SD}, \quad \forall i \in \mathcal{G}, \forall t \in \mathcal{T} \setminus \{1\}
+\end{equation}
+
+όπου:
+\begin{itemize}
+    \item $RU_i$: Ο μέγιστος ρυθμός αύξησης της μονάδας $i$ (MW/h)
+    \item $RD_i$: Ο μέγιστος ρυθμός μείωσης της μονάδας $i$ (MW/h)
+    \item $u_{i,t}^{SU}$, $u_{i,t}^{SD}$: Βοηθητικές μεταβλητές για τις καταστάσεις εκκίνησης και τερματισμού
+    \item $M$: Παράμετρος Big-M για την αποδέσμευση του περιορισμού κατά την εκκίνηση/τερματισμό
+\end{itemize}
+
+\subsection{Περιορισμός Ισορροπίας Ισχύος}
+\label{subsec:uc-power-balance}
+
+Ο θεμελιώδης περιορισμός του προβλήματος είναι η ισορροπία μεταξύ παραγωγής και ζήτησης σε κάθε χρονική περίοδο:
+\begin{equation}
+\label{eq:uc-power-balance}
+\sum_{i \in \mathcal{G}} g_{i,t} = D_t - R_t, \quad \forall t \in \mathcal{T}
+\end{equation}
+
+όπου:
+\begin{itemize}
+    \item $D_t$: Η συνολική ζήτηση στην περίοδο $t$ (MW)
+    \item $R_t$: Η παραγωγή από ΑΠΕ στην περίοδο $t$ (MW)
+\end{itemize}
+
+Η διαφορά $D_t - R_t$ αντιπροσωπεύει την καθαρή ζήτηση (net demand) που πρέπει να καλυφθεί από τις ελεγχόμενες θερμικές μονάδες.
+
+\subsection{Προφίλ Εκκίνησης και Τερματισμού}
+\label{subsec:uc-startup-shutdown-profiles}
+
+Κατά τη διάρκεια της εκκίνησης ή του τερματισμού μιας μονάδας, η παραγωγή ακολουθεί ένα συγκεκριμένο προφίλ που εξαρτάται από τον τύπο της μονάδας και τη διάρκεια της διαδικασίας. Για μια μονάδα $i$ με χρόνο εκκίνησης $T_i^{SU}$ περιόδων, η παραγωγή κατά την εκκίνηση $g_{i,t}^{SU}$ ακολουθεί γραμμική αύξηση από μηδέν στο ελάχιστο επίπεδο λειτουργίας:
+\begin{equation}
+\label{eq:uc-startup-profile}
+P_{i,\tau}^{SU} = P_i^{\min} \cdot \frac{\tau}{T_i^{SU}}, \quad \tau = 1, 2, \ldots, T_i^{SU}
+\end{equation}
+
+Αντίστοιχα, κατά τον τερματισμό, η παραγωγή μειώνεται γραμμικά από το ελάχιστο επίπεδο στο μηδέν:
+\begin{equation}
+\label{eq:uc-shutdown-profile}
+P_{i,\tau}^{SD} = P_i^{\min} \cdot \left(1 - \frac{\tau - 1}{T_i^{SD}}\right), \quad \tau = 1, 2, \ldots, T_i^{SD}
+\end{equation}
+
+\subsection{Συνολική Διατύπωση}
+\label{subsec:uc-complete-formulation}
+
+Συνοψίζοντας, το πλήρες πρόβλημα Unit Commitment διατυπώνεται ως ένα πρόβλημα MILP:
+
+\begin{equation}
+\label{eq:uc-complete}
+\begin{aligned}
+\min \quad & \sum_{t \in \mathcal{T}} \sum_{i \in \mathcal{G}} \left[ C_i \cdot g_{i,t} + SU_i \cdot v_{i,t} \right] \\
+\text{υπό τους περιορισμούς:} \quad 
+& g_{i,t} \leq P_i^{\max} \cdot u_{i,t} & \forall i, t \\
+& g_{i,t} \geq P_i^{\min} \cdot u_{i,t} & \forall i, t \\
+& u_{i,t} = u_{i,t-1} + v_{i,t} - z_{i,t} & \forall i, t > 1 \\
+& v_{i,t} + z_{i,t} \leq 1 & \forall i, t \\
+& \sum_{\tau = t - UT_i + 1}^{t} v_{i,\tau} \leq u_{i,t} & \forall i, t \geq UT_i \\
+& \sum_{\tau = t - DT_i + 1}^{t} z_{i,\tau} \leq 1 - u_{i,t} & \forall i, t \geq DT_i \\
+& g_{i,t} - g_{i,t-1} \leq RU_i + M \cdot u_{i,t}^{SU} & \forall i, t > 1 \\
+& g_{i,t-1} - g_{i,t} \leq RD_i + M \cdot u_{i,t}^{SD} & \forall i, t > 1 \\
+& \sum_{i \in \mathcal{G}} g_{i,t} = D_t - R_t & \forall t \\
+& u_{i,t}, v_{i,t}, z_{i,t} \in \{0, 1\} & \forall i, t \\
+& g_{i,t} \geq 0 & \forall i, t
+\end{aligned}
+\end{equation}
+
+
+% =============================================================================
+\section{Αλγόριθμος EUPHEMIA}
+\label{sec:euphemia-algorithm}
+
+Ο αλγόριθμος EUPHEMIA (EU Pan-European Hybrid Electricity Market Integration Algorithm) αποτελεί τον κεντρικό μηχανισμό εκκαθάρισης της συζευγμένης ευρωπαϊκής Προημερήσιας Αγοράς ηλεκτρικής ενέργειας. Αναπτύχθηκε από τους Ονομαζόμενους Διαχειριστές Αγοράς Ηλεκτρισμού (Nominated Electricity Market Operators - NEMOs) και χρησιμοποιείται για τον καθορισμό των τιμών και των ποσοτήτων σε όλες τις συζευγμένες ζώνες προσφοράς της Ευρώπης~\cite{euphemia-public-description}.
+
+\subsection{Στόχος: Μεγιστοποίηση Οικονομικού Πλεονάσματος}
+\label{subsec:euphemia-objective}
+
+Ο κεντρικός στόχος του EUPHEMIA είναι η μεγιστοποίηση του συνολικού οικονομικού πλεονάσματος (economic surplus) όλων των συμμετεχόντων στην αγορά, λαμβάνοντας υπόψη τους περιορισμούς διασυνοριακής μεταφοράς. Το οικονομικό πλεόνασμα ορίζεται ως η διαφορά μεταξύ της αξίας που αποδίδουν οι αγοραστές στην ηλεκτρική ενέργεια και του κόστους παραγωγής των πωλητών.
+
+Για απλές ωριαίες προσφορές, η αντικειμενική συνάρτηση εκφράζεται ως:
+\begin{equation}
+\label{eq:euphemia-objective}
+\max \sum_{z \in \mathcal{Z}} \sum_{t \in \mathcal{T}} \left[ \sum_{o \in \mathcal{O}_z^D} a_o \cdot q_o \cdot (V_o - \pi_{z,t}) + \sum_{o \in \mathcal{O}_z^S} a_o \cdot q_o \cdot (\pi_{z,t} - p_o) \right]
+\end{equation}
+
+όπου:
+\begin{itemize}
+    \item $\mathcal{Z}$: Το σύνολο των ζωνών προσφοράς (bidding zones)
+    \item $\mathcal{T}$: Το σύνολο των χρονικών περιόδων (συνήθως 24 ώρες)
+    \item $\mathcal{O}_z^D$: Οι προσφορές αγοράς στη ζώνη $z$
+    \item $\mathcal{O}_z^S$: Οι προσφορές πώλησης στη ζώνη $z$
+    \item $a_o \in [0, 1]$: Ο βαθμός αποδοχής της προσφοράς $o$
+    \item $q_o$: Η ποσότητα της προσφοράς $o$ (MWh)
+    \item $V_o$: Η τιμή προσφοράς αγοράς (willingness to pay)
+    \item $p_o$: Η τιμή προσφοράς πώλησης (marginal cost)
+    \item $\pi_{z,t}$: Η τιμή εκκαθάρισης στη ζώνη $z$ την περίοδο $t$
+\end{itemize}
+
+Η αντικειμενική συνάρτηση μπορεί να απλοποιηθεί σε:
+\begin{equation}
+\label{eq:euphemia-objective-simplified}
+\max \sum_{z \in \mathcal{Z}} \sum_{t \in \mathcal{T}} \sum_{o \in \mathcal{O}_{z,t}} a_o \cdot q_o \cdot p_o \cdot \sigma_o
+\end{equation}
+όπου $\sigma_o = -1$ για προσφορές πώλησης και $\sigma_o = +1$ για προσφορές αγοράς.
+
+\subsection{Τύποι Εντολών}
+\label{subsec:euphemia-order-types}
+
+Ο αλγόριθμος EUPHEMIA υποστηρίζει διάφορους τύπους εντολών που αντιπροσωπεύουν διαφορετικές ανάγκες και περιορισμούς των συμμετεχόντων:
+
+\subsubsection{Απλές Ωριαίες Προσφορές (Simple Hourly Orders)}
+
+Οι απλές ωριαίες προσφορές είναι η βασικότερη μορφή εντολής και αποτελούνται από ένα ζεύγος τιμής-ποσότητας $(p, q)$ για μια συγκεκριμένη ώρα. Διακρίνονται σε:
+\begin{itemize}
+    \item \textbf{Βηματικές προσφορές (Step orders)}: Η αποδοχή είναι δυαδική --- η προσφορά γίνεται αποδεκτή πλήρως ή απορρίπτεται
+    \item \textbf{Παρεμβαλλόμενες προσφορές (Interpolated orders)}: Επιτρέπεται μερική αποδοχή, με γραμμική παρεμβολή μεταξύ σημείων
+\end{itemize}
+
+Στην υλοποίηση της παρούσας εργασίας, χρησιμοποιείται η δομή \texttt{SimpleOrder}:
+\begin{equation}
+\label{eq:simple-order}
+\text{SimpleOrder} = (z, t, \text{type}, p, q)
+\end{equation}
+όπου $z$ είναι η ζώνη προσφοράς, $t$ είναι η χρονική περίοδος, $\text{type} \in \{\text{supply}, \text{demand}\}$ είναι ο τύπος της προσφοράς, $p$ είναι η τιμή (€/MWh) και $q$ είναι η ποσότητα (MWh).
+
+\subsubsection{Προσφορές Μπλοκ (Block Orders)}
+
+Οι προσφορές μπλοκ επιτρέπουν στους συμμετέχοντες να υποβάλουν προσφορές που καλύπτουν πολλαπλές διαδοχικές ώρες με την προϋπόθεση ότι η αποδοχή είναι ενιαία (all-or-nothing). Αυτός ο τύπος προσφοράς είναι ιδιαίτερα χρήσιμος για μονάδες παραγωγής με υψηλό κόστος εκκίνησης ή ελάχιστους χρόνους λειτουργίας.
+
+Μια προσφορά μπλοκ ορίζεται ως:
+\begin{equation}
+\label{eq:block-order}
+\text{BlockOrder} = (z, T_{start}, T_{end}, p, \{q_t\}_{t \in [T_{start}, T_{end}]})
+\end{equation}
+
+Η συνθήκη αποδοχής μιας προσφοράς μπλοκ πώλησης είναι:
+\begin{equation}
+\label{eq:block-acceptance-condition}
+a_b \cdot \left( \sum_{t=T_{start}}^{T_{end}} q_{b,t} \cdot (\pi_{z,t} - p_b) \right) \geq 0
+\end{equation}
+όπου $a_b \in \{0, 1\}$ είναι η αποδοχή του μπλοκ.
+
+\subsubsection{Συνδεδεμένες Προσφορές Μπλοκ (Linked Block Orders)}
+
+Οι συνδεδεμένες προσφορές μπλοκ επιτρέπουν τη δημιουργία ιεραρχικών σχέσεων μεταξύ μπλοκ. Μια ``θυγατρική'' προσφορά μπλοκ μπορεί να γίνει αποδεκτή μόνο εάν η ``γονική'' της έχει επίσης γίνει αποδεκτή:
+\begin{equation}
+\label{eq:linked-block}
+a_{child} \leq a_{parent}
+\end{equation}
+
+Αυτός ο τύπος προσφοράς χρησιμοποιείται για τη μοντελοποίηση σύνθετων περιορισμών λειτουργίας μονάδων παραγωγής.
+
+\subsection{Περιορισμοί Δικτύου}
+\label{subsec:euphemia-network}
+
+Ο αλγόριθμος EUPHEMIA λαμβάνει υπόψη τους περιορισμούς διασυνοριακής μεταφοράς μέσω του μοντέλου Διαθέσιμης Ικανότητας Μεταφοράς (Available Transfer Capacity - ATC). Για κάθε ζεύγος γειτονικών ζωνών $(z_1, z_2)$ και κάθε χρονική περίοδο $t$, η ροή ισχύος περιορίζεται:
+\begin{equation}
+\label{eq:atc-constraint}
+-ATC_{z_2 \rightarrow z_1, t} \leq f_{z_1, z_2, t} \leq ATC_{z_1 \rightarrow z_2, t}
+\end{equation}
+όπου $f_{z_1, z_2, t}$ είναι η ροή από τη ζώνη $z_1$ προς τη ζώνη $z_2$ και $ATC_{z_1 \rightarrow z_2, t}$ είναι η διαθέσιμη ικανότητα μεταφοράς προς αυτή την κατεύθυνση.
+
+Η ισορροπία ισχύος σε κάθε ζώνη διατυπώνεται ως:
+\begin{equation}
+\label{eq:zonal-balance}
+\sum_{o \in \mathcal{O}_{z,t}^S} a_o \cdot q_o - \sum_{o \in \mathcal{O}_{z,t}^D} a_o \cdot q_o + \sum_{z' \in \mathcal{N}(z)} f_{z', z, t} - \sum_{z' \in \mathcal{N}(z)} f_{z, z', t} = 0
+\end{equation}
+όπου $\mathcal{N}(z)$ είναι το σύνολο των γειτονικών ζωνών της $z$.
+
+\subsection{Συνθήκες Βελτιστότητας}
+\label{subsec:euphemia-optimality}
+
+Οι συνθήκες αποδοχής των προσφορών προκύπτουν από τις συνθήκες βελτιστότητας KKT του προβλήματος και εκφράζονται ως περιορισμοί συμπληρωματικότητας.
+
+Για μια απλή προσφορά πώλησης με τιμή $p_o$:
+\begin{equation}
+\label{eq:supply-acceptance}
+\begin{aligned}
+& a_o > 0 \Rightarrow \pi_{z,t} \geq p_o \\
+& \pi_{z,t} < p_o \Rightarrow a_o = 0
+\end{aligned}
+\end{equation}
+
+Αντίστοιχα, για μια προσφορά αγοράς με τιμή $V_o$:
+\begin{equation}
+\label{eq:demand-acceptance}
+\begin{aligned}
+& a_o > 0 \Rightarrow \pi_{z,t} \leq V_o \\
+& \pi_{z,t} > V_o \Rightarrow a_o = 0
+\end{aligned}
+\end{equation}
+
+Αυτές οι συνθήκες διασφαλίζουν ότι οι προσφορές γίνονται αποδεκτές μόνο όταν η τιμή αγοράς είναι ευνοϊκή για τον συμμετέχοντα (in-the-money).
+
+\subsection{Διατύπωση MPCC για Εκκαθάριση Αγοράς}
+\label{subsec:euphemia-mpcc-formulation}
+
+Η εκκαθάριση της αγοράς μπορεί να διατυπωθεί ως πρόβλημα MPCC:
+\begin{equation}
+\label{eq:market-clearing-mpcc}
+\begin{aligned}
+\max \quad & \sum_{o \in \mathcal{O}} a_o \cdot q_o \cdot p_o \cdot \sigma_o \\
+\text{υπό τους περιορισμούς:} \quad
+& 0 \leq a_o \leq 1 & \forall o \\
+& \sum_{o \in \mathcal{O}_{z,t}^S} a_o q_o - \sum_{o \in \mathcal{O}_{z,t}^D} a_o q_o + \text{net\_flow}_{z,t} = 0 & \forall z, t \\
+& -ATC_{z' \rightarrow z, t} \leq f_{z, z', t} \leq ATC_{z \rightarrow z', t} & \forall (z, z'), t \\
+& 0 \leq a_o \perp (\sigma_o \cdot \pi_{z,t} - \sigma_o \cdot p_o + \mu_o) \geq 0 & \forall o \\
+& \pi^{\min} \leq \pi_{z,t} \leq \pi^{\max} & \forall z, t
+\end{aligned}
+\end{equation}
+
+όπου $\mu_o$ είναι μια βοηθητική μεταβλητή χαλάρωσης (dual variable) και $\pi^{\min}$, $\pi^{\max}$ είναι τα όρια τιμής (συνήθως $-500$ και $3000$ €/MWh αντίστοιχα).
+
+Στην υλοποίηση, οι περιορισμοί συμπληρωματικότητας μετατρέπονται σε MILP χρησιμοποιώντας τη μέθοδο Big-M με παράμετρο $M = 4000000$.
+
+
+% =============================================================================
+\section{Στρατηγικές Υποβολής Προσφορών}
+\label{sec:bidding-strategies}
+
+Η μετατροπή των αποτελεσμάτων του προβλήματος Unit Commitment σε προσφορές αγοράς αποτελεί κρίσιμο βήμα στη λειτουργία της αγοράς. Διαφορετικές στρατηγικές υποβολής προσφορών μπορούν να οδηγήσουν σε σημαντικά διαφορετικά αποτελέσματα εκκαθάρισης. Στην παρούσα εργασία υλοποιήθηκαν τρεις διακριτές στρατηγικές~\cite{ventosa2005, conejo2010}.
+
+\subsection{Στρατηγική Δεσμευμένων Μονάδων (Committed Only)}
+\label{subsec:strategy-committed-only}
+
+Η συντηρητική στρατηγική \textit{committed\_only} υποβάλλει προσφορές μόνο για τις μονάδες που έχουν δεσμευτεί (committed) στη λύση του Unit Commitment. Για κάθε μονάδα $i$ και περίοδο $t$ όπου $u_{i,t} > 0.5$:
+\begin{equation}
+\label{eq:committed-only-bid}
+\text{Bid}_{i,t} = \left( p = C_i \cdot \mu, \quad q = g_{i,t}^* \right)
+\end{equation}
+όπου $g_{i,t}^*$ είναι η βέλτιστη παραγωγή από τη λύση UC και $\mu$ είναι ο συντελεστής markup (προσαύξησης), συνήθως $\mu = 1.1$ (δηλαδή 10\% πάνω από το οριακό κόστος).
+
+\textbf{Πλεονεκτήματα:}
+\begin{itemize}
+    \item Σέβεται όλους τους τεχνικούς περιορισμούς (ελάχιστοι χρόνοι, ramping κ.λπ.)
+    \item Χαμηλός κίνδυνος μη εφικτότητας στη φυσική παράδοση
+\end{itemize}
+
+\textbf{Μειονεκτήματα:}
+\begin{itemize}
+    \item Περιορισμένη διαθέσιμη ποσότητα στην αγορά
+    \item Ενδέχεται να μην εκμεταλλεύεται πλήρως τη διαθέσιμη δυναμικότητα
+\end{itemize}
+
+\subsection{Στρατηγική Μέγιστης Διαθεσιμότητας (All Available Max)}
+\label{subsec:strategy-all-available-max}
+
+Η στρατηγική \textit{all\_available\_max} υποβάλλει προσφορές για όλες τις διαθέσιμες μονάδες στη μέγιστη δυναμικότητά τους, ανεξάρτητα από τη λύση του Unit Commitment:
+\begin{equation}
+\label{eq:all-available-max-bid}
+\text{Bid}_{i,t} = \left( p = C_i \cdot \mu, \quad q = P_i^{\max} \right)
+\end{equation}
+
+Αυτή η στρατηγική είναι μη ρεαλιστική από τεχνική άποψη, καθώς αγνοεί τους περιορισμούς λειτουργίας των μονάδων. Ωστόσο, είναι χρήσιμη για:
+\begin{itemize}
+    \item Δοκιμές και debugging του αλγορίθμου εκκαθάρισης
+    \item Ανάλυση της μέγιστης δυνατής προσφοράς
+    \item Baseline σύγκρισης με άλλες στρατηγικές
+\end{itemize}
+
+\subsection{Στρατηγική Ρεαλιστικής Διαθεσιμότητας (All Available Realistic)}
+\label{subsec:strategy-all-available-realistic}
+
+Η στρατηγική \textit{all\_available\_realistic} υποβάλλει προσφορές για όλες τις διαθέσιμες μονάδες, αλλά με ποσότητες ενημερωμένες από τη λύση του Unit Commitment:
+
+\begin{equation}
+\label{eq:all-available-realistic-bid}
+\text{Bid}_{i,t} = 
+\begin{cases}
+\left( C_i \cdot \mu, g_{i,t}^* \right) & \text{αν } u_{i,t} > 0.5 \\
+\left( C_i \cdot \mu, \alpha \cdot P_i^{\max} \right) & \text{αν } u_{i,t} \leq 0.5 \text{ και } P_i^{\min} < \epsilon \cdot P_i^{\max} \\
+\left( C_i \cdot \mu, P_i^{\min} \right) & \text{αλλιώς}
+\end{cases}
+\end{equation}
+
+όπου $\alpha = 0.2$ (20\% της μέγιστης δυναμικότητας για μονάδες με πολύ χαμηλό ελάχιστο) και $\epsilon = 0.1$.
+
+Αυτή η στρατηγική επιχειρεί να βρει μια ισορροπία μεταξύ της μεγιστοποίησης της διαθέσιμης ποσότητας και της τήρησης τεχνικών περιορισμών.
+
+\subsection{Επίδραση του Συντελεστή Markup}
+\label{subsec:markup-factor}
+
+Ο συντελεστής markup $\mu$ καθορίζει τη σχέση μεταξύ της τιμής προσφοράς και του οριακού κόστους παραγωγής:
+\begin{equation}
+\label{eq:markup-definition}
+p_{\text{bid}} = \mu \cdot C_{\text{marginal}}
+\end{equation}
+
+Η επιλογή του $\mu$ επηρεάζει:
+\begin{itemize}
+    \item Την πιθανότητα αποδοχής της προσφοράς (υψηλότερο $\mu$ μειώνει την πιθανότητα)
+    \item Το κέρδος ανά αποδεκτή MWh (υψηλότερο $\mu$ αυξάνει το κέρδος)
+    \item Τη συνολική τιμή εκκαθάρισης της αγοράς
+\end{itemize}
+
+Στην πράξη, η βέλτιστη επιλογή του markup εξαρτάται από την ανταγωνιστική δομή της αγοράς, την ελαστικότητα της ζήτησης και τη στρατηγική των ανταγωνιστών. Στην παρούσα εργασία χρησιμοποιείται η προεπιλεγμένη τιμή $\mu = 1.1$ (10\% markup), η οποία αντιπροσωπεύει μια μέτρια προσέγγιση σε ανταγωνιστικές αγορές.
+
+\subsection{Δημιουργία Προσφορών Ζήτησης}
+\label{subsec:demand-orders}
+
+Εκτός από τις προσφορές παραγωγής, ο αλγόριθμος δημιουργεί και προσφορές ζήτησης βασισμένες στα προβλεπόμενα φορτία. Για κάθε περίοδο $t$ με ζήτηση $D_t > D_{\min}$ (όπου $D_{\min} = 0.01$ MW):
+\begin{equation}
+\label{eq:demand-order}
+\text{DemandBid}_t = \left( p = \pi^{\max}, \quad q = D_t \right)
+\end{equation}
+
+όπου $\pi^{\max}$ είναι η μέγιστη επιτρεπτή τιμή αγοράς. Αυτό αντανακλά την υπόθεση ότι η ζήτηση είναι ανελαστική σε βραχυπρόθεσμο ορίζοντα --- οι καταναλωτές είναι διατεθειμένοι να πληρώσουν οποιαδήποτε τιμή για να καλύψουν τις ανάγκες τους.
+
+\subsection{Σύνοψη Αλγορίθμου Μετατροπής}
+\label{subsec:conversion-algorithm}
+
+Ο πλήρης αλγόριθμος μετατροπής από UC σε εντολές αγοράς συνοψίζεται ως εξής:
+
+\begin{enumerate}
+    \item Επίλυση του προβλήματος Unit Commitment για την επιθυμητή ημέρα
+    \item Για κάθε μονάδα $i$ και περίοδο $t$:
+    \begin{enumerate}
+        \item Έλεγχος της κατάστασης δέσμευσης $u_{i,t}$
+        \item Υπολογισμός ποσότητας βάσει της επιλεγμένης στρατηγικής
+        \item Υπολογισμός τιμής: $p = C_i \cdot \mu$
+        \item Δημιουργία \texttt{SimpleOrder} με τα παραπάνω στοιχεία
+    \end{enumerate}
+    \item Για κάθε περίοδο $t$ με θετική ζήτηση:
+    \begin{enumerate}
+        \item Δημιουργία \texttt{SimpleOrder} τύπου demand με $p = \pi^{\max}$
+    \end{enumerate}
+    \item Επιστροφή λίστας όλων των εντολών
+\end{enumerate}

@@ -1,0 +1,1486 @@
+% =============================================================================
+% ΚΕΦΑΛΑΙΟ 4: ΥΛΟΠΟΙΗΣΗ
+% =============================================================================
+% Αυτό το αρχείο περιέχει το πλήρες Κεφάλαιο 4 της διπλωματικής εργασίας
+% "Μοντελοποίηση Αγορών Ηλεκτρικής Ενέργειας με Julia/JuMP"
+% 
+% Για ενσωμάτωση στο thesis.tex, χρησιμοποιήστε: \input{chapter4_implementation}
+% =============================================================================
+
+\chapter{Υλοποίηση}
+\label{ch:implementation}
+
+Στο παρόν κεφάλαιο παρουσιάζεται η υλοποίηση του συστήματος προσομοίωσης της Προημερήσιας Αγοράς ηλεκτρικής ενέργειας. Η ανάλυση ακολουθεί τη ροή επεξεργασίας δεδομένων από τα μοντέλα οντοτήτων, μέσω του επιλυτή Unit Commitment και της μηχανής στρατηγικής προσφορών, έως την εκκαθάριση της αγοράς με τη μέθοδο MPCC. Για κάθε συνιστώσα παρέχονται αντιπροσωπευτικά αποσπάσματα κώδικα που επιδεικνύουν τις βασικές αλγοριθμικές επιλογές. Ο πλήρης κώδικας είναι διαθέσιμος στο αποθετήριο του έργου\footnote{\url{https://github.com/philokalia-ai/energy-markets}}.
+
+
+% =============================================================================
+\section{Μοντελοποίηση Οντοτήτων}
+\label{sec:entity-modeling}
+
+Η υλοποίηση βασίζεται σε σαφώς ορισμένες δομές δεδομένων για την αναπαράσταση των οντοτήτων του συστήματος ηλεκτρικής ενέργειας. Οι δομές αυτές ορίζονται ως αμετάβλητα \texttt{struct} στη Julia, εξασφαλίζοντας ακεραιότητα δεδομένων και αποτελεσματικότητα.
+
+\subsection{Μονάδα Παραγωγής (Generator)}
+\label{subsec:generator-struct}
+
+Η δομή \texttt{Generator} αναπαριστά μια θερμική μονάδα παραγωγής με όλα τα τεχνικά και οικονομικά χαρακτηριστικά που απαιτούνται για το πρόβλημα Unit Commitment:
+
+\begin{samepage}
+\begin{minted}[fontsize=\small,linenos,frame=lines]{julia}
+struct Generator
+    code::String           # Μοναδικός κωδικός (EIC code)
+    name::String           # Όνομα μονάδας
+    fuel_type::Symbol      # Τύπος καυσίμου (:lignite, :gas, :hydro, κλπ)
+    location::String       # Τοποθεσία
+    p_max::Float64         # Μέγιστη ισχύς (MW)
+    p_min::Float64         # Ελάχιστη ισχύς (MW)
+    bidding_zone::String   # Ζώνη προσφοράς (π.χ. "GR")
+    marginal_cost::Float64 # Οριακό κόστος (€/MWh)
+    # Προαιρετικές παράμετροι από εξαγωγή ιστορικών δεδομένων
+    # nothing = χρήση προεπιλεγμένων τιμών ανά τύπο καυσίμου
+    ramp_up::Union{Float64, Nothing}    # Ρυθμός αύξησης (κλάσμα p_max/ώρα)
+    ramp_down::Union{Float64, Nothing}  # Ρυθμός μείωσης (κλάσμα p_max/ώρα)
+    min_uptime::Union{Int, Nothing}     # Ελάχιστος χρόνος λειτουργίας (ώρες)
+    min_downtime::Union{Int, Nothing}   # Ελάχιστος χρόνος αδράνειας (ώρες)
+
+    # Κατασκευαστής με προεπιλεγμένες τιμές nothing
+    function Generator(code, name, fuel_type, location, p_max, p_min,
+                       bidding_zone, marginal_cost,
+                       ramp_up=nothing, ramp_down=nothing,
+                       min_uptime=nothing, min_downtime=nothing)
+        new(code, name, fuel_type, location, p_max, p_min,
+            bidding_zone, marginal_cost,
+            ramp_up, ramp_down, min_uptime, min_downtime)
+    end
+end
+\end{minted}
+\end{samepage}
+
+Ο τύπος καυσίμου (\texttt{fuel\_type}) αποθηκεύεται ως \texttt{Symbol} για αποτελεσματική σύγκριση και χρησιμοποιείται για την ανάκτηση παραμέτρων ειδικών ανά τύπο καυσίμου. Τα πεδία \texttt{ramp\_up}, \texttt{ramp\_down}, \texttt{min\_uptime} και \texttt{min\_downtime} ορίζονται ως \texttt{Union\{T, Nothing\}}, γεγονός που επιτρέπει τη χρήση της τιμής \texttt{nothing} ως σημαίας (sentinel) για την ενεργοποίηση των προεπιλεγμένων τιμών ανά τύπο καυσίμου. Ο εσωτερικός κατασκευαστής (inner constructor) ορίζει αυτά τα πεδία με προεπιλεγμένη τιμή \texttt{nothing}, διατηρώντας τη συμβατότητα με τον υπάρχοντα κώδικα. Οι τεχνικές παράμετροι εξάγονται αυτόματα από ιστορικά δεδομένα παραγωγής, όπως περιγράφεται στην Ενότητα~\ref{subsec:parameter-inference}.
+
+Η ανάκτηση μονάδων παραγωγής από τη βάση δεδομένων πραγματοποιείται με τη συνάρτηση \texttt{get\_generators}, η οποία υποστηρίζει φιλτράρισμα μη διαθεσιμοτήτων:
+
+\begin{samepage}
+\begin{minted}[fontsize=\small,linenos,frame=lines]{julia}
+function get_generators(bidding_zone::String, day::Date; 
+                        exclude_unavailable::Bool=true)
+    # Ερώτημα SQL με LEFT JOIN στον πίνακα unavailability
+    # για αποκλεισμό ή μείωση ισχύος μονάδων με διακοπές
+    
+    query = """
+    WITH active_outages AS (
+        SELECT asset_code, MIN(available_capacity_mw) as available_capacity_mw
+        FROM entsoe.unavailability_of_production_and_generation_units
+        WHERE status = 'Active'
+          AND start_outage_utc::timestamp <= \$2::date + interval '1 day'
+          AND end_outage_utc::timestamp >= \$2::date
+        GROUP BY asset_code
+    )
+    SELECT g.*, COALESCE(o.available_capacity_mw, g.generation_unit_installed_capacity_mw) as p_max
+    FROM entsoe.production_and_generation_units g
+    LEFT JOIN active_outages o ON g.generation_unit_code = o.asset_code
+    WHERE g.area_map_code = \$1
+      AND g.production_unit_status = 'COMMISSIONED'
+      AND (o.asset_code IS NULL OR o.available_capacity_mw > 0)
+    """
+    # ... επεξεργασία αποτελεσμάτων
+end
+\end{minted}
+\end{samepage}
+
+\subsection{Παράμετροι Τύπου Καυσίμου}
+\label{subsec:fuel-type-parameters}
+
+Οι τεχνικοί περιορισμοί των μονάδων παραγωγής διαφέρουν σημαντικά ανάλογα με τον τύπο καυσίμου. Η δομή \texttt{FuelTypeParameters} συγκεντρώνει αυτές τις παραμέτρους:
+
+\begin{samepage}
+\begin{minted}[fontsize=\small,linenos,frame=lines]{julia}
+struct FuelTypeParameters
+    # Χαρακτηριστικά εκκίνησης (σε ΩΡΕΣ)
+    cold_startup_time::Int          # Ώρες για ψυχρή εκκίνηση
+    warm_startup_time::Int          # Ώρες για θερμή εκκίνηση
+    hot_startup_time::Int           # Ώρες για καυτή εκκίνηση
+    # Ελάχιστοι χρόνοι λειτουργίας (σε ΩΡΕΣ)
+    min_uptime::Int                 # Ελάχιστες ώρες λειτουργίας
+    min_downtime::Int               # Ελάχιστες ώρες αδράνειας
+    # Ρυθμοί μεταβολής (κλάσμα δυναμικότητας ανά ΩΡΑ)
+    ramp_up_rate::Float64           # Ρυθμός αύξησης (κλάσμα/ώρα)
+    ramp_down_rate::Float64         # Ρυθμός μείωσης (κλάσμα/ώρα)
+    # Λειτουργική ευελιξία
+    min_load_factor::Float64        # Ελάχιστο φορτίο (κλάσμα)
+    part_load_efficiency::Float64   # Απόδοση στο ελάχιστο φορτίο
+    # Κατώφλια θερμοκρασιακής μετάβασης (ΩΡΕΣ εκτός)
+    warm_threshold::Int             # Ώρες αδράνειας → θερμή κατάσταση
+    cold_threshold::Int             # Ώρες αδράνειας → ψυχρή κατάσταση
+    # Οικονομικές παράμετροι
+    startup_cost_multiplier::Float64  # Πολλαπλασιαστής κόστους εκκίνησης
+    no_load_cost_fraction::Float64    # Κόστος χωρίς φορτίο (κλάσμα)
+end
+\end{minted}
+\end{samepage}
+
+Σημαντικό σχεδιαστικό χαρακτηριστικό είναι ότι όλες οι χρονικές παράμετροι αποθηκεύονται σε \textbf{ώρες} (όχι σε περιόδους). Ο επιλυτής UC μετατρέπει αυτόματα σε περιόδους βάσει της πραγματικής χρονικής ανάλυσης των δεδομένων ($\text{periods\_per\_hour} = 60 / \text{resolution\_minutes}$). Τα πεδία \texttt{warm\_threshold} και \texttt{cold\_threshold} χρησιμοποιούνται τόσο στον προσδιορισμό θερμοκρασιακής κατάστασης εκκίνησης (Ενότητα~\ref{subsec:initial-conditions}) όσο και στους αντίστοιχους περιορισμούς του μοντέλου UC. Τα πεδία \texttt{startup\_cost\_multiplier} και \texttt{no\_load\_cost\_fraction} τροφοδοτούν τον υπολογισμό κόστους εκκίνησης και κόστους χωρίς φορτίο στην αντικειμενική συνάρτηση (Ενότητα~\ref{subsec:uc-balance-objective}).
+
+Η συνάρτηση \texttt{get\_fuel\_type\_parameters} επιστρέφει τις κατάλληλες παραμέτρους για κάθε τύπο καυσίμου. Για παράδειγμα, οι λιγνιτικές μονάδες έχουν μεγαλύτερους χρόνους εκκίνησης και χαμηλότερους ρυθμούς μεταβολής σε σύγκριση με τις μονάδες συνδυασμένου κύκλου φυσικού αερίου.
+
+\subsection{Φορτίο και Ανανεώσιμες Πηγές}
+\label{subsec:load-renewables}
+
+Η ζήτηση ηλεκτρικής ενέργειας αναπαρίσταται με τη δομή \texttt{Load}:
+
+\begin{samepage}
+\begin{minted}[fontsize=\small,linenos,frame=lines]{julia}
+struct Load
+    timeslot::String           # Χρονοθυρίδα (π.χ. "20240615-0000")
+    resolution_code::String    # Χρονική ανάλυση ("PT15M", "PT60M")
+    bidding_zone::String       # Ζώνη προσφοράς
+    value::Float64             # Κατανάλωση (MW)
+end
+\end{minted}
+\end{samepage}
+
+Οι προβλέψεις παραγωγής από ΑΠΕ αναπαρίστανται με τη δομή \texttt{RenewablesGenerationForecast}:
+
+\begin{samepage}
+\begin{minted}[fontsize=\small,linenos,frame=lines]{julia}
+struct RenewablesGenerationForecast
+    date_time::String                    # Χρονοσφραγίδα
+    resolution_code::String              # Χρονική ανάλυση
+    bidding_zone::String                 # Ζώνη προσφοράς
+    production_type::String              # "Solar" ή "Wind Onshore/Offshore"
+    aggregated_generation_forecast::Float64  # Πρόβλεψη (MW)
+end
+\end{minted}
+\end{samepage}
+
+\subsection{Εξαγωγή Τεχνικών Παραμέτρων από Ιστορικά Δεδομένα}
+\label{subsec:parameter-inference}
+
+Οι τεχνικές παράμετροι των μονάδων παραγωγής (ρυθμοί μεταβολής, ελάχιστη ισχύς, ελάχιστοι χρόνοι λειτουργίας/αδράνειας) δεν είναι διαθέσιμες στα δημόσια δεδομένα του ENTSO-E. Για την αντιμετώπιση αυτού του περιορισμού, αναπτύχθηκε ένας μηχανισμός αυτόματης εξαγωγής (inference) αυτών των παραμέτρων από ιστορικά δεδομένα πραγματικής παραγωγής.
+
+\paragraph{Πηγή Δεδομένων}
+Τα ιστορικά δεδομένα παραγωγής ανακτώνται από τον πίνακα \texttt{actual\_generation\_output\_per\_generation\_unit} του ENTSO-E, ο οποίος περιέχει τη μετρούμενη παραγωγή κάθε μονάδας ανά 15 λεπτά ή ανά ώρα. Η συνάρτηση \texttt{get\_historical\_generation} ανακτά δεδομένα για παράθυρο 3 μηνών πριν από την επιλεγμένη ημερομηνία.
+
+\paragraph{Εξαγωγή Ρυθμών Μεταβολής}
+Οι ρυθμοί μεταβολής (ramp rates) υπολογίζονται από τη συνάρτηση \texttt{infer\_ramp\_rates}:
+
+\begin{samepage}
+\begin{minted}[fontsize=\small,linenos,frame=lines]{julia}
+function infer_ramp_rates(historical_data::DataFrame, p_max::Float64;
+                          percentile::Float64=0.95)
+    if nrow(historical_data) < MIN_DATA_POINTS_FOR_RAMP_INFERENCE
+        return (ramp_up=nothing, ramp_down=nothing)
+    end
+
+    # Ταξινόμηση κατά χρόνο και υπολογισμός μεταβολών
+    sort!(historical_data, :date_time_utc)
+    gen_values = historical_data.actual_generation_output_mw
+    deltas = diff(gen_values)
+
+    # Διαχωρισμός σε αυξήσεις και μειώσεις
+    ramp_ups = filter(x -> x > 0, deltas)
+    ramp_downs = map(abs, filter(x -> x < 0, deltas))
+
+    # Κανονικοποίηση σε ωριαίο ρυθμό βάσει ανάλυσης δεδομένων
+    resolution_code = historical_data.resolution_code[1]
+    resolution_minutes = parse_resolution_to_minutes(resolution_code)
+    hourly_factor = 60.0 / resolution_minutes
+
+    # 95ο εκατοστημόριο, μετατροπή σε κλάσμα p_max/ώρα
+    ramp_up = isempty(ramp_ups) ? nothing :
+        (quantile(ramp_ups, percentile) * hourly_factor) / p_max
+    ramp_down = isempty(ramp_downs) ? nothing :
+        (quantile(ramp_downs, percentile) * hourly_factor) / p_max
+
+    return (ramp_up=ramp_up, ramp_down=ramp_down)
+end
+\end{minted}
+\end{samepage}
+
+Οι ρυθμοί αποθηκεύονται ως κλάσμα της μέγιστης ισχύος ανά ώρα (π.χ. 0.20 σημαίνει ότι η μονάδα μπορεί να μεταβάλει την παραγωγή της κατά 20\% της $P^{\max}$ ανά ώρα), επιτρέποντας την εύκολη μετατροπή σε οποιαδήποτε χρονική ανάλυση.
+
+\paragraph{Εξαγωγή Ελάχιστης Ισχύος}
+Η ελάχιστη ισχύς ($P^{\min}$) εξάγεται αναλύοντας τις περιόδους σταθερής λειτουργίας, εξαιρώντας τις μεταβατικές καταστάσεις (εκκίνηση/τερματισμός):
+
+\begin{samepage}
+\begin{minted}[fontsize=\small,linenos,frame=lines]{julia}
+function infer_p_min(historical_data::DataFrame, p_max::Float64,
+                     fuel_type::Symbol; percentile::Float64=0.05)
+    if nrow(historical_data) < MIN_DATA_POINTS_FOR_RAMP_INFERENCE
+        return nothing
+    end
+
+    sort!(historical_data, :date_time_utc)
+    gen_values = historical_data.actual_generation_output_mw
+    deltas = diff(gen_values)
+
+    # Ανίχνευση μεταβατικών καταστάσεων (|Δ| > 5% της p_max)
+    ramp_threshold = 0.05 * p_max
+
+    # Συλλογή σταθερών μη-μηδενικών τιμών
+    stable_values = Float64[]
+    for i in 2:(length(gen_values) - 1)
+        value = gen_values[i]
+        if value > 0 && abs(deltas[i-1]) < ramp_threshold &&
+                        abs(deltas[i]) < ramp_threshold
+            push!(stable_values, value)
+        end
+    end
+
+    if length(stable_values) < 50
+        return nothing  # Ανεπαρκή δεδομένα
+    end
+
+    # 5ο εκατοστημόριο της σταθερής λειτουργίας
+    inferred_p_min = quantile(stable_values, percentile)
+
+    # Εφαρμογή ορίων ανά τύπο καυσίμου (clamp σε MW)
+    (min_frac, max_frac) = P_MIN_BOUNDS[get_p_min_bounds_category(fuel_type)]
+    return clamp(inferred_p_min, min_frac * p_max, max_frac * p_max)
+end
+\end{minted}
+\end{samepage}
+
+\paragraph{Όρια ανά Τύπο Καυσίμου}
+Για την αποφυγή μη ρεαλιστικών τιμών, εφαρμόζονται όρια (bounds) ανά τύπο καυσίμου. Τα όρια αυτά βασίζονται στα τεχνικά χαρακτηριστικά κάθε τεχνολογίας παραγωγής:
+
+\begin{table}[htbp]
+\centering
+\caption{Όρια ελάχιστης ισχύος ($P^{\min}$) ανά τύπο καυσίμου}
+\label{tab:p-min-bounds}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+\textbf{Τύπος Καυσίμου} & \textbf{Ελάχιστο (\%)} & \textbf{Μέγιστο (\%)} \\
+\midrule
+Λιγνίτης/Άνθρακας & 45 & 65 \\
+Φυσικό αέριο (CCGT) & 35 & 55 \\
+Φυσικό αέριο (OCGT) & 20 & 45 \\
+Υδροηλεκτρικά/Μπαταρίες & 0 & 0 \\
+Προεπιλογή & 30 & 60 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Οι ευέλικτοι πόροι (υδροηλεκτρικά, μπαταρίες) λαμβάνουν $P^{\min} = 0$ χωρίς εξαγωγή, καθώς μπορούν να λειτουργήσουν σε οποιοδήποτε επίπεδο ισχύος. Η αντίστοιχη σταθερά \texttt{FLEXIBLE\_FUEL\_TYPES} περιλαμβάνει τους τύπους \texttt{Hydro Pumped Storage}, \texttt{Hydro Run-of-river}, \texttt{Hydro Water Reservoir}, \texttt{Battery} και \texttt{Other}. Αξίζει να σημειωθεί ότι οι προεπιλεγμένες τιμές \texttt{min\_load\_factor} στη δομή \texttt{FuelTypeParameters} ευθυγραμμίστηκαν με τα όρια εξαγωγής (π.χ. λιγνίτης: 0.45, ευέλικτοι πόροι: 0.0).
+
+\paragraph{Εξαγωγή Ελάχιστων Χρόνων Λειτουργίας/Αδράνειας}
+Οι ελάχιστοι χρόνοι υπολογίζονται αναλύοντας τους κύκλους λειτουργίας (on/off) της μονάδας:
+
+\begin{samepage}
+\begin{minted}[fontsize=\small,linenos,frame=lines]{julia}
+function infer_uptime_downtime(historical_data::DataFrame, fuel_type::Symbol;
+                               percentile::Float64=0.05)
+    if nrow(historical_data) < MIN_DATA_POINTS_FOR_RAMP_INFERENCE
+        return (nothing, nothing)
+    end
+
+    sort!(historical_data, :date_time_utc)
+    gen_values = historical_data.actual_generation_output_mw
+
+    # Υπολογισμός διάρκειας περιόδου σε ώρες
+    resolution_minutes = parse_resolution_to_minutes(
+        historical_data.resolution_code[1])
+    period_hours = resolution_minutes / 60.0
+
+    # Προσδιορισμός κατάστασης (on: > 1 MW, off: = 0)
+    is_on = gen_values .> 1.0
+
+    # Εντοπισμός κύκλων λειτουργίας
+    on_durations, off_durations = Float64[], Float64[]
+    current_state = is_on[1]
+    current_duration = 1
+
+    for i in 2:length(is_on)
+        if is_on[i] == current_state
+            current_duration += 1
+        else
+            duration_hours = current_duration * period_hours
+            if current_state
+                push!(on_durations, duration_hours)
+            else
+                push!(off_durations, duration_hours)
+            end
+            current_state = is_on[i]
+            current_duration = 1
+        end
+    end
+
+    # Φιλτράρισμα σύντομων glitches (< 2 περιόδων)
+    min_dur = 2 * period_hours
+    filter!(d -> d >= min_dur, on_durations)
+    filter!(d -> d >= min_dur, off_durations)
+
+    # Απαίτηση τουλάχιστον 5 κύκλων για αξιόπιστη εξαγωγή
+    # Εφαρμογή ορίων ανά τύπο καυσίμου (βλ. Πίνακα~\ref{tab:uptime-downtime-bounds})
+    bounds = UPTIME_DOWNTIME_BOUNDS[get_p_min_bounds_category(fuel_type)]
+    min_uptime = length(on_durations) >= 5 ?
+        round(Int, clamp(quantile(on_durations, percentile),
+                         bounds[1]...)) : nothing
+    min_downtime = length(off_durations) >= 5 ?
+        round(Int, clamp(quantile(off_durations, percentile),
+                         bounds[2]...)) : nothing
+
+    return (min_uptime, min_downtime)
+end
+\end{minted}
+\end{samepage}
+
+Ομοίως με τα όρια $P^{\min}$, εφαρμόζονται όρια ανά τύπο καυσίμου για τους χρόνους λειτουργίας και αδράνειας, όπως παρουσιάζονται στον Πίνακα~\ref{tab:uptime-downtime-bounds}.
+
+\begin{table}[htbp]
+\centering
+\caption{Όρια ελάχιστων χρόνων λειτουργίας/αδράνειας ανά τύπο καυσίμου (ώρες)}
+\label{tab:uptime-downtime-bounds}
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+\textbf{Τύπος Καυσίμου} & \multicolumn{2}{c}{\textbf{Χρόνος Λειτουργίας}} & \multicolumn{2}{c}{\textbf{Χρόνος Αδράνειας}} \\
+\cmidrule(lr){2-3} \cmidrule(lr){4-5}
+& \textbf{Ελάχ.} & \textbf{Μέγ.} & \textbf{Ελάχ.} & \textbf{Μέγ.} \\
+\midrule
+Λιγνίτης/Άνθρακας & 8 & 48 & 4 & 24 \\
+Φυσικό αέριο (CCGT) & 2 & 12 & 1 & 8 \\
+Φυσικό αέριο (OCGT) & 1 & 4 & 1 & 4 \\
+Προεπιλογή & 2 & 24 & 1 & 12 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Η εφαρμογή ορίων διασφαλίζει ότι οι εξαχθείσες τιμές παραμένουν εντός τεχνικά ρεαλιστικού εύρους. Για μονάδες βάσης (π.χ. λιγνιτικές), η εξαγωγή χρόνων συχνά δεν είναι εφικτή λόγω σπάνιων κύκλων λειτουργίας/αδράνειας, οπότε χρησιμοποιούνται οι προεπιλεγμένες τιμές τύπου καυσίμου.
+
+\paragraph{Ενοποίηση Εξαγωγής Παραμέτρων}
+Η κεντρική συνάρτηση \texttt{infer\_parameters\_for\_generators} ενορχηστρώνει την εξαγωγή για ένα σύνολο μονάδων, εφαρμόζοντας διαφορετική λογική ανάλογα με τον τύπο καυσίμου:
+
+\begin{samepage}
+\begin{minted}[fontsize=\small,linenos,frame=lines]{julia}
+function infer_parameters_for_generators(generators::Vector{Generator},
+                                         day::Date)
+    updated = Generator[]
+    for gen in generators
+        historical = get_historical_generation(gen.code, day)
+        rates = infer_ramp_rates(historical, gen.p_max)
+
+        if gen.fuel_type in FLEXIBLE_FUEL_TYPES
+            # Ευέλικτοι πόροι: p_min = 0, χωρίς uptime/downtime
+            push!(updated, Generator(gen.code, gen.name, gen.fuel_type,
+                gen.location, gen.p_max, 0.0, gen.bidding_zone,
+                gen.marginal_cost, rates.ramp_up, rates.ramp_down,
+                nothing, nothing))
+        else
+            # Θερμικές μονάδες: εξαγωγή όλων των παραμέτρων
+            p_min = infer_p_min(historical, gen.p_max, gen.fuel_type)
+            (uptime, downtime) = infer_uptime_downtime(historical,
+                                                        gen.fuel_type)
+            push!(updated, Generator(gen.code, gen.name, gen.fuel_type,
+                gen.location, gen.p_max,
+                p_min !== nothing ? p_min : gen.p_min,
+                gen.bidding_zone, gen.marginal_cost,
+                rates.ramp_up, rates.ramp_down, uptime, downtime))
+        end
+    end
+    return updated
+end
+\end{minted}
+\end{samepage}
+
+\paragraph{Αποθήκευση σε Κρυφή Μνήμη (Caching)}
+Η εξαγωγή παραμέτρων από ιστορικά δεδομένα είναι υπολογιστικά ακριβή (περίπου 17 λεπτά για 39 μονάδες). Για τη βελτίωση της απόδοσης, οι εξαχθείσες παράμετροι αποθηκεύονται στον πίνακα \texttt{simulations.generator\_inferred\_parameters}:
+
+\begin{samepage}
+\begin{minted}[fontsize=\small,linenos,frame=lines]{julia}
+# Ανάκτηση μονάδων με αυτόματη εξαγωγή και caching
+generators = get_generators_with_inferred_params("GR", Date(2024, 6, 15);
+    use_cache = true,       # Χρήση cached τιμών αν διαθέσιμες
+    max_age_days = 7        # Ανανέωση cache κάθε 7 ημέρες
+)
+\end{minted}
+\end{samepage}
+
+Η χρήση της κρυφής μνήμης μειώνει τον χρόνο ανάκτησης από περίπου 17 λεπτά σε περίπου 2 δευτερόλεπτα---βελτίωση κατά 525 φορές.
+
+
+\subsection{Αρχικές Συνθήκες Μονάδων Παραγωγής}
+\label{subsec:initial-conditions}
+
+Για τη ρεαλιστική μοντελοποίηση του προβλήματος Unit Commitment, η κατάσταση κάθε μονάδας κατά τη χρονική στιγμή $t=0$ (έναρξη του ορίζοντα βελτιστοποίησης) πρέπει να είναι γνωστή. Οι αρχικές συνθήκες καθορίζουν αν η μονάδα λειτουργούσε, σε ποιο επίπεδο ισχύος, και για πόσο χρόνο βρισκόταν στην τρέχουσα κατάστασή της. Αυτή η πληροφορία είναι απαραίτητη για τη σωστή επιβολή περιορισμών στις πρώτες περιόδους του ορίζοντα.
+
+\paragraph{Δομή Αρχικών Συνθηκών}
+Η δομή \texttt{InitialConditions} αναπαριστά την κατάσταση μιας μονάδας στο $t=0$:
+
+\begin{samepage}
+\begin{minted}[fontsize=\small,linenos,frame=lines]{julia}
+struct InitialConditions
+    is_on::Bool           # Λειτουργούσε η μονάδα στο t=0;
+    output::Float64       # Ισχύς εξόδου σε MW (0 αν εκτός λειτουργίας)
+    hours_on::Int         # Συνεχόμενες ώρες λειτουργίας
+    hours_off::Int        # Συνεχόμενες ώρες αδράνειας
+    thermal_state::Symbol # Θερμοκρασιακή κατάσταση (:hot, :warm, :cold)
+end
+\end{minted}
+\end{samepage}
+
+Η θερμοκρασιακή κατάσταση προσδιορίζεται από τον χρόνο αδράνειας: \texttt{:hot} αν $T_{\text{off}} \leq 8$ ώρες, \texttt{:warm} αν $8 < T_{\text{off}} \leq 48$ ώρες, και \texttt{:cold} αν $T_{\text{off}} > 48$ ώρες. Τα κατώφλια αυτά προσαρμόζονται ανά τύπο καυσίμου μέσω των αντίστοιχων πεδίων \texttt{warm\_threshold} και \texttt{cold\_threshold} της δομής \texttt{FuelTypeParameters}.
+
+\paragraph{Εξαγωγή από Ιστορικά Δεδομένα}
+Η κεντρική συνάρτηση \texttt{get\_initial\_conditions} εξάγει τις αρχικές συνθήκες για ένα σύνολο μονάδων χρησιμοποιώντας ένα μαζικό ερώτημα SQL (batch query) αντί $N$ ξεχωριστών ερωτημάτων. Η τεχνική αυτή επιτυγχάνει βελτίωση ταχύτητας κατά 36 φορές (από $\sim$9 λεπτά σε $\sim$15 δευτερόλεπτα για 40 μονάδες):
+
+\begin{samepage}
+\begin{minted}[fontsize=\small,linenos,frame=lines]{julia}
+function get_initial_conditions(generators::Vector{Generator},
+                                market_day::Date;
+                                use_historical::Bool=true)
+    # Μαζική ανάκτηση 72 ωρών ιστορικού για όλες τις μονάδες
+    # σε ένα ερώτημα SQL (WHERE generation_unit_code = ANY($1))
+    day_before = market_day - Day(1)
+    start_utc = DateTime(day_before, Time(23, 0, 0))  # ~00:00 CET
+    codes = [gen.code for gen in generators]
+    all_historical = get_recent_generation_batch(codes, start_utc)
+
+    conditions = Dict{String, InitialConditions}()
+    for gen in generators
+        gen_data = filter(r -> r.generation_unit_code == gen.code,
+                          all_historical)
+        ic = infer_initial_conditions_from_data(gen_data, gen.fuel_type)
+        conditions[gen.code] = ic
+    end
+    return conditions
+end
+\end{minted}
+\end{samepage}
+
+Ο αλγόριθμος εξαγωγής αναλύει τα δεδομένα σε φθίνουσα χρονική σειρά: η πιο πρόσφατη μέτρηση $> 1$ MW δηλώνει ότι η μονάδα ήταν σε λειτουργία. Στη συνέχεια, μετρούνται οι συνεχόμενες περίοδοι στην ίδια κατάσταση για τον υπολογισμό του $T_{\text{on}}$ ή $T_{\text{off}}$. Σε περίπτωση απουσίας δεδομένων, χρησιμοποιούνται ευρετικές προεπιλεγμένες τιμές ανά τύπο καυσίμου: οι μονάδες βάσης (λιγνίτης, πυρηνικά) θεωρούνται σε λειτουργία, οι μονάδες μέσου φορτίου (CCGT) εκτός λειτουργίας αλλά θερμές, οι μονάδες αιχμής (OCGT) εκτός λειτουργίας και ψυχρές, και οι ευέλικτοι πόροι (υδροηλεκτρικά, μπαταρίες) εκτός λειτουργίας αλλά έτοιμοι.
+
+
+\subsection{Τύποι Εντολών Αγοράς}
+\label{subsec:market-orders}
+
+Οι εντολές αγοράς υλοποιούνται ως ιεραρχία τύπων με αφηρημένο βασικό τύπο \texttt{MarketOrder}. Ο κύριος τύπος που χρησιμοποιείται είναι η απλή ωριαία εντολή \texttt{SimpleOrder}:
+
+\begin{samepage}
+\begin{minted}[fontsize=\small,linenos,frame=lines]{julia}
+abstract type MarketOrder end
+
+struct SimpleOrder <: MarketOrder
+    type::Symbol           # :supply ή :demand
+    price::Float64         # Τιμή (€/MWh)
+    quantity::Float64      # Ποσότητα (MWh)
+    zone::Symbol           # Ζώνη προσφοράς
+    date_time::DateTime    # Χρόνος παράδοσης
+    resolution_code::Int   # Ανάλυση σε λεπτά (60, 30, 15)
+end
+\end{minted}
+\end{samepage}
+
+Πέρα από τις απλές εντολές, υλοποιούνται και σύνθετοι τύποι όπως οι εντολές μπλοκ (\texttt{BlockOrder}), οι συνδεδεμένες εντολές μπλοκ (\texttt{LinkedBlockOrder}) και οι αποκλειστικές εντολές μπλοκ (\texttt{ExclusiveBlockOrder}), ακολουθώντας την προδιαγραφή του αλγορίθμου EUPHEMIA.
+
+
+% =============================================================================
+\section{Επιλυτής Unit Commitment}
+\label{sec:uc-solver}
+
+Ο επιλυτής Unit Commitment υλοποιείται στο module \texttt{UnitCommitment.jl} και αποτελεί το πρώτο βήμα της αλυσίδας υπολογισμών. Η κύρια συνάρτηση \texttt{solve\_unit\_commitment} δέχεται ως είσοδο τη ζώνη προσφοράς και την ημερομηνία, ανακτά τα απαραίτητα δεδομένα από τη βάση, διαμορφώνει το πρόβλημα βελτιστοποίησης και επιστρέφει τη βέλτιστη λύση.
+
+\subsection{Δημιουργία Μοντέλου}
+\label{subsec:uc-model-creation}
+
+Η δημιουργία του μοντέλου JuMP ξεκινά με την επιλογή του επιλυτή και τον ορισμό των μεταβλητών απόφασης:
+
+\begin{samepage}
+\begin{minted}[fontsize=\small,linenos,frame=lines]{julia}
+function solve_unit_commitment(bidding_zone::String, day::Date;
+                               optimizer::String="auto",
+                               mip_gap::Float64=0.01,
+                               time_limit::Float64=600.0)
+    # Φόρτωση δεδομένων
+    generators = get_generators(bidding_zone, day)
+    loads = get_loads(bidding_zone, day)
+    renewables = get_generation_forecast_for_wind_and_solar(bidding_zone, day)
+    initial_conditions = get_initial_conditions(generators, day)
+
+    N = length(generators)  # Αριθμός μονάδων
+    T = 24                  # Χρονικές περίοδοι
+    periods_per_hour = 60 / resolution_minutes
+
+    # Δημιουργία μοντέλου με ρύθμιση παραμέτρων επιλυτή
+    model = Model(optimizer_func)
+    set_silent(model)
+    set_optimizer_attribute(model, MOI.RelativeGapTolerance(), mip_gap)
+    set_optimizer_attribute(model, MOI.TimeLimitSec(), time_limit)
+
+    # Εξαγωγή αρχικών συνθηκών σε πίνακες
+    u0 = zeros(Int, N)      # Αρχική δέσμευση (0 ή 1)
+    g0 = zeros(Float64, N)  # Αρχική παραγωγή (MW)
+    T_on0 = zeros(Int, N)   # Ώρες ήδη σε λειτουργία
+    T_off0 = zeros(Int, N)  # Ώρες ήδη εκτός λειτουργίας
+    for (i, gen) in enumerate(generators)
+        ic = initial_conditions[gen.code]
+        u0[i] = ic.is_on ? 1 : 0
+        g0[i] = ic.output
+        T_on0[i] = ic.hours_on
+        T_off0[i] = ic.hours_off
+    end
+
+    # Μεταβλητές παραγωγής (συνεχείς)
+    @variable(model, 0 <= g[i=1:N, t=1:T] <= generators[i].p_max)
+
+    # Μεταβλητές δέσμευσης (δυαδικές)
+    @variable(model, u[i=1:N, t=1:T], Bin)  # Κατάσταση λειτουργίας
+    @variable(model, v[i=1:N, t=1:T], Bin)  # Εκκίνηση
+    @variable(model, z[i=1:N, t=1:T], Bin)  # Τερματισμός
+
+    # Μεταβλητές για θερμοκρασιακές καταστάσεις εκκίνησης
+    Θ = [:cold, :warm, :hot]
+    @variable(model, v_θ[i=1:N, θ in Θ, t=1:T], Bin)
+
+    # ... περαιτέρω μεταβλητές
+end
+\end{minted}
+\end{samepage}
+
+\subsection{Περιορισμοί Ισχύος}
+\label{subsec:impl-uc-power-constraints}
+
+Οι περιορισμοί ισχύος εξασφαλίζουν ότι η παραγωγή κάθε μονάδας βρίσκεται εντός των τεχνικών της ορίων:
+
+\begin{samepage}
+\begin{minted}[fontsize=\small,linenos,frame=lines]{julia}
+# Ανώτατο όριο παραγωγής
+@constraint(model, [i = 1:N, t = 1:T], 
+    g[i, t] <= generators[i].p_max * u[i, t])
+
+# Κατώτατο όριο παραγωγής με παραμέτρους ανά τύπο καυσίμου
+for (i, gen) in enumerate(generators)
+    params = fuel_params[i]
+    # Το ελάχιστο είναι το μέγιστο μεταξύ p_min και του ελάχιστου 
+    # φορτίου βάσει τύπου καυσίμου
+    min_gen = max(gen.p_min, params.min_load_factor * gen.p_max)
+    @constraint(model, [t = 1:T], g[i, t] >= min_gen * u[i, t])
+end
+\end{minted}
+\end{samepage}
+
+\subsection{Περιορισμοί Δέσμευσης}
+\label{subsec:impl-uc-commitment-constraints}
+
+Η σχέση μεταξύ κατάστασης λειτουργίας, εκκίνησης και τερματισμού υλοποιείται ως εξής, με ενσωμάτωση αρχικών συνθηκών στην περίοδο $t=1$:
+
+\begin{samepage}
+\begin{minted}[fontsize=\small,linenos,frame=lines]{julia}
+# Σύνδεση t=1 με αρχική κατάσταση u0
+if initial_conditions !== nothing
+    @constraint(model, [i in 1:N],
+        u[i, 1] == u0[i] + v[i, 1] - z[i, 1])
+end
+
+# Σύνδεση μεταβλητών δέσμευσης (t ≥ 2)
+@constraint(model, [i in 1:N, t in 2:T],
+    u[i, t] == u[i, t-1] + v[i, t] - z[i, t])
+
+# Αποκλεισμός ταυτόχρονης εκκίνησης και τερματισμού
+@constraint(model, [i = 1:N, t = 1:T], v[i, t] + z[i, t] <= 1)
+
+# Ελάχιστος χρόνος λειτουργίας (ώρες → περίοδοι)
+for (i, gen) in enumerate(generators)
+    UT_hours = gen.min_uptime !== nothing ?
+        gen.min_uptime : fuel_params[i].min_uptime
+    UT = max(1, ceil(Int, UT_hours * periods_per_hour))
+    if UT > 1
+        @constraint(model, [t = UT:T],
+            sum(v[i, τ] for τ in t-UT+1:t) <= u[i, t])
+        # Αρχική συνθήκη: εναπομένων χρόνος λειτουργίας
+        if initial_conditions !== nothing && u0[i] == 1
+            remaining = max(0, UT - ceil(Int, T_on0[i] * periods_per_hour))
+            for t in 1:min(remaining, T)
+                @constraint(model, u[i, t] == 1)
+            end
+        end
+    end
+end
+
+# Ελάχιστος χρόνος αδράνειας (ώρες → περίοδοι)
+for (i, gen) in enumerate(generators)
+    DT_hours = gen.min_downtime !== nothing ?
+        gen.min_downtime : fuel_params[i].min_downtime
+    DT = max(1, ceil(Int, DT_hours * periods_per_hour))
+    if DT > 1
+        @constraint(model, [t = DT:T],
+            sum(z[i, τ] for τ in t-DT+1:t) <= 1 - u[i, t])
+        # Αρχική συνθήκη: εναπομένων χρόνος αδράνειας
+        if initial_conditions !== nothing && u0[i] == 0
+            remaining = max(0, DT - ceil(Int, T_off0[i] * periods_per_hour))
+            for t in 1:min(remaining, T)
+                @constraint(model, u[i, t] == 0)
+            end
+        end
+    end
+end
+\end{minted}
+\end{samepage}
+
+Η μετατροπή $\texttt{UT\_hours} \times \texttt{periods\_per\_hour}$ διασφαλίζει ότι οι περιορισμοί εφαρμόζονται σωστά ανεξάρτητα από τη χρονική ανάλυση (15, 30 ή 60 λεπτά). Οι αρχικές συνθήκες επιβάλλουν τη συνέχιση της τρέχουσας κατάστασης κάθε μονάδας: αν μια μονάδα λειτουργούσε αλλά δεν έχει συμπληρώσει τον ελάχιστο χρόνο λειτουργίας, εξαναγκάζεται να παραμείνει σε λειτουργία για τις εναπομένουσες περιόδους.
+
+\subsection{Περιορισμοί Ρυθμού Μεταβολής}
+\label{subsec:impl-uc-ramping}
+
+Οι περιορισμοί ρυθμού μεταβολής (ramping) χρησιμοποιούν την τεχνική Big-M για την αποδέσμευση κατά τις μεταβατικές καταστάσεις:
+
+\begin{samepage}
+\begin{minted}[fontsize=\small,linenos,frame=lines]{julia}
+# Υπολογισμός ρυθμών μεταβολής ανά μονάδα:
+# εξαχθείσα τιμή (fraction/hour) ή προεπιλογή τύπου καυσίμου
+# Μετατροπή σε MW/περίοδο: rate × p_max × period_hours
+period_hours = resolution_minutes / 60.0
+ramp_up = Float64[]
+ramp_down = Float64[]
+for (i, gen) in enumerate(generators)
+    if gen.ramp_up !== nothing
+        push!(ramp_up, gen.ramp_up * gen.p_max * period_hours)
+    else
+        push!(ramp_up, fuel_params[i].ramp_up_rate * gen.p_max * period_hours)
+    end
+    if gen.ramp_down !== nothing
+        push!(ramp_down, gen.ramp_down * gen.p_max * period_hours)
+    else
+        push!(ramp_down, fuel_params[i].ramp_down_rate * gen.p_max * period_hours)
+    end
+end
+
+# Big-M: κλιμακούμενο βάσει μεγέθους προβλήματος
+max_p_max = maximum(gen.p_max for gen in generators)
+M = 2.0 * max_p_max
+
+# Περιορισμός αύξησης (t ≥ 2)
+@constraint(model, [i in 1:N, t in 2:T],
+    g[i, t] - g[i, t-1] <= ramp_up[i] + M * u_SU[i, t])
+
+# Περιορισμός μείωσης (t ≥ 2)
+@constraint(model, [i in 1:N, t in 2:T],
+    g[i, t-1] - g[i, t] <= ramp_down[i] + M * u_SD[i, t])
+\end{minted}
+\end{samepage}
+
+\subsection{Ισορροπία Ισχύος και Αντικειμενική Συνάρτηση}
+\label{subsec:uc-balance-objective}
+
+Ο περιορισμός ισορροπίας ισχύος εξασφαλίζει την κάλυψη της καθαρής ζήτησης:
+
+\begin{samepage}
+\begin{minted}[fontsize=\small,linenos,frame=lines]{julia}
+# Περιορισμός ισορροπίας
+@constraint(model, [t in 1:T],
+    sum(g[i, t] for i in 1:N) == net_demand[t])
+\end{minted}
+\end{samepage}
+
+Η αντικειμενική συνάρτηση αποτελείται από τρεις συνιστώσες κόστους: κόστος παραγωγής, κόστος εκκίνησης και κόστος χωρίς φορτίο. Πριν τη διαμόρφωση, υπολογίζονται οι παράμετροι κόστους:
+
+\begin{samepage}
+\begin{minted}[fontsize=\small,linenos,frame=lines]{julia}
+# Κόστος εκκίνησης ανά μονάδα και θερμοκρασιακή κατάσταση (€)
+# Βασικό κόστος = startup_cost_multiplier × marginal_cost × p_max
+# Πολλαπλασιαστές: hot=1.0, warm=1.5, cold=2.5
+C_SU = Dict{Tuple{Int,Symbol},Float64}()
+for i in 1:N
+    params = fuel_params[i]
+    gen = generators[i]
+    base = params.startup_cost_multiplier * gen.marginal_cost * gen.p_max
+    C_SU[(i, :hot)]  = base * 1.0
+    C_SU[(i, :warm)] = base * 1.5
+    C_SU[(i, :cold)] = base * 2.5
+end
+
+# Κόστος χωρίς φορτίο ανά μονάδα (€/περίοδο)
+# Πάγιο κόστος δέσμευσης ανεξάρτητο από παραγωγή
+period_hours = resolution_minutes / 60.0
+C_NL = Float64[]
+for i in 1:N
+    params = fuel_params[i]
+    gen = generators[i]
+    push!(C_NL, params.no_load_cost_fraction *
+                gen.marginal_cost * gen.p_min * period_hours)
+end
+
+# Αντικειμενική: ελαχιστοποίηση συνολικού κόστους
+@objective(model, Min,
+    # 1. Κόστος παραγωγής (μεταβλητό)
+    sum(generators[i].marginal_cost * g[i, t] for i in 1:N, t in 1:T)
+    # 2. Κόστος εκκίνησης (εξαρτώμενο από θερμοκρασία)
+    + sum(C_SU[(i, θ)] * v_θ[i, θ, t] for i in 1:N, θ in Θ, t in 1:T)
+    # 3. Κόστος χωρίς φορτίο (πάγιο κόστος δέσμευσης)
+    + sum(C_NL[i] * u[i, t] for i in 1:N, t in 1:T)
+)
+\end{minted}
+\end{samepage}
+
+Η τρισδιάστατη δομή κόστους αποτυπώνει ρεαλιστικά τα κίνητρα λειτουργίας: το κόστος εκκίνησης αποθαρρύνει τις συχνές εκκινήσεις/τερματισμούς (ιδιαίτερα τις ψυχρές εκκινήσεις, που κοστίζουν 2,5 φορές περισσότερο από τις θερμές), ενώ το κόστος χωρίς φορτίο αντανακλά τα πάγια λειτουργικά κόστη δέσμευσης μιας μονάδας ανεξάρτητα από το επίπεδο παραγωγής της.
+
+\subsection{Επίλυση και Επιστροφή Αποτελεσμάτων}
+\label{subsec:uc-solution}
+
+Μετά την επίλυση, τα αποτελέσματα επιστρέφονται σε δομημένη μορφή:
+
+\begin{samepage}
+\begin{minted}[fontsize=\small,linenos,frame=lines]{julia}
+optimize!(model)
+
+if termination_status(model) == OPTIMAL
+    return (
+        status = OPTIMAL,
+        generators = generators,
+        generation = value.(g),       # Πίνακας παραγωγής N×T
+        commitment = value.(u),       # Πίνακας δέσμευσης N×T
+        startup = value.(v),          # Πίνακας εκκινήσεων N×T
+        shutdown = value.(z),         # Πίνακας τερματισμών N×T
+        objective_value = objective_value(model),
+        solve_time = solve_time
+    )
+else
+    return (status = termination_status(model),)
+end
+\end{minted}
+\end{samepage}
+
+\subsection{Αποθήκευση Αποτελεσμάτων σε Κρυφή Μνήμη}
+\label{subsec:uc-caching}
+
+Η επίλυση του προβλήματος Unit Commitment απαιτεί 10--15 λεπτά ανά ζώνη. Για την αποφυγή επαναληπτικών υπολογισμών, τα αποτελέσματα αποθηκεύονται σε τρεις πίνακες PostgreSQL (\texttt{uc\_results}, \texttt{uc\_generation}, \texttt{uc\_net\_demand}) με κλειδί \texttt{(bidding\_zone, market\_date, code\_version)}. Η συνάρτηση \texttt{solve\_unit\_commitment} ελέγχει αυτόματα τη διαθεσιμότητα αποθηκευμένων αποτελεσμάτων:
+
+\begin{samepage}
+\begin{minted}[fontsize=\small,linenos,frame=lines]{julia}
+function solve_unit_commitment(bidding_zone::String, day::Date;
+                               optimizer::String="auto",
+                               use_cache::Bool=true,
+                               force_rerun::Bool=false,
+                               # ... λοιπές παράμετροι
+                               )
+    # Έλεγχος κρυφής μνήμης (εκτός αν απενεργοποιημένη)
+    if use_cache && !force_rerun
+        cached = load_uc_results(bidding_zone, day)
+        if cached !== nothing
+            return cached   # Επιστροφή σε ~2 δευτερόλεπτα
+        end
+    end
+
+    # ... κανονική επίλυση (10-15 λεπτά) ...
+
+    # Αποθήκευση αποτελεσμάτων (delete-before-insert)
+    if use_cache
+        save_uc_results(solution, bidding_zone, day)
+    end
+    return solution
+end
+\end{minted}
+\end{samepage}
+
+Η παράμετρος \texttt{force\_rerun} διαδίδεται μέσω ολόκληρης της αλυσίδας κλήσεων (\texttt{generate\_energy\_prices} $\to$ \texttt{create\_typed\_order\_book} $\to$ \texttt{generate\_market\_orders\_from\_uc} $\to$ \texttt{solve\_unit\_commitment}), επιτρέποντας τον επανυπολογισμό αποτελεσμάτων όταν αλλάξει ο κώδικας ή τα δεδομένα εισόδου. Η αποθήκευση ανέρχεται σε περίπου 195 KB ανά ζώνη/ημέρα---κόστος αμελητέο σε σύγκριση με την εξοικονόμηση χρόνου.
+
+
+% =============================================================================
+\section{Μηχανή Στρατηγικής Προσφορών}
+\label{sec:bidding-strategy-engine}
+
+Η μηχανή στρατηγικής προσφορών υλοποιείται στο module \texttt{BiddingStrategy.jl} και μετατρέπει τα αποτελέσματα του Unit Commitment σε εντολές αγοράς. Η κύρια συνάρτηση \texttt{generate\_market\_orders\_from\_uc} υποστηρίζει τρεις διακριτές στρατηγικές.
+
+\subsection{Δομή Αποτελέσματος}
+\label{subsec:bidding-result}
+
+Τα αποτελέσματα της μετατροπής επιστρέφονται στη δομή \texttt{UCToBidsResult}:
+
+\begin{samepage}
+\begin{minted}[fontsize=\small,linenos,frame=lines]{julia}
+struct UCToBidsResult
+    supply_orders::Vector{SimpleOrder}   # Εντολές πώλησης
+    demand_orders::Vector{SimpleOrder}   # Εντολές αγοράς
+    bidding_zone::Symbol                 # Ζώνη προσφοράς
+    day::Date                            # Ημερομηνία
+    total_supply_quantity::Float64       # Συνολική προσφερόμενη ποσότητα
+    total_demand_quantity::Float64       # Συνολική ζητούμενη ποσότητα
+    success::Bool                        # Επιτυχία μετατροπής
+    message::String                      # Μήνυμα κατάστασης
+end
+\end{minted}
+\end{samepage}
+
+\subsection{Στρατηγική Δεσμευμένων Μονάδων}
+\label{subsec:committed-only-strategy}
+
+Η συντηρητική στρατηγική \texttt{:committed\_only} δημιουργεί προσφορές μόνο για τις μονάδες που έχουν δεσμευτεί στη λύση του UC:
+
+\begin{samepage}
+\begin{minted}[fontsize=\small,linenos,frame=lines]{julia}
+function apply_committed_only_strategy!(orders, uc_solution, generators, 
+                                        day, markup_factor)
+    for (i, gen) in enumerate(generators)
+        for t in 1:24
+            # Έλεγχος αν η μονάδα είναι δεσμευμένη
+            if uc_solution.commitment[i, t] > COMMITMENT_THRESHOLD
+                generation = uc_solution.generation[i, t]
+                if generation > GENERATION_THRESHOLD
+                    # Δημιουργία εντολής πώλησης
+                    price = gen.marginal_cost * markup_factor
+                    dt = DateTime(day, Time(t-1, 0))
+                    push!(orders, SimpleOrder(
+                        :supply, price, generation, 
+                        Symbol(gen.bidding_zone), dt, 60
+                    ))
+                end
+            end
+        end
+    end
+end
+\end{minted}
+\end{samepage}
+
+\subsection{Στρατηγική Μέγιστης Διαθεσιμότητας}
+\label{subsec:all-available-max}
+
+Η στρατηγική \texttt{:all\_available\_max} προσφέρει όλες τις μονάδες στη μέγιστη δυναμικότητά τους, ανεξάρτητα από τη λύση του UC. Αν και μη ρεαλιστική, χρησιμεύει ως βάση σύγκρισης:
+
+\begin{samepage}
+\begin{minted}[fontsize=\small,linenos,frame=lines]{julia}
+function apply_all_available_max_strategy!(orders, generators, day, markup_factor)
+    for gen in generators
+        for t in 1:24
+            price = gen.marginal_cost * markup_factor
+            dt = DateTime(day, Time(t-1, 0))
+            push!(orders, SimpleOrder(
+                :supply, price, gen.p_max,
+                Symbol(gen.bidding_zone), dt, 60
+            ))
+        end
+    end
+end
+\end{minted}
+\end{samepage}
+
+\subsection{Στρατηγική Ρεαλιστικής Διαθεσιμότητας}
+\label{subsec:all-available-realistic}
+
+Η στρατηγική \texttt{:all\_available\_realistic} συνδυάζει πληροφορίες από τη λύση UC με τη διαθεσιμότητα όλων των μονάδων:
+
+\begin{samepage}
+\begin{minted}[fontsize=\small,linenos,frame=lines]{julia}
+function apply_all_available_realistic_strategy!(orders, uc_solution, 
+                                                  generators, day, markup_factor)
+    for (i, gen) in enumerate(generators)
+        for t in 1:24
+            # Καθορισμός ποσότητας βάσει κατάστασης δέσμευσης
+            if uc_solution.commitment[i, t] > COMMITMENT_THRESHOLD
+                # Δεσμευμένη μονάδα: χρήση πραγματικής παραγωγής
+                quantity = uc_solution.generation[i, t]
+            elseif gen.p_min < 0.1 * gen.p_max
+                # Μη δεσμευμένη με χαμηλό ελάχιστο: 20% της δυναμικότητας
+                quantity = DEFAULT_UNCOMMITTED_UNIT_FRACTION * gen.p_max
+            else
+                # Μη δεσμευμένη: ελάχιστη ισχύς
+                quantity = gen.p_min
+            end
+            
+            if quantity > GENERATION_THRESHOLD
+                price = gen.marginal_cost * markup_factor
+                dt = DateTime(day, Time(t-1, 0))
+                push!(orders, SimpleOrder(
+                    :supply, price, quantity,
+                    Symbol(gen.bidding_zone), dt, 60
+                ))
+            end
+        end
+    end
+end
+\end{minted}
+\end{samepage}
+
+\subsection{Δημιουργία Εντολών Ζήτησης}
+\label{subsec:demand-orders-creation}
+
+Οι εντολές ζήτησης δημιουργούνται με βάση τα δεδομένα φορτίου, με τιμή ίση με το ανώτατο όριο της αγοράς (price-taking demand):
+
+\begin{samepage}
+\begin{minted}[fontsize=\small,linenos,frame=lines]{julia}
+function create_demand_orders!(orders, loads, day, bidding_zone, price_cap)
+    for load in loads
+        if load.value > DEMAND_THRESHOLD
+            hour = parse(Int, load.timeslot[end-3:end-2])
+            dt = DateTime(day, Time(hour, 0))
+            push!(orders, SimpleOrder(
+                :demand, price_cap, load.value,
+                Symbol(bidding_zone), dt, 60
+            ))
+        end
+    end
+end
+\end{minted}
+\end{samepage}
+
+
+% =============================================================================
+\section{Βιβλίο Εντολών Οριακού Κόστους (Merit-Order)}
+\label{sec:merit-order-book}
+
+Πέραν των στρατηγικών που βασίζονται στη λύση του Unit Commitment, το σύστημα υλοποιεί (module \texttt{MeritOrderBook.jl}) μια ντετερμινιστική μέθοδο κατασκευής βιβλίου εντολών απευθείας από τα θεμελιώδη μεγέθη της αγοράς, η οποία αναδείχθηκε ως η ακριβέστερη (Κεφάλαιο 5) και αποτελεί την προεπιλεγμένη μέθοδο \texttt{:merit\_order}. Η κεντρική ιδέα είναι η κατασκευή ενός \emph{ανταγωνιστικού αντιπαραδείγματος}: κάθε μονάδα προσφέρει στο βραχυχρόνιο οριακό της κόστος (SRMC) συν την ορθολογική --- όχι όμως στρατηγική --- συμπεριφορά που επιβάλλουν τα τεχνικά και οικονομικά χαρακτηριστικά της. Η ενότητα αυτή περιγράφει τον \emph{σκελετό προσφορών} (bid skeleton): πώς ακριβώς κατασκευάζεται η προσφορά κάθε μονάδας, και γιατί η διαδρομή αυτή σκόπιμα \emph{δεν} περνά από πλήρη επίλυση Unit Commitment.\footnote{Η σύνθεση του σκελετού προσφορών τεκμηριώνεται και στο έγγραφο \texttt{docs/calibration-atlas.md} (§3) του αποθετηρίου.}
+
+\subsection{Γιατί Όχι Πλήρες Unit Commitment}
+\label{subsec:why-not-uc}
+
+Το ζητούμενο του αντιπαραδείγματος είναι η \emph{ορθολογική ανταγωνιστική προσφορά} κάθε μονάδας --- όχι μια προσομοιωμένη κεντρική κατανομή. Το πλήρες Unit Commitment απαντά σε διαφορετική ερώτηση («τι θα έτρεχε ένας κεντρικός σχεδιαστής»), και η μετατροπή της λύσης του σε εντολές αποδείχθηκε εκφυλισμένη: η προσφερόμενη ποσότητα ταυτίζεται με τη ζήτηση και η τιμή καθηλώνεται στην ακριβότερη \emph{δεσμευμένη} μονάδα, αντί να προκύπτει από τον ανταγωνισμό ολόκληρης της καμπύλης προσφοράς (βλ.\ και Πίνακα~\ref{tab:driver-analysis}). Επιπλέον, το UC είναι περίπου 100 φορές βραδύτερο --- απαγορευτικό για εκκαθάριση 39 ζωνών σε δύο περάσματα. Το μόνο στοιχείο λογικής κατανομής που διατηρείται είναι η ελαφριά δέσμευση της επόμενης υποενότητας.
+
+\subsection{Ελαφριά Δέσμευση (UC-lite)}
+\label{subsec:uc-lite}
+
+Αντί πλήρους βελτιστοποίησης, η δέσμευση των θερμικών μονάδων προσδιορίζεται με έναν ντετερμινιστικό κανόνα στοίβαξης: οι θερμικές μονάδες με $\text{SRMC} \le 1{,}15 \times \text{SRMC}_{\text{αερίου}}$ ταξινομούνται κατά αύξον οριακό κόστος και στοιβάζονται έως ότου η (απομειωμένη) ικανότητά τους καλύψει το $1{,}05 \times$ της \emph{μέγιστης} ημερήσιας καθαρής ζήτησης. Το σύνολο αυτό θεωρείται «δεσμευμένο» --- και επειδή η δέσμευση ακολουθεί την αιχμή, το τεχνικό ελάχιστο των μονάδων αυτών προσφέρεται ως αυτοπρογραμματισμένο (must-run) και στις νυχτερινές ώρες χαμηλής ζήτησης. Αυτός ακριβώς ο μηχανισμός επιτρέπει στις τιμές να καταρρέουν \emph{κάτω} από το θερμικό SRMC τις ώρες πλεονάσματος ΑΠΕ, όπως συμβαίνει με τον πραγματικό αυτοπρογραμματισμό.
+
+\subsection{Ο Σκελετός Προσφορών ανά Κατηγορία Μονάδας}
+\label{subsec:bid-skeleton}
+
+Κάθε βιβλίο ζώνης-διαστήματος χρησιμοποιεί τον ίδιο σκελετό· οι περιοχές αλλάζουν μόνο παραμέτρους. Ο Πίνακας~\ref{tab:bid-skeleton} συνοψίζει τι προσφέρει κάθε κατηγορία μονάδας και με ποιον κανόνα τιμής.
+
+\begin{table}[htbp]
+\centering
+\caption{Ο σκελετός προσφορών: ποσότητα και κανόνας τιμής ανά κατηγορία μονάδας}
+\label{tab:bid-skeleton}
+\begin{tabular}{@{}p{3.4cm}p{4.3cm}p{5.6cm}@{}}
+\toprule
+\textbf{Κατηγορία} & \textbf{Προσφερόμενη ποσότητα} & \textbf{Κανόνας τιμής} \\
+\midrule
+Αιολικά / φωτοβολταϊκά & Ζωνική πρόβλεψη (οι μονάδες εξαιρούνται από τη στοίβα) & 1~€/MWh --- δέκτης τιμής \\
+Υδροηλεκτρικά ταμιευτήρα / αντλησιοταμίευση & $p_{\max}$ επί συντελεστή κλίμακας (πληρότητα ταμιευτήρων / πρόσφατη παραγωγή) & \textbf{Αξία νερού} (τρία μοντέλα: αγκυρωμένη στο αέριο, ευκαιρίας ταμιευτήρα, ευκαιρίας με άγκυρα)· ποτέ το μεταβλητό κόστος \\
+Δεσμευμένη θερμική --- τεχνικό ελάχιστο & $p_{\min}$ σε δύο τμήματα & Το βαθύτερο 60\% στο 5\% του SRMC· το υπόλοιπο στο $\max(0{,}5 \cdot \text{SRMC},\ \text{SRMC} - 40)$ \\
+Ίδια μονάδα --- ευέλικτη ισχύς & $(p_{\max} - p_{\min})$ σε βαθμίδες 55/20/15/10\% & Κλίμακα $0{,}95 / 1{,}05 / 1{,}25 / 1{,}60 \times \text{SRMC}$· η πρώτη βαθμίδα στο κόστος, οι ανώτερες επί τον όρο στενότητας \\
+Μη δεσμευμένη θερμική & $p_{\max}$ στις ίδιες βαθμίδες & Ίδια κλίμακα + όρος στενότητας \\
+Παρατηρ.\ εισαγωγές (μη ενδογενή σύνορα) & Ωριαία καθαρή ροή & 1~€/MWh δέκτης τιμής· στις αγκυρωμένες ζώνες τιμολογούνται στη συζευγμένη τιμή αναφοράς \\
+Παρατηρούμενες εξαγωγές & Ωριαία καθαρή ροή & Σταθερή ζήτηση στην οροφή· στα αποσυρμένα σύνορα, ζήτηση στην τιμή αναφοράς (δεν κατασκευάζεται στενότητα) \\
+Ζήτηση & 98\% του φορτίου / 2\% ελαστική ουρά & 3.000~€/MWh οροφή / 250~€/MWh ελαστική \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Δύο κανόνες του πίνακα αξίζουν σχολιασμό. Πρώτον, η έκπτωση του τεχνικού ελαχίστου είναι \emph{απόλυτο} μέγεθος ($\text{SRMC} - 40$~€/MWh, με κατώφλι το μισό SRMC) και όχι ποσοστό: η έκπτωση αυτή αποσβένει κόστος εκκίνησης σε €/MWh, οπότε η αναλογική διατύπωση, αόρατη σε κανονικά έτη, κατέρρεε στα βράδια της κρίσης του 2022 (βλ.\ Ενότητα~\ref{subsec:crisis-2022}). Δεύτερον, ο όρος στενότητας εφαρμόζεται μόνο στις ανώτερες βαθμίδες και έχει τη μορφή
+\begin{equation}
+\sigma_t = 1 + \kappa_s \cdot \max(0,\ \theta - m_t)^2 + \kappa_p \cdot \hat{d}_t^{\,4},
+\label{eq:scarcity-factor}
+\end{equation}
+όπου $m_t$ το περιθώριο απομειωμένης ικανότητας πάνω από την καθαρή ζήτηση, $\theta$ το κατώφλι στενότητας και $\hat{d}_t$ η κανονικοποιημένη ζήτηση. Ο πρώτος όρος ενεργοποιείται όταν το περιθώριο \emph{πραγματικά} στενεύει· ο δεύτερος αποτυπώνει τη στρατηγική προσφορά των ωρών αιχμής (οι συμμετέχοντες γνωρίζουν πότε είναι η αιχμή, και η τέταρτη δύναμη συγκεντρώνει το πριμ εκεί).
+
+\subsection{Πιστότητα Στόλου}
+\label{subsec:fleet-honesty}
+
+Πριν από κάθε κατασκευή προσφορών εκτελούνται δύο διορθώσεις πιστότητας του στόλου. Η \emph{συμπλήρωση στόλου} (fleet completion) προσθέτει, ανά τεχνολογία, τη συγκεντρωτική ικανότητα που λείπει από τον κατάλογο μονάδων --- σε ζώνες με ελλιπή δεδομένα ανά μονάδα, ο στόλος του καταλόγου υπολείπεται συστηματικά του πραγματικού. Η \emph{απομείωση στην πραγματική διαθεσιμότητα} (fleet truthing) περιορίζει, αντίστροφα, τις τεχνολογίες βάσης στο πρόσφατα παρατηρημένο μέγιστό τους (95ο εκατοστημόριο κυλιόμενου 30ημέρου, με περιθώριο), όταν ο «χάρτινος» στόλος υπερβαίνει ό,τι πραγματικά λειτουργεί --- η διόρθωση που εξάλειψε το λιγνιτικό «φάντασμα» του 2022 (Ενότητα~\ref{subsec:crisis-2022}). Και οι δύο χρησιμοποιούν αποκλειστικά ιστορική πληροφορία διαθέσιμη πριν από τη δημοπρασία.
+
+\subsection{Από τον Σκελετό στις Περιφερειακές Στρατηγικές}
+\label{subsec:skeleton-to-regions}
+
+Διαβάζοντας τις περιφερειακές στρατηγικές του ευρωπαϊκού αποτυπώματος (Ενότητα~\ref{subsec:region-strategies}) πάνω σε αυτόν τον σκελετό, αναδεικνύεται ότι πρόκειται για τρεις μόνο οικογένειες αποκλίσεων από ένα κοινό σχήμα: (1)~\emph{αλήθεια κόστους} --- διόρθωση του ίδιου του SRMC (ο πολλαπλασιαστής της Ιταλίας, το πυρηνικό πάτωμα της Γαλλίας)· (2)~\emph{ανατιμολόγηση σε κόστος ευκαιρίας} του κυρίαρχου ευέλικτου πόρου έναντι της συζευγμένης τιμής του πρώτου περάσματος (οι υδροηλεκτρικές άγκυρες, η πυρηνική άγκυρα, η τιμολόγηση των βελγικών εισαγωγών --- όλα ο ίδιος μηχανισμός)· και (3)~\emph{ιδιοσυγκρασία στενότητας} --- πόσο επιθετικά προσαυξάνονται οι ανώτερες βαθμίδες, δηλαδή μια δήλωση για το πόσο συχνά κάθε περιοχή είναι πραγματικά στενή.
+
+\subsection{Συγχώνευση Εντολών}
+\label{subsec:order-merging}
+
+Εντολές ίδιας τεχνολογίας, στρογγυλοποιημένης τιμής και χρονικού διαστήματος συγχωνεύονται πριν την εκκαθάριση, μειώνοντας το μέγεθος του βιβλίου κατά $\approx 6\times$ (τυπικά από $\sim$11.000 σε $\sim$1.700 εντολές ανά ζώνη-ημέρα) χωρίς καμία επίδραση στις τιμές εκκαθάρισης. Η συγχώνευση είναι καθοριστική για την πολυζωνική εκκαθάριση, όπου κάθε εντολή εισάγει δυαδικές μεταβλητές συμπληρωματικότητας στο πρόβλημα μικτού ακέραιου προγραμματισμού.
+
+
+% =============================================================================
+\section{Εκκαθάριση Αγοράς με MPCC}
+\label{sec:mpcc-market-clearing}
+
+Η εκκαθάριση της αγοράς υλοποιείται στο module \texttt{MPCC.jl} χρησιμοποιώντας τη μέθοδο Mathematical Programming with Complementarity Constraints. Ο αλγόριθμος δέχεται ένα βιβλίο εντολών (\texttt{MPCCOrderBook}) και επιστρέφει τις τιμές εκκαθάρισης και τους βαθμούς αποδοχής των εντολών.
+
+\subsection{Δομή Βιβλίου Εντολών}
+\label{subsec:order-book-structure}
+
+Το βιβλίο εντολών οργανώνει τις εντολές αγοράς μαζί με τις παραμέτρους του προβλήματος:
+
+\begin{samepage}
+\begin{minted}[fontsize=\small,linenos,frame=lines]{julia}
+struct MPCCOrderBook
+    orders::Vector{MarketOrder}              # Όλες οι εντολές
+    nodes::Vector{String}                    # Ζώνες προσφοράς
+    periods::Vector{String}                  # Χρονικές περίοδοι
+    price_limits::Tuple{Float64,Float64}     # (min, max) τιμή
+    network_topology::Union{Nothing,TransferCapacity}  # Περιορισμοί δικτύου
+end
+\end{minted}
+\end{samepage}
+
+\subsection{Μεταβλητές Απόφασης}
+\label{subsec:mpcc-variables}
+
+Οι κύριες μεταβλητές του μοντέλου MPCC είναι οι τιμές αγοράς, οι βαθμοί αποδοχής και οι ροές μεταφοράς:
+
+\begin{samepage}
+\begin{minted}[fontsize=\small,linenos,frame=lines]{julia}
+function solve_mpcc_market_clearing(order_book::MPCCOrderBook; 
+                                    big_m::Float64=BIG_M_PARAMETER)
+    model = Model(HiGHS.Optimizer)
+    set_silent(model)
+    
+    # Τιμές αγοράς ανά ζώνη και περίοδο
+    @variable(model, market_price[node in order_book.nodes, 
+                                  period in order_book.periods])
+    
+    # Βαθμός αποδοχής κάθε εντολής [0, 1]
+    @variable(model, 0 <= stepwise_acceptance[order_id in order_ids] <= 1)
+    
+    # Dual μεταβλητή για περιορισμούς συμπληρωματικότητας
+    @variable(model, stepwise_dual[order_id in order_ids] >= 0)
+    
+    # Μεταβλητή έκτακτης αποκοπής φορτίου
+    @variable(model, load_shed[node in order_book.nodes, 
+                               period in order_book.periods] >= 0)
+    
+    # Ροές μεταφοράς (αν υπάρχει δίκτυο)
+    if order_book.network_topology !== nothing
+        zone_pairs = get_zone_pairs(order_book.network_topology)
+        @variable(model, flow[(s,d) in zone_pairs, t in order_book.periods])
+    end
+end
+\end{minted}
+\end{samepage}
+
+\subsection{Περιορισμοί Συμπληρωματικότητας}
+\label{subsec:complementarity-constraints}
+
+Οι περιορισμοί συμπληρωματικότητας εξασφαλίζουν ότι μια εντολή γίνεται αποδεκτή μόνο όταν η τιμή αγοράς είναι ευνοϊκή. Υλοποιούνται με τη μέθοδο Big-M:
+
+\begin{samepage}
+\begin{minted}[fontsize=\small,linenos,frame=lines]{julia}
+# Υπολογισμός του δεξιού μέλους της dual συνθήκης
+for (i, order) in enumerate(simple_orders)
+    order_id = order_ids[i]
+    node_id = string(order.zone)
+    time_period = extract_time_period(order.date_time, order_book.periods)
+    
+    # Ποσότητα με πρόσημο: αρνητική για πώληση, θετική για αγορά
+    quantity = order.type == :supply ? -order.quantity : order.quantity
+    
+    stepwise_dual_rhs[order_id] = @expression(model,
+        stepwise_dual[order_id] +
+        quantity * market_price[node_id, time_period] -
+        quantity * order.price
+    )
+end
+
+# Περιορισμός dual
+@constraint(model, [order_id in order_ids],
+    0 <= stepwise_dual_rhs[order_id])
+
+# Big-M μετασχηματισμός για συμπληρωματικότητα
+@variable(model, complementarity_aux[order_id in order_ids], Bin)
+
+@constraint(model, [order_id in order_ids],
+    stepwise_acceptance[order_id] <= complementarity_aux[order_id] * big_m)
+
+@constraint(model, [order_id in order_ids],
+    stepwise_dual_rhs[order_id] <= (1 - complementarity_aux[order_id]) * big_m)
+\end{minted}
+\end{samepage}
+
+Δύο λεπτομέρειες της υλοποίησης αποδείχθηκαν καθοριστικές για τον ορθό προσδιορισμό των τιμών. Πρώτον, απαιτούνται \emph{αμφότερες} οι πλευρές της συμπληρωματικότητας: πέραν της παραπάνω (αποδοχή $\perp$ dual υπόλοιπο), προστίθεται και η συμμετρική συνθήκη dual $\perp$ $(1 - \text{αποδοχή})$, ώστε μόνο πλήρως αποδεκτές εντολές να φέρουν θετικό πλεόνασμα. Χωρίς τη δεύτερη πλευρά, μια μερικώς αποδεκτή (οριακή) εντολή δεν καθηλώνει την τιμή στην προσφορά της και το πρόβλημα προσδιορίζει την τιμή μόνο εντός διαστήματος, με τον επιλυτή να επιστρέφει αυθαίρετο σημείο του. Δεύτερον, οι σταθερές Big-M ορίζονται \emph{ανά εντολή} από το μέγιστο δυνατό πλεόνασμά της (ποσότητα επί απόσταση προσφοράς από τα όρια τιμών)· μια καθολική σταθερά είτε στρεβλώνει τις τιμές μεγάλων εντολών είτε καθιστά το πρόβλημα αδύνατο για προσφορές εκτός των ορίων του βιβλίου. Τέλος, επειδή η αντικειμενική συνάρτηση δεν περιλαμβάνει τις μεταβλητές τιμών, η τελική τιμή κάθε ζώνης-διαστήματος ανακατασκευάζεται ντετερμινιστικά από το μοτίβο αποδοχής (η οριακή εντολή ορίζει την τιμή· ελλείψει οριακής, επιλέγεται το ανταγωνιστικό άκρο του εφικτού διαστήματος), με ομαδοποίηση των ζωνών σε συνιστώσες ίσης τιμής όταν οι διασυνδέσεις δεν είναι συμφορημένες και επικύρωση του προσήμου των μισθωμάτων συμφόρησης.
+
+\subsection{Περιορισμός Ισορροπίας Ισχύος}
+\label{subsec:mpcc-power-balance}
+
+Ο περιορισμός ισορροπίας ισχύος διαφοροποιείται ανάλογα με το αν υπάρχουν περιορισμοί δικτύου:
+
+\begin{samepage}
+\begin{minted}[fontsize=\small,linenos,frame=lines]{julia}
+if has_network_constraints
+    # Πολυζωνική ισορροπία με ροές μεταφοράς:
+    # -S + D + shed - εισροές + εκροές = 0, δηλ. S + εισροές = D + shed + εκροές
+    @constraint(model, [node_id in nodes, period in periods],
+        # Συνεισφορά εντολών: πώληση (αρνητική) + αγορά (θετική)
+        sum(stepwise_acceptance[order_ids[i]] *
+            (orders[i].type == :supply ? -orders[i].quantity : orders[i].quantity)
+            for i in orders_at_node_period[(node_id, period)]) +
+        load_shed[node_id, period] -
+        # Εισροές από άλλες ζώνες (μειώνουν την απαιτούμενη τοπική παραγωγή)
+        sum(flow[(z, node_id), period] for z in connected_zones_to[node_id]) +
+        # Εκροές προς άλλες ζώνες (αυξάνουν την απαιτούμενη τοπική παραγωγή)
+        sum(flow[(node_id, z), period] for z in connected_zones_from[node_id]) == 0
+    )
+else
+    # Μονοζωνική ισορροπία (χωρίς ροές)
+    @constraint(model, [node_id in nodes, period in periods],
+        sum(stepwise_acceptance[order_ids[i]] *
+            (orders[i].type == :supply ? -orders[i].quantity : orders[i].quantity)
+            for i in orders_at_node_period[(node_id, period)]) +
+        load_shed[node_id, period] == 0
+    )
+end
+\end{minted}
+\end{samepage}
+
+Η συνέπεια των προσήμων των ροών με τη σύμβαση προσήμων των εντολών (πώληση αρνητική, αγορά θετική) είναι κρίσιμη: με αντεστραμμένα πρόσημα, κάθε ροή δρα φυσικά κατοπτρικά --- η ροή $A \to B$ περιορίζεται από την ικανότητα ATC της \emph{αντίθετης} κατεύθυνσης. Το σφάλμα αυτό είναι αόρατο σε συμμετρικά σύνορα και εντοπίστηκε μόνο μέσω της αξιολόγησης σε πραγματικά δεδομένα, στο έντονα ασύμμετρο σύνορο GR--BG (εισαγωγική ικανότητα έως $\sim$2,7~GW έναντι εξαγωγικής που περιορίζεται περιοδικά κάτω από 0,3~GW), όπου προκαλούσε πλασματικές ελλείψεις. Στη σουίτα δοκιμών προστέθηκε στοχευμένος έλεγχος παλινδρόμησης με αυστηρά μονόδρομο σύνορο, ο οποίος αποτυγχάνει με οποιαδήποτε αναντιστοιχία προσήμων.
+
+Στην πολυζωνική περίπτωση, οι ροές συνοδεύονται από τη \emph{συνθήκη σύζευξης τιμών} της ευρωπαϊκής αγοράς: η διαφορά τιμών μεταξύ των άκρων κάθε διασύνδεσης ισούται με το μίσθωμα συμφόρησης, το οποίο επιτρέπεται να είναι μη μηδενικό μόνο όταν η ροή βρίσκεται στο αντίστοιχο όριο ATC (υλοποίηση με δυαδικές μεταβλητές ανά διασύνδεση και χρονικό διάστημα). Χωρίς τη συνθήκη αυτή, οι τιμές των ζωνών παραμένουν ασύζευκτες ακόμη και σε ασυμφόρητες διασυνδέσεις.
+
+\subsection{Αντικειμενική Συνάρτηση}
+\label{subsec:mpcc-objective}
+
+Η αντικειμενική συνάρτηση μεγιστοποιεί το οικονομικό πλεόνασμα, με ποινή για την αποκοπή φορτίου:
+
+\begin{samepage}
+\begin{minted}[fontsize=\small,linenos,frame=lines]{julia}
+load_shed_penalty = 10000.0  # €/MWh
+
+@objective(model, Max,
+    # Πλεόνασμα από εντολές
+    sum(stepwise_acceptance[order_ids[i]] *
+        (order.type == :supply ? 
+            -order.quantity * order.price :  # Κόστος παραγωγής
+             order.quantity * order.price)   # Αξία κατανάλωσης
+        for (i, order) in enumerate(simple_orders)) -
+    # Ποινή αποκοπής φορτίου
+    sum(load_shed_penalty * load_shed[n, p] 
+        for n in order_book.nodes, p in order_book.periods)
+)
+\end{minted}
+\end{samepage}
+
+\subsection{Δομή Αποτελέσματος}
+\label{subsec:mpcc-result}
+
+Τα αποτελέσματα της εκκαθάρισης επιστρέφονται στη δομή \texttt{MPCCResult}:
+
+\begin{samepage}
+\begin{minted}[fontsize=\small,linenos,frame=lines]{julia}
+struct MPCCResult
+    status::Symbol                                # :optimal, :infeasible, κλπ
+    objective_value::Float64                      # Τιμή αντικειμενικής
+    market_prices::Dict{String,Dict{String,Float64}}  # Τιμές [zone][period]
+    stepwise_acceptance::Dict{String,Float64}     # Αποδοχές εντολών
+    block_acceptance::Dict{String,Float64}        # Αποδοχές block
+    block_activation::Dict{String,Float64}        # Ενεργοποιήσεις block
+    transmission_flows::Dict{String,Dict{String,Float64}}  # Ροές
+    solve_time::Float64                           # Χρόνος επίλυσης
+    total_time::Float64                           # Συνολικός χρόνος
+    solver_name::String                           # Όνομα επιλυτή
+    message::String                               # Μήνυμα
+end
+\end{minted}
+\end{samepage}
+
+
+% =============================================================================
+\section{Μοντελοποίηση Δικτύου}
+\label{sec:network-modeling}
+
+Η μοντελοποίηση των περιορισμών δικτύου υλοποιείται στο module \texttt{Network.jl}. Το module παρέχει δύο προσεγγίσεις: τη βασισμένη σε γραμμές μεταφοράς (\texttt{NetworkTopology}) και τη βασισμένη σε ζώνες προσφοράς (\texttt{TransferCapacity}). Η δεύτερη προσέγγιση είναι η συνιστώμενη για χρήση με δεδομένα ENTSO-E.
+
+\subsection{Δομή Διαθέσιμης Ικανότητας Μεταφοράς}
+\label{subsec:transfer-capacity-struct}
+
+Η δομή \texttt{TransferCapacity} αναπαριστά την ικανότητα μεταφοράς μεταξύ ζωνών προσφοράς:
+
+\begin{samepage}
+\begin{minted}[fontsize=\small,linenos,frame=lines]{julia}
+struct TransferCapacity
+    bidding_zones::Vector{String}    # Όλες οι ζώνες
+    time_periods::Vector{String}     # Χρονικές περίοδοι
+    # Ικανότητα στην κατεύθυνση source → sink
+    capacity_forward::Dict{Tuple{String,String,String},Float64}
+    # Ικανότητα στην κατεύθυνση sink → source
+    capacity_backward::Dict{Tuple{String,String,String},Float64}
+end
+\end{minted}
+\end{samepage}
+
+\subsection{Ανάκτηση Δεδομένων ENTSO-E}
+\label{subsec:entsoe-data-retrieval}
+
+Η δημιουργία της δομής \texttt{TransferCapacity} από δεδομένα ENTSO-E γίνεται με την ακόλουθη συνάρτηση:
+
+\begin{samepage}
+\begin{minted}[fontsize=\small,linenos,frame=lines]{julia}
+function create_transfer_capacity_from_entsoe(date::Date, 
+                                              bidding_zones::Vector{String}=String[])
+    zone_filter = isempty(bidding_zones) ? "" :
+        "AND (out_map_code IN ('$(join(bidding_zones, "','"))') " *
+        "OR in_map_code IN ('$(join(bidding_zones, "','"))'))"
+    
+    query = """
+    SELECT
+        out_map_code as source_zone,
+        in_map_code as sink_zone,
+        EXTRACT(HOUR FROM date_time_utc) + 1 as time_period,
+        capacity_mw as capacity
+    FROM entsoe.offered_transfer_capacities_implicit
+    WHERE DATE(date_time_utc) = \$1
+    $zone_filter
+    ORDER BY out_map_code, in_map_code, date_time_utc
+    """
+    
+    df = sql2df(query, [date])
+    
+    if nrow(df) == 0
+        error("No transfer capacity data found for $date")
+    end
+    
+    return build_transfer_capacity_from_dataframe(df)
+end
+\end{minted}
+\end{samepage}
+
+\subsection{Προσθήκη Περιορισμών στο Μοντέλο}
+\label{subsec:adding-network-constraints}
+
+Οι περιορισμοί ικανότητας μεταφοράς προστίθενται στο μοντέλο JuMP ως εξής:
+
+\begin{samepage}
+\begin{minted}[fontsize=\small,linenos,frame=lines]{julia}
+function add_transfer_capacity_constraints!(model::Model, 
+                                            transfer_capacity::TransferCapacity, 
+                                            FLOW)
+    zones = transfer_capacity.bidding_zones
+    periods = transfer_capacity.time_periods
+    cap_fwd = transfer_capacity.capacity_forward
+    cap_bwd = transfer_capacity.capacity_backward
+    
+    # Περιορισμοί για κάθε ζεύγος ζωνών και περίοδο
+    # Θετική ροή: source → sink, περιορίζεται από capacity_forward
+    # Αρνητική ροή: sink → source, περιορίζεται από capacity_backward
+    @constraint(model, 
+        [source in zones, sink in zones, t in periods; source != sink],
+        -get(cap_bwd, (source, sink, t), 0.0) <= 
+            FLOW[source, sink, t] <= 
+            get(cap_fwd, (source, sink, t), 0.0)
+    )
+    
+    return model
+end
+\end{minted}
+\end{samepage}
+
+\subsection{Βοηθητικές Συναρτήσεις}
+\label{subsec:network-utilities}
+
+Το module παρέχει βοηθητικές συναρτήσεις για την εξαγωγή πληροφοριών συνδεσιμότητας:
+
+\begin{samepage}
+\begin{minted}[fontsize=\small,linenos,frame=lines]{julia}
+# Επιστροφή ζευγών ζωνών με διαθέσιμη ικανότητα μεταφοράς
+function get_zone_pairs(tc::TransferCapacity)
+    pairs = Set{Tuple{String,String}}()
+    for (source, sink, _) in keys(tc.capacity_forward)
+        if get(tc.capacity_forward, (source, sink, "1"), 0.0) > 0
+            push!(pairs, (source, sink))
+        end
+    end
+    return collect(pairs)
+end
+
+# Επιστροφή συνδεδεμένων ζωνών για μια δεδομένη ζώνη
+function get_connected_zones(tc::TransferCapacity, zone::String)
+    connected = Set{String}()
+    for (source, sink, _) in keys(tc.capacity_forward)
+        if source == zone
+            push!(connected, sink)
+        elseif sink == zone
+            push!(connected, source)
+        end
+    end
+    return collect(connected)
+end
+\end{minted}
+\end{samepage}
+
+
+% =============================================================================
+\section{Ολοκλήρωση και Κύρια Ροή Εργασιών}
+\label{sec:integration}
+
+Η ολοκλήρωση όλων των συνιστωσών επιτυγχάνεται μέσω δύο κύριων συναρτήσεων: η \texttt{generate\_energy\_prices} για μονοζωνική εκκαθάριση και η \texttt{run\_multi\_zone\_market\_clearing} για πολυζωνική εκκαθάριση με περιορισμούς διασυνοριακής μεταφοράς.
+
+\subsection{Μονοζωνική Εκκαθάριση}
+\label{subsec:single-zone-clearing}
+
+Η συνάρτηση \texttt{generate\_energy\_prices} υλοποιεί την πλήρη ροή εργασιών για μια ζώνη προσφοράς:
+
+\begin{samepage}
+\begin{minted}[fontsize=\small,linenos,frame=lines]{julia}
+function generate_energy_prices(bidding_zone::String, date::Date;
+                                order_method::Symbol=:uc_based,
+                                markup_factor::Float64=1.1,
+                                save_to_db::Bool=true)
+    
+    # Βήμα 1: Δημιουργία βιβλίου εντολών
+    if order_method == :uc_based
+        # Επίλυση UC και μετατροπή σε εντολές
+        uc_result = solve_unit_commitment(bidding_zone, date)
+        bids_result = generate_market_orders_from_uc(
+            bidding_zone, date;
+            markup_factor=markup_factor,
+            bidding_strategy=:committed_only
+        )
+        order_book = create_typed_order_book(bids_result, bidding_zone, date)
+    elseif order_method == :alternative
+        # Εναλλακτική μέθοδος (ταχύτερη)
+        result = create_adjusted_order_book(bidding_zone, date)
+        order_book = result.order_book
+    end
+    
+    # Βήμα 2: Εκκαθάριση αγοράς
+    mpcc_result = solve_mpcc_market_clearing(order_book)
+    
+    # Βήμα 3: Αποθήκευση αποτελεσμάτων
+    if save_to_db && mpcc_result.status == :optimal
+        save_energy_prices(mpcc_result, bidding_zone, date)
+    end
+    
+    return mpcc_result
+end
+\end{minted}
+\end{samepage}
+
+\subsection{Πολυζωνική Εκκαθάριση}
+\label{subsec:multi-zone-clearing}
+
+Η συνάρτηση \texttt{run\_multi\_zone\_market\_clearing} εκτελεί ταυτόχρονη εκκαθάριση πολλαπλών ζωνών με περιορισμούς ATC:
+
+\begin{samepage}
+\begin{minted}[fontsize=\small,linenos,frame=lines]{julia}
+function run_multi_zone_market_clearing(date::Date;
+                                        zones::Vector{String}=String[],
+                                        order_method::Symbol=:alternative,
+                                        save_to_db::Bool=true)
+    
+    # Ανακάλυψη διαθέσιμων ζωνών αν δεν καθορίστηκαν
+    if isempty(zones)
+        zones = get_zones_with_transfer_capacity(date)
+    end
+    
+    println("🌍 Running multi-zone clearing for $(length(zones)) zones")
+    
+    # Δημιουργία πολυζωνικού βιβλίου εντολών
+    order_book = create_multi_zone_order_book(date, zones; 
+                                              order_method=order_method)
+    
+    # Εκκαθάριση αγοράς
+    result = solve_mpcc_market_clearing(order_book)
+    
+    # Αποθήκευση αποτελεσμάτων
+    if save_to_db && result.status == :optimal
+        for zone in zones
+            save_energy_prices(result, zone, date)
+        end
+        save_transmission_flows(result, date)
+    end
+    
+    # Εκτύπωση αποτελεσμάτων
+    println("💰 Zonal Clearing Prices (average):")
+    for zone in zones
+        prices = values(result.market_prices[zone])
+        avg = sum(prices) / length(prices)
+        println("   $zone: €$(round(avg, digits=2))/MWh")
+    end
+    
+    return result
+end
+\end{minted}
+\end{samepage}
+
+\paragraph{Παράλληλη Εκτέλεση UC}
+Κατά την πολυζωνική εκκαθάριση με τη μέθοδο \texttt{:uc\_based}, η επίλυση Unit Commitment εκτελείται ανεξάρτητα για κάθε ζώνη. Η παράμετρος \texttt{parallel=true} ενεργοποιεί την ταυτόχρονη εκτέλεση αυτών των ανεξάρτητων υπολογισμών μέσω της συνάρτησης \texttt{pmap} του module \texttt{Distributed.jl}. Κάθε ζώνη ανατίθεται σε έναν ξεχωριστό εργάτη (worker process), ο οποίος εκτελεί πλήρως τον κύκλο ανάκτησης δεδομένων, επίλυσης UC και μετατροπής σε εντολές αγοράς. Η μέθοδος \texttt{pmap} εξασφαλίζει δυναμική κατανομή εργασιών: μόλις ένας εργάτης ολοκληρώσει μια ζώνη, αναλαμβάνει την επόμενη διαθέσιμη.
+
+Σε περίπτωση που δεν υπάρχουν διαθέσιμοι εργάτες (\texttt{nworkers() == 0}), το σύστημα υποβαθμίζεται αυτόματα σε σειριακή εκτέλεση χωρίς σφάλμα. Η ασφάλεια νημάτων (thread safety) εξασφαλίζεται από το γεγονός ότι κάθε εργάτης λειτουργεί σε ξεχωριστό address space και τα κλειδιά κρυφής μνήμης είναι ειδικά ανά ζώνη, ενώ οι εγγραφές στη βάση δεδομένων χρησιμοποιούν συναλλαγές PostgreSQL. Η εκκαθάριση MPCC εκτελείται πάντα σειριακά μετά την ολοκλήρωση όλων των UC, καθώς απαιτεί το ενοποιημένο βιβλίο εντολών όλων των ζωνών.
+
+\subsection{Αποθήκευση Αποτελεσμάτων}
+\label{subsec:saving-results}
+
+Τα αποτελέσματα αποθηκεύονται στη βάση δεδομένων μέσω των συναρτήσεων \texttt{save\_energy\_prices} και \texttt{save\_transmission\_flows}:
+
+\begin{samepage}
+\begin{minted}[fontsize=\small,linenos,frame=lines]{julia}
+function save_energy_prices(result::MPCCResult, bidding_zone::String, date::Date)
+    # Εξασφάλιση ύπαρξης πίνακα
+    ensure_energy_prices_table()
+    
+    # Προετοιμασία δεδομένων
+    prices = result.market_prices[bidding_zone]
+    
+    withdb() do conn
+        for (period, price) in prices
+            hour = parse(Int, period)
+            execute(conn, """
+                INSERT INTO simulations.energy_prices 
+                    (bidding_zone, date, hour, price, created_at)
+                VALUES (\$1, \$2, \$3, \$4, NOW())
+                ON CONFLICT (bidding_zone, date, hour) 
+                DO UPDATE SET price = EXCLUDED.price, created_at = NOW()
+            """, [bidding_zone, date, hour, price])
+        end
+    end
+end
+\end{minted}
+\end{samepage}
+
+\subsection{Επεξεργασία Κατά Παρτίδες}
+\label{subsec:batch-processing}
+
+Για την επεξεργασία πολλαπλών ημερομηνιών, παρέχονται οι συναρτήσεις \texttt{generate\_energy\_prices\_for\_date\_range} και \texttt{run\_multi\_zone\_for\_date\_range}:
+
+\begin{samepage}
+\begin{minted}[fontsize=\small,linenos,frame=lines]{julia}
+function run_multi_zone_for_date_range(start_date::Date, end_date::Date;
+                                       zones::Vector{String}=String[],
+                                       order_method::Symbol=:alternative,
+                                       force_rerun::Bool=false,
+                                       parallel::Bool=false)
+    results = Dict{Date,MPCCResult}()
+
+    for date in start_date:Day(1):end_date
+        try
+            result = run_multi_zone_market_clearing(date;
+                zones=zones, order_method=order_method,
+                force_rerun=force_rerun, parallel=parallel)
+            results[date] = result
+        catch e
+            @warn "Failed to process $date: $e"
+        end
+    end
+    return results
+end
+\end{minted}
+\end{samepage}
+
+\subsection{Παράδειγμα Χρήσης}
+\label{subsec:usage-example}
+
+Ένα πλήρες παράδειγμα χρήσης του συστήματος για τον υπολογισμό τιμών στην Ελλάδα:
+
+\begin{samepage}
+\begin{minted}[fontsize=\small,linenos,frame=lines]{julia}
+using Euphemia
+using Dates
+
+# Μονοζωνική εκκαθάριση για την Ελλάδα
+prices = generate_energy_prices("GR", Date(2024, 6, 15);
+    order_method = :uc_based,
+    markup_factor = 1.1,
+    save_to_db = true
+)
+
+# Πολυζωνική εκκαθάριση Ελλάδας-Βουλγαρίας-Ιταλίας
+result = run_multi_zone_market_clearing(Date(2024, 6, 15);
+    zones = ["GR", "BG", "IT"],
+    order_method = :alternative,
+    save_to_db = true
+)
+
+# Εκτύπωση διασυνοριακών ροών
+for (flow_id, flows) in result.transmission_flows
+    avg_flow = sum(values(flows)) / length(flows)
+    println("$flow_id: $(round(avg_flow, digits=1)) MW average")
+end
+\end{minted}
+\end{samepage}
+
+
+% =============================================================================
+\section{Αυτοματοποιημένη Εκτέλεση}
+\label{sec:automated-execution}
+
+Για τη συστηματική παραγωγή τιμών σε ημερήσια βάση, αναπτύχθηκε υποδομή αυτοματοποίησης βασισμένη σε GitHub Actions. Δύο ροές εργασιών (workflows) εκτελούνται σε αυτο-φιλοξενούμενο μηχάνημα (self-hosted runner):
+
+\begin{itemize}
+\item \texttt{generate-energy-prices.yml}: Μονοζωνική εκκαθάριση, προγραμματισμένη στις 02:00 UTC ημερησίως.
+\item \texttt{generate-multi-zone-prices.yml}: Πολυζωνική εκκαθάριση με διασυνοριακούς περιορισμούς, προγραμματισμένη στις 03:00 UTC ημερησίως.
+\end{itemize}
+
+Η πολυζωνική ροή εργασιών εκτελεί τα εξής βήματα: εγκατάσταση εξαρτήσεων Julia, ρύθμιση σύνδεσης βάσης δεδομένων, εκκίνηση παράλληλων εργατών (workers), εκτέλεση του σεναρίου \texttt{bin/multi\_zone\_main.jl} με τις κατάλληλες παραμέτρους, και αποστολή ειδοποιήσεων μέσω Slack σε περίπτωση επιτυχίας ή αποτυχίας. Κατά τη χρήση του εμπορικού επιλυτή Gurobi, ο αριθμός παράλληλων εργατών περιορίζεται αυτόματα σε 2, λόγω του ορίου ταυτόχρονων συνεδριών της άδειας WLS (Web License Service). Κάθε ροή εργασιών υποστηρίζει τόσο χειροκίνητη ενεργοποίηση (\texttt{workflow\_dispatch}) με παραμετροποιήσιμο εύρος ημερομηνιών, όσο και αυτόματη εκτέλεση μέσω χρονοπρογραμματισμού (\texttt{cron}).

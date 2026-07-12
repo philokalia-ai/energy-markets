@@ -1,15 +1,29 @@
+# Thesis Makefile
+# ================
+#
+# Required packages (Ubuntu/Debian):
+#   sudo apt install texlive-xetex texlive-lang-greek texlive-fonts-extra
+#   sudo apt install fonts-liberation ttf-mscorefonts-installer
+#   sudo apt install latexmk
+#   pip install Pygments  # For minted code highlighting
+#
+# Usage:
+#   make          # Build thesis.pdf
+#   make clean    # Remove auxiliary files
+#   make distclean # Remove all generated files including PDF
+
 .PHONY: FORCE default clean distclean
 
-FILE=thesis
+FILE = thesis
 
-export SHELL=/bin/bash
-export TEXINPUTS:=.:./Styles//:${TEXINPUTS}
-export BSTINPUTS:=.:./Styles//:${BSTINPUTS}
+export SHELL = /bin/bash
+export TEXINPUTS := .:./Styles//:${TEXINPUTS}
+export BSTINPUTS := .:./Styles//:${BSTINPUTS}
 
 default: $(FILE).pdf
 
 # Using -shell-escape because of the package "minted" for typesetting
-# listings of code.  Remove, if not needed.
+# listings of code. Remove if not needed.
 %.pdf: %.tex FORCE
 	latexmk -shell-escape -pdf -f -e '$$pdflatex=q/xelatex %O %S/' $<
 
