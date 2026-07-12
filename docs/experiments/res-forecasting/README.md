@@ -47,3 +47,14 @@ earliness and lead 2–7 once the ceres data fixes land.
 Price ladder (12 OOS days): ENTSO-E inputs 0.850/€24.6 → v1 0.686 → v2 0.754 →
 v3 (hod solar) **0.802/€29.6**. Attribution: wind-only substitution 0.823,
 solar-only 0.778. See the investigation doc §4b.
+
+## v4 (ELETAEN farm cells + 3-model NWP ensemble)
+
+| script | what it measures |
+|---|---|
+| `fit_wind_farm.jl` | wind on 124 capacity-weighted ELETAEN farm cells (95% of GR MW) — equals correlation-picked siting (0.923 DAfc) |
+| `fit_wind_ens.jl` | GFS+ECMWF+ICON lead-1 ensemble at the farm cells → **0.960 DAfc / 0.872 actual**; price test v4 0.804/€28.7 |
+
+Farm registry: `ceres/geodata/eletaen_request.py` (ELETAEN ArcGIS layer,
+3,093 turbines with coordinates + MW); cells built by 0.125° capacity-weighted
+clustering. NWP vintages from the public open-meteo Previous-Runs API.

@@ -76,10 +76,14 @@ input differs (ENTSO-E DA forecast vs our weather-RES via `renewable_modifier`).
 | v2: 100 m 40-cell wind + GHI (honest lead-1) | 0.754 | 33.8 |
 | — v2 wind only (ENTSO-E solar kept) | 0.823 | 27.4 |
 | — v2 solar only (ENTSO-E wind kept) | 0.778 | 30.7 |
-| **v3: v2 wind + hour-calibrated solar** | **0.802** | **29.6** |
+| v3: v2 wind + hour-calibrated solar | 0.802 | 29.6 |
+| **v4: 3-model ensemble farm-cell wind + v3 solar** | **0.804** | **28.7** |
 
 (pooled over 288 h; baseline matches the production GR record 0.86/€20.8 —
-sanity check).
+sanity check). v4 beats the ENTSO-E baseline outright on 4 of 12 days.
+Price corr saturates near 0.80 even as RES accuracy keeps improving (§4c) —
+at lead 1 the binding constraint has shifted from the RES input to the price
+model itself.
 
 ## 4b. Closing the gap — 100 m wind + honest vintages (public-API preview of the §6 fixes)
 
@@ -104,6 +108,28 @@ correlation vs actual (0.949 vs 0.948) at **half** their MAE (345 vs 715 —
 theirs carries the curtailment bias). Weather-forecast horizon costs almost
 nothing (lead-1 → lead-2 loses ~0.01), so **lead 2–7 forecasts inherit
 essentially lead-1 RES quality**.
+
+## 4c. Real wind-farm coordinates (ELETAEN) and the NWP ensemble
+
+The ceres repo already holds a fetcher for the **ELETAEN turbine registry**
+(`ceres/geodata/eletaen_request.py`, ArcGIS layer "Αιολικά πάρκα στην Ελλάδα
+S1 2021"): 3,093 turbines with point coordinates and per-turbine MW → 5.8 GW,
+clustered into 202 open-meteo grid cells; 124 cells cover 95% of capacity
+(South Evia, Thrace, Achaia, Crete — the known belts).
+
+| wind model (honest lead-1) | vs actual | vs ENTSO-E DAfc |
+|---|---|---|
+| 40 correlation-picked cells, GFS | 0.839 / 365 | 0.923 / 264 |
+| 124 ELETAEN farm cells, GFS | 0.841 / 368 | 0.923 / 261 |
+| **farm cells, GFS+ECMWF+ICON ensemble** | **0.872 / 319** | **0.960 / 199** |
+
+Two independent siting methods land on the same numbers ⇒ **siting is solved**
+(correlation-picking had already found the wind belts); the remaining error
+was the single NWP model. The 3-model previous-runs ensemble (all honest
+lead-1) is the real lever: **0.960 vs the market's own input**. Previous-runs
+serves all three models, and the self-hosted pipeline can replicate this by
+syncing `icon_seamless` (+ ECMWF open-data when open-meteo carries its 100 m
+wind) alongside `ncep_gfs013` — follow-up, not in the current infra PR.
 
 **Conclusion: at lead 1, keep ENTSO-E RES forecasts — do not substitute**
 (0.850 vs 0.802). But the weather path now costs only ~0.05 price-corr, and
