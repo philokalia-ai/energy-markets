@@ -876,26 +876,11 @@
     }
   }
 
-  // ---------- map view ----------
+  // ---------- map view (bidding-zone polygons) ----------
+  // Boundaries: web/geo/zones.geojson — adapted from the Electricity Maps
+  // contrib project (AGPL-3.0), IT-Calabria split + simplification ours.
 
-  // Tile-grid layout: [col, row], geographically suggestive. One tile per zone.
-  var MAP_GRID = {
-    NO4: [2.4, 0], SE1: [4.2, 0], FI: [6.0, 0.4],
-    NO3: [2.6, 1], SE2: [4.2, 1],
-    NO5: [1.4, 2], NO1: [2.6, 2], SE3: [4.2, 2], EE: [6.6, 2],
-    NO2: [1.8, 3], DK1: [3.0, 3.2], SE4: [4.6, 3], LV: [6.6, 3],
-    DK2: [3.9, 4], LT: [6.6, 4],
-    NL: [2.2, 5], DE_LU: [3.6, 5], PL: [5.4, 5],
-    BE: [1.8, 6], CZ: [4.8, 6.2], SK: [6.0, 6.4],
-    FR: [1.4, 7.4], CH: [3.0, 7.2], AT: [4.4, 7.2], HU: [5.6, 7.4], RO: [6.8, 7.4],
-    PT: [0.0, 9.0], ES: [1.2, 9.0], SI: [4.2, 8.2], RS: [5.8, 8.4], BG: [7.0, 8.4],
-    "IT-NORTH": [3.2, 8.6], "IT-CNORTH": [3.6, 9.6], "IT-CSOUTH": [4.2, 10.5],
-    "IT-SOUTH": [5.0, 11.2], "IT-Calabria": [5.2, 12.2], "IT-Sicily": [4.3, 13.0],
-    "IT-Sardinia": [2.9, 11.2],
-    GR: [6.8, 10.6],
-  };
-
-  var mapState = { data: null, dayIdx: null, metric: "sim" };
+  var mapState = { data: null, geo: null, dayIdx: null, metric: "sim" };
 
   var MAP_METRICS = [
     ["sim", "Forecast"],
@@ -904,12 +889,18 @@
   ];
 
   function loadMap() {
-    if (mapState.data) return Promise.resolve(mapState.data);
-    return loadWithFallback("map.json").then(function (res) {
-      mapState.data = res.json;
-      if (res.json && res.json.fixture) setFixtureBanner(true);
-      return res.json;
-    });
+    var pData = mapState.data ? Promise.resolve(mapState.data) :
+      loadWithFallback("map.json").then(function (res) {
+        mapState.data = res.json;
+        if (res.json && res.json.fixture) setFixtureBanner(true);
+        return res.json;
+      });
+    var pGeo = mapState.geo ? Promise.resolve(mapState.geo) :
+      fetchJSON("./geo/zones.geojson").then(function (g) {
+        mapState.geo = g;
+        return g;
+      });
+    return Promise.all([pData, pGeo]);
   }
 
   // color ramps (low -> high); diverging ramp for error
@@ -1015,8 +1006,30 @@
     return s;
   }
 
+  // Equirectangular projection over the footprint bounds, lon scaled by cos 52°.
+  var MAP_B = { minLon: -10.2, maxLon: 32.2, minLat: 34.4, maxLat: 71.6 };
+  var MAP_K = Math.cos(52 * Math.PI / 180);
+  var MAP_VBW = 900;
+  var MAP_S = MAP_VBW / ((MAP_B.maxLon - MAP_B.minLon) * MAP_K);
+  var MAP_VBH = Math.round((MAP_B.maxLat - MAP_B.minLat) * MAP_S);
+  function mapX(lon) { return (lon - MAP_B.minLon) * MAP_K * MAP_S; }
+  function mapY(lat) { return (MAP_B.maxLat - lat) * MAP_S; }
+
+  function geoPath(geom) {
+    var d = "";
+    function ring(r) {
+      for (var i = 0; i < r.length; i++) {
+        d += (i === 0 ? "M" : "L") + mapX(r[i][0]).toFixed(1) + " " + mapY(r[i][1]).toFixed(1);
+      }
+      d += "Z";
+    }
+    var polys = geom.type === "Polygon" ? [geom.coordinates] : geom.coordinates;
+    polys.forEach(function (p) { p.forEach(ring); });
+    return d;
+  }
+
   function renderMap() {
-    if (!mapState.data || !mapState.data.days || !mapState.data.days.length) {
+    if (!mapState.data || !mapState.data.days || !mapState.data.days.length || !mapState.geo) {
       $("map-title").textContent = "No map data yet";
       $("map-comment").textContent = "Map data arrives with the next forecast run.";
       return;
@@ -1033,8 +1046,7 @@
     renderMapMetricButtons();
 
     var mDef = MAP_METRICS.filter(function (m) { return m[0] === metric; })[0];
-    $("map-title").textContent = mDef[1] + " — " + dayLabel(day.date) +
-      (metric !== "err" ? " (€/MWh, day average)" : " (€/MWh)");
+    $("map-title").textContent = mDef[1] + " — " + dayLabel(day.date) + " (€/MWh, day average)";
 
     var dom = metricDomain(metric);
     var ramp = metric === "err" ? RAMP_DIV : RAMP_SEQ;
@@ -1044,55 +1056,35 @@
 
     var wrap = $("map-wrap");
     wrap.textContent = "";
-    var TW = 76, TH = 52, GX = 84, GY = 60, PAD = 10;
-    var maxC = 0, maxR = 0;
-    Object.keys(MAP_GRID).forEach(function (z) {
-      maxC = Math.max(maxC, MAP_GRID[z][0]);
-      maxR = Math.max(maxR, MAP_GRID[z][1]);
-    });
-    var VBW = PAD * 2 + maxC * GX + TW, VBH = PAD * 2 + maxR * GY + TH;
-    var svg = svgEl("svg", { viewBox: "0 0 " + VBW + " " + VBH, role: "img",
+    var svg = svgEl("svg", { viewBox: "0 0 " + MAP_VBW + " " + MAP_VBH, role: "img",
       "aria-label": "Map of day-ahead prices by bidding zone" });
     var css = getComputedStyle(document.documentElement);
     var C = { muted: css.getPropertyValue("--text-muted").trim(),
-              line: css.getPropertyValue("--border").trim() };
+              page: css.getPropertyValue("--page").trim() };
 
     var tooltip = el("div", "tooltip");
     tooltip.style.display = "none";
     wrap.appendChild(svg);
     wrap.appendChild(tooltip);
 
-    Object.keys(MAP_GRID).forEach(function (zn) {
-      var pos = MAP_GRID[zn];
-      var x = PAD + pos[0] * GX, y = PAD + pos[1] * GY;
+    var labels = [];   // draw after all shapes so they sit on top
+    mapState.geo.features.forEach(function (f) {
+      var zn = f.properties.zone;
       var z = day.zones[zn];
       var v = mapValue(z, metric);
       var has = v !== null && v !== undefined;
       var t = has ? (v - dom[0]) / (dom[1] - dom[0]) : 0;
-      var g = svgEl("g", { class: "map-tile", tabindex: "0", role: "button",
-        "aria-label": zn + (has ? ": " + fmt(v, 1) + " €/MWh" : ": no data") });
-      g.appendChild(svgEl("rect", {
-        x: x, y: y, width: TW, height: TH, rx: 8,
-        fill: has ? rampColor(ramp, t) : "transparent",
-        stroke: C.line, "stroke-width": has ? 0.5 : 1,
-        "stroke-dasharray": has ? "none" : "3 3",
-      }));
-      var dark = has && (t < 0.28 || t > 0.78);
-      var name = svgEl("text", {
-        x: x + TW / 2, y: y + 21, "text-anchor": "middle",
-        "font-size": zn.length > 6 ? 10 : 12, "font-weight": 600,
-        fill: has ? (dark ? "#FBF8F1" : "#22303F") : C.muted,
-      });
-      name.textContent = zn.replace("IT-", "IT·").replace("DE_LU", "DE/LU");
-      g.appendChild(name);
-      var val = svgEl("text", {
-        x: x + TW / 2, y: y + 40, "text-anchor": "middle",
-        "font-size": 12, "font-variant-numeric": "tabular-nums",
-        fill: has ? (dark ? "#FBF8F1" : "#22303F") : C.muted,
-      });
-      val.textContent = has ? (metric === "err" && v > 0 ? "+" : "") + fmt(v, 0) : "—";
-      g.appendChild(val);
 
+      var path = svgEl("path", {
+        d: geoPath(f.geometry),
+        class: "map-poly",
+        fill: has ? rampColor(ramp, t) : "rgba(128,128,128,0.12)",
+        stroke: C.page, "stroke-width": 1.1, "stroke-linejoin": "round",
+        tabindex: "0", role: "button",
+        "aria-label": zn + (has ? ": " + fmt(v, 1) + " €/MWh" : ": no data"),
+      });
+
+      var lx = mapX(f.properties.lx), ly = mapY(f.properties.ly);
       function showTip() {
         tooltip.textContent = "";
         tooltip.appendChild(el("div", "tt-head", zn + " · " + dayLabel(day.date) +
@@ -1113,25 +1105,48 @@
           tooltip.appendChild(row);
         });
         var rect = svg.getBoundingClientRect();
-        var scale = rect.width / VBW;
+        var scale = rect.width / MAP_VBW;
         tooltip.style.display = "block";
-        var left = (x + TW + 6) * scale;
-        if (left + tooltip.offsetWidth > rect.width) left = (x - 6) * scale - tooltip.offsetWidth;
+        var left = (lx + 12) * scale;
+        if (left + tooltip.offsetWidth > rect.width) left = lx * scale - tooltip.offsetWidth - 12;
         tooltip.style.left = Math.max(0, left) + "px";
-        tooltip.style.top = Math.max(0, y * scale - 8) + "px";
+        tooltip.style.top = Math.max(0, ly * scale - tooltip.offsetHeight - 10) + "px";
       }
-      g.addEventListener("pointerenter", showTip);
-      g.addEventListener("focus", showTip);
-      g.addEventListener("pointerleave", function () { tooltip.style.display = "none"; });
-      g.addEventListener("blur", function () { tooltip.style.display = "none"; });
-      g.addEventListener("click", function () {
+      path.addEventListener("pointerenter", showTip);
+      path.addEventListener("focus", showTip);
+      path.addEventListener("pointerleave", function () { tooltip.style.display = "none"; });
+      path.addEventListener("blur", function () { tooltip.style.display = "none"; });
+      path.addEventListener("click", function () {
         state.zone = zn;
         state.day = day.date;
         setView("explorer");
         selectZone(zn, true);
         writeHash();
       });
-      svg.appendChild(g);
+      svg.appendChild(path);
+
+      // labels: code for mid-size zones, code+value for large ones
+      var area = f.properties.area || 0;
+      if (area >= 1.2) {
+        var dark = has && (t < 0.28 || t > 0.78);
+        var fill = has ? (dark ? "#FBF8F1" : "#22303F") : C.muted;
+        var short = zn.replace("IT-", "").replace("DE_LU", "DE/LU");
+        labels.push({ x: lx, y: ly, text: short, size: area >= 6 ? 13 : 10, fill: fill, dy: area >= 6 ? -3 : 3 });
+        if (has && area >= 6) {
+          labels.push({ x: lx, y: ly, text: (metric === "err" && v > 0 ? "+" : "") + fmt(v, 0),
+                        size: 12, fill: fill, dy: 13 });
+        }
+      }
+    });
+    labels.forEach(function (L) {
+      var txt = svgEl("text", {
+        x: L.x, y: L.y + L.dy, "text-anchor": "middle",
+        "font-size": L.size, "font-weight": 600, fill: L.fill,
+        "pointer-events": "none", "font-variant-numeric": "tabular-nums",
+        "paint-order": "stroke", stroke: "rgba(251,248,241,0.45)", "stroke-width": 2,
+      });
+      txt.textContent = L.text;
+      svg.appendChild(txt);
     });
 
     $("map-comment").textContent = buildMapComment(day);

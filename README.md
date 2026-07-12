@@ -334,6 +334,11 @@ web/        Static SPA for the live forecast browser (energy.philokalia.ai)
 - **TTF gas and EUA carbon** — daily closes via `yfinance` (TTF front-month
   futures; the SparkChange Physical Carbon ETC as an EUA proxy).
 
+**Bidding-zone boundaries** (web map) are adapted from the
+[Electricity Maps contrib](https://github.com/electricitymaps/electricitymaps-contrib)
+project (AGPL-3.0): 39-zone subset, DE+LU merged, IT-Calabria split out of
+IT-SO along the Gulf of Taranto, simplified to 57 KB (`web/geo/zones.geojson`).
+
 ## License & citation
 
 License: to be determined — until a license file is added, all rights
