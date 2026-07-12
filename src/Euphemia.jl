@@ -1459,11 +1459,13 @@ one inside `run_multi_zone_market_clearing`.
 function mz_solve_pass(order_book::MPCC.MPCCOrderBook;
     optimizer::String="auto", silent::Bool=true,
     mpcc_time_limit::Float64=900.0, mpcc_mip_gap::Float64=1e-6,
-    mpcc_heuristic_effort::Union{Float64,Nothing}=nothing)
+    mpcc_heuristic_effort::Union{Float64,Nothing}=nothing,
+    decompose_periods::Bool=false)
     return MPCC.solve_mpcc_market_clearing(order_book;
         preferred_solver=optimizer, silent=silent,
         time_limit=mpcc_time_limit, mip_gap=mpcc_mip_gap,
-        heuristic_effort=mpcc_heuristic_effort)
+        heuristic_effort=mpcc_heuristic_effort,
+        decompose_periods=decompose_periods)
 end
 
 """
@@ -1632,6 +1634,18 @@ function run_multi_zone_market_clearing(date::Date;
                                         mpcc_time_limit::Float64=900.0,
                                         mpcc_mip_gap::Float64=1e-6,
                                         mpcc_heuristic_effort::Union{Float64,Nothing}=nothing,
+                                        # Per-period decomposition of the coupled
+                                        # MPCC. The clear has no inter-temporal
+                                        # coupling, so solving each period
+                                        # independently yields the SAME prices as
+                                        # the monolithic solve while shrinking each
+                                        # MIP by ~1/N_periods. `nothing` (default)
+                                        # applies the policy: monolithic for
+                                        # Gurobi/auto (byte-identical to before),
+                                        # auto-ENABLED for optimizer="highs"
+                                        # (monolithic HiGHS cannot solve the
+                                        # 39-zone MIP). Pass true/false to force.
+                                        decompose_periods::Union{Nothing,Bool}=nothing,
                                         # Counterfactual scenario (merit-order
                                         # path only). Either one `ZoneScenario`
                                         # applied to every zone (hooks gate on
@@ -1654,6 +1668,16 @@ function run_multi_zone_market_clearing(date::Date;
     MeritOrderBook.FLOW_ASOF_MODE[] = resolved_flow_mode
     resolved_flow_mode != prev_flow_mode &&
         println("   🔮 Ex-ante flow mode: $resolved_flow_mode (scoped default)")
+
+    # Resolve the period-decomposition policy. Gurobi/auto stay monolithic
+    # (byte-identical to the pre-existing path); optimizer="highs" auto-enables
+    # decomposition because the monolithic 39-zone MIP is empirically
+    # unsolvable by HiGHS (no incumbent in 20+ min). An explicit kwarg wins.
+    resolved_decompose = decompose_periods !== nothing ? decompose_periods :
+        (lowercase(optimizer) == "highs")
+    resolved_decompose &&
+        println("   🧩 Period-decomposition ENABLED (per-period independent clears; " *
+                "policy: $(decompose_periods === nothing ? "auto for highs" : "explicit"))")
     try
     # Label the optimization_runs row so a non-standard footprint (e.g. the
     # Europe-wide "multi_zone_eu" experiment) does not collide with the standard
@@ -1710,7 +1734,8 @@ function run_multi_zone_market_clearing(date::Date;
                                                    silent=silent,
                                                    time_limit=mpcc_time_limit,
                                                    mip_gap=mpcc_mip_gap,
-                                                   heuristic_effort=mpcc_heuristic_effort)
+                                                   heuristic_effort=mpcc_heuristic_effort,
+                                                   decompose_periods=resolved_decompose)
 
     # PER-DAY ROBUSTNESS FALLBACK (iter8). If the coupled MPCC stays
     # infeasible through the entire retry ladder (including the exact
@@ -1737,7 +1762,8 @@ function run_multi_zone_market_clearing(date::Date;
                 clear_resolution_minutes=clear_resolution_minutes,
                 ex_ante_mode=resolved_flow_mode,
                 mpcc_time_limit=mpcc_time_limit, mpcc_mip_gap=mpcc_mip_gap,
-                mpcc_heuristic_effort=mpcc_heuristic_effort, scenario=scenario)
+                mpcc_heuristic_effort=mpcc_heuristic_effort,
+                decompose_periods=resolved_decompose, scenario=scenario)
         finally
             MeritOrderBook.FLEET_TRUTH_OVERRIDE[] = nothing
         end
@@ -1771,7 +1797,8 @@ function run_multi_zone_market_clearing(date::Date;
             result2 = mz_solve_pass(order_book2;
                 optimizer=optimizer, silent=silent,
                 mpcc_time_limit=mpcc_time_limit, mpcc_mip_gap=mpcc_mip_gap,
-                mpcc_heuristic_effort=mpcc_heuristic_effort)
+                mpcc_heuristic_effort=mpcc_heuristic_effort,
+                decompose_periods=resolved_decompose)
             if result2.status == :optimal ||
                (result2.status == :time_limit && !isempty(result2.market_prices))
                 order_book = order_book2

@@ -501,7 +501,31 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
     big_m::Float64=BIG_M_PARAMETER,
     time_limit::Float64=900.0,
     mip_gap::Float64=1e-6,
-    heuristic_effort::Union{Float64,Nothing}=nothing)
+    heuristic_effort::Union{Float64,Nothing}=nothing,
+    # Per-period decomposition. The MPCC has NO inter-temporal coupling
+    # (no ramp/storage/block/t±1 links — every period is a mathematically
+    # independent clearing), so the monolithic optimum is exactly the
+    # concatenation of the per-period optima. When true (and there is more
+    # than one period) each period is solved as its own single-period
+    # MPCC and the results are merged into one MPCCResult of the same
+    # shape. This makes the 39-zone clear solvable with HiGHS (which cannot
+    # find a first incumbent on the monolithic 39-zone×24 MIP). Default
+    # false keeps the monolithic path byte-identical for Gurobi.
+    decompose_periods::Bool=false,
+    # Suppress the per-solve flow-setup chatter. Default true keeps the
+    # monolithic path's output byte-identical; the decomposition driver
+    # passes false to its (many) single-period sub-solves.
+    verbose::Bool=true)
+
+    # Period decomposition: solve each period independently and merge. Only
+    # engages with >1 period; a single-period book already IS the per-period
+    # problem, so it falls through to the monolithic path unchanged.
+    if decompose_periods && length(order_book.periods) > 1
+        return _solve_mpcc_by_period(order_book;
+            preferred_solver=preferred_solver, silent=silent, big_m=big_m,
+            time_limit=time_limit, mip_gap=mip_gap,
+            heuristic_effort=heuristic_effort, verbose=verbose)
+    end
 
     # Analyze orders by type - currently we only handle SimpleOrder types from UC conversion
     simple_orders = filter(o -> isa(o, SimpleOrder), order_book.orders)
@@ -599,7 +623,7 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
                           if p[1] in order_book.nodes && p[2] in order_book.nodes]
 
             if !isempty(zone_pairs)
-                println("   🔌 Adding transmission flow variables for $(length(zone_pairs)) zone pairs")
+                verbose && println("   🔌 Adding transmission flow variables for $(length(zone_pairs)) zone pairs")
 
                 # Create flow variables for each zone pair and time period
                 @variable(model, flow[pair in zone_pairs, t in order_book.periods])
@@ -666,7 +690,7 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
                             (1 - congestion_bw_aux[pair, t]) * cap_span)
                     end
                 end
-                println("   🔗 Added market-coupling price conditions for $(length(zone_pairs)) links")
+                verbose && println("   🔗 Added market-coupling price conditions for $(length(zone_pairs)) links")
 
                 # Precompute connected zones for power balance
                 for node in order_book.nodes
@@ -683,7 +707,7 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
                     end
                 end
 
-                println("   ✅ Added $(length(zone_pairs) * length(order_book.periods)) flow variables with ATC bounds")
+                verbose && println("   ✅ Added $(length(zone_pairs) * length(order_book.periods)) flow variables with ATC bounds")
             end
         end
 
@@ -1113,7 +1137,7 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
                         transmission_flow_values[flow_id][t] = value(flow[pair, t])
                     end
                 end
-                println("   📊 Extracted flows for $(length(zone_pairs)) zone pairs")
+                verbose && println("   📊 Extracted flows for $(length(zone_pairs)) zone pairs")
             end
 
             # Convert JuMP termination status to our expected Symbol
@@ -1214,6 +1238,146 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
             "Optimization failed: $e"
         )
     end
+end
+
+"""
+    _solve_mpcc_by_period(order_book; preferred_solver, silent, big_m,
+                          time_limit, mip_gap, heuristic_effort, verbose) -> MPCCResult
+
+Period-decomposition driver. Because the MPCC has no inter-temporal coupling,
+each period `t` in `order_book.periods` is an independent clearing problem. This
+splits the book into one single-period sub-book per period (same nodes, same
+network/ATC object — the ATC lookup already derives the hour from the timeslot,
+so it is per-period — and the orders whose `extract_time_period` maps to `t`),
+solves each on its own via the monolithic `solve_mpcc_market_clearing`, and
+merges the per-period results into one full-day `MPCCResult` of the same shape
+that all downstream code (saving, scoring, two-pass anchor extraction) expects.
+
+Each per-period solve runs the FULL retry ladder in
+`solve_mpcc_market_clearing`, so a single numerically hard period falls back on
+its own without sinking the rest of the day.
+
+Merge semantics:
+- `market_prices` / `transmission_flows`: union of per-period slices.
+- `objective_value` / `solve_time`: summed across periods.
+- `stepwise_acceptance`: namespaced by period (`"t::order_id"`) to avoid the
+  per-solve `order_id` collisions across periods; not load-bearing downstream.
+- `status`: `:optimal` iff every period is `:optimal`; else the worst observed
+  (`:error` > `:infeasible`/`:unbounded` > `:time_limit`). A period that hits
+  its own time limit but still returns an incumbent surfaces as `:time_limit`
+  (usable), matching the monolithic convention.
+"""
+function _solve_mpcc_by_period(order_book::MPCCOrderBook;
+    preferred_solver::String="auto",
+    silent::Bool=true,
+    big_m::Float64=BIG_M_PARAMETER,
+    time_limit::Float64=900.0,
+    mip_gap::Float64=1e-6,
+    heuristic_effort::Union{Float64,Nothing}=nothing,
+    verbose::Bool=true)
+
+    periods = order_book.periods
+    println("   🧩 Period-decomposition: $(length(periods)) independent single-period clears (solver=$(preferred_solver))")
+
+    simple_orders = filter(o -> isa(o, SimpleOrder), order_book.orders)
+
+    # Bucket each order by its full-book period assignment. Using the full
+    # periods vector here (not [t]) keeps the hourly/timeslot mapping identical
+    # to the monolithic grouping; the single-period sub-book below then re-maps
+    # these same orders onto its own [t] grid (a no-op for both formats).
+    orders_by_period = Dict{String,Vector{MarketOrder}}()
+    for t in periods
+        orders_by_period[t] = MarketOrder[]
+    end
+    for o in simple_orders
+        t = extract_time_period(o.date_time, periods)
+        haskey(orders_by_period, t) && push!(orders_by_period[t], o)
+    end
+
+    merged_prices = Dict{String,Dict{String,Float64}}()
+    for z in order_book.nodes
+        merged_prices[z] = Dict{String,Float64}()
+    end
+    merged_flows = Dict{String,Dict{String,Float64}}()
+    merged_accept = Dict{String,Float64}()
+    total_obj = 0.0
+    total_solve = 0.0
+    statuses = Symbol[]
+    solver_name = preferred_solver
+    wall_start = time()
+
+    for (pi, t) in enumerate(periods)
+        sub_book = MPCCOrderBook(
+            orders_by_period[t],
+            order_book.nodes,
+            [t],
+            order_book.price_limits,
+            order_book.network_topology
+        )
+        r = solve_mpcc_market_clearing(sub_book;
+            preferred_solver=preferred_solver, silent=silent, big_m=big_m,
+            time_limit=time_limit, mip_gap=mip_gap,
+            heuristic_effort=heuristic_effort,
+            decompose_periods=false, verbose=false)
+
+        solver_name = r.solver_name
+        push!(statuses, r.status)
+        total_obj += r.objective_value
+        total_solve += r.solve_time
+
+        for (z, pd) in r.market_prices
+            zt = get!(merged_prices, z, Dict{String,Float64}())
+            for (per, p) in pd
+                zt[per] = p
+            end
+        end
+        for (fid, pd) in r.transmission_flows
+            d = get!(merged_flows, fid, Dict{String,Float64}())
+            for (per, f) in pd
+                d[per] = f
+            end
+        end
+        for (oid, a) in r.stepwise_acceptance
+            merged_accept["$(t)::$(oid)"] = a
+        end
+
+        if verbose && (pi % 12 == 0 || pi == length(periods))
+            n_bad = count(s -> s != :optimal, statuses)
+            println("      · $(pi)/$(length(periods)) periods " *
+                    "($(round(time() - wall_start, digits=1))s, last=$(r.status)" *
+                    (n_bad > 0 ? ", $(n_bad) non-optimal)" : ")"))
+        end
+    end
+
+    merged_status = if all(s -> s == :optimal, statuses)
+        :optimal
+    elseif any(s -> s == :error, statuses)
+        :error
+    elseif any(s -> s in (:infeasible, :unbounded), statuses)
+        :infeasible
+    else
+        :time_limit
+    end
+
+    n_opt = count(s -> s == :optimal, statuses)
+    msg = "Period-decomposed clear: $(n_opt)/$(length(periods)) periods optimal, " *
+          "merged status $(merged_status)"
+    merged_status != :optimal &&
+        @warn "Period-decomposition: $msg"
+
+    return MPCCResult(
+        merged_status,
+        total_obj,
+        merged_prices,
+        merged_accept,
+        Dict{String,Float64}(),   # block acceptance (unused, as monolithic)
+        Dict{String,Float64}(),   # block activation (unused)
+        merged_flows,
+        total_solve,
+        time() - wall_start,
+        solver_name,
+        msg
+    )
 end
 
 # =============================================================================
