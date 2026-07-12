@@ -29,7 +29,7 @@ import ..get_generators, ..get_loads, ..get_generation_forecast_for_wind_and_sol
 import ..get_marginal_cost, ..sql2df_with_retry, ..Generator, ..normalize_fuel_type_name
 import ..MarketOrders: SimpleOrder
 import ..MPCC: MPCCOrderBook
-import ..disaggregate_temporal_data
+import ..disaggregate_temporal_data, ..replicate_to_finer_resolution
 import ..AlternativeOrderBook: AdjustedOrderBookResult, parse_timeslot_to_datetime
 
 """
@@ -1457,7 +1457,7 @@ function create_merit_order_book(
         # averaging sub-slots (MW is power — averaging preserves energy).
         if target_resolution_minutes !== nothing && resolution_minutes < target_resolution_minutes
             target_resolution_minutes == 60 ||
-                error("Only hourly (60) target resolution is supported, got $target_resolution_minutes")
+                error("Only hourly (60) target resolution is supported for down-aggregation, got $target_resolution_minutes")
             hour_key(ts) = ts[1:11] * "00"
             function aggregate_to_hours(d::Dict{String,Float64})
                 sums = Dict{String,Tuple{Float64,Int}}()
@@ -1472,6 +1472,27 @@ function create_merit_order_book(
             renewable_by_time = aggregate_to_hours(renewable_by_time)
             target_timeslots = sort(collect(keys(load_by_time)))
             println("  🕐 Aggregated $(resolution_minutes)-min data to hourly ($(length(target_timeslots)) slots)")
+            resolution_minutes = target_resolution_minutes
+        elseif target_resolution_minutes !== nothing && resolution_minutes > target_resolution_minutes
+            # UPSAMPLE (piecewise-constant REPLICATION) to a finer target grid.
+            # A zone whose native data is coarser than the shared clearing grid
+            # (e.g. an hourly PT60M zone in a 15-min clear) has each native
+            # slot's MW LEVEL copied into every finer sub-slot it spans.
+            # Load and generation are power levels (MW), NOT energy (MWh): a
+            # plant offering 500 MW offers 500 MW in each quarter — the energy
+            # divides naturally because the period is shorter, but the level is
+            # unchanged. DIVIDING by the sub-slot count would quarter both
+            # demand and supply and misprice everything. Downstream per-slot
+            # computations (scarcity margin, water value, demand orders, net
+            # imports which are hour-keyed) then run on the shared finer grid
+            # exactly as they would for a natively-fine zone.
+            target_resolution_minutes in (15, 30) ||
+                error("Only 15 or 30-min target resolution is supported for up-replication, got $target_resolution_minutes")
+            load_by_time = replicate_to_finer_resolution(load_by_time, resolution_minutes, target_resolution_minutes)
+            renewable_by_time = replicate_to_finer_resolution(renewable_by_time, resolution_minutes, target_resolution_minutes)
+            target_timeslots = sort(collect(keys(load_by_time)))
+            println("  🕐 Upsampled $(resolution_minutes)-min data to $(target_resolution_minutes)-min " *
+                    "($(length(target_timeslots)) slots) by piecewise-constant replication")
             resolution_minutes = target_resolution_minutes
         end
 

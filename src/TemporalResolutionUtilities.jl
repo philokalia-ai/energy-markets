@@ -89,6 +89,41 @@ function generate_sub_slots_from_source(source_slots::Vector{String}, source_res
 end
 
 """
+    replicate_to_finer_resolution(d::Dict{String,Float64}, native_res::Int, target_res::Int)
+
+Upsample a per-timeslot MW dictionary from a coarser `native_res` to a finer
+`target_res` grid by PIECEWISE-CONSTANT REPLICATION: each native slot's MW level
+is copied into every finer sub-slot it spans (e.g. hourly → 4 quarter-hours, the
+SAME level in each).
+
+`d` keys are "YYYYMMDD-HHMM"; sub-slots keep the same date and hour because the
+native minute plus `k*target_res` stays below 60 (`target_res` divides 60 and
+native slots align to hour subdivisions), so there is no hour/date rollover.
+
+This is the correct treatment for POWER levels (MW): a plant offering 500 MW
+offers 500 MW in each quarter — the energy divides naturally because the period
+is shorter, but the level is unchanged. It must NOT divide by the sub-slot count
+(that would quarter both demand and supply and misprice the clear). `target_res`
+must evenly divide `native_res`.
+"""
+function replicate_to_finer_resolution(d::Dict{String,Float64}, native_res::Int, target_res::Int)
+    native_res % target_res == 0 ||
+        error("Target resolution $target_res must evenly divide native $native_res")
+    n_sub = native_res ÷ target_res
+    out = Dict{String,Float64}()
+    for (ts, v) in d
+        date_part = ts[1:8]
+        hh = ts[10:11]
+        mm = parse(Int, ts[12:13])
+        for k in 0:(n_sub - 1)
+            newmm = mm + k * target_res
+            out["$(date_part)-$(hh)$(lpad(newmm, 2, '0'))"] = v
+        end
+    end
+    return out
+end
+
+"""
 Disaggregate load and renewable data to the finest temporal resolution.
 Returns target_timeslots, load_by_time, and renewable_by_time dictionaries.
 """
