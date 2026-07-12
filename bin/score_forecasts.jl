@@ -29,7 +29,13 @@ include(joinpath(@__DIR__, "..", "test", "scripts", "eu_eval_metrics.jl"))
 
 const RESCORE = lowercase(get(ENV, "RESCORE", "false")) == "true"
 
-"Slices of forecast_prices whose market day has realized actual DA prices."
+"""
+Slices of forecast_prices whose market day has realized actual DA prices.
+market_date is the Europe/Athens market day; its window's FINAL hours fall on
+UTC calendar day market_date, so EXISTS over the UTC day remains a correct
+readiness trigger (DA prices for a local delivery day publish as one batch —
+when any UTC-day-D row exists, the full Athens window is available).
+"""
 function pending_slices()
     rescore_clause = RESCORE ? "" : """
         AND NOT EXISTS (
@@ -138,7 +144,9 @@ function main()
         println("\nScoring market_date=$market_date lead_days=$lead_days cv=$cv")
 
         sim = slice_sim(market_date, lead_days, cv)
-        act = resolution_aware_actuals(market_date, market_date)
+        # market_date is the Europe/Athens market day: its window starts at
+        # 21:00/22:00 UTC on market_date-1, so actuals must cover BOTH UTC days.
+        act = resolution_aware_actuals(market_date - Day(1), market_date)
         actmap = Dict{Tuple{String,DateTime},Float64}(
             (String(a.z), DateTime(a.t)) => Float64(a.act) for a in eachrow(act))
 

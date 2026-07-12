@@ -20,9 +20,123 @@ const FORECAST_FOOTPRINT = String[
     forecast_lead_days(market_date::Date, today_utc::Date) -> Int
 
 Lead time in whole days: 0 = same-day nowcast, 1 = day-ahead, etc.
+`today_utc` should be the Europe/Athens calendar date of the prediction
+instant (see `athens_date`), so that "day-ahead" means the next MARKET day.
 """
 forecast_lead_days(market_date::Date, today_utc::Date) =
     Dates.value(market_date - today_utc)
+
+# ---------------------------------------------------------------------------
+# Europe/Athens market-day window (DST-aware, pure).
+#
+# ENTSO-E publishes day-ahead data per LOCAL market day. Greece is
+# Europe/Athens: EET (UTC+2) in winter, EEST (UTC+3) in summer. The EU DST
+# rule (Directive 2000/84/EC, unchanged as of 2026): summer time runs from
+# the last Sunday of March 01:00 UTC to the last Sunday of October 01:00 UTC.
+# TimeZones.jl is deliberately NOT a project dependency, so the rule is
+# implemented here as small pure functions with unit tests
+# (test/test_forecast_tracking.jl).
+# ---------------------------------------------------------------------------
+
+"Last Sunday of `month` in `year` (pure helper for the EU DST rule)."
+function last_sunday(year::Int, month::Int)
+    d = Date(year, month, Dates.daysinmonth(Date(year, month)))
+    return d - Day(dayofweek(d) % 7)   # Sunday has dayofweek 7 → shift 0
+end
+
+"EU summer-time interval [start, end) in UTC for `year`."
+eu_dst_window(year::Int) =
+    (DateTime(last_sunday(year, 3)) + Hour(1),
+     DateTime(last_sunday(year, 10)) + Hour(1))
+
+"Whether EU summer time (EEST for Athens) is in force at UTC instant `t`."
+function is_eu_summer_time(t::DateTime)
+    s, e = eu_dst_window(Dates.year(t))
+    return s <= t < e
+end
+
+"Europe/Athens UTC offset (Hour) at UTC instant `t`: +3 in EEST, +2 in EET."
+athens_utc_offset(t::DateTime) = is_eu_summer_time(t) ? Hour(3) : Hour(2)
+
+"Europe/Athens calendar date of UTC instant `t`."
+athens_date(t::DateTime) = Date(t + athens_utc_offset(t))
+
+"""
+    athens_day_start_utc(d::Date) -> DateTime
+
+UTC instant at which the Europe/Athens market day `d` begins (local midnight):
+21:00 UTC on d-1 under EEST, 22:00 UTC on d-1 under EET. The candidate EEST
+instant is checked against the EU DST window, which resolves the transition
+days correctly (local midnight of the switch Sunday is still in the old
+regime — the clocks change at 01:00 UTC that morning).
+"""
+function athens_day_start_utc(d::Date)
+    candidate = DateTime(d - Day(1)) + Hour(21)   # midnight if EEST
+    return is_eu_summer_time(candidate) ? candidate : candidate + Hour(1)
+end
+
+"""
+    athens_market_day_window(d::Date) -> (start_utc, end_utc)
+
+Half-open UTC window [start, end) of Europe/Athens market day `d`.
+Normally 24 h; 23 h on the March DST-transition Sunday, 25 h in October.
+"""
+athens_market_day_window(d::Date) =
+    (athens_day_start_utc(d), athens_day_start_utc(d + Day(1)))
+
+"Expected hourly UTC stamps of Europe/Athens market day `d` (24; 23/25 on DST days)."
+function expected_market_day_hours(d::Date)
+    t0, t1 = athens_market_day_window(d)
+    return collect(t0:Hour(1):(t1 - Hour(1)))
+end
+
+"""
+    stitch_market_day(d::Date, hourly_prev::Dict{DateTime,Float64},
+                      hourly_curr::Dict{DateTime,Float64})
+        -> (stitched, missing_hours, expected)
+
+Assemble the full Europe/Athens market day `d` from two UTC-day clears:
+`hourly_prev` = hourly prices of the UTC-day d-1 clear (contributes only
+hours ≥ athens_day_start_utc(d), i.e. the late-evening UTC tail that belongs
+to market day `d`), `hourly_curr` = hourly prices of the UTC-day d clear
+(contributes only hours < athens_day_start_utc(d+1); its unpublished local
+tail is expected to be absent). `missing_hours` is empty iff the stitched
+day is complete — callers MUST refuse to persist an incomplete day.
+"""
+function stitch_market_day(d::Date, hourly_prev::Dict{DateTime,Float64},
+                           hourly_curr::Dict{DateTime,Float64})
+    t0, t1 = athens_market_day_window(d)
+    utc_midnight = DateTime(d)
+    stitched = Dict{DateTime,Float64}()
+    for (h, p) in hourly_prev
+        (t0 <= h < utc_midnight) && (stitched[h] = p)
+    end
+    for (h, p) in hourly_curr
+        (utc_midnight <= h < t1) && (stitched[h] = p)
+    end
+    expected = collect(t0:Hour(1):(t1 - Hour(1)))
+    missing_hours = [h for h in expected if !haskey(stitched, h)]
+    return (stitched=stitched, missing_hours=missing_hours, expected=expected)
+end
+
+"""
+    assert_hours_unrealized(hours, prediction_made_utc::DateTime)
+
+HOUR-LEVEL HARD GUARD for honest forecasting: refuse any forecast row whose
+delivery hour is not strictly in the future of the prediction instant
+(date_time_utc ≤ prediction_made_utc). Complements the day-level
+`assert_unrealized` (kept for the fully-realized case). Throws on violation.
+"""
+function assert_hours_unrealized(hours, prediction_made_utc::DateTime)
+    bad = sort([h for h in hours if h <= prediction_made_utc])
+    if !isempty(bad)
+        error("REFUSING to write forecast rows for $(length(bad)) hour(s) at or " *
+              "before prediction_made_utc=$prediction_made_utc (first: $(bad[1]), " *
+              "last: $(bad[end])). A prediction for a delivery hour that has " *
+              "already begun would be fake.")
+    end
+    return true
+end
 
 """
     assert_unrealized(market_date::Date, latest_actual_date::Date)
