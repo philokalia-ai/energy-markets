@@ -123,12 +123,20 @@ body {
   letter-spacing: 0.01em;
 }
 .wordmark-tld { color: var(--terracotta); font-weight: 400; }
-.section-mark {
+.section-mark, .crumbs {
+  display: flex;
+  gap: 0.35rem;
   font-family: var(--mono);
   font-size: 0.85rem;
   letter-spacing: 0.08em;
   color: var(--text-muted);
+  white-space: nowrap;
 }
+.crumbs a {
+  color: var(--text-muted);
+  text-decoration: none;
+}
+.crumbs a:hover { color: var(--heading); text-decoration: underline; }
 .site-nav { display: flex; gap: 1.4rem; margin-left: auto; }
 .site-nav a {
   color: var(--text-muted);
@@ -614,4 +622,54 @@ select {
   max-width: 72em;
   border-left: 3px solid var(--terracotta-soft);
   padding-left: 10px;
+}
+
+/* ---------- responsiveness ---------- */
+html, body { overflow-x: hidden; }
+
+.tabs { overflow-x: auto; scrollbar-width: none; }
+.tabs::-webkit-scrollbar { display: none; }
+.tab { white-space: nowrap; }
+
+.segmented { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+.segmented::-webkit-scrollbar { display: none; }
+.segmented button { white-space: nowrap; flex: none; }
+
+@media (max-width: 680px) {
+  .site-header { gap: 0.7rem; padding: 0.65rem 0.9rem; }
+  .site-nav { gap: 0.9rem; }
+  .site-nav a { font-size: 0.85rem; }
+  .wordmark-text { font-size: 1rem; }
+  .wordmark-phi { font-size: 1.4rem; }
+  .section-mark, .crumbs { font-size: 0.75rem; }
+
+  .hero-lite { padding: 18px 14px 0; }
+  .hero-kicker { font-size: 0.68rem; }
+  .subtitle { font-size: 13px; }
+  .main { padding: 14px 10px; }
+
+  .tab { padding: 8px 10px 10px; font-size: 13.5px; }
+  .filter-row { gap: 12px; }
+  .map-day-filter { min-width: 0; width: 100%; }
+
+  .stat-row { gap: 14px; }
+  .stat .s-value { font-size: 19px; }
+  .day-list { max-height: 260px; }
+  .day-panel, .chart-card, .about-card { padding: 12px; }
+  .legend { gap: 12px; font-size: 12px; }
+  .day-comment { font-size: 13px; }
+  .map-legend-row { max-width: 100%; }
+
+  .prose { padding: 24px 16px 40px; }
+  .prose h1 { font-size: 1.7rem; }
+  .timeline li { grid-template-columns: 5.2rem 1fr; gap: 0.6rem; }
+  .site-footer { padding: 8px 12px 24px; display: block; }
+}
+
+@media (max-width: 420px) {
+  .site-nav a { font-size: 0.8rem; }
+  .section-mark, .crumbs { display: none; }  /* wordmark + nav only on tiny screens */
+  .stat-row { gap: 10px; }
+  .data-table { font-size: 12px; }
+  .data-table th, .data-table td { padding: 5px 7px; }
 }
