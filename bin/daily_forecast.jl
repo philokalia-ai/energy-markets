@@ -88,18 +88,28 @@ function load_forecast_hours(t0::DateTime, t1::DateTime, zones::Vector{String})
     return Dict{String,Int}(String(r.z) => Int(r.nh) for r in eachrow(df))
 end
 
-"Set of zones with a non-null day-ahead wind/solar forecast in [t0, t1)."
-function res_forecast_zones(t0::DateTime, t1::DateTime, zones::Vector{String})
+"""
+Set of zones whose day-ahead wind/solar forecast COVERS the window (≥20 of its
+hours with non-null values, same bar as the load gate). Mere EXISTS is not
+enough: on 2026-07-12 an early run saw a few DE_LU rows, passed the gate, and
+froze a 07-13 forecast with most of Germany's solar missing — the model priced
+a midday peak where reality had the solar valley (corr −0.50). Partial
+publications must read as "not yet published".
+"""
+function res_forecast_zones(t0::DateTime, t1::DateTime, zones::Vector{String};
+                            min_hours::Int=20)
     df = Euphemia.sql2df_with_retry("""
-        SELECT DISTINCT area_map_code AS z
+        SELECT area_map_code AS z,
+               COUNT(DISTINCT date_trunc('hour', date_time_utc)) AS nh
         FROM entsoe.generation_forecasts_for_wind_and_solar
         WHERE date_time_utc >= (\$1::timestamp AT TIME ZONE 'UTC')
           AND date_time_utc < (\$2::timestamp AT TIME ZONE 'UTC')
           AND area_map_code = ANY(\$3)
           AND area_type_code IN ('BZN', 'BZN/CTA', 'BZN/CTY', 'BZN/CTA/CTY')
           AND day_ahead_generation_forecast_mw IS NOT NULL
+        GROUP BY 1
     """, [t0, t1, zones])
-    return Set{String}(String.(df.z))
+    return Set{String}(String(r.z) for r in eachrow(df) if Int(r.nh) >= min_hours)
 end
 
 "Count of offered implicit-ATC rows touching the footprint in [t0, t1)."
