@@ -81,3 +81,5 @@ Fixtures were generated with a small deterministic script (3 zones × ~13 days �
 leads 1–2, including fully pending and partially settled days, with a scoreboard
 aggregated from the same series). If the data contract changes, regenerate them to
 match and keep `"fixture": true` set — the banner keys off that flag.
+
+<!-- deploy-stamp: 2026-07-12T17:05Z -->
