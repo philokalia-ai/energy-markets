@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>About — philokalia energy</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=GFS+Didot&family=Literata:opsz,wght@7..72,400;7..72,600;7..72,700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./style.css">
+</head>
+<body>
+
+<header class="site-header">
+  <a class="wordmark" href="https://philokalia.ai">
+    <span class="wordmark-phi">&phi;</span>
+    <span class="wordmark-text">philokalia<span class="wordmark-tld">.ai</span></span>
+  </a>
+  <span class="section-mark">/ energy / about</span>
+  <nav class="site-nav">
+    <a href="./index.html">Results</a>
+    <a href="https://github.com/philokalia-ai/energy-markets">GitHub</a>
+  </nav>
+</header>
+
+<article class="prose">
+  <p class="hero-kicker">Methodology</p>
+  <h1>A competitive counterfactual of the European power market</h1>
+  <p class="lede">
+    What would electricity prices be if every participant behaved competitively?
+    We simulate the European day-ahead market from physical fundamentals alone,
+    publish the predictions before the market clears, and score them honestly as
+    reality settles. The gaps that persist are not model errors — they are
+    measurements of how the real market deviates from competition.
+  </p>
+
+  <div class="meander" aria-hidden="true"></div>
+
+  <h2>What this is</h2>
+  <p>
+    This site tracks a <strong>no-fit, ex-ante simulation</strong> of the European
+    day-ahead electricity market — 39 bidding zones cleared jointly, the way the real
+    EUPHEMIA algorithm clears them, with cross-border transmission constraints. The model
+    ingests only what a market participant could know the evening before delivery:
+    ENTSO-E load and wind/solar forecasts, offered transfer capacities, fuel and carbon
+    prices, reservoir levels, and the physical generation fleet. From these it builds
+    supply and demand curves per zone, couples them over the transmission network, and
+    solves for the market-clearing price of every hour.
+  </p>
+  <p>
+    <strong>No-fit</strong> means exactly that: no parameter is trained or tuned on the
+    price outcomes the model is scored against. There is no train/serve gap to hide,
+    which is why the backtest and the live product show the same accuracy.
+  </p>
+
+  <h2>Why — the research thesis</h2>
+  <p>
+    A competitive market should price at the marginal cost of the marginal unit. Our
+    simulation is that competitive benchmark, reconstructed bottom-up. Where the real
+    market persistently clears <em>above</em> the counterfactual — in specific zones,
+    seasons, or hours — that residual is a <strong>finding about market behavior</strong>:
+    scarcity signals, strategic bidding, or the exercise of market power. This is why we
+    refuse to fit the model to prices: a fitted model would absorb exactly the deviations
+    we are trying to measure.
+  </p>
+
+  <h2>How the model works</h2>
+  <ol>
+    <li><strong>Fleet and costs.</strong> Every dispatchable generator in each zone, with
+      marginal costs built from real TTF gas futures, daily EUA carbon prices, and fuel
+      emission factors — short-run marginal cost, no bid markup.</li>
+    <li><strong>The order book.</strong> Thermal units bid their marginal cost;
+      renewables bid the D-1 forecast as price-takers; reservoir hydro bids its
+      opportunity cost (a water value tied to gas prices, reservoir dryness and
+      seasonal drawdown); demand is the D-1 load forecast, nearly inelastic at the cap.</li>
+    <li><strong>The coupled clear.</strong> All 39 zones clear simultaneously under
+      cross-border capacity limits (the ex-ante flow rule uses flow climatology — never
+      same-day observations). Zonal prices are the duals of the zonal balance
+      constraints, exactly as in the real market coupling.</li>
+    <li><strong>Two passes.</strong> Hydro- and nuclear-anchored zones re-bid against the
+      first pass's coupled price, so opportunity costs are consistent across the
+      footprint.</li>
+    <li><strong>Honest inputs only.</strong> Everything is D-1-legal. When an input is
+      not published in time, the day is skipped — never backfilled from hindsight.</li>
+  </ol>
+
+  <h2>The ex-ante guarantees</h2>
+  <p>Every prediction on this site satisfies, by construction:</p>
+  <ul>
+    <li><strong>Frozen before delivery.</strong> An hour-level guard makes it impossible
+      to write a value whose delivery hour has passed. Predictions are never revised;
+      the record is append-only.</li>
+    <li><strong>Provenance per row.</strong> Every prediction records the timestamp it
+      was made, so anyone can verify what was known when.</li>
+    <li><strong>Pre-auction where possible.</strong> The morning run freezes predictions
+      before the day-ahead auction gate closes (12:00 CET) — ex-ante with respect to the
+      market clearing itself, not just to physical delivery.</li>
+    <li><strong>Complete market days only.</strong> A delivery day is a Europe/Athens
+      market day (the 24-hour window starting 21:00/22:00 UTC the evening before,
+      DST-aware); a day is published only when all 24 hours can be predicted.</li>
+  </ul>
+
+  <h3>The daily schedule</h3>
+  <ul class="timeline">
+    <li><span class="t-time">00:00 UTC</span><span>Data fill: actuals for settled days;
+      realized days are scored and the scoreboard updates.</span></li>
+    <li><span class="t-time">08:00 UTC</span><span><strong>Morning window</strong> — fill +
+      forecast before the auction gate (10:00/11:00 UTC). Rows written here are
+      pre-auction. On days ENTSO-E inputs have not yet propagated, the run honestly
+      writes nothing.</span></li>
+    <li><span class="t-time">17:30 UTC</span><span><strong>Evening fill</strong> — ENTSO-E's
+      D-1 items propagate to the bulk export late for large zones (~19:00 UTC for
+      Germany and Italy), so the evening run fills whatever the morning could not see.
+      Writes never overwrite a morning row.</span></li>
+  </ul>
+
+  <h2>Scoring, honestly</h2>
+  <p>
+    As days settle, predictions are scored per zone and per lead time against the
+    official day-ahead auction prices: <strong>MAE</strong> (mean absolute error, €/MWh),
+    <strong>bias</strong> (mean simulated&nbsp;−&nbsp;actual — negative means the model
+    under-prices, which for a competitive counterfactual is a signal, not a bug), and
+    <strong>correlation</strong> of hourly prices. Whole-sample, never cherry-picked. On
+    the full-year EU backtest the model reaches a mean hourly correlation of
+    <strong>0.56</strong> across 39 zones (Germany 0.85, Greece 0.86) with MAE
+    <strong>€30/MWh</strong> and near-zero aggregate bias; zones with correlation above
+    0.7 cover roughly <strong>60% of European traded volume</strong>. Weak zones
+    (the Nordic hydro north, some small zones) are shown with the same prominence as
+    strong ones.
+  </p>
+
+  <h2>The weather layer — becoming independent of late inputs</h2>
+  <p>
+    The model's decisive inputs — ENTSO-E's day-ahead load and renewables forecasts —
+    are published late in the day and only for the next day, which caps the horizon at
+    lead&nbsp;1. To extend it, we predict wind and solar ourselves from raw weather
+    forecasts: a <strong>GFS + ECMWF + ICON ensemble</strong> evaluated at wind-farm-sited
+    grid cells (an OpenStreetMap extraction of <strong>115,390 turbines</strong> across the
+    footprint, validated at 97% against the Greek ELETAEN registry), and solar from
+    irradiance plus sun geometry. Measured on strictly honest lead-1 forecast vintages,
+    the weather layer predicts ENTSO-E's own wind forecast at correlation
+    <strong>0.96</strong> and its solar forecast at <strong>0.99</strong> — and losing
+    only ~0.01 at lead&nbsp;2 means <strong>lead 2–7 forecasts inherit near-lead-1
+    quality</strong>. This is what will make the morning window productive every day and
+    extend the site beyond tomorrow.
+  </p>
+
+  <h2>What we tested and rejected</h2>
+  <p>
+    Negative results are part of the record: inter-temporal commitment bidding (block
+    orders with startup dynamics) was built, tested across 14 zones, and rejected —
+    it helps only thermal-cycling zones in winter and hurts hydro-dominated ones; a
+    plant-level physical simulation of renewables was evaluated and found unnecessary
+    (one sun-geometry feature carries the physics). The full investigation record lives
+    in the repository's <code>docs/</code>.
+  </p>
+
+  <h2>Open by default</h2>
+  <p>
+    The model, the calibration history, the experiment scripts, and a self-contained
+    public data extract are on GitHub —
+    <a href="https://github.com/philokalia-ai/energy-markets">philokalia-ai/energy-markets</a>.
+    The full 39-zone clear reproduces offline from the published artifact, no database
+    required. Data: ENTSO-E Transparency Platform, TTF/EUA via public market feeds,
+    OpenStreetMap (turbine locations), open-meteo (weather).
+  </p>
+
+  <div class="meander" aria-hidden="true"></div>
+  <p style="margin-top:1.4rem">
+    <a class="more-link" href="./index.html">&larr; Back to the live results</a> ·
+    <a class="more-link" href="https://philokalia.ai">philokalia.ai</a>
+  </p>
+</article>
+
+<footer class="site-footer">
+  <span>A <a href="https://philokalia.ai">philokalia.ai</a> project.</span>
+</footer>
+
+</body>
+</html>
