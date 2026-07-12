@@ -72,9 +72,20 @@
     return wd + " " + dateStr;
   }
 
+  // Hours are stored as UTC stamps of the Europe/Athens market-day window;
+  // render them in Europe/Athens local time (00:00–23:00 across the day).
+  var ATHENS_TIME = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Europe/Athens", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+  });
+
   function hourLabel(iso) {
-    // "2026-07-12T13:00:00Z" -> "13:00"
-    return iso.slice(11, 16);
+    // "2026-07-12T21:00:00Z" -> "00:00" (Athens local)
+    return ATHENS_TIME.format(new Date(iso));
+  }
+
+  function hourEndLabel(iso) {
+    // Athens-local label of the delivery hour's end (start + 1h).
+    return ATHENS_TIME.format(new Date(new Date(iso).getTime() + 3600000));
   }
 
   function isPending(day) {
@@ -263,7 +274,7 @@
     t.textContent = "";
     var thead = el("thead");
     var tr = el("tr");
-    ["Hour (UTC)", "Simulated €/MWh", "Actual €/MWh", "Error €/MWh"].forEach(function (h) {
+    ["Hour (Europe/Athens)", "Simulated €/MWh", "Actual €/MWh", "Error €/MWh"].forEach(function (h) {
       tr.appendChild(el("th", null, h));
     });
     thead.appendChild(tr);
@@ -450,9 +461,8 @@
 
       // tooltip content (values lead, names follow; line keys; textContent only)
       tooltip.textContent = "";
-      var hEnd = (idx + 1) % 24;
       tooltip.appendChild(el("div", "tt-head",
-        hourLabel(day.hours[idx]) + "–" + (hEnd < 10 ? "0" : "") + hEnd + ":00 UTC"));
+        hourLabel(day.hours[idx]) + "–" + hourEndLabel(day.hours[idx]) + " Athens"));
       [
         [C.sim, day.sim[idx], "simulated"],
         [C.act, a, a === null || a === undefined ? "actual (pending)" : "actual"],
@@ -538,7 +548,8 @@
       ? " · prediction frozen " + day.prediction_made_utc.replace("T", " ").replace("Z", " UTC")
       : "";
     $("chart-sub").textContent =
-      "Lead time D-" + day.lead_days + madeAt;
+      "Lead time D-" + day.lead_days + madeAt +
+      " · hours shown in Europe/Athens (market day)";
     renderDayStats(day);
     renderLegend(day);
     renderChart(day);

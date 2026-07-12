@@ -23,6 +23,123 @@ include(joinpath(@__DIR__, "..", "bin", "forecast_common.jl"))
         @test forecast_lead_days(Date(2026, 7, 10), today) == -1
     end
 
+    @testset "EU DST rule (pure, no TimeZones.jl)" begin
+        # last Sundays, hand-checked against a calendar
+        @test last_sunday(2026, 3) == Date(2026, 3, 29)
+        @test last_sunday(2026, 10) == Date(2026, 10, 25)
+        @test last_sunday(2025, 3) == Date(2025, 3, 30)
+        @test last_sunday(2025, 10) == Date(2025, 10, 26)
+        @test last_sunday(2024, 3) == Date(2024, 3, 31)   # month ends on Sunday
+
+        s, e = eu_dst_window(2026)
+        @test s == DateTime(2026, 3, 29, 1)    # last Sunday of March, 01:00 UTC
+        @test e == DateTime(2026, 10, 25, 1)   # last Sunday of October, 01:00 UTC
+
+        @test is_eu_summer_time(DateTime(2026, 7, 12, 20))          # mid-summer
+        @test !is_eu_summer_time(DateTime(2026, 1, 15, 12))         # mid-winter
+        @test !is_eu_summer_time(DateTime(2026, 3, 29, 0, 59))      # 1 min before switch
+        @test is_eu_summer_time(DateTime(2026, 3, 29, 1))           # at the switch
+        @test is_eu_summer_time(DateTime(2026, 10, 25, 0, 59))      # 1 min before fallback
+        @test !is_eu_summer_time(DateTime(2026, 10, 25, 1))         # at the fallback
+
+        @test athens_utc_offset(DateTime(2026, 7, 12, 20)) == Hour(3)
+        @test athens_utc_offset(DateTime(2026, 1, 15, 12)) == Hour(2)
+    end
+
+    @testset "athens_date" begin
+        # 22:30 UTC in summer = 01:30 Athens next day
+        @test athens_date(DateTime(2026, 7, 12, 22, 30)) == Date(2026, 7, 13)
+        # 20:00 UTC in summer = 23:00 Athens same day
+        @test athens_date(DateTime(2026, 7, 12, 20, 0)) == Date(2026, 7, 12)
+        # 22:30 UTC in winter = 00:30 Athens next day
+        @test athens_date(DateTime(2026, 1, 15, 22, 30)) == Date(2026, 1, 16)
+        # 21:30 UTC in winter = 23:30 Athens same day
+        @test athens_date(DateTime(2026, 1, 15, 21, 30)) == Date(2026, 1, 15)
+    end
+
+    @testset "athens_day_start_utc (both regimes + transition days)" begin
+        # summer (EEST, UTC+3): local midnight = 21:00 UTC previous day
+        @test athens_day_start_utc(Date(2026, 7, 13)) == DateTime(2026, 7, 12, 21)
+        # winter (EET, UTC+2): local midnight = 22:00 UTC previous day
+        @test athens_day_start_utc(Date(2026, 1, 15)) == DateTime(2026, 1, 14, 22)
+
+        # March transition Sunday (2026-03-29): midnight is still EET → 22:00 UTC
+        @test athens_day_start_utc(Date(2026, 3, 29)) == DateTime(2026, 3, 28, 22)
+        # the day after: EEST is in force → 21:00 UTC
+        @test athens_day_start_utc(Date(2026, 3, 30)) == DateTime(2026, 3, 29, 21)
+        # October transition Sunday (2026-10-25): midnight is still EEST → 21:00 UTC
+        @test athens_day_start_utc(Date(2026, 10, 25)) == DateTime(2026, 10, 24, 21)
+        # the day after: back to EET → 22:00 UTC
+        @test athens_day_start_utc(Date(2026, 10, 26)) == DateTime(2026, 10, 25, 22)
+
+        # window lengths: 24 h normally, 23 h spring-forward, 25 h fall-back
+        @test length(expected_market_day_hours(Date(2026, 7, 13))) == 24
+        @test length(expected_market_day_hours(Date(2026, 1, 15))) == 24
+        @test length(expected_market_day_hours(Date(2026, 3, 29))) == 23
+        @test length(expected_market_day_hours(Date(2026, 10, 25))) == 25
+
+        # window is half-open and contiguous
+        t0, t1 = athens_market_day_window(Date(2026, 7, 13))
+        @test t0 == DateTime(2026, 7, 12, 21) && t1 == DateTime(2026, 7, 13, 21)
+        hrs = expected_market_day_hours(Date(2026, 7, 13))
+        @test hrs[1] == t0 && hrs[end] == t1 - Hour(1)
+        @test all(diff(hrs) .== Hour(1))
+    end
+
+    @testset "stitch_market_day" begin
+        d = Date(2026, 7, 13)           # window 2026-07-12T21:00 → 2026-07-13T21:00
+        # synthetic UTC-day clears: prev = full 24 h of UTC day 07-12,
+        # curr = UTC day 07-13 with the unpublished local tail (21:00–23:00) absent
+        prev = Dict(DateTime(2026, 7, 12, h) => 100.0 + h for h in 0:23)
+        curr = Dict(DateTime(2026, 7, 13, h) => 200.0 + h for h in 0:20)
+
+        st = stitch_market_day(d, prev, curr)
+        @test isempty(st.missing_hours)
+        @test length(st.stitched) == 24
+        @test length(st.expected) == 24
+        # head: last 3 hours of the prev UTC-day clear
+        @test st.stitched[DateTime(2026, 7, 12, 21)] == 121.0
+        @test st.stitched[DateTime(2026, 7, 12, 23)] == 123.0
+        # body: hours 00–20 of the curr UTC-day clear
+        @test st.stitched[DateTime(2026, 7, 13, 0)] == 200.0
+        @test st.stitched[DateTime(2026, 7, 13, 20)] == 220.0
+        # out-of-window hours never leak in
+        @test !haskey(st.stitched, DateTime(2026, 7, 12, 20))
+        @test !haskey(st.stitched, DateTime(2026, 7, 13, 21))
+
+        # a missing hour inside the window → refusal signal (missing_hours named)
+        curr_short = copy(curr)
+        delete!(curr_short, DateTime(2026, 7, 13, 5))
+        st2 = stitch_market_day(d, prev, curr_short)
+        @test st2.missing_hours == [DateTime(2026, 7, 13, 5)]
+        @test length(st2.stitched) == 23
+
+        # missing head (prev clear truncated) is also caught
+        st3 = stitch_market_day(d, Dict{DateTime,Float64}(), curr)
+        @test length(st3.missing_hours) == 3
+        @test st3.missing_hours[1] == DateTime(2026, 7, 12, 21)
+
+        # prev never contributes hours that belong to the curr UTC day, even if
+        # both clears carry them (curr wins by window partition, values differ)
+        prev_overlap = merge(prev, Dict(DateTime(2026, 7, 13, 0) => -1.0))
+        st4 = stitch_market_day(d, prev_overlap, curr)
+        @test st4.stitched[DateTime(2026, 7, 13, 0)] == 200.0
+    end
+
+    @testset "hour-level write guard" begin
+        made = DateTime(2026, 7, 12, 20, 5)
+        future = [DateTime(2026, 7, 12, 21) + Hour(k) for k in 0:23]
+        @test assert_hours_unrealized(future, made)
+        # an hour equal to the prediction instant → refused (strictly-after rule)
+        @test_throws ErrorException assert_hours_unrealized(
+            vcat(future, [DateTime(2026, 7, 12, 20, 5)]), made)
+        # an hour before the prediction instant → refused
+        @test_throws ErrorException assert_hours_unrealized(
+            vcat(future, [DateTime(2026, 7, 12, 19)]), made)
+        # empty input is fine (vacuous)
+        @test assert_hours_unrealized(DateTime[], made)
+    end
+
     @testset "realized-day write guard" begin
         latest_actual = Date(2026, 7, 10)
         # market day realized (or partially realized) → must throw

@@ -6,15 +6,19 @@
 # Contract (consumed by a separately-built SPA — do not change shapes):
 #
 # web/data/scoreboard.json
-#   {"generated_utc": ..., "code_version": 16, "zones": [...],
+#   {"generated_utc": ..., "code_version": 16, "market_day_tz": "Europe/Athens",
+#    "zones": [...],
 #    "scores": [{"zone","lead_days","window" ("all" or "YYYY-MM"),
 #                "n_days","mae","bias","corr"}, ...]}
 #
 # web/data/zones/<ZONE>.json
-#   {"zone": ..., "days": [{"date","lead_days","prediction_made_utc",
+#   {"zone": ..., "market_day_tz": "Europe/Athens",
+#    "days": [{"date","lead_days","prediction_made_utc",
 #     "hours":[ISO8601...], "sim":[...], "actual":[... or null where
 #     unrealized], "mae","bias","corr" (null when unrealized)}, ...]}
 #   — most recent 120 market days, newest first, one entry per (date, lead_days).
+#   "date" is the Europe/Athens market day; "hours" are the window's UTC
+#   stamps (24 normally; 23/25 on DST-transition days).
 #
 # web/data/ is git-ignored; CI uploads it as the `forecast-data` artifact.
 
@@ -73,6 +77,7 @@ function export_scoreboard()
     end
 
     doc = Dict("generated_utc" => now(UTC), "code_version" => CV,
+               "market_day_tz" => "Europe/Athens",
                "zones" => String.(zones.z), "scores" => entries)
     path = joinpath(OUT_DIR, "scoreboard.json")
     open(path, "w") do io
@@ -107,7 +112,9 @@ function export_zone_files()
         for r in eachrow(scores))
 
     sd, ed = extrema(Date.(prices.market_date))
-    act = resolution_aware_actuals(sd, ed)
+    # market_date is the Europe/Athens market day: its window starts at
+    # 21:00/22:00 UTC on the previous UTC day, so fetch actuals from sd-1.
+    act = resolution_aware_actuals(sd - Day(1), ed)
     actmap = Dict{Tuple{String,DateTime},Float64}(
         (String(a.z), DateTime(a.t)) => Float64(a.act) for a in eachrow(act))
 
@@ -139,7 +146,8 @@ function export_zone_files()
         sort!(days; by=e -> (e["date"], -e["lead_days"]), rev=true)
         path = joinpath(zdir, "$zone.json")
         open(path, "w") do io
-            json_write(io, Dict("zone" => zone, "days" => days))
+            json_write(io, Dict("zone" => zone, "market_day_tz" => "Europe/Athens",
+                                "days" => days))
         end
         nz += 1
     end
