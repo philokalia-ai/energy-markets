@@ -32,10 +32,11 @@ module BlockCommitment
 using JuMP, Dates, Statistics
 
 import ..MeritOrderBook: create_merit_order_book, get_zone_profile,
-    WATER_VALUE_FUEL_TYPES
+    WATER_VALUE_FUEL_TYPES, ENDOGENOUS_COMMITMENT_SOLVER
 import ..get_fuel_type_parameters
 import ..FLEXIBLE_FUEL_TYPES
 import ..get_cached_gurobi_optimizer
+import ..get_initial_conditions
 
 """
     _base_cost(g, ts, inp) -> Float64
@@ -75,34 +76,38 @@ function _base_cost(g, ts::AbstractString, norm_demand::Float64, inp)
 end
 
 """
-    clear_block_commitment(zone, day; kwargs...) -> Dict{String,Float64}
+    _commitment_milp(inp; initial_conditions=nothing, mip_gap=0.01,
+                     time_limit=180.0, verbose=false) -> NamedTuple
 
-Clear a single zone via commitment + fix-and-reprice on the merit book's exact
-fundamentals. Returns a `timeslot => price (€/MWh)` dict with the SAME native
-timeslot keys `create_merit_order_book` would produce (each native sub-hour slot
-carries its hour's price — the MILP clears at hourly resolution, matching the
-validated prototype and the hourly evaluation).
+The commitment MILP on the merit book's exact fundamentals (`inp` = the
+NamedTuple from `create_merit_order_book(...; return_inputs=true)`), factored
+out so it serves BOTH v17 mechanisms:
 
-Keyword args mirror the merit-book knobs that affect fundamentals
-(`include_net_imports`, `net_import_exclude`, `net_import_import_only`,
-`anchor_*`, scenario hooks) and are forwarded unchanged, so block mode and merit
-mode see byte-identical inputs. `mip_gap` / `time_limit` tune the MILP.
+- `clear_block_commitment` (commitment + fix-and-reprice): uses `ustar` and the
+  returned cost/limit arrays for the reprice LP (called with
+  `initial_conditions=nothing` — byte-identical to the pre-factor MILP).
+- the `:endogenous` must-run mode (`endogenous_committed_sets`): uses only
+  `ustar` — WHICH units are on, per hour — to gate the merit book's must-run
+  split.
+
+`initial_conditions` (a `Dict{String,InitialConditions}` from
+`get_initial_conditions`) anchors hour 1 to reality instead of leaving it free:
+startup logic vs u₀ (`v[i,1] ≥ u[i,1] − u₀`), the t=1 ramp vs the actual t=0
+output g₀, and the REMAINING min-uptime of units already running (a unit on for
+`hours_on < minup` must stay on for the difference). Min-downtime is not in
+this model (matching the original block MILP), so `hours_off` only enters
+through u₀ = 0.
+
+Returns `(ustar, hours, net, mc, pmax, pmin, ru, solve_time, status)`.
 """
-function clear_block_commitment(zone::String, day::Date;
-    profile=get_zone_profile(zone),
+function _commitment_milp(inp;
+    initial_conditions=nothing,
     mip_gap::Float64=0.01,
     time_limit::Float64=180.0,
-    verbose::Bool=false,
-    kwargs...)
-
-    inp = create_merit_order_book(zone, day; profile=profile, return_inputs=true, kwargs...)
-    if !(inp isa NamedTuple) || !inp.success
-        error("Block commitment: merit input assembly failed for $zone $day")
-    end
+    verbose::Bool=false)
 
     gens = inp.generators
     native_ts = inp.timeslots
-    resolution_minutes = inp.resolution_minutes
     VOLL = inp.price_cap        # shortage prices at the cap (matches merit)
     FLOOR = 500.0              # over-generation prices at the EU −500 floor
 
@@ -112,7 +117,6 @@ function clear_block_commitment(zone::String, day::Date;
     hour_key(ts) = ts[1:11] * "00"
     hours = sort(unique(hour_key(ts) for ts in native_ts))
     H = length(hours)
-    hidx = Dict(h => t for (t, h) in enumerate(hours))
     # hourly net demand = mean of the native sub-slot net demands in that hour
     nd_acc = Dict{String,Tuple{Float64,Int}}()
     for ts in native_ts
@@ -148,9 +152,24 @@ function clear_block_commitment(zone::String, day::Date;
     SU = [fp[i].startup_cost_multiplier * rep[i] * pmax[i] for i in 1:N]   # €/startup
     NL = [fp[i].no_load_cost_fraction * rep[i] * pmin[i] for i in 1:N]     # €/h
 
-    opt = get_cached_gurobi_optimizer()
+    # ---- initial conditions (t=0 anchor); nothing → the free-hour-1 model
+    u0 = zeros(Float64, N); g0 = zeros(Float64, N); rem_up = zeros(Int, N)
+    if initial_conditions !== nothing
+        for i in 1:N
+            ic = get(initial_conditions, gens[i].code, nothing)
+            ic === nothing && continue
+            if ic.is_on
+                u0[i] = 1.0
+                # clamp to THIS model's [pmin, pmax] (offered capacity may be
+                # derated below the historical output) so t=1 is feasible
+                g0[i] = clamp(ic.output, pmin[i], pmax[i])
+                rem_up[i] = max(0, minup[i] - ic.hours_on)
+            end
+        end
+    end
 
-    # ---- 1) commitment MILP ------------------------------------------------
+    opt = get_cached_gurobi_optimizer()
+    t_start = time()
     m = Model(opt); verbose || set_silent(m)
     set_optimizer_attribute(m, "MIPGap", mip_gap)
     set_optimizer_attribute(m, "TimeLimit", time_limit)
@@ -165,6 +184,15 @@ function clear_block_commitment(zone::String, day::Date;
     @constraint(m, [i=1:N, t=2:H], p[i, t] - p[i, t-1] <= ru[i] + pmax[i] * v[i, t])
     @constraint(m, [i=1:N, t=2:H], p[i, t-1] - p[i, t] <= rd[i] + pmax[i] * (1 - u[i, t]))
     @constraint(m, [i=1:N, t=2:H], v[i, t] >= u[i, t] - u[i, t-1])
+    if initial_conditions !== nothing
+        # hour-1 anchored to the real t=0 state (u₀, g₀, remaining uptime)
+        @constraint(m, [i=1:N], v[i, 1] >= u[i, 1] - u0[i])
+        @constraint(m, [i=1:N], p[i, 1] - g0[i] <= ru[i] + pmax[i] * v[i, 1])
+        @constraint(m, [i=1:N], g0[i] - p[i, 1] <= rd[i] + pmax[i] * (1 - u[i, 1]))
+        for i in 1:N, t in 1:min(rem_up[i], H)
+            fix(u[i, t], 1.0; force=true)
+        end
+    end
     for i in 1:N, t in 1:H
         minup[i] <= 1 && continue
         @constraint(m, sum(u[i, τ] for τ in t:min(H, t + minup[i] - 1)) >= minup[i] * v[i, t])
@@ -177,9 +205,91 @@ function clear_block_commitment(zone::String, day::Date;
     optimize!(m)
     st = termination_status(m)
     if !(st == OPTIMAL || st == TIME_LIMIT || st == LOCALLY_SOLVED)
-        error("Block commitment MILP for $zone $day terminated $st")
+        error("Block commitment MILP for $(inp.zone) $(inp.day) terminated $st")
     end
     ustar = round.(value.(u))
+
+    return (ustar = ustar, hours = hours, net = net, mc = mc,
+            pmax = pmax, pmin = pmin, ru = ru,
+            solve_time = time() - t_start, status = st)
+end
+
+"""
+    endogenous_committed_sets(inp; mip_gap=0.01, time_limit=120.0) -> NamedTuple
+
+The `must_run_mode = :endogenous` solver (registered into
+`MeritOrderBook.ENDOGENOUS_COMMITMENT_SOLVER` at load): solves the commitment
+MILP on the merit book's exact fundamentals, ANCHORED to real initial
+conditions (`get_initial_conditions`, 72 h lookback), and returns per-hour
+committed sets — `sets::Dict{String,Set{String}}` keyed `"yyyymmdd-HH00"`.
+
+A unit enters an hour's set iff u*[unit, hour] = 1 AND it is must-run-eligible
+in the merit book's sense (non-water-value fuel with a real minimum,
+p_min > 0.1 MW) — water-value fuels never reach the must-run gate and
+zero-p_min units have nothing to self-schedule, so including them would only
+distort the overlap diagnostic.
+"""
+function endogenous_committed_sets(inp;
+    mip_gap::Float64=0.01, time_limit::Float64=120.0, verbose::Bool=false)
+
+    ics = get_initial_conditions(inp.generators, inp.day)
+    r = _commitment_milp(inp; initial_conditions=ics,
+                         mip_gap=mip_gap, time_limit=time_limit, verbose=verbose)
+    gens = inp.generators
+    sets = Dict{String,Set{String}}()
+    for (t, h) in enumerate(r.hours)
+        s = Set{String}()
+        for (i, g) in enumerate(gens)
+            r.ustar[i, t] > 0.5 || continue
+            g.fuel_type in WATER_VALUE_FUEL_TYPES && continue
+            r.pmin[i] > 0.1 || continue
+            push!(s, g.code)
+        end
+        sets[h] = s
+    end
+    return (sets = sets, solve_time = r.solve_time, status = r.status)
+end
+
+"""
+    clear_block_commitment(zone, day; kwargs...) -> Dict{String,Float64}
+
+Clear a single zone via commitment + fix-and-reprice on the merit book's exact
+fundamentals. Returns a `timeslot => price (€/MWh)` dict with the SAME native
+timeslot keys `create_merit_order_book` would produce (each native sub-hour slot
+carries its hour's price — the MILP clears at hourly resolution, matching the
+validated prototype and the hourly evaluation).
+
+Keyword args mirror the merit-book knobs that affect fundamentals
+(`include_net_imports`, `net_import_exclude`, `net_import_import_only`,
+`anchor_*`, scenario hooks) and are forwarded unchanged, so block mode and merit
+mode see byte-identical inputs. `mip_gap` / `time_limit` tune the MILP.
+"""
+function clear_block_commitment(zone::String, day::Date;
+    profile=get_zone_profile(zone),
+    mip_gap::Float64=0.01,
+    time_limit::Float64=180.0,
+    verbose::Bool=false,
+    kwargs...)
+
+    inp = create_merit_order_book(zone, day; profile=profile, return_inputs=true, kwargs...)
+    if !(inp isa NamedTuple) || !inp.success
+        error("Block commitment: merit input assembly failed for $zone $day")
+    end
+
+    native_ts = inp.timeslots
+    VOLL = inp.price_cap        # shortage prices at the cap (matches merit)
+    FLOOR = 500.0              # over-generation prices at the EU −500 floor
+    hour_key(ts) = ts[1:11] * "00"
+
+    # ---- 1) commitment MILP (factored; no initial-condition anchor here —
+    # preserves this mode's original free-hour-1 behaviour) -------------------
+    r = _commitment_milp(inp; mip_gap=mip_gap, time_limit=time_limit, verbose=verbose)
+    ustar = r.ustar
+    hours = r.hours; H = length(hours)
+    net = r.net; mc = r.mc; pmax = r.pmax; pmin = r.pmin; ru = r.ru
+    N = length(inp.generators)
+
+    opt = get_cached_gurobi_optimizer()
 
     # ---- 2) fix-and-reprice LP → price = dual of the balance ---------------
     lp = Model(opt); set_silent(lp)
@@ -203,5 +313,9 @@ function clear_block_commitment(zone::String, day::Date;
     # map the hourly price back onto every native timeslot key
     return Dict{String,Float64}(ts => hourly_price[hour_key(ts)] for ts in native_ts)
 end
+
+# Register the endogenous must-run solver into MeritOrderBook's runtime hook
+# (MeritOrderBook is included before this module, so it cannot import us).
+ENDOGENOUS_COMMITMENT_SOLVER[] = endogenous_committed_sets
 
 end # module BlockCommitment

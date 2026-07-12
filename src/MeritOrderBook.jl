@@ -520,7 +520,48 @@ Base.@kwdef struct ZoneProfile
     # path selects block clearing explicitly regardless. Default `:per_period`
     # keeps every existing zone on the byte-identical merit path.
     bidding_mode::Symbol = :per_period
+    # Must-run commitment mode (v17 isolation experiment). Decides WHICH units
+    # self-schedule their p_min below cost, per timeslot — the ONE variable the
+    # commitment-informed must-run experiment changes:
+    #   :static     — the day-level heuristic (default, byte-identical): the
+    #                 cheapest eligible thermal units covering 1.05× the peak
+    #                 residual demand self-schedule in EVERY timeslot.
+    #   :endogenous — the BlockCommitment MILP (same fleet, same costs, same
+    #                 net demand, anchored to real initial conditions) decides
+    #                 the committed set PER HOUR; a unit self-schedules its
+    #                 must-run split in a slot iff u*[unit, hour] = 1.
+    # Everything else in the book — tranche ladder, scarcity factor, water
+    # values, demand, RES, imports, the must-run PRICE split itself — is
+    # identical between the two modes. Falls back to :static (with a warning)
+    # if the MILP fails, so the clear never breaks.
+    must_run_mode::Symbol = :static
 end
+
+"""
+    ENDOGENOUS_COMMITMENT_SOLVER
+
+Runtime hook for the `must_run_mode = :endogenous` commitment solver, populated
+by `BlockCommitment` at load time (it is included AFTER this module, so a static
+import is impossible). Holds a function `inp::NamedTuple -> NamedTuple` with
+fields `sets::Dict{String,Set{String}}` (hour-slot key `"yyyymmdd-HH00"` →
+committed unit codes), `solve_time`, `status`. `nothing` until registered.
+"""
+const ENDOGENOUS_COMMITMENT_SOLVER = Ref{Union{Nothing,Function}}(nothing)
+
+"""
+    LAST_ENDOGENOUS_STATS
+
+Diagnostics of the most recent `:endogenous` must-run solve in this process
+(`nothing` if the last endogenous attempt fell back to `:static` or none ran).
+NamedTuple: zone, day, milp_seconds, status, overlap_jaccard (mean hourly
+Jaccard vs the static committed set), mean_endo_size, static_size. Read by the
+canary harness; purely informational.
+"""
+const LAST_ENDOGENOUS_STATS = Ref{Union{Nothing,NamedTuple}}(nothing)
+
+# Committed set for hours the endogenous MILP produced no entry for (defensive;
+# should not happen — the MILP covers every hour of the day).
+const _EMPTY_CODE_SET = Set{String}()
 
 """
     FLEET_TRUTH_OVERRIDE
@@ -1235,6 +1276,7 @@ function create_merit_order_book(
     extra_orders::Union{Nothing,Function}=nothing,
     strategist::Union{Nothing,Function}=nothing,
     fleet_modifier::Union{Nothing,Function}=nothing,
+    must_run_mode::Union{Nothing,Symbol}=nothing,
     return_inputs::Bool=false
 )
     # Resolve every bid parameter from the profile, letting an explicit keyword
@@ -1262,6 +1304,7 @@ function create_merit_order_book(
     nuclear_srmc_floor = nuclear_srmc_floor === nothing ? profile.nuclear_srmc_floor : nuclear_srmc_floor
     opportunity_anchor = opportunity_anchor === nothing ? profile.opportunity_anchor : opportunity_anchor
     anchor_share = anchor_share === nothing ? profile.anchor_share : anchor_share
+    must_run_mode = must_run_mode === nothing ? profile.must_run_mode : must_run_mode
     # The opportunity anchor is active only when BOTH the profile opts in AND
     # pass-1 reference prices were supplied (two-pass clearing, pass 2). With
     # either missing the whole mechanism is dead code — pass 1 and every
@@ -1635,36 +1678,76 @@ function create_merit_order_book(
         # and the per-generator offered capacity — WITHOUT building the
         # per-period tranche book. The block-commitment clearer consumes these
         # so its commitment MILP sees byte-identical fundamentals and only the
-        # clearing mechanism differs (fair comparison). Default `false` skips
-        # this entirely, so every existing caller is byte-identical.
-        if return_inputs
-            offered = [offered_pmax(g) for g in generators]
-            return (
-                success = true,
-                generators = generators,
-                offered_pmax = offered,
-                timeslots = target_timeslots,
-                resolution_minutes = resolution_minutes,
-                net_demand = net_demand,
-                gross_demand = gross_demand,
-                nd_min = nd_min,
-                nd_span = nd_span,
-                gas_srmc = gas_srmc,
-                committed = committed,
-                hydro_dryness = hydro_dryness,
-                reservoir_drawdown = reservoir_drawdown,
-                hydro_model = hydro_model,
-                water_value_base = water_value_base,
-                water_value_span = water_value_span,
-                water_value_dry_boost = water_value_dry_boost,
-                anchor_active = anchor_active,
-                opportunity_anchor = opportunity_anchor,
-                anchor_prices = anchor_prices,
-                anchor_share = anchor_share,
-                price_cap = price_cap,
-                zone = bidding_zone,
-                day = day,
-            )
+        # clearing mechanism differs (fair comparison). The same NamedTuple
+        # feeds the `:endogenous` must-run commitment MILP below.
+        merit_inputs = (
+            success = true,
+            generators = generators,
+            offered_pmax = [offered_pmax(g) for g in generators],
+            timeslots = target_timeslots,
+            resolution_minutes = resolution_minutes,
+            net_demand = net_demand,
+            gross_demand = gross_demand,
+            nd_min = nd_min,
+            nd_span = nd_span,
+            gas_srmc = gas_srmc,
+            committed = committed,
+            hydro_dryness = hydro_dryness,
+            reservoir_drawdown = reservoir_drawdown,
+            hydro_model = hydro_model,
+            water_value_base = water_value_base,
+            water_value_span = water_value_span,
+            water_value_dry_boost = water_value_dry_boost,
+            anchor_active = anchor_active,
+            opportunity_anchor = opportunity_anchor,
+            anchor_prices = anchor_prices,
+            anchor_share = anchor_share,
+            price_cap = price_cap,
+            zone = bidding_zone,
+            day = day,
+        )
+        return_inputs && return merit_inputs
+
+        # v17 endogenous must-run (the ONE-variable isolation experiment): the
+        # commitment MILP — on the exact fundamentals above, anchored to real
+        # initial conditions — decides WHICH units self-schedule their p_min,
+        # PER HOUR, replacing the static day-level heuristic set. Every other
+        # part of the book (tranche ladder, scarcity, water values, the
+        # must-run price split itself) is untouched. On ANY failure the clear
+        # falls back to the static set — it never breaks.
+        endo_committed = nothing   # Dict{String,Set{String}}: "yyyymmdd-HH00" => codes
+        if must_run_mode == :endogenous
+            LAST_ENDOGENOUS_STATS[] = nothing
+            solver = ENDOGENOUS_COMMITMENT_SOLVER[]
+            if solver === nothing
+                @warn "must_run_mode=:endogenous but no commitment solver registered; using :static" zone=bidding_zone day=day
+            else
+                try
+                    res = solver(merit_inputs)
+                    endo_committed = res.sets
+                    # Sanity metric: hourly Jaccard overlap vs the static set
+                    jac = Float64[]
+                    for (_, s) in endo_committed
+                        uni = length(union(s, committed))
+                        push!(jac, uni == 0 ? 1.0 : length(intersect(s, committed)) / uni)
+                    end
+                    stats = (zone = bidding_zone, day = day,
+                             milp_seconds = res.solve_time, status = res.status,
+                             overlap_jaccard = isempty(jac) ? NaN : sum(jac) / length(jac),
+                             mean_endo_size = isempty(endo_committed) ? 0.0 :
+                                 sum(length(s) for (_, s) in endo_committed) / length(endo_committed),
+                             static_size = length(committed))
+                    LAST_ENDOGENOUS_STATS[] = stats
+                    println("  🕐 Endogenous must-run: MILP $(round(res.solve_time, digits=1))s " *
+                            "($(res.status)), mean committed $(round(stats.mean_endo_size, digits=1)) " *
+                            "vs static $(stats.static_size), overlap (Jaccard) " *
+                            "$(round(stats.overlap_jaccard, digits=2))")
+                catch e
+                    e isa InterruptException && rethrow()
+                    @warn "Endogenous commitment MILP failed; falling back to :static must-run" zone=bidding_zone day=day exception=(e, catch_backtrace())
+                    endo_committed = nothing
+                end
+            end
         end
 
         # Every order is tagged with an owner (Feature 5, strategist hook):
@@ -1760,6 +1843,13 @@ function create_merit_order_book(
                        scarcity_kappa * max(0.0, scarcity_threshold - margin)^2 +
                        peak_kappa * norm_demand^peak_exponent
 
+            # v17: the committed set that gates the must-run split in THIS
+            # slot — the static day-level set, or the MILP's hourly set when
+            # `must_run_mode = :endogenous` succeeded (sub-hour slots share
+            # their hour's set; the MILP clears at hourly resolution).
+            slot_committed = endo_committed === nothing ? committed :
+                get(endo_committed, ts[1:11] * "00", _EMPTY_CODE_SET)
+
             for g in generators
                 if g.fuel_type in WATER_VALUE_FUEL_TYPES
                     # Hydro water value. Two models:
@@ -1828,7 +1918,7 @@ function create_merit_order_book(
                     # few hours below cost. This is what lets midday prices
                     # collapse below thermal SRMC in renewable-surplus hours.
                     must_run_qty = 0.0
-                    if g.code in committed
+                    if g.code in slot_committed
                         must_run_qty = min(g.p_min, offered_pmax(g))
                         # Graduated self-scheduling: the deepest block is
                         # near-free (never shut down), the rest bids below
