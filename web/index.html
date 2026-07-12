@@ -94,11 +94,15 @@
     <h2 class="panel-title">About these numbers</h2>
     <p>
       This is a <strong>no-fit, ex-ante competitive counterfactual</strong> — a
-      fundamentals-based market-clearing model, not a statistical forecaster. Predictions
-      are frozen before the delivery day and never revised; nothing here is fitted to the
-      outcomes it is scored against. Persistent gaps between simulated and actual prices are
-      therefore <em>findings</em> about how the real market deviates from competitive
-      behavior, not model errors to be tuned away.
+      fundamentals-based market-clearing model, not a statistical forecaster. Each delivery
+      day is a Europe/Athens market day; its prediction is frozen at ~20:00&nbsp;UTC the
+      evening before (an hour-level guard means no value is ever written after its delivery
+      hour has passed) and never revised, then scored honestly per zone and lead time as
+      days settle. Nothing is fitted to the outcomes it is scored against, so persistent
+      gaps between simulated and actual prices are <em>findings</em> about how the real
+      market deviates from competitive behavior, not model errors to be tuned away.
+      Full methodology:
+      <a href="https://github.com/philokalia-ai/energy-markets#readme">github.com/philokalia-ai/energy-markets</a>.
     </p>
   </section>
 </main>

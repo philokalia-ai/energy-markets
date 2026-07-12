@@ -21,12 +21,29 @@ investigate, not a model failure to calibrate away.
 
 ## Headline results — honest, whole-sample, never cherry-picked
 
-All numbers below are from the fully ex-ante configuration, measured on a
-**frozen 36-day full-year stratified sample** (all 39 zones, every day scored;
-bias = sim − actual). Source of truth:
-[docs/model-spec-exante.md](docs/model-spec-exante.md).
+**Full-year record (cv16).** The current model (`code_version` 16), evaluated
+over the full year **2025-07-01 → 2026-06-30** (365 days, all 39 zones,
+identical-window comparison against the previous cv14 record, resolution-aware
+hourly eval; bias = sim − actual):
 
-**Aggregate: mean corr 0.61, mean MAE €30.7/MWh, mean bias −8.5.**
+**Aggregate over 39 zones: mean corr 0.45 → 0.56, mean MAE €42.0 → €29.9,
+mean bias +17.5 → −1.5 (cv14 → cv16).**
+
+The big movers (corr / MAE €/MWh, cv14 → cv16): DE_LU 0.50/49 → **0.85/18**,
+SK 0.33/176 → 0.72/33, PL 0.27/71 → 0.67/28, Baltics (LT/LV/EE) ~0.42/78 →
+~0.72/40, CZ 0.41/31 → 0.72/23, NO2 0.40/20 → 0.77/15, CH 0.36/31 → 0.65/23.
+**GR — the guard zone — held: 0.85/21.0 → 0.86/20.8.**
+
+Still weak on the full year, stated plainly: **NO1 corr 0.01 / MAE €63**
+(reservoir-regime import flows — the known open problem), **DK1/DK2 corr
+0.05/0.21**, **NO3 0.13**, **AT 0.24**, **SI 0.26**, **BE 0.30**.
+
+### By strategy regime — frozen 36-day stratified sample
+
+The per-regime breakdown below is measured on a **frozen 36-day full-year
+stratified sample** (all 39 zones, every day scored; bias = sim − actual).
+Source of truth: [docs/model-spec-exante.md](docs/model-spec-exante.md).
+Aggregate on this sample: mean corr 0.61, mean MAE €30.7/MWh, mean bias −8.5.
 
 By strategy regime (corr / MAE €/MWh / bias):
 
@@ -57,10 +74,10 @@ By strategy regime (corr / MAE €/MWh / bias):
 
 Where it's strong: wherever gas or truthed thermal sets the price (Greece,
 Germany, Iberia, Italy, France), correlation sits at 0.74–0.82 with MAE in the
-€20s. Greece — the longest-validated zone — holds **corr 0.852 over the
-368-day full-year backfill**.
+€20s. Greece — the longest-validated zone — holds **corr 0.86 / MAE €20.8 over
+the full-year cv16 backfill** (2025-07-01 → 2026-06-30).
 
-The honest weak spots, stated plainly:
+The honest weak spots on this sample, stated plainly:
 
 - **NO1 (corr 0.08)** — the known open problem. Its import flow regime flips
   week to week; neither an 8-week climatology nor D-7 recency captures it. It
@@ -132,6 +149,39 @@ regimes persist week to week; a median mis-states them). Post-auction data
 such as scheduled commercial exchanges is inadmissible by construction.
 Evidence per border class: [docs/ex-ante-flows.md](docs/ex-ante-flows.md).
 
+## Resolution & solvers
+
+- **15-minute clearing (opt-in, PR #115).** `clear_resolution_minutes=15`
+  clears the coupled footprint on native 15-minute periods (the real
+  auction's market time unit). Hourly inputs are upsampled by **replication, never
+  division**, and the reduces-to-hourly proof is bit-exact: at 60-minute
+  settings the refactored path reproduces the hourly prices bit-identically.
+  Honest note: scored against native 15-minute actuals the finer clear is a
+  *harder* target, not a better score — mean corr 0.582 vs 0.615 hourly
+  (GR 0.751 → 0.680). 15-minute clearing buys market fidelity, not
+  correlation.
+- **HiGHS is now a working option for the full 39-zone clear.** The
+  per-period decomposition solves each period's coupled MILP independently:
+  prices are **bit-identical to Gurobi's** at 60-minute resolution, at
+  ~511 s wall per day vs Gurobi's ~10 s. Gurobi remains the default fast
+  path; no solver license is required for any tier anymore.
+
+## Negative results — mechanisms tested and rejected
+
+Complex/temporal orders — block orders, unit commitment inside the clearing,
+endogenous must-run — were tested three ways (ramp-only coupling, mini-UC with
+fix-and-reprice on GR and DE_LU, and a one-variable endogenous-must-run swap
+inside the calibrated book across 16 zones) and **do not improve the
+counterfactual as an always-on mechanism**: the calibrated per-period book
+with correct costs (above all the hydro water value) already captures what
+they add. The one live lead is a **winter-gated endogenous must-run** (the
+signal: 11/14 zones improve on a winter day; the same mechanism hurts in
+summer). This is a feature of the method, not a failure: mechanisms are
+adopted only when they beat the calibrated baseline under fair, one-variable
+tests. Full record:
+[docs/complex-orders-investigation.md](docs/complex-orders-investigation.md);
+runnable prototypes in [docs/experiments/](docs/experiments/README.md).
+
 ## Reproduce it — no database required
 
 The full pipeline runs offline from a published, self-contained data extract
@@ -189,19 +239,26 @@ hooks: `strategist` (e.g. an incumbent marking up its fleet 20% — the
 market-power counterfactual), `fleet_modifier` (retire / add / derate physical
 units), `load_modifier` / `renewable_modifier`.
 
-## Live forecasting (in progress)
+## Live forecasting — live at [energy.philokalia.ai](https://energy.philokalia.ai)
 
-The same model runs as a genuine forward product. A daily CI run predicts
-every future day whose D-1 inputs (ENTSO-E load and wind/solar forecasts,
-offered ATC) are complete, and stores predictions in
-`simulations.forecast_prices` keyed by `(hour, zone, lead_days,
-code_version)`. Once a day has realized, its prediction is **never
-overwritten** — the record is append-only by construction. Realized days are
-then scored honestly, per region and per lead time, into
-`simulations.forecast_scores`, and the results are browsable in a static SPA
-under `web/` (default region: Greece). Because every input is D-1-legal, the
-backtest metrics above are the expected live performance — there is no
-train/serve gap to hide.
+The same model now runs daily as a genuine forward product:
+**<https://energy.philokalia.ai>**. Every evening a **20:00 UTC pipeline**
+fills the evening ENTSO-E data (D-1 load and wind/solar forecasts, offered
+ATC), runs the 39-zone coupled clear, and publishes the upcoming market days.
+A delivery day is a **Europe/Athens market day** — the 24-hour window starting
+21:00/22:00 UTC the previous evening (DST-aware), stitched from two UTC-day
+solves; a day is published only when complete. An **hour-level ex-ante guard**
+ensures no row is ever written whose delivery hour has already passed at
+prediction time, and predictions are **frozen — never revised**; the record in
+`simulations.forecast_prices` is append-only by construction. As days realize
+they are scored per zone × lead time into `simulations.forecast_scores`,
+browsable in the SPA under `web/`.
+
+First live day (2026-07-12): **GR corr 0.92 / MAE €21.7 at lead 1**. Lead-1 is
+the honest ceiling: the decisive inputs (ENTSO-E 6.1.B load and 14.1.D
+wind/solar forecasts) are D-1-only items, so longer leads run on degraded
+inputs by construction. Because every input is D-1-legal, the backtest metrics
+above are the expected live performance — there is no train/serve gap to hide.
 
 ## Repository map
 
@@ -211,25 +268,26 @@ src/        The Euphemia library: merit-order book construction (MeritOrderBook.
             unit commitment (UnitCommitment.jl), data access (dbutils.jl)
 bin/        Runners: reproduce.jl (public reproduction), build_duckdb_extract.jl /
             build_duckdb_from_parquet.jl (data artifacts), backfill runners
-docs/       Model spec, calibration atlas + iteration history, reproducibility —
+docs/       Model spec, calibration atlas + iteration history, reproducibility,
+            negative-results record (complex-orders-investigation.md, experiments/) —
             see the docs index: docs/README.md
 test/       Core test suite (julia --project=. test/runtests.jl), plus manual/
             DB-dependent tests and scripts/ benchmarks
 results/    Committed reference metrics for reproduction drift checks
 thesis/     LaTeX thesis documentation
-web/        Static SPA for browsing live forecast scores (in development)
+web/        Static SPA for the live forecast browser (energy.philokalia.ai)
 ```
 
 ## Requirements
 
 - **Julia** (project environment in `Project.toml`; `julia --project=. -e
   "using Pkg; Pkg.instantiate()"`).
-- **Solver:** single-zone clearing works fine on the bundled open-source
-  **HiGHS** — no license needed, metrics identical to Gurobi's. The **39-zone
-  coupled multi-zone MIP currently needs Gurobi** in practice: HiGHS found no
-  incumbent within a 1-hour budget on the full footprint, while Gurobi clears
-  each day in seconds. A per-hour decomposition of the multi-zone problem is
-  the planned fix to make that tier open-solver-viable.
+- **Solver:** the bundled open-source **HiGHS** now covers every tier — no
+  license needed. Single-zone clearing has always run on HiGHS with metrics
+  identical to Gurobi's, and the per-period decomposition makes the full
+  39-zone coupled clear HiGHS-viable too (bit-identical prices to Gurobi at
+  60-minute resolution, ~511 s/day vs ~10 s). **Gurobi**, if licensed, remains
+  the default fast path.
 - **Data:** either the public DuckDB extract (recommended; no database
   required) or a PostgreSQL database with the ENTSO-E schema (maintainers).
 
