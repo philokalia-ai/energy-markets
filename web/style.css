@@ -572,15 +572,16 @@ select {
 }
 
 /* ---------- map view ---------- */
-.map-wrap { max-width: 760px; }
+.map-wrap { max-width: 560px; margin: 0 auto; }
 .map-wrap svg { display: block; width: 100%; height: auto; }
-.map-tile { cursor: pointer; }
-.map-tile:hover rect, .map-tile:focus-visible rect {
+.map-poly { cursor: pointer; }
+.map-poly:hover, .map-poly:focus-visible {
   stroke: var(--deep-blue);
   stroke-width: 2;
+  filter: brightness(1.06);
 }
-.map-tile:focus-visible { outline: none; }
-.map-tile text { pointer-events: none; font-family: var(--sans); }
+.map-poly:focus-visible { outline: none; }
+.map-wrap text { font-family: var(--sans); }
 .map-day-filter { min-width: 260px; }
 .map-day-filter input[type="range"] {
   width: 100%;
