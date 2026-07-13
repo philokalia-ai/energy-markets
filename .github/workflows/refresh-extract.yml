@@ -37,6 +37,13 @@ on:
         type: boolean
 
 env:
+  # When the S3 secrets are present, extract_store.sh targets Cloudflare R2
+  # instead of the local canonical dir (zero code change; absent = local).
+  EXTRACT_S3_ENDPOINT: ${{ secrets.EXTRACT_S3_ENDPOINT }}
+  EXTRACT_S3_BUCKET: ${{ secrets.EXTRACT_S3_BUCKET }}
+  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+  AWS_DEFAULT_REGION: auto
   JULIA_VERSION: "1.12"
   EXTRACT_NAME: ${{ inputs.extract_name || 'euphemia-live.duckdb' }}
 
