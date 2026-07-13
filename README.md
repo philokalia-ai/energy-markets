@@ -216,6 +216,48 @@ diffs against the committed reference metrics, flagging any drift. Model
 results go to a separate `data/results.duckdb`; the source extract stays
 read-only.
 
+### Living extract — a daily-refreshed canonical copy
+
+Besides the frozen public artifact, a **living extract** is kept current by a
+daily workflow ([.github/workflows/refresh-extract.yml](.github/workflows/refresh-extract.yml),
+02:00 UTC): `bin/refresh_duckdb_extract.jl` opens the extract read-write and
+appends, per table, only rows newer than its max timestamp —
+`entsoe.*` / `yfinance.*` from the energy DB, the `weather` schema
+(`city`, `city_forecast`, `city_forecast_vintage`) from the silentech weather
+DB, and `weather.cell_hourly` (the ERA5 wind/GHI feature history at the
+wind-catalogue cells behind `bin/res_models_v1.json`) from the public
+open-meteo archive API. Mutable registry-like tables (unit registry, outages,
+reservoir filling, simulations caches) are re-pulled wholesale instead.
+
+The canonical refreshed copy lives in the extract store at
+**`/opt/euphemia/extracts/euphemia-live.duckdb`** — fetch it with
+`bin/extract_store.sh pull euphemia-live.duckdb <dest>` (local canonical dir by
+default, overridable via `EUPHEMIA_EXTRACT_STORE`; setting
+`EXTRACT_S3_ENDPOINT` + `EXTRACT_S3_BUCKET` flips the same commands to an
+S3-compatible store — the Cloudflare R2 / seaweedfs hook, env-only).
+
+**Who uses it:** read-only consumers — eval scripts, scenario runs,
+reproduction — already get an extract by default via the library's
+auto-detection of `data/extracts/euphemia-public.duckdb`; point
+`EUPHEMIA_DUCKDB_PATH` at the living copy to run them on current data:
+
+```bash
+EUPHEMIA_DUCKDB_PATH=/opt/euphemia/extracts/euphemia-live.duckdb \
+  julia --project=. test/scripts/eval_pricing_accuracy.jl merit_order "2026-07-10" GR
+```
+
+**Honest scoping — what stays on Postgres:** the daily forecast pipeline
+(`bin/daily_forecast.jl`) is NOT switched to the extract: it *writes*
+`forecast_prices` via LibPQ, and the DuckDB backend skips the Postgres pool
+entirely — a mixed read-from-extract / write-to-Postgres mode does not exist.
+Moving it is a known follow-up, not part of the living-extract scope.
+
+**Maintenance:** appended slabs land after the originally-sorted rows, so daily
+refreshes slowly degrade the extract's row-group zonemap pruning (results stay
+correct; scans get gradually slower). Run a monthly full rebuild
+(`bin/build_duckdb_extract.jl`, then `bin/extract_store.sh push … euphemia-live.duckdb`)
+to restore the global sort.
+
 ## Scenario API — counterfactuals on the counterfactual
 
 Perturb demand, supply, bidding behaviour, or the physical fleet, and re-clear

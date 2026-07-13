@@ -26,9 +26,25 @@
 #     ARTIFACT_VERSION=v1 MAX_SIZE_GB=12 \
 #     julia --project=. bin/build_duckdb_extract.jl
 #
-# Reads from Postgres (normal .env / ENERGY_CONN_STR). The DuckDB backend the
-# extract feeds is READ-ONLY in the library (writes route to a separate
-# data/results.duckdb; see src/dbutils.jl).
+# Reads from Postgres: `entsoe.*` / `yfinance.*` / `simulations.*` via the
+# normal .env ENERGY_CONN_STR, and (when WEATHER_CONN_STR is set) the `weather`
+# schema from the SEPARATE silentech database — `city` (full),
+# `city_forecast` (last WEATHER_BACK_DAYS, default 400), `city_forecast_vintage`
+# (full). Set INCLUDE_WEATHER=false to skip the weather schema explicitly.
+#
+# Optionally seeds `weather.cell_hourly` (zone, lat, lon, h, v100, ghi, source)
+# from CELL_HOURLY_CSV — the ERA5 feature history at the wind-catalogue cells
+# that the weather-RES models (bin/res_models_v1.json) were fitted on; filtered
+# to ZONES. bin/refresh_duckdb_extract.jl keeps it current from the public
+# open-meteo archive API.
+#
+# The DuckDB backend the extract feeds is READ-ONLY in the library (writes
+# route to a separate data/results.duckdb; see src/dbutils.jl). Shared helpers
+# (table specs, naive-UTC projection, chunked build) live in
+# bin/extract_common.jl and are reused by bin/refresh_duckdb_extract.jl.
+
+# The builder must read the LIVE Postgres, never an auto-detected local extract.
+haskey(ENV, "EUPHEMIA_DATA_STORE") || (ENV["EUPHEMIA_DATA_STORE"] = "postgres")
 
 using Euphemia
 using DataFrames
@@ -36,6 +52,10 @@ using Dates
 using DuckDB
 using Printf
 using SHA
+
+include(joinpath(@__DIR__, "extract_common.jl"))
+QUERY_FNS[:energy] = (sql, args=Any[]) -> Euphemia.sql2df_with_retry(sql, args)
+QUERY_FNS[:weather] = weather_query
 
 # --------------------------------------------------------------------------
 # Configuration
@@ -50,22 +70,23 @@ const OUT = get(ENV, "OUT", "data/extracts/euphemia_2026_see.duckdb")
 const ARTIFACT_VERSION = get(ENV, "ARTIFACT_VERSION", "v1")
 const PARQUET_DIR = get(ENV, "PARQUET_DIR", "")
 
-# Deep-lookback tables (per-type aggregate + hydro availability) need 400 days
-# back: the 365-day hydro-availability window, 60-day recent-generation filter,
-# and 30-day p95. Shallow aux tables (day-ahead load/RES forecast, ATC, flows,
-# actuals) are same-delivery-day and get a modest pre-roll for month-boundary
-# lookbacks.
-const BACK400 = START_DATE - Day(400)
-const AUX_BACK = START_DATE - Day(parse(Int, get(ENV, "AUX_BACK_DAYS", "31")))
+const AUX_BACK_DAYS = parse(Int, get(ENV, "AUX_BACK_DAYS", "31"))
 
 # Per-UNIT actual-generation output window. :merit_order never runs UC; its only
 # use of the huge per-unit table is get_generators' 60-day recent-generation
 # filter and get_day_outages' 7-day stale-override probe. AGEN_BACK_DAYS=90 keeps
 # a short-window merit extract small; the public artifact uses 400 for robustness
 # (also supports UC-based experiments).
-const AGEN_BACK = START_DATE - Day(parse(Int, get(ENV, "AGEN_BACK_DAYS", "400")))
-# Window end is exclusive at END_DATE + 1 day (whole END_DATE included).
-const END_EXCL = END_DATE + Day(1)
+const AGEN_BACK_DAYS = parse(Int, get(ENV, "AGEN_BACK_DAYS", "400"))
+
+# Weather schema (silentech DB): pulled when WEATHER_CONN_STR is available
+# unless INCLUDE_WEATHER=false. city_forecast is windowed to WEATHER_BACK_DAYS.
+const INCLUDE_WEATHER = lowercase(get(ENV, "INCLUDE_WEATHER", "true")) == "true" &&
+                        haskey(ENV, "WEATHER_CONN_STR")
+const WEATHER_BACK_DAYS = parse(Int, get(ENV, "WEATHER_BACK_DAYS", "400"))
+
+# ERA5 cell-feature seed CSV (header zone,lat,lon,h,v100,ghi). Empty = skip.
+const CELL_HOURLY_CSV = get(ENV, "CELL_HOURLY_CSV", "")
 
 # Size guard. The dominant per-unit table compresses to ~15-20 bytes/row on disk
 # (repeated codes, monotone timestamps), so the uncompressed 250 bytes/row of the
@@ -95,213 +116,14 @@ function free_gb(path::AbstractString)
     return avail_kb / 1e6
 end
 
-# --------------------------------------------------------------------------
-# Postgres → naive-UTC projection helper
-# --------------------------------------------------------------------------
-# Build the column list where every timestamptz column is emitted as
-# `col AT TIME ZONE 'UTC' AS col` (naive UTC) and everything else is passed
-# through unchanged. Keeps the extract's column names identical to the source.
-function projection(schema::String, table::String,
-                    casts::AbstractDict=Dict{String,String}())
-    df = Euphemia.sql2df_with_retry(
-        """
-        SELECT column_name, data_type
-        FROM information_schema.columns
-        WHERE table_schema = \$1 AND table_name = \$2
-        ORDER BY ordinal_position
-        """,
-        [schema, table])
-    isempty(df) && error("Table $schema.$table not found in Postgres")
-    parts = String[]
-    for r in eachrow(df)
-        col = String(r.column_name)
-        if haskey(casts, col)
-            # Explicit type conversion at build time (e.g. the unavailability
-            # table's text start/end_outage_utc → TIMESTAMP, so the daily outage
-            # probe compares pruned timestamps instead of casting every row).
-            push!(parts, "\"$col\"::$(casts[col]) AS \"$col\"")
-        elseif String(r.data_type) == "timestamp with time zone"
-            push!(parts, "\"$col\" AT TIME ZONE 'UTC' AS \"$col\"")
-        else
-            push!(parts, "\"$col\"")
-        end
-    end
-    return join(parts, ", ")
-end
-
-# --------------------------------------------------------------------------
-# Table specifications: (schema, table, where, args, chunk_col)
-# `where` may be "" for a full table. `chunk_col` names the timestamptz column to
-# window on when the table is large enough to require monthly chunking (or "").
-# --------------------------------------------------------------------------
-# Empty cast map reused by every spec that needs no explicit type conversion.
-const NOCAST = Dict{String,String}()
-
 function table_specs()
-    specs = Vector{NamedTuple}()
-
-    gen_codes = "SELECT generation_unit_code FROM entsoe.production_and_generation_units WHERE area_map_code = ANY(\$1)"
-    unit_codes = "$gen_codes UNION SELECT production_unit_code FROM entsoe.production_and_generation_units WHERE area_map_code = ANY(\$1)"
-
-    # `sort_by` is the ORDER BY the table is MATERIALIZED with, so DuckDB row-group
-    # zonemaps on (zone, date) actually prune per-zone/per-day scans (unsorted
-    # heap order pruned nothing). Chunked tables are sorted WITHIN each monthly
-    # chunk (giving month-level date locality plus in-chunk zone/unit locality).
-    push!(specs, (schema="entsoe", table="day_ahead_total_load_forecast",
-        where="area_map_code = ANY(\$1) AND date_time_utc >= (\$2::date::timestamp AT TIME ZONE 'UTC') AND date_time_utc < (\$3::date::timestamp AT TIME ZONE 'UTC')",
-        args=Any[ZONES, AUX_BACK, END_EXCL], chunk_col="date_time_utc",
-        sort_by="area_map_code, date_time_utc", casts=NOCAST))
-
-    push!(specs, (schema="entsoe", table="generation_forecasts_for_wind_and_solar",
-        where="area_map_code = ANY(\$1) AND date_time_utc >= (\$2::date::timestamp AT TIME ZONE 'UTC') AND date_time_utc < (\$3::date::timestamp AT TIME ZONE 'UTC')",
-        args=Any[ZONES, AUX_BACK, END_EXCL], chunk_col="date_time_utc",
-        sort_by="area_map_code, date_time_utc", casts=NOCAST))
-
-    push!(specs, (schema="entsoe", table="energy_prices",
-        where="map_code = ANY(\$1) AND contract_type = 'Day-ahead' AND date_time_utc >= (\$2::date::timestamp AT TIME ZONE 'UTC') AND date_time_utc < (\$3::date::timestamp AT TIME ZONE 'UTC')",
-        args=Any[ZONES, AUX_BACK, END_EXCL], chunk_col="date_time_utc",
-        sort_by="map_code, date_time_utc", casts=NOCAST))
-
-    push!(specs, (schema="entsoe", table="offered_transfer_capacities_implicit",
-        where="(out_map_code = ANY(\$1) OR in_map_code = ANY(\$1)) AND date_time_utc >= (\$2::date::timestamp AT TIME ZONE 'UTC') AND date_time_utc < (\$3::date::timestamp AT TIME ZONE 'UTC')",
-        args=Any[ZONES, AUX_BACK, END_EXCL], chunk_col="date_time_utc",
-        sort_by="out_map_code, in_map_code, date_time_utc", casts=NOCAST))
-
-    # Explicit (LT + DA-auction) ATC — required by the enriched multi-zone network
-    # build (CH is outside SDAC implicit coupling; Serbia's borders are auctioned).
-    push!(specs, (schema="entsoe", table="offered_transfer_capacities_explicit",
-        where="(out_map_code = ANY(\$1) OR in_map_code = ANY(\$1)) AND date_time_utc >= (\$2::date::timestamp AT TIME ZONE 'UTC') AND date_time_utc < (\$3::date::timestamp AT TIME ZONE 'UTC')",
-        args=Any[ZONES, AUX_BACK, END_EXCL], chunk_col="date_time_utc",
-        sort_by="out_map_code, in_map_code, date_time_utc", casts=NOCAST))
-
-    # physical_flows: match on either side, including _IPS-suffixed aliases
-    push!(specs, (schema="entsoe", table="physical_flows",
-        where="(regexp_replace(in_area_map_code, '_IPS\$', '') = ANY(\$1) OR regexp_replace(out_area_map_code, '_IPS\$', '') = ANY(\$1)) AND date_time_utc >= (\$2::date::timestamp AT TIME ZONE 'UTC') AND date_time_utc < (\$3::date::timestamp AT TIME ZONE 'UTC')",
-        args=Any[ZONES, AUX_BACK, END_EXCL], chunk_col="date_time_utc",
-        sort_by="in_area_map_code, out_area_map_code, date_time_utc", casts=NOCAST))
-
-    # aggregated_generation_per_type: 400-day-back window (30d p95 + 365d hydro avail)
-    push!(specs, (schema="entsoe", table="aggregated_generation_per_type",
-        where="area_map_code = ANY(\$1) AND date_time_utc >= (\$2::date::timestamp AT TIME ZONE 'UTC') AND date_time_utc < (\$3::date::timestamp AT TIME ZONE 'UTC')",
-        args=Any[ZONES, BACK400, END_EXCL], chunk_col="date_time_utc",
-        sort_by="area_map_code, production_type, date_time_utc", casts=NOCAST))
-
-    # aggregated_hydro_storage_filling_rate: FULL history for the zones. The
-    # reservoir-dryness comparison medians over ALL prior years' same weeks, so a
-    # windowed table would truncate the norm and change water-value prices. Weekly
-    # and tiny, so full history is free and keeps prices bit-identical.
-    push!(specs, (schema="entsoe", table="aggregated_hydro_storage_filling_rate",
-        where="area_map_code = ANY(\$1)",
-        args=Any[ZONES], chunk_col="",
-        sort_by="area_map_code, year, week", casts=NOCAST))
-
-    # production_and_generation_units: all history for the zones
-    push!(specs, (schema="entsoe", table="production_and_generation_units",
-        where="area_map_code = ANY(\$1)",
-        args=Any[ZONES], chunk_col="",
-        sort_by="area_map_code, generation_unit_code", casts=NOCAST))
-
-    # unavailability: asset_code in zones' unit/production codes, outage window
-    # overlapping [BACK400, END]. start/end_outage_utc are TEXT timestamps in the
-    # source — cast to TIMESTAMP at build time so the daily outage-overlap probe
-    # is a pruned comparison, not a per-row string cast.
-    push!(specs, (schema="entsoe", table="unavailability_of_production_and_generation_units",
-        where="asset_code IN ($unit_codes) AND start_outage_utc IS NOT NULL AND end_outage_utc IS NOT NULL AND start_outage_utc::timestamp <= \$2::date::timestamp AND end_outage_utc::timestamp >= \$3::date::timestamp",
-        args=Any[ZONES, END_DATE, BACK400], chunk_col="",
-        sort_by="asset_code, start_outage_utc",
-        casts=Dict("start_outage_utc" => "TIMESTAMP", "end_outage_utc" => "TIMESTAMP")))
-
-    # actual_generation_output_per_generation_unit: the big one (~125M rows for a
-    # 39-zone 3.5-year build). Built in monthly chunks via chunk_col; each chunk
-    # sorted by (unit, date) so the 60-day recent-generation probe and unit-level
-    # point probes prune to a unit's row groups within the date-pruned months.
-    push!(specs, (schema="entsoe", table="actual_generation_output_per_generation_unit",
-        where="generation_unit_code IN ($gen_codes) AND date_time_utc >= (\$2::date::timestamp AT TIME ZONE 'UTC') AND date_time_utc < (\$3::date::timestamp AT TIME ZONE 'UTC')",
-        args=Any[ZONES, AGEN_BACK, END_EXCL], chunk_col="date_time_utc",
-        sort_by="generation_unit_code, date_time_utc", casts=NOCAST))
-
-    # yfinance: full history (no zone/date filter) — ~1k rows each
-    push!(specs, (schema="yfinance", table="ttf_f", where="", args=Any[], chunk_col="",
-        sort_by="", casts=NOCAST))
-    push!(specs, (schema="yfinance", table="eua_co2", where="", args=Any[], chunk_col="",
-        sort_by="", casts=NOCAST))
-
-    # simulations reference caches used by the library / strategist context
-    push!(specs, (schema="simulations", table="generator_inferred_parameters",
-        where="bidding_zone = ANY(\$1)", args=Any[ZONES], chunk_col="",
-        sort_by="", casts=NOCAST))
-    push!(specs, (schema="simulations", table="unit_firms",
-        where="zone = ANY(\$1)", args=Any[ZONES], chunk_col="",
-        sort_by="", casts=NOCAST))
-
+    specs = entsoe_table_specs(ZONES; start_date=START_DATE, end_date=END_DATE,
+                               aux_back_days=AUX_BACK_DAYS,
+                               agen_back_days=AGEN_BACK_DAYS)
+    append!(specs, yfinance_table_specs())
+    append!(specs, simulations_table_specs(ZONES))
+    INCLUDE_WEATHER && append!(specs, weather_table_specs(back_days=WEATHER_BACK_DAYS))
     return specs
-end
-
-count_sql(spec) = "SELECT count(*) AS c FROM $(spec.schema).$(spec.table)" *
-                  (isempty(spec.where) ? "" : " WHERE $(spec.where)")
-
-select_sql(spec) = "SELECT $(projection(spec.schema, spec.table, spec.casts)) FROM $(spec.schema).$(spec.table)" *
-                   (isempty(spec.where) ? "" : " WHERE $(spec.where)")
-
-# Month boundaries [lo, hi) covering [from, until).
-function month_ranges(from::Date, until::Date)
-    ranges = Tuple{Date,Date}[]
-    lo = firstdayofmonth(from)
-    while lo < until
-        hi = lo + Month(1)
-        push!(ranges, (max(lo, from), min(hi, until)))
-        lo = hi
-    end
-    return ranges
-end
-
-# --------------------------------------------------------------------------
-# Build one DuckDB table from a spec (whole or monthly-chunked), returning rows.
-# --------------------------------------------------------------------------
-function build_table!(con, spec, cols::String, rowcount::Int)
-    fqtn = "$(spec.schema).$(spec.table)"
-    tgt = "\"$(spec.schema)\".\"$(spec.table)\""
-    order = isempty(spec.sort_by) ? "" : " ORDER BY $(spec.sort_by)"
-
-    if rowcount > CHUNK_THRESHOLD && !isempty(spec.chunk_col)
-        # Monthly-chunked build: the window is (args[2], args[3]) as Dates.
-        from = Date(spec.args[2]); until = Date(spec.args[3])
-        ranges = month_ranges(from, until)
-        base_where = spec.where
-        created = false
-        total = 0
-        for (i, (lo, hi)) in enumerate(ranges)
-            # Append month bounds using two fresh positional params after the
-            # spec's own args (postgres binds by position).
-            n = length(spec.args)
-            mwhere = base_where *
-                " AND $(spec.chunk_col) >= (\$$(n+1)::date::timestamp AT TIME ZONE 'UTC')" *
-                " AND $(spec.chunk_col) <  (\$$(n+2)::date::timestamp AT TIME ZONE 'UTC')"
-            sql = "SELECT $cols FROM $(spec.schema).$(spec.table) WHERE $mwhere"
-            df = Euphemia.sql2df_with_retry(sql, Any[spec.args..., lo, hi])
-            view = "_stage_chunk"
-            DuckDB.register_data_frame(con, df, view)
-            if !created
-                DBInterface.execute(con, "CREATE TABLE $tgt AS SELECT * FROM $view$order")
-                created = true
-            else
-                DBInterface.execute(con, "INSERT INTO $tgt SELECT * FROM $view$order")
-            end
-            DuckDB.unregister_data_frame(con, view)
-            total += nrow(df)
-            @printf("      chunk %2d/%2d  %s..%s  %10d rows  (cum %d)\n",
-                    i, length(ranges), lo, hi, nrow(df), total)
-            flush(stdout)
-        end
-        return total
-    else
-        df = Euphemia.sql2df_with_retry(select_sql(spec), spec.args)
-        view = "_stage_" * replace(fqtn, "." => "_")
-        DuckDB.register_data_frame(con, df, view)
-        DBInterface.execute(con, "CREATE TABLE $tgt AS SELECT * FROM $view$order")
-        DuckDB.unregister_data_frame(con, view)
-        return nrow(df)
-    end
 end
 
 # --------------------------------------------------------------------------
@@ -316,7 +138,7 @@ function write_manifest(path::String, tables::Vector{<:NamedTuple}, total_rows::
     println(io, "  \"build_timestamp_utc\": ", json_str(string(now(UTC))), ",")
     println(io, "  \"clearing_window\": {\"start\": ", json_str(string(START_DATE)),
             ", \"end\": ", json_str(string(END_DATE)), "},")
-    println(io, "  \"per_unit_output_lookback_start\": ", json_str(string(AGEN_BACK)), ",")
+    println(io, "  \"per_unit_output_lookback_start\": ", json_str(string(START_DATE - Day(AGEN_BACK_DAYS))), ",")
     println(io, "  \"source_data_cutoff\": ", json_str(string(END_DATE)), ",")
     println(io, "  \"zones\": [", join(json_str.(ZONES), ", "), "],")
     println(io, "  \"total_rows\": ", total_rows, ",")
@@ -336,6 +158,17 @@ function write_manifest(path::String, tables::Vector{<:NamedTuple}, total_rows::
     write(path, take!(io))
 end
 
+# Emit one extract table to the canonical parquet dir; returns the manifest
+# fields (parquet path relative to PARQUET_DIR, bytes, sha256).
+function emit_parquet(con, schema::String, table::String)
+    isempty(PARQUET_DIR) && return (nothing, 0, nothing)
+    parquet_rel = "$schema.$table.parquet"
+    pq = joinpath(PARQUET_DIR, parquet_rel)
+    DBInterface.execute(con,
+        "COPY \"$schema\".\"$table\" TO '$pq' (FORMAT PARQUET, COMPRESSION 'zstd')")
+    return (parquet_rel, filesize(pq), open(f -> bytes2hex(sha256(f)), pq))
+end
+
 # --------------------------------------------------------------------------
 # Main
 # --------------------------------------------------------------------------
@@ -345,10 +178,15 @@ function main()
     println("  artifact : ", ARTIFACT_VERSION)
     println("  zones    : ", length(ZONES), "  (", join(ZONES, ","), ")")
     println("  window   : ", START_DATE, " .. ", END_DATE,
-            "  (aux back to ", AUX_BACK, "; per-type back to ", BACK400,
-            "; per-unit output back to ", AGEN_BACK, ")")
+            "  (aux back to ", START_DATE - Day(AUX_BACK_DAYS),
+            "; per-type back to ", START_DATE - Day(400),
+            "; per-unit output back to ", START_DATE - Day(AGEN_BACK_DAYS), ")")
     println("  duckdb   : ", OUT)
     println("  parquet  : ", isempty(PARQUET_DIR) ? "(disabled)" : PARQUET_DIR)
+    println("  weather  : ", INCLUDE_WEATHER ?
+            "yes (city_forecast back $(WEATHER_BACK_DAYS) days)" :
+            "no (WEATHER_CONN_STR unset or INCLUDE_WEATHER=false)")
+    println("  cell CSV : ", isempty(CELL_HOURLY_CSV) ? "(none)" : CELL_HOURLY_CSV)
     println()
 
     specs = table_specs()
@@ -358,7 +196,8 @@ function main()
     total_rows = 0
     counts = Dict{String,Int}()
     for spec in specs
-        c = Euphemia.sql2df_with_retry(count_sql(spec), spec.args).c[1]
+        (where, args) = build_where_args(spec)
+        c = query_fn(spec.source)(count_sql(spec, where), args).c[1]
         c = c === missing ? 0 : Int(c)
         counts["$(spec.schema).$(spec.table)"] = c
         total_rows += c
@@ -407,26 +246,16 @@ function main()
     for spec in specs
         fqtn = "$(spec.schema).$(spec.table)"
         expected = counts[fqtn]
-        chunked = expected > CHUNK_THRESHOLD && !isempty(spec.chunk_col)
+        chunked = expected > CHUNK_THRESHOLD && spec.window !== nothing
         fg = free_gb(OUT)
         if fg < MIN_FREE_GB
             return abort_build("free space $(round(fg, digits=1)) GB < floor $(MIN_FREE_GB) GB before $fqtn")
         end
         @printf("  loading %-55s %s  [free %.1f GB]\n", fqtn, chunked ? "(monthly chunks)" : "", fg)
         flush(stdout)
-        cols = projection(spec.schema, spec.table, spec.casts)
-        n = build_table!(con, spec, cols, expected)
+        n = build_table!(con, spec; chunk_threshold=CHUNK_THRESHOLD, expected=expected)
 
-        # Emit parquet (zstd) for this table.
-        parquet_rel = nothing; parquet_bytes = 0; sha = nothing
-        if !isempty(PARQUET_DIR)
-            parquet_rel = "$(spec.schema).$(spec.table).parquet"
-            pq = joinpath(PARQUET_DIR, parquet_rel)
-            DBInterface.execute(con,
-                "COPY \"$(spec.schema)\".\"$(spec.table)\" TO '$pq' (FORMAT PARQUET, COMPRESSION 'zstd')")
-            parquet_bytes = filesize(pq)
-            sha = open(f -> bytes2hex(sha256(f)), pq)
-        end
+        (parquet_rel, parquet_bytes, sha) = emit_parquet(con, spec.schema, spec.table)
         push!(manifest_tables, (name=fqtn, rows=n, parquet=parquet_rel,
                                 parquet_bytes=parquet_bytes, sha=sha))
         fg2 = free_gb(OUT)
@@ -438,8 +267,21 @@ function main()
         end
     end
 
+    # --- weather.cell_hourly seed (ERA5 feature history, filtered to ZONES) ---
+    if !isempty(CELL_HOURLY_CSV)
+        println("  seeding weather.cell_hourly from ", CELL_HOURLY_CSV)
+        flush(stdout)
+        n = seed_cell_hourly!(con, CELL_HOURLY_CSV; zones=ZONES)
+        (parquet_rel, parquet_bytes, sha) = emit_parquet(con, "weather", "cell_hourly")
+        push!(manifest_tables, (name="weather.cell_hourly", rows=n, parquet=parquet_rel,
+                                parquet_bytes=parquet_bytes, sha=sha))
+        total_rows += n
+        @printf("      %10d rows (source='era5')\n", n)
+    end
+
     DBInterface.close!(con)
     close(db)
+    close_weather_connection!()
 
     duckdb_bytes = filesize(OUT)
 

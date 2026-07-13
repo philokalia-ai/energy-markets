@@ -6,6 +6,15 @@ checksums, and run one command. Everything the model reads (ENTSO-E fundamentals
 TTF gas, EUA carbon) is bundled; the pipeline clears the market, saves prices to a
 local file, and scores them against the bundled day-ahead actuals.
 
+> **Frozen vs living.** This doc describes the *frozen, published* artifact.
+> There is also a *living* extract kept current by a daily incremental refresh
+> (`bin/refresh_duckdb_extract.jl` via `.github/workflows/refresh-extract.yml`,
+> pulled/pushed with `bin/extract_store.sh`; canonical copy
+> `/opt/euphemia/extracts/euphemia-live.duckdb`). Incremental appends slowly
+> degrade the sorted extract's row-group zonemap pruning (correct results,
+> gradually slower scans), so the living extract gets a monthly full rebuild —
+> see the "Living extract" section of the README.
+
 ## What's in the artifact
 
 - **Footprint:** 39 EU bidding zones (the calibrated footprint — SEE, Iberia,
