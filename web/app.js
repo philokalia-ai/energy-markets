@@ -164,6 +164,14 @@
 
   // ---------- view switching ----------
 
+  var VIEW_CRUMBS = {
+    horizon: "next 7 days",
+    map: "map",
+    explorer: "zone explorer",
+    board: "scoreboard",
+    cases: "case studies"
+  };
+
   function setView(v) {
     state.view = v;
     $("view-explorer").hidden = v !== "explorer";
@@ -171,6 +179,8 @@
     $("view-horizon").hidden = v !== "horizon";
     $("view-map").hidden = v !== "map";
     $("view-cases").hidden = v !== "cases";
+    var crumb = $("crumb-view");
+    if (crumb) crumb.textContent = VIEW_CRUMBS[v] ? "/ " + VIEW_CRUMBS[v] : "";
     if (v === "map") loadMap().then(renderMap);
     document.querySelectorAll(".tab").forEach(function (t) {
       t.setAttribute("aria-selected", String(t.dataset.view === v));
