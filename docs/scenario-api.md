@@ -167,6 +167,38 @@ The same five hooks remain available as loose kwargs on the single-zone
 renewable_modifier=…, extra_orders=…, strategist=…, fleet_modifier=…)` path —
 unchanged, plus the new `fleet_modifier`.
 
+## Analyzing scenario outputs — the counterfactual-on-the-counterfactual workflow
+
+The full loop is three beats:
+
+1. **Define** a scenario with the hooks (`load_modifier` / `renewable_modifier`
+   / `extra_orders` / `strategist` / `fleet_modifier`, or a `ZoneScenario`
+   bundling them).
+2. **Run** it labeled: pass a distinct `clearing_mode` label so baseline and
+   counterfactual rows coexist in `simulations.energy_prices`
+   (single-zone: `generate_energy_prices(zone, day; save_to_db=true,
+   clearing_mode="my_scenario", load_modifier=…)`). Offline, results persist to
+   `data/results.duckdb`.
+3. **Analyze** with `queries/load_weighted_price_delta.sql`: given two
+   `clearing_mode` labels, a zone and a date window, it returns the
+   load-weighted average price of each run, the load-weighted **delta**
+   (€/MWh — "how much more people pay per MWh", weighted by the model's own
+   demand series, the day-ahead load forecast) and the window + annualized
+   extra cost in €m. Wrapper:
+
+   ```bash
+   julia --project=. bin/scenario_delta.jl <baseline_label> <scenario_label> \
+       <zone> <start> <end_exclusive>
+   julia --project=. bin/scenario_delta.jl gr_scn_base gr_scn_dc574 GR 2025-07-01 2026-07-01
+   ```
+
+Two complete worked exercises live in
+[`docs/experiments/scenario-exercises/`](experiments/scenario-exercises/README.md)
+— a 574 MW always-on data center in GR (`load_modifier`) and cold ironing at
+the 21 monitored Greek ports (`extra_orders` sized by a measured hourly OPS
+profile — the real-data incarnation of example (i) above). Copy either script
+to run your own scenario in minutes.
+
 ## Deferred (honest notes)
 
 - **`:merit_order` only.** Scenarios thread through the merit-order book (single
