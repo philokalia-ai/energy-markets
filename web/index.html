@@ -40,6 +40,7 @@
     <button id="tab-map" class="tab" role="tab" aria-selected="false" data-view="map">Map</button>
     <button id="tab-explorer" class="tab" role="tab" aria-selected="false" data-view="explorer">Zone explorer</button>
     <button id="tab-board" class="tab" role="tab" aria-selected="false" data-view="board">Scoreboard</button>
+    <button id="tab-cases" class="tab" role="tab" aria-selected="false" data-view="cases">Case studies</button>
   </nav>
 </div>
 
@@ -177,6 +178,174 @@
         Hover a cell for the number of scored days.
       </p>
     </div>
+  </section>
+
+  <!-- ============ Case studies ============ -->
+  <section id="view-cases" class="view" role="tabpanel" aria-labelledby="tab-cases" hidden>
+
+    <div class="chart-card">
+      <div class="chart-head">
+        <h2 class="chart-title">Case studies — counterfactuals on the counterfactual</h2>
+        <p class="chart-sub">
+          Beyond scoring, the same engine answers <em>what-if</em> questions. Each case study
+          defines a scenario through the library's <strong>scenario hooks</strong>
+          (<a href="https://github.com/philokalia-ai/energy-markets/blob/main/docs/scenario-api.md">the
+          scenario API</a>), re-clears a full year of Greek market days offline against the
+          published data extract, and compares against the identically built baseline. The
+          objective is always the same question: <strong>if X connects to the grid, how much
+          more does everyone pay?</strong> The two runs differ only in the scenario, so the
+          price delta is causal within the model — and because the model is a competitive
+          counterfactual, these are competitive-market estimates.
+          Full records, scripts and provenance:
+          <a href="https://github.com/philokalia-ai/energy-markets/tree/main/docs/experiments/scenario-exercises">docs/experiments/scenario-exercises</a>.
+        </p>
+      </div>
+    </div>
+
+    <!-- Case 1: data center -->
+    <article class="chart-card case-card" id="case-datacenter">
+      <div class="chart-head">
+        <h2 class="chart-title">1 · A 574&nbsp;MW data center connects in Greece</h2>
+        <p class="chart-sub"><strong>Objective.</strong> A hyperscale data center draws a
+          constant 574&nbsp;MW — about 9% of average Greek load — in every hour of the year.
+          What does that do to the day-ahead price that <em>every other consumer</em> pays?
+          Firm always-on demand belongs in the load series itself, so the scenario uses the
+          <code>load_modifier</code> hook: the extra megawatts propagate into net demand,
+          scarcity margins and hydro water values, exactly as real load would.</p>
+      </div>
+      <div class="case-chips">
+        <span class="chip">GR · 2025-07-01 → 2026-06-30</span>
+        <span class="chip">hook: load_modifier</span>
+        <span class="chip">runs: gr_scn_base vs gr_scn_dc574</span>
+        <span class="chip">364 days · 0 solver failures</span>
+      </div>
+
+      <div class="editor">
+        <div class="editor-head">
+          <span>datacenter_574mw.jl — run it yourself against the public extract</span>
+          <button type="button" class="copy-btn">copy</button>
+        </div>
+        <pre><code>using Euphemia, Dates
+
+# scenario: +574 MW of firm, always-on demand in every timeslot
+dc_load = (ts, load_mw) -> load_mw + 574.0
+
+for day in Date(2025, 7, 1):Day(1):Date(2026, 6, 30)
+    generate_energy_prices("GR", day;
+        order_method  = :merit_order,
+        save_to_db    = true,
+        clearing_mode = "gr_scn_dc574",   # label the run
+        load_modifier = dc_load)          # the scenario hook
+end
+
+# analyze: load-weighted price delta vs the baseline run
+# $ julia --project=. bin/scenario_delta.jl gr_scn_base gr_scn_dc574 GR 2025-07-01 2026-07-01</code></pre>
+      </div>
+
+      <div class="case-grid">
+        <div class="case-stat accent">
+          <span class="cs-label">Scenario consumer costs</span>
+          <span class="cs-value">€986m<span class="cs-unit">&thinsp;/year</span></span>
+          <span class="cs-sub">€983m over the 12-month window — extra spend by all Greek
+            consumers on unchanged consumption.</span>
+        </div>
+        <div class="case-stat accent">
+          <span class="cs-label">Load-weighted avg price increase</span>
+          <span class="cs-value">+19.9%</span>
+          <span class="cs-sub">+19.46&nbsp;€/MWh on the load-weighted average price
+            (weighted by baseline hourly load).</span>
+        </div>
+        <div class="case-stat">
+          <span class="cs-label">Everyone else pays</span>
+          <span class="cs-value">€97.77&thinsp;→&thinsp;€117.23</span>
+          <span class="cs-sub">per MWh: baseline × (1&nbsp;+&nbsp;19.9%). The higher price
+            applies to <em>every</em> MWh consumed in the zone, not just the data center's.</span>
+        </div>
+      </div>
+      <p class="crosscheck"><strong>Cross-check.</strong> The two headline cards are the same
+        fact in different units: +19.9% × €97.77/MWh × ≈50.5&nbsp;TWh consumed in the window
+        ≈ €983m. The delta is weighted by baseline hourly load, so the identity is exact by
+        construction.</p>
+      <p class="case-note">Honesty notes: €4.00 of the +19.46&nbsp;€/MWh comes from just 16
+        scarcity hours where the added load exhausts offered supply and the price hits the
+        €3,000 cap; the remaining +15.46 is ordinary merit-order steepening across 8,720
+        normal hours. Single-zone runs hold net imports at historical values — no import
+        relief responds — so these are upper-end estimates.</p>
+    </article>
+
+    <!-- Case 2: cold ironing -->
+    <article class="chart-card case-card" id="case-coldironing">
+      <div class="chart-head">
+        <h2 class="chart-title">2 · Cold ironing: every ferry &amp; cruise ship plugs in at berth</h2>
+        <p class="chart-sub"><strong>Objective.</strong> All in-scope passenger ships at the 21
+          monitored Greek ports connect to shore power (onshore power supply) instead of running
+          engines at berth. The demand profile is <em>measured</em> — AIS port-visit data with
+          EMSA at-berth loads: mean 126&nbsp;MW, strongly seasonal (~205–250&nbsp;MW in cruise
+          season, ~30&nbsp;MW in winter, peak 369&nbsp;MW). Ships connect regardless of the
+          day-ahead price, so the scenario uses the <code>extra_orders</code> hook: new
+          price-inelastic demand bid at the price cap — the real-data incarnation of the
+          documented "ships request power" example.</p>
+      </div>
+      <div class="case-chips">
+        <span class="chip">GR · 2024-07-01 → 2025-06-30</span>
+        <span class="chip">hook: extra_orders</span>
+        <span class="chip">runs: gr_scn_base vs gr_scn_ops</span>
+        <span class="chip">365 days · 0 solver failures</span>
+      </div>
+
+      <div class="editor">
+        <div class="editor-head">
+          <span>cold_ironing_ops.jl — run it yourself against the public extract</span>
+          <button type="button" class="copy-btn">copy</button>
+        </div>
+        <pre><code>using Euphemia, Dates
+
+# OPS_MW: measured hourly shore-power demand (MW), keyed "yyyymmdd-HH"
+ops = ctx -> [SimpleOrder(:demand, 3000.0, OPS_MW[ts[1:11]],
+                  Symbol(ctx.zone), DateTime(ts, dateformat"yyyymmdd-HHMM"),
+                  ctx.resolution_minutes)
+              for ts in ctx.timeslots if get(OPS_MW, ts[1:11], 0.0) > 0]
+
+for day in Date(2024, 7, 1):Day(1):Date(2025, 6, 30)
+    generate_energy_prices("GR", day;
+        order_method  = :merit_order,
+        save_to_db    = true,
+        clearing_mode = "gr_scn_ops",   # label the run
+        extra_orders  = ops)            # price-inelastic bids at the cap
+end
+
+# $ julia --project=. bin/scenario_delta.jl gr_scn_base gr_scn_ops GR 2024-07-01 2025-07-01</code></pre>
+      </div>
+
+      <div class="case-grid">
+        <div class="case-stat accent">
+          <span class="cs-label">Scenario consumer costs</span>
+          <span class="cs-value">€148m<span class="cs-unit">&thinsp;/year</span></span>
+          <span class="cs-sub">€148m over the 12-month window — extra spend by all Greek
+            consumers on unchanged consumption.</span>
+        </div>
+        <div class="case-stat accent">
+          <span class="cs-label">Load-weighted avg price increase</span>
+          <span class="cs-value">+2.8%</span>
+          <span class="cs-sub">+2.90&nbsp;€/MWh on the load-weighted average price —
+            summer-heavy: +3.62 in Jul–Dec vs +2.11 in Jan–Jun.</span>
+        </div>
+        <div class="case-stat">
+          <span class="cs-label">Everyone else pays</span>
+          <span class="cs-value">€102.16&thinsp;→&thinsp;€105.06</span>
+          <span class="cs-sub">per MWh: baseline × (1&nbsp;+&nbsp;2.8%). Seasonal concentration
+            makes an OPS megawatt <em>more</em> expensive than a flat one: ~€1.18m/yr per MW
+            of average load vs the data center's ~€1.72m (which includes its scarcity tail).</span>
+        </div>
+      </div>
+      <p class="crosscheck"><strong>Cross-check.</strong> +2.8% × €102.16/MWh ×
+        ≈51.1&nbsp;TWh consumed in the window ≈ €148m — again the same fact in two units,
+        exact by construction.</p>
+      <p class="case-note">Honesty notes: the profile is the <em>central</em> (imputed)
+        scenario and leans high — the confirmed-ships floor is ~3.3× smaller. Full uptake
+        assumed (every in-scope ship connects). No scenario hour reaches the price cap.
+        Single-zone caveat as above.</p>
+    </article>
   </section>
 
   <!-- ============ About teaser ============ -->

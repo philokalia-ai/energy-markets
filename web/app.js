@@ -109,7 +109,7 @@
       var i = kv.indexOf("=");
       if (i > 0) params[decodeURIComponent(kv.slice(0, i))] = decodeURIComponent(kv.slice(i + 1));
     });
-    if (["board", "explorer", "horizon", "map"].indexOf(params.view) !== -1) state.view = params.view;
+    if (["board", "explorer", "horizon", "map", "cases"].indexOf(params.view) !== -1) state.view = params.view;
     if (params.zone) state.zone = params.zone;
     if (params.lead && !isNaN(+params.lead)) state.lead = +params.lead;
     if (params.day && /^\d{4}-\d{2}-\d{2}$/.test(params.day)) state.day = params.day;
@@ -170,6 +170,7 @@
     $("view-board").hidden = v !== "board";
     $("view-horizon").hidden = v !== "horizon";
     $("view-map").hidden = v !== "map";
+    $("view-cases").hidden = v !== "cases";
     if (v === "map") loadMap().then(renderMap);
     document.querySelectorAll(".tab").forEach(function (t) {
       t.setAttribute("aria-selected", String(t.dataset.view === v));
@@ -1493,6 +1494,15 @@
     });
     window.addEventListener("hashchange", function () {
       if (!suppressHash) applyHash();
+    });
+    document.querySelectorAll(".editor .copy-btn").forEach(function (b) {
+      b.addEventListener("click", function () {
+        var code = b.closest(".editor").querySelector("code");
+        navigator.clipboard.writeText(code.textContent).then(function () {
+          b.textContent = "copied";
+          setTimeout(function () { b.textContent = "copy"; }, 1200);
+        });
+      });
     });
 
     loadWithFallback("scoreboard.json").then(function (res) {
