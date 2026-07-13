@@ -697,6 +697,19 @@
       lg.appendChild(span);
     });
 
+    // announce gap days (e.g. tomorrow before its evening model run lands)
+    var have = {};
+    days.forEach(function (d) { have[d.date] = true; });
+    var gaps = [];
+    if (days.length > 1) {
+      var d0 = new Date(days[0].date + "T12:00:00Z");
+      var dN = new Date(days[days.length - 1].date + "T12:00:00Z");
+      for (var t = d0.getTime(); t <= dN.getTime(); t += 86400000) {
+        var ds = new Date(t).toISOString().slice(0, 10);
+        if (!have[ds]) gaps.push(ds);
+      }
+    }
+
     // concatenated point list
     var pts = [];   // {iso, v, day}
     days.forEach(function (d) {
@@ -796,6 +809,14 @@
       dot.setAttribute("visibility", "hidden");
       tooltip.style.display = "none";
     });
+
+    if (gaps.length) {
+      wrap.appendChild(el("p", "pending-note",
+        gaps.map(dayLabel).join(", ") +
+        (gaps.length > 1 ? " have" : " has") +
+        " no frozen forecast yet — the next-day model forecast is written the evening before " +
+        "(17:30/19:30 UTC runs), and is never pre-filled with a placeholder."));
+    }
 
     renderRevisions();
   }
