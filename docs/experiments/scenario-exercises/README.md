@@ -110,4 +110,65 @@ julia --project=. bin/scenario_delta.jl gr_scn_base gr_scn_ops   GR 2024-07-01 2
 
 ## Results
 
-(to be filled after the runs)
+Runs completed 2026-07-13 against the living extract (source data
+2023-01-01..2026-07-12; HiGHS; ~2.6 days/s per solve loop). Day counts:
+baseline 729/730, data center 364/365, cold ironing 365/365, **0 solver
+failures**. The one missing day, **2025-10-08**, is an upstream data gap — the
+GR day-ahead wind/solar forecast has NULL values for that day (48 of 120 rows
+populated), so the book build aborts identically in baseline and scenario; it
+is simply absent from both runs and drops out of the comparison. 2024-10-26/27
+saved partially (21 + 2 hours, the October DST changeover gap in the source
+load series), again identically in both runs; the delta query joins on hours
+present in both runs, so all of this is handled.
+
+All numbers below from `bin/scenario_delta.jl` — load-weighted by the hourly
+day-ahead load forecast (the model's own demand series, unmodified baseline
+load), per calendar year and total.
+
+### Data center (+574 MW, 2025-07-01..2026-06-30, Δ = gr_scn_dc574 − gr_scn_base)
+
+| period | hours | LW base €/MWh | LW scenario €/MWh | **Δ €/MWh** | extra cost €m | annualized €m |
+|---|---:|---:|---:|---:|---:|---:|
+| 2025 H2 | 4,392 | 90.77 | 106.79 | **+16.02** | 419.7 | 837.1 |
+| 2026 H1 | 4,344 | 105.31 | 128.47 | **+23.16** | 563.3 | 1,135.9 |
+| **TOTAL** | 8,736 | 97.77 | 117.23 | **+19.46** | **982.9** | **985.6** |
+
+The +574 MW is ~9% of GR average load, so a double-digit delta is expected —
+the GR merit curve is steep between the RES/lignite shoulder and the gas SRMC
+band. Decomposition: **+15.46 €/MWh** of the total comes from ordinary
+merit-order steepening across 8,720 normal hours (€781m); **+4.00 €/MWh**
+comes from just 16 hours (47 quarter-hour periods) where the added demand
+exhausts the offered supply and the price hits the €3,000 cap (€202m). The
+scarcity tail is real signal (the extra baseload eats the reserve margin in
+tight hours) but is also the first thing that import relief would shave — see
+the caveat below.
+
+### Cold ironing (OPS profile, 2024-07-01..2025-06-30, Δ = gr_scn_ops − gr_scn_base)
+
+| period | hours | LW base €/MWh | LW scenario €/MWh | **Δ €/MWh** | extra cost €m | annualized €m |
+|---|---:|---:|---:|---:|---:|---:|
+| 2024 H2 | 4,391 | 106.65 | 110.26 | **+3.62** | 97.3 | 194.1 |
+| 2025 H1 | 4,344 | 97.16 | 99.26 | **+2.11** | 50.8 | 102.4 |
+| **TOTAL** | 8,735 | 102.16 | 105.06 | **+2.90** | **148.1** | **148.5** |
+
+Mean OPS demand is 126 MW but strongly summer-peaked (~205–250 MW mean in
+summer, ~30 MW in winter), which lands on the season when GR prices are set by
+gas and A/C load — hence the 2024 H2 (Jul–Dec) delta is ~1.7× the 2025 H1
+(Jan–Jun) one. No scenario hour reaches the cap. Per MW of average added load,
+cold ironing costs ~€1.18m/yr/MW vs the data center's ~€1.72m/yr/MW — the
+seasonal concentration into already-tight hours makes OPS MW *more* expensive
+than flat MW on that margin (the DC's higher figure is partly its scarcity
+tail).
+
+### Caveats
+
+- **Single-zone runs**: net imports are fixed at their historical values, so
+  no import relief responds to the added demand. In the coupled multi-zone
+  measurement of the documented +200 MW ships example, neighbours absorb part
+  of the shock (+2.62 €/MWh for 200 MW). These single-zone deltas are
+  therefore toward the upper end; a multi-zone rerun would soften them,
+  especially the DC scarcity tail.
+- **OPS profile is the CENTRAL (imputed) scenario** — it leans high; the floor
+  series is ~3.3× smaller. Bracket accordingly.
+- **Full uptake**: every in-scope ship connects (pre-AFIR-phase-in upper
+  bound).

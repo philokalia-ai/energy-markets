@@ -17,7 +17,8 @@
 #           results = $EUPHEMIA_RESULTS_DB  or data/results.duckdb.
 # Both files are opened READ_ONLY; safe to run while a backfill is writing.
 
-using DuckDB, DBInterface, DataFrames
+using DuckDB, DataFrames
+const DBInterface = DuckDB.DBInterface
 
 function main(args)
     length(args) >= 5 || begin

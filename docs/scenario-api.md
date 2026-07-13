@@ -194,10 +194,13 @@ The full loop is three beats:
 
 Two complete worked exercises live in
 [`docs/experiments/scenario-exercises/`](experiments/scenario-exercises/README.md)
-— a 574 MW always-on data center in GR (`load_modifier`) and cold ironing at
-the 21 monitored Greek ports (`extra_orders` sized by a measured hourly OPS
-profile — the real-data incarnation of example (i) above). Copy either script
-to run your own scenario in minutes.
+— a 574 MW always-on data center in GR (`load_modifier`; **+19.46 €/MWh
+load-weighted, ≈€986m/yr**, of which +4.00 from 16 scarcity hours at the cap)
+and cold ironing at the 21 monitored Greek ports (`extra_orders` sized by a
+measured hourly OPS profile — the real-data incarnation of example (i) above;
+**+2.90 €/MWh, ≈€148m/yr**). Both offline single-zone runs on the living
+extract (fixed historical imports — upper-end deltas). Copy either script to
+run your own scenario in minutes.
 
 ## Deferred (honest notes)
 
