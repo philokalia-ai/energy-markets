@@ -160,6 +160,48 @@ seasonal concentration into already-tight hours makes OPS MW *more* expensive
 than flat MW on that margin (the DC's higher figure is partly its scarcity
 tail).
 
+#### The other side of the ledger: the ship owners' power bill
+
+What the ships themselves pay for the OPS energy (wholesale day-ahead only —
+no grid fees, taxes, or port infrastructure): the OPS profile priced at the
+scenario's hourly prices.
+
+| | value |
+|---|---|
+| OPS energy | 1,101 GWh over the window (8,735 h) |
+| bill at scenario prices | **€100.0m** (OPS-weighted avg **€90.78/MWh**) |
+| bill at baseline prices | €95.7m (€86.89/MWh) — €4.3m of the bill is the price increase the ships themselves cause |
+
+The OPS-weighted price (€90.78) is *below* the zone's load-weighted average
+(€105.06): the berth profile lands on cheaper hours than the zone's load does
+(summer solar middays and nights). Comparison of the two ledgers: the ships
+buy €100m of electricity while everyone else pays €148m extra — every €1 of
+shore power raised other consumers' bills by ~€1.50.
+
+Reproduce (DuckDB on `data/results.duckdb`, after the runs):
+
+```sql
+SET TimeZone='UTC';
+WITH ops AS (
+  SELECT CAST(datetime_utc AS TIMESTAMP) AS h, ops_mw
+  FROM read_csv_auto('docs/experiments/scenario-exercises/ops_hourly_gr_central_2024H2_2025H1.csv')
+  WHERE ops_mw > 0),
+px AS (
+  SELECT date_trunc('hour', date_time_utc) AS h, clearing_mode, AVG(price_eur_mwh) AS p
+  FROM simulations.energy_prices
+  WHERE bidding_zone = 'GR' AND clearing_mode IN ('gr_scn_ops', 'gr_scn_base')
+    AND date_time_utc >= TIMESTAMP '2024-07-01' AND date_time_utc < TIMESTAMP '2025-07-01'
+  GROUP BY 1, 2)
+SELECT SUM(o.ops_mw)                             AS mwh,
+       SUM(o.ops_mw * s.p) / 1e6                 AS bill_scenario_meur,
+       SUM(o.ops_mw * b.p) / 1e6                 AS bill_baseline_meur,
+       SUM(o.ops_mw * s.p) / SUM(o.ops_mw)       AS ops_weighted_price_scenario,
+       SUM(o.ops_mw * b.p) / SUM(o.ops_mw)       AS ops_weighted_price_baseline
+FROM ops o
+JOIN px s ON s.h = o.h AND s.clearing_mode = 'gr_scn_ops'
+JOIN px b ON b.h = o.h AND b.clearing_mode = 'gr_scn_base';
+```
+
 ### Caveats
 
 - **Single-zone runs**: net imports are fixed at their historical values, so
