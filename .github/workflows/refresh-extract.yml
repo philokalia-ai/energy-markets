@@ -1,0 +1,95 @@
+name: Refresh living DuckDB extract
+
+# Daily incremental refresh of the canonical "living" extract
+# (euphemia-live.duckdb): pull from the extract store, append rows newer than
+# each table's max timestamp (entsoe.*/yfinance.* from ENERGY_CONN_STR,
+# weather.* from WEATHER_CONN_STR, weather.cell_hourly from the public
+# open-meteo ERA5 archive), push back, upload a manifest artifact.
+#
+# Required repository secrets (add once — NOT set by automation):
+#   gh secret set ENERGY_CONN_STR    # Postgres `energy` DB connection string
+#   gh secret set WEATHER_CONN_STR   # Postgres `silentech` DB (weather schema, read-only role)
+#
+# One-time seed (on the runner host) before the first run:
+#   ZONES=... START_DATE=... END_DATE=... CELL_HOURLY_CSV=... \
+#     julia --project=. bin/build_duckdb_extract.jl
+#   bin/extract_store.sh push <out.duckdb> euphemia-live.duckdb
+#
+# NOTE: incremental appends slowly degrade the sorted extract's zonemap
+# pruning — run a monthly full rebuild + push to restore the global sort.
+
+on:
+  schedule:
+    # Daily at 02:00 UTC — after the nightly ENTSO-E ETL (00:00 UTC) and the
+    # weather ETL (03:00 EET ≈ 01:00 UTC) have landed.
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+    inputs:
+      extract_name:
+        description: "Artifact name in the extract store"
+        required: false
+        default: "euphemia-live.duckdb"
+        type: string
+      skip_cell_hourly:
+        description: "Skip the open-meteo cell_hourly fetch"
+        required: false
+        default: false
+        type: boolean
+
+env:
+  JULIA_VERSION: "1.12"
+  EXTRACT_NAME: ${{ inputs.extract_name || 'euphemia-live.duckdb' }}
+
+jobs:
+  refresh-extract:
+    runs-on: [self-hosted, linux, ARM64]
+    timeout-minutes: 120
+    concurrency:
+      group: refresh-extract
+      cancel-in-progress: false
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Julia
+        uses: julia-actions/setup-julia@v1
+        with:
+          version: ${{ env.JULIA_VERSION }}
+
+      - name: Cache Julia packages
+        uses: julia-actions/cache@v1
+
+      - name: Install Julia dependencies
+        run: julia --project=. -e "using Pkg; Pkg.instantiate()"
+
+      - name: Pull extract from store
+        run: |
+          # Fails with a pointer at the one-time seed procedure if the store
+          # has never been seeded (see the header of this workflow).
+          bin/extract_store.sh pull "$EXTRACT_NAME" "data/extracts/$EXTRACT_NAME"
+
+      - name: Refresh extract
+        env:
+          ENERGY_CONN_STR: ${{ secrets.ENERGY_CONN_STR }}
+          WEATHER_CONN_STR: ${{ secrets.WEATHER_CONN_STR }}
+          SKIP_CELL_HOURLY: ${{ inputs.skip_cell_hourly && 'true' || 'false' }}
+        run: |
+          if [ -z "$ENERGY_CONN_STR" ]; then
+            echo "::error::ENERGY_CONN_STR secret is not set (gh secret set ENERGY_CONN_STR)"; exit 1
+          fi
+          if [ -z "$WEATHER_CONN_STR" ]; then
+            echo "::warning::WEATHER_CONN_STR secret is not set — weather.* tables will be skipped"
+          fi
+          EXTRACT="data/extracts/$EXTRACT_NAME" \
+          MANIFEST_OUT="refresh-manifest.json" \
+            julia --project=. bin/refresh_duckdb_extract.jl
+
+      - name: Push extract back to store
+        run: bin/extract_store.sh push "data/extracts/$EXTRACT_NAME" "$EXTRACT_NAME"
+
+      - name: Upload refresh manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: refresh-manifest
+          path: refresh-manifest.json
+          retention-days: 90

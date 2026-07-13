@@ -184,6 +184,16 @@ println()
         include(joinpath(@__DIR__, "test_weather_res.jl"))
     end
 
+    @testset "Extract Refresh Logic" begin
+        println("\n" * "=" ^ 60)
+        println("Running Extract Refresh Logic Tests...")
+        println("=" ^ 60)
+        # Pure logic + in-memory DuckDB only (where-clause construction,
+        # watermark bounds, ERA5 cell fetch window, seed/append machinery with
+        # a stubbed source) — no Postgres, no network, no extract file.
+        include(joinpath(@__DIR__, "test_extract_refresh_logic.jl"))
+    end
+
     @testset "15-min Resolution" begin
         println("\n" * "=" ^ 60)
         println("Running 15-min Resolution (upsample) Tests...")
