@@ -137,8 +137,25 @@ function main()
         end
 
         src = source_rows(P)
+        # Fallback proxy: same weekday two weeks back. Needed when T-7's slice
+        # is absent or incomplete (e.g. the legacy 21-hour 2026-07-12 day,
+        # which would otherwise leave a permanent hole at its T+7).
+        used_P = P
+        complete(s) = any(length(h) == expT for h in values(s))
+        if isempty(src) || !complete(src)
+            P2 = T - Day(14)
+            hoursP2 = expected_market_day_hours(P2)
+            if length(hoursP2) == expT && hoursT == hoursP2 .+ Day(14)
+                src2 = source_rows(P2)
+                if !isempty(src2) && complete(src2)
+                    src = Dict(z => Dict(h + Day(7) => p for (h, p) in hh) for (z, hh) in src2)
+                    used_P = P2
+                    println("lead $n → $T: proxy $P incomplete — using fallback $P2")
+                end
+            end
+        end
         if isempty(src)
-            println("lead $n → $T: no lead-1 model rows for proxy $P, skipping")
+            println("lead $n → $T: no lead-1 model rows for proxy $P (or fallback), skipping")
             continue
         end
 
