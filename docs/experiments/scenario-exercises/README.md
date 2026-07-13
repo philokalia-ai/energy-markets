@@ -143,6 +143,43 @@ scarcity tail is real signal (the extra baseload eats the reserve margin in
 tight hours) but is also the first thing that import relief would shave — see
 the caveat below.
 
+#### The other side of the ledger: the data center's power bill
+
+What the data center itself pays for its energy (wholesale day-ahead only):
+574 MW flat priced at the scenario's hourly prices.
+
+| | value |
+|---|---|
+| energy | 5,014 GWh over the window (574 MW × 8,736 h) |
+| bill at scenario prices | **€580.0m** (time-average **€115.67/MWh**) |
+| bill at baseline prices | €487.4m (€97.21/MWh) — €92.6m of the bill is the price increase it causes itself |
+
+The flat profile's time-average price (€115.67) sits slightly below the zone's
+load-weighted €117.23 (flat weighting includes the cheap off-peak hours that
+load weighting de-emphasizes). Ledger comparison: the data center buys €580m
+of electricity while everyone else pays €986m extra — every €1 it buys raises
+other consumers' bills by ~€1.70.
+
+Reproduce (DuckDB on `data/results.duckdb`, after the runs):
+
+```sql
+SET TimeZone='UTC';
+WITH px AS (
+  SELECT date_trunc('hour', date_time_utc) AS h, clearing_mode, AVG(price_eur_mwh) AS p
+  FROM simulations.energy_prices
+  WHERE bidding_zone = 'GR' AND clearing_mode IN ('gr_scn_dc574', 'gr_scn_base')
+    AND date_time_utc >= TIMESTAMP '2025-07-01' AND date_time_utc < TIMESTAMP '2026-07-01'
+  GROUP BY 1, 2)
+SELECT 574.0 * COUNT(*) / 1e6        AS twh,
+       574.0 * SUM(s.p) / 1e6        AS bill_scenario_meur,
+       574.0 * SUM(b.p) / 1e6        AS bill_baseline_meur,
+       AVG(s.p)                      AS avg_price_scenario,
+       AVG(b.p)                      AS avg_price_baseline
+FROM px s
+JOIN px b ON b.h = s.h AND b.clearing_mode = 'gr_scn_base'
+WHERE s.clearing_mode = 'gr_scn_dc574';
+```
+
 ### Cold ironing (OPS profile, 2024-07-01..2025-06-30, Δ = gr_scn_ops − gr_scn_base)
 
 | period | hours | LW base €/MWh | LW scenario €/MWh | **Δ €/MWh** | extra cost €m | annualized €m |
