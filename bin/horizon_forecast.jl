@@ -56,6 +56,7 @@ function source_rows(P::Date)
         SELECT bidding_zone AS z, (date_time_utc AT TIME ZONE 'UTC') AS t, price_eur_mwh AS p
         FROM simulations.forecast_prices
         WHERE market_date = \$1 AND lead_days = 1 AND code_version = \$2 AND clearing_mode = \$3
+          AND input_mode = 'entsoe'
     """, [P, CV, CLEARING_MODE])
     out = Dict{String,Dict{DateTime,Float64}}()
     for r in eachrow(df)
@@ -68,6 +69,7 @@ function slice_row_count(T::Date, lead::Int)
     df = Euphemia.sql2df_with_retry("""
         SELECT COUNT(*) AS n FROM simulations.forecast_prices
         WHERE market_date = \$1 AND lead_days = \$2 AND code_version = \$3
+          AND input_mode = 'entsoe'
     """, [T, lead, CV])
     return Int(df.n[1])
 end
@@ -88,14 +90,15 @@ function write_slice!(T::Date, lead::Int, made::DateTime,
             LibPQ.execute(cnx, """
                 DELETE FROM simulations.forecast_prices
                 WHERE market_date = \$1 AND lead_days = \$2 AND code_version = \$3
+                  AND input_mode = 'entsoe'
             """, [T, lead, CV])
             for (zone, hourly) in zone_hourly
                 for (h, price) in sort!(collect(hourly); by=first)
                     LibPQ.execute(cnx, """
                         INSERT INTO simulations.forecast_prices
                         (market_date, date_time_utc, bidding_zone, price_eur_mwh,
-                         prediction_made_utc, lead_days, clearing_mode, code_version)
-                        VALUES (\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8)
+                         prediction_made_utc, lead_days, clearing_mode, code_version, input_mode)
+                        VALUES (\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8, 'entsoe')
                     """, Any[T, tstz(h), zone, price, tstz(made), lead, CLEARING_MODE, CV])
                     n += 1
                 end
