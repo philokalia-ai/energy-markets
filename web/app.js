@@ -18,8 +18,10 @@
     zone: "GR",
     lead: null,            // number
     day: null,             // "YYYY-MM-DD"
+    dayMode: null,         // input_mode of the selected explorer day entry
     revDay: null,          // "YYYY-MM-DD" selected in the revision panel
     window: "all",
+    track: "entsoe",       // scoreboard track: "entsoe" (reference) | "weather" (ex-ante)
     sort: { lead: null, metric: "mae", dir: 1 }, // dir 1 = best first
     hoverIdx: null,
   };
@@ -114,6 +116,7 @@
     if (params.rev && /^\d{4}-\d{2}-\d{2}$/.test(params.rev)) state.revDay = params.rev;
     if (params.metric && ["sim", "act", "err"].indexOf(params.metric) !== -1) mapState.metric = params.metric;
     if (params.window) state.window = params.window;
+    if (params.track && ["entsoe", "weather"].indexOf(params.track) !== -1) state.track = params.track;
   }
 
   var suppressHash = false;
@@ -124,6 +127,7 @@
     if (state.revDay) parts.push("rev=" + state.revDay);
     if (state.view === "map" && mapState.metric !== "sim") parts.push("metric=" + mapState.metric);
     if (state.window && state.window !== "all") parts.push("window=" + encodeURIComponent(state.window));
+    if (state.track && state.track !== "entsoe") parts.push("track=" + state.track);
     suppressHash = true;
     window.location.hash = parts.join("&");
     // hashchange fires async; release the guard on next tick
@@ -214,6 +218,8 @@
     });
   }
 
+  function dayInputMode(d) { return d.input_mode || "entsoe"; }
+
   function renderDayList(days) {
     var ul = $("day-list");
     ul.textContent = "";
@@ -221,9 +227,13 @@
       var li = el("li");
       var b = el("button", "day-btn");
       b.type = "button";
-      b.setAttribute("aria-pressed", String(d.date === state.day));
+      b.setAttribute("aria-pressed",
+        String(d.date === state.day && (state.dayMode === null || dayInputMode(d) === state.dayMode)));
       b.appendChild(el("span", "d-date", dayLabel(d.date)));
       var badges = el("span", "d-badges");
+      if (dayInputMode(d) === "weather") {
+        badges.appendChild(el("span", "pill weather", "ex-ante (weather)"));
+      }
       if (isPending(d)) {
         badges.appendChild(el("span", "pill pending", "pending"));
       } else {
@@ -233,6 +243,7 @@
       b.appendChild(badges);
       b.addEventListener("click", function () {
         state.day = d.date;
+        state.dayMode = dayInputMode(d);
         state.hoverIdx = null;
         renderExplorer();
         writeHash();
@@ -547,18 +558,26 @@
       return;
     }
     var found = days.some(function (d) { return d.date === state.day; });
-    if (!state.day || !found) state.day = days[0].date;
+    if (!state.day || !found) { state.day = days[0].date; state.dayMode = null; }
 
     renderDayList(days);
+    // Prefer the entry matching both date and track (the same date can carry
+    // one entry per input_mode); fall back to date-only.
     var day = null;
-    days.forEach(function (d) { if (d.date === state.day) day = d; });
+    days.forEach(function (d) {
+      if (!day && d.date === state.day &&
+          (state.dayMode === null || dayInputMode(d) === state.dayMode)) day = d;
+    });
+    if (!day) days.forEach(function (d) { if (!day && d.date === state.day) day = d; });
 
     $("chart-title").textContent = state.zone + " — " + dayLabel(day.date);
     var madeAt = day.prediction_made_utc
       ? " · prediction frozen " + day.prediction_made_utc.replace("T", " ").replace("Z", " UTC")
       : "";
     $("chart-sub").textContent =
-      "Lead time D-" + day.lead_days + madeAt +
+      "Lead time D-" + day.lead_days +
+      (dayInputMode(day) === "weather" ? " · ex-ante (weather) track" : "") +
+      madeAt +
       " · hours shown in Europe/Athens (market day)";
     renderDayStats(day);
     renderDayComment(day);
@@ -1187,10 +1206,47 @@
 
   // ---------- scoreboard ----------
 
+  // Forecast tracks: reference = ENTSO-E D-1 inputs (frozen pre-delivery,
+  // post-auction); ex-ante = weather-based RES (freezable pre-auction).
+  // Score entries without input_mode are legacy reference-track rows.
+  var TRACKS = [
+    ["entsoe", "Reference (ENTSO-E)"],
+    ["weather", "Ex-ante (weather)"],
+  ];
+
+  function scoreTrack(s) { return s.input_mode || "entsoe"; }
+
+  function trackScores() {
+    return state.scoreboard.scores.filter(function (s) {
+      return scoreTrack(s) === state.track;
+    });
+  }
+
+  function renderTrackButtons() {
+    var box = $("track-select");
+    if (!box) return;
+    box.textContent = "";
+    TRACKS.forEach(function (t) {
+      var b = el("button", null, t[1]);
+      b.type = "button";
+      b.setAttribute("aria-pressed", String(state.track === t[0]));
+      b.addEventListener("click", function () {
+        if (state.track === t[0]) return;
+        state.track = t[0];
+        renderTrackButtons();
+        renderWindowSelect();
+        renderScoreboard();
+        writeHash();
+      });
+      box.appendChild(b);
+    });
+  }
+
   function scoreboardWindows() {
     var seen = {};
-    state.scoreboard.scores.forEach(function (s) { seen[s.window] = true; });
+    trackScores().forEach(function (s) { seen[s.window] = true; });
     var wins = Object.keys(seen);
+    if (!wins.length) wins = ["all"];
     wins.sort(function (a, b) {
       if (a === "all") return -1;
       if (b === "all") return 1;
@@ -1201,7 +1257,7 @@
 
   function scoreboardLeads() {
     var seen = {};
-    state.scoreboard.scores.forEach(function (s) { seen[s.lead_days] = true; });
+    trackScores().forEach(function (s) { seen[s.lead_days] = true; });
     return Object.keys(seen).map(Number).sort(function (a, b) { return a - b; });
   }
 
@@ -1230,8 +1286,25 @@
   function renderScoreboard() {
     var table = $("scoreboard-table");
     table.textContent = "";
+    var tracked = trackScores();
+    if (!tracked.length) {
+      // Friendly empty state (the weather track fills as its runs accumulate).
+      var tbody0 = el("tbody");
+      var tr0 = el("tr");
+      var td0 = el("td", "null",
+        state.track === "weather"
+          ? "No scored days on the ex-ante (weather) track yet — this track freezes " +
+            "before the 12:00 CET auction and starts accumulating scores once the " +
+            "weather-based morning runs begin and their delivery days settle."
+          : "No scored days on this track yet.");
+      td0.colSpan = 1;
+      tr0.appendChild(td0);
+      tbody0.appendChild(tr0);
+      table.appendChild(tbody0);
+      return;
+    }
     var leads = scoreboardLeads();
-    var scores = state.scoreboard.scores.filter(function (s) { return s.window === state.window; });
+    var scores = tracked.filter(function (s) { return s.window === state.window; });
     var byKey = {};
     scores.forEach(function (s) { byKey[s.zone + "|" + s.lead_days] = s; });
 
@@ -1368,6 +1441,7 @@
     if (state.scoreboard) {
       if (state.scoreboard.zones.indexOf(state.zone) === -1) state.zone = state.scoreboard.zones[0];
       $("zone-select").value = state.zone;
+      renderTrackButtons();
       renderWindowSelect();
       renderScoreboard();
       selectZone(state.zone, true);
@@ -1411,6 +1485,7 @@
       }
       setView(state.view);
       renderZoneSelect();
+      renderTrackButtons();
       renderWindowSelect();
       renderScoreboard();
       renderFooter();

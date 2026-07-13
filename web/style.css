@@ -328,6 +328,7 @@ select {
   background: color-mix(in srgb, var(--text-primary) 3%, transparent);
 }
 .pill.pending { color: var(--text-muted); font-style: italic; }
+.pill.weather { color: var(--series-sim, var(--text-secondary)); border-color: currentColor; }
 
 /* ---------- chart card ---------- */
 .chart-head { margin-bottom: 6px; }
