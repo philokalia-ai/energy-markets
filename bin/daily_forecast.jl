@@ -39,10 +39,26 @@
 #   window has no offered ATC rows, the day is skipped loudly (verdict + reason
 #   logged per day).
 #
+# INPUT TRACKS (INPUT_MODE):
+# - 'entsoe' (default, the REFERENCE track): ENTSO-E D-1 load + wind/solar
+#   forecasts, exactly as before. Freezes in the evening — before delivery,
+#   but after the 12:00 CET auction.
+# - 'weather' (the EX-ANTE track): wind/solar predicted from RAW open-meteo
+#   weather via bin/weather_res.jl, so the prediction can be frozen BEFORE the
+#   auction gate. The ENTSO-E RES eligibility requirement is REMOVED (weather
+#   is always available); the LOAD gate and ATC gate stay exactly as-is
+#   (ENTSO-E load published pre-gate is legitimate). Book construction zeroes
+#   whatever partial ENTSO-E RES exists (renewable_modifier -> 0) and injects
+#   the weather-RES prediction as price-taker supply orders per timeslot.
+#   Rows are stamped input_mode='weather'; the slice identity is
+#   (market_date, lead_days, code_version, input_mode) so the two tracks
+#   NEVER overwrite each other.
+#
 # Env vars:
 #   OPTIMIZER      'gurobi' (default) / 'highs' / 'auto'
+#   INPUT_MODE     'entsoe' (default) / 'weather' — see INPUT TRACKS above
 #   MAX_LEAD_DAYS  furthest lead to attempt, default 7
-#   FORCE_RERUN    'true' to rewrite an existing (market_date, lead, cv) slice
+#   FORCE_RERUN    'true' to rewrite an existing (market_date, lead, cv, mode) slice
 #   ZONES          comma-separated footprint override (FOR TESTING ONLY, e.g.
 #                  a 5-zone footprint when the Gurobi license is unavailable);
 #                  default = the 39-zone EU footprint
@@ -54,8 +70,14 @@
 using Euphemia, Dates, Statistics, LibPQ
 
 include(joinpath(@__DIR__, "forecast_common.jl"))
+include(joinpath(@__DIR__, "weather_res.jl"))   # guarded main; pure helpers + open-meteo fetch
 
 const OPTIMIZER = get(ENV, "OPTIMIZER", "gurobi")
+const INPUT_MODE = let m = lowercase(get(ENV, "INPUT_MODE", "entsoe"))
+    m in ("entsoe", "weather") ||
+        error("INPUT_MODE must be 'entsoe' or 'weather' (got '$m')")
+    m
+end
 const MAX_LEAD_DAYS = parse(Int, get(ENV, "MAX_LEAD_DAYS", "7"))
 const FORCE_RERUN = lowercase(get(ENV, "FORCE_RERUN", "false")) == "true"
 const SKIP_CLEAR = lowercase(get(ENV, "SKIP_CLEAR", "false")) == "true"
@@ -124,18 +146,21 @@ function atc_row_count(t0::DateTime, t1::DateTime, zones::Vector{String})
     return Int(df.n[1])
 end
 
-"Zones already present in the (market_date, lead_days, code_version) slice."
+"Zones already present in the (market_date, lead_days, code_version, input_mode) slice."
 function existing_forecast_zones(market_date::Date, lead_days::Int)
     df = Euphemia.sql2df_with_retry("""
         SELECT DISTINCT bidding_zone AS z FROM simulations.forecast_prices
         WHERE market_date = \$1 AND lead_days = \$2 AND code_version = \$3
-    """, [market_date, lead_days, CV])
+          AND input_mode = \$4
+    """, [market_date, lead_days, CV, INPUT_MODE])
     return Set{String}(String.(df.z))
 end
 
 """
-Delete-then-insert exactly the (market_date, lead_days, code_version) slice in
-one transaction. `zone_hourly` is zone → (hour::DateTime → price), already
+Delete-then-insert exactly the (market_date, lead_days, code_version,
+input_mode) slice in one transaction — the reference ('entsoe') and ex-ante
+('weather') tracks never overwrite each other.
+`zone_hourly` is zone → (hour::DateTime → price), already
 stitched and completeness-checked per zone (every zone here has exactly the
 expected market-day hours). The realized guard is re-checked immediately
 before the write (the horizon may have advanced during a long solve), and the
@@ -160,16 +185,19 @@ function write_forecast!(market_date::Date, lead_days::Int, prediction_made::Dat
             LibPQ.execute(cnx, """
                 DELETE FROM simulations.forecast_prices
                 WHERE market_date = \$1 AND lead_days = \$2 AND code_version = \$3
-            """, [market_date, lead_days, CV])
+                  AND input_mode = \$4
+            """, [market_date, lead_days, CV, INPUT_MODE])
             for (zone, hourly) in zone_hourly
                 for (h, price) in sort!(collect(hourly); by=first)
                     LibPQ.execute(cnx, """
                         INSERT INTO simulations.forecast_prices
                         (market_date, date_time_utc, bidding_zone, price_eur_mwh,
-                         prediction_made_utc, lead_days, clearing_mode, code_version)
-                        VALUES (\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8)
+                         prediction_made_utc, lead_days, clearing_mode, code_version,
+                         input_mode)
+                        VALUES (\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8, \$9)
                     """, Any[market_date, tstz(h), zone, price,
-                             tstz(prediction_made), lead_days, CLEARING_MODE, CV])
+                             tstz(prediction_made), lead_days, CLEARING_MODE, CV,
+                             INPUT_MODE])
                     n_inserted += 1
                 end
             end
@@ -183,12 +211,69 @@ function write_forecast!(market_date::Date, lead_days::Int, prediction_made::Dat
 end
 
 """
+Per-zone hourly weather-RES predictions (MW) covering UTC days
+`first_utc_day`..`last_utc_day` (the ex-ante track's wind+solar inputs).
+One open-meteo fetch per zone spans the whole window (locations batched ≤50
+per call). Zones without a model in the pack predict 0 for all hours (warned).
+"""
+function build_weather_predictions(first_utc_day::Date, last_utc_day::Date)
+    pack = load_res_models()
+    dates = collect(first_utc_day:Day(1):last_utc_day)
+    hours = collect(DateTime(first_utc_day):Hour(1):DateTime(last_utc_day) + Hour(23))
+    preds = Dict{String,Dict{DateTime,Float64}}()
+    for zone in ZONES
+        zm = get(pack["zones"], zone, nothing)
+        if zm === nothing
+            println("  ⚠️ $zone: no RES model in pack — weather RES predicted 0")
+            preds[zone] = Dict{DateTime,Float64}()
+            continue
+        end
+        cells = [(Float64(c[1]), Float64(c[2])) for c in zm["cells"]]
+        weather = fetch_weather(cells, dates)
+        preds[zone] = predict_res(pack, zone, hours, weather)
+    end
+    return preds
+end
+
+"""
+Per-zone `ZoneScenario` dict for the weather track: zero out whatever partial
+ENTSO-E RES exists (`renewable_modifier -> 0`) and inject the weather-RES
+prediction as price-taker supply orders (€1/MWh) per timeslot. Sub-hourly
+slots use the hour's predicted MW as the LEVEL (no division). Zero/negative
+predictions inject no order.
+"""
+function weather_scenario(preds::Dict{String,Dict{DateTime,Float64}})
+    zero_res = (ts, mw) -> 0.0
+    scenario = Dict{String,Euphemia.ZoneScenario}()
+    for zone in ZONES
+        zone_pred = get(preds, zone, Dict{DateTime,Float64}())
+        extra = ctx -> begin
+            orders = Euphemia.SimpleOrder[]
+            for ts in ctx.timeslots
+                dt = DateTime(ts, dateformat"yyyymmdd-HHMM")
+                mw = get(zone_pred, trunc(dt, Hour), 0.0)
+                mw > 0.0 || continue
+                push!(orders, Euphemia.SimpleOrder(:supply, 1.0, mw, Symbol(ctx.zone),
+                                                   dt, ctx.resolution_minutes))
+            end
+            orders
+        end
+        scenario[zone] = Euphemia.ZoneScenario(renewable_modifier=zero_res,
+                                               extra_orders=extra)
+    end
+    return scenario
+end
+
+"""
 Clear one UTC calendar day with the standard 39-zone machinery and collapse to
 zone → (hour → price). Returns `nothing` on failure. Results are memoized in
 `cache` so consecutive market days share their overlapping UTC-day solve.
+In weather mode, `scenario` carries the per-zone RES replacement (ENTSO-E RES
+zeroed, weather-RES injected as price-taker supply).
 """
 function clear_utc_day!(cache::Dict{Date,Union{Nothing,Dict{String,Dict{DateTime,Float64}}}},
-                        utc_day::Date)
+                        utc_day::Date;
+                        scenario::Union{Nothing,Dict{String,Euphemia.ZoneScenario}}=nothing)
     haskey(cache, utc_day) && return cache[utc_day]
     println("  clearing UTC day $utc_day ...")
     t0 = time()
@@ -201,7 +286,8 @@ function clear_utc_day!(cache::Dict{Date,Union{Nothing,Dict{String,Dict{DateTime
             save_to_db=false,        # forecast_prices is the ONLY output
             clearing_mode=CLEARING_MODE,
             enrich_network=true,
-            passes=2)
+            passes=2,
+            scenario=scenario)
     catch e
         e isa InterruptException && rethrow()
         println("  ❌ UTC day $utc_day clearing FAILED: $e")
@@ -229,6 +315,10 @@ function main()
     println("=" ^ 70)
     println("DAILY EX-ANTE FORECAST  zones=$(length(ZONES))  optimizer=$OPTIMIZER")
     println("  code_version=$CV  clearing_mode=$CLEARING_MODE  max_lead_days=$MAX_LEAD_DAYS")
+    println("  input_mode=$INPUT_MODE " *
+            (INPUT_MODE == "weather" ?
+             "(EX-ANTE track: RES from raw weather, ENTSO-E RES gate removed)" :
+             "(reference track: ENTSO-E D-1 load + wind/solar forecasts)"))
     println("  force_rerun=$FORCE_RERUN  skip_clear=$SKIP_CLEAR")
     println("  delivery day = Europe/Athens market day (two UTC-day solves, stitched)")
     ZONES != FORECAST_FOOTPRINT &&
@@ -253,10 +343,30 @@ function main()
 
     # RES coverage baseline: zones that had a wind/solar forecast on the most
     # recent fully-realized day's market window must also have one on any
-    # predicted day's window.
-    b0, b1 = athens_market_day_window(latest_actual)
-    res_required = res_forecast_zones(b0, b1, ZONES)
-    println("RES baseline (Athens day $latest_actual): $(length(res_required))/$(length(ZONES)) zones with wind/solar forecast")
+    # predicted day's window. WEATHER MODE: the ENTSO-E RES requirement is
+    # REMOVED (weather is always available; RES comes from bin/weather_res.jl)
+    # — the LOAD and ATC gates stay exactly as-is.
+    if INPUT_MODE == "weather"
+        res_required = Set{String}()
+        println("RES baseline: not required (input_mode=weather — RES predicted from raw weather)")
+    else
+        b0, b1 = athens_market_day_window(latest_actual)
+        res_required = res_forecast_zones(b0, b1, ZONES)
+        println("RES baseline (Athens day $latest_actual): $(length(res_required))/$(length(ZONES)) zones with wind/solar forecast")
+    end
+
+    # Weather track: fetch weather + predict per-zone RES ONCE for the whole
+    # candidate window (both UTC days of each Athens market day), then thread
+    # it into every clear as a per-zone scenario.
+    scenario = nothing
+    if INPUT_MODE == "weather" && !SKIP_CLEAR
+        println("Fetching open-meteo weather + predicting RES for UTC days " *
+                "$(first_candidate - Day(1)) .. $last_candidate ...")
+        t0 = time()
+        preds = build_weather_predictions(first_candidate - Day(1), last_candidate)
+        scenario = weather_scenario(preds)
+        println("Weather RES ready for $(length(preds)) zones in $(round(time() - t0, digits=1))s")
+    end
 
     # UTC-day clear cache: market days D and D+1 share the UTC-day-D solve.
     clear_cache = Dict{Date,Union{Nothing,Dict{String,Dict{DateTime,Float64}}}}()
@@ -282,7 +392,7 @@ function main()
             present = existing_forecast_zones(day, lead)
             if issubset(Set(ZONES), present)
                 println("  already predicted: all $(length(ZONES)) zones present for " *
-                        "(market_date=$day, lead_days=$lead, cv=$CV) — skipping " *
+                        "(market_date=$day, lead_days=$lead, cv=$CV, mode=$INPUT_MODE) — skipping " *
                         "(FORCE_RERUN=true to rewrite)")
                 continue
             elseif !isempty(present)
@@ -300,10 +410,10 @@ function main()
 
         # Two UTC-day clears cover the Athens window (see header comment).
         prediction_made = now(UTC)
-        prev_hourly = clear_utc_day!(clear_cache, day - Day(1))
+        prev_hourly = clear_utc_day!(clear_cache, day - Day(1); scenario=scenario)
         prev_hourly === nothing && (println("  ❌ DAY $day: UTC day $(day - Day(1)) " *
                                             "clear unavailable — no prediction written"); continue)
-        curr_hourly = clear_utc_day!(clear_cache, day)
+        curr_hourly = clear_utc_day!(clear_cache, day; scenario=scenario)
         curr_hourly === nothing && (println("  ❌ DAY $day: UTC day $day " *
                                             "clear unavailable — no prediction written"); continue)
 
@@ -330,7 +440,7 @@ function main()
         n = write_forecast!(day, lead, prediction_made, zone_hourly)
         n_predicted += n
         println("  ✅ DAY $day — wrote $n forecast rows across $(length(zone_hourly)) " *
-                "zone(s) ($(length(expected))h each; lead_days=$lead, cv=$CV)")
+                "zone(s) ($(length(expected))h each; lead_days=$lead, cv=$CV, mode=$INPUT_MODE)")
         for z in ("GR", "DE_LU", "FR", "IT-NORTH", "NO2")
             haskey(zone_hourly, z) || continue
             p = collect(values(zone_hourly[z]))

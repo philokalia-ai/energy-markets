@@ -9,16 +9,22 @@
 #   {"generated_utc": ..., "code_version": 16, "market_day_tz": "Europe/Athens",
 #    "zones": [...],
 #    "scores": [{"zone","lead_days","window" ("all" or "YYYY-MM"),
-#                "n_days","mae","bias","corr"}, ...]}
+#                "n_days","mae","bias","corr","input_mode"}, ...]}
+#   — "input_mode" is 'entsoe' (reference track) or 'weather' (ex-ante track);
+#   the SPA treats an absent input_mode as 'entsoe' (backward compatible).
 #
 # web/data/zones/<ZONE>.json
 #   {"zone": ..., "market_day_tz": "Europe/Athens",
 #    "days": [{"date","lead_days","prediction_made_utc",
 #     "hours":[ISO8601...], "sim":[...], "actual":[... or null where
-#     unrealized], "mae","bias","corr" (null when unrealized)}, ...]}
-#   — most recent 120 market days, newest first, one entry per (date, lead_days).
-#   "date" is the Europe/Athens market day; "hours" are the window's UTC
-#   stamps (24 normally; 23/25 on DST-transition days).
+#     unrealized], "mae","bias","corr" (null when unrealized),
+#     "input_mode"}, ...]}
+#   — most recent 120 market days, newest first, one entry per
+#   (date, lead_days, input_mode). "date" is the Europe/Athens market day;
+#   "hours" are the window's UTC stamps (24 normally; 23/25 on DST days).
+#
+# web/data/map.json prefers input_mode='entsoe' rows for now (unchanged
+# behavior; no input_mode field in its shape).
 #
 # web/data/ is git-ignored; CI uploads it as the `forecast-data` artifact.
 
@@ -37,7 +43,8 @@ nn(x) = (x === nothing || x === missing) ? nothing :
 
 function export_scoreboard()
     scores = Euphemia.sql2df_with_retry("""
-        SELECT bidding_zone AS z, lead_days, to_char(market_date, 'YYYY-MM') AS month,
+        SELECT bidding_zone AS z, lead_days, input_mode AS mode,
+               to_char(market_date, 'YYYY-MM') AS month,
                market_date, mae, bias, corr
         FROM simulations.forecast_scores
         WHERE code_version = \$1
@@ -59,17 +66,21 @@ function export_scoreboard()
 
     entries = Any[]
     if !isempty(scores)
-        for zl in unique(collect(zip(String.(scores.z), Int.(scores.lead_days))))
-            zone, lead = zl
-            sub = scores[(scores.z .== zone) .& (scores.lead_days .== lead), :]
+        for zlm in unique(collect(zip(String.(scores.z), Int.(scores.lead_days),
+                                      String.(scores.mode))))
+            zone, lead, mode = zlm
+            sub = scores[(scores.z .== zone) .& (scores.lead_days .== lead) .&
+                         (scores.mode .== mode), :]
             a = agg(sub)
             push!(entries, Dict("zone" => zone, "lead_days" => lead, "window" => "all",
+                                "input_mode" => mode,
                                 "n_days" => a.n_days, "mae" => nn(a.mae),
                                 "bias" => nn(a.bias), "corr" => nn(a.corr)))
             for month in sort(unique(String.(sub.month)))
                 m = sub[sub.month .== month, :]
                 am = agg(m)
                 push!(entries, Dict("zone" => zone, "lead_days" => lead, "window" => month,
+                                    "input_mode" => mode,
                                     "n_days" => am.n_days, "mae" => nn(am.mae),
                                     "bias" => nn(am.bias), "corr" => nn(am.corr)))
             end
@@ -88,7 +99,7 @@ end
 
 function export_zone_files()
     prices = Euphemia.sql2df_with_retry("""
-        SELECT bidding_zone AS z, market_date, lead_days,
+        SELECT bidding_zone AS z, market_date, lead_days, input_mode AS mode,
                (date_time_utc AT TIME ZONE 'UTC') AS t,
                price_eur_mwh AS sim,
                (prediction_made_utc AT TIME ZONE 'UTC') AS made
@@ -97,18 +108,19 @@ function export_zone_files()
           AND market_date IN (
             SELECT DISTINCT market_date FROM simulations.forecast_prices
             WHERE code_version = \$1 ORDER BY market_date DESC LIMIT \$2)
-        ORDER BY bidding_zone, market_date DESC, lead_days, date_time_utc
+        ORDER BY bidding_zone, market_date DESC, lead_days, input_mode, date_time_utc
     """, [CV, MAX_DAYS])
     if isempty(prices)
         println("no forecast_prices rows for cv=$CV — no zone files written")
         return
     end
     scores = Euphemia.sql2df_with_retry("""
-        SELECT bidding_zone AS z, market_date, lead_days, mae, bias, corr
+        SELECT bidding_zone AS z, market_date, lead_days, input_mode AS mode,
+               mae, bias, corr
         FROM simulations.forecast_scores WHERE code_version = \$1
     """, [CV])
-    scoremap = Dict{Tuple{String,Date,Int},Any}(
-        (String(r.z), Date(r.market_date), Int(r.lead_days)) => r
+    scoremap = Dict{Tuple{String,Date,Int,String},Any}(
+        (String(r.z), Date(r.market_date), Int(r.lead_days), String(r.mode)) => r
         for r in eachrow(scores))
 
     sd, ed = extrema(Date.(prices.market_date))
@@ -124,16 +136,19 @@ function export_zone_files()
     for zone in sort(unique(String.(prices.z)))
         zp = prices[prices.z .== zone, :]
         days = Any[]
-        for key in unique(collect(zip(Date.(zp.market_date), Int.(zp.lead_days))))
-            d, lead = key
-            sub = sort(zp[(Date.(zp.market_date) .== d) .& (zp.lead_days .== lead), :], :t)
+        for key in unique(collect(zip(Date.(zp.market_date), Int.(zp.lead_days),
+                                      String.(zp.mode))))
+            d, lead, mode = key
+            sub = sort(zp[(Date.(zp.market_date) .== d) .& (zp.lead_days .== lead) .&
+                          (zp.mode .== mode), :], :t)
             hours = [DateTime(t) for t in sub.t]
             sims = Float64.(sub.sim)
             actuals = Any[get(actmap, (zone, h), nothing) for h in hours]
-            sc = get(scoremap, (zone, d, lead), nothing)
+            sc = get(scoremap, (zone, d, lead, mode), nothing)
             push!(days, Dict(
                 "date" => d,
                 "lead_days" => lead,
+                "input_mode" => mode,
                 "prediction_made_utc" => DateTime(sub.made[1]),
                 "hours" => hours,
                 "sim" => sims,
@@ -142,8 +157,9 @@ function export_zone_files()
                 "bias" => sc === nothing ? nothing : nn(sc.bias),
                 "corr" => sc === nothing ? nothing : nn(sc.corr)))
         end
-        # newest first, then by increasing lead
-        sort!(days; by=e -> (e["date"], -e["lead_days"]), rev=true)
+        # newest first, then by increasing lead ('entsoe' before 'weather' within a lead)
+        sort!(days; by=e -> (e["date"], -e["lead_days"],
+                             e["input_mode"] == "entsoe" ? 1 : 0), rev=true)
         path = joinpath(zdir, "$zone.json")
         open(path, "w") do io
             json_write(io, Dict("zone" => zone, "market_day_tz" => "Europe/Athens",
@@ -162,11 +178,13 @@ end
 const MAP_DAYS = 60
 
 function export_map_json()
+    # map.json prefers the reference track (input_mode='entsoe') for now —
+    # shape unchanged, SPA-compatible.
     prices = Euphemia.sql2df_with_retry("""
         WITH freshest AS (
             SELECT bidding_zone, market_date, MIN(lead_days) AS lead
             FROM simulations.forecast_prices
-            WHERE code_version = \$1
+            WHERE code_version = \$1 AND input_mode = 'entsoe'
             GROUP BY 1, 2)
         SELECT p.bidding_zone AS z, p.market_date, p.lead_days,
                (p.date_time_utc AT TIME ZONE 'UTC') AS t,
@@ -176,9 +194,11 @@ function export_map_json()
         JOIN freshest f ON f.bidding_zone = p.bidding_zone
                        AND f.market_date = p.market_date AND f.lead = p.lead_days
         WHERE p.code_version = \$1
+          AND p.input_mode = 'entsoe'
           AND p.market_date IN (
             SELECT DISTINCT market_date FROM simulations.forecast_prices
-            WHERE code_version = \$1 ORDER BY market_date DESC LIMIT \$2)
+            WHERE code_version = \$1 AND input_mode = 'entsoe'
+            ORDER BY market_date DESC LIMIT \$2)
     """, [CV, MAP_DAYS])
     if isempty(prices)
         println("no forecast_prices rows for cv=$CV — no map.json written")
@@ -186,7 +206,8 @@ function export_map_json()
     end
     scores = Euphemia.sql2df_with_retry("""
         SELECT bidding_zone AS z, market_date, lead_days, mae, corr
-        FROM simulations.forecast_scores WHERE code_version = \$1
+        FROM simulations.forecast_scores
+        WHERE code_version = \$1 AND input_mode = 'entsoe'
     """, [CV])
     scoremap = Dict{Tuple{String,Date,Int},Any}(
         (String(r.z), Date(r.market_date), Int(r.lead_days)) => r

@@ -963,9 +963,17 @@ Creates the daily-forecast product tables if they don't exist (idempotent DDL):
   (market_date − prediction date, in days), so accuracy can be tracked HONESTLY
   per region and per lead time — a prediction is only ever written for days that
   had not yet realized at write time.
-- `simulations.forecast_scores`: per (market_date, zone, lead_days, code_version)
-  accuracy scores (MAE, bias = sim − actual, Pearson corr) computed once the
-  day's actual day-ahead prices realize.
+- `simulations.forecast_scores`: per (market_date, zone, lead_days, code_version,
+  input_mode) accuracy scores (MAE, bias = sim − actual, Pearson corr) computed
+  once the day's actual day-ahead prices realize.
+
+Both tables carry `input_mode` ('entsoe' = reference track built on ENTSO-E D-1
+load + wind/solar forecasts; 'weather' = ex-ante track whose wind/solar come
+from raw open-meteo weather via bin/weather_res.jl, freezable before the 12:00
+CET auction gate). The slice identity is (market_date, lead_days, code_version,
+input_mode) — the two tracks NEVER overwrite each other, so `input_mode` is part
+of the unique/primary keys (pre-existing constraints are migrated in place via
+pg_constraint-checked DO blocks; legacy rows default to 'entsoe').
 
 Postgres-only (no-op with a warning under the read-only DuckDB backend).
 Called by `bin/daily_forecast.jl` / `bin/score_forecasts.jl`.
@@ -986,9 +994,11 @@ function ensure_forecast_tables()
             lead_days INT NOT NULL,
             clearing_mode TEXT NOT NULL DEFAULT 'multi_zone_eu',
             code_version INT NOT NULL,
+            input_mode TEXT NOT NULL DEFAULT 'entsoe',
             optimization_run_id BIGINT,
             created_at TIMESTAMPTZ DEFAULT now(),
-            UNIQUE (date_time_utc, bidding_zone, lead_days, code_version)
+            CONSTRAINT forecast_prices_slice_hour_key
+                UNIQUE (date_time_utc, bidding_zone, lead_days, code_version, input_mode)
         )
         """)
 
@@ -998,13 +1008,79 @@ function ensure_forecast_tables()
             bidding_zone TEXT NOT NULL,
             lead_days INT NOT NULL,
             code_version INT NOT NULL,
+            input_mode TEXT NOT NULL DEFAULT 'entsoe',
             n_hours INT,
             mae DOUBLE PRECISION,
             bias DOUBLE PRECISION,  -- sim − actual
             corr DOUBLE PRECISION,
             scored_at TIMESTAMPTZ DEFAULT now(),
-            PRIMARY KEY (market_date, bidding_zone, lead_days, code_version)
+            PRIMARY KEY (market_date, bidding_zone, lead_days, code_version, input_mode)
         )
+        """)
+
+        # Migrate pre-existing tables: add input_mode (backfills 'entsoe' on
+        # legacy rows) and rebuild the unique/primary keys to include it, so
+        # the reference and weather tracks never collide. The DO blocks check
+        # pg_constraint and only touch constraints that lack input_mode —
+        # idempotent, no-op on fresh tables.
+        LibPQ.execute(cnx, """
+        ALTER TABLE simulations.forecast_prices
+            ADD COLUMN IF NOT EXISTS input_mode TEXT NOT NULL DEFAULT 'entsoe'
+        """)
+        LibPQ.execute(cnx, """
+        ALTER TABLE simulations.forecast_scores
+            ADD COLUMN IF NOT EXISTS input_mode TEXT NOT NULL DEFAULT 'entsoe'
+        """)
+
+        LibPQ.execute(cnx, """
+        DO \$\$
+        DECLARE c record;
+        BEGIN
+            FOR c IN
+                SELECT con.conname FROM pg_constraint con
+                WHERE con.conrelid = 'simulations.forecast_prices'::regclass
+                  AND con.contype = 'u'
+                  AND NOT EXISTS (
+                      SELECT 1 FROM unnest(con.conkey) k
+                      JOIN pg_attribute a
+                        ON a.attrelid = con.conrelid AND a.attnum = k
+                      WHERE a.attname = 'input_mode')
+            LOOP
+                EXECUTE format('ALTER TABLE simulations.forecast_prices DROP CONSTRAINT %I',
+                               c.conname);
+            END LOOP;
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_constraint
+                WHERE conrelid = 'simulations.forecast_prices'::regclass
+                  AND contype = 'u'
+            ) THEN
+                ALTER TABLE simulations.forecast_prices
+                ADD CONSTRAINT forecast_prices_slice_hour_key
+                UNIQUE (date_time_utc, bidding_zone, lead_days, code_version, input_mode);
+            END IF;
+        END \$\$;
+        """)
+
+        LibPQ.execute(cnx, """
+        DO \$\$
+        DECLARE c record;
+        BEGIN
+            FOR c IN
+                SELECT con.conname FROM pg_constraint con
+                WHERE con.conrelid = 'simulations.forecast_scores'::regclass
+                  AND con.contype = 'p'
+                  AND NOT EXISTS (
+                      SELECT 1 FROM unnest(con.conkey) k
+                      JOIN pg_attribute a
+                        ON a.attrelid = con.conrelid AND a.attnum = k
+                      WHERE a.attname = 'input_mode')
+            LOOP
+                EXECUTE format('ALTER TABLE simulations.forecast_scores DROP CONSTRAINT %I',
+                               c.conname);
+                ALTER TABLE simulations.forecast_scores
+                ADD PRIMARY KEY (market_date, bidding_zone, lead_days, code_version, input_mode);
+            END LOOP;
+        END \$\$;
         """)
 
         LibPQ.execute(cnx, """

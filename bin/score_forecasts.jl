@@ -3,11 +3,13 @@
 # Score realized forecasts (invoked by .github/workflows/daily-forecast.yml
 # after bin/daily_forecast.jl).
 #
-# For every (market_date, lead_days, code_version) slice in
+# For every (market_date, lead_days, code_version, input_mode) slice in
 # simulations.forecast_prices whose market day now has realized actual
 # day-ahead prices and no forecast_scores row yet (or RESCORE=true), computes
 # per-zone MAE, bias (sim − actual) and Pearson correlation over the day's
-# hours and upserts into simulations.forecast_scores.
+# hours and upserts into simulations.forecast_scores. The reference
+# ('entsoe') and ex-ante ('weather') tracks are scored as separate slices —
+# scores are per (date, zone, lead, cv, mode).
 #
 # Actuals methodology: resolution-aware, exactly the iteration-4 standard from
 # test/scripts/eu_eval_metrics.jl (whose `resolution_aware_actuals` is reused
@@ -49,10 +51,11 @@ function pending_slices()
             SELECT 1 FROM simulations.forecast_scores s
             WHERE s.market_date = fp.market_date
               AND s.lead_days = fp.lead_days
-              AND s.code_version = fp.code_version))
+              AND s.code_version = fp.code_version
+              AND s.input_mode = fp.input_mode))
     """
     return Euphemia.sql2df_with_retry("""
-        SELECT DISTINCT fp.market_date, fp.lead_days, fp.code_version
+        SELECT DISTINCT fp.market_date, fp.lead_days, fp.code_version, fp.input_mode
         FROM simulations.forecast_prices fp
         WHERE EXISTS (
             SELECT 1 FROM entsoe.energy_prices a
@@ -67,65 +70,71 @@ function pending_slices()
 end
 
 "Sim forecast rows of one slice, keyed (zone, naive-UTC hour)."
-function slice_sim(market_date::Date, lead_days::Int, cv::Int)
+function slice_sim(market_date::Date, lead_days::Int, cv::Int, input_mode::String)
     return Euphemia.sql2df_with_retry("""
         SELECT bidding_zone AS z, (date_time_utc AT TIME ZONE 'UTC') AS t,
                price_eur_mwh AS sim
         FROM simulations.forecast_prices
         WHERE market_date = \$1 AND lead_days = \$2 AND code_version = \$3
+          AND input_mode = \$4
         ORDER BY 1, 2
-    """, [market_date, lead_days, cv])
+    """, [market_date, lead_days, cv, input_mode])
 end
 
 function upsert_score!(market_date::Date, zone::String, lead_days::Int, cv::Int,
-                       n::Int, mae, bias, corr)
+                       input_mode::String, n::Int, mae, bias, corr)
     tonull(x) = x === nothing ? missing : x
     Euphemia.withdb() do cnx
         LibPQ.execute(cnx, """
             INSERT INTO simulations.forecast_scores
-            (market_date, bidding_zone, lead_days, code_version, n_hours, mae, bias, corr, scored_at)
-            VALUES (\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8, now())
-            ON CONFLICT (market_date, bidding_zone, lead_days, code_version)
+            (market_date, bidding_zone, lead_days, code_version, input_mode,
+             n_hours, mae, bias, corr, scored_at)
+            VALUES (\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8, \$9, now())
+            ON CONFLICT (market_date, bidding_zone, lead_days, code_version, input_mode)
             DO UPDATE SET n_hours = EXCLUDED.n_hours, mae = EXCLUDED.mae,
                           bias = EXCLUDED.bias, corr = EXCLUDED.corr, scored_at = now()
-        """, Any[market_date, zone, lead_days, cv, n, tonull(mae), tonull(bias), tonull(corr)])
+        """, Any[market_date, zone, lead_days, cv, input_mode,
+                 n, tonull(mae), tonull(bias), tonull(corr)])
     end
 end
 
-"Per lead_days × zone aggregate over all stored scores (GR first, then AGG)."
+"Per input_mode × lead_days × zone aggregate over all stored scores (GR first, then AGG)."
 function print_summary()
     df = Euphemia.sql2df_with_retry("""
-        SELECT lead_days, bidding_zone AS z, COUNT(*) AS n_days,
+        SELECT input_mode AS mode, lead_days, bidding_zone AS z, COUNT(*) AS n_days,
                AVG(mae) AS mae, AVG(bias) AS bias, AVG(corr) AS corr
         FROM simulations.forecast_scores
-        GROUP BY 1, 2
-        ORDER BY 1, 2
+        GROUP BY 1, 2, 3
+        ORDER BY 1, 2, 3
     """)
     if isempty(df)
         println("\nNo forecast scores stored yet — summary empty.")
         return
     end
     fmt(x) = (x === missing || x === nothing) ? "      -" : @sprintf("%7.2f", x)
-    println("\n### Forecast accuracy summary (per lead_days × zone, all stored scores)")
-    @printf("%-6s %-12s %7s %7s %8s %7s\n", "lead", "zone", "n_days", "MAE", "bias", "corr")
-    for lead in sort(unique(df.lead_days))
-        sub = df[df.lead_days .== lead, :]
-        # GR first, then the rest alphabetically
-        order = vcat(findall(sub.z .== "GR"), findall(sub.z .!= "GR"))
-        for i in order
-            r = sub[i, :]
-            @printf("%-6d %-12s %7d %s %s %s\n", lead, r.z, r.n_days,
-                    fmt(r.mae), fmt(r.bias), fmt(r.corr))
+    println("\n### Forecast accuracy summary (per input_mode × lead_days × zone, all stored scores)")
+    @printf("%-8s %-6s %-12s %7s %7s %8s %7s\n", "mode", "lead", "zone", "n_days", "MAE", "bias", "corr")
+    for mode in sort(unique(String.(df.mode)))
+        msub = df[df.mode .== mode, :]
+        for lead in sort(unique(msub.lead_days))
+            sub = msub[msub.lead_days .== lead, :]
+            # GR first, then the rest alphabetically
+            order = vcat(findall(sub.z .== "GR"), findall(sub.z .!= "GR"))
+            for i in order
+                r = sub[i, :]
+                @printf("%-8s %-6d %-12s %7d %s %s %s\n", mode, lead, r.z, r.n_days,
+                        fmt(r.mae), fmt(r.bias), fmt(r.corr))
+            end
+            # aggregate row across zones for this lead
+            mae_v = collect(skipmissing(sub.mae))
+            bias_v = collect(skipmissing(sub.bias))
+            corr_v = collect(skipmissing(sub.corr))
+            @printf("%-8s %-6d %-12s %7d %s %s %s\n", mode, lead, "AGG",
+                    sum(sub.n_days),
+                    fmt(isempty(mae_v) ? missing : mean(mae_v)),
+                    fmt(isempty(bias_v) ? missing : mean(bias_v)),
+                    fmt(isempty(corr_v) ? missing : mean(corr_v)))
         end
-        # aggregate row across zones for this lead
-        mae_v = collect(skipmissing(sub.mae))
-        bias_v = collect(skipmissing(sub.bias))
-        corr_v = collect(skipmissing(sub.corr))
-        @printf("%-6d %-12s %7d %s %s %s\n", lead, "AGG",
-                sum(sub.n_days),
-                fmt(isempty(mae_v) ? missing : mean(mae_v)),
-                fmt(isempty(bias_v) ? missing : mean(bias_v)),
-                fmt(isempty(corr_v) ? missing : mean(corr_v)))
     end
 end
 
@@ -148,9 +157,10 @@ function main()
         market_date = Date(r.market_date)
         lead_days = Int(r.lead_days)
         cv = Int(r.code_version)
-        println("\nScoring market_date=$market_date lead_days=$lead_days cv=$cv")
+        input_mode = String(r.input_mode)
+        println("\nScoring market_date=$market_date lead_days=$lead_days cv=$cv mode=$input_mode")
 
-        sim = slice_sim(market_date, lead_days, cv)
+        sim = slice_sim(market_date, lead_days, cv, input_mode)
         # market_date is the Europe/Athens market day: its window starts at
         # 21:00/22:00 UTC on market_date-1, so actuals must cover BOTH UTC days.
         act = resolution_aware_actuals(market_date - Day(1), market_date)
@@ -170,7 +180,8 @@ function main()
                 continue
             end
             s = score_series(sv, av)
-            upsert_score!(market_date, zone, lead_days, cv, s.n, s.mae, s.bias, s.corr)
+            upsert_score!(market_date, zone, lead_days, cv, input_mode,
+                          s.n, s.mae, s.bias, s.corr)
             corr_str = s.corr === nothing ? "-" : @sprintf("%.2f", s.corr)
             @printf("  %-12s n=%2d MAE=%6.1f bias=%+7.1f corr=%s\n",
                     zone, s.n, s.mae, s.bias, corr_str)
