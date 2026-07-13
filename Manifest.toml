@@ -2,7 +2,7 @@
 
 julia_version = "1.12.6"
 manifest_format = "2.0"
-project_hash = "fcdf8e7ee5d59b383d9ac2dd560e7836c8bce8f2"
+project_hash = "94cbe3341ae6307af813d94044c93aac6a312913"
 
 [[deps.ArgTools]]
 uuid = "0dad84c5-d112-42e6-8d28-ef12dabb789f"
@@ -186,7 +186,7 @@ uuid = "2cbbab25-fc8b-58cf-88d4-687a02676033"
 version = "1.5.4+0"
 
 [[deps.Euphemia]]
-deps = ["CSV", "ConcurrentUtilities", "DataFrames", "Dates", "Distributed", "DotEnv", "Gurobi", "HiGHS", "JuMP", "JuliaFormatter", "LibPQ", "Random", "Statistics", "Test"]
+deps = ["CSV", "ConcurrentUtilities", "DataFrames", "Dates", "Distributed", "DotEnv", "DuckDB", "Gurobi", "HiGHS", "JuMP", "JuliaFormatter", "LibPQ", "Random", "Statistics", "Test"]
 path = "."
 uuid = "2e9cd046-0924-5485-92f1-d5272153d98c"
 version = "0.0.0"

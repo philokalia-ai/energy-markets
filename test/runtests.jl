@@ -174,6 +174,16 @@ println()
         include(joinpath(@__DIR__, "test_forecast_tracking.jl"))
     end
 
+    @testset "Weather RES" begin
+        println("\n" * "=" ^ 60)
+        println("Running Weather RES Tests...")
+        println("=" ^ 60)
+        # Pure logic only (power curve, sun elevation, feature vectors,
+        # ensemble averaging, open-meteo response parsing on literal JSON)
+        # — no network, no DB, no solver.
+        include(joinpath(@__DIR__, "test_weather_res.jl"))
+    end
+
     @testset "15-min Resolution" begin
         println("\n" * "=" ^ 60)
         println("Running 15-min Resolution (upsample) Tests...")
