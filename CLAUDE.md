@@ -955,6 +955,13 @@ scenario never touched NO2. See [docs/scenario-api.md](docs/scenario-api.md) for
 the three worked examples (ships / PPC markup / unit retirement) and measured
 deltas.
 
+**Analyzing scenario outputs:** label each run with a distinct `clearing_mode`
+(kwarg on `generate_energy_prices`), then compare two labels with
+`queries/load_weighted_price_delta.sql` via `bin/scenario_delta.jl` (load-weighted
+price delta in €/MWh + annualized extra cost in €m). Full workflow and two
+committed exercises (GR data center / cold ironing): "Analyzing scenario
+outputs" in docs/scenario-api.md and docs/experiments/scenario-exercises/.
+
 ## GitHub Actions / CI
 
 The project includes several GitHub workflows for automated price generation:

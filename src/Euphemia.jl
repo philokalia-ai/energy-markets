@@ -553,6 +553,10 @@ Supports both hourly and sub-hourly temporal resolutions depending on the order 
 - `markup_factor::Float64`: Price markup factor for UC-based orders (default: 1.1)
 - `random_seed::Union{Int,Nothing}`: Random seed for alternative order book (default: nothing)
 - `silent::Bool`: Whether to suppress solver output (default: true)
+- `clearing_mode::String`: Label stored with saved prices (default: "single_zone").
+  Scenario runs should use a distinct label (e.g. "gr_scn_dc574") so baseline and
+  counterfactual rows coexist in `simulations.energy_prices` and can be compared
+  with `queries/load_weighted_price_delta.sql`.
 
 # Returns
 - `Dict{String,Float64}`: Dictionary mapping time periods to energy price (€/MWh)
@@ -600,6 +604,7 @@ function generate_energy_prices(bidding_zone::String, date::Date;
     silent::Bool=true,
     save_to_db::Bool=false,
     force_rerun::Bool=false,
+    clearing_mode::String="single_zone",
     load_modifier::Union{Nothing,Function}=nothing,
     renewable_modifier::Union{Nothing,Function}=nothing,
     extra_orders::Union{Nothing,Function}=nothing,
@@ -738,7 +743,7 @@ function generate_energy_prices(bidding_zone::String, date::Date;
                     try
                         println("   💾 Saving $(length(prices)) price records to database...")
                         records_saved = save_energy_prices(prices, bidding_zone, date, order_method;
-                                                           clearing_mode="single_zone",
+                                                           clearing_mode=clearing_mode,
                                                            optimization_run_id=optimization_run_id)
                         println("   ✅ Successfully saved $records_saved records to database")
                     catch db_error
