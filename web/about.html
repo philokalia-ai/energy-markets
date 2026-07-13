@@ -154,6 +154,65 @@
     model's information gain per day of lead time is measured.
   </p>
 
+
+  <h2 id="bidding-strategies">Bidding strategies — how each region's order book is built</h2>
+  <p>
+    Every zone's hourly supply and demand curves are constructed from fundamentals,
+    with <strong>no bid markups fitted to prices</strong>. The common machinery:
+  </p>
+  <ul>
+    <li><strong>Thermal plants bid short-run marginal cost</strong>: gas plants at
+      TTF futures / efficiency + CO₂ (daily EUA price × emission factor) + O&amp;M;
+      coal and lignite from their own fuel and carbon stacks. No strategic markup —
+      that gap is what we measure, not what we assume.</li>
+    <li><strong>Must-run behavior</strong>: the cheapest thermal units (within ~15%
+      of gas cost, up to the day's residual peak) offer the deepest part of their
+      minimum load nearly free — mimicking plants that will not cycle off for a
+      few cheap hours.</li>
+    <li><strong>Wind and solar are price-takers</strong>: the forecast volume is
+      offered at €1/MWh (reference track: ENTSO-E's D-1 forecast; ex-ante track:
+      our weather-model prediction).</li>
+    <li><strong>Demand</strong> is the D-1 load forecast, ~98% inelastic at the
+      price cap with a small elastic tail — day-ahead demand barely responds to
+      price.</li>
+    <li><strong>Imports/exports</strong> enter through the coupled clearing's
+      transmission constraints; where a zone structurally leans on imports, the
+      available import capacity is credited against its scarcity margin.</li>
+    <li><strong>Scarcity uplift</strong>: when the day's supply margin over peak
+      demand is thin, offers steepen — the competitive scarcity signal, not a
+      calibration to prices.</li>
+  </ul>
+  <p>On top of that, each region has a profile reflecting how its market actually sets prices:</p>
+  <ul>
+    <li><strong>Hydro-dominated zones (Norway, Alpine CH/AT, Southeast Europe)</strong> —
+      reservoir hydro does not bid its (near-zero) running cost but its
+      <em>opportunity cost</em>: a water value tied to gas prices, scaled down when
+      reservoirs are wet and up when dry (weekly reservoir levels vs the seasonal
+      norm; Sweden's north additionally follows the seasonal drawdown cycle).</li>
+    <li><strong>Two-pass opportunity anchors</strong> — in hydro-anchored zones
+      (Norway, CH, AT, BE, SK) and nuclear-anchored France, flexible fleets re-bid
+      in a second pass against the first pass's <em>coupled</em> price: a Norwegian
+      reservoir or a French nuclear plant asks "what is my energy worth to the
+      whole connected market?", not just locally.</li>
+    <li><strong>Continental thermal zones (DE/LU, NL, PL, CZ) and the Baltics</strong> —
+      the fleet is trued to registry <em>installed</em> capacity (ENTSO-E's
+      per-unit output history undercounts these fleets); the Baltics additionally
+      credit their import interconnectors (Estlink, NordBalt) in the scarcity
+      margin, since thin domestic fleets ride the Nordic system.</li>
+    <li><strong>Italy's six zones</strong> — a dedicated profile for the peninsula's
+      structurally tighter, gas-set market with its own scarcity parameters.</li>
+    <li><strong>Crisis honesty</strong> — where a fuel type's real availability sits
+      far below nameplate (e.g. lignite fleets in decline), capacity is derated to
+      its recent 95th-percentile output, so the book reflects the plants that
+      actually run.</li>
+  </ul>
+  <p>
+    The full parameterization is one <code>ZoneProfile</code> per zone in
+    <code>src/MeritOrderBook.jl</code>, documented zone by zone in the calibration
+    atlas (<code>docs/</code>) — every choice justified by physics or public data,
+    never by fitting to the prices we score against.
+  </p>
+
   <h2>Scoring, honestly</h2>
   <p>
     As days settle, predictions are scored per zone and per lead time against the
