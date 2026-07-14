@@ -171,21 +171,48 @@ include(joinpath(@__DIR__, "..", "bin", "weather_res.jl"))
         @test isempty(predict_res(pack, "NOPE", [t], weather))
     end
 
-    @testset "model pack sanity (bin/res_models_v1.json)" begin
-        pack = load_res_models()
-        zones = pack["zones"]
-        @test length(zones) == 39
-        for z in ("GR", "DE_LU", "FR", "IT-NORTH", "NO2")
-            @test haskey(zones, z)
+    @testset "model pack sanity (v1 + v2)" begin
+        for path in (RES_MODELS_PATH_V1, RES_MODELS_PATH_V2)
+            isfile(path) || continue
+            pack = load_res_models(path)
+            zones = pack["zones"]
+            @test length(zones) == 39
+            for z in ("GR", "DE_LU", "FR", "IT-NORTH", "NO2")
+                @test haskey(zones, z)
+            end
+            gr = zones["GR"]
+            ncells = length(gr["cells"])
+            @test length(gr["wind"]["coef"]) == 1 + 2 * ncells   # [1, pcurve., v/3.6]
+            @test length(gr["solar"]["coef"]) == 39
+            @test 34 <= gr["solar"]["lat0"] <= 42                # Greek centroid
+            # zones may legitimately lack a component (physically negligible)
+            @test !haskey(zones["NO5"], "wind")
+            @test !haskey(zones["NO2"], "solar")
         end
-        gr = zones["GR"]
-        ncells = length(gr["cells"])
-        @test length(gr["wind"]["coef"]) == 1 + 2 * ncells   # [1, pcurve., v/3.6]
-        @test length(gr["solar"]["coef"]) == 39
-        @test 34 <= gr["solar"]["lat0"] <= 42                # Greek centroid
-        # zones may legitimately lack a component (physically negligible)
-        @test !haskey(zones["NO5"], "wind")
-        @test !haskey(zones["NO2"], "solar")
+        # v2 keeps v1's cells + solar verbatim (feature vectors must match)
+        if isfile(RES_MODELS_PATH_V2)
+            v1 = load_res_models(RES_MODELS_PATH_V1)
+            v2 = load_res_models(RES_MODELS_PATH_V2)
+            for (z, zm) in v1["zones"]
+                @test v2["zones"][z]["cells"] == zm["cells"]
+                haskey(zm, "solar") && @test v2["zones"][z]["solar"] == zm["solar"]
+                @test haskey(v2["zones"][z], "wind") == haskey(zm, "wind")
+            end
+        end
+    end
+
+    @testset "default_res_models_path (v2 preferred, env override)" begin
+        expected = isfile(RES_MODELS_PATH_V2) ? RES_MODELS_PATH_V2 : RES_MODELS_PATH_V1
+        had = haskey(ENV, "EUPHEMIA_RES_PACK")
+        old = get(ENV, "EUPHEMIA_RES_PACK", "")
+        try
+            delete!(ENV, "EUPHEMIA_RES_PACK")
+            @test default_res_models_path() == expected
+            ENV["EUPHEMIA_RES_PACK"] = "/some/other/pack.json"   # rollback override wins
+            @test default_res_models_path() == "/some/other/pack.json"
+        finally
+            had ? (ENV["EUPHEMIA_RES_PACK"] = old) : delete!(ENV, "EUPHEMIA_RES_PACK")
+        end
     end
 
 end
