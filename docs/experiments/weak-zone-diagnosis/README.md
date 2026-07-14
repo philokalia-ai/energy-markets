@@ -45,7 +45,11 @@ benchmark.
      median, ≥0), priced at 1.8×gas SRMC (above every domestic tranche, so it
      only binds when the book would otherwise starve). Implemented via the
      built-in `ZoneScenario.extra_orders` hook — guard zones receive nothing.
-   - Results: see "Prototype results" below.
+   - **Measured (28-day benchmark)**: phantom caps 103 → 19 hours (all
+     remaining are out-of-scope Nordic + 3 stragglers); corr BE 0.22→0.85,
+     DK1 0.11→0.75, DK2 0.32→0.76, CH 0.11→0.74, AT 0.17→0.80, RO 0.35→0.77,
+     RS 0.32→0.79, SI 0.28→0.70, SE3 0.18→0.55; MAE cut 2–3× in every target
+     zone; guards GR/DE_LU/ES/PT within ±0.01 corr / ±0.4 MAE (GR improves).
 4. **Residual (non-spike) findings**, documented with evidence but not
    prototyped: a shared too-flat intraday shape in the CWE-adjacent zones
    (evening peak −20…−37 €/MWh, midday +5…+17), and SE3's anchor reference
@@ -211,7 +215,50 @@ temperament softens the peak markup — the production implementation has
 calibrated the same way in iter 5). Guards move ≤0.01 corr / ≤0.3 MAE
 (coupling-level effects only; the hooks never touch them).
 
-### RESULTS_V2_PLACEHOLDER
+### Results — P2 (`v2` = drops + backstop), 28-day benchmark vs settled prices
+
+Full table: `evidence/variant_metrics.csv` (also split by the 16 spike days).
+
+| zone | corr base→v1→v2 | MAE base→v1→v2 | bias v2 |
+|------|-----------------|-----------------|---------|
+| **BE** | 0.22 → 0.22 → **0.85** | 63.5 → 63.5 → **21.0** | −3.5 |
+| **DK1** | 0.11 → 0.10 → **0.75** | 71.8 → 71.9 → **28.8** | −7.0 |
+| **DK2** | 0.32 → 0.32 → **0.76** | 82.6 → 82.8 → **29.4** | −9.2 |
+| **CH** | 0.11 → 0.10 → **0.74** | 49.9 → 47.2 → **24.1** | −8.8 |
+| **AT** | 0.17 → 0.75 → **0.80** | 85.3 → 28.9 → **28.0** | −21.1 |
+| **RO** | 0.35 → 0.34 → **0.77** | 54.8 → 54.4 → **31.8** | −5.0 |
+| **RS** | 0.32 → 0.42 → **0.79** | 44.6 → 39.7 → **28.3** | −2.4 |
+| **SI** | 0.28 → 0.70 → **0.70** | 64.5 → 41.1 → **41.1** | −31.8 |
+| SE3 | 0.18 → 0.18 → 0.55 | 53.8 → 53.7 → 36.2 | +13.3 |
+| IT-CNORTH | 0.59 → 0.61 → 0.63 | 26.2 → 24.1 → 21.5 | +0.4 |
+| HU | 0.74 → 0.73 → 0.73 | 37.8 → 40.8 → 41.1 | −28.8 |
+| *GR (guard)* | 0.85 → 0.86 → 0.86 | 24.2 → 24.0 → 23.4 | −10.3 |
+| *DE_LU (guard)* | 0.88 → 0.87 → 0.87 | 20.7 → 20.9 → 21.1 | −6.7 |
+| *ES (guard)* | 0.83 → 0.84 → 0.84 | 23.5 → 23.2 → 23.0 | +3.0 |
+| *PT (guard)* | 0.80 → 0.80 → 0.80 | 25.2 → 24.9 → 24.8 | +4.1 |
+
+Hours > €500 on the benchmark: **103 (base) → 19 (v2)**, and the remainder is
+FI 4 / NO1 12 (out-of-scope Nordic hydro) + 1 each in IT-NORTH / IT-CNORTH /
+RO. Every in-scope phantom cap is gone. On the previously-capping SEE
+cold-snap day (2026-01-13) the coupled SEE block now clears 124–569 vs actual
+250–400 — direction right, residual overpricing from the scarcity *markup*
+still firing (the scarcity margin does not see backstop/restored-import
+supply; a production implementation should credit it, like
+`scarcity_import_credit`).
+
+Attribution: v1-alone moves only AT/SI (the chronic-ATC pair); the backstop
+provides the rest. The two mechanisms are complementary, matching the
+diagnosis. Cautions measured: **HU** bias drifts −14.6 → −28.8 (its
+climatology injection was already adequate — HU should be dropped from the
+backstop set or its scarcity margin credited); **AT/SI** now sit ~20–30 low
+(anchored import price clamped at gas SRMC + softened temperament —
+`anchor_share`/clamp are the production calibration levers, as in the iter-5
+AT calibration); **SE3** improves (0.18→0.55, spikes gone) but keeps the flat
+night overpricing of §4b — its fix is the anchor-ref change, not imports.
+
+A `v4` variant (backstop capability window widened from the 8 same-weekday
+draws to the trailing 56 calendar days) and a `v3` variant (backstop without
+drops, attribution control) are runnable from the same script.
 
 ## 4. Residual (non-spike) findings — documented, not prototyped
 
