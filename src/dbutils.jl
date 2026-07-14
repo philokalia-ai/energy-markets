@@ -589,10 +589,20 @@ end
 # the continental core DE_LU/NL/PL/CZ and the Baltics), SK Core-border drop +
 # :hydro anchor, seasonal reservoir-drawdown water value, import-ATC scarcity
 # credit, and MPCC robustness — exact indicator-form complementarity retry +
-# per-day :p95-books fallback, July 2026) so new results are never mixed
+# per-day :p95-books fallback, July 2026;
+# v15 -> v16: fully ex-ante :v2 flow rule (flow climatology + D-7 Norwegian
+# recency) as the EU-footprint default instead of same-day observed flows,
+# July 2026;
+# v16 -> v17: weak-zone import fixes (docs/experiments/weak-zone-diagnosis) —
+# AT–CZ/AT–DE_LU/AT–SI Core-FBMC border drops + SI on the Slovakia treatment
+# (continental temperament + :hydro anchor), the profile-gated ex-ante
+# elastic import backstop (AT/BE/CH/DK1/DK2/SE3/IT-CNORTH/SI/RO/RS; HU
+# excluded), SE3 anchor refs over dropped borders (SE2
+# climatology-flow-weighted), and ref-priced retained-border exports
+# (SI–HR, BE–GB), July 2026) so new results are never mixed
 # with — or skipped because of — old rows. Each version is one selectable
 # "Run" in the Metabase counterfactual dashboard.
-const ENERGY_PRICES_CODE_VERSION = 16
+const ENERGY_PRICES_CODE_VERSION = 17
 
 const poolsize = 5
 cnxpool = Pools.Pool{LibPQ.Connection}(poolsize)

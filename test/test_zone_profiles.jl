@@ -45,15 +45,72 @@ const V10_TRANCHES = [(0.55, 0.95), (0.20, 1.05), (0.15, 1.25), (0.10, 1.60)]
         @test p.hydro_model == :gas_anchored         # SEE hydro model
         @test p.nuclear_srmc_floor == 0.0            # no nuclear position floor
         @test p.opportunity_anchor == :none          # no two-pass anchor
+        # cv17 mechanisms are all inert on the SEE default profile
+        @test p.import_backstop == false
+        @test p.backstop_scarcity_credit == 0.0
+        @test p.anchor_include_dropped == false
+        @test p.ref_priced_exports == false
     end
 
     @testset "registry defaults to SEE for the SEE core and unknowns" begin
-        for z in ("GR", "BG", "RO", "RS", "HU")
+        for z in ("GR", "BG", "HU")
             @test get_zone_profile(z) === SEE_PROFILE
         end
         @test get_zone_profile("ZZ-not-a-zone") === SEE_PROFILE
         @test IBERIA_PROFILE === SEE_PROFILE          # Iberia == SEE (verified)
         @test get_zone_profile("ES") === SEE_PROFILE
+        # cv17: RO/RS = exact SEE calibration + the import backstop (EU
+        # footprint only — the single-zone/5-zone SEE products never consult
+        # the registry and force SEE_PROFILE)
+        for (z, p) in (("RO", ROMANIA_PROFILE), ("RS", SERBIA_PROFILE))
+            @test get_zone_profile(z) === p
+            @test p.import_backstop == true
+            @test with_profile(p; import_backstop=false) == SEE_PROFILE
+        end
+        # HU deliberately carries NO backstop (measured P2 caution: its bias
+        # drifted −14.6 → −28.8 — the climatology injection is adequate)
+        @test get_zone_profile("HU").import_backstop == false
+    end
+
+    @testset "cv17 profiles (weak-zone import fixes)" begin
+        # SI: the Slovakia treatment (the AT–SI drop pairs with the :hydro anchor)
+        @test get_zone_profile("SI") === SLOVENIA_PROFILE
+        @test SLOVENIA_PROFILE.opportunity_anchor == :hydro
+        @test SLOVENIA_PROFILE.scarcity_kappa == CONTINENTAL_PROFILE.scarcity_kappa
+        @test SLOVENIA_PROFILE.import_backstop == true
+        @test SLOVENIA_PROFILE.ref_priced_exports == true   # SI–HR retained border
+        # Denmark: NORDIC + backstop, nothing else changed
+        @test get_zone_profile("DK1") === DENMARK_PROFILE
+        @test get_zone_profile("DK2") === DENMARK_PROFILE
+        @test with_profile(DENMARK_PROFILE; import_backstop=false) == NORDIC_PROFILE
+        # SE1/SE2/FI stay plain NORDIC (no backstop)
+        for z in ("SE1", "SE2", "FI")
+            @test get_zone_profile(z) === NORDIC_PROFILE
+        end
+        # SE3: backstop + dropped-border anchor ref; SE4 unchanged
+        @test get_zone_profile("SE3") === SE3_PROFILE
+        @test SE3_PROFILE.anchor_include_dropped == true
+        @test SE3_PROFILE.import_backstop == true
+        @test get_zone_profile("SE4") === SWEDEN_SOUTH_PROFILE
+        @test SWEDEN_SOUTH_PROFILE.anchor_include_dropped == false
+        # IT-CNORTH: ITALY + backstop; other IT sub-zones unchanged
+        @test get_zone_profile("IT-CNORTH") === ITALY_CNORTH_PROFILE
+        @test with_profile(ITALY_CNORTH_PROFILE; import_backstop=false) == ITALY_PROFILE
+        @test get_zone_profile("IT-NORTH") === ITALY_PROFILE
+        # AT/CH/BE gained the backstop, keeping their existing calibration
+        @test AUSTRIA_PROFILE.import_backstop == true
+        @test AUSTRIA_PROFILE.anchor_share == 1.1
+        @test SWISS_PROFILE.import_backstop == true
+        @test BELGIUM_PROFILE.import_backstop == true
+        @test BELGIUM_PROFILE.ref_priced_exports == true    # BE–GB retained border
+        # AT border drops live in flow_based_drop_borders
+        drops = Euphemia.flow_based_drop_borders(["AT", "CZ", "DE_LU", "SI", "GR"])
+        @test ("AT", "CZ") in drops
+        @test ("AT", "DE_LU") in drops
+        @test ("AT", "SI") in drops
+        # ... and never fire on a footprint without AT (the SEE 5-zone set —
+        # HU–AT/HU–SK need AT/SK in the footprint too)
+        @test isempty(Euphemia.flow_based_drop_borders(["GR", "BG", "RO", "RS", "HU"]))
     end
 
     @testset "region profiles are the intended thin deltas" begin
@@ -100,7 +157,8 @@ const V10_TRANCHES = [(0.55, 0.95), (0.20, 1.05), (0.15, 1.25), (0.10, 1.60)]
         # drop (the €1 observed-import block must not be price-setting — the
         # NO1 iteration-2 lesson). SE1/SE2 stay plain NORDIC.
         @test SWEDEN_SOUTH_PROFILE.opportunity_anchor == :hydro
-        @test get_zone_profile("SE3") === SWEDEN_SOUTH_PROFILE
+        # cv17: SE3 moved to SE3_PROFILE (SWEDEN_SOUTH + backstop + dropped-
+        # border anchor ref) — see the cv17 testset; SE4 stays.
         @test get_zone_profile("SE4") === SWEDEN_SOUTH_PROFILE
         @test get_zone_profile("SE1") === NORDIC_PROFILE
         @test get_zone_profile("SE2") === NORDIC_PROFILE
