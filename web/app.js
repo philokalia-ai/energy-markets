@@ -1,17 +1,24 @@
-/* Euphemia results browser — plain JS, no build step, no external requests.
- * Data contract:
- *   ./data/scoreboard.json   (fallback ./fixtures/scoreboard.json)
- *   ./data/zones/<ZONE>.json (fallback ./fixtures/zones/<ZONE>.json)
+/* Euphemia results browser — plain JS, no build step.
+ * Data contract (three rungs, first that answers wins):
+ *   1. live Worker API (issue #152): API_BASE/v1/{zones/<Z>,scoreboard,map}
+ *      — R2-backed, fresh seconds after each pipeline run; ?live=0 disables,
+ *      ?api=<base> overrides the origin.
+ *   2. ./data/*.json   (committed exports — permanent fallback + offline dev)
+ *   3. ./fixtures/*.json
  */
 (function () {
   "use strict";
 
   var BASES = ["./data", "./fixtures"];
+  var QUERY = new URLSearchParams(window.location.search);
+  var API_BASE = QUERY.get("api") || "https://euphemia-api.dyad-wasm.workers.dev/api";
+  var LIVE = QUERY.get("live") !== "0";
   var SVGNS = "http://www.w3.org/2000/svg";
 
   var state = {
     scoreboard: null,
-    source: null,          // "data" | "fixtures"
+    source: null,          // "api" | "data" | "fixtures"
+    manifest: null,        // /api/v1/manifest payload (freshness badge)
     fixture: false,
     zoneCache: {},         // zone -> zone file json
     view: "horizon",       // "horizon" | "explorer" | "board"
@@ -57,15 +64,40 @@
     });
   }
 
-  // Try ./data first, fall back to ./fixtures.
+  // "zones/GR.json" -> API_BASE + "/v1/zones/GR" (endpoints carry no .json)
+  function apiPath(rel) {
+    return API_BASE + "/v1/" + rel.replace(/\.json$/, "");
+  }
+
+  // Fetch the freshness manifest once, after the first successful API load.
+  var manifestRequested = false;
+  function onApiSuccess() {
+    if (manifestRequested) return;
+    manifestRequested = true;
+    fetchJSON(API_BASE + "/v1/manifest").then(function (m) {
+      state.manifest = m;
+      renderFooter();
+    }, function () { /* badge is best-effort */ });
+  }
+
+  // Try the live Worker API first (unless ?live=0), then ./data, then
+  // ./fixtures. The static rungs never go away — disabling the Worker
+  // restores the pre-API behavior exactly.
   function loadWithFallback(rel) {
-    return fetchJSON(BASES[0] + "/" + rel).then(
-      function (j) { return { json: j, source: "data" }; },
-      function () {
-        return fetchJSON(BASES[1] + "/" + rel).then(function (j) {
-          return { json: j, source: "fixtures" };
-        });
-      }
+    function staticChain() {
+      return fetchJSON(BASES[0] + "/" + rel).then(
+        function (j) { return { json: j, source: "data" }; },
+        function () {
+          return fetchJSON(BASES[1] + "/" + rel).then(function (j) {
+            return { json: j, source: "fixtures" };
+          });
+        }
+      );
+    }
+    if (!LIVE) return staticChain();
+    return fetchJSON(apiPath(rel)).then(
+      function (j) { onApiSuccess(); return { json: j, source: "api" }; },
+      staticChain
     );
   }
 
@@ -1435,12 +1467,30 @@
 
   // ---------- footer ----------
 
+  function humanizeAgo(iso) {
+    var ms = Date.now() - new Date(iso).getTime();
+    if (!isFinite(ms)) return null;
+    var min = Math.round(ms / 60000);
+    if (min < 1) return "just now";
+    if (min < 60) return min + " min ago";
+    var h = Math.round(min / 60);
+    if (h < 48) return h + " h ago";
+    return Math.round(h / 24) + " days ago";
+  }
+
   function renderFooter() {
     var sb = state.scoreboard;
+    if (!sb) return;   // manifest may arrive before the scoreboard
     var bits = [];
     if (sb.generated_utc) bits.push("generated " + sb.generated_utc.replace("T", " ").replace("Z", " UTC"));
     if (sb.code_version !== undefined) bits.push("code_version " + sb.code_version);
-    bits.push("source: " + (state.source === "data" ? "exported model results" : "bundled fixtures"));
+    bits.push("source: " + (state.source === "api" ? "live data API" :
+      state.source === "data" ? "exported model results" : "bundled fixtures"));
+    // Freshness badge — only when the API rung actually served the data.
+    if (state.source === "api" && state.manifest && state.manifest.updated_at) {
+      var ago = humanizeAgo(state.manifest.updated_at);
+      if (ago) bits.push("data updated " + ago);
+    }
     $("footer-meta").textContent = bits.join(" · ");
   }
 
