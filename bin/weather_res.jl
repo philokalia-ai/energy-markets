@@ -233,7 +233,16 @@ function fetch_weather(cells::Vector{Tuple{Float64,Float64}}, dates::Vector{Date
               "&start_date=" * Dates.format(d0, "yyyy-mm-dd") *
               "&end_date=" * Dates.format(d1, "yyyy-mm-dd") *
               "&timezone=UTC"
-        body = _openmeteo_get(url)
+        body = try
+            _openmeteo_get(url)
+        catch e
+            # Self-hosted instance down? Fall back to the public API for this
+            # batch (slower, rate-limited, but keeps the morning window alive).
+            base_url == OPENMETEO_URL_DEFAULT && rethrow(e)
+            fb_url = replace(url, base_url => OPENMETEO_URL_DEFAULT)
+            @warn "open-meteo primary ($base_url) failed; falling back to public API" exception=e
+            _openmeteo_get(fb_url)
+        end
         merge!(out, parse_openmeteo_response(body, batch))
     end
     return out
