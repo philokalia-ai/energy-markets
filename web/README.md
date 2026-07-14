@@ -18,6 +18,17 @@ Any static file server works (the app only does `fetch('./data/...')`). Opening
 
 ## Where the data comes from
 
+Since issue #152 the app tries three rungs in order (first that answers wins):
+
+1. **Live Worker API** — `https://euphemia-api.dyad-wasm.workers.dev/api/v1/…`,
+   backed by R2 parquet the pipeline uploads seconds after each DB write
+   (`bin/export_web_parquet.jl` + `workers/api/`). Fresh without a deploy.
+   Disable with `?live=0`; point elsewhere with `?api=<base>`. When this rung
+   serves the data, the footer shows a "data updated … ago" freshness badge
+   from `/api/v1/manifest`.
+2. **`./data/*.json`** — committed exports (permanent fallback + offline dev).
+3. **`./fixtures/*.json`** — bundled synthetic fixtures (banner shown).
+
 The app reads two kinds of JSON files:
 
 - `data/scoreboard.json` — aggregate accuracy per zone × lead time × window

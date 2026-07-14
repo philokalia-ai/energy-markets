@@ -336,6 +336,48 @@ from weather forecasts
   Remaining for live use: EU-wide weather fetch at the catalogue cells and a
   temperature-driven load model for lead ≥ 2.
 
+### Live data backend — R2 parquet + Worker API (the `/v1/` contract)
+
+Site freshness is decoupled from git pushes (issue #152): right after each
+pipeline write step, `bin/export_web_parquet.jl` exports the SPA's data
+contract as **zstd parquet** (DuckDB `COPY`) and `bin/web_data_push.sh`
+uploads it to the R2 bucket `euphemia-web-data` — seconds after the DB
+write, no commit, no Pages build. A Cloudflare Worker
+([workers/api/](workers/api/)) reads the parquet with hyparquet and serves
+the exact JSON shapes the SPA consumes, ETag-cached at the edge:
+
+```
+GET https://euphemia-api.dyad-wasm.workers.dev/api/v1/zones/GR
+GET https://euphemia-api.dyad-wasm.workers.dev/api/v1/scoreboard
+GET https://euphemia-api.dyad-wasm.workers.dev/api/v1/map
+GET https://euphemia-api.dyad-wasm.workers.dev/api/v1/manifest   # {updated_at, …}
+```
+
+`web/app.js` tries the API first and falls back to the committed
+`./data/*.json`, then fixtures — disabling the Worker restores the static
+behavior exactly (`?live=0` forces it per visit).
+
+**Stability contract.** The bucket layout is a public data interface:
+
+```
+v1/zones/<ZONE>.parquet   # hourly sim/actual + all vintages, ~120 recent days
+v1/scoreboard.parquet     # zone × lead × window × track aggregates
+v1/map.parquet            # per-day zone aggregates (freshest lead)
+v1/manifest.json          # {updated_at, code_version, zones, row_counts}
+```
+
+Fields under `v1/` are append-only: new columns may be added, existing
+columns never change meaning or type; breaking changes bump to `v2/` with
+`v1/` kept alive during a deprecation window. The objects are typed parquet
+precisely so that people **and their agents** can query them directly
+(DuckDB/pandas over HTTP range reads) once public bucket access is enabled —
+a one-time user action: `npx wrangler r2 bucket dev-url enable
+euphemia-web-data` (or attach a custom domain to the bucket), then:
+
+```sql
+SELECT * FROM 'https://<public-bucket-url>/v1/zones/GR.parquet' LIMIT 24;
+```
+
 ## Repository map
 
 ```
