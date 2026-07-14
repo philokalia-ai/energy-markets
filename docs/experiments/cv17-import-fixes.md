@@ -72,11 +72,12 @@ drops, so they are structurally unchanged.
 
 ### 1. Unit tests
 
-`julia --project=. test/runtests.jl`: **1078 passed / 4 failed / 12 errored /
-2 broken** — the failures are exactly the 16 pre-existing "UC Caching
-Integration" failures documented in the known-issues memory (verified on
-unmodified main); all merit-book / profile / network / MPCC / scenario suites
-pass, including the updated `test_zone_profiles.jl` (119 tests).
+`julia --project=. test/runtests.jl` (run twice: after the initial
+implementation and on the final configuration): **1083 passed / 4 failed /
+12 errored / 2 broken** — the failures are exactly the 16 pre-existing "UC
+Caching Integration" failures documented in the known-issues memory (verified
+on unmodified main); all merit-book / profile / network / MPCC / scenario
+suites pass, including the updated `test_zone_profiles.jl`.
 
 ### 2. SEE byte-identity (cv16 code ↔ cv17 code)
 

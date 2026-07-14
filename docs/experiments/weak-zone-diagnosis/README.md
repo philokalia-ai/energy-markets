@@ -217,7 +217,7 @@ calibrated the same way in iter 5). Guards move ≤0.01 corr / ≤0.3 MAE
 
 ### Results — P2 (`v2` = drops + backstop), 28-day benchmark vs settled prices
 
-Full table: `evidence/variant_metrics.csv` (also split by the 16 spike days).
+Full table: `evidence/variant_metrics.csv` (also split by the 16 spike days). The cv17 production-path gate re-measurement of the same benchmark: `evidence/cv17_gate_metrics.csv`.
 
 | zone | corr base→v1→v2 | MAE base→v1→v2 | bias v2 |
 |------|-----------------|-----------------|---------|
