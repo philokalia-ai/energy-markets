@@ -596,10 +596,11 @@ end
 # v16 -> v17: weak-zone import fixes (docs/experiments/weak-zone-diagnosis) —
 # AT–CZ/AT–DE_LU/AT–SI Core-FBMC border drops + SI on the Slovakia treatment
 # (continental temperament + :hydro anchor), the profile-gated ex-ante
-# elastic import backstop (AT/BE/CH/DK1/DK2/SE3/IT-CNORTH/SI/RO/RS/HU; the SEE-east
-# zones RO/RS/HU also credit the demonstrated headroom in the scarcity margin), SE3 anchor refs over dropped borders (SE2
-# climatology-flow-weighted), and ref-priced retained-border exports
-# (SI–HR, BE–GB), July 2026) so new results are never mixed
+# elastic import backstop (AT/BE/CH/DK1/DK2/SE3/IT-CNORTH/SI/RO/RS/HU; the
+# SEE-east zones RO/RS/HU also credit the demonstrated headroom in the
+# scarcity margin), and ref-priced retained-border exports (SI–HR, BE–GB);
+# an anchor-refs-over-dropped-borders mechanism (SE3) was built, measured
+# against its gate and switched OFF — July 2026) so new results are never mixed
 # with — or skipped because of — old rows. Each version is one selectable
 # "Run" in the Metabase counterfactual dashboard.
 const ENERGY_PRICES_CODE_VERSION = 17

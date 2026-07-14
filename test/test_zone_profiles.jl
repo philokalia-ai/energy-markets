@@ -84,8 +84,7 @@ const V10_TRANCHES = [(0.55, 0.95), (0.20, 1.05), (0.15, 1.25), (0.10, 1.60)]
         # Denmark: NORDIC + backstop, nothing else changed
         @test get_zone_profile("DK1") === DENMARK_PROFILE
         @test get_zone_profile("DK2") === DENMARK_PROFILE
-        @test with_profile(DENMARK_PROFILE; import_backstop=false,
-                           backstop_scarcity_credit=0.0) == NORDIC_PROFILE
+        @test with_profile(DENMARK_PROFILE; import_backstop=false) == NORDIC_PROFILE
         # SE1/SE2/FI stay plain NORDIC (no backstop)
         for z in ("SE1", "SE2", "FI")
             @test get_zone_profile(z) === NORDIC_PROFILE
@@ -99,13 +98,12 @@ const V10_TRANCHES = [(0.55, 0.95), (0.20, 1.05), (0.15, 1.25), (0.10, 1.60)]
         @test SWEDEN_SOUTH_PROFILE.anchor_include_dropped == false
         # IT-CNORTH: ITALY + backstop; other IT sub-zones unchanged
         @test get_zone_profile("IT-CNORTH") === ITALY_CNORTH_PROFILE
-        @test with_profile(ITALY_CNORTH_PROFILE; import_backstop=false,
-                           backstop_scarcity_credit=0.0) == ITALY_PROFILE
+        @test with_profile(ITALY_CNORTH_PROFILE; import_backstop=false) == ITALY_PROFILE
         @test get_zone_profile("IT-NORTH") === ITALY_PROFILE
-        # AT/CH/BE gained the backstop (+ uniform scarcity credit), keeping
-        # their existing calibration
+        # AT/CH/BE gained the backstop, keeping their existing calibration
+        # (the scarcity credit stays scoped to the SEE-east zones — measured)
         @test AUSTRIA_PROFILE.import_backstop == true
-        @test AUSTRIA_PROFILE.backstop_scarcity_credit == 1.0
+        @test AUSTRIA_PROFILE.backstop_scarcity_credit == 0.0
         @test AUSTRIA_PROFILE.anchor_share == 1.1
         @test SWISS_PROFILE.import_backstop == true
         @test BELGIUM_PROFILE.import_backstop == true
