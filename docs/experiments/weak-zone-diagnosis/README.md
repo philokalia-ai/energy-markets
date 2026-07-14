@@ -256,9 +256,12 @@ backstop set or its scarcity margin credited); **AT/SI** now sit ~20–30 low
 AT calibration); **SE3** improves (0.18→0.55, spikes gone) but keeps the flat
 night overpricing of §4b — its fix is the anchor-ref change, not imports.
 
-A `v4` variant (backstop capability window widened from the 8 same-weekday
-draws to the trailing 56 calendar days) and a `v3` variant (backstop without
-drops, attribution control) are runnable from the same script.
+**`v4` (window robustness):** widening the backstop capability window from
+the 8 same-weekday draws to the trailing 56 calendar days is a marginal
+refinement — RO 0.77→0.80, CH 0.74→0.76, the last in-scope cap hour gone
+(18 remaining are all FI/NO1/IT-NORTH edge) — at the cost of slightly deeper
+negative bias (HU −28.8→−30.4). The window is a minor calibration knob; the
+8-week same-weekday form is already sufficient.
 
 ## 4. Residual (non-spike) findings — documented, not prototyped
 
