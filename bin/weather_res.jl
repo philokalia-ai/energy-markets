@@ -1,7 +1,9 @@
 # Weather-based RES (wind + solar) prediction for the ex-ante forecast track.
 #
-# Loads the fitted per-zone ridge models (bin/res_models_v1.json — per-zone
-# ridge on ERA5 wind_speed_100m / shortwave_radiation at OSM turbine cells),
+# Loads the fitted per-zone ridge models (bin/res_models_v2.json preferred —
+# wind ridge trained on GFS-vintage wind_speed_100m so training matches the
+# GFS forecasts served here; solar on ERA5 shortwave_radiation, GFS-safe;
+# bin/res_models_v1.json as fallback, EUPHEMIA_RES_PACK to override),
 # fetches raw weather forecasts from the PUBLIC open-meteo forecast API, and
 # predicts per-zone hourly wind+solar MW. Because the inputs are raw weather
 # (not ENTSO-E's D-1 RES forecasts), predictions can be frozen BEFORE the
@@ -11,8 +13,10 @@
 # Include-able helper (main is guarded): pure feature/parsing functions are
 # unit-tested in test/test_weather_res.jl with no network access.
 #
-# Feature vectors MUST match the fit exactly (analysis provenance:
-# fit_eu_models.jl, trained 2025-09-01..2026-06-30):
+# Feature vectors MUST match the fit exactly (analysis provenance: v1
+# fit_eu_models.jl trained 2025-09-01..2026-06-30 on ERA5; v2 wind refit on
+# GFS previous_day1 vintages 2024-07..2026-05 — same feature construction,
+# see docs/experiments/res-forecasting/README.md "v2 pack"):
 #   wind:  X = [1, pcurve.(v100_cells), v100_cells ./ 3.6]   (cells in pack order)
 #   solar: X = [1, g, se, g*se, sqrt(max(g,0)),
 #               (1{hod==k}*g for k in 3:19), (1{hod==k} for k in 3:19)]
@@ -35,7 +39,22 @@ const OPENMETEO_URL_DEFAULT = "https://api.open-meteo.com/v1/forecast"
 const OPENMETEO_USER_AGENT = "philokalia-energy/1.0 (contact: p.georgakopoulos@silentech.gr)"
 const OPENMETEO_BATCH = 50            # max locations per API call
 const OPENMETEO_RETRIES = 5
-const RES_MODELS_PATH = joinpath(@__DIR__, "res_models_v1.json")
+const RES_MODELS_PATH_V2 = joinpath(@__DIR__, "res_models_v2.json")
+const RES_MODELS_PATH_V1 = joinpath(@__DIR__, "res_models_v1.json")
+
+"""
+    default_res_models_path() -> String
+
+Model pack selection: `EUPHEMIA_RES_PACK` (explicit path, for rollback) wins;
+otherwise prefer `res_models_v2.json` (wind refit on GFS-vintage features —
+matches the GFS forecasts served at inference) with `res_models_v1.json` as
+fallback.
+"""
+function default_res_models_path()
+    override = get(ENV, "EUPHEMIA_RES_PACK", "")
+    isempty(override) || return override
+    return isfile(RES_MODELS_PATH_V2) ? RES_MODELS_PATH_V2 : RES_MODELS_PATH_V1
+end
 
 # ---------------------------------------------------------------------------
 # Pure feature functions (unit-tested; must match the fit exactly)
@@ -176,12 +195,14 @@ end
 # ---------------------------------------------------------------------------
 
 """
-    load_res_models(path=RES_MODELS_PATH) -> parsed model pack
+    load_res_models(path=default_res_models_path()) -> parsed model pack
 
 {"zones": {"<ZONE>": {"cells": [[lat,lon],…], "wind": {...}, "solar": {...}}}};
 zones may lack "wind" or "solar" (physically negligible there → predicted 0).
+Default pack: v2 (GFS-vintage-trained wind) if present, else v1; override with
+`EUPHEMIA_RES_PACK=<path>` for rollback.
 """
-load_res_models(path::AbstractString=RES_MODELS_PATH) = JSON.parse(read(path, String))
+load_res_models(path::AbstractString=default_res_models_path()) = JSON.parse(read(path, String))
 
 function _openmeteo_get(url::String)
     last_err = nothing
