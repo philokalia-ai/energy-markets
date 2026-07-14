@@ -307,8 +307,8 @@ using .MeritOrderBook: create_merit_order_book, ZoneProfile, get_zone_profile,
     ITALY_PROFILE, NORDIC_PROFILE, BALTIC_PROFILE, FRANCE_PROFILE, NORWAY_PROFILE,
     SWISS_PROFILE, SWEDEN_SOUTH_PROFILE, AUSTRIA_PROFILE, BELGIUM_PROFILE,
     SLOVAKIA_PROFILE, SLOVENIA_PROFILE, DENMARK_PROFILE, SE3_PROFILE,
-    ITALY_CNORTH_PROFILE, ROMANIA_PROFILE, SERBIA_PROFILE, with_profile,
-    clear_net_imports_cache!, ZoneScenario, zone_scenario, is_empty_scenario
+    ITALY_CNORTH_PROFILE, ROMANIA_PROFILE, SERBIA_PROFILE, HUNGARY_PROFILE,
+    with_profile, clear_net_imports_cache!, ZoneScenario, zone_scenario, is_empty_scenario
 
 # ===== EXPORTS =====
 # All module exports are centralized here following Julia best practices
@@ -363,7 +363,8 @@ export ZoneProfile, get_zone_profile, ZONE_PROFILES, SEE_PROFILE, IBERIA_PROFILE
     CONTINENTAL_PROFILE, ITALY_PROFILE, NORDIC_PROFILE, BALTIC_PROFILE, FRANCE_PROFILE,
     NORWAY_PROFILE, SWISS_PROFILE, SWEDEN_SOUTH_PROFILE, AUSTRIA_PROFILE, BELGIUM_PROFILE,
     SLOVAKIA_PROFILE, SLOVENIA_PROFILE, DENMARK_PROFILE, SE3_PROFILE,
-    ITALY_CNORTH_PROFILE, ROMANIA_PROFILE, SERBIA_PROFILE, with_profile
+    ITALY_CNORTH_PROFILE, ROMANIA_PROFILE, SERBIA_PROFILE, HUNGARY_PROFILE,
+    with_profile
 
 # Counterfactual scenario primitive for the multi-zone footprint path
 export ZoneScenario

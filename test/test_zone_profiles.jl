@@ -53,7 +53,7 @@ const V10_TRANCHES = [(0.55, 0.95), (0.20, 1.05), (0.15, 1.25), (0.10, 1.60)]
     end
 
     @testset "registry defaults to SEE for the SEE core and unknowns" begin
-        for z in ("GR", "BG", "HU")
+        for z in ("GR", "BG")
             @test get_zone_profile(z) === SEE_PROFILE
         end
         @test get_zone_profile("ZZ-not-a-zone") === SEE_PROFILE
@@ -62,14 +62,16 @@ const V10_TRANCHES = [(0.55, 0.95), (0.20, 1.05), (0.15, 1.25), (0.10, 1.60)]
         # cv17: RO/RS = exact SEE calibration + the import backstop (EU
         # footprint only — the single-zone/5-zone SEE products never consult
         # the registry and force SEE_PROFILE)
-        for (z, p) in (("RO", ROMANIA_PROFILE), ("RS", SERBIA_PROFILE))
+        for (z, p) in (("RO", ROMANIA_PROFILE), ("RS", SERBIA_PROFILE),
+                       ("HU", Euphemia.MeritOrderBook.HUNGARY_PROFILE))
             @test get_zone_profile(z) === p
             @test p.import_backstop == true
-            @test with_profile(p; import_backstop=false) == SEE_PROFILE
+            # Full scarcity credit for the demonstrated headroom (the SEE
+            # cold-snap cluster's residual markup overshoot — see profile doc)
+            @test p.backstop_scarcity_credit == 1.0
+            @test with_profile(p; import_backstop=false,
+                               backstop_scarcity_credit=0.0) == SEE_PROFILE
         end
-        # HU deliberately carries NO backstop (measured P2 caution: its bias
-        # drifted −14.6 → −28.8 — the climatology injection is adequate)
-        @test get_zone_profile("HU").import_backstop == false
     end
 
     @testset "cv17 profiles (weak-zone import fixes)" begin

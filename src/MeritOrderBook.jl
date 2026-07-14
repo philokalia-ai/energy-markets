@@ -371,17 +371,8 @@ scarcity margin — a zone that can import GWs is not domestically scarce. Offer
 ATC is published D-1, so this is ex-ante. AVG per (border, hour) before summing
 so a border reported sub-hourly is not over-counted.
 
-`from_counterparties` restricts the sum to borders FROM the listed zones
-(`out_map_code`) — used by the import backstop to subtract only the offered
-ATC of the zone's ENDOGENOUS borders (whose capacity the MPCC flow variables
-already carry) from the demonstrated import headroom.
 """
-function get_import_atc_capacity(bidding_zone::String, day::Date;
-    from_counterparties::Union{Nothing,Vector{String}}=nothing)
-    cp_filter = from_counterparties === nothing ? "" :
-        "AND out_map_code = ANY(\$3)"
-    params = from_counterparties === nothing ? Any[bidding_zone, day] :
-        Any[bidding_zone, day, from_counterparties]
+function get_import_atc_capacity(bidding_zone::String, day::Date)
     df = sql2df_with_retry(
         """
         SELECT h, SUM(cap) AS total FROM (
@@ -391,15 +382,58 @@ function get_import_atc_capacity(bidding_zone::String, day::Date;
           WHERE in_map_code = \$1
             AND date_time_utc >= (\$2::date::timestamp AT TIME ZONE 'UTC')
             AND date_time_utc <  ((\$2::date + 1)::timestamp AT TIME ZONE 'UTC')
-            $cp_filter
           GROUP BY 1, out_map_code
         ) s
         GROUP BY h
         """,
-        params)
+        [bidding_zone, day])
     out = Dict{Int,Float64}()
     for r in eachrow(df)
         ismissing(r.total) || (out[Int(r.h)] = Float64(r.total))
+    end
+    return out
+end
+
+"""
+    _endogenous_import_atc(zone, day, counterparties) -> Dict{Int,Float64}
+
+Per-UTC-hour offered import ATC into `zone` summed over the listed
+counterparties (`out_map_code`), matching the enriched network's border
+sourcing: `offered_transfer_capacities_implicit` unioned with the explicit
+table's Day-ahead rows, implicit preferred where a border exists in both.
+Used by the import backstop to size what the MPCC flow variables can already
+deliver over the zone's ENDOGENOUS borders.
+"""
+function _endogenous_import_atc(bidding_zone::String, day::Date,
+    counterparties::Vector{String})
+    per_border(table, ct_filter, params) = begin
+        df = sql2df_with_retry(
+            """
+            SELECT EXTRACT(HOUR FROM date_time_utc AT TIME ZONE 'UTC')::int AS h,
+                   out_map_code AS cp, AVG(capacity_mw) AS cap
+            FROM entsoe.$table
+            WHERE in_map_code = \$1 AND out_map_code = ANY(\$3)
+              AND date_time_utc >= (\$2::date::timestamp AT TIME ZONE 'UTC')
+              AND date_time_utc <  ((\$2::date + 1)::timestamp AT TIME ZONE 'UTC')
+              AND capacity_mw IS NOT NULL
+              $ct_filter
+            GROUP BY 1, out_map_code
+            """, params)
+        d = Dict{Tuple{Int,String},Float64}()
+        for r in eachrow(df)
+            ismissing(r.cap) || (d[(Int(r.h), String(r.cp))] = Float64(r.cap))
+        end
+        d
+    end
+    params = Any[bidding_zone, day, counterparties]
+    impl = per_border("offered_transfer_capacities_implicit", "", params)
+    expl = per_border("offered_transfer_capacities_explicit",
+        "AND contract_type = 'Day-ahead'", params)
+    # Implicit preferred per (hour, border); explicit fills the gaps (CH/RS).
+    merged = merge(expl, impl)
+    out = Dict{Int,Float64}()
+    for ((h, _), cap) in merged
+        out[h] = get(out, h, 0.0) + cap
     end
     return out
 end
@@ -409,42 +443,53 @@ end
         -> Dict{Int,Float64}
 
 Per-UTC-hour ex-ante elastic import-backstop quantity (MW) — the import
-headroom the zone has recently DEMONSTRATED beyond the flow-climatology
-injection the book already carries:
+capability the zone has recently DEMONSTRATED beyond what the book already
+carries, split by border class so nothing is double-counted:
 
-    qty(h) = max(0, max_{k=1..weeks} net_import(day − 7k, h)
-                   − climatology_median(h)
-                   − offered_endogenous_import_ATC(h))
+- **Non-endogenous borders** (retained observed injections + dropped
+  flow-based borders): the book injects their `:v2` climatology, so the
+  headroom is the demonstrated flow beyond it —
+  `max(0, max_{k=1..weeks} net_ne(day−7k, h) − clim_ne(h))`.
+- **Endogenous borders** (`endogenous_counterparties`: kept-ATC neighbors plus
+  shadowed aggregate codes the remap carries): the book injects nothing — the
+  MPCC flow variables deliver up to the OFFERED ATC — so the headroom is the
+  demonstrated flow beyond that ATC (implicit ∪ explicit-Day-ahead, exactly
+  the network's sourcing): `max(0, max_k net_endo(day−7k, h) − atc_endo(h))`.
+  This is what covers episodic offered-ATC collapses (CH holiday auction
+  gaps, DE_LU→DK1 tight-hour dips) without double-counting normal hours.
 
-The max/median run over the trailing `weeks` same-weekday days (D-7 … D-7·weeks
-— every input strictly predates the D-1 auction), computed off the same cached
-day-relations as the `:v2` climatology, so the backstop adds no extra flow
-scans. `endogenous_counterparties` (the zone's kept-ATC neighbors, plus any
-shadowed aggregate codes whose ATC the aggregate remap already carries) have
-their offered import ATC subtracted: the MPCC can already deliver that capacity
-endogenously, so leaving it in would double count. Zero/negative headroom hours
-are omitted. See the `import_backstop` field of `ZoneProfile` for pricing and
-the measured rationale.
+The max/median run over the trailing `weeks` same-weekday days (D-7 …
+D-7·weeks) and the offered ATC is published D-1, so every input strictly
+predates the auction; the flow reads reuse the cached `:v2` day relations.
+Zero/negative headroom hours are omitted. See the `import_backstop` field of
+`ZoneProfile` for pricing and the measured rationale.
 """
 function get_import_backstop(bidding_zone::String, day::Date;
     weeks::Int=8, endogenous_counterparties::Vector{String}=String[])
-    # Net import at `hour` summed over ALL borders of a (h,cp,dir)=>flow map,
-    # deterministically ordered for reproducible float sums.
-    function net_at(bh, hour)
-        rows = Tuple{String,Int,Float64}[(cp, dir, v) for ((h, cp, dir), v) in bh if h == hour]
-        sort!(rows)
-        return sum((dir * v for (_, dir, v) in rows); init=0.0)
+    endo = Set(endogenous_counterparties)
+    # Per-hour (non-endogenous, endogenous) net flows of a (h,cp,dir)=>flow
+    # map, deterministically ordered for reproducible float sums.
+    function nets(bh)
+        rows = sort!(Tuple{Int,String,Int,Float64}[
+            (h, cp, dir, v) for ((h, cp, dir), v) in bh])
+        ne = Dict{Int,Float64}(); e = Dict{Int,Float64}()
+        for (h, cp, dir, v) in rows
+            d = (cp in endo) ? e : ne
+            d[h] = get(d, h, 0.0) + dir * v
+        end
+        return (ne, e)
     end
-    lagged = [_zone_border_hourly(bidding_zone, day; lag=7k) for k in 1:weeks]
-    clim = _zone_border_hourly_clim(bidding_zone, day; weeks=weeks)
-    endo_atc = isempty(endogenous_counterparties) ? Dict{Int,Float64}() :
-        get_import_atc_capacity(bidding_zone, day;
-            from_counterparties=endogenous_counterparties)
+    lagged = [nets(_zone_border_hourly(bidding_zone, day; lag=7k)) for k in 1:weeks]
+    clim_ne, _ = nets(_zone_border_hourly_clim(bidding_zone, day; weeks=weeks))
+    atc_endo = isempty(endo) ? Dict{Int,Float64}() :
+        _endogenous_import_atc(bidding_zone, day, endogenous_counterparties)
     out = Dict{Int,Float64}()
+    isempty(lagged) && return out
     for h in 0:23
-        mx = maximum((net_at(bh, h) for bh in lagged); init=-Inf)
-        isfinite(mx) || continue
-        headroom = mx - net_at(clim, h) - get(endo_atc, h, 0.0)
+        mx_ne = maximum(get(l[1], h, 0.0) for l in lagged)
+        mx_e = maximum(get(l[2], h, 0.0) for l in lagged)
+        headroom = max(0.0, mx_ne - get(clim_ne, h, 0.0)) +
+                   max(0.0, mx_e - get(atc_endo, h, 0.0))
         headroom > 0.0 && (out[h] = headroom)
     end
     return out
@@ -968,18 +1013,33 @@ spike hours; avg ~3 GW) starve it a few days a year — backstop, not drop.
 const ITALY_CNORTH_PROFILE = with_profile(ITALY_PROFILE; import_backstop = true)
 
 """
-Romania / Serbia (cv17). SEE calibration (exact v10 parameters) plus the
-ex-ante import backstop. RO is the measured case for why the backstop must
-stay on in SEE's east: the June-2026 tight period (one Cernavoda unit
-partial, wind at 45% of 2025) was covered in reality by BG/HU/UA imports
-above climatology — the model capped every day of 2026-06-15..30 while
-actuals stayed at €200–290. Measured (28-day benchmark): RO corr 0.35 → 0.77
-/ MAE 54.8 → 31.8, RS 0.32 → 0.79 / 44.6 → 28.3. These profiles apply ONLY on
-the EU-footprint path (`enrich_network=true`); the legacy SEE single-zone and
-5-zone products force SEE_PROFILE and remain byte-identical.
+Romania / Serbia / Hungary (cv17). SEE calibration (exact v10 parameters)
+plus the ex-ante import backstop AND the backstop scarcity credit. RO is the
+measured case for why the backstop must stay on in SEE's east: the June-2026
+tight period (one Cernavoda unit partial, wind at 45% of 2025) was covered in
+reality by BG/HU/UA imports above climatology — the model capped every day of
+2026-06-15..30 while actuals stayed at €200–290. The full scarcity credit
+(`backstop_scarcity_credit = 1.0`, same fundamentals as the iter6
+`scarcity_import_credit`: demonstrated import capability means the zone is
+not domestically scarce) addresses the measured residual overpricing of the
+SEE cold-snap coupled block — with the backstop supply alone the cluster
+still cleared €517–591 vs actual ~€380 because the scarcity MARKUP could not
+see the restored imports; the credit only acts when the margin is below the
+scarcity threshold, so normal hours are untouched. HU's membership was the
+documented open calibration decision (P2 measured its bias drifting
+−14.6 → −28.8 with an uncredited backstop): the production benchmark shows
+HU's missing backstop left the coupled SEE cluster capping through the
+2026-01 cold snap, and the credit is the mechanism P2 lacked — HU carries
+both. These profiles apply ONLY on the EU-footprint path
+(`enrich_network=true`); the legacy SEE single-zone and 5-zone products force
+SEE_PROFILE and remain byte-identical.
 """
-const ROMANIA_PROFILE = with_profile(SEE_PROFILE; import_backstop = true)
-const SERBIA_PROFILE = with_profile(SEE_PROFILE; import_backstop = true)
+const ROMANIA_PROFILE = with_profile(SEE_PROFILE;
+    import_backstop = true, backstop_scarcity_credit = 1.0)
+const SERBIA_PROFILE = with_profile(SEE_PROFILE;
+    import_backstop = true, backstop_scarcity_credit = 1.0)
+const HUNGARY_PROFILE = with_profile(SEE_PROFILE;
+    import_backstop = true, backstop_scarcity_credit = 1.0)
 
 """
 Baltic (EE/LT/LV). Tightly coupled to the Nordic hydro system and thermally
@@ -1008,16 +1068,16 @@ registry fall back to `SEE_PROFILE` via `get_zone_profile`, so the default is
 always the validated SEE calibration.
 """
 const ZONE_PROFILES = Dict{String,ZoneProfile}(
-    # SEE core. GR/BG stay on the exact v10 SEE calibration; RO/RS add the
-    # cv17 import backstop (EU-footprint only — the single-zone / 5-zone SEE
-    # products force SEE_PROFILE and stay byte-identical). HU deliberately
-    # carries NO backstop: measured P2 caution — its climatology injection is
-    # already adequate and the backstop drifted its bias −14.6 → −28.8 (the
-    # v3 attribution keeps HU's backstop membership a calibration decision;
-    # the production benchmark confirmed exclusion). SI moves to the Slovakia
-    # treatment (cv17): AT–SI drop + :hydro anchor + backstop.
+    # SEE core. GR/BG stay on the exact v10 SEE calibration; RO/RS/HU add the
+    # cv17 import backstop + full scarcity credit (EU-footprint only — the
+    # single-zone / 5-zone SEE products force SEE_PROFILE and stay
+    # byte-identical). HU's membership was the documented calibration
+    # decision: the production benchmark showed the coupled SEE cold-snap
+    # cluster keeps capping without HU's backstop, and the scarcity credit is
+    # the mechanism the P2 bias-drift caution lacked. SI moves to the
+    # Slovakia treatment (cv17): AT–SI drop + :hydro anchor + backstop.
     "GR" => SEE_PROFILE, "BG" => SEE_PROFILE, "RO" => ROMANIA_PROFILE,
-    "RS" => SERBIA_PROFILE, "HU" => SEE_PROFILE, "SI" => SLOVENIA_PROFILE,
+    "RS" => SERBIA_PROFILE, "HU" => HUNGARY_PROFILE, "SI" => SLOVENIA_PROFILE,
     # Iberia
     "ES" => IBERIA_PROFILE, "PT" => IBERIA_PROFILE,
     # Italy sub-zones (IT-CNORTH: + cv17 import backstop)
