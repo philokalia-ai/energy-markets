@@ -89,7 +89,8 @@ function pipeline_book_worker(bookwork::RemoteChannel, solvework::RemoteChannel,
                 t0 = time()
                 ob1 = mz_build_books(zones, day;
                     enrich_network=cfg.enrich_network,
-                    apply_zone_profiles=cfg.apply_zone_profiles)
+                    apply_zone_profiles=cfg.apply_zone_profiles,
+                    scenario=cfg.scenario)
                 book_secs = time() - t0
                 put!(solvework, (:pass1, day, ob1, book_secs, time()))
             catch e
@@ -103,7 +104,8 @@ function pipeline_book_worker(bookwork::RemoteChannel, solvework::RemoteChannel,
                 t0 = time()
                 ob2 = mz_rebuild_anchored(zones, day, refs, cached;
                     enrich_network=cfg.enrich_network,
-                    apply_zone_profiles=cfg.apply_zone_profiles)
+                    apply_zone_profiles=cfg.apply_zone_profiles,
+                    scenario=cfg.scenario)
                 rebuild_secs = time() - t0
                 put!(solvework, (:pass2, day, ob2, r1, book_secs, waitq,
                                  solve1_secs, rebuild_secs, time()))
@@ -265,6 +267,15 @@ function run_pipelined_backfill(days, zones::Vector{String}=String[];
         mpcc_time_limit::Float64=900.0,
         mpcc_mip_gap::Float64=1e-6,
         mpcc_heuristic_effort::Union{Float64,Nothing}=nothing,
+        # Scenario passthrough (docs/scenario-api.md): a single ZoneScenario
+        # applied to every zone, or Dict{String,ZoneScenario} for per-zone
+        # targeting. Threaded into BOTH book stages (mz_build_books /
+        # mz_rebuild_anchored), so the counterfactual applies on both passes —
+        # identical semantics to run_multi_zone_market_clearing(...; scenario=).
+        # nothing (default) is byte-identical to the pre-scenario pipeline.
+        # NOTE: hooks are closures serialized to the book workers — define them
+        # at top level of the driver script (Main) with plain captured data.
+        scenario::Union{Nothing,ZoneScenario,Dict{String,ZoneScenario}}=nothing,
         ram_log_every::Int=10)
 
     order_method == :merit_order ||
@@ -312,6 +323,13 @@ function run_pipelined_backfill(days, zones::Vector{String}=String[];
                        "EUPHEMIA_DUCKDB_PATH" => extract,
                        "EUPHEMIA_DUCKDB_READONLY" => "true",
                        "ENERGY_CONN_STR" => ""]
+        # The book workers call mz_build_books directly (no run_multi_zone_
+        # market_clearing wrapper), so the EU-footprint scoped :v2 default does
+        # NOT apply there — the workers use the process-wide FLOW_ASOF_MODE.
+        # Forward an explicitly-set coordinator mode so worker books match what
+        # the coordinator (and the sequential path under the same env) builds.
+        haskey(ENV, "EUPHEMIA_FLOW_ASOF_MODE") &&
+            push!(extract_env, "EUPHEMIA_FLOW_ASOF_MODE" => ENV["EUPHEMIA_FLOW_ASOF_MODE"])
         # Workers share the source extract read-only; the coordinator keeps the
         # source read-only too (so it can coexist with them) but opts into result
         # writes, which land in the SEPARATE writable results_db file.
@@ -329,14 +347,24 @@ function run_pipelined_backfill(days, zones::Vector{String}=String[];
 
     cfg = (optimizer=optimizer, silent=silent, enrich_network=enrich_network,
            apply_zone_profiles=apply_zone_profiles, mpcc_time_limit=mpcc_time_limit,
-           mpcc_mip_gap=mpcc_mip_gap, mpcc_heuristic_effort=mpcc_heuristic_effort)
+           mpcc_mip_gap=mpcc_mip_gap, mpcc_heuristic_effort=mpcc_heuristic_effort,
+           scenario=scenario)
 
     day_prices = Dict{Date,Dict{String,Dict{String,Float64}}}()
     saved = 0; failed = 0
     wall0 = 0.0
     solver_futs = []
     try
-        @everywhere ws @eval using Euphemia
+        # Load Dates alongside Euphemia: scenario hooks are closures serialized
+        # from the coordinator's Main, and the documented examples reference
+        # `DateTime` / `dateformat` as Main bindings — without `using Dates` on
+        # the workers those references throw UndefVarError inside the per-zone
+        # book build, which is caught and silently DROPS the zone from the book
+        # (observed: an extra_orders hook using DateTime removed GR from all
+        # 365 days of a footprint run). Base values (numbers, Dicts) captured
+        # by hooks serialize fine; other package bindings do not — keep hooks
+        # to Euphemia exports, Dates, and plain data.
+        @everywhere ws @eval using Euphemia, Dates
 
         # Bounded channels. Capacity = in_flight; combined with the token
         # semaphore (≤ in_flight days live) no internal put! ever blocks.

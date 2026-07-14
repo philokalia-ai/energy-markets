@@ -206,11 +206,16 @@ run your own scenario in minutes.
 
 - **`:merit_order` only.** Scenarios thread through the merit-order book (single
   and multi-zone). `:uc_based` / `:alternative` are not wired.
-- **Pipelined backfill.** `run_pipelined_backfill` does not take a `scenario`
-  (it is a batch backfill of the committed product); the interactive
-  `run_multi_zone_market_clearing` is the scenario entry point. The exposed
-  stages `mz_build_books` / `mz_rebuild_anchored` do accept `scenario`, so a
-  scenario-aware pipeline is a small follow-up.
+- **Pipelined backfill: scenario-aware.** `run_pipelined_backfill(...;
+  scenario=)` threads a `ZoneScenario` (or per-zone Dict) into both book stages,
+  so long counterfactual backfills run at full pipeline throughput (used for
+  the EU-coupled exercises: 730-day 39-zone runs at ~155-204 days/h). `nothing`
+  stays byte-identical. Two worker-side notes: an explicitly-set
+  `EUPHEMIA_FLOW_ASOF_MODE` is forwarded to the workers (they bypass the
+  EU-footprint scoped `:v2` default), and workers load `Dates` so hooks
+  referencing `DateTime` resolve — keep hooks to Euphemia exports, `Dates`,
+  and plain captured data (a hook that throws on a worker gets its zone
+  silently dropped from the coupled book).
 - **Solver budget on the full 39-zone footprint.** The scenario threading is
   solver-agnostic and identical whatever the footprint size; only the MPCC solve
   cost scales. On the full 39 zones, **Gurobi** finds the incumbent reliably

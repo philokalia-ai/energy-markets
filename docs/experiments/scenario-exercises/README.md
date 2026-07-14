@@ -251,3 +251,130 @@ JOIN px b ON b.h = o.h AND b.clearing_mode = 'gr_scn_base';
   series is ~3.3× smaller. Bracket accordingly.
 - **Full uptake**: every in-scope ship connects (pre-AFIR-phase-in upper
   bound).
+
+---
+
+## EU-coupled runs (39-zone footprint)
+
+The single-zone caveat above — fixed historical imports make the deltas an
+upper bound — is answered by re-running the counterfactuals on the **full
+39-zone EU footprint** (`order_method=:merit_order, enrich_network=true,
+passes=2`), so imports respond endogenously through the coupled ATC network.
+Runs via `eu_scenarios.jl` → `run_pipelined_backfill` with the new `scenario=`
+passthrough (Gurobi, `solver_workers=2`, ex-ante flow mode pinned `:v2`, the
+cv16+ EU product default; offline against the living extract, results in
+`data/results.duckdb`). ~155–204 days/h; 2,192 day-solves total; every day
+`:optimal` (two transient pass-1 failures solved on the resumable rerun).
+
+| run | clearing_mode | window | scenario |
+|---|---|---|---|
+| baseline | `eu_scn_base` | 2024-07-01..2026-06-30 (730 d) | none |
+| data center | `eu_scn_dc574` | 2024-07-01..2026-06-30 (730 d) | `Dict("GR" => ZoneScenario(load_modifier = (ts,l) -> l + 574.0))` |
+| cold ironing | `eu_scn_ops_floor` | 2024-07-01..2025-06-30 (365 d) | `Dict("GR" => ZoneScenario(extra_orders = <FLOOR profile at the cap>))` |
+
+**FLOOR profile provenance.** `ops_hourly_gr_floor_2024H2_2025H1.csv` is the
+**floor** scenario of the same ceres ships export (column `power_total_mw`):
+only ships with a registry-confirmed >5000 GT match — the hard lower bound
+(GFW matches tonnage for ~27% of frequent Greek ferries), vs the central
+(imputed) profile used in the single-zone exercise. Same aggregation (all 21
+ports, four 15-min UTC slots averaged to hourly MW, actual dates, no tiling):
+mean 37.6 MW, max 163 MW, 329 GWh over the year — ~3.35× smaller than central.
+
+**Coverage note.** The coupled clear prices ~23.2–23.5 of 24 hours/day (hours
+without a coupled marginal are unpriced; late-Oct 2024 has the largest gaps).
+Coverage is IDENTICAL across the three labels, and the delta SQL inner-joins
+hours present in both runs, so all deltas are computed pairwise on the same
+hours (8,402 joined hours in the 2025-26 window, 8,567 in 2024-25).
+
+### (a) Data center EU-coupled, 2025-07-01..2026-06-30 (Δ = eu_scn_dc574 − eu_scn_base, zone GR)
+
+| period | hours | LW base €/MWh | LW scenario €/MWh | **Δ €/MWh** | Δ% | extra cost €m | annualized €m |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 2025 H2 | 4,199 | 98.68 | 107.69 | **+9.01** | | 226.6 | 472.8 |
+| 2026 H1 | 4,203 | 88.27 | 96.14 | **+7.87** | | 185.2 | 386.1 |
+| **TOTAL** | 8,402 | 93.65 | 102.11 | **+8.46** | **+9.0%** | **411.9** | **429.4** |
+
+**DC bill**: 574 MW × scenario prices = **€486.2m** over the window (time-avg
+price paid €100.82/MWh; €506.9m annualized to 8,760 h).
+
+**EU-wide extra cost** (all 39 zones, each weighted by its own load forecast):
+**€896.9m** — GR €411.9m, **outside GR €485.0m**. The data center's neighbours
+pay more than Greece does in aggregate.
+
+### (b) Cold ironing FLOOR EU-coupled, 2024-07-01..2025-06-30 (Δ = eu_scn_ops_floor − eu_scn_base, zone GR)
+
+| period | hours | LW base €/MWh | LW scenario €/MWh | **Δ €/MWh** | Δ% | extra cost €m | annualized €m |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 2024 H2 | 4,319 | 105.90 | 106.44 | **+0.55** | | 14.6 | 29.5 |
+| 2025 H1 | 4,248 | 102.58 | 102.97 | **+0.38** | | 9.0 | 18.6 |
+| **TOTAL** | 8,567 | 104.34 | 104.81 | **+0.47** | **+0.45%** | **23.6** | **24.1** |
+
+**Ships' floor bill**: floor MW × scenario prices = **€27.95m** for 321.7 GWh
+of joined shore-power energy (OPS-weighted price €86.87/MWh — *below* the
+€104.81 load-weighted average: ferry/cruise berthing is overnight-heavy, off
+the evening peak).
+
+**EU-wide extra cost**: **€65.9m** — GR €23.6m, outside GR €42.3m.
+
+### (c) Data center EU-coupled, 2024-07-01..2025-06-30 (same window as OPS — directly comparable)
+
+| period | hours | LW base €/MWh | LW scenario €/MWh | **Δ €/MWh** | Δ% | extra cost €m | annualized €m |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 2024 H2 | 4,319 | 105.90 | 113.75 | **+7.86** | | 208.6 | 423.1 |
+| 2025 H1 | 4,248 | 102.58 | 111.69 | **+9.10** | | 214.8 | 443.0 |
+| **TOTAL** | 8,567 | 104.34 | 112.78 | **+8.44** | **+8.1%** | **423.4** | **433.0** |
+
+**DC bill**: **€537.4m** over the window (time-avg €109.29/MWh). **EU-wide
+extra cost €1,168.0m** — GR €423.4m, outside GR €744.5m.
+
+On the same window and same coupled model, the 574 MW data center (5.03 TWh/yr)
+costs GR consumers **18×** what floor cold ironing (0.32 TWh/yr) does
+(€423m vs €24m) on **15.6×** the energy — flat baseload demand is slightly
+more expensive per MWh than the overnight-heavy OPS profile in the coupled
+model (the single-zone comparison, with its scarcity tail, ordered them the
+other way; coupling shaves scarcity first).
+
+### Single-zone vs EU-coupled (import relief)
+
+| exercise | single-zone Δ | EU-coupled Δ | relief |
+|---|---:|---:|---:|
+| DC +574 MW, 2025-26 | **+19.46** €/MWh | **+8.46** €/MWh | −57% |
+| OPS central 2024-25 (single) vs floor coupled | +2.90 | +0.47 | mixes two dimensions |
+
+- **DC (clean comparison, same scenario + window):** endogenous imports absorb
+  57% of the single-zone price impact (+19.46 → +8.46). The €983m/yr GR extra
+  cost becomes €412m — but the shock does not vanish, it propagates: EU-wide
+  the extra cost is €897m, over half of it landing on GR's neighbours.
+- **OPS (not a clean pair — profile AND coupling changed):** central→floor
+  scales the energy by ~0.30 (which alone would put the single-zone delta near
+  +0.87 €/MWh); coupling then shaves roughly half of that (+0.47), consistent
+  with the DC relief factor.
+
+### Neighbour spillover (mean Δ €/MWh over joined hours)
+
+The GR shock exports through the SEE coupling corridor and dies at the
+congested borders beyond it:
+
+- **DC 2024-25**: BG **+5.14**, RO **+4.46**, RS **+3.38**, HU **+1.62**;
+  SI +0.60, IT-* ≤ +0.09, DE_LU/FR +0.03 — the corridor carries €745m of extra
+  cost outside GR.
+- **DC 2025-26**: RO +3.44, BG +3.61, RS +2.57, HU +1.59, IT-SOUTH +0.18.
+- **OPS floor 2024-25**: RO +0.23, BG +0.29, RS +0.18, HU +0.08 — same shape,
+  ~20× smaller.
+
+### Pipeline notes (what these runs added to the codebase)
+
+- `run_pipelined_backfill(...; scenario=)` — the scenario passthrough into both
+  book stages (`mz_build_books` / `mz_rebuild_anchored`), so counterfactuals
+  run at full pipeline throughput. `nothing` remains byte-identical.
+- **Explicit `EUPHEMIA_FLOW_ASOF_MODE` is now forwarded to pipeline workers**
+  (they call `mz_build_books` directly, so the EU-footprint scoped `:v2`
+  default does not apply there; unforwarded it silently fell back to `:d0` —
+  measured GR 122.49 vs 134.10 €/MWh day-mean on 2025-04-03).
+- **Pipeline workers now load `Dates`**: scenario hooks are closures serialized
+  from the coordinator's Main, and hooks that reference `DateTime` (as every
+  documented example does) threw `UndefVarError` on the workers — which the
+  per-zone book build catches by *silently dropping the zone*. The first OPS
+  attempt saved 365 days of a 38-zone footprint with GR (and the scenario)
+  missing entirely; the label was purged and rerun. Keep hooks to Euphemia
+  exports, `Dates`, and plain captured data.
