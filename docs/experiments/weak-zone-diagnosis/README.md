@@ -256,6 +256,21 @@ backstop set or its scarcity margin credited); **AT/SI** now sit ~20–30 low
 AT calibration); **SE3** improves (0.18→0.55, spikes gone) but keeps the flat
 night overpricing of §4b — its fix is the anchor-ref change, not imports.
 
+**`v3` (attribution control — backstop WITHOUT the drops):** confirms the
+two mechanisms are complementary, not interchangeable:
+- **SI needs the drop**: backstop-only leaves SI at corr **0.33** (4 cap
+  hours remain) vs **0.70** with the SI–AT drop (v1/v2/v4). As designed, the
+  backstop quantity (headroom above the climatology) cannot stand in for a
+  chronically starved *endogenous* border, whose expected imports the
+  climatology already counts as delivered.
+- **AT can be rescued by either mechanism** (v1 drops-only 0.75, v3
+  backstop-only 0.78) and is best with both (0.80).
+- **HU prefers backstop-only** (MAE 37.0 / bias −23.1 vs 41.1 / −28.8 under
+  v2) — the AT-drop coupling cheapens HU's neighborhood. Production shape:
+  keep the AT/SI drops but re-check HU's backstop membership and scarcity
+  credit when calibrating.
+- All other zones: v3 ≈ v2 within ±0.01 corr.
+
 **`v4` (window robustness):** widening the backstop capability window from
 the 8 same-weekday draws to the trailing 56 calendar days is a marginal
 refinement — RO 0.77→0.80, CH 0.74→0.76, the last in-scope cap hour gone
