@@ -1,0 +1,16 @@
+# euphemia-api — live data backend for energy.philokalia.ai (issue #152).
+# Deploy: CLOUDFLARE_API_TOKEN=... npx wrangler deploy
+# Local dev against local R2 state: npx wrangler dev  (seed objects with
+#   npx wrangler r2 object put euphemia-web-data/v1/... --file ... --local)
+name = "euphemia-api"
+main = "src/index.js"
+compatibility_date = "2026-07-01"
+account_id = "c3ebd3825204235c8f8a3d84a9d9cf55"
+workers_dev = true
+
+[[r2_buckets]]
+binding = "DATA"
+bucket_name = "euphemia-web-data"
+
+[observability]
+enabled = true

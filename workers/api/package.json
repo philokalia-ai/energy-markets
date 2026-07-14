@@ -1,0 +1,19 @@
+{
+  "name": "euphemia-api",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Cloudflare Worker serving the euphemia-web-data R2 parquet as the JSON shapes web/app.js consumes (issue #152)",
+  "type": "module",
+  "scripts": {
+    "test": "node test/shape.test.mjs",
+    "dev": "wrangler dev --config wrangler.toml",
+    "deploy": "wrangler deploy --config wrangler.toml"
+  },
+  "dependencies": {
+    "hyparquet": "^1.26.2",
+    "hyparquet-compressors": "^1.1.1"
+  },
+  "devDependencies": {
+    "wrangler": "^4.110.0"
+  }
+}
