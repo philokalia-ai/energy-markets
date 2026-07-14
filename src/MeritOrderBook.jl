@@ -901,9 +901,12 @@ const AUSTRIA_PROFILE = ZoneProfile(
     # cv17: AT's remaining Core import borders (CZ–AT, DE_LU–AT) carry the
     # chronic flow-based-residual ATC (p10 = 0 vs 1.6–2.0 GW physical) and are
     # now DROPPED (see flow_based_drop_borders); the backstop covers the
-    # residual tail days beyond the restored climatology injection. Measured
-    # (28-day benchmark): corr 0.17 → 0.80, MAE 85.3 → 28.0.
+    # residual tail days beyond the restored climatology injection, and the
+    # scarcity credit stops the winter-morning markup overshoot (measured:
+    # 2026-01-28 h07 cleared €419 vs actual €196 with the supply-only
+    # backstop — the markup could not see the demonstrated headroom).
     import_backstop = true,
+    backstop_scarcity_credit = 1.0,
 )
 
 """
@@ -931,6 +934,7 @@ const BELGIUM_PROFILE = ZoneProfile(
     # retained BE–GB border's observed exports re-price at the anchor
     # reference in pass 2 instead of firm cap-priced demand.
     import_backstop = true,
+    backstop_scarcity_credit = 1.0,
     ref_priced_exports = true,
 )
 
@@ -977,6 +981,7 @@ const SLOVENIA_PROFILE = ZoneProfile(
     peak_kappa = 0.6,
     opportunity_anchor = :hydro,
     import_backstop = true,
+    backstop_scarcity_credit = 1.0,
     ref_priced_exports = true,
 )
 
@@ -988,7 +993,8 @@ hours), so a blanket border drop is not justified — the tail-day backstop is.
 Measured (28-day benchmark): DK1 corr 0.11 → 0.75 / MAE 71.8 → 28.8,
 DK2 0.32 → 0.76 / 82.6 → 29.4.
 """
-const DENMARK_PROFILE = with_profile(NORDIC_PROFILE; import_backstop = true)
+const DENMARK_PROFILE = with_profile(NORDIC_PROFILE;
+    import_backstop = true, backstop_scarcity_credit = 1.0)
 
 """
 SE3 (cv17). SWEDEN_SOUTH (anchored Nordic hydro) plus two cv17 mechanisms:
@@ -1003,14 +1009,22 @@ between SE2 and DK1. SE4 deliberately stays on plain SWEDEN_SOUTH (its
 existing refs are already decent; measured as a gate on the benchmark).
 """
 const SE3_PROFILE = with_profile(SWEDEN_SOUTH_PROFILE;
-    import_backstop = true, anchor_include_dropped = true)
+    import_backstop = true, backstop_scarcity_credit = 1.0,
+    # anchor_include_dropped measured and GATED OUT (28-day production
+    # benchmark): the SE2-dominated ref (~5 GW climatology weight vs DK1's
+    # ~0.3 GW ATC) pinned SE3 at SE2's level — bias flipped +13 → −24 and
+    # corr fell 0.55 → 0.31 vs the backstop-only configuration. The
+    # mechanism stays available on the profile for future calibration
+    # (e.g. a tempered weight); SE3's §4b night-shape problem remains open.
+    anchor_include_dropped = false)
 
 """
 IT-CNORTH (cv17). ITALY plus the import backstop: episodic
 IT-CSOUTH→IT-CNORTH offered-ATC dips (95 MW offered vs 1.2 GW physical on
 spike hours; avg ~3 GW) starve it a few days a year — backstop, not drop.
 """
-const ITALY_CNORTH_PROFILE = with_profile(ITALY_PROFILE; import_backstop = true)
+const ITALY_CNORTH_PROFILE = with_profile(ITALY_PROFILE;
+    import_backstop = true, backstop_scarcity_credit = 1.0)
 
 """
 Romania / Serbia / Hungary (cv17). SEE calibration (exact v10 parameters)
