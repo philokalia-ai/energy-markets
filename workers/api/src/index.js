@@ -1,0 +1,161 @@
+/* euphemia-api — Cloudflare Worker serving the live forecast data plane.
+ *
+ * Reads zstd parquet objects from the R2 bucket `euphemia-web-data`
+ * (written by bin/export_web_parquet.jl + bin/web_data_push.sh, seconds
+ * after each pipeline DB write) and emits the exact JSON shapes web/app.js
+ * consumes today:
+ *
+ *   GET /api/v1/zones/:zone   <- v1/zones/<zone>.parquet
+ *   GET /api/v1/scoreboard    <- v1/scoreboard.parquet (+ manifest)
+ *   GET /api/v1/map           <- v1/map.parquet        (+ manifest)
+ *   GET /api/v1/manifest      <- v1/manifest.json (pass-through)
+ *
+ * Caching: edge Cache API keyed on the R2 object ETag — the parquet is
+ * parsed at most once per object version per colo; clients get
+ * ETag/If-None-Match 304s. CORS: energy.philokalia.ai + localhost dev.
+ */
+
+import { parquetReadObjects } from "hyparquet";
+import { compressors } from "hyparquet-compressors";
+import { shapeZone, shapeScoreboard, shapeMap } from "./shape.js";
+
+const ALLOWED_ORIGINS = [
+  /^https:\/\/energy\.philokalia\.ai$/,
+  /^https?:\/\/localhost(:\d+)?$/,
+  /^https?:\/\/127\.0\.0\.1(:\d+)?$/,
+];
+
+function corsHeaders(request) {
+  const origin = request.headers.get("Origin");
+  const h = { "Vary": "Origin" };
+  if (origin && ALLOWED_ORIGINS.some((re) => re.test(origin))) {
+    h["Access-Control-Allow-Origin"] = origin;
+    h["Access-Control-Allow-Methods"] = "GET, HEAD, OPTIONS";
+    h["Access-Control-Allow-Headers"] = "If-None-Match, Content-Type";
+    h["Access-Control-Max-Age"] = "86400";
+  }
+  return h;
+}
+
+function jsonResponse(body, status, extraHeaders) {
+  return new Response(body, {
+    status: status || 200,
+    headers: Object.assign(
+      { "Content-Type": "application/json; charset=utf-8" },
+      extraHeaders || {}
+    ),
+  });
+}
+
+function errorResponse(request, status, message) {
+  return jsonResponse(JSON.stringify({ error: message }), status, corsHeaders(request));
+}
+
+async function readParquet(r2obj) {
+  const buf = await r2obj.arrayBuffer();
+  return parquetReadObjects({ file: buf, compressors });
+}
+
+async function loadManifest(env) {
+  const obj = await env.DATA.get("v1/manifest.json");
+  if (!obj) return null;
+  return JSON.parse(await obj.text());
+}
+
+/** Build the JSON payload for one route (cache-miss path). */
+async function buildPayload(env, route, zone) {
+  if (route === "manifest") {
+    const obj = await env.DATA.get("v1/manifest.json");
+    return obj ? await obj.text() : null;
+  }
+  if (route === "zone") {
+    const obj = await env.DATA.get("v1/zones/" + zone + ".parquet");
+    if (!obj) return null;
+    return JSON.stringify(shapeZone(await readParquet(obj), zone));
+  }
+  const manifest = await loadManifest(env);
+  if (!manifest) return null;
+  if (route === "scoreboard") {
+    const obj = await env.DATA.get("v1/scoreboard.parquet");
+    if (!obj) return null;
+    return JSON.stringify(shapeScoreboard(await readParquet(obj), manifest));
+  }
+  if (route === "map") {
+    const obj = await env.DATA.get("v1/map.parquet");
+    if (!obj) return null;
+    return JSON.stringify(shapeMap(await readParquet(obj), manifest));
+  }
+  return null;
+}
+
+/** R2 key whose ETag versions the route's cache entry. */
+function routeKey(route, zone) {
+  if (route === "manifest") return "v1/manifest.json";
+  if (route === "zone") return "v1/zones/" + zone + ".parquet";
+  return "v1/" + route + ".parquet";
+}
+
+export default {
+  async fetch(request, env, ctx) {
+    if (request.method === "OPTIONS") {
+      return new Response(null, { status: 204, headers: corsHeaders(request) });
+    }
+    if (request.method !== "GET" && request.method !== "HEAD") {
+      return errorResponse(request, 405, "method not allowed");
+    }
+
+    const url = new URL(request.url);
+    let route = null, zone = null;
+    let m;
+    if ((m = url.pathname.match(/^\/api\/v1\/zones\/([A-Za-z0-9_-]+)$/))) {
+      route = "zone";
+      zone = m[1];
+    } else if (url.pathname === "/api/v1/scoreboard") {
+      route = "scoreboard";
+    } else if (url.pathname === "/api/v1/map") {
+      route = "map";
+    } else if (url.pathname === "/api/v1/manifest") {
+      route = "manifest";
+    }
+    if (!route) return errorResponse(request, 404, "not found");
+
+    // Version the edge-cache entry on the R2 object's ETag: origin work
+    // (R2 get + parquet decode + shaping) happens once per object version.
+    const head = await env.DATA.head(routeKey(route, zone));
+    if (!head) return errorResponse(request, 404, "no data for " + url.pathname);
+    const etag = '"' + head.httpEtag.replace(/"/g, "") + '"';
+
+    // Client conditional request -> 304 without touching the cache/origin.
+    const inm = request.headers.get("If-None-Match");
+    if (inm && inm.replace(/^W\//, "") === etag) {
+      return new Response(null, {
+        status: 304,
+        headers: Object.assign({ "ETag": etag }, corsHeaders(request)),
+      });
+    }
+
+    const cache = caches.default;
+    const cacheKey = new Request(
+      url.origin + url.pathname + "?etag=" + encodeURIComponent(etag),
+      { method: "GET" }
+    );
+    let response = await cache.match(cacheKey);
+    if (!response) {
+      const body = await buildPayload(env, route, zone);
+      if (body === null) return errorResponse(request, 404, "no data for " + url.pathname);
+      response = jsonResponse(body, 200, {
+        "ETag": etag,
+        // Edge cache holds each version indefinitely (key includes the ETag);
+        // browsers revalidate after 60 s so freshness follows the pipeline.
+        "Cache-Control": "public, max-age=60",
+      });
+      ctx.waitUntil(cache.put(cacheKey, response.clone()));
+    }
+
+    // CORS is per-origin — apply outside the cached representation.
+    const out = new Response(request.method === "HEAD" ? null : response.body, response);
+    const cors = corsHeaders(request);
+    for (const k in cors) out.headers.set(k, cors[k]);
+    return out;
+  },
+};
