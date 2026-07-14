@@ -39,28 +39,27 @@
   --page-grid-line: rgba(44, 107, 168, 0.07);
   --header-bg:      rgba(251, 248, 241, 0.92);
 }
-@media (prefers-color-scheme: dark) {
-  :root {
-    --page:           #0E1B2E;
-    --surface-1:      #14243C;
-    --text-primary:   #EAE5D9;
-    --text-secondary: #B9C2CE;
-    --text-muted:     #8D99A8;
-    --grid:           #23344D;
-    --baseline:       #35496A;
-    --border:         rgba(234, 229, 217, 0.14);
-    --heading:        #DCE6F2;
-    --series-sim:     #6FA8DC;
-    --series-act:     #E0A458;
-    --status-good:    #58B372;
-    --status-weak:    #E06555;
-    --good-text:      #58B372;
-    --banner-bg:      #E0A458;
-    --banner-ink:     #0E2745;
-    --accent:         #6FA8DC;
-    --page-grid-line: rgba(111, 168, 220, 0.06);
-    --header-bg:      rgba(14, 27, 46, 0.92);
-  }
+/* "Aegean night" — opt-in via the header toggle; light is the default. */
+:root[data-theme="dark"] {
+  --page:           #0E1B2E;
+  --surface-1:      #14243C;
+  --text-primary:   #EAE5D9;
+  --text-secondary: #B9C2CE;
+  --text-muted:     #8D99A8;
+  --grid:           #23344D;
+  --baseline:       #35496A;
+  --border:         rgba(234, 229, 217, 0.14);
+  --heading:        #DCE6F2;
+  --series-sim:     #6FA8DC;
+  --series-act:     #E0A458;
+  --status-good:    #58B372;
+  --status-weak:    #E06555;
+  --good-text:      #58B372;
+  --banner-bg:      #E0A458;
+  --banner-ink:     #0E2745;
+  --accent:         #6FA8DC;
+  --page-grid-line: rgba(111, 168, 220, 0.06);
+  --header-bg:      rgba(14, 27, 46, 0.92);
 }
 
 * { box-sizing: border-box; }
@@ -145,6 +144,23 @@ body {
   font-weight: 500;
 }
 .site-nav a:hover { color: var(--heading); }
+
+.theme-btn {
+  border: 1px solid var(--border);
+  background: transparent;
+  border-radius: 999px;
+  width: 1.9rem;
+  height: 1.9rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.9rem;
+  line-height: 1;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0;
+}
+.theme-btn:hover { color: var(--heading); border-color: var(--text-muted); }
 
 /* ---------- hero strip (results page) ---------- */
 .hero-lite {
@@ -255,9 +271,7 @@ select {
   color: var(--ivory);
   font-weight: 600;
 }
-@media (prefers-color-scheme: dark) {
-  .segmented button[aria-pressed="true"] { background: var(--accent); color: #0E1B2E; }
-}
+:root[data-theme="dark"] .segmented button[aria-pressed="true"] { background: var(--accent); color: #0E1B2E; }
 
 /* ---------- explorer grid ---------- */
 .explorer-grid {
@@ -537,9 +551,7 @@ select {
   padding: 0.05em 0.35em;
   color: var(--deep-blue);
 }
-@media (prefers-color-scheme: dark) {
-  .prose code { background: #1B2E4A; border-color: #2B4066; color: #BFD5EC; }
-}
+:root[data-theme="dark"] .prose code { background: #1B2E4A; border-color: #2B4066; color: #BFD5EC; }
 .prose .meander {
   margin: 2.4rem 0 0;
   height: 12px;

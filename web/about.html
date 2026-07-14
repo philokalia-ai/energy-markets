@@ -4,6 +4,38 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#16375F">
+<script>
+(function () {
+  function stored() {
+    try { return localStorage.getItem("philokalia-theme") === "dark" ? "dark" : "light"; }
+    catch (e) { return "light"; }
+  }
+  function apply(t) {
+    var r = document.documentElement;
+    if (t === "dark") r.setAttribute("data-theme", "dark");
+    else r.removeAttribute("data-theme");
+    r.style.colorScheme = t;
+    var m = document.querySelector('meta[name="theme-color"]');
+    if (m) m.setAttribute("content", t === "dark" ? "#0E1B2E" : "#16375F");
+    var b = document.getElementById("theme-toggle");
+    if (b) {
+      b.textContent = t === "dark" ? "☀" : "☾";
+      b.setAttribute("aria-pressed", t === "dark" ? "true" : "false");
+    }
+  }
+  apply(stored());
+  document.addEventListener("DOMContentLoaded", function () {
+    apply(stored());
+    var b = document.getElementById("theme-toggle");
+    if (b) b.addEventListener("click", function () {
+      var next = document.documentElement.getAttribute("data-theme") === "dark" ? "light" : "dark";
+      try { localStorage.setItem("philokalia-theme", next); } catch (e) {}
+      apply(next);
+    });
+  });
+})();
+</script>
 <title>About — philokalia energy</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -22,6 +54,7 @@
   <nav class="site-nav">
     <a href="./index.html">Results</a>
     <a href="https://github.com/philokalia-ai/energy-markets">GitHub</a>
+    <button id="theme-toggle" class="theme-btn" type="button" aria-label="Light / dark mode" aria-pressed="false">☾</button>
   </nav>
 </header>
 
