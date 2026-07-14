@@ -355,7 +355,16 @@ function run_pipelined_backfill(days, zones::Vector{String}=String[];
     wall0 = 0.0
     solver_futs = []
     try
-        @everywhere ws @eval using Euphemia
+        # Load Dates alongside Euphemia: scenario hooks are closures serialized
+        # from the coordinator's Main, and the documented examples reference
+        # `DateTime` / `dateformat` as Main bindings — without `using Dates` on
+        # the workers those references throw UndefVarError inside the per-zone
+        # book build, which is caught and silently DROPS the zone from the book
+        # (observed: an extra_orders hook using DateTime removed GR from all
+        # 365 days of a footprint run). Base values (numbers, Dicts) captured
+        # by hooks serialize fine; other package bindings do not — keep hooks
+        # to Euphemia exports, Dates, and plain data.
+        @everywhere ws @eval using Euphemia, Dates
 
         # Bounded channels. Capacity = in_flight; combined with the token
         # semaphore (≤ in_flight days live) no internal put! ever blocks.
