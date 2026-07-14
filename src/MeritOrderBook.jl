@@ -370,6 +370,7 @@ by the gated `scarcity_import_credit` to credit available import capacity in the
 scarcity margin — a zone that can import GWs is not domestically scarce. Offered
 ATC is published D-1, so this is ex-ante. AVG per (border, hour) before summing
 so a border reported sub-hourly is not over-counted.
+
 """
 function get_import_atc_capacity(bidding_zone::String, day::Date)
     df = sql2df_with_retry(
@@ -389,6 +390,107 @@ function get_import_atc_capacity(bidding_zone::String, day::Date)
     out = Dict{Int,Float64}()
     for r in eachrow(df)
         ismissing(r.total) || (out[Int(r.h)] = Float64(r.total))
+    end
+    return out
+end
+
+"""
+    _endogenous_import_atc(zone, day, counterparties) -> Dict{Int,Float64}
+
+Per-UTC-hour offered import ATC into `zone` summed over the listed
+counterparties (`out_map_code`), matching the enriched network's border
+sourcing: `offered_transfer_capacities_implicit` unioned with the explicit
+table's Day-ahead rows, implicit preferred where a border exists in both.
+Used by the import backstop to size what the MPCC flow variables can already
+deliver over the zone's ENDOGENOUS borders.
+"""
+function _endogenous_import_atc(bidding_zone::String, day::Date,
+    counterparties::Vector{String})
+    per_border(table, ct_filter, params) = begin
+        df = sql2df_with_retry(
+            """
+            SELECT EXTRACT(HOUR FROM date_time_utc AT TIME ZONE 'UTC')::int AS h,
+                   out_map_code AS cp, AVG(capacity_mw) AS cap
+            FROM entsoe.$table
+            WHERE in_map_code = \$1 AND out_map_code = ANY(\$3)
+              AND date_time_utc >= (\$2::date::timestamp AT TIME ZONE 'UTC')
+              AND date_time_utc <  ((\$2::date + 1)::timestamp AT TIME ZONE 'UTC')
+              AND capacity_mw IS NOT NULL
+              $ct_filter
+            GROUP BY 1, out_map_code
+            """, params)
+        d = Dict{Tuple{Int,String},Float64}()
+        for r in eachrow(df)
+            ismissing(r.cap) || (d[(Int(r.h), String(r.cp))] = Float64(r.cap))
+        end
+        d
+    end
+    params = Any[bidding_zone, day, counterparties]
+    impl = per_border("offered_transfer_capacities_implicit", "", params)
+    expl = per_border("offered_transfer_capacities_explicit",
+        "AND contract_type = 'Day-ahead'", params)
+    # Implicit preferred per (hour, border); explicit fills the gaps (CH/RS).
+    merged = merge(expl, impl)
+    out = Dict{Int,Float64}()
+    for ((h, _), cap) in merged
+        out[h] = get(out, h, 0.0) + cap
+    end
+    return out
+end
+
+"""
+    get_import_backstop(bidding_zone, day; weeks=8, endogenous_counterparties=[])
+        -> Dict{Int,Float64}
+
+Per-UTC-hour ex-ante elastic import-backstop quantity (MW) — the import
+capability the zone has recently DEMONSTRATED beyond what the book already
+carries, split by border class so nothing is double-counted:
+
+- **Non-endogenous borders** (retained observed injections + dropped
+  flow-based borders): the book injects their `:v2` climatology, so the
+  headroom is the demonstrated flow beyond it —
+  `max(0, max_{k=1..weeks} net_ne(day−7k, h) − clim_ne(h))`.
+- **Endogenous borders** (`endogenous_counterparties`: kept-ATC neighbors plus
+  shadowed aggregate codes the remap carries): the book injects nothing — the
+  MPCC flow variables deliver up to the OFFERED ATC — so the headroom is the
+  demonstrated flow beyond that ATC (implicit ∪ explicit-Day-ahead, exactly
+  the network's sourcing): `max(0, max_k net_endo(day−7k, h) − atc_endo(h))`.
+  This is what covers episodic offered-ATC collapses (CH holiday auction
+  gaps, DE_LU→DK1 tight-hour dips) without double-counting normal hours.
+
+The max/median run over the trailing `weeks` same-weekday days (D-7 …
+D-7·weeks) and the offered ATC is published D-1, so every input strictly
+predates the auction; the flow reads reuse the cached `:v2` day relations.
+Zero/negative headroom hours are omitted. See the `import_backstop` field of
+`ZoneProfile` for pricing and the measured rationale.
+"""
+function get_import_backstop(bidding_zone::String, day::Date;
+    weeks::Int=8, endogenous_counterparties::Vector{String}=String[])
+    endo = Set(endogenous_counterparties)
+    # Per-hour (non-endogenous, endogenous) net flows of a (h,cp,dir)=>flow
+    # map, deterministically ordered for reproducible float sums.
+    function nets(bh)
+        rows = sort!(Tuple{Int,String,Int,Float64}[
+            (h, cp, dir, v) for ((h, cp, dir), v) in bh])
+        ne = Dict{Int,Float64}(); e = Dict{Int,Float64}()
+        for (h, cp, dir, v) in rows
+            d = (cp in endo) ? e : ne
+            d[h] = get(d, h, 0.0) + dir * v
+        end
+        return (ne, e)
+    end
+    lagged = [nets(_zone_border_hourly(bidding_zone, day; lag=7k)) for k in 1:weeks]
+    clim_ne, _ = nets(_zone_border_hourly_clim(bidding_zone, day; weeks=weeks))
+    atc_endo = isempty(endo) ? Dict{Int,Float64}() :
+        _endogenous_import_atc(bidding_zone, day, endogenous_counterparties)
+    out = Dict{Int,Float64}()
+    isempty(lagged) && return out
+    for h in 0:23
+        mx_ne = maximum(get(l[1], h, 0.0) for l in lagged)
+        mx_e = maximum(get(l[2], h, 0.0) for l in lagged)
+        headroom = max(0.0, mx_ne - get(clim_ne, h, 0.0)) +
+                   max(0.0, mx_e - get(atc_endo, h, 0.0))
+        headroom > 0.0 && (out[h] = headroom)
     end
     return out
 end
@@ -511,6 +613,58 @@ Base.@kwdef struct ZoneProfile
     # zones (SE1/SE2); off for far-north export-congested NO4, whose low price
     # is set by export congestion, not the seasonal water value.
     seasonal_drawdown::Bool = true
+    # --- cv17 import-fix mechanisms (weak-zone diagnosis,
+    # docs/experiments/weak-zone-diagnosis). All defaults inert, so
+    # SEE/guard/single-zone books stay byte-identical.
+    #
+    # Ex-ante elastic import backstop (P2 of the diagnosis). One extra supply
+    # block per hour, sized by the zone's recently DEMONSTRATED import headroom
+    # beyond the :v2 flow climatology the book already injects:
+    #   qty(h) = max(0, max over trailing `backstop_weeks` same-weekday days of
+    #                net import(h) − climatology median(h)
+    #                − offered ENDOGENOUS import ATC(h))
+    # (the last term avoids double counting capacity the MPCC flow variables
+    # can already deliver), priced at `backstop_price_mult ×` gas SRMC — above
+    # every domestic tranche multiplier (max 1.60), so it displaces nothing in
+    # normal hours and only prevents the jump from ~1.6×gas straight to the
+    # €3,000 cap on the ~2% tail days when the zone leans on its neighbors
+    # beyond climatology (reality: more import arrives as the price rises).
+    # All inputs strictly predate the D-1 auction (fully ex-ante).
+    import_backstop::Bool = false
+    backstop_weeks::Int = 8
+    backstop_price_mult::Float64 = 1.8
+    # Fraction of the hourly backstop quantity credited into the scarcity
+    # margin (the backstop analogue of `scarcity_import_credit`): the scarcity
+    # MARKUP otherwise cannot see the backstop supply, so restored-import days
+    # can keep a residual markup overshoot. 0 = off (default).
+    backstop_scarcity_credit::Float64 = 0.0
+    # Two-pass anchor refs over DROPPED borders: include dropped in-footprint
+    # borders in the opportunity-anchor reference, weighted by observed
+    # climatology import flow. SE3's case: its real marginal supplier is
+    # Norrland hydro over the dropped SE2–SE3 cut (~5 GW observed) while the
+    # endogenous ref saw only DK1's ~0.3 GW border, pinning SE3 to DK1's
+    # night price. Off by default.
+    anchor_include_dropped::Bool = false
+    # Price RETAINED-border observed net exports at the coupled/anchor
+    # reference instead of firm demand at the cap (pass 2, anchored zones
+    # only): a real exporter curtails its export under domestic stress
+    # (SI–HR, BE–GB) instead of serving it at any price — the demand-side
+    # mirror of the dropped-border `anchor_export_mw` treatment. Off by
+    # default (byte-identical cap-priced exports elsewhere).
+    ref_priced_exports::Bool = false
+end
+
+"""
+    with_profile(p::ZoneProfile; overrides...) -> ZoneProfile
+
+Copy of `p` with the given fields replaced — used to author zone variants of a
+shared regional profile (e.g. DK1/DK2 = NORDIC + import backstop) without
+duplicating the base calibration.
+"""
+function with_profile(p::ZoneProfile; overrides...)
+    nt = NamedTuple{fieldnames(ZoneProfile)}(
+        ntuple(i -> getfield(p, i), fieldcount(ZoneProfile)))
+    return ZoneProfile(; merge(nt, values(overrides))...)
 end
 
 """
@@ -707,6 +861,11 @@ const SWISS_PROFILE = ZoneProfile(
     water_value_base = 0.6,
     water_value_span = 0.5,
     opportunity_anchor = :hydro,
+    # cv17: CH starves episodically (FR→CH holiday auction gaps, e.g. the
+    # 2025-01-01 DE_Amprion zero-offer day), not chronically — no border drop
+    # is justified; the ex-ante backstop covers the tail days. Measured
+    # (28-day benchmark): corr 0.11 → 0.74, MAE 49.9 → 24.1.
+    import_backstop = true,
 )
 
 """
@@ -739,6 +898,14 @@ const AUSTRIA_PROFILE = ZoneProfile(
     # shape (corr), queued for iteration 9; the share stays at its iter5
     # calibration.
     anchor_share = 1.1,
+    # cv17: AT's remaining Core import borders (CZ–AT, DE_LU–AT) carry the
+    # chronic flow-based-residual ATC (p10 = 0 vs 1.6–2.0 GW physical) and are
+    # now DROPPED (see flow_based_drop_borders); the backstop covers the
+    # residual tail days beyond the restored climatology injection. Measured
+    # (28-day production benchmark): corr 0.17 → 0.77, MAE 85.3 → 28.3.
+    # The backstop scarcity credit was measured here and NOT adopted (moved
+    # no target metric; cost SK/SE4 ~0.05 corr via their anchor refs).
+    import_backstop = true,
 )
 
 """
@@ -760,6 +927,13 @@ const BELGIUM_PROFILE = ZoneProfile(
     scarcity_kappa = 1.5,
     peak_kappa = 0.6,
     opportunity_anchor = :hydro,
+    # cv17: BE's tail-day import starvation (actual imports +2.1 GW over the
+    # climatology on its spike hours) is covered by the ex-ante backstop.
+    # Measured (28-day benchmark): corr 0.22 → 0.85, MAE 63.5 → 21.0. The
+    # retained BE–GB border's observed exports re-price at the anchor
+    # reference in pass 2 instead of firm cap-priced demand.
+    import_backstop = true,
+    ref_priced_exports = true,
 )
 
 """
@@ -782,6 +956,99 @@ const SLOVAKIA_PROFILE = ZoneProfile(
     peak_kappa = 0.6,
     opportunity_anchor = :hydro,
 )
+
+"""
+Slovenia (cv17). Core-FBMC member whose AT import border carries the same
+chronic flow-based-residual "offered ATC" documented and dropped for
+HU (iter3), BE (iter5), SK (iter6) and now AT: AT→SI averages ~150 MW with
+p10 = 0 while the physical flow carries ~1.3 GW — SI capped on 47/730 days of
+the cv16 baseline, the worst phantom-scarcity zone in the footprint. The
+Slovakia treatment: AT–SI dropped (`flow_based_drop_borders`), continental
+scarcity temperament, and the `:hydro` opportunity anchor so the restored
+imports price at the coupled Core reference instead of the €1 price-taker
+block. Attribution-measured (weak-zone diagnosis v3): the drop is strictly
+necessary — backstop-only leaves SI at corr 0.33 vs 0.70 with the drop.
+Also carries the import backstop for residual tail days, and ref-priced
+retained-border exports: SI's ~1 GW HR export outlet entered as firm demand
+AT THE CAP, forcing the model to serve it at any price on tight days where a
+real exporter would curtail (§2c of the diagnosis).
+"""
+const SLOVENIA_PROFILE = ZoneProfile(
+    scarcity_threshold = 1.25,
+    scarcity_kappa = 1.5,
+    peak_kappa = 0.6,
+    opportunity_anchor = :hydro,
+    import_backstop = true,
+    ref_priced_exports = true,
+)
+
+"""
+Denmark (DK1/DK2, cv17). Plain NORDIC plus the ex-ante import backstop: their
+starvation is EPISODIC (DE_LU→DK1 offered ATC averages ~2.5 GW but collapses
+to ~295 MW exactly on tight hours; SE4→DK2 9 MW vs 698 MW physical on spike
+hours), so a blanket border drop is not justified — the tail-day backstop is.
+Measured (28-day benchmark): DK1 corr 0.11 → 0.75 / MAE 71.8 → 28.8,
+DK2 0.32 → 0.76 / 82.6 → 29.4.
+"""
+const DENMARK_PROFILE = with_profile(NORDIC_PROFILE; import_backstop = true)
+
+"""
+SE3 (cv17). SWEDEN_SOUTH (anchored Nordic hydro) plus two cv17 mechanisms:
+the import backstop (spike-hour imports ran +1.9 GW over climatology), and —
+its structural fix — `anchor_include_dropped`: SE3's anchor reference was the
+capacity-weighted price of its ENDOGENOUS neighbors, essentially only DK1
+(~0.3 GW border, €82 night) after the iter5 drops, while its real marginal
+supply is Norrland hydro over the dropped SE2–SE3 cut (~5 GW observed).
+Including dropped in-footprint borders climatology-flow-weighted makes the
+ref SE2-dominated, pulling SE3's level/shape toward its actual position
+between SE2 and DK1. SE4 deliberately stays on plain SWEDEN_SOUTH (its
+existing refs are already decent; measured as a gate on the benchmark).
+"""
+const SE3_PROFILE = with_profile(SWEDEN_SOUTH_PROFILE;
+    import_backstop = true,
+    # anchor_include_dropped measured and GATED OUT (28-day production
+    # benchmark): the SE2-dominated ref (~5 GW climatology weight vs DK1's
+    # ~0.3 GW ATC) pinned SE3 at SE2's level — bias flipped +13 → −24 and
+    # corr fell 0.55 → 0.31 vs the backstop-only configuration. The
+    # mechanism stays available on the profile for future calibration
+    # (e.g. a tempered weight); SE3's §4b night-shape problem remains open.
+    anchor_include_dropped = false)
+
+"""
+IT-CNORTH (cv17). ITALY plus the import backstop: episodic
+IT-CSOUTH→IT-CNORTH offered-ATC dips (95 MW offered vs 1.2 GW physical on
+spike hours; avg ~3 GW) starve it a few days a year — backstop, not drop.
+"""
+const ITALY_CNORTH_PROFILE = with_profile(ITALY_PROFILE; import_backstop = true)
+
+"""
+Romania / Serbia / Hungary (cv17). SEE calibration (exact v10 parameters)
+plus the ex-ante import backstop AND the backstop scarcity credit. RO is the
+measured case for why the backstop must stay on in SEE's east: the June-2026
+tight period (one Cernavoda unit partial, wind at 45% of 2025) was covered in
+reality by BG/HU/UA imports above climatology — the model capped every day of
+2026-06-15..30 while actuals stayed at €200–290. The full scarcity credit
+(`backstop_scarcity_credit = 1.0`, same fundamentals as the iter6
+`scarcity_import_credit`: demonstrated import capability means the zone is
+not domestically scarce) addresses the measured residual overpricing of the
+SEE cold-snap coupled block — with the backstop supply alone the cluster
+still cleared €517–591 vs actual ~€380 because the scarcity MARKUP could not
+see the restored imports; the credit only acts when the margin is below the
+scarcity threshold, so normal hours are untouched. HU's membership was the
+documented open calibration decision (P2 measured its bias drifting
+−14.6 → −28.8 with an uncredited backstop): the production benchmark shows
+HU's missing backstop left the coupled SEE cluster capping through the
+2026-01 cold snap, and the credit is the mechanism P2 lacked — HU carries
+both. These profiles apply ONLY on the EU-footprint path
+(`enrich_network=true`); the legacy SEE single-zone and 5-zone products force
+SEE_PROFILE and remain byte-identical.
+"""
+const ROMANIA_PROFILE = with_profile(SEE_PROFILE;
+    import_backstop = true, backstop_scarcity_credit = 1.0)
+const SERBIA_PROFILE = with_profile(SEE_PROFILE;
+    import_backstop = true, backstop_scarcity_credit = 1.0)
+const HUNGARY_PROFILE = with_profile(SEE_PROFILE;
+    import_backstop = true, backstop_scarcity_credit = 1.0)
 
 """
 Baltic (EE/LT/LV). Tightly coupled to the Nordic hydro system and thermally
@@ -810,13 +1077,20 @@ registry fall back to `SEE_PROFILE` via `get_zone_profile`, so the default is
 always the validated SEE calibration.
 """
 const ZONE_PROFILES = Dict{String,ZoneProfile}(
-    # SEE core (explicit for clarity; equal to the fallback)
-    "GR" => SEE_PROFILE, "BG" => SEE_PROFILE, "RO" => SEE_PROFILE,
-    "RS" => SEE_PROFILE, "HU" => SEE_PROFILE, "SI" => SEE_PROFILE,
+    # SEE core. GR/BG stay on the exact v10 SEE calibration; RO/RS/HU add the
+    # cv17 import backstop + full scarcity credit (EU-footprint only — the
+    # single-zone / 5-zone SEE products force SEE_PROFILE and stay
+    # byte-identical). HU's membership was the documented calibration
+    # decision: the production benchmark showed the coupled SEE cold-snap
+    # cluster keeps capping without HU's backstop, and the scarcity credit is
+    # the mechanism the P2 bias-drift caution lacked. SI moves to the
+    # Slovakia treatment (cv17): AT–SI drop + :hydro anchor + backstop.
+    "GR" => SEE_PROFILE, "BG" => SEE_PROFILE, "RO" => ROMANIA_PROFILE,
+    "RS" => SERBIA_PROFILE, "HU" => HUNGARY_PROFILE, "SI" => SLOVENIA_PROFILE,
     # Iberia
     "ES" => IBERIA_PROFILE, "PT" => IBERIA_PROFILE,
-    # Italy sub-zones
-    "IT-NORTH" => ITALY_PROFILE, "IT-CNORTH" => ITALY_PROFILE,
+    # Italy sub-zones (IT-CNORTH: + cv17 import backstop)
+    "IT-NORTH" => ITALY_PROFILE, "IT-CNORTH" => ITALY_CNORTH_PROFILE,
     "IT-CSOUTH" => ITALY_PROFILE, "IT-SOUTH" => ITALY_PROFILE,
     "IT-Calabria" => ITALY_PROFILE, "IT-Sicily" => ITALY_PROFILE,
     "IT-Sardinia" => ITALY_PROFILE,
@@ -826,10 +1100,12 @@ const ZONE_PROFILES = Dict{String,ZoneProfile}(
     "NO4" => NO4_PROFILE, "NO5" => NORWAY_PROFILE,
     "SE1" => NORDIC_PROFILE, "SE2" => NORDIC_PROFILE,
     # SE3/SE4: anchored after the iter5 SE2–SE3/SE3–SE4 border drop (see
-    # SWEDEN_SOUTH_PROFILE docstring)
-    "SE3" => SWEDEN_SOUTH_PROFILE, "SE4" => SWEDEN_SOUTH_PROFILE,
+    # SWEDEN_SOUTH_PROFILE docstring); SE3 adds the cv17 backstop + the
+    # dropped-border (SE2-weighted) anchor ref
+    "SE3" => SE3_PROFILE, "SE4" => SWEDEN_SOUTH_PROFILE,
     "FI" => NORDIC_PROFILE,
-    "DK1" => NORDIC_PROFILE, "DK2" => NORDIC_PROFILE,
+    # DK1/DK2: + cv17 import backstop (episodic starvation — see DENMARK_PROFILE)
+    "DK1" => DENMARK_PROFILE, "DK2" => DENMARK_PROFILE,
     # Baltic
     "EE" => BALTIC_PROFILE, "LT" => BALTIC_PROFILE, "LV" => BALTIC_PROFILE,
     # France (nuclear-heavy: continental scarcity + nuclear bid position)
@@ -1544,6 +1820,25 @@ function create_merit_order_book(
         # Gas SRMC anchors hydro water value (TTF-based when data exists)
         gas_srmc = get_marginal_cost(day, "Fossil Gas", bidding_zone)
 
+        # Ex-ante elastic import backstop (cv17, profile-gated — see the
+        # `import_backstop` field docstring). Computed next to the :v2 flow
+        # climatology off the same cached day relations; the offered ATC of
+        # the ENDOGENOUS borders (net_import_exclude — kept-ATC neighbors plus
+        # shadowed aggregate codes, whose aggregate-coded ATC the remap already
+        # carries endogenously) is subtracted so MPCC-deliverable capacity is
+        # never double-counted. Empty Dict for every non-backstop profile —
+        # byte-identical books.
+        backstop_by_hour = (profile.import_backstop && include_net_imports) ?
+            get_import_backstop(bidding_zone, day;
+                weeks=profile.backstop_weeks,
+                endogenous_counterparties=net_import_exclude) :
+            Dict{Int,Float64}()
+        backstop_price = profile.backstop_price_mult * gas_srmc
+        isempty(backstop_by_hour) ||
+            println("  🛟 Import backstop: peak $(round(Int, maximum(values(backstop_by_hour)))) MW " *
+                    "@ €$(round(backstop_price, digits=1))/MWh " *
+                    "($(length(backstop_by_hour)) hours, $(profile.backstop_weeks)-week window)")
+
         # Hydro energy limitation: recent actual peak output caps what the
         # hydro fleet can offer (dry periods → less water → tighter margin).
         # Thermal keeps the flat availability derate; hydro gets a
@@ -1684,10 +1979,31 @@ function create_merit_order_book(
                 supply_orders_count += 1
                 total_supply_capacity += ni
             elseif ni < -0.1
-                push!(tagged, (SimpleOrder(:demand, price_cap, -ni,
+                # cv17 ref-priced retained-border exports (profile-gated,
+                # pass 2 only): a net export over RETAINED borders (SI–HR,
+                # BE–GB) enters as demand at the coupled/anchor reference
+                # instead of firm at the cap, so the exporter curtails under
+                # domestic stress like a real one — the demand-side mirror of
+                # the dropped-border anchor_export_mw treatment. Everywhere
+                # else (and in pass 1) the export stays cap-priced firm demand.
+                export_price = (profile.ref_priced_exports && anchor_active &&
+                                haskey(anchor_prices, ts)) ?
+                               max(anchor_prices[ts], 1.0) : price_cap
+                push!(tagged, (SimpleOrder(:demand, export_price, -ni,
                     Symbol(bidding_zone), date_time, resolution_minutes), "IMPORT"))
                 demand_orders_count += 1
                 total_demand_quantity += -ni
+            end
+
+            # cv17 import-backstop supply block (profile-gated; empty Dict
+            # otherwise). Priced above every domestic tranche multiplier, so
+            # it binds only when the book would otherwise jump to the cap.
+            backstop_qty = get(backstop_by_hour, Dates.hour(date_time), 0.0)
+            if backstop_qty > 1.0
+                push!(tagged, (SimpleOrder(:supply, backstop_price, backstop_qty,
+                    Symbol(bidding_zone), date_time, resolution_minutes), "BACKSTOP"))
+                supply_orders_count += 1
+                total_supply_capacity += backstop_qty
             end
 
             # :hydro-anchored zones (pass 2): the export volume observed over
@@ -1727,7 +2043,14 @@ function create_merit_order_book(
             import_credit = profile.scarcity_import_credit > 0.0 ?
                 profile.scarcity_import_credit *
                 get(import_atc_by_hour, Dates.hour(parse_timeslot_to_datetime(ts, day)), 0.0) : 0.0
-            margin = (dispatchable_capacity + import_credit) / net_demand[ts]
+            # cv17: gated scarcity credit for the backstop quantity (the
+            # scarcity MARKUP cannot otherwise see the backstop supply, so
+            # restored-import days can keep a residual markup overshoot).
+            # 0 (default) = off everywhere.
+            backstop_credit = profile.backstop_scarcity_credit > 0.0 ?
+                profile.backstop_scarcity_credit *
+                get(backstop_by_hour, Dates.hour(parse_timeslot_to_datetime(ts, day)), 0.0) : 0.0
+            margin = (dispatchable_capacity + import_credit + backstop_credit) / net_demand[ts]
             scarcity = 1.0 +
                        scarcity_kappa * max(0.0, scarcity_threshold - margin)^2 +
                        peak_kappa * norm_demand^peak_exponent

@@ -306,7 +306,9 @@ using .MeritOrderBook: create_merit_order_book, ZoneProfile, get_zone_profile,
     ZONE_PROFILES, SEE_PROFILE, IBERIA_PROFILE, CONTINENTAL_PROFILE,
     ITALY_PROFILE, NORDIC_PROFILE, BALTIC_PROFILE, FRANCE_PROFILE, NORWAY_PROFILE,
     SWISS_PROFILE, SWEDEN_SOUTH_PROFILE, AUSTRIA_PROFILE, BELGIUM_PROFILE,
-    clear_net_imports_cache!, ZoneScenario, zone_scenario, is_empty_scenario
+    SLOVAKIA_PROFILE, SLOVENIA_PROFILE, DENMARK_PROFILE, SE3_PROFILE,
+    ITALY_CNORTH_PROFILE, ROMANIA_PROFILE, SERBIA_PROFILE, HUNGARY_PROFILE,
+    with_profile, clear_net_imports_cache!, ZoneScenario, zone_scenario, is_empty_scenario
 
 # ===== EXPORTS =====
 # All module exports are centralized here following Julia best practices
@@ -359,7 +361,10 @@ export create_adjusted_order_book, AdjustedOrderBookResult, print_order_book_sum
 export create_merit_order_book
 export ZoneProfile, get_zone_profile, ZONE_PROFILES, SEE_PROFILE, IBERIA_PROFILE,
     CONTINENTAL_PROFILE, ITALY_PROFILE, NORDIC_PROFILE, BALTIC_PROFILE, FRANCE_PROFILE,
-    NORWAY_PROFILE, SWISS_PROFILE, SWEDEN_SOUTH_PROFILE, AUSTRIA_PROFILE, BELGIUM_PROFILE
+    NORWAY_PROFILE, SWISS_PROFILE, SWEDEN_SOUTH_PROFILE, AUSTRIA_PROFILE, BELGIUM_PROFILE,
+    SLOVAKIA_PROFILE, SLOVENIA_PROFILE, DENMARK_PROFILE, SE3_PROFILE,
+    ITALY_CNORTH_PROFILE, ROMANIA_PROFILE, SERBIA_PROFILE, HUNGARY_PROFILE,
+    with_profile
 
 # Counterfactual scenario primitive for the multi-zone footprint path
 export ZoneScenario
@@ -1120,6 +1125,25 @@ function flow_based_drop_borders(footprint::AbstractVector{<:AbstractString})
             z in fp && push!(pairs, ordered("SK", z))
         end
     end
+    # Austria + Slovenia (Core FBMC, cv17 — weak-zone diagnosis §2b). The same
+    # chronic flow-based-residual signature on AT's remaining Core import
+    # borders and on SI's import border from AT: offered implicit ATC CZ→AT
+    # averages ~110–360 MW per quarter with p10 = 0 (19 MW on the spike-hour
+    # sample) vs ~1.6 GW physical; DE_LU→AT avg 52–355 / p10 = 0 (1 MW vs
+    # 2.0 GW); AT→SI avg 83–285 / p10 = 0 (3 MW vs 1.3 GW). AT capped on 7/730
+    # baseline days and SI on 47/730 — the worst phantom-scarcity zone —
+    # exactly in the starved hours. HU–AT was already dropped for HU's sake
+    # (iter3); these drops restore AT's and SI's own import supply as observed
+    # import-only flows, priced at the coupled Core reference through the
+    # :hydro anchors both zones carry (AUSTRIA_PROFILE, SLOVENIA_PROFILE).
+    # Measured (28-day benchmark, P1): AT corr 0.17→0.75 / MAE 85.3→28.9,
+    # SI 0.28→0.70 / 64.5→41.1; the v3 attribution control shows the SI drop
+    # is strictly necessary (backstop-only leaves SI at corr 0.33).
+    if "AT" in fp
+        for z in ("CZ", "DE_LU", "SI")
+            z in fp && push!(pairs, ordered("AT", z))
+        end
+    end
     return sort(collect(pairs))
 end
 
@@ -1154,10 +1178,19 @@ continental proxy: the DE_LU/NL average. The result carries both the daily
 level and the hourly shape of the coupled price. All inputs are
 model-internal (pass-1 output), so the anchor keeps the counterfactual
 ex-ante — no observed prices enter.
+
+`extra_weights` (cv17, `anchor_include_dropped` profiles) adds per-zone
+neighbor weights for DROPPED in-footprint borders — observed climatology
+import flow summed over the day, commensurate with the ATC weights (both MW
+summed over the day's periods). SE3's case: after the iter5 drops its
+endogenous ref was essentially only DK1 (~0.3 GW border) while its real
+marginal supply is Norrland hydro over the dropped SE2–SE3 cut (~5 GW), so
+the ref becomes SE2-dominated. The climatology is strictly ex-ante.
 """
 function compute_opportunity_anchor_refs(anchored_zones::Vector{String},
     market_prices::Dict{String,Dict{String,Float64}},
-    transfer_capacity)
+    transfer_capacity;
+    extra_weights::Dict{String,Dict{String,Float64}}=Dict{String,Dict{String,Float64}}())
 
     proxy_zones = [z for z in ("DE_LU", "NL") if haskey(market_prices, z)]
     refs = Dict{String,Dict{String,Float64}}()
@@ -1171,6 +1204,12 @@ function compute_opportunity_anchor_refs(anchored_zones::Vector{String},
                 haskey(market_prices, other) || continue
                 w[other] = get(w, other, 0.0) + max(cap, 0.0)
             end
+        end
+        # cv17: dropped-border neighbors, climatology-flow-weighted (gated —
+        # empty for every zone whose profile does not opt in)
+        for (other, wt) in get(extra_weights, z, Dict{String,Float64}())
+            haskey(market_prices, other) || continue
+            w[other] = get(w, other, 0.0) + wt
         end
         sources = if !isempty(w) && sum(values(w)) > 0
             w
@@ -1499,8 +1538,35 @@ function mz_extract_anchor_inputs(order_book::MPCC.MPCCOrderBook,
             refs=Dict{String,Dict{String,Float64}}(),
             cached=Dict{String,Vector{MarketOrders.MarketOrder}}())
     end
+    # cv17: anchor refs over DROPPED borders (profile-gated via
+    # `anchor_include_dropped` — currently SE3). For each flagged anchored
+    # zone, weight each dropped in-footprint neighbor by its observed
+    # climatology IMPORT flow summed over the day (MW·periods, commensurate
+    # with the ATC weights). Ex-ante: the climatology uses only pre-auction
+    # days; the day is recovered from the book's period grid.
+    extra_w = Dict{String,Dict{String,Float64}}()
+    flagged = [z for z in anchored
+               if MeritOrderBook.get_zone_profile(z).anchor_include_dropped]
+    if !isempty(flagged) && !isempty(order_book.periods)
+        day = Date(String(order_book.periods[1])[1:8], dateformat"yyyymmdd")
+        drops = flow_based_drop_borders([String(n) for n in order_book.nodes])
+        for z in flagged
+            clim = MeritOrderBook._zone_border_hourly_clim(z, day)
+            w = Dict{String,Float64}()
+            for (a, b) in drops
+                other = a == z ? b : (b == z ? a : nothing)
+                other === nothing && continue
+                haskey(mpcc_result.market_prices, other) || continue
+                s = sum((max(f, 0.0) for ((h, cp, dir), f) in clim
+                         if cp == other && dir == 1); init=0.0)
+                s > 0.0 && (w[other] = s)
+            end
+            isempty(w) || (extra_w[z] = w)
+        end
+    end
     refs = compute_opportunity_anchor_refs(anchored,
-        mpcc_result.market_prices, order_book.network_topology)
+        mpcc_result.market_prices, order_book.network_topology;
+        extra_weights=extra_w)
     cached = Dict{String,Vector{MarketOrders.MarketOrder}}(
         z => [o for o in order_book.orders if String(o.zone) == z]
         for z in order_book.nodes)
