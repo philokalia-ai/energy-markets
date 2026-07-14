@@ -732,6 +732,61 @@ select {
   max-width: 72em;
 }
 
+/* ---------- model map (About) ---------- */
+.mm-legend {
+  display: flex;
+  gap: 18px;
+  margin: 4px 0 10px;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.mm-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.mm-dot { width: 11px; height: 11px; border-radius: 50%; display: inline-block; }
+.mm-dot-ok   { background: var(--status-good); }
+.mm-dot-part { background: var(--terracotta-soft); }
+.mm-dot-no   { background: none; border: 2px dashed var(--text-muted); }
+
+.model-map { position: relative; }
+.mm-scroll { overflow-x: auto; }
+.model-map svg { min-width: 900px; width: 100%; display: block; }
+.mm-title { font-family: var(--serif); font-size: 22px; font-weight: 700; fill: var(--heading); }
+.mm-edges path { fill: none; stroke: var(--baseline); stroke-width: 1.2; }
+.mm-arrowhead { fill: var(--baseline); }
+
+.mm-node { cursor: pointer; outline: none; }
+.mm-node text {
+  font-family: var(--sans);
+  font-size: 12px;
+  fill: var(--text-primary);
+  text-anchor: middle;
+  pointer-events: none;
+}
+.mm-node ellipse, .mm-node rect { fill: var(--surface-1); stroke-width: 1.6; }
+.mm-ok   ellipse, .mm-ok rect   { stroke: var(--status-good); }
+.mm-part ellipse, .mm-part rect { stroke: var(--terracotta-soft); }
+.mm-no   ellipse, .mm-no rect   { stroke: var(--text-muted); stroke-dasharray: 5 4; }
+.mm-no text { fill: var(--text-muted); }
+.mm-node:hover ellipse, .mm-node:focus ellipse,
+.mm-node:hover rect, .mm-node:focus rect { stroke-width: 2.6; }
+.mm-edge-label text { font-size: 10.5px; }
+
+.mm-tip {
+  position: absolute;
+  z-index: 5;
+  max-width: 340px;
+  background: var(--surface-1);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
+  pointer-events: none;
+}
+.mm-caption { font-size: 13px; color: var(--text-muted); margin-top: 10px; }
+
 /* ---------- responsiveness ---------- */
 html, body { overflow-x: hidden; }
 

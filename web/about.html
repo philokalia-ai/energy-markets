@@ -9,6 +9,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=GFS+Didot&family=Literata:opsz,wght@7..72,400;7..72,600;7..72,700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="./style.css">
+<link rel="icon" href="./favicon.svg" type="image/svg+xml">
 </head>
 <body>
 
@@ -84,6 +85,155 @@
     <li><strong>Honest inputs only.</strong> Everything is D-1-legal. When an input is
       not published in time, the day is skipped — never backfilled from hindsight.</li>
   </ol>
+
+  <h2 id="model-map">The model map — what's implemented, honestly</h2>
+  <p>
+    This is the idealized anatomy of one bidding zone — every actor that shapes the
+    day-ahead auction. Hover (or tap) any element to see whether the model implements
+    it, how, and with what strategy. The honest tally: <strong>17 of 27 elements fully
+    implemented, 3 partially, 7 not</strong> — four of those deliberately (speculative
+    "virtual" trading has no place in a competitive counterfactual) and three because
+    load is modelled as one total, not decomposed by sector.
+  </p>
+  <div class="mm-legend" aria-hidden="true">
+    <span><span class="mm-dot mm-dot-ok"></span> implemented</span>
+    <span><span class="mm-dot mm-dot-part"></span> partial</span>
+    <span><span class="mm-dot mm-dot-no"></span> not implemented</span>
+  </div>
+  <div class="model-map" id="model-map-wrap">
+    <div class="mm-scroll">
+    <svg viewBox="0 0 1080 620" role="img" aria-label="Interactive bidding-zone model map">
+      <defs>
+        <marker id="mm-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" class="mm-arrowhead"/>
+        </marker>
+      </defs>
+      <text x="540" y="30" class="mm-title" text-anchor="middle">Bidding Zone</text>
+
+      <!-- edges -->
+      <g class="mm-edges">
+        <path d="M128,164 L266,286" marker-end="url(#mm-arrow)"/>
+        <path d="M216,162 L280,272" marker-end="url(#mm-arrow)"/>
+        <path d="M90,252 L258,296" marker-end="url(#mm-arrow)"/>
+        <path d="M186,222 L262,286" marker-end="url(#mm-arrow)"/>
+        <path d="M100,340 L250,398" marker-end="url(#mm-arrow)"/>
+        <path d="M118,408 L246,410" marker-end="url(#mm-arrow)"/>
+        <path d="M148,452 L254,424" marker-end="url(#mm-arrow)"/>
+        <path d="M322,316 L376,338" marker-end="url(#mm-arrow)"/>
+        <path d="M330,392 L372,366" marker-end="url(#mm-arrow)"/>
+        <path d="M372,468 L394,378" marker-end="url(#mm-arrow)"/>
+        <path d="M436,346 L500,348" marker-end="url(#mm-arrow)"/>
+        <path d="M402,252 L520,326" marker-end="url(#mm-arrow)"/>
+        <path d="M492,190 L556,322" marker-end="url(#mm-arrow)"/>
+        <path d="M600,382 L648,484" marker-end="url(#mm-arrow)"/>
+        <path d="M898,64 L946,242" marker-end="url(#mm-arrow)"/>
+        <path d="M968,110 L954,242" marker-end="url(#mm-arrow)"/>
+        <path d="M998,170 L962,244" marker-end="url(#mm-arrow)"/>
+        <path d="M916,180 L942,244" marker-end="url(#mm-arrow)"/>
+        <path d="M944,290 L928,326" marker-end="url(#mm-arrow)"/>
+        <path d="M884,362 L824,372" marker-end="url(#mm-arrow)"/>
+        <path d="M856,252 L792,350" marker-end="url(#mm-arrow)"/>
+        <path d="M792,212 L770,348" marker-end="url(#mm-arrow)"/>
+        <path d="M852,452 L790,400" marker-end="url(#mm-arrow)"/>
+        <path d="M724,398 L678,486" marker-end="url(#mm-arrow)"/>
+      </g>
+
+      <!-- supply side -->
+      <g class="mm-node mm-ok" tabindex="0" data-tip="&lt;b&gt;Implemented.&lt;/b&gt; Reference track bids ENTSO-E's D-1 wind forecast; the ex-ante track predicts it from raw weather (GFS+ECMWF ensemble) at 115,390 OSM-mapped turbine cells. Offered as price-taking supply at €1/MWh.">
+        <ellipse cx="100" cy="145" rx="56" ry="22"/><text x="100" y="150">Wind Farms</text>
+      </g>
+      <g class="mm-node mm-part" tabindex="0" data-tip="&lt;b&gt;Partial.&lt;/b&gt; Hydro is NOT lumped into RES: reservoir fleets bid their &lt;i&gt;opportunity cost&lt;/i&gt; — a water value tied to gas prices, reservoir dryness vs the seasonal norm, and (in northern Sweden) the drawdown cycle. The weather→inflow link is not implemented; weekly ENTSO-E reservoir levels stand in.">
+        <ellipse cx="214" cy="142" rx="40" ry="20"/><text x="214" y="147">Hydro</text>
+      </g>
+      <g class="mm-node mm-ok" tabindex="0" data-tip="&lt;b&gt;Implemented.&lt;/b&gt; ENTSO-E D-1 solar forecast (reference) or our irradiance + sun-geometry model (ex-ante). Price-taker at €1/MWh.">
+        <ellipse cx="64" cy="235" rx="38" ry="20"/><text x="64" y="240">Solar</text>
+      </g>
+      <g class="mm-node mm-part" tabindex="0" data-tip="&lt;b&gt;Partial.&lt;/b&gt; Weather drives the ex-ante RES track (self-hosted open-meteo: GFS + ECMWF at hub height and irradiance). The reference track uses ENTSO-E's forecasts instead, and hydro inflows are not weather-driven yet.">
+        <ellipse cx="168" cy="208" rx="44" ry="17"/><text x="168" y="213">Weather ⛅</text>
+      </g>
+      <g class="mm-node mm-ok" tabindex="0" data-tip="&lt;b&gt;Implemented.&lt;/b&gt; The zone's wind + solar forecast enters the book as near-free price-taking supply; negative-price behavior emerges from oversupply, and the scenario API can curtail or add RES per zone.">
+        <ellipse cx="295" cy="300" rx="34" ry="20"/><text x="295" y="305">RES</text>
+      </g>
+      <g class="mm-node mm-ok" tabindex="0" data-tip="&lt;b&gt;Implemented.&lt;/b&gt; SRMC = fuel base + emission factor × daily EUA. Declining coal/lignite fleets are derated to their trailing 95th-percentile output (crisis honesty), so the book holds the plants that actually run.">
+        <ellipse cx="72" cy="330" rx="32" ry="19"/><text x="72" y="335">Coal</text>
+      </g>
+      <g class="mm-node mm-ok mm-edge-label" tabindex="0" data-tip="&lt;b&gt;Implemented.&lt;/b&gt; Daily EUA carbon prices from the physical-carbon ETC close of the last trading day strictly before the market date — no lookahead. Multiplied by each fuel's emission factor.">
+        <rect x="120" y="352" rx="9" width="76" height="18"/><text x="158" y="365">CO₂ Tariff</text>
+      </g>
+      <g class="mm-node mm-ok" tabindex="0" data-tip="&lt;b&gt;Implemented.&lt;/b&gt; Gas SRMC = TTF front-month close ÷ 55% efficiency + CO₂ + O&amp;M. Strictly D-1-legal: the last close before the market day.">
+        <ellipse cx="72" cy="400" rx="64" ry="20"/><text x="72" y="405">Natural Gas Plants</text>
+      </g>
+      <g class="mm-node mm-ok mm-edge-label" tabindex="0" data-tip="&lt;b&gt;Implemented.&lt;/b&gt; Real TTF front-month futures closes (updated Tue–Sat), cached per market day, never from the future.">
+        <rect x="138" y="384" rx="9" width="66" height="18"/><text x="171" y="397">NG TTFs</text>
+      </g>
+      <g class="mm-node mm-ok" tabindex="0" data-tip="&lt;b&gt;Implemented.&lt;/b&gt; Low SRMC baseload; the French fleet re-bids in pass 2 through the nuclear opportunity anchor — pricing its energy against the whole coupled market, not just locally.">
+        <ellipse cx="118" cy="458" rx="44" ry="20"/><text x="118" y="463">Nuclear ☢</text>
+      </g>
+      <g class="mm-node mm-ok" tabindex="0" data-tip="&lt;b&gt;Implemented.&lt;/b&gt; Per-unit fleet from the ENTSO-E registry: outage filtering (planned + forced), stale-validity fallback via recent generation, deduplication, fleet completion and installed-capacity truthing where the registry undercounts.">
+        <ellipse cx="300" cy="410" rx="54" ry="24"/><text x="300" y="406">Conventional</text><text x="300" y="420">Plants</text>
+      </g>
+      <g class="mm-node mm-part" tabindex="0" data-tip="&lt;b&gt;Partial.&lt;/b&gt; Pumped storage and batteries offer as flexible supply (no minimum load), but there is no inter-temporal charge/discharge arbitrage optimization — a known gap for CH/AT price shape.">
+        <ellipse cx="370" cy="490" rx="54" ry="22"/><text x="370" y="486">Storage:</text><text x="370" y="500">Discharging</text>
+      </g>
+      <g class="mm-node mm-ok" tabindex="0" data-tip="&lt;b&gt;Implemented.&lt;/b&gt; The merit-order book: SRMC bids, must-run discounts for the cheapest units, scarcity uplift when the margin over peak is thin. Strategy is &lt;i&gt;competitive by construction&lt;/i&gt; — no markup; the gap to reality is the finding.">
+        <ellipse cx="400" cy="352" rx="42" ry="20"/><text x="400" y="357">Producers</text>
+      </g>
+      <g class="mm-node mm-no" tabindex="0" data-tip="&lt;b&gt;Not implemented — deliberately.&lt;/b&gt; Speculative (virtual) selling is excluded: the model is a competitive counterfactual, and strategic arbitrage bidding is part of what it measures, not what it assumes.">
+        <ellipse cx="382" cy="232" rx="40" ry="22"/><text x="382" y="228">Virtual</text><text x="382" y="242">Sellers</text>
+      </g>
+      <g class="mm-node mm-ok" tabindex="0" data-tip="&lt;b&gt;Implemented.&lt;/b&gt; All 39 zones clear jointly under offered transfer capacities (implicit + explicit ATC; flow-based borders dropped where ATC misrepresents them). The flow rule is fully ex-ante: climatology + recency, never same-day observations.">
+        <ellipse cx="480" cy="168" rx="64" ry="24"/><text x="480" y="164">Interconnections:</text><text x="480" y="178">Exports</text>
+      </g>
+      <g class="mm-node mm-ok" tabindex="0" data-tip="&lt;b&gt;Implemented.&lt;/b&gt; Hourly supply orders {volume, €/MWh, timeslot}. Inter-temporal block orders were built, tested on 14 zones, and &lt;i&gt;rejected&lt;/i&gt; — a recorded negative result (they help only thermal-cycling zones in winter).">
+        <ellipse cx="560" cy="350" rx="76" ry="26"/><text x="560" y="346">Sell</text><text x="560" y="360">{Vol, €/MWh, Timeslot}</text>
+      </g>
+
+      <!-- demand side -->
+      <g class="mm-node mm-no" tabindex="0" data-tip="&lt;b&gt;Not decomposed.&lt;/b&gt; The model uses the total zone load — no residential / commercial / industrial split. Sectoral decomposition would enable sector-specific elasticity and weather response.">
+        <ellipse cx="890" cy="42" rx="56" ry="22"/><text x="890" y="38">Residential</text><text x="890" y="52">Consumers</text>
+      </g>
+      <g class="mm-node mm-no" tabindex="0" data-tip="&lt;b&gt;Not decomposed.&lt;/b&gt; Commercial load (hotels, services) is inside the total; no separate model.">
+        <ellipse cx="972" cy="90" rx="48" ry="20"/><text x="972" y="95">Hotels, etc</text>
+      </g>
+      <g class="mm-node mm-no" tabindex="0" data-tip="&lt;b&gt;Not decomposed.&lt;/b&gt; Industrial load is inside the total. Large flexible industrial demand (and its price response) is a candidate future refinement.">
+        <ellipse cx="1008" cy="150" rx="46" ry="22"/><text x="1008" y="146">Heavy</text><text x="1008" y="160">Industry</text>
+      </g>
+      <g class="mm-node mm-no" tabindex="0" data-tip="&lt;b&gt;Not implemented.&lt;/b&gt; Load is ENTSO-E's D-1 forecast — we do not model weather→demand ourselves yet. A temperature/calendar load model is under investigation; it would unlock true model forecasts at D-2…D-7.">
+        <ellipse cx="908" cy="162" rx="44" ry="17"/><text x="908" y="167">Weather ⛅</text>
+      </g>
+      <g class="mm-node mm-ok" tabindex="0" data-tip="&lt;b&gt;Implemented.&lt;/b&gt; ENTSO-E's D-1 total load forecast per zone — the same demand information the real auction cleared on. If it isn't published in time, the day is honestly skipped.">
+        <ellipse cx="952" cy="268" rx="44" ry="24"/><text x="952" y="264">Electrical</text><text x="952" y="278">Load</text>
+      </g>
+      <g class="mm-node mm-ok" tabindex="0" data-tip="&lt;b&gt;Implemented.&lt;/b&gt; Suppliers bid the load ~98% price-inelastic at the cap with a small elastic tail — day-ahead demand barely responds to price.">
+        <ellipse cx="920" cy="348" rx="44" ry="20"/><text x="920" y="353">Suppliers</text>
+      </g>
+      <g class="mm-node mm-no" tabindex="0" data-tip="&lt;b&gt;Not implemented — deliberately.&lt;/b&gt; No speculative (virtual) buying, same reasoning as virtual sellers: arbitrage behavior is measured, not assumed.">
+        <ellipse cx="866" cy="230" rx="40" ry="22"/><text x="866" y="226">Virtual</text><text x="866" y="240">Buyers</text>
+      </g>
+      <g class="mm-node mm-ok" tabindex="0" data-tip="&lt;b&gt;Implemented.&lt;/b&gt; Imports enter through the coupled clearing; structurally import-leaning zones (e.g. the Baltics) additionally credit interconnector capacity against their scarcity margin. Single-zone mode instead injects historical net imports, fixed.">
+        <ellipse cx="800" cy="188" rx="64" ry="24"/><text x="800" y="184">Interconnections:</text><text x="800" y="198">Imports</text>
+      </g>
+      <g class="mm-node mm-no" tabindex="0" data-tip="&lt;b&gt;Not implemented.&lt;/b&gt; Pumping / battery-charging demand is not bid into the book — storage participates on the supply side only. The missing half of the arbitrage cycle.">
+        <ellipse cx="872" cy="470" rx="50" ry="22"/><text x="872" y="466">Storage:</text><text x="872" y="480">Charging</text>
+      </g>
+      <g class="mm-node mm-ok" tabindex="0" data-tip="&lt;b&gt;Implemented.&lt;/b&gt; Hourly demand orders {volume, €/MWh, timeslot}. The scenario API injects extra demand here — the data-center and cold-ironing case studies are exactly this hook.">
+        <ellipse cx="762" cy="374" rx="74" ry="26"/><text x="762" y="370">Buy</text><text x="762" y="384">{Vol, €/MWh, Timeslot}</text>
+      </g>
+
+      <!-- clearing -->
+      <g class="mm-node mm-ok" tabindex="0" data-tip="&lt;b&gt;Implemented.&lt;/b&gt; EUPHEMIA-style clearing: a MILP with complementarity conditions; zonal prices are the duals of the zonal balance constraints, exactly as in the real coupling. Two passes propagate opportunity costs across the footprint. Solvers: Gurobi / HiGHS.">
+        <ellipse cx="660" cy="512" rx="52" ry="28"/><text x="660" y="504">Market</text><text x="660" y="517">Clearing</text><text x="660" y="530">Price</text>
+      </g>
+    </svg>
+    </div>
+    <div class="mm-tip" id="mm-tip" hidden></div>
+  </div>
+  <p class="mm-caption">
+    The diagram mirrors the bidding-zone DAG in the
+    <a href="https://github.com/philokalia-ai/energy-markets#readme">repository README</a>.
+    Where an element is missing, that is a statement about the model's current scope —
+    kept visible on purpose.
+  </p>
 
   <h2>Two tracks — reference vs truly ex-ante</h2>
   <p>
@@ -278,5 +428,37 @@
   <span>A <a href="https://philokalia.ai">philokalia.ai</a> project.</span>
 </footer>
 
+<script>
+(function () {
+  var wrap = document.getElementById("model-map-wrap");
+  var tip = document.getElementById("mm-tip");
+  if (!wrap || !tip) return;
+  var current = null;
+  function show(node) {
+    current = node;
+    tip.innerHTML = node.getAttribute("data-tip");
+    tip.hidden = false;
+    var w = wrap.getBoundingClientRect();
+    var n = node.getBoundingClientRect();
+    var x = n.left - w.left + n.width / 2;
+    var y = n.top - w.top + n.height + 8;
+    tip.style.left = Math.max(8, Math.min(x - tip.offsetWidth / 2, wrap.clientWidth - tip.offsetWidth - 8)) + "px";
+    if (y + tip.offsetHeight > wrap.clientHeight - 4) y = n.top - w.top - tip.offsetHeight - 8;
+    tip.style.top = Math.max(4, y) + "px";
+  }
+  function hide() { current = null; tip.hidden = true; }
+  wrap.querySelectorAll(".mm-node").forEach(function (node) {
+    node.addEventListener("mouseenter", function () { show(node); });
+    node.addEventListener("mouseleave", hide);
+    node.addEventListener("focus", function () { show(node); });
+    node.addEventListener("blur", hide);
+    node.addEventListener("click", function (ev) {
+      ev.stopPropagation();
+      current === node ? hide() : show(node);
+    });
+  });
+  document.addEventListener("click", hide);
+})();
+</script>
 </body>
 </html>
