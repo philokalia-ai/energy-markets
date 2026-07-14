@@ -277,7 +277,9 @@ end
         scarcity hours where the added load exhausts offered supply and the price hits the
         €3,000 cap; the remaining +15.46 is ordinary merit-order steepening across 8,720
         normal hours. Single-zone runs hold net imports at historical values — no import
-        relief responds — so these are upper-end estimates.</p>
+        relief responds — so these are upper-end estimates:
+        <a href="#case-eucoupled">the EU-coupled rerun (case 3)</a> shaves the GR delta
+        to +8.46&nbsp;€/MWh but spreads the rest across the neighbors.</p>
     </article>
 
     <!-- Case 2: cold ironing -->
@@ -360,6 +362,119 @@ end
         scenario and leans high — the confirmed-ships floor is ~3.3× smaller. Full uptake
         assumed (every in-scope ship connects). No scenario hour reaches the price cap.
         Single-zone caveat as above.</p>
+    </article>
+
+    <!-- Case 3: EU-coupled reruns -->
+    <article class="chart-card case-card" id="case-eucoupled">
+      <div class="chart-head">
+        <h2 class="chart-title">3 · The same data center, with Europe in the loop</h2>
+        <p class="chart-sub"><strong>Objective.</strong> The single-zone runs above hold
+          net imports at historical values — an upper bound for Greece, and silent about
+          neighbors. Here the data-center scenario re-clears on the <strong>full 39-zone
+          coupled footprint</strong> (enriched cross-border network, two-pass opportunity
+          anchors): imports respond to the new demand, and every neighboring zone re-prices.
+          1,825 39-zone market days solved overnight against the public extract
+          (~200 days/hour on two solver workers, zero failures).</p>
+      </div>
+      <div class="case-chips">
+        <span class="chip">39 zones · 2024-07-01 → 2026-06-30</span>
+        <span class="chip">hook: load_modifier (GR only)</span>
+        <span class="chip">runs: eu_scn_base vs eu_scn_dc574</span>
+        <span class="chip">1,460 coupled day-solves · 0 failures</span>
+      </div>
+
+      <div class="editor">
+        <div class="editor-head">
+          <span>eu_datacenter.jl — the same hook, coupled footprint</span>
+          <button type="button" class="copy-btn">copy</button>
+        </div>
+        <pre><code>using Euphemia, Dates
+
+# same scenario, but targeted per-zone on the coupled clear
+scn = Dict("GR" => ZoneScenario(load_modifier = (ts, l) -> l + 574.0))
+
+for day in Date(2024, 7, 1):Day(1):Date(2026, 6, 30)
+    run_multi_zone_market_clearing(day;
+        zones         = FOOTPRINT,        # all 39 bidding zones
+        order_method  = :merit_order,
+        enrich_network = true, passes = 2,
+        save_to_db    = true,
+        clearing_mode = "eu_scn_dc574",
+        scenario      = scn)
+end</code></pre>
+      </div>
+
+      <div class="case-grid">
+        <div class="case-stat accent">
+          <span class="cs-label">GR increase, coupled (2025–26)</span>
+          <span class="cs-value">+9.0%</span>
+          <span class="cs-sub">+8.46&nbsp;€/MWh load-weighted (93.65&thinsp;→&thinsp;102.11),
+            €430m/yr — vs +19.46&nbsp;€/MWh single-zone: <strong>import relief absorbs
+            ~57%</strong> of the local impact.</span>
+        </div>
+        <div class="case-stat accent">
+          <span class="cs-label">Same window as the ships (2024–25)</span>
+          <span class="cs-value">+8.1%</span>
+          <span class="cs-sub">+8.44&nbsp;€/MWh (104.34&thinsp;→&thinsp;112.78), €433m/yr —
+            nearly identical to 2025–26. The window sensitivity of the single-zone runs was
+            the scarcity tail, and coupling absorbs it.</span>
+        </div>
+        <div class="case-stat">
+          <span class="cs-label">The cost doesn't vanish — it spreads</span>
+          <span class="cs-value">€0.9–1.2bn<span class="cs-unit">&thinsp;/year EU-wide</span></span>
+          <span class="cs-sub">Total extra consumer cost across all 39 zones: €897m (2025–26)
+            to €1,168m (2024–25) — <strong>€485–745m of it lands outside Greece</strong>:
+            BG&nbsp;+5.1, RO&nbsp;+4.5, RS&nbsp;+3.4, HU&nbsp;+1.6&nbsp;€/MWh (2024–25
+            load-weighted deltas).</span>
+        </div>
+      </div>
+      <p class="crosscheck"><strong>Reading.</strong> Coupling halves what Greek consumers
+        pay, but the EU-wide bill is comparable to the single-zone estimate — import relief
+        doesn't delete the cost of 574&nbsp;MW of new baseload, it exports it to the
+        neighbors who sell the power. The data center's own bill barely moves
+        (€486m/yr at a time-average €100.82/MWh, 2025–26).</p>
+      <p class="case-note">The cold-ironing <em>floor</em> scenario (registry-confirmed
+        ships only) is being re-run on the same coupled footprint; its numbers will appear
+        here. Baseline model quality over this 730-day window, hourly simulated vs settled
+        prices per zone, is in the table below — deltas are <em>paired</em> differences on
+        the same model, so baseline error largely cancels in the scenario numbers.</p>
+      <details class="table-details">
+        <summary>Baseline quality per zone (hourly, 2024-07 → 2026-06)</summary>
+        <div class="table-scroll">
+          <table class="data-table">
+            <thead><tr><th>zone</th><th>MAE €/MWh</th><th>bias €/MWh</th><th>corr</th>
+              <th>zone</th><th>MAE €/MWh</th><th>bias €/MWh</th><th>corr</th></tr></thead>
+            <tbody>
+              <tr><td>AT</td><td>27.2</td><td>−6.0</td><td>0.29</td><td>IT-Sicily</td><td>21.9</td><td>−8.4</td><td>0.69</td></tr>
+              <tr><td>BE</td><td>30.2</td><td>+6.3</td><td>0.24</td><td>LT</td><td>38.4</td><td>−23.6</td><td>0.73</td></tr>
+              <tr><td>BG</td><td>30.0</td><td>+2.1</td><td>0.62</td><td>LV</td><td>39.7</td><td>−25.1</td><td>0.70</td></tr>
+              <tr><td>CH</td><td>23.5</td><td>−0.8</td><td>0.34</td><td>NL</td><td>25.0</td><td>−4.9</td><td>0.71</td></tr>
+              <tr><td>CZ</td><td>26.7</td><td>−8.9</td><td>0.69</td><td>NO1</td><td>108.4</td><td>+95.2</td><td>0.15</td></tr>
+              <tr><td>DE_LU</td><td>18.9</td><td>−2.7</td><td>0.86</td><td>NO2</td><td>23.6</td><td>+12.6</td><td>0.66</td></tr>
+              <tr><td>DK1</td><td>41.9</td><td>+12.0</td><td>0.09</td><td>NO3</td><td>87.8</td><td>+80.3</td><td>0.10</td></tr>
+              <tr><td>DK2</td><td>38.2</td><td>+7.2</td><td>0.23</td><td>NO4</td><td>25.9</td><td>+13.7</td><td>0.07</td></tr>
+              <tr><td>EE</td><td>38.8</td><td>−20.7</td><td>0.71</td><td>NO5</td><td>35.5</td><td>+22.9</td><td>0.42</td></tr>
+              <tr><td>ES</td><td>22.8</td><td>+1.5</td><td>0.80</td><td>PL</td><td>29.7</td><td>−12.2</td><td>0.67</td></tr>
+              <tr><td>FI</td><td>24.6</td><td>−9.2</td><td>0.53</td><td>PT</td><td>24.0</td><td>+2.5</td><td>0.77</td></tr>
+              <tr><td>FR</td><td>23.1</td><td>+1.9</td><td>0.69</td><td>RO</td><td>41.2</td><td>+12.6</td><td>0.43</td></tr>
+              <tr><td><strong>GR</strong></td><td><strong>24.1</strong></td><td><strong>−8.6</strong></td><td><strong>0.80</strong></td><td>RS</td><td>32.4</td><td>+6.2</td><td>0.48</td></tr>
+              <tr><td>HU</td><td>35.5</td><td>−9.6</td><td>0.48</td><td>SE1</td><td>20.1</td><td>−1.4</td><td>0.51</td></tr>
+              <tr><td>IT-CNORTH</td><td>24.7</td><td>+2.1</td><td>0.24</td><td>SE2</td><td>19.5</td><td>−1.7</td><td>0.53</td></tr>
+              <tr><td>IT-CSOUTH</td><td>20.0</td><td>−10.0</td><td>0.61</td><td>SE3</td><td>38.5</td><td>+23.6</td><td>0.24</td></tr>
+              <tr><td>IT-Calabria</td><td>20.6</td><td>−12.7</td><td>0.66</td><td>SE4</td><td>31.2</td><td>+1.3</td><td>0.64</td></tr>
+              <tr><td>IT-NORTH</td><td>19.9</td><td>−1.4</td><td>0.60</td><td>SI</td><td>43.7</td><td>+9.1</td><td>0.31</td></tr>
+              <tr><td>IT-SOUTH</td><td>20.8</td><td>−12.3</td><td>0.66</td><td>SK</td><td>36.4</td><td>−27.4</td><td>0.68</td></tr>
+              <tr><td>IT-Sardinia</td><td>22.7</td><td>−12.1</td><td>0.65</td><td></td><td></td><td></td><td></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="case-note">Pearson correlation and errors on hourly prices over ~16,970
+          settled hours per zone. GR (the scenario zone) sits near the top: corr 0.80,
+          MAE 24.1. The weak spots are honest findings, not tuning targets: the Norwegian
+          hydro zones NO1/NO3 carry a large positive water-value bias in this window, and
+          continental borders with flow-based coupling (AT, BE, CH) correlate poorly under
+          the ATC approximation. Median zone correlation ≈ 0.61.</p>
+      </details>
     </article>
   </section>
 
