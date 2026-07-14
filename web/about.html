@@ -7,9 +7,20 @@
 <meta name="theme-color" content="#16375F">
 <script>
 (function () {
-  function stored() {
+  /* theme persisted in a cookie scoped to .philokalia.ai so the choice is
+     shared with philokalia.ai and other subdomains; localStorage is a
+     same-origin fallback (and for localhost). */
+  function readTheme() {
+    var m = document.cookie.match(/(?:^|;\s*)philokalia-theme=(dark|light)/);
+    if (m) return m[1];
     try { return localStorage.getItem("philokalia-theme") === "dark" ? "dark" : "light"; }
     catch (e) { return "light"; }
+  }
+  function writeTheme(t) {
+    try { localStorage.setItem("philokalia-theme", t); } catch (e) {}
+    var c = "philokalia-theme=" + t + ";path=/;max-age=31536000;SameSite=Lax";
+    var h = location.hostname;
+    document.cookie = (h === "philokalia.ai" || h.endsWith(".philokalia.ai")) ? c + ";domain=.philokalia.ai" : c;
   }
   function apply(t) {
     var r = document.documentElement;
@@ -24,13 +35,15 @@
       b.setAttribute("aria-pressed", t === "dark" ? "true" : "false");
     }
   }
-  apply(stored());
+  apply(readTheme());
   document.addEventListener("DOMContentLoaded", function () {
-    apply(stored());
+    var t = readTheme();
+    writeTheme(t);
+    apply(t);
     var b = document.getElementById("theme-toggle");
     if (b) b.addEventListener("click", function () {
       var next = document.documentElement.getAttribute("data-theme") === "dark" ? "light" : "dark";
-      try { localStorage.setItem("philokalia-theme", next); } catch (e) {}
+      writeTheme(next);
       apply(next);
     });
   });
