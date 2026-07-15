@@ -23,7 +23,7 @@
     }
     body
     place(bottom + right, dy: 0.5cm)[
-      #text(size: 10pt, fill: gray)[#context slide-count.display() / 33]
+      #text(size: 10pt, fill: gray)[#context slide-count.display() / #context slide-count.final().first()]
     ]
   })
 }
