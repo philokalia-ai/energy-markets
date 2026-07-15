@@ -631,9 +631,35 @@
 
   // ---------- horizon (next 7 days) + revision panel ----------
 
-  // Opacity by data age: fresh D-1 fully saturated, D-7 faint.
+  // Opacity by data age: fresh D-1 fully saturated, older leads slightly faded.
+  // (Kept mild — the primary lead encoding is the dash pattern below.)
   function leadOpacity(lead) {
-    return Math.max(0.3, 1 - (lead - 1) * 0.11);
+    return Math.max(0.55, 1 - (lead - 1) * 0.07);
+  }
+
+  // Dash pattern by lead: D-1 solid; D-n is dash + (n-1) dots — count the dots
+  // to read the lead. Round linecaps render the 0.1-length segments as dots.
+  function leadDash(lead) {
+    if (!lead || lead <= 1) return null;
+    var parts = ["12", "5"];
+    for (var i = 1; i < lead; i++) parts.push("0.1", "5");
+    return parts.join(" ");
+  }
+
+  // Small inline-SVG legend key showing the lead's line style.
+  function dashKey(lead, color, width) {
+    var svg = svgEl("svg", { width: 30, height: 10, viewBox: "0 0 30 10", "aria-hidden": "true" });
+    svg.style.verticalAlign = "middle";
+    svg.style.marginRight = "6px";
+    var line = svgEl("line", {
+      x1: 1, y1: 5, x2: 29, y2: 5, stroke: color,
+      "stroke-width": width || 2, "stroke-linecap": "round",
+    });
+    var dash = leadDash(lead);
+    if (dash) line.setAttribute("stroke-dasharray", dash);
+    line.style.opacity = leadOpacity(lead);
+    svg.appendChild(line);
+    return svg;
   }
 
   function chartColors() {
@@ -725,18 +751,17 @@
       return;
     }
     $("hz-sub").textContent =
-      "Freshest published prediction per delivery day · solid = next-day model forecast (D-1), " +
-      "faded = further out · hours in Europe/Athens";
+      "Freshest published prediction per delivery day · solid = next-day model forecast (D-1); " +
+      "dashed = further out, with the dots counting the lead (D-n = n-1 dots) · hours in Europe/Athens";
 
-    // legend
-    [["1", "D-1 (model, frozen the evening before)"],
-     ["4", "D-2…D-7 (weekly persistence of the model — fades with age)"]].forEach(function (it) {
+    // legend: one dash-key per lead present in the horizon
+    var legendColor = chartColors().sim;
+    var leadsPresent = {};
+    days.forEach(function (d) { leadsPresent[d.lead_days] = true; });
+    Object.keys(leadsPresent).map(Number).sort(function (a, b) { return a - b; }).forEach(function (l) {
       var span = el("span");
-      var key = el("span", "key sim");
-      key.style.opacity = leadOpacity(+it[0]);
-      key.setAttribute("aria-hidden", "true");
-      span.appendChild(key);
-      span.appendChild(document.createTextNode(it[1]));
+      span.appendChild(dashKey(l, legendColor, 2));
+      span.appendChild(document.createTextNode(l === 1 ? "D-1 (model)" : "D-" + l));
       lg.appendChild(span);
     });
 
@@ -791,11 +816,14 @@
       // per-day path with age fade
       var seg = pts.slice(idx0, idx1 + 1).map(function (p) { return p.v; });
       var Xoff = function (i) { return X(idx0 + i); };
-      svg.appendChild(svgEl("path", {
+      var hzAttrs = {
         d: pathString(seg, Xoff, Y), fill: "none", stroke: C.sim,
         "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round",
         opacity: leadOpacity(d.lead_days),
-      }));
+      };
+      var hzDash = leadDash(d.lead_days);
+      if (hzDash) hzAttrs["stroke-dasharray"] = hzDash;
+      svg.appendChild(svgEl("path", hzAttrs));
       idx0 = idx1 + 1;
     });
 
@@ -908,9 +936,7 @@
     // legend: one chip per vintage + actual
     entries.forEach(function (d) {
       var span = el("span");
-      var key = el("span", "key sim");
-      key.style.opacity = leadOpacity(d.lead_days);
-      span.appendChild(key);
+      span.appendChild(dashKey(d.lead_days, C.sim, d.lead_days === 1 ? 2.4 : 1.8));
       span.appendChild(document.createTextNode("D-" + d.lead_days));
       lg.appendChild(span);
     });
@@ -939,12 +965,15 @@
       svg.appendChild(tx);
     }
     entries.forEach(function (d) {
-      svg.appendChild(svgEl("path", {
+      var revAttrs = {
         d: pathString(d.sim, X, Y), fill: "none", stroke: sc.C.sim,
         "stroke-width": d.lead_days === 1 ? 2.4 : 1.8,
         "stroke-linejoin": "round", "stroke-linecap": "round",
         opacity: leadOpacity(d.lead_days),
-      }));
+      };
+      var revDash = leadDash(d.lead_days);
+      if (revDash) revAttrs["stroke-dasharray"] = revDash;
+      svg.appendChild(svgEl("path", revAttrs));
     });
     if (hasActual) {
       svg.appendChild(svgEl("path", {
