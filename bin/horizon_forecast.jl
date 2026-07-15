@@ -20,9 +20,14 @@
 #
 # HONESTY GUARANTEES (same as daily_forecast.jl):
 # - assert_unrealized / assert_hours_unrealized guards on every write.
-# - No-clobber: an existing (market_date, lead, cv) slice is never overwritten
-#   (FORCE_RERUN=true to rewrite). In particular a slice written by a genuine
-#   model run is never replaced by a persistence relabel.
+# - No-clobber: an existing (market_date, lead) slice — at ANY code_version —
+#   is never overwritten (FORCE_RERUN=true to rewrite). In particular a slice
+#   written by a genuine model run is never replaced by a persistence relabel,
+#   and a slice frozen under an earlier code_version is never rewritten by a
+#   later one (vintages are immutable across model upgrades). Source-slice
+#   reads (the T−7/T−14 lead-1 proxies) are likewise cv-agnostic, with
+#   earliest-frozen-wins on cross-version duplicates; writes stamp the
+#   current code_version as provenance.
 # - Complete-or-skip per zone: a zone is written only when P has exactly the
 #   hour count T expects; DST-transition mismatches (P and T in different
 #   DST regimes, 4 weeks/year) skip the zone-day loudly.
@@ -50,14 +55,30 @@ function latest_actual_load_date()
     return Date(df.d[1])
 end
 
-"lead-1 model rows for market day P: zone -> (hour -> price)."
+"""
+lead-1 model rows for market day P: zone -> (hour -> price).
+
+CV-AGNOSTIC with earliest-frozen-wins: the persistence source is whatever
+lead-1 slice was frozen FIRST for P, regardless of the code_version that wrote
+it (the product's record spans code versions; a cv bump must not stall the
+ladder for 7 days waiting for new-cv lead-1s to accumulate). Where a
+cross-version duplicate exists, the slice with the smallest slice-level
+MIN(prediction_made_utc) is used (lowest code_version as tiebreaker).
+"""
 function source_rows(P::Date)
     df = Euphemia.sql2df_with_retry("""
         SELECT bidding_zone AS z, (date_time_utc AT TIME ZONE 'UTC') AS t, price_eur_mwh AS p
         FROM simulations.forecast_prices
-        WHERE market_date = \$1 AND lead_days = 1 AND code_version = \$2 AND clearing_mode = \$3
+        WHERE market_date = \$1 AND lead_days = 1 AND clearing_mode = \$2
           AND input_mode = 'entsoe'
-    """, [P, CV, CLEARING_MODE])
+          AND code_version = (
+              SELECT code_version FROM simulations.forecast_prices
+              WHERE market_date = \$1 AND lead_days = 1 AND clearing_mode = \$2
+                AND input_mode = 'entsoe'
+              GROUP BY code_version
+              ORDER BY MIN(prediction_made_utc), code_version
+              LIMIT 1)
+    """, [P, CLEARING_MODE])
     out = Dict{String,Dict{DateTime,Float64}}()
     for r in eachrow(df)
         push!(get!(out, String(r.z), Dict{DateTime,Float64}()), DateTime(r.t) => Float64(r.p))
@@ -65,16 +86,20 @@ function source_rows(P::Date)
     return out
 end
 
+"Rows already present in the (T, lead) slice — at ANY code_version (cv-agnostic no-clobber)."
 function slice_row_count(T::Date, lead::Int)
     df = Euphemia.sql2df_with_retry("""
         SELECT COUNT(*) AS n FROM simulations.forecast_prices
-        WHERE market_date = \$1 AND lead_days = \$2 AND code_version = \$3
-          AND input_mode = 'entsoe'
-    """, [T, lead, CV])
+        WHERE market_date = \$1 AND lead_days = \$2 AND input_mode = 'entsoe'
+    """, [T, lead])
     return Int(df.n[1])
 end
 
-"Delete-then-insert the (T, lead, cv) slice — same pattern as daily_forecast."
+"""
+Delete-then-insert the (T, lead) slice — same pattern as daily_forecast. The
+DELETE is CV-AGNOSTIC (clears the slice at any code_version so a rewrite can
+never leave a cross-version duplicate); the INSERT stamps the current cv.
+"""
 function write_slice!(T::Date, lead::Int, made::DateTime,
                       zone_hourly::Dict{String,Dict{DateTime,Float64}})
     latest = latest_actual_load_date()
@@ -89,9 +114,8 @@ function write_slice!(T::Date, lead::Int, made::DateTime,
         try
             LibPQ.execute(cnx, """
                 DELETE FROM simulations.forecast_prices
-                WHERE market_date = \$1 AND lead_days = \$2 AND code_version = \$3
-                  AND input_mode = 'entsoe'
-            """, [T, lead, CV])
+                WHERE market_date = \$1 AND lead_days = \$2 AND input_mode = 'entsoe'
+            """, [T, lead])
             for (zone, hourly) in zone_hourly
                 for (h, price) in sort!(collect(hourly); by=first)
                     LibPQ.execute(cnx, """

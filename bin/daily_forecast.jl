@@ -51,14 +51,19 @@
 #   whatever partial ENTSO-E RES exists (renewable_modifier -> 0) and injects
 #   the weather-RES prediction as price-taker supply orders per timeslot.
 #   Rows are stamped input_mode='weather'; the slice identity is
-#   (market_date, lead_days, code_version, input_mode) so the two tracks
-#   NEVER overwrite each other.
+#   (market_date, lead_days, input_mode) so the two tracks NEVER overwrite
+#   each other. code_version is per-row PROVENANCE, not part of the slice
+#   identity: the no-clobber guard and the slice delete are CV-AGNOSTIC (a
+#   slice frozen under an earlier code_version is never rewritten by a later
+#   one — vintages are immutable across model upgrades), while writes stamp
+#   the current code_version.
 #
 # Env vars:
 #   OPTIMIZER      'gurobi' (default) / 'highs' / 'auto'
 #   INPUT_MODE     'entsoe' (default) / 'weather' — see INPUT TRACKS above
 #   MAX_LEAD_DAYS  furthest lead to attempt, default 7
-#   FORCE_RERUN    'true' to rewrite an existing (market_date, lead, cv, mode) slice
+#   FORCE_RERUN    'true' to rewrite an existing (market_date, lead, mode)
+#                  slice — at ANY code_version (vintages are otherwise immutable)
 #   ZONES          comma-separated footprint override (FOR TESTING ONLY, e.g.
 #                  a 5-zone footprint when the Gurobi license is unavailable);
 #                  default = the 39-zone EU footprint
@@ -146,20 +151,25 @@ function atc_row_count(t0::DateTime, t1::DateTime, zones::Vector{String})
     return Int(df.n[1])
 end
 
-"Zones already present in the (market_date, lead_days, code_version, input_mode) slice."
+"""
+Zones already present in the (market_date, lead_days, input_mode) slice — at
+ANY code_version (cv-agnostic no-clobber: a slice frozen under an earlier
+code_version must never be rewritten by a later one).
+"""
 function existing_forecast_zones(market_date::Date, lead_days::Int)
     df = Euphemia.sql2df_with_retry("""
         SELECT DISTINCT bidding_zone AS z FROM simulations.forecast_prices
-        WHERE market_date = \$1 AND lead_days = \$2 AND code_version = \$3
-          AND input_mode = \$4
-    """, [market_date, lead_days, CV, INPUT_MODE])
+        WHERE market_date = \$1 AND lead_days = \$2 AND input_mode = \$3
+    """, [market_date, lead_days, INPUT_MODE])
     return Set{String}(String.(df.z))
 end
 
 """
-Delete-then-insert exactly the (market_date, lead_days, code_version,
-input_mode) slice in one transaction — the reference ('entsoe') and ex-ante
-('weather') tracks never overwrite each other.
+Delete-then-insert exactly the (market_date, lead_days, input_mode) slice in
+one transaction — the reference ('entsoe') and ex-ante ('weather') tracks
+never overwrite each other. The DELETE is CV-AGNOSTIC (it clears the slice at
+any code_version, so a rewrite can never leave a cross-version duplicate
+pair); the INSERT stamps the current code_version as provenance.
 `zone_hourly` is zone → (hour::DateTime → price), already
 stitched and completeness-checked per zone (every zone here has exactly the
 expected market-day hours). The realized guard is re-checked immediately
@@ -184,9 +194,8 @@ function write_forecast!(market_date::Date, lead_days::Int, prediction_made::Dat
         try
             LibPQ.execute(cnx, """
                 DELETE FROM simulations.forecast_prices
-                WHERE market_date = \$1 AND lead_days = \$2 AND code_version = \$3
-                  AND input_mode = \$4
-            """, [market_date, lead_days, CV, INPUT_MODE])
+                WHERE market_date = \$1 AND lead_days = \$2 AND input_mode = \$3
+            """, [market_date, lead_days, INPUT_MODE])
             for (zone, hourly) in zone_hourly
                 for (h, price) in sort!(collect(hourly); by=first)
                     LibPQ.execute(cnx, """
@@ -392,8 +401,8 @@ function main()
             present = existing_forecast_zones(day, lead)
             if issubset(Set(ZONES), present)
                 println("  already predicted: all $(length(ZONES)) zones present for " *
-                        "(market_date=$day, lead_days=$lead, cv=$CV, mode=$INPUT_MODE) — skipping " *
-                        "(FORCE_RERUN=true to rewrite)")
+                        "(market_date=$day, lead_days=$lead, mode=$INPUT_MODE) at some " *
+                        "code_version — skipping (FORCE_RERUN=true to rewrite)")
                 continue
             elseif !isempty(present)
                 println("  partial slice exists ($(length(present)) zone(s)) — " *

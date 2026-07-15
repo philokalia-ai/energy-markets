@@ -5,23 +5,36 @@
 #
 # Contract (consumed by a separately-built SPA — do not change shapes):
 #
+# RECORD SPANS VERSIONS (honesty note): the exported record is the product's
+# full history across code versions — slice identity is (market_date,
+# lead_days, input_mode); code_version is per-row PROVENANCE, not a display
+# filter. Where a slice exists under more than one code_version, the
+# EARLIEST-FROZEN slice wins (slice-level MIN(prediction_made_utc) — the
+# first commitment is the honest ex-ante vintage); see CHOSEN_SLICE_CTE in
+# bin/forecast_common.jl. The top-level "code_version" in scoreboard.json /
+# map.json is the CURRENT model version for display; each zone-file day entry
+# carries the code_version that produced it.
+#
 # web/data/scoreboard.json
-#   {"generated_utc": ..., "code_version": 16, "market_day_tz": "Europe/Athens",
-#    "zones": [...],
+#   {"generated_utc": ..., "code_version": <current cv>, "market_day_tz":
+#    "Europe/Athens", "zones": [...],
 #    "scores": [{"zone","lead_days","window" ("all" or "YYYY-MM"),
 #                "n_days","mae","bias","corr","input_mode"}, ...]}
 #   — "input_mode" is 'entsoe' (reference track) or 'weather' (ex-ante track);
 #   the SPA treats an absent input_mode as 'entsoe' (backward compatible).
+#   Scores aggregate ONLY the chosen slices (duplicates that were scored twice
+#   across cvs are never double-counted).
 #
 # web/data/zones/<ZONE>.json
 #   {"zone": ..., "market_day_tz": "Europe/Athens",
 #    "days": [{"date","lead_days","prediction_made_utc",
 #     "hours":[ISO8601...], "sim":[...], "actual":[... or null where
 #     unrealized], "mae","bias","corr" (null when unrealized),
-#     "input_mode"}, ...]}
+#     "input_mode","code_version"}, ...]}
 #   — most recent 120 market days, newest first, one entry per
 #   (date, lead_days, input_mode). "date" is the Europe/Athens market day;
 #   "hours" are the window's UTC stamps (24 normally; 23/25 on DST days).
+#   "code_version" is the provenance of that day entry's chosen slice.
 #
 # web/data/map.json prefers input_mode='entsoe' rows for now (unchanged
 # behavior; no input_mode field in its shape).
@@ -42,17 +55,22 @@ nn(x) = (x === nothing || x === missing) ? nothing :
         (x isa AbstractFloat && !isfinite(x)) ? nothing : x
 
 function export_scoreboard()
+    # Chosen-slice join: aggregate ONLY the earliest-frozen slice's scores per
+    # (market_date, lead_days, input_mode) — a duplicate slice scored under a
+    # second code_version must not double-count.
     scores = Euphemia.sql2df_with_retry("""
-        SELECT bidding_zone AS z, lead_days, input_mode AS mode,
-               to_char(market_date, 'YYYY-MM') AS month,
-               market_date, mae, bias, corr
-        FROM simulations.forecast_scores
-        WHERE code_version = \$1
-    """, [CV])
+        WITH $(CHOSEN_SLICE_CTE)
+        SELECT s.bidding_zone AS z, s.lead_days, s.input_mode AS mode,
+               to_char(s.market_date, 'YYYY-MM') AS month,
+               s.market_date, s.mae, s.bias, s.corr
+        FROM simulations.forecast_scores s
+        JOIN chosen c ON c.market_date = s.market_date AND c.lead_days = s.lead_days
+                     AND c.input_mode = s.input_mode AND c.code_version = s.code_version
+    """)
     zones = Euphemia.sql2df_with_retry("""
         SELECT DISTINCT bidding_zone AS z FROM simulations.forecast_prices
-        WHERE code_version = \$1 ORDER BY 1
-    """, [CV])
+        ORDER BY 1
+    """)
 
     agg(sub) = begin
         mae_v = collect(skipmissing(sub.mae))
@@ -98,27 +116,36 @@ function export_scoreboard()
 end
 
 function export_zone_files()
+    # Cross-version record: one chosen slice per (market_date, lead_days,
+    # input_mode), earliest-frozen-wins; code_version carried as provenance.
     prices = Euphemia.sql2df_with_retry("""
-        SELECT bidding_zone AS z, market_date, lead_days, input_mode AS mode,
-               (date_time_utc AT TIME ZONE 'UTC') AS t,
-               price_eur_mwh AS sim,
-               (prediction_made_utc AT TIME ZONE 'UTC') AS made
-        FROM simulations.forecast_prices
-        WHERE code_version = \$1
-          AND market_date IN (
+        WITH $(CHOSEN_SLICE_CTE)
+        SELECT p.bidding_zone AS z, p.market_date, p.lead_days, p.input_mode AS mode,
+               p.code_version AS cv,
+               (p.date_time_utc AT TIME ZONE 'UTC') AS t,
+               p.price_eur_mwh AS sim,
+               (p.prediction_made_utc AT TIME ZONE 'UTC') AS made
+        FROM simulations.forecast_prices p
+        JOIN chosen c ON c.market_date = p.market_date AND c.lead_days = p.lead_days
+                     AND c.input_mode = p.input_mode AND c.code_version = p.code_version
+        WHERE p.market_date IN (
             SELECT DISTINCT market_date FROM simulations.forecast_prices
-            WHERE code_version = \$1 ORDER BY market_date DESC LIMIT \$2)
-        ORDER BY bidding_zone, market_date DESC, lead_days, input_mode, date_time_utc
-    """, [CV, MAX_DAYS])
+            ORDER BY market_date DESC LIMIT \$1)
+        ORDER BY p.bidding_zone, p.market_date DESC, p.lead_days, p.input_mode,
+                 p.date_time_utc
+    """, [MAX_DAYS])
     if isempty(prices)
-        println("no forecast_prices rows for cv=$CV — no zone files written")
+        println("no forecast_prices rows — no zone files written")
         return
     end
     scores = Euphemia.sql2df_with_retry("""
-        SELECT bidding_zone AS z, market_date, lead_days, input_mode AS mode,
-               mae, bias, corr
-        FROM simulations.forecast_scores WHERE code_version = \$1
-    """, [CV])
+        WITH $(CHOSEN_SLICE_CTE)
+        SELECT s.bidding_zone AS z, s.market_date, s.lead_days, s.input_mode AS mode,
+               s.mae, s.bias, s.corr
+        FROM simulations.forecast_scores s
+        JOIN chosen c ON c.market_date = s.market_date AND c.lead_days = s.lead_days
+                     AND c.input_mode = s.input_mode AND c.code_version = s.code_version
+    """)
     scoremap = Dict{Tuple{String,Date,Int,String},Any}(
         (String(r.z), Date(r.market_date), Int(r.lead_days), String(r.mode)) => r
         for r in eachrow(scores))
@@ -149,6 +176,7 @@ function export_zone_files()
                 "date" => d,
                 "lead_days" => lead,
                 "input_mode" => mode,
+                "code_version" => Int(sub.cv[1]),
                 "prediction_made_utc" => DateTime(sub.made[1]),
                 "hours" => hours,
                 "sim" => sims,
@@ -179,36 +207,46 @@ const MAP_DAYS = 60
 
 function export_map_json()
     # map.json prefers the reference track (input_mode='entsoe') for now —
-    # shape unchanged, SPA-compatible.
+    # shape unchanged, SPA-compatible. Cross-version record: rows come from
+    # the chosen (earliest-frozen) slice per (market_date, lead_days), and the
+    # freshest lead per zone-day is computed over chosen slices only.
     prices = Euphemia.sql2df_with_retry("""
-        WITH freshest AS (
+        WITH $(CHOSEN_SLICE_CTE),
+        src AS (
+            SELECT p.bidding_zone, p.market_date, p.lead_days,
+                   p.date_time_utc, p.price_eur_mwh, p.prediction_made_utc
+            FROM simulations.forecast_prices p
+            JOIN chosen c ON c.market_date = p.market_date AND c.lead_days = p.lead_days
+                         AND c.input_mode = p.input_mode AND c.code_version = p.code_version
+            WHERE p.input_mode = 'entsoe'),
+        freshest AS (
             SELECT bidding_zone, market_date, MIN(lead_days) AS lead
-            FROM simulations.forecast_prices
-            WHERE code_version = \$1 AND input_mode = 'entsoe'
+            FROM src
             GROUP BY 1, 2)
-        SELECT p.bidding_zone AS z, p.market_date, p.lead_days,
-               (p.date_time_utc AT TIME ZONE 'UTC') AS t,
-               p.price_eur_mwh AS sim,
-               (p.prediction_made_utc AT TIME ZONE 'UTC') AS made
-        FROM simulations.forecast_prices p
-        JOIN freshest f ON f.bidding_zone = p.bidding_zone
-                       AND f.market_date = p.market_date AND f.lead = p.lead_days
-        WHERE p.code_version = \$1
-          AND p.input_mode = 'entsoe'
-          AND p.market_date IN (
+        SELECT s.bidding_zone AS z, s.market_date, s.lead_days,
+               (s.date_time_utc AT TIME ZONE 'UTC') AS t,
+               s.price_eur_mwh AS sim,
+               (s.prediction_made_utc AT TIME ZONE 'UTC') AS made
+        FROM src s
+        JOIN freshest f ON f.bidding_zone = s.bidding_zone
+                       AND f.market_date = s.market_date AND f.lead = s.lead_days
+        WHERE s.market_date IN (
             SELECT DISTINCT market_date FROM simulations.forecast_prices
-            WHERE code_version = \$1 AND input_mode = 'entsoe'
-            ORDER BY market_date DESC LIMIT \$2)
-    """, [CV, MAP_DAYS])
+            WHERE input_mode = 'entsoe'
+            ORDER BY market_date DESC LIMIT \$1)
+    """, [MAP_DAYS])
     if isempty(prices)
-        println("no forecast_prices rows for cv=$CV — no map.json written")
+        println("no forecast_prices rows — no map.json written")
         return
     end
     scores = Euphemia.sql2df_with_retry("""
-        SELECT bidding_zone AS z, market_date, lead_days, mae, corr
-        FROM simulations.forecast_scores
-        WHERE code_version = \$1 AND input_mode = 'entsoe'
-    """, [CV])
+        WITH $(CHOSEN_SLICE_CTE)
+        SELECT s.bidding_zone AS z, s.market_date, s.lead_days, s.mae, s.corr
+        FROM simulations.forecast_scores s
+        JOIN chosen c ON c.market_date = s.market_date AND c.lead_days = s.lead_days
+                     AND c.input_mode = s.input_mode AND c.code_version = s.code_version
+        WHERE s.input_mode = 'entsoe'
+    """)
     scoremap = Dict{Tuple{String,Date,Int},Any}(
         (String(r.z), Date(r.market_date), Int(r.lead_days)) => r
         for r in eachrow(scores))

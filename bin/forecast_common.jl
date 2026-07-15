@@ -17,6 +17,35 @@ const FORECAST_FOOTPRINT = String[
 ]
 
 """
+    CHOSEN_SLICE_CTE
+
+The forecast product's slice-selection rule, as a SQL CTE body shared by the
+exporters (bin/export_forecast_json.jl, bin/export_web_parquet.jl).
+
+THE DESIGN RULE: the forecast product's record spans code versions. Slice
+identity for the product is (market_date, lead_days, input_mode);
+`code_version` is per-row PROVENANCE, not a display filter. Where a slice was
+written under more than one code_version (e.g. a mid-run cv bump between two
+pipeline invocations), the EARLIEST-FROZEN slice wins — the first commitment
+is the honest ex-ante one. Selection is by the SLICE-LEVEL
+MIN(prediction_made_utc) (never per-row, so a chosen slice stays internally
+consistent across zones), with the lowest code_version as a deterministic
+tiebreaker.
+
+Usage: `WITH \$(CHOSEN_SLICE_CTE) SELECT ... JOIN chosen c ON c.market_date =
+… AND c.lead_days = … AND c.input_mode = … AND c.code_version = …`.
+"""
+const CHOSEN_SLICE_CTE = """
+    chosen AS (
+        SELECT DISTINCT ON (market_date, lead_days, input_mode)
+               market_date, lead_days, input_mode, code_version
+        FROM (SELECT market_date, lead_days, input_mode, code_version,
+                     MIN(prediction_made_utc) AS made_min
+              FROM simulations.forecast_prices
+              GROUP BY 1, 2, 3, 4) slice_versions
+        ORDER BY market_date, lead_days, input_mode, made_min, code_version)"""
+
+"""
     forecast_lead_days(market_date::Date, today_utc::Date) -> Int
 
 Lead time in whole days: 0 = same-day nowcast, 1 = day-ahead, etc.
