@@ -149,7 +149,58 @@ the diagnosis):**
 
 ### 4. Full-year backfill (production record)
 
-<!-- CV17_FULLYEAR -->
+The production record: 2025-07-01..2026-06-30, 39 zones, `multi_zone_eu`
+cv17, pipelined backfill (2 Gurobi solver workers, 10 book workers,
+resume=true) saving directly to Postgres. **365/365 days processed, 0 save
+failures**, 53.3 days/hour (~6.8 h wall), 327,676 price rows verified in
+`simulations.energy_prices`. Fifteen scattered days are truncated to 1–3
+common hours by the documented common-period intersection: SI's D-1 load
+forecast is missing from `entsoe.day_ahead_total_load_forecast` on those days
+(verified missing in BOTH the live Postgres table and the extract — a source
+ETL gap, not a pipeline fault; flagged for the data pipeline. A framework
+refinement for iteration 9: a zone whose load covers only 1–3 hours should be
+dropped for the day like a zero-row zone instead of poisoning the
+intersection).
+
+**cv16 → cv17, identical window** (8,402 hourly slots where both versions and
+the settled price exist; corr / MAE / bias, cap = hours > €500):
+
+| zone | corr 16→17 | MAE 16→17 | bias 16→17 | caps 16→17 |
+|------|-----------|-----------|------------|------------|
+| **AT** | 0.21 → **0.66** | 39.3 → 28.9 | −1.1 → −15.5 | 30 → 0 |
+| **SI** | 0.19 → **0.50** | 59.6 → 40.1 | +12.0 → −26.5 | 75 → 0 |
+| **RO** | 0.34 → **0.61** | 53.0 → 34.2 | +22.0 → −1.5 | 63 → 0 |
+| **RS** | 0.32 → **0.57** | 43.0 → 34.9 | +18.1 → +7.5 | 22 → 0 |
+| **DK2** | 0.21 → **0.61** | 51.2 → 28.8 | +16.5 → −7.6 | 66 → 0 |
+| **DK1** | 0.05 → 0.19 | 46.6 → **30.7** | +15.6 → −0.9 | 56 → 9 |
+| **BE** | 0.38 → **0.68** | 24.8 → 24.0 | −4.9 → −6.0 | 2 → 0 |
+| **CH** | 0.60 → **0.67** | 25.4 → 23.8 | −6.8 → −11.6 | 0 → 0 |
+| **IT-CNORTH** | 0.40 → **0.50** | 25.1 → 22.6 | +0.9 → −3.1 | 3 → 2 |
+| HU | 0.56 → 0.56 | 40.8 → 38.8 | −9.8 → −18.5 | 11 → 0 |
+| BG | 0.66 → 0.65 | 35.5 → 32.5 | +7.4 → +1.3 | 11 → 0 |
+| *GR (guard)* | 0.68 → 0.68 | 31.2 → 30.2 | −2.1 → −4.3 | 2 → 0 |
+| *DE_LU (guard)* | 0.72 → 0.72 | 23.0 → 23.0 | −1.8 → −2.7 | 0 → 0 |
+| *ES / PT (guards)* | 0.64 / 0.62 → 0.64 / 0.62 | ≈ flat | ≈ flat | 0 → 0 |
+| CZ (trade-off) | 0.60 → 0.57 | 27.6 → 28.8 | −5.3 → −5.2 | 0 → 0 |
+| SK (trade-off) | 0.64 → 0.63 | 35.0 → 35.6 | −25.3 → −25.9 | 0 → 0 |
+| SE3 | 0.55 → 0.53 | 31.6 → 31.8 | +13.8 → +13.3 | 0 → 0 |
+| NO1/NO3 (out of scope) | 0.02 / 0.12 unchanged | unchanged | unchanged | 121 → 121 |
+
+All other zones (Nordics, Baltics, FR, NL, PL, the remaining IT sub-zones)
+move ≤0.01 corr — the mechanisms are surgical.
+
+**Footprint means (39 zones): corr 0.494 → 0.552, MAE 33.3 → 30.6, bias
+−1.3 → −5.5.** In-scope cap hours (excluding the out-of-scope NO1/NO3 hydro
+problem): **343 → 13** (DK1 9, IT-NORTH 2, IT-CNORTH 2) — a 96% reduction of
+the phantom-scarcity artifact the diagnosis targeted. DK1's MAE/bias are
+transformed (46.6 → 30.7 / +15.6 → −0.9) but its full-year corr stays low
+(0.19) — its residual is the §4a intraday-shape problem plus 9 remaining tight
+hours, queued for the next iteration alongside HU's deepened winter bias
+(−18.5) and the anchored-zone negative biases (AT −15.5, SI −26.5 — the
+`anchor_share`/clamp levers).
+
+Metabase run:
+<https://metabase.pankgeorg.com/dashboard/14?code_version=17&clearing_mode=multi_zone_eu&order_method=merit_order>
 
 ## Reproduction
 
