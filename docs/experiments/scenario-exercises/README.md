@@ -362,6 +362,114 @@ congested borders beyond it:
 - **OPS floor 2024-25**: RO +0.23, BG +0.29, RS +0.18, HU +0.08 — same shape,
   ~20× smaller.
 
+---
+
+## Pan-European cold ironing (39-zone footprint, cv17)
+
+The GR-only OPS exercise generalized to the whole footprint: **every in-scope
+passenger ship (ro-pax / high-speed / cruise, registry-confirmed >5000 GT) at
+294 TEN-T ports across 22 countries connects to shore power** — the AFIR
+Art. 9 / FuelEU Maritime at-berth obligation, priced on the coupled EU market.
+Runs on the **cv17** model (fresh baseline — the cv16 `eu_scn_base` is not
+reused), via `eu_pan_ops.jl`, over the full AIS data window.
+
+| run | clearing_mode | window | scenario |
+|---|---|---|---|
+| baseline | `eu17_base` | 2023-07-01..2025-06-30 (731 d) | none |
+| pan-EU OPS | `eu17_ops_floor_paneu` | same | per-zone `extra_orders`, FLOOR profile |
+
+### Demand profile
+
+Built from the `pan-european-cold-ironing-data/` dataset (3.57M AIS port-call
+dwell events, GT-binned EMSA at-berth loads 2.5/5/12 MW; see its README):
+per-call MW × hourly berth overlap, aggregated per **bidding zone** —
+`ops_hourly_eu_floor_2023H2_2025H1.csv` (274,376 rows; zone, UTC hour, MW).
+
+- **24 zones, ~2,494 GWh/yr in-footprint** (floor). Largest: ES 497, FR 335,
+  GR 320, IT-CSOUTH 204, IT-CNORTH 173, IT-NORTH 151, IT-Sardinia 132,
+  IT-Sicily 120 GWh/yr.
+- **Port → zone mapping** is explicit per UN/LOCODE for the multi-zone
+  countries (IT → 7 zones, SE → 4, DK → 2), country-level elsewhere
+  (DE → DE_LU).
+- **Excluded, with reasons**: IE/HR/MT/CY (outside the 39-zone footprint,
+  ~235 GWh/yr) and non-coupled island electrical systems — Canary Islands +
+  Ceuta/Melilla (ES −197), Corsica (FR −56), Madeira/Azores (PT −52),
+  Mayotte. Their OPS demand cannot clear on these bidding zones. Total
+  excluded ≈ 540 GWh/yr (~18% of the dataset's 3.0 TWh/yr).
+- **Validation**: per-country annual energy reproduces
+  `eu_cold_ironing_by_country.csv` within ±1% for every 1:1 country; the
+  ES/FR/PT differences equal exactly the excluded island systems.
+
+### Running
+
+```bash
+# 1. rebuild the per-zone profile from the AIS dataset (idempotent; writes the CSV)
+python3 docs/experiments/scenario-exercises/build_eu_ops_profiles.py
+# 2. the two labeled 39-zone runs (resumable; Gurobi, offline extract)
+julia --project=. docs/experiments/scenario-exercises/eu_pan_ops.jl
+#    SMOKE=true ... → one 2023-07 day, no saves, prints per-zone deltas
+```
+
+### Results
+
+Runs completed 2026-07-16 (cv17, offline extract, Gurobi 2 solver workers,
+~200 days/h, **731/731 days each label, 0 failures**). Both labels have
+identical coverage — 669,199 price rows, 17,159 of the 17,544 possible hours
+priced (the coupled clear leaves ~2% of hours without a marginal); the delta
+query inner-joins hours present in both, so every delta is paired.
+
+**EU-wide (Δ = eu17_ops_floor_paneu − eu17_base, all 39 zones each weighted by
+its own load forecast):**
+
+| period | LW Δ €/MWh | Δ% | extra consumer cost €m | annualized €m |
+|---|---:|---:|---:|---:|
+| 2023-07..2024-06 | +0.189 | | 488.0 | 488 |
+| 2024-07..2025-06 | +0.238 | | 622.3 | 622 |
+| **TOTAL (2 yr)** | **+0.214** | **+0.25%** | **1,110.3** | **555.1/yr** |
+
+**Ships' own bill** (in-scope OPS energy × scenario price, joined hours):
+**4.878 TWh** over two years, **€398.7m** (€199.3m/yr), OPS-weighted
+**€81.73/MWh**. Ledger: consumers pay €555m/yr extra so ships can buy €199m/yr
+of power — **every €1 of shore power raises other consumers' bills by ~€2.79**,
+a stronger lever than the GR-only ships case (~€1.50) because the demand lands
+in 24 zones at once and lifts many marginals together.
+
+**By zone** — highest per-MWh deltas are the Mediterranean ferry/cruise zones
+that carry the demand (GR +0.69, RO +0.62, BG +0.59, IT-Sicily +0.42,
+IT-CNORTH/NORTH ~+0.40 €/MWh); highest *absolute* cost follows load weight
+(FR €176m/yr, ES €62m/yr, IT-NORTH €58m/yr, GR €34m/yr, RO €33m/yr). The far
+north barely moves (SE1/SE2/NO4 ≈ 0) — the shock dies at the congested Nordic
+borders. GR's own extra cost is €34m/yr against a ships' GR bill of €28.5m/yr.
+
+Reproduce (read-only on `data/results.duckdb`; the full per-zone / ships'-bill
+breakdown is `scratchpad pan_ops_stats.py` of this session):
+
+```sql
+SET TimeZone='UTC';
+WITH px AS (
+  SELECT bidding_zone AS zone, date_trunc('hour', date_time_utc) AS h,
+         clearing_mode, AVG(price_eur_mwh) AS p
+  FROM simulations.energy_prices
+  WHERE clearing_mode IN ('eu17_base','eu17_ops_floor_paneu')
+  GROUP BY 1,2,3)
+SELECT ROUND(SUM(l.mw*(s.p-b.p))/1e6/2, 1) AS eu_extra_meur_yr,
+       ROUND(SUM(l.mw*(s.p-b.p))/SUM(l.mw), 3) AS eu_lw_delta
+FROM px b
+JOIN px s ON s.zone=b.zone AND s.h=b.h AND s.clearing_mode='eu17_ops_floor_paneu'
+JOIN loads l ON l.zone=b.zone AND l.h=b.h   -- loads = hourly day-ahead load forecast
+WHERE b.clearing_mode='eu17_base';
+```
+
+### Caveats
+
+- **Floor scenario, full uptake**: registry-confirmed >5000 GT passenger ships
+  only (the dataset's own floor — undercounts ship *count*, close on energy);
+  every in-scope ship connects (pre-AFIR-phase-in upper bound on uptake).
+- **Passenger/ferry/cruise only** — container OPS is not in the dataset (AIS
+  can't separate container from general cargo).
+- **cv17 model, ex-ante `:v2` flows** — same model and flow rule as the live EU
+  product; imports respond endogenously through the coupled ATC network.
+
 ### Pipeline notes (what these runs added to the codebase)
 
 - `run_pipelined_backfill(...; scenario=)` — the scenario passthrough into both
