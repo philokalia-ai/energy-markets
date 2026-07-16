@@ -224,8 +224,9 @@
           Beyond scoring, the same engine answers <em>what-if</em> questions. Each case study
           defines a scenario through the library's <strong>scenario hooks</strong>
           (<a href="https://github.com/philokalia-ai/energy-markets/blob/main/docs/scenario-api.md">the
-          scenario API</a>), re-clears a full year of Greek market days offline against the
-          published data extract, and compares against the identically built baseline. The
+          scenario API</a>), re-clears one to two years of market days offline against the
+          published data extract — a single zone or the full 39-zone footprint — and compares
+          against the identically built baseline. The
           objective is always the same question: <strong>if X connects to the grid, how much
           more does everyone pay?</strong> The two runs differ only in the scenario, so the
           price delta is causal within the model — and because the model is a competitive
@@ -516,6 +517,90 @@ end</code></pre>
           continental borders with flow-based coupling (AT, BE, CH) correlate poorly under
           the ATC approximation. Median zone correlation ≈ 0.61.</p>
       </details>
+    </article>
+
+    <!-- Case 4: pan-European cold ironing -->
+    <article class="chart-card case-card" id="case-paneu-coldironing">
+      <div class="chart-head">
+        <h2 class="chart-title">4 · Cold ironing, all of Europe at once</h2>
+        <p class="chart-sub"><strong>Objective.</strong> Cases 2–3 electrified Greek ports.
+          Here <strong>every in-scope passenger ship at 294 TEN-T ports across 22 countries</strong>
+          plugs into shore power — the EU <strong>AFIR</strong> + <strong>FuelEU Maritime</strong>
+          at-berth obligation, priced on the coupled market. Demand is built from
+          <strong>3.57 million real AIS port-call dwell events</strong> over two years, binned to
+          EMSA at-berth loads and mapped to each bidding zone (Italy → 7 zones, Sweden → 4,
+          Denmark → 2). Both baseline and scenario re-clear the full 39-zone footprint under the
+          <strong>cv17</strong> model — 1,462 coupled market days, zero failures.</p>
+      </div>
+      <div class="case-chips">
+        <span class="chip">39 zones · 2023-07-01 → 2025-06-30</span>
+        <span class="chip">24 zones with OPS demand · ~2,494 GWh/yr (floor)</span>
+        <span class="chip">hook: extra_orders (per zone)</span>
+        <span class="chip">eu17_base vs eu17_ops_floor_paneu · 0 failures</span>
+      </div>
+
+      <div class="editor">
+        <div class="editor-head">
+          <span>eu_pan_ops.jl — one OPS demand profile per bidding zone</span>
+          <button type="button" class="copy-btn">copy</button>
+        </div>
+        <pre><code>using Euphemia, Dates, CSV, DataFrames
+
+# per-zone hourly shore-power MW, built from AIS port calls
+# (build_eu_ops_profiles.py → ops_hourly_eu_floor_2023H2_2025H1.csv)
+scn = Dict(zone => ZoneScenario(extra_orders = ops_orders_for(zone))
+           for zone in keys(OPS_BY_ZONE))          # 24 coastal zones
+
+run_pipelined_backfill(Date(2023,7,1):Day(1):Date(2025,6,30), FOOTPRINT;
+    order_method  = :merit_order, optimizer = "gurobi",
+    clearing_mode = "eu17_ops_floor_paneu",
+    scenario      = scn, save_to_db = true, resume = true)</code></pre>
+      </div>
+
+      <div class="case-grid">
+        <div class="case-stat accent">
+          <span class="cs-label">Scenario consumer cost (EU-wide)</span>
+          <span class="cs-value">€555m<span class="cs-unit">&thinsp;/year</span></span>
+          <span class="cs-sub">All 39 zones, each weighted by its own load. +0.214&nbsp;€/MWh
+            load-weighted (€223.5bn baseline consumer bill → €224.1bn). Two-year total
+            €1,110m; €622m in the second year vs €488m in the first.</span>
+        </div>
+        <div class="case-stat accent">
+          <span class="cs-label">Load-weighted price increase</span>
+          <span class="cs-value">+0.25%</span>
+          <span class="cs-sub">Everyone else pays: Baseline&nbsp;×&nbsp;(1&thinsp;+&thinsp;0.25%).
+            Cross-check: 0.248%&nbsp;×&nbsp;€223.5bn = €554m ≈ the €555m measured directly. Small
+            because the load is spread over the whole footprint, not one zone.</span>
+        </div>
+        <div class="case-stat">
+          <span class="cs-label">The ships' own power bill</span>
+          <span class="cs-value">€199m<span class="cs-unit">&thinsp;/year</span></span>
+          <span class="cs-sub">4.88&nbsp;TWh of shore power over two years at an OPS-weighted
+            <strong>€81.73/MWh</strong> (below the load-weighted average — berthing is
+            overnight-heavy). So every €1 of shore power raises other consumers' bills by
+            <strong>~€2.79</strong> — a stronger lever than the Greek-only ships case (~€1.50),
+            because 24 zones' marginals lift together.</span>
+        </div>
+        <div class="case-stat">
+          <span class="cs-label">Who carries it</span>
+          <span class="cs-value">Med&nbsp;coast</span>
+          <span class="cs-sub">Highest per-MWh: GR&nbsp;+0.69, RO&nbsp;+0.62, BG&nbsp;+0.59,
+            IT-Sicily&nbsp;+0.42. Highest absolute (load weight): FR&nbsp;€176m/yr,
+            ES&nbsp;€62m/yr, IT-NORTH&nbsp;€58m/yr, GR&nbsp;€34m/yr. The far north barely moves
+            (SE1/SE2/NO4 ≈ 0) — the shock dies at the congested Nordic borders.</span>
+        </div>
+      </div>
+      <p class="crosscheck"><strong>Reading.</strong> A continent-wide obligation on the biggest
+        ferries and cruise ships adds ~2.5&nbsp;TWh/yr of berth demand and costs EU consumers
+        ~€555m/yr in the competitive counterfactual — about a quarter of a percent on the wholesale
+        bill, concentrated on the Mediterranean ferry/cruise coast where the ships actually berth.
+        It is a <strong>floor</strong>: registry-confirmed &gt;5000&nbsp;GT passenger ships only, full
+        uptake, no container OPS.</p>
+      <p class="case-note">Model: cv17, ex-ante <code>:v2</code> flows — the same engine and flow
+        rule as the live EU product. Deltas are <em>paired</em> (identical coverage, inner-joined on
+        the 17,159 priced hours per zone), so baseline error cancels. Full record, per-zone table and
+        the AIS-to-zone mapping:
+        <a href="https://github.com/philokalia-ai/energy-markets/tree/main/docs/experiments/scenario-exercises">docs/experiments/scenario-exercises</a>.</p>
     </article>
   </section>
 
