@@ -211,6 +211,34 @@ settled too. The under-pricing regime is regional and coupled, which is
 consistent both with regionally-correlated tight regimes and with market power
 exercised SEE-wide; the single-zone attribution cannot separate the two.
 
+### Phase 0 — unit-level dispatch evidence (who actually held back?)
+
+Fit-equivalence bounds the total markup but cannot name the firm. Dispatch can:
+`dispatch_evidence.py` measures **in-the-money shortfall** — capacity available
+(trailing-30-day p95 of the unit's own output) that did NOT produce in hours
+where the settled price exceeded 1.15× the unit's SRMC — per firm, on the
+60 experiment days, the 94 held-out days, and 60 good-fit control days:
+
+| firm | band60 %avail | held-out | control | Δ vs control | corr(shortfall, residual) |
+|---|---:|---:|---:|---:|---:|
+| **PPC** | 42.5 (14.2 GWh/d) | 43.7 | 40.1 (10.5) | **+2.4…+3.6 pp (+3.7 GWh/d)** | **0.33** |
+| Elpedison | 36.4 | 38.5 | 29.7 | +6.7…+8.8 pp (+1.0 GWh/d) | 0.17 |
+| Heron | 26.6 | 27.8 | 25.3 | +1.3…+2.5 pp | 0.26 |
+| Mytilineos | 22.0 | 22.6 | 23.0 | ≈ 0 | 0.30 |
+| Korinthos | 20.6 | 26.3 | 29.8 | negative | 0.24 |
+
+Reading, honestly bounded: the base rate is high for everyone (units
+legitimately idle below p95 for ramping/reserve/maintenance reasons the proxy
+misses), so **levels mean little — differentials and correlations carry the
+signal**. On residual days, in-the-money idle capacity rises where it matters:
+**PPC has by far the largest absolute differential (+3.7 GWh/day) and the
+highest day-level correlation with the residual (0.33)**; Elpedison the largest
+*proportional* one. Mytilineos/Korinthos show none. The dispatch evidence thus
+*points the same way as capacity share* — most of the withheld-or-repriced
+volume is the incumbent's — without being a smoking gun: a v2 should subtract
+declared outages (the unavailability table) and reserve obligations before any
+per-unit naming.
+
 ## Running
 
 ```bash
