@@ -168,6 +168,49 @@ scarcity), and GR's *band-average* coupled residual is ≈ 0. Two consequences:
   `unit_firms`. A genuine pan-European sweep needs firm maps beyond the five
   SEE zones — the natural next data step.
 
+### Per-firm behavior (one firm at a time, winning mechanism)
+
+`run_per_firm.jl` applies the near-uniform markup to ONE firm at a time
+(`results_per_firm.tsv`, 60 main days):
+
+| firm alone | ΔMAE @25% | ΔMAE @50% | flexible capacity |
+|---|---:|---:|---:|
+| PPC | **+3.10** (50/60) | +2.61 | ~10.4 GW registry |
+| Elpedison | +1.04 | +1.27 | 0.81 GW |
+| Mytilineos (+CHP) | +0.97 | +1.19 | 0.77 GW |
+| Heron/GEK-TERNA | +0.66 | +0.87 | 0.57 GW |
+| Korinthos Power | +0.53 | +0.63 | 0.43 GW |
+| PPC+Myt+Elp @25% | +3.02 | — | — |
+
+Three regularities: (α) every firm's markup helps *some* — price-setting power
+is roughly **proportional to flexible capacity** (the fringe firms' ΔMAE per GW
+is nearly constant); (β) the effects are **strongly sub-additive** — PPC+Myt+Elp
+together (+3.02) add nothing over PPC alone (+3.10): the settled prices support
+roughly **one portfolio-worth of markup (~+3 MAE)** however it is attributed;
+(γ) fit-equivalence means the *fit cannot identify the culprit* — it bounds the
+total exercised markup, and unit-level dispatch evidence (which units actually
+ran vs the competitive schedule) is the discriminating next step.
+
+### European footprint of the GR markup (coupled, paired days)
+
+Per-zone effect of the GR-only markup on the 24 coupled days (bias = sim −
+settled; all other 24 zones untouched, |Δprice| < 0.01):
+
+| zone | Δprice €/MWh | MAE | corr | bias |
+|---|---:|---|---|---|
+| GR | +2.91 | 28.72 → **26.87** | 0.706 → 0.710 | −17.6 → −14.7 |
+| BG | +1.74 | 34.46 → 33.73 | ≈ | −17.0 → −15.3 |
+| RO | +1.56 | 34.71 → 34.17 | ≈ | −16.3 → −14.8 |
+| RS | +1.07 | 31.38 → 30.90 | ≈ | −14.1 → −13.1 |
+| HU / SI / IT-south | +0.44…+0.12 | small gains | ≈ | — |
+
+**15 of 39 zones improve, zero worsen** (39-zone mean MAE 35.25 → 35.14). The
+markup exports through the SEE coupling corridor and — because the *neighbours
+also underprice on these days* (bias −14…−17) — moves their prices toward
+settled too. The under-pricing regime is regional and coupled, which is
+consistent both with regionally-correlated tight regimes and with market power
+exercised SEE-wide; the single-zone attribution cannot separate the two.
+
 ## Running
 
 ```bash
