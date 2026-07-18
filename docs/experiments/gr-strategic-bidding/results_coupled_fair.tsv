@@ -1,0 +1,4 @@
+strategy	corr	mae	absresid	resid	mae_gain	days_better	n
+nearuniform_25	0.7592	31.0058	17.4909	11.9408	3.4407	23	24
+baseline	0.7287	34.4465	21.9526	19.1027	0.0000	0	24
+ts_true_25	0.7299	34.6739	20.6348	17.7137	-0.2275	3	24
