@@ -12,7 +12,7 @@ function unit_spread(spread::Float64)
     (_day::Date) -> (ctx -> begin
         out = Tuple{SimpleOrder,String}[]
         for (o, tag) in ctx.tagged_orders
-            if o.type == :supply && startswith(tag, "26W") || startswith(tag, "AGG-")
+            if o.type == :supply && !(tag in ("RES", "IMPORT", "DEMAND", "EXTRA", "STRATEGIST"))
                 h = mod(hash(tag), 1000) / 1000.0          # stable in [0,1)
                 f = 1.0 + spread * (2h - 1.0)               # 1±spread
                 push!(out, (SimpleOrder(o.type, o.price * f, o.quantity, o.zone,
