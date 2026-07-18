@@ -38,16 +38,17 @@ end
 results = NamedTuple[]
 for (i, day) in enumerate(pick)
     a = try clear_day(day) catch e; @warn "A failed" day e; continue; end
-    b = try clear_day(day; strategist=unit_spread(0.08)(day)) catch e; @warn "B failed" day e; continue; end
+    SPREAD = parse(Float64, get(ENV, "SL_SPREAD", "0.08"))
+    b = try clear_day(day; strategist=unit_spread(SPREAD)(day)) catch e; @warn "B failed" day e; continue; end
     ma, mb = day_metrics(a, day), day_metrics(b, day)
     push!(results, (day=day, a=ma, b=mb))
-    @printf("[%2d/20] %s  stock: corr=%s mae=%.1f std=%.1f | spread8: corr=%s mae=%.1f std=%.1f\n",
+    @printf("[%2d/20] %s  stock: corr=%s mae=%.1f std=%.1f | spread: corr=%s mae=%.1f std=%.1f\n",
         i, day, ma.corr===missing ? "-" : round(ma.corr,digits=2), ma.mae, ma.simstd,
         mb.corr===missing ? "-" : round(mb.corr,digits=2), mb.mae, mb.simstd)
     flush(stdout)
 end
 ms(xs) = (v=Float64[x for x in xs if x !== missing]; isempty(v) ? NaN : mean(v))
-println("\n=== $ZONE unit-spread ±8% summary ($(length(results)) days) ===")
+println("\n=== $ZONE unit-spread ±$(get(ENV,"SL_SPREAD","0.08")) summary ($(length(results)) days) ===")
 @printf("stock  : corr %.3f  MAE %.2f  sim-std %.1f\n", ms(r.a.corr for r in results), ms(r.a.mae for r in results), ms(r.a.simstd for r in results))
 @printf("spread : corr %.3f  MAE %.2f  sim-std %.1f\n", ms(r.b.corr for r in results), ms(r.b.mae for r in results), ms(r.b.simstd for r in results))
 println("MAE better on $(count(r -> r.b.mae < r.a.mae, results))/$(length(results)) days")
