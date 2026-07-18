@@ -117,13 +117,14 @@ byte-identity + per-zone A/B on held-out days, bump cv18.
 | IT-CSOUTH ±8 % | 0.680 | 20.05 | 19/20 |
 | IT-CSOUTH ±12 % | 0.677 | **19.35** | 19/20 |
 | IT-NORTH stock → ±8 % | 0.747 → **0.820** | 19.74 → **17.82** | 17/20 |
-| **DK1 stock → ±8 %** | 0.495 → 0.499 | 34.44 → 34.38 | **3/20 (negative)** |
+| **DK1 stock → ±8 % (valid rerun)** | 0.495 → 0.521 | 34.44 → 33.96 | 10/20 (marginal) |
 
 Correlation plateaus at ±8 %; MAE keeps improving to ±12 %. **cv18
 recommendation: per-unit SRMC spread ≈ ±10 % for the IT zones** (implemented
 properly in the cost model — inferred heat rates where history allows, a
 deterministic per-unit draw otherwise), guarded by SEE byte-identity and
-held-out per-zone A/Bs. **DK1 is confirmed OUT of the spread family** — its
-sim already has intraday structure (std 25.9); its amplitude problem (missed
-RES-surplus valley and evening peak) needs the import/RES-surplus levers, not
-SRMC decorrelation.
+held-out per-zone A/Bs. **DK1: marginal.** The first DK1 run was INVALID (a prefix bug meant Danish
+unit orders were never repriced — caught in the loop's code-review pass); the
+valid rerun gives corr 0.495 → 0.521, MAE −0.5, 10/20 days: a small real
+effect, an order below the IT gains. DK1's main levers remain the
+import/RES-surplus family per its hour-profile diagnosis.
