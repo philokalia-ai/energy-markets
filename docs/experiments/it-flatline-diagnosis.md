@@ -64,3 +64,27 @@ Expected effect: shape ratio 0.26→0.6+ for the flat zones would move their
 correlations from 0.4–0.6 toward the thermal-zone band (0.7+), on data we
 already have. File under the next calibration iteration with the standard
 guards (SEE byte-identity, per-zone gates).
+
+## Update (loop, 2026-07-18 late): mechanism CORRECTED by measurement
+
+Two experiments sharpened the diagnosis:
+
+1. **The fine-tranche ladder is a confirmed dead end.** A 10-step tranche
+   ladder (0.85–1.60×SRMC, same average as stock) applied as a runtime profile
+   override on 20 IT-CSOUTH days: MAE 21.81 → **27.27, worse on 20/20 days**,
+   and — the tell — **sim intraday std unchanged (8.7 → 8.7)**. Tranche
+   granularity does not control the shape.
+2. **The marginal-attribution probe found the real pin.** On the flat day
+   (2023-07-17, every hour clears at exactly 90.90): the marginal orders are
+   FOUR different unit-level gas plants (Montalto, Aprilia, Torrevaldaliga,
+   Civitavecchia) whose tranches price **identically** — every Italian gas
+   unit carries the same type-level SRMC, so the whole fleet's same-multiplier
+   tranches align into one flat step of several GW. Net load never leaves the
+   step; any per-profile ladder just *moves* the step (level change, no shape).
+
+**Corrected fix (cv18 candidate): per-unit efficiency spread.** Decorrelate
+unit SRMCs (η ∈ ~0.48–0.58 → ±8 % cost spread, stable per unit — ideally from
+inferred heat rates, else a deterministic draw) so unit tranches interleave
+into a dense ladder. Prototyped via the strategist hook (±8 % stable-hash
+repricing of every supply order) — results in
+`docs/experiments/strategic-layer/it_unitspread_proto.jl` / the loop log.

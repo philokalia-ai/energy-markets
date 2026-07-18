@@ -10,6 +10,7 @@
 # intraday shape ratio (sim std / act std), per-day corr, MAE vs settled.
 
 include(joinpath(@__DIR__, "zone_common.jl"))
+const MOB = Euphemia.MeritOrderBook
 
 # ~20 evenly spaced days across the record (shape problem is universal — no
 # corr-band selection here)
@@ -21,18 +22,18 @@ const FINE_TRANCHES = [(0.12,0.85),(0.12,0.90),(0.12,0.95),(0.12,1.00),(0.12,1.0
 @assert abs(sum(first.(FINE_TRANCHES)) - 1.0) < 1e-9
 
 function with_fine_profile(f, zones)
-    old = Dict(z => MeritOrderBook.get_zone_profile(z) for z in zones)
+    old = Dict(z => MOB.get_zone_profile(z) for z in zones)
     try
         for z in zones
             p = old[z]
-            MeritOrderBook.ZONE_PROFILES[z] = MeritOrderBook.ZoneProfile(;
-                (fn => getfield(p, fn) for fn in fieldnames(MeritOrderBook.ZoneProfile))...,
+            MOB.ZONE_PROFILES[z] = MOB.ZoneProfile(;
+                (fn => getfield(p, fn) for fn in fieldnames(MOB.ZoneProfile))...,
                 tranches=FINE_TRANCHES)
         end
         f()
     finally
         for (z, p) in old
-            MeritOrderBook.ZONE_PROFILES[z] = p
+            MOB.ZONE_PROFILES[z] = p
         end
     end
 end
@@ -47,7 +48,6 @@ function day_metrics(sim, day)
     (corr=c, mae=m, resid=r, simstd=ssd)
 end
 
-const MOB = Euphemia.MeritOrderBook
 results = NamedTuple[]
 for (i, day) in enumerate(pick)
     a = try clear_day(day) catch e; @warn "A failed" day e; continue; end
@@ -63,7 +63,7 @@ for (i, day) in enumerate(pick)
     flush(stdout)
 end
 
-ms(xs) = mean(collect(skipmissing(xs)))
+ms(xs) = (v=Float64[x for x in xs if x !== missing]; isempty(v) ? NaN : mean(v))
 println("\n=== $ZONE ladder prototype summary ($(length(results)) days) ===")
 @printf("stock : corr %.3f  MAE %.2f  sim-std %.1f\n",
     ms(r.a.corr for r in results), ms(r.a.mae for r in results), ms(r.a.simstd for r in results))

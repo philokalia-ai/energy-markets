@@ -51,7 +51,7 @@ bump(o, f) = SimpleOrder(o.type, o.price * f, o.quantity, o.zone, o.date_time, o
 
 # --- day sets ----------------------------------------------------------------
 load_days(name) = [Date(d) for d in JSON.parsefile(joinpath(@__DIR__, "$(name)_$(ZONE).json"))]
-const DAYS = load_days("days")
+const DAYS = isfile(joinpath(@__DIR__, "days_$(ZONE).json")) ? load_days("days") : Date[]
 const HELDOUT = isfile(joinpath(@__DIR__, "heldout_$(ZONE).json")) ? load_days("heldout") : Date[]
 
 # --- settled actuals ---------------------------------------------------------
