@@ -164,3 +164,55 @@ single-zone figure.
 (Operational note: the coupled runs use `run_multi_zone_market_clearing` in a
 sequential loop, which commits each day on its own — the pipelined backfill's
 end-of-run teardown proved unreliable on this small non-contiguous day set.)
+
+### Follow-ups — smaller players, closing the gap, and Europe
+
+`run_fringe_combined.jl` (single-zone, 60 days) + `strat_tiered_markup.jl`
+(per-firm markup) answer three questions. Full table in `results_fringe.tsv`.
+
+| strategy | corr | MAE | resid | ΔMAE | days↑ |
+|---|---:|---:|---:|---:|---:|
+| **ppc 35%** | 0.77 | 28.74 | +4.35 | **+3.22** | 46/60 |
+| ppc 25% (winner) | 0.76 | 28.81 | +6.36 | +3.15 | 50/60 |
+| fringe 50% | 0.77 | 29.18 | +4.07 | +2.78 | 47/60 |
+| **fringe 25%** | 0.76 | 29.21 | +7.60 | +2.75 | **52/60** |
+| ppc 50% | 0.77 | 29.29 | +1.59 | +2.67 | 42/60 |
+| combined 25% (PPC+fringe) | 0.73 | 29.52 | −1.04 | +2.44 | 37/60 |
+| ppc35 + fringe25 | 0.74 | 29.71 | −3.41 | +2.25 | 36/60 |
+| *baseline* | 0.72 | 31.96 | +13.21 | 0 | — |
+
+**Q2 — do the smaller players control the price? Partly, and less per unit.**
+A *fringe-only* markup (Mytilineos, Elpedison, Heron, Korinthos Power — PPC left
+at cost) genuinely improves the fit: `fringe 25%` helps on **52/60 days** (the
+single most *consistent* config), and `fringe 50%` matches PPC's MAE gain. But
+the fringe needs roughly **double the markup** (~50%) to move the price as much
+as PPC does at 25% — it is smaller and less often pivotal. So the small players
+do set the flexible margin on many days, but PPC is the stronger price-maker per
+unit of markup. (This also explains why the earlier ~80 % capacity set overshot:
+fringe + PPC at the same rate is too much.)
+
+**Q1 — how does the gap close further? It mostly doesn't, via bidding.** Pushing
+PPC deeper (25 → 35 → 50 %) drives the residual from +6.4 toward +1.6, but the
+**MAE gain saturates around +3.2** and starts *losing* day-consistency (50/60 →
+42/60), and every *combined* PPC+fringe config **overshoots** into a negative
+residual (the price passes settled). So a portfolio markup on flexible capacity
+explains **~half** the residual and then plateaus — the remaining ~€4–6 is *not*
+more market power. It points elsewhere: unmodelled peaker costs, the ex-ante
+flow/import treatment (the coupled baseline residual was actually *larger*), or
+scarcity pricing on the tightest hours. That is the honest ceiling of the
+bidding-strategy explanation.
+
+**Q3 — extend to Europe? Only where the residual has the right sign.** The
+markup story requires the model to *under*price (settled above competitive). On
+the medium-corr band, that holds for **GR (+10.6) and HU (+12.7)** — but the
+other SEE incumbents run the *opposite* way: **BG −8.3, RS −11.6, RO −26.1**
+(the model *over*prices them). There a markup is wrong-signed — it would make
+the fit worse — so the same strategy must not be applied blindly. Their gap is a
+different problem (import/cost modelling — these overlap the known weak zones),
+not exercised market power. And HU, the one other positive-residual zone, has an
+unusable firm map (88 % of capacity unmapped). **The clean, firm-attributable
+market-power signal in this footprint is GR/PPC**; RS is a 100 %-EPS monopoly
+that would be the ideal second test *if* its residual were positive, which it
+is not. Firm-map coverage (`simulations.unit_firms`) is limited to the five SEE
+zones, so a genuine pan-European sweep needs firm attribution for DE/FR/PL/… —
+the natural next data step.
