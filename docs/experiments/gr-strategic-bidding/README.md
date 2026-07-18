@@ -132,3 +132,35 @@ should?).
 
 Numbers regenerate with `run_all.jl` (main matrix → `results.tsv`) and
 `run_focus.jl` (fine sweep; set `EUPHEMIA_BIG_FIRMS` for the ~80 % pass).
+
+### Robustness — does it survive import response? (coupled 39-zone)
+
+The main matrix clears GR **single-zone** (imports fixed at historical values),
+so a PPC markup raises the GR price with nothing pushing back — an **upper
+bound**. `run_coupled.jl` / `run_coupled_topslice_seq.jl` re-clear the winning
+`topslice 25%` on the **full 39-zone coupled footprint** (`enrich_network`,
+two-pass, ex-ante `:v2` flows), where neighbours import into GR against the
+markup. Evaluated on 24 of the 60 days (`eval_coupled.py`):
+
+| | corr | MAE | resid | ΔMAE | days↑ |
+|---|---:|---:|---:|---:|---:|
+| **single-zone** baseline | 0.72 | 31.96 | +13.21 | — | — |
+| **single-zone** topslice 25% | 0.76 | 28.81 | +6.36 | **+3.15** | 50/60 |
+| **coupled** baseline | 0.73 | 28.72 | +17.64 | — | — |
+| **coupled** topslice 25% | 0.75 | 26.87 | +14.73 | **+1.85** | **22/24** |
+
+**The finding holds under coupling, at reduced magnitude.** The top-slice markup
+still improves — MAE 28.72 → 26.87, corr 0.73 → 0.75, better on **22/24 days**.
+But the gain shrinks from **+3.15 to +1.85 €/MWh (~40 % smaller)**: endogenous
+imports absorb roughly 40 % of the markup's price impact, consistent with the
+~57 % import relief measured for demand shocks (a supply-side markup leaks a bit
+less). So single-zone was indeed an upper bound, and the honest coupled estimate
+of the exercisable markup is smaller — but the **direction and consistency
+survive**: on nearly every day, letting PPC mark up its flexible tranches moves
+the coupled price toward the settled price. The candidate market-power reading is
+robust to import response; its *size* is about a third smaller than the
+single-zone figure.
+
+(Operational note: the coupled runs use `run_multi_zone_market_clearing` in a
+sequential loop, which commits each day on its own — the pipelined backfill's
+end-of-run teardown proved unreliable on this small non-contiguous day set.)
