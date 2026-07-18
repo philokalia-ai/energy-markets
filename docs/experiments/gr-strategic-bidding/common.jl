@@ -77,14 +77,22 @@ end
 
 # --- hourly evaluation of a sim price dict vs settled actuals ---------------
 # returns (corr, mae, resid=mean(actual-sim), n)
+# The sim is HOUR-AVERAGED first (review finding): post-2025-10 days clear at
+# 15-min resolution while ACTUALS are hourly means; comparing 96 quarter-hours
+# against 24 duplicated hourly values is an asymmetric metric. Averaging the sim
+# onto the same hourly grid makes every day's pairing symmetric.
 function eval_vs_actual(sim::Dict{String,Float64}, day::Date)
-    a = Float64[]; s = Float64[]
+    hsum = Dict{String,Float64}(); hn = Dict{String,Int}()
     for (ts, sp) in sim
-        # sim key HHMM → hour bucket HH00 to match hourly actuals
         hkey = ts[1:9] * ts[10:11] * "00"
+        hsum[hkey] = get(hsum, hkey, 0.0) + sp
+        hn[hkey] = get(hn, hkey, 0) + 1
+    end
+    a = Float64[]; s = Float64[]
+    for (hkey, tot) in hsum
         ap = get(ACTUALS, hkey, nothing)
         ap === nothing && continue
-        push!(a, ap); push!(s, sp)
+        push!(a, ap); push!(s, tot / hn[hkey])
     end
     n = length(a)
     n < 12 && return (missing, missing, missing, n)

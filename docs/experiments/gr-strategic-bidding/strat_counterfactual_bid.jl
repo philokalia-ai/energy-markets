@@ -23,8 +23,14 @@ function counterfactual_bid(; headroom::Float64=0.20, floor_frac::Float64=0.75)
                     base = get(p0, ts_of(o), nothing)
                     if base !== nothing && base > 0
                         target = base * (1 + headroom)
-                        # lift only tranches in (floor_frac·target, target)
-                        if floor_frac * target < o.price < target
+                        # Lift tranches in (floor_frac·BASE, target) to the target.
+                        # Review fix: the band floor was previously floor_frac·target,
+                        # which for headroom ≥ 1/floor_frac − 1 (≈0.33 at 0.75) put
+                        # the whole band ABOVE the competitive clearing price — the
+                        # strategy then repriced only never-accepted orders, a
+                        # provable no-op (cf_bid_35% ≡ baseline in the original
+                        # results.tsv is that artifact, not a real saturation).
+                        if floor_frac * base < o.price < target
                             push!(out, (setprice(o, target), tag)); continue
                         end
                     end

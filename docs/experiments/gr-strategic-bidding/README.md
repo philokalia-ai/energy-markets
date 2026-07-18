@@ -12,207 +12,197 @@ This is a research probe, not a model change — nothing here bumps
 `ENERGY_PRICES_CODE_VERSION` or writes to the product. It runs fully offline on
 the DuckDB extract.
 
+> **Revision note (July 2026).** A full adversarial code review of the first
+> version of this experiment found real flaws — a mislabeled winning strategy,
+> a no-op parameter rung, selection-bias/winner's-curse exposure, an asymmetric
+> evaluation metric on 15-minute days, and a stale-baseline Europe argument.
+> Everything below reflects the **corrected instruments**; the changelog at the
+> bottom lists what changed and why. The headline finding survived the review;
+> its *mechanism* changed.
+
 ## Setup
 
 - **Zone**: Greece. **Players**: the mapped firms in `simulations.unit_firms`.
-  PPC (ΔΕΗ) alone is **~69 % of the mapped GR registry** (10.4 of 15.1 GW) and
-  the dominant dispatchable owner; `EUPHEMIA_BIG_FIRMS` widens the set toward the
-  ~80 % capacity ceiling (e.g. `"PPC,Mytilineos,Elpedison"`).
+  PPC (ΔΕΗ) alone is **~69 % of the mapped GR registry** (10.4 of 15.1 GW);
+  `EUPHEMIA_BIG_FIRMS` widens the set (e.g. `"PPC,Mytilineos,Elpedison"`).
 - **Days**: **60 medium-correlation days** (`days.json`), sampled evenly across
   2024-07…2026-06 from the 154 GR days whose competitive-baseline hourly
-  correlation is in **0.6–0.8** — the regime where there is real shape to keep
-  *and* real residual to explain. On this set the baseline sits **+12 €/MWh
-  (median) below** settled: the candidate market-power signal.
+  correlation is in **0.6–0.8**; the remaining **94 band days**
+  (`heldout_days.json`) are a held-out validation set that no parameter was
+  tuned on. On the 60-day set the baseline sits **+13.2 €/MWh below** settled —
+  the candidate market-power signal. (Because the days were *selected* for
+  mediocre fit on a mostly-underpriced band, any upward perturbation gains MAE
+  by construction — which is why every claim below is checked against the
+  held-out set and an additive level-shift null.)
 - **Mechanism**: the first-class [`strategist` hook](../../scenario-api.md). It
   receives the fully tagged order book (`unit_code => firm` via `firm_of`) and
-  returns a replacement book, so a strategy is a pure function of the competitive
-  book. Counterfactual-aware strategies additionally capture the day's baseline
-  clearing price (`get_baseline(day)`) — literally "the players see the
-  counterfactual".
-- **Metric**: paired per day against the *same-day* competitive baseline.
-  A strategy works iff it **raises MAE gain (baseline MAE − strategy MAE) > 0
-  against settled prices while holding correlation** — i.e. it moves the
-  simulated price toward reality without destroying the shape. `resid` =
-  mean(actual − sim): the baseline is strongly positive, so a good strategy
-  drives it toward 0 without overshooting negative.
+  returns a replacement book. Counterfactual-aware strategies additionally
+  capture the day's baseline clearing price (`get_baseline(day)`) — literally
+  "the players see the counterfactual".
+- **Metrics**: paired per day vs the same-day competitive baseline, hourly,
+  with the sim **hour-averaged** before pairing (symmetric on 15-minute days).
+  `resid` = mean(actual − sim). Correlations are means of per-day hourly
+  correlations. Two nulls frame every result: the **additive level-shift null**
+  (the best flat +c €/MWh on the same days — the strongest trivial competitor;
+  it cannot change correlation) and the baseline itself.
 
 ## The strategies (one file each — drop in your own the same way)
 
 | file | idea | key params |
 |---|---|---|
-| `strat_uniform_markup.jl` | flat Lerner markup on all big-firm supply | `markup` |
-| `strat_topslice_markup.jl` | mark up only the flexible upper tranches; base at cost | `markup`, `slice_from` |
-| `strat_pivotal_markup.jl` | mark up only in hours where the firm is pivotal (RSI<1) | `markup`, `rsi_thresh` |
-| `strat_counterfactual_bid.jl` | **see the counterfactual**: lift tranches up to `p₀·(1+headroom)` | `headroom`, `floor_frac` |
+| `strat_uniform_markup.jl` | flat markup on all big-firm supply | `markup` |
+| `strat_topslice_markup.jl` | **two variants**: `topslice_markup` (true top slice — only tranches above the unit-hour's quantity-weighted median, i.e. >~1.05×SRMC) and `nearuniform_markup` (everything above the deep must-run block — what a running unit's whole dispatchable range would do) | `markup`, `slice_from` |
+| `strat_pivotal_markup.jl` | mark up only when the firm is pivotal (RSI<1) | `markup`, `rsi_thresh` |
+| `strat_counterfactual_bid.jl` | lift tranches near the competitive price p₀ up to `p₀·(1+headroom)` | `headroom`, `floor_frac` |
 | `strat_withholding.jl` | economic withholding — drop the cheapest big-firm capacity | `w` |
 | `strat_share_proportional.jl` | Cournot/Lerner markup = share/elasticity, per hour | `elasticity`, `cap` |
 | `strat_peak_hour_markup.jl` | mark up only the top-k highest-load hours | `markup`, `topk` |
+| `strat_tiered_markup.jl` | per-firm markup map (PPC vs fringe vs combined) | `markups`, `slice_from` |
 
-Each file exposes one factory `name(; params...) -> (day::Date -> strategist)`
-and runs standalone (`julia --project=. .../strat_uniform_markup.jl` clears a
-2-config demo). `common.jl` holds the harness: day selection, actuals, the
-warm-cache day-outer runner, and the paired evaluation. `run_all.jl` runs the
-full matrix (~19 configs × 60 days ≈ 20 min, one warm baseline pass) and writes
-`results.tsv`.
+Each file exposes a factory `name(; params...) -> (day::Date -> strategist)` and
+runs standalone. `common.jl` holds the harness; `run_corrected.jl` is the
+authoritative evaluation (main matrix + held-out + paired-coupled);
+`run_all.jl` / `run_focus.jl` / `run_fringe_combined.jl` are the original
+(pre-review) sweeps kept for provenance.
+
+## Results (corrected instruments)
+
+Main 60-day matrix (`results_corrected.tsv`), ranked by paired ΔMAE:
+
+| strategy | corr | MAE | resid | ΔMAE | days↑ |
+|---|---:|---:|---:|---:|---:|
+| **nearuniform 25%** | **0.76** | **28.59** | +6.36 | **+3.10** | **50/60** |
+| withhold 10% | 0.76 | 29.13 | +2.11 | +2.56 | 40/60 |
+| *additive null (+12.5 flat)* | *0.73* | *29.06* | *+0.71* | *+2.63* | — |
+| uniform 20% | 0.75 | 31.23 | +2.34 | +0.46 | 35/60 |
+| *baseline* | 0.73 | 31.69 | +13.21 | 0.00 | — |
+| ts_true 15/25/35/50% | 0.73 | 31.8–31.9 | +12.1–12.4 | −0.1–−0.2 | ~9/60 |
+| cfbid_fix 20% | 0.75 | 31.94 | **+0.10** | −0.25 | 36/60 |
+| cfbid_fix 35% | 0.77 | 34.84 | −7.65 | −3.15 | 24/60 |
+
+**Held-out validation (94 untouched band days, `results_heldout.tsv`):**
+
+| strategy | corr | MAE | resid | ΔMAE | days↑ |
+|---|---:|---:|---:|---:|---:|
+| **nearuniform 25%** | **0.75** | **29.82** | +3.45 | **+3.05** | **75/94** |
+| *additive null (+11.25 flat)* | *0.72* | *30.86* | *+0.11* | *+2.00* | — |
+| *baseline* | 0.72 | 32.86 | +11.36 | 0.00 | — |
+| ts_true 25% | 0.72 | 33.27 | +10.16 | −0.41 | 13/94 |
+
+### What the corrected experiment actually shows
+
+1. **The effect is real and replicates.** The winning configuration — a **~25 %
+   markup on the full dispatchable range of the incumbent's *running* units**
+   (everything above the deep must-run block; idle units keep their entry
+   tranche at cost) — transfers to the 94 held-out days essentially unchanged:
+   **ΔMAE +3.05, better on 75/94 days, corr 0.72 → 0.75**. No winner's curse:
+   nothing was tuned on these days.
+2. **It beats the strongest trivial null, out of sample.** A post-hoc optimal
+   flat level shift achieves +2.00 on the held-out set; the markup achieves
+   **+3.05** *and* raises correlation, which no additive shift can do. About
+   two-thirds of the raw MAE gain is level, one-third is genuine shape — the
+   markup lands in the right hours. (Caveat kept from the review: most book
+   perturbations on these days raise the daily-corr mean somewhat, so the corr
+   gain alone is weak evidence; the *combination* — beats-null + corr + 75/94
+   consistency — is the finding.)
+3. **The mechanism is NOT peak-tranche sniping.** The literal "top slice" —
+   marking up only tranches priced above ~1.05×SRMC — does **nothing**
+   (ΔMAE ≈ −0.2 on both day sets): those expensive tranches are rarely
+   marginal. What reproduces settled prices is marking up the **at-cost and
+   below-cost mid-range** of committed units — the region that actually sets
+   the price. The economically natural reading: *scheduled units bid their
+   entire dispatchable range ~25 % above cost; reserve units stay competitive
+   to get scheduled.* (The first version of this README mislabeled this
+   configuration "top-slice" — see the changelog.)
+4. **Firm attribution is weaker than first claimed.** A fringe-only markup
+   (PPC at cost) achieves comparable consistency on the main set — the fit
+   alone cannot cleanly attribute the markup to PPC vs the fringe; both sit at
+   the flexible margin in the relevant hours. What the data *do* support:
+   applying the markup to ~all of the market's flexible capacity at once
+   (PPC + fringe at the same rate) **overshoots** — the exercised-markup
+   "budget" the settled prices support is roughly one large portfolio's worth,
+   however you attribute it.
+5. **The residual is not fully explained.** ~+6 €/MWh remains on the 60-day
+   set (+3.5 held-out) at the optimum, deeper markups saturate, and the
+   fixed counterfactual-bid strategy can *center* the residual (resid +0.10 at
+   headroom 20 %) but not reduce MAE — level-perfect, shape-neutral. The
+   remaining gap points to unmodelled peaker costs / scarcity hours, not more
+   markup.
+
+### Robustness — import response (coupled 39-zone, paired days)
+
+`run_coupled.jl` + `run_coupled_topslice_seq.jl` re-clear the winning
+configuration on the full coupled footprint; `eval_coupled.py` evaluates, and
+`run_corrected.jl` part C provides the single-zone comparison **on the same 24
+days** (`coupled_days.json`; the earlier version juxtaposed mismatched subsets):
+
+| (same 24 days) | corr | MAE | resid | ΔMAE | days↑ |
+|---|---:|---:|---:|---:|---:|
+| single-zone baseline | 0.73 | 34.45 | +19.10 | — | — |
+| single-zone nearuniform 25% | 0.76 | 31.01 | +11.94 | **+3.44** | 23/24 |
+| coupled baseline | 0.73 | 28.72 | +17.64 | — | — |
+| coupled nearuniform 25% | 0.75 | 26.87 | +14.73 | **+1.85** | 22/24 |
+
+Paired on identical days, endogenous imports absorb **(3.44 − 1.85)/3.44 ≈ 46 %**
+of the markup's price impact — consistent with the ~57 % import relief measured
+for demand shocks. The single-zone estimate is an upper bound; the direction and
+day-consistency (22/24) survive coupling.
+
+### Across zones (recomputed on the cv17 baseline)
+
+The first version argued zone eligibility from cv16 residuals; cv17's import
+fixes changed exactly the zones cited. Recomputed on `eu17_base` (cv17,
+2023-07…2025-06, medium-corr band per zone): **GR +0.8, HU +8.5, BG −8.6,
+RO −7.9, RS −7.1** — RO's −26 collapsed to −8 (it was mostly the cv16 phantom
+scarcity), and GR's *band-average* coupled residual is ≈ 0. Two consequences:
+
+- **The signal is regime-level, not zone-level.** GR's +13 residual is a
+  property of the *selected* medium-fit days, not of the zone in aggregate. A
+  transferable strategy must be **regime-gated** — markup only under an
+  *ex-ante observable* tightness signal (scarcity margin, net-load percentile),
+  not "always in zone X", and validated held-out exactly as here.
+- **Wrong-signed zones remain wrong-signed** (BG/RO/RS ≈ −7…−9): there the
+  model *over*prices and a markup worsens the fit; their residual is a model
+  problem (imports/costs), not candidate market power. HU is the one other
+  positive-residual zone, but 88 % of its capacity is unmapped in
+  `unit_firms`. A genuine pan-European sweep needs firm maps beyond the five
+  SEE zones — the natural next data step.
 
 ## Running
 
 ```bash
-julia --project=. docs/experiments/gr-strategic-bidding/run_all.jl
-NDAYS=6 julia --project=. docs/experiments/gr-strategic-bidding/run_all.jl   # quick
-EUPHEMIA_BIG_FIRMS="PPC,Mytilineos,Elpedison" julia ... run_all.jl           # ~80% cap
+julia --project=. docs/experiments/gr-strategic-bidding/run_corrected.jl   # authoritative
+julia --project=. docs/experiments/gr-strategic-bidding/run_all.jl         # original sweep (provenance)
+python3 docs/experiments/gr-strategic-bidding/eval_coupled.py              # coupled juxtaposition
 ```
 
-## Results
+## Changelog — what the code review found and what changed
 
-Full 60-day matrix, ranked by paired ΔMAE vs the same-day competitive baseline
-(positive = the strategy moved simulated prices **toward** settled). Baseline:
-**corr 0.72, MAE 31.96, resid +13.21 €/MWh** — settled sits €13 above the
-competitive counterfactual on these days. `results.tsv` has the full table.
-
-| strategy | corr | MAE | resid | ΔMAE | days↑ |
-|---|---:|---:|---:|---:|---:|
-| **topslice 25%** | **0.76** | **28.81** | +6.36 | **+3.15** | **50/60** |
-| topslice 40% | 0.77 | 28.90 | +3.39 | +3.06 | 45/60 |
-| withhold 10% | 0.75 | 29.40 | +2.11 | +2.56 | 40/60 |
-| uniform 10% | 0.74 | 31.22 | +7.47 | +0.74 | 41/60 |
-| cf-bid 10% | 0.74 | 31.23 | +6.66 | +0.73 | 40/60 |
-| uniform 20% | 0.75 | 31.43 | +2.34 | +0.53 | 36/60 |
-| *baseline* | 0.72 | 31.96 | +13.21 | 0.00 | — |
-| pivotal 30% | 0.75 | 33.56 | +2.79 | −1.60 | 22/60 |
-| uniform 35% | 0.76 | 33.35 | −4.53 | −1.39 | 28/60 |
-| withhold 20% | 0.75 | 34.05 | −10.39 | −2.09 | 29/60 |
-| pivotal 80% | 0.76 | 42.47 | −12.11 | −10.51 | 12/60 |
-| withhold 35% | 0.75 | 56.13 | −40.36 | −24.17 | 22/60 |
-
-### Verdict — yes, partially, and it localizes to PPC
-
-1. **A moderate top-slice markup is the single best explanation.** Marking up
-   only the incumbent's *flexible upper tranches* (base/must-run left at cost)
-   by **25–35 %** improves **50/60 days**, cuts MAE €31.96 → €28.8, closes about
-   **half** the +€13 residual, and — the tell — **raises correlation 0.72 →
-   0.76–0.77**. It doesn't just lift the level; it improves the hour-to-hour
-   shape, because the residual lives in the tight hours where PPC's peaking
-   tranches set the margin. The result is robust to *where* the slice is cut
-   (`slice_from` 1.05/1.10/1.20 are identical — PPC's tranche structure has a
-   clean gap between must-run and flexible).
-
-2. **It is PPC-specific, not a whole-market effect.** Re-run with the big-firm
-   set widened to **~80 % of capacity** (PPC + Mytilineos + Elpedison + Heron +
-   Korinthos Power), the *same* markup **overshoots**: residual flips negative
-   (−1.0), correlation *falls* (0.76 → 0.73). `withhold 8 %` lands resid at
-   ~0 there but with worse shape. So the above-competitive price localizes to
-   the **dominant incumbent's** flexible margin — the competitive fringe marking
-   up the same way over-explains it.
-
-3. **It is partial and bounded — this is not "the residual is all market
-   power".** The best strategy leaves ~+€5–6 residual, and *aggressive* levers
-   overshoot hard: uniform 35 %, pivotal ≥50 %, withhold ≥20 % all drive resid
-   negative and MAE up (withhold 35 % is catastrophic — pulling a third of PPC's
-   capacity manufactures scarcity spikes). The exercised markup the data
-   supports is a **~25–35 % adder on PPC's flexible tranches**, nothing larger.
-
-4. **Hour-targeting failed; tranche-targeting won.** The pivotal-hour and
-   peak-hour strategies did *not* help (ΔMAE −1.0…−1.8). The signal is not a
-   handful of pivotal spikes — it is a portfolio markup on the flexible tranches
-   spread across the tight hours. The RSI proxy rarely flags pivotal here
-   (fleet-completed supply + imports usually exceed load in the book), so that
-   lever mostly misfired.
-
-**Reading for the research programme.** On medium-correlation GR days the
-persistent above-counterfactual residual is *consistent with* a moderate,
-PPC-localized markup on flexible capacity — it improves both level and shape,
-exactly where market power would bite, and only for the dominant firm. It is a
-candidate market-power finding, not proof: a ~€5–6 residual remains, and the
-same improvement could in principle come from an unmodeled cost on those same
-peaking units. The natural next steps are unit-level (does the implied markup
-concentrate on specific PPC CCGT/OCGT units?) and a placebo (does the same
-top-slice markup on a *competitive* zone like DE_LU make things worse, as it
-should?).
-
-Numbers regenerate with `run_all.jl` (main matrix → `results.tsv`) and
-`run_focus.jl` (fine sweep; set `EUPHEMIA_BIG_FIRMS` for the ~80 % pass).
-
-### Robustness — does it survive import response? (coupled 39-zone)
-
-The main matrix clears GR **single-zone** (imports fixed at historical values),
-so a PPC markup raises the GR price with nothing pushing back — an **upper
-bound**. `run_coupled.jl` / `run_coupled_topslice_seq.jl` re-clear the winning
-`topslice 25%` on the **full 39-zone coupled footprint** (`enrich_network`,
-two-pass, ex-ante `:v2` flows), where neighbours import into GR against the
-markup. Evaluated on 24 of the 60 days (`eval_coupled.py`):
-
-| | corr | MAE | resid | ΔMAE | days↑ |
-|---|---:|---:|---:|---:|---:|
-| **single-zone** baseline | 0.72 | 31.96 | +13.21 | — | — |
-| **single-zone** topslice 25% | 0.76 | 28.81 | +6.36 | **+3.15** | 50/60 |
-| **coupled** baseline | 0.73 | 28.72 | +17.64 | — | — |
-| **coupled** topslice 25% | 0.75 | 26.87 | +14.73 | **+1.85** | **22/24** |
-
-**The finding holds under coupling, at reduced magnitude.** The top-slice markup
-still improves — MAE 28.72 → 26.87, corr 0.73 → 0.75, better on **22/24 days**.
-But the gain shrinks from **+3.15 to +1.85 €/MWh (~40 % smaller)**: endogenous
-imports absorb roughly 40 % of the markup's price impact, consistent with the
-~57 % import relief measured for demand shocks (a supply-side markup leaks a bit
-less). So single-zone was indeed an upper bound, and the honest coupled estimate
-of the exercisable markup is smaller — but the **direction and consistency
-survive**: on nearly every day, letting PPC mark up its flexible tranches moves
-the coupled price toward the settled price. The candidate market-power reading is
-robust to import response; its *size* is about a third smaller than the
-single-zone figure.
-
-(Operational note: the coupled runs use `run_multi_zone_market_clearing` in a
-sequential loop, which commits each day on its own — the pipelined backfill's
-end-of-run teardown proved unreliable on this small non-contiguous day set.)
-
-### Follow-ups — smaller players, closing the gap, and Europe
-
-`run_fringe_combined.jl` (single-zone, 60 days) + `strat_tiered_markup.jl`
-(per-firm markup) answer three questions. Full table in `results_fringe.tsv`.
-
-| strategy | corr | MAE | resid | ΔMAE | days↑ |
-|---|---:|---:|---:|---:|---:|
-| **ppc 35%** | 0.77 | 28.74 | +4.35 | **+3.22** | 46/60 |
-| ppc 25% (winner) | 0.76 | 28.81 | +6.36 | +3.15 | 50/60 |
-| fringe 50% | 0.77 | 29.18 | +4.07 | +2.78 | 47/60 |
-| **fringe 25%** | 0.76 | 29.21 | +7.60 | +2.75 | **52/60** |
-| ppc 50% | 0.77 | 29.29 | +1.59 | +2.67 | 42/60 |
-| combined 25% (PPC+fringe) | 0.73 | 29.52 | −1.04 | +2.44 | 37/60 |
-| ppc35 + fringe25 | 0.74 | 29.71 | −3.41 | +2.25 | 36/60 |
-| *baseline* | 0.72 | 31.96 | +13.21 | 0 | — |
-
-**Q2 — do the smaller players control the price? Partly, and less per unit.**
-A *fringe-only* markup (Mytilineos, Elpedison, Heron, Korinthos Power — PPC left
-at cost) genuinely improves the fit: `fringe 25%` helps on **52/60 days** (the
-single most *consistent* config), and `fringe 50%` matches PPC's MAE gain. But
-the fringe needs roughly **double the markup** (~50%) to move the price as much
-as PPC does at 25% — it is smaller and less often pivotal. So the small players
-do set the flexible margin on many days, but PPC is the stronger price-maker per
-unit of markup. (This also explains why the earlier ~80 % capacity set overshot:
-fringe + PPC at the same rate is too much.)
-
-**Q1 — how does the gap close further? It mostly doesn't, via bidding.** Pushing
-PPC deeper (25 → 35 → 50 %) drives the residual from +6.4 toward +1.6, but the
-**MAE gain saturates around +3.2** and starts *losing* day-consistency (50/60 →
-42/60), and every *combined* PPC+fringe config **overshoots** into a negative
-residual (the price passes settled). So a portfolio markup on flexible capacity
-explains **~half** the residual and then plateaus — the remaining ~€4–6 is *not*
-more market power. It points elsewhere: unmodelled peaker costs, the ex-ante
-flow/import treatment (the coupled baseline residual was actually *larger*), or
-scarcity pricing on the tightest hours. That is the honest ceiling of the
-bidding-strategy explanation.
-
-**Q3 — extend to Europe? Only where the residual has the right sign.** The
-markup story requires the model to *under*price (settled above competitive). On
-the medium-corr band, that holds for **GR (+10.6) and HU (+12.7)** — but the
-other SEE incumbents run the *opposite* way: **BG −8.3, RS −11.6, RO −26.1**
-(the model *over*prices them). There a markup is wrong-signed — it would make
-the fit worse — so the same strategy must not be applied blindly. Their gap is a
-different problem (import/cost modelling — these overlap the known weak zones),
-not exercised market power. And HU, the one other positive-residual zone, has an
-unusable firm map (88 % of capacity unmapped). **The clean, firm-attributable
-market-power signal in this footprint is GR/PPC**; RS is a 100 %-EPS monopoly
-that would be the ideal second test *if* its residual were positive, which it
-is not. Firm-map coverage (`simulations.unit_firms`) is limited to the five SEE
-zones, so a genuine pan-European sweep needs firm attribution for DE/FR/PL/… —
-the natural next data step.
+1. **"Top-slice" was mislabeled** (near-uniform on committed units: the deep
+   must-run block at 0.05×SRMC made the slice threshold vacuous). Fixed
+   `topslice_markup` to a quantity-weighted-median anchor; the original
+   behavior is preserved honestly as `nearuniform_markup`. Re-running showed
+   the true top slice does nothing and the near-uniform variant is the real
+   winner — the headline *mechanism* changed from "flexible upper tranches" to
+   "the running units' whole dispatchable range".
+2. **`counterfactual_bid` was a provable no-op at headroom ≥ 0.33** (band floor
+   anchored to target, not base) — `cf_bid_35% ≡ baseline` in the original
+   table was an artifact. Fixed; the strategy now centers the residual but
+   does not beat the null on MAE.
+3. **Selection bias / winner's curse / missing null** — addressed with the
+   94-day held-out set and the additive level-shift null; the winner survives
+   both.
+4. **15-minute days evaluated asymmetrically** — sim is now hour-averaged
+   before pairing (changes headline MAE ~0.2–0.3).
+5. **Coupled comparison was subset-mismatched** ("same 60 days" vs 24) — now
+   paired on `coupled_days.json`; import relief restated as ~46 %.
+6. **Europe argument used stale cv16 residuals** — recomputed on cv17
+   (`eu17_base`); conclusion reframed regime-level.
+7. **"PPC-specific" overclaim** — softened; fit cannot attribute between PPC
+   and fringe (finding 4 above).
+8. `eval_coupled.py` now filters `code_version` and aborts on duplicate
+   generations under a label.
+9. Known cosmetic debt: the coupled runners carry a hand-copy of the strategy
+   closure (worker-serialization constraint); pivotal-RSI rarely fires by
+   construction (fleet-completed supply + imports usually exceed load) — both
+   documented, not fixed.
