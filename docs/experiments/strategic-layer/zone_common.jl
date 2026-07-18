@@ -75,7 +75,7 @@ const ACTUALS = load_actuals()
 # borders have none, so DE_LU pairs with DK1 (NTC DC link), FR with ES.
 const PARTNER = Dict("DE_LU" => "DK1", "FR" => "ES", "ES" => "FR", "HU" => "RS",
                      "IT-CSOUTH" => "IT-SOUTH", "IT-NORTH" => "IT-CNORTH",
-                     "DK1" => "DE_LU", "SE3" => "SE4")
+                     "DK1" => "DE_LU", "SE3" => "FI")
 function clear_day(day::Date; strategist=nothing)
     scn = strategist === nothing ? nothing :
           Dict(ZONE => ZoneScenario(strategist=strategist))
