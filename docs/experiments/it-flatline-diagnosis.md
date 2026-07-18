@@ -88,3 +88,22 @@ inferred heat rates, else a deterministic draw) so unit tranches interleave
 into a dense ladder. Prototyped via the strategist hook (±8 % stable-hash
 repricing of every supply order) — results in
 `docs/experiments/strategic-layer/it_unitspread_proto.jl` / the loop log.
+
+## RESULT: per-unit efficiency spread WORKS (loop, 20-day A/B)
+
+Stable ±8 % per-unit repricing of every IT-CSOUTH supply order (strategist
+prototype, `it_unitspread_proto.jl`):
+
+| | corr | MAE | sim intraday std | better days |
+|---|---:|---:|---:|---:|
+| stock | 0.307 | 21.81 | 8.7 | — |
+| **±8 % unit spread** | **0.680** | **20.05** | 10.5 | **19/20** |
+
+Correlation more than doubles, MAE drops, and the fully-flat days come alive
+(final sample day: corr 0.0 → 0.75). This confirms the corrected mechanism and
+makes **per-unit SRMC decorrelation the headline cv18 candidate for the IT
+zones** — physically justified (real CCGT fleets span η ≈ 0.48–0.58; ideally
+sourced from inferred heat rates rather than a hash draw), cheap, and entirely
+inside the cost model. Adoption path: implement as a Generators-layer option
+(per-unit efficiency inference or deterministic spread), guard with SEE
+byte-identity + per-zone A/B on held-out days, bump cv18.
