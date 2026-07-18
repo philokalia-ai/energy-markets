@@ -73,7 +73,7 @@ const ACTUALS = load_actuals()
 # evaluated; the strategist applies only to the target zone.
 # Partners must share a border with offered (implicit) ATC — the Core-FBMC
 # borders have none, so DE_LU pairs with DK1 (NTC DC link), FR with ES.
-const PARTNER = Dict("DE_LU" => "DK1", "FR" => "ES", "ES" => "FR")
+const PARTNER = Dict("DE_LU" => "DK1", "FR" => "ES", "ES" => "FR", "HU" => "RS")
 function clear_day(day::Date; strategist=nothing)
     scn = strategist === nothing ? nothing :
           Dict(ZONE => ZoneScenario(strategist=strategist))

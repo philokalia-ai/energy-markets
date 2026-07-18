@@ -20,6 +20,13 @@ const BIG = Dict(
         ("EnBW",   Set(["EnBW"])),
         ("big4",   Set(["RWE", "LEAG", "Uniper", "EnBW"])),
     ],
+    "HU" => [
+        ("MVM",   Set(["MVM (Paks)", "MVM (reserve/peaker GT)"])),
+        ("MET",   Set(["MET (Dunamenti)", "MET (Tisza II)", "MET (Gonyu, ex-Uniper)", "Alpiq/MET (Csepel)"])),
+        ("Matra", Set(["Matra (Opus)"])),
+        ("big3",  Set(["MVM (Paks)", "MVM (reserve/peaker GT)", "MET (Dunamenti)",
+                       "MET (Tisza II)", "MET (Gonyu, ex-Uniper)", "Matra (Opus)"])),
+    ],
     "FR" => [
         ("EDF",    Set(["EDF", "EDF (CNR/SHEM excepted)"])),
         ("Engie",  Set(["Engie"])),
