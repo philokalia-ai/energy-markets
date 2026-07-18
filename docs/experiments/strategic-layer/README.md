@@ -68,7 +68,37 @@ cost in the day-ahead; no strategic layer for FR.** (FR's held-out residual is
 −19: the model *over*prices those days — a water-value/nuclear-anchor
 calibration question, explicitly not a bidding-strategy one.)
 
-## The triptych
+### HU — gate FAILED, but the closest call (wave-2 map: MVM/MET/Mátra, 76 %)
+
+HU is the only other GR-magnitude positive zone (calibration residual
+**+12.5**, median +10.2). Pilot via the HU–RS *explicit* ATC border (HU has
+zero implicit — Core FBMC). Calibration: `big3_25` (MVM+MET+Mátra at 25 %)
+ΔMAE +0.88 vs null +0.62, 62 % consistency. Held-out (155 days):
+
+| | corr | MAE | resid | ΔMAE | days↑ |
+|---|---:|---:|---:|---:|---:|
+| big3 25 % | 0.55 | **36.11** | +4.66 | +0.64 | **87/155 (56 %)** |
+| *additive null (+3.75)* | 0.54 | 36.60 | — | +0.16 | — |
+| *baseline* | 0.54 | 36.76 | +8.57 | 0.00 | — |
+
+It **beats the null out-of-sample** (−0.49 MAE vs the null) and nudges corr
++0.01 — but **56 % day-consistency fails the >60 % gate**, and the markup
+closes only ~a third of the residual (8.6 → 4.7). Verdict: **no strategic
+layer for HU under the pre-registered gates** — suggestive, not confirmed.
+The honest reading: HU's residual is at least half a *model* problem (it is
+the border-repair transit zone; its 2-zone pilot baseline corr 0.54 is far
+below its coupled 0.71) — re-test after the next import-model iteration.
+
+## The four-zone picture
+
+| zone | dominant | band resid | held-out vs null | consistency | verdict |
+|---|---|---:|---|---:|---|
+| **GR** | PPC ~69 % | **+13.2** | **+3.05 vs +2.00 ✓** | **80 %** | **markup ~25 % real** |
+| HU | MVM/MET/Mátra | +12.5 | +0.64 vs +0.16 ✓ | 56 % ✗ | suggestive, not confirmed |
+| DE_LU | big4 | +0.35 | +0.68 vs +0.01 | 52 % ✗ | none |
+| FR | EDF ~90 % | −1.46 | wrong-signed | — | none (competitive) |
+
+## The triptych (first three zones — see the four-zone table above)
 
 | zone | dominant firm | band resid | best markup vs null (held-out) | consistency | verdict |
 |---|---|---:|---|---:|---|
