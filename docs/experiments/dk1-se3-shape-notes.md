@@ -23,3 +23,22 @@ water-value open problem, now characterized precisely: it is not shape, not
 imports — it is the **night-time hydro offer floor**. A `water_value_base` /
 off-peak-discount recalibration for SE3 (reservoir-opportunity model) is the
 right cv18 lever; the strategic layer is explicitly NOT implicated.
+
+## SE3 water_value_base A/B (loop): NEGATIVE — wrong lever, wrong harness
+
+Tested via the SE3–DK1 endogenous border (SE3's other borders are all in the
+Nordic flow-based drop set — SE2–SE3, SE3–SE4, FI–SE3 — so the 2-zone harness
+only works through DK1). 15 days, `water_value_base` 0.85 → 0.65 / 0.50:
+
+| | corr | MAE | resid |
+|---|---:|---:|---:|
+| stock | 0.299 | 51.79 | −45.6 |
+| wv 0.65 | 0.296 | 51.94 | −45.9 |
+| wv 0.50 | 0.294 | 51.47 | −45.1 |
+
+Two honest conclusions: (1) `water_value_base` alone barely moves the SE3
+price — the night overpricing must live in the reservoir-opportunity model's
+other terms (span/dry boost) or the anchored-export pricing, not this scalar;
+(2) the 2-zone harness DISTORTS SE3 badly (baseline resid −45.6 vs −30 in the
+coupled footprint) — SE3 calibration must run on the coupled footprint, not in
+isolation. Filed for the cv18 coupled calibration pass, not solvable here.

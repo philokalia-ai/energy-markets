@@ -41,6 +41,9 @@ ES_RULES = [
     (r"BARRIOS", "EPH (ex-Viesgo)"),
     (r"S\.M\.GARO|GARO.A", "Nuclenor (closed)"),
     (r"PVENT|PdV", "Plana del Vent (verify owner)"),
+    (r"JM\.ORIOL|MUELA|ALDEA|VILLARINO|SAUCELLE|CORTES|CEDILLO|RICOBAYO|VALDECAnAS|AZUTAN|TORREJON|GABRIEL|GALISTEO", "Iberdrola (hydro)"),
+    (r"MEQUINENZA|RIBARROJA|MORALETS|SALLENTE|ESTANGENTO|TAVASCAN|MONTAMARA|TERRADETS|CAMARASA", "Endesa (hydro)"),
+    (r"AGUAYO|EBRO", "Repsol/Viesgo (hydro)"),
     (r"ESCATRON|EL POZO", "Enel Green/other"),
 ]
 HU_RULES = [
