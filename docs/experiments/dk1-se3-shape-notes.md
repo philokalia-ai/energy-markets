@@ -61,3 +61,7 @@ result (+0.026), the cv18 "DK1 package" = export-absorption pricing (primary)
 real bug: the strategist ctx does NOT carry `resolution_minutes` — a closure
 referencing it throws and the per-zone build silently drops the zone; take
 the resolution from an existing order.)
+
+**Combo (ladder + ±8 % spread, 20 days):** corr 0.553 / MAE 32.64 / **14/20**
+— slightly below ladder-alone on the aggregate, more consistent day-to-day.
+Verdict: ladder primary, spread optional for consistency.
