@@ -1,0 +1,6 @@
+zone,unit_code,unit_name,firm,source
+IT-CNORTH,26WUROSELECTRA1D,UP_ROSELECTRA_1,Rosen/Roselectra (verify),"name-rule wave2 (July 2026), verify before publication"
+IT-CNORTH,26WUUBARGI-CEN11,UP_BARGI_CEN_1,Enel,"name-rule wave2 (July 2026), verify before publication"
+IT-CNORTH,26WUUPIETRAFIT51,UP_PIETRAFIT_5,Enel,"name-rule wave2 (July 2026), verify before publication"
+IT-CNORTH,26WUUUSBARBARA3W,UP_SBARBARA_3,Enel,"name-rule wave2 (July 2026), verify before publication"
+IT-CNORTH,26WUUUUUUROSEN1B,UP_ROSEN_1,Rosen/Roselectra (verify),"name-rule wave2 (July 2026), verify before publication"

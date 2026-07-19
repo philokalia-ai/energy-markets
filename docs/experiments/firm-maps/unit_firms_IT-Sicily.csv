@@ -1,0 +1,12 @@
+zone,unit_code,unit_name,firm,source
+IT-Sicily,26WUTERMINI-I42G,UP_TERMINI_I_42,Enel,"name-rule wave2 (July 2026), verify before publication"
+IT-Sicily,26WUUANAPO-C-L1O,UP_ANAPO_C.L_1,Enel,"name-rule wave2 (July 2026), verify before publication"
+IT-Sicily,26WUUTERMINI-I4H,UP_TERMINI_I_4,Enel,"name-rule wave2 (July 2026), verify before publication"
+IT-Sicily,26WUUTERMINI-I5F,UP_TERMINI_I_5,Enel,"name-rule wave2 (July 2026), verify before publication"
+IT-Sicily,26WUUTERMINI-I6D,UP_TERMINI_I_6,Enel,"name-rule wave2 (July 2026), verify before publication"
+IT-Sicily,26WUUUPRIOLO-C13,UP_PRIOLO_C_1,"ERG/Enel (Priolo, verify)","name-rule wave2 (July 2026), verify before publication"
+IT-Sicily,26WUUUPRIOLO-C21,UP_PRIOLO_C_2,"ERG/Enel (Priolo, verify)","name-rule wave2 (July 2026), verify before publication"
+IT-Sicily,26WUUUS-F--DEL16,UP_S.F._DEL_1,A2A,"name-rule wave2 (July 2026), verify before publication"
+IT-Sicily,26WUUUS-F--DEL24,UP_S.F._DEL_2,A2A,"name-rule wave2 (July 2026), verify before publication"
+IT-Sicily,26WUUUS-F--DEL5Z,UP_S.F._DEL_5,A2A,"name-rule wave2 (July 2026), verify before publication"
+IT-Sicily,26WUUUS-F--DEL6X,UP_S.F._DEL_6,A2A,"name-rule wave2 (July 2026), verify before publication"

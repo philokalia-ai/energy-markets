@@ -1,0 +1,3 @@
+strategy	corr	mae	absresid	resid	mae_gain	days_better	n
+big3_25	0.5531	36.1131	27.1759	4.6621	0.6428	87	155
+baseline	0.5400	36.7559	27.9254	8.5733	0.0000	0	155
