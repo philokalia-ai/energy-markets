@@ -90,10 +90,28 @@ name-based fuel inference, and `include`s:
 | `duckdb_store.jl` | the offline DuckDB backend: dialect rewrite, prepared-statement cache, read-only guard, writable `results.duckdb` |
 | `results_store.jl` | `simulations.*` DDL, the `save_*` writers, `ensure_indexes` |
 
+### `src/MPCC.jl` + `src/mpcc/`
+
+`MPCC.jl` keeps the result/order-book structs and shared helpers, and `include`s:
+
+| File | Read this for |
+|---|---|
+| `solver.jl` | `solve_mpcc_market_clearing` — the complementarity clearing solve and its robustness retry ladder; `_solve_mpcc_by_period` (HiGHS period decomposition) |
+| `order_books.jl` | adapters from UC solutions / zone books to `MPCCOrderBook` (single- and multi-zone) |
+| `coupling_metrics.jl` | iterative-coupling helpers: flows→net imports, convergence metrics, damping |
+
+### `src/UnitCommitment.jl` + `src/uc/`
+
+`UnitCommitment.jl` keeps the cost-report helpers and `include`s:
+
+| File | Read this for |
+|---|---|
+| `model.jl` | `solve_unit_commitment` — the UC MILP build/solve, solver tuning, IIS diagnosis |
+| `cache.jl` | UC results caching against `simulations.uc_*` |
+
 ### Standalone files (unchanged)
 
-- `MPCC.jl` — the market-clearing solver (complementarity formulation, robustness retry ladder). One coherent module; read top-down.
-- `UnitCommitment.jl` — the UC MILP (JuMP/HiGHS/Gurobi).
+
 - `Network.jl` — topology, `TransferCapacity`, ATC queries.
 - `MarketOrders.jl` — `SimpleOrder` / `BlockOrder` types.
 - `AlternativeOrderBook.jl`, `BiddingStrategy.jl` — the `:alternative` and `:uc_based` book builders.

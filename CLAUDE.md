@@ -28,8 +28,8 @@ definition order:
 - `src/MeritOrderBook.jl` + `src/merit_order/` - The calibrated ex-ante book: `flows_imports.jl` (net imports, ex-ante flows, backstop), `zone_profiles.jl` (ZoneProfile + ZONE_PROFILES + ZoneScenario), `fleet_data.jl` (hydro/p95/reservoir queries), `book_build.jl` (create_merit_order_book)
 - `src/Generators.jl` + `src/generators/` - Generator struct + `registry.jl` (get_generators), `fuel_costs.jl` (TTF/EUA/SRMC), `parameter_inference.jl`, `inference_cache.jl`, `initial_conditions.jl`
 - `src/dbutils.jl` + `src/db/` - `postgres_core.jl` (code-version ledger, pool, sql2df), `duckdb_store.jl` (offline extract backend), `results_store.jl` (simulations.* DDL + writers)
-- `src/MPCC.jl` - MPCC (Mathematical Program with Complementarity Constraints) solver for market clearing
-- `src/UnitCommitment.jl` - Unit commitment optimization using JuMP/HiGHS
+- `src/MPCC.jl` + `src/mpcc/` - MPCC solver: `solver.jl` (clearing solve + robustness ladder), `order_books.jl` (UC->book adapters), `coupling_metrics.jl`
+- `src/UnitCommitment.jl` + `src/uc/` - Unit commitment: `model.jl` (the MILP), `cache.jl` (uc_results caching)
 - `src/BiddingStrategy.jl` - Converts UC solutions to market bids
 - `src/Network.jl` - Network topology, TransferCapacity, and ATC constraints
 - `src/MarketOrders.jl` - Order types (SimpleOrder, BlockOrder)
