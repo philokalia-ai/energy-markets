@@ -1,5 +1,399 @@
-# book_build.jl — create_merit_order_book — builds one zone-day merit-order book from generators, load, RES, flows and the zone profile.
-# Included by ../MeritOrderBook.jl inside `module MeritOrderBook` (definition order preserved).
+# book_build.jl — create_merit_order_book: builds one zone-day merit-order
+# book from generators, load, RES, flows and the zone profile.
+# Included by ../MeritOrderBook.jl inside `module MeritOrderBook`.
+#
+# The build runs in nine stages (banners mark each in the main function;
+# stages 1/2/4/5 are the named helpers defined below):
+#   1. _true_up_fleet     — fleet completion / truthing derate / SRMC pricing
+#   2. _demand_series     — load & RES series on the clearing grid
+#   3. inline             — net imports, demand state, gas anchor, backstop
+#   4. _hydro_state       — hydro offer scale, dryness, seasonal drawdown
+#   5. _committed_set     — UC-lite must-run selection
+#   6. inline             — the supply order loop (RES, imports, hydro, thermal)
+#   7. inline             — demand orders
+#   8. inline             — scenario hooks (extra_orders, strategist)
+#   9. inline             — merge identical blocks + assemble the MPCC book
+
+
+# =============================================================================
+# Stage helpers for create_merit_order_book
+# =============================================================================
+# Each helper is one stage of the book build, extracted verbatim from the
+# original single-function body (operation order unchanged — the book is
+# bit-identical). State flows explicitly: a helper takes what the stage read
+# and returns what later stages use.
+
+"""Hydro-family test shared by the offer-scale, capacity and water-value logic."""
+_is_hydro(g::Generator) = g.fuel_type in WATER_VALUE_FUEL_TYPES ||
+                          g.fuel_type == Symbol("Hydro Run-of-river and pondage")
+
+"""
+Stage 1 — true the offered fleet to the zone's demonstrated capability and
+price it: fleet completion (aggregate small units up to the p95/installed
+truth target), fleet-truthing derate of baseload types, the thermal SRMC
+premium / nuclear bid floor, and the cv18 per-unit spread factors.
+Returns `(generators, unit_spread_factor, apply_unit_spread)`.
+"""
+function _true_up_fleet(generators::Vector{Generator}, bidding_zone::String,
+    day::Date, profile::ZoneProfile;
+    fleet_completion::Bool, fleet_truthing::Bool, derate_headroom::Float64,
+    thermal_srmc_multiplier::Float64, nuclear_srmc_floor::Float64,
+    anchor_active::Bool, opportunity_anchor::Symbol)
+    # Fleet completion: ENTSO-E's unit-level table only lists larger
+    # units, so for some zones (RO, BG, RS) the fleet is structurally
+    # undersized and the book clears at spurious shortage-cap prices.
+    # When the zone's recent per-type actual output (p95, trailing 30
+    # days — strictly historical) exceeds the unit-level capacity of
+    # that type, the missing capacity demonstrably exists and produces:
+    # add it as one aggregate generator per fuel type. Wind/solar are
+    # excluded (netted via the RES forecast). Harmless for zones with
+    # good unit coverage — the gap is ~0 there (verified on GR).
+    # Shared by fleet completion (upward) and fleet-truthing derate
+    # (downward); keys normalized once to canonical fuel names
+    type_p95_raw = (fleet_completion || fleet_truthing) ?
+                   get_type_output_p95(bidding_zone, day) : Dict{String,Float64}()
+    type_p95 = Dict{String,Float64}(
+        normalize_fuel_type_name(k) => v for (k, v) in type_p95_raw)
+    # Fleet-truth mode (iter7, gated — see the ZoneProfile field docstring).
+    # `fleet_truth_target` holds the per-type truth target of MARKET-ACTIVE
+    # types only (trailing-30d p95 > 100 MW): those types complete UP to it
+    # and are never derated below it. Types with no recent output (phantom
+    # post-closure capacity with stale COMMISSIONED status) never enter —
+    # that is the activity gate that replaces get_generators' validity
+    # filter for this purpose. Empty for :p95 (the default) — byte-identical
+    # v10/iter6 behaviour.
+    fleet_truth_target = Dict{String,Float64}()
+    fleet_truth_mode = _effective_fleet_truth_mode(profile)
+    if fleet_completion && fleet_truth_mode != :p95
+        src = fleet_truth_mode == :installed ?
+              get_installed_capacity_by_type(bidding_zone) :
+              Dict{String,Float64}(normalize_fuel_type_name(k) => v
+                  for (k, v) in get_type_output_p95(bidding_zone, day;
+                                                    lookback_days=365))
+        for (t, cap) in src
+            get(type_p95, t, 0.0) > 100.0 && (fleet_truth_target[t] = cap)
+        end
+    end
+    if fleet_completion
+        for (ptype, p95) in type_p95
+            ptype in ("Wind Onshore", "Wind Offshore", "Solar") && continue
+            fleet = sum((g.p_max for g in generators
+                         if g.fuel_type == Symbol(ptype)); init=0.0)
+            target = max(p95, get(fleet_truth_target, ptype, 0.0))
+            gap = target - fleet
+            gap > 100.0 || continue
+            push!(generators, Generator(
+                "AGG-$(bidding_zone)-$(replace(ptype, " " => "_"))",
+                "Aggregate small units: $ptype",
+                Symbol(ptype),
+                bidding_zone,
+                gap,
+                0.0,
+                bidding_zone,
+                get_marginal_cost(day, ptype, bidding_zone)))
+            src = target > p95 ? "installed $(round(Int, target))" :
+                                 "recent p95 $(round(Int, p95))"
+            println("  ➕ Fleet completion: +$(round(Int, gap)) MW $ptype " *
+                    "($src MW vs $(round(Int, fleet)) MW unit-level)")
+        end
+    end
+
+    # Fleet-truthing derate — the symmetric case of fleet completion.
+    # When the unit-level fleet (after outage filtering) far exceeds
+    # what the type has recently delivered, the excess is phantom
+    # capacity: unfiled long-term derates, fuel-supply constraints, or
+    # stale unit records. 2022 GR lignite is the canonical case — the
+    # book offered ~2.2 GW at lignite SRMC while the real fleet's p95
+    # was ~1.2 GW, so cheap phantom lignite displaced gas from the
+    # margin and the whole crisis year cleared ~140 €/MWh low. Thermal
+    # types only: hydro availability is handled by the water-value
+    # offer scale, and RES never enters the thermal stack. The signal
+    # (trailing 30-day p95, strictly historical) is ex-ante; 15%
+    # headroom above p95 leaves room for genuinely tight days to call
+    # on more of the fleet than it recently ran.
+    #
+    # Baseload/fuel-constrained types ONLY. For a fuel whose SRMC sits
+    # below the market price, running under its capacity means it
+    # genuinely could not run (mining limits, fuel supply, unfiled
+    # derates) — it would have been dispatched otherwise. Mid-merit
+    # and peaking fuels (gas, oil) run below capacity simply because
+    # of their merit-order position; their capacity IS available at
+    # its SRMC, and derating them manufactures phantom scarcity.
+    derate_types = ("Fossil Brown coal/Lignite", "Fossil Hard coal",
+                    "Fossil Oil shale", "Fossil Coal-derived gas",
+                    "Fossil Peat", "Nuclear")
+    # One scale per fuel type, applied in a single pass. Iterates the
+    # FLEET's types (not type_p95's keys): a derate-listed type with a
+    # p95 of zero is a fully offline fleet and derates all the way
+    # down, while a type entirely absent from the aggregate table is
+    # ambiguous (never-reporting type vs ETL gap) and is skipped
+    # loudly rather than silently zeroed. Thermal orders offer raw
+    # p_max (availability_factor only shapes the scarcity margin), so
+    # the target compares against the raw fleet sum. p_min scales
+    # proportionally with p_max — clamping instead would balloon the
+    # must-run fraction of every derated unit.
+    derate_scale = Dict{Symbol,Float64}()
+    if fleet_truthing
+        for ptype in derate_types
+            fsym = Symbol(ptype)
+            fleet_raw = sum((g.p_max for g in generators if g.fuel_type == fsym); init=0.0)
+            fleet_raw > 0 || continue
+            if !haskey(type_p95, ptype)
+                println("  ⚠️  Fleet-truthing: no recent output data for $ptype " *
+                        "($(round(Int, fleet_raw)) MW fleet) — derate skipped")
+                continue
+            end
+            # Fleet-truth mode: a market-active type never derates below
+            # its truth target (the completion above just trued it to
+            # exactly that — derating it back to 1.15×30d-p95 would cancel
+            # the mechanism for precisely the baseload derate-types it
+            # targets). :p95 zones (GR/SEE) have fleet_truth_target empty —
+            # byte-identical v10 behaviour.
+            target = max(derate_headroom * type_p95[ptype],
+                         get(fleet_truth_target, ptype, 0.0))
+            fleet_raw > target + 100.0 || continue
+            derate_scale[fsym] = target / fleet_raw
+            println("  ➖ Fleet-truthing derate: $ptype ×$(round(target / fleet_raw, digits=2)) " *
+                    "(fleet $(round(Int, fleet_raw)) MW vs recent p95 $(round(Int, type_p95[ptype])) MW)")
+        end
+    end
+    # Thermal SRMC premium (ITALY_PROFILE): scale the marginal cost of
+    # thermal fuels only — hydro/storage price at water value, not fuel
+    # cost, and RES never enters the thermal stack. gas_srmc (the hydro
+    # anchor) is computed separately and is unaffected. Default multiplier
+    # 1.0 leaves every cost untouched (byte-identical for SEE).
+    srmc_exempt_fuels = Set{Symbol}(vcat(WATER_VALUE_FUEL_TYPES,
+        [Symbol("Hydro Run-of-river and pondage"), Symbol("Energy storage")]))
+    apply_srmc_premium = thermal_srmc_multiplier != 1.0
+    # Nuclear bid-position floor (FRANCE_PROFILE): raise the nuclear bid
+    # base to at least this level — nuclear-dominated exporters price their
+    # modulating fleet at opportunity cost, not fuel SRMC. Default 0.0 is a
+    # no-op (byte-identical for SEE).
+    # When the :nuclear anchor is ACTIVE the static floor is replaced by the
+    # per-slot anchor floor in the order loop (a static floor would hold the
+    # price up in exactly the RES-surplus hours where the coupled price —
+    # and EDF's opportunity cost — collapses: 2026-04 weekends, FR actual
+    # €9 vs the €55 floor).
+    apply_nuclear_floor = nuclear_srmc_floor > 0.0 &&
+                          !(anchor_active && opportunity_anchor == :nuclear)
+    # Per-unit SRMC spread (cv18) is applied at ORDER-PRICE time in the
+    # order loop below (to gmc), NOT here: applying it to marginal_cost
+    # would also perturb the UC-lite must-run SELECTION (SRMC <=
+    # 1.15 x gas gate) and the committed-set ordering, which the validated
+    # prototype left untouched — measured: spraying mc reproduced only
+    # half the CSOUTH gain and worsened MAE (+2.4) via a shifted
+    # commitment set.
+    apply_unit_spread = profile.unit_srmc_spread > 0.0
+    # Rank-based spread factors (cv18): thermal units ordered by p_max
+    # (desc, code tiebreak) get equally-spaced factors in 1 ∓ spread —
+    # the largest unit prices cheapest. Physically grounded (bigger CCGTs
+    # are newer/more efficient as a rule) and draw-free: a hash draw was
+    # measured at ±0.1 corr variance across seeds on IT-CSOUTH (0.51–0.71)
+    # — the mechanism helped under EVERY draw, but the per-zone outcome
+    # depended on luck; ranking removes the luck and is bit-reproducible.
+    unit_spread_factor = Dict{String,Float64}()
+    if apply_unit_spread
+        # Canonical fixed assignment: unsalted FNV-1a draw per unit code.
+        # Deterministic permutation schemes were measured and rejected —
+        # ANY fixed ordering has same-parity/adjacency clusters, and the
+        # units that pin a zone's price can land in one cluster (IT-CSOUTH
+        # collapsed to stock under both monotone and interleaved ranking,
+        # while every hash draw improved it, 0.51–0.71 across salts). The
+        # unsalted draw is arbitrary-but-fixed (bit-reproducible across
+        # runs and Julia versions); inferred heat rates replace it when
+        # unit history supports them.
+        for g in generators
+            g.fuel_type in srmc_exempt_fuels && continue
+            unit_spread_factor[g.code] =
+                1.0 + profile.unit_srmc_spread * (2.0 * _unit_hash01(g.code) - 1.0)
+        end
+    end
+    if !isempty(derate_scale) || apply_srmc_premium || apply_nuclear_floor
+        generators = [begin
+            s = get(derate_scale, g.fuel_type, 1.0)
+            m = (apply_srmc_premium && !(g.fuel_type in srmc_exempt_fuels)) ?
+                thermal_srmc_multiplier : 1.0
+            mc = g.marginal_cost * m
+            if apply_nuclear_floor && g.fuel_type == Symbol("Nuclear")
+                mc = max(mc, nuclear_srmc_floor)
+            end
+            (s < 1.0 || mc != g.marginal_cost) ?
+                Generator(g.code, g.name, g.fuel_type, g.location,
+                          g.p_max * s, g.p_min * s,
+                          g.bidding_zone, mc,
+                          g.ramp_up, g.ramp_down, g.min_uptime, g.min_downtime) :
+                g
+        end for g in generators]
+    end
+    return generators, unit_spread_factor, apply_unit_spread
+end
+
+"""
+Stage 2 — turn raw load/RES rows into per-timeslot MW dictionaries on the
+clearing grid: temporal disaggregation, down-aggregation to hourly or
+piecewise-constant upsampling to the shared finer grid, then the scenario
+load/renewable modifiers. Returns
+`(target_timeslots, load_by_time, renewable_by_time, resolution_minutes)`.
+"""
+function _demand_series(loads, renewables,
+    target_resolution_minutes::Union{Int,Nothing},
+    load_modifier::Union{Nothing,Function},
+    renewable_modifier::Union{Nothing,Function})
+    target_timeslots, load_by_time, renewable_by_time, resolution_minutes =
+        disaggregate_temporal_data(loads, renewables)
+
+    # Resolution harmonization for multi-zone books: zones publish at
+    # different resolutions (e.g. RO/HU 15-min, GR/BG hourly) and a
+    # combined book with mixed timeslots isolates the hourly zones in
+    # sub-hour slots. Aggregate MW values to the coarser target by
+    # averaging sub-slots (MW is power — averaging preserves energy).
+    if target_resolution_minutes !== nothing && resolution_minutes < target_resolution_minutes
+        target_resolution_minutes == 60 ||
+            error("Only hourly (60) target resolution is supported for down-aggregation, got $target_resolution_minutes")
+        hour_key(ts) = ts[1:11] * "00"
+        function aggregate_to_hours(d::Dict{String,Float64})
+            sums = Dict{String,Tuple{Float64,Int}}()
+            for (ts, v) in d
+                k = hour_key(ts)
+                s, n = get(sums, k, (0.0, 0))
+                sums[k] = (s + v, n + 1)
+            end
+            return Dict{String,Float64}(k => s / n for (k, (s, n)) in sums)
+        end
+        load_by_time = aggregate_to_hours(load_by_time)
+        renewable_by_time = aggregate_to_hours(renewable_by_time)
+        target_timeslots = sort(collect(keys(load_by_time)))
+        println("  🕐 Aggregated $(resolution_minutes)-min data to hourly ($(length(target_timeslots)) slots)")
+        resolution_minutes = target_resolution_minutes
+    elseif target_resolution_minutes !== nothing && resolution_minutes > target_resolution_minutes
+        # UPSAMPLE (piecewise-constant REPLICATION) to a finer target grid.
+        # A zone whose native data is coarser than the shared clearing grid
+        # (e.g. an hourly PT60M zone in a 15-min clear) has each native
+        # slot's MW LEVEL copied into every finer sub-slot it spans.
+        # Load and generation are power levels (MW), NOT energy (MWh): a
+        # plant offering 500 MW offers 500 MW in each quarter — the energy
+        # divides naturally because the period is shorter, but the level is
+        # unchanged. DIVIDING by the sub-slot count would quarter both
+        # demand and supply and misprice everything. Downstream per-slot
+        # computations (scarcity margin, water value, demand orders, net
+        # imports which are hour-keyed) then run on the shared finer grid
+        # exactly as they would for a natively-fine zone.
+        target_resolution_minutes in (15, 30) ||
+            error("Only 15 or 30-min target resolution is supported for up-replication, got $target_resolution_minutes")
+        load_by_time = replicate_to_finer_resolution(load_by_time, resolution_minutes, target_resolution_minutes)
+        renewable_by_time = replicate_to_finer_resolution(renewable_by_time, resolution_minutes, target_resolution_minutes)
+        target_timeslots = sort(collect(keys(load_by_time)))
+        println("  🕐 Upsampled $(resolution_minutes)-min data to $(target_resolution_minutes)-min " *
+                "($(length(target_timeslots)) slots) by piecewise-constant replication")
+        resolution_minutes = target_resolution_minutes
+    end
+
+    # Scenario demand/supply modifiers, applied at the SOURCE dictionaries
+    # (after disaggregation and any hourly aggregation) so the change
+    # propagates to net demand, scarcity margin, water value and demand
+    # orders. No-op when the hooks are nothing.
+    if load_modifier !== nothing
+        for ts in keys(load_by_time)
+            load_by_time[ts] = load_modifier(ts, load_by_time[ts])
+        end
+    end
+    if renewable_modifier !== nothing
+        for ts in keys(renewable_by_time)
+            renewable_by_time[ts] = renewable_modifier(ts, renewable_by_time[ts])
+        end
+    end
+    return target_timeslots, load_by_time, renewable_by_time, resolution_minutes
+end
+
+"""
+Stage 4 — hydro fleet state: offered-quantity scale (recent-output cap or,
+for `:reservoir_opportunity` zones, reservoir fullness), dryness (reservoir
+levels vs seasonal norm, output-based fallback) and the seasonal drawdown
+signal. Returns `(hydro_pmax, hydro_scale, hydro_dryness, reservoir_drawdown)`.
+"""
+function _hydro_state(generators::Vector{Generator}, bidding_zone::String,
+    day::Date, hydro_model::Symbol, seasonal_drawdown::Bool)
+    hydro_pmax = sum((g.p_max for g in generators if _is_hydro(g)); init=0.0)
+    hydro_scale = 1.0   # offered-quantity cap (fraction of nameplate)
+    hydro_dryness = 0.0 # 0 = normal water conditions, →1 = severe drought
+    reservoir_drawdown = 0.0 # 0 = reservoir at seasonal peak, →1 = drawn down
+    if hydro_pmax > 1.0
+        hydro_avail = get_hydro_availability(bidding_zone, day)
+        if hydro_avail !== nothing
+            hydro_scale = clamp(hydro_avail / hydro_pmax, 0.2, 1.0)
+        end
+        # Dryness: prefer reservoir filling levels vs seasonal norm
+        # (measures the water itself); fall back to recent-vs-1y output
+        # when filling data is unavailable for the zone. Output-based
+        # dryness is confounded by dispatch incentive: hydro running
+        # hard because prices are high looks "wet" while reservoirs
+        # are actually draining.
+        reservoir_dryness = get_reservoir_dryness(bidding_zone, day)
+        if reservoir_dryness !== nothing
+            hydro_dryness = reservoir_dryness
+        elseif hydro_avail !== nothing
+            # Fallback only when no reservoir filling data: the 365-day
+            # output norm is an expensive near-full scan of the per-type
+            # table, so compute it lazily here rather than unconditionally.
+            hydro_norm = get_hydro_availability(bidding_zone, day; lookback_days=365)
+            if hydro_norm !== nothing && hydro_norm > 1.0
+                hydro_dryness = clamp(1.0 - hydro_avail / hydro_norm, 0.0, 1.0)
+            end
+        end
+        # Reservoir-opportunity zones (Nordic) govern offered hydro QUANTITY
+        # by reservoir level, not by recent output. The p95-output cap above
+        # is a gas-world energy-limited heuristic; in a hydro-dominated,
+        # capacity-rich system it spuriously starves the book (e.g. NO1's
+        # standalone supply/demand ratio ≈ 0.95 → phantom shortage at the
+        # cap) even when reservoirs are full. Tie the offered fraction to
+        # reservoir fullness instead: full → near-nameplate, severe drought
+        # → half (inflow-only). Scarcity here is priced through the water
+        # value, not rationed through quantity.
+        if hydro_model == :reservoir_opportunity
+            hydro_scale = clamp(1.0 - hydro_dryness, 0.5, 1.0)
+            # Seasonal water-value signal: the absolute reservoir drawdown
+            # (vs the trailing-52-week peak) prices the water as scarcer
+            # through winter even when the prior-year-relative dryness reads
+            # ~0. Affects the PRICE (wv_frac below), never the offered
+            # quantity. Only the non-anchored reservoir zones
+            # (SE1/SE2/FI/DK1/DK2/NO4) reach the wv_frac branch — the
+            # Norway/alpine :hydro-anchored zones price off the anchor.
+            if seasonal_drawdown
+                dd = get_reservoir_drawdown(bidding_zone, day)
+                dd !== nothing && (reservoir_drawdown = dd)
+            end
+        end
+        println("  💧 Hydro: offer scale $(round(hydro_scale, digits=2)), " *
+                "dryness $(round(hydro_dryness, digits=2))" *
+                (reservoir_dryness !== nothing ? " (reservoir levels)" : " (output-based fallback)") *
+                (hydro_model == :reservoir_opportunity ? " [reservoir-opportunity]" : ""))
+    end
+    return hydro_pmax, hydro_scale, hydro_dryness, reservoir_drawdown
+end
+
+"""
+Stage 5 — UC-lite committed set: the cheapest eligible thermal units whose
+derated capacity covers the day's peak residual demand. Only these units
+self-schedule their minimum load in the order loop.
+"""
+function _committed_set(generators::Vector{Generator}, peak_residual::Float64,
+    gas_srmc::Float64, must_run_srmc_threshold::Float64,
+    availability_factor::Float64)
+    committed = Set{String}()
+    eligible = sort(
+        [g for g in generators
+         if !(g.fuel_type in WATER_VALUE_FUEL_TYPES) &&
+            g.marginal_cost <= must_run_srmc_threshold * gas_srmc &&
+            g.p_min > 0.1],
+        by=g -> g.marginal_cost)
+    cum_capacity = 0.0
+    for g in eligible
+        cum_capacity >= 1.05 * peak_residual && break
+        push!(committed, g.code)
+        cum_capacity += availability_factor * g.p_max
+    end
+    return committed
+end
 
 """
     create_merit_order_book(bidding_zone::String, day::Date; kwargs...)
@@ -139,192 +533,12 @@ function create_merit_order_book(
 
         generators = get_generators(bidding_zone, day)
 
-        # Fleet completion: ENTSO-E's unit-level table only lists larger
-        # units, so for some zones (RO, BG, RS) the fleet is structurally
-        # undersized and the book clears at spurious shortage-cap prices.
-        # When the zone's recent per-type actual output (p95, trailing 30
-        # days — strictly historical) exceeds the unit-level capacity of
-        # that type, the missing capacity demonstrably exists and produces:
-        # add it as one aggregate generator per fuel type. Wind/solar are
-        # excluded (netted via the RES forecast). Harmless for zones with
-        # good unit coverage — the gap is ~0 there (verified on GR).
-        # Shared by fleet completion (upward) and fleet-truthing derate
-        # (downward); keys normalized once to canonical fuel names
-        type_p95_raw = (fleet_completion || fleet_truthing) ?
-                       get_type_output_p95(bidding_zone, day) : Dict{String,Float64}()
-        type_p95 = Dict{String,Float64}(
-            normalize_fuel_type_name(k) => v for (k, v) in type_p95_raw)
-        # Fleet-truth mode (iter7, gated — see the ZoneProfile field docstring).
-        # `fleet_truth_target` holds the per-type truth target of MARKET-ACTIVE
-        # types only (trailing-30d p95 > 100 MW): those types complete UP to it
-        # and are never derated below it. Types with no recent output (phantom
-        # post-closure capacity with stale COMMISSIONED status) never enter —
-        # that is the activity gate that replaces get_generators' validity
-        # filter for this purpose. Empty for :p95 (the default) — byte-identical
-        # v10/iter6 behaviour.
-        fleet_truth_target = Dict{String,Float64}()
-        fleet_truth_mode = _effective_fleet_truth_mode(profile)
-        if fleet_completion && fleet_truth_mode != :p95
-            src = fleet_truth_mode == :installed ?
-                  get_installed_capacity_by_type(bidding_zone) :
-                  Dict{String,Float64}(normalize_fuel_type_name(k) => v
-                      for (k, v) in get_type_output_p95(bidding_zone, day;
-                                                        lookback_days=365))
-            for (t, cap) in src
-                get(type_p95, t, 0.0) > 100.0 && (fleet_truth_target[t] = cap)
-            end
-        end
-        if fleet_completion
-            for (ptype, p95) in type_p95
-                ptype in ("Wind Onshore", "Wind Offshore", "Solar") && continue
-                fleet = sum((g.p_max for g in generators
-                             if g.fuel_type == Symbol(ptype)); init=0.0)
-                target = max(p95, get(fleet_truth_target, ptype, 0.0))
-                gap = target - fleet
-                gap > 100.0 || continue
-                push!(generators, Generator(
-                    "AGG-$(bidding_zone)-$(replace(ptype, " " => "_"))",
-                    "Aggregate small units: $ptype",
-                    Symbol(ptype),
-                    bidding_zone,
-                    gap,
-                    0.0,
-                    bidding_zone,
-                    get_marginal_cost(day, ptype, bidding_zone)))
-                src = target > p95 ? "installed $(round(Int, target))" :
-                                     "recent p95 $(round(Int, p95))"
-                println("  ➕ Fleet completion: +$(round(Int, gap)) MW $ptype " *
-                        "($src MW vs $(round(Int, fleet)) MW unit-level)")
-            end
-        end
-
-        # Fleet-truthing derate — the symmetric case of fleet completion.
-        # When the unit-level fleet (after outage filtering) far exceeds
-        # what the type has recently delivered, the excess is phantom
-        # capacity: unfiled long-term derates, fuel-supply constraints, or
-        # stale unit records. 2022 GR lignite is the canonical case — the
-        # book offered ~2.2 GW at lignite SRMC while the real fleet's p95
-        # was ~1.2 GW, so cheap phantom lignite displaced gas from the
-        # margin and the whole crisis year cleared ~140 €/MWh low. Thermal
-        # types only: hydro availability is handled by the water-value
-        # offer scale, and RES never enters the thermal stack. The signal
-        # (trailing 30-day p95, strictly historical) is ex-ante; 15%
-        # headroom above p95 leaves room for genuinely tight days to call
-        # on more of the fleet than it recently ran.
-        #
-        # Baseload/fuel-constrained types ONLY. For a fuel whose SRMC sits
-        # below the market price, running under its capacity means it
-        # genuinely could not run (mining limits, fuel supply, unfiled
-        # derates) — it would have been dispatched otherwise. Mid-merit
-        # and peaking fuels (gas, oil) run below capacity simply because
-        # of their merit-order position; their capacity IS available at
-        # its SRMC, and derating them manufactures phantom scarcity.
-        derate_types = ("Fossil Brown coal/Lignite", "Fossil Hard coal",
-                        "Fossil Oil shale", "Fossil Coal-derived gas",
-                        "Fossil Peat", "Nuclear")
-        # One scale per fuel type, applied in a single pass. Iterates the
-        # FLEET's types (not type_p95's keys): a derate-listed type with a
-        # p95 of zero is a fully offline fleet and derates all the way
-        # down, while a type entirely absent from the aggregate table is
-        # ambiguous (never-reporting type vs ETL gap) and is skipped
-        # loudly rather than silently zeroed. Thermal orders offer raw
-        # p_max (availability_factor only shapes the scarcity margin), so
-        # the target compares against the raw fleet sum. p_min scales
-        # proportionally with p_max — clamping instead would balloon the
-        # must-run fraction of every derated unit.
-        derate_scale = Dict{Symbol,Float64}()
-        if fleet_truthing
-            for ptype in derate_types
-                fsym = Symbol(ptype)
-                fleet_raw = sum((g.p_max for g in generators if g.fuel_type == fsym); init=0.0)
-                fleet_raw > 0 || continue
-                if !haskey(type_p95, ptype)
-                    println("  ⚠️  Fleet-truthing: no recent output data for $ptype " *
-                            "($(round(Int, fleet_raw)) MW fleet) — derate skipped")
-                    continue
-                end
-                # Fleet-truth mode: a market-active type never derates below
-                # its truth target (the completion above just trued it to
-                # exactly that — derating it back to 1.15×30d-p95 would cancel
-                # the mechanism for precisely the baseload derate-types it
-                # targets). :p95 zones (GR/SEE) have fleet_truth_target empty —
-                # byte-identical v10 behaviour.
-                target = max(derate_headroom * type_p95[ptype],
-                             get(fleet_truth_target, ptype, 0.0))
-                fleet_raw > target + 100.0 || continue
-                derate_scale[fsym] = target / fleet_raw
-                println("  ➖ Fleet-truthing derate: $ptype ×$(round(target / fleet_raw, digits=2)) " *
-                        "(fleet $(round(Int, fleet_raw)) MW vs recent p95 $(round(Int, type_p95[ptype])) MW)")
-            end
-        end
-        # Thermal SRMC premium (ITALY_PROFILE): scale the marginal cost of
-        # thermal fuels only — hydro/storage price at water value, not fuel
-        # cost, and RES never enters the thermal stack. gas_srmc (the hydro
-        # anchor) is computed separately and is unaffected. Default multiplier
-        # 1.0 leaves every cost untouched (byte-identical for SEE).
-        srmc_exempt_fuels = Set{Symbol}(vcat(WATER_VALUE_FUEL_TYPES,
-            [Symbol("Hydro Run-of-river and pondage"), Symbol("Energy storage")]))
-        apply_srmc_premium = thermal_srmc_multiplier != 1.0
-        # Nuclear bid-position floor (FRANCE_PROFILE): raise the nuclear bid
-        # base to at least this level — nuclear-dominated exporters price their
-        # modulating fleet at opportunity cost, not fuel SRMC. Default 0.0 is a
-        # no-op (byte-identical for SEE).
-        # When the :nuclear anchor is ACTIVE the static floor is replaced by the
-        # per-slot anchor floor in the order loop (a static floor would hold the
-        # price up in exactly the RES-surplus hours where the coupled price —
-        # and EDF's opportunity cost — collapses: 2026-04 weekends, FR actual
-        # €9 vs the €55 floor).
-        apply_nuclear_floor = nuclear_srmc_floor > 0.0 &&
-                              !(anchor_active && opportunity_anchor == :nuclear)
-        # Per-unit SRMC spread (cv18) is applied at ORDER-PRICE time in the
-        # order loop below (to gmc), NOT here: applying it to marginal_cost
-        # would also perturb the UC-lite must-run SELECTION (SRMC <=
-        # 1.15 x gas gate) and the committed-set ordering, which the validated
-        # prototype left untouched — measured: spraying mc reproduced only
-        # half the CSOUTH gain and worsened MAE (+2.4) via a shifted
-        # commitment set.
-        apply_unit_spread = profile.unit_srmc_spread > 0.0
-        # Rank-based spread factors (cv18): thermal units ordered by p_max
-        # (desc, code tiebreak) get equally-spaced factors in 1 ∓ spread —
-        # the largest unit prices cheapest. Physically grounded (bigger CCGTs
-        # are newer/more efficient as a rule) and draw-free: a hash draw was
-        # measured at ±0.1 corr variance across seeds on IT-CSOUTH (0.51–0.71)
-        # — the mechanism helped under EVERY draw, but the per-zone outcome
-        # depended on luck; ranking removes the luck and is bit-reproducible.
-        unit_spread_factor = Dict{String,Float64}()
-        if apply_unit_spread
-            # Canonical fixed assignment: unsalted FNV-1a draw per unit code.
-            # Deterministic permutation schemes were measured and rejected —
-            # ANY fixed ordering has same-parity/adjacency clusters, and the
-            # units that pin a zone's price can land in one cluster (IT-CSOUTH
-            # collapsed to stock under both monotone and interleaved ranking,
-            # while every hash draw improved it, 0.51–0.71 across salts). The
-            # unsalted draw is arbitrary-but-fixed (bit-reproducible across
-            # runs and Julia versions); inferred heat rates replace it when
-            # unit history supports them.
-            for g in generators
-                g.fuel_type in srmc_exempt_fuels && continue
-                unit_spread_factor[g.code] =
-                    1.0 + profile.unit_srmc_spread * (2.0 * _unit_hash01(g.code) - 1.0)
-            end
-        end
-        if !isempty(derate_scale) || apply_srmc_premium || apply_nuclear_floor
-            generators = [begin
-                s = get(derate_scale, g.fuel_type, 1.0)
-                m = (apply_srmc_premium && !(g.fuel_type in srmc_exempt_fuels)) ?
-                    thermal_srmc_multiplier : 1.0
-                mc = g.marginal_cost * m
-                if apply_nuclear_floor && g.fuel_type == Symbol("Nuclear")
-                    mc = max(mc, nuclear_srmc_floor)
-                end
-                (s < 1.0 || mc != g.marginal_cost) ?
-                    Generator(g.code, g.name, g.fuel_type, g.location,
-                              g.p_max * s, g.p_min * s,
-                              g.bidding_zone, mc,
-                              g.ramp_up, g.ramp_down, g.min_uptime, g.min_downtime) :
-                    g
-            end for g in generators]
-        end
+        # ── Stage 1: true up + price the offered fleet ──────────────────
+        generators, unit_spread_factor, apply_unit_spread =
+            _true_up_fleet(generators, bidding_zone, day, profile;
+                fleet_completion, fleet_truthing, derate_headroom,
+                thermal_srmc_multiplier, nuclear_srmc_floor,
+                anchor_active, opportunity_anchor)
 
         # Scenario fleet_modifier — add / remove / derate physical units as
         # DATA. Applied AFTER fleet completion and fleet-truthing (above) on
@@ -355,70 +569,12 @@ function create_merit_order_book(
             return AdjustedOrderBookResult(false, "No load data found", nothing, 0, 0, 0, 0.0, 0.0, 0.0)
         end
 
+        # ── Stage 2: load/RES series on the clearing grid ───────────────
         target_timeslots, load_by_time, renewable_by_time, resolution_minutes =
-            disaggregate_temporal_data(loads, renewables)
+            _demand_series(loads, renewables, target_resolution_minutes,
+                load_modifier, renewable_modifier)
 
-        # Resolution harmonization for multi-zone books: zones publish at
-        # different resolutions (e.g. RO/HU 15-min, GR/BG hourly) and a
-        # combined book with mixed timeslots isolates the hourly zones in
-        # sub-hour slots. Aggregate MW values to the coarser target by
-        # averaging sub-slots (MW is power — averaging preserves energy).
-        if target_resolution_minutes !== nothing && resolution_minutes < target_resolution_minutes
-            target_resolution_minutes == 60 ||
-                error("Only hourly (60) target resolution is supported for down-aggregation, got $target_resolution_minutes")
-            hour_key(ts) = ts[1:11] * "00"
-            function aggregate_to_hours(d::Dict{String,Float64})
-                sums = Dict{String,Tuple{Float64,Int}}()
-                for (ts, v) in d
-                    k = hour_key(ts)
-                    s, n = get(sums, k, (0.0, 0))
-                    sums[k] = (s + v, n + 1)
-                end
-                return Dict{String,Float64}(k => s / n for (k, (s, n)) in sums)
-            end
-            load_by_time = aggregate_to_hours(load_by_time)
-            renewable_by_time = aggregate_to_hours(renewable_by_time)
-            target_timeslots = sort(collect(keys(load_by_time)))
-            println("  🕐 Aggregated $(resolution_minutes)-min data to hourly ($(length(target_timeslots)) slots)")
-            resolution_minutes = target_resolution_minutes
-        elseif target_resolution_minutes !== nothing && resolution_minutes > target_resolution_minutes
-            # UPSAMPLE (piecewise-constant REPLICATION) to a finer target grid.
-            # A zone whose native data is coarser than the shared clearing grid
-            # (e.g. an hourly PT60M zone in a 15-min clear) has each native
-            # slot's MW LEVEL copied into every finer sub-slot it spans.
-            # Load and generation are power levels (MW), NOT energy (MWh): a
-            # plant offering 500 MW offers 500 MW in each quarter — the energy
-            # divides naturally because the period is shorter, but the level is
-            # unchanged. DIVIDING by the sub-slot count would quarter both
-            # demand and supply and misprice everything. Downstream per-slot
-            # computations (scarcity margin, water value, demand orders, net
-            # imports which are hour-keyed) then run on the shared finer grid
-            # exactly as they would for a natively-fine zone.
-            target_resolution_minutes in (15, 30) ||
-                error("Only 15 or 30-min target resolution is supported for up-replication, got $target_resolution_minutes")
-            load_by_time = replicate_to_finer_resolution(load_by_time, resolution_minutes, target_resolution_minutes)
-            renewable_by_time = replicate_to_finer_resolution(renewable_by_time, resolution_minutes, target_resolution_minutes)
-            target_timeslots = sort(collect(keys(load_by_time)))
-            println("  🕐 Upsampled $(resolution_minutes)-min data to $(target_resolution_minutes)-min " *
-                    "($(length(target_timeslots)) slots) by piecewise-constant replication")
-            resolution_minutes = target_resolution_minutes
-        end
-
-        # Scenario demand/supply modifiers, applied at the SOURCE dictionaries
-        # (after disaggregation and any hourly aggregation) so the change
-        # propagates to net demand, scarcity margin, water value and demand
-        # orders. No-op when the hooks are nothing.
-        if load_modifier !== nothing
-            for ts in keys(load_by_time)
-                load_by_time[ts] = load_modifier(ts, load_by_time[ts])
-            end
-        end
-        if renewable_modifier !== nothing
-            for ts in keys(renewable_by_time)
-                renewable_by_time[ts] = renewable_modifier(ts, renewable_by_time[ts])
-            end
-        end
-
+        # ── Stage 3: net imports, demand state, gas anchor, backstop ────
         # Residual demand per slot (load minus renewables) drives water value
         # and scarcity. Renewables themselves are offered as near-zero-price
         # supply below, NOT netted from demand — this lets prices collapse
@@ -471,74 +627,17 @@ function create_merit_order_book(
                     "@ €$(round(backstop_price, digits=1))/MWh " *
                     "($(length(backstop_by_hour)) hours, $(profile.backstop_weeks)-week window)")
 
-        # Hydro energy limitation: recent actual peak output caps what the
-        # hydro fleet can offer (dry periods → less water → tighter margin).
-        # Thermal keeps the flat availability derate; hydro gets a
-        # data-driven one.
-        is_hydro(g) = g.fuel_type in WATER_VALUE_FUEL_TYPES ||
-                      g.fuel_type == Symbol("Hydro Run-of-river and pondage")
-        hydro_pmax = sum((g.p_max for g in generators if is_hydro(g)); init=0.0)
-        hydro_scale = 1.0   # offered-quantity cap (fraction of nameplate)
-        hydro_dryness = 0.0 # 0 = normal water conditions, →1 = severe drought
-        reservoir_drawdown = 0.0 # 0 = reservoir at seasonal peak, →1 = drawn down
-        if hydro_pmax > 1.0
-            hydro_avail = get_hydro_availability(bidding_zone, day)
-            if hydro_avail !== nothing
-                hydro_scale = clamp(hydro_avail / hydro_pmax, 0.2, 1.0)
-            end
-            # Dryness: prefer reservoir filling levels vs seasonal norm
-            # (measures the water itself); fall back to recent-vs-1y output
-            # when filling data is unavailable for the zone. Output-based
-            # dryness is confounded by dispatch incentive: hydro running
-            # hard because prices are high looks "wet" while reservoirs
-            # are actually draining.
-            reservoir_dryness = get_reservoir_dryness(bidding_zone, day)
-            if reservoir_dryness !== nothing
-                hydro_dryness = reservoir_dryness
-            elseif hydro_avail !== nothing
-                # Fallback only when no reservoir filling data: the 365-day
-                # output norm is an expensive near-full scan of the per-type
-                # table, so compute it lazily here rather than unconditionally.
-                hydro_norm = get_hydro_availability(bidding_zone, day; lookback_days=365)
-                if hydro_norm !== nothing && hydro_norm > 1.0
-                    hydro_dryness = clamp(1.0 - hydro_avail / hydro_norm, 0.0, 1.0)
-                end
-            end
-            # Reservoir-opportunity zones (Nordic) govern offered hydro QUANTITY
-            # by reservoir level, not by recent output. The p95-output cap above
-            # is a gas-world energy-limited heuristic; in a hydro-dominated,
-            # capacity-rich system it spuriously starves the book (e.g. NO1's
-            # standalone supply/demand ratio ≈ 0.95 → phantom shortage at the
-            # cap) even when reservoirs are full. Tie the offered fraction to
-            # reservoir fullness instead: full → near-nameplate, severe drought
-            # → half (inflow-only). Scarcity here is priced through the water
-            # value, not rationed through quantity.
-            if hydro_model == :reservoir_opportunity
-                hydro_scale = clamp(1.0 - hydro_dryness, 0.5, 1.0)
-                # Seasonal water-value signal: the absolute reservoir drawdown
-                # (vs the trailing-52-week peak) prices the water as scarcer
-                # through winter even when the prior-year-relative dryness reads
-                # ~0. Affects the PRICE (wv_frac below), never the offered
-                # quantity. Only the non-anchored reservoir zones
-                # (SE1/SE2/FI/DK1/DK2/NO4) reach the wv_frac branch — the
-                # Norway/alpine :hydro-anchored zones price off the anchor.
-                if profile.seasonal_drawdown
-                    dd = get_reservoir_drawdown(bidding_zone, day)
-                    dd !== nothing && (reservoir_drawdown = dd)
-                end
-            end
-            println("  💧 Hydro: offer scale $(round(hydro_scale, digits=2)), " *
-                    "dryness $(round(hydro_dryness, digits=2))" *
-                    (reservoir_dryness !== nothing ? " (reservoir levels)" : " (output-based fallback)") *
-                    (hydro_model == :reservoir_opportunity ? " [reservoir-opportunity]" : ""))
-        end
-        offered_pmax(g) = is_hydro(g) ? g.p_max * hydro_scale : g.p_max
+        # ── Stage 4: hydro fleet state (offer scale, dryness, drawdown) ──
+        hydro_pmax, hydro_scale, hydro_dryness, reservoir_drawdown =
+            _hydro_state(generators, bidding_zone, day, hydro_model,
+                profile.seasonal_drawdown)
+        offered_pmax(g) = _is_hydro(g) ? g.p_max * hydro_scale : g.p_max
 
         # Dispatchable capacity for the scarcity margin, derated for the
         # realistic availability of the fleet (unreported outages) and for
         # the hydro energy limit — nameplate capacity never looks scarce.
         dispatchable_capacity =
-            availability_factor * sum((g.p_max for g in generators if !is_hydro(g)); init=0.0) +
+            availability_factor * sum((g.p_max for g in generators if !_is_hydro(g)); init=0.0) +
             hydro_scale * hydro_pmax
 
         # Available import capacity per UTC hour, credited into the scarcity
@@ -546,26 +645,11 @@ function create_merit_order_book(
         import_atc_by_hour = profile.scarcity_import_credit > 0.0 ?
             get_import_atc_capacity(bidding_zone, day) : Dict{Int,Float64}()
 
-        # UC-lite commitment: only units that are actually running
-        # self-schedule their minimum load. Approximate the committed set as
-        # the cheapest eligible thermal units whose derated capacity covers
-        # the day's peak residual demand (commitment follows the peak; the
-        # p_min of that set is then must-run through the trough).
-        committed = Set{String}()
-        peak_residual = nd_max
-        eligible = sort(
-            [g for g in generators
-             if !(g.fuel_type in WATER_VALUE_FUEL_TYPES) &&
-                g.marginal_cost <= must_run_srmc_threshold * gas_srmc &&
-                g.p_min > 0.1],
-            by=g -> g.marginal_cost)
-        cum_capacity = 0.0
-        for g in eligible
-            cum_capacity >= 1.05 * peak_residual && break
-            push!(committed, g.code)
-            cum_capacity += availability_factor * g.p_max
-        end
+        # ── Stage 5: UC-lite committed set (peak-covering cheap thermal) ─
+        committed = _committed_set(generators, nd_max, gas_srmc,
+            must_run_srmc_threshold, availability_factor)
 
+        # ── Stage 6: the supply order loop (RES, imports, hydro, thermal) ─
         # Every order is tagged with an owner (Feature 5, strategist hook):
         # the generator code for unit orders, "RES" for the renewable
         # forecast, "IMPORT" for net-import injections, "DEMAND" for demand
@@ -580,6 +664,7 @@ function create_merit_order_book(
 
         for ts in target_timeslots
             date_time = parse_timeslot_to_datetime(ts, day)
+            hr = Dates.hour(date_time)   # UTC hour key for all hour-keyed lookups
 
             # Renewable forecast offered at near-zero price (RES bids as
             # price-taker; support schemes make it insensitive to price)
@@ -593,7 +678,7 @@ function create_merit_order_book(
 
             # Net imports as price-taking supply (imports) or firm extra
             # demand (exports) — scheduled flows are committed either way
-            ni = slot_import(ts)
+            ni = get(net_imports, hr, 0.0)
             if ni > 0.1
                 # :hydro-anchored zones (pass 2): observed imports arrive at
                 # the BORDER price, not free — pricing them near zero lets the
@@ -630,7 +715,7 @@ function create_merit_order_book(
             # cv17 import-backstop supply block (profile-gated; empty Dict
             # otherwise). Priced above every domestic tranche multiplier, so
             # it binds only when the book would otherwise jump to the cap.
-            backstop_qty = get(backstop_by_hour, Dates.hour(date_time), 0.0)
+            backstop_qty = get(backstop_by_hour, hr, 0.0)
             if backstop_qty > 1.0
                 push!(tagged, (SimpleOrder(:supply, backstop_price, backstop_qty,
                     Symbol(bidding_zone), date_time, resolution_minutes), "BACKSTOP"))
@@ -650,7 +735,7 @@ function create_merit_order_book(
             # (measured failure mode of netting: NO1 −23 → +134).
             if anchor_active && opportunity_anchor == :hydro &&
                haskey(anchor_prices, ts) && !isempty(anchor_export_mw)
-                ex_mw = get(anchor_export_mw, Dates.hour(date_time), 0.0)
+                ex_mw = get(anchor_export_mw, hr, 0.0)
                 if ex_mw > 0.1
                     push!(tagged, (SimpleOrder(:demand, max(anchor_prices[ts], 1.0),
                         ex_mw, Symbol(bidding_zone), date_time, resolution_minutes), "IMPORT"))
@@ -674,14 +759,14 @@ function create_merit_order_book(
             # the peak strategic-bidding term is left intact.
             import_credit = profile.scarcity_import_credit > 0.0 ?
                 profile.scarcity_import_credit *
-                get(import_atc_by_hour, Dates.hour(parse_timeslot_to_datetime(ts, day)), 0.0) : 0.0
+                get(import_atc_by_hour, hr, 0.0) : 0.0
             # cv17: gated scarcity credit for the backstop quantity (the
             # scarcity MARKUP cannot otherwise see the backstop supply, so
             # restored-import days can keep a residual markup overshoot).
             # 0 (default) = off everywhere.
             backstop_credit = profile.backstop_scarcity_credit > 0.0 ?
                 profile.backstop_scarcity_credit *
-                get(backstop_by_hour, Dates.hour(parse_timeslot_to_datetime(ts, day)), 0.0) : 0.0
+                get(backstop_by_hour, hr, 0.0) : 0.0
             margin = (dispatchable_capacity + import_credit + backstop_credit) / net_demand[ts]
             scarcity = 1.0 +
                        scarcity_kappa * max(0.0, scarcity_threshold - margin)^2 +
@@ -802,6 +887,7 @@ function create_merit_order_book(
             end
         end
 
+        # ── Stage 7: demand orders ──────────────────────────────────────
         # Demand: inelastic tranche at the cap + small price-sensitive tail
         for ts in target_timeslots
             date_time = parse_timeslot_to_datetime(ts, day)
@@ -829,6 +915,7 @@ function create_merit_order_book(
             total_demand_quantity += gd
         end
 
+        # ── Stage 8: scenario hooks (extra_orders, strategist) ──────────
         # Feature 3/4: extra scenario orders appended after all standard
         # orders and BEFORE merging. Both :supply and :demand are allowed.
         if extra_orders !== nothing
@@ -869,6 +956,7 @@ function create_merit_order_book(
 
         orders = SimpleOrder[t[1] for t in tagged]
 
+        # ── Stage 9: merge identical blocks + assemble the MPCC book ────
         # Merge orders with identical (type, price, timeslot): all units of a
         # fuel type bid the same SRMC-derived tranche prices, so a zone-day
         # book collapses ~6x with market-equivalent clearing (partial
