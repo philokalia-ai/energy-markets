@@ -1721,13 +1721,39 @@ function create_merit_order_book(
         # €9 vs the €55 floor).
         apply_nuclear_floor = nuclear_srmc_floor > 0.0 &&
                               !(anchor_active && opportunity_anchor == :nuclear)
-        # Per-unit SRMC spread (cv18): thermal fuels only — hydro/storage price
-        # at water value, and RES never enters the thermal stack. The factor is
-        # a deterministic FNV-1a hash of the unit code (reproducible across
-        # sessions and Julia versions, unlike Base.hash), uniform in 1 ± spread.
+        # Per-unit SRMC spread (cv18) is applied at ORDER-PRICE time in the
+        # order loop below (to gmc), NOT here: applying it to marginal_cost
+        # would also perturb the UC-lite must-run SELECTION (SRMC <=
+        # 1.15 x gas gate) and the committed-set ordering, which the validated
+        # prototype left untouched — measured: spraying mc reproduced only
+        # half the CSOUTH gain and worsened MAE (+2.4) via a shifted
+        # commitment set.
         apply_unit_spread = profile.unit_srmc_spread > 0.0
-        if !isempty(derate_scale) || apply_srmc_premium || apply_nuclear_floor ||
-           apply_unit_spread
+        # Rank-based spread factors (cv18): thermal units ordered by p_max
+        # (desc, code tiebreak) get equally-spaced factors in 1 ∓ spread —
+        # the largest unit prices cheapest. Physically grounded (bigger CCGTs
+        # are newer/more efficient as a rule) and draw-free: a hash draw was
+        # measured at ±0.1 corr variance across seeds on IT-CSOUTH (0.51–0.71)
+        # — the mechanism helped under EVERY draw, but the per-zone outcome
+        # depended on luck; ranking removes the luck and is bit-reproducible.
+        unit_spread_factor = Dict{String,Float64}()
+        if apply_unit_spread
+            # Canonical fixed assignment: unsalted FNV-1a draw per unit code.
+            # Deterministic permutation schemes were measured and rejected —
+            # ANY fixed ordering has same-parity/adjacency clusters, and the
+            # units that pin a zone's price can land in one cluster (IT-CSOUTH
+            # collapsed to stock under both monotone and interleaved ranking,
+            # while every hash draw improved it, 0.51–0.71 across salts). The
+            # unsalted draw is arbitrary-but-fixed (bit-reproducible across
+            # runs and Julia versions); inferred heat rates replace it when
+            # unit history supports them.
+            for g in generators
+                g.fuel_type in srmc_exempt_fuels && continue
+                unit_spread_factor[g.code] =
+                    1.0 + profile.unit_srmc_spread * (2.0 * _unit_hash01(g.code) - 1.0)
+            end
+        end
+        if !isempty(derate_scale) || apply_srmc_premium || apply_nuclear_floor
             generators = [begin
                 s = get(derate_scale, g.fuel_type, 1.0)
                 m = (apply_srmc_premium && !(g.fuel_type in srmc_exempt_fuels)) ?
@@ -1735,9 +1761,6 @@ function create_merit_order_book(
                 mc = g.marginal_cost * m
                 if apply_nuclear_floor && g.fuel_type == Symbol("Nuclear")
                     mc = max(mc, nuclear_srmc_floor)
-                end
-                if apply_unit_spread && !(g.fuel_type in srmc_exempt_fuels)
-                    mc *= 1.0 + profile.unit_srmc_spread * (2.0 * _unit_hash01(g.code) - 1.0)
                 end
                 (s < 1.0 || mc != g.marginal_cost) ?
                     Generator(g.code, g.name, g.fuel_type, g.location,
@@ -2171,6 +2194,13 @@ function create_merit_order_book(
                            haskey(anchor_prices, ts)) ?
                           max(g.marginal_cost, anchor_share * anchor_prices[ts]) :
                           g.marginal_cost
+                    # cv18 per-unit SRMC spread: order prices only (must-run
+                    # blocks + tranches scale together via gmc); the must-run
+                    # SELECTION above used the unsprayed costs, exactly like
+                    # the validated prototype.
+                    if apply_unit_spread
+                        gmc *= get(unit_spread_factor, g.code, 1.0)
+                    end
                     # Must-run self-scheduling: baseload-ish units (SRMC not
                     # far above gas) bid their minimum-load block near zero —
                     # shutting down and restarting costs more than running a

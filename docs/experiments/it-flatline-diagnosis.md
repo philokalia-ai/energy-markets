@@ -133,3 +133,33 @@ unit orders were never repriced — caught in the loop's code-review pass); the
 valid rerun gives corr 0.495 → 0.521, MAE −0.5, 10/20 days: a small real
 effect, an order below the IT gains. DK1's main levers remain the
 import/RES-surplus family per its hour-profile diagnosis.
+
+## cv18 implementation record (the honest engineering trail)
+
+Promoting the prototype to model code surfaced four measured subtleties:
+
+1. **Spraying `marginal_cost` is wrong** — it also perturbs the UC-lite
+   must-run *selection* (SRMC ≤ 1.15×gas gate), shifting the committed set:
+   half the CSOUTH gain vanished and MAE worsened +2.4. The spread belongs at
+   ORDER-PRICE time (gmc), selection on unsprayed costs — prototype semantics.
+2. **The draw matters: ±0.1 corr across salts** (CSOUTH 0.51–0.71 over four
+   seeds). The prototype's 0.68 was a good draw.
+3. **Every deterministic permutation failed on CSOUTH** (monotone rank AND
+   interleaved rank → 0.31 = stock): any fixed ordering has same-parity/
+   adjacency clusters, and CSOUTH's four price-pinning units landed in one.
+   Excluding the AGG aggregate (which any size-ranked scheme hands the extreme
+   cheap slot, re-pinning the price) did not rescue ranking either.
+4. **Final scheme: canonical unsalted FNV-1a draw** — arbitrary-but-fixed,
+   bit-reproducible across runs and Julia versions; inferred heat rates
+   replace it when unit history supports them.
+
+Final gates (real cv18 code, 20-day sets; stock → cv18):
+
+| zone | corr | MAE | note |
+|---|---|---|---|
+| IT-CSOUTH | 0.307 → **0.501** | 21.81 → 22.87 | below the lucky-draw prototype, +0.19 real |
+| IT-NORTH | 0.747 → **0.839** | 19.74 → **17.28** | ≥ prototype |
+| IT-Sicily | 0.489 → **0.734** | 21.82 → **20.96** | ≈ prototype |
+| IT-Sardinia | 0.369 → **0.505** | 26.70 → 27.12 | indirect (no own spread — partner coupling) |
+| DK1 (ladder) | 0.495 → **0.569** | 34.44 → **32.42** | = prototype exactly |
+| GR | max\|Δ\| = 0.0 | — | byte-identity preserved |

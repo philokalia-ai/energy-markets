@@ -81,8 +81,11 @@ const V10_TRANCHES = [(0.55, 0.95), (0.20, 1.05), (0.15, 1.25), (0.10, 1.60)]
         @test SLOVENIA_PROFILE.scarcity_kappa == CONTINENTAL_PROFILE.scarcity_kappa
         @test SLOVENIA_PROFILE.import_backstop == true
         @test SLOVENIA_PROFILE.ref_priced_exports == true   # SI–HR retained border
-        # Denmark: NORDIC + backstop, nothing else changed
-        @test get_zone_profile("DK1") === DENMARK_PROFILE
+        # Denmark: NORDIC + backstop; cv18 adds DK1's export-absorption ladder
+        # (reuse DENMARK's empty vector: ZoneProfile == is egal-based, so a
+        # fresh empty array would compare false by identity)
+        @test with_profile(get_zone_profile("DK1");
+            export_absorption_steps=DENMARK_PROFILE.export_absorption_steps) == DENMARK_PROFILE
         @test get_zone_profile("DK2") === DENMARK_PROFILE
         @test with_profile(DENMARK_PROFILE; import_backstop=false) == NORDIC_PROFILE
         # SE1/SE2/FI stay plain NORDIC (no backstop)
@@ -97,9 +100,22 @@ const V10_TRANCHES = [(0.55, 0.95), (0.20, 1.05), (0.15, 1.25), (0.10, 1.60)]
         @test get_zone_profile("SE4") === SWEDEN_SOUTH_PROFILE
         @test SWEDEN_SOUTH_PROFILE.anchor_include_dropped == false
         # IT-CNORTH: ITALY + backstop; other IT sub-zones unchanged
-        @test get_zone_profile("IT-CNORTH") === ITALY_CNORTH_PROFILE
-        @test with_profile(ITALY_CNORTH_PROFILE; import_backstop=false) == ITALY_PROFILE
-        @test get_zone_profile("IT-NORTH") === ITALY_PROFILE
+        # cv18: IT mainland + Sicily add unit_srmc_spread=0.10 on top of their
+        # cv17 profiles; Sardinia is the measured exception and stays plain.
+        @test get_zone_profile("IT-CNORTH").import_backstop == true
+        @test get_zone_profile("IT-CNORTH").unit_srmc_spread == 0.10
+        @test with_profile(get_zone_profile("IT-CNORTH");
+            import_backstop=false, unit_srmc_spread=0.0) == ITALY_PROFILE
+        @test get_zone_profile("IT-NORTH").unit_srmc_spread == 0.10
+        @test with_profile(get_zone_profile("IT-NORTH"); unit_srmc_spread=0.0) == ITALY_PROFILE
+        @test get_zone_profile("IT-Sardinia") === ITALY_PROFILE
+        @test ITALY_PROFILE.unit_srmc_spread == 0.0
+        # cv18: DK1 export-absorption ladder; DK2 unchanged
+        @test get_zone_profile("DK1").export_absorption_steps ==
+              [(30.0, 400.0), (15.0, 400.0), (5.0, 400.0)]
+        @test get_zone_profile("DK2") === DENMARK_PROFILE
+        @test isempty(DENMARK_PROFILE.export_absorption_steps)
+        @test isempty(SEE_PROFILE.export_absorption_steps)
         # AT/CH/BE gained the backstop, keeping their existing calibration
         # (the scarcity credit stays scoped to the SEE-east zones — measured)
         @test AUSTRIA_PROFILE.import_backstop == true
@@ -124,7 +140,7 @@ const V10_TRANCHES = [(0.55, 0.95), (0.20, 1.05), (0.15, 1.25), (0.10, 1.60)]
         @test NORDIC_PROFILE.hydro_model == :reservoir_opportunity
         @test NORDIC_PROFILE.scarcity_kappa < SEE_PROFILE.scarcity_kappa
         @test CONTINENTAL_PROFILE.scarcity_kappa < SEE_PROFILE.scarcity_kappa
-        @test get_zone_profile("IT-SOUTH") === ITALY_PROFILE
+        @test with_profile(get_zone_profile("IT-SOUTH"); unit_srmc_spread=0.0) == ITALY_PROFILE
         @test get_zone_profile("NO1") === NORWAY_PROFILE  # iter2: southern Norway
         @test get_zone_profile("EE") === BALTIC_PROFILE
         @test get_zone_profile("DE_LU") === CONTINENTAL_PROFILE
