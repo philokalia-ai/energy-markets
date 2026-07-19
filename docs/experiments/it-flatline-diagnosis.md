@@ -163,3 +163,35 @@ Final gates (real cv18 code, 20-day sets; stock → cv18):
 | IT-Sardinia | 0.369 → **0.505** | 26.70 → 27.12 | indirect (no own spread — partner coupling) |
 | DK1 (ladder) | 0.495 → **0.569** | 34.44 → **32.42** | = prototype exactly |
 | GR | max\|Δ\| = 0.0 | — | byte-identity preserved |
+
+## ATTRIBUTION VERDICT (July 2026): activation HELD BACK
+
+The full-year cv18 record and a 36-day two-arm attribution
+(`EUPHEMIA_DISABLE_CV18` kill-switch, forwarded to pipeline workers) showed the
+pilot gates were structurally insufficient:
+
+| zone (36 d) | cv17 | spread-only | ladder-only | full cv18 |
+|---|---:|---:|---:|---:|
+| DK1 | 0.62 | **0.68** | 0.34 | 0.34 |
+| IT-CSOUTH | 0.66 | 0.64 | **0.39** | 0.39 |
+| SE3 | 0.56 | 0.61 | **0.10** | 0.10 |
+| NO1 (caps) | 15 | **44** | **0** | 0 |
+| FI (full-yr) | 0.84 | — | — | **0.46** |
+| FR (full-yr) | 0.75 | — | — | **0.59** |
+
+The levers interact strongly and NON-LOCALLY through the coupled footprint —
+the DK1 ladder alone reshapes prices from Norway to central Italy, with
+opposite signs by zone and regime (it also flipped DK1 itself: better on the
+full year, worse on the 36-day slice). Key lessons:
+
+1. **Isolated-zone pilots cannot gate coupled mechanisms.** The 2-zone harness
+   both exaggerated the IT flat-line (coupling supplies intraday shape
+   externally: CSOUTH coupled cv17 corr 0.68 vs 0.31 isolated) and hid every
+   cross-border side effect.
+2. **The export ladder double-counts** absorption that endogenous borders
+   already model. A shippable version must be border-scoped — the mirror of
+   cv17's import backstop (only demonstrated absorption beyond offered export
+   ATC), validated on the full coupled footprint from the start.
+3. The fields + kill-switch infrastructure stay in the code (default-inert,
+   byte-identical — re-verified); cv stays 17; the measured cv18 record was
+   deleted from Postgres after documentation.

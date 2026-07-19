@@ -330,6 +330,10 @@ function run_pipelined_backfill(days, zones::Vector{String}=String[];
         # the coordinator (and the sequential path under the same env) builds.
         haskey(ENV, "EUPHEMIA_FLOW_ASOF_MODE") &&
             push!(extract_env, "EUPHEMIA_FLOW_ASOF_MODE" => ENV["EUPHEMIA_FLOW_ASOF_MODE"])
+        # Same forwarding need for the experiment-only cv18 lever kill-switch
+        # (attribution A/Bs): profile lookups happen on the WORKERS.
+        haskey(ENV, "EUPHEMIA_DISABLE_CV18") &&
+            push!(extract_env, "EUPHEMIA_DISABLE_CV18" => ENV["EUPHEMIA_DISABLE_CV18"])
         # Workers share the source extract read-only; the coordinator keeps the
         # source read-only too (so it can coexist with them) but opts into result
         # writes, which land in the SEPARATE writable results_db file.

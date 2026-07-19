@@ -1128,12 +1128,16 @@ const ZONE_PROFILES = Dict{String,ZoneProfile}(
     # corr 0.31→0.68 CSOUTH / 0.75→0.82 NORTH / 0.49→0.72 Sicily, plateau
     # ±8–12%); Sardinia is the measured exception (spread WORSENED it 7/20 —
     # island/SAPEI import mix) and stays on the plain profile.
-    "IT-NORTH" => with_profile(ITALY_PROFILE; unit_srmc_spread = 0.10),
-    "IT-CNORTH" => with_profile(ITALY_CNORTH_PROFILE; unit_srmc_spread = 0.10),
-    "IT-CSOUTH" => with_profile(ITALY_PROFILE; unit_srmc_spread = 0.10),
-    "IT-SOUTH" => with_profile(ITALY_PROFILE; unit_srmc_spread = 0.10),
-    "IT-Calabria" => with_profile(ITALY_PROFILE; unit_srmc_spread = 0.10),
-    "IT-Sicily" => with_profile(ITALY_PROFILE; unit_srmc_spread = 0.10),
+    # cv18 ACTIVATION HELD BACK: the 36-day attribution showed the two levers
+    # interact strongly and non-locally through the coupled footprint (DK1
+    # ladder: NO1 caps 15→0 but IT-CSOUTH 0.66→0.39 and SE3 0.56→0.10; spread:
+    # benign continentally but NO1 caps 15→44). The 20-day/2-zone pilot gates
+    # are structurally insufficient for coupled mechanisms — activation waits
+    # for the border-scoped redesign (export backstop mirror) validated on the
+    # coupled footprint. Fields + EUPHEMIA_DISABLE_CV18 infrastructure stay.
+    "IT-NORTH" => ITALY_PROFILE, "IT-CNORTH" => ITALY_CNORTH_PROFILE,
+    "IT-CSOUTH" => ITALY_PROFILE, "IT-SOUTH" => ITALY_PROFILE,
+    "IT-Calabria" => ITALY_PROFILE, "IT-Sicily" => ITALY_PROFILE,
     "IT-Sardinia" => ITALY_PROFILE,
     # Norway — southern/mid zones carry the :hydro opportunity anchor;
     # NO4 (far north, not continentally coupled) stays plain NORDIC
@@ -1148,9 +1152,7 @@ const ZONE_PROFILES = Dict{String,ZoneProfile}(
     # DK1/DK2: + cv17 import backstop (episodic starvation — see DENMARK_PROFILE).
     # cv18: DK1 adds the export-absorption ladder (prototype corr 0.495→0.569,
     # MAE −2.0, binds only in RES-surplus hours). DK2 unchanged pending its own A/B.
-    "DK1" => with_profile(DENMARK_PROFILE;
-        export_absorption_steps = [(30.0, 400.0), (15.0, 400.0), (5.0, 400.0)]),
-    "DK2" => DENMARK_PROFILE,
+    "DK1" => DENMARK_PROFILE, "DK2" => DENMARK_PROFILE,
     # Baltic
     "EE" => BALTIC_PROFILE, "LT" => BALTIC_PROFILE, "LV" => BALTIC_PROFILE,
     # France (nuclear-heavy: continental scarcity + nuclear bid position)
@@ -1174,7 +1176,23 @@ const ZONE_PROFILES = Dict{String,ZoneProfile}(
 
 Profile for a zone, defaulting to `SEE_PROFILE` for any zone not in the registry.
 """
-get_zone_profile(zone::AbstractString) = get(ZONE_PROFILES, String(zone), SEE_PROFILE)
+function get_zone_profile(zone::AbstractString)
+    p = get(ZONE_PROFILES, String(zone), SEE_PROFILE)
+    # Experiment-only lever kill-switch (attribution A/Bs): profile mutations
+    # in the coordinator do NOT reach pipeline workers (fresh `using Euphemia`
+    # rebuilds ZONE_PROFILES), so per-mechanism disabling must travel via ENV.
+    # Unset in production; reads once per call, negligible cost.
+    dis = get(ENV, "EUPHEMIA_DISABLE_CV18", "")
+    if dis == "spread" && p.unit_srmc_spread > 0.0
+        p = with_profile(p; unit_srmc_spread=0.0)
+    elseif dis == "ladder" && !isempty(p.export_absorption_steps)
+        p = with_profile(p; export_absorption_steps=Tuple{Float64,Float64}[])
+    elseif dis == "all" && (p.unit_srmc_spread > 0.0 || !isempty(p.export_absorption_steps))
+        p = with_profile(p; unit_srmc_spread=0.0,
+                         export_absorption_steps=Tuple{Float64,Float64}[])
+    end
+    return p
+end
 
 # =============================================================================
 # ZONE SCENARIO — counterfactual hooks bundled per zone
