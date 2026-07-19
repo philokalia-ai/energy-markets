@@ -133,3 +133,65 @@ unit orders were never repriced — caught in the loop's code-review pass); the
 valid rerun gives corr 0.495 → 0.521, MAE −0.5, 10/20 days: a small real
 effect, an order below the IT gains. DK1's main levers remain the
 import/RES-surplus family per its hour-profile diagnosis.
+
+## cv18 implementation record (the honest engineering trail)
+
+Promoting the prototype to model code surfaced four measured subtleties:
+
+1. **Spraying `marginal_cost` is wrong** — it also perturbs the UC-lite
+   must-run *selection* (SRMC ≤ 1.15×gas gate), shifting the committed set:
+   half the CSOUTH gain vanished and MAE worsened +2.4. The spread belongs at
+   ORDER-PRICE time (gmc), selection on unsprayed costs — prototype semantics.
+2. **The draw matters: ±0.1 corr across salts** (CSOUTH 0.51–0.71 over four
+   seeds). The prototype's 0.68 was a good draw.
+3. **Every deterministic permutation failed on CSOUTH** (monotone rank AND
+   interleaved rank → 0.31 = stock): any fixed ordering has same-parity/
+   adjacency clusters, and CSOUTH's four price-pinning units landed in one.
+   Excluding the AGG aggregate (which any size-ranked scheme hands the extreme
+   cheap slot, re-pinning the price) did not rescue ranking either.
+4. **Final scheme: canonical unsalted FNV-1a draw** — arbitrary-but-fixed,
+   bit-reproducible across runs and Julia versions; inferred heat rates
+   replace it when unit history supports them.
+
+Final gates (real cv18 code, 20-day sets; stock → cv18):
+
+| zone | corr | MAE | note |
+|---|---|---|---|
+| IT-CSOUTH | 0.307 → **0.501** | 21.81 → 22.87 | below the lucky-draw prototype, +0.19 real |
+| IT-NORTH | 0.747 → **0.839** | 19.74 → **17.28** | ≥ prototype |
+| IT-Sicily | 0.489 → **0.734** | 21.82 → **20.96** | ≈ prototype |
+| IT-Sardinia | 0.369 → **0.505** | 26.70 → 27.12 | indirect (no own spread — partner coupling) |
+| DK1 (ladder) | 0.495 → **0.569** | 34.44 → **32.42** | = prototype exactly |
+| GR | max\|Δ\| = 0.0 | — | byte-identity preserved |
+
+## ATTRIBUTION VERDICT (July 2026): activation HELD BACK
+
+The full-year cv18 record and a 36-day two-arm attribution
+(`EUPHEMIA_DISABLE_CV18` kill-switch, forwarded to pipeline workers) showed the
+pilot gates were structurally insufficient:
+
+| zone (36 d) | cv17 | spread-only | ladder-only | full cv18 |
+|---|---:|---:|---:|---:|
+| DK1 | 0.62 | **0.68** | 0.34 | 0.34 |
+| IT-CSOUTH | 0.66 | 0.64 | **0.39** | 0.39 |
+| SE3 | 0.56 | 0.61 | **0.10** | 0.10 |
+| NO1 (caps) | 15 | **44** | **0** | 0 |
+| FI (full-yr) | 0.84 | — | — | **0.46** |
+| FR (full-yr) | 0.75 | — | — | **0.59** |
+
+The levers interact strongly and NON-LOCALLY through the coupled footprint —
+the DK1 ladder alone reshapes prices from Norway to central Italy, with
+opposite signs by zone and regime (it also flipped DK1 itself: better on the
+full year, worse on the 36-day slice). Key lessons:
+
+1. **Isolated-zone pilots cannot gate coupled mechanisms.** The 2-zone harness
+   both exaggerated the IT flat-line (coupling supplies intraday shape
+   externally: CSOUTH coupled cv17 corr 0.68 vs 0.31 isolated) and hid every
+   cross-border side effect.
+2. **The export ladder double-counts** absorption that endogenous borders
+   already model. A shippable version must be border-scoped — the mirror of
+   cv17's import backstop (only demonstrated absorption beyond offered export
+   ATC), validated on the full coupled footprint from the start.
+3. The fields + kill-switch infrastructure stay in the code (default-inert,
+   byte-identical — re-verified); cv stays 17; the measured cv18 record was
+   deleted from Postgres after documentation.

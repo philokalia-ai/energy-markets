@@ -525,6 +525,22 @@ end
 const WATER_VALUE_FUEL_TYPES =
     [Symbol("Hydro Water Reservoir"), Symbol("Hydro Pumped Storage")]
 
+"""
+    _unit_hash01(code) -> Float64 in [0, 1)
+
+Deterministic per-unit draw for `unit_srmc_spread` (FNV-1a over the code's
+bytes). Stable across sessions, processes and Julia versions — Base.hash is
+not guaranteed stable across versions, and reproducibility of the priced book
+is a hard requirement (same day + same code ⇒ bit-identical prices).
+"""
+function _unit_hash01(code::AbstractString)
+    h = 0xcbf29ce484222325
+    for b in codeunits(code)
+        h = (h ⊻ UInt64(b)) * 0x00000100000001b3
+    end
+    return (h % UInt64(1000)) / 1000.0
+end
+
 # ENTSO-E production_type strings for hydro availability lookup
 const HYDRO_PRODUCTION_TYPES =
     ["Hydro Water Reservoir", "Hydro Pumped Storage", "Hydro Run-of-river and pondage"]
@@ -573,6 +589,24 @@ Base.@kwdef struct ZoneProfile
     fleet_truthing::Bool = true
     derate_headroom::Float64 = 1.15
     thermal_srmc_multiplier::Float64 = 1.0
+    # Per-unit SRMC spread (cv18): decorrelate thermal unit costs by a stable
+    # per-unit factor 1 ± spread (deterministic FNV-1a hash of the unit code —
+    # to be replaced by inferred heat rates once history supports them).
+    # Without it every unit of a fuel type shares one type-level SRMC, so all
+    # their same-multiplier tranches align into ONE flat multi-GW step and the
+    # marginal price cannot move intraday — the measured cause of the flat
+    # Italian zones (docs/experiments/it-flatline-diagnosis.md: every hour of
+    # the probe day pinned at 90.90 by four units priced identically; ±8%
+    # prototype corr 0.31→0.68 CSOUTH, 0.75→0.82 NORTH, 0.49→0.72 Sicily;
+    # Sardinia the measured exception). 0 = off (byte-identical).
+    unit_srmc_spread::Float64 = 0.0
+    # Export-absorption ladder (cv18): elastic demand steps (price €/MWh, MW)
+    # appended every timeslot — export/flexibility absorption of RES-surplus
+    # generation below the thermal band. Without it a wind-heavy zone's price
+    # stays pinned at the thermal marginal in surplus hours (DK1: prototype
+    # 30/15/5 € × 400 MW → corr 0.495→0.569, MAE −2.0, binding only on
+    # surplus days). Empty = off (byte-identical).
+    export_absorption_steps::Vector{Tuple{Float64,Float64}} = Tuple{Float64,Float64}[]
     hydro_model::Symbol = :gas_anchored
     nuclear_srmc_floor::Float64 = 0.0
     opportunity_anchor::Symbol = :none
@@ -1089,7 +1123,18 @@ const ZONE_PROFILES = Dict{String,ZoneProfile}(
     "RS" => SERBIA_PROFILE, "HU" => HUNGARY_PROFILE, "SI" => SLOVENIA_PROFILE,
     # Iberia
     "ES" => IBERIA_PROFILE, "PT" => IBERIA_PROFILE,
-    # Italy sub-zones (IT-CNORTH: + cv17 import backstop)
+    # Italy sub-zones (IT-CNORTH: + cv17 import backstop). cv18: the mainland
+    # zones + Sicily add the per-unit SRMC spread (±10% — measured prototype
+    # corr 0.31→0.68 CSOUTH / 0.75→0.82 NORTH / 0.49→0.72 Sicily, plateau
+    # ±8–12%); Sardinia is the measured exception (spread WORSENED it 7/20 —
+    # island/SAPEI import mix) and stays on the plain profile.
+    # cv18 ACTIVATION HELD BACK: the 36-day attribution showed the two levers
+    # interact strongly and non-locally through the coupled footprint (DK1
+    # ladder: NO1 caps 15→0 but IT-CSOUTH 0.66→0.39 and SE3 0.56→0.10; spread:
+    # benign continentally but NO1 caps 15→44). The 20-day/2-zone pilot gates
+    # are structurally insufficient for coupled mechanisms — activation waits
+    # for the border-scoped redesign (export backstop mirror) validated on the
+    # coupled footprint. Fields + EUPHEMIA_DISABLE_CV18 infrastructure stay.
     "IT-NORTH" => ITALY_PROFILE, "IT-CNORTH" => ITALY_CNORTH_PROFILE,
     "IT-CSOUTH" => ITALY_PROFILE, "IT-SOUTH" => ITALY_PROFILE,
     "IT-Calabria" => ITALY_PROFILE, "IT-Sicily" => ITALY_PROFILE,
@@ -1104,7 +1149,9 @@ const ZONE_PROFILES = Dict{String,ZoneProfile}(
     # dropped-border (SE2-weighted) anchor ref
     "SE3" => SE3_PROFILE, "SE4" => SWEDEN_SOUTH_PROFILE,
     "FI" => NORDIC_PROFILE,
-    # DK1/DK2: + cv17 import backstop (episodic starvation — see DENMARK_PROFILE)
+    # DK1/DK2: + cv17 import backstop (episodic starvation — see DENMARK_PROFILE).
+    # cv18: DK1 adds the export-absorption ladder (prototype corr 0.495→0.569,
+    # MAE −2.0, binds only in RES-surplus hours). DK2 unchanged pending its own A/B.
     "DK1" => DENMARK_PROFILE, "DK2" => DENMARK_PROFILE,
     # Baltic
     "EE" => BALTIC_PROFILE, "LT" => BALTIC_PROFILE, "LV" => BALTIC_PROFILE,
@@ -1129,7 +1176,23 @@ const ZONE_PROFILES = Dict{String,ZoneProfile}(
 
 Profile for a zone, defaulting to `SEE_PROFILE` for any zone not in the registry.
 """
-get_zone_profile(zone::AbstractString) = get(ZONE_PROFILES, String(zone), SEE_PROFILE)
+function get_zone_profile(zone::AbstractString)
+    p = get(ZONE_PROFILES, String(zone), SEE_PROFILE)
+    # Experiment-only lever kill-switch (attribution A/Bs): profile mutations
+    # in the coordinator do NOT reach pipeline workers (fresh `using Euphemia`
+    # rebuilds ZONE_PROFILES), so per-mechanism disabling must travel via ENV.
+    # Unset in production; reads once per call, negligible cost.
+    dis = get(ENV, "EUPHEMIA_DISABLE_CV18", "")
+    if dis == "spread" && p.unit_srmc_spread > 0.0
+        p = with_profile(p; unit_srmc_spread=0.0)
+    elseif dis == "ladder" && !isempty(p.export_absorption_steps)
+        p = with_profile(p; export_absorption_steps=Tuple{Float64,Float64}[])
+    elseif dis == "all" && (p.unit_srmc_spread > 0.0 || !isempty(p.export_absorption_steps))
+        p = with_profile(p; unit_srmc_spread=0.0,
+                         export_absorption_steps=Tuple{Float64,Float64}[])
+    end
+    return p
+end
 
 # =============================================================================
 # ZONE SCENARIO — counterfactual hooks bundled per zone
@@ -1676,6 +1739,38 @@ function create_merit_order_book(
         # €9 vs the €55 floor).
         apply_nuclear_floor = nuclear_srmc_floor > 0.0 &&
                               !(anchor_active && opportunity_anchor == :nuclear)
+        # Per-unit SRMC spread (cv18) is applied at ORDER-PRICE time in the
+        # order loop below (to gmc), NOT here: applying it to marginal_cost
+        # would also perturb the UC-lite must-run SELECTION (SRMC <=
+        # 1.15 x gas gate) and the committed-set ordering, which the validated
+        # prototype left untouched — measured: spraying mc reproduced only
+        # half the CSOUTH gain and worsened MAE (+2.4) via a shifted
+        # commitment set.
+        apply_unit_spread = profile.unit_srmc_spread > 0.0
+        # Rank-based spread factors (cv18): thermal units ordered by p_max
+        # (desc, code tiebreak) get equally-spaced factors in 1 ∓ spread —
+        # the largest unit prices cheapest. Physically grounded (bigger CCGTs
+        # are newer/more efficient as a rule) and draw-free: a hash draw was
+        # measured at ±0.1 corr variance across seeds on IT-CSOUTH (0.51–0.71)
+        # — the mechanism helped under EVERY draw, but the per-zone outcome
+        # depended on luck; ranking removes the luck and is bit-reproducible.
+        unit_spread_factor = Dict{String,Float64}()
+        if apply_unit_spread
+            # Canonical fixed assignment: unsalted FNV-1a draw per unit code.
+            # Deterministic permutation schemes were measured and rejected —
+            # ANY fixed ordering has same-parity/adjacency clusters, and the
+            # units that pin a zone's price can land in one cluster (IT-CSOUTH
+            # collapsed to stock under both monotone and interleaved ranking,
+            # while every hash draw improved it, 0.51–0.71 across salts). The
+            # unsalted draw is arbitrary-but-fixed (bit-reproducible across
+            # runs and Julia versions); inferred heat rates replace it when
+            # unit history supports them.
+            for g in generators
+                g.fuel_type in srmc_exempt_fuels && continue
+                unit_spread_factor[g.code] =
+                    1.0 + profile.unit_srmc_spread * (2.0 * _unit_hash01(g.code) - 1.0)
+            end
+        end
         if !isempty(derate_scale) || apply_srmc_premium || apply_nuclear_floor
             generators = [begin
                 s = get(derate_scale, g.fuel_type, 1.0)
@@ -2117,6 +2212,13 @@ function create_merit_order_book(
                            haskey(anchor_prices, ts)) ?
                           max(g.marginal_cost, anchor_share * anchor_prices[ts]) :
                           g.marginal_cost
+                    # cv18 per-unit SRMC spread: order prices only (must-run
+                    # blocks + tranches scale together via gmc); the must-run
+                    # SELECTION above used the unsprayed costs, exactly like
+                    # the validated prototype.
+                    if apply_unit_spread
+                        gmc *= get(unit_spread_factor, g.code, 1.0)
+                    end
                     # Must-run self-scheduling: baseload-ish units (SRMC not
                     # far above gas) bid their minimum-load block near zero —
                     # shutting down and restarting costs more than running a
@@ -2177,6 +2279,14 @@ function create_merit_order_book(
             if elastic_qty > 0.1
                 push!(tagged, (SimpleOrder(:demand, demand_elastic_price, elastic_qty,
                     Symbol(bidding_zone), date_time, resolution_minutes), "DEMAND"))
+                demand_orders_count += 1
+            end
+            # Export-absorption ladder (cv18): elastic demand below the thermal
+            # band that binds only in RES-surplus hours — see the profile field
+            # docstring. Tagged distinctly so the bids view can label it.
+            for (step_price, step_mw) in profile.export_absorption_steps
+                push!(tagged, (SimpleOrder(:demand, step_price, step_mw,
+                    Symbol(bidding_zone), date_time, resolution_minutes), "EXPORT_ABS"))
                 demand_orders_count += 1
             end
             total_demand_quantity += gd
