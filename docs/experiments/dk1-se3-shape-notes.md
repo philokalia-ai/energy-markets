@@ -42,3 +42,22 @@ other terms (span/dry boost) or the anchored-export pricing, not this scalar;
 (2) the 2-zone harness DISTORTS SE3 badly (baseline resid −45.6 vs −30 in the
 coupled footprint) — SE3 calibration must run on the coupled footprint, not in
 isolation. Filed for the cv18 coupled calibration pass, not solvable here.
+
+## DK1 surplus-ladder A/B (loop): POSITIVE — the missing valley mechanism
+
+Elastic export-absorption ladder (3 × 400 MW demand steps at 30/15/5 €/MWh,
+appended via strategist), 20 days:
+
+| | corr | MAE | sim std | better days |
+|---|---:|---:|---:|---:|
+| stock | 0.495 | 34.44 | 25.9 | — |
+| **+ export ladder** | **0.569** | **32.42** | 23.3 | 10/20 |
+
+The largest DK1 gain measured tonight (+0.074 corr, −2.0 MAE); the 10/20
+split is the expected signature — the ladder only binds in RES-surplus hours,
+which occur on about half the sampled days. Combined with the marginal spread
+result (+0.026), the cv18 "DK1 package" = export-absorption pricing (primary)
++ unit spread (minor). Combo A/B running. (En route this test caught a third
+real bug: the strategist ctx does NOT carry `resolution_minutes` — a closure
+referencing it throws and the per-zone build silently drops the zone; take
+the resolution from an existing order.)
