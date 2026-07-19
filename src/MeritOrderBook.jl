@@ -525,6 +525,22 @@ end
 const WATER_VALUE_FUEL_TYPES =
     [Symbol("Hydro Water Reservoir"), Symbol("Hydro Pumped Storage")]
 
+"""
+    _unit_hash01(code) -> Float64 in [0, 1)
+
+Deterministic per-unit draw for `unit_srmc_spread` (FNV-1a over the code's
+bytes). Stable across sessions, processes and Julia versions — Base.hash is
+not guaranteed stable across versions, and reproducibility of the priced book
+is a hard requirement (same day + same code ⇒ bit-identical prices).
+"""
+function _unit_hash01(code::AbstractString)
+    h = 0xcbf29ce484222325
+    for b in codeunits(code)
+        h = (h ⊻ UInt64(b)) * 0x00000100000001b3
+    end
+    return (h % UInt64(1000)) / 1000.0
+end
+
 # ENTSO-E production_type strings for hydro availability lookup
 const HYDRO_PRODUCTION_TYPES =
     ["Hydro Water Reservoir", "Hydro Pumped Storage", "Hydro Run-of-river and pondage"]
@@ -573,6 +589,24 @@ Base.@kwdef struct ZoneProfile
     fleet_truthing::Bool = true
     derate_headroom::Float64 = 1.15
     thermal_srmc_multiplier::Float64 = 1.0
+    # Per-unit SRMC spread (cv18): decorrelate thermal unit costs by a stable
+    # per-unit factor 1 ± spread (deterministic FNV-1a hash of the unit code —
+    # to be replaced by inferred heat rates once history supports them).
+    # Without it every unit of a fuel type shares one type-level SRMC, so all
+    # their same-multiplier tranches align into ONE flat multi-GW step and the
+    # marginal price cannot move intraday — the measured cause of the flat
+    # Italian zones (docs/experiments/it-flatline-diagnosis.md: every hour of
+    # the probe day pinned at 90.90 by four units priced identically; ±8%
+    # prototype corr 0.31→0.68 CSOUTH, 0.75→0.82 NORTH, 0.49→0.72 Sicily;
+    # Sardinia the measured exception). 0 = off (byte-identical).
+    unit_srmc_spread::Float64 = 0.0
+    # Export-absorption ladder (cv18): elastic demand steps (price €/MWh, MW)
+    # appended every timeslot — export/flexibility absorption of RES-surplus
+    # generation below the thermal band. Without it a wind-heavy zone's price
+    # stays pinned at the thermal marginal in surplus hours (DK1: prototype
+    # 30/15/5 € × 400 MW → corr 0.495→0.569, MAE −2.0, binding only on
+    # surplus days). Empty = off (byte-identical).
+    export_absorption_steps::Vector{Tuple{Float64,Float64}} = Tuple{Float64,Float64}[]
     hydro_model::Symbol = :gas_anchored
     nuclear_srmc_floor::Float64 = 0.0
     opportunity_anchor::Symbol = :none
@@ -1089,10 +1123,17 @@ const ZONE_PROFILES = Dict{String,ZoneProfile}(
     "RS" => SERBIA_PROFILE, "HU" => HUNGARY_PROFILE, "SI" => SLOVENIA_PROFILE,
     # Iberia
     "ES" => IBERIA_PROFILE, "PT" => IBERIA_PROFILE,
-    # Italy sub-zones (IT-CNORTH: + cv17 import backstop)
-    "IT-NORTH" => ITALY_PROFILE, "IT-CNORTH" => ITALY_CNORTH_PROFILE,
-    "IT-CSOUTH" => ITALY_PROFILE, "IT-SOUTH" => ITALY_PROFILE,
-    "IT-Calabria" => ITALY_PROFILE, "IT-Sicily" => ITALY_PROFILE,
+    # Italy sub-zones (IT-CNORTH: + cv17 import backstop). cv18: the mainland
+    # zones + Sicily add the per-unit SRMC spread (±10% — measured prototype
+    # corr 0.31→0.68 CSOUTH / 0.75→0.82 NORTH / 0.49→0.72 Sicily, plateau
+    # ±8–12%); Sardinia is the measured exception (spread WORSENED it 7/20 —
+    # island/SAPEI import mix) and stays on the plain profile.
+    "IT-NORTH" => with_profile(ITALY_PROFILE; unit_srmc_spread = 0.10),
+    "IT-CNORTH" => with_profile(ITALY_CNORTH_PROFILE; unit_srmc_spread = 0.10),
+    "IT-CSOUTH" => with_profile(ITALY_PROFILE; unit_srmc_spread = 0.10),
+    "IT-SOUTH" => with_profile(ITALY_PROFILE; unit_srmc_spread = 0.10),
+    "IT-Calabria" => with_profile(ITALY_PROFILE; unit_srmc_spread = 0.10),
+    "IT-Sicily" => with_profile(ITALY_PROFILE; unit_srmc_spread = 0.10),
     "IT-Sardinia" => ITALY_PROFILE,
     # Norway — southern/mid zones carry the :hydro opportunity anchor;
     # NO4 (far north, not continentally coupled) stays plain NORDIC
@@ -1104,8 +1145,12 @@ const ZONE_PROFILES = Dict{String,ZoneProfile}(
     # dropped-border (SE2-weighted) anchor ref
     "SE3" => SE3_PROFILE, "SE4" => SWEDEN_SOUTH_PROFILE,
     "FI" => NORDIC_PROFILE,
-    # DK1/DK2: + cv17 import backstop (episodic starvation — see DENMARK_PROFILE)
-    "DK1" => DENMARK_PROFILE, "DK2" => DENMARK_PROFILE,
+    # DK1/DK2: + cv17 import backstop (episodic starvation — see DENMARK_PROFILE).
+    # cv18: DK1 adds the export-absorption ladder (prototype corr 0.495→0.569,
+    # MAE −2.0, binds only in RES-surplus hours). DK2 unchanged pending its own A/B.
+    "DK1" => with_profile(DENMARK_PROFILE;
+        export_absorption_steps = [(30.0, 400.0), (15.0, 400.0), (5.0, 400.0)]),
+    "DK2" => DENMARK_PROFILE,
     # Baltic
     "EE" => BALTIC_PROFILE, "LT" => BALTIC_PROFILE, "LV" => BALTIC_PROFILE,
     # France (nuclear-heavy: continental scarcity + nuclear bid position)
@@ -1676,7 +1721,13 @@ function create_merit_order_book(
         # €9 vs the €55 floor).
         apply_nuclear_floor = nuclear_srmc_floor > 0.0 &&
                               !(anchor_active && opportunity_anchor == :nuclear)
-        if !isempty(derate_scale) || apply_srmc_premium || apply_nuclear_floor
+        # Per-unit SRMC spread (cv18): thermal fuels only — hydro/storage price
+        # at water value, and RES never enters the thermal stack. The factor is
+        # a deterministic FNV-1a hash of the unit code (reproducible across
+        # sessions and Julia versions, unlike Base.hash), uniform in 1 ± spread.
+        apply_unit_spread = profile.unit_srmc_spread > 0.0
+        if !isempty(derate_scale) || apply_srmc_premium || apply_nuclear_floor ||
+           apply_unit_spread
             generators = [begin
                 s = get(derate_scale, g.fuel_type, 1.0)
                 m = (apply_srmc_premium && !(g.fuel_type in srmc_exempt_fuels)) ?
@@ -1684,6 +1735,9 @@ function create_merit_order_book(
                 mc = g.marginal_cost * m
                 if apply_nuclear_floor && g.fuel_type == Symbol("Nuclear")
                     mc = max(mc, nuclear_srmc_floor)
+                end
+                if apply_unit_spread && !(g.fuel_type in srmc_exempt_fuels)
+                    mc *= 1.0 + profile.unit_srmc_spread * (2.0 * _unit_hash01(g.code) - 1.0)
                 end
                 (s < 1.0 || mc != g.marginal_cost) ?
                     Generator(g.code, g.name, g.fuel_type, g.location,
@@ -2177,6 +2231,14 @@ function create_merit_order_book(
             if elastic_qty > 0.1
                 push!(tagged, (SimpleOrder(:demand, demand_elastic_price, elastic_qty,
                     Symbol(bidding_zone), date_time, resolution_minutes), "DEMAND"))
+                demand_orders_count += 1
+            end
+            # Export-absorption ladder (cv18): elastic demand below the thermal
+            # band that binds only in RES-surplus hours — see the profile field
+            # docstring. Tagged distinctly so the bids view can label it.
+            for (step_price, step_mw) in profile.export_absorption_steps
+                push!(tagged, (SimpleOrder(:demand, step_price, step_mw,
+                    Symbol(bidding_zone), date_time, resolution_minutes), "EXPORT_ABS"))
                 demand_orders_count += 1
             end
             total_demand_quantity += gd

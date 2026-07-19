@@ -603,7 +603,7 @@ end
 # against its gate and switched OFF — July 2026) so new results are never mixed
 # with — or skipped because of — old rows. Each version is one selectable
 # "Run" in the Metabase counterfactual dashboard.
-const ENERGY_PRICES_CODE_VERSION = 17
+const ENERGY_PRICES_CODE_VERSION = 18
 
 const poolsize = 5
 cnxpool = Pools.Pool{LibPQ.Connection}(poolsize)
