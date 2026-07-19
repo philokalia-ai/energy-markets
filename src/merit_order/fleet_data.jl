@@ -1,0 +1,201 @@
+# fleet_data.jl — Fleet/hydro data queries: hydro availability, per-type output p95, installed capacity, reservoir dryness and drawdown.
+# Included by ../MeritOrderBook.jl inside `module MeritOrderBook` (definition order preserved).
+
+"""
+    get_hydro_availability(bidding_zone::String, day::Date; lookback_days=30) -> Union{Float64,Nothing}
+
+Recent achievable hydro output as a fraction of what the fleet produced at
+its best over the trailing window: the 95th-percentile hourly total hydro
+output over the `lookback_days` before `day` (strictly before — no
+lookahead). Hydro is energy-limited, so recent peak output is a physical
+proxy for the water actually available — in dry periods (e.g. August 2024,
+May 2025 in SEE) reservoirs cannot sustain nameplate output regardless of
+price, which tightens the real capacity margin and drives scarcity pricing.
+
+Returns MW (the p95 hourly output), or `nothing` when no data exists.
+"""
+function get_hydro_availability(bidding_zone::String, day::Date; lookback_days::Int=30)
+    df = sql2df_with_retry(
+        """
+        SELECT percentile_cont(0.95) WITHIN GROUP (ORDER BY hydro_mw) AS p95
+        FROM (
+            SELECT date_time_utc, SUM(actual_generation_output_mw) AS hydro_mw
+            FROM entsoe.aggregated_generation_per_type
+            WHERE area_map_code = \$1
+              AND production_type = ANY(\$2)
+              AND area_type_code LIKE 'BZN%'
+              AND actual_generation_output_mw IS NOT NULL
+              AND date_time_utc >= (\$3::date::timestamp AT TIME ZONE 'UTC')
+              AND date_time_utc < (\$4::date::timestamp AT TIME ZONE 'UTC')
+            GROUP BY date_time_utc
+        ) hourly
+        """,
+        [bidding_zone, HYDRO_PRODUCTION_TYPES, day - Day(lookback_days), day]
+    )
+    (isempty(df) || ismissing(df.p95[1])) && return nothing
+    return Float64(df.p95[1])
+end
+
+"""
+    get_type_output_p95(bidding_zone::String, day::Date; lookback_days=30) -> Dict{String,Float64}
+
+95th-percentile hourly actual output per production type over the trailing
+window (strictly before `day` — no lookahead), from
+`entsoe.aggregated_generation_per_type`. Used for fleet completion: ENTSO-E's
+unit-level table only lists larger units, so for some zones (RO, BG, RS) the
+per-type aggregate output demonstrably exceeds the unit-level fleet capacity.
+"""
+function get_type_output_p95(bidding_zone::String, day::Date; lookback_days::Int=30)
+    df = sql2df_with_retry(
+        """
+        SELECT production_type,
+               percentile_cont(0.95) WITHIN GROUP (ORDER BY mw) AS p95
+        FROM (
+            SELECT production_type, date_time_utc, SUM(actual_generation_output_mw) AS mw
+            FROM entsoe.aggregated_generation_per_type
+            WHERE area_map_code = \$1
+              AND area_type_code LIKE 'BZN%'
+              AND actual_generation_output_mw IS NOT NULL
+              AND date_time_utc >= (\$2::date::timestamp AT TIME ZONE 'UTC')
+              AND date_time_utc < (\$3::date::timestamp AT TIME ZONE 'UTC')
+            GROUP BY production_type, date_time_utc
+        ) hourly
+        GROUP BY production_type
+        """,
+        [bidding_zone, day - Day(lookback_days), day]
+    )
+    return Dict{String,Float64}(row.production_type => Float64(row.p95)
+                                for row in eachrow(df) if !ismissing(row.p95))
+end
+
+"""
+    get_installed_capacity_by_type(bidding_zone::String) -> Dict{String,Float64}
+
+INSTALLED capacity (MW) per fuel type from the ENTSO-E unit registry
+(`entsoe.production_and_generation_units`): COMMISSIONED units deduplicated per
+`generation_unit_code` (most recent `valid_from`, highest capacity tiebreaker —
+the standard dedup for this table's overlapping-validity data-quality issue),
+summed per `generation_unit_type`. Deliberately does NOT apply the
+date-validity / recent-generation filter of `get_generators` — that filter is
+what removes idle-but-existing capacity; the caller (installed-aware fleet
+truth) gates each type on recent market activity instead, which is what
+excludes genuinely-decommissioned capacity with stale COMMISSIONED status
+(e.g. Germany's post-phase-out nuclear). Keys are normalized fuel names.
+The registry is slowly-changing reference data (same ex-ante treatment as
+`get_generators`' use of it).
+"""
+function get_installed_capacity_by_type(bidding_zone::String)
+    df = sql2df_with_retry(
+        """
+        SELECT generation_unit_type AS t, SUM(cap) AS mw FROM (
+          SELECT DISTINCT ON (generation_unit_code)
+                 generation_unit_type, generation_unit_installed_capacity_mw AS cap
+          FROM entsoe.production_and_generation_units
+          WHERE area_map_code = \$1
+            AND production_unit_status = 'COMMISSIONED'
+            AND generation_unit_status = 'COMMISSIONED'
+            AND generation_unit_installed_capacity_mw > 0
+          ORDER BY generation_unit_code, valid_from DESC,
+                   generation_unit_installed_capacity_mw DESC
+        ) s
+        GROUP BY generation_unit_type
+        """,
+        [bidding_zone]
+    )
+    out = Dict{String,Float64}()
+    for row in eachrow(df)
+        (ismissing(row.t) || ismissing(row.mw)) && continue
+        k = normalize_fuel_type_name(String(row.t))
+        out[k] = get(out, k, 0.0) + Float64(row.mw)
+    end
+    return out
+end
+
+"""
+    get_reservoir_dryness(bidding_zone::String, day::Date) -> Union{Float64,Nothing}
+
+Hydrological dryness from ENTSO-E weekly reservoir filling levels
+(`entsoe.aggregated_hydro_storage_filling_rate`): the latest stored energy
+strictly before `day`'s ISO week, compared to the median stored energy for
+the same weeks (±2) of previous years. Returns `clamp(1 - current/norm, 0, 1)`
+— 0 in normal/wet conditions, approaching 1 in severe drought — or `nothing`
+when either value is unavailable.
+
+Unlike output-based dryness, this measures the water itself, so it is not
+confounded by dispatch incentives (hydro running hard *because* prices are
+high looks "wet" in output terms while reservoirs are actually draining).
+"""
+function get_reservoir_dryness(bidding_zone::String, day::Date)
+    iso_week = Int(Dates.week(day))
+    iso_year = year(day)
+
+    current = sql2df_with_retry(
+        """
+        SELECT stored_energy_mwh
+        FROM entsoe.aggregated_hydro_storage_filling_rate
+        WHERE area_map_code = \$1 AND area_type_code LIKE 'BZN%'
+          AND stored_energy_mwh IS NOT NULL
+          AND (year < \$2 OR (year = \$2 AND week < \$3))
+        ORDER BY year DESC, week DESC
+        LIMIT 1
+        """,
+        [bidding_zone, iso_year, iso_week]
+    )
+    (isempty(current) || ismissing(current.stored_energy_mwh[1])) && return nothing
+
+    norm = sql2df_with_retry(
+        """
+        SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY stored_energy_mwh) AS med
+        FROM entsoe.aggregated_hydro_storage_filling_rate
+        WHERE area_map_code = \$1 AND area_type_code LIKE 'BZN%'
+          AND stored_energy_mwh IS NOT NULL
+          AND year < \$2
+          AND week BETWEEN \$3 - 2 AND \$3 + 2
+        """,
+        [bidding_zone, iso_year, iso_week]
+    )
+    (isempty(norm) || ismissing(norm.med[1]) || Float64(norm.med[1]) <= 0.0) && return nothing
+
+    return clamp(1.0 - Float64(current.stored_energy_mwh[1]) / Float64(norm.med[1]), 0.0, 1.0)
+end
+
+"""
+    get_reservoir_drawdown(bidding_zone::String, day::Date) -> Union{Float64,Nothing}
+
+Absolute reservoir DRAWDOWN: `clamp(1 - stored / trailing-52-week max, 0, 1)`,
+using the latest stored energy strictly before `day`'s ISO week and the maximum
+stored energy over the preceding 52 weeks (both ex-ante — only weeks before the
+market day enter). 0 at the seasonal reservoir peak (autumn), rising toward 1 as
+the reservoir empties through winter into spring.
+
+This is the SEASONAL complement to `get_reservoir_dryness`. Dryness normalizes
+against the *same week of prior years*, so a normal winter drawdown reads
+dryness ≈ 0 even though the water is absolutely scarce and its shadow value is
+high (measured: SE1/SE2 reservoirs draw down to 55–60% of the annual max by
+February at dryness 0, yet the model priced their water at the full-reservoir
+floor → SE1/SE2 clearing ≈ €18 vs actual ≈ €59). Drawdown restores that seasonal
+water-value signal from fundamentals (reservoir physics), with no month dummies.
+"""
+function get_reservoir_drawdown(bidding_zone::String, day::Date)
+    iso_week = Int(Dates.week(day))
+    iso_year = year(day)
+    df = sql2df_with_retry(
+        """
+        WITH hist AS (
+          SELECT year, week, stored_energy_mwh
+          FROM entsoe.aggregated_hydro_storage_filling_rate
+          WHERE area_map_code = \$1 AND area_type_code LIKE 'BZN%'
+            AND stored_energy_mwh IS NOT NULL
+            AND (year < \$2 OR (year = \$2 AND week < \$3))
+            AND (year > \$2 - 2 OR (year = \$2 - 1 AND week >= \$3))
+        )
+        SELECT (SELECT stored_energy_mwh FROM hist ORDER BY year DESC, week DESC LIMIT 1) AS cur,
+               (SELECT MAX(stored_energy_mwh) FROM hist) AS mx
+        """,
+        [bidding_zone, iso_year, iso_week]
+    )
+    (isempty(df) || ismissing(df.cur[1]) || ismissing(df.mx[1]) ||
+        Float64(df.mx[1]) <= 0.0) && return nothing
+    return clamp(1.0 - Float64(df.cur[1]) / Float64(df.mx[1]), 0.0, 1.0)
+end
+

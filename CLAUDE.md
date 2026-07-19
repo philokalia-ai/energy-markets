@@ -19,15 +19,22 @@ The main module `Euphemia` provides:
 
 ### Key Modules
 
-- `src/Euphemia.jl` - Main module with market clearing functions and orchestration
+See **[docs/code-map.md](docs/code-map.md)** for the full third-party reader's
+guide (what lives where, what calls what, where to start per task). Large
+concerns are split into per-topic files `include`d by a thin parent in
+definition order:
+
+- `src/Euphemia.jl` + `src/clearing/` - Main module spine (deps, solver cache, exports) + the clearing orchestration: `single_zone.jl`, `multi_zone_books.jl`, `multi_zone_run.jl`, `iterative.jl`, `batch_runners.jl`, `batch_workers.jl`
+- `src/MeritOrderBook.jl` + `src/merit_order/` - The calibrated ex-ante book: `flows_imports.jl` (net imports, ex-ante flows, backstop), `zone_profiles.jl` (ZoneProfile + ZONE_PROFILES + ZoneScenario), `fleet_data.jl` (hydro/p95/reservoir queries), `book_build.jl` (create_merit_order_book)
+- `src/Generators.jl` + `src/generators/` - Generator struct + `registry.jl` (get_generators), `fuel_costs.jl` (TTF/EUA/SRMC), `parameter_inference.jl`, `inference_cache.jl`, `initial_conditions.jl`
+- `src/dbutils.jl` + `src/db/` - `postgres_core.jl` (code-version ledger, pool, sql2df), `duckdb_store.jl` (offline extract backend), `results_store.jl` (simulations.* DDL + writers)
 - `src/MPCC.jl` - MPCC (Mathematical Program with Complementarity Constraints) solver for market clearing
 - `src/UnitCommitment.jl` - Unit commitment optimization using JuMP/HiGHS
 - `src/BiddingStrategy.jl` - Converts UC solutions to market bids
 - `src/Network.jl` - Network topology, TransferCapacity, and ATC constraints
 - `src/MarketOrders.jl` - Order types (SimpleOrder, BlockOrder)
 - `src/AlternativeOrderBook.jl` - Alternative (faster) order book generation
-- `src/Generators.jl`, `src/Loads.jl`, `src/Renewables.jl` - Data models
-- `src/dbutils.jl` - Database connection and data access
+- `src/Loads.jl`, `src/Renewables.jl` - Demand and RES-forecast queries
 
 ### Key Functions
 
