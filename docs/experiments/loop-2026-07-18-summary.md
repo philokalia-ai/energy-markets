@@ -16,7 +16,10 @@ product changes, no cv bump**. 14 commits.
    flat step); (γ) stable ±8 % per-unit repricing → **IT-CSOUTH corr
    0.307→0.680, MAE 21.81→20.05, 19/20 days; IT-NORTH corr 0.747→0.820,
    MAE −1.9, 17/20**; magnitude sweep: corr plateaus at ±8 %, MAE keeps
-   improving to ±12 % (19.35).
+   improving to ±12 % (19.35). Late addendum: **IT-Sicily confirms (corr
+   0.489→0.720, 19/20)**; **IT-Sardinia is the honest exception (0.369→0.361,
+   7/20 — its problem is the island/SAPEI mix, not SRMC alignment)**. Final
+   family score: 3 of 4 IT zones confirmed, scope refined to mainland+Sicily.
 2. **DK1 valley mechanism found — export-absorption ladder.** Elastic export
    demand steps (30/15/5 € × 400 MW): **corr 0.495→0.569, MAE −2.0**, binding
    only in RES-surplus hours (10/20 days — the expected signature). Combo

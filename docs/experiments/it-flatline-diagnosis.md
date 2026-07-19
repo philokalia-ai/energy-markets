@@ -117,10 +117,15 @@ byte-identity + per-zone A/B on held-out days, bump cv18.
 | IT-CSOUTH ±8 % | 0.680 | 20.05 | 19/20 |
 | IT-CSOUTH ±12 % | 0.677 | **19.35** | 19/20 |
 | IT-NORTH stock → ±8 % | 0.747 → **0.820** | 19.74 → **17.82** | 17/20 |
+| IT-Sicily stock → ±8 % | 0.489 → **0.720** | 21.82 → **20.10** | 19/20 |
+| **IT-Sardinia stock → ±8 %** | 0.369 → 0.361 | 26.70 → 28.03 | **7/20 (negative)** |
 | **DK1 stock → ±8 % (valid rerun)** | 0.495 → 0.521 | 34.44 → 33.96 | 10/20 (marginal) |
 
 Correlation plateaus at ±8 %; MAE keeps improving to ±12 %. **cv18
-recommendation: per-unit SRMC spread ≈ ±10 % for the IT zones** (implemented
+recommendation: per-unit SRMC spread ≈ ±10 % for the IT mainland zones + Sicily**
+(Sardinia is the honest exception — its sim already has structure and the
+spread hurts; its residual is the island system / SAPEI import mix, filed
+separately) (implemented
 properly in the cost model — inferred heat rates where history allows, a
 deterministic per-unit draw otherwise), guarded by SEE byte-identity and
 held-out per-zone A/Bs. **DK1: marginal.** The first DK1 run was INVALID (a prefix bug meant Danish
