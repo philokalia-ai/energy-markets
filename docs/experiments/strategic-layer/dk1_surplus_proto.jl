@@ -10,11 +10,15 @@ using Statistics, Printf
 function surplus_ladder(steps::Vector{Tuple{Float64,Float64}})
     (_day::Date) -> (ctx -> begin
         out = collect(ctx.tagged_orders)
+        # strategist ctx has NO resolution_minutes (only extra_orders ctx does);
+        # referencing it throws and the zone is silently dropped. Take the
+        # resolution from an existing order instead.
+        res = isempty(ctx.tagged_orders) ? 60 : ctx.tagged_orders[1][1].resolution_code
         for ts in ctx.timeslots
             dt = DateTime(ts, dateformat"yyyymmdd-HHMM")
             for (price, mw) in steps
                 push!(out, (SimpleOrder(:demand, price, mw, Symbol(ctx.zone), dt,
-                    ctx.resolution_minutes), "EXTRA"))
+                    res), "EXTRA"))
             end
         end
         out
@@ -35,6 +39,7 @@ for (i, day) in enumerate(pick)
     a = try clear_day(day) catch e; @warn "A failed" day e; continue; end
     b = try clear_day(day; strategist=surplus_ladder(LADDER)(day)) catch e; @warn "B failed" day e; continue; end
     ma, mb = dm(a, day), dm(b, day)
+    (ma.mae === missing || mb.mae === missing) && (@warn "skipping day with <12 paired hours" day; continue)
     push!(results, (a=ma, b=mb))
     @printf("[%2d/20] %s  stock: corr=%s mae=%.1f std=%.1f | ladder: corr=%s mae=%.1f std=%.1f\n",
         i, day, ma.corr===missing ? "-" : round(ma.corr,digits=2), ma.mae, ma.simstd,
@@ -46,3 +51,4 @@ println("\n=== DK1 surplus-ladder summary ($(length(results)) days) ===")
 @printf("stock  : corr %.3f  MAE %.2f  std %.1f\n", ms(r.a.corr for r in results), ms(r.a.mae for r in results), ms(r.a.simstd for r in results))
 @printf("ladder : corr %.3f  MAE %.2f  std %.1f\n", ms(r.b.corr for r in results), ms(r.b.mae for r in results), ms(r.b.simstd for r in results))
 println("MAE better on $(count(r -> r.b.mae < r.a.mae, results))/$(length(results)) days")
+println("DONE")
