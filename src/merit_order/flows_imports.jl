@@ -48,6 +48,9 @@ const FLOW_ASOF_CLASS = Ref{Symbol}(:all)
 #   :clim — flow climatology: per (border, hour) MEDIAN over the trailing
 #           8 same-weekday days (D-7, D-14, …, D-56 — all strictly before
 #           the D-1 auction). Interpretable, no fitting, versioned here.
+#   :v3   — :v2 plus load-analogue blending on non-Nordic borders
+#           (docs/experiments/analogue-flows): thermal-regime analogue days
+#           selected by D-1 load-forecast similarity. Opt-in (env/kwarg).
 #   :v2   — the measured best ex-ante mix (docs/ex-ante-flows.md): D-7 for
 #           borders touching a NORDIC hydro zone (regime-switching flows —
 #           reservoir state persists week to week, so recency wins; the
@@ -167,7 +170,7 @@ _lag_applies(cp::String, imponly::Set{String}) =
     ((FLOW_ASOF_CLASS[] == :dropped) == (cp in imponly))
 
 # Is any ex-ante replacement active at all?
-_exante_active() = FLOW_ASOF_MODE[] in (:clim, :v2) ||
+_exante_active() = FLOW_ASOF_MODE[] in (:clim, :v2, :v3) ||
                    (FLOW_ASOF_MODE[] == :dlag && FLOW_ASOF_LAG[] > 0) ||
                    # legacy: LAG>0 with mode :d0 keeps the iter6 audit behaviour
                    FLOW_ASOF_LAG[] > 0
@@ -191,26 +194,155 @@ function _zone_border_hourly_clim(zone::String, day::Date; weeks::Int=8)
         key => median(v) for (key, v) in acc)
 end
 
+# --- :v3 load-analogue selection (docs/experiments/analogue-flows) ----------
+# The delivery day's published D-1 load-forecast vector is matched (L2, 24 UTC
+# hours) against the realized load of the trailing 365 days (candidates
+# <= day-2, so their load AND flows are published strictly before the D-1
+# auction). Flows then come from the per-(hour,border) MEDIAN over the K
+# nearest analogue days. Load is the ex-ante thermometer: it is a monotone
+# function of temperature (GR: 195 MW/°C below 25°C, 354 above), embeds
+# weekday/holiday/tourism, and exists for every zone — so a heatwave week
+# finds last summer's analogue days instead of dragging the calendar median
+# through a regime flip (measured failure: July 2026 SEE, GR evening bias
+# +60..+79 €/MWh at 93-100% day consistency under :v2's 8-week median).
+const ANALOGUE_K = Ref{Int}(16)
+const _ANALOGUE_DAYS_CACHE = Dict{Tuple{String,Date},Vector{Date}}()
+const _ANALOGUE_DAYS_LOCK = ReentrantLock()
+
+function clear_analogue_days_cache!()
+    lock(_ANALOGUE_DAYS_LOCK) do
+        empty!(_ANALOGUE_DAYS_CACHE)
+    end
+end
+
+function _load_day_vectors(zone::String, day::Date)
+    # Realized 24h load vectors for candidate days [day-365, day-2], plus the
+    # delivery day's D-1 forecast vector. Both hourly UTC averages.
+    fdf = sql2df_with_retry("""
+        SELECT EXTRACT(hour FROM date_time_utc AT TIME ZONE 'UTC')::int AS h,
+               AVG(total_load_mw) AS mw
+        FROM entsoe.day_ahead_total_load_forecast
+        WHERE date_time_utc >= (\$1::date::timestamp AT TIME ZONE 'UTC')
+          AND date_time_utc < ((\$1::date + 1)::timestamp AT TIME ZONE 'UTC')
+          AND area_map_code = \$2
+          AND area_type_code IN ('BZN', 'BZN/CTA', 'BZN/CTY', 'BZN/CTA/CTY')
+        GROUP BY 1
+        """, [day, zone])
+    adf = sql2df_with_retry("""
+        SELECT (date_time_utc AT TIME ZONE 'UTC')::date AS d,
+               EXTRACT(hour FROM date_time_utc AT TIME ZONE 'UTC')::int AS h,
+               AVG(total_load_mw) AS mw
+        FROM entsoe.actual_total_load
+        WHERE date_time_utc >= ((\$1::date - 365)::timestamp AT TIME ZONE 'UTC')
+          AND date_time_utc < ((\$1::date - 1)::timestamp AT TIME ZONE 'UTC')
+          AND area_map_code = \$2
+          AND area_type_code IN ('BZN', 'BZN/CTA', 'BZN/CTY', 'BZN/CTA/CTY')
+        GROUP BY 1, 2
+        """, [day, zone])
+    return fdf, adf
+end
+
+"""
+    _analogue_days(zone, day; k=ANALOGUE_K[]) -> Vector{Date}
+
+The k candidate days (trailing 365, ≤ day-2) whose realized 24h load vector is
+L2-closest to `day`'s published D-1 load forecast vector. Empty when the
+forecast or the candidate pool is unavailable — callers fall back to the
+calendar climatology (the :v2 source), so :v3 degrades gracefully to :v2.
+"""
+function _analogue_days(zone::String, day::Date; k::Int=ANALOGUE_K[])
+    key = (zone, day)
+    lock(_ANALOGUE_DAYS_LOCK) do
+        haskey(_ANALOGUE_DAYS_CACHE, key) && return _ANALOGUE_DAYS_CACHE[key]
+    end
+    days = try
+        fdf, adf = _load_day_vectors(zone, day)
+        fv = fill(NaN, 24)
+        for r in eachrow(fdf)
+            0 <= r.h <= 23 && (fv[r.h+1] = r.mw)
+        end
+        if any(isnan, fv)
+            Date[]
+        else
+            byday = Dict{Date,Vector{Float64}}()
+            for r in eachrow(adf)
+                v = get!(byday, r.d, fill(NaN, 24))
+                0 <= r.h <= 23 && (v[r.h+1] = r.mw)
+            end
+            cands = [(d, v) for (d, v) in byday if !any(isnan, v)]
+            if length(cands) < k
+                Date[]
+            else
+                sort!(cands, by=t -> sum(abs2, t[2] .- fv))
+                sort!([t[1] for t in cands[1:k]])
+            end
+        end
+    catch e
+        @warn "analogue-day selection failed for $zone $day — falling back to climatology" error = sprint(showerror, e)
+        Date[]
+    end
+    lock(_ANALOGUE_DAYS_LOCK) do
+        _ANALOGUE_DAYS_CACHE[key] = days
+    end
+    return days
+end
+
+# Per-(hour,border) MEDIAN of the flows on the analogue days. Reuses the
+# day-level relation cache, so the K days are shared across all zones of a
+# footprint build.
+function _zone_border_hourly_analogue(zone::String, day::Date)
+    days = _analogue_days(zone, day)
+    isempty(days) && return Dict{Tuple{Int,String,Int},Float64}()
+    acc = Dict{Tuple{Int,String,Int},Vector{Float64}}()
+    for d in days
+        for (key, avg) in _zone_border_hourly(zone, day; lag=Dates.value(day - d))
+            push!(get!(acc, key, Float64[]), avg)
+        end
+    end
+    return Dict{Tuple{Int,String,Int},Float64}(
+        key => median(v) for (key, v) in acc)
+end
+
+# The :v2 source map — measured best ex-ante mix (docs/ex-ante-flows.md):
+# D-7 for borders touching a Nordic hydro zone (regime persistence),
+# climatology for the rest (noise averaging). Shared by :v2 and :v3.
+function _v2_border_map(zone::String, day::Date)
+    clim = _zone_border_hourly_clim(zone, day)
+    d7 = _zone_border_hourly(zone, day; lag=7)
+    mixed = Dict{Tuple{Int,String,Int},Float64}()
+    nordic_side(cp) = zone in NORDIC_FLOW_ZONES || cp in NORDIC_FLOW_ZONES
+    for (key, avg) in clim
+        nordic_side(key[2]) || (mixed[key] = avg)
+    end
+    for (key, avg) in d7
+        nordic_side(key[2]) && (mixed[key] = avg)
+    end
+    return mixed
+end
+
 # The ex-ante source map for the selected class, merged with same-day flows
 # for the non-selected counterparties.
 function _zone_border_hourly_exante(zone::String, day::Date, imponly::Set{String})
     mode = FLOW_ASOF_MODE[]
     alt = if mode == :clim
         _zone_border_hourly_clim(zone, day)
+    elseif mode == :v3
+        # Load-analogue blend (docs/experiments/analogue-flows): per (hour,
+        # border), 50/50 mix of the analogue-day median with the :v2 value
+        # (D-7 on Nordic-touching borders, 8-week calendar climatology
+        # elsewhere). Measured on 2024-07..2026-07 net-import MAE across the
+        # footprint: 413 vs v2's 459 MW overall, 401 vs 445 evenings, 452 vs
+        # 494 in the July-2026 SEE flip window — the blend also beat both the
+        # pure analogue and every class-scoped variant. Borders without an
+        # analogue value (selection unavailable) keep the :v2 value exactly,
+        # so :v3 degrades gracefully to :v2.
+        v2map = _v2_border_map(zone, day)
+        ana = _zone_border_hourly_analogue(zone, day)
+        Dict{Tuple{Int,String,Int},Float64}(
+            key => haskey(ana, key) ? 0.5 * ana[key] + 0.5 * avg : avg
+            for (key, avg) in v2map)
     elseif mode == :v2
-        # Measured best mix: D-7 for borders touching a Nordic hydro zone
-        # (regime persistence), climatology for the rest (noise averaging).
-        clim = _zone_border_hourly_clim(zone, day)
-        d7 = _zone_border_hourly(zone, day; lag=7)
-        mixed = Dict{Tuple{Int,String,Int},Float64}()
-        nordic_side(cp) = zone in NORDIC_FLOW_ZONES || cp in NORDIC_FLOW_ZONES
-        for (key, avg) in clim
-            nordic_side(key[2]) || (mixed[key] = avg)
-        end
-        for (key, avg) in d7
-            nordic_side(key[2]) && (mixed[key] = avg)
-        end
-        mixed
+        _v2_border_map(zone, day)
     else
         _zone_border_hourly(zone, day; lag=FLOW_ASOF_LAG[])
     end
