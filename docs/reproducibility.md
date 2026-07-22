@@ -61,14 +61,12 @@ The 2026-04 SEE window is a subset; the full artifact is ~5 GB of parquet.
 
 ## 1. Download
 
-The artifacts live on the project's Cloudflare R2 bucket, pushed by
-`.github/workflows/publish-public-artifact.yml` (frozen artifacts, manual
-release act) and `.github/workflows/refresh-extract.yml` (the living extract,
-daily). `$EUPHEMIA_DATA_URL` is the bucket's public base URL; before the
-public dev-URL is enabled, collaborators fetch the same objects with
-`bin/extract_store.sh pull <name> <dest>` using the R2 credentials
-(`EXTRACT_S3_ENDPOINT` / `EXTRACT_S3_BUCKET` / `AWS_ACCESS_KEY_ID` /
-`AWS_SECRET_ACCESS_KEY`, `AWS_DEFAULT_REGION=auto` — the same env CI uses).
+The artifacts live on the project's public data bucket at
+**<https://data.philokalia.ai>** (Cloudflare R2 behind a custom domain),
+pushed by `.github/workflows/publish-public-artifact.yml` (frozen artifacts,
+manual release act) and `.github/workflows/refresh-extract.yml` (the living
+extract, daily). Maintainers can also fetch through the S3 API with
+`bin/extract_store.sh pull <name> <dest>` (same env as CI).
 
 Published objects:
 
@@ -79,7 +77,7 @@ Published objects:
 
 ```bash
 mkdir -p data/public
-curl -L -o euphemia-data-v1.1.tar.zst "$EUPHEMIA_DATA_URL/euphemia-data-v1.1.tar.zst"
+curl -L -o euphemia-data-v1.1.tar.zst https://data.philokalia.ai/euphemia-data-v1.1.tar.zst
 tar --zstd -xf euphemia-data-v1.1.tar.zst -C data/public   # -> data/public/euphemia-data-v1.1/
 ```
 

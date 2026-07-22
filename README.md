@@ -209,19 +209,17 @@ The full pipeline runs offline from a published, self-contained data extract
 materialized runtime DuckDB ~2.61 GB). Full guide:
 [docs/reproducibility.md](docs/reproducibility.md).
 
-Both artifacts are hosted on the project's Cloudflare R2 bucket (uploaded by
+Both artifacts are hosted on the project's public data bucket at
+**<https://data.philokalia.ai>** (Cloudflare R2 behind a custom domain;
+uploaded by
 [publish-public-artifact.yml](.github/workflows/publish-public-artifact.yml)
-and the daily extract refresh). `$EUPHEMIA_DATA_URL` below is the bucket's
-public base URL — until the public dev-URL is enabled on the bucket,
-collaborators use the same commands through
-`bin/extract_store.sh pull <name> <dest>` with the R2 credentials
-(`EXTRACT_S3_ENDPOINT`, `EXTRACT_S3_BUCKET`, `AWS_*` — same env as CI).
+and the daily extract refresh).
 
 ```bash
 # 1. Download the frozen artifact (euphemia-data-v1.1.tar.zst, ~623 MB;
 #    sha256 5b0e90154f21bd2649a060af60545fecf537eb562ac035fe3e687ceb3ebf0992)
 mkdir -p data/public
-curl -L -o euphemia-data-v1.1.tar.zst "$EUPHEMIA_DATA_URL/euphemia-data-v1.1.tar.zst"
+curl -L -o euphemia-data-v1.1.tar.zst https://data.philokalia.ai/euphemia-data-v1.1.tar.zst
 tar --zstd -xf euphemia-data-v1.1.tar.zst -C data/public
 
 # 2. Verify checksums
@@ -245,7 +243,7 @@ pull the daily-refreshed living extract directly (single ~3 GB DuckDB file,
 `.sha256` sidecar next to it):
 
 ```bash
-curl -L -o data/extracts/euphemia-live.duckdb "$EUPHEMIA_DATA_URL/euphemia-live.duckdb"
+curl -L -o data/extracts/euphemia-live.duckdb https://data.philokalia.ai/euphemia-live.duckdb
 EUPHEMIA_DUCKDB_PATH=data/extracts/euphemia-live.duckdb \
   julia --project=. bin/reproduce.jl --quick
 ```
