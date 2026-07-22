@@ -61,17 +61,32 @@ The 2026-04 SEE window is a subset; the full artifact is ~5 GB of parquet.
 
 ## 1. Download
 
+The artifacts live on the project's Cloudflare R2 bucket, pushed by
+`.github/workflows/publish-public-artifact.yml` (frozen artifacts, manual
+release act) and `.github/workflows/refresh-extract.yml` (the living extract,
+daily). `$EUPHEMIA_DATA_URL` is the bucket's public base URL; before the
+public dev-URL is enabled, collaborators fetch the same objects with
+`bin/extract_store.sh pull <name> <dest>` using the R2 credentials
+(`EXTRACT_S3_ENDPOINT` / `EXTRACT_S3_BUCKET` / `AWS_ACCESS_KEY_ID` /
+`AWS_SECRET_ACCESS_KEY`, `AWS_DEFAULT_REGION=auto` — the same env CI uses).
+
+Published objects:
+
+| object | what | size |
+|---|---|---|
+| `euphemia-data-v1.1.tar.zst` | frozen parquet artifact v1.1 (39 zones, 2023-01-01…2026-06-30), sha256 `5b0e90154f21bd2649a060af60545fecf537eb562ac035fe3e687ceb3ebf0992` | ~623 MB |
+| `euphemia-live.duckdb` | living extract, refreshed daily 02:00 UTC (`.sha256` sidecar) | ~3 GB |
+
 ```bash
 mkdir -p data/public
-# Placeholder — replace with the published artifact URL:
-curl -L -o euphemia-data-v1.tar.zst https://<published-url>/euphemia-data-v1.tar.zst
-tar --zstd -xf euphemia-data-v1.tar.zst -C data/public   # -> data/public/euphemia-data-v1/
+curl -L -o euphemia-data-v1.1.tar.zst "$EUPHEMIA_DATA_URL/euphemia-data-v1.1.tar.zst"
+tar --zstd -xf euphemia-data-v1.1.tar.zst -C data/public   # -> data/public/euphemia-data-v1.1/
 ```
 
 ## 2. Verify checksums
 
 ```bash
-cd data/public/euphemia-data-v1
+cd data/public/euphemia-data-v1.1
 sha256sum -c SHA256SUMS      # every parquet file + MANIFEST.json -> "OK"
 cat MANIFEST.json            # artifact version, window, zones, per-table rows/bytes
 cd -
@@ -80,7 +95,7 @@ cd -
 ## 3. Materialize the runtime DuckDB
 
 ```bash
-PARQUET_DIR=data/public/euphemia-data-v1 \
+PARQUET_DIR=data/public/euphemia-data-v1.1 \
   OUT=data/extracts/euphemia-public.duckdb \
   julia --project=. bin/build_duckdb_from_parquet.jl
 ```
@@ -266,12 +281,12 @@ production Postgres history, not this public extract.
 # Build the parquet dir + runtime .duckdb + MANIFEST + SHA256SUMS from Postgres
 ZONES="AT,BE,BG,CZ,DE_LU,DK1,DK2,EE,ES,FI,FR,GR,HU,LT,LV,NL,NO1,NO2,NO3,NO4,NO5,PL,PT,RO,RS,SE1,SE2,SE3,SE4,SI,SK,IT-NORTH,IT-CNORTH,IT-CSOUTH,IT-SOUTH,IT-Calabria,IT-Sicily,IT-Sardinia,CH" \
   START_DATE=2023-01-01 END_DATE=2026-06-30 AGEN_BACK_DAYS=400 \
-  OUT=data/public/euphemia-public.duckdb PARQUET_DIR=data/public/euphemia-data-v1 \
+  OUT=data/public/euphemia-public.duckdb PARQUET_DIR=data/public/euphemia-data-v1.1 \
   ARTIFACT_VERSION=v1 MAX_SIZE_GB=12 MIN_FREE_GB=60 \
   julia --project=. bin/build_duckdb_extract.jl
 
 # Prove the parquet is content-identical to the Postgres-built DuckDB (no 2nd copy)
-PARITY_ONLY=true PARQUET_DIR=data/public/euphemia-data-v1 \
+PARITY_ONLY=true PARQUET_DIR=data/public/euphemia-data-v1.1 \
   VERIFY_AGAINST=data/public/euphemia-public.duckdb \
   julia --project=. bin/build_duckdb_from_parquet.jl
 ```
