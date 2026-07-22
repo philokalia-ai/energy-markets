@@ -19,6 +19,32 @@ investigate, not a model failure to calibrate away.
 
 ![Day-ahead market bidding-zone DAG](https://github.com/user-attachments/assets/36fa28b2-04b2-4a98-b633-9d9cef683b22)
 
+## Quickstart
+
+```bash
+git clone https://github.com/philokalia-ai/energy-markets && cd energy-markets
+./setup.sh                                    # Julia deps + public data (623 MB, checksummed) + smoke test
+julia --project=. bin/reproduce.jl --quick    # clear 5 days offline, diff vs committed reference metrics
+```
+
+No database, no license, no credentials — the public extract from
+<https://data.philokalia.ai> covers 39 zones, 2023-01-01…2026-06-30
+(`./setup.sh --live` fetches the daily-refreshed extract instead). Then try a
+counterfactual:
+
+```julia
+using Euphemia, Dates
+solar = (ts, mw) -> (8 <= parse(Int, ts[10:11]) <= 17) ? mw + 300.0 : mw
+prices = generate_energy_prices("GR", Date(2026, 1, 26);
+    order_method=:merit_order, save_to_db=false, renewable_modifier=solar)
+```
+
+Full scenario API: [docs/scenario-api.md](docs/scenario-api.md) · deeper
+reproduce options: [docs/reproducibility.md](docs/reproducibility.md) ·
+source-tree guide: [docs/code-map.md](docs/code-map.md). Claude Code users
+get a bundled **`scenarios` skill** ([.claude/skills/scenarios/](.claude/skills/scenarios/SKILL.md))
+that teaches the agent the hooks, labels and pitfalls.
+
 ## Headline results — honest, whole-sample, never cherry-picked
 
 **Full-year record (cv16).** The current model (`code_version` 16), evaluated
