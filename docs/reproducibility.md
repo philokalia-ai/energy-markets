@@ -35,6 +35,11 @@ local file, and scores them against the bundled day-ahead actuals.
 
 The 2026-04 SEE window is a subset; the full artifact is ~5 GB of parquet.
 
+**Column-level documentation with explicit per-table provenance (ENTSO-E TP
+datasets, Yahoo Finance tickers, project-derived tables) and the known data
+quirks: [data-dictionary.md](data-dictionary.md)** (bundled inside future
+artifacts as `DATA-DICTIONARY.md`).
+
 ### Artifact versions
 
 - **v1** — the original published extract.

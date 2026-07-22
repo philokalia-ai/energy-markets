@@ -475,14 +475,29 @@ web/        Static SPA for the live forecast browser (energy.philokalia.ai)
 - **Data:** either the public DuckDB extract (recommended; no database
   required) or a PostgreSQL database with the ENTSO-E schema (maintainers).
 
-## Data attribution
+## Data attribution & acknowledgements (data)
 
-- **ENTSO-E Transparency Platform** — load and wind/solar forecasts, offered
-  transfer capacities, physical flows, generation units and outages, reservoir
-  levels, day-ahead prices (used for validation only). Redistributed in the
-  public extract with attribution under the Platform's terms of use.
-- **TTF gas and EUA carbon** — daily closes via `yfinance` (TTF front-month
-  futures; the SparkChange Physical Carbon ETC as an EUA proxy).
+Full column-level documentation of the published artifact, with per-table
+provenance: **[docs/data-dictionary.md](docs/data-dictionary.md)**.
+
+- **[ENTSO-E Transparency Platform](https://transparency.entsoe.eu)** — the
+  backbone of the model: load and wind/solar forecasts, offered transfer
+  capacities, physical flows, generation units and outages, reservoir levels,
+  per-unit and per-type actual generation, and day-ahead prices (used for
+  validation only). Redistributed in the public extract with attribution
+  under the Platform's terms of use. This project would not exist without
+  ENTSO-E's open transparency data.
+- **[Open-Meteo](https://open-meteo.com)** — hourly weather (temperature,
+  wind, radiation) for the weather→RES forecasting track and the ERA5
+  reanalysis history behind the wind/solar feature models (CC-BY 4.0,
+  non-commercial API tier). Carried in the living extract's `weather.*`
+  tables.
+- **Yahoo Finance** via `yfinance` — TTF gas front-month futures (`TTF=F`)
+  and the SparkChange Physical Carbon ETC (`CO2.L`) as the EUA carbon proxy;
+  daily reference closes.
+- **[Global Fishing Watch](https://globalfishingwatch.org)** — AIS port-call
+  data behind the cold-ironing case studies (CC BY-NC; the raw dataset is
+  therefore *not* redistributed in this repo — only derived aggregates).
 
 **Bidding-zone boundaries** (web map) are adapted from the
 [Electricity Maps contrib](https://github.com/electricitymaps/electricitymaps-contrib)
