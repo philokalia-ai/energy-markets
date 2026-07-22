@@ -290,8 +290,15 @@ function main()
         manifest_path = joinpath(PARQUET_DIR, "MANIFEST.json")
         write_manifest(manifest_path, manifest_tables, total_rows)
 
-        # SHA256SUMS: one line per published file (parquet + manifest), sha256sum
-        # format ("<hex>  <relative path>"), relative to PARQUET_DIR.
+        # Bundle the column-level data dictionary (per-table provenance and
+        # gotchas) so the artifact is self-documenting.
+        dict_src = joinpath(@__DIR__, "..", "docs", "data-dictionary.md")
+        isfile(dict_src) && cp(dict_src, joinpath(PARQUET_DIR, "DATA-DICTIONARY.md");
+                               force=true)
+
+        # SHA256SUMS: one line per published file (parquet + manifest +
+        # dictionary), sha256sum format ("<hex>  <relative path>"), relative
+        # to PARQUET_DIR.
         sums = IOBuffer()
         for t in manifest_tables
             t.parquet === nothing && continue
@@ -299,6 +306,11 @@ function main()
         end
         mdigest = open(f -> bytes2hex(sha256(f)), manifest_path)
         println(sums, mdigest, "  MANIFEST.json")
+        dict_dst = joinpath(PARQUET_DIR, "DATA-DICTIONARY.md")
+        if isfile(dict_dst)
+            ddigest = open(f -> bytes2hex(sha256(f)), dict_dst)
+            println(sums, ddigest, "  DATA-DICTIONARY.md")
+        end
         write(joinpath(PARQUET_DIR, "SHA256SUMS"), take!(sums))
         println("\nWrote MANIFEST.json + SHA256SUMS to ", PARQUET_DIR)
     end
