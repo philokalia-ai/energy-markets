@@ -88,7 +88,6 @@ ladder, hb_rows, const_rows, transfer = [], [], [], []
 
 for zone in ["GR", "BG", "ES", "DE_LU"]:
     zdf = df[df["zone"] == zone]
-    tr, te, ap = zdf[TRAIN[df["zone"] == zone].values], zdf[TEST[df["zone"] == zone].values], zdf[APR26[df["zone"] == zone].values]
     tr = zdf[(zdf["day"] >= "2023-07-01") & (zdf["day"] <= "2025-06-30")]
     te = zdf[(zdf["day"] >= "2025-07-01") & (zdf["day"] <= "2026-06-30")]
     ap = zdf[(zdf["day"] >= "2026-04-01") & (zdf["day"] <= "2026-04-30")]

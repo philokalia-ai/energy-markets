@@ -74,7 +74,8 @@ gas-anchored markup model of any constants is structurally wrong there.
 | A refit constants | 28.4 (.61) | 37.8 (.50) | 46.8 (.10) | 26.7 (.63) |
 | B GBT core (margin, d̂) | 23.2 (.75) | 35.0 (.63) | 21.7 (.75) | 15.7 (.87) |
 | B GBT rich features | 22.3 (.76) | 39.5 (.68) | 20.8 (.79) | 15.0 (.89) |
-| C SR best (complexity ≤ 15, core) | see Pareto table below | | | |
+| C SR core `1.98/margin` (cplx 3) | 24.8 (.77) | — | — | — |
+| C SR rich (cplx 9–19) | 21.9–20.3 (.80–.82) | — | — | — |
 | D relax-ODE (D-1 legal) | 28.2 — α→1, collapses to static | 37.5 | 46.7 | 26.7 |
 | D GBT + prev-day lag (D-1 legal) | 19.2 (.82) | 26.3 (.79) | 17.9 (.84) | 13.5 (.92) |
 | D GBT + within-day lag (NOT D-1 legal) | 11.8 (.92) | 12.5 (.93) | 6.3 (.98) | 6.7 (.96) |
@@ -123,7 +124,38 @@ DE_LU evenings were never biased (−2/−2/+1 even with hand constants).
 
 ### C: what function does the data propose? (symbolic regression, GR)
 
-SR_RESULTS_PLACEHOLDER
+SymbolicRegression.jl (PySR's backend), operators `+ − × ÷ square cube relu
+exp`, fit on GR train, test MAE on the held-out year. Pareto fronts in
+`sr_front_core.tsv` / `sr_front_rich.tsv`. The headline members:
+
+| complexity | formula | test MAE | corr |
+|---|---|---|---|
+| 3 (core) | `y = 1.98 / margin` | 24.8 | 0.77 |
+| 5 (core) | `y = 0.29 + 1.54 / margin` | 24.0 | 0.75 |
+| 9 (rich) | `y = 0.51 + 1.13 / (margin − d̂ + fill_frac)` | **21.9** | 0.80 |
+| 16 (rich) | `y = 0.42 + (imp_share + 1.21 + relu(0.40/fill_frac + d̂ − margin)) / margin` | 20.8 | 0.81 |
+| 19 (rich) | c16 + a second relu correction | 20.3 | 0.82 |
+
+Three findings:
+
+1. **The data's own scarcity law is a hyperbola, not a thresholded hinge.**
+   `y ≈ 1.98/margin` — two constants — beats the refit 4-constant hand form
+   (24.8 vs 28.4) and has a near-FLAT hourly bias profile (evenings −2/+6/+19,
+   midday −3…−6, vs the hand form's +61/+65/+53 and +30…+37). A `1/margin` law
+   is exactly the inverse-residual-supply shape that oligopoly-markup theory
+   (Cournot-style: markup ∝ 1/elastic residual supply) predicts — the data is
+   proposing economics, not noise.
+2. **No separate peak term is needed.** d̂ enters (if at all) *inside* the
+   margin denominator (`margin − d̂`): the peak steepens the same hyperbola
+   rather than adding an independent additive markup. The hand form's additive
+   separability (`scarcity term + peak term`) is the main thing the data
+   rejects.
+3. **The rich-feature SR beats the rich-feature GBT** (21.9 vs 22.3 at
+   complexity NINE) — the signal really is low-dimensional and smooth; trees
+   waste capacity. Reservoir filling and import share enter exactly the way
+   the product's cv15–cv17 mechanisms hand-coded them (dry reservoirs tighten
+   the margin; import dependence raises the markup), which is independent
+   confirmation of those mechanism choices.
 
 ### D: do dynamics matter? (honest answer: no — for the right reason)
 
@@ -153,29 +185,40 @@ product's choice of a different mechanism (not constants) would be needed there.
 
 ## Conclusions
 
-1. **Was the hand form near-optimal?** The *form* is reasonable — hinge +
-   peak-shape explains most of what any (margin, d̂) function can: refit form
-   28.4 vs GBT-core 23.2 on GR, so the parametric family captures ~70% of the
-   core-feature ceiling's improvement over hand. The *constants* were not:
-   refitting buys 10.7 €/MWh on GR (39.2→28.4) and kills most of the evening
-   over-prediction. BG's hand constants were nearly the data's own choice.
-2. **What does all-in fitting buy?** On GR: hand 39.2 → refit 28.4 → flexible
-   local 22.3 → +prev-day persistence 19.2. The truly-dynamic-looking 11.8
-   is not achievable ex ante (uses same-day hours). So the honest upper bound
-   of a D-1-legal local markup model is ≈19 €/MWh MAE — roughly half the
-   hand-constant number *in this standalone framing*.
-3. **What it costs**: the fitted constants/trees are shaped by the framing
-   (gas-always-marginal) and the sample (post-2023 regime); they carry no
-   mechanism, so a residual is no longer attributable to conduct vs misfit —
-   exactly the property the product's no-fit design exists to protect. The SR
-   front shows the data's own preferred laws are smooth
-   (hyperbolic-in-margin, interaction-coupled) rather than thresholded —
-   useful *shape intelligence* for future hand calibration without adopting
-   fitted constants.
-4. **Dynamics don't matter** (α→1); **transfer is partial** — fitted functions
-   are zone-idiosyncratic; the hand approach of shared mechanisms with
-   per-profile constants is validated in direction, if not in the specific
-   SEE values.
+1. **Was the hand form near-optimal?** The *constants* were not (refitting
+   buys 10.7 €/MWh on GR and kills most of the evening over-prediction; BG's
+   were close to the data's choice), and more importantly the *shape* is not
+   what the data proposes: a plain hyperbola `1.98/margin` with two constants
+   beats the refit 4-constant hinge+peak form (24.8 vs 28.4) with a near-flat
+   hourly bias profile. The data rejects (a) the threshold (scarcity pricing is
+   smooth all the way up the margin axis), and (b) the additive separability of
+   scarcity and peak terms (d̂ belongs inside the margin denominator).
+2. **What does all-in fitting buy?** On GR: hand 39.2 → refit constants 28.4 →
+   data's own formula 24.8→21.9 → flexible trees 22.3 → +prev-day persistence
+   19.2. The 11.8 of the within-day-lag model is not achievable ex ante. So
+   the honest D-1-legal ceiling of a local markup model is ≈19–20 €/MWh, about
+   half the hand-constant number *in this standalone framing* — and a
+   two-to-nine-constant formula gets ~85% of the way to that ceiling.
+3. **What it costs**: fitted constants are shaped by the framing
+   (gas-always-marginal) and the sample (post-2023 regime), and carry no
+   mechanism — a residual is no longer attributable to conduct vs misfit,
+   exactly the property the product's no-fit design exists to protect. But the
+   SR result is *shape intelligence* usable without importing fitted
+   constants: a future hand calibration could adopt the hyperbolic LAW
+   (markup ∝ 1/margin, theory-backed) and hand-pick its two constants by
+   mechanism reasoning, keeping the no-fit guarantee while shedding the
+   threshold artifact that produced the phantom-evening-scarcity failure mode.
+4. **Dynamics don't matter** (α→1 in every zone — the DA auction is
+   simultaneous); **transfer is partial** — fitted functions are
+   zone-idiosyncratic (GR-fit beats hand-SEE on BG but loses to hand-
+   CONTINENTAL on DE_LU); the hand approach of shared mechanisms with
+   per-profile constants is validated in direction, if not in the SEE values.
+5. **Independent confirmation of cv15–cv17 mechanisms**: without being told,
+   the SR put reservoir dryness and import share into the markup in the same
+   direction the product hand-coded them (`water_value_dry_boost`,
+   `import_backstop`/`scarcity_import_credit`) — and the BG evening residual
+   that survives even the flexible fit (+40–48) is a clean candidate conduct
+   signature for the research-framing agenda.
 
 ## Reproduce
 
