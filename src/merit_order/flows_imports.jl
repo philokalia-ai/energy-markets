@@ -327,19 +327,27 @@ function _zone_border_hourly_exante(zone::String, day::Date, imponly::Set{String
     alt = if mode == :clim
         _zone_border_hourly_clim(zone, day)
     elseif mode == :v3
-        # Load-analogue blend (docs/experiments/analogue-flows): per (hour,
-        # border), 50/50 mix of the analogue-day median with the :v2 value
-        # (D-7 on Nordic-touching borders, 8-week calendar climatology
-        # elsewhere). Measured on 2024-07..2026-07 net-import MAE across the
-        # footprint: 413 vs v2's 459 MW overall, 401 vs 445 evenings, 452 vs
-        # 494 in the July-2026 SEE flip window — the blend also beat both the
-        # pure analogue and every class-scoped variant. Borders without an
-        # analogue value (selection unavailable) keep the :v2 value exactly,
-        # so :v3 degrades gracefully to :v2.
+        # anad2 (docs/experiments/analogue-flows, stage-1 round 2): per (hour,
+        # border), the MEAN of the load-analogue median and the D-2 observed
+        # flow — "half what thermally-similar days did, half what the border
+        # did the day before yesterday". D-2 is the fastest admissible signal
+        # (realized + published before the D-1 auction) and catches a NEW
+        # regime within 48 h; the analogue term supplies stability. Measured
+        # footprint net-import MAE: 391 vs v2's 459 overall, 373 vs 445
+        # evenings, 388 vs 494 in the July-2026 flip window (GR 589→322).
+        # The earlier v2-blend definition scored 437/425/478 and only shaved
+        # 3 of GR's +57 evening price bias; a 3-year analogue pool was also
+        # measured and REJECTED (structural border drift: 454→479). Borders
+        # with only one of {analogue, D-2} use that one; borders with neither
+        # keep the :v2 value exactly — graceful degradation to :v2.
         v2map = _v2_border_map(zone, day)
         ana = _zone_border_hourly_analogue(zone, day)
+        d2 = _zone_border_hourly(zone, day; lag=2)
         Dict{Tuple{Int,String,Int},Float64}(
-            key => haskey(ana, key) ? 0.5 * ana[key] + 0.5 * avg : avg
+            key => (haskey(ana, key) && haskey(d2, key)) ?
+                       0.5 * ana[key] + 0.5 * d2[key] :
+                   haskey(ana, key) ? ana[key] :
+                   haskey(d2, key) ? d2[key] : avg
             for (key, avg) in v2map)
     elseif mode == :v2
         _v2_border_map(zone, day)

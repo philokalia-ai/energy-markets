@@ -119,16 +119,28 @@ for zone in FOOTPRINT:
             if have:
                 rec[cp] = m.loc[have].median()
         cands["rec3"] = rec
+        # --- d2: the fastest admissible signal — flows of D-2 (realized and
+        # published before the D-1 auction; different weekday, but a NEW
+        # regime shows up within 2 days instead of >=7)
+        d2day = d - pd.Timedelta(days=2)
+        d2 = {}
+        for cp in borders:
+            m = bmat[cp]
+            if d2day in m.index:
+                d2[cp] = m.loc[d2day]
+        cands["d2"] = d2
         # --- analogue: nearest-load days in trailing 365, <= D-2
         if d in fcl.index:
             fv = fcl.loc[d].to_numpy()
             if not np.isnan(fv).all():
-                lo, hi = d - pd.Timedelta(days=365), d - pd.Timedelta(days=2)
-                mask = (al_days >= lo) & (al_days <= hi)
-                cd, cv = al_days[mask], al_v[mask]
-                ok = ~np.isnan(cv).any(axis=1)
-                cd, cv = cd[ok], cv[ok]
-                if len(cd) >= max(K_LIST):
+                for pool, tag in ((365, ""), (1200, "w")):
+                    lo, hi = d - pd.Timedelta(days=pool), d - pd.Timedelta(days=2)
+                    mask = (al_days >= lo) & (al_days <= hi)
+                    cd, cv = al_days[mask], al_v[mask]
+                    ok = ~np.isnan(cv).any(axis=1)
+                    cd, cv = cd[ok], cv[ok]
+                    if len(cd) < max(K_LIST):
+                        continue
                     fv0 = np.where(np.isnan(fv), np.nanmean(fv), fv)
                     dist = np.sqrt(((cv - fv0) ** 2).mean(axis=1))
                     order = np.argsort(dist)
@@ -140,13 +152,25 @@ for zone in FOOTPRINT:
                             have = [x for x in sel if x in m.index]
                             if have:
                                 ana[cp] = m.loc[have].median()
-                        cands[f"ana{K}"] = ana
+                        cands[f"ana{K}{tag}"] = ana
                         blend = {}
                         for cp in set(ana) & set(v2):
                             blend[cp] = 0.5 * ana[cp] + 0.5 * v2[cp]
                         cands[f"ana{K}b"] = blend
                 # v3 = class-scoped: Nordic-touching borders keep v2's D-7;
                 # all other borders 50/50 analogue(K=16) + calendar median
+                for src in ("ana16", "ana16w"):
+                    if src in cands and "d2" in cands:
+                        ad2 = {}
+                        for cp in set(cands[src]) | set(cands["d2"]):
+                            vs = [cands[r][cp] for r in (src, "d2") if cp in cands[r]]
+                            ad2[cp] = sum(vs) / len(vs)
+                        cands["anad2" + ("w" if src.endswith("w") else "")] = ad2
+                if "ana16w" in cands:
+                    bl = {}
+                    for key2, avg2 in v2.items():
+                        bl[key2] = 0.5 * cands["ana16w"].get(key2, avg2) + 0.5 * avg2
+                    cands["ana16wb"] = bl
                 if "ana16" in cands:
                     v3 = {}
                     for cp in borders:
