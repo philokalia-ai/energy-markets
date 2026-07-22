@@ -1,0 +1,9 @@
+# Python env for the fit-scarcity experiment (create with:
+#   python3 -m venv .venv && ./.venv/bin/pip install -r requirements.txt)
+# NOTE: on many-core machines run with OMP_NUM_THREADS=4 — sklearn's
+# HistGradientBoosting oversubscribes badly on 80 cores (213 s vs ~5 s).
+duckdb
+pandas
+numpy
+scipy
+scikit-learn

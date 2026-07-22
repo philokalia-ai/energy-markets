@@ -1,0 +1,6 @@
+.venv/
+outputs/
+julia_setup.log
+sr_fit.log
+dataset.tsv.gz
+__pycache__/
