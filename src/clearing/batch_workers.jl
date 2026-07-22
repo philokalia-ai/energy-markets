@@ -177,7 +177,7 @@ Helper function for processing zones sequentially.
 """
 function _process_zones_sequential(zones_to_process, date, order_method, model, optimizer,
     markup_factor, random_seed, silent, save_to_db,
-    max_retries, retry_delay, progress_callback, start_time)
+    max_retries, retry_delay, progress_callback, start_time, force_rerun)
     results = NamedTuple[]
 
     for (i, zone) in enumerate(zones_to_process)
@@ -301,7 +301,7 @@ Helper function for processing zones in parallel.
 """
 function _process_zones_parallel(zones_to_process, date, order_method, model, optimizer,
     markup_factor, random_seed, silent, save_to_db,
-    max_retries, retry_delay, progress_callback, chunk_size)
+    max_retries, retry_delay, progress_callback, chunk_size, force_rerun)
 
     # Split zones into chunks for distribution
     zone_chunks = [zones_to_process[i:min(i + chunk_size - 1, end)] for i in 1:chunk_size:length(zones_to_process)]
@@ -309,7 +309,7 @@ function _process_zones_parallel(zones_to_process, date, order_method, model, op
     println("📦 Split $(length(zones_to_process)) zones into $(length(zone_chunks)) chunks of size $chunk_size")
 
     # Prepare arguments for pmap
-    pmap_args = [(chunk, date, order_method, model, optimizer, markup_factor, random_seed, silent, save_to_db, max_retries, retry_delay) for chunk in zone_chunks]
+    pmap_args = [(chunk, date, order_method, model, optimizer, markup_factor, random_seed, silent, save_to_db, max_retries, retry_delay, force_rerun) for chunk in zone_chunks]
 
     # Process chunks in parallel
     chunk_start_time = time()
@@ -347,10 +347,10 @@ end
 Wrapper function for pmap to process a chunk of zones.
 """
 function _parallel_chunk_processor(args)
-    zone_chunk, date, order_method, model, optimizer, markup_factor, random_seed, silent, save_to_db, max_retries, retry_delay = args
+    zone_chunk, date, order_method, model, optimizer, markup_factor, random_seed, silent, save_to_db, max_retries, retry_delay, force_rerun = args
     return _process_zone_chunk(zone_chunk, date, order_method, model, optimizer,
         markup_factor, random_seed, silent, save_to_db,
-        max_retries, retry_delay)
+        max_retries, retry_delay, force_rerun)
 end
 
 """
@@ -358,7 +358,7 @@ Process a chunk of zones on a single worker.
 """
 function _process_zone_chunk(zone_chunk, date, order_method, model, optimizer,
     markup_factor, random_seed, silent, save_to_db,
-    max_retries, retry_delay)
+    max_retries, retry_delay, force_rerun)
     worker_id = myid()
     chunk_results = NamedTuple[]
 

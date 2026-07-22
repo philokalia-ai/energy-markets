@@ -559,13 +559,13 @@ function generate_energy_prices_for_all_zones(date::Date;
         results = _process_zones_parallel(
             zones_to_process, date, order_method, model, optimizer,
             markup_factor, random_seed, silent, save_to_db,
-            max_retries, retry_delay, progress_callback, chunk_size
+            max_retries, retry_delay, progress_callback, chunk_size, force_rerun
         )
     else
         results = _process_zones_sequential(
             zones_to_process, date, order_method, model, optimizer,
             markup_factor, random_seed, silent, save_to_db,
-            max_retries, retry_delay, progress_callback, start_time
+            max_retries, retry_delay, progress_callback, start_time, force_rerun
         )
     end
 
