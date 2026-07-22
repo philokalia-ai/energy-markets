@@ -140,14 +140,33 @@ with exact per-order Big-M, the market-coupling condition
 λ_sink − λ_source = ρ⁺ − ρ⁻ per ATC-constrained border, MIP gap 1e-6,
 deterministic price reconstruction. ~10 s/day (Gurobi) for 39 zones.
 
-**3. The ex-ante flow rule (`:v2`).** Borders inside the footprint clear
-endogenously. Borders that can't — outside the footprint (Turkey, Ukraine,
-GB…) or with broken flow-based "offered ATC" — enter as injections using
-**flow climatology** (median of the trailing 8 same-weekday days) everywhere
-except the Norwegian borders, which use **D-7 same-weekday flows** (reservoir
-regimes persist week to week; a median mis-states them). Post-auction data
-such as scheduled commercial exchanges is inadmissible by construction.
-Evidence per border class: [docs/ex-ante-flows.md](docs/ex-ante-flows.md).
+**3. The ex-ante flow rule (`:v2`).** In the real EUPHEMIA, cross-border
+flows are not derived *from* prices — flows and prices **co-emerge** from the
+same optimization: energy flows from cheap zones to expensive ones until a
+border saturates or prices equalize. Our coupled clear does exactly that for
+every border *inside* the model. But every model has a boundary, and at the
+boundary physics enters as data:
+
+- **Endogenous borders** (most EU-internal ones with usable ATC): the MPCC
+  decides these flows itself — no assumption anywhere.
+- **Out-of-footprint borders** (Turkey, Ukraine, GB, Albania, N. Macedonia…):
+  we do not model those markets — no fleet, no bids, no comparable data — yet
+  their real exchanges move our zones' prices by ±1–2 GW. Since they cannot
+  *emerge*, they must enter as inputs, exactly like load and RES do.
+- **Dropped flow-based borders** (Core FBMC, Nordic-internal): the real
+  market clears these against flow-based domains (PTDF polytopes) that the
+  public "offered ATC" data cannot reproduce; a wrong constraint set produces
+  wrong flows, so their observed/predicted flow enters as data instead.
+
+For the backward-looking counterfactual the observed same-day flows are
+legitimate inputs. For the **D-1 forecast** they are a data leak — and unlike
+load and RES, no official D-1 flow forecast exists (scheduled exchanges are
+the auction's own output; using them would be circular). So the exogenous
+part is predicted by a simple, versioned rule: **flow climatology** (median
+of the trailing 8 same-weekday days) everywhere except the Norwegian
+borders, which use **D-7 same-weekday flows** (reservoir regimes persist
+week to week; a median mis-states them). Evidence per border class:
+[docs/ex-ante-flows.md](docs/ex-ante-flows.md).
 
 ## Resolution & solvers
 
@@ -189,19 +208,28 @@ The full pipeline runs offline from a published, self-contained data extract
 materialized runtime DuckDB ~2.61 GB). Full guide:
 [docs/reproducibility.md](docs/reproducibility.md).
 
+Both artifacts are hosted on the project's Cloudflare R2 bucket (uploaded by
+[publish-public-artifact.yml](.github/workflows/publish-public-artifact.yml)
+and the daily extract refresh). `$EUPHEMIA_DATA_URL` below is the bucket's
+public base URL — until the public dev-URL is enabled on the bucket,
+collaborators use the same commands through
+`bin/extract_store.sh pull <name> <dest>` with the R2 credentials
+(`EXTRACT_S3_ENDPOINT`, `EXTRACT_S3_BUCKET`, `AWS_*` — same env as CI).
+
 ```bash
-# 1. Download
+# 1. Download the frozen artifact (euphemia-data-v1.1.tar.zst, ~623 MB;
+#    sha256 5b0e90154f21bd2649a060af60545fecf537eb562ac035fe3e687ceb3ebf0992)
 mkdir -p data/public
-curl -L -o euphemia-data-v1.tar.zst https://<published-url>/euphemia-data-v1.tar.zst
-tar --zstd -xf euphemia-data-v1.tar.zst -C data/public
+curl -L -o euphemia-data-v1.1.tar.zst "$EUPHEMIA_DATA_URL/euphemia-data-v1.1.tar.zst"
+tar --zstd -xf euphemia-data-v1.1.tar.zst -C data/public
 
 # 2. Verify checksums
-cd data/public/euphemia-data-v1
+cd data/public/euphemia-data-v1.1
 sha256sum -c SHA256SUMS      # every parquet file + MANIFEST.json -> "OK"
 cd -
 
 # 3. Materialize the runtime DuckDB (auto-detected by the library)
-PARQUET_DIR=data/public/euphemia-data-v1 \
+PARQUET_DIR=data/public/euphemia-data-v1.1 \
   OUT=data/extracts/euphemia-public.duckdb \
   julia --project=. bin/build_duckdb_from_parquet.jl
 
@@ -209,6 +237,16 @@ PARQUET_DIR=data/public/euphemia-data-v1 \
 julia --project=. bin/reproduce.jl --quick                       # 5 days, single + multi-zone
 julia --project=. bin/reproduce.jl --range 2026-03-01 2026-03-07 --single GR
 julia --project=. bin/reproduce.jl --full --workers auto         # the full record
+```
+
+To skip the parquet materialization and work on **current data** instead,
+pull the daily-refreshed living extract directly (single ~3 GB DuckDB file,
+`.sha256` sidecar next to it):
+
+```bash
+curl -L -o data/extracts/euphemia-live.duckdb "$EUPHEMIA_DATA_URL/euphemia-live.duckdb"
+EUPHEMIA_DUCKDB_PATH=data/extracts/euphemia-live.duckdb \
+  julia --project=. bin/reproduce.jl --quick
 ```
 
 Each run writes per-zone corr / MAE / bias tables to `results/` and `--quick`
@@ -425,6 +463,24 @@ web/        Static SPA for the live forecast browser (energy.philokalia.ai)
 [Electricity Maps contrib](https://github.com/electricitymaps/electricitymaps-contrib)
 project (AGPL-3.0): 39-zone subset, DE+LU merged, IT-Calabria split out of
 IT-SO along the Gulf of Taranto, simplified to 57 KB (`web/geo/zones.geojson`).
+
+## Acknowledgements
+
+This repository is the work of three contributors, in three distinct phases:
+
+- **Giannis Georgakopoulos** — original author. Two years of foundational
+  work: the core Euphemia clearing engine, the unit-commitment and bidding
+  layers, and the ENTSO-E data pipelines. His diploma thesis, developed in
+  this repository, lives in [`thesis/`](thesis/).
+- **Efthymios Karangelos** — shared the MPCC (complementarity-constraints)
+  market-clearing formulation with Giannis, in the wake of the **Julia
+  Meetup Athens, 2024**. The `MPCC.jl` solver at the heart of the coupled
+  clear descends from that exchange.
+- **Panagiotis Georgakopoulos** — Fable tokens (2026 → ). Directed and
+  funded the 2026+ program: the 39-zone EU footprint, the calibration
+  iterations (cv10…cv17), the ex-ante forecasting product, the scenario API,
+  and the reproducibility artifacts — engineered in collaboration with
+  Claude (Anthropic).
 
 ## License & citation
 

@@ -1,0 +1,42 @@
+# Publish a public data artifact from the local canonical extract store
+# (/opt/euphemia/extracts on the self-hosted runner) to the R2 bucket, using
+# the same secrets as refresh-extract.yml. Manual trigger only — publishing a
+# frozen artifact is a deliberate release act, not a scheduled one.
+#
+# Typical objects:
+#   euphemia-data-v1.1.tar.zst        # frozen parquet artifact (+ .sha256)
+#   euphemia-live.duckdb              # already pushed daily by refresh-extract
+#
+# Public download URL: one-time owner action on the bucket —
+#   npx wrangler r2 bucket dev-url enable <bucket>     (or attach a domain)
+# after which every pushed object is at https://<public-bucket-url>/<name>.
+name: Publish public data artifact
+
+on:
+  workflow_dispatch:
+    inputs:
+      artifact:
+        description: "Object name in /opt/euphemia/extracts to publish"
+        required: true
+        default: "euphemia-data-v1.1.tar.zst"
+
+jobs:
+  publish:
+    runs-on: [self-hosted]
+    timeout-minutes: 60
+    env:
+      EXTRACT_S3_ENDPOINT: ${{ secrets.EXTRACT_S3_ENDPOINT }}
+      EXTRACT_S3_BUCKET: ${{ secrets.EXTRACT_S3_BUCKET }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: auto
+    steps:
+      - uses: actions/checkout@v4
+      - name: Publish artifact + checksum
+        run: |
+          set -euo pipefail
+          SRC="/opt/euphemia/extracts/${{ inputs.artifact }}"
+          [ -f "$SRC" ] || { echo "::error::$SRC not found on the runner host"; exit 1; }
+          [ -n "$EXTRACT_S3_ENDPOINT" ] || { echo "::error::EXTRACT_S3_ENDPOINT secret missing"; exit 1; }
+          bin/extract_store.sh push "$SRC" "${{ inputs.artifact }}"
+          echo "published ${{ inputs.artifact }} ($(du -h "$SRC" | cut -f1))"
