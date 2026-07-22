@@ -46,8 +46,27 @@ Rules: `v2` (shipped), `rec3` (median D-7/14/21), `ana8`/`ana16` (load
 analogues), `ana8b`/`ana16b` (50/50 blend with v2).
 
 Results: `results_flow_rules.tsv` (net-import MAE per zone × rule × period),
-`results_flow_rules_borders.tsv` (per-border MAE). See the tables at the
-bottom of this file.
+`results_flow_rules_borders.tsv` (per-border MAE).
+
+**Stage-1 verdict (measured, footprint-mean hourly net-import MAE in MW):**
+
+| period | v2 (shipped) | rec3 | ana16 (pure) | **ana16b (blend)** |
+|---|---|---|---|---|
+| all (2024-07..2026-07) | 458.7 | 458.5 | 438.5 | **413.1** |
+| evenings (17–20 UTC) | 444.6 | 440.3 | 422.6 | **401.0** |
+| July-2026 flip evenings | 494.4 | 468.2 | 456.2 | **451.8** |
+
+The 50/50 blend of analogue(K=16) with the :v2 value wins every composite,
+including the Nordic zones (DK1 jul26-evening 1065→804, SE2 484→381) — so no
+class scoping is needed; the earlier apparent Nordic analogue blow-up was an
+artifact of sub-hour aggregation in the first evaluator run (fixed to
+MW-level hourly means). GR jul26 evenings: 589→494 (pure analogue 416).
+
+Smoke test of the shipped `:v3` (GR 2026-07-21): the analogue selector picked
+10/16 days from late July 2025 — last summer's heatwave found automatically —
+and moved the assumed evening balance from −366..−1096 (v2) to −189..−473,
+about halfway to the realized +928..+1240. The blend halves the regime error
+by construction; the price A/B decides whether that is enough.
 
 ## Stage 2 — coupled price A/B (planned gates)
 
