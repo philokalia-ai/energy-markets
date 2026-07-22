@@ -21,22 +21,23 @@ investigate, not a model failure to calibrate away.
 
 ## Headline results — honest, whole-sample, never cherry-picked
 
-**Full-year record (cv16).** The current model (`code_version` 16), evaluated
-over the full year **2025-07-01 → 2026-06-30** (365 days, all 39 zones,
-identical-window comparison against the previous cv14 record, resolution-aware
-hourly eval; bias = sim − actual):
+**Full-year record (cv17).** The current model (`code_version` 17), evaluated
+over the full year **2025-07-01 → 2026-06-30** (all 39 zones, identical-window
+comparison against the previous cv16 record, resolution-aware hourly eval;
+bias = sim − actual):
 
-**Aggregate over 39 zones: mean corr 0.45 → 0.56, mean MAE €42.0 → €29.9,
-mean bias +17.5 → −1.5 (cv14 → cv16).**
+**Aggregate over 39 zones: mean corr 0.56 → 0.64, mean MAE €29.9 → €27.3
+(cv16 → cv17; the cv14 → cv16 step was 0.45 → 0.56 / €42.0 → €29.9).**
 
-The big movers (corr / MAE €/MWh, cv14 → cv16): DE_LU 0.50/49 → **0.85/18**,
-SK 0.33/176 → 0.72/33, PL 0.27/71 → 0.67/28, Baltics (LT/LV/EE) ~0.42/78 →
-~0.72/40, CZ 0.41/31 → 0.72/23, NO2 0.40/20 → 0.77/15, CH 0.36/31 → 0.65/23.
-**GR — the guard zone — held: 0.85/21.0 → 0.86/20.8.**
+The cv17 movers are exactly its targets — the weak-zone import fixes
+(corr, cv16 → cv17): **AT 0.24 → 0.79**, **BE 0.30 → 0.78**,
+**DK2 0.21 → 0.69**, **SI 0.26 → 0.62**, **RO 0.51 → 0.76**,
+**RS 0.45 → 0.72**, SE1/SE2 ~0.32 → ~0.52. The guard zones held:
+**GR 0.86 → 0.85 (MAE 20.8 → 20.3)**, DE_LU 0.85 → 0.84.
 
-Still weak on the full year, stated plainly: **NO1 corr 0.01 / MAE €63**
-(reservoir-regime import flows — the known open problem), **DK1/DK2 corr
-0.05/0.21**, **NO3 0.13**, **AT 0.24**, **SI 0.26**, **BE 0.30**.
+Still weak on the full year, stated plainly: **NO1 corr 0.01 / MAE €64 /
+bias +€40** (reservoir-regime import flows — the known open problem),
+**NO3 0.13**, **NO4 0.19**, **DK1 0.20**, **NO5 0.42**.
 
 ### By strategy regime — frozen 36-day stratified sample
 
