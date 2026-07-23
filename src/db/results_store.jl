@@ -1099,6 +1099,14 @@ function ensure_indexes()
             CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_load_fcst_zone_time
             ON entsoe.day_ahead_total_load_forecast (area_map_code, date_time_utc);
         """)
+        # actual_total_load had NO index: the :v3 analogue-day selection scans
+        # a 365-day window per (zone, day) — 2 GB seq scan per call, ~1 s,
+        # x39 zones per market day. With the index: 166 ms (measured 6x).
+        @info "Creating index on actual_total_load..."
+        LibPQ.execute(cnx, """
+            CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_actual_load_zone_time
+            ON entsoe.actual_total_load (area_map_code, date_time_utc);
+        """)
         @info "Creating index on generation_forecasts_for_wind_and_solar..."
         LibPQ.execute(cnx, """
             CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_res_fcst_zone_time

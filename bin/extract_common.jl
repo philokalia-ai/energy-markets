@@ -242,6 +242,16 @@ function entsoe_table_specs(zones::Vector{String};
         ts_col="date_time_utc", window=(aux_back, end_excl),
         sort_by="area_map_code, date_time_utc"))
 
+    # Realized load — the :v3 analogue-day selector matches the delivery day's
+    # load-forecast vector against the trailing 365 days of REALIZED load, so
+    # the extract needs the 400-day back window (same rationale as the
+    # aggregate-output tables). Absent this table :v3 degrades gracefully to
+    # exact :v2 (warn + calendar climatology).
+    push!(specs, mkspec(schema="entsoe", table="actual_total_load",
+        base_where=zone_where, base_args=Any[zones],
+        ts_col="date_time_utc", window=(back400, end_excl),
+        sort_by="area_map_code, date_time_utc"))
+
     push!(specs, mkspec(schema="entsoe", table="generation_forecasts_for_wind_and_solar",
         base_where=zone_where, base_args=Any[zones],
         ts_col="date_time_utc", window=(aux_back, end_excl),
