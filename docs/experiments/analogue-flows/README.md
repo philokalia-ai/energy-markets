@@ -90,3 +90,42 @@ coupled 39-zone footprint from day one** — no isolated-zone pilots:
 - The cv17 `import_backstop` remains the complementary mechanism for
   quantity-limited import starvation; this experiment fixes the *directional*
   assumption feeding both the injections and the backstop headroom.
+
+
+## Stage-2 round 2 — anad2 price A/B (2026-07-23)
+
+`:v3` redefined as **anad2** (per-border mean of the analogue median and the
+D-2 observed flow) after the round-2 stage-1 sweep: footprint net-import MAE
+391/373/388 (all / evenings / July-flip evenings) vs v2's 459/445/494; GR
+flip evenings 589→322 MW (−45%). A 3-year analogue pool was measured and
+REJECTED (structural border drift, 454→479); pure D-2 is too noisy alone
+(460 overall) — the blend is the point.
+
+Price A/B (39 days, both arms, full coupled footprint;
+`results_price_ab_anad2.tsv`):
+
+| window | MAE v2→anad2 | zones better/worse |
+|---|---|---|
+| jul26 flip | 33.60→33.19 | 28/11 |
+| jun26 held-out | 37.46→32.37 | 22/17 |
+| feb26 winter | 30.48→30.61 | 20/19 |
+| jul25 transition | 22.87→22.75 | 23/16 |
+
+GR July evenings: bias +57.2→+42.6 (−26%), corr 0.85→0.87, MAE 33.0→30.2.
+BG/RO/RS July evening bias barely moves (44.9→43.5 / 35.2→34.0 / 33.8→34.2)
+despite the large flow-MAE gains.
+
+**Interpretation (with docs/experiments/fit-scarcity):** the flow rule can
+only fix the flow-attributable share of the SEE evening overshoot. The
+standalone fitting study found that with CORRECT observed imports the markup
+FORM still leaves ~+15–19 on GR evenings, and BG carries a +40–48 evening
+premium that no flexible function of fundamentals explains — a candidate
+conduct signature, i.e. exactly the residual the research framing exists to
+surface, not to calibrate away. anad2 closes what flows can close.
+
+**Verdict:** anad2 is a broad, honest improvement over the shipped :v2
+(better or flat in every window, −15% flow MAE overall, GR evening −26%)
+with small localized price regressions (HU July, RO/RS June). Ship decision
+deferred until the boundary-zones experiment (exp/boundary-zones) reports —
+its price-responsive border curves target the same evenings through a
+different mechanism; the better of the two goes to the forecast path.
