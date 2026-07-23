@@ -33,7 +33,15 @@
 # against its gate and switched OFF — July 2026) so new results are never mixed
 # with — or skipped because of — old rows. Each version is one selectable
 # "Run" in the Metabase counterfactual dashboard.
-const ENERGY_PRICES_CODE_VERSION = 17
+# v18 = RESERVED (shape levers, built default-inert, activation held back).
+# v18 -> v19: the EU-footprint scoped flow default moves :v2 -> :v3 (anad2:
+# per-border mean of the load-analogue median and the D-2 observed flow —
+# docs/experiments/analogue-flows). Measured vs :v2 on the 39-day coupled
+# A/B: MAE better or flat in all four windows (July-26 flip 33.6->33.2,
+# June-26 held-out 37.5->32.4), GR July evening bias +57->+43, corr
+# 0.85->0.87; footprint net-import MAE -15%. SEE legacy paths (single-zone,
+# 5-zone multi_zone) keep :d0 and their byte-identity — July 2026.
+const ENERGY_PRICES_CODE_VERSION = 19
 
 const poolsize = 5
 cnxpool = Pools.Pool{LibPQ.Connection}(poolsize)

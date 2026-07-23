@@ -133,16 +133,18 @@ function run_multi_zone_market_clearing(date::Date;
                                         scenario::Union{Nothing,ZoneScenario,Dict{String,ZoneScenario}}=nothing)
 
     start_time = time()
-    # Resolve the ex-ante flow mode (scoped :v2 default, iter8/Phase-2): the
-    # EU-footprint path (enriched network, merit order) defaults to the fully
-    # ex-ante :v2 flow rule; every other path keeps the process-wide mode
-    # (:d0 same-day unless the env set otherwise). Explicit kwarg > explicit
-    # env > scoped default. Restored in the finally at function end. Applies
-    # to saved EU-footprint results from cv16 onward (the cv15 backfill is :d0).
+    # Resolve the ex-ante flow mode (scoped :v3 default, cv19): the
+    # EU-footprint path (enriched network, merit order) defaults to the
+    # anad2 :v3 flow rule (analogue x D-2 blend — measured better than :v2
+    # in every window, docs/experiments/analogue-flows); every other path
+    # keeps the process-wide mode (:d0 same-day unless the env set
+    # otherwise). Explicit kwarg > explicit env > scoped default. Restored
+    # in the finally at function end. Version scope: cv16..18 saves used
+    # :v2, the cv15 backfill :d0.
     prev_flow_mode = MeritOrderBook.FLOW_ASOF_MODE[]
     resolved_flow_mode = ex_ante_mode !== nothing ? ex_ante_mode :
         (MeritOrderBook.FLOW_ASOF_MODE_EXPLICIT[] ? prev_flow_mode :
-         (enrich_network && order_method == :merit_order ? :v2 : prev_flow_mode))
+         (enrich_network && order_method == :merit_order ? :v3 : prev_flow_mode))
     MeritOrderBook.FLOW_ASOF_MODE[] = resolved_flow_mode
     resolved_flow_mode != prev_flow_mode &&
         println("   🔮 Ex-ante flow mode: $resolved_flow_mode (scoped default)")
