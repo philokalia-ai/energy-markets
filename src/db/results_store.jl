@@ -271,6 +271,9 @@ Called by `bin/daily_forecast.jl` / `bin/score_forecasts.jl`.
 function ensure_forecast_tables()
     _duckdb_readonly_guard("ensure_forecast_tables") && return nothing
     withdb() do cnx
+        # Any DDL below fails fast (loud run failure) instead of queueing for
+        # hours behind a long reader — see the WEDGE GUARD note further down.
+        LibPQ.execute(cnx, "SET lock_timeout = '30s'")
         LibPQ.execute(cnx, "CREATE SCHEMA IF NOT EXISTS simulations")
 
         LibPQ.execute(cnx, """
@@ -313,14 +316,32 @@ function ensure_forecast_tables()
         # the reference and weather tracks never collide. The DO blocks check
         # pg_constraint and only touch constraints that lack input_mode —
         # idempotent, no-op on fresh tables.
-        LibPQ.execute(cnx, """
-        ALTER TABLE simulations.forecast_prices
-            ADD COLUMN IF NOT EXISTS input_mode TEXT NOT NULL DEFAULT 'entsoe'
-        """)
-        LibPQ.execute(cnx, """
-        ALTER TABLE simulations.forecast_scores
-            ADD COLUMN IF NOT EXISTS input_mode TEXT NOT NULL DEFAULT 'entsoe'
-        """)
+        #
+        # WEDGE GUARD (2026-07-23): `ALTER ... ADD COLUMN IF NOT EXISTS` takes
+        # ACCESS EXCLUSIVE even when the column exists, so any long reader on
+        # forecast_prices (a slow scoring query, Metabase, an orphan of a
+        # cancelled run) blocked it — and behind it every other query — for
+        # hours. The daily-forecast run then died at its 2 h timeout, leaving
+        # its own orphan reader for the NEXT day's ALTER to wedge on: the
+        # cycle cancelled 4 consecutive daily runs (07-20..07-23). Fix: check
+        # the catalog first and skip the DDL entirely in the steady state;
+        # when the migration IS needed, run it under a 30 s lock_timeout so a
+        # busy table fails the run fast and loudly instead of wedging it.
+        needs_migration = LibPQ.execute(cnx, """
+            SELECT COUNT(*) = 0 AS missing FROM information_schema.columns
+            WHERE table_schema = 'simulations' AND table_name = 'forecast_prices'
+              AND column_name = 'input_mode'
+            """) |> DataFrame |> df -> df.missing[1]
+        if needs_migration
+            LibPQ.execute(cnx, """
+            ALTER TABLE simulations.forecast_prices
+                ADD COLUMN IF NOT EXISTS input_mode TEXT NOT NULL DEFAULT 'entsoe'
+            """)
+            LibPQ.execute(cnx, """
+            ALTER TABLE simulations.forecast_scores
+                ADD COLUMN IF NOT EXISTS input_mode TEXT NOT NULL DEFAULT 'entsoe'
+            """)
+        end
 
         LibPQ.execute(cnx, """
         DO \$\$
@@ -382,8 +403,9 @@ function ensure_forecast_tables()
         CREATE INDEX IF NOT EXISTS idx_forecast_prices_zone_time
         ON simulations.forecast_prices (bidding_zone, date_time_utc)
         """)
-    end
 
+        LibPQ.execute(cnx, "SET lock_timeout = DEFAULT")
+    end
     @info "Forecast tables schema verified/created"
     return nothing
 end
