@@ -54,19 +54,32 @@ function pending_slices()
               AND s.code_version = fp.code_version
               AND s.input_mode = fp.input_mode))
     """
-    return Euphemia.sql2df_with_retry("""
+    # TWO-STEP discovery (2026-07-23). The old single query ran a correlated
+    # EXISTS against 1.9 GB entsoe.energy_prices for each of the ~80k
+    # forecast_prices rows (the actuals index leads on map_code, so a pure
+    # date-range probe couldn't use it) — observed running 3.5 HOURS, eating
+    # the daily run's timeout and (until the #170 lock guard) wedging the
+    # table for every other client. Rewritten: distinct candidate slices from
+    # the small forecast_prices first, then ONE bounded scan of the actuals
+    # for realized market days, intersected in Julia. Same result set.
+    slices = Euphemia.sql2df_with_retry("""
         SELECT DISTINCT fp.market_date, fp.lead_days, fp.code_version, fp.input_mode
         FROM simulations.forecast_prices fp
-        WHERE EXISTS (
-            SELECT 1 FROM entsoe.energy_prices a
-            WHERE a.contract_type = 'Day-ahead'
-              AND a.area_type_code LIKE 'BZN%'
-              AND a.price_currency_mwh IS NOT NULL
-              AND a.date_time_utc >= (fp.market_date::timestamp AT TIME ZONE 'UTC')
-              AND a.date_time_utc < ((fp.market_date + 1)::timestamp AT TIME ZONE 'UTC'))
+        WHERE TRUE
         $rescore_clause
         ORDER BY 1, 2
     """)
+    isempty(slices) && return slices
+    realized = Euphemia.sql2df_with_retry("""
+        SELECT DISTINCT (date_time_utc AT TIME ZONE 'UTC')::date AS d
+        FROM entsoe.energy_prices
+        WHERE contract_type = 'Day-ahead'
+          AND area_type_code LIKE 'BZN%'
+          AND price_currency_mwh IS NOT NULL
+          AND date_time_utc >= (\$1::date::timestamp AT TIME ZONE 'UTC')
+    """, [minimum(slices.market_date)])
+    realized_days = Set(realized.d)
+    return slices[[d in realized_days for d in slices.market_date], :]
 end
 
 "Sim forecast rows of one slice, keyed (zone, naive-UTC hour)."
