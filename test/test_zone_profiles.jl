@@ -124,6 +124,42 @@ const V10_TRANCHES = [(0.55, 0.95), (0.20, 1.05), (0.15, 1.25), (0.10, 1.60)]
         @test isempty(Euphemia.flow_based_drop_borders(["GR", "BG", "RO", "RS", "HU"]))
     end
 
+    @testset "iter9 Western-Balkan endogenization (AL/MK/ME/HR) gating" begin
+        # New registry keys resolve to the intended profiles
+        @test get_zone_profile("HR") === Euphemia.MeritOrderBook.CROATIA_PROFILE
+        @test get_zone_profile("AL") === SEE_PROFILE
+        @test get_zone_profile("MK") === SEE_PROFILE
+        @test get_zone_profile("ME") === SEE_PROFILE
+        # CROATIA = the SLOVENIA shape minus ref_priced_exports (measure-first)
+        CR = Euphemia.MeritOrderBook.CROATIA_PROFILE
+        SLO = Euphemia.MeritOrderBook.SLOVENIA_PROFILE
+        @test with_profile(CR; ref_priced_exports=true) == SLO
+        @test CR.opportunity_anchor == :hydro
+        @test CR.import_backstop == true
+        @test CR.ref_priced_exports == false
+        # HR border drops fire only with HR in the footprint
+        d43 = Euphemia.flow_based_drop_borders(["HR", "SI", "HU", "RS", "GR"])
+        @test ("HR", "SI") in d43
+        @test ("HR", "HU") in d43
+        @test !any(p -> "HR" in p,
+                   Euphemia.flow_based_drop_borders(["SI", "HU", "RS", "GR"]))
+        # HR–HU control arm (A/B only): env keeps HR–HU endogenous
+        ENV["EUPHEMIA_ITER9_HRHU"] = "endogenous"
+        try
+            dctl = Euphemia.flow_based_drop_borders(["HR", "SI", "HU", "RS", "GR"])
+            @test ("HR", "SI") in dctl
+            @test !(("HR", "HU") in dctl)
+        finally
+            delete!(ENV, "EUPHEMIA_ITER9_HRHU")
+        end
+        # Monita per-border remap override: active only when ME (and the
+        # override representative) are footprint nodes; 39-zone/SEE get none
+        @test Euphemia.build_aggregate_remap_overrides(["ME", "IT-CSOUTH", "IT-NORTH"]) ==
+              Dict(("IT", "ME") => "IT-CSOUTH")
+        @test isempty(Euphemia.build_aggregate_remap_overrides(["IT-CSOUTH", "IT-NORTH", "GR"]))
+        @test isempty(Euphemia.build_aggregate_remap_overrides(["GR", "BG", "RO", "RS", "HU"]))
+    end
+
     @testset "region profiles are the intended thin deltas" begin
         @test ITALY_PROFILE.thermal_srmc_multiplier == 1.20
         @test ITALY_PROFILE.hydro_model == :gas_anchored

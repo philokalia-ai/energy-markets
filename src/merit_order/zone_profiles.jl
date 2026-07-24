@@ -496,6 +496,32 @@ const SLOVENIA_PROFILE = ZoneProfile(
 )
 
 """
+Croatia (iter9 — docs/experiments/iter9-scoping). Core-coupled (CROPEX/SDAC,
+hourly corr to SI 0.985) with the same flow-based-residual border situation as
+SI: its HR–SI / HR–HU implicit rows are Intraday-only leftovers (p10 0–1 MW vs
+1.8–2.4 GW physical), dropped in `flow_based_drop_borders`; HR–RS stays
+endogenous on real explicit DA ATC. Hence the SLOVENIA_PROFILE shape:
+continental scarcity temperament (threshold 1.25, κ 1.5, peak κ 0.6), the
+`:hydro` opportunity anchor so the restored SI/HU imports price at the coupled
+Core reference (refs from the endogenous RS border, DE_LU/NL proxy fallback),
+and the ex-ante import backstop for residual tail days. Deliberate deviation
+from SLOVENIA_PROFILE: `ref_priced_exports` stays OFF — SI's flag covers its
+~1 GW HR export (now a dropped in-footprint border, handled by
+`anchor_export_mw` instead); HR's own retained exogenous export (HR–BA,
+~216 MW avg) is small, and the scoping's instruction is measure-before-adopt.
+HR's fleet is built 100% by fleet completion (0 unit-registry rows — trial
+books complete +953 hydro / +577 gas / +258 pumped / +206 RoR / +202 coal MW),
+which the default `:p95` fleet-truth mode handles.
+"""
+const CROATIA_PROFILE = ZoneProfile(
+    scarcity_threshold = 1.25,
+    scarcity_kappa = 1.5,
+    peak_kappa = 0.6,
+    opportunity_anchor = :hydro,
+    import_backstop = true,
+)
+
+"""
 Denmark (DK1/DK2, cv17). Plain NORDIC plus the ex-ante import backstop: their
 starvation is EPISODIC (DE_LU→DK1 offered ATC averages ~2.5 GW but collapses
 to ~295 MW exactly on tight hours; SE4→DK2 9 MW vs 698 MW physical on spike
@@ -648,6 +674,30 @@ const ZONE_PROFILES = Dict{String,ZoneProfile}(
     # SK: dropped Core import borders (CZ–SK, PL–SK) + :hydro anchor for import
     # pricing (iter6) — the HU treatment applied to SK's own residual borders
     "SK" => SLOVAKIA_PROFILE,
+    # --- iter9 Western-Balkan endogenization (AL/MK/ME/HR, 39→43 zones;
+    # docs/experiments/iter9-scoping). New registry keys only — inert for every
+    # footprint that does not include these zones (G1/G2 byte-identity).
+    # HR: Core-coupled, dropped HR–SI/HR–HU residual borders + :hydro anchor +
+    # backstop (the Slovenia treatment; see CROATIA_PROFILE).
+    "HR" => CROATIA_PROFILE,
+    # AL: pure-hydro SEE zone (1.5 GW reservoir + 240 MW solar), ALPEX clears
+    # standalone at a premium vs GR (corr 0.689 — the honest out-of-sample
+    # case). Gas-anchored SEE temperament per the scoping (§3): the premium
+    # argues against a Nordic reservoir-opportunity model in the first cut;
+    # winter books are structurally short (day ratio 0.76) so the endogenous
+    # GR/ME borders must deliver — if AL over-prices at the cap on normal
+    # winter days, the RO/RS-style import_backstop is the designed next lever.
+    "AL" => SEE_PROFILE,
+    # MK: SEE thermal/transit zone (real lignite ~330 MW after truthing, gas
+    # 227, hydro ~410, heavy transit imports). SEE first per the scoping; if
+    # the A/B shows the RS/RO failure mode (cap days on import-covered hours),
+    # promote to the SERBIA_PROFILE shape (backstop + scarcity credit).
+    "MK" => SEE_PROFILE,
+    # ME: SEE hydro zone (hydro p95 953, lignite 200 real, wind 105; KAP
+    # smelter base load). ME~RS corr 0.835 and the shared SEE temperament
+    # argue no special treatment; the endogenous IT-CSOUTH border (Monita
+    # remap override) gives it its export outlet.
+    "ME" => SEE_PROFILE,
 )
 
 """

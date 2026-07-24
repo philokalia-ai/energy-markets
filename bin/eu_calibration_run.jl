@@ -18,13 +18,19 @@
 using Euphemia, Dates, Statistics
 
 # Full footprint = PR #91's 38 zones + Switzerland (now an endogenous node).
-const FOOTPRINT = String[
+const FOOTPRINT39 = String[
     "AT", "BE", "BG", "CZ", "DE_LU", "DK1", "DK2", "EE", "ES", "FI", "FR",
     "GR", "HU", "LT", "LV", "NL", "NO1", "NO2", "NO3", "NO4", "NO5", "PL",
     "PT", "RO", "RS", "SE1", "SE2", "SE3", "SE4", "SI", "SK",
     "IT-NORTH", "IT-CNORTH", "IT-CSOUTH", "IT-SOUTH", "IT-Calabria",
     "IT-Sicily", "IT-Sardinia", "CH",
 ]
+
+# iter9: + Western Balkans (AL/HR/ME/MK endogenized). Opt in with
+# FOOTPRINT=43 (env); the default stays the 39-zone production footprint
+# until the iter9 cv ships.
+const FOOTPRINT43 = sort(vcat(FOOTPRINT39, ["AL", "HR", "ME", "MK"]))
+const FOOTPRINT = get(ENV, "FOOTPRINT", "39") == "43" ? FOOTPRINT43 : FOOTPRINT39
 
 start_date = Date(get(ENV, "START_DATE", "2026-04-01"))
 end_date = Date(get(ENV, "END_DATE", "2026-04-05"))

@@ -223,6 +223,7 @@ More suitable for market clearing applications than NetworkTopology.
 function create_transfer_capacity_from_entsoe(date::Date, bidding_zones::Vector{String}=String[];
     include_explicit::Bool=false,
     aggregate_remap::AbstractDict=Dict{String,String}(),
+    aggregate_remap_overrides::AbstractDict=Dict{Tuple{String,String},String}(),
     drop_borders::Vector{Tuple{String,String}}=Tuple{String,String}[])
 
     # ENRICHED PATH (opt-in): union the explicit (LT+DA-auction) ATC table,
@@ -234,6 +235,7 @@ function create_transfer_capacity_from_entsoe(date::Date, bidding_zones::Vector{
     if include_explicit || !isempty(aggregate_remap) || !isempty(drop_borders)
         return _create_transfer_capacity_enriched(date, bidding_zones;
             include_explicit=include_explicit, aggregate_remap=aggregate_remap,
+            aggregate_remap_overrides=aggregate_remap_overrides,
             drop_borders=drop_borders)
     end
 
@@ -334,10 +336,16 @@ Two extensions over the implicit-only default:
    *unless* `X` already borders one of the aggregate's sub-zones directly
    (e.g. GR↔IT is physically GR↔IT-SOUTH and already present as a sub-zone
    border), which prevents a phantom line to the representative.
+   `aggregate_remap_overrides` refines the remap per counterparty:
+   `(aggregate, X) => sub-zone` wins over the blanket representative for that
+   specific border (iter9: `("IT","ME") => "IT-CSOUTH"` — the Monita cable
+   physically lands in IT-CSOUTH, so the blanket `IT → IT-NORTH` remap would
+   mis-wire Montenegro's Italian border onto the wrong node).
 """
 function _create_transfer_capacity_enriched(date::Date, bidding_zones::Vector{String};
     include_explicit::Bool=false,
     aggregate_remap::AbstractDict=Dict{String,String}(),
+    aggregate_remap_overrides::AbstractDict=Dict{Tuple{String,String},String}(),
     drop_borders::Vector{Tuple{String,String}}=Tuple{String,String}[])
 
     isempty(bidding_zones) &&
@@ -349,6 +357,15 @@ function _create_transfer_capacity_enriched(date::Date, bidding_zones::Vector{St
     println("📊 Fetching ENTSO-E transfer capacity (enriched: explicit=$include_explicit, " *
             "remap=$(isempty(aggregate_remap) ? "none" : join(["$a→$s" for (a,s) in aggregate_remap], ","))) for $date...")
 
+    # LATENT TRAP (audited iter9): this implicit fetch has NO contract_type
+    # filter, so any non-Day-ahead rows a TSO files in the implicit table are
+    # ingested as endogenous DA ATC. Measured case: Croatia's HR–SI / HR–HU
+    # rows are *Intraday-only* flow-based leftovers (p10 = 0–1 MW vs 1.8–2.4 GW
+    # physical) — HR joining the footprint without the HR–SI/HR–HU border drops
+    # (see `flow_based_drop_borders`) would silently endogenize those residuals
+    # and starve HR into phantom scarcity. If more zones with Intraday-only
+    # implicit rows join later, consider a contract_type filter here (it would
+    # change every existing footprint's bytes, so it needs its own guard).
     imp = _fetch_atc_aggregated(date, "offered_transfer_capacities_implicit", codes)
     nrow(imp) == 0 && include_explicit == false &&
         error("No implicit transfer capacity data for $date (footprint: $(join(bidding_zones, ", ")))")
@@ -409,7 +426,10 @@ function _create_transfer_capacity_enriched(date::Date, bidding_zones::Vector{St
             if X in get(remap_direct, s, Set{String}()) || !(X in fpset)
                 drop = true
             else
-                s = String(aggregate_remap[s]); n_remapped += 1
+                # Per-counterparty override (e.g. IT↔ME → IT-CSOUTH) wins over
+                # the blanket representative for this specific border.
+                s_new = String(get(aggregate_remap_overrides, (s, X), aggregate_remap[s]))
+                s = s_new; n_remapped += 1
             end
         end
         if !drop && haskey(aggregate_remap, d)
@@ -417,7 +437,8 @@ function _create_transfer_capacity_enriched(date::Date, bidding_zones::Vector{St
             if X in get(remap_direct, d, Set{String}()) || !(X in fpset)
                 drop = true
             else
-                d = String(aggregate_remap[d]); n_remapped += 1
+                d_new = String(get(aggregate_remap_overrides, (d, X), aggregate_remap[d]))
+                d = d_new; n_remapped += 1
             end
         end
         drop && continue

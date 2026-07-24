@@ -53,6 +53,13 @@ const FOOTPRINT = String[
     "IT-Sicily", "IT-Sardinia", "CH",
 ]
 
+# iter9 43-zone footprint: + Western Balkans (AL/HR/ME/MK endogenized —
+# docs/experiments/iter9-implementation). NOT the default until the iter9 cv
+# ships; the A/B selects it via `--zones AL,HR,ME,MK,...` or by referencing
+# this constant. The published extract does not carry the four new zones, so
+# 43-zone runs need Postgres (or a rebuilt extract).
+const FOOTPRINT43 = sort(vcat(FOOTPRINT, ["AL", "HR", "ME", "MK"]))
+
 include(joinpath(@__DIR__, "..", "test", "scripts", "eu_eval_metrics.jl"))
 
 # --------------------------------------------------------------------------

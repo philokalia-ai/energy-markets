@@ -146,6 +146,18 @@ end
 # BZN borders directly and need no remap — audited.)
 const AGGREGATE_BORDER_REPRESENTATIVE = Dict{String,String}("IT" => "IT-NORTH")
 
+# Per-counterparty refinements of the blanket remap above:
+# `(aggregate, counterparty) => representative` wins over
+# `AGGREGATE_BORDER_REPRESENTATIVE[aggregate]` for that one border. Confirmed
+# case (iter9): the IT–ME explicit DA ATC is filed under the aggregate `IT`,
+# but the border is the Monita cable landing in IT-CSOUTH (physical flows are
+# ME↔IT-CSOUTH) — the blanket IT→IT-NORTH remap would mis-wire Montenegro's
+# only Italian border onto the wrong node. Inert unless BOTH the counterparty
+# and the override representative are in the footprint (see
+# `build_aggregate_remap_overrides`), so every ME-less footprint is unchanged.
+const AGGREGATE_BORDER_COUNTERPARTY_REPRESENTATIVE =
+    Dict{Tuple{String,String},String}(("IT", "ME") => "IT-CSOUTH")
+
 # Nordic flow-based border handling. The Nordic CCR moved to flow-based DA
 # capacity calculation in Oct 2024, so the implicit table's "offered ATC" rows
 # for Nordic-internal borders are stale residuals. Where a zone's IMPORT
@@ -183,7 +195,8 @@ from the enriched network (falling back to observed net imports, import-only):
   455–994 mid-morning) while the real Core domain carries GWs — the model starved
   HU exactly at the peak residual hours. Same treatment as the Nordic flow-based
   borders. HU–RO already moved to flow-based coupling (kept as observed imports),
-  and HU–HR is not in the footprint, so those flows were already retained.
+  and HU–HR was outside the footprint until iter9 — with HR endogenized it is
+  dropped by the Croatia block below (Intraday-only residual rows).
   HU–SI is deliberately KEPT endogenous: dropping it too (iter-4 cal11) fixed HU
   identically but regressed SI's shape (corr 0.79→0.58) by stripping SI's HU
   export outlet, while AT/SK-only (cal12) fixed HU (bias +70→+0.5, MAE 75→30)
@@ -285,6 +298,28 @@ function flow_based_drop_borders(footprint::AbstractVector{<:AbstractString})
             z in fp && push!(pairs, ordered("AT", z))
         end
     end
+    # Croatia (Core FBMC, iter9 — docs/experiments/iter9-scoping). HR's only
+    # implicit-table rows for HR–SI / HR–HU are *Intraday* leftovers (the
+    # implicit loader has no contract_type filter, so they would be ingested
+    # as endogenous DA ATC): p10 = 0–1 MW vs 1.8–2.4 GW physical peaks — the
+    # same flow-based-residual signature dropped five times before (Nordic,
+    # HU, BE, SK, AT/SI). There are NO Day-ahead implicit rows for HR at all,
+    # so there is nothing to endogenize short of a real FBMC domain model.
+    # Dropping both restores observed imports (import-only), priced at the
+    # coupled anchor reference through CROATIA_PROFILE's :hydro anchor; HR–RS
+    # stays endogenous on its real explicit DA ATC (avg 408/473 MW). Gated on
+    # "HR" in fp, so every HR-less footprint (39-zone EU, 5-zone SEE) is
+    # byte-identical.
+    # Control arm (A/B only): EUPHEMIA_ITER9_HRHU=endogenous keeps HR–HU
+    # endogenous on the Intraday-avg ATC (avg 558 MW tracks the 498 MW
+    # physical average surprisingly well) to measure HU's export-loss
+    # knock-on. ENV so it reaches pipeline workers; unset in production.
+    if "HR" in fp
+        "SI" in fp && push!(pairs, ordered("HR", "SI"))
+        if "HU" in fp && get(ENV, "EUPHEMIA_ITER9_HRHU", "") != "endogenous"
+            push!(pairs, ordered("HR", "HU"))
+        end
+    end
     return sort(collect(pairs))
 end
 
@@ -304,6 +339,25 @@ function build_aggregate_remap(footprint::AbstractVector{<:AbstractString})
         (rep in fp) && !(agg in fp) && (remap[agg] = rep)
     end
     return remap
+end
+
+"""
+    build_aggregate_remap_overrides(footprint) -> Dict{Tuple{String,String},String}
+
+Per-counterparty remap overrides applicable to a footprint: an entry
+`(agg, counterparty) => rep` is included only when the blanket remap for `agg`
+is itself active (`agg` absent, some representative present), the counterparty
+is a footprint node, and the override representative exists as a node. Empty
+for every footprint without the counterparty (e.g. the 39-zone EU set has no
+ME, so this is a no-op there — byte-identity guard G2).
+"""
+function build_aggregate_remap_overrides(footprint::AbstractVector{<:AbstractString})
+    fp = Set(String.(footprint))
+    out = Dict{Tuple{String,String},String}()
+    for ((agg, cp), rep) in AGGREGATE_BORDER_COUNTERPARTY_REPRESENTATIVE
+        (rep in fp) && !(agg in fp) && (cp in fp) && (out[(agg, cp)] = rep)
+    end
+    return out
 end
 
 """
@@ -408,6 +462,8 @@ function _create_multi_zone_order_book_merit(zones::Vector{String}, day::Date;
     # forecasts so partial-coverage zones (CH, RS) build a book instead of
     # failing. Left off by default so the 5-zone SEE product is byte-identical.
     aggregate_remap = enrich_network ? build_aggregate_remap(zones) : Dict{String,String}()
+    aggregate_remap_overrides = enrich_network ? build_aggregate_remap_overrides(zones) :
+                                Dict{Tuple{String,String},String}()
 
     drop_borders = enrich_network ? flow_based_drop_borders(zones) :
                    Tuple{String,String}[]
@@ -415,6 +471,7 @@ function _create_multi_zone_order_book_merit(zones::Vector{String}, day::Date;
     println("   🔌 Fetching transfer capacities between zones...")
     transfer_capacity = Network.create_transfer_capacity_from_entsoe(day, zones;
         include_explicit=enrich_network, aggregate_remap=aggregate_remap,
+        aggregate_remap_overrides=aggregate_remap_overrides,
         drop_borders=drop_borders)
     zone_pairs = Network.get_zone_pairs(transfer_capacity)
     # A border only counts as endogenous if it can actually carry flow:
