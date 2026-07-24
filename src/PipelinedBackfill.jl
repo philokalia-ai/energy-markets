@@ -288,9 +288,26 @@ function run_pipelined_backfill(days, zones::Vector{String}=String[];
 
     # Resume: drop already-saved days up front, so the total to process is known.
     todo = if resume && save_to_db
+        # ONE grouped probe for the whole range (was one COUNT round-trip per
+        # candidate day — a 365-day resume paid 365 serial queries before any
+        # work started). Same verdict per day: saved = any rows for that day.
+        saved_days = try
+            df = sql2df("""
+                SELECT (date_time_utc AT TIME ZONE 'UTC')::date AS d
+                FROM simulations.energy_prices
+                WHERE clearing_mode = \$1 AND code_version = \$2
+                  AND date_time_utc >= (\$3::date::timestamp AT TIME ZONE 'UTC')
+                  AND date_time_utc <  (\$4::date::timestamp AT TIME ZONE 'UTC')
+                GROUP BY 1
+                """, [clearing_mode, cv, minimum(days), maximum(days) + Day(1)])
+            Set(Date.(df.d))
+        catch e
+            @warn "resume range check failed — treating all days as not-saved" error = e
+            Set{Date}()
+        end
         keep = Date[]
         for d in days
-            pipeline_day_saved(d, clearing_mode, cv) ?
+            d in saved_days ?
                 println("⏩ skip $d (already saved under $clearing_mode cv$cv)") :
                 push!(keep, d)
         end

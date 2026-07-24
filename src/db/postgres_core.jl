@@ -43,7 +43,11 @@
 # 5-zone multi_zone) keep :d0 and their byte-identity — July 2026.
 const ENERGY_PRICES_CODE_VERSION = 19
 
-const poolsize = 5
+# Pool size: env-tunable (EUPHEMIA_PG_POOL) because the threaded book build
+# runs up to nzones concurrent queries — 5 connections cap the parallelism
+# and lock convoys made 8 threads SLOWER than 1 in the 2026-07-24 benchmark.
+# Default stays 5 (the long-standing footprint-friendly value).
+const poolsize = max(1, parse(Int, get(ENV, "EUPHEMIA_PG_POOL", "5")))
 cnxpool = Pools.Pool{LibPQ.Connection}(poolsize)
 
 function cnxisok(cnx::LibPQ.Connection)

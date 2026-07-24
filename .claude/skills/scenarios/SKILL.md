@@ -11,7 +11,11 @@ deltas), `docs/code-map.md` (where code lives), `docs/reproducibility.md`.
 
 ## Setup (once per machine)
 
-`./setup.sh` downloads the public extract and instantiates Julia deps. The
+`./setup.sh` downloads the public extract and instantiates Julia deps.
+**Prefer the extract over live Postgres for ALL experiment work** — it is
+4-10x faster for book builds and cannot disturb production. Get CURRENT data
+with `bin/pull_live_extract.sh` (daily-refreshed, sha256-verified from
+data.philokalia.ai), then point `EUPHEMIA_DUCKDB_PATH` at it. The
 library auto-detects `data/extracts/euphemia-public.duckdb`; results are
 written to a separate `data/results.duckdb` (the source extract stays
 read-only). For current data instead of the frozen artifact:
