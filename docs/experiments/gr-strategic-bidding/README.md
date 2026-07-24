@@ -1,5 +1,18 @@
 # GR strategic bidding — does market power explain the residual?
 
+> **⚠️ Research disclaimer.** This document is an academic **what-if
+> simulation study** on public ENTSO-E data. The "strategies" below are
+> hypothetical bidding rules imposed on a *model*, not observed conduct; firm
+> attributions rest on a public unit-ownership mapping and model-fit
+> comparisons whose limits are stated in the text (the fit **cannot cleanly
+> attribute** behaviour to a specific firm — see the fit-equivalence result).
+> Nothing here asserts, and no reader should infer, that any named company
+> has violated any law or regulation. Residuals between a competitive
+> counterfactual and settled prices are **candidate hypotheses for further
+> study**, with many innocent explanations (model error, data gaps, costs the
+> model does not observe). Findings are provisional and unreviewed.
+
+
 The model is a **competitive counterfactual**: the price if every unit offered at
 short-run marginal cost. On many Greek days the settled price sits *above* that
 counterfactual. This experiment asks the obvious question directly: **if the big

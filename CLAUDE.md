@@ -1138,7 +1138,7 @@ Market data is sourced from:
 - ENTSO-e Transparency Platform (installed capacity, load)
 - EnEx Group (Greek market participants)
 - Weather data (renewable generation forecasts) — hourly temperature/wind/solar
-  for 1,851 GR cities in the separate `silentech` DB; see
+  for 1,851 GR cities in a separate weather DB; see
   [READING_WEATHER_DATA.md](READING_WEATHER_DATA.md) for how to query it
 - TTFS (natural gas prices)
 

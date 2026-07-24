@@ -36,7 +36,7 @@
 using Dates, Statistics, Downloads, JSON
 
 const OPENMETEO_URL_DEFAULT = "https://api.open-meteo.com/v1/forecast"
-const OPENMETEO_USER_AGENT = "philokalia-energy/1.0 (contact: p.georgakopoulos@silentech.gr)"
+const OPENMETEO_USER_AGENT = "philokalia-energy/1.0 (contact: pankgeorg@gmail.com)"
 const OPENMETEO_BATCH = 50            # max locations per API call
 const OPENMETEO_RETRIES = 5
 const RES_MODELS_PATH_V2 = joinpath(@__DIR__, "res_models_v2.json")

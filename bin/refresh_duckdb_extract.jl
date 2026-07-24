@@ -5,7 +5,7 @@
 #   - entsoe.* / yfinance.*  from ENERGY_CONN_STR (same column handling /
 #     naive-UTC conversion as the builder — shared code in bin/extract_common.jl)
 #   - weather.city_forecast / city_forecast_vintage  from WEATHER_CONN_STR
-#     (silentech DB; skipped with a warning when WEATHER_CONN_STR is unset)
+#     (weather DB; skipped with a warning when WEATHER_CONN_STR is unset)
 #   - weather.cell_hourly  from the PUBLIC open-meteo ERA5 archive API
 #     (wind_speed_100m + shortwave_radiation, batched ≤50 cells per call, cells
 #     = DISTINCT zone,lat,lon already in the table; ERA5 lags ~5 days so the

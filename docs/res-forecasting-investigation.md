@@ -2,7 +2,7 @@
 
 **Question.** ENTSO-E's D-1 RES forecasts arrive late (~16:00 UTC, DE/IT ~19:08 UTC)
 and don't exist at all for lead ≥ 2 days. Can we predict wind/solar ourselves from
-the `silentech.weather` data, well enough to (a) forecast earlier in the day and
+the local `weather` schema data, well enough to (a) forecast earlier in the day and
 (b) extend the forecast horizon to lead 2–7?
 
 Study: GR, 2025-07-01 → 2026-06-30 hourly. Train Jul–Mar, test **out-of-sample

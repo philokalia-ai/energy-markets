@@ -293,7 +293,7 @@ daily workflow ([.github/workflows/refresh-extract.yml](.github/workflows/refres
 02:00 UTC): `bin/refresh_duckdb_extract.jl` opens the extract read-write and
 appends, per table, only rows newer than its max timestamp —
 `entsoe.*` / `yfinance.*` from the energy DB, the `weather` schema
-(`city`, `city_forecast`, `city_forecast_vintage`) from the silentech weather
+(`city`, `city_forecast`, `city_forecast_vintage`) from the separate weather
 DB, and `weather.cell_hourly` (the ERA5 wind/GHI feature history at the
 wind-catalogue cells behind `bin/res_models_v1.json`) from the public
 open-meteo archive API. Mutable registry-like tables (unit registry, outages,
@@ -417,10 +417,10 @@ write, no commit, no Pages build. A Cloudflare Worker
 the exact JSON shapes the SPA consumes, ETag-cached at the edge:
 
 ```
-GET https://euphemia-api.dyad-wasm.workers.dev/api/v1/zones/GR
-GET https://euphemia-api.dyad-wasm.workers.dev/api/v1/scoreboard
-GET https://euphemia-api.dyad-wasm.workers.dev/api/v1/map
-GET https://euphemia-api.dyad-wasm.workers.dev/api/v1/manifest   # {updated_at, …}
+GET https://api.philokalia.ai/api/v1/zones/GR
+GET https://api.philokalia.ai/api/v1/scoreboard
+GET https://api.philokalia.ai/api/v1/map
+GET https://api.philokalia.ai/api/v1/manifest   # {updated_at, …}
 ```
 
 `web/app.js` tries the API first and falls back to the committed

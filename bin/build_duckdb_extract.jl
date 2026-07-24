@@ -28,7 +28,7 @@
 #
 # Reads from Postgres: `entsoe.*` / `yfinance.*` / `simulations.*` via the
 # normal .env ENERGY_CONN_STR, and (when WEATHER_CONN_STR is set) the `weather`
-# schema from the SEPARATE silentech database — `city` (full),
+# schema from the SEPARATE weather database — `city` (full),
 # `city_forecast` (last WEATHER_BACK_DAYS, default 400), `city_forecast_vintage`
 # (full). Set INCLUDE_WEATHER=false to skip the weather schema explicitly.
 #
@@ -79,7 +79,7 @@ const AUX_BACK_DAYS = parse(Int, get(ENV, "AUX_BACK_DAYS", "31"))
 # (also supports UC-based experiments).
 const AGEN_BACK_DAYS = parse(Int, get(ENV, "AGEN_BACK_DAYS", "400"))
 
-# Weather schema (silentech DB): pulled when WEATHER_CONN_STR is available
+# Weather schema (separate weather DB): pulled when WEATHER_CONN_STR is available
 # unless INCLUDE_WEATHER=false. city_forecast is windowed to WEATHER_BACK_DAYS.
 const INCLUDE_WEATHER = lowercase(get(ENV, "INCLUDE_WEATHER", "true")) == "true" &&
                         haskey(ENV, "WEATHER_CONN_STR")

@@ -20,7 +20,7 @@ Any static file server works (the app only does `fetch('./data/...')`). Opening
 
 Since issue #152 the app tries three rungs in order (first that answers wins):
 
-1. **Live Worker API** — `https://euphemia-api.dyad-wasm.workers.dev/api/v1/…`,
+1. **Live Worker API** — `https://api.philokalia.ai/api/v1/…`,
    backed by R2 parquet the pipeline uploads seconds after each DB write
    (`bin/export_web_parquet.jl` + `workers/api/`). Fresh without a deploy.
    Disable with `?live=0`; point elsewhere with `?api=<base>`. When this rung

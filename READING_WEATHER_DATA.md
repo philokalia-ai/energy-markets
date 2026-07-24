@@ -6,40 +6,41 @@ RES/load driver referenced in the README ("Load – Renewable Energy Sources Out
 Weather"). This doc is how a Euphemia agent pulls it.
 
 > **TL;DR** — the weather data is **not** in the `energy` database. It's in a
-> **separate database `silentech`** on the *same* Postgres server
-> (`arm.silentech.gr:5432`). Postgres can't join across databases, so you open a
-> **second connection** to `silentech` (env `WEATHER_CONN_STR`) and join to
+> **separate weather database** on the *same* Postgres server
+> (host/port as in your `.env`). Postgres can't join across databases, so you open a
+> **second connection** to it (env `WEATHER_CONN_STR`) and join to
 > `energy` data in Julia/DataFrames, not in SQL.
 
-The pipeline runs in the k3s cluster (`pankgeorg/infra` → `manifests/weather`) as
-the `weather-etl` CronJob, nightly at 03:00, upserting into `silentech.weather.*`.
+The pipeline runs as a nightly `weather-etl` CronJob (03:00), upserting into
+the weather database's `weather.*` schema.
 
 ---
 
 ## 1. One-time setup
 
 ### a) Grant read access — ✅ already done
-`energy_user` (the `ENERGY_CONN_STR` role) has been granted read-only access to
-the `weather` schema in the `silentech` database:
+The `ENERGY_CONN_STR` role has been granted read-only access to the `weather`
+schema in the weather database:
 
 ```sql
--- (already applied) as postgres, connected to the silentech database:
-GRANT CONNECT ON DATABASE silentech TO energy_user;
-GRANT USAGE  ON SCHEMA weather      TO energy_user;
-GRANT SELECT ON ALL TABLES IN SCHEMA weather TO energy_user;
-ALTER DEFAULT PRIVILEGES IN SCHEMA weather GRANT SELECT ON TABLES TO energy_user;
+-- (already applied) as postgres, connected to the weather database
+-- (<weather-db> = its name, <role> = the ENERGY_CONN_STR role):
+GRANT CONNECT ON DATABASE <weather-db> TO <role>;
+GRANT USAGE  ON SCHEMA weather        TO <role>;
+GRANT SELECT ON ALL TABLES IN SCHEMA weather TO <role>;
+ALTER DEFAULT PRIVILEGES IN SCHEMA weather GRANT SELECT ON TABLES TO <role>;
 ```
 
-Scoped to the `weather` schema only — no access to the other schemas in
-`silentech`.
+Scoped to the `weather` schema only — no access to the other schemas of that
+database.
 
 ### b) Connection string — ✅ already in `.env`
 `WEATHER_CONN_STR` has been added: same host/credentials as `ENERGY_CONN_STR`,
-just with **`dbname=silentech`** instead of `energy`:
+just with the weather database's **`dbname`** instead of `energy`:
 
 ```bash
 # .env
-WEATHER_CONN_STR=postgresql://energy_user:<pw>@arm.silentech.gr:5432/silentech
+WEATHER_CONN_STR=postgresql://<user>:<pw>@<host>:<port>/<weather-db>
 ```
 
 ---
@@ -53,7 +54,7 @@ only sees the `energy` DB. Use a **separate** connection for weather — same
 ```julia
 using LibPQ, DataFrames
 
-"Run SQL against the silentech/weather database, returning a DataFrame."
+"Run SQL against the weather database, returning a DataFrame."
 function weather2df(sql, args = [])
     cnx = LibPQ.Connection(ENV["WEATHER_CONN_STR"] * " connect_timeout=30")
     try
@@ -79,7 +80,7 @@ df = weather2df("""
 
 ---
 
-## 3. Schema reference (`silentech.weather`)
+## 3. Schema reference (the `weather` schema)
 
 | Table | Rows | What |
 |---|---|---|
@@ -170,9 +171,9 @@ coordinates **in Julia** after pulling both DataFrames.
 ---
 
 ## 5. Gotchas
-- **Different database** (`silentech`, not `energy`): no cross-DB SQL joins —
+- **Different database** (the weather DB, not `energy`): no cross-DB SQL joins —
   join in DataFrames.
-- **Collation warnings** (`database "silentech" has a collation version
+- **Collation warnings** (`database ... has a collation version
   mismatch …`) on connect are harmless noise from the server; ignore them.
 - **Historical vs forecast overlap**: both tables can cover the same timestamps;
   pick one deliberately (measure = authoritative but lagged, forecast = fresh).
