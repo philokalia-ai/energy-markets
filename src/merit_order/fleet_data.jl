@@ -1,6 +1,102 @@
 # fleet_data.jl — Fleet/hydro data queries: hydro availability, per-type output p95, installed capacity, reservoir dryness and drawdown.
 # Included by ../MeritOrderBook.jl inside `module MeritOrderBook` (definition order preserved).
 
+
+# --- Day-level batch caches (2026-07-24 performance review) ------------------
+# The four query families below used to run per (zone, day): on a 39-zone
+# sequential day that is ~4 aggregate-table scans x 39 zones x 2 passes. Like
+# the outage/flows day caches, each family now fetches ONCE per day for ALL
+# zones (grouped by area_map_code) and per-zone calls slice the cached result.
+# Per-zone VALUES are identical to the old per-zone queries: percentile_cont
+# sorts within its group (deterministic), DISTINCT ON orders within the same
+# keys; only scan-order FP summation can differ at the last ULP (the same
+# documented mechanism as the physical-flows day cache). Errors are never
+# cached; locks follow the TTF_PRICE_CACHE pattern.
+const _TYPE_P95_DAY_CACHE = Dict{Tuple{Date,Int},Dict{String,Dict{String,Float64}}}()
+const _HYDRO_AVAIL_DAY_CACHE = Dict{Tuple{Date,Int},Dict{String,Float64}}()
+const _INSTALLED_CAP_CACHE = Ref{Union{Nothing,Dict{String,Dict{String,Float64}}}}(nothing)
+const _RESERVOIR_DAY_CACHE = Dict{Date,Dict{String,Any}}()
+const _FLEET_DATA_LOCK = ReentrantLock()
+
+function clear_fleet_data_caches!()
+    lock(_FLEET_DATA_LOCK) do
+        empty!(_TYPE_P95_DAY_CACHE)
+        empty!(_HYDRO_AVAIL_DAY_CACHE)
+        _INSTALLED_CAP_CACHE[] = nothing
+        empty!(_RESERVOIR_DAY_CACHE)
+    end
+    return nothing
+end
+
+function _type_p95_all_zones(day::Date, lookback_days::Int)
+    key = (day, lookback_days)
+    cached = lock(_FLEET_DATA_LOCK) do
+        get(_TYPE_P95_DAY_CACHE, key, nothing)
+    end
+    cached !== nothing && return cached
+    df = sql2df_with_retry(
+        """
+        SELECT area_map_code AS z, production_type,
+               percentile_cont(0.95) WITHIN GROUP (ORDER BY mw) AS p95
+        FROM (
+            SELECT area_map_code, production_type, date_time_utc,
+                   SUM(actual_generation_output_mw) AS mw
+            FROM entsoe.aggregated_generation_per_type
+            WHERE area_type_code LIKE 'BZN%'
+              AND actual_generation_output_mw IS NOT NULL
+              AND date_time_utc >= (\$1::date::timestamp AT TIME ZONE 'UTC')
+              AND date_time_utc < (\$2::date::timestamp AT TIME ZONE 'UTC')
+            GROUP BY area_map_code, production_type, date_time_utc
+        ) hourly
+        GROUP BY area_map_code, production_type
+        """,
+        [day - Day(lookback_days), day])
+    out = Dict{String,Dict{String,Float64}}()
+    for row in eachrow(df)
+        ismissing(row.p95) && continue
+        get!(out, String(row.z), Dict{String,Float64}())[String(row.production_type)] =
+            Float64(row.p95)
+    end
+    lock(_FLEET_DATA_LOCK) do
+        _TYPE_P95_DAY_CACHE[key] = out
+    end
+    return out
+end
+
+function _hydro_avail_all_zones(day::Date, lookback_days::Int)
+    key = (day, lookback_days)
+    cached = lock(_FLEET_DATA_LOCK) do
+        get(_HYDRO_AVAIL_DAY_CACHE, key, nothing)
+    end
+    cached !== nothing && return cached
+    df = sql2df_with_retry(
+        """
+        SELECT z, percentile_cont(0.95) WITHIN GROUP (ORDER BY hydro_mw) AS p95
+        FROM (
+            SELECT area_map_code AS z, date_time_utc,
+                   SUM(actual_generation_output_mw) AS hydro_mw
+            FROM entsoe.aggregated_generation_per_type
+            WHERE production_type = ANY(\$1)
+              AND area_type_code LIKE 'BZN%'
+              AND actual_generation_output_mw IS NOT NULL
+              AND date_time_utc >= (\$2::date::timestamp AT TIME ZONE 'UTC')
+              AND date_time_utc < (\$3::date::timestamp AT TIME ZONE 'UTC')
+            GROUP BY area_map_code, date_time_utc
+        ) hourly
+        GROUP BY z
+        """,
+        [HYDRO_PRODUCTION_TYPES, day - Day(lookback_days), day])
+    out = Dict{String,Float64}()
+    for row in eachrow(df)
+        ismissing(row.p95) && continue
+        out[String(row.z)] = Float64(row.p95)
+    end
+    lock(_FLEET_DATA_LOCK) do
+        _HYDRO_AVAIL_DAY_CACHE[key] = out
+    end
+    return out
+end
+
 """
     get_hydro_availability(bidding_zone::String, day::Date; lookback_days=30) -> Union{Float64,Nothing}
 
@@ -15,6 +111,12 @@ price, which tightens the real capacity margin and drives scarcity pricing.
 Returns MW (the p95 hourly output), or `nothing` when no data exists.
 """
 function get_hydro_availability(bidding_zone::String, day::Date; lookback_days::Int=30)
+    # Served from the all-zones day cache; `nothing` when the zone has no
+    # hydro rows in the window — same contract as the single-zone query.
+    return get(_hydro_avail_all_zones(day, lookback_days), bidding_zone, nothing)
+end
+
+function _get_hydro_availability_singlezone(bidding_zone::String, day::Date; lookback_days::Int=30)
     df = sql2df_with_retry(
         """
         SELECT percentile_cont(0.95) WITHIN GROUP (ORDER BY hydro_mw) AS p95
@@ -46,6 +148,13 @@ unit-level table only lists larger units, so for some zones (RO, BG, RS) the
 per-type aggregate output demonstrably exceeds the unit-level fleet capacity.
 """
 function get_type_output_p95(bidding_zone::String, day::Date; lookback_days::Int=30)
+    # Served from the all-zones day cache (one grouped query per (day,
+    # lookback) instead of one scan per zone) — values per zone identical.
+    return get(_type_p95_all_zones(day, lookback_days), bidding_zone,
+               Dict{String,Float64}())
+end
+
+function _get_type_output_p95_singlezone(bidding_zone::String, day::Date; lookback_days::Int=30)
     df = sql2df_with_retry(
         """
         SELECT production_type,
@@ -85,6 +194,47 @@ The registry is slowly-changing reference data (same ex-ante treatment as
 `get_generators`' use of it).
 """
 function get_installed_capacity_by_type(bidding_zone::String)
+    # Registry snapshot cached per process (the query is day-independent, so
+    # this returns exactly what per-call queries would — modulo an ETL write
+    # landing mid-process, same exposure as any long backfill already had).
+    cached = lock(_FLEET_DATA_LOCK) do
+        _INSTALLED_CAP_CACHE[]
+    end
+    if cached === nothing
+        df_all = sql2df_with_retry(
+            """
+            SELECT area_map_code AS z, generation_unit_type AS t, SUM(cap) AS mw FROM (
+              SELECT DISTINCT ON (area_map_code, generation_unit_code)
+                     area_map_code, generation_unit_type,
+                     generation_unit_installed_capacity_mw AS cap
+              FROM entsoe.production_and_generation_units
+              WHERE production_unit_status = 'COMMISSIONED'
+                AND generation_unit_status = 'COMMISSIONED'
+                AND generation_unit_installed_capacity_mw > 0
+              -- DISTINCT ON per (zone, unit): a unit re-zoned across validity
+              -- rows must dedup WITHIN each zone exactly like the old
+              -- per-zone query did, not once globally.
+              ORDER BY area_map_code, generation_unit_code, valid_from DESC,
+                       generation_unit_installed_capacity_mw DESC
+            ) s
+            GROUP BY area_map_code, generation_unit_type
+            """, [])
+        allz = Dict{String,Dict{String,Float64}}()
+        for row in eachrow(df_all)
+            (ismissing(row.t) || ismissing(row.mw) || ismissing(row.z)) && continue
+            k = normalize_fuel_type_name(String(row.t))
+            d = get!(allz, String(row.z), Dict{String,Float64}())
+            d[k] = get(d, k, 0.0) + Float64(row.mw)
+        end
+        lock(_FLEET_DATA_LOCK) do
+            _INSTALLED_CAP_CACHE[] = allz
+        end
+        cached = allz
+    end
+    return get(cached, bidding_zone, Dict{String,Float64}())
+end
+
+function _get_installed_capacity_by_type_singlezone(bidding_zone::String)
     df = sql2df_with_retry(
         """
         SELECT generation_unit_type AS t, SUM(cap) AS mw FROM (
