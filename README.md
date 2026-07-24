@@ -531,8 +531,16 @@ This repository is the work of three contributors, in three distinct phases:
 
 ## License & citation
 
-License: to be determined — until a license file is added, all rights
-reserved; contact the authors for reuse.
+Licensed under the **European Union Public Licence v1.2** ([LICENSE](LICENSE),
+[EUPL-1.2](https://joinup.ec.europa.eu/collection/eupl/eupl-text-eupl-12)) —
+*from Europeans, to Europeans*: a model of the European electricity market,
+built on European open data, under the EU's own copyleft licence (compatible
+with GPL/AGPL/LGPL/MPL per its Appendix; the Electricity Maps-derived
+`web/geo/zones.geojson` remains AGPL-3.0 as noted above).
+
+Authors: **Giannis Georgakopoulos**, **Efthymios Karangelos**,
+**Panagiotis Georgakopoulos** — see [Acknowledgements](#acknowledgements) for
+who built what.
 
 If you use this model or the published data artifact in academic work, please
 cite this repository (a `CITATION.cff` with a citable release DOI is planned).
