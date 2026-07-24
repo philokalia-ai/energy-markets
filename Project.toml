@@ -1,6 +1,6 @@
 name = "Euphemia"
 uuid = "2e9cd046-0924-5485-92f1-d5272153d98c"
-authors = ["Giannis Georgakopoulos <john.k.georg@gmail.com>", "Efthymios Karangelos", "Panagiotis Georgakopoulos <p.georgakopoulos@silentech.gr>"]
+authors = ["Giannis Georgakopoulos <john.k.georg@gmail.com>", "Efthymios Karangelos", "Panagiotis Georgakopoulos <pankgeorg@gmail.com>"]
 
 [deps]
 CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
