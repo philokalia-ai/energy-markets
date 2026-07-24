@@ -65,13 +65,18 @@ every single-zone book are unchanged (guards G1/G2 below).
 
 ## Guards
 
-- **G1 (byte-identity of the SEE products)** — PENDING FINAL VERDICT (see
-  `g1_*` logs): GR single-zone books for 2026-01-26 and 2026-04-03 are
-  **bit-identical** (SHA256 equal) between main (077c7da) and this branch;
-  the 5-zone SEE ATC surface is bit-identical; the 5-zone book hash
-  comparison is being re-run serialized because a concurrent Postgres load
-  (another agent's backfill) injects the documented last-ULP SUM-reordering
-  noise.
+- **G1 (byte-identity of the SEE products)** — **PASS**. Vs main @077c7da:
+  GR single-zone books bit-identical (SHA256) on 2026-01-26 and 2026-04-03;
+  the 5-zone SEE ATC surface bit-identical on both days; the 5-zone SEE book
+  bit-identical on 2026-01-26 (0 differing order lines of 3,432) and on
+  2026-04-03 (0 of 3,140) when the two builds run serialized. An initial hash mismatch on the 5-zone books was
+  reproduced as the *documented* concurrent-Postgres last-ULP SUM-reordering
+  transient (another agent's backfill was hammering the DB): same-code
+  back-to-back reruns are bit-identical, and the serialized cross-code diff
+  is 0 lines. 43-zone smoke build (2026-04-03, no solve): all four new zones
+  build (AL 74 / HR 312 / ME 240 / MK 480 orders), borders AL:{GR,ME},
+  HR:{RS} (SI/HU dropped), ME:{AL,IT-CSOUTH,RS} (Monita on IT-CSOUTH, not
+  IT-NORTH), MK:{BG,GR,RS}.
 - **G2 (39-zone bit-identity)** — pending solver availability.
 - **G3 (43-zone A/B)** — pending solver availability. Windows: 2026-04-01..05
   benchmark, 2026-07-06..21 July regime window, 2026-03-01..08 March guard.
