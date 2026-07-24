@@ -1107,6 +1107,14 @@ function ensure_indexes()
             CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_actual_load_zone_time
             ON entsoe.actual_total_load (area_map_code, date_time_utc);
         """)
+        # Pure time-range probes on the day-ahead actuals (scoring discovery,
+        # realized-day checks) could not use the zone-leading index — a 1.9 GB
+        # seq scan per probe. Time-leading index fixes the class.
+        @info "Creating index on entsoe.energy_prices (date_time_utc)..."
+        LibPQ.execute(cnx, """
+            CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_entsoe_energy_prices_time
+            ON entsoe.energy_prices (date_time_utc);
+        """)
         @info "Creating index on generation_forecasts_for_wind_and_solar..."
         LibPQ.execute(cnx, """
             CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_res_fcst_zone_time
