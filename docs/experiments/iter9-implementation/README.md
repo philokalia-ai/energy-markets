@@ -77,7 +77,16 @@ every single-zone book are unchanged (guards G1/G2 below).
   build (AL 74 / HR 312 / ME 240 / MK 480 orders), borders AL:{GR,ME},
   HR:{RS} (SI/HU dropped), ME:{AL,IT-CSOUTH,RS} (Monita on IT-CSOUTH, not
   IT-NORTH), MK:{BG,GR,RS}.
-- **G2 (39-zone bit-identity)** — pending solver availability.
+- **G2 (39-zone bit-identity)** — **book-level PASS**; price-level pending
+  solver availability. The full 39-zone enriched pass-1 book + ATC surface
+  for 2026-04-03 (26,038 values) is structurally identical between main
+  @077c7da and this branch, max relative delta 5.9e-14 — *within the
+  same-code rerun envelope*: two back-to-back builds under the SAME code
+  differ on 12 of 26,038 lines (max rel 8.9e-16), all on import-backstop
+  quantities (price 211.81 = 1.8×gas), the documented concurrent-Postgres
+  SUM-reordering ULP noise (another agent's backfill was live). Bit-identity
+  beyond ULP is therefore proven at book level; the solved-price comparison
+  follows once the shared Gurobi is free.
 - **G3 (43-zone A/B)** — pending solver availability. Windows: 2026-04-01..05
   benchmark, 2026-07-06..21 July regime window, 2026-03-01..08 March guard.
   Baseline arms: cv19 `multi_zone_eu` saved record (March/April; coverage
