@@ -63,6 +63,10 @@ paths are unchanged.
 include("merit_order/flows_imports.jl") # physical-flow cache, net imports, ex-ante flows, import ATC/backstop, firm map
 include("merit_order/zone_profiles.jl") # ZoneProfile struct, per-zone profiles, ZONE_PROFILES, ZoneScenario
 include("merit_order/fleet_data.jl")    # hydro availability, per-type p95, installed capacity, reservoir dryness/drawdown
+# Optional order-book sink — set by the book-export feature; nothing = the
+# exact pre-existing behaviour (guarded byte-identical).
+const BOOK_SINK = Ref{Union{Nothing,Function}}(nothing)
+
 include("merit_order/book_build.jl")    # create_merit_order_book — the merit-order book construction itself
 
 
