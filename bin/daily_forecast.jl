@@ -72,7 +72,7 @@
 #                  solve (used by CI when Gurobi credentials are absent — the
 #                  39-zone clear does not converge with HiGHS)
 
-using Euphemia, Dates, Statistics, LibPQ
+using Euphemia, Dates, Statistics, LibPQ, DataFrames, DuckDB
 
 include(joinpath(@__DIR__, "forecast_common.jl"))
 include(joinpath(@__DIR__, "weather_res.jl"))   # guarded main; pure helpers + open-meteo fetch
@@ -176,6 +176,46 @@ expected market-day hours). The realized guard is re-checked immediately
 before the write (the horizon may have advanced during a long solve), and the
 HOUR-LEVEL guard refuses any row at or before `prediction_made`.
 """
+
+
+"Write all captured books to v1/books/<market_date>.parquet (zstd) and push."
+function flush_books!(books::Dict, market_date::Date)
+    rows = NamedTuple[]
+    for ((zone, day), tagged) in books
+        for (o, tag) in tagged
+            push!(rows, (market_date=market_date, zone=zone, ts=o.date_time,
+                         side=String(o.type), price=o.price, mw=o.quantity,
+                         owner=tag,
+                         code_version=Euphemia.ENERGY_PRICES_CODE_VERSION))
+        end
+    end
+    isempty(rows) && return nothing
+    outdir = joinpath(dirname(@__DIR__), "data", "web", "v1", "books")
+    mkpath(outdir)
+    out = joinpath(outdir, "$(market_date).parquet")
+    df = DataFrame(rows)
+    db = DuckDB.DB()
+    con = DBInterface.connect(db)
+    DuckDB.register_data_frame(con, df, "books")
+    DBInterface.execute(con,
+        "COPY (SELECT * FROM books ORDER BY zone, ts, side, price) TO '$(out)' " *
+        "(FORMAT parquet, COMPRESSION zstd)")
+    DBInterface.close!(con)
+    println("📚 books: wrote $(nrow(df)) orders -> $(out) ($(round(filesize(out)/1024, digits=0)) KB)")
+    endpoint = get(ENV, "EXTRACT_S3_ENDPOINT", "")
+    bucket = get(ENV, "EXTRACT_S3_BUCKET", "")
+    if !isempty(endpoint) && !isempty(bucket)
+        try
+            run(`aws s3 cp --endpoint-url $(endpoint) $(out) s3://$(bucket)/books/$(market_date).parquet`)
+            println("📚 books: pushed to s3://…/books/$(market_date).parquet")
+        catch e
+            @warn "books push failed (parquet kept locally)" error = sprint(showerror, e)
+        end
+    end
+    empty!(books)
+    return nothing
+end
+
 function write_forecast!(market_date::Date, lead_days::Int, prediction_made::DateTime,
                          zone_hourly::Dict{String,Dict{DateTime,Float64}})
     latest_actual = latest_actual_load_date()
@@ -336,6 +376,23 @@ function main()
 
     Euphemia.ensure_forecast_tables()
 
+    # --- Order-book export (measured: ~150k tagged orders / 307 KB zstd
+    # parquet per 39-zone two-pass day; ~112 MB/yr). The sink captures every
+    # zone-day's FULL tagged book (the strategist view: per-unit ladders, RES,
+    # IMPORT, DEMAND, BACKSTOP tags) right before merging; two-pass rebuilds
+    # overwrite per (zone, day) so the final book wins. Books are written per
+    # MARKET DAY to data/web/v1/books/<date>.parquet after the day's forecast
+    # freezes, and pushed to the public data bucket when the S3 env is
+    # present (same env contract as bin/extract_store.sh). Failures warn,
+    # never break forecasting.
+    _BOOKS = Dict{Tuple{String,Date},Vector{Tuple{Euphemia.SimpleOrder,String}}}()
+    _BOOKS_LOCK = ReentrantLock()
+    Euphemia.MeritOrderBook.BOOK_SINK[] = function (zone, day, tagged, res)
+        lock(_BOOKS_LOCK) do
+            _BOOKS[(zone, day)] = copy(tagged)
+        end
+    end
+
     now_utc = now(UTC)
     today_athens = athens_date(now_utc)
     latest_actual = latest_actual_load_date()
@@ -448,6 +505,16 @@ function main()
 
         n = write_forecast!(day, lead, prediction_made, zone_hourly)
         n_predicted += n
+        # Books captured during this market day's clears — freeze them next
+        # to the vintage (only after the forecast wrote, so a refused write
+        # never exports books for an unpublished day).
+        try
+            lock(_BOOKS_LOCK) do
+                flush_books!(_BOOKS, day)
+            end
+        catch e
+            @warn "book export failed (forecast unaffected)" day error = sprint(showerror, e)
+        end
         println("  ✅ DAY $day — wrote $n forecast rows across $(length(zone_hourly)) " *
                 "zone(s) ($(length(expected))h each; lead_days=$lead, cv=$CV, mode=$INPUT_MODE)")
         for z in ("GR", "DE_LU", "FR", "IT-NORTH", "NO2")

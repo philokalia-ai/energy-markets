@@ -954,6 +954,21 @@ function create_merit_order_book(
             total_demand_quantity = sum((t[1].quantity for t in tagged if t[1].type == :demand); init=0.0)
         end
 
+        # Optional book sink (default nothing = byte-identical no-op): a
+        # callback receiving the FULL tagged order list right before merging —
+        # the same view the strategist hook gets. Used by the book-export
+        # feature to persist per-owner bid ladders for analysis/transparency;
+        # in two-pass clears the harness overwrites per (zone, day), so the
+        # final (pass-2) book wins. Errors in the sink must never break a
+        # clear — swallowed with a warning.
+        if BOOK_SINK[] !== nothing
+            try
+                BOOK_SINK[](bidding_zone, day, tagged, resolution_minutes)
+            catch e
+                @warn "BOOK_SINK failed (book still cleared)" zone = bidding_zone day error = sprint(showerror, e)
+            end
+        end
+
         orders = SimpleOrder[t[1] for t in tagged]
 
         # ── Stage 9: merge identical blocks + assemble the MPCC book ────
