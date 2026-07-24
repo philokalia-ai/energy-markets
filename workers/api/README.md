@@ -1,5 +1,11 @@
 # euphemia-api — live data backend (issue #152)
 
+> **Deploy gotcha:** run wrangler with an explicit config —
+> `npx wrangler deploy --config workers/api/wrangler.toml` — because the repo
+> root also carries a `wrangler.jsonc` (the `energy-markets` static-assets
+> worker) and wrangler can resolve that one even when invoked from this
+> directory, deploying the wrong worker.
+
 Cloudflare Worker that serves the forecast data plane from the R2 bucket
 `euphemia-web-data` (zstd parquet written by `bin/export_web_parquet.jl` and
 pushed by `bin/web_data_push.sh` seconds after each pipeline DB write). It

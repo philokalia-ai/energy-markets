@@ -55,6 +55,30 @@ iteration plan.
 | 5 | **GB done right** — UK fundamentals feed (Elexon/BMRS + UKA carbon), daily GB SRMC anchor + evening scarcity premium, **paired with the FR–GB double-count fix** | BE/NL/FR/DK1 windows, March guard clean | needs new ETL |
 | 6 | Core-FBMC family (BE/NL/PL/SK/HU/CZ evenings) | separate program — not a boundary problem | out of scope here |
 
+### Confirm A/B results (2026-07-24, 24 days × base/ua2/dk1, cv19-era books)
+
+Both refinements **passed their pre-registered gates** (72 coupled solves,
+July-failure + March-stable windows, scored on realized prices;
+`exp/boundary-refine`, scored table `results_price_ab.tsv`):
+
+- **DK1/Viking (item 2): PASS, and the program's current focus.** July MAE
+  31.5→28.3 (corr 0.90→0.93, evening bias −58→−48); March MAE 27.6→25.2 with
+  corr **0.55→0.80**; no FR/NL/NO2 leakage (all within ±0.1 MAE). Cleanest
+  single lever measured in the program to date.
+- **ua2 firm-slice (item 1): PASS.** Keeps the full HU July gain (MAE
+  72.3→57.1, corr 0.69→0.79) and kills the March MAE breach (28.24→28.29,
+  corr 0.86→0.88). Honest residuals: HU March *evening* MAE 29→33 and mild
+  March SEE drift (RO +1.3, BG +1.1 MAE) — understood-and-documented, not
+  disqualifying, but the reason ua2 ships as its own decision rather than
+  silently bundled.
+- July spillovers of ua2 are free wins: SK evening bias −82→−73, SI MAE
+  81→70, RO/RS/GR/BG all slightly better.
+
+**Decision (2026-07-24): DK1/Viking is the cv21 core; GB (item 5) is
+PARKED** until the Elexon/BMRS + UKA ETL exists — no GB behavioral book
+ships in the interim. ua2 stays measured-and-available as a separate
+ship/no-ship decision alongside DK1.
+
 Ship vehicle: items 1–2 are candidates for the next model cv after cv19;
 items 3–5 are each their own cv with the full protocol (coupled A/B, guards,
 backfill, Metabase). The `NET_IMPORT_EXCLUDE_EXTRA` / `BACKSTOP_EXCLUDE_EXTRA`
