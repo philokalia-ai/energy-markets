@@ -1,0 +1,239 @@
+[ Info: preinit 5 done
+[ Info: Initialization done
+[ Info: Filtered out 3 variable renewable generators (Wind/Solar) from UC
+[ Info: Filtered out 3 variable renewable generators (Wind/Solar) from UC
+[ Info: Filtered out 3 variable renewable generators (Wind/Solar) from UC
+
+======================================================================
+### AL 2026-01-21
+📊 Creating merit-order order book for AL on 2026-01-21
+  📊 Resolution analysis:
+     - Loads: PT15M (15 minutes)
+     - Renewables: PT60M (60 minutes)
+     → Using finest resolution: 15 minutes
+  📊 Disaggregating renewables from 60min to 15min resolution
+  💧 Hydro: offer scale 1.0, dryness 0.0 (reservoir levels)
+  🔗 Merged 1632 orders into 384 price-distinct blocks
+  ✅ Merit-order book: 1344 supply / 288 demand orders
+     ⚖️  Supply/Demand ratio: 0.76  (gas SRMC €96.6/MWh)
+>>> AL 2026-01-21 OK: 192 supply + 192 demand orders; day supply/demand MWh ratio 0.76; worst-hour ratio 0.69
+
+======================================================================
+### MK 2026-01-21
+📊 Creating merit-order order book for MK on 2026-01-21
+  ➕ Fleet completion: +150 MW Hydro Water Reservoir (recent p95 414 MW vs 264 MW unit-level)
+  ➖ Fleet-truthing derate: Fossil Brown coal/Lignite ×0.46 (fleet 824 MW vs recent p95 329 MW)
+  📊 Resolution analysis:
+     - Loads & Renewables: PT60M (60 minutes)
+     - Loads & Renewables: PT60M (60 minutes)
+     → Using finest resolution: 60 minutes
+  💧 Hydro: offer scale 1.0, dryness 0.0 (reservoir levels)
+  🔗 Merged 921 orders into 432 price-distinct blocks
+  ✅ Merit-order book: 873 supply / 48 demand orders
+     ⚖️  Supply/Demand ratio: 1.38  (gas SRMC €96.6/MWh)
+>>> MK 2026-01-21 OK: 384 supply + 48 demand orders; day supply/demand MWh ratio 1.38; worst-hour ratio 1.25
+
+======================================================================
+### ME 2026-01-21
+📊 Creating merit-order order book for ME on 2026-01-21
+  ➕ Fleet completion: +283 MW Hydro Water Reservoir (recent p95 625 MW vs 342 MW unit-level)
+  📊 Resolution analysis:
+     - Loads & Renewables: PT60M (60 minutes)
+     - Loads & Renewables: PT60M (60 minutes)
+     → Using finest resolution: 60 minutes
+  💧 Hydro: offer scale 1.0, dryness 0.0 (reservoir levels)
+  🔗 Merged 288 orders into 192 price-distinct blocks
+  ✅ Merit-order book: 216 supply / 72 demand orders
+     ⚖️  Supply/Demand ratio: 1.18  (gas SRMC €96.6/MWh)
+>>> ME 2026-01-21 OK: 144 supply + 48 demand orders; day supply/demand MWh ratio 1.18; worst-hour ratio 1.02
+
+======================================================================
+### HR 2026-01-21
+📊 Creating merit-order order book for HR on 2026-01-21
+  ➕ Fleet completion: +258 MW Hydro Pumped Storage (recent p95 258 MW vs 0 MW unit-level)
+  ➕ Fleet completion: +953 MW Hydro Water Reservoir (recent p95 953 MW vs 0 MW unit-level)
+  ➕ Fleet completion: +206 MW Hydro Run-of-river and pondage (recent p95 206 MW vs 0 MW unit-level)
+  ➕ Fleet completion: +577 MW Fossil Gas (recent p95 577 MW vs 0 MW unit-level)
+  ➕ Fleet completion: +202 MW Fossil Hard coal (recent p95 202 MW vs 0 MW unit-level)
+  📊 Resolution analysis:
+     - Loads & Renewables: PT15M (15 minutes)
+     - Loads & Renewables: PT15M (15 minutes)
+     → Using finest resolution: 15 minutes
+  💧 Hydro: offer scale 0.95, dryness 0.02 (reservoir levels)
+  🔗 Merged 1728 orders into 1536 price-distinct blocks
+  ✅ Merit-order book: 1536 supply / 192 demand orders
+     ⚖️  Supply/Demand ratio: 1.06  (gas SRMC €96.6/MWh)
+>>> HR 2026-01-21 OK: 1344 supply + 192 demand orders; day supply/demand MWh ratio 1.06; worst-hour ratio 0.88
+
+======================================================================
+### AL 2026-04-03
+📊 Creating merit-order order book for AL on 2026-04-03
+  ❌ Error creating merit-order book: MethodError: Cannot `convert` an object of type Missing to an object of type Float64
+The function `convert` exists, but no method is defined for this combination of argument types.
+
+Closest candidates are:
+  convert(::Type{Float64}, !Matched::DuckDB.duckdb_decimal)
+   @ DuckDB ~/.julia/packages/DuckDB/2J7sd/src/ctypes.jl:585
+  convert(::Type{T}, !Matched::LibPQ.PQChar) where T<:Number
+   @ LibPQ ~/.julia/packages/LibPQ/i4yBe/src/typemaps.jl:282
+  convert(::Type{T}, !Matched::CartesianIndex{1}) where T<:Number
+   @ Base multidimensional.jl:139
+  ...
+
+
+======================================================================
+### MK 2026-04-03
+📊 Creating merit-order order book for MK on 2026-04-03
+  ➕ Fleet completion: +150 MW Hydro Water Reservoir (recent p95 414 MW vs 264 MW unit-level)
+  ➖ Fleet-truthing derate: Fossil Brown coal/Lignite ×0.42 (fleet 824 MW vs recent p95 301 MW)
+  ❌ Error creating merit-order book: MethodError: Cannot `convert` an object of type Missing to an object of type Float64
+The function `convert` exists, but no method is defined for this combination of argument types.
+
+Closest candidates are:
+  convert(::Type{Float64}, !Matched::DuckDB.duckdb_decimal)
+   @ DuckDB ~/.julia/packages/DuckDB/2J7sd/src/ctypes.jl:585
+  convert(::Type{T}, !Matched::LibPQ.PQChar) where T<:Number
+   @ LibPQ ~/.julia/packages/LibPQ/i4yBe/src/typemaps.jl:282
+  convert(::Type{T}, !Matched::CartesianIndex{1}) where T<:Number
+   @ Base multidimensional.jl:139
+  ...
+
+
+======================================================================
+### ME 2026-04-03
+📊 Creating merit-order order book for ME on 2026-04-03
+  ➕ Fleet completion: +235 MW Hydro Water Reservoir (recent p95 577 MW vs 342 MW unit-level)
+  ❌ Error creating merit-order book: MethodError: Cannot `convert` an object of type Missing to an object of type Float64
+The function `convert` exists, but no method is defined for this combination of argument types.
+
+Closest candidates are:
+  convert(::Type{Float64}, !Matched::DuckDB.duckdb_decimal)
+   @ DuckDB ~/.julia/packages/DuckDB/2J7sd/src/ctypes.jl:585
+  convert(::Type{T}, !Matched::LibPQ.PQChar) where T<:Number
+   @ LibPQ ~/.julia/packages/LibPQ/i4yBe/src/typemaps.jl:282
+  convert(::Type{T}, !Matched::CartesianIndex{1}) where T<:Number
+   @ Base multidimensional.jl:139
+  ...
+
+
+======================================================================
+### HR 2026-04-03
+📊 Creating merit-order order book for HR on 2026-04-03
+  ➕ Fleet completion: +258 MW Hydro Pumped Storage (recent p95 258 MW vs 0 MW unit-level)
+  ➕ Fleet completion: +814 MW Hydro Water Reservoir (recent p95 814 MW vs 0 MW unit-level)
+  ➕ Fleet completion: +184 MW Hydro Run-of-river and pondage (recent p95 184 MW vs 0 MW unit-level)
+  ➕ Fleet completion: +445 MW Fossil Gas (recent p95 445 MW vs 0 MW unit-level)
+  📊 Resolution analysis:
+     - Loads & Renewables: PT15M (15 minutes)
+     - Loads & Renewables: PT15M (15 minutes)
+     → Using finest resolution: 15 minutes
+  💧 Hydro: offer scale 0.96, dryness 0.0 (reservoir levels)
+  🔗 Merged 1344 orders into 1152 price-distinct blocks
+  ✅ Merit-order book: 1152 supply / 192 demand orders
+     ⚖️  Supply/Demand ratio: 1.49  (gas SRMC €117.7/MWh)
+>>> HR 2026-04-03 OK: 960 supply + 192 demand orders; day supply/demand MWh ratio 1.49; worst-hour ratio 1.11
+
+======================================================================
+### AL 2026-06-10
+📊 Creating merit-order order book for AL on 2026-06-10
+  📊 Resolution analysis:
+     - Loads: PT15M (15 minutes)
+     - Renewables: PT60M (60 minutes)
+     → Using finest resolution: 15 minutes
+  📊 Disaggregating renewables from 60min to 15min resolution
+  💧 Hydro: offer scale 0.89, dryness 0.0 (reservoir levels)
+  🔗 Merged 1632 orders into 384 price-distinct blocks
+  ✅ Merit-order book: 1344 supply / 288 demand orders
+     ⚖️  Supply/Demand ratio: 1.32  (gas SRMC €117.0/MWh)
+>>> AL 2026-06-10 OK: 192 supply + 192 demand orders; day supply/demand MWh ratio 1.32; worst-hour ratio 0.89
+
+======================================================================
+### MK 2026-06-10
+📊 Creating merit-order order book for MK on 2026-06-10
+  ➖ Fleet-truthing derate: Fossil Brown coal/Lignite ×0.29 (fleet 824 MW vs recent p95 208 MW)
+  📊 Resolution analysis:
+     - Loads & Renewables: PT60M (60 minutes)
+     - Loads & Renewables: PT60M (60 minutes)
+     → Using finest resolution: 60 minutes
+  💧 Hydro: offer scale 1.0, dryness 0.0 (reservoir levels)
+  🔗 Merged 1104 orders into 480 price-distinct blocks
+  ✅ Merit-order book: 1045 supply / 59 demand orders
+     ⚖️  Supply/Demand ratio: 1.94  (gas SRMC €117.0/MWh)
+>>> MK 2026-06-10 OK: 432 supply + 48 demand orders; day supply/demand MWh ratio 1.94; worst-hour ratio 1.52
+
+======================================================================
+### ME 2026-06-10
+📊 Creating merit-order order book for ME on 2026-06-10
+  📊 Resolution analysis:
+     - Loads & Renewables: PT60M (60 minutes)
+     - Loads & Renewables: PT60M (60 minutes)
+     → Using finest resolution: 60 minutes
+  💧 Hydro: offer scale 0.58, dryness 0.11 (reservoir levels)
+  🔗 Merged 312 orders into 240 price-distinct blocks
+  ✅ Merit-order book: 262 supply / 50 demand orders
+     ⚖️  Supply/Demand ratio: 1.35  (gas SRMC €117.0/MWh)
+>>> ME 2026-06-10 OK: 192 supply + 48 demand orders; day supply/demand MWh ratio 1.35; worst-hour ratio 0.84
+
+======================================================================
+### HR 2026-06-10
+📊 Creating merit-order order book for HR on 2026-06-10
+  ➕ Fleet completion: +132 MW Hydro Pumped Storage (recent p95 132 MW vs 0 MW unit-level)
+  ➕ Fleet completion: +605 MW Hydro Water Reservoir (recent p95 605 MW vs 0 MW unit-level)
+  ➕ Fleet completion: +221 MW Hydro Run-of-river and pondage (recent p95 221 MW vs 0 MW unit-level)
+  📊 Resolution analysis:
+     - Loads & Renewables: PT15M (15 minutes)
+     - Loads & Renewables: PT15M (15 minutes)
+     → Using finest resolution: 15 minutes
+  💧 Hydro: offer scale 1.0, dryness 0.0 (reservoir levels)
+  🔗 Merged 960 orders into 768 price-distinct blocks
+  ✅ Merit-order book: 768 supply / 192 demand orders
+     ⚖️  Supply/Demand ratio: 1.19  (gas SRMC €117.0/MWh)
+>>> HR 2026-06-10 OK: 576 supply + 192 demand orders; day supply/demand MWh ratio 1.19; worst-hour ratio 0.88
+
+======================================================================
+SUMMARY
+AL 2026-01-21   OK  ratio=0.76  (192S/192D)
+MK 2026-01-21   OK  ratio=1.38  (384S/48D)
+ME 2026-01-21   OK  ratio=1.18  (144S/48D)
+HR 2026-01-21   OK  ratio=1.06  (1344S/192D)
+AL 2026-04-03   FAIL: Error creating merit-order book: MethodError: Cannot `convert` an object of type Missing to an object of type Float64
+The function `convert` exists, but no method is defined for this combination of argument types.
+
+Closest candidates are:
+  convert(::Type{Float64}, !Matched::DuckDB.duckdb_decimal)
+   @ DuckDB ~/.julia/packages/DuckDB/2J7sd/src/ctypes.jl:585
+  convert(::Type{T}, !Matched::LibPQ.PQChar) where T<:Number
+   @ LibPQ ~/.julia/packages/LibPQ/i4yBe/src/typemaps.jl:282
+  convert(::Type{T}, !Matched::CartesianIndex{1}) where T<:Number
+   @ Base multidimensional.jl:139
+  ...
+
+MK 2026-04-03   FAIL: Error creating merit-order book: MethodError: Cannot `convert` an object of type Missing to an object of type Float64
+The function `convert` exists, but no method is defined for this combination of argument types.
+
+Closest candidates are:
+  convert(::Type{Float64}, !Matched::DuckDB.duckdb_decimal)
+   @ DuckDB ~/.julia/packages/DuckDB/2J7sd/src/ctypes.jl:585
+  convert(::Type{T}, !Matched::LibPQ.PQChar) where T<:Number
+   @ LibPQ ~/.julia/packages/LibPQ/i4yBe/src/typemaps.jl:282
+  convert(::Type{T}, !Matched::CartesianIndex{1}) where T<:Number
+   @ Base multidimensional.jl:139
+  ...
+
+ME 2026-04-03   FAIL: Error creating merit-order book: MethodError: Cannot `convert` an object of type Missing to an object of type Float64
+The function `convert` exists, but no method is defined for this combination of argument types.
+
+Closest candidates are:
+  convert(::Type{Float64}, !Matched::DuckDB.duckdb_decimal)
+   @ DuckDB ~/.julia/packages/DuckDB/2J7sd/src/ctypes.jl:585
+  convert(::Type{T}, !Matched::LibPQ.PQChar) where T<:Number
+   @ LibPQ ~/.julia/packages/LibPQ/i4yBe/src/typemaps.jl:282
+  convert(::Type{T}, !Matched::CartesianIndex{1}) where T<:Number
+   @ Base multidimensional.jl:139
+  ...
+
+HR 2026-04-03   OK  ratio=1.49  (960S/192D)
+AL 2026-06-10   OK  ratio=1.32  (192S/192D)
+MK 2026-06-10   OK  ratio=1.94  (432S/48D)
+ME 2026-06-10   OK  ratio=1.35  (192S/48D)
+HR 2026-06-10   OK  ratio=1.19  (576S/192D)

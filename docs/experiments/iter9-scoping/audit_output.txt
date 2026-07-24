@@ -1,0 +1,426 @@
+Output format is aligned.
+=== 1. DA prices (entsoe.energy_prices) per zone ===
+ map_code | contract_type | currency |               source               | rows | distinct_ts |   first    |    last    | cov_pct_win 
+----------+---------------+----------+------------------------------------+------+-------------+------------+------------+-------------
+ AL       | Day-ahead     | EUR      | 2023_04_EnergyPrices_12.1.D_r3.csv |  458 |         458 | 2023-04-12 | 2023-05-01 |         0.0
+ AL       | Day-ahead     | EUR      | 2023_05_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2023-05-01 | 2023-06-01 |         0.0
+ AL       | Day-ahead     | EUR      | 2023_06_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2023-06-01 | 2023-07-01 |         0.0
+ AL       | Day-ahead     | EUR      | 2023_07_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2023-07-01 | 2023-08-01 |         0.0
+ AL       | Day-ahead     | EUR      | 2023_08_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2023-08-01 | 2023-09-01 |         0.0
+ AL       | Day-ahead     | EUR      | 2023_09_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2023-09-01 | 2023-10-01 |         0.0
+ AL       | Day-ahead     | EUR      | 2023_10_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2023-10-01 | 2023-11-01 |         0.0
+ AL       | Day-ahead     | EUR      | 2023_11_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2023-11-01 | 2023-12-01 |         0.0
+ AL       | Day-ahead     | EUR      | 2023_12_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2023-12-01 | 2024-01-01 |         0.0
+ AL       | Day-ahead     | EUR      | 2024_01_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2024-01-01 | 2024-02-01 |         0.0
+ AL       | Day-ahead     | EUR      | 2024_02_EnergyPrices_12.1.D_r3.csv |  696 |         696 | 2024-02-01 | 2024-03-01 |         0.0
+ AL       | Day-ahead     | EUR      | 2024_03_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2024-03-01 | 2024-04-01 |         0.0
+ AL       | Day-ahead     | EUR      | 2024_04_EnergyPrices_12.1.D_r3.csv |  696 |         696 | 2024-04-01 | 2024-05-01 |         0.0
+ AL       | Day-ahead     | EUR      | 2024_05_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2024-05-01 | 2024-06-01 |         0.0
+ AL       | Day-ahead     | EUR      | 2024_06_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2024-06-01 | 2024-07-01 |         0.0
+ AL       | Day-ahead     | EUR      | 2024_07_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2024-07-01 | 2024-08-01 |         4.2
+ AL       | Day-ahead     | EUR      | 2024_08_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2024-08-01 | 2024-09-01 |         4.2
+ AL       | Day-ahead     | EUR      | 2024_09_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2024-09-01 | 2024-10-01 |         4.1
+ AL       | Day-ahead     | EUR      | 2024_10_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2024-10-01 | 2024-11-01 |         4.2
+ AL       | Day-ahead     | EUR      | 2024_11_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2024-11-01 | 2024-12-01 |         4.1
+ AL       | Day-ahead     | EUR      | 2024_12_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2024-12-01 | 2025-01-01 |         4.2
+ AL       | Day-ahead     | EUR      | 2025_01_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2025-01-01 | 2025-02-01 |         4.2
+ AL       | Day-ahead     | EUR      | 2025_02_EnergyPrices_12.1.D_r3.csv |  672 |         672 | 2025-02-01 | 2025-03-01 |         3.8
+ AL       | Day-ahead     | EUR      | 2025_03_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2025-03-01 | 2025-04-01 |         4.2
+ AL       | Day-ahead     | EUR      | 2025_04_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2025-04-01 | 2025-05-01 |         4.1
+ AL       | Day-ahead     | EUR      | 2025_05_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2025-05-01 | 2025-06-01 |         4.2
+ AL       | Day-ahead     | EUR      | 2025_06_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2025-06-01 | 2025-07-01 |         4.1
+ AL       | Day-ahead     | EUR      | 2025_07_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2025-07-01 | 2025-08-01 |         4.2
+ AL       | Day-ahead     | EUR      | 2025_08_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2025-08-01 | 2025-09-01 |         4.1
+ AL       | Day-ahead     | EUR      | 2025_09_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2025-09-01 | 2025-10-01 |         4.1
+ AL       | Day-ahead     | EUR      | 2025_10_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2025-10-01 | 2025-11-01 |         4.2
+ AL       | Day-ahead     | EUR      | 2025_11_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2025-11-01 | 2025-12-01 |         4.1
+ AL       | Day-ahead     | EUR      | 2025_12_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2025-12-01 | 2026-01-01 |         4.2
+ AL       | Day-ahead     | EUR      | 2026_01_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2026-01-01 | 2026-02-01 |         4.2
+ AL       | Day-ahead     | EUR      | 2026_02_EnergyPrices_12.1.D_r3.csv |  672 |         672 | 2026-02-01 | 2026-03-01 |         3.8
+ AL       | Day-ahead     | EUR      | 2026_03_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2026-03-01 | 2026-04-01 |         4.2
+ AL       | Day-ahead     | EUR      | 2026_04_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2026-04-01 | 2026-05-01 |         4.1
+ AL       | Day-ahead     | EUR      | 2026_05_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2026-05-01 | 2026-06-01 |         4.1
+ AL       | Day-ahead     | EUR      | 2026_06_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2026-06-01 | 2026-07-01 |         4.1
+ AL       | Day-ahead     | EUR      | 2026_07_EnergyPrices_12.1.D_r3.csv |  574 |         574 | 2026-07-01 | 2026-07-24 |         0.0
+ HR       | Day-ahead     | EUR      | 2017_10_EnergyPrices_12.1.D_r3.csv |  338 |         338 | 2017-10-18 | 2017-11-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2017_11_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2017-11-01 | 2017-12-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2017_12_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2017-12-01 | 2018-01-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2018_01_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2018-01-01 | 2018-02-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2018_02_EnergyPrices_12.1.D_r3.csv |  672 |         672 | 2018-02-01 | 2018-03-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2018_03_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2018-03-01 | 2018-04-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2018_04_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2018-04-01 | 2018-05-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2018_05_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2018-05-01 | 2018-06-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2018_06_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2018-06-01 | 2018-07-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2018_07_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2018-07-01 | 2018-08-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2018_08_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2018-08-01 | 2018-09-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2018_09_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2018-09-01 | 2018-10-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2018_10_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2018-10-01 | 2018-11-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2018_11_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2018-11-01 | 2018-12-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2018_12_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2018-12-01 | 2019-01-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2019_01_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2019-01-01 | 2019-02-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2019_02_EnergyPrices_12.1.D_r3.csv |  672 |         672 | 2019-02-01 | 2019-03-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2019_03_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2019-03-01 | 2019-04-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2019_04_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2019-04-01 | 2019-05-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2019_05_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2019-05-01 | 2019-06-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2019_06_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2019-06-01 | 2019-07-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2019_07_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2019-07-01 | 2019-08-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2019_08_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2019-08-01 | 2019-09-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2019_09_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2019-09-01 | 2019-10-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2019_10_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2019-10-01 | 2019-11-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2019_11_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2019-11-01 | 2019-12-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2019_12_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2019-12-01 | 2020-01-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2020_01_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2020-01-01 | 2020-02-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2020_02_EnergyPrices_12.1.D_r3.csv |  696 |         696 | 2020-02-01 | 2020-03-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2020_03_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2020-03-01 | 2020-04-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2020_04_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2020-04-01 | 2020-05-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2020_05_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2020-05-01 | 2020-06-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2020_06_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2020-06-01 | 2020-07-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2020_07_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2020-07-01 | 2020-08-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2020_08_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2020-08-01 | 2020-09-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2020_09_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2020-09-01 | 2020-10-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2020_10_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2020-10-01 | 2020-11-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2020_11_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2020-11-01 | 2020-12-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2020_12_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2020-12-01 | 2021-01-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2021_01_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2021-01-01 | 2021-02-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2021_02_EnergyPrices_12.1.D_r3.csv |  672 |         672 | 2021-02-01 | 2021-03-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2021_03_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2021-03-01 | 2021-04-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2021_04_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2021-04-01 | 2021-05-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2021_05_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2021-05-01 | 2021-06-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2021_06_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2021-06-01 | 2021-07-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2021_07_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2021-07-01 | 2021-08-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2021_08_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2021-08-01 | 2021-09-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2021_09_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2021-09-01 | 2021-10-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2021_10_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2021-10-01 | 2021-11-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2021_11_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2021-11-01 | 2021-12-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2021_12_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2021-12-01 | 2022-01-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2022_01_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2022-01-01 | 2022-02-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2022_02_EnergyPrices_12.1.D_r3.csv |  672 |         672 | 2022-02-01 | 2022-03-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2022_03_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2022-03-01 | 2022-04-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2022_04_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2022-04-01 | 2022-05-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2022_05_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2022-05-01 | 2022-06-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2022_06_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2022-06-01 | 2022-07-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2022_07_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2022-07-01 | 2022-08-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2022_08_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2022-08-01 | 2022-09-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2022_09_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2022-09-01 | 2022-10-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2022_10_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2022-10-01 | 2022-11-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2022_11_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2022-11-01 | 2022-12-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2022_12_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2022-12-01 | 2023-01-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2023_01_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2023-01-01 | 2023-02-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2023_02_EnergyPrices_12.1.D_r3.csv |  672 |         672 | 2023-02-01 | 2023-03-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2023_03_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2023-03-01 | 2023-04-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2023_04_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2023-04-01 | 2023-05-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2023_05_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2023-05-01 | 2023-06-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2023_06_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2023-06-01 | 2023-07-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2023_07_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2023-07-01 | 2023-08-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2023_08_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2023-08-01 | 2023-09-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2023_09_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2023-09-01 | 2023-10-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2023_10_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2023-10-01 | 2023-11-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2023_11_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2023-11-01 | 2023-12-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2023_12_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2023-12-01 | 2024-01-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2024_01_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2024-01-01 | 2024-02-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2024_02_EnergyPrices_12.1.D_r3.csv |  696 |         696 | 2024-02-01 | 2024-03-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2024_03_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2024-03-01 | 2024-04-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2024_04_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2024-04-01 | 2024-05-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2024_05_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2024-05-01 | 2024-06-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2024_06_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2024-06-01 | 2024-07-01 |         0.0
+ HR       | Day-ahead     | EUR      | 2024_07_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2024-07-01 | 2024-08-01 |         4.2
+ HR       | Day-ahead     | EUR      | 2024_08_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2024-08-01 | 2024-09-01 |         4.2
+ HR       | Day-ahead     | EUR      | 2024_09_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2024-09-01 | 2024-10-01 |         4.1
+ HR       | Day-ahead     | EUR      | 2024_10_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2024-10-01 | 2024-11-01 |         4.2
+ HR       | Day-ahead     | EUR      | 2024_11_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2024-11-01 | 2024-12-01 |         4.1
+ HR       | Day-ahead     | EUR      | 2024_12_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2024-12-01 | 2025-01-01 |         4.2
+ HR       | Day-ahead     | EUR      | 2025_01_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2025-01-01 | 2025-02-01 |         4.2
+ HR       | Day-ahead     | EUR      | 2025_02_EnergyPrices_12.1.D_r3.csv |  672 |         672 | 2025-02-01 | 2025-03-01 |         3.8
+ HR       | Day-ahead     | EUR      | 2025_03_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2025-03-01 | 2025-04-01 |         4.2
+ HR       | Day-ahead     | EUR      | 2025_04_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2025-04-01 | 2025-05-01 |         4.1
+ HR       | Day-ahead     | EUR      | 2025_05_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2025-05-01 | 2025-06-01 |         4.2
+ HR       | Day-ahead     | EUR      | 2025_06_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2025-06-01 | 2025-07-01 |         4.1
+ HR       | Day-ahead     | EUR      | 2025_07_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2025-07-01 | 2025-08-01 |         4.2
+ HR       | Day-ahead     | EUR      | 2025_08_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2025-08-01 | 2025-09-01 |         4.2
+ HR       | Day-ahead     | EUR      | 2025_09_EnergyPrices_12.1.D_r3.csv |  726 |         726 | 2025-09-01 | 2025-10-01 |         4.1
+ HR       | Day-ahead     | EUR      | 2025_10_EnergyPrices_12.1.D_r3.csv | 2976 |        2976 | 2025-10-01 | 2025-11-01 |        17.0
+ HR       | Day-ahead     | EUR      | 2025_11_EnergyPrices_12.1.D_r3.csv | 2880 |        2880 | 2025-11-01 | 2025-12-01 |        16.4
+ HR       | Day-ahead     | EUR      | 2025_12_EnergyPrices_12.1.D_r3.csv | 2976 |        2976 | 2025-12-01 | 2026-01-01 |        17.0
+ HR       | Day-ahead     | EUR      | 2026_01_EnergyPrices_12.1.D_r3.csv | 2976 |        2976 | 2026-01-01 | 2026-02-01 |        17.0
+ HR       | Day-ahead     | EUR      | 2026_02_EnergyPrices_12.1.D_r3.csv | 2688 |        2688 | 2026-02-01 | 2026-03-01 |        15.3
+ HR       | Day-ahead     | EUR      | 2026_03_EnergyPrices_12.1.D_r3.csv | 2976 |        2976 | 2026-03-01 | 2026-04-01 |        17.0
+ HR       | Day-ahead     | EUR      | 2026_04_EnergyPrices_12.1.D_r3.csv | 2880 |        2880 | 2026-04-01 | 2026-05-01 |        16.4
+ HR       | Day-ahead     | EUR      | 2026_05_EnergyPrices_12.1.D_r3.csv | 2976 |        2976 | 2026-05-01 | 2026-06-01 |        17.0
+ HR       | Day-ahead     | EUR      | 2026_06_EnergyPrices_12.1.D_r3.csv | 2880 |        2880 | 2026-06-01 | 2026-07-01 |        16.4
+ HR       | Day-ahead     | EUR      | 2026_07_EnergyPrices_12.1.D_r3.csv | 2296 |        2296 | 2026-07-01 | 2026-07-24 |         0.0
+ ME       | Day-ahead     | EUR      | 2014_12_EnergyPrices_12.1.D_r3.csv |   24 |          24 | 2014-12-21 | 2014-12-21 |         0.0
+ ME       | Day-ahead     | EUR      | 2023_04_EnergyPrices_12.1.D_r3.csv |   98 |          98 | 2023-04-27 | 2023-05-01 |         0.0
+ ME       | Day-ahead     | EUR      | 2023_05_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2023-05-01 | 2023-06-01 |         0.0
+ ME       | Day-ahead     | EUR      | 2023_06_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2023-06-01 | 2023-07-01 |         0.0
+ ME       | Day-ahead     | EUR      | 2023_07_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2023-07-01 | 2023-08-01 |         0.0
+ ME       | Day-ahead     | EUR      | 2023_08_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2023-08-01 | 2023-09-01 |         0.0
+ ME       | Day-ahead     | EUR      | 2023_09_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2023-09-01 | 2023-10-01 |         0.0
+ ME       | Day-ahead     | EUR      | 2023_10_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2023-10-01 | 2023-11-01 |         0.0
+ ME       | Day-ahead     | EUR      | 2023_11_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2023-11-01 | 2023-12-01 |         0.0
+ ME       | Day-ahead     | EUR      | 2023_12_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2023-12-01 | 2024-01-01 |         0.0
+ ME       | Day-ahead     | EUR      | 2024_01_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2024-01-01 | 2024-02-01 |         0.0
+ ME       | Day-ahead     | EUR      | 2024_02_EnergyPrices_12.1.D_r3.csv |  696 |         696 | 2024-02-01 | 2024-03-01 |         0.0
+ ME       | Day-ahead     | EUR      | 2024_03_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2024-03-01 | 2024-04-01 |         0.0
+ ME       | Day-ahead     | EUR      | 2024_04_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2024-04-01 | 2024-05-01 |         0.0
+ ME       | Day-ahead     | EUR      | 2024_05_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2024-05-01 | 2024-06-01 |         0.0
+ ME       | Day-ahead     | EUR      | 2024_06_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2024-06-01 | 2024-07-01 |         0.0
+ ME       | Day-ahead     | EUR      | 2024_07_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2024-07-01 | 2024-08-01 |         4.2
+ ME       | Day-ahead     | EUR      | 2024_08_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2024-08-01 | 2024-09-01 |         4.2
+ ME       | Day-ahead     | EUR      | 2024_09_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2024-09-01 | 2024-10-01 |         4.1
+ ME       | Day-ahead     | EUR      | 2024_10_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2024-10-01 | 2024-11-01 |         4.2
+ ME       | Day-ahead     | EUR      | 2024_11_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2024-11-01 | 2024-12-01 |         4.1
+ ME       | Day-ahead     | EUR      | 2024_12_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2024-12-01 | 2025-01-01 |         4.2
+ ME       | Day-ahead     | EUR      | 2025_01_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2025-01-01 | 2025-02-01 |         4.2
+ ME       | Day-ahead     | EUR      | 2025_02_EnergyPrices_12.1.D_r3.csv |  672 |         672 | 2025-02-01 | 2025-03-01 |         3.8
+ ME       | Day-ahead     | EUR      | 2025_03_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2025-03-01 | 2025-04-01 |         4.2
+ ME       | Day-ahead     | EUR      | 2025_04_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2025-04-01 | 2025-05-01 |         4.1
+ ME       | Day-ahead     | EUR      | 2025_05_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2025-05-01 | 2025-06-01 |         4.2
+ ME       | Day-ahead     | EUR      | 2025_06_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2025-06-01 | 2025-07-01 |         4.1
+ ME       | Day-ahead     | EUR      | 2025_07_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2025-07-01 | 2025-08-01 |         4.2
+ ME       | Day-ahead     | EUR      | 2025_08_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2025-08-01 | 2025-09-01 |         4.2
+ ME       | Day-ahead     | EUR      | 2025_09_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2025-09-01 | 2025-10-01 |         4.1
+ ME       | Day-ahead     | EUR      | 2025_10_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2025-10-01 | 2025-11-01 |         4.2
+ ME       | Day-ahead     | EUR      | 2025_11_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2025-11-01 | 2025-12-01 |         4.1
+ ME       | Day-ahead     | EUR      | 2025_12_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2025-12-01 | 2026-01-01 |         4.2
+ ME       | Day-ahead     | EUR      | 2026_01_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2026-01-01 | 2026-02-01 |         4.2
+ ME       | Day-ahead     | EUR      | 2026_02_EnergyPrices_12.1.D_r3.csv |  672 |         672 | 2026-02-01 | 2026-03-01 |         3.8
+ ME       | Day-ahead     | EUR      | 2026_03_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2026-03-01 | 2026-04-01 |         4.2
+ ME       | Day-ahead     | EUR      | 2026_04_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2026-04-01 | 2026-05-01 |         4.1
+ ME       | Day-ahead     | EUR      | 2026_05_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2026-05-01 | 2026-06-01 |         4.2
+ ME       | Day-ahead     | EUR      | 2026_06_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2026-06-01 | 2026-07-01 |         4.1
+ ME       | Day-ahead     | EUR      | 2026_07_EnergyPrices_12.1.D_r3.csv |  574 |         574 | 2026-07-01 | 2026-07-24 |         0.0
+ MK       | Day-ahead     | EUR      | 2023_05_EnergyPrices_12.1.D_r3.csv |  506 |         506 | 2023-05-11 | 2023-06-01 |         0.0
+ MK       | Day-ahead     | EUR      | 2023_06_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2023-06-01 | 2023-07-01 |         0.0
+ MK       | Day-ahead     | EUR      | 2023_07_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2023-07-01 | 2023-08-01 |         0.0
+ MK       | Day-ahead     | EUR      | 2023_08_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2023-08-01 | 2023-09-01 |         0.0
+ MK       | Day-ahead     | EUR      | 2023_09_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2023-09-01 | 2023-10-01 |         0.0
+ MK       | Day-ahead     | EUR      | 2023_10_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2023-10-01 | 2023-11-01 |         0.0
+ MK       | Day-ahead     | EUR      | 2023_11_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2023-11-01 | 2023-12-01 |         0.0
+ MK       | Day-ahead     | EUR      | 2023_12_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2023-12-01 | 2024-01-01 |         0.0
+ MK       | Day-ahead     | EUR      | 2024_01_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2024-01-01 | 2024-02-01 |         0.0
+ MK       | Day-ahead     | EUR      | 2024_02_EnergyPrices_12.1.D_r3.csv |  696 |         696 | 2024-02-01 | 2024-03-01 |         0.0
+ MK       | Day-ahead     | EUR      | 2024_03_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2024-03-01 | 2024-04-01 |         0.0
+ MK       | Day-ahead     | EUR      | 2024_04_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2024-04-01 | 2024-05-01 |         0.0
+ MK       | Day-ahead     | EUR      | 2024_05_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2024-05-01 | 2024-06-01 |         0.0
+ MK       | Day-ahead     | EUR      | 2024_06_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2024-06-01 | 2024-07-01 |         0.0
+ MK       | Day-ahead     | EUR      | 2024_07_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2024-07-01 | 2024-08-01 |         4.1
+ MK       | Day-ahead     | EUR      | 2024_08_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2024-08-01 | 2024-09-01 |         4.2
+ MK       | Day-ahead     | EUR      | 2024_09_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2024-09-01 | 2024-10-01 |         4.1
+ MK       | Day-ahead     | EUR      | 2024_10_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2024-10-01 | 2024-11-01 |         4.2
+ MK       | Day-ahead     | EUR      | 2024_11_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2024-11-01 | 2024-12-01 |         4.1
+ MK       | Day-ahead     | EUR      | 2024_12_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2024-12-01 | 2025-01-01 |         4.2
+ MK       | Day-ahead     | EUR      | 2025_01_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2025-01-01 | 2025-02-01 |         4.2
+ MK       | Day-ahead     | EUR      | 2025_02_EnergyPrices_12.1.D_r3.csv |  672 |         672 | 2025-02-01 | 2025-03-01 |         3.8
+ MK       | Day-ahead     | EUR      | 2025_03_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2025-03-01 | 2025-04-01 |         4.2
+ MK       | Day-ahead     | EUR      | 2025_04_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2025-04-01 | 2025-05-01 |         4.1
+ MK       | Day-ahead     | EUR      | 2025_05_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2025-05-01 | 2025-06-01 |         4.2
+ MK       | Day-ahead     | EUR      | 2025_06_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2025-06-01 | 2025-07-01 |         4.1
+ MK       | Day-ahead     | EUR      | 2025_07_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2025-07-01 | 2025-08-01 |         4.2
+ MK       | Day-ahead     | EUR      | 2025_08_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2025-08-01 | 2025-09-01 |         4.2
+ MK       | Day-ahead     | EUR      | 2025_09_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2025-09-01 | 2025-10-01 |         4.1
+ MK       | Day-ahead     | EUR      | 2025_10_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2025-10-01 | 2025-11-01 |         4.2
+ MK       | Day-ahead     | EUR      | 2025_11_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2025-11-01 | 2025-12-01 |         4.1
+ MK       | Day-ahead     | EUR      | 2025_12_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2025-12-01 | 2026-01-01 |         4.2
+ MK       | Day-ahead     | EUR      | 2026_01_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2026-01-01 | 2026-02-01 |         4.2
+ MK       | Day-ahead     | EUR      | 2026_02_EnergyPrices_12.1.D_r3.csv |  672 |         672 | 2026-02-01 | 2026-03-01 |         3.8
+ MK       | Day-ahead     | EUR      | 2026_03_EnergyPrices_12.1.D_r3.csv |  744 |         744 | 2026-03-01 | 2026-04-01 |         4.2
+ MK       | Day-ahead     | EUR      | 2026_04_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2026-04-01 | 2026-05-01 |         4.1
+ MK       | Day-ahead     | EUR      | 2026_05_EnergyPrices_12.1.D_r3.csv |  720 |         720 | 2026-05-01 | 2026-06-01 |         4.1
+ MK       | Day-ahead     | EUR      | 2026_06_EnergyPrices_12.1.D_r3.csv |  696 |         696 | 2026-06-01 | 2026-07-01 |         4.0
+ MK       | Day-ahead     | EUR      | 2026_07_EnergyPrices_12.1.D_r3.csv |  550 |         550 | 2026-07-01 | 2026-07-24 |         0.0
+(226 rows)
+
+=== 1b. DA price resolutions / area_type ===
+ map_code | resolution_code | area_type_code | rows  |   first    |    last    
+----------+-----------------+----------------+-------+------------+------------
+ AL       | PT60M           | BZN            | 28704 | 2023-04-12 | 2026-07-24
+ HR       | PT15M           | BZN            | 28512 | 2025-10-01 | 2026-07-24
+ HR       | PT60M           | BZN            | 69720 | 2017-10-18 | 2025-09-30
+ ME       | PT60M           | BZN            | 28464 | 2014-12-21 | 2026-07-24
+ MK       | PT60M           | BZN            | 28008 | 2023-05-11 | 2026-07-24
+(5 rows)
+
+=== 2. DA load forecast coverage (BZN-filtered, as Loads.jl) ===
+ area_map_code |  rows  | distinct_ts |  resolutions  |   first    |    last    | cov_pct_win_hourly_basis 
+---------------+--------+-------------+---------------+------------+------------+--------------------------
+ AL            | 179312 |      179312 | {PT15M}       | 2015-01-06 | 2026-07-24 |                    398.9
+ HR            | 195185 |      195185 | {PT15M,PT60M} | 2015-01-01 | 2026-07-25 |                    399.5
+ ME            | 101303 |      101303 | {PT60M}       | 2014-09-24 | 2026-07-25 |                     99.9
+ MK            |  97557 |       97557 | {PT60M}       | 2015-01-01 | 2026-07-24 |                     94.4
+(4 rows)
+
+=== 3. Wind/solar DA forecast coverage (BZN-filtered, as Renewables.jl) ===
+ area_map_code | production_type |  rows  | null_da_fcst | distinct_ts |   first    |    last    | cov_pct_win_hourly_basis 
+---------------+-----------------+--------+--------------+-------------+------------+------------+--------------------------
+ AL            | Solar           |  37056 |           24 |       37056 | 2021-12-24 | 2026-07-24 |                     99.9
+ AL            | Wind Offshore   |  37056 |           24 |       37056 | 2021-12-24 | 2026-07-24 |                     99.9
+ AL            | Wind Onshore    |  37058 |           24 |       37058 | 2021-12-01 | 2026-07-24 |                     99.9
+ HR            | Solar           | 123426 |           24 |      123426 | 2020-06-06 | 2026-07-24 |                    399.5
+ HR            | Wind Onshore    | 123426 |           24 |      123426 | 2020-06-06 | 2026-07-24 |                    399.5
+ ME            | Solar           |  62448 |         9216 |       62448 | 2019-06-01 | 2026-07-24 |                     99.9
+ ME            | Wind Onshore    |  72816 |         9120 |       72816 | 2017-06-23 | 2026-07-24 |                     99.9
+ MK            | Solar           |  28128 |           72 |       28128 | 2023-05-10 | 2026-07-24 |                     99.9
+ MK            | Wind Offshore   |  28176 |           72 |       28176 | 2016-05-15 | 2026-07-24 |                     99.9
+ MK            | Wind Onshore    |  86567 |           72 |       86567 | 2016-01-01 | 2026-07-24 |                     99.9
+(10 rows)
+
+=== 4. Unit registry (production_and_generation_units) — fuel mix ===
+ area_map_code |   generation_unit_type    | units |  mw  
+---------------+---------------------------+-------+------
+ AL            | Hydro Water Reservoir     |    16 | 1493
+ AL            | Solar                     |     3 |  240
+ ME            |                           |     0 |     
+ ME            | Fossil Brown coal/Lignite |     2 |  420
+ ME            | Hydro Water Reservoir     |     3 |  342
+ MK            | Fossil Brown coal/Lignite |     4 |  824
+ MK            | Hydro Water Reservoir     |     8 |  264
+ MK            | Fossil Gas                |     2 |  251
+ MK            | Fossil Oil                |     1 |  165
+(9 rows)
+
+=== 4b. Unit registry status breakdown ===
+ area_map_code | generation_unit_status | units 
+---------------+------------------------+-------
+ AL            | CANCELLED              |     3
+ AL            | COMMISSIONED           |    16
+ ME            | CANCELLED              |     1
+ ME            | COMMISSIONED           |     4
+ ME            |                        |     0
+ MK            | CANCELLED              |     1
+ MK            | COMMISSIONED           |    14
+(7 rows)
+
+=== 4c. Registry area_type / any HR-relevant alias codes? ===
+ area_map_code | area_type_code | count 
+---------------+----------------+-------
+ AL            | BZN/CTA        |    19
+ ME            | BZN/CTA        |     9
+ MK            | BZN/CTA        |    15
+(3 rows)
+
+=== 5. Per-type aggregate output (aggregated_generation_per_type) ===
+ area_map_code |        production_type         | rows  | distinct_ts |   first    |    last    | avg_mw | p95_mw 
+---------------+--------------------------------+-------+-------------+------------+------------+--------+--------
+ AL            | Hydro Water Reservoir          |   672 |         672 | 2026-05-27 | 2026-06-23 |    527 |   1112
+ AL            | Solar                          |   672 |         672 | 2026-05-27 | 2026-06-23 |     91 |    274
+ AL            | Hydro Run-of-river and pondage |   672 |         672 | 2026-05-27 | 2026-06-23 |     35 |     56
+ AL            | Fossil Oil                     |   672 |         672 | 2026-05-27 | 2026-06-23 |      0 |      0
+ HR            | Hydro Water Reservoir          | 72327 |       72327 | 2024-07-01 | 2026-07-24 |    387 |    893
+ HR            | Wind Onshore                   | 72327 |       72327 | 2024-07-01 | 2026-07-24 |    336 |    880
+ HR            | Fossil Gas                     | 72327 |       72327 | 2024-07-01 | 2026-07-24 |    275 |    512
+ HR            | Hydro Run-of-river and pondage | 72328 |       72328 | 2024-07-01 | 2026-07-24 |    159 |    283
+ HR            | Fossil Hard coal               | 72327 |       72327 | 2024-07-01 | 2026-07-24 |     96 |    200
+ HR            | Biomass                        | 72328 |       72328 | 2024-07-01 | 2026-07-24 |     69 |     76
+ HR            | Solar                          | 72328 |       72328 | 2024-07-01 | 2026-07-24 |     65 |    288
+ HR            | Hydro Pumped Storage           | 72327 |       72327 | 2024-07-01 | 2026-07-24 |     55 |    257
+ HR            | Other renewable                | 72328 |       72328 | 2024-07-01 | 2026-07-24 |     33 |     36
+ HR            | Waste                          | 72328 |       72328 | 2024-07-01 | 2026-07-24 |      6 |      9
+ HR            | Fossil Oil                     | 72327 |       72327 | 2024-07-01 | 2026-07-24 |      1 |     12
+ HR            | Energy storage                 | 19619 |       19619 | 2026-01-01 | 2026-07-24 |      1 |      7
+ HR            | Geothermal                     | 71578 |       71578 | 2024-07-01 | 2026-07-24 |      0 |      0
+ ME            | Hydro Water Reservoir          | 18078 |       18078 | 2024-07-01 | 2026-07-24 |    170 |    526
+ ME            | Fossil Brown coal/Lignite      | 18078 |       18078 | 2024-07-01 | 2026-07-24 |    115 |    200
+ ME            | Wind Onshore                   | 18081 |       18081 | 2024-07-01 | 2026-07-24 |     35 |    105
+ ME            | Solar                          |   359 |         359 | 2025-01-30 | 2026-07-17 |      0 |      0
+ MK            | Fossil Brown coal/Lignite      | 17448 |       17448 | 2024-07-01 | 2026-07-23 |    231 |    393
+ MK            | Fossil Gas                     | 17448 |       17448 | 2024-07-01 | 2026-07-23 |    117 |    227
+ MK            | Hydro Water Reservoir          | 17448 |       17448 | 2024-07-01 | 2026-07-23 |    116 |    329
+ MK            | Wind Onshore                   | 17448 |       17448 | 2024-07-01 | 2026-07-23 |     12 |     36
+ MK            | Fossil Oil                     | 17448 |       17448 | 2024-07-01 | 2026-07-23 |      0 |      0
+(26 rows)
+
+=== 6a. Implicit offered ATC borders touching AL/MK/ME/HR (2024-07 →) ===
+ out_map_code | in_map_code | contract_type |  rows  |   first    |    last    | avg_mw | p10_mw | max_mw 
+--------------+-------------+---------------+--------+------------+------------+--------+--------+--------
+ HR           | HU          | Intraday      | 178896 | 2024-07-01 | 2026-07-24 |    235 |      0 |   3004
+ HR           | SI          | Intraday      | 178800 | 2024-07-01 | 2026-07-24 |    657 |     12 | 4008.3
+ HU           | HR          | Intraday      | 178896 | 2024-07-01 | 2026-07-24 |    558 |      1 | 4751.8
+ SI           | HR          | Intraday      | 178800 | 2024-07-01 | 2026-07-24 |    548 |      0 |   4067
+(4 rows)
+
+=== 6b. Explicit offered ATC borders touching AL/MK/ME/HR (Day-ahead, 2024-07 →) ===
+ out_map_code | in_map_code | rows  |   first    |    last    | avg_mw | p10_mw | max_mw 
+--------------+-------------+-------+------------+------------+--------+--------+--------
+ AL           | GR          | 18120 | 2024-07-01 | 2026-07-25 |    376 |    216 |    712
+ AL           | ME          | 18120 | 2024-07-01 | 2026-07-25 |    179 |     97 |    352
+ BA           | HR          | 18120 | 2024-07-01 | 2026-07-25 |    508 |    431 |    852
+ BA           | ME          | 18120 | 2024-07-01 | 2026-07-25 |    285 |    173 |    646
+ BG           | MK          |  4463 | 2026-01-01 | 2026-07-25 |    381 |    356 |    455
+ GR           | AL          | 18120 | 2024-07-01 | 2026-07-25 |    215 |     86 |    555
+ GR           | MK          | 18120 | 2024-07-01 | 2026-07-25 |    387 |    268 |    720
+ HR           | BA          | 18120 | 2024-07-01 | 2026-07-25 |    581 |    473 |    854
+ HR           | RS          | 17760 | 2024-07-01 | 2026-07-25 |    408 |    308 |    551
+ IT           | ME          | 17808 | 2024-07-01 | 2026-07-25 |    609 |    385 |    941
+ ME           | AL          | 18120 | 2024-07-01 | 2026-07-25 |    224 |    148 |    403
+ ME           | BA          | 18120 | 2024-07-01 | 2026-07-25 |    392 |    291 |    757
+ ME           | IT          | 17808 | 2024-07-01 | 2026-07-25 |    478 |     25 |   1009
+ ME           | RS          | 17664 | 2024-07-01 | 2026-07-25 |    237 |    118 |    402
+ ME           | XK          | 18120 | 2024-07-01 | 2026-07-25 |    200 |    156 |    358
+ MK           | BG          |  4631 | 2026-01-01 | 2026-07-25 |    410 |    400 |    590
+ MK           | GR          | 18120 | 2024-07-01 | 2026-07-25 |    459 |    295 |    764
+ MK           | RS          | 17760 | 2024-07-01 | 2026-07-25 |    481 |    264 |   1010
+ MK           | XK          | 18120 | 2024-07-01 | 2026-07-25 |    259 |    174 |    468
+ RS           | HR          | 17784 | 2024-07-01 | 2026-07-25 |    473 |    376 |    680
+ RS           | ME          | 17688 | 2024-07-01 | 2026-07-25 |    239 |    117 |    441
+ RS           | MK          | 17808 | 2024-07-01 | 2026-07-25 |    428 |    213 |    925
+ XK           | ME          | 18120 | 2024-07-01 | 2026-07-25 |    236 |    169 |    403
+ XK           | MK          | 18120 | 2024-07-01 | 2026-07-25 |    370 |    255 |    604
+(24 rows)
+
+=== 7. Physical flows per border (BZN both sides, 2024-07 →) ===
+     o     |     i     | rows  |   first    |    last    | avg_mw |  max_mw   
+-----------+-----------+-------+------------+------------+--------+-----------
+ AL        | GR        | 18079 | 2024-07-01 | 2026-07-24 |     44 |       681
+ AL        | ME        | 18081 | 2024-07-01 | 2026-07-24 |    134 |   976.148
+ AL        | XK        | 18080 | 2024-07-01 | 2026-07-24 |    140 |   640.292
+ BA        | HR        | 18082 | 2024-07-01 | 2026-07-24 |    209 |      1848
+ BA        | ME        | 18081 | 2024-07-01 | 2026-07-24 |    322 |    1129.1
+ BG        | MK        | 18081 | 2024-07-01 | 2026-07-24 |    107 |  756.3072
+ GR        | AL        | 18079 | 2024-07-01 | 2026-07-24 |    117 |    864.66
+ GR        | MK        | 18079 | 2024-07-01 | 2026-07-24 |    262 |      1317
+ HR        | BA        | 18082 | 2024-07-01 | 2026-07-24 |    216 |      1634
+ HR        | HU        | 72328 | 2024-07-01 | 2026-07-24 |     33 |       895
+ HR        | RS        | 18082 | 2024-07-01 | 2026-07-24 |    125 |       857
+ HR        | SI        | 72328 | 2024-07-01 | 2026-07-24 |    149 |      1833
+ HU        | HR        | 72328 | 2024-07-01 | 2026-07-24 |    498 |      2100
+ IT-CSOUTH | ME        | 18081 | 2024-07-01 | 2026-07-24 |     83 |       585
+ ME        | AL        | 18081 | 2024-07-01 | 2026-07-24 |     38 |    752.09
+ ME        | BA        | 18081 | 2024-07-01 | 2026-07-24 |     91 | 805.00447
+ ME        | IT-CSOUTH | 18081 | 2024-07-01 | 2026-07-24 |    242 |       604
+ ME        | RS        | 18081 | 2024-07-01 | 2026-07-24 |     80 |    715.31
+ ME        | XK        | 18081 | 2024-07-01 | 2026-07-24 |     87 |     707.2
+ MK        | BG        | 18081 | 2024-07-01 | 2026-07-24 |     38 |  487.2448
+ MK        | GR        | 18079 | 2024-07-01 | 2026-07-24 |    111 |      1046
+ MK        | RS        | 18081 | 2024-07-01 | 2026-07-24 |     98 |  658.0943
+ MK        | XK        | 18080 | 2024-07-01 | 2026-07-24 |    119 |     897.6
+ RS        | HR        | 18082 | 2024-07-01 | 2026-07-24 |     74 |       686
+ RS        | ME        | 18081 | 2024-07-01 | 2026-07-24 |     43 |    602.59
+ RS        | MK        | 18081 | 2024-07-01 | 2026-07-24 |     34 |    636.43
+ SI        | HR        | 72328 | 2024-07-01 | 2026-07-24 |    396 |      2448
+ XK        | AL        | 18080 | 2024-07-01 | 2026-07-24 |     32 |   652.472
+ XK        | ME        | 18081 | 2024-07-01 | 2026-07-24 |     78 |     731.2
+ XK        | MK        | 18080 | 2024-07-01 | 2026-07-24 |     62 |     575.6
+(30 rows)
+
+=== 8. Hydro reservoir filling (weekly) for the hydro zones ===
+psql:audit.sql:128: ERROR:  column "date_time_utc" does not exist
+LINE 1: SELECT area_map_code, count(*) AS rows, min(date_time_utc)::...
+                                                    ^
+HINT:  Perhaps you meant to reference the column "aggregated_hydro_storage_filling_rate.update_time_utc".
+=== 9. Actual total load (for eval only) ===
+ area_map_code | rows  |   first    |    last    
+---------------+-------+------------+------------
+ AL            | 69304 | 2024-07-01 | 2026-07-23
+ HR            | 72328 | 2024-07-01 | 2026-07-24
+ ME            | 18072 | 2024-07-01 | 2026-07-23
+ MK            | 14736 | 2024-07-01 | 2026-07-21
+(4 rows)
+
+=== 10. Per-unit actual generation output (UC/inference only) ===
+ area_map_code | units_with_output 
+---------------+-------------------
+ AL            |                 8
+ ME            |                 4
+ MK            |                14
+(3 rows)
+
