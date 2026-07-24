@@ -47,15 +47,22 @@ that teaches the agent the hooks, labels and pitfalls.
 
 ## Headline results — honest, whole-sample, never cherry-picked
 
-**Full-year record (cv17).** The current model (`code_version` 17), evaluated
-over the full year **2025-07-01 → 2026-06-30** (all 39 zones, identical-window
-comparison against the previous cv16 record, resolution-aware hourly eval;
-bias = sim − actual):
+**Full-year record (cv19).** The current model (`code_version` 19 — cv17 plus
+the anad2 ex-ante flow rule), evaluated over the full year
+**2025-07-01 → 2026-06-30** (all 39 zones, identical-window comparison,
+resolution-aware hourly eval; bias = sim − actual):
 
-**Aggregate over 39 zones: mean corr 0.56 → 0.64, mean MAE €29.9 → €27.3
-(cv16 → cv17; the cv14 → cv16 step was 0.45 → 0.56 / €42.0 → €29.9).**
+**Aggregate over 39 zones: mean corr 0.64, mean MAE €27.2 (cv17: 0.64 /
+€27.3; the cv16 → cv17 step was 0.56 → 0.64 / €29.9 → €27.3).**
 
-The cv17 movers are exactly its targets — the weak-zone import fixes
+cv19's aggregate is honestly flat — its value is concentrated where regimes
+turn, which the annual mean barely samples: on the measured A/B windows the
+anad2 flow rule cut the July-2026 SEE evening overshoot (GR bias +57 → +43,
+outside this record window) and improved the held-out June-2026 week's MAE
+37.5 → 32.4, with every window better or flat and footprint net-import MAE
+−15% ([docs/experiments/analogue-flows](docs/experiments/analogue-flows/README.md)).
+
+The cv17 movers were exactly its targets — the weak-zone import fixes
 (corr, cv16 → cv17): **AT 0.24 → 0.79**, **BE 0.30 → 0.78**,
 **DK2 0.21 → 0.69**, **SI 0.26 → 0.62**, **RO 0.51 → 0.76**,
 **RS 0.45 → 0.72**, SE1/SE2 ~0.32 → ~0.52. The guard zones held:
