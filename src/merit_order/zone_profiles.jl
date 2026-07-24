@@ -513,13 +513,7 @@ HR's fleet is built 100% by fleet completion (0 unit-registry rows — trial
 books complete +953 hydro / +577 gas / +258 pumped / +206 RoR / +202 coal MW),
 which the default `:p95` fleet-truth mode handles.
 """
-const CROATIA_PROFILE = ZoneProfile(
-    scarcity_threshold = 1.25,
-    scarcity_kappa = 1.5,
-    peak_kappa = 0.6,
-    opportunity_anchor = :hydro,
-    import_backstop = true,
-)
+const CROATIA_PROFILE = with_profile(SLOVENIA_PROFILE; ref_priced_exports = false)
 
 """
 Denmark (DK1/DK2, cv17). Plain NORDIC plus the ex-ante import backstop: their
