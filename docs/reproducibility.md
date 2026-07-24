@@ -80,6 +80,15 @@ Published objects:
 | `euphemia-data-v1.1.tar.zst` | frozen parquet artifact v1.1 (39 zones, 2023-01-01…2026-06-30), sha256 `5b0e90154f21bd2649a060af60545fecf537eb562ac035fe3e687ceb3ebf0992` | ~623 MB |
 | `euphemia-live.duckdb` | living extract, refreshed daily 02:00 UTC (`.sha256` sidecar) | ~3 GB |
 
+> **v1.1 + cv19 caveat:** the :v3 ex-ante flow rule (default on the EU path
+> since cv19) reads `entsoe.actual_total_load`, which entered the extract
+> builder on 2026-07-22 — **after** v1.1 was frozen. Reproducing cv19+/cv20
+> results (including the committed `results/reference/quick_metrics.csv`)
+> therefore needs the **living extract** (`bin/pull_live_extract.sh`,
+> checksummed) or a ≥v1.2 frozen artifact; on v1.1 the flow rule cannot find
+> its load-analogue inputs. v1.1 remains exact for the cv17-era pipeline it
+> shipped with.
+
 ```bash
 mkdir -p data/public
 curl -L -o euphemia-data-v1.1.tar.zst https://data.philokalia.ai/euphemia-data-v1.1.tar.zst
