@@ -99,8 +99,8 @@ This is a key finding of the recon:
 
 | source | coverage | vintages? | usable for |
 |---|---|---|---|
-| `weather.city_measure` (silentech DB) | GR only, 1,851 cities, hourly, 2007→now | n/a (measurements) | GR training data, today |
-| `weather.city_forecast` (silentech DB) | GR only, rolling +7 d | **NO — upserted in place** (rows == distinct hours; each target hour keeps only the latest forecast) | live GR inference only |
+| `weather.city_measure` (weather DB) | GR only, 1,851 cities, hourly, 2007→now | n/a (measurements) | GR training data, today |
+| `weather.city_forecast` (weather DB) | GR only, rolling +7 d | **NO — upserted in place** (rows == distinct hours; each target hour keeps only the latest forecast) | live GR inference only |
 | `weather.city_forecast_vintage` (ceres #491, merged 2026-07-12) | GR only, `run_date`-stamped, accumulating since **2026-07-08** | YES, going forward | honest GR backtests *from now on* |
 | self-hosted open-meteo (`openmeteo.weather.svc`) | forecasts for arbitrary coords, **no deep history**; not reachable from this host (in-cluster) | live only | live inference, all zones |
 | public open-meteo **archive** API (ERA5) | global, hourly, 1940→now−5 d | n/a (reanalysis) | training data, all zones, today |

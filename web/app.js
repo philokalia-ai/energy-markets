@@ -11,7 +11,7 @@
 
   var BASES = ["./data", "./fixtures"];
   var QUERY = new URLSearchParams(window.location.search);
-  var API_BASE = QUERY.get("api") || "https://euphemia-api.dyad-wasm.workers.dev/api";
+  var API_BASE = QUERY.get("api") || "https://api.philokalia.ai/api";
   var LIVE = QUERY.get("live") !== "0";
   var SVGNS = "http://www.w3.org/2000/svg";
 

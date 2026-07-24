@@ -6,7 +6,15 @@ name = "euphemia-api"
 main = "src/index.js"
 compatibility_date = "2026-07-01"
 account_id = "c3ebd3825204235c8f8a3d84a9d9cf55"
+# Canonical public hostname — provisioned automatically on deploy (the
+# philokalia.ai zone lives in this account; same mechanism as the
+# data.philokalia.ai R2 domain). workers_dev stays on as a legacy alias
+# during the migration; flip to false once nothing references it.
 workers_dev = true
+
+[[routes]]
+pattern = "api.philokalia.ai"
+custom_domain = true
 
 [[r2_buckets]]
 binding = "DATA"

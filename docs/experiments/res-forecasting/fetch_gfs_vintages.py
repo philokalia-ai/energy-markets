@@ -40,7 +40,7 @@ def get(url, tries=12):
     for i in range(tries):
         try:
             req = urllib.request.Request(url, headers={
-                "User-Agent": "philokalia-energy/1.0 (contact: p.georgakopoulos@silentech.gr)"})
+                "User-Agent": "philokalia-energy/1.0 (contact: pankgeorg@gmail.com)"})
             with urllib.request.urlopen(req, timeout=180) as r:
                 return json.loads(r.read())
         except Exception as e:

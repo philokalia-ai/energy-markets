@@ -13,7 +13,9 @@ decodes the parquet with [hyparquet](https://github.com/hyparam/hyparquet)
 | `GET /api/v1/map` | `v1/map.parquet` | `web/data/map.json` |
 | `GET /api/v1/manifest` | `v1/manifest.json` | `{updated_at, code_version, zones, row_counts, …}` |
 
-Deployed at <https://euphemia-api.dyad-wasm.workers.dev>. The R2 objects
+Deployed at <https://api.philokalia.ai> (canonical; the legacy
+`*.workers.dev` alias remains live during the migration and will be retired
+by setting `workers_dev = false`). The R2 objects
 themselves are the stable public data API (`/v1/`; breaking schema changes
 bump `/v2/`) — see "Public data API" in the repo README.
 
