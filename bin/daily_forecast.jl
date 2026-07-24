@@ -69,15 +69,15 @@
 #                  default = the 39-zone EU footprint
 #   CLEARING_MODE  label stored on forecast rows (default 'multi_zone_eu')
 #   SKIP_CLEAR     'true' = run discovery + eligibility logging only, never
-#                  solve (used by CI when Gurobi credentials are absent — the
-#                  39-zone clear does not converge with HiGHS)
+#                  solve (debugging escape hatch; since cv20 the clear runs
+#                  in decomposed mode, which HiGHS solves — no Gurobi needed)
 
 using Euphemia, Dates, Statistics, LibPQ, DataFrames, DuckDB
 
 include(joinpath(@__DIR__, "forecast_common.jl"))
 include(joinpath(@__DIR__, "weather_res.jl"))   # guarded main; pure helpers + open-meteo fetch
 
-const OPTIMIZER = get(ENV, "OPTIMIZER", "gurobi")
+const OPTIMIZER = get(ENV, "OPTIMIZER", "highs")
 const INPUT_MODE = let m = lowercase(get(ENV, "INPUT_MODE", "entsoe"))
     m in ("entsoe", "weather") ||
         error("INPUT_MODE must be 'entsoe' or 'weather' (got '$m')")
@@ -468,9 +468,8 @@ function main()
         end
 
         if SKIP_CLEAR
-            println("  SKIP_CLEAR=true — eligibility verified, but the 39-zone clear " *
-                    "is not attempted (no Gurobi credentials; HiGHS does not converge " *
-                    "on the coupled 39-zone MIP). No prediction written.")
+            println("  SKIP_CLEAR=true — eligibility verified, the 39-zone clear " *
+                    "is not attempted. No prediction written.")
             continue
         end
 

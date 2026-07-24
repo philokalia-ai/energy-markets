@@ -17,6 +17,14 @@ on:
         required: false
         default: false
         type: boolean
+      optimizer:
+        description: "Solver (highs = production default; gurobi = development, academic license)"
+        required: false
+        default: "highs"
+        type: choice
+        options:
+          - highs
+          - gurobi
 
 env:
   JULIA_VERSION: "1.12"
@@ -38,36 +46,43 @@ jobs:
       - name: Cache Julia packages
         uses: julia-actions/cache@v1
 
-      - name: Setup Gurobi license
+      - name: Select optimizer
         env:
           GUROBI_ACCESS_ID: ${{ secrets.WLSACCESSID }}
           GUROBI_WLS_SECRET: ${{ secrets.WLSSECRET }}
           GUROBI_LICENSE_ID: ${{ secrets.LICENSEID }}
+          REQUESTED_OPTIMIZER: ${{ github.event.inputs.optimizer || 'highs' }}
         run: |
-          if [ -n "$GUROBI_ACCESS_ID" ] && [ -n "$GUROBI_WLS_SECRET" ] && [ -n "$GUROBI_LICENSE_ID" ]; then
-            echo "::add-mask::$GUROBI_ACCESS_ID"
-            echo "::add-mask::$GUROBI_WLS_SECRET"
-            echo "::add-mask::$GUROBI_LICENSE_ID"
+          # Production default is HiGHS (open-source): since cv20 the 39-zone
+          # clear runs in canonical per-period-decomposed mode, which HiGHS
+          # solves and which is bit-identical across solvers. Gurobi (academic
+          # license — development/research use only) is available via the
+          # workflow_dispatch optimizer input.
+          echo "FORECAST_SKIP_CLEAR=false" >> $GITHUB_ENV
+          if [ "$REQUESTED_OPTIMIZER" = "gurobi" ]; then
+            if [ -n "$GUROBI_ACCESS_ID" ] && [ -n "$GUROBI_WLS_SECRET" ] && [ -n "$GUROBI_LICENSE_ID" ]; then
+              echo "::add-mask::$GUROBI_ACCESS_ID"
+              echo "::add-mask::$GUROBI_WLS_SECRET"
+              echo "::add-mask::$GUROBI_LICENSE_ID"
 
-            umask 077
-            {
-              echo "WLSACCESSID=$GUROBI_ACCESS_ID"
-              echo "WLSSECRET=$GUROBI_WLS_SECRET"
-              echo "LICENSEID=$GUROBI_LICENSE_ID"
-            } > gurobi.lic
-            chmod 600 gurobi.lic
+              umask 077
+              {
+                echo "WLSACCESSID=$GUROBI_ACCESS_ID"
+                echo "WLSSECRET=$GUROBI_WLS_SECRET"
+                echo "LICENSEID=$GUROBI_LICENSE_ID"
+              } > gurobi.lic
+              chmod 600 gurobi.lic
 
-            echo "GRB_LICENSE_FILE=$PWD/gurobi.lic" >> $GITHUB_ENV
-            echo "FORECAST_OPTIMIZER=gurobi" >> $GITHUB_ENV
-            echo "FORECAST_SKIP_CLEAR=false" >> $GITHUB_ENV
-            echo "✅ Gurobi WLS license configured"
+              echo "GRB_LICENSE_FILE=$PWD/gurobi.lic" >> $GITHUB_ENV
+              echo "FORECAST_OPTIMIZER=gurobi" >> $GITHUB_ENV
+              echo "✅ Gurobi WLS license configured (development dispatch)"
+            else
+              echo "FORECAST_OPTIMIZER=highs" >> $GITHUB_ENV
+              echo "⚠️ Gurobi requested but WLS credentials missing — falling back to HiGHS"
+            fi
           else
-            # HONEST FALLBACK: the 39-zone coupled clear does not converge with
-            # HiGHS, so without Gurobi credentials we only run lead discovery +
-            # eligibility logging (SKIP_CLEAR), then scoring/export.
             echo "FORECAST_OPTIMIZER=highs" >> $GITHUB_ENV
-            echo "FORECAST_SKIP_CLEAR=true" >> $GITHUB_ENV
-            echo "⚠️ Missing Gurobi WLS credentials — the 39-zone clear will be SKIPPED (discovery + scoring/export only)"
+            echo "✅ HiGHS selected (production default)"
           fi
 
       - name: Install Julia dependencies

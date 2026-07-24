@@ -1,17 +1,34 @@
-# Per-period decomposition of the coupled clear (the HiGHS-viable option)
+# Per-period decomposition of the coupled clear (the canonical mode since cv20)
 
 The coupled multi-zone market clear (`run_multi_zone_market_clearing`, MPCC in
 `src/MPCC.jl`) historically builds **one monolithic MILP** with every period as an
 index dimension: `market_price[node, t]`, `flow[pair, t]`, congestion binaries
 `congestion_fw_aux/bw_aux[pair, t]`, all over `t in order_book.periods`.
 
-This increment adds a **period-decomposition** solve mode: instead of one large
-MILP, solve each period as its own single-period clear and merge the results back
-into the same full-day `MPCCResult`. Its purpose is to make **HiGHS a working
-choice** for the 39-zone clear — the open-solver half of the public
-reproducibility story (open DuckDB extract + HiGHS = fully open, no commercial
-license). **Gurobi stays the default and primary solver**; nothing on the Gurobi
-path changes.
+The **period-decomposition** solve mode instead solves each period as its own
+single-period clear and merges the results back into the same full-day
+`MPCCResult`. It began as the HiGHS-viability option; **since cv20 it is the
+canonical mode on the EU-footprint path for every solver**, because it is
+bit-identical across Gurobi/HiGHS (measured below and on the 39-day mode A/B) —
+the published record is therefore **solver-invariant**: the open stack
+(DuckDB extract + HiGHS) reproduces it exactly, no commercial license involved.
+Gurobi (academic license) remains the faster development option via
+`optimizer="gurobi"`.
+
+**Decomposed vs monolithic** is not bit-identical: the two modes tie-break
+degenerate pass-2 anchor books differently (flat blocks at the anchor price
+admit multiple equal-surplus flow patterns). Measured on the mode A/B —
+39 scheduled days across the four standard windows (July-26 flip, June-26
+held-out, Feb-26 winter, July-25 transition; 33 cleared — the 6 tail-July
+days were missing from the offline extract in BOTH arms, so coverage is
+identical), scored against realized DA prices: 10 of 29,679 hourly cells
+differ (max 70 €/MWh on one degenerate IT-Sardinia hour), and the aggregate
+MAE per window is identical to two decimals (31.90/31.90, 32.88/32.88,
+30.61/30.61, 22.75/22.75 mono/decomp). The modes are statistically
+equivalent; decomposed wins on solver-invariance, so it is canonical. An
+extreme counter-day exists — 2026-04-03 has 454/936 cells differing (max
+144 €/MWh, FI/NO4/EE) — degenerate ties are rare but can cluster on a single
+day; the scoring verdict is what carries the decision.
 
 ## Why it is exact — no inter-temporal coupling
 
@@ -30,33 +47,33 @@ the Postgres↔DuckDB residual. The parity bar is on **prices**.
 ## How to use
 
 ```julia
-# Default: Gurobi, monolithic — byte-identical to before.
+# Default on the EU-footprint path: DECOMPOSED, any solver (canonical, cv20).
+# "auto" resolves to HiGHS — the open default reproduces the record exactly.
 run_multi_zone_market_clearing(day; zones, order_method=:merit_order,
-    enrich_network=true, optimizer="gurobi")
+    enrich_network=true, passes=2)
 
-# HiGHS: decomposition auto-enables (monolithic HiGHS can't solve the 39-zone MIP).
+# Development: Gurobi, same decomposed mode — bit-identical to the HiGHS run.
 run_multi_zone_market_clearing(day; zones, order_method=:merit_order,
-    enrich_network=true, optimizer="highs")
+    enrich_network=true, passes=2, optimizer="gurobi")
 
 # Force either way (overrides the policy):
-run_multi_zone_market_clearing(day; ..., optimizer="gurobi", decompose_periods=true)
-run_multi_zone_market_clearing(day; ..., optimizer="highs",  decompose_periods=false)
+run_multi_zone_market_clearing(day; ..., decompose_periods=false)  # legacy monolithic
+run_multi_zone_market_clearing(day; ..., decompose_periods=true)
 ```
 
-## The default policy
+## The default policy (cv20)
 
 `decompose_periods::Union{Nothing,Bool}=nothing` on
-`run_multi_zone_market_clearing` resolves as:
+`run_multi_zone_market_clearing` resolves **by path, not by solver**:
 
-| optimizer | `decompose_periods=nothing` (default) | rationale |
-|-----------|----------------------------------------|-----------|
-| `"gurobi"` / `"auto"` | **monolithic** | byte-identical to the pre-existing path; Gurobi solves the monolith fast |
-| `"highs"` | **decomposed** | monolithic HiGHS finds no incumbent on the 39-zone MIP in 20+ min |
+| path | `decompose_periods=nothing` (default) | rationale |
+|------|----------------------------------------|-----------|
+| EU footprint (`enrich_network=true` + `:merit_order`) | **decomposed** | canonical since cv20 — bit-identical across solvers (solver-invariant record); HiGHS can actually solve it |
+| everything else (SEE 5-zone, non-enriched) | **monolithic** | byte-identical to the legacy SEE record |
 
-An explicit `decompose_periods=true/false` always wins. The policy keys on the
-literal string `"highs"`; if you pass `optimizer="auto"` on a machine with no
-Gurobi license (so it falls back to HiGHS at solve time), pass
-`decompose_periods=true` explicitly.
+An explicit `decompose_periods=true/false` always wins. Before cv20 the policy
+keyed on the literal solver string `"highs"` (Gurobi/auto stayed monolithic);
+the cv19-and-earlier EU records were produced monolithically with Gurobi.
 
 ## Where it lives
 
@@ -101,8 +118,10 @@ DB saving, scoring, and the two-pass opportunity-anchor extraction
 works period-by-period: pass 1 produces per-period reference prices (merged
 across the per-period solves), the anchor refs are extracted from those merged
 prices exactly as before, and pass 2 re-solves the anchored rebuild — also
-decomposed. The pipelined backfill (`src/PipelinedBackfill.jl`) uses Gurobi and
-keeps its default `decompose_periods=false` (monolithic), so it is unaffected.
+decomposed. The pipelined backfill (`src/PipelinedBackfill.jl`) applies the same
+cv20 policy (decomposed on the enriched path, `decompose_periods` kwarg to
+override), so pipelined and sequential backfills produce the same canonical
+record.
 
 ## Measured results
 

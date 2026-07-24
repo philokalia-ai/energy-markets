@@ -226,12 +226,14 @@ function select_solver(preferred_solver::String="auto")
     end
 
     # Determine priority order based on preference.
-    # "auto" prefers Gurobi when its package is installed: on multi-zone
-    # complementarity MIPs it is 10-100x faster than HiGHS (benchmarked
-    # 137.6s vs 1.1s on a 5-zone book). If no license is available at
-    # runtime (e.g. CI), Env creation fails and the loop below falls back
-    # to HiGHS with a warning — safe everywhere.
-    auto_order = [("Gurobi", "gurobi"), ("HiGHS", "highs"), ("CPLEX", "cplex")]
+    # "auto" prefers HiGHS (open-source, no license): since cv20 the
+    # EU-footprint clear runs in canonical per-period-decomposed mode, which
+    # HiGHS solves and which is bit-identical across solvers — so the open
+    # default reproduces the published record exactly. Gurobi (10-100x
+    # faster on the MONOLITHIC coupled MIP, benchmarked 137.6s vs 1.1s on a
+    # 5-zone book; academic license here) remains the development option via
+    # optimizer="gurobi".
+    auto_order = [("HiGHS", "highs"), ("Gurobi", "gurobi"), ("CPLEX", "cplex")]
     auto_available = filter(s -> s in available_solvers, auto_order)
 
     solvers_to_try = if preferred_solver == "auto"

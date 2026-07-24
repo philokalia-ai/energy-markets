@@ -96,7 +96,7 @@ name-based fuel inference, and `include`s:
 
 | File | Read this for |
 |---|---|
-| `solver.jl` | `solve_mpcc_market_clearing` — the complementarity clearing solve and its robustness retry ladder; `_solve_mpcc_by_period` (HiGHS period decomposition) |
+| `solver.jl` | `solve_mpcc_market_clearing` — the complementarity clearing solve and its robustness retry ladder; `_solve_mpcc_by_period` (per-period decomposition — canonical on the EU path since cv20, any solver) |
 | `order_books.jl` | adapters from UC solutions / zone books to `MPCCOrderBook` (single- and multi-zone) |
 | `coupling_metrics.jl` | iterative-coupling helpers: flows→net imports, convergence metrics, damping |
 
@@ -118,7 +118,7 @@ name-based fuel inference, and `include`s:
 - `Loads.jl`, `Renewables.jl` — demand and RES-forecast queries.
 - `FuelTypeParameters.jl` — per-fuel technical defaults.
 - `TemporalResolutionUtilities.jl` — 15/30/60-min harmonization helpers.
-- `PipelinedBackfill.jl` — producer/consumer backfill harness (book builders feed a small Gurobi pool).
+- `PipelinedBackfill.jl` — producer/consumer backfill harness (book builders feed a small solver pool).
 
 ## Where to start, by task
 

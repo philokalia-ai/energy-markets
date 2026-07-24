@@ -115,14 +115,22 @@ function run_multi_zone_market_clearing(date::Date;
                                         # Per-period decomposition of the coupled
                                         # MPCC. The clear has no inter-temporal
                                         # coupling, so solving each period
-                                        # independently yields the SAME prices as
-                                        # the monolithic solve while shrinking each
-                                        # MIP by ~1/N_periods. `nothing` (default)
-                                        # applies the policy: monolithic for
-                                        # Gurobi/auto (byte-identical to before),
-                                        # auto-ENABLED for optimizer="highs"
-                                        # (monolithic HiGHS cannot solve the
-                                        # 39-zone MIP). Pass true/false to force.
+                                        # independently yields the same clear while
+                                        # shrinking each MIP by ~1/N_periods.
+                                        # `nothing` (default) applies the cv20
+                                        # policy: decomposed is the CANONICAL mode
+                                        # on the EU-footprint path (enriched
+                                        # network + :merit_order) for EVERY solver
+                                        # — it is bit-identical across solvers,
+                                        # making the published record
+                                        # solver-invariant. It differs from the
+                                        # monolithic clear only on degenerate
+                                        # pass-2 anchor ties (10/29,679 hourly
+                                        # cells over the 39-day A/B; scores
+                                        # statistically identical). All other
+                                        # paths (SEE 5-zone, non-enriched) stay
+                                        # monolithic — byte-identical to the
+                                        # legacy record. Pass true/false to force.
                                         decompose_periods::Union{Nothing,Bool}=nothing,
                                         # Counterfactual scenario (merit-order
                                         # path only). Either one `ZoneScenario`
@@ -149,15 +157,17 @@ function run_multi_zone_market_clearing(date::Date;
     resolved_flow_mode != prev_flow_mode &&
         println("   🔮 Ex-ante flow mode: $resolved_flow_mode (scoped default)")
 
-    # Resolve the period-decomposition policy. Gurobi/auto stay monolithic
-    # (byte-identical to the pre-existing path); optimizer="highs" auto-enables
-    # decomposition because the monolithic 39-zone MIP is empirically
-    # unsolvable by HiGHS (no incumbent in 20+ min). An explicit kwarg wins.
+    # Resolve the period-decomposition policy (cv20): decomposed is the
+    # canonical mode on the EU-footprint path for every solver (bit-identical
+    # across Gurobi/HiGHS — the record becomes solver-invariant, and HiGHS can
+    # actually solve it: the monolithic 39-zone MIP finds no HiGHS incumbent
+    # in 20+ min). Non-enriched paths stay monolithic so the SEE legacy record
+    # keeps its byte-identity. An explicit kwarg wins over the policy.
     resolved_decompose = decompose_periods !== nothing ? decompose_periods :
-        (lowercase(optimizer) == "highs")
+        (enrich_network && order_method == :merit_order)
     resolved_decompose &&
         println("   🧩 Period-decomposition ENABLED (per-period independent clears; " *
-                "policy: $(decompose_periods === nothing ? "auto for highs" : "explicit"))")
+                "policy: $(decompose_periods === nothing ? "canonical on the EU path" : "explicit"))")
     try
     # Label the optimization_runs row so a non-standard footprint (e.g. the
     # Europe-wide "multi_zone_eu" experiment) does not collide with the standard

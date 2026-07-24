@@ -213,11 +213,13 @@ week to week; a median mis-states them). Evidence per border class:
   *harder* target, not a better score — mean corr 0.582 vs 0.615 hourly
   (GR 0.751 → 0.680). 15-minute clearing buys market fidelity, not
   correlation.
-- **HiGHS is now a working option for the full 39-zone clear.** The
-  per-period decomposition solves each period's coupled MILP independently:
-  prices are **bit-identical to Gurobi's** at 60-minute resolution, at
-  ~511 s wall per day vs Gurobi's ~10 s. Gurobi remains the default fast
-  path; no solver license is required for any tier anymore.
+- **HiGHS is the default solver, and the record is solver-invariant** (cv20).
+  The per-period decomposition solves each period's coupled MILP
+  independently and is the canonical mode on the EU-footprint path: prices
+  are **bit-identical across HiGHS and Gurobi** at 60-minute resolution
+  (~511 s wall per day on HiGHS vs Gurobi's ~10 s), so the open stack
+  reproduces the published record exactly. Gurobi (academic license) remains
+  the faster development option via `optimizer="gurobi"`.
 
 ## Negative results — mechanisms tested and rejected
 
@@ -473,12 +475,13 @@ web/        Static SPA for the live forecast browser (energy.philokalia.ai)
 
 - **Julia** (project environment in `Project.toml`; `julia --project=. -e
   "using Pkg; Pkg.instantiate()"`).
-- **Solver:** the bundled open-source **HiGHS** now covers every tier — no
-  license needed. Single-zone clearing has always run on HiGHS with metrics
-  identical to Gurobi's, and the per-period decomposition makes the full
-  39-zone coupled clear HiGHS-viable too (bit-identical prices to Gurobi at
-  60-minute resolution, ~511 s/day vs ~10 s). **Gurobi**, if licensed, remains
-  the default fast path.
+- **Solver:** the bundled open-source **HiGHS** is the default and covers
+  every tier — no license needed. Single-zone clearing has always run on
+  HiGHS with metrics identical to Gurobi's, and since cv20 the full 39-zone
+  coupled clear runs in canonical per-period-decomposed mode, which is
+  **bit-identical across HiGHS and Gurobi** at 60-minute resolution
+  (~511 s/day vs ~10 s). **Gurobi**, if licensed (ours is academic), is the
+  faster development option via `optimizer="gurobi"`.
 - **Data:** either the public DuckDB extract (recommended; no database
   required) or a PostgreSQL database with the ENTSO-E schema (maintainers).
 
