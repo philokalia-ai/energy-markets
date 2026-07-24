@@ -252,9 +252,15 @@ calendar climatology (the :v2 source), so :v3 degrades gracefully to :v2.
 """
 function _analogue_days(zone::String, day::Date; k::Int=ANALOGUE_K[])
     key = (zone, day)
-    lock(_ANALOGUE_DAYS_LOCK) do
-        haskey(_ANALOGUE_DAYS_CACHE, key) && return _ANALOGUE_DAYS_CACHE[key]
+    # NOTE: a bare `return` inside `lock() do` returns from the CLOSURE and
+    # its value is discarded — the original code recomputed on every call
+    # (found by the 2026-07-24 performance review: the :v3 analogue queries
+    # re-ran per call instead of once per zone-day). Capture and test.
+    cached = lock(_ANALOGUE_DAYS_LOCK) do
+        get(_ANALOGUE_DAYS_CACHE, key, nothing)
     end
+    cached !== nothing && return cached
+    had_error = false
     days = try
         fdf, adf = _load_day_vectors(zone, day)
         fv = fill(NaN, 24)
@@ -279,10 +285,16 @@ function _analogue_days(zone::String, day::Date; k::Int=ANALOGUE_K[])
         end
     catch e
         @warn "analogue-day selection failed for $zone $day — falling back to climatology" error = sprint(showerror, e)
+        had_error = true
         Date[]
     end
-    lock(_ANALOGUE_DAYS_LOCK) do
-        _ANALOGUE_DAYS_CACHE[key] = days
+    # Cache only genuine results (incl. legitimately-empty pools). Errors are
+    # NEVER cached — the repo-wide cache rule — so a transient DB failure
+    # doesn't silently pin this zone-day to the :v2 fallback for the process.
+    if !had_error
+        lock(_ANALOGUE_DAYS_LOCK) do
+            _ANALOGUE_DAYS_CACHE[key] = days
+        end
     end
     return days
 end

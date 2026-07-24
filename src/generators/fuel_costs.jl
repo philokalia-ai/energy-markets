@@ -6,6 +6,7 @@
 # TTF gas price lookup (yfinance.ttf_f, populated by the ceres yfinance ETL).
 # Cached per day because get_generators() calls get_marginal_cost once per generator.
 const TTF_PRICE_CACHE = Dict{Dates.Date,Union{Float64,Nothing}}()
+const _TTF_CACHE_LOCK = ReentrantLock()
 
 # Gas plant cost model constants
 const GAS_PLANT_EFFICIENCY = 0.55   # CCGT-dominated fleet efficiency (LHV basis)
@@ -29,6 +30,7 @@ const EUA_PRICE_DEFAULT = 70.0
 # Cached per day because get_generators() calls get_marginal_cost once per
 # generator.
 const EUA_PRICE_CACHE = Dict{Dates.Date,Union{Float64,Nothing}}()
+const _EUA_CACHE_LOCK = ReentrantLock()
 
 """
     get_daily_eua_price(day::Dates.Date) -> Union{Float64,Nothing}
@@ -43,7 +45,10 @@ Like `get_ttf_price`, uses strictly `date < day`: the day-ahead auction for
 D clears around noon on D−1, when D's own close does not exist yet.
 """
 function get_daily_eua_price(day::Dates.Date)
-    haskey(EUA_PRICE_CACHE, day) && return EUA_PRICE_CACHE[day]
+    cached_eua = lock(_EUA_CACHE_LOCK) do
+        get(EUA_PRICE_CACHE, day, missing)
+    end
+    cached_eua !== missing && return cached_eua
 
     df = try
         Euphemia.sql2df_with_retry(
@@ -70,7 +75,9 @@ function get_daily_eua_price(day::Dates.Date)
     end
 
     # Cache both hits and genuine data absence (but never transient errors)
-    EUA_PRICE_CACHE[day] = price
+    lock(_EUA_CACHE_LOCK) do
+        EUA_PRICE_CACHE[day] = price
+    end
     return price
 end
 
@@ -91,7 +98,10 @@ For a market date D this returns the close of the last trading day before D,
 which is the price information available at day-ahead auction time.
 """
 function get_ttf_price(day::Dates.Date)
-    haskey(TTF_PRICE_CACHE, day) && return TTF_PRICE_CACHE[day]
+    cached_ttf = lock(_TTF_CACHE_LOCK) do
+        get(TTF_PRICE_CACHE, day, missing)
+    end
+    cached_ttf !== missing && return cached_ttf
 
     # Strictly before the delivery day: the day-ahead auction for D clears
     # around noon on D-1, when D's own close does not exist yet. Using
@@ -122,7 +132,9 @@ function get_ttf_price(day::Dates.Date)
     end
 
     # Cache both hits and genuine data absence (but never transient errors)
-    TTF_PRICE_CACHE[day] = price
+    lock(_TTF_CACHE_LOCK) do
+        TTF_PRICE_CACHE[day] = price
+    end
     return price
 end
 
