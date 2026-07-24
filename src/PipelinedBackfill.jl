@@ -147,7 +147,8 @@ function pipeline_solver_worker(solvework::RemoteChannel, bookwork::RemoteChanne
                 tw = time()
                 r1 = mz_solve_pass(ob1; optimizer=cfg.optimizer, silent=cfg.silent,
                     mpcc_time_limit=cfg.mpcc_time_limit, mpcc_mip_gap=cfg.mpcc_mip_gap,
-                    mpcc_heuristic_effort=cfg.mpcc_heuristic_effort)
+                    mpcc_heuristic_effort=cfg.mpcc_heuristic_effort,
+                    decompose_periods=cfg.decompose_periods)
                 solve1_secs = time() - tw
                 busy += solve1_secs; n += 1
                 if !_usable(r1)
@@ -178,7 +179,8 @@ function pipeline_solver_worker(solvework::RemoteChannel, bookwork::RemoteChanne
                 tw = time()
                 r2 = mz_solve_pass(ob2; optimizer=cfg.optimizer, silent=cfg.silent,
                     mpcc_time_limit=cfg.mpcc_time_limit, mpcc_mip_gap=cfg.mpcc_mip_gap,
-                    mpcc_heuristic_effort=cfg.mpcc_heuristic_effort)
+                    mpcc_heuristic_effort=cfg.mpcc_heuristic_effort,
+                    decompose_periods=cfg.decompose_periods)
                 solve2_secs = time() - tw
                 busy += solve2_secs; n += 1
                 # Accept pass 2 if usable, else fall back to pass 1 (as sequential).
@@ -267,6 +269,10 @@ function run_pipelined_backfill(days, zones::Vector{String}=String[];
         mpcc_time_limit::Float64=900.0,
         mpcc_mip_gap::Float64=1e-6,
         mpcc_heuristic_effort::Union{Float64,Nothing}=nothing,
+        # Same cv20 policy as run_multi_zone_market_clearing: `nothing` resolves
+        # to decomposed on the enriched (EU-footprint) path — the canonical,
+        # solver-invariant mode — and monolithic otherwise. Explicit wins.
+        decompose_periods::Union{Nothing,Bool}=nothing,
         # Scenario passthrough (docs/scenario-api.md): a single ZoneScenario
         # applied to every zone, or Dict{String,ZoneScenario} for per-zone
         # targeting. Threaded into BOTH book stages (mz_build_books /
@@ -366,10 +372,12 @@ function run_pipelined_backfill(days, zones::Vector{String}=String[];
     solver_pids = ws[1:solver_workers]
     book_pids = ws[solver_workers+1:end]
 
+    resolved_decompose = decompose_periods !== nothing ? decompose_periods :
+        enrich_network
     cfg = (optimizer=optimizer, silent=silent, enrich_network=enrich_network,
            apply_zone_profiles=apply_zone_profiles, mpcc_time_limit=mpcc_time_limit,
            mpcc_mip_gap=mpcc_mip_gap, mpcc_heuristic_effort=mpcc_heuristic_effort,
-           scenario=scenario)
+           scenario=scenario, decompose_periods=resolved_decompose)
 
     day_prices = Dict{Date,Dict{String,Dict{String,Float64}}}()
     saved = 0; failed = 0

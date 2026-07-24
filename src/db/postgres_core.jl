@@ -41,7 +41,16 @@
 # June-26 held-out 37.5->32.4), GR July evening bias +57->+43, corr
 # 0.85->0.87; footprint net-import MAE -15%. SEE legacy paths (single-zone,
 # 5-zone multi_zone) keep :d0 and their byte-identity — July 2026.
-const ENERGY_PRICES_CODE_VERSION = 19
+# v19 -> v20: per-period-DECOMPOSED clear becomes the canonical mode on the
+# EU-footprint path for every solver, and the auto solver default flips to
+# HiGHS (open-source; the Gurobi license here is academic — Gurobi stays the
+# development option). Decomposed is bit-identical across Gurobi/HiGHS, so
+# the record is solver-invariant; it differs from the legacy monolithic
+# clear only on degenerate pass-2 anchor ties (10/29,679 hourly cells over
+# the 39-day mode A/B, scores identical to 2 decimals in all four windows).
+# SEE legacy paths (single-zone, 5-zone multi_zone) stay monolithic and keep
+# their byte-identity — July 2026.
+const ENERGY_PRICES_CODE_VERSION = 20
 
 # Pool size: env-tunable (EUPHEMIA_PG_POOL) because the threaded book build
 # runs up to nzones concurrent queries — 5 connections cap the parallelism
