@@ -87,18 +87,17 @@ every single-zone book are unchanged (guards G1/G2 below).
   SUM-reordering ULP noise (another agent's backfill was live). Bit-identity
   beyond ULP is therefore proven at book level; the solved-price comparison
   follows once the shared Gurobi is free.
-- **G3 (43-zone A/B)** — **FAIL → NO-SHIP.** Full evidence + diagnosis in
-  [`G3.md`](G3.md). 29 days × 3 windows, both arms complete off one read-only
-  43-zone extract (HiGHS, cv19 `:v3` flows, identical conditions). **Gate 4
-  (SEE bit-identity) PASSES; Gates 1/2/3 FAIL:** (1) ME clears only 0.40 vs the
-  0.55 floor (July corr 0.09) and AL is marginal (0.44 / July 0.20) — both are
-  hydro/import zones mis-assigned the gas-anchored `SEE_PROFILE`; HR (0.86, on
-  `CROATIA_PROFILE`) and MK (0.88) pass. (2)+(3) Adding the four zones degrades
-  the 39-zone product — HU July ΔMAE +11.4 / Δcorr −0.044 (the flagged control),
-  DK1 July Δcorr −0.074, plus a July Baltic/Nordic MAE cluster — the same
-  non-local coupled-interaction mechanism cv18 documented. Fixes hypothesized in
-  `G3.md`: hydro-anchor AL/ME (the HR shape), and border-scope the endogenization
-  so it doesn't leak into HU/DK1 anchor refs. Not shipped; no PR.
+- **G3 (43-zone A/B)** — full evidence + per-window tables + diagnosis in
+  [`G3.md`](G3.md). Two runs: **iter9.0** (cv19 first cut) NO-SHIP; **iter9.1**
+  (cv21 + two fixes) **Gate 1 PASS, Gate 4 PASS, Gates 2/3 marginal FAIL →
+  NO-SHIP**. iter9.1 fixes: (1) `SEE_HYDRO_PROFILE` (the HR/CROATIA `:hydro`
+  anchor + backstop) for AL/ME — cleared Gate 1 (AL 0.44→0.74, ME 0.40→0.61,
+  spring bias +42/+56→+12/+35); (2) HR–HU kept endogenous — HU July MAE 72.4→69.0
+  (−3.4). DK1 (iter9.0's −0.074) resolved to −0.01 by cv21's boundary book. Gates
+  2/3 miss only marginally: FR April is a single negative-price degenerate day
+  (04-05, corr artifact, not a regression); HU July corr −0.031 (0.001 past floor,
+  MAE improved); GR mar MAE +3.0 and SE4 jul MAE +1.8 the two real small
+  regressions. Not shipped; no PR (ship/relax is the coordinator's call).
 
 ## Files
 

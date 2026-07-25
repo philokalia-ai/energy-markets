@@ -305,18 +305,24 @@ function flow_based_drop_borders(footprint::AbstractVector{<:AbstractString})
     # same flow-based-residual signature dropped five times before (Nordic,
     # HU, BE, SK, AT/SI). There are NO Day-ahead implicit rows for HR at all,
     # so there is nothing to endogenize short of a real FBMC domain model.
-    # Dropping both restores observed imports (import-only), priced at the
-    # coupled anchor reference through CROATIA_PROFILE's :hydro anchor; HR–RS
-    # stays endogenous on its real explicit DA ATC (avg 408/473 MW). Gated on
-    # "HR" in fp, so every HR-less footprint (39-zone EU, 5-zone SEE) is
-    # byte-identical.
-    # Control arm (A/B only): EUPHEMIA_ITER9_HRHU=endogenous keeps HR–HU
-    # endogenous on the Intraday-avg ATC (avg 558 MW tracks the 498 MW
-    # physical average surprisingly well) to measure HU's export-loss
-    # knock-on. ENV so it reaches pipeline workers; unset in production.
+    # HR–SI is dropped (import-only restore, priced at the coupled anchor
+    # reference through CROATIA_PROFILE's :hydro anchor); HR–RS stays endogenous
+    # on its real explicit DA ATC (avg 408/473 MW). Gated on "HR" in fp, so
+    # every HR-less footprint (39-zone EU, 5-zone SEE) is byte-identical.
+    #
+    # iter9.1: HR–HU is kept ENDOGENOUS by default (the earlier drop is now
+    # opt-in via EUPHEMIA_ITER9_HRHU=dropped). G3 (docs/experiments/
+    # iter9-implementation/G3.md) showed the drop degraded HU in July — the
+    # single worst existing-zone regression (Δcorr −0.044, ΔMAE +11.4, the
+    # pre-registered control). HU is heavily UNDER-priced in July (bias ≈ −72:
+    # model ~€45 vs actual ~€115); the drop hands HU cheap restored observed
+    # imports and keeps it low, whereas a direct coupled HR neighbour (~€118,
+    # near HU's realized level) pulls HU up toward reality. The Intraday-avg
+    # HR–HU ATC (~558 MW) tracks the ~498 MW physical average well enough to
+    # serve as that coupling. Measured in the iter9.1 G3 re-run.
     if "HR" in fp
         "SI" in fp && push!(pairs, ordered("HR", "SI"))
-        if "HU" in fp && get(ENV, "EUPHEMIA_ITER9_HRHU", "") != "endogenous"
+        if "HU" in fp && get(ENV, "EUPHEMIA_ITER9_HRHU", "") == "dropped"
             push!(pairs, ordered("HR", "HU"))
         end
     end

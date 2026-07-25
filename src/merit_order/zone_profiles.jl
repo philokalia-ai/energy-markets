@@ -600,6 +600,27 @@ which the default `:p95` fleet-truth mode handles.
 const CROATIA_PROFILE = with_profile(SLOVENIA_PROFILE; ref_priced_exports = false)
 
 """
+Albania / Montenegro (iter9.1). The hydro-anchored SEE shape — the CROATIA_PROFILE
+treatment (SLOVENIA temperament + `:hydro` opportunity anchor + ex-ante import
+backstop, `ref_priced_exports` off) plus the RS/RO/HU-style
+`backstop_scarcity_credit = 1.0`.
+
+Rationale (G3 no-ship diagnosis, docs/experiments/iter9-implementation/G3.md):
+AL (1.5 GW reservoir + 240 MW solar) and ME (hydro p95 953 + Monita export) are
+**hydro/import-priced**, not gas-anchored. On the first-cut `SEE_PROFILE` they
+were overpriced in the hydro-rich shoulder (March bias +42 / +56 €/MWh, model
+floored at the gas SRMC while they cleared on cheap hydro) and decoupled from the
+model's scarcity pricing in the July peak (corr 0.20 / 0.09, bias +36 / +27). The
+control cases prove the shape: MK — a real lignite/gas/transit SEE zone — passes
+at 0.88 on `SEE_PROFILE`, while HR passes at 0.86 precisely *because* it got this
+hydro-anchor treatment. The `:hydro` anchor prices AL/ME against their coupled
+endogenous neighbours (AL: GR/ME; ME: AL/RS/IT-CSOUTH) instead of the gas SRMC;
+the backstop + scarcity credit cover their demonstrated import headroom on tail
+days. Inert for every footprint without AL/ME (registry keys only).
+"""
+const SEE_HYDRO_PROFILE = with_profile(CROATIA_PROFILE; backstop_scarcity_credit = 1.0)
+
+"""
 Denmark (DK1/DK2, cv17). Plain NORDIC plus the ex-ante import backstop: their
 starvation is EPISODIC (DE_LU→DK1 offered ATC averages ~2.5 GW but collapses
 to ~295 MW exactly on tight hours; SE4→DK2 9 MW vs 698 MW physical on spike
@@ -770,24 +791,23 @@ const ZONE_PROFILES = Dict{String,ZoneProfile}(
     # HR: Core-coupled, dropped HR–SI/HR–HU residual borders + :hydro anchor +
     # backstop (the Slovenia treatment; see CROATIA_PROFILE).
     "HR" => CROATIA_PROFILE,
-    # AL: pure-hydro SEE zone (1.5 GW reservoir + 240 MW solar), ALPEX clears
-    # standalone at a premium vs GR (corr 0.689 — the honest out-of-sample
-    # case). Gas-anchored SEE temperament per the scoping (§3): the premium
-    # argues against a Nordic reservoir-opportunity model in the first cut;
-    # winter books are structurally short (day ratio 0.76) so the endogenous
-    # GR/ME borders must deliver — if AL over-prices at the cap on normal
-    # winter days, the RO/RS-style import_backstop is the designed next lever.
-    "AL" => SEE_PROFILE,
+    # AL: hydro-priced SEE zone (1.5 GW reservoir + 240 MW solar). iter9.1:
+    # promoted off SEE_PROFILE to SEE_HYDRO_PROFILE — G3 showed the gas-anchored
+    # first cut overpriced AL in the hydro-rich shoulder (March bias +42) and
+    # decoupled it in July (corr 0.20); the RO/RS-style import_backstop the
+    # scoping named as "the designed next lever" is now on, with the :hydro
+    # anchor pricing the endogenous GR/ME borders at the coupled reference.
+    "AL" => SEE_HYDRO_PROFILE,
     # MK: SEE thermal/transit zone (real lignite ~330 MW after truthing, gas
-    # 227, hydro ~410, heavy transit imports). SEE first per the scoping; if
-    # the A/B shows the RS/RO failure mode (cap days on import-covered hours),
-    # promote to the SERBIA_PROFILE shape (backstop + scarcity credit).
+    # 227, hydro ~410, heavy transit imports). Stays on SEE_PROFILE — G3 cleared
+    # it at corr 0.88 in every window (the thermal SEE shape is correct here).
     "MK" => SEE_PROFILE,
-    # ME: SEE hydro zone (hydro p95 953, lignite 200 real, wind 105; KAP
-    # smelter base load). ME~RS corr 0.835 and the shared SEE temperament
-    # argue no special treatment; the endogenous IT-CSOUTH border (Monita
-    # remap override) gives it its export outlet.
-    "ME" => SEE_PROFILE,
+    # ME: hydro-priced SEE zone (hydro p95 953, lignite 200 real, wind 105; KAP
+    # smelter base load). iter9.1: promoted off SEE_PROFILE to SEE_HYDRO_PROFILE
+    # — G3 showed the gas-anchored cut overpriced ME in March (bias +56) and
+    # collapsed its July shape (corr 0.09); the :hydro anchor prices the
+    # endogenous AL/RS/IT-CSOUTH borders at the coupled reference.
+    "ME" => SEE_HYDRO_PROFILE,
 )
 
 """
