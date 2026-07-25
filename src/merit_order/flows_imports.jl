@@ -561,8 +561,16 @@ Zero/negative headroom hours are omitted. See the `import_backstop` field of
 `ZoneProfile` for pricing and the measured rationale.
 """
 function get_import_backstop(bidding_zone::String, day::Date;
-    weeks::Int=8, endogenous_counterparties::Vector{String}=String[])
+    weeks::Int=8, endogenous_counterparties::Vector{String}=String[],
+    exclude_counterparties::Vector{String}=String[])
     endo = Set(endogenous_counterparties)
+    # cv21 boundary counterparties: dropped from the non-endogenous sums entirely
+    # — their elastic ladder replaces both the injection AND the backstop
+    # headroom, so without this the same demonstrated MW would enter twice on a
+    # backstop zone (DK1). Empty default ⇒ byte-identical backstops. Deliberately
+    # NOT wired into `endogenous_counterparties` (a boundary counterparty has no
+    # offered endogenous ATC to compare against).
+    excl = Set(exclude_counterparties)
     # Per-hour (non-endogenous, endogenous) net flows of a (h,cp,dir)=>flow
     # map, deterministically ordered for reproducible float sums.
     function nets(bh)
@@ -570,6 +578,7 @@ function get_import_backstop(bidding_zone::String, day::Date;
             (h, cp, dir, v) for ((h, cp, dir), v) in bh])
         ne = Dict{Int,Float64}(); e = Dict{Int,Float64}()
         for (h, cp, dir, v) in rows
+            cp in excl && continue
             d = (cp in endo) ? e : ne
             d[h] = get(d, h, 0.0) + dir * v
         end

@@ -24,9 +24,11 @@ order book moves with real fuel prices.
 """
 
 using Dates
-using Statistics: median
+using Statistics: median, quantile
 import ..get_generators, ..get_loads, ..get_generation_forecast_for_wind_and_solar
 import ..get_marginal_cost, ..sql2df_with_retry, ..Generator, ..normalize_fuel_type_name
+import ..get_ttf_price, ..eua_price
+import ..GAS_PLANT_EFFICIENCY, ..GAS_EMISSION_FACTOR, ..GAS_VOM_COST
 import ..MarketOrders: SimpleOrder
 import ..MPCC: MPCCOrderBook
 import ..disaggregate_temporal_data, ..replicate_to_finer_resolution
@@ -63,6 +65,7 @@ paths are unchanged.
 include("merit_order/flows_imports.jl") # physical-flow cache, net imports, ex-ante flows, import ATC/backstop, firm map
 include("merit_order/zone_profiles.jl") # ZoneProfile struct, per-zone profiles, ZONE_PROFILES, ZoneScenario
 include("merit_order/fleet_data.jl")    # hydro availability, per-type p95, installed capacity, reservoir dryness/drawdown
+include("merit_order/boundary.jl")      # cv21 virtual boundary-counterparty book (DK1/Viking GB): anchor SRMC, capability, orders
 # Optional order-book sink — set by the book-export feature; nothing = the
 # exact pre-existing behaviour (guarded byte-identical).
 const BOOK_SINK = Ref{Union{Nothing,Function}}(nothing)

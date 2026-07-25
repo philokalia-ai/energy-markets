@@ -585,9 +585,15 @@ function create_merit_order_book(
         # hours; using the observed schedule is the standard single-zone
         # backtesting treatment. Set include_net_imports=false for a pure
         # isolated-zone simulation (or when forecasting without flow data).
+        # cv21 boundary book (profile-gated; nothing everywhere but DK1 ⇒ the
+        # code below is inert and the book byte-identical). The counterparty's
+        # fixed flow injection is REMOVED here — the elastic ladder (Stage 6b)
+        # replaces it — and its backstop headroom is removed just below.
+        boundary_book = profile.boundary_book
+        boundary_exclude = boundary_book === nothing ? String[] : boundary_book.flow_codes
         net_imports = include_net_imports ?
                       get_net_imports(bidding_zone, day;
-                          exclude_counterparties=net_import_exclude,
+                          exclude_counterparties=vcat(net_import_exclude, boundary_exclude),
                           import_only_counterparties=net_import_import_only) :
                       Dict{Int,Float64}()
         slot_import(ts) = get(net_imports, Dates.hour(parse_timeslot_to_datetime(ts, day)), 0.0)
@@ -619,7 +625,8 @@ function create_merit_order_book(
         backstop_by_hour = (profile.import_backstop && include_net_imports) ?
             get_import_backstop(bidding_zone, day;
                 weeks=profile.backstop_weeks,
-                endogenous_counterparties=net_import_exclude) :
+                endogenous_counterparties=net_import_exclude,
+                exclude_counterparties=boundary_exclude) :
             Dict{Int,Float64}()
         backstop_price = profile.backstop_price_mult * gas_srmc
         isempty(backstop_by_hour) ||
@@ -913,6 +920,33 @@ function create_merit_order_book(
                 demand_orders_count += 1
             end
             total_demand_quantity += gd
+        end
+
+        # ── Stage 7b: cv21 boundary counterparty ladder ─────────────────
+        # The elastic out-of-footprint neighbor on one border (DK1↔GB Viking
+        # Link) — import supply + export demand anchored on the NEIGHBOR's own
+        # fundamental SRMC over the border's demonstrated capability. Replaces
+        # the fixed GB flow injection (removed from net imports above) and its
+        # backstop headroom. Inert (nothing) for every zone but DK1 ⇒ the book
+        # is byte-identical. Requires flow injections (include_net_imports) —
+        # the ladder is the injection's elastic replacement.
+        if boundary_book !== nothing && include_net_imports
+            b_orders = get_boundary_orders(boundary_book, bidding_zone, day,
+                target_timeslots, resolution_minutes, price_cap)
+            btag = "BOUNDARY:" * boundary_book.counterparty
+            for o in b_orders
+                push!(tagged, (o, btag))
+                if o.type == :supply
+                    supply_orders_count += 1
+                    total_supply_capacity += o.quantity
+                else
+                    demand_orders_count += 1
+                    total_demand_quantity += o.quantity
+                end
+            end
+            isempty(b_orders) ||
+                println("  🌐 Boundary book ($(boundary_book.counterparty)): " *
+                        "$(length(b_orders)) orders over $(length(target_timeslots)) slots")
         end
 
         # ── Stage 8: scenario hooks (extra_orders, strategist) ──────────
