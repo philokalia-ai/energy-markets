@@ -49,7 +49,7 @@ iteration plan.
 | # | item | gate | status |
 |---|---|---|---|
 | 1 | **UA treatment, firm-slice refinement** — war-constrained scarcity buyer: firm cap-priced base slice + elastic tail (fixes the HU March breach) | re-pass the same 24-day A/B, no March breach | prototype ready (wave-2) |
-| 2 | **DK1/Viking cherry-pick** — the GB arm's one clean winner (July eve −70.6→−48.4; March MAE 27.1→24.9, corr 0.60→0.83) | DK1-scoped confirm on both windows | candidate |
+| 2 | **DK1/Viking cherry-pick** — the GB arm's one clean winner (July eve −70.6→−48.4; March MAE 27.1→24.9, corr 0.60→0.83) | DK1-scoped confirm on both windows | **SHIPPED cv21** (docs/experiments/cv21-dk1-viking.md) |
 | 3 | **AL/MK/ME/HR endogenization** ("iteration-9") — real books from real data; extends the footprint to 43 zones | standard footprint gates + SEE guard | data inventory done |
 | 4 | **TR fundamental anchor** — EPİAŞ/EXIST transparency ETL (MCP, load, generation; administered BOTAŞ gas pricing) | wave-1 A/B re-run, March guard clean | needs new ETL |
 | 5 | **GB done right** — UK fundamentals feed (Elexon/BMRS + UKA carbon), daily GB SRMC anchor + evening scarcity premium, **paired with the FR–GB double-count fix** | BE/NL/FR/DK1 windows, March guard clean | needs new ETL |
@@ -78,6 +78,17 @@ July-failure + March-stable windows, scored on realized prices;
 PARKED** until the Elexon/BMRS + UKA ETL exists — no GB behavioral book
 ships in the interim. ua2 stays measured-and-available as a separate
 ship/no-ship decision alongside DK1.
+
+**SHIPPED cv21 (2026-07-25).** DK1/Viking ported to src as a first-class,
+profile-gated `BoundaryBook` (`VIKING_GB_BOOK` on `DK1_PROFILE`; the wave-2
+capability JSON became a runtime ATC+p95 query so it generalizes to every
+backfill day). Byte-identity guards (GR single-zone, SEE 5-zone, 39-zone EU
+with the book disabled) all bit-identical vs cv20. Src-implementation confirm
+A/B (HiGHS, offline extract): March (stable guard, 8/8 days) MAE 27.9→24.6 /
+corr 0.55→0.81 — matches the measured reference; July (10/16 days — the extract
+lacks Day-ahead ATC for 2026-07-16..21, so those days fail the enriched-network
+build for both arms) MAE 29.5→26.6 / corr 0.88→0.90; no FR/NL/NO2 leakage. See
+docs/experiments/cv21-dk1-viking.md.
 
 Ship vehicle: items 1–2 are candidates for the next model cv after cv19;
 items 3–5 are each their own cv with the full protocol (coupled A/B, guards,
