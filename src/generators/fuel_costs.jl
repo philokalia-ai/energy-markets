@@ -86,6 +86,67 @@ function eua_price(day::Dates.Date)
     return daily === nothing ? get(EUA_PRICE_BY_YEAR, year(day), EUA_PRICE_DEFAULT) : daily
 end
 
+# UKA (UK ETS allowance) carbon price (€/tCO₂), from `carbon.uka_price` (ICAP
+# APE secondary-market EUR closes). The GB fundamental anchor
+# (`_boundary_anchor(:gb_ccgt_srmc)`) uses this instead of the EUA proxy — GB
+# left the EU ETS and its CCGT fleet pays the UK price, which has diverged from
+# EUA (mid-2026: UKA ≈ €66 vs EUA ≈ €79). Cached per day like EUA/TTF; genuine
+# absence cached, transient errors never cached.
+const UKA_PRICE_CACHE = Dict{Dates.Date,Union{Float64,Nothing}}()
+const _UKA_CACHE_LOCK = ReentrantLock()
+
+"""
+    uka_price(day::Dates.Date) -> Float64
+
+Most recent UKA (UK-ETS) close (€/tCO₂) strictly before `day`, from
+`carbon.uka_price`. Strictly `< day` — no lookahead (the D-ahead auction clears
+around noon on D−1). The ICAP feed lags ~quarterly at the live edge, so for a
+recent `day` this naturally returns the LAST AVAILABLE close (the documented
+last-value-before fallback, like TTF): a July-2026 `day` gets the 2026-06-30
+close. Falls back to `eua_price(day)` when the table is unavailable (e.g. the
+offline extract, which does not carry `carbon.uka_price`) or has no row before
+`day` (before the feed's 2021-05 history) — so the anchor always tracks carbon.
+"""
+function uka_price(day::Dates.Date)
+    cached = lock(_UKA_CACHE_LOCK) do
+        get(UKA_PRICE_CACHE, day, missing)
+    end
+    cached !== missing && return cached === nothing ? eua_price(day) : cached
+
+    # Plain sql2df (NOT sql2df_with_retry): a UKA miss just falls back to EUA, so
+    # there is no value in the retry wrapper's 3×2 s backoff — and the offline
+    # extract (no `carbon` schema) would otherwise sleep on every lookup.
+    price = nothing
+    structural_absence = false
+    try
+        df = Euphemia.sql2df(
+            """
+            SELECT price_eur
+            FROM carbon.uka_price
+            WHERE price_date < \$1 AND price_eur IS NOT NULL
+            ORDER BY price_date DESC
+            LIMIT 1
+            """,
+            [day]
+        )
+        price = (isempty(df) || ismissing(df.price_eur[1])) ? nothing : Float64(df.price_eur[1])
+        structural_absence = true   # empty result = real data gap → cache it
+    catch e
+        msg = sprint(showerror, e)
+        # A missing table/schema (the offline extract carries no `carbon.*`) is
+        # PERSISTENT — cache the EUA fallback so we never re-query it. A genuine
+        # transient DB error is NOT cached (repo rule) so the next call retries.
+        structural_absence = occursin("does not exist", msg) ||
+                             occursin("Catalog Error", msg)
+        structural_absence ||
+            @warn "UKA price lookup failed for $day; using EUA for the GB carbon leg" error = msg
+    end
+    (structural_absence) && lock(_UKA_CACHE_LOCK) do
+        UKA_PRICE_CACHE[day] = price
+    end
+    return price === nothing ? eua_price(day) : price
+end
+
 """
     get_ttf_price(day::Dates.Date) -> Union{Float64,Nothing}
 

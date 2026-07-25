@@ -27,7 +27,7 @@ using Dates
 using Statistics: median, quantile
 import ..get_generators, ..get_loads, ..get_generation_forecast_for_wind_and_solar, ..Load
 import ..get_marginal_cost, ..sql2df_with_retry, ..Generator, ..normalize_fuel_type_name
-import ..get_ttf_price, ..eua_price
+import ..get_ttf_price, ..eua_price, ..uka_price
 import ..GAS_PLANT_EFFICIENCY, ..GAS_EMISSION_FACTOR, ..GAS_VOM_COST
 import ..MarketOrders: SimpleOrder
 import ..MPCC: MPCCOrderBook

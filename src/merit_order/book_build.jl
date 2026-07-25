@@ -624,7 +624,12 @@ function create_merit_order_book(
         # fixed flow injection is REMOVED here — the elastic ladder (Stage 6b)
         # replaces it — and its backstop headroom is removed just below.
         boundary_book = profile.boundary_book
-        boundary_exclude = boundary_book === nothing ? String[] : boundary_book.flow_codes
+        # The counterparty's map codes stripped from the fixed net-import
+        # injection + backstop headroom (the elastic ladder replaces both). For
+        # FR↔GB this is all four codes (aggregate GB + the three cables) so the
+        # ≈2× double-count is removed, not just the aggregate — see GB_FR_BOOK.
+        boundary_exclude = boundary_book === nothing ? String[] :
+                           boundary_net_exclude(boundary_book)
         net_imports = include_net_imports ?
                       get_net_imports(bidding_zone, day;
                           exclude_counterparties=vcat(net_import_exclude, boundary_exclude),

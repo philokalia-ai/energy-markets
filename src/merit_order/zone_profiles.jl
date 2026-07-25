@@ -50,29 +50,59 @@ measured sensitivity choice; documented not load-bearing between mid/high).
 
 Fields:
 - `counterparty` — label for tagging/logging (e.g. `"GB"`).
-- `flow_codes`   — `entsoe.physical_flows` / offered-ATC map codes for the
-  border, excluded from injections + backstop and measured for capability
-  (DK1↔GB carries the single aggregate `"GB"` code).
+- `flow_codes`   — `entsoe.physical_flows` map codes carrying the border's
+  physical flow, measured for capability (the aggregate: DK1↔GB and FR↔GB both
+  carry the single netted `"GB"` code).
+- `net_exclude_codes` — map codes stripped from `get_net_imports` + the import
+  backstop (the elastic ladder replaces both). Empty ⇒ defaults to `flow_codes`
+  (DK1). **FR↔GB must list all four codes** (`GB` AND the per-cable `GB_IFA`,
+  `GB_IFA2`, `GB_ElecLink`): ENTSO-E publishes the FR↔GB flow BOTH as the
+  aggregate `GB` and as the three cables, so the loader summed them ≈2× — the
+  cv22 double-count fix (docs/experiments/gb-borders-cv22.md). Excluding all
+  four removes the phantom AND the true injection; the ladder prices the border.
+- `atc_codes`    — offered-ATC map codes for capability sizing. Empty ⇒ defaults
+  to `flow_codes` (DK1: the `"GB"` aggregate). **FR↔GB has NO aggregate ATC** —
+  it is published only per-cable, so FR lists the three cables and
+  `get_boundary_capability` SUMS their offered ATC.
 - `anchor`       — which neighbor-fundamental SRMC to anchor on
   (`:gb_ccgt_srmc`).
+- `carbon_source` — carbon leg of the anchor: `:eua` (DK1/Viking — its cv21
+  validated config) or `:uka` (FR — the correct UK-ETS price from
+  `carbon.uka_price`, falling back to EUA when unavailable).
 - `anchor_mult`  — sensitivity multiplier on the anchor.
 - `imp_ladder`   — import-supply rungs `(price_mult, capability_share)`: the
   neighbor sells to us at `price_mult × anchor × anchor_mult` for
   `capability_share ×` the demonstrated import capability.
 - `exp_ladder`   — export-demand rungs `(price_mult, capability_share)`: the
   neighbor buys from us, symmetric.
+- `kill_switch`  — the ENV name that strips this book (byte-identity guard +
+  attribution A/Bs). DK1/Viking keeps `"EUPHEMIA_DISABLE_CV21"`; the FR book
+  carries `"EUPHEMIA_DISABLE_CV22GB"` so cv22's A/B baseline (cv21, Viking on)
+  can toggle only the FR pair.
 
-`nothing` on a profile (every zone but DK1) ⇒ the mechanism is entirely dead
+`nothing` on a profile (every zone but DK1/FR) ⇒ the mechanism is entirely dead
 code and the book is byte-identical.
 """
 Base.@kwdef struct BoundaryBook
     counterparty::String
     flow_codes::Vector{String}
+    net_exclude_codes::Vector{String} = String[]
+    atc_codes::Vector{String} = String[]
     anchor::Symbol
+    carbon_source::Symbol = :eua
     anchor_mult::Float64 = 1.0
     imp_ladder::Vector{Tuple{Float64,Float64}}
     exp_ladder::Vector{Tuple{Float64,Float64}}
+    kill_switch::String = "EUPHEMIA_DISABLE_CV21"
 end
+
+# Which map codes a boundary book strips from net imports / backstop, and which
+# it sizes ATC on. Empty vectors default to `flow_codes` so DK1/Viking (single
+# aggregate code) is byte-identical to cv21.
+boundary_net_exclude(b::BoundaryBook) =
+    isempty(b.net_exclude_codes) ? b.flow_codes : b.net_exclude_codes
+boundary_atc_codes(b::BoundaryBook) =
+    isempty(b.atc_codes) ? b.flow_codes : b.atc_codes
 
 """
     VIKING_GB_BOOK
@@ -98,6 +128,44 @@ const VIKING_GB_BOOK = BoundaryBook(
     anchor_mult = 1.15,
     imp_ladder = [(1.00, 0.5), (1.15, 0.3), (1.30, 0.2)],
     exp_ladder = [(1.05, 0.5), (0.90, 0.5)],
+)
+
+"""
+    GB_FR_BOOK
+
+The FR↔GB boundary book (cv22 candidate — docs/experiments/gb-borders-cv22.md).
+Two bugs paired into one lever (roadmap item 5, the non-shippable-alone pair):
+
+1. **FR–GB flow double-count fix.** ENTSO-E publishes the FR↔GB physical flow
+   BOTH as the aggregate `GB` code AND as the three cables `GB_IFA` / `GB_IFA2`
+   / `GB_ElecLink`; `get_net_imports` summed all four ≈2× the true exchange
+   (verified: aggregate `GB` = Σcables exactly, so the injection was doubled).
+   `net_exclude_codes` lists all four ⇒ the whole GB injection (phantom + true)
+   leaves the fixed schedule.
+2. **The honest GB premium** the phantom was masking: GB is priced as an elastic
+   CCGT-marginal counterparty on the Viking recipe — import supply + export
+   demand laddered over the FR↔GB demonstrated capability, anchored on GB's own
+   fundamental SRMC (`:uka` carbon: the correct UK-ETS price). Shipping (1)
+   alone costs FR +5.3 July MAE (the double-count accidentally compensated the
+   missing evening premium); the pair ships together or not at all.
+
+Capability: FR↔GB flow is the aggregate `GB` (`flow_codes`); its offered ATC is
+published only per-cable (no aggregate), so `atc_codes` lists the three cables
+and their DA ATC is SUMMED. Anchor `1.15 × GB CCGT SRMC` and the ladder shapes
+are the wave-2/cv21 Viking constants (no price fit). Carried on `FR_PROFILE`,
+gated by `EUPHEMIA_DISABLE_CV22GB` (leaves DK1/Viking untouched).
+"""
+const GB_FR_BOOK = BoundaryBook(
+    counterparty = "GB",
+    flow_codes = ["GB"],
+    net_exclude_codes = ["GB", "GB_IFA", "GB_IFA2", "GB_ElecLink"],
+    atc_codes = ["GB_IFA", "GB_IFA2", "GB_ElecLink"],
+    anchor = :gb_ccgt_srmc,
+    carbon_source = :uka,
+    anchor_mult = 1.15,
+    imp_ladder = [(1.00, 0.5), (1.15, 0.3), (1.30, 0.2)],
+    exp_ladder = [(1.05, 0.5), (0.90, 0.5)],
+    kill_switch = "EUPHEMIA_DISABLE_CV22GB",
 )
 
 # =============================================================================
@@ -390,6 +458,16 @@ const FRANCE_PROFILE = ZoneProfile(
     # neighbor price.
     anchor_share = 0.55,
 )
+
+"""
+FR (cv22 candidate). FRANCE_PROFILE plus the FR↔GB boundary book (`GB_FR_BOOK`):
+GB is modeled as its own CCGT-marginal counterparty on the FR↔GB interconnectors
+(IFA/IFA2/ElecLink), replacing the double-counted fixed GB flow injection with an
+elastic ladder anchored on GB's own fundamental SRMC (UK-ETS carbon). Pairs the
+FR–GB flow double-count fix with the honest GB evening premium — neither ships
+alone (docs/experiments/gb-borders-cv22.md). Gated by `EUPHEMIA_DISABLE_CV22GB`.
+"""
+const FR_PROFILE = with_profile(FRANCE_PROFILE; boundary_book = GB_FR_BOOK)
 
 """
 Southern/mid Norway (NO1/NO2/NO3/NO5). Same reservoir-opportunity hydro model
@@ -730,8 +808,10 @@ const ZONE_PROFILES = Dict{String,ZoneProfile}(
     "DK1" => DK1_PROFILE, "DK2" => DENMARK_PROFILE,
     # Baltic
     "EE" => BALTIC_PROFILE, "LT" => BALTIC_PROFILE, "LV" => BALTIC_PROFILE,
-    # France (nuclear-heavy: continental scarcity + nuclear bid position)
-    "FR" => FRANCE_PROFILE,
+    # France (nuclear-heavy: continental scarcity + nuclear bid position).
+    # cv22: + the FR↔GB boundary book (double-count fix paired with the GB
+    # premium — see FR_PROFILE / GB_FR_BOOK). Gated by EUPHEMIA_DISABLE_CV22GB.
+    "FR" => FR_PROFILE,
     # Alpine hydro (CH + AT): reservoir-opportunity + :hydro anchor, rolled out
     # together (iter4) so the AT–CH border is anchored consistently; AT carries
     # its own anchor_share for the Core-FBMC premium (iter5)
@@ -766,12 +846,14 @@ function get_zone_profile(zone::AbstractString)
         p = with_profile(p; unit_srmc_spread=0.0,
                          export_absorption_steps=Tuple{Float64,Float64}[])
     end
-    # cv21 boundary-book kill-switch (byte-identity guard + attribution A/Bs):
-    # EUPHEMIA_DISABLE_CV21 strips the boundary book so the EU book with the
-    # mechanism disabled is bit-identical to unmodified main. Travels via ENV
-    # for the same worker-safety reason as EUPHEMIA_DISABLE_CV18. Any non-empty
-    # value disables (there is one boundary book in cv21).
-    if p.boundary_book !== nothing && !isempty(get(ENV, "EUPHEMIA_DISABLE_CV21", ""))
+    # Boundary-book kill-switch (byte-identity guards + attribution A/Bs): each
+    # book names the ENV var that strips it, so the EU book with a mechanism
+    # disabled is bit-identical to the prior cv. DK1/Viking → EUPHEMIA_DISABLE_CV21
+    # (cv21↔cv20 guard); FR↔GB → EUPHEMIA_DISABLE_CV22GB (cv22↔cv21 guard, leaves
+    # Viking on). Travels via ENV for the same worker-safety reason as
+    # EUPHEMIA_DISABLE_CV18. Any non-empty value disables.
+    if p.boundary_book !== nothing &&
+       !isempty(get(ENV, p.boundary_book.kill_switch, ""))
         p = with_profile(p; boundary_book=nothing)
     end
     return p

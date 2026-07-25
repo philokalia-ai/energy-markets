@@ -34,11 +34,24 @@ iteration plan.
    the flow-based-domain story, not a virtual neighbor.
 5. **A real product bug found: FR–GB flows are double-counted.** The `GB`
    flow code is the AGGREGATE of `GB_IFA` + `GB_IFA2` + `GB_ElecLink`; the
-   loader sums all four ≈ 2× the true flow. The pure data fix reproduces
+   loader sums all four ≈ 2× the true flow (confirmed: aggregate `GB` net =
+   cable-sum net to the MW over 3,431 hours; only FR double-counts — BE/NL/
+   NO2/DK1 carry a single aggregate code). The pure data fix reproduces
    ~80% of FR's July treatment effect — but shipping it alone costs FR +5.3
    July MAE because the double-count accidentally compensates a missing GB
    evening scarcity premium. Compensating errors: the fix ships PAIRED with
    the GB premium mechanism, never alone.
+   **UPDATE (cv22 attempt, 2026-07-25 — docs/experiments/gb-borders-cv22.md):**
+   the pair was BUILT (FR↔GB `BoundaryBook` with UKA carbon, real N2EX-validated
+   anchor) and MEASURED on the coupled 39-zone A/B → **NO-SHIP**: FR July MAE
+   still regresses **+4.2** (gate breach) though March improves −5.0. The
+   compensated error is **France's too-cheap evening supply curve**, not a GB
+   mis-statement: FR clears *below* the GB export-demand anchor, so the honest
+   ladder is inframarginal and can't recover the July evening level (no anchor
+   fix helps; raising it would be price-fitting). Sequencing corrected: fix
+   France's opportunity-cost nuclear bidding FIRST, then re-run this A/B. The
+   double-count stays **documented as known-compensated**; cv22 ships without
+   the GB pair.
 6. **Endogenize, don't model, where data exists**: AL / MK / ME / HR have DA
    prices, load & RES forecasts, unit registries and ATC in ENTSO-E — they
    belong in the footprint as real zones. Only TR / UA / GB / MT (no usable
@@ -52,7 +65,7 @@ iteration plan.
 | 2 | **DK1/Viking cherry-pick** — the GB arm's one clean winner (July eve −70.6→−48.4; March MAE 27.1→24.9, corr 0.60→0.83) | DK1-scoped confirm on both windows | **SHIPPED cv21** (docs/experiments/cv21-dk1-viking.md) |
 | 3 | **AL/MK/ME/HR endogenization** ("iteration-9") — real books from real data; extends the footprint to 43 zones | standard footprint gates + SEE guard | data inventory done |
 | 4 | **TR fundamental anchor** — EPİAŞ/EXIST transparency ETL (MCP, load, generation; administered BOTAŞ gas pricing) | wave-1 A/B re-run, March guard clean | needs new ETL |
-| 5 | **GB done right** — UK fundamentals feed (Elexon/BMRS + UKA carbon), daily GB SRMC anchor + evening scarcity premium, **paired with the FR–GB double-count fix** | BE/NL/FR/DK1 windows, March guard clean | needs new ETL |
+| 5 | **GB done right** — UK fundamentals feed (Elexon/BMRS + UKA carbon), daily GB SRMC anchor + evening scarcity premium, **paired with the FR–GB double-count fix** | BE/NL/FR/DK1 windows, March guard clean | **MEASURED, NO-SHIP (2026-07-25)** — docs/experiments/gb-borders-cv22.md |
 | 6 | Core-FBMC family (BE/NL/PL/SK/HU/CZ evenings) | separate program — not a boundary problem | out of scope here |
 
 ### Confirm A/B results (2026-07-24, 24 days × base/ua2/dk1, cv19-era books)
