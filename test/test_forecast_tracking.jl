@@ -197,6 +197,27 @@ include(joinpath(@__DIR__, "..", "bin", "forecast_common.jl"))
         ok, reason = eligibility_verdict(zones, full_load, res_req, Set(["GR", "BG"]), 0)
         @test !ok
         @test occursin("ATC", reason)
+
+        # LOAD FILL: a short zone that IS model-fillable no longer blocks the day
+        short_ro = Dict("GR" => 24, "BG" => 24, "RO" => 3)
+        ok, reason = eligibility_verdict(zones, short_ro, res_req, Set(["GR", "BG"]), 500;
+                                         load_fill_zones=Set(["RO"]))
+        @test ok
+        @test occursin("model-filled", reason)
+
+        # a short zone that is NOT in the fill set still blocks (no silent fallback)
+        ok, reason = eligibility_verdict(zones, short_ro, res_req, Set(["GR", "BG"]), 500;
+                                         load_fill_zones=Set(["BG"]))
+        @test !ok
+        @test occursin("RO", reason)
+        @test occursin("model-fillable", reason)
+
+        # empty fill set (default) is byte-identical to the pre-fill gate
+        ok1, r1 = eligibility_verdict(zones, full_load, res_req, Set(["GR", "BG"]), 500)
+        ok2, r2 = eligibility_verdict(zones, full_load, res_req, Set(["GR", "BG"]), 500;
+                                      load_fill_zones=Set{String}())
+        @test ok1 == ok2 == true
+        @test r1 == r2
     end
 
     @testset "hourly_prices" begin

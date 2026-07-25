@@ -184,6 +184,15 @@ println()
         include(joinpath(@__DIR__, "test_weather_res.jl"))
     end
 
+    @testset "Weather Load Model" begin
+        println("\n" * "=" ^ 60)
+        println("Running Weather Load Model Tests...")
+        println("=" ^ 60)
+        # Pure logic only (feature vectors, EU-DST local time, Easter/holiday
+        # computus, ridge fit/predict, open-meteo parsing) — no network/DB.
+        include(joinpath(@__DIR__, "test_weather_load.jl"))
+    end
+
     @testset "Extract Refresh Logic" begin
         println("\n" * "=" ^ 60)
         println("Running Extract Refresh Logic Tests...")

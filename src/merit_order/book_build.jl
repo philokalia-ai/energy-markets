@@ -452,6 +452,16 @@ Create a deterministic merit-order-based order book for MPCC clearing.
   fleet is exactly what the modifier returns (scenario edits are physical
   reality changes; truthing runs on the pre-scenario registry). Returning an
   empty vector fails the build gracefully.
+- `load_fill::Union{Nothing,Function}`: `f(zone::String, day::Date) ->
+  Union{Nothing,Dict{String,Float64}}` (timeslot `"yyyymmdd-HHMM"` → MW). SEEDS
+  the load series when the TSO day-ahead load for this zone/day is absent — the
+  daily-forecast eligibility fill (`bin/daily_forecast.jl`). A returned non-empty
+  dict REPLACES the DB load (`get_loads`) for this zone/day; `nothing` or an
+  empty dict leaves the DB load untouched (byte-identical). Unlike
+  `load_modifier`, which only reshapes existing entries, this provides load for a
+  zone the TSO never published. The seeded load flows through the SAME
+  `_demand_series` stage (temporal grid, `load_modifier` if also present, demand
+  orders, net demand, scarcity) as DB load.
 
 Both the single-zone (`:merit_order`) `generate_energy_prices` path and the
 multi-zone `run_multi_zone_market_clearing(...; scenario=...)` path thread these
@@ -495,7 +505,8 @@ function create_merit_order_book(
     renewable_modifier::Union{Nothing,Function}=nothing,
     extra_orders::Union{Nothing,Function}=nothing,
     strategist::Union{Nothing,Function}=nothing,
-    fleet_modifier::Union{Nothing,Function}=nothing
+    fleet_modifier::Union{Nothing,Function}=nothing,
+    load_fill::Union{Nothing,Function}=nothing
 )
     # Resolve every bid parameter from the profile, letting an explicit keyword
     # override its profile field. With no overrides and the default SEE_PROFILE
@@ -559,6 +570,29 @@ function create_merit_order_book(
                     "fleet_modifier removed all generators", nothing, 0, 0, 0, 0.0, 0.0, 0.0)
         end
         loads = get_loads(bidding_zone, day)
+        # Load-fill (daily-forecast eligibility fill): when the TSO day-ahead
+        # load for this zone/day is missing/short, add model load for the hours
+        # the TSO did NOT publish. MERGE, never replace: a present TSO hour
+        # always wins (no-override — checked at HOUR granularity so a native
+        # sub-hourly TSO hour is never split by an hourly fill slot). `nothing`
+        # or an empty return is a no-op (byte-identical). The caller
+        # (bin/daily_forecast.jl) only attaches this hook to short zones, so on a
+        # fully-published zone `filled` covers only already-present hours and
+        # nothing is added. Filled slots are hourly ("60").
+        if load_fill !== nothing
+            filled = load_fill(bidding_zone, day)
+            if filled !== nothing && !isempty(filled)
+                covered = Set(l.timeslot[1:11] for l in loads)   # "yyyymmdd-HH" present in TSO
+                added = 0
+                for (ts, mw) in filled
+                    ts[1:11] in covered && continue              # TSO already covers this hour
+                    push!(loads, Load(ts, "60", bidding_zone, mw))
+                    added += 1
+                end
+                added > 0 && println("  🩹 load-fill: $bidding_zone added $added model hour(s) " *
+                                     "(TSO published $(length(covered))h; missing hours filled)")
+            end
+        end
         renewables = get_generation_forecast_for_wind_and_solar(bidding_zone, day;
             coalesce_missing=res_coalesce_missing)
 

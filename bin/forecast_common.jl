@@ -186,27 +186,36 @@ end
 """
     eligibility_verdict(zones, load_hours_by_zone, res_zones_required,
                         res_zones_present, atc_rows;
-                        min_load_hours=20) -> (eligible::Bool, reason::String)
+                        min_load_hours=20, load_fill_zones=Set{String}())
+        -> (eligible::Bool, reason::String)
 
 Pure eligibility gate for one candidate market day. A day is eligible iff
 1. EVERY footprint zone has ≥ `min_load_hours` hourly-equivalent rows of
-   day-ahead load forecast (`load_hours_by_zone`: zone → distinct hours);
+   day-ahead load forecast (`load_hours_by_zone`: zone → distinct hours), OR the
+   zone is in `load_fill_zones` (its load will be model-filled — the
+   `bin/daily_forecast.jl` eligibility fill; a zone is only added there when the
+   model can actually produce the window, so a filled zone is genuinely covered);
 2. every zone that had a wind/solar forecast on the most recent fully-realized
    day (`res_zones_required`) also has one for this day (`res_zones_present`);
 3. offered implicit ATC rows exist for the day (`atc_rows` > 0).
 
-Never degrades: any missing zone makes the whole day ineligible.
+Never degrades on RES/ATC: a missing RES/ATC still makes the whole day
+ineligible. A short LOAD zone only passes when it is model-fillable — a zone the
+fill cannot cover (no coefficients / no weather) keeps the day ineligible.
 """
 function eligibility_verdict(zones::Vector{String},
                              load_hours_by_zone::AbstractDict{String,<:Integer},
                              res_zones_required::AbstractSet{String},
                              res_zones_present::AbstractSet{String},
                              atc_rows::Integer;
-                             min_load_hours::Integer=20)
-    missing_load = [z for z in zones if get(load_hours_by_zone, z, 0) < min_load_hours]
+                             min_load_hours::Integer=20,
+                             load_fill_zones::AbstractSet{String}=Set{String}())
+    missing_load = [z for z in zones
+                    if get(load_hours_by_zone, z, 0) < min_load_hours && !(z in load_fill_zones)]
     if !isempty(missing_load)
-        return (false, "load forecast missing/short (<$(min_load_hours)h) for " *
-                       "$(length(missing_load)) zone(s): $(join(missing_load, ","))")
+        return (false, "load forecast missing/short (<$(min_load_hours)h) and not " *
+                       "model-fillable for $(length(missing_load)) zone(s): " *
+                       "$(join(missing_load, ","))")
     end
     missing_res = sort(collect(setdiff(res_zones_required, res_zones_present)))
     if !isempty(missing_res)
@@ -216,7 +225,9 @@ function eligibility_verdict(zones::Vector{String},
     if atc_rows <= 0
         return (false, "no offered ATC (implicit) rows for the day")
     end
-    return (true, "all $(length(zones)) zones have load forecast, " *
+    n_filled = count(z -> get(load_hours_by_zone, z, 0) < min_load_hours, zones)
+    fill_note = n_filled > 0 ? " ($n_filled model-filled)" : ""
+    return (true, "all $(length(zones)) zones have load forecast$fill_note, " *
                   "RES coverage matches the last realized day " *
                   "($(length(res_zones_required)) zones), ATC present ($atc_rows rows)")
 end
