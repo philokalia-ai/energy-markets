@@ -218,6 +218,35 @@ include(joinpath(@__DIR__, "..", "bin", "forecast_common.jl"))
                                       load_fill_zones=Set{String}())
         @test ok1 == ok2 == true
         @test r1 == r2
+
+        # RES FILL: a required zone MISSING its wind/solar that IS model-fillable
+        # no longer blocks the day (BG required, present only GR, but BG res-filled)
+        ok, reason = eligibility_verdict(zones, full_load, res_req, Set(["GR"]), 500;
+                                         res_fill_zones=Set(["BG"]))
+        @test ok
+        @test occursin("RES model-filled", reason)
+
+        # a required-missing RES zone NOT in the res-fill set still blocks
+        ok, reason = eligibility_verdict(zones, full_load, res_req, Set(["GR"]), 500;
+                                         res_fill_zones=Set(["RO"]))  # RO not required
+        @test !ok
+        @test occursin("BG", reason)
+        @test occursin("wind/solar", reason)
+
+        # both fills compose: short-load RO + RES-missing BG, both fillable → eligible
+        ok, reason = eligibility_verdict(zones, short_ro, res_req, Set(["GR"]), 500;
+                                         load_fill_zones=Set(["RO"]),
+                                         res_fill_zones=Set(["BG"]))
+        @test ok
+        @test occursin("load model-filled", reason)
+        @test occursin("RES model-filled", reason)
+
+        # empty res-fill set (default) is byte-identical to the pre-fill gate
+        okr1, rr1 = eligibility_verdict(zones, full_load, res_req, Set(["GR", "BG"]), 500)
+        okr2, rr2 = eligibility_verdict(zones, full_load, res_req, Set(["GR", "BG"]), 500;
+                                        res_fill_zones=Set{String}())
+        @test okr1 == okr2 == true
+        @test rr1 == rr2
     end
 
     @testset "hourly_prices" begin

@@ -186,7 +186,8 @@ end
 """
     eligibility_verdict(zones, load_hours_by_zone, res_zones_required,
                         res_zones_present, atc_rows;
-                        min_load_hours=20, load_fill_zones=Set{String}())
+                        min_load_hours=20, load_fill_zones=Set{String}(),
+                        res_fill_zones=Set{String}())
         -> (eligible::Bool, reason::String)
 
 Pure eligibility gate for one candidate market day. A day is eligible iff
@@ -196,12 +197,14 @@ Pure eligibility gate for one candidate market day. A day is eligible iff
    `bin/daily_forecast.jl` eligibility fill; a zone is only added there when the
    model can actually produce the window, so a filled zone is genuinely covered);
 2. every zone that had a wind/solar forecast on the most recent fully-realized
-   day (`res_zones_required`) also has one for this day (`res_zones_present`);
+   day (`res_zones_required`) also has one for this day (`res_zones_present`), OR
+   the zone is in `res_fill_zones` (its wind/solar will be weather-model-filled —
+   the symmetric RES fill; again only added when the model can cover the window);
 3. offered implicit ATC rows exist for the day (`atc_rows` > 0).
 
-Never degrades on RES/ATC: a missing RES/ATC still makes the whole day
-ineligible. A short LOAD zone only passes when it is model-fillable — a zone the
-fill cannot cover (no coefficients / no weather) keeps the day ineligible.
+Never degrades on ATC. A short LOAD or missing RES zone only passes when it is
+model-fillable — a zone the fill cannot cover (absent from the pack / no weather)
+keeps the day ineligible.
 """
 function eligibility_verdict(zones::Vector{String},
                              load_hours_by_zone::AbstractDict{String,<:Integer},
@@ -209,7 +212,8 @@ function eligibility_verdict(zones::Vector{String},
                              res_zones_present::AbstractSet{String},
                              atc_rows::Integer;
                              min_load_hours::Integer=20,
-                             load_fill_zones::AbstractSet{String}=Set{String}())
+                             load_fill_zones::AbstractSet{String}=Set{String}(),
+                             res_fill_zones::AbstractSet{String}=Set{String}())
     missing_load = [z for z in zones
                     if get(load_hours_by_zone, z, 0) < min_load_hours && !(z in load_fill_zones)]
     if !isempty(missing_load)
@@ -217,18 +221,23 @@ function eligibility_verdict(zones::Vector{String},
                        "model-fillable for $(length(missing_load)) zone(s): " *
                        "$(join(missing_load, ","))")
     end
-    missing_res = sort(collect(setdiff(res_zones_required, res_zones_present)))
+    missing_res = sort(collect(setdiff(res_zones_required, union(res_zones_present, res_fill_zones))))
     if !isempty(missing_res)
-        return (false, "wind/solar forecast missing for zone(s) that had one on " *
-                       "the last realized day: $(join(missing_res, ","))")
+        return (false, "wind/solar forecast missing (and not model-fillable) for " *
+                       "zone(s) that had one on the last realized day: " *
+                       "$(join(missing_res, ","))")
     end
+    n_lfill = count(z -> get(load_hours_by_zone, z, 0) < min_load_hours, zones)
+    n_rfill = length(intersect(res_zones_required, res_fill_zones))
+    notes = String[]
+    n_lfill > 0 && push!(notes, "$n_lfill load model-filled")
+    n_rfill > 0 && push!(notes, "$n_rfill RES model-filled")
+    fill_note = isempty(notes) ? "" : " (" * join(notes, ", ") * ")"
     if atc_rows <= 0
         return (false, "no offered ATC (implicit) rows for the day")
     end
-    n_filled = count(z -> get(load_hours_by_zone, z, 0) < min_load_hours, zones)
-    fill_note = n_filled > 0 ? " ($n_filled model-filled)" : ""
-    return (true, "all $(length(zones)) zones have load forecast$fill_note, " *
-                  "RES coverage matches the last realized day " *
+    return (true, "all $(length(zones)) zones have load + RES coverage$fill_note, " *
+                  "RES baseline the last realized day " *
                   "($(length(res_zones_required)) zones), ATC present ($atc_rows rows)")
 end
 

@@ -28,6 +28,22 @@
 >   `test/scripts/validate_load_fill.jl` (model vs actual vs TSO, out of sample).
 > See the PR for the LT/SI/CH validation table and guard evidence.
 
+> **Symmetric RES FILL (2026-07-26).** The load gate was only half the door: a
+> run that passed the load gate (with the fill) then went INELIGIBLE on the RES
+> gate — DE_LU on lead-1, AT on deeper leads missing their 14.1.D wind/solar
+> forecast. The RES twin fills a missing zone's wind/solar from the existing
+> weather→RES models (`bin/weather_res.jl` + `res_models` pack) exactly as load
+> fill does: `res_fill` book hook MERGES weather RES for the hours the TSO 14.1.D
+> did not publish (present TSO RES never overridden); `bin/daily_forecast.jl`
+> predicts RES-missing *required* zones once over the span, exempts the fillable
+> ones in the RES gate (a zone absent from the RES pack keeps the day
+> ineligible), composes the provenance marker `input_mode='<mode>+loadfill+resfill'`
+> (score_forecasts stays grouped correctly), and honors a `RES_FILL` kill-switch
+> (default on). Inert on the weather track (which already sources all RES from
+> weather — no RES gate). Same guard script covers both fills; RES validation:
+> `test/scripts/validate_res_fill.jl` (model wind+solar vs 14.1.D). See the
+> res-fill PR for the DE/AT numbers.
+
 **Question.** Leads 2..7 of the forecast product are WEEKLY PERSISTENCE of our
 own lead-1 forecast (`bin/horizon_forecast.jl`) because ENTSO-E publishes no
 inputs beyond D-1. Can we instead run the FULL model at lead n by (a) predicting

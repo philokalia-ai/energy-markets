@@ -453,15 +453,22 @@ Create a deterministic merit-order-based order book for MPCC clearing.
   reality changes; truthing runs on the pre-scenario registry). Returning an
   empty vector fails the build gracefully.
 - `load_fill::Union{Nothing,Function}`: `f(zone::String, day::Date) ->
-  Union{Nothing,Dict{String,Float64}}` (timeslot `"yyyymmdd-HHMM"` → MW). SEEDS
-  the load series when the TSO day-ahead load for this zone/day is absent — the
-  daily-forecast eligibility fill (`bin/daily_forecast.jl`). A returned non-empty
-  dict REPLACES the DB load (`get_loads`) for this zone/day; `nothing` or an
+  Union{Nothing,Dict{String,Float64}}` (timeslot `"yyyymmdd-HHMM"` → MW). MERGES
+  model load for the hours the TSO day-ahead load for this zone/day did NOT
+  publish — the daily-forecast eligibility fill (`bin/daily_forecast.jl`). A
+  present TSO hour is never overridden (hour-granularity merge); `nothing` or an
   empty dict leaves the DB load untouched (byte-identical). Unlike
   `load_modifier`, which only reshapes existing entries, this provides load for a
-  zone the TSO never published. The seeded load flows through the SAME
+  zone the TSO never published. The merged load flows through the SAME
   `_demand_series` stage (temporal grid, `load_modifier` if also present, demand
   orders, net demand, scarcity) as DB load.
+- `res_fill::Union{Nothing,Function}`: the RES twin of `load_fill` (same
+  signature). MERGES weather-model wind+solar MW for the hours the TSO 14.1.D
+  wind/solar forecast did NOT publish, into the renewable forecast (as hourly
+  "WeatherFill" rows) before `_demand_series` — so it propagates to
+  `renewable_by_time`, the near-zero-price RES supply orders, and the net-demand
+  residual exactly like DB RES. A present TSO RES hour is never overridden;
+  `nothing`/empty is byte-identical.
 
 Both the single-zone (`:merit_order`) `generate_energy_prices` path and the
 multi-zone `run_multi_zone_market_clearing(...; scenario=...)` path thread these
@@ -506,7 +513,8 @@ function create_merit_order_book(
     extra_orders::Union{Nothing,Function}=nothing,
     strategist::Union{Nothing,Function}=nothing,
     fleet_modifier::Union{Nothing,Function}=nothing,
-    load_fill::Union{Nothing,Function}=nothing
+    load_fill::Union{Nothing,Function}=nothing,
+    res_fill::Union{Nothing,Function}=nothing
 )
     # Resolve every bid parameter from the profile, letting an explicit keyword
     # override its profile field. With no overrides and the default SEE_PROFILE
@@ -595,6 +603,29 @@ function create_merit_order_book(
         end
         renewables = get_generation_forecast_for_wind_and_solar(bidding_zone, day;
             coalesce_missing=res_coalesce_missing)
+        # RES-fill (daily-forecast RES eligibility fill) — the twin of load-fill.
+        # When the TSO 14.1.D wind/solar forecast for this zone/day is
+        # missing/short, add weather-model RES for the hours the TSO did NOT
+        # publish. MERGE, never replace: an hour with ANY published TSO RES row
+        # (even a coalesced 0) is never overridden (hour-granularity check).
+        # `nothing`/empty is a no-op (byte-identical). Filled rows are hourly
+        # ("60") and tagged production_type "WeatherFill". The caller only
+        # attaches this hook to RES-short zones.
+        if res_fill !== nothing
+            rfilled = res_fill(bidding_zone, day)
+            if rfilled !== nothing && !isempty(rfilled)
+                rcovered = Set(r.date_time[1:11] for r in renewables)  # "yyyymmdd-HH" present in TSO
+                radded = 0
+                for (ts, mw) in rfilled
+                    ts[1:11] in rcovered && continue                   # TSO already covers this hour
+                    push!(renewables, RenewablesGenerationForecast(ts, "60", bidding_zone,
+                                                                    "WeatherFill", mw))
+                    radded += 1
+                end
+                radded > 0 && println("  🩹 res-fill: $bidding_zone added $radded model hour(s) " *
+                                      "(TSO published $(length(rcovered))h; missing hours filled)")
+            end
+        end
 
         if isempty(generators)
             return AdjustedOrderBookResult(false, "No generators found", nothing, 0, 0, 0, 0.0, 0.0, 0.0)

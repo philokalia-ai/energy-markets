@@ -886,6 +886,12 @@ Fields (see `create_merit_order_book`'s "Scenario hooks" docstring for the exact
   that zone/day; `nothing` (default) leaves the DB load untouched (byte-identical).
   Unlike `load_modifier` (which only reshapes existing entries), this can provide
   load for a zone the TSO never published — the whole point of the fill.
+- `res_fill(zone, day::Date) -> Union{Nothing,Dict{String,Float64}}` — the RES
+  twin of `load_fill`: MERGE weather-model wind+solar (timeslot `"yyyymmdd-HHMM"`
+  → MW) into the zone's renewable forecast for the hours the TSO 14.1.D forecast
+  did NOT publish. A present TSO RES hour is never overridden; `nothing` (default)
+  leaves the DB RES untouched (byte-identical). Used by the daily-forecast RES
+  eligibility fill (`bin/daily_forecast.jl`).
 
 The `extra_orders` and `strategist` `ctx` both carry `ctx.zone`, so a single
 scenario object applied to a whole footprint can gate its edits on the zone
@@ -900,6 +906,7 @@ Base.@kwdef struct ZoneScenario
     strategist::Union{Nothing,Function} = nothing
     fleet_modifier::Union{Nothing,Function} = nothing
     load_fill::Union{Nothing,Function} = nothing
+    res_fill::Union{Nothing,Function} = nothing
 end
 
 """
@@ -913,7 +920,7 @@ is_empty_scenario(::Nothing) = true
 is_empty_scenario(s::ZoneScenario) =
     s.load_modifier === nothing && s.renewable_modifier === nothing &&
     s.extra_orders === nothing && s.strategist === nothing &&
-    s.fleet_modifier === nothing && s.load_fill === nothing
+    s.fleet_modifier === nothing && s.load_fill === nothing && s.res_fill === nothing
 
 """
     zone_scenario(scenario, zone) -> Union{Nothing,ZoneScenario}
