@@ -1,0 +1,6 @@
+out_cv22_*.tsv
+out_base_*.tsv
+out_cv22.tsv
+out_base.tsv
+log_*.txt
+launch_*.log

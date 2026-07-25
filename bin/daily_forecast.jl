@@ -430,6 +430,11 @@ function clear_utc_day!(cache::Dict{Date,Union{Nothing,Dict{String,Dict{DateTime
                         scenario::Union{Nothing,Dict{String,Euphemia.ZoneScenario}}=nothing)
     haskey(cache, utc_day) && return cache[utc_day]
     println("  clearing UTC day $utc_day ...")
+    # #182 limitation: the try/catch below catches ordinary errors but NOT a
+    # HiGHS SIGSEGV, which kills this process outright (a same-process segfault
+    # is uncatchable). The daily forecast clears only two UTC days per run, so
+    # recovery is a re-invocation (the workflow's second daily attempt). The
+    # survivable crash-retry lives in the pipelined backfill, not here.
     t0 = time()
     result = try
         Euphemia.run_multi_zone_market_clearing(utc_day;

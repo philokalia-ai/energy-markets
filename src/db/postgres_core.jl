@@ -65,7 +65,58 @@
 # broader GB book until an Elexon/BMRS + UKA feed); UA is a separate decision.
 # SEE single-zone / 5-zone products stay byte-identical (guarded); cv21 matters
 # for the EU footprint (multi_zone_eu). No backfill in this change — July 2026.
-const ENERGY_PRICES_CODE_VERSION = 21
+# v21 -> v22: the UA firm-slice boundary book + a batch of four confirmed
+# price-affecting bug-fixes (docs/experiments/cv22.md). All five are gated behind
+# EUPHEMIA_DISABLE_CV22 (the byte-identity kill-switch) and ON by default.
+#  (A) ua2 — roadmap item 1 ported to src as a first-class, profile-gated
+#      BoundaryBook (like cv21 Viking): UA is a war-constrained scarcity buyer on
+#      the HU/SK/RO/PL-UA borders. Import supply anchored 0.55x zone gas SRMC (no
+#      UA fundamentals feed — the documented generic-anchor compromise); export
+#      demand = a FIRM cap-priced base slice (its demonstrated persistent import
+#      need, which does not curtail on price — the mechanism that killed the
+#      wave-2 HU March breach) plus an elastic tail. UA_BOOK_DEFAULT (HU/SK/RO),
+#      UA_BOOK_PL (PL, +UA_DobTPP radial); capability = trailing-366d p95 gross
+#      flow per 4h block (:p95_block, UA ATC is stale/absent); firm = trailing-28d
+#      p10 of the daily block-mean export flow. Both computed at RUNTIME (no
+#      committed JSON) — they reproduce the experiment's firm_ua.json /
+#      capability_w2.json EXACTLY on the confirm days (firm@18UTC March HU 139/
+#      SK 283/PL 137/RO 9, July HU 8.5/RO,PL 0/SK 74 — matching the reference),
+#      so the book generalizes to every backfill day. Reference confirm
+#      (2026-07-24, 24-day A/B): HU July MAE 72.3->57.1 / corr 0.69->0.79; March
+#      MAE 28.24->28.29 (breach dead); SK July eve bias -82->-73, SI July MAE
+#      80.7->70.1. Accepted residuals: HU March evening MAE 29.2->33.0, RO/BG
+#      March ~+1. SRC confirm A/B (HiGHS decomposed, 39-zone coupled, offline
+#      extract, 18/24 days — July 16-21 fail the extract ATC gap for both arms):
+#      HU July MAE 80.3->61.5 / corr 0.70->0.80 (PASS, gate -10.5); SI July
+#      82.5->71.4, SK 46.3->44.8, RO 30.2->28.6; July footprint mean 31.7->30.6
+#      (28/10 better); March guard flat 24.63->24.68. Accepted residuals
+#      reproduce: RO March +1.2, BG +0.9, HU March eve +3.0. docs/experiments/cv22.md.
+#  (B) flows_imports :v2 border map — a Nordic-side border MISSING its D-7
+#      observation was DELETED from the border map (silently zeroing its ex-ante
+#      flow) instead of falling back to climatology. Fixed to fall back, never
+#      delete. EU-footprint :v2/:v3 only.
+#  (C) Network.jl legacy (non-enriched) ATC build — took whichever duplicate
+#      capacity row sorted LAST by date_time_utc for a border-hour
+#      (order-dependent). Fixed to hourly AVG per (source, sink, hour), matching
+#      the enriched path. *** This ENDS the SEE 5-zone byte-identity chain
+#      (unbroken since cv10). *** Measured SEE delta (single-zone unaffected —
+#      never touches the Network build; 5-zone tiny/zero on days without
+#      duplicate rows): see docs/experiments/cv22.md; gate held (no material
+#      worsening).
+#  (D) fleet_data get_reservoir_drawdown — the lower-bound disjunct year>$2-2
+#      widened the "preceding 52 weeks" window to 52-104 weeks (and made the
+#      second disjunct dead). Fixed to $2-1. Nordic :reservoir_opportunity only.
+#  (E) fleet_data get_reservoir_dryness — the +-2-ISO-week neighbourhood
+#      (week BETWEEN $3-2 AND $3+2) did not wrap the year boundary. Fixed with a
+#      mod-52 wrapped week set. Only differs at ISO weeks 1/2/52/53 (Dec/Jan) —
+#      invisible to the mid-year confirm/guard windows and to the SEE guard days.
+#  NOT shipped in cv22 (measured NO-SHIP, deferred to cv23): the GB pair (FR
+#  nuclear root cause; the FR-GB double-count stays known-compensated so it does
+#  NOT ship alone) and iter9/43-zones (AL/MK/ME/HR endogenization). Byte-identity
+#  guards (GR single-zone, SEE 5-zone, 39-zone EU with EUPHEMIA_DISABLE_CV22=1):
+#  bit-identical vs cv21 main (Viking stays ON — its kill-switch is CV21).
+#  cv22 matters for the EU footprint (multi_zone_eu). July 2026.
+const ENERGY_PRICES_CODE_VERSION = 22
 
 # Pool size: env-tunable (EUPHEMIA_PG_POOL) because the threaded book build
 # runs up to nzones concurrent queries — 5 connections cap the parallelism

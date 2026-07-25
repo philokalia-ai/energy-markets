@@ -24,6 +24,10 @@ unavailable, back out an implied gas price from our own gas SRMC and re-scale
 to GB efficiency, so the anchor still tracks fuel.
 """
 function _boundary_anchor(anchor::Symbol, day::Date, zone::String)
+    # :zone_gas_srmc (cv22/UA) — our OWN zone gas SRMC. UA has no fundamentals
+    # feed, so this is the documented wave-1 generic-anchor compromise; the firm
+    # slice, not the elastic anchor, does the load-bearing work.
+    anchor === :zone_gas_srmc && return get_marginal_cost(day, "Fossil Gas", zone)
     anchor === :gb_ccgt_srmc ||
         error("unknown boundary anchor $anchor")
     ttf = get_ttf_price(day)
@@ -48,6 +52,7 @@ const _BOUNDARY_CAP_LOCK = ReentrantLock()
 function clear_boundary_cap_cache!()
     lock(_BOUNDARY_CAP_LOCK) do
         empty!(_BOUNDARY_CAP_CACHE)
+        empty!(_BOUNDARY_FIRM_CACHE)
     end
     return nothing
 end
@@ -80,7 +85,19 @@ function get_boundary_capability(zone::String, book::BoundaryBook, day::Date)
         get(_BOUNDARY_CAP_CACHE, ckey, nothing)
     end
     cached === nothing || return cached
+    out = book.capability_mode === :p95_block ?
+          _boundary_capability_p95(zone, book, day) :
+          _boundary_capability_atc(zone, book, day)
+    lock(_BOUNDARY_CAP_LOCK) do
+        _BOUNDARY_CAP_CACHE[ckey] = out
+    end
+    return out
+end
 
+# cv21/DK1 capability: the day's offered DA explicit ATC capped at the
+# trailing-366d demonstrated max, with the per-hour p95 block as the floor on
+# ATC gaps. (Unchanged from cv21 — byte-identical for VIKING_GB_BOOK.)
+function _boundary_capability_atc(zone::String, book::BoundaryBook, day::Date)
     codes = book.flow_codes
     # (1) The day's offered Day-ahead explicit ATC, hourly AVG, per direction.
     atc_df = sql2df_with_retry(
@@ -148,10 +165,128 @@ function get_boundary_capability(zone::String, book::BoundaryBook, day::Date)
         end
         out[h] = (round(dirvals[1], digits=1), round(dirvals[2], digits=1))
     end
-    lock(_BOUNDARY_CAP_LOCK) do
-        _BOUNDARY_CAP_CACHE[ckey] = out
+    return out
+end
+
+# --- Combined directed gross flow over a window (cv22/UA multi-code borders) ---
+# Returns Dict{(dir, hour_ts) => MW}: per direction, per hour-truncated UTC
+# timestamp, the border's gross flow combined across `book.flow_codes`. Alias
+# codes (`X_IPS`) are collapsed into `X` by MAX per hour (the duplicate-alias
+# dedup of `get_net_imports`); the resulting distinct canonical codes are SUMMED
+# (genuinely-separate radials, e.g. PL's UA + UA_DobTPP). `dir = "imp"` when the
+# footprint zone is the sink (flow toward it), `"exp"` when it is the source.
+function _boundary_combined_flows(zone::String, book::BoundaryBook,
+    start_date::Date, stop_date::Date)
+    # Query the canonical codes and their _IPS aliases.
+    qcodes = String[]
+    for c in book.flow_codes
+        push!(qcodes, c); push!(qcodes, c * "_IPS")
+    end
+    df = sql2df_with_retry(
+        """
+        SELECT CASE WHEN in_area_map_code = \$1 THEN 'imp' ELSE 'exp' END AS dir,
+               CASE WHEN in_area_map_code = \$1 THEN out_area_map_code
+                    ELSE in_area_map_code END AS code,
+               date_trunc('hour', date_time_utc AT TIME ZONE 'UTC') AS ts,
+               AVG(flow_mw) AS f
+        FROM entsoe.physical_flows
+        WHERE in_area_type_code LIKE 'BZN%' AND out_area_type_code LIKE 'BZN%'
+          AND date_time_utc >= (\$2::date::timestamp AT TIME ZONE 'UTC')
+          AND date_time_utc <  (\$3::date::timestamp AT TIME ZONE 'UTC')
+          AND ((in_area_map_code = \$1 AND out_area_map_code = ANY(\$4))
+            OR (out_area_map_code = \$1 AND in_area_map_code = ANY(\$4)))
+        GROUP BY 1, 2, 3
+        """,
+        Any[zone, start_date, stop_date, qcodes])
+    canon = Set(book.flow_codes)
+    # Step 1: alias-collapse to canonical, MAX per (dir, canonical, ts).
+    bycanon = Dict{Tuple{String,String,DateTime},Float64}()
+    for r in eachrow(df)
+        ismissing(r.f) && continue
+        raw = String(r.code)
+        c = raw in canon ? raw : _strip_ips(raw)
+        c in canon || continue
+        k = (String(r.dir), c, DateTime(r.ts)); v = Float64(r.f)
+        bycanon[k] = max(get(bycanon, k, -Inf), v)
+    end
+    # Step 2: SUM canonical codes per (dir, ts).
+    out = Dict{Tuple{String,DateTime},Float64}()
+    for ((dir, _, ts), v) in bycanon
+        k = (dir, ts)
+        out[k] = get(out, k, 0.0) + v
     end
     return out
+end
+
+# cv22/UA capability: the pure trailing-366d p95 gross flow per 4h block, per
+# direction — the wave-1 Mechanism-A / BG–TR definition (UA explicit ATC is
+# stale/absent and understates realized flows ~4×, so the demonstrated floor is
+# used uniformly, no ATC). Window [D-366, D-1), strictly pre-D-1.
+function _boundary_capability_p95(zone::String, book::BoundaryBook, day::Date)
+    flows = _boundary_combined_flows(zone, book, day - Day(366), day - Day(1))
+    blockvals = Dict{Tuple{String,Int},Vector{Float64}}()
+    for ((dir, ts), v) in flows
+        push!(get!(blockvals, (dir, Dates.hour(ts) ÷ 4), Float64[]), v)
+    end
+    p95 = Dict{Tuple{String,Int},Float64}(
+        k => quantile(vs, 0.95) for (k, vs) in blockvals)
+    out = Dict{Int,Tuple{Float64,Float64}}()
+    for h in 0:23
+        qi = get(p95, ("imp", h ÷ 4), 0.0)
+        qe = get(p95, ("exp", h ÷ 4), 0.0)
+        out[h] = (round(qi, digits=1), round(qe, digits=1))
+    end
+    return out
+end
+
+# --- Firm-slice day cache (like _BOUNDARY_CAP_CACHE): trailing-window p-quantile
+# of the daily block-mean export flow. Keyed on (zone, day, flow_codes). --------
+const _BOUNDARY_FIRM_CACHE = Dict{Tuple{String,Date,String},Dict{Int,Float64}}()
+
+"""
+    get_boundary_firm(zone, book, day) -> Dict{Int,Float64}
+
+Per-UTC-hour FIRM export-demand slice (MW) for a `firm_slice` boundary book: the
+`firm_quantile` (p10) over the trailing `firm_window_days` days of the daily
+4h-block-MEAN gross EXPORT flow zone→counterparty. This is UA's demonstrated
+persistent import need — the level it takes on ~90% of recent days, structural
+(grid damage + deficit) rather than price-elastic, so it bids as a price-taker
+at the cap and does not curtail when the exporting zone's price spikes (the
+mechanism that kills the wave-2 HU March breach; sizing rationale in
+docs/experiments/cv22.md / build_inputs_refine.py). Window [D-firm_window_days-1,
+D-1), strictly pre-D-1. When the direction flips (June/July: UA exports to HU),
+the trailing p10 collapses to ~0 by itself and the book reverts to the pure
+elastic ladder.
+"""
+function get_boundary_firm(zone::String, book::BoundaryBook, day::Date)
+    ckey = (zone, day, join(book.flow_codes, ","))
+    cached = lock(_BOUNDARY_CAP_LOCK) do
+        get(_BOUNDARY_FIRM_CACHE, ckey, nothing)
+    end
+    cached === nothing || return cached
+    flows = _boundary_combined_flows(zone, book,
+        day - Day(book.firm_window_days + 1), day - Day(1))
+    # Daily 4h-block MEAN of the EXPORT flow, then the p-quantile over days.
+    byblockday = Dict{Tuple{Int,Date},Vector{Float64}}()
+    for ((dir, ts), v) in flows
+        dir == "exp" || continue
+        push!(get!(byblockday, (Dates.hour(ts) ÷ 4, Date(ts)), Float64[]), v)
+    end
+    blockday_mean = Dict{Tuple{Int,Date},Float64}(
+        k => sum(vs) / length(vs) for (k, vs) in byblockday)
+    byblock = Dict{Int,Vector{Float64}}()
+    for ((b, _), m) in blockday_mean
+        push!(get!(byblock, b, Float64[]), m)
+    end
+    firm = Dict{Int,Float64}()
+    for h in 0:23
+        vs = get(byblock, h ÷ 4, Float64[])
+        firm[h] = isempty(vs) ? 0.0 : round(quantile(vs, book.firm_quantile), digits=1)
+    end
+    lock(_BOUNDARY_CAP_LOCK) do
+        _BOUNDARY_FIRM_CACHE[ckey] = firm
+    end
+    return firm
 end
 
 """
@@ -168,6 +303,8 @@ function get_boundary_orders(book::BoundaryBook, zone::String, day::Date,
     timeslots::Vector{String}, resolution_minutes::Int, price_cap::Float64)
     anchor = book.anchor_mult * _boundary_anchor(book.anchor, day, zone)
     cap = get_boundary_capability(zone, book, day)
+    firm = book.firm_slice ? get_boundary_firm(zone, book, day) :
+           Dict{Int,Float64}()
     orders = SimpleOrder[]
     for ts in timeslots
         dt = parse_timeslot_to_datetime(ts, day)
@@ -182,8 +319,16 @@ function get_boundary_orders(book::BoundaryBook, zone::String, day::Date,
             end
         end
         if qe > 1.0                     # export demand: neighbor buys from us
+            # cv22 firm slice: a war-constrained importer's demonstrated
+            # persistent need bids as a price-taker at the cap (does not curtail
+            # on price); only the tail above it stays on the elastic ladder.
+            qf = book.firm_slice ? min(get(firm, h, 0.0), qe) : 0.0
+            qt = qe - qf
+            qf > 1.0 && push!(orders, SimpleOrder(:demand,
+                clamp(book.firm_price, 1.0, price_cap), qf, Symbol(zone), dt,
+                resolution_minutes))
             for (pm, share) in book.exp_ladder
-                q = qe * share
+                q = qt * share
                 q < 1.0 && continue
                 push!(orders, SimpleOrder(:demand, clamp(anchor * pm, 1.0, price_cap),
                     q, Symbol(zone), dt, resolution_minutes))

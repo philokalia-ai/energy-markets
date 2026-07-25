@@ -77,12 +77,16 @@ Any build error is turned into a failed `results` item so the day still
 completes (its token is released) instead of stalling the pipeline.
 """
 function pipeline_book_worker(bookwork::RemoteChannel, solvework::RemoteChannel,
-                              results::RemoteChannel, zones::Vector{String}, cfg)
+                              results::RemoteChannel, zones::Vector{String}, cfg,
+                              progress::Union{Nothing,RemoteChannel}=nothing)
     handled = 0
     while true
         job = take!(bookwork)
         job[1] === :stop && break
         handled += 1
+        # Report the day this worker is now processing so the coordinator can
+        # resubmit it if this process dies (#182 crash resilience).
+        progress === nothing || put!(progress, (myid(), :start, job[2]))
         if job[1] === :pass1
             (_, day, _t_feed) = job
             try
@@ -116,6 +120,7 @@ function pipeline_book_worker(bookwork::RemoteChannel, solvework::RemoteChannel,
                     err="pass-2 rebuild: " * sprint(showerror, e)))
             end
         end
+        progress === nothing || put!(progress, (myid(), :idle, job[2]))
     end
     return handled
 end
@@ -134,12 +139,15 @@ n_solves)` for the utilization summary. Each solver process reuses one
 persistent Gurobi env (SOLVER_ENV_CACHE) across all solves.
 """
 function pipeline_solver_worker(solvework::RemoteChannel, bookwork::RemoteChannel,
-                                results::RemoteChannel, cfg)
+                                results::RemoteChannel, cfg,
+                                progress::Union{Nothing,RemoteChannel}=nothing)
     busy = 0.0
     n = 0
     while true
         job = take!(solvework)
         job[1] === :stop && break
+        # Report the day being solved for crash-resubmit (#182).
+        progress === nothing || put!(progress, (myid(), :start, job[2]))
         if job[1] === :pass1
             (_, day, ob1, book_secs, t_build_done) = job
             waitq = time() - t_build_done
@@ -155,6 +163,7 @@ function pipeline_solver_worker(solvework::RemoteChannel, bookwork::RemoteChanne
                     put!(results, _result_failed(day; status=r1.status,
                         book_secs=book_secs, waitq_secs=waitq, solve1_secs=solve1_secs,
                         err="pass-1 solve produced no prices"))
+                    progress === nothing || put!(progress, (myid(), :idle, day))
                     continue
                 end
                 ai = mz_extract_anchor_inputs(ob1, r1;
@@ -194,6 +203,7 @@ function pipeline_solver_worker(solvework::RemoteChannel, bookwork::RemoteChanne
                     solve1_secs, rebuild_secs, 0.0))
             end
         end
+        progress === nothing || put!(progress, (myid(), :idle, job[2]))
     end
     return (busy, n)
 end
@@ -401,11 +411,74 @@ function run_pipelined_backfill(days, zones::Vector{String}=String[];
         bookwork = RemoteChannel(() -> Channel{Any}(cap))
         solvework = RemoteChannel(() -> Channel{Any}(cap))
         results = RemoteChannel(() -> Channel{Any}(cap))
+        # `progress` is sized so workers never block reporting (start/idle per
+        # job); the coordinator drains it continuously.
+        progress = RemoteChannel(() -> Channel{Any}(4 * (solver_workers + book_workers) + 8))
 
-        book_futs = [@spawnat p pipeline_book_worker(bookwork, solvework, results, zones, cfg)
+        book_futs = [@spawnat p pipeline_book_worker(bookwork, solvework, results, zones, cfg, progress)
                      for p in book_pids]
-        solver_futs = [@spawnat p pipeline_solver_worker(solvework, bookwork, results, cfg)
+        solver_futs = [@spawnat p pipeline_solver_worker(solvework, bookwork, results, cfg, progress)
                        for p in solver_pids]
+        # All futures ever spawned (originals + crash replacements), for the
+        # drain / utilization-stat collection.
+        all_book_futs = copy(book_futs)
+        all_solver_futs = copy(solver_futs)
+
+        # --- #182 crash resilience -----------------------------------------
+        # A HiGHS SIGSEGV (~3-4% of decomposed day-solves) kills a worker
+        # PROCESS, which a try/catch in the same process cannot catch — the retry
+        # must live at the coordinator (the layer that survives). Each worker
+        # reports (pid, :start/:idle, day) on `progress`; the coordinator tracks
+        # each worker's current day and, on a worker's death, resubmits its
+        # orphaned day (retry-once) and spawns a same-kind replacement (so the
+        # solver-process count == WLS session cap is preserved). Days are deduped
+        # at the writer, so a resubmit racing a late genuine result is harmless.
+        worker_day = Dict{Int,Union{Nothing,Date}}()
+        seen = Set{Date}()          # days that produced a (first) result
+        retried = Set{Date}()       # days resubmitted once after a crash
+        draining = Ref(false)
+        progress_reader = @async begin
+            while true
+                msg = take!(progress)
+                msg === :stop && break
+                pid, ev, day = msg
+                worker_day[pid] = ev === :start ? day : nothing
+            end
+        end
+        function monitor_worker(fut, pid, kind::Symbol)
+            @async begin
+                try; fetch(fut); catch; end     # resolves when the process exits
+                draining[] && return
+                d = get(worker_day, pid, nothing)
+                if d !== nothing && !(d in seen) && !(d in retried)
+                    push!(retried, d)
+                    @warn "pipeline $kind worker $pid died on $d — resubmitting (retry once)"
+                    @async put!(bookwork, (:pass1, d, time()))
+                elseif d !== nothing
+                    @warn "pipeline $kind worker $pid died on $d — already resulted/retried"
+                else
+                    @warn "pipeline $kind worker $pid died idle"
+                end
+                # Same-kind replacement so the pool (and WLS session count) is
+                # restored; keep watching it too.
+                try
+                    newp = (isempty(extract_env) ?
+                        addprocs(1; exeflags="--project=$proj") :
+                        addprocs(1; exeflags="--project=$proj", env=extract_env))[1]
+                    @everywhere [newp] @eval using Euphemia, Dates
+                    push!(ws, newp)
+                    nf = kind === :solver ?
+                        (@spawnat newp pipeline_solver_worker(solvework, bookwork, results, cfg, progress)) :
+                        (@spawnat newp pipeline_book_worker(bookwork, solvework, results, zones, cfg, progress))
+                    kind === :solver ? push!(all_solver_futs, nf) : push!(all_book_futs, nf)
+                    monitor_worker(nf, newp, kind)
+                catch e
+                    @error "failed to spawn replacement $kind worker" error=e
+                end
+            end
+        end
+        for (f, p) in zip(solver_futs, solver_pids); monitor_worker(f, p, :solver); end
+        for (f, p) in zip(book_futs, book_pids); monitor_worker(f, p, :book); end
 
         # Token semaphore: at most `in_flight` days between feed and save.
         tokens = Channel{Nothing}(in_flight)
@@ -419,9 +492,19 @@ function run_pipelined_backfill(days, zones::Vector{String}=String[];
             end
         end
 
-        # Writer (single, on coordinator).
-        for i in 1:N
+        # Writer (single, on coordinator). Loops until every UNIQUE day has a
+        # result (not a fixed N take!s) — a crash-resubmitted day produces a
+        # second result for a day already `seen`, which is ignored here (and
+        # never releases a second token, since the resubmit consumed none). This
+        # is what lets the coordinator survive a worker death without deadlock.
+        i = 0
+        while length(seen) < N
             r = take!(results)
+            if r.day in seen
+                continue                      # duplicate from a crash-resubmit
+            end
+            push!(seen, r.day)
+            i += 1
             put!(tokens, nothing)             # release for the next day
             total = r.book_secs + r.waitq_secs + r.solve1_secs + r.rebuild_secs + r.solve2_secs
             if r.ok && _usable(r.final)
@@ -484,11 +567,17 @@ function run_pipelined_backfill(days, zones::Vector{String}=String[];
         end
 
         wait(feeder)
-        # Drain: all days are through, so no real jobs remain. Send sentinels.
-        for _ in book_pids; put!(bookwork, (:stop,)); end
-        for _ in solver_pids; put!(solvework, (:stop,)); end
-        foreach(fetch, book_futs)
-        solver_futs = [fetch(f) for f in solver_futs]
+        # Drain. `draining` stops the crash supervisor from resubmitting/replacing
+        # on the clean shutdown exits below. The alive worker count is invariant
+        # under the supervisor (each death is matched by one replacement), so the
+        # original per-kind sentinel counts still match the live workers; dead
+        # workers' futures already resolved, so the tolerant fetch never blocks.
+        draining[] = true
+        for _ in 1:book_workers; put!(bookwork, (:stop,)); end
+        for _ in 1:solver_workers; put!(solvework, (:stop,)); end
+        for f in all_book_futs; try; fetch(f); catch; end; end
+        solver_futs = [(try; fetch(f); catch; (0.0, 0); end) for f in all_solver_futs]
+        put!(progress, :stop)
     finally
         rmprocs(ws)
         DATA_STORE[] == :duckdb &&

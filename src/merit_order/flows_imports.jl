@@ -329,6 +329,16 @@ function _v2_border_map(zone::String, day::Date)
     for (key, avg) in d7
         nordic_side(key[2]) && (mixed[key] = avg)
     end
+    # cv22 bug-fix (gated by EUPHEMIA_DISABLE_CV22): a Nordic-side border present
+    # in the climatology but MISSING its D-7 observation fell through BOTH loops
+    # above and was DELETED from the map — silently zeroing that border's ex-ante
+    # flow. Fall back to climatology instead (never delete). Only affects the
+    # EU-footprint :v2/:v3 path (SEE uses :d0). See docs/experiments/cv22.md.
+    if isempty(get(ENV, "EUPHEMIA_DISABLE_CV22", ""))
+        for (key, avg) in clim
+            (nordic_side(key[2]) && !haskey(mixed, key)) && (mixed[key] = avg)
+        end
+    end
     return mixed
 end
 

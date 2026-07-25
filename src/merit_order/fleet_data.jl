@@ -293,17 +293,38 @@ function get_reservoir_dryness(bidding_zone::String, day::Date)
     )
     (isempty(current) || ismissing(current.stored_energy_mwh[1])) && return nothing
 
-    norm = sql2df_with_retry(
-        """
-        SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY stored_energy_mwh) AS med
-        FROM entsoe.aggregated_hydro_storage_filling_rate
-        WHERE area_map_code = \$1 AND area_type_code LIKE 'BZN%'
-          AND stored_energy_mwh IS NOT NULL
-          AND year < \$2
-          AND week BETWEEN \$3 - 2 AND \$3 + 2
-        """,
-        [bidding_zone, iso_year, iso_week]
-    )
+    # cv22 bug-fix (gated by EUPHEMIA_DISABLE_CV22): `week BETWEEN $3-2 AND $3+2`
+    # does not wrap the ISO-week cycle, so weeks 1-2 / 52-53 lose their neighbors
+    # across the year boundary (e.g. iso_week=1 → BETWEEN -1 AND 3, missing weeks
+    # 51-52). Pass the ±2 neighbourhood as an explicit wrapped set (mod-52). Only
+    # differs from BETWEEN at ISO weeks 1/2/52/53 (Dec/Jan) — invisible to the
+    # mid-year confirm/guard windows; see docs/experiments/cv22.md.
+    if isempty(get(ENV, "EUPHEMIA_DISABLE_CV22", ""))
+        weeks = sort(unique(Int[mod1(iso_week + d, 52) for d in -2:2]))
+        norm = sql2df_with_retry(
+            """
+            SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY stored_energy_mwh) AS med
+            FROM entsoe.aggregated_hydro_storage_filling_rate
+            WHERE area_map_code = \$1 AND area_type_code LIKE 'BZN%'
+              AND stored_energy_mwh IS NOT NULL
+              AND year < \$2
+              AND week = ANY(\$3)
+            """,
+            [bidding_zone, iso_year, weeks]
+        )
+    else
+        norm = sql2df_with_retry(
+            """
+            SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY stored_energy_mwh) AS med
+            FROM entsoe.aggregated_hydro_storage_filling_rate
+            WHERE area_map_code = \$1 AND area_type_code LIKE 'BZN%'
+              AND stored_energy_mwh IS NOT NULL
+              AND year < \$2
+              AND week BETWEEN \$3 - 2 AND \$3 + 2
+            """,
+            [bidding_zone, iso_year, iso_week]
+        )
+    end
     (isempty(norm) || ismissing(norm.med[1]) || Float64(norm.med[1]) <= 0.0) && return nothing
 
     return clamp(1.0 - Float64(current.stored_energy_mwh[1]) / Float64(norm.med[1]), 0.0, 1.0)
@@ -329,6 +350,14 @@ water-value signal from fundamentals (reservoir physics), with no month dummies.
 function get_reservoir_drawdown(bidding_zone::String, day::Date)
     iso_week = Int(Dates.week(day))
     iso_year = year(day)
+    # cv22 bug-fix (gated by EUPHEMIA_DISABLE_CV22): the lower-bound disjunct
+    # `year > $2 - 2` admitted ALL of year Y-1 plus year Y up to the current
+    # week — a 52–104-week window, not the documented "preceding 52 weeks"
+    # ([(Y-1, iso_week) .. (Y, iso_week-1)]). It also made the second disjunct
+    # `(year = Y-1 AND week >= iso_week)` dead. `$2 - 1` restores the intended
+    # 52-week trailing window. Nordic reservoir-opportunity zones only; year-round
+    # effect (see docs/experiments/cv22.md).
+    lb = isempty(get(ENV, "EUPHEMIA_DISABLE_CV22", "")) ? 1 : 2
     df = sql2df_with_retry(
         """
         WITH hist AS (
@@ -337,7 +366,7 @@ function get_reservoir_drawdown(bidding_zone::String, day::Date)
           WHERE area_map_code = \$1 AND area_type_code LIKE 'BZN%'
             AND stored_energy_mwh IS NOT NULL
             AND (year < \$2 OR (year = \$2 AND week < \$3))
-            AND (year > \$2 - 2 OR (year = \$2 - 1 AND week >= \$3))
+            AND (year > \$2 - $lb OR (year = \$2 - 1 AND week >= \$3))
         )
         SELECT (SELECT stored_energy_mwh FROM hist ORDER BY year DESC, week DESC LIMIT 1) AS cur,
                (SELECT MAX(stored_energy_mwh) FROM hist) AS mx

@@ -64,6 +64,26 @@ Fields:
 
 `nothing` on a profile (every zone but DK1) ⇒ the mechanism is entirely dead
 code and the book is byte-identical.
+
+Additional fields (cv22, the UA firm-slice boundary treatment — a
+war-constrained scarcity buyer on the HU/SK/RO/PL–UA borders,
+docs/experiments/cv22.md):
+- `capability_mode` — how `get_boundary_capability` sizes the border:
+  `:atc_capped` (cv21/DK1: the day's offered DA explicit ATC capped at the
+  trailing-366d demonstrated max, p95 floor on ATC gaps) or `:p95_block`
+  (cv22/UA: the pure trailing-366d p95 gross flow per 4h block — the wave-1
+  Mechanism-A definition; UA explicit ATC is stale/absent and understates
+  realized flows ~4×, so the demonstrated-capability floor is used uniformly).
+- `firm_slice` — when `true`, the export-demand stack is split into a FIRM
+  cap-priced base slice (`firm_price`, a price-taker at the cap: the
+  war-constrained structural import that does not curtail on price) sized by
+  `get_boundary_firm` (trailing-`firm_window_days`-day `firm_quantile` of the
+  daily 4h-block-mean gross export flow zone→counterparty), plus the elastic
+  `exp_ladder` on the TAIL above it. `false` (DK1) ⇒ the whole export stack is
+  elastic (byte-identical to cv21).
+- `disable_env` — the env var whose non-empty value strips this book in
+  `get_zone_profile` (Viking: `EUPHEMIA_DISABLE_CV21`; UA: `EUPHEMIA_DISABLE_CV22`),
+  so each cv's byte-identity guard disables exactly its own books.
 """
 Base.@kwdef struct BoundaryBook
     counterparty::String
@@ -72,6 +92,12 @@ Base.@kwdef struct BoundaryBook
     anchor_mult::Float64 = 1.0
     imp_ladder::Vector{Tuple{Float64,Float64}}
     exp_ladder::Vector{Tuple{Float64,Float64}}
+    capability_mode::Symbol = :atc_capped
+    firm_slice::Bool = false
+    firm_price::Float64 = 2999.0
+    firm_window_days::Int = 28
+    firm_quantile::Float64 = 0.10
+    disable_env::String = "EUPHEMIA_DISABLE_CV21"
 end
 
 """
@@ -99,6 +125,48 @@ const VIKING_GB_BOOK = BoundaryBook(
     imp_ladder = [(1.00, 0.5), (1.15, 0.3), (1.30, 0.2)],
     exp_ladder = [(1.05, 0.5), (0.90, 0.5)],
 )
+
+"""
+    UA_BOOK(flow_codes)
+
+The Ukraine boundary book shipped in cv22 (roadmap item 1, the firm-slice
+refinement — docs/experiments/cv22.md + boundary-refine README). UA is modeled
+as a WAR-CONSTRAINED SCARCITY BUYER on the HU/SK/RO/PL–UA borders: on the import
+side it sells cheap surplus (nuclear/hydro marginal) into the footprint; on the
+export side it buys with a FIRM cap-priced base slice (its demonstrated
+persistent import need, which does not curtail on price — the mechanism that
+killed the wave-2 HU March breach) plus an elastic tail at gas parity and above.
+
+No UA fundamentals feed exists, so the anchor is `:zone_gas_srmc` (our OWN gas
+SRMC) — the documented wave-1 generic-anchor risk, accepted here because the
+firm slice, not the elastic anchor, does the load-bearing work. Import supply
+`0.55 × gas × [0.85, 1.00, 1.20]` (baked into `imp_ladder` with `anchor_mult=1`);
+export tail `gas × [1.20, 1.00]`; firm base = trailing-28-day p10 of the daily
+4h-block-mean gross export flow zone→UA (`get_boundary_firm`), price-taker at the
+cap. Capability = pure trailing-366d p95 gross flow per 4h block (`:p95_block`).
+
+Confirm 2026-07-24 (24-day A/B): HU July MAE 72.3→57.1 / corr 0.69→0.79; March
+MAE 28.24→28.29 (the breach dead); spillovers SK July eve bias −82→−73, SI July
+MAE 80.7→70.1. Accepted residuals: HU March evening MAE 29.2→33.0, RO/BG March
+~+1. PL additionally carries the UA_DobTPP radial in its flow codes.
+"""
+UA_BOOK(flow_codes::Vector{String}=["UA"]) = BoundaryBook(
+    counterparty = "UA",
+    flow_codes = flow_codes,
+    anchor = :zone_gas_srmc,
+    anchor_mult = 1.0,
+    # 0.55 × gas × [0.85, 1.00, 1.20] baked in (anchor_mult = 1.0).
+    imp_ladder = [(0.55 * 0.85, 0.5), (0.55 * 1.00, 0.3), (0.55 * 1.20, 0.2)],
+    exp_ladder = [(1.20, 0.5), (1.00, 0.5)],
+    capability_mode = :p95_block,
+    firm_slice = true,
+    firm_price = 2999.0,
+    firm_window_days = 28,
+    firm_quantile = 0.10,
+    disable_env = "EUPHEMIA_DISABLE_CV22",
+)
+const UA_BOOK_DEFAULT = UA_BOOK(["UA"])            # HU / SK / RO
+const UA_BOOK_PL = UA_BOOK(["UA", "UA_DobTPP"])    # PL adds the Dobrotvir radial
 
 # =============================================================================
 # ZONE PROFILES — per-region bid-construction calibration
@@ -693,8 +761,13 @@ const ZONE_PROFILES = Dict{String,ZoneProfile}(
     # cluster keeps capping without HU's backstop, and the scarcity credit is
     # the mechanism the P2 bias-drift caution lacked. SI moves to the
     # Slovakia treatment (cv17): AT–SI drop + :hydro anchor + backstop.
-    "GR" => SEE_PROFILE, "BG" => SEE_PROFILE, "RO" => ROMANIA_PROFILE,
-    "RS" => SERBIA_PROFILE, "HU" => HUNGARY_PROFILE, "SI" => SLOVENIA_PROFILE,
+    # RO/HU add the cv22 UA firm-slice boundary book on top of their cv17
+    # backstop (UA is excluded from injections + backstop headroom by the book).
+    "GR" => SEE_PROFILE, "BG" => SEE_PROFILE,
+    "RO" => with_profile(ROMANIA_PROFILE; boundary_book = UA_BOOK_DEFAULT),
+    "RS" => SERBIA_PROFILE,
+    "HU" => with_profile(HUNGARY_PROFILE; boundary_book = UA_BOOK_DEFAULT),
+    "SI" => SLOVENIA_PROFILE,
     # Iberia
     "ES" => IBERIA_PROFILE, "PT" => IBERIA_PROFILE,
     # Italy sub-zones (IT-CNORTH: + cv17 import backstop). cv18: the mainland
@@ -740,10 +813,13 @@ const ZONE_PROFILES = Dict{String,ZoneProfile}(
     "DE_LU" => CONTINENTAL_PROFILE,
     # BE: dropped Core borders + :hydro anchor for import pricing (iter5)
     "BE" => BELGIUM_PROFILE, "NL" => CONTINENTAL_PROFILE,
-    "PL" => CONTINENTAL_PROFILE, "CZ" => CONTINENTAL_PROFILE,
+    # PL/SK carry the cv22 UA firm-slice boundary book (PL adds the UA_DobTPP
+    # radial to its flow codes); CZ/DE_LU/NL stay on plain CONTINENTAL.
+    "PL" => with_profile(CONTINENTAL_PROFILE; boundary_book = UA_BOOK_PL),
+    "CZ" => CONTINENTAL_PROFILE,
     # SK: dropped Core import borders (CZ–SK, PL–SK) + :hydro anchor for import
     # pricing (iter6) — the HU treatment applied to SK's own residual borders
-    "SK" => SLOVAKIA_PROFILE,
+    "SK" => with_profile(SLOVAKIA_PROFILE; boundary_book = UA_BOOK_DEFAULT),
 )
 
 """
@@ -766,12 +842,14 @@ function get_zone_profile(zone::AbstractString)
         p = with_profile(p; unit_srmc_spread=0.0,
                          export_absorption_steps=Tuple{Float64,Float64}[])
     end
-    # cv21 boundary-book kill-switch (byte-identity guard + attribution A/Bs):
-    # EUPHEMIA_DISABLE_CV21 strips the boundary book so the EU book with the
-    # mechanism disabled is bit-identical to unmodified main. Travels via ENV
-    # for the same worker-safety reason as EUPHEMIA_DISABLE_CV18. Any non-empty
-    # value disables (there is one boundary book in cv21).
-    if p.boundary_book !== nothing && !isempty(get(ENV, "EUPHEMIA_DISABLE_CV21", ""))
+    # Boundary-book kill-switch (byte-identity guard + attribution A/Bs): each
+    # book names the env var that strips it (`disable_env`) — Viking →
+    # EUPHEMIA_DISABLE_CV21, the UA books → EUPHEMIA_DISABLE_CV22 — so each cv's
+    # guard disables exactly its own books (the cv22 guard leaves Viking ON,
+    # matching cv21 main). Travels via ENV for the same worker-safety reason as
+    # EUPHEMIA_DISABLE_CV18. Any non-empty value disables.
+    if p.boundary_book !== nothing &&
+       !isempty(get(ENV, p.boundary_book.disable_env, ""))
         p = with_profile(p; boundary_book=nothing)
     end
     return p
