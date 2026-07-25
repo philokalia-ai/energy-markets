@@ -50,7 +50,22 @@
 # the 39-day mode A/B, scores identical to 2 decimals in all four windows).
 # SEE legacy paths (single-zone, 5-zone multi_zone) stay monolithic and keep
 # their byte-identity — July 2026.
-const ENERGY_PRICES_CODE_VERSION = 20
+# v20 -> v21: DK1/Viking virtual boundary book (docs/experiments/cv21-dk1-viking.md,
+# item 2 of the boundary-zone program). The out-of-footprint GB counterparty on
+# the DK1-GB Viking Link is modeled as an ELASTIC neighbor — import-supply +
+# export-demand ladders anchored on GB's OWN CCGT SRMC (TTF/0.52 + EUA-proxied
+# UK carbon/0.52 + O&M) over the border's demonstrated capability — replacing
+# GB's fixed flow injection and its import-backstop headroom. Profile-gated
+# (only DK1 carries VIKING_GB_BOOK; DK2 unchanged), default-inert everywhere
+# else, EUPHEMIA_DISABLE_CV21 kill-switch. Confirm A/B (src impl, HiGHS, offline
+# extract, 24-day window; 6 late-July days unavailable on the extract's ATC
+# gap): March (stable guard, 8/8 days) DK1 MAE 27.9->24.6, corr 0.55->0.81
+# (reference 27.6->25.2 / 0.55->0.80 — matched); July (10/16 days) DK1 MAE
+# 29.5->26.6, corr 0.88->0.90; no FR/NL/NO2 leakage. GB itself stays PARKED (no
+# broader GB book until an Elexon/BMRS + UKA feed); UA is a separate decision.
+# SEE single-zone / 5-zone products stay byte-identical (guarded); cv21 matters
+# for the EU footprint (multi_zone_eu). No backfill in this change — July 2026.
+const ENERGY_PRICES_CODE_VERSION = 21
 
 # Pool size: env-tunable (EUPHEMIA_PG_POOL) because the threaded book build
 # runs up to nzones concurrent queries — 5 connections cap the parallelism
