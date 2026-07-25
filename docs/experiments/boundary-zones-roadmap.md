@@ -48,7 +48,7 @@ iteration plan.
 
 | # | item | gate | status |
 |---|---|---|---|
-| 1 | **UA treatment, firm-slice refinement** — war-constrained scarcity buyer: firm cap-priced base slice + elastic tail (fixes the HU March breach) | re-pass the same 24-day A/B, no March breach | prototype ready (wave-2) |
+| 1 | **UA treatment, firm-slice refinement** — war-constrained scarcity buyer: firm cap-priced base slice + elastic tail (fixes the HU March breach) | re-pass the same 24-day A/B, no March breach | **SHIPPED cv22** (docs/experiments/cv22.md) |
 | 2 | **DK1/Viking cherry-pick** — the GB arm's one clean winner (July eve −70.6→−48.4; March MAE 27.1→24.9, corr 0.60→0.83) | DK1-scoped confirm on both windows | **SHIPPED cv21** (docs/experiments/cv21-dk1-viking.md) |
 | 3 | **AL/MK/ME/HR endogenization** ("iteration-9") — real books from real data; extends the footprint to 43 zones | standard footprint gates + SEE guard | data inventory done |
 | 4 | **TR fundamental anchor** — EPİAŞ/EXIST transparency ETL (MCP, load, generation; administered BOTAŞ gas pricing) | wave-1 A/B re-run, March guard clean | needs new ETL |
@@ -78,6 +78,15 @@ July-failure + March-stable windows, scored on realized prices;
 PARKED** until the Elexon/BMRS + UKA ETL exists — no GB behavioral book
 ships in the interim. ua2 stays measured-and-available as a separate
 ship/no-ship decision alongside DK1.
+
+**SHIPPED cv22 (2026-07-25).** UA firm-slice (item 1) ported to src as a
+first-class, profile-gated `BoundaryBook` (`UA_BOOK_DEFAULT` on HU/SK/RO,
+`UA_BOOK_PL` on PL) following the cv21 Viking pattern — `:p95_block` capability
+and the `firm_slice` export mechanism computed at RUNTIME (reproducing the
+experiment's `firm_ua.json`/`capability_w2.json` exactly on the confirm days, so
+they generalize to every backfill day), `EUPHEMIA_DISABLE_CV22` kill-switch.
+Shipped alongside four confirmed price bug-fixes (`docs/experiments/cv22.md`).
+GB (item 5) stays PARKED; iter9/43-zones (item 3) deferred to cv23.
 
 **SHIPPED cv21 (2026-07-25).** DK1/Viking ported to src as a first-class,
 profile-gated `BoundaryBook` (`VIKING_GB_BOOK` on `DK1_PROFILE`; the wave-2

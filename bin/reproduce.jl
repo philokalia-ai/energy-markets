@@ -100,6 +100,12 @@ end
 function clear_multi_zone(zones::Vector{String}, days; order_method::Symbol, optimizer::String)
     println("\n▶ Multi-zone EU ($(length(zones)) zones): $(first(days)) .. $(last(days))  ($(length(days)) days)")
     ok = 0
+    # #182: a HiGHS SIGSEGV during a solve kills THIS process — a try/catch here
+    # cannot catch a same-process segfault, so a crashed day is simply lost.
+    # Recovery for this sequential path is the resume flag: re-running the same
+    # range skips already-saved days and re-solves the lost one. The crash-retry
+    # itself lives in the PIPELINED path (run_pipelined_backfill, --pipeline),
+    # which the full-year backfill uses and where a worker death is survivable.
     for d in days
         try
             res = run_multi_zone_market_clearing(d; zones=zones, order_method=order_method,

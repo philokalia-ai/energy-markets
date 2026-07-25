@@ -242,18 +242,41 @@ function create_transfer_capacity_from_entsoe(date::Date, bidding_zones::Vector{
     zone_filter = isempty(bidding_zones) ? "" :
                   "AND (out_map_code IN ('" * join(bidding_zones, "','") * "') OR in_map_code IN ('" * join(bidding_zones, "','") * "'))"
 
-    query = """
-    SELECT
-        out_map_code as source_zone,
-        in_map_code as sink_zone,
-        EXTRACT(HOUR FROM date_time_utc) + 1 as time_period,
-        capacity_mw as capacity
-    FROM entsoe.offered_transfer_capacities_implicit
-    WHERE date_time_utc >= (\$1::date::timestamp AT TIME ZONE 'UTC')
-          AND date_time_utc < ((\$1::date + 1)::timestamp AT TIME ZONE 'UTC')
-    $zone_filter
-    ORDER BY out_map_code, in_map_code, date_time_utc
-    """
+    # cv22 bug-fix (gated by EUPHEMIA_DISABLE_CV22): when the implicit table
+    # carries MULTIPLE capacity rows for the same border-hour (sub-hourly or
+    # duplicate sequences), the raw SELECT + `build_transfer_capacity_from_dataframe`
+    # kept whichever row sorted LAST by date_time_utc — order-dependent and
+    # non-deterministic. Aggregate to one hourly AVG per (source, sink, hour),
+    # matching the enriched path's `_fetch_atc_aggregated`. This deliberately
+    # ENDS the SEE 5-zone byte-identity chain (unbroken since cv10); the delta is
+    # tiny/zero on days without duplicate rows (see docs/experiments/cv22.md).
+    if isempty(get(ENV, "EUPHEMIA_DISABLE_CV22", ""))
+        query = """
+        SELECT out_map_code AS source_zone,
+               in_map_code AS sink_zone,
+               (EXTRACT(HOUR FROM date_time_utc) + 1)::int AS time_period,
+               AVG(capacity_mw)::float8 AS capacity
+        FROM entsoe.offered_transfer_capacities_implicit
+        WHERE date_time_utc >= (\$1::date::timestamp AT TIME ZONE 'UTC')
+              AND date_time_utc < ((\$1::date + 1)::timestamp AT TIME ZONE 'UTC')
+              AND capacity_mw IS NOT NULL
+        $zone_filter
+        GROUP BY out_map_code, in_map_code, (EXTRACT(HOUR FROM date_time_utc) + 1)::int
+        """
+    else
+        query = """
+        SELECT
+            out_map_code as source_zone,
+            in_map_code as sink_zone,
+            EXTRACT(HOUR FROM date_time_utc) + 1 as time_period,
+            capacity_mw as capacity
+        FROM entsoe.offered_transfer_capacities_implicit
+        WHERE date_time_utc >= (\$1::date::timestamp AT TIME ZONE 'UTC')
+              AND date_time_utc < ((\$1::date + 1)::timestamp AT TIME ZONE 'UTC')
+        $zone_filter
+        ORDER BY out_map_code, in_map_code, date_time_utc
+        """
+    end
 
     println("📊 Fetching ENTSO-E transfer capacity data for $date...")
     df = safe_sql2df(query, [date])
