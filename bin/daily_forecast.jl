@@ -75,7 +75,8 @@
 using Euphemia, Dates, Statistics, LibPQ, DataFrames, DuckDB
 
 include(joinpath(@__DIR__, "forecast_common.jl"))
-include(joinpath(@__DIR__, "weather_res.jl"))   # guarded main; pure helpers + open-meteo fetch
+include(joinpath(@__DIR__, "weather_res.jl"))    # guarded main; pure helpers + open-meteo fetch
+include(joinpath(@__DIR__, "weather_load.jl"))   # guarded main; load model (features + fetch + predict)
 
 const OPTIMIZER = get(ENV, "OPTIMIZER", "highs")
 const INPUT_MODE = let m = lowercase(get(ENV, "INPUT_MODE", "entsoe"))
@@ -86,6 +87,12 @@ end
 const MAX_LEAD_DAYS = parse(Int, get(ENV, "MAX_LEAD_DAYS", "7"))
 const FORCE_RERUN = lowercase(get(ENV, "FORCE_RERUN", "false")) == "true"
 const SKIP_CLEAR = lowercase(get(ENV, "SKIP_CLEAR", "false")) == "true"
+# Per-zone eligibility fill: when a zone's ENTSO-E 6.1.B day-ahead load is
+# missing/short for the window, predict its hourly load with the committed model
+# (bin/weather_load.jl + bin/load_models_v1.json) so the day stays eligible and
+# the other zones are not thrown away. Default ON; LOAD_FILL=false reverts to the
+# pre-fill eligibility (a missing load zone skips the whole day) with no rollback.
+const LOAD_FILL = lowercase(get(ENV, "LOAD_FILL", "true")) == "true"
 const CLEARING_MODE = get(ENV, "CLEARING_MODE", "multi_zone_eu")
 const ZONES = let z = [String(strip(s)) for s in split(get(ENV, "ZONES", ""), ",") if !isempty(strip(s))]
     isempty(z) ? FORECAST_FOOTPRINT : z
@@ -156,11 +163,12 @@ Zones already present in the (market_date, lead_days, input_mode) slice — at
 ANY code_version (cv-agnostic no-clobber: a slice frozen under an earlier
 code_version must never be rewritten by a later one).
 """
-function existing_forecast_zones(market_date::Date, lead_days::Int)
+function existing_forecast_zones(market_date::Date, lead_days::Int,
+                                 input_mode::String=INPUT_MODE)
     df = Euphemia.sql2df_with_retry("""
         SELECT DISTINCT bidding_zone AS z FROM simulations.forecast_prices
         WHERE market_date = \$1 AND lead_days = \$2 AND input_mode = \$3
-    """, [market_date, lead_days, INPUT_MODE])
+    """, [market_date, lead_days, input_mode])
     return Set{String}(String.(df.z))
 end
 
@@ -217,7 +225,8 @@ function flush_books!(books::Dict, market_date::Date)
 end
 
 function write_forecast!(market_date::Date, lead_days::Int, prediction_made::DateTime,
-                         zone_hourly::Dict{String,Dict{DateTime,Float64}})
+                         zone_hourly::Dict{String,Dict{DateTime,Float64}},
+                         input_mode::String=INPUT_MODE)
     latest_actual = latest_actual_load_date()
     assert_unrealized(market_date, latest_actual)   # HARD GUARD (day level)
     for (_, hourly) in zone_hourly                  # HARD GUARD (hour level)
@@ -235,7 +244,7 @@ function write_forecast!(market_date::Date, lead_days::Int, prediction_made::Dat
             LibPQ.execute(cnx, """
                 DELETE FROM simulations.forecast_prices
                 WHERE market_date = \$1 AND lead_days = \$2 AND input_mode = \$3
-            """, [market_date, lead_days, INPUT_MODE])
+            """, [market_date, lead_days, input_mode])
             for (zone, hourly) in zone_hourly
                 for (h, price) in sort!(collect(hourly); by=first)
                     LibPQ.execute(cnx, """
@@ -246,7 +255,7 @@ function write_forecast!(market_date::Date, lead_days::Int, prediction_made::Dat
                         VALUES (\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8, \$9)
                     """, Any[market_date, tstz(h), zone, price,
                              tstz(prediction_made), lead_days, CLEARING_MODE, CV,
-                             INPUT_MODE])
+                             input_mode])
                     n_inserted += 1
                 end
             end
@@ -291,7 +300,8 @@ prediction as price-taker supply orders (€1/MWh) per timeslot. Sub-hourly
 slots use the hour's predicted MW as the LEVEL (no division). Zero/negative
 predictions inject no order.
 """
-function weather_scenario(preds::Dict{String,Dict{DateTime,Float64}})
+function weather_scenario(preds::Dict{String,Dict{DateTime,Float64}};
+                          load_fill_fn::Union{Nothing,Function}=nothing)
     zero_res = (ts, mw) -> 0.0
     scenario = Dict{String,Euphemia.ZoneScenario}()
     for zone in ZONES
@@ -308,9 +318,104 @@ function weather_scenario(preds::Dict{String,Dict{DateTime,Float64}})
             orders
         end
         scenario[zone] = Euphemia.ZoneScenario(renewable_modifier=zero_res,
-                                               extra_orders=extra)
+                                               extra_orders=extra,
+                                               load_fill=load_fill_fn)
     end
     return scenario
+end
+
+# ---------------------------------------------------------------------------
+# Per-zone eligibility LOAD FILL (bin/weather_load.jl).
+#
+# When a zone's ENTSO-E day-ahead load is missing/short for a candidate market
+# day, predict its hourly load from the committed model so the day stays
+# eligible. The prediction covers the whole candidate UTC span; the
+# `load_fill` book hook (src/merit_order/book_build.jl) MERGES it into each
+# zone's load, filling ONLY the hours the TSO did not publish — a present TSO
+# hour is never overridden. Zones with a full TSO forecast are never predicted,
+# so their books are byte-identical to a no-fill run.
+# ---------------------------------------------------------------------------
+
+"""
+Predict hourly load (MW) for each `zones_to_fill` zone over UTC days
+`first_utc`..`last_utc`, using the load-model `pack` and open-meteo forecast
+weather (fetched from `first_utc - 2` for the trailing-48h feature). Returns
+`zone => (hour::DateTime → MW)`; a zone is omitted if it has no pack entry or no
+weather could be fetched (the caller then keeps that zone's day INELIGIBLE —
+never a silent flat/persistence fallback).
+"""
+function build_load_fills(pack, zones_to_fill::Vector{String},
+                          first_utc::Date, last_utc::Date)
+    fill_pred = Dict{String,Dict{DateTime,Float64}}()
+    isempty(zones_to_fill) && return fill_pred
+    hours = collect(DateTime(first_utc):Hour(1):DateTime(last_utc) + Hour(23))
+    fetch_dates = collect((first_utc - Day(2)):Day(1):last_utc)
+    for zone in zones_to_fill
+        zm = get(pack["zones"], zone, nothing)
+        if zm === nothing
+            println("  ⚠️ load-fill: $zone has no model in the pack — cannot fill (day stays ineligible)")
+            continue
+        end
+        cells = [(Float64(c[1]), Float64(c[2])) for c in zm["cities"]]
+        weather = try
+            fetch_load_weather(cells, fetch_dates)
+        catch e
+            e isa InterruptException && rethrow()
+            println("  ⚠️ load-fill: $zone weather fetch failed ($(sprint(showerror, e))) — cannot fill")
+            continue
+        end
+        pred = predict_load(pack, zone, hours, weather)
+        if isempty(pred)
+            println("  ⚠️ load-fill: $zone produced no hours (weather gaps) — cannot fill")
+            continue
+        end
+        fill_pred[zone] = pred
+        println("  🩹 load-fill: $zone model load ready ($(length(pred))h over " *
+                "$(first_utc)..$(last_utc))")
+    end
+    return fill_pred
+end
+
+"""
+Book hook `load_fill(zone, utc_day) -> Union{Nothing,Dict{String,Float64}}` over a
+precomputed `fill_pred` (zone → hour → MW). Returns the UTC day's timeslot→MW
+slice for a predicted zone, or `nothing` (no fill) for any other zone/day. Stable
+and order-independent, so the shared UTC-day clear cache is never contaminated.
+"""
+function make_load_fill_fn(fill_pred::Dict{String,Dict{DateTime,Float64}})
+    isempty(fill_pred) && return nothing
+    return (zone, day) -> begin
+        zp = get(fill_pred, String(zone), nothing)
+        zp === nothing && return nothing
+        slots = Dict{String,Float64}()
+        for t in DateTime(day):Hour(1):(DateTime(day) + Hour(23))
+            mw = get(zp, t, nothing)
+            mw === nothing && continue
+            slots[Dates.format(t, "yyyymmdd-HHMM")] = mw
+        end
+        isempty(slots) ? nothing : slots
+    end
+end
+
+"""
+Zones short (< `min_hours` TSO load hours) on this market day's window that the
+fill CAN cover (`fill_pred` has the zone and it spans every expected window
+hour). These are exactly the zones exempted in the eligibility gate and merged
+in the clear; a short zone the model cannot cover is NOT returned (day stays
+ineligible).
+"""
+function fillable_for_day(day::Date, load_hours::Dict{String,Int},
+                          fill_pred::Dict{String,Dict{DateTime,Float64}};
+                          min_hours::Int=20)
+    expected = expected_market_day_hours(day)
+    out = Set{String}()
+    for zone in ZONES
+        get(load_hours, zone, 0) < min_hours || continue
+        zp = get(fill_pred, zone, nothing)
+        zp === nothing && continue
+        all(h -> haskey(zp, h), expected) && push!(out, zone)
+    end
+    return out
 end
 
 """
@@ -368,7 +473,7 @@ function main()
             (INPUT_MODE == "weather" ?
              "(EX-ANTE track: RES from raw weather, ENTSO-E RES gate removed)" :
              "(reference track: ENTSO-E D-1 load + wind/solar forecasts)"))
-    println("  force_rerun=$FORCE_RERUN  skip_clear=$SKIP_CLEAR")
+    println("  force_rerun=$FORCE_RERUN  skip_clear=$SKIP_CLEAR  load_fill=$LOAD_FILL")
     println("  delivery day = Europe/Athens market day (two UTC-day solves, stitched)")
     ZONES != FORECAST_FOOTPRINT &&
         println("  ⚠️ ZONES override active ($(join(ZONES, ","))) — testing footprint, not the 39-zone product")
@@ -421,17 +526,63 @@ function main()
         println("RES baseline (Athens day $latest_actual): $(length(res_required))/$(length(ZONES)) zones with wind/solar forecast")
     end
 
+    # Per-day TSO load-hours, computed once and reused by the fill pre-pass and
+    # the market-day loop (one query per candidate day either way).
+    day_load_hours = Dict{Date,Dict{String,Int}}()
+    for day in first_candidate:Day(1):last_candidate
+        w0, w1 = athens_market_day_window(day)
+        day_load_hours[day] = load_forecast_hours(w0, w1, ZONES)
+    end
+
+    # ── Eligibility LOAD FILL pre-pass ──────────────────────────────────────
+    # Zones short on ANY candidate day are predicted ONCE over the whole UTC
+    # span, so the `load_fill` book hook is stable and the shared UTC-day clear
+    # cache is never contaminated. Zones the model cannot cover keep their day
+    # ineligible (no silent fallback). LOAD_FILL=false disables this entirely.
+    fill_pred = Dict{String,Dict{DateTime,Float64}}()
+    if LOAD_FILL
+        load_pack = load_load_models()
+        if load_pack === nothing
+            println("⚠️ LOAD_FILL on but no load pack at $(default_load_models_path()) — " *
+                    "run bin/fit_load_models.jl; falling back to no-fill eligibility this run")
+        else
+            short_union = String[]
+            for (_, lh) in day_load_hours, z in ZONES
+                (get(lh, z, 0) < 20 && !(z in short_union)) && push!(short_union, z)
+            end
+            if isempty(short_union)
+                println("LOAD FILL: no short zones across candidate days — nothing to fill")
+            else
+                println("LOAD FILL: $(length(short_union)) short zone(s) across candidate days " *
+                        "($(join(sort(short_union), ","))) — predicting model load ...")
+                t0 = time()
+                fill_pred = build_load_fills(load_pack, sort(short_union),
+                                             first_candidate - Day(1), last_candidate)
+                println("LOAD FILL: model load ready for $(length(fill_pred))/$(length(short_union)) " *
+                        "zone(s) in $(round(time() - t0, digits=1))s")
+            end
+        end
+    else
+        println("LOAD FILL: disabled (LOAD_FILL=false) — a short load zone skips the whole day")
+    end
+    load_fill_fn = make_load_fill_fn(fill_pred)
+
     # Weather track: fetch weather + predict per-zone RES ONCE for the whole
     # candidate window (both UTC days of each Athens market day), then thread
-    # it into every clear as a per-zone scenario.
+    # it into every clear as a per-zone scenario. The load-fill hook rides on
+    # the same per-zone ZoneScenario (built for the entsoe track too when any
+    # zone needs filling).
     scenario = nothing
     if INPUT_MODE == "weather" && !SKIP_CLEAR
         println("Fetching open-meteo weather + predicting RES for UTC days " *
                 "$(first_candidate - Day(1)) .. $last_candidate ...")
         t0 = time()
         preds = build_weather_predictions(first_candidate - Day(1), last_candidate)
-        scenario = weather_scenario(preds)
+        scenario = weather_scenario(preds; load_fill_fn=load_fill_fn)
         println("Weather RES ready for $(length(preds)) zones in $(round(time() - t0, digits=1))s")
+    elseif load_fill_fn !== nothing && !SKIP_CLEAR
+        scenario = Dict{String,Euphemia.ZoneScenario}(
+            zone => Euphemia.ZoneScenario(load_fill=load_fill_fn) for zone in ZONES)
     end
 
     # UTC-day clear cache: market days D and D+1 share the UTC-day-D solve.
@@ -446,19 +597,29 @@ function main()
         println("ATHENS MARKET DAY $day (lead_days=$lead, window $w0 → $w1 UTC, " *
                 "$(length(expected))h)")
 
-        load_hours = load_forecast_hours(w0, w1, ZONES)
+        load_hours = day_load_hours[day]
         res_present = res_forecast_zones(w0, w1, ZONES)
         atc_rows = atc_row_count(w0, w1, ZONES)
+        fillable = fillable_for_day(day, load_hours, fill_pred)
         eligible, reason = eligibility_verdict(ZONES, load_hours, res_required,
-                                               res_present, atc_rows)
+                                               res_present, atc_rows;
+                                               load_fill_zones=fillable)
+        # Filled days are their OWN provenance slice/track: input_mode carries a
+        # "+loadfill" suffix so bin/score_forecasts.jl keeps them separate from
+        # the pure-ENTSO-E track record (no pollution) and the no-clobber slice
+        # identity never mixes a filled vintage with an unfilled one.
+        day_mode = isempty(fillable) ? INPUT_MODE : INPUT_MODE * "+loadfill"
         println("  VERDICT: $(eligible ? "ELIGIBLE ✅" : "INELIGIBLE ⛔") — $reason")
+        !isempty(fillable) && eligible &&
+            println("  🩹 load-filled zone(s): $(join(sort(collect(fillable)), ",")) " *
+                    "(input_mode=$day_mode)")
         eligible || continue
 
         if !FORCE_RERUN
-            present = existing_forecast_zones(day, lead)
+            present = existing_forecast_zones(day, lead, day_mode)
             if issubset(Set(ZONES), present)
                 println("  already predicted: all $(length(ZONES)) zones present for " *
-                        "(market_date=$day, lead_days=$lead, mode=$INPUT_MODE) at some " *
+                        "(market_date=$day, lead_days=$lead, mode=$day_mode) at some " *
                         "code_version — skipping (FORCE_RERUN=true to rewrite)")
                 continue
             elseif !isempty(present)
@@ -502,7 +663,7 @@ function main()
             continue
         end
 
-        n = write_forecast!(day, lead, prediction_made, zone_hourly)
+        n = write_forecast!(day, lead, prediction_made, zone_hourly, day_mode)
         n_predicted += n
         # Books captured during this market day's clears — freeze them next
         # to the vintage (only after the forecast wrote, so a refused write
@@ -515,7 +676,7 @@ function main()
             @warn "book export failed (forecast unaffected)" day error = sprint(showerror, e)
         end
         println("  ✅ DAY $day — wrote $n forecast rows across $(length(zone_hourly)) " *
-                "zone(s) ($(length(expected))h each; lead_days=$lead, cv=$CV, mode=$INPUT_MODE)")
+                "zone(s) ($(length(expected))h each; lead_days=$lead, cv=$CV, mode=$day_mode)")
         for z in ("GR", "DE_LU", "FR", "IT-NORTH", "NO2")
             haskey(zone_hourly, z) || continue
             p = collect(values(zone_hourly[z]))

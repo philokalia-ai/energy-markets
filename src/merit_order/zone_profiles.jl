@@ -801,6 +801,13 @@ Fields (see `create_merit_order_book`'s "Scenario hooks" docstring for the exact
   remove / derate physical units. Runs AFTER fleet completion/truthing (see the
   `fleet_modifier` note in `create_merit_order_book`), so a removed unit is not
   silently re-added by the `:installed`/p95 truth-up.
+- `load_fill(zone, day::Date) -> Union{Nothing,Dict{String,Float64}}` — SEED the
+  zone's load series (timeslot `"yyyymmdd-HHMM"` → MW) when the TSO day-ahead
+  load is absent. Used by the daily-forecast eligibility fill
+  (`bin/daily_forecast.jl`): a returned non-empty dict REPLACES the DB load for
+  that zone/day; `nothing` (default) leaves the DB load untouched (byte-identical).
+  Unlike `load_modifier` (which only reshapes existing entries), this can provide
+  load for a zone the TSO never published — the whole point of the fill.
 
 The `extra_orders` and `strategist` `ctx` both carry `ctx.zone`, so a single
 scenario object applied to a whole footprint can gate its edits on the zone
@@ -814,6 +821,7 @@ Base.@kwdef struct ZoneScenario
     extra_orders::Union{Nothing,Function} = nothing
     strategist::Union{Nothing,Function} = nothing
     fleet_modifier::Union{Nothing,Function} = nothing
+    load_fill::Union{Nothing,Function} = nothing
 end
 
 """
@@ -827,7 +835,7 @@ is_empty_scenario(::Nothing) = true
 is_empty_scenario(s::ZoneScenario) =
     s.load_modifier === nothing && s.renewable_modifier === nothing &&
     s.extra_orders === nothing && s.strategist === nothing &&
-    s.fleet_modifier === nothing
+    s.fleet_modifier === nothing && s.load_fill === nothing
 
 """
     zone_scenario(scenario, zone) -> Union{Nothing,ZoneScenario}

@@ -1,5 +1,33 @@
 # D-n load model: full model predictions at leads 2..7 (July 2026)
 
+> **Productionized as the daily-forecast eligibility LOAD FILL (2026-07-25).**
+> The load model is now a per-zone eligibility fallback in `bin/daily_forecast.jl`.
+> Motivation (measured): the daily run requires the ENTSO-E 6.1.B D-1 load
+> forecast for ALL 39 footprint zones; a run that found LT/SI/CH missing/short
+> declared the day INELIGIBLE and threw away the 36 complete zones. The fill
+> predicts a zone's hourly load with the committed model **only when its TSO
+> forecast is missing/short**, so the day stays eligible.
+>
+> Shipped:
+> - `bin/fit_load_models.jl` → committed pack `bin/load_models_v1.json` (39
+>   footprint zones, per-zone ridge, ERA5-archive-trained; refit instructions in
+>   the script header — annual/quarterly cadence).
+> - `bin/weather_load.jl` — shared feature construction (207 features, identical
+>   to this prototype) + open-meteo fetch + `predict_load`; unit-tested pure in
+>   `test/test_weather_load.jl`.
+> - `load_fill` book hook (`src/merit_order/book_build.jl` + `ZoneScenario`):
+>   **merges** model load into a zone's series, filling ONLY hours the TSO did
+>   not publish — a present TSO hour is never overridden.
+> - `bin/daily_forecast.jl`: predicts short zones once over the candidate span,
+>   exempts them in the eligibility gate (a zone the model cannot cover keeps the
+>   day ineligible — no silent flat/persistence numbers), stamps filled vintages
+>   `input_mode='<mode>+loadfill'` (their own scoreboard track), and honors a
+>   `LOAD_FILL` kill-switch (default on).
+> - Guards: `test/scripts/load_fill_book_identity.jl` (no-fill = byte-identical
+>   book; no-override; seed-when-absent). Real-case validation:
+>   `test/scripts/validate_load_fill.jl` (model vs actual vs TSO, out of sample).
+> See the PR for the LT/SI/CH validation table and guard evidence.
+
 **Question.** Leads 2..7 of the forecast product are WEEKLY PERSISTENCE of our
 own lead-1 forecast (`bin/horizon_forecast.jl`) because ENTSO-E publishes no
 inputs beyond D-1. Can we instead run the FULL model at lead n by (a) predicting
