@@ -97,7 +97,13 @@ every single-zone book are unchanged (guards G1/G2 below).
   2/3 miss only marginally: FR April is a single negative-price degenerate day
   (04-05, corr artifact, not a regression); HU July corr −0.031 (0.001 past floor,
   MAE improved); GR mar MAE +3.0 and SE4 jul MAE +1.8 the two real small
-  regressions. Not shipped; no PR (ship/relax is the coordinator's call).
+  regressions. **iter9.2** targeted the GR-March leak (AL/ME `:hydro`
+  `anchor_share 0.9→0.82` + `dry_boost 1.0→0.25`) but the lever was **measured
+  ineffective** (moves AL/ME/GR March by only ~2/~2/~0.35 €/MWh — their shoulder
+  price is thermal/import/scarcity-set, not hydro-water-value-set) and was
+  reverted; FR-April is a documented negative-price-day scoring artifact. Final
+  **NO-SHIP for this cv cycle; iter9 waits for cv23** (forward lever hypothesis in
+  G3.md). No PR.
 
 ## Files
 
