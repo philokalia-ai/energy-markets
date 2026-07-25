@@ -93,6 +93,12 @@ const SKIP_CLEAR = lowercase(get(ENV, "SKIP_CLEAR", "false")) == "true"
 # the other zones are not thrown away. Default ON; LOAD_FILL=false reverts to the
 # pre-fill eligibility (a missing load zone skips the whole day) with no rollback.
 const LOAD_FILL = lowercase(get(ENV, "LOAD_FILL", "true")) == "true"
+# RES twin of LOAD_FILL: when a zone's ENTSO-E 14.1.D wind/solar forecast is
+# missing/short for the window, predict it from the weather→RES models
+# (bin/weather_res.jl + res_models pack) so the reference (entsoe) track stays
+# eligible. Default ON; RES_FILL=false reverts to the pre-fill RES gate. Inert on
+# the weather track (which already sources all RES from weather, no RES gate).
+const RES_FILL = lowercase(get(ENV, "RES_FILL", "true")) == "true"
 const CLEARING_MODE = get(ENV, "CLEARING_MODE", "multi_zone_eu")
 const ZONES = let z = [String(strip(s)) for s in split(get(ENV, "ZONES", ""), ",") if !isempty(strip(s))]
     isempty(z) ? FORECAST_FOOTPRINT : z
@@ -301,7 +307,8 @@ slots use the hour's predicted MW as the LEVEL (no division). Zero/negative
 predictions inject no order.
 """
 function weather_scenario(preds::Dict{String,Dict{DateTime,Float64}};
-                          load_fill_fn::Union{Nothing,Function}=nothing)
+                          load_fill_fn::Union{Nothing,Function}=nothing,
+                          res_fill_fn::Union{Nothing,Function}=nothing)
     zero_res = (ts, mw) -> 0.0
     scenario = Dict{String,Euphemia.ZoneScenario}()
     for zone in ZONES
@@ -317,9 +324,13 @@ function weather_scenario(preds::Dict{String,Dict{DateTime,Float64}};
             end
             orders
         end
+        # The weather track already replaces ALL RES from weather (renewable→0 +
+        # injected supply), so res_fill is redundant here and left off; load_fill
+        # still rides along (its gate — the LOAD gate — is live on both tracks).
         scenario[zone] = Euphemia.ZoneScenario(renewable_modifier=zero_res,
                                                extra_orders=extra,
-                                               load_fill=load_fill_fn)
+                                               load_fill=load_fill_fn,
+                                               res_fill=res_fill_fn)
     end
     return scenario
 end
@@ -418,6 +429,80 @@ function fillable_for_day(day::Date, load_hours::Dict{String,Int},
     return out
 end
 
+# ---------------------------------------------------------------------------
+# Per-zone RES eligibility fill (bin/weather_res.jl) — the twin of load fill.
+#
+# When a zone's ENTSO-E 14.1.D wind/solar forecast is missing/short, predict its
+# hourly wind+solar MW from the committed weather→RES pack. The `res_fill` book
+# hook MERGES it into the zone's renewable forecast, filling ONLY the hours the
+# TSO did not publish (present TSO RES never overridden). A zone absent from the
+# RES pack cannot be filled (day stays ineligible); a pack zone lacking a
+# wind/solar sub-model predicts that component as 0 (physically negligible — fine
+# per the pack design). Inert on the weather track (no RES gate there).
+# ---------------------------------------------------------------------------
+
+"""
+Predict hourly wind+solar (MW) for each `zones_to_fill` zone over UTC days
+`first_utc`..`last_utc` from the weather→RES `pack` (bin/weather_res.jl). Returns
+`zone => (hour::DateTime → MW)`; a zone is omitted if it has no pack entry or no
+weather could be fetched (the caller then keeps that zone's day INELIGIBLE — no
+silent fallback). Mirrors `build_load_fills`.
+"""
+function build_res_fills(pack, zones_to_fill::Vector{String},
+                         first_utc::Date, last_utc::Date)
+    res_pred = Dict{String,Dict{DateTime,Float64}}()
+    isempty(zones_to_fill) && return res_pred
+    hours = collect(DateTime(first_utc):Hour(1):DateTime(last_utc) + Hour(23))
+    dates = collect(first_utc:Day(1):last_utc)
+    for zone in zones_to_fill
+        zm = get(pack["zones"], zone, nothing)
+        if zm === nothing
+            println("  ⚠️ res-fill: $zone has no model in the RES pack — cannot fill (day stays ineligible)")
+            continue
+        end
+        cells = [(Float64(c[1]), Float64(c[2])) for c in zm["cells"]]
+        weather = try
+            fetch_weather(cells, dates)
+        catch e
+            e isa InterruptException && rethrow()
+            println("  ⚠️ res-fill: $zone weather fetch failed ($(sprint(showerror, e))) — cannot fill")
+            continue
+        end
+        pred = predict_res(pack, zone, hours, weather)
+        if isempty(pred)
+            println("  ⚠️ res-fill: $zone produced no hours (weather gaps) — cannot fill")
+            continue
+        end
+        res_pred[zone] = pred
+        println("  🩹 res-fill: $zone model wind+solar ready ($(length(pred))h over " *
+                "$(first_utc)..$(last_utc))")
+    end
+    return res_pred
+end
+
+"Book hook `res_fill(zone, utc_day)` over a precomputed `res_pred`. Twin of `make_load_fill_fn`."
+make_res_fill_fn(res_pred::Dict{String,Dict{DateTime,Float64}}) = make_load_fill_fn(res_pred)
+
+"""
+Zones REQUIRED to have a wind/solar forecast (had one on the last realized day)
+but MISSING it this market day, that the RES model CAN cover (`res_pred` has the
+zone spanning every expected window hour). Exactly the zones exempted in the RES
+eligibility gate and merged in the clear; a zone the model cannot cover is NOT
+returned (day stays ineligible). Twin of `fillable_for_day`.
+"""
+function res_fillable_for_day(day::Date, res_required::AbstractSet{String},
+                              res_present::AbstractSet{String},
+                              res_pred::Dict{String,Dict{DateTime,Float64}})
+    expected = expected_market_day_hours(day)
+    out = Set{String}()
+    for zone in setdiff(res_required, res_present)
+        zp = get(res_pred, zone, nothing)
+        zp === nothing && continue
+        all(h -> haskey(zp, h), expected) && push!(out, zone)
+    end
+    return out
+end
+
 """
 Clear one UTC calendar day with the standard 39-zone machinery and collapse to
 zone → (hour → price). Returns `nothing` on failure. Results are memoized in
@@ -478,7 +563,7 @@ function main()
             (INPUT_MODE == "weather" ?
              "(EX-ANTE track: RES from raw weather, ENTSO-E RES gate removed)" :
              "(reference track: ENTSO-E D-1 load + wind/solar forecasts)"))
-    println("  force_rerun=$FORCE_RERUN  skip_clear=$SKIP_CLEAR  load_fill=$LOAD_FILL")
+    println("  force_rerun=$FORCE_RERUN  skip_clear=$SKIP_CLEAR  load_fill=$LOAD_FILL  res_fill=$RES_FILL")
     println("  delivery day = Europe/Athens market day (two UTC-day solves, stitched)")
     ZONES != FORECAST_FOOTPRINT &&
         println("  ⚠️ ZONES override active ($(join(ZONES, ","))) — testing footprint, not the 39-zone product")
@@ -531,12 +616,15 @@ function main()
         println("RES baseline (Athens day $latest_actual): $(length(res_required))/$(length(ZONES)) zones with wind/solar forecast")
     end
 
-    # Per-day TSO load-hours, computed once and reused by the fill pre-pass and
-    # the market-day loop (one query per candidate day either way).
+    # Per-day TSO load-hours and RES-present sets, computed once and reused by the
+    # fill pre-passes and the market-day loop (one query each per candidate day
+    # either way).
     day_load_hours = Dict{Date,Dict{String,Int}}()
+    day_res_present = Dict{Date,Set{String}}()
     for day in first_candidate:Day(1):last_candidate
         w0, w1 = athens_market_day_window(day)
         day_load_hours[day] = load_forecast_hours(w0, w1, ZONES)
+        day_res_present[day] = res_forecast_zones(w0, w1, ZONES)
     end
 
     # ── Eligibility LOAD FILL pre-pass ──────────────────────────────────────
@@ -572,6 +660,34 @@ function main()
     end
     load_fill_fn = make_load_fill_fn(fill_pred)
 
+    # ── Eligibility RES FILL pre-pass (twin of LOAD FILL) ───────────────────
+    # Zones REQUIRED to have wind/solar (had it on the last realized day) but
+    # MISSING it on ANY candidate day are predicted ONCE from the weather→RES
+    # pack. Only relevant on the entsoe reference track: the weather track has no
+    # RES gate (res_required is empty) and already sources all RES from weather.
+    res_pred = Dict{String,Dict{DateTime,Float64}}()
+    if RES_FILL && !isempty(res_required)
+        res_pack = load_res_models()
+        res_short = String[]
+        for day in first_candidate:Day(1):last_candidate, z in res_required
+            (!(z in day_res_present[day]) && !(z in res_short)) && push!(res_short, z)
+        end
+        if isempty(res_short)
+            println("RES FILL: no RES-missing required zones across candidate days — nothing to fill")
+        else
+            println("RES FILL: $(length(res_short)) RES-missing zone(s) across candidate days " *
+                    "($(join(sort(res_short), ","))) — predicting weather wind+solar ...")
+            t0 = time()
+            res_pred = build_res_fills(res_pack, sort(res_short),
+                                       first_candidate - Day(1), last_candidate)
+            println("RES FILL: model RES ready for $(length(res_pred))/$(length(res_short)) " *
+                    "zone(s) in $(round(time() - t0, digits=1))s")
+        end
+    elseif !RES_FILL
+        println("RES FILL: disabled (RES_FILL=false) — a RES-missing required zone skips the whole day")
+    end
+    res_fill_fn = make_res_fill_fn(res_pred)
+
     # Weather track: fetch weather + predict per-zone RES ONCE for the whole
     # candidate window (both UTC days of each Athens market day), then thread
     # it into every clear as a per-zone scenario. The load-fill hook rides on
@@ -583,11 +699,12 @@ function main()
                 "$(first_candidate - Day(1)) .. $last_candidate ...")
         t0 = time()
         preds = build_weather_predictions(first_candidate - Day(1), last_candidate)
-        scenario = weather_scenario(preds; load_fill_fn=load_fill_fn)
+        scenario = weather_scenario(preds; load_fill_fn=load_fill_fn, res_fill_fn=res_fill_fn)
         println("Weather RES ready for $(length(preds)) zones in $(round(time() - t0, digits=1))s")
-    elseif load_fill_fn !== nothing && !SKIP_CLEAR
+    elseif (load_fill_fn !== nothing || res_fill_fn !== nothing) && !SKIP_CLEAR
         scenario = Dict{String,Euphemia.ZoneScenario}(
-            zone => Euphemia.ZoneScenario(load_fill=load_fill_fn) for zone in ZONES)
+            zone => Euphemia.ZoneScenario(load_fill=load_fill_fn, res_fill=res_fill_fn)
+            for zone in ZONES)
     end
 
     # UTC-day clear cache: market days D and D+1 share the UTC-day-D solve.
@@ -603,21 +720,29 @@ function main()
                 "$(length(expected))h)")
 
         load_hours = day_load_hours[day]
-        res_present = res_forecast_zones(w0, w1, ZONES)
+        res_present = day_res_present[day]
         atc_rows = atc_row_count(w0, w1, ZONES)
         fillable = fillable_for_day(day, load_hours, fill_pred)
+        res_fillable = res_fillable_for_day(day, res_required, res_present, res_pred)
         eligible, reason = eligibility_verdict(ZONES, load_hours, res_required,
                                                res_present, atc_rows;
-                                               load_fill_zones=fillable)
-        # Filled days are their OWN provenance slice/track: input_mode carries a
-        # "+loadfill" suffix so bin/score_forecasts.jl keeps them separate from
-        # the pure-ENTSO-E track record (no pollution) and the no-clobber slice
-        # identity never mixes a filled vintage with an unfilled one.
-        day_mode = isempty(fillable) ? INPUT_MODE : INPUT_MODE * "+loadfill"
+                                               load_fill_zones=fillable,
+                                               res_fill_zones=res_fillable)
+        # Filled days are their OWN provenance slice/track: input_mode composes a
+        # "+loadfill"/"+resfill" suffix so bin/score_forecasts.jl keeps them
+        # separate from the pure-ENTSO-E track record (no pollution) and the
+        # no-clobber slice identity never mixes a filled vintage with an unfilled
+        # one. Order is fixed (loadfill before resfill) so the mode is stable.
+        suffixes = String[]
+        isempty(fillable) || push!(suffixes, "loadfill")
+        isempty(res_fillable) || push!(suffixes, "resfill")
+        day_mode = isempty(suffixes) ? INPUT_MODE : INPUT_MODE * "+" * join(suffixes, "+")
         println("  VERDICT: $(eligible ? "ELIGIBLE ✅" : "INELIGIBLE ⛔") — $reason")
-        !isempty(fillable) && eligible &&
-            println("  🩹 load-filled zone(s): $(join(sort(collect(fillable)), ",")) " *
-                    "(input_mode=$day_mode)")
+        eligible && !isempty(fillable) &&
+            println("  🩹 load-filled zone(s): $(join(sort(collect(fillable)), ","))")
+        eligible && !isempty(res_fillable) &&
+            println("  🩹 RES-filled zone(s): $(join(sort(collect(res_fillable)), ","))")
+        (eligible && !isempty(suffixes)) && println("  (input_mode=$day_mode)")
         eligible || continue
 
         if !FORCE_RERUN

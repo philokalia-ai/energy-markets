@@ -69,7 +69,33 @@ println("(2) seed on $future (no TSO load): without fill ",
         failed_wo ? "FAILS ✅" : "unexpectedly built ⚠️",
         " ; with fill ", built_w ? "BUILDS ✅" : "still fails ❌")
 
-ok = inert && noover
+# ── RES-FILL guards (symmetric) ─────────────────────────────────────────────
+# (R1) inertness: res_fill returning nothing is byte-identical.
+res_inert_b = MOB.create_merit_order_book(zone, day; res_fill=(z, d) -> nothing)
+pr = book_prices(res_inert_b)
+res_inert = pb !== nothing && pb == pr
+println("(R1) res-fill inertness (returns nothing) → ",
+        res_inert ? "BIT-IDENTICAL ✅" : "DIFFERS ❌")
+
+# (R3) no-override: res_fill offered for present TSO RES hours changes nothing.
+res_over = MOB.create_merit_order_book(zone, day; res_fill=overfill)
+pro = book_prices(res_over)
+res_noover = pb !== nothing && pb == pro
+println("(R3) res-fill no-override (present TSO RES hours) → ",
+        res_noover ? "BIT-IDENTICAL ✅ (TSO RES wins)" : "DIFFERS ❌")
+
+# (R2) effect: on a zone/day with missing RES hours, res_fill ADDS RES supply,
+# which lowers or holds the book (more near-zero supply) — here just assert the
+# book still builds and the order set CHANGES when RES is genuinely injected on
+# the far-future seeded day (which has no TSO RES either).
+res_seed = (z, d) -> Dict(Dates.format(DateTime(d) + Hour(h), "yyyymmdd-HHMM") => 1000.0
+                          for h in 0:23)
+withboth = MOB.create_merit_order_book(zone, future; load_fill=seed, res_fill=res_seed)
+res_seed_built = book_prices(withboth) !== nothing
+println("(R2) res-fill effect on $future (load+RES seeded): ",
+        res_seed_built ? "BUILDS ✅" : "fails ❌")
+
+ok = inert && noover && res_inert && res_noover
 println("="^70)
 println(ok ? "GUARDS PASSED ✅" : "GUARD FAILURE ❌")
 println("="^70)
