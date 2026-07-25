@@ -72,6 +72,16 @@ Still weak on the full year, stated plainly: **NO1 corr 0.01 / MAE €64 /
 bias +€40** (reservoir-regime import flows — the known open problem),
 **NO3 0.13**, **NO4 0.19**, **DK1 0.20**, **NO5 0.42**.
 
+**Latest code iteration (cv21, not yet in the full-year record):** the
+DK1/Viking virtual boundary book ([docs/experiments/cv21-dk1-viking.md](docs/experiments/cv21-dk1-viking.md))
+prices the GB counterparty on the DK1–GB Viking Link as an elastic neighbor.
+Byte-identity guards pass (GR / SEE 5-zone / 39-zone EU with the book disabled,
+all bit-identical vs cv20); the src-implementation confirm reproduced the
+measured DK1 gain (March stable-guard corr 0.55 → 0.81, MAE 27.9 → 24.6; July
+MAE 29.5 → 26.6) with no FR/NL/NO2 leakage. It changes only the EU footprint
+(`multi_zone_eu`); the SEE single-zone/5-zone products stay byte-identical. The
+full-year record above is still cv19 — a cv21 backfill has not been run.
+
 ### By strategy regime — frozen 36-day stratified sample
 
 The per-regime breakdown below is measured on a **frozen 36-day full-year
