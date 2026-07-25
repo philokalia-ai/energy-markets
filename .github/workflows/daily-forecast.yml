@@ -5,6 +5,13 @@ on:
     # Daily at 12:30 UTC — after ENTSO-E D-1 publication (~12:00 CET auction
     # results + forecasts) and the ETL that lands them in the database.
     - cron: "30 12 * * *"
+    # 20:10 UTC — second attempt after the ceres ENTSO-E evening fills (17:30 +
+    # 19:30 UTC sweeper): several TSOs' D-1 load forecasts propagate to the bulk
+    # export only in the evening (2026-07-25: LT/SI/CH short at 12:48 made
+    # lead-1 INELIGIBLE). Vintage rows are immutable/no-clobber, so this run
+    # only fills slices the 12:30 run could not see — still ex-ante for the
+    # Athens delivery window (opens 21:00 UTC).
+    - cron: "10 20 * * *"
   workflow_dispatch:
     inputs:
       max_lead_days:
