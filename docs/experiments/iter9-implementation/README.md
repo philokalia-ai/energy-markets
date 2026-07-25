@@ -87,16 +87,24 @@ every single-zone book are unchanged (guards G1/G2 below).
   SUM-reordering ULP noise (another agent's backfill was live). Bit-identity
   beyond ULP is therefore proven at book level; the solved-price comparison
   follows once the shared Gurobi is free.
-- **G3 (43-zone A/B)** — pending solver availability. Windows: 2026-04-01..05
-  benchmark, 2026-07-06..21 July regime window, 2026-03-01..08 March guard.
-  Baseline arms: cv19 `multi_zone_eu` saved record (March/April; coverage
-  verified: 8 and 5 days × 39 zones) + fresh 39-zone runs for July (cv19
-  backfill ends 2026-06-30). Treatment: fresh 43-zone runs via `ab_run.jl`
-  (save_to_db=false, prices to TSV). Scoring: `score_ab.jl`
-  (resolution-aware actuals, dedup by sequence — the iteration-4 standard).
+- **G3 (43-zone A/B)** — **FAIL → NO-SHIP.** Full evidence + diagnosis in
+  [`G3.md`](G3.md). 29 days × 3 windows, both arms complete off one read-only
+  43-zone extract (HiGHS, cv19 `:v3` flows, identical conditions). **Gate 4
+  (SEE bit-identity) PASSES; Gates 1/2/3 FAIL:** (1) ME clears only 0.40 vs the
+  0.55 floor (July corr 0.09) and AL is marginal (0.44 / July 0.20) — both are
+  hydro/import zones mis-assigned the gas-anchored `SEE_PROFILE`; HR (0.86, on
+  `CROATIA_PROFILE`) and MK (0.88) pass. (2)+(3) Adding the four zones degrades
+  the 39-zone product — HU July ΔMAE +11.4 / Δcorr −0.044 (the flagged control),
+  DK1 July Δcorr −0.074, plus a July Baltic/Nordic MAE cluster — the same
+  non-local coupled-interaction mechanism cv18 documented. Fixes hypothesized in
+  `G3.md`: hydro-anchor AL/ME (the HR shape), and border-scope the endogenization
+  so it doesn't leak into HU/DK1 anchor refs. Not shipped; no PR.
 
 ## Files
 
+- `G3.md` — **the G3 gate report (NO-SHIP): full score tables, gate verdicts, diagnosis**
 - `ab_run.jl` — A/B driver (footprint × window → TSV, resumable, no Postgres writes)
+- `run_g3.sh` / `run_g3_sharded.sh` — two-arm launchers (sharded = concurrent read-only shards)
 - `score_ab.jl` — per-zone/per-window scorer + A-vs-B delta tables
-- results TSVs land here (`ab_39.tsv`, `ab_43.tsv`, `ab_scores.tsv`, …)
+- `gate_check.jl` — applies the pre-registered G3 gates to `ab_scores.tsv`, prints verdicts
+- results TSVs land here (`ab_39.tsv`, `ab_43.tsv`, per-shard `ab_*_s*.tsv`, `ab_scores.tsv`)
