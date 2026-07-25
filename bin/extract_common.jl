@@ -9,7 +9,7 @@
 #     wholesale (`refresh = :replace`).
 #
 # Sources: `:energy` (Postgres `energy` DB via Euphemia's pool) and `:weather`
-# (Postgres `silentech` DB via WEATHER_CONN_STR — a SEPARATE database on the
+# (Postgres weather DB via WEATHER_CONN_STR — a SEPARATE database on the
 # same server; see READING_WEATHER_DATA.md). Scripts register their query
 # functions in `QUERY_FNS` — this file deliberately does NOT `using Euphemia`,
 # so the pure helpers can be unit-tested (test/test_extract_refresh_logic.jl)
@@ -41,20 +41,20 @@ query_fn(source::Symbol) =
           "the including script must populate QUERY_FNS[:$source]")
 
 # ---------------------------------------------------------------------------
-# Weather DB access (silentech database, WEATHER_CONN_STR, read-only role)
+# Weather DB access (separate weather database, WEATHER_CONN_STR, read-only role)
 # ---------------------------------------------------------------------------
 const _WEATHER_CNX = Ref{Any}(nothing)
 
 function _weather_connect()
     haskey(ENV, "WEATHER_CONN_STR") ||
         error("WEATHER_CONN_STR not set — required to pull the weather schema " *
-              "(silentech database). See READING_WEATHER_DATA.md.")
+              "(the weather database). See READING_WEATHER_DATA.md.")
     # WEATHER_CONN_STR may be a postgres:// URI — pass the timeout as a kwarg
     # instead of appending conninfo keywords (mixing the two is invalid).
     return LibPQ.Connection(ENV["WEATHER_CONN_STR"]; connect_timeout=30)
 end
 
-"Run SQL against the silentech/weather database, returning a DataFrame.
+"Run SQL against the weather database, returning a DataFrame.
 Keeps one lazy connection; reconnects once on failure."
 function weather_query(sql::AbstractString, args=Any[])
     _WEATHER_CNX[] === nothing && (_WEATHER_CNX[] = _weather_connect())
@@ -336,12 +336,12 @@ function simulations_table_specs(zones::Vector{String})
 end
 
 # ---------------------------------------------------------------------------
-# weather specs (silentech DB)
+# weather specs (separate weather DB)
 # ---------------------------------------------------------------------------
 """
     weather_table_specs(; back_days=400, today=Dates.today()) -> Vector
 
-The `weather` schema (silentech DB): `city` (full registry), `city_forecast`
+The `weather` schema (separate weather DB): `city` (full registry), `city_forecast`
 (last `back_days`; measure_ts is a NAIVE GMT timestamp in the source, so it is
 already the naive UTC the extract stores), `city_forecast_vintage` (full).
 

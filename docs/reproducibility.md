@@ -80,6 +80,15 @@ Published objects:
 | `euphemia-data-v1.1.tar.zst` | frozen parquet artifact v1.1 (39 zones, 2023-01-01…2026-06-30), sha256 `5b0e90154f21bd2649a060af60545fecf537eb562ac035fe3e687ceb3ebf0992` | ~623 MB |
 | `euphemia-live.duckdb` | living extract, refreshed daily 02:00 UTC (`.sha256` sidecar) | ~3 GB |
 
+> **v1.1 + cv19 caveat:** the :v3 ex-ante flow rule (default on the EU path
+> since cv19) reads `entsoe.actual_total_load`, which entered the extract
+> builder on 2026-07-22 — **after** v1.1 was frozen. Reproducing cv19+/cv20
+> results (including the committed `results/reference/quick_metrics.csv`)
+> therefore needs the **living extract** (`bin/pull_live_extract.sh`,
+> checksummed) or a ≥v1.2 frozen artifact; on v1.1 the flow rule cannot find
+> its load-analogue inputs. v1.1 remains exact for the cv17-era pipeline it
+> shipped with.
+
 ```bash
 mkdir -p data/public
 curl -L -o euphemia-data-v1.1.tar.zst https://data.philokalia.ai/euphemia-data-v1.1.tar.zst
@@ -126,29 +135,26 @@ julia --project=. bin/reproduce.jl --range 2026-03-01 2026-03-07 --single GR
 julia --project=. bin/reproduce.jl --full --workers auto
 ```
 
-The default optimizer is `auto`: **Gurobi** when installed, else **HiGHS**.
+The default optimizer is `auto`, which since cv20 resolves to **HiGHS** — the
+open default reproduces the published record exactly (see below). Pass
+`optimizer="gurobi"` for the faster development path if licensed.
 
 **Solver reality check (measured):** single-zone clearing works fine on HiGHS
 (no license needed) and its metrics are identical to the Gurobi run's. The
-**39-zone coupled multi-zone MIP currently needs Gurobi**: on our 80-core box
-HiGHS found *no incumbent* within a 1-hour budget (the exact-Big-M
-complementarity MILP at MIP gap 1e-6 is hard for it), while Gurobi clears each
-day in seconds — the full offline `--quick` (5 single-zone + 5 × 39-zone
-multi-zone days) measured **243 s** end-to-end. A per-hour decomposition of the
-multi-zone MPCC (the 24 hours are independent in the merit-order book) is the
-planned fix to make the multi-zone tier HiGHS-viable.
-
-**Re-tested on the cv15 model (iter8 books, 2026-04-03, 40-min solve budget):
-unchanged.** Two things had shifted that could have helped — tightened
-per-order Big-M constants and the deeper installed-truthed books — but HiGHS
-still finds **no incumbent** (886 B&B nodes, primal bound `-inf` at 30 min;
-dual bound stuck at the LP relaxation). The verdict stands: **multi-zone needs
-Gurobi**; single-zone remains fully HiGHS-viable. Two related notes for HiGHS
-runs of the multi-zone tier: (1) the iter8 *indicator-constraint* retry rung is
-**Gurobi-only** (HiGHS has no indicator constraints through JuMP) — the retry
-ladder detects the solver and skips that rung gracefully; (2) the per-day
-`:p95`-books fallback IS solver-agnostic and still fires. The per-hour MPCC
-decomposition remains the documented path to an open-solver multi-zone tier.
+**monolithic** 39-zone coupled MIP does need Gurobi — on our 80-core box HiGHS
+found *no incumbent* within a 1-hour budget (re-confirmed on the cv15 iter8
+books: 886 B&B nodes, primal bound `-inf` at 30 min), while Gurobi clears each
+day in seconds. That is why, since cv20, the EU-footprint path runs in
+canonical **per-period-decomposed** mode ([docs/period-decomposition.md](
+period-decomposition.md)): the 24 hourly clears are independent MILPs that
+HiGHS solves to optimality, and the prices are **bit-identical across
+HiGHS and Gurobi** at 60-minute resolution (~511 s/day HiGHS vs ~10 s Gurobi)
+— the record is solver-invariant, so the fully open stack (public extract +
+HiGHS) reproduces it exactly. Two notes for HiGHS runs: (1) the iter8
+*indicator-constraint* retry rung is **Gurobi-only** (HiGHS has no indicator
+constraints through JuMP) — the retry ladder detects the solver and skips that
+rung gracefully; (2) the per-day `:p95`-books fallback IS solver-agnostic and
+still fires.
 
 ### Parallel reproduction (`--workers N|auto`)
 

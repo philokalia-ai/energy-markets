@@ -1,5 +1,11 @@
 # euphemia-api — live data backend (issue #152)
 
+> **Deploy gotcha:** run wrangler with an explicit config —
+> `npx wrangler deploy --config workers/api/wrangler.toml` — because the repo
+> root also carries a `wrangler.jsonc` (the `energy-markets` static-assets
+> worker) and wrangler can resolve that one even when invoked from this
+> directory, deploying the wrong worker.
+
 Cloudflare Worker that serves the forecast data plane from the R2 bucket
 `euphemia-web-data` (zstd parquet written by `bin/export_web_parquet.jl` and
 pushed by `bin/web_data_push.sh` seconds after each pipeline DB write). It
@@ -13,7 +19,9 @@ decodes the parquet with [hyparquet](https://github.com/hyparam/hyparquet)
 | `GET /api/v1/map` | `v1/map.parquet` | `web/data/map.json` |
 | `GET /api/v1/manifest` | `v1/manifest.json` | `{updated_at, code_version, zones, row_counts, …}` |
 
-Deployed at <https://euphemia-api.dyad-wasm.workers.dev>. The R2 objects
+Deployed at <https://api.philokalia.ai> (canonical; the legacy
+`*.workers.dev` alias remains live during the migration and will be retired
+by setting `workers_dev = false`). The R2 objects
 themselves are the stable public data API (`/v1/`; breaking schema changes
 bump `/v2/`) — see "Public data API" in the repo README.
 

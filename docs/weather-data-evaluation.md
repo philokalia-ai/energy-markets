@@ -1,6 +1,6 @@
 # Weather data for DA price simulation — evaluation (July 2026)
 
-Empirical evaluation of whether the `silentech.weather` database (see
+Empirical evaluation of whether the local `weather` database (see
 `READING_WEATHER_DATA.md`) can improve day-ahead price simulation accuracy.
 Benchmark: GR, 4 held-out days (2023-12-01, 2025-04-26, 2025-07-02,
 2026-01-26), `:merit_order` method, 168 hourly points.

@@ -8,7 +8,7 @@ name: Refresh living DuckDB extract
 #
 # Required repository secrets (add once — NOT set by automation):
 #   gh secret set ENERGY_CONN_STR    # Postgres `energy` DB connection string
-#   gh secret set WEATHER_CONN_STR   # Postgres `silentech` DB (weather schema, read-only role)
+#   gh secret set WEATHER_CONN_STR   # Postgres weather DB (weather schema, read-only role)
 #
 # One-time seed (on the runner host) before the first run:
 #   ZONES=... START_DATE=... END_DATE=... CELL_HOURLY_CSV=... \

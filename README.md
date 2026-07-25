@@ -72,6 +72,16 @@ Still weak on the full year, stated plainly: **NO1 corr 0.01 / MAE €64 /
 bias +€40** (reservoir-regime import flows — the known open problem),
 **NO3 0.13**, **NO4 0.19**, **DK1 0.20**, **NO5 0.42**.
 
+**Latest code iteration (cv21, not yet in the full-year record):** the
+DK1/Viking virtual boundary book ([docs/experiments/cv21-dk1-viking.md](docs/experiments/cv21-dk1-viking.md))
+prices the GB counterparty on the DK1–GB Viking Link as an elastic neighbor.
+Byte-identity guards pass (GR / SEE 5-zone / 39-zone EU with the book disabled,
+all bit-identical vs cv20); the src-implementation confirm reproduced the
+measured DK1 gain (March stable-guard corr 0.55 → 0.81, MAE 27.9 → 24.6; July
+MAE 29.5 → 26.6) with no FR/NL/NO2 leakage. It changes only the EU footprint
+(`multi_zone_eu`); the SEE single-zone/5-zone products stay byte-identical. The
+full-year record above is still cv19 — a cv21 backfill has not been run.
+
 ### By strategy regime — frozen 36-day stratified sample
 
 The per-regime breakdown below is measured on a **frozen 36-day full-year
@@ -213,11 +223,13 @@ week to week; a median mis-states them). Evidence per border class:
   *harder* target, not a better score — mean corr 0.582 vs 0.615 hourly
   (GR 0.751 → 0.680). 15-minute clearing buys market fidelity, not
   correlation.
-- **HiGHS is now a working option for the full 39-zone clear.** The
-  per-period decomposition solves each period's coupled MILP independently:
-  prices are **bit-identical to Gurobi's** at 60-minute resolution, at
-  ~511 s wall per day vs Gurobi's ~10 s. Gurobi remains the default fast
-  path; no solver license is required for any tier anymore.
+- **HiGHS is the default solver, and the record is solver-invariant** (cv20).
+  The per-period decomposition solves each period's coupled MILP
+  independently and is the canonical mode on the EU-footprint path: prices
+  are **bit-identical across HiGHS and Gurobi** at 60-minute resolution
+  (~511 s wall per day on HiGHS vs Gurobi's ~10 s), so the open stack
+  reproduces the published record exactly. Gurobi (academic license) remains
+  the faster development option via `optimizer="gurobi"`.
 
 ## Negative results — mechanisms tested and rejected
 
@@ -293,7 +305,7 @@ daily workflow ([.github/workflows/refresh-extract.yml](.github/workflows/refres
 02:00 UTC): `bin/refresh_duckdb_extract.jl` opens the extract read-write and
 appends, per table, only rows newer than its max timestamp —
 `entsoe.*` / `yfinance.*` from the energy DB, the `weather` schema
-(`city`, `city_forecast`, `city_forecast_vintage`) from the silentech weather
+(`city`, `city_forecast`, `city_forecast_vintage`) from the separate weather
 DB, and `weather.cell_hourly` (the ERA5 wind/GHI feature history at the
 wind-catalogue cells behind `bin/res_models_v1.json`) from the public
 open-meteo archive API. Mutable registry-like tables (unit registry, outages,
@@ -417,10 +429,10 @@ write, no commit, no Pages build. A Cloudflare Worker
 the exact JSON shapes the SPA consumes, ETag-cached at the edge:
 
 ```
-GET https://euphemia-api.dyad-wasm.workers.dev/api/v1/zones/GR
-GET https://euphemia-api.dyad-wasm.workers.dev/api/v1/scoreboard
-GET https://euphemia-api.dyad-wasm.workers.dev/api/v1/map
-GET https://euphemia-api.dyad-wasm.workers.dev/api/v1/manifest   # {updated_at, …}
+GET https://api.philokalia.ai/api/v1/zones/GR
+GET https://api.philokalia.ai/api/v1/scoreboard
+GET https://api.philokalia.ai/api/v1/map
+GET https://api.philokalia.ai/api/v1/manifest   # {updated_at, …}
 ```
 
 `web/app.js` tries the API first and falls back to the committed
@@ -473,12 +485,13 @@ web/        Static SPA for the live forecast browser (energy.philokalia.ai)
 
 - **Julia** (project environment in `Project.toml`; `julia --project=. -e
   "using Pkg; Pkg.instantiate()"`).
-- **Solver:** the bundled open-source **HiGHS** now covers every tier — no
-  license needed. Single-zone clearing has always run on HiGHS with metrics
-  identical to Gurobi's, and the per-period decomposition makes the full
-  39-zone coupled clear HiGHS-viable too (bit-identical prices to Gurobi at
-  60-minute resolution, ~511 s/day vs ~10 s). **Gurobi**, if licensed, remains
-  the default fast path.
+- **Solver:** the bundled open-source **HiGHS** is the default and covers
+  every tier — no license needed. Single-zone clearing has always run on
+  HiGHS with metrics identical to Gurobi's, and since cv20 the full 39-zone
+  coupled clear runs in canonical per-period-decomposed mode, which is
+  **bit-identical across HiGHS and Gurobi** at 60-minute resolution
+  (~511 s/day vs ~10 s). **Gurobi**, if licensed (ours is academic), is the
+  faster development option via `optimizer="gurobi"`.
 - **Data:** either the public DuckDB extract (recommended; no database
   required) or a PostgreSQL database with the ENTSO-E schema (maintainers).
 
@@ -531,8 +544,16 @@ This repository is the work of three contributors, in three distinct phases:
 
 ## License & citation
 
-License: to be determined — until a license file is added, all rights
-reserved; contact the authors for reuse.
+Licensed under the **European Union Public Licence v1.2** ([LICENSE](LICENSE),
+[EUPL-1.2](https://joinup.ec.europa.eu/collection/eupl/eupl-text-eupl-12)) —
+*from Europeans, to Europeans*: a model of the European electricity market,
+built on European open data, under the EU's own copyleft licence (compatible
+with GPL/AGPL/LGPL/MPL per its Appendix; the Electricity Maps-derived
+`web/geo/zones.geojson` remains AGPL-3.0 as noted above).
+
+Authors: **Giannis Georgakopoulos**, **Efthymios Karangelos**,
+**Panagiotis Georgakopoulos** — see [Acknowledgements](#acknowledgements) for
+who built what.
 
 If you use this model or the published data artifact in academic work, please
 cite this repository (a `CITATION.cff` with a citable release DOI is planned).

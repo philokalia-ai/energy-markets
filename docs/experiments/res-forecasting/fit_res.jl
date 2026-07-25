@@ -1,5 +1,5 @@
 # Weather -> RES prediction skill study (GR, 2025-07-01..2026-06-30).
-# Q: can silentech weather predict solar/wind well enough to replace the
+# Q: can the local weather DB predict solar/wind well enough to replace the
 # late-arriving ENTSO-E DA forecasts?  Benchmark = ENTSO-E DA forecast accuracy.
 using CSV, DataFrames, Dates, Statistics, Printf
 

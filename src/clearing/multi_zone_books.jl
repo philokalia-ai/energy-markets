@@ -556,27 +556,47 @@ function _create_multi_zone_order_book_merit(zones::Vector{String}, day::Date;
     all_periods = Set{String}()
     failed_zones = String[]
 
-    for zone in zones
+    # Build phase — one task per zone. Zone books are fully independent (all
+    # shared day-level caches carry locks: outages, flows, analogue days,
+    # fleet-data, TTF/EUA, generator memo), so with JULIA_NUM_THREADS > 1 the
+    # per-zone Postgres round-trips overlap instead of paying 39 x 2-pass
+    # serial latency (~440 s of a ~464 s sequential day; the solves are
+    # ~24 s). With 1 thread @spawn degrades to exact serial execution.
+    # Determinism: each zone's book is computed by the same code on the same
+    # inputs regardless of scheduling, and ASSEMBLY below walks `zones` in
+    # order — the combined book is byte-identical to the serial build (the
+    # guard recipe verifies this). Only log-line interleaving changes.
+    build_one(zone) = begin
+        if haskey(cached_zone_orders, zone) && !haskey(anchor_refs, zone)
+            return (zone=zone, kind=:reused, result=nothing,
+                    orders=cached_zone_orders[zone])
+        end
+        println("   📊 Processing zone $zone...")
+        result = build_zone_book(zone, zone_exclude(sort(collect(atc_linked[zone]))))
+        return (zone=zone, kind=:built, result=result, orders=nothing)
+    end
+    tasks = [(zone, Threads.@spawn build_one(zone)) for zone in zones]
+
+    # Assembly phase — strictly in `zones` order, same effects as the old
+    # serial loop (including per-zone error handling; a failed task counts
+    # as a failed zone, InterruptException always rethrows).
+    for (zone, task) in tasks
         try
-            # Pass-2 reuse: zones without an anchor keep their pass-1 orders
-            # verbatim (books are deterministic; only anchored zones re-bid).
-            if haskey(cached_zone_orders, zone) && !haskey(anchor_refs, zone)
-                zone_orders[zone] = cached_zone_orders[zone]
-                for o in cached_zone_orders[zone]
+            r = fetch(task)
+            if r.kind == :reused
+                zone_orders[zone] = r.orders
+                for o in r.orders
                     push!(all_periods, Dates.format(o.date_time, "yyyymmdd-HHMM"))
                 end
-                println("   ♻️  Zone $zone: reusing pass-1 book ($(length(cached_zone_orders[zone])) orders)")
+                println("   ♻️  Zone $zone: reusing pass-1 book ($(length(r.orders)) orders)")
                 continue
             end
-            println("   📊 Processing zone $zone...")
-            result = build_zone_book(zone, zone_exclude(sort(collect(atc_linked[zone]))))
-
+            result = r.result
             if !result.success
                 @warn "Failed to generate merit orders for zone $zone: $(result.message)"
                 push!(failed_zones, zone)
                 continue
             end
-
             zone_orders[zone] = result.order_book.orders
             for period in result.order_book.periods
                 push!(all_periods, period)
@@ -584,6 +604,7 @@ function _create_multi_zone_order_book_merit(zones::Vector{String}, day::Date;
             println("      ✅ Added $(result.supply_orders) supply + $(result.demand_orders) demand orders")
         catch e
             e isa InterruptException && rethrow()
+            (e isa TaskFailedException && e.task.exception isa InterruptException) && rethrow()
             @error "Error processing zone $zone: $e"
             push!(failed_zones, zone)
         end

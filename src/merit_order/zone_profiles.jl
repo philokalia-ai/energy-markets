@@ -25,6 +25,82 @@ const HYDRO_PRODUCTION_TYPES =
     ["Hydro Water Reservoir", "Hydro Pumped Storage", "Hydro Run-of-river and pondage"]
 
 # =============================================================================
+# VIRTUAL BOUNDARY-COUNTERPARTY BOOK (cv21) — model the country, not the flow
+# =============================================================================
+"""
+    BoundaryBook
+
+Configuration for a modeled out-of-footprint neighbor on ONE physical border
+(the virtual-boundary-zone program, docs/experiments/cv21-dk1-viking.md). When
+a zone's profile carries a `BoundaryBook`, `create_merit_order_book`:
+
+1. REMOVES the counterparty's fixed net-import injection (its `flow_codes` are
+   excluded from `get_net_imports`) and its share of the import-backstop
+   headroom — the elastic book replaces both; and
+2. ADDS an elastic counterparty ladder — an **import supply** stack (the
+   neighbor sells into the zone above its own marginal cost) and an **export
+   demand** stack (the neighbor buys from the zone below it), laddered over the
+   border's demonstrated interconnector capability (`get_boundary_capability`).
+
+The neighbor's willingness to pay/sell is anchored on ITS OWN fundamental SRMC
+(`anchor`, e.g. GB CCGT SRMC from TTF + EUA-proxied UK carbon), never on our
+price and never a fixed multiple of our SRMC — the boundary-program standing
+rule (roadmap §"Standing rules"). `anchor_mult` scales that anchor (the
+measured sensitivity choice; documented not load-bearing between mid/high).
+
+Fields:
+- `counterparty` — label for tagging/logging (e.g. `"GB"`).
+- `flow_codes`   — `entsoe.physical_flows` / offered-ATC map codes for the
+  border, excluded from injections + backstop and measured for capability
+  (DK1↔GB carries the single aggregate `"GB"` code).
+- `anchor`       — which neighbor-fundamental SRMC to anchor on
+  (`:gb_ccgt_srmc`).
+- `anchor_mult`  — sensitivity multiplier on the anchor.
+- `imp_ladder`   — import-supply rungs `(price_mult, capability_share)`: the
+  neighbor sells to us at `price_mult × anchor × anchor_mult` for
+  `capability_share ×` the demonstrated import capability.
+- `exp_ladder`   — export-demand rungs `(price_mult, capability_share)`: the
+  neighbor buys from us, symmetric.
+
+`nothing` on a profile (every zone but DK1) ⇒ the mechanism is entirely dead
+code and the book is byte-identical.
+"""
+Base.@kwdef struct BoundaryBook
+    counterparty::String
+    flow_codes::Vector{String}
+    anchor::Symbol
+    anchor_mult::Float64 = 1.0
+    imp_ladder::Vector{Tuple{Float64,Float64}}
+    exp_ladder::Vector{Tuple{Float64,Float64}}
+end
+
+"""
+    VIKING_GB_BOOK
+
+The DK1/Viking-Link (DK1–GB) boundary book shipped in cv21 — the boundary
+program's cleanest single lever (confirm 2026-07-24: DK1 July MAE 31.5→28.3,
+corr 0.90→0.93; March MAE 27.6→25.2, corr 0.55→0.80; no FR/NL/NO2 leakage —
+docs/experiments/cv21-dk1-viking.md). GB is modeled as its own CCGT-marginal
+counterparty on the Viking Link only; GB's other borders are untouched (GB the
+zone is PARKED pending an Elexon/BMRS + UKA fundamentals feed).
+
+Anchor: `1.15 × GB CCGT SRMC` (TTF/0.52 + EUA-proxied UK carbon/0.52 + €2 O&M).
+The high multiplier is the wave-2/refine sensitivity choice — DK1 favored it
+monotonically and the plain CCGT SRMC understates GB's willingness to pay; the
+mid↔high difference on DK1 is within noise (documented not load-bearing).
+Ladders are the wave-2 shapes: import supply `× [1.00, 1.15, 1.30]` (50/30/20),
+export demand `× [1.05, 0.90]` (50/50).
+"""
+const VIKING_GB_BOOK = BoundaryBook(
+    counterparty = "GB",
+    flow_codes = ["GB"],
+    anchor = :gb_ccgt_srmc,
+    anchor_mult = 1.15,
+    imp_ladder = [(1.00, 0.5), (1.15, 0.3), (1.30, 0.2)],
+    exp_ladder = [(1.05, 0.5), (0.90, 0.5)],
+)
+
+# =============================================================================
 # ZONE PROFILES — per-region bid-construction calibration
 # =============================================================================
 """
@@ -165,6 +241,14 @@ Base.@kwdef struct ZoneProfile
     # mirror of the dropped-border `anchor_export_mw` treatment. Off by
     # default (byte-identical cap-priced exports elsewhere).
     ref_priced_exports::Bool = false
+    # cv21 virtual boundary-counterparty book (docs/experiments/cv21-dk1-viking.md).
+    # When set, the out-of-footprint neighbor on ONE physical border is modeled as
+    # an elastic counterparty (import-supply + export-demand ladders anchored on
+    # the NEIGHBOR's own fundamental SRMC), and that counterparty's fixed flow
+    # injection + import-backstop headroom are removed. `nothing` = off
+    # (byte-identical). Only DK1 (Viking Link, GB) carries one in cv21; see
+    # `BoundaryBook` / `VIKING_GB_BOOK`.
+    boundary_book::Union{Nothing,BoundaryBook} = nothing
 end
 
 """
@@ -526,6 +610,17 @@ DK2 0.32 → 0.76 / 82.6 → 29.4.
 const DENMARK_PROFILE = with_profile(NORDIC_PROFILE; import_backstop = true)
 
 """
+DK1 (cv21). DENMARK_PROFILE plus the Viking-Link (DK1–GB) boundary book: GB is
+modeled as its own CCGT-marginal counterparty on that single border (elastic
+import supply + export demand replacing GB's fixed flow injection and its
+backstop headroom — see `VIKING_GB_BOOK`). Confirm 2026-07-24: July MAE
+31.5→28.3 / corr 0.90→0.93, March MAE 27.6→25.2 / corr 0.55→0.80, no FR/NL/NO2
+leakage (docs/experiments/cv21-dk1-viking.md). DK2 stays on plain
+DENMARK_PROFILE — its GB link (no Viking equivalent) is not treated.
+"""
+const DK1_PROFILE = with_profile(DENMARK_PROFILE; boundary_book = VIKING_GB_BOOK)
+
+"""
 SE3 (cv17). SWEDEN_SOUTH (anchored Nordic hydro) plus two cv17 mechanisms:
 the import backstop (spike-hour imports ran +1.9 GW over climatology), and —
 its structural fix — `anchor_include_dropped`: SE3's anchor reference was the
@@ -651,7 +746,8 @@ const ZONE_PROFILES = Dict{String,ZoneProfile}(
     # DK1/DK2: + cv17 import backstop (episodic starvation — see DENMARK_PROFILE).
     # cv18: DK1 adds the export-absorption ladder (prototype corr 0.495→0.569,
     # MAE −2.0, binds only in RES-surplus hours). DK2 unchanged pending its own A/B.
-    "DK1" => DENMARK_PROFILE, "DK2" => DENMARK_PROFILE,
+    # DK1 adds the cv21 Viking-Link (DK1–GB) boundary book; DK2 stays plain.
+    "DK1" => DK1_PROFILE, "DK2" => DENMARK_PROFILE,
     # Baltic
     "EE" => BALTIC_PROFILE, "LT" => BALTIC_PROFILE, "LV" => BALTIC_PROFILE,
     # France (nuclear-heavy: continental scarcity + nuclear bid position)
@@ -713,6 +809,14 @@ function get_zone_profile(zone::AbstractString)
     elseif dis == "all" && (p.unit_srmc_spread > 0.0 || !isempty(p.export_absorption_steps))
         p = with_profile(p; unit_srmc_spread=0.0,
                          export_absorption_steps=Tuple{Float64,Float64}[])
+    end
+    # cv21 boundary-book kill-switch (byte-identity guard + attribution A/Bs):
+    # EUPHEMIA_DISABLE_CV21 strips the boundary book so the EU book with the
+    # mechanism disabled is bit-identical to unmodified main. Travels via ENV
+    # for the same worker-safety reason as EUPHEMIA_DISABLE_CV18. Any non-empty
+    # value disables (there is one boundary book in cv21).
+    if p.boundary_book !== nothing && !isempty(get(ENV, "EUPHEMIA_DISABLE_CV21", ""))
+        p = with_profile(p; boundary_book=nothing)
     end
     return p
 end
