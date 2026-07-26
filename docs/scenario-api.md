@@ -218,10 +218,11 @@ run your own scenario in minutes.
   silently dropped from the coupled book).
 - **Solver budget on the full 39-zone footprint.** The scenario threading is
   solver-agnostic and identical whatever the footprint size; only the MPCC solve
-  cost scales. On the full 39 zones, **Gurobi** finds the incumbent reliably
-  (the committed product solves this way); open-source **HiGHS** needs a long
-  budget to find a first incumbent and can return `time_limit` with no prices on
-  hard days (observed for a full-footprint baseline at 300–600 s). Run the
-  worked examples above on a coupled sub-footprint with HiGHS, or on the full
-  footprint with `optimizer="gurobi"` (respecting the WLS session cap — a
-  running backfill may already hold several sessions).
+  cost scales. Since **cv20 the canonical EU-footprint mode is per-period
+  decomposition** (default), and it is **bit-identical across HiGHS and
+  Gurobi** — so the full 39-zone scenario clear runs on the bundled open-source
+  **HiGHS** (default), just slower (~500 s/day vs Gurobi's ~10 s). Gurobi is the
+  faster development option via `optimizer="gurobi"` (respecting the WLS session
+  cap — a running backfill may already hold several sessions). Only the legacy
+  *monolithic* clear needs Gurobi (HiGHS finds no incumbent on the whole-day
+  39-zone MILP); the decomposed default sidesteps that entirely.
