@@ -88,7 +88,27 @@ docs/experiments/cv22.md):
 Base.@kwdef struct BoundaryBook
     counterparty::String
     flow_codes::Vector{String}
+    # Map codes stripped from `get_net_imports` + the import backstop (the
+    # elastic ladder replaces both). Empty ⇒ defaults to `flow_codes`
+    # (DK1/UA — a single netted code). **FR↔GB lists all four codes** (`GB`
+    # AND the per-cable `GB_IFA`/`GB_IFA2`/`GB_ElecLink`): ENTSO-E publishes the
+    # FR↔GB flow BOTH as the aggregate `GB` and as the three cables, so the
+    # loader summed them ≈2× — the cv23 double-count fix (see GB_FR_BOOK,
+    # docs/experiments/gb-borders-cv22.md). Excluding all four removes the
+    # phantom AND the true injection; the ladder prices the border once.
+    net_exclude_codes::Vector{String} = String[]
+    # Offered-ATC map codes for capability sizing. Empty ⇒ defaults to
+    # `flow_codes`. **FR↔GB has NO aggregate ATC** — it is published only
+    # per-cable, so FR lists the three cables and `get_boundary_capability`
+    # AVG-within-cable then SUMS across cables (a single-code border sums one
+    # cable ⇒ byte-identical to the old per-(dir,hour) AVG).
+    atc_codes::Vector{String} = String[]
     anchor::Symbol
+    # Carbon leg of the `:gb_ccgt_srmc` anchor: `:eua` (DK1/Viking — its cv21
+    # validated config) or `:uka` (FR — the correct UK-ETS price from
+    # `carbon.uka_price`, falling back to EUA when the feed is unavailable, e.g.
+    # the offline extract).
+    carbon_source::Symbol = :eua
     anchor_mult::Float64 = 1.0
     imp_ladder::Vector{Tuple{Float64,Float64}}
     exp_ladder::Vector{Tuple{Float64,Float64}}
@@ -99,6 +119,14 @@ Base.@kwdef struct BoundaryBook
     firm_quantile::Float64 = 0.10
     disable_env::String = "EUPHEMIA_DISABLE_CV21"
 end
+
+# Which map codes a boundary book strips from net imports / backstop, and which
+# it sizes offered ATC on. Empty vectors default to `flow_codes` so DK1/Viking +
+# the UA books (single netted code, no per-cable split) stay byte-identical.
+boundary_net_exclude(b::BoundaryBook) =
+    isempty(b.net_exclude_codes) ? b.flow_codes : b.net_exclude_codes
+boundary_atc_codes(b::BoundaryBook) =
+    isempty(b.atc_codes) ? b.flow_codes : b.atc_codes
 
 """
     VIKING_GB_BOOK
@@ -124,6 +152,47 @@ const VIKING_GB_BOOK = BoundaryBook(
     anchor_mult = 1.15,
     imp_ladder = [(1.00, 0.5), (1.15, 0.3), (1.30, 0.2)],
     exp_ladder = [(1.05, 0.5), (0.90, 0.5)],
+)
+
+"""
+    GB_FR_BOOK
+
+The FR↔GB boundary book (cv23 — roadmap item 5, `docs/experiments/gb-borders-cv22.md`,
+re-paired with the FR nuclear fix per that file's NO-SHIP verdict). Two bugs
+paired into one lever (non-shippable alone):
+
+1. **FR–GB flow double-count fix.** ENTSO-E publishes the FR↔GB physical flow
+   BOTH as the aggregate `GB` code AND as the three cables `GB_IFA` / `GB_IFA2`
+   / `GB_ElecLink`; `get_net_imports` summed all four ≈2× the true exchange
+   (verified: aggregate `GB` = Σcables exactly, so the injection was doubled).
+   `net_exclude_codes` lists all four ⇒ the whole GB injection (phantom + true)
+   leaves the fixed schedule; the ladder prices the border once.
+2. **The honest GB premium** the phantom was masking: GB is priced as an elastic
+   CCGT-marginal counterparty on the Viking recipe — import supply + export
+   demand laddered over the FR↔GB demonstrated capability, anchored on GB's own
+   fundamental SRMC (`:uka` carbon: the correct UK-ETS price). Shipping (1)
+   alone cost FR +4.2 July MAE (the double-count accidentally compensated
+   France's too-cheap evening supply curve), so the pair ships together with the
+   FR nuclear opportunity-cost fix that fixes that supply curve at the root.
+
+Capability: FR↔GB flow is the aggregate `GB` (`flow_codes`); its offered ATC is
+published only per-cable (no aggregate), so `atc_codes` lists the three cables
+and their DA ATC is AVG-within-cable then SUMMED across cables. Anchor
+`1.15 × GB CCGT SRMC` and the ladder shapes are the wave-2/cv21 Viking constants
+(no price fit). Carried on `FR_PROFILE`, gated by `EUPHEMIA_DISABLE_CV23`
+(strips it together with the FR nuclear scaling ⇒ cv22 main).
+"""
+const GB_FR_BOOK = BoundaryBook(
+    counterparty = "GB",
+    flow_codes = ["GB"],
+    net_exclude_codes = ["GB", "GB_IFA", "GB_IFA2", "GB_ElecLink"],
+    atc_codes = ["GB_IFA", "GB_IFA2", "GB_ElecLink"],
+    anchor = :gb_ccgt_srmc,
+    carbon_source = :uka,
+    anchor_mult = 1.15,
+    imp_ladder = [(1.00, 0.5), (1.15, 0.3), (1.30, 0.2)],
+    exp_ladder = [(1.05, 0.5), (0.90, 0.5)],
+    disable_env = "EUPHEMIA_DISABLE_CV23",
 )
 
 """
@@ -234,6 +303,32 @@ Base.@kwdef struct ZoneProfile
     nuclear_srmc_floor::Float64 = 0.0
     opportunity_anchor::Symbol = :none
     anchor_share::Float64 = 0.9
+    # Availability-scaled nuclear opportunity cost (cv23, the "nuclear water
+    # value"). France's nuclear fleet is energy-constrained (summer maintenance
+    # + river-temperature de-rating), so the opportunity cost of deploying a
+    # scarce nuclear MWh rises as the fleet's energy budget tightens — the same
+    # reservoir/water-value logic already used for hydro. When active AND the
+    # `:nuclear` anchor is in force, the fixed `anchor_share` is REPLACED by a
+    # share that scales with ex-ante nuclear availability tightness:
+    #   a         = trailing-30d nuclear output p95 ÷ installed nuclear capacity
+    #               (both already queried by fleet-truthing — ex-ante, no fit)
+    #   tightness = clamp((nuclear_avail_ref − a) /
+    #                     (nuclear_avail_ref − nuclear_avail_floor), 0, 1)
+    #   share_eff = nuclear_avail_share_lo +
+    #               (nuclear_avail_share_hi − nuclear_avail_share_lo) · tightness
+    # Loose fleet (winter, a≈0.80) → share_lo (nuclear bids near fuel cost,
+    # pulls the over-priced winter evenings down); tight fleet (summer, a≈0.60)
+    # or crisis (2023, a≈0.53) → toward share_hi (scarce nuclear prices the
+    # ramp/peak at high opportunity cost, lifts the under-priced summer ramp).
+    # The water-value clamp is preserved (floored at fuel SRMC, capped by the
+    # coupled reference), so this never manufactures scarcity — it only
+    # redistributes the nuclear bid across the availability regime.
+    # nuclear_avail_share_hi == 0 ⇒ OFF: the fixed anchor_share is used
+    # (byte-identical). See docs/experiments/cv23-fr-nuclear.md.
+    nuclear_avail_share_lo::Float64 = 0.0
+    nuclear_avail_share_hi::Float64 = 0.0
+    nuclear_avail_ref::Float64 = 0.80    # winter-peak availability: no premium at/above
+    nuclear_avail_floor::Float64 = 0.50  # crisis / deep-maintenance floor: premium saturates at/below
     # Scarcity import credit (iter6): fraction of the zone's offered import ATC
     # to add to dispatchable capacity in the scarcity margin. A thermal zone with
     # GWs of available import capacity is NOT strategically scarce even when its
@@ -455,9 +550,37 @@ const FRANCE_PROFILE = ZoneProfile(
     # weighted ref imports the overpricing of CH/BE/ES, so the share must
     # discount it. Extrapolating the measured share→bias line puts |bias|≤10
     # at ≈0.55: EDF's off-peak position sits just above half the coupled
-    # neighbor price.
+    # neighbor price. cv23: this fixed share is REPLACED at runtime by the
+    # availability-scaled band [nuclear_avail_share_lo, nuclear_avail_share_hi]
+    # below (a strict generalization — lo=hi=0.55 reproduces this exactly).
     anchor_share = 0.55,
+    # cv23 availability-scaled nuclear opportunity cost. Endpoints read off the
+    # fleet's demonstrated availability envelope + the opportunity-cost economics
+    # (no price fit): winter-loose nuclear (a≈0.80) bids at share_lo=0.40 — below
+    # the old 0.55, pulling the over-priced winter/morning peaks down; summer- or
+    # crisis-tight nuclear (a≈0.50–0.66) scales toward share_hi=0.95, the near-
+    # full export/opportunity value of a budget-limited MWh, lifting the €15–21
+    # under-priced summer late-afternoon ramp. a_ref=0.80 (winter-peak observed
+    # 0.74–0.86), a_floor=0.50 (2023-crisis / deep-maintenance floor). See
+    # docs/experiments/cv23-fr-nuclear.md §"the designed rule".
+    nuclear_avail_share_lo = 0.40,
+    nuclear_avail_share_hi = 0.95,
+    nuclear_avail_ref = 0.80,
+    nuclear_avail_floor = 0.50,
 )
+
+"""
+FR (cv23). FRANCE_PROFILE (nuclear opportunity-cost bidding) plus the FR↔GB
+boundary book (`GB_FR_BOOK`): GB is modeled as its own CCGT-marginal counterparty
+on the FR↔GB interconnectors (IFA/IFA2/ElecLink), replacing the double-counted
+fixed GB flow injection with an elastic ladder anchored on GB's own fundamental
+SRMC (UK-ETS carbon). The FR nuclear fix (availability-scaled opportunity cost)
+and the GB pair (double-count fix + honest GB premium) are the two coupled cv23
+components — shipped together per the cv22 GB-pair NO-SHIP verdict ("fix France's
+supply curve first, then re-run this exact A/B"). Both gated by
+`EUPHEMIA_DISABLE_CV23` (docs/experiments/cv23-fr-nuclear.md).
+"""
+const FR_PROFILE = with_profile(FRANCE_PROFILE; boundary_book = GB_FR_BOOK)
 
 """
 Southern/mid Norway (NO1/NO2/NO3/NO5). Same reservoir-opportunity hydro model
@@ -803,8 +926,11 @@ const ZONE_PROFILES = Dict{String,ZoneProfile}(
     "DK1" => DK1_PROFILE, "DK2" => DENMARK_PROFILE,
     # Baltic
     "EE" => BALTIC_PROFILE, "LT" => BALTIC_PROFILE, "LV" => BALTIC_PROFILE,
-    # France (nuclear-heavy: continental scarcity + nuclear bid position)
-    "FR" => FRANCE_PROFILE,
+    # France (nuclear-heavy: continental scarcity + availability-scaled nuclear
+    # opportunity cost). cv23: + the FR↔GB boundary book (double-count fix paired
+    # with the honest GB premium — see FR_PROFILE / GB_FR_BOOK). Both cv23
+    # mechanisms gated by EUPHEMIA_DISABLE_CV23.
+    "FR" => FR_PROFILE,
     # Alpine hydro (CH + AT): reservoir-opportunity + :hydro anchor, rolled out
     # together (iter4) so the AT–CH border is anchored consistently; AT carries
     # its own anchor_share for the Core-FBMC premium (iter5)
@@ -851,6 +977,15 @@ function get_zone_profile(zone::AbstractString)
     if p.boundary_book !== nothing &&
        !isempty(get(ENV, p.boundary_book.disable_env, ""))
         p = with_profile(p; boundary_book=nothing)
+    end
+    # cv23 kill-switch (byte-identity guard + attribution A/Bs). A non-empty
+    # EUPHEMIA_DISABLE_CV23 strips BOTH cv23 mechanisms so the EU book reverts
+    # exactly to cv22 main: (1) the availability-scaled nuclear share reverts to
+    # the fixed anchor_share (share_hi=0 ⇒ OFF), and (2) the FR↔GB boundary book
+    # is stripped (its disable_env is also EUPHEMIA_DISABLE_CV23, handled above).
+    # Worker-safe via ENV like the other switches.
+    if !isempty(get(ENV, "EUPHEMIA_DISABLE_CV23", "")) && p.nuclear_avail_share_hi > 0.0
+        p = with_profile(p; nuclear_avail_share_lo=0.0, nuclear_avail_share_hi=0.0)
     end
     return p
 end

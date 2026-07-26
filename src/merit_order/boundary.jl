@@ -13,23 +13,28 @@ const GB_CCGT_EFFICIENCY = 0.52   # GB CCGT fleet efficiency (LHV) — the ancho
                                   # divisor for the GB fundamental SRMC.
 
 """
-    _boundary_anchor(anchor::Symbol, day::Date, zone::String) -> Float64
+    _boundary_anchor(book::BoundaryBook, day::Date, zone::String) -> Float64
 
 The NEIGHBOR's own fundamental marginal cost (€/MWh) the boundary ladder is
 anchored on — never our price, never a fixed multiple of our SRMC (the
 boundary-program standing rule). `:gb_ccgt_srmc` is GB CCGT SRMC: TTF/η +
-EUA-proxied UK carbon/η + €2 O&M (η = `GB_CCGT_EFFICIENCY`; UK ETS proxied by
-EUA — the documented wave-2 proxy, no UKA feed exists yet). When TTF is
-unavailable, back out an implied gas price from our own gas SRMC and re-scale
-to GB efficiency, so the anchor still tracks fuel.
+UK-carbon/η + €2 O&M (η = `GB_CCGT_EFFICIENCY`). The carbon leg uses
+`book.carbon_source`: `:uka` = the real UK-ETS price (`uka_price(day)`, falling
+back to EUA when the feed is unavailable — e.g. the offline extract) or `:eua`
+= the EUA proxy (DK1/Viking's cv21 config). Validated 2026-07-23..25: the
+UKA-anchored GB CCGT SRMC ≈ €146–150 tracks realized N2EX all-hours €150–159 on
+the two tight days (docs/experiments/gb-borders-cv22.md). When TTF is
+unavailable, back out an implied gas price from our own gas SRMC and re-scale to
+GB efficiency, so the anchor still tracks fuel.
 """
-function _boundary_anchor(anchor::Symbol, day::Date, zone::String)
+function _boundary_anchor(book::BoundaryBook, day::Date, zone::String)
     # :zone_gas_srmc (cv22/UA) — our OWN zone gas SRMC. UA has no fundamentals
     # feed, so this is the documented wave-1 generic-anchor compromise; the firm
     # slice, not the elastic anchor, does the load-bearing work.
-    anchor === :zone_gas_srmc && return get_marginal_cost(day, "Fossil Gas", zone)
-    anchor === :gb_ccgt_srmc ||
-        error("unknown boundary anchor $anchor")
+    book.anchor === :zone_gas_srmc && return get_marginal_cost(day, "Fossil Gas", zone)
+    book.anchor === :gb_ccgt_srmc ||
+        error("unknown boundary anchor $(book.anchor)")
+    carbon = book.carbon_source === :uka ? uka_price(day) : eua_price(day)
     ttf = get_ttf_price(day)
     if ttf === nothing
         gas = get_marginal_cost(day, "Fossil Gas", zone)
@@ -37,7 +42,7 @@ function _boundary_anchor(anchor::Symbol, day::Date, zone::String)
                (GAS_PLANT_EFFICIENCY / GB_CCGT_EFFICIENCY) + GAS_VOM_COST
     end
     return ttf / GB_CCGT_EFFICIENCY +
-           GAS_EMISSION_FACTOR / GB_CCGT_EFFICIENCY * eua_price(day) +
+           GAS_EMISSION_FACTOR / GB_CCGT_EFFICIENCY * carbon +
            GAS_VOM_COST
 end
 
@@ -80,7 +85,7 @@ On days with full DA-ATC coverage this reproduces the experiment's precomputed
 capability bit-identically (verified on the confirm window).
 """
 function get_boundary_capability(zone::String, book::BoundaryBook, day::Date)
-    ckey = (zone, day, join(book.flow_codes, ","))
+    ckey = (zone, day, join(vcat(book.flow_codes, "|", boundary_atc_codes(book)), ","))
     cached = lock(_BOUNDARY_CAP_LOCK) do
         get(_BOUNDARY_CAP_CACHE, ckey, nothing)
     end
@@ -99,21 +104,30 @@ end
 # ATC gaps. (Unchanged from cv21 — byte-identical for VIKING_GB_BOOK.)
 function _boundary_capability_atc(zone::String, book::BoundaryBook, day::Date)
     codes = book.flow_codes
-    # (1) The day's offered Day-ahead explicit ATC, hourly AVG, per direction.
+    atc_codes = boundary_atc_codes(book)
+    # (1) The day's offered Day-ahead explicit ATC per direction. A border can be
+    # published as multiple parallel cables (FR↔GB: IFA/IFA2/ElecLink, no
+    # aggregate ATC), so AVG within (cable, hour) then SUM across cables — the
+    # total border capability. A single-code border (DK1: "GB") sums one cable ⇒
+    # bit-identical to the old per-(dir,hour) AVG.
     atc_df = sql2df_with_retry(
         """
-        SELECT CASE WHEN in_map_code = \$1 THEN 'imp' ELSE 'exp' END AS dir,
-               EXTRACT(HOUR FROM date_time_utc AT TIME ZONE 'UTC')::int AS h,
-               AVG(capacity_mw) AS cap
-        FROM entsoe.offered_transfer_capacities_explicit
-        WHERE contract_type = 'Day-ahead' AND capacity_mw IS NOT NULL
-          AND date_time_utc >= (\$2::date::timestamp AT TIME ZONE 'UTC')
-          AND date_time_utc <  ((\$2::date + 1)::timestamp AT TIME ZONE 'UTC')
-          AND ((in_map_code = \$1 AND out_map_code = ANY(\$3))
-            OR (out_map_code = \$1 AND in_map_code = ANY(\$3)))
+        SELECT dir, h, SUM(cap) AS cap FROM (
+          SELECT CASE WHEN in_map_code = \$1 THEN 'imp' ELSE 'exp' END AS dir,
+                 EXTRACT(HOUR FROM date_time_utc AT TIME ZONE 'UTC')::int AS h,
+                 CASE WHEN in_map_code = \$1 THEN out_map_code ELSE in_map_code END AS cbl,
+                 AVG(capacity_mw) AS cap
+          FROM entsoe.offered_transfer_capacities_explicit
+          WHERE contract_type = 'Day-ahead' AND capacity_mw IS NOT NULL
+            AND date_time_utc >= (\$2::date::timestamp AT TIME ZONE 'UTC')
+            AND date_time_utc <  ((\$2::date + 1)::timestamp AT TIME ZONE 'UTC')
+            AND ((in_map_code = \$1 AND out_map_code = ANY(\$3))
+              OR (out_map_code = \$1 AND in_map_code = ANY(\$3)))
+          GROUP BY 1, 2, 3
+        ) s
         GROUP BY 1, 2
         """,
-        Any[zone, day, codes])
+        Any[zone, day, atc_codes])
     atc = Dict{Tuple{String,Int},Float64}()
     for r in eachrow(atc_df)
         ismissing(r.cap) || (atc[(String(r.dir), Int(r.h))] = Float64(r.cap))
@@ -301,7 +315,7 @@ dropped; prices clamp to `[1, price_cap]`.
 """
 function get_boundary_orders(book::BoundaryBook, zone::String, day::Date,
     timeslots::Vector{String}, resolution_minutes::Int, price_cap::Float64)
-    anchor = book.anchor_mult * _boundary_anchor(book.anchor, day, zone)
+    anchor = book.anchor_mult * _boundary_anchor(book, day, zone)
     cap = get_boundary_capability(zone, book, day)
     firm = book.firm_slice ? get_boundary_firm(zone, book, day) :
            Dict{Int,Float64}()
