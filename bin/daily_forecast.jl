@@ -99,6 +99,14 @@ const LOAD_FILL = lowercase(get(ENV, "LOAD_FILL", "true")) == "true"
 # eligible. Default ON; RES_FILL=false reverts to the pre-fill RES gate. Inert on
 # the weather track (which already sources all RES from weather, no RES gate).
 const RES_FILL = lowercase(get(ENV, "RES_FILL", "true")) == "true"
+# Inter-zone throttle for the per-zone open-meteo fetches (load fill, RES fill,
+# weather track). On the entsoe track a run fires up to 39 load-fill + 39 RES-fill
+# fetches back-to-back against the PUBLIC open-meteo API, which then returns 429
+# (Too Many Requests) mid-burst — that is exactly what refused FI/PT on 2026-07-26
+# and made the day INELIGIBLE. Spacing the calls keeps the rate under the API's
+# per-minute window; the 429-aware retry in weather_res/weather_load is the
+# backstop. Set 0 to disable (e.g. against a self-hosted instance).
+const OPENMETEO_ZONE_THROTTLE_S = parse(Float64, get(ENV, "EUPHEMIA_OPENMETEO_ZONE_THROTTLE", "0.6"))
 const CLEARING_MODE = get(ENV, "CLEARING_MODE", "multi_zone_eu")
 const ZONES = let z = [String(strip(s)) for s in split(get(ENV, "ZONES", ""), ",") if !isempty(strip(s))]
     isempty(z) ? FORECAST_FOOTPRINT : z
@@ -293,6 +301,7 @@ function build_weather_predictions(first_utc_day::Date, last_utc_day::Date)
             continue
         end
         cells = [(Float64(c[1]), Float64(c[2])) for c in zm["cells"]]
+        OPENMETEO_ZONE_THROTTLE_S > 0 && sleep(OPENMETEO_ZONE_THROTTLE_S)  # spread calls → avoid 429
         weather = fetch_weather(cells, dates)
         preds[zone] = predict_res(pack, zone, hours, weather)
     end
@@ -368,6 +377,7 @@ function build_load_fills(pack, zones_to_fill::Vector{String},
             continue
         end
         cells = [(Float64(c[1]), Float64(c[2])) for c in zm["cities"]]
+        OPENMETEO_ZONE_THROTTLE_S > 0 && sleep(OPENMETEO_ZONE_THROTTLE_S)  # spread calls → avoid 429
         weather = try
             fetch_load_weather(cells, fetch_dates)
         catch e
@@ -461,6 +471,7 @@ function build_res_fills(pack, zones_to_fill::Vector{String},
             continue
         end
         cells = [(Float64(c[1]), Float64(c[2])) for c in zm["cells"]]
+        OPENMETEO_ZONE_THROTTLE_S > 0 && sleep(OPENMETEO_ZONE_THROTTLE_S)  # spread calls → avoid 429
         weather = try
             fetch_weather(cells, dates)
         catch e

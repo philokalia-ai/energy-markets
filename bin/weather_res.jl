@@ -38,7 +38,11 @@ using Dates, Statistics, Downloads, JSON
 const OPENMETEO_URL_DEFAULT = "https://api.open-meteo.com/v1/forecast"
 const OPENMETEO_USER_AGENT = "philokalia-energy/1.0 (contact: pankgeorg@gmail.com)"
 const OPENMETEO_BATCH = 50            # max locations per API call
-const OPENMETEO_RETRIES = 5
+const OPENMETEO_RETRIES = 6
+# A 429 (rate limit) needs a cooldown that spans the API's per-minute rate
+# window, not the short exponential backoff a transient network error uses.
+# Overridable so a self-hosted instance with no limit can shorten it.
+const OPENMETEO_RL_COOLDOWN_S = parse(Float64, get(ENV, "EUPHEMIA_OPENMETEO_RL_COOLDOWN", "20.0"))
 const RES_MODELS_PATH_V2 = joinpath(@__DIR__, "res_models_v2.json")
 const RES_MODELS_PATH_V1 = joinpath(@__DIR__, "res_models_v1.json")
 
@@ -204,6 +208,13 @@ Default pack: v2 (GFS-vintage-trained wind) if present, else v1; override with
 """
 load_res_models(path::AbstractString=default_res_models_path()) = JSON.parse(read(path, String))
 
+"True if `e` is an open-meteo HTTP 429 (Too Many Requests) rate-limit response."
+function _openmeteo_is_rate_limited(e)
+    e isa Downloads.RequestError || return false
+    resp = getfield(e, :response)
+    return resp !== nothing && hasproperty(resp, :status) && resp.status == 429
+end
+
 function _openmeteo_get(url::String)
     last_err = nothing
     for attempt in 1:OPENMETEO_RETRIES
@@ -216,8 +227,13 @@ function _openmeteo_get(url::String)
         catch e
             last_err = e
             attempt == OPENMETEO_RETRIES && break
-            wait_s = 2.0^attempt
-            @warn "open-meteo request failed (attempt $attempt/$OPENMETEO_RETRIES); retrying in $(wait_s)s" exception=e
+            # 429 → a fixed cooldown long enough for the rate window to reset;
+            # otherwise the short exponential backoff. Jitter de-syncs the many
+            # per-zone fetches so they don't retry in lockstep and re-trip the limit.
+            rl = _openmeteo_is_rate_limited(e)
+            wait_s = (rl ? OPENMETEO_RL_COOLDOWN_S : 2.0^attempt) * (0.75 + 0.5 * rand())
+            @warn "open-meteo request $(rl ? "rate-limited (429)" : "failed") " *
+                  "(attempt $attempt/$OPENMETEO_RETRIES); retrying in $(round(wait_s, digits=1))s" exception=e
             sleep(wait_s)
         end
     end
