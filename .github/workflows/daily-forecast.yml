@@ -36,6 +36,15 @@ on:
 env:
   JULIA_VERSION: "1.12"
   JULIA_NUM_THREADS: 4
+  # Weather source: the SELF-HOSTED open-meteo (same host as the runner;
+  # serves wind_speed_100m + shortwave_radiation since infra#9). No public
+  # rate limits, no external dependency for the ex-ante product; if it is
+  # down, fetch_weather falls back to the public API automatically. Honest
+  # note: the self-hosted GFS cycle can lag the public blend by one sync
+  # (~2-4 km/h wind differences observed; GHI ±5 W/m²) — the 17:30/19:30
+  # evening ETLs keep the gap small.
+  EUPHEMIA_OPENMETEO_URL: "http://localhost:30555/v1/forecast"
+  EUPHEMIA_OPENMETEO_ARCHIVE_URL: "http://localhost:30555/v1/archive"
 
 jobs:
   daily-forecast:
