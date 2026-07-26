@@ -1,0 +1,20 @@
+cv23 A/B — single clean coupled day 2026-03-03 (March stable-guard window)
+39-zone coupled clear (enrich_network, passes=2, :merit_order, HiGHS), offline
+extract euphemia-live, scored on the extract's realized DA prices.
+  base = EUPHEMIA_DISABLE_CV23=1 (== cv22, byte-identical guard)
+  cv23 = FR nuclear availability-scaled share + FR<->GB boundary pair (both ON)
+FR nuclear availability 0.80 -> effective opportunity share 0.41 (winter: pulls down)
+
+zone | cv22 MAE / bias / eve-bias | cv23 MAE / bias / eve-bias | dMAE
+-----+----------------------------+----------------------------+------
+ FR  |   38.2 / +38.2 / +47.4     |   16.2 / +13.4 / +11.1     | -22.0
+ BE  |   23.3 / +19.8 / +17.4     |   23.2 / +19.7 / +17.1     | -0.0
+ NL  |   29.4 /  -4.3 / -49.4     |   29.4 /  -4.3 / -49.4     |  0.0
+ NO2 |   13.4 / +13.0 /  +6.1     |   13.4 / +13.0 /  +6.1     |  0.0
+ DK1 |   19.0 /  +5.1 / -13.1     |   19.0 /  +5.1 / -13.1     |  0.0
+
+FR: MAE -22.0 (gate -1.5), evening bias +47.4 -> +11.1 = -77% (gate >=30%).
+Neighbours BE/NL/NO2/DK1 within +-0.1 MAE (GB-pair guard PASS, no FR regression).
+See docs/experiments/cv23-fr-nuclear.md "Phase 2" for caveats (single day; July
+target window data-blocked on this extract; summer half verified at share level).
+Reproduce: score1day.jl (scratchpad) or score_cv23.jl over full-window arms.

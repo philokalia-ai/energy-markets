@@ -218,4 +218,111 @@ March-2026 stable) plus a 2023 stratified 10-day sample (the crisis regime).
 If the FR mechanism passes but the GB pair still fails its leg, **ship FR alone**
 and document GB honestly again (the cv22 discipline).
 
-<!-- Phase 2 results appended below after measurement. -->
+## Phase 2 — implementation + measurement
+
+### Implemented (committed)
+
+- **FR nuclear availability-scaled share** — `ZoneProfile.nuclear_avail_share_lo/hi`
+  + `nuclear_avail_ref/floor` (`zone_profiles.jl`); `_effective_nuclear_share` /
+  `_nuclear_avail_frac` (`book_build.jl`), used in place of the fixed
+  `anchor_share` in the `:nuclear` anchor branch. FRANCE_PROFILE carries
+  `(0.40, 0.95, 0.80, 0.50)`.
+- **FR↔GB boundary pair** — ported from `fix/gb-borders-cv22` and reconciled onto
+  cv22 main: `BoundaryBook` gains `net_exclude_codes` / `atc_codes` /
+  `carbon_source`; `GB_FR_BOOK` on `FR_PROFILE`; `uka_price` (EUA fallback
+  offline); per-cable ATC AVG-within-cable → SUM-across-cables.
+- Both gated by one `EUPHEMIA_DISABLE_CV23`. **Does NOT bump the cv** (coordinator
+  serializes the cv22→23 bump across concurrent agents).
+
+### Guard 1 — byte-identity (PASS)
+
+`EUPHEMIA_DISABLE_CV23=1` vs cv22 main (`cv22_guard.jl`, 2026-03-03, offline
+extract): **1152 / 1152 price rows BIT-IDENTICAL** — GR single-zone (96) + SEE
+5-zone (120) + 39-zone EU (936). The shared boundary-code changes (ATC SUM
+restructure, `_boundary_anchor(book)`, `boundary_net_exclude`) are byte-identical
+for the DK1/Viking + UA books when cv23 is disabled, and the FR nuclear share
+reverts to the fixed 0.55. So cv23-off reproduces cv22 exactly.
+
+### Guard 2 — the mechanism responds correctly to availability (ex-ante, no fit)
+
+The `:nuclear` effective share, computed by the shipped code from the ex-ante
+availability signal (trailing-30d nuclear p95 ÷ installed), across regimes:
+
+| day | nuclear availability | effective share | vs fixed 0.55 |
+|---|---|---|---|
+| 2023-07-15 (crisis summer) | 0.53 | **0.89** | strong lift |
+| 2025-07-15 (summer) | 0.66 | **0.65** | lift |
+| 2026-07-15 (summer) | 0.70 | **0.58** | mild lift |
+| 2026-03-03 (spring) | 0.80 | **0.41** | pulls down |
+| 2026-01-15 (winter) | 0.86 | **0.40** | pulls down |
+
+Exactly the regime shape the diagnosis prescribes: scarce fleet → higher
+opportunity cost, abundant fleet → nearer fuel cost. `EUPHEMIA_DISABLE_CV23=1`
+returns the fixed 0.55 on every day.
+
+### A/B — the coupled measurement (one clean day; window A/B blocked in-session)
+
+**Environment limits (documented, not code issues).** Two independent obstacles
+prevented completing the full multi-window coupled A/B in this session, both
+orthogonal to the cv23 code (the cv22 baseline arm hits them identically):
+
+1. **July-2026 is data-blocked on the available extract.** The coupled clear
+   drops periods "not covered by all zones" — for 2026-07-11 only 3 of 24 UTC
+   hours are common across all 39 zones (≥1 footprint zone lacks the July
+   day-ahead forecast), so the **primary target window (July evening) cannot be
+   scored here**. March-2026 clears cleanly to 24 h (guard: full 936 EU rows).
+2. **Heavy machine contention.** A concurrent agent held ~50 Julia processes
+   through the session; coupled 39-zone clears that run ~4.5 min solo stalled
+   many minutes in the Nordic-zone (reservoir full-history) scan under
+   contention, exceeding the harness timeouts. The harness
+   (`docs/experiments/cv23/ab_cv23.jl` + `score_cv23.jl`, `windows_ab.json`) is
+   committed for the coordinator to run the full backfill A/B off-contention.
+
+**Clean measured day — 2026-03-03 (March stable-guard window), 39-zone coupled,
+offline extract, scored on the extract's realized DA prices** (cv22 = the guard's
+`EUPHEMIA_DISABLE_CV23=1` EU clear; cv23 = both mechanisms on):
+
+| zone | cv22 MAE / bias / eve-bias | cv23 MAE / bias / eve-bias | ΔMAE |
+|---|---|---|---|
+| **FR** | **38.2 / +38.2 / +47.4** | **16.2 / +13.4 / +11.1** | **−22.0** |
+| BE | 23.3 / +19.8 / +17.4 | 23.2 / +19.7 / +17.1 | −0.0 |
+| NL | 29.4 / −4.3 / −49.4 | 29.4 / −4.3 / −49.4 | 0.0 |
+| NO2 | 13.4 / +13.0 / +6.1 | 13.4 / +13.0 / +6.1 | 0.0 |
+| DK1 | 19.0 / +5.1 / −13.1 | 19.0 / +5.1 / −13.1 | 0.0 |
+
+- **FR improves dramatically and directionally as designed:** MAE −22.0 (gate
+  −1.5), evening bias +47.4 → +11.1 (**−77%**, gate ≥30%). 2026-03-03 is winter
+  (availability 0.80 → share 0.41 pulls the over-priced evenings down) plus the
+  GB double-count removal — exactly the winter-overpricing fix the diagnosis
+  identified (§1b: 2023/2026 DJF evenings +20…+30 too dear).
+- **GB-pair neighbor guard PASSES:** BE/NL/NO2/DK1 all within ±0.1 MAE (0.0) —
+  no leakage, and crucially **no FR regression** (the cv22 GB-pair failure was
+  +4.2 FR July MAE; here FR is −22 with the nuclear fix underneath, as the cv22
+  verdict predicted).
+
+**Honest caveats on the single day.** (a) One day is not a window mean — the
+direction (FR winter overpricing cut, neighbors neutral) is robust and matches
+the diagnosis, but the magnitude is one draw. (b) The offline-extract cv22 FR
+03-03 evening bias (+47) runs hotter than the Postgres cv22 record's March
+average (~+3, §1b) — the extract's 03-03 flow/ATC conditions overprice FR more
+than the shipped record, so the −22 magnitude is partly day/extract-specific;
+the shipped-record improvement will be smaller. (c) **The July-evening summer-
+scarcity target — the mechanism's home regime, where the nuclear share lifts
+(2025-07 → 0.65, 2023-07 → 0.89) and the GB double-count removal drops FR —
+is UNMEASURED here** (data-blocked); it must be run on an extract with complete
+July forecast coverage before cv23 ships. The winter result confirms the
+lower half of the mechanism (share < 0.55 fixes over-pricing); the summer half
+(share > 0.55 fixes under-pricing) is verified only at the share level, not yet
+on coupled prices.
+
+### Verdict / next step
+
+The mechanism is **implemented, correctness-guarded (byte-identical when
+disabled), and confirmed firing with the right availability shape**; the one
+clean coupled day it could be scored on (March) shows a large FR improvement
+with zero neighbor leakage — the GB-pair guard the cv22 investigation demanded.
+**Ship decision is deferred to the full window A/B** (July + March + 2023) on a
+non-contended run with complete July forecast coverage, via the committed
+harness. The FR mechanism and the GB pair are wired to ship together per the
+cv22 verdict; if the full A/B shows the GB leg still failing while FR passes,
+ship FR alone (the cv22 discipline).
