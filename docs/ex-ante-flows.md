@@ -119,7 +119,15 @@ D-7 −20.6). The one leak can be removed at *negative* cost.
 
 ## The v2 default — scoped (user decision, 2026-07-11)
 
-**`:v2` is now the DEFAULT for the EU-footprint path** —
+> **Superseded as the default since cv19.** `:v2` was the EU-footprint default
+> for cv16–cv18. From **cv19 onward the scoped default is `:v3` (anad2)** — the
+> per-border mean of the D-1-load-analogue median and the D-2 observed flow
+> (see `docs/experiments/analogue-flows/`). This section documents the `:v2`
+> evidence that established the ex-ante-flow approach; `:v3` refined it. An
+> explicit `EUPHEMIA_FLOW_ASOF_MODE` / `ex_ante_mode` still selects `:v2` (or
+> `:d0`) on demand.
+
+**`:v2` was the DEFAULT for the EU-footprint path** (cv16–cv18) —
 `run_multi_zone_market_clearing` with `enrich_network=true` + `:merit_order`
 (the forward product) resolves `ex_ante_mode` to `:v2` unless an explicit
 `EUPHEMIA_FLOW_ASOF_MODE` env or `ex_ante_mode` kwarg says otherwise. The

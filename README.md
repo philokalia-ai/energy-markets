@@ -77,9 +77,10 @@ The cv17 movers were exactly its targets — the weak-zone import fixes
 **RS 0.45 → 0.72**, SE1/SE2 ~0.32 → ~0.52. The guard zones held:
 **GR 0.86 → 0.85 (MAE 20.8 → 20.3)**, DE_LU 0.85 → 0.84.
 
-Still weak on the full year, stated plainly: **NO1 corr 0.01 / MAE €64 /
-bias +€40** (reservoir-regime import flows — the known open problem),
-**NO3 0.13**, **NO4 0.19**, **DK1 0.20**, **NO5 0.42**.
+Still weak on the full year, stated plainly: **NO1 corr 0.00 / MAE €62.7 /
+bias +€36.9** (reservoir-regime import flows — the known open problem),
+**NO3 0.13**, **NO4 0.14**, **NO5 0.42**, **SE1/SE2 ≈ 0.52**. (DK1, weak in
+earlier cvs, is now **0.78 / €22.5** — the cv21 Viking boundary book fixed it.)
 
 **What entered between cv19 and the cv22 record:** the DK1/Viking virtual
 boundary book ([docs/experiments/cv21-dk1-viking.md](docs/experiments/cv21-dk1-viking.md),
@@ -91,12 +92,19 @@ NO-SHIPs are documented with mechanism-level root causes for cv23: the GB
 border pair (blocked on French nuclear opportunity-cost bidding) and the
 43-zone endogenization ([docs/experiments/](docs/experiments/)).
 
-### By strategy regime — frozen 36-day stratified sample
+### By strategy regime — frozen 36-day stratified sample (pre-cv19)
 
-The per-regime breakdown below is measured on a **frozen 36-day full-year
-stratified sample** (all 39 zones, every day scored; bias = sim − actual).
-Source of truth: [docs/model-spec-exante.md](docs/model-spec-exante.md).
-Aggregate on this sample: mean corr 0.61, mean MAE €30.7/MWh, mean bias −8.5.
+The per-regime breakdown below is a **frozen 36-day full-year stratified
+sample** (all 39 zones, every day scored; bias = sim − actual) measured under
+the **cv17-era climatology flow rule** — *before* the cv19 anad2 flows and the
+cv21/cv22 boundary books. It is kept as a stratified-regime snapshot of where
+each strategy class is strong or weak; it is **not** the current record. For
+current per-zone numbers use the cv22 comparable-full-year figures in the
+headline above (DE_LU 0.85, GR 0.85, FI 0.84, FR 0.75, …) and the
+`multi_zone_eu` cv22 backfill in the Metabase dashboard.
+Source of truth for this frozen sample:
+[docs/model-spec-exante.md](docs/model-spec-exante.md). Aggregate on it: mean
+corr 0.61, mean MAE €30.7/MWh, mean bias −8.5.
 
 By strategy regime (corr / MAE €/MWh / bias):
 
@@ -127,8 +135,10 @@ By strategy regime (corr / MAE €/MWh / bias):
 
 Where it's strong: wherever gas or truthed thermal sets the price (Greece,
 Germany, Iberia, Italy, France), correlation sits at 0.74–0.82 with MAE in the
-€20s. Greece — the longest-validated zone — holds **corr 0.86 / MAE €20.8 over
-the full-year cv16 backfill** (2025-07-01 → 2026-06-30).
+€20s. Greece — the longest-validated zone — reaches **corr 0.87 in 2026** and
+holds **0.85 / MAE €21.2** over the cv22 comparable full year
+(2025-07-25 → 2026-07-24); its per-year trajectory is 0.72 → 0.77 → 0.85 →
+0.87 (the earlier full-year cv16 backfill sat at 0.86 / €20.8).
 
 The honest weak spots on this sample, stated plainly:
 
@@ -193,7 +203,7 @@ with exact per-order Big-M, the market-coupling condition
 λ_sink − λ_source = ρ⁺ − ρ⁻ per ATC-constrained border, MIP gap 1e-6,
 deterministic price reconstruction. ~10 s/day (Gurobi) for 39 zones.
 
-**3. The ex-ante flow rule (`:v2`).** In the real EUPHEMIA, cross-border
+**3. The ex-ante flow rule (`:v3`, cv19+).** In the real EUPHEMIA, cross-border
 flows are not derived *from* prices — flows and prices **co-emerge** from the
 same optimization: energy flows from cheap zones to expensive ones until a
 border saturates or prices equalize. Our coupled clear does exactly that for
@@ -215,11 +225,16 @@ For the backward-looking counterfactual the observed same-day flows are
 legitimate inputs. For the **D-1 forecast** they are a data leak — and unlike
 load and RES, no official D-1 flow forecast exists (scheduled exchanges are
 the auction's own output; using them would be circular). So the exogenous
-part is predicted by a simple, versioned rule: **flow climatology** (median
-of the trailing 8 same-weekday days) everywhere except the Norwegian
-borders, which use **D-7 same-weekday flows** (reservoir regimes persist
-week to week; a median mis-states them). Evidence per border class:
-[docs/ex-ante-flows.md](docs/ex-ante-flows.md).
+part is predicted by a simple, versioned rule. The current default (`:v3`
+"anad2", since cv19) is the **per-border mean of the D-1-load-analogue median**
+(the 16 trailing-365 days whose D-1 load-forecast vector is closest to the
+delivery day's) **and the D-2 observed flow** — the load-analogue captures the
+regime, D-2 catches a new one within 48 h. It refined the earlier `:v2` rule
+(flow climatology + D-7 same-weekday recency on the Norwegian reservoir
+borders), still selectable via `EUPHEMIA_FLOW_ASOF_MODE`. Evidence per border
+class: [docs/ex-ante-flows.md](docs/ex-ante-flows.md) (`:v2`) and
+[docs/experiments/analogue-flows](docs/experiments/analogue-flows/README.md)
+(`:v3`).
 
 ## Resolution & solvers
 

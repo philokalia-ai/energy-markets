@@ -249,9 +249,10 @@ reference at `results/reference/quick_metrics.csv` and flags any drift.
 ### What to expect
 
 - The `--quick` GR single-zone and 39-zone EU metrics should match
-  `results/reference/quick_metrics.csv` to well within €0.5/MWh. The v0.2.0
-  footprint sits at mean MAE ≈ 24 €/MWh, mean corr ≈ 0.79 on the 2026-04 window
-  (per-zone spread documented in `docs/calibration-atlas.md`).
+  `results/reference/quick_metrics.csv` to well within €0.5/MWh. On the current
+  **cv22** reference the 2026-04-01…05 window sits at 39-zone mean MAE ≈ 27
+  €/MWh, mean corr ≈ 0.78 (GR single-zone 0.85 / €25.1); per-zone spread
+  documented in `docs/calibration-atlas.md`.
 - The model is a **competitive counterfactual**, not a forecast: persistent
   residuals are candidate findings, not bugs. Read the numbers against
   `docs/calibration-atlas.md`.

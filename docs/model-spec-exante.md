@@ -25,7 +25,7 @@ observed prices — prices only ever enter as *validation*.
 | Historical unit/type output (trailing windows) | ENTSO-E | Activity gates, commitment state, fleet truthing |
 | Weekly reservoir filling levels | ENTSO-E | Hydro water value |
 | TTF gas & EUA carbon closes (last trading day *before* the market day) | market data | Marginal costs |
-| Cross-border flow **climatology** (median of the trailing 8 same-weekday days) and D-7 flows | derived, strictly pre-auction | Injections on borders outside the coupled network |
+| Cross-border **ex-ante flow rule** (current EU-path default `:v3` anad2, cv19+: per-border mean of the D-1-load-analogue median and the D-2 observed flow; the earlier `:v2` used flow climatology + D-7 Norwegian recency) | derived, strictly pre-auction | Injections on borders outside the coupled network |
 
 ## The strategy classes — who bids what
 
@@ -95,6 +95,16 @@ inadmissible by construction.
 | Demand | 98% @ €3000, 2% @ €250 |
 
 ## Performance — fully ex-ante, 36-day full-year stratified sample (corr / MAE €/MWh / bias)
+
+> **Provenance — a frozen pre-cv19 sample.** The per-zone figures in this
+> section were measured on a frozen 36-day stratified sample under the
+> **cv17-era climatology (`:v2`) flow rule**, *before* the cv19 anad2 (`:v3`)
+> flows and the cv21/cv22 boundary books entered the model. They are retained
+> as a stratified-regime snapshot, not as the current record. The **current
+> canonical record is cv22** (`clearing_mode='multi_zone_eu'`,
+> 2023-01-01…2026-07-24, 1,301 days): comparable full-year mean corr **0.67** /
+> MAE **€27.4**, full 2023+ **0.62 / €28.1** — see the README headline and
+> `docs/reproducibility.md`.
 
 **Aggregate: mean corr 0.61, mean MAE 30.7, mean bias −8.5.** By strategy regime:
 

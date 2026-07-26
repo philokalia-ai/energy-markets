@@ -4,6 +4,12 @@ Synthesis of calibration iterations 1–5 (PRs #91–#95, #97; released as v0.2.
 This is the single reference page; the chronological record with every measured
 sub-iteration, failure mode, and audit lives in `docs/eu-calibration-iter1..5.md`.
 
+> **Note — this page describes the v0.2.0 (cv14) state.** It documents *how* the
+> EU footprint is built and is accurate for that; the numbers below are the
+> 5-day v0.2.0 snapshot. The **current canonical record is cv22**
+> (2023-01-01…2026-07-24, 1,301 days): comparable full-year mean corr **0.67** /
+> MAE **€27.4**. See the README headline and `docs/reproducibility.md`.
+
 **State at v0.2.0** (39 zones, 5-day window 2026-04-01…05, resolution-aware
 methodology, bias = sim − actual): mean MAE **23.9 €/MWh**, mean corr **0.79**,
 mean bias **−2.5**, no zone above 36 MAE, zero regression flags, GR/SEE product

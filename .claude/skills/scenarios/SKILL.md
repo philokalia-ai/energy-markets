@@ -56,7 +56,7 @@ prices = generate_energy_prices("GR", Date(2026, 1, 26);
     order_method=:merit_order, save_to_db=false, renewable_modifier=solar)
 ```
 
-## Multi-zone EU scenario (the real thing: ~1 min/day with Gurobi)
+## Multi-zone EU scenario (the real thing: HiGHS default ~500 s/day, Gurobi ~10 s/day)
 
 ```julia
 FOOTPRINT = ["AT","BE","BG","CZ","DE_LU","DK1","DK2","EE","ES","FI","FR","GR",
@@ -104,8 +104,12 @@ zones' pass-2 water values through the pass-1 reference — footprint-consistent
    missing inputs. `./setup.sh --live` gets current data.
 3. `:merit_order` is the only extract-supported order method (`:uc_based` /
    `:alternative` need Postgres write paths).
-4. Multi-zone needs Gurobi in practice (HiGHS finds no incumbent on the
-   39-zone MILP; per-period decomposition works but ~50× slower).
+4. Multi-zone runs on HiGHS by default: since cv20 the canonical EU-footprint
+   mode is **per-period decomposition** (bit-identical across solvers, so the
+   record is solver-invariant), which HiGHS solves fine — just ~50× slower than
+   Gurobi (~500 s/day vs ~10 s). Only the legacy *monolithic* whole-day MILP
+   needs Gurobi (HiGHS finds no incumbent there). Use `optimizer="gurobi"` for
+   the faster path if licensed.
 5. Scenario hooks default to `nothing` — the no-scenario path is byte-identical
    and guarded; keep it that way when editing the hook plumbing.
 6. Model-behaviour changes bump `ENERGY_PRICES_CODE_VERSION` (ledger in

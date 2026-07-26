@@ -91,11 +91,13 @@ fi
 # ---------------------------------------------------------------- 4. What else
 say "Optional — worth setting up"
 if julia --project=. -e 'using Gurobi' >/dev/null 2>&1 && [ -n "${GRB_LICENSE_FILE:-$([ -f "$HOME/gurobi.lic" ] && echo y)}" ]; then
-    ok "Gurobi available — full 39-zone multi-zone clears run in ~10 s/day"
+    ok "Gurobi available — full 39-zone multi-zone clears run in ~10 s/day (optional fast path)"
 else
-    warn "Gurobi not configured: single-zone runs fine on the bundled HiGHS;"
-    echo  "      the 39-zone multi-zone MILP effectively needs Gurobi (free academic"
-    echo  "      licenses: https://www.gurobi.com/academia/ — put the license at ~/gurobi.lic)"
+    warn "Gurobi not configured — not required: since cv20 the 39-zone clear runs in"
+    echo  "      canonical per-period-decomposed mode on the bundled HiGHS (bit-identical"
+    echo  "      to Gurobi, solver-invariant record), just slower (~500 s/day vs ~10 s)."
+    echo  "      Gurobi is an optional faster dev path (free academic licenses:"
+    echo  "      https://www.gurobi.com/academia/ — put the license at ~/gurobi.lic)"
 fi
 [ -f .env ] && ok ".env present" || {
     warn "no .env — only needed by maintainers with live-Postgres access"

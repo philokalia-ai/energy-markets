@@ -62,7 +62,7 @@ the module header and `include`s:
 
 | File | Read this for |
 |---|---|
-| `flows_imports.jl` | day-level physical-flow cache, `get_net_imports` (same-day `:d0` and fully ex-ante `:v2` modes), import ATC capacity, the cv17 import backstop, unit→firm map |
+| `flows_imports.jl` | day-level physical-flow cache, `get_net_imports` (same-day `:d0`, ex-ante `:v2` climatology, and the current EU-path default `:v3` anad2 load-analogue modes), import ATC capacity, the cv17 import backstop, unit→firm map |
 | `zone_profiles.jl` | `ZoneProfile` (every per-zone calibration knob, with field docstrings), all named profiles, the `ZONE_PROFILES` registry, and the `ZoneScenario` counterfactual hooks |
 | `fleet_data.jl` | hydro availability, per-type output p95, installed capacity, reservoir dryness/drawdown queries |
 | `book_build.jl` | `create_merit_order_book` — the book construction itself, decomposed into named stages (see the file header for the stage list) |
