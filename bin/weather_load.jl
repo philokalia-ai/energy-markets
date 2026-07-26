@@ -36,7 +36,9 @@ const OPENMETEO_FORECAST_URL_DEFAULT = "https://api.open-meteo.com/v1/forecast"
 const OPENMETEO_ARCHIVE_URL_DEFAULT = "https://archive-api.open-meteo.com/v1/archive"
 const LOAD_OPENMETEO_USER_AGENT = "philokalia-energy/1.0 (contact: pankgeorg@gmail.com)"
 const LOAD_OPENMETEO_BATCH = 50
-const LOAD_OPENMETEO_RETRIES = 5
+const LOAD_OPENMETEO_RETRIES = 6
+# 429 rate-limit cooldown (spans the API's per-minute window; see weather_res.jl).
+const LOAD_OPENMETEO_RL_COOLDOWN_S = parse(Float64, get(ENV, "EUPHEMIA_OPENMETEO_RL_COOLDOWN", "20.0"))
 
 # Degree-hour bases (°C). Stored per-zone in the pack too, but these are the
 # fit defaults and the fallback when a pack omits them.
@@ -267,6 +269,13 @@ function load_load_models(path::AbstractString=default_load_models_path())
     return JSON.parse(read(path, String))
 end
 
+"True if `e` is an open-meteo HTTP 429 (Too Many Requests) rate-limit response."
+function _load_openmeteo_is_rate_limited(e)
+    e isa Downloads.RequestError || return false
+    resp = getfield(e, :response)
+    return resp !== nothing && hasproperty(resp, :status) && resp.status == 429
+end
+
 function _load_openmeteo_get(url::String)
     last_err = nothing
     for attempt in 1:LOAD_OPENMETEO_RETRIES
@@ -278,7 +287,11 @@ function _load_openmeteo_get(url::String)
         catch e
             last_err = e
             attempt == LOAD_OPENMETEO_RETRIES && break
-            sleep(2.0^attempt)
+            # 429 → fixed cooldown spanning the rate window; else exponential.
+            # Jitter de-syncs concurrent per-zone fetches (see weather_res.jl).
+            rl = _load_openmeteo_is_rate_limited(e)
+            wait_s = (rl ? LOAD_OPENMETEO_RL_COOLDOWN_S : 2.0^attempt) * (0.75 + 0.5 * rand())
+            sleep(wait_s)
         end
     end
     error("open-meteo request failed after $LOAD_OPENMETEO_RETRIES attempts: $last_err")
