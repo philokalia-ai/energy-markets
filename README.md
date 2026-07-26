@@ -47,20 +47,29 @@ that teaches the agent the hooks, labels and pitfalls.
 
 ## Headline results — honest, whole-sample, never cherry-picked
 
-**Full-year record (cv19).** The current model (`code_version` 19 — cv17 plus
-the anad2 ex-ante flow rule), evaluated over the full year
-**2025-07-01 → 2026-06-30** (all 39 zones, identical-window comparison,
-resolution-aware hourly eval; bias = sim − actual):
+**Full record (cv22, 2023-01-01 → 2026-07-24, 1,301 days × 39 zones).** The
+current model (`code_version` 22 — cv21's DK1/Viking boundary book plus the
+UA firm-slice boundary treatment and four price bug-fixes), backfilled over
+the entire history the public extract covers:
 
-**Aggregate over 39 zones: mean corr 0.64, mean MAE €27.2 (cv17: 0.64 /
-€27.3; the cv16 → cv17 step was 0.56 → 0.64 / €29.9 → €27.3).**
+**Comparable full-year window (2025-07-25 → 2026-07-24): mean corr 0.67,
+mean MAE €27.4** — the largest single-version correlation step in the
+program's history (cv19: 0.64 / €27.2; cv17: 0.64 / €27.3; cv16: 0.56 /
+€29.9). Full 2023+ record: mean corr 0.62 / MAE €28.1 (2023 carries the
+post-crisis regime, the hardest to model competitively).
 
-cv19's aggregate is honestly flat — its value is concentrated where regimes
-turn, which the annual mean barely samples: on the measured A/B windows the
-anad2 flow rule cut the July-2026 SEE evening overshoot (GR bias +57 → +43,
-outside this record window) and improved the held-out June-2026 week's MAE
-37.5 → 32.4, with every window better or flat and footprint net-import MAE
-−15% ([docs/experiments/analogue-flows](docs/experiments/analogue-flows/README.md)).
+The trajectory by year is itself a finding — the competitive counterfactual
+tracks the market better the further it gets from the 2022 crisis
+(energy-weighted share of load in zones with pooled corr ≥ 0.75, and mean
+zone corr): **2023: 50% / 0.61 · 2024: 58% / 0.60 · 2025: 66% / 0.65 ·
+2026: 19 of 39 zones ≥ 0.75 / 0.67**. GR specifically: 0.72 → 0.77 → 0.85 →
+0.87. On the measured A/B windows the cv19 anad2 flow rule cut the
+July-2026 SEE evening overshoot (GR bias +57 → +43) and improved the
+held-out June-2026 week's MAE 37.5 → 32.4
+([docs/experiments/analogue-flows](docs/experiments/analogue-flows/README.md));
+cv22's ua2 cut HU July MAE 80.3 → 61.5 and the legacy-ATC bug-fix removed
+phantom-scarcity hours worth −44/−90 MAE on the 5-zone BG/RO products
+([docs/experiments/cv22.md](docs/experiments/cv22.md)).
 
 The cv17 movers were exactly its targets — the weak-zone import fixes
 (corr, cv16 → cv17): **AT 0.24 → 0.79**, **BE 0.30 → 0.78**,
@@ -72,15 +81,15 @@ Still weak on the full year, stated plainly: **NO1 corr 0.01 / MAE €64 /
 bias +€40** (reservoir-regime import flows — the known open problem),
 **NO3 0.13**, **NO4 0.19**, **DK1 0.20**, **NO5 0.42**.
 
-**Latest code iteration (cv21, not yet in the full-year record):** the
-DK1/Viking virtual boundary book ([docs/experiments/cv21-dk1-viking.md](docs/experiments/cv21-dk1-viking.md))
-prices the GB counterparty on the DK1–GB Viking Link as an elastic neighbor.
-Byte-identity guards pass (GR / SEE 5-zone / 39-zone EU with the book disabled,
-all bit-identical vs cv20); the src-implementation confirm reproduced the
-measured DK1 gain (March stable-guard corr 0.55 → 0.81, MAE 27.9 → 24.6; July
-MAE 29.5 → 26.6) with no FR/NL/NO2 leakage. It changes only the EU footprint
-(`multi_zone_eu`); the SEE single-zone/5-zone products stay byte-identical. The
-full-year record above is still cv19 — a cv21 backfill has not been run.
+**What entered between cv19 and the cv22 record:** the DK1/Viking virtual
+boundary book ([docs/experiments/cv21-dk1-viking.md](docs/experiments/cv21-dk1-viking.md),
+DK1 March corr 0.55 → 0.81), the UA firm-slice boundary treatment, four
+confirmed price bug-fixes (the legacy-ATC fix deliberately ends the SEE
+byte-identity chain held since cv10 — measured worst SEE delta +0.17 MAE,
+with BG/RO improving −44/−90), and pipeline crash-hardening. Two measured
+NO-SHIPs are documented with mechanism-level root causes for cv23: the GB
+border pair (blocked on French nuclear opportunity-cost bidding) and the
+43-zone endogenization ([docs/experiments/](docs/experiments/)).
 
 ### By strategy regime — frozen 36-day stratified sample
 
