@@ -36,3 +36,4 @@ docs/experiments/scenario-exercises/ops_hourly_eu_floor_2023H2_2025H1.csv
 # cv21 confirm/guard transient price dumps (regenerable; not committed)
 test/scripts/cv21_guard_*.tsv
 docs/experiments/cv21-dk1-viking/out_*.tsv
+scratch_tmp/

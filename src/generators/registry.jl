@@ -37,6 +37,18 @@ const _OUTAGE_DAY_CACHE_LOCK = ReentrantLock()
 const _GENERATOR_MEMO = Dict{Tuple{String,Dates.Date,Bool,Bool,Bool},Vector{Generator}}()
 const _GENERATOR_MEMO_LOCK = ReentrantLock()
 
+# cv24 registry sanity bound. ENTSO-E's unit registry carries rare corrupt
+# `installed_capacity_mw` values (e.g. IT-CSOUTH unit `26WUUUUUUBUSSI19` at
+# 13,068,005 MW — a small plant with a mangled capacity), which propagate into
+# the order book as a multi-million-MW supply block that erases scarcity and
+# pins the zone at gas SRMC. No real single generation unit approaches this: the
+# largest European generation units are ≈1.7 GW (nuclear) and the biggest
+# aggregate registry rows are a few GW, so a 25 GW ceiling rejects only garbage
+# while leaving every genuine unit untouched (verified: no unit in the 39-zone
+# footprint reaches it, so non-IT zones are byte-identical). Gated by
+# EUPHEMIA_DISABLE_CV24 so the whole cv24 delta reverts together for the guard.
+const MAX_PLAUSIBLE_UNIT_MW = 25_000.0
+
 """
     get_day_outages(day::Date) -> DataFrame
 
@@ -304,7 +316,18 @@ function get_generators(map_code::String, day::Dates.Date;
 
     # Build generators (without ramp rates initially)
     generators = Generator[]
+    # cv24 registry sanity bound: drop rows whose installed capacity exceeds any
+    # physically-plausible generation unit (corrupt ENTSO-E capacities — see
+    # MAX_PLAUSIBLE_UNIT_MW). Gated by EUPHEMIA_DISABLE_CV24 (guard reverts to
+    # cv23: the corrupt row passes through). Only IT-CSOUTH carries such a row in
+    # the footprint, so non-IT zones are byte-identical either way.
+    sanity_bound = isempty(get(ENV, "EUPHEMIA_DISABLE_CV24", ""))
     for row in eachrow(df)
+        if sanity_bound &&
+           Float64(row.generation_unit_installed_capacity_mw) > MAX_PLAUSIBLE_UNIT_MW
+            @warn "Dropping corrupt registry capacity" unit=row.generation_unit_code zone=map_code capacity_mw=Float64(row.generation_unit_installed_capacity_mw)
+            continue
+        end
         # Infer actual fuel type from name if declared as "Other".
         # normalize_fuel_type_name folds ENTSO-E spelling variants (e.g.
         # Romania publishes "Hydro Run-of-river and pondage") onto the

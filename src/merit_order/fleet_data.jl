@@ -13,6 +13,7 @@
 # documented mechanism as the physical-flows day cache). Errors are never
 # cached; locks follow the TTF_PRICE_CACHE pattern.
 const _TYPE_P95_DAY_CACHE = Dict{Tuple{Date,Int},Dict{String,Dict{String,Float64}}}()
+const _OVERNIGHT_P5_DAY_CACHE = Dict{Tuple{Date,Int},Dict{String,Dict{String,Float64}}}()
 const _HYDRO_AVAIL_DAY_CACHE = Dict{Tuple{Date,Int},Dict{String,Float64}}()
 const _INSTALLED_CAP_CACHE = Ref{Union{Nothing,Dict{String,Dict{String,Float64}}}}(nothing)
 const _RESERVOIR_DAY_CACHE = Dict{Date,Dict{String,Any}}()
@@ -21,6 +22,7 @@ const _FLEET_DATA_LOCK = ReentrantLock()
 function clear_fleet_data_caches!()
     lock(_FLEET_DATA_LOCK) do
         empty!(_TYPE_P95_DAY_CACHE)
+        empty!(_OVERNIGHT_P5_DAY_CACHE)
         empty!(_HYDRO_AVAIL_DAY_CACHE)
         _INSTALLED_CAP_CACHE[] = nothing
         empty!(_RESERVOIR_DAY_CACHE)
@@ -175,6 +177,64 @@ function _get_type_output_p95_singlezone(bidding_zone::String, day::Date; lookba
     )
     return Dict{String,Float64}(row.production_type => Float64(row.p95)
                                 for row in eachrow(df) if !ismissing(row.p95))
+end
+
+function _overnight_p5_all_zones(day::Date, lookback_days::Int)
+    key = (day, lookback_days)
+    cached = lock(_FLEET_DATA_LOCK) do
+        get(_OVERNIGHT_P5_DAY_CACHE, key, nothing)
+    end
+    cached !== nothing && return cached
+    # 5th-percentile of OVERNIGHT (00-06 UTC) per-type hourly output over the
+    # trailing window: the MW the type demonstrably never drops below in the
+    # low-demand overnight hours — its always-on/must-run floor. Mirrors the
+    # p95 query exactly except for the overnight-hour filter and the 0.05
+    # quantile. Ex-ante (strictly before `day`), day-cached, errors uncached.
+    df = sql2df_with_retry(
+        """
+        SELECT area_map_code AS z, production_type,
+               percentile_cont(0.05) WITHIN GROUP (ORDER BY mw) AS p5
+        FROM (
+            SELECT area_map_code, production_type, date_time_utc,
+                   SUM(actual_generation_output_mw) AS mw
+            FROM entsoe.aggregated_generation_per_type
+            WHERE area_type_code LIKE 'BZN%'
+              AND actual_generation_output_mw IS NOT NULL
+              AND date_time_utc >= (\$1::date::timestamp AT TIME ZONE 'UTC')
+              AND date_time_utc < (\$2::date::timestamp AT TIME ZONE 'UTC')
+              AND EXTRACT(HOUR FROM date_time_utc) < 6
+            GROUP BY area_map_code, production_type, date_time_utc
+        ) hourly
+        GROUP BY area_map_code, production_type
+        """,
+        [day - Day(lookback_days), day])
+    out = Dict{String,Dict{String,Float64}}()
+    for row in eachrow(df)
+        ismissing(row.p5) && continue
+        get!(out, String(row.z), Dict{String,Float64}())[String(row.production_type)] =
+            Float64(row.p5)
+    end
+    lock(_FLEET_DATA_LOCK) do
+        _OVERNIGHT_P5_DAY_CACHE[key] = out
+    end
+    return out
+end
+
+"""
+    get_overnight_output_p5(bidding_zone::String, day::Date; lookback_days=30) -> Dict{String,Float64}
+
+5th-percentile hourly actual output per production type restricted to the
+OVERNIGHT hours (00–06 UTC) over the trailing `lookback_days` (strictly before
+`day` — no lookahead), from `entsoe.aggregated_generation_per_type`. This is the
+demonstrated always-on floor of each fuel type: the MW it never drops below even
+in the lowest-demand hours of the night. Used by the cv24 Italian must-run floor
+to size (from fundamentals, not bids/prices) the price-taker slice of the
+physically-inflexible classes (geothermal, run-of-river, biomass, waste). Empty
+Dict for a zone with no data (the caller then adds no floor block).
+"""
+function get_overnight_output_p5(bidding_zone::String, day::Date; lookback_days::Int=30)
+    return get(_overnight_p5_all_zones(day, lookback_days), bidding_zone,
+               Dict{String,Float64}())
 end
 
 """

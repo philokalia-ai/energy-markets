@@ -765,6 +765,38 @@ function create_merit_order_book(
                 profile.seasonal_drawdown)
         offered_pmax(g) = _is_hydro(g) ? g.p_max * hydro_scale : g.p_max
 
+        # ── cv24 Italian must-run floor (profile-gated) ─────────────────
+        # The must-run fuel classes (`MUST_RUN_FLOOR_FUELS`: always-on geothermal
+        # / run-of-river / biomass / waste + baseload thermal gas / hard-coal /
+        # oil) bid their demonstrated overnight base at/near the price floor, not
+        # SRMC — the competitive bid of inflexibility (shutdown/restart cost
+        # exceeds a few negative-price hours). `must_run_frac[type]` is the
+        # fraction of that type's offered fleet that its trailing p5 of overnight
+        # (00-06 UTC) per-type output demonstrates is always on — derived from
+        # fundamentals (observed output), never from bids or prices. Empty for
+        # every non-must-run-floor zone ⇒ the order loop is byte-identical.
+        must_run_frac = Dict{Symbol,Float64}()
+        if profile.must_run_floor
+            overnight_p5 = Dict{String,Float64}(
+                normalize_fuel_type_name(k) => v
+                for (k, v) in get_overnight_output_p5(bidding_zone, day))
+            offered_by_type = Dict{Symbol,Float64}()
+            for g in generators
+                g.fuel_type in MUST_RUN_FLOOR_FUELS || continue
+                offered_by_type[g.fuel_type] =
+                    get(offered_by_type, g.fuel_type, 0.0) + offered_pmax(g)
+            end
+            for (fsym, offered) in offered_by_type
+                offered > 1.0 || continue
+                p5 = get(overnight_p5, string(fsym), 0.0)
+                p5 > 1.0 || continue
+                must_run_frac[fsym] = clamp(p5 / offered, 0.0, 1.0)
+            end
+            isempty(must_run_frac) ||
+                println("  🇮🇹 Must-run floor @ €$(round(profile.must_run_floor_price, digits=1)): " *
+                        join(["$(k) ×$(round(v, digits=2))" for (k, v) in must_run_frac], ", "))
+        end
+
         # Dispatchable capacity for the scarcity margin, derated for the
         # realistic availability of the fleet (unreported outages) and for
         # the hydro energy limit — nameplate capacity never looks scarce.
@@ -991,7 +1023,40 @@ function create_merit_order_book(
                     # few hours below cost. This is what lets midday prices
                     # collapse below thermal SRMC in renewable-surplus hours.
                     must_run_qty = 0.0
-                    if g.code in committed
+                    if profile.must_run_floor
+                        # cv24 Italian must-run floor (graduated two-part bid).
+                        # The must-run QUANTITY is the type's demonstrated
+                        # overnight base (`must_run_frac[type] × offered`, from
+                        # trailing p5 of 00-06 UTC output — fundamentals). A
+                        # committed thermal type with no overnight data falls back
+                        # to p_min so it still self-schedules. That base is split
+                        # like cv10's graduated self-schedule, but the deep slice
+                        # bids at the price FLOOR (≤€0 — the competitive bid of the
+                        # inflexible base that never shuts down) and the rest bids
+                        # below cost (max(0.5×SRMC, SRMC−40)); the flexible
+                        # remainder keeps the SRMC tranche ladder. This makes the
+                        # book bimodal (a ≤€0 must-run floor + the SRMC tail),
+                        # matching the real GME shape, while keeping a convex
+                        # low-price region so night/high-RES troughs re-price down
+                        # instead of jumping floor→SRMC.
+                        base = get(must_run_frac, g.fuel_type, 0.0) * offered_pmax(g)
+                        if base <= 0.1 && g.code in committed
+                            base = min(g.p_min, offered_pmax(g))
+                        end
+                        if base > 0.1
+                            must_run_qty = base
+                            deep_qty = must_run_qty * 0.6
+                            push!(tagged, (SimpleOrder(:supply,
+                                profile.must_run_floor_price, deep_qty,
+                                Symbol(bidding_zone), date_time, resolution_minutes), g.code))
+                            push!(tagged, (SimpleOrder(:supply,
+                                min(max(gmc * 0.5, gmc - 40.0), nuc_ceil),
+                                must_run_qty - deep_qty,
+                                Symbol(bidding_zone), date_time, resolution_minutes), g.code))
+                            supply_orders_count += 2
+                            total_supply_capacity += must_run_qty
+                        end
+                    elseif g.code in committed
                         must_run_qty = min(g.p_min, offered_pmax(g))
                         # Graduated self-scheduling: the deepest block is
                         # near-free (never shut down), the rest bids below

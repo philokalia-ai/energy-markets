@@ -4,6 +4,35 @@
 const WATER_VALUE_FUEL_TYPES =
     [Symbol("Hydro Water Reservoir"), Symbol("Hydro Pumped Storage")]
 
+# cv24 Italian must-run floor. The fuel classes whose demonstrated overnight
+# base bids at the price floor (≤€0) — the competitive bid of inflexibility:
+# shutdown/restart cost exceeds a few negative-price hours, so this base
+# secures dispatch at the floor rather than cycle. Two kinds of must-run, both
+# priced off the SAME fundamental (trailing p5 of 00-06 UTC per-type output —
+# the MW the type demonstrably never drops below overnight, never a bid/price):
+#   - always-on non-dispatchable classes: geothermal (baseload, no fuel-cycle
+#     economics), run-of-river hydro (water must pass), biomass and waste
+#     (heat-following cogeneration / disposal obligation);
+#   - the baseload thermal floor: the overnight-demonstrated minimum of the
+#     gas / hard-coal / oil fleet is the cogeneration + must-run CCGT base that
+#     stays on all night — the largest must-run component, and the classic
+#     "baseload securing dispatch by bidding at the floor" the GME book shows.
+# Only the demonstrated overnight FRACTION of each type is floored; the flexible
+# remainder keeps its SRMC tranche ladder (scarcity/peak markup intact), so the
+# marginal price on tight/peak hours is unchanged (the floor slice is
+# inframarginal there) and only the low-demand troughs re-price down. See the
+# `ZoneProfile.must_run_floor` field docstring and docs/experiments/cv24-it-book.md.
+const MUST_RUN_FLOOR_FUELS = Set{Symbol}([
+    Symbol("Geothermal"),
+    Symbol("Hydro Run-of-river and pondage"),
+    Symbol("Biomass"),
+    Symbol("Waste"),
+    Symbol("Fossil Gas"),
+    Symbol("Fossil Hard coal"),
+    Symbol("Fossil Oil"),
+    Symbol("Fossil Coal-derived gas"),
+])
+
 """
     _unit_hash01(code) -> Float64 in [0, 1)
 
@@ -423,6 +452,29 @@ Base.@kwdef struct ZoneProfile
     # (byte-identical). Only DK1 (Viking Link, GB) carries one in cv21; see
     # `BoundaryBook` / `VIKING_GB_BOOK`.
     boundary_book::Union{Nothing,BoundaryBook} = nothing
+    # cv24 Italian must-run floor (docs/experiments/cv24-it-book.md). When true,
+    # each fuel class in `MUST_RUN_FLOOR_FUELS` (the always-on geothermal /
+    # run-of-river / biomass / waste, plus the baseload thermal gas / hard-coal /
+    # oil) bids a two-part must-run sized by its DEMONSTRATED OVERNIGHT BASE
+    # (`get_overnight_output_p5` — trailing p5 of 00-06 UTC per-type output, a
+    # fundamental, never a bid/price): the deep 60% at `must_run_floor_price` (the
+    # price floor, ≤€0 — the competitive bid of the inflexible base that never
+    # shuts down) and the rest below cost (max(0.5×SRMC, SRMC−40)); the flexible
+    # remainder keeps the SRMC tranche ladder. This makes the Italian book BIMODAL
+    # — a ≤€0 must-run floor plus the SRMC tail — matching the real GME MGP book's
+    # shape (which offers ~45% of volume at ≤€0 while our v10 unimodal SRMC stack
+    # offered 0%, over-pricing troughs) while keeping a convex low-price region so
+    # troughs re-price down instead of jumping floor→SRMC. The mechanism is
+    # VOLUME-NEUTRAL: it reprices/reclassifies the same offered capacity, it does
+    # not add or remove MW. Every input is ex-ante (trailing observed output,
+    # technical class) — no bid or price is fit (the GME book is the validation
+    # instrument, not a fitting target). The cap-priced peak tail is NOT modeled:
+    # it is the market-power conduct residual the counterfactual exists to measure.
+    # false (default) ⇒ byte-identical (the committed must-run keeps its
+    # `must_run_price_factor × SRMC` deep block, no floor classes). On for the 7
+    # IT zones.
+    must_run_floor::Bool = false
+    must_run_floor_price::Float64 = 0.0
 end
 
 """
@@ -500,6 +552,15 @@ premium-priced LNG — so thermal marginal costs carry an efficiency/LNG premium
 """
 const ITALY_PROFILE = ZoneProfile(
     thermal_srmc_multiplier = 1.20,
+    # cv24: the Italian must-run floor (bimodal book). Validated against the real
+    # GME MGP book (docs/experiments/gme-book-comparison): our v10 unimodal SRMC
+    # stack offered 0% of volume at ≤€0 while the real book front-loads a ~45%
+    # must-run floor there, so we over-priced troughs (real IT troughs clear
+    # below our gas-SRMC floor). The floor prices the demonstrated overnight base
+    # of the inflexible classes at ≤€0 from fundamentals. Shared by all 7 IT zones
+    # (ITALY_CNORTH_PROFILE inherits it via with_profile). Kill-switch
+    # EUPHEMIA_DISABLE_CV24. See docs/experiments/cv24-it-book.md.
+    must_run_floor = true,
 )
 
 """
@@ -1083,6 +1144,15 @@ function get_zone_profile(zone::AbstractString)
        !isempty(get(ENV, "EUPHEMIA_DISABLE_FRCAP", ""))
         p = with_profile(p; import_backstop=false, backstop_scarcity_credit=0.0,
                          nuclear_bid_ref_ceiling=0.0)
+    end
+    # cv24 kill-switch (byte-identity guard + attribution A/Bs). A non-empty
+    # EUPHEMIA_DISABLE_CV24 strips the Italian must-run floor from every profile
+    # that carries it, so the EU book reverts exactly to cv23 main. Scoped by the
+    # `must_run_floor` flag (only the IT profiles set it), worker-safe via ENV
+    # like the other switches. The registry sanity bound (registry.jl) reads the
+    # same env var, so the whole cv24 delta reverts together.
+    if p.must_run_floor && !isempty(get(ENV, "EUPHEMIA_DISABLE_CV24", ""))
+        p = with_profile(p; must_run_floor=false)
     end
     return p
 end
