@@ -116,7 +116,20 @@
 #  guards (GR single-zone, SEE 5-zone, 39-zone EU with EUPHEMIA_DISABLE_CV22=1):
 #  bit-identical vs cv21 main (Viking stays ON — its kill-switch is CV21).
 #  cv22 matters for the EU footprint (multi_zone_eu). July 2026.
-const ENERGY_PRICES_CODE_VERSION = 22
+# v22 -> v23: three mechanism components, each measured (July 2026):
+# (1) FR nuclear opportunity-cost bidding — availability-scaled :nuclear
+# anchor share (trailing-30d fleet p95/installed; ex-ante, no-fit;
+# docs/experiments/cv23-fr-nuclear.md) — March confirm FR MAE 38.2->16.2,
+# evening bias -77%; (2) the re-paired FR<->GB border (double-count fix +
+# elastic GB CCGT boundary book with UKA carbon) shipping WITH the FR fix
+# per the cv22 no-ship prescription — neighbour guards pass on top of (1);
+# (3) interior-Norway import backstop NO1/NO3 (docs/experiments/
+# norwegian-hydro/) — kills the dry-spring phantom-scarcity cap (NO1 MAE
+# 340->73, NO3 corr 0.16->0.48, all other zones byte-identical); the NO1
+# corr headline stays an open problem (anchor levers measured and
+# rejected; needs inflow data / corridor congestion). Kill-switch
+# EUPHEMIA_DISABLE_CV23 covers all three.
+const ENERGY_PRICES_CODE_VERSION = 23
 
 # Pool size: env-tunable (EUPHEMIA_PG_POOL) because the threaded book build
 # runs up to nzones concurrent queries — 5 connections cap the parallelism
