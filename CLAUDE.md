@@ -662,6 +662,7 @@ result = run_pipelined_backfill(Date(2026,1,1):Day(1):Date(2026,6,30), FOOTPRINT
     in_flight=8,                # bounded days-in-flight (RAM + backpressure)
     optimizer="gurobi",
     clearing_mode="multi_zone_eu",
+    books_dir="data/web/v1/books",  # optional: capture per-day order books (off = nothing)
     save_to_db=true, resume=true)   # resumable: already-saved days are skipped
 result.days_per_hour            # throughput
 result.solver_utilization       # solve-busy / wall, per solver worker
@@ -701,6 +702,33 @@ still run sequentially), and `bin/eu_calibration_run.jl` via `PIPELINE=true`
 (with `BOOK_WORKERS` / `SOLVER_WORKERS`; saves energy_prices only under
 `CLEARING_MODE`). Under the DuckDB extract the workers open it read-only and the
 coordinator is the single writer, exactly like `--workers`.
+
+**Order-book capture (`books_dir`).** Pass `books_dir=` to capture every
+backfilled day's FULL tagged order book (per-unit ladders + `RES`/`IMPORT`/
+`DEMAND`/`BACKSTOP`/owner tags — the pre-merge strategist view) to
+`<books_dir>/<market_date>.parquet` (zstd; columns `market_date, zone, ts, side,
+price, mw, owner, code_version`; ~307 KB/day, ~400 MB for 1,301 days). The
+`BOOK_SINK` fires on the BOOK WORKERS, so capture is worker-side: each worker
+flushes its captured zones to a pass-tagged staging parquet
+(`<books_dir>/.staging/<day>_pass{1,2}.parquet`) **before** forwarding the job to
+the solver, and the single coordinator merges pass-1 ∪ pass-2 with **pass-2
+winning per zone** into the per-day parquet at save time (a day's pass-1 and
+pass-2 books can land on different workers; the merge is the only cross-process
+step, done serially by the coordinator). Books are captured for every *usable*
+day independent of `save_to_db`; a failed day's staging is cleaned up. The sink
+is **observational** — with `books_dir` set prices are **bit-identical** to
+`books_dir=nothing` (guarded on 2026-04-03 × 39 zones, max |Δ| = 0; merge
+semantics unit-tested DB-free in `test/test_pipeline_book_merge.jl`).
+
+**cv23 record backfill flow** (see [docs/backfill-architecture.md](docs/backfill-architecture.md)):
+(1) native pipelined backfill on the read-only DuckDB extract → results land in
+the writable `data/results.duckdb`, books captured via `books_dir`; (2) transfer
+that slice into live Postgres with `bin/transfer_results_to_postgres.jl`
+(`--clearing-mode multi_zone_eu --code-version N`; upserts optimization_runs +
+remaps `optimization_run_id`, delete-then-COPY the price/flow slices — idempotent,
+resumable, minutes via `COPY`; `--verify` prints per-year counts + per zone-month
+price checksums both sides); (3) coordinator rebuilds the extract; (4) the per-day
+book parquets are retained/published.
 
 ## Data stores and scenario hooks
 

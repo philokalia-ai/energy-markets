@@ -64,6 +64,125 @@ _result_failed(day; status=:error, book_secs=0.0, waitq_secs=0.0,
 _usable(r) = r.status == :optimal ||
              (r.status == :time_limit && !isempty(r.market_prices))
 
+# ---------------------------------------------------------------------------
+# Order-book capture (opt-in via run_pipelined_backfill(books_dir=...))
+# ---------------------------------------------------------------------------
+# The BOOK_SINK Ref fires inside create_merit_order_book, which in the pipeline
+# runs on the BOOK WORKERS (mz_build_books / mz_rebuild_anchored), not the
+# coordinator. So capture is worker-side: each book worker installs a sink that
+# accumulates the FULL tagged book per (zone,day), and after each pass job it
+# flushes that day's captured zones to a PASS-TAGGED staging parquet in
+# `<books_dir>/.staging/`. The coordinator merges pass-1 ∪ pass-2 (pass-2 WINS
+# per zone — same overwrite-per-(zone,day) semantics as bin/daily_forecast.jl's
+# sink, where pass-2 only re-fires for the anchored zones and the rest persist
+# from pass 1) into `<books_dir>/<day>.parquet` at save time.
+#
+# Concurrency: within a worker the threaded 39-zone build fires the sink from
+# multiple threads, guarded by a per-worker lock. ACROSS workers a day's pass-1
+# and pass-2 books may be built by DIFFERENT processes, so each writes its own
+# pass-tagged staging file and the single coordinator merges — no cross-process
+# file races. Ordering is safe by construction: a worker flushes its staging
+# file SYNCHRONOUSLY before forwarding the job to the solver, so the file is on
+# disk before any result for that day can reach the coordinator's writer.
+#
+# When `books_dir` is nothing the sink is never installed and this whole path is
+# inert — the pipeline is byte-identical to the pre-books code (identity guard).
+
+_pipeline_book_staging(dir::AbstractString, day::Date, pass::Int) =
+    joinpath(dir, ".staging", "$(day)_pass$(pass).parquet")
+
+# Write a parquet (zstd) atomically: COPY to `path.tmp` then rename.
+function _write_books_parquet(df::DataFrame, path::AbstractString)
+    tmp = path * ".tmp"
+    dbh = DuckDB.DB()
+    con = DBInterface.connect(dbh)
+    try
+        DuckDB.register_data_frame(con, df, "_books_stage")
+        DBInterface.execute(con,
+            "COPY (SELECT * FROM _books_stage ORDER BY zone, ts, side, price) " *
+            "TO '$(tmp)' (FORMAT parquet, COMPRESSION zstd)")
+    finally
+        DBInterface.close!(con)
+        close(dbh)
+    end
+    mv(tmp, path; force=true)
+    return path
+end
+
+# Flush (and clear) the captured books for `day` to its pass-tagged staging
+# parquet. Columns mirror bin/daily_forecast.jl's flush_books! so downstream
+# tooling reads one schema. Returns the row count written.
+function _flush_pipeline_books(books::Dict{Tuple{String,Date},Vector{Tuple{SimpleOrder,String}}},
+                               books_lock::ReentrantLock, dir::AbstractString,
+                               day::Date, pass::Int)
+    rows = NamedTuple[]
+    lock(books_lock) do
+        for k in collect(keys(books))
+            (zone, d) = k
+            d == day || continue
+            for (o, tag) in books[k]
+                push!(rows, (market_date=day, zone=zone, ts=o.date_time,
+                             side=String(o.type), price=o.price, mw=o.quantity,
+                             owner=tag, code_version=ENERGY_PRICES_CODE_VERSION))
+            end
+            delete!(books, k)
+        end
+    end
+    staging = _pipeline_book_staging(dir, day, pass)
+    mkpath(dirname(staging))
+    isempty(rows) && return 0
+    _write_books_parquet(DataFrame(rows), staging)
+    return length(rows)
+end
+
+# Coordinator-side merge: combine `day`'s pass-1 and pass-2 staging parquets into
+# `<dir>/<day>.parquet` with pass-2 winning per zone, then delete the staging
+# files. Returns the output path, or `nothing` if no pass-1 file was captured.
+function _merge_pipeline_day_books(dir::AbstractString, day::Date)
+    p1 = _pipeline_book_staging(dir, day, 1)
+    p2 = _pipeline_book_staging(dir, day, 2)
+    isfile(p1) || return nothing
+    out = joinpath(dir, "$(day).parquet")
+    tmp = out * ".tmp"
+    dbh = DuckDB.DB()
+    con = DBInterface.connect(dbh)
+    try
+        sql = if isfile(p2)
+            # pass-2 wins: keep pass-1 rows only for zones NOT rebuilt in pass 2.
+            """
+            COPY (
+              SELECT * FROM read_parquet('$(p1)')
+              WHERE zone NOT IN (SELECT DISTINCT zone FROM read_parquet('$(p2)'))
+              UNION ALL
+              SELECT * FROM read_parquet('$(p2)')
+              ORDER BY zone, ts, side, price
+            ) TO '$(tmp)' (FORMAT parquet, COMPRESSION zstd)
+            """
+        else
+            "COPY (SELECT * FROM read_parquet('$(p1)') ORDER BY zone, ts, side, price) " *
+            "TO '$(tmp)' (FORMAT parquet, COMPRESSION zstd)"
+        end
+        DBInterface.execute(con, sql)
+    finally
+        DBInterface.close!(con)
+        close(dbh)
+    end
+    mv(tmp, out; force=true)
+    rm(p1; force=true)
+    isfile(p2) && rm(p2; force=true)
+    return out
+end
+
+# Remove any staging parquets for a day whose result was NOT usable, so failed
+# days leave no orphaned staging files behind.
+function _cleanup_pipeline_staging(dir::AbstractString, day::Date)
+    for pass in (1, 2)
+        p = _pipeline_book_staging(dir, day, pass)
+        isfile(p) && rm(p; force=true)
+    end
+    return nothing
+end
+
 """
     pipeline_book_worker(bookwork, solvework, results, zones, cfg) -> Int
 
@@ -80,6 +199,21 @@ function pipeline_book_worker(bookwork::RemoteChannel, solvework::RemoteChannel,
                               results::RemoteChannel, zones::Vector{String}, cfg,
                               progress::Union{Nothing,RemoteChannel}=nothing)
     handled = 0
+    # Opt-in book capture (cfg.books_dir set). Install a process-local sink that
+    # accumulates the tagged book per (zone,day); the threaded build fires it
+    # from several threads, so guard the dict with a lock. Flushed + cleared per
+    # pass job below. Inert (never installed) when books_dir is nothing.
+    books_dir = hasproperty(cfg, :books_dir) ? cfg.books_dir : nothing
+    books = books_dir === nothing ? nothing :
+        Dict{Tuple{String,Date},Vector{Tuple{SimpleOrder,String}}}()
+    books_lock = ReentrantLock()
+    if books !== nothing
+        MeritOrderBook.BOOK_SINK[] = function (zone, day, tagged, res)
+            lock(books_lock) do
+                books[(zone, day)] = copy(tagged)
+            end
+        end
+    end
     while true
         job = take!(bookwork)
         job[1] === :stop && break
@@ -96,6 +230,10 @@ function pipeline_book_worker(bookwork::RemoteChannel, solvework::RemoteChannel,
                     apply_zone_profiles=cfg.apply_zone_profiles,
                     scenario=cfg.scenario)
                 book_secs = time() - t0
+                # Flush pass-1 books BEFORE forwarding, so the staging file is on
+                # disk before any result for this day can reach the coordinator.
+                books === nothing ||
+                    _flush_pipeline_books(books, books_lock, books_dir, day, 1)
                 put!(solvework, (:pass1, day, ob1, book_secs, time()))
             catch e
                 e isa InterruptException && rethrow()
@@ -111,6 +249,10 @@ function pipeline_book_worker(bookwork::RemoteChannel, solvework::RemoteChannel,
                     apply_zone_profiles=cfg.apply_zone_profiles,
                     scenario=cfg.scenario)
                 rebuild_secs = time() - t0
+                # Flush pass-2 books (only the anchored zones re-fired the sink)
+                # before forwarding — same ordering guarantee as pass 1.
+                books === nothing ||
+                    _flush_pipeline_books(books, books_lock, books_dir, day, 2)
                 put!(solvework, (:pass2, day, ob2, r1, book_secs, waitq,
                                  solve1_secs, rebuild_secs, time()))
             catch e
@@ -256,6 +398,9 @@ sequential `run_multi_zone_market_clearing(day; passes=2, ...)` path.
 - `resume`          : skip already-saved days (default true)
 - `collect_prices`  : also return each day's market_prices in-memory (default
   false; the identity test uses true)
+- `books_dir`       : if set, capture each backfilled day's FULL tagged order
+  book to `<books_dir>/<market_date>.parquet` (pass-2 wins per zone).
+  Observational — prices are byte-identical to `books_dir=nothing`.
 - `duckdb_readonly_env` : pass the DuckDB read-only env to workers (auto-detected
   from the coordinator backend)
 
@@ -292,6 +437,15 @@ function run_pipelined_backfill(days, zones::Vector{String}=String[];
         # NOTE: hooks are closures serialized to the book workers — define them
         # at top level of the driver script (Main) with plain captured data.
         scenario::Union{Nothing,ZoneScenario,Dict{String,ZoneScenario}}=nothing,
+        # Opt-in order-book capture. When set, each book worker writes every
+        # zone-day's FULL tagged book (per-unit ladders + RES/IMPORT/DEMAND/
+        # BACKSTOP tags, the pre-merge strategist view) and the coordinator
+        # merges pass-1 ∪ pass-2 (pass-2 wins per zone) into
+        # `<books_dir>/<market_date>.parquet` (zstd; columns market_date/zone/ts/
+        # side/price/mw/owner/code_version). Observational: prices are
+        # bit-identical to books_dir=nothing. Captured for every USABLE day,
+        # independent of save_to_db.
+        books_dir::Union{Nothing,String}=nothing,
         ram_log_every::Int=10)
 
     order_method == :merit_order ||
@@ -384,10 +538,16 @@ function run_pipelined_backfill(days, zones::Vector{String}=String[];
 
     resolved_decompose = decompose_periods !== nothing ? decompose_periods :
         enrich_network
+    books_dir_abs = books_dir === nothing ? nothing : abspath(books_dir)
+    if books_dir_abs !== nothing
+        mkpath(joinpath(books_dir_abs, ".staging"))
+        println("📚 book capture ON → $books_dir_abs (one parquet per market day)")
+    end
     cfg = (optimizer=optimizer, silent=silent, enrich_network=enrich_network,
            apply_zone_profiles=apply_zone_profiles, mpcc_time_limit=mpcc_time_limit,
            mpcc_mip_gap=mpcc_mip_gap, mpcc_heuristic_effort=mpcc_heuristic_effort,
-           scenario=scenario, decompose_periods=resolved_decompose)
+           scenario=scenario, decompose_periods=resolved_decompose,
+           books_dir=books_dir_abs)
 
     day_prices = Dict{Date,Dict{String,Dict{String,Float64}}}()
     saved = 0; failed = 0
@@ -511,6 +671,17 @@ function run_pipelined_backfill(days, zones::Vector{String}=String[];
                 if collect_prices
                     day_prices[r.day] = deepcopy(r.final.market_prices)
                 end
+                # Merge this day's captured books (pass-2 wins per zone) into one
+                # per-day parquet. Observational — a failure here never fails the
+                # day. Independent of save_to_db so books are captured even for
+                # dry runs.
+                if cfg.books_dir !== nothing
+                    try
+                        _merge_pipeline_day_books(cfg.books_dir, r.day)
+                    catch e
+                        @warn "book merge failed for $(r.day) (prices unaffected)" error=e
+                    end
+                end
                 write_ok = true
                 if save_to_db
                     try
@@ -555,6 +726,8 @@ function run_pipelined_backfill(days, zones::Vector{String}=String[];
                 end
             else
                 failed += 1
+                # Drop any staging books left by a partial (unusable) day.
+                cfg.books_dir === nothing || _cleanup_pipeline_staging(cfg.books_dir, r.day)
                 println("DAY $(r.day) FAIL   status=$(r.status) err=$(something(r.err, "")) [$i/$N]")
             end
             if i % ram_log_every == 0
