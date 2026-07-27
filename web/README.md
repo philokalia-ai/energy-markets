@@ -86,6 +86,31 @@ realized hours only. Predictions are frozen at `prediction_made_utc` and never
 revised — this is a no-fit ex-ante counterfactual, so persistent residuals are
 findings about the real market, not tuning targets.
 
+## Vintage chart ("What we said, when")
+
+The horizon view's vintage panel overlays every forecast we published for one
+delivery day. A single `(date, lead_days)` can carry **several** vintages that
+differ only in `input_mode` — the slice identity is `(date, lead_days,
+input_mode)` by design (e.g. a post-auction `entsoe` run and a later
+`…loadfill/resfill` gap-fill run both land as D-1). The legend disambiguates
+them with a compact `◦`-tag so no two entries read the same:
+
+| input_mode                        | label          | meaning                              |
+|-----------------------------------|----------------|--------------------------------------|
+| `entsoe`                          | `D-1`          | reference, post-auction inputs       |
+| `entsoe+loadfill+resfill` (any `…fill`) | `D-1 ◦fill`    | reference, load/RES gap-filled       |
+| `weather…` (any weather mode)     | `D-1 ◦weather` | ex-ante weather-RES track            |
+
+Each legend chip's hover title shows the full `input_mode` and the frozen
+`prediction_made_utc` stamp. The **Actual (settled)** entry is hidden until the
+day has at least one settled hour (it reads *"Actual (settling)"* while partial).
+
+Legend chips are interactive (shared `attachSeriesFocus` component, also used by
+the zone-explorer chart): **hover** a chip or a line to highlight that series and
+dim the rest; **click** to toggle a series on/off; **double-click** (or the `⌾
+only` affordance) to isolate one; **show all** resets. No dependencies — plain
+SVG opacity + CSS transitions.
+
 ## Regenerating fixtures
 
 Fixtures were generated with a small deterministic script (3 zones × ~13 days ×

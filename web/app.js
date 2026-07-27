@@ -323,6 +323,7 @@
       ["sim", "Simulated (ex-ante)"],
       ["act", isPending(day) ? "Actual (pending — not yet settled)" : "Actual (settled)"],
     ];
+    var chips = {};
     items.forEach(function (it) {
       var span = el("span");
       var key = el("span", "key " + it[0]);
@@ -330,7 +331,9 @@
       span.appendChild(key);
       span.appendChild(document.createTextNode(it[1]));
       lg.appendChild(span);
+      chips[it[0]] = span;
     });
+    return chips;   // { sim, act } — wired to the chart series by renderExplorer
   }
 
   function renderHourTable(day) {
@@ -457,17 +460,21 @@
       }
       return dstr.trim();
     }
+    var simEls = [], actEls = [];
     var simPath = svgEl("path", {
       d: pathFor(day.sim), fill: "none", stroke: C.sim,
       "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round",
     });
     svg.appendChild(simPath);
+    simEls.push(simPath);
     var actD = pathFor(day.actual);
     if (actD) {
-      svg.appendChild(svgEl("path", {
+      var actPath = svgEl("path", {
         d: actD, fill: "none", stroke: C.act,
         "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round",
-      }));
+      });
+      svg.appendChild(actPath);
+      actEls.push(actPath);
       // lone realized points (no neighbors) would be invisible in a path
       for (var k = 0; k < n; k++) {
         var a = day.actual[k];
@@ -475,9 +482,11 @@
         var prev = k > 0 ? day.actual[k - 1] : null;
         var next = k < n - 1 ? day.actual[k + 1] : null;
         if ((prev === null || prev === undefined) && (next === null || next === undefined)) {
-          svg.appendChild(svgEl("circle", {
+          var loneDot = svgEl("circle", {
             cx: X(k), cy: Y(a), r: 4, fill: C.act, stroke: C.surface, "stroke-width": 2,
-          }));
+          });
+          svg.appendChild(loneDot);
+          actEls.push(loneDot);
         }
       }
     }
@@ -583,6 +592,7 @@
       wrap.appendChild(el("p", "pending-note",
         "Partially settled — remaining hours are still pending."));
     }
+    return { sim: simEls, act: actEls };   // series refs for the focus wiring
   }
 
   function renderExplorer() {
@@ -624,8 +634,15 @@
       " · hours shown in Europe/Athens (market day)";
     renderDayStats(day);
     renderDayComment(day);
-    renderLegend(day);
-    renderChart(day);
+    var legendChips = renderLegend(day);
+    var chartEls = renderChart(day);
+    // Shared series-focus: hover/click/isolate the sim & actual lines. The
+    // actual series is only wired when it actually has drawn points.
+    var explorerSeries = [{ key: "sim", chip: legendChips.sim, els: chartEls.sim, baseOpacity: 1 }];
+    if (chartEls.act.length) {
+      explorerSeries.push({ key: "act", chip: legendChips.act, els: chartEls.act, baseOpacity: 1 });
+    }
+    attachSeriesFocus($("chart-legend"), explorerSeries);
     renderHourTable(day);
   }
 
@@ -892,6 +909,130 @@
     renderRevisions();
   }
 
+  // ---------- interactive series focus (shared component) ----------
+  // Wire a chart's legend chips to their SVG series so the reader can:
+  //   • hover a chip OR a line  -> highlight that series, dim the rest to 0.15
+  //   • click a chip            -> toggle the series on/off (persists; greys chip)
+  //   • double-click / ⌾ "only" -> isolate one series
+  //   • "show all"              -> reset (appears once anything is hidden)
+  // No deps, CSS transitions only. `series` = [{ key, chip, els:[svgEl…],
+  // baseOpacity }]. Non-line charts (map) don't use it; multi-line charts do.
+  var DIM_OPACITY = 0.15;
+  function attachSeriesFocus(legendEl, series) {
+    if (!series.length) return null;
+    var off = {};        // key -> true when toggled off
+    var hover = null;    // key currently hovered (via chip or line)
+
+    var resetBtn = el("button", "series-reset", "show all");
+    resetBtn.type = "button";
+    resetBtn.hidden = true;
+    resetBtn.addEventListener("click", function () { off = {}; hover = null; apply(); });
+    legendEl.appendChild(resetBtn);
+
+    function apply() {
+      var anyOff = false;
+      series.forEach(function (s) {
+        var isOff = !!off[s.key];
+        if (isOff) anyOff = true;
+        var op = isOff ? 0
+          : hover === null ? s.baseOpacity
+          : hover === s.key ? 1
+          : DIM_OPACITY;
+        s.els.forEach(function (e) {
+          e.style.transition = "opacity .16s ease";
+          e.style.opacity = op;
+          e.style.pointerEvents = isOff ? "none" : "";
+        });
+        if (s.chip) {
+          s.chip.classList.toggle("series-off", isOff);
+          s.chip.classList.toggle("series-hi", hover === s.key && !isOff);
+        }
+      });
+      resetBtn.hidden = !anyOff;
+    }
+    function isolate(key) {
+      series.forEach(function (s) { off[s.key] = s.key !== key; });
+      hover = null; apply();
+    }
+
+    series.forEach(function (s) {
+      if (s.chip) {
+        s.chip.classList.add("series-chip");
+        s.chip.setAttribute("role", "button");
+        s.chip.setAttribute("tabindex", "0");
+        s.chip.setAttribute("aria-pressed", "false");
+        // "only" affordance (double-click also isolates)
+        var only = el("span", "series-only", "⌾ only");
+        s.chip.appendChild(only);
+        only.addEventListener("click", function (ev) { ev.stopPropagation(); isolate(s.key); });
+
+        var clickTimer = null;
+        s.chip.addEventListener("mouseenter", function () { hover = s.key; apply(); });
+        s.chip.addEventListener("mouseleave", function () { hover = null; apply(); });
+        s.chip.addEventListener("click", function () {
+          if (clickTimer) return;             // a dblclick is in progress
+          clickTimer = setTimeout(function () {
+            clickTimer = null;
+            off[s.key] = !off[s.key];
+            s.chip.setAttribute("aria-pressed", String(!!off[s.key]));
+            apply();
+          }, 180);
+        });
+        s.chip.addEventListener("dblclick", function () {
+          if (clickTimer) { clearTimeout(clickTimer); clickTimer = null; }
+          isolate(s.key);
+        });
+        s.chip.addEventListener("keydown", function (ev) {
+          if (ev.key === "Enter" || ev.key === " ") {
+            ev.preventDefault(); off[s.key] = !off[s.key];
+            s.chip.setAttribute("aria-pressed", String(!!off[s.key])); apply();
+          } else if (ev.key === "o" || ev.key === "O") {
+            ev.preventDefault(); isolate(s.key);
+          }
+        });
+      }
+      // hovering the line itself highlights the series (charts without a
+      // full-plot overlay — e.g. the vintage chart — get this for free)
+      s.els.forEach(function (e) {
+        if (e.tagName && e.tagName.toLowerCase() === "path") {
+          e.style.pointerEvents = "stroke";
+          e.style.cursor = "pointer";
+          e.addEventListener("pointerenter", function () { hover = s.key; apply(); });
+          e.addEventListener("pointerleave", function () { hover = null; apply(); });
+        }
+      });
+    });
+
+    apply();
+    return { showAll: function () { off = {}; hover = null; apply(); } };
+  }
+
+  // Compact, collision-free label for a forecast vintage. The base is the lead
+  // (D-1, D-2 …); but a single delivery day + lead can carry several vintages
+  // that differ only in `input_mode` — the (date, lead_days, input_mode) slice
+  // identity is by design (e.g. a 12:30 post-auction "entsoe" run and a later
+  // "…loadfill/resfill" gap-fill run both land as D-1). We disambiguate with a
+  // compact ◦-tag so no two legend entries read the same:
+  //   pure "entsoe"        -> "D-1"          (reference, post-auction inputs)
+  //   any "weather…" mode   -> "D-1 ◦weather" (ex-ante weather-RES track)
+  //   any other "…fill" mode-> "D-1 ◦fill"    (reference, load/RES gap-filled)
+  function vintageTag(inputMode) {
+    var m = inputMode || "entsoe";
+    if (/^weather/.test(m)) return "◦weather";  // ◦weather
+    if (/fill/.test(m)) return "◦fill";         // ◦fill
+    return "";
+  }
+  function vintageLabel(d) {
+    var base = "D-" + d.lead_days;
+    var tag = vintageTag(dayInputMode(d));
+    return tag ? base + " " + tag : base;
+  }
+
+  // Count of settled (non-null) actual points in a day entry.
+  function settledCount(d) {
+    return d.actual.filter(function (a) { return a !== null && a !== undefined; }).length;
+  }
+
   // Revision panel: every vintage we published for one delivery day.
   function renderRevisions() {
     var zoneData = state.zoneCache[state.zone];
@@ -928,31 +1069,28 @@
       btns.appendChild(b);
     });
 
-    var entries = byDate[state.revDay].slice().sort(function (a, b) { return b.lead_days - a.lead_days; });
-    var newest = entries[entries.length - 1];
+    // Draw order: longest lead first so the freshest D-1 sits on top; within an
+    // equal lead the pure-entsoe reference draws last (on top of its fill/weather
+    // siblings). Legend order matches draw order.
+    function modeRank(d) { return vintageTag(dayInputMode(d)) === "" ? 2 : 1; }
+    var entries = byDate[state.revDay].slice().sort(function (a, b) {
+      return (b.lead_days - a.lead_days) || (modeRank(a) - modeRank(b));
+    });
+    // The actual (settled) line is the same for every vintage of a delivery day;
+    // take it from whichever entry carries the most settled hours. Empty => hide.
+    var actualSrc = entries.reduce(function (best, d) {
+      return settledCount(d) > settledCount(best) ? d : best;
+    }, entries[0]);
+    var hasActual = settledCount(actualSrc) > 0;
+    var hoursSrc = actualSrc;
     $("rev-title").textContent = "What we said, when — " + state.zone + " · " + dayLabel(state.revDay);
 
     var C = chartColors();
-    // legend: one chip per vintage + actual
-    entries.forEach(function (d) {
-      var span = el("span");
-      span.appendChild(dashKey(d.lead_days, C.sim, d.lead_days === 1 ? 2.4 : 1.8));
-      span.appendChild(document.createTextNode("D-" + d.lead_days));
-      lg.appendChild(span);
-    });
-    var hasActual = !isPending(newest);
-    if (hasActual) {
-      var span = el("span");
-      span.appendChild(el("span", "key act"));
-      span.appendChild(document.createTextNode("Actual (settled)"));
-      lg.appendChild(span);
-    }
-
     // values pool for scale
     var vals = [];
     entries.forEach(function (d) { d.sim.forEach(function (v) { vals.push(v); }); });
-    newest.actual.forEach(function (a) { if (a !== null && a !== undefined) vals.push(a); });
-    var n = newest.hours.length;
+    if (hasActual) actualSrc.actual.forEach(function (a) { if (a !== null && a !== undefined) vals.push(a); });
+    var n = hoursSrc.hours.length;
     var sc = chartScaffold(wrap, vals, n, "Forecast vintages for " + state.revDay + ", " + state.zone);
     var svg = sc.svg, X = sc.X, Y = sc.Y;
 
@@ -961,9 +1099,13 @@
         x: X(i), y: sc.m.t + sc.ph + 20, "text-anchor": "middle",
         fill: sc.C.muted, "font-size": 11.5, "font-variant-numeric": "tabular-nums",
       });
-      tx.textContent = hourLabel(newest.hours[i]);
+      tx.textContent = hourLabel(hoursSrc.hours[i]);
       svg.appendChild(tx);
     }
+
+    // Draw each vintage's line and collect (chip, path) as a focusable series.
+    // Series key is (lead|input_mode) so the two D-1 slices are distinct.
+    var focusSeries = [];
     entries.forEach(function (d) {
       var revAttrs = {
         d: pathString(d.sim, X, Y), fill: "none", stroke: sc.C.sim,
@@ -973,15 +1115,59 @@
       };
       var revDash = leadDash(d.lead_days);
       if (revDash) revAttrs["stroke-dasharray"] = revDash;
-      svg.appendChild(svgEl("path", revAttrs));
+      var path = svgEl("path", revAttrs);
+      svg.appendChild(path);
+
+      var chip = el("span");
+      chip.appendChild(dashKey(d.lead_days, C.sim, d.lead_days === 1 ? 2.4 : 1.8));
+      chip.appendChild(document.createTextNode(vintageLabel(d)));
+      // full-detail tooltip: exact input_mode + the frozen prediction stamp
+      chip.title = vintageLabel(d) + "  ·  input_mode: " + dayInputMode(d) +
+        (d.prediction_made_utc
+          ? "  ·  frozen " + d.prediction_made_utc.replace("T", " ").replace("Z", " UTC")
+          : "");
+      lg.appendChild(chip);
+
+      focusSeries.push({
+        key: d.lead_days + "|" + dayInputMode(d),
+        chip: chip, els: [path], baseOpacity: leadOpacity(d.lead_days),
+      });
     });
+
+    // Actual line + legend — only when the day has at least one settled hour.
     if (hasActual) {
-      svg.appendChild(svgEl("path", {
-        d: pathString(newest.actual, X, Y), fill: "none", stroke: sc.C.act,
+      var actPath = svgEl("path", {
+        d: pathString(actualSrc.actual, X, Y), fill: "none", stroke: sc.C.act,
         "stroke-width": 2.4, "stroke-linejoin": "round", "stroke-linecap": "round",
-      }));
+      });
+      svg.appendChild(actPath);
+      // a lone settled point (no realized neighbours) needs a dot to be visible
+      var actEls = [actPath];
+      for (var k = 0; k < n; k++) {
+        var av = actualSrc.actual[k];
+        if (av === null || av === undefined) continue;
+        var pv = k > 0 ? actualSrc.actual[k - 1] : null;
+        var nv = k < n - 1 ? actualSrc.actual[k + 1] : null;
+        if ((pv === null || pv === undefined) && (nv === null || nv === undefined)) {
+          var dot = svgEl("circle", {
+            cx: X(k), cy: Y(av), r: 4, fill: sc.C.act, stroke: sc.C.surface, "stroke-width": 2,
+          });
+          svg.appendChild(dot);
+          actEls.push(dot);
+        }
+      }
+      var actChip = el("span");
+      actChip.appendChild(el("span", "key act"));
+      var partial = settledCount(actualSrc) < n;
+      actChip.appendChild(document.createTextNode(partial ? "Actual (settling)" : "Actual (settled)"));
+      actChip.title = "Actual settled price" + (partial
+        ? " (" + settledCount(actualSrc) + "/" + n + " hours settled so far)" : "");
+      lg.appendChild(actChip);
+      focusSeries.push({ key: "act", chip: actChip, els: actEls, baseOpacity: 1 });
     }
+
     wrap.appendChild(svg);
+    attachSeriesFocus(lg, focusSeries);
     if (entries.length === 1) {
       wrap.appendChild(el("p", "pending-note",
         "One vintage so far — earlier leads appear as the horizon runs accumulate day by day."));
