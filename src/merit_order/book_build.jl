@@ -396,6 +396,54 @@ function _committed_set(generators::Vector{Generator}, peak_residual::Float64,
 end
 
 """
+    _nuclear_avail_frac(bidding_zone, day) -> Union{Nothing,Float64}
+
+Ex-ante nuclear availability fraction for the cv23 availability-scaled nuclear
+opportunity cost (`docs/experiments/cv23-fr-nuclear.md`): trailing-30d nuclear
+output p95 ÷ installed nuclear capacity — both strictly historical (no lookahead,
+no price input). Reuses the exact `get_type_output_p95` (day-cached) and
+`get_installed_capacity_by_type` (process-cached) queries fleet-truthing already
+runs, so it is free. `nothing` when either input is missing (the caller falls
+back to the fixed `anchor_share`).
+"""
+function _nuclear_avail_frac(bidding_zone::String, day::Date)
+    p95 = get(get_type_output_p95(bidding_zone, day), "Nuclear", 0.0)
+    inst = get(get_installed_capacity_by_type(bidding_zone), "Nuclear", 0.0)
+    (p95 > 0.0 && inst > 0.0) || return nothing
+    return clamp(p95 / inst, 0.0, 1.0)
+end
+
+"""
+    _effective_nuclear_share(profile, anchor_active, opportunity_anchor,
+                             anchor_share, bidding_zone, day) -> Float64
+
+The `:nuclear` opportunity-anchor share for this zone-day. When the profile opts
+into the availability scaling (`nuclear_avail_share_hi > 0`) AND the `:nuclear`
+anchor is active, the fixed `anchor_share` is replaced by a share that rises as
+the ex-ante nuclear energy budget tightens (low availability = summer maintenance
+/ river-temperature de-rating / the 2023 crisis) — the reservoir/water-value
+analogy for the energy-constrained EDF fleet. Otherwise returns `anchor_share`
+unchanged (byte-identical). See the `ZoneProfile` field docstring + the cv23 doc.
+"""
+function _effective_nuclear_share(profile::ZoneProfile, anchor_active::Bool,
+    opportunity_anchor::Symbol, anchor_share::Float64,
+    bidding_zone::String, day::Date)
+    (anchor_active && opportunity_anchor == :nuclear &&
+     profile.nuclear_avail_share_hi > 0.0) || return anchor_share
+    a = _nuclear_avail_frac(bidding_zone, day)
+    a === nothing && return anchor_share
+    tight = clamp(
+        (profile.nuclear_avail_ref - a) /
+        max(profile.nuclear_avail_ref - profile.nuclear_avail_floor, 1e-6),
+        0.0, 1.0)
+    share = profile.nuclear_avail_share_lo +
+            (profile.nuclear_avail_share_hi - profile.nuclear_avail_share_lo) * tight
+    println("  ⚛️  Nuclear availability $(round(a, digits=2)) → opportunity share " *
+            "$(round(share, digits=2)) (tightness $(round(tight, digits=2)))")
+    return share
+end
+
+"""
     create_merit_order_book(bidding_zone::String, day::Date; kwargs...)
 
 Create a deterministic merit-order-based order book for MPCC clearing.
@@ -655,7 +703,12 @@ function create_merit_order_book(
         # fixed flow injection is REMOVED here — the elastic ladder (Stage 6b)
         # replaces it — and its backstop headroom is removed just below.
         boundary_book = profile.boundary_book
-        boundary_exclude = boundary_book === nothing ? String[] : boundary_book.flow_codes
+        # The counterparty's map codes stripped from the fixed net-import
+        # injection + backstop headroom (the elastic ladder replaces both). For
+        # FR↔GB this is all four codes (aggregate GB + the three cables) so the
+        # ≈2× double-count is removed, not just the aggregate — see GB_FR_BOOK.
+        boundary_exclude = boundary_book === nothing ? String[] :
+                           boundary_net_exclude(boundary_book)
         net_imports = include_net_imports ?
                       get_net_imports(bidding_zone, day;
                           exclude_counterparties=vcat(net_import_exclude, boundary_exclude),
@@ -678,6 +731,13 @@ function create_merit_order_book(
 
         # Gas SRMC anchors hydro water value (TTF-based when data exists)
         gas_srmc = get_marginal_cost(day, "Fossil Gas", bidding_zone)
+
+        # cv23 availability-scaled nuclear opportunity-cost share (FR). Computed
+        # once per zone-day from ex-ante nuclear availability; used in place of
+        # the fixed `anchor_share` in the `:nuclear` anchor branch below. Equals
+        # `anchor_share` for every zone that does not opt in (byte-identical).
+        eff_nuclear_share = _effective_nuclear_share(profile, anchor_active,
+            opportunity_anchor, anchor_share, bidding_zone, day)
 
         # Ex-ante elastic import backstop (cv17, profile-gated — see the
         # `import_backstop` field docstring). Computed next to the :v2 flow
@@ -904,7 +964,7 @@ function create_merit_order_book(
                     gmc = (anchor_active && opportunity_anchor == :nuclear &&
                            g.fuel_type == Symbol("Nuclear") &&
                            haskey(anchor_prices, ts)) ?
-                          max(g.marginal_cost, anchor_share * anchor_prices[ts]) :
+                          max(g.marginal_cost, eff_nuclear_share * anchor_prices[ts]) :
                           g.marginal_cost
                     # cv18 per-unit SRMC spread: order prices only (must-run
                     # blocks + tranches scale together via gmc); the must-run
