@@ -92,71 +92,71 @@ NO-SHIPs are documented with mechanism-level root causes for cv23: the GB
 border pair (blocked on French nuclear opportunity-cost bidding) and the
 43-zone endogenization ([docs/experiments/](docs/experiments/)).
 
-### By strategy regime — frozen 36-day stratified sample (pre-cv19)
+### By strategy regime — cv22 comparable full year (2025-07-25 → 2026-07-24)
 
-The per-regime breakdown below is a **frozen 36-day full-year stratified
-sample** (all 39 zones, every day scored; bias = sim − actual) measured under
-the **cv17-era climatology flow rule** — *before* the cv19 anad2 flows and the
-cv21/cv22 boundary books. It is kept as a stratified-regime snapshot of where
-each strategy class is strong or weak; it is **not** the current record. For
-current per-zone numbers use the cv22 comparable-full-year figures in the
-headline above (DE_LU 0.85, GR 0.85, FI 0.84, FR 0.75, …) and the
-`multi_zone_eu` cv22 backfill in the Metabase dashboard.
-Source of truth for this frozen sample:
-[docs/model-spec-exante.md](docs/model-spec-exante.md). Aggregate on it: mean
-corr 0.61, mean MAE €30.7/MWh, mean bias −8.5.
+The per-regime breakdown below is measured on the **cv22 canonical record**
+over the comparable full year — all 39 zones, every day scored, 8,402 hours
+per zone (bias = sim − actual). Aggregate: **mean corr 0.67, mean MAE €27.4,
+mean bias −6.7**. (The pre-cv19 frozen 36-day stratified sample this table
+replaces is preserved in
+[docs/model-spec-exante.md](docs/model-spec-exante.md); its windows differ,
+so compare regime-by-regime with care.)
 
 By strategy regime (corr / MAE €/MWh / bias):
 
 | Regime | Zone | corr | MAE | bias |
 |---|---|---|---|---|
-| Gas-marginal (SEE/Iberia) | **GR** | **0.82** | 23.3 | −6.7 |
-| | BG | 0.79 | 30.3 | +6.4 |
-| | ES / PT | 0.80 / 0.77 | 22 / 23 | +5 |
-| | RS | 0.64 | 36.2 | +12.6 |
-| | RO | 0.54 | 50.7 | +25.0 |
-| Continental (installed-truthed) | **DE_LU** | **0.80** | 21.1 | −9.8 |
-| | FR | 0.74 | 25.5 | +3.9 |
-| | CZ / PL | 0.68 / 0.65 | 26 / 29 | −13 / −16 |
-| | NL | 0.52 | 25.9 | −14.1 |
-| | BE | 0.18 | 38.6 | −25.1 |
-| Italy (gas + premium) | 7 zones | 0.64–0.76 | 19–24 | −14…+1 |
-| Hydro, export-anchored | NO2 | **0.78** | 15.9 | −0.9 |
-| | SE4 | 0.72 | 36.0 | −15.2 |
-| | CH | 0.68 | 23.4 | −7.3 |
-| | NO1 / NO3 / NO5 | 0.08 / 0.31 / 0.41 | 34–46 | mixed |
-| Hydro, reservoir-only | FI | **0.85** | 35.1 | −27.9 |
-| | DK1 | 0.69 | 26.7 | −14.6 |
-| | SE1/SE2/SE3 | 0.44–0.49 | 30–39 | −13…+6 |
-| Baltic (installed-truthed) | LT / LV / EE | **0.83 / 0.82 / 0.80** | 48–50 | ≈ −38 |
-| Border-repaired transit | HU | 0.74 | 33.8 | −9.3 |
-| | SK | 0.68 | 37.9 | −32.8 |
-| | AT / DK2 / SI | 0.34 / 0.27 / 0.64 | 29–35 | −10…−12 |
+| Gas-marginal (SEE/Iberia) | **GR** | **0.85** | 21.2 | −6.3 |
+| | BG | 0.79 | 25.3 | −2.8 |
+| | ES / PT | 0.79 / 0.77 | 22 / 23 | +7 / +8 |
+| | RO | 0.77 | 26.2 | −5.5 |
+| | RS | 0.72 | 27.0 | +4.1 |
+| Continental (installed-truthed) | **DE_LU** | **0.85** | 19.3 | −4.2 |
+| | BE | 0.79 | 21.5 | −6.4 |
+| | FR | 0.75 | 24.3 | +2.8 |
+| | CZ / PL | 0.68 / 0.69 | 26 / 28 | −7 / −10 |
+| | NL | 0.69 | 24.5 | −5.2 |
+| Italy (gas + premium) | 7 zones | 0.62–0.77 | 19–22 | −14…−3 |
+| Hydro, export-anchored | NO2 | **0.76** | 15.6 | +1.0 |
+| | CH | 0.76 | 22.0 | −12.3 |
+| | SE4 | 0.58 | 31.7 | −8.0 |
+| | NO1 / NO3 / NO5 | 0.00 / 0.13 / 0.42 | 27–63 | +3…+37 |
+| Hydro, reservoir-only | FI | **0.84** | 25.9 | −21.7 |
+| | DK1 | 0.78 | 22.5 | −1.0 |
+| | SE1/SE2/SE3 | 0.51–0.61 | 26–30 | −10…+16 |
+| Baltic (installed-truthed) | LT / LV / EE | 0.74 / 0.72 / 0.73 | 39–43 | ≈ −29 |
+| Border-repaired transit | AT | **0.80** | 25.3 | −16.9 |
+| | HU / SK | 0.74 / 0.72 | 33 / 34 | −24 |
+| | DK2 / SI | 0.71 / 0.62 | 26 / 37 | −8 / −28 |
 
-Where it's strong: wherever gas or truthed thermal sets the price (Greece,
-Germany, Iberia, Italy, France), correlation sits at 0.74–0.82 with MAE in the
-€20s. Greece — the longest-validated zone — reaches **corr 0.87 in 2026** and
-holds **0.85 / MAE €21.2** over the cv22 comparable full year
-(2025-07-25 → 2026-07-24); its per-year trajectory is 0.72 → 0.77 → 0.85 →
-0.87 (the earlier full-year cv16 backfill sat at 0.86 / €20.8).
+What moved since the frozen pre-cv19 sample (different windows — direction,
+not decimals): the meshed continental core is repaired (**BE 0.18 → 0.79,
+AT 0.34 → 0.80**, NL 0.52 → 0.69), the SEE east lifted (RO 0.54 → 0.77,
+RS 0.64 → 0.72), and **DK1 0.69 → 0.78** carries the cv21 Viking book.
+Greece — the longest-validated zone — holds **0.85 / €21.2** with a per-year
+trajectory 0.72 → 0.77 → 0.85 → **0.87 in 2026**.
 
-The honest weak spots on this sample, stated plainly:
+The honest weak spots on the full year, stated plainly:
 
-- **NO1 (corr 0.08)** — the known open problem. Its import flow regime flips
-  week to week; neither an 8-week climatology nor D-7 recency captures it. It
-  needs a real flow input model with reservoir-state features (the defined
-  next-iteration deliverable).
-- **Baltics (LT/LV/EE)** — shape is excellent (corr 0.80–0.83) but there is a
-  systematic **≈ −€38/MWh level bias** (winter import pricing, the next
-  calibration target).
-- **BE / AT / DK2** — the remaining shape problems in the meshed continental
-  core (corr 0.18–0.34).
+- **Interior Norway — NO1 corr 0.00 / bias +36.9, NO3 0.13, NO4 0.14** — the
+  program's oldest open problem. cv23's import backstop kills the dry-spring
+  phantom-cap failure (NO1 MAE 340 → 73 on the measured windows) but the
+  seasonal water-value level structure needs reservoir/inflow modelling that
+  ENTSO-E data does not carry (measured negatives + the forward path in
+  [docs/experiments/norwegian-hydro/](docs/experiments/norwegian-hydro/)).
+- **Baltics (LT/LV/EE)** — shape fine (corr ~0.73), level bias still
+  **≈ −€29/MWh** (winter import pricing).
+- **Transit level biases** — HU/SK/SI clear €24–28 below realized on the full
+  year (the Core-FBMC evening family; ua2 improved HU's July but the level
+  gap remains a candidate market-power/conduct signature under the program's
+  framing, not only a model gap).
 
-Two context numbers, so the ex-ante claim is checkable: with *same-day
-observed* flows instead of the ex-ante flow rule the aggregate is corr 0.59 /
-MAE 31.9 — the fully ex-ante version is **not worse, it's slightly better**.
-On 12 fully held-out days the aggregate holds at corr 0.62 / MAE 35.3, with
-the degradation concentrated in NO1.
+Two context numbers from the pre-cv19 frozen sample, so the ex-ante claim
+stays checkable: with *same-day observed* flows instead of the ex-ante flow
+rule that sample's aggregate was corr 0.59 / MAE 31.9 — the fully ex-ante
+version is **not worse, it's slightly better**. On its 12 fully held-out days
+the aggregate held at corr 0.62 / MAE 35.3, with the degradation concentrated
+in NO1.
 
 ## How it works
 
