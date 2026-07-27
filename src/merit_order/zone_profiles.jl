@@ -603,6 +603,42 @@ const NORWAY_PROFILE = ZoneProfile(
 )
 
 """
+Interior Norway (NO1/NO3, cv23). NORWAY_PROFILE plus the ex-ante `import_backstop`
+(docs/experiments/norwegian-hydro/DIAGNOSIS.md + results.md).
+
+The interior hydro pockets (NO1/NO3) reach the continent only through NO2, and
+every Norwegian-internal border is a dropped flow-based residual
+(`flow_based_drop_borders`), so their only non-hydro supply is the clamped
+observed import-only flow. In the spring-drawdown weeks (reservoir at its
+seasonal low before the snowmelt refill) the dryness-rationed hydro-quantity
+heuristic tightens the book until the coupled clear sits at supply ≈ demand on a
+phantom-scarcity knife-edge and tips to the price cap — a genuine, reproducible
+instability (NO1 May-2026 base flips €91↔€2045 on adjacent days for the same
+water outturn ≈ €110; the frozen cv22 Postgres record and the live extract cap on
+different May days for the same reason). The ex-ante import backstop restores the
+zone's demonstrated tail-day import capability as elastic supply above the
+tranches (the identical cv17 fix DK1/DK2/CH/AT/SI carry), de-risking the
+knife-edge: measured A/B NO1 MAE 340→73, bias +298→+30; NO3 MAE 314→46, corr
+0.16→0.48; dry-spring NO1 MAE 883→162; ALL other zones byte-identical (the
+backstop is priced above every tranche, so it is inert on non-tail hours).
+
+**Deliberately does NOT touch the anchor.** Two re-anchoring attempts (blunt
+`anchor_include_dropped`, and a gateway anchor to NO2) were built and measured
+NEGATIVE — anchoring the hydro OFFER is not the same as transplanting NO2's
+clearing price, and the gas-SRMC water-value clamp only lets re-anchoring push
+the genuinely-scarce winter further down (NO1 winter bias −55→−102). So the
+backstop ships alone and the full-year NO1 corr≈0 (seasonal level inversion +
+gas-SRMC ceiling) stays an open problem with a specified mechanism/data gap
+(DIAGNOSIS.md §7). NO2 (the gateway, fits well), NO4 (isolated) and NO5 (measured
+worse under any treatment) stay on their own profiles. Gated by
+`EUPHEMIA_DISABLE_CV23` (byte-identity guard).
+"""
+const NORWAY_ANCHORED_PROFILE = with_profile(NORWAY_PROFILE; import_backstop = true)
+
+"Interior-Norway zones carrying the cv23 import-backstop treatment (kill-switch scope)."
+const CV23_NO_ZONES = Set(["NO1", "NO3"])
+
+"""
 Mid/south Sweden (SE3/SE4). Same structural object as southern Norway once
 their flow-based-residual borders are dropped (iter5: SE2–SE3, SE3–SE4 in
 `flow_based_drop_borders`): the drop cured the +128/+147 continental-scarcity
@@ -909,9 +945,14 @@ const ZONE_PROFILES = Dict{String,ZoneProfile}(
     "IT-CSOUTH" => ITALY_PROFILE, "IT-SOUTH" => ITALY_PROFILE,
     "IT-Calabria" => ITALY_PROFILE, "IT-Sicily" => ITALY_PROFILE,
     "IT-Sardinia" => ITALY_PROFILE,
-    # Norway — southern/mid zones carry the :hydro opportunity anchor;
-    # NO4 (far north, not continentally coupled) stays plain NORDIC
-    "NO1" => NORWAY_PROFILE, "NO2" => NORWAY_PROFILE, "NO3" => NORWAY_PROFILE,
+    # Norway — NO2 is the export gateway (direct DE/NL/DK cables), fits well on
+    # plain NORWAY_PROFILE. NO1/NO3 are interior hydro pockets behind NO2: cv23
+    # gives them the ex-ante import backstop (NORWAY_ANCHORED_PROFILE,
+    # docs/experiments/norwegian-hydro) to de-risk their spring-drawdown
+    # phantom-cap knife-edge. NO5 measured WORSE under any treatment and stays
+    # plain; NO4 (far north, congestion-isolated) stays plain NORDIC.
+    "NO1" => NORWAY_ANCHORED_PROFILE, "NO2" => NORWAY_PROFILE,
+    "NO3" => NORWAY_ANCHORED_PROFILE,
     "NO4" => NO4_PROFILE, "NO5" => NORWAY_PROFILE,
     "SE1" => NORDIC_PROFILE, "SE2" => NORDIC_PROFILE,
     # SE3/SE4: anchored after the iter5 SE2–SE3/SE3–SE4 border drop (see
@@ -967,6 +1008,15 @@ function get_zone_profile(zone::AbstractString)
     elseif dis == "all" && (p.unit_srmc_spread > 0.0 || !isempty(p.export_absorption_steps))
         p = with_profile(p; unit_srmc_spread=0.0,
                          export_absorption_steps=Tuple{Float64,Float64}[])
+    end
+    # cv23 interior-Norway kill-switch (byte-identity guard + attribution A/Bs):
+    # revert the cv23 import_backstop on ONLY the cv23 NO zones, so a disabled
+    # run is byte-identical to cv22 while other zones' own import_backstop
+    # (SE3/DK1/DK2/CH/AT/SI/RO/RS/HU/IT-CNORTH) is untouched. Travels via ENV for
+    # the same worker-safety reason as the other kill-switches.
+    if String(zone) in CV23_NO_ZONES &&
+       !isempty(get(ENV, "EUPHEMIA_DISABLE_CV23", ""))
+        p = with_profile(p; import_backstop = false)
     end
     # Boundary-book kill-switch (byte-identity guard + attribution A/Bs): each
     # book names the env var that strips it (`disable_env`) — Viking →

@@ -1,0 +1,13 @@
+metric	value
+NO1_all_corr	0.004
+NO1_all_mae	62.7
+NO1_all_bias	36.9
+NO1_exclMay_corr	0.046
+NO1_exclMay_mae	29.4
+NO1_exclMay_bias	3.8
+NO1_May_sim_mean	489
+NO1_May_act_mean	99
+NO1_May_capdays_sim_gt200	16
+NO1_realized_price_reservoir_low(drawn-down)	105.3
+NO1_realized_price_reservoir_mid	103.1
+NO1_realized_price_reservoir_high(full)	64.6

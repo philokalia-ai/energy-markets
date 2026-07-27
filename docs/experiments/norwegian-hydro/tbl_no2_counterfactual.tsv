@@ -1,0 +1,10 @@
+zone	variant	n	corr	mae	bias	act_mean	sim_mean
+NO1	own	8402	0.004	62.7	36.9	82.9	119.7
+NO1	priced_as_NO2	8402	0.677	20.1	4.6	82.9	87.5
+NO1	realized_corr_with_NO2		0.894				
+NO3	own	8402	0.127	42.7	26.5	57.9	84.4
+NO3	priced_as_NO2	8402	0.42	41.2	29.6	57.9	87.5
+NO3	realized_corr_with_NO2		0.58				
+NO5	own	8402	0.423	26.8	3.0	78.7	81.7
+NO5	priced_as_NO2	8402	0.501	26.0	8.8	78.7	87.5
+NO5	realized_corr_with_NO2		0.733				
