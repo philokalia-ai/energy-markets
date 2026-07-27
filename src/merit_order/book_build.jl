@@ -973,6 +973,18 @@ function create_merit_order_book(
                     if apply_unit_spread
                         gmc *= get(unit_spread_factor, g.code, 1.0)
                     end
+                    # cv23 FR-cap ceiling: bound anchor-lifted nuclear supply
+                    # prices (must-run second block + tranches, after the
+                    # scarcity/peak markup) to a modest markup over the coupled
+                    # reference, so the upper-tranche markup cannot amplify the
+                    # anchor base into the footprint-wide cap on crisis-tight
+                    # winter days. Inf (no clamp) unless the profile opts in AND
+                    # this is anchor-lifted nuclear (docs/experiments/cv23-fr-cap.md).
+                    nuc_ceil = (profile.nuclear_bid_ref_ceiling > 0.0 && anchor_active &&
+                                opportunity_anchor == :nuclear &&
+                                g.fuel_type == Symbol("Nuclear") &&
+                                haskey(anchor_prices, ts)) ?
+                               profile.nuclear_bid_ref_ceiling * anchor_prices[ts] : Inf
                     # Must-run self-scheduling: baseload-ish units (SRMC not
                     # far above gas) bid their minimum-load block near zero —
                     # shutting down and restarting costs more than running a
@@ -995,7 +1007,7 @@ function create_merit_order_book(
                             gmc * must_run_price_factor, deep_qty,
                             Symbol(bidding_zone), date_time, resolution_minutes), g.code))
                         push!(tagged, (SimpleOrder(:supply,
-                            max(gmc * 0.5, gmc - 40.0),
+                            min(max(gmc * 0.5, gmc - 40.0), nuc_ceil),
                             must_run_qty - deep_qty,
                             Symbol(bidding_zone), date_time, resolution_minutes), g.code))
                         supply_orders_count += 2
@@ -1007,7 +1019,7 @@ function create_merit_order_book(
                     # cost so mid-merit keeps clearing)
                     flexible_capacity = max(offered_pmax(g) - must_run_qty, 0.0)
                     for (i, (share, mult)) in enumerate(tranches)
-                        price = gmc * mult * (i == 1 ? 1.0 : scarcity)
+                        price = min(gmc * mult * (i == 1 ? 1.0 : scarcity), nuc_ceil)
                         qty = flexible_capacity * share
                         qty < 0.1 && continue
                         push!(tagged, (SimpleOrder(:supply, price, qty,
