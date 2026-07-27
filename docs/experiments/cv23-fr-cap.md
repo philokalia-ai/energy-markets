@@ -114,3 +114,21 @@ consistent with the GB export leg overshooting FR down in summer (the GB double-
 count removal drops FR, and the summer nuclear lift is only mild at share ≈0.58);
 a seasonal gate on the GB export ladder is the candidate cv24 lever — NOT
 implemented here (not trivially safe; needs the coupled A/B).
+
+## Note for the next iteration (if the coupled check still caps)
+
+The last in-session `frcap_verify.jl` run (fix ON) stayed in an extended
+robustness-ladder solve for 40+ min with only the pass-1 period-decomposition
+started (heavy contention masks whether this is still-capping or merely slow). If
+the coordinator's off-contention run shows FR/footprint STILL capping, the signal
+points to the cascade seeding in **pass 1**, which the `nuclear_bid_ref_ceiling`
+does NOT touch (it is anchor-active/pass-2 only). Pass 1 uses the static nuclear
+floor, so the only cv23 pass-1 change is the **GB pair** (the double-count
+exclusion + the elastic GB ladder). Next levers, in order: (a) raise the backstop
+QUANTITY (the ~5 GW headroom may be too small for the footprint shortfall — e.g.
+widen `backstop_weeks` or lift the headroom floor); (b) add `ref_priced_exports`
+so FR's observed exports curtail at the reference instead of firm-at-cap
+(demand-side relief in BOTH passes — the SI/BE pattern, directly targeting "the
+export ladder exhausts the book"); (c) if it is genuinely pass-1 GB-driven, a
+seasonal/scarcity gate on the GB export-demand ladder. All are additive to the
+committed fix and gate-able under `EUPHEMIA_DISABLE_FRCAP`.
