@@ -123,7 +123,7 @@ LIMIT 1;
 | Load / demand | `temperature_2m` (+ humidity) | heating/cooling degree signal |
 
 ### Freshness & cadence — read this
-- Updated **nightly (03:00)** by the k3s `weather-etl` CronJob.
+- Updated by a nightly ETL job.
 - **`city_measure` legitimately lags ~5–6 days.** It's ERA5 reanalysis
   (`copernicus_era5`), which is only published with that delay — so
   `max(measure_ts)` sitting a few days behind "now" is normal, not a gap.

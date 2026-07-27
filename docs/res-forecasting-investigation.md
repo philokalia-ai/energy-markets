@@ -130,12 +130,12 @@ fixes are validated: they move the full-weather price forecast from 0.686 to
 
 ## 6. What we need from ceres / infra (concrete, ordered by value)
 
-> Status: items 1–4 + 6 are implemented in **pankgeorg/ceres#491** (ETL columns,
-> schema migration, vintage table) and **pankgeorg/infra#9** (GFS sync variables,
+> Status: items 1–4 + 6 are implemented in **the (private) data-ETL repo** (ETL columns,
+> schema migration, vintage table) and **the (private) infra repo** (GFS sync variables,
 > evening ETL run). Item 5 (EU catalogue) is follow-up work.
 
-1. **Serve radiation on the forecast endpoint** (`pankgeorg/infra` →
-   `manifests/weather`, open-meteo forecast sync): add `shortwave_radiation`
+1. **Serve radiation on the forecast endpoint** (the (private) infra repo →
+   `its weather manifests`, open-meteo forecast sync): add `shortwave_radiation`
    (and ideally `diffuse_radiation`) to `OPEN_METEO_VARIABLES` for
    `ncep_gfs013`; verify `/v1/forecast` returns non-null `direct_radiation`.
    Without this there is **no live solar input**.

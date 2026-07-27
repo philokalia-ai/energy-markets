@@ -1,4 +1,4 @@
-ENV["EUPHEMIA_DATA_STORE"]="duckdb"; ENV["EUPHEMIA_DUCKDB_PATH"]="data/extracts/frcap.duckdb"
+ENV["EUPHEMIA_DATA_STORE"]="duckdb"; haskey(ENV, "EUPHEMIA_DUCKDB_PATH") || (ENV["EUPHEMIA_DUCKDB_PATH"] = "data/extracts/euphemia-live.duckdb")
 using Euphemia, Dates, Statistics
 M=Euphemia.MeritOrderBook
 FOOT=["AT","BE","BG","CZ","DE_LU","DK1","DK2","EE","ES","FI","FR","GR","HU","LT","LV","NL","NO1","NO2","NO3","NO4","NO5","PL","PT","RO","RS","SE1","SE2","SE3","SE4","SI","SK","IT-NORTH","IT-CNORTH","IT-CSOUTH","IT-SOUTH","IT-Calabria","IT-Sicily","IT-Sardinia","CH"]

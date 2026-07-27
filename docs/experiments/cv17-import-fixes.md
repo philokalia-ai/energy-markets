@@ -200,7 +200,7 @@ hours, queued for the next iteration alongside HU's deepened winter bias
 `anchor_share`/clamp levers).
 
 Metabase run:
-<https://metabase.pankgeorg.com/dashboard/14?code_version=17&clearing_mode=multi_zone_eu&order_method=merit_order>
+<the internal Metabase counterfactual dashboard (per-version Runs)
 
 ## Reproduction
 
