@@ -19,6 +19,13 @@ set -euo pipefail
 STAGING="${1:-data/web}"
 ENDPOINT="${WEB_S3_ENDPOINT:-${EXTRACT_S3_ENDPOINT:-}}"
 BUCKET="${WEB_S3_BUCKET:-euphemia-web-data}"
+# R2 API tokens are bucket-scoped: the extract-bucket keys get AccessDenied on
+# euphemia-web-data (measured 2026-07-27, first CI push). Prefer dedicated
+# WEB_S3_* keys when present; fall back to the ambient AWS_* pair.
+if [ -n "${WEB_S3_ACCESS_KEY_ID:-}" ] && [ -n "${WEB_S3_SECRET_ACCESS_KEY:-}" ]; then
+    export AWS_ACCESS_KEY_ID="$WEB_S3_ACCESS_KEY_ID"
+    export AWS_SECRET_ACCESS_KEY="$WEB_S3_SECRET_ACCESS_KEY"
+fi
 export AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-auto}"
 
 [ -n "$ENDPOINT" ] || { echo "ERROR: WEB_S3_ENDPOINT (or EXTRACT_S3_ENDPOINT) is not set" >&2; exit 1; }
