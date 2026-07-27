@@ -6,10 +6,10 @@
 #
 #   EUPHEMIA_DUCKDB_PATH=.../x.duckdb julia --project=. \
 #     docs/experiments/cv23/score_cv23.jl base.tsv cv23.tsv windows.json
-using DuckDB, DataFrames, CSV, Statistics, Dates, JSON
+using DuckDB, Printf, DataFrames, CSV, Statistics, Dates, JSON
 basef, cv23f, winf = ARGS[1], ARGS[2], ARGS[3]
 windows = Dict(k => Set(String.(v)) for (k,v) in JSON.parsefile(winf))
-con = DBInterface.connect(DuckDB.DB, ENV["EUPHEMIA_DUCKDB_PATH"])
+con = DBInterface.connect(DuckDB.DB(ENV["EUPHEMIA_DUCKDB_PATH"]; readonly=true))
 
 function loadarm(path)
     df = CSV.read(path, DataFrame)
@@ -44,7 +44,7 @@ function score(g, arm)
 end
 
 GATE = ["FR","BE","NL","NO2","DK1"]
-for (wname, wdays) in sort(collect(windows))
+for (wname, wdays) in sort(collect(windows); by=first)  # by key: Set values are not comparable
     w = m[in.(m.day, Ref(wdays)),:]
     isempty(w) && continue
     println("\n===== WINDOW $wname ($(length(unique(w.day))) days) =====")

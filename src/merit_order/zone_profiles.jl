@@ -329,6 +329,17 @@ Base.@kwdef struct ZoneProfile
     nuclear_avail_share_hi::Float64 = 0.0
     nuclear_avail_ref::Float64 = 0.80    # winter-peak availability: no premium at/above
     nuclear_avail_floor::Float64 = 0.50  # crisis / deep-maintenance floor: premium saturates at/below
+    # cv23 FR-cap ceiling. When > 0 AND the :nuclear anchor is active, every
+    # nuclear SUPPLY-order price (must-run + tranches, after the scarcity/peak
+    # markup) is clamped to `nuclear_bid_ref_ceiling × coupled-reference` — nuclear
+    # is an opportunity-cost price-TAKER on the export price, so it should never
+    # bid more than a modest markup ABOVE the reference it is anchored on. Without
+    # the clamp the upper-tranche scarcity markup amplifies the anchor-lifted base
+    # to ≈1.85×ref, which on the crisis-tight winter day 2023-01-10 helped tip the
+    # whole footprint to the €3000 cap (docs/experiments/cv23-fr-cap.md). At 1.3
+    # it never bites on the summer gain days (which clear at ≈ the reference, well
+    # below 1.3×ref) yet bounds the crisis explosion. 0 = off (byte-identical).
+    nuclear_bid_ref_ceiling::Float64 = 0.0
     # Scarcity import credit (iter6): fraction of the zone's offered import ATC
     # to add to dispatchable capacity in the scarcity margin. A thermal zone with
     # GWs of available import capacity is NOT strategically scarce even when its
@@ -579,8 +590,32 @@ and the GB pair (double-count fix + honest GB premium) are the two coupled cv23
 components — shipped together per the cv22 GB-pair NO-SHIP verdict ("fix France's
 supply curve first, then re-run this exact A/B"). Both gated by
 `EUPHEMIA_DISABLE_CV23` (docs/experiments/cv23-fr-nuclear.md).
+
+**cv23 FR-cap fix (post-merge, `docs/experiments/cv23-fr-cap.md`).** The
+availability-scaled nuclear share + the GB export-demand ladder together tipped
+the crisis-tight winter day 2023-01-10 into a footprint-wide €3000 phantom cap
+(19 zones capped, DE_LU mean 89→211/cap, FR 137→270/cap; the base cv22 day is
+normal). Diagnosis: FR's *single-zone* book clears fine that day (mean 200, max
+540) — the cap is purely the COUPLED pass-2 mechanism. In pass 2 the nuclear
+anchor lifts nuclear's bid base to `share·coupled-ref` (0.67·high-crisis-ref),
+and the **scarcity markup** on the upper tranches — which cannot see any relief —
+then amplifies that elevated base into the €3000 cap and cascades the coupled
+clear. The fix is the program's established two-part pattern (exactly the
+RO/RS/HU treatment): (1) the ex-ante elastic **import backstop** — FR's
+demonstrated import headroom (~4–9 GW in the 2022–23 crisis, when FR imported
+heavily) offered as supply at `1.8 × gas SRMC`, above every domestic tranche so
+it binds only near the cap, self-scaling with gas so it never clips the
+legitimate crisis-summer nuclear lift; and (2) **`backstop_scarcity_credit = 1.0`**
+— the same demonstrated import headroom credited into the scarcity margin, so the
+markup can SEE the available imports and no longer explodes the nuclear tranches
+(the mechanism RO/RS/HU added for precisely this "scarcity markup can't see the
+backstop supply" overshoot). Gated by `EUPHEMIA_DISABLE_FRCAP` (byte-identity:
+reverts FR to the cv23 no-backstop profile; non-FR zones untouched). Verified:
+2023-01-10 clears sanely, the 5 clean 2023 days keep their gains.
 """
-const FR_PROFILE = with_profile(FRANCE_PROFILE; boundary_book = GB_FR_BOOK)
+const FR_PROFILE = with_profile(FRANCE_PROFILE;
+    boundary_book = GB_FR_BOOK, import_backstop = true, backstop_scarcity_credit = 1.0,
+    nuclear_bid_ref_ceiling = 1.3)
 
 """
 Southern/mid Norway (NO1/NO2/NO3/NO5). Same reservoir-opportunity hydro model
@@ -1036,6 +1071,18 @@ function get_zone_profile(zone::AbstractString)
     # Worker-safe via ENV like the other switches.
     if !isempty(get(ENV, "EUPHEMIA_DISABLE_CV23", "")) && p.nuclear_avail_share_hi > 0.0
         p = with_profile(p; nuclear_avail_share_lo=0.0, nuclear_avail_share_hi=0.0)
+    end
+    # cv23 FR-cap fix kill-switch (byte-identity guard + attribution A/Bs). A
+    # non-empty EUPHEMIA_DISABLE_FRCAP strips the FR import backstop added by the
+    # cap fix, reverting FR to the cv23-merged no-backstop profile (so the guard
+    # shows FR-without-the-fix == cv23 main, and non-FR zones are untouched).
+    # Scoped to FR by name: FR is the only zone whose backstop is the cap fix —
+    # every other backstop zone (AT/BE/CH/DK/SI/RO/RS/HU) predates cv23 and must
+    # NOT be disabled here. Worker-safe via ENV.
+    if String(zone) == "FR" && (p.import_backstop || p.nuclear_bid_ref_ceiling > 0.0) &&
+       !isempty(get(ENV, "EUPHEMIA_DISABLE_FRCAP", ""))
+        p = with_profile(p; import_backstop=false, backstop_scarcity_credit=0.0,
+                         nuclear_bid_ref_ceiling=0.0)
     end
     return p
 end
