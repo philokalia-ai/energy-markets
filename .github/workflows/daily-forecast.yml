@@ -165,6 +165,22 @@ jobs:
         run: |
           julia --project=. bin/export_forecast_json.jl
 
+      - name: Publish web data plane to R2 (parquet for api.philokalia.ai)
+        env:
+          ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
+          EXTRACT_S3_ENDPOINT: ${{ secrets.EXTRACT_S3_ENDPOINT }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+        run: |
+          # The SPA reads api.philokalia.ai (R2-backed) since the #179
+          # migration; nothing was pushing the parquet after each run, so the
+          # site data plane went stale (manifest frozen at the last manual
+          # push). Export + push here, manifest last (readers never see a
+          # manifest newer than its objects).
+          julia --project=. bin/export_web_parquet.jl
+          bash bin/web_data_push.sh
+
       - name: Upload forecast data artifact
         uses: actions/upload-artifact@v4
         with:
