@@ -1,0 +1,211 @@
+date	zone	hour	kind	level	our_price	gme_price	gme_minus_our
+2023-01-17	IT-NORTH	4	shape_pctl	10	127.2	0.0	-127.2
+2023-01-17	IT-NORTH	4	shape_pctl	25	167.72	0.0	-167.72
+2023-01-17	IT-NORTH	4	shape_pctl	50	167.72	171.31	3.59
+2023-01-17	IT-NORTH	4	shape_pctl	75	191.62	302.0	110.38
+2023-01-17	IT-NORTH	4	shape_pctl	90	222.57	332.65	110.08
+2023-01-17	IT-NORTH	4	abs_depth_mw	2000	118.41	0.0	-118.41
+2023-01-17	IT-NORTH	4	abs_depth_mw	5000	167.72	0.0	-167.72
+2023-01-17	IT-NORTH	4	abs_depth_mw	10000	167.72	174.42	6.7
+2023-01-17	IT-NORTH	4	abs_depth_mw	15000	168.79	302.0	133.21
+2023-01-17	IT-NORTH	4	abs_depth_mw	20000	191.62		
+2023-01-17	IT-NORTH	12	shape_pctl	10	127.2	0.0	-127.2
+2023-01-17	IT-NORTH	12	shape_pctl	25	167.72	0.0	-167.72
+2023-01-17	IT-NORTH	12	shape_pctl	50	167.72	153.46	-14.26
+2023-01-17	IT-NORTH	12	shape_pctl	75	431.71	203.38	-228.33
+2023-01-17	IT-NORTH	12	shape_pctl	90	513.94	302.0	-211.94
+2023-01-17	IT-NORTH	12	abs_depth_mw	2000	118.41	0.0	-118.41
+2023-01-17	IT-NORTH	12	abs_depth_mw	5000	167.72	0.0	-167.72
+2023-01-17	IT-NORTH	12	abs_depth_mw	10000	167.72	144.12	-23.6
+2023-01-17	IT-NORTH	12	abs_depth_mw	15000	313.6	173.25	-140.35
+2023-01-17	IT-NORTH	12	abs_depth_mw	20000	431.71	373.0	-58.71
+2023-01-17	IT-NORTH	19	shape_pctl	10	127.2	0.0	-127.2
+2023-01-17	IT-NORTH	19	shape_pctl	25	167.72	0.0	-167.72
+2023-01-17	IT-NORTH	19	shape_pctl	50	167.72	155.9	-11.82
+2023-01-17	IT-NORTH	19	shape_pctl	75	373.5	230.0	-143.5
+2023-01-17	IT-NORTH	19	shape_pctl	90	444.65	314.8	-129.85
+2023-01-17	IT-NORTH	19	abs_depth_mw	2000	127.2	0.0	-127.2
+2023-01-17	IT-NORTH	19	abs_depth_mw	5000	167.72	0.0	-167.72
+2023-01-17	IT-NORTH	19	abs_depth_mw	10000	167.72	138.8	-28.92
+2023-01-17	IT-NORTH	19	abs_depth_mw	15000	298.65	172.36	-126.29
+2023-01-17	IT-NORTH	19	abs_depth_mw	20000	373.5	302.0	-71.5
+2023-01-17	IT-CNORTH	4	shape_pctl	10	1.0	0.0	-1.0
+2023-01-17	IT-CNORTH	4	shape_pctl	25	22.8	0.0	-22.8
+2023-01-17	IT-CNORTH	4	shape_pctl	50	167.72	0.0	-167.72
+2023-01-17	IT-CNORTH	4	shape_pctl	75	183.54	50.0	-133.54
+2023-01-17	IT-CNORTH	4	shape_pctl	90	458.33	198.3	-260.03
+2023-01-17	IT-CNORTH	4	abs_depth_mw	2000	384.99		
+2023-01-17	IT-CNORTH	4	abs_depth_mw	5000			
+2023-01-17	IT-CNORTH	4	abs_depth_mw	10000			
+2023-01-17	IT-CNORTH	4	abs_depth_mw	15000			
+2023-01-17	IT-CNORTH	4	abs_depth_mw	20000			
+2023-01-17	IT-CNORTH	12	shape_pctl	10	1.0	0.0	-1.0
+2023-01-17	IT-CNORTH	12	shape_pctl	25	11.97	0.0	-11.97
+2023-01-17	IT-CNORTH	12	shape_pctl	50	127.2	0.0	-127.2
+2023-01-17	IT-CNORTH	12	shape_pctl	75	258.12	168.3	-89.82
+2023-01-17	IT-CNORTH	12	shape_pctl	90	704.34	168.3	-536.04
+2023-01-17	IT-CNORTH	12	abs_depth_mw	2000	258.12		
+2023-01-17	IT-CNORTH	12	abs_depth_mw	5000			
+2023-01-17	IT-CNORTH	12	abs_depth_mw	10000			
+2023-01-17	IT-CNORTH	12	abs_depth_mw	15000			
+2023-01-17	IT-CNORTH	12	abs_depth_mw	20000			
+2023-01-17	IT-CNORTH	19	shape_pctl	10	1.0	0.0	-1.0
+2023-01-17	IT-CNORTH	19	shape_pctl	25	22.8	0.0	-22.8
+2023-01-17	IT-CNORTH	19	shape_pctl	50	167.72	0.0	-167.72
+2023-01-17	IT-CNORTH	19	shape_pctl	75	262.87	50.0	-212.87
+2023-01-17	IT-CNORTH	19	shape_pctl	90	721.77	168.3	-553.47
+2023-01-17	IT-CNORTH	19	abs_depth_mw	2000	606.29		
+2023-01-17	IT-CNORTH	19	abs_depth_mw	5000			
+2023-01-17	IT-CNORTH	19	abs_depth_mw	10000			
+2023-01-17	IT-CNORTH	19	abs_depth_mw	15000			
+2023-01-17	IT-CNORTH	19	abs_depth_mw	20000			
+2023-01-17	IT-CSOUTH	4	shape_pctl	10	1.0	0.0	-1.0
+2023-01-17	IT-CSOUTH	4	shape_pctl	25	127.2	0.01	-127.19
+2023-01-17	IT-CSOUTH	4	shape_pctl	50	167.72	300.4	132.68
+2023-01-17	IT-CSOUTH	4	shape_pctl	75	167.72	316.8	149.08
+2023-01-17	IT-CSOUTH	4	shape_pctl	90	220.71	374.0	153.29
+2023-01-17	IT-CSOUTH	4	abs_depth_mw	2000	2.85	0.0	-2.85
+2023-01-17	IT-CSOUTH	4	abs_depth_mw	5000	137.26	310.1	172.84
+2023-01-17	IT-CSOUTH	4	abs_depth_mw	10000	185.4		
+2023-01-17	IT-CSOUTH	4	abs_depth_mw	15000			
+2023-01-17	IT-CSOUTH	4	abs_depth_mw	20000			
+2023-01-17	IT-CSOUTH	12	shape_pctl	10	1.0	-500.0	-501.0
+2023-01-17	IT-CSOUTH	12	shape_pctl	25	118.41	0.0	-118.41
+2023-01-17	IT-CSOUTH	12	shape_pctl	50	167.72	195.16	27.44
+2023-01-17	IT-CSOUTH	12	shape_pctl	75	200.74	315.8	115.06
+2023-01-17	IT-CSOUTH	12	shape_pctl	90	248.95	332.65	83.7
+2023-01-17	IT-CSOUTH	12	abs_depth_mw	2000	1.0	0.0	-1.0
+2023-01-17	IT-CSOUTH	12	abs_depth_mw	5000	127.2	224.6	97.4
+2023-01-17	IT-CSOUTH	12	abs_depth_mw	10000	200.74		
+2023-01-17	IT-CSOUTH	12	abs_depth_mw	15000			
+2023-01-17	IT-CSOUTH	12	abs_depth_mw	20000			
+2023-01-17	IT-CSOUTH	19	shape_pctl	10	1.0	-500.0	-501.0
+2023-01-17	IT-CSOUTH	19	shape_pctl	25	118.41	0.0	-118.41
+2023-01-17	IT-CSOUTH	19	shape_pctl	50	167.72	192.67	24.95
+2023-01-17	IT-CSOUTH	19	shape_pctl	75	298.4	314.8	16.4
+2023-01-17	IT-CSOUTH	19	shape_pctl	90	393.47	332.65	-60.82
+2023-01-17	IT-CSOUTH	19	abs_depth_mw	2000	1.0	0.0	-1.0
+2023-01-17	IT-CSOUTH	19	abs_depth_mw	5000	167.72	203.14	35.42
+2023-01-17	IT-CSOUTH	19	abs_depth_mw	10000	298.4		
+2023-01-17	IT-CSOUTH	19	abs_depth_mw	15000			
+2023-01-17	IT-CSOUTH	19	abs_depth_mw	20000			
+2023-01-17	IT-SOUTH	4	shape_pctl	10	1.0	-500.0	-501.0
+2023-01-17	IT-SOUTH	4	shape_pctl	25	1.0	0.0	-1.0
+2023-01-17	IT-SOUTH	4	shape_pctl	50	167.36	50.0	-117.36
+2023-01-17	IT-SOUTH	4	shape_pctl	75	167.72	316.8	149.08
+2023-01-17	IT-SOUTH	4	shape_pctl	90	220.69	332.65	111.96
+2023-01-17	IT-SOUTH	4	abs_depth_mw	2000	1.0	0.0	-1.0
+2023-01-17	IT-SOUTH	4	abs_depth_mw	5000	167.72	215.0	47.28
+2023-01-17	IT-SOUTH	4	abs_depth_mw	10000			
+2023-01-17	IT-SOUTH	4	abs_depth_mw	15000			
+2023-01-17	IT-SOUTH	4	abs_depth_mw	20000			
+2023-01-17	IT-SOUTH	12	shape_pctl	10	1.0	-500.0	-501.0
+2023-01-17	IT-SOUTH	12	shape_pctl	25	1.0	0.0	-1.0
+2023-01-17	IT-SOUTH	12	shape_pctl	50	127.2	20.0	-107.2
+2023-01-17	IT-SOUTH	12	shape_pctl	75	167.72	214.13	46.41
+2023-01-17	IT-SOUTH	12	shape_pctl	90	220.69	332.65	111.96
+2023-01-17	IT-SOUTH	12	abs_depth_mw	2000	1.0	0.0	-1.0
+2023-01-17	IT-SOUTH	12	abs_depth_mw	5000	130.87	50.0	-80.87
+2023-01-17	IT-SOUTH	12	abs_depth_mw	10000			
+2023-01-17	IT-SOUTH	12	abs_depth_mw	15000			
+2023-01-17	IT-SOUTH	12	abs_depth_mw	20000			
+2023-01-17	IT-SOUTH	19	shape_pctl	10	1.0	-500.0	-501.0
+2023-01-17	IT-SOUTH	19	shape_pctl	25	1.0	0.0	-1.0
+2023-01-17	IT-SOUTH	19	shape_pctl	50	129.81	3.0	-126.81
+2023-01-17	IT-SOUTH	19	shape_pctl	75	167.72	215.0	47.28
+2023-01-17	IT-SOUTH	19	shape_pctl	90	220.69	332.65	111.96
+2023-01-17	IT-SOUTH	19	abs_depth_mw	2000	1.0	0.0	-1.0
+2023-01-17	IT-SOUTH	19	abs_depth_mw	5000	155.8	50.0	-105.8
+2023-01-17	IT-SOUTH	19	abs_depth_mw	10000			
+2023-01-17	IT-SOUTH	19	abs_depth_mw	15000			
+2023-01-17	IT-SOUTH	19	abs_depth_mw	20000			
+2023-01-17	IT-Calabria	4	shape_pctl	10	1.0	0.0	-1.0
+2023-01-17	IT-Calabria	4	shape_pctl	25	127.2	298.7	171.5
+2023-01-17	IT-Calabria	4	shape_pctl	50	167.72	299.6	131.88
+2023-01-17	IT-Calabria	4	shape_pctl	75	185.38	373.0	187.62
+2023-01-17	IT-Calabria	4	shape_pctl	90	220.69	374.0	153.31
+2023-01-17	IT-Calabria	4	abs_depth_mw	2000	167.72	299.7	131.98
+2023-01-17	IT-Calabria	4	abs_depth_mw	5000			
+2023-01-17	IT-Calabria	4	abs_depth_mw	10000			
+2023-01-17	IT-Calabria	4	abs_depth_mw	15000			
+2023-01-17	IT-Calabria	4	abs_depth_mw	20000			
+2023-01-17	IT-Calabria	12	shape_pctl	10	1.0	0.0	-1.0
+2023-01-17	IT-Calabria	12	shape_pctl	25	167.72	0.0	-167.72
+2023-01-17	IT-Calabria	12	shape_pctl	50	167.72	153.3	-14.42
+2023-01-17	IT-Calabria	12	shape_pctl	75	185.58	373.0	187.42
+2023-01-17	IT-Calabria	12	shape_pctl	90	220.93	374.0	153.07
+2023-01-17	IT-Calabria	12	abs_depth_mw	2000	167.72	153.3	-14.42
+2023-01-17	IT-Calabria	12	abs_depth_mw	5000			
+2023-01-17	IT-Calabria	12	abs_depth_mw	10000			
+2023-01-17	IT-Calabria	12	abs_depth_mw	15000			
+2023-01-17	IT-Calabria	12	abs_depth_mw	20000			
+2023-01-17	IT-Calabria	19	shape_pctl	10	1.0	0.0	-1.0
+2023-01-17	IT-Calabria	19	shape_pctl	25	167.72	0.0	-167.72
+2023-01-17	IT-Calabria	19	shape_pctl	50	167.72	159.8	-7.92
+2023-01-17	IT-Calabria	19	shape_pctl	75	196.58	373.0	176.42
+2023-01-17	IT-Calabria	19	shape_pctl	90	234.02	374.0	139.98
+2023-01-17	IT-Calabria	19	abs_depth_mw	2000	167.72	163.5	-4.22
+2023-01-17	IT-Calabria	19	abs_depth_mw	5000			
+2023-01-17	IT-Calabria	19	abs_depth_mw	10000			
+2023-01-17	IT-Calabria	19	abs_depth_mw	15000			
+2023-01-17	IT-Calabria	19	abs_depth_mw	20000			
+2023-01-17	IT-Sicily	4	shape_pctl	10	1.0	-2.0	-3.0
+2023-01-17	IT-Sicily	4	shape_pctl	25	167.72	0.0	-167.72
+2023-01-17	IT-Sicily	4	shape_pctl	50	167.72	20.0	-147.72
+2023-01-17	IT-Sicily	4	shape_pctl	75	185.93	218.94	33.01
+2023-01-17	IT-Sicily	4	shape_pctl	90	237.93	326.4	88.47
+2023-01-17	IT-Sicily	4	abs_depth_mw	2000	167.72	145.0	-22.72
+2023-01-17	IT-Sicily	4	abs_depth_mw	5000	283.33		
+2023-01-17	IT-Sicily	4	abs_depth_mw	10000			
+2023-01-17	IT-Sicily	4	abs_depth_mw	15000			
+2023-01-17	IT-Sicily	4	abs_depth_mw	20000			
+2023-01-17	IT-Sicily	12	shape_pctl	10	1.0	-0.5	-1.5
+2023-01-17	IT-Sicily	12	shape_pctl	25	1.0	0.0	-1.0
+2023-01-17	IT-Sicily	12	shape_pctl	50	167.72	0.01	-167.71
+2023-01-17	IT-Sicily	12	shape_pctl	75	185.44	159.2	-26.24
+2023-01-17	IT-Sicily	12	shape_pctl	90	220.76	257.2	36.44
+2023-01-17	IT-Sicily	12	abs_depth_mw	2000	167.42	0.0	-167.42
+2023-01-17	IT-Sicily	12	abs_depth_mw	5000	220.76		
+2023-01-17	IT-Sicily	12	abs_depth_mw	10000			
+2023-01-17	IT-Sicily	12	abs_depth_mw	15000			
+2023-01-17	IT-Sicily	12	abs_depth_mw	20000			
+2023-01-17	IT-Sicily	19	shape_pctl	10	1.0	-500.0	-501.0
+2023-01-17	IT-Sicily	19	shape_pctl	25	167.72	0.0	-167.72
+2023-01-17	IT-Sicily	19	shape_pctl	50	167.72	103.0	-64.72
+2023-01-17	IT-Sicily	19	shape_pctl	75	361.3	218.94	-142.36
+2023-01-17	IT-Sicily	19	shape_pctl	90	430.11	314.8	-115.31
+2023-01-17	IT-Sicily	19	abs_depth_mw	2000	167.72	50.0	-117.72
+2023-01-17	IT-Sicily	19	abs_depth_mw	5000	550.55		
+2023-01-17	IT-Sicily	19	abs_depth_mw	10000			
+2023-01-17	IT-Sicily	19	abs_depth_mw	15000			
+2023-01-17	IT-Sicily	19	abs_depth_mw	20000			
+2023-01-17	IT-Sardinia	4	shape_pctl	10	1.0	-500.0	-501.0
+2023-01-17	IT-Sardinia	4	shape_pctl	25	6.23	-500.0	-506.23
+2023-01-17	IT-Sardinia	4	shape_pctl	50	118.41	0.0	-118.41
+2023-01-17	IT-Sardinia	4	shape_pctl	75	140.59	0.0	-140.59
+2023-01-17	IT-Sardinia	4	shape_pctl	90	190.7	50.0	-140.7
+2023-01-17	IT-Sardinia	4	abs_depth_mw	2000	127.2	50.0	-77.2
+2023-01-17	IT-Sardinia	4	abs_depth_mw	5000			
+2023-01-17	IT-Sardinia	4	abs_depth_mw	10000			
+2023-01-17	IT-Sardinia	4	abs_depth_mw	15000			
+2023-01-17	IT-Sardinia	4	abs_depth_mw	20000			
+2023-01-17	IT-Sardinia	12	shape_pctl	10	1.0	-500.0	-501.0
+2023-01-17	IT-Sardinia	12	shape_pctl	25	1.0	-0.5	-1.5
+2023-01-17	IT-Sardinia	12	shape_pctl	50	118.41	0.0	-118.41
+2023-01-17	IT-Sardinia	12	shape_pctl	75	131.08	0.0	-131.08
+2023-01-17	IT-Sardinia	12	shape_pctl	90	171.07	208.18	37.11
+2023-01-17	IT-Sardinia	12	abs_depth_mw	2000	127.2	39.5	-87.7
+2023-01-17	IT-Sardinia	12	abs_depth_mw	5000			
+2023-01-17	IT-Sardinia	12	abs_depth_mw	10000			
+2023-01-17	IT-Sardinia	12	abs_depth_mw	15000			
+2023-01-17	IT-Sardinia	12	abs_depth_mw	20000			
+2023-01-17	IT-Sardinia	19	shape_pctl	10	1.0	-500.0	-501.0
+2023-01-17	IT-Sardinia	19	shape_pctl	25	6.23	-500.0	-506.23
+2023-01-17	IT-Sardinia	19	shape_pctl	50	127.2	0.0	-127.2
+2023-01-17	IT-Sardinia	19	shape_pctl	75	309.29	0.0	-309.29
+2023-01-17	IT-Sardinia	19	shape_pctl	90	368.2	314.8	-53.4
+2023-01-17	IT-Sardinia	19	abs_depth_mw	2000	129.81	0.0	-129.81
+2023-01-17	IT-Sardinia	19	abs_depth_mw	5000			
+2023-01-17	IT-Sardinia	19	abs_depth_mw	10000			
+2023-01-17	IT-Sardinia	19	abs_depth_mw	15000			
+2023-01-17	IT-Sardinia	19	abs_depth_mw	20000			

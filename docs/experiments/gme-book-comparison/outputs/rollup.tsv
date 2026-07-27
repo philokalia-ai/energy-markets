@@ -1,0 +1,7 @@
+metric	ours	gme_real
+offered supply MW (our / GME-UP)  ratio	1.35	1.00
+share of supply offered at price <= 0	0.0	0.45
+share of supply offered above 300 EUR/MWh (cap tail)	0.1	0.11
+share of supply in mid band 0-150 EUR/MWh	0.6	0.22
+GME real zonal clearing price (EUR/MWh)	-	137.4
+our thermal SRMC marginal price at cleared depth (EUR/MWh)	156.3	-

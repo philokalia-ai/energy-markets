@@ -1,0 +1,6 @@
+# Never commit raw GME data (terms: no redistribution). Only derived aggregates
+# under data/ (TSV/PNG) are tracked.
+*.zip
+*MGPOffertePubbliche.xml
+gme_*.parquet
+scratch/
