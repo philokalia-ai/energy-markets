@@ -129,7 +129,16 @@
 # corr headline stays an open problem (anchor levers measured and
 # rejected; needs inflow data / corridor congestion). Kill-switch
 # EUPHEMIA_DISABLE_CV23 covers all three.
-const ENERGY_PRICES_CODE_VERSION = 23
+# v23 -> v24: record-consistency bump for the registry sanity bound (#205,
+# MAX_PLAUSIBLE_UNIT_MW = 25 GW): drops corrupt ENTSO-E capacity rows (the
+# IT-CSOUTH unit 26WUUUUUUBUSSI19 carried 13,068,005 MW, which polluted the
+# fleet-truthing denominators and produced NaN correlation there). No other
+# mechanism content — the IT must-run floor experiments (cv24/cv24.1 in
+# docs/experiments/cv24-it-book.md) were measured NO-SHIP. Prices change
+# only where a corrupt unit was in the fleet (IT-CSOUTH); every other zone
+# is byte-identical to cv23 code. Bumped so the post-#205 daily forecasts
+# and the refilled record never mix with cv23 rows. July 2026.
+const ENERGY_PRICES_CODE_VERSION = 24
 
 # Pool size: env-tunable (EUPHEMIA_PG_POOL) because the threaded book build
 # runs up to nzones concurrent queries — 5 connections cap the parallelism
