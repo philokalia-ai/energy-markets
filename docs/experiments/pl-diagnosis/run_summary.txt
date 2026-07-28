@@ -1,0 +1,21 @@
+    ok 2025-01-07 in 660s (decomp=true, PL periods=24)
+  === paired day 2025-01-07 complete ===
+    ok 2025-07-08 in 336s (decomp=true, PL periods=23)
+    ok 2025-07-08 in 523s (decomp=true, PL periods=24)
+  === paired day 2025-07-08 complete ===
+    ok 2025-01-08 in 804s (decomp=true, PL periods=24)
+    ok 2025-01-08 in 538s (decomp=true, PL periods=24)
+  === paired day 2025-01-08 complete ===
+    ok 2025-07-09 in 447s (decomp=true, PL periods=23)
+  === paired day 2025-01-07 complete ===
+  === paired day 2025-07-08 complete ===
+  === paired day 2025-01-08 complete ===
+    ok 2025-07-09 in 277s (decomp=true, PL periods=24)
+  === paired day 2025-07-09 complete ===
+[2213409] signal 11 (1): Segmentation fault
+SUPERVISOR: launch attempt 1
+  === paired day 2025-01-07 complete ===
+  === paired day 2025-07-08 complete ===
+  === paired day 2025-01-08 complete ===
+  === paired day 2025-07-09 complete ===
+    ok 2025-01-09 in 1724s (decomp=true, PL periods=24)
