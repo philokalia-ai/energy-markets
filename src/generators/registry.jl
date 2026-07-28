@@ -37,6 +37,20 @@ const _OUTAGE_DAY_CACHE_LOCK = ReentrantLock()
 const _GENERATOR_MEMO = Dict{Tuple{String,Dates.Date,Bool,Bool,Bool},Vector{Generator}}()
 const _GENERATOR_MEMO_LOCK = ReentrantLock()
 
+# Registry sanity bound. ENTSO-E's unit registry carries rare corrupt
+# `installed_capacity_mw` values (e.g. IT-CSOUTH unit `26WUUUUUUBUSSI19` at
+# 13,068,005 MW — a small plant with a mangled capacity), which propagate into
+# the merit-order book as a multi-million-MW supply block that erases scarcity
+# and pins the zone at gas SRMC (IT-CSOUTH's clearing price is flat → its
+# price-vs-actual correlation is undefined/NaN). No real single generation unit
+# approaches this: the largest European generation units are ≈1.7 GW (nuclear)
+# and the biggest aggregate registry rows are a few GW, so a 25 GW ceiling
+# rejects only garbage while leaving every genuine unit untouched (verified: no
+# unit in the 39-zone footprint reaches it, so every zone but IT-CSOUTH is
+# byte-identical). Surfaced by the GME MGP book comparison
+# (docs/experiments/gme-book-comparison).
+const MAX_PLAUSIBLE_UNIT_MW = 25_000.0
+
 """
     get_day_outages(day::Date) -> DataFrame
 
@@ -305,6 +319,14 @@ function get_generators(map_code::String, day::Dates.Date;
     # Build generators (without ramp rates initially)
     generators = Generator[]
     for row in eachrow(df)
+        # Registry sanity bound: drop rows whose installed capacity exceeds any
+        # physically-plausible generation unit (corrupt ENTSO-E capacities — see
+        # MAX_PLAUSIBLE_UNIT_MW). Only IT-CSOUTH carries such a row in the
+        # footprint, so every other zone is byte-identical.
+        if Float64(row.generation_unit_installed_capacity_mw) > MAX_PLAUSIBLE_UNIT_MW
+            @warn "Dropping corrupt registry capacity" unit=row.generation_unit_code zone=map_code capacity_mw=Float64(row.generation_unit_installed_capacity_mw)
+            continue
+        end
         # Infer actual fuel type from name if declared as "Other".
         # normalize_fuel_type_name folds ENTSO-E spelling variants (e.g.
         # Romania publishes "Hydro Run-of-river and pondage") onto the
