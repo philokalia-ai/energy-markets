@@ -263,11 +263,75 @@ is a **sizing signal confounded by RES**, not the two-part-bid principle — and
 is the mirror image of what a naïve reading expects (the floor *raises* summer
 prices because it thins the below-cost band relative to cv23's p_min base).
 
-### cv24.1 lever (specified, not built)
+### cv24.1 lever — BUILT, measured, also NO-SHIP (the Phase-2 diagnosis was wrong)
 
-Size the must-run base from a signal that is **not** RES-confounded: the trailing
-p5 of **overnight RESIDUAL demand** (load − RES − imports) rather than raw output
-— which shrinks the floor exactly when RES already fills the trough, removing the
-summer over-thinning — and/or **floor the base at the technical `p_min`** so cv24
-never offers *less* below-cost than cv23. Re-run this exact 3-window A/B; ship
-only if summer no longer regresses while March/trough keep their gains.
+Both parts were implemented (`get_overnight_floor_residual_p5` — trailing p5 of
+the **summed** overnight 00–06 UTC output of the floor fleet ÷ offered — plus the
+hard floor-of-the-floor `must_run = max(mrf_system × offered, min(p_min,
+offered))`) and the **summer2025 inner-loop** was run first (base = cv23 vs
+cv24.1, 8 days, 39-zone coupled; `fork_summer.sh` / `wait_score_summer.sh`, full
+table in `ab_summer/SCORE.txt`). Object gate held (≤0 share 0.09 ≥ cv24's 0.08);
+byte-identity held. But summer **regressed harder than cv24**:
+
+| zone | base MAE / eveBias | cv24 ΔMAE | **cv24.1 ΔMAE / Δcorr / cv24.1 eveBias** |
+|---|---|---|---|
+| IT-NORTH | 14.6 / −28.1 | +2.0 | **+4.3** / −0.16 / −21.2 |
+| IT-CNORTH | 15.0 / −30.6 | +2.8 | **+4.9** / −0.00 / **+12.8** |
+| IT-CSOUTH | 15.1 / −30.9 | +2.7 | **+4.7** / +0.02 / **+12.6** |
+| IT-SOUTH / Calabria | 18.8 / −30.9 | +1.6 | **+4.2** / +0.01 / **+10.3** |
+| IT-Sicily | 22.3 / +22.8 | +2.4 | **+4.6** / +0.03 / **+52.1** |
+| IT-Sardinia | 22.0 / −23.2 | +2.7 | **+5.3** / +0.02 / **+7.6** |
+| **footprint** | mean 23.22 / −6.6 | +0.4 | mean MAE **24.62**, corr 0.641 → **0.607**, eveBias → **+4.5** |
+
+IT aggregate MAE worsens **+4.6** (vs cv24's +2.2); the evening bias flips
+positive (+8..+52). The floor-of-the-floor made it **worse, not better** —
+**FINAL NO-SHIP for the must-run floor this cycle.** cv stays 23.
+
+### Corrected mechanism reading (why forcing ≥ p_min over-corrected)
+
+The Phase-2 diagnosis — "cv24 under-sized the floor, so raising it to ≥ p_min
+fixes summer" — had the **sign backwards**, and cv24.1 falsified it cleanly. The
+floor is **volume-neutral but SHAPE-changing**: moving each unit's must-run slice
+out of the low SRMC tranches down to ≤€0 **thins the mid-merit tranche ladder**
+that serves the steep evening ramp. Meeting the RES-depleted summer evening demand
+then climbs **higher** into the (now thinner) marked-up tranches — so the trough
+drops but **the evening rises**. cv23's below-cost path already covers the summer
+trough, so the extra floor volume does not lower the trough further (it is already
+saturated); it only **displaces mid-merit capacity into the evening ramp**,
+lifting the peak. Forcing MORE floor volume (≥ p_min) enlarges exactly this
+displacement, which is why cv24.1's evening bias (+8..+52) is worse than cv24's.
+The mechanism **trades a lower trough for a higher peak** — a bad trade in the
+high-RES season, where the evening ramp is the error and the trough is not.
+
+This is the real, honest finding: the two-part must-run bid does reproduce the GME
+book's bimodal *shape* (object gate ≤0 share 0 → 0.08–0.09), but on the *coupled
+price* it steepens the evening supply curve, and in summer that costs more than
+the trough correction is worth. The object-level shape win and the price outcome
+point in opposite directions here — exactly the kind of tension the object-level
+validation instrument exists to surface.
+
+### Forward lever for cv25 (specified; not built)
+
+Deliver the bimodality **without steepening the evening supply curve** — the floor
+must not thin the evening-ramp tranches, and it must be RES-conditional **in a
+measured way**, validated **summer-inner-loop FIRST** (the harness now exists):
+1. **Floor only the genuinely all-hours-inframarginal volume** — the overnight
+   minimum that never has to ramp — and CAP it so the flexible tranche ladder
+   keeps its depth for the peak; leave the rest of p_min on cv23's below-cost path
+   (do NOT move evening-serving tranche volume to the floor).
+2. **Make the floor a strict reclassification of all-hours-inframarginal MW
+   only** (never volume the evening needs), so the mid-merit ladder available to
+   the evening ramp is unchanged by construction.
+Both keep the ≤0 shape gain while leaving the evening supply curve at its cv23
+slope; whichever is measured non-regressing in summer first earns a full
+3-window run. That is the cv25 iteration.
+
+### Registry sanity bound — split out
+
+The `MAX_PLAUSIBLE_UNIT_MW = 25 GW` guard (the corrupt 13-TW IT-CSOUTH unit) is an
+**independently-correct data-hygiene fix**, byte-identity-proven outside
+IT-CSOUTH, that fixes IT-CSOUTH's NaN-correlation pathology on its own. It does
+**not** depend on the must-run floor, so it ships **separately** on branch
+`fix/registry-sanity-bound` (small PR off main). It changes IT-CSOUTH prices, so
+it rides into the price record at the next cv bump (coordinator-serialized; no
+bump in that PR).
