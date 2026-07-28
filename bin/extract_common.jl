@@ -461,15 +461,22 @@ function build_table!(con, spec; chunk_threshold::Int, expected::Union{Nothing,I
 end
 
 """
-    append_incremental!(con, spec; today=Dates.today(), horizon_days=17) -> rows
+    append_incremental!(con, spec; today=Dates.today(), horizon_days=17,
+                        rewindow_days=14) -> rows
 
-Append rows of `spec` with `ts_col` strictly after the extract's current max,
-fetched from the source in MONTHLY chunks up to `today + horizon_days`
-(future-dated rows: D+1 delivery data, weather forecast horizon). Each slab is
-sorted by `sort_by` within itself before insertion (see the header note on
-zonemap degradation).
+Refresh rows of `spec` from the source in MONTHLY chunks up to
+`today + horizon_days` (future-dated rows: D+1 delivery data, weather
+forecast horizon). NOT a pure strictly-after-watermark append: ENTSO-E
+publishes rows for a delivery timestamp over the FOLLOWING days (measured:
+Day-ahead ATC for 2026-07-16..27 arrived after rows for 07-28 existed, so a
+strict watermark skipped 55 of 57 borders forever — the cv23 backfill's 11
+failed tail days). The trailing `rewindow_days` before the watermark are
+therefore DELETED and re-fetched wholesale (idempotent; a few days of rows),
+so late arrivals heal on every refresh. Each slab is sorted by `sort_by`
+within itself before insertion (see the header note on zonemap degradation).
 """
-function append_incremental!(con, spec; today::Date=Dates.today(), horizon_days::Int=17)
+function append_incremental!(con, spec; today::Date=Dates.today(), horizon_days::Int=17,
+                             rewindow_days::Int=14)
     qfn = query_fn(spec.source)
     watermark = duckdb_max_ts(con, spec)
     watermark === nothing &&
@@ -478,7 +485,16 @@ function append_incremental!(con, spec; today::Date=Dates.today(), horizon_days:
     tgt = duckdb_target(spec)
     order = isempty(spec.sort_by) ? "" : " ORDER BY $(spec.sort_by)"
     hi_end = today + Day(horizon_days)
-    lo_start = Date(watermark)
+    # Rewindow: pull the fetch window back and clear those extract rows first,
+    # so late-published source rows inside it are (re)captured.
+    rw_start = Date(watermark) - Day(rewindow_days)
+    if rewindow_days > 0
+        DBInterface.execute(con,
+            "DELETE FROM $tgt WHERE CAST($(spec.ts_col) AS TIMESTAMP) >= ?",
+            [DateTime(rw_start)])
+    end
+    watermark = DateTime(rw_start) - Second(1)
+    lo_start = rw_start
     lo_start >= hi_end && return 0
     total = 0
     for (lo, hi) in month_ranges(lo_start, hi_end)
