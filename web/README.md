@@ -91,15 +91,15 @@ findings about the real market, not tuning targets.
 The horizon view's vintage panel overlays every forecast we published for one
 delivery day. A single `(date, lead_days)` can carry **several** vintages that
 differ only in `input_mode` — the slice identity is `(date, lead_days,
-input_mode)` by design (e.g. a post-auction `entsoe` run and a later
-`…loadfill/resfill` gap-fill run both land as D-1). The legend disambiguates
-them with a compact `◦`-tag so no two entries read the same:
+input_mode)` by design (e.g. the morning ex-ante `weather` run and the evening
+reference `entsoe` run both land as D-1). The legend disambiguates them with a
+compact `◦`-tag so no two entries read the same:
 
 | input_mode                        | label          | meaning                              |
 |-----------------------------------|----------------|--------------------------------------|
-| `entsoe`                          | `D-1`          | reference, post-auction inputs       |
-| `entsoe+loadfill+resfill` (any `…fill`) | `D-1 ◦fill`    | reference, load/RES gap-filled       |
-| `weather…` (any weather mode)     | `D-1 ◦weather` | ex-ante weather-RES track            |
+| `entsoe`                          | `D-1`          | reference, pure ENTSO-E post-auction inputs |
+| `weather…` (any weather mode)     | `D-1 ◦weather` | ex-ante track (all model inputs: weather-RES + model load) |
+| `…fill` (any fill suffix)         | `D-1 ◦fill`    | HISTORICAL: retired gap-fill vintages (reference track with model-filled load/RES; not produced since July 2026) |
 
 Each legend chip's hover title shows the full `input_mode` and the frozen
 `prediction_made_utc` stamp. The **Actual (settled)** entry is hidden until the

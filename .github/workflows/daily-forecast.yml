@@ -3,14 +3,19 @@ name: Daily ex-ante forecast
 on:
   schedule:
     # Daily at 12:30 UTC — after ENTSO-E D-1 publication (~12:00 CET auction
-    # results + forecasts) and the ETL that lands them in the database.
+    # results + forecasts) and the ETL that lands them in the database. PURE
+    # entsoe track (the opportunistic fills are retired): when a TSO slice is
+    # still missing at this hour, the day honestly skips and the evening
+    # attempts below retry it — no model-filled vintage is ever written.
     - cron: "30 12 * * *"
     # 20:10 UTC — second attempt after the ceres ENTSO-E evening fills (17:30 +
     # 19:30 UTC sweeper): several TSOs' D-1 load forecasts propagate to the bulk
     # export only in the evening (2026-07-25: LT/SI/CH short at 12:48 made
     # lead-1 INELIGIBLE). Vintage rows are immutable/no-clobber, so this run
     # only fills slices the 12:30 run could not see — still ex-ante for the
-    # Athens delivery window (opens 21:00 UTC).
+    # Athens delivery window (opens 21:00 UTC). The morning EX-ANTE vintage
+    # (input_mode=weather, uniform model inputs) comes from the ceres 08:00
+    # dispatch, not from this workflow.
     - cron: "10 20 * * *"
   workflow_dispatch:
     inputs:
@@ -151,21 +156,43 @@ jobs:
 
           export OPTIMIZER MAX_LEAD_DAYS FORCE_RERUN SKIP_CLEAR
 
-          julia --project=. bin/daily_forecast.jl
+          # Crash-retry (issue #182: HiGHS segfaults ~3-4% of decomposed
+          # day-solves). Forecast slices are no-clobber, so a retry skips
+          # everything already written and only redoes the crashed remainder —
+          # the loop is idempotent.
+          ok=false
+          for attempt in 1 2 3; do
+            if julia --project=. bin/daily_forecast.jl; then
+              ok=true
+              break
+            fi
+            echo "⚠️ forecast attempt $attempt failed — retrying (completed slices are skipped)"
+          done
+          if [ "$ok" != "true" ]; then
+            echo "::error::daily forecast failed after 3 attempts"
+            exit 1
+          fi
 
+      # Scoring/export/publish run even when the forecast step failed
+      # (!cancelled()): whatever slices DID land — or landed in an earlier run
+      # today — still get scored and pushed, so the site never goes stale
+      # behind a solver crash. The job still reports failure (Slack notify).
       - name: Score realized forecasts
+        if: ${{ !cancelled() }}
         env:
           ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
         run: |
           julia --project=. bin/score_forecasts.jl
 
       - name: Export forecast JSON
+        if: ${{ !cancelled() }}
         env:
           ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
         run: |
           julia --project=. bin/export_forecast_json.jl
 
       - name: Publish web data plane to R2 (parquet for api.philokalia.ai)
+        if: ${{ !cancelled() }}
         env:
           ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
           EXTRACT_S3_ENDPOINT: ${{ secrets.EXTRACT_S3_ENDPOINT }}
@@ -184,6 +211,7 @@ jobs:
           bash bin/web_data_push.sh
 
       - name: Upload forecast data artifact
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
           name: forecast-data

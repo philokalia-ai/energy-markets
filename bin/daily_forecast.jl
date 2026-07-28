@@ -42,15 +42,28 @@
 # INPUT TRACKS (INPUT_MODE):
 # - 'entsoe' (default, the REFERENCE track): ENTSO-E D-1 load + wind/solar
 #   forecasts, exactly as before. Freezes in the evening — before delivery,
-#   but after the 12:00 CET auction.
-# - 'weather' (the EX-ANTE track): wind/solar predicted from RAW open-meteo
-#   weather via bin/weather_res.jl, so the prediction can be frozen BEFORE the
-#   auction gate. The ENTSO-E RES eligibility requirement is REMOVED (weather
-#   is always available); the LOAD gate and ATC gate stay exactly as-is
-#   (ENTSO-E load published pre-gate is legitimate). Book construction zeroes
-#   whatever partial ENTSO-E RES exists (renewable_modifier -> 0) and injects
-#   the weather-RES prediction as price-taker supply orders per timeslot.
-#   Rows are stamped input_mode='weather'; the slice identity is
+#   but after the 12:00 CET auction. PURE by default: the opportunistic
+#   eligibility fills (LOAD_FILL/RES_FILL) are RETIRED as defaults — which
+#   slices they filled depended on ETL arrival timing at run moment, so two
+#   runs minutes apart could differ in provenance composition. A short zone
+#   now honestly skips the day (a later scheduled attempt retries); rows are
+#   stamped plain 'entsoe', never '+loadfill/+resfill' unless the fills are
+#   explicitly re-enabled for an experiment.
+# - 'weather' (the EX-ANTE track): ALL model inputs, uniformly — wind/solar
+#   predicted from RAW open-meteo weather via bin/weather_res.jl AND load
+#   predicted from the committed load models (bin/weather_load.jl) for EVERY
+#   zone, so the prediction can be frozen BEFORE the auction gate with a
+#   composition that never depends on which TSOs happened to publish early.
+#   The ENTSO-E RES eligibility requirement is REMOVED and the LOAD gate is
+#   replaced by MODEL coverage (a zone the load model cannot cover keeps the
+#   day ineligible — no silent TSO mixing); the ATC gate stays as-is. Book
+#   construction zeroes whatever partial ENTSO-E RES exists
+#   (renewable_modifier -> 0) and injects the weather-RES prediction as
+#   price-taker supply orders per timeslot; load is overridden to the model
+#   value on every timeslot (load_modifier) and model hours are added where
+#   the TSO published nothing (load_fill hook) — every hour is model-sourced.
+#   Rows are stamped input_mode='weather' (never suffixed — model load is the
+#   track's core, not a fill); the slice identity is
 #   (market_date, lead_days, input_mode) so the two tracks NEVER overwrite
 #   each other. code_version is per-row PROVENANCE, not part of the slice
 #   identity: the no-clobber guard and the slice delete are CV-AGNOSTIC (a
@@ -87,18 +100,20 @@ end
 const MAX_LEAD_DAYS = parse(Int, get(ENV, "MAX_LEAD_DAYS", "7"))
 const FORCE_RERUN = lowercase(get(ENV, "FORCE_RERUN", "false")) == "true"
 const SKIP_CLEAR = lowercase(get(ENV, "SKIP_CLEAR", "false")) == "true"
-# Per-zone eligibility fill: when a zone's ENTSO-E 6.1.B day-ahead load is
-# missing/short for the window, predict its hourly load with the committed model
-# (bin/weather_load.jl + bin/load_models_v1.json) so the day stays eligible and
-# the other zones are not thrown away. Default ON; LOAD_FILL=false reverts to the
-# pre-fill eligibility (a missing load zone skips the whole day) with no rollback.
-const LOAD_FILL = lowercase(get(ENV, "LOAD_FILL", "true")) == "true"
-# RES twin of LOAD_FILL: when a zone's ENTSO-E 14.1.D wind/solar forecast is
-# missing/short for the window, predict it from the weather→RES models
-# (bin/weather_res.jl + res_models pack) so the reference (entsoe) track stays
-# eligible. Default ON; RES_FILL=false reverts to the pre-fill RES gate. Inert on
-# the weather track (which already sources all RES from weather, no RES gate).
-const RES_FILL = lowercase(get(ENV, "RES_FILL", "true")) == "true"
+# Per-zone eligibility fill on the entsoe track: when a zone's ENTSO-E 6.1.B
+# day-ahead load is missing/short for the window, predict its hourly load with
+# the committed model (bin/weather_load.jl + bin/load_models_v1.json) so the day
+# stays eligible. RETIRED as a default (July 2026): whether a slice got filled
+# depended on ETL arrival timing at run moment, so the reference track's
+# provenance composition was run-time-dependent. Default OFF — a short load zone
+# skips the whole day (honest absence; a later scheduled attempt retries).
+# LOAD_FILL=true re-enables it for experiments (rows then carry the
+# '+loadfill' provenance suffix as before). The weather track does NOT use this
+# flag — model load is that track's core input, always on, for every zone.
+const LOAD_FILL = lowercase(get(ENV, "LOAD_FILL", "false")) == "true"
+# RES twin of LOAD_FILL, same retirement: default OFF; RES_FILL=true re-enables
+# ('+resfill' suffix). Inert on the weather track (all RES from weather there).
+const RES_FILL = lowercase(get(ENV, "RES_FILL", "false")) == "true"
 # Inter-zone throttle for the per-zone open-meteo fetches (load fill, RES fill,
 # weather track). On the entsoe track a run fires up to 39 load-fill + 39 RES-fill
 # fetches back-to-back against the PUBLIC open-meteo API, which then returns 429
@@ -314,14 +329,25 @@ ENTSO-E RES exists (`renewable_modifier -> 0`) and inject the weather-RES
 prediction as price-taker supply orders (€1/MWh) per timeslot. Sub-hourly
 slots use the hour's predicted MW as the LEVEL (no division). Zero/negative
 predictions inject no order.
+
+LOAD is uniformly model-sourced (`load_preds`, zone → hour → MW): every load
+timeslot the TSO published is OVERRIDDEN to the model's value for its hour
+(`load_modifier` — sub-hourly slots use the hour's MW as the LEVEL, same
+convention as RES), and hours the TSO did not publish are added by the
+`load_fill` hook. Together every hour of every zone is model load, so the
+vintage's composition never depends on which TSOs happened to publish before
+the run. Eligibility (model_covered_for_day) guarantees full coverage on
+eligible days; the `mw` fallback in the modifier is therefore unreachable
+there and kept only as a safe identity.
 """
-function weather_scenario(preds::Dict{String,Dict{DateTime,Float64}};
-                          load_fill_fn::Union{Nothing,Function}=nothing,
-                          res_fill_fn::Union{Nothing,Function}=nothing)
+function weather_scenario(preds::Dict{String,Dict{DateTime,Float64}},
+                          load_preds::Dict{String,Dict{DateTime,Float64}})
     zero_res = (ts, mw) -> 0.0
     scenario = Dict{String,Euphemia.ZoneScenario}()
+    load_fill_fn = make_load_fill_fn(load_preds)
     for zone in ZONES
         zone_pred = get(preds, zone, Dict{DateTime,Float64}())
+        zone_load = get(load_preds, zone, Dict{DateTime,Float64}())
         extra = ctx -> begin
             orders = Euphemia.SimpleOrder[]
             for ts in ctx.timeslots
@@ -333,15 +359,30 @@ function weather_scenario(preds::Dict{String,Dict{DateTime,Float64}};
             end
             orders
         end
-        # The weather track already replaces ALL RES from weather (renewable→0 +
-        # injected supply), so res_fill is redundant here and left off; load_fill
-        # still rides along (its gate — the LOAD gate — is live on both tracks).
-        scenario[zone] = Euphemia.ZoneScenario(renewable_modifier=zero_res,
+        lmod = (ts, mw) -> begin
+            dt = DateTime(ts, dateformat"yyyymmdd-HHMM")
+            get(zone_load, trunc(dt, Hour), mw)
+        end
+        # RES is fully weather-sourced (renewable→0 + injected supply) and load
+        # fully model-sourced (override + fill), so the entsoe-track fill hooks
+        # never appear here — this track has no notion of "filling" TSO gaps.
+        scenario[zone] = Euphemia.ZoneScenario(load_modifier=lmod,
+                                               renewable_modifier=zero_res,
                                                extra_orders=extra,
-                                               load_fill=load_fill_fn,
-                                               res_fill=res_fill_fn)
+                                               load_fill=load_fill_fn)
     end
     return scenario
+end
+
+"""
+Zones whose model-load prediction (`load_preds`) covers EVERY expected hour of
+`day`'s Athens market window — the weather track's load-eligibility set (the
+TSO-load gate is replaced by model coverage there).
+"""
+function model_covered_for_day(day::Date,
+                               load_preds::Dict{String,Dict{DateTime,Float64}})
+    expected = expected_market_day_hours(day)
+    return Set(z for (z, zp) in load_preds if all(h -> haskey(zp, h), expected))
 end
 
 # ---------------------------------------------------------------------------
@@ -572,8 +613,8 @@ function main()
     println("  code_version=$CV  clearing_mode=$CLEARING_MODE  max_lead_days=$MAX_LEAD_DAYS")
     println("  input_mode=$INPUT_MODE " *
             (INPUT_MODE == "weather" ?
-             "(EX-ANTE track: RES from raw weather, ENTSO-E RES gate removed)" :
-             "(reference track: ENTSO-E D-1 load + wind/solar forecasts)"))
+             "(EX-ANTE track: RES from raw weather + UNIFORM model load, all zones)" :
+             "(reference track: pure ENTSO-E D-1 load + wind/solar forecasts)"))
     println("  force_rerun=$FORCE_RERUN  skip_clear=$SKIP_CLEAR  load_fill=$LOAD_FILL  res_fill=$RES_FILL")
     println("  delivery day = Europe/Athens market day (two UTC-day solves, stitched)")
     ZONES != FORECAST_FOOTPRINT &&
@@ -638,13 +679,27 @@ function main()
         day_res_present[day] = res_forecast_zones(w0, w1, ZONES)
     end
 
-    # ── Eligibility LOAD FILL pre-pass ──────────────────────────────────────
-    # Zones short on ANY candidate day are predicted ONCE over the whole UTC
-    # span, so the `load_fill` book hook is stable and the shared UTC-day clear
-    # cache is never contaminated. Zones the model cannot cover keep their day
-    # ineligible (no silent fallback). LOAD_FILL=false disables this entirely.
+    # ── Model-load pre-pass ─────────────────────────────────────────────────
+    # WEATHER track: model load is the track's CORE input — predicted ONCE for
+    # ALL zones over the whole UTC span (uniform composition, independent of
+    # which TSOs published early). A zone the model cannot cover keeps its day
+    # ineligible (no silent TSO mixing).
+    # ENTSOE track: the retired opportunistic fill — only when LOAD_FILL=true,
+    # and only for TSO-short zones (rows then carry the '+loadfill' suffix).
     fill_pred = Dict{String,Dict{DateTime,Float64}}()
-    if LOAD_FILL
+    if INPUT_MODE == "weather"
+        load_pack = load_load_models()
+        load_pack === nothing &&
+            error("weather track needs the load model pack at " *
+                  "$(default_load_models_path()) (run bin/fit_load_models.jl) — " *
+                  "load is uniformly model-sourced on this track")
+        println("WEATHER LOAD: predicting model load for all $(length(ZONES)) zones ...")
+        t0 = time()
+        fill_pred = build_load_fills(load_pack, sort(copy(ZONES)),
+                                     first_candidate - Day(1), last_candidate)
+        println("WEATHER LOAD: model load ready for $(length(fill_pred))/$(length(ZONES)) " *
+                "zone(s) in $(round(time() - t0, digits=1))s")
+    elseif LOAD_FILL
         load_pack = load_load_models()
         if load_pack === nothing
             println("⚠️ LOAD_FILL on but no load pack at $(default_load_models_path()) — " *
@@ -701,16 +756,15 @@ function main()
 
     # Weather track: fetch weather + predict per-zone RES ONCE for the whole
     # candidate window (both UTC days of each Athens market day), then thread
-    # it into every clear as a per-zone scenario. The load-fill hook rides on
-    # the same per-zone ZoneScenario (built for the entsoe track too when any
-    # zone needs filling).
+    # it into every clear as a per-zone scenario together with the uniform
+    # model load (override + fill — see weather_scenario).
     scenario = nothing
     if INPUT_MODE == "weather" && !SKIP_CLEAR
         println("Fetching open-meteo weather + predicting RES for UTC days " *
                 "$(first_candidate - Day(1)) .. $last_candidate ...")
         t0 = time()
         preds = build_weather_predictions(first_candidate - Day(1), last_candidate)
-        scenario = weather_scenario(preds; load_fill_fn=load_fill_fn, res_fill_fn=res_fill_fn)
+        scenario = weather_scenario(preds, fill_pred)
         println("Weather RES ready for $(length(preds)) zones in $(round(time() - t0, digits=1))s")
     elseif (load_fill_fn !== nothing || res_fill_fn !== nothing) && !SKIP_CLEAR
         scenario = Dict{String,Euphemia.ZoneScenario}(
@@ -733,27 +787,46 @@ function main()
         load_hours = day_load_hours[day]
         res_present = day_res_present[day]
         atc_rows = atc_row_count(w0, w1, ZONES)
-        fillable = fillable_for_day(day, load_hours, fill_pred)
-        res_fillable = res_fillable_for_day(day, res_required, res_present, res_pred)
-        eligible, reason = eligibility_verdict(ZONES, load_hours, res_required,
-                                               res_present, atc_rows;
-                                               load_fill_zones=fillable,
-                                               res_fill_zones=res_fillable)
-        # Filled days are their OWN provenance slice/track: input_mode composes a
-        # "+loadfill"/"+resfill" suffix so bin/score_forecasts.jl keeps them
-        # separate from the pure-ENTSO-E track record (no pollution) and the
-        # no-clobber slice identity never mixes a filled vintage with an unfilled
-        # one. Order is fixed (loadfill before resfill) so the mode is stable.
-        suffixes = String[]
-        isempty(fillable) || push!(suffixes, "loadfill")
-        isempty(res_fillable) || push!(suffixes, "resfill")
-        day_mode = isempty(suffixes) ? INPUT_MODE : INPUT_MODE * "+" * join(suffixes, "+")
+        if INPUT_MODE == "weather"
+            # Load eligibility = MODEL coverage (uniform model load replaces the
+            # TSO-load gate); mode is always plain 'weather' — model inputs are
+            # the track, not a fill, so no provenance suffix ever.
+            covered = model_covered_for_day(day, fill_pred)
+            uncovered = sort([z for z in ZONES if !(z in covered)])
+            if !isempty(uncovered)
+                eligible = false
+                reason = "weather-track model load cannot cover $(length(uncovered)) " *
+                         "zone(s): $(join(uncovered, ","))"
+            else
+                eligible, reason = eligibility_verdict(ZONES, load_hours, res_required,
+                                                       res_present, atc_rows;
+                                                       load_fill_zones=Set(ZONES))
+            end
+            day_mode = INPUT_MODE
+        else
+            fillable = fillable_for_day(day, load_hours, fill_pred)
+            res_fillable = res_fillable_for_day(day, res_required, res_present, res_pred)
+            eligible, reason = eligibility_verdict(ZONES, load_hours, res_required,
+                                                   res_present, atc_rows;
+                                                   load_fill_zones=fillable,
+                                                   res_fill_zones=res_fillable)
+            # Filled days (only when the retired fills are explicitly re-enabled)
+            # are their OWN provenance slice/track: input_mode composes a
+            # "+loadfill"/"+resfill" suffix so bin/score_forecasts.jl keeps them
+            # separate from the pure-ENTSO-E track record (no pollution) and the
+            # no-clobber slice identity never mixes a filled vintage with an
+            # unfilled one. Order fixed (loadfill before resfill) — stable mode.
+            suffixes = String[]
+            isempty(fillable) || push!(suffixes, "loadfill")
+            isempty(res_fillable) || push!(suffixes, "resfill")
+            day_mode = isempty(suffixes) ? INPUT_MODE : INPUT_MODE * "+" * join(suffixes, "+")
+            eligible && !isempty(fillable) &&
+                println("  🩹 load-filled zone(s): $(join(sort(collect(fillable)), ","))")
+            eligible && !isempty(res_fillable) &&
+                println("  🩹 RES-filled zone(s): $(join(sort(collect(res_fillable)), ","))")
+            (eligible && !isempty(suffixes)) && println("  (input_mode=$day_mode)")
+        end
         println("  VERDICT: $(eligible ? "ELIGIBLE ✅" : "INELIGIBLE ⛔") — $reason")
-        eligible && !isempty(fillable) &&
-            println("  🩹 load-filled zone(s): $(join(sort(collect(fillable)), ","))")
-        eligible && !isempty(res_fillable) &&
-            println("  🩹 RES-filled zone(s): $(join(sort(collect(res_fillable)), ","))")
-        (eligible && !isempty(suffixes)) && println("  (input_mode=$day_mode)")
         eligible || continue
 
         if !FORCE_RERUN
