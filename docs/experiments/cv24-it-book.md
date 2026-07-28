@@ -193,4 +193,81 @@ diagnosis, no PR.
 
 ## Phase 2 — measured price gates + decision
 
-_(appended after the A/B)_
+### Directional probe (2026-03-04, full 39-zone coupled clear)
+
+A single-day probe (base = `EUPHEMIA_DISABLE_CV24` vs cv24) before the full run,
+scored vs realized ENTSO-E Day-ahead:
+
+| zone | base MAE / bias / corr / eveBias | cv24 MAE / bias / corr / eveBias | ΔMAE |
+|---|---|---|---|
+| IT-NORTH | 17.7 / −14.2 / 0.65 / −24.8 | 16.1 / −11.9 / 0.68 / +2.8 | **−1.6** |
+| IT-CSOUTH | 23.9 / −22.3 / **NaN** / −45.9 | 17.6 / −13.4 / **0.58** / +2.8 | **−6.3** |
+| IT-SOUTH | 23.9 / −22.3 / NaN / −45.9 | 17.6 / −13.4 / 0.58 / +2.8 | **−6.3** |
+| IT-Calabria | 19.7 / −17.5 / NaN / −45.9 | 13.4 / −8.6 / 0.71 / +2.8 | **−6.3** |
+| IT-Sicily | 20.4 / −18.3 / NaN / −49.5 | 13.4 / −9.4 / 0.73 / −0.8 | **−7.1** |
+| IT-Sardinia | 26.4 / −24.9 / 0.11 / −26.7 | 27.5 / −20.7 / 0.27 / +10.2 | +1.1 |
+| CH | 18.3 / … / 0.97 | 17.7 / … / 0.96 | −0.5 |
+| SI | 37.7 / … / 0.91 | 34.1 / … / 0.90 | −3.5 |
+| AT | 26.3 / … / 0.93 | 25.3 / … / 0.93 | −1.0 |
+| FR | 19.9 / … / 0.89 | 19.5 / … / 0.90 | −0.4 |
+| GR | 15.4 / … / 0.95 | 15.4 / … / 0.95 | −0.0 |
+
+**IT aggregate MAE ≈ 21.4 → 17.4 (−4.0)** on this single day. The probe looked
+strong, but a single March day does not capture the seasonal behaviour — the full
+A/B below shows the mechanism regresses in summer.
+
+### Full 3-window A/B (39-zone coupled, HiGHS, offline extract; base = `EUPHEMIA_DISABLE_CV24` = cv23 main)
+
+`launch_ab.sh` / `fork_arm.sh` (24 days × 2 arms), scored vs realized ENTSO-E
+Day-ahead by `score_cv24.jl` (full table in `docs/experiments/cv24/ab/SCORE.txt`).
+IT **aggregate** MAE = mean over the 7 IT zones.
+
+| window | IT MAE base → cv24 (Δ) | IT corr | IT evening bias (17–20 UTC) base → cv24 | neighbors |
+|---|---|---|---|---|
+| **march2026_stable** (8 d) | 19.67 → 17.63 (**−2.04** ✓) | all +0.04..+0.17 | −3..−44 → −11..+7 (toward 0) | pass |
+| **summer2025** (8 d) | 18.09 → 20.33 (**+2.24** ✗) | IT-NORTH **−0.16** ✗ (others +0.01..+0.06) | −28..−31 → **+16..+52** (overshoot) | pass |
+| **trough_highres_weekends** (8 d) | 20.84 → 19.70 (−1.14) | all +0.02..+0.05 | +6..+11 → +1..+5 (toward 0) | pass |
+| **all 24 days** | 19.53 → 19.22 (**−0.31** ✗) | — | — | — |
+
+Neighbor gate (CH/SI/AT/FR/GR): PASS in every window — no neighbor degrades
+>0.03 corr or >1.5 MAE; SI/CH/AT/FR mostly improve (e.g. SI summer −1.5 MAE,
+March −1.3).
+
+### Decision: NO-SHIP (no cv bump)
+
+Gate outcomes against the pre-registration:
+- **IT MAE improves ≥1.5: FAIL.** Overall −0.31 (< 1.5); summer **worsens +2.24**.
+- **No IT zone degrades corr >0.03: FAIL.** IT-NORTH corr −0.16 in summer.
+- Trough bias toward zero: partial — March and the high-RES-trough window move the
+  bias toward zero (the mechanism does exactly what the GME shape gap predicted
+  there), but **summer over-corrects** the evening bias to positive.
+- Object-level (≤0 share 0→0.08) and byte-identity: PASS (Phase 1).
+
+March and the high-RES trough window are clean wins, but **summer2025 is a clear
+regression** (all 7 IT MAE worse, IT-NORTH corr −0.16, evening bias overshoot).
+Per the program's standing rule — a win in one regime that costs another does not
+ship until the cost is understood and fixed — this is a **NO-SHIP**. cv stays 23.
+
+### Diagnosis: the raw-output p5 must-run size is RES-confounded (under-sizes in summer)
+
+The floor quantity is `must_run_frac[type] × offered`, with `must_run_frac =
+(trailing p5 of 00–06 UTC RAW output) / offered`. In the high-RES season the
+overnight raw thermal output is **depressed** — gas cycles off overnight when
+low demand is covered by must-run RES/imports — so `must_run_frac(gas)` in summer
+falls **below** the technical `p_min` that cv23's committed must-run used. cv24
+therefore offers *less* below-cost thermal than cv23 in summer, so the coupled
+evening clear **rises** (bias −28 → +16..+52) and MAE worsens. In winter/spring
+(March; and the spring high-RES *weekends*, whose overnight output is still
+thermal-backed) the floor base is well-sized and the mechanism helps. The failure
+is a **sizing signal confounded by RES**, not the two-part-bid principle — and it
+is the mirror image of what a naïve reading expects (the floor *raises* summer
+prices because it thins the below-cost band relative to cv23's p_min base).
+
+### cv24.1 lever (specified, not built)
+
+Size the must-run base from a signal that is **not** RES-confounded: the trailing
+p5 of **overnight RESIDUAL demand** (load − RES − imports) rather than raw output
+— which shrinks the floor exactly when RES already fills the trough, removing the
+summer over-thinning — and/or **floor the base at the technical `p_min`** so cv24
+never offers *less* below-cost than cv23. Re-run this exact 3-window A/B; ship
+only if summer no longer regresses while March/trough keep their gains.
