@@ -47,29 +47,29 @@ that teaches the agent the hooks, labels and pitfalls.
 
 ## Headline results — honest, whole-sample, never cherry-picked
 
-**Full record (cv22, 2023-01-01 → 2026-07-24, 1,301 days × 39 zones).** The
-current model (`code_version` 22 — cv21's DK1/Viking boundary book plus the
-UA firm-slice boundary treatment and four price bug-fixes), backfilled over
-the entire history the public extract covers:
+**Full record (cv24, 2023-01-01 → 2026-07-27, 1,304 days × 39 zones).** The
+current model (`code_version` 24 — cv22 plus French nuclear opportunity-cost
+bidding, the re-paired FR–GB border with its GB boundary book, the
+interior-Norway import backstop, and a registry sanity bound), backfilled
+over the entire history the public extract covers:
 
-**Comparable full-year window (2025-07-25 → 2026-07-24): mean corr 0.67,
-mean MAE €27.4** — the largest single-version correlation step in the
-program's history (cv19: 0.64 / €27.2; cv17: 0.64 / €27.3; cv16: 0.56 /
-€29.9). Full 2023+ record: mean corr 0.62 / MAE €28.1 (2023 carries the
-post-crisis regime, the hardest to model competitively).
+**Comparable full-year window (2025-07-25 → 2026-07-24): mean corr 0.68,
+mean MAE €26.3** (lineage: cv22: 0.67 / €27.4; cv19: 0.64 / €27.2; cv17:
+0.64 / €27.3; cv16: 0.56 / €29.9). Full 2023+ record: mean corr 0.64 /
+MAE €26.0 (2023 carries the post-crisis regime, the hardest to model
+competitively).
 
-The trajectory by year is itself a finding — the competitive counterfactual
-tracks the market better the further it gets from the 2022 crisis
-(energy-weighted share of load in zones with pooled corr ≥ 0.75, and mean
-zone corr): **2023: 50% / 0.61 · 2024: 58% / 0.60 · 2025: 66% / 0.65 ·
-2026: 19 of 39 zones ≥ 0.75 / 0.67**. GR specifically: 0.72 → 0.77 → 0.85 →
-0.87. On the measured A/B windows the cv19 anad2 flow rule cut the
-July-2026 SEE evening overshoot (GR bias +57 → +43) and improved the
-held-out June-2026 week's MAE 37.5 → 32.4
+By year (energy-weighted share of load in zones with corr ≥ 0.75, mean zone
+corr, and zones ≥ 0.75): **2023: 59% / 0.65 / 10 of 39 · 2024: 57% / 0.63 /
+13 · 2025: 64% / 0.66 / 14 · 2026: 63% / 0.68 / 19 of 39**. GR specifically:
+0.73 → 0.78 → 0.85 → 0.86. On the measured A/B windows the cv19 anad2 flow
+rule cut the July-2026 SEE evening overshoot (GR bias +57 → +43) and
+improved the held-out June-2026 week's MAE 37.5 → 32.4
 ([docs/experiments/analogue-flows](docs/experiments/analogue-flows/README.md));
 cv22's ua2 cut HU July MAE 80.3 → 61.5 and the legacy-ATC bug-fix removed
 phantom-scarcity hours worth −44/−90 MAE on the 5-zone BG/RO products
-([docs/experiments/cv22.md](docs/experiments/cv22.md)).
+([docs/experiments/cv22.md](docs/experiments/cv22.md)); cv23's nuclear
+opportunity-cost mechanism moved FR's full-2023 corr 0.61 → 0.84.
 
 The cv17 movers were exactly its targets — the weak-zone import fixes
 (corr, cv16 → cv17): **AT 0.24 → 0.79**, **BE 0.30 → 0.78**,
@@ -77,27 +77,35 @@ The cv17 movers were exactly its targets — the weak-zone import fixes
 **RS 0.45 → 0.72**, SE1/SE2 ~0.32 → ~0.52. The guard zones held:
 **GR 0.86 → 0.85 (MAE 20.8 → 20.3)**, DE_LU 0.85 → 0.84.
 
-Still weak on the full year, stated plainly: **NO1 corr 0.00 / MAE €62.7 /
-bias +€36.9** (reservoir-regime import flows — the known open problem),
-**NO3 0.13**, **NO4 0.14**, **NO5 0.42**, **SE1/SE2 ≈ 0.52**. (DK1, weak in
-earlier cvs, is now **0.78 / €22.5** — the cv21 Viking boundary book fixed it.)
+Still weak on the comparable year, stated plainly: **NO1 corr 0.29**
+(though its level is now honest: MAE €25.7, bias +€0.1 — the cv23 import
+backstop killed the phantom-scarcity caps and the +€36.9 bias; the shape
+problem remains the program's oldest open item), **NO3 0.33**, **NO4 0.14**,
+**NO5 0.43**, **SE1/SE2 ≈ 0.52**, **SE3 0.61**. (DK1, weak in earlier cvs,
+is now **0.78 / €22.4** — the cv21 Viking boundary book fixed it.)
 
-**What entered between cv19 and the cv22 record:** the DK1/Viking virtual
-boundary book ([docs/experiments/cv21-dk1-viking.md](docs/experiments/cv21-dk1-viking.md),
-DK1 March corr 0.55 → 0.81), the UA firm-slice boundary treatment, four
-confirmed price bug-fixes (the legacy-ATC fix deliberately ends the SEE
-byte-identity chain held since cv10 — measured worst SEE delta +0.17 MAE,
-with BG/RO improving −44/−90), and pipeline crash-hardening. Two measured
-NO-SHIPs are documented with mechanism-level root causes for cv23: the GB
-border pair (blocked on French nuclear opportunity-cost bidding) and the
-43-zone endogenization ([docs/experiments/](docs/experiments/)).
+**What entered between cv22 and the cv24 record:** cv23 shipped French
+nuclear opportunity-cost bidding (availability-scaled anchor share — FR
+full-2023 corr 0.61 → 0.84, March MAE 38.2 → 16.2), the re-paired FR–GB
+border with an elastic GB CCGT boundary book (UKA carbon), and the
+interior-Norway import backstop (NO1 comparable-year bias +36.9 → +0.1)
+([docs/experiments/cv23-fr-nuclear.md](docs/experiments/cv23-fr-nuclear.md),
+[docs/experiments/norwegian-hydro/](docs/experiments/norwegian-hydro/)).
+cv24 added a registry sanity bound (25 GW ceiling on unit capacities): one
+corrupt ENTSO-E entry — an IT-CSOUTH unit carrying 13,068,005 MW — had been
+polluting the *coupled* clear across the whole Italian family; healing it
+lifts IT-family correlations by up to +0.20 (IT-CSOUTH 2024: 0.58 → 0.78).
+Two measured NO-SHIPs are documented with mechanism-level root causes: the
+IT must-run price floor (twice — volume-neutral but shape-changing;
+[docs/experiments/cv24-it-book.md](docs/experiments/cv24-it-book.md)) and
+the 43-zone endogenization ([docs/experiments/](docs/experiments/)).
 
-### By strategy regime — cv22 comparable full year (2025-07-25 → 2026-07-24)
+### By strategy regime — cv24 comparable full year (2025-07-25 → 2026-07-24)
 
-The per-regime breakdown below is measured on the **cv22 canonical record**
+The per-regime breakdown below is measured on the **cv24 canonical record**
 over the comparable full year — all 39 zones, every day scored, 8,402 hours
-per zone (bias = sim − actual). Aggregate: **mean corr 0.67, mean MAE €27.4,
-mean bias −6.7**. (The pre-cv19 frozen 36-day stratified sample this table
+per zone (bias = sim − actual). Aggregate: **mean corr 0.68, mean MAE €26.3,
+mean bias −6.1**. (The pre-cv19 frozen 36-day stratified sample this table
 replaces is preserved in
 [docs/model-spec-exante.md](docs/model-spec-exante.md); its windows differ,
 so compare regime-by-regime with care.)
@@ -106,43 +114,47 @@ By strategy regime (corr / MAE €/MWh / bias):
 
 | Regime | Zone | corr | MAE | bias |
 |---|---|---|---|---|
-| Gas-marginal (SEE/Iberia) | **GR** | **0.85** | 21.2 | −6.3 |
-| | BG | 0.79 | 25.3 | −2.8 |
-| | ES / PT | 0.79 / 0.77 | 22 / 23 | +7 / +8 |
-| | RO | 0.77 | 26.2 | −5.5 |
-| | RS | 0.72 | 27.0 | +4.1 |
-| Continental (installed-truthed) | **DE_LU** | **0.85** | 19.3 | −4.2 |
-| | BE | 0.79 | 21.5 | −6.4 |
-| | FR | 0.75 | 24.3 | +2.8 |
+| Gas-marginal (SEE/Iberia) | **GR** | **0.85** | 21.5 | −4.6 |
+| | BG | 0.79 | 25.6 | −1.8 |
+| | ES / PT | 0.80 / 0.78 | 22 / 23 | +4 / +5 |
+| | RO | 0.76 | 26.4 | −4.4 |
+| | RS | 0.72 | 27.3 | +4.9 |
+| Continental (installed-truthed) | **DE_LU** | **0.85** | 19.1 | −4.0 |
+| | BE | 0.79 | 21.4 | −6.4 |
+| | FR | 0.78 | 23.5 | −4.4 |
 | | CZ / PL | 0.68 / 0.69 | 26 / 28 | −7 / −10 |
-| | NL | 0.69 | 24.5 | −5.2 |
-| Italy (gas + premium) | 7 zones | 0.62–0.77 | 19–22 | −14…−3 |
-| Hydro, export-anchored | NO2 | **0.76** | 15.6 | +1.0 |
-| | CH | 0.76 | 22.0 | −12.3 |
-| | SE4 | 0.58 | 31.7 | −8.0 |
-| | NO1 / NO3 / NO5 | 0.00 / 0.13 / 0.42 | 27–63 | +3…+37 |
+| | NL | 0.69 | 24.1 | −4.9 |
+| Italy (gas + premium) | 7 zones | 0.67–0.77 | 19–22 | −6…+6 |
+| Hydro, export-anchored | NO2 | **0.76** | 15.6 | +0.9 |
+| | CH | 0.73 | 22.4 | −11.7 |
+| | SE4 | 0.59 | 31.7 | −8.0 |
+| | NO1 / NO3 / NO5 | 0.29 / 0.33 / 0.43 | 26–40 | +0…+23 |
 | Hydro, reservoir-only | FI | **0.84** | 25.9 | −21.7 |
-| | DK1 | 0.78 | 22.5 | −1.0 |
+| | DK1 | 0.78 | 22.4 | −1.0 |
 | | SE1/SE2/SE3 | 0.51–0.61 | 26–30 | −10…+16 |
-| Baltic (installed-truthed) | LT / LV / EE | 0.74 / 0.72 / 0.73 | 39–43 | ≈ −29 |
-| Border-repaired transit | AT | **0.80** | 25.3 | −16.9 |
-| | HU / SK | 0.74 / 0.72 | 33 / 34 | −24 |
-| | DK2 / SI | 0.71 / 0.62 | 26 / 37 | −8 / −28 |
+| Baltic (installed-truthed) | LT / LV / EE | 0.74 / 0.72 / 0.73 | 39–42 | ≈ −29 |
+| Border-repaired transit | AT | **0.80** | 24.6 | −15.7 |
+| | HU / SK | 0.72 / 0.72 | 34 / 34 | −24 |
+| | DK2 / SI | 0.71 / 0.63 | 26 / 36 | −8 / −25 |
 
 What moved since the frozen pre-cv19 sample (different windows — direction,
 not decimals): the meshed continental core is repaired (**BE 0.18 → 0.79,
-AT 0.34 → 0.80**, NL 0.52 → 0.69), the SEE east lifted (RO 0.54 → 0.77,
-RS 0.64 → 0.72), and **DK1 0.69 → 0.78** carries the cv21 Viking book.
-Greece — the longest-validated zone — holds **0.85 / €21.2** with a per-year
-trajectory 0.72 → 0.77 → 0.85 → **0.87 in 2026**.
+AT 0.34 → 0.80**, NL 0.52 → 0.69), the SEE east lifted (RO 0.54 → 0.76,
+RS 0.64 → 0.72), **DK1 0.69 → 0.78** carries the cv21 Viking book,
+**FR holds 0.78** on the cv23 nuclear mechanism, and **NO1's bias is gone**
+(+36.9 → +0.1) on the cv23 import backstop. Greece — the longest-validated
+zone — holds **0.85 / €21.5** with a per-year trajectory 0.73 → 0.78 →
+0.85 → **0.86 in 2026**.
 
 The honest weak spots on the full year, stated plainly:
 
-- **Interior Norway — NO1 corr 0.00 / bias +36.9, NO3 0.13, NO4 0.14** — the
-  program's oldest open problem. cv23's import backstop kills the dry-spring
-  phantom-cap failure (NO1 MAE 340 → 73 on the measured windows) but the
-  seasonal water-value level structure needs reservoir/inflow modelling that
-  ENTSO-E data does not carry (measured negatives + the forward path in
+- **Interior Norway — NO1 corr 0.29, NO3 0.33, NO4 0.14** — the program's
+  oldest open problem, though the cv23 import backstop transformed its
+  character: the dry-spring phantom-cap failure and the level bias are gone
+  (NO1 comparable-year MAE 62.7 → 25.7, bias +36.9 → +0.1). What remains is
+  a shape problem — the seasonal water-value structure needs
+  reservoir/inflow modelling that ENTSO-E data does not carry (measured
+  negatives + the forward path in
   [docs/experiments/norwegian-hydro/](docs/experiments/norwegian-hydro/)).
 - **Baltics (LT/LV/EE)** — shape fine (corr ~0.73), level bias still
   **≈ −€29/MWh** (winter import pricing).
