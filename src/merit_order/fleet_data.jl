@@ -14,6 +14,7 @@
 # cached; locks follow the TTF_PRICE_CACHE pattern.
 const _TYPE_P95_DAY_CACHE = Dict{Tuple{Date,Int},Dict{String,Dict{String,Float64}}}()
 const _OVERNIGHT_P5_DAY_CACHE = Dict{Tuple{Date,Int},Dict{String,Dict{String,Float64}}}()
+const _OVERNIGHT_RESIDUAL_DAY_CACHE = Dict{Tuple{Date,Int},Dict{String,Float64}}()
 const _HYDRO_AVAIL_DAY_CACHE = Dict{Tuple{Date,Int},Dict{String,Float64}}()
 const _INSTALLED_CAP_CACHE = Ref{Union{Nothing,Dict{String,Dict{String,Float64}}}}(nothing)
 const _RESERVOIR_DAY_CACHE = Dict{Date,Dict{String,Any}}()
@@ -23,6 +24,7 @@ function clear_fleet_data_caches!()
     lock(_FLEET_DATA_LOCK) do
         empty!(_TYPE_P95_DAY_CACHE)
         empty!(_OVERNIGHT_P5_DAY_CACHE)
+        empty!(_OVERNIGHT_RESIDUAL_DAY_CACHE)
         empty!(_HYDRO_AVAIL_DAY_CACHE)
         _INSTALLED_CAP_CACHE[] = nothing
         empty!(_RESERVOIR_DAY_CACHE)
@@ -235,6 +237,65 @@ Dict for a zone with no data (the caller then adds no floor block).
 function get_overnight_output_p5(bidding_zone::String, day::Date; lookback_days::Int=30)
     return get(_overnight_p5_all_zones(day, lookback_days), bidding_zone,
                Dict{String,Float64}())
+end
+
+function _overnight_residual_all_zones(day::Date, lookback_days::Int, floor_types::Vector{String})
+    key = (day, lookback_days)   # floor_types is a constant across the process
+    cached = lock(_FLEET_DATA_LOCK) do
+        get(_OVERNIGHT_RESIDUAL_DAY_CACHE, key, nothing)
+    end
+    cached !== nothing && return cached
+    # 5th-percentile of the OVERNIGHT (00-06 UTC) SUMMED output of the must-run
+    # fleet types — the RES-aware "residual demand met by the must-run fleet".
+    # Summing the floor types per timestamp BEFORE the percentile (vs cv24's
+    # per-type p5) makes the signal shrink together on high-RES nights, when the
+    # whole thermal+RoR fleet backs off because RES/imports cover the trough —
+    # which is what fixed cv24's summer over-thinning at the sizing layer. Ex-ante
+    # (strictly before `day`), day-cached, errors uncached.
+    df = sql2df_with_retry(
+        """
+        SELECT z, percentile_cont(0.05) WITHIN GROUP (ORDER BY mw) AS p5
+        FROM (
+            SELECT area_map_code AS z, date_time_utc,
+                   SUM(actual_generation_output_mw) AS mw
+            FROM entsoe.aggregated_generation_per_type
+            WHERE area_type_code LIKE 'BZN%'
+              AND production_type = ANY(\$1)
+              AND actual_generation_output_mw IS NOT NULL
+              AND date_time_utc >= (\$2::date::timestamp AT TIME ZONE 'UTC')
+              AND date_time_utc < (\$3::date::timestamp AT TIME ZONE 'UTC')
+              AND EXTRACT(HOUR FROM date_time_utc) < 6
+            GROUP BY area_map_code, date_time_utc
+        ) hourly
+        GROUP BY z
+        """,
+        [floor_types, day - Day(lookback_days), day])
+    out = Dict{String,Float64}()
+    for row in eachrow(df)
+        ismissing(row.p5) && continue
+        out[String(row.z)] = Float64(row.p5)
+    end
+    lock(_FLEET_DATA_LOCK) do
+        _OVERNIGHT_RESIDUAL_DAY_CACHE[key] = out
+    end
+    return out
+end
+
+"""
+    get_overnight_floor_residual_p5(bidding_zone, day, floor_types; lookback_days=30) -> Float64
+
+The RES-aware must-run sizing signal for the cv24.1 Italian floor: the trailing
+p5 (00–06 UTC, strictly before `day`) of the OVERNIGHT SUMMED output of the
+must-run fleet types (`floor_types`, ENTSO-E production-type names). By the
+energy balance this is the overnight residual demand met by that fleet
+(load − RES − imports, restricted to the floored fleet) — it shrinks precisely
+when RES fills the trough, so the floor no longer over-thins in the high-RES
+season (the cv24 summer-regression cause). Returns MW (0.0 when no data).
+"""
+function get_overnight_floor_residual_p5(bidding_zone::String, day::Date,
+    floor_types::Vector{String}; lookback_days::Int=30)
+    return get(_overnight_residual_all_zones(day, lookback_days, floor_types),
+               bidding_zone, 0.0)
 end
 
 """

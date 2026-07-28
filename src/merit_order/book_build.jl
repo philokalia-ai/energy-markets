@@ -765,36 +765,35 @@ function create_merit_order_book(
                 profile.seasonal_drawdown)
         offered_pmax(g) = _is_hydro(g) ? g.p_max * hydro_scale : g.p_max
 
-        # ── cv24 Italian must-run floor (profile-gated) ─────────────────
+        # ── cv24.1 Italian must-run floor (profile-gated) ───────────────
         # The must-run fuel classes (`MUST_RUN_FLOOR_FUELS`: always-on geothermal
         # / run-of-river / biomass / waste + baseload thermal gas / hard-coal /
         # oil) bid their demonstrated overnight base at/near the price floor, not
         # SRMC — the competitive bid of inflexibility (shutdown/restart cost
-        # exceeds a few negative-price hours). `must_run_frac[type]` is the
-        # fraction of that type's offered fleet that its trailing p5 of overnight
-        # (00-06 UTC) per-type output demonstrates is always on — derived from
-        # fundamentals (observed output), never from bids or prices. Empty for
-        # every non-must-run-floor zone ⇒ the order loop is byte-identical.
-        must_run_frac = Dict{Symbol,Float64}()
+        # exceeds a few negative-price hours).
+        #
+        # cv24.1 sizes the floor from a RES-AWARE signal (fixing cv24's summer
+        # regression at the sizing layer): `mrf_system` = the trailing p5 of the
+        # OVERNIGHT (00-06 UTC) SUMMED output of the floor fleet — the residual
+        # demand that fleet met — as a fraction of its offered capacity. Summing
+        # before the percentile makes it shrink together on high-RES nights (the
+        # whole fleet backs off when RES/imports cover the trough), unlike cv24's
+        # per-type p5 which under-sized gas in summer. All ex-ante (observed
+        # output), never bids/prices. 0.0 for every non-must-run-floor zone ⇒ the
+        # order loop is byte-identical. The hard floor-of-the-floor (never below
+        # cv23's committed p_min) is applied per unit in the loop below.
+        mrf_system = 0.0
         if profile.must_run_floor
-            overnight_p5 = Dict{String,Float64}(
-                normalize_fuel_type_name(k) => v
-                for (k, v) in get_overnight_output_p5(bidding_zone, day))
-            offered_by_type = Dict{Symbol,Float64}()
-            for g in generators
-                g.fuel_type in MUST_RUN_FLOOR_FUELS || continue
-                offered_by_type[g.fuel_type] =
-                    get(offered_by_type, g.fuel_type, 0.0) + offered_pmax(g)
-            end
-            for (fsym, offered) in offered_by_type
-                offered > 1.0 || continue
-                p5 = get(overnight_p5, string(fsym), 0.0)
-                p5 > 1.0 || continue
-                must_run_frac[fsym] = clamp(p5 / offered, 0.0, 1.0)
-            end
-            isempty(must_run_frac) ||
+            floor_offered = sum((offered_pmax(g) for g in generators
+                                 if g.fuel_type in MUST_RUN_FLOOR_FUELS); init=0.0)
+            if floor_offered > 1.0
+                floor_types = String[string(s) for s in MUST_RUN_FLOOR_FUELS]
+                r5 = get_overnight_floor_residual_p5(bidding_zone, day, floor_types)
+                mrf_system = clamp(r5 / floor_offered, 0.0, 1.0)
                 println("  🇮🇹 Must-run floor @ €$(round(profile.must_run_floor_price, digits=1)): " *
-                        join(["$(k) ×$(round(v, digits=2))" for (k, v) in must_run_frac], ", "))
+                        "residual p5 $(round(Int, r5)) MW / offered $(round(Int, floor_offered)) MW " *
+                        "→ system frac $(round(mrf_system, digits=2)) (floor-of-the-floor: p_min)")
+            end
         end
 
         # Dispatchable capacity for the scarcity margin, derated for the
@@ -1024,24 +1023,27 @@ function create_merit_order_book(
                     # collapse below thermal SRMC in renewable-surplus hours.
                     must_run_qty = 0.0
                     if profile.must_run_floor
-                        # cv24 Italian must-run floor (graduated two-part bid).
-                        # The must-run QUANTITY is the type's demonstrated
-                        # overnight base (`must_run_frac[type] × offered`, from
-                        # trailing p5 of 00-06 UTC output — fundamentals). A
-                        # committed thermal type with no overnight data falls back
-                        # to p_min so it still self-schedules. That base is split
-                        # like cv10's graduated self-schedule, but the deep slice
-                        # bids at the price FLOOR (≤€0 — the competitive bid of the
-                        # inflexible base that never shuts down) and the rest bids
-                        # below cost (max(0.5×SRMC, SRMC−40)); the flexible
-                        # remainder keeps the SRMC tranche ladder. This makes the
-                        # book bimodal (a ≤€0 must-run floor + the SRMC tail),
-                        # matching the real GME shape, while keeping a convex
-                        # low-price region so night/high-RES troughs re-price down
-                        # instead of jumping floor→SRMC.
-                        base = get(must_run_frac, g.fuel_type, 0.0) * offered_pmax(g)
-                        if base <= 0.1 && g.code in committed
-                            base = min(g.p_min, offered_pmax(g))
+                        # cv24.1 Italian must-run floor (graduated two-part bid).
+                        # QUANTITY = the RES-aware system fraction × this unit's
+                        # offered (`mrf_system × offered`, from the overnight
+                        # residual-demand p5 above — shrinks in the high-RES
+                        # season), then the HARD FLOOR-OF-THE-FLOOR: a committed
+                        # unit never floors LESS than cv23's `min(p_min, offered)`.
+                        # So cv24.1 always offers AT LEAST as much below-cost
+                        # thermal as cv23 (its deep slice is even cheaper — €0 vs
+                        # 0.05×SRMC), which makes the cv24 summer over-thinning
+                        # regression impossible by construction; the RES-aware
+                        # signal only ADDS floor above p_min on genuinely
+                        # thermal-heavy nights (winter/spring). The base is split
+                        # like cv10's graduated self-schedule: deep 60% at the
+                        # price FLOOR (≤€0 — the inflexible base that never shuts
+                        # down), the rest below cost (max(0.5×SRMC, SRMC−40)); the
+                        # flexible remainder keeps the SRMC tranche ladder. Bimodal
+                        # book, convex low-price region.
+                        base = (g.fuel_type in MUST_RUN_FLOOR_FUELS) ?
+                               mrf_system * offered_pmax(g) : 0.0
+                        if g.code in committed
+                            base = max(base, min(g.p_min, offered_pmax(g)))
                         end
                         if base > 0.1
                             must_run_qty = base
