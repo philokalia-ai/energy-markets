@@ -72,7 +72,8 @@
 #   the current code_version.
 #
 # Env vars:
-#   OPTIMIZER      'gurobi' (default) / 'highs' / 'auto'
+#   OPTIMIZER      'highs' (default, production since cv20) / 'gurobi'
+#                  (development, academic licence) / 'auto'
 #   INPUT_MODE     'entsoe' (default) / 'weather' — see INPUT TRACKS above
 #   MAX_LEAD_DAYS  furthest lead to attempt, default 7
 #   FORCE_RERUN    'true' to rewrite an existing (market_date, lead, mode)
@@ -202,23 +203,22 @@ function existing_forecast_zones(market_date::Date, lead_days::Int,
 end
 
 """
-Delete-then-insert exactly the (market_date, lead_days, input_mode) slice in
-one transaction — the reference ('entsoe') and ex-ante ('weather') tracks
-never overwrite each other. The DELETE is CV-AGNOSTIC (it clears the slice at
-any code_version, so a rewrite can never leave a cross-version duplicate
-pair); the INSERT stamps the current code_version as provenance.
-`zone_hourly` is zone → (hour::DateTime → price), already
-stitched and completeness-checked per zone (every zone here has exactly the
-expected market-day hours). The realized guard is re-checked immediately
-before the write (the horizon may have advanced during a long solve), and the
-HOUR-LEVEL guard refuses any row at or before `prediction_made`.
+Write the books captured for ONE market day to v1/books/<market_date>.parquet
+(zstd) and push.
+
+An Athens market day is produced by clearing two UTC days (D-1 and D), so only
+those two keys belong in the file. The accumulator is never emptied between
+market days (UTC day D's book is reused from cache by market day D+1, so the
+sink does not re-fire for it), which is why the filter lives here: flushing the
+whole accumulator wrote every previously-cleared UTC day into each per-day
+parquet, stamped with the WRONG market_date and growing quadratically over a
+run.
 """
-
-
-"Write all captured books to v1/books/<market_date>.parquet (zstd) and push."
 function flush_books!(books::Dict, market_date::Date)
     rows = NamedTuple[]
+    wanted = (market_date - Day(1), market_date)
     for ((zone, day), tagged) in books
+        day in wanted || continue
         for (o, tag) in tagged
             push!(rows, (market_date=market_date, zone=zone, ts=o.date_time,
                          side=String(o.type), price=o.price, mw=o.quantity,
@@ -253,6 +253,18 @@ function flush_books!(books::Dict, market_date::Date)
     return nothing
 end
 
+"""
+Delete-then-insert exactly the (market_date, lead_days, input_mode) slice in
+one transaction — the reference ('entsoe') and ex-ante ('weather') tracks
+never overwrite each other. The DELETE is CV-AGNOSTIC (it clears the slice at
+any code_version, so a rewrite can never leave a cross-version duplicate
+pair); the INSERT stamps the current code_version as provenance.
+`zone_hourly` is zone → (hour::DateTime → price), already
+stitched and completeness-checked per zone (every zone here has exactly the
+expected market-day hours). The realized guard is re-checked immediately
+before the write (the horizon may have advanced during a long solve), and the
+HOUR-LEVEL guard refuses any row at or before `prediction_made`.
+"""
 function write_forecast!(market_date::Date, lead_days::Int, prediction_made::DateTime,
                          zone_hourly::Dict{String,Dict{DateTime,Float64}},
                          input_mode::String=INPUT_MODE)
@@ -383,6 +395,25 @@ function model_covered_for_day(day::Date,
                                load_preds::Dict{String,Dict{DateTime,Float64}})
     expected = expected_market_day_hours(day)
     return Set(z for (z, zp) in load_preds if all(h -> haskey(zp, h), expected))
+end
+
+"""
+Zones whose weather-RES prediction covers EVERY expected hour of `day`'s Athens
+market window — the RES twin of `model_covered_for_day`.
+
+Without this gate the weather track applied the "partial publications must read
+as not-yet-published" rule (see `res_forecast_zones`) to the TSO's RES but NOT
+to its own: `weather_scenario` zeroes the ENTSO-E renewable forecast and injects
+`get(zone_pred, hour, 0.0)`, so an hour the model could not predict — a zone
+absent from the RES pack, an open-meteo gap, a short fetch — silently clears
+with ZERO wind+solar. That is the 2026-07-12 failure mode (a day frozen with
+most of Germany's solar missing, corr −0.50) reintroduced from the model side,
+and forecast vintages are immutable, so it can never be corrected afterwards.
+"""
+function res_covered_for_day(day::Date,
+                             res_preds::Dict{String,Dict{DateTime,Float64}})
+    expected = expected_market_day_hours(day)
+    return Set(z for (z, zp) in res_preds if all(h -> haskey(zp, h), expected))
 end
 
 # ---------------------------------------------------------------------------
@@ -759,11 +790,13 @@ function main()
     # it into every clear as a per-zone scenario together with the uniform
     # model load (override + fill — see weather_scenario).
     scenario = nothing
+    res_pred_weather = Dict{String,Dict{DateTime,Float64}}()
     if INPUT_MODE == "weather" && !SKIP_CLEAR
         println("Fetching open-meteo weather + predicting RES for UTC days " *
                 "$(first_candidate - Day(1)) .. $last_candidate ...")
         t0 = time()
         preds = build_weather_predictions(first_candidate - Day(1), last_candidate)
+        res_pred_weather = preds
         scenario = weather_scenario(preds, fill_pred)
         println("Weather RES ready for $(length(preds)) zones in $(round(time() - t0, digits=1))s")
     elseif (load_fill_fn !== nothing || res_fill_fn !== nothing) && !SKIP_CLEAR
@@ -793,10 +826,20 @@ function main()
             # the track, not a fill, so no provenance suffix ever.
             covered = model_covered_for_day(day, fill_pred)
             uncovered = sort([z for z in ZONES if !(z in covered)])
+            # RES coverage is gated exactly like load: a zone-hour the weather
+            # model cannot predict would otherwise clear at ZERO wind+solar
+            # (see res_covered_for_day). SKIP_CLEAR runs never build preds, so
+            # the RES gate only applies when a clear will actually happen.
+            res_covered = SKIP_CLEAR ? Set(ZONES) : res_covered_for_day(day, res_pred_weather)
+            res_uncovered = sort([z for z in ZONES if !(z in res_covered)])
             if !isempty(uncovered)
                 eligible = false
                 reason = "weather-track model load cannot cover $(length(uncovered)) " *
                          "zone(s): $(join(uncovered, ","))"
+            elseif !isempty(res_uncovered)
+                eligible = false
+                reason = "weather-track RES prediction cannot cover $(length(res_uncovered)) " *
+                         "zone(s): $(join(res_uncovered, ",")) — refusing to clear them at zero wind+solar"
             else
                 eligible, reason = eligibility_verdict(ZONES, load_hours, res_required,
                                                        res_present, atc_rows;

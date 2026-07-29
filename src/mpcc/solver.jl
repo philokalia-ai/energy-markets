@@ -872,7 +872,23 @@ function _solve_mpcc_by_period(order_book::MPCCOrderBook;
         end
     end
 
-    merged_status = if all(s -> s == :optimal, statuses)
+    # Completeness is the invariant that matters, not the status name. A
+    # per-period status is `Symbol(lowercase(string(termination_status)))`
+    # whenever the model has no values, so :numerical_error / :other_error /
+    # :memory_limit / :almost_optimal all exist and none was classified —
+    # they fell through to the permissive `else :time_limit`, which the
+    # caller (`pass1_usable` in multi_zone_run.jl) treats as USABLE. A day
+    # missing one hour was then saved as a complete record. Assert every
+    # node×period cell instead: this is inert when all periods produced
+    # prices (the only case that ever reached the record intentionally).
+    missing_cells = 0
+    for z in order_book.nodes, t in periods
+        haskey(get(merged_prices, z, Dict{String,Float64}()), t) || (missing_cells += 1)
+    end
+
+    merged_status = if missing_cells > 0
+        :error
+    elseif all(s -> s == :optimal, statuses)
         :optimal
     elseif any(s -> s == :error, statuses)
         :error
@@ -880,6 +896,15 @@ function _solve_mpcc_by_period(order_book::MPCCOrderBook;
         :infeasible
     else
         :time_limit
+    end
+
+    if missing_cells > 0
+        stat_list = join(sort(unique(String.(statuses))), ", ")
+        n_cells = length(order_book.nodes) * length(periods)
+        @error "Period-decomposition: $missing_cells of $n_cells node×period price " *
+               "cells are MISSING — the clear is incomplete and is reported as " *
+               ":error so it can never be saved as a complete day " *
+               "(per-period statuses: $stat_list)"
     end
 
     n_opt = count(s -> s == :optimal, statuses)

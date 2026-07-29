@@ -900,8 +900,17 @@ function generate_energy_prices_for_date_range(start_date::Date, end_date::Date;
 
                 date_elapsed = time() - date_start_time
 
-                # Determine if date was successful (at least one zone succeeded)
-                date_successful = zones_result.success_count > 0
+                # Determine if date was successful (at least one zone succeeded).
+                # A date on which every zone was SKIPPED (skip_existing=true and
+                # the day is already saved) is not a failure — it is a resume
+                # no-op. Counting it as one made five already-complete days in a
+                # row trip the "systematic issue" early termination, so resuming
+                # a partially-finished range stopped after five days and
+                # reported the rest as failures without attempting them.
+                all_skipped = zones_result.success_count == 0 &&
+                              zones_result.failure_count == 0 &&
+                              zones_result.skipped_count > 0
+                date_successful = zones_result.success_count > 0 || all_skipped
                 if date_successful
                     successful_dates += 1
                     consecutive_failures = 0  # Reset consecutive failure counter

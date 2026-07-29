@@ -227,9 +227,22 @@ function transfer_prices!(pg, prices::DataFrame, idmap::Dict{Int64,Int}, o)
     return nrow(prices)
 end
 
-"""Delete-then-COPY the transmission-flow slice into Postgres."""
+"""
+Delete-then-COPY the transmission-flow slice into Postgres.
+
+CAUTION — this delete is WIDER than the price delete. `simulations.energy_prices`
+is scoped by `clearing_mode`, but `simulations.transmission_flows` has no such
+column, so the delete can only key on `(code_version, window)`. Transferring the
+`multi_zone_eu` slice therefore also removes any flow rows in that window at the
+same code_version that came from a DIFFERENT clearing mode (single-zone, the SEE
+5-zone run, iterative) and were written straight to live Postgres. The asymmetry
+is easy to miss because the price side IS mode-scoped.
+"""
 function transfer_flows!(pg, flows::DataFrame, o)
     isempty(flows) && return 0
+    @warn "transmission_flows delete is NOT clearing-mode scoped (the table has no " *
+          "such column): every flow row at code_version $(o["code_version"]) in this " *
+          "window is replaced, including rows from other clearing modes"
     win, wp = day_window_clause("date_time_utc", o["start"], o["end"], 2)
     LibPQ.execute(pg, "BEGIN")
     try
@@ -385,8 +398,17 @@ function main()
         end
 
         println("── post-transfer verification ──")
-        run_verify(con, pg, o)
+        # The verdict must reach the exit code. It was discarded here, so a
+        # transfer whose zone-month checksums DISAGREED still printed DONE and
+        # exited 0 — the one check that can catch a bad transfer could not fail
+        # the run (only --verify-only mode propagated it).
+        ok = run_verify(con, pg, o)
         @printf("DONE in %.1fs\n", time() - t0)
+        if ok === false
+            println("❌ post-transfer verification FAILED — the Postgres slice does " *
+                    "not match the source. Investigate before publishing.")
+            exit(1)
+        end
     finally
         LibPQ.close(pg)
         DBInterface.close!(con); DuckDB.close(db)

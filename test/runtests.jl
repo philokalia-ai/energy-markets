@@ -210,6 +210,17 @@ println()
         include(joinpath(@__DIR__, "test_15min_resolution.jl"))
     end
 
+    @testset "Code review 2026-07" begin
+        println("\n" * "=" ^ 60)
+        println("Running July 2026 code-review regression tests...")
+        println("=" ^ 60)
+        # DB-free. Two @test_broken entries document defects that are real,
+        # reproduced, and deliberately NOT fixed here because they change every
+        # price and need their own code_version + backfill
+        # (docs/experiments/review-2026-07.md).
+        include(joinpath(@__DIR__, "test_review_2026_07.jl"))
+    end
+
 end
 
 # =============================================================================

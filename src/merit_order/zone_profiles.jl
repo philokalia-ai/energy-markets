@@ -1079,8 +1079,17 @@ function get_zone_profile(zone::AbstractString)
     # Scoped to FR by name: FR is the only zone whose backstop is the cap fix —
     # every other backstop zone (AT/BE/CH/DK/SI/RO/RS/HU) predates cv23 and must
     # NOT be disabled here. Worker-safe via ENV.
+    # EUPHEMIA_DISABLE_CV23 also strips it: the cv23 comment above claims the
+    # switch "reverts exactly to cv22 main", but the FR-cap half of cv23 (the
+    # interior-Norway/FR import backstop, backstop_scarcity_credit and
+    # nuclear_bid_ref_ceiling added to FR_PROFILE by the same version) was
+    # reachable only through DISABLE_FRCAP. A cv23-off A/B or byte-identity
+    # guard therefore left FR carrying a backstop cv22-FR never had, so every
+    # conclusion drawn from that guard compared the wrong pair. Either switch
+    # now strips it; DISABLE_FRCAP alone still strips ONLY the cap fix.
     if String(zone) == "FR" && (p.import_backstop || p.nuclear_bid_ref_ceiling > 0.0) &&
-       !isempty(get(ENV, "EUPHEMIA_DISABLE_FRCAP", ""))
+       (!isempty(get(ENV, "EUPHEMIA_DISABLE_FRCAP", "")) ||
+        !isempty(get(ENV, "EUPHEMIA_DISABLE_CV23", "")))
         p = with_profile(p; import_backstop=false, backstop_scarcity_credit=0.0,
                          nuclear_bid_ref_ceiling=0.0)
     end
