@@ -29,17 +29,21 @@ using DataFrames
     # directed pairs, of which ~79 are bidirectional — i.e. ~40 of ~44 physical
     # borders carry double capacity in the published record.
     #
-    # The fix changes every price, so it needs its own code_version and a
-    # backfill; the test is marked broken rather than deleted so the day the
-    # canonicalisation lands, this flips to a failure and must be un-marked.
+    # ON THIS BRANCH the canonicalisation is APPLIED, so the assertions are the
+    # fixed ones (on main they are @test_broken, documenting the defect). The
+    # kill-switch EUPHEMIA_DISABLE_ATC_CANON restores the old behaviour, which
+    # is asserted too — that is what makes the A/B a one-binary comparison.
     # -----------------------------------------------------------------------
     @testset "ATC is not doubled on a bidirectional border" begin
         df = DataFrame(source_zone=["A", "B"], sink_zone=["B", "A"],
                        time_period=[1, 1], capacity=[100.0, 100.0])
         tc = build_transfer_capacity_from_dataframe(df)
 
-        # The real data shape produces both orientations...
-        @test Set(get_zone_pairs(tc)) == Set([("A", "B"), ("B", "A")])
+        # Both ENTSO-E orientations are stored, but only ONE becomes a variable.
+        @test Set(get_zone_pairs(tc)) == Set([("A", "B")])
+        withenv("EUPHEMIA_DISABLE_ATC_CANON" => "true") do
+            @test Set(get_zone_pairs(tc)) == Set([("A", "B"), ("B", "A")])
+        end
 
         ts, dt = "20240615-0000", DateTime(2024, 6, 15, 0)
         orders = Euphemia.MarketOrder[
@@ -58,8 +62,8 @@ using DataFrames
         # Nodal balance in solver.jl gives zone A: -inflow(B→A var) + outflow(A→B var)
         net_a_to_b = ab - ba
 
-        @test_broken abs(net_a_to_b) <= 100.0 + 1e-6   # offered ATC A→B is 100 MW
-        @test abs(net_a_to_b) ≈ 200.0 atol = 1e-6      # documents TODAY's behaviour
+        @test abs(net_a_to_b) <= 100.0 + 1e-6          # offered ATC A→B is 100 MW
+        @test abs(net_a_to_b) ≈ 100.0 atol = 1e-6      # the fix: exactly the offered ATC
 
         # Control: with a single orientation (what the old tests build) the
         # model is correct — which is why the defect stayed invisible.
