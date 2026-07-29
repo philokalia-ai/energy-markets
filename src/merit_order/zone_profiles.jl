@@ -422,7 +422,6 @@ _effective_fleet_truth_mode(profile) =
 "SEE / default profile — the exact v10 parameters (regression baseline)."
 const SEE_PROFILE = ZoneProfile()
 
-"Iberia — near-isolated, already the best-fit region; identical to SEE (verified)."
 
 """
 Continental core (DE/FR/BE/NL/AT/CH/PL/CZ/SK). High-RES thermal with heavy
@@ -651,7 +650,6 @@ clamps to the coupled reference, and dropped-border exports re-enter as
 ref-priced demand. Anchor refs come from the remaining endogenous neighbors —
 DK1 for SE3, DK2/LT for SE4 — all well-calibrated after the SE drop.
 """
-const SWEDEN_SOUTH_PROFILE = NORWAY_PROFILE
 
 """
 Switzerland. Hydro-storage dominated (large reservoir + pumped fleet, thin
@@ -840,7 +838,7 @@ ref SE2-dominated, pulling SE3's level/shape toward its actual position
 between SE2 and DK1. SE4 deliberately stays on plain SWEDEN_SOUTH (its
 existing refs are already decent; measured as a gate on the benchmark).
 """
-const SE3_PROFILE = with_profile(SWEDEN_SOUTH_PROFILE;
+const SE3_PROFILE = with_profile(NORWAY_PROFILE;
     import_backstop = true,
     # anchor_include_dropped measured and GATED OUT (28-day production
     # benchmark): the SE2-dominated ref (~5 GW climatology weight vs DK1's
@@ -858,7 +856,7 @@ spike hours; avg ~3 GW) starve it a few days a year — backstop, not drop.
 const ITALY_CNORTH_PROFILE = with_profile(ITALY_PROFILE; import_backstop = true)
 
 """
-Romania / Serbia / Hungary (cv17). SEE calibration (exact v10 parameters)
+SEE base + import backstop + full scarcity credit (cv17). SEE calibration (exact v10 parameters)
 plus the ex-ante import backstop AND the backstop scarcity credit. RO is the
 measured case for why the backstop must stay on in SEE's east: the June-2026
 tight period (one Cernavoda unit partial, wind at 45% of 2025) was covered in
@@ -875,7 +873,7 @@ documented open calibration decision (P2 measured its bias drifting
 −14.6 → −28.8 with an uncredited backstop): the production benchmark shows
 HU's missing backstop left the coupled SEE cluster capping through the
 2026-01 cold snap, and the credit is the mechanism P2 lacked — HU carries
-both. These profiles apply ONLY on the EU-footprint path
+both. This profile applies ONLY on the EU-footprint path
 (`enrich_network=true`); the legacy SEE single-zone and 5-zone products force
 SEE_PROFILE and remain byte-identical.
 """
@@ -954,9 +952,9 @@ const ZONE_PROFILES = Dict{String,ZoneProfile}(
     "NO4" => NO4_PROFILE, "NO5" => NORWAY_PROFILE,
     "SE1" => NORDIC_PROFILE, "SE2" => NORDIC_PROFILE,
     # SE3/SE4: anchored after the iter5 SE2–SE3/SE3–SE4 border drop (see
-    # SWEDEN_SOUTH_PROFILE docstring); SE3 adds the cv17 backstop + the
+    # NORWAY_PROFILE docstring); SE3 adds the cv17 backstop + the
     # dropped-border (SE2-weighted) anchor ref
-    "SE3" => SE3_PROFILE, "SE4" => SWEDEN_SOUTH_PROFILE,
+    "SE3" => SE3_PROFILE, "SE4" => NORWAY_PROFILE,
     "FI" => NORDIC_PROFILE,
     # DK1/DK2: + cv17 import backstop (episodic starvation — see DENMARK_PROFILE).
     # cv18: DK1 adds the export-absorption ladder (prototype corr 0.495→0.569,
