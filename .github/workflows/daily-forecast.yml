@@ -202,14 +202,6 @@ jobs:
           julia --project=. bin/export_web_parquet.jl
           bash bin/web_data_push.sh
 
-      - name: Upload forecast data artifact
-        if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: forecast-data
-          path: web/data/
-          if-no-files-found: warn
-
       - name: Cleanup Gurobi license
         if: always()
         run: rm -f gurobi.lic
