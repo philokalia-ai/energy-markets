@@ -2,7 +2,6 @@
 
 A third-party reader's guide to the source tree: what lives where, what calls
 what, and where to start reading for each task. The package is one Julia module
-(`Euphemia`) plus three nested submodules (`MPCC`, `AlternativeOrderBook`,
 `MeritOrderBook`); large concerns are split into per-topic files that the
 parent file `include`s in definition order.
 
@@ -23,8 +22,6 @@ parent file `include`s in definition order.
                                     │
                     ┌───────────────▼────────────────────────────┐
    order books      │ MeritOrderBook.jl → src/merit_order/       │
-                    │ AlternativeOrderBook.jl · BiddingStrategy  │
-                    │ UnitCommitment.jl (for :uc_based books)    │
                     └───────────────┬────────────────────────────┘
                                     │
                     ┌───────────────▼────────────────────────────┐
@@ -76,9 +73,6 @@ name-based fuel inference, and `include`s:
 |---|---|
 | `registry.jl` | the unit-registry query (`get_generators`): outage filtering via the day-level outage cache, dedup, stale-validity fallbacks, per-zone memoization |
 | `fuel_costs.jl` | TTF gas / EUA carbon price lookups and the SRMC model (`get_marginal_cost`) |
-| `parameter_inference.jl` | inferring ramp rates / p_min / up-down times from historical output |
-| `inference_cache.jl` | persisting and applying inferred parameters (`get_generators_with_inferred_params`, `refresh_inference_cache`) |
-| `initial_conditions.jl` | generator state at t=0 for unit commitment |
 
 ### `src/dbutils.jl` + `src/db/`
 
@@ -97,12 +91,9 @@ name-based fuel inference, and `include`s:
 | File | Read this for |
 |---|---|
 | `solver.jl` | `solve_mpcc_market_clearing` — the complementarity clearing solve and its robustness retry ladder; `_solve_mpcc_by_period` (per-period decomposition — canonical on the EU path since cv20, any solver) |
-| `order_books.jl` | adapters from UC solutions / zone books to `MPCCOrderBook` (single- and multi-zone) |
 | `coupling_metrics.jl` | iterative-coupling helpers: flows→net imports, convergence metrics, damping |
 
-### `src/UnitCommitment.jl` + `src/uc/`
 
-`UnitCommitment.jl` keeps the cost-report helpers and `include`s:
 
 | File | Read this for |
 |---|---|
@@ -114,7 +105,6 @@ name-based fuel inference, and `include`s:
 
 - `Network.jl` — topology, `TransferCapacity`, ATC queries.
 - `MarketOrders.jl` — `SimpleOrder` / `BlockOrder` types.
-- `AlternativeOrderBook.jl`, `BiddingStrategy.jl` — the `:alternative` and `:uc_based` book builders.
 - `Loads.jl`, `Renewables.jl` — demand and RES-forecast queries.
 - `FuelTypeParameters.jl` — per-fuel technical defaults.
 - `TemporalResolutionUtilities.jl` — 15/30/60-min harmonization helpers.

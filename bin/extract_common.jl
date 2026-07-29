@@ -326,7 +326,6 @@ end
 "simulations reference caches: tiny, mutable → replace."
 function simulations_table_specs(zones::Vector{String})
     return NamedTuple[
-        mkspec(schema="simulations", table="generator_inferred_parameters",
                base_where="bidding_zone = ANY(\$1)", base_args=Any[zones],
                refresh=:replace),
         mkspec(schema="simulations", table="unit_firms",

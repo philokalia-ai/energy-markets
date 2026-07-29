@@ -34,7 +34,7 @@ const _OUTAGE_DAY_CACHE_LOCK = ReentrantLock()
 # rebuilds and repeated builds within one process do not re-query. Cleared per
 # process. Callers mutate the returned vector (fleet completion push!/filter), so
 # callers always receive a shallow copy — the cached vector is never handed out.
-const _GENERATOR_MEMO = Dict{Tuple{String,Dates.Date,Bool,Bool,Bool},Vector{Generator}}()
+const _GENERATOR_MEMO = Dict{Tuple{String,Dates.Date,Bool,Bool},Vector{Generator}}()
 const _GENERATOR_MEMO_LOCK = ReentrantLock()
 
 # Registry sanity bound. ENTSO-E's unit registry carries rare corrupt
@@ -113,10 +113,8 @@ end
 # infer_ramp_rates: if true, infer ramp rates from historical generation data (3 months)
 function get_generators(map_code::String, day::Dates.Date;
                        exclude_unavailable::Bool=true,
-                       exclude_variable_renewables::Bool=true,
-                       infer_ramp_rates_flag::Bool=false)
-    memo_key = (map_code, day, exclude_unavailable, exclude_variable_renewables,
-                infer_ramp_rates_flag)
+                       exclude_variable_renewables::Bool=true)
+    memo_key = (map_code, day, exclude_unavailable, exclude_variable_renewables)
     cached = lock(_GENERATOR_MEMO_LOCK) do
         get(_GENERATOR_MEMO, memo_key, nothing)
     end
@@ -367,11 +365,6 @@ function get_generators(map_code::String, day::Dates.Date;
         if filtered_count > 0
             @info "Filtered out $filtered_count variable renewable generators (Wind/Solar) from UC"
         end
-    end
-
-    # Optionally infer ramp rates from historical data
-    if infer_ramp_rates_flag
-        generators = infer_ramp_rates_for_generators(generators, day)
     end
 
     # Memoize the canonical result and hand callers a copy (they mutate it).

@@ -31,7 +31,6 @@ dictionary applies to all three.
 |---|---|---|
 | **ENTSO-E Transparency Platform** (transparency.entsoe.eu), pulled by the maintainers' ETL | all `entsoe.*` | Redistributed with attribution under the [TP terms of use](https://transparency.entsoe.eu/content/static_content/Static%20content/terms%20and%20conditions/terms%20and%20conditions.html); free reuse with source attribution |
 | **Yahoo Finance** via `yfinance` | `yfinance.ttf_f` (ticker `TTF=F`, Dutch TTF natural-gas front-month futures, €/MWh), `yfinance.eua_co2` (ticker `CO2.L`, SparkChange Physical Carbon EUA ETC — physically holds EU Allowances, so its close tracks EUA spot ~1:1) | market-data quotes; used as daily reference closes |
-| **This project (derived)** | `simulations.generator_inferred_parameters` (statistical inference over the ENTSO-E per-unit output history), `simulations.unit_firms` (curated unit→firm ownership map; per-row `source` tag records the curation wave) | same license as the repo |
 
 ## Table by table
 
@@ -158,7 +157,6 @@ Yahoo Finance ticker `CO2.L` (SparkChange Physical Carbon ETC, EUR). The
 carbon-cost input, same strictly-before-the-day rule. History starts Nov
 2021; before that a yearly lookup table applies.
 
-### `simulations.generator_inferred_parameters` — our inference cache
 
 Derived by this project from the per-unit output history: `ramp_up`/`ramp_down`
 (95th-percentile observed ramps, fraction of p_max per hour), `p_min` (5th

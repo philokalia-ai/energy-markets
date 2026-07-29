@@ -24,11 +24,11 @@ guide (what lives where, what calls what, where to start per task). Large
 concerns are split into per-topic files `include`d by a thin parent in
 definition order:
 
-- `src/Euphemia.jl` + `src/clearing/` - Main module spine (deps, solver cache, exports) + the clearing orchestration: `single_zone.jl`, `multi_zone_books.jl`, `multi_zone_run.jl`, `iterative.jl`, `batch_runners.jl`, `batch_workers.jl`
+- `src/Euphemia.jl` + `src/clearing/` - Main module spine (deps, solver cache, exports) + the clearing orchestration: `single_zone.jl`, `multi_zone_books.jl`, `multi_zone_run.jl`, `batch_runners.jl`, `batch_workers.jl`
 - `src/MeritOrderBook.jl` + `src/merit_order/` - The calibrated ex-ante book: `flows_imports.jl` (net imports, ex-ante flows, backstop), `zone_profiles.jl` (ZoneProfile + ZONE_PROFILES + ZoneScenario), `fleet_data.jl` (hydro/p95/reservoir queries), `book_build.jl` (create_merit_order_book)
-- `src/Generators.jl` + `src/generators/` - Generator struct + `registry.jl` (get_generators), `fuel_costs.jl` (TTF/EUA/SRMC), `parameter_inference.jl`, `inference_cache.jl`, `initial_conditions.jl`
+- `src/Generators.jl` + `src/generators/` - Generator struct + `registry.jl` (get_generators), `fuel_costs.jl` (TTF/EUA/SRMC)
 - `src/dbutils.jl` + `src/db/` - `postgres_core.jl` (code-version ledger, pool, sql2df), `duckdb_store.jl` (offline extract backend), `results_store.jl` (simulations.* DDL + writers)
-- `src/MPCC.jl` + `src/mpcc/` - MPCC solver: `solver.jl` (clearing solve + robustness ladder), `order_books.jl` (UC->book adapters), `coupling_metrics.jl`
+- `src/MPCC.jl` + `src/mpcc/` - MPCC solver: `solver.jl` (clearing solve, robustness ladder, competitive price reconstruction), `coupling_metrics.jl`
 - `src/Network.jl` - Network topology, TransferCapacity, and ATC constraints
 - `src/MarketOrders.jl` - Order types (SimpleOrder, BlockOrder)
 - `src/OrderBookResult.jl` - The shared order-book result type + the timeslot helper
@@ -42,7 +42,7 @@ definition order:
 prices = generate_energy_prices("GR", Date(2024, 6, 15);
     order_method=:merit_order,
     save_to_db=true,
-    force_rerun=false)       # Set true to bypass UC cache
+    force_rerun=false)     
 
 # Process all zones for a single date
 result = generate_energy_prices_for_all_zones(Date(2024, 6, 15);
@@ -81,19 +81,19 @@ addprocs(4)
 result = run_multi_zone_market_clearing(Date(2024, 6, 15);
     zones=["GR", "BG", "RO", "HU"],
     order_method=:merit_order,
-    parallel=true)  # UC solves run in parallel, MPCC runs after all complete
+    parallel=true)  
 
 # Date range with parallel UC
 result = run_multi_zone_for_date_range(Date(2023, 1, 1), Date(2024, 12, 31);
     order_method=:merit_order,
     parallel=true,       # UC solves run in parallel per date
-    force_rerun=false,   # Set true to bypass UC cache
+    force_rerun=false, 
     save_to_db=true)
 ```
 
 **Zone discovery:**
 ```julia
-# Zones with generator data (for UC/bidding)
+# Zones with generator data
 zones = get_available_zones(date)
 
 # Zones with transfer capacity data (for multi-zone clearing)
@@ -638,11 +638,7 @@ julia --project=. -e "using Test, Euphemia; include(\"test/test_multi_zone_mpcc.
 ```
 test/
 ├── runtests.jl                  # Main test runner (includes core tests)
-├── test_generator_inference.jl  # Generator parameter inference tests (58 tests)
 ├── test_data_fetching.jl        # DB integration for loads/renewables/etc (23 tests)
-├── test_initial_conditions.jl   # Generator initial state tests (69 tests)
-├── test_uc_enhancements.jl      # UC cost breakdown, solver tuning, batch query tests
-├── test_uc_caching.jl           # UC results caching tests (17 tests)
 ├── test_mpcc.jl                 # MPCC solver tests (50 tests)
 ├── test_multi_zone_mpcc.jl      # Multi-zone transmission tests (21 tests)
 ├── test_network_module.jl       # Network/ATC tests (140 tests)

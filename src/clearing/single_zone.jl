@@ -147,18 +147,17 @@ end
                           silent::Bool=true)
 
 Unified function to generate energy prices for a bidding zone on a specific date through market clearing optimization.
-Supports both hourly and sub-hourly temporal resolutions depending on the order method used.
+Supports hourly and sub-hourly temporal resolutions, following the input data.
 
 # Arguments
 - `bidding_zone::String`: The bidding zone code (e.g., "GR", "DE", "FR")
 - `date::Date`: The date for which to generate prices
-- `order_method::Symbol`: only `:merit_order` (the UC-based and alternative books were removed in cv25)
-  - `:uc_based`: Creates orders preserving Unit Commitment's native temporal resolution (15/30/60 minutes)
-  - `:alternative`: Creates orders at finest available resolution (15/30/60 minutes) from real load/renewable data
+- `order_method::Symbol`: only `:merit_order` (the UC-based and alternative books
+  were removed in cv25)
 - `model::Symbol`: Market clearing model - `:mpcc` (more models may be added later)
 - `optimizer::String`: Optimization solver - "highs" (default), "gurobi", "cplex", "auto"
-- `markup_factor::Float64`: Price markup factor for UC-based orders (default: 1.1)
-- `random_seed::Union{Int,Nothing}`: Random seed for alternative order book (default: nothing)
+- `markup_factor`, `random_seed`, `force_rerun`: INERT since cv25 — they served the
+  deleted UC / alternative books and are accepted only so existing callers do not break
 - `silent::Bool`: Whether to suppress solver output (default: true)
 - `clearing_mode::String`: Label stored with saved prices (default: "single_zone").
   Scenario runs should use a distinct label (e.g. "gr_scn_dc574") so baseline and
@@ -168,19 +167,11 @@ Supports both hourly and sub-hourly temporal resolutions depending on the order 
 # Returns
 - `Dict{String,Float64}`: Dictionary mapping time periods to energy price (€/MWh)
   - Keys are timeslots in format "YYYYMMDD-HHMM" (e.g., "20240618-0000", "20240618-0015")
-  - Both `:uc_based` and `:alternative` methods use consistent timeslot formatting
   Returns empty dict if any step fails.
 
 # Temporal Resolution
-The output resolution depends on the order method and underlying data resolution:
-- **UC-based**: Preserves the native resolution from load/renewable data (15/30/60 minutes)
-- **Alternative**: Automatically detects finest resolution from load/renewable data:
-  - 15-minute data → 96 periods per day
-  - 30-minute data → 48 periods per day  
-  - 60-minute data → 24 periods per day
-
-Both methods now support sub-hourly resolution and will automatically use the finest temporal 
-resolution available in the underlying load and renewable generation data.
+The merit-order book detects the finest resolution in the underlying load and
+renewable data: 15-minute → 96 periods/day, 30-minute → 48, 60-minute → 24.
 
 # Examples
 ```julia

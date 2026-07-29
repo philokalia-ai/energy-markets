@@ -423,7 +423,7 @@ Assumes connection is already to the 'energy' database.
 - `prices`: Dictionary with timeslot keys ("YYYYMMDD-HHMM") and price values in EUR/MWh
 - `bidding_zone`: Bidding zone code (e.g., "GR", "AL")
 - `day`: Date of the prices
-- `order_method`: Method used (:uc_based or :alternative)
+- `order_method`: always `:merit_order` since cv25
 - `clearing_mode`: Market clearing mode ("single_zone" or "multi_zone", default: "single_zone")
 - `optimization_run_id`: Foreign key to simulations.optimization_runs (default: nothing)
 - `batch_size`: Number of records to insert per batch (default: 100)
@@ -581,7 +581,7 @@ Save optimization run metadata to track all optimization attempts (successful an
 # Arguments
 - `bidding_zone`: Bidding zone code (e.g., "GR", "AL", or "MULTI_ZONE" for multi-zone runs)
 - `date`: Date of the optimization
-- `order_method`: Method used (:uc_based or :alternative)
+- `order_method`: always `:merit_order` since cv25
 - `model_type`: Model used (:mpcc, :mpcc_multi_zone, :mpcc_iterative, etc.)
 - `optimizer`: Solver used ("highs", "gurobi", "cplex")
 - `status`: Optimization status (:optimal, :infeasible, :time_limit, etc.)

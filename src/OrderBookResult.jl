@@ -9,19 +9,8 @@ for what it is.
 """
 module OrderBookResult
 
-"""
-Alternative Order Book Generation for MPCC
-
-This module provides functions to create realistic order books by adjusting
-real generator and demand data with random variations, bypassing Unit Commitment
-complexity while maintaining market realism.
-"""
-
-using Dates, Random
-import ..get_generators, ..get_loads, ..get_generation_forecast_for_wind_and_solar
-import ..MarketOrders: SimpleOrder
-import ..MPCC: MPCCOrderBook
-import ..parse_resolution_to_minutes, ..determine_finest_resolution, ..generate_sub_slots_from_source, ..disaggregate_temporal_data
+using Dates
+import ..MPCC: MPCCOrderBook   # the result wraps one
 
 """
     parse_timeslot_to_datetime(timeslot::String, day::Date)

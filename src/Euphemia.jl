@@ -322,7 +322,7 @@ export LinkedBlockOrder, ExclusiveBlockOrder, FlexibleOrder, AggregatedPeriodicO
 export MICOrder, LoadGradientOrder, MeritOrder, PUNOrder
 
 # Entity types
-export Generator, Load, RenewablesGenerationForecast, InitialConditions
+export Generator, Load, RenewablesGenerationForecast
 
 # Helper functions for data retrieval
 export get_generators
