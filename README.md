@@ -53,11 +53,34 @@ bidding, the re-paired FR–GB border with its GB boundary book, the
 interior-Norway import backstop, and a registry sanity bound), backfilled
 over the entire history the public extract covers:
 
+> [!IMPORTANT]
+> **These figures are not ex-ante figures.** The cv22/23/24 records were produced
+> by the pipelined backfill (cv16 and cv17 too — every record built through
+> `run_pipelined_backfill` or `eu_calibration_run.jl PIPELINE=true`, so the lineage
+> figures below are like-for-like), which never resolved the scoped ex-ante flow rule and
+> therefore built its order books with **`:d0` — same-day *observed* cross-border
+> flows**, information no forecaster has before the auction. Measured by re-clearing
+> record days both ways against the stored prices: `:d0` reproduces the record at
+> 93.8–100% bit-identical, the documented ex-ante `:v3` at ~47%
+> ([audit](docs/experiments/exante-audit-2026-07.md)). The live daily forecast is
+> unaffected — it clears through `run_multi_zone_market_clearing` and *does* resolve
+> `:v3`, so it is ex-ante *with respect to flows*; the backtest it is benchmarked against had an
+> information advantage it does not have. cv25 corrects this
+> ([plan](docs/cv25-plan.md)) and will restate the headline against a
+> like-for-like ex-ante baseline.
+>
+> A second correction lands with it: **65 of the 1,304 days (5.0%) carry fewer than
+> 24 UTC hours** — 12 of them a single hour, 2.52% of the record's zone-hours — and
+> were saved as complete. Cause: those days are **missing D-1 load-forecast hours at
+> source** for one zone (SI on 48 of the 65, then BE 8, BG 4), and a zone's book takes
+> its timeslots from the load forecast, so a one-hour zone collapses the coupled
+> period intersection for all 39.
+
 **Comparable full-year window (2025-07-25 → 2026-07-24): mean corr 0.68,
 mean MAE €26.3** (lineage: cv22: 0.67 / €27.4; cv19: 0.64 / €27.2; cv17:
 0.64 / €27.3; cv16: 0.56 / €29.9). Full 2023+ record: mean corr 0.64 /
 MAE €26.0 (2023 carries the post-crisis regime, the hardest to model
-competitively).
+competitively). Read all of these with the correction above.
 
 By year (energy-weighted share of load in zones with corr ≥ 0.75, mean zone
 corr, and zones ≥ 0.75): **2023: 59% / 0.65 / 10 of 39 · 2024: 57% / 0.63 /
@@ -166,7 +189,10 @@ The honest weak spots on the full year, stated plainly:
 Two context numbers from the pre-cv19 frozen sample, so the ex-ante claim
 stays checkable: with *same-day observed* flows instead of the ex-ante flow
 rule that sample's aggregate was corr 0.59 / MAE 31.9 — the fully ex-ante
-version is **not worse, it's slightly better**. On its 12 fully held-out days
+version is **not worse, it's slightly better**. That comparison was made on a
+frozen forecast sample, not on the backfilled record, so it does **not** bound
+the size of the correction at the top of this README; Phase 3 of the cv25 plan
+measures that directly. On its 12 fully held-out days
 the aggregate held at corr 0.62 / MAE 35.3, with the degradation concentrated
 in NO1.
 
@@ -233,8 +259,11 @@ boundary physics enters as data:
   public "offered ATC" data cannot reproduce; a wrong constraint set produces
   wrong flows, so their observed/predicted flow enters as data instead.
 
-For the backward-looking counterfactual the observed same-day flows are
-legitimate inputs. For the **D-1 forecast** they are a data leak — and unlike
+For a *backward-looking* counterfactual the observed same-day flows would be
+legitimate inputs — but this project's published record is not that, it is an
+ex-ante counterfactual, and the correction at the top of this README applies: the
+record was in fact built with them, and cv25 removes them. For the **D-1 forecast**
+they are a data leak — and unlike
 load and RES, no official D-1 flow forecast exists (scheduled exchanges are
 the auction's own output; using them would be circular). So the exogenous
 part is predicted by a simple, versioned rule. The current default (`:v3`
