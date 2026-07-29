@@ -85,6 +85,7 @@ to reconsider the mechanism, not to widen the struct.
 | **19 `ZoneProfile` fields that never vary** across 39 zones | They are constants wearing a parameter's clothes. Move to module constants; the struct keeps only what differs. |
 | **23 of `create_merit_order_book`'s 39 kwargs** | Each shadows a profile field with a `x === nothing ? profile.x : x` line. `with_profile` already exists; one `overrides` argument replaces the lot. |
 | **Duplicate profiles** | `ROMANIA_PROFILE`, `SERBIA_PROFILE`, `HUNGARY_PROFILE` are identical definitions; `IBERIA_PROFILE` equals `SEE_PROFILE`. 22 names describe 17 distinct vectors — name the 17. |
+| **The remaining name-vs-vector gap** | After the Iberia and Sweden-South aliases go, the file still holds **19 constants for 17 distinct vectors**. Measured field-wise: `SE3_PROFILE === NORWAY_ANCHORED_PROFILE`; `SWISS_PROFILE` has silently converged to both; `CONTINENTAL_PROFILE == BALTIC_PROFILE`; `BELGIUM_PROFILE == SLOVENIA_PROFILE`. The first two are pure duplication and should merge. The last two are *semantic coincidences with different rationales* — their real difference lives in the network build (border drops), not the profile — so merging them would hide a distinction rather than reveal one. **Decision: merge the duplicates, keep the coincidences, and say in the atlas why two zones with the same vector are still different treatments.** That is the defined end state for this step. |
 | **Kill-switches AND `:d0`, at ship time — not in Phase 1** | `:d0` is the process default and the SEE single-zone path never resolves a mode, so deleting it in Phase 1 breaks Phase 1's own bit-identity gate by construction. Worse, the Phase-3 "Δ from ex-ante honesty" arm *is* a `:d0` run — deleting it early forces that arm cross-binary, which the plan forbids elsewhere. Keep `:d0`, `:clim`, `:dlag` and the switches through Phase 3 as ablation arms; delete them all in one sweep afterwards. |
 | **`test/archive/`, stale `test/scripts/`, `test/manual/`** | 3 + 42 + 11 files; keep what a third party would run. |
 | **`src/mpcc/order_books.jl`** (363) — the UC→book adapters | Callers are only the `:uc_based` branches (`single_zone.jl:241`, `iterative.jl:132`, `multi_zone_run.jl:200`). |
@@ -92,6 +93,14 @@ to reconsider the mechanism, not to widen the struct.
 | **`bin/iterative_multi_zone_main.jl`** (251) + its workflow | The plan deleted `clearing/iterative.jl` but not its driver. |
 | **Partial cuts**: `_create_multi_zone_order_book_alternative` (~370 lines of `multi_zone_books.jl`), the `:uc_based` branches in `single_zone.jl` / `batch_runners.jl`, the `MARKUP_FACTOR` plumbing | |
 | **Extract the competitive price reconstruction** as a pure function (~140 lines of `mpcc/solver.jl`) | Numerically inert, so Phase-1 eligible. It is the arithmetic that decides every published price and today it cannot execute outside a live MIP solve. Highest-leverage change for an outside reader auditing how a price is made. |
+
+> **The hand-maintained atlas had already drifted.** `docs/calibration-atlas.md`
+> listed RO/RS/HU/SI as plain `SEE_PROFILE` and had no row at all for the
+> import-backed treatment — wrong against the registry it claims to describe. It was
+> corrected in the same PR, but this is precisely why the plan's ship gate requires
+> the zone-strategy table to be **generated from `get_zone_profile`**: a calibration
+> table maintained by hand is wrong within one iteration, and a wrong table is worse
+> than none when it is also the design spec.
 
 > **Consequence recorded during Phase 1.** `docs/experiments/pl-diagnosis/`
 > recommendation #1 was a PL-scoped `unit_srmc_spread` activation, and its harness
