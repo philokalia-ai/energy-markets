@@ -41,8 +41,8 @@ ZoneScenario(;
   that references a missing field throws and the zone is SILENTLY DROPPED
   from the book — if a zone returns zero prices, check this first.
 - `strategist` REPLACES the tagged order list. Tags: unit codes for unit
-  orders, `"RES"`, `"IMPORT"`, `"DEMAND"`, `"BACKSTOP"`, `"EXTRA"`,
-  `"EXPORT_ABS"`; plain `Vector{SimpleOrder}` returns are re-tagged
+  orders, `"RES"`, `"IMPORT"`, `"DEMAND"`, `"BACKSTOP"`, `"EXTRA"`;
+  plain `Vector{SimpleOrder}` returns are re-tagged
   `"STRATEGIST"`. `ctx.firm_of` maps unit code → firm (from
   `simulations.unit_firms` in the extract).
 - `fleet_modifier` runs AFTER fleet completion/truthing on purpose — removed

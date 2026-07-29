@@ -31,8 +31,8 @@ _is_hydro(g::Generator) = g.fuel_type in WATER_VALUE_FUEL_TYPES ||
 Stage 1 — true the offered fleet to the zone's demonstrated capability and
 price it: fleet completion (aggregate small units up to the p95/installed
 truth target), fleet-truthing derate of baseload types, the thermal SRMC
-premium / nuclear bid floor, and the cv18 per-unit spread factors.
-Returns `(generators, unit_spread_factor, apply_unit_spread)`.
+premium / nuclear bid floor.
+Returns the trued-up `generators`.
 """
 function _true_up_fleet(generators::Vector{Generator}, bidding_zone::String,
     day::Date, profile::ZoneProfile;
@@ -176,38 +176,6 @@ function _true_up_fleet(generators::Vector{Generator}, bidding_zone::String,
     # €9 vs the €55 floor).
     apply_nuclear_floor = nuclear_srmc_floor > 0.0 &&
                           !(anchor_active && opportunity_anchor == :nuclear)
-    # Per-unit SRMC spread (cv18) is applied at ORDER-PRICE time in the
-    # order loop below (to gmc), NOT here: applying it to marginal_cost
-    # would also perturb the UC-lite must-run SELECTION (SRMC <=
-    # 1.15 x gas gate) and the committed-set ordering, which the validated
-    # prototype left untouched — measured: spraying mc reproduced only
-    # half the CSOUTH gain and worsened MAE (+2.4) via a shifted
-    # commitment set.
-    apply_unit_spread = profile.unit_srmc_spread > 0.0
-    # Rank-based spread factors (cv18): thermal units ordered by p_max
-    # (desc, code tiebreak) get equally-spaced factors in 1 ∓ spread —
-    # the largest unit prices cheapest. Physically grounded (bigger CCGTs
-    # are newer/more efficient as a rule) and draw-free: a hash draw was
-    # measured at ±0.1 corr variance across seeds on IT-CSOUTH (0.51–0.71)
-    # — the mechanism helped under EVERY draw, but the per-zone outcome
-    # depended on luck; ranking removes the luck and is bit-reproducible.
-    unit_spread_factor = Dict{String,Float64}()
-    if apply_unit_spread
-        # Canonical fixed assignment: unsalted FNV-1a draw per unit code.
-        # Deterministic permutation schemes were measured and rejected —
-        # ANY fixed ordering has same-parity/adjacency clusters, and the
-        # units that pin a zone's price can land in one cluster (IT-CSOUTH
-        # collapsed to stock under both monotone and interleaved ranking,
-        # while every hash draw improved it, 0.51–0.71 across salts). The
-        # unsalted draw is arbitrary-but-fixed (bit-reproducible across
-        # runs and Julia versions); inferred heat rates replace it when
-        # unit history supports them.
-        for g in generators
-            g.fuel_type in srmc_exempt_fuels && continue
-            unit_spread_factor[g.code] =
-                1.0 + profile.unit_srmc_spread * (2.0 * _unit_hash01(g.code) - 1.0)
-        end
-    end
     if !isempty(derate_scale) || apply_srmc_premium || apply_nuclear_floor
         generators = [begin
             s = get(derate_scale, g.fuel_type, 1.0)
@@ -225,7 +193,7 @@ function _true_up_fleet(generators::Vector{Generator}, bidding_zone::String,
                 g
         end for g in generators]
     end
-    return generators, unit_spread_factor, apply_unit_spread
+    return generators
 end
 
 """
@@ -601,8 +569,7 @@ function create_merit_order_book(
         generators = get_generators(bidding_zone, day)
 
         # ── Stage 1: true up + price the offered fleet ──────────────────
-        generators, unit_spread_factor, apply_unit_spread =
-            _true_up_fleet(generators, bidding_zone, day, profile;
+        generators = _true_up_fleet(generators, bidding_zone, day, profile;
                 fleet_completion, fleet_truthing, derate_headroom,
                 thermal_srmc_multiplier, nuclear_srmc_floor,
                 anchor_active, opportunity_anchor)
@@ -966,13 +933,6 @@ function create_merit_order_book(
                            haskey(anchor_prices, ts)) ?
                           max(g.marginal_cost, eff_nuclear_share * anchor_prices[ts]) :
                           g.marginal_cost
-                    # cv18 per-unit SRMC spread: order prices only (must-run
-                    # blocks + tranches scale together via gmc); the must-run
-                    # SELECTION above used the unsprayed costs, exactly like
-                    # the validated prototype.
-                    if apply_unit_spread
-                        gmc *= get(unit_spread_factor, g.code, 1.0)
-                    end
                     # cv23 FR-cap ceiling: bound anchor-lifted nuclear supply
                     # prices (must-run second block + tranches, after the
                     # scarcity/peak markup) to a modest markup over the coupled
@@ -1046,14 +1006,6 @@ function create_merit_order_book(
             if elastic_qty > 0.1
                 push!(tagged, (SimpleOrder(:demand, demand_elastic_price, elastic_qty,
                     Symbol(bidding_zone), date_time, resolution_minutes), "DEMAND"))
-                demand_orders_count += 1
-            end
-            # Export-absorption ladder (cv18): elastic demand below the thermal
-            # band that binds only in RES-surplus hours — see the profile field
-            # docstring. Tagged distinctly so the bids view can label it.
-            for (step_price, step_mw) in profile.export_absorption_steps
-                push!(tagged, (SimpleOrder(:demand, step_price, step_mw,
-                    Symbol(bidding_zone), date_time, resolution_minutes), "EXPORT_ABS"))
                 demand_orders_count += 1
             end
             total_demand_quantity += gd
