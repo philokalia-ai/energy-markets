@@ -137,6 +137,11 @@ Plus the same-class stragglers, which are not optional here:
 - Price-provenance observability: the rent-sign check abandons the competitive
   reconstruction for a whole period with no warning and no field on the result.
   Make it countable before calibrating against those prices.
+- **The rent-sign fallback is period-WIDE across unrelated components** (found by
+  #223's review): a violation on one border discards the reconstructed price of
+  every other component in that period too, including isolated ones that were
+  perfectly consistent. Now one `if`-scope away from being fixable per component,
+  and pinned by a test.
 - The marginal-price accumulator mixes supply-max and demand-min in one variable,
   seeded by whichever marginal order is enumerated first — the published price for
   such an hour is an artifact of book-assembly order. Same class as the provenance
