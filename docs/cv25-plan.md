@@ -93,6 +93,13 @@ to reconsider the mechanism, not to widen the struct.
 | **Partial cuts**: `_create_multi_zone_order_book_alternative` (~370 lines of `multi_zone_books.jl`), the `:uc_based` branches in `single_zone.jl` / `batch_runners.jl`, the `MARKUP_FACTOR` plumbing | |
 | **Extract the competitive price reconstruction** as a pure function (~140 lines of `mpcc/solver.jl`) | Numerically inert, so Phase-1 eligible. It is the arithmetic that decides every published price and today it cannot execute outside a live MIP solve. Highest-leverage change for an outside reader auditing how a price is made. |
 
+> **Consequence recorded during Phase 1.** `docs/experiments/pl-diagnosis/`
+> recommendation #1 was a PL-scoped `unit_srmc_spread` activation, and its harness
+> `ab_pl_both.jl` now throws. Under "git holds the history" that is accepted — but
+> the PL path is no longer a flag flip, it is a re-implementation. Any future
+> revival should come back as a border-scoped redesign validated on the coupled
+> footprint, which was the cv18 verdict's own prescription.
+
 Gate: the 39-zone EU + GR single-zone bit-identity guard, at every step. Prices do
 not move in Phase 1.
 
