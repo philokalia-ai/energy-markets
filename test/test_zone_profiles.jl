@@ -103,9 +103,11 @@ const V10_TRANCHES = [(0.55, 0.95), (0.20, 1.05), (0.15, 1.25), (0.10, 1.60)]
         @test with_profile(ITALY_CNORTH_PROFILE; import_backstop=false) == ITALY_PROFILE
         @test get_zone_profile("IT-NORTH") === ITALY_PROFILE
         @test get_zone_profile("IT-Sardinia") === ITALY_PROFILE
-        @test ITALY_PROFILE.unit_srmc_spread == 0.0
-        @test isempty(get_zone_profile("DK1").export_absorption_steps)
-        @test isempty(SEE_PROFILE.export_absorption_steps)
+        # cv18's parked levers (unit_srmc_spread / export_absorption_steps) were
+        # removed in cv25's subtraction phase — they were default-inert in every
+        # zone and never activated. git holds the implementation.
+        @test !(:unit_srmc_spread in fieldnames(ZoneProfile))
+        @test !(:export_absorption_steps in fieldnames(ZoneProfile))
         # AT/CH/BE gained the backstop, keeping their existing calibration
         # (the scarcity credit stays scoped to the SEE-east zones — measured)
         @test AUSTRIA_PROFILE.import_backstop == true
