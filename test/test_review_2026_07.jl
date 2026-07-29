@@ -120,6 +120,25 @@ using DataFrames
     end
 
     # -----------------------------------------------------------------------
+    # 5b. Record completeness has TWO dimensions. The coupled clear intersects
+    #     every zone's periods, so one zone's short book truncates the whole
+    #     39-zone day — which still carries all 39 zones. Measured on the cv24
+    #     record: 65 of 1,304 days hold fewer than 24 UTC hours, 12 of them a
+    #     single hour, and every one of them passed a zone-only completeness
+    #     check and was skipped by resume forever.
+    # -----------------------------------------------------------------------
+    @testset "completeness needs zones AND hours" begin
+        nz_req, nh_req = 39, 24
+        ok(nz, nh) = nz >= nz_req && nh >= nh_req
+        @test ok(39, 24)
+        @test !ok(39, 1)      # 2025-11-12 in the real record: all zones, one hour
+        @test !ok(39, 22)
+        @test !ok(38, 24)     # the zone-only case the first fix caught
+        # a UTC day always has 24 hours, so <24 is never DST — it is truncation
+        @test !ok(39, 23)
+    end
+
+    # -----------------------------------------------------------------------
     # 5. A date on which every zone was SKIPPED is a resume no-op, not a
     #    failure — five in a row used to trip "EARLY TERMINATION".
     # -----------------------------------------------------------------------
