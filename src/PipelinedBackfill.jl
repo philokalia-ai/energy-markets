@@ -429,6 +429,23 @@ function run_pipelined_backfill(days, zones::Vector{String}=String[];
         mpcc_time_limit::Float64=900.0,
         mpcc_mip_gap::Float64=1e-6,
         mpcc_heuristic_effort::Union{Float64,Nothing}=nothing,
+        # Minimum distinct price periods a day must produce to be SAVED.
+        #
+        # The coupled clear intersects every zone's periods
+        # (`common_periods = reduce(intersect, …)` in multi_zone_books.jl), so a
+        # SINGLE zone with a short book truncates the whole 39-zone day. That
+        # trim is deliberate on the forecast path (it drops the unpublished
+        # next-CET-day tail) but on a historical backfill it silently produces
+        # one-hour days: the day still carries all 39 zones, still prints DONE,
+        # and resume then skips it forever. Measured on the cv24 record —
+        # 65 of 1,304 days (5.0%) hold fewer than 24 UTC hours, 12 of them a
+        # single hour, losing 30,810 zone-hours (2.52% of the record).
+        #
+        # A UTC day always has 24 hours (no DST ambiguity), so the honest bar
+        # for an hourly clear is 24. Set 0 to restore the old save-anything
+        # behaviour. This gate never changes a price — only whether a
+        # truncated day is recorded as complete.
+        min_price_periods::Int=24,
         # Same cv20 policy as run_multi_zone_market_clearing: `nothing` resolves
         # to decomposed on the enriched (EU-footprint) path — the canonical,
         # solver-invariant mode — and monolithic otherwise. Explicit wins.
@@ -477,17 +494,26 @@ function run_pipelined_backfill(days, zones::Vector{String}=String[];
         saved_days = try
             df = sql2df("""
                 SELECT (date_time_utc AT TIME ZONE 'UTC')::date AS d,
-                       COUNT(DISTINCT bidding_zone) AS nz
+                       COUNT(DISTINCT bidding_zone) AS nz,
+                       COUNT(DISTINCT date_time_utc) AS nh
                 FROM simulations.energy_prices
                 WHERE clearing_mode = \$1 AND code_version = \$2
                   AND date_time_utc >= (\$3::date::timestamp AT TIME ZONE 'UTC')
                   AND date_time_utc <  (\$4::date::timestamp AT TIME ZONE 'UTC')
                 GROUP BY 1
                 """, [clearing_mode, cv, minimum(days), maximum(days) + Day(1)])
-            complete = Set(Date(r.d) for r in eachrow(df) if Int(r.nz) >= length(zones))
+            # BOTH dimensions. Zone count alone is not completeness: the cv24
+            # record holds 65 days that carry all 39 zones and fewer than 24
+            # hours (12 of them a single hour) because one zone's short book
+            # collapsed the coupled period intersection. Those days passed a
+            # zone-only check and were skipped forever.
+            complete = Set(Date(r.d) for r in eachrow(df)
+                           if Int(r.nz) >= length(zones) && Int(r.nh) >= min_price_periods)
             for r in eachrow(df)
-                Int(r.nz) < length(zones) &&
-                    @warn "resume: $(Date(r.d)) is SHORT ($(Int(r.nz))/$(length(zones)) zones) — re-processing"
+                nz, nh = Int(r.nz), Int(r.nh)
+                (nz >= length(zones) && nh >= min_price_periods) && continue
+                @warn "resume: $(Date(r.d)) is SHORT ($nz/$(length(zones)) zones, " *
+                      "$nh/$min_price_periods hours) — re-processing"
             end
             complete
         catch e
@@ -718,6 +744,24 @@ function run_pipelined_backfill(days, zones::Vector{String}=String[];
             i += 1
             put!(tokens, nothing)             # release for the next day
             total = r.book_secs + r.waitq_secs + r.solve1_secs + r.rebuild_secs + r.solve2_secs
+            # Truncation gate (see min_price_periods). Checked here, at the
+            # writer, so it applies to whatever the clear actually produced
+            # rather than to what the book intended.
+            n_periods = r.ok && r.final !== nothing && !isempty(r.final.market_prices) ?
+                maximum(length(pd) for pd in values(r.final.market_prices)) : 0
+            if r.ok && _usable(r.final) && n_periods < min_price_periods
+                @error "DAY $(r.day) TRUNCATED — only $n_periods price period(s), " *
+                       "need $min_price_periods. One zone's short book collapses the " *
+                       "coupled intersection for every zone. NOT saved (rerun the day " *
+                       "once its inputs are complete; min_price_periods=0 disables this)."
+                failed += 1
+                # Same housekeeping as the FAIL branch: a day that is not
+                # recorded must not leave its staged books behind either.
+                cfg.books_dir === nothing || _cleanup_pipeline_staging(cfg.books_dir, r.day)
+                println("DAY $(r.day) TRUNCATED status=$(r.status) periods=$n_periods [$i/$N]")
+                flush(stdout)
+                continue
+            end
             if r.ok && _usable(r.final)
                 if collect_prices
                     day_prices[r.day] = deepcopy(r.final.market_prices)
