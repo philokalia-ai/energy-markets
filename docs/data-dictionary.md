@@ -196,7 +196,7 @@ market day, captured right before block-merging — the same view the
 `market_date, zone, ts, side (supply|demand), price (€/MWh), mw, owner,
 code_version`. `owner` is the generation-unit code for unit ladders (join
 `simulations.unit_firms` for firm attribution) or a mechanism tag: `RES`,
-`IMPORT`, `DEMAND`, `BACKSTOP`, `EXTRA`, `EXPORT_ABS`, fleet-completion
+`IMPORT`, `DEMAND`, `BACKSTOP`, `EXTRA`, fleet-completion
 aggregates (`AGG-<zone>-<type>`). ~150k rows / ~300 KB per 39-zone day
 (~112 MB/yr). Two-pass clears keep the final (pass-2) book. These are MODEL
 bids (the competitive counterfactual), not actual market orders.
