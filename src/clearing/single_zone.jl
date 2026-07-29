@@ -139,7 +139,7 @@ end
 
 """
     generate_energy_prices(bidding_zone::String, date::Date; 
-                          order_method::Symbol=:uc_based, 
+                          order_method::Symbol=:merit_order, 
                           model::Symbol=:mpcc,
                           optimizer::String="auto",
                           markup_factor::Float64=1.1,
@@ -152,7 +152,7 @@ Supports both hourly and sub-hourly temporal resolutions depending on the order 
 # Arguments
 - `bidding_zone::String`: The bidding zone code (e.g., "GR", "DE", "FR")
 - `date::Date`: The date for which to generate prices
-- `order_method::Symbol`: Method for creating orders - `:uc_based`, `:alternative` or `:merit_order`
+- `order_method::Symbol`: only `:merit_order` (the UC-based and alternative books were removed in cv25)
   - `:uc_based`: Creates orders preserving Unit Commitment's native temporal resolution (15/30/60 minutes)
   - `:alternative`: Creates orders at finest available resolution (15/30/60 minutes) from real load/renewable data
 - `model::Symbol`: Market clearing model - `:mpcc` (more models may be added later)
@@ -189,7 +189,6 @@ prices = generate_energy_prices("GR", Date(2025, 7, 24))
 println("Noon price: €\$(prices["20250724-1200"])/MWh")
 
 # Generate prices using alternative order book (auto-detects temporal resolution)
-prices_alternative = generate_energy_prices("AL", Date(2024, 6, 18); order_method=:alternative)
 println("Number of price periods: \$(length(prices_alternative))")  # Could be 24, 48, or 96 depending on data
 
 # Access specific time periods by timeslot
@@ -203,7 +202,7 @@ avg_price = sum(price_values) / length(price_values)
 ```
 """
 function generate_energy_prices(bidding_zone::String, date::Date;
-    order_method::Symbol=:uc_based,
+    order_method::Symbol=:merit_order,
     model::Symbol=:mpcc,
     optimizer::String="auto",
     markup_factor::Float64=1.1,
@@ -219,8 +218,8 @@ function generate_energy_prices(bidding_zone::String, date::Date;
     fleet_modifier::Union{Nothing,Function}=nothing)
 
     # Validate inputs
-    if !(order_method in [:uc_based, :alternative, :merit_order])
-        error("Invalid order_method: $order_method. Must be :uc_based, :alternative or :merit_order")
+    if order_method != :merit_order
+        error("Invalid order_method: $order_method. Only :merit_order remains — the UC-based and alternative books were removed in cv25.")
     end
 
     if !(model in [:mpcc])
@@ -236,19 +235,9 @@ function generate_energy_prices(bidding_zone::String, date::Date;
         println("\n📋 Step 1: Creating Order Book...")
         order_book = nothing
 
-        if order_method == :uc_based
-            println("   Using UC-based order creation")
-            order_book = create_typed_order_book(bidding_zone, date;
-                markup_factor=markup_factor,
-                optimizer=optimizer,
-                force_rerun=force_rerun
-            )
-
-        elseif order_method in (:alternative, :merit_order)
-            println("   Using $(order_method == :alternative ? "alternative" : "merit-order") book creation")
-            order_book_result = order_method == :alternative ?
-                                create_adjusted_order_book(bidding_zone, date; random_seed=random_seed) :
-                                create_merit_order_book(bidding_zone, date;
+        if order_method == :merit_order
+            println("   Using merit-order book creation")
+            order_book_result = create_merit_order_book(bidding_zone, date;
                                     load_modifier=load_modifier,
                                     renewable_modifier=renewable_modifier,
                                     extra_orders=extra_orders,

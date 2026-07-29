@@ -32,7 +32,7 @@ import ..GAS_PLANT_EFFICIENCY, ..GAS_EMISSION_FACTOR, ..GAS_VOM_COST
 import ..MarketOrders: SimpleOrder
 import ..MPCC: MPCCOrderBook
 import ..disaggregate_temporal_data, ..replicate_to_finer_resolution
-import ..AlternativeOrderBook: AdjustedOrderBookResult, parse_timeslot_to_datetime
+import ..OrderBookResult: AdjustedOrderBookResult, parse_timeslot_to_datetime
 
 """
     get_net_imports(bidding_zone::String, day::Date) -> Dict{Int,Float64}
