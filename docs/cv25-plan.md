@@ -240,3 +240,48 @@ cv24 flows — the real (documented) hazard is same-cv cross-mode.
   is an assumption until someone checks it.
 - **The reproducibility recipe** is versioned: the published artifact reproduces cv24;
   after cv25 the docs must say which tag reproduces which record.
+
+---
+
+## Phase 0 results (2026-07-29)
+
+**0.2 Restatement — done.** README correction box + ledger correction, pointing at the
+audit and this plan. The live forecast is explicitly exempted: it resolves `:v3`.
+
+**0.3 Truncated days — the premise was wrong, and there is a root cause.**
+The source data is *present*: for 2025-11-12, 2024-03-05 and 2023-10-29 the extract
+holds all 39 zones × 24 hours of day-ahead load forecast and 24 hours of offered ATC.
+So these days are **recoverable, not holes** — the plan's "record explicit holes"
+option is off the table.
+
+Reproduced on 2025-11-12 through the real path (`mz_build_books`, 39 zones, enriched):
+`dropping 23 period(s) not covered by all zones`, result `periods=1 nodes=39`, **zero
+zones reported as failed**. The culprit is **SI**: its standalone book build on that
+day throws
+
+```
+MethodError: Cannot `convert` an object of type Missing to an object of type Float64
+```
+
+— a NULL in SI's input reaching a `Float64` conversion. Under the multi-zone path the
+zone still yields a book, but a **one-slot** one, and the coupled intersection then
+truncates all 39 zones to that single hour.
+
+So the defect is: **a NULL in one zone's data silently collapses the whole footprint's
+day**, and the day is saved as complete. PR #215's gate stops the *saving*; the NULL
+handling and the intersection's silent collapse are Phase-2 work. Note the log output
+of the threaded per-zone builds interleaves, so zone attribution must come from a
+direct per-zone probe, not from log position.
+
+**0.4 Cold start — real, and larger than expected.** The extract begins **2022-12-01**;
+the record begins 2023-01-01. `:v3`'s analogue pool wants 365 trailing days, so day one
+has **31**. The first ~11 months of any cv25 backfill run on a truncated pool. Decide
+the policy (accept the degraded pool and document it, start the record later, or extend
+the extract backwards) before Phase 5, not during it.
+
+**0.6 Lookahead sweep — clean beyond the two known sites.** The only day-inclusive
+upper bounds in `src/` are `registry.jl:182` and `:266` (both already scheduled for
+Phase 2). Two non-sargable `DATE(date_time_utc) = $x` filters exist
+(`results_store.jl:520`, `batch_runners.jl:519`) — a performance issue, not a lookahead.
+
+**0.1 and 0.5 remain.**
