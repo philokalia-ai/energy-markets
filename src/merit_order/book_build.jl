@@ -417,19 +417,21 @@ end
 Create a deterministic merit-order-based order book for MPCC clearing.
 
 # Keyword arguments (bidding strategy parameters)
-- `tranches`: supply tranches as (capacity share, price multiplier on SRMC)
+
+Only parameters that actually DIFFER between zones are overridable. Everything
+that held the same value in all 39 zones is a module constant — `TRANCHES`,
+`PRICE_CAP`, `DEMAND_ELASTIC_SHARE`/`_PRICE`, `FLEET_COMPLETION`,
+`FLEET_TRUTHING`, `DERATE_HEADROOM`, `MUST_RUN_*`, `AVAILABILITY_FACTOR`,
+`PEAK_EXPONENT`, `WATER_VALUE_DRY_BOOST`, `BACKSTOP_*`, `NUCLEAR_AVAIL_*` —
+and is no longer a keyword argument.
+
+- `profile`: the zone's `ZoneProfile`; the normal way to vary anything below
 - `scarcity_threshold`: capacity margin below which scarcity markup kicks in
-- `scarcity_kappa`: quadratic scarcity markup coefficient
+- `scarcity_kappa` / `peak_kappa`: scarcity and peak markup coefficients
 - `water_value_base` / `water_value_span`: hydro opportunity cost as a
   multiple of gas SRMC, scaled across the day's demand range
-- `demand_elastic_share` / `demand_elastic_price`: size and price of the
-  price-sensitive demand tail
-- `price_cap`: price of the inelastic demand tranche
-- `fleet_completion`: add aggregate capacity where the type's recent output
-  (p95) exceeds the unit-level fleet (under-reported fleets: RO/BG/RS)
-- `fleet_truthing` / `derate_headroom`: derate baseload types whose
-  unit-level fleet exceeds `derate_headroom ×` recent p95 — phantom
-  capacity from unfiled derates or fuel constraints (2022 GR lignite)
+- `thermal_srmc_multiplier`, `hydro_model`, `nuclear_srmc_floor`,
+  `opportunity_anchor`, `anchor_share`: the remaining per-zone levers
 
 # Scenario hooks (all default `nothing`; when all are `nothing` the code path
 # is byte-identical to the no-kwargs call)

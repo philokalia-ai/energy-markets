@@ -393,12 +393,6 @@ Base.@kwdef struct ZoneProfile
     # MARKUP otherwise cannot see the backstop supply, so restored-import days
     # can keep a residual markup overshoot. 0 = off (default).
     backstop_scarcity_credit::Float64 = 0.0
-    # Two-pass anchor refs over DROPPED borders: include dropped in-footprint
-    # borders in the opportunity-anchor reference, weighted by observed
-    # climatology import flow. SE3's case: its real marginal supplier is
-    # Norrland hydro over the dropped SE2–SE3 cut (~5 GW observed) while the
-    # endogenous ref saw only DK1's ~0.3 GW border, pinning SE3 to DK1's
-    # night price. Off by default.
     # Price RETAINED-border observed net exports at the coupled/anchor
     # reference instead of firm demand at the cap (pass 2, anchored zones
     # only): a real exporter curtails its export under domestic stress

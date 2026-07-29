@@ -95,7 +95,7 @@ each unit's *rational competitive bid*, not a simulated central dispatch (UC
 answers "what would a planner run", pins prices to the most expensive committed
 unit, and is ~100× slower — impractical for a 39-zone two-pass clear). The one
 piece of dispatch logic that survives is **UC-lite commitment**: thermal units
-with SRMC ≤ `must_run_srmc_threshold` × gas-SRMC are stacked by marginal cost
+with SRMC ≤ `MUST_RUN_SRMC_THRESHOLD` × gas-SRMC are stacked by marginal cost
 until derated capacity covers 1.05 × the day's **peak** residual demand; that
 set is "committed" (commitment follows the peak), so its minimum load is
 must-run through the overnight trough — which is what lets prices collapse
@@ -115,14 +115,14 @@ Every zone-slot book uses the same skeleton; regions only change parameters:
 | Demand | 98% of gross load / 2% tail | €3,000 cap / €250 elastic |
 
 Scarcity factor on upper tranches:
-`1 + scarcity_kappa · max(0, scarcity_threshold − margin)² + peak_kappa · norm_demand^peak_exponent`
+`1 + scarcity_kappa · max(0, scarcity_threshold − margin)² + peak_kappa · norm_demand^PEAK_EXPONENT`
 — the first term fires when the derated capacity margin over residual demand
 genuinely tightens; the second is peak-hour strategic bidding (participants
 know when the peak is; the 4th power concentrates it there).
 
 Fleet honesty runs before any bidding: **fleet completion** (per-type aggregate
 capacity missing from the unit list is added back) and **fleet truthing**
-(baseload types derated to `derate_headroom` × trailing-30-day p95 output when
+(baseload types derated to `DERATE_HEADROOM` × trailing-30-day p95 output when
 the paper fleet exceeds what actually runs).
 
 Reading the region table in §2 against this skeleton: regional strategies are
@@ -137,7 +137,7 @@ often each region is genuinely tight).
 
 Four orthogonal mechanisms carry all of the above:
 
-1. **`ZoneProfile`** (`src/MeritOrderBook.jl`) — ~23 data fields, no logic:
+1. **`ZoneProfile`** (`src/merit_order/zone_profiles.jl`) — **20** data fields, no logic (cv25 phase 1 moved the 17 that held the same value in all 39 zones to module constants):
    tranches, must-run, scarcity/peak shape, water-value parameters,
    fleet-truthing, and the calibration levers (`thermal_srmc_multiplier`,
    `hydro_model`, `nuclear_srmc_floor`, `opportunity_anchor`, `anchor_share`).
