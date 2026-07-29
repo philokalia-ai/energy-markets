@@ -310,4 +310,37 @@ upper bounds in `src/` are `registry.jl:182` and `:266` (both already scheduled 
 Phase 2). Two non-sargable `DATE(date_time_utc) = $x` filters exist
 (`results_store.jl:520`, `batch_runners.jl:519`) — a performance issue, not a lookahead.
 
-**0.1 and 0.5 remain.**
+**0.1 Which flow mode measured which calibration decision — the surface is small.**
+The scoped resolution landed in `cb47b67` ("`:v2` is the default for the EU-footprint
+path, cv16 onward"). Every calibration A/B harness that decided a shipped treatment
+calls `run_multi_zone_market_clearing`, i.e. the sequential path that *does* resolve
+it:
+
+| decision | harness | path |
+|---|---|---|
+| cv17 weak-zone import backstops | `test/scripts/weak_zone_prototypes.jl` | sequential (mode set explicitly) |
+| cv17 benchmark | `test/scripts/cv17_bench.jl` | sequential (scoped default) |
+| cv19 `:v3` analogue flows | `docs/experiments/analogue-flows/ab_price_v3.jl` | sequential (mode set explicitly) |
+| cv21 Viking | `cv21-dk1-viking/ab_confirm.jl`, `test/scripts/cv21_guards.jl` | sequential |
+| cv22 UA + bug batch | `cv22/ab_cv22.jl`, `cv22_guard.jl`, `see_delta.jl` | sequential |
+| cv23 FR nuclear + FR cap | `cv23/ab_cv23.jl`, `frcap_decomp.jl`, `frcap_verify.jl` | sequential |
+| IT-NORTH / PL / NL diagnoses | `*/ab_*.jl` | sequential |
+
+The only pipeline callers among the experiment scripts are a crash test
+(`cv22/test_pipeline_crash.jl`) and a scenario runner that sets the mode explicitly.
+
+**So the flow defect contaminated the RECORD, not the calibration decisions** — from
+cv16 onward those were measured under `:v2`/`:v3`. This bounds Phase 4: no treatment
+needs revisiting *on account of the flow defect*. Every treatment was still measured
+under the doubled ATC, which is a separate and much larger claim on Phase 4's scope.
+Pre-cv16 decisions (the v10 SEE baseline, fleet truthing) predate the scoped default
+and were measured with `:d0` everywhere — they are base calibration, not import
+mechanisms.
+
+**0.5 Fix-4 frequency — NOT rare; the plan's assumption was wrong.**
+Sampling every 14th day over 2023-01-01..2026-07-24 (92 days): **34 of them (37%)**
+have at least one unit whose *only* output in the 60-day probe window falls on the
+delivery day itself. That is an upper bound on the days the fix changes the fleet —
+the probe only decides membership for units the registry's date-validity filter
+rejects — but it is nowhere near the "fires on few days, its arm is nearly free"
+the plan assumed. **Fix 4 needs a full ablation arm, not a token one.**
