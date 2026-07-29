@@ -225,6 +225,48 @@ const UA_BOOK_PL = UA_BOOK(["UA", "UA_DobTPP"])    # PL adds the Dobrotvir radia
 # =============================================================================
 # ZONE PROFILES — per-region bid-construction calibration
 # =============================================================================
+# ---------------------------------------------------------------------------
+# Model constants
+# ---------------------------------------------------------------------------
+# These were `ZoneProfile` fields, but they hold the same value in all 39 zones
+# — constants wearing a parameter's clothes. A zone's PROFILE should carry only
+# what actually differs between zones, so that the struct and the published
+# zone-strategy table are the same object seen twice. Anything here that a
+# future zone genuinely needs to vary comes back as a field, deliberately.
+
+"SRMC tranches: (share of p_max, price multiplier), cheapest first."
+const TRANCHES = [(0.55, 0.95), (0.20, 1.05), (0.15, 1.25), (0.10, 1.60)]
+"Must-run blocks bid at this fraction of the unit's SRMC (absolute below-cost discount)."
+const MUST_RUN_PRICE_FACTOR = 0.05
+"A unit is must-run when its SRMC is below this multiple of the zone's gas SRMC."
+const MUST_RUN_SRMC_THRESHOLD = 1.15
+"Fraction of nameplate offered by default."
+const AVAILABILITY_FACTOR = 0.80
+"Exponent of the peak-hour scarcity markup."
+const PEAK_EXPONENT = 4.0
+"Dry-year multiplier on the water value."
+const WATER_VALUE_DRY_BOOST = 1.0
+"Share of demand bid elastically."
+const DEMAND_ELASTIC_SHARE = 0.02
+"Price of the elastic demand block (EUR/MWh)."
+const DEMAND_ELASTIC_PRICE = 250.0
+"Bid cap (EUR/MWh)."
+const PRICE_CAP = 3000.0
+"Complete the offered fleet up to the p95/installed truth target."
+const FLEET_COMPLETION = true
+"Derate baseload types to their demonstrated trailing capability."
+const FLEET_TRUTHING = true
+"Headroom multiplier on the fleet-truthing derate target."
+const DERATE_HEADROOM = 1.15
+"Import backstop: price multiple of the zone gas SRMC."
+const BACKSTOP_PRICE_MULT = 1.8
+"Import backstop: trailing same-weekday window (weeks)."
+const BACKSTOP_WEEKS = 8
+"Nuclear availability at/above which no opportunity premium applies."
+const NUCLEAR_AVAIL_REF = 0.80
+"Nuclear availability at/below which the premium saturates (crisis floor)."
+const NUCLEAR_AVAIL_FLOOR = 0.50
+
 """
     ZoneProfile
 
@@ -247,24 +289,11 @@ Fields are data, not logic. Two levers extend the old kwargs:
   (Nordic — water value from reservoir filling level, decoupled from gas).
 """
 Base.@kwdef struct ZoneProfile
-    tranches::Vector{Tuple{Float64,Float64}} =
-        [(0.55, 0.95), (0.20, 1.05), (0.15, 1.25), (0.10, 1.60)]
-    must_run_price_factor::Float64 = 0.05
-    must_run_srmc_threshold::Float64 = 1.15
-    availability_factor::Float64 = 0.80
     scarcity_threshold::Float64 = 1.4
     scarcity_kappa::Float64 = 3.0
     peak_kappa::Float64 = 1.2
-    peak_exponent::Float64 = 4.0
     water_value_base::Float64 = 0.85
-    water_value_dry_boost::Float64 = 1.0
     water_value_span::Float64 = 0.9
-    demand_elastic_share::Float64 = 0.02
-    demand_elastic_price::Float64 = 250.0
-    price_cap::Float64 = 3000.0
-    fleet_completion::Bool = true
-    fleet_truthing::Bool = true
-    derate_headroom::Float64 = 1.15
     thermal_srmc_multiplier::Float64 = 1.0
     hydro_model::Symbol = :gas_anchored
     nuclear_srmc_floor::Float64 = 0.0
@@ -294,8 +323,6 @@ Base.@kwdef struct ZoneProfile
     # (byte-identical). See docs/experiments/cv23-fr-nuclear.md.
     nuclear_avail_share_lo::Float64 = 0.0
     nuclear_avail_share_hi::Float64 = 0.0
-    nuclear_avail_ref::Float64 = 0.80    # winter-peak availability: no premium at/above
-    nuclear_avail_floor::Float64 = 0.50  # crisis / deep-maintenance floor: premium saturates at/below
     # cv23 FR-cap ceiling. When > 0 AND the :nuclear anchor is active, every
     # nuclear SUPPLY-order price (must-run + tranches, after the scarcity/peak
     # markup) is clamped to `nuclear_bid_ref_ceiling × coupled-reference` — nuclear
@@ -361,20 +388,11 @@ Base.@kwdef struct ZoneProfile
     # beyond climatology (reality: more import arrives as the price rises).
     # All inputs strictly predate the D-1 auction (fully ex-ante).
     import_backstop::Bool = false
-    backstop_weeks::Int = 8
-    backstop_price_mult::Float64 = 1.8
     # Fraction of the hourly backstop quantity credited into the scarcity
     # margin (the backstop analogue of `scarcity_import_credit`): the scarcity
     # MARKUP otherwise cannot see the backstop supply, so restored-import days
     # can keep a residual markup overshoot. 0 = off (default).
     backstop_scarcity_credit::Float64 = 0.0
-    # Two-pass anchor refs over DROPPED borders: include dropped in-footprint
-    # borders in the opportunity-anchor reference, weighted by observed
-    # climatology import flow. SE3's case: its real marginal supplier is
-    # Norrland hydro over the dropped SE2–SE3 cut (~5 GW observed) while the
-    # endogenous ref saw only DK1's ~0.3 GW border, pinning SE3 to DK1's
-    # night price. Off by default.
-    anchor_include_dropped::Bool = false
     # Price RETAINED-border observed net exports at the coupled/anchor
     # reference instead of firm demand at the cap (pass 2, anchored zones
     # only): a real exporter curtails its export under domestic stress
@@ -541,8 +559,6 @@ const FRANCE_PROFILE = ZoneProfile(
     # docs/experiments/cv23-fr-nuclear.md §"the designed rule".
     nuclear_avail_share_lo = 0.40,
     nuclear_avail_share_hi = 0.95,
-    nuclear_avail_ref = 0.80,
-    nuclear_avail_floor = 0.50,
 )
 
 """
@@ -838,15 +854,14 @@ ref SE2-dominated, pulling SE3's level/shape toward its actual position
 between SE2 and DK1. SE4 deliberately stays on plain SWEDEN_SOUTH (its
 existing refs are already decent; measured as a gate on the benchmark).
 """
-const SE3_PROFILE = with_profile(NORWAY_PROFILE;
-    import_backstop = true,
-    # anchor_include_dropped measured and GATED OUT (28-day production
-    # benchmark): the SE2-dominated ref (~5 GW climatology weight vs DK1's
-    # ~0.3 GW ATC) pinned SE3 at SE2's level — bias flipped +13 → −24 and
-    # corr fell 0.55 → 0.31 vs the backstop-only configuration. The
-    # mechanism stays available on the profile for future calibration
-    # (e.g. a tempered weight); SE3's §4b night-shape problem remains open.
-    anchor_include_dropped = false)
+# anchor_include_dropped was measured and GATED OUT (28-day production
+# benchmark): the SE2-dominated ref (~5 GW climatology weight vs DK1's ~0.3 GW
+# ATC) pinned SE3 at SE2's level — bias flipped +13 → −24 and corr fell
+# 0.55 → 0.31 vs the backstop-only configuration. It was OFF in every zone, so
+# cv25's subtraction phase removed the field and the branch it fed; a tempered
+# re-try is a re-implementation, not a flag flip. SE3's night-shape problem
+# remains open.
+const SE3_PROFILE = with_profile(NORWAY_PROFILE; import_backstop = true)
 
 """
 IT-CNORTH (cv17). ITALY plus the import backstop: episodic

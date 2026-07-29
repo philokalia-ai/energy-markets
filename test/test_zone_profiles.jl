@@ -24,23 +24,23 @@ const V10_TRANCHES = [(0.55, 0.95), (0.20, 1.05), (0.15, 1.25), (0.10, 1.60)]
 
     @testset "SEE_PROFILE holds the exact v10 defaults" begin
         p = SEE_PROFILE
-        @test p.tranches == V10_TRANCHES
-        @test p.must_run_price_factor == 0.05
-        @test p.must_run_srmc_threshold == 1.15
-        @test p.availability_factor == 0.80
+        @test Euphemia.MeritOrderBook.TRANCHES == V10_TRANCHES
+        @test Euphemia.MeritOrderBook.MUST_RUN_PRICE_FACTOR == 0.05
+        @test Euphemia.MeritOrderBook.MUST_RUN_SRMC_THRESHOLD == 1.15
+        @test Euphemia.MeritOrderBook.AVAILABILITY_FACTOR == 0.80
         @test p.scarcity_threshold == 1.4
         @test p.scarcity_kappa == 3.0
         @test p.peak_kappa == 1.2
-        @test p.peak_exponent == 4.0
+        @test Euphemia.MeritOrderBook.PEAK_EXPONENT == 4.0
         @test p.water_value_base == 0.85
-        @test p.water_value_dry_boost == 1.0
+        @test Euphemia.MeritOrderBook.WATER_VALUE_DRY_BOOST == 1.0
         @test p.water_value_span == 0.9
-        @test p.demand_elastic_share == 0.02
-        @test p.demand_elastic_price == 250.0
-        @test p.price_cap == 3000.0
-        @test p.fleet_completion == true
-        @test p.fleet_truthing == true
-        @test p.derate_headroom == 1.15
+        @test Euphemia.MeritOrderBook.DEMAND_ELASTIC_SHARE == 0.02
+        @test Euphemia.MeritOrderBook.DEMAND_ELASTIC_PRICE == 250.0
+        @test Euphemia.MeritOrderBook.PRICE_CAP == 3000.0
+        @test Euphemia.MeritOrderBook.FLEET_COMPLETION == true
+        @test Euphemia.MeritOrderBook.FLEET_TRUTHING == true
+        @test Euphemia.MeritOrderBook.DERATE_HEADROOM == 1.15
         @test p.thermal_srmc_multiplier == 1.0       # no premium
         @test p.hydro_model == :gas_anchored         # SEE hydro model
         @test p.nuclear_srmc_floor == 0.0            # no nuclear position floor
@@ -48,7 +48,6 @@ const V10_TRANCHES = [(0.55, 0.95), (0.20, 1.05), (0.15, 1.25), (0.10, 1.60)]
         # cv17 mechanisms are all inert on the SEE default profile
         @test p.import_backstop == false
         @test p.backstop_scarcity_credit == 0.0
-        @test p.anchor_include_dropped == false
         @test p.ref_priced_exports == false
     end
 
@@ -96,10 +95,8 @@ const V10_TRANCHES = [(0.55, 0.95), (0.20, 1.05), (0.15, 1.25), (0.10, 1.60)]
         # SE3: backstop; the dropped-border anchor ref was measured and
         # gated OUT (bias +13 → −24, corr 0.55 → 0.31 — see SE3_PROFILE)
         @test get_zone_profile("SE3") === SE3_PROFILE
-        @test SE3_PROFILE.anchor_include_dropped == false
         @test SE3_PROFILE.import_backstop == true
         @test get_zone_profile("SE4") === NORWAY_PROFILE
-        @test NORWAY_PROFILE.anchor_include_dropped == false
         # IT-CNORTH: ITALY + backstop; other IT sub-zones unchanged
         @test get_zone_profile("IT-CNORTH") === ITALY_CNORTH_PROFILE
         @test with_profile(ITALY_CNORTH_PROFILE; import_backstop=false) == ITALY_PROFILE
@@ -218,25 +215,15 @@ const V10_TRANCHES = [(0.55, 0.95), (0.20, 1.05), (0.15, 1.25), (0.10, 1.60)]
         book_profile = create_merit_order_book(ZP_ZONE, ZP_DAY; profile=SEE_PROFILE)
         @test book_profile.success
 
-        # Every bid parameter passed explicitly as its legacy v10 default value.
+        # Every VARYING bid parameter passed explicitly as its legacy v10 default.
+        # The invariant ones moved to module constants in cv25 phase 1 and are no
+        # longer overridable per call — that is the point: they never varied.
         book_explicit = create_merit_order_book(ZP_ZONE, ZP_DAY;
-            tranches=V10_TRANCHES,
-            must_run_price_factor=0.05,
-            must_run_srmc_threshold=1.15,
-            availability_factor=0.80,
             scarcity_threshold=1.4,
             scarcity_kappa=3.0,
             peak_kappa=1.2,
-            peak_exponent=4.0,
             water_value_base=0.85,
-            water_value_dry_boost=1.0,
             water_value_span=0.9,
-            demand_elastic_share=0.02,
-            demand_elastic_price=250.0,
-            price_cap=3000.0,
-            fleet_completion=true,
-            fleet_truthing=true,
-            derate_headroom=1.15,
             thermal_srmc_multiplier=1.0,
             hydro_model=:gas_anchored,
             nuclear_srmc_floor=0.0)

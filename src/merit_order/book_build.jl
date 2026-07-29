@@ -401,8 +401,8 @@ function _effective_nuclear_share(profile::ZoneProfile, anchor_active::Bool,
     a = _nuclear_avail_frac(bidding_zone, day)
     a === nothing && return anchor_share
     tight = clamp(
-        (profile.nuclear_avail_ref - a) /
-        max(profile.nuclear_avail_ref - profile.nuclear_avail_floor, 1e-6),
+        (NUCLEAR_AVAIL_REF - a) /
+        max(NUCLEAR_AVAIL_REF - NUCLEAR_AVAIL_FLOOR, 1e-6),
         0.0, 1.0)
     share = profile.nuclear_avail_share_lo +
             (profile.nuclear_avail_share_hi - profile.nuclear_avail_share_lo) * tight
@@ -417,19 +417,21 @@ end
 Create a deterministic merit-order-based order book for MPCC clearing.
 
 # Keyword arguments (bidding strategy parameters)
-- `tranches`: supply tranches as (capacity share, price multiplier on SRMC)
+
+Only parameters that actually DIFFER between zones are overridable. Everything
+that held the same value in all 39 zones is a module constant — `TRANCHES`,
+`PRICE_CAP`, `DEMAND_ELASTIC_SHARE`/`_PRICE`, `FLEET_COMPLETION`,
+`FLEET_TRUTHING`, `DERATE_HEADROOM`, `MUST_RUN_*`, `AVAILABILITY_FACTOR`,
+`PEAK_EXPONENT`, `WATER_VALUE_DRY_BOOST`, `BACKSTOP_*`, `NUCLEAR_AVAIL_*` —
+and is no longer a keyword argument.
+
+- `profile`: the zone's `ZoneProfile`; the normal way to vary anything below
 - `scarcity_threshold`: capacity margin below which scarcity markup kicks in
-- `scarcity_kappa`: quadratic scarcity markup coefficient
+- `scarcity_kappa` / `peak_kappa`: scarcity and peak markup coefficients
 - `water_value_base` / `water_value_span`: hydro opportunity cost as a
   multiple of gas SRMC, scaled across the day's demand range
-- `demand_elastic_share` / `demand_elastic_price`: size and price of the
-  price-sensitive demand tail
-- `price_cap`: price of the inelastic demand tranche
-- `fleet_completion`: add aggregate capacity where the type's recent output
-  (p95) exceeds the unit-level fleet (under-reported fleets: RO/BG/RS)
-- `fleet_truthing` / `derate_headroom`: derate baseload types whose
-  unit-level fleet exceeds `derate_headroom ×` recent p95 — phantom
-  capacity from unfiled derates or fuel constraints (2022 GR lignite)
+- `thermal_srmc_multiplier`, `hydro_model`, `nuclear_srmc_floor`,
+  `opportunity_anchor`, `anchor_share`: the remaining per-zone levers
 
 # Scenario hooks (all default `nothing`; when all are `nothing` the code path
 # is byte-identical to the no-kwargs call)
@@ -495,27 +497,15 @@ function create_merit_order_book(
     bidding_zone::String,
     day::Date;
     profile::ZoneProfile=SEE_PROFILE,
-    tranches::Union{Nothing,Vector{Tuple{Float64,Float64}}}=nothing,
-    must_run_price_factor::Union{Nothing,Float64}=nothing,
-    must_run_srmc_threshold::Union{Nothing,Float64}=nothing,
-    availability_factor::Union{Nothing,Float64}=nothing,
     scarcity_threshold::Union{Nothing,Float64}=nothing,
     scarcity_kappa::Union{Nothing,Float64}=nothing,
     peak_kappa::Union{Nothing,Float64}=nothing,
-    peak_exponent::Union{Nothing,Float64}=nothing,
     water_value_base::Union{Nothing,Float64}=nothing,
-    water_value_dry_boost::Union{Nothing,Float64}=nothing,
     water_value_span::Union{Nothing,Float64}=nothing,
-    demand_elastic_share::Union{Nothing,Float64}=nothing,
-    demand_elastic_price::Union{Nothing,Float64}=nothing,
-    price_cap::Union{Nothing,Float64}=nothing,
     include_net_imports::Bool=true,
     net_import_exclude::Vector{String}=String[],
     net_import_import_only::Vector{String}=String[],
     target_resolution_minutes::Union{Int,Nothing}=nothing,
-    fleet_completion::Union{Nothing,Bool}=nothing,
-    fleet_truthing::Union{Nothing,Bool}=nothing,
-    derate_headroom::Union{Nothing,Float64}=nothing,
     thermal_srmc_multiplier::Union{Nothing,Float64}=nothing,
     hydro_model::Union{Nothing,Symbol}=nothing,
     nuclear_srmc_floor::Union{Nothing,Float64}=nothing,
@@ -535,23 +525,23 @@ function create_merit_order_book(
     # Resolve every bid parameter from the profile, letting an explicit keyword
     # override its profile field. With no overrides and the default SEE_PROFILE
     # this reproduces the pre-abstraction defaults exactly (byte-identical).
-    tranches = tranches === nothing ? profile.tranches : tranches
-    must_run_price_factor = must_run_price_factor === nothing ? profile.must_run_price_factor : must_run_price_factor
-    must_run_srmc_threshold = must_run_srmc_threshold === nothing ? profile.must_run_srmc_threshold : must_run_srmc_threshold
-    availability_factor = availability_factor === nothing ? profile.availability_factor : availability_factor
+    tranches = TRANCHES
+    must_run_price_factor = MUST_RUN_PRICE_FACTOR
+    must_run_srmc_threshold = MUST_RUN_SRMC_THRESHOLD
+    availability_factor = AVAILABILITY_FACTOR
     scarcity_threshold = scarcity_threshold === nothing ? profile.scarcity_threshold : scarcity_threshold
     scarcity_kappa = scarcity_kappa === nothing ? profile.scarcity_kappa : scarcity_kappa
     peak_kappa = peak_kappa === nothing ? profile.peak_kappa : peak_kappa
-    peak_exponent = peak_exponent === nothing ? profile.peak_exponent : peak_exponent
+    peak_exponent = PEAK_EXPONENT
     water_value_base = water_value_base === nothing ? profile.water_value_base : water_value_base
-    water_value_dry_boost = water_value_dry_boost === nothing ? profile.water_value_dry_boost : water_value_dry_boost
+    water_value_dry_boost = WATER_VALUE_DRY_BOOST
     water_value_span = water_value_span === nothing ? profile.water_value_span : water_value_span
-    demand_elastic_share = demand_elastic_share === nothing ? profile.demand_elastic_share : demand_elastic_share
-    demand_elastic_price = demand_elastic_price === nothing ? profile.demand_elastic_price : demand_elastic_price
-    price_cap = price_cap === nothing ? profile.price_cap : price_cap
-    fleet_completion = fleet_completion === nothing ? profile.fleet_completion : fleet_completion
-    fleet_truthing = fleet_truthing === nothing ? profile.fleet_truthing : fleet_truthing
-    derate_headroom = derate_headroom === nothing ? profile.derate_headroom : derate_headroom
+    demand_elastic_share = DEMAND_ELASTIC_SHARE
+    demand_elastic_price = DEMAND_ELASTIC_PRICE
+    price_cap = PRICE_CAP
+    fleet_completion = FLEET_COMPLETION
+    fleet_truthing = FLEET_TRUTHING
+    derate_headroom = DERATE_HEADROOM
     thermal_srmc_multiplier = thermal_srmc_multiplier === nothing ? profile.thermal_srmc_multiplier : thermal_srmc_multiplier
     hydro_model = hydro_model === nothing ? profile.hydro_model : hydro_model
     nuclear_srmc_floor = nuclear_srmc_floor === nothing ? profile.nuclear_srmc_floor : nuclear_srmc_floor
@@ -716,15 +706,15 @@ function create_merit_order_book(
         # byte-identical books.
         backstop_by_hour = (profile.import_backstop && include_net_imports) ?
             get_import_backstop(bidding_zone, day;
-                weeks=profile.backstop_weeks,
+                weeks=BACKSTOP_WEEKS,
                 endogenous_counterparties=net_import_exclude,
                 exclude_counterparties=boundary_exclude) :
             Dict{Int,Float64}()
-        backstop_price = profile.backstop_price_mult * gas_srmc
+        backstop_price = BACKSTOP_PRICE_MULT * gas_srmc
         isempty(backstop_by_hour) ||
             println("  🛟 Import backstop: peak $(round(Int, maximum(values(backstop_by_hour)))) MW " *
                     "@ €$(round(backstop_price, digits=1))/MWh " *
-                    "($(length(backstop_by_hour)) hours, $(profile.backstop_weeks)-week window)")
+                    "($(length(backstop_by_hour)) hours, $(BACKSTOP_WEEKS)-week window)")
 
         # ── Stage 4: hydro fleet state (offer scale, dryness, drawdown) ──
         hydro_pmax, hydro_scale, hydro_dryness, reservoir_drawdown =
