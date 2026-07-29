@@ -210,6 +210,16 @@ println()
         include(joinpath(@__DIR__, "test_15min_resolution.jl"))
     end
 
+    @testset "Price reconstruction (pure, DB-free)" begin
+        println("\n" * "=" ^ 60)
+        println("Running competitive price reconstruction unit tests...")
+        println("=" ^ 60)
+        # The arithmetic that decides every published price, now callable without
+        # a solver. Two testsets deliberately pin PRESERVED defects so a Phase-2
+        # fix has to change a test on purpose.
+        include(joinpath(@__DIR__, "test_price_reconstruction.jl"))
+    end
+
     @testset "Code review 2026-07" begin
         println("\n" * "=" ^ 60)
         println("Running July 2026 code-review regression tests...")

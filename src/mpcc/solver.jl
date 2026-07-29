@@ -5,7 +5,7 @@
 """
     _reconstruct_component_prices(nodes, periods, zone_pairs, flow_values, flow_caps,
                                   orders_by_node_time, simple_orders, order_ids,
-                                  acceptance_values, price_limits, solver_prices)
+                                  stepwise_acceptance_values, price_limits, solver_prices)
 
 Competitive price reconstruction, extracted from `solve_mpcc_market_clearing`
 so it can run — and be tested — without a live solver.
@@ -688,7 +688,7 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
             end
             market_prices = _reconstruct_component_prices(
                 order_book.nodes, order_book.periods,
-                (flow === nothing ? Tuple{String,String}[] : zone_pairs),
+                zone_pairs,   # already empty whenever flow === nothing
                 flow_values, flow_caps, orders_by_node_time, simple_orders,
                 order_ids, stepwise_acceptance_values, order_book.price_limits,
                 market_prices)
