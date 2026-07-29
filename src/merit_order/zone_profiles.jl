@@ -266,22 +266,6 @@ Base.@kwdef struct ZoneProfile
     fleet_truthing::Bool = true
     derate_headroom::Float64 = 1.15
     thermal_srmc_multiplier::Float64 = 1.0
-    # Per-unit SRMC spread (cv18): decorrelate thermal unit costs by a stable
-    # per-unit factor 1 ± spread (deterministic FNV-1a hash of the unit code —
-    # to be replaced by inferred heat rates once history supports them).
-    # Without it every unit of a fuel type shares one type-level SRMC, so all
-    # their same-multiplier tranches align into ONE flat multi-GW step and the
-    # marginal price cannot move intraday — the measured cause of the flat
-    # Italian zones (docs/experiments/it-flatline-diagnosis.md: every hour of
-    # the probe day pinned at 90.90 by four units priced identically; ±8%
-    # prototype corr 0.31→0.68 CSOUTH, 0.75→0.82 NORTH, 0.49→0.72 Sicily;
-    # Sardinia the measured exception). 0 = off (byte-identical).
-    # Export-absorption ladder (cv18): elastic demand steps (price €/MWh, MW)
-    # appended every timeslot — export/flexibility absorption of RES-surplus
-    # generation below the thermal band. Without it a wind-heavy zone's price
-    # stays pinned at the thermal marginal in surplus hours (DK1: prototype
-    # 30/15/5 € × 400 MW → corr 0.495→0.569, MAE −2.0, binding only on
-    # surplus days). Empty = off (byte-identical).
     hydro_model::Symbol = :gas_anchored
     nuclear_srmc_floor::Float64 = 0.0
     opportunity_anchor::Symbol = :none
@@ -1029,6 +1013,7 @@ function get_zone_profile(zone::AbstractString)
     # EUPHEMIA_DISABLE_CV21, the UA books → EUPHEMIA_DISABLE_CV22 — so each cv's
     # guard disables exactly its own books (the cv22 guard leaves Viking ON,
     # matching cv21 main). Travels via ENV for the same worker-safety reason as
+    # the other switches: any non-empty value disables.
     if p.boundary_book !== nothing &&
        !isempty(get(ENV, p.boundary_book.disable_env, ""))
         p = with_profile(p; boundary_book=nothing)

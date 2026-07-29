@@ -81,7 +81,7 @@ const V10_TRANCHES = [(0.55, 0.95), (0.20, 1.05), (0.15, 1.25), (0.10, 1.60)]
         @test SLOVENIA_PROFILE.scarcity_kappa == CONTINENTAL_PROFILE.scarcity_kappa
         @test SLOVENIA_PROFILE.import_backstop == true
         @test SLOVENIA_PROFILE.ref_priced_exports == true   # SI–HR retained border
-        # Denmark: NORDIC + backstop (cv18 ladder held back)
+        # Denmark: NORDIC + backstop
         @test get_zone_profile("DK1") === DENMARK_PROFILE
         @test get_zone_profile("DK2") === DENMARK_PROFILE
         @test with_profile(DENMARK_PROFILE; import_backstop=false) == NORDIC_PROFILE
@@ -97,8 +97,6 @@ const V10_TRANCHES = [(0.55, 0.95), (0.20, 1.05), (0.15, 1.25), (0.10, 1.60)]
         @test get_zone_profile("SE4") === SWEDEN_SOUTH_PROFILE
         @test SWEDEN_SOUTH_PROFILE.anchor_include_dropped == false
         # IT-CNORTH: ITALY + backstop; other IT sub-zones unchanged
-        # cv18 fields exist but are NOT activated (attribution hold — see
-        # ZONE_PROFILES comment): every zone stays on its cv17 profile.
         @test get_zone_profile("IT-CNORTH") === ITALY_CNORTH_PROFILE
         @test with_profile(ITALY_CNORTH_PROFILE; import_backstop=false) == ITALY_PROFILE
         @test get_zone_profile("IT-NORTH") === ITALY_PROFILE

@@ -176,13 +176,6 @@ function _true_up_fleet(generators::Vector{Generator}, bidding_zone::String,
     # €9 vs the €55 floor).
     apply_nuclear_floor = nuclear_srmc_floor > 0.0 &&
                           !(anchor_active && opportunity_anchor == :nuclear)
-    # Per-unit SRMC spread (cv18) is applied at ORDER-PRICE time in the
-    # order loop below (to gmc), NOT here: applying it to marginal_cost
-    # would also perturb the UC-lite must-run SELECTION (SRMC <=
-    # 1.15 x gas gate) and the committed-set ordering, which the validated
-    # prototype left untouched — measured: spraying mc reproduced only
-    # half the CSOUTH gain and worsened MAE (+2.4) via a shifted
-    # commitment set.
     if !isempty(derate_scale) || apply_srmc_premium || apply_nuclear_floor
         generators = [begin
             s = get(derate_scale, g.fuel_type, 1.0)
