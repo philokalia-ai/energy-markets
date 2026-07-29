@@ -4,21 +4,6 @@
 const WATER_VALUE_FUEL_TYPES =
     [Symbol("Hydro Water Reservoir"), Symbol("Hydro Pumped Storage")]
 
-"""
-    _unit_hash01(code) -> Float64 in [0, 1)
-
-Deterministic per-unit draw for `unit_srmc_spread` (FNV-1a over the code's
-bytes). Stable across sessions, processes and Julia versions — Base.hash is
-not guaranteed stable across versions, and reproducibility of the priced book
-is a hard requirement (same day + same code ⇒ bit-identical prices).
-"""
-function _unit_hash01(code::AbstractString)
-    h = 0xcbf29ce484222325
-    for b in codeunits(code)
-        h = (h ⊻ UInt64(b)) * 0x00000100000001b3
-    end
-    return (h % UInt64(1000)) / 1000.0
-end
 
 # ENTSO-E production_type strings for hydro availability lookup
 const HYDRO_PRODUCTION_TYPES =
@@ -291,14 +276,12 @@ Base.@kwdef struct ZoneProfile
     # the probe day pinned at 90.90 by four units priced identically; ±8%
     # prototype corr 0.31→0.68 CSOUTH, 0.75→0.82 NORTH, 0.49→0.72 Sicily;
     # Sardinia the measured exception). 0 = off (byte-identical).
-    unit_srmc_spread::Float64 = 0.0
     # Export-absorption ladder (cv18): elastic demand steps (price €/MWh, MW)
     # appended every timeslot — export/flexibility absorption of RES-surplus
     # generation below the thermal band. Without it a wind-heavy zone's price
     # stays pinned at the thermal marginal in surplus hours (DK1: prototype
     # 30/15/5 € × 400 MW → corr 0.495→0.569, MAE −2.0, binding only on
     # surplus days). Empty = off (byte-identical).
-    export_absorption_steps::Vector{Tuple{Float64,Float64}} = Tuple{Float64,Float64}[]
     hydro_model::Symbol = :gas_anchored
     nuclear_srmc_floor::Float64 = 0.0
     opportunity_anchor::Symbol = :none
@@ -975,7 +958,8 @@ const ZONE_PROFILES = Dict{String,ZoneProfile}(
     # benign continentally but NO1 caps 15→44). The 20-day/2-zone pilot gates
     # are structurally insufficient for coupled mechanisms — activation waits
     # for the border-scoped redesign (export backstop mirror) validated on the
-    # coupled footprint. Fields + EUPHEMIA_DISABLE_CV18 infrastructure stay.
+    # coupled footprint. The fields and their kill-switch were removed in cv25's
+    # subtraction phase — git holds the implementation if the redesign revives them.
     "IT-NORTH" => ITALY_PROFILE, "IT-CNORTH" => ITALY_CNORTH_PROFILE,
     "IT-CSOUTH" => ITALY_PROFILE, "IT-SOUTH" => ITALY_PROFILE,
     "IT-Calabria" => ITALY_PROFILE, "IT-Sicily" => ITALY_PROFILE,
@@ -1031,19 +1015,6 @@ Profile for a zone, defaulting to `SEE_PROFILE` for any zone not in the registry
 """
 function get_zone_profile(zone::AbstractString)
     p = get(ZONE_PROFILES, String(zone), SEE_PROFILE)
-    # Experiment-only lever kill-switch (attribution A/Bs): profile mutations
-    # in the coordinator do NOT reach pipeline workers (fresh `using Euphemia`
-    # rebuilds ZONE_PROFILES), so per-mechanism disabling must travel via ENV.
-    # Unset in production; reads once per call, negligible cost.
-    dis = get(ENV, "EUPHEMIA_DISABLE_CV18", "")
-    if dis == "spread" && p.unit_srmc_spread > 0.0
-        p = with_profile(p; unit_srmc_spread=0.0)
-    elseif dis == "ladder" && !isempty(p.export_absorption_steps)
-        p = with_profile(p; export_absorption_steps=Tuple{Float64,Float64}[])
-    elseif dis == "all" && (p.unit_srmc_spread > 0.0 || !isempty(p.export_absorption_steps))
-        p = with_profile(p; unit_srmc_spread=0.0,
-                         export_absorption_steps=Tuple{Float64,Float64}[])
-    end
     # cv23 interior-Norway kill-switch (byte-identity guard + attribution A/Bs):
     # revert the cv23 import_backstop on ONLY the cv23 NO zones, so a disabled
     # run is byte-identical to cv22 while other zones' own import_backstop
@@ -1058,7 +1029,6 @@ function get_zone_profile(zone::AbstractString)
     # EUPHEMIA_DISABLE_CV21, the UA books → EUPHEMIA_DISABLE_CV22 — so each cv's
     # guard disables exactly its own books (the cv22 guard leaves Viking ON,
     # matching cv21 main). Travels via ENV for the same worker-safety reason as
-    # EUPHEMIA_DISABLE_CV18. Any non-empty value disables.
     if p.boundary_book !== nothing &&
        !isempty(get(ENV, p.boundary_book.disable_env, ""))
         p = with_profile(p; boundary_book=nothing)
