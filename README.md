@@ -53,11 +53,30 @@ bidding, the re-paired FR–GB border with its GB boundary book, the
 interior-Norway import backstop, and a registry sanity bound), backfilled
 over the entire history the public extract covers:
 
+> [!IMPORTANT]
+> **These figures are not ex-ante figures.** The cv22/23/24 records were produced
+> by the pipelined backfill, which never resolved the scoped ex-ante flow rule and
+> therefore built its order books with **`:d0` — same-day *observed* cross-border
+> flows**, information no forecaster has before the auction. Measured by re-clearing
+> record days both ways against the stored prices: `:d0` reproduces the record at
+> 93.8–100% bit-identical, the documented ex-ante `:v3` at ~47%
+> ([audit](docs/experiments/exante-audit-2026-07.md)). The live daily forecast is
+> unaffected — it clears through `run_multi_zone_market_clearing` and *does* resolve
+> `:v3`, so it is genuinely ex-ante; the backtest it is benchmarked against had an
+> information advantage it does not have. cv25 corrects this
+> ([plan](docs/cv25-plan.md)) and will restate the headline against a
+> like-for-like ex-ante baseline.
+>
+> A second correction lands with it: **65 of the 1,304 days carry fewer than 24 UTC
+> hours** (12 of them a single hour) because one zone's short book collapses the
+> coupled period intersection — 2.52% of the record, saved as complete. The source
+> data for those days is present, so they are recoverable, not holes.
+
 **Comparable full-year window (2025-07-25 → 2026-07-24): mean corr 0.68,
 mean MAE €26.3** (lineage: cv22: 0.67 / €27.4; cv19: 0.64 / €27.2; cv17:
 0.64 / €27.3; cv16: 0.56 / €29.9). Full 2023+ record: mean corr 0.64 /
 MAE €26.0 (2023 carries the post-crisis regime, the hardest to model
-competitively).
+competitively). Read all of these with the correction above.
 
 By year (energy-weighted share of load in zones with corr ≥ 0.75, mean zone
 corr, and zones ≥ 0.75): **2023: 59% / 0.65 / 10 of 39 · 2024: 57% / 0.63 /
