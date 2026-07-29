@@ -423,7 +423,6 @@ _effective_fleet_truth_mode(profile) =
 const SEE_PROFILE = ZoneProfile()
 
 "Iberia — near-isolated, already the best-fit region; identical to SEE (verified)."
-const IBERIA_PROFILE = SEE_PROFILE
 
 """
 Continental core (DE/FR/BE/NL/AT/CH/PL/CZ/SK). High-RES thermal with heavy
@@ -880,11 +879,7 @@ both. These profiles apply ONLY on the EU-footprint path
 (`enrich_network=true`); the legacy SEE single-zone and 5-zone products force
 SEE_PROFILE and remain byte-identical.
 """
-const ROMANIA_PROFILE = with_profile(SEE_PROFILE;
-    import_backstop = true, backstop_scarcity_credit = 1.0)
-const SERBIA_PROFILE = with_profile(SEE_PROFILE;
-    import_backstop = true, backstop_scarcity_credit = 1.0)
-const HUNGARY_PROFILE = with_profile(SEE_PROFILE;
+const SEE_IMPORT_BACKED_PROFILE = with_profile(SEE_PROFILE;
     import_backstop = true, backstop_scarcity_credit = 1.0)
 
 """
@@ -925,12 +920,12 @@ const ZONE_PROFILES = Dict{String,ZoneProfile}(
     # RO/HU add the cv22 UA firm-slice boundary book on top of their cv17
     # backstop (UA is excluded from injections + backstop headroom by the book).
     "GR" => SEE_PROFILE, "BG" => SEE_PROFILE,
-    "RO" => with_profile(ROMANIA_PROFILE; boundary_book = UA_BOOK_DEFAULT),
-    "RS" => SERBIA_PROFILE,
-    "HU" => with_profile(HUNGARY_PROFILE; boundary_book = UA_BOOK_DEFAULT),
+    "RO" => with_profile(SEE_IMPORT_BACKED_PROFILE; boundary_book = UA_BOOK_DEFAULT),
+    "RS" => SEE_IMPORT_BACKED_PROFILE,
+    "HU" => with_profile(SEE_IMPORT_BACKED_PROFILE; boundary_book = UA_BOOK_DEFAULT),
     "SI" => SLOVENIA_PROFILE,
     # Iberia
-    "ES" => IBERIA_PROFILE, "PT" => IBERIA_PROFILE,
+    "ES" => SEE_PROFILE, "PT" => SEE_PROFILE,
     # Italy sub-zones (IT-CNORTH: + cv17 import backstop). cv18: the mainland
     # zones + Sicily add the per-unit SRMC spread (±10% — measured prototype
     # corr 0.31→0.68 CSOUTH / 0.75→0.82 NORTH / 0.49→0.72 Sicily, plateau

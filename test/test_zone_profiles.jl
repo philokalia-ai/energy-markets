@@ -57,13 +57,18 @@ const V10_TRANCHES = [(0.55, 0.95), (0.20, 1.05), (0.15, 1.25), (0.10, 1.60)]
             @test get_zone_profile(z) === SEE_PROFILE
         end
         @test get_zone_profile("ZZ-not-a-zone") === SEE_PROFILE
-        @test IBERIA_PROFILE === SEE_PROFILE          # Iberia == SEE (verified)
+        # IBERIA_PROFILE was an alias for SEE_PROFILE and was removed in cv25's
+        # subtraction phase — ES/PT now name SEE_PROFILE directly.
+        @test get_zone_profile("ES") === SEE_PROFILE
+        @test get_zone_profile("PT") === SEE_PROFILE
         @test get_zone_profile("ES") === SEE_PROFILE
         # cv17: RO/RS = exact SEE calibration + the import backstop (EU
         # footprint only — the single-zone/5-zone SEE products never consult
         # the registry and force SEE_PROFILE)
-        for (z, p) in (("RO", ROMANIA_PROFILE), ("RS", SERBIA_PROFILE),
-                       ("HU", Euphemia.MeritOrderBook.HUNGARY_PROFILE))
+        # ROMANIA/SERBIA/HUNGARY_PROFILE were three identical definitions; cv25's
+        # subtraction phase names the one thing they are.
+        for (z, p) in (("RO", SEE_IMPORT_BACKED_PROFILE), ("RS", SEE_IMPORT_BACKED_PROFILE),
+                       ("HU", SEE_IMPORT_BACKED_PROFILE))
             @test get_zone_profile(z) === p
             @test p.import_backstop == true
             # Full scarcity credit for the demonstrated headroom (the SEE
