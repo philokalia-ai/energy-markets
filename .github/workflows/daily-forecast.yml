@@ -1,22 +1,14 @@
 name: Daily ex-ante forecast
 
+# SCHEDULING CONSOLIDATED (July 2026): all forecast scheduling lives in the
+# ceres `update_entsoe_data` workflow (08:00 weather / 12:30 + 17:30 + 19:30
+# entsoe, every run SELF-HEALING — it detects a missing lead-1 slice,
+# re-pulls the four D-1 input feeds and retries, bounded by per-track
+# deadlines). Scheduling forecasts here was redundant with that and had no
+# ETL re-pull capability: when a TSO item was late this workflow could only
+# skip and hope. This workflow remains as the manual/debug runner
+# (workflow_dispatch only) with the same HiGHS production default.
 on:
-  schedule:
-    # Daily at 12:30 UTC — after ENTSO-E D-1 publication (~12:00 CET auction
-    # results + forecasts) and the ETL that lands them in the database. PURE
-    # entsoe track (the opportunistic fills are retired): when a TSO slice is
-    # still missing at this hour, the day honestly skips and the evening
-    # attempts below retry it — no model-filled vintage is ever written.
-    - cron: "30 12 * * *"
-    # 20:10 UTC — second attempt after the ceres ENTSO-E evening fills (17:30 +
-    # 19:30 UTC sweeper): several TSOs' D-1 load forecasts propagate to the bulk
-    # export only in the evening (2026-07-25: LT/SI/CH short at 12:48 made
-    # lead-1 INELIGIBLE). Vintage rows are immutable/no-clobber, so this run
-    # only fills slices the 12:30 run could not see — still ex-ante for the
-    # Athens delivery window (opens 21:00 UTC). The morning EX-ANTE vintage
-    # (input_mode=weather, uniform model inputs) comes from the ceres 08:00
-    # dispatch, not from this workflow.
-    - cron: "10 20 * * *"
   workflow_dispatch:
     inputs:
       max_lead_days:
@@ -209,14 +201,6 @@ jobs:
           # manifest newer than its objects).
           julia --project=. bin/export_web_parquet.jl
           bash bin/web_data_push.sh
-
-      - name: Upload forecast data artifact
-        if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: forecast-data
-          path: web/data/
-          if-no-files-found: warn
 
       - name: Cleanup Gurobi license
         if: always()
