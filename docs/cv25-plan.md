@@ -256,3 +256,107 @@ cv24 flows — the real (documented) hazard is same-cv cross-mode.
   is an assumption until someone checks it.
 - **The reproducibility recipe** is versioned: the published artifact reproduces cv24;
   after cv25 the docs must say which tag reproduces which record.
+
+---
+
+## Phase 0 results (2026-07-29)
+
+**0.2 Restatement — done.** README correction box + ledger correction, pointing at the
+audit and this plan. The live forecast is explicitly exempted: it resolves `:v3`.
+
+**0.3 Truncated days — the plan's premise was RIGHT: the source data is missing.**
+
+An earlier version of this section claimed the opposite. It was produced by a query
+that counted zones and hours **aggregated across the whole footprint** — 39 zones
+present *somewhere* in the day, 24 hours present *somewhere* — which cannot detect a
+zone with one hour. The correct per-zone query is one line different and falsifies it:
+
+```sql
+SELECT area_map_code, count(DISTINCT date_trunc('hour', date_time_utc)) nh
+FROM entsoe.day_ahead_total_load_forecast
+WHERE date_time_utc >= $d AND date_time_utc < $d + 1
+  AND area_type_code IN ('BZN','BZN/CTA','BZN/CTY','BZN/CTA/CTY')
+GROUP BY 1 HAVING nh < 24;
+```
+
+On 2025-11-12 that returns exactly one row: **SI, 1 hour**.
+
+**Census over the record window** (2023-01-01..2026-07-24), zone-days with fewer than
+24 D-1 forecast hours: **SI 48, BE 8, BG 4, SE1/SE2/SE3/SE4/DE_LU/RS/EE/GR 2 each,
+LT 1 — spanning exactly 65 distinct days**, matching the 65 truncated days in the
+record one for one. SI's gaps come in adjacent pairs (23h+2h, 22h+2h, 22h+1h): one
+missing **CET-day** forecast block straddling two UTC days.
+
+**Mechanism, and no NULL is involved.** A zone's book takes its timeslots directly
+from the load forecast — `target_timeslots = sort(collect(keys(load_by_time)))`
+(`book_build.jl:265, 285`). One forecast hour ⇒ a one-slot book ⇒ `reduce(intersect,
+…)` (`multi_zone_books.jl:591`) collapses all 39 zones to that hour. The
+`MethodError: Cannot convert Missing to Float64` seen in a standalone build is a
+downstream symptom, not the cause; "fix the NULL handling" would have aimed at the
+wrong thing.
+
+**Policy consequence.** The fork is *repair the source* (re-fetch the missing ENTSO-E
+blocks — the adjacent-pair pattern suggests an ETL boundary bug worth reporting
+upstream) or *record explicit holes*. What is NOT available: falling back to
+`actual_total_load` to fill a missing D-1 forecast — that is realized data and would
+violate invariant 1.
+
+**0.4 Cold start — real, but not the number or the mechanism first stated.**
+The analogue pool is selected from `entsoe.actual_total_load`
+(`flows_imports.jl:235`), which reaches back to **2021-10-27**, so 2023-01-01 has a
+full ~364-day candidate pool — not the 31 days first claimed (that was the start of
+`physical_flows` / the D-1 forecast, 2022-12-01).
+
+The real defect is quieter: the analogue *days* can be selected from before flow data
+exists, and `_zone_border_hourly_analogue` then medians each border over only those
+analogue days that actually have flows — possibly one, possibly none — with **no
+minimum-sample guard and no logging**, plus a discontinuous flip to D-2/`:v2` when
+fewer than `k` candidates exist. The `:v2` climatology degrades the same silent way.
+And `get_import_backstop` imputes **0.0** for missing lagged weeks before taking a
+max, so on a structural net exporter missing history *manufactures* phantom import
+headroom.
+
+Nor is `:v3` the only mechanism with an uninstrumented cold start: the UA
+firm/capability windows (366d/28d), Viking capability, fleet-truth p95 and FR's
+trailing-30d nuclear share all have their own. Phase 5 needs a warm-up policy and
+sample-count instrumentation, not just a start date.
+
+**0.6 Lookahead sweep — clean beyond the two known sites.** The only day-inclusive
+upper bounds in `src/` are `registry.jl:182` and `:266` (both already scheduled for
+Phase 2). Two non-sargable `DATE(date_time_utc) = $x` filters exist
+(`results_store.jl:520`, `batch_runners.jl:519`) — a performance issue, not a lookahead.
+
+**0.1 Which flow mode measured which calibration decision — the surface is small.**
+The scoped resolution landed in `cb47b67` ("`:v2` is the default for the EU-footprint
+path, cv16 onward"). Every calibration A/B harness that decided a shipped treatment
+calls `run_multi_zone_market_clearing`, i.e. the sequential path that *does* resolve
+it:
+
+| decision | harness | path |
+|---|---|---|
+| cv17 weak-zone import backstops | `test/scripts/weak_zone_prototypes.jl` | sequential (mode set explicitly) |
+| cv17 benchmark | `test/scripts/cv17_bench.jl` | sequential (scoped default) |
+| cv19 `:v3` analogue flows | `docs/experiments/analogue-flows/ab_price_v3.jl` | sequential (mode set explicitly) |
+| cv21 Viking | `cv21-dk1-viking/ab_confirm.jl`, `test/scripts/cv21_guards.jl` | sequential |
+| cv22 UA + bug batch | `cv22/ab_cv22.jl`, `cv22_guard.jl`, `see_delta.jl` | sequential |
+| cv23 FR nuclear + FR cap | `cv23/ab_cv23.jl`, `frcap_decomp.jl`, `frcap_verify.jl` | sequential |
+| IT-NORTH / PL / NL diagnoses | `*/ab_*.jl` | sequential |
+
+The only pipeline callers among the experiment scripts are a crash test
+(`cv22/test_pipeline_crash.jl`) and a scenario runner that sets the mode explicitly.
+
+**So the flow defect contaminated the RECORD, not the calibration decisions** — from
+cv16 onward those were measured under `:v2`/`:v3`. This bounds Phase 4: no treatment
+needs revisiting *on account of the flow defect*. Every treatment was still measured
+under the doubled ATC, which is a separate and much larger claim on Phase 4's scope.
+Pre-cv16 decisions (the v10 SEE baseline, fleet truthing) predate the scoped default
+and were measured with `:d0` everywhere — they are base calibration, not import
+mechanisms.
+
+**0.5 Fix-4 frequency — NOT rare; the plan's assumption was wrong.**
+Sampling every 14th day over 2023-01-01..2026-07-24 (92 days): **34 of them (37%)**
+have at least one unit whose *only* output in the 60-day probe window falls on the
+delivery day itself. That is an upper bound on the days the fix changes the fleet —
+the probe only decides membership for units the registry's date-validity filter
+rejects — but it is nowhere near the "fires on few days, its arm is nearly free"
+the plan assumed. **Fix 4 needs a full ablation arm, not a token one.**
