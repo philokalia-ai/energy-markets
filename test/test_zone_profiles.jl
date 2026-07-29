@@ -61,7 +61,6 @@ const V10_TRANCHES = [(0.55, 0.95), (0.20, 1.05), (0.15, 1.25), (0.10, 1.60)]
         # subtraction phase — ES/PT now name SEE_PROFILE directly.
         @test get_zone_profile("ES") === SEE_PROFILE
         @test get_zone_profile("PT") === SEE_PROFILE
-        @test get_zone_profile("ES") === SEE_PROFILE
         # cv17: RO/RS = exact SEE calibration + the import backstop (EU
         # footprint only — the single-zone/5-zone SEE products never consult
         # the registry and force SEE_PROFILE)
@@ -99,8 +98,8 @@ const V10_TRANCHES = [(0.55, 0.95), (0.20, 1.05), (0.15, 1.25), (0.10, 1.60)]
         @test get_zone_profile("SE3") === SE3_PROFILE
         @test SE3_PROFILE.anchor_include_dropped == false
         @test SE3_PROFILE.import_backstop == true
-        @test get_zone_profile("SE4") === SWEDEN_SOUTH_PROFILE
-        @test SWEDEN_SOUTH_PROFILE.anchor_include_dropped == false
+        @test get_zone_profile("SE4") === NORWAY_PROFILE
+        @test NORWAY_PROFILE.anchor_include_dropped == false
         # IT-CNORTH: ITALY + backstop; other IT sub-zones unchanged
         @test get_zone_profile("IT-CNORTH") === ITALY_CNORTH_PROFILE
         @test with_profile(ITALY_CNORTH_PROFILE; import_backstop=false) == ITALY_PROFILE
@@ -172,10 +171,10 @@ const V10_TRANCHES = [(0.55, 0.95), (0.20, 1.05), (0.15, 1.25), (0.10, 1.60)]
         # iter5: SE3/SE4 anchored after the SE2–SE3/SE3–SE4 flow-based border
         # drop (the €1 observed-import block must not be price-setting — the
         # NO1 iteration-2 lesson). SE1/SE2 stay plain NORDIC.
-        @test SWEDEN_SOUTH_PROFILE.opportunity_anchor == :hydro
+        @test NORWAY_PROFILE.opportunity_anchor == :hydro
         # cv17: SE3 moved to SE3_PROFILE (SWEDEN_SOUTH + backstop + dropped-
         # border anchor ref) — see the cv17 testset; SE4 stays.
-        @test get_zone_profile("SE4") === SWEDEN_SOUTH_PROFILE
+        @test get_zone_profile("SE4") === NORWAY_PROFILE
         @test get_zone_profile("SE1") === NORDIC_PROFILE
         @test get_zone_profile("SE2") === NORDIC_PROFILE
         # iter5: BE's dropped Core borders need the anchor's import pricing

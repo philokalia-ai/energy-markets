@@ -74,14 +74,16 @@ price-setter and the alternative it prices against**.
 
 | Region (zones) | Price-forming force | Model |
 |---|---|---|
-| **SEE** (GR, BG, RO, RS, HU, SI) | Gas-marginal thermal; hydro shadows gas | `SEE_PROFILE` — exact v10 baseline (SRMC tranches, gas-anchored water value, full scarcity markups) |
-| **Iberia** (ES, PT) | Same as SEE; near-isolated, solar-heavy | `IBERIA_PROFILE` ≡ SEE (verified identical) |
+| **SEE** (GR, BG) | Gas-marginal thermal; hydro shadows gas | `SEE_PROFILE` — exact v10 baseline (SRMC tranches, gas-anchored water value, full scarcity markups) |
+| **SEE, import-backed** (RO, RS, HU) | Same forces, but the coupled cold-snap block caps without demonstrated import headroom | `SEE_IMPORT_BACKED_PROFILE` = SEE + `import_backstop` + `backstop_scarcity_credit = 1.0` (cv17); RO/HU also carry the UA boundary book (cv22) |
+| **Slovenia** (SI) | Continental temperament behind dropped Core-FBMC borders | `SLOVENIA_PROFILE` — the Slovakia treatment: border drops + `:hydro` anchor + backstop (cv17) |
+| **Iberia** (ES, PT) | Same as SEE; near-isolated, solar-heavy | `SEE_PROFILE` directly — the `IBERIA_PROFILE` alias was removed in cv25 phase 1 |
 | **Italy** (7 sub-zones) | Gas at a premium — older CCGTs, LNG import costs | SEE + `thermal_srmc_multiplier = 1.20`; the decisive fix was the network remap, not fuel cost |
 | **Continental core** (DE_LU, NL, PL, CZ, SK) | High-RES meshed thermal transit; genuine scarcity rare | `CONTINENTAL_PROFILE`: softened scarcity (threshold 1.25, κ 1.5, peak κ 0.6); adequacy from endogenous flows + CH transit node |
 | **France** | EDF's opportunity-cost bidding of modulating nuclear — not fuel SRMC (the fleet was proven correct; the gap was off-peak bid *position*) | `FRANCE_PROFILE`: nuclear bid floor €55 + `:nuclear` anchor at `anchor_share = 0.55` of the coupled off-peak reference |
 | **Nordic hydro** (NO4, SE1, SE2, FI, DK1, DK2) | Shadow value of stored water (reservoir levels) | `NORDIC_PROFILE`: `hydro_model = :reservoir_opportunity` — water value from weekly reservoir dryness, decoupled from gas; soft scarcity |
 | **Southern/mid Norway** (NO1, NO2, NO3, NO5) | Stored water priced against the **export opportunity to the continent** | `NORWAY_PROFILE` = Nordic + `:hydro` anchor at 0.9 × pass-1 continental ref |
-| **South/mid Sweden** (SE3, SE4) | Same object as southern Norway, once the stale internal borders stop starving them | `SWEDEN_SOUTH_PROFILE` ≡ NORWAY_PROFILE, paired with the SE2–SE3/SE3–SE4 drop (one treatment) |
+| **South/mid Sweden** (SE3, SE4) | Same object as southern Norway, once the stale internal borders stop starving them | `NORWAY_PROFILE`, paired with the SE2–SE3/SE3–SE4 drop (one treatment); SE3 adds the cv17 backstop. The `SWEDEN_SOUTH_PROFILE` alias was removed in cv25 phase 1 |
 | **Alpine** (CH, AT) | Reservoir storage against the continent — hydro-dominated transit hubs | `SWISS_PROFILE` / `AUSTRIA_PROFILE`: reservoir-opportunity + `:hydro` anchor; AT at `anchor_share = 1.1` (its observed Core premium), CH at 0.9. Rolled out **jointly** — fixing CH alone broke AT through their border |
 | **Belgium** | Continental thermal, but its Core-FBMC import ATC collapses exactly at its residual peak hours | `BELGIUM_PROFILE`: BE–FR/NL/DE_LU dropped + observed imports priced at the anchor ref (corr 0.68 → 0.95) |
 | **Baltic** (EE, LT, LV) | Thermally thin, rides the Nordic system | `BALTIC_PROFILE`: softened scarcity. LT and DK2 were cured purely by the SE fix propagating — no local change |
