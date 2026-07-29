@@ -31,13 +31,6 @@ println()
     # Generator Inference Tests
     # Tests for inferring ramp rates, p_min, uptime/downtime from synthetic data
     # -------------------------------------------------------------------------
-    @testset "Generator Inference" begin
-        println("\n" * "=" ^ 60)
-        println("Running Generator Inference Tests...")
-        println("=" ^ 60)
-        include(joinpath(@__DIR__, "test_generator_inference.jl"))
-    end
-
     # -------------------------------------------------------------------------
     # Data Fetching Tests
     # DB integration tests for generators, loads, renewables, transfer capacities
@@ -77,35 +70,14 @@ println()
     # Initial Conditions Tests
     # Tests for generator initial state determination for UC optimization
     # -------------------------------------------------------------------------
-    @testset "Initial Conditions" begin
-        println("\n" * "=" ^ 60)
-        println("Running Initial Conditions Tests...")
-        println("=" ^ 60)
-        include(joinpath(@__DIR__, "test_initial_conditions.jl"))
-    end
-
     # -------------------------------------------------------------------------
     # UC Enhancements Tests
     # Tests for cost breakdown, solver tuning, and batch query optimization
     # -------------------------------------------------------------------------
-    @testset "UC Enhancements" begin
-        println("\n" * "=" ^ 60)
-        println("Running UC Enhancements Tests...")
-        println("=" ^ 60)
-        include(joinpath(@__DIR__, "test_uc_enhancements.jl"))
-    end
-
     # -------------------------------------------------------------------------
     # UC Caching Tests
     # Tests for caching Unit Commitment results in the database
     # -------------------------------------------------------------------------
-    @testset "UC Caching" begin
-        println("\n" * "=" ^ 60)
-        println("Running UC Caching Tests...")
-        println("=" ^ 60)
-        include(joinpath(@__DIR__, "test_uc_caching.jl"))
-    end
-
     # -------------------------------------------------------------------------
     # Network Module Tests
     # Tests for network topology, transfer capacity, and ATC constraints

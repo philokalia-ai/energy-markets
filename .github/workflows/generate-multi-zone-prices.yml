@@ -42,8 +42,6 @@ on:
         type: choice
         options:
           - merit_order
-          - uc_based
-          - alternative
       zones:
         description: "Comma-separated zones (empty = auto-discover; auto misses RS)"
         required: false
@@ -197,7 +195,7 @@ jobs:
           echo "- **Date Range**: $DATE_RANGE" >> $GITHUB_STEP_SUMMARY
           echo "- **Optimizer**: ${{ github.event.inputs.optimizer || 'highs' }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Parallel UC**: ${{ github.event.inputs.parallel || 'true' }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Order Method**: ${{ github.event.inputs.order_method || 'uc_based' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Order Method**: ${{ github.event.inputs.order_method || 'merit_order' }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Force Rerun**: ${{ github.event.inputs.force_rerun || 'false' }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Markup Factor**: ${{ github.event.inputs.markup_factor || '1.1' }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY

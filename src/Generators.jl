@@ -101,7 +101,6 @@ function infer_fuel_type_from_name(name::String, declared_type::Symbol)::Symbol
     return declared_type
 end
 
-include("generators/parameter_inference.jl")  # ramp / p_min / uptime inference from historical output
 function get_generators(source::Bool=false)
     if source == true
         units = DataFrame(CSV.File(joinpath(@__DIR__, "..", "data", "productionunit_202406181240.csv")))
@@ -150,5 +149,3 @@ function get_min_active_capacity(max_capacity::Float64, fuel_type::Symbol)
 end
 include("generators/fuel_costs.jl")           # TTF / EUA lookups and SRMC marginal-cost model
 include("generators/registry.jl")             # day-level outage cache + get_generators (the unit registry query)
-include("generators/inference_cache.jl")      # inferred-parameter DB cache + get_generators_with_inferred_params
-include("generators/initial_conditions.jl")   # generator state at t=0 for unit commitment

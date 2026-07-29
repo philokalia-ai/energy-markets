@@ -4,7 +4,7 @@
 """
     run_multi_zone_for_date_range(start_date::Date, end_date::Date;
                                   zones::Vector{String}=String[],
-                                  order_method::Symbol=:uc_based,
+                                  order_method::Symbol=:merit_order,
                                   optimizer::String="auto",
                                   markup_factor::Float64=1.1,
                                   silent::Bool=true,
@@ -22,7 +22,7 @@ Provides comprehensive progress tracking and timing statistics.
 - `start_date::Date`: First date to process (inclusive)
 - `end_date::Date`: Last date to process (inclusive)
 - `zones::Vector{String}`: List of bidding zones to include (default: auto-discover from DB)
-- `order_method::Symbol`: Method for creating orders - `:uc_based`, `:alternative` or `:merit_order` (default: `:uc_based`)
+- `order_method::Symbol`: only `:merit_order` (the UC-based and alternative books were removed in cv25)
 - `optimizer::String`: Optimization solver - "highs" (default), "gurobi", "cplex", "auto"
 - `markup_factor::Float64`: Price markup factor for supply bids (default: 1.1)
 - `silent::Bool`: Whether to suppress solver output (default: true)
@@ -76,7 +76,7 @@ end
 """
 function run_multi_zone_for_date_range(start_date::Date, end_date::Date;
                                        zones::Vector{String}=String[],
-                                       order_method::Symbol=:uc_based,
+                                       order_method::Symbol=:merit_order,
                                        optimizer::String="auto",
                                        markup_factor::Float64=1.1,
                                        silent::Bool=true,
@@ -283,7 +283,7 @@ end
 
 """
     generate_energy_prices_for_all_zones(date::Date;
-                                        order_method::Symbol=:uc_based,
+                                        order_method::Symbol=:merit_order,
                                         model::Symbol=:mpcc,
                                         optimizer::String="auto",
                                         markup_factor::Float64=1.1,
@@ -308,7 +308,7 @@ progress tracking, and optional parallel processing.
 
 # Arguments
 - `date::Date`: The date for which to generate prices for all zones
-- `order_method::Symbol`: Method for creating orders - `:uc_based`, `:alternative` or `:merit_order` (default: `:uc_based`)
+- `order_method::Symbol`: only `:merit_order` (the UC-based and alternative books were removed in cv25)
 - `model::Symbol`: Market clearing model - `:mpcc` (default, more may be added later)
 - `optimizer::String`: Optimization solver - "highs" (default), "gurobi", "cplex", "auto"
 - `markup_factor::Float64`: Price markup factor for UC-based orders (default: 1.1)
@@ -393,7 +393,7 @@ end
 
 # Using alternative order book method with parallel processing
 result = generate_energy_prices_for_all_zones(Date(2024, 10, 1);
-    order_method=:alternative,
+    order_method=:merit_order,
     random_seed=42,
     parallel=true,
     max_workers=32)
@@ -443,7 +443,7 @@ The function includes robust error handling:
 - In parallel mode, worker failures are isolated and reported
 """
 function generate_energy_prices_for_all_zones(date::Date;
-    order_method::Symbol=:uc_based,
+    order_method::Symbol=:merit_order,
     model::Symbol=:mpcc,
     optimizer::String="auto",
     markup_factor::Float64=1.1,
@@ -643,7 +643,7 @@ end
 
 """
     generate_energy_prices_for_date_range(start_date::Date, end_date::Date;
-                                          order_method::Symbol=:uc_based,
+                                          order_method::Symbol=:merit_order,
                                           model::Symbol=:mpcc,
                                           optimizer::String="auto",
                                           markup_factor::Float64=1.1,
@@ -669,7 +669,7 @@ and result aggregation across the entire date range.
 - `start_date::Date`: First date to process (inclusive)
 - `end_date::Date`: Last date to process (inclusive)
 - All other arguments are passed through to `generate_energy_prices_for_all_zones()`:
-  - `order_method::Symbol`: Method for creating orders - `:uc_based`, `:alternative` or `:merit_order` (default: `:uc_based`)
+  - `order_method::Symbol`: only `:merit_order` (the UC-based and alternative books were removed in cv25)
   - `model::Symbol`: Market clearing model - `:mpcc` (default)
   - `optimizer::String`: Optimization solver - "highs" (default), "gurobi", "cplex", "auto"
   - `markup_factor::Float64`: Price markup factor for UC-based orders (default: 1.1)
@@ -788,7 +788,7 @@ end
 - Failed dates are clearly identified in results
 """
 function generate_energy_prices_for_date_range(start_date::Date, end_date::Date;
-    order_method::Symbol=:uc_based,
+    order_method::Symbol=:merit_order,
     model::Symbol=:mpcc,
     optimizer::String="auto",
     markup_factor::Float64=1.1,

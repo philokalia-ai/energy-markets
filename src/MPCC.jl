@@ -11,7 +11,6 @@ import ..select_solver
 import ..Euphemia.MarketOrders: MarketOrder, SimpleOrder, AggregatedPeriodicOrder
 import ..Euphemia.Network: NetworkTopology, TransferCapacity, get_connected_zones, get_zone_pairs, create_transfer_capacity_from_entsoe
 import ..Euphemia: get_loads, get_generators, get_generation_forecast_for_wind_and_solar
-import ..Euphemia.BiddingStrategy: generate_market_orders_from_uc, UCToBidsResult
 
 # Result structure
 struct MPCCResult
@@ -121,7 +120,6 @@ end
 
 # Split by concern; each file is `include`d in the original definition order,
 # so the module body is line-for-line the pre-split code.
-include("mpcc/order_books.jl")      # UC-solution -> MPCCOrderBook adapters (single- and multi-zone)
 include("mpcc/solver.jl")           # solve_mpcc_market_clearing + the per-period decomposition variant
 include("mpcc/coupling_metrics.jl") # iterative-coupling helpers: flows -> net imports, convergence, damping
 

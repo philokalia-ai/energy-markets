@@ -531,7 +531,6 @@ SELECT * FROM 'https://<public-bucket-url>/v1/zones/GR.parquet' LIMIT 24;
 src/        The Euphemia library: merit-order book construction (MeritOrderBook.jl
             + merit_order/), clearing orchestration (Euphemia.jl + clearing/),
             coupled MPCC clearing (MPCC.jl), network/ATC topology (Network.jl),
-            unit commitment (UnitCommitment.jl), generator registry & costs
             (Generators.jl + generators/), data access (dbutils.jl + db/) —
             reader's guide: docs/code-map.md
 bin/        Runners: reproduce.jl (public reproduction), build_duckdb_extract.jl /

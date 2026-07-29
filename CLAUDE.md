@@ -24,16 +24,14 @@ guide (what lives where, what calls what, where to start per task). Large
 concerns are split into per-topic files `include`d by a thin parent in
 definition order:
 
-- `src/Euphemia.jl` + `src/clearing/` - Main module spine (deps, solver cache, exports) + the clearing orchestration: `single_zone.jl`, `multi_zone_books.jl`, `multi_zone_run.jl`, `iterative.jl`, `batch_runners.jl`, `batch_workers.jl`
+- `src/Euphemia.jl` + `src/clearing/` - Main module spine (deps, solver cache, exports) + the clearing orchestration: `single_zone.jl`, `multi_zone_books.jl`, `multi_zone_run.jl`, `batch_runners.jl`, `batch_workers.jl`
 - `src/MeritOrderBook.jl` + `src/merit_order/` - The calibrated ex-ante book: `flows_imports.jl` (net imports, ex-ante flows, backstop), `zone_profiles.jl` (ZoneProfile + ZONE_PROFILES + ZoneScenario), `fleet_data.jl` (hydro/p95/reservoir queries), `book_build.jl` (create_merit_order_book)
-- `src/Generators.jl` + `src/generators/` - Generator struct + `registry.jl` (get_generators), `fuel_costs.jl` (TTF/EUA/SRMC), `parameter_inference.jl`, `inference_cache.jl`, `initial_conditions.jl`
+- `src/Generators.jl` + `src/generators/` - Generator struct + `registry.jl` (get_generators), `fuel_costs.jl` (TTF/EUA/SRMC)
 - `src/dbutils.jl` + `src/db/` - `postgres_core.jl` (code-version ledger, pool, sql2df), `duckdb_store.jl` (offline extract backend), `results_store.jl` (simulations.* DDL + writers)
-- `src/MPCC.jl` + `src/mpcc/` - MPCC solver: `solver.jl` (clearing solve + robustness ladder), `order_books.jl` (UC->book adapters), `coupling_metrics.jl`
-- `src/UnitCommitment.jl` + `src/uc/` - Unit commitment: `model.jl` (the MILP), `cache.jl` (uc_results caching)
-- `src/BiddingStrategy.jl` - Converts UC solutions to market bids
+- `src/MPCC.jl` + `src/mpcc/` - MPCC solver: `solver.jl` (clearing solve, robustness ladder, competitive price reconstruction), `coupling_metrics.jl`
 - `src/Network.jl` - Network topology, TransferCapacity, and ATC constraints
 - `src/MarketOrders.jl` - Order types (SimpleOrder, BlockOrder)
-- `src/AlternativeOrderBook.jl` - Alternative (faster) order book generation
+- `src/OrderBookResult.jl` - The shared order-book result type + the timeslot helper
 - `src/Loads.jl`, `src/Renewables.jl` - Demand and RES-forecast queries
 
 ### Key Functions
@@ -42,9 +40,9 @@ definition order:
 ```julia
 # Generate prices for a single zone
 prices = generate_energy_prices("GR", Date(2024, 6, 15);
-    order_method=:uc_based,  # or :alternative (faster)
+    order_method=:merit_order,
     save_to_db=true,
-    force_rerun=false)       # Set true to bypass UC cache
+    force_rerun=false)     
 
 # Process all zones for a single date
 result = generate_energy_prices_for_all_zones(Date(2024, 6, 15);
@@ -60,7 +58,7 @@ result = generate_energy_prices_for_date_range(Date(2024, 6, 1), Date(2024, 6, 7
 # Clear multiple zones simultaneously with cross-border ATC constraints
 result = run_multi_zone_market_clearing(Date(2024, 6, 15);
     zones=["GR", "BG", "RO"],  # or empty for auto-discover
-    order_method=:alternative,  # :uc_based or :alternative
+    order_method=:merit_order,
     save_to_db=true)
 
 # Access results
@@ -71,7 +69,7 @@ result.total_time              # Total processing time
 
 # Process multiple dates with multi-zone clearing
 result = run_multi_zone_for_date_range(Date(2024, 6, 1), Date(2024, 6, 7);
-    order_method=:alternative,
+    order_method=:merit_order,
     save_to_db=true)
 
 # Parallel UC execution (requires workers)
@@ -82,50 +80,20 @@ addprocs(4)
 # Single date with parallel UC
 result = run_multi_zone_market_clearing(Date(2024, 6, 15);
     zones=["GR", "BG", "RO", "HU"],
-    order_method=:uc_based,
-    parallel=true)  # UC solves run in parallel, MPCC runs after all complete
+    order_method=:merit_order,
+    parallel=true)  
 
 # Date range with parallel UC
 result = run_multi_zone_for_date_range(Date(2023, 1, 1), Date(2024, 12, 31);
-    order_method=:uc_based,
+    order_method=:merit_order,
     parallel=true,       # UC solves run in parallel per date
-    force_rerun=false,   # Set true to bypass UC cache
+    force_rerun=false, 
     save_to_db=true)
 ```
 
-**Iterative multi-zone clearing (accounts for interconnections in UC):**
-```julia
-# Standard approach: UC ignores interconnections, MPCC handles flows
-result = run_multi_zone_market_clearing(Date(2024, 6, 15); zones=["GR", "BG", "RO"])
-
-# Iterative approach: UC-MPCC feedback loop until prices converge
-result = run_iterative_multi_zone_market_clearing(Date(2024, 6, 15);
-    zones=["GR", "IT-NORTH", "IT-SOUTH"],
-    max_iterations=10,       # Stop after 10 iterations max
-    price_tolerance=1.0,     # Stop when max price change < 1 €/MWh
-    damping_factor=0.7,      # Update smoothing (0.7 = 70% new + 30% old)
-    parallel=true            # Auto-limits: 2 workers for Gurobi, half for HiGHS
-)
-
-# Check convergence
-result.converged              # true if price changes < tolerance
-result.iterations             # number of iterations performed
-result.convergence_metrics    # (price_change, flow_change_pct)
-result.final_net_imports      # final net imports per zone
-```
-
-**Convergence criterion:** Uses price-based convergence (max |Δλ| < tolerance) rather
-than flow-based. This is preferred because prices are the economic fixed point of
-market coupling, while flows are derived quantities that can oscillate near binding
-constraints due to UC binary decisions.
-
-The iterative approach is recommended for tightly interconnected zones where
-cross-border flows significantly affect optimal unit commitment decisions.
-Typical convergence: 2-5 iterations. Runtime: 2-4× longer than non-iterative.
-
 **Zone discovery:**
 ```julia
-# Zones with generator data (for UC/bidding)
+# Zones with generator data
 zones = get_available_zones(date)
 
 # Zones with transfer capacity data (for multi-zone clearing)
@@ -252,397 +220,6 @@ These fuel types:
 - Have `min_load_factor = 0` (can operate at any level down to 0 MW)
 - Are excluded from thermal minimum generation constraints in UC
 - Include "Other" since the actual technology is unknown
-
-**Generator parameter inference from historical data:**
-
-The UC solver uses inferred plant-specific parameters by default (`use_inferred_params=true`). This provides more accurate ramp rates, p_min, and uptime/downtime constraints based on historical generation data rather than generic fuel-type defaults.
-
-```julia
-# Get generators with inferred parameters (uses DB cache, ~2 sec)
-generators = get_generators_with_inferred_params("GR", Date(2024, 6, 15))
-
-# Force fresh inference (slow, ~17 min, but updates cache)
-generators = get_generators_with_inferred_params("GR", Date(2024, 6, 15); use_cache=false)
-
-# Manual inference without caching
-generators = get_generators("GR", Date(2024, 6, 15))
-generators_with_inferred = infer_parameters_for_generators(generators, Date(2024, 6, 15))
-```
-
-Parameter cache:
-- Cached in PostgreSQL (`simulations.generator_inferred_parameters`)
-- Default cache expiry: 365 days (physical parameters don't change frequently)
-- For zones without cached data, inference runs automatically on first UC solve
-- Use `max_cache_age_days` parameter to adjust cache expiry
-
-**Proactive cache refresh:**
-
-To avoid surprise delays during UC solves, use `refresh_inference_cache()` to proactively update the cache. When `parallel=true`, inference is parallelized at the **generator level** (not zone level), allowing full utilization of all available CPU cores. Each generator's inference is completely independent (just DB queries + statistics).
-
-```julia
-# Refresh cache for specific zones (sequential)
-result = refresh_inference_cache(["GR", "BG", "RO"], Date(2024, 6, 15))
-
-# Parallel refresh - uses half the cores (leave room for other users)
-using Distributed
-addprocs(Sys.CPU_THREADS ÷ 2)  # e.g., 40 cores on 80-core machine
-@everywhere using Euphemia
-zones = get_available_zones(Date(2024, 6, 15))
-result = refresh_inference_cache(zones, Date(2024, 6, 15); parallel=true)
-# With 400 generators across 80 workers: ~5x faster than sequential
-```
-
-**Command-line script** (`bin/refresh_inference_cache.jl`):
-```bash
-# Run manually with environment variables
-REFERENCE_DATE="2026-01-01" PARALLEL="true" MAX_WORKERS="40" julia --project=. bin/refresh_inference_cache.jl
-```
-
-**GitHub Action** (`.github/workflows/refresh-inference-cache.yml`):
-- Runs annually on January 1st to keep cache fresh
-- Can be triggered manually before large batch runs
-- Auto-discovers all zones and uses generator-level parallelism
-
-The `infer_parameters_for_generators()` function analyzes historical generation from `entsoe.actual_generation_output_per_generation_unit` to infer:
-
-- **Ramp rates** (`ramp_up`, `ramp_down`): 95th percentile of observed ramps, stored as fraction of p_max per hour
-- **Minimum generation** (`p_min`): 5th percentile of stable non-zero operation
-- **Min uptime/downtime** (`min_uptime`, `min_downtime`): 5th percentile of on/off cycle durations (hours)
-
-Ramp rate inference:
-- Queries 12 months of historical generation data to capture full seasonal variation
-- Normalizes to hourly rates regardless of source resolution (PT15M, PT60M, etc.)
-- Falls back to fuel-type defaults in `FuelTypeParameters` if insufficient data
-- The 12-month window captures all seasonal dispatch patterns while the 95th/5th percentile approach extracts robust parameter estimates
-
-Initial p_min (when loading from database):
-- **Flexible resources** (hydro, batteries, storage): `p_min = 0`
-- **Thermal plants**: `p_min = min_load_factor × p_max` from `FuelTypeParameters`
-- This ensures consistency with what UC enforces, even before inference runs
-
-p_min inference strategy (robust to data quality issues):
-- **Flexible resources** (hydro, batteries): p_min = 0 (no inference needed)
-- **Thermal plants**: Infers from historical stable operation
-  - Filters zeros (plant off) and transients (startup/shutdown ramps)
-  - Transient detection: points where |delta| > 5% of p_max
-  - Takes 5th percentile of remaining stable values
-  - Fuel-type-specific clamp bounds (aligned with FuelTypeParameters):
-    - Coal/Lignite: 45-65% of p_max
-    - Gas CCGT: 35-55% of p_max
-    - Gas OCGT: 20-45% of p_max
-
-Min uptime/downtime inference:
-- Identifies consecutive "on" periods (output > 1 MW) for uptime
-- Identifies consecutive "off" periods (output = 0) for downtime
-- Filters out short glitches (< 2 periods)
-- Requires at least 5 on/off cycles for meaningful inference
-- Baseload plants (coal) often return N/A (rarely cycle)
-- Fuel-type-specific clamp bounds:
-  - Coal: uptime 8-48h, downtime 4-24h
-  - Gas CCGT: uptime 2-12h, downtime 1-8h
-  - Gas OCGT: uptime 1-4h, downtime 1-4h
-
-p_min validation (outage handling):
-- Inferred or cached p_min may exceed current p_max when outages reduce capacity
-- Example: Generator historically operates at min 80 MW, but outage reduces p_max to 70 MW
-- **Validation**: p_min is clamped to not exceed p_max in both:
-  - `infer_parameters_for_generator()`: After inference
-  - `get_generators_with_inferred_params()`: When applying cached parameters
-- Logs a warning when clamping occurs for tracking data issues
-- Without this validation, UC becomes infeasible (constraint p_min ≤ g ≤ p_max impossible)
-
-**Generator initial conditions for unit commitment:**
-```julia
-# Get initial conditions for all generators (state at t=0)
-conditions = get_initial_conditions(generators, Date(2024, 6, 15))
-
-# Each generator has:
-ic = conditions["GEN-CODE"]
-ic.is_on        # Bool: was generator running at market day start?
-ic.output       # Float64: MW output at t=0 (0 if off)
-ic.hours_on     # Int: consecutive hours already running
-ic.hours_off    # Int: consecutive hours already off
-ic.thermal_state # Symbol: :hot, :warm, or :cold
-```
-
-Initial conditions inference:
-- Uses batch query (`get_recent_generation_batch()`) to fetch all generator history in one SQL call
-- Queries 72 hours of historical data before market day start (00:00 CET)
-- Determines commitment status from most recent output (> 1 MW = on)
-- Counts consecutive hours in current state for uptime/downtime constraints
-- Thermal state based on hours_off:
-  - Hot: hours_off <= 8 (quick restart)
-  - Warm: 8 < hours_off <= 48
-  - Cold: hours_off > 48 (full cold start)
-
-Performance optimization:
-- Batch query instead of N individual queries (~36x speedup)
-- For ~40 generators: ~15 sec vs ~9 min with individual queries
-- Uses `WHERE generation_unit_code = ANY($1)` for efficient batch lookup
-
-Fallback defaults when no historical data:
-- Baseload (coal, lignite, nuclear): Assume running
-- Mid-merit (CCGT): Assume off but warm
-- Peakers (OCGT): Assume off, potentially cold
-- Flexible (hydro, batteries): Assume off, ready (hot)
-
-Unit commitment integration:
-- Links t=1 commitment to initial state u₀
-- Constrains t=1 ramps from initial output g₀
-- Enforces remaining uptime/downtime based on T_on₀/T_off₀
-
-Initial output validation:
-- Historical output data may be outside the valid `[effective_p_min, p_max]` range due to:
-  - Data quality issues (measurement errors)
-  - Capacity changes (derating, upgrades)
-  - Outages affecting available capacity
-- The UC solver validates and clamps initial output to prevent infeasibility:
-  - If `output > p_max`: clamp to `p_max`
-  - If `output < effective_p_min`: set to `max(0.7 × p_max, effective_p_min)`
-  - Logs warnings when clamping occurs
-- **Important**: `effective_p_min = max(declared_p_min, min_load_factor × p_max)` for thermal plants
-  - This matches how the UC model calculates minimum generation
-  - Flexible fuel types (hydro, storage) use only `declared_p_min`
-- This ensures ramp constraints from t=0 to t=1 are always feasible
-
-**Unit commitment solver:**
-```julia
-# Run unit commitment optimization
-solution = solve_unit_commitment("GR", Date(2024, 6, 15))
-
-# With custom solver tuning
-solution = solve_unit_commitment("GR", Date(2024, 6, 15);
-    mip_gap=0.01,       # Accept 1% optimality gap (default)
-    time_limit=600.0)   # Max solve time in seconds (default 10 min)
-
-# With inferred parameters from historical data (default: enabled)
-solution = solve_unit_commitment("GR", Date(2024, 6, 15);
-    use_inferred_params=true)  # Use plant-specific ramp rates from historical data
-
-# Disable inferred parameters (use fuel-type defaults only)
-solution = solve_unit_commitment("GR", Date(2024, 6, 15);
-    use_inferred_params=false)  # Fall back to FuelTypeParameters defaults
-
-# Access solution fields
-solution.status              # JuMP termination status (OPTIMAL, INFEASIBLE, etc.)
-solution.solver              # Solver used ("HiGHS" or "Gurobi")
-solution.resolution_minutes  # Time period resolution (15, 30, or 60)
-solution.total_cost          # Total cost (production + startup + no-load)
-solution.g                   # Generation matrix [generator × time]
-solution.u                   # Commitment matrix [generator × time]
-solution.v                   # Startup decisions [generator × time]
-solution.cost_breakdown      # Detailed cost breakdown (see below)
-```
-
-Solver tuning parameters (solver-agnostic via MOI):
-- `mip_gap`: Relative optimality gap tolerance (default 0.01 = 1%). Solver stops when it finds a solution within this percentage of proven optimal.
-- `time_limit`: Maximum solve time in seconds (default 600 = 10 min). Returns best solution found within time budget.
-- `use_inferred_params`: Use plant-specific parameters inferred from historical data (default: true). When enabled, the solver uses `get_generators_with_inferred_params()` which provides plant-specific ramp rates, p_min, and uptime/downtime constraints. When disabled, uses fuel-type defaults from `FuelTypeParameters`.
-
-Unit commitment objective function components:
-- **Production costs**: `marginal_cost × generation` for each generator and period
-- **Startup costs**: Temperature-dependent (hot × 1.0, warm × 1.5, cold × 2.5 base cost)
-  - Base startup cost = `startup_cost_multiplier × marginal_cost × p_max`
-  - From `FuelTypeParameters` for each fuel type
-- **No-load costs**: Fixed cost when committed = `no_load_cost_fraction × marginal_cost × p_min × period_hours`
-- **Curtailment costs**: Penalty for spilling renewable generation (default 1 €/MWh)
-
-"Other" fuel type handling:
-- Generators with unknown fuel type use flexible parameters (not conservative thermal)
-- Parameters: 1-2h startup, 1h min up/downtime, 50% ramp rate, 0% min load factor
-- This prevents infeasibility for miscategorized flexible resources (e.g., unidentified batteries)
-- See `docs/unknown-other-generators.md` for list of generators requiring manual classification
-
-**Renewable curtailment:**
-
-The UC solver allows renewable curtailment to handle infeasibility when thermal P_min constraints exceed net demand. This is common in high-RES penetration scenarios.
-
-```julia
-# Default: curtailment allowed with 1 €/MWh penalty
-solution = solve_unit_commitment("GR", Date(2024, 6, 15))
-
-# Custom curtailment penalty (higher = less curtailment)
-solution = solve_unit_commitment("GR", Date(2024, 6, 15);
-    curtailment_penalty=5.0)  # 5 €/MWh penalty
-
-# Access curtailment data
-solution.curtailment      # Vector of curtailment per period (MWh)
-solution.curtailment_cost # Total curtailment cost (€)
-solution.load_values      # Raw load values (before net demand)
-solution.renewable_values # Raw renewable forecast values
-```
-
-How curtailment works:
-- **Balance constraint**: `Generation + Shortage = Load - Renewables + Curtailment + Excess`
-- **Curtailment bounds**: `0 ≤ Curtailment[t] ≤ Renewables[t]`
-- **Objective**: Adds `curtailment_penalty × sum(Curtailment)` to minimize unnecessary spilling
-
-When curtailment is needed:
-- Sum of committed thermal P_min exceeds net demand
-- High renewable generation + low load periods
-- Min uptime constraints prevent thermal unit shutdown
-
-The curtailment penalty should reflect:
-- `0 €/MWh`: Free curtailment (pure technical feasibility)
-- `1-5 €/MWh`: Typical values (political/subsidy signal)
-- Higher values reduce curtailment but may cause infeasibility
-
-**Excess generation (structural oversupply):**
-
-When curtailment alone cannot achieve feasibility (e.g., sum of thermal P_min > load even with all renewables curtailed), the UC solver allows "excess generation" as a last resort. This guarantees feasibility for all zones.
-
-```julia
-# Default: excess allowed with 10,000 €/MWh penalty
-solution = solve_unit_commitment("GR", Date(2024, 6, 15))
-
-# Custom excess penalty (higher = less excess, but may cause infeasibility)
-solution = solve_unit_commitment("GR", Date(2024, 6, 15);
-    excess_penalty=5000.0)  # 5,000 €/MWh penalty
-
-# Access excess data
-solution.excess      # Vector of excess generation per period (MWh)
-solution.excess_cost # Total excess cost (€)
-```
-
-How excess generation works:
-- **Balance constraint**: `Generation + Shortage = Load - Renewables + Curtailment + Excess`
-- **Excess bounds**: `Excess[t] ≥ 0` (unbounded above)
-- **Objective**: Adds `excess_penalty × sum(Excess)` to minimize structural oversupply
-
-When excess is needed:
-- Thermal P_min constraints force generation above what load can absorb
-- Even after curtailing all renewables, thermal minimum > load
-- Typically indicates grid has more baseload capacity than demand
-
-The excess penalty should be high (default 10,000 €/MWh) to ensure it's only used as a last resort, after all curtailment options are exhausted. If excess generation appears, it indicates a structural oversupply problem in the zone.
-
-**Shortage (load shedding):**
-
-When total generation capacity is insufficient to meet demand (total P_max < net demand), the UC solver allows "load shedding" via a shortage variable. This guarantees feasibility for all zones.
-
-```julia
-# Default: shortage allowed with 10,000 €/MWh penalty
-solution = solve_unit_commitment("GR", Date(2024, 6, 15))
-
-# Custom shortage penalty
-solution = solve_unit_commitment("GR", Date(2024, 6, 15);
-    shortage_penalty=5000.0)  # 5,000 €/MWh penalty
-
-# Access shortage data
-solution.shortage      # Vector of load shedding per period (MWh)
-solution.shortage_cost # Total shortage cost (€)
-```
-
-How shortage (load shedding) works:
-- **Balance constraint**: `Generation + Shortage = Load - Renewables + Curtailment + Excess`
-- **Shortage bounds**: `Shortage[t] ≥ 0` (unbounded above)
-- **Objective**: Adds `shortage_penalty × sum(Shortage)` to minimize load shedding
-
-When shortage is needed:
-- Total available generation capacity (P_max) is less than net demand
-- Even with all generators running at full capacity, demand cannot be met
-- Typically indicates zone has insufficient generation capacity or data issues
-
-The shortage penalty should be high (default 10,000 €/MWh) to ensure it's only used as a last resort. If shortage appears, it indicates either:
-1. A capacity shortage in the zone (insufficient installed capacity)
-2. Data quality issues (missing generators or incorrect load data)
-3. The zone aggregates multiple sub-zones with different data availability
-
-Cost breakdown fields:
-```julia
-cb = solution.cost_breakdown
-cb.production_cost        # Total production costs (€)
-cb.startup_cost           # Total startup costs (€)
-cb.noload_cost            # Total no-load costs (€)
-cb.startup_costs_by_type  # Dict{Symbol,Float64} - costs by :hot/:warm/:cold
-cb.startup_counts         # Dict{Symbol,Int} - count of each startup type
-cb.generator_costs        # Dict{String,Float64} - production cost by generator
-cb.fuel_type_costs        # Dict{Symbol,Float64} - production cost by fuel type
-cb.period_costs           # Vector{Float64} - total cost per time period
-```
-
-Time resolution handling:
-- All parameters in `FuelTypeParameters` are stored in HOURS
-- The UC solver converts to PERIODS based on actual data resolution
-- Conversion factor: `periods_per_hour = 60 / resolution_minutes`
-- Affected parameters: startup times, min uptime/downtime, temperature thresholds
-- Example: At 15min resolution, `min_uptime=4` hours → 16 periods
-
-Big M parameter:
-- Used in ramp constraints to relax them during startup/shutdown
-- Scaled to problem size: `M = 2 × max(p_max)` for numerical stability
-
-**Infeasibility diagnosis (Gurobi only):**
-
-When the UC solver returns INFEASIBLE with Gurobi, it automatically computes and prints the Irreducible Infeasible Subsystem (IIS):
-
-```julia
-# If infeasible, solver prints conflicting constraints:
-# Computing IIS (Irreducible Infeasible Subsystem)...
-# IN CONFLICT: min_uptime[GEN-CODE,5]: u[GEN-CODE,5] >= ...
-# IN CONFLICT: ramp_down[GEN-CODE,1]: g[GEN-CODE,1] - g₀ >= ...
-```
-
-The IIS identifies the minimal set of constraints that cannot all be satisfied simultaneously. Common causes:
-- **Ramp + initial conditions**: Generator output at t=0 too far from required t=1 range
-- **Min uptime/downtime**: Generator must be both ON and OFF due to conflicting constraints
-- **Startup profile**: Generator cannot complete startup within horizon
-
-For systematic diagnosis, use the diagnostic script:
-```bash
-julia --project=. test/scripts/diagnose_fr_infeasibility.jl
-```
-
-This analyzes capacity by status, thermal state, startup time, and identifies locked generators.
-
-**UC results caching:**
-```julia
-# Run UC with caching (default - uses cached results if available)
-solution = solve_unit_commitment("GR", Date(2024, 6, 15))
-
-# Force fresh solve, bypassing and replacing cache
-solution = solve_unit_commitment("GR", Date(2024, 6, 15); force_rerun=true)
-
-# Disable caching entirely (neither load nor save)
-solution = solve_unit_commitment("GR", Date(2024, 6, 15); use_cache=false)
-
-# Check if cached results exist
-has_cache = has_cached_uc_results("GR", Date(2024, 6, 15))
-
-# Load cached results directly (returns nothing if not found)
-cached = load_uc_results("GR", Date(2024, 6, 15))
-
-# Cached solutions have from_cache=true field
-cached.from_cache  # true for loaded results, not present for fresh solves
-```
-
-Caching behavior:
-- **Default** (`use_cache=true, force_rerun=false`): Check cache first, return cached if exists, else solve and save
-- **Force rerun** (`force_rerun=true`): Solve fresh, replace cache entry
-- **No caching** (`use_cache=false`): Solve fresh, don't save to cache
-- Cache is stored in PostgreSQL (`simulations.uc_results`, `uc_generation`, `uc_net_demand`)
-- Cache key: `(bidding_zone, market_date, code_version)`
-- Storage: ~195 KB per zone/day (~700 MB/year for 10 zones)
-
-The `force_rerun` parameter is passed through the entire call chain:
-- `generate_energy_prices_for_date_range()` → `generate_energy_prices_for_all_zones()` → `generate_energy_prices()` → `create_typed_order_book()` → `generate_market_orders_from_uc()` → `solve_unit_commitment()`
-- `run_multi_zone_for_date_range()` → `run_multi_zone_market_clearing()` → `create_multi_zone_order_book()` → `generate_market_orders_from_uc()` → `solve_unit_commitment()`
-
-**Parallel UC execution:**
-When `parallel=true` in `run_multi_zone_market_clearing()`:
-- UC solves for each zone run concurrently using `Distributed.pmap`
-- Requires workers: `addprocs(n)` + `@everywhere using Euphemia`
-- Falls back to sequential if no workers available
-- Cache reads/writes are safe (zone-specific keys, PostgreSQL transactions)
-
-**Gurobi license constraints:**
-- WLS (Web License Service) limits concurrent solver sessions (check "session baseline" in your Gurobi profile)
-- Each parallel UC worker consumes 1 session while actively solving
-- **Automatic cap**: When `parallel=true` and `max_workers` is not set:
-  - Gurobi: automatically limits to 2 workers (license limit)
-  - HiGHS: uses half of available workers (leaves headroom)
-- Override with explicit `max_workers=N` if needed
-- "Max distributed workers" is unrelated (for Gurobi's distributed MIP, not parallel independent solves)
 
 ### Pipelined multi-zone backfill (`run_pipelined_backfill`)
 
@@ -781,15 +358,12 @@ as `results_db`; reads of `simulations.energy_prices` / `optimization_runs` /
 
 **Limitations:**
 - **Source data is read-only** under DuckDB (entsoe.*/yfinance.* never written).
-  Market results persist to `data/results.duckdb` (see above); UC caching and
-  `ensure_indexes` still warn-and-no-op.
+  Market results persist to `data/results.duckdb` (see above); `ensure_indexes`
+  still warns-and-no-ops.
 - **Merit-order only.** The DuckDB path targets the `:merit_order` book
-  (single-zone and multi-zone). `:uc_based` / `:alternative` are not threaded
-  (they need write-heavy UC caching and the full 365-day ramp-inference window,
-  which the merit extract does not carry).
+  (single-zone and multi-zone) — the only book there is since cv25.
 - **Scenario hooks** thread through both the single-zone `:merit_order` path and
-  the multi-zone footprint path (`run_multi_zone_market_clearing(...; scenario=)`);
-  `:uc_based` / `:alternative` are not wired.
+  the multi-zone footprint path (`run_multi_zone_market_clearing(...; scenario=)`).
 
 **Multi-zone under DuckDB.** `run_multi_zone_market_clearing(..., order_method=`
 `:merit_order, enrich_network=true, passes=2, save_to_db=false)` runs entirely
@@ -1005,10 +579,11 @@ The project includes several GitHub workflows for automated price generation:
 
 | Workflow | Schedule | Description |
 |----------|----------|-------------|
-| `generate-energy-prices.yml` | Daily 2 AM UTC | Single-zone market clearing |
 | `generate-multi-zone-prices.yml` | Daily 3 AM UTC | Multi-zone clearing with transmission |
-| `generate-iterative-multi-zone-prices.yml` | Manual only | Iterative UC-MPCC (accounts for interconnections) |
-| `refresh-inference-cache.yml` | Annually Jan 1st | Refresh generator parameter inference cache |
+| `daily-forecast.yml` | Dispatch only | The ex-ante forecast (scheduled from ceres) |
+
+The single-zone, iterative and inference-refresh workflows were deleted in cv25
+along with the UC path they drove.
 
 All workflows support `workflow_dispatch` for manual triggering with custom parameters.
 
@@ -1016,8 +591,7 @@ All workflows support `workflow_dispatch` for manual triggering with custom para
 
 The workflows invoke Julia scripts in the `bin/` directory:
 
-- **`bin/multi_zone_main.jl`** - Non-iterative multi-zone clearing for date ranges
-- **`bin/iterative_multi_zone_main.jl`** - Iterative UC-MPCC clearing for date ranges
+- **`bin/multi_zone_main.jl`** - Multi-zone clearing for date ranges
 
 **Running locally:**
 ```bash
@@ -1028,13 +602,8 @@ export PARALLEL="true"
 export OPTIMIZER="highs"
 export MAX_WORKERS="0"  # 0 = auto-detect
 
-# For iterative (additional params)
-export MAX_ITERATIONS="10"
-export PRICE_TOLERANCE="1.0"
-export DAMPING_FACTOR="0.7"
-
 # Run
-julia --project=. bin/iterative_multi_zone_main.jl
+julia --project=. bin/multi_zone_main.jl
 ```
 
 ## Development Commands
@@ -1069,11 +638,7 @@ julia --project=. -e "using Test, Euphemia; include(\"test/test_multi_zone_mpcc.
 ```
 test/
 ├── runtests.jl                  # Main test runner (includes core tests)
-├── test_generator_inference.jl  # Generator parameter inference tests (58 tests)
 ├── test_data_fetching.jl        # DB integration for loads/renewables/etc (23 tests)
-├── test_initial_conditions.jl   # Generator initial state tests (69 tests)
-├── test_uc_enhancements.jl      # UC cost breakdown, solver tuning, batch query tests
-├── test_uc_caching.jl           # UC results caching tests (17 tests)
 ├── test_mpcc.jl                 # MPCC solver tests (50 tests)
 ├── test_multi_zone_mpcc.jl      # Multi-zone transmission tests (21 tests)
 ├── test_network_module.jl       # Network/ATC tests (140 tests)
@@ -1208,7 +773,8 @@ The project uses PostgreSQL with two main schemas:
 **`simulations.energy_prices`** - Generated energy price results by bidding zone, date, and time period
 - `clearing_mode`: Distinguishes between `'single_zone'` (independent zone clearing), `'multi_zone'` (joint clearing with transmission), and `'multi_zone_iterative'` (iterative UC-MPCC feedback loop)
 - `optimization_run_id`: Foreign key to `optimization_runs` table for traceability
-- `code_version`: Model version (current: 24 for energy_prices, 4 for optimization_runs/uc_results). energy_prices v3 = SRMC/TTF cost model (July 2026); v7 = multi-zone artifact fixes (tight MIP gap, component-wise price reconstruction, border-aware import exclusion, July 2026; 4–6 were taken by legacy uc_based experiment rows); v8 = daily EUA carbon prices from `yfinance.eua_co2` (July 2026); v9 = multi-zone nodal-balance flow signs fixed (flows were physically mirrored, capping each border by the opposite direction's ATC — July 2026); v10 = crisis-year honesty (fleet-truthing derate of baseload types to trailing p95, absolute must-run below-cost discount — July 2026; 2022 GR bias −141 → +1); v14 = the calibrated 39-zone EU-footprint model, i.e. v0.2.0 (network enrichment incl. explicit ATC + aggregate remap + flow-based border drops, ZoneProfiles, two-pass opportunity anchors — July 2026; 11–13 are reserved for the intermediate calibration iterations, whose 5-day records live under `clearing_mode='multi_zone_eu_cal*'` at cv10; the cv14 full-year `multi_zone_eu` backfill 2025-07..2026-07 is the v0.2.0 record); v15 = iterations 6–8 (July 2026): SK Core-FBMC border drop + :hydro anchor (SK winter MAE 956→~40), seasonal reservoir-drawdown water value (SE1/SE2), import-ATC scarcity credit, installed-capacity fleet truth (`fleet_truth_mode=:installed` on the continental core DE_LU/NL/PL/CZ and the Baltics — DE_LU corr 0.62→0.80), and MPCC robustness (exact indicator-form complementarity retry rung + per-day :p95-books fallback — no missing days). v7 and v8 multi_zone rows carried that bug and were deleted; v8 single_zone rows are flow-free (bit-identical to v9 output) and were relabeled to 9. The SEE single_zone/multi_zone product is byte-identical across v10/v14/v15 code — v14/v15 matter for the EU footprint (`multi_zone_eu`). Earlier rows keep their old version and are not mixed with new results. Each version is one selectable "Run" in the Metabase counterfactual dashboard — bump it for every model iteration that gets a backfill. **Ex-ante flow default (cv16 onward):** the EU-footprint multi-zone path (`enrich_network=true` + `:merit_order`) now defaults to the fully ex-ante `:v2` flow rule (flow climatology + D-7 Norwegian recency, `docs/ex-ante-flows.md`) instead of same-day observed flows — this applies to EU-footprint saves from **cv16** onward; the cv15 full-year backfill was produced with `:d0` same-day flows. SEE legacy paths (single-zone, 5-zone multi_zone with `enrich_network=false`) keep `:d0` and their byte-identity. Explicit `EUPHEMIA_FLOW_ASOF_MODE` or the `ex_ante_mode` kwarg always wins over the scoped default. **v17 = weak-zone import fixes** (July 2026, `docs/experiments/weak-zone-diagnosis` + `docs/experiments/cv17-import-fixes.md`): the cv16 EU footprint's low-correlation zones were a handful of phantom-scarcity cap days from import starvation. Shipped: (1) AT–CZ / AT–DE_LU / AT–SI Core-FBMC border drops + SI on the Slovakia treatment (continental temperament + `:hydro` anchor — `SLOVENIA_PROFILE`); (2) profile-gated **ex-ante elastic import backstop** (`ZoneProfile.import_backstop`, quantity = trailing-8-same-weekday demonstrated import headroom beyond the `:v2` climatology minus offered endogenous ATC, priced 1.8×gas SRMC; on for AT/BE/CH/DK1/DK2/SE3/IT-CNORTH/SI/RO/RS/HU; RO/RS/HU also credit the demonstrated headroom in the scarcity margin via `backstop_scarcity_credit`); (3) ref-priced retained-border exports (`ref_priced_exports`: SI–HR, BE–GB). A fourth mechanism — anchor refs over dropped borders (`anchor_include_dropped`, SE3, SE2-flow-weighted) — was built, measured against its gate and switched OFF (it pinned SE3 at SE2's level: corr 0.55→0.31). The SEE single-zone/5-zone products stay byte-identical (measured: full books + GR prices bit-identical cv16↔cv17 code). **v18 = RESERVED (shape levers, activation held back July 2026; the fields and their kill-switch were REMOVED in cv25's subtraction phase — a revival needs re-implementation, not a flag flip)**: `ZoneProfile.unit_srmc_spread` and `export_absorption_steps` are BUILT (default-inert, with the `EUPHEMIA_DISABLE_CV18` worker-safe kill-switch for lever A/Bs) but NOT activated: the 36-day attribution showed strong non-local coupled interactions (DK1 ladder: NO1 caps 15→0 but IT-CSOUTH corr 0.66→0.39, SE3 0.56→0.10, and DK1 itself regime-dependent; spread: continentally benign but NO1 caps 15→44; FI/FR full-year regressions) — 2-zone/20-day pilot gates are structurally insufficient for coupled mechanisms. The cv18 full-year record was measured, documented (PR #162) and deleted from Postgres; activation waits for the border-scoped redesign (export-backstop mirror) validated on the coupled footprint. cv stays 17 until then. **v19 = anad2 ex-ante flows (July 2026, docs/experiments/analogue-flows):** the EU-footprint scoped flow default moves :v2 → :v3 — per-border mean of the load-analogue median (16 trailing-365 days nearest to the delivery day's D-1 load-forecast vector, the ex-ante thermometer) and the D-2 observed flow (fastest admissible signal — catches a new regime in 48 h). Measured on the 39-day coupled A/B: MAE better/flat in all four windows, GR July-flip evening bias +57→+43, corr 0.85→0.87, footprint net-import MAE −15%. A 3-year analogue pool and pure-D-2 were measured and rejected. SEE legacy paths keep :d0 byte-identity. **v20 = solver-invariant canonical mode (July 2026, `docs/period-decomposition.md`):** the per-period-DECOMPOSED clear becomes the canonical mode on the EU-footprint path for every solver, and the `auto` solver default flips to HiGHS (open-source; the Gurobi license is academic — Gurobi stays the development option via `optimizer="gurobi"`). Decomposed is bit-identical across Gurobi/HiGHS; it differs from the legacy monolithic clear only on degenerate pass-2 anchor ties (10/29,679 hourly cells over the 39-day mode A/B, aggregate scores identical to 2 decimals in all four windows). The pipelined backfill applies the same policy. SEE legacy paths (single-zone, 5-zone multi_zone) stay monolithic and keep their byte-identity. **v21 = DK1/Viking virtual boundary book (July 2026, `docs/experiments/cv21-dk1-viking.md`, item 2 of the virtual-boundary-zone program):** the out-of-footprint GB counterparty on the DK1–GB Viking Link is modeled as an ELASTIC neighbor — import-supply + export-demand ladders anchored on GB's OWN CCGT SRMC (TTF/0.52 + EUA-proxied UK carbon/0.52 + O&M) laddered over the border's demonstrated interconnector capability (a runtime Day-ahead-ATC-capped-at-demonstrated-max query with a trailing-365d p95-block floor on ATC gaps — the wave-2 `capability.json` recipe, generalized to every day) — replacing GB's fixed flow injection AND its import-backstop headroom. First-class and profile-gated: `BoundaryBook`/`VIKING_GB_BOOK` on `DK1_PROFILE` (only DK1; DK2 unchanged), default-inert everywhere else, `EUPHEMIA_DISABLE_CV21` kill-switch. Byte-identity guards (GR single-zone, SEE 5-zone, 39-zone EU with the book disabled) all bit-identical vs cv20. Src-implementation confirm A/B (HiGHS, offline extract): March (stable guard, 8/8 days) DK1 MAE 27.9→24.6 / corr 0.55→0.81 — matches the measured reference (27.6→25.2 / 0.55→0.80); July (10/16 days — the extract lacks Day-ahead ATC for 2026-07-16..21, which fail the enriched-network build for both arms) DK1 MAE 29.5→26.6 / corr 0.88→0.90; no FR/NL/NO2 leakage. GB the zone stays PARKED (no broader GB behavioural book until an Elexon/BMRS + UKA feed); UA (boundary item 1) is a separate decision. SEE single-zone / 5-zone products stay byte-identical (guarded); cv21 matters for the EU footprint (`multi_zone_eu`). No backfill shipped with the code change. The remaining SEE evening residual is form/conduct territory (docs/experiments/fit-scarcity: hyperbolic scarcity candidate + BG conduct signature). **v22 = UA firm-slice boundary book + four confirmed price bug-fixes (July 2026, `docs/experiments/cv22.md`): **The cv22 full record (2023-01-01..2026-07-24, 1,301 days, backfilled 2026-07-26) is the canonical published record: comparable full-year corr 0.67 / MAE 27.4 (cv19: 0.64/27.2 — the largest single-version corr step), full 2023+ 0.62/28.1; per-year energy-weighted corr>=0.75 share 50/58/66% for 2023/24/25, GR 0.72->0.87.**** (A) **ua2** (roadmap item 1) ported to src as a first-class, profile-gated `BoundaryBook` like cv21 Viking — UA is a **war-constrained scarcity buyer** on the HU/SK/RO/PL–UA borders: import supply anchored `0.55 × zone gas SRMC` (no UA fundamentals feed — the documented generic-anchor compromise), export demand = a **FIRM cap-priced base slice** (its demonstrated persistent import need, which does not curtail on price — the mechanism that killed the wave-2 HU March breach) plus an elastic tail. `UA_BOOK_DEFAULT`/`UA_BOOK_PL` (PL adds the UA_DobTPP radial); capability = trailing-366d p95 gross flow per 4h block (`:p95_block`), firm = trailing-28d p10 of the daily block-mean export flow — both computed at RUNTIME (no committed JSON; they reproduce the experiment's `firm_ua.json`/`capability_w2.json` exactly on the confirm days, so the book generalizes to every backfill day). Reference confirm (24-day A/B): HU July MAE 72.3→57.1 / corr 0.69→0.79, March breach dead (28.24→28.29); accepted residuals HU March evening 29.2→33.0, RO/BG March ~+1. (B) `flows_imports` `:v2` border map — a Nordic-side border missing its D-7 observation was DELETED (silently zeroed) instead of falling back to climatology; fixed to fall back. (C) `Network.jl` legacy ATC build — took the LAST duplicate capacity row per border-hour (order-dependent); fixed to hourly AVG matching the enriched path — **this deliberately ENDS the SEE 5-zone byte-identity chain (unbroken since cv10)**; measured SEE delta small and within gate (single-zone unaffected). (D) `get_reservoir_drawdown` window `year>$2-2` widened 52→52-104 weeks; fixed to `$2-1` (Nordic only). (E) `get_reservoir_dryness` ±2-ISO-week neighbourhood didn't wrap the year boundary; fixed with a mod-52 wrapped set (only differs Dec/Jan). All five gated behind `EUPHEMIA_DISABLE_CV22` (byte-identity guard: GR single-zone / SEE 5-zone / 39-zone EU bit-identical to cv21 main with the switch set — Viking stays ON via its own CV21 switch), ON by default. NOT shipped (measured NO-SHIP, deferred to cv23): the GB pair (FR-nuclear root cause; the FR–GB double-count stays known-compensated so it does not ship alone) and iter9/43-zones. Plus #182 runner hardening: the pipelined backfill coordinator now resubmits a solver/book worker's orphaned day (retry-once) and respawns the worker on a HiGHS SIGSEGV, so a segfault no longer deadlocks the run; sequential runners rely on the resume flag. cv22 matters for the EU footprint (`multi_zone_eu`). **v23 = FR nuclear opportunity cost + FR–GB re-pair + interior-Norway backstop (July 2026, `docs/experiments/cv23-fr-nuclear.md`, `docs/experiments/norwegian-hydro/`):** (1) availability-scaled `:nuclear` anchor share for FR (trailing-30d fleet p95/installed — ex-ante, no-fit; March confirm FR MAE 38.2→16.2, evening bias −77%); (2) the FR↔GB border re-paired — double-count fix shipping WITH an elastic GB CCGT boundary book (TTF/0.52 + UKA carbon; the cv22 no-ship prescription); (3) interior-Norway import backstop NO1/NO3 + FR cap fix (`import_backstop` + scarcity credit + `nuclear_bid_ref_ceiling`) — kills the dry-spring phantom-scarcity caps (NO1 MAE 62.7→25.8, bias +36.9→−0.1 on the record). Kill-switches `EUPHEMIA_DISABLE_CV23`/`EUPHEMIA_DISABLE_FRCAP`. The cv23 full record (2023-01-01..2026-07-26, 1,303 days) superseded cv22 as canonical: comparable year corr 0.68 / MAE 26.4, full 2023+ 0.63/26.5, FR 0.78, GR 0.85. **CORRECTION (July 2026, docs/experiments/exante-audit-2026-07.md): every pipelined record — cv16, cv17, cv19, cv22, cv23, cv24 — is NOT ex-ante with respect to cross-border flows.** `run_pipelined_backfill`'s book workers call `mz_build_books`, which has no `ex_ante_mode`, so they used the process-wide `:d0` — same-day OBSERVED flows — not the `:v2`/`:v3` scoped default this ledger documents from cv16 onward. Verified by re-clearing record days both ways against the stored prices (`:d0` 93.8–100% bit-identical, `:v3` ~47%). The choice of `:v3` (the cv19 analogue-flows A/B) is not in question — it never reached the record. The live forecast path is unaffected (it resolves `:v3`). Also: 65 of 1,304 cv24 days (5.0% of days, 2.52% of zone-hours) hold fewer than 24 UTC hours because those days are MISSING D-1 load-forecast hours at source for one zone (SI on 48 of them, BE 8, BG 4) and a zone's book takes its timeslots from the load forecast, so a one-hour zone collapses the coupled intersection for all 39. cv25 corrects both (docs/cv25-plan.md). **v24 = registry sanity bound (July 2026, #205): record-consistency bump.** `MAX_PLAUSIBLE_UNIT_MW = 25 GW` drops corrupt ENTSO-E capacity rows (IT-CSOUTH unit `26WUUUUUUBUSSI19` carried 13,068,005 MW → NaN correlation there via the fleet-truthing denominators). No other mechanism content (the IT must-run floor was measured NO-SHIP twice — `docs/experiments/cv24-it-book.md`); prices change only where a corrupt unit was in the fleet (IT-CSOUTH), every other zone byte-identical to cv23 code. Bumped so post-#205 daily forecasts and the refilled record never mix with cv23 rows.- Unique on `(date_time_utc, bidding_zone, contract_type, order_method, clearing_mode, code_version)` - allows storing results from different clearing modes side by side
+- `code_version`: Model version (current: 24 for energy_prices, 4 for optimization_runs/uc_results). energy_prices v3 = SRMC/TTF cost model (July 2026); v7 = multi-zone artifact fixes (tight MIP gap, component-wise price reconstruction, border-aware import exclusion, July 2026; 4–6 were taken by legacy uc_based experiment rows); v8 = daily EUA carbon prices from `yfinance.eua_co2` (July 2026); v9 = multi-zone nodal-balance flow signs fixed (flows were physically mirrored, capping each border by the opposite direction's ATC — July 2026); v10 = crisis-year honesty (fleet-truthing derate of baseload types to trailing p95, absolute must-run below-cost discount — July 2026; 2022 GR bias −141 → +1); v14 = the calibrated 39-zone EU-footprint model, i.e. v0.2.0 (network enrichment incl. explicit ATC + aggregate remap + flow-based border drops, ZoneProfiles, two-pass opportunity anchors — July 2026; 11–13 are reserved for the intermediate calibration iterations, whose 5-day records live under `clearing_mode='multi_zone_eu_cal*'` at cv10; the cv14 full-year `multi_zone_eu` backfill 2025-07..2026-07 is the v0.2.0 record); v15 = iterations 6–8 (July 2026): SK Core-FBMC border drop + :hydro anchor (SK winter MAE 956→~40), seasonal reservoir-drawdown water value (SE1/SE2), import-ATC scarcity credit, installed-capacity fleet truth (`fleet_truth_mode=:installed` on the continental core DE_LU/NL/PL/CZ and the Baltics — DE_LU corr 0.62→0.80), and MPCC robustness (exact indicator-form complementarity retry rung + per-day :p95-books fallback — no missing days). v7 and v8 multi_zone rows carried that bug and were deleted; v8 single_zone rows are flow-free (bit-identical to v9 output) and were relabeled to 9. The SEE single_zone/multi_zone product is byte-identical across v10/v14/v15 code — v14/v15 matter for the EU footprint (`multi_zone_eu`). Earlier rows keep their old version and are not mixed with new results. Each version is one selectable "Run" in the Metabase counterfactual dashboard — bump it for every model iteration that gets a backfill. **Ex-ante flow default (cv16 onward):** the EU-footprint multi-zone path (`enrich_network=true` + `:merit_order`) now defaults to the fully ex-ante `:v2` flow rule (flow climatology + D-7 Norwegian recency, `docs/ex-ante-flows.md`) instead of same-day observed flows — this applies to EU-footprint saves from **cv16** onward; the cv15 full-year backfill was produced with `:d0` same-day flows. SEE legacy paths (single-zone, 5-zone multi_zone with `enrich_network=false`) keep `:d0` and their byte-identity. Explicit `EUPHEMIA_FLOW_ASOF_MODE` or the `ex_ante_mode` kwarg always wins over the scoped default. **v17 = weak-zone import fixes** (July 2026, `docs/experiments/weak-zone-diagnosis` + `docs/experiments/cv17-import-fixes.md`): the cv16 EU footprint's low-correlation zones were a handful of phantom-scarcity cap days from import starvation. Shipped: (1) AT–CZ / AT–DE_LU / AT–SI Core-FBMC border drops + SI on the Slovakia treatment (continental temperament + `:hydro` anchor — `SLOVENIA_PROFILE`); (2) profile-gated **ex-ante elastic import backstop** (`ZoneProfile.import_backstop`, quantity = trailing-8-same-weekday demonstrated import headroom beyond the `:v2` climatology minus offered endogenous ATC, priced 1.8×gas SRMC; on for AT/BE/CH/DK1/DK2/SE3/IT-CNORTH/SI/RO/RS/HU; RO/RS/HU also credit the demonstrated headroom in the scarcity margin via `backstop_scarcity_credit`); (3) ref-priced retained-border exports (`ref_priced_exports`: SI–HR, BE–GB). A fourth mechanism — anchor refs over dropped borders (`anchor_include_dropped`, SE3, SE2-flow-weighted) — was built, measured against its gate and switched OFF (it pinned SE3 at SE2's level: corr 0.55→0.31). The SEE single-zone/5-zone products stay byte-identical (measured: full books + GR prices bit-identical cv16↔cv17 code). **v18 = RESERVED (shape levers, activation held back July 2026; the fields and their kill-switch were REMOVED in cv25's subtraction phase — a revival needs re-implementation, not a flag flip)**: `ZoneProfile.unit_srmc_spread` and `export_absorption_steps` are BUILT (default-inert, with the `EUPHEMIA_DISABLE_CV18` worker-safe kill-switch for lever A/Bs) but NOT activated: the 36-day attribution showed strong non-local coupled interactions (DK1 ladder: NO1 caps 15→0 but IT-CSOUTH corr 0.66→0.39, SE3 0.56→0.10, and DK1 itself regime-dependent; spread: continentally benign but NO1 caps 15→44; FI/FR full-year regressions) — 2-zone/20-day pilot gates are structurally insufficient for coupled mechanisms. The cv18 full-year record was measured, documented (PR #162) and deleted from Postgres; activation waits for the border-scoped redesign (export-backstop mirror) validated on the coupled footprint. cv stays 17 until then. **v19 = anad2 ex-ante flows (July 2026, docs/experiments/analogue-flows):** the EU-footprint scoped flow default moves :v2 → :v3 — per-border mean of the load-analogue median (16 trailing-365 days nearest to the delivery day's D-1 load-forecast vector, the ex-ante thermometer) and the D-2 observed flow (fastest admissible signal — catches a new regime in 48 h). Measured on the 39-day coupled A/B: MAE better/flat in all four windows, GR July-flip evening bias +57→+43, corr 0.85→0.87, footprint net-import MAE −15%. A 3-year analogue pool and pure-D-2 were measured and rejected. SEE legacy paths keep :d0 byte-identity. **v20 = solver-invariant canonical mode (July 2026, `docs/period-decomposition.md`):** the per-period-DECOMPOSED clear becomes the canonical mode on the EU-footprint path for every solver, and the `auto` solver default flips to HiGHS (open-source; the Gurobi license is academic — Gurobi stays the development option via `optimizer="gurobi"`). Decomposed is bit-identical across Gurobi/HiGHS; it differs from the legacy monolithic clear only on degenerate pass-2 anchor ties (10/29,679 hourly cells over the 39-day mode A/B, aggregate scores identical to 2 decimals in all four windows). The pipelined backfill applies the same policy. SEE legacy paths (single-zone, 5-zone multi_zone) stay monolithic and keep their byte-identity. **v21 = DK1/Viking virtual boundary book (July 2026, `docs/experiments/cv21-dk1-viking.md`, item 2 of the virtual-boundary-zone program):** the out-of-footprint GB counterparty on the DK1–GB Viking Link is modeled as an ELASTIC neighbor — import-supply + export-demand ladders anchored on GB's OWN CCGT SRMC (TTF/0.52 + EUA-proxied UK carbon/0.52 + O&M) laddered over the border's demonstrated interconnector capability (a runtime Day-ahead-ATC-capped-at-demonstrated-max query with a trailing-365d p95-block floor on ATC gaps — the wave-2 `capability.json` recipe, generalized to every day) — replacing GB's fixed flow injection AND its import-backstop headroom. First-class and profile-gated: `BoundaryBook`/`VIKING_GB_BOOK` on `DK1_PROFILE` (only DK1; DK2 unchanged), default-inert everywhere else, `EUPHEMIA_DISABLE_CV21` kill-switch. Byte-identity guards (GR single-zone, SEE 5-zone, 39-zone EU with the book disabled) all bit-identical vs cv20. Src-implementation confirm A/B (HiGHS, offline extract): March (stable guard, 8/8 days) DK1 MAE 27.9→24.6 / corr 0.55→0.81 — matches the measured reference (27.6→25.2 / 0.55→0.80); July (10/16 days — the extract lacks Day-ahead ATC for 2026-07-16..21, which fail the enriched-network build for both arms) DK1 MAE 29.5→26.6 / corr 0.88→0.90; no FR/NL/NO2 leakage. GB the zone stays PARKED (no broader GB behavioural book until an Elexon/BMRS + UKA feed); UA (boundary item 1) is a separate decision. SEE single-zone / 5-zone products stay byte-identical (guarded); cv21 matters for the EU footprint (`multi_zone_eu`). No backfill shipped with the code change. The remaining SEE evening residual is form/conduct territory (docs/experiments/fit-scarcity: hyperbolic scarcity candidate + BG conduct signature). **v22 = UA firm-slice boundary book + four confirmed price bug-fixes (July 2026, `docs/experiments/cv22.md`): **The cv22 full record (2023-01-01..2026-07-24, 1,301 days, backfilled 2026-07-26) is the canonical published record: comparable full-year corr 0.67 / MAE 27.4 (cv19: 0.64/27.2 — the largest single-version corr step), full 2023+ 0.62/28.1; per-year energy-weighted corr>=0.75 share 50/58/66% for 2023/24/25, GR 0.72->0.87.**** (A) **ua2** (roadmap item 1) ported to src as a first-class, profile-gated `BoundaryBook` like cv21 Viking — UA is a **war-constrained scarcity buyer** on the HU/SK/RO/PL–UA borders: import supply anchored `0.55 × zone gas SRMC` (no UA fundamentals feed — the documented generic-anchor compromise), export demand = a **FIRM cap-priced base slice** (its demonstrated persistent import need, which does not curtail on price — the mechanism that killed the wave-2 HU March breach) plus an elastic tail. `UA_BOOK_DEFAULT`/`UA_BOOK_PL` (PL adds the UA_DobTPP radial); capability = trailing-366d p95 gross flow per 4h block (`:p95_block`), firm = trailing-28d p10 of the daily block-mean export flow — both computed at RUNTIME (no committed JSON; they reproduce the experiment's `firm_ua.json`/`capability_w2.json` exactly on the confirm days, so the book generalizes to every backfill day). Reference confirm (24-day A/B): HU July MAE 72.3→57.1 / corr 0.69→0.79, March breach dead (28.24→28.29); accepted residuals HU March evening 29.2→33.0, RO/BG March ~+1. (B) `flows_imports` `:v2` border map — a Nordic-side border missing its D-7 observation was DELETED (silently zeroed) instead of falling back to climatology; fixed to fall back. (C) `Network.jl` legacy ATC build — took the LAST duplicate capacity row per border-hour (order-dependent); fixed to hourly AVG matching the enriched path — **this deliberately ENDS the SEE 5-zone byte-identity chain (unbroken since cv10)**; measured SEE delta small and within gate (single-zone unaffected). (D) `get_reservoir_drawdown` window `year>$2-2` widened 52→52-104 weeks; fixed to `$2-1` (Nordic only). (E) `get_reservoir_dryness` ±2-ISO-week neighbourhood didn't wrap the year boundary; fixed with a mod-52 wrapped set (only differs Dec/Jan). All five gated behind `EUPHEMIA_DISABLE_CV22` (byte-identity guard: GR single-zone / SEE 5-zone / 39-zone EU bit-identical to cv21 main with the switch set — Viking stays ON via its own CV21 switch), ON by default. NOT shipped (measured NO-SHIP, deferred to cv23): the GB pair (FR-nuclear root cause; the FR–GB double-count stays known-compensated so it does not ship alone) and iter9/43-zones. Plus #182 runner hardening: the pipelined backfill coordinator now resubmits a solver/book worker's orphaned day (retry-once) and respawns the worker on a HiGHS SIGSEGV, so a segfault no longer deadlocks the run; sequential runners rely on the resume flag. cv22 matters for the EU footprint (`multi_zone_eu`). **v23 = FR nuclear opportunity cost + FR–GB re-pair + interior-Norway backstop (July 2026, `docs/experiments/cv23-fr-nuclear.md`, `docs/experiments/norwegian-hydro/`):** (1) availability-scaled `:nuclear` anchor share for FR (trailing-30d fleet p95/installed — ex-ante, no-fit; March confirm FR MAE 38.2→16.2, evening bias −77%); (2) the FR↔GB border re-paired — double-count fix shipping WITH an elastic GB CCGT boundary book (TTF/0.52 + UKA carbon; the cv22 no-ship prescription); (3) interior-Norway import backstop NO1/NO3 + FR cap fix (`import_backstop` + scarcity credit + `nuclear_bid_ref_ceiling`) — kills the dry-spring phantom-scarcity caps (NO1 MAE 62.7→25.8, bias +36.9→−0.1 on the record). Kill-switches `EUPHEMIA_DISABLE_CV23`/`EUPHEMIA_DISABLE_FRCAP`. The cv23 full record (2023-01-01..2026-07-26, 1,303 days) superseded cv22 as canonical: comparable year corr 0.68 / MAE 26.4, full 2023+ 0.63/26.5, FR 0.78, GR 0.85. **CORRECTION (July 2026, docs/experiments/exante-audit-2026-07.md): every pipelined record — cv16, cv17, cv19, cv22, cv23, cv24 — is NOT ex-ante with respect to cross-border flows.** `run_pipelined_backfill`'s book workers call `mz_build_books`, which has no `ex_ante_mode`, so they used the process-wide `:d0` — same-day OBSERVED flows — not the `:v2`/`:v3` scoped default this ledger documents from cv16 onward. Verified by re-clearing record days both ways against the stored prices (`:d0` 93.8–100% bit-identical, `:v3` ~47%). The choice of `:v3` (the cv19 analogue-flows A/B) is not in question — it never reached the record. The live forecast path is unaffected (it resolves `:v3`). Also: 65 of 1,304 cv24 days (5.0% of days, 2.52% of zone-hours) hold fewer than 24 UTC hours because those days are MISSING D-1 load-forecast hours at source for one zone (SI on 48 of them, BE 8, BG 4) and a zone's book takes its timeslots from the load forecast, so a one-hour zone collapses the coupled intersection for all 39. cv25 corrects both (docs/cv25-plan.md). **v24 = registry sanity bound (July 2026, #205): record-consistency bump.** `MAX_PLAUSIBLE_UNIT_MW = 25 GW` drops corrupt ENTSO-E capacity rows (IT-CSOUTH unit `26WUUUUUUBUSSI19` carried 13,068,005 MW → NaN correlation there via the fleet-truthing denominators). No other mechanism content (the IT must-run floor was measured NO-SHIP twice — `docs/experiments/cv24-it-book.md`); prices change only where a corrupt unit was in the fleet (IT-CSOUTH), every other zone byte-identical to cv23 code. Bumped so post-#205 daily forecasts and the refilled record never mix with cv23 rows.
+- Unique on `(date_time_utc, bidding_zone, contract_type, order_method, clearing_mode, code_version)` - allows storing results from different clearing modes side by side
 
 **`simulations.optimization_runs`** - Optimization run metadata including status, solver info, and performance metrics
 - For single-zone runs: `bidding_zone` contains the zone code (e.g., "GR")
@@ -1226,37 +792,8 @@ The project uses PostgreSQL with two main schemas:
 
 **`simulations.transmission_flows`** - Cross-border transmission flow results from multi-zone clearing
 
-**`simulations.generator_inferred_parameters`** - Cached inferred generator parameters
-- `generator_code`, `bidding_zone`: Primary key
-- `inference_date`: When inference was run (for cache expiration)
-- `ramp_up`, `ramp_down`: Inferred ramp rates (fraction/hour)
-- `p_min`: Inferred minimum generation (MW)
-- `min_uptime`, `min_downtime`: Inferred cycle constraints (hours)
-- `data_points_used`: Number of historical data points used for inference
-
-**`simulations.uc_results`** - Cached unit commitment optimization results (summary)
-- `bidding_zone`, `market_date`, `code_version`: Unique key
-- `status`: JuMP termination status (e.g., "OPTIMAL")
-- `solver`: Solver used ("HiGHS" or "Gurobi")
-- `resolution_minutes`: Time period resolution (15, 30, or 60)
-- `total_cost`, `production_cost`, `startup_cost`, `noload_cost`: Cost components
-- `hot_startups`, `warm_startups`, `cold_startups`: Startup counts by type
-- `total_curtailment_mwh`, `curtailment_cost`: Renewable curtailment summary
-- `total_excess_mwh`, `excess_cost`: Excess generation summary (structural oversupply)
-- `total_shortage_mwh`, `shortage_cost`: Load shedding summary (capacity shortage)
-
-**`simulations.uc_generation`** - Detailed generation data per generator per period
-- `uc_result_id`: Foreign key to `uc_results`
-- `generator_code`, `generator_idx`, `period_idx`: Generator and time indices
-- `generation_mw`, `commitment`, `startup`: Values from g, u, v matrices
-
-**`simulations.uc_net_demand`** - Net demand data per period
-- `uc_result_id`: Foreign key to `uc_results`
-- `period_idx`, `time_slot_utc`: Time period identification
-- `net_demand_mw`, `renewable_generation_mw`: Demand and renewable data
-- `curtailment_mw`: Renewable curtailment per period (MW)
-- `excess_mw`: Excess generation per period (MW, structural oversupply)
-- `shortage_mw`: Load shedding per period (MW, capacity shortage)
+> The `simulations.uc_*` and `generator_inferred_parameters` tables still exist
+> with their data, but nothing writes them since cv25 deleted the UC path.
 
 **Joining prices with optimization metadata:**
 ```sql

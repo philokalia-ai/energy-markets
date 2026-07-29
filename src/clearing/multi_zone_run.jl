@@ -4,7 +4,7 @@
 """
     run_multi_zone_market_clearing(date::Date;
                                    zones::Vector{String}=String[],
-                                   order_method::Symbol=:uc_based,
+                                   order_method::Symbol=:merit_order,
                                    optimizer::String="auto",
                                    markup_factor::Float64=1.1,
                                    silent::Bool=true,
@@ -21,7 +21,7 @@ transmission flow constraints between zones based on ENTSO-E ATC data.
 # Arguments
 - `date::Date`: The date for which to run market clearing
 - `zones::Vector{String}`: List of bidding zones to include (default: auto-discover from DB)
-- `order_method::Symbol`: Method for creating orders - `:uc_based`, `:alternative` or `:merit_order` (default: `:uc_based`)
+- `order_method::Symbol`: only `:merit_order` (the UC-based and alternative books were removed in cv25) (default: `:merit_order`)
 - `optimizer::String`: Optimization solver - "highs" (default), "gurobi", "cplex", "auto"
 - `markup_factor::Float64`: Price markup factor for supply bids (default: 1.1)
 - `silent::Bool`: Whether to suppress solver output (default: true)
@@ -69,7 +69,7 @@ result = run_multi_zone_market_clearing(Date(2024, 6, 15);
 """
 function run_multi_zone_market_clearing(date::Date;
                                         zones::Vector{String}=String[],
-                                        order_method::Symbol=:uc_based,
+                                        order_method::Symbol=:merit_order,
                                         optimizer::String="auto",
                                         markup_factor::Float64=1.1,
                                         silent::Bool=true,
@@ -195,27 +195,14 @@ function run_multi_zone_market_clearing(date::Date;
 
     # Create multi-zone order book based on order_method
     println("\n📊 Creating multi-zone order book...")
-    order_book = if order_method == :uc_based
-        # UC-based: runs full unit commitment for each zone (slower but more accurate)
-        MPCC.create_multi_zone_order_book(zones, date;
-                                          markup_factor=markup_factor,
-                                          optimizer=optimizer,
-                                          force_rerun=force_rerun,
-                                          parallel=parallel,
-                                          max_workers=max_workers)
-    elseif order_method == :alternative
-        # Alternative: uses simplified order generation (faster)
-        _create_multi_zone_order_book_alternative(zones, date)
-    elseif order_method == :merit_order
-        # Merit-order: deterministic strategy-based books per zone,
-        # cross-zone flows endogenous via ATC-constrained MPCC
-        _create_multi_zone_order_book_merit(zones, date; enrich_network=enrich_network,
-                                            apply_zone_profiles=apply_zone_profiles,
-                                            clear_resolution_minutes=clear_resolution_minutes,
-                                            scenario=scenario)
-    else
-        error("Invalid order_method: $order_method. Must be :uc_based, :alternative or :merit_order")
-    end
+    order_method == :merit_order ||
+        error("Invalid order_method: $order_method. Only :merit_order remains — the " *
+              "UC-based and alternative books were removed in cv25.")
+    # Merit-order: deterministic strategy-based books per zone, cross-zone flows
+    # endogenous via ATC-constrained MPCC
+    order_book = _create_multi_zone_order_book_merit(zones, date;
+        enrich_network=enrich_network, apply_zone_profiles=apply_zone_profiles,
+        clear_resolution_minutes=clear_resolution_minutes, scenario=scenario)
 
     # Run MPCC market clearing with transmission constraints
     println("\n⚡ Running multi-zone market clearing optimization...")

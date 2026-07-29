@@ -282,10 +282,7 @@ include("Renewables.jl")
 
 include("TemporalResolutionUtilities.jl")
 
-include("UnitCommitment.jl")
 
-include("BiddingStrategy.jl")
-using .BiddingStrategy: generate_market_orders_from_uc, apply_bidding_strategy_to_uc, UCToBidsResult
 
 include("Network.jl")
 using .Network: NetworkTopology, create_example_network, add_atc_constraints!
@@ -295,13 +292,13 @@ using .Network: get_bidding_zones, get_outgoing_lines, get_incoming_lines, creat
 using .Network: get_zones_with_transfer_capacity, get_connected_zones, get_zone_pairs  # Multi-zone support
 
 include("MPCC.jl")
-using .MPCC: MPCCResult, MPCCOrderBook, solve_mpcc_market_clearing, create_typed_order_book, select_solver
-using .MPCC: create_multi_zone_order_book, with_total_time  # Multi-zone support
+using .MPCC: MPCCResult, MPCCOrderBook, solve_mpcc_market_clearing, select_solver
+using .MPCC: with_total_time  # Multi-zone support
 using .MPCC: compute_net_imports_from_flows, compute_max_flow_change, apply_damping  # Iterative UC-MPCC utilities
 using .MPCC: compute_max_price_change, compute_max_relative_flow_change  # Price-based convergence
 
-include("AlternativeOrderBook.jl")
-using .AlternativeOrderBook: create_adjusted_order_book, AdjustedOrderBookResult, print_order_book_summary
+include("OrderBookResult.jl")
+using .OrderBookResult: AdjustedOrderBookResult
 
 include("MeritOrderBook.jl")
 using .MeritOrderBook: create_merit_order_book, ZoneProfile, get_zone_profile,
@@ -325,15 +322,13 @@ export LinkedBlockOrder, ExclusiveBlockOrder, FlexibleOrder, AggregatedPeriodicO
 export MICOrder, LoadGradientOrder, MeritOrder, PUNOrder
 
 # Entity types
-export Generator, Load, RenewablesGenerationForecast, InitialConditions
+export Generator, Load, RenewablesGenerationForecast
 
 # Helper functions for data retrieval
-export get_generators, get_generators_with_inferred_params, infer_parameters_for_generator, infer_parameters_for_generators, refresh_inference_cache
+export get_generators
 export get_loads, get_generation_forecast_for_wind_and_solar
-export get_initial_conditions, get_default_initial_conditions, determine_thermal_state
 
 # Unit commitment functionality
-export test_unit_commitment, calculate_cost_breakdown, solve_unit_commitment
 
 # Network topology and transfer capacity
 export NetworkTopology, create_example_network, add_atc_constraints!  # Network constraints (legacy)
@@ -344,9 +339,8 @@ export get_bidding_zones, get_outgoing_lines, get_incoming_lines
 export get_zones_with_transfer_capacity, get_connected_zones, get_zone_pairs  # Multi-zone support
 
 # MPCC optimization functionality
-export MPCCResult, MPCCOrderBook, solve_mpcc_market_clearing, create_typed_order_book, select_solver
-export create_multi_zone_order_book, run_multi_zone_market_clearing, run_multi_zone_for_date_range  # Multi-zone market clearing
-export run_iterative_multi_zone_market_clearing  # Iterative UC-MPCC with flow feedback
+export MPCCResult, MPCCOrderBook, solve_mpcc_market_clearing, select_solver
+export run_multi_zone_market_clearing, run_multi_zone_for_date_range  # Multi-zone market clearing
 export mz_build_books, mz_solve_pass, mz_extract_anchor_inputs, mz_rebuild_anchored  # Exposed clearing stages
 export run_pipelined_backfill  # Producer-consumer pipelined multi-zone backfill
 export compute_net_imports_from_flows, compute_max_flow_change, apply_damping  # Flow conversion utilities
@@ -359,7 +353,7 @@ export get_cached_optimizer, clear_solver_cache!
 export configure_data_store!
 
 # Alternative order book functionality
-export create_adjusted_order_book, AdjustedOrderBookResult, print_order_book_summary
+export AdjustedOrderBookResult
 export create_merit_order_book
 export ZoneProfile, get_zone_profile, ZONE_PROFILES, SEE_PROFILE, SEE_IMPORT_BACKED_PROFILE,
     CONTINENTAL_PROFILE, ITALY_PROFILE, NORDIC_PROFILE, BALTIC_PROFILE, FRANCE_PROFILE,
@@ -372,7 +366,6 @@ export ZoneProfile, get_zone_profile, ZONE_PROFILES, SEE_PROFILE, SEE_IMPORT_BAC
 export ZoneScenario
 
 # Bidding strategy functionality
-export generate_market_orders_from_uc, apply_bidding_strategy_to_uc, UCToBidsResult
 
 # Fuel type parameters
 export FuelTypeParameters, get_fuel_type_parameters, apply_fuel_type_constraints!
@@ -389,11 +382,9 @@ export generate_energy_prices
 # Database utilities
 export save_energy_prices, ensure_energy_prices_table, withdb, save_optimization_run
 export save_transmission_flows, ensure_transmission_flows_table  # Multi-zone transmission flows
-export ensure_uc_results_tables  # UC results caching tables
 export ensure_indexes  # Create indexes on ENTSOE tables for query performance
 
 # UC results caching
-export has_cached_uc_results, save_uc_results, load_uc_results
 
 # Zone discovery utilities  
 export get_available_zones
@@ -409,7 +400,6 @@ export generate_energy_prices_for_all_zones, generate_energy_prices_for_date_ran
 include("clearing/single_zone.jl")      # generate_energy_prices + zone discovery
 include("clearing/multi_zone_books.jl") # multi-zone book builders, network prep, mz_* stages
 include("clearing/multi_zone_run.jl")   # run_multi_zone_market_clearing (one date)
-include("clearing/iterative.jl")        # iterative UC-MPCC feedback loop
 include("clearing/batch_runners.jl")    # date-range / all-zones orchestration
 include("clearing/batch_workers.jl")    # parallel & sequential worker helpers
 

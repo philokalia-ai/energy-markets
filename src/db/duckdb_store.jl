@@ -277,7 +277,7 @@ end
 # tells the caller to no-op. Returns `true` when running on DuckDB.
 #
 # NOTE: this is now used ONLY for write paths with no offline equivalent — UC
-# caching (`ensure_uc_results_tables`) and `ensure_indexes`. The three
+# caching (removed in cv25) and `ensure_indexes`. The three
 # market-result writers (energy_prices / optimization_runs / transmission_flows)
 # instead persist to a separate writable results database so the full pipeline
 # (incl. save_to_db) and the eval scripts run end-to-end offline; see below.
