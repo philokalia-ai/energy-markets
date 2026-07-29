@@ -55,22 +55,26 @@ over the entire history the public extract covers:
 
 > [!IMPORTANT]
 > **These figures are not ex-ante figures.** The cv22/23/24 records were produced
-> by the pipelined backfill, which never resolved the scoped ex-ante flow rule and
+> by the pipelined backfill (cv16 and cv17 too — every record built through
+> `run_pipelined_backfill` or `eu_calibration_run.jl PIPELINE=true`, so the lineage
+> figures below are like-for-like), which never resolved the scoped ex-ante flow rule and
 > therefore built its order books with **`:d0` — same-day *observed* cross-border
 > flows**, information no forecaster has before the auction. Measured by re-clearing
 > record days both ways against the stored prices: `:d0` reproduces the record at
 > 93.8–100% bit-identical, the documented ex-ante `:v3` at ~47%
 > ([audit](docs/experiments/exante-audit-2026-07.md)). The live daily forecast is
 > unaffected — it clears through `run_multi_zone_market_clearing` and *does* resolve
-> `:v3`, so it is genuinely ex-ante; the backtest it is benchmarked against had an
+> `:v3`, so it is ex-ante *with respect to flows*; the backtest it is benchmarked against had an
 > information advantage it does not have. cv25 corrects this
 > ([plan](docs/cv25-plan.md)) and will restate the headline against a
 > like-for-like ex-ante baseline.
 >
-> A second correction lands with it: **65 of the 1,304 days carry fewer than 24 UTC
-> hours** (12 of them a single hour) because one zone's short book collapses the
-> coupled period intersection — 2.52% of the record, saved as complete. The source
-> data for those days is present, so they are recoverable, not holes.
+> A second correction lands with it: **65 of the 1,304 days (5.0%) carry fewer than
+> 24 UTC hours** — 12 of them a single hour, 2.52% of the record's zone-hours — and
+> were saved as complete. Cause: those days are **missing D-1 load-forecast hours at
+> source** for one zone (SI on 48 of the 65, then BE 8, BG 4), and a zone's book takes
+> its timeslots from the load forecast, so a one-hour zone collapses the coupled
+> period intersection for all 39.
 
 **Comparable full-year window (2025-07-25 → 2026-07-24): mean corr 0.68,
 mean MAE €26.3** (lineage: cv22: 0.67 / €27.4; cv19: 0.64 / €27.2; cv17:

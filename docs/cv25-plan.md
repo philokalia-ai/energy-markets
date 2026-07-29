@@ -248,36 +248,62 @@ cv24 flows — the real (documented) hazard is same-cv cross-mode.
 **0.2 Restatement — done.** README correction box + ledger correction, pointing at the
 audit and this plan. The live forecast is explicitly exempted: it resolves `:v3`.
 
-**0.3 Truncated days — the premise was wrong, and there is a root cause.**
-The source data is *present*: for 2025-11-12, 2024-03-05 and 2023-10-29 the extract
-holds all 39 zones × 24 hours of day-ahead load forecast and 24 hours of offered ATC.
-So these days are **recoverable, not holes** — the plan's "record explicit holes"
-option is off the table.
+**0.3 Truncated days — the plan's premise was RIGHT: the source data is missing.**
 
-Reproduced on 2025-11-12 through the real path (`mz_build_books`, 39 zones, enriched):
-`dropping 23 period(s) not covered by all zones`, result `periods=1 nodes=39`, **zero
-zones reported as failed**. The culprit is **SI**: its standalone book build on that
-day throws
+An earlier version of this section claimed the opposite. It was produced by a query
+that counted zones and hours **aggregated across the whole footprint** — 39 zones
+present *somewhere* in the day, 24 hours present *somewhere* — which cannot detect a
+zone with one hour. The correct per-zone query is one line different and falsifies it:
 
+```sql
+SELECT area_map_code, count(DISTINCT date_trunc('hour', date_time_utc)) nh
+FROM entsoe.day_ahead_total_load_forecast
+WHERE date_time_utc >= $d AND date_time_utc < $d + 1
+  AND area_type_code IN ('BZN','BZN/CTA','BZN/CTY','BZN/CTA/CTY')
+GROUP BY 1 HAVING nh < 24;
 ```
-MethodError: Cannot `convert` an object of type Missing to an object of type Float64
-```
 
-— a NULL in SI's input reaching a `Float64` conversion. Under the multi-zone path the
-zone still yields a book, but a **one-slot** one, and the coupled intersection then
-truncates all 39 zones to that single hour.
+On 2025-11-12 that returns exactly one row: **SI, 1 hour**.
 
-So the defect is: **a NULL in one zone's data silently collapses the whole footprint's
-day**, and the day is saved as complete. PR #215's gate stops the *saving*; the NULL
-handling and the intersection's silent collapse are Phase-2 work. Note the log output
-of the threaded per-zone builds interleaves, so zone attribution must come from a
-direct per-zone probe, not from log position.
+**Census over the record window** (2023-01-01..2026-07-24), zone-days with fewer than
+24 D-1 forecast hours: **SI 48, BE 8, BG 4, SE1/SE2/SE3/SE4/DE_LU/RS/EE/GR 2 each,
+LT 1 — spanning exactly 65 distinct days**, matching the 65 truncated days in the
+record one for one. SI's gaps come in adjacent pairs (23h+2h, 22h+2h, 22h+1h): one
+missing **CET-day** forecast block straddling two UTC days.
 
-**0.4 Cold start — real, and larger than expected.** The extract begins **2022-12-01**;
-the record begins 2023-01-01. `:v3`'s analogue pool wants 365 trailing days, so day one
-has **31**. The first ~11 months of any cv25 backfill run on a truncated pool. Decide
-the policy (accept the degraded pool and document it, start the record later, or extend
-the extract backwards) before Phase 5, not during it.
+**Mechanism, and no NULL is involved.** A zone's book takes its timeslots directly
+from the load forecast — `target_timeslots = sort(collect(keys(load_by_time)))`
+(`book_build.jl:265, 285`). One forecast hour ⇒ a one-slot book ⇒ `reduce(intersect,
+…)` (`multi_zone_books.jl:591`) collapses all 39 zones to that hour. The
+`MethodError: Cannot convert Missing to Float64` seen in a standalone build is a
+downstream symptom, not the cause; "fix the NULL handling" would have aimed at the
+wrong thing.
+
+**Policy consequence.** The fork is *repair the source* (re-fetch the missing ENTSO-E
+blocks — the adjacent-pair pattern suggests an ETL boundary bug worth reporting
+upstream) or *record explicit holes*. What is NOT available: falling back to
+`actual_total_load` to fill a missing D-1 forecast — that is realized data and would
+violate invariant 1.
+
+**0.4 Cold start — real, but not the number or the mechanism first stated.**
+The analogue pool is selected from `entsoe.actual_total_load`
+(`flows_imports.jl:235`), which reaches back to **2021-10-27**, so 2023-01-01 has a
+full ~364-day candidate pool — not the 31 days first claimed (that was the start of
+`physical_flows` / the D-1 forecast, 2022-12-01).
+
+The real defect is quieter: the analogue *days* can be selected from before flow data
+exists, and `_zone_border_hourly_analogue` then medians each border over only those
+analogue days that actually have flows — possibly one, possibly none — with **no
+minimum-sample guard and no logging**, plus a discontinuous flip to D-2/`:v2` when
+fewer than `k` candidates exist. The `:v2` climatology degrades the same silent way.
+And `get_import_backstop` imputes **0.0** for missing lagged weeks before taking a
+max, so on a structural net exporter missing history *manufactures* phantom import
+headroom.
+
+Nor is `:v3` the only mechanism with an uninstrumented cold start: the UA
+firm/capability windows (366d/28d), Viking capability, fleet-truth p95 and FR's
+trailing-30d nuclear share all have their own. Phase 5 needs a warm-up policy and
+sample-count instrumentation, not just a start date.
 
 **0.6 Lookahead sweep — clean beyond the two known sites.** The only day-inclusive
 upper bounds in `src/` are `registry.jl:182` and `:266` (both already scheduled for
