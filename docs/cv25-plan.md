@@ -9,7 +9,12 @@ Five things do not change. Everything else is negotiable, and most of it should 
    defect, not a trade-off.
 3. **Open data.** The published extract reproduces the published record.
 4. **Open source.** The tool is meant to be read and run by other people.
-5. **HiGHS.** The canonical solver is open-source. Gurobi stays a development option.
+5. **Reproducible with HiGHS.** The published record must be reproducible by anyone
+   with the open-source solver — that is the invariant, not "HiGHS everywhere".
+   This is an academic project with an academic Gurobi licence: **use Gurobi for
+   development and iteration**, where it is the faster tool. The ship gate is that
+   HiGHS reproduces the result (decomposed mode is bit-identical across solvers, so
+   this costs nothing but the confirming run).
 
 Everything below serves those five. Byte-identity with older records, historical
 kill-switches, parked levers, and unused subsystems do not — git holds the history.
@@ -58,6 +63,19 @@ systematic pass, not two point fixes.
 ## Phase 1 — Subtraction (price-inert, guarded bit-identical)
 
 Ships before any physics change, so the fixes land on a small codebase.
+
+**Design target: the code should look like the table.** The published zone-strategy
+matrix — one row per zone, columns being discrete treatments (scarcity shape, hydro
+model, anchor, import backstop, credits, boundary book, fleet truth, thermal
+multiplier) — is not a rendering of the calibration; it *is* the calibration, and the
+code should say so. After Phase 1 a zone's strategy should be one flat struct whose
+fields are exactly that row, read by code that does not need to know which cv
+introduced which field. Concretely: the 19 never-varying fields leave the struct (they
+are model constants, not zone strategy), the shadowing kwargs go, the 17 distinct
+vectors are named for what they *are* rather than for the region that first needed
+them, and a reader can put the struct and the table side by side and see the same
+thing. If a future mechanism cannot be expressed as another column, that is a signal
+to reconsider the mechanism, not to widen the struct.
 
 | remove | evidence |
 |---|---|
@@ -192,7 +210,15 @@ and 5 are mechanical.
      ledger is a multi-thousand-word accretion that should become a short model
      description plus a CHANGELOG;
    - the headline metric's definition is findable and rerunnable by a newcomer;
-   - **a fresh-clone reproduction by someone who did not write the code.**
+   - **a fresh-clone reproduction by someone who did not write the code**, using
+     HiGHS (invariant 5);
+   - **the zone-strategy table published at `energy.philokalia.ai/about`** —
+     **generated from the running code**, never hand-maintained: a
+     `bin/export_zone_strategies.jl` resolves `get_zone_profile` for the footprint,
+     diffs each zone against the base, and emits the table with the same data plane
+     as the rest of the site. A hand-written copy would drift from the model within
+     one iteration; a generated one is a standing check that the calibration is still
+     small enough to fit in a table.
 
 **Rollback** is cheap and should be stated plainly: `code_version` is row provenance,
 cv24 rows are never rewritten, the dashboard selects by cv, the product pins a
