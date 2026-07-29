@@ -13,49 +13,44 @@ python3 -m http.server 8000 --directory web
 # then open http://localhost:8000/
 ```
 
-Any static file server works (the app only does `fetch('./data/...')`). Opening
+Any static file server works (the app only fetches relative JSON). Opening
 `index.html` via `file://` will not work because browsers block `fetch` there.
 
 ## Where the data comes from
 
-Since issue #152 the app tries three rungs in order (first that answers wins):
+The app tries two rungs in order (first that answers wins):
 
 1. **Live Worker API** — `https://api.philokalia.ai/api/v1/…`,
    backed by R2 parquet the pipeline uploads seconds after each DB write
    (`bin/export_web_parquet.jl` + `workers/api/`). Fresh without a deploy.
    Disable with `?live=0`; point elsewhere with `?api=<base>`. When this rung
    serves the data, the footer shows a "data updated … ago" freshness badge
-   from `/api/v1/manifest`.
-2. **`./data/*.json`** — committed exports (permanent fallback + offline dev).
-3. **`./fixtures/*.json`** — bundled synthetic fixtures (banner shown).
+   from `/api/v1/manifest`. This is the SOLE live data plane — the committed
+   `./data` rung and the daily bot commits that fed it were retired in July
+   2026 (single-publication-path cleanup).
+2. **`./fixtures/*.json`** — bundled snapshot (offline dev + last-resort;
+   banner shown).
 
 The app reads two kinds of JSON files:
 
 - `data/scoreboard.json` — aggregate accuracy per zone × lead time × window
 - `data/zones/<ZONE>.json` — per-day hourly predictions and actuals for one zone
 
-These are produced by `bin/export_forecast_json.jl` and published as the
-`forecast-data` artifact of the **"Daily ex-ante forecast"** GitHub workflow.
-`web/data/` is git-ignored — drop an exported dataset there for local use:
+These are produced by `bin/export_forecast_json.jl` (which still writes
+`web/data/` locally — the directory is git-ignored; the exported shapes are
+uploaded to R2 as parquet by `bin/export_web_parquet.jl`).
 
-```bash
-# e.g. download the latest artifact into web/data/
-gh run download --name forecast-data --dir web/data
-```
-
-When `data/` is missing (fresh checkout), the app falls back to the bundled
-synthetic fixtures in `fixtures/` (marked `"fixture": true` in the JSON) and shows
-a prominent **FIXTURE DATA** banner. Fixtures are for development only.
+Without the live API (fresh checkout, offline), the app falls back to the
+bundled fixtures in `fixtures/` (marked `"fixture": true` in the JSON) and
+shows a prominent **FIXTURE DATA** banner. Fixtures are for development only.
 
 ## Deploy
 
-The whole `web/` directory is the deployable unit — host it on any static host
-(GitHub Pages, nginx, S3, …). The repository ships
-`.github/workflows/publish-results.yml` ("Publish results SPA"), which runs after
-each successful "Daily ex-ante forecast" run (or manually via *Run workflow*),
-downloads the `forecast-data` artifact into `web/data/`, and deploys `web/` to
-GitHub Pages. **GitHub Pages must be enabled in the repository settings**
-(Settings → Pages → Source: *GitHub Actions*) for the deploy step to succeed.
+The whole `web/` directory is the deployable unit — host it on any static
+host. Production is Cloudflare (energy.philokalia.ai) serving `web/` from
+`main`, with all data coming live from the R2-backed Worker API. (The former
+GitHub Pages mirror and its `publish-results.yml` workflow were retired in
+July 2026 — one site, one data plane.)
 
 ## Data contract
 

@@ -1,15 +1,15 @@
 /* Euphemia results browser — plain JS, no build step.
- * Data contract (three rungs, first that answers wins):
+ * Data contract (two rungs, first that answers wins):
  *   1. live Worker API (issue #152): API_BASE/v1/{zones/<Z>,scoreboard,map}
  *      — R2-backed, fresh seconds after each pipeline run; ?live=0 disables,
- *      ?api=<base> overrides the origin.
- *   2. ./data/*.json   (committed exports — permanent fallback + offline dev)
- *   3. ./fixtures/*.json
+ *      ?api=<base> overrides the origin. The SOLE live data plane (the
+ *      committed ./data rung was retired July 2026 with the bot-commit path).
+ *   2. ./fixtures/*.json (bundled snapshot — offline dev + last-resort).
  */
 (function () {
   "use strict";
 
-  var BASES = ["./data", "./fixtures"];
+  var BASES = ["./fixtures"];
   var QUERY = new URLSearchParams(window.location.search);
   var API_BASE = QUERY.get("api") || "https://api.philokalia.ai/api";
   var LIVE = QUERY.get("live") !== "0";
@@ -80,19 +80,13 @@
     }, function () { /* badge is best-effort */ });
   }
 
-  // Try the live Worker API first (unless ?live=0), then ./data, then
-  // ./fixtures. The static rungs never go away — disabling the Worker
-  // restores the pre-API behavior exactly.
+  // Try the live Worker API first (unless ?live=0), then the bundled
+  // ./fixtures snapshot — offline dev and last-resort when the API is down.
   function loadWithFallback(rel) {
     function staticChain() {
-      return fetchJSON(BASES[0] + "/" + rel).then(
-        function (j) { return { json: j, source: "data" }; },
-        function () {
-          return fetchJSON(BASES[1] + "/" + rel).then(function (j) {
-            return { json: j, source: "fixtures" };
-          });
-        }
-      );
+      return fetchJSON(BASES[0] + "/" + rel).then(function (j) {
+        return { json: j, source: "fixtures" };
+      });
     }
     if (!LIVE) return staticChain();
     return fetchJSON(apiPath(rel)).then(
@@ -1800,8 +1794,8 @@
       var box = $("load-error");
       box.hidden = false;
       box.textContent =
-        "Could not load results data (" + err + "). Expected ./data/scoreboard.json " +
-        "or the bundled ./fixtures/scoreboard.json. Serve this directory with a static " +
+        "Could not load results data (" + err + "). Expected the live API or the " +
+        "bundled ./fixtures/scoreboard.json. Serve this directory with a static " +
         "file server, e.g.: python3 -m http.server --directory web";
     });
   }
