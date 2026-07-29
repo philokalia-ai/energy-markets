@@ -340,7 +340,12 @@ function pipeline_solver_worker(solvework::RemoteChannel, bookwork::RemoteChanne
                     solve1_secs, rebuild_secs, solve2_secs))
             catch e
                 e isa InterruptException && rethrow()
-                # Pass-2 solve blew up — fall back to the pass-1 incumbent.
+                # Pass-2 solve blew up — fall back to the pass-1 incumbent, as
+                # the sequential path does. It warns there (multi_zone_run.jl);
+                # here the exception was swallowed entirely, so a 1,300-day
+                # record gave no way to tell which days are silently pass-1
+                # only. Same result, now visible.
+                @warn "pass-2 solve failed for $day — falling back to the pass-1 clear" error = sprint(showerror, e)
                 put!(results, _result_ok(day, r1, ob2, book_secs, waitq,
                     solve1_secs, rebuild_secs, 0.0))
             end
@@ -460,17 +465,31 @@ function run_pipelined_backfill(days, zones::Vector{String}=String[];
     todo = if resume && save_to_db
         # ONE grouped probe for the whole range (was one COUNT round-trip per
         # candidate day — a 365-day resume paid 365 serial queries before any
-        # work started). Same verdict per day: saved = any rows for that day.
+        # work started).
+        #
+        # A day counts as saved only when EVERY requested zone is present. The
+        # old verdict was "any row for that day", which made a SHORT day
+        # permanent: a zone whose book build failed is dropped from the clear
+        # (multi_zone_books.jl rebuilds its neighbours and proceeds), the day
+        # is written with 38 of 39 zones and printed DONE, and resume then
+        # skipped it forever. Zone-count completeness costs nothing extra —
+        # it is the same grouped scan with one more aggregate.
         saved_days = try
             df = sql2df("""
-                SELECT (date_time_utc AT TIME ZONE 'UTC')::date AS d
+                SELECT (date_time_utc AT TIME ZONE 'UTC')::date AS d,
+                       COUNT(DISTINCT bidding_zone) AS nz
                 FROM simulations.energy_prices
                 WHERE clearing_mode = \$1 AND code_version = \$2
                   AND date_time_utc >= (\$3::date::timestamp AT TIME ZONE 'UTC')
                   AND date_time_utc <  (\$4::date::timestamp AT TIME ZONE 'UTC')
                 GROUP BY 1
                 """, [clearing_mode, cv, minimum(days), maximum(days) + Day(1)])
-            Set(Date.(df.d))
+            complete = Set(Date(r.d) for r in eachrow(df) if Int(r.nz) >= length(zones))
+            for r in eachrow(df)
+                Int(r.nz) < length(zones) &&
+                    @warn "resume: $(Date(r.d)) is SHORT ($(Int(r.nz))/$(length(zones)) zones) — re-processing"
+            end
+            complete
         catch e
             @warn "resume range check failed — treating all days as not-saved" error = e
             Set{Date}()
@@ -596,6 +615,10 @@ function run_pipelined_backfill(days, zones::Vector{String}=String[];
         worker_day = Dict{Int,Union{Nothing,Date}}()
         seen = Set{Date}()          # days that produced a (first) result
         retried = Set{Date}()       # days resubmitted once after a crash
+        # Live worker count per kind. When it reaches zero nothing can ever
+        # produce the outstanding days, which is a terminal state the writer
+        # cannot observe on its own (it blocks on `take!`).
+        live_workers = Dict{Symbol,Int}(:solver => solver_workers, :book => book_workers)
         draining = Ref(false)
         progress_reader = @async begin
             while true
@@ -609,13 +632,28 @@ function run_pipelined_backfill(days, zones::Vector{String}=String[];
             @async begin
                 try; fetch(fut); catch; end     # resolves when the process exits
                 draining[] && return
+                live_workers[kind] -= 1
                 d = get(worker_day, pid, nothing)
                 if d !== nothing && !(d in seen) && !(d in retried)
                     push!(retried, d)
                     @warn "pipeline $kind worker $pid died on $d — resubmitting (retry once)"
                     @async put!(bookwork, (:pass1, d, time()))
+                elseif d !== nothing && !(d in seen)
+                    # Retry already spent and STILL no result: the day is
+                    # terminally lost. It must be reported as a failure, not
+                    # left owing — the writer loops `while length(seen) < N`,
+                    # so an unaccounted day parks it on `take!(results)` with
+                    # every worker idle and the feeder drained: a silent hang
+                    # that loses the rest of the run (segfaults are
+                    # input-dependent, so a day that crashed once tends to
+                    # crash again). Emitting the failure also returns the
+                    # day's in-flight token.
+                    @error "pipeline $kind worker $pid died on $d after its retry — " *
+                           "day reported FAILED (rerun it with resume=true)"
+                    @async put!(results, _result_failed(d; status=:error,
+                        err="worker died twice (retry exhausted)"))
                 elseif d !== nothing
-                    @warn "pipeline $kind worker $pid died on $d — already resulted/retried"
+                    @warn "pipeline $kind worker $pid died on $d — already resulted"
                 else
                     @warn "pipeline $kind worker $pid died idle"
                 end
@@ -631,9 +669,22 @@ function run_pipelined_backfill(days, zones::Vector{String}=String[];
                         (@spawnat newp pipeline_solver_worker(solvework, bookwork, results, cfg, progress)) :
                         (@spawnat newp pipeline_book_worker(bookwork, solvework, results, zones, cfg, progress))
                     kind === :solver ? push!(all_solver_futs, nf) : push!(all_book_futs, nf)
+                    live_workers[kind] += 1      # replacement is up
                     monitor_worker(nf, newp, kind)
                 catch e
+                    # Same terminal-state reasoning as above: with no worker of
+                    # this kind left, nothing can ever produce the outstanding
+                    # days, so the writer would park forever. Report them.
                     @error "failed to spawn replacement $kind worker" error=e
+                    if live_workers[kind] <= 0
+                        @error "no $kind workers left — failing the $(N - length(seen)) " *
+                               "outstanding day(s) so the run terminates honestly"
+                        for d2 in todo
+                            (d2 in seen) && continue
+                            @async put!(results, _result_failed(d2; status=:error,
+                                err="no $kind worker left to process the day"))
+                        end
+                    end
                 end
             end
         end
@@ -696,11 +747,15 @@ function run_pipelined_backfill(days, zones::Vector{String}=String[];
                                 solve_time_seconds=r.final.solve_time,
                                 num_orders=length(r.ob.orders),
                                 num_price_periods=length(r.ob.periods))
-                        for zone in r.ob.nodes
-                            haskey(r.final.market_prices, zone) &&
-                                save_energy_prices(r.final.market_prices[zone], zone, r.day,
-                                    order_method; clearing_mode=clearing_mode,
-                                    optimization_run_id=run_id)
+                        # Iterate the PRICES, not the pass-2 book's node list:
+                        # `r.final` can be the pass-1 result (pass-2 fallback)
+                        # while `r.ob` is the pass-2 book, so a zone that
+                        # cleared in pass 1 but dropped out of the pass-2
+                        # rebuild had its prices silently discarded here.
+                        for zone in sort(collect(keys(r.final.market_prices)))
+                            save_energy_prices(r.final.market_prices[zone], zone, r.day,
+                                order_method; clearing_mode=clearing_mode,
+                                optimization_run_id=run_id)
                         end
                         !save_prices_only && !isempty(r.final.transmission_flows) &&
                             save_transmission_flows(r.final.transmission_flows, r.day)

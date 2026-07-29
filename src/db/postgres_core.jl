@@ -183,14 +183,24 @@ function preinit_pool(poolsize=poolsize)
     @info "preinit $poolsize done"
 end
 
+# The pool permit MUST be released on every exit path. ConcurrentUtilities'
+# contract is "each acquire is matched by exactly one release, or acquire
+# blocks forever once the pool is at its limit" — and `acquire` only
+# self-heals when the CONSTRUCTOR throws, not the body. Without the finally,
+# any server-side error (statement timeout, killed backend, a UniqueViolation
+# in save_inferred_parameters, the ALTER wedge in results_store.jl) leaked one
+# permit; after `poolsize` such errors EVERY query in the process blocked in
+# `wait(pool.lock)` with no error and no log. Worse, `sql2df_with_retry`'s
+# connection-error path calls `preinit_pool`, which acquires all permits at
+# once — so a single leak could hang the run inside its own retry handler.
 function withdb(f)
     connection = Base.acquire(newconnection, cnxpool; isvalid=cnxisok)
-    result = f(connection)
-
-    !cnxisok(connection) && LibPQ.reset!(connection)
-    Base.release(cnxpool, connection)
-
-    return result
+    try
+        return f(connection)
+    finally
+        !cnxisok(connection) && LibPQ.reset!(connection)
+        Base.release(cnxpool, connection)
+    end
 end
 
 function sql2df(sql, args=[])
