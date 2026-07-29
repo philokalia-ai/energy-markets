@@ -189,7 +189,10 @@ The honest weak spots on the full year, stated plainly:
 Two context numbers from the pre-cv19 frozen sample, so the ex-ante claim
 stays checkable: with *same-day observed* flows instead of the ex-ante flow
 rule that sample's aggregate was corr 0.59 / MAE 31.9 — the fully ex-ante
-version is **not worse, it's slightly better**. On its 12 fully held-out days
+version is **not worse, it's slightly better**. That comparison was made on a
+frozen forecast sample, not on the backfilled record, so it does **not** bound
+the size of the correction at the top of this README; Phase 3 of the cv25 plan
+measures that directly. On its 12 fully held-out days
 the aggregate held at corr 0.62 / MAE 35.3, with the degradation concentrated
 in NO1.
 
@@ -256,8 +259,11 @@ boundary physics enters as data:
   public "offered ATC" data cannot reproduce; a wrong constraint set produces
   wrong flows, so their observed/predicted flow enters as data instead.
 
-For the backward-looking counterfactual the observed same-day flows are
-legitimate inputs. For the **D-1 forecast** they are a data leak — and unlike
+For a *backward-looking* counterfactual the observed same-day flows would be
+legitimate inputs — but this project's published record is not that, it is an
+ex-ante counterfactual, and the correction at the top of this README applies: the
+record was in fact built with them, and cv25 removes them. For the **D-1 forecast**
+they are a data leak — and unlike
 load and RES, no official D-1 flow forecast exists (scheduled exchanges are
 the auction's own output; using them would be circular). So the exogenous
 part is predicted by a simple, versioned rule. The current default (`:v3`

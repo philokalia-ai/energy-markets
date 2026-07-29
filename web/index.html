@@ -596,7 +596,7 @@ run_pipelined_backfill(Date(2023,7,1):Day(1):Date(2025,6,30), FOOTPRINT;
         bill, concentrated on the Mediterranean ferry/cruise coast where the ships actually berth.
         It is a <strong>floor</strong>: registry-confirmed &gt;5000&nbsp;GT passenger ships only, full
         uptake, no container OPS.</p>
-      <p class="case-note">Model: cv17, ex-ante <code>:v2</code> flows — the same engine and flow
+      <p class="case-note">Model: cv17 (built through the pipeline, so with <code>:d0</code> same-day flows, not the <code>:v2</code> rule intended) — the same engine and flow
         rule as the live EU product. Deltas are <em>paired</em> (identical coverage, inner-joined on
         the 17,159 priced hours per zone), so baseline error cancels. Full record, per-zone table and
         the AIS-to-zone mapping:

@@ -212,6 +212,15 @@ zones end-to-end. Measured:
 
 - **DuckDB extract:** pipeline vs sequential **bit-identical** — 2,808
   zone-hour prices, max |Δ| = 0.
+
+  > [!WARNING]
+  > **This measurement no longer certifies what it says.** The sequential arm
+  > resolves the scoped ex-ante flow rule; the pipelined arm does not and uses
+  > `:d0` same-day observed flows (`docs/experiments/exante-audit-2026-07.md`).
+  > The two arms therefore run different models and differ on roughly half the
+  > cells. The number above was true when it was measured; the harness has since
+  > stopped comparing like with like. It is fixed in cv25, and until then
+  > sequential `bin/reproduce.jl` **cannot** reproduce the pipelined record.
 - **Postgres, serialized DB access** (`book_workers=1, in_flight=1`):
   **bit-identical** (and sequential-vs-sequential re-runs are themselves
   bit-identical).
