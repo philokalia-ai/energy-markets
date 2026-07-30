@@ -891,3 +891,13 @@ html, body { overflow-x: hidden; }
   .data-table { font-size: 12px; }
   .data-table th, .data-table td { padding: 5px 7px; }
 }
+
+/* ── generated calibration table (/about) ───────────────────────────────── */
+.zs-note { font-style: italic; color: var(--text-muted); }
+.zs-summary { font-size: .9rem; margin: 0 0 .6rem; }
+.zs-table td.zs-zones { text-align: left; white-space: normal; min-width: 11rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .78rem; }
+.zs-table th { white-space: nowrap; }
+.zs-table td.zs-off { color: var(--text-muted); }
+.zs-table td.zs-on { font-weight: 600; }
+.zs-src { font-size: .85rem; color: var(--text-muted); }

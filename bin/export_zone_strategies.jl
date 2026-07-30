@@ -16,25 +16,69 @@
 # network build's border drops. Those are emitted as their own section rather than
 # omitted, so the page is not a partial truth.
 #
-# Output: $WEB_PARQUET_OUT/v1/zone_strategies.json (default <repo>/data/web/v1),
-# i.e. the same staging root bin/web_data_push.sh uploads.
+# Output: $ZONE_STRATEGIES_OUT (default <repo>/data/calibration/zone_strategies.json).
+#
+# DELIBERATELY NOT under data/web/v1: bin/web_data_push.sh does
+# `aws s3 sync --delete $STAGING/v1 -> s3://$BUCKET/v1` over EVERYTHING in that
+# tree, so a file staged there publishes itself on the next routine data push.
+# Putting the calibration on a public site is a transparency decision; it must
+# take an explicit act, not a side effect of an unrelated push.
 
 using Euphemia, JSON, Dates
 const MO = Euphemia.MeritOrderBook
 
-const OUT_ROOT = get(ENV, "WEB_PARQUET_OUT", joinpath(dirname(@__DIR__), "data", "web"))
-const V1_DIR = joinpath(OUT_ROOT, "v1")
+const OUT_PATH = get(ENV, "ZONE_STRATEGIES_OUT",
+    joinpath(dirname(@__DIR__), "data", "calibration", "zone_strategies.json"))
 
-const FOOTPRINT = ["AT","BE","BG","CZ","DE_LU","DK1","DK2","EE","ES","FI","FR","GR","HU",
-                   "LT","LV","NL","NO1","NO2","NO3","NO4","NO5","PL","PT","RO","RS",
-                   "SE1","SE2","SE3","SE4","SI","SK","IT-NORTH","IT-CNORTH","IT-CSOUTH",
-                   "IT-SOUTH","IT-Calabria","IT-Sicily","IT-Sardinia","CH"]
+# The ONE footprint list, not a sixth hand-kept copy — a footprint change (the
+# parked 43-zone iteration) would otherwise silently make this "cannot drift"
+# table wrong.
+include(joinpath(@__DIR__, "forecast_common.jl"))
+const FOOTPRINT = FORECAST_FOOTPRINT
 
-_jsonable(v) = v isa MO.BoundaryBook ? "boundary book: $(v.counterparty)" :
-               v isa Symbol ? String(v) :
-               v isa Tuple ? collect(v) :
-               v isa Vector{<:Tuple} ? [collect(t) for t in v] :
-               v === nothing ? nothing : v
+# A BoundaryBook is a struct, so emit its fields. Collapsing it to
+# "boundary book: GB" made FR's GB_FR_BOOK (UKA carbon, 4-code net exclusion,
+# per-cable ATC) and DK1's VIKING_GB_BOOK (EUA, one code) render identically —
+# materially different calibrations shown as equal, in a table whose whole claim
+# is that it IS the calibration.
+_jsonable(v) =
+    v isa MO.BoundaryBook ?
+        Dict{String,Any}(String(f) => _jsonable(getfield(v, f))
+                         for f in fieldnames(MO.BoundaryBook)) :
+    v isa Symbol ? String(v) :
+    v isa Tuple ? collect(v) :
+    v isa Vector{<:Tuple} ? [collect(t) for t in v] :
+    v isa AbstractVector ? [_jsonable(x) for x in v] :
+    v === nothing ? nothing : v
+
+"""
+One line per profile field, in plain language — the column headers are snake_case
+Julia names an outside reader cannot interpret. A test asserts every field has one,
+so adding a field to the struct without describing it fails CI rather than shipping
+an unexplained column.
+"""
+const FIELD_DESCRIPTIONS = Dict(
+  "scarcity_threshold" => "supply margin below which offers start to steepen",
+  "scarcity_kappa" => "how hard offers steepen once the margin is thin",
+  "peak_kappa" => "extra uplift at the day's demand peak",
+  "water_value_base" => "reservoir hydro's opportunity cost, as a multiple of gas SRMC",
+  "water_value_span" => "how much the water value swings across the day's demand range",
+  "thermal_srmc_multiplier" => "premium on this zone's thermal running costs (Italy: 1.20)",
+  "hydro_model" => "gas-anchored water value, or reservoir-opportunity from weekly levels",
+  "nuclear_srmc_floor" => "floor under nuclear bids (EUR/MWh), France's off-peak position",
+  "opportunity_anchor" => "which fleet re-bids in pass 2 against the coupled price",
+  "anchor_share" => "fraction of the coupled reference the anchored fleet asks for",
+  "nuclear_avail_share_lo" => "anchor share when the nuclear fleet is at its crisis floor",
+  "nuclear_avail_share_hi" => "anchor share when the fleet is fully available",
+  "nuclear_bid_ref_ceiling" => "cap on anchor-lifted nuclear bids, as a multiple of the reference",
+  "scarcity_import_credit" => "credit available import capacity against the scarcity margin",
+  "fleet_truth_mode" => "true the fleet to trailing p95 output, or to registry installed capacity",
+  "seasonal_drawdown" => "follow the seasonal reservoir drawdown cycle (Swedish north)",
+  "import_backstop" => "offer demonstrated import headroom as elastic supply",
+  "backstop_scarcity_credit" => "also credit that headroom in the scarcity margin",
+  "ref_priced_exports" => "price exports over retained borders at the coupled reference",
+  "boundary_book" => "an out-of-footprint neighbour modelled as an elastic counterparty",
+)
 
 "Per-zone resolved profile, plus the base profile every row is a delta against."
 function zone_rows()
@@ -55,12 +99,17 @@ function zone_rows()
     return flds, rows
 end
 
-"Group the zones by identical parameter vector — the real number of treatments."
+"""
+Group the zones by identical parameter vector — the real number of treatments.
+
+Grouping is on the RESOLVED PROFILE ITSELF, not on the emitted JSON: grouping by a
+stringified projection would silently merge two distinct treatments the day their
+other fields converge (the boundary-book collapse above was exactly that hazard).
+"""
 function treatment_groups(flds, rows)
-    sig(r) = [string(r["values"][String(f)]) for f in flds]
-    groups = Dict{Vector{String},Vector{String}}()
+    groups = Dict{MO.ZoneProfile,Vector{String}}()
     for r in rows
-        push!(get!(groups, sig(r), String[]), r["zone"])
+        push!(get!(groups, MO.get_zone_profile(r["zone"]), String[]), r["zone"])
     end
     return [Dict("zones" => sort(zs), "n" => length(zs))
             for (_, zs) in sort(collect(groups); by = x -> (-length(x[2]), first(sort(x[2]))))]
@@ -73,6 +122,17 @@ these too.
 """
 function out_of_struct()
     return [
+        Dict("mechanism" => "The table is scoped to the EU-footprint product",
+             "where" => "enrich_network && apply_zone_profiles, in multi_zone_books.jl",
+             "note" => "Profiles apply ONLY on the coupled 39-zone path. The legacy " *
+                       "single-zone and 5-zone SEE products force SEE_PROFILE, so for " *
+                       "those the table below does not describe what was cleared."),
+        Dict("mechanism" => "FLEET_TRUTH_OVERRIDE (per day, all zones)",
+             "where" => "multi_zone_run.jl's robustness fallback",
+             "note" => "When a day's coupled clear stays infeasible through the whole " *
+                       "retry ladder, EVERY zone's fleet_truth_mode is forced to :p95 " *
+                       "for that day and the day ships. So a published day can have " *
+                       "been cleared with a different value of a column below."),
         Dict("mechanism" => "Border drops (flow-based)",
              "where" => "the enriched network build, not the profile",
              "note" => "Core-FBMC and other borders whose offered ATC misrepresents " *
@@ -82,6 +142,12 @@ function out_of_struct()
              "where" => "hardcoded (\"DE_LU\", \"NL\") in compute_opportunity_anchor_refs",
              "note" => "Every :hydro/:nuclear anchored zone with no endogenous neighbour " *
                        "falls back to the DE_LU/NL average — a shared reference no column shows."),
+        Dict("mechanism" => "Other zone-name-keyed treatment in the flow layer",
+             "where" => "flows_imports.jl (NORDIC_FLOW_ZONES D-7 recency) and the " *
+                        "aggregate-border remap",
+             "note" => "The ex-ante flow rule treats the Nordic zones differently, and " *
+                       "aggregate ENTSO-E border codes are remapped to a representative " *
+                       "zone. Neither is a profile field."),
         Dict("mechanism" => "Env-gated version switches",
              "where" => "get_zone_profile (EUPHEMIA_DISABLE_CV21/22/23/FRCAP)",
              "note" => "Set in A/B and byte-identity runs; unset in production. When set " *
@@ -101,7 +167,9 @@ function main()
         "code_version" => Euphemia.ENERGY_PRICES_CODE_VERSION,
         "generated_from" => "get_zone_profile resolved in-process — never hand-maintained",
         "fields" => String.(flds),
-        "base_profile" => "SEE_PROFILE",
+        "field_descriptions" => Dict(String(f) => get(FIELD_DESCRIPTIONS, String(f), "") for f in flds),
+        "source_of_truth" => "src/merit_order/zone_profiles.jl",
+        "base_profile" => "SEE_PROFILE",  # the row every diff is against
         "n_zones" => length(rows),
         "n_distinct_treatments" => length(groups),
         "kill_switches_set" => switches,
@@ -109,8 +177,8 @@ function main()
         "zones" => rows,
         "strategy_outside_the_profile" => out_of_struct(),
     )
-    mkpath(V1_DIR)
-    out = joinpath(V1_DIR, "zone_strategies.json")
+    mkpath(dirname(OUT_PATH))
+    out = OUT_PATH
     open(out, "w") do io
         JSON.print(io, payload, 2)
     end

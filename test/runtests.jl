@@ -182,6 +182,15 @@ println()
         include(joinpath(@__DIR__, "test_15min_resolution.jl"))
     end
 
+    @testset "Zone-strategy export" begin
+        println("\n" * "=" ^ 60)
+        println("Running zone-strategy export tests...")
+        println("=" ^ 60)
+        # Keeps the generated calibration table honest: every field described, the
+        # honesty section's named mechanisms real, grouping on the profile itself.
+        include(joinpath(@__DIR__, "test_zone_strategy_export.jl"))
+    end
+
     @testset "Price reconstruction (pure, DB-free)" begin
         println("\n" * "=" ^ 60)
         println("Running competitive price reconstruction unit tests...")

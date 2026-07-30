@@ -406,7 +406,12 @@
   <p class="zs-note" id="zs-status">Loading…</p>
   <div class="zs-wrap" id="zs-wrap" hidden>
     <p class="zs-summary" id="zs-summary"></p>
-    <div class="zs-scroll"><table class="zs-table" id="zs-table"></table></div>
+    <div class="table-scroll"><table class="data-table zs-table" id="zs-table"></table></div>
+    <p class="zs-src">
+      Source of truth: <code>src/merit_order/zone_profiles.jl</code> —
+      <a href="https://github.com/philokalia-ai/energy-markets/blob/main/src/merit_order/zone_profiles.jl">read the registry</a>.
+      This table is generated from it, never written by hand.
+    </p>
     <h4>Strategy that is not in the table</h4>
     <p>
       Being honest about the limits of the view above: some of what makes two zones
@@ -505,6 +510,7 @@
 
   function render(d) {
     var cols = varyingFields(d);
+    var dsc = d.field_descriptions || {};
     var byZone = {};
     d.zones.forEach(function (z) { byZone[z.zone] = z; });
 
@@ -519,18 +525,25 @@
         : "");
 
     var head = "<thead><tr><th>zones</th><th>n</th>" +
-      cols.map(function (c) { return "<th>" + esc(c.replace(/_/g, " ")) + "</th>"; }).join("") +
+      cols.map(function (c) {
+        var d = (dsc[c] || "");
+        return "<th title=\"" + esc(c + (d ? " — " + d : "")) + "\">" +
+               esc(c.replace(/_/g, " ")) + "</th>";
+      }).join("") +
       "</tr></thead>";
     var body = d.treatments.map(function (t) {
       var rep = byZone[t.zones[0]];
       return "<tr><td class=\"zs-zones\">" + esc(t.zones.join(" ")) + "</td>" +
-        "<td>" + t.n + "</td>" +
+        "<td>" + esc(t.n) + "</td>" +
         cols.map(function (c) {
           var v = rep.values[c];
           var off = (v === false || v === 0 || v === 0.0 || v === null ||
                      v === "none" || (Array.isArray(v) && !v.length));
-          var txt = (v === true) ? "on" : (v === false ? "—" :
-                    (v === null ? "—" : (Array.isArray(v) ? v.join(", ") : v)));
+          var txt = (v === true) ? "on"
+                  : (v === false || v === null || v === "none") ? "—"
+                  : (Array.isArray(v) ? v.join(", ")
+                  : (v && typeof v === "object") ? "book: " + (v.counterparty || "?")
+                  : v);
           return "<td class=\"" + (off ? "zs-off" : "zs-on") + "\">" + esc(txt) + "</td>";
         }).join("") + "</tr>";
     }).join("");
@@ -549,11 +562,13 @@
   fetch(API + "/v1/zone_strategies.json", { cache: "no-store" })
     .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
     .then(render)
-    .catch(function () {
-      status.textContent =
-        "The generated calibration table is not published yet. It is produced by " +
-        "bin/export_zone_strategies.jl in the repository — run it to see the same " +
-        "table locally.";
+    .catch(function (err) {
+      if (window.console) console.error("zone_strategies", err);
+      status.textContent = /^\d+$/.test(String(err && err.message))
+        ? "The generated calibration table is not published yet. It is produced by " +
+          "bin/export_zone_strategies.jl in the repository — run it to see the same " +
+          "table locally."
+        : "The calibration table could not be read (see the browser console).";
     });
 })();
 </script>
