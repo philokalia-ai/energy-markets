@@ -361,13 +361,16 @@ json_string(v) = sprint(json_write, v)
         -> Vector{Tuple{Vector{Date},Int}}
 
 Partition the UTC days `first_utc..last_utc` into runs of consecutive days
-sharing one admissible open-meteo vintage lag (`openmeteo_vintage_lag`), for
-the D-1-vintage fetch discipline. A UTC day's governing market day is itself
-when it is a candidate, else the next day (the earliest candidate its hours
-serve — Athens market day D consumes UTC days D-1 and D, and the earlier
-candidate's vintage is the stricter, admissible-for-both choice). On a normal
-D-1 morning run every day resolves to lag 0 and one group — the fetch pattern
-is then identical to the pre-vintage code; only late/catch-up runs split.
+sharing one admissible open-meteo vintage lag (`openmeteo_vintage_lag`, so lag
+is 0 or 1), for the D-1-vintage fetch discipline. A UTC day's governing market
+day is itself when it is a candidate, else the next day (the earliest candidate
+its hours serve — Athens market day D consumes UTC days D-1 and D, and the
+earlier candidate's vintage is the stricter, admissible-for-both choice). On a
+normal D-1 morning run every day resolves to lag 0 and one group — the fetch
+pattern is then identical to the pre-vintage code; only late/catch-up runs
+split. Pass ONE `asof` captured at run start to every caller: per-builder
+`Date(now(UTC))` defaults can straddle midnight UTC and hand the builders
+different vintages for the same day.
 """
 function vintage_groups(first_utc::Date, last_utc::Date, candidates::AbstractSet{Date};
                         asof::Date=Date(now(UTC)))

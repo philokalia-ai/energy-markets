@@ -327,7 +327,8 @@ request order). Multi-location → JSON array; single → one object. Multi-mode
 either variable is null across all models are dropped.
 """
 function parse_load_weather_response(body::AbstractString,
-                                     cells::Vector{Tuple{Float64,Float64}})
+                                     cells::Vector{Tuple{Float64,Float64}};
+                                     var_suffix::String="")
     parsed = JSON.parse(String(body))
     locs = parsed isa AbstractVector ? parsed : [parsed]
     length(locs) == length(cells) ||
@@ -336,8 +337,8 @@ function parse_load_weather_response(body::AbstractString,
     for (cell, loc) in zip(cells, locs)
         hourly = loc["hourly"]
         times = [DateTime(String(t), dateformat"yyyy-mm-ddTHH:MM") for t in hourly["time"]]
-        temp = _avg_hourly_var(hourly, "temperature_2m")
-        ghi = _avg_hourly_var(hourly, "shortwave_radiation")
+        temp = _avg_hourly_var(hourly, "temperature_2m" * var_suffix)
+        ghi = _avg_hourly_var(hourly, "shortwave_radiation" * var_suffix)
         d = Dict{DateTime,Tuple{Float64,Float64}}()
         for (i, t) in enumerate(times)
             tv = i <= length(temp) ? temp[i] : nothing
@@ -350,19 +351,7 @@ function parse_load_weather_response(body::AbstractString,
     return out
 end
 
-# Mirror of weather_res.jl's openmeteo_vintage_lag, defined only when this file
-# is used standalone (daily_forecast.jl includes weather_res.jl first, whose
-# definition then wins — the two must stay identical).
-if !@isdefined(openmeteo_vintage_lag)
-    function openmeteo_vintage_lag(market_day::Date; asof::Date=Date(now(UTC)))
-        lag = Dates.value(asof - (market_day - Day(1)))
-        lag <= 0 && return 0
-        lag <= 7 && return lag
-        error("openmeteo_vintage_lag: market day $market_day needs the vintage issued " *
-              "$(market_day - Day(1)), $lag days before $asof — beyond the previous-runs " *
-              "API's 7-day history; the D-1 vintage is not reconstructable")
-    end
-end
+include(joinpath(@__DIR__, "weather_vintage.jl"))   # openmeteo_vintage_lag (single definition)
 
 """
     fetch_load_weather(cells, dates; archive=false, vintage_lag=0, ...) -> cell → hour → (T, GHI)
@@ -395,6 +384,8 @@ function fetch_load_weather(cells::Vector{Tuple{Float64,Float64}}, dates::Vector
          vintage_lag > 0 ? get(ENV, "EUPHEMIA_OPENMETEO_PREVRUNS_URL", LOAD_OPENMETEO_PREVRUNS_URL_DEFAULT) :
                    get(ENV, "EUPHEMIA_OPENMETEO_URL", OPENMETEO_FORECAST_URL_DEFAULT))
     sfx = vintage_lag > 0 ? "_previous_day$(vintage_lag)" : ""
+    vintage_lag > 0 &&
+        println("  🕰️ vintage fetch: previous_day$(vintage_lag) via $url_base")
     out = Dict{Tuple{Float64,Float64},Dict{DateTime,Tuple{Float64,Float64}}}()
     for lo in 1:LOAD_OPENMETEO_BATCH:length(cells)
         batch = cells[lo:min(lo + LOAD_OPENMETEO_BATCH - 1, length(cells))]
@@ -406,7 +397,7 @@ function fetch_load_weather(cells::Vector{Tuple{Float64,Float64}}, dates::Vector
               "&end_date=" * Dates.format(d1, "yyyy-mm-dd") * "&timezone=UTC"
         archive || (url *= "&models=" * models)
         body = _load_openmeteo_get(url)
-        merge!(out, parse_load_weather_response(body, batch))
+        merge!(out, parse_load_weather_response(body, batch; var_suffix=sfx))
     end
     return out
 end

@@ -319,9 +319,10 @@ from the run issued on ITS D-1 (previous-runs API), never a fresher one.
 Zones without a model in the pack predict 0 for all hours (warned).
 """
 function build_weather_predictions(first_utc_day::Date, last_utc_day::Date,
-                                   candidates::AbstractSet{Date})
+                                   candidates::AbstractSet{Date};
+                                   asof::Date=Date(now(UTC)))
     pack = load_res_models()
-    groups = vintage_groups(first_utc_day, last_utc_day, candidates)
+    groups = vintage_groups(first_utc_day, last_utc_day, candidates; asof)
     preds = Dict{String,Dict{DateTime,Float64}}()
     for zone in ZONES
         zm = get(pack["zones"], zone, nothing)
@@ -338,6 +339,10 @@ function build_weather_predictions(first_utc_day::Date, last_utc_day::Date,
             ghours = collect(DateTime(first(gdates)):Hour(1):DateTime(last(gdates)) + Hour(23))
             merge!(zp, predict_res(pack, zone, ghours, weather))
         end
+        nspan = 24 * (Dates.value(last_utc_day - first_utc_day) + 1)
+        0 < length(zp) < nspan &&
+            println("  ⚠️ $zone: weather RES covers $(length(zp))/$(nspan) span hours " *
+                    "(previous-runs nulls / weather gaps) — short market days go ineligible")
         preds[zone] = zp
     end
     return preds
@@ -449,10 +454,11 @@ never a silent flat/persistence fallback).
 """
 function build_load_fills(pack, zones_to_fill::Vector{String},
                           first_utc::Date, last_utc::Date,
-                          candidates::AbstractSet{Date})
+                          candidates::AbstractSet{Date};
+                          asof::Date=Date(now(UTC)))
     fill_pred = Dict{String,Dict{DateTime,Float64}}()
     isempty(zones_to_fill) && return fill_pred
-    groups = vintage_groups(first_utc, last_utc, candidates)
+    groups = vintage_groups(first_utc, last_utc, candidates; asof)
     for zone in zones_to_fill
         zm = get(pack["zones"], zone, nothing)
         if zm === nothing
@@ -481,6 +487,10 @@ function build_load_fills(pack, zones_to_fill::Vector{String},
             println("  ⚠️ load-fill: $zone produced no hours (weather gaps) — cannot fill")
             continue
         end
+        nspan = 24 * (Dates.value(last_utc - first_utc) + 1)
+        length(pred) < nspan &&
+            println("  ⚠️ load-fill: $zone covers $(length(pred))/$(nspan) span hours " *
+                    "(weather gaps) — short market days stay ineligible")
         fill_pred[zone] = pred
         println("  🩹 load-fill: $zone model load ready ($(length(pred))h over " *
                 "$(first_utc)..$(last_utc))")
@@ -551,10 +561,11 @@ silent fallback). Mirrors `build_load_fills`.
 """
 function build_res_fills(pack, zones_to_fill::Vector{String},
                          first_utc::Date, last_utc::Date,
-                         candidates::AbstractSet{Date})
+                         candidates::AbstractSet{Date};
+                         asof::Date=Date(now(UTC)))
     res_pred = Dict{String,Dict{DateTime,Float64}}()
     isempty(zones_to_fill) && return res_pred
-    groups = vintage_groups(first_utc, last_utc, candidates)
+    groups = vintage_groups(first_utc, last_utc, candidates; asof)
     for zone in zones_to_fill
         zm = get(pack["zones"], zone, nothing)
         if zm === nothing
@@ -582,6 +593,10 @@ function build_res_fills(pack, zones_to_fill::Vector{String},
             println("  ⚠️ res-fill: $zone produced no hours (weather gaps) — cannot fill")
             continue
         end
+        nspan = 24 * (Dates.value(last_utc - first_utc) + 1)
+        length(pred) < nspan &&
+            println("  ⚠️ res-fill: $zone covers $(length(pred))/$(nspan) span hours " *
+                    "(weather gaps) — short market days stay ineligible")
         res_pred[zone] = pred
         println("  🩹 res-fill: $zone model wind+solar ready ($(length(pred))h over " *
                 "$(first_utc)..$(last_utc))")
@@ -736,6 +751,11 @@ function main()
         day_res_present[day] = res_forecast_zones(w0, w1, ZONES)
     end
 
+    # One asof for every vintage decision in this run (review #230 finding 4:
+    # per-builder Date(now(UTC)) defaults can straddle midnight UTC and hand
+    # the builders different vintages for the same market day).
+    vintage_asof = Date(now(UTC))
+
     # ── Model-load pre-pass ─────────────────────────────────────────────────
     # WEATHER track: model load is the track's CORE input — predicted ONCE for
     # ALL zones over the whole UTC span (uniform composition, independent of
@@ -754,7 +774,8 @@ function main()
         t0 = time()
         fill_pred = build_load_fills(load_pack, sort(copy(ZONES)),
                                      first_candidate - Day(1), last_candidate,
-                                     Set(first_candidate:Day(1):last_candidate))
+                                     Set(first_candidate:Day(1):last_candidate);
+                                     asof=vintage_asof)
         println("WEATHER LOAD: model load ready for $(length(fill_pred))/$(length(ZONES)) " *
                 "zone(s) in $(round(time() - t0, digits=1))s")
     elseif LOAD_FILL
@@ -775,7 +796,8 @@ function main()
                 t0 = time()
                 fill_pred = build_load_fills(load_pack, sort(short_union),
                                              first_candidate - Day(1), last_candidate,
-                                             Set(first_candidate:Day(1):last_candidate))
+                                             Set(first_candidate:Day(1):last_candidate);
+                                             asof=vintage_asof)
                 println("LOAD FILL: model load ready for $(length(fill_pred))/$(length(short_union)) " *
                         "zone(s) in $(round(time() - t0, digits=1))s")
             end
@@ -805,7 +827,8 @@ function main()
             t0 = time()
             res_pred = build_res_fills(res_pack, sort(res_short),
                                        first_candidate - Day(1), last_candidate,
-                                       Set(first_candidate:Day(1):last_candidate))
+                                       Set(first_candidate:Day(1):last_candidate);
+                                       asof=vintage_asof)
             println("RES FILL: model RES ready for $(length(res_pred))/$(length(res_short)) " *
                     "zone(s) in $(round(time() - t0, digits=1))s")
         end
@@ -825,7 +848,8 @@ function main()
                 "$(first_candidate - Day(1)) .. $last_candidate ...")
         t0 = time()
         preds = build_weather_predictions(first_candidate - Day(1), last_candidate,
-                                          Set(first_candidate:Day(1):last_candidate))
+                                          Set(first_candidate:Day(1):last_candidate);
+                                          asof=vintage_asof)
         res_pred_weather = preds
         scenario = weather_scenario(preds, fill_pred)
         println("Weather RES ready for $(length(preds)) zones in $(round(time() - t0, digits=1))s")
