@@ -176,16 +176,22 @@ function res_forecast_zones(t0::DateTime, t1::DateTime, zones::Vector{String};
     return Set{String}(String(r.z) for r in eachrow(df) if Int(r.nh) >= min_hours)
 end
 
-"Count of offered implicit-ATC rows touching the footprint in [t0, t1)."
+"Count of offered implicit-ATC rows touching the footprint in [t0, t1).
+Counts Day-ahead rows only (falling back to any row when no Day-ahead exists in
+the window, e.g. a fully-FBMC future): with the cv26 Day-ahead preference, a
+window where only Intraday rows have landed would otherwise pass the gate and
+freeze a slice cleared on fallback capacity hours before the DA rows arrive."
 function atc_row_count(t0::DateTime, t1::DateTime, zones::Vector{String})
     df = Euphemia.sql2df_with_retry("""
-        SELECT COUNT(*) AS n
+        SELECT COUNT(*) FILTER (WHERE contract_type = 'Day-ahead') AS n_da,
+               COUNT(*) AS n
         FROM entsoe.offered_transfer_capacities_implicit
         WHERE date_time_utc >= (\$1::timestamp AT TIME ZONE 'UTC')
           AND date_time_utc < (\$2::timestamp AT TIME ZONE 'UTC')
           AND (out_map_code = ANY(\$3) OR in_map_code = ANY(\$3))
     """, [t0, t1, zones])
-    return Int(df.n[1])
+    n_da = Int(df.n_da[1])
+    return n_da > 0 ? n_da : Int(df.n[1])
 end
 
 """
