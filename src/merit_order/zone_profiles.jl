@@ -238,6 +238,11 @@ const UA_BOOK_PL = UA_BOOK(["UA", "UA_DobTPP"])    # PL adds the Dobrotvir radia
 const TRANCHES = [(0.55, 0.95), (0.20, 1.05), (0.15, 1.25), (0.10, 1.60)]
 "Must-run blocks bid at this fraction of the unit's SRMC (absolute below-cost discount)."
 const MUST_RUN_PRICE_FACTOR = 0.05
+# cv27 T3 (docs/cv27-import-hydro-prereg.md): the deep must-run block's price
+# floor in deep-surplus hours — curtailment-avoidance / support-scheme
+# economics (a unit that pays to keep running rather than cycle). ONE declared
+# form-level value, never per-zone.
+const DEEP_SURPLUS_FLOOR_EUR = -20.0
 "A unit is must-run when its SRMC is below this multiple of the zone's gas SRMC."
 const MUST_RUN_SRMC_THRESHOLD = 1.15
 "Fraction of nameplate offered by default."
@@ -285,6 +290,7 @@ const FIELD_DESCRIPTIONS = Dict{Symbol,String}(
     :water_value_span => "how much the water value swings across the day's demand range",
     :thermal_srmc_multiplier => "premium on this zone's thermal running costs (Italy: 1.20)",
     :hydro_model => "gas-anchored water value, or reservoir-opportunity from weekly levels",
+    :spill_surplus_dryness => "cv27 spill-risk gate: below this dryness the hydro offer chases the net-demand valley (0 = off)",
     :nuclear_srmc_floor => "floor under nuclear bids (EUR/MWh) — France's off-peak position",
     :opportunity_anchor => "which fleet re-bids in pass 2 against the coupled price",
     :anchor_share => "fraction of the coupled reference the anchored fleet asks for",
@@ -329,6 +335,11 @@ Base.@kwdef struct ZoneProfile
     water_value_span::Float64 = 0.9
     thermal_srmc_multiplier::Float64 = 1.0
     hydro_model::Symbol = :gas_anchored
+    # cv27 T2: surplus-regime gate for spill-risk pricing — when reservoir
+    # dryness is BELOW this value (full reservoirs) the hydro offer follows the
+    # within-day net-demand valley toward 0 instead of holding the water-value
+    # level. 0.0 = off. One declared value on the Nordic profiles, not tuned.
+    spill_surplus_dryness::Float64 = 0.0
     nuclear_srmc_floor::Float64 = 0.0
     opportunity_anchor::Symbol = :none
     anchor_share::Float64 = 0.9
@@ -526,6 +537,7 @@ longer slam into the price cap.
 """
 const NORDIC_PROFILE = ZoneProfile(
     hydro_model = :reservoir_opportunity,
+    spill_surplus_dryness = 0.15,
     scarcity_threshold = 1.2,
     scarcity_kappa = 1.0,
     peak_kappa = 0.5,
@@ -546,6 +558,7 @@ in winter; off, it stays centered (+0.2) while SE1/SE2 keep the drawdown lift.
 """
 const NO4_PROFILE = ZoneProfile(
     hydro_model = :reservoir_opportunity,
+    spill_surplus_dryness = 0.15,
     scarcity_threshold = 1.2,
     scarcity_kappa = 1.0,
     peak_kappa = 0.5,
@@ -643,6 +656,7 @@ stays on plain NORDIC_PROFILE.
 """
 const NORWAY_PROFILE = ZoneProfile(
     hydro_model = :reservoir_opportunity,
+    spill_surplus_dryness = 0.15,
     scarcity_threshold = 1.2,
     scarcity_kappa = 1.0,
     peak_kappa = 0.5,

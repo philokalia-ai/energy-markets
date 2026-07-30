@@ -325,7 +325,8 @@ function _fetch_atc_aggregated(date::Date, table::String, codes::Vector{String};
     SELECT out_map_code AS source_zone,
            in_map_code AS sink_zone,
            (EXTRACT(HOUR FROM date_time_utc) + 1)::int AS time_period,
-           $cap_expr::float8 AS capacity
+           $cap_expr::float8 AS capacity,
+           (COUNT(*) FILTER (WHERE contract_type = 'Day-ahead'))::int AS n_da
     FROM entsoe.$table
     WHERE date_time_utc >= (\$1::date::timestamp AT TIME ZONE 'UTC')
           AND date_time_utc < ((\$1::date + 1)::timestamp AT TIME ZONE 'UTC')
@@ -336,6 +337,41 @@ function _fetch_atc_aggregated(date::Date, table::String, codes::Vector{String};
     """
     return safe_sql2df(query, params)
 end
+
+# cv27 T1 (docs/cv27-import-hydro-prereg.md): demonstrated interconnector
+# capability for Day-ahead-free (FBMC) borders — trailing-366d p95 of observed
+# gross flow per 4h block, the cv21/cv22 boundary-book recipe generalized.
+# Computed ONCE per delivery day for ALL borders (one grouped scan of
+# physical_flows) and cached, day-level, like the outage cache. Never cached
+# on error.
+const _FBMC_CAP_DAY_CACHE = Dict{Date,Dict{Tuple{String,String,Int},Float64}}()
+const _FBMC_CAP_LOCK = ReentrantLock()
+
+function _fbmc_capability(date::Date)
+    lock(_FBMC_CAP_LOCK) do
+        haskey(_FBMC_CAP_DAY_CACHE, date) && return _FBMC_CAP_DAY_CACHE[date]
+        df = safe_sql2df("""
+            SELECT out_area_map_code AS s, in_area_map_code AS k,
+                   FLOOR(EXTRACT(HOUR FROM date_time_utc) / 4)::int AS blk,
+                   percentile_cont(0.95) WITHIN GROUP (ORDER BY flow_mw) AS cap
+            FROM entsoe.physical_flows
+            WHERE date_time_utc >= ((\$1::date - 366)::timestamp AT TIME ZONE 'UTC')
+              AND date_time_utc < (\$1::date::timestamp AT TIME ZONE 'UTC')
+              AND flow_mw IS NOT NULL AND flow_mw > 0
+            GROUP BY 1, 2, 3
+            """, Any[date])
+        cap = Dict{Tuple{String,String,Int},Float64}()
+        for r in eachrow(df)
+            (ismissing(r.cap) || ismissing(r.s) || ismissing(r.k)) && continue
+            cap[(String(r.s), String(r.k), Int(r.blk))] = Float64(r.cap)
+        end
+        _FBMC_CAP_DAY_CACHE[date] = cap
+        return cap
+    end
+end
+
+"Clear the cv27 demonstrated-capability day cache (tests / long processes)."
+clear_fbmc_capability_cache!() = (lock(_FBMC_CAP_LOCK) do; empty!(_FBMC_CAP_DAY_CACHE); end; nothing)
 
 """
     _subzones_of(aggregate, footprint) -> Vector{String}
@@ -395,12 +431,29 @@ function _create_transfer_capacity_enriched(date::Date, bidding_zones::Vector{St
     imp_pairs = Set{Tuple{String,String}}(
         (r.source_zone, r.sink_zone) for r in eachrow(imp))
 
+    # cv27 T1: a border-hour with NO Day-ahead rows (n_da == 0 — the FBMC
+    # borders since late 2024) sizes by demonstrated capability instead of the
+    # intraday-blend fallback. Borders WITH Day-ahead rows are untouched by
+    # construction (the falsifier the prereg names).
+    cv27_t1 = isempty(get(ENV, "EUPHEMIA_DISABLE_CV27", "")) &&
+              isempty(get(ENV, "EUPHEMIA_DISABLE_CV27_T1", ""))
+    fbmc_cap = (cv27_t1 && "n_da" in names(imp) && any(imp.n_da .== 0)) ?
+        _fbmc_capability(date) : nothing
+    n_fbmc_override = 0
     rows = NamedTuple{(:source_zone, :sink_zone, :time_period, :capacity),
                       Tuple{String,String,Int,Float64}}[]
     for r in eachrow(imp)
+        capacity = Float64(r.capacity)
+        if fbmc_cap !== nothing && Int(r.n_da) == 0
+            blk = (Int(r.time_period) - 1) ÷ 4
+            demo = get(fbmc_cap, (String(r.source_zone), String(r.sink_zone), blk), 0.0)
+            demo > 0.0 && (capacity = demo; n_fbmc_override += 1)
+        end
         push!(rows, (source_zone=r.source_zone, sink_zone=r.sink_zone,
-                     time_period=Int(r.time_period), capacity=Float64(r.capacity)))
+                     time_period=Int(r.time_period), capacity=capacity))
     end
+    n_fbmc_override > 0 &&
+        println("   🔁 cv27 T1: $(n_fbmc_override) Day-ahead-free border-hours sized by demonstrated capability")
     n_explicit_added = 0
     if include_explicit
         exp = _fetch_atc_aggregated(date, "offered_transfer_capacities_explicit", codes;
