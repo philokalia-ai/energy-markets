@@ -238,6 +238,15 @@ const UA_BOOK_PL = UA_BOOK(["UA", "UA_DobTPP"])    # PL adds the Dobrotvir radia
 const TRANCHES = [(0.55, 0.95), (0.20, 1.05), (0.15, 1.25), (0.10, 1.60)]
 "Must-run blocks bid at this fraction of the unit's SRMC (absolute below-cost discount)."
 const MUST_RUN_PRICE_FACTOR = 0.05
+# cv28 T1 (docs/cv28-pricetaker-hydro-prereg.md): the single declared floor at
+# which the price-taker block (RES forecast, run-of-river, the deep must-run
+# block, and :price_taker-placed hydro) offers — support-scheme +
+# inflexibility economics. The public GME/OMIE books put 20-78% of supply
+# at <= 0; one form-level value, never per-zone.
+const PRICE_TAKER_FLOOR_EUR = -20.0
+# cv28 T2: the :cap_tail hydro placement prices the water-value order at this
+# multiple of gas SRMC (the measured OMIE opportunity tail).
+const CAP_TAIL_HYDRO_MULT = 1.5
 "A unit is must-run when its SRMC is below this multiple of the zone's gas SRMC."
 const MUST_RUN_SRMC_THRESHOLD = 1.15
 "Fraction of nameplate offered by default."
@@ -285,6 +294,7 @@ const FIELD_DESCRIPTIONS = Dict{Symbol,String}(
     :water_value_span => "how much the water value swings across the day's demand range",
     :thermal_srmc_multiplier => "premium on this zone's thermal running costs (Italy: 1.20)",
     :hydro_model => "gas-anchored water value, or reservoir-opportunity from weekly levels",
+    :hydro_placement => "cv28: where reservoir hydro bids — opportunity (water value), price_taker (floor; GME), cap_tail (1.5x gas; OMIE)",
     :nuclear_srmc_floor => "floor under nuclear bids (EUR/MWh) — France's off-peak position",
     :opportunity_anchor => "which fleet re-bids in pass 2 against the coupled price",
     :anchor_share => "fraction of the coupled reference the anchored fleet asks for",
@@ -329,6 +339,11 @@ Base.@kwdef struct ZoneProfile
     water_value_span::Float64 = 0.9
     thermal_srmc_multiplier::Float64 = 1.0
     hydro_model::Symbol = :gas_anchored
+    # cv28 T2: WHERE the reservoir-hydro offer sits in the book, measured from
+    # the public books — :opportunity (status quo water value), :price_taker
+    # (joins the price-taker floor; Italian GME behaviour), :cap_tail
+    # (CAP_TAIL_HYDRO_MULT x gas SRMC; Iberian OMIE behaviour).
+    hydro_placement::Symbol = :opportunity
     nuclear_srmc_floor::Float64 = 0.0
     opportunity_anchor::Symbol = :none
     anchor_share::Float64 = 0.9
@@ -515,6 +530,7 @@ Italy. Gas-heavy but higher SRMC than SEE — older, less-efficient CCGTs burnin
 premium-priced LNG — so thermal marginal costs carry an efficiency/LNG premium.
 """
 const ITALY_PROFILE = ZoneProfile(
+    hydro_placement = :price_taker,
     thermal_srmc_multiplier = 1.20,
 )
 
@@ -904,6 +920,13 @@ spike hours; avg ~3 GW) starve it a few days a year — backstop, not drop.
 const ITALY_CNORTH_PROFILE = with_profile(ITALY_PROFILE; import_backstop = true)
 
 """
+Iberia (ES/PT): SEE temperament, but the public OMIE book shows reservoir
+hydro opportunity-priced toward the cap (15-31% of supply >= 300 €/MWh) —
+the :cap_tail placement (cv28 T2).
+"""
+const IBERIA_PROFILE = with_profile(SEE_PROFILE; hydro_placement = :cap_tail)
+
+"""
 SEE base + import backstop + full scarcity credit (cv17). SEE calibration (exact v10 parameters)
 plus the ex-ante import backstop AND the backstop scarcity credit. RO is the
 measured case for why the backstop must stay on in SEE's east: the June-2026
@@ -971,7 +994,7 @@ const ZONE_PROFILES = Dict{String,ZoneProfile}(
     "HU" => with_profile(SEE_IMPORT_BACKED_PROFILE; boundary_book = UA_BOOK_DEFAULT),
     "SI" => SLOVENIA_PROFILE,
     # Iberia
-    "ES" => SEE_PROFILE, "PT" => SEE_PROFILE,
+    "ES" => IBERIA_PROFILE, "PT" => IBERIA_PROFILE,
     # Italy sub-zones (IT-CNORTH: + cv17 import backstop). cv18: the mainland
     # zones + Sicily add the per-unit SRMC spread (±10% — measured prototype
     # corr 0.31→0.68 CSOUTH / 0.75→0.82 NORTH / 0.49→0.72 Sicily, plateau

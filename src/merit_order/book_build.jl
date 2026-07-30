@@ -755,11 +755,18 @@ function create_merit_order_book(
             date_time = parse_timeslot_to_datetime(ts, day)
             hr = Dates.hour(date_time)   # UTC hour key for all hour-keyed lookups
 
-            # Renewable forecast offered at near-zero price (RES bids as
-            # price-taker; support schemes make it insensitive to price)
+            # Renewable forecast as price-taker. cv28 T1: the real price-taker
+            # block clears BELOW zero (support schemes pay for volume) — the
+            # public books carry 20-78% of supply at <= 0 where our +1 floor
+            # made negatives unreachable (the measured cv27-T3 lesson).
+            cv28_t1 = isempty(get(ENV, "EUPHEMIA_DISABLE_CV28", "")) &&
+                      isempty(get(ENV, "EUPHEMIA_DISABLE_CV28_T1", ""))
+            cv28_t2 = isempty(get(ENV, "EUPHEMIA_DISABLE_CV28", "")) &&
+                      isempty(get(ENV, "EUPHEMIA_DISABLE_CV28_T2", ""))
             res_qty = get(renewable_by_time, ts, 0.0)
             if res_qty > 0.1
-                push!(tagged, (SimpleOrder(:supply, 1.0, res_qty,
+                push!(tagged, (SimpleOrder(:supply,
+                    cv28_t1 ? PRICE_TAKER_FLOOR_EUR : 1.0, res_qty,
                     Symbol(bidding_zone), date_time, resolution_minutes), "RES"))
                 supply_orders_count += 1
                 total_supply_capacity += res_qty
@@ -862,7 +869,15 @@ function create_merit_order_book(
                        peak_kappa * norm_demand^peak_exponent
 
             for g in generators
-                if g.fuel_type in WATER_VALUE_FUEL_TYPES
+                # cv28 T1: run-of-river is a price-taker (non-storable inflow;
+                # every public book carries it at/below zero).
+                if cv28_t1 && g.fuel_type == Symbol("Hydro Run-of-river and pondage")
+                    push!(tagged, (SimpleOrder(:supply, PRICE_TAKER_FLOOR_EUR,
+                        offered_pmax(g), Symbol(bidding_zone), date_time,
+                        resolution_minutes), g.code))
+                    supply_orders_count += 1
+                    total_supply_capacity += offered_pmax(g)
+                elseif g.fuel_type in WATER_VALUE_FUEL_TYPES
                     # Hydro water value. Two models:
                     #
                     # :gas_anchored (SEE default) — opportunity cost tied to gas
@@ -905,6 +920,15 @@ function create_merit_order_book(
                     else
                         gas_srmc * (1.0 + water_value_dry_boost * hydro_dryness) *
                         (water_value_base + water_value_span * norm_demand)
+                    end
+                    # cv28 T2: placement measured from the public books —
+                    # Italian reservoir hydro price-takes (GME), Iberian hydro
+                    # prices its opportunity toward the cap (OMIE). Everything
+                    # else keeps the water value.
+                    if cv28_t2 && profile.hydro_placement == :price_taker
+                        water_value = PRICE_TAKER_FLOOR_EUR
+                    elseif cv28_t2 && profile.hydro_placement == :cap_tail
+                        water_value = CAP_TAIL_HYDRO_MULT * gas_srmc
                     end
                     push!(tagged, (SimpleOrder(:supply, water_value, offered_pmax(g),
                         Symbol(bidding_zone), date_time, resolution_minutes), g.code))
@@ -954,7 +978,8 @@ function create_merit_order_book(
                         # (−212 at TTF 218, 2022) and sank the whole year.
                         deep_qty = must_run_qty * 0.6
                         push!(tagged, (SimpleOrder(:supply,
-                            gmc * must_run_price_factor, deep_qty,
+                            cv28_t1 ? PRICE_TAKER_FLOOR_EUR : gmc * must_run_price_factor,
+                            deep_qty,
                             Symbol(bidding_zone), date_time, resolution_minutes), g.code))
                         push!(tagged, (SimpleOrder(:supply,
                             min(max(gmc * 0.5, gmc - 40.0), nuc_ceil),
