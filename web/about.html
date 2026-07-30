@@ -391,10 +391,29 @@
   </ul>
   <p>
     The full parameterization is one <code>ZoneProfile</code> per zone in
-    <code>src/MeritOrderBook.jl</code>, documented zone by zone in the calibration
-    atlas (<code>docs/</code>) — every choice justified by physics or public data,
-    never by fitting to the prices we score against.
+    <code>src/merit_order/zone_profiles.jl</code> — every choice justified by physics
+    or public data, never by fitting to the prices we score against.
   </p>
+
+  <h3 id="zone-strategy-table">The calibration, generated from the running model</h3>
+  <p>
+    The table below is not a description of the calibration — it <em>is</em> the
+    calibration, read out of the code by resolving every zone's profile in-process.
+    Nothing here is maintained by hand, because a hand-kept calibration table drifts
+    from the model within one iteration (ours did: it listed four zones on the base
+    profile that the registry had already moved onto an import-backed one).
+  </p>
+  <p class="zs-note" id="zs-status">Loading…</p>
+  <div class="zs-wrap" id="zs-wrap" hidden>
+    <p class="zs-summary" id="zs-summary"></p>
+    <div class="zs-scroll"><table class="zs-table" id="zs-table"></table></div>
+    <h4>Strategy that is not in the table</h4>
+    <p>
+      Being honest about the limits of the view above: some of what makes two zones
+      behave differently does not live in the profile at all. These do:
+    </p>
+    <ul id="zs-outside"></ul>
+  </div>
 
   <h2>Scoring, honestly</h2>
   <p>
@@ -456,6 +475,88 @@
     <a class="more-link" href="https://philokalia.ai">philokalia.ai</a>
   </p>
 </article>
+
+<script>
+/* The zone-strategy table, fetched from the model's own export.
+   No committed copy: a checked-in snapshot is exactly the drift this section
+   exists to avoid. If the object is not published yet the section says so. */
+(function () {
+  var status = document.getElementById("zs-status");
+  var wrap = document.getElementById("zs-wrap");
+  if (!status || !wrap) return;
+
+  var API = (new URLSearchParams(location.search)).get("api") ||
+            "https://api.philokalia.ai/api";
+
+  function esc(x) {
+    return String(x).replace(/[&<>]/g, function (c) {
+      return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c];
+    });
+  }
+
+  /* Show the columns that actually vary, so the table stays readable. */
+  function varyingFields(d) {
+    return d.fields.filter(function (f) {
+      var seen = {};
+      d.zones.forEach(function (z) { seen[JSON.stringify(z.values[f])] = 1; });
+      return Object.keys(seen).length > 1;
+    });
+  }
+
+  function render(d) {
+    var cols = varyingFields(d);
+    var byZone = {};
+    d.zones.forEach(function (z) { byZone[z.zone] = z; });
+
+    document.getElementById("zs-summary").textContent =
+      d.n_zones + " zones resolve to " + d.n_distinct_treatments +
+      " distinct parameter vectors across " + d.fields.length +
+      " profile fields (" + cols.length + " of them vary). Generated " +
+      d.generated_utc + " from code_version " + d.code_version + "." +
+      (d.kill_switches_set && d.kill_switches_set.length
+        ? " ⚠ generated with kill-switches set: " + d.kill_switches_set.join(", ") +
+          " — this is NOT the production calibration."
+        : "");
+
+    var head = "<thead><tr><th>zones</th><th>n</th>" +
+      cols.map(function (c) { return "<th>" + esc(c.replace(/_/g, " ")) + "</th>"; }).join("") +
+      "</tr></thead>";
+    var body = d.treatments.map(function (t) {
+      var rep = byZone[t.zones[0]];
+      return "<tr><td class=\"zs-zones\">" + esc(t.zones.join(" ")) + "</td>" +
+        "<td>" + t.n + "</td>" +
+        cols.map(function (c) {
+          var v = rep.values[c];
+          var off = (v === false || v === 0 || v === 0.0 || v === null ||
+                     v === "none" || (Array.isArray(v) && !v.length));
+          var txt = (v === true) ? "on" : (v === false ? "—" :
+                    (v === null ? "—" : (Array.isArray(v) ? v.join(", ") : v)));
+          return "<td class=\"" + (off ? "zs-off" : "zs-on") + "\">" + esc(txt) + "</td>";
+        }).join("") + "</tr>";
+    }).join("");
+    document.getElementById("zs-table").innerHTML = head + "<tbody>" + body + "</tbody>";
+
+    document.getElementById("zs-outside").innerHTML =
+      (d.strategy_outside_the_profile || []).map(function (m) {
+        return "<li><strong>" + esc(m.mechanism) + "</strong> — <em>" +
+               esc(m.where) + "</em>. " + esc(m.note) + "</li>";
+      }).join("");
+
+    status.hidden = true;
+    wrap.hidden = false;
+  }
+
+  fetch(API + "/v1/zone_strategies.json", { cache: "no-store" })
+    .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+    .then(render)
+    .catch(function () {
+      status.textContent =
+        "The generated calibration table is not published yet. It is produced by " +
+        "bin/export_zone_strategies.jl in the repository — run it to see the same " +
+        "table locally.";
+    });
+})();
+</script>
 
 <footer class="site-footer">
   <span>A <a href="https://philokalia.ai">philokalia.ai</a> project.</span>
