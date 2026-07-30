@@ -279,6 +279,7 @@ prevent. `test_zone_strategy_export.jl` asserts the key set equals
 """
 const FIELD_DESCRIPTIONS = Dict{Symbol,String}(
     :scarcity_threshold => "supply margin below which offers start to steepen",
+    :scarcity_margin_floor => "margin asymptote of the cv26 hyperbolic scarcity tail (1.0 = capacity equals demand)",
     :scarcity_kappa => "how hard offers steepen once the margin is thin",
     :peak_kappa => "extra uplift at the day's demand peak",
     :water_value_base => "reservoir hydro's opportunity cost, as a multiple of gas SRMC",
@@ -324,6 +325,11 @@ Fields are data, not logic. Two levers extend the old kwargs:
 Base.@kwdef struct ZoneProfile
     scarcity_threshold::Float64 = 1.4
     scarcity_kappa::Float64 = 3.0
+    # cv26 (docs/cv26-scarcity-prereg.md): asymptote margin of the hyperbolic
+    # scarcity tail — the margin at which effective capacity equals demand and
+    # the priced scarcity diverges (capped by the price ceiling downstream).
+    # ONE form-level value, deliberately NOT tuned per zone.
+    scarcity_margin_floor::Float64 = 1.0
     peak_kappa::Float64 = 1.2
     water_value_base::Float64 = 0.85
     water_value_span::Float64 = 0.9

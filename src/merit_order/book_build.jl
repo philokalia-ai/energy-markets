@@ -857,8 +857,29 @@ function create_merit_order_book(
                 profile.backstop_scarcity_credit *
                 get(backstop_by_hour, hr, 0.0) : 0.0
             margin = (dispatchable_capacity + import_credit + backstop_credit) / net_demand[ts]
-            scarcity = 1.0 +
-                       scarcity_kappa * max(0.0, scarcity_threshold - margin)^2 +
+            # cv26 (docs/cv26-scarcity-prereg.md): the scarcity term's tail is
+            # HYPERBOLIC in the margin — bidders price the last tranches
+            # against effective residual capacity with a divergence as margin
+            # approaches the asymptote m0 (capacity == demand), not the gentle
+            # bounded quadratic. kappa_h is pinned by CONTINUITY with the
+            # quadratic form at the midpoint reference margin (theta+m0)/2 —
+            # the two forms agree there exactly, so no new per-zone strength
+            # knob exists. Degenerate profiles (theta <= m0) and the kill
+            # switch keep the quadratic. Price ceiling still caps downstream.
+            m0 = profile.scarcity_margin_floor
+            scarcity_term = if isempty(get(ENV, "EUPHEMIA_DISABLE_CV26", "")) &&
+                               scarcity_threshold > m0
+                if margin >= scarcity_threshold
+                    0.0
+                else
+                    mref = (scarcity_threshold + m0) / 2
+                    kappa_h = scarcity_kappa * (scarcity_threshold - mref) * (mref - m0)
+                    kappa_h * (scarcity_threshold - margin) / max(margin - m0, 1e-6)
+                end
+            else
+                scarcity_kappa * max(0.0, scarcity_threshold - margin)^2
+            end
+            scarcity = 1.0 + scarcity_term +
                        peak_kappa * norm_demand^peak_exponent
 
             for g in generators
