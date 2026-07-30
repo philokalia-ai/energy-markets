@@ -7,6 +7,7 @@
 using Test, Dates, Statistics
 
 include(joinpath(@__DIR__, "..", "bin", "weather_res.jl"))
+include(joinpath(@__DIR__, "..", "bin", "forecast_common.jl"))   # vintage_groups
 
 @testset "Weather RES" begin
 
@@ -199,6 +200,50 @@ include(joinpath(@__DIR__, "..", "bin", "weather_res.jl"))
                 @test haskey(v2["zones"][z], "wind") == haskey(zm, "wind")
             end
         end
+    end
+
+    @testset "D-1 vintage discipline (openmeteo_vintage_lag / vintage_groups)" begin
+        D = Date(2026, 8, 5)
+        # running on/before D-1: the current run is an admissible vintage
+        @test openmeteo_vintage_lag(D; asof=D - Day(1)) == 0    # the normal D-1 run
+        @test openmeteo_vintage_lag(D; asof=D - Day(3)) == 0    # longer lead, older still
+        # running on/after D: previous_day1 is PER-TIMESTAMP (for hour h of day
+        # D it carries the run issued on D-1 — dn_load_fetch.py semantics), so
+        # the lag is CONSTANT 1 for any past day, however old.
+        @test openmeteo_vintage_lag(D; asof=D) == 1             # same-day catch-up
+        @test openmeteo_vintage_lag(D; asof=D + Day(2)) == 1
+        @test openmeteo_vintage_lag(D; asof=D + Day(40)) == 1   # no 7-day cliff
+        # fetchers refuse out-of-range lags before any network access
+        @test_throws Exception fetch_weather([(38.0, 23.7)], [D]; vintage_lag=8)
+        @test_throws Exception fetch_weather([(38.0, 23.7)], [D]; vintage_lag=-1)
+
+        # suffixed previous-runs response keys parse via the EXACT requested
+        # name; a plain current-run key alongside must NOT blend in (the
+        # vintage-purity guarantee), in either direction
+        body = """{"hourly": {"time": ["2026-08-05T00:00"],
+                   "wind_speed_100m": [99.0],
+                   "shortwave_radiation": [999.0],
+                   "wind_speed_100m_previous_day1": [12.0],
+                   "shortwave_radiation_previous_day1": [340.0]}}"""
+        w = parse_openmeteo_response(body, [(38.0, 23.7)]; var_suffix="_previous_day1")
+        @test w[(38.0, 23.7)][DateTime(2026, 8, 5, 0)] == (12.0, 340.0)
+        # ensemble members of the suffixed variable still average
+        body2 = """{"hourly": {"time": ["2026-08-05T00:00"],
+                    "wind_speed_100m_previous_day1_gfs_seamless": [10.0],
+                    "wind_speed_100m_previous_day1_ecmwf_ifs025": [14.0],
+                    "shortwave_radiation_previous_day1": [340.0]}}"""
+        w2 = parse_openmeteo_response(body2, [(38.0, 23.7)]; var_suffix="_previous_day1")
+        @test w2[(38.0, 23.7)][DateTime(2026, 8, 5, 0)] == (12.0, 340.0)
+
+        # grouping: normal D-1 run = ONE lag-0 group (fetch pattern unchanged)
+        g = vintage_groups(D - Day(1), D, Set([D]); asof=D - Day(1))
+        @test g == [([D - Day(1), D], 0)]
+        # catch-up spanning two candidates: past day pinned to previous_day1,
+        # the still-future day stays on the current run
+        g2 = vintage_groups(D - Day(1), D + Day(1), Set([D, D + Day(1)]); asof=D)
+        @test g2 == [([D - Day(1), D], 1), ([D + Day(1)], 0)]
+        # a UTC day serving no candidate is a hard error
+        @test_throws Exception vintage_groups(D - Day(1), D, Set([D + Day(5)]); asof=D)
     end
 
     @testset "default_res_models_path (v2 preferred, env override)" begin

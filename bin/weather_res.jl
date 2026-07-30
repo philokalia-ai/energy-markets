@@ -25,6 +25,10 @@
 #
 # Env vars:
 #   EUPHEMIA_OPENMETEO_URL     API base (default https://api.open-meteo.com/v1/forecast)
+#   EUPHEMIA_OPENMETEO_PREVRUNS_URL  previous-runs API base for vintage_lag>0
+#                              fetches (default the public previous-runs API —
+#                              a self-hosted forecast mirror has no previous
+#                              runs, so catch-up fetches go public)
 #   EUPHEMIA_OPENMETEO_MODELS  weather model(s), default 'gfs_seamless'; a
 #                              comma-separated list requests all models and
 #                              averages per-model arrays element-wise (nulls
@@ -36,6 +40,7 @@
 using Dates, Statistics, Downloads, JSON
 
 const OPENMETEO_URL_DEFAULT = "https://api.open-meteo.com/v1/forecast"
+const OPENMETEO_PREVRUNS_URL_DEFAULT = "https://previous-runs-api.open-meteo.com/v1/forecast"
 const OPENMETEO_USER_AGENT = "philokalia-energy/1.0 (contact: pankgeorg@gmail.com)"
 const OPENMETEO_BATCH = 50            # max locations per API call
 const OPENMETEO_RETRIES = 6
@@ -138,6 +143,12 @@ key ("wind_speed_100m"); with `models=a,b,…` it returns one suffixed key per
 model ("wind_speed_100m_gfs_seamless", …) — both shapes are handled, and the
 multi-model average IS the ensemble. Hours where every model is null stay
 `nothing`.
+
+`var` must be the FULL requested variable name including any vintage suffix
+(e.g. "wind_speed_100m_previous_day1"): matching is `k == var` or
+`startswith(k, var * "_")`, so a response carrying BOTH a plain current-run
+key and the requested previous-runs key can never blend vintages — the plain
+key is not a match for the suffixed request.
 """
 function average_hourly(hourly::AbstractDict, var::String)
     keys_ = [k for k in keys(hourly)
@@ -171,7 +182,8 @@ object — both shapes are handled. Per cell: hour → (v100 km/h, GHI W/m²).
 Hours where either variable is null across all models are dropped.
 """
 function parse_openmeteo_response(body::AbstractString,
-                                  cells::Vector{Tuple{Float64,Float64}})
+                                  cells::Vector{Tuple{Float64,Float64}};
+                                  var_suffix::String="")
     parsed = JSON.parse(String(body))
     locs = parsed isa AbstractVector ? parsed : [parsed]
     length(locs) == length(cells) ||
@@ -180,8 +192,8 @@ function parse_openmeteo_response(body::AbstractString,
     for (cell, loc) in zip(cells, locs)
         hourly = loc["hourly"]
         times = [DateTime(String(t), dateformat"yyyy-mm-ddTHH:MM") for t in hourly["time"]]
-        v100 = average_hourly(hourly, "wind_speed_100m")
-        ghi = average_hourly(hourly, "shortwave_radiation")
+        v100 = average_hourly(hourly, "wind_speed_100m" * var_suffix)
+        ghi = average_hourly(hourly, "shortwave_radiation" * var_suffix)
         d = Dict{DateTime,Tuple{Float64,Float64}}()
         for (i, t) in enumerate(times)
             v = i <= length(v100) ? v100[i] : nothing
@@ -240,8 +252,10 @@ function _openmeteo_get(url::String)
     error("open-meteo request failed after $OPENMETEO_RETRIES attempts: $last_err")
 end
 
+include(joinpath(@__DIR__, "weather_vintage.jl"))   # openmeteo_vintage_lag (single definition)
+
 """
-    fetch_weather(cells, dates) ->
+    fetch_weather(cells, dates; vintage_lag=0) ->
         Dict{Tuple{Float64,Float64}, Dict{DateTime, Tuple{Float64,Float64}}}
 
 Fetch hourly (wind_speed_100m km/h, shortwave_radiation W/m²) forecasts for
@@ -251,21 +265,39 @@ latitude=/longitude= lists, ≤ $(OPENMETEO_BATCH) per call); `models=` comes
 from EUPHEMIA_OPENMETEO_MODELS (default gfs_seamless; multiple comma-separated
 models are ensemble-averaged — see `average_hourly`). Retries ×$(OPENMETEO_RETRIES)
 with backoff.
+
+`vintage_lag` (from `openmeteo_vintage_lag`) enforces the D-1-vintage
+discipline: `0` uses the live forecast API's current run; `1..7` requests the
+`_previous_dayN`-suffixed variables from the previous-runs API, i.e. the run
+issued N days ago (`average_hourly` matches the suffixed response keys by
+prefix, so parsing is unchanged). An explicit `base_url` always wins; otherwise
+the URL comes from `EUPHEMIA_OPENMETEO_URL` / `EUPHEMIA_OPENMETEO_PREVRUNS_URL`
+per the selected API family.
 """
 function fetch_weather(cells::Vector{Tuple{Float64,Float64}}, dates::Vector{Date};
-                       base_url::String=get(ENV, "EUPHEMIA_OPENMETEO_URL", OPENMETEO_URL_DEFAULT),
+                       vintage_lag::Int=0,
+                       base_url::String="",
                        models::String=get(ENV, "EUPHEMIA_OPENMETEO_MODELS", "gfs_seamless"))
+    0 <= vintage_lag <= 7 ||
+        error("fetch_weather: vintage_lag must be 0..7 (got $vintage_lag)")
     isempty(cells) && return Dict{Tuple{Float64,Float64},Dict{DateTime,Tuple{Float64,Float64}}}()
     isempty(dates) && error("fetch_weather: empty date list")
+    public_default = vintage_lag > 0 ? OPENMETEO_PREVRUNS_URL_DEFAULT : OPENMETEO_URL_DEFAULT
+    url_base = !isempty(base_url) ? base_url :
+        (vintage_lag > 0 ? get(ENV, "EUPHEMIA_OPENMETEO_PREVRUNS_URL", OPENMETEO_PREVRUNS_URL_DEFAULT) :
+                           get(ENV, "EUPHEMIA_OPENMETEO_URL", OPENMETEO_URL_DEFAULT))
+    sfx = vintage_lag > 0 ? "_previous_day$(vintage_lag)" : ""
+    vintage_lag > 0 &&
+        println("  🕰️ vintage fetch: previous_day$(vintage_lag) via $url_base")
     d0, d1 = extrema(dates)
     out = Dict{Tuple{Float64,Float64},Dict{DateTime,Tuple{Float64,Float64}}}()
     for lo in 1:OPENMETEO_BATCH:length(cells)
         batch = cells[lo:min(lo + OPENMETEO_BATCH - 1, length(cells))]
         lats = join((string(c[1]) for c in batch), ",")
         lons = join((string(c[2]) for c in batch), ",")
-        url = base_url *
+        url = url_base *
               "?latitude=" * lats * "&longitude=" * lons *
-              "&hourly=wind_speed_100m,shortwave_radiation" *
+              "&hourly=wind_speed_100m" * sfx * ",shortwave_radiation" * sfx *
               "&models=" * models *
               "&start_date=" * Dates.format(d0, "yyyy-mm-dd") *
               "&end_date=" * Dates.format(d1, "yyyy-mm-dd") *
@@ -275,12 +307,15 @@ function fetch_weather(cells::Vector{Tuple{Float64,Float64}}, dates::Vector{Date
         catch e
             # Self-hosted instance down? Fall back to the public API for this
             # batch (slower, rate-limited, but keeps the morning window alive).
-            base_url == OPENMETEO_URL_DEFAULT && rethrow(e)
-            fb_url = replace(url, base_url => OPENMETEO_URL_DEFAULT)
-            @warn "open-meteo primary ($base_url) failed; falling back to public API" exception=e
+            # An EXPLICITLY passed base_url (e.g. the ERA5 archive in
+            # refresh_duckdb_extract) never falls back — that would silently
+            # cross API families.
+            (!isempty(base_url) || url_base == public_default) && rethrow(e)
+            fb_url = replace(url, url_base => public_default)
+            @warn "open-meteo primary ($url_base) failed; falling back to public API" exception=e
             _openmeteo_get(fb_url)
         end
-        merge!(out, parse_openmeteo_response(body, batch))
+        merge!(out, parse_openmeteo_response(body, batch; var_suffix=sfx))
     end
     return out
 end
@@ -345,7 +380,7 @@ if abspath(PROGRAM_FILE) == @__FILE__
     zm = pack["zones"][zone]
     cells = [(Float64(c[1]), Float64(c[2])) for c in zm["cells"]]
     println("  $(length(cells)) cells; wind=$(haskey(zm, "wind")) solar=$(haskey(zm, "solar"))")
-    weather = fetch_weather(cells, [day])
+    weather = fetch_weather(cells, [day]; vintage_lag=openmeteo_vintage_lag(day))
     hours = collect(DateTime(day):Hour(1):DateTime(day) + Hour(23))
     pred = predict_res(pack, zone, hours, weather)
     for t in hours

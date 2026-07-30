@@ -78,7 +78,10 @@ function main()
             println("$zone: not in RES pack — not fillable"); continue
         end
         cells = [(Float64(c[1]), Float64(c[2])) for c in zm["cells"]]
-        weather = fetch_weather(cells, dates)
+        # Past validation window: fetch the admissible D-1 vintage
+        # (previous_day1, per-timestamp semantics) — the plain forecast API
+        # would serve recent-run data fresher than production ever has.
+        weather = fetch_weather(cells, dates; vintage_lag=1)
         pred = predict_res(pack, zone, hours, weather)
         tso = tso_res_forecast(zone, VAL_START, VAL_END)
         common = sort([h for h in keys(pred) if haskey(tso, h)])

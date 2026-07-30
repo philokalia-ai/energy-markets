@@ -82,7 +82,9 @@ function main()
         zm = get(pack["zones"], zone, nothing)
         zm === nothing && (println("$zone: not in pack"); continue)
         cells = [(Float64(c[1]), Float64(c[2])) for c in zm["cities"]]
-        weather = fetch_load_weather(cells, fetch_dates)
+        # Past validation window: admissible D-1 vintage (previous_day1) —
+        # not the plain forecast API's fresher recent-run data.
+        weather = fetch_load_weather(cells, fetch_dates; vintage_lag=1)
         pred = predict_load(pack, zone, hours, weather)
         act = actual_load(zone, VAL_START, VAL_END)
         tso = tso_forecast(zone, VAL_START, VAL_END)
