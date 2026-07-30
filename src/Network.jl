@@ -250,6 +250,10 @@ function create_transfer_capacity_from_entsoe(date::Date, bidding_zones::Vector{
     # matching the enriched path's `_fetch_atc_aggregated`. This deliberately
     # ENDS the SEE 5-zone byte-identity chain (unbroken since cv10); the delta is
     # tiny/zero on days without duplicate rows (see docs/experiments/cv22.md).
+    # NOTE: the cv26 Day-ahead preference (EUPHEMIA_DISABLE_ATC_DAPREF) only
+    # exists in this aggregated branch — under EUPHEMIA_DISABLE_CV22 the raw
+    # last-row-wins query below ignores it, so an A/B arm combining the two
+    # switches does not isolate DAPREF on this legacy path.
     if isempty(get(ENV, "EUPHEMIA_DISABLE_CV22", ""))
         query = """
         SELECT out_map_code AS source_zone,
