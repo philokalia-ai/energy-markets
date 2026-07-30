@@ -255,7 +255,9 @@ function create_transfer_capacity_from_entsoe(date::Date, bidding_zones::Vector{
         SELECT out_map_code AS source_zone,
                in_map_code AS sink_zone,
                (EXTRACT(HOUR FROM date_time_utc) + 1)::int AS time_period,
-               AVG(capacity_mw)::float8 AS capacity
+               $(isempty(get(ENV, "EUPHEMIA_DISABLE_ATC_DAPREF", "")) ?
+                 "COALESCE(AVG(capacity_mw) FILTER (WHERE contract_type = 'Day-ahead'), AVG(capacity_mw))" :
+                 "AVG(capacity_mw)")::float8 AS capacity
         FROM entsoe.offered_transfer_capacities_implicit
         WHERE date_time_utc >= (\$1::date::timestamp AT TIME ZONE 'UTC')
               AND date_time_utc < ((\$1::date + 1)::timestamp AT TIME ZONE 'UTC')
@@ -306,11 +308,20 @@ function _fetch_atc_aggregated(date::Date, table::String, codes::Vector{String};
     contract_type::Union{String,Nothing}=nothing)
     ct_filter = contract_type === nothing ? "" : "AND contract_type = \$3"
     params = contract_type === nothing ? Any[date, codes] : Any[date, codes, contract_type]
+    # Day-ahead preference (2026-07 EE diagnosis): the implicit table mixes
+    # Intraday rows (often 0, and the ONLY rows on FBMC borders since late
+    # 2024) with the Day-ahead offered capacity. Per border-hour, use the
+    # Day-ahead average when Day-ahead rows exist; otherwise keep the
+    # all-rows average (FBMC borders keep today's behaviour until their
+    # capacity source is redesigned). Killable for A/Bs.
+    cap_expr = contract_type === nothing && isempty(get(ENV, "EUPHEMIA_DISABLE_ATC_DAPREF", "")) ?
+        "COALESCE(AVG(capacity_mw) FILTER (WHERE contract_type = 'Day-ahead'), AVG(capacity_mw))" :
+        "AVG(capacity_mw)"
     query = """
     SELECT out_map_code AS source_zone,
            in_map_code AS sink_zone,
            (EXTRACT(HOUR FROM date_time_utc) + 1)::int AS time_period,
-           AVG(capacity_mw)::float8 AS capacity
+           $cap_expr::float8 AS capacity
     FROM entsoe.$table
     WHERE date_time_utc >= (\$1::date::timestamp AT TIME ZONE 'UTC')
           AND date_time_utc < ((\$1::date + 1)::timestamp AT TIME ZONE 'UTC')

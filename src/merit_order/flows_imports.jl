@@ -483,7 +483,10 @@ function get_import_atc_capacity(bidding_zone::String, day::Date)
         """
         SELECT h, SUM(cap) AS total FROM (
           SELECT EXTRACT(HOUR FROM date_time_utc AT TIME ZONE 'UTC')::int AS h,
-                 out_map_code, AVG(capacity_mw) AS cap
+                 out_map_code,
+                 $(isempty(get(ENV, "EUPHEMIA_DISABLE_ATC_DAPREF", "")) ?
+                   "COALESCE(AVG(capacity_mw) FILTER (WHERE contract_type = 'Day-ahead'), AVG(capacity_mw))" :
+                   "AVG(capacity_mw)") AS cap
           FROM entsoe.offered_transfer_capacities_implicit
           WHERE in_map_code = \$1
             AND date_time_utc >= (\$2::date::timestamp AT TIME ZONE 'UTC')
@@ -524,10 +527,14 @@ function _endogenous_import_atc(bidding_zone::String, day::Date,
         rep == bidding_zone && push!(in_codes, agg)
     end
     per_border(table, ct_filter, params) = begin
+        # Day-ahead preference on the implicit table (see Network.jl note).
+        cap_expr = isempty(ct_filter) && isempty(get(ENV, "EUPHEMIA_DISABLE_ATC_DAPREF", "")) ?
+            "COALESCE(AVG(capacity_mw) FILTER (WHERE contract_type = 'Day-ahead'), AVG(capacity_mw))" :
+            "AVG(capacity_mw)"
         df = sql2df_with_retry(
             """
             SELECT EXTRACT(HOUR FROM date_time_utc AT TIME ZONE 'UTC')::int AS h,
-                   out_map_code AS cp, AVG(capacity_mw) AS cap
+                   out_map_code AS cp, $cap_expr AS cap
             FROM entsoe.$table
             WHERE in_map_code = ANY(\$1) AND out_map_code = ANY(\$3)
               AND date_time_utc >= (\$2::date::timestamp AT TIME ZONE 'UTC')
