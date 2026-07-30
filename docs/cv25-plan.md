@@ -268,6 +268,45 @@ cv24 flows — the real (documented) hazard is same-cv cross-mode.
 
 ---
 
+## Checkpoint — 2026-07-30
+
+**Phase 0 and Phase 1 are complete.** Nine PRs, each with an independent adversarial
+review, each guarded bit-identical where it touched the price path (1032 price rows,
+zero differences, at every step).
+
+| | before | after |
+|---|---|---|
+| `src/` | 17,826 lines | **13,813** |
+| `ZoneProfile` | 39 fields | **20** |
+| test-suite errors | 12 | **0** |
+| profile constants | 22 | 19, for **17** real treatments |
+
+Shipped in Phase 1: the parked cv18 levers · the duplicate and alias profiles · 17
+model constants out of the struct · the competitive price reconstruction extracted
+as a pure, unit-testable function (+10 DB-free tests) · the entire
+UC/`:alternative` subsystem (−6,300 lines) · the truncated-day and
+two-dimensional resume guards · the generated calibration table with its
+"strategy outside the profile" section.
+
+Phase 0's two plan-changing results: the flow defect contaminated the **record**,
+not the calibration decisions (which bounds Phase 4), and fix-4 fires on ~37% of
+days rather than "few" (so it needs a full ablation arm).
+
+**Next: Phase 2.** The regime changes there — prices move on purpose, so the
+bit-identity guard stops applying and a defect appears as a slightly different
+number rather than an error. Two consequences for how it must be run:
+
+1. **Never edit the working tree while a measurement runs.** A suite in this session
+   picked up a new test against an old module and reported errors that were purely
+   that race. In Phase 2 the same race would surface as a wrong *price*, silently.
+2. **Put assertions in the harnesses, not only tests in the code.** Three times in
+   Phase 1 a step passed its author's own check and failed the independent review,
+   every time because a tool went quiet instead of failing — a `replace()` whose
+   needle was absent, a regex that cut one line of a three-line entry, a file staged
+   one push from publishing itself.
+
+---
+
 ## Phase 0 results (2026-07-29)
 
 **0.2 Restatement — done.** README correction box + ledger correction, pointing at the
