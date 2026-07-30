@@ -268,6 +268,39 @@ const NUCLEAR_AVAIL_REF = 0.80
 const NUCLEAR_AVAIL_FLOOR = 0.50
 
 """
+    FIELD_DESCRIPTIONS
+
+One plain-language line per `ZoneProfile` field. Lives HERE, beside the fields, so
+the generated calibration table (`bin/export_zone_strategies.jl`) and the test that
+guards it read the same object — a second copy in either place could drift while
+the test still passed, which is the exact failure this whole table exists to
+prevent. `test_zone_strategy_export.jl` asserts the key set equals
+`fieldnames(ZoneProfile)`, so adding a field without describing it fails there.
+"""
+const FIELD_DESCRIPTIONS = Dict{Symbol,String}(
+    :scarcity_threshold => "supply margin below which offers start to steepen",
+    :scarcity_kappa => "how hard offers steepen once the margin is thin",
+    :peak_kappa => "extra uplift at the day's demand peak",
+    :water_value_base => "reservoir hydro's opportunity cost, as a multiple of gas SRMC",
+    :water_value_span => "how much the water value swings across the day's demand range",
+    :thermal_srmc_multiplier => "premium on this zone's thermal running costs (Italy: 1.20)",
+    :hydro_model => "gas-anchored water value, or reservoir-opportunity from weekly levels",
+    :nuclear_srmc_floor => "floor under nuclear bids (EUR/MWh) — France's off-peak position",
+    :opportunity_anchor => "which fleet re-bids in pass 2 against the coupled price",
+    :anchor_share => "fraction of the coupled reference the anchored fleet asks for",
+    :nuclear_avail_share_lo => "anchor share when the nuclear fleet is at its crisis floor",
+    :nuclear_avail_share_hi => "anchor share when the fleet is fully available",
+    :nuclear_bid_ref_ceiling => "cap on anchor-lifted nuclear bids, as a multiple of the reference",
+    :scarcity_import_credit => "credit available import capacity against the scarcity margin",
+    :fleet_truth_mode => "true the fleet to trailing p95 output, or to registry installed capacity",
+    :seasonal_drawdown => "follow the seasonal reservoir drawdown cycle (Swedish north)",
+    :import_backstop => "offer demonstrated import headroom as elastic supply",
+    :backstop_scarcity_credit => "also credit that headroom in the scarcity margin",
+    :ref_priced_exports => "price exports over retained borders at the coupled reference",
+    :boundary_book => "an out-of-footprint neighbour modelled as an elastic counterparty",
+)
+
+"""
     ZoneProfile
 
 Bundles the per-zone bid-construction / hydro / fleet / scarcity parameters of

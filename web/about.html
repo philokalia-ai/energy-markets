@@ -391,10 +391,34 @@
   </ul>
   <p>
     The full parameterization is one <code>ZoneProfile</code> per zone in
-    <code>src/MeritOrderBook.jl</code>, documented zone by zone in the calibration
-    atlas (<code>docs/</code>) — every choice justified by physics or public data,
-    never by fitting to the prices we score against.
+    <code>src/merit_order/zone_profiles.jl</code> — every choice justified by physics
+    or public data, never by fitting to the prices we score against.
   </p>
+
+  <h3 id="zone-strategy-table">The calibration, generated from the running model</h3>
+  <p>
+    The table below is not a description of the calibration — it <em>is</em> the
+    calibration, read out of the code by resolving every zone's profile in-process.
+    Nothing here is maintained by hand, because a hand-kept calibration table drifts
+    from the model within one iteration (ours did: it listed four zones on the base
+    profile that the registry had already moved onto an import-backed one).
+  </p>
+  <p class="zs-note" id="zs-status">Loading…</p>
+  <div class="zs-wrap" id="zs-wrap" hidden>
+    <p class="zs-summary" id="zs-summary"></p>
+    <div class="table-scroll"><table class="data-table zs-table" id="zs-table"></table></div>
+    <p class="zs-src">
+      Source of truth: <code>src/merit_order/zone_profiles.jl</code> —
+      <a href="https://github.com/philokalia-ai/energy-markets/blob/main/src/merit_order/zone_profiles.jl">read the registry</a>.
+      This table is generated from it, never written by hand.
+    </p>
+    <h4>Strategy that is not in the table</h4>
+    <p>
+      Being honest about the limits of the view above: some of what makes two zones
+      behave differently does not live in the profile at all. These do:
+    </p>
+    <ul id="zs-outside"></ul>
+  </div>
 
   <h2>Scoring, honestly</h2>
   <p>
@@ -456,6 +480,113 @@
     <a class="more-link" href="https://philokalia.ai">philokalia.ai</a>
   </p>
 </article>
+
+<script>
+/* The zone-strategy table, fetched from the model's own export.
+   No committed copy: a checked-in snapshot is exactly the drift this section
+   exists to avoid. If the object is not published yet the section says so. */
+(function () {
+  var status = document.getElementById("zs-status");
+  var wrap = document.getElementById("zs-wrap");
+  if (!status || !wrap) return;
+
+  var API = (new URLSearchParams(location.search)).get("api") ||
+            "https://api.philokalia.ai/api";
+
+  function esc(x) {
+    return String(x).replace(/[&<>"]/g, function (c) {
+      return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c];
+    });
+  }
+
+  /* Show the columns that actually vary, so the table stays readable. */
+  function varyingFields(d) {
+    return d.fields.filter(function (f) {
+      var seen = {};
+      d.zones.forEach(function (z) { seen[JSON.stringify(z.values[f])] = 1; });
+      return Object.keys(seen).length > 1;
+    });
+  }
+
+  /* A boundary book is a 15-field struct. Rendering just its counterparty made
+     FR's GB book (UKA carbon, three cables, four excluded codes) and DK1's
+     (EUA, none) read identically — the collapse this table exists to avoid. */
+  function bookLabel(b) {
+    var bits = [b.counterparty || "?"];
+    if (b.carbon_source) bits.push(String(b.carbon_source).toUpperCase());
+    if (b.atc_codes && b.atc_codes.length) bits.push(b.atc_codes.length + " cable(s)");
+    if (b.firm_slice) bits.push("firm slice");
+    return bits.join(" · ");
+  }
+
+  function render(d) {
+    var cols = varyingFields(d);
+    var dsc = d.field_descriptions || {};
+    var byZone = {};
+    d.zones.forEach(function (z) { byZone[z.zone] = z; });
+
+    document.getElementById("zs-summary").textContent =
+      d.n_zones + " zones resolve to " + d.n_distinct_treatments +
+      " distinct parameter vectors across " + d.fields.length +
+      " profile fields" + (cols.length < d.fields.length
+        ? " (" + cols.length + " of them vary; invariant columns hidden)" : "") +
+      ". Generated " +
+      d.generated_utc + " from code_version " + d.code_version + "." +
+      (d.kill_switches_set && d.kill_switches_set.length
+        ? " ⚠ generated with kill-switches set: " + d.kill_switches_set.join(", ") +
+          " — this is NOT the production calibration."
+        : "");
+
+    var head = "<thead><tr><th>zones</th><th>n</th>" +
+      cols.map(function (c) {
+        var d = (dsc[c] || "");
+        return "<th title=\"" + esc(c + (d ? " — " + d : "")) + "\">" +
+               esc(c.replace(/_/g, " ")) + "</th>";
+      }).join("") +
+      "</tr></thead>";
+    var body = d.treatments.map(function (t) {
+      var rep = byZone[t.zones[0]];
+      return "<tr><td class=\"zs-zones\">" + esc(t.zones.join(" ")) + "</td>" +
+        "<td>" + esc(t.n) + "</td>" +
+        cols.map(function (c) {
+          var v = rep.values[c];
+          var off = (v === false || v === 0 || v === 0.0 || v === null ||
+                     v === "none" || (Array.isArray(v) && !v.length));
+          var txt = (v === true) ? "on"
+                  : (v === false || v === null || v === "none") ? "—"
+                  : (Array.isArray(v) ? v.join(", ")
+                  : (v && typeof v === "object") ? bookLabel(v)
+                  : v);
+          var tip = (v && typeof v === "object") ? esc(JSON.stringify(v, null, 1)) : "";
+          return "<td class=\"" + (off ? "zs-off" : "zs-on") + "\"" +
+                 (tip ? " title=\"" + tip + "\"" : "") + ">" + esc(txt) + "</td>";
+        }).join("") + "</tr>";
+    }).join("");
+    document.getElementById("zs-table").innerHTML = head + "<tbody>" + body + "</tbody>";
+
+    document.getElementById("zs-outside").innerHTML =
+      (d.strategy_outside_the_profile || []).map(function (m) {
+        return "<li><strong>" + esc(m.mechanism) + "</strong> — <em>" +
+               esc(m.where) + "</em>. " + esc(m.note) + "</li>";
+      }).join("");
+
+    status.hidden = true;
+    wrap.hidden = false;
+  }
+
+  fetch(API + "/v1/zone_strategies.json", { cache: "no-store" })
+    .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+    .then(render)
+    .catch(function (err) {
+      if (window.console) console.error("zone_strategies", err);
+      status.textContent = /^\d+$/.test(String(err && err.message))
+        ? "The generated calibration table is not published yet. It is produced by " +
+          "bin/export_zone_strategies.jl in the repository — run it to see the same " +
+          "table locally."
+        : "The calibration table could not be read (see the browser console).";
+    });
+})();
+</script>
 
 <footer class="site-footer">
   <span>A <a href="https://philokalia.ai">philokalia.ai</a> project.</span>
