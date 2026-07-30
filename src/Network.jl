@@ -347,6 +347,30 @@ end
 const _FBMC_CAP_DAY_CACHE = Dict{Date,Dict{Tuple{String,String,Int},Float64}}()
 const _FBMC_CAP_LOCK = ReentrantLock()
 
+# T1b scoping (declared post-Set-A amendment, disclosed in the results): the
+# demonstrated capability applies ONLY to borders that HAD Day-ahead offered
+# rows at some point before the delivery day and have none on it — capacity
+# CONTINUITY where the DA product disappeared (the Nordic post-FBMC case).
+# Borders that never published DA rows in our history (Core FBMC since 2022)
+# keep the calibrated intraday-blend behaviour; measured Set A showed re-basing
+# them breaches DE_LU/AT. Strictly ex-ante (only pre-delivery history).
+const _DA_EVER_CACHE = Dict{Date,Set{Tuple{String,String}}}()
+
+function _da_ever_borders(date::Date)
+    lock(_FBMC_CAP_LOCK) do
+        haskey(_DA_EVER_CACHE, date) && return _DA_EVER_CACHE[date]
+        df = safe_sql2df("""
+            SELECT DISTINCT out_map_code AS s, in_map_code AS k
+            FROM entsoe.offered_transfer_capacities_implicit
+            WHERE contract_type = 'Day-ahead'
+              AND date_time_utc < (\$1::date::timestamp AT TIME ZONE 'UTC')
+            """, Any[date])
+        st = Set{Tuple{String,String}}((String(r.s), String(r.k)) for r in eachrow(df))
+        _DA_EVER_CACHE[date] = st
+        return st
+    end
+end
+
 function _fbmc_capability(date::Date)
     lock(_FBMC_CAP_LOCK) do
         haskey(_FBMC_CAP_DAY_CACHE, date) && return _FBMC_CAP_DAY_CACHE[date]
@@ -439,12 +463,14 @@ function _create_transfer_capacity_enriched(date::Date, bidding_zones::Vector{St
               isempty(get(ENV, "EUPHEMIA_DISABLE_CV27_T1", ""))
     fbmc_cap = (cv27_t1 && "n_da" in names(imp) && any(imp.n_da .== 0)) ?
         _fbmc_capability(date) : nothing
+    da_ever = fbmc_cap === nothing ? Set{Tuple{String,String}}() : _da_ever_borders(date)
     n_fbmc_override = 0
     rows = NamedTuple{(:source_zone, :sink_zone, :time_period, :capacity),
                       Tuple{String,String,Int,Float64}}[]
     for r in eachrow(imp)
         capacity = Float64(r.capacity)
-        if fbmc_cap !== nothing && Int(r.n_da) == 0
+        if fbmc_cap !== nothing && Int(r.n_da) == 0 &&
+           (String(r.source_zone), String(r.sink_zone)) in da_ever
             blk = (Int(r.time_period) - 1) ÷ 4
             demo = get(fbmc_cap, (String(r.source_zone), String(r.sink_zone), blk), 0.0)
             demo > 0.0 && (capacity = demo; n_fbmc_override += 1)
