@@ -1,8 +1,13 @@
 # cv27 — FBMC import capability + hydro surplus pricing, pre-registration
 
-**Status: DRAFT, awaiting the owner's ratification. No scored arm runs until
-this is merged.** Gates, tie-break, envelope and the calibrate-on-A /
-hold-out-B discipline are inherited from `docs/cv25-phase2-prereg.md`. The
+**Status: gates frozen by this merge (owner process directive, 2026-07-30):
+the experimenter runs the full theory→experiment→results cycle autonomously;
+the OWNER decides at the END, with the measured results in hand — never asked
+to pre-approve an unvalidated approach.** Merging this file freezes the gates
+before any scored arm (the prereg discipline is unchanged); the ship/backfill
+decision happens in the results report. Gates, tie-break, envelope and the
+calibrate-on-A / hold-out-B discipline are inherited from
+`docs/cv25-phase2-prereg.md`. The
 baseline for every arm is the **cv26 record code** (ATC Day-ahead preference,
 #233) — these treatments must be measured on the ATC-clean footing, since the
 intraday-contamination fix already reshapes the Nordic import picture.
@@ -90,10 +95,11 @@ This rule is part of the prereg so it cannot be chosen after seeing results.
 3. Score per inherited gates + the per-treatment falsifiers above (scored-cell
    counts beside every figure; shape stats under the Metric note rule).
    Set B once, only if the package passes on A.
-4. Report; ship/backfill decision is the owner's. cv bumps to 27 on the
-   activating branch only.
+4. Report the measured results to the owner (non-draft PR carrying code +
+   results together); the ship/backfill decision is the owner's, made on the
+   data. cv bumps to 27 on the activating branch only.
 
 **Out of scope by rule:** conduct residuals (PL premium, SEE evening level),
 the evening ramp premium (own prereg, next), any scarcity-form change.
 
-**Ratification: merging this file. Amendments before the run, in the open.**
+**This merge freezes the gates. Amendments before the run, in the open.**
