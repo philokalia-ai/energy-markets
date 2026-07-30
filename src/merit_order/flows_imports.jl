@@ -512,13 +512,24 @@ deliver over the zone's ENDOGENOUS borders.
 """
 function _endogenous_import_atc(bidding_zone::String, day::Date,
     counterparties::Vector{String})
+    # cv25 T3 fix (review A1): the raw ATC tables code sub-zone borders on the
+    # AGGREGATE endpoint (e.g. AT->IT rows serve IT-NORTH), and the enriched
+    # network remaps them onto the representative sub-zone. Matching only
+    # in_map_code = zone missed those rows, so mx_e - atc_endo under-subtracted
+    # by the whole aggregate-coded capacity (~5-8 GW for IT-NORTH) and the
+    # backstop double-counted what the flow variables already deliver. Accept
+    # the aggregate in-code too, mirroring the network's remap.
+    in_codes = [bidding_zone]
+    for (agg, rep) in Dict("IT" => "IT-NORTH")  # mirror of AGGREGATE_BORDER_REPRESENTATIVE (module load order forbids the direct ref)
+        rep == bidding_zone && push!(in_codes, agg)
+    end
     per_border(table, ct_filter, params) = begin
         df = sql2df_with_retry(
             """
             SELECT EXTRACT(HOUR FROM date_time_utc AT TIME ZONE 'UTC')::int AS h,
                    out_map_code AS cp, AVG(capacity_mw) AS cap
             FROM entsoe.$table
-            WHERE in_map_code = \$1 AND out_map_code = ANY(\$3)
+            WHERE in_map_code = ANY(\$1) AND out_map_code = ANY(\$3)
               AND date_time_utc >= (\$2::date::timestamp AT TIME ZONE 'UTC')
               AND date_time_utc <  ((\$2::date + 1)::timestamp AT TIME ZONE 'UTC')
               AND capacity_mw IS NOT NULL
@@ -531,7 +542,7 @@ function _endogenous_import_atc(bidding_zone::String, day::Date,
         end
         d
     end
-    params = Any[bidding_zone, day, counterparties]
+    params = Any[in_codes, day, counterparties]
     impl = per_border("offered_transfer_capacities_implicit", "", params)
     expl = per_border("offered_transfer_capacities_explicit",
         "AND contract_type = 'Day-ahead'", params)

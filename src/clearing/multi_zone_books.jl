@@ -533,6 +533,24 @@ end
 # model/book logic stays here.
 # ---------------------------------------------------------------------------
 
+
+"""
+    mz_resolve_flow_mode(enrich_network) -> (resolved, prev)
+
+The ONE place the EU-footprint scoped ex-ante flow default is decided. cv25 fix 2:
+`run_multi_zone_market_clearing` resolved :v3 here-abouts but `mz_build_books` —
+the pipeline's entry — did not, so every pipelined record (cv16..cv24) was built
+with :d0 SAME-DAY OBSERVED flows (docs/experiments/exante-audit-2026-07.md).
+Explicit env (`EUPHEMIA_FLOW_ASOF_MODE`) always wins; the scoped default applies
+only on the enriched footprint. Callers must restore `prev` in a `finally`.
+"""
+function mz_resolve_flow_mode(enrich_network::Bool)
+    prev = MeritOrderBook.FLOW_ASOF_MODE[]
+    resolved = MeritOrderBook.FLOW_ASOF_MODE_EXPLICIT[] ? prev :
+               (enrich_network ? :v3 : prev)
+    return resolved, prev
+end
+
 """
     mz_build_books(zones, date; enrich_network, apply_zone_profiles) -> MPCCOrderBook
 
@@ -542,11 +560,19 @@ Pass-1 multi-zone merit-order book build — identical to what
 function mz_build_books(zones::Vector{String}, date::Date;
     enrich_network::Bool=false, apply_zone_profiles::Bool=true,
     clear_resolution_minutes::Int=60,
+    ex_ante_mode::Union{Nothing,Symbol}=nothing,
     scenario::Union{Nothing,ZoneScenario,Dict{String,ZoneScenario}}=nothing)
-    return _create_multi_zone_order_book_merit(zones, date;
-        enrich_network=enrich_network, apply_zone_profiles=apply_zone_profiles,
-        clear_resolution_minutes=clear_resolution_minutes,
-        scenario=scenario)
+    resolved, prev = ex_ante_mode !== nothing ? (ex_ante_mode, MeritOrderBook.FLOW_ASOF_MODE[]) :
+                     mz_resolve_flow_mode(enrich_network)
+    MeritOrderBook.FLOW_ASOF_MODE[] = resolved
+    try
+        return _create_multi_zone_order_book_merit(zones, date;
+            enrich_network=enrich_network, apply_zone_profiles=apply_zone_profiles,
+            clear_resolution_minutes=clear_resolution_minutes,
+            scenario=scenario)
+    finally
+        MeritOrderBook.FLOW_ASOF_MODE[] = prev
+    end
 end
 
 """
@@ -621,10 +647,21 @@ function mz_rebuild_anchored(zones::Vector{String}, date::Date,
     cached::Dict{String,Vector{MarketOrders.MarketOrder}};
     enrich_network::Bool=false, apply_zone_profiles::Bool=true,
     clear_resolution_minutes::Int=60,
+    ex_ante_mode::Union{Nothing,Symbol}=nothing,
     scenario::Union{Nothing,ZoneScenario,Dict{String,ZoneScenario}}=nothing)
-    return _create_multi_zone_order_book_merit(zones, date;
-        enrich_network=enrich_network, apply_zone_profiles=apply_zone_profiles,
-        anchor_refs=refs, cached_zone_orders=cached,
-        clear_resolution_minutes=clear_resolution_minutes, scenario=scenario)
+    # Same scoped flow-policy resolution as mz_build_books (cv25 fix 2): the
+    # pipeline's pass-2 rebuilds hit this entry directly on the workers.
+    resolved, prev = ex_ante_mode !== nothing ?
+        (ex_ante_mode, MeritOrderBook.FLOW_ASOF_MODE[]) :
+        mz_resolve_flow_mode(enrich_network)
+    MeritOrderBook.FLOW_ASOF_MODE[] = resolved
+    try
+        return _create_multi_zone_order_book_merit(zones, date;
+            enrich_network=enrich_network, apply_zone_profiles=apply_zone_profiles,
+            anchor_refs=refs, cached_zone_orders=cached,
+            clear_resolution_minutes=clear_resolution_minutes, scenario=scenario)
+    finally
+        MeritOrderBook.FLOW_ASOF_MODE[] = prev
+    end
 end
 

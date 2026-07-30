@@ -736,18 +736,48 @@ end
 """
     get_zone_pairs(transfer_capacity::TransferCapacity)
 
-Returns all zone pairs that have transfer capacity defined.
-Each pair is represented as (source_zone, sink_zone) tuple.
+Returns the physical borders that have transfer capacity defined, ONE ORIENTED
+PAIR PER UNORDERED BORDER. Each pair is represented as a (source_zone,
+sink_zone) tuple defining the positive-flow direction of that border's single
+flow variable, with the `± ` bound semantics of
+`build_transfer_capacity_from_dataframe`:
+
+    flow[(A,B),t] ∈ [-capacity_backward[(A,B,t)], +capacity_forward[(A,B,t)]]
+
+where `capacity_backward[(A,B,t)] == capacity_forward[(B,A,t)]`.
+
+**Canonicalisation (bug fix).** ENTSO-E publishes one ATC row per DIRECTION, so
+a normally-coupled border yields BOTH `(A,B)` and `(B,A)` keys in
+`capacity_forward`. Returning both made the MPCC solver create two INDEPENDENT
+full-range flow variables for the same physical line, with nothing linking
+them: zone A's nodal balance carries `+flow[(A,B)] - flow[(B,A)]`, so the net
+transfer ranged over ±2× the offered ATC — and on a congested border the two
+congestion-rent conditions force exactly 2×. We therefore keep exactly one
+orientation per unordered border: `(s,d)` with `s < d` when both directions are
+published, otherwise whichever single orientation exists (a genuinely
+unidirectional link).
 
 # Returns
-- `Vector{Tuple{String,String}}`: List of zone pairs with transfer capacity
+- `Vector{Tuple{String,String}}`: one oriented pair per physical border
 """
 function get_zone_pairs(transfer_capacity::TransferCapacity)
-    pairs = Set{Tuple{String,String}}()
+    directed = Set{Tuple{String,String}}()
 
     for key in keys(transfer_capacity.capacity_forward)
         source, sink, _ = key
-        push!(pairs, (source, sink))
+        push!(directed, (source, sink))
+    end
+
+    # Kill-switch for A/B measurement: restores the pre-fix behaviour in which
+    # each published DIRECTION became its own independent flow variable.
+    !isempty(get(ENV, "EUPHEMIA_DISABLE_ATC_CANON", "")) &&
+        return collect(directed)
+
+    pairs = Set{Tuple{String,String}}()
+    for (source, sink) in directed
+        if source < sink || !((sink, source) in directed)
+            push!(pairs, (source, sink))
+        end
     end
 
     return collect(pairs)

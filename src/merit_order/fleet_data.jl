@@ -211,6 +211,12 @@ function get_installed_capacity_by_type(bidding_zone::String)
               WHERE production_unit_status = 'COMMISSIONED'
                 AND generation_unit_status = 'COMMISSIONED'
                 AND generation_unit_installed_capacity_mw > 0
+                -- cv25: same registry sanity bound as get_generators (cv24's
+                -- MAX_PLAUSIBLE_UNIT_MW). This reader feeds the :installed
+                -- fleet-truth denominators and FR's nuclear availability share;
+                -- without the bound, one corrupt row (the 13 TW IT unit) would
+                -- poison exactly the quantities Phase 4 re-calibrates around.
+                AND generation_unit_installed_capacity_mw <= 25000
               -- DISTINCT ON per (zone, unit): a unit re-zoned across validity
               -- rows must dedup WITHIN each zone exactly like the old
               -- per-zone query did, not once globally.
@@ -245,6 +251,12 @@ function _get_installed_capacity_by_type_singlezone(bidding_zone::String)
             AND production_unit_status = 'COMMISSIONED'
             AND generation_unit_status = 'COMMISSIONED'
             AND generation_unit_installed_capacity_mw > 0
+                -- cv25: same registry sanity bound as get_generators (cv24's
+                -- MAX_PLAUSIBLE_UNIT_MW). This reader feeds the :installed
+                -- fleet-truth denominators and FR's nuclear availability share;
+                -- without the bound, one corrupt row (the 13 TW IT unit) would
+                -- poison exactly the quantities Phase 4 re-calibrates around.
+                AND generation_unit_installed_capacity_mw <= 25000
           ORDER BY generation_unit_code, valid_from DESC,
                    generation_unit_installed_capacity_mw DESC
         ) s
@@ -260,6 +272,16 @@ function _get_installed_capacity_by_type_singlezone(bidding_zone::String)
     end
     return out
 end
+
+# cv25 fix 3 (gated by EUPHEMIA_DISABLE_ISOYEAR_FIX): `Dates.week` is ISO-8601
+# but `year` is calendar — the pair disagrees 2-3 days/year. On 2023-01-01
+# (isoweek 52, calyear 2023) the predicate `year<Y OR (year=Y AND week<W)`
+# admitted week 51 of 2023 — reservoir levels ~11.5 months AFTER delivery, an
+# outright lookahead; on 2025-12-29..31 (isoweek 1) it reached a full year back.
+# The ISO year of a date is the calendar year of that week's Thursday.
+_iso_year_of(day) = year(day - Day(dayofweek(day) - 4))
+_reservoir_iso_year(day) =
+    isempty(get(ENV, "EUPHEMIA_DISABLE_ISOYEAR_FIX", "")) ? _iso_year_of(day) : year(day)
 
 """
     get_reservoir_dryness(bidding_zone::String, day::Date) -> Union{Float64,Nothing}
@@ -277,7 +299,7 @@ high looks "wet" in output terms while reservoirs are actually draining).
 """
 function get_reservoir_dryness(bidding_zone::String, day::Date)
     iso_week = Int(Dates.week(day))
-    iso_year = year(day)
+    iso_year = _reservoir_iso_year(day)
 
     current = sql2df_with_retry(
         """
@@ -349,7 +371,7 @@ water-value signal from fundamentals (reservoir physics), with no month dummies.
 """
 function get_reservoir_drawdown(bidding_zone::String, day::Date)
     iso_week = Int(Dates.week(day))
-    iso_year = year(day)
+    iso_year = _reservoir_iso_year(day)
     # cv22 bug-fix (gated by EUPHEMIA_DISABLE_CV22): the lower-bound disjunct
     # `year > $2 - 2` admitted ALL of year Y-1 plus year Y up to the current
     # week — a 52–104-week window, not the documented "preceding 52 weeks"

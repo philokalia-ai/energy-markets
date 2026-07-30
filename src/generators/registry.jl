@@ -49,6 +49,19 @@ const _GENERATOR_MEMO_LOCK = ReentrantLock()
 # unit in the 39-zone footprint reaches it, so every zone but IT-CSOUTH is
 # byte-identical). Surfaced by the GME MGP book comparison
 # (docs/experiments/gme-book-comparison).
+# cv25 fix 4 (gated by EUPHEMIA_DISABLE_FLEETPROBE_FIX): the 60-day
+# recent-generation probe decides fleet membership for stale-registry units, and
+# its upper bound `< $2 + INTERVAL '1 day'` INCLUDED the delivery day — a unit
+# could enter day D's fleet BECAUSE it generated on day D (measured: ~37% of
+# sampled days carry at least one such unit). The sibling probe in
+# get_day_outages always used the strict `< $1`. The fix makes this one match.
+# NOTE: `get_generators` memoizes per (zone, day, ...) WITHOUT this switch in
+# the key — ablation arms must run in separate processes with the env set at
+# launch, never flip it mid-process.
+_fleet_probe_upper() =
+    isempty(get(ENV, "EUPHEMIA_DISABLE_FLEETPROBE_FIX", "")) ?
+        "\$2::timestamp" : "\$2::timestamp + INTERVAL '1 day'"
+
 const MAX_PLAUSIBLE_UNIT_MW = 25_000.0
 
 """
@@ -177,7 +190,7 @@ function get_generators(map_code::String, day::Dates.Date;
                     FROM entsoe.production_and_generation_units
                     WHERE area_map_code = \$1)
               AND date_time_utc >= \$2::timestamp - INTERVAL '60 days'
-              AND date_time_utc < \$2::timestamp + INTERVAL '1 day'
+              AND date_time_utc < $(_fleet_probe_upper())
               AND actual_generation_output_mw > 0
         ),
         -- Hard-evidence override for stale outage records (computed per day in
@@ -261,7 +274,7 @@ function get_generators(map_code::String, day::Dates.Date;
                     FROM entsoe.production_and_generation_units
                     WHERE area_map_code = \$1)
               AND date_time_utc >= \$2::timestamp - INTERVAL '60 days'
-              AND date_time_utc < \$2::timestamp + INTERVAL '1 day'
+              AND date_time_utc < $(_fleet_probe_upper())
               AND actual_generation_output_mw > 0
         )
         SELECT DISTINCT ON (g.generation_unit_code)

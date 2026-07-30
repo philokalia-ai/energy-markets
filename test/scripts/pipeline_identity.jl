@@ -7,6 +7,18 @@
 #
 #   julia --project=. test/scripts/pipeline_identity.jl [START END] [--tol X] [--optimizer gurobi|highs]
 
+# cv25 fix 2 note: this harness previously compared a SEQUENTIAL arm (which
+# resolved the scoped :v3 flow default) against a PIPELINED arm (whose book
+# workers used the :d0 process default) and called the result "identity" — it
+# certified nothing (docs/experiments/exante-audit-2026-07.md). Since fix 2,
+# mz_build_books/mz_rebuild_anchored resolve the SAME scoped policy, so the two
+# arms genuinely run one model. The assertion below makes the precondition
+# explicit instead of trusting it.
+@assert isempty(get(ENV, "EUPHEMIA_FLOW_ASOF_MODE", "")) ||
+        error("run this harness WITHOUT EUPHEMIA_FLOW_ASOF_MODE: an explicit env " *
+              "would mask a policy-resolution regression, which is the one thing " *
+              "this harness exists to catch")
+
 using Euphemia, Dates, Printf
 
 const FOOTPRINT = String[

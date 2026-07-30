@@ -17,8 +17,9 @@ this function recomputes it from the acceptance pattern. It takes flow VALUES
 (already extracted with `value(...)`) rather than JuMP variables, so it touches
 no model object.
 
-Returns a fresh price dict; `solver_prices` is the fallback used verbatim for
-any period whose rent-sign validation fails.
+Returns `(prices, fallback_periods)`: a fresh price dict, plus the list of
+periods whose rent-sign validation failed and therefore keep the solver's raw
+prices verbatim (observable provenance — cv25).
 """
 function _reconstruct_component_prices(nodes::Vector{String}, periods::Vector{String},
     zone_pairs, flow_values::Dict{Tuple{Tuple{String,String},String},Float64},
@@ -27,6 +28,7 @@ function _reconstruct_component_prices(nodes::Vector{String}, periods::Vector{St
     solver_prices::Dict{String,Dict{String,Float64}})
 
     prices = Dict{String,Dict{String,Float64}}(z => copy(solver_prices[z]) for z in nodes)
+    fallback_periods = String[]
     is_multi_zone = !isempty(zone_pairs)
     # Well above solver feasibility tolerances (1e-6..1e-5), far
     # below any economically meaningful partial acceptance
@@ -130,10 +132,22 @@ function _reconstruct_component_prices(nodes::Vector{String}, periods::Vector{St
             for (z, p) in candidate
                 prices[z][time_period] = p
             end
+        else
+            # cv25 observability: this fallback silently changed the published
+            # price's provenance (the reconstruction is abandoned for the WHOLE
+            # period, including consistent components — a known Phase-2 defect,
+            # pinned in test_price_reconstruction.jl). Until it is fixed, it must
+            # at least be countable.
+            push!(fallback_periods, time_period)
         end
     end
 
-    return prices
+    isempty(fallback_periods) ||
+        @warn "Price reconstruction: rent-sign validation failed — " *
+              "$(length(fallback_periods)) period(s) keep the solver's raw prices " *
+              "(period-wide fallback; provenance differs from reconstructed periods)" periods = fallback_periods
+
+    return (prices = prices, fallback_periods = fallback_periods)
 end
 
 """
@@ -300,7 +314,15 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
                         end
 
                         forward_cap = get(tc.capacity_forward, (source, sink, lookup_period), 0.0)
-                        backward_cap = get(tc.capacity_backward, (source, sink, lookup_period), 0.0)
+                        # `capacity_backward[(A,B,p)]` only exists when `(A,B,p)`
+                        # is itself a published forward key; since `get_zone_pairs`
+                        # now returns ONE orientation per border, a period that
+                        # publishes only the reverse direction would otherwise
+                        # silently lose its capacity. Fall back to the reverse
+                        # forward key — which is exactly how `capacity_backward`
+                        # is defined, so this is identical wherever both exist.
+                        backward_cap = get(tc.capacity_backward, (source, sink, lookup_period),
+                            get(tc.capacity_forward, (sink, source, lookup_period), 0.0))
 
                         # ATC bounds: -backward <= flow <= forward
                         set_lower_bound(flow[pair, t], -backward_cap)
@@ -686,12 +708,13 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
                     flow_values[(pair, t)] = value(flow[pair, t])
                 end
             end
-            market_prices = _reconstruct_component_prices(
+            recon = _reconstruct_component_prices(
                 order_book.nodes, order_book.periods,
                 zone_pairs,   # already empty whenever flow === nothing
                 flow_values, flow_caps, orders_by_node_time, simple_orders,
                 order_ids, stepwise_acceptance_values, order_book.price_limits,
                 market_prices)
+            market_prices = recon.prices
 
 
             # Extract transmission flow values if multi-zone

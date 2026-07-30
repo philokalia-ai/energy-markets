@@ -149,10 +149,12 @@ function run_multi_zone_market_clearing(date::Date;
     # otherwise). Explicit kwarg > explicit env > scoped default. Restored
     # in the finally at function end. Version scope: cv16..18 saves used
     # :v2, the cv15 backfill :d0.
+    # cv25 fix 2: one resolver owns the scoped default (mz_resolve_flow_mode);
+    # the wrapper adds only its :merit_order condition on top.
     prev_flow_mode = MeritOrderBook.FLOW_ASOF_MODE[]
     resolved_flow_mode = ex_ante_mode !== nothing ? ex_ante_mode :
-        (MeritOrderBook.FLOW_ASOF_MODE_EXPLICIT[] ? prev_flow_mode :
-         (enrich_network && order_method == :merit_order ? :v3 : prev_flow_mode))
+        (order_method == :merit_order ? first(mz_resolve_flow_mode(enrich_network)) :
+         prev_flow_mode)
     MeritOrderBook.FLOW_ASOF_MODE[] = resolved_flow_mode
     resolved_flow_mode != prev_flow_mode &&
         println("   🔮 Ex-ante flow mode: $resolved_flow_mode (scoped default)")
