@@ -118,6 +118,10 @@ not move in Phase 1.
 
 ## Phase 2 — The four fixes, with ablation
 
+**Gates: `docs/cv25-phase2-prereg.md`** — windows, tie-break metric, neighbour
+envelope and cap ceiling, all fixed by commit before any scored run. No measurement
+runs until that file is merged.
+
 Each behind a switch so arms come from one binary.
 
 1. **ATC canonicalisation** — one flow variable per unordered border
