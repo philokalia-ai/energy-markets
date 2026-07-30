@@ -479,6 +479,16 @@ function run_pipelined_backfill(days, zones::Vector{String}=String[];
     cv = ENERGY_PRICES_CODE_VERSION
 
     # Resume: drop already-saved days up front, so the total to process is known.
+    # Under the DuckDB backend the resume probe READS simulations.* which lives
+    # in the separate results_db — opt into results_writable BEFORE the probe,
+    # or it errors ("results cannot be written from this process") and resume
+    # silently treats every day as not-saved (full recompute on any restart;
+    # observed on the cv25 record run, 2026-07-30). Same configuration the
+    # coordinator sets again later with the worker extract path — idempotent.
+    if resume && save_to_db && DATA_STORE[] == :duckdb
+        configure_data_store!(backend=:duckdb, duckdb_path=abspath(DUCKDB_PATH[]),
+                              read_only=true, results_writable=true)
+    end
     todo = if resume && save_to_db
         # ONE grouped probe for the whole range (was one COUNT round-trip per
         # candidate day — a 365-day resume paid 365 serial queries before any
