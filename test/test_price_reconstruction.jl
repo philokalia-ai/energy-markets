@@ -12,7 +12,10 @@
 using Test
 using Euphemia: MPCC
 
-const _R = MPCC._reconstruct_component_prices
+# The function returns (prices, fallback_periods) since the cv25 observability
+# change; _R unwraps to prices, _Rfull keeps the tuple for the fallback tests.
+const _Rfull = MPCC._reconstruct_component_prices
+_R(args...) = _Rfull(args...).prices
 
 # Only `.type` and `.price` are read from an order, so a NamedTuple stands in.
 _o(t, p) = (type=t, price=p)
@@ -65,6 +68,14 @@ _solver(zones, periods, v) = Dict(z => Dict(p => v for p in periods) for z in zo
         @test r["B"]["1"] == 88.0
         # and the caller's dict is not mutated on the way
         @test solver["A"]["1"] == 77.0 && solver["B"]["1"] == 88.0
+        # cv25 observability: the fallback is now countable
+        full = _Rfull(["A", "B"], ["1"], [("A", "B")],
+               _FK((("A", "B"), "1") => 100.0),
+               Dict((("A", "B"), "1") => (100.0, 100.0)),
+               Dict(("A", "1") => [1], ("B", "1") => [2]),
+               [_o(:supply, 90.0), _o(:supply, 10.0)], ["a", "b"],
+               Dict("a" => 0.5, "b" => 0.5), _LIM, solver)
+        @test full.fallback_periods == ["1"]
     end
 
     # ---------------------------------------------------------------------
