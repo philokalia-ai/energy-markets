@@ -5,6 +5,9 @@
 Five things do not change. Everything else is negotiable, and most of it should go.
 
 1. **Ex-ante.** Only information available before the auction gate enters a price.
+   This is the load-bearing invariant: with it, calibrated parameters are market
+   characteristics; without it, they are leakage. (The "no-fit" claim was retired
+   by owner decision, 2026-07-30 — see "The claim, restated" below.)
 2. **No forward-looking bias.** Any query window that touches the delivery day is a
    defect, not a trade-off.
 3. **Open data.** The published extract reproduces the published record.
@@ -166,6 +169,24 @@ cv24's headline is not the target. Asking a re-calibration to recover a lost
 information advantage and phantom transmission capacity through parameter choices is
 the definition of fitting. Publish the decomposition — Δ from ex-ante honesty, Δ from
 ATC physics, Δ from re-calibration — not a single cv24→cv25 delta.
+
+## The claim, restated (owner decision, 2026-07-30)
+
+The programme no longer claims "no-fit". The honest, defensible claim is:
+
+- **all inputs are ex-ante** (invariants 1–2);
+- **the bidding methodology is transparent** — every rule is published code;
+- **parameters may be calibrated per market**, because a gas premium or a water
+  value IS a characteristic of that market — but only on ex-ante data, and
+  validated on held-out windows (`docs/cv25-phase2-prereg.md` Set B), never
+  fitted in-sample to the prices scored against.
+
+What this changes: Phase 4 stops being a threat to the thesis and becomes normal
+model development. What it does NOT change: the residual-as-market-power reading
+now rests entirely on **out-of-sample** performance — an in-sample residual from a
+calibrated model means nothing, so the held-out discipline below is what keeps the
+research claim alive, and the writeup must always say which windows a number comes
+from.
 
 ## Phase 4 — Re-calibration, constrained
 

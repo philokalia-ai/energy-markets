@@ -1,7 +1,12 @@
 # Euphemia — an ex-ante competitive counterfactual of the European day-ahead electricity market
 
-A fully **ex-ante**, **no-fit** simulation of the European day-ahead electricity
-auction across **39 bidding zones**. For each zone it reconstructs the *rational
+A fully **ex-ante** simulation of the European day-ahead electricity
+auction across **39 bidding zones**, with **transparent bidding methodology**:
+every input is available before the auction gate, every bid-construction rule is
+published, and where a parameter is calibrated it is a *market characteristic*
+(a zone's gas premium, a hydro system's water value) fitted on ex-ante data and
+validated on held-out windows — never a curve fitted to the prices we score
+against in-sample. For each zone it reconstructs the *rational
 competitive bid* of every market participant from fundamentals (fuel and carbon
 prices, forecasts, reservoir levels, the physical fleet), assembles the
 resulting order books, and clears all zones simultaneously through a
@@ -227,8 +232,8 @@ regions differ only in parameters (a per-zone `ZoneProfile`):
   whose dominant resource prices against the coupled system (Norwegian and
   south-Swedish hydro, alpine storage, French off-peak nuclear, Belgian
   imports) then re-bid at a share of the *pass-1 model price* and the
-  footprint re-clears. All anchor inputs are model-internal — the no-fit,
-  ex-ante property is preserved.
+  footprint re-clears. All anchor inputs are model-internal — the ex-ante
+  property is preserved.
 - **Fleet truthing.** Registry capacity is cross-checked against what has
   recently been active: idle-but-real capacity counts toward adequacy
   (activity-gated), phantom paper capacity is derated, and per-type capacity

@@ -73,7 +73,7 @@
 
   <h2>What this is</h2>
   <p>
-    This site tracks a <strong>no-fit, ex-ante simulation</strong> of the European
+    This site tracks an <strong>ex-ante simulation</strong> of the European
     day-ahead electricity market — 39 bidding zones cleared jointly, the way the real
     EUPHEMIA algorithm clears them, with cross-border transmission constraints. The model
     ingests only what a market participant could know the evening before delivery:
@@ -341,7 +341,7 @@
   <h2 id="bidding-strategies">Bidding strategies — how each region's order book is built</h2>
   <p>
     Every zone's hourly supply and demand curves are constructed from fundamentals,
-    with <strong>no bid markups fitted to prices</strong>. The common machinery:
+    with a <strong>published bidding methodology</strong>: where a parameter is calibrated it is a market characteristic — a zone's gas premium, a hydro system's water value — fitted on ex-ante data and validated out-of-sample, never a markup tuned to the prices scored against. The common machinery:
   </p>
   <ul>
     <li><strong>Thermal plants bid short-run marginal cost</strong>: gas plants at
@@ -392,7 +392,7 @@
   <p>
     The full parameterization is one <code>ZoneProfile</code> per zone in
     <code>src/merit_order/zone_profiles.jl</code> — every choice justified by physics
-    or public data, never by fitting to the prices we score against.
+    or public data; calibrated parameters are market characteristics, validated on held-out windows rather than fitted in-sample.
   </p>
 
   <h3 id="zone-strategy-table">The calibration, generated from the running model</h3>
