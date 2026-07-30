@@ -51,35 +51,6 @@ _jsonable(v) =
     v isa AbstractVector ? [_jsonable(x) for x in v] :
     v === nothing ? nothing : v
 
-"""
-One line per profile field, in plain language — the column headers are snake_case
-Julia names an outside reader cannot interpret. A test asserts every field has one,
-so adding a field to the struct without describing it fails CI rather than shipping
-an unexplained column.
-"""
-const FIELD_DESCRIPTIONS = Dict(
-  "scarcity_threshold" => "supply margin below which offers start to steepen",
-  "scarcity_kappa" => "how hard offers steepen once the margin is thin",
-  "peak_kappa" => "extra uplift at the day's demand peak",
-  "water_value_base" => "reservoir hydro's opportunity cost, as a multiple of gas SRMC",
-  "water_value_span" => "how much the water value swings across the day's demand range",
-  "thermal_srmc_multiplier" => "premium on this zone's thermal running costs (Italy: 1.20)",
-  "hydro_model" => "gas-anchored water value, or reservoir-opportunity from weekly levels",
-  "nuclear_srmc_floor" => "floor under nuclear bids (EUR/MWh), France's off-peak position",
-  "opportunity_anchor" => "which fleet re-bids in pass 2 against the coupled price",
-  "anchor_share" => "fraction of the coupled reference the anchored fleet asks for",
-  "nuclear_avail_share_lo" => "anchor share when the nuclear fleet is at its crisis floor",
-  "nuclear_avail_share_hi" => "anchor share when the fleet is fully available",
-  "nuclear_bid_ref_ceiling" => "cap on anchor-lifted nuclear bids, as a multiple of the reference",
-  "scarcity_import_credit" => "credit available import capacity against the scarcity margin",
-  "fleet_truth_mode" => "true the fleet to trailing p95 output, or to registry installed capacity",
-  "seasonal_drawdown" => "follow the seasonal reservoir drawdown cycle (Swedish north)",
-  "import_backstop" => "offer demonstrated import headroom as elastic supply",
-  "backstop_scarcity_credit" => "also credit that headroom in the scarcity margin",
-  "ref_priced_exports" => "price exports over retained borders at the coupled reference",
-  "boundary_book" => "an out-of-footprint neighbour modelled as an elastic counterparty",
-)
-
 "Per-zone resolved profile, plus the base profile every row is a delta against."
 function zone_rows()
     flds = collect(fieldnames(MO.ZoneProfile))
@@ -167,7 +138,7 @@ function main()
         "code_version" => Euphemia.ENERGY_PRICES_CODE_VERSION,
         "generated_from" => "get_zone_profile resolved in-process — never hand-maintained",
         "fields" => String.(flds),
-        "field_descriptions" => Dict(String(f) => get(FIELD_DESCRIPTIONS, String(f), "") for f in flds),
+        "field_descriptions" => Dict(String(f) => get(MO.FIELD_DESCRIPTIONS, f, "") for f in flds),
         "source_of_truth" => "src/merit_order/zone_profiles.jl",
         "base_profile" => "SEE_PROFILE",  # the row every diff is against
         "n_zones" => length(rows),

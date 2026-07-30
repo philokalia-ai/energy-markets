@@ -16,23 +16,18 @@ const _MO = Euphemia.MeritOrderBook
 
 @testset "Zone-strategy export" begin
 
-    @testset "every profile field is described" begin
-        # Mirrors FIELD_DESCRIPTIONS in bin/export_zone_strategies.jl. Kept here so
-        # the assertion runs in the core suite without executing the exporter (which
-        # needs a data store just to load the module).
-        described = Set([
-            "scarcity_threshold", "scarcity_kappa", "peak_kappa", "water_value_base",
-            "water_value_span", "thermal_srmc_multiplier", "hydro_model",
-            "nuclear_srmc_floor", "opportunity_anchor", "anchor_share",
-            "nuclear_avail_share_lo", "nuclear_avail_share_hi",
-            "nuclear_bid_ref_ceiling", "scarcity_import_credit", "fleet_truth_mode",
-            "seasonal_drawdown", "import_backstop", "backstop_scarcity_credit",
-            "ref_priced_exports", "boundary_book",
-        ])
-        actual = Set(String.(fieldnames(_MO.ZoneProfile)))
-        # If this fails, add the new field to FIELD_DESCRIPTIONS *and* here.
-        @test setdiff(actual, described) == Set{String}()
-        @test setdiff(described, actual) == Set{String}()
+    @testset "every profile field is described — no second copy to drift" begin
+        # FIELD_DESCRIPTIONS lives beside the struct in zone_profiles.jl, and BOTH
+        # the exporter and this test read that one object. An earlier version of
+        # this test duplicated the list, which meant the two could drift apart
+        # while the test still passed — the exact failure the generated table
+        # exists to prevent, reintroduced in its own guard.
+        @test Set(keys(_MO.FIELD_DESCRIPTIONS)) == Set(fieldnames(_MO.ZoneProfile))
+        @test all(!isempty(v) for v in values(_MO.FIELD_DESCRIPTIONS))
+        # and the exporter must not carry its own copy
+        src = read(joinpath(dirname(@__DIR__), "bin", "export_zone_strategies.jl"), String)
+        @test occursin("MO.FIELD_DESCRIPTIONS", src)
+        @test !occursin("const FIELD_DESCRIPTIONS", src)
     end
 
     @testset "the honesty section names things that exist" begin
