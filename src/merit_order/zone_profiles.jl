@@ -1059,6 +1059,21 @@ function get_zone_profile(zone::AbstractString)
        !isempty(get(ENV, p.boundary_book.disable_env, ""))
         p = with_profile(p; boundary_book=nothing)
     end
+    # cv25 Phase-4 re-calibration treatments (docs/cv25-phase4-prereg.md), gated
+    # by EUPHEMIA_DISABLE_CV25_RECAL (house isempty style). T1: BG/GR gain the
+    # cv17 demonstrated-headroom import backstop — under the doubled ATC they
+    # were fed endogenously by phantom capacity, so the market characteristic
+    # (their real demonstrated import capability) never needed representing.
+    # T3: IT-NORTH gains the same standard backstop (northern import corridor;
+    # level-shift pathology). IT-CNORTH already carries one (recomputed at
+    # runtime). NOT scored until the prereg PR is ratified.
+    if isempty(get(ENV, "EUPHEMIA_DISABLE_CV25_RECAL", ""))
+        if String(zone) in ("BG", "GR")
+            p = with_profile(p; import_backstop = true, backstop_scarcity_credit = 1.0)
+        elseif String(zone) == "IT-NORTH"
+            p = with_profile(p; import_backstop = true)
+        end
+    end
     # cv23 kill-switch (byte-identity guard + attribution A/Bs). A non-empty
     # EUPHEMIA_DISABLE_CV23 strips BOTH cv23 mechanisms so the EU book reverts
     # exactly to cv22 main: (1) the availability-scaled nuclear share reverts to
