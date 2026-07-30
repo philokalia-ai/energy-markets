@@ -108,7 +108,11 @@ function out_of_struct()
              "where" => "the enriched network build, not the profile",
              "note" => "Core-FBMC and other borders whose offered ATC misrepresents " *
                        "the real constraint are dropped per zone pair; two zones can " *
-                       "share a profile and still be treated differently because of this."),
+                       "share a profile and still be treated differently because of " *
+                       "this. It also SHAPES BIDS: for an anchored zone, exports over " *
+                       "a dropped border come back as a separate reference-priced " *
+                       "demand block (anchor_export_mw), which is a bid mechanism " *
+                       "keyed off the drop list and anchor state, not off any field."),
         Dict("mechanism" => "Continental anchor proxy",
              "where" => "hardcoded (\"DE_LU\", \"NL\") in compute_opportunity_anchor_refs",
              "note" => "Every :hydro/:nuclear anchored zone with no endogenous neighbour " *
@@ -120,10 +124,14 @@ function out_of_struct()
                        "aggregate ENTSO-E border codes are remapped to a representative " *
                        "zone. Neither is a profile field."),
         Dict("mechanism" => "Env-gated version switches",
-             "where" => "get_zone_profile (EUPHEMIA_DISABLE_CV21/22/23/FRCAP)",
-             "note" => "Set in A/B and byte-identity runs; unset in production. When set " *
-                       "they rewrite the profile AFTER the registry, so the table below " *
-                       "reflects the environment it was generated in."),
+             "where" => "get_zone_profile, AND non-profile code: fleet_data.jl " *
+                        "(reservoir window and dryness wrap) and flows_imports.jl " *
+                        "(the :v2 border-map fallback) for CV22",
+             "note" => "Set in A/B and byte-identity runs; unset in production. They " *
+                       "rewrite the profile AFTER the registry — and CV22 additionally " *
+                       "gates data-layer bug fixes that are not profile fields at all. " *
+                       "The table reflects the environment it was generated in; the " *
+                       "kill_switches_set field above says which were active."),
     ]
 end
 

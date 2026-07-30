@@ -494,8 +494,8 @@
             "https://api.philokalia.ai/api";
 
   function esc(x) {
-    return String(x).replace(/[&<>]/g, function (c) {
-      return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c];
+    return String(x).replace(/[&<>"]/g, function (c) {
+      return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c];
     });
   }
 
@@ -508,6 +508,17 @@
     });
   }
 
+  /* A boundary book is a 15-field struct. Rendering just its counterparty made
+     FR's GB book (UKA carbon, three cables, four excluded codes) and DK1's
+     (EUA, none) read identically — the collapse this table exists to avoid. */
+  function bookLabel(b) {
+    var bits = [b.counterparty || "?"];
+    if (b.carbon_source) bits.push(String(b.carbon_source).toUpperCase());
+    if (b.atc_codes && b.atc_codes.length) bits.push(b.atc_codes.length + " cable(s)");
+    if (b.firm_slice) bits.push("firm slice");
+    return bits.join(" · ");
+  }
+
   function render(d) {
     var cols = varyingFields(d);
     var dsc = d.field_descriptions || {};
@@ -517,7 +528,9 @@
     document.getElementById("zs-summary").textContent =
       d.n_zones + " zones resolve to " + d.n_distinct_treatments +
       " distinct parameter vectors across " + d.fields.length +
-      " profile fields (" + cols.length + " of them vary). Generated " +
+      " profile fields" + (cols.length < d.fields.length
+        ? " (" + cols.length + " of them vary; invariant columns hidden)" : "") +
+      ". Generated " +
       d.generated_utc + " from code_version " + d.code_version + "." +
       (d.kill_switches_set && d.kill_switches_set.length
         ? " ⚠ generated with kill-switches set: " + d.kill_switches_set.join(", ") +
@@ -542,9 +555,11 @@
           var txt = (v === true) ? "on"
                   : (v === false || v === null || v === "none") ? "—"
                   : (Array.isArray(v) ? v.join(", ")
-                  : (v && typeof v === "object") ? "book: " + (v.counterparty || "?")
+                  : (v && typeof v === "object") ? bookLabel(v)
                   : v);
-          return "<td class=\"" + (off ? "zs-off" : "zs-on") + "\">" + esc(txt) + "</td>";
+          var tip = (v && typeof v === "object") ? esc(JSON.stringify(v, null, 1)) : "";
+          return "<td class=\"" + (off ? "zs-off" : "zs-on") + "\"" +
+                 (tip ? " title=\"" + tip + "\"" : "") + ">" + esc(txt) + "</td>";
         }).join("") + "</tr>";
     }).join("");
     document.getElementById("zs-table").innerHTML = head + "<tbody>" + body + "</tbody>";
