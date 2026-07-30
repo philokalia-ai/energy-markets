@@ -461,16 +461,38 @@ function _create_transfer_capacity_enriched(date::Date, bidding_zones::Vector{St
     # construction (the falsifier the prereg names).
     cv27_t1 = isempty(get(ENV, "EUPHEMIA_DISABLE_CV27", "")) &&
               isempty(get(ENV, "EUPHEMIA_DISABLE_CV27_T1", ""))
-    fbmc_cap = (cv27_t1 && "n_da" in names(imp) && any(imp.n_da .== 0)) ?
+    # cv27-borders (Phase 0): per-border scoping of the T1 override.
+    # When EUPHEMIA_CV27_T1_BORDERS is PRESENT in the environment it selects the
+    # border-list mode: the demonstrated-capability override applies ONLY to the
+    # listed directed borders (comma-separated "A>B,B>A,..."), regardless of
+    # da_ever — both physical directions are symmetrized in code as a safety.
+    # An empty value = no borders = treatment OFF. When the var is ABSENT the
+    # legacy T1b behaviour (override every n_da==0 border in da_ever) is
+    # unchanged, so the existing guards stay bit-identical.
+    border_list_mode = haskey(ENV, "EUPHEMIA_CV27_T1_BORDERS")
+    border_set = Set{Tuple{String,String}}()
+    if border_list_mode
+        for tok in split(get(ENV, "EUPHEMIA_CV27_T1_BORDERS", ""), ',')
+            t = strip(tok); isempty(t) && continue
+            parts = split(t, '>')
+            length(parts) == 2 || error("bad EUPHEMIA_CV27_T1_BORDERS token: $t")
+            a = String(strip(parts[1])); b = String(strip(parts[2]))
+            push!(border_set, (a, b)); push!(border_set, (b, a))  # both directions
+        end
+    end
+    fbmc_cap = (cv27_t1 && "n_da" in names(imp) && any(imp.n_da .== 0) &&
+                (!border_list_mode || !isempty(border_set))) ?
         _fbmc_capability(date) : nothing
-    da_ever = fbmc_cap === nothing ? Set{Tuple{String,String}}() : _da_ever_borders(date)
+    da_ever = (fbmc_cap === nothing || border_list_mode) ?
+        Set{Tuple{String,String}}() : _da_ever_borders(date)
     n_fbmc_override = 0
     rows = NamedTuple{(:source_zone, :sink_zone, :time_period, :capacity),
                       Tuple{String,String,Int,Float64}}[]
     for r in eachrow(imp)
         capacity = Float64(r.capacity)
-        if fbmc_cap !== nothing && Int(r.n_da) == 0 &&
-           (String(r.source_zone), String(r.sink_zone)) in da_ever
+        pair = (String(r.source_zone), String(r.sink_zone))
+        eligible = border_list_mode ? (pair in border_set) : (pair in da_ever)
+        if fbmc_cap !== nothing && Int(r.n_da) == 0 && eligible
             blk = (Int(r.time_period) - 1) ÷ 4
             demo = get(fbmc_cap, (String(r.source_zone), String(r.sink_zone), blk), 0.0)
             demo > 0.0 && (capacity = demo; n_fbmc_override += 1)
