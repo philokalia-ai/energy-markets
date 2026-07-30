@@ -1,7 +1,14 @@
 # cv25 Phase 2 — the pre-registered ablation
 
-Run overnight 2026-07-30, exactly per `docs/cv25-phase2-prereg.md` (ratified as
-#226 **before** any cell ran — the commit timestamp is the point). Branch
+Run overnight 2026-07-30 per `docs/cv25-phase2-prereg.md` (ratified as #226
+**before** any cell ran — the commit timestamp is the point), **with one
+execution deviation found by the PR's adversarial review and repaired**: the
+overnight harness misapplied the substitution rule, placing 2025-07-19 in Set A
+(displacing the ratified 2025-07-22, which initially never ran) and substituting
+2025-07-20 instead of the ratified 07-19 in Set B. The missing 2025-07-22 cells
+were run afterwards and BOTH window definitions scored. The tables below are the
+**ratified** windows; the as-executed scores are given alongside — the verdicts
+are identical under both. Branch
 `feat/cv25-phase2-fixes`; every arm from one binary via kill-switches; each
 (arm, day) cell its own process with the switches set at launch. The
 all-switches-off guard passed first: **bit-identical to `main`, 1032/1032**.
@@ -13,11 +20,17 @@ all-switches-off guard passed first: **bit-identical to `main`, 1032/1032**.
 
 | arm | MAE €/MWh | corr | ΔMAE | Δcorr |
 |---|---|---|---|---|
-| baseline (all fixes off) | 30.60 | 0.741 | — | — |
-| **all-on** | 33.94 | 0.550 | **+3.34** | **−0.192** |
-| leave-out fix 1 (ATC) | 30.60 | 0.741 | ±0.00 | ±0.000 |
-| leave-out fix 3 (ISO-year) | 33.94 | 0.550 | +3.34 | −0.192 |
-| leave-out fix 4 (fleet probe) | 33.94 | 0.550 | +3.34 | −0.192 |
+| baseline (all fixes off) | 30.83 | 0.734 | — | — |
+| **all-on** | 34.05 | 0.547 | **+3.22** | **−0.187** |
+| leave-out fix 1 (ATC) | 30.83 | 0.734 | ±0.00 | ±0.000 |
+| leave-out fix 3 (ISO-year) | 34.05 | 0.547 | +3.22 | −0.187 |
+| leave-out fix 4 (fleet probe) | 34.05 | 0.547 | +3.22 | −0.187 |
+
+*(As-executed windows — with 07-19 in A instead of the ratified 07-22 — scored
+baseline 30.60/0.741 → all-on 33.94/0.550: same verdicts, ~0.1 differences.)*
+
+Set-A days (ratified, as scored above): the 1st/8th/15th/22nd of 2025-01,
+2026-01, 2024-07, 2025-07 — no substitution was needed in Set A.
 
 The arithmetic of the leave-outs says everything: **the entire all-on effect is
 fix 1.** Removing fix 3 or fix 4 from the bundle changes nothing; removing fix 1
@@ -73,14 +86,18 @@ once import capacity halves.
 ## Set B (held out) — baseline & all-on, 32/32 cells, none truncated
 
 One substitution by the declared rule: 2025-07-18 unusable (SI has 2 forecast
-hours at source) → **2025-07-20**. **14,976 scored cells.**
+hours at source) → **2025-07-19, as ratified**. **14,976 scored cells.**
 
 | arm | MAE | corr |
 |---|---|---|
-| baseline | 25.06 | 0.667 |
-| all-on | 27.17 | 0.635 |
+| baseline | 25.09 | 0.667 |
+| all-on | 27.26 | 0.633 |
 
-Held-out delta ΔMAE **+2.11** / Δcorr **−0.032** — same direction as Set A,
+*(The overnight harness had substituted 07-20 instead; scored 25.06/0.667 →
+27.17/0.635 — same verdicts.)* Set-B days: the 4th/11th/18th→19th/25th of the
+same four months.
+
+Held-out delta ΔMAE **+2.17** / Δcorr **−0.034** — same direction as Set A,
 milder magnitude, **zero cap hours in either arm**, and the same zones carry the
 damage (SI +11.8, HU +7.9, AT +6.6, CH +5.6, RS +6.4, the Italian islands). The
 Set-A finding is not a sample artifact.
@@ -93,8 +110,8 @@ model with the calibration untouched:
 
 | set | honest baseline (all-on) | old-physics baseline | the gap re-calibration must close |
 |---|---|---|---|
-| A (screening) | 33.94 / 0.550 | 30.60 / 0.741 | 3.34 MAE / 0.191 corr |
-| B (held out) | 27.17 / 0.635 | 25.06 / 0.667 | 2.11 MAE / 0.032 corr |
+| A (screening) | 34.05 / 0.547 | 30.83 / 0.734 | 3.22 MAE / 0.187 corr |
+| B (held out) | 27.26 / 0.633 | 25.09 / 0.667 | 2.17 MAE / 0.034 corr |
 
 Decomposition on these windows: the ATC physics accounts for **all** of the gap
 (fixes 3/4 inert here; fix 2 does not touch the sequential path). Against
@@ -128,6 +145,25 @@ The full-orchestration identity harness (`pipeline_identity.jl`, now asserting
 its own precondition) remains the CI-level check; the first attempts through
 `run_pipelined_backfill` in this session hit DuckDB lock conflicts with the
 concurrently running ablation cells and were superseded by the minimal form.
+
+## Audit-trail notes (from the PR's adversarial review)
+
+- The machine scorer labelled fixes 3/4 `CONFLICTED (owner's call)`; the doc's
+  "NO EFFECT ON WINDOW" is a re-label with proof attached (bit-equal tsvs,
+  positive controls). The prereg's conflicted row was defined for
+  opposite-moving metrics, not exact 0/0 ties — recorded here so the raw verdict
+  is not lost.
+- Fix 2's ratified pass criterion was `pipeline_identity.jl`; that harness hit
+  DuckDB lock conflicts with the running cells, so the delivered check is the
+  in-process stage-sequence agreement (936/936, Δ=0). It proves the resolver but
+  not worker-process env propagation — **run `pipeline_identity.jl` before any
+  Phase-4 backfill uses the pipeline.**
+- Fix 1's blast radius is not EU-scoped: `get_zone_pairs` is shared, so the
+  canonicalisation also changes the legacy SEE 5-zone path when enabled. Phase 4
+  must decide the SEE identity story explicitly (as cv22 did).
+- `ENERGY_PRICES_CODE_VERSION` is bumped to **25 on this branch**: it activates
+  changed physics by default, and an accidental early merge must never label
+  those prices cv24.
 
 ## Process notes
 

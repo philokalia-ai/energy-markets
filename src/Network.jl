@@ -770,7 +770,7 @@ function get_zone_pairs(transfer_capacity::TransferCapacity)
 
     # Kill-switch for A/B measurement: restores the pre-fix behaviour in which
     # each published DIRECTION became its own independent flow variable.
-    lowercase(get(ENV, "EUPHEMIA_DISABLE_ATC_CANON", "")) == "true" &&
+    !isempty(get(ENV, "EUPHEMIA_DISABLE_ATC_CANON", "")) &&
         return collect(directed)
 
     pairs = Set{Tuple{String,String}}()

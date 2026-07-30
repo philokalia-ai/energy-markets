@@ -90,7 +90,7 @@ using DataFrames
         # Pure signature check — no clearing, no DB.
         ms = collect(methods(Euphemia.mz_build_books))
         kwnames = Base.kwarg_decl(first(ms))
-        @test_broken :ex_ante_mode in kwnames
+        @test :ex_ante_mode in kwnames   # fixed by cv25 fix 2 (mz_resolve_flow_mode)
     end
 
     # -----------------------------------------------------------------------
@@ -152,5 +152,29 @@ using DataFrames
         @test date_ok(5, 2, 0)       # partial success
         @test !date_ok(0, 39, 0)     # genuine total failure
         @test !date_ok(0, 0, 0)      # nothing at all
+    end
+    # -----------------------------------------------------------------------
+    # cv25 fix 3/4 unit anchors (from #228's review): the ISO-year helper at
+    # its boundaries, and the fleet-probe switch actually switching the SQL.
+    # -----------------------------------------------------------------------
+    @testset "ISO-year helper boundaries" begin
+        MO = Euphemia.MeritOrderBook
+        @test MO._iso_year_of(Date(2023, 1, 1)) == 2022    # isoweek 52 of 2022
+        @test MO._iso_year_of(Date(2025, 12, 29)) == 2026  # isoweek 1 of 2026
+        @test MO._iso_year_of(Date(2025, 6, 15)) == 2025   # mid-year identity
+    end
+
+    @testset "fleet-probe switch changes the SQL bound" begin
+        G = parentmodule(Euphemia.get_generators)
+        old = get(ENV, "EUPHEMIA_DISABLE_FLEETPROBE_FIX", nothing)
+        try
+            delete!(ENV, "EUPHEMIA_DISABLE_FLEETPROBE_FIX")
+            @test G._fleet_probe_upper() == "\$2::timestamp"
+            ENV["EUPHEMIA_DISABLE_FLEETPROBE_FIX"] = "1"
+            @test occursin("INTERVAL '1 day'", G._fleet_probe_upper())
+        finally
+            old === nothing ? delete!(ENV, "EUPHEMIA_DISABLE_FLEETPROBE_FIX") :
+                              (ENV["EUPHEMIA_DISABLE_FLEETPROBE_FIX"] = old)
+        end
     end
 end
