@@ -312,13 +312,16 @@ end
 """
 Per-zone hourly weather-RES predictions (MW) covering UTC days
 `first_utc_day`..`last_utc_day` (the ex-ante track's wind+solar inputs).
-One open-meteo fetch per zone spans the whole window (locations batched ≤50
-per call). Zones without a model in the pack predict 0 for all hours (warned).
+Fetches are grouped by admissible vintage (`vintage_groups` over the candidate
+market days): on the normal D-1 morning run that is ONE span fetch per zone
+exactly as before; a late/catch-up run splits so each market day's inputs come
+from the run issued on ITS D-1 (previous-runs API), never a fresher one.
+Zones without a model in the pack predict 0 for all hours (warned).
 """
-function build_weather_predictions(first_utc_day::Date, last_utc_day::Date)
+function build_weather_predictions(first_utc_day::Date, last_utc_day::Date,
+                                   candidates::AbstractSet{Date})
     pack = load_res_models()
-    dates = collect(first_utc_day:Day(1):last_utc_day)
-    hours = collect(DateTime(first_utc_day):Hour(1):DateTime(last_utc_day) + Hour(23))
+    groups = vintage_groups(first_utc_day, last_utc_day, candidates)
     preds = Dict{String,Dict{DateTime,Float64}}()
     for zone in ZONES
         zm = get(pack["zones"], zone, nothing)
@@ -328,9 +331,14 @@ function build_weather_predictions(first_utc_day::Date, last_utc_day::Date)
             continue
         end
         cells = [(Float64(c[1]), Float64(c[2])) for c in zm["cells"]]
-        OPENMETEO_ZONE_THROTTLE_S > 0 && sleep(OPENMETEO_ZONE_THROTTLE_S)  # spread calls → avoid 429
-        weather = fetch_weather(cells, dates)
-        preds[zone] = predict_res(pack, zone, hours, weather)
+        zp = Dict{DateTime,Float64}()
+        for (gdates, lag) in groups
+            OPENMETEO_ZONE_THROTTLE_S > 0 && sleep(OPENMETEO_ZONE_THROTTLE_S)  # spread calls → avoid 429
+            weather = fetch_weather(cells, gdates; vintage_lag=lag)
+            ghours = collect(DateTime(first(gdates)):Hour(1):DateTime(last(gdates)) + Hour(23))
+            merge!(zp, predict_res(pack, zone, ghours, weather))
+        end
+        preds[zone] = zp
     end
     return preds
 end
@@ -431,17 +439,20 @@ end
 """
 Predict hourly load (MW) for each `zones_to_fill` zone over UTC days
 `first_utc`..`last_utc`, using the load-model `pack` and open-meteo forecast
-weather (fetched from `first_utc - 2` for the trailing-48h feature). Returns
+weather (each vintage group's fetch reaches 2 days further back for the
+trailing-48h feature, at the group's own lag — vintage-coherent inputs).
+Fetches group by admissible vintage over the candidate market days (see
+`vintage_groups`; one span fetch on the normal run). Returns
 `zone => (hour::DateTime → MW)`; a zone is omitted if it has no pack entry or no
 weather could be fetched (the caller then keeps that zone's day INELIGIBLE —
 never a silent flat/persistence fallback).
 """
 function build_load_fills(pack, zones_to_fill::Vector{String},
-                          first_utc::Date, last_utc::Date)
+                          first_utc::Date, last_utc::Date,
+                          candidates::AbstractSet{Date})
     fill_pred = Dict{String,Dict{DateTime,Float64}}()
     isempty(zones_to_fill) && return fill_pred
-    hours = collect(DateTime(first_utc):Hour(1):DateTime(last_utc) + Hour(23))
-    fetch_dates = collect((first_utc - Day(2)):Day(1):last_utc)
+    groups = vintage_groups(first_utc, last_utc, candidates)
     for zone in zones_to_fill
         zm = get(pack["zones"], zone, nothing)
         if zm === nothing
@@ -449,15 +460,23 @@ function build_load_fills(pack, zones_to_fill::Vector{String},
             continue
         end
         cells = [(Float64(c[1]), Float64(c[2])) for c in zm["cities"]]
-        OPENMETEO_ZONE_THROTTLE_S > 0 && sleep(OPENMETEO_ZONE_THROTTLE_S)  # spread calls → avoid 429
-        weather = try
-            fetch_load_weather(cells, fetch_dates)
-        catch e
-            e isa InterruptException && rethrow()
-            println("  ⚠️ load-fill: $zone weather fetch failed ($(sprint(showerror, e))) — cannot fill")
-            continue
+        pred = Dict{DateTime,Float64}()
+        ok = true
+        for (gdates, lag) in groups
+            OPENMETEO_ZONE_THROTTLE_S > 0 && sleep(OPENMETEO_ZONE_THROTTLE_S)  # spread calls → avoid 429
+            weather = try
+                fetch_load_weather(cells, collect((first(gdates) - Day(2)):Day(1):last(gdates));
+                                   vintage_lag=lag)
+            catch e
+                e isa InterruptException && rethrow()
+                println("  ⚠️ load-fill: $zone weather fetch failed ($(sprint(showerror, e))) — cannot fill")
+                ok = false
+                break
+            end
+            ghours = collect(DateTime(first(gdates)):Hour(1):DateTime(last(gdates)) + Hour(23))
+            merge!(pred, predict_load(pack, zone, ghours, weather))
         end
-        pred = predict_load(pack, zone, hours, weather)
+        ok || continue
         if isempty(pred)
             println("  ⚠️ load-fill: $zone produced no hours (weather gaps) — cannot fill")
             continue
@@ -531,11 +550,11 @@ weather could be fetched (the caller then keeps that zone's day INELIGIBLE — n
 silent fallback). Mirrors `build_load_fills`.
 """
 function build_res_fills(pack, zones_to_fill::Vector{String},
-                         first_utc::Date, last_utc::Date)
+                         first_utc::Date, last_utc::Date,
+                         candidates::AbstractSet{Date})
     res_pred = Dict{String,Dict{DateTime,Float64}}()
     isempty(zones_to_fill) && return res_pred
-    hours = collect(DateTime(first_utc):Hour(1):DateTime(last_utc) + Hour(23))
-    dates = collect(first_utc:Day(1):last_utc)
+    groups = vintage_groups(first_utc, last_utc, candidates)
     for zone in zones_to_fill
         zm = get(pack["zones"], zone, nothing)
         if zm === nothing
@@ -543,15 +562,22 @@ function build_res_fills(pack, zones_to_fill::Vector{String},
             continue
         end
         cells = [(Float64(c[1]), Float64(c[2])) for c in zm["cells"]]
-        OPENMETEO_ZONE_THROTTLE_S > 0 && sleep(OPENMETEO_ZONE_THROTTLE_S)  # spread calls → avoid 429
-        weather = try
-            fetch_weather(cells, dates)
-        catch e
-            e isa InterruptException && rethrow()
-            println("  ⚠️ res-fill: $zone weather fetch failed ($(sprint(showerror, e))) — cannot fill")
-            continue
+        pred = Dict{DateTime,Float64}()
+        ok = true
+        for (gdates, lag) in groups
+            OPENMETEO_ZONE_THROTTLE_S > 0 && sleep(OPENMETEO_ZONE_THROTTLE_S)  # spread calls → avoid 429
+            weather = try
+                fetch_weather(cells, gdates; vintage_lag=lag)
+            catch e
+                e isa InterruptException && rethrow()
+                println("  ⚠️ res-fill: $zone weather fetch failed ($(sprint(showerror, e))) — cannot fill")
+                ok = false
+                break
+            end
+            ghours = collect(DateTime(first(gdates)):Hour(1):DateTime(last(gdates)) + Hour(23))
+            merge!(pred, predict_res(pack, zone, ghours, weather))
         end
-        pred = predict_res(pack, zone, hours, weather)
+        ok || continue
         if isempty(pred)
             println("  ⚠️ res-fill: $zone produced no hours (weather gaps) — cannot fill")
             continue
@@ -727,7 +753,8 @@ function main()
         println("WEATHER LOAD: predicting model load for all $(length(ZONES)) zones ...")
         t0 = time()
         fill_pred = build_load_fills(load_pack, sort(copy(ZONES)),
-                                     first_candidate - Day(1), last_candidate)
+                                     first_candidate - Day(1), last_candidate,
+                                     Set(first_candidate:Day(1):last_candidate))
         println("WEATHER LOAD: model load ready for $(length(fill_pred))/$(length(ZONES)) " *
                 "zone(s) in $(round(time() - t0, digits=1))s")
     elseif LOAD_FILL
@@ -747,7 +774,8 @@ function main()
                         "($(join(sort(short_union), ","))) — predicting model load ...")
                 t0 = time()
                 fill_pred = build_load_fills(load_pack, sort(short_union),
-                                             first_candidate - Day(1), last_candidate)
+                                             first_candidate - Day(1), last_candidate,
+                                             Set(first_candidate:Day(1):last_candidate))
                 println("LOAD FILL: model load ready for $(length(fill_pred))/$(length(short_union)) " *
                         "zone(s) in $(round(time() - t0, digits=1))s")
             end
@@ -776,7 +804,8 @@ function main()
                     "($(join(sort(res_short), ","))) — predicting weather wind+solar ...")
             t0 = time()
             res_pred = build_res_fills(res_pack, sort(res_short),
-                                       first_candidate - Day(1), last_candidate)
+                                       first_candidate - Day(1), last_candidate,
+                                       Set(first_candidate:Day(1):last_candidate))
             println("RES FILL: model RES ready for $(length(res_pred))/$(length(res_short)) " *
                     "zone(s) in $(round(time() - t0, digits=1))s")
         end
@@ -795,7 +824,8 @@ function main()
         println("Fetching open-meteo weather + predicting RES for UTC days " *
                 "$(first_candidate - Day(1)) .. $last_candidate ...")
         t0 = time()
-        preds = build_weather_predictions(first_candidate - Day(1), last_candidate)
+        preds = build_weather_predictions(first_candidate - Day(1), last_candidate,
+                                          Set(first_candidate:Day(1):last_candidate))
         res_pred_weather = preds
         scenario = weather_scenario(preds, fill_pred)
         println("Weather RES ready for $(length(preds)) zones in $(round(time() - t0, digits=1))s")

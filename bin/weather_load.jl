@@ -34,6 +34,7 @@ using Dates, Statistics, LinearAlgebra, Downloads, JSON
 const LOAD_MODELS_PATH_V1 = joinpath(@__DIR__, "load_models_v1.json")
 const OPENMETEO_FORECAST_URL_DEFAULT = "https://api.open-meteo.com/v1/forecast"
 const OPENMETEO_ARCHIVE_URL_DEFAULT = "https://archive-api.open-meteo.com/v1/archive"
+const LOAD_OPENMETEO_PREVRUNS_URL_DEFAULT = "https://previous-runs-api.open-meteo.com/v1/forecast"
 const LOAD_OPENMETEO_USER_AGENT = "philokalia-energy/1.0 (contact: pankgeorg@gmail.com)"
 const LOAD_OPENMETEO_BATCH = 50
 const LOAD_OPENMETEO_RETRIES = 6
@@ -349,31 +350,58 @@ function parse_load_weather_response(body::AbstractString,
     return out
 end
 
+# Mirror of weather_res.jl's openmeteo_vintage_lag, defined only when this file
+# is used standalone (daily_forecast.jl includes weather_res.jl first, whose
+# definition then wins — the two must stay identical).
+if !@isdefined(openmeteo_vintage_lag)
+    function openmeteo_vintage_lag(market_day::Date; asof::Date=Date(now(UTC)))
+        lag = Dates.value(asof - (market_day - Day(1)))
+        lag <= 0 && return 0
+        lag <= 7 && return lag
+        error("openmeteo_vintage_lag: market day $market_day needs the vintage issued " *
+              "$(market_day - Day(1)), $lag days before $asof — beyond the previous-runs " *
+              "API's 7-day history; the D-1 vintage is not reconstructable")
+    end
+end
+
 """
-    fetch_load_weather(cells, dates; archive=false, ...) -> cell → hour → (T, GHI)
+    fetch_load_weather(cells, dates; archive=false, vintage_lag=0, ...) -> cell → hour → (T, GHI)
 
 Fetch hourly (temperature_2m °C, shortwave_radiation W/m²) for `cells` covering
 `dates` (UTC calendar days) from open-meteo. `archive=true` uses the ERA5
 archive API (fit time); default uses the forecast API (predict time). Locations
 batched ≤$(LOAD_OPENMETEO_BATCH)/call; `models=` from EUPHEMIA_OPENMETEO_MODELS.
+
+`vintage_lag` (from `openmeteo_vintage_lag`) enforces the D-1-vintage
+discipline on the forecast path exactly as in `fetch_weather`: `1..7` requests
+`_previous_dayN`-suffixed variables from the previous-runs API (the run issued
+N days ago); the prefix-matching parser is unchanged. Incompatible with
+`archive=true` (the archive is actuals, not a forecast vintage).
 """
 function fetch_load_weather(cells::Vector{Tuple{Float64,Float64}}, dates::Vector{Date};
                             archive::Bool=false,
+                            vintage_lag::Int=0,
                             models::String=get(ENV, "EUPHEMIA_OPENMETEO_MODELS", "gfs_seamless"),
                             base_url::String="")
+    0 <= vintage_lag <= 7 ||
+        error("fetch_load_weather: vintage_lag must be 0..7 (got $vintage_lag)")
+    archive && vintage_lag > 0 &&
+        error("fetch_load_weather: vintage_lag is a forecast-vintage control — meaningless with archive=true")
     isempty(cells) && return Dict{Tuple{Float64,Float64},Dict{DateTime,Tuple{Float64,Float64}}}()
     isempty(dates) && error("fetch_load_weather: empty date list")
     d0, d1 = extrema(dates)
     url_base = !isempty(base_url) ? base_url :
         (archive ? get(ENV, "EUPHEMIA_OPENMETEO_ARCHIVE_URL", OPENMETEO_ARCHIVE_URL_DEFAULT) :
+         vintage_lag > 0 ? get(ENV, "EUPHEMIA_OPENMETEO_PREVRUNS_URL", LOAD_OPENMETEO_PREVRUNS_URL_DEFAULT) :
                    get(ENV, "EUPHEMIA_OPENMETEO_URL", OPENMETEO_FORECAST_URL_DEFAULT))
+    sfx = vintage_lag > 0 ? "_previous_day$(vintage_lag)" : ""
     out = Dict{Tuple{Float64,Float64},Dict{DateTime,Tuple{Float64,Float64}}}()
     for lo in 1:LOAD_OPENMETEO_BATCH:length(cells)
         batch = cells[lo:min(lo + LOAD_OPENMETEO_BATCH - 1, length(cells))]
         lats = join((string(c[1]) for c in batch), ",")
         lons = join((string(c[2]) for c in batch), ",")
         url = url_base * "?latitude=" * lats * "&longitude=" * lons *
-              "&hourly=temperature_2m,shortwave_radiation" *
+              "&hourly=temperature_2m" * sfx * ",shortwave_radiation" * sfx *
               "&start_date=" * Dates.format(d0, "yyyy-mm-dd") *
               "&end_date=" * Dates.format(d1, "yyyy-mm-dd") * "&timezone=UTC"
         archive || (url *= "&models=" * models)
@@ -476,7 +504,8 @@ if abspath(PROGRAM_FILE) == @__FILE__
     zm = pack["zones"][zone]
     cells = [(Float64(c[1]), Float64(c[2])) for c in zm["cities"]]
     println("  $(length(cells)) cities; country=$(zm["holiday_country"]) tz_base=$(zm["tz_base"])")
-    weather = fetch_load_weather(cells, [day - Day(1), day])   # -1 day for trailing MA
+    weather = fetch_load_weather(cells, [day - Day(1), day];   # -1 day for trailing MA
+                                 vintage_lag=openmeteo_vintage_lag(day))
     hours = collect(DateTime(day):Hour(1):DateTime(day) + Hour(23))
     pred = predict_load(pack, zone, hours, weather)
     for t in hours

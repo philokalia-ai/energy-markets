@@ -201,6 +201,38 @@ include(joinpath(@__DIR__, "..", "bin", "weather_res.jl"))
         end
     end
 
+    @testset "D-1 vintage discipline (openmeteo_vintage_lag / vintage_groups)" begin
+        D = Date(2026, 8, 5)
+        # running on/before D-1: the current run is an admissible vintage
+        @test openmeteo_vintage_lag(D; asof=D - Day(1)) == 0    # the normal D-1 run
+        @test openmeteo_vintage_lag(D; asof=D - Day(3)) == 0    # longer lead, older still
+        # running on/after D: pin the D-1-issued run via previous-runs
+        @test openmeteo_vintage_lag(D; asof=D) == 1             # same-day catch-up
+        @test openmeteo_vintage_lag(D; asof=D + Day(2)) == 3
+        @test openmeteo_vintage_lag(D; asof=D + Day(6)) == 7    # history edge
+        @test_throws Exception openmeteo_vintage_lag(D; asof=D + Day(7))
+        # fetchers refuse out-of-range lags before any network access
+        @test_throws Exception fetch_weather([(38.0, 23.7)], [D]; vintage_lag=8)
+        @test_throws Exception fetch_weather([(38.0, 23.7)], [D]; vintage_lag=-1)
+
+        # suffixed previous-runs response keys parse through the prefix match
+        body = """{"hourly": {"time": ["2026-08-05T00:00"],
+                   "wind_speed_100m_previous_day2": [12.0],
+                   "shortwave_radiation_previous_day2": [340.0]}}"""
+        w = parse_openmeteo_response(body, [(38.0, 23.7)])
+        @test w[(38.0, 23.7)][DateTime(2026, 8, 5, 0)] == (12.0, 340.0)
+
+        # grouping: normal D-1 run = ONE lag-0 group (fetch pattern unchanged)
+        include(joinpath(@__DIR__, "..", "bin", "forecast_common.jl"))
+        g = vintage_groups(D - Day(1), D, Set([D]); asof=D - Day(1))
+        @test g == [([D - Day(1), D], 0)]
+        # catch-up spanning two candidates: each UTC day pinned to ITS candidate
+        g2 = vintage_groups(D - Day(1), D + Day(1), Set([D, D + Day(1)]); asof=D)
+        @test g2 == [([D - Day(1), D], 1), ([D + Day(1)], 0)]
+        # a UTC day serving no candidate is a hard error
+        @test_throws Exception vintage_groups(D - Day(1), D, Set([D + Day(5)]); asof=D)
+    end
+
     @testset "default_res_models_path (v2 preferred, env override)" begin
         expected = isfile(RES_MODELS_PATH_V2) ? RES_MODELS_PATH_V2 : RES_MODELS_PATH_V1
         had = haskey(ENV, "EUPHEMIA_RES_PACK")
