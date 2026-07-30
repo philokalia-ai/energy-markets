@@ -1067,10 +1067,15 @@ function get_zone_profile(zone::AbstractString)
     # T3: IT-NORTH gains the same standard backstop (northern import corridor;
     # level-shift pathology). IT-CNORTH already carries one (recomputed at
     # runtime). NOT scored until the prereg PR is ratified.
+    # Per-treatment sub-switches serve the prereg's leave-one-out arms
+    # (loo_T1 = recal minus T1, loo_T3 = recal minus T3); the parent switch
+    # still strips everything.
     if isempty(get(ENV, "EUPHEMIA_DISABLE_CV25_RECAL", ""))
-        if String(zone) in ("BG", "GR")
+        if String(zone) in ("BG", "GR") &&
+           isempty(get(ENV, "EUPHEMIA_DISABLE_CV25_T1", ""))
             p = with_profile(p; import_backstop = true, backstop_scarcity_credit = 1.0)
-        elseif String(zone) == "IT-NORTH"
+        elseif String(zone) == "IT-NORTH" &&
+               isempty(get(ENV, "EUPHEMIA_DISABLE_CV25_T3", ""))
             p = with_profile(p; import_backstop = true)
         end
     end
