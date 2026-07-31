@@ -6,6 +6,38 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This is a Julia project implementing the **Euphemia** energy market clearing engine, focusing on electricity market simulation and optimization. The project models day-ahead electricity markets with support for unit commitment, bidding strategies, and network constraints.
 
+## Methodology (standing rules, owner-ratified July 2026)
+
+1. **Theory → experiment → results.** Gates/windows/falsifiers are FROZEN
+   (merged prereg doc) before any scored run; the owner reviews non-draft PRs
+   carrying code AND measured results together, and decides on the numbers —
+   never asked to pre-approve an unvalidated approach.
+2. **Calibrate on Set A, hold out Set B** (scored once, on an A-pass only).
+   Scored-cell counts beside every figure; conflicted ≠ pass; per-zone envelope
+   (+3.0 MAE / −0.05 corr) and the no-new-cap-hours ceiling guard collateral
+   damage; leave-one-out arms attribute every package's effect.
+3. **Regime-conditional evaluation.** Mechanisms that only exist in a regime
+   (solar surplus, nuclear outage, hydro state, mix anomaly) are gated and
+   judged WITHIN their regime (per-zone axis + one threshold, simple and
+   ex-ante) — never rejected on all-hours averages; outside-regime deltas must
+   be ≈0 by construction.
+4. **The collapse question.** Whether prices COLLAPSE (≤ €5, solar-surplus
+   middays / negative hours) is a classification question that dominates
+   continuous MAE near the RES-coverage threshold: small solar-forecast errors
+   flip the answer, so input accuracy there defines whether the signal is
+   useful at all. Collapse hit/false-alarm rates are first-class validation
+   metrics alongside MAE/corr.
+5. **Ex-ante always**: every input available before the auction gate (D-1
+   vintages for weather, lagged public books for calibration, trailing
+   observed capabilities for capacities); parameters are nameable market
+   characteristics (the no-fit claim was retired for this sharper one).
+6. **Bit-identity guards**: every switch-gated change proves all-off ==
+   baseline (1032-row GR+EU harness) before any scored arm; fresh process per
+   (arm, day) cell; measured NO-SHIPs are documented in
+   docs/experiments/ and their branches stay unmerged.
+7. **Conduct residuals are measured, not reproduced** (PL import premium,
+   near-cap withheld tails) — the competitive counterfactual's boundary.
+
 ## Core Architecture
 
 The main module `Euphemia` provides:
