@@ -100,6 +100,64 @@ export function shapeScoreboard(rows, manifest) {
   };
 }
 
+/**
+ * books/<date>.parquet rows (ALL zones for one market day) + zone + date ->
+ * the compact per-zone-day order-book ladder shape web/app.js renders.
+ *
+ * Each row is one tagged order: {market_date, zone, ts, side, price, mw,
+ * owner, code_version}. We keep only the requested zone, group by delivery
+ * hour (ts), and emit the supply ladder ascending in price (the merit order)
+ * and the demand ladder descending in price. Owners are de-duplicated into an
+ * index table so the long ENTSO-E unit codes are not repeated on every order
+ * (keeps the biggest zones — FR/DE_LU — comfortably under 1 MB).
+ *
+ *   { zone, date, market_day_tz, code_version,
+ *     owners: ["RES", "IMPORT", "<unit>", …],
+ *     hours:  ["2023-01-01T00:00:00Z", …],           // one ts per delivery hour
+ *     supply: [ [ [price, mw, ownerIdx], … ], … ],    // per hour, price ascending
+ *     demand: [ [ [price, mw, ownerIdx], … ], … ] }   // per hour, price descending
+ *
+ * The CLEARING price ("πού έκατσε η μπίλια") and the settled actual are NOT in
+ * the book — the frontend overlays them from the zone forecast series
+ * (zones/<Z>) by aligning hour index, so this endpoint stays purely structural.
+ */
+export function shapeBook(rows, zone, date) {
+  const owners = [];
+  const ownerIdx = new Map();
+  function oidx(o) {
+    const key = o == null ? "" : o;
+    let i = ownerIdx.get(key);
+    if (i === undefined) { i = owners.length; owners.push(key); ownerIdx.set(key, i); }
+    return i;
+  }
+  // Group by hour timestamp, preserving first-seen order (parquet is written
+  // ORDER BY zone, ts, side, price so hours already arrive ascending).
+  const byTs = new Map();
+  let cv = null;
+  for (const r of rows) {
+    if (r.zone !== zone) continue;
+    if (cv === null) cv = num(r.code_version);
+    const ts = iso(r.ts);
+    let h = byTs.get(ts);
+    if (!h) { h = { supply: [], demand: [] }; byTs.set(ts, h); }
+    const order = [num(r.price), num(r.mw), oidx(r.owner)];
+    (r.side === "supply" ? h.supply : h.demand).push(order);
+  }
+  const hours = Array.from(byTs.keys()).sort();
+  const supply = [], demand = [];
+  for (const ts of hours) {
+    const h = byTs.get(ts);
+    h.supply.sort(function (a, b) { return a[0] - b[0]; });   // merit order
+    h.demand.sort(function (a, b) { return b[0] - a[0]; });   // willingness to pay
+    supply.push(h.supply);
+    demand.push(h.demand);
+  }
+  return {
+    zone: zone, date: date, market_day_tz: MARKET_DAY_TZ, code_version: cv,
+    owners: owners, hours: hours, supply: supply, demand: demand,
+  };
+}
+
 /** map.parquet rows + manifest -> map.json shape (days sorted by date asc). */
 export function shapeMap(rows, manifest) {
   const byDate = new Map();
