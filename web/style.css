@@ -901,3 +901,39 @@ html, body { overflow-x: hidden; }
 .zs-table td.zs-off { color: var(--text-muted); }
 .zs-table td.zs-on { font-weight: 600; }
 .zs-src { font-size: .85rem; color: var(--text-muted); }
+
+/* ---------- order book (merit-order ladder) ---------- */
+.book-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 6px 0 10px;
+  flex-wrap: wrap;
+}
+.book-play {
+  border: 1px solid var(--baseline);
+  background: var(--surface-1);
+  color: var(--text-secondary);
+  border-radius: 6px;
+  padding: 5px 12px;
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.book-play:hover { background: var(--surface-2, rgba(128,128,128,0.12)); }
+.book-controls input[type="range"] { flex: 1 1 220px; min-width: 160px; accent-color: var(--accent); }
+.book-hour-label {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  min-width: 150px;
+}
+.book-legend { flex-wrap: wrap; gap: 6px 14px; }
+.book-legend .key {
+  width: 12px;
+  height: 12px;
+  border-top: none;
+  border-radius: 3px;
+}
+.book-block { cursor: crosshair; }
+.book-block:hover { fill-opacity: 1; }

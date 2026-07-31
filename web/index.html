@@ -65,14 +65,15 @@
   <p class="hero-kicker">Ex-ante day-ahead electricity price forecasts</p>
   <h1>The competitive counterfactual, live</h1>
   <p class="subtitle">A fundamentals-based simulation of the European day-ahead market —
-    predictions frozen before delivery, never revised, scored honestly per bidding zone
-    and lead time. Scores shown are the <strong>reference track</strong> (ENTSO-E D-1
-    inputs); the <strong>weather-based, pre-auction ex-ante track</strong> is being wired
-    in and will become the headline. <a class="more-link" href="./about.html">How it works &rarr;</a></p>
+    predictions frozen before delivery, never revised, scored honestly per bidding zone.
+    Everything shown is the <strong>ex-ante weather track</strong>: a weather-based,
+    pre-auction forecast using the latest admissible inputs.
+    <a class="more-link" href="./about.html">How it works &rarr;</a></p>
   <nav class="tabs" role="tablist" aria-label="Views">
-    <button id="tab-horizon" class="tab" role="tab" aria-selected="true" data-view="horizon">Next 7 days</button>
+    <button id="tab-horizon" class="tab" role="tab" aria-selected="true" data-view="horizon">Recent days</button>
     <button id="tab-map" class="tab" role="tab" aria-selected="false" data-view="map">Map</button>
     <button id="tab-explorer" class="tab" role="tab" aria-selected="false" data-view="explorer">Zone explorer</button>
+    <button id="tab-book" class="tab" role="tab" aria-selected="false" data-view="book">Order book</button>
     <button id="tab-board" class="tab" role="tab" aria-selected="false" data-view="board">Scoreboard</button>
     <button id="tab-cases" class="tab" role="tab" aria-selected="false" data-view="cases">Case studies</button>
   </nav>
@@ -133,9 +134,9 @@
     <div class="chart-card" style="margin-top: 16px">
       <div class="chart-head">
         <h2 id="rev-title" class="chart-title"></h2>
-        <p class="chart-sub">Every vintage we published for this delivery day, oldest to newest —
-          the record of what we said at D&minus;7 &hellip; D&minus;1, plus the settled actual.
-          Predictions are frozen when written and never revised.</p>
+        <p class="chart-sub">The freshest ex-ante (weather) forecast we published for this
+          delivery day, plus the settled actual. Predictions are frozen when written and
+          never revised.</p>
       </div>
       <div class="filter-row" style="margin: 10px 0 4px">
         <div class="filter">
@@ -155,10 +156,6 @@
         <span class="filter-label">Zone</span>
         <select id="zone-select" aria-label="Bidding zone"></select>
       </label>
-      <div class="filter" id="lead-filter" hidden>
-        <span class="filter-label">Lead time</span>
-        <div id="lead-buttons" class="segmented" role="group" aria-label="Lead time"></div>
-      </div>
     </div>
 
     <div class="explorer-grid">
@@ -184,13 +181,46 @@
     </div>
   </section>
 
+  <!-- ============ Order book (merit-order ladder) ============ -->
+  <section id="view-book" class="view" role="tabpanel" aria-labelledby="tab-book" hidden>
+    <div class="filter-row">
+      <label class="filter">
+        <span class="filter-label">Zone</span>
+        <select id="bzone-select" aria-label="Bidding zone"></select>
+      </label>
+      <div class="filter">
+        <span class="filter-label">Market day</span>
+        <div id="book-daybtns" class="segmented" role="group" aria-label="Market day"></div>
+      </div>
+    </div>
+
+    <div class="chart-card">
+      <div class="chart-head">
+        <h2 id="book-title" class="chart-title"></h2>
+        <p id="book-sub" class="chart-sub">The merit-order supply ladder for one hour:
+          every generator's offer stacked left&nbsp;→&nbsp;right by ascending price
+          (x&nbsp;=&nbsp;cumulative MW, y&nbsp;=&nbsp;€/MWh), coloured by owner. The dashed line
+          marks where the <strong>clearing price</strong> landed
+          (&ldquo;πού έκατσε η μπίλια&rdquo;) — the model's simulated price for that
+          zone-hour — with the settled actual as a second marker.</p>
+      </div>
+
+      <div class="book-controls">
+        <button id="book-play" type="button" class="book-play">▶ Play day</button>
+        <input id="book-hour-slider" type="range" min="0" max="23" step="1" value="12"
+               aria-label="Delivery hour">
+        <span id="book-hour-label" class="book-hour-label"></span>
+      </div>
+
+      <div id="book-legend" class="legend book-legend"></div>
+      <div id="book-wrap" class="chart-wrap"></div>
+      <p id="book-comment" class="day-comment"></p>
+    </div>
+  </section>
+
   <!-- ============ Scoreboard ============ -->
   <section id="view-board" class="view" role="tabpanel" aria-labelledby="tab-board" hidden>
     <div class="filter-row">
-      <div class="filter">
-        <span class="filter-label">Track</span>
-        <div id="track-select" class="segmented" role="group" aria-label="Forecast track"></div>
-      </div>
       <label class="filter">
         <span class="filter-label">Window</span>
         <select id="window-select" aria-label="Scoring window"></select>

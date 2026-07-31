@@ -1,10 +1,29 @@
 # Euphemia results browser (static SPA)
 
 A dependency-free single-page app for browsing the model's ex-ante day-ahead price
-predictions against settled actuals, per bidding zone: an hourly predicted-vs-actual
-chart with a day picker, and an honest per-lead-time accuracy scoreboard
-(MAE / bias / Pearson corr). Plain HTML/CSS/JS — no build step, no CDNs, no external
-requests; it works fully offline from any static file server.
+predictions against settled actuals, per bidding zone. Plain HTML/CSS/JS — no build
+step, no CDNs, no external requests; it works fully offline from any static file
+server.
+
+**One track, freshest forecast (2026-07-31).** The site shows a single forecast
+track — the **ex-ante weather track** (`input_mode` starting with `weather`; all
+model inputs, weather-based RES). The reference (`entsoe`) track stays in the data
+plane for research but is hidden from the UI. Because every forecast uses the latest
+admissible weather, the lead/D-n dimension is collapsed everywhere to the **freshest
+forecast per delivery day** (deeper leads were noise). Views:
+
+- **Recent days** — the last ~5 market days, freshest forecast per day with the
+  settled **actual overlaid** once the day clears (straddles today: D-2, D-1, D,
+  D+1). Below it, "What we said, when" shows one delivery day's freshest forecast
+  vs actual.
+- **Map** — day-average price per bidding zone.
+- **Zone explorer** — per-day hourly forecast vs actual, freshest weather day per date.
+- **Order book** — per zone × market day × hour, the merit-order supply ladder
+  stacked by ascending offer price (x = cumulative MW, y = €/MWh), coloured by
+  owner, with a dashed marker where the **clearing price** landed ("πού έκατσε η
+  μπίλια") and a second marker at the settled actual. Hour slider + play-through-day.
+  Ladder data comes from `GET /api/v1/books/:zone/:date` (see `workers/api/`).
+- **Scoreboard** — weather-track accuracy (MAE / bias / Pearson corr) by window.
 
 ## Run locally
 
@@ -81,36 +100,35 @@ realized hours only. Predictions are frozen at `prediction_made_utc` and never
 revised — this is a no-fit ex-ante counterfactual, so persistent residuals are
 findings about the real market, not tuning targets.
 
-## Vintage chart ("What we said, when")
+Only the **ex-ante weather track** is shown (`input_mode` starting with
+`weather`); the reference (`entsoe`) track is filtered out in the UI. Where a zone
+has no weather-track day yet, the view shows an empty state and fills as the daily
+weather runs accumulate.
 
-The horizon view's vintage panel overlays every forecast we published for one
-delivery day. A single `(date, lead_days)` can carry **several** vintages that
-differ only in `input_mode` — the slice identity is `(date, lead_days,
-input_mode)` by design (e.g. the morning ex-ante `weather` run and the evening
-reference `entsoe` run both land as D-1). The legend disambiguates them with a
-compact `◦`-tag so no two entries read the same:
+## Order-book data contract
 
-| input_mode                        | label          | meaning                              |
-|-----------------------------------|----------------|--------------------------------------|
-| `entsoe`                          | `D-1`          | reference, pure ENTSO-E post-auction inputs |
-| `weather…` (any weather mode)     | `D-1 ◦weather` | ex-ante track (all model inputs: weather-RES + model load) |
-| `…fill` (any fill suffix)         | `D-1 ◦fill`    | HISTORICAL: retired gap-fill vintages (reference track with model-filled load/RES; not produced since July 2026) |
+`GET /api/v1/books/:zone/:date` (worker route; per-day book parquet filtered to
+the zone) returns the merit-order ladder:
 
-Each legend chip's hover title shows the full `input_mode` and the frozen
-`prediction_made_utc` stamp. The **Actual (settled)** entry is hidden until the
-day has at least one settled hour (it reads *"Actual (settling)"* while partial).
+```json
+{"zone": "GR", "date": "2026-07-27", "market_day_tz": "Europe/Athens",
+ "code_version": 27, "owners": ["RES", "IMPORT", "29WGU-…", "…"],
+ "hours": ["2026-07-26T21:00:00Z", "…"],
+ "supply": [[[2.85, 163.4, 3], [5.0, 96.5, 4], "…"], "…"],
+ "demand": [[[3000.0, 5182.2, 0], "…"], "…"]}
+```
 
-Legend chips are interactive (shared `attachSeriesFocus` component, also used by
-the zone-explorer chart): **hover** a chip or a line to highlight that series and
-dim the rest; **click** to toggle a series on/off; **double-click** (or the `⌾
-only` affordance) to isolate one; **show all** resets. No dependencies — plain
-SVG opacity + CSS transitions.
+Per hour, `supply` is ascending in offer price (the merit order) and `demand`
+descending; each order is `[price €/MWh, mw, ownerIdx]` where `ownerIdx` indexes
+`owners`. The clearing price and settled actual are NOT in the book — the SPA
+overlays them from `zones/<zone>` (`sim`/`actual`) by aligning the hour index.
 
 ## Regenerating fixtures
 
-Fixtures were generated with a small deterministic script (3 zones × ~13 days ×
-leads 1–2, including fully pending and partially settled days, with a scoreboard
-aggregated from the same series). If the data contract changes, regenerate them to
+Fixtures (`fixtures/`, `"fixture": true`) are development-only. They are labelled
+`input_mode: "weather"` so the offline fallback exercises the weather-only UI, and
+carry one GR order-book fixture (`fixtures/books/GR/<date>`, no extension) so the
+order-book view renders offline. If the data contract changes, regenerate them to
 match and keep `"fixture": true` set — the banner keys off that flag.
 
 <!-- deploy-stamp: 2026-07-12T17:05Z -->

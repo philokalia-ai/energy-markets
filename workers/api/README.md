@@ -15,9 +15,24 @@ decodes the parquet with [hyparquet](https://github.com/hyparam/hyparquet)
 | Endpoint | Backing object | Shape |
 |---|---|---|
 | `GET /api/v1/zones/:zone` | `v1/zones/<zone>.parquet` | `web/data/zones/<zone>.json` |
+| `GET /api/v1/books/:zone/:date` | `v1/books/<date>.parquet` (filtered to zone) | order-book ladder (see below) |
 | `GET /api/v1/scoreboard` | `v1/scoreboard.parquet` | `web/data/scoreboard.json` |
 | `GET /api/v1/map` | `v1/map.parquet` | `web/data/map.json` |
 | `GET /api/v1/manifest` | `v1/manifest.json` | `{updated_at, code_version, zones, row_counts, …}` |
+
+**Order-book ladder** (`/api/v1/books/:zone/:date`, `date` = `YYYY-MM-DD`):
+`shapeBook` reads the per-day book parquet (all 39 zones — columns
+`market_date, zone, ts, side, price, mw, owner, code_version`), keeps the
+requested zone, and emits a compact per-zone-day ladder:
+`{zone, date, market_day_tz, code_version, owners:[…], hours:[…],
+supply:[[[price,mw,ownerIdx],…] per hour], demand:[…]}` — supply ascending in
+price (the merit order), demand descending, owners de-duplicated into an index
+table so the biggest zones (FR ≈ 660 KB, DE_LU ≈ 470 KB) stay under 1 MB. The
+clearing price and settled actual are NOT embedded — the SPA overlays them from
+`zones/<zone>`. The book parquets reach `v1/books/` via the same daily web push
+(`bin/daily_forecast.jl` writes `data/web/v1/books/<date>.parquet`,
+`bin/web_data_push.sh` syncs it); a missing day 404s and the SPA shows an empty
+state. Served from the existing `DATA` binding — no extra R2 bucket needed.
 
 Deployed at <https://api.philokalia.ai> (canonical; the legacy
 `*.workers.dev` alias remains live during the migration and will be retired
@@ -43,6 +58,11 @@ npm install
 # data/web/v1 AND bin/export_forecast_json.jl output in web/data,
 # exported back-to-back against the same DB state.
 npm test
+
+# Order-book ladder shape test (self-contained; reads a book parquet, defaults
+# to data/backfill_books_cv27/, or set BOOK_PARQUET=<path>). Asserts merit-order
+# ascending, owner-index integrity, and the <1MB per-zone-day budget.
+npm run test:book
 
 # Local dev against local R2 state (no credentials needed):
 for f in $(cd ../../data/web/v1 && find . -type f | sed 's|^\./||'); do

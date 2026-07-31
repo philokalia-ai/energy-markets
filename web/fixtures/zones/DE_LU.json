@@ -86,7 +86,8 @@
    ],
    "mae": null,
    "bias": null,
-   "corr": null
+   "corr": null,
+   "input_mode": "weather"
   },
   {
    "date": "2026-07-11",
@@ -172,7 +173,8 @@
    ],
    "mae": null,
    "bias": null,
-   "corr": null
+   "corr": null,
+   "input_mode": "weather"
   },
   {
    "date": "2026-07-10",
@@ -258,7 +260,8 @@
    ],
    "mae": 17.35,
    "bias": 2.44,
-   "corr": 0.469
+   "corr": 0.469,
+   "input_mode": "weather"
   },
   {
    "date": "2026-07-10",
@@ -344,7 +347,8 @@
    ],
    "mae": 21.55,
    "bias": 5.37,
-   "corr": 0.425
+   "corr": 0.425,
+   "input_mode": "weather"
   },
   {
    "date": "2026-07-09",
@@ -430,7 +434,8 @@
    ],
    "mae": 13.6,
    "bias": -5.86,
-   "corr": 0.786
+   "corr": 0.786,
+   "input_mode": "weather"
   },
   {
    "date": "2026-07-09",
@@ -516,7 +521,8 @@
    ],
    "mae": 19.24,
    "bias": -3.37,
-   "corr": 0.672
+   "corr": 0.672,
+   "input_mode": "weather"
   },
   {
    "date": "2026-07-08",
@@ -602,7 +608,8 @@
    ],
    "mae": 15.72,
    "bias": 6.56,
-   "corr": 0.76
+   "corr": 0.76,
+   "input_mode": "weather"
   },
   {
    "date": "2026-07-08",
@@ -688,7 +695,8 @@
    ],
    "mae": 21.26,
    "bias": 1.78,
-   "corr": 0.739
+   "corr": 0.739,
+   "input_mode": "weather"
   },
   {
    "date": "2026-07-07",
@@ -774,7 +782,8 @@
    ],
    "mae": 16.29,
    "bias": 1.47,
-   "corr": 0.677
+   "corr": 0.677,
+   "input_mode": "weather"
   },
   {
    "date": "2026-07-07",
@@ -860,7 +869,8 @@
    ],
    "mae": 19.41,
    "bias": 5.04,
-   "corr": 0.665
+   "corr": 0.665,
+   "input_mode": "weather"
   },
   {
    "date": "2026-07-06",
@@ -946,7 +956,8 @@
    ],
    "mae": 14.88,
    "bias": -8.53,
-   "corr": 0.805
+   "corr": 0.805,
+   "input_mode": "weather"
   },
   {
    "date": "2026-07-06",
@@ -1032,7 +1043,8 @@
    ],
    "mae": 20.03,
    "bias": -6.09,
-   "corr": 0.643
+   "corr": 0.643,
+   "input_mode": "weather"
   },
   {
    "date": "2026-07-05",
@@ -1118,7 +1130,8 @@
    ],
    "mae": 21.89,
    "bias": 12.8,
-   "corr": 0.61
+   "corr": 0.61,
+   "input_mode": "weather"
   },
   {
    "date": "2026-07-05",
@@ -1204,7 +1217,8 @@
    ],
    "mae": 22.88,
    "bias": 9.84,
-   "corr": 0.521
+   "corr": 0.521,
+   "input_mode": "weather"
   },
   {
    "date": "2026-07-04",
@@ -1290,7 +1304,8 @@
    ],
    "mae": 18.59,
    "bias": -7.99,
-   "corr": 0.573
+   "corr": 0.573,
+   "input_mode": "weather"
   },
   {
    "date": "2026-07-04",
@@ -1376,7 +1391,8 @@
    ],
    "mae": 20.96,
    "bias": -17.71,
-   "corr": 0.682
+   "corr": 0.682,
+   "input_mode": "weather"
   },
   {
    "date": "2026-07-03",
@@ -1462,7 +1478,8 @@
    ],
    "mae": 13.18,
    "bias": 3.44,
-   "corr": 0.776
+   "corr": 0.776,
+   "input_mode": "weather"
   },
   {
    "date": "2026-07-03",
@@ -1548,7 +1565,8 @@
    ],
    "mae": 22.85,
    "bias": 5.46,
-   "corr": 0.621
+   "corr": 0.621,
+   "input_mode": "weather"
   },
   {
    "date": "2026-07-02",
@@ -1634,7 +1652,8 @@
    ],
    "mae": 12.5,
    "bias": 4.45,
-   "corr": 0.745
+   "corr": 0.745,
+   "input_mode": "weather"
   },
   {
    "date": "2026-07-02",
@@ -1720,7 +1739,8 @@
    ],
    "mae": 18.56,
    "bias": 2.13,
-   "corr": 0.649
+   "corr": 0.649,
+   "input_mode": "weather"
   },
   {
    "date": "2026-07-01",
@@ -1806,7 +1826,8 @@
    ],
    "mae": 13.76,
    "bias": -4.17,
-   "corr": 0.675
+   "corr": 0.675,
+   "input_mode": "weather"
   },
   {
    "date": "2026-07-01",
@@ -1892,7 +1913,8 @@
    ],
    "mae": 15.08,
    "bias": -4.63,
-   "corr": 0.712
+   "corr": 0.712,
+   "input_mode": "weather"
   },
   {
    "date": "2026-06-30",
@@ -1978,7 +2000,8 @@
    ],
    "mae": 15.59,
    "bias": 6.5,
-   "corr": 0.712
+   "corr": 0.712,
+   "input_mode": "weather"
   },
   {
    "date": "2026-06-30",
@@ -2064,7 +2087,8 @@
    ],
    "mae": 17.91,
    "bias": 11.69,
-   "corr": 0.676
+   "corr": 0.676,
+   "input_mode": "weather"
   },
   {
    "date": "2026-06-29",
@@ -2150,7 +2174,8 @@
    ],
    "mae": 14.39,
    "bias": -6.71,
-   "corr": 0.775
+   "corr": 0.775,
+   "input_mode": "weather"
   },
   {
    "date": "2026-06-29",
@@ -2236,7 +2261,8 @@
    ],
    "mae": 19.08,
    "bias": -5.16,
-   "corr": 0.661
+   "corr": 0.661,
+   "input_mode": "weather"
   }
  ]
 }

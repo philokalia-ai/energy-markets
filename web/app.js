@@ -21,17 +21,23 @@
     manifest: null,        // /api/v1/manifest payload (freshness badge)
     fixture: false,
     zoneCache: {},         // zone -> zone file json
-    view: "horizon",       // "horizon" | "explorer" | "board"
+    bookCache: {},         // "zone|date" -> book ladder json
+    view: "horizon",       // "horizon" | "explorer" | "board" | "book"
     zone: "GR",
-    lead: null,            // number
     day: null,             // "YYYY-MM-DD"
-    dayMode: null,         // input_mode of the selected explorer day entry
     revDay: null,          // "YYYY-MM-DD" selected in the revision panel
+    bookDay: null,         // "YYYY-MM-DD" selected in the order-book view
+    bookHour: 12,          // hour index selected in the order-book view
     window: "all",
-    track: "entsoe",       // scoreboard track: "entsoe" (reference) | "weather" (ex-ante)
     sort: { lead: null, metric: "mae", dir: 1 }, // dir 1 = best first
     hoverIdx: null,
   };
+
+  // The site shows ONE forecast track: the ex-ante WEATHER track (all model
+  // inputs, weather-based RES). The reference (entsoe) track is kept in the
+  // data plane for research but hidden from the UI. Any input_mode starting
+  // with "weather" (weather, weather+loadfill, …) is the ex-ante track.
+  function isWeatherMode(m) { return /^weather/.test(m || ""); }
 
   // ---------- helpers ----------
 
@@ -135,25 +141,27 @@
       var i = kv.indexOf("=");
       if (i > 0) params[decodeURIComponent(kv.slice(0, i))] = decodeURIComponent(kv.slice(i + 1));
     });
-    if (["board", "explorer", "horizon", "map", "cases"].indexOf(params.view) !== -1) state.view = params.view;
+    if (["board", "explorer", "horizon", "map", "cases", "book"].indexOf(params.view) !== -1) state.view = params.view;
     if (params.zone) state.zone = params.zone;
-    if (params.lead && !isNaN(+params.lead)) state.lead = +params.lead;
     if (params.day && /^\d{4}-\d{2}-\d{2}$/.test(params.day)) state.day = params.day;
     if (params.rev && /^\d{4}-\d{2}-\d{2}$/.test(params.rev)) state.revDay = params.rev;
+    if (params.bday && /^\d{4}-\d{2}-\d{2}$/.test(params.bday)) state.bookDay = params.bday;
+    if (params.bhr && !isNaN(+params.bhr)) state.bookHour = +params.bhr;
     if (params.metric && ["sim", "act", "err"].indexOf(params.metric) !== -1) mapState.metric = params.metric;
     if (params.window) state.window = params.window;
-    if (params.track && ["entsoe", "weather"].indexOf(params.track) !== -1) state.track = params.track;
   }
 
   var suppressHash = false;
   function writeHash() {
     var parts = ["view=" + state.view, "zone=" + encodeURIComponent(state.zone)];
-    if (state.lead !== null) parts.push("lead=" + state.lead);
     if (state.day) parts.push("day=" + state.day);
     if (state.revDay) parts.push("rev=" + state.revDay);
+    if (state.view === "book") {
+      if (state.bookDay) parts.push("bday=" + state.bookDay);
+      parts.push("bhr=" + state.bookHour);
+    }
     if (state.view === "map" && mapState.metric !== "sim") parts.push("metric=" + mapState.metric);
     if (state.window && state.window !== "all") parts.push("window=" + encodeURIComponent(state.window));
-    if (state.track && state.track !== "entsoe") parts.push("track=" + state.track);
     suppressHash = true;
     window.location.hash = parts.join("&");
     // hashchange fires async; release the guard on next tick
@@ -171,14 +179,22 @@
     });
   }
 
-  function zoneDays(zoneData, lead) {
-    return zoneData.days.filter(function (d) { return d.lead_days === lead; });
+  // Ex-ante weather-track entries only (the reference track is hidden from UI).
+  function weatherDays(zoneData) {
+    return zoneData.days.filter(function (d) { return isWeatherMode(dayInputMode(d)); });
   }
 
-  function zoneLeads(zoneData) {
-    var seen = {};
-    zoneData.days.forEach(function (d) { seen[d.lead_days] = true; });
-    return Object.keys(seen).map(Number).sort(function (a, b) { return a - b; });
+  // Collapse the lead/D-n dimension: the single freshest (lowest-lead) entry per
+  // delivery date. Every forecast uses the latest admissible weather, so the
+  // freshest lead is the best ex-ante estimate and deeper leads are noise.
+  // Returns newest date first.
+  function freshestByDate(days) {
+    var byDate = {};
+    days.forEach(function (d) {
+      var cur = byDate[d.date];
+      if (!cur || d.lead_days < cur.lead_days) byDate[d.date] = d;
+    });
+    return Object.keys(byDate).sort().reverse().map(function (k) { return byDate[k]; });
   }
 
   // ---------- fixture banner ----------
@@ -191,10 +207,11 @@
   // ---------- view switching ----------
 
   var VIEW_CRUMBS = {
-    horizon: "next 7 days",
+    horizon: "recent days",
     map: "map",
     explorer: "zone explorer",
     board: "scoreboard",
+    book: "order book",
     cases: "case studies"
   };
 
@@ -204,10 +221,12 @@
     $("view-board").hidden = v !== "board";
     $("view-horizon").hidden = v !== "horizon";
     $("view-map").hidden = v !== "map";
+    $("view-book").hidden = v !== "book";
     $("view-cases").hidden = v !== "cases";
     var crumb = $("crumb-view");
     if (crumb) crumb.textContent = VIEW_CRUMBS[v] ? "/ " + VIEW_CRUMBS[v] : "";
     if (v === "map") loadMap().then(renderMap);
+    if (v === "book") renderBook();
     document.querySelectorAll(".tab").forEach(function (t) {
       t.setAttribute("aria-selected", String(t.dataset.view === v));
     });
@@ -223,8 +242,9 @@
       if (b === "GR") return 1;
       return a < b ? -1 : a > b ? 1 : 0;
     });
-    ["zone-select", "hzone-select"].forEach(function (id) {
+    ["zone-select", "hzone-select", "bzone-select"].forEach(function (id) {
       var sel = $(id);
+      if (!sel) return;
       sel.textContent = "";
       zones.forEach(function (z) {
         var o = el("option", null, z);
@@ -232,26 +252,6 @@
         sel.appendChild(o);
       });
       sel.value = state.zone;
-    });
-  }
-
-  function renderLeadButtons(leads) {
-    var wrap = $("lead-filter");
-    var box = $("lead-buttons");
-    box.textContent = "";
-    wrap.hidden = leads.length < 2;
-    leads.forEach(function (l) {
-      var b = el("button", null, l === 1 ? "D-1" : "D-" + l);
-      b.type = "button";
-      b.setAttribute("aria-pressed", String(l === state.lead));
-      b.addEventListener("click", function () {
-        if (state.lead === l) return;
-        state.lead = l;
-        state.hoverIdx = null;
-        renderExplorer();
-        writeHash();
-      });
-      box.appendChild(b);
     });
   }
 
@@ -264,13 +264,9 @@
       var li = el("li");
       var b = el("button", "day-btn");
       b.type = "button";
-      b.setAttribute("aria-pressed",
-        String(d.date === state.day && (state.dayMode === null || dayInputMode(d) === state.dayMode)));
+      b.setAttribute("aria-pressed", String(d.date === state.day));
       b.appendChild(el("span", "d-date", dayLabel(d.date)));
       var badges = el("span", "d-badges");
-      if (dayInputMode(d) === "weather") {
-        badges.appendChild(el("span", "pill weather", "ex-ante (weather)"));
-      }
       if (isPending(d)) {
         badges.appendChild(el("span", "pill pending", "pending"));
       } else {
@@ -280,7 +276,6 @@
       b.appendChild(badges);
       b.addEventListener("click", function () {
         state.day = d.date;
-        state.dayMode = dayInputMode(d);
         state.hoverIdx = null;
         renderExplorer();
         writeHash();
@@ -593,37 +588,36 @@
     var zoneData = state.zoneCache[state.zone];
     if (!zoneData) return;
 
-    var leads = zoneLeads(zoneData);
-    if (state.lead === null || leads.indexOf(state.lead) === -1) state.lead = leads[0];
-    renderLeadButtons(leads);
-
-    var days = zoneDays(zoneData, state.lead);
+    // Leads collapsed to the freshest forecast per date; ex-ante weather track
+    // only (directives 1 & 3). Newest day first.
+    var days = freshestByDate(weatherDays(zoneData));
     if (!days.length) {
       $("day-list").textContent = "";
-      $("chart-title").textContent = state.zone + " — no days available";
-      $("chart-wrap").textContent = "";
+      $("chart-title").textContent = state.zone + " — ex-ante forecast pending";
+      $("chart-sub").textContent = "";
+      $("day-stats").textContent = "";
+      $("day-comment").textContent = "";
+      $("chart-legend").textContent = "";
+      $("hour-table").textContent = "";
+      var w = $("chart-wrap"); w.textContent = "";
+      w.appendChild(el("p", "pending-note",
+        "No ex-ante (weather-track) days for " + state.zone +
+        " yet — the daily weather runs fill this in as they accumulate."));
       return;
     }
     var found = days.some(function (d) { return d.date === state.day; });
-    if (!state.day || !found) { state.day = days[0].date; state.dayMode = null; }
+    if (!state.day || !found) { state.day = days[0].date; }
 
     renderDayList(days);
-    // Prefer the entry matching both date and track (the same date can carry
-    // one entry per input_mode); fall back to date-only.
     var day = null;
-    days.forEach(function (d) {
-      if (!day && d.date === state.day &&
-          (state.dayMode === null || dayInputMode(d) === state.dayMode)) day = d;
-    });
-    if (!day) days.forEach(function (d) { if (!day && d.date === state.day) day = d; });
+    days.forEach(function (d) { if (!day && d.date === state.day) day = d; });
 
     $("chart-title").textContent = state.zone + " — " + dayLabel(day.date);
     var madeAt = day.prediction_made_utc
       ? " · prediction frozen " + day.prediction_made_utc.replace("T", " ").replace("Z", " UTC")
       : "";
     $("chart-sub").textContent =
-      "Lead time D-" + day.lead_days +
-      (dayInputMode(day) === "weather" ? " · ex-ante (weather) track" : "") +
+      "Ex-ante (weather) forecast" +
       madeAt +
       " · hours shown in Europe/Athens (market day)";
     renderDayStats(day);
@@ -640,38 +634,7 @@
     renderHourTable(day);
   }
 
-  // ---------- horizon (next 7 days) + revision panel ----------
-
-  // Opacity by data age: fresh D-1 fully saturated, older leads slightly faded.
-  // (Kept mild — the primary lead encoding is the dash pattern below.)
-  function leadOpacity(lead) {
-    return Math.max(0.55, 1 - (lead - 1) * 0.07);
-  }
-
-  // Dash pattern by lead: D-1 solid; D-n is dash + (n-1) dots — count the dots
-  // to read the lead. Round linecaps render the 0.1-length segments as dots.
-  function leadDash(lead) {
-    if (!lead || lead <= 1) return null;
-    var parts = ["12", "5"];
-    for (var i = 1; i < lead; i++) parts.push("0.1", "5");
-    return parts.join(" ");
-  }
-
-  // Small inline-SVG legend key showing the lead's line style.
-  function dashKey(lead, color, width) {
-    var svg = svgEl("svg", { width: 30, height: 10, viewBox: "0 0 30 10", "aria-hidden": "true" });
-    svg.style.verticalAlign = "middle";
-    svg.style.marginRight = "6px";
-    var line = svgEl("line", {
-      x1: 1, y1: 5, x2: 29, y2: 5, stroke: color,
-      "stroke-width": width || 2, "stroke-linecap": "round",
-    });
-    var dash = leadDash(lead);
-    if (dash) line.setAttribute("stroke-dasharray", dash);
-    line.style.opacity = leadOpacity(lead);
-    svg.appendChild(line);
-    return svg;
-  }
+  // ---------- horizon (recent market days) + revision panel ----------
 
   function chartColors() {
     var css = getComputedStyle(document.documentElement);
@@ -733,22 +696,21 @@
     return d.trim();
   }
 
-  // Days grouped by date with the freshest (lowest-lead) entry per date.
-  function futureDays(zoneData) {
-    var byDate = {};
-    zoneData.days.forEach(function (d) {
-      if (!isPending(d)) return;                     // horizon = unsettled days only
-      var cur = byDate[d.date];
-      if (!cur || d.lead_days < cur.lead_days) byDate[d.date] = d;
-    });
-    return Object.keys(byDate).sort().map(function (k) { return byDate[k]; }).slice(0, 8);
+  // The recent-market-days window: the freshest ex-ante (weather-track)
+  // forecast per delivery date, most recent N days (settled + upcoming), so the
+  // view straddles today — D-2, D-1, D (today), D+1 — with actuals overlaid
+  // where the day has settled. Leads collapsed (directive 1).
+  var HORIZON_DAYS = 5;
+  function horizonDays(zoneData) {
+    var byDate = freshestByDate(weatherDays(zoneData));   // newest first
+    return byDate.slice(0, HORIZON_DAYS).reverse();       // oldest -> newest for the timeline
   }
 
   function renderHorizon() {
     var zoneData = state.zoneCache[state.zone];
     if (!zoneData) return;
-    var days = futureDays(zoneData);
-    $("hz-title").textContent = state.zone + " — the next " + (days.length || 7) + " market days";
+    var days = horizonDays(zoneData);
+    $("hz-title").textContent = state.zone + " — the last " + (days.length || HORIZON_DAYS) + " market days";
     var wrap = $("hz-wrap");
     wrap.textContent = "";
     var lg = $("hz-legend");
@@ -757,57 +719,47 @@
     if (!days.length) {
       $("hz-sub").textContent = "";
       wrap.appendChild(el("p", "pending-note",
-        "No unsettled forecast days available yet — the horizon fills as the daily runs accumulate."));
+        "No ex-ante (weather-track) forecast days for " + state.zone +
+        " yet — this fills as the daily weather runs accumulate."));
       renderRevisions();
       return;
     }
     $("hz-sub").textContent =
-      "Freshest published prediction per delivery day · solid = next-day model forecast (D-1); " +
-      "dashed = further out, with the dots counting the lead (D-n = n-1 dots) · hours in Europe/Athens";
+      "Freshest ex-ante (weather) forecast per delivery day, with the settled " +
+      "actual overlaid once the day clears · hours in Europe/Athens (market day)";
 
-    // legend: one dash-key per lead present in the horizon
-    var legendColor = chartColors().sim;
-    var leadsPresent = {};
-    days.forEach(function (d) { leadsPresent[d.lead_days] = true; });
-    Object.keys(leadsPresent).map(Number).sort(function (a, b) { return a - b; }).forEach(function (l) {
+    // legend: forecast + actual
+    var C = chartColors();
+    [["sim", "Forecast (ex-ante)"], ["act", "Actual (settled)"]].forEach(function (it) {
       var span = el("span");
-      span.appendChild(dashKey(l, legendColor, 2));
-      span.appendChild(document.createTextNode(l === 1 ? "D-1 (model)" : "D-" + l));
+      var key = el("span", "key " + it[0]);
+      key.setAttribute("aria-hidden", "true");
+      span.appendChild(key);
+      span.appendChild(document.createTextNode(it[1]));
       lg.appendChild(span);
     });
 
-    // announce gap days (e.g. tomorrow before its evening model run lands)
-    var have = {};
-    days.forEach(function (d) { have[d.date] = true; });
-    var gaps = [];
-    if (days.length > 1) {
-      var d0 = new Date(days[0].date + "T12:00:00Z");
-      var dN = new Date(days[days.length - 1].date + "T12:00:00Z");
-      for (var t = d0.getTime(); t <= dN.getTime(); t += 86400000) {
-        var ds = new Date(t).toISOString().slice(0, 10);
-        if (!have[ds]) gaps.push(ds);
-      }
-    }
-
-    // concatenated point list
-    var pts = [];   // {iso, v, day}
+    // concatenated point list (forecast + actual per hour, per day)
+    var pts = [];   // {iso, v, a, day}
     days.forEach(function (d) {
       d.hours.forEach(function (h, i) {
-        pts.push({ iso: h, v: d.sim[i], day: d });
+        pts.push({ iso: h, v: d.sim[i], a: d.actual[i], day: d });
       });
     });
     var n = pts.length;
-    var sc = chartScaffold(wrap, pts.map(function (p) { return p.v; }), n,
-      "Hourly price forecast for the next " + days.length + " market days, " + state.zone);
-    var svg = sc.svg, X = sc.X, Y = sc.Y, C = sc.C, m = sc.m;
+    var vals = pts.map(function (p) { return p.v; });
+    pts.forEach(function (p) { if (p.a !== null && p.a !== undefined) vals.push(p.a); });
+    var sc = chartScaffold(wrap, vals, n,
+      "Hourly ex-ante forecast vs actual for the last " + days.length + " market days, " + state.zone);
+    var svg = sc.svg, X = sc.X, Y = sc.Y, m = sc.m;
 
-    // day separators + weekday labels
+    // day separators + weekday labels + per-day forecast & actual paths
     var idx0 = 0;
     days.forEach(function (d) {
       var idx1 = idx0 + d.hours.length - 1;
       if (idx0 > 0) {
         svg.appendChild(svgEl("line", {
-          x1: X(idx0) , x2: X(idx0), y1: m.t, y2: m.t + sc.ph,
+          x1: X(idx0), x2: X(idx0), y1: m.t, y2: m.t + sc.ph,
           stroke: C.baseline, "stroke-width": 1, "stroke-dasharray": "3 4",
         }));
       }
@@ -817,35 +769,40 @@
       });
       lbl.textContent = dayLabel(d.date).slice(0, 3) + " " + d.date.slice(5);
       svg.appendChild(lbl);
-      var lead = svgEl("text", {
+      var status = svgEl("text", {
         x: (X(idx0) + X(idx1)) / 2, y: m.t + sc.ph + 32, "text-anchor": "middle",
-        fill: C.muted, "font-size": 10, "font-style": d.lead_days > 1 ? "italic" : "normal",
+        fill: C.muted, "font-size": 10,
+        "font-style": isPending(d) ? "italic" : "normal",
       });
-      lead.textContent = "D-" + d.lead_days;
-      svg.appendChild(lead);
+      status.textContent = isPending(d) ? "forecast" : "settled";
+      svg.appendChild(status);
 
-      // per-day path with age fade
-      var seg = pts.slice(idx0, idx1 + 1).map(function (p) { return p.v; });
       var Xoff = function (i) { return X(idx0 + i); };
-      var hzAttrs = {
-        d: pathString(seg, Xoff, Y), fill: "none", stroke: C.sim,
+      // forecast line
+      svg.appendChild(svgEl("path", {
+        d: pathString(d.sim, Xoff, Y), fill: "none", stroke: C.sim,
         "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round",
-        opacity: leadOpacity(d.lead_days),
-      };
-      var hzDash = leadDash(d.lead_days);
-      if (hzDash) hzAttrs["stroke-dasharray"] = hzDash;
-      svg.appendChild(svgEl("path", hzAttrs));
+      }));
+      // actual line (breaks at nulls)
+      var actD = pathString(d.actual, Xoff, Y);
+      if (actD) {
+        svg.appendChild(svgEl("path", {
+          d: actD, fill: "none", stroke: C.act,
+          "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round",
+        }));
+      }
       idx0 = idx1 + 1;
     });
 
     // hover
     var hoverLine = svgEl("line", { y1: m.t, y2: m.t + sc.ph, stroke: C.baseline, "stroke-width": 1, visibility: "hidden" });
     svg.appendChild(hoverLine);
-    var dot = svgEl("circle", { r: 4.5, fill: C.sim, stroke: C.surface, "stroke-width": 2, visibility: "hidden" });
-    svg.appendChild(dot);
+    var dotS = svgEl("circle", { r: 4.5, fill: C.sim, stroke: C.surface, "stroke-width": 2, visibility: "hidden" });
+    var dotA = svgEl("circle", { r: 4.5, fill: C.act, stroke: C.surface, "stroke-width": 2, visibility: "hidden" });
+    svg.appendChild(dotS); svg.appendChild(dotA);
     var overlay = svgEl("rect", {
       x: m.l, y: m.t, width: sc.pw, height: sc.ph, fill: "transparent",
-      class: "hover-rect", tabindex: "0", "aria-label": "Forecast values across the horizon.",
+      class: "hover-rect", tabindex: "0", "aria-label": "Forecast and actual values across recent days.",
     });
     svg.appendChild(overlay);
     var tooltip = el("div", "tooltip");
@@ -859,23 +816,32 @@
       var x = X(i);
       hoverLine.setAttribute("x1", x); hoverLine.setAttribute("x2", x);
       hoverLine.setAttribute("visibility", "visible");
-      dot.setAttribute("cx", x); dot.setAttribute("cy", Y(p.v));
-      dot.setAttribute("visibility", "visible");
+      dotS.setAttribute("cx", x); dotS.setAttribute("cy", Y(p.v));
+      dotS.setAttribute("visibility", "visible");
+      if (p.a !== null && p.a !== undefined) {
+        dotA.setAttribute("cx", x); dotA.setAttribute("cy", Y(p.a));
+        dotA.setAttribute("visibility", "visible");
+      } else {
+        dotA.setAttribute("visibility", "hidden");
+      }
       tooltip.textContent = "";
       tooltip.appendChild(el("div", "tt-head",
         dayLabel(p.day.date) + " · " + hourLabel(p.iso) + "–" + hourEndLabel(p.iso) + " Athens"));
-      var row = el("div", "tt-row");
-      var key = el("span", "tt-key");
-      key.style.borderTopColor = C.sim;
-      row.appendChild(key);
-      row.appendChild(el("span", "tt-val", fmt(p.v, 2)));
-      row.appendChild(el("span", "tt-name", "forecast (D-" + p.day.lead_days + ")"));
-      tooltip.appendChild(row);
+      [[C.sim, p.v, "forecast"], [C.act, p.a, p.a === null || p.a === undefined ? "actual (pending)" : "actual"]]
+        .forEach(function (rd) {
+          var row = el("div", "tt-row");
+          var key = el("span", "tt-key");
+          key.style.borderTopColor = rd[0];
+          row.appendChild(key);
+          row.appendChild(el("span", "tt-val", rd[1] === null || rd[1] === undefined ? "—" : fmt(rd[1], 2)));
+          row.appendChild(el("span", "tt-name", rd[2]));
+          tooltip.appendChild(row);
+        });
       var rect = svg.getBoundingClientRect();
       var scale = rect.width / sc.VBW;
-      var px = x * scale, tw;
+      var px = x * scale;
       tooltip.style.display = "block";
-      tw = tooltip.offsetWidth;
+      var tw = tooltip.offsetWidth;
       var left = px + 14;
       if (left + tw > rect.width - 4) left = px - tw - 14;
       tooltip.style.left = Math.max(0, left) + "px";
@@ -888,17 +854,10 @@
     });
     overlay.addEventListener("pointerleave", function () {
       hoverLine.setAttribute("visibility", "hidden");
-      dot.setAttribute("visibility", "hidden");
+      dotS.setAttribute("visibility", "hidden");
+      dotA.setAttribute("visibility", "hidden");
       tooltip.style.display = "none";
     });
-
-    if (gaps.length) {
-      wrap.appendChild(el("p", "pending-note",
-        gaps.map(dayLabel).join(", ") +
-        (gaps.length > 1 ? " have" : " has") +
-        " no frozen forecast yet — the next-day model forecast is written the evening before " +
-        "(17:30/19:30 UTC runs), and is never pre-filled with a placeholder."));
-    }
 
     renderRevisions();
   }
@@ -1001,41 +960,21 @@
     return { showAll: function () { off = {}; hover = null; apply(); } };
   }
 
-  // Compact, collision-free label for a forecast vintage. The base is the lead
-  // (D-1, D-2 …); but a single delivery day + lead can carry several vintages
-  // that differ only in `input_mode` — the (date, lead_days, input_mode) slice
-  // identity is by design (e.g. a 12:30 post-auction "entsoe" run and a later
-  // "…loadfill/resfill" gap-fill run both land as D-1). We disambiguate with a
-  // compact ◦-tag so no two legend entries read the same:
-  //   pure "entsoe"        -> "D-1"          (reference, post-auction inputs)
-  //   any "weather…" mode   -> "D-1 ◦weather" (ex-ante weather-RES track)
-  //   any other "…fill" mode-> "D-1 ◦fill"    (reference, load/RES gap-filled)
-  function vintageTag(inputMode) {
-    var m = inputMode || "entsoe";
-    if (/^weather/.test(m)) return "◦weather";  // ◦weather
-    if (/fill/.test(m)) return "◦fill";         // ◦fill
-    return "";
-  }
-  function vintageLabel(d) {
-    var base = "D-" + d.lead_days;
-    var tag = vintageTag(dayInputMode(d));
-    return tag ? base + " " + tag : base;
-  }
-
   // Count of settled (non-null) actual points in a day entry.
   function settledCount(d) {
     return d.actual.filter(function (a) { return a !== null && a !== undefined; }).length;
   }
 
-  // Revision panel: every vintage we published for one delivery day.
+  // "What we said, when" — the freshest ex-ante (weather) forecast we published
+  // for one delivery day, plus the settled actual. Reduced (directive 2) from
+  // the old multi-vintage overlay: every forecast uses the latest admissible
+  // weather, so the freshest prediction is the one that matters.
   function renderRevisions() {
     var zoneData = state.zoneCache[state.zone];
     if (!zoneData) return;
     var byDate = {};
-    zoneData.days.forEach(function (d) {
-      (byDate[d.date] = byDate[d.date] || []).push(d);
-    });
-    // days worth showing: newest 14 (future first for defaults)
+    freshestByDate(weatherDays(zoneData)).forEach(function (d) { byDate[d.date] = d; });
+    // newest 14 delivery days that have an ex-ante forecast
     var dates = Object.keys(byDate).sort().slice(-14);
     var wrap = $("rev-wrap");
     var lg = $("rev-legend");
@@ -1043,17 +982,17 @@
     wrap.textContent = ""; lg.textContent = ""; btns.textContent = "";
     if (!dates.length) {
       $("rev-title").textContent = "What we said, when";
+      wrap.appendChild(el("p", "pending-note",
+        "No ex-ante (weather-track) forecast days for " + state.zone + " yet."));
       return;
     }
     if (!state.revDay || dates.indexOf(state.revDay) === -1) {
-      // default: tomorrow-most future day with >1 vintage, else newest
-      var multi = dates.filter(function (dd) { return byDate[dd].length > 1; });
-      state.revDay = multi.length ? multi[multi.length - 1] : dates[dates.length - 1];
+      state.revDay = dates[dates.length - 1];
     }
     dates.forEach(function (dd) {
       var b = el("button", null, dd.slice(5));
       b.type = "button";
-      b.title = dayLabel(dd) + " · " + byDate[dd].length + " vintage" + (byDate[dd].length > 1 ? "s" : "");
+      b.title = dayLabel(dd);
       b.setAttribute("aria-pressed", String(dd === state.revDay));
       b.addEventListener("click", function () {
         state.revDay = dd;
@@ -1063,29 +1002,15 @@
       btns.appendChild(b);
     });
 
-    // Draw order: longest lead first so the freshest D-1 sits on top; within an
-    // equal lead the pure-entsoe reference draws last (on top of its fill/weather
-    // siblings). Legend order matches draw order.
-    function modeRank(d) { return vintageTag(dayInputMode(d)) === "" ? 2 : 1; }
-    var entries = byDate[state.revDay].slice().sort(function (a, b) {
-      return (b.lead_days - a.lead_days) || (modeRank(a) - modeRank(b));
-    });
-    // The actual (settled) line is the same for every vintage of a delivery day;
-    // take it from whichever entry carries the most settled hours. Empty => hide.
-    var actualSrc = entries.reduce(function (best, d) {
-      return settledCount(d) > settledCount(best) ? d : best;
-    }, entries[0]);
-    var hasActual = settledCount(actualSrc) > 0;
-    var hoursSrc = actualSrc;
+    var d = byDate[state.revDay];
+    var hasActual = settledCount(d) > 0;
     $("rev-title").textContent = "What we said, when — " + state.zone + " · " + dayLabel(state.revDay);
 
     var C = chartColors();
-    // values pool for scale
-    var vals = [];
-    entries.forEach(function (d) { d.sim.forEach(function (v) { vals.push(v); }); });
-    if (hasActual) actualSrc.actual.forEach(function (a) { if (a !== null && a !== undefined) vals.push(a); });
-    var n = hoursSrc.hours.length;
-    var sc = chartScaffold(wrap, vals, n, "Forecast vintages for " + state.revDay + ", " + state.zone);
+    var vals = d.sim.slice();
+    if (hasActual) d.actual.forEach(function (a) { if (a !== null && a !== undefined) vals.push(a); });
+    var n = d.hours.length;
+    var sc = chartScaffold(wrap, vals, n, "Ex-ante forecast vs actual for " + state.revDay + ", " + state.zone);
     var svg = sc.svg, X = sc.X, Y = sc.Y;
 
     for (var i = 0; i < n; i += 3) {
@@ -1093,79 +1018,60 @@
         x: X(i), y: sc.m.t + sc.ph + 20, "text-anchor": "middle",
         fill: sc.C.muted, "font-size": 11.5, "font-variant-numeric": "tabular-nums",
       });
-      tx.textContent = hourLabel(hoursSrc.hours[i]);
+      tx.textContent = hourLabel(d.hours[i]);
       svg.appendChild(tx);
     }
 
-    // Draw each vintage's line and collect (chip, path) as a focusable series.
-    // Series key is (lead|input_mode) so the two D-1 slices are distinct.
     var focusSeries = [];
-    entries.forEach(function (d) {
-      var revAttrs = {
-        d: pathString(d.sim, X, Y), fill: "none", stroke: sc.C.sim,
-        "stroke-width": d.lead_days === 1 ? 2.4 : 1.8,
-        "stroke-linejoin": "round", "stroke-linecap": "round",
-        opacity: leadOpacity(d.lead_days),
-      };
-      var revDash = leadDash(d.lead_days);
-      if (revDash) revAttrs["stroke-dasharray"] = revDash;
-      var path = svgEl("path", revAttrs);
-      svg.appendChild(path);
-
-      var chip = el("span");
-      chip.appendChild(dashKey(d.lead_days, C.sim, d.lead_days === 1 ? 2.4 : 1.8));
-      chip.appendChild(document.createTextNode(vintageLabel(d)));
-      // full-detail tooltip: exact input_mode + the frozen prediction stamp
-      chip.title = vintageLabel(d) + "  ·  input_mode: " + dayInputMode(d) +
-        (d.prediction_made_utc
-          ? "  ·  frozen " + d.prediction_made_utc.replace("T", " ").replace("Z", " UTC")
-          : "");
-      lg.appendChild(chip);
-
-      focusSeries.push({
-        key: d.lead_days + "|" + dayInputMode(d),
-        chip: chip, els: [path], baseOpacity: leadOpacity(d.lead_days),
-      });
+    // forecast line
+    var simPath = svgEl("path", {
+      d: pathString(d.sim, X, Y), fill: "none", stroke: sc.C.sim,
+      "stroke-width": 2.4, "stroke-linejoin": "round", "stroke-linecap": "round",
     });
+    svg.appendChild(simPath);
+    var simChip = el("span");
+    simChip.appendChild(el("span", "key sim"));
+    simChip.appendChild(document.createTextNode("Forecast (ex-ante)"));
+    simChip.title = "Ex-ante (weather) forecast · input_mode: " + dayInputMode(d) +
+      (d.prediction_made_utc
+        ? "  ·  frozen " + d.prediction_made_utc.replace("T", " ").replace("Z", " UTC")
+        : "");
+    lg.appendChild(simChip);
+    focusSeries.push({ key: "sim", chip: simChip, els: [simPath], baseOpacity: 1 });
 
-    // Actual line + legend — only when the day has at least one settled hour.
     if (hasActual) {
       var actPath = svgEl("path", {
-        d: pathString(actualSrc.actual, X, Y), fill: "none", stroke: sc.C.act,
+        d: pathString(d.actual, X, Y), fill: "none", stroke: sc.C.act,
         "stroke-width": 2.4, "stroke-linejoin": "round", "stroke-linecap": "round",
       });
       svg.appendChild(actPath);
-      // a lone settled point (no realized neighbours) needs a dot to be visible
       var actEls = [actPath];
       for (var k = 0; k < n; k++) {
-        var av = actualSrc.actual[k];
+        var av = d.actual[k];
         if (av === null || av === undefined) continue;
-        var pv = k > 0 ? actualSrc.actual[k - 1] : null;
-        var nv = k < n - 1 ? actualSrc.actual[k + 1] : null;
+        var pv = k > 0 ? d.actual[k - 1] : null;
+        var nv = k < n - 1 ? d.actual[k + 1] : null;
         if ((pv === null || pv === undefined) && (nv === null || nv === undefined)) {
-          var dot = svgEl("circle", {
+          svg.appendChild(svgEl("circle", {
             cx: X(k), cy: Y(av), r: 4, fill: sc.C.act, stroke: sc.C.surface, "stroke-width": 2,
-          });
-          svg.appendChild(dot);
-          actEls.push(dot);
+          }));
         }
       }
       var actChip = el("span");
       actChip.appendChild(el("span", "key act"));
-      var partial = settledCount(actualSrc) < n;
+      var partial = settledCount(d) < n;
       actChip.appendChild(document.createTextNode(partial ? "Actual (settling)" : "Actual (settled)"));
       actChip.title = "Actual settled price" + (partial
-        ? " (" + settledCount(actualSrc) + "/" + n + " hours settled so far)" : "");
+        ? " (" + settledCount(d) + "/" + n + " hours settled so far)" : "");
       lg.appendChild(actChip);
       focusSeries.push({ key: "act", chip: actChip, els: actEls, baseOpacity: 1 });
+    } else {
+      wrap.appendChild(el("p", "pending-note",
+        "This delivery day has not settled yet — the actual appears once it clears."));
     }
 
     wrap.appendChild(svg);
     attachSeriesFocus(lg, focusSeries);
-    if (entries.length === 1) {
-      wrap.appendChild(el("p", "pending-note",
-        "One vintage so far — earlier leads appear as the horizon runs accumulate day by day."));
-    }
   }
 
   // ---------- map view (bidding-zone polygons) ----------
@@ -1479,39 +1385,11 @@
 
   // ---------- scoreboard ----------
 
-  // Forecast tracks: reference = ENTSO-E D-1 inputs (frozen pre-delivery,
-  // post-auction); ex-ante = weather-based RES (freezable pre-auction).
-  // Score entries without input_mode are legacy reference-track rows.
-  var TRACKS = [
-    ["entsoe", "Reference (ENTSO-E)"],
-    ["weather", "Ex-ante (weather)"],
-  ];
-
-  function scoreTrack(s) { return s.input_mode || "entsoe"; }
-
+  // The scoreboard reports ONLY the ex-ante weather track (directive 3); the
+  // reference (entsoe) track is kept in the data plane but hidden from the UI.
   function trackScores() {
     return state.scoreboard.scores.filter(function (s) {
-      return scoreTrack(s) === state.track;
-    });
-  }
-
-  function renderTrackButtons() {
-    var box = $("track-select");
-    if (!box) return;
-    box.textContent = "";
-    TRACKS.forEach(function (t) {
-      var b = el("button", null, t[1]);
-      b.type = "button";
-      b.setAttribute("aria-pressed", String(state.track === t[0]));
-      b.addEventListener("click", function () {
-        if (state.track === t[0]) return;
-        state.track = t[0];
-        renderTrackButtons();
-        renderWindowSelect();
-        renderScoreboard();
-        writeHash();
-      });
-      box.appendChild(b);
+      return isWeatherMode(s.input_mode);
     });
   }
 
@@ -1565,11 +1443,9 @@
       var tbody0 = el("tbody");
       var tr0 = el("tr");
       var td0 = el("td", "null",
-        state.track === "weather"
-          ? "No scored days on the ex-ante (weather) track yet — this track freezes " +
-            "before the 12:00 CET auction and starts accumulating scores once the " +
-            "weather-based morning runs begin and their delivery days settle."
-          : "No scored days on this track yet.");
+        "No scored days on the ex-ante (weather) track yet — this track freezes " +
+        "before the 12:00 CET auction and starts accumulating scores once the " +
+        "weather-based morning runs begin and their delivery days settle.");
       td0.colSpan = 1;
       tr0.appendChild(td0);
       tbody0.appendChild(tr0);
@@ -1674,6 +1550,293 @@
     table.appendChild(tbody);
   }
 
+  // ---------- order book (merit-order ladder) ----------
+  // Per zone × market day × hour: the supply ladder stacked left→right by
+  // ascending price (x = cumulative MW, y = €/MWh), coloured by owner, with a
+  // dashed marker at the clearing price (the model's simulated price for that
+  // zone-hour — "πού έκατσε η μπίλια") and a second marker at the settled actual.
+
+  var bookPlayTimer = null;
+
+  function stopBookPlay() {
+    if (bookPlayTimer) { clearInterval(bookPlayTimer); bookPlayTimer = null; }
+    var b = $("book-play");
+    if (b) b.textContent = "▶ Play day";
+  }
+
+  // Stable colour per owner: named tags get fixed hues; unit codes hash to one.
+  function bookOwnerColor(owner) {
+    if (owner === "RES") return "#3F9B6D";
+    if (owner === "IMPORT") return "#2C6BA8";
+    if (owner === "BACKSTOP") return "#8E6BB0";
+    if (owner === "DEMAND") return "#9AA3AD";
+    if (owner === "EXTRA" || owner === "STRATEGIST") return "#C4643C";
+    var h = 0;
+    for (var i = 0; i < owner.length; i++) h = (h * 31 + owner.charCodeAt(i)) >>> 0;
+    return "hsl(" + (h % 360) + ", 48%, 52%)";
+  }
+
+  function bookOwnerLabel(owner) {
+    // ENTSO-E unit codes are long; show a compact tail for the legend.
+    if (["RES", "IMPORT", "BACKSTOP", "DEMAND", "EXTRA", "STRATEGIST"].indexOf(owner) !== -1) return owner;
+    return owner.length > 12 ? "…" + owner.slice(-8) : owner;
+  }
+
+  function loadBook(zone, date) {
+    var key = zone + "|" + date;
+    if (state.bookCache[key] !== undefined) return Promise.resolve(state.bookCache[key]);
+    return loadWithFallback("books/" + encodeURIComponent(zone) + "/" + date).then(
+      function (res) { state.bookCache[key] = res.json; return res.json; },
+      function () { state.bookCache[key] = null; return null; }   // no book for this day
+    );
+  }
+
+  function renderBook() {
+    var zoneData = state.zoneCache[state.zone];
+    if (!zoneData) { loadZone(state.zone).then(renderBook); return; }
+    if ($("bzone-select")) $("bzone-select").value = state.zone;
+
+    // Day options: the freshest ex-ante (weather) days — the recent window that
+    // also has captured books synced to the data plane.
+    var days = freshestByDate(weatherDays(zoneData));
+    var btns = $("book-daybtns");
+    btns.textContent = "";
+    if (!days.length) {
+      $("book-title").textContent = state.zone + " — order book pending";
+      $("book-legend").textContent = "";
+      $("book-comment").textContent = "";
+      var w0 = $("book-wrap"); w0.textContent = "";
+      w0.appendChild(el("p", "pending-note",
+        "No ex-ante (weather-track) days for " + state.zone + " yet — the order book " +
+        "appears once the daily runs and their captured books accumulate."));
+      return;
+    }
+    if (!state.bookDay || !days.some(function (d) { return d.date === state.bookDay; })) {
+      state.bookDay = days[0].date;
+    }
+    days.slice(0, 14).forEach(function (d) {
+      var b = el("button", null, d.date.slice(5));
+      b.type = "button";
+      b.title = dayLabel(d.date);
+      b.setAttribute("aria-pressed", String(d.date === state.bookDay));
+      b.addEventListener("click", function () {
+        if (state.bookDay === d.date) return;
+        stopBookPlay();
+        state.bookDay = d.date;
+        renderBook();
+        writeHash();
+      });
+      btns.appendChild(b);
+    });
+
+    var fday = null;
+    days.forEach(function (d) { if (!fday && d.date === state.bookDay) fday = d; });
+
+    $("book-title").textContent = state.zone + " — order book · " + dayLabel(state.bookDay);
+    var wrap = $("book-wrap");
+    wrap.textContent = "";
+    wrap.appendChild(el("p", "pending-note", "Loading order book…"));
+
+    loadBook(state.zone, state.bookDay).then(function (book) {
+      if (state.view !== "book" || state.bookDay !== fday.date) return;   // stale
+      if (!book || !book.supply || !book.supply.length) {
+        wrap.textContent = "";
+        $("book-legend").textContent = "";
+        $("book-comment").textContent = "";
+        wrap.appendChild(el("p", "pending-note",
+          "No captured order book for " + dayLabel(state.bookDay) + " in the data plane. " +
+          "Books are published for recent forecast days and record backfills."));
+        stopBookPlay();
+        return;
+      }
+      var nH = Math.min(book.supply.length, fday.hours.length);
+      var slider = $("book-hour-slider");
+      slider.max = nH - 1;
+      if (state.bookHour == null || state.bookHour < 0 || state.bookHour >= nH) state.bookHour = Math.min(12, nH - 1);
+      slider.value = state.bookHour;
+      renderBookLadder(book, fday, state.bookHour);
+    });
+  }
+
+  function renderBookLadder(book, fday, hourIdx) {
+    var wrap = $("book-wrap");
+    wrap.textContent = "";
+    var supply = (book.supply[hourIdx] || []).map(function (o) {
+      return { price: o[0], mw: o[1], owner: book.owners[o[2]] };
+    });
+    var clearing = fday.sim[hourIdx];
+    var actual = fday.actual[hourIdx];
+    $("book-hour-label").textContent =
+      hourLabel(fday.hours[hourIdx]) + "–" + hourEndLabel(fday.hours[hourIdx]) + " Athens";
+
+    if (!supply.length) {
+      wrap.appendChild(el("p", "pending-note", "No supply orders for this hour."));
+      return;
+    }
+
+    // cumulative MW + the "ball" (cumulative MW where the ladder reaches the
+    // clearing price — the marginal block).
+    var cum = 0, clearMW = null;
+    supply.forEach(function (o) {
+      o.cum0 = cum; cum += o.mw; o.cum1 = cum;
+      if (clearMW === null && clearing !== null && clearing !== undefined && o.price >= clearing) clearMW = o.cum0;
+    });
+    var totalMW = cum;
+    if (clearMW === null) clearMW = totalMW;   // clearing above the whole ladder
+
+    // x window: focus on the cleared region with context beyond the ball.
+    var xMax = Math.max(clearMW * 1.5, clearMW + 500, 100);
+    xMax = Math.min(xMax, totalMW);
+    // y window: keep the region around clearing readable; clip €3000 demand-cap
+    // blocks. Base on clearing/actual and the supply price near the ball.
+    var yRef = supply.filter(function (o) { return o.cum1 <= xMax; })
+      .reduce(function (m, o) { return Math.max(m, o.price); }, 0);
+    var yMax = Math.max(clearing || 0, actual || 0, yRef) * 1.18;
+    if (!(yMax > 0)) yMax = 50;
+
+    var VBW = 900, VBH = 420;
+    var m = { t: 28, r: 16, b: 40, l: 56 };
+    var pw = VBW - m.l - m.r, ph = VBH - m.t - m.b;
+    function X(v) { return m.l + Math.max(0, Math.min(1, v / xMax)) * pw; }
+    function Y(v) { return m.t + ph - Math.max(0, Math.min(1, v / yMax)) * ph; }
+    var C = chartColors();
+
+    var svg = svgEl("svg", {
+      viewBox: "0 0 " + VBW + " " + VBH, role: "img",
+      "aria-label": "Merit-order supply ladder for " + state.zone + " " + state.bookDay +
+        " hour " + hourLabel(fday.hours[hourIdx]),
+    });
+
+    // y gridlines + ticks
+    var yStep = niceStep(yMax, 6);
+    for (var gy = 0; gy <= yMax + 1e-9; gy += yStep) {
+      var yy = Y(gy);
+      svg.appendChild(svgEl("line", {
+        x1: m.l, x2: m.l + pw, y1: yy, y2: yy, stroke: C.grid, "stroke-width": 1,
+        "shape-rendering": "crispEdges",
+      }));
+      var tk = svgEl("text", { x: m.l - 8, y: yy + 4, "text-anchor": "end", fill: C.muted,
+        "font-size": 11.5, "font-variant-numeric": "tabular-nums" });
+      tk.textContent = fmt(gy, 0);
+      svg.appendChild(tk);
+    }
+    var unit = svgEl("text", { x: m.l - 8, y: m.t - 12, "text-anchor": "end", fill: C.muted, "font-size": 11 });
+    unit.textContent = "€/MWh";
+    svg.appendChild(unit);
+
+    // x ticks (MW)
+    var xStep = niceStep(xMax, 6);
+    for (var gx = 0; gx <= xMax + 1e-9; gx += xStep) {
+      svg.appendChild(svgEl("line", {
+        x1: X(gx), x2: X(gx), y1: m.t + ph, y2: m.t + ph + 4, stroke: C.muted, "stroke-width": 1,
+      }));
+      var xt = svgEl("text", { x: X(gx), y: m.t + ph + 18, "text-anchor": "middle", fill: C.muted,
+        "font-size": 11.5, "font-variant-numeric": "tabular-nums" });
+      xt.textContent = fmt(gx, 0);
+      svg.appendChild(xt);
+    }
+    var xlab = svgEl("text", { x: m.l + pw, y: m.t + ph + 34, "text-anchor": "end", fill: C.muted, "font-size": 11 });
+    xlab.textContent = "cumulative MW (ascending offer price)";
+    svg.appendChild(xlab);
+
+    // supply blocks (owner-coloured bars from 0 to their offer price)
+    var tooltip = el("div", "tooltip");
+    tooltip.style.display = "none";
+    supply.forEach(function (o) {
+      if (o.cum0 > xMax) return;
+      var x0 = X(o.cum0), x1 = X(o.cum1);
+      var w = Math.max(0.6, x1 - x0);
+      var yTop = Y(o.price);
+      var rect = svgEl("rect", {
+        x: x0, y: yTop, width: w, height: (m.t + ph) - yTop,
+        fill: bookOwnerColor(o.owner), "fill-opacity": 0.82,
+        stroke: C.surface, "stroke-width": w > 2 ? 0.5 : 0, class: "book-block",
+      });
+      rect.addEventListener("pointerenter", function (ev) {
+        tooltip.textContent = "";
+        tooltip.appendChild(el("div", "tt-head", bookOwnerLabel(o.owner)));
+        [["offer", fmt(o.price, 2) + " €/MWh"], ["block", fmt(o.mw, 1) + " MW"],
+         ["cumulative", fmt(o.cum1, 0) + " MW"]].forEach(function (r) {
+          var row = el("div", "tt-row");
+          row.appendChild(el("span", "tt-val", r[1]));
+          row.appendChild(el("span", "tt-name", r[0]));
+          tooltip.appendChild(row);
+        });
+        var rct = svg.getBoundingClientRect();
+        var sc = rct.width / VBW;
+        tooltip.style.display = "block";
+        var left = (x0 + w + 8) * sc;
+        if (left + tooltip.offsetWidth > rct.width) left = x0 * sc - tooltip.offsetWidth - 8;
+        tooltip.style.left = Math.max(0, left) + "px";
+        tooltip.style.top = Math.max(0, yTop * sc - 10) + "px";
+      });
+      rect.addEventListener("pointerleave", function () { tooltip.style.display = "none"; });
+      svg.appendChild(rect);
+    });
+
+    // clearing price line + "ball" where the ladder reaches it
+    function marker(price, color, label, dash) {
+      if (price === null || price === undefined) return;
+      var yy = Y(price);
+      svg.appendChild(svgEl("line", {
+        x1: m.l, x2: m.l + pw, y1: yy, y2: yy, stroke: color, "stroke-width": 2,
+        "stroke-dasharray": dash || null,
+      }));
+      var t = svgEl("text", { x: m.l + pw - 4, y: yy - 5, "text-anchor": "end",
+        fill: color, "font-size": 12, "font-weight": 600 });
+      t.textContent = label + " €" + fmt(price, 1);
+      svg.appendChild(t);
+    }
+    marker(actual, C.act, "actual", null);
+    marker(clearing, C.sim, "clearing", "7 4");
+    if (clearing !== null && clearing !== undefined) {
+      var bx = X(clearMW), by = Y(clearing);
+      svg.appendChild(svgEl("line", {
+        x1: bx, x2: bx, y1: by, y2: m.t + ph, stroke: C.sim, "stroke-width": 1.5, "stroke-dasharray": "3 4",
+      }));
+      svg.appendChild(svgEl("circle", { cx: bx, cy: by, r: 6, fill: C.sim, stroke: C.surface, "stroke-width": 2 }));
+    }
+
+    wrap.appendChild(svg);
+    wrap.appendChild(tooltip);
+
+    // legend: top owners by MW within the visible window
+    var byOwner = {};
+    supply.forEach(function (o) { if (o.cum0 <= xMax) byOwner[o.owner] = (byOwner[o.owner] || 0) + o.mw; });
+    var top = Object.keys(byOwner).sort(function (a, b) { return byOwner[b] - byOwner[a]; }).slice(0, 10);
+    var lg = $("book-legend");
+    lg.textContent = "";
+    top.forEach(function (ow) {
+      var span = el("span");
+      var key = el("span", "key");
+      key.style.background = bookOwnerColor(ow);
+      key.style.borderTopColor = bookOwnerColor(ow);
+      span.appendChild(key);
+      span.appendChild(document.createTextNode(bookOwnerLabel(ow) + " · " + fmt(byOwner[ow], 0) + " MW"));
+      span.title = ow;
+      lg.appendChild(span);
+    });
+
+    // one-line commentary
+    var cp = $("book-comment");
+    var marginal = null;
+    supply.forEach(function (o) { if (marginal === null && o.cum1 >= clearMW) marginal = o; });
+    var bits = "Cleared around " + fmt(clearMW, 0) + " MW of " + fmt(totalMW, 0) +
+      " MW offered. ";
+    if (clearing !== null && clearing !== undefined) {
+      bits += "Model clearing €" + fmt(clearing, 1) + "/MWh";
+      if (marginal) bits += ", set near " + bookOwnerLabel(marginal.owner) + " (offer €" + fmt(marginal.price, 1) + ")";
+      bits += ".";
+    }
+    if (actual !== null && actual !== undefined) {
+      bits += " Settled actual €" + fmt(actual, 1) + "/MWh (" +
+        (actual > clearing ? "+" : "") + fmt(actual - clearing, 1) + " vs model).";
+    } else {
+      bits += " Actual not yet settled.";
+    }
+    cp.textContent = bits;
+  }
+
   // ---------- footer ----------
 
   function humanizeAgo(iso) {
@@ -1707,13 +1870,16 @@
 
   function selectZone(zone, keepDay) {
     state.zone = zone;
-    if (!keepDay) { state.day = null; state.revDay = null; }
+    if (!keepDay) { state.day = null; state.revDay = null; state.bookDay = null; }
     state.hoverIdx = null;
+    stopBookPlay();
     $("zone-select").value = zone;
     $("hzone-select").value = zone;
+    if ($("bzone-select")) $("bzone-select").value = zone;
     loadZone(zone).then(function () {
       renderExplorer();
       renderHorizon();
+      if (state.view === "book") renderBook();
       writeHash();
     }).catch(function (err) {
       $("chart-title").textContent = zone + " — failed to load zone data";
@@ -1732,7 +1898,6 @@
     if (state.scoreboard) {
       if (state.scoreboard.zones.indexOf(state.zone) === -1) state.zone = state.scoreboard.zones[0];
       $("zone-select").value = state.zone;
-      renderTrackButtons();
       renderWindowSelect();
       renderScoreboard();
       selectZone(state.zone, true);
@@ -1755,6 +1920,37 @@
     $("map-day-slider").addEventListener("input", function (ev) {
       mapState.dayIdx = +ev.target.value;
       renderMap();
+    });
+    if ($("bzone-select")) {
+      $("bzone-select").addEventListener("change", function (ev) { selectZone(ev.target.value, true); state.bookDay = null; renderBook(); });
+    }
+    $("book-hour-slider").addEventListener("input", function (ev) {
+      stopBookPlay();
+      state.bookHour = +ev.target.value;
+      var zoneData = state.zoneCache[state.zone];
+      var days = zoneData ? freshestByDate(weatherDays(zoneData)) : [];
+      var fday = null;
+      days.forEach(function (d) { if (!fday && d.date === state.bookDay) fday = d; });
+      var book = state.bookCache[state.zone + "|" + state.bookDay];
+      if (book && fday) renderBookLadder(book, fday, state.bookHour);
+      writeHash();
+    });
+    $("book-play").addEventListener("click", function () {
+      if (bookPlayTimer) { stopBookPlay(); return; }
+      var slider = $("book-hour-slider");
+      var nH = (+slider.max) + 1;
+      $("book-play").textContent = "❚❚ Pause";
+      bookPlayTimer = setInterval(function () {
+        var zoneData = state.zoneCache[state.zone];
+        var days = zoneData ? freshestByDate(weatherDays(zoneData)) : [];
+        var fday = null;
+        days.forEach(function (d) { if (!fday && d.date === state.bookDay) fday = d; });
+        var book = state.bookCache[state.zone + "|" + state.bookDay];
+        if (!book || !fday) { stopBookPlay(); return; }
+        state.bookHour = (state.bookHour + 1) % nH;
+        slider.value = state.bookHour;
+        renderBookLadder(book, fday, state.bookHour);
+      }, 750);
     });
     $("window-select").addEventListener("change", function (ev) {
       state.window = ev.target.value;
@@ -1785,7 +1981,6 @@
       }
       setView(state.view);
       renderZoneSelect();
-      renderTrackButtons();
       renderWindowSelect();
       renderScoreboard();
       renderFooter();

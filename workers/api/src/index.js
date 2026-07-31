@@ -6,6 +6,7 @@
  * consumes today:
  *
  *   GET /api/v1/zones/:zone   <- v1/zones/<zone>.parquet
+ *   GET /api/v1/books/:zone/:date <- v1/books/<date>.parquet (filtered to zone)
  *   GET /api/v1/scoreboard    <- v1/scoreboard.parquet (+ manifest)
  *   GET /api/v1/map           <- v1/map.parquet        (+ manifest)
  *   GET /api/v1/manifest      <- v1/manifest.json (pass-through)
@@ -17,7 +18,7 @@
 
 import { parquetReadObjects } from "hyparquet";
 import { compressors } from "hyparquet-compressors";
-import { shapeZone, shapeScoreboard, shapeMap } from "./shape.js";
+import { shapeZone, shapeScoreboard, shapeMap, shapeBook } from "./shape.js";
 
 const ALLOWED_ORIGINS = [
   /^https:\/\/energy\.philokalia\.ai$/,
@@ -63,7 +64,7 @@ async function loadManifest(env) {
 }
 
 /** Build the JSON payload for one route (cache-miss path). */
-async function buildPayload(env, route, zone) {
+async function buildPayload(env, route, zone, date) {
   if (route === "manifest") {
     const obj = await env.DATA.get("v1/manifest.json");
     return obj ? await obj.text() : null;
@@ -72,6 +73,15 @@ async function buildPayload(env, route, zone) {
     const obj = await env.DATA.get("v1/zones/" + zone + ".parquet");
     if (!obj) return null;
     return JSON.stringify(shapeZone(await readParquet(obj), zone));
+  }
+  if (route === "book") {
+    // One per-day book parquet (all 39 zones) is synced into the web bucket
+    // under v1/books/<date>.parquet by the daily web push (bin/daily_forecast.jl
+    // writes data/web/v1/books/ -> bin/web_data_push.sh syncs it). Filter to
+    // the requested zone and shape the ladder — no extra R2 binding needed.
+    const obj = await env.DATA.get("v1/books/" + date + ".parquet");
+    if (!obj) return null;
+    return JSON.stringify(shapeBook(await readParquet(obj), zone, date));
   }
   const manifest = await loadManifest(env);
   if (!manifest) return null;
@@ -89,9 +99,10 @@ async function buildPayload(env, route, zone) {
 }
 
 /** R2 key whose ETag versions the route's cache entry. */
-function routeKey(route, zone) {
+function routeKey(route, zone, date) {
   if (route === "manifest") return "v1/manifest.json";
   if (route === "zone") return "v1/zones/" + zone + ".parquet";
+  if (route === "book") return "v1/books/" + date + ".parquet";
   return "v1/" + route + ".parquet";
 }
 
@@ -105,11 +116,15 @@ export default {
     }
 
     const url = new URL(request.url);
-    let route = null, zone = null;
+    let route = null, zone = null, date = null;
     let m;
     if ((m = url.pathname.match(/^\/api\/v1\/zones\/([A-Za-z0-9_-]+)$/))) {
       route = "zone";
       zone = m[1];
+    } else if ((m = url.pathname.match(/^\/api\/v1\/books\/([A-Za-z0-9_-]+)\/(\d{4}-\d{2}-\d{2})$/))) {
+      route = "book";
+      zone = m[1];
+      date = m[2];
     } else if (url.pathname === "/api/v1/scoreboard") {
       route = "scoreboard";
     } else if (url.pathname === "/api/v1/map") {
@@ -121,7 +136,7 @@ export default {
 
     // Version the edge-cache entry on the R2 object's ETag: origin work
     // (R2 get + parquet decode + shaping) happens once per object version.
-    const head = await env.DATA.head(routeKey(route, zone));
+    const head = await env.DATA.head(routeKey(route, zone, date));
     if (!head) return errorResponse(request, 404, "no data for " + url.pathname);
     const etag = '"' + head.httpEtag.replace(/"/g, "") + '"';
 
@@ -141,7 +156,7 @@ export default {
     );
     let response = await cache.match(cacheKey);
     if (!response) {
-      const body = await buildPayload(env, route, zone);
+      const body = await buildPayload(env, route, zone, date);
       if (body === null) return errorResponse(request, 404, "no data for " + url.pathname);
       response = jsonResponse(body, 200, {
         "ETag": etag,
