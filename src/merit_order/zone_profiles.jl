@@ -238,6 +238,14 @@ const UA_BOOK_PL = UA_BOOK(["UA", "UA_DobTPP"])    # PL adds the Dobrotvir radia
 const TRANCHES = [(0.55, 0.95), (0.20, 1.05), (0.15, 1.25), (0.10, 1.60)]
 "Must-run blocks bid at this fraction of the unit's SRMC (absolute below-cost discount)."
 const MUST_RUN_PRICE_FACTOR = 0.05
+# cv29 (docs/cv29-surplus-regime-prereg.md): the declared floor of the
+# price-taker block in SURPLUS hours (support-scheme economics; conditional —
+# the cv28 blanket floor measured 18% phantom negatives), and the banded
+# placement shares measured from the lagged public GME/OMIE books.
+const PRICE_TAKER_FLOOR_EUR = -20.0
+const CAP_TAIL_HYDRO_MULT = 1.5
+const IT_HYDRO_FLOOR_SHARE = 0.7    # GME: hydro at/below zero, tail <= 3%
+const IB_HYDRO_CAPTAIL_SHARE = 0.25 # OMIE: >=300 EUR share 15-31%
 "A unit is must-run when its SRMC is below this multiple of the zone's gas SRMC."
 const MUST_RUN_SRMC_THRESHOLD = 1.15
 "Fraction of nameplate offered by default."
@@ -285,6 +293,9 @@ const FIELD_DESCRIPTIONS = Dict{Symbol,String}(
     :water_value_span => "how much the water value swings across the day's demand range",
     :thermal_srmc_multiplier => "premium on this zone's thermal running costs (Italy: 1.20)",
     :hydro_model => "gas-anchored water value, or reservoir-opportunity from weekly levels",
+    :hydro_placement => "cv29: banded hydro placement from the public books (floor_band IT / cap_band Iberia)",
+    :domestic_offer_scale => "cv29: unit-offer scale = 1 - the self-scheduling share measured in the public books",
+    :spill_surplus_dryness => "cv29: below this dryness the hydro offer chases the net-demand valley (0 = off)",
     :nuclear_srmc_floor => "floor under nuclear bids (EUR/MWh) — France's off-peak position",
     :opportunity_anchor => "which fleet re-bids in pass 2 against the coupled price",
     :anchor_share => "fraction of the coupled reference the anchored fleet asks for",
@@ -329,6 +340,19 @@ Base.@kwdef struct ZoneProfile
     water_value_span::Float64 = 0.9
     thermal_srmc_multiplier::Float64 = 1.0
     hydro_model::Symbol = :gas_anchored
+    # cv29 T2: banded hydro placement measured from the public books —
+    # :opportunity (status quo), :floor_band (IT_HYDRO_FLOOR_SHARE at the
+    # price-taker floor, rest at water value; GME), :cap_band
+    # (IB_HYDRO_CAPTAIL_SHARE at CAP_TAIL_HYDRO_MULT x gas, rest status quo;
+    # OMIE).
+    hydro_placement::Symbol = :opportunity
+    # cv29 T3: domestic-offer scale — the self-scheduling/bilateral share
+    # visible in the public books (unit offers scaled; RES/imports untouched).
+    domestic_offer_scale::Float64 = 1.0
+    # cv29 T4 (= cv27 T2 revived with the floor present): surplus-regime gate
+    # for Nordic spill-risk valley-following. 0.0 = off; NO4 stays off (its
+    # measured falsifier).
+    spill_surplus_dryness::Float64 = 0.0
     nuclear_srmc_floor::Float64 = 0.0
     opportunity_anchor::Symbol = :none
     anchor_share::Float64 = 0.9
@@ -515,6 +539,7 @@ Italy. Gas-heavy but higher SRMC than SEE — older, less-efficient CCGTs burnin
 premium-priced LNG — so thermal marginal costs carry an efficiency/LNG premium.
 """
 const ITALY_PROFILE = ZoneProfile(
+    hydro_placement = :floor_band,
     thermal_srmc_multiplier = 1.20,
 )
 
@@ -526,6 +551,7 @@ longer slam into the price cap.
 """
 const NORDIC_PROFILE = ZoneProfile(
     hydro_model = :reservoir_opportunity,
+    spill_surplus_dryness = 0.15,
     scarcity_threshold = 1.2,
     scarcity_kappa = 1.0,
     peak_kappa = 0.5,
@@ -643,6 +669,7 @@ stays on plain NORDIC_PROFILE.
 """
 const NORWAY_PROFILE = ZoneProfile(
     hydro_model = :reservoir_opportunity,
+    spill_surplus_dryness = 0.15,
     scarcity_threshold = 1.2,
     scarcity_kappa = 1.0,
     peak_kappa = 0.5,
@@ -901,7 +928,16 @@ IT-CNORTH (cv17). ITALY plus the import backstop: episodic
 IT-CSOUTH→IT-CNORTH offered-ATC dips (95 MW offered vs 1.2 GW physical on
 spike hours; avg ~3 GW) starve it a few days a year — backstop, not drop.
 """
-const ITALY_CNORTH_PROFILE = with_profile(ITALY_PROFILE; import_backstop = true)
+const ITALY_CNORTH_PROFILE = with_profile(ITALY_PROFILE; import_backstop = true,
+                                          domestic_offer_scale = 0.7)
+
+"Small-IT domestic-offer variants (cv29 T3: measured over-offer 1.4-2.0x)."
+const ITALY_CSOUTH_PROFILE = with_profile(ITALY_PROFILE; domestic_offer_scale = 0.62)
+const ITALY_SICILY_PROFILE = with_profile(ITALY_PROFILE; domestic_offer_scale = 0.7)
+const ITALY_SARDINIA_PROFILE = with_profile(ITALY_PROFILE; domestic_offer_scale = 0.5)
+
+"Iberia (cv29 T2): OMIE-measured cap-tail band on reservoir hydro."
+const IBERIA_PROFILE = with_profile(SEE_PROFILE; hydro_placement = :cap_band)
 
 """
 SEE base + import backstop + full scarcity credit (cv17). SEE calibration (exact v10 parameters)
@@ -971,7 +1007,7 @@ const ZONE_PROFILES = Dict{String,ZoneProfile}(
     "HU" => with_profile(SEE_IMPORT_BACKED_PROFILE; boundary_book = UA_BOOK_DEFAULT),
     "SI" => SLOVENIA_PROFILE,
     # Iberia
-    "ES" => SEE_PROFILE, "PT" => SEE_PROFILE,
+    "ES" => IBERIA_PROFILE, "PT" => IBERIA_PROFILE,
     # Italy sub-zones (IT-CNORTH: + cv17 import backstop). cv18: the mainland
     # zones + Sicily add the per-unit SRMC spread (±10% — measured prototype
     # corr 0.31→0.68 CSOUTH / 0.75→0.82 NORTH / 0.49→0.72 Sicily, plateau
@@ -986,9 +1022,9 @@ const ZONE_PROFILES = Dict{String,ZoneProfile}(
     # coupled footprint. The fields and their kill-switch were removed in cv25's
     # subtraction phase — git holds the implementation if the redesign revives them.
     "IT-NORTH" => ITALY_PROFILE, "IT-CNORTH" => ITALY_CNORTH_PROFILE,
-    "IT-CSOUTH" => ITALY_PROFILE, "IT-SOUTH" => ITALY_PROFILE,
-    "IT-Calabria" => ITALY_PROFILE, "IT-Sicily" => ITALY_PROFILE,
-    "IT-Sardinia" => ITALY_PROFILE,
+    "IT-CSOUTH" => ITALY_CSOUTH_PROFILE, "IT-SOUTH" => ITALY_PROFILE,
+    "IT-Calabria" => ITALY_PROFILE, "IT-Sicily" => ITALY_SICILY_PROFILE,
+    "IT-Sardinia" => ITALY_SARDINIA_PROFILE,
     # Norway — NO2 is the export gateway (direct DE/NL/DK cables), fits well on
     # plain NORWAY_PROFILE. NO1/NO3 are interior hydro pockets behind NO2: cv23
     # gives them the ex-ante import backstop (NORWAY_ANCHORED_PROFILE,

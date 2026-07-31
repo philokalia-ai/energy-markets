@@ -745,6 +745,20 @@ function create_merit_order_book(
         # orders, "EXTRA" for extra_orders, "STRATEGIST" for strategist
         # replacements. Tags never affect the SimpleOrder values, so with no
         # hooks the merged book is byte-identical to before.
+        # cv29 (docs/cv29-surplus-regime-prereg.md): switches + the surplus
+        # signal's ts-invariant components. The signal is the book's OWN
+        # price-taker mass vs gross load — one declared inequality, ex-ante.
+        cv29 = isempty(get(ENV, "EUPHEMIA_DISABLE_CV29", ""))
+        cv29_t1 = cv29 && isempty(get(ENV, "EUPHEMIA_DISABLE_CV29_T1", ""))
+        cv29_t2 = cv29 && isempty(get(ENV, "EUPHEMIA_DISABLE_CV29_T2", ""))
+        cv29_t3 = cv29 && isempty(get(ENV, "EUPHEMIA_DISABLE_CV29_T3", ""))
+        cv29_t4 = cv29 && isempty(get(ENV, "EUPHEMIA_DISABLE_CV29_T4", ""))
+        ror_mw = sum((offered_pmax(g) for g in generators
+                      if g.fuel_type == Symbol("Hydro Run-of-river and pondage")); init=0.0)
+        deep_mw = sum((min(g.p_min, offered_pmax(g)) * 0.6 for g in generators
+                       if g.code in committed); init=0.0)
+        dscale = cv29_t3 ? profile.domestic_offer_scale : 1.0
+
         tagged = Tuple{SimpleOrder,String}[]
         supply_orders_count = 0
         demand_orders_count = 0
@@ -755,11 +769,16 @@ function create_merit_order_book(
             date_time = parse_timeslot_to_datetime(ts, day)
             hr = Dates.hour(date_time)   # UTC hour key for all hour-keyed lookups
 
-            # Renewable forecast offered at near-zero price (RES bids as
-            # price-taker; support schemes make it insensitive to price)
+            # Renewable forecast as price-taker. cv29 T1: in SURPLUS hours
+            # (price-taker mass covers gross load) the block prices at the
+            # floor — the market can genuinely clear below zero only then
+            # (the cv28 blanket floor measured 18% phantom negatives).
             res_qty = get(renewable_by_time, ts, 0.0)
+            surplus_h = cv29_t1 &&
+                (res_qty + ror_mw + deep_mw) >= get(load_by_time, ts, Inf)
             if res_qty > 0.1
-                push!(tagged, (SimpleOrder(:supply, 1.0, res_qty,
+                push!(tagged, (SimpleOrder(:supply,
+                    surplus_h ? PRICE_TAKER_FLOOR_EUR : 1.0, res_qty,
                     Symbol(bidding_zone), date_time, resolution_minutes), "RES"))
                 supply_orders_count += 1
                 total_supply_capacity += res_qty
@@ -862,7 +881,14 @@ function create_merit_order_book(
                        peak_kappa * norm_demand^peak_exponent
 
             for g in generators
-                if g.fuel_type in WATER_VALUE_FUEL_TYPES
+                # cv29 T1: run-of-river joins the floor in surplus hours only.
+                if surplus_h && g.fuel_type == Symbol("Hydro Run-of-river and pondage")
+                    push!(tagged, (SimpleOrder(:supply, PRICE_TAKER_FLOOR_EUR,
+                        offered_pmax(g) * dscale, Symbol(bidding_zone), date_time,
+                        resolution_minutes), g.code))
+                    supply_orders_count += 1
+                    total_supply_capacity += offered_pmax(g) * dscale
+                elseif g.fuel_type in WATER_VALUE_FUEL_TYPES
                     # Hydro water value. Two models:
                     #
                     # :gas_anchored (SEE default) — opportunity cost tied to gas
@@ -906,10 +932,38 @@ function create_merit_order_book(
                         gas_srmc * (1.0 + water_value_dry_boost * hydro_dryness) *
                         (water_value_base + water_value_span * norm_demand)
                     end
-                    push!(tagged, (SimpleOrder(:supply, water_value, offered_pmax(g),
-                        Symbol(bidding_zone), date_time, resolution_minutes), g.code))
-                    supply_orders_count += 1
-                    total_supply_capacity += offered_pmax(g)
+                    # cv29 T4 (spill valley, the cv27-T2 revival WITH the floor
+                    # present; NO4 excluded via its profile gate staying 0).
+                    if cv29_t4 && profile.spill_surplus_dryness > 0.0 &&
+                       hydro_dryness < profile.spill_surplus_dryness &&
+                       norm_demand < 0.5
+                        water_value *= norm_demand / 0.5
+                    end
+                    # cv29 T2: banded placement measured from the public books.
+                    qty_g = offered_pmax(g) * dscale
+                    if cv29_t2 && profile.hydro_placement == :floor_band
+                        push!(tagged, (SimpleOrder(:supply, PRICE_TAKER_FLOOR_EUR,
+                            qty_g * IT_HYDRO_FLOOR_SHARE, Symbol(bidding_zone),
+                            date_time, resolution_minutes), g.code))
+                        push!(tagged, (SimpleOrder(:supply, water_value,
+                            qty_g * (1 - IT_HYDRO_FLOOR_SHARE), Symbol(bidding_zone),
+                            date_time, resolution_minutes), g.code))
+                        supply_orders_count += 2
+                    elseif cv29_t2 && profile.hydro_placement == :cap_band
+                        push!(tagged, (SimpleOrder(:supply,
+                            CAP_TAIL_HYDRO_MULT * gas_srmc,
+                            qty_g * IB_HYDRO_CAPTAIL_SHARE, Symbol(bidding_zone),
+                            date_time, resolution_minutes), g.code))
+                        push!(tagged, (SimpleOrder(:supply, water_value,
+                            qty_g * (1 - IB_HYDRO_CAPTAIL_SHARE), Symbol(bidding_zone),
+                            date_time, resolution_minutes), g.code))
+                        supply_orders_count += 2
+                    else
+                        push!(tagged, (SimpleOrder(:supply, water_value, qty_g,
+                            Symbol(bidding_zone), date_time, resolution_minutes), g.code))
+                        supply_orders_count += 1
+                    end
+                    total_supply_capacity += qty_g
                 else
                     # :nuclear opportunity anchor (two-pass, pass 2): nuclear's
                     # effective bid base per slot is the export opportunity —
@@ -952,22 +1006,23 @@ function create_merit_order_book(
                         # discount is benign at gas ≈ 90 (−45) but capped
                         # crisis evenings at half the real gas cost
                         # (−212 at TTF 218, 2022) and sank the whole year.
-                        deep_qty = must_run_qty * 0.6
+                        deep_qty = must_run_qty * 0.6 * dscale
                         push!(tagged, (SimpleOrder(:supply,
-                            gmc * must_run_price_factor, deep_qty,
+                            surplus_h ? PRICE_TAKER_FLOOR_EUR : gmc * must_run_price_factor,
+                            deep_qty,
                             Symbol(bidding_zone), date_time, resolution_minutes), g.code))
                         push!(tagged, (SimpleOrder(:supply,
                             min(max(gmc * 0.5, gmc - 40.0), nuc_ceil),
-                            must_run_qty - deep_qty,
+                            (must_run_qty - must_run_qty * 0.6) * dscale,
                             Symbol(bidding_zone), date_time, resolution_minutes), g.code))
                         supply_orders_count += 2
-                        total_supply_capacity += must_run_qty
+                        total_supply_capacity += must_run_qty * dscale
                     end
 
                     # Remaining capacity: tranche ladder on SRMC, scarcity
                     # markup on the upper tranches (first tranche stays at
                     # cost so mid-merit keeps clearing)
-                    flexible_capacity = max(offered_pmax(g) - must_run_qty, 0.0)
+                    flexible_capacity = max(offered_pmax(g) - must_run_qty, 0.0) * dscale
                     for (i, (share, mult)) in enumerate(tranches)
                         price = min(gmc * mult * (i == 1 ? 1.0 : scarcity), nuc_ceil)
                         qty = flexible_capacity * share
