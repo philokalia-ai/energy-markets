@@ -545,7 +545,14 @@ function _create_transfer_capacity_enriched(date::Date, bidding_zones::Vector{St
             parts = split(t, '>')
             length(parts) == 2 || error("bad EUPHEMIA_CV30_T1_BORDERS token: $t")
             a = String(strip(parts[1])); b = String(strip(parts[2]))
-            push!(t1set, (a, b)); push!(t1set, (b, a))  # both directions tied
+            push!(t1set, (a, b))
+            # Default: both directions tied (cv27 screening protocol). The Set A
+            # calibration measured that symmetrizing the CEILING starves the
+            # IMPORT direction of BG/RO (phantom cap prices, corr −0.32) — a fill
+            # can be tied safely but a ceiling cannot. EUPHEMIA_CV30_T1_DIRECTIONAL
+            # applies the ceiling to the LISTED directions only (disclosed
+            # post-A diagnostic; docs/experiments/cv30-results.md).
+            isempty(get(ENV, "EUPHEMIA_CV30_T1_DIRECTIONAL", "")) && push!(t1set, (b, a))
         end
         cap30 = isempty(t1set) ? nothing : _fbmc_capability(date)
         if cap30 !== nothing
