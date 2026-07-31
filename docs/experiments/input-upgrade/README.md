@@ -93,6 +93,29 @@ under-predicts clear-sky solar by ~2–2.7 GW (the measured July failure).
 | 07-27 | GR | 38.1 | 39.5 | 63.8 | 36.8 |
 | 07-27 | NL | 2.4 | 50.7 | 139.3 | 103.8 |
 
+*(NL "NEW weather" column above = the baseline-wind variant used in the main panel.)*
+
+**NL ship-config re-run — NEW load + NEW solar + NEW offshore wind** (isolates NL; ref/base
+identical to above by construction):
+
+| day | zone | settled | reference | old weather (base) | NEW weather (NEW offshore wind) |
+|-----|------|--------:|----------:|-------------------:|--------------------------------:|
+| 07-24 | NL | 53.7 | 80.8 | 136.6 | 103.6 |
+| 07-25 | NL | -3.1 | 6.3 | 123.9 | 102.7 |
+| 07-26 | NL | 6.3 | 92.8 | 114.6 | 103.8 |
+| 07-27 | NL | 2.4 | 50.7 | 139.3 | 105.0 |
+
+**Finding (corrects the earlier caveat): shipping NL's NEW offshore-wind model does NOT
+fix NL at price level.** NL stays flat at ~€103–105 in the new arm regardless of wind
+source (all-hour MAE-vs-settled 50.1 with NEW wind vs 48.8 with baseline wind — marginally
+*worse*; collapse ≤€5 still 0/19 hours, negative-price 0/59). NL's NEW wind is the better
+INPUT (VALID MAE 303 vs 750) but the residual NL price gap is **structural**, not a
+wind-input deficit: in this controlled test NL's continental neighbours keep reference
+inputs, and the injected RES is €1/MWh price-taker supply, so NL cannot reach settled's
+negative regime by changing one zone's wind. NL's true collapse is driven by the
+surrounding continental surplus (a footprint-wide input upgrade, not a per-zone one) plus
+an injection-price change to reach sub-€1.
+
 **Controls (ES / DE_LU / SE2):**
 
 | day | zone | settled | reference | old weather (base) | NEW weather |
@@ -169,11 +192,15 @@ zones GR/DE_LU/SE2; NEW wind for the offshore zones ES/NL). Rationale from VALID
   July GR failure (GR MAE 748→366, midday solar +2–2.7 GW). ES's ridge is already
   near-perfect (bias −24) — do not disturb it.
 - **WIND — keep the physical power-curve baseline for onshore zones; ship NEW for the
-  offshore-heavy zones (ES, NL 750→303).** ML does not beat a good power curve onshore.
+  offshore-heavy zones (ES, NL 750→303) as the better INPUT.** ML does not beat a good
+  power curve onshore.
 
-**The price test used the conservative baseline-wind-everywhere variant, so NL/ES are
-UNDERSTATED** — NL's real fix needs its NEW offshore-wind model (the injected wind that
-would collapse NL toward settled).
+**Measured caveat (NL ship-config re-run, §4): NL's NEW offshore wind is the better input
+but does NOT move NL at price level** (flat ~€104, MAE 50.1 vs 48.8 baseline-wind, collapse
+still 0/19). NL's price residual is structural (continental coupling + the €1 injection
+floor), so NL needs a **footprint-wide** input upgrade + an injection-price change to reach
+its negative settled regime — not a single-zone wind swap. Ship NL's NEW wind for input
+accuracy, but do not expect it to fix NL prices alone.
 
 **Do NOT ship blind:** on the one genuinely-expensive day (07-24, settled €95) richer solar
 made NEW over-collapse GR to €53 (a false alarm). Gate any activation on the collapse

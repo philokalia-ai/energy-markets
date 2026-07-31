@@ -3,7 +3,7 @@
 given UTC days, for both the NEW LightGBM models and the committed baseline packs.
 Usage: predict_inputs.py 2026-07-24 2026-07-28  -> writes inputs_new.parquet, inputs_base.parquet
 Columns: zone, ts (naive UTC hour), load_mw, solar_mw, wind_mw"""
-import sys, json, numpy as np, pandas as pd, lightgbm as lgb
+import os as _os, sys, json, numpy as np, pandas as pd, lightgbm as lgb
 import features as F, baseline as B   # reuse baseline replication + feature build
 SP=F.SP; ZONES=F.ZONES
 d0=pd.Timestamp(sys.argv[1]); d1=pd.Timestamp(sys.argv[2])
@@ -52,11 +52,16 @@ for z in ZONES:
     if rs is not None: sp=sp*ra_h[rs].values
     sp=np.maximum(sp,0.0); sp=np.where(ra_h["se"].values<=1e-6,0.0,sp)
     # SHIP CONFIG: wind uses the committed physical power-curve baseline (beats ML
-    # in 3/4 zones on VALID); ML load+solar are the wins. (ML wind model still
-    # exported for the scorecard/record.)
-    cp_all=cellp.reindex(ra["h"].values); cp_all.index=ra.index
-    wp_series=B.baseline_wind(z,cp_all).reindex(ra_h.index)
-    wp=np.maximum(wp_series.values,0.0)
+    # onshore); EXCEPT offshore-heavy zones in EUPHEMIA_NEWWIND_ZONES use the NEW
+    # ML wind model (it wins offshore, e.g. NL 303 vs 750 MAE).
+    NEWWIND=set(x for x in _os.environ.get("EUPHEMIA_NEWWIND_ZONES","").split(",") if x)
+    if z in NEWWIND:
+        wp=mw.predict(ra_h[fw])
+        if rw is not None: wp=wp*ra_h[rw].values
+        wp=np.maximum(wp,0.0)
+    else:
+        cp_all=cellp.reindex(ra["h"].values); cp_all.index=ra.index
+        wp=np.maximum(B.baseline_wind(z,cp_all).reindex(ra_h.index).values,0.0)
     lp=np.maximum(ml.predict(la_h[fl]),0.0)
     rn=ra_h[["zone","h"]].copy(); rn["solar_mw"]=sp; rn["wind_mw"]=wp
     ln=la_h[["zone","h"]].copy(); ln["load_mw"]=lp
