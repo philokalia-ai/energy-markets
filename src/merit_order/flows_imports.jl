@@ -99,7 +99,53 @@ function clear_net_imports_cache!()
     lock(_NET_IMPORTS_CACHE_LOCK) do
         empty!(_NET_IMPORTS_DAY_CACHE)
     end
+    lock(_EXPORT_CAP_LOCK) do
+        empty!(_EXPORT_CAP_DAY_CACHE)
+    end
     return nothing
+end
+
+# cv30 T2 (docs/cv30-export-surplus-prereg.md): demonstrated EXPORT capability
+# per zone — trailing-366d p95 of the zone's TOTAL gross outbound flow per 4h
+# block. A zone is only truly LONG (in surplus) when its price-taker MW exceed
+# load PLUS what it could physically export; this is that export headroom. One
+# grouped scan of entsoe.physical_flows per delivery day for ALL zones, day-
+# cached like the net-imports relation. Strictly ex-ante (pre-delivery history
+# only). Never cached on error. Mirrors Network._fbmc_capability's WHERE/EXTRACT
+# so both DB backends dispatch identically.
+const _EXPORT_CAP_DAY_CACHE = Dict{Date,Dict{Tuple{String,Int},Float64}}()
+const _EXPORT_CAP_LOCK = ReentrantLock()
+
+function get_export_capability_day(day::Date)
+    cached = lock(_EXPORT_CAP_LOCK) do
+        get(_EXPORT_CAP_DAY_CACHE, day, nothing)
+    end
+    cached !== nothing && return cached
+    df = sql2df_with_retry(
+        """
+        WITH hourly AS (
+          SELECT out_area_map_code AS z,
+                 date_time_utc AS t,
+                 FLOOR(EXTRACT(HOUR FROM date_time_utc) / 4)::int AS blk,
+                 SUM(flow_mw) AS tot
+          FROM entsoe.physical_flows
+          WHERE date_time_utc >= ((\$1::date - 366)::timestamp AT TIME ZONE 'UTC')
+            AND date_time_utc < (\$1::date::timestamp AT TIME ZONE 'UTC')
+            AND flow_mw IS NOT NULL AND flow_mw > 0
+          GROUP BY out_area_map_code, date_time_utc, blk)
+        SELECT z, blk, percentile_cont(0.95) WITHIN GROUP (ORDER BY tot) AS cap
+        FROM hourly GROUP BY z, blk
+        """,
+        [day])
+    cap = Dict{Tuple{String,Int},Float64}()
+    for r in eachrow(df)
+        (ismissing(r.cap) || ismissing(r.z)) && continue
+        cap[(String(r.z), Int(r.blk))] = Float64(r.cap)
+    end
+    lock(_EXPORT_CAP_LOCK) do
+        _EXPORT_CAP_DAY_CACHE[day] = cap
+    end
+    return cap
 end
 
 _strip_ips(s::AbstractString) = replace(String(s), r"_IPS$" => "")

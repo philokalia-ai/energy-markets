@@ -243,6 +243,12 @@ const MUST_RUN_PRICE_FACTOR = 0.05
 # economics (a unit that pays to keep running rather than cycle). ONE declared
 # form-level value, never per-zone.
 const DEEP_SURPLUS_FLOOR_EUR = -20.0
+# cv30 T3 (docs/cv30-export-surplus-prereg.md): self-scheduling reallocation
+# shares (cv29's measured haircut shares) — the fraction of a zone's thermal
+# flexible offer MOVED from the SRMC ladder into the price-taker block. Applied
+# only to these IT zones; every other zone reallocates nothing.
+const CV30_T3_SHARES = Dict{String,Float64}(
+    "IT-Sardinia" => 0.5, "IT-CSOUTH" => 0.62, "IT-CNORTH" => 0.7, "IT-Sicily" => 0.7)
 "A unit is must-run when its SRMC is below this multiple of the zone's gas SRMC."
 const MUST_RUN_SRMC_THRESHOLD = 1.15
 "Fraction of nameplate offered by default."

@@ -738,6 +738,52 @@ function create_merit_order_book(
         committed = _committed_set(generators, nd_max, gas_srmc,
             must_run_srmc_threshold, availability_factor)
 
+        # ── cv30 T2/T3 pre-pass (docs/cv30-export-surplus-prereg.md) ──────
+        # Both default-inert (opt-in EUPHEMIA_ENABLE_CV30[_T2/_T3]); with the
+        # switches unset every branch below is skipped and the book is
+        # byte-identical to cv27 main (guarded).
+        #
+        # T2 — export-AWARE surplus floor. The hour is in true surplus when the
+        # zone's price-taker MW (RES + run-of-river + deep must-run self-
+        # schedule) exceed load PLUS the demonstrated export headroom: a zone
+        # can only be genuinely long once it cannot export the excess. The two
+        # earlier redesigns (cv28/cv29) fired on export-BLIND signals and hit
+        # 18%/16.4% phantom-negative rates; the export term is the fix. When the
+        # signal fires, the price-taker block prices at the declared −20 floor
+        # (DEEP_SURPLUS_FLOOR_EUR), letting midday/negative surplus hours clear
+        # below zero as they settle.
+        cv30_t2 = !isempty(get(ENV, "EUPHEMIA_ENABLE_CV30", "")) ||
+                  !isempty(get(ENV, "EUPHEMIA_ENABLE_CV30_T2", ""))
+        # T3 — self-scheduling reallocation. The cv29 haircut shares MOVE that
+        # share of thermal flexible offers INTO the price-taker block (never
+        # delete: cv29 measured deletion = phantom scarcity, +7.45 MAE), so the
+        # SRMC ladder thins and the marginal price falls in surplus/shoulder
+        # hours without removing energy from the balance.
+        cv30_t3 = !isempty(get(ENV, "EUPHEMIA_ENABLE_CV30", "")) ||
+                  !isempty(get(ENV, "EUPHEMIA_ENABLE_CV30_T3", ""))
+        t3_share = cv30_t3 ? get(CV30_T3_SHARES, bidding_zone, 0.0) : 0.0
+
+        t2_surplus = Dict{String,Bool}()
+        if cv30_t2
+            export_cap = get_export_capability_day(day)
+            # Price-taker MW that do NOT vary with the timeslot: run-of-river
+            # (non-storable) offered capacity + the deep must-run self-schedule
+            # block (0.6 × min(p_min, pmax)) of committed thermal units.
+            ror_pmax = sum((offered_pmax(g) for g in generators
+                            if g.fuel_type == Symbol("Hydro Run-of-river and pondage"));
+                           init=0.0)
+            deep_mustrun = sum((0.6 * min(g.p_min, offered_pmax(g)) for g in generators
+                                if g.code in committed &&
+                                   !(g.fuel_type in WATER_VALUE_FUEL_TYPES));
+                               init=0.0)
+            for ts in target_timeslots
+                hr_ts = Dates.hour(parse_timeslot_to_datetime(ts, day))
+                cap_blk = get(export_cap, (bidding_zone, hr_ts ÷ 4), 0.0)
+                ptk = get(renewable_by_time, ts, 0.0) + ror_pmax + deep_mustrun
+                t2_surplus[ts] = ptk >= gross_demand[ts] + cap_blk
+            end
+        end
+
         # ── Stage 6: the supply order loop (RES, imports, hydro, thermal) ─
         # Every order is tagged with an owner (Feature 5, strategist hook):
         # the generator code for unit orders, "RES" for the renewable
@@ -759,7 +805,11 @@ function create_merit_order_book(
             # price-taker; support schemes make it insensitive to price)
             res_qty = get(renewable_by_time, ts, 0.0)
             if res_qty > 0.1
-                push!(tagged, (SimpleOrder(:supply, 1.0, res_qty,
+                # cv30 T2: in the export-aware surplus regime RES prices at the
+                # −20 floor instead of €1, so it stays in-merit and pulls the
+                # clearing price below zero (unset ⇒ €1, byte-identical).
+                res_price = get(t2_surplus, ts, false) ? DEEP_SURPLUS_FLOOR_EUR : 1.0
+                push!(tagged, (SimpleOrder(:supply, res_price, res_qty,
                     Symbol(bidding_zone), date_time, resolution_minutes), "RES"))
                 supply_orders_count += 1
                 total_supply_capacity += res_qty
@@ -920,6 +970,13 @@ function create_merit_order_book(
                        !isempty(get(ENV, "EUPHEMIA_ENABLE_CV27_T2", ""))
                         water_value *= norm_demand / 0.5
                     end
+                    # cv30 T2: run-of-river is a genuine price-taker (non-
+                    # storable); in the export-aware surplus regime it prices at
+                    # the −20 floor with RES and the deep must-run block.
+                    if get(t2_surplus, ts, false) &&
+                       g.fuel_type == Symbol("Hydro Run-of-river and pondage")
+                        water_value = DEEP_SURPLUS_FLOOR_EUR
+                    end
                     push!(tagged, (SimpleOrder(:supply, water_value, offered_pmax(g),
                         Symbol(bidding_zone), date_time, resolution_minutes), g.code))
                     supply_orders_count += 1
@@ -973,7 +1030,10 @@ function create_merit_order_book(
                         # below zero, which the >= 0 near-free price never can.
                         # NOT shipped with cv27 (cv28/cv29 measured the floor family
                         # NO-SHIP): explicit opt-in only.
-                        deep_price = !isempty(get(ENV, "EUPHEMIA_ENABLE_CV27_T3", "")) ?
+                        # cv30 T2 fires the same deep floor on its export-aware
+                        # surplus signal (the cv27 T3 opt-in remains independent).
+                        deep_price = (get(t2_surplus, ts, false) ||
+                                      !isempty(get(ENV, "EUPHEMIA_ENABLE_CV27_T3", ""))) ?
                             DEEP_SURPLUS_FLOOR_EUR : gmc * must_run_price_factor
                         push!(tagged, (SimpleOrder(:supply,
                             deep_price, deep_qty,
@@ -990,6 +1050,23 @@ function create_merit_order_book(
                     # markup on the upper tranches (first tranche stays at
                     # cost so mid-merit keeps clearing)
                     flexible_capacity = max(offered_pmax(g) - must_run_qty, 0.0)
+                    # cv30 T3: reallocate a share of this unit's flexible offer
+                    # OUT of the SRMC ladder INTO the price-taker block (self-
+                    # schedule, or the −20 floor when the T2 surplus signal
+                    # fires). Energy is conserved — the ladder just thins, so
+                    # the marginal price falls in surplus/shoulder hours without
+                    # the phantom scarcity that deleting it caused (cv29). Only
+                    # the profiled IT zones (t3_share>0); 0 elsewhere ⇒ unchanged.
+                    if t3_share > 0.0 && flexible_capacity > 0.1
+                        realloc_qty = flexible_capacity * t3_share
+                        realloc_price = get(t2_surplus, ts, false) ?
+                            DEEP_SURPLUS_FLOOR_EUR : min(max(gmc * 0.5, gmc - 40.0), nuc_ceil)
+                        push!(tagged, (SimpleOrder(:supply, realloc_price, realloc_qty,
+                            Symbol(bidding_zone), date_time, resolution_minutes), g.code))
+                        supply_orders_count += 1
+                        total_supply_capacity += realloc_qty
+                        flexible_capacity -= realloc_qty
+                    end
                     for (i, (share, mult)) in enumerate(tranches)
                         price = min(gmc * mult * (i == 1 ? 1.0 : scarcity), nuc_ceil)
                         qty = flexible_capacity * share
