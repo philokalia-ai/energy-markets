@@ -36,15 +36,24 @@ jobs:
           AWS_DEFAULT_REGION: auto
         run: |
           set -euo pipefail
+          # The R2 token has object read/write but NO bucket-list permission
+          # (extract_store.sh precedent: cp only, never sync/ls). cp --recursive
+          # lists only the LOCAL source; verify by HeadObject spot checks.
           test -d "${{ inputs.books_dir }}" || { echo "books_dir missing on runner host"; exit 1; }
           n_local=$(ls "${{ inputs.books_dir }}"/*.parquet | wc -l)
-          aws s3 sync --endpoint-url "$EXTRACT_S3_ENDPOINT" \
+          aws s3 cp --recursive --endpoint-url "$EXTRACT_S3_ENDPOINT" \
             --exclude "*" --include "*.parquet" \
             "${{ inputs.books_dir }}" "s3://$EXTRACT_S3_BUCKET/books/"
-          n_remote=$(aws s3 ls --endpoint-url "$EXTRACT_S3_ENDPOINT" \
-            "s3://$EXTRACT_S3_BUCKET/books/" | wc -l)
-          echo "books: local=$n_local remote=$n_remote"
-          [ "$n_remote" -ge "$n_local" ] || { echo "remote < local after sync"; exit 1; }
+          for f in $(ls "${{ inputs.books_dir }}"/*.parquet | sed -n '1p;$p') \
+                   $(ls "${{ inputs.books_dir }}"/*.parquet | sed -n "$((n_local/2))p"); do
+            key="books/$(basename "$f")"
+            sz_local=$(stat -c%s "$f")
+            sz_remote=$(aws s3api head-object --endpoint-url "$EXTRACT_S3_ENDPOINT" \
+              --bucket "$EXTRACT_S3_BUCKET" --key "$key" --query ContentLength --output text)
+            echo "verify $key: local=$sz_local remote=$sz_remote"
+            [ "$sz_local" = "$sz_remote" ] || { echo "size mismatch on $key"; exit 1; }
+          done
+          echo "books: uploaded $n_local parquets, 3 spot-verified by HeadObject" 
 
       - name: Export + publish zone-strategies JSON to the web bucket
         if: ${{ inputs.publish_zone_strategies }}
