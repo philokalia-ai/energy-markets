@@ -8,6 +8,13 @@ This is a Julia project implementing the **Euphemia** energy market clearing eng
 
 ## Methodology (standing rules, owner-ratified July 2026)
 
+**Canonical, repo-committed working notes — read these first:**
+[.claude/STRATEGY.md](.claude/STRATEGY.md) (what the program is, how progress
+happens), [.claude/SCIENTIST.md](.claude/SCIENTIST.md) (the experimental
+discipline), [.claude/CODE_STYLEGUIDE.md](.claude/CODE_STYLEGUIDE.md) (code
+reads like the zone-strategies table; switches, guards, layout). The rules
+below are the summary; the files are the authority.
+
 1. **Theory → experiment → results.** Gates/windows/falsifiers are FROZEN
    (merged prereg doc) before any scored run; the owner reviews non-draft PRs
    carrying code AND measured results together, and decides on the numbers —
