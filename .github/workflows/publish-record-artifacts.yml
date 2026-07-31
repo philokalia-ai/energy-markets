@@ -1,0 +1,69 @@
+# Publish the record's side artifacts — owner-dispatched (2026-07-31 decision):
+#   1. the per-day order-book parquets of a record backfill -> extract bucket
+#      /books/ (the cv23-flow "books retained/published" step, now as CI);
+#   2. the zone-strategies JSON -> web bucket /v1/zone_strategies.json (the
+#      /about table; deliberately OUTSIDE the web data-plane auto-sync, so
+#      publishing it is an explicit act — this workflow IS that act).
+# Runs on the self-hosted runner, which lives on the machine that holds the
+# backfill books (data/ is git-ignored; books never enter the repo).
+name: publish-record-artifacts
+
+on:
+  workflow_dispatch:
+    inputs:
+      books_dir:
+        description: "Absolute path (on the runner host) of the per-day book parquets; empty = skip books"
+        required: false
+        default: "/home/pgeorgakopoulos/armada/energy-markets/data/backfill_books_cv26"
+      publish_zone_strategies:
+        description: "Also publish the zone-strategies JSON to the web bucket"
+        type: boolean
+        default: true
+
+jobs:
+  publish:
+    runs-on: [self-hosted, linux, ARM64]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Sync record books to the extract bucket
+        if: ${{ inputs.books_dir != '' }}
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          EXTRACT_S3_ENDPOINT: ${{ secrets.EXTRACT_S3_ENDPOINT }}
+          EXTRACT_S3_BUCKET: ${{ secrets.EXTRACT_S3_BUCKET }}
+          AWS_DEFAULT_REGION: auto
+        run: |
+          set -euo pipefail
+          test -d "${{ inputs.books_dir }}" || { echo "books_dir missing on runner host"; exit 1; }
+          n_local=$(ls "${{ inputs.books_dir }}"/*.parquet | wc -l)
+          aws s3 sync --endpoint-url "$EXTRACT_S3_ENDPOINT" \
+            --exclude "*" --include "*.parquet" \
+            "${{ inputs.books_dir }}" "s3://$EXTRACT_S3_BUCKET/books/"
+          n_remote=$(aws s3 ls --endpoint-url "$EXTRACT_S3_ENDPOINT" \
+            "s3://$EXTRACT_S3_BUCKET/books/" | wc -l)
+          echo "books: local=$n_local remote=$n_remote"
+          [ "$n_remote" -ge "$n_local" ] || { echo "remote < local after sync"; exit 1; }
+
+      - name: Export + publish zone-strategies JSON to the web bucket
+        if: ${{ inputs.publish_zone_strategies }}
+        env:
+          WEB_S3_ACCESS_KEY_ID: ${{ secrets.WEB_S3_ACCESS_KEY_ID }}
+          WEB_S3_SECRET_ACCESS_KEY: ${{ secrets.WEB_S3_SECRET_ACCESS_KEY }}
+          EXTRACT_S3_ENDPOINT: ${{ secrets.EXTRACT_S3_ENDPOINT }}
+          WEB_S3_ENDPOINT: ${{ secrets.EXTRACT_S3_ENDPOINT }}
+          WEB_S3_BUCKET: euphemia-web-data
+          AWS_DEFAULT_REGION: auto
+        run: |
+          set -euo pipefail
+          julia --project=. -e 'using Pkg; Pkg.instantiate()'
+          julia --project=. bin/export_zone_strategies.jl
+          test -s data/calibration/zone_strategies.json
+          export AWS_ACCESS_KEY_ID="$WEB_S3_ACCESS_KEY_ID"
+          export AWS_SECRET_ACCESS_KEY="$WEB_S3_SECRET_ACCESS_KEY"
+          aws s3 cp --endpoint-url "$WEB_S3_ENDPOINT" \
+            --content-type application/json --cache-control "max-age=300" \
+            data/calibration/zone_strategies.json \
+            "s3://$WEB_S3_BUCKET/v1/zone_strategies.json"
+          aws s3 ls --endpoint-url "$WEB_S3_ENDPOINT" "s3://$WEB_S3_BUCKET/v1/zone_strategies.json"
