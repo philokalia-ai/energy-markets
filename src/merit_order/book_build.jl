@@ -912,11 +912,12 @@ function create_merit_order_book(
                     # valley instead of holding the level — the offer scales
                     # with the demand position below the day's midpoint,
                     # toward 0 at the trough. Never negative here (T3's job).
+                    # NOT shipped with cv27 (measured mild-positive but not part of
+                    # the shipped border combo): explicit opt-in only.
                     if profile.spill_surplus_dryness > 0.0 &&
                        hydro_dryness < profile.spill_surplus_dryness &&
                        norm_demand < 0.5 &&
-                       isempty(get(ENV, "EUPHEMIA_DISABLE_CV27", "")) &&
-                       isempty(get(ENV, "EUPHEMIA_DISABLE_CV27_T2", ""))
+                       !isempty(get(ENV, "EUPHEMIA_ENABLE_CV27_T2", ""))
                         water_value *= norm_demand / 0.5
                     end
                     push!(tagged, (SimpleOrder(:supply, water_value, offered_pmax(g),
@@ -970,8 +971,9 @@ function create_merit_order_book(
                         # the declared negative floor — curtailment-avoidance /
                         # support-scheme economics let midday surplus clear
                         # below zero, which the >= 0 near-free price never can.
-                        deep_price = (isempty(get(ENV, "EUPHEMIA_DISABLE_CV27", "")) &&
-                                      isempty(get(ENV, "EUPHEMIA_DISABLE_CV27_T3", ""))) ?
+                        # NOT shipped with cv27 (cv28/cv29 measured the floor family
+                        # NO-SHIP): explicit opt-in only.
+                        deep_price = !isempty(get(ENV, "EUPHEMIA_ENABLE_CV27_T3", "")) ?
                             DEEP_SURPLUS_FLOOR_EUR : gmc * must_run_price_factor
                         push!(tagged, (SimpleOrder(:supply,
                             deep_price, deep_qty,

@@ -138,7 +138,7 @@
 # only where a corrupt unit was in the fleet (IT-CSOUTH); every other zone
 # is byte-identical to cv23 code. Bumped so the post-#205 daily forecasts
 # and the refilled record never mix with cv23 rows. July 2026.
-const ENERGY_PRICES_CODE_VERSION = 26
+const ENERGY_PRICES_CODE_VERSION = 27
 
 # Pool size: env-tunable (EUPHEMIA_PG_POOL) because the threaded book build
 # runs up to nzones concurrent queries — 5 connections cap the parallelism

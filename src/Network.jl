@@ -344,6 +344,14 @@ end
 # Computed ONCE per delivery day for ALL borders (one grouped scan of
 # physical_flows) and cached, day-level, like the outage cache. Never cached
 # on error.
+# The 7 physical borders accepted by the cv27 border campaign
+# (docs/experiments/cv27-borders/, Set A -0.44 MAE/+0.009 corr, Set B
+# -0.41/-0.004, zero caps/breaches; both directions each).
+const CV27_SHIPPED_BORDERS = join([
+    "DE_LU>FR", "FR>DE_LU", "CH>FR", "FR>CH", "CZ>PL", "PL>CZ",
+    "SE1>SE2", "SE2>SE1", "IT-CNORTH>IT-NORTH", "IT-NORTH>IT-CNORTH",
+    "DK1>SE3", "SE3>DK1", "IT-Calabria>IT-Sicily", "IT-Sicily>IT-Calabria"], ",")
+
 const _FBMC_CAP_DAY_CACHE = Dict{Date,Dict{Tuple{String,String,Int},Float64}}()
 const _FBMC_CAP_LOCK = ReentrantLock()
 
@@ -469,10 +477,15 @@ function _create_transfer_capacity_enriched(date::Date, bidding_zones::Vector{St
     # An empty value = no borders = treatment OFF. When the var is ABSENT the
     # legacy T1b behaviour (override every n_da==0 border in da_ever) is
     # unchanged, so the existing guards stay bit-identical.
-    border_list_mode = haskey(ENV, "EUPHEMIA_CV27_T1_BORDERS")
+    # cv27 SHIP (2026-07-31, owner decision on the border campaign's Set A/B):
+    # the accepted 7-border set is the DEFAULT. The env var still overrides for
+    # A/Bs (present-and-empty = treatment OFF); the campaign's measured combo
+    # arm is bit-identical to this default (ship guard).
+    border_list_mode = true
+    border_env = get(ENV, "EUPHEMIA_CV27_T1_BORDERS", CV27_SHIPPED_BORDERS)
     border_set = Set{Tuple{String,String}}()
     if border_list_mode
-        for tok in split(get(ENV, "EUPHEMIA_CV27_T1_BORDERS", ""), ',')
+        for tok in split(border_env, ',')
             t = strip(tok); isempty(t) && continue
             parts = split(t, '>')
             length(parts) == 2 || error("bad EUPHEMIA_CV27_T1_BORDERS token: $t")
