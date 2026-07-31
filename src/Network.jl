@@ -352,6 +352,19 @@ const CV27_SHIPPED_BORDERS = join([
     "SE1>SE2", "SE2>SE1", "IT-CNORTH>IT-NORTH", "IT-NORTH>IT-CNORTH",
     "DK1>SE3", "SE3>DK1", "IT-Calabria>IT-Sicily", "IT-Sicily>IT-Calabria"], ",")
 
+# cv30 T1 (docs/cv30-export-surplus-prereg.md): demonstrated EXPORT-capability
+# CEILING — the mirror of cv27 T1. Frozen candidate set from the static midday
+# survey (2026-07-31): directed borders A>B where settled prices DECOUPLED
+# (|P_A−P_B| > €5) while observed flow stayed < 50% of offered DA ATC — nominal
+# ATC overstating the DA-allocatable capability. Both directions tied (cv27
+# protocol), so the undirected borders IT-CSOUTH~IT-SOUTH, BG~GR (the headline
+# GR-summer-collapse border), RO~BG, IT-SOUTH~IT-Calabria. Applied as a CEILING
+# on borders WITH Day-ahead rows (min of offered and demonstrated p95), never a
+# raise — the exact inverse of cv27's fill-borders-WITHOUT-DA-rows. Default-inert
+# (opt-in EUPHEMIA_ENABLE_CV30[_T1]); a ceiling never lifts capacity, so borders
+# already below their demonstrated p95 are untouched.
+const CV30_T1_BORDERS_DEFAULT = "IT-CSOUTH>IT-SOUTH,BG>GR,RO>BG,IT-SOUTH>IT-Calabria"
+
 const _FBMC_CAP_DAY_CACHE = Dict{Date,Dict{Tuple{String,String,Int},Float64}}()
 const _FBMC_CAP_LOCK = ReentrantLock()
 
@@ -515,6 +528,49 @@ function _create_transfer_capacity_enriched(date::Date, bidding_zones::Vector{St
     end
     n_fbmc_override > 0 &&
         println("   🔁 cv27 T1: $(n_fbmc_override) Day-ahead-free border-hours sized by demonstrated capability")
+
+    # cv30 T1: demonstrated EXPORT-capability CEILING on the frozen candidate
+    # borders (both directions tied). Caps the model border-hour at the
+    # trailing-366d p95-block observed exchange when the offered ATC exceeds it,
+    # so the coupled clear cannot inject phantom import over a border whose real
+    # DA exchange saturates far below its nominal ATC (headline: BG>GR, ~245 MW
+    # demonstrated vs ~1,000 MW offered). A pure ceiling — never a raise — so
+    # off == cv27 main byte-identical (guarded).
+    cv30_t1 = !isempty(get(ENV, "EUPHEMIA_ENABLE_CV30", "")) ||
+              !isempty(get(ENV, "EUPHEMIA_ENABLE_CV30_T1", ""))
+    if cv30_t1
+        t1set = Set{Tuple{String,String}}()
+        for tok in split(get(ENV, "EUPHEMIA_CV30_T1_BORDERS", CV30_T1_BORDERS_DEFAULT), ',')
+            t = strip(tok); isempty(t) && continue
+            parts = split(t, '>')
+            length(parts) == 2 || error("bad EUPHEMIA_CV30_T1_BORDERS token: $t")
+            a = String(strip(parts[1])); b = String(strip(parts[2]))
+            push!(t1set, (a, b))
+            # Default: both directions tied (cv27 screening protocol). The Set A
+            # calibration measured that symmetrizing the CEILING starves the
+            # IMPORT direction of BG/RO (phantom cap prices, corr −0.32) — a fill
+            # can be tied safely but a ceiling cannot. EUPHEMIA_CV30_T1_DIRECTIONAL
+            # applies the ceiling to the LISTED directions only (disclosed
+            # post-A diagnostic; docs/experiments/cv30-results.md).
+            isempty(get(ENV, "EUPHEMIA_CV30_T1_DIRECTIONAL", "")) && push!(t1set, (b, a))
+        end
+        cap30 = isempty(t1set) ? nothing : _fbmc_capability(date)
+        if cap30 !== nothing
+            n_ceil = 0
+            for (i, r) in enumerate(rows)
+                (r.source_zone, r.sink_zone) in t1set || continue
+                blk = (r.time_period - 1) ÷ 4
+                demo = get(cap30, (r.source_zone, r.sink_zone, blk), 0.0)
+                if demo > 0.0 && demo < r.capacity
+                    rows[i] = (source_zone=r.source_zone, sink_zone=r.sink_zone,
+                               time_period=r.time_period, capacity=demo)
+                    n_ceil += 1
+                end
+            end
+            n_ceil > 0 &&
+                println("   🔻 cv30 T1: $(n_ceil) border-hours capped at demonstrated export capability")
+        end
+    end
     n_explicit_added = 0
     if include_explicit
         exp = _fetch_atc_aggregated(date, "offered_transfer_capacities_explicit", codes;
