@@ -29,10 +29,16 @@ jobs:
       - name: Sync record books to the extract bucket
         if: ${{ inputs.books_dir != 'none' }}
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          # The site's worker reads v1/books/<date>.parquet from the WEB bucket
+          # (the daily flow: flush_books! writes data/web/v1/books locally and
+          # web_data_push.sh syncs it) — publish the record books THERE with the
+          # WEB credentials, which demonstrably create new keys daily. The
+          # extract-bucket token intermittently AccessDenied's new-key bursts
+          # and was the wrong destination for the site anyway.
+          AWS_ACCESS_KEY_ID: ${{ secrets.WEB_S3_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.WEB_S3_SECRET_ACCESS_KEY }}
           EXTRACT_S3_ENDPOINT: ${{ secrets.EXTRACT_S3_ENDPOINT }}
-          EXTRACT_S3_BUCKET: ${{ secrets.EXTRACT_S3_BUCKET }}
+          EXTRACT_S3_BUCKET: euphemia-web-data
           AWS_DEFAULT_REGION: auto
         run: |
           set -euo pipefail
@@ -48,10 +54,10 @@ jobs:
           export AWS_RETRY_MODE=standard AWS_MAX_ATTEMPTS=10
           aws s3 cp --recursive --endpoint-url "$EXTRACT_S3_ENDPOINT" \
             --exclude "*" --include "*.parquet" \
-            "${{ inputs.books_dir }}" "s3://$EXTRACT_S3_BUCKET/books/" || true
+            "${{ inputs.books_dir }}" "s3://$EXTRACT_S3_BUCKET/v1/books/" || true
           missing=0
           for f in "${{ inputs.books_dir }}"/*.parquet; do
-            key="books/$(basename "$f")"
+            key="v1/books/$(basename "$f")"
             for attempt in 1 2 3 4 5; do
               sz_remote=$(aws s3api head-object --endpoint-url "$EXTRACT_S3_ENDPOINT" \
                 --bucket "$EXTRACT_S3_BUCKET" --key "$key" \
