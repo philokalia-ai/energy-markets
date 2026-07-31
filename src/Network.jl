@@ -325,7 +325,8 @@ function _fetch_atc_aggregated(date::Date, table::String, codes::Vector{String};
     SELECT out_map_code AS source_zone,
            in_map_code AS sink_zone,
            (EXTRACT(HOUR FROM date_time_utc) + 1)::int AS time_period,
-           $cap_expr::float8 AS capacity
+           $cap_expr::float8 AS capacity,
+           (COUNT(*) FILTER (WHERE contract_type = 'Day-ahead'))::int AS n_da
     FROM entsoe.$table
     WHERE date_time_utc >= (\$1::date::timestamp AT TIME ZONE 'UTC')
           AND date_time_utc < ((\$1::date + 1)::timestamp AT TIME ZONE 'UTC')
@@ -336,6 +337,73 @@ function _fetch_atc_aggregated(date::Date, table::String, codes::Vector{String};
     """
     return safe_sql2df(query, params)
 end
+
+# cv27 T1 (docs/cv27-import-hydro-prereg.md): demonstrated interconnector
+# capability for Day-ahead-free (FBMC) borders — trailing-366d p95 of observed
+# gross flow per 4h block, the cv21/cv22 boundary-book recipe generalized.
+# Computed ONCE per delivery day for ALL borders (one grouped scan of
+# physical_flows) and cached, day-level, like the outage cache. Never cached
+# on error.
+# The 7 physical borders accepted by the cv27 border campaign
+# (docs/experiments/cv27-borders/, Set A -0.44 MAE/+0.009 corr, Set B
+# -0.41/-0.004, zero caps/breaches; both directions each).
+const CV27_SHIPPED_BORDERS = join([
+    "DE_LU>FR", "FR>DE_LU", "CH>FR", "FR>CH", "CZ>PL", "PL>CZ",
+    "SE1>SE2", "SE2>SE1", "IT-CNORTH>IT-NORTH", "IT-NORTH>IT-CNORTH",
+    "DK1>SE3", "SE3>DK1", "IT-Calabria>IT-Sicily", "IT-Sicily>IT-Calabria"], ",")
+
+const _FBMC_CAP_DAY_CACHE = Dict{Date,Dict{Tuple{String,String,Int},Float64}}()
+const _FBMC_CAP_LOCK = ReentrantLock()
+
+# T1b scoping (declared post-Set-A amendment, disclosed in the results): the
+# demonstrated capability applies ONLY to borders that HAD Day-ahead offered
+# rows at some point before the delivery day and have none on it — capacity
+# CONTINUITY where the DA product disappeared (the Nordic post-FBMC case).
+# Borders that never published DA rows in our history (Core FBMC since 2022)
+# keep the calibrated intraday-blend behaviour; measured Set A showed re-basing
+# them breaches DE_LU/AT. Strictly ex-ante (only pre-delivery history).
+const _DA_EVER_CACHE = Dict{Date,Set{Tuple{String,String}}}()
+
+function _da_ever_borders(date::Date)
+    lock(_FBMC_CAP_LOCK) do
+        haskey(_DA_EVER_CACHE, date) && return _DA_EVER_CACHE[date]
+        df = safe_sql2df("""
+            SELECT DISTINCT out_map_code AS s, in_map_code AS k
+            FROM entsoe.offered_transfer_capacities_implicit
+            WHERE contract_type = 'Day-ahead'
+              AND date_time_utc < (\$1::date::timestamp AT TIME ZONE 'UTC')
+            """, Any[date])
+        st = Set{Tuple{String,String}}((String(r.s), String(r.k)) for r in eachrow(df))
+        _DA_EVER_CACHE[date] = st
+        return st
+    end
+end
+
+function _fbmc_capability(date::Date)
+    lock(_FBMC_CAP_LOCK) do
+        haskey(_FBMC_CAP_DAY_CACHE, date) && return _FBMC_CAP_DAY_CACHE[date]
+        df = safe_sql2df("""
+            SELECT out_area_map_code AS s, in_area_map_code AS k,
+                   FLOOR(EXTRACT(HOUR FROM date_time_utc) / 4)::int AS blk,
+                   percentile_cont(0.95) WITHIN GROUP (ORDER BY flow_mw) AS cap
+            FROM entsoe.physical_flows
+            WHERE date_time_utc >= ((\$1::date - 366)::timestamp AT TIME ZONE 'UTC')
+              AND date_time_utc < (\$1::date::timestamp AT TIME ZONE 'UTC')
+              AND flow_mw IS NOT NULL AND flow_mw > 0
+            GROUP BY 1, 2, 3
+            """, Any[date])
+        cap = Dict{Tuple{String,String,Int},Float64}()
+        for r in eachrow(df)
+            (ismissing(r.cap) || ismissing(r.s) || ismissing(r.k)) && continue
+            cap[(String(r.s), String(r.k), Int(r.blk))] = Float64(r.cap)
+        end
+        _FBMC_CAP_DAY_CACHE[date] = cap
+        return cap
+    end
+end
+
+"Clear the cv27 demonstrated-capability day cache (tests / long processes)."
+clear_fbmc_capability_cache!() = (lock(_FBMC_CAP_LOCK) do; empty!(_FBMC_CAP_DAY_CACHE); end; nothing)
 
 """
     _subzones_of(aggregate, footprint) -> Vector{String}
@@ -395,12 +463,58 @@ function _create_transfer_capacity_enriched(date::Date, bidding_zones::Vector{St
     imp_pairs = Set{Tuple{String,String}}(
         (r.source_zone, r.sink_zone) for r in eachrow(imp))
 
+    # cv27 T1: a border-hour with NO Day-ahead rows (n_da == 0 — the FBMC
+    # borders since late 2024) sizes by demonstrated capability instead of the
+    # intraday-blend fallback. Borders WITH Day-ahead rows are untouched by
+    # construction (the falsifier the prereg names).
+    cv27_t1 = isempty(get(ENV, "EUPHEMIA_DISABLE_CV27", "")) &&
+              isempty(get(ENV, "EUPHEMIA_DISABLE_CV27_T1", ""))
+    # cv27-borders (Phase 0): per-border scoping of the T1 override.
+    # When EUPHEMIA_CV27_T1_BORDERS is PRESENT in the environment it selects the
+    # border-list mode: the demonstrated-capability override applies ONLY to the
+    # listed directed borders (comma-separated "A>B,B>A,..."), regardless of
+    # da_ever — both physical directions are symmetrized in code as a safety.
+    # An empty value = no borders = treatment OFF. When the var is ABSENT the
+    # legacy T1b behaviour (override every n_da==0 border in da_ever) is
+    # unchanged, so the existing guards stay bit-identical.
+    # cv27 SHIP (2026-07-31, owner decision on the border campaign's Set A/B):
+    # the accepted 7-border set is the DEFAULT. The env var still overrides for
+    # A/Bs (present-and-empty = treatment OFF); the campaign's measured combo
+    # arm is bit-identical to this default (ship guard).
+    border_list_mode = true
+    border_env = get(ENV, "EUPHEMIA_CV27_T1_BORDERS", CV27_SHIPPED_BORDERS)
+    border_set = Set{Tuple{String,String}}()
+    if border_list_mode
+        for tok in split(border_env, ',')
+            t = strip(tok); isempty(t) && continue
+            parts = split(t, '>')
+            length(parts) == 2 || error("bad EUPHEMIA_CV27_T1_BORDERS token: $t")
+            a = String(strip(parts[1])); b = String(strip(parts[2]))
+            push!(border_set, (a, b)); push!(border_set, (b, a))  # both directions
+        end
+    end
+    fbmc_cap = (cv27_t1 && "n_da" in names(imp) && any(imp.n_da .== 0) &&
+                (!border_list_mode || !isempty(border_set))) ?
+        _fbmc_capability(date) : nothing
+    da_ever = (fbmc_cap === nothing || border_list_mode) ?
+        Set{Tuple{String,String}}() : _da_ever_borders(date)
+    n_fbmc_override = 0
     rows = NamedTuple{(:source_zone, :sink_zone, :time_period, :capacity),
                       Tuple{String,String,Int,Float64}}[]
     for r in eachrow(imp)
+        capacity = Float64(r.capacity)
+        pair = (String(r.source_zone), String(r.sink_zone))
+        eligible = border_list_mode ? (pair in border_set) : (pair in da_ever)
+        if fbmc_cap !== nothing && Int(r.n_da) == 0 && eligible
+            blk = (Int(r.time_period) - 1) ÷ 4
+            demo = get(fbmc_cap, (String(r.source_zone), String(r.sink_zone), blk), 0.0)
+            demo > 0.0 && (capacity = demo; n_fbmc_override += 1)
+        end
         push!(rows, (source_zone=r.source_zone, sink_zone=r.sink_zone,
-                     time_period=Int(r.time_period), capacity=Float64(r.capacity)))
+                     time_period=Int(r.time_period), capacity=capacity))
     end
+    n_fbmc_override > 0 &&
+        println("   🔁 cv27 T1: $(n_fbmc_override) Day-ahead-free border-hours sized by demonstrated capability")
     n_explicit_added = 0
     if include_explicit
         exp = _fetch_atc_aggregated(date, "offered_transfer_capacities_explicit", codes;
