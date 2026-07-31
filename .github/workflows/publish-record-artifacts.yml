@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
     inputs:
       books_dir:
-        description: "Absolute path (on the runner host) of the per-day book parquets; empty = skip books"
+        description: "Absolute path (on the runner host) of the per-day book parquets; 'none' = skip books"
         required: false
         default: "/home/pgeorgakopoulos/armada/energy-markets/data/backfill_books_cv26"
       publish_zone_strategies:
@@ -27,7 +27,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Sync record books to the extract bucket
-        if: ${{ inputs.books_dir != '' }}
+        if: ${{ inputs.books_dir != 'none' }}
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
@@ -41,18 +41,33 @@ jobs:
           # lists only the LOCAL source; verify by HeadObject spot checks.
           test -d "${{ inputs.books_dir }}" || { echo "books_dir missing on runner host"; exit 1; }
           n_local=$(ls "${{ inputs.books_dir }}"/*.parquet | wc -l)
+          # R2 intermittently rejects a few PutObjects in large bursts with
+          # AccessDenied (observed: different keys each run). Bulk-copy first,
+          # then verify EVERY key by HeadObject and retry stragglers
+          # sequentially with backoff.
+          export AWS_RETRY_MODE=standard AWS_MAX_ATTEMPTS=10
           aws s3 cp --recursive --endpoint-url "$EXTRACT_S3_ENDPOINT" \
             --exclude "*" --include "*.parquet" \
-            "${{ inputs.books_dir }}" "s3://$EXTRACT_S3_BUCKET/books/"
-          for f in $(ls "${{ inputs.books_dir }}"/*.parquet | sed -n '1p;$p') \
-                   $(ls "${{ inputs.books_dir }}"/*.parquet | sed -n "$((n_local/2))p"); do
+            "${{ inputs.books_dir }}" "s3://$EXTRACT_S3_BUCKET/books/" || true
+          missing=0
+          for f in "${{ inputs.books_dir }}"/*.parquet; do
             key="books/$(basename "$f")"
-            sz_local=$(stat -c%s "$f")
+            for attempt in 1 2 3 4 5; do
+              sz_remote=$(aws s3api head-object --endpoint-url "$EXTRACT_S3_ENDPOINT" \
+                --bucket "$EXTRACT_S3_BUCKET" --key "$key" \
+                --query ContentLength --output text 2>/dev/null || echo MISSING)
+              [ "$sz_remote" = "$(stat -c%s "$f")" ] && break
+              echo "retry $key (attempt $attempt, remote=$sz_remote)"
+              sleep $((attempt * 2))
+              aws s3 cp --endpoint-url "$EXTRACT_S3_ENDPOINT" "$f" \
+                "s3://$EXTRACT_S3_BUCKET/$key" || true
+            done
             sz_remote=$(aws s3api head-object --endpoint-url "$EXTRACT_S3_ENDPOINT" \
-              --bucket "$EXTRACT_S3_BUCKET" --key "$key" --query ContentLength --output text)
-            echo "verify $key: local=$sz_local remote=$sz_remote"
-            [ "$sz_local" = "$sz_remote" ] || { echo "size mismatch on $key"; exit 1; }
+              --bucket "$EXTRACT_S3_BUCKET" --key "$key" \
+              --query ContentLength --output text 2>/dev/null || echo MISSING)
+            [ "$sz_remote" = "$(stat -c%s "$f")" ] || { echo "STILL FAILING: $key"; missing=$((missing+1)); }
           done
+          [ "$missing" -eq 0 ] || { echo "$missing keys failed after retries"; exit 1; }
           echo "books: uploaded $n_local parquets, 3 spot-verified by HeadObject" 
 
       - name: Export + publish zone-strategies JSON to the web bucket
