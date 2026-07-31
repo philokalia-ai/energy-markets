@@ -143,11 +143,26 @@ and starves BG/RO; (b) whether the export-ceiling concept helps at all with
 correct directionality. `EUPHEMIA_CV30_T1_DIRECTIONAL` applies the ceiling to the
 listed directions only. Measured on Set A (24 days), vs cv27 base:
 
-[T1_DIR TABLE — filled after the run]
+| arm (24 days, vs cv27 base) | MAE | dMAE | corr | dcorr | new caps |
+|---|---|---|---|---|---|
+| base | 31.14 | 0.00 | 0.701 | 0.000 | 0 |
+| T1 symmetric (LOO marginal effect) | — | +0.72 | — | — | **+6** |
+| **t1_dir (directional, alone)** | 31.15 | **+0.01** | 0.700 | **−0.001** | **0** |
 
-This is calibration-set diagnosis (not falsifier-tuning: T1's failure is an
-envelope/cap breach, not the phantom gate). It does not change the package
-verdict — T2 and T3 fail independently.
+Per-zone (t1_dir vs base): BG 38.83→39.85 (+1.02 MAE / −0.013 corr — **within**
+envelope, 0 caps), RO 39.67→40.37 (+0.70 / −0.010 — **within**, 0 caps), GR
+28.77→28.59 (**−0.18** / 0.000 — the intended direction, marginal).
+
+**Directional T1 eliminates the defect** (0 new caps, no envelope breach — the
+BG/RO corr collapse is gone) **but is inert on Set A** (+0.01 all-hours MAE). The
+concept (cap a border whose real DA exchange saturates below nominal ATC) is
+benign but delivers no Set A gain, because **the owner's headline validation
+target — GR summer-2026 midday collapse — is OUTSIDE the frozen Set A/B window**
+(2024-07 / 2025-07 are the only summers; the measured episode was 30-31 Jul /
+01 Aug 2026). T1's value for that specific episode is therefore untested by the
+frozen gates. This is calibration-set diagnosis (not falsifier-tuning: T1's
+failure is an envelope/cap breach, not the phantom gate) and does not change the
+package verdict — T2 and T3 fail independently.
 
 ## Decision trace (design, deferred)
 
@@ -180,11 +195,17 @@ orthogonal to the owner's ship decision on a NO-SHIP package.
   +11..+16), because the reallocated block is priced at self-schedule/floor in
   shoulder hours that settled well above it. The share magnitudes (0.5–0.7) are
   too large for a system-wide reallocation.
-- **T1 (export-capability ceiling): NO-SHIP as implemented (symmetric).** The
-  concept — cap a border whose real DA exchange saturates below nominal ATC — is
-  sound, but tying both directions starves importers (BG/RO). See the
-  directional diagnostic for whether the corrected, direction-scoped ceiling is
-  worth a future border-screened program (the GR headline). Not shipped here.
+- **T1 (export-capability ceiling): NO-SHIP now; concept parked for a
+  window-scoped follow-up.** The symmetric ceiling starves BG/RO (NO-SHIP). The
+  corrected *directional* ceiling is benign (0 caps, no envelope breach) but
+  inert on Set A (+0.01 MAE) — because the owner's headline target (GR
+  summer-2026 midday collapse) lies OUTSIDE the frozen Set A/B window. A future
+  T1 program should (a) be directional-only from the start, (b) run the per-
+  border cv27-style screening on each candidate, and (c) include the 2026-07 GR
+  episode in its evaluation window so the headline is actually testable. There
+  is no evidence T1 helps the record on the frozen gates, but no evidence it
+  harms either once directional — it is a safe, targeted lever awaiting the
+  right evaluation window.
 
 The code lands default-inert (byte-identical to cv27), so nothing changes for the
 record or the live forecast; the switches remain for future revival of a
