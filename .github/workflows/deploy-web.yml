@@ -1,0 +1,42 @@
+# Deploy the site (api worker + SPA) via wrangler — owner-dispatched.
+# Requires the CLOUDFLARE_API_TOKEN repo secret (Workers Scripts: Edit).
+# Closes the "no CI deploys the SPA or worker" gap flagged in PR #246.
+name: deploy-web
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "What to deploy"
+        type: choice
+        options: [both, worker, spa]
+        default: both
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, linux, ARM64]
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Guard secret present
+        run: |
+          [ -n "$CLOUDFLARE_API_TOKEN" ] || { echo "CLOUDFLARE_API_TOKEN secret is not set"; exit 1; }
+      - name: Deploy api worker (/books route etc.)
+        if: ${{ inputs.target == 'both' || inputs.target == 'worker' }}
+        working-directory: workers/api
+        run: |
+          npm ci
+          npx wrangler deploy
+      - name: Deploy SPA
+        if: ${{ inputs.target == 'both' || inputs.target == 'spa' }}
+        run: |
+          npx wrangler deploy
+      - name: Verify live routes
+        run: |
+          sleep 5
+          code=$(curl -s -o /dev/null -w "%{http_code}" "https://api.philokalia.ai/api/v1/manifest")
+          echo "manifest: $code"; [ "$code" = "200" ] || exit 1
+          code=$(curl -s -o /dev/null -w "%{http_code}" "https://api.philokalia.ai/api/v1/books/GR/2026-07-15")
+          echo "books GR/2026-07-15: $code (200 = data present, 404 = route live but day missing)"
+          [ "$code" = "200" ] || [ "$code" = "404" ]
