@@ -183,12 +183,20 @@ orthogonal to the owner's ship decision on a NO-SHIP package.
 
 - **T2 (export-aware surplus floor): NO-SHIP.** The export-aware signal did NOT
   fix the phantom-negative problem (20.6% vs cv28 18% / cv29 16.4%) — the third
-  redesign of the surplus floor fails the same falsifier as the first two. The
-  floor family is exhausted on the record gates; a fourth attempt needs a
-  fundamentally different mechanism (not a price floor on price-takers). Lesson:
-  the export term makes the signal *conservative on quantity* but the failure is
-  that when the floored price-taker DOES become marginal, it prints −20 in hours
-  that settled positive — a **marginality** problem the signal cannot see.
+  redesign of the surplus floor fails the same falsifier as the first two.
+  **Sharper lesson — gate on the CAUSE (solar share), not the SYMPTOM (surplus
+  MW).** The floor MECHANISM is not the problem; the QUANTITY-SURPLUS *gate* is.
+  Every quantity-surplus gate (cv28 `price_taker_mw ≥ load`, cv29 domestic
+  surplus, cv30-T2 `price_taker_mw ≥ load + export_capability`) fires the floor
+  in hours that settle positive → 16–20% phantom. The SAME price-taker floor,
+  gated instead on the ex-ante **solar-share regime axis**, passed at **0.0%
+  phantom on both Set A and Set B** tonight (the solar-regime program, PR #251,
+  unmerged). Surplus MW is a lagging, marginality-blind proxy: it says the zone
+  *could* be long but not *why*, so it floors thermal-marginal hours that never
+  collapse. Solar share is the ex-ante cause that actually predicts the collapse.
+  The floor family is NOT exhausted — it works under a cause-based (solar-share)
+  gate and fails under every surplus-MW gate; a fourth surplus-MW redesign is the
+  wrong direction.
 - **T3 (self-scheduling reallocation): NO-SHIP.** Reallocating (not deleting) the
   cv29 haircut shares avoids phantom scarcity (0 new caps) — the cv29 lesson
   holds — but it over-lowers the IT zones (+1.42 MAE, IT-Sicily/Sardinia dMAE
