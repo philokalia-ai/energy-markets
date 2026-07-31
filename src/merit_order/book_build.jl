@@ -751,6 +751,47 @@ function create_merit_order_book(
         total_demand_quantity = 0.0
         total_supply_capacity = 0.0
 
+        # ── Solar-regime price-taker floor (feat/solar-regime) ──────────
+        # Regime-gated revival of the cv28/cv29 price-taker floor. The gate is
+        # an EX-ANTE per-zone-hour regime axis — the day-ahead SOLAR share of
+        # forecast load (solar_fc/load_fc) — NOT the cv29 domestic surplus
+        # signal. Phase-1 cartography (docs) shows the continental-solar group
+        # (DE_LU/FR/PL/BE/CZ/CH) systematically OVERPRICES by +15..+18 €/MWh in
+        # high-solar hours where the settled market crashes to ≤0 (28..50% of
+        # those hours) while the model reaches ≤5 only 10..24% of the time.
+        # In regime hours the RES block (and, with BLOCKS=full, run-of-river +
+        # the deepest must-run block) prices at the declared negative floor so
+        # the clear can genuinely fall below zero. Default-INERT: with
+        # EUPHEMIA_SOLAR_REGIME unset every branch below is skipped and the book
+        # is byte-identical to main (guard). One declared parameter: θ.
+        solar_regime = !isempty(get(ENV, "EUPHEMIA_SOLAR_REGIME", ""))
+        sr_zones = Set(strip.(split(get(ENV, "EUPHEMIA_SOLAR_REGIME_ZONES",
+            "DE_LU,FR,PL,BE,CZ,CH"), ",")))
+        solar_regime_on = solar_regime && (bidding_zone in sr_zones)
+        sr_theta = parse(Float64, get(ENV, "EUPHEMIA_SOLAR_REGIME_THETA", "0.4"))
+        sr_full = solar_regime_on &&
+                  get(ENV, "EUPHEMIA_SOLAR_REGIME_BLOCKS", "res") == "full"
+        solar_share_hr = Dict{Int,Float64}()
+        if solar_regime_on
+            sol_hr = Dict{Int,Vector{Float64}}()
+            ld_hr = Dict{Int,Vector{Float64}}()
+            for r in renewables
+                r.production_type == "Solar" || continue
+                length(r.date_time) >= 11 || continue
+                push!(get!(sol_hr, parse(Int, r.date_time[10:11]), Float64[]),
+                      r.aggregated_generation_forecast)
+            end
+            for (ts, v) in load_by_time
+                length(ts) >= 11 || continue
+                push!(get!(ld_hr, parse(Int, ts[10:11]), Float64[]), v)
+            end
+            for (h, vs) in sol_hr
+                lv = haskey(ld_hr, h) ? sum(ld_hr[h]) / length(ld_hr[h]) : 0.0
+                solar_share_hr[h] = lv > 0 ? (sum(vs) / length(vs)) / lv : 0.0
+            end
+        end
+        sr_active(hr) = solar_regime_on && get(solar_share_hr, hr, 0.0) >= sr_theta
+
         for ts in target_timeslots
             date_time = parse_timeslot_to_datetime(ts, day)
             hr = Dates.hour(date_time)   # UTC hour key for all hour-keyed lookups
@@ -759,7 +800,8 @@ function create_merit_order_book(
             # price-taker; support schemes make it insensitive to price)
             res_qty = get(renewable_by_time, ts, 0.0)
             if res_qty > 0.1
-                push!(tagged, (SimpleOrder(:supply, 1.0, res_qty,
+                push!(tagged, (SimpleOrder(:supply,
+                    sr_active(hr) ? DEEP_SURPLUS_FLOOR_EUR : 1.0, res_qty,
                     Symbol(bidding_zone), date_time, resolution_minutes), "RES"))
                 supply_orders_count += 1
                 total_supply_capacity += res_qty
@@ -920,6 +962,12 @@ function create_merit_order_book(
                        !isempty(get(ENV, "EUPHEMIA_ENABLE_CV27_T2", ""))
                         water_value *= norm_demand / 0.5
                     end
+                    # Solar-regime full-blocks: run-of-river joins the floor in
+                    # regime hours (price-taker, curtailment-avoidance economics).
+                    if sr_full && sr_active(hr) &&
+                       g.fuel_type == Symbol("Hydro Run-of-river and pondage")
+                        water_value = DEEP_SURPLUS_FLOOR_EUR
+                    end
                     push!(tagged, (SimpleOrder(:supply, water_value, offered_pmax(g),
                         Symbol(bidding_zone), date_time, resolution_minutes), g.code))
                     supply_orders_count += 1
@@ -973,7 +1021,8 @@ function create_merit_order_book(
                         # below zero, which the >= 0 near-free price never can.
                         # NOT shipped with cv27 (cv28/cv29 measured the floor family
                         # NO-SHIP): explicit opt-in only.
-                        deep_price = !isempty(get(ENV, "EUPHEMIA_ENABLE_CV27_T3", "")) ?
+                        deep_price = (!isempty(get(ENV, "EUPHEMIA_ENABLE_CV27_T3", "")) ||
+                                      (sr_full && sr_active(hr))) ?
                             DEEP_SURPLUS_FLOOR_EUR : gmc * must_run_price_factor
                         push!(tagged, (SimpleOrder(:supply,
                             deep_price, deep_qty,
