@@ -32,15 +32,38 @@ export AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-auto}"
 [ -d "$STAGING/v1" ] || { echo "ERROR: staging dir $STAGING/v1 not found — run bin/export_web_parquet.jl first" >&2; exit 1; }
 command -v aws >/dev/null || { echo "ERROR: aws CLI required" >&2; exit 1; }
 
-# Parquet objects first (sync prunes deleted zones), manifests last. The
-# `*manifest.json` exclude covers BOTH the top-level manifest and the
-# Predictions-page one at v1/inputs/manifest.json, so each is uploaded after its
-# own parquet objects (a reader never sees a manifest newer than its data).
+# DELETE SCOPE (incident 2026-08-01): a root-level `sync --delete` on v1/
+# mirrors THIS RUN's staging and deletes every key other publishers own —
+# it wiped the 1,235 record book parquets (v1/books/, published 03:34,
+# deleted 04:06) and would nightly delete v1/zone_strategies.json and any
+# v1/inputs/ from a cycle whose non-fatal exporter skipped. The destructive
+# sync is scoped to the ONE subtree this exporter fully owns (v1/zones —
+# pruning deleted zones is the original intent); everything else is
+# additive. Books/inputs/zone_strategies are never deleted here.
 aws s3 sync --endpoint-url "$ENDPOINT" \
-    --exclude "*manifest.json" \
     --content-type "application/vnd.apache.parquet" \
     --delete \
-    "$STAGING/v1" "s3://$BUCKET/v1"
+    "$STAGING/v1/zones" "s3://$BUCKET/v1/zones"
+for f in "$STAGING"/v1/*.parquet; do
+    [ -e "$f" ] || continue
+    aws s3 cp --endpoint-url "$ENDPOINT" \
+        --content-type "application/vnd.apache.parquet" \
+        "$f" "s3://$BUCKET/v1/$(basename "$f")"
+done
+# Predictions inputs (v1/inputs/): additive sync of parquets when this cycle
+# produced them; the inputs manifest still goes LAST (below).
+if [ -d "$STAGING/v1/inputs" ]; then
+    aws s3 sync --endpoint-url "$ENDPOINT" \
+        --exclude "*manifest.json" \
+        --content-type "application/vnd.apache.parquet" \
+        "$STAGING/v1/inputs" "s3://$BUCKET/v1/inputs"
+fi
+# Record books captured by backfills/daily flow: additive only.
+if [ -d "$STAGING/v1/books" ]; then
+    aws s3 sync --endpoint-url "$ENDPOINT" \
+        --content-type "application/vnd.apache.parquet" \
+        "$STAGING/v1/books" "s3://$BUCKET/v1/books"
+fi
 
 aws s3 cp --endpoint-url "$ENDPOINT" \
     --content-type "application/json" \
