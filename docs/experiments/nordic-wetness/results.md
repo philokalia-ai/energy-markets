@@ -131,20 +131,26 @@ insufficient, T1 supplies the extra reduction but destroys shape.
 
 ## Constraint on the successor (a fired falsifier constrains, never tuned around)
 
-1. A wet discount on a **non-anchored** water-value zone must **preserve the
-   within-day shape** — discounting the level/floor cannot collapse the
-   demand-shaping `span·norm_demand` term (which the floored `wv_frac` does).
-   Candidate: discount the wv_frac *offset* while renormalizing the demand-shape
-   band, or apply the discount to the *level* (`water_value_base`) only.
+1. **Shape-preserving mechanism on the water-value-setting (non-anchored)
+   zones.** A wet discount on SE1/SE2/FI/NO4 must **preserve the within-day
+   shape**: the water value IS the price-setter there, so discounting it cannot
+   collapse the demand-shaping `span·norm_demand` term (which the floored
+   `wv_frac` does — NO4 corr 0.263→−0.024). Candidate: discount the `wv_frac`
+   *offset* / the `water_value_base` *level* while renormalizing the demand-shape
+   band, so the diurnal profile survives the level cut. A flat floor-clamp is
+   disqualified by this record.
 2. Or **scope the wet discount to the anchored (shape-safe) branch only** and
    find the missing bias reduction elsewhere (T2-only cleared every collateral
-   gate — it is a viable half; it just needs a second, shape-safe lever to reach
-   the floor).
+   gate — a viable half needing a second, shape-safe lever to reach the floor).
 3. Guard the **≤20 collapse false-alarm**, not only the ≤5 phantom — T1 passed
    the ≤5 phantom gate while quadrupling the ≤20 false-alarm.
-4. Re-derive against a **cv31+** baseline where the wet overprice is already only
-   ~+10 (not the cv27 +23) — the headroom for a shape-safe ≥5 reduction is much
-   thinner than the cartography implied.
+4. **Re-measure the effect size on the current-record ratified windows BEFORE
+   freezing any floors.** On the cv31 baseline the wet-Nordic overprice is only
+   **~+10** (measured here), not the cartography's **+23** (a cv27 full-record
+   figure). The floor parameters (`wv_floor_wet`, `anchor_floor_wet`, β) must be
+   re-derived against that ~+10 headroom on the ratified windows and frozen only
+   after — a floor tuned to the +23 diagnosis over-discounts on the current
+   record.
 
 ## Reproduce
 
