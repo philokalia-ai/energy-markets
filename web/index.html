@@ -302,6 +302,11 @@
       <div id="book-legend" class="legend book-legend"></div>
       <div id="book-wrap" class="chart-wrap"></div>
       <p id="book-comment" class="day-comment"></p>
+
+      <!-- Per-block decision trace for the selected hour: one row per supply
+           block (merit-order sorted) + a demand section, split at the clearing
+           point. Populated by renderBookTable in app.js. -->
+      <div id="book-table" class="book-table-wrap"></div>
     </div>
   </section>
 

@@ -105,17 +105,27 @@ export function shapeScoreboard(rows, manifest) {
  * the compact per-zone-day order-book ladder shape web/app.js renders.
  *
  * Each row is one tagged order: {market_date, zone, ts, side, price, mw,
- * owner, code_version}. We keep only the requested zone, group by delivery
- * hour (ts), and emit the supply ladder ascending in price (the merit order)
- * and the demand ladder descending in price. Owners are de-duplicated into an
- * index table so the long ENTSO-E unit codes are not repeated on every order
- * (keeps the biggest zones — FR/DE_LU — comfortably under 1 MB).
+ * owner, strategy?, code_version}. We keep only the requested zone, group by
+ * delivery hour (ts), and emit the supply ladder ascending in price (the merit
+ * order) and the demand ladder descending in price. Owners AND strategies are
+ * de-duplicated into index tables so the long ENTSO-E unit codes / repeated
+ * strategy labels are not repeated on every order (keeps the biggest zones —
+ * FR/DE_LU — comfortably under 1 MB).
  *
- *   { zone, date, market_day_tz, code_version,
- *     owners: ["RES", "IMPORT", "<unit>", …],
- *     hours:  ["2023-01-01T00:00:00Z", …],           // one ts per delivery hour
- *     supply: [ [ [price, mw, ownerIdx], … ], … ],    // per hour, price ascending
- *     demand: [ [ [price, mw, ownerIdx], … ], … ] }   // per hour, price descending
+ *   { zone, date, market_day_tz, code_version, has_strategy,
+ *     owners:     ["RES", "IMPORT", "<unit>", …],
+ *     strategies: ["res_forecast", "srmc_base", …],       // index table (see below)
+ *     hours:  ["2023-01-01T00:00:00Z", …],                   // one ts per delivery hour
+ *     supply: [ [ [price, mw, ownerIdx, stratIdx], … ], … ], // per hour, price ascending
+ *     demand: [ [ [price, mw, ownerIdx, stratIdx], … ], … ] }// per hour, price descending
+ *
+ * STRATEGY is the honest source-side "WHY" of each block, written by the Julia
+ * book builder (STRATEGY_DESCRIPTIONS in src/merit_order/book_build.jl) into an
+ * additive `strategy` parquet column. GRACEFUL DEGRADATION: parquets captured
+ * BEFORE the column existed have no `r.strategy` — every order then maps to the
+ * empty label and `has_strategy` is false, so the SPA hides the strategy/
+ * explanation columns and shows a small note. The 4th tuple element is additive:
+ * older SPA builds that read only o[0..2] are unaffected.
  *
  * The CLEARING price ("πού έκατσε η μπίλια") and the settled actual are NOT in
  * the book — the frontend overlays them from the zone forecast series
@@ -130,17 +140,26 @@ export function shapeBook(rows, zone, date) {
     if (i === undefined) { i = owners.length; owners.push(key); ownerIdx.set(key, i); }
     return i;
   }
+  const strategies = [];
+  const stratIdx = new Map();
+  function sidx(s) {
+    const key = s == null ? "" : String(s);
+    let i = stratIdx.get(key);
+    if (i === undefined) { i = strategies.length; strategies.push(key); stratIdx.set(key, i); }
+    return i;
+  }
   // Group by hour timestamp, preserving first-seen order (parquet is written
   // ORDER BY zone, ts, side, price so hours already arrive ascending).
   const byTs = new Map();
-  let cv = null;
+  let cv = null, hasStrategy = false;
   for (const r of rows) {
     if (r.zone !== zone) continue;
     if (cv === null) cv = num(r.code_version);
+    if (r.strategy != null && r.strategy !== "") hasStrategy = true;
     const ts = iso(r.ts);
     let h = byTs.get(ts);
     if (!h) { h = { supply: [], demand: [] }; byTs.set(ts, h); }
-    const order = [num(r.price), num(r.mw), oidx(r.owner)];
+    const order = [num(r.price), num(r.mw), oidx(r.owner), sidx(r.strategy)];
     (r.side === "supply" ? h.supply : h.demand).push(order);
   }
   const hours = Array.from(byTs.keys()).sort();
@@ -154,7 +173,8 @@ export function shapeBook(rows, zone, date) {
   }
   return {
     zone: zone, date: date, market_day_tz: MARKET_DAY_TZ, code_version: cv,
-    owners: owners, hours: hours, supply: supply, demand: demand,
+    has_strategy: hasStrategy, owners: owners, strategies: strategies,
+    hours: hours, supply: supply, demand: demand,
   };
 }
 

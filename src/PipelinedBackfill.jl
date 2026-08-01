@@ -112,7 +112,7 @@ end
 # Flush (and clear) the captured books for `day` to its pass-tagged staging
 # parquet. Columns mirror bin/daily_forecast.jl's flush_books! so downstream
 # tooling reads one schema. Returns the row count written.
-function _flush_pipeline_books(books::Dict{Tuple{String,Date},Vector{Tuple{SimpleOrder,String}}},
+function _flush_pipeline_books(books::Dict{Tuple{String,Date},Vector{Tuple{SimpleOrder,String,String}}},
                                books_lock::ReentrantLock, dir::AbstractString,
                                day::Date, pass::Int)
     rows = NamedTuple[]
@@ -120,10 +120,11 @@ function _flush_pipeline_books(books::Dict{Tuple{String,Date},Vector{Tuple{Simpl
         for k in collect(keys(books))
             (zone, d) = k
             d == day || continue
-            for (o, tag) in books[k]
+            for (o, tag, strat) in books[k]
                 push!(rows, (market_date=day, zone=zone, ts=o.date_time,
                              side=String(o.type), price=o.price, mw=o.quantity,
-                             owner=tag, code_version=ENERGY_PRICES_CODE_VERSION))
+                             owner=tag, strategy=strat,
+                             code_version=ENERGY_PRICES_CODE_VERSION))
             end
             delete!(books, k)
         end
@@ -204,13 +205,17 @@ function pipeline_book_worker(bookwork::RemoteChannel, solvework::RemoteChannel,
     # from several threads, so guard the dict with a lock. Flushed + cleared per
     # pass job below. Inert (never installed) when books_dir is nothing.
     books_dir = hasproperty(cfg, :books_dir) ? cfg.books_dir : nothing
+    # Each captured order is (SimpleOrder, owner_tag, strategy_label) — the
+    # strategy is the parallel 5th sink arg zipped in here (additive `strategy`
+    # parquet column; see _flush_pipeline_books).
     books = books_dir === nothing ? nothing :
-        Dict{Tuple{String,Date},Vector{Tuple{SimpleOrder,String}}}()
+        Dict{Tuple{String,Date},Vector{Tuple{SimpleOrder,String,String}}}()
     books_lock = ReentrantLock()
     if books !== nothing
-        MeritOrderBook.BOOK_SINK[] = function (zone, day, tagged, res)
+        MeritOrderBook.BOOK_SINK[] = function (zone, day, tagged, res, strat)
             lock(books_lock) do
-                books[(zone, day)] = copy(tagged)
+                books[(zone, day)] = [(tagged[i][1], tagged[i][2], String(strat[i]))
+                                      for i in eachindex(tagged)]
             end
         end
     end
@@ -464,7 +469,7 @@ function run_pipelined_backfill(days, zones::Vector{String}=String[];
         # BACKSTOP tags, the pre-merge strategist view) and the coordinator
         # merges pass-1 ∪ pass-2 (pass-2 wins per zone) into
         # `<books_dir>/<market_date>.parquet` (zstd; columns market_date/zone/ts/
-        # side/price/mw/owner/code_version). Observational: prices are
+        # side/price/mw/owner/strategy/code_version). Observational: prices are
         # bit-identical to books_dir=nothing. Captured for every USABLE day,
         # independent of save_to_db.
         books_dir::Union{Nothing,String}=nothing,

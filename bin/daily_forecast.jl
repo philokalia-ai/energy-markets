@@ -259,10 +259,10 @@ function flush_books!(books::Dict, market_date::Date)
     wanted = (market_date - Day(1), market_date)
     for ((zone, day), tagged) in books
         day in wanted || continue
-        for (o, tag) in tagged
+        for (o, tag, strat) in tagged
             push!(rows, (market_date=market_date, zone=zone, ts=o.date_time,
                          side=String(o.type), price=o.price, mw=o.quantity,
-                         owner=tag,
+                         owner=tag, strategy=strat,
                          code_version=Euphemia.ENERGY_PRICES_CODE_VERSION))
         end
     end
@@ -818,17 +818,21 @@ function main()
     # --- Order-book export (measured: ~150k tagged orders / 307 KB zstd
     # parquet per 39-zone two-pass day; ~112 MB/yr). The sink captures every
     # zone-day's FULL tagged book (the strategist view: per-unit ladders, RES,
-    # IMPORT, DEMAND, BACKSTOP tags) right before merging; two-pass rebuilds
+    # IMPORT, DEMAND, BACKSTOP tags + the per-block `strategy` label) right
+    # before merging; two-pass rebuilds
     # overwrite per (zone, day) so the final book wins. Books are written per
     # MARKET DAY to data/web/v1/books/<date>.parquet after the day's forecast
     # freezes, and pushed to the public data bucket when the S3 env is
     # present (same env contract as bin/extract_store.sh). Failures warn,
     # never break forecasting.
-    _BOOKS = Dict{Tuple{String,Date},Vector{Tuple{Euphemia.SimpleOrder,String}}}()
+    # Each captured order is (SimpleOrder, owner_tag, strategy_label); the strategy
+    # is the parallel 5th sink arg (additive `strategy` parquet column).
+    _BOOKS = Dict{Tuple{String,Date},Vector{Tuple{Euphemia.SimpleOrder,String,String}}}()
     _BOOKS_LOCK = ReentrantLock()
-    Euphemia.MeritOrderBook.BOOK_SINK[] = function (zone, day, tagged, res)
+    Euphemia.MeritOrderBook.BOOK_SINK[] = function (zone, day, tagged, res, strat)
         lock(_BOOKS_LOCK) do
-            _BOOKS[(zone, day)] = copy(tagged)
+            _BOOKS[(zone, day)] = [(tagged[i][1], tagged[i][2], String(strat[i]))
+                                   for i in eachindex(tagged)]
         end
     end
 

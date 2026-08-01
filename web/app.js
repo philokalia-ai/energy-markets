@@ -1927,6 +1927,44 @@
     STRATEGIST: { icon: "➕", label: "Strategist order",      css: "--book-extra" },
   };
 
+  // ---- strategy taxonomy: the honest source-side "WHY" of each block --------
+  // Mirror of the Julia const table STRATEGY_DESCRIPTIONS in
+  // src/merit_order/book_build.jl — the NAMES are the contract between the two,
+  // keep them in sync. The book builder writes each block's strategy label into
+  // the parquet `strategy` column; the worker (shapeBook) indexes them into
+  // book.strategies; here we turn a label into a short `label` (tooltip line +
+  // table cell) and a longer `explain` (the table's explanation column).
+  // Parametric peak tranches arrive as "peak_tranche_<k>" — strategyMeta strips
+  // the numeric suffix so the single "peak_tranche" row covers them all.
+  var STRATEGY_LABELS = {
+    must_run_deep:            { label: "must-run · deep block", explain: "Technical-minimum block bid near €0 (5% of SRMC) — shutting down and restarting costs more than running below cost." },
+    must_run_rest:            { label: "must-run · remainder", explain: "The rest of minimum load bid below SRMC (start-up cost amortised over the committed hours)." },
+    srmc_base:                { label: "SRMC base tranche", explain: "Base tranche at short-run marginal cost: fuel / efficiency + CO₂ + O&M, with no scarcity markup." },
+    peak_tranche:             { label: "peak tranche", explain: "Upper capacity priced above cost for the scarcity margin plus peak-hour strategic bidding." },
+    water_value_gas_anchored: { label: "water value · gas-anchored", explain: "Reservoir opportunity cost anchored to gas SRMC — a premium at peak, boosted when the reservoir is dry." },
+    water_value_reservoir:    { label: "water value · reservoir", explain: "Shadow price of stored water — near-free when reservoirs are full, rising toward the thermal alternative as they empty." },
+    water_value_anchored:     { label: "water value · coupled anchor", explain: "Export opportunity cost set to the pass-1 coupled reference price (two-pass anchor)." },
+    res_forecast:             { label: "RES forecast", explain: "Renewable forecast offered as a price-taker (support schemes make output price-insensitive); floored negative in a solar-surplus regime." },
+    import_fixed:             { label: "scheduled import", explain: "Net scheduled cross-border imports injected as price-taking supply." },
+    ref_priced_export:        { label: "ref-priced export", explain: "Net export re-priced at the coupled reference so the exporter curtails under domestic stress." },
+    export_demand:            { label: "scheduled export", explain: "Net scheduled cross-border exports taken as firm demand at the price cap." },
+    import_backstop:          { label: "import backstop", explain: "Ex-ante elastic import headroom beyond the endogenous ATC, priced above every domestic tranche — binds only when the book would otherwise hit the cap." },
+    boundary_import:          { label: "boundary import", explain: "Out-of-footprint neighbour import supply, laddered on the neighbour's own SRMC over the border's demonstrated capability." },
+    boundary_export:          { label: "boundary export", explain: "Out-of-footprint neighbour export demand over the border's demonstrated capability (firm base slice + elastic tail)." },
+    demand_firm:              { label: "firm demand", explain: "Inelastic demand at the price cap (must-serve load)." },
+    demand_elastic:           { label: "elastic demand", explain: "Price-sensitive demand tail — curtails above the elastic bid price." },
+    extra:                    { label: "scenario order", explain: "Added via the extra_orders scenario hook." },
+    strategist:               { label: "strategist order", explain: "Produced by the strategist scenario hook (replaces the source ladder)." },
+  };
+  // Resolve a raw strategy label (incl. "peak_tranche_<k>") to {label, explain};
+  // null for an empty/unknown label (older books, or a not-yet-mapped name).
+  function strategyMeta(strat) {
+    if (!strat) return null;
+    if (STRATEGY_LABELS[strat]) return STRATEGY_LABELS[strat];
+    var base = String(strat).replace(/_\d+$/, "");
+    return STRATEGY_LABELS[base] || null;
+  }
+
   function fuelMeta(fuel) { return (fuel && FUEL_META[fuel]) || FUEL_META["Other"]; }
 
   // Theme-aware colour lookups, read from CSS custom properties (same pattern as
@@ -2203,13 +2241,20 @@
   function renderBookLadder(book, fday, hourIdx) {
     var wrap = $("book-wrap");
     wrap.textContent = "";
+    // Resolve the strategy label from o[3] via book.strategies (both additive;
+    // absent on pre-strategy-column books → strat null, handled everywhere).
+    var bookStrats = book.strategies || null;
+    function stratOf(o) {
+      return bookStrats && o[3] != null ? (bookStrats[o[3]] || null) : null;
+    }
     var supply = (book.supply[hourIdx] || []).map(function (o) {
-      return { price: o[0], mw: o[1], owner: book.owners[o[2]] };
+      return { price: o[0], mw: o[1], owner: book.owners[o[2]], strat: stratOf(o) };
     });
     // Demand ladder (willingness-to-pay), descending in price from shapeBook.
     var demand = (book.demand[hourIdx] || []).map(function (o) {
-      return { price: o[0], mw: o[1], owner: book.owners[o[2]] };
+      return { price: o[0], mw: o[1], owner: book.owners[o[2]], strat: stratOf(o) };
     });
+    var hasStrategy = !!book.has_strategy;
     var clearing = fday.sim[hourIdx];
     var actual = fday.actual[hourIdx];
     $("book-hour-label").textContent =
@@ -2366,6 +2411,8 @@
       rect.addEventListener("pointerenter", function (ev) {
         tooltip.textContent = "";
         tooltip.appendChild(el("div", "tt-head", ownerLabel(o.owner)));
+        var sm = strategyMeta(o.strat);
+        if (sm) tooltip.appendChild(el("div", "tt-strat", sm.label + " — " + sm.explain));
         [["offer", fmt(o.price, 2) + " €/MWh"], ["block", fmt(o.mw, 1) + " MW"],
          ["cumulative", fmt(o.cum1, 0) + " MW"]].forEach(function (r) {
           var row = el("div", "tt-row");
@@ -2415,6 +2462,8 @@
           hit.addEventListener("pointerenter", function () {
             tooltip.textContent = "";
             tooltip.appendChild(el("div", "tt-head", "demand · " + ownerLabel(o.owner)));
+            var sm = strategyMeta(o.strat);
+            if (sm) tooltip.appendChild(el("div", "tt-strat", sm.label + " — " + sm.explain));
             [["bid", fmt(o.price, 2) + " €/MWh"], ["block", fmt(o.mw, 1) + " MW"],
              ["cumulative", fmt(o.cum1, 0) + " MW"]].forEach(function (r) {
               var row = el("div", "tt-row");
@@ -2754,6 +2803,177 @@
       }
       cp.appendChild(tradeSpan);
     }
+
+    // ---- per-block decision-trace table (below the chart) ----------------
+    renderBookTable(supply, demand, {
+      clearMW: clearMW, clearing: clearing, actual: actual, settledMW: settledMW,
+      totalMW: totalMW, hasStrategy: hasStrategy,
+    });
+  }
+
+  // Per-block table for the selected hour: one row per supply block (merit-order
+  // sorted), split at the clearing point (cleared vs uncleared visually
+  // distinct), with a separate demand section. Contiguous same-owner tranches
+  // fold into ONE expandable group row (keeps a 100+-block ladder legible).
+  // Columns: cumulative-MW range | owner (firm + icon + name) | strategy |
+  // price | MW | explanation. On books WITHOUT the strategy column
+  // (has_strategy=false) the strategy + explanation columns are dropped and a
+  // small note explains why.
+  function renderBookTable(supply, demand, ctx) {
+    var host = $("book-table");
+    if (!host) return;
+    host.textContent = "";
+    if (!supply.length && !demand.length) return;
+    var showStrat = !!ctx.hasStrategy;
+    var clearMW = ctx.clearMW;
+
+    // Split any supply block that straddles the clearing quantity so each row is
+    // wholly cleared or wholly uncleared (clean visual split + correct grouping).
+    var rows = [];
+    supply.forEach(function (o) {
+      var isCleared = o.cum0 < clearMW - 1e-9;
+      if (clearMW > o.cum0 + 1e-9 && clearMW < o.cum1 - 1e-9) {
+        rows.push({ price: o.price, mw: clearMW - o.cum0, owner: o.owner, strat: o.strat,
+                    cum0: o.cum0, cum1: clearMW, cleared: true, marginal: true });
+        rows.push({ price: o.price, mw: o.cum1 - clearMW, owner: o.owner, strat: o.strat,
+                    cum0: clearMW, cum1: o.cum1, cleared: false, marginal: false });
+      } else {
+        rows.push({ price: o.price, mw: o.mw, owner: o.owner, strat: o.strat,
+                    cum0: o.cum0, cum1: o.cum1, cleared: isCleared, marginal: false });
+      }
+    });
+
+    // Group contiguous same-owner + same-cleared-state rows.
+    var groups = [];
+    rows.forEach(function (r) {
+      var g = groups[groups.length - 1];
+      if (g && g.owner === r.owner && g.cleared === r.cleared) {
+        g.rows.push(r); g.mw += r.mw; g.cum1 = r.cum1;
+        g.pmin = Math.min(g.pmin, r.price); g.pmax = Math.max(g.pmax, r.price);
+        if (r.marginal) g.marginal = true;
+      } else {
+        groups.push({ owner: r.owner, cleared: r.cleared, rows: [r], mw: r.mw,
+                      cum0: r.cum0, cum1: r.cum1, pmin: r.price, pmax: r.price,
+                      marginal: !!r.marginal });
+      }
+    });
+
+    var table = el("table", "book-table");
+    var thead = el("thead");
+    var htr = el("tr");
+    var cols = ["MW range", "owner", "strategy", "price €/MWh", "MW", "why"];
+    if (!showStrat) cols = ["MW range", "owner", "price €/MWh", "MW"];
+    cols.forEach(function (c) { htr.appendChild(el("th", null, c)); });
+    thead.appendChild(htr);
+    table.appendChild(thead);
+    var tbody = el("tbody");
+
+    function priceCell(pmin, pmax) {
+      return pmin === pmax ? fmt(pmin, 2) : fmt(pmin, 2) + "–" + fmt(pmax, 2);
+    }
+    // One <tr> for a group summary (expandable when it folds >1 tranche).
+    function groupRow(g) {
+      var tr = el("tr", "book-trow " + (g.cleared ? "is-cleared" : "is-uncleared"));
+      if (g.marginal) tr.className += " is-marginal";
+      var multi = g.rows.length > 1;
+      var range = el("td", "bt-range", fmt(g.cum0, 0) + "–" + fmt(g.cum1, 0));
+      tr.appendChild(range);
+      // owner cell: firm · icon name, with an expander caret when multi-tranche
+      var oc = el("td", "bt-owner");
+      if (multi) {
+        var caret = el("span", "bt-caret", "▸");
+        oc.appendChild(caret);
+      }
+      oc.appendChild(document.createTextNode((multi ? " " : "") + ownerLabel(g.owner)));
+      tr.appendChild(oc);
+      if (showStrat) {
+        var sm = multi ? null : strategyMeta(g.rows[0].strat);
+        tr.appendChild(el("td", "bt-strat", multi ? (g.rows.length + " tranches") : (sm ? sm.label : "—")));
+      }
+      tr.appendChild(el("td", "bt-price", priceCell(g.pmin, g.pmax)));
+      tr.appendChild(el("td", "bt-mw", fmt(g.mw, 1)));
+      if (showStrat) {
+        var sm2 = multi ? null : strategyMeta(g.rows[0].strat);
+        tr.appendChild(el("td", "bt-why", multi ? "expand for per-tranche detail" : (sm2 ? sm2.explain : "")));
+      }
+      var childRows = [];
+      if (multi) {
+        tr.classList.add("is-expandable");
+        tr.setAttribute("role", "button");
+        tr.setAttribute("tabindex", "0");
+        tr.setAttribute("aria-expanded", "false");
+        g.rows.forEach(function (r) {
+          var ctr = el("tr", "book-trow bt-child " + (g.cleared ? "is-cleared" : "is-uncleared"));
+          ctr.hidden = true;
+          ctr.appendChild(el("td", "bt-range", fmt(r.cum0, 0) + "–" + fmt(r.cum1, 0)));
+          ctr.appendChild(el("td", "bt-owner bt-child-owner", "↳"));
+          var sm3 = strategyMeta(r.strat);
+          if (showStrat) ctr.appendChild(el("td", "bt-strat", sm3 ? sm3.label : "—"));
+          ctr.appendChild(el("td", "bt-price", fmt(r.price, 2)));
+          ctr.appendChild(el("td", "bt-mw", fmt(r.mw, 1)));
+          if (showStrat) ctr.appendChild(el("td", "bt-why", sm3 ? sm3.explain : ""));
+          childRows.push(ctr);
+        });
+        function toggle() {
+          var open = tr.getAttribute("aria-expanded") === "true";
+          tr.setAttribute("aria-expanded", String(!open));
+          tr.querySelector(".bt-caret").textContent = open ? "▸" : "▾";
+          childRows.forEach(function (c) { c.hidden = open; });
+        }
+        tr.addEventListener("click", toggle);
+        tr.addEventListener("keydown", function (e) {
+          if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); }
+        });
+      }
+      return [tr].concat(childRows);
+    }
+
+    // supply: cleared groups first, then a clearing divider, then uncleared.
+    var clearedGroups = groups.filter(function (g) { return g.cleared; });
+    var unclearedGroups = groups.filter(function (g) { return !g.cleared; });
+    clearedGroups.forEach(function (g) { groupRow(g).forEach(function (tr) { tbody.appendChild(tr); }); });
+    // clearing divider row
+    var ncol = showStrat ? 6 : 4;
+    var dtr = el("tr", "bt-divider");
+    var dtd = el("td", null,
+      "— clears at " + (ctx.clearing == null ? "?" : "€" + fmt(ctx.clearing, 2)) +
+      " · " + fmt(clearMW, 0) + " MW —");
+    dtd.setAttribute("colspan", String(ncol));
+    dtr.appendChild(dtd);
+    tbody.appendChild(dtr);
+    unclearedGroups.forEach(function (g) { groupRow(g).forEach(function (tr) { tbody.appendChild(tr); }); });
+
+    // demand section (own subheader, willingness-to-pay descending).
+    if (demand.length) {
+      var dhr = el("tr", "bt-section");
+      var dth = el("td", null, "Demand (willingness to pay)");
+      dth.setAttribute("colspan", String(ncol));
+      dhr.appendChild(dth);
+      tbody.appendChild(dhr);
+      // group contiguous same-owner demand blocks (mostly DEMAND / IMPORT)
+      var dgroups = [];
+      demand.forEach(function (o) {
+        var g = dgroups[dgroups.length - 1];
+        if (g && g.owner === o.owner) {
+          g.rows.push(o); g.mw += o.mw; g.cum1 = o.cum1;
+          g.pmin = Math.min(g.pmin, o.price); g.pmax = Math.max(g.pmax, o.price);
+        } else {
+          dgroups.push({ owner: o.owner, cleared: false, rows: [o], mw: o.mw,
+                         cum0: o.cum0, cum1: o.cum1, pmin: o.price, pmax: o.price, marginal: false });
+        }
+      });
+      dgroups.forEach(function (g) {
+        groupRow(g).forEach(function (tr) { tr.classList.add("bt-demand"); tbody.appendChild(tr); });
+      });
+    }
+
+    table.appendChild(tbody);
+    if (!showStrat) {
+      host.appendChild(el("p", "bt-note",
+        "Strategy tags are available for books captured after 2026-08-02 — this " +
+        "day predates them, so the WHY column is hidden."));
+    }
+    host.appendChild(table);
   }
 
   // ---------- footer ----------
@@ -2920,5 +3140,17 @@
     });
   }
 
-  init();
+  // Auto-boot in the browser. A test harness sets window.__EUPHEMIA_NO_AUTOINIT
+  // to drive individual render functions without the full data-plane bootstrap.
+  if (typeof window === "undefined" || !window.__EUPHEMIA_NO_AUTOINIT) init();
+
+  // Browser-safe test surface (a debug handle the app never itself relies on) —
+  // lets web/DOM tests drive the order-book table + strategy map in isolation.
+  if (typeof window !== "undefined") {
+    window.__euphemiaBook = {
+      renderBookTable: renderBookTable,
+      strategyMeta: strategyMeta,
+      STRATEGY_LABELS: STRATEGY_LABELS,
+    };
+  }
 })();

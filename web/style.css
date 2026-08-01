@@ -490,6 +490,71 @@ select {
 .tooltip .tt-key { width: 14px; border-top: 2.5px solid; border-radius: 2px; flex: none; align-self: center; }
 .tooltip .tt-val { font-weight: 650; font-variant-numeric: tabular-nums; }
 .tooltip .tt-name { color: var(--text-secondary); }
+/* strategy "why" line under the slice title — the source-side decision trace */
+.tooltip .tt-strat {
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  line-height: 1.35;
+  margin: 0 0 6px;
+  max-width: 260px;
+  border-left: 2px solid color-mix(in srgb, var(--series-sim) 55%, transparent);
+  padding-left: 7px;
+}
+
+/* ---------- order-book per-block decision-trace table ---------- */
+.book-table-wrap { margin-top: 16px; overflow-x: auto; }
+table.book-table {
+  border-collapse: collapse;
+  width: 100%;
+  min-width: 560px;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+table.book-table th {
+  text-align: left;
+  font-weight: 600;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border);
+  padding: 5px 9px;
+  white-space: nowrap;
+}
+table.book-table td {
+  padding: 4px 9px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+  vertical-align: top;
+}
+.book-table .bt-range, .book-table .bt-price, .book-table .bt-mw { white-space: nowrap; }
+.book-table .bt-why { color: var(--text-muted); font-size: 11.5px; line-height: 1.35; }
+.book-table .bt-strat { color: var(--text-secondary); }
+/* cleared blocks read solid; uncleared blocks are dimmed (above the ball) */
+.book-table .is-uncleared td { opacity: 0.5; }
+.book-table .is-cleared .bt-owner { font-weight: 600; }
+/* the marginal (price-setting) block gets a subtle accent bar */
+.book-table .is-marginal td:first-child {
+  box-shadow: inset 3px 0 0 var(--series-sim);
+}
+.book-table .is-expandable { cursor: pointer; }
+.book-table .is-expandable:hover td { background: color-mix(in srgb, var(--text-primary) 4%, transparent); }
+.book-table .bt-caret { display: inline-block; width: 12px; color: var(--text-muted); }
+.book-table .bt-child td { background: color-mix(in srgb, var(--text-primary) 2.5%, transparent); }
+.book-table .bt-child-owner { color: var(--text-muted); padding-left: 18px; }
+/* the clearing split + section headers span the whole row */
+.book-table .bt-divider td {
+  text-align: center;
+  color: var(--series-sim);
+  font-weight: 600;
+  padding: 6px 9px;
+  border-top: 1.5px dashed var(--series-sim);
+  border-bottom: 1.5px dashed var(--series-sim);
+}
+.book-table .bt-section td {
+  color: var(--text-secondary);
+  font-weight: 600;
+  padding-top: 12px;
+  border-bottom: 1px solid var(--border);
+}
+.book-table .bt-demand td { color: var(--text-secondary); opacity: 0.85; }
+.bt-note { font-size: 12px; color: var(--text-muted); font-style: italic; margin: 6px 0; }
 
 .pending-note {
   font-size: 12.5px;
