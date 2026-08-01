@@ -90,13 +90,18 @@ function export_units_parquet(v1_dir::AbstractString)
     df = DataFrame(code=String[], display_name=Union{Missing,String}[],
                    fuel=String[], firm=Union{Missing,String}[], zone=String[])
     for r in eachrow(units)
+        # Live Postgres carries NULLs the windowed extract never showed
+        # (run 30704782418: String(::Missing) on a NULL zone) — a unit with no
+        # zone or code cannot be joined by the SPA; skip it. NULL fuel type
+        # degrades to "Other" below instead of erroring.
+        (r.zone === missing || r.code === missing) && continue
         zone = String(r.zone)
         code = String(r.code)
         name = r.name === missing || r.name === nothing ? missing : String(r.name)
         # Same canonicalisation + name-inference get_generators applies, so the
         # fuel string matches the one the book/UC layer classified the unit as
         # (e.g. a BESS-in-name "Other" becomes "Energy storage").
-        declared = Euphemia.normalize_fuel_type_name(String(r.ftype))
+        declared = Euphemia.normalize_fuel_type_name(r.ftype === missing ? "Other" : String(r.ftype))
         inferred = String(Euphemia.infer_fuel_type_from_name(
             name === missing ? "" : name, Symbol(declared)))
         firm = get(firm_of, (zone, code), missing)
