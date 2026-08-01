@@ -18,6 +18,15 @@ panel — and the map colours all 39 zones (see §1 status table).
 > is documented in [reproducibility.md](reproducibility.md). This document is only
 > about the **input models** that feed the weather forecast track.
 
+> **Download the standalone bundle:** the fitted model (the 5 ML pilot zones'
+> LightGBM dumps + a minimal self-contained Python predictor + per-zone output
+> parquets) is packaged as a GitHub Release —
+> <https://github.com/philokalia-ai/energy-markets/releases/tag/input-model-v1.0.0>.
+> With no Euphemia, no Julia and no Postgres you can load the per-zone predictions
+> as data and run the model for new days from the public open-meteo API. Rebuild it
+> with [`bin/build_input_model_bundle.sh`](../bin/build_input_model_bundle.sh)
+> (sources in [`bin/input_model_bundle/`](../bin/input_model_bundle/)).
+
 ## 1. What we predict, and against what
 
 For delivery day **D**, three targets per zone-hour — the **ENTSO-E day-ahead

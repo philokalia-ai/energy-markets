@@ -488,6 +488,15 @@ from weather forecasts
   Remaining for live use: EU-wide weather fetch at the catalogue cells and a
   temperature-driven load model for lead ≥ 2.
 
+**Download the standalone input model.** The fitted RES/load model — the 5 ML
+pilot zones' LightGBM dumps, a minimal self-contained Python predictor, and
+per-zone prediction parquets — is packaged as a GitHub Release
+([**input-model-v1.0.0**](https://github.com/philokalia-ai/energy-markets/releases/tag/input-model-v1.0.0)):
+with no Euphemia, no Julia and no Postgres you can load the per-zone predictions
+as data and run the model for new days from the public open-meteo API. Recipe:
+[docs/predictions.md](docs/predictions.md); rebuild:
+[`bin/build_input_model_bundle.sh`](bin/build_input_model_bundle.sh).
+
 ### Live data backend — R2 parquet + Worker API (the `/v1/` contract)
 
 Site freshness is decoupled from git pushes (issue #152): right after each
