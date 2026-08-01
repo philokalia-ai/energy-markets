@@ -284,20 +284,22 @@ _reservoir_iso_year(day) =
     isempty(get(ENV, "EUPHEMIA_DISABLE_ISOYEAR_FIX", "")) ? _iso_year_of(day) : year(day)
 
 """
-    get_reservoir_dryness(bidding_zone::String, day::Date) -> Union{Float64,Nothing}
+    _reservoir_fill_ratio(bidding_zone::String, day::Date) -> Union{Float64,Nothing}
 
-Hydrological dryness from ENTSO-E weekly reservoir filling levels
-(`entsoe.aggregated_hydro_storage_filling_rate`): the latest stored energy
-strictly before `day`'s ISO week, compared to the median stored energy for
-the same weeks (±2) of previous years. Returns `clamp(1 - current/norm, 0, 1)`
-— 0 in normal/wet conditions, approaching 1 in severe drought — or `nothing`
-when either value is unavailable.
+The reservoir FILL RATIO `current / norm`, where `current` is the latest stored
+energy strictly before `day`'s ISO week and `norm` is the median stored energy
+for the same ISO week (±2) of prior years. This is the single normalization
+behind BOTH price axes:
+- `get_reservoir_dryness`  = `clamp(1 - ratio, 0, 1)`  (the dry complement)
+- `get_reservoir_wetness`  = `clamp(ratio - 1, 0, cap)` (the wet complement, the
+  Nordic-wetness program — docs/nordic-wetness-prereg.md)
 
-Unlike output-based dryness, this measures the water itself, so it is not
-confounded by dispatch incentives (hydro running hard *because* prices are
-high looks "wet" in output terms while reservoirs are actually draining).
+so the two directions can never diverge in their normalization. Returns
+`nothing` when either the current level or the prior-year median is
+unavailable/≤0 (same contract the old `get_reservoir_dryness` had). Inherits the
+cv22-E mod-52 ISO-week wrap and the cv25 ISO-year fix verbatim.
 """
-function get_reservoir_dryness(bidding_zone::String, day::Date)
+function _reservoir_fill_ratio(bidding_zone::String, day::Date)
     iso_week = Int(Dates.week(day))
     iso_year = _reservoir_iso_year(day)
 
@@ -349,7 +351,48 @@ function get_reservoir_dryness(bidding_zone::String, day::Date)
     end
     (isempty(norm) || ismissing(norm.med[1]) || Float64(norm.med[1]) <= 0.0) && return nothing
 
-    return clamp(1.0 - Float64(current.stored_energy_mwh[1]) / Float64(norm.med[1]), 0.0, 1.0)
+    return Float64(current.stored_energy_mwh[1]) / Float64(norm.med[1])
+end
+
+"""
+    get_reservoir_dryness(bidding_zone::String, day::Date) -> Union{Float64,Nothing}
+
+Hydrological dryness from ENTSO-E weekly reservoir filling levels
+(`entsoe.aggregated_hydro_storage_filling_rate`): the latest stored energy
+strictly before `day`'s ISO week, compared to the median stored energy for
+the same weeks (±2) of previous years. Returns `clamp(1 - current/norm, 0, 1)`
+— 0 in normal/wet conditions, approaching 1 in severe drought — or `nothing`
+when either value is unavailable.
+
+Unlike output-based dryness, this measures the water itself, so it is not
+confounded by dispatch incentives (hydro running hard *because* prices are
+high looks "wet" in output terms while reservoirs are actually draining).
+"""
+function get_reservoir_dryness(bidding_zone::String, day::Date)
+    r = _reservoir_fill_ratio(bidding_zone, day)
+    return r === nothing ? nothing : clamp(1.0 - r, 0.0, 1.0)
+end
+
+"""
+    get_reservoir_wetness(bidding_zone::String, day::Date; wet_cap=0.5) -> Union{Float64,Nothing}
+
+The WET complement of `get_reservoir_dryness`: `clamp(fill_ratio - 1, 0, wet_cap)`
+over the EXACT normalization `get_reservoir_dryness` uses (`_reservoir_fill_ratio`)
+— 0 when the reservoir is at/below its seasonal-climatological norm, rising toward
+`wet_cap` as it fills above the norm. Nonzero only when the fill ratio exceeds 1
+(where dryness is clamped to 0), so the two axes are mutually exclusive on the
+prior-year-relative signal by construction.
+
+The Nordic-wetness program's regime axis (docs/nordic-wetness-prereg.md): a
+fuller-than-normal reservoir lowers the shadow value of stored water below the
+0.35 `wv_frac` floor (T1) / the anchor share (T2). Ex-ante — every input is a
+reservoir level from a week strictly before the delivery day and a median over
+prior ISO years. `nothing` when the norm is unavailable (same contract as
+dryness).
+"""
+function get_reservoir_wetness(bidding_zone::String, day::Date; wet_cap::Float64=0.5)
+    r = _reservoir_fill_ratio(bidding_zone, day)
+    return r === nothing ? nothing : clamp(r - 1.0, 0.0, wet_cap)
 end
 
 """
