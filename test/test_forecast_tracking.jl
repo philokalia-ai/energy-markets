@@ -374,4 +374,17 @@ include(joinpath(@__DIR__, "..", "bin", "forecast_common.jl"))
         @test_throws ArgumentError collapse_metrics([1.0], Float64[])
     end
 
+    @testset "retro_write_plan (three writer paths)" begin
+        # LIVE write always inserts, regardless of supersede/live presence
+        @test retro_write_plan(is_retro=false, supersede=false, has_live=false) == :insert
+        @test retro_write_plan(is_retro=false, supersede=true,  has_live=true)  == :insert
+        # RETRO with no live conflict inserts (delete prior retro, insert)
+        @test retro_write_plan(is_retro=true, supersede=false, has_live=false) == :insert
+        @test retro_write_plan(is_retro=true, supersede=true,  has_live=false) == :insert
+        # RETRO + live conflict + NO supersede ⇒ refuse (additive-fill contract, #280)
+        @test retro_write_plan(is_retro=true, supersede=false, has_live=true) == :refuse
+        # RETRO + live conflict + supersede ⇒ back up + replace
+        @test retro_write_plan(is_retro=true, supersede=true, has_live=true) == :supersede
+    end
+
 end

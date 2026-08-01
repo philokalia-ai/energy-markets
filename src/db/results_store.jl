@@ -332,6 +332,32 @@ function ensure_forecast_tables()
         )
         """)
 
+        # Data-reset backup table (EUPHEMIA_RETRO_SUPERSEDE): when a retro
+        # reconstruction REPLACES an existing genuine LIVE vintage, the live rows
+        # are copied here first — verbatim, with superseded_at_utc — so "what we
+        # said then" is preserved for audit even though the live series now shows
+        # the reset. The backup IS the honesty mechanism in supersede mode. Same
+        # data columns as forecast_prices (a surrogate backup_id, no unique key —
+        # it accumulates every superseded generation).
+        LibPQ.execute(cnx, """
+        CREATE TABLE IF NOT EXISTS simulations.forecast_prices_pre_reset (
+            backup_id BIGSERIAL PRIMARY KEY,
+            market_date DATE NOT NULL,
+            date_time_utc TIMESTAMPTZ NOT NULL,
+            bidding_zone TEXT NOT NULL,
+            price_eur_mwh DOUBLE PRECISION NOT NULL,
+            prediction_made_utc TIMESTAMPTZ NOT NULL,
+            lead_days INT NOT NULL,
+            clearing_mode TEXT,
+            code_version INT NOT NULL,
+            input_mode TEXT NOT NULL,
+            is_retro BOOLEAN,
+            reset_tag TEXT,
+            retro_of_utc TIMESTAMPTZ,
+            superseded_at_utc TIMESTAMPTZ NOT NULL DEFAULT now()
+        )
+        """)
+
         # Migrate pre-existing tables: add input_mode (backfills 'entsoe' on
         # legacy rows) and rebuild the unique/primary keys to include it, so
         # the reference and weather tracks never collide. The DO blocks check
