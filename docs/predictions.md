@@ -2,11 +2,17 @@
 
 This is the complete, open recipe for the model behind the site's
 **"Predicting RES & loads"** page. It predicts, for every delivery hour and every
-pilot zone, the **wind, solar and load** the day-ahead market clears on — strictly
-ex-ante (D-1 weather only) — from open weather data. A third party with **no
-Postgres and no private data** can retrain the models from scratch, score them,
-and reproduce our numbers. Everything it needs is either a free public API or a
-published artifact.
+zone of the **39-zone footprint**, the **wind, solar and load** the day-ahead
+market clears on — strictly ex-ante (D-1 weather only) — from open weather data. A
+third party with **no Postgres and no private data** can retrain the models from
+scratch, score them, and reproduce our numbers. Everything it needs is either a
+free public API or a published artifact.
+
+Provenance is honest and **per target**: 5 pilot zones use committed **LightGBM**
+models where they won the scorecard; every other zone uses the **linear weather
+packs** the daily forecast actually drives them with. Each series carries a
+`src_solar`/`src_wind`/`src_load` label (`ml`|`pack`) — the badge on each zone
+panel — and the map colours all 39 zones (see §1 status table).
 
 > The market-clearing counterfactual (prices, order books, the 39-zone footprint)
 > is documented in [reproducibility.md](reproducibility.md). This document is only
@@ -27,11 +33,35 @@ Predicting the *reference* (not outturn) is deliberate: if our predicted inputs
 equal the TSO's published forecast, the ex-ante weather track converges to the
 reference track's price quality. Error is measured against what the market used.
 
-**Pilot zones (5, with committed model dumps):** GR, ES, DE_LU, SE2, NL — 3
-targets each = **15 LightGBM models** in [`bin/input_models/`](../bin/input_models/).
-Zone geometry (weather cells + population-weighted cities) is reused verbatim from
-the committed packs ([`geom.json`](../bin/input_models/geom.json)). The other 34
-footprint zones keep the linear packs and are out of this surface.
+### Footprint status (which model produces each target)
+
+The surface now spans the **whole 39-zone footprint**. Provenance is resolved per
+zone-target exactly as `bin/daily_forecast.jl` resolves it with `EUPHEMIA_ML_INPUTS`
+on — the `ML_USE_NEW` scorecard for the pilots, the linear pack everywhere else:
+
+| class | zones | solar | wind | load | geometry |
+|-------|-------|-------|------|------|----------|
+| **ML pilots** (5) | GR, ES, DE_LU, SE2, NL | ML¹ | ML² | ML | `geom.json` |
+| **linear pack** (34) | the rest of `FORECAST_FOOTPRINT` | pack | pack | pack | `res_models_v2.json` cells + `load_models_v1.json` cities |
+
+¹ ML solar on all pilots **except ES** (its ridge already wins). ² ML wind **only
+on offshore-heavy NL**; the other pilots' wind is the physical power-curve pack.
+
+The 5 pilots carry 3 targets each = **15 LightGBM models** in
+[`bin/input_models/`](../bin/input_models/) with geometry from
+[`geom.json`](../bin/input_models/geom.json). The 34 pack zones reuse the SAME
+committed weather packs the daily forecast drives them with:
+[`bin/res_models_v2.json`](../bin/res_models_v2.json) (RES ridges via
+`predict_solar_hour`/`predict_wind_hour`) and
+[`bin/load_models_v1.json`](../bin/load_models_v1.json) (per-zone ridge via
+`predict_load`). Every row's `src_*` label records which model produced each
+target, and the manifest tags each zone `model: ml|pack`.
+
+> Sections 3–7 below detail the **LightGBM** pilot models. The linear-pack recipe
+> (the same one the live forecast uses for the other 34 zones) is documented under
+> [`docs/experiments/res-forecasting/`](experiments/res-forecasting/) (wind/solar
+> ridges) and [`docs/experiments/dn-load-model/`](experiments/dn-load-model/)
+> (the D-n load ridge); the exporter reuses their committed packs verbatim.
 
 ## 2. Honest ex-ante weather (the vintage discipline)
 
@@ -157,25 +187,41 @@ same fetch/scorer machinery to emit the additive `v1/inputs/` parquet contract t
 Predictions page reads through the Worker API (`workers/api/`, routes
 `/api/v1/inputs/{manifest,reservoir,<zone>}`):
 
-- `v1/inputs/<ZONE>.parquet` — per zone-hour over a trailing ~60-day window + the
-  forecast horizon: the five drivers (`temp_c`, `ghi_wm2`, `cloud_pct`,
-  `pressure_hpa`, `wind100_ms`), our per-zone-winner prediction (`pred_solar_mw`,
-  `pred_wind_mw`, `pred_res_mw`, `pred_load_mw`), the ENTSO-E DA reference
-  (`ref_*_mw`, null where unpublished), the settled actual (`act_*_mw`, null until
-  settled), the winner labels (`src_*`), and `vintage_lag`.
+- `v1/inputs/<ZONE>.parquet` — one file per footprint zone, per zone-hour over a
+  trailing window (default 30 days, `INPUTS_BACK_DAYS`) + the forecast horizon: the
+  five drivers (`temp_c`, `ghi_wm2`, `cloud_pct`, `pressure_hpa`, `wind100_ms`),
+  the per-zone-winner prediction (`pred_solar_mw`, `pred_wind_mw`, `pred_res_mw`,
+  `pred_load_mw`), the ENTSO-E DA reference (`ref_*_mw`, null where unpublished),
+  the settled actual (`act_*_mw`, null until settled), the per-target provenance
+  labels (`src_solar`/`src_wind`/`src_load` = `ml`|`pack`), and `vintage_lag`.
 - `v1/inputs/reservoir.parquet` — weekly reservoir `fill_ratio` (share of the
   trailing-52-week max, the seasonal water-value signal `get_reservoir_drawdown`
   uses) and `dryness` (vs the same ISO-week prior-year median, `get_reservoir_dryness`)
   for the hydro zones.
-- `v1/inputs/manifest.json` — freshness, the column dictionary, and the per-zone
-  freshest-day **midday RES-coverage** summary the map colours by.
+- `v1/inputs/manifest.json` — freshness, the column dictionary, the zone lists
+  (`zones` = the full surface, `pilot_zones` = the ML five, `pack_zones` = the
+  linear-pack remainder), and the per-zone freshest-day **midday RES-coverage**
+  summary the map colours by (each entry tagged `model: ml|pack`).
 
-Run it offline against the extract (small window shown; production is 60 days):
+The additive v1 contract is preserved: the pack zones add **more zone files** and a
+`model` field / `zones`+`pack_zones` manifest keys — no existing key is renamed.
+
+**Open-meteo budget.** The full-footprint pull is much larger than the 5-zone
+pilot (39 zones, each a RES 4-variable + load 2-variable fetch, batched ≤50
+cells/call, one span fetch per zone per admissible vintage group, throttled by
+`EUPHEMIA_OPENMETEO_ZONE_THROTTLE` with 429 backoff). `INPUTS_BACK_DAYS` (default
+**30**, was `INPUTS_HIST_DAYS`=60 for the pilot) trades trailing-history depth for
+the size of that pull — 30 days keeps the daily CI run inside the public rate
+budget; raise it for a deeper offline backfill. `INPUTS_ZONES` restricts the run
+to a subset. The CI step is **non-fatal** (a transient open-meteo failure warns
+and never blocks the core web-data publish).
+
+Run it offline against the extract (mix an ML pilot with pack zones):
 
 ```bash
 EUPHEMIA_DATA_STORE=duckdb EUPHEMIA_DUCKDB_READONLY=true \
 EUPHEMIA_DUCKDB_PATH=data/extracts/euphemia-public.duckdb \
-INPUTS_HIST_DAYS=14 INPUTS_ASOF=2026-07-27 \
+INPUTS_ZONES="GR,PL,IT-NORTH" INPUTS_BACK_DAYS=2 INPUTS_ASOF=2026-07-27 \
   julia --project=. bin/export_prediction_inputs.jl
 ```
 

@@ -18,9 +18,16 @@
 #   the current run at the horizon, 1 = the D-1-issued previous-run vintage for
 #   settled history — the honest ex-ante discipline, bin/weather_vintage.jl).
 #
-# This is the pilot-zone OPEN model surface: the 5 zones that carry committed
-# LightGBM dumps + a pure-Julia scorer (bin/input_models/, bin/ml_inputs.jl).
-# The 34 other footprint zones keep the linear packs and are not in this view.
+# This is the FULL 39-zone footprint OPEN model surface. Provenance is honest and
+# per-target: the 5 ML pilot zones (GR/ES/DE_LU/SE2/NL) carry committed LightGBM
+# dumps + a pure-Julia scorer (bin/input_models/, bin/ml_inputs.jl) and use the
+# per-zone-winner ML prediction exactly as bin/daily_forecast.jl resolves it with
+# EUPHEMIA_ML_INPUTS on (the `ML_USE_NEW` scorecard: ML load on all 5, ML solar on
+# all but ES, ML wind only on NL); the other 34 zones use the SAME linear weather
+# packs the daily forecast actually drives them with (bin/res_models_v2.json via
+# predict_solar_hour/predict_wind_hour, bin/load_models_v1.json via predict_load).
+# Every zone-row's `src_solar`/`src_wind`/`src_load` label ('ml'|'pack') records
+# which model produced each target, so the page can badge the provenance.
 #
 # Layout (the /v1/ public data API — additive; schema changes bump /v2/):
 #
@@ -43,11 +50,14 @@
 #                              (1 − stored / same-ISO-week prior-year median —
 #                              get_reservoir_dryness) DOUBLE.
 #   v1/inputs/manifest.json    {schema, updated_at, code_version, vintage_note,
-#                              pilot_zones, hydro_zones, window, columns,
-#                              row_counts, map:[{zone,date,midday_res_mw,
-#                              midday_load_mw,coverage,collapse_risk}]} — the
-#                              per-zone freshest-day midday RES-coverage summary
-#                              the map centrepiece colours by.
+#                              zones, pilot_zones, pack_zones, hydro_zones, window,
+#                              columns, row_counts, map:[{zone,date,midday_res_mw,
+#                              midday_load_mw,coverage,collapse_risk,model}]} — the
+#                              per-zone freshest-day midday RES-coverage summary the
+#                              map centrepiece colours by. `model` ('ml'|'pack') is
+#                              the zone-level provenance summary; `zones` is every
+#                              exported zone, `pilot_zones` the ML subset, and
+#                              `pack_zones` the linear-pack remainder (additive).
 #
 # Reproducible offline (read-only extract + public open-meteo previous-runs):
 #   EUPHEMIA_DATA_STORE=duckdb EUPHEMIA_DUCKDB_READONLY=true \
@@ -57,11 +67,20 @@
 #
 # Env:
 #   WEB_PARQUET_OUT   staging root (default <repo>/data/web); objects under $/v1/inputs
-#   INPUTS_HIST_DAYS  trailing history window in market days (default 60)
+#   INPUTS_BACK_DAYS  trailing history window in market days (default 30). The full
+#                     39-zone pull hits open-meteo per zone (RES 4-var + load 2-var,
+#                     batched ≤50 cells/call, one span fetch per zone per vintage
+#                     group, throttled by EUPHEMIA_OPENMETEO_ZONE_THROTTLE with 429
+#                     backoff) so the window trades history depth against the size
+#                     of that pull — 30 days keeps the daily CI run well inside the
+#                     public rate budget; raise it for a deeper offline backfill.
+#                     (INPUTS_HIST_DAYS is still honoured as the legacy alias.)
 #   INPUTS_HORIZON_DAYS  forecast horizon in market days ahead of asof (default 2)
 #   INPUTS_ASOF       ex-ante "now" date override (ISO; default today UTC) — pins
 #                     the D-1 vintage discipline for a reproducible historical run
-#   INPUTS_ZONES      comma list of pilot zones (default the 5 ML_PILOT_ZONES)
+#   INPUTS_ZONES      comma list of zones to export (default the 39-zone
+#                     FORECAST_FOOTPRINT; the ML pilots within it use LightGBM, the
+#                     rest use the linear packs)
 #   UPDATED_AT        manifest updated_at override (ISO8601; default now UTC)
 
 using Euphemia, Dates, Statistics, DataFrames, DuckDB, JSON
@@ -77,10 +96,21 @@ include(joinpath(@__DIR__, "ml_inputs.jl"))
 const CV = Euphemia.ENERGY_PRICES_CODE_VERSION
 const OUT_ROOT = get(ENV, "WEB_PARQUET_OUT", joinpath(dirname(@__DIR__), "data", "web"))
 const INPUTS_DIR = joinpath(OUT_ROOT, "v1", "inputs")
-const HIST_DAYS = parse(Int, get(ENV, "INPUTS_HIST_DAYS", "60"))
+# INPUTS_BACK_DAYS is the trailing window (default 30 for the full footprint);
+# INPUTS_HIST_DAYS stays honoured as the legacy alias.
+const HIST_DAYS = parse(Int, get(ENV, "INPUTS_BACK_DAYS",
+                                 get(ENV, "INPUTS_HIST_DAYS", "30")))
 const HORIZON_DAYS = parse(Int, get(ENV, "INPUTS_HORIZON_DAYS", "2"))
-const PILOT_ZONES = strip(get(ENV, "INPUTS_ZONES", "")) == "" ? ML_PILOT_ZONES :
-                    String.(split(ENV["INPUTS_ZONES"], ","))
+# The full open surface is the 39-zone footprint; INPUTS_ZONES overrides it.
+const EXPORT_ZONES = strip(get(ENV, "INPUTS_ZONES", "")) == "" ? FORECAST_FOOTPRINT :
+                     String.(strip.(split(ENV["INPUTS_ZONES"], ",")))
+# ML pilots carry committed LightGBM dumps + geom.json geometry; every other
+# footprint zone falls back to the linear weather packs.
+const PILOT_SET = Set(ML_PILOT_ZONES)
+is_ml_pilot(z::AbstractString) = z in PILOT_SET
+"'ml' when the per-zone-winner scorecard (ML_USE_NEW) ships the ML model for
+(zone,target), else 'pack' — the honest provenance label written on every row."
+winner_src(z::AbstractString, tgt::Symbol) = get(ML_USE_NEW, (String(z), tgt), false) ? "ml" : "pack"
 
 # nothing/missing/NaN/Inf -> missing (parquet null; JSON null downstream)
 nm(x) = (x === nothing || x === missing) ? missing :
@@ -112,20 +142,32 @@ end
     build_ml_input_panel(zones, first_utc, last_utc, candidates; asof) -> DataFrame
 
 One row per (zone, UTC delivery hour) over the market days served by
-[first_utc, last_utc]: the four RES drivers (ghi/cloud/pres/v100m), the two load
-drivers (T, and its trailing-48h mean is used internally), the per-zone-winner
-predicted solar/wind/load MW, the winner source label, and the weather
-`vintage_lag` that produced the row. Ex-ante by construction (same discipline as
-the daily forecast).
+[first_utc, last_utc]: the four RES drivers (ghi/cloud/pres/v100m), the load
+temperature driver, the per-zone-winner predicted solar/wind/load MW, the winner
+source labels, and the weather `vintage_lag` that produced the row. Ex-ante by
+construction (same discipline as the daily forecast).
+
+Provenance is resolved PER ZONE exactly as bin/daily_forecast.jl does with
+EUPHEMIA_ML_INPUTS on: an ML pilot zone (geom.json + committed LightGBM dumps)
+uses its per-zone-winner ML model for a target where `ML_USE_NEW` ships it and
+the linear pack otherwise; every non-pilot footprint zone uses the linear packs
+throughout (RES via predict_solar_hour/predict_wind_hour on res_models_v2.json,
+load via predict_load on load_models_v1.json). The 4-variable RES fetch is reused
+for both classes, so the cloud/pressure drivers are captured for every zone; the
+pack solar/wind read the very same ghi/v100 the daily forecast's pack path reads.
 """
 function build_ml_input_panel(zones::Vector{String}, first_utc::Date, last_utc::Date,
                               candidates::AbstractSet{Date}; asof::Date=Date(now(UTC)))
-    models = load_ml_models(zones)
-    geom = ml_geom()
-    res_pack = load_res_models()
+    pilots = String[z for z in zones if is_ml_pilot(z)]
+    models = isempty(pilots) ? nothing : load_ml_models(pilots)   # LightGBM: pilots only
+    geom = ml_geom()                                              # pilot geometry (5 zones)
+    res_pack = load_res_models()                                  # RES linear packs (39 zones)
+    load_pack = load_load_models()                                # load ridge packs (39 zones)
+    load_zones = load_pack === nothing ? Dict{String,Any}() : load_pack["zones"]
     groups = vintage_groups(first_utc, last_utc, candidates; asof)
     target_days = collect(first_utc:Day(1):last_utc)
-    cap = ml_capacity_p95(zones, target_days)
+    cap = isempty(pilots) ? Dict{Tuple{String,Symbol},Dict{Date,Float64}}() :
+          ml_capacity_p95(pilots, target_days)                    # cap95 only feeds ML RES
     throttle = parse(Float64, get(ENV, "EUPHEMIA_OPENMETEO_ZONE_THROTTLE", "0.6"))
 
     df = DataFrame(zone=String[], date_time_utc=DateTime[], vintage_lag=Int[],
@@ -137,14 +179,32 @@ function build_ml_input_panel(zones::Vector{String}, first_utc::Date, last_utc::
                    src_solar=String[], src_wind=String[], src_load=String[])
 
     for z in zones
-        lat0, lon0 = ml_zone_centroid(geom, z)
-        cells = [(Float64(c[1]), Float64(c[2])) for c in geom[z]["cells"]]
-        cities = [(Float64(c[1]), Float64(c[2]), Float64(c[3])) for c in geom[z]["cities"]]
+        pilot = is_ml_pilot(z)
         zpack = get(res_pack["zones"], z, nothing)
-        holset = ml_holidays(String(load_load_models()["zones"][z]["holiday_country"]), 2024:2027)
-        ssrc = ML_USE_NEW[(z, :solar)] ? "ml" : "pack"
-        wsrc = ML_USE_NEW[(z, :wind)] ? "ml" : "pack"
-        lsrc = ML_USE_NEW[(z, :load)] ? "ml" : "pack"
+        lz = get(load_zones, z, nothing)
+        # Geometry: pilots use the committed geom.json (what the ML models expect);
+        # pack zones use the RES pack cells + the load pack's weighted cities.
+        if pilot
+            lat0, lon0 = ml_zone_centroid(geom, z)
+            cells = [(Float64(c[1]), Float64(c[2])) for c in geom[z]["cells"]]
+            cities = [(Float64(c[1]), Float64(c[2]), Float64(c[3])) for c in geom[z]["cities"]]
+        else
+            if zpack === nothing
+                println("  ⚠️ $z: no RES pack — skipped"); continue
+            end
+            cells = [(Float64(c[1]), Float64(c[2])) for c in zpack["cells"]]
+            lat0 = mean(c[1] for c in cells); lon0 = mean(c[2] for c in cells)
+            cities = lz === nothing ? Tuple{Float64,Float64,Float64}[] :
+                     [(Float64(c[1]), Float64(c[2]), Float64(c[3])) for c in lz["cities"]]
+        end
+        ssrc = winner_src(z, :solar); wsrc = winner_src(z, :wind); lsrc = winner_src(z, :load)
+        use_ml_solar = pilot && get(ML_USE_NEW, (z, :solar), false)
+        use_ml_wind  = pilot && get(ML_USE_NEW, (z, :wind), false)
+        use_ml_load  = pilot && get(ML_USE_NEW, (z, :load), false)
+        # ml_holidays (features.py port) only for an ML-load pilot; the pack-load
+        # path derives holidays itself inside predict_load (holidays_for_country).
+        holset = use_ml_load ?
+                 ml_holidays(String(load_zones[z]["holiday_country"]), 2024:2027) : Set{Date}()
         for (gdates, lag) in groups
             throttle > 0 && sleep(throttle)
             rweather = fetch_ml_res_weather(cells, gdates; vintage_lag=lag)
@@ -153,12 +213,18 @@ function build_ml_input_panel(zones::Vector{String}, first_utc::Date, last_utc::
                 wcells[cell] = Dict(h => tup[1] for (h, tup) in cw)
             end
             ragg = ml_res_agg(cells, rweather)
-            lweather = fetch_load_weather(cells_of_cities(cities),
-                                          collect((first(gdates) - Day(2)):Day(1):last(gdates));
-                                          vintage_lag=lag)
+            lweather = isempty(cities) ?
+                Dict{Tuple{Float64,Float64},Dict{DateTime,Tuple{Float64,Float64}}}() :
+                fetch_load_weather(cells_of_cities(cities),
+                                   collect((first(gdates) - Day(2)):Day(1):last(gdates));
+                                   vintage_lag=lag)
             lagg = ml_load_agg(cities, lweather)
             Tseries = Dict{DateTime,Float64}(h => v[1] for (h, v) in lagg)
             ghours = collect(DateTime(first(gdates)):Hour(1):DateTime(last(gdates)) + Hour(23))
+            # Pack-load zones score the whole group through the tested predict_load
+            # (the exact daily-forecast pack path); ML-load pilots score per hour below.
+            pack_load_pred = (!use_ml_load && lz !== nothing) ?
+                predict_load(load_pack, z, ghours, lweather) : nothing
             for h in ghours
                 D = Date(h)
                 ra = get(ragg, h, nothing)
@@ -167,10 +233,10 @@ function build_ml_input_panel(zones::Vector{String}, first_utc::Date, last_utc::
                 c95s = get(get(cap, (z, :solar), Dict{Date,Float64}()), D, NaN)
                 c95w = get(get(cap, (z, :wind), Dict{Date,Float64}()), D, NaN)
                 feats = ml_res_features(h, lat0, lon0, ghi, cloud, pres, v100m, c95s, c95w)
-                solar = ML_USE_NEW[(z, :solar)] ? ml_predict_solar(models, z, feats) :
+                solar = use_ml_solar ? ml_predict_solar(models, z, feats) :
                         (zpack !== nothing && haskey(zpack, "solar") ?
                          predict_solar_hour(zpack["solar"], ghi, h) : 0.0)
-                wind = if ML_USE_NEW[(z, :wind)]
+                wind = if use_ml_wind
                     ml_predict_wind(models, z, feats)
                 else
                     vv = Float64[get(get(wcells, cell, Dict{DateTime,Float64}()), h, NaN)
@@ -182,22 +248,25 @@ function build_ml_input_panel(zones::Vector{String}, first_utc::Date, last_utc::
                 wind_v = isnan(wind) ? missing : wind
                 res_v = (isnan(solar) ? 0.0 : solar) + (isnan(wind) ? 0.0 : wind)
 
-                # LOAD (only where the NEW model is the winner, matching the daily
-                # overlay — a pack-load pilot leaves pred_load null here; the daily
-                # forecast keeps its committed pack fill there, out of this panel).
+                # LOAD: ML pilot winner scores per hour (needs cap-independent T/AR
+                # features); every pack-load zone reads its predict_load result.
                 load_v = missing
-                la = get(lagg, h, nothing)
-                if ML_USE_NEW[(z, :load)] && la !== nothing && !isnan(la[1])
-                    T, ghiL = la
-                    Tma = ml_trailing_ma48(Tseries, h)
-                    if !isnan(Tma)
-                        ar_series = get(_ar_cache, z, nothing)
-                        ar1 = ar_series === nothing ? NaN : get(ar_series, h - Day(1), NaN)
-                        ar7 = ar_series === nothing ? NaN : get(ar_series, h - Day(7), NaN)
-                        is_hol = (Date(h) in holset) ? 1.0 : 0.0
-                        lf = ml_load_features(h, lat0, lon0, T, ghiL, Tma, ar1, ar7, is_hol)
-                        load_v = ml_predict_load(models, z, lf)
+                if use_ml_load
+                    la = get(lagg, h, nothing)
+                    if la !== nothing && !isnan(la[1])
+                        T, ghiL = la
+                        Tma = ml_trailing_ma48(Tseries, h)
+                        if !isnan(Tma)
+                            ar_series = get(_ar_cache, z, nothing)
+                            ar1 = ar_series === nothing ? NaN : get(ar_series, h - Day(1), NaN)
+                            ar7 = ar_series === nothing ? NaN : get(ar_series, h - Day(7), NaN)
+                            is_hol = (Date(h) in holset) ? 1.0 : 0.0
+                            lf = ml_load_features(h, lat0, lon0, T, ghiL, Tma, ar1, ar7, is_hol)
+                            load_v = ml_predict_load(models, z, lf)
+                        end
                     end
+                elseif pack_load_pred !== nothing
+                    load_v = get(pack_load_pred, h, missing)
                 end
 
                 push!(df, (z, h, lag,
@@ -367,12 +436,18 @@ function main()
     market_last = asof + Day(HORIZON_DAYS)
     first_utc = market_first - Day(1)
     candidates = Set(market_first:Day(1):market_last)
-    zones = String.(PILOT_ZONES)
-    println("pilots=$(join(zones, ",")) window(market days)=$market_first..$market_last asof=$asof")
+    zones = String.(EXPORT_ZONES)
+    pilot_zones = String[z for z in zones if is_ml_pilot(z)]
+    pack_zones = String[z for z in zones if !is_ml_pilot(z)]
+    println("zones=$(length(zones)) (ml pilots=$(join(pilot_zones, ",")); " *
+            "pack=$(length(pack_zones))) window(market days)=$market_first..$market_last asof=$asof")
 
-    # AR load lags once (D-1/D-7 DA forecasts) — shared into the panel loop.
+    # AR load lags once (D-1/D-7 DA forecasts) — only the ML-load pilots read them
+    # (the pack-load path has no AR feature); shared into the panel loop.
     span_hours = collect(DateTime(first_utc):Hour(1):DateTime(market_last) + Hour(23))
-    for (z, s) in ml_ar_load_lags(zones, span_hours); _ar_cache[z] = s; end
+    if !isempty(pilot_zones)
+        for (z, s) in ml_ar_load_lags(pilot_zones, span_hours); _ar_cache[z] = s; end
+    end
 
     panel = build_ml_input_panel(zones, first_utc, market_last, candidates; asof)
     println("panel: $(nrow(panel)) zone-hours")
@@ -423,7 +498,10 @@ function main()
             "midday_res_mw" => nm(rmean) === missing ? nothing : round(rmean; digits=1),
             "midday_load_mw" => nm(lmean) === missing ? nothing : round(lmean; digits=1),
             "coverage" => nm(cov) === missing ? nothing : round(cov; digits=3),
-            "collapse_risk" => (cov !== missing && cov >= 0.75)))
+            "collapse_risk" => (cov !== missing && cov >= 0.75),
+            # Zone-level provenance for the map badge/tooltip: 'ml' if this zone is
+            # an ML pilot (LightGBM winner on at least one target), else 'pack'.
+            "model" => is_ml_pilot(z) ? "ml" : "pack"))
     end
 
     # Reservoir panel — the hydro zones present in the table over the window.
@@ -448,7 +526,9 @@ function main()
         "vintage_note" => "vintage_lag: 0 = the forecast run current at the horizon; " *
             "1 = the D-1-issued GFS previous_day1 vintage for settled history. " *
             "Every driver and prediction is ex-ante (bin/weather_vintage.jl).",
-        "pilot_zones" => zones,
+        "zones" => zones,               # every exported zone (the full open surface)
+        "pilot_zones" => pilot_zones,    # ML subset (LightGBM per-zone-winner)
+        "pack_zones" => pack_zones,      # linear-pack remainder
         "hydro_zones" => hydro_zones,
         "window" => Dict("market_first" => string(market_first),
                          "market_last" => string(market_last), "asof" => string(asof)),
@@ -464,7 +544,8 @@ function main()
             "pred_load_mw" => "model predicted load",
             "ref_*_mw" => "ENTSO-E day-ahead forecast (null where unpublished)",
             "act_*_mw" => "settled actual (null until settled)",
-            "src_*" => "'ml' (LightGBM) or 'pack' (linear) winner per target"),
+            "src_*" => "per-target provenance: 'ml' (LightGBM, pilot zones) or " *
+                       "'pack' (linear weather pack, everywhere else)"),
         "row_counts" => counts,
         "map" => map_summary,
     )
