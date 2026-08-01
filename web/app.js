@@ -23,6 +23,7 @@
     zoneCache: {},         // zone -> zone file json
     bookCache: {},         // "zone|date" -> book ladder json
     units: null,           // code -> {name, fuel, firm, zone} (order-book join)
+    flowsCache: {},        // date -> {tsIso: [[source,sink,mw],…]} | null (trade wedge)
     view: "horizon",       // "horizon" | "explorer" | "board" | "book"
     zone: "GR",
     day: null,             // "YYYY-MM-DD"
@@ -1936,7 +1937,8 @@
     for (k in FUEL_FAM_LABEL) fams[k] = css.getPropertyValue("--fuel-" + k).trim() || "#8892A0";
     var tags = {};
     for (k in TAG_META) tags[TAG_META[k].css] = css.getPropertyValue(TAG_META[k].css).trim();
-    return { fuel: fams, tag: tags };
+    var trade = css.getPropertyValue("--book-trade").trim() || "#C51D74";
+    return { fuel: fams, tag: tags, trade: trade };
   }
 
   // Resolve a book `owner` tag to display info: kind (unit|agg|tag), fuel family,
@@ -1994,6 +1996,116 @@
     return unitsPromise;
   }
 
+  // ---- coupled cross-border flows (for the trade-wedge decomposition) ------
+  // Per market day: v1/flows/<date>.parquet -> { "<tsIso>": [[source,sink,mw],…] }.
+  // Only RECORD/backfill days persist transmission_flows (the daily FORECAST
+  // path saves forecast_prices only, save_to_db=false) — so on forecast days the
+  // flows fetch 404s and the wedge falls back to the anonymous net brace. Cached
+  // per date; failure caches null (→ anonymous wedge, no repeated fetch).
+  var flowsPromise = {};
+  function loadFlows(date) {
+    if (state.flowsCache[date] !== undefined) return Promise.resolve(state.flowsCache[date]);
+    if (flowsPromise[date]) return flowsPromise[date];
+    flowsPromise[date] = loadWithFallback("flows/" + date).then(
+      function (res) { state.flowsCache[date] = (res.json && res.json.flows) || null; return state.flowsCache[date]; },
+      function () { state.flowsCache[date] = null; return null; }
+    );
+    return flowsPromise[date];
+  }
+
+  // Best-effort neighbour clearing price at a UTC hour, from the neighbour's
+  // (already cached) zone forecast for the shown market day. null if not loaded.
+  function neighborPriceAt(zone, tsIso) {
+    var zd = state.zoneCache[zone];
+    if (!zd) return null;
+    var days = freshestByDate(weatherDays(zd));
+    var day = null;
+    days.forEach(function (d) { if (!day && d.date === state.bookDay) day = d; });
+    if (!day) return null;
+    var i = day.hours.indexOf(tsIso);
+    return i >= 0 ? day.sim[i] : null;
+  }
+
+  function fmtMWk(mw) {
+    return mw >= 1000 ? (mw / 1000).toFixed(1) + "k" : String(Math.round(mw));
+  }
+
+  // Decompose a zone-hour's coupled net trade into import/export SOURCES from
+  // the solved cross-border flows, ordered by the neighbour's price (cheapest
+  // imports first), with the out-of-footprint fixed injection as the residual.
+  // Returns null when no flows are loaded for the day (→ anonymous net wedge).
+  function tradeSegments(zone, tsIso, netImport) {
+    var byTs = state.flowsCache[state.bookDay];
+    if (!byTs) return null;
+    var rows = byTs[tsIso];
+    if (!rows || !rows.length) return null;
+    var isImport = netImport > 0;
+    var perN = {}, flowNet = 0;
+    rows.forEach(function (r) {
+      var src = r[0], snk = r[1], mw = r[2], other = null, into = 0;
+      if (snk === zone) { other = src; into = mw; }
+      else if (src === zone) { other = snk; into = -mw; }
+      else return;
+      perN[other] = (perN[other] || 0) + into;
+      flowNet += into;
+    });
+    // Only decompose when the SOLVED coupled flow agrees in DIRECTION with the
+    // book-implied net (a local-ladder heuristic). When they diverge — the local
+    // book's intersection is not the coupled dispatch — per-source attribution
+    // would mislead, so we fall back to the anonymous net wedge (measured: this
+    // happens on genuine hours, e.g. GR importing on the local ladder while the
+    // footprint has it exporting).
+    if ((isImport && flowNet <= 1) || (!isImport && flowNet >= -1)) return null;
+    var segs = [];
+    Object.keys(perN).forEach(function (n) {
+      var v = perN[n];
+      if (isImport ? v > 1 : v < -1) {
+        segs.push({ zone: n, mw: Math.abs(v), price: neighborPriceAt(n, tsIso), fixed: false });
+      }
+    });
+    segs.sort(function (a, b) {
+      var pa = a.price == null ? 1e9 : a.price, pb = b.price == null ? 1e9 : b.price;
+      return isImport ? pa - pb : pb - pa;
+    });
+    segs.forEach(function (s) {
+      s.label = s.zone + " → " + fmtMWk(s.mw) + (s.price == null ? "" : " @ €" + fmt(s.price, 0));
+    });
+    // Out-of-footprint fixed injections (TR/AL/MK …) are NOT in the flow table;
+    // show the reconciliation residual to the book-implied net as "(fixed)".
+    var fixed = Math.abs(netImport) - segs.reduce(function (a, s) { return a + s.mw; }, 0);
+    if (fixed > CLIFF.TRADE_MIN_MW) {
+      segs.push({ zone: "(fixed)", mw: fixed, price: null, fixed: true, label: "(fixed) " + fmtMWk(fixed) });
+    }
+    return segs;
+  }
+
+  // After flows load, pre-load the zones of this zone-day's trading neighbours
+  // (bounded) so a second paint can label segments with their prices.
+  function preloadTradingNeighbors(zone, date, tsList) {
+    var byTs = state.flowsCache[date];
+    if (!byTs) return;
+    var need = {};
+    tsList.forEach(function (ts) {
+      (byTs[ts] || []).forEach(function (r) {
+        var other = r[1] === zone ? r[0] : (r[0] === zone ? r[1] : null);
+        if (other && !state.zoneCache[other]) need[other] = true;
+      });
+    });
+    var zones = Object.keys(need);
+    if (!zones.length) return;
+    Promise.all(zones.map(function (z) { return loadZone(z).catch(function () { return null; }); }))
+      .then(function () {
+        if (state.view === "book" && state.bookDay === date) {
+          var zoneData = state.zoneCache[state.zone];
+          var days = zoneData ? freshestByDate(weatherDays(zoneData)) : [];
+          var fday = null;
+          days.forEach(function (d) { if (!fday && d.date === date) fday = d; });
+          var book = state.bookCache[state.zone + "|" + date];
+          if (book && fday) renderBookLadder(book, fday, state.bookHour);
+        }
+      });
+  }
+
   // ---- CLIFF metric: price fragility of the book at the clearing point ------
   // Display heuristics (NOT a scored product metric — a scored cliff-risk metric
   // would be its own prereg). Kept in ONE constants block; surfaced in the badge
@@ -2003,6 +2115,7 @@
     W_PRIMARY: 200,            // the band drawn on the chart + badge threshold
     SPAN_CLIFF: 50,            // €/MWh price span across ±W_PRIMARY: > this = "cliff"
     MERGE_PX: 10,              // model/settled MW markers merge when this close on-screen
+    TRADE_MIN_MW: 50,          // hide the coupled trade wedge below this |net import|
   };
 
   function loadBook(zone, date) {
@@ -2060,7 +2173,8 @@
     wrap.textContent = "";
     wrap.appendChild(el("p", "pending-note", "Loading order book…"));
 
-    Promise.all([loadBook(state.zone, state.bookDay), loadUnits()]).then(function (r) {
+    Promise.all([loadBook(state.zone, state.bookDay), loadUnits(),
+                 loadFlows(state.bookDay)]).then(function (r) {
       var book = r[0];
       if (state.view !== "book" || state.bookDay !== fday.date) return;   // stale
       if (!book || !book.supply || !book.supply.length) {
@@ -2079,6 +2193,10 @@
       if (state.bookHour == null || state.bookHour < 0 || state.bookHour >= nH) state.bookHour = Math.min(12, nH - 1);
       slider.value = state.bookHour;
       renderBookLadder(book, fday, state.bookHour);
+      // if flows exist for this day, warm up trading-neighbour prices (2nd paint)
+      if (state.flowsCache[state.bookDay]) {
+        preloadTradingNeighbors(state.zone, state.bookDay, fday.hours);
+      }
     });
   }
 
@@ -2117,6 +2235,20 @@
     demand.forEach(function (o) { o.cum0 = dcum; dcum += o.mw; o.cum1 = dcum; });
     var totalDemand = dcum;
 
+    // ---- coupled-market TRADE WEDGE --------------------------------------
+    // The marker sits on the LOCAL supply curve at the COUPLED price P, not at
+    // the local supply∩demand crossing: the gap is cross-border trade decided by
+    // the 39-zone network (flow variables absent from this local ladder).
+    // implied_net_import = (local demand willing at P) − (local supply cleared
+    // at P) — >0 imports, <0 exports. Hidden when |·| is negligible.
+    var demandAtClear = null, impliedNetImport = null;
+    if (clearing !== null && clearing !== undefined && demand.length) {
+      var dAt = 0;
+      demand.forEach(function (o) { if (o.price >= clearing - 1e-9) dAt = o.cum1; });
+      demandAtClear = dAt;
+      impliedNetImport = demandAtClear - clearMW;   // >0 imports, <0 exports
+    }
+
     // ---- CLIFF metric (client-side, from this ladder) --------------------
     // priceAtCum: the offer price of the supply block covering cumulative q —
     // the merit-order supply curve as a step function.
@@ -2150,7 +2282,8 @@
     // x window: focus on the cleared region with context beyond the ball —
     // and always keep the ±W cliff band and the settled-MW marker on screen.
     var xMax = Math.max(clearMW * 1.5, clearMW + 500, clearMW + CLIFF.W_PRIMARY + 60,
-                        settledMW === null ? 0 : settledMW + 60, 100);
+                        settledMW === null ? 0 : settledMW + 60,
+                        demandAtClear === null ? 0 : demandAtClear + 60, 100);
     xMax = Math.min(xMax, totalMW);
     // y window: keep the region around clearing readable; clip €3000 demand-cap
     // blocks. Base on clearing/actual and the supply price near the ball.
@@ -2172,6 +2305,14 @@
       "aria-label": "Merit-order supply ladder for " + state.zone + " " + state.bookDay +
         " hour " + hourLabel(fday.hours[hourIdx]),
     });
+    // diagonal hatch for the coupled trade wedge fill
+    var defs = svgEl("defs");
+    var pat = svgEl("pattern", { id: "wedgeHatch", width: 6, height: 6,
+      patternUnits: "userSpaceOnUse", patternTransform: "rotate(45)" });
+    pat.appendChild(svgEl("line", { x1: 0, y1: 0, x2: 0, y2: 6, stroke: BC.trade,
+      "stroke-width": 1.4, "stroke-opacity": 0.35 }));
+    defs.appendChild(pat);
+    svg.appendChild(defs);
 
     // y gridlines + ticks
     var yStep = niceStep(yMax, 6);
@@ -2205,40 +2346,9 @@
     xlab.textContent = "cumulative MW (ascending offer price)";
     svg.appendChild(xlab);
 
-    // CLIFF band: a subtle shaded ±W_PRIMARY MW window around the clearing
-    // quantity, with the implied price range marked — the reader SEES the local
-    // steepness of the book at the clearing point (behind the bars).
-    if (clearing !== null && clearing !== undefined) {
-      var bandX0 = X(Math.max(0, clearMW - CLIFF.W_PRIMARY));
-      var bandX1 = X(clearMW + CLIFF.W_PRIMARY);
-      svg.appendChild(svgEl("rect", {
-        x: bandX0, y: m.t, width: Math.max(1, bandX1 - bandX0), height: ph,
-        fill: C.sim, "fill-opacity": isCliff ? 0.1 : 0.05, class: "book-cliff-band",
-      }));
-      var pr = cliffByW[CLIFF.W_PRIMARY];
-      // the implied price range on the y axis (faint guides at plo / phi)
-      [pr.lo, pr.hi].forEach(function (pp) {
-        if (pp <= yMax) svg.appendChild(svgEl("line", {
-          x1: bandX0, x2: bandX1, y1: Y(pp), y2: Y(pp), stroke: C.sim,
-          "stroke-width": 1, "stroke-opacity": 0.5, "stroke-dasharray": "2 3",
-        }));
-      });
-      var yLoC = Math.min(Y(Math.min(pr.lo, yMax)), m.t + ph);
-      var yHiC = Y(Math.min(pr.hi, yMax));
-      if (pr.span > 0.5 && pr.hi <= yMax * 1.02) {
-        // a small vertical span bracket on the band's right edge
-        svg.appendChild(svgEl("line", {
-          x1: bandX1, x2: bandX1, y1: yHiC, y2: yLoC, stroke: C.sim,
-          "stroke-width": 1.5, "stroke-opacity": 0.7,
-        }));
-        var spanLbl = svgEl("text", {
-          x: bandX1 + 4, y: (yHiC + yLoC) / 2 + 4, "text-anchor": "start",
-          fill: C.sim, "font-size": 10.5, "font-weight": 600,
-        });
-        spanLbl.textContent = "±" + CLIFF.W_PRIMARY + " MW ⇒ €" + fmt(pr.span, 0);
-        svg.appendChild(spanLbl);
-      }
-    }
+    // (The CLIFF band + the coupled TRADE WEDGE are painted in the TOP
+    // annotation layer, AFTER the bars — see below — so their labels are never
+    // hidden a layer behind the ladder.)
 
     // supply blocks (fuel-coloured bars from 0 to their offer price)
     var tooltip = el("div", "tooltip");
@@ -2323,6 +2433,99 @@
           svg.appendChild(hit);
         });
       }
+    }
+
+    // ======== TOP ANNOTATION LAYER (painted AFTER the bars) ==============
+    // A haloed label: a surface-coloured stroke behind the fill so text stays
+    // legible over bars / the shaded band (z-order fix — annotations sit ON TOP).
+    function haloText(attrs, txt) {
+      var t = svgEl("text", Object.assign({
+        "paint-order": "stroke", stroke: C.surface, "stroke-width": 3,
+        "stroke-linejoin": "round",
+      }, attrs));
+      t.textContent = txt;
+      svg.appendChild(t);
+      return t;
+    }
+
+    // CLIFF band — now a TOP-LAYER annotation (was a layer behind the bars):
+    // the shaded ±W window + the implied price-range guides + the span label,
+    // all painted over the ladder so nothing hides them.
+    if (clearing !== null && clearing !== undefined) {
+      var bandX0 = X(Math.max(0, clearMW - CLIFF.W_PRIMARY));
+      var bandX1 = X(clearMW + CLIFF.W_PRIMARY);
+      svg.appendChild(svgEl("rect", {
+        x: bandX0, y: m.t, width: Math.max(1, bandX1 - bandX0), height: ph,
+        fill: C.sim, "fill-opacity": isCliff ? 0.12 : 0.06, class: "book-cliff-band",
+        "pointer-events": "none",
+      }));
+      var pr = cliffByW[CLIFF.W_PRIMARY];
+      [pr.lo, pr.hi].forEach(function (pp) {
+        if (pp <= yMax) svg.appendChild(svgEl("line", {
+          x1: bandX0, x2: bandX1, y1: Y(pp), y2: Y(pp), stroke: C.sim,
+          "stroke-width": 1, "stroke-opacity": 0.6, "stroke-dasharray": "2 3",
+        }));
+      });
+      var yLoC = Math.min(Y(Math.min(pr.lo, yMax)), m.t + ph);
+      var yHiC = Y(Math.min(pr.hi, yMax));
+      if (pr.span > 0.5 && pr.hi <= yMax * 1.02) {
+        svg.appendChild(svgEl("line", {
+          x1: bandX1, x2: bandX1, y1: yHiC, y2: yLoC, stroke: C.sim,
+          "stroke-width": 1.5, "stroke-opacity": 0.8,
+        }));
+        haloText({ x: bandX1 + 4, y: (yHiC + yLoC) / 2 + 4, "text-anchor": "start",
+          fill: C.sim, "font-size": 10.5, "font-weight": 600 },
+          "±" + CLIFF.W_PRIMARY + " MW ⇒ €" + fmt(pr.span, 0));
+      }
+    }
+
+    // COUPLED TRADE WEDGE — the gap between the marker (local supply cleared at
+    // the coupled price P) and where local demand crosses P, at the P level.
+    // When per-border flows are loaded (record days) it is a stacked mini-ladder
+    // of import SOURCES ordered by the neighbour's price; otherwise an anonymous
+    // net brace. Exports mirror to the left. Hidden when |net| is negligible.
+    if (impliedNetImport !== null && Math.abs(impliedNetImport) >= CLIFF.TRADE_MIN_MW) {
+      var isImport = impliedNetImport > 0;
+      var wy = Y(Math.min(clearing, yMax));            // the clearing-price level
+      var xNear = X(clearMW);
+      var xFar = X(clearMW + impliedNetImport);        // demand-crossing side
+      var segs = tradeSegments(state.zone, fday.hours[hourIdx], impliedNetImport);
+      // brace baseline at the P level, marker → demand-crossing
+      svg.appendChild(svgEl("line", { x1: xNear, x2: xFar, y1: wy, y2: wy,
+        stroke: BC.trade, "stroke-width": 2, "stroke-opacity": 0.9 }));
+      [xNear, xFar].forEach(function (xe) {
+        svg.appendChild(svgEl("line", { x1: xe, x2: xe, y1: wy - 5, y2: wy + 5,
+          stroke: BC.trade, "stroke-width": 2 }));
+      });
+      // stacked source segments (each a coloured band on the brace), laid out
+      // PROPORTIONALLY across the wedge span so the stack fills [xNear, xFar]
+      // exactly even when the solved-flow MW don't sum to the book-implied net.
+      if (segs && segs.length) {
+        var sumMW = segs.reduce(function (a, s) { return a + s.mw; }, 0) || 1;
+        var runX = xNear;
+        segs.forEach(function (s) {
+          var wpx = (xFar - xNear) * (s.mw / sumMW);   // signed share of the span
+          var sx0 = runX, sx1 = runX + wpx; runX = sx1;
+          var xa = Math.min(sx0, sx1), xb = Math.max(sx0, sx1);
+          svg.appendChild(svgEl("rect", { x: xa, y: wy - 5, width: Math.max(1, xb - xa),
+            height: 10, fill: s.fixed ? C.muted : BC.trade,
+            "fill-opacity": s.fixed ? 0.35 : 0.28,
+            stroke: BC.trade, "stroke-width": 0.5, "stroke-opacity": 0.6 }));
+        });
+      }
+      // hatched fill under the brace to read as a wedge
+      var wx0 = Math.min(xNear, xFar), wx1 = Math.max(xNear, xFar);
+      svg.appendChild(svgEl("rect", { x: wx0, y: wy, width: Math.max(1, wx1 - wx0),
+        height: Math.min(18, (m.t + ph) - wy), fill: "url(#wedgeHatch)",
+        "pointer-events": "none" }));
+      // label: sources when known, else anonymous net
+      var srcTxt = (segs && segs.length)
+        ? segs.map(function (s) { return s.label; }).join(" · ")
+        : "via coupling";
+      var wlabel = (isImport ? "← imports ~" : "exports → ") + fmt(Math.abs(impliedNetImport), 0) +
+        " MW  (" + srcTxt + ")";
+      haloText({ x: (wx0 + wx1) / 2, y: wy - 9, "text-anchor": "middle",
+        fill: BC.trade, "font-size": 10.5, "font-weight": 600 }, wlabel);
     }
 
     // clearing price line + "ball" where the ladder reaches it
@@ -2505,6 +2708,30 @@
       txt += " Actual not yet settled — ex-ante cliff index above.";
     }
     cp.appendChild(document.createTextNode(txt));
+
+    // coupled trade balance: generation + imports = demand (identity), with the
+    // per-source breakdown when the solved flows are loaded (record days).
+    if (impliedNetImport !== null && Math.abs(impliedNetImport) >= CLIFF.TRADE_MIN_MW) {
+      var segs2 = tradeSegments(state.zone, fday.hours[hourIdx], impliedNetImport);
+      var brk = segs2 && segs2.length ? " (" + segs2.map(function (s) { return s.label; }).join(" · ") + ")" : "";
+      var tradeSpan = el("span", "trade-note");
+      tradeSpan.title =
+        "In a coupled hour the zonal price is set MARKET-WIDE by the 39-zone clear; " +
+        "local supply∩demand is NOT the clearing condition. The marker sits on the " +
+        "local supply curve at the coupled price — the gap to local demand is " +
+        "cross-border trade (flow variables, absent from this local ladder). " +
+        (segs2 && segs2.length
+          ? "Sources from the solved flows; ‘(fixed)’ is the out-of-footprint injection residual."
+          : "Per-source breakdown appears on record/backfill days (the daily forecast run does not persist flows yet).");
+      if (impliedNetImport > 0) {
+        tradeSpan.textContent = " Coupled balance: generation " + fmt(clearMW, 0) +
+          " + imports " + fmt(impliedNetImport, 0) + brk + " = demand " + fmt(demandAtClear, 0) + " MW.";
+      } else {
+        tradeSpan.textContent = " Coupled balance: generation " + fmt(clearMW, 0) +
+          " − exports " + fmt(-impliedNetImport, 0) + brk + " = demand " + fmt(demandAtClear, 0) + " MW.";
+      }
+      cp.appendChild(tradeSpan);
+    }
   }
 
   // ---------- footer ----------

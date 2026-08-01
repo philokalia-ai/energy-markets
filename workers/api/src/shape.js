@@ -246,6 +246,30 @@ export function shapeUnits(rows) {
   return { market_day_tz: MARKET_DAY_TZ, units: units };
 }
 
+/**
+ * flows/<date>.parquet rows -> the coupled cross-border flows the Order-book
+ * TRADE WEDGE decomposes (bin/export_flows_parquet.jl is the contract). Each row
+ * is one solved border-hour: {date_time_utc, source_zone, sink_zone, flow_mw}.
+ * Grouped by delivery hour (UTC ISO), each hour an array of compact
+ * [source, sink, mw] triples so the SPA can, for a zone Z, sum the net flow per
+ * neighbour into Z at the shown hour:
+ *
+ *   { market_day_tz, flows: { "2026-07-27T16:00:00Z": [ ["BG","GR",1080.1], … ] } }
+ *
+ * ONLY record/backfill days persist transmission_flows (the daily forecast run
+ * writes forecast_prices only), so this endpoint 404s on pure-forecast days and
+ * the wedge falls back to its anonymous net brace — see the SPA.
+ */
+export function shapeFlows(rows) {
+  const flows = {};
+  for (const r of rows) {
+    const ts = iso(r.date_time_utc);
+    if (ts === null) continue;
+    (flows[ts] || (flows[ts] = [])).push([r.source_zone, r.sink_zone, num(r.flow_mw)]);
+  }
+  return { market_day_tz: MARKET_DAY_TZ, flows: flows };
+}
+
 /** map.parquet rows + manifest -> map.json shape (days sorted by date asc). */
 export function shapeMap(rows, manifest) {
   const byDate = new Map();

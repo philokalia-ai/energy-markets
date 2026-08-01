@@ -58,6 +58,7 @@
   --book-demand:   #9AA3AD;   /* demand — grey */
   --book-backstop: #A08A7A;   /* import backstop — warm grey */
   --book-extra:    #C4643C;   /* scenario / strategist — terracotta */
+  --book-trade:    #C51D74;   /* coupled cross-border trade wedge — magenta */
 }
 /* "Aegean night" — opt-in via the header toggle; light is the default. */
 :root[data-theme="dark"] {
@@ -98,6 +99,7 @@
   --book-demand:   #AEB6C0;
   --book-backstop: #BBA697;
   --book-extra:    #E0A458;
+  --book-trade:    #E255A0;
 }
 
 * { box-sizing: border-box; }
@@ -1016,6 +1018,9 @@ html, body { overflow-x: hidden; }
 .book-demand-line { pointer-events: none; }
 .book-demand-hit { cursor: crosshair; }
 .book-legend .book-demand-key { border-top: 2px dashed; height: 0; align-self: center; }
+.book-cliff-band { pointer-events: none; }
+/* coupled trade-balance sentence — hover for the coupled-pricing explanation */
+.day-comment .trade-note { cursor: help; border-bottom: 1px dotted var(--book-trade); }
 /* Non-fuel book tags in the legend read as neutral (a subtle dotted outline)
    so they are never mistaken for a fuel colour. */
 .book-legend .book-tagkey { opacity: 0.9; }

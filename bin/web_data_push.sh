@@ -64,6 +64,13 @@ if [ -d "$STAGING/v1/books" ]; then
         --content-type "application/vnd.apache.parquet" \
         "$STAGING/v1/books" "s3://$BUCKET/v1/books"
 fi
+# Coupled cross-border flows for the trade wedge (record/backfill days only):
+# additive, same non-destructive discipline as books.
+if [ -d "$STAGING/v1/flows" ]; then
+    aws s3 sync --endpoint-url "$ENDPOINT" \
+        --content-type "application/vnd.apache.parquet" \
+        "$STAGING/v1/flows" "s3://$BUCKET/v1/flows"
+fi
 
 aws s3 cp --endpoint-url "$ENDPOINT" \
     --content-type "application/json" \

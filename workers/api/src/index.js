@@ -10,6 +10,7 @@
  *   GET /api/v1/scoreboard    <- v1/scoreboard.parquet (+ manifest)
  *   GET /api/v1/map           <- v1/map.parquet        (+ manifest)
  *   GET /api/v1/units         <- v1/units.parquet (unit code -> name/fuel/firm)
+ *   GET /api/v1/flows/:date   <- v1/flows/<date>.parquet (coupled trade wedge)
  *   GET /api/v1/manifest      <- v1/manifest.json (pass-through)
  *
  * Caching: edge Cache API keyed on the R2 object ETag — the parquet is
@@ -19,7 +20,7 @@
 
 import { parquetReadObjects } from "hyparquet";
 import { compressors } from "hyparquet-compressors";
-import { shapeZone, shapeScoreboard, shapeMap, shapeBook, shapeInputsZone, shapeReservoir, shapeUnits } from "./shape.js";
+import { shapeZone, shapeScoreboard, shapeMap, shapeBook, shapeInputsZone, shapeReservoir, shapeUnits, shapeFlows } from "./shape.js";
 
 const ALLOWED_ORIGINS = [
   /^https:\/\/energy\.philokalia\.ai$/,
@@ -91,6 +92,14 @@ async function buildPayload(env, route, zone, date) {
     if (!obj) return null;
     return JSON.stringify(shapeUnits(await readParquet(obj)));
   }
+  if (route === "flows") {
+    // Coupled cross-border flows for one market day (trade-wedge decomposition).
+    // Only record/backfill days have a parquet; forecast days 404 (SPA falls
+    // back to the anonymous net wedge).
+    const obj = await env.DATA.get("v1/flows/" + date + ".parquet");
+    if (!obj) return null;
+    return JSON.stringify(shapeFlows(await readParquet(obj)));
+  }
   if (route === "inputs_manifest") {
     // The Predictions-page data plane manifest (v1/inputs/manifest.json) —
     // pass-through, like v1/manifest.json (see bin/export_prediction_inputs.jl).
@@ -126,6 +135,7 @@ async function buildPayload(env, route, zone, date) {
 function routeKey(route, zone, date) {
   if (route === "manifest") return "v1/manifest.json";
   if (route === "units") return "v1/units.parquet";
+  if (route === "flows") return "v1/flows/" + date + ".parquet";
   if (route === "zone") return "v1/zones/" + zone + ".parquet";
   if (route === "book") return "v1/books/" + date + ".parquet";
   if (route === "inputs_manifest") return "v1/inputs/manifest.json";
@@ -153,6 +163,9 @@ export default {
       route = "book";
       zone = m[1];
       date = m[2];
+    } else if ((m = url.pathname.match(/^\/api\/v1\/flows\/(\d{4}-\d{2}-\d{2})$/))) {
+      route = "flows";
+      date = m[1];
     } else if (url.pathname === "/api/v1/scoreboard") {
       route = "scoreboard";
     } else if (url.pathname === "/api/v1/map") {
