@@ -619,7 +619,7 @@ The project includes several GitHub workflows for automated price generation:
 | Workflow | Schedule | Description |
 |----------|----------|-------------|
 | `generate-multi-zone-prices.yml` | Daily 3 AM UTC | Multi-zone clearing with transmission |
-| `daily-forecast.yml` | Dispatch only | The ex-ante forecast (scheduled from ceres) |
+| `daily-forecast.yml` | 06:30 UTC daily + dispatch | Pre-gate/7-lead ex-ante forecast (weather track, leads D+1..D+7, before the 12:00 CET auction; evening entsoe refresh still scheduled from ceres) — see docs/experiments/pregate-7lead.md |
 
 The single-zone, iterative and inference-refresh workflows were deleted in cv25
 along with the UC path they drove.

@@ -54,6 +54,58 @@ const ML_USE_NEW = Dict{Tuple{String,Symbol},Bool}(
     ("NL", :load) => true,  ("NL", :solar) => true,   ("NL", :wind) => true,
 )
 
+# ── Run-time zone→model resolution (pre-gate/7-lead Phase-2 hook) ─────────────
+# The 39-zone ML rollout (in flight) ships its winners config THROUGH meta.json
+# (bin/input_models/meta.json) — the same artifact this port already reads. So
+# the pilot set and the per-(zone,target) winner are resolved at RUN time from
+# meta, with the committed consts above as the fallback. Phase 2 (the data-reset
+# backfill) then automatically picks up whatever zones the rollout merged: no
+# code edit here, just a richer meta. Optional meta keys (all backward-compatible
+# — absent ⇒ the 5-pilot consts):
+#   "pilot_zones": ["GR","ES",...]                         # the ML surface
+#   "winners": {"GR_load": true, "GR_solar": true, ...}    # per (zone,target)
+# `<zone>_<target>` present in meta AND a matching `<zone>_<target>.txt` dump
+# gates a zone into the pilot set even if pilot_zones is absent.
+
+"Pilot (ML-covered) zones, resolved from meta.json at run time (fallback: ML_PILOT_ZONES)."
+function ml_pilot_zones(; dir::AbstractString=ML_MODELS_DIR)
+    mp = joinpath(dir, "meta.json")
+    isfile(mp) || return copy(ML_PILOT_ZONES)
+    meta = try
+        JSON.parsefile(mp)
+    catch
+        return copy(ML_PILOT_ZONES)
+    end
+    if haskey(meta, "pilot_zones") && meta["pilot_zones"] isa AbstractVector &&
+       !isempty(meta["pilot_zones"])
+        return String[String(z) for z in meta["pilot_zones"]]
+    end
+    return copy(ML_PILOT_ZONES)
+end
+
+"""
+    ml_use_new(zone, target; meta=nothing) -> Bool
+
+Whether the NEW LightGBM model (vs the committed linear pack) supplies
+`(zone, target::Symbol in (:load,:solar,:wind))`. Reads meta.json's optional
+`winners` map at run time; falls back to the committed `ML_USE_NEW`, then to
+`false` (keep the pack). `meta` may be pre-parsed to avoid re-reading in a loop.
+"""
+function ml_use_new(zone::AbstractString, target::Symbol;
+                    meta::Union{Nothing,AbstractDict}=nothing,
+                    dir::AbstractString=ML_MODELS_DIR)
+    m = meta
+    if m === nothing
+        mp = joinpath(dir, "meta.json")
+        m = isfile(mp) ? (try JSON.parsefile(mp) catch; nothing end) : nothing
+    end
+    if m !== nothing && haskey(m, "winners") && m["winners"] isa AbstractDict
+        v = get(m["winners"], "$(zone)_$(target)", nothing)
+        v isa Bool && return v
+    end
+    return get(ML_USE_NEW, (String(zone), target), false)
+end
+
 # ---------------------------------------------------------------------------
 # LightGBM text-dump parser + GBDT evaluator (numerical splits only; the pipeline
 # trained num_cat=0). Prediction = Σ over trees of the reached leaf value — the
@@ -533,11 +585,12 @@ from weather_res.jl). Weather is fetched at the admissible D-1 vintage
 pilot zones in `preds`/`load_preds` before `weather_scenario`.
 """
 function build_ml_inputs(zones::Vector{String}, first_utc::Date, last_utc::Date,
-                         candidates::AbstractSet{Date}; asof::Date=Date(now(UTC)))
+                         candidates::AbstractSet{Date}; asof::Date=Date(now(UTC)),
+                         fixed_lag::Union{Nothing,Int}=nothing)
     models = load_ml_models(zones)
     geom = ml_geom()
     res_pack = load_res_models()
-    groups = vintage_groups(first_utc, last_utc, candidates; asof)
+    groups = vintage_groups(first_utc, last_utc, candidates; asof, fixed_lag)
     span_hours = collect(DateTime(first_utc):Hour(1):DateTime(last_utc) + Hour(23))
     target_days = collect(first_utc:Day(1):last_utc)
     cap = ml_capacity_p95(zones, target_days)
@@ -553,6 +606,10 @@ function build_ml_inputs(zones::Vector{String}, first_utc::Date, last_utc::Date,
         zpack = get(res_pack["zones"], z, nothing)
         holset = ml_holidays(String(load_load_models()["zones"][z]["holiday_country"]),
                              2024:2027)
+        # Per-(zone,target) winner resolved from meta.json at run time (Phase-2
+        # hook: the 39-zone rollout ships its winners through meta) — fallback
+        # to the committed ML_USE_NEW.
+        use_new(t) = ml_use_new(z, t; meta=models.meta)
         rp = Dict{DateTime,Float64}(); lp = Dict{DateTime,Float64}()
         for (gdates, lag) in groups
             throttle > 0 && sleep(throttle)
@@ -579,10 +636,10 @@ function build_ml_inputs(zones::Vector{String}, first_utc::Date, last_utc::Date,
                     c95s = get(get(cap, (z, :solar), Dict{Date,Float64}()), D, NaN)
                     c95w = get(get(cap, (z, :wind), Dict{Date,Float64}()), D, NaN)
                     feats = ml_res_features(h, lat0, lon0, ghi, cloud, pres, v100m, c95s, c95w)
-                    solar = ML_USE_NEW[(z, :solar)] ? ml_predict_solar(models, z, feats) :
+                    solar = use_new(:solar) ? ml_predict_solar(models, z, feats) :
                             (zpack !== nothing && haskey(zpack, "solar") ?
                              predict_solar_hour(zpack["solar"], ghi, h) : 0.0)
-                    wind = if ML_USE_NEW[(z, :wind)]
+                    wind = if use_new(:wind)
                         ml_predict_wind(models, z, feats)
                     else
                         # baseline power curve needs per-cell v100 in pack order
@@ -605,7 +662,7 @@ function build_ml_inputs(zones::Vector{String}, first_utc::Date, last_utc::Date,
                     # Only overlay load where the NEW model is the winner; a
                     # pack-load pilot is left out of load_preds entirely so the
                     # caller keeps its committed-pack fill (never clobbered empty).
-                    if ML_USE_NEW[(z, :load)]
+                    if use_new(:load)
                         is_hol = (Date(h) in holset) ? 1.0 : 0.0
                         lf = ml_load_features(h, lat0, lon0, T, ghiL, Tma, ar1, ar7, is_hol)
                         lp[h] = ml_predict_load(models, z, lf)
@@ -614,7 +671,7 @@ function build_ml_inputs(zones::Vector{String}, first_utc::Date, last_utc::Date,
             end
         end
         res_preds[z] = rp
-        ML_USE_NEW[(z, :load)] && (load_preds[z] = lp)   # pack-load pilots keep their fill
+        use_new(:load) && (load_preds[z] = lp)   # pack-load pilots keep their fill
     end
     return res_preds, load_preds
 end

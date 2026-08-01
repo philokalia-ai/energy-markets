@@ -144,7 +144,8 @@ function export_zone_parquets()
                p.code_version AS cv,
                (p.date_time_utc AT TIME ZONE 'UTC') AS t,
                p.price_eur_mwh AS sim,
-               (p.prediction_made_utc AT TIME ZONE 'UTC') AS made
+               (p.prediction_made_utc AT TIME ZONE 'UTC') AS made,
+               p.is_retro, p.reset_tag
         FROM simulations.forecast_prices p
         JOIN chosen c ON c.market_date = p.market_date AND c.lead_days = p.lead_days
                      AND c.input_mode = p.input_mode AND c.code_version = p.code_version
@@ -185,7 +186,8 @@ function export_zone_parquets()
                        prediction_made_utc=DateTime[], date_time_utc=DateTime[],
                        sim=Float64[], actual=Union{Missing,Float64}[],
                        mae=Union{Missing,Float64}[], bias=Union{Missing,Float64}[],
-                       corr=Union{Missing,Float64}[])
+                       corr=Union{Missing,Float64}[],
+                       is_retro=Bool[], reset_tag=Union{Missing,String}[])
         keys_ = unique(collect(zip(Date.(zp.market_date), Int.(zp.lead_days),
                                    String.(zp.mode))))
         # newest first, then by increasing lead ('entsoe' before 'weather'
@@ -200,10 +202,13 @@ function export_zone_parquets()
             corr = sc === nothing ? missing : nm(sc.corr)
             made = DateTime(sub.made[1])
             slice_cv = Int(sub.cv[1])
+            slice_retro = !ismissing(sub.is_retro[1]) && Bool(sub.is_retro[1])
+            slice_tag = ismissing(sub.reset_tag[1]) ? missing : String(sub.reset_tag[1])
             for r in eachrow(sub)
                 h = DateTime(r.t)
                 push!(df, (d, lead, mode, slice_cv, made, h, Float64(r.sim),
-                           get(actmap, (zone, h), missing), mae, bias, corr))
+                           get(actmap, (zone, h), missing), mae, bias, corr,
+                           slice_retro, slice_tag))
             end
         end
         counts["zones/$zone.parquet"] =
@@ -339,12 +344,44 @@ function main()
     for (k, v) in zone_counts
         counts[k] = v
     end
+    # data_reset (pre-gate/7-lead γ): summarize the retro-reconstruction campaign
+    # so the SPA can render the reset notice ("Data reset at 1 Aug 2026,
+    # retroactively"). ADDITIVE — absent-null on a record with no retro rows.
+    # Retro rows are additive gap-fills; genuine live vintages are preserved and
+    # are NOT flagged here.
+    data_reset = nothing
+    try
+        rs = Euphemia.sql2df_with_retry("""
+            SELECT reset_tag AS tag, COUNT(DISTINCT (market_date, lead_days)) AS n_slices,
+                   MIN(market_date) AS d0, MAX(market_date) AS d1,
+                   COUNT(DISTINCT lead_days) AS n_leads
+            FROM simulations.forecast_prices
+            WHERE is_retro = true AND reset_tag IS NOT NULL
+            GROUP BY reset_tag ORDER BY 2 DESC LIMIT 1
+        """)
+        if !isempty(rs)
+            data_reset = Dict(
+                "reset_tag" => String(rs.tag[1]),
+                "label" => "Data reset at 1 Aug 2026, retroactively",
+                "retro_slices" => Int(rs.n_slices[1]),
+                "leads" => Int(rs.n_leads[1]),
+                "window_start" => Dates.format(Date(rs.d0[1]), "yyyy-mm-dd"),
+                "window_end" => Dates.format(Date(rs.d1[1]), "yyyy-mm-dd"),
+                "note" => "Retro rows are ex-ante reconstructions (historical " *
+                          "previous_dayN weather vintages) filling gaps in the " *
+                          "live record; genuine live vintages are preserved.",
+            )
+        end
+    catch e
+        @warn "data_reset manifest summary failed (web data unaffected)" exception = (e, catch_backtrace())
+    end
     manifest = Dict(
         "updated_at" => updated_at,
         "code_version" => CV,
         "market_day_tz" => "Europe/Athens",
         "zones" => zones,
         "row_counts" => counts,
+        "data_reset" => data_reset,
         "schema" => "v1",
     )
     open(joinpath(V1_DIR, "manifest.json"), "w") do io

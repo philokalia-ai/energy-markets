@@ -27,3 +27,23 @@ lookahead; it does not reconstruct the bidders' exact pre-gate information set.
 """
 openmeteo_vintage_lag(market_day::Date; asof::Date=Date(now(UTC))) =
     asof <= market_day - Day(1) ? 0 : 1
+
+"""
+    openmeteo_retro_vintage_lag(lead_days::Int) -> Int
+
+RETRO reconstruction discipline (docs/experiments/pregate-7lead.md): to
+reconstruct "what the forecast would have said at lead `n` for a PAST delivery
+day D", every weather feature must come from the run issued `n` days before D —
+the open-meteo previous-runs API's `_previous_day{n}` variable (per-timestamp:
+for hour h it carries the value predicted by the run issued issue-date(h) − n).
+So the admissible vintage lag for a lead-`n` retro slice is simply `n`, clamped
+to the API's 1..7 previous-runs coverage.
+
+Unlike the LIVE lag (`openmeteo_vintage_lag`, 0/1 — a FUTURE day's current run
+is already horizon-natural, and lag 0 IS the run issued D−lead), the retro lag
+EQUALS the lead: for a past D the D−n-issued run is recovered only through
+`_previous_day{n}`. Models were trained on `previous_day1`; serving day-n
+vintages of the SAME variables is the declared convention whose skill cost the
+per-lead scoreboard measures — that IS the validation.
+"""
+openmeteo_retro_vintage_lag(lead_days::Int) = clamp(lead_days, 1, 7)

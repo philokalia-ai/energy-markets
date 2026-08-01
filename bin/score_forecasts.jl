@@ -63,7 +63,8 @@ function pending_slices()
     # the small forecast_prices first, then ONE bounded scan of the actuals
     # for realized market days, intersected in Julia. Same result set.
     slices = Euphemia.sql2df_with_retry("""
-        SELECT DISTINCT fp.market_date, fp.lead_days, fp.code_version, fp.input_mode
+        SELECT DISTINCT fp.market_date, fp.lead_days, fp.code_version, fp.input_mode,
+               fp.is_retro
         FROM simulations.forecast_prices fp
         WHERE TRUE
         $rescore_clause
@@ -95,19 +96,35 @@ function slice_sim(market_date::Date, lead_days::Int, cv::Int, input_mode::Strin
 end
 
 function upsert_score!(market_date::Date, zone::String, lead_days::Int, cv::Int,
-                       input_mode::String, n::Int, mae, bias, corr)
+                       input_mode::String, n::Int, mae, bias, corr, cm;
+                       is_retro::Bool=false, reset_tag::Union{Nothing,String}=nothing)
     tonull(x) = x === nothing ? missing : x
     Euphemia.withdb() do cnx
         LibPQ.execute(cnx, """
             INSERT INTO simulations.forecast_scores
             (market_date, bidding_zone, lead_days, code_version, input_mode,
-             n_hours, mae, bias, corr, scored_at)
-            VALUES (\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8, \$9, now())
+             n_hours, mae, bias, corr,
+             n_collapse_actual, n_collapse_pred, collapse_hits,
+             collapse_false_alarms, collapse_hit_rate, collapse_false_alarm_rate,
+             is_retro, reset_tag, scored_at)
+            VALUES (\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8, \$9,
+                    \$10, \$11, \$12, \$13, \$14, \$15, \$16, \$17, now())
             ON CONFLICT (market_date, bidding_zone, lead_days, code_version, input_mode)
             DO UPDATE SET n_hours = EXCLUDED.n_hours, mae = EXCLUDED.mae,
-                          bias = EXCLUDED.bias, corr = EXCLUDED.corr, scored_at = now()
+                          bias = EXCLUDED.bias, corr = EXCLUDED.corr,
+                          n_collapse_actual = EXCLUDED.n_collapse_actual,
+                          n_collapse_pred = EXCLUDED.n_collapse_pred,
+                          collapse_hits = EXCLUDED.collapse_hits,
+                          collapse_false_alarms = EXCLUDED.collapse_false_alarms,
+                          collapse_hit_rate = EXCLUDED.collapse_hit_rate,
+                          collapse_false_alarm_rate = EXCLUDED.collapse_false_alarm_rate,
+                          is_retro = EXCLUDED.is_retro, reset_tag = EXCLUDED.reset_tag,
+                          scored_at = now()
         """, Any[market_date, zone, lead_days, cv, input_mode,
-                 n, tonull(mae), tonull(bias), tonull(corr)])
+                 n, tonull(mae), tonull(bias), tonull(corr),
+                 cm.n_collapse_actual, cm.n_collapse_pred, cm.hits,
+                 cm.false_alarms, tonull(cm.hit_rate), tonull(cm.false_alarm_rate),
+                 is_retro, reset_tag === nothing ? missing : reset_tag])
     end
 end
 
@@ -171,7 +188,17 @@ function main()
         lead_days = Int(r.lead_days)
         cv = Int(r.code_version)
         input_mode = String(r.input_mode)
-        println("\nScoring market_date=$market_date lead_days=$lead_days cv=$cv mode=$input_mode")
+        is_retro = "is_retro" in names(slices) && !ismissing(r.is_retro) && Bool(r.is_retro)
+        # reset_tag is uniform within a slice — read one row's value.
+        reset_tag = let rt = Euphemia.sql2df_with_retry("""
+                SELECT MAX(reset_tag) AS t FROM simulations.forecast_prices
+                WHERE market_date = \$1 AND lead_days = \$2 AND code_version = \$3
+                  AND input_mode = \$4
+            """, [market_date, lead_days, cv, input_mode])
+            (isempty(rt) || ismissing(rt.t[1])) ? nothing : String(rt.t[1])
+        end
+        println("\nScoring market_date=$market_date lead_days=$lead_days cv=$cv mode=$input_mode" *
+                (is_retro ? " [RETRO $(reset_tag)]" : ""))
 
         sim = slice_sim(market_date, lead_days, cv, input_mode)
         # market_date is the Europe/Athens market day: its window starts at
@@ -193,11 +220,14 @@ function main()
                 continue
             end
             s = score_series(sv, av)
+            cm = collapse_metrics(sv, av)   # SCIENTIST.md §4, threshold ≤ €5
             upsert_score!(market_date, zone, lead_days, cv, input_mode,
-                          s.n, s.mae, s.bias, s.corr)
+                          s.n, s.mae, s.bias, s.corr, cm;
+                          is_retro=is_retro, reset_tag=reset_tag)
             corr_str = s.corr === nothing ? "-" : @sprintf("%.2f", s.corr)
-            @printf("  %-12s n=%2d MAE=%6.1f bias=%+7.1f corr=%s\n",
-                    zone, s.n, s.mae, s.bias, corr_str)
+            @printf("  %-12s n=%2d MAE=%6.1f bias=%+7.1f corr=%s  collapse[act=%d pred=%d hit=%d FA=%d]\n",
+                    zone, s.n, s.mae, s.bias, corr_str,
+                    cm.n_collapse_actual, cm.n_collapse_pred, cm.hits, cm.false_alarms)
         end
     end
 

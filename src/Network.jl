@@ -355,6 +355,21 @@ const CV27_SHIPPED_BORDERS = join([
 const _FBMC_CAP_DAY_CACHE = Dict{Date,Dict{Tuple{String,String,Int},Float64}}()
 const _FBMC_CAP_LOCK = ReentrantLock()
 
+# Pre-gate ATC fallback (pre-gate/7-lead enabler β2). At a run BEFORE day D's
+# Day-ahead ATC has published (the 06:30 UTC pre-gate run, or any lead where the
+# DA auction has not cleared), many footprint borders have NO offered-ATC row
+# for D at all — not the cv27 "n_da==0 present row" case, but wholly absent. The
+# enriched network would then build those borders missing, starving
+# import-dependent zones into phantom scarcity. When this flag is set the build
+# ADDS a demonstrated-capability row (trailing-366d p95 gross flow per 4h block,
+# `_fbmc_capability`) for every footprint-internal border-hour absent from the
+# offered data — the cv27 signal generalized from "re-size a present row" to
+# "supply a missing one". Default false ⇒ byte-identical (the block never runs);
+# only bin/daily_forecast.jl's pre-gate/retro path sets it. Kill-switch
+# EUPHEMIA_DISABLE_PREGATE_ATC forces it off even when set. Strictly ex-ante
+# (history < D only).
+const PREGATE_ATC_FALLBACK = Ref{Bool}(false)
+
 # T1b scoping (declared post-Set-A amendment, disclosed in the results): the
 # demonstrated capability applies ONLY to borders that HAD Day-ahead offered
 # rows at some point before the delivery day and have none on it — capacity
@@ -525,6 +540,31 @@ function _create_transfer_capacity_enriched(date::Date, bidding_zones::Vector{St
                          time_period=Int(r.time_period), capacity=Float64(r.capacity)))
             n_explicit_added += 1
         end
+    end
+
+    # Pre-gate ATC fallback (enabler β2): supply demonstrated capability for
+    # footprint-internal border-hours WHOLLY ABSENT from the offered data (the
+    # pre-gate morning case — Day-ahead ATC for D not yet published). Added
+    # BEFORE the remap/drop passes so a fallback row is remapped and drop-border
+    # filtered exactly like a real one. Both endpoints must be footprint zones
+    # (sub-zone codes, as physical_flows reports them), so aggregate external
+    # borders are untouched here. Never overwrites a present row.
+    n_pregate_added = 0
+    if PREGATE_ATC_FALLBACK[] && isempty(get(ENV, "EUPHEMIA_DISABLE_PREGATE_ATC", ""))
+        capf = _fbmc_capability(date)  # (source, sink, blk) => p95 gross flow (day-cached)
+        present = Set{Tuple{String,String,Int}}(
+            (String(r.source_zone), String(r.sink_zone), Int(r.time_period)) for r in rows)
+        for ((s, k, blk), c) in capf
+            (s in fpset && k in fpset && s != k && c > 0.0) || continue
+            for tp in (4blk + 1):(4blk + 4)   # 4h block → its four hourly periods
+                (s, k, tp) in present && continue           # never clobber a real row
+                push!(rows, (source_zone=s, sink_zone=k, time_period=tp, capacity=c))
+                n_pregate_added += 1
+            end
+        end
+        n_pregate_added > 0 &&
+            println("   🌅 pre-gate ATC fallback: +$n_pregate_added demonstrated-capability " *
+                    "border-hours (Day-ahead ATC not yet published for $date)")
     end
 
     # Apply aggregate → sub-zone remap. Precompute, per aggregate, the set of

@@ -215,10 +215,67 @@ function clear_analogue_days_cache!()
     end
 end
 
-function _load_day_vectors(zone::String, day::Date)
+# --- Weather-track thermometer override (pre-gate/7-lead enabler β1) ---------
+# The :v3 analogue selection reads the delivery day's PUBLISHED ENTSO-E D-1
+# load forecast as its thermometer `fv` (a monotone-in-temperature vector that
+# selects thermally-similar analogue days). On the WEATHER (ex-ante) forecast
+# track we can freeze the whole prediction BEFORE the 12:00 CET auction, but
+# the ENTSO-E D-1 forecast may not be published yet at a 06:30 UTC run — and,
+# more fundamentally, the ex-ante track's own claim is that it does not read the
+# TSO's published forecast. So the weather track injects OUR model/ML load
+# vector (the same one that drives the book's demand) as the thermometer, per
+# (zone, market_day).
+#
+# Weather-track-SCOPED and default-INERT: the dict is populated only by
+# bin/daily_forecast.jl's weather track. The entsoe track, the RECORD backfill
+# and every offline path leave it empty, so `_analogue_days` reads the published
+# forecast EXACTLY as before — byte-identical (guarded on a record day). The
+# EUPHEMIA_DISABLE_WEATHER_THERMOMETER kill-switch forces the published-forecast
+# thermometer even on the weather track. See docs/experiments/pregate-7lead.md.
+const _THERMOMETER_LOAD_OVERRIDE = Dict{Tuple{String,Date},Vector{Float64}}()
+const _THERMOMETER_LOCK = ReentrantLock()
+
+"""
+    set_thermometer_load!(zone, day, vec24)
+
+Inject a 24-element (UTC hour 0..23) load vector to use as the :v3 analogue
+thermometer for `(zone, day)`, replacing the published ENTSO-E D-1 forecast.
+Clears the analogue-day cache so the next selection re-runs against it.
+"""
+function set_thermometer_load!(zone::String, day::Date, vec24::Vector{Float64})
+    length(vec24) == 24 ||
+        throw(ArgumentError("thermometer load vector must be 24 hourly values (got $(length(vec24)))"))
+    lock(_THERMOMETER_LOCK) do
+        _THERMOMETER_LOAD_OVERRIDE[(zone, day)] = copy(vec24)
+    end
+    clear_analogue_days_cache!()
+    return nothing
+end
+
+"Empty the weather-track thermometer overrides (and the analogue cache they feed)."
+function clear_thermometer_overrides!()
+    lock(_THERMOMETER_LOCK) do
+        empty!(_THERMOMETER_LOAD_OVERRIDE)
+    end
+    clear_analogue_days_cache!()
+    return nothing
+end
+
+"The injected thermometer vector for `(zone, day)`, or `nothing` (kill-switch honoured)."
+function _thermometer_override(zone::String, day::Date)
+    isempty(get(ENV, "EUPHEMIA_DISABLE_WEATHER_THERMOMETER", "")) || return nothing
+    lock(_THERMOMETER_LOCK) do
+        get(_THERMOMETER_LOAD_OVERRIDE, (zone, day), nothing)
+    end
+end
+
+function _load_day_vectors(zone::String, day::Date; skip_forecast::Bool=false)
     # Realized 24h load vectors for candidate days [day-365, day-2], plus the
     # delivery day's D-1 forecast vector. Both hourly UTC averages.
-    fdf = sql2df_with_retry("""
+    # `skip_forecast` (weather-track thermometer override): the caller supplies
+    # `fv` itself, so the published-forecast query is skipped entirely — the
+    # correct behaviour at a pre-gate run where it may not be published yet.
+    fdf = skip_forecast ? nothing : sql2df_with_retry("""
         SELECT EXTRACT(hour FROM date_time_utc AT TIME ZONE 'UTC')::int AS h,
                AVG(total_load_mw) AS mw
         FROM entsoe.day_ahead_total_load_forecast
@@ -262,10 +319,16 @@ function _analogue_days(zone::String, day::Date; k::Int=ANALOGUE_K[])
     cached !== nothing && return cached
     had_error = false
     days = try
-        fdf, adf = _load_day_vectors(zone, day)
-        fv = fill(NaN, 24)
-        for r in eachrow(fdf)
-            0 <= r.h <= 23 && (fv[r.h+1] = r.mw)
+        # Weather-track thermometer override (enabler β1): use OUR model/ML load
+        # vector as `fv` instead of the published ENTSO-E D-1 forecast. Empty
+        # everywhere else ⇒ byte-identical to the published-forecast path.
+        ov = _thermometer_override(zone, day)
+        fdf, adf = _load_day_vectors(zone, day; skip_forecast=(ov !== nothing))
+        fv = ov !== nothing ? copy(ov) : fill(NaN, 24)
+        if ov === nothing
+            for r in eachrow(fdf)
+                0 <= r.h <= 23 && (fv[r.h+1] = r.mw)
+            end
         end
         if any(isnan, fv)
             Date[]
