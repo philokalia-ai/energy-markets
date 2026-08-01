@@ -1,0 +1,69 @@
+# Owner-dispatchable upload of a self-contained EXPERIMENT artifact tree to the
+# web R2 bucket, under the experiments/ namespace — OUTSIDE the site's v1/ data
+# plane (v1/zones, v1/books, v1/inputs, v1/manifest.json are never touched here).
+#
+# First consumer: the published-books clearing validation
+# (docs/experiments/pubbooks-clearing/). Stage the DERIVED artifacts on the
+# runner host with docs/experiments/pubbooks-clearing/stage_r2.py, then dispatch
+# this workflow pointing `staging_dir` at that tree.
+#
+# ADDITIVE ONLY. This uploads with `aws s3 cp` (no `sync --delete` anywhere) — the
+# 2026-08-01 incident (a root `sync --delete` on v1/ wiped the record books) is
+# why every experiment push here is copy-only and scoped to its own prefix. It
+# can only ADD/overwrite objects under experiments/<prefix>/, never delete.
+name: upload-experiment-data
+
+on:
+  workflow_dispatch:
+    inputs:
+      staging_dir:
+        description: "Absolute path on the runner host of the staged artifact tree (stage_r2.py output; must contain MANIFEST.json + SHA256SUMS)"
+        required: true
+        default: "/home/pgeorgakopoulos/armada/energy-markets/data/experiments/pubbooks/v1"
+      prefix:
+        description: "Destination key prefix under the bucket (no leading/trailing slash)"
+        required: true
+        default: "experiments/pubbooks/v1"
+
+jobs:
+  upload:
+    runs-on: [self-hosted, linux, ARM64]
+    steps:
+      - name: Validate staging tree
+        run: |
+          D="${{ inputs.staging_dir }}"
+          test -d "$D" || { echo "::error::staging_dir $D not found on runner host"; exit 1; }
+          test -f "$D/MANIFEST.json" || { echo "::error::$D/MANIFEST.json missing — run stage_r2.py first"; exit 1; }
+          test -f "$D/SHA256SUMS" || { echo "::error::$D/SHA256SUMS missing — run stage_r2.py first"; exit 1; }
+          # Guard: refuse to write into the site data plane.
+          case "${{ inputs.prefix }}" in
+            experiments/*) : ;;
+            *) echo "::error::prefix must live under experiments/ (got '${{ inputs.prefix }}')"; exit 1 ;;
+          esac
+          echo "staging OK: $(find "$D" -type f | wc -l) files, $(du -sh "$D" | cut -f1)"
+
+      - name: Push DERIVED artifacts additively (manifest last)
+        env:
+          EXTRACT_S3_ENDPOINT: ${{ secrets.EXTRACT_S3_ENDPOINT }}
+          WEB_S3_ACCESS_KEY_ID: ${{ secrets.WEB_S3_ACCESS_KEY_ID }}
+          WEB_S3_SECRET_ACCESS_KEY: ${{ secrets.WEB_S3_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+        run: |
+          set -euo pipefail
+          D="${{ inputs.staging_dir }}"
+          PFX="${{ inputs.prefix }}"
+          ENDPOINT="${WEB_S3_ENDPOINT:-$EXTRACT_S3_ENDPOINT}"
+          BUCKET="${WEB_S3_BUCKET:-euphemia-web-data}"
+          export AWS_ACCESS_KEY_ID="$WEB_S3_ACCESS_KEY_ID"
+          export AWS_SECRET_ACCESS_KEY="$WEB_S3_SECRET_ACCESS_KEY"
+          command -v aws >/dev/null || { echo "::error::aws CLI required on runner"; exit 1; }
+          # 1) all data objects (exclude the two integrity files — uploaded last)
+          aws s3 cp --recursive --endpoint-url "$ENDPOINT" \
+            --exclude "MANIFEST.json" --exclude "SHA256SUMS" \
+            "$D" "s3://$BUCKET/$PFX"
+          # 2) SHA256SUMS, then 3) MANIFEST.json last (readers key off the manifest)
+          aws s3 cp --endpoint-url "$ENDPOINT" --content-type "text/plain" \
+            "$D/SHA256SUMS" "s3://$BUCKET/$PFX/SHA256SUMS"
+          aws s3 cp --endpoint-url "$ENDPOINT" --content-type "application/json" \
+            "$D/MANIFEST.json" "s3://$BUCKET/$PFX/MANIFEST.json"
+          echo "pushed $D -> s3://$BUCKET/$PFX ($ENDPOINT)"

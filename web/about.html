@@ -557,6 +557,14 @@
     across ~160k hours. Because the gate is ex-ante and regime-scoped, all-hours
     aggregates barely move by design and no zone is harmed outside the regime.
   </p>
+  <p>
+    The clearing solver itself is validated against <strong>real published
+    auctions</strong> — fed the actual GME (Italian) and OMIE (Iberian) day-ahead
+    bid books it reproduces the official zonal price exactly wherever the published
+    book alone determines it (max&nbsp;|Δ|&nbsp;=&nbsp;€0.00 across the
+    well-determined GME cells):
+    <a href="https://github.com/philokalia-ai/energy-markets/blob/main/docs/experiments/pubbooks-clearing/REPRODUCE.md">reproduce&nbsp;it&nbsp;→</a>.
+  </p>
 
   <h2>The weather layer — shipped, and independent of late inputs</h2>
   <p>

@@ -550,6 +550,8 @@ docs/       Model spec, calibration atlas + iteration history, reproducibility,
             the open RES/load input model (predictions.md), negative-results
             record (complex-orders-investigation.md, experiments/) —
             see the docs index: docs/README.md
+            · solver validated on REAL published auctions (GME MGP + OMIE):
+              docs/experiments/pubbooks-clearing/REPRODUCE.md
 test/       Core test suite (julia --project=. test/runtests.jl), plus manual/
             DB-dependent tests and scripts/ benchmarks
 results/    Committed reference metrics for reproduction drift checks
