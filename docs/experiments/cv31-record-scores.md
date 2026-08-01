@@ -20,6 +20,12 @@ like-for-like fix, #260).
 | 2025 | 316,368 | 26.59 → 26.52 | 0.633 → 0.634 | 63.7% |
 | 2026 | 179,712/180,648¹ | 30.27 → 30.28 | 0.668 → 0.669 | 61.5% |
 
+At the stricter 0.80 threshold the energy-weighted shares are **55.0%**
+(2025) and **40.4%** (2026), identical cv27↔cv31 — no zone crossed either
+threshold; the floor's corr gains are within-band. Zones sitting in the
+0.70–0.80 band by energy weight (2026): ES 0.754 (9.5%), PL 0.747 (6.4%),
+FI 0.797 (3.5%), SE3 0.736, BE 0.769, CZ 0.709, AT 0.740, RO 0.767.
+
 ¹ cv31 saved one more usable day than cv27 (1,234 vs 1,233).
 
 Aggregates barely move BY DESIGN: the cv31 mechanism (solar-share-gated
