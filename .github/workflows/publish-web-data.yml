@@ -1,0 +1,69 @@
+# On-demand web data-plane publish — the same export+push the daily forecast
+# runs at the end of its cycle, dispatchable any time (e.g. after a record
+# backfill, a data fix, or to fill a freshly-deployed page without waiting
+# for tonight's run). Runs on the self-hosted runner; the record books live
+# on the runner host (data/ is git-ignored) and are pushed additively from
+# there via the books_dir input.
+name: publish-web-data
+
+on:
+  workflow_dispatch:
+    inputs:
+      include_inputs:
+        description: "Also export the Predictions-page v1/inputs data plane (open-meteo pull)"
+        type: boolean
+        default: true
+      books_dir:
+        description: "Absolute path (runner host) of per-day book parquets to push additively; 'none' = skip"
+        required: false
+        default: "/home/pgeorgakopoulos/armada/energy-markets/data/web/v1/books"
+
+jobs:
+  publish:
+    runs-on: [self-hosted, linux, ARM64]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Export web parquet (prices data plane)
+        env:
+          ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
+        run: |
+          julia --project=. -e 'using Pkg; Pkg.instantiate()'
+          julia --project=. bin/export_web_parquet.jl
+
+      - name: Export prediction inputs (v1/inputs, non-fatal)
+        if: ${{ inputs.include_inputs }}
+        env:
+          ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
+        run: |
+          julia --project=. bin/export_prediction_inputs.jl \
+            || echo "::warning::prediction-inputs export failed — core web data still published"
+
+      - name: Stage record books additively
+        if: ${{ inputs.books_dir != 'none' }}
+        run: |
+          test -d "${{ inputs.books_dir }}" || { echo "::warning::books_dir missing on runner host — skipping books"; exit 0; }
+          mkdir -p data/web/v1/books
+          # Hard-link into staging (same filesystem) so web_data_push's additive
+          # books sync carries them; falls back to copy across filesystems.
+          cp -al "${{ inputs.books_dir }}"/. data/web/v1/books/ 2>/dev/null || \
+            cp -a "${{ inputs.books_dir }}"/. data/web/v1/books/
+          echo "staged $(ls data/web/v1/books/*.parquet | wc -l) book parquets"
+
+      - name: Push to the web bucket (manifest last)
+        env:
+          EXTRACT_S3_ENDPOINT: ${{ secrets.EXTRACT_S3_ENDPOINT }}
+          WEB_S3_ACCESS_KEY_ID: ${{ secrets.WEB_S3_ACCESS_KEY_ID }}
+          WEB_S3_SECRET_ACCESS_KEY: ${{ secrets.WEB_S3_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+        run: bash bin/web_data_push.sh
+
+      - name: Verify live
+        run: |
+          sleep 3
+          code=$(curl -s -o /dev/null -w "%{http_code}" "https://api.philokalia.ai/api/v1/manifest")
+          echo "manifest: $code"; [ "$code" = "200" ] || exit 1
+          code=$(curl -s -o /dev/null -w "%{http_code}" "https://api.philokalia.ai/api/v1/books/GR/2026-07-15")
+          echo "books GR/2026-07-15: $code"
+          code=$(curl -s -o /dev/null -w "%{http_code}" "https://api.philokalia.ai/api/v1/inputs/manifest")
+          echo "inputs manifest: $code"
