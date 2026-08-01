@@ -1,0 +1,312 @@
+{
+"GR_solar": {
+"feat_cols": [
+"ghi",
+"cloud",
+"pres",
+"se",
+"clearness",
+"hod",
+"doy_s",
+"doy_c",
+"doy_s2",
+"doy_c2",
+"cap95_solar",
+"v100m"
+],
+"best_iter": 442,
+"clamp_night": true,
+"n_train": 15719,
+"ref_col": "cap95_solar"
+},
+"GR_wind": {
+"feat_cols": [
+"v100m",
+"cloud",
+"pres",
+"hod",
+"dow",
+"doy_s",
+"doy_c",
+"doy_s2",
+"doy_c2",
+"cap95_wind"
+],
+"best_iter": 94,
+"clamp_night": false,
+"n_train": 15719,
+"ref_col": "cap95_wind"
+},
+"GR_load": {
+"feat_cols": [
+"T",
+"Tma",
+"cdh",
+"hdh",
+"cdh2",
+"hdh2",
+"ghi",
+"hod",
+"dow",
+"is_hol",
+"doy_s",
+"doy_c",
+"doy_s2",
+"doy_c2",
+"ar1",
+"ar7"
+],
+"best_iter": 94,
+"clamp_night": false,
+"n_train": 15719,
+"ref_col": null
+},
+"ES_solar": {
+"feat_cols": [
+"ghi",
+"cloud",
+"pres",
+"se",
+"clearness",
+"hod",
+"doy_s",
+"doy_c",
+"doy_s2",
+"doy_c2",
+"cap95_solar",
+"v100m"
+],
+"best_iter": 380,
+"clamp_night": true,
+"n_train": 15624,
+"ref_col": "cap95_solar"
+},
+"ES_wind": {
+"feat_cols": [
+"v100m",
+"cloud",
+"pres",
+"hod",
+"dow",
+"doy_s",
+"doy_c",
+"doy_s2",
+"doy_c2",
+"cap95_wind"
+],
+"best_iter": 246,
+"clamp_night": false,
+"n_train": 15456,
+"ref_col": "cap95_wind"
+},
+"ES_load": {
+"feat_cols": [
+"T",
+"Tma",
+"cdh",
+"hdh",
+"cdh2",
+"hdh2",
+"ghi",
+"hod",
+"dow",
+"is_hol",
+"doy_s",
+"doy_c",
+"doy_s2",
+"doy_c2",
+"ar1",
+"ar7"
+],
+"best_iter": 507,
+"clamp_night": false,
+"n_train": 15744,
+"ref_col": null
+},
+"DE_LU_solar": {
+"feat_cols": [
+"ghi",
+"cloud",
+"pres",
+"se",
+"clearness",
+"hod",
+"doy_s",
+"doy_c",
+"doy_s2",
+"doy_c2",
+"cap95_solar",
+"v100m"
+],
+"best_iter": 238,
+"clamp_night": true,
+"n_train": 15742,
+"ref_col": "cap95_solar"
+},
+"DE_LU_wind": {
+"feat_cols": [
+"v100m",
+"cloud",
+"pres",
+"hod",
+"dow",
+"doy_s",
+"doy_c",
+"doy_s2",
+"doy_c2",
+"cap95_wind"
+],
+"best_iter": 180,
+"clamp_night": false,
+"n_train": 15744,
+"ref_col": "cap95_wind"
+},
+"DE_LU_load": {
+"feat_cols": [
+"T",
+"Tma",
+"cdh",
+"hdh",
+"cdh2",
+"hdh2",
+"ghi",
+"hod",
+"dow",
+"is_hol",
+"doy_s",
+"doy_c",
+"doy_s2",
+"doy_c2",
+"ar1",
+"ar7"
+],
+"best_iter": 333,
+"clamp_night": false,
+"n_train": 15743,
+"ref_col": null
+},
+"SE2_solar": {
+"feat_cols": [
+"ghi",
+"cloud",
+"pres",
+"se",
+"clearness",
+"hod",
+"doy_s",
+"doy_c",
+"doy_s2",
+"doy_c2",
+"cap95_solar",
+"v100m"
+],
+"best_iter": 272,
+"clamp_night": true,
+"n_train": 13368,
+"ref_col": "cap95_solar"
+},
+"SE2_wind": {
+"feat_cols": [
+"v100m",
+"cloud",
+"pres",
+"hod",
+"dow",
+"doy_s",
+"doy_c",
+"doy_s2",
+"doy_c2",
+"cap95_wind"
+],
+"best_iter": 63,
+"clamp_night": false,
+"n_train": 15624,
+"ref_col": "cap95_wind"
+},
+"SE2_load": {
+"feat_cols": [
+"T",
+"Tma",
+"cdh",
+"hdh",
+"cdh2",
+"hdh2",
+"ghi",
+"hod",
+"dow",
+"is_hol",
+"doy_s",
+"doy_c",
+"doy_s2",
+"doy_c2",
+"ar1",
+"ar7"
+],
+"best_iter": 239,
+"clamp_night": false,
+"n_train": 15744,
+"ref_col": null
+},
+"NL_solar": {
+"feat_cols": [
+"ghi",
+"cloud",
+"pres",
+"se",
+"clearness",
+"hod",
+"doy_s",
+"doy_c",
+"doy_s2",
+"doy_c2",
+"cap95_solar",
+"v100m"
+],
+"best_iter": 238,
+"clamp_night": true,
+"n_train": 15744,
+"ref_col": "cap95_solar"
+},
+"NL_wind": {
+"feat_cols": [
+"v100m",
+"cloud",
+"pres",
+"hod",
+"dow",
+"doy_s",
+"doy_c",
+"doy_s2",
+"doy_c2",
+"cap95_wind"
+],
+"best_iter": 133,
+"clamp_night": false,
+"n_train": 15744,
+"ref_col": "cap95_wind"
+},
+"NL_load": {
+"feat_cols": [
+"T",
+"Tma",
+"cdh",
+"hdh",
+"cdh2",
+"hdh2",
+"ghi",
+"hod",
+"dow",
+"is_hol",
+"doy_s",
+"doy_c",
+"doy_s2",
+"doy_c2",
+"ar1",
+"ar7"
+],
+"best_iter": 63,
+"clamp_night": false,
+"n_train": 15744,
+"ref_col": null
+}
+}
