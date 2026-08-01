@@ -290,11 +290,17 @@ function per_year_counts_pg(pg, o)
 end
 
 # Per zone-month price-sum checksums (rounded) — a strong content fingerprint.
+# The Postgres column is NUMERIC(10,2), so every stored price is quantized to
+# 2 decimals; the DuckDB side keeps full float64. Rounding PER ROW before the
+# SUM makes the two fingerprints like-for-like — summing full-precision values
+# and rounding once at the end flags spurious cent-level DIFFs whenever a
+# month's sub-cent residues fail to cancel (seen on the cv31 transfer:
+# 3/1677 Baltic zone-months, max per-row effect 0.005 €/MWh, all rows present).
 function checksums_duckdb(con, o)
     win, wp = day_window_clause("date_time_utc", o["start"], o["end"], 3)
     DataFrame(DBInterface.execute(con, """
         SELECT bidding_zone AS z, strftime(date_time_utc, '%Y-%m') AS ym,
-               ROUND(SUM(price_eur_mwh), 2) AS s, COUNT(*) AS n
+               ROUND(SUM(ROUND(price_eur_mwh, 2)), 2) AS s, COUNT(*) AS n
         FROM simulations.energy_prices
         WHERE clearing_mode = \$1 AND code_version = \$2 AND $win
         GROUP BY 1, 2 ORDER BY 1, 2
@@ -305,7 +311,7 @@ function checksums_pg(pg, o)
     win, wp = day_window_clause("date_time_utc", o["start"], o["end"], 3)
     DataFrame(LibPQ.execute(pg, """
         SELECT bidding_zone AS z, to_char(date_time_utc, 'YYYY-MM') AS ym,
-               ROUND(SUM(price_eur_mwh), 2)::float8 AS s, COUNT(*) AS n
+               ROUND(SUM(ROUND(price_eur_mwh, 2)), 2)::float8 AS s, COUNT(*) AS n
         FROM simulations.energy_prices
         WHERE clearing_mode = \$1 AND code_version = \$2 AND $win
         GROUP BY 1, 2 ORDER BY 1, 2
