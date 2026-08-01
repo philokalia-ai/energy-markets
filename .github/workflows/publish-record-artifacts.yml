@@ -85,6 +85,14 @@ jobs:
           WEB_S3_ENDPOINT: ${{ secrets.EXTRACT_S3_ENDPOINT }}
           WEB_S3_BUCKET: euphemia-web-data
           AWS_DEFAULT_REGION: auto
+          # The runner checkout has no .env and no public extract, so module
+          # init fails store auto-detection ("No data store available").
+          # export_zone_strategies.jl only reads the code-defined ZONE_PROFILES,
+          # but `using Euphemia` still needs A store — point it read-only at
+          # the live extract on the runner host.
+          EUPHEMIA_DATA_STORE: duckdb
+          EUPHEMIA_DUCKDB_PATH: /home/pgeorgakopoulos/armada/energy-markets/data/extracts/euphemia-live.duckdb
+          EUPHEMIA_DUCKDB_READONLY: "true"
         run: |
           set -euo pipefail
           julia --project=. -e 'using Pkg; Pkg.instantiate()'
