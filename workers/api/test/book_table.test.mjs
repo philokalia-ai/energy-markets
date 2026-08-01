@@ -249,5 +249,35 @@ T = host.textContent;
 ok(/\(coupling\) net imports/.test(T) && host.querySelectorAll(".bt-coupling").length === 1,
    "anonymous coupling → single net-imports row at the clearing price");
 
+/* ---- lifecycle: the table must not go stale on date/zone/hour changes ---- */
+console.log("-- lifecycle (no stale table on blank / re-render / hour change) --");
+ok(typeof api.bookTableMessage === "function", "app.js exposes bookTableMessage (empty/loading/error state)");
+// render reference hour A
+host.textContent = "";
+api.renderBookTable(SS.L, DD.L, { clearMW: cMW, clearing: clr, actual: null, settledMW: null, totalMW: tot, hasStrategy: true });
+ok(host.querySelector(".book-table") != null && host.querySelectorAll(".book-trow").length > 0,
+   "lifecycle: reference hour renders a populated table");
+ok(/LAVRIO/.test(host.textContent), "lifecycle: reference owners present (LAVRIO)");
+// switch to a NO-BOOK day → explicit empty state REPLACES the table (no stale rows)
+api.bookTableMessage("No order book captured for Wed 2026-07-30.");
+ok(host.querySelector(".book-table") == null, "lifecycle: no-book state removes the table element");
+ok(host.querySelectorAll(".book-trow").length === 0, "lifecycle: NO stale rows after switching to a no-book day");
+ok(/No order book captured/.test(host.textContent), "lifecycle: explicit empty state shown in place of the table");
+// switch back to a book day → renderBookTable clears the note and re-renders
+api.renderBookTable(SS.L, DD.L, { clearMW: cMW, clearing: clr, actual: null, settledMW: null, totalMW: tot, hasStrategy: true });
+ok(host.querySelector(".book-table") != null && host.querySelectorAll(".book-trow").length > 0,
+   "lifecycle: switching back re-renders the table");
+ok(!/No order book captured/.test(host.textContent), "lifecycle: empty-state message gone after re-render");
+// HOUR change → the new hour's ladder replaces the old (no rows from the prior hour)
+const SB = mk([
+  { price: 5,   mw: 300, owner: "AGG-GR-Solar", strat: "res_forecast" },
+  { price: 120, mw: 900, owner: "29WGU-XYZ",    strat: "srmc_base" },   // short → shown verbatim
+]);
+let cMWb = SB.total; for (const o of SB.L) { if (o.price >= 100) { cMWb = o.cum0; break; } }
+api.renderBookTable(SB.L, [], { clearMW: cMWb, clearing: 100, actual: null, settledMW: null, totalMW: SB.total, hasStrategy: true });
+ok(/29WGU-XYZ/.test(host.textContent), "hour-change: the new hour's blocks are present");
+ok(!/LAVRIO/.test(host.textContent) && !/KORITHPWR3/.test(host.textContent),
+   "hour-change: the previous hour's rows are gone (no stale rows)");
+
 if (failures) { console.error(failures + " failure(s)"); process.exit(1); }
 console.log("BOOK TABLE DOM OK");

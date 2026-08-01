@@ -2165,6 +2165,17 @@
     );
   }
 
+  // Put the per-block table host into a single-message state (loading skeleton /
+  // empty / error), replacing ANY previously-rendered table. The table shares
+  // the chart's lifecycle: every selector change clears it here first, so a stale
+  // table can never outlive its selection (bound as tightly as the chart wrap).
+  function bookTableMessage(msg, cls) {
+    var host = $("book-table");
+    if (!host) return;
+    host.textContent = "";
+    host.appendChild(el("p", cls || "bt-note", msg));
+  }
+
   function renderBook() {
     var zoneData = state.zoneCache[state.zone];
     if (!zoneData) { loadZone(state.zone).then(renderBook); return; }
@@ -2183,6 +2194,7 @@
       w0.appendChild(el("p", "pending-note",
         "No ex-ante (weather-track) days for " + state.zone + " yet — the order book " +
         "appears once the daily runs and their captured books accumulate."));
+      bookTableMessage("No order book captured for " + state.zone + " yet.");
       return;
     }
     if (!state.bookDay || !days.some(function (d) { return d.date === state.bookDay; })) {
@@ -2210,6 +2222,9 @@
     var wrap = $("book-wrap");
     wrap.textContent = "";
     wrap.appendChild(el("p", "pending-note", "Loading order book…"));
+    // Clear the table for the NEW selection immediately (skeleton), so the
+    // previous day/zone/hour's table cannot linger while this one loads.
+    bookTableMessage("Loading order book…", "pending-note");
 
     Promise.all([loadBook(state.zone, state.bookDay), loadUnits(),
                  loadFlows(state.bookDay)]).then(function (r) {
@@ -2222,6 +2237,8 @@
         wrap.appendChild(el("p", "pending-note",
           "No captured order book for " + dayLabel(state.bookDay) + " in the data plane. " +
           "Books are published for recent forecast days and record backfills."));
+        // explicit empty state IN PLACE of the table (no stale rows).
+        bookTableMessage("No order book captured for " + dayLabel(state.bookDay) + ".");
         stopBookPlay();
         return;
       }
@@ -2235,6 +2252,15 @@
       if (state.flowsCache[state.bookDay]) {
         preloadTradingNeighbors(state.zone, state.bookDay, fday.hours);
       }
+    }).catch(function (err) {
+      if (state.view !== "book" || state.bookDay !== fday.date) return;   // stale
+      wrap.textContent = "";
+      wrap.appendChild(el("p", "pending-note",
+        "Could not load the order book for " + dayLabel(state.bookDay) + " (" + err + ")."));
+      $("book-legend").textContent = "";
+      $("book-comment").textContent = "";
+      bookTableMessage("Could not load the order book for " + dayLabel(state.bookDay) + ".");
+      stopBookPlay();
     });
   }
 
@@ -3295,6 +3321,7 @@
   if (typeof window !== "undefined") {
     window.__euphemiaBook = {
       renderBookTable: renderBookTable,
+      bookTableMessage: bookTableMessage,
       strategyMeta: strategyMeta,
       STRATEGY_LABELS: STRATEGY_LABELS,
     };
