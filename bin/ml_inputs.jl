@@ -12,13 +12,15 @@
 # The feature port replicates features.py AS TRAINED, INCLUDING its known
 # imperfections. Do NOT "fix" a feature here — the models learned on the trained
 # feature, so a serve-time fix would introduce train/serve skew. Fixes happen at
-# the next RETRAIN, never in this port. The specific carried-over imperfections:
-#   • GR (Orthodox) holidays use the WESTERN Gregorian Easter as an approximation
-#     (features.py `holidays()` derives GR's movable feasts from the Gregorian
-#     `easter()`, NOT the Orthodox computus that weather_load.jl uses). `ml_holidays`
-#     below deliberately mirrors that — it is NOT `holidays_for_country`.
-#   • Only GR/ES/DE/SE carry a fixed-holiday map in features.py; every other
-#     country (incl. NL) gets an EMPTY holiday set → `is_hol` ≡ 0 there. Mirrored.
+# the next RETRAIN, never in this port. The specific carried-over behaviours:
+#   • ORTHODOX holidays (GR/BG/RO/RS) derive their movable feasts from the ORTHODOX
+#     (Julian/Meeus) Easter — `ml_orthodox_easter`, mirroring features.py
+#     `orthodox_easter` (rollout-39 amendment 1 retrain; the pilot's Western-Easter
+#     approximation for GR was fixed here and in features.py IN LOCKSTEP). ES/DE/SE
+#     keep the Western `easter_gregorian`. `ml_holidays` is NOT `holidays_for_country`.
+#   • features.py carries a fixed-holiday map for GR/BG/RO/RS/ES/DE/SE only; every
+#     other country (incl. NL, FR, PL, …) gets an EMPTY holiday set → `is_hol` ≡ 0
+#     there. Mirrored — a zone whose load model needs holidays loses to its pack.
 #   • Degree-hour bases are the hard-coded 21.0 / 16.5 °C from features.py, not the
 #     per-zone pack bases.
 #   • `is_hol` keys on the UTC calendar date of the hour (features.py normalizes the
@@ -219,30 +221,43 @@ function ml_sinel(hod::Float64, doy::Float64, lat0::Float64, lon0::Float64)
     return max(sind(lat0) * sin(dec) + cosd(lat0) * cos(dec) * cos(H), 0.0)
 end
 
+"Orthodox (Julian/Meeus) Easter on the Gregorian calendar (valid 1900-2099).
+Bit-for-bit mirror of features.py `orthodox_easter` — change both together."
+function ml_orthodox_easter(y::Int)
+    a = y % 4; b = y % 7; c = y % 19
+    d = (19c + 15) % 30
+    e = (2a + 4b - d + 34) % 7
+    month = (d + e + 114) ÷ 31
+    day = ((d + e + 114) % 31) + 1
+    return Date(y, month, day) + Day(13)
+end
+
 """
     ml_holidays(country, years) -> Set{Date}
 
-EXACT port of features.py `holidays()` — see the TRAIN/SERVE CONSISTENCY note at
-the top. GR's movable feasts derive from the WESTERN Gregorian Easter (the
-Orthodox approximation the models were trained on); only GR/ES/DE/SE carry a
-fixed map, every other country returns an empty set. Do NOT substitute the
-correct Orthodox computus (`holidays_for_country`) here.
+EXACT port of features.py `holidays()` (rollout-39). Fixed national holidays plus
+movable Easter-anchored feasts; the ORTHODOX zones GR/BG/RO/RS anchor on
+`ml_orthodox_easter`, ES/DE/SE on the Western `easter_gregorian`. Any country
+without a fixed map returns an empty set. NOT `holidays_for_country`.
 """
 function ml_holidays(country::AbstractString, years)
+    orthodox = country in ("GR", "BG", "RO", "RS")
+    fixed_map = Dict(
+        "GR" => ((1,1),(1,6),(3,25),(5,1),(8,15),(10,28),(12,25),(12,26)),
+        "BG" => ((1,1),(3,3),(5,1),(5,6),(5,24),(9,6),(9,22),(12,24),(12,25),(12,26)),
+        "RO" => ((1,1),(1,2),(1,24),(5,1),(6,1),(8,15),(11,30),(12,1),(12,25),(12,26)),
+        "RS" => ((1,1),(1,2),(1,7),(2,15),(2,16),(5,1),(5,2),(11,11)),
+        "ES" => ((1,1),(1,6),(5,1),(8,15),(10,12),(11,1),(12,6),(12,8),(12,25)),
+        "DE" => ((1,1),(5,1),(10,3),(12,25),(12,26)),
+        "SE" => ((1,1),(1,6),(5,1),(6,6),(12,25),(12,26)))
+    movable_map = Dict(
+        "GR" => (-48,-2,0,1,50), "BG" => (-2,-1,0,1), "RO" => (-2,0,1,49,50),
+        "RS" => (-2,0,1), "ES" => (-2,0), "DE" => (-2,1,39,50), "SE" => (-2,0,1,39,49))
     hs = Set{Date}()
     for y in years
-        E = easter_gregorian(y)                    # WESTERN Easter, deliberately (approx)
-        fixed(mds...) = foreach(md -> push!(hs, Date(y, md[1], md[2])), mds)
-        eastr(offsets...) = foreach(o -> push!(hs, E + Day(o)), offsets)
-        if country == "GR"
-            fixed((1,1),(1,6),(3,25),(5,1),(8,15),(10,28),(12,25),(12,26)); eastr(-48,-2,0,1,50)
-        elseif country == "ES"
-            fixed((1,1),(1,6),(5,1),(8,15),(10,12),(11,1),(12,6),(12,8),(12,25)); eastr(-2,0)
-        elseif country == "DE"
-            fixed((1,1),(5,1),(10,3),(12,25),(12,26)); eastr(-2,1,39,50)
-        elseif country == "SE"
-            fixed((1,1),(1,6),(5,1),(6,6),(12,25),(12,26)); eastr(-2,0,1,39,49)
-        end
+        E = orthodox ? ml_orthodox_easter(y) : easter_gregorian(y)
+        for md in get(fixed_map, country, ()); push!(hs, Date(y, md[1], md[2])); end
+        for o in get(movable_map, country, ()); push!(hs, E + Day(o)); end
     end
     return hs
 end
@@ -297,14 +312,18 @@ struct MLModels
     meta::Dict{String,Any}
 end
 
-"Load the committed ML models + meta for the given zones from bin/input_models/."
+"Load the committed ML models + meta for the given zones from bin/input_models/.
+Only WINNER models are committed (per-zone-winner selection; losers ship the pack
+and have no .txt) and amendment-2 skip zones carry no solar/wind model — so a
+model is loaded only where meta.json has its entry. build_ml_inputs never
+dereferences a model that lost (the `ml_use_new` gate keeps it on the pack)."
 function load_ml_models(zones::Vector{String}=ML_PILOT_ZONES; dir::AbstractString=ML_MODELS_DIR)
     meta = JSON.parsefile(joinpath(dir, "meta.json"))
     s = Dict{String,LGBModel}(); w = Dict{String,LGBModel}(); l = Dict{String,LGBModel}()
     for z in zones
-        s[z] = parse_lgb_model(joinpath(dir, "$(z)_solar.txt"))
-        w[z] = parse_lgb_model(joinpath(dir, "$(z)_wind.txt"))
-        l[z] = parse_lgb_model(joinpath(dir, "$(z)_load.txt"))
+        haskey(meta, "$(z)_solar") && (s[z] = parse_lgb_model(joinpath(dir, "$(z)_solar.txt")))
+        haskey(meta, "$(z)_wind")  && (w[z] = parse_lgb_model(joinpath(dir, "$(z)_wind.txt")))
+        haskey(meta, "$(z)_load")  && (l[z] = parse_lgb_model(joinpath(dir, "$(z)_load.txt")))
     end
     return MLModels(s, w, l, meta)
 end
