@@ -316,10 +316,26 @@ function main()
         @warn "units export failed (web data unaffected)" exception = (e, catch_backtrace())
     end
 
+    # v1/flows/<date>.parquet — coupled cross-border flows for the Order-book
+    # TRADE WEDGE. ADDITIVE and NON-FATAL. Only record/backfill days persist
+    # transmission_flows (the daily forecast run does not), so this writes files
+    # only for dates in the recent window that actually have flows — dormant on
+    # pure-forecast windows until the persist-forecast-flows follow-up. invokelatest
+    # for the same in-function-include world-age reason as units above.
+    n_flows = 0
+    try
+        include(joinpath(@__DIR__, "export_flows_parquet.jl"))  # defines export_flows_parquet
+        n_flows = Base.invokelatest(export_flows_parquet, V1_DIR;
+            dates=collect((Dates.today() - Day(MAX_DAYS)):Day(1):Dates.today()))
+    catch e
+        @warn "flows export failed (web data unaffected)" exception = (e, catch_backtrace())
+    end
+
     updated_at = get(ENV, "UPDATED_AT", Dates.format(now(UTC), "yyyy-mm-ddTHH:MM:SS") * "Z")
     counts = Dict{String,Any}("scoreboard.parquet" => n_scores,
                               "map.parquet" => n_map,
-                              "units.parquet" => n_units)
+                              "units.parquet" => n_units,
+                              "flows" => n_flows)
     for (k, v) in zone_counts
         counts[k] = v
     end
