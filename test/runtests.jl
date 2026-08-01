@@ -165,6 +165,17 @@ println()
         include(joinpath(@__DIR__, "test_weather_load.jl"))
     end
 
+    @testset "ML Input Models" begin
+        println("\n" * "=" ^ 60)
+        println("Running ML Input Model Tests...")
+        println("=" ^ 60)
+        # Pure logic only (LightGBM tree evaluation + NaN/zero-split routing,
+        # feature math, cap95 percentile, the deliberate train/serve holiday
+        # imperfection, ship config) — no network, no DB, no solver. The full
+        # equivalence vs python LightGBM is test/scripts/ml_inputs_equivalence.jl.
+        include(joinpath(@__DIR__, "test_ml_inputs.jl"))
+    end
+
     @testset "Extract Refresh Logic" begin
         println("\n" * "=" ^ 60)
         println("Running Extract Refresh Logic Tests...")

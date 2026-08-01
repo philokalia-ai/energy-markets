@@ -97,6 +97,7 @@ using Euphemia, Dates, Statistics, LibPQ, DataFrames, DuckDB
 include(joinpath(@__DIR__, "forecast_common.jl"))
 include(joinpath(@__DIR__, "weather_res.jl"))    # guarded main; pure helpers + open-meteo fetch
 include(joinpath(@__DIR__, "weather_load.jl"))   # guarded main; load model (features + fetch + predict)
+include(joinpath(@__DIR__, "ml_inputs.jl"))      # LightGBM input models (scorer + feature port, PR #252)
 
 const OPTIMIZER = get(ENV, "OPTIMIZER", "highs")
 const INPUT_MODE = let m = lowercase(get(ENV, "INPUT_MODE", "entsoe"))
@@ -129,6 +130,13 @@ const RES_FILL = lowercase(get(ENV, "RES_FILL", "false")) == "true"
 # per-minute window; the 429-aware retry in weather_res/weather_load is the
 # backstop. Set 0 to disable (e.g. against a self-hosted instance).
 const OPENMETEO_ZONE_THROTTLE_S = parse(Float64, get(ENV, "EUPHEMIA_OPENMETEO_ZONE_THROTTLE", "0.6"))
+# ML input models (PR #252): on the weather track, the per-zone-winner LightGBM
+# predictions REPLACE the linear-pack predictions for the 5 pilot zones
+# (bin/ml_inputs.jl ML_PILOT_ZONES / ML_USE_NEW); the other 34 zones keep the
+# packs, and the entsoe track is untouched. Default ON for the weather track;
+# EUPHEMIA_ML_INPUTS=false/0/off is the kill-switch (house style — read here, not
+# memoized). Inert unless INPUT_MODE=weather.
+const ML_INPUTS_ON = lowercase(get(ENV, "EUPHEMIA_ML_INPUTS", "on")) ∉ ("false", "0", "off", "no")
 const CLEARING_MODE = get(ENV, "CLEARING_MODE", "multi_zone_eu")
 const ZONES = let z = [String(strip(s)) for s in split(get(ENV, "ZONES", ""), ",") if !isempty(strip(s))]
     isempty(z) ? FORECAST_FOOTPRINT : z
@@ -869,6 +877,34 @@ function main()
         preds = build_weather_predictions(first_candidate - Day(1), last_candidate,
                                           Set(first_candidate:Day(1):last_candidate);
                                           asof=vintage_asof)
+        # ML input models: OVERLAY the per-zone-winner LightGBM predictions onto
+        # the pilot zones (in-footprint), replacing their linear-pack RES + load.
+        # Same D-1 vintage discipline (build_ml_inputs uses vintage_groups +
+        # vintage_asof); cap95 / AR lags read the store ex-ante. Non-pilot zones
+        # and the entsoe track are untouched. A pilot-zone ML failure leaves that
+        # zone on the pack (the loop below only overwrites what it produced), so
+        # eligibility/purity guards downstream are unchanged.
+        ml_pilots = [z for z in ML_PILOT_ZONES if z in ZONES]
+        if ML_INPUTS_ON && !isempty(ml_pilots)
+            println("ML inputs: overlaying LightGBM predictions for $(join(ml_pilots, ",")) " *
+                    "(EUPHEMIA_ML_INPUTS on)")
+            tml = time()
+            try
+                ml_res, ml_load = build_ml_inputs(ml_pilots, first_candidate - Day(1),
+                                                  last_candidate,
+                                                  Set(first_candidate:Day(1):last_candidate);
+                                                  asof=vintage_asof)
+                for (z, zp) in ml_res; preds[z] = zp; end
+                for (z, zp) in ml_load; fill_pred[z] = zp; end
+                println("ML inputs ready in $(round(time() - tml, digits=1))s")
+            catch e
+                # A newly-wired overlay must never regress a day the packs could
+                # serve: on any ML failure keep the pack predictions already built
+                # above (a coverage gap then makes the pilot INELIGIBLE the same
+                # way a pack gap would — no silent zero-RES/zero-load).
+                @warn "ML inputs overlay failed — falling back to the linear packs for pilots" exception=(e, catch_backtrace())
+            end
+        end
         res_pred_weather = preds
         scenario = weather_scenario(preds, fill_pred)
         println("Weather RES ready for $(length(preds)) zones in $(round(time() - t0, digits=1))s")
