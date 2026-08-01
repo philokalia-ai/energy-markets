@@ -308,7 +308,10 @@ function main()
     n_units = 0
     try
         include(joinpath(@__DIR__, "export_units_parquet.jl"))  # defines export_units_parquet
-        n_units = export_units_parquet(V1_DIR)
+        # invokelatest: the include happens inside this function body, so a
+        # direct call sees a pre-include world (MethodError at runtime —
+        # exactly what the non-fatal warn swallowed in run 30704653032).
+        n_units = Base.invokelatest(export_units_parquet, V1_DIR)
     catch e
         @warn "units export failed (web data unaffected)" exception = (e, catch_backtrace())
     end
