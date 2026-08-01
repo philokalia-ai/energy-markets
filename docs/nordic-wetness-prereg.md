@@ -184,7 +184,7 @@ is itself frozen by this merge — the wet/dry split is declared before any scor
 
 | gate | rule | scope |
 |---|---|---|
-| **within-regime improvement** | WET-hour (`ratio ≥ θ_wet`, Nordic reservoir zones) MAE improves AND wet-hour bias moves toward 0 (from +23) | acceptance metric |
+| **within-regime improvement** | WET-hour (`ratio ≥ θ_wet`, Nordic reservoir zones) **dMAE ≤ −0.5 AND wet-hour bias reduced by ≥ 5 €/MWh** (from +23) — a floor consistent with the motivating effect size, so a token +0.01 improvement cannot pass | acceptance metric |
 | **outside-regime ≈0** | Nordic DRY/NORMAL hours (`ratio < θ_wet`) and ALL non-Nordic zones: `|ΔMAE| < 0.1` vs base | acceptance metric (by construction) |
 | **neighbour envelope** | no neighbour MAE +1.0 / corr −0.02; NO zone (affected or not) MAE +3.0 / corr −0.05 | collateral, per-zone, never aggregated |
 | **cap-hour ceiling** | ZERO new price-cap hours in any of the 39 zones (measured baseline 0; cv18 failure mode) | collateral |
