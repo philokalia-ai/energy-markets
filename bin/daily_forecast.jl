@@ -57,11 +57,17 @@
 #   The ENTSO-E RES eligibility requirement is REMOVED and the LOAD gate is
 #   replaced by MODEL coverage (a zone the load model cannot cover keeps the
 #   day ineligible — no silent TSO mixing); the ATC gate stays as-is. Book
-#   construction zeroes whatever partial ENTSO-E RES exists
-#   (renewable_modifier -> 0) and injects the weather-RES prediction as
-#   price-taker supply orders per timeslot; load is overridden to the model
-#   value on every timeslot (load_modifier) and model hours are added where
-#   the TSO published nothing (load_fill hook) — every hour is model-sourced.
+#   construction OVERRIDES whatever ENTSO-E RES exists to the weather-RES
+#   prediction on every timeslot (renewable_modifier — same mechanism the
+#   entsoe track's real RES forecast uses, so it propagates into net demand,
+#   the scarcity margin and the peak-hour shape, not just the raw supply
+#   curve) and fills any hour the TSO published nothing for (res_fill hook,
+#   the RES twin of load_fill below) so the override always has an entry to
+#   reshape; load is overridden the same way (load_modifier + load_fill) —
+#   every hour of every track input is model-sourced. (Fixed 2026-08:
+#   RES used to be zeroed via renewable_modifier and re-injected as a
+#   separate extra_orders supply block, which bypassed net demand entirely —
+#   see docs/experiments/weather-track-hook-fix.md.)
 #   Rows are stamped input_mode='weather' (never suffixed — model load is the
 #   track's core, not a fill); the slice identity is
 #   (market_date, lead_days, input_mode) so the two tracks NEVER overwrite
@@ -355,52 +361,59 @@ function build_weather_predictions(first_utc_day::Date, last_utc_day::Date,
 end
 
 """
-Per-zone `ZoneScenario` dict for the weather track: zero out whatever partial
-ENTSO-E RES exists (`renewable_modifier -> 0`) and inject the weather-RES
-prediction as price-taker supply orders (€1/MWh) per timeslot. Sub-hourly
-slots use the hour's predicted MW as the LEVEL (no division). Zero/negative
-predictions inject no order.
+Per-zone `ZoneScenario` dict for the weather track: OVERRIDE whatever ENTSO-E
+RES exists to the weather-RES prediction for its hour (`renewable_modifier` —
+sub-hourly slots use the hour's predicted MW as the LEVEL, no division). This
+is the SAME hook the entsoe track's real RES forecast flows through implicitly
+(it is simply never modified there), so the weather prediction now propagates
+everywhere RES is supposed to: the merit-order RES supply order (Stage 6 of
+book_build.jl, tagged "RES" — no separate "EXTRA" provenance any more), net
+demand, the scarcity margin and the peak-hour shape term (Stage 3). Previously
+RES was ZEROED via `renewable_modifier -> 0` and re-injected as a separate
+`extra_orders` price-taker supply block — that bypassed net demand/scarcity/
+peak-shape entirely, so a zone's day-shape was computed off gross LOAD alone,
+blind to its own predicted solar/wind. Fixed 2026-08 — see
+docs/experiments/weather-track-hook-fix.md for the diagnosis and the
+zone-day A/B (PL was the worst-hit: forecast sd collapsed to ~0.1 €/MWh).
 
-LOAD is uniformly model-sourced (`load_preds`, zone → hour → MW): every load
-timeslot the TSO published is OVERRIDDEN to the model's value for its hour
-(`load_modifier` — sub-hourly slots use the hour's MW as the LEVEL, same
-convention as RES), and hours the TSO did not publish are added by the
-`load_fill` hook. Together every hour of every zone is model load, so the
-vintage's composition never depends on which TSOs happened to publish before
-the run. Eligibility (model_covered_for_day) guarantees full coverage on
-eligible days; the `mw` fallback in the modifier is therefore unreachable
+`renewable_modifier` only RESHAPES existing `renewable_by_time` entries (it
+cannot add an hour that has no key at all), so `res_fill` — the RES twin of
+`load_fill` below, built the same way over the SAME `preds` dict — guarantees
+every UTC hour has an entry for the modifier to override, even where ENTSO-E
+published nothing for that zone/hour. This mirrors the LOAD side exactly:
+`load_preds` (zone → hour → MW) OVERRIDES every load timeslot via
+`load_modifier` (sub-hourly slots use the hour's MW as the LEVEL) with
+`load_fill` covering hours the TSO did not publish. Together every hour of
+every zone is model-sourced RES + load, so the vintage's composition never
+depends on which TSOs happened to publish before the run. Eligibility
+(model_covered_for_day / res_covered_for_day) guarantees full coverage on
+eligible days; the `mw` fallback in both modifiers is therefore unreachable
 there and kept only as a safe identity.
 """
 function weather_scenario(preds::Dict{String,Dict{DateTime,Float64}},
                           load_preds::Dict{String,Dict{DateTime,Float64}})
-    zero_res = (ts, mw) -> 0.0
     scenario = Dict{String,Euphemia.ZoneScenario}()
     load_fill_fn = make_load_fill_fn(load_preds)
+    res_fill_fn = make_res_fill_fn(preds)
     for zone in ZONES
         zone_pred = get(preds, zone, Dict{DateTime,Float64}())
         zone_load = get(load_preds, zone, Dict{DateTime,Float64}())
-        extra = ctx -> begin
-            orders = Euphemia.SimpleOrder[]
-            for ts in ctx.timeslots
-                dt = DateTime(ts, dateformat"yyyymmdd-HHMM")
-                mw = get(zone_pred, trunc(dt, Hour), 0.0)
-                mw > 0.0 || continue
-                push!(orders, Euphemia.SimpleOrder(:supply, 1.0, mw, Symbol(ctx.zone),
-                                                   dt, ctx.resolution_minutes))
-            end
-            orders
+        rmod = (ts, mw) -> begin
+            dt = DateTime(ts, dateformat"yyyymmdd-HHMM")
+            get(zone_pred, trunc(dt, Hour), mw)
         end
         lmod = (ts, mw) -> begin
             dt = DateTime(ts, dateformat"yyyymmdd-HHMM")
             get(zone_load, trunc(dt, Hour), mw)
         end
-        # RES is fully weather-sourced (renewable→0 + injected supply) and load
-        # fully model-sourced (override + fill), so the entsoe-track fill hooks
-        # never appear here — this track has no notion of "filling" TSO gaps.
+        # RES and load are both fully weather/model-sourced (override + fill),
+        # so the entsoe-track eligibility-gap fill semantics (merge, never
+        # replace a published TSO hour) never matter here — the modifier
+        # overrides every hour regardless of provenance.
         scenario[zone] = Euphemia.ZoneScenario(load_modifier=lmod,
-                                               renewable_modifier=zero_res,
-                                               extra_orders=extra,
-                                               load_fill=load_fill_fn)
+                                               renewable_modifier=rmod,
+                                               load_fill=load_fill_fn,
+                                               res_fill=res_fill_fn)
     end
     return scenario
 end
