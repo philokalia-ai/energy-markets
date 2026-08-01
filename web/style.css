@@ -556,6 +556,29 @@ table.book-table td {
 .book-table .bt-demand td { color: var(--text-secondary); opacity: 0.85; }
 .bt-note { font-size: 12px; color: var(--text-muted); font-style: italic; margin: 6px 0; }
 
+/* waterfall position column: a mini merit-order bar per row (fuel-coloured
+   block over a faint track), with vertical guides that line up across rows. */
+.book-table .bt-waterfall { width: 132px; padding-top: 6px; padding-bottom: 4px; }
+.book-table .bt-wf { display: block; }
+.book-table .bt-type { white-space: nowrap; color: var(--text-secondary); }
+/* coupling rows (synthetic cross-border imports/exports) read distinct from the
+   book slices: tinted background, dashed accent, trade colour. */
+.book-table tr.bt-coupling td { background: color-mix(in srgb, var(--book-trade) 8%, transparent); }
+.book-table tr.bt-coupling .bt-owner,
+.book-table tr.bt-coupling .bt-strat { color: var(--book-trade); font-style: italic; }
+.book-table tr.bt-coupling td:first-child { box-shadow: inset 3px 0 0 var(--book-trade); }
+/* waterfall legend under the table */
+.bt-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px;
+  margin: 8px 0 2px; font-size: 11.5px; color: var(--text-muted); }
+.bt-legend .bt-leg-title { font-weight: 600; }
+.bt-legend .bt-leg-item { display: inline-flex; align-items: center; }
+.bt-legend .bt-leg-key { display: inline-block; height: 11px; vertical-align: middle; border-radius: 1px; }
+.bt-legend .bt-leg-key.k-clear { width: 3px; background: var(--series-sim); }
+.bt-legend .bt-leg-key.k-demand { width: 2px; background: var(--text-muted); opacity: 0.5; }
+.bt-legend .bt-leg-key.k-coupling { width: 14px;
+  background: color-mix(in srgb, var(--book-trade) 45%, transparent);
+  border: 1px dashed var(--book-trade); }
+
 .pending-note {
   font-size: 12.5px;
   color: var(--text-muted);

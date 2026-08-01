@@ -2805,9 +2805,16 @@
     }
 
     // ---- per-block decision-trace table (below the chart) ----------------
+    // Pass the coupled-trade net + its per-source decomposition (same sign-gated
+    // rule as the wedge) so the table can render coupling imports/exports as
+    // synthetic rows at the neighbour's merit position.
+    var tableTradeSegs = (impliedNetImport !== null &&
+                          Math.abs(impliedNetImport) >= CLIFF.TRADE_MIN_MW)
+      ? tradeSegments(state.zone, fday.hours[hourIdx], impliedNetImport) : null;
     renderBookTable(supply, demand, {
       clearMW: clearMW, clearing: clearing, actual: actual, settledMW: settledMW,
       totalMW: totalMW, hasStrategy: hasStrategy,
+      impliedNetImport: impliedNetImport, tradeSegs: tableTradeSegs,
     });
   }
 
@@ -2815,10 +2822,16 @@
   // sorted), split at the clearing point (cleared vs uncleared visually
   // distinct), with a separate demand section. Contiguous same-owner tranches
   // fold into ONE expandable group row (keeps a 100+-block ladder legible).
-  // Columns: cumulative-MW range | owner (firm + icon + name) | strategy |
-  // price | MW | explanation. On books WITHOUT the strategy column
-  // (has_strategy=false) the strategy + explanation columns are dropped and a
-  // small note explains why.
+  // Columns: position (waterfall mini-bar) | cumulative MW | type (fuel family
+  // icon + name) | owner (firm + icon + name) | strategy | price €/MWh | block
+  // MW | why. The waterfall bars carry vertical guides at the clearing quantity
+  // (bold) and the demand-curve steps (light), aligned across all rows so the
+  // table reads as a vertical waterfall of the merit order. Coupled cross-border
+  // trade appears as synthetic "(coupling) …" rows at the neighbour's merit
+  // position (dashed sub-track, tinted). On books WITHOUT the strategy column
+  // (has_strategy=false) the strategy + why columns are dropped and a note says
+  // why. The waterfall cumulative axis = total SUPPLY MW (matches the chart);
+  // coupling rows don't change it (least-confusing option — see the PR).
   function renderBookTable(supply, demand, ctx) {
     var host = $("book-table");
     if (!host) return;
@@ -2826,6 +2839,63 @@
     if (!supply.length && !demand.length) return;
     var showStrat = !!ctx.hasStrategy;
     var clearMW = ctx.clearMW;
+    var C = chartColors(), BC = bookColors();
+    // Waterfall axis = total SUPPLY MW — identical to the chart's x-axis, so the
+    // per-row bars match the merit-order chart exactly. Coupling rows do NOT
+    // change this axis (they render on a separate lighter sub-track).
+    var axisMax = ctx.totalMW ||
+      supply.reduce(function (m, o) { return Math.max(m, o.cum1 || 0); }, 1) || 1;
+    // Demand-curve step quantities (internal willingness-to-pay drops) in range —
+    // drawn as light vertical guides across every waterfall bar (e.g. the
+    // elastic-demand step); the clearing quantity is the bold guide.
+    var demandSteps = [];
+    for (var _di = 0; _di < demand.length - 1; _di++) {
+      var _q = demand[_di].cum1;
+      if (_q != null && _q > 1 && _q < axisMax - 1) demandSteps.push(_q);
+    }
+    // Cumulative supply MW at which a price would clear (merit insertion point) —
+    // where a coupling row of that price sits in the ladder.
+    function supplyCumAtPrice(p) {
+      for (var i = 0; i < supply.length; i++) if (supply[i].price >= p) return supply[i].cum0;
+      return axisMax;
+    }
+    // One waterfall cell: faint track + the block's [cum0,cum1] filled in its
+    // fuel colour, with the demand-step + clearing guides overlaid so they line
+    // up vertically across ALL rows. Coupling bars use a thinner dashed sub-track.
+    function waterfallCell(cum0, cum1, color, coupling) {
+      var td = el("td", "bt-waterfall");
+      var W = 120, H = 12;
+      var svg = svgEl("svg", { viewBox: "0 0 " + W + " " + H, width: W, height: H,
+        class: "bt-wf", "aria-hidden": "true" });
+      var X = function (q) { return Math.max(0, Math.min(W, (q / axisMax) * W)); };
+      var ty = coupling ? 6.5 : 2.5, bh = coupling ? 4 : 7;
+      svg.appendChild(svgEl("rect", { x: 0, y: ty, width: W, height: bh, rx: 1, fill: C.grid }));
+      var fx0 = X(cum0), fx1 = X(cum1);
+      var rectAttrs = { x: Math.min(fx0, fx1), y: ty, width: Math.max(1.2, Math.abs(fx1 - fx0)),
+        height: bh, rx: 1, fill: color, "fill-opacity": coupling ? 0.5 : 0.92 };
+      if (coupling) { rectAttrs.stroke = BC.trade; rectAttrs["stroke-width"] = 0.8; rectAttrs["stroke-dasharray"] = "2 1.5"; }
+      svg.appendChild(svgEl("rect", rectAttrs));
+      demandSteps.forEach(function (q) {
+        var gx = X(q);
+        svg.appendChild(svgEl("line", { x1: gx, x2: gx, y1: 0, y2: H, stroke: C.muted,
+          "stroke-width": 1, "stroke-opacity": 0.4, class: "bt-wf-demand" }));
+      });
+      if (clearMW != null) {
+        var cx = X(clearMW);
+        svg.appendChild(svgEl("line", { x1: cx, x2: cx, y1: 0, y2: H, stroke: C.sim,
+          "stroke-width": 1.5, class: "bt-wf-clear" }));
+      }
+      td.appendChild(svg);
+      return td;
+    }
+    // Type (fuel-family) cell text: 🔥 Gas for units, the tag's own icon+name for
+    // RES/IMPORT/DEMAND/BACKSTOP, 🔗 coupling for synthetic coupling rows.
+    function typeText(owner, coupling) {
+      if (coupling) return "🔗 coupling";
+      var ti = ownerInfo(owner);
+      return ti.kind === "tag" ? ti.icon + " " + ti.name
+                               : ti.icon + " " + (FUEL_FAM_LABEL[ti.fam] || ti.fam);
+    }
 
     // Split any supply block that straddles the clearing quantity so each row is
     // wholly cleared or wholly uncleared (clean visual split + correct grouping).
@@ -2861,8 +2931,8 @@
     var table = el("table", "book-table");
     var thead = el("thead");
     var htr = el("tr");
-    var cols = ["MW range", "owner", "strategy", "price €/MWh", "MW", "why"];
-    if (!showStrat) cols = ["MW range", "owner", "price €/MWh", "MW"];
+    var cols = ["position", "cumulative MW", "type", "owner", "strategy", "price €/MWh", "block MW", "why"];
+    if (!showStrat) cols = ["position", "cumulative MW", "type", "owner", "price €/MWh", "block MW"];
     cols.forEach(function (c) { htr.appendChild(el("th", null, c)); });
     thead.appendChild(htr);
     table.appendChild(thead);
@@ -2875,26 +2945,39 @@
     function groupRow(g) {
       var tr = el("tr", "book-trow " + (g.cleared ? "is-cleared" : "is-uncleared"));
       if (g.marginal) tr.className += " is-marginal";
+      if (g.coupling) tr.className += " bt-coupling";
       var multi = g.rows.length > 1;
-      var range = el("td", "bt-range", fmt(g.cum0, 0) + "–" + fmt(g.cum1, 0));
-      tr.appendChild(range);
+      // waterfall position bar (coupling rows on their own lighter dashed track)
+      tr.appendChild(waterfallCell(g.cum0, g.cum1,
+        g.coupling ? BC.trade : ownerColor(g.owner, BC), g.coupling));
+      // cumulative-MW range (coupling rows show their added MW, not a supply range)
+      tr.appendChild(el("td", "bt-range",
+        g.coupling ? ("+" + fmt(g.mw, 0)) : (fmt(g.cum0, 0) + "–" + fmt(g.cum1, 0))));
+      // type = fuel family (icon + name), duplicated on purpose alongside owner
+      tr.appendChild(el("td", "bt-type", typeText(g.owner, g.coupling)));
       // owner cell: firm · icon name, with an expander caret when multi-tranche
       var oc = el("td", "bt-owner");
       if (multi) {
         var caret = el("span", "bt-caret", "▸");
         oc.appendChild(caret);
       }
-      oc.appendChild(document.createTextNode((multi ? " " : "") + ownerLabel(g.owner)));
+      oc.appendChild(document.createTextNode((multi ? " " : "") + (g.coupling ? g.owner : ownerLabel(g.owner))));
       tr.appendChild(oc);
       if (showStrat) {
-        var sm = multi ? null : strategyMeta(g.rows[0].strat);
-        tr.appendChild(el("td", "bt-strat", multi ? (g.rows.length + " tranches") : (sm ? sm.label : "—")));
+        var stratTxt;
+        if (g.coupling) stratTxt = g.couplingStrat;
+        else if (multi) stratTxt = g.rows.length + " tranches";
+        else { var sm = strategyMeta(g.rows[0].strat); stratTxt = sm ? sm.label : "—"; }
+        tr.appendChild(el("td", "bt-strat", stratTxt));
       }
       tr.appendChild(el("td", "bt-price", priceCell(g.pmin, g.pmax)));
       tr.appendChild(el("td", "bt-mw", fmt(g.mw, 1)));
       if (showStrat) {
-        var sm2 = multi ? null : strategyMeta(g.rows[0].strat);
-        tr.appendChild(el("td", "bt-why", multi ? "expand for per-tranche detail" : (sm2 ? sm2.explain : "")));
+        var whyTxt;
+        if (g.coupling) whyTxt = g.couplingWhy;
+        else if (multi) whyTxt = "expand for per-tranche detail";
+        else { var sm2 = strategyMeta(g.rows[0].strat); whyTxt = sm2 ? sm2.explain : ""; }
+        tr.appendChild(el("td", "bt-why", whyTxt));
       }
       var childRows = [];
       if (multi) {
@@ -2905,7 +2988,9 @@
         g.rows.forEach(function (r) {
           var ctr = el("tr", "book-trow bt-child " + (g.cleared ? "is-cleared" : "is-uncleared"));
           ctr.hidden = true;
+          ctr.appendChild(waterfallCell(r.cum0, r.cum1, ownerColor(g.owner, BC), false));
           ctr.appendChild(el("td", "bt-range", fmt(r.cum0, 0) + "–" + fmt(r.cum1, 0)));
+          ctr.appendChild(el("td", "bt-type", ""));
           ctr.appendChild(el("td", "bt-owner bt-child-owner", "↳"));
           var sm3 = strategyMeta(r.strat);
           if (showStrat) ctr.appendChild(el("td", "bt-strat", sm3 ? sm3.label : "—"));
@@ -2931,9 +3016,53 @@
     // supply: cleared groups first, then a clearing divider, then uncleared.
     var clearedGroups = groups.filter(function (g) { return g.cleared; });
     var unclearedGroups = groups.filter(function (g) { return !g.cleared; });
+
+    // COUPLING ROWS — the wedge's cross-border imports/exports as synthetic rows
+    // at the neighbour's merit position. Same sign-gated decomposition as the
+    // wedge: per-source when v1/flows is loaded AND the sign gate passed
+    // (ctx.tradeSegs), else one net row at the model clearing price. Import rows
+    // join the supply side (cleared/uncleared by their price); export rows join
+    // demand. Visually distinct (bt-coupling: dashed sub-track + tinted).
+    var demandCoupling = [];
+    var couplingRendered = false;
+    var netImp = ctx.impliedNetImport;
+    if (netImp != null && Math.abs(netImp) >= 50) {
+      var isImp = netImp > 0;
+      var specs = (ctx.tradeSegs && ctx.tradeSegs.length)
+        ? ctx.tradeSegs.map(function (sg) {
+            return { label: sg.fixed ? "(coupling) fixed " + (isImp ? "imports" : "exports")
+                                     : "(coupling) " + sg.zone,
+                     price: sg.price != null ? sg.price : ctx.clearing, mw: sg.mw, fixed: !!sg.fixed };
+          })
+        : [{ label: "(coupling) net " + (isImp ? "imports" : "exports"),
+             price: ctx.clearing, mw: Math.abs(netImp), fixed: false }];
+      specs.forEach(function (rs) {
+        var startCum = supplyCumAtPrice(rs.price == null ? (ctx.clearing || 0) : rs.price);
+        var g = {
+          owner: rs.label, coupling: true,
+          cleared: rs.price == null || ctx.clearing == null || rs.price <= ctx.clearing,
+          rows: [{ price: rs.price == null ? ctx.clearing : rs.price, mw: rs.mw, owner: rs.label, strat: null }],
+          mw: rs.mw, cum0: startCum, cum1: startCum + rs.mw,
+          pmin: rs.price == null ? ctx.clearing : rs.price, pmax: rs.price == null ? ctx.clearing : rs.price,
+          marginal: false,
+          couplingStrat: isImp ? "coupled import" : "coupled export",
+          couplingWhy: rs.fixed
+            ? "Fixed out-of-footprint injection (TR/AL/MK …) — not in the coupled flow table; the reconciliation residual."
+            : "Cross-border " + (isImp ? "import" : "export") +
+              " from the coupled 39-zone clear, at the neighbour's clearing price (flow variable, not a local book slice)." };
+        couplingRendered = true;
+        if (isImp) { (g.cleared ? clearedGroups : unclearedGroups).push(g); }
+        else { demandCoupling.push(g); }
+      });
+      // keep merit order: existing groups are already price-ascending, so a
+      // stable sort by pmin just slots the coupling rows into place.
+      clearedGroups.sort(function (a, b) { return a.pmin - b.pmin; });
+      unclearedGroups.sort(function (a, b) { return a.pmin - b.pmin; });
+    }
+
     clearedGroups.forEach(function (g) { groupRow(g).forEach(function (tr) { tbody.appendChild(tr); }); });
     // clearing divider row
-    var ncol = showStrat ? 6 : 4;
+    var ncol = showStrat ? 8 : 6;
     var dtr = el("tr", "bt-divider");
     var dtd = el("td", null,
       "— clears at " + (ctx.clearing == null ? "?" : "€" + fmt(ctx.clearing, 2)) +
@@ -2944,7 +3073,7 @@
     unclearedGroups.forEach(function (g) { groupRow(g).forEach(function (tr) { tbody.appendChild(tr); }); });
 
     // demand section (own subheader, willingness-to-pay descending).
-    if (demand.length) {
+    if (demand.length || demandCoupling.length) {
       var dhr = el("tr", "bt-section");
       var dth = el("td", null, "Demand (willingness to pay)");
       dth.setAttribute("colspan", String(ncol));
@@ -2962,6 +3091,9 @@
                          cum0: o.cum0, cum1: o.cum1, pmin: o.price, pmax: o.price, marginal: false });
         }
       });
+      // coupling EXPORTS sit among demand by willingness-to-pay (descending).
+      demandCoupling.forEach(function (g) { dgroups.push(g); });
+      dgroups.sort(function (a, b) { return b.pmax - a.pmax; });
       dgroups.forEach(function (g) {
         groupRow(g).forEach(function (tr) { tr.classList.add("bt-demand"); tbody.appendChild(tr); });
       });
@@ -2974,6 +3106,20 @@
         "day predates them, so the WHY column is hidden."));
     }
     host.appendChild(table);
+
+    // tiny waterfall legend under the table
+    var legend = el("div", "bt-legend");
+    function legItem(cls, txt) {
+      var s = el("span", "bt-leg-item");
+      s.appendChild(el("span", "bt-leg-key " + cls));
+      s.appendChild(document.createTextNode(" " + txt));
+      return s;
+    }
+    legend.appendChild(el("span", "bt-leg-title", "waterfall:"));
+    legend.appendChild(legItem("k-clear", "clearing quantity (μπίλια)"));
+    if (demandSteps.length) legend.appendChild(legItem("k-demand", "demand step"));
+    if (couplingRendered) legend.appendChild(legItem("k-coupling", "coupling import/export"));
+    host.appendChild(legend);
   }
 
   // ---------- footer ----------
