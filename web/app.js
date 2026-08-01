@@ -22,6 +22,7 @@
     fixture: false,
     zoneCache: {},         // zone -> zone file json
     bookCache: {},         // "zone|date" -> book ladder json
+    units: null,           // code -> {name, fuel, firm, zone} (order-book join)
     view: "horizon",       // "horizon" | "explorer" | "board" | "book"
     zone: "GR",
     day: null,             // "YYYY-MM-DD"
@@ -1882,23 +1883,127 @@
     if (b) b.textContent = "▶ Play day";
   }
 
-  // Stable colour per owner: named tags get fixed hues; unit codes hash to one.
-  function bookOwnerColor(owner) {
-    if (owner === "RES") return "#3F9B6D";
-    if (owner === "IMPORT") return "#2C6BA8";
-    if (owner === "BACKSTOP") return "#8E6BB0";
-    if (owner === "DEMAND") return "#9AA3AD";
-    if (owner === "EXTRA" || owner === "STRATEGIST") return "#C4643C";
-    var h = 0;
-    for (var i = 0; i < owner.length; i++) h = (h * 31 + owner.charCodeAt(i)) >>> 0;
-    return "hsl(" + (h % 360) + ", 48%, 52%)";
+  // ---- fuel taxonomy: ONE consistent palette + icon per fuel family --------
+  // Slices are coloured by FUEL TYPE (not per-unit), so a gas plant reads the
+  // same colour everywhere. The canonical ENTSO-E fuel STRING (from
+  // v1/units.parquet, post name-inference) maps to a small family; the family
+  // maps to a --fuel-<fam> CSS variable (theme-aware, defined in style.css) and
+  // an emoji icon (owner's spec, extended consistently). One place: here.
+  var FUEL_META = {
+    "Fossil Gas":                     { fam: "gas",        icon: "🔥" },
+    "Fossil Coal-derived gas":        { fam: "gas",        icon: "🔥" },
+    "Fossil Oil":                     { fam: "oil",        icon: "⛽" },
+    "Fossil Oil shale":               { fam: "oil",        icon: "⛽" },
+    "Fossil Hard coal":               { fam: "coal",       icon: "🪨" },
+    "Fossil Brown coal/Lignite":      { fam: "coal",       icon: "🪨" },
+    "Fossil Peat":                    { fam: "coal",       icon: "🪨" },
+    "Nuclear":                        { fam: "nuclear",    icon: "⚛️" },
+    "Hydro Water Reservoir":          { fam: "hydro",      icon: "💧" },
+    "Hydro Run-of-river and pondage": { fam: "hydro",      icon: "💧" },
+    "Hydro Pumped Storage":           { fam: "hydro",      icon: "💧" },
+    "Solar":                          { fam: "solar",      icon: "☀️" },
+    "Wind Onshore":                   { fam: "wind",       icon: "🎐" },
+    "Wind Offshore":                  { fam: "wind",       icon: "🎐" },
+    "Energy storage":                 { fam: "storage",    icon: "🔋" },
+    "Biomass":                        { fam: "biomass",    icon: "🌾" },
+    "Waste":                          { fam: "biomass",    icon: "🌾" },
+    "Other renewable":                { fam: "biomass",    icon: "🌱" },
+    "Geothermal":                     { fam: "geothermal", icon: "♨️" },
+    "Other":                          { fam: "other",      icon: "❓" },
+  };
+  var FUEL_FAM_LABEL = {
+    gas: "Gas", oil: "Oil / diesel", coal: "Coal / lignite", nuclear: "Nuclear",
+    hydro: "Hydro", solar: "Solar", wind: "Wind", storage: "Storage",
+    biomass: "Biomass", geothermal: "Geothermal", other: "Other / unknown",
+  };
+  // Non-fuel book tags keep DISTINCT NEUTRAL styling (never a fuel colour).
+  var TAG_META = {
+    RES:        { icon: "🌱", label: "Renewables (forecast)", css: "--book-res" },
+    IMPORT:     { icon: "🔌", label: "Net imports",           css: "--book-import" },
+    DEMAND:     { icon: "📉", label: "Demand",                css: "--book-demand" },
+    BACKSTOP:   { icon: "🛟", label: "Import backstop",       css: "--book-backstop" },
+    EXTRA:      { icon: "➕", label: "Scenario order",        css: "--book-extra" },
+    STRATEGIST: { icon: "➕", label: "Strategist order",      css: "--book-extra" },
+  };
+
+  function fuelMeta(fuel) { return (fuel && FUEL_META[fuel]) || FUEL_META["Other"]; }
+
+  // Theme-aware colour lookups, read from CSS custom properties (same pattern as
+  // chartColors) so light/dark follow the site toggle on the next render.
+  function bookColors() {
+    var css = getComputedStyle(document.documentElement);
+    var fams = {}, k;
+    for (k in FUEL_FAM_LABEL) fams[k] = css.getPropertyValue("--fuel-" + k).trim() || "#8892A0";
+    var tags = {};
+    for (k in TAG_META) tags[TAG_META[k].css] = css.getPropertyValue(TAG_META[k].css).trim();
+    return { fuel: fams, tag: tags };
   }
 
-  function bookOwnerLabel(owner) {
-    // ENTSO-E unit codes are long; show a compact tail for the legend.
-    if (["RES", "IMPORT", "BACKSTOP", "DEMAND", "EXTRA", "STRATEGIST"].indexOf(owner) !== -1) return owner;
-    return owner.length > 12 ? "…" + owner.slice(-8) : owner;
+  // Resolve a book `owner` tag to display info: kind (unit|agg|tag), fuel family,
+  // icon, firm (nullable), a human name, and its palette key. Degrades to the
+  // raw code when the units reference has not loaded or lacks the unit.
+  function ownerInfo(owner) {
+    if (TAG_META[owner]) {
+      var t = TAG_META[owner];
+      return { kind: "tag", fam: null, icon: t.icon, firm: null, name: t.label,
+               tagCss: t.css, fuel: null };
+    }
+    // Fleet-completion aggregate: "AGG-<zone>-<Fuel_with_underscores>".
+    var fuel = null, name = null;
+    var mAgg = /^AGG[-_].+?[-_](.+)$/.exec(owner);
+    if (mAgg) { fuel = mAgg[1].replace(/_/g, " "); name = "Aggregate small units"; }
+    var u = state.units && state.units[owner];
+    if (u) {
+      if (u.fuel) fuel = u.fuel;
+      if (u.name) name = u.name;
+    }
+    var meta = fuelMeta(fuel);
+    var firm = u && u.firm && u.firm !== "unknown" ? u.firm : null;
+    if (!name) name = owner.length > 14 ? "…" + owner.slice(-10) : owner;
+    return { kind: mAgg ? "agg" : "unit", fam: meta.fam, icon: meta.icon,
+             firm: firm, name: name, fuel: fuel || "Other", tagCss: null };
   }
+
+  // Colour for an owner given a resolved bookColors() map.
+  function ownerColor(owner, BC) {
+    var info = ownerInfo(owner);
+    return info.kind === "tag" ? (BC.tag[info.tagCss] || "#8892A0")
+                               : (BC.fuel[info.fam] || BC.fuel.other);
+  }
+
+  // "(firm) (icon) name" — the slice label/tooltip title.
+  function ownerLabel(owner) {
+    var info = ownerInfo(owner);
+    var head = info.icon + " " + info.name;
+    return info.firm ? info.firm + " · " + head : head;
+  }
+
+  // Static unit reference (code -> {name, fuel, firm}). Loaded once, cached;
+  // failure degrades to {} (slices fall back to code labels + Other colour).
+  var unitsPromise = null;
+  function loadUnits() {
+    if (state.units) return Promise.resolve(state.units);
+    if (unitsPromise) return unitsPromise;
+    unitsPromise = loadWithFallback("units").then(
+      function (res) {
+        state.units = (res.json && res.json.units) ? res.json.units : {};
+        return state.units;
+      },
+      function () { state.units = {}; return state.units; }
+    );
+    return unitsPromise;
+  }
+
+  // ---- CLIFF metric: price fragility of the book at the clearing point ------
+  // Display heuristics (NOT a scored product metric — a scored cliff-risk metric
+  // would be its own prereg). Kept in ONE constants block; surfaced in the badge
+  // tooltip. See the collapse-question family in .claude/STRATEGY.md.
+  var CLIFF = {
+    WINDOWS: [100, 200, 500],  // ±MW windows offered in the readout
+    W_PRIMARY: 200,            // the band drawn on the chart + badge threshold
+    SPAN_CLIFF: 50,            // €/MWh price span across ±W_PRIMARY: > this = "cliff"
+    MERGE_PX: 10,              // model/settled MW markers merge when this close on-screen
+  };
 
   function loadBook(zone, date) {
     var key = zone + "|" + date;
@@ -1955,7 +2060,8 @@
     wrap.textContent = "";
     wrap.appendChild(el("p", "pending-note", "Loading order book…"));
 
-    loadBook(state.zone, state.bookDay).then(function (book) {
+    Promise.all([loadBook(state.zone, state.bookDay), loadUnits()]).then(function (r) {
+      var book = r[0];
       if (state.view !== "book" || state.bookDay !== fday.date) return;   // stale
       if (!book || !book.supply || !book.supply.length) {
         wrap.textContent = "";
@@ -1982,6 +2088,10 @@
     var supply = (book.supply[hourIdx] || []).map(function (o) {
       return { price: o[0], mw: o[1], owner: book.owners[o[2]] };
     });
+    // Demand ladder (willingness-to-pay), descending in price from shapeBook.
+    var demand = (book.demand[hourIdx] || []).map(function (o) {
+      return { price: o[0], mw: o[1], owner: book.owners[o[2]] };
+    });
     var clearing = fday.sim[hourIdx];
     var actual = fday.actual[hourIdx];
     $("book-hour-label").textContent =
@@ -2002,8 +2112,45 @@
     var totalMW = cum;
     if (clearMW === null) clearMW = totalMW;   // clearing above the whole ladder
 
-    // x window: focus on the cleared region with context beyond the ball.
-    var xMax = Math.max(clearMW * 1.5, clearMW + 500, 100);
+    // Cumulative demand (descending willingness-to-pay from the left).
+    var dcum = 0;
+    demand.forEach(function (o) { o.cum0 = dcum; dcum += o.mw; o.cum1 = dcum; });
+    var totalDemand = dcum;
+
+    // ---- CLIFF metric (client-side, from this ladder) --------------------
+    // priceAtCum: the offer price of the supply block covering cumulative q —
+    // the merit-order supply curve as a step function.
+    function priceAtCum(q) {
+      if (q <= 0) return supply[0].price;
+      if (q >= totalMW) return supply[supply.length - 1].price;
+      for (var i = 0; i < supply.length; i++) if (q < supply[i].cum1) return supply[i].price;
+      return supply[supply.length - 1].price;
+    }
+    // MW-distance to settled: cumulative MW where the ladder first reaches the
+    // SETTLED price minus where it reaches the MODEL clearing. "We were only ΔQ
+    // MW off in energy" even when the €-error is large (the cliff signature).
+    var settledMW = null;
+    if (actual !== null && actual !== undefined) {
+      settledMW = null;
+      for (var si = 0; si < supply.length; si++) {
+        if (supply[si].price >= actual) { settledMW = supply[si].cum0; break; }
+      }
+      if (settledMW === null) settledMW = totalMW;
+    }
+    var dQ = settledMW === null ? null : (clearMW - settledMW);   // signed (model − settled)
+    // Cliff index: price span across ±W MW of the clearing quantity, per window.
+    var cliffByW = {};
+    CLIFF.WINDOWS.forEach(function (W) {
+      var plo = priceAtCum(clearMW - W), phi = priceAtCum(clearMW + W);
+      cliffByW[W] = { lo: plo, hi: phi, span: phi - plo };
+    });
+    var primarySpan = cliffByW[CLIFF.W_PRIMARY].span;
+    var isCliff = primarySpan > CLIFF.SPAN_CLIFF;
+
+    // x window: focus on the cleared region with context beyond the ball —
+    // and always keep the ±W cliff band and the settled-MW marker on screen.
+    var xMax = Math.max(clearMW * 1.5, clearMW + 500, clearMW + CLIFF.W_PRIMARY + 60,
+                        settledMW === null ? 0 : settledMW + 60, 100);
     xMax = Math.min(xMax, totalMW);
     // y window: keep the region around clearing readable; clip €3000 demand-cap
     // blocks. Base on clearing/actual and the supply price near the ball.
@@ -2012,12 +2159,13 @@
     var yMax = Math.max(clearing || 0, actual || 0, yRef) * 1.18;
     if (!(yMax > 0)) yMax = 50;
 
-    var VBW = 900, VBH = 420;
-    var m = { t: 28, r: 16, b: 40, l: 56 };
+    var VBW = 900, VBH = 486;
+    var m = { t: 28, r: 16, b: 106, l: 56 };   // deep bottom margin: dual MW markers + ΔQ bracket
     var pw = VBW - m.l - m.r, ph = VBH - m.t - m.b;
     function X(v) { return m.l + Math.max(0, Math.min(1, v / xMax)) * pw; }
     function Y(v) { return m.t + ph - Math.max(0, Math.min(1, v / yMax)) * ph; }
     var C = chartColors();
+    var BC = bookColors();
 
     var svg = svgEl("svg", {
       viewBox: "0 0 " + VBW + " " + VBH, role: "img",
@@ -2057,7 +2205,42 @@
     xlab.textContent = "cumulative MW (ascending offer price)";
     svg.appendChild(xlab);
 
-    // supply blocks (owner-coloured bars from 0 to their offer price)
+    // CLIFF band: a subtle shaded ±W_PRIMARY MW window around the clearing
+    // quantity, with the implied price range marked — the reader SEES the local
+    // steepness of the book at the clearing point (behind the bars).
+    if (clearing !== null && clearing !== undefined) {
+      var bandX0 = X(Math.max(0, clearMW - CLIFF.W_PRIMARY));
+      var bandX1 = X(clearMW + CLIFF.W_PRIMARY);
+      svg.appendChild(svgEl("rect", {
+        x: bandX0, y: m.t, width: Math.max(1, bandX1 - bandX0), height: ph,
+        fill: C.sim, "fill-opacity": isCliff ? 0.1 : 0.05, class: "book-cliff-band",
+      }));
+      var pr = cliffByW[CLIFF.W_PRIMARY];
+      // the implied price range on the y axis (faint guides at plo / phi)
+      [pr.lo, pr.hi].forEach(function (pp) {
+        if (pp <= yMax) svg.appendChild(svgEl("line", {
+          x1: bandX0, x2: bandX1, y1: Y(pp), y2: Y(pp), stroke: C.sim,
+          "stroke-width": 1, "stroke-opacity": 0.5, "stroke-dasharray": "2 3",
+        }));
+      });
+      var yLoC = Math.min(Y(Math.min(pr.lo, yMax)), m.t + ph);
+      var yHiC = Y(Math.min(pr.hi, yMax));
+      if (pr.span > 0.5 && pr.hi <= yMax * 1.02) {
+        // a small vertical span bracket on the band's right edge
+        svg.appendChild(svgEl("line", {
+          x1: bandX1, x2: bandX1, y1: yHiC, y2: yLoC, stroke: C.sim,
+          "stroke-width": 1.5, "stroke-opacity": 0.7,
+        }));
+        var spanLbl = svgEl("text", {
+          x: bandX1 + 4, y: (yHiC + yLoC) / 2 + 4, "text-anchor": "start",
+          fill: C.sim, "font-size": 10.5, "font-weight": 600,
+        });
+        spanLbl.textContent = "±" + CLIFF.W_PRIMARY + " MW ⇒ €" + fmt(pr.span, 0);
+        svg.appendChild(spanLbl);
+      }
+    }
+
+    // supply blocks (fuel-coloured bars from 0 to their offer price)
     var tooltip = el("div", "tooltip");
     tooltip.style.display = "none";
     supply.forEach(function (o) {
@@ -2067,12 +2250,12 @@
       var yTop = Y(o.price);
       var rect = svgEl("rect", {
         x: x0, y: yTop, width: w, height: (m.t + ph) - yTop,
-        fill: bookOwnerColor(o.owner), "fill-opacity": 0.82,
+        fill: ownerColor(o.owner, BC), "fill-opacity": 0.82,
         stroke: C.surface, "stroke-width": w > 2 ? 0.5 : 0, class: "book-block",
       });
       rect.addEventListener("pointerenter", function (ev) {
         tooltip.textContent = "";
-        tooltip.appendChild(el("div", "tt-head", bookOwnerLabel(o.owner)));
+        tooltip.appendChild(el("div", "tt-head", ownerLabel(o.owner)));
         [["offer", fmt(o.price, 2) + " €/MWh"], ["block", fmt(o.mw, 1) + " MW"],
          ["cumulative", fmt(o.cum1, 0) + " MW"]].forEach(function (r) {
           var row = el("div", "tt-row");
@@ -2092,6 +2275,56 @@
       svg.appendChild(rect);
     });
 
+    // DEMAND curve overlay — the descending willingness-to-pay step from the
+    // right (dashed, subtle). The book hides it by default, but a hour can clear
+    // where a DEMAND bid crosses a vertical supply gap (the price is demand-set,
+    // not supply-set); showing the curve makes that correct outcome legible.
+    if (demand.length) {
+      var dClamp = function (p) { return Math.min(p, yMax); };
+      var dPts = [];
+      demand.forEach(function (o) {
+        if (o.cum0 > xMax) return;
+        var dx0 = X(o.cum0), dx1 = X(Math.min(o.cum1, xMax)), dy = Y(dClamp(o.price));
+        dPts.push(dx0 + " " + dy, dx1 + " " + dy);   // horizontal tread; the join adds the risers
+      });
+      if (dPts.length) {
+        svg.appendChild(svgEl("path", {
+          d: "M " + dPts.join(" L "), fill: "none", stroke: C.muted, "stroke-width": 1.6,
+          "stroke-dasharray": "5 4", "stroke-opacity": 0.85, class: "book-demand-line",
+        }));
+        var dlab = svgEl("text", { x: X(0) + 4, y: Y(dClamp(demand[0].price)) - 5,
+          "text-anchor": "start", fill: C.muted, "font-size": 10.5, "font-weight": 600 });
+        dlab.textContent = "demand";
+        svg.appendChild(dlab);
+        // per-tread hit-lines for tooltips (like the supply blocks)
+        demand.forEach(function (o) {
+          if (o.cum0 > xMax) return;
+          var dx0 = X(o.cum0), dx1 = X(Math.min(o.cum1, xMax)), dy = Y(dClamp(o.price));
+          var hit = svgEl("line", { x1: dx0, x2: dx1, y1: dy, y2: dy, stroke: "transparent",
+            "stroke-width": 11, class: "book-demand-hit" });
+          hit.addEventListener("pointerenter", function () {
+            tooltip.textContent = "";
+            tooltip.appendChild(el("div", "tt-head", "demand · " + ownerLabel(o.owner)));
+            [["bid", fmt(o.price, 2) + " €/MWh"], ["block", fmt(o.mw, 1) + " MW"],
+             ["cumulative", fmt(o.cum1, 0) + " MW"]].forEach(function (r) {
+              var row = el("div", "tt-row");
+              row.appendChild(el("span", "tt-val", r[1]));
+              row.appendChild(el("span", "tt-name", r[0]));
+              tooltip.appendChild(row);
+            });
+            var rct = svg.getBoundingClientRect(), sc = rct.width / VBW;
+            tooltip.style.display = "block";
+            var left = (dx1 + 8) * sc;
+            if (left + tooltip.offsetWidth > rct.width) left = dx0 * sc - tooltip.offsetWidth - 8;
+            tooltip.style.left = Math.max(0, left) + "px";
+            tooltip.style.top = Math.max(0, dy * sc - 10) + "px";
+          });
+          hit.addEventListener("pointerleave", function () { tooltip.style.display = "none"; });
+          svg.appendChild(hit);
+        });
+      }
+    }
+
     // clearing price line + "ball" where the ladder reaches it
     function marker(price, color, label, dash) {
       if (price === null || price === undefined) return;
@@ -2107,6 +2340,7 @@
     }
     marker(actual, C.act, "actual", null);
     marker(clearing, C.sim, "clearing", "7 4");
+    // clearing "ball" where the ladder reaches the model price.
     if (clearing !== null && clearing !== undefined) {
       var bx = X(clearMW), by = Y(clearing);
       svg.appendChild(svgEl("line", {
@@ -2114,45 +2348,163 @@
       }));
       svg.appendChild(svgEl("circle", { cx: bx, cy: by, r: 6, fill: C.sim, stroke: C.surface, "stroke-width": 2 }));
     }
+    // settled-price "ball" where OUR ladder reaches the settled price — the
+    // implied ACTUAL quantity (ΔQ endpoint).
+    if (settledMW !== null) {
+      var sx = X(settledMW), sy = Y(Math.min(actual, yMax));
+      svg.appendChild(svgEl("line", {
+        x1: sx, x2: sx, y1: sy, y2: m.t + ph, stroke: C.act, "stroke-width": 1.5, "stroke-dasharray": "3 4",
+      }));
+      svg.appendChild(svgEl("circle", { cx: sx, cy: sy, r: 5, fill: C.act, stroke: C.surface, "stroke-width": 2 }));
+    }
+
+    // ---- dual MW markers on the x-axis + the ΔQ bracket ------------------
+    // Mark BOTH quantities on the cumulative-MW axis: what the model predicted
+    // (where the μπίλια sits) and the implied ACTUAL point (our book's cum-MW at
+    // the settled price). The dashed droplines from the two balls already reach
+    // the axis at exactly clearMW / settledMW; here we add the labels + a bracket
+    // between them that IS the ΔQ readout ("we were only X MW off in energy").
+    // Markers MERGE gracefully on plateau hours (the two points ~coincide).
+    if (clearing !== null && clearing !== undefined) {
+      var axY = m.t + ph;
+      var mx = X(clearMW);
+      function clampX(xx, txt) {
+        var half = txt.length * 3.0;
+        return Math.min(Math.max(xx, m.l + half), m.l + pw - half);
+      }
+      function mwLabel(xx, yrow, color, txt) {
+        var tt = svgEl("text", { x: clampX(xx, txt), y: yrow, "text-anchor": "middle",
+          fill: color, "font-size": 11, "font-weight": 600,
+          "font-variant-numeric": "tabular-nums" });
+        tt.textContent = txt;
+        svg.appendChild(tt);
+      }
+      var merged = settledMW !== null && Math.abs(X(settledMW) - mx) < CLIFF.MERGE_PX;
+      if (settledMW === null || merged) {
+        mwLabel(mx, axY + 50, C.sim, "model: " + fmt(clearMW, 0) + " MW" +
+          (merged ? " (settled ~same)" : ""));
+      } else {
+        var sxx = X(settledMW);
+        // ΔQ bracket (top-opening ∏) below the axis-label row, joining the two
+        // droplines; the span between the markers is the MW-distance to settled.
+        var bBar = axY + 44;
+        svg.appendChild(svgEl("path", {
+          d: "M " + mx + " " + (bBar - 6) + " L " + mx + " " + bBar +
+             " L " + sxx + " " + bBar + " L " + sxx + " " + (bBar - 6),
+          fill: "none", stroke: C.act, "stroke-width": 1.5, "stroke-opacity": 0.9,
+        }));
+        mwLabel((mx + sxx) / 2, bBar + 12, C.act, "ΔQ " + fmt(Math.abs(dQ), 0) + " MW");
+        mwLabel(mx, axY + 70, C.sim, "model: " + fmt(clearMW, 0) + " MW");
+        mwLabel(sxx, axY + 84, C.act, "at settled €" + fmt(actual, 1) + ": " + fmt(settledMW, 0) + " MW");
+      }
+    }
 
     wrap.appendChild(svg);
     wrap.appendChild(tooltip);
 
-    // legend: top owners by MW within the visible window
-    var byOwner = {};
-    supply.forEach(function (o) { if (o.cum0 <= xMax) byOwner[o.owner] = (byOwner[o.owner] || 0) + o.mw; });
-    var top = Object.keys(byOwner).sort(function (a, b) { return byOwner[b] - byOwner[a]; }).slice(0, 10);
+    // legend: FUEL families (+ non-fuel tags) present in the visible window,
+    // by MW — the consistent palette the slices use. Aggregates fold into their
+    // fuel family; tags stay distinct.
+    var byKey = {};   // legendKey -> {mw, color, icon, label, isTag}
+    supply.forEach(function (o) {
+      if (o.cum0 > xMax) return;
+      var info = ownerInfo(o.owner);
+      var key, color, icon, label, isTag;
+      if (info.kind === "tag") {
+        key = "tag:" + o.owner; color = BC.tag[info.tagCss] || "#8892A0";
+        icon = info.icon; label = info.name; isTag = true;
+      } else {
+        key = "fuel:" + info.fam; color = BC.fuel[info.fam] || BC.fuel.other;
+        icon = info.icon; label = FUEL_FAM_LABEL[info.fam] || info.fam; isTag = false;
+      }
+      if (!byKey[key]) byKey[key] = { mw: 0, color: color, icon: icon, label: label, isTag: isTag };
+      byKey[key].mw += o.mw;
+    });
+    var order = Object.keys(byKey).sort(function (a, b) { return byKey[b].mw - byKey[a].mw; });
     var lg = $("book-legend");
     lg.textContent = "";
-    top.forEach(function (ow) {
-      var span = el("span");
+    order.forEach(function (k) {
+      var it = byKey[k];
+      var span = el("span", it.isTag ? "book-tagkey" : null);
       var key = el("span", "key");
-      key.style.background = bookOwnerColor(ow);
-      key.style.borderTopColor = bookOwnerColor(ow);
+      key.style.background = it.color;
+      key.style.borderTopColor = it.color;
       span.appendChild(key);
-      span.appendChild(document.createTextNode(bookOwnerLabel(ow) + " · " + fmt(byOwner[ow], 0) + " MW"));
-      span.title = ow;
+      span.appendChild(document.createTextNode(
+        it.icon + " " + it.label + " · " + fmt(it.mw, 0) + " MW"));
       lg.appendChild(span);
     });
+    // demand-curve key (the dashed descending overlay)
+    if (demand.length) {
+      var dspan = el("span", "book-tagkey");
+      var dkey = el("span", "key book-demand-key");
+      dkey.style.background = "transparent";
+      dkey.style.borderTopColor = C.muted;
+      dspan.appendChild(dkey);
+      dspan.appendChild(document.createTextNode("⬇ demand curve"));
+      lg.appendChild(dspan);
+    }
 
-    // one-line commentary
+    // ---- commentary + CLIFF badge ---------------------------------------
     var cp = $("book-comment");
+    cp.textContent = "";
     var marginal = null;
     supply.forEach(function (o) { if (marginal === null && o.cum1 >= clearMW) marginal = o; });
-    var bits = "Cleared around " + fmt(clearMW, 0) + " MW of " + fmt(totalMW, 0) +
-      " MW offered. ";
+    // Demand-set price: the clearing coincides with a DEMAND bid inside a supply
+    // GAP (not within ε of the marginal supply offer) — a demand bid crosses the
+    // vertical supply segment. Attribute the price to that demand bid, not to the
+    // nearest supply unit (which would misattribute the hour).
+    var PRICE_EPS = 0.5;
+    var setByDemand = null;
     if (clearing !== null && clearing !== undefined) {
-      bits += "Model clearing €" + fmt(clearing, 1) + "/MWh";
-      if (marginal) bits += ", set near " + bookOwnerLabel(marginal.owner) + " (offer €" + fmt(marginal.price, 1) + ")";
-      bits += ".";
+      var supplySets = marginal && Math.abs(marginal.price - clearing) <= PRICE_EPS;
+      if (!supplySets) {
+        demand.forEach(function (o) {
+          if (setByDemand === null && Math.abs(o.price - clearing) <= PRICE_EPS) setByDemand = o;
+        });
+      }
+    }
+
+    // badge: cliff vs plateau (display heuristic; thresholds in the tooltip)
+    var badge = el("span", "cliff-badge " + (isCliff ? "is-cliff" : "is-plateau"));
+    badge.textContent = (isCliff ? "⚠ cliff hour" : "▬ plateau hour") +
+      " · ±" + CLIFF.W_PRIMARY + " MW ⇒ €" + fmt(primarySpan, 0);
+    badge.title =
+      "Cliff index = the €/MWh price span of the supply book within ±" +
+      CLIFF.W_PRIMARY + " MW of the clearing quantity (windows: " +
+      CLIFF.WINDOWS.map(function (W) { return "±" + W + " MW ⇒ €" + fmt(cliffByW[W].span, 0); }).join(", ") +
+      "). Above €" + CLIFF.SPAN_CLIFF + " ⇒ a CLIFF: the ladder is near-vertical here, " +
+      "so a small input error (a little more/less demand, wind or solar) explodes " +
+      "into a large price error. These near-threshold discontinuity hours are where " +
+      "input precision matters most (the collapse-question family). Display heuristic, " +
+      "not a scored metric.";
+    cp.appendChild(badge);
+
+    var txt = " Cleared around " + fmt(clearMW, 0) + " MW of " + fmt(totalMW, 0) + " MW offered. ";
+    if (clearing !== null && clearing !== undefined) {
+      txt += "Model clearing €" + fmt(clearing, 1) + "/MWh";
+      if (setByDemand) {
+        txt += ", set by demand bid €" + fmt(setByDemand.price, 1) + " (" +
+          ownerLabel(setByDemand.owner) + ") crossing a supply gap";
+      } else if (marginal) {
+        txt += ", set near " + ownerLabel(marginal.owner) + " (offer €" + fmt(marginal.price, 1) + ")";
+      }
+      txt += ".";
     }
     if (actual !== null && actual !== undefined) {
-      bits += " Settled actual €" + fmt(actual, 1) + "/MWh (" +
-        (actual > clearing ? "+" : "") + fmt(actual - clearing, 1) + " vs model).";
+      var dP = clearing - actual;
+      txt += " Model " + (dP >= 0 ? "+" : "") + fmt(dP, 1) + " €/MWh vs settled €" +
+        fmt(actual, 1);
+      if (dQ !== null) {
+        txt += ", but only " + fmt(Math.abs(dQ), 0) + " MW off in energy" +
+          (isCliff ? " — a cliff hour: the €-error is a book discontinuity, not a volume miss." : ".");
+      } else {
+        txt += ".";
+      }
     } else {
-      bits += " Actual not yet settled.";
+      txt += " Actual not yet settled — ex-ante cliff index above.";
     }
-    cp.textContent = bits;
+    cp.appendChild(document.createTextNode(txt));
   }
 
   // ---------- footer ----------

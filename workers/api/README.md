@@ -18,6 +18,7 @@ decodes the parquet with [hyparquet](https://github.com/hyparam/hyparquet)
 | `GET /api/v1/books/:zone/:date` | `v1/books/<date>.parquet` (filtered to zone) | order-book ladder (see below) |
 | `GET /api/v1/scoreboard` | `v1/scoreboard.parquet` | `web/data/scoreboard.json` |
 | `GET /api/v1/map` | `v1/map.parquet` | `web/data/map.json` |
+| `GET /api/v1/units` | `v1/units.parquet` | `{units:{<code>:{name,fuel,firm,zone}}}` (order-book join) |
 | `GET /api/v1/manifest` | `v1/manifest.json` | `{updated_at, code_version, zones, row_counts, …}` |
 | `GET /api/v1/inputs/:zone` | `v1/inputs/<zone>.parquet` | RES/load driver + prediction panel (columnar series) |
 | `GET /api/v1/inputs/reservoir` | `v1/inputs/reservoir.parquet` | `{zones:{<Z>:[{week_start,fill_ratio,dryness,…}]}}` |

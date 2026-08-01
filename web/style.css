@@ -38,6 +38,26 @@
   --accent:         var(--aegean);
   --page-grid-line: rgba(44, 107, 168, 0.07);
   --header-bg:      rgba(251, 248, 241, 0.92);
+
+  /* Order-book fuel palette — ONE consistent, intuitive, theme-aware set.
+     Slices are coloured by fuel FAMILY (see FUEL_META in app.js). */
+  --fuel-gas:        #E8743B;   /* gas — warm orange/red */
+  --fuel-oil:        #B5651D;   /* oil / diesel — amber-brown */
+  --fuel-coal:       #5A4A38;   /* coal / lignite — dark brown-grey */
+  --fuel-nuclear:    #7E57C2;   /* nuclear — purple */
+  --fuel-hydro:      #2C6BA8;   /* hydro — deep blue */
+  --fuel-solar:      #E0B000;   /* solar — yellow */
+  --fuel-wind:       #2AA198;   /* wind — teal */
+  --fuel-storage:    #2E9E5B;   /* storage — green */
+  --fuel-biomass:    #7A8B3A;   /* biomass — moss green */
+  --fuel-geothermal: #C0567A;   /* geothermal — warm rose */
+  --fuel-other:      #8892A0;   /* other / unknown — neutral grey */
+  /* Non-fuel book tags — distinct NEUTRAL styling, never a fuel colour. */
+  --book-res:      #6FA88A;   /* renewables forecast — sage */
+  --book-import:   #6D8CA8;   /* net imports — steel blue-grey */
+  --book-demand:   #9AA3AD;   /* demand — grey */
+  --book-backstop: #A08A7A;   /* import backstop — warm grey */
+  --book-extra:    #C4643C;   /* scenario / strategist — terracotta */
 }
 /* "Aegean night" — opt-in via the header toggle; light is the default. */
 :root[data-theme="dark"] {
@@ -60,6 +80,24 @@
   --accent:         #6FA8DC;
   --page-grid-line: rgba(111, 168, 220, 0.06);
   --header-bg:      rgba(14, 27, 46, 0.92);
+
+  /* Order-book fuel palette — brightened for the dark surface. */
+  --fuel-gas:        #F0894F;
+  --fuel-oil:        #CE8A46;
+  --fuel-coal:       #9C876E;
+  --fuel-nuclear:    #A585DD;
+  --fuel-hydro:      #5B9BD5;
+  --fuel-solar:      #F2C94C;
+  --fuel-wind:       #4FC3B8;
+  --fuel-storage:    #52C07A;
+  --fuel-biomass:    #A6B45E;
+  --fuel-geothermal: #D97AA0;
+  --fuel-other:      #98A2B0;
+  --book-res:      #8CC0A4;
+  --book-import:   #8AA6C0;
+  --book-demand:   #AEB6C0;
+  --book-backstop: #BBA697;
+  --book-extra:    #E0A458;
 }
 
 * { box-sizing: border-box; }
@@ -973,6 +1011,39 @@ html, body { overflow-x: hidden; }
 }
 .book-block { cursor: crosshair; }
 .book-block:hover { fill-opacity: 1; }
+/* Demand-curve overlay: the line is decorative (no pointer capture); the wide
+   transparent hit-lines carry the tooltips. */
+.book-demand-line { pointer-events: none; }
+.book-demand-hit { cursor: crosshair; }
+.book-legend .book-demand-key { border-top: 2px dashed; height: 0; align-self: center; }
+/* Non-fuel book tags in the legend read as neutral (a subtle dotted outline)
+   so they are never mistaken for a fuel colour. */
+.book-legend .book-tagkey { opacity: 0.9; }
+.book-legend .book-tagkey .key { outline: 1px dotted var(--text-muted); outline-offset: 1px; }
+
+/* CLIFF badge — the price-fragility classifier beside the book caption.
+   Thresholds are display heuristics (explained in the badge title). */
+.cliff-badge {
+  display: inline-block;
+  font: 600 11.5px/1.4 var(--mono);
+  padding: 1px 8px;
+  border-radius: 999px;
+  margin-right: 8px;
+  vertical-align: baseline;
+  white-space: nowrap;
+  cursor: help;
+  border: 1px solid transparent;
+}
+.cliff-badge.is-cliff {
+  color: var(--fuel-gas);
+  border-color: var(--fuel-gas);
+  background: color-mix(in srgb, var(--fuel-gas) 12%, transparent);
+}
+.cliff-badge.is-plateau {
+  color: var(--text-muted);
+  border-color: var(--baseline);
+  background: color-mix(in srgb, var(--text-muted) 8%, transparent);
+}
 
 /* ============ Predicting RES & loads ============ */
 /* Every footprint zone in the open surface is clickable; the ML pilots keep a

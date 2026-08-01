@@ -301,9 +301,22 @@ function main()
     zone_counts = export_zone_parquets()
     n_map = export_map_parquet()
 
+    # v1/units.parquet — static unit reference (code -> name/fuel/firm) for the
+    # order-book view. ADDITIVE and NON-FATAL: a registry hiccup must never fail
+    # the forecast data export. bin/web_data_push.sh's root `for f in v1/*.parquet`
+    # loop picks it up (additive cp, outside the destructive sync scope).
+    n_units = 0
+    try
+        include(joinpath(@__DIR__, "export_units_parquet.jl"))  # defines export_units_parquet
+        n_units = export_units_parquet(V1_DIR)
+    catch e
+        @warn "units export failed (web data unaffected)" exception = (e, catch_backtrace())
+    end
+
     updated_at = get(ENV, "UPDATED_AT", Dates.format(now(UTC), "yyyy-mm-ddTHH:MM:SS") * "Z")
     counts = Dict{String,Any}("scoreboard.parquet" => n_scores,
-                              "map.parquet" => n_map)
+                              "map.parquet" => n_map,
+                              "units.parquet" => n_units)
     for (k, v) in zone_counts
         counts[k] = v
     end

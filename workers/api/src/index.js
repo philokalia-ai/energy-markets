@@ -9,6 +9,7 @@
  *   GET /api/v1/books/:zone/:date <- v1/books/<date>.parquet (filtered to zone)
  *   GET /api/v1/scoreboard    <- v1/scoreboard.parquet (+ manifest)
  *   GET /api/v1/map           <- v1/map.parquet        (+ manifest)
+ *   GET /api/v1/units         <- v1/units.parquet (unit code -> name/fuel/firm)
  *   GET /api/v1/manifest      <- v1/manifest.json (pass-through)
  *
  * Caching: edge Cache API keyed on the R2 object ETag — the parquet is
@@ -18,7 +19,7 @@
 
 import { parquetReadObjects } from "hyparquet";
 import { compressors } from "hyparquet-compressors";
-import { shapeZone, shapeScoreboard, shapeMap, shapeBook, shapeInputsZone, shapeReservoir } from "./shape.js";
+import { shapeZone, shapeScoreboard, shapeMap, shapeBook, shapeInputsZone, shapeReservoir, shapeUnits } from "./shape.js";
 
 const ALLOWED_ORIGINS = [
   /^https:\/\/energy\.philokalia\.ai$/,
@@ -83,6 +84,13 @@ async function buildPayload(env, route, zone, date) {
     if (!obj) return null;
     return JSON.stringify(shapeBook(await readParquet(obj), zone, date));
   }
+  if (route === "units") {
+    // Static unit reference (code -> name/fuel/firm) for the Order-book view.
+    // Pass-through parquet like the others; the SPA joins it client-side.
+    const obj = await env.DATA.get("v1/units.parquet");
+    if (!obj) return null;
+    return JSON.stringify(shapeUnits(await readParquet(obj)));
+  }
   if (route === "inputs_manifest") {
     // The Predictions-page data plane manifest (v1/inputs/manifest.json) —
     // pass-through, like v1/manifest.json (see bin/export_prediction_inputs.jl).
@@ -117,6 +125,7 @@ async function buildPayload(env, route, zone, date) {
 /** R2 key whose ETag versions the route's cache entry. */
 function routeKey(route, zone, date) {
   if (route === "manifest") return "v1/manifest.json";
+  if (route === "units") return "v1/units.parquet";
   if (route === "zone") return "v1/zones/" + zone + ".parquet";
   if (route === "book") return "v1/books/" + date + ".parquet";
   if (route === "inputs_manifest") return "v1/inputs/manifest.json";
@@ -150,6 +159,8 @@ export default {
       route = "map";
     } else if (url.pathname === "/api/v1/manifest") {
       route = "manifest";
+    } else if (url.pathname === "/api/v1/units") {
+      route = "units";
     } else if (url.pathname === "/api/v1/inputs/manifest") {
       route = "inputs_manifest";
     } else if (url.pathname === "/api/v1/inputs/reservoir") {
