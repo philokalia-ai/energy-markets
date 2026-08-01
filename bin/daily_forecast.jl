@@ -327,33 +327,71 @@ function write_forecast!(market_date::Date, lead_days::Int, prediction_made::Dat
     # the session timezone.
     tstz(dt::DateTime) = Dates.format(dt, "yyyy-mm-dd HH:MM:SS") * "+00"
 
+    # Retro write mode (EUPHEMIA_RETRO_SUPERSEDE): default OFF ⇒ the additive
+    # no-clobber contract (#280) is exactly as merged. Set ⇒ a retro slice that
+    # collides with a genuine LIVE vintage BACKS the live rows up verbatim to
+    # simulations.forecast_prices_pre_reset (superseded_at_utc) and then REPLACES
+    # them — the backup table is the honesty mechanism ("what we said then" kept
+    # for audit; the live series now carries the reset). Read at call time.
+    supersede = lowercase(get(ENV, "EUPHEMIA_RETRO_SUPERSEDE", "")) in ("1", "true", "yes", "on")
     n_inserted = 0
     Euphemia.withdb() do cnx
-        # RETRO no-clobber contract: a retro fill NEVER touches a slice that
-        # already holds a genuine LIVE vintage (is_retro=false) at ANY
-        # code_version — additive fill only. Checked inside the transaction so a
-        # concurrent live write cannot race it.
+        # The write path (:insert / :refuse / :supersede) is decided by the pure
+        # retro_write_plan on the live-row presence read INSIDE the transaction,
+        # so a concurrent live write cannot race it.
         LibPQ.execute(cnx, "BEGIN")
         try
+            n_live = 0
             if is_retro
-                live = LibPQ.execute(cnx, """
+                n_live = Int((LibPQ.execute(cnx, """
                     SELECT COUNT(*) AS n FROM simulations.forecast_prices
                     WHERE market_date = \$1 AND lead_days = \$2 AND input_mode = \$3
                       AND is_retro = false
-                """, [market_date, lead_days, input_mode]) |> DataFrame
-                if Int(live.n[1]) > 0
-                    LibPQ.execute(cnx, "ROLLBACK")
-                    println("  ⏭️  retro SKIP $market_date lead=$lead_days mode=$input_mode: " *
-                            "a LIVE vintage already exists — additive fill refuses to clobber it")
-                    return
-                end
-                # Clear only prior RETRO rows for this slice (idempotent re-run).
+                """, [market_date, lead_days, input_mode]) |> DataFrame).n[1])
+            end
+            plan = retro_write_plan(is_retro=is_retro, supersede=supersede,
+                                    has_live=(n_live > 0))
+            if plan == :refuse
+                LibPQ.execute(cnx, "ROLLBACK")
+                println("  ⏭️  retro SKIP $market_date lead=$lead_days mode=$input_mode: " *
+                        "a LIVE vintage already exists — additive fill refuses to clobber it " *
+                        "(EUPHEMIA_RETRO_SUPERSEDE=1 to replace it)")
+                return
+            elseif plan == :supersede
+                # 1. Back up the live rows verbatim (+ superseded_at_utc default).
+                backup_res = LibPQ.execute(cnx, """
+                    INSERT INTO simulations.forecast_prices_pre_reset
+                    (market_date, date_time_utc, bidding_zone, price_eur_mwh,
+                     prediction_made_utc, lead_days, clearing_mode, code_version,
+                     input_mode, is_retro, reset_tag, retro_of_utc)
+                    SELECT market_date, date_time_utc, bidding_zone, price_eur_mwh,
+                     prediction_made_utc, lead_days, clearing_mode, code_version,
+                     input_mode, is_retro, reset_tag, retro_of_utc
+                    FROM simulations.forecast_prices
+                    WHERE market_date = \$1 AND lead_days = \$2 AND input_mode = \$3
+                      AND is_retro = false
+                """, [market_date, lead_days, input_mode])
+                n_backed = LibPQ.num_affected_rows(backup_res)
+                # Verify the backup captured EXACTLY the live rows before deleting.
+                n_backed == n_live ||
+                    error("retro SUPERSEDE backup mismatch for $market_date lead=$lead_days " *
+                          "mode=$input_mode: backed up $n_backed but $n_live live rows exist — aborting")
+                # 2. Delete BOTH the live and any prior retro rows for the slice.
+                LibPQ.execute(cnx, """
+                    DELETE FROM simulations.forecast_prices
+                    WHERE market_date = \$1 AND lead_days = \$2 AND input_mode = \$3
+                """, [market_date, lead_days, input_mode])
+                println("  ♻️  retro SUPERSEDE $market_date lead=$lead_days mode=$input_mode: " *
+                        "backed up $n_backed live row(s) → forecast_prices_pre_reset, replacing")
+            elseif is_retro
+                # :insert (no live conflict) — clear only prior RETRO rows.
                 LibPQ.execute(cnx, """
                     DELETE FROM simulations.forecast_prices
                     WHERE market_date = \$1 AND lead_days = \$2 AND input_mode = \$3
                       AND is_retro = true
                 """, [market_date, lead_days, input_mode])
             else
+                # :insert (LIVE write) — cv-agnostic clear of the live slice.
                 LibPQ.execute(cnx, """
                     DELETE FROM simulations.forecast_prices
                     WHERE market_date = \$1 AND lead_days = \$2 AND input_mode = \$3
@@ -1295,9 +1333,12 @@ function run_retro()
 end
 
 # Dispatch: an explicit RETRO_ASOF selects the data-reset reconstruction; else
-# the normal live forward run.
-if RETRO_ASOF !== nothing
-    run_retro()
-else
-    main()
+# the normal live forward run. EUPHEMIA_FORECAST_NO_AUTORUN lets a test load the
+# writer (write_forecast!) without triggering a run.
+if isempty(get(ENV, "EUPHEMIA_FORECAST_NO_AUTORUN", ""))
+    if RETRO_ASOF !== nothing
+        run_retro()
+    else
+        main()
+    end
 end

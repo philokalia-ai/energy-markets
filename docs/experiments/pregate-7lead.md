@@ -114,20 +114,42 @@ only if the per-lead board shows it matters.
 
 ## 3. Retro labeling contract (honesty-critical, FROZEN)
 
-1. **Genuine live vintages are never overwritten.** `write_forecast!(...;
-   is_retro=true)` checks, inside the write transaction, whether the slice
-   `(market_date, lead_days, input_mode)` already holds any `is_retro=false`
-   row at any code_version. If so it **refuses** (additive fill only). The data
-   reset therefore only FILLS GAPS in the live record (leads/days that were never
-   forecast live); what we actually said at the time stands, immutable.
-2. **Honest stamping.** `prediction_made_utc` = the ACTUAL compute time (now,
+The retro writer has **two modes** (owner amendment, Aug 2026). Both keep the
+same honesty invariant — *"what we said then" is preserved verbatim, forever* —
+but relocate where it lives:
+
+- **Additive-fill mode (default, `EUPHEMIA_RETRO_SUPERSEDE` unset).**
+  `write_forecast!(...; is_retro=true)` checks, inside the write transaction,
+  whether the slice `(market_date, lead_days, input_mode)` already holds any
+  `is_retro=false` row at any code_version. If so it **refuses** (`:refuse`). The
+  reset only FILLS GAPS in the live record; the genuine live rows stand in place,
+  immutable.
+- **Supersede mode (`EUPHEMIA_RETRO_SUPERSEDE=1`).** The reset REPLACES the
+  existing live weather-track vintages so the live series shows one consistent
+  reset generation. Honesty is preserved by a **backup**: for each colliding
+  slice the writer, in a single transaction, (1) copies every live row VERBATIM
+  to `simulations.forecast_prices_pre_reset` (same data columns +
+  `superseded_at_utc`), asserting the backup count **equals** the replaced count,
+  then (2) delete-then-inserts the retro rows in the live table (`:supersede`).
+  The backup table IS the honesty mechanism now — "what we said then" is
+  auditable there in full; the live series carries the `reset_tag`. `Ας κρατήσει
+  ένα backup` — kept, by construction.
+
+Common to both:
+
+1. **Honest stamping.** `prediction_made_utc` = the ACTUAL compute time (now,
    Aug 2026). `is_retro=true`, `reset_tag`, and `retro_of_utc` (the natural
    D−lead instant reconstructed) are ADDITIVE — existing readers are unaffected.
-3. **The purity guard is mode-scoped.** LIVE mode keeps both hard guards
+2. **The purity guard is mode-scoped.** LIVE writes keep both hard guards
    absolute (`assert_unrealized` day-level + `assert_hours_unrealized`
-   hour-level). RETRO mode reconstructs already-realized days on purpose, so
-   those assertions are replaced by the labeling contract above — the honesty
-   comes from the labels + the no-clobber rule, not from a future-hour assertion.
+   hour-level). RETRO reconstructs already-realized days on purpose, so those
+   assertions are replaced by this labeling contract — the honesty comes from the
+   labels + (refuse | backup-then-replace), not from a future-hour assertion.
+3. **The three writer paths are a pure decision** (`retro_write_plan`,
+   `:insert`/`:refuse`/`:supersede`), unit-tested DB-free, and validated by a
+   real-Postgres roundtrip (refuse leaves the live slice intact; supersede backs
+   up N and replaces with backup-count == replaced-count; no-conflict inserts
+   directly).
 4. **Display.** The web manifest carries an additive `data_reset` field (reset
    tag, window, slice count, the notice text) and the zone series parquet carries
    per-row `is_retro`/`reset_tag`, so the SPA renders the reset notice ("Data
@@ -194,14 +216,21 @@ Execution checklist ("fill all surfaces"):
    (`is_retro=false` counts unchanged); `data_reset` manifest reflects the window;
    per-lead board renders on the SPA with the reset notice.
 
-Run command (Phase 2, per the machine's ≤10-parallel-clear constraint):
+Run command (Phase 2, per the machine's ≤10-parallel-clear constraint). The
+owner amendment: the reset REPLACES the existing July live weather-track
+vintages (`EUPHEMIA_RETRO_SUPERSEDE=1`), backing them up to
+`simulations.forecast_prices_pre_reset` first. Omit the flag for the default
+additive gap-fill.
 ```bash
-EUPHEMIA_DATA_STORE=... INPUT_MODE=weather \
+EUPHEMIA_DATA_STORE=... INPUT_MODE=weather EUPHEMIA_RETRO_SUPERSEDE=1 \
 EUPHEMIA_FORECAST_RETRO_ASOF=<last past market day> \
 EUPHEMIA_FORECAST_RETRO_START=2026-07-01 \
 EUPHEMIA_FORECAST_RESET_TAG=2026-08-01-reset MAX_LEAD_DAYS=7 \
   julia --project=. bin/daily_forecast.jl
 ```
+Verify after: `SELECT reset_tag, count(*) FROM simulations.forecast_prices
+WHERE is_retro GROUP BY 1` and `SELECT count(*) FROM
+simulations.forecast_prices_pre_reset` (== the superseded live-row count).
 
 ### Expected Phase-2 runtime
 `run_retro` iterates leads (each a fixed vintage) and, within a lead, clears the

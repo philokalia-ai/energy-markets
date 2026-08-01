@@ -317,6 +317,35 @@ function collapse_metrics(sim::Vector{Float64}, act::Vector{Float64};
             false_alarms=fa, hit_rate=hit_rate, false_alarm_rate=fa_rate)
 end
 
+"""
+    retro_write_plan(; is_retro::Bool, supersede::Bool, has_live::Bool) -> Symbol
+
+Pure decision for `write_forecast!`'s three paths (DB-free, unit-tested). Given
+whether the slice is a retro reconstruction, whether SUPERSEDE mode is on, and
+whether a genuine LIVE (`is_retro=false`) row already exists in the slice:
+
+- `:insert`    — write straight in. LIVE writes always; a retro fill when no
+                 live vintage exists (delete prior retro, then insert).
+- `:refuse`    — retro fill blocked by an existing live vintage (default
+                 additive-fill contract, #280).
+- `:supersede` — retro REPLACES an existing live vintage: back the live rows up
+                 to `simulations.forecast_prices_pre_reset` first, then
+                 delete-then-insert the retro rows (EUPHEMIA_RETRO_SUPERSEDE=1).
+
+Truth table:
+| is_retro | supersede | has_live | plan       |
+|----------|-----------|----------|------------|
+| false    | *         | *        | :insert    |
+| true     | *         | false    | :insert    |
+| true     | false     | true     | :refuse    |
+| true     | true      | true     | :supersede |
+"""
+function retro_write_plan(; is_retro::Bool, supersede::Bool, has_live::Bool)
+    is_retro || return :insert
+    has_live || return :insert
+    return supersede ? :supersede : :refuse
+end
+
 # ---------------------------------------------------------------------------
 # Minimal JSON serializer (avoids adding a package dependency). Handles the
 # restricted value universe of the export contract: Dict / NamedTuple /
