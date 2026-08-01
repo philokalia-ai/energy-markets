@@ -218,6 +218,34 @@ export function shapeReservoir(rows) {
   return { market_day_tz: MARKET_DAY_TZ, zones: zones };
 }
 
+/**
+ * units.parquet rows -> the static unit reference the Order-book view joins
+ * client-side (bin/export_units_parquet.jl is the contract). One row per
+ * (zone, code): {code, display_name, fuel, firm, zone}. Emitted as an object
+ * keyed by unit code — the book's `owner` tag for a unit order — so the SPA
+ * does an O(1) lookup per slice:
+ *
+ *   { market_day_tz, units: { "<code>": {name, fuel, firm, zone}, … } }
+ *
+ * `fuel` is the canonical ENTSO-E type string (post name-inference); the icon +
+ * colour taxonomy lives in the SPA. `firm` is null when unknown/absent. If a
+ * code somehow appears in two zones, the last row wins (codes are globally
+ * unique EICs in practice, and the book is queried per zone anyway).
+ */
+export function shapeUnits(rows) {
+  const units = {};
+  for (const r of rows) {
+    if (r.code == null) continue;
+    units[r.code] = {
+      name: r.display_name == null ? null : r.display_name,
+      fuel: r.fuel == null ? null : r.fuel,
+      firm: r.firm == null ? null : r.firm,
+      zone: r.zone == null ? null : r.zone,
+    };
+  }
+  return { market_day_tz: MARKET_DAY_TZ, units: units };
+}
+
 /** map.parquet rows + manifest -> map.json shape (days sorted by date asc). */
 export function shapeMap(rows, manifest) {
   const byDate = new Map();
