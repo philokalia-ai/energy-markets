@@ -1,5 +1,11 @@
 # Solar-regime program — regime cartography + regime-gated floor sweep
 
+> **SHIPPED as cv31 (August 2026, activation PR after #251).** The accepted arm
+> — BLOCKS=full, θ=0.4, ZONES=DE_LU,FR,PL,BE,CZ,CH — is now the DEFAULT for the
+> record path (`ENERGY_PRICES_CODE_VERSION = 31`). Kill-switch
+> `EUPHEMIA_DISABLE_CV31` ⇒ fully inert (byte-identical to cv27 main); explicit
+> `EUPHEMIA_SOLAR_REGIME*` env still wins. See the CLAUDE.md v31 ledger entry.
+
 Branch `feat/solar-regime` off main=cv27. Extract read-only. The owner ask:
 market regimes that plausibly activate only under abundant renewables must be
 studied SEPARATELY — a regime mechanism must not be rejected because it "hurts

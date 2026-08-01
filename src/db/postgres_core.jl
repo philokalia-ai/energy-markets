@@ -138,7 +138,24 @@
 # only where a corrupt unit was in the fleet (IT-CSOUTH); every other zone
 # is byte-identical to cv23 code. Bumped so the post-#205 daily forecasts
 # and the refilled record never mix with cv23 rows. July 2026.
-const ENERGY_PRICES_CODE_VERSION = 27
+# v27 -> v31: solar-regime price-taker floor ACTIVATED (#251 -> cv31 ship;
+# docs/experiments/solar-regime). Ex-ante regime gate = day-ahead solar share
+# of forecast load >= θ=0.4 on the CONTINENTAL_SOLAR group DE_LU/FR/PL/BE/CZ/CH;
+# in regime hours the RES block + run-of-river + the deepest must-run block
+# price at DEEP_SURPLUS_FLOOR_EUR (-20) so the clear can go negative
+# (BLOCKS=full). Measured within-regime: Set A dMAE -1.50 (base 43.83 ->
+# 42.33), Set B dMAE -0.27 (base 34.14 -> 33.87); phantom rate 0.0, outside-
+# regime |ΔMAE| <= 0.017, ZERO new caps, no zone harmed — clears every gate on
+# both sets. Default-ON; kill-switch EUPHEMIA_DISABLE_CV31 set ⇒ fully inert
+# (byte-identical to cv27 main; guarded GR single-zone + 39-zone EU). Explicit
+# EUPHEMIA_SOLAR_REGIME* env still wins (THETA/BLOCKS/ZONES A/Bs). None of the
+# six floor zones is in the SEE single-zone/5-zone products, so those stay
+# byte-identical; cv31 matters for the EU footprint (multi_zone_eu). Effect is
+# safe and directionally correct but modest (the coupled marginal block often
+# stays thermal, and the floor bottoms at -20 while settled reaches -100..-300)
+# — versions 28/29/30 are consumed by documented NO-SHIP labels (cv28/cv29
+# floor family, cv30 — docs/experiments/cv{28,29,30}-results.md). August 2026.
+const ENERGY_PRICES_CODE_VERSION = 31
 
 # Pool size: env-tunable (EUPHEMIA_PG_POOL) because the threaded book build
 # runs up to nzones concurrent queries — 5 connections cap the parallelism
