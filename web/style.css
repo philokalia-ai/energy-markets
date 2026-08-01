@@ -939,6 +939,11 @@ html, body { overflow-x: hidden; }
 .book-block:hover { fill-opacity: 1; }
 
 /* ============ Predicting RES & loads ============ */
+/* Every footprint zone in the open surface is clickable; the ML pilots keep a
+   slightly stronger hover accent than the linear-pack zones. */
+.map-poly.in-surface { cursor: pointer; }
+.map-poly.in-surface:hover { fill-opacity: 0.9; }
+.map-poly.in-surface:focus { outline: none; }
 .map-poly.pilot { cursor: pointer; }
 .map-poly.pilot:hover { fill-opacity: 0.85; }
 .map-poly.pilot:focus { outline: none; }

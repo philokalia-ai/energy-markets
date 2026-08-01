@@ -1356,8 +1356,10 @@
   // ---------- Predicting RES & loads (the open input model) ----------
   // Data plane: /api/v1/inputs/{manifest,reservoir,<zone>} (parquet under
   // v1/inputs/, bin/export_prediction_inputs.jl). The map centrepiece colours
-  // each pilot zone by tomorrow's predicted midday RES coverage; clicking a
-  // zone opens the driver small-multiples ("the knobs") underneath.
+  // every footprint zone by tomorrow's predicted midday RES coverage — the 5 ML
+  // pilots from LightGBM, the other 34 from the linear weather packs (the src_*
+  // provenance is badged on each zone panel); clicking a zone opens the driver
+  // small-multiples ("the knobs") underneath.
 
   var predictState = { manifest: null, reservoir: null, geo: null, zone: null, zoneData: {} };
 
@@ -1400,7 +1402,7 @@
     var pilots = man.pilot_zones || Object.keys(cov);
 
     var svg = svgEl("svg", { viewBox: "0 0 " + MAP_VBW + " " + MAP_VBH, role: "img",
-      "aria-label": "Map of predicted midday RES coverage by pilot bidding zone" });
+      "aria-label": "Map of predicted midday RES coverage across the footprint" });
     var css = getComputedStyle(document.documentElement);
     var pageC = css.getPropertyValue("--page").trim();
     var mutedC = css.getPropertyValue("--text-muted").trim();
@@ -1411,24 +1413,30 @@
     predictState.geo.features.forEach(function (f) {
       var zn = f.properties.zone;
       var rec = cov[zn];
+      // Every footprint zone is now in the open surface (ML pilot or linear pack);
+      // a zone with a manifest map record is coloured + clickable regardless of
+      // which model produced it. `pilot` only picks a stroke accent for the ML five.
+      var inSurface = !!rec;
       var isPilot = pilots.indexOf(zn) !== -1;
       var has = rec && rec.coverage !== null && rec.coverage !== undefined;
       var t = has ? (rec.coverage - COVER_DOMAIN[0]) / (COVER_DOMAIN[1] - COVER_DOMAIN[0]) : 0;
-      var fill = has ? rampColor(RAMP_COVER, t) : (isPilot ? "rgba(128,128,128,0.18)" : "rgba(128,128,128,0.07)");
+      var fill = has ? rampColor(RAMP_COVER, t) : (inSurface ? "rgba(128,128,128,0.18)" : "rgba(128,128,128,0.07)");
       var attrs = {
-        d: geoPath(f.geometry), class: "map-poly" + (isPilot ? " pilot" : ""),
+        d: geoPath(f.geometry), class: "map-poly" + (isPilot ? " pilot" : "") + (inSurface ? " in-surface" : ""),
         fill: fill, stroke: (has && rec.collapse_risk) ? "#0F5A34" : pageC,
         "stroke-width": (has && rec.collapse_risk) ? 2.4 : 1.1, "stroke-linejoin": "round",
-        "aria-label": zn + (has ? ": predicted RES coverage " + fmt(rec.coverage * 100, 0) + "%" :
-          (isPilot ? ": no prediction yet" : ": not in the open model")),
+        "aria-label": zn + (has ? ": predicted RES coverage " + fmt(rec.coverage * 100, 0) + "%" +
+          (rec.model ? " (" + (rec.model === "ml" ? "ML" : "pack") + ")" : "") :
+          (inSurface ? ": no prediction yet" : ": not in the open model")),
       };
-      if (isPilot) { attrs.tabindex = "0"; attrs.role = "button"; }
+      if (inSurface) { attrs.tabindex = "0"; attrs.role = "button"; }
       var path = svgEl("path", attrs);
-      if (isPilot) {
+      if (inSurface) {
         var lx = mapX(f.properties.lx), ly = mapY(f.properties.ly);
         function showTip() {
           tooltip.textContent = "";
-          tooltip.appendChild(el("div", "tt-head", zn + (rec ? " · " + rec.date : "")));
+          tooltip.appendChild(el("div", "tt-head", zn + (rec ? " · " + rec.date : "") +
+            (rec && rec.model ? "  ·  " + (rec.model === "ml" ? "ML" : "pack") : "")));
           if (has) {
             [["RES coverage", fmt(rec.coverage * 100, 0) + "%"],
              ["pred. RES", fmt(rec.midday_res_mw, 0) + " MW"],
@@ -1479,7 +1487,7 @@
         " (" + fmt(top.coverage * 100, 0) + "% of load from wind+solar). ";
       s += atRisk.length ?
         "Collapse-risk zones (RES approaching load at midday): " + atRisk.join(", ") + "." :
-        "No pilot zone reaches the collapse threshold at midday.";
+        "No zone reaches the collapse threshold at midday.";
       $("pmap-comment").textContent = s;
     } else {
       $("pmap-comment").textContent = "Predictions fill as the daily weather runs accumulate.";
