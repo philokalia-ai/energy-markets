@@ -31,11 +31,15 @@ jobs:
         working-directory: workers/api
         run: |
           npm ci
-          npx wrangler deploy
+          # Explicit --config: run 30702412717 deployed the ROOT wrangler.jsonc
+          # ("energy-markets", 0.31 KiB) from this directory despite the cwd —
+          # wrangler config discovery walked up past workers/api/wrangler.toml.
+          npx wrangler deploy --config wrangler.toml
+          npx wrangler deployments list --config wrangler.toml | head -8
       - name: Deploy SPA
         if: ${{ inputs.target == 'both' || inputs.target == 'spa' }}
         run: |
-          npx wrangler deploy
+          npx wrangler deploy --config wrangler.jsonc
       - name: Verify live routes
         run: |
           sleep 5
