@@ -32,9 +32,12 @@ export AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-auto}"
 [ -d "$STAGING/v1" ] || { echo "ERROR: staging dir $STAGING/v1 not found — run bin/export_web_parquet.jl first" >&2; exit 1; }
 command -v aws >/dev/null || { echo "ERROR: aws CLI required" >&2; exit 1; }
 
-# Parquet objects first (sync prunes deleted zones), manifest last.
+# Parquet objects first (sync prunes deleted zones), manifests last. The
+# `*manifest.json` exclude covers BOTH the top-level manifest and the
+# Predictions-page one at v1/inputs/manifest.json, so each is uploaded after its
+# own parquet objects (a reader never sees a manifest newer than its data).
 aws s3 sync --endpoint-url "$ENDPOINT" \
-    --exclude "manifest.json" \
+    --exclude "*manifest.json" \
     --content-type "application/vnd.apache.parquet" \
     --delete \
     "$STAGING/v1" "s3://$BUCKET/v1"
@@ -42,5 +45,13 @@ aws s3 sync --endpoint-url "$ENDPOINT" \
 aws s3 cp --endpoint-url "$ENDPOINT" \
     --content-type "application/json" \
     "$STAGING/v1/manifest.json" "s3://$BUCKET/v1/manifest.json"
+
+# The Predictions data plane manifest (only present when the — non-fatal —
+# prediction-inputs export ran this cycle), uploaded last for the same reason.
+if [ -f "$STAGING/v1/inputs/manifest.json" ]; then
+    aws s3 cp --endpoint-url "$ENDPOINT" \
+        --content-type "application/json" \
+        "$STAGING/v1/inputs/manifest.json" "s3://$BUCKET/v1/inputs/manifest.json"
+fi
 
 echo "pushed $STAGING/v1 -> s3://$BUCKET/v1 ($ENDPOINT)"

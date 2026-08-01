@@ -141,7 +141,7 @@
       var i = kv.indexOf("=");
       if (i > 0) params[decodeURIComponent(kv.slice(0, i))] = decodeURIComponent(kv.slice(i + 1));
     });
-    if (["board", "explorer", "horizon", "map", "cases", "book"].indexOf(params.view) !== -1) state.view = params.view;
+    if (["board", "explorer", "horizon", "map", "predict", "cases", "book"].indexOf(params.view) !== -1) state.view = params.view;
     if (params.zone) state.zone = params.zone;
     if (params.day && /^\d{4}-\d{2}-\d{2}$/.test(params.day)) state.day = params.day;
     if (params.rev && /^\d{4}-\d{2}-\d{2}$/.test(params.rev)) state.revDay = params.rev;
@@ -209,6 +209,7 @@
   var VIEW_CRUMBS = {
     horizon: "recent days",
     map: "map",
+    predict: "predicting RES & loads",
     explorer: "zone explorer",
     board: "scoreboard",
     book: "order book",
@@ -221,11 +222,13 @@
     $("view-board").hidden = v !== "board";
     $("view-horizon").hidden = v !== "horizon";
     $("view-map").hidden = v !== "map";
+    $("view-predict").hidden = v !== "predict";
     $("view-book").hidden = v !== "book";
     $("view-cases").hidden = v !== "cases";
     var crumb = $("crumb-view");
     if (crumb) crumb.textContent = VIEW_CRUMBS[v] ? "/ " + VIEW_CRUMBS[v] : "";
     if (v === "map") loadMap().then(renderMap);
+    if (v === "predict") loadPredict().then(renderPredict);
     if (v === "book") renderBook();
     document.querySelectorAll(".tab").forEach(function (t) {
       t.setAttribute("aria-selected", String(t.dataset.view === v));
@@ -1350,6 +1353,313 @@
     $("map-comment").textContent = buildMapComment(day);
   }
 
+  // ---------- Predicting RES & loads (the open input model) ----------
+  // Data plane: /api/v1/inputs/{manifest,reservoir,<zone>} (parquet under
+  // v1/inputs/, bin/export_prediction_inputs.jl). The map centrepiece colours
+  // each pilot zone by tomorrow's predicted midday RES coverage; clicking a
+  // zone opens the driver small-multiples ("the knobs") underneath.
+
+  var predictState = { manifest: null, reservoir: null, geo: null, zone: null, zoneData: {} };
+
+  // Coverage ramp: neutral (load-covered) -> deep green (RES ≥ load, collapse risk).
+  var RAMP_COVER = ["#E7DFC9", "#B9CDA0", "#7FB077", "#3F9B6D", "#1F7A4A", "#0F5A34"];
+  var COVER_DOMAIN = [0, 1.2];
+
+  function loadPredict() {
+    var pM = predictState.manifest ? Promise.resolve() :
+      loadWithFallback("inputs/manifest.json").then(function (r) {
+        predictState.manifest = r.json;
+        if (r.json && r.json.fixture) setFixtureBanner(true);
+      }, function () { predictState.manifest = { map: [], pilot_zones: [] }; });
+    var pR = predictState.reservoir ? Promise.resolve() :
+      loadWithFallback("inputs/reservoir.json").then(function (r) {
+        predictState.reservoir = r.json;
+      }, function () { predictState.reservoir = { zones: {} }; });
+    var pG = predictState.geo ? Promise.resolve() :
+      (mapState.geo ? (predictState.geo = mapState.geo, Promise.resolve()) :
+        fetchJSON("./geo/zones.geojson").then(function (g) { predictState.geo = g; mapState.geo = mapState.geo || g; }));
+    return Promise.all([pM, pR, pG]);
+  }
+
+  function coverMap() {
+    var m = {};
+    ((predictState.manifest && predictState.manifest.map) || []).forEach(function (r) { m[r.zone] = r; });
+    return m;
+  }
+
+  function renderPredict() {
+    var man = predictState.manifest;
+    var wrap = $("pmap-wrap");
+    wrap.textContent = "";
+    $("pmap-legend-bar").style.backgroundImage = rampCss(RAMP_COVER);
+    if (!man || !predictState.geo) {
+      $("pmap-comment").textContent = "Prediction inputs arrive with the next forecast run.";
+      return;
+    }
+    var cov = coverMap();
+    var pilots = man.pilot_zones || Object.keys(cov);
+
+    var svg = svgEl("svg", { viewBox: "0 0 " + MAP_VBW + " " + MAP_VBH, role: "img",
+      "aria-label": "Map of predicted midday RES coverage by pilot bidding zone" });
+    var css = getComputedStyle(document.documentElement);
+    var pageC = css.getPropertyValue("--page").trim();
+    var mutedC = css.getPropertyValue("--text-muted").trim();
+    var tooltip = el("div", "tooltip"); tooltip.style.display = "none";
+    wrap.appendChild(svg); wrap.appendChild(tooltip);
+
+    var labels = [];
+    predictState.geo.features.forEach(function (f) {
+      var zn = f.properties.zone;
+      var rec = cov[zn];
+      var isPilot = pilots.indexOf(zn) !== -1;
+      var has = rec && rec.coverage !== null && rec.coverage !== undefined;
+      var t = has ? (rec.coverage - COVER_DOMAIN[0]) / (COVER_DOMAIN[1] - COVER_DOMAIN[0]) : 0;
+      var fill = has ? rampColor(RAMP_COVER, t) : (isPilot ? "rgba(128,128,128,0.18)" : "rgba(128,128,128,0.07)");
+      var attrs = {
+        d: geoPath(f.geometry), class: "map-poly" + (isPilot ? " pilot" : ""),
+        fill: fill, stroke: (has && rec.collapse_risk) ? "#0F5A34" : pageC,
+        "stroke-width": (has && rec.collapse_risk) ? 2.4 : 1.1, "stroke-linejoin": "round",
+        "aria-label": zn + (has ? ": predicted RES coverage " + fmt(rec.coverage * 100, 0) + "%" :
+          (isPilot ? ": no prediction yet" : ": not in the open model")),
+      };
+      if (isPilot) { attrs.tabindex = "0"; attrs.role = "button"; }
+      var path = svgEl("path", attrs);
+      if (isPilot) {
+        var lx = mapX(f.properties.lx), ly = mapY(f.properties.ly);
+        function showTip() {
+          tooltip.textContent = "";
+          tooltip.appendChild(el("div", "tt-head", zn + (rec ? " · " + rec.date : "")));
+          if (has) {
+            [["RES coverage", fmt(rec.coverage * 100, 0) + "%"],
+             ["pred. RES", fmt(rec.midday_res_mw, 0) + " MW"],
+             ["pred. load", fmt(rec.midday_load_mw, 0) + " MW"],
+             ["collapse risk", rec.collapse_risk ? "yes" : "no"]].forEach(function (rw) {
+              var row = el("div", "tt-row");
+              row.appendChild(el("span", "tt-val", rw[1]));
+              row.appendChild(el("span", "tt-name", rw[0]));
+              tooltip.appendChild(row);
+            });
+          } else {
+            tooltip.appendChild(el("div", "tt-row", "prediction pending"));
+          }
+          var rect = svg.getBoundingClientRect(); var scale = rect.width / MAP_VBW;
+          tooltip.style.display = "block";
+          var left = (lx + 12) * scale;
+          if (left + tooltip.offsetWidth > rect.width) left = lx * scale - tooltip.offsetWidth - 12;
+          tooltip.style.left = Math.max(0, left) + "px";
+          tooltip.style.top = Math.max(0, ly * scale - tooltip.offsetHeight - 10) + "px";
+        }
+        path.addEventListener("pointerenter", showTip);
+        path.addEventListener("focus", showTip);
+        path.addEventListener("pointerleave", function () { tooltip.style.display = "none"; });
+        path.addEventListener("blur", function () { tooltip.style.display = "none"; });
+        path.addEventListener("click", function () { selectPredictZone(zn); });
+        var short = zn.replace("IT-", "").replace("DE_LU", "DE/LU");
+        labels.push({ x: lx, y: ly, text: short, has: has, t: t });
+      }
+      svg.appendChild(path);
+    });
+    labels.forEach(function (L) {
+      var dark = L.has && L.t > 0.5;
+      var txt = svgEl("text", { x: L.x, y: L.y + 4, "text-anchor": "middle",
+        "font-size": 12, "font-weight": 700, fill: dark ? "#FBF8F1" : "#22303F",
+        "pointer-events": "none", "paint-order": "stroke",
+        stroke: "rgba(251,248,241,0.5)", "stroke-width": 2.4 });
+      txt.textContent = L.text;
+      svg.appendChild(txt);
+    });
+
+    // Comment: the highest-coverage / collapse-risk pilot today.
+    var recs = ((man.map) || []).filter(function (r) { return r.coverage !== null && r.coverage !== undefined; });
+    if (recs.length) {
+      recs.sort(function (a, b) { return b.coverage - a.coverage; });
+      var top = recs[0];
+      var atRisk = recs.filter(function (r) { return r.collapse_risk; }).map(function (r) { return r.zone; });
+      var s = "For " + top.date + ", the model sees the deepest midday RES coverage in " + top.zone +
+        " (" + fmt(top.coverage * 100, 0) + "% of load from wind+solar). ";
+      s += atRisk.length ?
+        "Collapse-risk zones (RES approaching load at midday): " + atRisk.join(", ") + "." :
+        "No pilot zone reaches the collapse threshold at midday.";
+      $("pmap-comment").textContent = s;
+    } else {
+      $("pmap-comment").textContent = "Predictions fill as the daily weather runs accumulate.";
+    }
+
+    if (predictState.zone) renderKnobs();
+  }
+
+  function loadPredictZone(zone) {
+    if (predictState.zoneData[zone]) return Promise.resolve(predictState.zoneData[zone]);
+    return loadWithFallback("inputs/" + encodeURIComponent(zone) + ".json").then(function (r) {
+      predictState.zoneData[zone] = r.json;
+      if (r.json && r.json.fixture) setFixtureBanner(true);
+      return r.json;
+    });
+  }
+
+  function selectPredictZone(zone) {
+    predictState.zone = zone;
+    loadPredictZone(zone).then(renderKnobs, function () {
+      $("predict-knobs").hidden = false;
+      $("pk-title").textContent = zone + " — no driver panel yet";
+      $("pk-sub").textContent = "This zone's prediction inputs fill with the next forecast run.";
+      $("pk-outputs").textContent = ""; $("pk-drivers").textContent = "";
+      $("pk-reservoir").hidden = true;
+    });
+  }
+
+  // element-wise sum of two nullable numeric arrays (RES = solar + wind).
+  function sumSeries(a, b) {
+    var out = [];
+    for (var i = 0; i < a.length; i++) {
+      var x = a[i], y = b[i];
+      out.push((x === null || x === undefined) && (y === null || y === undefined) ? null :
+        (x || 0) + (y || 0));
+    }
+    return out;
+  }
+
+  function srcBadge(label, which) {
+    var b = el("span", "src-badge src-" + which, label + ": " + (which === "ml" ? "LightGBM" : "linear pack"));
+    return b;
+  }
+
+  function renderKnobs() {
+    var zd = predictState.zoneData[predictState.zone];
+    if (!zd) return;
+    var box = $("predict-knobs");
+    box.hidden = false;
+    var C = chartColors();
+    var s = zd.series;
+    var hours = zd.hours;
+    var lastDate = hours.length ? hours[hours.length - 1].slice(0, 10) : "";
+    $("pk-title").textContent = predictState.zone + " — drivers & prediction";
+    var sub = $("pk-sub");
+    sub.textContent = hours.length ?
+      ("Every delivery hour from " + hours[0].slice(0, 10) + " to " + lastDate +
+        " · ex-ante D-1 weather vintage · winners: ") : "";
+    sub.appendChild(srcBadge("load", zd.src.load));
+    sub.appendChild(document.createTextNode(" "));
+    sub.appendChild(srcBadge("solar", zd.src.solar));
+    sub.appendChild(document.createTextNode(" "));
+    sub.appendChild(srcBadge("wind", zd.src.wind));
+
+    // --- Predictions vs reference vs actual ---
+    var outs = $("pk-outputs"); outs.textContent = "";
+    var resRef = sumSeries(s.ref_solar_mw, s.ref_wind_mw);
+    var resAct = sumSeries(s.act_solar_mw, s.act_wind_mw);
+    driverMiniChart(outs, {
+      title: "Renewables (wind + solar)", unit: "MW", hours: hours, big: true,
+      series: [
+        { label: "predicted", color: C.sim, values: s.pred_res_mw },
+        { label: "ENTSO-E reference", color: "#B08A3E", values: resRef, dashed: true },
+        { label: "actual", color: C.act, values: resAct },
+      ],
+    });
+    driverMiniChart(outs, {
+      title: "Load", unit: "MW", hours: hours, big: true,
+      series: [
+        { label: "predicted", color: C.sim, values: s.pred_load_mw },
+        { label: "ENTSO-E reference", color: "#B08A3E", values: s.ref_load_mw, dashed: true },
+        { label: "actual", color: C.act, values: s.act_load_mw },
+      ],
+    });
+
+    // --- The knobs (drivers) ---
+    var drv = $("pk-drivers"); drv.textContent = "";
+    var accent = "#2C6BA8";
+    [["temp_c", "Temperature", "°C"],
+     ["ghi_wm2", "Solar radiation (GHI)", "W/m²"],
+     ["cloud_pct", "Cloud cover", "%"],
+     ["pressure_hpa", "Surface pressure", "hPa"],
+     ["wind100_ms", "Wind speed (100 m)", "m/s"]].forEach(function (d) {
+      driverMiniChart(drv, {
+        title: d[1], unit: d[2], hours: hours,
+        series: [{ label: d[1], color: accent, values: s[d[0]] }],
+      });
+    });
+
+    // --- Reservoir (hydro zones) ---
+    var resv = predictState.reservoir && predictState.reservoir.zones &&
+      predictState.reservoir.zones[predictState.zone];
+    var rbox = $("pk-reservoir");
+    if (resv && resv.length) {
+      rbox.hidden = false;
+      var rc = $("pk-reservoir-charts"); rc.textContent = "";
+      var wks = resv.map(function (w) { return w.week_start; });
+      driverMiniChart(rc, { title: "Reservoir fill ratio", unit: "share of 52-wk max", hours: wks,
+        series: [{ label: "fill ratio", color: "#2C6BA8", values: resv.map(function (w) { return w.fill_ratio; }) }] });
+      driverMiniChart(rc, { title: "Reservoir dryness", unit: "vs prior-year median", hours: wks,
+        series: [{ label: "dryness", color: "#C4643C", values: resv.map(function (w) { return w.dryness; }) }] });
+    } else {
+      rbox.hidden = true;
+    }
+  }
+
+  // Compact multi-series line chart with its own y-scale + unit. `hours` is the
+  // shared x axis (ISO stamps or dates); series = [{label,color,values,dashed}].
+  function driverMiniChart(container, cfg) {
+    var card = el("div", "mini-card" + (cfg.big ? " mini-big" : ""));
+    var head = el("div", "mini-head");
+    head.appendChild(el("span", "mini-title", cfg.title));
+    head.appendChild(el("span", "mini-unit", cfg.unit));
+    card.appendChild(head);
+
+    var vals = [];
+    cfg.series.forEach(function (se) {
+      se.values.forEach(function (v) { if (v !== null && v !== undefined && isFinite(v)) vals.push(v); });
+    });
+    if (!vals.length) {
+      card.appendChild(el("p", "mini-empty", "no data yet"));
+      container.appendChild(card);
+      return;
+    }
+    var VBW = 460, VBH = cfg.big ? 190 : 140;
+    var m = { t: 8, r: 8, b: 16, l: 40 };
+    var pw = VBW - m.l - m.r, ph = VBH - m.t - m.b;
+    var n = cfg.hours.length;
+    var vMin = Math.min.apply(null, vals), vMax = Math.max.apply(null, vals);
+    if (vMin > 0 && vMin / (vMax || 1) > 0.4) { /* keep a non-zero baseline for tight ranges */ }
+    else if (vMin > 0) vMin = 0;
+    var pad = (vMax - vMin) * 0.08 || 1; vMax += pad; if (vMin < 0) vMin -= pad;
+    var C = chartColors();
+    function X(i) { return m.l + (n <= 1 ? pw / 2 : (i / (n - 1)) * pw); }
+    function Y(v) { return m.t + ph - ((v - vMin) / (vMax - vMin || 1)) * ph; }
+    var svg = svgEl("svg", { viewBox: "0 0 " + VBW + " " + VBH, class: "mini-svg",
+      role: "img", "aria-label": cfg.title + " over the window" });
+    // zero / min / max gridlines + ticks
+    [vMin, (vMin + vMax) / 2, vMax].forEach(function (gv) {
+      var yy = Y(gv);
+      svg.appendChild(svgEl("line", { x1: m.l, x2: m.l + pw, y1: yy, y2: yy,
+        stroke: C.grid, "stroke-width": 1, "shape-rendering": "crispEdges" }));
+      var tk = svgEl("text", { x: m.l - 6, y: yy + 3, "text-anchor": "end",
+        fill: C.muted, "font-size": 10, "font-variant-numeric": "tabular-nums" });
+      tk.textContent = fmt(gv, Math.abs(vMax) < 3 ? 2 : 0);
+      svg.appendChild(tk);
+    });
+    cfg.series.forEach(function (se) {
+      var d = pathString(se.values, X, Y);
+      if (!d) return;
+      var pa = { d: d, fill: "none", stroke: se.color, "stroke-width": 1.8,
+        "stroke-linejoin": "round", "stroke-linecap": "round" };
+      if (se.dashed) pa["stroke-dasharray"] = "4 3";
+      svg.appendChild(svgEl("path", pa));
+    });
+    card.appendChild(svg);
+    if (cfg.series.length > 1) {
+      var lg = el("div", "mini-legend");
+      cfg.series.forEach(function (se) {
+        var sp = el("span", "mini-key");
+        var sw = el("span", "mini-swatch"); sw.style.background = se.color;
+        if (se.dashed) sw.classList.add("dashed");
+        sp.appendChild(sw); sp.appendChild(document.createTextNode(se.label));
+        lg.appendChild(sp);
+      });
+      card.appendChild(lg);
+    }
+    container.appendChild(card);
+  }
+
   // ---------- day commentary (explorer) ----------
 
   function renderDayComment(day) {
@@ -1956,6 +2266,12 @@
       state.window = ev.target.value;
       renderScoreboard();
       writeHash();
+    });
+    var methodLink = $("predict-method-link");
+    if (methodLink) methodLink.addEventListener("click", function (ev) {
+      ev.preventDefault();
+      var t = $("predict-method");
+      if (t) t.scrollIntoView({ behavior: "smooth", block: "start" });
     });
     window.addEventListener("hashchange", function () {
       if (!suppressHash) applyHash();

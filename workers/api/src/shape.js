@@ -158,6 +158,66 @@ export function shapeBook(rows, zone, date) {
   };
 }
 
+/**
+ * inputs/<Z>.parquet rows -> the per-zone driver + prediction panel the
+ * Predictions view renders (bin/export_prediction_inputs.jl is the contract).
+ * Emits columnar series (hours ascending) so the SPA can draw small-multiple
+ * driver charts aligned with the prediction and the settled actual:
+ *
+ *   { zone, market_day_tz, src:{solar,wind,load},
+ *     hours: ["…Z", …],
+ *     series: { vintage_lag, temp_c, ghi_wm2, cloud_pct, pressure_hpa,
+ *               wind100_ms, pred_solar_mw, pred_wind_mw, pred_res_mw,
+ *               pred_load_mw, ref_solar_mw, ref_wind_mw, ref_load_mw,
+ *               act_solar_mw, act_wind_mw, act_load_mw } }
+ */
+const INPUT_SERIES_COLS = [
+  "vintage_lag", "temp_c", "ghi_wm2", "cloud_pct", "pressure_hpa", "wind100_ms",
+  "pred_solar_mw", "pred_wind_mw", "pred_res_mw", "pred_load_mw",
+  "ref_solar_mw", "ref_wind_mw", "ref_load_mw",
+  "act_solar_mw", "act_wind_mw", "act_load_mw",
+];
+export function shapeInputsZone(rows, zone) {
+  const sorted = rows
+    .filter(function (r) { return r.zone === zone; })
+    .sort(function (a, b) { return Number(a.date_time_utc) - Number(b.date_time_utc); });
+  const hours = [];
+  const series = {};
+  INPUT_SERIES_COLS.forEach(function (c) { series[c] = []; });
+  for (const r of sorted) {
+    hours.push(iso(r.date_time_utc));
+    INPUT_SERIES_COLS.forEach(function (c) { series[c].push(num(r[c])); });
+  }
+  const src = sorted.length
+    ? { solar: sorted[0].src_solar, wind: sorted[0].src_wind, load: sorted[0].src_load }
+    : { solar: null, wind: null, load: null };
+  return { zone: zone, market_day_tz: MARKET_DAY_TZ, src: src, hours: hours, series: series };
+}
+
+/**
+ * inputs/reservoir.parquet rows -> { zones: { <Z>: [ {week_start, iso_year,
+ * iso_week, stored_energy_mwh, fill_ratio, dryness}, … ] } }, weeks ascending.
+ */
+export function shapeReservoir(rows) {
+  const zones = {};
+  for (const r of rows) {
+    const z = r.zone;
+    if (!zones[z]) zones[z] = [];
+    zones[z].push({
+      week_start: dateStr(r.week_start),
+      iso_year: num(r.iso_year),
+      iso_week: num(r.iso_week),
+      stored_energy_mwh: num(r.stored_energy_mwh),
+      fill_ratio: num(r.fill_ratio),
+      dryness: num(r.dryness),
+    });
+  }
+  Object.keys(zones).forEach(function (z) {
+    zones[z].sort(function (a, b) { return a.week_start < b.week_start ? -1 : a.week_start > b.week_start ? 1 : 0; });
+  });
+  return { market_day_tz: MARKET_DAY_TZ, zones: zones };
+}
+
 /** map.parquet rows + manifest -> map.json shape (days sorted by date asc). */
 export function shapeMap(rows, manifest) {
   const byDate = new Map();

@@ -502,7 +502,10 @@ the exact JSON shapes the SPA consumes, ETag-cached at the edge:
 GET https://api.philokalia.ai/api/v1/zones/GR
 GET https://api.philokalia.ai/api/v1/scoreboard
 GET https://api.philokalia.ai/api/v1/map
-GET https://api.philokalia.ai/api/v1/manifest   # {updated_at, …}
+GET https://api.philokalia.ai/api/v1/manifest        # {updated_at, …}
+GET https://api.philokalia.ai/api/v1/inputs/<ZONE>   # RES/load driver + prediction panel
+GET https://api.philokalia.ai/api/v1/inputs/reservoir
+GET https://api.philokalia.ai/api/v1/inputs/manifest
 ```
 
 `web/app.js` tries the API first and falls back to the committed
@@ -516,6 +519,9 @@ v1/zones/<ZONE>.parquet   # hourly sim/actual + all vintages, ~120 recent days
 v1/scoreboard.parquet     # zone × lead × window × track aggregates
 v1/map.parquet            # per-day zone aggregates (freshest lead)
 v1/manifest.json          # {updated_at, code_version, zones, row_counts}
+v1/inputs/<ZONE>.parquet  # RES/load DRIVERS + prediction + reference + actual, per zone-hour
+v1/inputs/reservoir.parquet  # weekly reservoir fill ratio / dryness (hydro zones)
+v1/inputs/manifest.json   # the open input-model plane (docs/predictions.md)
 ```
 
 Fields under `v1/` are append-only: new columns may be added, existing
@@ -541,7 +547,8 @@ src/        The Euphemia library: merit-order book construction (MeritOrderBook.
 bin/        Runners: reproduce.jl (public reproduction), build_duckdb_extract.jl /
             build_duckdb_from_parquet.jl (data artifacts), backfill runners
 docs/       Model spec, calibration atlas + iteration history, reproducibility,
-            negative-results record (complex-orders-investigation.md, experiments/) —
+            the open RES/load input model (predictions.md), negative-results
+            record (complex-orders-investigation.md, experiments/) —
             see the docs index: docs/README.md
 test/       Core test suite (julia --project=. test/runtests.jl), plus manual/
             DB-dependent tests and scripts/ benchmarks
