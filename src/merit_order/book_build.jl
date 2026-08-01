@@ -16,6 +16,59 @@
 
 
 # =============================================================================
+# Strategy taxonomy — WHY each block is where it is on the ladder
+# =============================================================================
+# Every pushed order carries, ALONGSIDE its owner tag, a STRATEGY label naming
+# the bidding decision that placed it (must-run, SRMC base, peak tranche, water
+# value, import, backstop, boundary, demand, …). This is the honest source-side
+# "decision trace": the label is written by the code that makes the decision,
+# never guessed downstream. The strategy travels in a PARALLEL vector to the
+# `tagged` tuples (see `create_merit_order_book`) so the existing
+# `(order, owner_tag)` contract the strategist hook + firm_of map depend on is
+# untouched; it is carried to `BOOK_SINK` for the parquet `strategy` column.
+#
+# STRUCTS-AS-TABLES (styleguide): the taxonomy is ONE const table of
+# name → human description. The SPA keeps a mirror of these exact names in its
+# STRATEGY_LABELS map (web/app.js) — keep the two in sync; the names are the
+# contract between them. Parametric peak tranches are labelled `peak_tranche_<k>`
+# (k = tranche index 2,3,…); `strategy_description` strips the numeric suffix so
+# the single `peak_tranche` row covers them all.
+const STRATEGY_DESCRIPTIONS = Dict{String,String}(
+    "must_run_deep"          => "must-run deepest block: technical minimum offered near €0 (5% of SRMC) — shutting down and restarting costs more than running below cost",
+    "must_run_rest"          => "must-run remainder: the rest of minimum load bid below SRMC (start-up cost amortised over the committed hours)",
+    "srmc_base"              => "base tranche at short-run marginal cost: fuel/efficiency + CO₂ + O&M, no scarcity markup",
+    "peak_tranche"           => "peak tranche: upper capacity priced above cost for scarcity margin + peak-hour strategic bidding",
+    "water_value_gas_anchored" => "hydro water value: reservoir opportunity cost anchored to gas SRMC (premium at peak, boosted when dry)",
+    "water_value_reservoir"  => "hydro water value: shadow price of stored water — near-free when reservoirs are full, rising to the thermal alternative as they empty",
+    "water_value_anchored"   => "hydro water value: export opportunity cost = the coupled reference price (two-pass anchor)",
+    "res_forecast"           => "renewable forecast offered as price-taker (support schemes make output price-insensitive; floored negative in a solar-surplus regime)",
+    "import_fixed"           => "net scheduled imports injected as price-taking supply",
+    "ref_priced_export"      => "net export re-priced at the coupled reference so the exporter curtails under domestic stress",
+    "export_demand"          => "net scheduled exports taken as firm demand at the price cap",
+    "import_backstop"        => "ex-ante elastic import headroom beyond the endogenous ATC, priced above every domestic tranche (binds only near the cap)",
+    "boundary_import"        => "out-of-footprint neighbour import supply, laddered on the neighbour's own fundamental SRMC over the border's demonstrated capability",
+    "boundary_export"        => "out-of-footprint neighbour export demand over the border's demonstrated capability (firm base slice + elastic tail)",
+    "demand_firm"            => "inelastic demand at the price cap (must-serve load)",
+    "demand_elastic"         => "price-sensitive demand tail (curtails above the elastic bid price)",
+    "extra"                  => "scenario order added via the extra_orders hook",
+    "strategist"             => "order produced by the strategist hook (replaces the source ladder)",
+)
+
+"""
+    strategy_description(s::AbstractString) -> String
+
+Human-readable description for a strategy label, resolving parametric
+`peak_tranche_<k>` labels to the single `peak_tranche` row. Empty string for an
+unknown label (never throws — this is a display helper).
+"""
+function strategy_description(s::AbstractString)
+    haskey(STRATEGY_DESCRIPTIONS, s) && return STRATEGY_DESCRIPTIONS[s]
+    base = replace(s, r"_\d+$" => "")
+    return get(STRATEGY_DESCRIPTIONS, base, "")
+end
+
+
+# =============================================================================
 # Stage helpers for create_merit_order_book
 # =============================================================================
 # Each helper is one stage of the book build, extracted verbatim from the
@@ -746,6 +799,15 @@ function create_merit_order_book(
         # replacements. Tags never affect the SimpleOrder values, so with no
         # hooks the merged book is byte-identical to before.
         tagged = Tuple{SimpleOrder,String}[]
+        # PARALLEL to `tagged`: strategies[i] is the STRATEGY label of tagged[i]
+        # (the WHY of that block — see STRATEGY_DESCRIPTIONS). Kept in lockstep by
+        # `push_tagged!`; the `(order, owner_tag)` tuples the strategist hook +
+        # firm_of map consume are unchanged. Carried to BOOK_SINK for the parquet
+        # `strategy` column; NEVER passed into the strategist ctx.
+        strategies = String[]
+        push_tagged!(o::SimpleOrder, owner::String, strat::String) = begin
+            push!(tagged, (o, owner)); push!(strategies, strat)
+        end
         supply_orders_count = 0
         demand_orders_count = 0
         total_demand_quantity = 0.0
@@ -812,9 +874,10 @@ function create_merit_order_book(
             # price-taker; support schemes make it insensitive to price)
             res_qty = get(renewable_by_time, ts, 0.0)
             if res_qty > 0.1
-                push!(tagged, (SimpleOrder(:supply,
+                push_tagged!(SimpleOrder(:supply,
                     sr_active(hr) ? DEEP_SURPLUS_FLOOR_EUR : 1.0, res_qty,
-                    Symbol(bidding_zone), date_time, resolution_minutes), "RES"))
+                    Symbol(bidding_zone), date_time, resolution_minutes),
+                    "RES", "res_forecast")
                 supply_orders_count += 1
                 total_supply_capacity += res_qty
             end
@@ -834,8 +897,9 @@ function create_merit_order_book(
                 import_price = (anchor_active && opportunity_anchor == :hydro &&
                                 haskey(anchor_prices, ts)) ?
                                clamp(anchor_share * anchor_prices[ts], 1.0, gas_srmc) : 1.0
-                push!(tagged, (SimpleOrder(:supply, import_price, ni,
-                    Symbol(bidding_zone), date_time, resolution_minutes), "IMPORT"))
+                push_tagged!(SimpleOrder(:supply, import_price, ni,
+                    Symbol(bidding_zone), date_time, resolution_minutes),
+                    "IMPORT", "import_fixed")
                 supply_orders_count += 1
                 total_supply_capacity += ni
             elseif ni < -0.1
@@ -846,11 +910,12 @@ function create_merit_order_book(
                 # domestic stress like a real one — the demand-side mirror of
                 # the dropped-border anchor_export_mw treatment. Everywhere
                 # else (and in pass 1) the export stays cap-priced firm demand.
-                export_price = (profile.ref_priced_exports && anchor_active &&
-                                haskey(anchor_prices, ts)) ?
-                               max(anchor_prices[ts], 1.0) : price_cap
-                push!(tagged, (SimpleOrder(:demand, export_price, -ni,
-                    Symbol(bidding_zone), date_time, resolution_minutes), "IMPORT"))
+                ref_priced = profile.ref_priced_exports && anchor_active &&
+                             haskey(anchor_prices, ts)
+                export_price = ref_priced ? max(anchor_prices[ts], 1.0) : price_cap
+                push_tagged!(SimpleOrder(:demand, export_price, -ni,
+                    Symbol(bidding_zone), date_time, resolution_minutes),
+                    "IMPORT", ref_priced ? "ref_priced_export" : "export_demand")
                 demand_orders_count += 1
                 total_demand_quantity += -ni
             end
@@ -860,8 +925,9 @@ function create_merit_order_book(
             # it binds only when the book would otherwise jump to the cap.
             backstop_qty = get(backstop_by_hour, hr, 0.0)
             if backstop_qty > 1.0
-                push!(tagged, (SimpleOrder(:supply, backstop_price, backstop_qty,
-                    Symbol(bidding_zone), date_time, resolution_minutes), "BACKSTOP"))
+                push_tagged!(SimpleOrder(:supply, backstop_price, backstop_qty,
+                    Symbol(bidding_zone), date_time, resolution_minutes),
+                    "BACKSTOP", "import_backstop")
                 supply_orders_count += 1
                 total_supply_capacity += backstop_qty
             end
@@ -880,8 +946,9 @@ function create_merit_order_book(
                haskey(anchor_prices, ts) && !isempty(anchor_export_mw)
                 ex_mw = get(anchor_export_mw, hr, 0.0)
                 if ex_mw > 0.1
-                    push!(tagged, (SimpleOrder(:demand, max(anchor_prices[ts], 1.0),
-                        ex_mw, Symbol(bidding_zone), date_time, resolution_minutes), "IMPORT"))
+                    push_tagged!(SimpleOrder(:demand, max(anchor_prices[ts], 1.0),
+                        ex_mw, Symbol(bidding_zone), date_time, resolution_minutes),
+                        "IMPORT", "ref_priced_export")
                     demand_orders_count += 1
                     total_demand_quantity += ex_mw
                 end
@@ -937,6 +1004,11 @@ function create_merit_order_book(
                     # a share slightly below 1 when reservoirs are full
                     # (willing to undercut the continent to export), rising
                     # with dryness. Clamped to [2, gas SRMC].
+                    # Strategy label mirrors the water-value branch taken below.
+                    wv_strategy = (anchor_active && opportunity_anchor == :hydro &&
+                                   haskey(anchor_prices, ts)) ? "water_value_anchored" :
+                                  hydro_model == :reservoir_opportunity ?
+                                      "water_value_reservoir" : "water_value_gas_anchored"
                     water_value = if anchor_active && opportunity_anchor == :hydro &&
                                      haskey(anchor_prices, ts)
                         clamp(anchor_prices[ts] *
@@ -980,8 +1052,9 @@ function create_merit_order_book(
                        g.fuel_type == Symbol("Hydro Run-of-river and pondage")
                         water_value = DEEP_SURPLUS_FLOOR_EUR
                     end
-                    push!(tagged, (SimpleOrder(:supply, water_value, offered_pmax(g),
-                        Symbol(bidding_zone), date_time, resolution_minutes), g.code))
+                    push_tagged!(SimpleOrder(:supply, water_value, offered_pmax(g),
+                        Symbol(bidding_zone), date_time, resolution_minutes),
+                        g.code, wv_strategy)
                     supply_orders_count += 1
                     total_supply_capacity += offered_pmax(g)
                 else
@@ -1036,13 +1109,15 @@ function create_merit_order_book(
                         deep_price = (!isempty(get(ENV, "EUPHEMIA_ENABLE_CV27_T3", "")) ||
                                       (sr_full && sr_active(hr))) ?
                             DEEP_SURPLUS_FLOOR_EUR : gmc * must_run_price_factor
-                        push!(tagged, (SimpleOrder(:supply,
+                        push_tagged!(SimpleOrder(:supply,
                             deep_price, deep_qty,
-                            Symbol(bidding_zone), date_time, resolution_minutes), g.code))
-                        push!(tagged, (SimpleOrder(:supply,
+                            Symbol(bidding_zone), date_time, resolution_minutes),
+                            g.code, "must_run_deep")
+                        push_tagged!(SimpleOrder(:supply,
                             min(max(gmc * 0.5, gmc - 40.0), nuc_ceil),
                             must_run_qty - deep_qty,
-                            Symbol(bidding_zone), date_time, resolution_minutes), g.code))
+                            Symbol(bidding_zone), date_time, resolution_minutes),
+                            g.code, "must_run_rest")
                         supply_orders_count += 2
                         total_supply_capacity += must_run_qty
                     end
@@ -1055,8 +1130,9 @@ function create_merit_order_book(
                         price = min(gmc * mult * (i == 1 ? 1.0 : scarcity), nuc_ceil)
                         qty = flexible_capacity * share
                         qty < 0.1 && continue
-                        push!(tagged, (SimpleOrder(:supply, price, qty,
-                            Symbol(bidding_zone), date_time, resolution_minutes), g.code))
+                        push_tagged!(SimpleOrder(:supply, price, qty,
+                            Symbol(bidding_zone), date_time, resolution_minutes),
+                            g.code, i == 1 ? "srmc_base" : "peak_tranche_$i")
                         supply_orders_count += 1
                         total_supply_capacity += qty
                     end
@@ -1071,14 +1147,16 @@ function create_merit_order_book(
             gd = gross_demand[ts]
 
             inelastic_qty = gd * (1.0 - demand_elastic_share)
-            push!(tagged, (SimpleOrder(:demand, price_cap, inelastic_qty,
-                Symbol(bidding_zone), date_time, resolution_minutes), "DEMAND"))
+            push_tagged!(SimpleOrder(:demand, price_cap, inelastic_qty,
+                Symbol(bidding_zone), date_time, resolution_minutes),
+                "DEMAND", "demand_firm")
             demand_orders_count += 1
 
             elastic_qty = gd * demand_elastic_share
             if elastic_qty > 0.1
-                push!(tagged, (SimpleOrder(:demand, demand_elastic_price, elastic_qty,
-                    Symbol(bidding_zone), date_time, resolution_minutes), "DEMAND"))
+                push_tagged!(SimpleOrder(:demand, demand_elastic_price, elastic_qty,
+                    Symbol(bidding_zone), date_time, resolution_minutes),
+                    "DEMAND", "demand_elastic")
                 demand_orders_count += 1
             end
             total_demand_quantity += gd
@@ -1097,11 +1175,12 @@ function create_merit_order_book(
                 target_timeslots, resolution_minutes, price_cap)
             btag = "BOUNDARY:" * boundary_book.counterparty
             for o in b_orders
-                push!(tagged, (o, btag))
                 if o.type == :supply
+                    push_tagged!(o, btag, "boundary_import")
                     supply_orders_count += 1
                     total_supply_capacity += o.quantity
                 else
+                    push_tagged!(o, btag, "boundary_export")
                     demand_orders_count += 1
                     total_demand_quantity += o.quantity
                 end
@@ -1119,7 +1198,7 @@ function create_merit_order_book(
                    resolution_minutes=resolution_minutes,
                    load_by_time=load_by_time, renewable_by_time=renewable_by_time)
             for o in extra_orders(ctx)
-                push!(tagged, (o, "EXTRA"))
+                push_tagged!(o, "EXTRA", "extra")
                 if o.type == :supply
                     supply_orders_count += 1
                     total_supply_capacity += o.quantity
@@ -1143,6 +1222,10 @@ function create_merit_order_book(
             # Vector{SimpleOrder} (re-tagged "STRATEGIST").
             tagged = Tuple{SimpleOrder,String}[
                 x isa Tuple ? (x[1], x[2]) : (x, "STRATEGIST") for x in result]
+            # The strategist REPLACES the ladder, so the source strategy labels no
+            # longer map; the whole replacement set is labelled "strategist"
+            # (scenario path — not the capture/backfill path).
+            strategies = fill("strategist", length(tagged))
             # Recount from the replacement set so summary stats stay accurate
             supply_orders_count = count(t -> t[1].type == :supply, tagged)
             demand_orders_count = count(t -> t[1].type == :demand, tagged)
@@ -1159,7 +1242,11 @@ function create_merit_order_book(
         # clear — swallowed with a warning.
         if BOOK_SINK[] !== nothing
             try
-                BOOK_SINK[](bidding_zone, day, tagged, resolution_minutes)
+                # 5th positional arg = the PARALLEL strategy labels (strategies[i]
+                # is tagged[i]'s WHY). Sinks are updated in lockstep; a legacy
+                # 4-arg sink would error here and be caught below (book still
+                # clears) — so capture degrades safely, never a broken clear.
+                BOOK_SINK[](bidding_zone, day, tagged, resolution_minutes, strategies)
             catch e
                 @warn "BOOK_SINK failed (book still cleared)" zone = bidding_zone day error = sprint(showerror, e)
             end

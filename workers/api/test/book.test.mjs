@@ -45,8 +45,9 @@ for (const zone of ["GR", "FR", "DE_LU"]) {
   ok(b.hours.length > 0, zone + ": has hours");
   ok(b.supply.length === b.hours.length, zone + ": supply per hour");
   ok(b.demand.length === b.hours.length, zone + ": demand per hour");
-  // merit order ascending; demand descending; owner idx in range
-  let asc = true, desc = true, idxOk = true, nOrders = 0;
+  // merit order ascending; demand descending; owner + strategy idx in range
+  let asc = true, desc = true, idxOk = true, sIdxOk = true, nOrders = 0;
+  ok(Array.isArray(b.strategies), zone + ": strategies index table present");
   for (let h = 0; h < b.hours.length; h++) {
     for (let i = 1; i < b.supply[h].length; i++) {
       if (b.supply[h][i][0] < b.supply[h][i - 1][0]) asc = false;
@@ -56,12 +57,26 @@ for (const zone of ["GR", "FR", "DE_LU"]) {
     }
     for (const o of b.supply[h].concat(b.demand[h])) {
       if (o[2] < 0 || o[2] >= b.owners.length) idxOk = false;
+      if (o[3] < 0 || o[3] >= b.strategies.length) sIdxOk = false;
       nOrders++;
     }
   }
   ok(asc, zone + ": supply ascending in price");
   ok(desc, zone + ": demand descending in price");
   ok(idxOk, zone + ": owner indices in range");
+  ok(sIdxOk, zone + ": strategy indices in range");
+  // When the parquet carries the strategy column every order must resolve to a
+  // NON-empty label; when it does not, has_strategy is false and the SPA hides
+  // the strategy columns (graceful degradation).
+  if (b.has_strategy) {
+    let allLabelled = true;
+    for (let h = 0; h < b.hours.length; h++) {
+      for (const o of b.supply[h].concat(b.demand[h])) {
+        if (!b.strategies[o[3]]) allLabelled = false;
+      }
+    }
+    ok(allLabelled, zone + ": every order has a strategy label (has_strategy)");
+  }
   ok(!("clearing" in b) && !("sim" in b) && !("actual" in b),
      zone + ": no embedded clearing/actual (overlaid by frontend)");
   const bytes = Buffer.byteLength(JSON.stringify(b));

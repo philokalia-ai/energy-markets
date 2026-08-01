@@ -323,7 +323,14 @@ coordinator is the single writer, exactly like `--workers`.
 backfilled day's FULL tagged order book (per-unit ladders + `RES`/`IMPORT`/
 `DEMAND`/`BACKSTOP`/owner tags — the pre-merge strategist view) to
 `<books_dir>/<market_date>.parquet` (zstd; columns `market_date, zone, ts, side,
-price, mw, owner, code_version`; ~307 KB/day, ~400 MB for 1,301 days). The
+price, mw, owner, strategy, code_version`; ~307 KB/day, ~400 MB for 1,301 days).
+The `strategy` column is the honest source-side "WHY" of each block
+(`must_run_deep`/`srmc_base`/`peak_tranche_<k>`/`water_value_*`/`import_backstop`/
+… — the `STRATEGY_DESCRIPTIONS` table in `src/merit_order/book_build.jl`), carried
+in a vector PARALLEL to the `(order, owner)` tuples so the strategist-hook contract
+is untouched; it is price-inert (guarded bit-identical). Parquets captured before
+the column existed still read everywhere (worker `has_strategy=false` → the SPA
+hides the strategy/explanation columns). The
 `BOOK_SINK` fires on the BOOK WORKERS, so capture is worker-side: each worker
 flushes its captured zones to a pass-tagged staging parquet
 (`<books_dir>/.staging/<day>_pass{1,2}.parquet`) **before** forwarding the job to

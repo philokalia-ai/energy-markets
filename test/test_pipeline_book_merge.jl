@@ -16,12 +16,13 @@ using Test, Euphemia, Dates, DataFrames, DuckDB
 
 const _P = Euphemia   # internal helpers live in module Euphemia (PipelinedBackfill.jl)
 
-# Build a tiny tagged book for a zone: two supply tranches tagged by owner.
+# Build a tiny tagged book for a zone: two supply tranches tagged by owner AND
+# by strategy (order, owner, strategy) — the 3-tuple the sink now accumulates.
 function _book(zone, day, base_price)
     ts = DateTime(day) + Hour(0)
-    [(_P.SimpleOrder(:supply, base_price,       100.0, Symbol(zone), ts, 60), "$(zone)_G1"),
-     (_P.SimpleOrder(:supply, base_price + 5.0, 200.0, Symbol(zone), ts, 60), "$(zone)_G2"),
-     (_P.SimpleOrder(:demand, 3000.0,          500.0, Symbol(zone), ts, 60), "DEMAND")]
+    [(_P.SimpleOrder(:supply, base_price,       100.0, Symbol(zone), ts, 60), "$(zone)_G1", "srmc_base"),
+     (_P.SimpleOrder(:supply, base_price + 5.0, 200.0, Symbol(zone), ts, 60), "$(zone)_G2", "peak_tranche_2"),
+     (_P.SimpleOrder(:demand, 3000.0,          500.0, Symbol(zone), ts, 60), "DEMAND", "demand_firm")]
 end
 
 _read(path) = DataFrame(DBInterface.execute(DBInterface.connect(DuckDB.DB()),
@@ -35,7 +36,7 @@ _read(path) = DataFrame(DBInterface.execute(DBInterface.connect(DuckDB.DB()),
         lk = ReentrantLock()
 
         # PASS 1: three zones (GR non-anchored, NO2 + SE1 anchored) all at price 50.
-        books = Dict{Tuple{String,Date},Vector{Tuple{_P.SimpleOrder,String}}}()
+        books = Dict{Tuple{String,Date},Vector{Tuple{_P.SimpleOrder,String,String}}}()
         for z in ("GR", "NO2", "SE1"); books[(z, day)] = _book(z, day, 50.0); end
         n1 = _P._flush_pipeline_books(books, lk, dir, day, 1)
         @test n1 == 9                       # 3 zones × 3 orders
@@ -70,7 +71,7 @@ _read(path) = DataFrame(DBInterface.execute(DBInterface.connect(DuckDB.DB()),
     @testset "no pass-2 (no anchors) → pass-1 books alone" begin
         dir = mktempdir()
         lk = ReentrantLock()
-        books = Dict{Tuple{String,Date},Vector{Tuple{_P.SimpleOrder,String}}}()
+        books = Dict{Tuple{String,Date},Vector{Tuple{_P.SimpleOrder,String,String}}}()
         for z in ("GR", "BG"); books[(z, day)] = _book(z, day, 40.0); end
         _P._flush_pipeline_books(books, lk, dir, day, 1)
         out = _P._merge_pipeline_day_books(dir, day)
@@ -78,13 +79,17 @@ _read(path) = DataFrame(DBInterface.execute(DBInterface.connect(DuckDB.DB()),
         @test nrow(df) == 6
         @test Set(df.zone) == Set(["GR", "BG"])
         @test Set(names(df)) ==
-            Set(["market_date", "zone", "ts", "side", "price", "mw", "owner", "code_version"])
+            Set(["market_date", "zone", "ts", "side", "price", "mw", "owner", "strategy", "code_version"])
+        # strategy round-trips through the staging→merge parquet path
+        @test Set(df.strategy) == Set(["srmc_base", "peak_tranche_2", "demand_firm"])
+        g1 = filter(r -> r.owner == "GR_G1", df)
+        @test nrow(g1) == 1 && g1.strategy[1] == "srmc_base"
     end
 
     @testset "cleanup removes orphaned staging" begin
         dir = mktempdir()
         lk = ReentrantLock()
-        books = Dict{Tuple{String,Date},Vector{Tuple{_P.SimpleOrder,String}}}()
+        books = Dict{Tuple{String,Date},Vector{Tuple{_P.SimpleOrder,String,String}}}()
         books[("GR", day)] = _book("GR", day, 30.0)
         _P._flush_pipeline_books(books, lk, dir, day, 1)
         @test isfile(_P._pipeline_book_staging(dir, day, 1))
@@ -96,7 +101,7 @@ _read(path) = DataFrame(DBInterface.execute(DBInterface.connect(DuckDB.DB()),
     @testset "flush of empty day writes nothing" begin
         dir = mktempdir()
         lk = ReentrantLock()
-        books = Dict{Tuple{String,Date},Vector{Tuple{_P.SimpleOrder,String}}}()
+        books = Dict{Tuple{String,Date},Vector{Tuple{_P.SimpleOrder,String,String}}}()
         @test _P._flush_pipeline_books(books, lk, dir, day, 1) == 0
         @test !isfile(_P._pipeline_book_staging(dir, day, 1))
         @test _P._merge_pipeline_day_books(dir, day) === nothing
