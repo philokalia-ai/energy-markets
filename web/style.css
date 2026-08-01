@@ -937,3 +937,80 @@ html, body { overflow-x: hidden; }
 }
 .book-block { cursor: crosshair; }
 .book-block:hover { fill-opacity: 1; }
+
+/* ============ Predicting RES & loads ============ */
+.map-poly.pilot { cursor: pointer; }
+.map-poly.pilot:hover { fill-opacity: 0.85; }
+.map-poly.pilot:focus { outline: none; }
+
+.src-badge {
+  display: inline-block;
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  white-space: nowrap;
+}
+.src-badge.src-ml { color: #1F7A4A; border-color: rgba(31, 122, 74, 0.4); }
+.src-badge.src-pack { color: var(--text-muted); }
+
+.predict-outputs,
+.predict-drivers {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+.predict-outputs { grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); }
+
+.mini-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px 10px;
+  background: var(--surface-1);
+}
+.mini-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 2px;
+}
+.mini-title { font-size: 12.5px; font-weight: 600; color: var(--heading); }
+.mini-unit {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.mini-svg { width: 100%; height: auto; display: block; }
+.mini-empty { color: var(--text-muted); font-size: 12px; margin: 18px 0; text-align: center; }
+.mini-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.mini-key { display: inline-flex; align-items: center; gap: 5px; }
+.mini-swatch {
+  width: 14px;
+  height: 3px;
+  border-radius: 2px;
+  display: inline-block;
+}
+.mini-swatch.dashed {
+  background-image: repeating-linear-gradient(90deg, currentColor 0 4px, transparent 4px 7px) !important;
+}
+
+.method-prose { color: var(--text-secondary); font-size: 0.95rem; line-height: 1.6; }
+.method-prose p { margin: 0 0 12px; }
+.method-prose strong { color: var(--heading); }
+.method-repro {
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+  font-size: 0.9rem;
+}

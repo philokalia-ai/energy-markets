@@ -7,6 +7,7 @@
 - [ex-ante-flows.md](ex-ante-flows.md) — The `:v2` ex-ante flow rule (climatology + D-7 Norwegian recency): per-border-class evidence, measured alternatives, and the NO1 open problem.
 - [ex-ante-audit.md](ex-ante-audit.md) — The D-1-legality audit: every book input classified as ex-ante-legal or a forward-looking leak.
 - [scenario-api.md](scenario-api.md) — The counterfactual scenario API (`ZoneScenario`): demand/RES modifiers, extra orders, strategist bid rewrites, fleet edits — with measured multi-zone worked examples.
+- [predictions.md](predictions.md) — The **open, reproducible RES/load input model** behind the site's "Predicting RES & loads" page: targets, D-1 GFS vintage discipline, features, LightGBM training protocol, the committed model dumps + Julia scorer, equivalence numbers, and the `v1/inputs/` data plane.
 
 ## Calibration history
 

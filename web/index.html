@@ -72,6 +72,7 @@
   <nav class="tabs" role="tablist" aria-label="Views">
     <button id="tab-horizon" class="tab" role="tab" aria-selected="true" data-view="horizon">Recent days</button>
     <button id="tab-map" class="tab" role="tab" aria-selected="false" data-view="map">Map</button>
+    <button id="tab-predict" class="tab" role="tab" aria-selected="false" data-view="predict">Predicting RES &amp; loads</button>
     <button id="tab-explorer" class="tab" role="tab" aria-selected="false" data-view="explorer">Zone explorer</button>
     <button id="tab-book" class="tab" role="tab" aria-selected="false" data-view="book">Order book</button>
     <button id="tab-board" class="tab" role="tab" aria-selected="false" data-view="board">Scoreboard</button>
@@ -110,6 +111,86 @@
         <span id="map-legend-hi" class="map-legend-cap"></span>
       </div>
       <p id="map-comment" class="day-comment"></p>
+    </div>
+  </section>
+
+  <!-- ============ Predicting RES & loads (the open input model) ============ -->
+  <section id="view-predict" class="view" role="tabpanel" aria-labelledby="tab-predict" hidden>
+    <div class="chart-card">
+      <div class="chart-head">
+        <h2 class="chart-title">Predicting RES &amp; loads — a fully open, reproducible model</h2>
+        <p class="chart-sub">Before the market can clear, we predict each zone's wind, solar
+          and load for every delivery hour — from the weather. This is the open pilot model
+          (5 zones with committed model dumps + a pure-Julia scorer). The map colours each
+          pilot zone by <strong>tomorrow's predicted midday RES coverage</strong>
+          (predicted wind+solar ÷ predicted load): the deeper the green, the closer
+          price-taker renewables come to covering demand — the regime where midday prices
+          can <em>collapse</em>. Click a zone to see the knobs underneath.
+          <a href="#" id="predict-method-link">How we predict &rarr;</a></p>
+      </div>
+      <div id="pmap-wrap" class="chart-wrap map-wrap"></div>
+      <div class="map-legend-row">
+        <span class="map-legend-cap">0% (load-covered)</span>
+        <span id="pmap-legend-bar" class="map-legend-bar" aria-hidden="true"></span>
+        <span class="map-legend-cap">≥120% RES (collapse risk)</span>
+      </div>
+      <p id="pmap-comment" class="day-comment"></p>
+    </div>
+
+    <!-- The knobs: driver small-multiples for the selected zone -->
+    <div class="chart-card" id="predict-knobs" style="margin-top:16px" hidden>
+      <div class="chart-head">
+        <h2 id="pk-title" class="chart-title"></h2>
+        <p id="pk-sub" class="chart-sub"></p>
+      </div>
+      <div id="pk-outputs" class="predict-outputs"></div>
+      <h3 class="panel-title" style="margin:18px 0 4px">The knobs — what the model reads from the weather</h3>
+      <p class="chart-sub" style="margin-top:0">Each driver is the zone's pop-weighted (load) or
+        cell-mean (RES) value, from the same D-1 GFS vintage the forecast consumes. Watch which
+        knob moves with the prediction above.</p>
+      <div id="pk-drivers" class="predict-drivers"></div>
+      <div id="pk-reservoir" class="predict-reservoir" hidden>
+        <h3 class="panel-title" style="margin:18px 0 4px">Reservoir state (hydro water value)</h3>
+        <p class="chart-sub" style="margin-top:0">Weekly reservoir fill ratio (share of the
+          trailing-52-week maximum) and dryness (shortfall vs the same week in prior years) —
+          the slow knob behind hydro-zone water value.</p>
+        <div id="pk-reservoir-charts" class="predict-drivers"></div>
+      </div>
+    </div>
+
+    <!-- Methodology, plain language -->
+    <div class="chart-card" id="predict-method" style="margin-top:16px">
+      <div class="chart-head">
+        <h2 class="chart-title">How we predict — in plain language</h2>
+      </div>
+      <div class="method-prose">
+        <p><strong>The target is the market's own reference.</strong> Each morning the TSOs publish
+          a day-ahead wind, solar and load forecast; the day-ahead auction clears on those numbers.
+          We predict the very same quantity — so our error is measured against what the market
+          actually used, not against outturn.</p>
+        <p><strong>The inputs are honest ex-ante weather.</strong> For delivery day D we only ever
+          use the GFS run issued on D-1 (the open-meteo <em>previous_day1</em> vintage) — never a
+          later run that would peek across the auction gate. Every number on this page is labelled
+          by the vintage that produced it.</p>
+        <p><strong>One gradient-boosted model per zone &amp; target.</strong> A LightGBM model maps
+          the drivers — pop-weighted temperature, shortwave radiation (GHI), cloud cover, surface
+          pressure, 100&nbsp;m wind speed, plus calendar and a solar-elevation term — to MW.
+          Wind and solar are <em>capacity-normalized</em>: the model predicts a ratio against the
+          fleet's recent 95th-percentile output, so a growing fleet doesn't drift the forecast.
+          Load adds the trailing-48&nbsp;h temperature and the D-1/D-7 load lags.</p>
+        <p><strong>Per-zone winner selection.</strong> For each (zone, target) we ship whichever of
+          {new LightGBM, the committed linear pack} won an out-of-sample scorecard — the badge next
+          to each chart shows which one is live.</p>
+        <p><strong>The collapse question is the whole game.</strong> Near the RES-coverage
+          threshold, a small solar-forecast error flips whether the midday price collapses to ≤&nbsp;€5
+          (or below zero) or not. That classification dominates the continuous error there, so input
+          accuracy at midday is what decides whether the price signal is useful at all — which is
+          why the map centres on midday RES coverage.</p>
+        <p class="method-repro">Everything here is reproducible with no database:
+          <a href="https://github.com/philokalia-ai/energy-markets/blob/main/docs/predictions.md">docs/predictions.md</a>
+          gives the complete recipe — open weather source, feature definitions, the training
+          protocol, the committed model dumps and the Julia scorer, plus the equivalence numbers.</p>
+      </div>
     </div>
   </section>
 

@@ -200,6 +200,13 @@ jobs:
           # push). Export + push here, manifest last (readers never see a
           # manifest newer than its objects).
           julia --project=. bin/export_web_parquet.jl
+          # Predictions page data plane (v1/inputs/ — the open RES/load input
+          # model: drivers + prediction + reference + actuals, additive contract,
+          # bin/export_prediction_inputs.jl). Reuses the ML fetch machinery; it
+          # hits open-meteo, so a transient fetch failure must NOT block the core
+          # web-data publish — non-fatal, the manifest below still uploads last.
+          julia --project=. bin/export_prediction_inputs.jl \
+            || echo "::warning::prediction-inputs export failed — core web data still published"
           bash bin/web_data_push.sh
 
       - name: Cleanup Gurobi license

@@ -17,6 +17,15 @@ forecast per delivery day** (deeper leads were noise). Views:
   D+1). Below it, "What we said, when" shows one delivery day's freshest forecast
   vs actual.
 - **Map** — day-average price per bidding zone.
+- **Predicting RES & loads** — the open input model. A Europe map colours each of
+  the 5 pilot zones (GR, ES, DE_LU, SE2, NL) by tomorrow's predicted **midday RES
+  coverage** (predicted wind+solar ÷ predicted load) and flags collapse-risk zones;
+  click a zone for the KNOBS panel — small-multiple driver time series (temperature,
+  GHI, cloud, pressure, 100 m wind, reservoir state) aligned with the prediction and
+  the settled actual, plus a plain-language methodology. Data comes from
+  `GET /api/v1/inputs/{manifest,reservoir,:zone}` (see `workers/api/` and
+  `bin/export_prediction_inputs.jl`); the open recipe is
+  [docs/predictions.md](../docs/predictions.md).
 - **Zone explorer** — per-day hourly forecast vs actual, freshest weather day per date.
 - **Order book** — per zone × market day × hour, the merit-order supply ladder
   stacked by ascending offer price (x = cumulative MW, y = €/MWh), coloured by
@@ -122,6 +131,30 @@ Per hour, `supply` is ascending in offer price (the merit order) and `demand`
 descending; each order is `[price €/MWh, mw, ownerIdx]` where `ownerIdx` indexes
 `owners`. The clearing price and settled actual are NOT in the book — the SPA
 overlays them from `zones/<zone>` (`sim`/`actual`) by aligning the hour index.
+
+## Predictions data contract (`/api/v1/inputs/…`)
+
+`GET /api/v1/inputs/:zone` — the per-zone driver + prediction panel (columnar
+series, hours ascending):
+
+```json
+{"zone": "GR", "market_day_tz": "Europe/Athens",
+ "src": {"solar": "ml", "wind": "pack", "load": "ml"},
+ "hours": ["2026-07-19T00:00:00Z", "…"],
+ "series": {"temp_c": [27.6], "ghi_wm2": [0.0], "cloud_pct": [0.24],
+            "pressure_hpa": [943.0], "wind100_ms": [10.2],
+            "pred_solar_mw": [0.0], "pred_wind_mw": [525.4], "pred_res_mw": [525.4],
+            "pred_load_mw": [5703.8], "ref_solar_mw": [52.5], "ref_wind_mw": [577.5],
+            "ref_load_mw": [5610.0], "act_solar_mw": [77.0], "act_wind_mw": [500.5],
+            "act_load_mw": [5561.5], "vintage_lag": [1]}}
+```
+
+`GET /api/v1/inputs/reservoir` — `{zones: {"<Z>": [{week_start, iso_year, iso_week,
+stored_energy_mwh, fill_ratio, dryness}, …]}}` (weeks ascending). `GET
+/api/v1/inputs/manifest` — freshness + the column dictionary + the per-zone
+freshest-day midday RES-coverage summary the map colours by. Produced by
+`bin/export_prediction_inputs.jl` (the additive `v1/inputs/` contract); the open
+model recipe is [docs/predictions.md](../docs/predictions.md).
 
 ## Regenerating fixtures
 

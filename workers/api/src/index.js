@@ -18,7 +18,7 @@
 
 import { parquetReadObjects } from "hyparquet";
 import { compressors } from "hyparquet-compressors";
-import { shapeZone, shapeScoreboard, shapeMap, shapeBook } from "./shape.js";
+import { shapeZone, shapeScoreboard, shapeMap, shapeBook, shapeInputsZone, shapeReservoir } from "./shape.js";
 
 const ALLOWED_ORIGINS = [
   /^https:\/\/energy\.philokalia\.ai$/,
@@ -83,6 +83,22 @@ async function buildPayload(env, route, zone, date) {
     if (!obj) return null;
     return JSON.stringify(shapeBook(await readParquet(obj), zone, date));
   }
+  if (route === "inputs_manifest") {
+    // The Predictions-page data plane manifest (v1/inputs/manifest.json) —
+    // pass-through, like v1/manifest.json (see bin/export_prediction_inputs.jl).
+    const obj = await env.DATA.get("v1/inputs/manifest.json");
+    return obj ? await obj.text() : null;
+  }
+  if (route === "inputs_reservoir") {
+    const obj = await env.DATA.get("v1/inputs/reservoir.parquet");
+    if (!obj) return null;
+    return JSON.stringify(shapeReservoir(await readParquet(obj)));
+  }
+  if (route === "inputs_zone") {
+    const obj = await env.DATA.get("v1/inputs/" + zone + ".parquet");
+    if (!obj) return null;
+    return JSON.stringify(shapeInputsZone(await readParquet(obj), zone));
+  }
   const manifest = await loadManifest(env);
   if (!manifest) return null;
   if (route === "scoreboard") {
@@ -103,6 +119,9 @@ function routeKey(route, zone, date) {
   if (route === "manifest") return "v1/manifest.json";
   if (route === "zone") return "v1/zones/" + zone + ".parquet";
   if (route === "book") return "v1/books/" + date + ".parquet";
+  if (route === "inputs_manifest") return "v1/inputs/manifest.json";
+  if (route === "inputs_reservoir") return "v1/inputs/reservoir.parquet";
+  if (route === "inputs_zone") return "v1/inputs/" + zone + ".parquet";
   return "v1/" + route + ".parquet";
 }
 
@@ -131,6 +150,15 @@ export default {
       route = "map";
     } else if (url.pathname === "/api/v1/manifest") {
       route = "manifest";
+    } else if (url.pathname === "/api/v1/inputs/manifest") {
+      route = "inputs_manifest";
+    } else if (url.pathname === "/api/v1/inputs/reservoir") {
+      route = "inputs_reservoir";
+    } else if ((m = url.pathname.match(/^\/api\/v1\/inputs\/([A-Za-z0-9_-]+)$/))) {
+      // Predictions-page per-zone driver + prediction panel. The literal
+      // /inputs/manifest and /inputs/reservoir are matched first above.
+      route = "inputs_zone";
+      zone = m[1];
     }
     if (!route) return errorResponse(request, 404, "not found");
 
