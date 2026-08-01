@@ -576,6 +576,16 @@ function run_pipelined_backfill(days, zones::Vector{String}=String[];
         # local addprocs children inherit ENV, but SSH workers would not.
         haskey(ENV, "EUPHEMIA_DISABLE_ATC_DAPREF") &&
             push!(extract_env, "EUPHEMIA_DISABLE_ATC_DAPREF" => ENV["EUPHEMIA_DISABLE_ATC_DAPREF"])
+        # cv31 solar-regime floor is default-ON: forward its kill-switch and any
+        # explicit EUPHEMIA_SOLAR_REGIME* A/B overrides so worker books match the
+        # coordinator (SSH workers do not inherit ENV; the book workers call
+        # mz_build_books directly).
+        haskey(ENV, "EUPHEMIA_DISABLE_CV31") &&
+            push!(extract_env, "EUPHEMIA_DISABLE_CV31" => ENV["EUPHEMIA_DISABLE_CV31"])
+        for k in ("EUPHEMIA_SOLAR_REGIME", "EUPHEMIA_SOLAR_REGIME_THETA",
+                  "EUPHEMIA_SOLAR_REGIME_BLOCKS", "EUPHEMIA_SOLAR_REGIME_ZONES")
+            haskey(ENV, k) && push!(extract_env, k => ENV[k])
+        end
         # Workers share the source extract read-only; the coordinator keeps the
         # source read-only too (so it can coexist with them) but opts into result
         # writes, which land in the SEPARATE writable results_db file.

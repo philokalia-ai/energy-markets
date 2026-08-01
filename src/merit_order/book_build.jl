@@ -751,26 +751,38 @@ function create_merit_order_book(
         total_demand_quantity = 0.0
         total_supply_capacity = 0.0
 
-        # ── Solar-regime price-taker floor (feat/solar-regime) ──────────
+        # ── Solar-regime price-taker floor (cv31, default-ON) ───────────
         # Regime-gated revival of the cv28/cv29 price-taker floor. The gate is
         # an EX-ANTE per-zone-hour regime axis — the day-ahead SOLAR share of
         # forecast load (solar_fc/load_fc) — NOT the cv29 domestic surplus
-        # signal. Phase-1 cartography (docs) shows the continental-solar group
-        # (DE_LU/FR/PL/BE/CZ/CH) systematically OVERPRICES by +15..+18 €/MWh in
-        # high-solar hours where the settled market crashes to ≤0 (28..50% of
-        # those hours) while the model reaches ≤5 only 10..24% of the time.
-        # In regime hours the RES block (and, with BLOCKS=full, run-of-river +
-        # the deepest must-run block) prices at the declared negative floor so
-        # the clear can genuinely fall below zero. Default-INERT: with
-        # EUPHEMIA_SOLAR_REGIME unset every branch below is skipped and the book
-        # is byte-identical to main (guard). One declared parameter: θ.
-        solar_regime = !isempty(get(ENV, "EUPHEMIA_SOLAR_REGIME", ""))
+        # signal. Phase-1 cartography (docs/experiments/solar-regime) shows the
+        # continental-solar group (DE_LU/FR/PL/BE/CZ/CH) systematically
+        # OVERPRICES by +15..+18 €/MWh in high-solar hours where the settled
+        # market crashes to ≤0 (28..50% of those hours) while the model reaches
+        # ≤5 only 10..24% of the time. In regime hours the RES block, run-of-
+        # river and the deepest must-run block (BLOCKS=full) price at the
+        # declared negative floor so the clear can genuinely fall below zero.
+        #
+        # cv31 ACTIVATION (#251 measured accepted arm — Set A −1.50 within-regime
+        # dMAE / phantom 0 / 0 new caps; Set B confirmed): the SHIPPED default is
+        # ON with θ=0.4, BLOCKS=full, ZONES=DE_LU,FR,PL,BE,CZ,CH. Kill-switch
+        # EUPHEMIA_DISABLE_CV31 set ⇒ fully inert (byte-identical to pre-cv31
+        # main). Explicit EUPHEMIA_SOLAR_REGIME* env vars still WIN over the
+        # scoped default (house convention, the FLOW_ASOF precedent):
+        # EUPHEMIA_SOLAR_REGIME=0 forces the mechanism off, and THETA/BLOCKS/
+        # ZONES override the shipped values for A/Bs. One declared parameter: θ.
+        sr_disabled = !isempty(get(ENV, "EUPHEMIA_DISABLE_CV31", ""))
+        solar_regime = !sr_disabled &&
+            (haskey(ENV, "EUPHEMIA_SOLAR_REGIME") ?
+                !(isempty(ENV["EUPHEMIA_SOLAR_REGIME"]) ||
+                  ENV["EUPHEMIA_SOLAR_REGIME"] == "0") :
+                true)
         sr_zones = Set(strip.(split(get(ENV, "EUPHEMIA_SOLAR_REGIME_ZONES",
             "DE_LU,FR,PL,BE,CZ,CH"), ",")))
         solar_regime_on = solar_regime && (bidding_zone in sr_zones)
         sr_theta = parse(Float64, get(ENV, "EUPHEMIA_SOLAR_REGIME_THETA", "0.4"))
         sr_full = solar_regime_on &&
-                  get(ENV, "EUPHEMIA_SOLAR_REGIME_BLOCKS", "res") == "full"
+                  get(ENV, "EUPHEMIA_SOLAR_REGIME_BLOCKS", "full") == "full"
         solar_share_hr = Dict{Int,Float64}()
         if solar_regime_on
             sol_hr = Dict{Int,Vector{Float64}}()
