@@ -902,6 +902,42 @@ html, body { overflow-x: hidden; }
 .zs-table td.zs-on { font-weight: 600; }
 .zs-src { font-size: .85rem; color: var(--text-muted); }
 
+/* ── the two layers: fitted inputs vs constructed prices (/about) ────────── */
+.layer-cards { display: grid; gap: 16px; margin: 1.4rem 0 0.4rem; }
+@media (min-width: 640px) { .layer-cards { grid-template-columns: 1fr 1fr; } }
+.layer-card {
+  border: 1px solid var(--border); border-radius: 12px;
+  padding: 18px 20px; background: var(--surface-1);
+}
+.layer-card h3 { margin: 0 0 .4rem; font-size: 1.06rem; }
+.layer-tag {
+  display: inline-block; font-family: var(--mono); font-size: .66rem;
+  letter-spacing: .05em; text-transform: uppercase; padding: 2px 9px;
+  border-radius: 999px; margin-bottom: .7rem;
+}
+.layer-fit   { border-top: 3px solid var(--terracotta); }
+.layer-fit   .layer-tag { color: var(--terracotta); border: 1px solid var(--terracotta); }
+.layer-build { border-top: 3px solid var(--status-good); }
+.layer-build .layer-tag { color: var(--good-text); border: 1px solid var(--good-text); }
+.layer-card p  { margin: 0 0 .55rem; font-size: .96rem; color: var(--text-secondary); }
+.layer-card ul { margin: .3rem 0 .55rem; padding-left: 1.1rem; font-size: .92rem; color: var(--text-secondary); }
+.layer-card ul li { margin: .18rem 0; }
+.layer-card .more-link { margin-top: .3rem; font-size: .92rem; }
+
+.book-cta {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px;
+  margin: 1.3rem 0; padding: 16px 20px;
+  border: 1px solid var(--border); border-left: 4px solid var(--aegean);
+  border-radius: 10px; background: var(--surface-1);
+}
+.book-cta .book-cta-text { margin: 0; flex: 1 1 20rem; color: var(--text-secondary); font-size: .96rem; }
+.book-cta .book-cta-btn {
+  display: inline-block; font-weight: 600; font-family: var(--sans);
+  color: #fff; background: var(--aegean); padding: 9px 17px;
+  border-radius: 8px; text-decoration: none; white-space: nowrap;
+}
+.book-cta .book-cta-btn:hover { background: var(--deep-blue); color: #fff; }
+
 /* ---------- order book (merit-order ladder) ---------- */
 .book-controls {
   display: flex;
