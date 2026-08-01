@@ -2473,7 +2473,11 @@
           x1: bandX1, x2: bandX1, y1: yHiC, y2: yLoC, stroke: C.sim,
           "stroke-width": 1.5, "stroke-opacity": 0.8,
         }));
-        haloText({ x: bandX1 + 4, y: (yHiC + yLoC) / 2 + 4, "text-anchor": "start",
+        // Anti-collision: the span label sits BELOW the clearing line, centered
+        // under the band near the marker (its natural place) — off the crowded
+        // clearing-price band where the trade-wedge and 'clearing €X' labels live.
+        var clrY = Y(Math.min(clearing, yMax));
+        haloText({ x: X(clearMW), y: Math.min(m.t + ph - 4, clrY + 15), "text-anchor": "middle",
           fill: C.sim, "font-size": 10.5, "font-weight": 600 },
           "±" + CLIFF.W_PRIMARY + " MW ⇒ €" + fmt(pr.span, 0));
       }
@@ -2518,31 +2522,49 @@
       svg.appendChild(svgEl("rect", { x: wx0, y: wy, width: Math.max(1, wx1 - wx0),
         height: Math.min(18, (m.t + ph) - wy), fill: "url(#wedgeHatch)",
         "pointer-events": "none" }));
-      // label: sources when known, else anonymous net
+      // label: sources when known, else anonymous net — placed ABOVE the
+      // clearing line (~1.2em up) with a short leader tick down to the wedge, so
+      // it never overlaps the 'clearing €X' / cliff-span labels sharing that
+      // horizontal band. When the marker sits close to the right edge (tight
+      // horizontal room) it collapses to a compact "← X MW", full text on hover.
       var srcTxt = (segs && segs.length)
         ? segs.map(function (s) { return s.label; }).join(" · ")
         : "via coupling";
-      var wlabel = (isImport ? "← imports ~" : "exports → ") + fmt(Math.abs(impliedNetImport), 0) +
-        " MW  (" + srcTxt + ")";
-      haloText({ x: (wx0 + wx1) / 2, y: wy - 9, "text-anchor": "middle",
-        fill: BC.trade, "font-size": 10.5, "font-weight": 600 }, wlabel);
+      var fullLabel = (isImport ? "← imports ~" : "exports → ") +
+        fmt(Math.abs(impliedNetImport), 0) + " MW  (" + srcTxt + ")";
+      var shortLabel = (isImport ? "← " : "→ ") + fmt(Math.abs(impliedNetImport), 0) + " MW";
+      var tight = ((m.l + pw) - xNear) < 0.30 * pw;
+      var labelX = (wx0 + wx1) / 2, labelY = Math.max(m.t + 10, wy - 16);
+      svg.appendChild(svgEl("line", { x1: labelX, x2: labelX, y1: labelY + 3, y2: wy,
+        stroke: BC.trade, "stroke-width": 1, "stroke-opacity": 0.6 }));
+      var wtext = haloText({ x: labelX, y: labelY, "text-anchor": "middle",
+        fill: BC.trade, "font-size": 10.5, "font-weight": 600 },
+        tight ? shortLabel : fullLabel);
+      var wtitle = svgEl("title"); wtitle.textContent = fullLabel; wtext.appendChild(wtitle);
     }
 
-    // clearing price line + "ball" where the ladder reaches it
-    function marker(price, color, label, dash) {
+    // clearing price line + "ball" where the ladder reaches it. `halo` gives the
+    // right-edge label a surface-coloured background so it wins overlaps on the
+    // crowded clearing-price band (theme-aware, via haloText).
+    function marker(price, color, label, dash, halo) {
       if (price === null || price === undefined) return;
       var yy = Y(price);
       svg.appendChild(svgEl("line", {
         x1: m.l, x2: m.l + pw, y1: yy, y2: yy, stroke: color, "stroke-width": 2,
         "stroke-dasharray": dash || null,
       }));
-      var t = svgEl("text", { x: m.l + pw - 4, y: yy - 5, "text-anchor": "end",
-        fill: color, "font-size": 12, "font-weight": 600 });
-      t.textContent = label + " €" + fmt(price, 1);
-      svg.appendChild(t);
+      var attrs = { x: m.l + pw - 4, y: yy - 5, "text-anchor": "end",
+        fill: color, "font-size": 12, "font-weight": 600 };
+      if (halo) {
+        haloText(attrs, label + " €" + fmt(price, 1));
+      } else {
+        var t = svgEl("text", attrs);
+        t.textContent = label + " €" + fmt(price, 1);
+        svg.appendChild(t);
+      }
     }
-    marker(actual, C.act, "actual", null);
-    marker(clearing, C.sim, "clearing", "7 4");
+    marker(actual, C.act, "actual", null, false);
+    marker(clearing, C.sim, "clearing", "7 4", true);
     // clearing "ball" where the ladder reaches the model price.
     if (clearing !== null && clearing !== undefined) {
       var bx = X(clearMW), by = Y(clearing);
