@@ -89,27 +89,42 @@ def capacity_p95():
 
 # ---- calendar / holidays ----
 def easter(y):
+    # Western (Gregorian) Easter — Meeus/Butcher. Used for the Catholic/Protestant zones.
     a=y%19;b=y//100;c=y%100;d=b//4;e=b%4;f=(b+8)//25;g=(b-f+1)//3
     h=(19*a+b-d-g+15)%30;i=c//4;k=c%4;l=(32+2*e+2*i-h-k)%7
     m=(a+11*h+22*l)//451;mo=(h+l-7*m+114)//31;da=((h+l-7*m+114)%31)+1
     return pd.Timestamp(y,mo,da)
+def orthodox_easter(y):
+    # Orthodox (Julian) Easter — Meeus Julian algorithm, +13d to the Gregorian
+    # calendar (valid 1900-2099). rollout-39 amendment 1: GR/BG/RO/RS movable
+    # feasts are computed from THIS, not the Western easter() (fixes the pilot's
+    # disclosed Western-Easter approximation). Mirrored bit-for-bit in
+    # bin/ml_inputs.jl `ml_orthodox_easter` — change both together.
+    a=y%4;b=y%7;c=y%19
+    d=(19*c+15)%30
+    e=(2*a+4*b-d+34)%7
+    month=(d+e+114)//31; day=((d+e+114)%31)+1
+    return pd.Timestamp(y,month,day)+pd.Timedelta(days=13)
 def holidays(country,years):
+    # Fixed national holidays + movable (Easter-anchored) feasts. ORTHODOX_ZONES use
+    # the Orthodox computus for the movable feasts; ES/DE/SE use the Western one; any
+    # other country returns only its fixed map (empty if unlisted). Mirrored exactly
+    # in bin/ml_inputs.jl `ml_holidays` (train/serve lockstep — change both together).
+    ORTHODOX={"GR","BG","RO","RS"}
+    FIXED={"GR":[(1,1),(1,6),(3,25),(5,1),(8,15),(10,28),(12,25),(12,26)],
+           "BG":[(1,1),(3,3),(5,1),(5,6),(5,24),(9,6),(9,22),(12,24),(12,25),(12,26)],
+           "RO":[(1,1),(1,2),(1,24),(5,1),(6,1),(8,15),(11,30),(12,1),(12,25),(12,26)],
+           "RS":[(1,1),(1,2),(1,7),(2,15),(2,16),(5,1),(5,2),(11,11)],
+           "ES":[(1,1),(1,6),(5,1),(8,15),(10,12),(11,1),(12,6),(12,8),(12,25)],
+           "DE":[(1,1),(5,1),(10,3),(12,25),(12,26)],
+           "SE":[(1,1),(1,6),(5,1),(6,6),(12,25),(12,26)]}
+    MOVABLE={"GR":(-48,-2,0,1,50),"BG":(-2,-1,0,1),"RO":(-2,0,1,49,50),"RS":(-2,0,1),
+             "ES":(-2,0),"DE":(-2,1,39,50),"SE":(-2,0,1,39,49)}
     hs=set()
     for y in years:
-        E=easter(y)
-        fixed={"GR":[(1,1),(1,6),(3,25),(5,1),(8,15),(10,28),(12,25),(12,26)],
-               "ES":[(1,1),(1,6),(5,1),(8,15),(10,12),(11,1),(12,6),(12,8),(12,25)],
-               "DE":[(1,1),(5,1),(10,3),(12,25),(12,26)],
-               "SE":[(1,1),(1,6),(5,1),(6,6),(12,25),(12,26)]}.get(country,[])
-        for md in fixed: hs.add(pd.Timestamp(y,md[0],md[1]))
-        if country=="GR":
-            for o in (-48,-2,0,1,50): hs.add((E+pd.Timedelta(days=o)))  # orthodox approx uses same E here (approx)
-        elif country=="ES":
-            for o in (-2,0): hs.add(E+pd.Timedelta(days=o))
-        elif country=="DE":
-            for o in (-2,1,39,50): hs.add(E+pd.Timedelta(days=o))
-        elif country=="SE":
-            for o in (-2,0,1,39,49): hs.add(E+pd.Timedelta(days=o))
+        E=orthodox_easter(y) if country in ORTHODOX else easter(y)
+        for md in FIXED.get(country,[]): hs.add(pd.Timestamp(y,md[0],md[1]))
+        for o in MOVABLE.get(country,()): hs.add(E+pd.Timedelta(days=o))
     return {d.normalize() for d in hs}
 
 def eu_dst_offset(ts, tz_base):

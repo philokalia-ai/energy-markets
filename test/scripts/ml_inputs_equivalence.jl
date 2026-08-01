@@ -17,9 +17,10 @@
 #   EUPHEMIA_DUCKDB_PATH=data/extracts/euphemia-live.duckdb \
 #     julia --project=. test/scripts/ml_inputs_equivalence.jl
 #
-# Precondition: docs/experiments/input-upgrade/dump_eval.py has written
-# <SP>/eval_ref.json and the GFS parquets exist under <SP>/gfs (both produced by
-# PR #252's pipeline; re-run dump_eval.py to refresh).
+# Precondition: docs/experiments/input-upgrade/dump_eval39.py has written
+# <SP>/eval_ref.json (spot set: a few pilots + a few new rollout-39 zones, dumped
+# from the COMMITTED bin/input_models) and the GFS parquets exist under <SP>/gfs.
+# The test reads whatever zones the ref names and compares only committed targets.
 
 const SP = "/tmp/claude-1000/-home-pgeorgakopoulos-armada-energy-markets/b12b1e25-3bbc-44fb-b4b2-77f8400fd203/scratchpad/input_upgrade"
 const EXTRACT = "/home/pgeorgakopoulos/armada/energy-markets/data/extracts/euphemia-live.duckdb"
@@ -34,9 +35,15 @@ include(joinpath(BIN, "weather_res.jl"))
 include(joinpath(BIN, "weather_load.jl"))
 include(joinpath(BIN, "ml_inputs.jl"))
 
-const PILOTS = ["GR", "ES", "DE_LU", "SE2", "NL"]
+# rollout-39: the reference file names whichever zones the dumper emitted (a few
+# pilots + a few new zones as spot-checks). Only committed (winner) models are
+# compared — a target absent from a zone's meta shipped the pack, so the ref never
+# carries a `new_<t>` for it and the port never dereferences a missing model.
 ref = JSON.parsefile(joinpath(SP, "eval_ref.json"))
+const PILOTS = sort(collect(keys(ref)))
 models = load_ml_models(PILOTS)
+has_model(t, z) = (t == "solar" ? haskey(models.solar, z) :
+                   t == "wind" ? haskey(models.wind, z) : haskey(models.load, z))
 geom = ml_geom()
 _num(x) = x === nothing ? NaN : Float64(x)
 
@@ -57,15 +64,19 @@ println("PART 1 — SCORER on identical (reference) feature vectors")
 println("="^72)
 p1 = Dict(t => DiffAcc() for t in ("solar", "wind", "load"))
 for z in PILOTS
-    fs = models.meta["$(z)_solar"]["feat_cols"]
-    fw = models.meta["$(z)_wind"]["feat_cols"]
-    fl = models.meta["$(z)_load"]["feat_cols"]
     for (key, rec) in ref[z]
-        feats_s = Dict{String,Float64}(fs[i] => _num(rec["feats_solar"][i]) for i in eachindex(fs))
-        feats_w = Dict{String,Float64}(fw[i] => _num(rec["feats_wind"][i]) for i in eachindex(fw))
-        upd!(p1["solar"], ml_predict_solar(models, z, feats_s), _num(rec["new_solar"]))
-        upd!(p1["wind"], ml_predict_wind(models, z, feats_w), _num(rec["new_wind"]))
-        if haskey(rec, "feats_load")
+        if has_model("solar", z) && haskey(rec, "feats_solar")
+            fs = models.meta["$(z)_solar"]["feat_cols"]
+            feats_s = Dict{String,Float64}(fs[i] => _num(rec["feats_solar"][i]) for i in eachindex(fs))
+            upd!(p1["solar"], ml_predict_solar(models, z, feats_s), _num(rec["new_solar"]))
+        end
+        if has_model("wind", z) && haskey(rec, "feats_wind")
+            fw = models.meta["$(z)_wind"]["feat_cols"]
+            feats_w = Dict{String,Float64}(fw[i] => _num(rec["feats_wind"][i]) for i in eachindex(fw))
+            upd!(p1["wind"], ml_predict_wind(models, z, feats_w), _num(rec["new_wind"]))
+        end
+        if has_model("load", z) && haskey(rec, "feats_load")
+            fl = models.meta["$(z)_load"]["feat_cols"]
             feats_l = Dict{String,Float64}(fl[i] => _num(rec["feats_load"][i]) for i in eachindex(fl))
             upd!(p1["load"], ml_predict_load(models, z, feats_l), _num(rec["new_load"]))
         end
@@ -139,32 +150,42 @@ for z in PILOTS
     Tseries = Dict{DateTime,Float64}(h => v[1] for (h, v) in lagg)
     holset = ml_holidays(String(load_load_models()["zones"][z]["holiday_country"]), 2024:2027)
     zpack = load_res_models()["zones"][z]
-    fs = models.meta["$(z)_solar"]["feat_cols"]; fw = models.meta["$(z)_wind"]["feat_cols"]
-    fl = models.meta["$(z)_load"]["feat_cols"]
     for (key, rec) in ref[z]
         h = DateTime(key, dateformat"yyyymmdd-HHMM"); D = Date(h)
         ra = get(ragg, h, nothing); ra === nothing && continue
         ghi, cloud, pres, v100m = ra
         c95s = get(cap[(z, :solar)], D, NaN); c95w = get(cap[(z, :wind)], D, NaN)
         feats_s = ml_res_features(h, lat0, lon0, ghi, cloud, pres, v100m, c95s, c95w)
-        # compare RES feature vectors
-        for (i, n) in enumerate(fs)
-            jl = feats_s[n]; py = _num(rec["feats_solar"][i]); upd!(feat_acc, jl, py)
-            d = abs(jl - py); d > worst_feat[3] && !isnan(d) && (global worst_feat = (z * ":" * n, key, d))
+        # SOLAR (only where a NEW model shipped for this zone)
+        if has_model("solar", z) && haskey(rec, "feats_solar")
+            fs = models.meta["$(z)_solar"]["feat_cols"]
+            for (i, n) in enumerate(fs)
+                jl = feats_s[n]; py = _num(rec["feats_solar"][i]); upd!(feat_acc, jl, py)
+                d = abs(jl - py); d > worst_feat[3] && !isnan(d) && (global worst_feat = (z * ":" * n, key, d))
+            end
+            upd!(pred_acc["solar"], ml_predict_solar(models, z, feats_s), _num(rec["new_solar"]), "$z@$key")
         end
-        for (i, n) in enumerate(fw)
-            upd!(feat_acc, feats_s[n], _num(rec["feats_wind"][i]))
+        # WIND (only where a NEW model shipped for this zone)
+        if has_model("wind", z) && haskey(rec, "feats_wind")
+            fw = models.meta["$(z)_wind"]["feat_cols"]
+            for (i, n) in enumerate(fw)
+                upd!(feat_acc, feats_s[n], _num(rec["feats_wind"][i]))
+            end
+            upd!(pred_acc["wind"], ml_predict_wind(models, z, feats_s), _num(rec["new_wind"]), "$z@$key")
         end
-        upd!(pred_acc["solar"], ml_predict_solar(models, z, feats_s), _num(rec["new_solar"]), "$z@$key")
-        upd!(pred_acc["wind"], ml_predict_wind(models, z, feats_s), _num(rec["new_wind"]), "$z@$key")
-        # baseline components (pack) — validate the reuse path too
-        bs = haskey(zpack, "solar") ? predict_solar_hour(zpack["solar"], ghi, h) : 0.0
-        upd!(base_acc["solar"], bs, _num(rec["base_solar"]))
-        vv = Float64[get(get(rw, cell, Dict{DateTime,NTuple{4,Float64}}()), h, (NaN,NaN,NaN,NaN))[1] for cell in cells]
-        bw = (haskey(zpack, "wind") && !any(isnan, vv)) ? max(predict_wind_hour(zpack["wind"], vv), 0.0) : 0.0
-        upd!(base_acc["wind"], bw, _num(rec["base_wind"]))
-        # LOAD
-        if haskey(rec, "feats_load")
+        # baseline components (pack) — validate the reuse path where the ref carries it
+        if haskey(rec, "base_solar")
+            bs = haskey(zpack, "solar") ? predict_solar_hour(zpack["solar"], ghi, h) : 0.0
+            upd!(base_acc["solar"], bs, _num(rec["base_solar"]))
+        end
+        if haskey(rec, "base_wind")
+            vv = Float64[get(get(rw, cell, Dict{DateTime,NTuple{4,Float64}}()), h, (NaN,NaN,NaN,NaN))[1] for cell in cells]
+            bw = (haskey(zpack, "wind") && !any(isnan, vv)) ? max(predict_wind_hour(zpack["wind"], vv), 0.0) : 0.0
+            upd!(base_acc["wind"], bw, _num(rec["base_wind"]))
+        end
+        # LOAD (only where a NEW load model shipped for this zone)
+        if has_model("load", z) && haskey(rec, "feats_load")
+            fl = models.meta["$(z)_load"]["feat_cols"]
             la = get(lagg, h, nothing)
             if la !== nothing && !isnan(la[1])
                 T, ghiL = la; Tma = ml_trailing_ma48(Tseries, h)
@@ -201,14 +222,16 @@ end
 #  (3) end-to-end NEW predictions are therefore bit-identical EXCEPT where a
 #      feature sits within ~1e-13 of a tree split threshold and the discrete split
 #      flips — the documented last-ULP mechanism (Postgres↔DuckDB parity note),
-#      not a port bug. We bound this at a tiny fraction of hours.
+#      not a port bug. This applies to LOAD as well as RES (the same LightGBM
+#      evaluator; the pilot happened to see zero load flips, not a guarantee).
+#      We bound total flips across all three targets at ≤1% of predictions.
 scorer_ok = p1["load"].maxabs == 0 && p1["solar"].maxabs == 0 && p1["wind"].maxabs == 0
 feats_ok = feat_acc.maxrel < 1e-9
-load_ok = pred_acc["load"].maxabs == 0.0
-flips = pred_acc["solar"].nbig + pred_acc["wind"].nbig
-flips_ok = flips <= div(480, 100)   # ≤1% of hours may flip a near-threshold split
-ok = scorer_ok && feats_ok && load_ok && flips_ok
-@printf("\n  scorer bit-identical: %s | features rel<1e-9: %s | load bit-identical: %s | RES split-flips: %d/960 (≤1%% ok: %s)\n",
-        scorer_ok, feats_ok, load_ok, flips, flips_ok)
+flips = pred_acc["load"].nbig + pred_acc["solar"].nbig + pred_acc["wind"].nbig
+tot_n = pred_acc["load"].n + pred_acc["solar"].n + pred_acc["wind"].n
+flips_ok = flips <= max(cld(tot_n, 100), 1)   # ≤1% of hours may flip a near-threshold split
+ok = scorer_ok && feats_ok && flips_ok
+@printf("\n  scorer bit-identical: %s | features rel<1e-9: %s | split-flips: %d/%d (≤1%% ok: %s)\n",
+        scorer_ok, feats_ok, flips, tot_n, flips_ok)
 println("\n", ok ? "EQUIVALENCE PASS ✅" : "EQUIVALENCE FAIL ❌")
 println("ML_EQUIV_DONE")

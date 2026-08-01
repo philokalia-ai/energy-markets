@@ -42,9 +42,13 @@ end
     x = zeros(length(gm.feature_names))
     p1 = lgb_predict(gm, x); p2 = lgb_predict(gm, x)
     @test p1 == p2 && isfinite(p1)         # deterministic, finite
-    # num_cat assertion holds (no categorical dumps in the pipeline)
-    for z in ML_PILOT_ZONES, tgt in ("solar", "wind", "load")
-        @test length(parse_lgb_model(joinpath(_BIN, "input_models", "$(z)_$(tgt).txt")).trees) >= 1
+    # num_cat assertion holds (no categorical dumps in the pipeline). Only WINNER
+    # models are committed — iterate the per-model meta entries (a Dict with
+    # feat_cols), skipping the meta-driven wiring keys (pilot_zones / winners).
+    meta = JSON.parsefile(joinpath(_BIN, "input_models", "meta.json"))
+    for (key, entry) in meta
+        (entry isa AbstractDict && haskey(entry, "feat_cols")) || continue
+        @test length(parse_lgb_model(joinpath(_BIN, "input_models", "$(key).txt")).trees) >= 1
     end
 end
 
@@ -68,20 +72,59 @@ end
     @test _np_percentile95([5.0]) == 5.0
 end
 
-@testset "ML inputs — holidays (deliberate train/serve imperfection)" begin
-    # GR uses the WESTERN Gregorian Easter approximation (NOT Orthodox computus):
-    # 2026 Western Easter = Apr 5 -> Good Friday Apr 3 must be in the GR set.
+@testset "ML inputs — holidays (rollout-39 Orthodox amendment, train/serve lockstep)" begin
+    # GR/BG/RO/RS anchor movable feasts on the ORTHODOX (Julian/Meeus) Easter.
+    # 2026 Orthodox Easter = Apr 12 -> Good Friday Apr 10 in the set; the Western
+    # Good Friday (Apr 3) must NOT be (the pilot approximation was fixed here + in
+    # features.py in lockstep).
     gr = ml_holidays("GR", 2026:2026)
-    @test Date(2026, 4, 3) in gr           # western Good Friday (approx)
+    @test Date(2026, 4, 10) in gr          # orthodox Good Friday
+    @test !(Date(2026, 4, 3) in gr)        # western Good Friday no longer present
     @test Date(2026, 3, 25) in gr          # fixed GR national day
-    # NL (and any non-GR/ES/DE/SE country) carries NO holidays in features.py.
+    @test ml_orthodox_easter(2026) == Date(2026, 4, 12)
+    # the other Orthodox zones carry their fixed + orthodox-movable maps
+    @test Date(2026, 4, 12) in ml_holidays("BG", 2026:2026)   # orthodox Easter Sunday
+    @test Date(2026, 3, 3)  in ml_holidays("BG", 2026:2026)   # BG Liberation Day
+    @test Date(2026, 1, 7)  in ml_holidays("RS", 2026:2026)   # RS Orthodox Christmas
+    @test Date(2026, 12, 1) in ml_holidays("RO", 2026:2026)   # RO National Day
+    # ES/DE/SE keep the Western Easter; unmapped countries carry NO holidays.
+    @test Date(2026, 4, 3) in ml_holidays("ES", 2026:2026)    # western Good Friday
     @test isempty(ml_holidays("NL", 2024:2027))
     @test isempty(ml_holidays("PL", 2026:2026))
+    @test isempty(ml_holidays("FR", 2026:2026))
 end
 
-@testset "ML inputs — ship config" begin
+@testset "ML inputs — ship config (rollout-39)" begin
+    # structural invariants: every ML zone × target has an explicit entry, and every
+    # ML zone ships at least one NEW target (else it would not be in the overlay).
+    for z in ML_PILOT_ZONES, t in (:load, :solar, :wind)
+        @test haskey(ML_USE_NEW, (z, t))
+    end
+    @test all(any(ML_USE_NEW[(z, t)] for t in (:load, :solar, :wind)) for z in ML_PILOT_ZONES)
+    # every committed model corresponds to a NEW winner, and vice-versa
+    meta = JSON.parsefile(joinpath(_BIN, "input_models", "meta.json"))
+    for z in ML_PILOT_ZONES, t in (:load, :solar, :wind)
+        @test ML_USE_NEW[(z, t)] == haskey(meta, "$(z)_$(t)")
+    end
+    # stable pilot decisions (unchanged by the retrain; GR wind + ES solar lose to the pack)
     @test ML_USE_NEW[("GR", :load)] && ML_USE_NEW[("GR", :solar)] && !ML_USE_NEW[("GR", :wind)]
-    @test !ML_USE_NEW[("ES", :solar)]                       # ES keeps the pack solar ridge
-    @test ML_USE_NEW[("NL", :wind)] && !ML_USE_NEW[("SE2", :wind)]   # NEW wind only offshore NL
-    @test all(ML_USE_NEW[(z, :load)] for z in ML_PILOT_ZONES)
+    @test !ML_USE_NEW[("ES", :solar)] && ML_USE_NEW[("ES", :load)]
+    @test ML_USE_NEW[("NL", :wind)] && !ML_USE_NEW[("SE2", :wind)]
+    @test ML_USE_NEW[("DE_LU", :solar)] && !ML_USE_NEW[("DE_LU", :wind)]
+
+    # meta-driven runtime resolution (#280): the 39-zone rollout ships pilot_zones +
+    # winners THROUGH meta.json — the surface production actually reads.
+    if haskey(meta, "pilot_zones")
+        mp = ml_pilot_zones()
+        @test issubset(ML_PILOT_ZONES, mp)          # pilots stay covered
+        @test "PL" in mp                            # a headline new zone joined
+        @test ml_use_new("PL", :load; meta=meta)    # PL load ships NEW
+        @test ml_use_new("GR", :solar; meta=meta) && !ml_use_new("GR", :wind; meta=meta)
+        # every committed model entry ⇔ a meta winner; and each pilot_zone ships ≥1 NEW
+        for (key, entry) in meta
+            (entry isa AbstractDict && haskey(entry, "feat_cols")) || continue
+            @test meta["winners"][key] == true
+        end
+        @test all(any(ml_use_new(z, t; meta=meta) for t in (:load, :solar, :wind)) for z in mp)
+    end
 end

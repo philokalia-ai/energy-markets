@@ -44,22 +44,25 @@ reference track's price quality. Error is measured against what the market used.
 
 ### Footprint status (which model produces each target)
 
-The surface now spans the **whole 39-zone footprint**. Provenance is resolved per
-zone-target exactly as `bin/daily_forecast.jl` resolves it with `EUPHEMIA_ML_INPUTS`
-on — the `ML_USE_NEW` scorecard for the pilots, the linear pack everywhere else:
+The 5-zone pilot was rolled out to the **whole 39-zone footprint** (see
+[`docs/experiments/input-upgrade/rollout-39.md`](experiments/input-upgrade/rollout-39.md)).
+Provenance is resolved per zone-target at RUN time from
+[`bin/input_models/meta.json`](../bin/input_models/meta.json) (`pilot_zones` +
+`winners`) via `ml_pilot_zones()` / `ml_use_new()` in `bin/ml_inputs.jl`, exactly
+as `bin/daily_forecast.jl` reads it with `EUPHEMIA_ML_INPUTS` on:
 
-| class | zones | solar | wind | load | geometry |
-|-------|-------|-------|------|------|----------|
-| **ML pilots** (5) | GR, ES, DE_LU, SE2, NL | ML¹ | ML² | ML | `geom.json` |
-| **linear pack** (34) | the rest of `FORECAST_FOOTPRINT` | pack | pack | pack | `res_models_v2.json` cells + `load_models_v1.json` cities |
+| class | count | solar | wind | load |
+|-------|-------|-------|------|------|
+| **NEW LightGBM** | **76 of 117 zone-targets** (38 load, 22 solar, 16 wind) | per-winner | per-winner | 38/39 zones |
+| **linear pack** | 41 zone-targets (incl. all of NO4) | pack | pack | pack |
 
-¹ ML solar on all pilots **except ES** (its ridge already wins). ² ML wind **only
-on offshore-heavy NL**; the other pilots' wind is the physical power-curve pack.
-
-The 5 pilots carry 3 targets each = **15 LightGBM models** in
-[`bin/input_models/`](../bin/input_models/) with geometry from
-[`geom.json`](../bin/input_models/geom.json). The 34 pack zones reuse the SAME
-committed weather packs the daily forecast drives them with:
+Each (zone, target) ships whichever beat the other on the frozen OOS scorecard.
+**Load is a near-universal NEW winner (38/39 zones)**; solar NEW on 22 modeled
+zones (7 skip — no meaningful solar: NO1-5, SE1, RS); wind NEW on 16 (the physical
+power-curve pack still wins the low/onshore zones; 7 skip). **76 winner LightGBM
+models** live in [`bin/input_models/`](../bin/input_models/) with geometry from
+[`geom.json`](../bin/input_models/geom.json) (39 zones); losers ship no model and
+fall back to the pack. Pack zones reuse the SAME committed weather packs:
 [`bin/res_models_v2.json`](../bin/res_models_v2.json) (RES ridges via
 `predict_solar_hour`/`predict_wind_hour`) and
 [`bin/load_models_v1.json`](../bin/load_models_v1.json) (per-zone ridge via
@@ -110,11 +113,14 @@ and [`bin/ml_inputs.jl`](../bin/ml_inputs.jl) (serve):
   known at the gate).
 
 > **Train/serve consistency rule (owner):** the serve-time port replicates
-> `features.py` *including its known imperfections* (GR holidays use the Western
-> Gregorian Easter; only GR/ES/DE/SE carry a holiday map; hard-coded degree-hour
-> bases). Fixes happen at the next retrain, never in the port — a serve-time "fix"
-> would introduce skew. See the header of `bin/ml_inputs.jl` and the asserts in
-> `test/test_ml_inputs.jl`.
+> `features.py` *exactly as trained*, changed only IN LOCKSTEP with it. The
+> rollout-39 retrain fixed GR's holidays to the **Orthodox** (Julian/Meeus) Easter
+> and added BG/RO/RS Orthodox maps — applied to `features.py` `orthodox_easter` AND
+> `bin/ml_inputs.jl` `ml_orthodox_easter` together (asserted byte-identical for all
+> mapped countries). ES/DE/SE keep the Western Easter; unmapped countries carry no
+> holiday map; degree-hour bases stay the hard-coded 21.0/16.5 °C. A serve-time
+> "fix" out of lockstep would introduce skew. See the `bin/ml_inputs.jl` header and
+> the asserts in `test/test_ml_inputs.jl`.
 
 ## 4. Training protocol (frozen)
 
@@ -129,14 +135,18 @@ driver: [`train.py`](experiments/input-upgrade/train.py).
   `lr = 0.05`, `n_estimators ≤ 600`, early-stopped on a time-ordered inner tail.
   Predictions clamped ≥ 0; solar clamped to 0 at night (sun elevation = 0).
 - **Per-zone-winner selection:** each (zone, target) ships whichever of {new
-  LightGBM, committed linear pack} won the OOS scorecard
-  ([`scorecard.csv`](experiments/input-upgrade/scorecard.csv)). The live winners
-  (`ML_USE_NEW` in `bin/ml_inputs.jl`): load = new on all 5; solar = new on all but
-  ES; wind = new only on offshore-heavy NL. The badge next to each chart on the page
-  shows which is live.
+  LightGBM, committed linear pack} won the OOS scorecard. Across the 39-zone
+  footprint **76 of 117 zone-targets ship NEW** (rollout-39: load 38/39, solar 22,
+  wind 16); the winners live in `meta.json`'s `winners` map, resolved at run time
+  (see [`rollout-39.md`](experiments/input-upgrade/rollout-39.md) for the full
+  scorecard). The badge next to each chart on the page shows which is live.
+- **GFS vintage cache:** the honest `previous_day1` vintages fetched for train (and
+  reused at serve) are cached durably in **`data/gfs_vintages/`** (git-ignored,
+  ~136 MB, one parquet per zone × time-chunk) so future retrains never re-fetch the
+  rate-limited open-meteo history.
 - **Export:** each booster is a LightGBM text dump (`bin/input_models/<zone>_<target>.txt`)
   plus [`meta.json`](../bin/input_models/meta.json) (feature order, best iteration,
-  ratio column, night-clamp flag).
+  ratio column, night-clamp flag, and the `pilot_zones` / `winners` wiring keys).
 
 ## 5. The committed model + the pure-Julia scorer
 
