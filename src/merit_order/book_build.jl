@@ -27,6 +27,52 @@
 _is_hydro(g::Generator) = g.fuel_type in WATER_VALUE_FUEL_TYPES ||
                           g.fuel_type == Symbol("Hydro Run-of-river and pondage")
 
+# =============================================================================
+# Nordic reservoir-wetness program (docs/nordic-wetness-prereg.md) — DEFAULT-INERT
+# =============================================================================
+# Opt-in, enable-polarity (the mechanism did NOT ship): every branch below is
+# dead unless EUPHEMIA_ENABLE_NW is set AND the per-treatment enable is set AND
+# the zone is in that treatment's declared affected set. With the master switch
+# unset the book is byte-identical to cv27 main (bit-identity guard).
+#
+# Theory: the shipped water-value floor `wv_frac = 0.35 + 0.65·max(dry,drawdown)`
+# only ever RAISES the price — a fuller-than-normal reservoir cannot price stored
+# water below the 0.35 full-reservoir floor, so wet Nordic hours systematically
+# OVERPRICE (+23 €/MWh, 51% of Nordic error mass). The two treatments make the
+# response SYMMETRIC about the normal state, using the wet complement of the exact
+# dryness normalization (`get_reservoir_wetness`, mod-52 ISO-week wrap inherited):
+#   T1 — non-anchored reservoir-opportunity zones (wv_frac branch):
+#        wv_frac -= β·wetness, clamped to [wv_floor_wet, 1.0]
+#   T2 — :hydro-anchored zones (pass-2 anchor branch):
+#        anchor_share_eff = anchor_share − β·wetness, clamped to [anchor_floor_wet, anchor_share]
+"Affected set for T1 — non-anchored reservoir-opportunity Nordic zones (wv_frac branch)."
+const NW_T1_ZONES = Set(["SE1", "SE2", "FI", "NO4"])
+"Affected set for T2 — :hydro-anchored reservoir-opportunity Nordic zones (pass-2 anchor)."
+const NW_T2_ZONES = Set(["NO1", "NO2", "NO3", "NO5", "SE3", "SE4"])
+
+_nw_master_on() = !isempty(get(ENV, "EUPHEMIA_ENABLE_NW", ""))
+"T1 fires for `zone` iff the master + T1 enables are set and the zone is in the T1 set."
+_nw_t1_on(zone::AbstractString) =
+    _nw_master_on() && !isempty(get(ENV, "EUPHEMIA_ENABLE_NW_T1", "")) &&
+    String(zone) in NW_T1_ZONES
+"T2 fires for `zone` iff the master + T2 enables are set and the zone is in the T2 set."
+_nw_t2_on(zone::AbstractString) =
+    _nw_master_on() && !isempty(get(ENV, "EUPHEMIA_ENABLE_NW_T2", "")) &&
+    String(zone) in NW_T2_ZONES
+"Either treatment fires for `zone` — gates the (extra) reservoir-wetness query."
+_nw_active(zone::AbstractString) = _nw_t1_on(zone) || _nw_t2_on(zone)
+
+# Declared parameters (frozen count — one axis, one discount slope β, per-branch
+# lower clamps, one wetness cap). Read at CALL time so a fresh process per arm can
+# set them; the β sweep sets EUPHEMIA_NW_BETA per cell. Defaults: β mirrors the
+# shipped 0.65 dry slope (symmetric extension); floors are physical export-
+# opportunity floors, not fitted.
+_nw_param(name::String, default::String) = parse(Float64, get(ENV, name, default))
+nw_beta() = _nw_param("EUPHEMIA_NW_BETA", "0.65")             # discount slope
+nw_wv_floor_wet() = _nw_param("EUPHEMIA_NW_WV_FLOOR", "0.15")    # T1 lower clamp on wv_frac
+nw_anchor_floor_wet() = _nw_param("EUPHEMIA_NW_ANCHOR_FLOOR", "0.6") # T2 lower clamp on anchor_share
+nw_wet_cap() = _nw_param("EUPHEMIA_NW_WET_CAP", "0.5")          # wetness magnitude cap
+
 """
 Stage 1 — true the offered fleet to the zone's demonstrated capability and
 price it: fleet completion (aggregate small units up to the p95/installed
@@ -277,7 +323,10 @@ end
 Stage 4 — hydro fleet state: offered-quantity scale (recent-output cap or,
 for `:reservoir_opportunity` zones, reservoir fullness), dryness (reservoir
 levels vs seasonal norm, output-based fallback) and the seasonal drawdown
-signal. Returns `(hydro_pmax, hydro_scale, hydro_dryness, reservoir_drawdown)`.
+signal. Returns
+`(hydro_pmax, hydro_scale, hydro_dryness, reservoir_drawdown, wetness)`.
+`wetness` is the Nordic-wetness axis (`clamp(fill_ratio-1, 0, cap)`); it is 0.0
+everywhere unless the wetness program is enabled for this zone (default-inert).
 """
 function _hydro_state(generators::Vector{Generator}, bidding_zone::String,
     day::Date, hydro_model::Symbol, seasonal_drawdown::Bool)
@@ -285,6 +334,7 @@ function _hydro_state(generators::Vector{Generator}, bidding_zone::String,
     hydro_scale = 1.0   # offered-quantity cap (fraction of nameplate)
     hydro_dryness = 0.0 # 0 = normal water conditions, →1 = severe drought
     reservoir_drawdown = 0.0 # 0 = reservoir at seasonal peak, →1 = drawn down
+    wetness = 0.0       # Nordic-wetness axis; 0 unless the program is on (inert)
     if hydro_pmax > 1.0
         hydro_avail = get_hydro_availability(bidding_zone, day)
         if hydro_avail !== nothing
@@ -331,12 +381,21 @@ function _hydro_state(generators::Vector{Generator}, bidding_zone::String,
                 dd !== nothing && (reservoir_drawdown = dd)
             end
         end
+        # Nordic-wetness axis (docs/nordic-wetness-prereg.md) — the symmetric
+        # wet complement of the dryness norm above, computed only when the
+        # program is enabled for this zone (one extra reservoir query, gated so
+        # the default path is untouched). 0.0 leaves T1/T2 inert downstream.
+        if _nw_active(bidding_zone)
+            w = get_reservoir_wetness(bidding_zone, day; wet_cap=nw_wet_cap())
+            w !== nothing && (wetness = w)
+        end
         println("  💧 Hydro: offer scale $(round(hydro_scale, digits=2)), " *
                 "dryness $(round(hydro_dryness, digits=2))" *
                 (reservoir_dryness !== nothing ? " (reservoir levels)" : " (output-based fallback)") *
-                (hydro_model == :reservoir_opportunity ? " [reservoir-opportunity]" : ""))
+                (hydro_model == :reservoir_opportunity ? " [reservoir-opportunity]" : "") *
+                (wetness > 0.0 ? " wetness $(round(wetness, digits=2))" : ""))
     end
-    return hydro_pmax, hydro_scale, hydro_dryness, reservoir_drawdown
+    return hydro_pmax, hydro_scale, hydro_dryness, reservoir_drawdown, wetness
 end
 
 """
@@ -717,7 +776,7 @@ function create_merit_order_book(
                     "($(length(backstop_by_hour)) hours, $(BACKSTOP_WEEKS)-week window)")
 
         # ── Stage 4: hydro fleet state (offer scale, dryness, drawdown) ──
-        hydro_pmax, hydro_scale, hydro_dryness, reservoir_drawdown =
+        hydro_pmax, hydro_scale, hydro_dryness, reservoir_drawdown, wetness =
             _hydro_state(generators, bidding_zone, day, hydro_model,
                 profile.seasonal_drawdown)
         offered_pmax(g) = _is_hydro(g) ? g.p_max * hydro_scale : g.p_max
@@ -939,8 +998,17 @@ function create_merit_order_book(
                     # with dryness. Clamped to [2, gas SRMC].
                     water_value = if anchor_active && opportunity_anchor == :hydro &&
                                      haskey(anchor_prices, ts)
+                        # T2 (Nordic-wetness, docs/nordic-wetness-prereg.md):
+                        # discount the pass-2 anchor share when the reservoir is
+                        # above its climatological norm — anchor_share_eff =
+                        # anchor_share − β·wetness, clamped to [anchor_floor_wet,
+                        # anchor_share]. Inert (== anchor_share) unless T2 is
+                        # enabled for this zone AND wetness > 0.
+                        anchor_share_eff = (_nw_t2_on(bidding_zone) && wetness > 0.0) ?
+                            clamp(anchor_share - nw_beta() * wetness,
+                                  nw_anchor_floor_wet(), anchor_share) : anchor_share
                         clamp(anchor_prices[ts] *
-                              (anchor_share + water_value_dry_boost * hydro_dryness),
+                              (anchor_share_eff + water_value_dry_boost * hydro_dryness),
                               2.0, gas_srmc)
                     elseif hydro_model == :reservoir_opportunity
                         # Stored water is worth a FRACTION of the continental
@@ -955,6 +1023,17 @@ function create_merit_order_book(
                         # raises the shadow value of stored water — SE1/SE2 draw
                         # to 55–60% of the annual peak by February at dryness 0).
                         wv_frac = 0.35 + 0.65 * max(hydro_dryness, reservoir_drawdown)
+                        # T1 (Nordic-wetness, docs/nordic-wetness-prereg.md):
+                        # extend the floor SYMMETRICALLY below 0.35 when the
+                        # reservoir is above its climatological norm — wv_frac -=
+                        # β·wetness, clamped to a physical export-opportunity floor
+                        # [wv_floor_wet, 1.0]. Inert unless T1 is enabled for this
+                        # zone AND wetness > 0 (a T2 zone reaching this branch in
+                        # pass 1 has _nw_t1_on false, so it is untouched here).
+                        if _nw_t1_on(bidding_zone) && wetness > 0.0
+                            wv_frac = clamp(wv_frac - nw_beta() * wetness,
+                                            nw_wv_floor_wet(), 1.0)
+                        end
                         gas_srmc * wv_frac * (water_value_base + water_value_span * norm_demand)
                     else
                         gas_srmc * (1.0 + water_value_dry_boost * hydro_dryness) *
