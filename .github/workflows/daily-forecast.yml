@@ -1,14 +1,22 @@
 name: Daily ex-ante forecast
 
-# SCHEDULING CONSOLIDATED (July 2026): all forecast scheduling lives in the
-# ceres `update_entsoe_data` workflow (08:00 weather / 12:30 + 17:30 + 19:30
-# entsoe, every run SELF-HEALING — it detects a missing lead-1 slice,
-# re-pulls the four D-1 input feeds and retries, bounded by per-track
-# deadlines). Scheduling forecasts here was redundant with that and had no
-# ETL re-pull capability: when a TSO item was late this workflow could only
-# skip and hope. This workflow remains as the manual/debug runner
-# (workflow_dispatch only) with the same HiGHS production default.
+# PRE-GATE 7-LEAD RUN (Aug 2026, docs/experiments/pregate-7lead.md): a 06:30 UTC
+# cron produces the WEATHER (ex-ante) track for ALL leads D+1..D+7 BEFORE the
+# 12:00 CET auction. Lead-1 (tomorrow) is therefore a genuine PRE-GATE forecast.
+# At 06:30 tomorrow's Day-ahead ATC has not yet published, so the run sets
+# EUPHEMIA_FORECAST_PREGATE=true (the network build degrades to the cv27
+# demonstrated-capability fallback, and the ATC eligibility gate does not block).
+#
+# The ceres `update_entsoe_data` workflow (08:00 weather / 12:30 + 17:30 + 19:30
+# entsoe, SELF-HEALING) STILL runs the evening REFRESH — it detects a missing
+# lead-1 slice, re-pulls the four D-1 input feeds and retries. The evening
+# refresh remains the reference/entsoe track's freeze; ceres-side coordination
+# may retire it once the pre-gate weather track is trusted. This workflow also
+# stays the manual/debug runner (workflow_dispatch) with the HiGHS default.
 on:
+  schedule:
+    # 06:30 UTC daily — the pre-gate slot (before 12:00 CET / 10:00–11:00 UTC).
+    - cron: "30 6 * * *"
   workflow_dispatch:
     inputs:
       max_lead_days:
@@ -131,11 +139,18 @@ jobs:
           ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
         run: |
           if [ "${{ github.event_name }}" = "schedule" ]; then
+            # PRE-GATE 7-lead run: weather (ex-ante) track, ALL leads, before the
+            # 12:00 CET auction. Day-ahead ATC for tomorrow is not yet published,
+            # so degrade the network to the demonstrated-capability fallback.
             MAX_LEAD_DAYS="7"
             FORCE_RERUN="false"
+            INPUT_MODE="weather"
+            EUPHEMIA_FORECAST_PREGATE="true"
           else
             MAX_LEAD_DAYS="${{ github.event.inputs.max_lead_days }}"
             FORCE_RERUN="${{ github.event.inputs.force_rerun }}"
+            INPUT_MODE="${INPUT_MODE:-entsoe}"
+            EUPHEMIA_FORECAST_PREGATE="${EUPHEMIA_FORECAST_PREGATE:-false}"
           fi
 
           OPTIMIZER="$FORECAST_OPTIMIZER"
@@ -143,10 +158,10 @@ jobs:
 
           echo "🔮 Daily ex-ante forecast"
           echo "⚖️ Optimizer: $OPTIMIZER (skip_clear=$SKIP_CLEAR)"
-          echo "📅 Max lead days: $MAX_LEAD_DAYS"
+          echo "📅 Max lead days: $MAX_LEAD_DAYS   🛰️ input_mode: $INPUT_MODE   🌅 pre-gate: $EUPHEMIA_FORECAST_PREGATE"
           echo "🔄 Force rerun: $FORCE_RERUN"
 
-          export OPTIMIZER MAX_LEAD_DAYS FORCE_RERUN SKIP_CLEAR
+          export OPTIMIZER MAX_LEAD_DAYS FORCE_RERUN SKIP_CLEAR INPUT_MODE EUPHEMIA_FORECAST_PREGATE
 
           # Crash-retry (issue #182: HiGHS segfaults ~3-4% of decomposed
           # day-solves). Forecast slices are no-clobber, so a retry skips

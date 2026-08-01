@@ -143,6 +143,26 @@ const ZONES = let z = [String(strip(s)) for s in split(get(ENV, "ZONES", ""), ",
 end
 const CV = Euphemia.ENERGY_PRICES_CODE_VERSION
 
+# ── Pre-gate/7-lead + data-reset controls (docs/experiments/pregate-7lead.md) ─
+# PRE-GATE: the ~06:30 UTC run that freezes lead-1 (tomorrow) BEFORE the 12:00
+# CET auction. At that hour tomorrow's Day-ahead ATC is not yet published, so
+# the network build degrades to the cv27 demonstrated-capability fallback
+# (Network.PREGATE_ATC_FALLBACK) and the ATC eligibility gate does not block on
+# absent Day-ahead rows. Default OFF ⇒ the classic evening-run behaviour,
+# byte-identical. Inert unless a clear actually runs.
+const PREGATE = lowercase(get(ENV, "EUPHEMIA_FORECAST_PREGATE", "false")) == "true"
+# RETRO: reconstruct PAST market days at every lead 1..N from the historical
+# previous_dayN weather vintages of the time (the data-reset backfill, Phase 2).
+# EUPHEMIA_FORECAST_RETRO_ASOF is the RETRO WINDOW END (the last past market day
+# to reconstruct); EUPHEMIA_FORECAST_RETRO_START (default 2026-07-01) the first.
+# Rows are stamped is_retro=true + reset_tag; the writer refuses to clobber any
+# LIVE vintage (additive fill). Empty ⇒ the normal live forward run.
+const RETRO_ASOF = let s = strip(get(ENV, "EUPHEMIA_FORECAST_RETRO_ASOF", ""))
+    isempty(s) ? nothing : Date(String(s))
+end
+const RETRO_START = Date(strip(get(ENV, "EUPHEMIA_FORECAST_RETRO_START", "2026-07-01")))
+const RESET_TAG = get(ENV, "EUPHEMIA_FORECAST_RESET_TAG", "2026-08-01-reset")
+
 "Latest fully-realized market day (MAX UTC date of entsoe.actual_total_load)."
 function latest_actual_load_date()
     df = Euphemia.sql2df_with_retry(
@@ -287,11 +307,20 @@ HOUR-LEVEL guard refuses any row at or before `prediction_made`.
 """
 function write_forecast!(market_date::Date, lead_days::Int, prediction_made::DateTime,
                          zone_hourly::Dict{String,Dict{DateTime,Float64}},
-                         input_mode::String=INPUT_MODE)
-    latest_actual = latest_actual_load_date()
-    assert_unrealized(market_date, latest_actual)   # HARD GUARD (day level)
-    for (_, hourly) in zone_hourly                  # HARD GUARD (hour level)
-        assert_hours_unrealized(keys(hourly), prediction_made)
+                         input_mode::String=INPUT_MODE;
+                         is_retro::Bool=false,
+                         reset_tag::Union{Nothing,String}=nothing,
+                         retro_of_utc::Union{Nothing,DateTime}=nothing)
+    # LIVE mode keeps both purity guards ABSOLUTE. RETRO mode reconstructs
+    # already-realized past days ON PURPOSE (the labeling contract replaces the
+    # guards): the honesty comes from `is_retro`/`reset_tag`/`retro_of_utc` +
+    # the no-clobber-LIVE rule below, not from the future-hour assertion.
+    if !is_retro
+        latest_actual = latest_actual_load_date()
+        assert_unrealized(market_date, latest_actual)   # HARD GUARD (day level)
+        for (_, hourly) in zone_hourly                  # HARD GUARD (hour level)
+            assert_hours_unrealized(keys(hourly), prediction_made)
+        end
     end
 
     # Explicit UTC offsets so timestamptz values are unambiguous regardless of
@@ -300,23 +329,50 @@ function write_forecast!(market_date::Date, lead_days::Int, prediction_made::Dat
 
     n_inserted = 0
     Euphemia.withdb() do cnx
+        # RETRO no-clobber contract: a retro fill NEVER touches a slice that
+        # already holds a genuine LIVE vintage (is_retro=false) at ANY
+        # code_version — additive fill only. Checked inside the transaction so a
+        # concurrent live write cannot race it.
         LibPQ.execute(cnx, "BEGIN")
         try
-            LibPQ.execute(cnx, """
-                DELETE FROM simulations.forecast_prices
-                WHERE market_date = \$1 AND lead_days = \$2 AND input_mode = \$3
-            """, [market_date, lead_days, input_mode])
+            if is_retro
+                live = LibPQ.execute(cnx, """
+                    SELECT COUNT(*) AS n FROM simulations.forecast_prices
+                    WHERE market_date = \$1 AND lead_days = \$2 AND input_mode = \$3
+                      AND is_retro = false
+                """, [market_date, lead_days, input_mode]) |> DataFrame
+                if Int(live.n[1]) > 0
+                    LibPQ.execute(cnx, "ROLLBACK")
+                    println("  ⏭️  retro SKIP $market_date lead=$lead_days mode=$input_mode: " *
+                            "a LIVE vintage already exists — additive fill refuses to clobber it")
+                    return
+                end
+                # Clear only prior RETRO rows for this slice (idempotent re-run).
+                LibPQ.execute(cnx, """
+                    DELETE FROM simulations.forecast_prices
+                    WHERE market_date = \$1 AND lead_days = \$2 AND input_mode = \$3
+                      AND is_retro = true
+                """, [market_date, lead_days, input_mode])
+            else
+                LibPQ.execute(cnx, """
+                    DELETE FROM simulations.forecast_prices
+                    WHERE market_date = \$1 AND lead_days = \$2 AND input_mode = \$3
+                      AND is_retro = false
+                """, [market_date, lead_days, input_mode])
+            end
             for (zone, hourly) in zone_hourly
                 for (h, price) in sort!(collect(hourly); by=first)
                     LibPQ.execute(cnx, """
                         INSERT INTO simulations.forecast_prices
                         (market_date, date_time_utc, bidding_zone, price_eur_mwh,
                          prediction_made_utc, lead_days, clearing_mode, code_version,
-                         input_mode)
-                        VALUES (\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8, \$9)
+                         input_mode, is_retro, reset_tag, retro_of_utc)
+                        VALUES (\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8, \$9, \$10, \$11, \$12)
                     """, Any[market_date, tstz(h), zone, price,
                              tstz(prediction_made), lead_days, CLEARING_MODE, CV,
-                             input_mode])
+                             input_mode, is_retro,
+                             reset_tag === nothing ? missing : reset_tag,
+                             retro_of_utc === nothing ? missing : tstz(retro_of_utc)])
                     n_inserted += 1
                 end
             end
@@ -340,9 +396,10 @@ Zones without a model in the pack predict 0 for all hours (warned).
 """
 function build_weather_predictions(first_utc_day::Date, last_utc_day::Date,
                                    candidates::AbstractSet{Date};
-                                   asof::Date=Date(now(UTC)))
+                                   asof::Date=Date(now(UTC)),
+                                   fixed_lag::Union{Nothing,Int}=nothing)
     pack = load_res_models()
-    groups = vintage_groups(first_utc_day, last_utc_day, candidates; asof)
+    groups = vintage_groups(first_utc_day, last_utc_day, candidates; asof, fixed_lag)
     preds = Dict{String,Dict{DateTime,Float64}}()
     for zone in ZONES
         zm = get(pack["zones"], zone, nothing)
@@ -482,10 +539,11 @@ never a silent flat/persistence fallback).
 function build_load_fills(pack, zones_to_fill::Vector{String},
                           first_utc::Date, last_utc::Date,
                           candidates::AbstractSet{Date};
-                          asof::Date=Date(now(UTC)))
+                          asof::Date=Date(now(UTC)),
+                          fixed_lag::Union{Nothing,Int}=nothing)
     fill_pred = Dict{String,Dict{DateTime,Float64}}()
     isempty(zones_to_fill) && return fill_pred
-    groups = vintage_groups(first_utc, last_utc, candidates; asof)
+    groups = vintage_groups(first_utc, last_utc, candidates; asof, fixed_lag)
     for zone in zones_to_fill
         zm = get(pack["zones"], zone, nothing)
         if zm === nothing
@@ -589,10 +647,11 @@ silent fallback). Mirrors `build_load_fills`.
 function build_res_fills(pack, zones_to_fill::Vector{String},
                          first_utc::Date, last_utc::Date,
                          candidates::AbstractSet{Date};
-                         asof::Date=Date(now(UTC)))
+                         asof::Date=Date(now(UTC)),
+                         fixed_lag::Union{Nothing,Int}=nothing)
     res_pred = Dict{String,Dict{DateTime,Float64}}()
     isempty(zones_to_fill) && return res_pred
-    groups = vintage_groups(first_utc, last_utc, candidates; asof)
+    groups = vintage_groups(first_utc, last_utc, candidates; asof, fixed_lag)
     for zone in zones_to_fill
         zm = get(pack["zones"], zone, nothing)
         if zm === nothing
@@ -706,6 +765,32 @@ function clear_utc_day!(cache::Dict{Date,Union{Nothing,Dict{String,Dict{DateTime
     return hourly
 end
 
+"""
+Install the weather-track thermometer override (enabler β1): for every zone and
+every UTC day in `[first_utc, last_utc]` whose model load `preds` covers all 24
+hours, register that vector as the :v3 analogue thermometer for (zone, UTC-day),
+replacing the published ENTSO-E D-1 forecast. Weather-track-scoped — the entsoe
+track / record never call this, so the analogue selection stays byte-identical
+there. The kill-switch (EUPHEMIA_DISABLE_WEATHER_THERMOMETER) is honoured inside
+the override lookup, so installing is always safe.
+"""
+function install_thermometer!(preds::Dict{String,Dict{DateTime,Float64}},
+                              first_utc::Date, last_utc::Date)
+    Euphemia.MeritOrderBook.clear_thermometer_overrides!()
+    n = 0
+    for (zone, zp) in preds
+        for d in first_utc:Day(1):last_utc
+            vec = Float64[get(zp, DateTime(d) + Hour(h), NaN) for h in 0:23]
+            any(isnan, vec) && continue
+            Euphemia.MeritOrderBook.set_thermometer_load!(zone, d, vec)
+            n += 1
+        end
+    end
+    println("  🌡️ weather thermometer: installed $n (zone, UTC-day) model-load vectors " *
+            "for the :v3 analogue selection")
+    return n
+end
+
 function main()
     println("=" ^ 70)
     println("DAILY EX-ANTE FORECAST  zones=$(length(ZONES))  optimizer=$OPTIMIZER")
@@ -721,6 +806,14 @@ function main()
     println("=" ^ 70)
 
     Euphemia.ensure_forecast_tables()
+
+    # Pre-gate ATC fallback (enabler β2): the ~06:30 UTC run freezes tomorrow
+    # BEFORE its Day-ahead ATC publishes, so the network build degrades to the
+    # cv27 demonstrated-capability signal for absent borders. Default OFF ⇒ the
+    # classic evening-run network build, byte-identical.
+    Euphemia.Network.PREGATE_ATC_FALLBACK[] = PREGATE
+    PREGATE && println("  🌅 PRE-GATE mode: demonstrated-capability ATC fallback ON; " *
+                       "ATC eligibility gate does not block on absent Day-ahead rows")
 
     # --- Order-book export (measured: ~150k tagged orders / 307 KB zstd
     # parquet per 39-zone two-pass day; ~112 MB/yr). The sink captures every
@@ -884,7 +977,7 @@ function main()
         # and the entsoe track are untouched. A pilot-zone ML failure leaves that
         # zone on the pack (the loop below only overwrites what it produced), so
         # eligibility/purity guards downstream are unchanged.
-        ml_pilots = [z for z in ML_PILOT_ZONES if z in ZONES]
+        ml_pilots = [z for z in ml_pilot_zones() if z in ZONES]
         if ML_INPUTS_ON && !isempty(ml_pilots)
             println("ML inputs: overlaying LightGBM predictions for $(join(ml_pilots, ",")) " *
                     "(EUPHEMIA_ML_INPUTS on)")
@@ -907,6 +1000,9 @@ function main()
         end
         res_pred_weather = preds
         scenario = weather_scenario(preds, fill_pred)
+        # Enabler β1: the :v3 analogue thermometer now reads OUR model load, not
+        # the published ENTSO-E D-1 forecast (weather-track-scoped).
+        install_thermometer!(fill_pred, first_candidate - Day(1), last_candidate)
         println("Weather RES ready for $(length(preds)) zones in $(round(time() - t0, digits=1))s")
     elseif (load_fill_fn !== nothing || res_fill_fn !== nothing) && !SKIP_CLEAR
         scenario = Dict{String,Euphemia.ZoneScenario}(
@@ -929,6 +1025,12 @@ function main()
         load_hours = day_load_hours[day]
         res_present = day_res_present[day]
         atc_rows = atc_row_count(w0, w1, ZONES)
+        # PRE-GATE: tomorrow's Day-ahead ATC is not yet published, so the gate
+        # must not block on it — the demonstrated-capability fallback supplies
+        # the borders. Treat ATC as present (the network build backstops it).
+        PREGATE && atc_rows <= 0 &&
+            println("  🌅 pre-gate: no offered ATC rows yet — demonstrated-capability fallback supplies borders")
+        PREGATE && (atc_rows = max(atc_rows, 1))
         if INPUT_MODE == "weather"
             # Load eligibility = MODEL coverage (uniform model load replaces the
             # TSO-load gate); mode is always plain 'weather' — model inputs are
@@ -1056,4 +1158,142 @@ function main()
     println("=" ^ 70)
 end
 
-main()
+"""
+    run_retro()
+
+DATA-RESET retroactive backfill (pre-gate/7-lead γ). Reconstructs PAST market
+days [`RETRO_START`, `RETRO_ASOF`] at EVERY lead 1..`MAX_LEAD_DAYS`, using the
+historical `previous_day{lead}` weather vintage of the time (the honest per-lead
+information set — `openmeteo_retro_vintage_lag`). Rows are stamped is_retro=true
++ reset_tag=`RESET_TAG`, prediction_made_utc = the ACTUAL compute time (now),
+retro_of_utc = the natural D−lead compute instant it stands in for; the writer
+REFUSES to clobber any genuine LIVE vintage (additive fill). Weather (ex-ante)
+track only. The per-lead scoreboard (bin/score_forecasts.jl) then measures the
+skill decay across the ladder — that IS the validation of the day-n-vintage
+convention (models trained on previous_day1). See docs/experiments/pregate-7lead.md.
+"""
+function run_retro()
+    INPUT_MODE == "weather" ||
+        error("retro backfill runs on the WEATHER (ex-ante) track only — set INPUT_MODE=weather")
+    start_day, end_day = RETRO_START, RETRO_ASOF
+    println("=" ^ 70)
+    println("RETRO DATA-RESET BACKFILL  zones=$(length(ZONES))  optimizer=$OPTIMIZER")
+    println("  window $start_day .. $end_day  leads 1..$MAX_LEAD_DAYS  reset_tag=$RESET_TAG")
+    println("  cv=$CV  clearing_mode=$CLEARING_MODE  input_mode=$INPUT_MODE (weather/ex-ante)")
+    println("  vintage discipline: lead n ⇒ previous_day$("{n}") (openmeteo_retro_vintage_lag)")
+    ZONES != FORECAST_FOOTPRINT &&
+        println("  ⚠️ ZONES override active ($(join(ZONES, ","))) — testing footprint, not the 39-zone product")
+    println("=" ^ 70)
+    start_day <= end_day || error("RETRO_START ($start_day) must be ≤ RETRO_ASOF ($end_day)")
+
+    Euphemia.ensure_forecast_tables()
+    # Demonstrated-capability ATC fallback ON: for a past day the offered ATC is
+    # in the DB, so this only FILLS genuine gaps (a border missing on that day).
+    Euphemia.Network.PREGATE_ATC_FALLBACK[] = true
+
+    load_pack = load_load_models()
+    load_pack === nothing &&
+        error("retro backfill needs the load model pack at $(default_load_models_path())")
+    ml_pilots0 = [z for z in ml_pilot_zones() if z in ZONES]
+    vintage_asof = Date(now(UTC))   # irrelevant under fixed_lag, passed for the API
+
+    # Order-book capture (same sink as the live run). Phase-2 SEQUENCING: run the
+    # retro backfill only AFTER the strategy-tagged book-capture PR lands, so the
+    # regenerated books carry the additive `strategy` column (flows through the
+    # BOOK_SINK path automatically). See the runbook.
+    _BOOKS = Dict{Tuple{String,Date},Vector{Tuple{Euphemia.SimpleOrder,String}}}()
+    _BOOKS_LOCK = ReentrantLock()
+    Euphemia.MeritOrderBook.BOOK_SINK[] = function (zone, day, tagged, res)
+        lock(_BOOKS_LOCK) do
+            _BOOKS[(zone, day)] = copy(tagged)
+        end
+    end
+
+    n_total = 0
+    for lead in 1:MAX_LEAD_DAYS
+        fixed_lag = openmeteo_retro_vintage_lag(lead)
+        first_utc, last_utc = start_day - Day(1), end_day
+        candidates = Set(start_day:Day(1):end_day)
+        println("\n" * "#" ^ 70)
+        println("LEAD $lead  (vintage previous_day$fixed_lag)  UTC span $first_utc .. $last_utc")
+
+        # Weather-track inputs at THIS lead's fixed vintage.
+        fill_pred = build_load_fills(load_pack, sort(copy(ZONES)), first_utc, last_utc,
+                                     candidates; asof=vintage_asof, fixed_lag=fixed_lag)
+        preds = build_weather_predictions(first_utc, last_utc, candidates;
+                                          asof=vintage_asof, fixed_lag=fixed_lag)
+        if ML_INPUTS_ON && !isempty(ml_pilots0)
+            try
+                ml_res, ml_load = build_ml_inputs(ml_pilots0, first_utc, last_utc,
+                                                  candidates; asof=vintage_asof,
+                                                  fixed_lag=fixed_lag)
+                for (z, zp) in ml_res; preds[z] = zp; end
+                for (z, zp) in ml_load; fill_pred[z] = zp; end
+            catch e
+                @warn "retro ML overlay failed for lead $lead — packs kept" exception=(e, catch_backtrace())
+            end
+        end
+        scenario = weather_scenario(preds, fill_pred)
+        install_thermometer!(fill_pred, first_utc, last_utc)
+
+        clear_cache = Dict{Date,Union{Nothing,Dict{String,Dict{DateTime,Float64}}}}()
+        for day in start_day:Day(1):end_day
+            expected = expected_market_day_hours(day)
+            covered = model_covered_for_day(day, fill_pred)
+            res_covered = res_covered_for_day(day, preds)
+            uncovered = [z for z in ZONES if !(z in covered) || !(z in res_covered)]
+            if !isempty(uncovered)
+                println("  ⛔ $day lead=$lead: weather-track inputs cannot cover " *
+                        "$(length(uncovered)) zone(s) ($(join(sort(uncovered), ","))) — skipped")
+                continue
+            end
+            if !FORCE_RERUN
+                present = existing_forecast_zones(day, lead, INPUT_MODE)
+                issubset(Set(ZONES), present) &&
+                    (println("  ⏭️  $day lead=$lead already present — skipping (FORCE_RERUN to rewrite)"); continue)
+            end
+            SKIP_CLEAR && (println("  SKIP_CLEAR: $day lead=$lead eligible, not cleared"); continue)
+
+            prev_hourly = clear_utc_day!(clear_cache, day - Day(1); scenario=scenario)
+            prev_hourly === nothing && (println("  ❌ $day lead=$lead: UTC $(day-Day(1)) clear failed"); continue)
+            curr_hourly = clear_utc_day!(clear_cache, day; scenario=scenario)
+            curr_hourly === nothing && (println("  ❌ $day lead=$lead: UTC $day clear failed"); continue)
+
+            zone_hourly = Dict{String,Dict{DateTime,Float64}}()
+            empty_hourly = Dict{DateTime,Float64}()
+            for zone in union(keys(prev_hourly), keys(curr_hourly))
+                st = stitch_market_day(day, get(prev_hourly, zone, empty_hourly),
+                                       get(curr_hourly, zone, empty_hourly))
+                isempty(st.missing_hours) && (zone_hourly[zone] = st.stitched)
+            end
+            isempty(zone_hourly) &&
+                (println("  ❌ $day lead=$lead: no complete zone-day — nothing written"); continue)
+
+            # Honest stamping: prediction_made_utc = ACTUAL compute time (now);
+            # retro_of_utc = the natural D−lead ~06:30 UTC instant reconstructed.
+            retro_of = DateTime(day - Day(lead)) + Hour(6) + Minute(30)
+            n = write_forecast!(day, lead, now(UTC), zone_hourly, INPUT_MODE;
+                                is_retro=true, reset_tag=RESET_TAG, retro_of_utc=retro_of)
+            n_total += n
+            try
+                lock(_BOOKS_LOCK) do; flush_books!(_BOOKS, day); end
+            catch e
+                @warn "retro book export failed (forecast unaffected)" day error = sprint(showerror, e)
+            end
+            n > 0 && println("  ✅ $day lead=$lead — wrote $n retro rows across " *
+                             "$(length(zone_hourly)) zone(s) (retro_of_utc=$retro_of)")
+        end
+    end
+    Euphemia.MeritOrderBook.clear_thermometer_overrides!()
+    println("\n" * "=" ^ 70)
+    println("RETRO BACKFILL COMPLETE — $n_total retro rows written (reset_tag=$RESET_TAG)")
+    println("=" ^ 70)
+end
+
+# Dispatch: an explicit RETRO_ASOF selects the data-reset reconstruction; else
+# the normal live forward run.
+if RETRO_ASOF !== nothing
+    run_retro()
+else
+    main()
+end

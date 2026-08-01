@@ -4,6 +4,7 @@
 
 using Test, Dates, Statistics
 
+include(joinpath(@__DIR__, "..", "bin", "weather_vintage.jl"))
 include(joinpath(@__DIR__, "..", "bin", "forecast_common.jl"))
 
 @testset "Forecast Tracking" begin
@@ -324,6 +325,53 @@ include(joinpath(@__DIR__, "..", "bin", "forecast_common.jl"))
         s = json_string(Dict("zone" => "GR", "days" => [Dict("mae" => nothing)]))
         @test occursin("\"zone\":\"GR\"", s)
         @test occursin("\"mae\":null", s)
+    end
+
+    # --- pre-gate/7-lead additions -----------------------------------------
+    @testset "retro vintage lag (lead ⇒ previous_day{lead})" begin
+        @test openmeteo_retro_vintage_lag(1) == 1
+        @test openmeteo_retro_vintage_lag(7) == 7
+        @test openmeteo_retro_vintage_lag(9) == 7    # clamped to API coverage
+        @test openmeteo_retro_vintage_lag(0) == 1    # min 1 (a lead-0 nowcast is D-1 at least)
+        # LIVE lag is unchanged (0 for a future day, 1 for a past/today day)
+        @test openmeteo_vintage_lag(Date(2026,8,2); asof=Date(2026,8,1)) == 0
+        @test openmeteo_vintage_lag(Date(2026,7,25); asof=Date(2026,8,1)) == 1
+    end
+
+    @testset "vintage_groups fixed_lag (retro/pre-gate one-group)" begin
+        cands = Set(Date(2026,7,1):Day(1):Date(2026,7,5))
+        # fixed_lag ⇒ ONE group over the whole span at that exact lag
+        g = vintage_groups(Date(2026,6,30), Date(2026,7,5), cands; fixed_lag=3)
+        @test length(g) == 1
+        @test g[1][2] == 3
+        @test g[1][1] == collect(Date(2026,6,30):Day(1):Date(2026,7,5))
+        # nothing (default) keeps the live D-1 discipline — byte-identical shape
+        g0 = vintage_groups(Date(2026,6,30), Date(2026,7,5), cands;
+                            asof=Date(2026,6,30))
+        @test all(grp -> grp[2] in (0, 1), g0)
+    end
+
+    @testset "collapse metrics (SCIENTIST.md §4, ≤€5)" begin
+        # act collapses at hours 1,2,4 (≤5); sim predicts collapse at 1,2,3
+        act = [3.0, 0.0, 50.0, -2.0, 80.0]
+        sim = [4.0, 1.0, 2.0, 60.0, 90.0]
+        cm = collapse_metrics(sim, act)
+        @test cm.n == 5
+        @test cm.n_collapse_actual == 3        # 3.0, 0.0, -2.0
+        @test cm.n_collapse_pred == 3          # 4.0, 1.0, 2.0
+        @test cm.hits == 2                     # hours 1,2
+        @test cm.false_alarms == 1             # hour 3 (sim 2 ≤5, act 50 >5)
+        @test cm.hit_rate == 2 / 3
+        @test cm.false_alarm_rate == 1 / 2     # 1 FA over 2 actual non-collapses
+        # no actual collapse ⇒ hit_rate undefined (nothing, never a fake 0)
+        cm2 = collapse_metrics([1.0, 2.0], [50.0, 60.0])
+        @test cm2.n_collapse_actual == 0 && cm2.hit_rate === nothing
+        @test cm2.false_alarm_rate == 1.0      # both predicted-collapse are FAs
+        # all actual collapse ⇒ false_alarm_rate undefined
+        cm3 = collapse_metrics([1.0, 2.0], [1.0, 2.0])
+        @test cm3.hits == 2 && cm3.false_alarm_rate === nothing
+        @test cm3.hit_rate == 1.0
+        @test_throws ArgumentError collapse_metrics([1.0], Float64[])
     end
 
 end

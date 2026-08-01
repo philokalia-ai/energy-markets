@@ -279,6 +279,44 @@ function score_series(sim::Vector{Float64}, act::Vector{Float64})
     return (n=n, mae=mae, bias=bias, corr=c)
 end
 
+"""
+    collapse_metrics(sim::Vector{Float64}, act::Vector{Float64}; threshold=5.0)
+        -> (n, n_collapse_actual, n_collapse_pred, hits, false_alarms,
+            hit_rate, false_alarm_rate)
+
+First-class collapse classification for one zone-day/-slice (SCIENTIST.md §4).
+A price "collapses" when it is ≤ `threshold` €/MWh (default €5 — the
+solar-surplus / negative-hour regime). Ground truth = the settled actual; the
+prediction is scored as a binary detector of that event:
+
+- `n_collapse_actual` — hours the ACTUAL price collapsed (the positives),
+- `n_collapse_pred`   — hours the model PREDICTED a collapse,
+- `hits`              — predicted ∧ actual collapse,
+- `false_alarms`      — predicted collapse ∧ actual did NOT,
+- `hit_rate`          — hits / actual collapses (recall; `nothing` when no
+                        actual collapse — undefined, never a fake 0/1),
+- `false_alarm_rate`  — false_alarms / actual NON-collapses (fall-out;
+                        `nothing` when every hour actually collapsed).
+
+Matches `docs/experiments/input-upgrade/collapse_metrics.py`'s `confusion` at
+the €5 threshold. Pure and DB-free (unit-tested in test_forecast_tracking.jl).
+"""
+function collapse_metrics(sim::Vector{Float64}, act::Vector{Float64};
+                          threshold::Float64=5.0)
+    length(sim) == length(act) ||
+        throw(ArgumentError("sim and act must be paired (got $(length(sim)) vs $(length(act)))"))
+    n = length(sim)
+    n_ca = count(<=(threshold), act)
+    n_cp = count(<=(threshold), sim)
+    hits = count(i -> sim[i] <= threshold && act[i] <= threshold, 1:n)
+    fa = count(i -> sim[i] <= threshold && act[i] > threshold, 1:n)
+    n_neg = n - n_ca          # actual non-collapses
+    hit_rate = n_ca > 0 ? hits / n_ca : nothing
+    fa_rate = n_neg > 0 ? fa / n_neg : nothing
+    return (n=n, n_collapse_actual=n_ca, n_collapse_pred=n_cp, hits=hits,
+            false_alarms=fa, hit_rate=hit_rate, false_alarm_rate=fa_rate)
+end
+
 # ---------------------------------------------------------------------------
 # Minimal JSON serializer (avoids adding a package dependency). Handles the
 # restricted value universe of the export contract: Dict / NamedTuple /
@@ -371,9 +409,21 @@ pattern is then identical to the pre-vintage code; only late/catch-up runs
 split. Pass ONE `asof` captured at run start to every caller: per-builder
 `Date(now(UTC))` defaults can straddle midnight UTC and hand the builders
 different vintages for the same day.
+
+RETRO/pre-gate note: pass `fixed_lag` to force EVERY UTC day into ONE group at
+that exact vintage lag — the retro reconstruction of a single lead `n` fetches
+the whole window at `previous_day{n}` (`openmeteo_retro_vintage_lag(n)`), so no
+per-day `asof` split applies. `nothing` (default) keeps the live D-1 discipline
+above, byte-identical to the pre-existing code.
 """
 function vintage_groups(first_utc::Date, last_utc::Date, candidates::AbstractSet{Date};
-                        asof::Date=Date(now(UTC)))
+                        asof::Date=Date(now(UTC)),
+                        fixed_lag::Union{Nothing,Int}=nothing)
+    if fixed_lag !== nothing
+        # RETRO/pre-gate: the caller reconstructs ONE lead at a fixed vintage; a
+        # single group over the whole span (no candidate/asof split).
+        return Tuple{Vector{Date},Int}[(collect(first_utc:Day(1):last_utc), fixed_lag)]
+    end
     groups = Vector{Tuple{Vector{Date},Int}}()
     for u in first_utc:Day(1):last_utc
         g = u in candidates ? u : u + Day(1)

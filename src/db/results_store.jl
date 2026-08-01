@@ -290,6 +290,16 @@ function ensure_forecast_tables()
             input_mode TEXT NOT NULL DEFAULT 'entsoe',
             optimization_run_id BIGINT,
             created_at TIMESTAMPTZ DEFAULT now(),
+            -- RETRO reconstruction (data-reset backfill). ADDITIVE: existing
+            -- readers ignore these; genuine live vintages carry is_retro=false.
+            -- A retro row is a reconstruction of "what we would have said at
+            -- this lead" computed from the historical previous_dayN vintages,
+            -- stamped with reset_tag (the campaign label) and retro_of_utc
+            -- (the natural D-lead compute instant it stands in for). See
+            -- docs/experiments/pregate-7lead.md.
+            is_retro BOOLEAN NOT NULL DEFAULT false,
+            reset_tag TEXT,
+            retro_of_utc TIMESTAMPTZ,
             CONSTRAINT forecast_prices_slice_hour_key
                 UNIQUE (date_time_utc, bidding_zone, lead_days, code_version, input_mode)
         )
@@ -306,6 +316,17 @@ function ensure_forecast_tables()
             mae DOUBLE PRECISION,
             bias DOUBLE PRECISION,  -- sim − actual
             corr DOUBLE PRECISION,
+            -- Collapse classification (SCIENTIST.md §4, threshold ≤ €5).
+            -- ADDITIVE; NULL on legacy rows scored before the per-lead board.
+            n_collapse_actual INT,
+            n_collapse_pred INT,
+            collapse_hits INT,
+            collapse_false_alarms INT,
+            collapse_hit_rate DOUBLE PRECISION,
+            collapse_false_alarm_rate DOUBLE PRECISION,
+            -- Retro provenance mirror of forecast_prices (ADDITIVE).
+            is_retro BOOLEAN NOT NULL DEFAULT false,
+            reset_tag TEXT,
             scored_at TIMESTAMPTZ DEFAULT now(),
             PRIMARY KEY (market_date, bidding_zone, lead_days, code_version, input_mode)
         )
@@ -340,6 +361,36 @@ function ensure_forecast_tables()
             LibPQ.execute(cnx, """
             ALTER TABLE simulations.forecast_scores
                 ADD COLUMN IF NOT EXISTS input_mode TEXT NOT NULL DEFAULT 'entsoe'
+            """)
+        end
+
+        # ADDITIVE migration: retro-reconstruction provenance + per-lead
+        # collapse metrics (docs/experiments/pregate-7lead.md). Same catalog-
+        # first WEDGE GUARD as input_mode above — probe for one new column and
+        # skip the ALTERs entirely in the steady state, so the daily run never
+        # takes ACCESS EXCLUSIVE on a busy table once the migration has run.
+        needs_retro_migration = LibPQ.execute(cnx, """
+            SELECT COUNT(*) = 0 AS missing FROM information_schema.columns
+            WHERE table_schema = 'simulations' AND table_name = 'forecast_prices'
+              AND column_name = 'is_retro'
+            """) |> DataFrame |> df -> df.missing[1]
+        if needs_retro_migration
+            LibPQ.execute(cnx, """
+            ALTER TABLE simulations.forecast_prices
+                ADD COLUMN IF NOT EXISTS is_retro BOOLEAN NOT NULL DEFAULT false,
+                ADD COLUMN IF NOT EXISTS reset_tag TEXT,
+                ADD COLUMN IF NOT EXISTS retro_of_utc TIMESTAMPTZ
+            """)
+            LibPQ.execute(cnx, """
+            ALTER TABLE simulations.forecast_scores
+                ADD COLUMN IF NOT EXISTS n_collapse_actual INT,
+                ADD COLUMN IF NOT EXISTS n_collapse_pred INT,
+                ADD COLUMN IF NOT EXISTS collapse_hits INT,
+                ADD COLUMN IF NOT EXISTS collapse_false_alarms INT,
+                ADD COLUMN IF NOT EXISTS collapse_hit_rate DOUBLE PRECISION,
+                ADD COLUMN IF NOT EXISTS collapse_false_alarm_rate DOUBLE PRECISION,
+                ADD COLUMN IF NOT EXISTS is_retro BOOLEAN NOT NULL DEFAULT false,
+                ADD COLUMN IF NOT EXISTS reset_tag TEXT
             """)
         end
 
