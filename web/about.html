@@ -157,6 +157,70 @@
     <a class="book-cta-btn" href="./#view=book">Open the order book &rarr;</a>
   </div>
 
+  <h2 id="six-pillars">The six pillars</h2>
+  <p>
+    Underneath the two layers, the system is <strong>six pillars over one clearing
+    engine</strong> — two <em>fitted</em> (openly statistical predictions), three
+    <em>constructed</em> (mechanistic, never fitted to price), and one
+    <em>constructed with declared anchors</em> (out-of-EU neighbours priced on their
+    own fundamentals). Each pillar has a surface you can open today; the full
+    verified synthesis, with code anchors, is in
+    <a class="more-link" href="https://github.com/philokalia-ai/energy-markets/blob/main/docs/six-pillars.md">docs/six-pillars.md</a>.
+  </p>
+  <ol class="pillars-list">
+    <li>
+      <span class="layer-tag layer-tag-build">constructed</span>
+      <strong>The clearing solver.</strong> The 39-zone coupled day-ahead auction —
+      zonal prices are the duals of the balance constraints, flows bounded by ATC.
+      Validated on real published auctions (GME €0.00 exact).
+      <a class="more-link" href="./#view=book">See a price cross &rarr;</a>
+      ·
+      <a class="more-link" href="https://github.com/philokalia-ai/energy-markets/blob/main/docs/experiments/pubbooks-clearing/REPRODUCE.md">the GME/OMIE validation &rarr;</a>
+    </li>
+    <li>
+      <span class="layer-tag layer-tag-fit">fitted</span>
+      <strong>Next-day load.</strong> Per-zone LightGBM (38/39 zones) with linear
+      packs where they win — temperature, degree-hours, calendar and AR lags on
+      honest D-1 weather vintages.
+      <a class="more-link" href="./#view=predict">See the predictions &rarr;</a>
+    </li>
+    <li>
+      <span class="layer-tag layer-tag-fit">fitted</span>
+      <strong>Next-day solar.</strong> Capacity-normalized LightGBM on GFS
+      irradiance, clearness and sun geometry — tuned for the collapse question
+      (does midday crash below zero?).
+      <a class="more-link" href="./#view=predict">See the predictions &rarr;</a>
+      ·
+      <a class="more-link" href="./#view=map">the coverage map &rarr;</a>
+    </li>
+    <li>
+      <span class="layer-tag layer-tag-fit">fitted</span>
+      <strong>Next-day wind.</strong> Per-zone winner selection — the physical
+      power-curve packs still beat LightGBM on the low/onshore zones; ML wins
+      offshore-heavy zones.
+      <a class="more-link" href="./#view=predict">See the predictions &rarr;</a>
+    </li>
+    <li>
+      <span class="layer-tag layer-tag-build">constructed</span>
+      <strong>Order-book construction.</strong> Each zone's supply/demand curve
+      from ENTSO-E data and named market characteristics — SRMC tranches, must-run
+      factors, water values, scarcity/peak κ, import backstops, the solar-regime
+      floor — per the profile registry.
+      <a class="more-link" href="./#view=book">Open the order book &rarr;</a>
+      ·
+      <a class="more-link" href="#zone-strategy-table">the calibration table &rarr;</a>
+    </li>
+    <li>
+      <span class="layer-tag layer-tag-anchor">constructed · declared anchors</span>
+      <strong>Out-of-EU behaviours.</strong> Turkey (and AL/MK) enter as fixed
+      observed injections; Great Britain and Ukraine are modelled as elastic
+      counterparties on named borders, each anchored on its own fundamental cost.
+      <a class="more-link" href="#model-map">See the boundary in the model map &rarr;</a>
+      ·
+      <a class="more-link" href="https://github.com/philokalia-ai/energy-markets/blob/main/docs/six-pillars.md#pillar-6--out-of-eu-zone-behaviours-tr--gb--ua">the per-country detail &rarr;</a>
+    </li>
+  </ol>
+
   <h2>What this is</h2>
   <p>
     This site tracks an <strong>ex-ante simulation</strong> of the European
