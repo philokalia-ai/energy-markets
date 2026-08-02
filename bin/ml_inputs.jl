@@ -62,6 +62,33 @@ const ML_USE_NEW = Dict{Tuple{String,Symbol},Bool}(
     ("NL", :load) => true,  ("NL", :solar) => false,  ("NL", :wind) => true,
 )
 
+# ── Per-zone affine LOAD bias correction (fit-iteration 3, fixes R2) ──────────
+# Several large NEW-load zones carry a systematic POSITIVE bias that feeds straight
+# into demand → price (R2: FR +191, IT-NORTH +198 MW mean over-prediction on VALID).
+# The serve output is post-scaled `corrected = max(a + b·pred, 0)` per this table.
+# Fit on the frozen VALID window 2026-05-01…07-22 (re-scored from the committed .txt
+# with the bit-identical GBDT scorer; matches scorecard39 exactly). The SLOPE term
+# `b` is held at 1.0 — a pure level debias: the full OLS slope overfit the May-June
+# fit sub-window and regressed FR MAE on the held-out July tail (regime non-
+# stationarity), whereas b=1 (a = −VALID mean bias) improved BOTH zones out of
+# sample. Verification (fit 05-01…06-30, holdout 07-01…07-22): FR holdout MAE
+# 1309.7→1294.7 (−15.0), bias +142.5→−66.2; IT-NORTH 779.9→753.5 (−26.4), bias
+# +375.7→+242.0. A zone absent here is unchanged (b=1,a=0). HU (also R2) is NOT
+# here: fit-iteration 1's corr guard demoted HU_load to the pack, so it no longer
+# flows through this NEW-load hook — its debias is deferred to the pack path.
+const LOAD_BIAS_CORRECTION = Dict{String,NamedTuple{(:a, :b),Tuple{Float64,Float64}}}(
+    "FR"       => (a = -191.20, b = 1.0),
+    "IT-NORTH" => (a = -197.79, b = 1.0),
+)
+
+"Apply the per-zone affine LOAD bias correction (fit-iteration 3). Identity for
+zones absent from `LOAD_BIAS_CORRECTION`. Clamped at 0 (load MW is non-negative)."
+function ml_load_bias_correct(zone::AbstractString, mw::Float64)
+    c = get(LOAD_BIAS_CORRECTION, String(zone), nothing)
+    c === nothing && return mw
+    return max(c.a + c.b * mw, 0.0)
+end
+
 # ── Run-time zone→model resolution (pre-gate/7-lead Phase-2 hook) ─────────────
 # The 39-zone ML rollout (in flight) ships its winners config THROUGH meta.json
 # (bin/input_models/meta.json) — the same artifact this port already reads. So
@@ -719,7 +746,7 @@ function build_ml_inputs(zones::Vector{String}, first_utc::Date, last_utc::Date,
                     if use_new(:load)
                         is_hol = (Date(h) in holset) ? 1.0 : 0.0
                         lf = ml_load_features(h, lat0, lon0, T, ghiL, Tma, ar1, ar7, is_hol)
-                        lp[h] = ml_predict_load(models, z, lf)
+                        lp[h] = ml_load_bias_correct(z, ml_predict_load(models, z, lf))
                     end
                 end
             end

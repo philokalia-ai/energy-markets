@@ -70,6 +70,13 @@ end
     # numpy-linear percentile
     @test _np_percentile95([0.0, 10.0]) ≈ 9.5
     @test _np_percentile95([5.0]) == 5.0
+
+    # fit-iteration 3: per-zone affine LOAD bias correction (b=1 level debias)
+    @test ml_load_bias_correct("FR", 5000.0) ≈ 5000.0 - 191.20   # a=-191.20, b=1
+    @test ml_load_bias_correct("IT-NORTH", 4000.0) ≈ 4000.0 - 197.79
+    @test ml_load_bias_correct("GR", 5000.0) == 5000.0           # absent zone -> identity
+    @test ml_load_bias_correct("HU", 3000.0) == 3000.0           # demoted to pack (iter1), not here
+    @test ml_load_bias_correct("FR", 100.0) == 0.0               # clamped at 0 (100-191.2<0)
 end
 
 @testset "ML inputs — holidays (rollout-39 Orthodox amendment, train/serve lockstep)" begin

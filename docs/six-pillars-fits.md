@@ -206,3 +206,27 @@ has **zero** `is_hol` splits (is_hol was zero-variance in their training), so th
 new maps cannot change any current serve output. They activate at the next retrain,
 where the expected effect (R6) is more load zones flipping to ML.
 `test/test_ml_inputs.jl` green (217/217).
+
+**Iteration 3 — per-zone affine LOAD bias correction (fixes R2). SHIPPED (FR/
+IT-NORTH); HU deferred.** The high-bias NEW-load zones over-predict demand, lifting
+the clearing price (R2). Re-scored the committed FR/IT-NORTH load `.txt` over the
+frozen VALID window with the bit-identical Julia GBDT scorer (inference only, local
+gfs — **no retrain, no fetch**); the result is **exactly** scorecard39 (FR MAE
+1342.55 / bias +191.20 / corr 0.946; IT-NORTH 931.84 / +197.79 / 0.944 — validating
+the re-score). Fit an affine post-scaler `corrected = max(a + b·pred, 0)` behind the
+`LOAD_BIAS_CORRECTION` table in `ml_inputs.jl`, applied on the NEW-load serve
+overlay. **The full OLS slope was NOT robust** — fit on 05-01…06-30 it *regressed*
+FR MAE on the 07-01…07-22 holdout (+17.1) because the May-June and July bias regimes
+differ; the **level-only debias (b=1, a = −VALID mean bias)** improved BOTH zones
+out of sample and is what ships:
+
+| zone | shipped a (b=1) | holdout raw MAE | holdout corrected MAE | ΔMAE | bias +→ |
+|---|---|---|---|---|---|
+| FR | −191.20 | 1309.7 | 1294.7 | **−15.0** | +142.5 → −66.2 |
+| IT-NORTH | −197.79 | 779.9 | 753.5 | **−26.4** | +375.7 → +242.0 |
+
+Both clear the verify gate (MAE not worse — in fact better — and |bias| down). This
+is a fitted-input change scored on the **ex-ante product track**, never the record.
+**HU** (the third R2 zone) is deferred: iteration 1's corr guard demoted HU_load to
+the pack, so it no longer flows through this NEW-load hook; correcting the pack's HU
+bias is a separate pack-path change. `test/test_ml_inputs.jl` green (222/222).
