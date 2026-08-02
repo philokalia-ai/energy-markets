@@ -119,15 +119,45 @@ body {
 }
 
 /* ---------- banner ---------- */
-.fixture-banner {
-  background: var(--banner-bg);
-  color: var(--banner-ink);
-  text-align: center;
-  font-weight: 700;
-  font-size: 13px;
-  letter-spacing: 0.04em;
-  padding: 6px 12px;
+/* ---------- honest "live data unavailable" state ---------- */
+/* The ONE empty/error component every view shows when the live plane does not
+   answer. There is no synthetic fallback anywhere in the site. */
+.live-unavailable {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 20px 24px;
+  margin: 12px 0;
+  max-width: 640px;
 }
+.live-unavailable .lu-title {
+  font-weight: 700;
+  font-size: 15px;
+  color: var(--status-weak);
+  margin: 0;
+}
+.live-unavailable .lu-msg {
+  font-size: 13px;
+  color: var(--muted, var(--ink));
+  margin: 0;
+  line-height: 1.5;
+}
+.live-unavailable .lu-retry {
+  cursor: pointer;
+  font: inherit;
+  font-weight: 600;
+  font-size: 13px;
+  padding: 7px 18px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface-2, var(--surface-1));
+  color: var(--ink);
+}
+.live-unavailable .lu-retry:hover { border-color: var(--ink); }
 
 /* ---------- philokalia header ---------- */
 .site-header {

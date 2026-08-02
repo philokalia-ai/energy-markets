@@ -22,6 +22,15 @@ const here = dirname(fileURLToPath(import.meta.url));
 const STAGING = process.env.STAGING || join(here, "../../../data/web/v1");
 const REF = process.env.REF || join(here, "../../../web/data");
 
+// Data-dependent (like book/flows/units): both exporters must have run against
+// the same DB (data/ is git-ignored). Skip cleanly when the staging/ref output
+// is absent instead of throwing, so the suite is green in a fresh checkout.
+if (!existsSync(join(STAGING, "manifest.json")) || !existsSync(join(REF, "zones"))) {
+  console.log("shape: SKIP (no export output; run bin/export_web_parquet.jl + " +
+    "bin/export_forecast_json.jl, or set STAGING=/REF=)");
+  process.exit(0);
+}
+
 let failures = 0;
 function fail(msg) {
   failures++;

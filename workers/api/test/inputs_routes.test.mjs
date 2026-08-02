@@ -3,7 +3,7 @@
  *
  * Both are JSON pass-throughs (no parquet, no shape.js), so this drives the
  * Worker's default fetch handler end-to-end against a mock R2 backed by the
- * committed fixtures (web/fixtures/inputs/{scorecard,skill}.json) and asserts:
+ * test-local fixtures (test/fixtures/inputs/{scorecard,skill}.json) and asserts:
  *   • the router matches the literal /inputs/scorecard and /inputs/skill BEFORE
  *     the generic /inputs/:zone regex (a zone named "scorecard" must not shadow),
  *   • a present object → 200 with the exact fixture bytes + an ETag,
@@ -18,9 +18,11 @@ import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const repo = join(here, "../../..");
-const scorecard = readFileSync(join(repo, "web/fixtures/inputs/scorecard.json"), "utf8");
-const skill = readFileSync(join(repo, "web/fixtures/inputs/skill.json"), "utf8");
+// Test-local fixtures (the site ships no runtime fixtures — they were removed
+// so synthetic data can never render as model output; tests keep their own).
+const fxDir = join(here, "fixtures/inputs");
+const scorecard = readFileSync(join(fxDir, "scorecard.json"), "utf8");
+const skill = readFileSync(join(fxDir, "skill.json"), "utf8");
 
 let failures = 0;
 function ok(cond, msg) { if (!cond) { failures++; console.error("FAIL: " + msg); } else { console.log("ok - " + msg); } }

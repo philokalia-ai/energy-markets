@@ -1,15 +1,19 @@
 /* Euphemia results browser — plain JS, no build step.
- * Data contract (two rungs, first that answers wins):
- *   1. live Worker API (issue #152): API_BASE/v1/{zones/<Z>,scoreboard,map}
- *      — R2-backed, fresh seconds after each pipeline run; ?live=0 disables,
- *      ?api=<base> overrides the origin. The SOLE live data plane (the
- *      committed ./data rung was retired July 2026 with the bot-commit path).
- *   2. ./fixtures/*.json (bundled snapshot — offline dev + last-resort).
+ * Data contract: ONE rung, live-only.
+ *   live Worker API (issue #152): API_BASE/v1/{zones/<Z>,scoreboard,map,…}
+ *   — R2-backed, fresh seconds after each pipeline run; ?api=<base> overrides
+ *   the origin (point it at a local wrangler dev worker for offline work).
+ *   ?live=0 disables the plane entirely (every view then shows its honest
+ *   "live data unavailable — retry" state).
+ *
+ * There is NO bundled-snapshot fallback. The owner directive is absolute:
+ * synthetic/example data must NEVER be rendered as if it were model output.
+ * When the API does not answer, each view paints an honest empty/error state
+ * with a retry action (liveUnavailable) — it never substitutes a snapshot.
  */
 (function () {
   "use strict";
 
-  var BASES = ["./fixtures"];
   var QUERY = new URLSearchParams(window.location.search);
   var API_BASE = QUERY.get("api") || "https://api.philokalia.ai/api";
   var LIVE = QUERY.get("live") !== "0";
@@ -17,9 +21,8 @@
 
   var state = {
     scoreboard: null,
-    source: null,          // "api" | "data" | "fixtures"
+    source: null,          // "api" (the sole live plane) once it answers
     manifest: null,        // /api/v1/manifest payload (freshness badge)
-    fixture: false,
     zoneCache: {},         // zone -> zone file json
     bookCache: {},         // "zone|date" -> book ladder json
     units: null,           // code -> {name, fuel, firm, zone} (order-book join)
@@ -89,19 +92,16 @@
     }, function () { /* badge is best-effort */ });
   }
 
-  // Try the live Worker API first (unless ?live=0), then the bundled
-  // ./fixtures snapshot — offline dev and last-resort when the API is down.
-  function loadWithFallback(rel) {
-    function staticChain() {
-      return fetchJSON(BASES[0] + "/" + rel).then(function (j) {
-        return { json: j, source: "fixtures" };
-      });
-    }
-    if (!LIVE) return staticChain();
-    return fetchJSON(apiPath(rel)).then(
-      function (j) { onApiSuccess(); return { json: j, source: "api" }; },
-      staticChain
-    );
+  // Load from the live Worker API — the SOLE data plane. There is no bundled
+  // snapshot fallback: a failed fetch (or ?live=0) rejects, and the caller
+  // surfaces an honest empty/error state (never synthetic data). Kept returning
+  // {json, source} so call sites read res.json uniformly.
+  function loadLive(rel) {
+    if (!LIVE) return Promise.reject(new Error("live data plane disabled (?live=0)"));
+    return fetchJSON(apiPath(rel)).then(function (j) {
+      onApiSuccess();
+      return { json: j, source: "api" };
+    });
   }
 
   function dayLabel(dateStr) {
@@ -182,9 +182,8 @@
 
   function loadZone(zone) {
     if (state.zoneCache[zone]) return Promise.resolve(state.zoneCache[zone]);
-    return loadWithFallback("zones/" + encodeURIComponent(zone) + ".json").then(function (res) {
+    return loadLive("zones/" + encodeURIComponent(zone) + ".json").then(function (res) {
       state.zoneCache[zone] = res.json;
-      if (res.json && res.json.fixture) setFixtureBanner(true);
       return res.json;
     });
   }
@@ -207,11 +206,29 @@
     return Object.keys(byDate).sort().reverse().map(function (k) { return byDate[k]; });
   }
 
-  // ---------- fixture banner ----------
+  // ---------- honest "live data unavailable" state ----------
 
-  function setFixtureBanner(on) {
-    if (on) state.fixture = true;
-    $("fixture-banner").hidden = !state.fixture;
+  // The ONE consistent empty/error component every view uses when the live
+  // plane does not answer. Never a snapshot — an honest message plus a retry
+  // action. `host` is cleared and repopulated; `retry` (optional) wires the
+  // button. Returns the panel element (for tests).
+  function liveUnavailable(host, retry, msg) {
+    if (!host) return null;
+    host.textContent = "";
+    var box = el("div", "live-unavailable");
+    box.setAttribute("role", "status");
+    box.appendChild(el("p", "lu-title", "Live data unavailable"));
+    box.appendChild(el("p", "lu-msg", msg ||
+      "This view loads only from the live data API and never substitutes " +
+      "synthetic data. The API did not respond."));
+    if (retry) {
+      var btn = el("button", "lu-retry", "Retry");
+      btn.type = "button";
+      btn.addEventListener("click", retry);
+      box.appendChild(btn);
+    }
+    host.appendChild(box);
+    return box;
   }
 
   // ---------- view switching ----------
@@ -239,7 +256,13 @@
     $("view-cases").hidden = v !== "cases";
     var crumb = $("crumb-view");
     if (crumb) crumb.textContent = VIEW_CRUMBS[v] ? "/ " + VIEW_CRUMBS[v] : "";
-    if (v === "map") loadMap().then(renderMap);
+    if (v === "map") loadMap().then(renderMap, function () {
+      liveUnavailable($("map-wrap"), function () { setView("map"); },
+        "The live data API did not return the map. This site never substitutes " +
+        "synthetic data — retry once the API is reachable.");
+      $("map-title").textContent = "Live data unavailable";
+      $("map-comment").textContent = "";
+    });
     if (v === "solver") renderSolver();
     if (v === "predict") loadPredict().then(renderPredict);
     if (v === "book") renderBook();
@@ -721,7 +744,7 @@
   // first forecast-only hour; past days overlay the settled actual (+ per-day
   // MAE/bias), today & future show the freshest forecast alone. The window is
   // anchored on the FRONTIER — the first fully-pending (forecast-only) delivery
-  // day — so it self-locates without a wall clock (keeps fixtures rendering).
+  // day — so it self-locates from the data alone, without a wall clock.
   // Leads collapsed (directive 1).
   var HZ_PAST = 5, HZ_FUTURE = 5;
   function horizonDays(zoneData) {
@@ -1185,9 +1208,8 @@
 
   function loadMap() {
     var pData = mapState.data ? Promise.resolve(mapState.data) :
-      loadWithFallback("map.json").then(function (res) {
+      loadLive("map.json").then(function (res) {
         mapState.data = res.json;
-        if (res.json && res.json.fixture) setFixtureBanner(true);
         return res.json;
       });
     var pGeo = mapState.geo ? Promise.resolve(mapState.geo) :
@@ -1491,23 +1513,24 @@
   var WIND_OFFSHORE = ["NL", "DK1", "DK2", "BE"];
 
   function loadPredict() {
+    // Each panel degrades to an EMPTY (honest "warming up / fills next run")
+    // structure on failure — an absent panel, never fabricated numbers.
     var pM = predictState.manifest ? Promise.resolve() :
-      loadWithFallback("inputs/manifest.json").then(function (r) {
+      loadLive("inputs/manifest.json").then(function (r) {
         predictState.manifest = r.json;
-        if (r.json && r.json.fixture) setFixtureBanner(true);
       }, function () { predictState.manifest = { map: [], pilot_zones: [] }; });
     var pR = predictState.reservoir ? Promise.resolve() :
-      loadWithFallback("inputs/reservoir.json").then(function (r) {
+      loadLive("inputs/reservoir.json").then(function (r) {
         predictState.reservoir = r.json;
       }, function () { predictState.reservoir = { zones: {} }; });
     // The two additive artifacts (plan §7) — model-card scores + per-lead skill.
     // Non-fatal: an absent file leaves the card/strip in a graceful pending state.
     var pS = predictState.scorecard ? Promise.resolve() :
-      loadWithFallback("inputs/scorecard.json").then(function (r) {
+      loadLive("inputs/scorecard.json").then(function (r) {
         predictState.scorecard = r.json;
       }, function () { predictState.scorecard = { scores: [], winner_counts: {} }; });
     var pK = predictState.skill ? Promise.resolve() :
-      loadWithFallback("inputs/skill.json").then(function (r) {
+      loadLive("inputs/skill.json").then(function (r) {
         predictState.skill = r.json;
       }, function () { predictState.skill = { status: "warming_up", skill: [] }; });
     var pG = predictState.geo ? Promise.resolve() :
@@ -1654,9 +1677,8 @@
 
   function loadPredictZone(zone) {
     if (predictState.zoneData[zone]) return Promise.resolve(predictState.zoneData[zone]);
-    return loadWithFallback("inputs/" + encodeURIComponent(zone) + ".json").then(function (r) {
+    return loadLive("inputs/" + encodeURIComponent(zone) + ".json").then(function (r) {
       predictState.zoneData[zone] = r.json;
-      if (r.json && r.json.fixture) setFixtureBanner(true);
       return r.json;
     });
   }
@@ -1751,9 +1773,9 @@
     if (!zd) {
       host.appendChild(el("p", "chart-sub", "Loading " + zone + " inputs…"));
       loadPredictZone(zone).then(function () { renderPredictTarget(target); }, function () {
-        host.textContent = "";
-        host.appendChild(el("p", "chart-sub",
-          zone + " — this zone's prediction inputs fill with the next forecast run."));
+        liveUnavailable(host, function () { renderPredictTarget(target); },
+          "The live data API did not return " + zone + "'s prediction inputs. This " +
+          "site never substitutes synthetic data — retry once the API is reachable.");
       });
       return;
     }
@@ -2638,7 +2660,7 @@
   function loadUnits() {
     if (state.units) return Promise.resolve(state.units);
     if (unitsPromise) return unitsPromise;
-    unitsPromise = loadWithFallback("units").then(
+    unitsPromise = loadLive("units").then(
       function (res) {
         state.units = (res.json && res.json.units) ? res.json.units : {};
         return state.units;
@@ -2658,7 +2680,7 @@
   function loadFlows(date) {
     if (state.flowsCache[date] !== undefined) return Promise.resolve(state.flowsCache[date]);
     if (flowsPromise[date]) return flowsPromise[date];
-    flowsPromise[date] = loadWithFallback("flows/" + date).then(
+    flowsPromise[date] = loadLive("flows/" + date).then(
       function (res) { state.flowsCache[date] = (res.json && res.json.flows) || null; return state.flowsCache[date]; },
       function () { state.flowsCache[date] = null; return null; }
     );
@@ -2773,7 +2795,7 @@
   function loadBook(zone, date) {
     var key = zone + "|" + date;
     if (state.bookCache[key] !== undefined) return Promise.resolve(state.bookCache[key]);
-    return loadWithFallback("books/" + encodeURIComponent(zone) + "/" + date).then(
+    return loadLive("books/" + encodeURIComponent(zone) + "/" + date).then(
       function (res) { state.bookCache[key] = res.json; return res.json; },
       function () { state.bookCache[key] = null; return null; }   // no book for this day
     );
@@ -2792,7 +2814,18 @@
 
   function renderBook() {
     var zoneData = state.zoneCache[state.zone];
-    if (!zoneData) { loadZone(state.zone).then(renderBook); return; }
+    if (!zoneData) {
+      loadZone(state.zone).then(renderBook, function () {
+        $("book-title").textContent = state.zone + " — live data unavailable";
+        $("book-legend").textContent = "";
+        $("book-comment").textContent = "";
+        liveUnavailable($("book-wrap"), function () { renderBook(); },
+          "The live data API did not return " + state.zone + "'s data. This site " +
+          "never substitutes synthetic data — retry once the API is reachable.");
+        bookTableMessage("Live data unavailable for " + state.zone + ".");
+      });
+      return;
+    }
     if ($("bzone-select")) $("bzone-select").value = state.zone;
 
     // Day options: the freshest ex-ante (weather) days — the recent window that
@@ -3997,7 +4030,8 @@
   var solverZoneCache = {};    // zone -> zone forecast json | null (live-only)
 
   // LIVE-ONLY fetch for the S4 exemplars — hits the record API directly and is
-  // deliberately NOT wired to loadWithFallback, so a bundled fixture can never
+  // uses the live record API directly (loadLive is live-only too now, but this
+  // stays explicit for the record contract), so nothing can ever
   // stand in for the persisted record (the owner directive: never render
   // synthetic content as if it were model output). Rejects when the live plane
   // is disabled (?live=0) or the record has no such object → honest empty state.
@@ -4293,8 +4327,7 @@
     var bits = [];
     if (sb.generated_utc) bits.push("generated " + sb.generated_utc.replace("T", " ").replace("Z", " UTC"));
     if (sb.code_version !== undefined) bits.push("code_version " + sb.code_version);
-    bits.push("source: " + (state.source === "api" ? "live data API" :
-      state.source === "data" ? "exported model results" : "bundled fixtures"));
+    bits.push("source: live data API");
     // Freshness badge — only when the API rung actually served the data.
     if (state.source === "api" && state.manifest && state.manifest.updated_at) {
       var ago = humanizeAgo(state.manifest.updated_at);
@@ -4318,14 +4351,27 @@
       renderHorizon();
       if (state.view === "book") renderBook();
       writeHash();
-    }).catch(function (err) {
-      $("chart-title").textContent = zone + " — failed to load zone data";
-      $("chart-sub").textContent = String(err);
-      $("chart-wrap").textContent = "";
+    }).catch(function () {
+      // Honest live-unavailable state in the zone-backed views (explorer +
+      // horizon), with a retry that re-selects the zone. Never a snapshot.
+      $("chart-title").textContent = zone + " — live data unavailable";
+      $("chart-sub").textContent = "";
       $("day-list").textContent = "";
       $("day-stats").textContent = "";
       $("chart-legend").textContent = "";
       $("hour-table").textContent = "";
+      var retry = function () { selectZone(zone, true); };
+      liveUnavailable($("chart-wrap"), retry,
+        "The live data API did not return " + zone + "'s forecast. This site never " +
+        "substitutes synthetic data — retry once the API is reachable.");
+      var hz = $("hz-wrap");
+      if (hz) {
+        $("hz-title").textContent = zone + " — live data unavailable";
+        $("hz-sub").textContent = "";
+        liveUnavailable(hz, retry,
+          "The live data API did not return " + zone + "'s forecast. This site never " +
+          "substitutes synthetic data — retry once the API is reachable.");
+      }
     });
   }
 
@@ -4424,10 +4470,20 @@
       });
     });
 
-    loadWithFallback("scoreboard.json").then(function (res) {
+    bootstrapData();
+  }
+
+  // Load the scoreboard (the app-level bootstrap) from the live plane. On
+  // failure paint the honest empty/error state with a Retry that re-runs this
+  // — never a bundled snapshot.
+  function bootstrapData() {
+    var box = $("load-error");
+    box.hidden = true;
+    box.textContent = "";
+    loadLive("scoreboard.json").then(function (res) {
       state.scoreboard = res.json;
       state.source = res.source;
-      if (res.json.fixture) setFixtureBanner(true);
+      box.hidden = true;
 
       readHash();
       if (state.scoreboard.zones.indexOf(state.zone) === -1) {
@@ -4440,12 +4496,11 @@
       renderFooter();
       selectZone(state.zone, true);
     }).catch(function (err) {
-      var box = $("load-error");
       box.hidden = false;
-      box.textContent =
-        "Could not load results data (" + err + "). Expected the live API or the " +
-        "bundled ./fixtures/scoreboard.json. Serve this directory with a static " +
-        "file server, e.g.: python3 -m http.server --directory web";
+      liveUnavailable(box, bootstrapData,
+        "Could not reach the live data API (" + err + "). This site shows only " +
+        "live model results — it never falls back to bundled or synthetic data. " +
+        "Retry, or check the API status.");
     });
   }
 
@@ -4474,7 +4529,7 @@
       SOLVER_EXEMPLARS: SOLVER_EXEMPLARS,
     };
     // Predictions hub+3 test surface — lets DOM tests drive the composed target
-    // views + hub composites against fixtures, in isolation from the bootstrap.
+    // views + hub composites against test fixtures, in isolation from bootstrap.
     window.__euphemiaPredict = {
       predictState: predictState,
       buildContractStrip: buildContractStrip,
@@ -4486,6 +4541,22 @@
       buildFamilyTable: buildFamilyTable,
       buildTargetCards: buildTargetCards,
       buildReservoir: buildReservoir,
+    };
+    // Views test surface — lets a DOM smoke test drive each view's live-only
+    // load+render with the API absent and assert the honest empty state (no
+    // synthetic fallback anywhere). Also exposes the shared honest component.
+    window.__euphemiaViews = {
+      state: state,
+      liveUnavailable: liveUnavailable,
+      loadLive: loadLive,
+      bootstrapData: bootstrapData,
+      selectZone: selectZone,
+      loadMap: loadMap,
+      renderMap: renderMap,
+      setView: setView,
+      renderBook: renderBook,
+      loadPredict: loadPredict,
+      renderPredictTarget: renderPredictTarget,
     };
   }
 })();
