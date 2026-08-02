@@ -62,7 +62,7 @@ function export_scoreboard()
         WITH $(CHOSEN_SLICE_CTE)
         SELECT s.bidding_zone AS z, s.lead_days, s.input_mode AS mode,
                to_char(s.market_date, 'YYYY-MM') AS month,
-               s.market_date, s.mae, s.bias, s.corr
+               s.market_date, s.code_version AS cv, s.mae, s.bias, s.corr
         FROM simulations.forecast_scores s
         JOIN chosen c ON c.market_date = s.market_date AND c.lead_days = s.lead_days
                      AND c.input_mode = s.input_mode AND c.code_version = s.code_version
@@ -76,10 +76,14 @@ function export_scoreboard()
         mae_v = collect(skipmissing(sub.mae))
         bias_v = collect(skipmissing(sub.bias))
         corr_v = collect(skipmissing(sub.corr))
+        # code_version = per-cell provenance for the same-cv pairing guard (single
+        # value when the cell is single-cv, else nothing = mixed → chip shows n/a).
+        cvs = unique(Int.(sub.cv))
         (n_days=length(unique(sub.market_date)),
          mae=isempty(mae_v) ? nothing : mean(mae_v),
          bias=isempty(bias_v) ? nothing : mean(bias_v),
-         corr=isempty(corr_v) ? nothing : mean(corr_v))
+         corr=isempty(corr_v) ? nothing : mean(corr_v),
+         cv=length(cvs) == 1 ? cvs[1] : nothing)
     end
 
     entries = Any[]
@@ -93,14 +97,16 @@ function export_scoreboard()
             push!(entries, Dict("zone" => zone, "lead_days" => lead, "window" => "all",
                                 "input_mode" => mode,
                                 "n_days" => a.n_days, "mae" => nn(a.mae),
-                                "bias" => nn(a.bias), "corr" => nn(a.corr)))
+                                "bias" => nn(a.bias), "corr" => nn(a.corr),
+                                "code_version" => a.cv))
             for month in sort(unique(String.(sub.month)))
                 m = sub[sub.month .== month, :]
                 am = agg(m)
                 push!(entries, Dict("zone" => zone, "lead_days" => lead, "window" => month,
                                     "input_mode" => mode,
                                     "n_days" => am.n_days, "mae" => nn(am.mae),
-                                    "bias" => nn(am.bias), "corr" => nn(am.corr)))
+                                    "bias" => nn(am.bias), "corr" => nn(am.corr),
+                                    "code_version" => am.cv))
             end
         end
     end

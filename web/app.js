@@ -1080,19 +1080,37 @@
   // Rendered wherever BOTH tracks have a score for the same slice. The gap IS the
   // product — input cost = predicted MAE − announced MAE, i.e. how much our
   // fitted inputs cost vs holding the inputs at the TSO's official D-1 figures.
-  // Returns an element, or null when either side is missing (honest absence).
-  function trackGapChip(predMae, annMae) {
+  //
+  // SAME-CV PAIRING (owner directive): the two tracks are only comparable when
+  // they were cleared under the SAME code_version — otherwise the delta conflates
+  // a model-version change with an input change. When the cvs differ (or either is
+  // unknown / a mixed-cv aggregate), the chip shows "input cost n/a" with a
+  // cv-mismatch tooltip instead of a wrong number. The cv is always surfaced.
+  // Returns an element, or null when either MAE is missing (honest absence).
+  function trackGapChip(predMae, annMae, predCv, annCv) {
     if (predMae === null || predMae === undefined || isNaN(predMae)) return null;
     if (annMae === null || annMae === undefined || isNaN(annMae)) return null;
-    var cost = predMae - annMae;
-    var chip = el("span", "track-gap-chip" +
-      (cost > 0.05 ? " cost-pos" : cost < -0.05 ? " cost-neg" : " cost-tie"));
+    var cvMatch = predCv != null && annCv != null && predCv === annCv;
+    var chip = el("span", "track-gap-chip");
     chip.appendChild(el("span", "tg-part", "announced MAE " + fmt(annMae, 1)));
     chip.appendChild(el("span", "tg-part", "predicted " + fmt(predMae, 1)));
+    if (!cvMatch) {
+      chip.className += " cost-na";
+      chip.appendChild(el("span", "tg-cost", "input cost n/a"));
+      chip.title = "Cannot compare: the two tracks were cleared under different " +
+        "model versions (predicted cv " + (predCv == null ? "mixed/unknown" : predCv) +
+        " vs announced cv " + (annCv == null ? "mixed/unknown" : annCv) + "). " +
+        "The gap chip pairs only same-code_version slices so a model-version change " +
+        "is never mistaken for an input change.";
+      return chip;
+    }
+    var cost = predMae - annMae;
+    chip.className += (cost > 0.05 ? " cost-pos" : cost < -0.05 ? " cost-neg" : " cost-tie");
     chip.appendChild(el("span", "tg-cost",
       "input cost " + (cost >= 0 ? "+" : "") + fmt(cost, 1)));
-    chip.title = "Both tracks scored this slice. Input cost = predicted MAE − " +
-      "announced MAE = " + (cost >= 0 ? "+" : "") + fmt(cost, 2) + " €/MWh. " +
+    chip.title = "Both tracks scored this slice under code_version " + predCv +
+      ". Input cost = predicted MAE − announced MAE = " +
+      (cost >= 0 ? "+" : "") + fmt(cost, 2) + " €/MWh. " +
       (cost > 0.05
         ? "Announced beats predicted here — the gap is the measured cost of our fitted inputs."
         : cost < -0.05
@@ -1658,7 +1676,9 @@
       if (altd && !isPending(altd)) {
         var predMae = state.track === "predicted" ? day.mae : altd.mae;
         var annMae = state.track === "announced" ? day.mae : altd.mae;
-        var dchip = trackGapChip(predMae, annMae);
+        var predCv = state.track === "predicted" ? day.code_version : altd.code_version;
+        var annCv = state.track === "announced" ? day.code_version : altd.code_version;
+        var dchip = trackGapChip(predMae, annMae, predCv, annCv);
         if (dchip) {
           var gapWrap = el("div", "stat track-gap-stat");
           gapWrap.appendChild(el("span", "s-label", "Track gap"));
@@ -3407,7 +3427,12 @@
   function scoreboardLeads() {
     var seen = {};
     trackScores().forEach(function (s) { seen[s.lead_days] = true; });
-    return Object.keys(seen).map(Number).sort(function (a, b) { return a - b; });
+    var arr = Object.keys(seen).map(Number).sort(function (a, b) { return a - b; });
+    // The announced track is ONE D-1 freeze per delivery day, not a 7-lead ladder
+    // (owner directive). Collapse to the freshest (min-lead) freeze slice and guard
+    // against rendering any stale lead>1 announced rows that exist in the data.
+    if (state.track === "announced" && arr.length) return [arr[0]];
+    return arr;
   }
 
   function renderWindowSelect() {
@@ -3457,12 +3482,23 @@
     var scores = tracked.filter(function (s) { return s.window === state.window; });
     var byKey = {};
     scores.forEach(function (s) { byKey[s.zone + "|" + s.lead_days] = s; });
-    // Track-gap counterpart: the OTHER track's MAE for the same (zone, lead) in
-    // this window, so a cell can surface the input-cost delta when both exist.
-    var altByKey = {};
-    altTrackScores().forEach(function (s) {
-      if (s.window === state.window) altByKey[s.zone + "|" + s.lead_days] = s;
+    // Track-gap counterpart: the OTHER track's score for the same slice. The
+    // announced track has NO lead dimension (one D-1 freeze per day), so its side
+    // is ALWAYS the freeze = the min-lead slice, keyed by zone alone. This also
+    // guards against pairing a predicted lead against a stale lead>1 announced row.
+    var altScores = altTrackScores().filter(function (s) { return s.window === state.window; });
+    var altByZoneFreeze = {};   // announced freeze (min lead) per zone
+    altScores.forEach(function (s) {
+      var cur = altByZoneFreeze[s.zone];
+      if (!cur || s.lead_days < cur.lead_days) altByZoneFreeze[s.zone] = s;
     });
+    var altByKey = {};          // per (zone, lead) — used when the alt IS predicted
+    altScores.forEach(function (s) { altByKey[s.zone + "|" + s.lead_days] = s; });
+    // On the predicted track the counterpart is the announced freeze (zone-keyed);
+    // on the announced track the counterpart is predicted at the shown (freeze) lead.
+    function altFor(zone, lead) {
+      return state.track === "predicted" ? altByZoneFreeze[zone] : altByKey[zone + "|" + lead];
+    }
 
     if (state.sort.lead === null || leads.indexOf(state.sort.lead) === -1) state.sort.lead = leads[0];
 
@@ -3475,7 +3511,9 @@
     thZone.rowSpan = 2;
     tr1.appendChild(thZone);
     leads.forEach(function (l) {
-      var th = el("th", "group lead-sep", "Lead D-" + l);
+      // Announced = the single D-1 freeze (no lead ladder); label it as such.
+      var th = el("th", "group lead-sep",
+        state.track === "announced" ? "D-1 announcement" : "Lead D-" + l);
       th.colSpan = METRICS.length;
       tr1.appendChild(th);
     });
@@ -3548,11 +3586,13 @@
             // Track-gap chip: when the OTHER track also scored this (zone, lead,
             // window), show the input-cost delta inline (the difference IS the
             // measured cost of our inputs). Client-side, honestly absent otherwise.
-            var alt = altByKey[z + "|" + l];
+            var alt = altFor(z, l);
             if (alt && alt.mae !== null && alt.mae !== undefined && s.mae !== null) {
               var predMae = state.track === "predicted" ? s.mae : alt.mae;
               var annMae = state.track === "announced" ? s.mae : alt.mae;
-              var chip = trackGapChip(predMae, annMae);
+              var predCv = state.track === "predicted" ? s.code_version : alt.code_version;
+              var annCv = state.track === "announced" ? s.code_version : alt.code_version;
+              var chip = trackGapChip(predMae, annMae, predCv, annCv);
               if (chip) td.appendChild(chip);
             }
           } else {
@@ -6314,6 +6354,8 @@
       trackOfMode: trackOfMode,
       trackDays: trackDays,
       trackScores: trackScores,
+      altTrackScores: altTrackScores,
+      scoreboardLeads: scoreboardLeads,
       trackGapChip: trackGapChip,
       currentTrack: currentTrack,
       renderTrackSwitch: renderTrackSwitch,

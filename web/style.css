@@ -383,6 +383,8 @@ select {
 .track-gap-chip .tg-cost { font-weight: 600; color: var(--text-secondary); }
 .track-gap-chip.cost-pos .tg-cost { color: var(--terracotta, #B45309); }
 .track-gap-chip.cost-neg .tg-cost { color: var(--series-act, #2E7D32); }
+.track-gap-chip.cost-na { border-style: dashed; opacity: 0.8; }
+.track-gap-chip.cost-na .tg-cost { color: var(--text-muted); font-style: italic; }
 .track-gap-stat .track-gap-chip { margin-left: 0; }
 
 /* Inline "this surface is the Predicted pillar" note (predict + book views). */

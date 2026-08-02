@@ -87,7 +87,7 @@ function export_scoreboard_parquet()
         WITH $(CHOSEN_SLICE_CTE)
         SELECT s.bidding_zone AS z, s.lead_days, s.input_mode AS mode,
                to_char(s.market_date, 'YYYY-MM') AS month,
-               s.market_date, s.mae, s.bias, s.corr
+               s.market_date, s.code_version AS cv, s.mae, s.bias, s.corr
         FROM simulations.forecast_scores s
         JOIN chosen c ON c.market_date = s.market_date AND c.lead_days = s.lead_days
                      AND c.input_mode = s.input_mode AND c.code_version = s.code_version
@@ -101,16 +101,22 @@ function export_scoreboard_parquet()
         mae_v = collect(skipmissing(sub.mae))
         bias_v = collect(skipmissing(sub.bias))
         corr_v = collect(skipmissing(sub.corr))
+        # code_version is per-cell PROVENANCE for the SAME-CV pairing guard: the
+        # cross-track gap chip may only compare two aggregates cleared under the
+        # SAME model version. A single value when the cell is single-cv, else
+        # missing (mixed) so the SPA shows the chip as "n/a (cv mismatch)".
+        cvs = unique(Int.(sub.cv))
         (n_days=length(unique(sub.market_date)),
          mae=isempty(mae_v) ? missing : mean(mae_v),
          bias=isempty(bias_v) ? missing : mean(bias_v),
-         corr=isempty(corr_v) ? missing : mean(corr_v))
+         corr=isempty(corr_v) ? missing : mean(corr_v),
+         cv=length(cvs) == 1 ? cvs[1] : missing)
     end
 
     df = DataFrame(zone=String[], lead_days=Int[], window=String[],
                    input_mode=String[], n_days=Int[],
                    mae=Union{Missing,Float64}[], bias=Union{Missing,Float64}[],
-                   corr=Union{Missing,Float64}[])
+                   corr=Union{Missing,Float64}[], code_version=Union{Missing,Int}[])
     if !isempty(scores)
         for zlm in unique(collect(zip(String.(scores.z), Int.(scores.lead_days),
                                       String.(scores.mode))))
@@ -119,12 +125,12 @@ function export_scoreboard_parquet()
                          (scores.mode .== mode), :]
             a = agg(sub)
             push!(df, (zone, lead, "all", mode, a.n_days,
-                       nm(a.mae), nm(a.bias), nm(a.corr)))
+                       nm(a.mae), nm(a.bias), nm(a.corr), a.cv))
             for month in sort(unique(String.(sub.month)))
                 m = sub[sub.month .== month, :]
                 am = agg(m)
                 push!(df, (zone, lead, month, mode, am.n_days,
-                           nm(am.mae), nm(am.bias), nm(am.corr)))
+                           nm(am.mae), nm(am.bias), nm(am.corr), am.cv))
             end
         end
     end

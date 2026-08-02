@@ -54,6 +54,7 @@ export function shapeZone(rows, zone) {
         date: date,
         lead_days: lead,
         input_mode: mode,
+        code_version: num(r.code_version),   // per-slice provenance — the same-cv pairing guard
         prediction_made_utc: iso(r.prediction_made_utc),
         hours: [],
         sim: [],
@@ -101,6 +102,7 @@ export function shapeScoreboard(rows, manifest) {
         mae: num(r.mae),
         bias: num(r.bias),
         corr: num(r.corr),
+        code_version: num(r.code_version),   // single-cv guard for the track-gap chip
       };
     }),
   };

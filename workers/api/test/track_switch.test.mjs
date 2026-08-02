@@ -102,17 +102,18 @@ ok(T.trackOfMode("entsoe+loadfill+resfill") === "announced", "entsoe+... -> anno
 /* ---- inject a zone that carries BOTH tracks for the same delivery day ---- */
 const DATE = "2026-07-09";
 const HOURS = ["2026-07-09T21:00:00Z", "2026-07-09T22:00:00Z"];
-function mkDay(mode, sim, mae) {
+function mkDay(mode, sim, mae, cv, lead) {
   return {
-    date: DATE, lead_days: 1, input_mode: mode,
+    date: DATE, lead_days: lead === undefined ? 1 : lead, input_mode: mode,
+    code_version: cv === undefined ? 31 : cv,
     prediction_made_utc: "2026-07-08T06:00:00Z",
     hours: HOURS.slice(), sim: sim.slice(), actual: [12, 19],
     mae: mae, bias: 0, corr: 0.9,
   };
 }
 const zoneData = { zone: "GR", market_day_tz: "Europe/Athens", days: [
-  mkDay("weather", [10, 20], 2.0),   // predicted
-  mkDay("entsoe", [11, 21], 1.0),    // announced
+  mkDay("weather", [10, 20], 2.0, 31),   // predicted, cv31
+  mkDay("entsoe", [11, 21], 1.0, 31),    // announced, cv31 (same cv -> chip pairs)
 ] };
 T.state.zone = "GR";
 T.state.zoneCache["GR"] = zoneData;
@@ -158,6 +159,23 @@ ok(getById("day-stats").querySelector(".track-gap-chip") != null,
   const chip = getById("day-stats").querySelector(".track-gap-chip");
   ok(/input cost \+1\.0/.test(chip.textContent),
      "gap chip computes input cost = predicted MAE (2.0) - announced MAE (1.0) = +1.0");
+  ok(/code_version 31/.test(chip.title || ""),
+     "gap chip surfaces the code_version in its tooltip");
+}
+
+/* ---- SAME-CV PAIRING: a cv mismatch shows n/a, not a wrong number ---- */
+{
+  // announced cleared under a different model version than predicted
+  zoneData.days[1].code_version = 30;
+  T.renderExplorer();
+  const chip = getById("day-stats").querySelector(".track-gap-chip");
+  ok(chip && /input cost n\/a/.test(chip.textContent),
+     "gap chip shows 'input cost n/a' when the two tracks' code_versions differ");
+  ok(chip && /different\s+model versions/.test(chip.title || ""),
+     "cv-mismatch tooltip explains the tracks were cleared under different model versions");
+  ok(chip && !/cost-pos|cost-neg|cost-tie/.test(chip.className) && /cost-na/.test(chip.className),
+     "cv-mismatch chip carries the cost-na class (never a coloured delta)");
+  zoneData.days[1].code_version = 31;   // restore same-cv for later assertions
 }
 
 /* ---- FLIP the switch to As-announced ---- */
@@ -190,6 +208,30 @@ ok(!/track=/.test(globalThis.window.location.hash),
    "the default track is omitted from the URL hash (clean links)");
 ok(/10\.00/.test(getById("hour-table").textContent),
    "the predicted series is restored after flipping back");
+
+/* ---- NO LEAD DIMENSION for the announced track ---- */
+T.state.scoreboard = { zones: ["GR"], scores: [
+  // predicted: a real D+1..D+4 lead ladder
+  { zone: "GR", lead_days: 1, window: "all", input_mode: "weather", n_days: 5, mae: 12, bias: 0, corr: 0.9, code_version: 31 },
+  { zone: "GR", lead_days: 2, window: "all", input_mode: "weather", n_days: 5, mae: 13, bias: 0, corr: 0.88, code_version: 31 },
+  { zone: "GR", lead_days: 3, window: "all", input_mode: "weather", n_days: 5, mae: 14, bias: 0, corr: 0.86, code_version: 31 },
+  // announced: one D-1 freeze, but the data ALSO carries stale lead>1 rows
+  { zone: "GR", lead_days: 1, window: "all", input_mode: "entsoe", n_days: 5, mae: 10, bias: 0, corr: 0.92, code_version: 31 },
+  { zone: "GR", lead_days: 3, window: "all", input_mode: "entsoe", n_days: 5, mae: 40, bias: 0, corr: 0.5, code_version: 31 },
+] };
+T.state.track = "predicted";
+{
+  const leads = T.scoreboardLeads();
+  ok(leads.length === 3 && leads[0] === 1 && leads[2] === 3,
+     "predicted track keeps its full lead ladder in the scoreboard (D-1..D-3)");
+}
+T.state.track = "announced";
+{
+  const leads = T.scoreboardLeads();
+  ok(leads.length === 1 && leads[0] === 1,
+     "announced track collapses to the single D-1 freeze (no lead ladder), ignoring stale lead>1 rows");
+}
+T.state.track = "predicted";
 
 if (failures) {
   console.error("track_switch: " + failures + " FAILURE(S)");
