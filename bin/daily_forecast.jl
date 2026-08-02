@@ -1243,11 +1243,16 @@ function run_retro()
     # retro backfill only AFTER the strategy-tagged book-capture PR lands, so the
     # regenerated books carry the additive `strategy` column (flows through the
     # BOOK_SINK path automatically). See the runbook.
-    _BOOKS = Dict{Tuple{String,Date},Vector{Tuple{Euphemia.SimpleOrder,String}}}()
+    # 5-arg sink matching the live run's (the #281 strategy column). The
+    # #280+#281 merge left this at the stale 4-arg signature, so the sink
+    # MethodError'd inside the flush try/catch and run_retro captured ZERO
+    # books silently.
+    _BOOKS = Dict{Tuple{String,Date},Vector{Tuple{Euphemia.SimpleOrder,String,String}}}()
     _BOOKS_LOCK = ReentrantLock()
-    Euphemia.MeritOrderBook.BOOK_SINK[] = function (zone, day, tagged, res)
+    Euphemia.MeritOrderBook.BOOK_SINK[] = function (zone, day, tagged, res, strat)
         lock(_BOOKS_LOCK) do
-            _BOOKS[(zone, day)] = copy(tagged)
+            _BOOKS[(zone, day)] = [(tagged[i][1], tagged[i][2], String(strat[i]))
+                                   for i in eachindex(tagged)]
         end
     end
 
