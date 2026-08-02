@@ -3787,9 +3787,11 @@
   // Two SYNTHETIC two-block books (NOT a real ladder). NORTH is cheap (wind/
   // hydro), SOUTH dear (gas-set). The reader drags the ATC and watches the
   // clear move through islanded → congested → coupled.
+  // Neutral, unmistakably-invented names + round numbers: NOT real bidding zones
+  // or model output. "Zone A" is the cheap exporter, "Zone B" the dear importer.
   var SOLVER_TOY_BOOKS = {
-    north: { name: "NORTH", blocks: [{ mw: 3000, price: 20 }, { mw: 2000, price: 70 }], demand: 2500 },
-    south: { name: "SOUTH", blocks: [{ mw: 500, price: 45 }, { mw: 3000, price: 95 }], demand: 2500 },
+    north: { name: "Zone A", blocks: [{ mw: 3000, price: 20 }, { mw: 2000, price: 70 }], demand: 2500 },
+    south: { name: "Zone B", blocks: [{ mw: 500, price: 45 }, { mw: 3000, price: 95 }], demand: 2500 },
   };
 
   // Marginal supply price to serve quantity q from ascending price blocks.
@@ -3904,9 +3906,13 @@
     var C = solverColors();
 
     host.textContent = "";
+    // Unmistakable, always-visible label ON the widget (not a tooltip): this is
+    // the ONE pedagogical synthetic element on the page.
+    host.appendChild(el("div", "solver-toy-label",
+      "Illustrative synthetic market — not model data"));
     var W = 640, H = 320;
     var svg = svgEl("svg", { viewBox: "0 0 " + W + " " + H, width: "100%",
-      role: "img", "aria-label": "Two-zone toy clear at ATC " + atc + " MW" });
+      role: "img", "aria-label": "Illustrative synthetic two-zone toy clear at ATC " + atc + " MW — not model data" });
 
     var colW = 150, leftX = 40, rightX = W - 40 - colW;
     // dispatched MW per zone = local demand ± the cross-border flow (NORTH
@@ -3968,23 +3974,51 @@
   }
 
   // ---- S4: a real congested border-hour ------------------------------------
-  // Curated pointers into the reproducible record (borders + record-range
-  // dates); every displayed number is computed live from /flows + /zones. The
-  // first two are the congested/uncongested CONTRAST on one border (fixture-
-  // backed so the offline snapshot renders them); the rest are additional
-  // regimes that resolve from the live API and degrade gracefully when absent.
+  // Curated pointers into the reproducible historical record (borders + dates
+  // squarely inside the multi_zone_eu record). Every displayed number is
+  // computed live from the persisted record via /api/v1/flows + /api/v1/zones —
+  // there is NO fixture/synthetic fallback here: if the record flow for a
+  // border-hour isn't served, S4 shows an honest empty state, never invented
+  // data. (The two-zone toy above is the ONLY synthetic element on this page,
+  // and it is labelled as such on the widget itself.)
   var SOLVER_EXEMPLARS = [
-    { date: "2026-07-11", hour_utc: "2026-07-11T18:00:00Z", from_zone: "FR", to_zone: "IT-NORTH",
-      note: "Evening peak: French supply can't fully reach Italy — the interconnector fills and the two zones decouple." },
-    { date: "2026-07-11", hour_utc: "2026-07-11T03:00:00Z", from_zone: "FR", to_zone: "IT-NORTH",
+    { date: "2025-01-22", hour_utc: "2025-01-22T18:00:00Z", from_zone: "FR", to_zone: "IT-NORTH",
+      note: "Winter evening peak: French supply can't fully reach Italy — the interconnector fills and the two zones decouple." },
+    { date: "2025-01-22", hour_utc: "2025-01-22T03:00:00Z", from_zone: "FR", to_zone: "IT-NORTH",
       note: "The same border a few hours earlier: demand is low, the line has room, and the two prices sit together — the contrast that proves the rule." },
-    { date: "2026-06-21", hour_utc: "2026-06-21T11:00:00Z", from_zone: "DE_LU", to_zone: "FR",
+    { date: "2025-06-15", hour_utc: "2025-06-15T11:00:00Z", from_zone: "DE_LU", to_zone: "FR",
       note: "Solar-surplus midday on the continental core: a low/negative-price separation as one side floods with cheap PV." },
-    { date: "2026-02-05", hour_utc: "2026-02-05T17:00:00Z", from_zone: "NO2", to_zone: "DK1",
+    { date: "2025-02-05", hour_utc: "2025-02-05T17:00:00Z", from_zone: "NO2", to_zone: "DK1",
       note: "Nordic hydro exporting into a tight Danish winter evening across the Skagerrak link." },
-    { date: "2026-01-15", hour_utc: "2026-01-15T08:00:00Z", from_zone: "SE3", to_zone: "SE4",
+    { date: "2025-01-15", hour_utc: "2025-01-15T08:00:00Z", from_zone: "SE3", to_zone: "SE4",
       note: "A Nordic internal winter-morning constraint between two Swedish zones." },
   ];
+  var solverFlowsCache = {};   // date -> {tsIso:[[src,snk,mw],…]} | null (live-only)
+  var solverZoneCache = {};    // zone -> zone forecast json | null (live-only)
+
+  // LIVE-ONLY fetch for the S4 exemplars — hits the record API directly and is
+  // deliberately NOT wired to loadWithFallback, so a bundled fixture can never
+  // stand in for the persisted record (the owner directive: never render
+  // synthetic content as if it were model output). Rejects when the live plane
+  // is disabled (?live=0) or the record has no such object → honest empty state.
+  function solverRecordJSON(rel) {
+    if (!LIVE) return Promise.reject(new Error("record API disabled (?live=0)"));
+    return fetchJSON(apiPath(rel));
+  }
+  function solverLoadRecordFlows(date) {
+    if (solverFlowsCache[date] !== undefined) return Promise.resolve(solverFlowsCache[date]);
+    return solverRecordJSON("flows/" + date).then(
+      function (j) { solverFlowsCache[date] = (j && j.flows) || null; return solverFlowsCache[date]; },
+      function () { solverFlowsCache[date] = null; return null; }
+    );
+  }
+  function solverLoadRecordZone(zone) {
+    if (solverZoneCache[zone] !== undefined) return Promise.resolve(solverZoneCache[zone]);
+    return solverRecordJSON("zones/" + encodeURIComponent(zone) + ".json").then(
+      function (j) { solverZoneCache[zone] = j || null; return solverZoneCache[zone]; },
+      function () { solverZoneCache[zone] = null; return null; }
+    );
+  }
   var solverExemplarIdx = 0;
 
   // A zone's coupled `sim` price at a UTC hour, from its (cached) forecast for
@@ -4042,10 +4076,11 @@
     if (!host) return;
     var ex = SOLVER_EXEMPLARS[solverExemplarIdx];
     solverExemplarMessage(host, "Opening the " + ex.from_zone + " · " + ex.to_zone + " border…");
+    // LIVE record only — never a fixture fallback (see solverRecordJSON).
     Promise.all([
-      loadFlows(ex.date),
-      loadZone(ex.from_zone).catch(function () { return null; }),
-      loadZone(ex.to_zone).catch(function () { return null; }),
+      solverLoadRecordFlows(ex.date),
+      solverLoadRecordZone(ex.from_zone),
+      solverLoadRecordZone(ex.to_zone),
     ]).then(function (res) {
       // guard against a stale in-flight render if the reader stepped on.
       if (SOLVER_EXEMPLARS[solverExemplarIdx] !== ex) return;
@@ -4055,10 +4090,11 @@
       var net = solverBorderFlow(flows, ex.hour_utc, ex.from_zone, ex.to_zone);
       if (net === null || pFrom === null || pTo === null) {
         solverExemplarMessage(host,
-          "No persisted coupled flow for this border-hour in the current data plane " +
-          "(the daily ex-ante forecast saves prices only, not flows). Congestion exemplars " +
-          "are drawn from the reproducible historical record — try the live site, or another " +
-          "exemplar above.");
+          "Record flows unavailable for this border-hour. Congestion exemplars load only " +
+          "from the reproducible historical record (the persisted coupled clear and its " +
+          "cross-border flows), served live from the record API — this page never " +
+          "substitutes synthetic data. Try the live site, another exemplar above, or check " +
+          "back once the record covers this date.");
         return;
       }
       drawSolverExemplar(host, ex, pFrom, pTo, net);

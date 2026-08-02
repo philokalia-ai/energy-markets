@@ -220,24 +220,25 @@
       <div class="chart-head">
         <h2 class="chart-title">Clear it yourself — two zones, one line</h2>
         <p class="chart-sub">
-          <span class="chip solver-synth-chip">SYNTHETIC · illustrative two-block books, not real bids</span>
+          <span class="chip solver-synth-chip">SYNTHETIC · illustrative two-block toy, not real bids or model output</span>
         </p>
       </div>
       <div class="solver-toy-controls">
         <label class="solver-atc-label" for="solver-atc">
-          <span class="filter-label">ATC (NORTH → SOUTH) — <span id="solver-atc-val"></span></span>
+          <span class="filter-label">ATC (Zone A → Zone B) — <span id="solver-atc-val"></span></span>
           <input id="solver-atc" type="range" min="0" max="2500" step="50" value="800"
-                 aria-label="ATC between NORTH and SOUTH in MW"
+                 aria-label="ATC between Zone A and Zone B in MW"
                  list="solver-atc-ticks">
           <datalist id="solver-atc-ticks">
             <option value="0" label="islanded"></option>
-            <option value="500" label="NORTH's dear block"></option>
+            <option value="500" label="Zone A's dear block"></option>
             <option value="2000" label="fully coupled"></option>
           </datalist>
         </label>
       </div>
       <div class="chart-wrap solver-toy" id="solver-toy"></div>
-      <p class="chart-sub solver-caption">The numbers here are invented to make the mechanism
+      <p class="chart-sub solver-caption"><strong>Zone A and Zone B are invented, not real
+        bidding zones</strong> — the numbers are round on purpose, chosen to make the mechanism
         visible in two blocks. The real engine does this with 39 zones and thousands of real
         unit offers at once — see a real congested hour just below, and a real full book on
         the <a href="#view=book">Order-book page</a>. Dragging ATC from 0 → high walks
@@ -251,15 +252,17 @@
         <h2 class="chart-title">Congestion on a real hour</h2>
         <p class="chart-sub">Now the same story on real model output. Each exemplar opens the
           border between two zones that cleared in the same coupled auction. Prices and the
-          cross-border flow are read live from the published record.</p>
+          cross-border flow are read live from the published record — nothing here is
+          synthetic; if the record can't serve a border-hour, the panel says so plainly.</p>
       </div>
       <div id="solver-exemplar-steps" class="segmented" role="group" aria-label="Congestion exemplar"></div>
       <div class="chart-wrap solver-exemplar" id="solver-exemplar"></div>
       <p class="chart-sub solver-caption">Both zones cleared in the same auction; the full line
         is why they hold different prices. Equal prices would mean the border had room to
         spare. These are hours from the reproducible historical record, where the full coupled
-        solve and its cross-border flows are persisted — the daily ex-ante forecast does not
-        save flows, so a forecast-only day shows an empty state here.</p>
+        solve and its cross-border flows are persisted and served live — this panel never falls
+        back to bundled or synthetic data, so when the record can't serve a border-hour it
+        shows an honest empty state rather than an invented one.</p>
     </div>
 
     <!-- S5 — the second pass: anchor feedback -->
