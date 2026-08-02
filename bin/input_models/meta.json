@@ -1574,11 +1574,13 @@
 "doy_s2",
 "doy_c2",
 "ar1",
-"ar7"
+"ar7",
+"school_hol",
+"windchill"
 ],
-"best_iter": 333,
+"best_iter": 90,
 "clamp_night": false,
-"n_train": 15743,
+"n_train": 16823,
 "ref_col": null
 },
 "DE_LU_solar": {

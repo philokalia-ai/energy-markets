@@ -95,6 +95,10 @@ for z in ZONES:
     tl=TGT_LOAD[TGT_LOAD.zone==z][["h","load_da"]]; la=la.merge(tl,on="h",how="left"); lser=la.set_index("h")["load_da"]
     la["ar1"]=la["h"].map(lambda t:lser.get(t-pd.Timedelta(days=1),np.nan)); la["ar7"]=la["h"].map(lambda t:lser.get(t-pd.Timedelta(days=7),np.nan))
     holset=F.holidays(LOADP[z]["holiday_country"],range(2024,2027)); la["is_hol"]=la["h"].dt.normalize().isin(holset).astype(int)
+    # iter6 DE_LU-scoped features (inert for zones whose feat_cols omit them)
+    la=la.merge(ra[["h","v100m"]],on="h",how="left")
+    la["school_hol"]=la["h"].map(lambda t:1.0 if F.de_school_holiday(t) else 0.0)
+    la["windchill"]=[F.windchill(T,v) for T,v in zip(la["T"].values,la["v100m"].values)]
     ra_h=ra[ra["h"].isin(hours)].copy(); la_h=la[la["h"].isin(hours)].copy()
     cp=cellp.reindex(ra["h"].values); cp.index=ra.index
     has_s=f"{z}_solar" in meta; has_w=f"{z}_wind" in meta; has_l=f"{z}_load" in meta

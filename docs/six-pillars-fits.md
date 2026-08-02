@@ -290,3 +290,31 @@ NO-SHIP; the year-round seasonal layer R3 scoped needs a year-round OOS window (
 large ones — DK1 +0.34, FR +0.22, SE1 +0.42, LV −0.59 — are known small/onshore-fleet
 or Nordic zones from R8). No serve change; `test/test_ml_inputs.jl` unchanged
 (235/235).
+
+**Iteration 6 — DE_LU load feature enrichment (R7). SHIPPED.** Added two DE_LU-scoped
+LOAD features: a **German school-holiday calendar** (`de_school_holiday`: Christmas
+Dec23–Jan6, the summer envelope Jul15–Aug31, autumn Oct20–Nov1, Easter ±7d — a
+national approximation of the Bundesland-staggered breaks) and a **wind-chill** term
+(`windchill`, Environment Canada JAG/TI on the RES zone-mean 100 m wind as an ex-ante
+cold-stress proxy — the load-weather cache carries no 10 m wind). Both live in
+`features.py` (training authority) and are mirrored byte-for-byte in `ml_inputs.jl`
+(`ml_de_school_holiday`/`ml_windchill`); the serve path threads the same-hour RES
+`v100m` into `ml_load_features`. Retrained **DE_LU load only** on the fit-iteration-4
+window; scored 4 arms vs the FRESH baseline on VALID with iteration 1's corr guard:
+
+| arm | VALID MAE | corr | ΔMAE vs base | Δcorr | gate |
+|---|--:|--:|--:|--:|---|
+| base (fresh) | 1001.7 | 0.9848 | — | — | — |
+| +school | 948.0 | 0.9863 | −53.7 | +0.0014 | pass |
+| +windchill | 934.8 | 0.9868 | −66.9 | +0.0020 | pass |
+| **+both (shipped)** | **961.0** | **0.9858** | **−40.7** | **+0.0010** | **pass** |
+
+All three enriched arms clear the guard. **Shipped the pre-registered `+both`** (the
+task's specified {school-holiday, wind-chill} set) rather than selecting the
+marginally-better wind-chill-alone arm ON the VALID MAE (that would be selection-on-
+test). Lockstep verified: `cmp_dnload_iter6.py` **LOCKSTEP_OK** — school-holiday days
+match python↔Julia EXACTLY (364/364, 2024–2027) and wind-chill to **max|Δ| = 7e-15**
+(< 1e-9). Serve port re-verified **bit-identical** with the enriched model
+(`ml_inputs_equivalence.jl`: DE_LU load max|Δ| = 0 MW, 0/1080 split-flips); **no other
+zone changed** (only `DE_LU_load.txt` + its meta feat_cols). `test/test_ml_inputs.jl`
+green (247/247, incl. the 12-assert iter6 lockstep testset).

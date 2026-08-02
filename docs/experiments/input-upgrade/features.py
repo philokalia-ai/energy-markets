@@ -157,6 +157,34 @@ def holidays(country,years):
         for o in MOVABLE.get(country,()): hs.add(E+pd.Timedelta(days=o))
     return {d.normalize() for d in hs}
 
+# ---- fit-iteration 6: DE_LU-scoped load enrichment (school holidays + wind-chill) ----
+def de_school_holiday(ts):
+    """German school-holiday indicator (national approximation). School breaks are
+    Bundesland-staggered; this uses the nationwide-common windows that move load:
+    Christmas (Dec 23 - Jan 6), Easter (Easter Sun +-7d), the broad summer break
+    (Jul 15 - Aug 31, the national envelope of the staggered Laender summers), and
+    autumn (Oct 20 - Nov 1). Fixed month-day windows + Easter-anchored spring, so it
+    is fully deterministic and reproduced bit-for-bit in ml_inputs.jl
+    `ml_de_school_holiday` (train/serve lockstep). Approximate by construction; the
+    tree decides if it carries signal (iteration 6 corr-guard gate)."""
+    m,d=ts.month,ts.day
+    if (m==12 and d>=23) or (m==1 and d<=6): return True        # Christmas / New Year
+    if (m==7 and d>=15) or m==8: return True                    # summer envelope
+    if (m==10 and d>=20) or (m==11 and d==1): return True       # autumn
+    E=easter(ts.year); dd=(ts.normalize()-E.normalize()).days
+    if -7<=dd<=7: return True                                   # Easter break +-1 week
+    return False
+
+def windchill(T, v100m):
+    """Wind-chill index (Environment Canada JAG/TI) as a cold-stress load feature.
+    WC = 13.12 + 0.6215*T - 11.37*V^0.16 + 0.3965*T*V^0.16, V in km/h. Wind uses the
+    zone-mean 100 m speed (m/s -> km/h) as an ex-ante proxy (the load-weather cache
+    carries no 10 m wind); a documented approximation. NaN wind -> NaN (LightGBM's
+    default split direction handles it). Mirrored in ml_inputs.jl `ml_windchill`."""
+    if v100m is None or (isinstance(v100m,float) and np.isnan(v100m)): return float("nan")
+    vk=(v100m*3.6)**0.16
+    return 13.12+0.6215*T-11.37*vk+0.3965*T*vk
+
 def eu_dst_offset(ts, tz_base):
     """EU DST: last Sun Mar 01:00 UTC .. last Sun Oct 01:00 UTC -> +1."""
     y=ts.year

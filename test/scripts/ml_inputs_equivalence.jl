@@ -191,7 +191,7 @@ for z in PILOTS
                 T, ghiL = la; Tma = ml_trailing_ma48(Tseries, h)
                 ar1 = get(ar[z], h - Day(1), NaN); ar7 = get(ar[z], h - Day(7), NaN)
                 is_hol = (Date(h) in holset) ? 1.0 : 0.0
-                feats_l = ml_load_features(h, lat0, lon0, T, ghiL, Tma, ar1, ar7, is_hol)
+                feats_l = ml_load_features(h, lat0, lon0, T, ghiL, Tma, ar1, ar7, is_hol, v100m)
                 for (i, n) in enumerate(fl)
                     jl = feats_l[n]; py = _num(rec["feats_load"][i]); upd!(feat_acc, jl, py)
                     d = abs(jl - py); d > worst_feat[3] && !isnan(d) && (global worst_feat = (z * ":" * n, key, d))

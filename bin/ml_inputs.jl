@@ -325,6 +325,29 @@ function ml_holidays(country::AbstractString, years)
     return hs
 end
 
+# ── fit-iteration 6: DE_LU-scoped load enrichment (train/serve lockstep) ──────────
+"German school-holiday indicator (features.py `de_school_holiday`, national
+approximation: Christmas Dec23–Jan6, summer Jul15–Aug31, autumn Oct20–Nov1,
+Easter ±7d). Keys on the UTC calendar date of `h` (like `is_hol`). Only the DE_LU
+load model's feat_cols reference `school_hol`; inert for every other model."
+function ml_de_school_holiday(h::DateTime)
+    m = month(h); d = day(h)
+    ((m == 12 && d >= 23) || (m == 1 && d <= 6)) && return true      # Christmas / New Year
+    ((m == 7 && d >= 15) || m == 8) && return true                   # summer envelope
+    ((m == 10 && d >= 20) || (m == 11 && d == 1)) && return true     # autumn
+    dd = (Date(h) - easter_gregorian(year(h))).value
+    return -7 <= dd <= 7                                             # Easter break ±1 week
+end
+
+"Wind-chill index (features.py `windchill`, Environment Canada JAG/TI) as a
+cold-stress load feature; wind = zone-mean 100 m speed (m/s→km/h) proxy. NaN wind
+→ NaN. Only the DE_LU load model references `windchill`."
+function ml_windchill(T::Float64, v100m::Float64)
+    isnan(v100m) && return NaN
+    vk = (v100m * 3.6)^0.16
+    return 13.12 + 0.6215 * T - 11.37 * vk + 0.3965 * T * vk
+end
+
 "Calendar features shared by RES and load (features.py add_cal). Returns a NamedTuple."
 function ml_calendar(h::DateTime, lat0::Float64, lon0::Float64)
     doy = Float64(dayofyear(h)); hod = Float64(hour(h)); dow = Float64(dayofweek(h) - 1)
@@ -347,10 +370,14 @@ function ml_res_features(h::DateTime, lat0::Float64, lon0::Float64,
 end
 
 "Load feature dict for one hour (features.py names). Degree-hour bases hard-coded
-21.0/16.5 °C as trained; `is_hol` from `ml_holidays` on the UTC date."
+21.0/16.5 °C as trained; `is_hol` from `ml_holidays` on the UTC date. `v100m` (RES
+zone-mean 100 m wind for the same hour, default NaN) feeds the DE_LU-scoped
+`windchill`; `school_hol`/`windchill` are inert for every model whose feat_cols
+omit them (fit-iteration 6)."
 function ml_load_features(h::DateTime, lat0::Float64, lon0::Float64,
                           T::Float64, ghi::Float64, Tma::Float64,
-                          ar1::Float64, ar7::Float64, is_hol::Float64)
+                          ar1::Float64, ar7::Float64, is_hol::Float64,
+                          v100m::Float64=NaN)
     c = ml_calendar(h, lat0, lon0)
     cdh = max(T - 21.0, 0.0); hdh = max(16.5 - T, 0.0)
     return Dict{String,Float64}(
@@ -358,7 +385,8 @@ function ml_load_features(h::DateTime, lat0::Float64, lon0::Float64,
         "cdh2" => cdh^2 / 10, "hdh2" => hdh^2 / 10, "ghi" => ghi,
         "hod" => c.hod, "dow" => c.dow, "is_hol" => is_hol,
         "doy_s" => c.doy_s, "doy_c" => c.doy_c, "doy_s2" => c.doy_s2, "doy_c2" => c.doy_c2,
-        "ar1" => ar1, "ar7" => ar7)
+        "ar1" => ar1, "ar7" => ar7,
+        "school_hol" => ml_de_school_holiday(h) ? 1.0 : 0.0, "windchill" => ml_windchill(T, v100m))
 end
 
 "Assemble the feature vector in a model's trained feature_names order from a name→value dict."
@@ -746,7 +774,11 @@ function build_ml_inputs(zones::Vector{String}, first_utc::Date, last_utc::Date,
                     # caller keeps its committed-pack fill (never clobbered empty).
                     if use_new(:load)
                         is_hol = (Date(h) in holset) ? 1.0 : 0.0
-                        lf = ml_load_features(h, lat0, lon0, T, ghiL, Tma, ar1, ar7, is_hol)
+                        # v100m (DE_LU-scoped windchill) from the same-hour RES agg; NaN
+                        # if RES is absent this hour (models without windchill ignore it).
+                        rah = get(ragg, h, nothing)
+                        v100m = rah === nothing ? NaN : rah[4]
+                        lf = ml_load_features(h, lat0, lon0, T, ghiL, Tma, ar1, ar7, is_hol, v100m)
                         lp[h] = ml_load_bias_correct(z, ml_predict_load(models, z, lf))
                     end
                 end
