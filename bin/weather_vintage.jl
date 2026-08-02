@@ -5,6 +5,19 @@
 using Dates
 
 """
+    _batch_all_empty(parsed, batch) -> Bool
+
+True when a parsed open-meteo batch carries NO usable hour for ANY requested
+cell — i.e. every cell's hour series is empty. This is the exact shape a
+self-hosted instance returns for `previous_dayN` it cannot serve: HTTP 200 with
+all-null arrays that the parser then drops. Pure; the trigger for the null-data
+public fallback shared by `fetch_weather` and `fetch_load_weather`. Defined here
+(the single shared include) so the two fetch layers cannot drift.
+"""
+_batch_all_empty(parsed::AbstractDict, batch::AbstractVector) =
+    all(c -> isempty(get(parsed, c, ())), batch)
+
+"""
     openmeteo_vintage_lag(market_day::Date; asof::Date=Date(now(UTC))) -> Int
 
 D-1-vintage discipline: for market day D the admissible weather input is the

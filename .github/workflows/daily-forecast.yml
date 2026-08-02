@@ -55,6 +55,15 @@ env:
   # evening ETLs keep the gap small.
   EUPHEMIA_OPENMETEO_URL: "http://localhost:30555/v1/forecast"
   EUPHEMIA_OPENMETEO_ARCHIVE_URL: "http://localhost:30555/v1/archive"
+  # Previous-runs (leads ≥ 1, the D-1..D-7 vintages) also try the self-hosted
+  # instance FIRST. It cannot serve previous_dayN yet (it holds no previous-run
+  # chunks — infra manifests/weather/PREVIOUS_RUNS.md), so each prevruns batch
+  # gets one fast localhost probe that returns all-null and then transparently
+  # falls through to the public previous-runs API (the null-data fallback in
+  # weather_res.jl/weather_load.jl). Harmless today; free the moment the instance
+  # can serve previous runs. The durable local archive is data/gfs_vintages/
+  # (capture-gfs-vintages.yml).
+  EUPHEMIA_OPENMETEO_PREVRUNS_URL: "http://localhost:30555/v1/forecast"
 
 jobs:
   daily-forecast:

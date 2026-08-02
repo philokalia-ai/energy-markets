@@ -383,6 +383,12 @@ function fetch_load_weather(cells::Vector{Tuple{Float64,Float64}}, dates::Vector
         (archive ? get(ENV, "EUPHEMIA_OPENMETEO_ARCHIVE_URL", OPENMETEO_ARCHIVE_URL_DEFAULT) :
          vintage_lag > 0 ? get(ENV, "EUPHEMIA_OPENMETEO_PREVRUNS_URL", LOAD_OPENMETEO_PREVRUNS_URL_DEFAULT) :
                    get(ENV, "EUPHEMIA_OPENMETEO_URL", OPENMETEO_FORECAST_URL_DEFAULT))
+    # Public API of the SAME family, for the local-instance-first fallback. We
+    # fall back only on the forecast/prevruns paths, and only when the primary is
+    # a non-public custom URL (a self-hosted instance) — never for an explicit
+    # base_url or the archive family (that would silently cross API families).
+    public_default = vintage_lag > 0 ? LOAD_OPENMETEO_PREVRUNS_URL_DEFAULT : OPENMETEO_FORECAST_URL_DEFAULT
+    can_fallback = isempty(base_url) && !archive && url_base != public_default
     sfx = vintage_lag > 0 ? "_previous_day$(vintage_lag)" : ""
     vintage_lag > 0 &&
         println("  🕰️ vintage fetch: previous_day$(vintage_lag) via $url_base")
@@ -396,8 +402,24 @@ function fetch_load_weather(cells::Vector{Tuple{Float64,Float64}}, dates::Vector
               "&start_date=" * Dates.format(d0, "yyyy-mm-dd") *
               "&end_date=" * Dates.format(d1, "yyyy-mm-dd") * "&timezone=UTC"
         archive || (url *= "&models=" * models)
-        body = _load_openmeteo_get(url)
-        merge!(out, parse_load_weather_response(body, batch; var_suffix=sfx))
+        body = try
+            _load_openmeteo_get(url)
+        catch e
+            # Self-hosted instance down → fall back to the public API (mirrors
+            # fetch_weather in weather_res.jl).
+            can_fallback || rethrow(e)
+            @warn "open-meteo primary ($url_base) failed; falling back to public API" exception=e
+            _load_openmeteo_get(replace(url, url_base => public_default))
+        end
+        parsed = parse_load_weather_response(body, batch; var_suffix=sfx)
+        # Null-data fallback (previous_dayN the instance can't serve → HTTP 200
+        # with all-null arrays the parser drops): fall through to the public API.
+        if can_fallback && _batch_all_empty(parsed, batch)
+            @warn "open-meteo primary ($url_base) returned all-null data; falling back to public API"
+            parsed = parse_load_weather_response(
+                _load_openmeteo_get(replace(url, url_base => public_default)), batch; var_suffix=sfx)
+        end
+        merge!(out, parsed)
     end
     return out
 end

@@ -1,0 +1,103 @@
+name: Capture GFS vintages
+
+# Nightly durable archive of the open-meteo previous_day1..7 GFS vintages the
+# ex-ante models depend on (bin/capture_gfs_vintages.jl). Runs AFTER the 06:30
+# UTC pre-gate forecast so it never competes with it for the API window, and
+# captures the day's vintages into data/gfs_vintages/ while they are still on the
+# public previous-runs API. This is the in-our-control safety-net: over time our
+# archive — not the rate-limited public previous-runs-api.open-meteo.com — is the
+# source of truth. See docs/predictions.md ("GFS vintage archive").
+#
+# The self-hosted open-meteo mirror CANNOT serve previous_dayN today (it holds no
+# previous-run chunks — see infra repo manifests/weather/PREVIOUS_RUNS.md), so the
+# capture tries the local instance FIRST (EUPHEMIA_OPENMETEO_PREVRUNS_URL) and
+# falls through to the public API on the null/error response (the fallback added
+# in weather_res.jl/weather_load.jl). The moment the local instance can serve
+# previous runs, this job (and the live forecast) become free automatically.
+
+on:
+  schedule:
+    # 07:30 UTC daily — after the 06:30 pre-gate forecast, before the 18:00 ETL.
+    - cron: "30 7 * * *"
+  workflow_dispatch:
+    inputs:
+      capture_days:
+        description: "How many recent delivery days (back from yesterday) to consider"
+        required: false
+        default: "2"
+        type: string
+      specific_day:
+        description: "Capture ONE explicit delivery day (YYYY-MM-DD); overrides capture_days"
+        required: false
+        default: ""
+        type: string
+      force:
+        description: "Recompute delivery-day files that already exist"
+        required: false
+        default: false
+        type: boolean
+
+env:
+  JULIA_VERSION: "1.12"
+  JULIA_NUM_THREADS: 4
+  # Try the self-hosted instance first; the null/error fallback in the fetchers
+  # routes to the public previous-runs API until the local instance can serve
+  # previous runs. No public rate limit if/when it can.
+  EUPHEMIA_OPENMETEO_PREVRUNS_URL: "http://localhost:30555/v1/forecast"
+
+jobs:
+  capture-gfs-vintages:
+    runs-on: [self-hosted, linux, ARM64]
+    timeout-minutes: 180
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # clean:false so the durable archive under the git-ignored
+          # data/gfs_vintages/ SURVIVES between runs on the self-hosted runner
+          # (default checkout would git-clean untracked/ignored files and wipe it).
+          clean: false
+
+      - name: Setup Julia
+        uses: julia-actions/setup-julia@v1
+        with:
+          version: ${{ env.JULIA_VERSION }}
+
+      - name: Cache Julia packages
+        uses: julia-actions/cache@v1
+
+      - name: Install Julia dependencies
+        run: |
+          julia --project=. -e '
+            using Pkg
+            Pkg.resolve()
+            Pkg.instantiate()
+            Pkg.precompile()
+            println("✅ dependencies ready")'
+
+      - name: Capture GFS vintages (non-fatal, additive, idempotent)
+        env:
+          EUPHEMIA_VINTAGE_CAPTURE_DAYS: ${{ github.event.inputs.capture_days || '2' }}
+          EUPHEMIA_VINTAGE_FORCE: ${{ github.event.inputs.force || 'false' }}
+        run: |
+          # The script ALWAYS exits 0 (the archive must never break CI). New
+          # delivery days accrue; already-captured days are skipped. A day that
+          # the public API rate-limits tonight is simply retried on the next run.
+          if [ -n "${{ github.event.inputs.specific_day }}" ]; then
+            julia --project=. bin/capture_gfs_vintages.jl "${{ github.event.inputs.specific_day }}"
+          else
+            julia --project=. bin/capture_gfs_vintages.jl
+          fi
+          echo "📦 archive dir:"; du -sh data/gfs_vintages 2>/dev/null || echo "(no archive dir yet)"
+          ls -1 data/gfs_vintages 2>/dev/null | tail -8 || true
+
+      - name: Notify on failure
+        if: failure()
+        uses: 8398a7/action-slack@v3
+        with:
+          status: failure
+          webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          text: |
+            🚨 GFS-vintage capture workflow failed (infrastructure, not a null day)!
+            🔗 ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        continue-on-error: true
