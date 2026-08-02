@@ -165,3 +165,27 @@ verification harness; 5–7 and 9 are targeted refinements; 10 closes the loop s
 staleness risk never returns. Every model-touching item is scored on the **ex-ante
 product track**, never the record (the record runs on ENTSO-E reference inputs by
 construction — these fits never enter it).
+
+## 4. Iteration results (measured)
+
+**Iteration 1 — winner-selection corr guard (fixes R1). SHIPPED.** The MAE-only
+`win` predicate in `train39.py` gained a companion clause: NEW ships only when it
+beats the pack on VALID MAE **AND** loses at most `CORR_GUARD_TOL = 0.02`
+correlation (`corr_ok` is vacuous when either corr is NaN). Re-running the selection
+over the frozen VALID window (2026-05-01…07-22) from the committed
+`valid_preds.parquet` (pilots) + `scorecard39.csv` (39-zone) — **no refetch, no
+retrain** — demoted **4 of 76** NEW winners that had shipped a corr regression:
+
+| zone-target | NEW MAE | pack MAE | NEW corr | pack corr | corr lost | → |
+|---|---|---|---|---|---|---|
+| NL_solar | 1144.6 | 1291.6 | 0.707 | 0.933 | **0.226** | pack |
+| NO2_wind | 102.9 | 116.3 | 0.798 | 0.881 | 0.083 | pack |
+| FR_wind | 916.6 | 965.3 | 0.843 | 0.888 | 0.045 | pack |
+| HU_load | 219.2 | 346.8 | 0.899 | 0.924 | 0.025 | pack |
+
+NO2/FR wind were the two R1 named cases; the guard also caught the large NL_solar
+shape regression (a pilot, so `ML_USE_NEW` was flipped in lockstep) and the marginal
+HU_load. `meta.json` winners set to `false` for the four; per the winners-only-
+committed invariant their `.txt` dumps + meta model entries were removed (72 committed
+models ⇔ 72 NEW winners). Direction is one-way conservative (a guard only demotes),
+so every other winner is untouched. `test/test_ml_inputs.jl` stays green (214/214).

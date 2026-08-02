@@ -417,48 +417,6 @@
 "n_train": 15744,
 "ref_col": null
 },
-"FR_wind": {
-"feat_cols": [
-"v100m",
-"cloud",
-"pres",
-"hod",
-"dow",
-"doy_s",
-"doy_c",
-"doy_s2",
-"doy_c2",
-"cap95_wind"
-],
-"best_iter": 275,
-"clamp_night": false,
-"n_train": 15744,
-"ref_col": "cap95_wind"
-},
-"HU_load": {
-"feat_cols": [
-"T",
-"Tma",
-"cdh",
-"hdh",
-"cdh2",
-"hdh2",
-"ghi",
-"hod",
-"dow",
-"is_hol",
-"doy_s",
-"doy_c",
-"doy_s2",
-"doy_c2",
-"ar1",
-"ar7"
-],
-"best_iter": 454,
-"clamp_night": false,
-"n_train": 15744,
-"ref_col": null
-},
 "HU_solar": {
 "feat_cols": [
 "ghi",
@@ -992,24 +950,6 @@
 "clamp_night": false,
 "n_train": 15744,
 "ref_col": null
-},
-"NO2_wind": {
-"feat_cols": [
-"v100m",
-"cloud",
-"pres",
-"hod",
-"dow",
-"doy_s",
-"doy_c",
-"doy_s2",
-"doy_c2",
-"cap95_wind"
-],
-"best_iter": 391,
-"clamp_night": false,
-"n_train": 15744,
-"ref_col": "cap95_wind"
 },
 "NO3_load": {
 "feat_cols": [
@@ -1601,26 +1541,6 @@
 "n_train": 15744,
 "ref_col": null
 },
-"NL_solar": {
-"feat_cols": [
-"ghi",
-"cloud",
-"pres",
-"se",
-"clearness",
-"hod",
-"doy_s",
-"doy_c",
-"doy_s2",
-"doy_c2",
-"cap95_solar",
-"v100m"
-],
-"best_iter": 238,
-"clamp_night": true,
-"n_train": 15744,
-"ref_col": "cap95_solar"
-},
 "NL_wind": {
 "feat_cols": [
 "v100m",
@@ -1715,11 +1635,11 @@
 "FI_wind": true,
 "FR_load": true,
 "FR_solar": false,
-"FR_wind": true,
+"FR_wind": false,
 "GR_load": true,
 "GR_solar": true,
 "GR_wind": false,
-"HU_load": true,
+"HU_load": false,
 "HU_solar": true,
 "HU_wind": false,
 "IT-CNORTH_load": true,
@@ -1750,14 +1670,14 @@
 "LV_solar": false,
 "LV_wind": false,
 "NL_load": true,
-"NL_solar": true,
+"NL_solar": false,
 "NL_wind": true,
 "NO1_load": true,
 "NO1_solar": false,
 "NO1_wind": true,
 "NO2_load": true,
 "NO2_solar": false,
-"NO2_wind": true,
+"NO2_wind": false,
 "NO3_load": true,
 "NO3_solar": false,
 "NO3_wind": false,

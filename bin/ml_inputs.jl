@@ -45,15 +45,16 @@ const ML_PILOT_ZONES = ["GR", "ES", "DE_LU", "SE2", "NL"]
 
 # Per-zone-winner ship config (#252 scorecard, task directive): which of {NEW ML,
 # committed pack} supplies each (zone, target). NEW load on all 5; NEW solar on
-# all but ES (its pack ridge is already near-perfect); NEW wind only on the
-# offshore-heavy NL (the physical power curve wins the onshore zones). A zone/
+# GR/DE_LU/SE2 (ES pack ridge is near-perfect; NL solar NEW lost the corr guard —
+# fit-iteration 1); NEW wind only on the offshore-heavy NL (the physical power
+# curve wins the onshore zones). A zone/
 # target absent here (or a non-pilot zone) keeps the pack. Read at call time.
 const ML_USE_NEW = Dict{Tuple{String,Symbol},Bool}(
     ("GR", :load) => true,  ("GR", :solar) => true,  ("GR", :wind) => false,
     ("ES", :load) => true,  ("ES", :solar) => false, ("ES", :wind) => false,
     ("DE_LU", :load) => true, ("DE_LU", :solar) => true, ("DE_LU", :wind) => false,
     ("SE2", :load) => true, ("SE2", :solar) => true,  ("SE2", :wind) => false,
-    ("NL", :load) => true,  ("NL", :solar) => true,   ("NL", :wind) => true,
+    ("NL", :load) => true,  ("NL", :solar) => false,  ("NL", :wind) => true,
 )
 
 # ── Run-time zone→model resolution (pre-gate/7-lead Phase-2 hook) ─────────────
