@@ -44,13 +44,53 @@
     window: "all",
     sort: { lead: null, metric: "mae", dir: 1 }, // dir 1 = best first
     hoverIdx: null,
+    track: "predicted",    // the global lens: "predicted" | "announced" (see TRACKS)
   };
 
-  // The site shows ONE forecast track: the ex-ante WEATHER track (all model
-  // inputs, weather-based RES). The reference (entsoe) track is kept in the
-  // data plane for research but hidden from the UI. Any input_mode starting
-  // with "weather" (weather, weather+loadfill, …) is the ex-ante track.
+  // ---------- the global track (Predicted vs As-announced) ----------
+  // A site-wide lens over EVERY series surface — the About page's fitted/
+  // constructed wall as a user-flippable switch, NOT a 7th pillar.
+  //   predicted — our fitted inputs, end-to-end (input_mode "weather*"):
+  //               "how much can you trust OUR model".
+  //   announced — the TSOs' announced D-1 inputs through the SAME
+  //               bid-construction + solver (input_mode "entsoe*"): "the fair
+  //               evaluation of the bidding mechanism with inputs held at the
+  //               official ones".
+  // The GAP between the two IS a product: where announced beats predicted, that
+  // difference is the measured cost of our inputs (the track-gap chip).
+  var TRACKS = {
+    predicted: {
+      key: "predicted", label: "Predicted", adj: "predicted",
+      series: "Simulated · predicted inputs",
+      evaluates: "our fitted inputs end-to-end — how much you can trust our model",
+    },
+    announced: {
+      key: "announced", label: "As announced", adj: "as-announced",
+      series: "Simulated · announced D-1 inputs",
+      evaluates: "the TSOs' announced D-1 inputs run through the same " +
+        "bid-construction and solver — the fair test of the bidding mechanism " +
+        "with the inputs held at the official figures",
+    },
+  };
+  var TRACK_ORDER = ["predicted", "announced"];
+  var TRACK_LS_KEY = "euphemia.track";
+
+  // The predicted track is the ex-ante WEATHER track (all model inputs,
+  // weather-based RES); any input_mode starting with "weather" (weather,
+  // weather+loadfill, …) is predicted. Everything else (entsoe,
+  // entsoe+loadfill+resfill) is the announced track.
   function isWeatherMode(m) { return /^weather/.test(m || ""); }
+  function trackOfMode(m) { return isWeatherMode(m) ? "predicted" : "announced"; }
+  function currentTrack() { return TRACKS[state.track] || TRACKS.predicted; }
+  function loadTrackPref() {
+    try {
+      var t = window.localStorage.getItem(TRACK_LS_KEY);
+      if (t && TRACKS[t]) state.track = t;
+    } catch (e) { /* private mode / no storage — the default stays */ }
+  }
+  function saveTrackPref() {
+    try { window.localStorage.setItem(TRACK_LS_KEY, state.track); } catch (e) {}
+  }
 
   // ---------- helpers ----------
 
@@ -165,6 +205,8 @@
     if (params.bhr && !isNaN(+params.bhr)) state.bookHour = +params.bhr;
     if (params.metric && ["sim", "act", "err"].indexOf(params.metric) !== -1) mapState.metric = params.metric;
     if (params.window) state.window = params.window;
+    // The global track lens: URL overrides the localStorage preference.
+    if (params.track && TRACKS[params.track]) state.track = params.track;
   }
 
   var suppressHash = false;
@@ -180,6 +222,9 @@
     if (state.view === "method" && state.methodZone) parts.push("mzone=" + encodeURIComponent(state.methodZone));
     if (state.view === "map" && mapState.metric !== "sim") parts.push("metric=" + mapState.metric);
     if (state.window && state.window !== "all") parts.push("window=" + encodeURIComponent(state.window));
+    // The global track lens is shareable via the URL (non-default only, to keep
+    // links clean); localStorage carries the default between visits.
+    if (state.track && state.track !== "predicted") parts.push("track=" + state.track);
     suppressHash = true;
     window.location.hash = parts.join("&");
     // hashchange fires async; release the guard on next tick
@@ -1013,9 +1058,47 @@
     });
   }
 
-  // Ex-ante weather-track entries only (the reference track is hidden from UI).
-  function weatherDays(zoneData) {
-    return zoneData.days.filter(function (d) { return isWeatherMode(dayInputMode(d)); });
+  // Entries on the CURRENTLY SELECTED track (the global Predicted / As-announced
+  // lens). Every zone file carries both tracks; the switch filters client-side.
+  function trackDays(zoneData) {
+    return zoneData.days.filter(function (d) { return trackOfMode(dayInputMode(d)) === state.track; });
+  }
+
+  // The freshest (lowest-lead) day of the OTHER track for the same delivery date
+  // — the counterpart used to compute the track-gap chip. null when the other
+  // track has no entry for that date (so the chip is honestly absent).
+  function altTrackDay(zoneData, date) {
+    var alt = state.track === "predicted" ? "announced" : "predicted";
+    var cand = zoneData.days.filter(function (d) {
+      return d.date === date && trackOfMode(dayInputMode(d)) === alt;
+    });
+    cand.sort(function (a, b) { return a.lead_days - b.lead_days; });
+    return cand.length ? cand[0] : null;
+  }
+
+  // The track-gap chip: "announced MAE 12.1 · predicted 14.3 → input cost +2.2".
+  // Rendered wherever BOTH tracks have a score for the same slice. The gap IS the
+  // product — input cost = predicted MAE − announced MAE, i.e. how much our
+  // fitted inputs cost vs holding the inputs at the TSO's official D-1 figures.
+  // Returns an element, or null when either side is missing (honest absence).
+  function trackGapChip(predMae, annMae) {
+    if (predMae === null || predMae === undefined || isNaN(predMae)) return null;
+    if (annMae === null || annMae === undefined || isNaN(annMae)) return null;
+    var cost = predMae - annMae;
+    var chip = el("span", "track-gap-chip" +
+      (cost > 0.05 ? " cost-pos" : cost < -0.05 ? " cost-neg" : " cost-tie"));
+    chip.appendChild(el("span", "tg-part", "announced MAE " + fmt(annMae, 1)));
+    chip.appendChild(el("span", "tg-part", "predicted " + fmt(predMae, 1)));
+    chip.appendChild(el("span", "tg-cost",
+      "input cost " + (cost >= 0 ? "+" : "") + fmt(cost, 1)));
+    chip.title = "Both tracks scored this slice. Input cost = predicted MAE − " +
+      "announced MAE = " + (cost >= 0 ? "+" : "") + fmt(cost, 2) + " €/MWh. " +
+      (cost > 0.05
+        ? "Announced beats predicted here — the gap is the measured cost of our fitted inputs."
+        : cost < -0.05
+          ? "Predicted beats announced here — our inputs helped."
+          : "The two tracks tie here.");
+    return chip;
   }
 
   // Collapse the lead/D-n dimension: the single freshest (lowest-lead) entry per
@@ -1070,6 +1153,81 @@
     method: "how bids are built",
     cases: "case studies"
   };
+
+  // ---------- the global track switch (header-level segmented control) ----------
+
+  // Render the Predicted | As-announced buttons + the one-sentence explainer of
+  // what the SELECTED track evaluates (incl. the honesty note that "as announced"
+  // is not strictly pre-gate). Idempotent — safe to call on every flip.
+  function renderTrackSwitch() {
+    var host = $("track-switch");
+    if (host) {
+      host.textContent = "";
+      TRACK_ORDER.forEach(function (k) {
+        var b = el("button", "seg-btn" + (state.track === k ? " active" : ""), TRACKS[k].label);
+        b.type = "button";
+        b.setAttribute("role", "radio");
+        b.setAttribute("aria-checked", String(state.track === k));
+        b.dataset.track = k;
+        b.title = TRACKS[k].label + " — " + TRACKS[k].evaluates;
+        b.addEventListener("click", function () { setTrack(k); });
+        host.appendChild(b);
+      });
+    }
+    var ex = $("track-explainer");
+    if (ex) {
+      ex.textContent = "";
+      ex.appendChild(el("strong", null, currentTrack().label + ": "));
+      ex.appendChild(document.createTextNode(currentTrack().evaluates + ". "));
+      ex.appendChild(el("span", "track-explainer-gap",
+        "The gap where announced beats predicted is the measured cost of our inputs."));
+      // The owner's honesty note: the announced track is the official D-1 inputs,
+      // not a strictly pre-gate re-derivation of them.
+      ex.appendChild(el("span", "track-explainer-note",
+        " Note: “as announced” holds inputs at the TSOs' published D-1 figures — a " +
+        "fair fixed-input test, not a strictly pre-gate reconstruction."));
+    }
+  }
+
+  // Flip the global track. All zone/scoreboard data already holds BOTH tracks, so
+  // this is a pure client-side re-filter + re-render (no refetch). Persists to
+  // localStorage and the URL.
+  function setTrack(t) {
+    if (!TRACKS[t]) return;
+    if (t === state.track) { renderTrackSwitch(); return; }
+    state.track = t;
+    saveTrackPref();
+    renderTrackSwitch();
+    rerenderForTrack();
+    writeHash();
+  }
+
+  // Re-render every track-reactive surface after a flip. Guarded so it is safe
+  // before the data plane has answered.
+  function rerenderForTrack() {
+    applyMapTrack();
+    if (state.scoreboard) {
+      renderWindowSelect();
+      renderScoreboard();
+    }
+    if (state.zoneCache[state.zone]) {
+      renderExplorer();
+      renderHorizon();
+    }
+    if (state.view === "map") renderMap();
+    if (state.view === "book") renderBook();
+    if (state.view === "predict") renderPredict();
+  }
+
+  // Point each map day's `zones` at the selected track's per-track object (the
+  // map JSON carries day.tracks = {predicted, announced}). Legacy single-track
+  // map JSON (only day.zones) is left untouched — honest graceful degradation.
+  function applyMapTrack() {
+    if (!mapState.data || !mapState.data.days) return;
+    mapState.data.days.forEach(function (d) {
+      if (d.tracks && d.tracks[state.track]) d.zones = d.tracks[state.track];
+    });
+  }
 
   function setView(v) {
     state.view = v;
@@ -1179,7 +1337,7 @@
     var lg = $("chart-legend");
     lg.textContent = "";
     var items = [
-      ["sim", "Simulated (ex-ante)"],
+      ["sim", currentTrack().series],
       ["act", isPending(day) ? "Actual (pending — not yet settled)" : "Actual (settled)"],
     ];
     var chips = {};
@@ -1458,12 +1616,12 @@
     var zoneData = state.zoneCache[state.zone];
     if (!zoneData) return;
 
-    // Leads collapsed to the freshest forecast per date; ex-ante weather track
-    // only (directives 1 & 3). Newest day first.
-    var days = freshestByDate(weatherDays(zoneData));
+    // Leads collapsed to the freshest forecast per date, on the selected track
+    // (directive 1 + the global lens). Newest day first.
+    var days = freshestByDate(trackDays(zoneData));
     if (!days.length) {
       $("day-list").textContent = "";
-      $("chart-title").textContent = state.zone + " — ex-ante forecast pending";
+      $("chart-title").textContent = state.zone + " — " + currentTrack().adj + " forecast pending";
       $("chart-sub").textContent = "";
       $("day-stats").textContent = "";
       $("day-comment").textContent = "";
@@ -1471,8 +1629,10 @@
       $("hour-table").textContent = "";
       var w = $("chart-wrap"); w.textContent = "";
       w.appendChild(el("p", "pending-note",
-        "No ex-ante (weather-track) days for " + state.zone +
-        " yet — the daily weather runs fill this in as they accumulate."));
+        "No " + currentTrack().adj + "-track days for " + state.zone +
+        " yet — " + (state.track === "predicted"
+          ? "the daily weather runs fill this in as they accumulate."
+          : "the announced-input (ENTSO-E D-1) runs fill this in as they accumulate.")));
       return;
     }
     var found = days.some(function (d) { return d.date === state.day; });
@@ -1487,10 +1647,26 @@
       ? " · prediction frozen " + day.prediction_made_utc.replace("T", " ").replace("Z", " UTC")
       : "";
     $("chart-sub").textContent =
-      "Ex-ante (weather) forecast" +
+      currentTrack().series + " (" + currentTrack().adj + " track)" +
       madeAt +
       " · hours shown in Europe/Athens (market day)";
     renderDayStats(day);
+    // Track-gap chip: when the other track scored the same delivery day, show the
+    // input-cost delta right under the day stats.
+    if (!isPending(day)) {
+      var altd = altTrackDay(zoneData, day.date);
+      if (altd && !isPending(altd)) {
+        var predMae = state.track === "predicted" ? day.mae : altd.mae;
+        var annMae = state.track === "announced" ? day.mae : altd.mae;
+        var dchip = trackGapChip(predMae, annMae);
+        if (dchip) {
+          var gapWrap = el("div", "stat track-gap-stat");
+          gapWrap.appendChild(el("span", "s-label", "Track gap"));
+          gapWrap.appendChild(dchip);
+          $("day-stats").appendChild(gapWrap);
+        }
+      }
+    }
     renderDayComment(day);
     var legendChips = renderLegend(day);
     var chartEls = renderChart(day);
@@ -1579,7 +1755,7 @@
   // Leads collapsed (directive 1).
   var HZ_PAST = 5, HZ_FUTURE = 5;
   function horizonDays(zoneData) {
-    var asc = freshestByDate(weatherDays(zoneData)).slice().reverse();   // oldest -> newest
+    var asc = freshestByDate(trackDays(zoneData)).slice().reverse();   // oldest -> newest
     if (!asc.length) return [];
     var frontier = asc.length;   // first forecast-only (fully pending) day = today/tomorrow
     for (var i = 0; i < asc.length; i++) {
@@ -1603,15 +1779,16 @@
     if (!days.length) {
       $("hz-sub").textContent = "";
       wrap.appendChild(el("p", "pending-note",
-        "No ex-ante (weather-track) forecast days for " + state.zone +
-        " yet — this fills as the daily weather runs accumulate."));
+        "No " + currentTrack().adj + "-track forecast days for " + state.zone +
+        " yet — this fills as the " + (state.track === "predicted"
+          ? "daily weather runs" : "announced-input runs") + " accumulate."));
       renderRevisions();
       return;
     }
     var pastN = days.filter(function (d) { return !isPending(d); }).length;
     var futureN = days.length - pastN;
     $("hz-sub").textContent =
-      "Freshest ex-ante (weather) forecast per delivery day — settled actual " +
+      "Freshest " + currentTrack().adj + " forecast per delivery day — settled actual " +
       "overlaid on the days left of “now”, forecast alone ahead of it (" +
       pastN + " back · " + futureN + " ahead) · hours in Europe/Athens (market day)";
 
@@ -1924,7 +2101,7 @@
     var zoneData = state.zoneCache[state.zone];
     if (!zoneData) return;
     var byDate = {};
-    freshestByDate(weatherDays(zoneData)).forEach(function (d) { byDate[d.date] = d; });
+    freshestByDate(trackDays(zoneData)).forEach(function (d) { byDate[d.date] = d; });
     // newest 14 delivery days that have an ex-ante forecast
     var dates = Object.keys(byDate).sort().slice(-14);
     var wrap = $("rev-wrap");
@@ -1934,7 +2111,7 @@
     if (!dates.length) {
       $("rev-title").textContent = "What we said, when";
       wrap.appendChild(el("p", "pending-note",
-        "No ex-ante (weather-track) forecast days for " + state.zone + " yet."));
+        "No " + currentTrack().adj + "-track forecast days for " + state.zone + " yet."));
       return;
     }
     if (!state.revDay || dates.indexOf(state.revDay) === -1) {
@@ -1982,8 +2159,8 @@
     svg.appendChild(simPath);
     var simChip = el("span");
     simChip.appendChild(el("span", "key sim"));
-    simChip.appendChild(document.createTextNode("Forecast (ex-ante)"));
-    simChip.title = "Ex-ante (weather) forecast · input_mode: " + dayInputMode(d) +
+    simChip.appendChild(document.createTextNode("Forecast (" + currentTrack().adj + ")"));
+    simChip.title = currentTrack().series + " · input_mode: " + dayInputMode(d) +
       (d.prediction_made_utc
         ? "  ·  frozen " + d.prediction_made_utc.replace("T", " ").replace("Z", " UTC")
         : "");
@@ -2182,6 +2359,7 @@
       $("map-comment").textContent = "Map data arrives with the next forecast run.";
       return;
     }
+    applyMapTrack();   // point each day at the selected track's zone prices
     var days = mapState.data.days;
     if (mapState.dayIdx === null || mapState.dayIdx >= days.length) mapState.dayIdx = days.length - 1;
     var day = days[mapState.dayIdx];
@@ -2194,7 +2372,8 @@
     renderMapMetricButtons();
 
     var mDef = MAP_METRICS.filter(function (m) { return m[0] === metric; })[0];
-    $("map-title").textContent = mDef[1] + " — " + dayLabel(day.date) + " (€/MWh, day average)";
+    $("map-title").textContent = mDef[1] + " — " + dayLabel(day.date) +
+      " (€/MWh, day average · " + currentTrack().adj + " track)";
 
     var dom = metricDomain(metric);
     var ramp = metric === "err" ? RAMP_DIV : RAMP_SEQ;
@@ -2568,6 +2747,7 @@
   function renderPredict() {
     buildPredictSubnav();
     syncPredictZoneSelect();
+    renderPredictTrackNote();
     var tgt = state.predictTarget || "overview";
     var isHub = tgt === "overview";
     var hub = $("predict-hub"), tv = $("predict-target-view");
@@ -2575,6 +2755,28 @@
     if (tv) tv.hidden = isHub;
     if (isHub) renderPredictHub();
     else renderPredictTarget(tgt);
+  }
+
+  // The input model cards ARE the Predicted pillar — the global track switch has
+  // no meaning here. State it inline rather than silently ignore the switch.
+  function renderPredictTrackNote() {
+    var note = $("predict-track-note");
+    if (!note) return;
+    note.textContent = "";
+    if (state.track === "announced") {
+      note.appendChild(el("strong", null, "You are on the As-announced track. "));
+      note.appendChild(document.createTextNode(
+        "This surface is the Predicted pillar itself — the fitted input models the " +
+        "switch evaluates. The As-announced track replaces these predictions with " +
+        "the TSO's official D-1 figures, so there is nothing to switch here; the " +
+        "price surfaces (Recent days, Map, Scoreboard, Zone explorer) are where the " +
+        "two tracks diverge."));
+      note.className = "track-inline-note track-inline-note-active";
+      note.hidden = false;
+    } else {
+      note.className = "track-inline-note";
+      note.hidden = true;
+    }
   }
 
   function renderPredictHub() {
@@ -2636,8 +2838,9 @@
     }
     card.appendChild(chips);
     var p = el("p", "chart-sub",
-      "If our predicted input equals the TSO's forecast, the ex-ante weather price track " +
-      "converges to the reference track — so error is measured against what the market used. ");
+      "If our predicted input equals the TSO's forecast, the Predicted price track " +
+      "converges to the As-announced track — so error is measured against what the " +
+      "market used, and the gap between the two tracks is the cost of our inputs. ");
     var a = el("a", null, "The full recipe →");
     a.href = "https://github.com/philokalia-ai/energy-markets/blob/main/docs/predictions.md";
     p.appendChild(a);
@@ -3172,11 +3375,19 @@
 
   // ---------- scoreboard ----------
 
-  // The scoreboard reports ONLY the ex-ante weather track (directive 3); the
-  // reference (entsoe) track is kept in the data plane but hidden from the UI.
+  // Scoreboard scores on the currently selected track (the global lens). Both
+  // tracks live in the data plane; the switch filters client-side.
   function trackScores() {
     return state.scoreboard.scores.filter(function (s) {
-      return isWeatherMode(s.input_mode);
+      return trackOfMode(s.input_mode) === state.track;
+    });
+  }
+
+  // Scoreboard scores on the OTHER track — the counterpart for the track-gap chip.
+  function altTrackScores() {
+    var alt = state.track === "predicted" ? "announced" : "predicted";
+    return state.scoreboard.scores.filter(function (s) {
+      return trackOfMode(s.input_mode) === alt;
     });
   }
 
@@ -3226,13 +3437,16 @@
     table.textContent = "";
     var tracked = trackScores();
     if (!tracked.length) {
-      // Friendly empty state (the weather track fills as its runs accumulate).
+      // Friendly empty state (the selected track fills as its runs accumulate).
       var tbody0 = el("tbody");
       var tr0 = el("tr");
-      var td0 = el("td", "null",
-        "No scored days on the ex-ante (weather) track yet — this track freezes " +
-        "before the 12:00 CET auction and starts accumulating scores once the " +
-        "weather-based morning runs begin and their delivery days settle.");
+      var td0 = el("td", "null", state.track === "predicted"
+        ? "No scored days on the Predicted (weather) track yet — this track " +
+          "freezes before the 12:00 CET auction and starts accumulating scores " +
+          "once the weather-based morning runs begin and their delivery days settle."
+        : "No scored days on the As-announced (ENTSO-E D-1) track yet — it fills " +
+          "as the evening announced-input runs accumulate and their delivery " +
+          "days settle.");
       td0.colSpan = 1;
       tr0.appendChild(td0);
       tbody0.appendChild(tr0);
@@ -3243,6 +3457,12 @@
     var scores = tracked.filter(function (s) { return s.window === state.window; });
     var byKey = {};
     scores.forEach(function (s) { byKey[s.zone + "|" + s.lead_days] = s; });
+    // Track-gap counterpart: the OTHER track's MAE for the same (zone, lead) in
+    // this window, so a cell can surface the input-cost delta when both exist.
+    var altByKey = {};
+    altTrackScores().forEach(function (s) {
+      if (s.window === state.window) altByKey[s.zone + "|" + s.lead_days] = s;
+    });
 
     if (state.sort.lead === null || leads.indexOf(state.sort.lead) === -1) state.sort.lead = leads[0];
 
@@ -3323,8 +3543,18 @@
             }
             td.appendChild(document.createTextNode(fmt(s.corr, 2)));
           } else if (mdef[0] === "mae") {
-            td.textContent = fmt(s.mae, 1);
+            td.appendChild(document.createTextNode(fmt(s.mae, 1)));
             td.title = "MAE " + fmt(s.mae, 2) + " €/MWh · n=" + s.n_days + " days";
+            // Track-gap chip: when the OTHER track also scored this (zone, lead,
+            // window), show the input-cost delta inline (the difference IS the
+            // measured cost of our inputs). Client-side, honestly absent otherwise.
+            var alt = altByKey[z + "|" + l];
+            if (alt && alt.mae !== null && alt.mae !== undefined && s.mae !== null) {
+              var predMae = state.track === "predicted" ? s.mae : alt.mae;
+              var annMae = state.track === "announced" ? s.mae : alt.mae;
+              var chip = trackGapChip(predMae, annMae);
+              if (chip) td.appendChild(chip);
+            }
           } else {
             td.textContent = (s.bias > 0 ? "+" : "") + fmt(s.bias, 1);
             td.title = "bias " + fmt(s.bias, 2) + " €/MWh · n=" + s.n_days + " days";
@@ -3528,7 +3758,7 @@
   function neighborPriceAt(zone, tsIso) {
     var zd = state.zoneCache[zone];
     if (!zd) return null;
-    var days = freshestByDate(weatherDays(zd));
+    var days = freshestByDate(trackDays(zd));
     var day = null;
     days.forEach(function (d) { if (!day && d.date === state.bookDay) day = d; });
     if (!day) return null;
@@ -3607,7 +3837,7 @@
       .then(function () {
         if (state.view === "book" && state.bookDay === date) {
           var zoneData = state.zoneCache[state.zone];
-          var days = zoneData ? freshestByDate(weatherDays(zoneData)) : [];
+          var days = zoneData ? freshestByDate(trackDays(zoneData)) : [];
           var fday = null;
           days.forEach(function (d) { if (!fday && d.date === date) fday = d; });
           var book = state.bookCache[state.zone + "|" + date];
@@ -3670,7 +3900,7 @@
 
     // Day options: the freshest ex-ante (weather) days — the recent window that
     // also has captured books synced to the data plane.
-    var days = freshestByDate(weatherDays(zoneData));
+    var days = freshestByDate(trackDays(zoneData));
     var btns = $("book-daybtns");
     btns.textContent = "";
     if (!days.length) {
@@ -3679,7 +3909,7 @@
       $("book-comment").textContent = "";
       var w0 = $("book-wrap"); w0.textContent = "";
       w0.appendChild(el("p", "pending-note",
-        "No ex-ante (weather-track) days for " + state.zone + " yet — the order book " +
+        "No " + currentTrack().adj + "-track days for " + state.zone + " yet — the order book " +
         "appears once the daily runs and their captured books accumulate."));
       bookTableMessage("No order book captured for " + state.zone + " yet.");
       return;
@@ -3706,6 +3936,22 @@
     days.forEach(function (d) { if (!fday && d.date === state.bookDay) fday = d; });
 
     $("book-title").textContent = state.zone + " — order book · " + dayLabel(state.bookDay);
+    // Track honesty note: the captured ladder is the predicted-track run's book
+    // (per-track book capture is Phase 2 — see docs/pillars/track-switch-phase-2.md).
+    // The clearing-price + actual markers DO follow the switch (they overlay from
+    // the selected track's price series), so we say so rather than ignore it.
+    var bnote = $("book-track-note");
+    if (bnote) {
+      if (state.track === "announced") {
+        bnote.textContent = "You are on the As-announced track. The ladder shown is " +
+          "the captured Predicted-track book (per-track book capture is Phase 2); the " +
+          "clearing-price and actual markers follow the As-announced price series.";
+        bnote.hidden = false;
+      } else {
+        bnote.hidden = true;
+        bnote.textContent = "";
+      }
+    }
     var wrap = $("book-wrap");
     wrap.textContent = "";
     wrap.appendChild(el("p", "pending-note", "Loading order book…"));
@@ -5852,6 +6098,7 @@
 
   function applyHash() {
     readHash();
+    renderTrackSwitch();
     setView(state.view);
     if (state.scoreboard) {
       if (state.scoreboard.zones.indexOf(state.zone) === -1) state.zone = state.scoreboard.zones[0];
@@ -5863,6 +6110,11 @@
   }
 
   function init() {
+    // The global track: localStorage carries the default; the URL (read in
+    // bootstrapData/applyHash) overrides it. Render the switch immediately so it
+    // is present even before the data plane answers.
+    loadTrackPref();
+    renderTrackSwitch();
     document.querySelectorAll(".tab").forEach(function (t) {
       t.addEventListener("click", function () {
         setView(t.dataset.view);
@@ -5901,7 +6153,7 @@
       stopBookPlay();
       state.bookHour = +ev.target.value;
       var zoneData = state.zoneCache[state.zone];
-      var days = zoneData ? freshestByDate(weatherDays(zoneData)) : [];
+      var days = zoneData ? freshestByDate(trackDays(zoneData)) : [];
       var fday = null;
       days.forEach(function (d) { if (!fday && d.date === state.bookDay) fday = d; });
       var book = state.bookCache[state.zone + "|" + state.bookDay];
@@ -5915,7 +6167,7 @@
       $("book-play").textContent = "❚❚ Pause";
       bookPlayTimer = setInterval(function () {
         var zoneData = state.zoneCache[state.zone];
-        var days = zoneData ? freshestByDate(weatherDays(zoneData)) : [];
+        var days = zoneData ? freshestByDate(trackDays(zoneData)) : [];
         var fday = null;
         days.forEach(function (d) { if (!fday && d.date === state.bookDay) fday = d; });
         var book = state.bookCache[state.zone + "|" + state.bookDay];
@@ -5976,6 +6228,7 @@
       box.hidden = true;
 
       readHash();
+      renderTrackSwitch();   // reflect a track= in the shared/deep-linked URL
       if (state.scoreboard.zones.indexOf(state.zone) === -1) {
         state.zone = state.scoreboard.zones.indexOf("GR") !== -1 ? "GR" : state.scoreboard.zones[0];
       }
@@ -6050,6 +6303,24 @@
       buildFamilyTable: buildFamilyTable,
       buildTargetCards: buildTargetCards,
       buildReservoir: buildReservoir,
+    };
+    // Track-switch test surface — drives the global Predicted / As-announced lens
+    // in isolation (flip, re-render, assert series/labels + URL change).
+    window.__euphemiaTrack = {
+      state: state,
+      TRACKS: TRACKS,
+      TRACK_ORDER: TRACK_ORDER,
+      setTrack: setTrack,
+      trackOfMode: trackOfMode,
+      trackDays: trackDays,
+      trackScores: trackScores,
+      trackGapChip: trackGapChip,
+      currentTrack: currentTrack,
+      renderTrackSwitch: renderTrackSwitch,
+      renderExplorer: renderExplorer,
+      renderScoreboard: renderScoreboard,
+      writeHash: writeHash,
+      readHash: readHash,
     };
     // Views test surface — lets a DOM smoke test drive each view's live-only
     // load+render with the API absent and assert the honest empty state (no

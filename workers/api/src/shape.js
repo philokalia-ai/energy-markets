@@ -7,6 +7,12 @@
  */
 
 const MARKET_DAY_TZ = "Europe/Athens";
+// The two tracks of the global Predicted / As-announced lens (input_mode buckets:
+// "weather*" -> predicted, everything else -> announced).
+const TRACK_KEYS = ["predicted", "announced"];
+export function trackOfInputMode(m) {
+  return /^weather/.test(m || "") ? "predicted" : "announced";
+}
 
 /** BigInt/number -> number; null/undefined stay null. */
 function num(v) {
@@ -290,17 +296,27 @@ export function shapeFlows(rows) {
   return { market_day_tz: MARKET_DAY_TZ, flows: flows };
 }
 
-/** map.parquet rows + manifest -> map.json shape (days sorted by date asc). */
+/**
+ * map.parquet rows + manifest -> map.json shape (days sorted by date asc).
+ *
+ * Track-aware (the global Predicted / As-announced lens): each row carries a
+ * `track` column ("predicted" | "announced"). Each day emits BOTH tracks under
+ * `day.tracks = { predicted: {zone:{…}}, announced: {zone:{…}} }`, and keeps a
+ * flat `day.zones` pointing at the PREDICTED track (default lens; the SPA repoints
+ * it on a flip via applyMapTrack). Legacy single-track parquet (no `track` column)
+ * degrades to the announced track only, exactly as before.
+ */
 export function shapeMap(rows, manifest) {
   const byDate = new Map();
   for (const r of rows) {
     const date = dateStr(r.market_date);
+    const track = r.track === "predicted" ? "predicted" : "announced";
     let day = byDate.get(date);
     if (!day) {
-      day = { date: date, zones: {} };
+      day = { date: date, zones: {}, tracks: { predicted: {}, announced: {} } };
       byDate.set(date, day);
     }
-    day.zones[r.zone] = {
+    day.tracks[track][r.zone] = {
       sim: num(r.sim),
       act: num(r.act),
       mae: num(r.mae),
@@ -310,11 +326,17 @@ export function shapeMap(rows, manifest) {
     };
   }
   const days = Array.from(byDate.values());
+  // Flat day.zones = predicted where present, else announced (single-track/legacy).
+  for (const day of days) {
+    const hasPred = Object.keys(day.tracks.predicted).length > 0;
+    day.zones = hasPred ? day.tracks.predicted : day.tracks.announced;
+  }
   days.sort(function (a, b) { return a.date < b.date ? -1 : a.date > b.date ? 1 : 0; });
   return {
     generated_utc: manifest.updated_at,
     code_version: manifest.code_version,
     market_day_tz: MARKET_DAY_TZ,
+    tracks: manifest.tracks || TRACK_KEYS,
     days: days,
   };
 }

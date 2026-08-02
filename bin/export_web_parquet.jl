@@ -25,11 +25,13 @@
 #                             scored; repeated on each hourly row).
 #   v1/scoreboard.parquet     zone, lead_days, window ("all" | "YYYY-MM"),
 #                             input_mode, n_days, mae, bias, corr.
-#   v1/map.parquet            market_date, zone, sim, act, mae, corr, lead,
-#                             made — freshest-lead day aggregates, reference
-#                             (entsoe) track only, matching web/data/map.json.
+#   v1/map.parquet            market_date, zone, track, sim, act, mae, corr,
+#                             lead, made — freshest-lead day aggregates, BOTH
+#                             tracks (track = 'predicted' | 'announced'; the
+#                             global lens), matching web/data/map.json.
 #   v1/manifest.json          {updated_at, code_version, market_day_tz, zones,
-#                              row_counts} — freshness + discovery.
+#                              row_counts, tracks, track_freshness} — freshness,
+#                              discovery + the two-track lens.
 #
 # The COLUMNAR CONTENT is value-identical to bin/export_forecast_json.jl's
 # JSON output (same queries, same window, same aggregation); the Cloudflare
@@ -219,35 +221,38 @@ function export_zone_parquets()
 end
 
 # ---------------------------------------------------------------------------
-# map.parquet — same day aggregates as export_map_json() (entsoe track,
-# freshest lead per zone-day)
+# map.parquet — day aggregates per zone, BOTH tracks (the global Predicted /
+# As-announced lens). `track` column: 'predicted' (input_mode LIKE 'weather%')
+# or 'announced' (everything else). Freshest lead per (zone, market_date, track).
 # ---------------------------------------------------------------------------
+map_track_expr(col) = "CASE WHEN $(col) LIKE 'weather%' THEN 'predicted' ELSE 'announced' END"
+
 function export_map_parquet()
     # Cross-version record: rows come from the chosen (earliest-frozen) slice
-    # per (market_date, lead_days); freshest lead computed over chosen slices.
+    # per (market_date, lead_days, input_mode); freshest lead computed per track.
     prices = Euphemia.sql2df_with_retry("""
         WITH $(CHOSEN_SLICE_CTE),
         src AS (
             SELECT p.bidding_zone, p.market_date, p.lead_days,
+                   $(map_track_expr("p.input_mode")) AS track,
                    p.date_time_utc, p.price_eur_mwh, p.prediction_made_utc
             FROM simulations.forecast_prices p
             JOIN chosen c ON c.market_date = p.market_date AND c.lead_days = p.lead_days
-                         AND c.input_mode = p.input_mode AND c.code_version = p.code_version
-            WHERE p.input_mode = 'entsoe'),
+                         AND c.input_mode = p.input_mode AND c.code_version = p.code_version),
         freshest AS (
-            SELECT bidding_zone, market_date, MIN(lead_days) AS lead
+            SELECT bidding_zone, market_date, track, MIN(lead_days) AS lead
             FROM src
-            GROUP BY 1, 2)
-        SELECT s.bidding_zone AS z, s.market_date, s.lead_days,
+            GROUP BY 1, 2, 3)
+        SELECT s.bidding_zone AS z, s.market_date, s.lead_days, s.track,
                (s.date_time_utc AT TIME ZONE 'UTC') AS t,
                s.price_eur_mwh AS sim,
                (s.prediction_made_utc AT TIME ZONE 'UTC') AS made
         FROM src s
         JOIN freshest f ON f.bidding_zone = s.bidding_zone
-                       AND f.market_date = s.market_date AND f.lead = s.lead_days
+                       AND f.market_date = s.market_date AND f.track = s.track
+                       AND f.lead = s.lead_days
         WHERE s.market_date IN (
             SELECT DISTINCT market_date FROM simulations.forecast_prices
-            WHERE input_mode = 'entsoe'
             ORDER BY market_date DESC LIMIT \$1)
     """, [MAP_DAYS])
     if isempty(prices)
@@ -256,14 +261,14 @@ function export_map_parquet()
     end
     scores = Euphemia.sql2df_with_retry("""
         WITH $(CHOSEN_SLICE_CTE)
-        SELECT s.bidding_zone AS z, s.market_date, s.lead_days, s.mae, s.corr
+        SELECT s.bidding_zone AS z, s.market_date, s.lead_days,
+               $(map_track_expr("s.input_mode")) AS track, s.mae, s.corr
         FROM simulations.forecast_scores s
         JOIN chosen c ON c.market_date = s.market_date AND c.lead_days = s.lead_days
                      AND c.input_mode = s.input_mode AND c.code_version = s.code_version
-        WHERE s.input_mode = 'entsoe'
     """)
-    scoremap = Dict{Tuple{String,Date,Int},Any}(
-        (String(r.z), Date(r.market_date), Int(r.lead_days)) => r
+    scoremap = Dict{Tuple{String,Date,Int,String},Any}(
+        (String(r.z), Date(r.market_date), Int(r.lead_days), String(r.track)) => r
         for r in eachrow(scores))
 
     sd, ed = extrema(Date.(prices.market_date))
@@ -271,30 +276,58 @@ function export_map_parquet()
     actmap = Dict{Tuple{String,DateTime},Float64}(
         (String(a.z), DateTime(a.t)) => Float64(a.act) for a in eachrow(act))
 
-    df = DataFrame(market_date=Date[], zone=String[], sim=Float64[],
+    df = DataFrame(market_date=Date[], zone=String[], track=String[], sim=Float64[],
                    act=Union{Missing,Float64}[], mae=Union{Missing,Float64}[],
                    corr=Union{Missing,Float64}[], lead=Int[], made=DateTime[])
     for d in sort(unique(Date.(prices.market_date)))
         sub = prices[Date.(prices.market_date) .== d, :]
-        for zone in sort(unique(String.(sub.z)))
-            zp = sub[sub.z .== zone, :]
-            hours = [DateTime(t) for t in zp.t]
-            acts = [get(actmap, (zone, h), nothing) for h in hours]
-            settled = Float64[a for a in acts if a !== nothing]
-            lead = Int(zp.lead_days[1])
-            sc = get(scoremap, (zone, d, lead), nothing)
-            push!(df, (d, zone,
-                       round(mean(Float64.(zp.sim)); digits=2),
-                       length(settled) == length(hours) ?
-                           round(mean(settled); digits=2) : missing,
-                       sc === nothing ? missing : nm(sc.mae),
-                       sc === nothing ? missing : nm(sc.corr),
-                       lead, DateTime(zp.made[1])))
+        for track in sort(unique(String.(sub.track)))
+            st = sub[String.(sub.track) .== track, :]
+            for zone in sort(unique(String.(st.z)))
+                zp = st[st.z .== zone, :]
+                hours = [DateTime(t) for t in zp.t]
+                acts = [get(actmap, (zone, h), nothing) for h in hours]
+                settled = Float64[a for a in acts if a !== nothing]
+                lead = Int(zp.lead_days[1])
+                sc = get(scoremap, (zone, d, lead, track), nothing)
+                push!(df, (d, zone, track,
+                           round(mean(Float64.(zp.sim)); digits=2),
+                           length(settled) == length(hours) ?
+                               round(mean(settled); digits=2) : missing,
+                           sc === nothing ? missing : nm(sc.mae),
+                           sc === nothing ? missing : nm(sc.corr),
+                           lead, DateTime(zp.made[1])))
+            end
         end
     end
     n = write_parquet(df, joinpath(V1_DIR, "map.parquet"))
-    println("wrote v1/map.parquet ($n zone-day rows)")
+    println("wrote v1/map.parquet ($n zone-day-track rows)")
     return n
+end
+
+# ---------------------------------------------------------------------------
+# Per-track freshness for the manifest: latest market_date + scored-day count
+# per track, so the SPA can surface honest per-track presence/recency.
+# ---------------------------------------------------------------------------
+function track_freshness()
+    df = Euphemia.sql2df_with_retry("""
+        SELECT $(map_track_expr("input_mode")) AS track,
+               COUNT(DISTINCT market_date) AS n_days,
+               MAX(market_date) AS latest_market_date,
+               MIN(lead_days) AS min_lead, MAX(lead_days) AS max_lead
+        FROM simulations.forecast_prices
+        GROUP BY 1
+    """)
+    out = Dict{String,Any}()
+    for r in eachrow(df)
+        out[String(r.track)] = Dict(
+            "n_days" => Int(r.n_days),
+            "latest_market_date" => Dates.format(Date(r.latest_market_date), "yyyy-mm-dd"),
+            "min_lead" => Int(r.min_lead),
+            "max_lead" => Int(r.max_lead),
+        )
+    end
+    return out
 end
 
 function main()
@@ -375,6 +408,14 @@ function main()
     catch e
         @warn "data_reset manifest summary failed (web data unaffected)" exception = (e, catch_backtrace())
     end
+    # Track discovery + per-track freshness for the global Predicted / As-announced
+    # lens. ADDITIVE and NON-FATAL — a query hiccup must never fail the export.
+    track_fresh = Dict{String,Any}()
+    try
+        track_fresh = track_freshness()
+    catch e
+        @warn "track freshness summary failed (web data unaffected)" exception = (e, catch_backtrace())
+    end
     manifest = Dict(
         "updated_at" => updated_at,
         "code_version" => CV,
@@ -382,6 +423,11 @@ function main()
         "zones" => zones,
         "row_counts" => counts,
         "data_reset" => data_reset,
+        # The global track lens: the two tracks the SPA switch offers + their
+        # freshness. Both tracks are carried in every zones/scoreboard parquet
+        # (input_mode column) and in map.parquet (track column).
+        "tracks" => ["predicted", "announced"],
+        "track_freshness" => track_fresh,
         "schema" => "v1",
     )
     open(joinpath(V1_DIR, "manifest.json"), "w") do io

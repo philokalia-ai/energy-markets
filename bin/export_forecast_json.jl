@@ -205,34 +205,38 @@ end
 # day scores for that zone-day at the same lead (null until scored).
 const MAP_DAYS = 60
 
+map_track_expr(col) = "CASE WHEN $(col) LIKE 'weather%' THEN 'predicted' ELSE 'announced' END"
+
 function export_map_json()
-    # map.json prefers the reference track (input_mode='entsoe') for now —
-    # shape unchanged, SPA-compatible. Cross-version record: rows come from
-    # the chosen (earliest-frozen) slice per (market_date, lead_days), and the
-    # freshest lead per zone-day is computed over chosen slices only.
+    # map.json carries BOTH tracks (the global Predicted / As-announced lens):
+    # each day has `tracks = {predicted:{zone:{…}}, announced:{zone:{…}}}` plus a
+    # flat `zones` pointing at the predicted track (default lens; the SPA repoints
+    # it on a flip). `track` derived from input_mode ('weather%' -> predicted).
+    # Cross-version record: rows come from the chosen (earliest-frozen) slice per
+    # (market_date, lead_days, input_mode), freshest lead per (zone, date, track).
     prices = Euphemia.sql2df_with_retry("""
         WITH $(CHOSEN_SLICE_CTE),
         src AS (
             SELECT p.bidding_zone, p.market_date, p.lead_days,
+                   $(map_track_expr("p.input_mode")) AS track,
                    p.date_time_utc, p.price_eur_mwh, p.prediction_made_utc
             FROM simulations.forecast_prices p
             JOIN chosen c ON c.market_date = p.market_date AND c.lead_days = p.lead_days
-                         AND c.input_mode = p.input_mode AND c.code_version = p.code_version
-            WHERE p.input_mode = 'entsoe'),
+                         AND c.input_mode = p.input_mode AND c.code_version = p.code_version),
         freshest AS (
-            SELECT bidding_zone, market_date, MIN(lead_days) AS lead
+            SELECT bidding_zone, market_date, track, MIN(lead_days) AS lead
             FROM src
-            GROUP BY 1, 2)
-        SELECT s.bidding_zone AS z, s.market_date, s.lead_days,
+            GROUP BY 1, 2, 3)
+        SELECT s.bidding_zone AS z, s.market_date, s.lead_days, s.track,
                (s.date_time_utc AT TIME ZONE 'UTC') AS t,
                s.price_eur_mwh AS sim,
                (s.prediction_made_utc AT TIME ZONE 'UTC') AS made
         FROM src s
         JOIN freshest f ON f.bidding_zone = s.bidding_zone
-                       AND f.market_date = s.market_date AND f.lead = s.lead_days
+                       AND f.market_date = s.market_date AND f.track = s.track
+                       AND f.lead = s.lead_days
         WHERE s.market_date IN (
             SELECT DISTINCT market_date FROM simulations.forecast_prices
-            WHERE input_mode = 'entsoe'
             ORDER BY market_date DESC LIMIT \$1)
     """, [MAP_DAYS])
     if isempty(prices)
@@ -241,14 +245,14 @@ function export_map_json()
     end
     scores = Euphemia.sql2df_with_retry("""
         WITH $(CHOSEN_SLICE_CTE)
-        SELECT s.bidding_zone AS z, s.market_date, s.lead_days, s.mae, s.corr
+        SELECT s.bidding_zone AS z, s.market_date, s.lead_days,
+               $(map_track_expr("s.input_mode")) AS track, s.mae, s.corr
         FROM simulations.forecast_scores s
         JOIN chosen c ON c.market_date = s.market_date AND c.lead_days = s.lead_days
                      AND c.input_mode = s.input_mode AND c.code_version = s.code_version
-        WHERE s.input_mode = 'entsoe'
     """)
-    scoremap = Dict{Tuple{String,Date,Int},Any}(
-        (String(r.z), Date(r.market_date), Int(r.lead_days)) => r
+    scoremap = Dict{Tuple{String,Date,Int,String},Any}(
+        (String(r.z), Date(r.market_date), Int(r.lead_days), String(r.track)) => r
         for r in eachrow(scores))
 
     sd, ed = extrema(Date.(prices.market_date))
@@ -256,34 +260,44 @@ function export_map_json()
     actmap = Dict{Tuple{String,DateTime},Float64}(
         (String(a.z), DateTime(a.t)) => Float64(a.act) for a in eachrow(act))
 
+    zone_agg(zp, d, track) = begin
+        hours = [DateTime(t) for t in zp.t]
+        acts = [get(actmap, (String(zp.z[1]), h), nothing) for h in hours]
+        settled = [a for a in acts if a !== nothing]
+        lead = Int(zp.lead_days[1])
+        sc = get(scoremap, (String(zp.z[1]), d, lead, track), nothing)
+        Dict(
+            "sim" => round(mean(Float64.(zp.sim)); digits=2),
+            "act" => length(settled) == length(hours) ?
+                     round(mean(Float64.(settled)); digits=2) : nothing,
+            "mae" => sc === nothing ? nothing : nn(sc.mae),
+            "corr" => sc === nothing ? nothing : nn(sc.corr),
+            "lead" => lead,
+            "made" => DateTime(zp.made[1]))
+    end
+
     days = Any[]
     for d in sort(unique(Date.(prices.market_date)))
         sub = prices[Date.(prices.market_date) .== d, :]
-        zones = Dict{String,Any}()
-        for zone in unique(String.(sub.z))
-            zp = sub[sub.z .== zone, :]
-            hours = [DateTime(t) for t in zp.t]
-            acts = [get(actmap, (zone, h), nothing) for h in hours]
-            settled = [a for a in acts if a !== nothing]
-            lead = Int(zp.lead_days[1])
-            sc = get(scoremap, (zone, d, lead), nothing)
-            zones[zone] = Dict(
-                "sim" => round(mean(Float64.(zp.sim)); digits=2),
-                "act" => length(settled) == length(hours) ?
-                         round(mean(Float64.(settled)); digits=2) : nothing,
-                "mae" => sc === nothing ? nothing : nn(sc.mae),
-                "corr" => sc === nothing ? nothing : nn(sc.corr),
-                "lead" => lead,
-                "made" => DateTime(zp.made[1]))
+        tracks = Dict("predicted" => Dict{String,Any}(), "announced" => Dict{String,Any}())
+        for track in unique(String.(sub.track))
+            st = sub[String.(sub.track) .== track, :]
+            for zone in unique(String.(st.z))
+                zp = st[st.z .== zone, :]
+                tracks[track][zone] = zone_agg(zp, d, track)
+            end
         end
-        push!(days, Dict("date" => d, "zones" => zones))
+        # Flat zones = predicted where present, else announced (single-track).
+        flat = !isempty(tracks["predicted"]) ? tracks["predicted"] : tracks["announced"]
+        push!(days, Dict("date" => d, "zones" => flat, "tracks" => tracks))
     end
     path = joinpath(OUT_DIR, "map.json")
     open(path, "w") do io
         json_write(io, Dict("generated_utc" => now(UTC), "code_version" => CV,
-                            "market_day_tz" => "Europe/Athens", "days" => days))
+                            "market_day_tz" => "Europe/Athens",
+                            "tracks" => ["predicted", "announced"], "days" => days))
     end
-    println("wrote $path ($(length(days)) days)")
+    println("wrote $path ($(length(days)) days, both tracks)")
 end
 
 function main()

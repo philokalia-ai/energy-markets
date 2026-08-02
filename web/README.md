@@ -5,12 +5,30 @@ predictions against settled actuals, per bidding zone. Plain HTML/CSS/JS — no 
 step, no CDNs, no external requests; it works fully offline from any static file
 server.
 
-**One track, freshest forecast (2026-07-31).** The site shows a single forecast
-track — the **ex-ante weather track** (`input_mode` starting with `weather`; all
-model inputs, weather-based RES). The reference (`entsoe`) track stays in the data
-plane for research but is hidden from the UI. Because every forecast uses the latest
-admissible weather, the lead/D-n dimension is collapsed everywhere to the **freshest
-forecast per delivery day** (deeper leads were noise). Views:
+**The global track switch (2026-08).** A header-level segmented control flips the
+whole site between two tracks — a cross-cutting lens over every price-series
+surface, not a separate view:
+
+- **Predicted** (default) — our fitted inputs end-to-end (`input_mode` starting
+  with `weather`; all model inputs, weather-based RES): "how much can you trust our
+  model".
+- **As announced** — the TSOs' announced D-1 inputs (`input_mode` `entsoe*`) run
+  through the same bid-construction and solver: "the fair test of the bidding
+  mechanism with inputs held at the official figures".
+
+The switch state lives in the URL (`&track=`) + `localStorage` (default Predicted).
+The gap between the tracks is itself a product: where announced beats predicted, a
+**track-gap chip** ("announced MAE 12.1 · predicted 14.3 → input cost +2.2",
+computed client-side) surfaces the measured cost of our inputs. Views where the
+announced track has no meaning — the Predictions input-model cards, which ARE the
+Predicted pillar — state that inline instead of silently ignoring the switch.
+Both tracks are carried in every zones/scoreboard parquet (`input_mode`) and in
+`map.parquet` (`track` column); `manifest.json` declares
+`tracks:["predicted","announced"]` with per-track freshness.
+
+Because every forecast uses the latest admissible inputs, the lead/D-n dimension is
+collapsed everywhere to the **freshest forecast per delivery day** (deeper leads
+were noise). Views:
 
 - **Recent days** — a continuous ±5-day ribbon around now: the freshest forecast
   per delivery day for the ~5 settled days before the **"now" seam** (each with the
@@ -39,7 +57,8 @@ forecast per delivery day** (deeper leads were noise). Views:
   owner, with a dashed marker where the **clearing price** landed ("πού έκατσε η
   μπίλια") and a second marker at the settled actual. Hour slider + play-through-day.
   Ladder data comes from `GET /api/v1/books/:zone/:date` (see `workers/api/`).
-- **Scoreboard** — weather-track accuracy (MAE / bias / Pearson corr) by window.
+- **Scoreboard** — accuracy (MAE / bias / Pearson corr) by window on the selected
+  track, with the track-gap chip on each MAE cell where both tracks scored.
 
 ## Run locally
 
@@ -122,10 +141,10 @@ realized hours only. Predictions are frozen at `prediction_made_utc` and never
 revised — this is a no-fit ex-ante counterfactual, so persistent residuals are
 findings about the real market, not tuning targets.
 
-Only the **ex-ante weather track** is shown (`input_mode` starting with
-`weather`); the reference (`entsoe`) track is filtered out in the UI. Where a zone
-has no weather-track day yet, the view shows an empty state and fills as the daily
-weather runs accumulate.
+Both tracks are served (the global switch filters client-side): `input_mode`
+starting with `weather` is the **Predicted** track, everything else (`entsoe*`) is
+the **As announced** track. Where a zone has no day yet on the selected track, the
+view shows an empty state and fills as that track's runs accumulate.
 
 ## Order-book data contract
 
