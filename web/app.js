@@ -147,7 +147,7 @@
       var i = kv.indexOf("=");
       if (i > 0) params[decodeURIComponent(kv.slice(0, i))] = decodeURIComponent(kv.slice(i + 1));
     });
-    if (["board", "explorer", "horizon", "map", "predict", "cases", "book"].indexOf(params.view) !== -1) state.view = params.view;
+    if (["board", "explorer", "horizon", "map", "predict", "cases", "book", "solver"].indexOf(params.view) !== -1) state.view = params.view;
     if (params.zone) state.zone = params.zone;
     if (params.day && /^\d{4}-\d{2}-\d{2}$/.test(params.day)) state.day = params.day;
     if (params.rev && /^\d{4}-\d{2}-\d{2}$/.test(params.rev)) state.revDay = params.rev;
@@ -215,6 +215,7 @@
   var VIEW_CRUMBS = {
     horizon: "recent days",
     map: "map",
+    solver: "solver",
     predict: "predicting RES & loads",
     explorer: "zone explorer",
     board: "scoreboard",
@@ -228,12 +229,14 @@
     $("view-board").hidden = v !== "board";
     $("view-horizon").hidden = v !== "horizon";
     $("view-map").hidden = v !== "map";
+    $("view-solver").hidden = v !== "solver";
     $("view-predict").hidden = v !== "predict";
     $("view-book").hidden = v !== "book";
     $("view-cases").hidden = v !== "cases";
     var crumb = $("crumb-view");
     if (crumb) crumb.textContent = VIEW_CRUMBS[v] ? "/ " + VIEW_CRUMBS[v] : "";
     if (v === "map") loadMap().then(renderMap);
+    if (v === "solver") renderSolver();
     if (v === "predict") loadPredict().then(renderPredict);
     if (v === "book") renderBook();
     document.querySelectorAll(".tab").forEach(function (t) {
@@ -3246,6 +3249,482 @@
     return Math.round(h / 24) + " days ago";
   }
 
+  // ================= Solver view (pillar 1 — the coupled clearing) =========
+  //
+  // A dependency-free surface over data that already ships. S1 (the GME/OMIE
+  // proof) is static content in index.html. S3 clears a SYNTHETIC two-zone toy
+  // live in JS (clearTwoZone, below). S4 opens a real congested border-hour from
+  // the live /api/v1/flows + /api/v1/zones planes (every number computed here,
+  // nothing hand-authored). S5 is an illustrative two-pass click-through.
+
+  // ---- S3: the two-zone toy -------------------------------------------------
+  // Two SYNTHETIC two-block books (NOT a real ladder). NORTH is cheap (wind/
+  // hydro), SOUTH dear (gas-set). The reader drags the ATC and watches the
+  // clear move through islanded → congested → coupled.
+  var SOLVER_TOY_BOOKS = {
+    north: { name: "NORTH", blocks: [{ mw: 3000, price: 20 }, { mw: 2000, price: 70 }], demand: 2500 },
+    south: { name: "SOUTH", blocks: [{ mw: 500, price: 45 }, { mw: 3000, price: 95 }], demand: 2500 },
+  };
+
+  // Marginal supply price to serve quantity q from ascending price blocks.
+  // 0 for q<=0; Infinity beyond total capacity (scarcity).
+  function solverMarginalPrice(blocks, q) {
+    if (q <= 0) return 0;
+    var cum = 0;
+    for (var i = 0; i < blocks.length; i++) {
+      cum += blocks[i].mw;
+      if (q <= cum + 1e-9) return blocks[i].price;
+    }
+    return Infinity;
+  }
+
+  // Closed-form clear of two two-block books joined by a NORTH→SOUTH line of
+  // capacity `atc`. Pure function — the whole of pillar 1 in one control:
+  //   1. merge both books, dispatch the combined inelastic demand by merit order
+  //      → the efficient (unconstrained) NORTH export x* and the single price p*;
+  //   2. if x* <= atc the line has room → COUPLED: one price p* in both zones,
+  //      flow = x* (< atc = slack), zero congestion rent;
+  //   3. else the line is full → CONGESTED: flow = atc, each zone prices its own
+  //      margin (NORTH at demand+atc, SOUTH at demand−atc), and the gap between
+  //      them, times the flow, is the border's congestion rent.
+  function clearTwoZone(atc, books) {
+    books = books || SOLVER_TOY_BOOKS;
+    var N = books.north, S = books.south;
+    var merged = N.blocks.map(function (b) { return { mw: b.mw, price: b.price, z: "N" }; })
+      .concat(S.blocks.map(function (b) { return { mw: b.mw, price: b.price, z: "S" }; }))
+      .sort(function (a, b) { return a.price - b.price; });
+    var demand = N.demand + S.demand, rem = demand, nUsed = 0, pStar = 0;
+    for (var i = 0; i < merged.length && rem > 1e-9; i++) {
+      var take = Math.min(merged[i].mw, rem);
+      if (take > 0) { pStar = merged[i].price; if (merged[i].z === "N") nUsed += take; rem -= take; }
+    }
+    var xUnc = nUsed - N.demand;   // efficient NORTH→SOUTH export (copper-plate)
+    var flow, pN, pS, congested;
+    if (xUnc <= atc + 1e-9) {
+      congested = false; flow = Math.max(0, xUnc); pN = pStar; pS = pStar;
+    } else {
+      congested = true; flow = atc;
+      pN = solverMarginalPrice(N.blocks, N.demand + atc);
+      pS = solverMarginalPrice(S.blocks, S.demand - atc);
+    }
+    var gap = pS - pN;
+    return {
+      atc: atc, flow: flow, pN: pN, pS: pS, gap: gap,
+      rent: congested ? gap * flow : 0, congested: congested, coupled: !congested,
+    };
+  }
+
+  function solverColors() {
+    var css = getComputedStyle(document.documentElement);
+    return {
+      grid: css.getPropertyValue("--grid").trim(),
+      baseline: css.getPropertyValue("--baseline").trim(),
+      muted: css.getPropertyValue("--text-muted").trim(),
+      text: css.getPropertyValue("--text-secondary").trim(),
+      surface: css.getPropertyValue("--surface-1").trim(),
+      heading: css.getPropertyValue("--heading").trim(),
+      good: css.getPropertyValue("--status-good").trim(),
+      weak: css.getPropertyValue("--status-weak").trim(),
+      cheap: css.getPropertyValue("--status-good").trim(),
+      dear: css.getPropertyValue("--fuel-gas").trim(),
+      trade: css.getPropertyValue("--book-trade").trim(),
+      sim: css.getPropertyValue("--series-sim").trim(),
+    };
+  }
+
+  function eur(v, d) { return "€" + fmt(v, d === undefined ? 0 : d); }
+
+  // A cartoon two-block book column: a cheap slab (green) under a dear slab
+  // (orange), height ∝ MW, with the zone's clearing price called out.
+  function solverBookColumn(svg, x, w, book, price, C, dispatched) {
+    var top = 24, maxMW = 5200, hMax = 150;
+    var y = top, cum = 0;
+    book.blocks.forEach(function (b, i) {
+      var h = (b.mw / maxMW) * hMax;
+      var lit = cum < dispatched - 1e-9;   // this block is (partly) dispatched
+      svg.appendChild(svgEl("rect", {
+        x: x, y: y, width: w, height: h, rx: 2,
+        fill: i === 0 ? C.cheap : C.dear, opacity: lit ? 0.9 : 0.28,
+        stroke: C.surface, "stroke-width": 1,
+      }));
+      var lbl = svgEl("text", { x: x + w / 2, y: y + h / 2 + 4, "text-anchor": "middle",
+        "font-size": 11, fill: C.surface, "font-family": "var(--mono)" });
+      lbl.textContent = b.mw + " @ " + eur(b.price);
+      if (h > 18) svg.appendChild(lbl);
+      y += h; cum += b.mw;
+    });
+    var name = svgEl("text", { x: x + w / 2, y: top - 8, "text-anchor": "middle",
+      "font-size": 12, fill: C.heading, "font-family": "var(--serif)", "font-weight": 700 });
+    name.textContent = book.name;
+    svg.appendChild(name);
+    var pr = svgEl("text", { x: x + w / 2, y: y + 18, "text-anchor": "middle",
+      "font-size": 15, fill: C.heading, "font-family": "var(--mono)", "font-weight": 700 });
+    pr.textContent = isFinite(price) ? eur(price) + "/MWh" : "scarcity";
+    svg.appendChild(pr);
+    var dm = svgEl("text", { x: x + w / 2, y: y + 34, "text-anchor": "middle",
+      "font-size": 10.5, fill: C.muted, "font-family": "var(--mono)" });
+    dm.textContent = "demand " + book.demand + " MW";
+    svg.appendChild(dm);
+  }
+
+  function renderSolverToy() {
+    var host = $("solver-toy");
+    if (!host) return;
+    var slider = $("solver-atc");
+    var atc = slider ? +slider.value : 800;
+    var vlab = $("solver-atc-val");
+    if (vlab) vlab.textContent = atc + " MW";
+    var r = clearTwoZone(atc);
+    var C = solverColors();
+
+    host.textContent = "";
+    var W = 640, H = 320;
+    var svg = svgEl("svg", { viewBox: "0 0 " + W + " " + H, width: "100%",
+      role: "img", "aria-label": "Two-zone toy clear at ATC " + atc + " MW" });
+
+    var colW = 150, leftX = 40, rightX = W - 40 - colW;
+    // dispatched MW per zone = local demand ± the cross-border flow (NORTH
+    // exports r.flow, SOUTH imports it), used only to light the served blocks.
+    var dispN = SOLVER_TOY_BOOKS.north.demand + r.flow;
+    var dispS = SOLVER_TOY_BOOKS.south.demand - r.flow;
+    solverBookColumn(svg, leftX, colW, SOLVER_TOY_BOOKS.north, r.pN, C, dispN);
+    solverBookColumn(svg, rightX, colW, SOLVER_TOY_BOOKS.south, r.pS, C, dispS);
+
+    // the line between them: an arrow whose width ∝ flow, magenta (trade wedge).
+    var midY = 96, ax0 = leftX + colW + 8, ax1 = rightX - 8;
+    var slack = r.coupled;
+    svg.appendChild(svgEl("line", { x1: ax0, y1: midY, x2: ax1, y2: midY,
+      stroke: C.baseline, "stroke-width": 1, "stroke-dasharray": "3 3" }));
+    if (r.flow > 1) {
+      var sw = Math.max(2, Math.min(16, (r.flow / 2500) * 16));
+      svg.appendChild(svgEl("line", { x1: ax0, y1: midY, x2: ax1 - 10, y2: midY,
+        stroke: C.trade, "stroke-width": sw, "stroke-linecap": "round" }));
+      svg.appendChild(svgEl("path", {
+        d: "M " + (ax1 - 12) + " " + (midY - 7) + " L " + ax1 + " " + midY + " L " + (ax1 - 12) + " " + (midY + 7) + " Z",
+        fill: C.trade }));
+    }
+    var flab = svgEl("text", { x: (ax0 + ax1) / 2, y: midY - 12, "text-anchor": "middle",
+      "font-size": 11, fill: C.text, "font-family": "var(--mono)" });
+    flab.textContent = "flow " + Math.round(r.flow) + " MW";
+    svg.appendChild(flab);
+    var alab = svgEl("text", { x: (ax0 + ax1) / 2, y: midY + 20, "text-anchor": "middle",
+      "font-size": 10.5, fill: slack ? C.good : C.weak, "font-family": "var(--mono)" });
+    alab.textContent = slack ? "ATC " + atc + " (slack)" : "ATC " + atc + " (AT BOUND)";
+    svg.appendChild(alab);
+
+    // read-out band: the price gap and the congestion rent.
+    var by = 250;
+    var gapTxt = svgEl("text", { x: W / 2, y: by, "text-anchor": "middle",
+      "font-size": 14, fill: C.heading, "font-family": "var(--mono)", "font-weight": 700 });
+    gapTxt.textContent = r.coupled
+      ? "ONE price — gap €0 (the line has room; both zones price the same marginal unit)"
+      : "price gap " + eur(r.gap) + "/MWh — the line is full, the zones decouple";
+    svg.appendChild(gapTxt);
+
+    // congestion-rent bar: appears only when the border binds and the gap > 0.
+    var rentY = by + 20, barMaxW = 360, barX = (W - barMaxW) / 2;
+    svg.appendChild(svgEl("line", { x1: barX, y1: rentY + 12, x2: barX + barMaxW, y2: rentY + 12,
+      stroke: C.grid, "stroke-width": 8, "stroke-linecap": "round" }));
+    var rentMax = 60000;
+    if (r.rent > 1) {
+      var rw = Math.max(6, Math.min(barMaxW, (r.rent / rentMax) * barMaxW));
+      svg.appendChild(svgEl("line", { x1: barX, y1: rentY + 12, x2: barX + rw, y2: rentY + 12,
+        stroke: C.weak, "stroke-width": 8, "stroke-linecap": "round" }));
+    }
+    var rentTxt = svgEl("text", { x: W / 2, y: rentY + 34, "text-anchor": "middle",
+      "font-size": 11.5, fill: r.rent > 1 ? C.weak : C.muted, "font-family": "var(--mono)" });
+    rentTxt.textContent = r.rent > 1
+      ? "congestion rent " + eur(r.gap) + " × " + Math.round(r.flow) + " MW = " + eur(r.rent) + "/h"
+      : "congestion rent: €0";
+    svg.appendChild(rentTxt);
+
+    host.appendChild(svg);
+  }
+
+  // ---- S4: a real congested border-hour ------------------------------------
+  // Curated pointers into the reproducible record (borders + record-range
+  // dates); every displayed number is computed live from /flows + /zones. The
+  // first two are the congested/uncongested CONTRAST on one border (fixture-
+  // backed so the offline snapshot renders them); the rest are additional
+  // regimes that resolve from the live API and degrade gracefully when absent.
+  var SOLVER_EXEMPLARS = [
+    { date: "2026-07-11", hour_utc: "2026-07-11T18:00:00Z", from_zone: "FR", to_zone: "IT-NORTH",
+      note: "Evening peak: French supply can't fully reach Italy — the interconnector fills and the two zones decouple." },
+    { date: "2026-07-11", hour_utc: "2026-07-11T03:00:00Z", from_zone: "FR", to_zone: "IT-NORTH",
+      note: "The same border a few hours earlier: demand is low, the line has room, and the two prices sit together — the contrast that proves the rule." },
+    { date: "2026-06-21", hour_utc: "2026-06-21T11:00:00Z", from_zone: "DE_LU", to_zone: "FR",
+      note: "Solar-surplus midday on the continental core: a low/negative-price separation as one side floods with cheap PV." },
+    { date: "2026-02-05", hour_utc: "2026-02-05T17:00:00Z", from_zone: "NO2", to_zone: "DK1",
+      note: "Nordic hydro exporting into a tight Danish winter evening across the Skagerrak link." },
+    { date: "2026-01-15", hour_utc: "2026-01-15T08:00:00Z", from_zone: "SE3", to_zone: "SE4",
+      note: "A Nordic internal winter-morning constraint between two Swedish zones." },
+  ];
+  var solverExemplarIdx = 0;
+
+  // A zone's coupled `sim` price at a UTC hour, from its (cached) forecast for
+  // the exemplar's market day. null when the day/hour isn't loaded.
+  function solverZonePriceAt(zoneData, dateStr, tsIso) {
+    if (!zoneData || !zoneData.days) return null;
+    var day = null;
+    zoneData.days.forEach(function (d) {
+      if (d.date === dateStr && (!day || d.lead_days < day.lead_days)) day = d;
+    });
+    if (!day) return null;
+    var i = day.hours.indexOf(tsIso);
+    return i >= 0 && day.sim ? day.sim[i] : null;
+  }
+
+  // Net flow from→to on a border at a UTC hour, from the day's flow rows
+  // (either stored direction). null when no flows / no border row.
+  function solverBorderFlow(flows, tsIso, from, to) {
+    if (!flows) return null;
+    var rows = flows[tsIso];
+    if (!rows || !rows.length) return null;
+    var net = 0, hit = false;
+    rows.forEach(function (r) {
+      if (r[0] === from && r[1] === to) { net += r[2]; hit = true; }
+      else if (r[0] === to && r[1] === from) { net -= r[2]; hit = true; }
+    });
+    return hit ? net : null;
+  }
+
+  function renderSolverExemplarSteps() {
+    var bar = $("solver-exemplar-steps");
+    if (!bar) return;
+    bar.textContent = "";
+    SOLVER_EXEMPLARS.forEach(function (ex, i) {
+      var b = el("button", null, ex.from_zone + " · " + ex.to_zone);
+      b.type = "button";
+      b.setAttribute("aria-pressed", String(i === solverExemplarIdx));
+      if (i === solverExemplarIdx) b.classList.add("is-active");
+      b.addEventListener("click", function () {
+        solverExemplarIdx = i;
+        renderSolverExemplarSteps();
+        renderSolverExemplar();
+      });
+      bar.appendChild(b);
+    });
+  }
+
+  function solverExemplarMessage(host, msg) {
+    host.textContent = "";
+    host.appendChild(el("p", "pending-note", msg));
+  }
+
+  function renderSolverExemplar() {
+    var host = $("solver-exemplar");
+    if (!host) return;
+    var ex = SOLVER_EXEMPLARS[solverExemplarIdx];
+    solverExemplarMessage(host, "Opening the " + ex.from_zone + " · " + ex.to_zone + " border…");
+    Promise.all([
+      loadFlows(ex.date),
+      loadZone(ex.from_zone).catch(function () { return null; }),
+      loadZone(ex.to_zone).catch(function () { return null; }),
+    ]).then(function (res) {
+      // guard against a stale in-flight render if the reader stepped on.
+      if (SOLVER_EXEMPLARS[solverExemplarIdx] !== ex) return;
+      var flows = res[0];
+      var pFrom = solverZonePriceAt(res[1], ex.date, ex.hour_utc);
+      var pTo = solverZonePriceAt(res[2], ex.date, ex.hour_utc);
+      var net = solverBorderFlow(flows, ex.hour_utc, ex.from_zone, ex.to_zone);
+      if (net === null || pFrom === null || pTo === null) {
+        solverExemplarMessage(host,
+          "No persisted coupled flow for this border-hour in the current data plane " +
+          "(the daily ex-ante forecast saves prices only, not flows). Congestion exemplars " +
+          "are drawn from the reproducible historical record — try the live site, or another " +
+          "exemplar above.");
+        return;
+      }
+      drawSolverExemplar(host, ex, pFrom, pTo, net);
+    });
+  }
+
+  function drawSolverExemplar(host, ex, pFrom, pTo, net) {
+    var C = solverColors();
+    var sep = Math.abs(pFrom - pTo);
+    var rent = sep * Math.abs(net);
+    // flow direction: physical power runs cheap → dear; net sign is from→to.
+    var srcZone = net >= 0 ? ex.from_zone : ex.to_zone;
+    var dstZone = net >= 0 ? ex.to_zone : ex.from_zone;
+    var congested = sep > 0.5;
+
+    host.textContent = "";
+    var W = 640, H = 220;
+    var svg = svgEl("svg", { viewBox: "0 0 " + W + " " + H, width: "100%", role: "img",
+      "aria-label": ex.from_zone + "–" + ex.to_zone + " coupled prices and flow" });
+
+    var head = svgEl("text", { x: W / 2, y: 22, "text-anchor": "middle", "font-size": 12,
+      fill: C.muted, "font-family": "var(--mono)" });
+    head.textContent = ex.date + ", " + hourLabel(ex.hour_utc) + " (" + hourEndLabel(ex.hour_utc) + ") Athens";
+    svg.appendChild(head);
+
+    var tileW = 170, tileH = 92, ty = 48, lX = 40, rX = W - 40 - tileW;
+    function tile(x, zone, price) {
+      svg.appendChild(svgEl("rect", { x: x, y: ty, width: tileW, height: tileH, rx: 10,
+        fill: C.surface, stroke: C.baseline, "stroke-width": 1 }));
+      var zt = svgEl("text", { x: x + tileW / 2, y: ty + 34, "text-anchor": "middle",
+        "font-size": 15, fill: C.heading, "font-family": "var(--serif)", "font-weight": 700 });
+      zt.textContent = zone;
+      svg.appendChild(zt);
+      var pt = svgEl("text", { x: x + tileW / 2, y: ty + 66, "text-anchor": "middle",
+        "font-size": 18, fill: C.sim, "font-family": "var(--mono)", "font-weight": 700 });
+      pt.textContent = eur(price) + " /MWh";
+      svg.appendChild(pt);
+    }
+    tile(lX, ex.from_zone, pFrom);
+    tile(rX, ex.to_zone, pTo);
+
+    var midY = ty + tileH / 2, ax0 = lX + tileW + 6, ax1 = rX - 6;
+    // arrow points from the physically-exporting (cheaper) zone to the importer.
+    var forward = srcZone === ex.from_zone;
+    var sw = Math.max(3, Math.min(18, (Math.abs(net) / 3000) * 18));
+    svg.appendChild(svgEl("line", { x1: ax0, y1: midY, x2: ax1, y2: midY,
+      stroke: C.trade, "stroke-width": sw, "stroke-linecap": "round" }));
+    var tipX = forward ? ax1 : ax0, backX = forward ? ax1 - 13 : ax0 + 13;
+    svg.appendChild(svgEl("path", {
+      d: "M " + backX + " " + (midY - 8) + " L " + tipX + " " + midY + " L " + backX + " " + (midY + 8) + " Z",
+      fill: C.trade }));
+    var fl = svgEl("text", { x: (ax0 + ax1) / 2, y: midY - 14, "text-anchor": "middle",
+      "font-size": 11.5, fill: C.text, "font-family": "var(--mono)" });
+    fl.textContent = "flow " + fmt(Math.abs(net), 0) + " MW  " + srcZone + " → " + dstZone;
+    svg.appendChild(fl);
+
+    var sy = ty + tileH + 44;
+    var sepTxt = svgEl("text", { x: W / 2, y: sy, "text-anchor": "middle", "font-size": 14,
+      fill: congested ? C.weak : C.good, "font-family": "var(--mono)", "font-weight": 700 });
+    sepTxt.textContent = congested
+      ? "price separation: " + eur(sep) + "/MWh · congestion rent " + eur(rent) + " this hour"
+      : "prices equalised (Δ " + eur(sep, 2) + ") — the border had room to spare";
+    svg.appendChild(sepTxt);
+
+    host.appendChild(svg);
+    host.appendChild(el("p", "solver-exemplar-note", ex.note));
+  }
+
+  // ---- S5: the two-pass anchor click-through (illustrative) -----------------
+  var solverPassStep = 1;
+  var SOLVER_PASS = [
+    { tag: "pass 1", price: 58, water: null,
+      cap: "NO2's reservoir bids a first-guess water value → the footprint clears → a coupled price of €58/MWh emerges." },
+    { tag: "the anchor", price: 58, water: 52,
+      cap: "NO2 asks: what is my water worth to the WHOLE connected market right now? It re-prices at 0.9 × €58 = €52." },
+    { tag: "pass 2", price: 55, water: 52,
+      cap: "The footprint re-clears with NO2's opportunity-cost bid → final coupled prices, consistent across every anchored zone." },
+  ];
+
+  function renderSolverPass() {
+    var host = $("solver-pass");
+    if (!host) return;
+    var s = SOLVER_PASS[(solverPassStep - 1) % 3];
+    var C = solverColors();
+    host.textContent = "";
+    var W = 640, H = 190;
+    var svg = svgEl("svg", { viewBox: "0 0 " + W + " " + H, width: "100%", role: "img",
+      "aria-label": "Two-pass anchor feedback, step " + solverPassStep });
+
+    var steps = ["pass 1", "the anchor", "pass 2"];
+    steps.forEach(function (t, i) {
+      var on = i === (solverPassStep - 1) % 3;
+      var cx = 90 + i * 90;
+      svg.appendChild(svgEl("circle", { cx: cx, cy: 30, r: 12,
+        fill: on ? C.sim : C.surface, stroke: on ? C.sim : C.baseline, "stroke-width": 1.5 }));
+      var num = svgEl("text", { x: cx, y: 34, "text-anchor": "middle", "font-size": 11,
+        fill: on ? C.surface : C.muted, "font-family": "var(--mono)", "font-weight": 700 });
+      num.textContent = String(i + 1);
+      svg.appendChild(num);
+      if (i < 2) svg.appendChild(svgEl("line", { x1: cx + 13, y1: 30, x2: cx + 77, y2: 30,
+        stroke: C.baseline, "stroke-width": 1 }));
+      var tl = svgEl("text", { x: cx, y: 56, "text-anchor": "middle", "font-size": 9.5,
+        fill: on ? C.heading : C.muted, "font-family": "var(--mono)" });
+      tl.textContent = t;
+      svg.appendChild(tl);
+    });
+
+    // NO2 water-value tile + the coupled-price read-out.
+    var ty = 82, tileW = 190, tileH = 76;
+    svg.appendChild(svgEl("rect", { x: 40, y: ty, width: tileW, height: tileH, rx: 10,
+      fill: C.surface, stroke: C.baseline, "stroke-width": 1 }));
+    var zt = svgEl("text", { x: 40 + tileW / 2, y: ty + 26, "text-anchor": "middle", "font-size": 13,
+      fill: C.heading, "font-family": "var(--serif)", "font-weight": 700 });
+    zt.textContent = "NO2 · reservoir";
+    svg.appendChild(zt);
+    var wv = svgEl("text", { x: 40 + tileW / 2, y: ty + 54, "text-anchor": "middle", "font-size": 16,
+      fill: s.water == null ? C.muted : C.good, "font-family": "var(--mono)", "font-weight": 700 });
+    wv.textContent = s.water == null ? "water value: first guess" : "water value €" + s.water + "/MWh";
+    svg.appendChild(wv);
+
+    var arrX0 = 40 + tileW + 10, arrX1 = W - 40 - 190;
+    svg.appendChild(svgEl("line", { x1: arrX0, y1: ty + tileH / 2, x2: arrX1 - 12, y2: ty + tileH / 2,
+      stroke: C.trade, "stroke-width": 4, "stroke-linecap": "round" }));
+    svg.appendChild(svgEl("path", {
+      d: "M " + (arrX1 - 14) + " " + (ty + tileH / 2 - 7) + " L " + (arrX1 - 2) + " " + (ty + tileH / 2) +
+        " L " + (arrX1 - 14) + " " + (ty + tileH / 2 + 7) + " Z", fill: C.trade }));
+
+    svg.appendChild(svgEl("rect", { x: W - 40 - 190, y: ty, width: 190, height: tileH, rx: 10,
+      fill: C.surface, stroke: C.baseline, "stroke-width": 1 }));
+    var ct = svgEl("text", { x: W - 40 - 95, y: ty + 26, "text-anchor": "middle", "font-size": 12,
+      fill: C.muted, "font-family": "var(--mono)" });
+    ct.textContent = "coupled price";
+    svg.appendChild(ct);
+    var cp = svgEl("text", { x: W - 40 - 95, y: ty + 54, "text-anchor": "middle", "font-size": 18,
+      fill: C.sim, "font-family": "var(--mono)", "font-weight": 700 });
+    cp.textContent = eur(s.price) + "/MWh";
+    svg.appendChild(cp);
+
+    host.appendChild(svg);
+    host.appendChild(el("p", "solver-pass-cap", "Step " + solverPassStep + " · " + s.tag + " — " + s.cap));
+  }
+
+  // ---- S2: the dual sketch (static, theme-aware) ---------------------------
+  function renderSolverDual() {
+    var host = $("solver-dual");
+    if (!host) return;
+    var C = solverColors();
+    host.textContent = "";
+    var W = 640, H = 200;
+    var svg = svgEl("svg", { viewBox: "0 0 " + W + " " + H, width: "100%", role: "img",
+      "aria-label": "A zonal price is the dual of the balance constraint" });
+    var top = svgEl("text", { x: W / 2, y: 22, "text-anchor": "middle", "font-size": 13,
+      fill: C.heading, "font-family": "var(--serif)", "font-weight": 700 });
+    top.textContent = "maximise  Σ economic surplus   subject to:";
+    svg.appendChild(top);
+
+    function constraintRow(y, label, dualText, accent) {
+      svg.appendChild(svgEl("rect", { x: 40, y: y, width: 300, height: 46, rx: 8,
+        fill: C.surface, stroke: C.baseline, "stroke-width": 1 }));
+      var t = svgEl("text", { x: 56, y: y + 28, "font-size": 12.5, fill: C.heading,
+        "font-family": "var(--mono)" });
+      t.textContent = label;
+      svg.appendChild(t);
+      svg.appendChild(svgEl("line", { x1: 340, y1: y + 23, x2: 380, y2: y + 23,
+        stroke: accent, "stroke-width": 2 }));
+      svg.appendChild(svgEl("path", { d: "M 344 " + (y + 18) + " L 340 " + (y + 23) + " L 344 " + (y + 28) + " Z",
+        fill: accent }));
+      var d = svgEl("text", { x: 392, y: y + 20, "font-size": 12, fill: C.text,
+        "font-family": "var(--sans)" });
+      d.textContent = dualText[0];
+      svg.appendChild(d);
+      var d2 = svgEl("text", { x: 392, y: y + 37, "font-size": 12, fill: C.text,
+        "font-family": "var(--sans)" });
+      d2.textContent = dualText[1];
+      svg.appendChild(d2);
+    }
+    constraintRow(50, "supply + imports = demand + exports",
+      ["the multiplier on THIS constraint =", "the zone's clearing price (its dual)"], C.sim);
+    constraintRow(120, "flow ≤ ATC   (each border)",
+      ["the multiplier on THIS constraint =", "the congestion rent on that border"], C.trade);
+    host.appendChild(svg);
+  }
+
+  var solverBooted = false;
+  function renderSolver() {
+    renderSolverDual();
+    renderSolverToy();
+    renderSolverPass();
+    if (!solverBooted) { renderSolverExemplarSteps(); solverBooted = true; }
+    renderSolverExemplar();
+  }
+
   function renderFooter() {
     var sb = state.scoreboard;
     if (!sb) return;   // manifest may arrive before the scoreboard
@@ -3353,6 +3832,15 @@
       renderScoreboard();
       writeHash();
     });
+    if ($("solver-atc")) {
+      $("solver-atc").addEventListener("input", renderSolverToy);
+    }
+    if ($("solver-pass-step")) {
+      $("solver-pass-step").addEventListener("click", function () {
+        solverPassStep = (solverPassStep % 3) + 1;
+        renderSolverPass();
+      });
+    }
     var methodLink = $("predict-method-link");
     if (methodLink) methodLink.addEventListener("click", function (ev) {
       ev.preventDefault();
@@ -3409,6 +3897,17 @@
       bookTableMessage: bookTableMessage,
       strategyMeta: strategyMeta,
       STRATEGY_LABELS: STRATEGY_LABELS,
+    };
+    // Solver-view test surface: the pure two-zone closed-form clear (S3) plus
+    // the render entry points, so web/DOM tests can drive the Solver view in
+    // isolation without the full data-plane bootstrap.
+    window.__euphemiaSolver = {
+      clearTwoZone: clearTwoZone,
+      solverMarginalPrice: solverMarginalPrice,
+      renderSolver: renderSolver,
+      renderSolverToy: renderSolverToy,
+      SOLVER_TOY_BOOKS: SOLVER_TOY_BOOKS,
+      SOLVER_EXEMPLARS: SOLVER_EXEMPLARS,
     };
   }
 })();
