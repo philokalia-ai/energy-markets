@@ -5,11 +5,13 @@ zone-hour the feature vectors (in each committed model's feat_cols order), the N
 post-processed outputs, and pack baselines — for the Julia scorer/port to match.
 Only committed (winner) targets are dumped per zone. Usage: dump_eval39.py d0 d1"""
 import os, sys, json, glob, numpy as np, pandas as pd, lightgbm as lgb
-sys.path.insert(0, "/home/pgeorgakopoulos/armada/energy-markets/.claude/worktrees/agent-a534d70e414d18b80/docs/experiments/input-upgrade")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # iter4: co-located features.py
 import features as F
 SP=F.SP; GFS=f"{SP}/gfs"
-WT="/home/pgeorgakopoulos/armada/energy-markets/.claude/worktrees/agent-a534d70e414d18b80"
-BIN=f"{WT}/bin"                 # packs (res/load models) — read from the worktree
+# iter4: read packs + the freshly committed models from THIS worktree's bin (the
+# same dir the Julia equivalence harness scores), not a sibling/shared checkout.
+_ROOT=os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+BIN=f"{_ROOT}/bin"
 MODELS=f"{BIN}/input_models"    # the COMMITTED rollout models (worktree)
 RESP=json.load(open(f"{BIN}/res_models_v2.json"))["zones"]
 LOADP=json.load(open(f"{BIN}/load_models_v1.json"))["zones"]

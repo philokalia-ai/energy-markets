@@ -230,3 +230,43 @@ is a fitted-input change scored on the **ex-ante product track**, never the reco
 **HU** (the third R2 zone) is deferred: iteration 1's corr guard demoted HU_load to
 the pack, so it no longer flows through this NEW-load hook; correcting the pack's HU
 bias is a separate pack-path change. `test/test_ml_inputs.jl` green (222/222).
+
+**Iteration 4 — retrain through the latest settled month (fixes R5). SHIPPED.**
+The committed models were trained through 2026-04-30 (VALID 05-01…07-22) — ~3 months
+stale at the Aug-2026 audit. Re-ran `train39.py` (GR + the 34 new zones; the 4 special
+pilots ES/DE_LU/SE2/NL preserved verbatim — their geom/lineage differ from `geom39`)
+on the extended window: **train 2024-07…2026-06-14, held-out VALID = the last 6 weeks
+2026-06-15…07-27**. Dense GFS `previous_day1..7` vintages + ENTSO-E DA targets already
+ran to 2026-07-27 in the fetch cache (`data/gfs_vintages` / the local open-meteo
+instance) — **no history refetch, zero public open-meteo calls**. The 18 iteration-2
+holiday maps are now ACTIVE (models retrained under them). Winner selection kept
+iteration 1's corr guard (MAE-better AND corr-loss ≤ 0.02). Serve port re-verified
+**bit-identical** to python (`ml_inputs_equivalence.jl`: scorer max|Δ|=0, features
+rel < 1e-9, **0/1080 split-flips** across 8 spot zones incl. the NO2-wind flip).
+
+*Winner churn:* **72 → 78 NEW winners, 16 flips** vs the committed map — 11 pack→NEW
+(BG/IT-Sardinia/NO2/PL wind, CH/LV/PT/SE4 solar, HU load + wind, NO4 load) and 5
+NEW→pack (DK1/IT-CSOUTH/RO/RS/SE1 wind). HU_load and NO2_wind — both demoted by
+iteration 1's corr guard on the old window — re-win on the fresh window; NO4 (R9,
+previously all-pack) takes its load. *Staleness gain:* of the 60 winners with a
+committed predecessor scored on the fresh tail, **NEW beats old MAE in 40, worse in
+20** (all 20 still beat their pack — the ship gate), mean ΔMAE **−6.86 MW**; biggest:
+FR load 1176→1083 (−92.6, corr 0.964→0.974), NO3 load 134→55, BE solar 300→256, NO2
+load 94→66, SI load 80→54. *Headline zones* (NEW / old / pack MAE·corr on VALID):
+GR load 149.0·.989 / 148.6·.989 / 235.7·.974 (NEW); GR solar 200·.994 / 207·.994 /
+862·.981 (NEW); PL load 481·.973 / 505·.973 / 829·.973 (NEW); PL solar 460·.988 /
+431·.989 / 737·.982 (NEW); FR load 1083·.974 / 1176·.964 / 1198·.968 (NEW); DE_LU is
+a preserved pilot (unchanged). *Collapse (solar):* the continental-solar NEW winners
+keep the conservative under-forecast that aids crash detection (R4) — PL solar bias
++29.8 → **−183.3**, BE −124.5 → −4.3, CZ −64.1 → −33.6, CH −8.4; corr ≥ 0.985
+throughout, so the shape the collapse classifier needs is intact.
+
+*Debias re-fit (iteration 3 on the new tail):* level debias fit on the first 2/3 of
+VALID, gated on the last-1/3 holdout. **IT-NORTH (a=−177.08) and NO3 (a=−48.56) ship**
+(holdout MAE 837.6→829.3 and 45.8→43.6, |bias| down). **FR is DROPPED** — the retrain
+itself removed FR's over-prediction (old +191 → full-new-VALID −47.6) and its June/July
+sub-windows carry opposite-sign bias, so any level debias worsened the holdout (+77.7
+MAE): a measured no-ship, R2 fixed for FR by the retrain directly. HU/RO also failed
+the holdout gate (over-correct) and are not shipped. Winners shipped exactly as before
+(`meta.json` `pilot_zones`+`winners` + winners-only `.txt`; 78 models ⇔ 78 winners).
+`test/test_ml_inputs.jl` green (235/235); equivalence PASS.

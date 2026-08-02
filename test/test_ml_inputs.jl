@@ -71,12 +71,14 @@ end
     @test _np_percentile95([0.0, 10.0]) ≈ 9.5
     @test _np_percentile95([5.0]) == 5.0
 
-    # fit-iteration 3: per-zone affine LOAD bias correction (b=1 level debias)
-    @test ml_load_bias_correct("FR", 5000.0) ≈ 5000.0 - 191.20   # a=-191.20, b=1
-    @test ml_load_bias_correct("IT-NORTH", 4000.0) ≈ 4000.0 - 197.79
+    # fit-iteration 3, re-fit at iteration 4: per-zone affine LOAD bias correction
+    # (b=1 level debias). IT-NORTH + NO3 ship; FR dropped (retrain removed its bias).
+    @test ml_load_bias_correct("IT-NORTH", 4000.0) ≈ 4000.0 - 177.08
+    @test ml_load_bias_correct("NO3", 1000.0) ≈ 1000.0 - 48.56
+    @test ml_load_bias_correct("FR", 5000.0) == 5000.0           # dropped at iter4 -> identity
     @test ml_load_bias_correct("GR", 5000.0) == 5000.0           # absent zone -> identity
-    @test ml_load_bias_correct("HU", 3000.0) == 3000.0           # demoted to pack (iter1), not here
-    @test ml_load_bias_correct("FR", 100.0) == 0.0               # clamped at 0 (100-191.2<0)
+    @test ml_load_bias_correct("HU", 3000.0) == 3000.0           # holdout gate failed -> not here
+    @test ml_load_bias_correct("NO3", 10.0) == 0.0               # clamped at 0 (10-48.56<0)
 end
 
 @testset "ML inputs — holidays (rollout-39 Orthodox amendment, train/serve lockstep)" begin

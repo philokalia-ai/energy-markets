@@ -20,12 +20,11 @@
 #     keep the Western `easter_gregorian`. `ml_holidays` is NOT `holidays_for_country`.
 #   • features.py carries fixed+movable holiday maps for all 25 footprint countries
 #     (fit-iteration 2 expanded GR/BG/RO/RS/ES/DE/SE → the full footprint; the 18
-#     added maps are all Western-Easter). Mirrored byte-for-byte here. The 18 new
-#     maps are INERT for the currently-committed models — those trained is_hol≡0 in
-#     their countries so is_hol is a zero-variance, unsplit feature; the maps only
-#     bite at the NEXT retrain (measured: no committed load model splits on is_hol
-#     outside the original 7 mapped countries). Any country still off the map (e.g.
-#     a non-footprint code) gets an EMPTY set.
+#     added maps are all Western-Easter). Mirrored byte-for-byte here. As of
+#     fit-iteration 4 the committed models were RETRAINED with these maps active, so
+#     is_hol now carries the calendar signal for the full footprint (the maps were
+#     inert only for the pre-iter4 models). Any country still off the map (e.g. a
+#     non-footprint code) gets an EMPTY set.
 #   • Degree-hour bases are the hard-coded 21.0 / 16.5 °C from features.py, not the
 #     per-zone pack bases.
 #   • `is_hol` keys on the UTC calendar date of the hour (features.py normalizes the
@@ -62,23 +61,25 @@ const ML_USE_NEW = Dict{Tuple{String,Symbol},Bool}(
     ("NL", :load) => true,  ("NL", :solar) => false,  ("NL", :wind) => true,
 )
 
-# ── Per-zone affine LOAD bias correction (fit-iteration 3, fixes R2) ──────────
-# Several large NEW-load zones carry a systematic POSITIVE bias that feeds straight
-# into demand → price (R2: FR +191, IT-NORTH +198 MW mean over-prediction on VALID).
-# The serve output is post-scaled `corrected = max(a + b·pred, 0)` per this table.
-# Fit on the frozen VALID window 2026-05-01…07-22 (re-scored from the committed .txt
-# with the bit-identical GBDT scorer; matches scorecard39 exactly). The SLOPE term
-# `b` is held at 1.0 — a pure level debias: the full OLS slope overfit the May-June
-# fit sub-window and regressed FR MAE on the held-out July tail (regime non-
-# stationarity), whereas b=1 (a = −VALID mean bias) improved BOTH zones out of
-# sample. Verification (fit 05-01…06-30, holdout 07-01…07-22): FR holdout MAE
-# 1309.7→1294.7 (−15.0), bias +142.5→−66.2; IT-NORTH 779.9→753.5 (−26.4), bias
-# +375.7→+242.0. A zone absent here is unchanged (b=1,a=0). HU (also R2) is NOT
-# here: fit-iteration 1's corr guard demoted HU_load to the pack, so it no longer
-# flows through this NEW-load hook — its debias is deferred to the pack path.
+# ── Per-zone affine LOAD bias correction (fit-iteration 3, re-fit at iteration 4) ─
+# Some NEW-load zones carry a systematic POSITIVE bias that feeds straight into
+# demand → price (R2). The serve output is post-scaled `corrected = max(a + b·pred,
+# 0)`; `b` is held at 1.0 — a pure level debias (the full OLS slope overfit the fit
+# sub-window and regressed out of sample). RE-FIT on the fit-iteration-4 VALID tail
+# 2026-06-15…07-27 from the freshly-retrained models (per-row VALID preds), each
+# gated OUT-OF-SAMPLE: fit a on the first 2/3, ship only if the last-1/3 holdout MAE
+# does not worsen AND |bias| drops. Two zones ship:
+#   • IT-NORTH a=−177.08  (holdout MAE 837.6→829.3, bias +493→+474)
+#   • NO3      a= −48.56  (holdout MAE  45.8→ 43.6, bias +33.8→−22.1)
+# FR is DROPPED this iteration: the retrain itself removed FR's over-prediction
+# (was +191 on the old window; full new-VALID bias is now only −47.6), and its
+# June/July sub-windows carry OPPOSITE-sign bias, so any level debias worsened the
+# holdout (+77.7 MAE) — a measured no-ship, the retrain fixed R2 for FR directly.
+# HU/RO (R2 candidates; HU_load re-won NEW at iter4) also failed the holdout gate
+# (over-correct, +6.3/+4.2 MAE) and are NOT shipped. A zone absent here is unchanged.
 const LOAD_BIAS_CORRECTION = Dict{String,NamedTuple{(:a, :b),Tuple{Float64,Float64}}}(
-    "FR"       => (a = -191.20, b = 1.0),
-    "IT-NORTH" => (a = -197.79, b = 1.0),
+    "IT-NORTH" => (a = -177.08, b = 1.0),
+    "NO3"      => (a = -48.56, b = 1.0),
 )
 
 "Apply the per-zone affine LOAD bias correction (fit-iteration 3). Identity for
