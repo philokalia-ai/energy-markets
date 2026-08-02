@@ -140,7 +140,13 @@ V.renderPredictTarget("load");
 await settle();
 assertHonest(getById("predict-target-view"), "predict");
 
-/* ---- 6. no snapshot was ever fetched: only apiPath (…/v1/…) or geo ---- */
+/* ---- 6. bid-methodology reference (loadMethodology rejects) ---- */
+byId.delete("method-status"); // fresh host
+V.setView("method");          // sets state.view = "method", then renders
+await settle();
+assertHonest(getById("method-status"), "method");
+
+/* ---- 7. no snapshot was ever fetched: only apiPath (…/v1/…) or geo ---- */
 ok(fetchCount > 0, "views actually attempted the live API (fetch was called)");
 
 if (failures) {

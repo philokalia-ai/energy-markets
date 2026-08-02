@@ -1,0 +1,527 @@
+{
+  "code_version": 31,
+  "cost_model": {
+    "fuels": {
+      "Biomass": {
+        "base_eur": 60.0,
+        "ef_el": 0.0
+      },
+      "Energy storage": {
+        "base_eur": 90.0,
+        "ef_el": 0.0
+      },
+      "Fossil Brown coal/Lignite": {
+        "base_eur": 25.0,
+        "ef_el": 1.25
+      },
+      "Fossil Coal-derived gas": {
+        "base_eur": 47.0,
+        "ef_el": 0.9
+      },
+      "Fossil Gas": {
+        "base_eur": 79.31,
+        "ef_el": 0.367,
+        "note": "fallback only — the live TTF path is preferred (see gas.formula)."
+      },
+      "Fossil Hard coal": {
+        "base_eur": 37.0,
+        "ef_el": 0.9
+      },
+      "Fossil Oil": {
+        "base_eur": 103.0,
+        "ef_el": 0.75
+      },
+      "Geothermal": {
+        "base_eur": 20.0,
+        "ef_el": 0.0
+      },
+      "Hydro Pumped Storage": {
+        "base_eur": 60.0,
+        "ef_el": 0.0
+      },
+      "Hydro Run-of-river and pondage": {
+        "base_eur": 3.0,
+        "ef_el": 0.0
+      },
+      "Hydro Water Reservoir": {
+        "base_eur": 12.0,
+        "ef_el": 0.0,
+        "note": "O&M only — the reservoir water value is applied in the book layer, not the cost model, so this is not a hydro bid."
+      },
+      "Nuclear": {
+        "base_eur": 10.0,
+        "ef_el": 0.0
+      },
+      "Other": {
+        "base_eur": 84.31,
+        "ef_el": 0.367
+      },
+      "Solar": {
+        "base_eur": 1.0,
+        "ef_el": 0.0
+      },
+      "Waste": {
+        "base_eur": 25.0,
+        "ef_el": 0.0
+      },
+      "Wind Offshore": {
+        "base_eur": 2.0,
+        "ef_el": 0.0
+      },
+      "Wind Onshore": {
+        "base_eur": 1.0,
+        "ef_el": 0.0
+      }
+    },
+    "gas": {
+      "efficiency": 0.55,
+      "emission_factor_th": 0.202,
+      "formula": "TTF/η + EUA·EF_th/η + VOM",
+      "source": "GAS_PLANT_EFFICIENCY / GAS_EMISSION_FACTOR / GAS_VOM_COST",
+      "vom": 2.0
+    },
+    "live": {
+      "as_of": "2026-08-02",
+      "eua_eur_t": null,
+      "note": "last close strictly before as_of — no lookahead; null when no price feed is available (offline / DuckDB extract).",
+      "ttf_eur_mwh_th": null
+    }
+  },
+  "cv_ledger": [
+    {
+      "cv": 31,
+      "characteristic": "DEEP_SURPLUS_FLOOR_EUR (solar-regime price-taker floor)",
+      "change": "regime-gated -20 EUR/MWh floor on the RES + run-of-river + deepest must-run blocks for the CONTINENTAL_SOLAR group (DE_LU/FR/PL/BE/CZ/CH) in hours whose ex-ante day-ahead solar share of forecast load >= 0.4, so the coupled clear can genuinely fall below zero.",
+      "status": "shipped",
+      "measured": {
+        "setA_dMAE": -1.5,
+        "setB_dMAE": -0.27,
+        "phantom_rate": 0.0,
+        "new_caps": 0
+      },
+      "doc": "docs/experiments/solar-regime"
+    },
+    {
+      "cv": 27,
+      "characteristic": "bordered demonstrated capability (7 FBMC borders)",
+      "change": "size Day-ahead-free (FBMC) border-hours on seven accepted physical borders by trailing-366d p95 gross observed flow per 4h block, replacing the intraday-blend fallback.",
+      "status": "shipped",
+      "measured": {
+        "setA_dMAE": -0.44,
+        "setA_dcorr": 0.009,
+        "setB_dMAE": -0.41,
+        "setB_dcorr": -0.004,
+        "new_caps": 0
+      },
+      "doc": "docs/experiments/cv27-borders"
+    },
+    {
+      "cv": 23,
+      "characteristic": "nuclear opportunity anchor (FR, availability-scaled)",
+      "change": "availability-scaled :nuclear anchor share for France (trailing-30d fleet p95 / installed, ex-ante) — the off-peak nuclear opportunity cost.",
+      "status": "shipped",
+      "measured": {
+        "regime": "FR March",
+        "dMAE": -22.0,
+        "note": "MAE 38.2 -> 16.2, evening bias -77%"
+      },
+      "doc": "docs/experiments/cv23-fr-nuclear.md"
+    },
+    {
+      "cv": 23,
+      "characteristic": "interior-Norway import backstop (NO1/NO3)",
+      "change": "profile-gated ex-ante import backstop + scarcity credit for interior Norway, killing dry-spring phantom-scarcity caps.",
+      "status": "shipped",
+      "measured": {
+        "regime": "NO1 record",
+        "dMAE": -36.9,
+        "note": "MAE 62.7 -> 25.8, bias +36.9 -> -0.1"
+      },
+      "doc": "docs/experiments/norwegian-hydro"
+    },
+    {
+      "cv": 22,
+      "characteristic": "UA firm-slice boundary book",
+      "change": "model Ukraine on the HU/SK/RO/PL-UA borders as a war-constrained scarcity buyer — import supply at 0.55x zone gas SRMC, export demand as a firm cap-priced base slice + elastic tail.",
+      "status": "shipped",
+      "measured": {
+        "regime": "HU July",
+        "dMAE": -15.2,
+        "dcorr": 0.1,
+        "note": "MAE 72.3 -> 57.1, corr 0.69 -> 0.79"
+      },
+      "doc": "docs/experiments/cv22.md"
+    },
+    {
+      "cv": 19,
+      "characteristic": "analogue ex-ante flows (:v3)",
+      "change": "per-border mean of the load-analogue median (16 trailing-365d days nearest the delivery day's D-1 load-forecast vector) and the D-2 observed flow.",
+      "status": "shipped",
+      "measured": {
+        "regime": "coupled 39-day A/B",
+        "dcorr": 0.02,
+        "net_import_MAE_pct": -15.0,
+        "note": "corr 0.85 -> 0.87; GR July-flip evening bias +57 -> +43"
+      },
+      "doc": "docs/experiments/analogue-flows"
+    },
+    {
+      "cv": 17,
+      "characteristic": "import backstop + weak-zone import fixes",
+      "change": "profile-gated ex-ante elastic import backstop (trailing-8-weekday demonstrated headroom, priced 1.8x gas SRMC) + Core-FBMC border drops for the low-correlation continental zones whose caps were import-starvation phantoms.",
+      "status": "shipped",
+      "measured": {
+        "note": "resolved a handful of phantom-scarcity cap days per weak zone; SEE products byte-identical"
+      },
+      "doc": "docs/experiments/cv17-import-fixes.md"
+    },
+    {
+      "cv": 28,
+      "characteristic": "unconditional deep-surplus floor family",
+      "change": "candidate: apply the negative floor without the ex-ante solar-share gate (and variants). REJECTED — manufactured phantom lows on hours the settled market did not crash.",
+      "status": "no_ship",
+      "measured": {
+        "note": "phantom rate too high without the ex-ante solar gate; superseded by the gated cv31 floor"
+      },
+      "doc": "docs/experiments/cv28-results.md"
+    },
+    {
+      "cv": 29,
+      "characteristic": "deep-surplus floor family (2nd pass)",
+      "change": "further floor-family variants. REJECTED for the same phantom-low reason; the gate, not the floor, was the missing ingredient.",
+      "status": "no_ship",
+      "measured": {
+        "note": "no accepted arm; motivated the ex-ante solar-share gate that shipped as cv31"
+      },
+      "doc": "docs/experiments/cv29-results.md"
+    },
+    {
+      "cv": 27,
+      "characteristic": "Nordic reservoir-wetness regime",
+      "change": "candidate: a wet-reservoir low-price regime for the Nordic zones. Measured NO-SHIP — kept visible beside the ships.",
+      "status": "no_ship",
+      "measured": {
+        "note": "did not clear its acceptance gate on held-out windows"
+      },
+      "doc": "docs/experiments/nordic-wetness"
+    }
+  ],
+  "form_constants": {
+    "descriptions": {
+      "AVAILABILITY_FACTOR": "fraction of nameplate a unit offers by default (the rest is derated headroom / self-scheduling reserve).",
+      "BACKSTOP_PRICE_MULT": "import backstop is priced at this multiple of the zone gas SRMC — above every domestic tranche, so it binds only near the cap.",
+      "BACKSTOP_WEEKS": "import backstop capability = demonstrated import headroom over this trailing same-weekday window (weeks).",
+      "DEEP_SURPLUS_FLOOR_EUR": "price floor (€/MWh) of the deepest must-run / RES block in a solar-surplus regime hour, so the coupled clear can genuinely fall below zero.",
+      "DEMAND_ELASTIC_PRICE": "price (€/MWh) above which the elastic demand tail curtails.",
+      "DEMAND_ELASTIC_SHARE": "fraction of demand bid elastically (price-sensitive) rather than firm at the cap.",
+      "DERATE_HEADROOM": "headroom multiplier on the fleet-truthing derate target (do not derate below trailing p95 × this).",
+      "FLEET_COMPLETION": "complete the offered fleet up to the demonstrated p95/installed truth target (fills structurally-undersized unit registries).",
+      "FLEET_TRUTHING": "derate baseload types to their demonstrated trailing capability (crisis-year honesty).",
+      "MUST_RUN_PRICE_FACTOR": "the deepest must-run block is bid at this fraction of the unit's SRMC — below cost by design (restart cost exceeds running below cost).",
+      "MUST_RUN_SRMC_THRESHOLD": "a unit is committed (must-run) when its SRMC is below this multiple of the zone's gas SRMC.",
+      "NUCLEAR_AVAIL_FLOOR": "nuclear availability at/below which the opportunity premium saturates (crisis floor).",
+      "NUCLEAR_AVAIL_REF": "nuclear availability at/above which no opportunity premium applies.",
+      "PEAK_EXPONENT": "exponent of the peak-hour scarcity markup (normalized-demand^n) — flat off-peak, steep at the day's demand peak.",
+      "PRICE_CAP": "bid price cap (€/MWh) — firm demand and scheduled exports bid here.",
+      "TRANCHES": "SRMC tranches (share of p_max, price multiplier), cheapest first — how one unit's offered capacity is sliced and priced above/below its cost.",
+      "WATER_VALUE_DRY_BOOST": "multiplier applied to the reservoir water value in a dry year."
+    },
+    "values": {
+      "AVAILABILITY_FACTOR": 0.8,
+      "BACKSTOP_PRICE_MULT": 1.8,
+      "BACKSTOP_WEEKS": 8,
+      "DEEP_SURPLUS_FLOOR_EUR": -20.0,
+      "DEMAND_ELASTIC_PRICE": 250.0,
+      "DEMAND_ELASTIC_SHARE": 0.02,
+      "DERATE_HEADROOM": 1.15,
+      "FLEET_COMPLETION": true,
+      "FLEET_TRUTHING": true,
+      "MUST_RUN_PRICE_FACTOR": 0.05,
+      "MUST_RUN_SRMC_THRESHOLD": 1.15,
+      "NUCLEAR_AVAIL_FLOOR": 0.5,
+      "NUCLEAR_AVAIL_REF": 0.8,
+      "PEAK_EXPONENT": 4.0,
+      "PRICE_CAP": 3000.0,
+      "TRANCHES": [
+        [
+          0.55,
+          0.95
+        ],
+        [
+          0.2,
+          1.05
+        ],
+        [
+          0.15,
+          1.25
+        ],
+        [
+          0.1,
+          1.6
+        ]
+      ],
+      "WATER_VALUE_DRY_BOOST": 1.0
+    }
+  },
+  "generated_from": "MeritOrderBook + Generators constants, resolved in-process",
+  "generated_utc": "2026-08-02T17:47:30Z",
+  "provenance": {
+    "AVAILABILITY_FACTOR": {
+      "cv": 10,
+      "kind": "declared",
+      "source": "default nameplate availability, named form"
+    },
+    "BACKSTOP_PRICE_MULT": {
+      "cv": 17,
+      "kind": "declared",
+      "source": "import-backstop price multiple of gas SRMC, named form"
+    },
+    "BACKSTOP_WEEKS": {
+      "cv": 17,
+      "kind": "declared",
+      "source": "import-backstop demonstration window (weeks), named form"
+    },
+    "DEEP_SURPLUS_FLOOR_EUR": {
+      "cv": 31,
+      "kind": "declared",
+      "source": "solar-regime price-taker floor (support-scheme economics), OOS-validated"
+    },
+    "DEMAND_ELASTIC_PRICE": {
+      "cv": 10,
+      "kind": "declared",
+      "source": "elastic demand curtailment price, named form"
+    },
+    "DEMAND_ELASTIC_SHARE": {
+      "cv": 10,
+      "kind": "declared",
+      "source": "elastic demand share, named form"
+    },
+    "DERATE_HEADROOM": {
+      "cv": 10,
+      "kind": "declared",
+      "source": "headroom on the derate target, named form"
+    },
+    "FLEET_COMPLETION": {
+      "cv": 10,
+      "kind": "declared",
+      "source": "structural switch: complete undersized fleets to demonstrated capability"
+    },
+    "FLEET_TRUTHING": {
+      "cv": 10,
+      "kind": "declared",
+      "source": "structural switch: derate baseload to demonstrated capability"
+    },
+    "MUST_RUN_PRICE_FACTOR": {
+      "cv": 10,
+      "kind": "declared",
+      "source": "below-cost must-run discount, named form"
+    },
+    "MUST_RUN_SRMC_THRESHOLD": {
+      "cv": 10,
+      "kind": "declared",
+      "source": "commitment threshold as a multiple of gas SRMC, named form"
+    },
+    "NUCLEAR_AVAIL_FLOOR": {
+      "cv": 23,
+      "kind": "declared",
+      "source": "nuclear premium-saturation availability floor, named form"
+    },
+    "NUCLEAR_AVAIL_REF": {
+      "cv": 23,
+      "kind": "declared",
+      "source": "nuclear no-premium availability reference, named form"
+    },
+    "PEAK_EXPONENT": {
+      "cv": 10,
+      "kind": "declared",
+      "source": "peak-hour scarcity markup exponent, named form"
+    },
+    "PRICE_CAP": {
+      "cv": 10,
+      "kind": "declared",
+      "source": "bid price cap, market rule"
+    },
+    "TRANCHES": {
+      "cv": 10,
+      "kind": "declared",
+      "source": "named bidding form (share, multiplier per tranche), OOS-validated"
+    },
+    "WATER_VALUE_DRY_BOOST": {
+      "cv": 10,
+      "kind": "declared",
+      "source": "dry-year water-value multiplier, named form"
+    },
+    "anchor_share": {
+      "cv": 14,
+      "kind": "declared",
+      "source": "fraction of the coupled reference the anchored fleet asks for, OOS-validated"
+    },
+    "backstop_scarcity_credit": {
+      "cv": 17,
+      "kind": "declared",
+      "source": "structural switch: also credit that headroom in the scarcity margin"
+    },
+    "boundary_book": {
+      "cv": 21,
+      "kind": "declared",
+      "source": "structural choice: model an out-of-footprint neighbour as an elastic counterparty"
+    },
+    "boundary_capability": {
+      "cv": 21,
+      "kind": "observed",
+      "source": "trailing-366d p95 gross observed flow per 4h block over the boundary border"
+    },
+    "eua": {
+      "cv": 8,
+      "kind": "observed",
+      "source": "EUA carbon close, last trading day strictly before the market date (yfinance.eua_co2)"
+    },
+    "fleet_p95_installed": {
+      "cv": 10,
+      "kind": "observed",
+      "source": "trailing ENTSO-E per-type output p95 / registry installed capacity (fleet completion + truthing)"
+    },
+    "fleet_truth_mode": {
+      "cv": 15,
+      "kind": "declared",
+      "source": "structural choice: true the fleet to p95 or to installed capacity"
+    },
+    "flow_climatology": {
+      "cv": 19,
+      "kind": "observed",
+      "source": "ex-ante cross-border flow rule (load-analogue median + D-2 observed), :v3"
+    },
+    "hydro_model": {
+      "cv": 14,
+      "kind": "declared",
+      "source": "structural choice: gas-anchored vs reservoir-opportunity water value"
+    },
+    "import_backstop": {
+      "cv": 17,
+      "kind": "declared",
+      "source": "structural switch: offer demonstrated import headroom as elastic supply"
+    },
+    "import_backstop_qty": {
+      "cv": 17,
+      "kind": "observed",
+      "source": "trailing-8-same-weekday demonstrated import headroom beyond the endogenous ATC"
+    },
+    "nuclear_avail_share_hi": {
+      "cv": 23,
+      "kind": "declared",
+      "source": "anchor share at full nuclear availability, OOS-validated"
+    },
+    "nuclear_avail_share_lo": {
+      "cv": 23,
+      "kind": "declared",
+      "source": "anchor share at the nuclear crisis floor, OOS-validated"
+    },
+    "nuclear_bid_ref_ceiling": {
+      "cv": 23,
+      "kind": "declared",
+      "source": "cap on anchor-lifted nuclear bids (× reference), OOS-validated"
+    },
+    "nuclear_srmc_floor": {
+      "cv": 14,
+      "kind": "declared",
+      "source": "France off-peak nuclear bid floor, OOS-validated"
+    },
+    "opportunity_anchor": {
+      "cv": 14,
+      "kind": "declared",
+      "source": "structural choice: which fleet re-bids against the coupled price"
+    },
+    "peak_kappa": {
+      "cv": 14,
+      "kind": "declared",
+      "source": "per-region peak uplift, OOS-validated"
+    },
+    "ref_priced_exports": {
+      "cv": 17,
+      "kind": "declared",
+      "source": "structural switch: price retained-border exports at the coupled reference"
+    },
+    "reservoir_dryness": {
+      "cv": 15,
+      "kind": "observed",
+      "source": "reservoir shortfall vs the same ISO week in prior years (ENTSO-E)"
+    },
+    "reservoir_fill": {
+      "cv": 15,
+      "kind": "observed",
+      "source": "weekly reservoir fill ratio vs the trailing-52-week maximum (ENTSO-E)"
+    },
+    "scarcity_import_credit": {
+      "cv": 15,
+      "kind": "declared",
+      "source": "structural switch: credit available import capacity against the scarcity margin"
+    },
+    "scarcity_kappa": {
+      "cv": 14,
+      "kind": "declared",
+      "source": "per-region scarcity steepening, OOS-validated"
+    },
+    "scarcity_threshold": {
+      "cv": 14,
+      "kind": "declared",
+      "source": "per-region scarcity onset margin, OOS-validated"
+    },
+    "seasonal_drawdown": {
+      "cv": 15,
+      "kind": "declared",
+      "source": "structural switch: follow the seasonal reservoir drawdown cycle (Swedish north)"
+    },
+    "spill_surplus_dryness": {
+      "cv": 27,
+      "kind": "declared",
+      "source": "cv27 spill-risk gate (dryness threshold), OOS-validated"
+    },
+    "thermal_srmc_multiplier": {
+      "cv": 14,
+      "kind": "declared",
+      "source": "per-region thermal running-cost premium (Italy), OOS-validated"
+    },
+    "ttf": {
+      "cv": 3,
+      "kind": "observed",
+      "source": "TTF front-month gas close, last trading day strictly before the market date (yfinance.ttf_f)"
+    },
+    "water_value_base": {
+      "cv": 14,
+      "kind": "declared",
+      "source": "per-region reservoir opportunity cost (× gas SRMC), OOS-validated"
+    },
+    "water_value_span": {
+      "cv": 14,
+      "kind": "declared",
+      "source": "per-region intraday water-value swing, OOS-validated"
+    }
+  },
+  "source_of_truth": {
+    "cost_model": "src/generators/fuel_costs.jl",
+    "cv_ledger": "docs/pillars/cv-ledger.json (curated, cited)",
+    "form_constants": "src/merit_order/zone_profiles.jl",
+    "provenance": "src/merit_order/zone_profiles.jl (PROVENANCE)",
+    "strategy_glossary": "src/merit_order/book_build.jl (STRATEGY_DESCRIPTIONS)"
+  },
+  "strategy_glossary": {
+    "boundary_export": "out-of-footprint neighbour export demand over the border's demonstrated capability (firm base slice + elastic tail)",
+    "boundary_import": "out-of-footprint neighbour import supply, laddered on the neighbour's own fundamental SRMC over the border's demonstrated capability",
+    "demand_elastic": "price-sensitive demand tail (curtails above the elastic bid price)",
+    "demand_firm": "inelastic demand at the price cap (must-serve load)",
+    "export_demand": "net scheduled exports taken as firm demand at the price cap",
+    "extra": "scenario order added via the extra_orders hook",
+    "import_backstop": "ex-ante elastic import headroom beyond the endogenous ATC, priced above every domestic tranche (binds only near the cap)",
+    "import_fixed": "net scheduled imports injected as price-taking supply",
+    "must_run_deep": "must-run deepest block: technical minimum offered near €0 (5% of SRMC) — shutting down and restarting costs more than running below cost",
+    "must_run_rest": "must-run remainder: the rest of minimum load bid below SRMC (start-up cost amortised over the committed hours)",
+    "peak_tranche": "peak tranche: upper capacity priced above cost for scarcity margin + peak-hour strategic bidding",
+    "ref_priced_export": "net export re-priced at the coupled reference so the exporter curtails under domestic stress",
+    "res_forecast": "renewable forecast offered as price-taker (support schemes make output price-insensitive; floored negative in a solar-surplus regime)",
+    "srmc_base": "base tranche at short-run marginal cost: fuel/efficiency + CO₂ + O&M, no scarcity markup",
+    "strategist": "order produced by the strategist hook (replaces the source ladder)",
+    "water_value_anchored": "hydro water value: export opportunity cost = the coupled reference price (two-pass anchor)",
+    "water_value_gas_anchored": "hydro water value: reservoir opportunity cost anchored to gas SRMC (premium at peak, boosted when dry)",
+    "water_value_reservoir": "hydro water value: shadow price of stored water — near-free when reservoirs are full, rising to the thermal alternative as they empty"
+  }
+}

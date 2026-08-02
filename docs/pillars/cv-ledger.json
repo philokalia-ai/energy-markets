@@ -1,0 +1,85 @@
+{
+  "_comment": "The calibration cv-ledger for the pillar-5 bid-methodology surface (B6 timeline). CURATED, not generated — but every row cites a committed docs/experiments/ file and carries ONLY the measured deltas from it. This is the one admissible hand-entry on the surface (per docs/pillars/pillar-5-book-methodology-plan.md §7), because these are EXPERIMENT OUTCOMES (results), not book numbers. bin/export_book_methodology.jl READS (never regenerates) this file and folds it into the payload; test_book_methodology_export.jl asserts every `doc` path exists and every `cv` is <= ENERGY_PRICES_CODE_VERSION. NO-SHIPs are listed at equal prominence with status:\"no_ship\" — the discipline is the point.",
+  "rows": [
+    {
+      "cv": 31,
+      "characteristic": "DEEP_SURPLUS_FLOOR_EUR (solar-regime price-taker floor)",
+      "change": "regime-gated -20 EUR/MWh floor on the RES + run-of-river + deepest must-run blocks for the CONTINENTAL_SOLAR group (DE_LU/FR/PL/BE/CZ/CH) in hours whose ex-ante day-ahead solar share of forecast load >= 0.4, so the coupled clear can genuinely fall below zero.",
+      "status": "shipped",
+      "measured": { "setA_dMAE": -1.50, "setB_dMAE": -0.27, "phantom_rate": 0.0, "new_caps": 0 },
+      "doc": "docs/experiments/solar-regime"
+    },
+    {
+      "cv": 27,
+      "characteristic": "bordered demonstrated capability (7 FBMC borders)",
+      "change": "size Day-ahead-free (FBMC) border-hours on seven accepted physical borders by trailing-366d p95 gross observed flow per 4h block, replacing the intraday-blend fallback.",
+      "status": "shipped",
+      "measured": { "setA_dMAE": -0.44, "setA_dcorr": 0.009, "setB_dMAE": -0.41, "setB_dcorr": -0.004, "new_caps": 0 },
+      "doc": "docs/experiments/cv27-borders"
+    },
+    {
+      "cv": 23,
+      "characteristic": "nuclear opportunity anchor (FR, availability-scaled)",
+      "change": "availability-scaled :nuclear anchor share for France (trailing-30d fleet p95 / installed, ex-ante) — the off-peak nuclear opportunity cost.",
+      "status": "shipped",
+      "measured": { "regime": "FR March", "dMAE": -22.0, "note": "MAE 38.2 -> 16.2, evening bias -77%" },
+      "doc": "docs/experiments/cv23-fr-nuclear.md"
+    },
+    {
+      "cv": 23,
+      "characteristic": "interior-Norway import backstop (NO1/NO3)",
+      "change": "profile-gated ex-ante import backstop + scarcity credit for interior Norway, killing dry-spring phantom-scarcity caps.",
+      "status": "shipped",
+      "measured": { "regime": "NO1 record", "dMAE": -36.9, "note": "MAE 62.7 -> 25.8, bias +36.9 -> -0.1" },
+      "doc": "docs/experiments/norwegian-hydro"
+    },
+    {
+      "cv": 22,
+      "characteristic": "UA firm-slice boundary book",
+      "change": "model Ukraine on the HU/SK/RO/PL-UA borders as a war-constrained scarcity buyer — import supply at 0.55x zone gas SRMC, export demand as a firm cap-priced base slice + elastic tail.",
+      "status": "shipped",
+      "measured": { "regime": "HU July", "dMAE": -15.2, "dcorr": 0.10, "note": "MAE 72.3 -> 57.1, corr 0.69 -> 0.79" },
+      "doc": "docs/experiments/cv22.md"
+    },
+    {
+      "cv": 19,
+      "characteristic": "analogue ex-ante flows (:v3)",
+      "change": "per-border mean of the load-analogue median (16 trailing-365d days nearest the delivery day's D-1 load-forecast vector) and the D-2 observed flow.",
+      "status": "shipped",
+      "measured": { "regime": "coupled 39-day A/B", "dcorr": 0.02, "net_import_MAE_pct": -15.0, "note": "corr 0.85 -> 0.87; GR July-flip evening bias +57 -> +43" },
+      "doc": "docs/experiments/analogue-flows"
+    },
+    {
+      "cv": 17,
+      "characteristic": "import backstop + weak-zone import fixes",
+      "change": "profile-gated ex-ante elastic import backstop (trailing-8-weekday demonstrated headroom, priced 1.8x gas SRMC) + Core-FBMC border drops for the low-correlation continental zones whose caps were import-starvation phantoms.",
+      "status": "shipped",
+      "measured": { "note": "resolved a handful of phantom-scarcity cap days per weak zone; SEE products byte-identical" },
+      "doc": "docs/experiments/cv17-import-fixes.md"
+    },
+    {
+      "cv": 28,
+      "characteristic": "unconditional deep-surplus floor family",
+      "change": "candidate: apply the negative floor without the ex-ante solar-share gate (and variants). REJECTED — manufactured phantom lows on hours the settled market did not crash.",
+      "status": "no_ship",
+      "measured": { "note": "phantom rate too high without the ex-ante solar gate; superseded by the gated cv31 floor" },
+      "doc": "docs/experiments/cv28-results.md"
+    },
+    {
+      "cv": 29,
+      "characteristic": "deep-surplus floor family (2nd pass)",
+      "change": "further floor-family variants. REJECTED for the same phantom-low reason; the gate, not the floor, was the missing ingredient.",
+      "status": "no_ship",
+      "measured": { "note": "no accepted arm; motivated the ex-ante solar-share gate that shipped as cv31" },
+      "doc": "docs/experiments/cv29-results.md"
+    },
+    {
+      "cv": 27,
+      "characteristic": "Nordic reservoir-wetness regime",
+      "change": "candidate: a wet-reservoir low-price regime for the Nordic zones. Measured NO-SHIP — kept visible beside the ships.",
+      "status": "no_ship",
+      "measured": { "note": "did not clear its acceptance gate on held-out windows" },
+      "doc": "docs/experiments/nordic-wetness"
+    }
+  ]
+}

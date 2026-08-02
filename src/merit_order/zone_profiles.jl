@@ -273,6 +273,112 @@ const NUCLEAR_AVAIL_REF = 0.80
 const NUCLEAR_AVAIL_FLOOR = 0.50
 
 """
+    CONST_DESCRIPTIONS
+
+One plain-language line per FORM-LEVEL constant above (the parameters identical
+in all 39 zones — the bidding *form*, as opposed to the per-zone `ZoneProfile`
+fields described by `FIELD_DESCRIPTIONS`). Lives HERE, beside the constants, for
+the same never-drift reason: `bin/export_book_methodology.jl` emits this map so
+the bid-methodology page's constant table is GENERATED, never a second copy, and
+`test_book_methodology_export.jl` asserts the key set equals the set of form
+constants — adding a form constant without describing it fails the build.
+
+The KEY is the constant's own name; `export_book_methodology.jl` resolves the
+matching value from the module by that name (`getproperty`), so a description
+can never point at a value that no longer exists.
+"""
+const CONST_DESCRIPTIONS = Dict{String,String}(
+    "TRANCHES" => "SRMC tranches (share of p_max, price multiplier), cheapest first — how one unit's offered capacity is sliced and priced above/below its cost.",
+    "MUST_RUN_PRICE_FACTOR" => "the deepest must-run block is bid at this fraction of the unit's SRMC — below cost by design (restart cost exceeds running below cost).",
+    "DEEP_SURPLUS_FLOOR_EUR" => "price floor (€/MWh) of the deepest must-run / RES block in a solar-surplus regime hour, so the coupled clear can genuinely fall below zero.",
+    "MUST_RUN_SRMC_THRESHOLD" => "a unit is committed (must-run) when its SRMC is below this multiple of the zone's gas SRMC.",
+    "AVAILABILITY_FACTOR" => "fraction of nameplate a unit offers by default (the rest is derated headroom / self-scheduling reserve).",
+    "PEAK_EXPONENT" => "exponent of the peak-hour scarcity markup (normalized-demand^n) — flat off-peak, steep at the day's demand peak.",
+    "WATER_VALUE_DRY_BOOST" => "multiplier applied to the reservoir water value in a dry year.",
+    "DEMAND_ELASTIC_SHARE" => "fraction of demand bid elastically (price-sensitive) rather than firm at the cap.",
+    "DEMAND_ELASTIC_PRICE" => "price (€/MWh) above which the elastic demand tail curtails.",
+    "PRICE_CAP" => "bid price cap (€/MWh) — firm demand and scheduled exports bid here.",
+    "FLEET_COMPLETION" => "complete the offered fleet up to the demonstrated p95/installed truth target (fills structurally-undersized unit registries).",
+    "FLEET_TRUTHING" => "derate baseload types to their demonstrated trailing capability (crisis-year honesty).",
+    "DERATE_HEADROOM" => "headroom multiplier on the fleet-truthing derate target (do not derate below trailing p95 × this).",
+    "BACKSTOP_PRICE_MULT" => "import backstop is priced at this multiple of the zone gas SRMC — above every domestic tranche, so it binds only near the cap.",
+    "BACKSTOP_WEEKS" => "import backstop capability = demonstrated import headroom over this trailing same-weekday window (weeks).",
+    "NUCLEAR_AVAIL_REF" => "nuclear availability at/above which no opportunity premium applies.",
+    "NUCLEAR_AVAIL_FLOOR" => "nuclear availability at/below which the opportunity premium saturates (crisis floor).",
+)
+
+"""
+    PROVENANCE
+
+The fit/construct wall, drawn INSIDE pillar 5 and machine-readable: for every
+named characteristic, whether it is `observed` (a value read from data that
+exists before the auction gate — no choice involved) or `declared` (a named
+market characteristic CHOSEN and then validated out-of-sample, never fitted to
+the scored prices), its one-line source, and the code version that introduced /
+last moved it. Emitted by `export_book_methodology.jl` for the observed/declared
+badge on the methodology page (§6 of the plan).
+
+Lives beside the constants and the `ZoneProfile` fields, guarded by the same
+key-set discipline: `test_book_methodology_export.jl` asserts PROVENANCE has an
+entry for EVERY form constant (`CONST_DESCRIPTIONS`) and EVERY `ZoneProfile`
+field (`FIELD_DESCRIPTIONS`), so a new lever cannot ship without declaring
+whether it is observed or declared. Extra keys describe the observed model
+INPUTS (market data feeds) that no single constant/field owns.
+"""
+_PROV(kind, source, cv) = Dict{String,Any}("kind" => kind, "source" => source, "cv" => cv)
+const PROVENANCE = Dict{String,Any}(
+    # --- observed model inputs (market data, strictly pre-auction) ---
+    "ttf" => _PROV("observed", "TTF front-month gas close, last trading day strictly before the market date (yfinance.ttf_f)", 3),
+    "eua" => _PROV("observed", "EUA carbon close, last trading day strictly before the market date (yfinance.eua_co2)", 8),
+    "fleet_p95_installed" => _PROV("observed", "trailing ENTSO-E per-type output p95 / registry installed capacity (fleet completion + truthing)", 10),
+    "import_backstop_qty" => _PROV("observed", "trailing-8-same-weekday demonstrated import headroom beyond the endogenous ATC", 17),
+    "reservoir_fill" => _PROV("observed", "weekly reservoir fill ratio vs the trailing-52-week maximum (ENTSO-E)", 15),
+    "reservoir_dryness" => _PROV("observed", "reservoir shortfall vs the same ISO week in prior years (ENTSO-E)", 15),
+    "flow_climatology" => _PROV("observed", "ex-ante cross-border flow rule (load-analogue median + D-2 observed), :v3", 19),
+    "boundary_capability" => _PROV("observed", "trailing-366d p95 gross observed flow per 4h block over the boundary border", 21),
+    # --- form-level constants: the declared bidding form ---
+    "TRANCHES" => _PROV("declared", "named bidding form (share, multiplier per tranche), OOS-validated", 10),
+    "MUST_RUN_PRICE_FACTOR" => _PROV("declared", "below-cost must-run discount, named form", 10),
+    "DEEP_SURPLUS_FLOOR_EUR" => _PROV("declared", "solar-regime price-taker floor (support-scheme economics), OOS-validated", 31),
+    "MUST_RUN_SRMC_THRESHOLD" => _PROV("declared", "commitment threshold as a multiple of gas SRMC, named form", 10),
+    "AVAILABILITY_FACTOR" => _PROV("declared", "default nameplate availability, named form", 10),
+    "PEAK_EXPONENT" => _PROV("declared", "peak-hour scarcity markup exponent, named form", 10),
+    "WATER_VALUE_DRY_BOOST" => _PROV("declared", "dry-year water-value multiplier, named form", 10),
+    "DEMAND_ELASTIC_SHARE" => _PROV("declared", "elastic demand share, named form", 10),
+    "DEMAND_ELASTIC_PRICE" => _PROV("declared", "elastic demand curtailment price, named form", 10),
+    "PRICE_CAP" => _PROV("declared", "bid price cap, market rule", 10),
+    "FLEET_COMPLETION" => _PROV("declared", "structural switch: complete undersized fleets to demonstrated capability", 10),
+    "FLEET_TRUTHING" => _PROV("declared", "structural switch: derate baseload to demonstrated capability", 10),
+    "DERATE_HEADROOM" => _PROV("declared", "headroom on the derate target, named form", 10),
+    "BACKSTOP_PRICE_MULT" => _PROV("declared", "import-backstop price multiple of gas SRMC, named form", 17),
+    "BACKSTOP_WEEKS" => _PROV("declared", "import-backstop demonstration window (weeks), named form", 17),
+    "NUCLEAR_AVAIL_REF" => _PROV("declared", "nuclear no-premium availability reference, named form", 23),
+    "NUCLEAR_AVAIL_FLOOR" => _PROV("declared", "nuclear premium-saturation availability floor, named form", 23),
+    # --- per-zone ZoneProfile fields: declared, per-region calibration ---
+    "scarcity_threshold" => _PROV("declared", "per-region scarcity onset margin, OOS-validated", 14),
+    "scarcity_kappa" => _PROV("declared", "per-region scarcity steepening, OOS-validated", 14),
+    "peak_kappa" => _PROV("declared", "per-region peak uplift, OOS-validated", 14),
+    "water_value_base" => _PROV("declared", "per-region reservoir opportunity cost (× gas SRMC), OOS-validated", 14),
+    "water_value_span" => _PROV("declared", "per-region intraday water-value swing, OOS-validated", 14),
+    "thermal_srmc_multiplier" => _PROV("declared", "per-region thermal running-cost premium (Italy), OOS-validated", 14),
+    "hydro_model" => _PROV("declared", "structural choice: gas-anchored vs reservoir-opportunity water value", 14),
+    "spill_surplus_dryness" => _PROV("declared", "cv27 spill-risk gate (dryness threshold), OOS-validated", 27),
+    "nuclear_srmc_floor" => _PROV("declared", "France off-peak nuclear bid floor, OOS-validated", 14),
+    "opportunity_anchor" => _PROV("declared", "structural choice: which fleet re-bids against the coupled price", 14),
+    "anchor_share" => _PROV("declared", "fraction of the coupled reference the anchored fleet asks for, OOS-validated", 14),
+    "nuclear_avail_share_lo" => _PROV("declared", "anchor share at the nuclear crisis floor, OOS-validated", 23),
+    "nuclear_avail_share_hi" => _PROV("declared", "anchor share at full nuclear availability, OOS-validated", 23),
+    "nuclear_bid_ref_ceiling" => _PROV("declared", "cap on anchor-lifted nuclear bids (× reference), OOS-validated", 23),
+    "scarcity_import_credit" => _PROV("declared", "structural switch: credit available import capacity against the scarcity margin", 15),
+    "fleet_truth_mode" => _PROV("declared", "structural choice: true the fleet to p95 or to installed capacity", 15),
+    "seasonal_drawdown" => _PROV("declared", "structural switch: follow the seasonal reservoir drawdown cycle (Swedish north)", 15),
+    "import_backstop" => _PROV("declared", "structural switch: offer demonstrated import headroom as elastic supply", 17),
+    "backstop_scarcity_credit" => _PROV("declared", "structural switch: also credit that headroom in the scarcity margin", 17),
+    "ref_priced_exports" => _PROV("declared", "structural switch: price retained-border exports at the coupled reference", 17),
+    "boundary_book" => _PROV("declared", "structural choice: model an out-of-footprint neighbour as an elastic counterparty", 21),
+)
+
+"""
     FIELD_DESCRIPTIONS
 
 One plain-language line per `ZoneProfile` field. Lives HERE, beside the fields, so
