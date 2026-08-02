@@ -239,7 +239,7 @@ this page renders) — see below.
 [`bin/export_prediction_inputs.jl`](../bin/export_prediction_inputs.jl) reuses the
 same fetch/scorer machinery to emit the additive `v1/inputs/` parquet contract the
 Predictions page reads through the Worker API (`workers/api/`, routes
-`/api/v1/inputs/{manifest,reservoir,<zone>}`):
+`/api/v1/inputs/{manifest,reservoir,scorecard,skill,<zone>}`):
 
 - `v1/inputs/<ZONE>.parquet` — one file per footprint zone, per zone-hour over a
   trailing window (default 30 days, `INPUTS_BACK_DAYS`) + the forecast horizon: the
@@ -282,6 +282,40 @@ INPUTS_ZONES="GR,PL,IT-NORTH" INPUTS_BACK_DAYS=2 INPUTS_ASOF=2026-07-27 \
 In CI it runs in the same publish step as `bin/export_web_parquet.jl`
 (`.github/workflows/daily-forecast.yml`), then `bin/web_data_push.sh` syncs
 `data/web/v1/` to R2 with the manifest uploaded last.
+
+### The model-card + skill artifacts (`scorecard.json`, `skill.json`)
+
+Two **additive** JSON side-artifacts feed the per-zone model card and the per-lead
+skill strip on the prediction pages ([`bin/export_prediction_scorecard.jl`](../bin/export_prediction_scorecard.jl),
+routes `/api/v1/inputs/{scorecard,skill}`). Unlike the inputs export this is pure
+file work (no DB, no open-meteo) — it reads only committed artifacts (the winners
+map in `bin/input_models/meta.json`, the 39-zone VALID table in
+[`experiments/input-upgrade/rollout-39.md`](experiments/input-upgrade/rollout-39.md),
+the 5-pilot [`scorecard.csv`](experiments/input-upgrade/scorecard.csv)):
+
+- `v1/inputs/scorecard.json` — per-(zone,target) VALID `mae_new`/`mae_base`,
+  `corr_new`/`corr_base`, `bias_new`, `n_valid`, and the **winner** taken strictly
+  from `meta.json` (the corr-guard-reconciled truth: four NEW winners were demoted
+  to their pack on a correlation regression — NL_solar/NO2_wind/FR_wind/HU_load —
+  so the card tells the honest "ML beaten by pack on corr — pack ships" story). A
+  no-resource RES target is its own `skip` state. Collapse hit/false-alarm metrics
+  are a solar-only, first-class card element; they are computed at the price level
+  (`collapse_metrics.py`) and ship `null` (a **pending** state) until a settled-price
+  pass fills them — never fabricated.
+- `v1/inputs/skill.json` — per-lead (D-1..D-7) input skill. It ships in a
+  `warming_up` state with an empty `skill[]` until the archived GFS `previous_dayN`
+  vintages (`bin/capture_gfs_vintages.jl`) accumulate enough days for a non-noisy
+  deep-lead score; the strip renders "warming up" and fills lead by lead — no
+  fabricated deep-lead rows.
+
+### The three prediction pages (Load · Solar · Wind)
+
+The `#view=predict` surface is a **hub + three sibling pages** under one segmented
+sub-nav (`Overview · Load · Solar · Wind`, deep-linked `#view=predict&target=…&zone=…`),
+each honoring its own physics (Load: temperature/holidays/AR; Solar: the collapse
+cliff + cap95; Wind: the power curve + the onshore-pack-vs-ML honesty), composed
+from the shared chart primitives. Design and acceptance criteria:
+[`docs/pillars/pillars-2-4-predictions-plan.md`](pillars/pillars-2-4-predictions-plan.md).
 
 ## 9. The collapse question (why midday is the whole game)
 

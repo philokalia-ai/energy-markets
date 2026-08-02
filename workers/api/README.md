@@ -24,6 +24,8 @@ decodes the parquet with [hyparquet](https://github.com/hyparam/hyparquet)
 | `GET /api/v1/inputs/:zone` | `v1/inputs/<zone>.parquet` | RES/load driver + prediction panel (columnar series) |
 | `GET /api/v1/inputs/reservoir` | `v1/inputs/reservoir.parquet` | `{zones:{<Z>:[{week_start,fill_ratio,dryness,…}]}}` |
 | `GET /api/v1/inputs/manifest` | `v1/inputs/manifest.json` | Predictions-page plane (see `bin/export_prediction_inputs.jl`) |
+| `GET /api/v1/inputs/scorecard` | `v1/inputs/scorecard.json` | Model-card VALID scores per (zone,target) + winner + collapse (see `bin/export_prediction_scorecard.jl`) |
+| `GET /api/v1/inputs/skill` | `v1/inputs/skill.json` | Per-lead (D-1..D-7) input skill; warming-up until the vintage archive fills |
 
 **Order-book ladder** (`/api/v1/books/:zone/:date`, `date` = `YYYY-MM-DD`):
 `shapeBook` reads the per-day book parquet (all 39 zones — columns

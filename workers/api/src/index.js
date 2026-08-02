@@ -106,6 +106,17 @@ async function buildPayload(env, route, zone, date) {
     const obj = await env.DATA.get("v1/inputs/manifest.json");
     return obj ? await obj.text() : null;
   }
+  if (route === "inputs_scorecard") {
+    // Model-card VALID scores (v1/inputs/scorecard.json) — JSON pass-through,
+    // like the manifest (see bin/export_prediction_scorecard.jl).
+    const obj = await env.DATA.get("v1/inputs/scorecard.json");
+    return obj ? await obj.text() : null;
+  }
+  if (route === "inputs_skill") {
+    // Per-lead input skill (v1/inputs/skill.json) — JSON pass-through.
+    const obj = await env.DATA.get("v1/inputs/skill.json");
+    return obj ? await obj.text() : null;
+  }
   if (route === "inputs_reservoir") {
     const obj = await env.DATA.get("v1/inputs/reservoir.parquet");
     if (!obj) return null;
@@ -139,6 +150,8 @@ function routeKey(route, zone, date) {
   if (route === "zone") return "v1/zones/" + zone + ".parquet";
   if (route === "book") return "v1/books/" + date + ".parquet";
   if (route === "inputs_manifest") return "v1/inputs/manifest.json";
+  if (route === "inputs_scorecard") return "v1/inputs/scorecard.json";
+  if (route === "inputs_skill") return "v1/inputs/skill.json";
   if (route === "inputs_reservoir") return "v1/inputs/reservoir.parquet";
   if (route === "inputs_zone") return "v1/inputs/" + zone + ".parquet";
   return "v1/" + route + ".parquet";
@@ -176,11 +189,15 @@ export default {
       route = "units";
     } else if (url.pathname === "/api/v1/inputs/manifest") {
       route = "inputs_manifest";
+    } else if (url.pathname === "/api/v1/inputs/scorecard") {
+      route = "inputs_scorecard";
+    } else if (url.pathname === "/api/v1/inputs/skill") {
+      route = "inputs_skill";
     } else if (url.pathname === "/api/v1/inputs/reservoir") {
       route = "inputs_reservoir";
     } else if ((m = url.pathname.match(/^\/api\/v1\/inputs\/([A-Za-z0-9_-]+)$/))) {
       // Predictions-page per-zone driver + prediction panel. The literal
-      // /inputs/manifest and /inputs/reservoir are matched first above.
+      // /inputs/{manifest,scorecard,skill,reservoir} are matched first above.
       route = "inputs_zone";
       zone = m[1];
     }

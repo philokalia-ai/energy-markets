@@ -51,10 +51,11 @@ for f in "$STAGING"/v1/*.parquet; do
         "$f" "s3://$BUCKET/v1/$(basename "$f")"
 done
 # Predictions inputs (v1/inputs/): additive sync of parquets when this cycle
-# produced them; the inputs manifest still goes LAST (below).
+# produced them; the JSON side-artifacts (manifest, scorecard, skill) are cp'd
+# with the right content-type LAST (below).
 if [ -d "$STAGING/v1/inputs" ]; then
     aws s3 sync --endpoint-url "$ENDPOINT" \
-        --exclude "*manifest.json" \
+        --exclude "*.json" \
         --content-type "application/vnd.apache.parquet" \
         "$STAGING/v1/inputs" "s3://$BUCKET/v1/inputs"
 fi
@@ -76,12 +77,15 @@ aws s3 cp --endpoint-url "$ENDPOINT" \
     --content-type "application/json" \
     "$STAGING/v1/manifest.json" "s3://$BUCKET/v1/manifest.json"
 
-# The Predictions data plane manifest (only present when the — non-fatal —
-# prediction-inputs export ran this cycle), uploaded last for the same reason.
-if [ -f "$STAGING/v1/inputs/manifest.json" ]; then
-    aws s3 cp --endpoint-url "$ENDPOINT" \
-        --content-type "application/json" \
-        "$STAGING/v1/inputs/manifest.json" "s3://$BUCKET/v1/inputs/manifest.json"
-fi
+# The Predictions data plane JSON side-artifacts (only present when the —
+# non-fatal — inputs / scorecard exports ran this cycle), each additive and
+# uploaded last with the right content-type. The manifest goes last of all.
+for j in scorecard.json skill.json manifest.json; do
+    if [ -f "$STAGING/v1/inputs/$j" ]; then
+        aws s3 cp --endpoint-url "$ENDPOINT" \
+            --content-type "application/json" \
+            "$STAGING/v1/inputs/$j" "s3://$BUCKET/v1/inputs/$j"
+    fi
+done
 
 echo "pushed $STAGING/v1 -> s3://$BUCKET/v1 ($ENDPOINT)"

@@ -24,7 +24,8 @@
     bookCache: {},         // "zone|date" -> book ladder json
     units: null,           // code -> {name, fuel, firm, zone} (order-book join)
     flowsCache: {},        // date -> {tsIso: [[source,sink,mw],…]} | null (trade wedge)
-    view: "horizon",       // "horizon" | "explorer" | "board" | "book"
+    view: "horizon",       // "horizon" | "explorer" | "board" | "book" | "predict"
+    predictTarget: "overview", // predict sub-nav: overview | load | solar | wind
     zone: "GR",
     day: null,             // "YYYY-MM-DD"
     revDay: null,          // "YYYY-MM-DD" selected in the revision panel
@@ -148,6 +149,8 @@
       if (i > 0) params[decodeURIComponent(kv.slice(0, i))] = decodeURIComponent(kv.slice(i + 1));
     });
     if (["board", "explorer", "horizon", "map", "predict", "cases", "book", "solver"].indexOf(params.view) !== -1) state.view = params.view;
+    if (["board", "explorer", "horizon", "map", "predict", "cases", "book"].indexOf(params.view) !== -1) state.view = params.view;
+    if (["overview", "load", "solar", "wind"].indexOf(params.target) !== -1) state.predictTarget = params.target;
     if (params.zone) state.zone = params.zone;
     if (params.day && /^\d{4}-\d{2}-\d{2}$/.test(params.day)) state.day = params.day;
     if (params.rev && /^\d{4}-\d{2}-\d{2}$/.test(params.rev)) state.revDay = params.rev;
@@ -166,6 +169,7 @@
       if (state.bookDay) parts.push("bday=" + state.bookDay);
       parts.push("bhr=" + state.bookHour);
     }
+    if (state.view === "predict" && state.predictTarget && state.predictTarget !== "overview") parts.push("target=" + state.predictTarget);
     if (state.view === "map" && mapState.metric !== "sim") parts.push("metric=" + mapState.metric);
     if (state.window && state.window !== "all") parts.push("window=" + encodeURIComponent(state.window));
     suppressHash = true;
@@ -1451,11 +1455,40 @@
   // provenance is badged on each zone panel); clicking a zone opens the driver
   // small-multiples ("the knobs") underneath.
 
-  var predictState = { manifest: null, reservoir: null, geo: null, zone: null, zoneData: {} };
+  var predictState = { manifest: null, reservoir: null, geo: null, scorecard: null,
+    skill: null, zone: null, zoneData: {} };
 
   // Coverage ramp: neutral (load-covered) -> deep green (RES ≥ load, collapse risk).
   var RAMP_COVER = ["#E7DFC9", "#B9CDA0", "#7FB077", "#3F9B6D", "#1F7A4A", "#0F5A34"];
   var COVER_DOMAIN = [0, 1.2];
+
+  // The four surfaces of the Predictions family (hub + 3). `overview` is the hub.
+  var PREDICT_TARGETS = ["overview", "load", "solar", "wind"];
+  var PREDICT_TARGET_LABELS = { overview: "Overview", load: "Load", solar: "Solar", wind: "Wind" };
+
+  // Per-target driver subsets (§3.2/4.2/5.2) — each page shows only its own
+  // physics-relevant knobs. Keys index the zone parquet `series`. Solar's
+  // clearness / sun-elevation are model-internal derived features (not exported),
+  // called out in the physics panel rather than charted from absent data.
+  var TARGET_DRIVERS = {
+    load:  [["temp_c", "Temperature", "°C"], ["ghi_wm2", "Solar radiation (GHI)", "W/m²"]],
+    solar: [["ghi_wm2", "Solar radiation (GHI)", "W/m²"], ["cloud_pct", "Cloud cover", "%"],
+            ["pressure_hpa", "Surface pressure", "hPa"]],
+    wind:  [["wind100_ms", "Wind speed (100 m)", "m/s"], ["cloud_pct", "Cloud cover", "%"],
+            ["pressure_hpa", "Surface pressure", "hPa"]],
+  };
+  // The single target series each page plots (pred / ENTSO-E ref / settled actual).
+  var TARGET_OUTPUT = {
+    load:  { pred: "pred_load_mw",  ref: "ref_load_mw",  act: "act_load_mw",  title: "Load" },
+    solar: { pred: "pred_solar_mw", ref: "ref_solar_mw", act: "act_solar_mw", title: "Solar" },
+    wind:  { pred: "pred_wind_mw",  ref: "ref_wind_mw",  act: "act_wind_mw",  title: "Wind" },
+  };
+  // Holiday-map classification (rollout-39.md amendment 1, committed source):
+  // Orthodox-Easter zones, Western-Easter zones; all others carry an empty map.
+  var HOLIDAY_ORTHODOX = ["GR", "BG", "RO", "RS"];
+  var HOLIDAY_WESTERN = ["ES", "DE_LU", "SE1", "SE2", "SE3", "SE4"];
+  // Offshore-heavy wind zones — the ML's favourable regime (plan §5.1).
+  var WIND_OFFSHORE = ["NL", "DK1", "DK2", "BE"];
 
   function loadPredict() {
     var pM = predictState.manifest ? Promise.resolve() :
@@ -1467,10 +1500,42 @@
       loadWithFallback("inputs/reservoir.json").then(function (r) {
         predictState.reservoir = r.json;
       }, function () { predictState.reservoir = { zones: {} }; });
+    // The two additive artifacts (plan §7) — model-card scores + per-lead skill.
+    // Non-fatal: an absent file leaves the card/strip in a graceful pending state.
+    var pS = predictState.scorecard ? Promise.resolve() :
+      loadWithFallback("inputs/scorecard.json").then(function (r) {
+        predictState.scorecard = r.json;
+      }, function () { predictState.scorecard = { scores: [], winner_counts: {} }; });
+    var pK = predictState.skill ? Promise.resolve() :
+      loadWithFallback("inputs/skill.json").then(function (r) {
+        predictState.skill = r.json;
+      }, function () { predictState.skill = { status: "warming_up", skill: [] }; });
     var pG = predictState.geo ? Promise.resolve() :
       (mapState.geo ? (predictState.geo = mapState.geo, Promise.resolve()) :
         fetchJSON("./geo/zones.geojson").then(function (g) { predictState.geo = g; mapState.geo = mapState.geo || g; }));
-    return Promise.all([pM, pR, pG]);
+    return Promise.all([pM, pR, pS, pK, pG]);
+  }
+
+  function scorecardRow(zone, target) {
+    var sc = predictState.scorecard;
+    if (!sc || !sc.scores) return null;
+    for (var i = 0; i < sc.scores.length; i++) {
+      if (sc.scores[i].zone === zone && sc.scores[i].target === target) return sc.scores[i];
+    }
+    return null;
+  }
+  function skillRows(zone, target) {
+    var sk = predictState.skill;
+    if (!sk || !sk.skill) return [];
+    return sk.skill.filter(function (r) { return r.zone === zone && r.target === target; });
+  }
+  // The live per-(zone,target) provenance: prefer the zone parquet's own src label
+  // (what actually served the row); fall back to the reconciled scorecard winner.
+  function winnerOf(zone, target) {
+    var zd = predictState.zoneData[zone];
+    if (zd && zd.src && zd.src[target]) return zd.src[target];
+    var row = scorecardRow(zone, target);
+    return row ? row.winner : null;
   }
 
   function coverMap() {
@@ -1479,9 +1544,12 @@
     return m;
   }
 
-  function renderPredict() {
+  // The footprint coverage map (midday RES coverage, collapse-risk flagged) —
+  // the hub centrepiece. Unchanged from the pre-hub predict page.
+  function renderPmap() {
     var man = predictState.manifest;
     var wrap = $("pmap-wrap");
+    if (!wrap) return;
     wrap.textContent = "";
     $("pmap-legend-bar").style.backgroundImage = rampCss(RAMP_COVER);
     if (!man || !predictState.geo) {
@@ -1582,8 +1650,6 @@
     } else {
       $("pmap-comment").textContent = "Predictions fill as the daily weather runs accumulate.";
     }
-
-    if (predictState.zone) renderKnobs();
   }
 
   function loadPredictZone(zone) {
@@ -1595,15 +1661,547 @@
     });
   }
 
+  // Shared zone state across the sub-nav (plan §2.1): pick GR on Solar, switch to
+  // Wind, still GR. Backed by the app-wide state.zone (promoted to &zone=).
   function selectPredictZone(zone) {
+    state.zone = zone;
     predictState.zone = zone;
-    loadPredictZone(zone).then(renderKnobs, function () {
-      $("predict-knobs").hidden = false;
-      $("pk-title").textContent = zone + " — no driver panel yet";
-      $("pk-sub").textContent = "This zone's prediction inputs fill with the next forecast run.";
-      $("pk-outputs").textContent = ""; $("pk-drivers").textContent = "";
-      $("pk-reservoir").hidden = true;
+    var sel = $("predict-zone-select"); if (sel) sel.value = zone;
+    renderPredict();
+    if (typeof writeHash === "function") writeHash();
+  }
+
+  // ---------- Predictions hub + target dispatcher ----------
+
+  function buildPredictSubnav() {
+    var nav = $("predict-subnav");
+    if (!nav) return;
+    nav.textContent = "";
+    PREDICT_TARGETS.forEach(function (t) {
+      var b = el("button", null, PREDICT_TARGET_LABELS[t]);
+      b.type = "button";
+      b.dataset.target = t;
+      b.setAttribute("aria-pressed", String((state.predictTarget || "overview") === t));
+      b.addEventListener("click", function () {
+        state.predictTarget = t;
+        renderPredict();
+        writeHash();
+      });
+      nav.appendChild(b);
     });
+  }
+
+  function predictZones() {
+    var man = predictState.manifest;
+    var zs = (man && man.zones && man.zones.length) ? man.zones.slice() :
+      (state.scoreboard ? state.scoreboard.zones.slice() : ["GR"]);
+    zs.sort(function (a, b) { return a === "GR" ? -1 : b === "GR" ? 1 : (a < b ? -1 : 1); });
+    return zs;
+  }
+
+  function syncPredictZoneSelect() {
+    var sel = $("predict-zone-select");
+    if (!sel) return;
+    var zs = predictZones();
+    if (zs.indexOf(state.zone) === -1) state.zone = zs[0];
+    if (sel.children && sel.children.length !== zs.length) sel.textContent = "";
+    if (!sel.children || !sel.children.length) {
+      zs.forEach(function (z) { var o = el("option", null, z); o.value = z; sel.appendChild(o); });
+    }
+    sel.value = state.zone;
+    predictState.zone = state.zone;
+  }
+
+  function renderPredict() {
+    buildPredictSubnav();
+    syncPredictZoneSelect();
+    var tgt = state.predictTarget || "overview";
+    var isHub = tgt === "overview";
+    var hub = $("predict-hub"), tv = $("predict-target-view");
+    if (hub) hub.hidden = !isHub;
+    if (tv) tv.hidden = isHub;
+    if (isHub) renderPredictHub();
+    else renderPredictTarget(tgt);
+  }
+
+  function renderPredictHub() {
+    renderPmap();
+    var contract = $("predict-contract-hub");
+    if (contract) { contract.textContent = ""; contract.appendChild(buildContractStrip(null, null)); }
+    var fam = $("predict-family");
+    if (fam) { fam.textContent = ""; fam.appendChild(buildFamilyTable()); }
+    var cards = $("predict-target-cards");
+    if (cards) { cards.textContent = ""; cards.appendChild(buildTargetCards()); }
+    var rbox = $("predict-reservoir-hub");
+    if (rbox) {
+      var resv = predictState.reservoir && predictState.reservoir.zones &&
+        predictState.reservoir.zones[state.zone];
+      if (resv && resv.length) { rbox.hidden = false; rbox.textContent = "";
+        rbox.appendChild(buildReservoir(state.zone, resv)); }
+      else rbox.hidden = true;
+    }
+  }
+
+  function renderPredictTarget(target) {
+    var host = $("predict-target-view");
+    if (!host) return;
+    host.textContent = "";
+    var zone = state.zone;
+    var zd = predictState.zoneData[zone];
+    if (!zd) {
+      host.appendChild(el("p", "chart-sub", "Loading " + zone + " inputs…"));
+      loadPredictZone(zone).then(function () { renderPredictTarget(target); }, function () {
+        host.textContent = "";
+        host.appendChild(el("p", "chart-sub",
+          zone + " — this zone's prediction inputs fill with the next forecast run."));
+      });
+      return;
+    }
+    host.appendChild(buildTargetView(zone, target));
+  }
+
+  // ---------- A. Honest fitted-model contract strip (every page) ----------
+
+  function buildContractStrip(zone, target) {
+    var card = el("div", "contract-strip");
+    var head = el("div", "chart-head");
+    head.appendChild(el("h2", "chart-title", "The honest fitted-model contract"));
+    card.appendChild(head);
+    var chips = el("div", "contract-chips");
+    var tname = target || "load / solar / wind";
+    chips.appendChild(el("span", "chip",
+      "target: the TSO's published D-1 " + tname + " forecast — what the auction clears on, not outturn"));
+    chips.appendChild(el("span", "chip",
+      "vintage: GFS previous_day1 (issued D-1) — never across the 12:00 CET gate"));
+    if (target && zone) {
+      var w = winnerOf(zone, target);
+      if (w === "ml" || w === "pack") {
+        chips.appendChild(srcBadge(target, w));
+      } else if (w === "skip") {
+        chips.appendChild(el("span", "chip", target + ": no resource — not modeled"));
+      }
+    }
+    card.appendChild(chips);
+    var p = el("p", "chart-sub",
+      "If our predicted input equals the TSO's forecast, the ex-ante weather price track " +
+      "converges to the reference track — so error is measured against what the market used. ");
+    var a = el("a", null, "The full recipe →");
+    a.href = "https://github.com/philokalia-ai/energy-markets/blob/main/docs/predictions.md";
+    p.appendChild(a);
+    card.appendChild(p);
+    return card;
+  }
+
+  // ---------- B. Per-zone model card ----------
+
+  function statCell(label, val, sub) {
+    var d = el("div", "mc-stat");
+    d.appendChild(el("span", "mc-stat-label", label));
+    d.appendChild(el("span", "mc-stat-val", val));
+    if (sub) d.appendChild(el("span", "mc-stat-sub", sub));
+    return d;
+  }
+
+  function buildModelCard(zone, target) {
+    var card = el("div", "model-card");
+    var head = el("div", "chart-head");
+    head.appendChild(el("h2", "chart-title", zone + " · " + TARGET_OUTPUT[target].title + " — model card"));
+    card.appendChild(head);
+    var row = scorecardRow(zone, target);
+    var winner = row ? row.winner : winnerOf(zone, target);
+
+    if (winner === "skip") {
+      card.appendChild(el("p", "chart-sub",
+        "No " + target + " regime in " + zone + " — this zone has no meaningful " + target +
+        " resource (decided ex-ante from the installed-scale signal), so it is not modeled; the " +
+        "clear takes a pack/zero passthrough. Not a model loss — an honest scope boundary."));
+      return card;
+    }
+
+    // Verdict line — names the shipped model and, on a corr-guard demotion, tells
+    // the honest "ML beaten by pack on corr — pack ships" story.
+    var verdict = el("p", "mc-verdict");
+    var demoted = row && winner === "pack" && row.mae_new != null && row.mae_base != null &&
+      row.corr_new != null && row.corr_base != null &&
+      row.mae_new < row.mae_base && row.corr_new < row.corr_base;
+    verdict.appendChild(srcBadge(target, winner));
+    verdict.appendChild(document.createTextNode(" "));
+    if (winner === "ml") {
+      verdict.appendChild(document.createTextNode(
+        "LightGBM ships — it beat the committed linear pack on the frozen out-of-sample scorecard."));
+    } else if (demoted) {
+      verdict.appendChild(document.createTextNode(
+        "The linear pack ships. The ML cut MAE (" + fmt(row.mae_new, 1) + " vs " + fmt(row.mae_base, 1) +
+        ") but LOST on correlation (" + fmt(row.corr_new, 3) + " vs " + fmt(row.corr_base, 3) +
+        ") — beaten by the pack on corr, so the pack ships (the corr-guard verdict)."));
+    } else {
+      verdict.appendChild(document.createTextNode(
+        "The committed linear pack ships — it won the frozen out-of-sample scorecard here."));
+    }
+    card.appendChild(verdict);
+
+    if (row) {
+      var stats = el("div", "mc-stats");
+      var maeDelta = (row.mae_new != null && row.mae_base != null) ?
+        fmt(row.mae_new - row.mae_base, 1) + " vs pack" : null;
+      stats.appendChild(statCell("MAE (new)", row.mae_new != null ? fmt(row.mae_new, 1) : "—", maeDelta));
+      stats.appendChild(statCell("MAE (pack)", row.mae_base != null ? fmt(row.mae_base, 1) : "—", "€/MWh-scale MW"));
+      stats.appendChild(statCell("corr (new)", row.corr_new != null ? fmt(row.corr_new, 3) : "—",
+        row.corr_base != null ? "pack " + fmt(row.corr_base, 3) : null));
+      stats.appendChild(statCell("bias (new)", row.bias_new != null ? fmt(row.bias_new, 1) : "—", "pred − ref"));
+      stats.appendChild(statCell("n valid", row.n_valid != null ? fmt(row.n_valid, 0) : "—",
+        predictState.scorecard && predictState.scorecard.valid_window ?
+          predictState.scorecard.valid_window.first + "…" + predictState.scorecard.valid_window.last : null));
+      card.appendChild(stats);
+    } else {
+      card.appendChild(el("p", "chart-sub", "VALID scores fill when the scorecard exports."));
+    }
+
+    // Collapse metrics are a SOLAR-only, first-class card element.
+    if (target === "solar") {
+      var col = el("div", "mc-collapse");
+      col.appendChild(el("h3", "panel-title", "Collapse classification (hit / false-alarm)"));
+      var hasCollapse = row && row.collapse && row.collapse.hit_rate != null;
+      if (hasCollapse) {
+        var cg = el("div", "mc-stats");
+        cg.appendChild(statCell("hit-rate", fmt(row.collapse.hit_rate * 100, 0) + "%", "≤ €5 caught"));
+        cg.appendChild(statCell("false-alarm", fmt(row.collapse.fa_rate * 100, 0) + "%", "cried collapse, wasn't"));
+        col.appendChild(cg);
+      } else {
+        var note = predictState.scorecard && predictState.scorecard.collapse_note ?
+          predictState.scorecard.collapse_note :
+          "Per-zone collapse hit/false-alarm metrics fill in a later pass.";
+        col.appendChild(el("p", "chart-sub warming", "Pending — " + note));
+      }
+      card.appendChild(col);
+    }
+    return card;
+  }
+  var renderModelCard = buildModelCard;
+
+  // ---------- C. Per-lead skill strip ----------
+
+  function buildSkill(zone, target) {
+    var card = el("div", "skill-strip");
+    var head = el("div", "chart-head");
+    head.appendChild(el("h2", "chart-title", "Per-lead input skill (D-1 → D-7)"));
+    card.appendChild(head);
+    var rows = skillRows(zone, target);
+    var sk = predictState.skill;
+    if (!rows.length) {
+      var msg = (sk && sk.note) ? sk.note :
+        "Per-lead skill fills as the GFS vintage archive accumulates.";
+      card.appendChild(el("p", "chart-sub warming",
+        "Warming up — the honest degradation story (how much skill we lose predicting D-2…D-7 " +
+        "ahead) fills lead by lead as the archived vintages land. " + msg));
+      return card;
+    }
+    rows.sort(function (a, b) { return a.lead_days - b.lead_days; });
+    var leads = rows.map(function (r) { return "D-" + r.lead_days; });
+    var accent = "#2C6BA8";
+    var box = el("div", "predict-drivers");
+    driverMiniChart(box, { title: "MAE by lead", unit: "MW", hours: leads,
+      series: [{ label: "MAE", color: accent, values: rows.map(function (r) { return r.mae; }) }] });
+    driverMiniChart(box, { title: "Correlation by lead", unit: "r", hours: leads,
+      series: [{ label: "corr", color: "#1F7A4A", values: rows.map(function (r) { return r.corr; }) }] });
+    card.appendChild(box);
+    return card;
+  }
+  var renderSkill = buildSkill;
+
+  // ---------- D/E. knobs + output chart ----------
+
+  function buildKnobs(zone, target) {
+    var card = el("div", "predict-knobs-card");
+    var head = el("div", "chart-head");
+    head.appendChild(el("h2", "chart-title", "The knobs — what the model reads from the weather"));
+    head.appendChild(el("p", "chart-sub",
+      "Only " + TARGET_OUTPUT[target].title + "'s physics-relevant drivers, from the same D-1 GFS " +
+      "vintage the forecast consumes."));
+    card.appendChild(head);
+    var zd = predictState.zoneData[zone];
+    var box = el("div", "predict-drivers");
+    var accent = "#2C6BA8";
+    (TARGET_DRIVERS[target] || []).forEach(function (d) {
+      driverMiniChart(box, { title: d[1], unit: d[2], hours: zd.hours,
+        series: [{ label: d[1], color: accent, values: zd.series[d[0]] }] });
+    });
+    card.appendChild(box);
+    return card;
+  }
+
+  function buildOutput(zone, target) {
+    var card = el("div", "predict-output-card");
+    var head = el("div", "chart-head");
+    head.appendChild(el("h2", "chart-title",
+      TARGET_OUTPUT[target].title + " — predicted vs ENTSO-E reference vs settled actual"));
+    card.appendChild(head);
+    var zd = predictState.zoneData[zone];
+    var C = chartColors();
+    var cols = TARGET_OUTPUT[target];
+    var box = el("div", "predict-outputs");
+    driverMiniChart(box, { title: cols.title, unit: "MW", hours: zd.hours, big: true,
+      series: [
+        { label: "predicted", color: C.sim, values: zd.series[cols.pred] },
+        { label: "ENTSO-E reference", color: "#B08A3E", values: zd.series[cols.ref], dashed: true },
+        { label: "actual", color: C.act, values: zd.series[cols.act] },
+      ] });
+    card.appendChild(box);
+    return card;
+  }
+
+  // Bin y over x into `nb` equal-width buckets; returns {labels, means} for the
+  // non-empty buckets — the primitive behind the temperature-response and
+  // power-curve physics charts (fed straight into driverMiniChart).
+  function binnedCurve(xs, ys, nb, unitFmt) {
+    var pts = [];
+    for (var i = 0; i < xs.length; i++) {
+      var x = xs[i], y = ys[i];
+      if (x == null || y == null || !isFinite(x) || !isFinite(y)) continue;
+      pts.push([x, y]);
+    }
+    if (!pts.length) return { labels: [], means: [] };
+    var lo = Math.min.apply(null, pts.map(function (p) { return p[0]; }));
+    var hi = Math.max.apply(null, pts.map(function (p) { return p[0]; }));
+    var w = (hi - lo) / nb || 1;
+    var sum = new Array(nb).fill(0), cnt = new Array(nb).fill(0);
+    pts.forEach(function (p) {
+      var b = Math.min(nb - 1, Math.floor((p[0] - lo) / w));
+      sum[b] += p[1]; cnt[b] += 1;
+    });
+    var labels = [], means = [];
+    for (var b = 0; b < nb; b++) {
+      if (!cnt[b]) continue;
+      labels.push(unitFmt(lo + (b + 0.5) * w));
+      means.push(sum[b] / cnt[b]);
+    }
+    return { labels: labels, means: means };
+  }
+
+  // Midday (UTC 9–14) mean RES-coverage per delivery date — the input-level
+  // collapse signal, extended from the hub map's single day to a trailing window.
+  function middayCoverageByDate(zd) {
+    var byDate = {};
+    for (var i = 0; i < zd.hours.length; i++) {
+      var h = new Date(zd.hours[i]).getUTCHours();
+      if (h < 9 || h > 14) continue;
+      var d = zd.hours[i].slice(0, 10);
+      var res = zd.series.pred_res_mw[i], load = zd.series.pred_load_mw[i];
+      if (res == null || load == null || !(load > 0)) continue;
+      var b = byDate[d] || (byDate[d] = { res: 0, load: 0, n: 0 });
+      b.res += res; b.load += load; b.n += 1;
+    }
+    var dates = Object.keys(byDate).sort();
+    return { dates: dates, cov: dates.map(function (d) { return byDate[d].res / byDate[d].load; }) };
+  }
+
+  // ---------- F. physics panels (target-specific) ----------
+
+  function buildLoadPhysics(zone, target) {
+    var card = el("div", "physics-panel");
+    card.appendChild(el("h2", "chart-title", "Load physics — a calendar-and-temperature machine with memory"));
+    var zd = predictState.zoneData[zone];
+    var box = el("div", "predict-drivers");
+    var tr = binnedCurve(zd.series.temp_c, zd.series.pred_load_mw, 14,
+      function (v) { return fmt(v, 0) + "°"; });
+    driverMiniChart(box, { title: "Temperature-response curve", unit: "MW vs °C", hours: tr.labels,
+      series: [{ label: "pred load", color: "#C4643C", values: tr.means }] });
+    card.appendChild(box);
+    card.appendChild(el("p", "chart-sub",
+      "Predicted load binned against pop-weighted temperature — the U-shape: heating below " +
+      "~16.5 °C (HDH base), cooling above ~21 °C (CDH base)."));
+
+    var holClass = HOLIDAY_ORTHODOX.indexOf(zone) !== -1 ? "Orthodox-Easter map (Julian/Meeus computus)" :
+      HOLIDAY_WESTERN.indexOf(zone) !== -1 ? "Western-Easter map" : null;
+    var hp = el("p", "chart-sub");
+    hp.appendChild(el("strong", null, "Calendar & holidays. "));
+    hp.appendChild(document.createTextNode(holClass ?
+      (zone + " carries a national holiday map (" + holClass + "), so movable feasts enter the model.") :
+      (zone + " carries NO active holiday map (empty set → is_hol ≡ 0) — an honest gap; where holidays " +
+        "matter the pack can win here, and the winner selection defends it.")));
+    card.appendChild(hp);
+
+    var ar = el("p", "chart-sub");
+    ar.appendChild(el("strong", null, "Autoregression. "));
+    ar.appendChild(document.createTextNode(
+      "The model already knows the D-1 (ar1) and D-7 (ar7) same-hour day-ahead load forecasts — " +
+      "both admissible at the gate — so persistence is an input, not a leak."));
+    card.appendChild(ar);
+    return card;
+  }
+
+  function buildSolarPhysics(zone, target) {
+    var card = el("div", "physics-panel");
+    card.appendChild(el("h2", "chart-title", "Solar physics — the collapse cliff"));
+    var zd = predictState.zoneData[zone];
+    if (winnerOf(zone, "solar") === "skip") {
+      card.appendChild(el("p", "chart-sub",
+        zone + " has no meaningful solar regime — the collapse cliff does not apply here."));
+      return card;
+    }
+    var mc = middayCoverageByDate(zd);
+    var box = el("div", "predict-drivers");
+    driverMiniChart(box, { title: "Midday RES-coverage cliff", unit: "RES ÷ load", hours: mc.dates,
+      series: [
+        { label: "midday coverage", color: "#1F7A4A", values: mc.cov },
+        { label: "collapse threshold", color: "#B08A3E", values: mc.dates.map(function () { return 1.0; }), dashed: true },
+      ] });
+    card.appendChild(box);
+    card.appendChild(el("p", "chart-sub",
+      "Midday (Athens ~11–16) predicted wind+solar ÷ load across recent days. Days that cross ≥ 1.0 " +
+      "are where price-taker RES meets or exceeds demand — the regime where the midday price can collapse."));
+    var why = el("p", "chart-sub");
+    why.appendChild(el("strong", null, "Why a small error flips it. "));
+    why.appendChild(document.createTextNode(
+      "Near the threshold a small solar-forecast error flips whether the midday price collapses (≤ €5 / " +
+      "negative) or not — a classification that dominates the continuous MAE there. Solar is predicted as a " +
+      "ratio against the fleet's trailing-30-day p95 capacity (cap95_solar), so a growing fleet doesn't " +
+      "drift the forecast; the prediction is night-clamped to 0 at sun-elevation 0."));
+    card.appendChild(why);
+    card.appendChild(el("p", "chart-sub warming",
+      "cap95_solar growth strip and clearness / sun-elevation knobs are model-internal derived features, " +
+      "not in the exported input plane yet — they fill when the driver export widens."));
+    return card;
+  }
+
+  function buildWindPhysics(zone, target) {
+    var card = el("div", "physics-panel");
+    card.appendChild(el("h2", "chart-title", "Wind physics — the power curve, and where the pack beats the ML"));
+    var zd = predictState.zoneData[zone];
+    if (winnerOf(zone, "wind") === "skip") {
+      card.appendChild(el("p", "chart-sub",
+        zone + " has no meaningful wind regime — not modeled."));
+      return card;
+    }
+    var pc = binnedCurve(zd.series.wind100_ms, zd.series.pred_wind_mw, 14,
+      function (v) { return fmt(v, 0); });
+    var box = el("div", "predict-drivers");
+    driverMiniChart(box, { title: "Power curve", unit: "MW vs m/s", hours: pc.labels,
+      series: [{ label: "pred wind", color: "#2C6BA8", values: pc.means }] });
+    card.appendChild(box);
+    card.appendChild(el("p", "chart-sub",
+      "Predicted wind binned against 100 m wind speed — the cut-in → ramp → rated shape the physical " +
+      "pack encodes and the ML approximates."));
+
+    var w = winnerOf(zone, "wind");
+    var hp = el("p", "chart-sub");
+    hp.appendChild(el("strong", null, "Pack-vs-ML honesty. "));
+    hp.appendChild(document.createTextNode(w === "pack" ?
+      (zone + "'s wind ships the committed physical PACK, not the ML. On onshore / low-penetration " +
+        "fleets the monotone physical curve generalizes better than a boosted tree on a short record — " +
+        "a feature, not a caveat: the pack wins 25 of the 32 modeled wind zones.") :
+      (zone + "'s wind ships the ML — it beat the pack here. Offshore-heavy fleets are the ML's strong ground.")));
+    card.appendChild(hp);
+    if (WIND_OFFSHORE.indexOf(zone) !== -1) {
+      card.appendChild(el("p", "chart-sub",
+        zone + " is offshore-heavy — the ML's favourable regime."));
+    }
+    card.appendChild(el("p", "chart-sub warming",
+      "cap95_wind growth strip is a model-internal ratio denominator, not in the exported input plane yet."));
+    return card;
+  }
+
+  var TARGET_PHYSICS = { load: buildLoadPhysics, solar: buildSolarPhysics, wind: buildWindPhysics };
+
+  // The shared skeleton (A → F), composed for one (zone, target). Pure — reads
+  // predictState; returned as one element so it renders offline and under test.
+  function buildTargetView(zone, target) {
+    var view = el("div", "predict-target");
+    [buildContractStrip(zone, target),
+     buildModelCard(zone, target),
+     buildSkill(zone, target),
+     buildKnobs(zone, target),
+     buildOutput(zone, target),
+     TARGET_PHYSICS[target](zone, target)].forEach(function (node) {
+      var wrap = el("div", "chart-card"); wrap.appendChild(node); view.appendChild(wrap);
+    });
+    return view;
+  }
+
+  // ---------- hub composites ----------
+
+  function winnerChip(zone, target) {
+    var w = winnerOf(zone, target) || (scorecardRow(zone, target) || {}).winner;
+    var row = scorecardRow(zone, target);
+    var span = el("span", "fam-cell fam-" + (w || "na"));
+    span.appendChild(el("span", "fam-badge", w === "ml" ? "ML" : w === "pack" ? "pack" : w === "skip" ? "skip" : "—"));
+    if (row && row.corr_new != null && w !== "skip") span.appendChild(el("span", "fam-corr", fmt(row.corr_new, 2)));
+    if (w === "ml" || w === "pack") {
+      span.setAttribute("role", "button"); span.tabIndex = 0;
+      span.addEventListener("click", function () {
+        state.zone = zone; predictState.zone = zone; state.predictTarget = target;
+        var sel = $("predict-zone-select"); if (sel) sel.value = zone;
+        renderPredict(); writeHash();
+      });
+    }
+    return span;
+  }
+
+  function buildFamilyTable() {
+    var card = el("div", "family-card");
+    var head = el("div", "chart-head");
+    head.appendChild(el("h2", "chart-title", "The family — per-zone winner across all three targets"));
+    var wc = (predictState.scorecard && predictState.scorecard.winner_counts) || {};
+    var total = (wc.ml || 0) + (wc.pack || 0) + (wc.skip || 0);
+    head.appendChild(el("p", "chart-sub",
+      (wc.ml || 0) + " of " + (total || 117) + " zone-targets ship the NEW LightGBM model; " +
+      (wc.pack || 0) + " keep the linear pack; " + (wc.skip || 0) + " have no resource (not modeled). " +
+      "Each cell links into that zone's target page."));
+    card.appendChild(head);
+    var scroll = el("div", "table-scroll");
+    var table = el("table", "data-table");
+    var thead = el("thead"); var htr = el("tr");
+    ["zone", "load", "solar", "wind"].forEach(function (h) { htr.appendChild(el("th", null, h)); });
+    thead.appendChild(htr); table.appendChild(thead);
+    var tbody = el("tbody");
+    predictZones().forEach(function (z) {
+      var tr = el("tr");
+      tr.appendChild(el("td", null, z));
+      ["load", "solar", "wind"].forEach(function (t) {
+        var td = el("td"); td.appendChild(winnerChip(z, t)); tr.appendChild(td);
+      });
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody); scroll.appendChild(table); card.appendChild(scroll);
+    return card;
+  }
+
+  function buildTargetCards() {
+    var wrap = el("div", "predict-cards-grid");
+    var wc = (predictState.scorecard && predictState.scorecard.winner_counts) || {};
+    var meta = {
+      load:  ["Calendar · temperature · holidays · autoregression.", "near-universal ML win"],
+      solar: ["Capacity growth + the collapse question — midday is the whole game.", "owns collapse"],
+      wind:  ["Power curves — where the physical pack still beats the ML.", "the honest pack-vs-ML split"],
+    };
+    ["load", "solar", "wind"].forEach(function (t) {
+      var c = el("div", "predict-card case-stat");
+      c.setAttribute("role", "button"); c.tabIndex = 0;
+      c.appendChild(el("span", "cs-label", PREDICT_TARGET_LABELS[t]));
+      c.appendChild(el("span", "predict-card-teaser", meta[t][0]));
+      c.appendChild(el("span", "cs-sub", meta[t][1]));
+      c.addEventListener("click", function () { state.predictTarget = t; renderPredict(); writeHash(); });
+      wrap.appendChild(c);
+    });
+    return wrap;
+  }
+
+  function buildReservoir(zone, resv) {
+    var card = el("div", "reservoir-card");
+    var head = el("div", "chart-head");
+    head.appendChild(el("h2", "chart-title", "Hydro reservoir state — " + zone + " (price-side)"));
+    head.appendChild(el("p", "chart-sub",
+      "Weekly reservoir fill ratio and dryness — a hydro water-value / PRICE knob, not a RES/load " +
+      "input. Shown here on the hub, clearly out of scope for the input models (pending the price pillars)."));
+    card.appendChild(head);
+    var box = el("div", "predict-drivers");
+    var wks = resv.map(function (w) { return w.week_start; });
+    driverMiniChart(box, { title: "Reservoir fill ratio", unit: "share of 52-wk max", hours: wks,
+      series: [{ label: "fill ratio", color: "#2C6BA8", values: resv.map(function (w) { return w.fill_ratio; }) }] });
+    driverMiniChart(box, { title: "Reservoir dryness", unit: "vs prior-year median", hours: wks,
+      series: [{ label: "dryness", color: "#C4643C", values: resv.map(function (w) { return w.dryness; }) }] });
+    card.appendChild(box);
+    return card;
   }
 
   // element-wise sum of two nullable numeric arrays (RES = solar + wind).
@@ -1620,78 +2218,6 @@
   function srcBadge(label, which) {
     var b = el("span", "src-badge src-" + which, label + ": " + (which === "ml" ? "LightGBM" : "linear pack"));
     return b;
-  }
-
-  function renderKnobs() {
-    var zd = predictState.zoneData[predictState.zone];
-    if (!zd) return;
-    var box = $("predict-knobs");
-    box.hidden = false;
-    var C = chartColors();
-    var s = zd.series;
-    var hours = zd.hours;
-    var lastDate = hours.length ? hours[hours.length - 1].slice(0, 10) : "";
-    $("pk-title").textContent = predictState.zone + " — drivers & prediction";
-    var sub = $("pk-sub");
-    sub.textContent = hours.length ?
-      ("Every delivery hour from " + hours[0].slice(0, 10) + " to " + lastDate +
-        " · ex-ante D-1 weather vintage · winners: ") : "";
-    sub.appendChild(srcBadge("load", zd.src.load));
-    sub.appendChild(document.createTextNode(" "));
-    sub.appendChild(srcBadge("solar", zd.src.solar));
-    sub.appendChild(document.createTextNode(" "));
-    sub.appendChild(srcBadge("wind", zd.src.wind));
-
-    // --- Predictions vs reference vs actual ---
-    var outs = $("pk-outputs"); outs.textContent = "";
-    var resRef = sumSeries(s.ref_solar_mw, s.ref_wind_mw);
-    var resAct = sumSeries(s.act_solar_mw, s.act_wind_mw);
-    driverMiniChart(outs, {
-      title: "Renewables (wind + solar)", unit: "MW", hours: hours, big: true,
-      series: [
-        { label: "predicted", color: C.sim, values: s.pred_res_mw },
-        { label: "ENTSO-E reference", color: "#B08A3E", values: resRef, dashed: true },
-        { label: "actual", color: C.act, values: resAct },
-      ],
-    });
-    driverMiniChart(outs, {
-      title: "Load", unit: "MW", hours: hours, big: true,
-      series: [
-        { label: "predicted", color: C.sim, values: s.pred_load_mw },
-        { label: "ENTSO-E reference", color: "#B08A3E", values: s.ref_load_mw, dashed: true },
-        { label: "actual", color: C.act, values: s.act_load_mw },
-      ],
-    });
-
-    // --- The knobs (drivers) ---
-    var drv = $("pk-drivers"); drv.textContent = "";
-    var accent = "#2C6BA8";
-    [["temp_c", "Temperature", "°C"],
-     ["ghi_wm2", "Solar radiation (GHI)", "W/m²"],
-     ["cloud_pct", "Cloud cover", "%"],
-     ["pressure_hpa", "Surface pressure", "hPa"],
-     ["wind100_ms", "Wind speed (100 m)", "m/s"]].forEach(function (d) {
-      driverMiniChart(drv, {
-        title: d[1], unit: d[2], hours: hours,
-        series: [{ label: d[1], color: accent, values: s[d[0]] }],
-      });
-    });
-
-    // --- Reservoir (hydro zones) ---
-    var resv = predictState.reservoir && predictState.reservoir.zones &&
-      predictState.reservoir.zones[predictState.zone];
-    var rbox = $("pk-reservoir");
-    if (resv && resv.length) {
-      rbox.hidden = false;
-      var rc = $("pk-reservoir-charts"); rc.textContent = "";
-      var wks = resv.map(function (w) { return w.week_start; });
-      driverMiniChart(rc, { title: "Reservoir fill ratio", unit: "share of 52-wk max", hours: wks,
-        series: [{ label: "fill ratio", color: "#2C6BA8", values: resv.map(function (w) { return w.fill_ratio; }) }] });
-      driverMiniChart(rc, { title: "Reservoir dryness", unit: "vs prior-year median", hours: wks,
-        series: [{ label: "dryness", color: "#C4643C", values: resv.map(function (w) { return w.dryness; }) }] });
-    } else {
-      rbox.hidden = true;
-    }
   }
 
   // Compact multi-series line chart with its own y-scale + unit. `hours` is the
@@ -3847,6 +4373,8 @@
       var t = $("predict-method");
       if (t) t.scrollIntoView({ behavior: "smooth", block: "start" });
     });
+    var pzsel = $("predict-zone-select");
+    if (pzsel) pzsel.addEventListener("change", function (ev) { selectPredictZone(ev.target.value); });
     window.addEventListener("hashchange", function () {
       if (!suppressHash) applyHash();
     });
@@ -3908,6 +4436,20 @@
       renderSolverToy: renderSolverToy,
       SOLVER_TOY_BOOKS: SOLVER_TOY_BOOKS,
       SOLVER_EXEMPLARS: SOLVER_EXEMPLARS,
+    };
+    // Predictions hub+3 test surface — lets DOM tests drive the composed target
+    // views + hub composites against fixtures, in isolation from the bootstrap.
+    window.__euphemiaPredict = {
+      predictState: predictState,
+      buildContractStrip: buildContractStrip,
+      buildModelCard: buildModelCard,
+      buildSkill: buildSkill,
+      buildKnobs: buildKnobs,
+      buildOutput: buildOutput,
+      buildTargetView: buildTargetView,
+      buildFamilyTable: buildFamilyTable,
+      buildTargetCards: buildTargetCards,
+      buildReservoir: buildReservoir,
     };
   }
 })();
