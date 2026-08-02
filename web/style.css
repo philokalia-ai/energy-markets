@@ -1052,6 +1052,16 @@ html, body { overflow-x: hidden; }
 .layer-card ul li { margin: .18rem 0; }
 .layer-card .more-link { margin-top: .3rem; font-size: .92rem; }
 
+/* The six-pillars list (about page) — reuses the layer fit/build tokens. */
+.pillars-list { margin: 1rem 0 .4rem; padding-left: 1.3rem; }
+.pillars-list > li { margin: .55rem 0; font-size: .96rem; color: var(--text-secondary); }
+.pillars-list > li strong { color: var(--heading); }
+.pillars-list .layer-tag { margin: 0 .5rem 0 0; vertical-align: middle; }
+.layer-tag-fit    { color: var(--terracotta);  border: 1px solid var(--terracotta); }
+.layer-tag-build  { color: var(--good-text);   border: 1px solid var(--good-text); }
+.layer-tag-anchor { color: var(--accent);      border: 1px solid var(--accent); }
+.pillars-list .more-link { font-size: .9rem; }
+
 .book-cta {
   display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px;
   margin: 1.3rem 0; padding: 16px 20px;

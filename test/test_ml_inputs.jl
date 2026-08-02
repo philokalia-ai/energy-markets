@@ -70,6 +70,13 @@ end
     # numpy-linear percentile
     @test _np_percentile95([0.0, 10.0]) ≈ 9.5
     @test _np_percentile95([5.0]) == 5.0
+
+    # fit-iteration 3: per-zone affine LOAD bias correction (b=1 level debias)
+    @test ml_load_bias_correct("FR", 5000.0) ≈ 5000.0 - 191.20   # a=-191.20, b=1
+    @test ml_load_bias_correct("IT-NORTH", 4000.0) ≈ 4000.0 - 197.79
+    @test ml_load_bias_correct("GR", 5000.0) == 5000.0           # absent zone -> identity
+    @test ml_load_bias_correct("HU", 3000.0) == 3000.0           # demoted to pack (iter1), not here
+    @test ml_load_bias_correct("FR", 100.0) == 0.0               # clamped at 0 (100-191.2<0)
 end
 
 @testset "ML inputs — holidays (rollout-39 Orthodox amendment, train/serve lockstep)" begin
@@ -87,11 +94,24 @@ end
     @test Date(2026, 3, 3)  in ml_holidays("BG", 2026:2026)   # BG Liberation Day
     @test Date(2026, 1, 7)  in ml_holidays("RS", 2026:2026)   # RS Orthodox Christmas
     @test Date(2026, 12, 1) in ml_holidays("RO", 2026:2026)   # RO National Day
-    # ES/DE/SE keep the Western Easter; unmapped countries carry NO holidays.
+    # ES/DE/SE keep the Western Easter.
     @test Date(2026, 4, 3) in ml_holidays("ES", 2026:2026)    # western Good Friday
-    @test isempty(ml_holidays("NL", 2024:2027))
-    @test isempty(ml_holidays("PL", 2026:2026))
-    @test isempty(ml_holidays("FR", 2026:2026))
+
+    # fit-iteration 2: the remaining footprint countries now carry national maps
+    # (all Western-Easter; 2026 Western Easter Sunday = Apr 5, Good Friday = Apr 3,
+    # Easter Monday = Apr 6). These lock the serve side; a python↔Julia byte-identity
+    # sweep over 2024-2027 for all 25 countries is docs/experiments/input-upgrade
+    # cmp_holidays.py (LOCKSTEP_OK). Only a few anchor dates are asserted here.
+    fr = ml_holidays("FR", 2026:2026)
+    @test Date(2026, 7, 14) in fr && Date(2026, 4, 6) in fr && !(Date(2026, 4, 3) in fr)  # Bastille + Easter Mon; no Good Fri in FR
+    pl = ml_holidays("PL", 2026:2026)
+    @test Date(2026, 5, 3) in pl && Date(2026, 4, 5) in pl                     # Constitution Day + Easter Sunday
+    nl = ml_holidays("NL", 2026:2026)
+    @test Date(2026, 4, 27) in nl && Date(2026, 4, 3) in nl                    # King's Day + Good Friday
+    @test Date(2026, 8, 15) in ml_holidays("IT", 2026:2026)                    # Ferragosto
+    @test Date(2026, 5, 17) in ml_holidays("NO", 2026:2026)                    # Norway Constitution Day
+    # a country outside the footprint map still returns an empty set
+    @test isempty(ml_holidays("XX", 2024:2027))
 end
 
 @testset "ML inputs — ship config (rollout-39)" begin

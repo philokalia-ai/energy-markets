@@ -142,6 +142,7 @@ def baseline_load(z,la):
 
 lgb_params=dict(objective="l1",num_leaves=31,learning_rate=0.05,n_estimators=600,
     min_child_samples=40,subsample=0.8,subsample_freq=1,colsample_bytree=0.8,reg_lambda=1.0,verbosity=-1)
+CORR_GUARD_TOL=0.02   # fit-iteration 1 (R1): NEW may lose at most this much VALID corr vs pack
 scorecard=[]; meta={}; winners={}
 
 def fit_score(z,target,df,feat_cols,tgt_col,baseline_pred,clamp_night=False,ref_col=None):
@@ -165,7 +166,13 @@ def fit_score(z,target,df,feat_cols,tgt_col,baseline_pred,clamp_night=False,ref_
     if clamp_night: pv=np.where(va["se"].values<=1e-6,0.0,pv)
     bv=baseline_pred.reindex(va.index).values
     mn=metrics(pv,va[tgt_col].values); mb=metrics(bv,va[tgt_col].values)
-    win = (not np.isnan(mn["mae"])) and (np.isnan(mb["mae"]) or mn["mae"]<mb["mae"])
+    # Winner selection: NEW ships only when it beats the pack on VALID MAE AND does
+    # not lose more than CORR_GUARD_TOL correlation vs the pack (fit-iteration 1,
+    # R1). MAE-only was blind to shape and shipped corr regressions (NO2/FR wind,
+    # NL solar). corr_ok is vacuously true when either corr is NaN (degenerate).
+    mae_better = (not np.isnan(mn["mae"])) and (np.isnan(mb["mae"]) or mn["mae"]<mb["mae"])
+    corr_ok = np.isnan(mn["corr"]) or np.isnan(mb["corr"]) or (mn["corr"] >= mb["corr"]-CORR_GUARD_TOL)
+    win = mae_better and corr_ok
     scorecard.append(dict(zone=z,target=target,model="NEW",win=win,**mn))
     scorecard.append(dict(zone=z,target=target,model="pack",win=win,**mb))
     winners[(z,target)]=bool(win)
