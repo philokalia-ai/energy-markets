@@ -29,6 +29,11 @@ on:
         required: false
         default: false
         type: boolean
+      pregate:
+        description: "Run the PRE-GATE 7-lead weather-track profile (same as the 06:30 cron) — for manual recovery when the schedule is delayed/skipped"
+        required: false
+        default: false
+        type: boolean
       optimizer:
         description: "Solver (highs = production default; gurobi = development, academic license)"
         required: false
@@ -138,7 +143,7 @@ jobs:
         env:
           ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
         run: |
-          if [ "${{ github.event_name }}" = "schedule" ]; then
+          if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ github.event.inputs.pregate }}" = "true" ]; then
             # PRE-GATE 7-lead run: weather (ex-ante) track, ALL leads, before the
             # 12:00 CET auction. Day-ahead ATC for tomorrow is not yet published,
             # so degrade the network to the demonstrated-capability fallback.
