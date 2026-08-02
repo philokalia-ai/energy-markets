@@ -211,6 +211,17 @@ println()
         include(joinpath(@__DIR__, "test_book_methodology_export.jl"))
     end
 
+    @testset "Boundaries export" begin
+        println("\n" * "=" ^ 60)
+        println("Running boundaries export tests...")
+        println("=" ^ 60)
+        # Pillar 6: the elastic boundary structure is walked from ZONE_PROFILES's
+        # BoundaryBook structs; effects + the fixed-neighbour list are cited. Guards
+        # book-name resolution, GB two-book carbon legs, UA firm slice, effect
+        # citations, and that fixed neighbours are real & struct-free.
+        include(joinpath(@__DIR__, "test_boundaries_export.jl"))
+    end
+
     @testset "Price reconstruction (pure, DB-free)" begin
         println("\n" * "=" ^ 60)
         println("Running competitive price reconstruction unit tests...")

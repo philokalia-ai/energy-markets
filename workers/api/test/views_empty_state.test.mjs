@@ -146,6 +146,12 @@ V.setView("method");          // sets state.view = "method", then renders
 await settle();
 assertHonest(getById("method-status"), "method");
 
+/* ---- 6b. boundary view (loadBoundaries rejects) ---- */
+byId.delete("boundary-status"); // fresh host
+V.setView("boundary");          // sets state.view = "boundary", then renders
+await settle();
+assertHonest(getById("boundary-status"), "boundary");
+
 /* ---- 7. no snapshot was ever fetched: only apiPath (…/v1/…) or geo ---- */
 ok(fetchCount > 0, "views actually attempted the live API (fetch was called)");
 

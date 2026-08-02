@@ -16,6 +16,8 @@
     "test:views": "node test/views_empty_state.test.mjs",
     "test:methodology": "node test/book_methodology.test.mjs",
     "test:methodview": "node test/method_view.test.mjs",
+    "test:boundaries": "node test/boundaries.test.mjs",
+    "test:boundaryview": "node test/boundary_view.test.mjs",
     "dev": "wrangler dev --config wrangler.toml",
     "deploy": "wrangler deploy --config wrangler.toml"
   },

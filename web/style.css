@@ -1570,3 +1570,129 @@ html, body { overflow-x: hidden; }
 @media (max-width: 720px) {
   .method-census-cols { grid-template-columns: 1fr; }
 }
+
+/* ============ Pillar 6 — the boundary view ============ */
+/* Map sub-line link to the boundary surface. */
+.map-sub-boundary { color: var(--text-muted); }
+
+/* Inline KIND markers in the boundary intro + the KIND badges on cards. */
+.kind-inline, .kind-badge { display: inline-block; font-family: var(--mono); font-weight: 700;
+  font-size: 10.5px; padding: 1px 8px; border-radius: 999px; text-transform: uppercase;
+  letter-spacing: 0.02em; }
+.kind-inline.kind-elastic, .kind-badge.kind-elastic {
+  background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent); }
+.kind-inline.kind-fixed, .kind-badge.kind-fixed {
+  background: color-mix(in srgb, var(--text-muted) 14%, transparent); color: var(--text-muted);
+  border: 1px solid color-mix(in srgb, var(--text-muted) 40%, transparent); }
+
+/* A · the ring */
+.boundary-ring-wrap { width: 100%; overflow-x: auto; }
+.boundary-ring-wrap svg { width: 100%; height: auto; min-width: 520px; display: block; }
+.boundary-node { cursor: pointer; }
+.boundary-node:hover circle { stroke-width: 3; }
+.boundary-node:focus { outline: none; }
+.boundary-node:focus circle { stroke-width: 3.5; }
+.boundary-legend { display: flex; flex-wrap: wrap; gap: 14px 20px; align-items: center;
+  margin-top: 10px; font-size: 12px; color: var(--text-muted); }
+.boundary-leg-item { display: inline-flex; align-items: center; gap: 7px; }
+.boundary-leg-swatch { display: inline-block; width: 26px; height: 0; border-top-width: 3px; }
+.boundary-leg-swatch.solid { border-top: 3px solid var(--accent); }
+.boundary-leg-swatch.dashed { border-top: 2px dashed var(--text-muted); }
+.boundary-leg-note { flex-basis: 100%; font-size: 11.5px; opacity: 0.9; }
+
+/* B · fixed-vs-elastic explainer */
+.boundary-explainer-picker { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
+.boundary-chip { font: inherit; font-size: 11.5px; padding: 4px 11px; border-radius: 999px;
+  border: 1px solid var(--border); background: transparent; color: var(--text-secondary, var(--text-muted));
+  cursor: pointer; }
+.boundary-chip:hover { border-color: var(--accent); color: var(--heading); }
+.boundary-chip.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+.boundary-explainer-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
+.boundary-explainer-col { border: 1px solid var(--border); border-radius: 10px; padding: 14px; }
+.boundary-explainer-col svg { width: 100%; height: auto; }
+.boundary-explainer-caption { font-size: 12px; color: var(--text-muted); margin-top: 8px; }
+.boundary-rungs-toggle { margin: 10px 0 6px; }
+.boundary-rungs-table, .boundary-rungs-live table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.boundary-rungs-table th, .boundary-rungs-table td { text-align: left; padding: 4px 8px;
+  border-bottom: 1px solid var(--border); }
+.boundary-rung-owner { font-family: var(--mono); font-size: 11px; color: var(--text-muted); }
+.boundary-absence { display: flex; gap: 8px; align-items: baseline; font-size: 12.5px;
+  color: var(--text-muted); background: color-mix(in srgb, var(--text-muted) 8%, transparent);
+  border: 1px dashed var(--border); border-radius: 8px; padding: 9px 11px; margin-top: 6px; }
+.boundary-absence-mark { font-family: var(--mono); font-weight: 700; font-size: 15px; }
+
+/* C · per-country cards */
+.boundary-cards { display: grid; gap: 18px; }
+.boundary-card { border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px;
+  background: var(--surface-2, var(--surface-1)); transition: box-shadow 0.3s; }
+.boundary-card-elastic { border-left: 4px solid var(--accent); }
+.boundary-card-fixed { border-left: 4px dashed var(--text-muted); }
+.boundary-card-flash { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 40%, transparent); }
+.boundary-card-disabled .boundary-book-block,
+.boundary-card-disabled .boundary-effect,
+.boundary-card-disabled .boundary-doublecount { opacity: 0.32; filter: grayscale(1); }
+.boundary-card-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 6px; }
+.boundary-card-title { font-family: var(--serif); font-weight: 700; font-size: 21px; color: var(--heading); }
+.boundary-card-lede { font-size: 13px; color: var(--text-secondary, var(--text-muted)); margin: 4px 0 10px; }
+.boundary-book-block { border-top: 1px solid var(--border); padding-top: 10px; margin-top: 10px; }
+.boundary-book-name { font-family: var(--mono); font-size: 12.5px; color: var(--heading); margin: 0 0 8px; }
+.boundary-field { display: grid; grid-template-columns: 148px 1fr; gap: 10px; padding: 4px 0;
+  font-size: 12.5px; align-items: baseline; }
+.boundary-field-label { font-family: var(--mono); font-size: 11px; text-transform: uppercase;
+  letter-spacing: 0.03em; color: var(--text-muted); }
+.boundary-field-value { color: var(--text-secondary, var(--heading)); line-height: 1.5; }
+.boundary-blank { font-family: var(--mono); color: var(--text-muted); font-style: italic; }
+
+.boundary-doublecount, .boundary-callout, .boundary-roadmap-panel, .boundary-lesson,
+.boundary-effect, .boundary-audit-box {
+  border: 1px solid var(--border); border-radius: 9px; padding: 11px 13px; margin: 12px 0;
+  background: color-mix(in srgb, var(--accent) 5%, transparent); font-size: 12.5px; }
+.boundary-callout { background: color-mix(in srgb, var(--status-warn, var(--accent)) 9%, transparent);
+  border-color: color-mix(in srgb, var(--status-warn, var(--accent)) 40%, transparent); }
+.boundary-exhibit-title, .boundary-callout-title, .boundary-lesson-title, .boundary-effect-title {
+  font-family: var(--mono); font-size: 12px; color: var(--heading); margin: 0 0 7px; }
+.boundary-beforeafter { display: flex; gap: 12px; margin: 8px 0; }
+.boundary-ba-col { flex: 1; border: 1px solid var(--border); border-radius: 7px; padding: 8px;
+  font-size: 12px; text-align: center; }
+.boundary-ba-label { display: block; font-family: var(--mono); font-size: 10px; text-transform: uppercase;
+  color: var(--text-muted); margin-bottom: 3px; }
+.boundary-effect-table { width: 100%; border-collapse: collapse; font-size: 12px; margin: 6px 0; }
+.boundary-effect-table th, .boundary-effect-table td { text-align: left; padding: 3px 8px;
+  border-bottom: 1px solid var(--border); font-variant-numeric: tabular-nums; }
+.boundary-effect-note { font-size: 12px; color: var(--text-secondary, var(--text-muted)); margin: 6px 0 0; }
+.boundary-residuals { margin-top: 8px; font-size: 12px; }
+.boundary-residuals-label { font-family: var(--mono); font-weight: 700; color: var(--heading); }
+.boundary-roadmap-list { margin: 6px 0 0 18px; font-size: 12.5px; line-height: 1.55; }
+.boundary-roadmap-list li { margin-bottom: 8px; }
+.boundary-killswitch { border-top: 1px solid var(--border); padding-top: 10px; margin-top: 12px;
+  display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+
+/* D · flow rule */
+.boundary-flow-steps { display: grid; gap: 10px; margin: 10px 0; }
+.boundary-flow-step { display: flex; gap: 12px; align-items: flex-start; border: 1px solid var(--border);
+  border-radius: 8px; padding: 10px 12px; font-size: 12.5px; }
+.boundary-flow-num { flex: none; width: 24px; height: 24px; border-radius: 999px; background: var(--accent);
+  color: #fff; font-family: var(--mono); font-weight: 700; font-size: 12px;
+  display: inline-flex; align-items: center; justify-content: center; }
+.boundary-flow-step-title { font-family: var(--mono); font-size: 12px; color: var(--heading); font-weight: 700; }
+.boundary-audit-box { background: color-mix(in srgb, var(--status-warn, var(--accent)) 9%, transparent);
+  border-color: color-mix(in srgb, var(--status-warn, var(--accent)) 40%, transparent); }
+
+/* E · propagation */
+.boundary-prop-chain { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 12px 0; }
+.boundary-prop-node { border: 1px solid var(--border); border-radius: 999px; padding: 5px 12px;
+  font-size: 12px; background: var(--surface-1); }
+.boundary-prop-arrow { color: var(--accent); font-weight: 700; }
+
+/* footer roadmap */
+.boundary-roadmap-row { display: grid; grid-template-columns: 260px 1fr; gap: 12px; padding: 8px 0;
+  border-bottom: 1px solid var(--border); font-size: 12.5px; }
+.boundary-roadmap-key { font-family: var(--mono); font-weight: 700; color: var(--heading); }
+.boundary-nofit-footer { margin-top: 14px; }
+
+@media (max-width: 760px) {
+  .boundary-explainer-cols { grid-template-columns: 1fr; }
+  .boundary-field { grid-template-columns: 1fr; gap: 2px; }
+  .boundary-roadmap-row { grid-template-columns: 1fr; gap: 2px; }
+}
