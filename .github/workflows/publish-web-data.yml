@@ -13,6 +13,11 @@ on:
         description: "Also export the Predictions-page v1/inputs data plane (open-meteo pull)"
         type: boolean
         default: true
+      inputs_back_days:
+        description: "Trailing window (days) for the inputs export; keep <= the local prevruns retention to avoid public-API fallback"
+        required: false
+        default: ""
+
       books_dir:
         description: "Absolute path (runner host) of per-day book parquets to push additively; 'none' = skip"
         required: false
@@ -35,6 +40,8 @@ jobs:
         if: ${{ inputs.include_inputs }}
         env:
           ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
+        env:
+          INPUTS_BACK_DAYS: ${{ inputs.inputs_back_days }}
         run: |
           julia --project=. bin/export_prediction_inputs.jl \
             || echo "::warning::prediction-inputs export failed — core web data still published"
