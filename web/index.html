@@ -72,6 +72,7 @@
   <nav class="tabs" role="tablist" aria-label="Views">
     <button id="tab-horizon" class="tab" role="tab" aria-selected="true" data-view="horizon">Recent days</button>
     <button id="tab-map" class="tab" role="tab" aria-selected="false" data-view="map">Map</button>
+    <button id="tab-solver" class="tab" role="tab" aria-selected="false" data-view="solver">Solver</button>
     <button id="tab-predict" class="tab" role="tab" aria-selected="false" data-view="predict">Predicting RES &amp; loads</button>
     <button id="tab-explorer" class="tab" role="tab" aria-selected="false" data-view="explorer">Zone explorer</button>
     <button id="tab-book" class="tab" role="tab" aria-selected="false" data-view="book">Order book</button>
@@ -111,6 +112,191 @@
         <span id="map-legend-hi" class="map-legend-cap"></span>
       </div>
       <p id="map-comment" class="day-comment"></p>
+    </div>
+  </section>
+
+  <!-- ============ Solver (pillar 1 — the coupled clearing) ============ -->
+  <section id="view-solver" class="view" role="tabpanel" aria-labelledby="tab-solver" hidden>
+
+    <!-- S0 — hero strip -->
+    <div class="chart-card">
+      <div class="chart-head">
+        <p class="hero-kicker">Pillar 1 · constructed</p>
+        <h2 class="chart-title solver-hero-title">One auction, thirty-nine prices.</h2>
+        <p class="chart-sub solver-hero-sub">The same coupled day-ahead auction the real
+          EUPHEMIA engine solves — every zone's book cleared simultaneously under the
+          transmission network, so each zonal price is a property of the whole connected
+          system, not of that zone alone.</p>
+      </div>
+    </div>
+
+    <!-- S1 — the proof: GME €0.00 -->
+    <div class="chart-card solver-proof" style="margin-top:16px">
+      <div class="chart-head">
+        <h2 class="chart-title">Does the solver clear real bids correctly? Yes — exactly.</h2>
+      </div>
+      <div class="case-grid">
+        <div class="case-stat accent">
+          <span class="cs-label">GME · Italy</span>
+          <span class="cs-value">max |Δ| = €0.00</span>
+          <span class="cs-sub">Across the 76 well-determined GME zone-hour cells (of 1,175),
+            the engine reproduces the exchange's own published zonal price to the cent.
+            100% of all 1,175 cells land inside the valid clearing bracket.</span>
+        </div>
+        <div class="case-stat accent">
+          <span class="cs-label">OMIE · Iberia</span>
+          <span class="cs-value">100% ≤ €0.50</span>
+          <span class="cs-sub">On the 232 well-determined Iberian cells (of 480),
+            median |Δ| = €0.00, max €0.45; every one of the 480 cells is inside the valid
+            bracket.</span>
+        </div>
+      </div>
+      <p class="solver-body">
+        We fed the engine the <strong>actual published bid books</strong> of two exchanges
+        that publish them — GME (Italy, 7 days across 4 seasons) and OMIE (the Iberian pool,
+        20 days) — and asked one question: given these real bids, does our solver find the
+        same price the exchange did? On every cell where the bids alone pin a unique price,
+        it does — exactly. <strong>This validates the clearing <em>mechanism</em> in
+        isolation.</strong> It is deliberately a narrow claim: the published books are only
+        the <em>domestic</em> layer of a coupled market, so on most Italian zone-hours the
+        price is actually set by an import at the margin that isn't in the per-zone book at
+        all (77.7% of GME cells). That gap is not a solver error — it is exactly the
+        cross-border coupling the rest of this page is about. Everything hard lives in the
+        <em>inputs</em> to the solver: the book we construct (pillar 5) and the forecasts we
+        predict (pillars 2–4). The solver itself is exact.
+      </p>
+      <details class="table-details solver-layerb">
+        <summary>The two-layer split, in one line</summary>
+        <div class="solver-layerb-body">
+          <table class="solver-mini-table">
+            <thead><tr><th></th><th>domestic-only</th><th>+ observed net position</th></tr></thead>
+            <tbody><tr>
+              <td>median |Δ vs official|</td>
+              <td>€95.2/MWh</td>
+              <td>→&nbsp;&nbsp;€8.4/MWh</td>
+            </tr></tbody>
+          </table>
+          <p class="cs-sub">Injecting the exchange's own net cross-border position — the
+            coupling layer the published book omits — collapses the gap by €87/MWh. The
+            solver was never wrong; the domestic book was incomplete.</p>
+        </div>
+      </details>
+      <p class="chart-sub solver-provenance">Frozen protocol (2026-08-01), fresh Julia process
+        per day, HiGHS solver. Raw exchange bids are not redistributable; the method and every
+        number reproduce from the committed harness.
+        <a href="https://github.com/philokalia-ai/energy-markets/blob/main/docs/experiments/pubbooks-clearing/REPRODUCE.md">REPRODUCE.md</a>
+        ·
+        <a href="https://github.com/philokalia-ai/energy-markets/blob/main/docs/experiments/pubbooks-clearing/results.md">results.md</a>
+      </p>
+    </div>
+
+    <div class="solver-meander" aria-hidden="true"></div>
+
+    <!-- S2 — why a price is a dual -->
+    <div class="chart-card" style="margin-top:16px">
+      <div class="chart-head">
+        <h2 class="chart-title">Why a zonal price is a dual</h2>
+      </div>
+      <p class="solver-body">
+        A market-clearing price is not a number we choose or predict — it <em>falls out</em>
+        of the solve. The auction maximises total economic surplus subject to one balance
+        equation per zone (supply + imports = demand + exports) and one capacity limit per
+        border. The <strong>price of a zone is the shadow price of its balance
+        equation</strong>: the amount total surplus would rise if that zone needed one more
+        MWh. That is why it equals the cost of the <em>marginal</em> unit serving the zone —
+        and why, when a zone leans on imports, its price is set by a plant in a
+        <em>neighbouring</em> zone. The price is an <strong>output</strong> of the coupled
+        optimisation, the dual variable, not an input to it.
+      </p>
+      <div class="chart-wrap solver-dual-wrap" id="solver-dual"></div>
+      <p class="chart-sub solver-caption">When every border constraint is slack, all coupled
+        zones share one price. When a border binds — flow at its ATC limit — the two zones it
+        joins can hold different prices, and the difference is that border's congestion rent.
+        The next two panels show both cases.</p>
+    </div>
+
+    <!-- S3 — clear it yourself: the two-zone toy -->
+    <div class="chart-card" style="margin-top:16px">
+      <div class="chart-head">
+        <h2 class="chart-title">Clear it yourself — two zones, one line</h2>
+        <p class="chart-sub">
+          <span class="chip solver-synth-chip">SYNTHETIC · illustrative two-block books, not real bids</span>
+        </p>
+      </div>
+      <div class="solver-toy-controls">
+        <label class="solver-atc-label" for="solver-atc">
+          <span class="filter-label">ATC (NORTH → SOUTH) — <span id="solver-atc-val"></span></span>
+          <input id="solver-atc" type="range" min="0" max="2500" step="50" value="800"
+                 aria-label="ATC between NORTH and SOUTH in MW"
+                 list="solver-atc-ticks">
+          <datalist id="solver-atc-ticks">
+            <option value="0" label="islanded"></option>
+            <option value="500" label="NORTH's dear block"></option>
+            <option value="2000" label="fully coupled"></option>
+          </datalist>
+        </label>
+      </div>
+      <div class="chart-wrap solver-toy" id="solver-toy"></div>
+      <p class="chart-sub solver-caption">The numbers here are invented to make the mechanism
+        visible in two blocks. The real engine does this with 39 zones and thousands of real
+        unit offers at once — see a real congested hour just below, and a real full book on
+        the <a href="#view=book">Order-book page</a>. Dragging ATC from 0 → high walks
+        islanded → congested → coupled: the price gap closes to zero, and the congestion rent
+        appears exactly when the flow reaches the line's limit.</p>
+    </div>
+
+    <!-- S4 — congestion on a real hour -->
+    <div class="chart-card" style="margin-top:16px">
+      <div class="chart-head">
+        <h2 class="chart-title">Congestion on a real hour</h2>
+        <p class="chart-sub">Now the same story on real model output. Each exemplar opens the
+          border between two zones that cleared in the same coupled auction. Prices and the
+          cross-border flow are read live from the published record.</p>
+      </div>
+      <div id="solver-exemplar-steps" class="segmented" role="group" aria-label="Congestion exemplar"></div>
+      <div class="chart-wrap solver-exemplar" id="solver-exemplar"></div>
+      <p class="chart-sub solver-caption">Both zones cleared in the same auction; the full line
+        is why they hold different prices. Equal prices would mean the border had room to
+        spare. These are hours from the reproducible historical record, where the full coupled
+        solve and its cross-border flows are persisted — the daily ex-ante forecast does not
+        save flows, so a forecast-only day shows an empty state here.</p>
+    </div>
+
+    <!-- S5 — the second pass: anchor feedback -->
+    <div class="chart-card" style="margin-top:16px">
+      <div class="chart-head">
+        <h2 class="chart-title">The second pass — anchor feedback</h2>
+      </div>
+      <p class="solver-body">
+        Reservoir hydro and French nuclear don't have a fuel cost that sets their bid — they
+        have an <em>opportunity</em> cost: the value of holding the water (or the nuclear
+        output) for a better hour. But "a better hour" is defined by the coupled price, which
+        doesn't exist until the market clears. So the footprint clears <strong>twice</strong>:
+        the first pass produces a coupled price; the hydro and nuclear fleets re-bid their
+        opportunity cost against <em>that</em> price; the second pass re-clears. The result is
+        water values that are consistent across the whole connected system — a Norwegian
+        reservoir and a French reactor both pricing against the same market-wide signal.
+      </p>
+      <div class="solver-pass-controls">
+        <button id="solver-pass-step" type="button" class="book-play">▸ step</button>
+      </div>
+      <div class="chart-wrap solver-pass" id="solver-pass"></div>
+      <p class="chart-sub solver-caption">A two-pass approximation, not a full storage
+        optimisation — the storage charge/discharge cycle is a known modelling gap, kept
+        visible (see the model map on the <a href="./about.html#model-map">About page</a>).</p>
+    </div>
+
+    <!-- S6 — where this sits -->
+    <div class="book-cta" style="margin-top:18px">
+      <p class="book-cta-text"><strong>← Its inputs: the order book.</strong> The solver clears
+        the books pillar 5 builds. See a real zone's full per-unit supply ladder and where it
+        crosses.</p>
+      <a class="book-cta-btn" href="#view=book">Open the order book &rarr;</a>
+    </div>
+    <div class="book-cta" style="margin-top:12px">
+      <p class="book-cta-text"><strong>Its outputs: the price map.</strong> Every zonal price on
+        this page is one cell of the map. See all 39 at once, any day.</p>
+      <a class="book-cta-btn" href="#view=map">Open the price map &rarr;</a>
     </div>
   </section>
 

@@ -1229,3 +1229,73 @@ html, body { overflow-x: hidden; }
   padding-top: 12px;
   font-size: 0.9rem;
 }
+
+/* ---------- Solver view (pillar 1 — the coupled clearing) ---------- */
+.solver-hero-title { font-size: clamp(20px, 3.4vw, 30px); font-family: var(--didot); }
+.solver-hero-sub { font-size: 14px; color: var(--text-secondary); max-width: 68em; line-height: 1.55; }
+.solver-body {
+  color: var(--text-secondary);
+  font-size: 0.95rem;
+  line-height: 1.62;
+  max-width: 72em;
+  margin: 12px 0 0;
+}
+.solver-body strong { color: var(--heading); }
+.solver-caption { max-width: 72em; line-height: 1.5; margin-top: 10px; }
+.solver-caption a { color: var(--accent); }
+.solver-provenance { margin-top: 14px; font-size: 12px; }
+.solver-provenance a { color: var(--accent); }
+
+/* the meander divider (the .prose one is prose-scoped; this is view-scoped) */
+.solver-meander {
+  margin: 22px 0 6px;
+  height: 12px;
+  background-image: repeating-linear-gradient(90deg, var(--line) 0 2px, transparent 2px 14px);
+  opacity: 0.9;
+}
+
+.solver-proof .case-grid { margin-top: 4px; }
+.solver-mini-table { border-collapse: collapse; margin: 6px 0 8px; font-size: 0.9rem; }
+.solver-mini-table th, .solver-mini-table td {
+  padding: 5px 14px 5px 0;
+  text-align: left;
+  font-variant-numeric: tabular-nums;
+  border-bottom: 1px solid var(--grid);
+}
+.solver-mini-table th {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+.solver-mini-table td { font-family: var(--mono); color: var(--heading); }
+.solver-layerb-body { margin-top: 8px; }
+
+.solver-synth-chip { border-color: var(--terracotta-soft); color: var(--terracotta); }
+
+.solver-toy-controls { margin: 8px 0 4px; }
+.solver-atc-label { display: flex; flex-direction: column; gap: 6px; max-width: 520px; }
+.solver-atc-label input[type="range"] { width: 100%; }
+
+.solver-toy svg, .solver-exemplar svg, .solver-pass svg, .solver-dual-wrap svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.solver-exemplar-note {
+  margin: 8px 0 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  max-width: 68em;
+}
+.solver-pass-controls { margin: 8px 0 2px; }
+.solver-pass-cap {
+  margin: 8px 0 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  max-width: 68em;
+}
+#solver-exemplar-steps { margin: 6px 0 8px; }

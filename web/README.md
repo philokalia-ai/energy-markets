@@ -19,6 +19,11 @@ forecast per delivery day** (deeper leads were noise). Views:
   (post data-reset) days appear inline with a reset note. Below it, "What we said,
   when" shows one delivery day's freshest forecast vs actual.
 - **Map** — day-average price per bidding zone.
+- **Solver** — pillar 1: how the 39-zone coupled auction produces those prices.
+  The GME/OMIE €0.00 validation, "a price is a dual", an interactive two-zone toy
+  (drag the ATC slider to walk islanded → congested → coupled — the clear is a
+  closed-form merit crossing in JS), a real congested border-hour opened live from
+  `/api/v1/flows` + `/api/v1/zones`, and the two-pass anchor click-through.
 - **Predicting RES & loads** — the open input model. A Europe map colours each of
   the 5 pilot zones (GR, ES, DE_LU, SE2, NL) by tomorrow's predicted **midday RES
   coverage** (predicted wind+solar ÷ predicted load) and flags collapse-risk zones;

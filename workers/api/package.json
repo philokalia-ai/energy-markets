@@ -10,6 +10,7 @@
     "test:units": "node test/units.test.mjs",
     "test:flows": "node test/flows.test.mjs",
     "test:table": "node test/book_table.test.mjs",
+    "test:solver": "node test/solver_toy.test.mjs",
     "dev": "wrangler dev --config wrangler.toml",
     "deploy": "wrangler deploy --config wrangler.toml"
   },
