@@ -18,9 +18,14 @@
 #     `orthodox_easter` (rollout-39 amendment 1 retrain; the pilot's Western-Easter
 #     approximation for GR was fixed here and in features.py IN LOCKSTEP). ES/DE/SE
 #     keep the Western `easter_gregorian`. `ml_holidays` is NOT `holidays_for_country`.
-#   • features.py carries a fixed-holiday map for GR/BG/RO/RS/ES/DE/SE only; every
-#     other country (incl. NL, FR, PL, …) gets an EMPTY holiday set → `is_hol` ≡ 0
-#     there. Mirrored — a zone whose load model needs holidays loses to its pack.
+#   • features.py carries fixed+movable holiday maps for all 25 footprint countries
+#     (fit-iteration 2 expanded GR/BG/RO/RS/ES/DE/SE → the full footprint; the 18
+#     added maps are all Western-Easter). Mirrored byte-for-byte here. The 18 new
+#     maps are INERT for the currently-committed models — those trained is_hol≡0 in
+#     their countries so is_hol is a zero-variance, unsplit feature; the maps only
+#     bite at the NEXT retrain (measured: no committed load model splits on is_hol
+#     outside the original 7 mapped countries). Any country still off the map (e.g.
+#     a non-footprint code) gets an EMPTY set.
 #   • Degree-hour bases are the hard-coded 21.0 / 16.5 °C from features.py, not the
 #     per-zone pack bases.
 #   • `is_hol` keys on the UTC calendar date of the hour (features.py normalizes the
@@ -250,10 +255,39 @@ function ml_holidays(country::AbstractString, years)
         "RS" => ((1,1),(1,2),(1,7),(2,15),(2,16),(5,1),(5,2),(11,11)),
         "ES" => ((1,1),(1,6),(5,1),(8,15),(10,12),(11,1),(12,6),(12,8),(12,25)),
         "DE" => ((1,1),(5,1),(10,3),(12,25),(12,26)),
-        "SE" => ((1,1),(1,6),(5,1),(6,6),(12,25),(12,26)))
+        "SE" => ((1,1),(1,6),(5,1),(6,6),(12,25),(12,26)),
+        # fit-iteration 2: national fixed holidays for the remaining footprint
+        # countries (all Western-Easter). Inert until the next retrain — the
+        # committed models trained is_hol≡0 here so no tree splits on it.
+        "AT" => ((1,1),(1,6),(5,1),(8,15),(10,26),(11,1),(12,8),(12,25),(12,26)),
+        "BE" => ((1,1),(5,1),(7,21),(8,15),(11,1),(11,11),(12,25)),
+        "CH" => ((1,1),(8,1),(12,25),(12,26)),
+        "CZ" => ((1,1),(5,1),(5,8),(7,5),(7,6),(9,28),(10,28),(11,17),(12,24),(12,25),(12,26)),
+        "DK" => ((1,1),(12,25),(12,26)),
+        "EE" => ((1,1),(2,24),(5,1),(6,23),(6,24),(8,20),(12,24),(12,25),(12,26)),
+        "FI" => ((1,1),(1,6),(5,1),(12,6),(12,24),(12,25),(12,26)),
+        "FR" => ((1,1),(5,1),(5,8),(7,14),(8,15),(11,1),(11,11),(12,25)),
+        "HU" => ((1,1),(3,15),(5,1),(8,20),(10,23),(11,1),(12,25),(12,26)),
+        "IT" => ((1,1),(1,6),(4,25),(5,1),(6,2),(8,15),(11,1),(12,8),(12,25),(12,26)),
+        "LT" => ((1,1),(2,16),(3,11),(5,1),(6,24),(7,6),(8,15),(11,1),(11,2),(12,24),(12,25),(12,26)),
+        "LV" => ((1,1),(5,1),(5,4),(6,23),(6,24),(11,18),(12,24),(12,25),(12,26),(12,31)),
+        "NL" => ((1,1),(4,27),(12,25),(12,26)),
+        "NO" => ((1,1),(5,1),(5,17),(12,25),(12,26)),
+        "PL" => ((1,1),(1,6),(5,1),(5,3),(8,15),(11,1),(11,11),(12,25),(12,26)),
+        "PT" => ((1,1),(4,25),(5,1),(6,10),(8,15),(10,5),(11,1),(12,1),(12,8),(12,25)),
+        "SI" => ((1,1),(1,2),(2,8),(4,27),(5,1),(5,2),(6,25),(8,15),(10,31),(11,1),(12,25),(12,26)),
+        "SK" => ((1,1),(1,6),(5,1),(5,8),(7,5),(8,29),(9,1),(9,15),(11,1),(11,17),(12,24),(12,25),(12,26)))
     movable_map = Dict(
         "GR" => (-48,-2,0,1,50), "BG" => (-2,-1,0,1), "RO" => (-2,0,1,49,50),
-        "RS" => (-2,0,1), "ES" => (-2,0), "DE" => (-2,1,39,50), "SE" => (-2,0,1,39,49))
+        "RS" => (-2,0,1), "ES" => (-2,0), "DE" => (-2,1,39,50), "SE" => (-2,0,1,39,49),
+        # fit-iteration 2 (Western-Easter offsets: -3 Maundy Thu, -2 Good Fri,
+        # 0 Easter Sun, 1 Easter Mon, 39 Ascension, 49 Whit Sun, 50 Whit Mon, 60 Corpus).
+        "AT" => (1,39,50,60), "BE" => (1,39,50), "CH" => (-2,1,39,50),
+        "CZ" => (-2,1), "DK" => (-3,-2,0,1,39,50), "EE" => (-2,0,49),
+        "FI" => (-2,0,1,39,49), "FR" => (1,39,50), "HU" => (-2,0,1,49,50),
+        "IT" => (0,1), "LT" => (0,1), "LV" => (-2,0,1),
+        "NL" => (-2,1,39,50), "NO" => (-3,-2,0,1,39,49,50), "PL" => (0,1,49,60),
+        "PT" => (-2,0,60), "SI" => (0,1), "SK" => (-2,0,1))
     hs = Set{Date}()
     for y in years
         E = orthodox ? ml_orthodox_easter(y) : easter_gregorian(y)

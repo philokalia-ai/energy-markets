@@ -189,3 +189,20 @@ HU_load. `meta.json` winners set to `false` for the four; per the winners-only-
 committed invariant their `.txt` dumps + meta model entries were removed (72 committed
 models ⇔ 72 NEW winners). Direction is one-way conservative (a guard only demotes),
 so every other winner is untouched. `test/test_ml_inputs.jl` stays green (214/214).
+
+**Iteration 2 — expand the national holiday maps (fixes R6). IMPLEMENTED, LANDS
+AT NEXT RETRAIN.** The holiday map covered only 7 countries (GR/BG/RO/RS/ES/DE/SE);
+the other 18 footprint countries carried an empty set, so `is_hol ≡ 0` and their
+load models lost the calendar signal. Added national fixed + Western-Easter movable
+maps for **AT, BE, CH, CZ, DK, EE, FI, FR, HU, IT, LT, LV, NL, NO, PL, PT, SI, SK**
+to both `features.py` (training authority) and `ml_inputs.jl` (`ml_holidays`), in
+lockstep. Verified **byte-identical python↔Julia** across all 25 countries for
+2024-2027 (cmp_holidays.py → `LOCKSTEP_OK`; test asserts anchor dates for FR/PL/NL/
+IT/NO). **Deliberately NOT retrained now:** this changes the `is_hol` feature, so
+retraining under it is a separate scored step. It is provably **inert for the
+currently-committed models** — measured, only the original 7 mapped countries' load
+models split on `is_hol` (SE1-4/GR/BG/RO/RS/ES/DE_LU); every unmapped-country model
+has **zero** `is_hol` splits (is_hol was zero-variance in their training), so the
+new maps cannot change any current serve output. They activate at the next retrain,
+where the expected effect (R6) is more load zones flipping to ML.
+`test/test_ml_inputs.jl` green (217/217).
