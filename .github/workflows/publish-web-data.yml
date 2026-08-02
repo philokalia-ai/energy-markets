@@ -40,7 +40,6 @@ jobs:
         if: ${{ inputs.include_inputs }}
         env:
           ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
-        env:
           INPUTS_BACK_DAYS: ${{ inputs.inputs_back_days }}
         run: |
           julia --project=. bin/export_prediction_inputs.jl \
