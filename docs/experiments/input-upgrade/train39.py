@@ -4,18 +4,26 @@ holidays) + the 34 new footprint zones, scores NEW vs the committed linear packs
 the frozen VALID window, and emits a per-zone-winner ship map. Reuses the FROZEN
 protocol exactly (features.py functions imported for holiday/calendar lockstep)."""
 import os, sys, json, glob, numpy as np, pandas as pd, lightgbm as lgb
-sys.path.insert(0, "/home/pgeorgakopoulos/armada/energy-markets/.claude/worktrees/agent-a534d70e414d18b80/docs/experiments/input-upgrade")
+# fit-iteration 4: import the CO-LOCATED features.py (carries iteration 2's 25-country
+# holiday maps, which activate on this retrain) rather than a stale sibling worktree.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import features as F   # holidays(), orthodox_easter(), sinel(), eu_dst_offset(), S0
 
 SP=F.SP; BIN="/home/pgeorgakopoulos/armada/energy-markets/bin"
+COMMITTED=f"{BIN}/input_models"   # iter4: the currently-shipped models, scored on the NEW VALID
 GFS=f"{SP}/gfs"
 RESP=json.load(open(f"{BIN}/res_models_v2.json"))["zones"]
 LOADP=json.load(open(f"{BIN}/load_models_v1.json"))["zones"]
 GEOM=json.load(open(f"{SP}/geom39.json"))
 OUTDIR=f"{SP}/models39"; os.makedirs(OUTDIR, exist_ok=True)
 S0=F.S0
-TRAIN_END=pd.Timestamp("2026-04-30 23:00")
-VAL0,VAL1=pd.Timestamp("2026-05-01"),pd.Timestamp("2026-07-22 23:00")
+# fit-iteration 4 (fixes R5, staleness): extend train through the latest settled
+# month and hold out the last ~6 weeks time-ordered. Dense GFS previous_day1..7
+# vintages + ENTSO-E DA targets run to 2026-07-27, so VALID = 2026-06-15…07-27
+# (6 weeks) and train covers 2024-07…2026-06-14. Was TRAIN_END 2026-04-30 / VALID
+# 2026-05-01…07-22 (models ~3 months stale at the Aug-2026 audit).
+TRAIN_END=pd.Timestamp("2026-06-14 23:00")
+VAL0,VAL1=pd.Timestamp("2026-06-15"),pd.Timestamp("2026-07-27 23:00")
 
 ZONES=[z for z in (["GR"]+sorted(set(GEOM)-{"GR","ES","DE_LU","SE2","NL"})) ]
 ZONES=[z for z in ZONES if z in GEOM]
@@ -143,7 +151,7 @@ def baseline_load(z,la):
 lgb_params=dict(objective="l1",num_leaves=31,learning_rate=0.05,n_estimators=600,
     min_child_samples=40,subsample=0.8,subsample_freq=1,colsample_bytree=0.8,reg_lambda=1.0,verbosity=-1)
 CORR_GUARD_TOL=0.02   # fit-iteration 1 (R1): NEW may lose at most this much VALID corr vs pack
-scorecard=[]; meta={}; winners={}
+scorecard=[]; meta={}; winners={}; valid_rows=[]   # valid_rows: per-row VALID preds (iter4 debias/collapse)
 
 def fit_score(z,target,df,feat_cols,tgt_col,baseline_pred,clamp_night=False,ref_col=None):
     d=df.dropna(subset=[tgt_col]).copy()
@@ -165,6 +173,17 @@ def fit_score(z,target,df,feat_cols,tgt_col,baseline_pred,clamp_night=False,ref_
     raw=m.predict(va[feat_cols]); pv=np.maximum(raw*(va[ref_col].values if ref_col is not None else 1.0),0.0)
     if clamp_night: pv=np.where(va["se"].values<=1e-6,0.0,pv)
     bv=baseline_pred.reindex(va.index).values
+    # iter4: score the CURRENTLY-SHIPPED committed model on this same NEW VALID tail
+    # (the "before" for the retrain — verify: NEW not worse than what we ship today).
+    old_txt=f"{COMMITTED}/{z}_{target}.txt"; ov=np.full(len(va),np.nan)
+    if os.path.exists(old_txt):
+        try:
+            ob=lgb.Booster(model_file=old_txt)
+            oraw=ob.predict(va[feat_cols])
+            ov=np.maximum(oraw*(va[ref_col].values if ref_col is not None else 1.0),0.0)
+            if clamp_night: ov=np.where(va["se"].values<=1e-6,0.0,ov)
+        except Exception as e: print(f"  {z}_{target}: old-model score failed ({e})")
+    mo=metrics(ov,va[tgt_col].values)
     mn=metrics(pv,va[tgt_col].values); mb=metrics(bv,va[tgt_col].values)
     # Winner selection: NEW ships only when it beats the pack on VALID MAE AND does
     # not lose more than CORR_GUARD_TOL correlation vs the pack (fit-iteration 1,
@@ -175,11 +194,15 @@ def fit_score(z,target,df,feat_cols,tgt_col,baseline_pred,clamp_night=False,ref_
     win = mae_better and corr_ok
     scorecard.append(dict(zone=z,target=target,model="NEW",win=win,**mn))
     scorecard.append(dict(zone=z,target=target,model="pack",win=win,**mb))
+    scorecard.append(dict(zone=z,target=target,model="old",win=win,**mo))
     winners[(z,target)]=bool(win)
+    # per-row VALID dump (iter4): affine-debias re-fit + before/after scoring + collapse
+    valid_rows.append(pd.DataFrame(dict(h=va["h"].values,zone=z,target=target,
+        pred_new=pv,pred_pack=bv,pred_old=ov,tgt=va[tgt_col].values)))
     m.booster_.save_model(f"{OUTDIR}/{z}_{target}.txt")
     meta[f"{z}_{target}"]=dict(feat_cols=feat_cols,best_iter=int(best),clamp_night=clamp_night,
         n_train=int(len(tr)),ref_col=ref_col)
-    print(f"  {z}_{target:5s} NEW mae={mn['mae']:.1f} corr={mn['corr']:.3f} | pack mae={mb['mae']:.1f} corr={mb['corr']:.3f} -> {'NEW' if win else 'pack'}")
+    print(f"  {z}_{target:5s} NEW mae={mn['mae']:.1f} corr={mn['corr']:.3f} | pack mae={mb['mae']:.1f} corr={mb['corr']:.3f} | old mae={mo['mae']:.1f} corr={mo['corr']:.3f} -> {'NEW' if win else 'pack'}")
 
 for z in ZONES:
     print(f"[{z}]",flush=True)
@@ -223,6 +246,7 @@ for z in ZONES:
     fit_score(z,"load",la,feat_l,"load_da",bl)
 
 sc=pd.DataFrame(scorecard); sc.to_csv(f"{SP}/scorecard39.csv",index=False)
+if valid_rows: pd.concat(valid_rows,ignore_index=True).to_parquet(f"{SP}/valid_preds39.parquet")
 json.dump(meta,open(f"{OUTDIR}/meta.json","w"),indent=0)
 json.dump({f"{z}|{t}":w for (z,t),w in winners.items()},open(f"{SP}/winners39.json","w"),indent=1)
 print("\n=== WINNERS (NEW beats pack on VALID) ===")

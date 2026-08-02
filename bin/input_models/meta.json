@@ -1,48 +1,4 @@
 {
-"GR_load": {
-"feat_cols": [
-"T",
-"Tma",
-"cdh",
-"hdh",
-"cdh2",
-"hdh2",
-"ghi",
-"hod",
-"dow",
-"is_hol",
-"doy_s",
-"doy_c",
-"doy_s2",
-"doy_c2",
-"ar1",
-"ar7"
-],
-"best_iter": 600,
-"clamp_night": false,
-"n_train": 15719,
-"ref_col": null
-},
-"GR_solar": {
-"feat_cols": [
-"ghi",
-"cloud",
-"pres",
-"se",
-"clearness",
-"hod",
-"doy_s",
-"doy_c",
-"doy_s2",
-"doy_c2",
-"cap95_solar",
-"v100m"
-],
-"best_iter": 442,
-"clamp_night": true,
-"n_train": 15719,
-"ref_col": "cap95_solar"
-},
 "AT_load": {
 "feat_cols": [
 "T",
@@ -62,9 +18,9 @@
 "ar1",
 "ar7"
 ],
-"best_iter": 128,
+"best_iter": 595,
 "clamp_night": false,
-"n_train": 15744,
+"n_train": 16824,
 "ref_col": null
 },
 "AT_wind": {
@@ -80,9 +36,9 @@
 "doy_c2",
 "cap95_wind"
 ],
-"best_iter": 114,
+"best_iter": 138,
 "clamp_night": false,
-"n_train": 15744,
+"n_train": 16824,
 "ref_col": "cap95_wind"
 },
 "BE_load": {
@@ -104,9 +60,9 @@
 "ar1",
 "ar7"
 ],
-"best_iter": 73,
+"best_iter": 94,
 "clamp_night": false,
-"n_train": 15648,
+"n_train": 16728,
 "ref_col": null
 },
 "BE_solar": {
@@ -124,9 +80,9 @@
 "cap95_solar",
 "v100m"
 ],
-"best_iter": 336,
+"best_iter": 125,
 "clamp_night": true,
-"n_train": 15744,
+"n_train": 16824,
 "ref_col": "cap95_solar"
 },
 "BG_load": {
@@ -150,7 +106,7 @@
 ],
 "best_iter": 159,
 "clamp_night": false,
-"n_train": 15720,
+"n_train": 16776,
 "ref_col": null
 },
 "BG_solar": {
@@ -168,10 +124,28 @@
 "cap95_solar",
 "v100m"
 ],
-"best_iter": 256,
+"best_iter": 231,
 "clamp_night": true,
-"n_train": 15437,
+"n_train": 16516,
 "ref_col": "cap95_solar"
+},
+"BG_wind": {
+"feat_cols": [
+"v100m",
+"cloud",
+"pres",
+"hod",
+"dow",
+"doy_s",
+"doy_c",
+"doy_s2",
+"doy_c2",
+"cap95_wind"
+],
+"best_iter": 210,
+"clamp_night": false,
+"n_train": 16771,
+"ref_col": "cap95_wind"
 },
 "CH_load": {
 "feat_cols": [
@@ -192,10 +166,30 @@
 "ar1",
 "ar7"
 ],
-"best_iter": 132,
+"best_iter": 195,
 "clamp_night": false,
-"n_train": 15744,
+"n_train": 16824,
 "ref_col": null
+},
+"CH_solar": {
+"feat_cols": [
+"ghi",
+"cloud",
+"pres",
+"se",
+"clearness",
+"hod",
+"doy_s",
+"doy_c",
+"doy_s2",
+"doy_c2",
+"cap95_solar",
+"v100m"
+],
+"best_iter": 137,
+"clamp_night": true,
+"n_train": 16821,
+"ref_col": "cap95_solar"
 },
 "CZ_load": {
 "feat_cols": [
@@ -216,9 +210,9 @@
 "ar1",
 "ar7"
 ],
-"best_iter": 291,
+"best_iter": 583,
 "clamp_night": false,
-"n_train": 15744,
+"n_train": 16824,
 "ref_col": null
 },
 "CZ_solar": {
@@ -236,9 +230,9 @@
 "cap95_solar",
 "v100m"
 ],
-"best_iter": 346,
+"best_iter": 135,
 "clamp_night": true,
-"n_train": 15744,
+"n_train": 16824,
 "ref_col": "cap95_solar"
 },
 "DK1_load": {
@@ -260,28 +254,10 @@
 "ar1",
 "ar7"
 ],
-"best_iter": 142,
+"best_iter": 106,
 "clamp_night": false,
-"n_train": 15744,
+"n_train": 16824,
 "ref_col": null
-},
-"DK1_wind": {
-"feat_cols": [
-"v100m",
-"cloud",
-"pres",
-"hod",
-"dow",
-"doy_s",
-"doy_c",
-"doy_s2",
-"doy_c2",
-"cap95_wind"
-],
-"best_iter": 144,
-"clamp_night": false,
-"n_train": 15630,
-"ref_col": "cap95_wind"
 },
 "DK2_load": {
 "feat_cols": [
@@ -302,9 +278,9 @@
 "ar1",
 "ar7"
 ],
-"best_iter": 93,
+"best_iter": 81,
 "clamp_night": false,
-"n_train": 15744,
+"n_train": 16824,
 "ref_col": null
 },
 "EE_load": {
@@ -326,9 +302,9 @@
 "ar1",
 "ar7"
 ],
-"best_iter": 172,
+"best_iter": 76,
 "clamp_night": false,
-"n_train": 15744,
+"n_train": 16824,
 "ref_col": null
 },
 "FI_load": {
@@ -350,9 +326,9 @@
 "ar1",
 "ar7"
 ],
-"best_iter": 262,
+"best_iter": 221,
 "clamp_night": false,
-"n_train": 15744,
+"n_train": 16824,
 "ref_col": null
 },
 "FI_solar": {
@@ -370,9 +346,9 @@
 "cap95_solar",
 "v100m"
 ],
-"best_iter": 379,
+"best_iter": 302,
 "clamp_night": true,
-"n_train": 15696,
+"n_train": 16776,
 "ref_col": "cap95_solar"
 },
 "FI_wind": {
@@ -388,9 +364,9 @@
 "doy_c2",
 "cap95_wind"
 ],
-"best_iter": 154,
+"best_iter": 157,
 "clamp_night": false,
-"n_train": 15720,
+"n_train": 16800,
 "ref_col": "cap95_wind"
 },
 "FR_load": {
@@ -412,9 +388,77 @@
 "ar1",
 "ar7"
 ],
-"best_iter": 591,
+"best_iter": 447,
 "clamp_night": false,
-"n_train": 15744,
+"n_train": 16824,
+"ref_col": null
+},
+"GR_load": {
+"feat_cols": [
+"T",
+"Tma",
+"cdh",
+"hdh",
+"cdh2",
+"hdh2",
+"ghi",
+"hod",
+"dow",
+"is_hol",
+"doy_s",
+"doy_c",
+"doy_s2",
+"doy_c2",
+"ar1",
+"ar7"
+],
+"best_iter": 455,
+"clamp_night": false,
+"n_train": 16799,
+"ref_col": null
+},
+"GR_solar": {
+"feat_cols": [
+"ghi",
+"cloud",
+"pres",
+"se",
+"clearness",
+"hod",
+"doy_s",
+"doy_c",
+"doy_s2",
+"doy_c2",
+"cap95_solar",
+"v100m"
+],
+"best_iter": 159,
+"clamp_night": true,
+"n_train": 16799,
+"ref_col": "cap95_solar"
+},
+"HU_load": {
+"feat_cols": [
+"T",
+"Tma",
+"cdh",
+"hdh",
+"cdh2",
+"hdh2",
+"ghi",
+"hod",
+"dow",
+"is_hol",
+"doy_s",
+"doy_c",
+"doy_s2",
+"doy_c2",
+"ar1",
+"ar7"
+],
+"best_iter": 190,
+"clamp_night": false,
+"n_train": 16824,
 "ref_col": null
 },
 "HU_solar": {
@@ -432,10 +476,28 @@
 "cap95_solar",
 "v100m"
 ],
-"best_iter": 438,
+"best_iter": 100,
 "clamp_night": true,
-"n_train": 15744,
+"n_train": 16824,
 "ref_col": "cap95_solar"
+},
+"HU_wind": {
+"feat_cols": [
+"v100m",
+"cloud",
+"pres",
+"hod",
+"dow",
+"doy_s",
+"doy_c",
+"doy_s2",
+"doy_c2",
+"cap95_wind"
+],
+"best_iter": 126,
+"clamp_night": false,
+"n_train": 16816,
+"ref_col": "cap95_wind"
 },
 "IT-CNORTH_load": {
 "feat_cols": [
@@ -456,9 +518,9 @@
 "ar1",
 "ar7"
 ],
-"best_iter": 240,
+"best_iter": 327,
 "clamp_night": false,
-"n_train": 15744,
+"n_train": 16824,
 "ref_col": null
 },
 "IT-CNORTH_solar": {
@@ -476,9 +538,9 @@
 "cap95_solar",
 "v100m"
 ],
-"best_iter": 155,
+"best_iter": 124,
 "clamp_night": true,
-"n_train": 15623,
+"n_train": 16703,
 "ref_col": "cap95_solar"
 },
 "IT-CSOUTH_load": {
@@ -500,9 +562,9 @@
 "ar1",
 "ar7"
 ],
-"best_iter": 91,
+"best_iter": 220,
 "clamp_night": false,
-"n_train": 15744,
+"n_train": 16824,
 "ref_col": null
 },
 "IT-CSOUTH_solar": {
@@ -520,28 +582,10 @@
 "cap95_solar",
 "v100m"
 ],
-"best_iter": 128,
+"best_iter": 451,
 "clamp_night": true,
-"n_train": 15623,
+"n_train": 16703,
 "ref_col": "cap95_solar"
-},
-"IT-CSOUTH_wind": {
-"feat_cols": [
-"v100m",
-"cloud",
-"pres",
-"hod",
-"dow",
-"doy_s",
-"doy_c",
-"doy_s2",
-"doy_c2",
-"cap95_wind"
-],
-"best_iter": 94,
-"clamp_night": false,
-"n_train": 15623,
-"ref_col": "cap95_wind"
 },
 "IT-Calabria_load": {
 "feat_cols": [
@@ -562,9 +606,9 @@
 "ar1",
 "ar7"
 ],
-"best_iter": 80,
+"best_iter": 104,
 "clamp_night": false,
-"n_train": 15744,
+"n_train": 16824,
 "ref_col": null
 },
 "IT-Calabria_solar": {
@@ -582,9 +626,9 @@
 "cap95_solar",
 "v100m"
 ],
-"best_iter": 276,
+"best_iter": 497,
 "clamp_night": true,
-"n_train": 15623,
+"n_train": 16703,
 "ref_col": "cap95_solar"
 },
 "IT-NORTH_load": {
@@ -606,9 +650,9 @@
 "ar1",
 "ar7"
 ],
-"best_iter": 152,
+"best_iter": 481,
 "clamp_night": false,
-"n_train": 15744,
+"n_train": 16824,
 "ref_col": null
 },
 "IT-NORTH_solar": {
@@ -626,9 +670,9 @@
 "cap95_solar",
 "v100m"
 ],
-"best_iter": 78,
+"best_iter": 67,
 "clamp_night": true,
-"n_train": 15623,
+"n_train": 16703,
 "ref_col": "cap95_solar"
 },
 "IT-SOUTH_load": {
@@ -650,9 +694,9 @@
 "ar1",
 "ar7"
 ],
-"best_iter": 213,
+"best_iter": 141,
 "clamp_night": false,
-"n_train": 15744,
+"n_train": 16824,
 "ref_col": null
 },
 "IT-SOUTH_solar": {
@@ -670,9 +714,9 @@
 "cap95_solar",
 "v100m"
 ],
-"best_iter": 118,
+"best_iter": 466,
 "clamp_night": true,
-"n_train": 15623,
+"n_train": 16703,
 "ref_col": "cap95_solar"
 },
 "IT-SOUTH_wind": {
@@ -688,9 +732,9 @@
 "doy_c2",
 "cap95_wind"
 ],
-"best_iter": 69,
+"best_iter": 191,
 "clamp_night": false,
-"n_train": 15623,
+"n_train": 16703,
 "ref_col": "cap95_wind"
 },
 "IT-Sardinia_load": {
@@ -712,9 +756,9 @@
 "ar1",
 "ar7"
 ],
-"best_iter": 229,
+"best_iter": 241,
 "clamp_night": false,
-"n_train": 15744,
+"n_train": 16824,
 "ref_col": null
 },
 "IT-Sardinia_solar": {
@@ -732,10 +776,28 @@
 "cap95_solar",
 "v100m"
 ],
-"best_iter": 87,
+"best_iter": 211,
 "clamp_night": true,
-"n_train": 15623,
+"n_train": 16703,
 "ref_col": "cap95_solar"
+},
+"IT-Sardinia_wind": {
+"feat_cols": [
+"v100m",
+"cloud",
+"pres",
+"hod",
+"dow",
+"doy_s",
+"doy_c",
+"doy_s2",
+"doy_c2",
+"cap95_wind"
+],
+"best_iter": 204,
+"clamp_night": false,
+"n_train": 16703,
+"ref_col": "cap95_wind"
 },
 "IT-Sicily_load": {
 "feat_cols": [
@@ -756,9 +818,9 @@
 "ar1",
 "ar7"
 ],
-"best_iter": 171,
+"best_iter": 597,
 "clamp_night": false,
-"n_train": 15744,
+"n_train": 16824,
 "ref_col": null
 },
 "IT-Sicily_solar": {
@@ -776,9 +838,9 @@
 "cap95_solar",
 "v100m"
 ],
-"best_iter": 478,
+"best_iter": 70,
 "clamp_night": true,
-"n_train": 15623,
+"n_train": 16703,
 "ref_col": "cap95_solar"
 },
 "IT-Sicily_wind": {
@@ -794,9 +856,9 @@
 "doy_c2",
 "cap95_wind"
 ],
-"best_iter": 124,
+"best_iter": 179,
 "clamp_night": false,
-"n_train": 15623,
+"n_train": 16703,
 "ref_col": "cap95_wind"
 },
 "LT_load": {
@@ -818,9 +880,9 @@
 "ar1",
 "ar7"
 ],
-"best_iter": 187,
+"best_iter": 249,
 "clamp_night": false,
-"n_train": 15743,
+"n_train": 16823,
 "ref_col": null
 },
 "LT_solar": {
@@ -838,9 +900,9 @@
 "cap95_solar",
 "v100m"
 ],
-"best_iter": 240,
+"best_iter": 197,
 "clamp_night": true,
-"n_train": 15743,
+"n_train": 16823,
 "ref_col": "cap95_solar"
 },
 "LT_wind": {
@@ -856,9 +918,9 @@
 "doy_c2",
 "cap95_wind"
 ],
-"best_iter": 174,
+"best_iter": 122,
 "clamp_night": false,
-"n_train": 15743,
+"n_train": 16823,
 "ref_col": "cap95_wind"
 },
 "LV_load": {
@@ -880,10 +942,30 @@
 "ar1",
 "ar7"
 ],
-"best_iter": 65,
+"best_iter": 55,
 "clamp_night": false,
-"n_train": 15744,
+"n_train": 16824,
 "ref_col": null
+},
+"LV_solar": {
+"feat_cols": [
+"ghi",
+"cloud",
+"pres",
+"se",
+"clearness",
+"hod",
+"doy_s",
+"doy_c",
+"doy_s2",
+"doy_c2",
+"cap95_solar",
+"v100m"
+],
+"best_iter": 526,
+"clamp_night": true,
+"n_train": 16824,
+"ref_col": "cap95_solar"
 },
 "NO1_load": {
 "feat_cols": [
@@ -904,9 +986,9 @@
 "ar1",
 "ar7"
 ],
-"best_iter": 187,
+"best_iter": 595,
 "clamp_night": false,
-"n_train": 15744,
+"n_train": 16824,
 "ref_col": null
 },
 "NO1_wind": {
@@ -922,9 +1004,9 @@
 "doy_c2",
 "cap95_wind"
 ],
-"best_iter": 115,
+"best_iter": 159,
 "clamp_night": false,
-"n_train": 15744,
+"n_train": 16824,
 "ref_col": "cap95_wind"
 },
 "NO2_load": {
@@ -946,10 +1028,28 @@
 "ar1",
 "ar7"
 ],
-"best_iter": 118,
+"best_iter": 47,
 "clamp_night": false,
-"n_train": 15744,
+"n_train": 16824,
 "ref_col": null
+},
+"NO2_wind": {
+"feat_cols": [
+"v100m",
+"cloud",
+"pres",
+"hod",
+"dow",
+"doy_s",
+"doy_c",
+"doy_s2",
+"doy_c2",
+"cap95_wind"
+],
+"best_iter": 256,
+"clamp_night": false,
+"n_train": 16824,
+"ref_col": "cap95_wind"
 },
 "NO3_load": {
 "feat_cols": [
@@ -970,9 +1070,33 @@
 "ar1",
 "ar7"
 ],
-"best_iter": 36,
+"best_iter": 205,
 "clamp_night": false,
-"n_train": 15744,
+"n_train": 16824,
+"ref_col": null
+},
+"NO4_load": {
+"feat_cols": [
+"T",
+"Tma",
+"cdh",
+"hdh",
+"cdh2",
+"hdh2",
+"ghi",
+"hod",
+"dow",
+"is_hol",
+"doy_s",
+"doy_c",
+"doy_s2",
+"doy_c2",
+"ar1",
+"ar7"
+],
+"best_iter": 53,
+"clamp_night": false,
+"n_train": 16824,
 "ref_col": null
 },
 "NO5_load": {
@@ -994,9 +1118,9 @@
 "ar1",
 "ar7"
 ],
-"best_iter": 124,
+"best_iter": 206,
 "clamp_night": false,
-"n_train": 15744,
+"n_train": 16824,
 "ref_col": null
 },
 "PL_load": {
@@ -1018,9 +1142,9 @@
 "ar1",
 "ar7"
 ],
-"best_iter": 100,
+"best_iter": 119,
 "clamp_night": false,
-"n_train": 15744,
+"n_train": 16824,
 "ref_col": null
 },
 "PL_solar": {
@@ -1038,10 +1162,28 @@
 "cap95_solar",
 "v100m"
 ],
-"best_iter": 168,
+"best_iter": 131,
 "clamp_night": true,
-"n_train": 15744,
+"n_train": 16822,
 "ref_col": "cap95_solar"
+},
+"PL_wind": {
+"feat_cols": [
+"v100m",
+"cloud",
+"pres",
+"hod",
+"dow",
+"doy_s",
+"doy_c",
+"doy_s2",
+"doy_c2",
+"cap95_wind"
+],
+"best_iter": 117,
+"clamp_night": false,
+"n_train": 16824,
+"ref_col": "cap95_wind"
 },
 "PT_load": {
 "feat_cols": [
@@ -1062,10 +1204,30 @@
 "ar1",
 "ar7"
 ],
-"best_iter": 293,
+"best_iter": 600,
 "clamp_night": false,
-"n_train": 15744,
+"n_train": 16824,
 "ref_col": null
+},
+"PT_solar": {
+"feat_cols": [
+"ghi",
+"cloud",
+"pres",
+"se",
+"clearness",
+"hod",
+"doy_s",
+"doy_c",
+"doy_s2",
+"doy_c2",
+"cap95_solar",
+"v100m"
+],
+"best_iter": 168,
+"clamp_night": true,
+"n_train": 16705,
+"ref_col": "cap95_solar"
 },
 "PT_wind": {
 "feat_cols": [
@@ -1080,9 +1242,9 @@
 "doy_c2",
 "cap95_wind"
 ],
-"best_iter": 138,
+"best_iter": 163,
 "clamp_night": false,
-"n_train": 15648,
+"n_train": 16728,
 "ref_col": "cap95_wind"
 },
 "RO_load": {
@@ -1104,9 +1266,9 @@
 "ar1",
 "ar7"
 ],
-"best_iter": 461,
+"best_iter": 512,
 "clamp_night": false,
-"n_train": 15744,
+"n_train": 16824,
 "ref_col": null
 },
 "RO_solar": {
@@ -1124,28 +1286,10 @@
 "cap95_solar",
 "v100m"
 ],
-"best_iter": 267,
+"best_iter": 163,
 "clamp_night": true,
-"n_train": 15744,
+"n_train": 16824,
 "ref_col": "cap95_solar"
-},
-"RO_wind": {
-"feat_cols": [
-"v100m",
-"cloud",
-"pres",
-"hod",
-"dow",
-"doy_s",
-"doy_c",
-"doy_s2",
-"doy_c2",
-"cap95_wind"
-],
-"best_iter": 79,
-"clamp_night": false,
-"n_train": 15744,
-"ref_col": "cap95_wind"
 },
 "RS_load": {
 "feat_cols": [
@@ -1166,28 +1310,10 @@
 "ar1",
 "ar7"
 ],
-"best_iter": 233,
+"best_iter": 280,
 "clamp_night": false,
-"n_train": 15697,
+"n_train": 16777,
 "ref_col": null
-},
-"RS_wind": {
-"feat_cols": [
-"v100m",
-"cloud",
-"pres",
-"hod",
-"dow",
-"doy_s",
-"doy_c",
-"doy_s2",
-"doy_c2",
-"cap95_wind"
-],
-"best_iter": 153,
-"clamp_night": false,
-"n_train": 15646,
-"ref_col": "cap95_wind"
 },
 "SE1_load": {
 "feat_cols": [
@@ -1208,28 +1334,10 @@
 "ar1",
 "ar7"
 ],
-"best_iter": 114,
+"best_iter": 128,
 "clamp_night": false,
-"n_train": 15744,
+"n_train": 16800,
 "ref_col": null
-},
-"SE1_wind": {
-"feat_cols": [
-"v100m",
-"cloud",
-"pres",
-"hod",
-"dow",
-"doy_s",
-"doy_c",
-"doy_s2",
-"doy_c2",
-"cap95_wind"
-],
-"best_iter": 74,
-"clamp_night": false,
-"n_train": 15624,
-"ref_col": "cap95_wind"
 },
 "SE3_load": {
 "feat_cols": [
@@ -1250,9 +1358,9 @@
 "ar1",
 "ar7"
 ],
-"best_iter": 598,
+"best_iter": 443,
 "clamp_night": false,
-"n_train": 15744,
+"n_train": 16800,
 "ref_col": null
 },
 "SE3_solar": {
@@ -1270,9 +1378,9 @@
 "cap95_solar",
 "v100m"
 ],
-"best_iter": 145,
+"best_iter": 97,
 "clamp_night": true,
-"n_train": 15624,
+"n_train": 16704,
 "ref_col": "cap95_solar"
 },
 "SE3_wind": {
@@ -1288,9 +1396,9 @@
 "doy_c2",
 "cap95_wind"
 ],
-"best_iter": 191,
+"best_iter": 187,
 "clamp_night": false,
-"n_train": 15624,
+"n_train": 16704,
 "ref_col": "cap95_wind"
 },
 "SE4_load": {
@@ -1312,10 +1420,30 @@
 "ar1",
 "ar7"
 ],
-"best_iter": 596,
+"best_iter": 597,
 "clamp_night": false,
-"n_train": 15744,
+"n_train": 16800,
 "ref_col": null
+},
+"SE4_solar": {
+"feat_cols": [
+"ghi",
+"cloud",
+"pres",
+"se",
+"clearness",
+"hod",
+"doy_s",
+"doy_c",
+"doy_s2",
+"doy_c2",
+"cap95_solar",
+"v100m"
+],
+"best_iter": 138,
+"clamp_night": true,
+"n_train": 16704,
+"ref_col": "cap95_solar"
 },
 "SI_load": {
 "feat_cols": [
@@ -1336,9 +1464,9 @@
 "ar1",
 "ar7"
 ],
-"best_iter": 83,
+"best_iter": 74,
 "clamp_night": false,
-"n_train": 15383,
+"n_train": 16439,
 "ref_col": null
 },
 "SI_solar": {
@@ -1356,9 +1484,9 @@
 "cap95_solar",
 "v100m"
 ],
-"best_iter": 76,
+"best_iter": 83,
 "clamp_night": true,
-"n_train": 14232,
+"n_train": 15288,
 "ref_col": "cap95_solar"
 },
 "SK_load": {
@@ -1380,9 +1508,9 @@
 "ar1",
 "ar7"
 ],
-"best_iter": 174,
+"best_iter": 148,
 "clamp_night": false,
-"n_train": 15744,
+"n_train": 16824,
 "ref_col": null
 },
 "SK_solar": {
@@ -1400,9 +1528,9 @@
 "cap95_solar",
 "v100m"
 ],
-"best_iter": 250,
+"best_iter": 167,
 "clamp_night": true,
-"n_train": 15720,
+"n_train": 16800,
 "ref_col": "cap95_solar"
 },
 "ES_load": {
@@ -1446,11 +1574,13 @@
 "doy_s2",
 "doy_c2",
 "ar1",
-"ar7"
+"ar7",
+"school_hol",
+"windchill"
 ],
-"best_iter": 333,
+"best_iter": 90,
 "clamp_night": false,
-"n_train": 15743,
+"n_train": 16823,
 "ref_col": null
 },
 "DE_LU_solar": {
@@ -1587,6 +1717,7 @@
 "NO1",
 "NO2",
 "NO3",
+"NO4",
 "NO5",
 "PL",
 "PT",
@@ -1608,28 +1739,22 @@
 "BE_wind": false,
 "BG_load": true,
 "BG_solar": true,
-"BG_wind": false,
+"BG_wind": true,
 "CH_load": true,
-"CH_solar": false,
+"CH_solar": true,
 "CH_wind": false,
 "CZ_load": true,
 "CZ_solar": true,
 "CZ_wind": false,
-"DE_LU_load": true,
-"DE_LU_solar": true,
-"DE_LU_wind": false,
 "DK1_load": true,
 "DK1_solar": false,
-"DK1_wind": true,
+"DK1_wind": false,
 "DK2_load": true,
 "DK2_solar": false,
 "DK2_wind": false,
 "EE_load": true,
 "EE_solar": false,
 "EE_wind": false,
-"ES_load": true,
-"ES_solar": false,
-"ES_wind": false,
 "FI_load": true,
 "FI_solar": true,
 "FI_wind": true,
@@ -1639,15 +1764,15 @@
 "GR_load": true,
 "GR_solar": true,
 "GR_wind": false,
-"HU_load": false,
+"HU_load": true,
 "HU_solar": true,
-"HU_wind": false,
+"HU_wind": true,
 "IT-CNORTH_load": true,
 "IT-CNORTH_solar": true,
 "IT-CNORTH_wind": false,
 "IT-CSOUTH_load": true,
 "IT-CSOUTH_solar": true,
-"IT-CSOUTH_wind": true,
+"IT-CSOUTH_wind": false,
 "IT-Calabria_load": true,
 "IT-Calabria_solar": true,
 "IT-Calabria_wind": false,
@@ -1659,7 +1784,7 @@
 "IT-SOUTH_wind": true,
 "IT-Sardinia_load": true,
 "IT-Sardinia_solar": true,
-"IT-Sardinia_wind": false,
+"IT-Sardinia_wind": true,
 "IT-Sicily_load": true,
 "IT-Sicily_solar": true,
 "IT-Sicily_wind": true,
@@ -1667,21 +1792,18 @@
 "LT_solar": true,
 "LT_wind": true,
 "LV_load": true,
-"LV_solar": false,
+"LV_solar": true,
 "LV_wind": false,
-"NL_load": true,
-"NL_solar": false,
-"NL_wind": true,
 "NO1_load": true,
 "NO1_solar": false,
 "NO1_wind": true,
 "NO2_load": true,
 "NO2_solar": false,
-"NO2_wind": false,
+"NO2_wind": true,
 "NO3_load": true,
 "NO3_solar": false,
 "NO3_wind": false,
-"NO4_load": false,
+"NO4_load": true,
 "NO4_solar": false,
 "NO4_wind": false,
 "NO5_load": true,
@@ -1689,33 +1811,42 @@
 "NO5_wind": false,
 "PL_load": true,
 "PL_solar": true,
-"PL_wind": false,
+"PL_wind": true,
 "PT_load": true,
-"PT_solar": false,
+"PT_solar": true,
 "PT_wind": true,
 "RO_load": true,
 "RO_solar": true,
-"RO_wind": true,
+"RO_wind": false,
 "RS_load": true,
 "RS_solar": false,
-"RS_wind": true,
+"RS_wind": false,
 "SE1_load": true,
 "SE1_solar": false,
-"SE1_wind": true,
-"SE2_load": true,
-"SE2_solar": true,
-"SE2_wind": false,
+"SE1_wind": false,
 "SE3_load": true,
 "SE3_solar": true,
 "SE3_wind": true,
 "SE4_load": true,
-"SE4_solar": false,
+"SE4_solar": true,
 "SE4_wind": false,
 "SI_load": true,
 "SI_solar": true,
 "SI_wind": false,
 "SK_load": true,
 "SK_solar": true,
-"SK_wind": false
+"SK_wind": false,
+"ES_load": true,
+"ES_solar": false,
+"ES_wind": false,
+"DE_LU_load": true,
+"DE_LU_solar": true,
+"DE_LU_wind": false,
+"SE2_load": true,
+"SE2_solar": true,
+"SE2_wind": false,
+"NL_load": true,
+"NL_solar": false,
+"NL_wind": true
 }
 }

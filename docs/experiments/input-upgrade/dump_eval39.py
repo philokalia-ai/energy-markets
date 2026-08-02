@@ -5,11 +5,13 @@ zone-hour the feature vectors (in each committed model's feat_cols order), the N
 post-processed outputs, and pack baselines — for the Julia scorer/port to match.
 Only committed (winner) targets are dumped per zone. Usage: dump_eval39.py d0 d1"""
 import os, sys, json, glob, numpy as np, pandas as pd, lightgbm as lgb
-sys.path.insert(0, "/home/pgeorgakopoulos/armada/energy-markets/.claude/worktrees/agent-a534d70e414d18b80/docs/experiments/input-upgrade")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # iter4: co-located features.py
 import features as F
 SP=F.SP; GFS=f"{SP}/gfs"
-WT="/home/pgeorgakopoulos/armada/energy-markets/.claude/worktrees/agent-a534d70e414d18b80"
-BIN=f"{WT}/bin"                 # packs (res/load models) — read from the worktree
+# iter4: read packs + the freshly committed models from THIS worktree's bin (the
+# same dir the Julia equivalence harness scores), not a sibling/shared checkout.
+_ROOT=os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+BIN=f"{_ROOT}/bin"
 MODELS=f"{BIN}/input_models"    # the COMMITTED rollout models (worktree)
 RESP=json.load(open(f"{BIN}/res_models_v2.json"))["zones"]
 LOADP=json.load(open(f"{BIN}/load_models_v1.json"))["zones"]
@@ -93,6 +95,10 @@ for z in ZONES:
     tl=TGT_LOAD[TGT_LOAD.zone==z][["h","load_da"]]; la=la.merge(tl,on="h",how="left"); lser=la.set_index("h")["load_da"]
     la["ar1"]=la["h"].map(lambda t:lser.get(t-pd.Timedelta(days=1),np.nan)); la["ar7"]=la["h"].map(lambda t:lser.get(t-pd.Timedelta(days=7),np.nan))
     holset=F.holidays(LOADP[z]["holiday_country"],range(2024,2027)); la["is_hol"]=la["h"].dt.normalize().isin(holset).astype(int)
+    # iter6 DE_LU-scoped features (inert for zones whose feat_cols omit them)
+    la=la.merge(ra[["h","v100m"]],on="h",how="left")
+    la["school_hol"]=la["h"].map(lambda t:1.0 if F.de_school_holiday(t) else 0.0)
+    la["windchill"]=[F.windchill(T,v) for T,v in zip(la["T"].values,la["v100m"].values)]
     ra_h=ra[ra["h"].isin(hours)].copy(); la_h=la[la["h"].isin(hours)].copy()
     cp=cellp.reindex(ra["h"].values); cp.index=ra.index
     has_s=f"{z}_solar" in meta; has_w=f"{z}_wind" in meta; has_l=f"{z}_load" in meta

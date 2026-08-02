@@ -230,3 +230,91 @@ is a fitted-input change scored on the **ex-ante product track**, never the reco
 **HU** (the third R2 zone) is deferred: iteration 1's corr guard demoted HU_load to
 the pack, so it no longer flows through this NEW-load hook; correcting the pack's HU
 bias is a separate pack-path change. `test/test_ml_inputs.jl` green (222/222).
+
+**Iteration 4 — retrain through the latest settled month (fixes R5). SHIPPED.**
+The committed models were trained through 2026-04-30 (VALID 05-01…07-22) — ~3 months
+stale at the Aug-2026 audit. Re-ran `train39.py` (GR + the 34 new zones; the 4 special
+pilots ES/DE_LU/SE2/NL preserved verbatim — their geom/lineage differ from `geom39`)
+on the extended window: **train 2024-07…2026-06-14, held-out VALID = the last 6 weeks
+2026-06-15…07-27**. Dense GFS `previous_day1..7` vintages + ENTSO-E DA targets already
+ran to 2026-07-27 in the fetch cache (`data/gfs_vintages` / the local open-meteo
+instance) — **no history refetch, zero public open-meteo calls**. The 18 iteration-2
+holiday maps are now ACTIVE (models retrained under them). Winner selection kept
+iteration 1's corr guard (MAE-better AND corr-loss ≤ 0.02). Serve port re-verified
+**bit-identical** to python (`ml_inputs_equivalence.jl`: scorer max|Δ|=0, features
+rel < 1e-9, **0/1080 split-flips** across 8 spot zones incl. the NO2-wind flip).
+
+*Winner churn:* **72 → 78 NEW winners, 16 flips** vs the committed map — 11 pack→NEW
+(BG/IT-Sardinia/NO2/PL wind, CH/LV/PT/SE4 solar, HU load + wind, NO4 load) and 5
+NEW→pack (DK1/IT-CSOUTH/RO/RS/SE1 wind). HU_load and NO2_wind — both demoted by
+iteration 1's corr guard on the old window — re-win on the fresh window; NO4 (R9,
+previously all-pack) takes its load. *Staleness gain:* of the 60 winners with a
+committed predecessor scored on the fresh tail, **NEW beats old MAE in 40, worse in
+20** (all 20 still beat their pack — the ship gate), mean ΔMAE **−6.86 MW**; biggest:
+FR load 1176→1083 (−92.6, corr 0.964→0.974), NO3 load 134→55, BE solar 300→256, NO2
+load 94→66, SI load 80→54. *Headline zones* (NEW / old / pack MAE·corr on VALID):
+GR load 149.0·.989 / 148.6·.989 / 235.7·.974 (NEW); GR solar 200·.994 / 207·.994 /
+862·.981 (NEW); PL load 481·.973 / 505·.973 / 829·.973 (NEW); PL solar 460·.988 /
+431·.989 / 737·.982 (NEW); FR load 1083·.974 / 1176·.964 / 1198·.968 (NEW); DE_LU is
+a preserved pilot (unchanged). *Collapse (solar):* the continental-solar NEW winners
+keep the conservative under-forecast that aids crash detection (R4) — PL solar bias
++29.8 → **−183.3**, BE −124.5 → −4.3, CZ −64.1 → −33.6, CH −8.4; corr ≥ 0.985
+throughout, so the shape the collapse classifier needs is intact.
+
+*Debias re-fit (iteration 3 on the new tail):* level debias fit on the first 2/3 of
+VALID, gated on the last-1/3 holdout. **IT-NORTH (a=−177.08) and NO3 (a=−48.56) ship**
+(holdout MAE 837.6→829.3 and 45.8→43.6, |bias| down). **FR is DROPPED** — the retrain
+itself removed FR's over-prediction (old +191 → full-new-VALID −47.6) and its June/July
+sub-windows carry opposite-sign bias, so any level debias worsened the holdout (+77.7
+MAE): a measured no-ship, R2 fixed for FR by the retrain directly. HU/RO also failed
+the holdout gate (over-correct) and are not shipped. Winners shipped exactly as before
+(`meta.json` `pilot_zones`+`winners` + winners-only `.txt`; 78 models ⇔ 78 winners).
+`test/test_ml_inputs.jl` green (235/235); equivalence PASS.
+
+**Iteration 5 — seasonal wind-level calibration (R3). MEASURED NO-SHIP.** Probed a
+month-of-year multiplicative level term on the SHIPPED wind prediction using the
+fit-iteration-4 VALID (`wind_seasonal_iter5.py`, 28 wind zones). The window is 6
+weeks spanning two PARTIAL months (Jun-15…Jul-27), so the only admissible
+out-of-sample check is cross-month: fit the multiplier that zeroes one month's
+volume bias, verify it reduces the OTHER month's MAE (a multiplier is corr-invariant,
+so corr is safe by construction). It does not verify: the correction **reduced
+held-out MAE in only 12/28 zones**, and the June vs July multipliers **agreed within
+5% in only 5/28**. The per-month biases are frequently OPPOSITE-signed (BG +0.554 /
+−0.196, NO3 −0.053 / +0.167, RS +0.149 / −0.067, IT-SOUTH +0.094 / −0.078) — i.e. the
+residual is weather-regime noise between two specific months, not a stable
+month-of-year LEVEL effect this window can fit *and* independently confirm. Shipping a
+seasonal table off it would be an unverifiable fit, so per the methodology it is a
+NO-SHIP; the year-round seasonal layer R3 scoped needs a year-round OOS window (the
+`res-forecasting` recipe: train to a month, evaluate the following 12) that this
+6-week tail cannot provide. Mean |relbias| over the shipped wind zones is 0.127 (the
+large ones — DK1 +0.34, FR +0.22, SE1 +0.42, LV −0.59 — are known small/onshore-fleet
+or Nordic zones from R8). No serve change; `test/test_ml_inputs.jl` unchanged
+(235/235).
+
+**Iteration 6 — DE_LU load feature enrichment (R7). SHIPPED.** Added two DE_LU-scoped
+LOAD features: a **German school-holiday calendar** (`de_school_holiday`: Christmas
+Dec23–Jan6, the summer envelope Jul15–Aug31, autumn Oct20–Nov1, Easter ±7d — a
+national approximation of the Bundesland-staggered breaks) and a **wind-chill** term
+(`windchill`, Environment Canada JAG/TI on the RES zone-mean 100 m wind as an ex-ante
+cold-stress proxy — the load-weather cache carries no 10 m wind). Both live in
+`features.py` (training authority) and are mirrored byte-for-byte in `ml_inputs.jl`
+(`ml_de_school_holiday`/`ml_windchill`); the serve path threads the same-hour RES
+`v100m` into `ml_load_features`. Retrained **DE_LU load only** on the fit-iteration-4
+window; scored 4 arms vs the FRESH baseline on VALID with iteration 1's corr guard:
+
+| arm | VALID MAE | corr | ΔMAE vs base | Δcorr | gate |
+|---|--:|--:|--:|--:|---|
+| base (fresh) | 1001.7 | 0.9848 | — | — | — |
+| +school | 948.0 | 0.9863 | −53.7 | +0.0014 | pass |
+| +windchill | 934.8 | 0.9868 | −66.9 | +0.0020 | pass |
+| **+both (shipped)** | **961.0** | **0.9858** | **−40.7** | **+0.0010** | **pass** |
+
+All three enriched arms clear the guard. **Shipped the pre-registered `+both`** (the
+task's specified {school-holiday, wind-chill} set) rather than selecting the
+marginally-better wind-chill-alone arm ON the VALID MAE (that would be selection-on-
+test). Lockstep verified: `cmp_dnload_iter6.py` **LOCKSTEP_OK** — school-holiday days
+match python↔Julia EXACTLY (364/364, 2024–2027) and wind-chill to **max|Δ| = 7e-15**
+(< 1e-9). Serve port re-verified **bit-identical** with the enriched model
+(`ml_inputs_equivalence.jl`: DE_LU load max|Δ| = 0 MW, 0/1080 split-flips); **no other
+zone changed** (only `DE_LU_load.txt` + its meta feat_cols). `test/test_ml_inputs.jl`
+green (247/247, incl. the 12-assert iter6 lockstep testset).

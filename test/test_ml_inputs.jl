@@ -71,12 +71,14 @@ end
     @test _np_percentile95([0.0, 10.0]) ≈ 9.5
     @test _np_percentile95([5.0]) == 5.0
 
-    # fit-iteration 3: per-zone affine LOAD bias correction (b=1 level debias)
-    @test ml_load_bias_correct("FR", 5000.0) ≈ 5000.0 - 191.20   # a=-191.20, b=1
-    @test ml_load_bias_correct("IT-NORTH", 4000.0) ≈ 4000.0 - 197.79
+    # fit-iteration 3, re-fit at iteration 4: per-zone affine LOAD bias correction
+    # (b=1 level debias). IT-NORTH + NO3 ship; FR dropped (retrain removed its bias).
+    @test ml_load_bias_correct("IT-NORTH", 4000.0) ≈ 4000.0 - 177.08
+    @test ml_load_bias_correct("NO3", 1000.0) ≈ 1000.0 - 48.56
+    @test ml_load_bias_correct("FR", 5000.0) == 5000.0           # dropped at iter4 -> identity
     @test ml_load_bias_correct("GR", 5000.0) == 5000.0           # absent zone -> identity
-    @test ml_load_bias_correct("HU", 3000.0) == 3000.0           # demoted to pack (iter1), not here
-    @test ml_load_bias_correct("FR", 100.0) == 0.0               # clamped at 0 (100-191.2<0)
+    @test ml_load_bias_correct("HU", 3000.0) == 3000.0           # holdout gate failed -> not here
+    @test ml_load_bias_correct("NO3", 10.0) == 0.0               # clamped at 0 (10-48.56<0)
 end
 
 @testset "ML inputs — holidays (rollout-39 Orthodox amendment, train/serve lockstep)" begin
@@ -112,6 +114,28 @@ end
     @test Date(2026, 5, 17) in ml_holidays("NO", 2026:2026)                    # Norway Constitution Day
     # a country outside the footprint map still returns an empty set
     @test isempty(ml_holidays("XX", 2024:2027))
+end
+
+@testset "ML inputs — DE_LU load enrichment (iter6, train/serve lockstep)" begin
+    # ml_de_school_holiday: mirrors features.py de_school_holiday byte-for-byte
+    # (cmp_dnload_iter6.py LOCKSTEP_OK: 364/364 days match, windchill max|Δ|=7e-15).
+    @test ml_de_school_holiday(DateTime(2026, 7, 20))   # summer envelope
+    @test ml_de_school_holiday(DateTime(2026, 12, 25))  # Christmas window
+    @test ml_de_school_holiday(DateTime(2026, 10, 25))  # autumn window
+    @test ml_de_school_holiday(DateTime(2026, 4, 5))    # Western Easter 2026 (Apr 5)
+    @test !ml_de_school_holiday(DateTime(2026, 11, 15)) # ordinary day
+    @test !ml_de_school_holiday(DateTime(2026, 6, 10))  # before the summer window
+    @test !ml_de_school_holiday(DateTime(2026, 3, 20))  # >7d before Easter
+    # ml_windchill: Environment Canada JAG/TI on the 100m-wind proxy; NaN wind -> NaN
+    @test ml_windchill(0.0, 5.0) ≈ 13.12 - 11.37 * (18.0)^0.16 atol = 1e-9
+    @test isnan(ml_windchill(5.0, NaN))
+    # the committed DE_LU load model carries the two enrichment features
+    dm = parse_lgb_model(joinpath(_BIN, "input_models", "DE_LU_load.txt"))
+    @test "school_hol" in dm.feature_names && "windchill" in dm.feature_names
+    # inert elsewhere: the load dict always exposes both, but only DE_LU's feat_cols use them
+    lf = ml_load_features(DateTime(2026, 7, 20), 50.0, 9.0, 25.0, 200.0, 24.0, 6e4, 6e4, 0.0, 4.0)
+    @test lf["school_hol"] == 1.0 && !isnan(lf["windchill"])
+    @test isnan(ml_load_features(DateTime(2026, 1, 15), 50.0, 9.0, 5.0, 0.0, 4.0, 6e4, 6e4, 0.0)["windchill"])  # v100m default NaN
 end
 
 @testset "ML inputs — ship config (rollout-39)" begin
