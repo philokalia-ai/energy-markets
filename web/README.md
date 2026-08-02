@@ -53,31 +53,37 @@ Any static file server works (the app only fetches relative JSON). Opening
 
 ## Where the data comes from
 
-The app tries two rungs in order (first that answers wins):
+The app has **one** data plane, live-only:
 
-1. **Live Worker API** — `https://api.philokalia.ai/api/v1/…`,
-   backed by R2 parquet the pipeline uploads seconds after each DB write
-   (`bin/export_web_parquet.jl` + `workers/api/`). Fresh without a deploy.
-   Disable with `?live=0`; point elsewhere with `?api=<base>`. When this rung
-   serves the data, the footer shows a "data updated … ago" freshness badge
-   from `/api/v1/manifest`. This is the SOLE live data plane — the committed
-   `./data` rung and the daily bot commits that fed it were retired in July
-   2026 (single-publication-path cleanup).
-2. **`./fixtures/*.json`** — bundled snapshot (offline dev + last-resort;
-   banner shown).
+- **Live Worker API** — `https://api.philokalia.ai/api/v1/…`,
+  backed by R2 parquet the pipeline uploads seconds after each DB write
+  (`bin/export_web_parquet.jl` + `workers/api/`). Fresh without a deploy.
+  Disable with `?live=0`; point elsewhere with `?api=<base>`. When this rung
+  serves the data, the footer shows a "data updated … ago" freshness badge
+  from `/api/v1/manifest`.
 
-The app reads two kinds of JSON files:
+There is **no bundled-snapshot fallback** and there are **no runtime fixtures**.
+The owner directive is absolute: synthetic/example data must never render as if
+it were model output. When the API does not answer, every view paints an honest
+**"Live data unavailable — retry"** state (the shared `liveUnavailable`
+component in `app.js`, styled `.live-unavailable`) with a retry action — it
+never substitutes a snapshot. The app-level bootstrap (the scoreboard) shows the
+same state with a Retry that re-runs the bootstrap.
 
-- `data/scoreboard.json` — aggregate accuracy per zone × lead time × window
-- `data/zones/<ZONE>.json` — per-day hourly predictions and actuals for one zone
+**Offline / local development.** Because there is no fixture rung, drive the app
+against a local API instead: run the worker locally against local R2 state
+(`workers/api` — `wrangler dev --persist-to …`, see that README) and open the
+site with `?api=http://127.0.0.1:8787/api`. That renders real shapes with no
+synthetic data.
 
-These are produced by `bin/export_forecast_json.jl` (which still writes
+The app reads two kinds of JSON files (from the live API):
+
+- `scoreboard` — aggregate accuracy per zone × lead time × window
+- `zones/<ZONE>` — per-day hourly predictions and actuals for one zone
+
+The reference shapes are produced by `bin/export_forecast_json.jl` (which writes
 `web/data/` locally — the directory is git-ignored; the exported shapes are
 uploaded to R2 as parquet by `bin/export_web_parquet.jl`).
-
-Without the live API (fresh checkout, offline), the app falls back to the
-bundled fixtures in `fixtures/` (marked `"fixture": true` in the JSON) and
-shows a prominent **FIXTURE DATA** banner. Fixtures are for development only.
 
 ## Deploy
 
@@ -163,12 +169,13 @@ freshest-day midday RES-coverage summary the map colours by. Produced by
 `bin/export_prediction_inputs.jl` (the additive `v1/inputs/` contract); the open
 model recipe is [docs/predictions.md](../docs/predictions.md).
 
-## Regenerating fixtures
+## No runtime fixtures
 
-Fixtures (`fixtures/`, `"fixture": true`) are development-only. They are labelled
-`input_mode: "weather"` so the offline fallback exercises the weather-only UI, and
-carry one GR order-book fixture (`fixtures/books/GR/<date>`, no extension) so the
-order-book view renders offline. If the data contract changes, regenerate them to
-match and keep `"fixture": true` set — the banner keys off that flag.
+The shipped site carries **no** fixtures — the `web/fixtures/` directory and the
+snapshot fallback rung were removed (owner directive: synthetic data must never
+render as if it were model output). The only fixtures in the repo now live under
+`workers/api/test/fixtures/` and are used solely by the worker test suite; they
+are never served to a browser. To render the app offline, point it at a local
+worker (`?api=…`, see "Data plane" above).
 
 <!-- deploy-stamp: 2026-07-12T17:05Z -->

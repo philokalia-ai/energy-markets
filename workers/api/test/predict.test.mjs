@@ -1,7 +1,7 @@
 /* DOM smoke test for the Predictions hub + Load/Solar/Wind target pages
  * (pillars 2-4), driven through the same dependency-free DOM stub the order-book
  * table test uses — no jsdom. It loads web/app.js with autoinit suppressed,
- * seeds predictState from the committed fixtures, and drives the exposed
+ * seeds predictState from the test-local fixtures, and drives the exposed
  * window.__euphemiaPredict builders, asserting each composed surface renders the
  * elements the plan's acceptance criteria require:
  *   • every target page = the same skeleton (contract strip, model card, skill,
@@ -19,7 +19,9 @@ import { dirname, join } from "path";
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, "../../..");
 const appPath = join(repo, "web/app.js");
-const fx = (p) => JSON.parse(readFileSync(join(repo, "web/fixtures/inputs", p), "utf8"));
+// Test-local fixtures (the site ships no runtime fixtures anymore — they were
+// removed so synthetic data can never render as model output).
+const fx = (p) => JSON.parse(readFileSync(join(here, "fixtures/inputs", p), "utf8"));
 
 let failures = 0;
 function ok(cond, msg) { if (!cond) { failures++; console.error("FAIL: " + msg); } else { console.log("ok - " + msg); } }

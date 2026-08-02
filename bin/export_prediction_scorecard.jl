@@ -42,8 +42,6 @@
 #   CODE_VERSION      code_version stamp (default: reads the freshly written
 #                     v1/inputs/manifest.json if present, else 31)
 #   UPDATED_AT        updated_at override (ISO8601; default now UTC)
-#   FIXTURE           "true" => stamp {"fixture":true} (used to regenerate the
-#                     committed web/fixtures/inputs/{scorecard,skill}.json)
 
 using JSON, Dates
 
@@ -174,7 +172,6 @@ function main()
 
     cv = code_version()
     updated_at = get(ENV, "UPDATED_AT", Dates.format(now(UTC), "yyyy-mm-ddTHH:MM:SS") * "Z")
-    fixture = lowercase(get(ENV, "FIXTURE", "")) == "true"
 
     scores = Vector{Dict{String,Any}}()
     nwin = Dict("ml" => 0, "pack" => 0, "skip" => 0)
@@ -227,7 +224,6 @@ function main()
         "winner_counts" => nwin,
         "scores" => scores,
     )
-    fixture && (scorecard["fixture"] = true)
     open(joinpath(INPUTS_DIR, "scorecard.json"), "w") do io
         JSON.print(io, scorecard)
     end
@@ -246,7 +242,6 @@ function main()
         "leads" => collect(1:7),
         "skill" => Vector{Dict{String,Any}}(),   # {zone,target,lead_days,mae,corr,bias,n_days}
     )
-    fixture && (skill["fixture"] = true)
     open(joinpath(INPUTS_DIR, "skill.json"), "w") do io
         JSON.print(io, skill)
     end

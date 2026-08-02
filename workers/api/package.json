@@ -13,6 +13,7 @@
     "test:solver": "node test/solver_toy.test.mjs",
     "test:inputs-routes": "node test/inputs_routes.test.mjs",
     "test:predict": "node test/predict.test.mjs",
+    "test:views": "node test/views_empty_state.test.mjs",
     "dev": "wrangler dev --config wrangler.toml",
     "deploy": "wrangler deploy --config wrangler.toml"
   },
