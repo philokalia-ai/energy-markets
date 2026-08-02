@@ -92,6 +92,41 @@ cities for load):
 - **RES cells:** `wind_speed_100m`, `shortwave_radiation` (GHI), `cloud_cover`, `surface_pressure`
 - **Load cities:** `temperature_2m`, `shortwave_radiation`
 
+### Where the vintages come from (local-first, with a durable archive)
+
+The `previous_dayN` history is served publicly only by the rate-limited
+`previous-runs-api.open-meteo.com` (HTTP 429 "Daily API request limit exceeded"
+under load). We reduce that dependency from two sides:
+
+- **Fetch preference (local-first).** `fetch_weather` / `fetch_load_weather`
+  resolve the previous-runs base URL from `EUPHEMIA_OPENMETEO_PREVRUNS_URL`
+  (default the public API) and now fall back to the public API **on both an
+  error AND a null-data response** — a self-hosted instance that answers HTTP 200
+  with all-null `previous_dayN` arrays (it holds no previous-run chunks) is
+  treated as "no usable answer" and the batch is re-fetched publicly
+  (`_batch_all_empty`, unit-tested; the guard never fires for an explicit
+  `base_url` or when the primary already IS public). So pointing
+  `EUPHEMIA_OPENMETEO_PREVRUNS_URL` at the local instance is safe today (it
+  transparently falls through) and becomes free the moment the instance can serve
+  previous runs. *Why the self-hosted mirror can't serve previous_dayN yet, and
+  what it would take, is documented in the infra repo
+  `manifests/weather/PREVIOUS_RUNS.md`.*
+
+- **Durable archive.** [`bin/capture_gfs_vintages.jl`](../bin/capture_gfs_vintages.jl)
+  (nightly `capture-gfs-vintages.yml`, ~07:30 UTC after the pre-gate forecast)
+  appends the day's `previous_day1..7` vintages for the union of all 39 zones'
+  RES cells + load cities into **`data/gfs_vintages/`** — one parquet per delivery
+  day (`delivery_date, valid_time_utc, lead_days, lat, lon, variable, value`),
+  reusing the exact serve-time fetch machinery. It is **idempotent** (existing
+  day-files are skipped unless `EUPHEMIA_VINTAGE_FORCE=true`), **additive**, and
+  **non-fatal** (per-day failures — including a rate-limited public window — are
+  warned and retried on the next run; the process always exits 0). This is the
+  in-our-control safety-net that de-risks the public history ageing out or the
+  rate limit tightening. **Warm-up:** deep leads for a just-completed day may sit
+  at the edge of the public API's ~7-day previous-runs window and return null;
+  those rows are simply absent and accrue as the runs land — coverage is honest,
+  never fabricated.
+
 ## 3. Features (all admissible at the D-1 gate)
 
 Replicated exactly by [`features.py`](experiments/input-upgrade/features.py) (train)

@@ -260,4 +260,34 @@ include(joinpath(@__DIR__, "..", "bin", "forecast_common.jl"))   # vintage_group
         end
     end
 
+    @testset "_batch_all_empty (null-data fallback trigger)" begin
+        b = [(38.0, 23.0), (40.0, 22.0)]
+        empty_series() = Dict{DateTime,Tuple{Float64,Float64}}()
+        # all cells empty → true (the shape of a previous_dayN response the local
+        # instance can't serve: HTTP 200 with all-null arrays → parser drops all)
+        @test _batch_all_empty(Dict(b[1] => empty_series(), b[2] => empty_series()), b)
+        # a missing cell counts as empty too
+        @test _batch_all_empty(Dict(b[1] => empty_series()), b)
+        @test _batch_all_empty(Dict{Tuple{Float64,Float64},Dict{DateTime,Tuple{Float64,Float64}}}(), b)
+        # ANY usable hour on ANY cell → false (keep the primary answer)
+        @test !_batch_all_empty(
+            Dict(b[1] => Dict(DateTime(2026, 1, 1) => (5.0, 6.0)), b[2] => empty_series()), b)
+        # end-to-end: an all-null previous_day1 response parses to an empty batch
+        null_body = """[{"latitude":38.0,"longitude":23.0,"hourly":{
+            "time":["2026-01-01T00:00","2026-01-01T01:00"],
+            "wind_speed_100m_previous_day1":[null,null],
+            "shortwave_radiation_previous_day1":[null,null]}}]"""
+        p = parse_openmeteo_response(null_body, [(38.0, 23.0)]; var_suffix="_previous_day1")
+        @test _batch_all_empty(p, [(38.0, 23.0)])
+        # a partially-populated response is NOT all-empty (no fallback)
+        half_body = replace(null_body, "\"wind_speed_100m_previous_day1\":[null,null]" =>
+                                       "\"wind_speed_100m_previous_day1\":[7.2,null]")
+        # (shortwave still null on hour 2 → hour dropped; hour 1 also needs GHI)
+        # so make GHI present on hour 1 to keep it:
+        half_body = replace(half_body, "\"shortwave_radiation_previous_day1\":[null,null]" =>
+                                       "\"shortwave_radiation_previous_day1\":[120.0,null]")
+        ph = parse_openmeteo_response(half_body, [(38.0, 23.0)]; var_suffix="_previous_day1")
+        @test !_batch_all_empty(ph, [(38.0, 23.0)])
+    end
+
 end

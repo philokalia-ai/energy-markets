@@ -315,7 +315,20 @@ function fetch_weather(cells::Vector{Tuple{Float64,Float64}}, dates::Vector{Date
             @warn "open-meteo primary ($url_base) failed; falling back to public API" exception=e
             _openmeteo_get(fb_url)
         end
-        merge!(out, parse_openmeteo_response(body, batch; var_suffix=sfx))
+        parsed = parse_openmeteo_response(body, batch; var_suffix=sfx)
+        # Null-data fallback (today's exact failure mode for previous_dayN): a
+        # self-hosted instance answers HTTP 200 but with all-null arrays because
+        # it holds no previous-run chunks — parsing then drops every hour and the
+        # batch comes back empty. That is NOT a usable answer, so fall through to
+        # the public previous-runs API for this batch. Same guard as the
+        # HTTP-error path: never when base_url is explicit or the primary already
+        # IS public (a genuinely empty public answer is beyond-coverage, kept).
+        if isempty(base_url) && url_base != public_default && _batch_all_empty(parsed, batch)
+            fb_url = replace(url, url_base => public_default)
+            @warn "open-meteo primary ($url_base) returned all-null data; falling back to public API"
+            parsed = parse_openmeteo_response(_openmeteo_get(fb_url), batch; var_suffix=sfx)
+        end
+        merge!(out, parsed)
     end
     return out
 end
