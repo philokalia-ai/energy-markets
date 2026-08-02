@@ -1274,6 +1274,20 @@ html, body { overflow-x: hidden; }
 
 .solver-synth-chip { border-color: var(--terracotta-soft); color: var(--terracotta); }
 
+/* the always-visible "this is invented" strip on the toy widget itself */
+.solver-toy-label {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--banner-ink);
+  background: var(--banner-bg);
+  border-radius: 6px;
+  padding: 5px 12px;
+  margin: 0 0 8px;
+  text-align: center;
+}
+
 .solver-toy-controls { margin: 8px 0 4px; }
 .solver-atc-label { display: flex; flex-direction: column; gap: 6px; max-width: 520px; }
 .solver-atc-label input[type="range"] { width: 100%; }
