@@ -12,10 +12,12 @@ plane for research but is hidden from the UI. Because every forecast uses the la
 admissible weather, the lead/D-n dimension is collapsed everywhere to the **freshest
 forecast per delivery day** (deeper leads were noise). Views:
 
-- **Recent days** — the last ~5 market days, freshest forecast per day with the
-  settled **actual overlaid** once the day clears (straddles today: D-2, D-1, D,
-  D+1). Below it, "What we said, when" shows one delivery day's freshest forecast
-  vs actual.
+- **Recent days** — a continuous ±5-day ribbon around now: the freshest forecast
+  per delivery day for the ~5 settled days before the **"now" seam** (each with the
+  settled **actual overlaid** and a per-day MAE·bias chip) and today + the next ~5
+  upcoming days as forecast alone. The seam marks the last settled hour; retro
+  (post data-reset) days appear inline with a reset note. Below it, "What we said,
+  when" shows one delivery day's freshest forecast vs actual.
 - **Map** — day-average price per bidding zone.
 - **Predicting RES & loads** — the open input model. A Europe map colours each of
   the 5 pilot zones (GR, ES, DE_LU, SE2, NL) by tomorrow's predicted **midday RES

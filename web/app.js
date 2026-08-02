@@ -134,6 +134,10 @@
     return n > 0 && n < day.actual.length;
   }
 
+  // A retroactively-reconstructed day (post data-reset backfill): the export
+  // stamps is_retro / reset_tag when present. Absent field ⇒ ordinary live day.
+  function isRetro(day) { return !!(day && day.is_retro); }
+
   // ---------- hash routing ----------
 
   function readHash() {
@@ -650,6 +654,7 @@
       surface: css.getPropertyValue("--surface-1").trim(),
       sim: css.getPropertyValue("--series-sim").trim(),
       act: css.getPropertyValue("--series-act").trim(),
+      accent: css.getPropertyValue("--accent").trim(),
     };
   }
 
@@ -701,21 +706,34 @@
     return d.trim();
   }
 
-  // The recent-market-days window: the freshest ex-ante (weather-track)
-  // forecast per delivery date, most recent N days (settled + upcoming), so the
-  // view straddles today — D-2, D-1, D (today), D+1 — with actuals overlaid
-  // where the day has settled. Leads collapsed (directive 1).
-  var HORIZON_DAYS = 5;
+  // The ±5-day ribbon around "now": the freshest ex-ante (weather-track)
+  // forecast per delivery date, for the HZ_PAST settled days before the seam
+  // and the first pending (today) + upcoming forecast days after it — one
+  // continuous window straddling the present. The "now" seam (drawn in
+  // renderHorizon) is the boundary between the last settled actual and the
+  // first forecast-only hour; past days overlay the settled actual (+ per-day
+  // MAE/bias), today & future show the freshest forecast alone. The window is
+  // anchored on the FRONTIER — the first fully-pending (forecast-only) delivery
+  // day — so it self-locates without a wall clock (keeps fixtures rendering).
+  // Leads collapsed (directive 1).
+  var HZ_PAST = 5, HZ_FUTURE = 5;
   function horizonDays(zoneData) {
-    var byDate = freshestByDate(weatherDays(zoneData));   // newest first
-    return byDate.slice(0, HORIZON_DAYS).reverse();       // oldest -> newest for the timeline
+    var asc = freshestByDate(weatherDays(zoneData)).slice().reverse();   // oldest -> newest
+    if (!asc.length) return [];
+    var frontier = asc.length;   // first forecast-only (fully pending) day = today/tomorrow
+    for (var i = 0; i < asc.length; i++) {
+      if (isPending(asc[i])) { frontier = i; break; }
+    }
+    var start = Math.max(0, frontier - HZ_PAST);
+    var end = Math.min(asc.length, frontier + HZ_FUTURE);
+    return asc.slice(start, end);
   }
 
   function renderHorizon() {
     var zoneData = state.zoneCache[state.zone];
     if (!zoneData) return;
     var days = horizonDays(zoneData);
-    $("hz-title").textContent = state.zone + " — the last " + (days.length || HORIZON_DAYS) + " market days";
+    $("hz-title").textContent = state.zone + " — the days around now";
     var wrap = $("hz-wrap");
     wrap.textContent = "";
     var lg = $("hz-legend");
@@ -729,9 +747,25 @@
       renderRevisions();
       return;
     }
+    var pastN = days.filter(function (d) { return !isPending(d); }).length;
+    var futureN = days.length - pastN;
     $("hz-sub").textContent =
-      "Freshest ex-ante (weather) forecast per delivery day, with the settled " +
-      "actual overlaid once the day clears · hours in Europe/Athens (market day)";
+      "Freshest ex-ante (weather) forecast per delivery day — settled actual " +
+      "overlaid on the days left of “now”, forecast alone ahead of it (" +
+      pastN + " back · " + futureN + " ahead) · hours in Europe/Athens (market day)";
+
+    // Retro rows (post data-reset backfill) shown inline, with the reset note.
+    var retroDays = days.filter(isRetro);
+    if (retroDays.length) {
+      var tags = {};
+      retroDays.forEach(function (d) { if (d.reset_tag) tags[d.reset_tag] = 1; });
+      var tagList = Object.keys(tags);
+      wrap.appendChild(el("p", "pending-note",
+        retroDays.length + (retroDays.length > 1 ? " days were" : " day was") +
+        " reconstructed retroactively after a data reset" +
+        (tagList.length ? " (" + tagList.join(", ") + ")" : "") +
+        " — shown inline (marked ↺); each prediction stays frozen at its retro compute instant."));
+    }
 
     // legend: forecast + actual
     var C = chartColors();
@@ -755,8 +789,28 @@
     var vals = pts.map(function (p) { return p.v; });
     pts.forEach(function (p) { if (p.a !== null && p.a !== undefined) vals.push(p.a); });
     var sc = chartScaffold(wrap, vals, n,
-      "Hourly ex-ante forecast vs actual for the last " + days.length + " market days, " + state.zone);
+      "Hourly ex-ante forecast vs actual across " + pastN + " past and " + futureN +
+      " upcoming market days around now, " + state.zone);
     var svg = sc.svg, X = sc.X, Y = sc.Y, m = sc.m;
+
+    // "now" seam: the boundary between the last hour carrying a settled actual
+    // and the first forecast-only hour. Everything to its right is pure
+    // forecast (no actual yet). Drawn as a faint wash now (behind the paths)
+    // and a labelled line after the day paths (on top).
+    var lastSettled = -1;
+    for (var si = 0; si < n; si++) {
+      if (pts[si].a !== null && pts[si].a !== undefined) lastSettled = si;
+    }
+    var hasSeam = lastSettled >= 0 && lastSettled < n - 1;
+    var seamX = lastSettled < 0 ? m.l
+      : lastSettled >= n - 1 ? X(n - 1)
+      : (X(lastSettled) + X(lastSettled + 1)) / 2;
+    if (hasSeam) {
+      svg.appendChild(svgEl("rect", {
+        x: seamX, y: m.t, width: (m.l + sc.pw) - seamX, height: sc.ph,
+        fill: C.sim, opacity: 0.05,
+      }));
+    }
 
     // day separators + weekday labels + per-day forecast & actual paths
     var idx0 = 0;
@@ -779,7 +833,15 @@
         fill: C.muted, "font-size": 10,
         "font-style": isPending(d) ? "italic" : "normal",
       });
-      status.textContent = isPending(d) ? "forecast" : "settled";
+      // past days carry a per-day MAE·bias chip; pending days read "forecast"
+      var scored = d.mae !== null && d.mae !== undefined;
+      var statusTxt = isPending(d) ? "forecast"
+        : scored ? ("MAE " + fmt(d.mae, 1)
+            + (d.bias === null || d.bias === undefined ? ""
+               : " · " + (d.bias >= 0 ? "+" : "−") + fmt(Math.abs(d.bias), 1)))
+        : (isPartial(d) ? "settling" : "settled");
+      if (isRetro(d)) statusTxt += " ↺";
+      status.textContent = statusTxt;
       svg.appendChild(status);
 
       var Xoff = function (i) { return X(idx0 + i); };
@@ -798,6 +860,29 @@
       }
       idx0 = idx1 + 1;
     });
+
+    // the "now" seam line + labels, on top of the day paths
+    if (hasSeam) {
+      var seamColor = C.accent || C.act;
+      svg.appendChild(svgEl("line", {
+        x1: seamX, x2: seamX, y1: m.t - 6, y2: m.t + sc.ph,
+        stroke: seamColor, "stroke-width": 1.6,
+      }));
+      var nowLbl = svgEl("text", {
+        x: seamX, y: m.t - 10, "text-anchor": "middle",
+        fill: seamColor, "font-size": 11, "font-weight": 600,
+      });
+      nowLbl.textContent = "now";
+      svg.appendChild(nowLbl);
+      if (seamX < m.l + sc.pw - 60) {
+        var fcHint = svgEl("text", {
+          x: seamX + 6, y: m.t + 12, "text-anchor": "start",
+          fill: C.muted, "font-size": 10,
+        });
+        fcHint.textContent = "forecast →";
+        svg.appendChild(fcHint);
+      }
+    }
 
     // hover
     var hoverLine = svgEl("line", { y1: m.t, y2: m.t + sc.ph, stroke: C.baseline, "stroke-width": 1, visibility: "hidden" });
