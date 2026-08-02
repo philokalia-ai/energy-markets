@@ -88,6 +88,15 @@ async function buildPayload(env, route, zone, date) {
     const obj = await env.DATA.get("v1/zone_strategies.json");
     return obj ? await obj.text() : null;
   }
+  if (route === "boundaries") {
+    // The pillar-6 boundary-zones object (elastic books walked from ZONE_PROFILES's
+    // BoundaryBook structs + the cited fixed-neighbour list + flow rule) — generated
+    // by bin/export_boundaries.jl and published as a JSON pass-through, like the
+    // methodology object. 404s until explicitly published; there is NO fixture
+    // fallback — the SPA shows the shared honest "live data unavailable" state.
+    const obj = await env.DATA.get("v1/boundaries.json");
+    return obj ? await obj.text() : null;
+  }
   if (route === "zone") {
     const obj = await env.DATA.get("v1/zones/" + zone + ".parquet");
     if (!obj) return null;
@@ -164,6 +173,7 @@ function routeKey(route, zone, date) {
   if (route === "manifest") return "v1/manifest.json";
   if (route === "book_methodology") return "v1/book_methodology.json";
   if (route === "zone_strategies") return "v1/zone_strategies.json";
+  if (route === "boundaries") return "v1/boundaries.json";
   if (route === "units") return "v1/units.parquet";
   if (route === "flows") return "v1/flows/" + date + ".parquet";
   if (route === "zone") return "v1/zones/" + zone + ".parquet";
@@ -210,6 +220,8 @@ export default {
       route = "book_methodology";
     } else if (url.pathname === "/api/v1/zone_strategies" || url.pathname === "/api/v1/zone_strategies.json") {
       route = "zone_strategies";
+    } else if (url.pathname === "/api/v1/boundaries" || url.pathname === "/api/v1/boundaries.json") {
+      route = "boundaries";
     } else if (url.pathname === "/api/v1/units") {
       route = "units";
     } else if (url.pathname === "/api/v1/inputs/manifest") {

@@ -1,0 +1,85 @@
+{
+  "_comment": "Curated-but-cited inputs for the pillar-6 boundary surface: (1) the FROZEN measured confirm A/B numbers for each boundary book (quoted from the ledger / docs/experiments — historical experiment OUTCOMES, never recomputed each run, the same admissible hand-entry as docs/pillars/cv-ledger.json for pillar 5), keyed by the BoundaryBook const name; (2) the fixed out-of-footprint neighbour list (TR/AL/MK — price-taker injections that carry no struct in ZONE_PROFILES, so they cannot be walked from code) with the verbatim 'NOT a book' correction and roadmap; (3) the ex-ante flow rule descriptor. bin/export_boundaries.jl READS (never regenerates) this file and merges it with the GENERATED elastic structural fields walked from ZONE_PROFILES's BoundaryBook structs; test_boundaries_export.jl asserts every `book` here is realised by a struct, every `cv`/`ledger` is <= ENERGY_PRICES_CODE_VERSION, and every fixed counterparty appears as a real network neighbour.",
+  "effects": {
+    "VIKING_GB_BOOK": {
+      "zone": "DK1",
+      "ledger": "cv21",
+      "cv": 21,
+      "windows": [
+        { "name": "July", "mae": [31.5, 28.3], "corr": [0.90, 0.93] },
+        { "name": "March", "mae": [27.6, 25.2], "corr": [0.55, 0.80] }
+      ],
+      "note": "no FR/NL/NO2 leakage",
+      "src_confirm": "src-implementation A/B reproduced the reference: March 27.9->24.6 / 0.55->0.81; July (10/16 days) 29.5->26.6 / 0.88->0.90",
+      "doc": "docs/experiments/cv21-dk1-viking.md",
+      "standalone": true
+    },
+    "GB_FR_BOOK": {
+      "zone": "FR",
+      "ledger": "cv23",
+      "cv": 23,
+      "fr_corr_record": 0.78,
+      "note": "ships PAIRED with the FR nuclear opportunity-cost anchor; the GB book is HALF of a two-bug lever, not a standalone win",
+      "double_count_fix": {
+        "shipped_alone_cost": "FR +4.2 July MAE (the phantom double-injection had accidentally been compensating France's too-cheap evening supply curve)",
+        "paired_lever": "the combined FR-nuclear + FR-GB lever: FR March MAE 38.2->16.2",
+        "lesson": "you cannot ship half a correction"
+      },
+      "doc": "docs/experiments/cv23-fr-nuclear.md",
+      "standalone": false
+    },
+    "UA_BOOK": {
+      "zone": "HU",
+      "ledger": "cv22",
+      "cv": 22,
+      "windows": [
+        { "name": "July", "mae": [72.3, 57.1], "corr": [0.69, 0.79] },
+        { "name": "March breach", "mae": [28.24, 28.29] }
+      ],
+      "residuals": ["HU March evening MAE 29.2->33.0", "RO/BG March ~+1"],
+      "spillovers": ["SK July evening bias -82->-73", "SI July MAE 80.7->70.1"],
+      "hu_march_lesson": "an early arm modelled UA demand as FULLY elastic, which let HU's price breach in March when the elastic tail curtailed under stress; the FIRM slice (demand that does not back off on price) killed the breach with no damage (28.24->28.29) while the July win landed. The single clearest illustration that the SHAPE of a boundary bid matters, not just its level.",
+      "anchor_weakness": "the anchor is :zone_gas_srmc (our OWN gas SRMC) because no UA fundamentals feed exists — the documented generic-anchor compromise, accepted because the firm slice, not the elastic anchor, does the load-bearing work.",
+      "doc": "docs/experiments/cv22.md",
+      "standalone": true
+    }
+  },
+  "fixed": [
+    {
+      "counterparty": "TR",
+      "borders": ["GR", "BG"],
+      "book": null,
+      "correction": "The dictation called TR a 'book on dropped borders.' It is neither. (1) 'Flow-based border drops' are an internal fix for IN-footprint Core-FBMC borders (AT-SI, CZ-SK...) - nothing to do with TR. (2) TR is simply never in the footprint, so its flow is injected as an observed schedule. The BG-TR p95-block recipe in the code (boundary.jl comment) is the ANCESTOR of the UA sizing, not a TR book. If TR ever gets an elastic book it will be a new pillar-6 item - today it has none.",
+      "roadmap": [
+        "A defensible TR fundamentals anchor. GB works because we can build GB CCGT SRMC from TTF + UK-ETS. TR's fleet is gas + lignite + hydro + a large and growing nuclear (Akkuyu) block, priced off BOTAS gas and a TL-denominated cost base with NO EU-ETS carbon - none of which is in our feeds. Without a defensible TR marginal cost, an elastic anchor would be a guess, and the rule is that a declared anchor must be defensible, not invented.",
+        "A demonstrated-capability series for the BG-TR / GR-TR borders - we already have this (the p95-block recipe), so this is the easy half.",
+        "A reason to believe TR bids elastically at the day-ahead horizon across a non-synchronous interconnection with its own market design, plus a measured confirm A/B on the coupled footprint showing GR/BG improve within a regime with zero new cap-hours and no envelope breach. Until that exists, fixed injection is the honest choice - the absence of a TR book is a DECISION, not an oversight."
+      ]
+    },
+    {
+      "counterparty": "AL",
+      "borders": ["GR"],
+      "book": null,
+      "roadmap_short": "Same bar as TR (defensible anchor + capability series + measured confirm); smaller border, lower priority. Fixed observed injection by decision."
+    },
+    {
+      "counterparty": "MK",
+      "borders": ["GR"],
+      "book": null,
+      "roadmap_short": "Same bar as TR (defensible anchor + capability series + measured confirm); smaller border, lower priority. Fixed observed injection by decision."
+    }
+  ],
+  "flow_rule": {
+    "footprint_default": "v3",
+    "legacy": "d0",
+    "ledger": "cv19",
+    "cv": 19,
+    "descriptions": {
+      "v3": "Per border: MEAN of (a) the load-analogue median - the median observed flow of the 16 trailing-365-day days whose D-1 load-forecast vector is nearest to the delivery day's (the ex-ante thermometer: warm days look like warm days), and (b) the D-2 observed flow (the fastest admissible signal, catches a regime change within 48h); PLUS the D-7 recency component on Norwegian reservoir borders.",
+      "v2": "flow climatology + D-7 Norwegian recency (the :v3 predecessor).",
+      "d0": "same-day observed flow - the SEE legacy / byte-identity path ONLY, never the footprint default (tomorrow's flow does not exist at auction time)."
+    },
+    "audit_note": "We caught our own lookahead. The pipelined RECORDS through cv24 were NOT ex-ante on flows - the book workers silently used :d0 (same-day observed) instead of the scoped :v3 default the ledger documents. The audit found it (docs/experiments/exante-audit-2026-07.md) and cv25 closed it. The live forecast path was always correct. This is exactly the kind of honesty the whole site advertises.",
+    "doc": "docs/experiments/exante-audit-2026-07.md"
+  }
+}
