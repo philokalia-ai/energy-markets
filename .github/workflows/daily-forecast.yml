@@ -236,6 +236,11 @@ jobs:
           # web-data publish — non-fatal, the manifest below still uploads last.
           julia --project=. bin/export_prediction_inputs.jl \
             || echo "::warning::prediction-inputs export failed — core web data still published"
+          # Model-card VALID scores + per-lead skill (pillars 2-4, additive JSON
+          # under v1/inputs/). Pure file work (no DB/open-meteo) but kept non-fatal
+          # so a parse hiccup never blocks the core web-data publish.
+          julia --project=. bin/export_prediction_scorecard.jl \
+            || echo "::warning::prediction-scorecard export failed — core web data still published"
           bash bin/web_data_push.sh
 
       - name: Cleanup Gurobi license

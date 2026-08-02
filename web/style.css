@@ -1299,3 +1299,76 @@ html, body { overflow-x: hidden; }
   max-width: 68em;
 }
 #solver-exemplar-steps { margin: 6px 0 8px; }
+/* ---- Predictions hub + Load/Solar/Wind (pillars 2-4) ---- */
+.predict-subnav-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.predict-controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.predict-vintage-chip { font-family: var(--mono); font-size: 11px; }
+
+.contract-strip .contract-chips,
+.contract-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0 6px;
+  align-items: center;
+}
+
+.predict-target > .chart-card { margin-top: 16px; }
+.predict-target > .chart-card:first-child { margin-top: 0; }
+
+/* model card */
+.mc-verdict { font-size: 0.95rem; color: var(--text-secondary); line-height: 1.55; margin: 6px 0 12px; }
+.mc-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 12px;
+  margin: 4px 0 6px;
+}
+.mc-stat {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: var(--surface-1);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.mc-stat-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.03em; }
+.mc-stat-val { font-size: 20px; font-weight: 600; color: var(--heading); font-variant-numeric: tabular-nums; }
+.mc-stat-sub { font-size: 11px; color: var(--text-secondary); }
+.mc-collapse { margin-top: 12px; }
+.chart-sub.warming { color: var(--text-muted); font-style: italic; }
+
+/* family table cells */
+.fam-cell { display: inline-flex; align-items: center; gap: 6px; }
+.fam-badge {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+}
+.fam-ml .fam-badge { color: #1F7A4A; border-color: rgba(31, 122, 74, 0.4); }
+.fam-pack .fam-badge { color: var(--text-muted); }
+.fam-skip .fam-badge { color: var(--text-muted); opacity: 0.6; }
+.fam-cell[role="button"] { cursor: pointer; }
+.fam-corr { font-size: 11px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+
+/* three target cards on the hub */
+.predict-cards-grid,
+.predict-target-cards {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+.predict-card { cursor: pointer; }
+.predict-card:hover { border-color: var(--accent); }
+.predict-card-teaser { font-size: 13px; color: var(--text-secondary); line-height: 1.45; margin: 4px 0; }
