@@ -41,6 +41,7 @@ jobs:
         env:
           ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
           INPUTS_BACK_DAYS: ${{ inputs.inputs_back_days }}
+          EUPHEMIA_OPENMETEO_PREVRUNS_URL: "http://localhost:30555/v1/forecast"
         run: |
           julia --project=. bin/export_prediction_inputs.jl \
             || echo "::warning::prediction-inputs export failed — core web data still published"
