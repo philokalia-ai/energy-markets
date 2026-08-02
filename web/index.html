@@ -62,9 +62,16 @@
   <h1>The competitive counterfactual, live</h1>
   <p class="subtitle">A fundamentals-based simulation of the European day-ahead market —
     predictions frozen before delivery, never revised, scored honestly per bidding zone.
-    Everything shown is the <strong>ex-ante weather track</strong>: a weather-based,
-    pre-auction forecast using the latest admissible inputs.
+    Flip the whole site between the two tracks below: our fitted inputs, or the TSOs'
+    announced D-1 figures through the same engine.
     <a class="more-link" href="./about.html">How it works &rarr;</a></p>
+
+  <!-- The GLOBAL TRACK SWITCH — a site-wide lens over every series surface. -->
+  <div class="track-switch-row">
+    <div id="track-switch" class="segmented track-switch" role="group" aria-label="Evaluation track"></div>
+    <p id="track-explainer" class="track-explainer"></p>
+  </div>
+
   <nav class="tabs" role="tablist" aria-label="Views">
     <button id="tab-horizon" class="tab" role="tab" aria-selected="true" data-view="horizon">Recent days</button>
     <button id="tab-map" class="tab" role="tab" aria-selected="false" data-view="map">Map</button>
@@ -419,6 +426,11 @@
       </div>
     </div>
 
+    <!-- The global track switch has no meaning on this surface: these fitted
+         input models ARE the Predicted pillar. State it inline (never silently
+         ignore the switch). -->
+    <p id="predict-track-note" class="track-inline-note" hidden></p>
+
     <!-- HUB (target=overview): the cross-cutting story + coverage map -->
     <div id="predict-hub">
       <div class="chart-card">
@@ -553,6 +565,7 @@
           the marker sits on the local supply curve at the market-wide price; the
           <strong>trade wedge</strong> to the demand curve is the cross-border
           import/export decided by the 39-zone network.</p>
+        <p id="book-track-note" class="track-inline-note" hidden></p>
       </div>
 
       <div class="book-controls">
@@ -1092,12 +1105,14 @@ run_pipelined_backfill(Date(2023,7,1):Day(1):Date(2025,6,30), FOOTPRINT;
     <p>
       This is a <strong>no-fit competitive counterfactual</strong> — a fundamentals-based
       market-clearing model, not a statistical forecaster. Predictions are frozen before
-      delivery, never revised, and scored honestly as days settle. Be precise about what
-      today's scores are: the <strong>reference track</strong> uses ENTSO-E's published D-1
-      forecasts and freezes in the evening — before delivery, but after the auction. The
-      <strong>truly ex-ante track</strong> — our own weather-based wind/solar, frozen before
-      the auction gate — is being wired in and will be scored separately. Nothing is fitted to
-      the outcomes it is scored against, so persistent gaps between simulated and actual
+      delivery, never revised, and scored honestly as days settle. The switch at the top
+      flips the whole site between two tracks: <strong>Predicted</strong> — our own
+      weather-based inputs, frozen before the 12:00 CET auction gate ("how much can you
+      trust our model") — and <strong>As announced</strong> — the TSOs' published D-1
+      inputs run through the same bid-construction and solver ("the fair test of the bidding
+      mechanism with inputs held at the official figures"). The gap between them, where
+      announced beats predicted, is itself the measured cost of our inputs. Nothing is fitted
+      to the outcomes it is scored against, so persistent gaps between simulated and actual
       prices are <em>findings</em> about how the real market deviates from competitive
       behavior — not model errors to be tuned away.
       <a class="more-link" href="./about.html">Read the full explanation &rarr;</a>

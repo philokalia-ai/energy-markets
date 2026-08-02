@@ -343,6 +343,62 @@ select {
 }
 :root[data-theme="dark"] .segmented button[aria-pressed="true"] { background: var(--accent); color: #0E1B2E; }
 
+/* ---------- the global track switch (Predicted | As-announced) ---------- */
+.track-switch-row {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 16px;
+  margin: 14px 0 4px;
+}
+.track-switch .seg-btn {
+  appearance: none; border: none; background: var(--surface-1);
+  color: var(--text-secondary); font: inherit; font-size: 13.5px;
+  padding: 6px 16px; cursor: pointer; font-weight: 500;
+}
+.track-switch .seg-btn + .seg-btn { border-left: 1px solid var(--baseline); }
+.track-switch .seg-btn.active,
+.track-switch .seg-btn[aria-checked="true"] {
+  background: var(--deep-blue); color: var(--ivory); font-weight: 600;
+}
+:root[data-theme="dark"] .track-switch .seg-btn.active,
+:root[data-theme="dark"] .track-switch .seg-btn[aria-checked="true"] {
+  background: var(--accent); color: #0E1B2E;
+}
+.track-explainer {
+  flex: 1 1 340px; min-width: 240px; margin: 0;
+  font-size: 12.5px; line-height: 1.45; color: var(--text-muted);
+}
+.track-explainer strong { color: var(--text-secondary); }
+.track-explainer-gap { color: var(--text-secondary); }
+.track-explainer-note { font-style: italic; opacity: 0.85; }
+
+/* Track-gap chip: "announced MAE 12.1 · predicted 14.3 → input cost +2.2" */
+.track-gap-chip {
+  display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  margin-left: 8px; padding: 1px 7px; border-radius: 999px;
+  border: 1px solid var(--baseline); background: var(--surface-1);
+  font-size: 11px; line-height: 1.6; vertical-align: middle;
+  font-variant-numeric: tabular-nums;
+}
+.track-gap-chip .tg-part { color: var(--text-muted); }
+.track-gap-chip .tg-part + .tg-part::before { content: "· "; }
+.track-gap-chip .tg-cost { font-weight: 600; color: var(--text-secondary); }
+.track-gap-chip.cost-pos .tg-cost { color: var(--terracotta, #B45309); }
+.track-gap-chip.cost-neg .tg-cost { color: var(--series-act, #2E7D32); }
+.track-gap-chip.cost-na { border-style: dashed; opacity: 0.8; }
+.track-gap-chip.cost-na .tg-cost { color: var(--text-muted); font-style: italic; }
+.track-gap-stat .track-gap-chip { margin-left: 0; }
+
+/* Inline "this surface is the Predicted pillar" note (predict + book views). */
+.track-inline-note {
+  margin: 10px 0 0; padding: 8px 12px; border-radius: 6px;
+  border: 1px solid var(--baseline); background: var(--surface-1);
+  font-size: 12.5px; line-height: 1.5; color: var(--text-muted);
+}
+.track-inline-note-active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface-1));
+  color: var(--text-secondary);
+}
+
 /* ---------- explorer grid ---------- */
 .explorer-grid {
   display: grid;
