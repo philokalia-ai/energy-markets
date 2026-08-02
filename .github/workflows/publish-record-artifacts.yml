@@ -97,11 +97,20 @@ jobs:
           set -euo pipefail
           julia --project=. -e 'using Pkg; Pkg.instantiate()'
           julia --project=. bin/export_zone_strategies.jl
+          julia --project=. bin/export_book_methodology.jl
+          julia --project=. bin/export_boundaries.jl
           test -s data/calibration/zone_strategies.json
+          test -s data/calibration/book_methodology.json
+          test -s data/calibration/boundaries.json
           export AWS_ACCESS_KEY_ID="$WEB_S3_ACCESS_KEY_ID"
           export AWS_SECRET_ACCESS_KEY="$WEB_S3_SECRET_ACCESS_KEY"
           aws s3 cp --endpoint-url "$WEB_S3_ENDPOINT" \
             --content-type application/json --cache-control "max-age=300" \
             data/calibration/zone_strategies.json \
             "s3://$WEB_S3_BUCKET/v1/zone_strategies.json"
+          for f in book_methodology boundaries; do
+            aws s3 cp --endpoint-url "$WEB_S3_ENDPOINT" \
+              --content-type application/json --cache-control "max-age=300" \
+              "data/calibration/$f.json" "s3://$WEB_S3_BUCKET/v1/$f.json"
+          done
           aws s3 ls --endpoint-url "$WEB_S3_ENDPOINT" "s3://$WEB_S3_BUCKET/v1/zone_strategies.json"
