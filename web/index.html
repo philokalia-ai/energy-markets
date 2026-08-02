@@ -72,6 +72,7 @@
     <button id="tab-predict" class="tab" role="tab" aria-selected="false" data-view="predict">Predicting RES &amp; loads</button>
     <button id="tab-explorer" class="tab" role="tab" aria-selected="false" data-view="explorer">Zone explorer</button>
     <button id="tab-book" class="tab" role="tab" aria-selected="false" data-view="book">Order book</button>
+    <button id="tab-method" class="tab" role="tab" aria-selected="false" data-view="method">How bids are built</button>
     <button id="tab-board" class="tab" role="tab" aria-selected="false" data-view="board">Scoreboard</button>
     <button id="tab-cases" class="tab" role="tab" aria-selected="false" data-view="cases">Case studies</button>
   </nav>
@@ -465,6 +466,103 @@
            block (merit-order sorted) + a demand section, split at the clearing
            point. Populated by renderBookTable in app.js. -->
       <div id="book-table" class="book-table-wrap"></div>
+    </div>
+  </section>
+
+  <!-- ============ How bids are built (bid-methodology reference, pillar 5) ============ -->
+  <!-- Every number in this view is GENERATED from the running model
+       (/api/v1/book_methodology + zone_strategies) — the SPA never transcribes a
+       book number. Containers here are populated by renderMethod() in app.js. -->
+  <section id="view-method" class="view" role="tabpanel" aria-labelledby="tab-method" hidden>
+    <div class="chart-card">
+      <div class="chart-head">
+        <h2 class="chart-title">How a bid is built — from named ex-ante characteristics</h2>
+        <p class="chart-sub">Every order in the merit book carries a <strong>strategy label</strong> —
+          the honest source-side reason that block sits where it does. This page teaches that
+          vocabulary and wires each term to (a) the named parameter or formula that produced it,
+          and (b) its provenance: market-<em>observed</em> vs <em>declared</em> &amp; out-of-sample
+          validated. <strong>No price here is hand-authored</strong> — the cost constants, tranche
+          form and glossary are generated from the running model; drag the sliders to explore.
+          <a href="#view=book" id="method-to-book-link">See these blocks live in the order book &rarr;</a></p>
+      </div>
+      <div id="method-status" class="chart-sub"></div>
+    </div>
+
+    <!-- B1 · SRMC decomposition explorer -->
+    <div class="chart-card method-section" id="method-b1">
+      <div class="chart-head">
+        <h2 class="chart-title">1 · The SRMC of a bid — the cost floor</h2>
+        <p class="chart-sub">The short-run marginal cost is the atom of every thermal offer:
+          fuel ÷ efficiency + carbon + O&amp;M, with <strong>no scarcity markup</strong>. Pick a
+          fuel; drag TTF (gas) and EUA (carbon) to feel the cost assemble.</p>
+      </div>
+      <div id="b1-controls" class="method-controls"></div>
+      <div id="b1-waterfall" class="method-waterfall"></div>
+      <p id="b1-note" class="day-comment"></p>
+    </div>
+
+    <!-- B2 · Tranche ladder + must-run economics schematic -->
+    <div class="chart-card method-section" id="method-b2">
+      <div class="chart-head">
+        <h2 class="chart-title">2 · From cost to offered blocks — tranches &amp; must-run</h2>
+        <p class="chart-sub">One unit's available capacity is sliced into priced blocks. The
+          deepest must-run block is bid <em>below cost</em> by design; upper tranches carry the
+          scarcity/peak markup that only bites in tight hours.</p>
+      </div>
+      <div id="b2-schematic" class="method-schematic"></div>
+      <p id="b2-note" class="day-comment"></p>
+    </div>
+
+    <!-- B3 · The parameter → bid-category table -->
+    <div class="chart-card method-section" id="method-b3">
+      <div class="chart-head">
+        <h2 class="chart-title">3 · The characteristics table — parameter &rarr; bid category</h2>
+        <p class="chart-sub">Every named characteristic, its value/source, the strategy label it
+          produces, and a provenance badge: <span class="prov-badge prov-observed">observed</span>
+          (market data, no choice) or <span class="prov-badge prov-declared">declared</span>
+          (a named characteristic, chosen then validated out-of-sample — never fitted to prices).</p>
+      </div>
+      <div id="b3-table" class="method-table-wrap"></div>
+    </div>
+
+    <!-- B4 · Strategy glossary -->
+    <div class="chart-card method-section" id="method-b4">
+      <div class="chart-head">
+        <h2 class="chart-title">4 · The strategy glossary — the WHY-column dictionary</h2>
+        <p class="chart-sub">One card per strategy label — the exact vocabulary the order-book
+          table prints. Generated from the model's own <code>STRATEGY_DESCRIPTIONS</code>, so the
+          book and this page can never disagree.</p>
+      </div>
+      <div id="b4-glossary" class="method-glossary"></div>
+    </div>
+
+    <!-- B5 · Per-zone profile explorer -->
+    <div class="chart-card method-section" id="method-b5">
+      <div class="chart-head">
+        <h2 class="chart-title">5 · Per-zone profiles — why zones behave differently</h2>
+        <p class="chart-sub">The 39 zones resolve to a handful of distinct parameter vectors. Pick a
+          zone to see only the fields that differ from the SEE base, each with its provenance badge —
+          plus the honest &ldquo;strategy not in the table&rdquo; caveats.</p>
+      </div>
+      <div id="b5-controls" class="method-controls"></div>
+      <div id="b5-zone" class="method-zone-card"></div>
+      <div id="b5-treatments" class="method-treatments"></div>
+      <div id="b5-outside" class="method-outside"></div>
+    </div>
+
+    <!-- B6 · Calibration honesty — observed/declared census + cv-ledger timeline -->
+    <div class="chart-card method-section" id="method-b6">
+      <div class="chart-head">
+        <h2 class="chart-title">6 · Calibration honesty — constructed, not fitted</h2>
+        <p class="chart-sub">Pillar 5 is <strong>constructed</strong>: its <em>inputs</em> are
+          market-observed, its <em>form</em> is a small set of declared parameters validated on
+          held-out windows. <strong>No price is regressed.</strong> Below: the observed/declared
+          census, then the calibration history — every shipped mechanism with its measured Set A /
+          Set B deltas, and the NO-SHIPs kept visible beside them.</p>
+      </div>
+      <div id="b6-census" class="method-census"></div>
+      <h3 class="panel-title" style="margin:18px 0 8px">The calibration timeline</h3>
+      <div id="b6-ledger" class="method-ledger"></div>
     </div>
   </section>
 

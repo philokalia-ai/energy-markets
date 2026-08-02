@@ -14,6 +14,8 @@
     "test:inputs-routes": "node test/inputs_routes.test.mjs",
     "test:predict": "node test/predict.test.mjs",
     "test:views": "node test/views_empty_state.test.mjs",
+    "test:methodology": "node test/book_methodology.test.mjs",
+    "test:methodview": "node test/method_view.test.mjs",
     "dev": "wrangler dev --config wrangler.toml",
     "deploy": "wrangler deploy --config wrangler.toml"
   },

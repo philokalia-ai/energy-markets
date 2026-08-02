@@ -1,0 +1,1761 @@
+{
+  "base_profile": "SEE_PROFILE",
+  "code_version": 31,
+  "field_descriptions": {
+    "anchor_share": "fraction of the coupled reference the anchored fleet asks for",
+    "backstop_scarcity_credit": "also credit that headroom in the scarcity margin",
+    "boundary_book": "an out-of-footprint neighbour modelled as an elastic counterparty",
+    "fleet_truth_mode": "true the fleet to trailing p95 output, or to registry installed capacity",
+    "hydro_model": "gas-anchored water value, or reservoir-opportunity from weekly levels",
+    "import_backstop": "offer demonstrated import headroom as elastic supply",
+    "nuclear_avail_share_hi": "anchor share when the fleet is fully available",
+    "nuclear_avail_share_lo": "anchor share when the nuclear fleet is at its crisis floor",
+    "nuclear_bid_ref_ceiling": "cap on anchor-lifted nuclear bids, as a multiple of the reference",
+    "nuclear_srmc_floor": "floor under nuclear bids (EUR/MWh) — France's off-peak position",
+    "opportunity_anchor": "which fleet re-bids in pass 2 against the coupled price",
+    "peak_kappa": "extra uplift at the day's demand peak",
+    "ref_priced_exports": "price exports over retained borders at the coupled reference",
+    "scarcity_import_credit": "credit available import capacity against the scarcity margin",
+    "scarcity_kappa": "how hard offers steepen once the margin is thin",
+    "scarcity_threshold": "supply margin below which offers start to steepen",
+    "seasonal_drawdown": "follow the seasonal reservoir drawdown cycle (Swedish north)",
+    "spill_surplus_dryness": "cv27 spill-risk gate: below this dryness the hydro offer chases the net-demand valley (0 = off)",
+    "thermal_srmc_multiplier": "premium on this zone's thermal running costs (Italy: 1.20)",
+    "water_value_base": "reservoir hydro's opportunity cost, as a multiple of gas SRMC",
+    "water_value_span": "how much the water value swings across the day's demand range"
+  },
+  "fields": [
+    "scarcity_threshold",
+    "scarcity_kappa",
+    "peak_kappa",
+    "water_value_base",
+    "water_value_span",
+    "thermal_srmc_multiplier",
+    "hydro_model",
+    "spill_surplus_dryness",
+    "nuclear_srmc_floor",
+    "opportunity_anchor",
+    "anchor_share",
+    "nuclear_avail_share_lo",
+    "nuclear_avail_share_hi",
+    "nuclear_bid_ref_ceiling",
+    "scarcity_import_credit",
+    "fleet_truth_mode",
+    "seasonal_drawdown",
+    "import_backstop",
+    "backstop_scarcity_credit",
+    "ref_priced_exports",
+    "boundary_book"
+  ],
+  "generated_from": "get_zone_profile resolved in-process — never hand-maintained",
+  "generated_utc": "2026-08-02T17:52:13Z",
+  "kill_switches_set": [],
+  "n_distinct_treatments": 18,
+  "n_zones": 39,
+  "source_of_truth": "src/merit_order/zone_profiles.jl",
+  "strategy_outside_the_profile": [
+    {
+      "mechanism": "The table is scoped to the EU-footprint product",
+      "note": "Profiles apply ONLY on the coupled 39-zone path. The legacy single-zone and 5-zone SEE products force SEE_PROFILE, so for those the table below does not describe what was cleared.",
+      "where": "enrich_network && apply_zone_profiles, in multi_zone_books.jl"
+    },
+    {
+      "mechanism": "FLEET_TRUTH_OVERRIDE (per day, all zones)",
+      "note": "When a day's coupled clear stays infeasible through the whole retry ladder, EVERY zone's fleet_truth_mode is forced to :p95 for that day and the day ships. So a published day can have been cleared with a different value of a column below.",
+      "where": "multi_zone_run.jl's robustness fallback"
+    },
+    {
+      "mechanism": "Border drops (flow-based)",
+      "note": "Core-FBMC and other borders whose offered ATC misrepresents the real constraint are dropped per zone pair; two zones can share a profile and still be treated differently because of this. It also SHAPES BIDS: for an anchored zone, exports over a dropped border come back as a separate reference-priced demand block (anchor_export_mw), which is a bid mechanism keyed off the drop list and anchor state, not off any field.",
+      "where": "the enriched network build, not the profile"
+    },
+    {
+      "mechanism": "Continental anchor proxy",
+      "note": "Every :hydro/:nuclear anchored zone with no endogenous neighbour falls back to the DE_LU/NL average — a shared reference no column shows.",
+      "where": "hardcoded (\"DE_LU\", \"NL\") in compute_opportunity_anchor_refs"
+    },
+    {
+      "mechanism": "Other zone-name-keyed treatment in the flow layer",
+      "note": "The ex-ante flow rule treats the Nordic zones differently, and aggregate ENTSO-E border codes are remapped to a representative zone. Neither is a profile field.",
+      "where": "flows_imports.jl (NORDIC_FLOW_ZONES D-7 recency) and the aggregate-border remap"
+    },
+    {
+      "mechanism": "Env-gated version switches",
+      "note": "Set in A/B and byte-identity runs; unset in production. They rewrite the profile AFTER the registry — and CV22 additionally gates data-layer bug fixes that are not profile fields at all. The table reflects the environment it was generated in; the kill_switches_set field above says which were active.",
+      "where": "get_zone_profile, AND non-profile code: fleet_data.jl (reservoir window and dryness wrap) and flows_imports.jl (the :v2 border-map fallback) for CV22"
+    }
+  ],
+  "treatments": [
+    {
+      "n": 6,
+      "zones": [
+        "CZ",
+        "DE_LU",
+        "EE",
+        "LT",
+        "LV",
+        "NL"
+      ]
+    },
+    {
+      "n": 5,
+      "zones": [
+        "IT-CSOUTH",
+        "IT-Calabria",
+        "IT-SOUTH",
+        "IT-Sardinia",
+        "IT-Sicily"
+      ]
+    },
+    {
+      "n": 3,
+      "zones": [
+        "BG",
+        "GR",
+        "RS"
+      ]
+    },
+    {
+      "n": 3,
+      "zones": [
+        "FI",
+        "SE1",
+        "SE2"
+      ]
+    },
+    {
+      "n": 3,
+      "zones": [
+        "NO1",
+        "NO3",
+        "SE3"
+      ]
+    },
+    {
+      "n": 3,
+      "zones": [
+        "NO2",
+        "NO5",
+        "SE4"
+      ]
+    },
+    {
+      "n": 2,
+      "zones": [
+        "BE",
+        "SI"
+      ]
+    },
+    {
+      "n": 2,
+      "zones": [
+        "ES",
+        "PT"
+      ]
+    },
+    {
+      "n": 2,
+      "zones": [
+        "HU",
+        "RO"
+      ]
+    },
+    {
+      "n": 2,
+      "zones": [
+        "IT-CNORTH",
+        "IT-NORTH"
+      ]
+    },
+    {
+      "n": 1,
+      "zones": [
+        "AT"
+      ]
+    },
+    {
+      "n": 1,
+      "zones": [
+        "CH"
+      ]
+    },
+    {
+      "n": 1,
+      "zones": [
+        "DK1"
+      ]
+    },
+    {
+      "n": 1,
+      "zones": [
+        "DK2"
+      ]
+    },
+    {
+      "n": 1,
+      "zones": [
+        "FR"
+      ]
+    },
+    {
+      "n": 1,
+      "zones": [
+        "NO4"
+      ]
+    },
+    {
+      "n": 1,
+      "zones": [
+        "PL"
+      ]
+    },
+    {
+      "n": 1,
+      "zones": [
+        "SK"
+      ]
+    }
+  ],
+  "zones": [
+    {
+      "differs_from_base": [
+        "scarcity_threshold",
+        "scarcity_kappa",
+        "peak_kappa",
+        "water_value_base",
+        "water_value_span",
+        "hydro_model",
+        "opportunity_anchor",
+        "anchor_share",
+        "import_backstop"
+      ],
+      "values": {
+        "anchor_share": 1.1,
+        "backstop_scarcity_credit": 0.0,
+        "boundary_book": null,
+        "fleet_truth_mode": "p95",
+        "hydro_model": "reservoir_opportunity",
+        "import_backstop": true,
+        "nuclear_avail_share_hi": 0.0,
+        "nuclear_avail_share_lo": 0.0,
+        "nuclear_bid_ref_ceiling": 0.0,
+        "nuclear_srmc_floor": 0.0,
+        "opportunity_anchor": "hydro",
+        "peak_kappa": 0.5,
+        "ref_priced_exports": false,
+        "scarcity_import_credit": 0.0,
+        "scarcity_kappa": 1.0,
+        "scarcity_threshold": 1.2,
+        "seasonal_drawdown": true,
+        "spill_surplus_dryness": 0.0,
+        "thermal_srmc_multiplier": 1.0,
+        "water_value_base": 0.6,
+        "water_value_span": 0.5
+      },
+      "zone": "AT"
+    },
+    {
+      "differs_from_base": [
+        "scarcity_threshold",
+        "scarcity_kappa",
+        "peak_kappa",
+        "opportunity_anchor",
+        "import_backstop",
+        "ref_priced_exports"
+      ],
+      "values": {
+        "anchor_share": 0.9,
+        "backstop_scarcity_credit": 0.0,
+        "boundary_book": null,
+        "fleet_truth_mode": "p95",
+        "hydro_model": "gas_anchored",
+        "import_backstop": true,
+        "nuclear_avail_share_hi": 0.0,
+        "nuclear_avail_share_lo": 0.0,
+        "nuclear_bid_ref_ceiling": 0.0,
+        "nuclear_srmc_floor": 0.0,
+        "opportunity_anchor": "hydro",
+        "peak_kappa": 0.6,
+        "ref_priced_exports": true,
+        "scarcity_import_credit": 0.0,
+        "scarcity_kappa": 1.5,
+        "scarcity_threshold": 1.25,
+        "seasonal_drawdown": true,
+        "spill_surplus_dryness": 0.0,
+        "thermal_srmc_multiplier": 1.0,
+        "water_value_base": 0.85,
+        "water_value_span": 0.9
+      },
+      "zone": "BE"
+    },
+    {
+      "differs_from_base": [
+        "import_backstop",
+        "backstop_scarcity_credit"
+      ],
+      "values": {
+        "anchor_share": 0.9,
+        "backstop_scarcity_credit": 1.0,
+        "boundary_book": null,
+        "fleet_truth_mode": "p95",
+        "hydro_model": "gas_anchored",
+        "import_backstop": true,
+        "nuclear_avail_share_hi": 0.0,
+        "nuclear_avail_share_lo": 0.0,
+        "nuclear_bid_ref_ceiling": 0.0,
+        "nuclear_srmc_floor": 0.0,
+        "opportunity_anchor": "none",
+        "peak_kappa": 1.2,
+        "ref_priced_exports": false,
+        "scarcity_import_credit": 0.0,
+        "scarcity_kappa": 3.0,
+        "scarcity_threshold": 1.4,
+        "seasonal_drawdown": true,
+        "spill_surplus_dryness": 0.0,
+        "thermal_srmc_multiplier": 1.0,
+        "water_value_base": 0.85,
+        "water_value_span": 0.9
+      },
+      "zone": "BG"
+    },
+    {
+      "differs_from_base": [
+        "scarcity_threshold",
+        "scarcity_kappa",
+        "peak_kappa",
+        "scarcity_import_credit",
+        "fleet_truth_mode"
+      ],
+      "values": {
+        "anchor_share": 0.9,
+        "backstop_scarcity_credit": 0.0,
+        "boundary_book": null,
+        "fleet_truth_mode": "installed",
+        "hydro_model": "gas_anchored",
+        "import_backstop": false,
+        "nuclear_avail_share_hi": 0.0,
+        "nuclear_avail_share_lo": 0.0,
+        "nuclear_bid_ref_ceiling": 0.0,
+        "nuclear_srmc_floor": 0.0,
+        "opportunity_anchor": "none",
+        "peak_kappa": 0.6,
+        "ref_priced_exports": false,
+        "scarcity_import_credit": 1.0,
+        "scarcity_kappa": 1.5,
+        "scarcity_threshold": 1.25,
+        "seasonal_drawdown": true,
+        "spill_surplus_dryness": 0.0,
+        "thermal_srmc_multiplier": 1.0,
+        "water_value_base": 0.85,
+        "water_value_span": 0.9
+      },
+      "zone": "CZ"
+    },
+    {
+      "differs_from_base": [
+        "scarcity_threshold",
+        "scarcity_kappa",
+        "peak_kappa",
+        "scarcity_import_credit",
+        "fleet_truth_mode"
+      ],
+      "values": {
+        "anchor_share": 0.9,
+        "backstop_scarcity_credit": 0.0,
+        "boundary_book": null,
+        "fleet_truth_mode": "installed",
+        "hydro_model": "gas_anchored",
+        "import_backstop": false,
+        "nuclear_avail_share_hi": 0.0,
+        "nuclear_avail_share_lo": 0.0,
+        "nuclear_bid_ref_ceiling": 0.0,
+        "nuclear_srmc_floor": 0.0,
+        "opportunity_anchor": "none",
+        "peak_kappa": 0.6,
+        "ref_priced_exports": false,
+        "scarcity_import_credit": 1.0,
+        "scarcity_kappa": 1.5,
+        "scarcity_threshold": 1.25,
+        "seasonal_drawdown": true,
+        "spill_surplus_dryness": 0.0,
+        "thermal_srmc_multiplier": 1.0,
+        "water_value_base": 0.85,
+        "water_value_span": 0.9
+      },
+      "zone": "DE_LU"
+    },
+    {
+      "differs_from_base": [
+        "scarcity_threshold",
+        "scarcity_kappa",
+        "peak_kappa",
+        "water_value_base",
+        "water_value_span",
+        "hydro_model",
+        "spill_surplus_dryness",
+        "import_backstop",
+        "boundary_book"
+      ],
+      "values": {
+        "anchor_share": 0.9,
+        "backstop_scarcity_credit": 0.0,
+        "boundary_book": {
+          "anchor": "gb_ccgt_srmc",
+          "anchor_mult": 1.15,
+          "atc_codes": [],
+          "capability_mode": "atc_capped",
+          "carbon_source": "eua",
+          "counterparty": "GB",
+          "disable_env": "EUPHEMIA_DISABLE_CV21",
+          "exp_ladder": [
+            [
+              1.05,
+              0.5
+            ],
+            [
+              0.9,
+              0.5
+            ]
+          ],
+          "firm_price": 2999.0,
+          "firm_quantile": 0.1,
+          "firm_slice": false,
+          "firm_window_days": 28,
+          "flow_codes": [
+            "GB"
+          ],
+          "imp_ladder": [
+            [
+              1.0,
+              0.5
+            ],
+            [
+              1.15,
+              0.3
+            ],
+            [
+              1.3,
+              0.2
+            ]
+          ],
+          "net_exclude_codes": []
+        },
+        "fleet_truth_mode": "p95",
+        "hydro_model": "reservoir_opportunity",
+        "import_backstop": true,
+        "nuclear_avail_share_hi": 0.0,
+        "nuclear_avail_share_lo": 0.0,
+        "nuclear_bid_ref_ceiling": 0.0,
+        "nuclear_srmc_floor": 0.0,
+        "opportunity_anchor": "none",
+        "peak_kappa": 0.5,
+        "ref_priced_exports": false,
+        "scarcity_import_credit": 0.0,
+        "scarcity_kappa": 1.0,
+        "scarcity_threshold": 1.2,
+        "seasonal_drawdown": true,
+        "spill_surplus_dryness": 0.15,
+        "thermal_srmc_multiplier": 1.0,
+        "water_value_base": 0.6,
+        "water_value_span": 0.5
+      },
+      "zone": "DK1"
+    },
+    {
+      "differs_from_base": [
+        "scarcity_threshold",
+        "scarcity_kappa",
+        "peak_kappa",
+        "water_value_base",
+        "water_value_span",
+        "hydro_model",
+        "spill_surplus_dryness",
+        "import_backstop"
+      ],
+      "values": {
+        "anchor_share": 0.9,
+        "backstop_scarcity_credit": 0.0,
+        "boundary_book": null,
+        "fleet_truth_mode": "p95",
+        "hydro_model": "reservoir_opportunity",
+        "import_backstop": true,
+        "nuclear_avail_share_hi": 0.0,
+        "nuclear_avail_share_lo": 0.0,
+        "nuclear_bid_ref_ceiling": 0.0,
+        "nuclear_srmc_floor": 0.0,
+        "opportunity_anchor": "none",
+        "peak_kappa": 0.5,
+        "ref_priced_exports": false,
+        "scarcity_import_credit": 0.0,
+        "scarcity_kappa": 1.0,
+        "scarcity_threshold": 1.2,
+        "seasonal_drawdown": true,
+        "spill_surplus_dryness": 0.15,
+        "thermal_srmc_multiplier": 1.0,
+        "water_value_base": 0.6,
+        "water_value_span": 0.5
+      },
+      "zone": "DK2"
+    },
+    {
+      "differs_from_base": [
+        "scarcity_threshold",
+        "scarcity_kappa",
+        "peak_kappa",
+        "scarcity_import_credit",
+        "fleet_truth_mode"
+      ],
+      "values": {
+        "anchor_share": 0.9,
+        "backstop_scarcity_credit": 0.0,
+        "boundary_book": null,
+        "fleet_truth_mode": "installed",
+        "hydro_model": "gas_anchored",
+        "import_backstop": false,
+        "nuclear_avail_share_hi": 0.0,
+        "nuclear_avail_share_lo": 0.0,
+        "nuclear_bid_ref_ceiling": 0.0,
+        "nuclear_srmc_floor": 0.0,
+        "opportunity_anchor": "none",
+        "peak_kappa": 0.6,
+        "ref_priced_exports": false,
+        "scarcity_import_credit": 1.0,
+        "scarcity_kappa": 1.5,
+        "scarcity_threshold": 1.25,
+        "seasonal_drawdown": true,
+        "spill_surplus_dryness": 0.0,
+        "thermal_srmc_multiplier": 1.0,
+        "water_value_base": 0.85,
+        "water_value_span": 0.9
+      },
+      "zone": "EE"
+    },
+    {
+      "differs_from_base": [],
+      "values": {
+        "anchor_share": 0.9,
+        "backstop_scarcity_credit": 0.0,
+        "boundary_book": null,
+        "fleet_truth_mode": "p95",
+        "hydro_model": "gas_anchored",
+        "import_backstop": false,
+        "nuclear_avail_share_hi": 0.0,
+        "nuclear_avail_share_lo": 0.0,
+        "nuclear_bid_ref_ceiling": 0.0,
+        "nuclear_srmc_floor": 0.0,
+        "opportunity_anchor": "none",
+        "peak_kappa": 1.2,
+        "ref_priced_exports": false,
+        "scarcity_import_credit": 0.0,
+        "scarcity_kappa": 3.0,
+        "scarcity_threshold": 1.4,
+        "seasonal_drawdown": true,
+        "spill_surplus_dryness": 0.0,
+        "thermal_srmc_multiplier": 1.0,
+        "water_value_base": 0.85,
+        "water_value_span": 0.9
+      },
+      "zone": "ES"
+    },
+    {
+      "differs_from_base": [
+        "scarcity_threshold",
+        "scarcity_kappa",
+        "peak_kappa",
+        "water_value_base",
+        "water_value_span",
+        "hydro_model",
+        "spill_surplus_dryness"
+      ],
+      "values": {
+        "anchor_share": 0.9,
+        "backstop_scarcity_credit": 0.0,
+        "boundary_book": null,
+        "fleet_truth_mode": "p95",
+        "hydro_model": "reservoir_opportunity",
+        "import_backstop": false,
+        "nuclear_avail_share_hi": 0.0,
+        "nuclear_avail_share_lo": 0.0,
+        "nuclear_bid_ref_ceiling": 0.0,
+        "nuclear_srmc_floor": 0.0,
+        "opportunity_anchor": "none",
+        "peak_kappa": 0.5,
+        "ref_priced_exports": false,
+        "scarcity_import_credit": 0.0,
+        "scarcity_kappa": 1.0,
+        "scarcity_threshold": 1.2,
+        "seasonal_drawdown": true,
+        "spill_surplus_dryness": 0.15,
+        "thermal_srmc_multiplier": 1.0,
+        "water_value_base": 0.6,
+        "water_value_span": 0.5
+      },
+      "zone": "FI"
+    },
+    {
+      "differs_from_base": [
+        "scarcity_threshold",
+        "scarcity_kappa",
+        "peak_kappa",
+        "nuclear_srmc_floor",
+        "opportunity_anchor",
+        "anchor_share",
+        "nuclear_avail_share_lo",
+        "nuclear_avail_share_hi",
+        "nuclear_bid_ref_ceiling",
+        "import_backstop",
+        "backstop_scarcity_credit",
+        "boundary_book"
+      ],
+      "values": {
+        "anchor_share": 0.55,
+        "backstop_scarcity_credit": 1.0,
+        "boundary_book": {
+          "anchor": "gb_ccgt_srmc",
+          "anchor_mult": 1.15,
+          "atc_codes": [
+            "GB_IFA",
+            "GB_IFA2",
+            "GB_ElecLink"
+          ],
+          "capability_mode": "atc_capped",
+          "carbon_source": "uka",
+          "counterparty": "GB",
+          "disable_env": "EUPHEMIA_DISABLE_CV23",
+          "exp_ladder": [
+            [
+              1.05,
+              0.5
+            ],
+            [
+              0.9,
+              0.5
+            ]
+          ],
+          "firm_price": 2999.0,
+          "firm_quantile": 0.1,
+          "firm_slice": false,
+          "firm_window_days": 28,
+          "flow_codes": [
+            "GB"
+          ],
+          "imp_ladder": [
+            [
+              1.0,
+              0.5
+            ],
+            [
+              1.15,
+              0.3
+            ],
+            [
+              1.3,
+              0.2
+            ]
+          ],
+          "net_exclude_codes": [
+            "GB",
+            "GB_IFA",
+            "GB_IFA2",
+            "GB_ElecLink"
+          ]
+        },
+        "fleet_truth_mode": "p95",
+        "hydro_model": "gas_anchored",
+        "import_backstop": true,
+        "nuclear_avail_share_hi": 0.95,
+        "nuclear_avail_share_lo": 0.4,
+        "nuclear_bid_ref_ceiling": 1.3,
+        "nuclear_srmc_floor": 55.0,
+        "opportunity_anchor": "nuclear",
+        "peak_kappa": 0.6,
+        "ref_priced_exports": false,
+        "scarcity_import_credit": 0.0,
+        "scarcity_kappa": 1.5,
+        "scarcity_threshold": 1.25,
+        "seasonal_drawdown": true,
+        "spill_surplus_dryness": 0.0,
+        "thermal_srmc_multiplier": 1.0,
+        "water_value_base": 0.85,
+        "water_value_span": 0.9
+      },
+      "zone": "FR"
+    },
+    {
+      "differs_from_base": [
+        "import_backstop",
+        "backstop_scarcity_credit"
+      ],
+      "values": {
+        "anchor_share": 0.9,
+        "backstop_scarcity_credit": 1.0,
+        "boundary_book": null,
+        "fleet_truth_mode": "p95",
+        "hydro_model": "gas_anchored",
+        "import_backstop": true,
+        "nuclear_avail_share_hi": 0.0,
+        "nuclear_avail_share_lo": 0.0,
+        "nuclear_bid_ref_ceiling": 0.0,
+        "nuclear_srmc_floor": 0.0,
+        "opportunity_anchor": "none",
+        "peak_kappa": 1.2,
+        "ref_priced_exports": false,
+        "scarcity_import_credit": 0.0,
+        "scarcity_kappa": 3.0,
+        "scarcity_threshold": 1.4,
+        "seasonal_drawdown": true,
+        "spill_surplus_dryness": 0.0,
+        "thermal_srmc_multiplier": 1.0,
+        "water_value_base": 0.85,
+        "water_value_span": 0.9
+      },
+      "zone": "GR"
+    },
+    {
+      "differs_from_base": [
+        "import_backstop",
+        "backstop_scarcity_credit",
+        "boundary_book"
+      ],
+      "values": {
+        "anchor_share": 0.9,
+        "backstop_scarcity_credit": 1.0,
+        "boundary_book": {
+          "anchor": "zone_gas_srmc",
+          "anchor_mult": 1.0,
+          "atc_codes": [],
+          "capability_mode": "p95_block",
+          "carbon_source": "eua",
+          "counterparty": "UA",
+          "disable_env": "EUPHEMIA_DISABLE_CV22",
+          "exp_ladder": [
+            [
+              1.2,
+              0.5
+            ],
+            [
+              1.0,
+              0.5
+            ]
+          ],
+          "firm_price": 2999.0,
+          "firm_quantile": 0.1,
+          "firm_slice": true,
+          "firm_window_days": 28,
+          "flow_codes": [
+            "UA"
+          ],
+          "imp_ladder": [
+            [
+              0.4675,
+              0.5
+            ],
+            [
+              0.55,
+              0.3
+            ],
+            [
+              0.66,
+              0.2
+            ]
+          ],
+          "net_exclude_codes": []
+        },
+        "fleet_truth_mode": "p95",
+        "hydro_model": "gas_anchored",
+        "import_backstop": true,
+        "nuclear_avail_share_hi": 0.0,
+        "nuclear_avail_share_lo": 0.0,
+        "nuclear_bid_ref_ceiling": 0.0,
+        "nuclear_srmc_floor": 0.0,
+        "opportunity_anchor": "none",
+        "peak_kappa": 1.2,
+        "ref_priced_exports": false,
+        "scarcity_import_credit": 0.0,
+        "scarcity_kappa": 3.0,
+        "scarcity_threshold": 1.4,
+        "seasonal_drawdown": true,
+        "spill_surplus_dryness": 0.0,
+        "thermal_srmc_multiplier": 1.0,
+        "water_value_base": 0.85,
+        "water_value_span": 0.9
+      },
+      "zone": "HU"
+    },
+    {
+      "differs_from_base": [
+        "scarcity_threshold",
+        "scarcity_kappa",
+        "peak_kappa",
+        "scarcity_import_credit",
+        "fleet_truth_mode"
+      ],
+      "values": {
+        "anchor_share": 0.9,
+        "backstop_scarcity_credit": 0.0,
+        "boundary_book": null,
+        "fleet_truth_mode": "installed",
+        "hydro_model": "gas_anchored",
+        "import_backstop": false,
+        "nuclear_avail_share_hi": 0.0,
+        "nuclear_avail_share_lo": 0.0,
+        "nuclear_bid_ref_ceiling": 0.0,
+        "nuclear_srmc_floor": 0.0,
+        "opportunity_anchor": "none",
+        "peak_kappa": 0.6,
+        "ref_priced_exports": false,
+        "scarcity_import_credit": 1.0,
+        "scarcity_kappa": 1.5,
+        "scarcity_threshold": 1.25,
+        "seasonal_drawdown": true,
+        "spill_surplus_dryness": 0.0,
+        "thermal_srmc_multiplier": 1.0,
+        "water_value_base": 0.85,
+        "water_value_span": 0.9
+      },
+      "zone": "LT"
+    },
+    {
+      "differs_from_base": [
+        "scarcity_threshold",
+        "scarcity_kappa",
+        "peak_kappa",
+        "scarcity_import_credit",
+        "fleet_truth_mode"
+      ],
+      "values": {
+        "anchor_share": 0.9,
+        "backstop_scarcity_credit": 0.0,
+        "boundary_book": null,
+        "fleet_truth_mode": "installed",
+        "hydro_model": "gas_anchored",
+        "import_backstop": false,
+        "nuclear_avail_share_hi": 0.0,
+        "nuclear_avail_share_lo": 0.0,
+        "nuclear_bid_ref_ceiling": 0.0,
+        "nuclear_srmc_floor": 0.0,
+        "opportunity_anchor": "none",
+        "peak_kappa": 0.6,
+        "ref_priced_exports": false,
+        "scarcity_import_credit": 1.0,
+        "scarcity_kappa": 1.5,
+        "scarcity_threshold": 1.25,
+        "seasonal_drawdown": true,
+        "spill_surplus_dryness": 0.0,
+        "thermal_srmc_multiplier": 1.0,
+        "water_value_base": 0.85,
+        "water_value_span": 0.9
+      },
+      "zone": "LV"
+    },
+    {
+      "differs_from_base": [
+        "scarcity_threshold",
+        "scarcity_kappa",
+        "peak_kappa",
+        "scarcity_import_credit",
+        "fleet_truth_mode"
+      ],
+      "values": {
+        "anchor_share": 0.9,
+        "backstop_scarcity_credit": 0.0,
+        "boundary_book": null,
+        "fleet_truth_mode": "installed",
+        "hydro_model": "gas_anchored",
+        "import_backstop": false,
+        "nuclear_avail_share_hi": 0.0,
+        "nuclear_avail_share_lo": 0.0,
+        "nuclear_bid_ref_ceiling": 0.0,
+        "nuclear_srmc_floor": 0.0,
+        "opportunity_anchor": "none",
+        "peak_kappa": 0.6,
+        "ref_priced_exports": false,
+        "scarcity_import_credit": 1.0,
+        "scarcity_kappa": 1.5,
+        "scarcity_threshold": 1.25,
+        "seasonal_drawdown": true,
+        "spill_surplus_dryness": 0.0,
+        "thermal_srmc_multiplier": 1.0,
+        "water_value_base": 0.85,
+        "water_value_span": 0.9
+      },
+      "zone": "NL"
+    },
+    {
+      "differs_from_base": [
+        "scarcity_threshold",
+        "scarcity_kappa",
+        "peak_kappa",
+        "water_value_base",
+        "water_value_span",
+        "hydro_model",
+        "spill_surplus_dryness",
+        "opportunity_anchor",
+        "import_backstop"
+      ],
+      "values": {
+        "anchor_share": 0.9,
+        "backstop_scarcity_credit": 0.0,
+        "boundary_book": null,
+        "fleet_truth_mode": "p95",
+        "hydro_model": "reservoir_opportunity",
+        "import_backstop": true,
+        "nuclear_avail_share_hi": 0.0,
+        "nuclear_avail_share_lo": 0.0,
+        "nuclear_bid_ref_ceiling": 0.0,
+        "nuclear_srmc_floor": 0.0,
+        "opportunity_anchor": "hydro",
+        "peak_kappa": 0.5,
+        "ref_priced_exports": false,
+        "scarcity_import_credit": 0.0,
+        "scarcity_kappa": 1.0,
+        "scarcity_threshold": 1.2,
+        "seasonal_drawdown": true,
+        "spill_surplus_dryness": 0.15,
+        "thermal_srmc_multiplier": 1.0,
+        "water_value_base": 0.6,
+        "water_value_span": 0.5
+      },
+      "zone": "NO1"
+    },
+    {
+      "differs_from_base": [
+        "scarcity_threshold",
+        "scarcity_kappa",
+        "peak_kappa",
+        "water_value_base",
+        "water_value_span",
+        "hydro_model",
+        "spill_surplus_dryness",
+        "opportunity_anchor"
+      ],
+      "values": {
+        "anchor_share": 0.9,
+        "backstop_scarcity_credit": 0.0,
+        "boundary_book": null,
+        "fleet_truth_mode": "p95",
+        "hydro_model": "reservoir_opportunity",
+        "import_backstop": false,
+        "nuclear_avail_share_hi": 0.0,
+        "nuclear_avail_share_lo": 0.0,
+        "nuclear_bid_ref_ceiling": 0.0,
+        "nuclear_srmc_floor": 0.0,
+        "opportunity_anchor": "hydro",
+        "peak_kappa": 0.5,
+        "ref_priced_exports": false,
+        "scarcity_import_credit": 0.0,
+        "scarcity_kappa": 1.0,
+        "scarcity_threshold": 1.2,
+        "seasonal_drawdown": true,
+        "spill_surplus_dryness": 0.15,
+        "thermal_srmc_multiplier": 1.0,
+        "water_value_base": 0.6,
+        "water_value_span": 0.5
+      },
+      "zone": "NO2"
+    },
+    {
+      "differs_from_base": [
+        "scarcity_threshold",
+        "scarcity_kappa",
+        "peak_kappa",
+        "water_value_base",
+        "water_value_span",
+        "hydro_model",
+        "spill_surplus_dryness",
+        "opportunity_anchor",
+        "import_backstop"
+      ],
+      "values": {
+        "anchor_share": 0.9,
+        "backstop_scarcity_credit": 0.0,
+        "boundary_book": null,
+        "fleet_truth_mode": "p95",
+        "hydro_model": "reservoir_opportunity",
+        "import_backstop": true,
+        "nuclear_avail_share_hi": 0.0,
+        "nuclear_avail_share_lo": 0.0,
+        "nuclear_bid_ref_ceiling": 0.0,
+        "nuclear_srmc_floor": 0.0,
+        "opportunity_anchor": "hydro",
+        "peak_kappa": 0.5,
+        "ref_priced_exports": false,
+        "scarcity_import_credit": 0.0,
+        "scarcity_kappa": 1.0,
+        "scarcity_threshold": 1.2,
+        "seasonal_drawdown": true,
+        "spill_surplus_dryness": 0.15,
+        "thermal_srmc_multiplier": 1.0,
+        "water_value_base": 0.6,
+        "water_value_span": 0.5
+      },
+      "zone": "NO3"
+    },
+    {
+      "differs_from_base": [
+        "scarcity_threshold",
+        "scarcity_kappa",
+        "peak_kappa",
+        "water_value_base",
+        "water_value_span",
+        "hydro_model",
+        "spill_surplus_dryness",
+        "seasonal_drawdown"
+      ],
+      "values": {
+        "anchor_share": 0.9,
+        "backstop_scarcity_credit": 0.0,
+        "boundary_book": null,
+        "fleet_truth_mode": "p95",
+        "hydro_model": "reservoir_opportunity",
+        "import_backstop": false,
+        "nuclear_avail_share_hi": 0.0,
+        "nuclear_avail_share_lo": 0.0,
+        "nuclear_bid_ref_ceiling": 0.0,
+        "nuclear_srmc_floor": 0.0,
+        "opportunity_anchor": "none",
+        "peak_kappa": 0.5,
+        "ref_priced_exports": false,
+        "scarcity_import_credit": 0.0,
+        "scarcity_kappa": 1.0,
+        "scarcity_threshold": 1.2,
+        "seasonal_drawdown": false,
+        "spill_surplus_dryness": 0.15,
+        "thermal_srmc_multiplier": 1.0,
+        "water_value_base": 0.6,
+        "water_value_span": 0.5
+      },
+      "zone": "NO4"
+    },
+    {
+      "differs_from_base": [
+        "scarcity_threshold",
+        "scarcity_kappa",
+        "peak_kappa",
+        "water_value_base",
+        "water_value_span",
+        "hydro_model",
+        "spill_surplus_dryness",
+        "opportunity_anchor"
+      ],
+      "values": {
+        "anchor_share": 0.9,
+        "backstop_scarcity_credit": 0.0,
+        "boundary_book": null,
+        "fleet_truth_mode": "p95",
+        "hydro_model": "reservoir_opportunity",
+        "import_backstop": false,
+        "nuclear_avail_share_hi": 0.0,
+        "nuclear_avail_share_lo": 0.0,
+        "nuclear_bid_ref_ceiling": 0.0,
+        "nuclear_srmc_floor": 0.0,
+        "opportunity_anchor": "hydro",
+        "peak_kappa": 0.5,
+        "ref_priced_exports": false,
+        "scarcity_import_credit": 0.0,
+        "scarcity_kappa": 1.0,
+        "scarcity_threshold": 1.2,
+        "seasonal_drawdown": true,
+        "spill_surplus_dryness": 0.15,
+        "thermal_srmc_multiplier": 1.0,
+        "water_value_base": 0.6,
+        "water_value_span": 0.5
+      },
+      "zone": "NO5"
+    },
+    {
+      "differs_from_base": [
+        "scarcity_threshold",
+        "scarcity_kappa",
+        "peak_kappa",
+        "scarcity_import_credit",
+        "fleet_truth_mode",
+        "boundary_book"
+      ],
+      "values": {
+        "anchor_share": 0.9,
+        "backstop_scarcity_credit": 0.0,
+        "boundary_book": {
+          "anchor": "zone_gas_srmc",
+          "anchor_mult": 1.0,
+          "atc_codes": [],
+          "capability_mode": "p95_block",
+          "carbon_source": "eua",
+          "counterparty": "UA",
+          "disable_env": "EUPHEMIA_DISABLE_CV22",
+          "exp_ladder": [
+            [
+              1.2,
+              0.5
+            ],
+            [
+              1.0,
+              0.5
+            ]
+          ],
+          "firm_price": 2999.0,
+          "firm_quantile": 0.1,
+          "firm_slice": true,
+          "firm_window_days": 28,
+          "flow_codes": [
+            "UA",
+            "UA_DobTPP"
+          ],
+          "imp_ladder": [
+            [
+              0.4675,
+              0.5
+            ],
+            [
+              0.55,
+              0.3
+            ],
+            [
+              0.66,
+              0.2
+            ]
+          ],
+          "net_exclude_codes": []
+        },
+        "fleet_truth_mode": "installed",
+        "hydro_model": "gas_anchored",
+        "import_backstop": false,
+        "nuclear_avail_share_hi": 0.0,
+        "nuclear_avail_share_lo": 0.0,
+        "nuclear_bid_ref_ceiling": 0.0,
+        "nuclear_srmc_floor": 0.0,
+        "opportunity_anchor": "none",
+        "peak_kappa": 0.6,
+        "ref_priced_exports": false,
+        "scarcity_import_credit": 1.0,
+        "scarcity_kappa": 1.5,
+        "scarcity_threshold": 1.25,
+        "seasonal_drawdown": true,
+        "spill_surplus_dryness": 0.0,
+        "thermal_srmc_multiplier": 1.0,
+        "water_value_base": 0.85,
+        "water_value_span": 0.9
+      },
+      "zone": "PL"
+    },
+    {
+      "differs_from_base": [],
+      "values": {
+        "anchor_share": 0.9,
+        "backstop_scarcity_credit": 0.0,
+        "boundary_book": null,
+        "fleet_truth_mode": "p95",
+        "hydro_model": "gas_anchored",
+        "import_backstop": false,
+        "nuclear_avail_share_hi": 0.0,
+        "nuclear_avail_share_lo": 0.0,
+        "nuclear_bid_ref_ceiling": 0.0,
+        "nuclear_srmc_floor": 0.0,
+        "opportunity_anchor": "none",
+        "peak_kappa": 1.2,
+        "ref_priced_exports": false,
+        "scarcity_import_credit": 0.0,
+        "scarcity_kappa": 3.0,
+        "scarcity_threshold": 1.4,
+        "seasonal_drawdown": true,
+        "spill_surplus_dryness": 0.0,
+        "thermal_srmc_multiplier": 1.0,
+        "water_value_base": 0.85,
+        "water_value_span": 0.9
+      },
+      "zone": "PT"
+    },
+    {
+      "differs_from_base": [
+        "import_backstop",
+        "backstop_scarcity_credit",
+        "boundary_book"
+      ],
+      "values": {
+        "anchor_share": 0.9,
+        "backstop_scarcity_credit": 1.0,
+        "boundary_book": {
+          "anchor": "zone_gas_srmc",
+          "anchor_mult": 1.0,
+          "atc_codes": [],
+          "capability_mode": "p95_block",
+          "carbon_source": "eua",
+          "counterparty": "UA",
+          "disable_env": "EUPHEMIA_DISABLE_CV22",
+          "exp_ladder": [
+            [
+              1.2,
+              0.5
+            ],
+            [
+              1.0,
+              0.5
+            ]
+          ],
+          "firm_price": 2999.0,
+          "firm_quantile": 0.1,
+          "firm_slice": true,
+          "firm_window_days": 28,
+          "flow_codes": [
+            "UA"
+          ],
+          "imp_ladder": [
+            [
+              0.4675,
+              0.5
+            ],
+            [
+              0.55,
+              0.3
+            ],
+            [
+              0.66,
+              0.2
+            ]
+          ],
+          "net_exclude_codes": []
+        },
+        "fleet_truth_mode": "p95",
+        "hydro_model": "gas_anchored",
+        "import_backstop": true,
+        "nuclear_avail_share_hi": 0.0,
+        "nuclear_avail_share_lo": 0.0,
+        "nuclear_bid_ref_ceiling": 0.0,
+        "nuclear_srmc_floor": 0.0,
+        "opportunity_anchor": "none",
+        "peak_kappa": 1.2,
+        "ref_priced_exports": false,
+        "scarcity_import_credit": 0.0,
+        "scarcity_kappa": 3.0,
+        "scarcity_threshold": 1.4,
+        "seasonal_drawdown": true,
+        "spill_surplus_dryness": 0.0,
+        "thermal_srmc_multiplier": 1.0,
+        "water_value_base": 0.85,
+        "water_value_span": 0.9
+      },
+      "zone": "RO"
+    },
+    {
+      "differs_from_base": [
+        "import_backstop",
+        "backstop_scarcity_credit"
+      ],
+      "values": {
+        "anchor_share": 0.9,
+        "backstop_scarcity_credit": 1.0,
+        "boundary_book": null,
+        "fleet_truth_mode": "p95",
+        "hydro_model": "gas_anchored",
+        "import_backstop": true,
+        "nuclear_avail_share_hi": 0.0,
+        "nuclear_avail_share_lo": 0.0,
+        "nuclear_bid_ref_ceiling": 0.0,
+        "nuclear_srmc_floor": 0.0,
+        "opportunity_anchor": "none",
+        "peak_kappa": 1.2,
+        "ref_priced_exports": false,
+        "scarcity_import_credit": 0.0,
+        "scarcity_kappa": 3.0,
+        "scarcity_threshold": 1.4,
+        "seasonal_drawdown": true,
+        "spill_surplus_dryness": 0.0,
+        "thermal_srmc_multiplier": 1.0,
+        "water_value_base": 0.85,
+        "water_value_span": 0.9
+      },
+      "zone": "RS"
+    },
+    {
+      "differs_from_base": [
+        "scarcity_threshold",
+        "scarcity_kappa",
+        "peak_kappa",
+        "water_value_base",
+        "water_value_span",
+        "hydro_model",
+        "spill_surplus_dryness"
+      ],
+      "values": {
+        "anchor_share": 0.9,
+        "backstop_scarcity_credit": 0.0,
+        "boundary_book": null,
+        "fleet_truth_mode": "p95",
+        "hydro_model": "reservoir_opportunity",
+        "import_backstop": false,
+        "nuclear_avail_share_hi": 0.0,
+        "nuclear_avail_share_lo": 0.0,
+        "nuclear_bid_ref_ceiling": 0.0,
+        "nuclear_srmc_floor": 0.0,
+        "opportunity_anchor": "none",
+        "peak_kappa": 0.5,
+        "ref_priced_exports": false,
+        "scarcity_import_credit": 0.0,
+        "scarcity_kappa": 1.0,
+        "scarcity_threshold": 1.2,
+        "seasonal_drawdown": true,
+        "spill_surplus_dryness": 0.15,
+        "thermal_srmc_multiplier": 1.0,
+        "water_value_base": 0.6,
+        "water_value_span": 0.5
+      },
+      "zone": "SE1"
+    },
+    {
+      "differs_from_base": [
+        "scarcity_threshold",
+        "scarcity_kappa",
+        "peak_kappa",
+        "water_value_base",
+        "water_value_span",
+        "hydro_model",
+        "spill_surplus_dryness"
+      ],
+      "values": {
+        "anchor_share": 0.9,
+        "backstop_scarcity_credit": 0.0,
+        "boundary_book": null,
+        "fleet_truth_mode": "p95",
+        "hydro_model": "reservoir_opportunity",
+        "import_backstop": false,
+        "nuclear_avail_share_hi": 0.0,
+        "nuclear_avail_share_lo": 0.0,
+        "nuclear_bid_ref_ceiling": 0.0,
+        "nuclear_srmc_floor": 0.0,
+        "opportunity_anchor": "none",
+        "peak_kappa": 0.5,
+        "ref_priced_exports": false,
+        "scarcity_import_credit": 0.0,
+        "scarcity_kappa": 1.0,
+        "scarcity_threshold": 1.2,
+        "seasonal_drawdown": true,
+        "spill_surplus_dryness": 0.15,
+        "thermal_srmc_multiplier": 1.0,
+        "water_value_base": 0.6,
+        "water_value_span": 0.5
+      },
+      "zone": "SE2"
+    },
+    {
+      "differs_from_base": [
+        "scarcity_threshold",
+        "scarcity_kappa",
+        "peak_kappa",
+        "water_value_base",
+        "water_value_span",
+        "hydro_model",
+        "spill_surplus_dryness",
+        "opportunity_anchor",
+        "import_backstop"
+      ],
+      "values": {
+        "anchor_share": 0.9,
+        "backstop_scarcity_credit": 0.0,
+        "boundary_book": null,
+        "fleet_truth_mode": "p95",
+        "hydro_model": "reservoir_opportunity",
+        "import_backstop": true,
+        "nuclear_avail_share_hi": 0.0,
+        "nuclear_avail_share_lo": 0.0,
+        "nuclear_bid_ref_ceiling": 0.0,
+        "nuclear_srmc_floor": 0.0,
+        "opportunity_anchor": "hydro",
+        "peak_kappa": 0.5,
+        "ref_priced_exports": false,
+        "scarcity_import_credit": 0.0,
+        "scarcity_kappa": 1.0,
+        "scarcity_threshold": 1.2,
+        "seasonal_drawdown": true,
+        "spill_surplus_dryness": 0.15,
+        "thermal_srmc_multiplier": 1.0,
+        "water_value_base": 0.6,
+        "water_value_span": 0.5
+      },
+      "zone": "SE3"
+    },
+    {
+      "differs_from_base": [
+        "scarcity_threshold",
+        "scarcity_kappa",
+        "peak_kappa",
+        "water_value_base",
+        "water_value_span",
+        "hydro_model",
+        "spill_surplus_dryness",
+        "opportunity_anchor"
+      ],
+      "values": {
+        "anchor_share": 0.9,
+        "backstop_scarcity_credit": 0.0,
+        "boundary_book": null,
+        "fleet_truth_mode": "p95",
+        "hydro_model": "reservoir_opportunity",
+        "import_backstop": false,
+        "nuclear_avail_share_hi": 0.0,
+        "nuclear_avail_share_lo": 0.0,
+        "nuclear_bid_ref_ceiling": 0.0,
+        "nuclear_srmc_floor": 0.0,
+        "opportunity_anchor": "hydro",
+        "peak_kappa": 0.5,
+        "ref_priced_exports": false,
+        "scarcity_import_credit": 0.0,
+        "scarcity_kappa": 1.0,
+        "scarcity_threshold": 1.2,
+        "seasonal_drawdown": true,
+        "spill_surplus_dryness": 0.15,
+        "thermal_srmc_multiplier": 1.0,
+        "water_value_base": 0.6,
+        "water_value_span": 0.5
+      },
+      "zone": "SE4"
+    },
+    {
+      "differs_from_base": [
+        "scarcity_threshold",
+        "scarcity_kappa",
+        "peak_kappa",
+        "opportunity_anchor",
+        "import_backstop",
+        "ref_priced_exports"
+      ],
+      "values": {
+        "anchor_share": 0.9,
+        "backstop_scarcity_credit": 0.0,
+        "boundary_book": null,
+        "fleet_truth_mode": "p95",
+        "hydro_model": "gas_anchored",
+        "import_backstop": true,
+        "nuclear_avail_share_hi": 0.0,
+        "nuclear_avail_share_lo": 0.0,
+        "nuclear_bid_ref_ceiling": 0.0,
+        "nuclear_srmc_floor": 0.0,
+        "opportunity_anchor": "hydro",
+        "peak_kappa": 0.6,
+        "ref_priced_exports": true,
+        "scarcity_import_credit": 0.0,
+        "scarcity_kappa": 1.5,
+        "scarcity_threshold": 1.25,
+        "seasonal_drawdown": true,
+        "spill_surplus_dryness": 0.0,
+        "thermal_srmc_multiplier": 1.0,
+        "water_value_base": 0.85,
+        "water_value_span": 0.9
+      },
+      "zone": "SI"
+    },
+    {
+      "differs_from_base": [
+        "scarcity_threshold",
+        "scarcity_kappa",
+        "peak_kappa",
+        "opportunity_anchor",
+        "boundary_book"
+      ],
+      "values": {
+        "anchor_share": 0.9,
+        "backstop_scarcity_credit": 0.0,
+        "boundary_book": {
+          "anchor": "zone_gas_srmc",
+          "anchor_mult": 1.0,
+          "atc_codes": [],
+          "capability_mode": "p95_block",
+          "carbon_source": "eua",
+          "counterparty": "UA",
+          "disable_env": "EUPHEMIA_DISABLE_CV22",
+          "exp_ladder": [
+            [
+              1.2,
+              0.5
+            ],
+            [
+              1.0,
+              0.5
+            ]
+          ],
+          "firm_price": 2999.0,
+          "firm_quantile": 0.1,
+          "firm_slice": true,
+          "firm_window_days": 28,
+          "flow_codes": [
+            "UA"
+          ],
+          "imp_ladder": [
+            [
+              0.4675,
+              0.5
+            ],
+            [
+              0.55,
+              0.3
+            ],
+            [
+              0.66,
+              0.2
+            ]
+          ],
+          "net_exclude_codes": []
+        },
+        "fleet_truth_mode": "p95",
+        "hydro_model": "gas_anchored",
+        "import_backstop": false,
+        "nuclear_avail_share_hi": 0.0,
+        "nuclear_avail_share_lo": 0.0,
+        "nuclear_bid_ref_ceiling": 0.0,
+        "nuclear_srmc_floor": 0.0,
+        "opportunity_anchor": "hydro",
+        "peak_kappa": 0.6,
+        "ref_priced_exports": false,
+        "scarcity_import_credit": 0.0,
+        "scarcity_kappa": 1.5,
+        "scarcity_threshold": 1.25,
+        "seasonal_drawdown": true,
+        "spill_surplus_dryness": 0.0,
+        "thermal_srmc_multiplier": 1.0,
+        "water_value_base": 0.85,
+        "water_value_span": 0.9
+      },
+      "zone": "SK"
+    },
+    {
+      "differs_from_base": [
+        "thermal_srmc_multiplier",
+        "import_backstop"
+      ],
+      "values": {
+        "anchor_share": 0.9,
+        "backstop_scarcity_credit": 0.0,
+        "boundary_book": null,
+        "fleet_truth_mode": "p95",
+        "hydro_model": "gas_anchored",
+        "import_backstop": true,
+        "nuclear_avail_share_hi": 0.0,
+        "nuclear_avail_share_lo": 0.0,
+        "nuclear_bid_ref_ceiling": 0.0,
+        "nuclear_srmc_floor": 0.0,
+        "opportunity_anchor": "none",
+        "peak_kappa": 1.2,
+        "ref_priced_exports": false,
+        "scarcity_import_credit": 0.0,
+        "scarcity_kappa": 3.0,
+        "scarcity_threshold": 1.4,
+        "seasonal_drawdown": true,
+        "spill_surplus_dryness": 0.0,
+        "thermal_srmc_multiplier": 1.2,
+        "water_value_base": 0.85,
+        "water_value_span": 0.9
+      },
+      "zone": "IT-NORTH"
+    },
+    {
+      "differs_from_base": [
+        "thermal_srmc_multiplier",
+        "import_backstop"
+      ],
+      "values": {
+        "anchor_share": 0.9,
+        "backstop_scarcity_credit": 0.0,
+        "boundary_book": null,
+        "fleet_truth_mode": "p95",
+        "hydro_model": "gas_anchored",
+        "import_backstop": true,
+        "nuclear_avail_share_hi": 0.0,
+        "nuclear_avail_share_lo": 0.0,
+        "nuclear_bid_ref_ceiling": 0.0,
+        "nuclear_srmc_floor": 0.0,
+        "opportunity_anchor": "none",
+        "peak_kappa": 1.2,
+        "ref_priced_exports": false,
+        "scarcity_import_credit": 0.0,
+        "scarcity_kappa": 3.0,
+        "scarcity_threshold": 1.4,
+        "seasonal_drawdown": true,
+        "spill_surplus_dryness": 0.0,
+        "thermal_srmc_multiplier": 1.2,
+        "water_value_base": 0.85,
+        "water_value_span": 0.9
+      },
+      "zone": "IT-CNORTH"
+    },
+    {
+      "differs_from_base": [
+        "thermal_srmc_multiplier"
+      ],
+      "values": {
+        "anchor_share": 0.9,
+        "backstop_scarcity_credit": 0.0,
+        "boundary_book": null,
+        "fleet_truth_mode": "p95",
+        "hydro_model": "gas_anchored",
+        "import_backstop": false,
+        "nuclear_avail_share_hi": 0.0,
+        "nuclear_avail_share_lo": 0.0,
+        "nuclear_bid_ref_ceiling": 0.0,
+        "nuclear_srmc_floor": 0.0,
+        "opportunity_anchor": "none",
+        "peak_kappa": 1.2,
+        "ref_priced_exports": false,
+        "scarcity_import_credit": 0.0,
+        "scarcity_kappa": 3.0,
+        "scarcity_threshold": 1.4,
+        "seasonal_drawdown": true,
+        "spill_surplus_dryness": 0.0,
+        "thermal_srmc_multiplier": 1.2,
+        "water_value_base": 0.85,
+        "water_value_span": 0.9
+      },
+      "zone": "IT-CSOUTH"
+    },
+    {
+      "differs_from_base": [
+        "thermal_srmc_multiplier"
+      ],
+      "values": {
+        "anchor_share": 0.9,
+        "backstop_scarcity_credit": 0.0,
+        "boundary_book": null,
+        "fleet_truth_mode": "p95",
+        "hydro_model": "gas_anchored",
+        "import_backstop": false,
+        "nuclear_avail_share_hi": 0.0,
+        "nuclear_avail_share_lo": 0.0,
+        "nuclear_bid_ref_ceiling": 0.0,
+        "nuclear_srmc_floor": 0.0,
+        "opportunity_anchor": "none",
+        "peak_kappa": 1.2,
+        "ref_priced_exports": false,
+        "scarcity_import_credit": 0.0,
+        "scarcity_kappa": 3.0,
+        "scarcity_threshold": 1.4,
+        "seasonal_drawdown": true,
+        "spill_surplus_dryness": 0.0,
+        "thermal_srmc_multiplier": 1.2,
+        "water_value_base": 0.85,
+        "water_value_span": 0.9
+      },
+      "zone": "IT-SOUTH"
+    },
+    {
+      "differs_from_base": [
+        "thermal_srmc_multiplier"
+      ],
+      "values": {
+        "anchor_share": 0.9,
+        "backstop_scarcity_credit": 0.0,
+        "boundary_book": null,
+        "fleet_truth_mode": "p95",
+        "hydro_model": "gas_anchored",
+        "import_backstop": false,
+        "nuclear_avail_share_hi": 0.0,
+        "nuclear_avail_share_lo": 0.0,
+        "nuclear_bid_ref_ceiling": 0.0,
+        "nuclear_srmc_floor": 0.0,
+        "opportunity_anchor": "none",
+        "peak_kappa": 1.2,
+        "ref_priced_exports": false,
+        "scarcity_import_credit": 0.0,
+        "scarcity_kappa": 3.0,
+        "scarcity_threshold": 1.4,
+        "seasonal_drawdown": true,
+        "spill_surplus_dryness": 0.0,
+        "thermal_srmc_multiplier": 1.2,
+        "water_value_base": 0.85,
+        "water_value_span": 0.9
+      },
+      "zone": "IT-Calabria"
+    },
+    {
+      "differs_from_base": [
+        "thermal_srmc_multiplier"
+      ],
+      "values": {
+        "anchor_share": 0.9,
+        "backstop_scarcity_credit": 0.0,
+        "boundary_book": null,
+        "fleet_truth_mode": "p95",
+        "hydro_model": "gas_anchored",
+        "import_backstop": false,
+        "nuclear_avail_share_hi": 0.0,
+        "nuclear_avail_share_lo": 0.0,
+        "nuclear_bid_ref_ceiling": 0.0,
+        "nuclear_srmc_floor": 0.0,
+        "opportunity_anchor": "none",
+        "peak_kappa": 1.2,
+        "ref_priced_exports": false,
+        "scarcity_import_credit": 0.0,
+        "scarcity_kappa": 3.0,
+        "scarcity_threshold": 1.4,
+        "seasonal_drawdown": true,
+        "spill_surplus_dryness": 0.0,
+        "thermal_srmc_multiplier": 1.2,
+        "water_value_base": 0.85,
+        "water_value_span": 0.9
+      },
+      "zone": "IT-Sicily"
+    },
+    {
+      "differs_from_base": [
+        "thermal_srmc_multiplier"
+      ],
+      "values": {
+        "anchor_share": 0.9,
+        "backstop_scarcity_credit": 0.0,
+        "boundary_book": null,
+        "fleet_truth_mode": "p95",
+        "hydro_model": "gas_anchored",
+        "import_backstop": false,
+        "nuclear_avail_share_hi": 0.0,
+        "nuclear_avail_share_lo": 0.0,
+        "nuclear_bid_ref_ceiling": 0.0,
+        "nuclear_srmc_floor": 0.0,
+        "opportunity_anchor": "none",
+        "peak_kappa": 1.2,
+        "ref_priced_exports": false,
+        "scarcity_import_credit": 0.0,
+        "scarcity_kappa": 3.0,
+        "scarcity_threshold": 1.4,
+        "seasonal_drawdown": true,
+        "spill_surplus_dryness": 0.0,
+        "thermal_srmc_multiplier": 1.2,
+        "water_value_base": 0.85,
+        "water_value_span": 0.9
+      },
+      "zone": "IT-Sardinia"
+    },
+    {
+      "differs_from_base": [
+        "scarcity_threshold",
+        "scarcity_kappa",
+        "peak_kappa",
+        "water_value_base",
+        "water_value_span",
+        "hydro_model",
+        "opportunity_anchor",
+        "import_backstop"
+      ],
+      "values": {
+        "anchor_share": 0.9,
+        "backstop_scarcity_credit": 0.0,
+        "boundary_book": null,
+        "fleet_truth_mode": "p95",
+        "hydro_model": "reservoir_opportunity",
+        "import_backstop": true,
+        "nuclear_avail_share_hi": 0.0,
+        "nuclear_avail_share_lo": 0.0,
+        "nuclear_bid_ref_ceiling": 0.0,
+        "nuclear_srmc_floor": 0.0,
+        "opportunity_anchor": "hydro",
+        "peak_kappa": 0.5,
+        "ref_priced_exports": false,
+        "scarcity_import_credit": 0.0,
+        "scarcity_kappa": 1.0,
+        "scarcity_threshold": 1.2,
+        "seasonal_drawdown": true,
+        "spill_surplus_dryness": 0.0,
+        "thermal_srmc_multiplier": 1.0,
+        "water_value_base": 0.6,
+        "water_value_span": 0.5
+      },
+      "zone": "CH"
+    }
+  ]
+}

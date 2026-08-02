@@ -202,6 +202,15 @@ println()
         include(joinpath(@__DIR__, "test_zone_strategy_export.jl"))
     end
 
+    @testset "Book-methodology export" begin
+        println("\n" * "=" ^ 60)
+        println("Running book-methodology export tests...")
+        println("=" ^ 60)
+        # Pillar 5: every methodology number is generated, not hand-authored. Guards
+        # cost-model / form-constant / provenance / glossary / cv-ledger coverage.
+        include(joinpath(@__DIR__, "test_book_methodology_export.jl"))
+    end
+
     @testset "Price reconstruction (pure, DB-free)" begin
         println("\n" * "=" ^ 60)
         println("Running competitive price reconstruction unit tests...")
