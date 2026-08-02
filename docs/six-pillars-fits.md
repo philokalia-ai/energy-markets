@@ -270,3 +270,23 @@ MAE): a measured no-ship, R2 fixed for FR by the retrain directly. HU/RO also fa
 the holdout gate (over-correct) and are not shipped. Winners shipped exactly as before
 (`meta.json` `pilot_zones`+`winners` + winners-only `.txt`; 78 models ⇔ 78 winners).
 `test/test_ml_inputs.jl` green (235/235); equivalence PASS.
+
+**Iteration 5 — seasonal wind-level calibration (R3). MEASURED NO-SHIP.** Probed a
+month-of-year multiplicative level term on the SHIPPED wind prediction using the
+fit-iteration-4 VALID (`wind_seasonal_iter5.py`, 28 wind zones). The window is 6
+weeks spanning two PARTIAL months (Jun-15…Jul-27), so the only admissible
+out-of-sample check is cross-month: fit the multiplier that zeroes one month's
+volume bias, verify it reduces the OTHER month's MAE (a multiplier is corr-invariant,
+so corr is safe by construction). It does not verify: the correction **reduced
+held-out MAE in only 12/28 zones**, and the June vs July multipliers **agreed within
+5% in only 5/28**. The per-month biases are frequently OPPOSITE-signed (BG +0.554 /
+−0.196, NO3 −0.053 / +0.167, RS +0.149 / −0.067, IT-SOUTH +0.094 / −0.078) — i.e. the
+residual is weather-regime noise between two specific months, not a stable
+month-of-year LEVEL effect this window can fit *and* independently confirm. Shipping a
+seasonal table off it would be an unverifiable fit, so per the methodology it is a
+NO-SHIP; the year-round seasonal layer R3 scoped needs a year-round OOS window (the
+`res-forecasting` recipe: train to a month, evaluate the following 12) that this
+6-week tail cannot provide. Mean |relbias| over the shipped wind zones is 0.127 (the
+large ones — DK1 +0.34, FR +0.22, SE1 +0.42, LV −0.59 — are known small/onshore-fleet
+or Nordic zones from R8). No serve change; `test/test_ml_inputs.jl` unchanged
+(235/235).
