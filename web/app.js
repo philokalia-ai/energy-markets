@@ -157,6 +157,12 @@
     return wd + " " + dateStr;
   }
 
+  function prevDayStr(dateStr) {
+    // "2026-08-09" -> "2026-08-08" (UTC-safe)
+    return new Date(new Date(dateStr + "T00:00:00Z").getTime() - 86400000)
+      .toISOString().slice(0, 10);
+  }
+
   // Hours are stored as UTC stamps of the Europe/Athens market-day window;
   // render them in Europe/Athens local time (00:00–23:00 across the day).
   var ATHENS_TIME = new Intl.DateTimeFormat("en-GB", {
@@ -3999,8 +4005,14 @@
     // previous day/zone/hour's table cannot linger while this one loads.
     bookTableMessage("Loading order book…", "pending-note");
 
+    // The book parquet is keyed by UTC day, but the Athens market day starts at
+    // 21:00Z of the PREVIOUS UTC day — warm that day's book too so the first
+    // three Athens hours can resolve their ladder (see renderBookLadder's
+    // timestamp alignment). Best-effort: a 404 caches null and those hours
+    // show an honest "not captured" note.
     Promise.all([loadBook(state.zone, state.bookDay), loadUnits(),
-                 loadFlows(state.bookDay)]).then(function (r) {
+                 loadFlows(state.bookDay),
+                 loadBook(state.zone, prevDayStr(state.bookDay))]).then(function (r) {
       var book = r[0];
       if (state.view !== "book" || state.bookDay !== fday.date) return;   // stale
       if (!book || !book.supply || !book.supply.length) {
@@ -4040,44 +4052,107 @@
   function renderBookLadder(book, fday, hourIdx) {
     var wrap = $("book-wrap");
     wrap.textContent = "";
-    // Resolve the strategy label from o[3] via book.strategies (both additive;
-    // absent on pre-strategy-column books → strat null, handled everywhere).
-    var bookStrats = book.strategies || null;
-    function stratOf(o) {
-      return bookStrats && o[3] != null ? (bookStrats[o[3]] || null) : null;
-    }
-    var supply = (book.supply[hourIdx] || []).map(function (o) {
-      return { price: o[0], mw: o[1], owner: book.owners[o[2]], strat: stratOf(o) };
-    });
-    // Demand ladder (willingness-to-pay), descending in price from shapeBook.
-    var demand = (book.demand[hourIdx] || []).map(function (o) {
-      return { price: o[0], mw: o[1], owner: book.owners[o[2]], strat: stratOf(o) };
-    });
-    var hasStrategy = !!book.has_strategy;
+    // ---- hour alignment: pick the book hour by TIMESTAMP, never by index ---
+    // fday.hours is the Athens market day (21:00Z of D-1 … 20:00Z of D), while
+    // the captured book parquet covers UTC day(s) — the same INDEX is a
+    // DIFFERENT delivery hour (a 24-hour file is offset +3h; a first-of-run
+    // 48-hour file by a whole day). The Athens hours 00:00–02:59 live in the
+    // PREVIOUS day's parquet (warmed by renderBook). A missing hour shows an
+    // honest note — never a mismatched ladder.
+    var ts = fday.hours[hourIdx];
     var clearing = fday.sim[hourIdx];
     var actual = fday.actual[hourIdx];
     $("book-hour-label").textContent =
-      hourLabel(fday.hours[hourIdx]) + "–" + hourEndLabel(fday.hours[hourIdx]) + " Athens";
+      hourLabel(ts) + "–" + hourEndLabel(ts) + " Athens";
+    var src = null, bIdx = -1;
+    if (book && book.hours) {
+      bIdx = book.hours.indexOf(ts);
+      if (bIdx >= 0) src = book;
+    }
+    if (!src) {
+      var prevBook = state.bookCache[state.zone + "|" + prevDayStr(state.bookDay)];
+      if (prevBook && prevBook.hours) {
+        bIdx = prevBook.hours.indexOf(ts);
+        if (bIdx >= 0) src = prevBook;
+      }
+    }
+    if (!src) {
+      var missMsg = "No captured ladder for " + hourLabel(ts) + "–" + hourEndLabel(ts) +
+        " Athens (" + ts + ") — this delivery hour is not in the day's book parquet " +
+        "(the first Athens hours live in the previous UTC day's book, which is not " +
+        "in the data plane for this day).";
+      wrap.appendChild(el("p", "pending-note", missMsg));
+      bookTableMessage(missMsg);
+      return;
+    }
+    // Resolve the strategy label from o[3] via the book's strategies (both
+    // additive; absent on pre-strategy-column books → strat null, handled
+    // everywhere).
+    var bookStrats = src.strategies || null;
+    function stratOf(o) {
+      return bookStrats && o[3] != null ? (bookStrats[o[3]] || null) : null;
+    }
+    var supply = (src.supply[bIdx] || []).map(function (o) {
+      return { price: o[0], mw: o[1], owner: src.owners[o[2]], strat: stratOf(o) };
+    });
+    // Demand ladder (willingness-to-pay), descending in price from shapeBook.
+    var demand = (src.demand[bIdx] || []).map(function (o) {
+      return { price: o[0], mw: o[1], owner: src.owners[o[2]], strat: stratOf(o) };
+    });
+    var hasStrategy = !!src.has_strategy;
 
     if (!supply.length) {
       wrap.appendChild(el("p", "pending-note", "No supply orders for this hour."));
       return;
     }
 
-    // cumulative MW + the "ball" (cumulative MW where the ladder reaches the
-    // clearing price — the marginal block).
-    var cum = 0, clearMW = null;
-    supply.forEach(function (o) {
-      o.cum0 = cum; cum += o.mw; o.cum1 = cum;
-      if (clearMW === null && clearing !== null && clearing !== undefined && o.price >= clearing) clearMW = o.cum0;
-    });
+    // Cumulative MW on both ladders first (the clearing rule below needs
+    // demand-at-P to place the ball inside an at-the-money marginal block).
+    var cum = 0;
+    supply.forEach(function (o) { o.cum0 = cum; cum += o.mw; o.cum1 = cum; });
     var totalMW = cum;
-    if (clearMW === null) clearMW = totalMW;   // clearing above the whole ladder
 
     // Cumulative demand (descending willingness-to-pay from the left).
     var dcum = 0;
     demand.forEach(function (o) { o.cum0 = dcum; dcum += o.mw; o.cum1 = dcum; });
     var totalDemand = dcum;
+    var demandAtClear = null;
+    if (clearing !== null && clearing !== undefined && demand.length) {
+      var dAt = 0;
+      demand.forEach(function (o) { if (o.price >= clearing - 1e-9) dAt = o.cum1; });
+      demandAtClear = dAt;
+    }
+
+    // The "ball": cumulative MW where the ladder reaches the clearing price.
+    // Blocks priced strictly BELOW the clearing are cleared; strictly ABOVE,
+    // uncleared. A block AT the clearing price is the at-the-money MARGINAL
+    // block: its true cleared share is decided by the coupled flows, which this
+    // local ladder does not carry, so it is split at the LOCAL BALANCE (demand
+    // willing at P, clamped into the at-the-money run). The previous rule
+    // (price >= clearing ⇒ uncleared) counted the WHOLE marginal block as
+    // uncleared — in solar-collapse hours where the coupled price lands exactly
+    // on the €1 RES block, clearMW collapsed to 0 and the trade wedge painted a
+    // phantom multi-GW "(coupling) net imports" row ABOVE the RES block
+    // (GR 2026-08-09 midday: engine-side GR was a net EXPORTER there).
+    var ATM_EPS = 1e-9;
+    var clearMW = null;
+    if (clearing !== null && clearing !== undefined) {
+      for (var mi = 0; mi < supply.length; mi++) {
+        if (supply[mi].price >= clearing - ATM_EPS) {
+          if (Math.abs(supply[mi].price - clearing) <= ATM_EPS) {
+            var mk = mi;   // contiguous at-the-money run [mi..mk]
+            while (mk + 1 < supply.length &&
+                   Math.abs(supply[mk + 1].price - clearing) <= ATM_EPS) mk++;
+            clearMW = demandAtClear === null ? supply[mi].cum0
+              : Math.max(supply[mi].cum0, Math.min(demandAtClear, supply[mk].cum1));
+          } else {
+            clearMW = supply[mi].cum0;
+          }
+          break;
+        }
+      }
+    }
+    if (clearMW === null) clearMW = totalMW;   // clearing above the whole ladder
 
     // ---- coupled-market TRADE WEDGE --------------------------------------
     // The marker sits on the LOCAL supply curve at the COUPLED price P, not at
@@ -4085,13 +4160,7 @@
     // the 39-zone network (flow variables absent from this local ladder).
     // implied_net_import = (local demand willing at P) − (local supply cleared
     // at P) — >0 imports, <0 exports. Hidden when |·| is negligible.
-    var demandAtClear = null, impliedNetImport = null;
-    if (clearing !== null && clearing !== undefined && demand.length) {
-      var dAt = 0;
-      demand.forEach(function (o) { if (o.price >= clearing - 1e-9) dAt = o.cum1; });
-      demandAtClear = dAt;
-      impliedNetImport = demandAtClear - clearMW;   // >0 imports, <0 exports
-    }
+    var impliedNetImport = demandAtClear === null ? null : demandAtClear - clearMW;
 
     // ---- CLIFF metric (client-side, from this ladder) --------------------
     // priceAtCum: the offer price of the supply block covering cumulative q —
@@ -6296,6 +6365,7 @@
   if (typeof window !== "undefined") {
     window.__euphemiaBook = {
       renderBookTable: renderBookTable,
+      renderBookLadder: renderBookLadder,
       bookTableMessage: bookTableMessage,
       strategyMeta: strategyMeta,
       STRATEGY_LABELS: STRATEGY_LABELS,

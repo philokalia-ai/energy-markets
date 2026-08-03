@@ -63,6 +63,24 @@ for (const zone of ["GR", "FR", "DE_LU"]) {
   }
   ok(asc, zone + ": supply ascending in price");
   ok(desc, zone + ": demand descending in price");
+  // Equal-price tie-break: the country's RES / DEMAND blocks come before the
+  // IMPORT injection at the SAME price (parquet tie order is unspecified; the
+  // shaper ranks ties so the display is deterministic — see shapeBook). Within
+  // any equal-price run the rank (RES/DEMAND 0 < other 0.5 < IMPORT 1) must be
+  // non-decreasing.
+  let tieOk = true;
+  const rankOf = (o) => {
+    const own = b.owners[o[2]];
+    return own === "RES" || own === "DEMAND" ? 0 : own === "IMPORT" ? 1 : 0.5;
+  };
+  for (let h = 0; h < b.hours.length; h++) {
+    for (const side of [b.supply[h], b.demand[h]]) {
+      for (let i = 1; i < side.length; i++) {
+        if (side[i][0] === side[i - 1][0] && rankOf(side[i]) < rankOf(side[i - 1])) tieOk = false;
+      }
+    }
+  }
+  ok(tieOk, zone + ": RES/DEMAND before IMPORT at equal price");
   ok(idxOk, zone + ": owner indices in range");
   ok(sIdxOk, zone + ": strategy indices in range");
   // When the parquet carries the strategy column every order must resolve to a
