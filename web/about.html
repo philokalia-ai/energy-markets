@@ -80,6 +80,38 @@
 
   <div class="meander" aria-hidden="true"></div>
 
+  <h2>What this is</h2>
+  <p>
+    This site tracks an <strong>ex-ante simulation</strong> of the European
+    day-ahead electricity market — 39 bidding zones cleared jointly, the way the real
+    EUPHEMIA algorithm clears them, with cross-border transmission constraints. The model
+    ingests only what a market participant could know the evening before delivery:
+    ENTSO-E load and wind/solar forecasts, offered transfer capacities, fuel and carbon
+    prices, reservoir levels, and the physical generation fleet. From these it builds
+    supply and demand curves per zone, couples them over the transmission network, and
+    solves for the market-clearing price of every hour.
+  </p>
+  <p>
+    The sharp claim is <strong>not "no parameters"</strong> — the book has plenty, and
+    each is a nameable market characteristic (a zone's gas premium, a hydro system's
+    water value). It is that <strong>no parameter is fitted against the prices the
+    model is scored on</strong>: the methodology is transparent, every input is
+    strictly ex-ante, and activation gates are validated out-of-sample on a held-out
+    window rather than tuned in-sample. A model fitted to prices would absorb exactly
+    the competitive deviations we exist to measure.
+  </p>
+
+  <h2>Why — the research thesis</h2>
+  <p>
+    A competitive market should price at the marginal cost of the marginal unit. Our
+    simulation is that competitive benchmark, reconstructed bottom-up. Where the real
+    market persistently clears <em>above</em> the counterfactual — in specific zones,
+    seasons, or hours — that residual is a <strong>finding about market behavior</strong>:
+    scarcity signals, strategic bidding, or the exercise of market power. This is why we
+    refuse to fit the model to prices: a fitted model would absorb exactly the deviations
+    we are trying to measure.
+  </p>
+
   <h2 id="two-layers">The two layers — what we fit, what we construct</h2>
   <p>
     The model is built in two layers with a hard wall between them. Getting this
@@ -163,8 +195,9 @@
     engine</strong> — two <em>fitted</em> (openly statistical predictions), three
     <em>constructed</em> (mechanistic, never fitted to price), and one
     <em>constructed with declared anchors</em> (out-of-EU neighbours priced on their
-    own fundamentals). Each pillar has a surface you can open today; the full
-    verified synthesis, with code anchors, is in
+    own fundamentals). Each pillar has a live surface you can open today — the
+    <em>&ldquo;How it works&rdquo;</em> row on the results page is exactly this list —
+    and the full verified synthesis, with code anchors, is in
     <a class="more-link" href="https://github.com/philokalia-ai/energy-markets/blob/main/docs/six-pillars.md">docs/six-pillars.md</a>.
   </p>
   <ol class="pillars-list">
@@ -222,38 +255,6 @@
       <a class="more-link" href="https://github.com/philokalia-ai/energy-markets/blob/main/docs/six-pillars.md#pillar-6--out-of-eu-zone-behaviours-tr--gb--ua">the per-country detail &rarr;</a>
     </li>
   </ol>
-
-  <h2>What this is</h2>
-  <p>
-    This site tracks an <strong>ex-ante simulation</strong> of the European
-    day-ahead electricity market — 39 bidding zones cleared jointly, the way the real
-    EUPHEMIA algorithm clears them, with cross-border transmission constraints. The model
-    ingests only what a market participant could know the evening before delivery:
-    ENTSO-E load and wind/solar forecasts, offered transfer capacities, fuel and carbon
-    prices, reservoir levels, and the physical generation fleet. From these it builds
-    supply and demand curves per zone, couples them over the transmission network, and
-    solves for the market-clearing price of every hour.
-  </p>
-  <p>
-    The sharp claim is <strong>not "no parameters"</strong> — the book has plenty, and
-    each is a nameable market characteristic (a zone's gas premium, a hydro system's
-    water value). It is that <strong>no parameter is fitted against the prices the
-    model is scored on</strong>: the methodology is transparent, every input is
-    strictly ex-ante, and activation gates are validated out-of-sample on a held-out
-    window rather than tuned in-sample. A model fitted to prices would absorb exactly
-    the competitive deviations we exist to measure.
-  </p>
-
-  <h2>Why — the research thesis</h2>
-  <p>
-    A competitive market should price at the marginal cost of the marginal unit. Our
-    simulation is that competitive benchmark, reconstructed bottom-up. Where the real
-    market persistently clears <em>above</em> the counterfactual — in specific zones,
-    seasons, or hours — that residual is a <strong>finding about market behavior</strong>:
-    scarcity signals, strategic bidding, or the exercise of market power. This is why we
-    refuse to fit the model to prices: a fitted model would absorb exactly the deviations
-    we are trying to measure.
-  </p>
 
   <h2>How the model works</h2>
   <ol>
