@@ -6,6 +6,19 @@ parameters are allowed when they are *nameable market characteristics*,
 calibrated on Set A and **validated out-of-sample** on Set B. ("No-fit" was
 retired for this sharper claim.)
 
+**The six pillars** (owner-ratified 2026-08, docs/six-pillars.md is the
+authority): (1) the SOLVER — coupled 39-zone clearing, validated EXACT on
+real published GME/OMIE books (€0.00; docs/experiments/pubbooks-clearing/);
+(2-4) next-day LOAD / SOLAR / WIND predictions — the FITTED pillars
+(per-zone-winner ML + linear packs, docs/predictions.md); (5) ORDER-BOOK
+CONSTRUCTION from named ex-ante characteristics — constructed, never fitted
+to prices; (6) OUT-OF-EU behaviors (GB/UA elastic boundary books; TR/AL/MK
+fixed injections — a decision, not a gap). Fitted vs constructed is the
+epistemology of the whole program and the site's global TRACK SWITCH:
+*Predicted* (our inputs end-to-end — trust in the model) vs *As announced*
+(ENTSO-E D-1 inputs — the fair evaluation of the bid mechanism); their gap
+is the measured INPUT COST, and comparisons pair the SAME code_version only.
+
 **The product surfaces**: (1) the RECORD — full-history backfill at a
 code_version, published to Postgres/Metabase + site; ENTSO-E D-1 inputs +
 ex-ante flows; the basis for scenario work (cold ironing etc.). (2) the
@@ -28,6 +41,12 @@ the honest product). Vintages are immutable; slices never mix code_versions.
    ("will middays collapse ≤€5?"); input accuracy there defines signal
    usefulness, and input + expression mechanism (≤0 floor, export capability)
    must ship together.
+
+**Infrastructure posture**: the data we depend on lives locally — the
+infra k3s runs open-meteo's download-gfs pipeline (previous_day1..7 served
+from localhost; pankgeorg/infra #27/#28), fetchers are local-first with
+public fallback, and every fetched vintage persists to data/gfs_vintages/.
+No external rate limit may ever again pace a retrain or backfill.
 
 **Boundaries**: conduct residuals (PL import premium, near-cap withheld
 tails) are measured and reported, never reproduced. HiGHS is the
