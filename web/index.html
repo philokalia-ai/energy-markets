@@ -72,17 +72,24 @@
     <p id="track-explainer" class="track-explainer"></p>
   </div>
 
-  <nav class="tabs" role="tablist" aria-label="Views">
+  <nav class="tabs" role="tablist" aria-label="Live views">
     <button id="tab-horizon" class="tab" role="tab" aria-selected="true" data-view="horizon">Recent days</button>
     <button id="tab-map" class="tab" role="tab" aria-selected="false" data-view="map">Map</button>
-    <button id="tab-boundary" class="tab" role="tab" aria-selected="false" data-view="boundary">Boundary</button>
-    <button id="tab-solver" class="tab" role="tab" aria-selected="false" data-view="solver">Solver</button>
-    <button id="tab-predict" class="tab" role="tab" aria-selected="false" data-view="predict">Predicting RES &amp; loads</button>
     <button id="tab-explorer" class="tab" role="tab" aria-selected="false" data-view="explorer">Zone explorer</button>
     <button id="tab-book" class="tab" role="tab" aria-selected="false" data-view="book">Order book</button>
-    <button id="tab-method" class="tab" role="tab" aria-selected="false" data-view="method">How bids are built</button>
     <button id="tab-board" class="tab" role="tab" aria-selected="false" data-view="board">Scoreboard</button>
+  </nav>
+  <!-- The explanatory surfaces, grouped under the six-pillars frame (the About
+       page is the narrative entrance; these are the live instances). Same .tab
+       machinery — deep links #view=solver etc. keep working. -->
+  <nav class="tabs tabs-howto" role="tablist" aria-label="How it works — the six pillars">
+    <span class="tabs-howto-label">How it works</span>
+    <button id="tab-solver" class="tab" role="tab" aria-selected="false" data-view="solver"><span class="pillar-no">1</span>The solver</button>
+    <button id="tab-predict" class="tab" role="tab" aria-selected="false" data-view="predict"><span class="pillar-no">2–4</span>Predicting RES &amp; loads</button>
+    <button id="tab-method" class="tab" role="tab" aria-selected="false" data-view="method"><span class="pillar-no">5</span>How bids are built</button>
+    <button id="tab-boundary" class="tab" role="tab" aria-selected="false" data-view="boundary"><span class="pillar-no">6</span>The boundary</button>
     <button id="tab-cases" class="tab" role="tab" aria-selected="false" data-view="cases">Case studies</button>
+    <a class="tabs-howto-about" href="./about.html#six-pillars">the six pillars, explained &rarr;</a>
   </nav>
 </div>
 
