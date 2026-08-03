@@ -60,8 +60,8 @@
 <div class="hero-lite">
   <p class="hero-kicker">Ex-ante day-ahead electricity price forecasts</p>
   <h1>The competitive counterfactual, live</h1>
-  <p class="subtitle">A fundamentals-based simulation of the European day-ahead market —
-    predictions frozen before delivery, never revised, scored honestly per bidding zone.
+  <p class="subtitle">A fundamentals-based simulation of the European day-ahead market,
+    scored per bidding zone as days settle.
     Flip the whole site between the two tracks below: our fitted inputs, or the TSOs'
     announced D-1 figures through the same engine.
     <a class="more-link" href="./about.html">How it works &rarr;</a></p>
@@ -141,7 +141,7 @@
           <span class="kind-inline kind-elastic">Elastic book</span> — the neighbour bids into the clear
           on its own fundamental cost (GB, UA). <span class="kind-inline kind-fixed">Fixed injection</span>
           — a price-taker observed schedule, lagged ex-ante, that does not respond to price (TR, AL, MK,
-          and every unnamed neighbour). <strong>No price here is fitted.</strong>
+          and every unnamed neighbour).
           <a href="#view=map" id="boundary-to-map-link">&larr; back to the price map</a></p>
       </div>
       <div id="boundary-status" class="chart-sub"></div>
@@ -223,9 +223,7 @@
         <h2 class="chart-title">What's not modelled yet, and why</h2>
       </div>
       <div id="boundary-roadmap" class="boundary-roadmap"></div>
-      <p class="day-comment boundary-nofit-footer">No price on this surface was fitted: the pillar-6
-        anchors are neighbour <em>fundamentals</em>, not regressions against our price errors, and the
-        confirm A/Bs are out-of-sample validation. The absence of a TR/AL/MK book is a
+      <p class="day-comment boundary-nofit-footer">The absence of a TR/AL/MK book is a
         <strong>decision</strong> — the bar to promote a neighbour is the bar GB and UA cleared.</p>
     </div>
   </section>
@@ -498,8 +496,7 @@
       <div class="chart-head">
         <h2 id="rev-title" class="chart-title"></h2>
         <p class="chart-sub">The freshest ex-ante (weather) forecast we published for this
-          delivery day, plus the settled actual. Predictions are frozen when written and
-          never revised.</p>
+          delivery day, plus the settled actual.</p>
       </div>
       <div class="filter-row" style="margin: 10px 0 4px">
         <div class="filter">

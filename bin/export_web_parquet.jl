@@ -25,10 +25,12 @@
 #                             scored; repeated on each hourly row).
 #   v1/scoreboard.parquet     zone, lead_days, window ("all" | "YYYY-MM"),
 #                             input_mode, n_days, mae, bias, corr.
-#   v1/map.parquet            market_date, zone, track, sim, act, mae, corr,
-#                             lead, made — freshest-lead day aggregates, BOTH
-#                             tracks (track = 'predicted' | 'announced'; the
-#                             global lens), matching web/data/map.json.
+#   v1/map.parquet            market_date, zone, track, sim, act, err_pct, mae,
+#                             corr, lead, made — freshest-lead day aggregates,
+#                             BOTH tracks (track = 'predicted' | 'announced';
+#                             the global lens), matching web/data/map.json.
+#                             err_pct = load-weighted WAPE % (null until the day
+#                             fully settles / when the denominator is degenerate).
 #   v1/manifest.json          {updated_at, code_version, market_day_tz, zones,
 #                              row_counts, tracks, track_freshness} — freshness,
 #                              discovery + the two-track lens.
@@ -281,9 +283,14 @@ function export_map_parquet()
     act = resolution_aware_actuals(sd - Day(1), ed)
     actmap = Dict{Tuple{String,DateTime},Float64}(
         (String(a.z), DateTime(a.t)) => Float64(a.act) for a in eachrow(act))
+    # Hourly D-1 load forecast: the weights of err_pct (load-weighted WAPE).
+    loads = Euphemia.sql2df_with_retry(HOURLY_LOAD_FC_SQL, [sd - Day(1), ed + Day(1)])
+    loadmap = Dict{Tuple{String,DateTime},Float64}(
+        (String(r.z), DateTime(r.t)) => Float64(r.load_mw) for r in eachrow(loads))
 
     df = DataFrame(market_date=Date[], zone=String[], track=String[], sim=Float64[],
-                   act=Union{Missing,Float64}[], mae=Union{Missing,Float64}[],
+                   act=Union{Missing,Float64}[], err_pct=Union{Missing,Float64}[],
+                   mae=Union{Missing,Float64}[],
                    corr=Union{Missing,Float64}[], lead=Int[], made=DateTime[])
     for d in sort(unique(Date.(prices.market_date)))
         sub = prices[Date.(prices.market_date) .== d, :]
@@ -296,10 +303,17 @@ function export_map_parquet()
                 settled = Float64[a for a in acts if a !== nothing]
                 lead = Int(zp.lead_days[1])
                 sc = get(scoremap, (zone, d, lead, track), nothing)
+                # err_pct: only for fully-settled days with full load coverage
+                # (the metric is undefined otherwise — never fabricated).
+                loadv = [get(loadmap, (zone, h), nothing) for h in hours]
+                ep = (length(settled) == length(hours) && all(!isnothing, loadv)) ?
+                    load_weighted_err_pct(Float64.(zp.sim), settled, Float64.(loadv)) :
+                    nothing
                 push!(df, (d, zone, track,
                            round(mean(Float64.(zp.sim)); digits=2),
                            length(settled) == length(hours) ?
                                round(mean(settled); digits=2) : missing,
+                           ep === nothing ? missing : round(ep; digits=2),
                            sc === nothing ? missing : nm(sc.mae),
                            sc === nothing ? missing : nm(sc.corr),
                            lead, DateTime(zp.made[1])))

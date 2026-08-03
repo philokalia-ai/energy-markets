@@ -280,6 +280,53 @@ function score_series(sim::Vector{Float64}, act::Vector{Float64})
 end
 
 """
+    load_weighted_err_pct(sim, act, load; min_den_eur=1.0) -> Union{Float64,Nothing}
+
+Load-weighted absolute percentage error for one zone-day (a load-weighted
+WAPE), the map view's "Error %" metric:
+
+    Σ_h load_h·|sim_h − act_h| / Σ_h load_h·|act_h| × 100
+
+All three vectors must be hour-paired and equal-length (throws otherwise).
+Returns `nothing` — never a fabricated number — when the day is empty, when
+total load is not positive, or when the DENOMINATOR is degenerate: the
+load-weighted mean |settled price| below `min_den_eur` €/MWh (a day whose
+settled prices sit at ~0 would turn any € error into an arbitrarily huge %,
+so the metric is honestly undefined there).
+"""
+function load_weighted_err_pct(sim::Vector{Float64}, act::Vector{Float64},
+                               load::Vector{Float64}; min_den_eur::Float64=1.0)
+    (length(sim) == length(act) == length(load)) ||
+        throw(ArgumentError("sim/act/load must be hour-paired (got " *
+                            "$(length(sim))/$(length(act))/$(length(load)))"))
+    isempty(sim) && return nothing
+    wsum = sum(load)
+    wsum > 0 || return nothing
+    den = sum(load .* abs.(act))
+    den / wsum < min_den_eur && return nothing   # near-zero settled prices → undefined
+    return 100 * sum(load .* abs.(sim .- act)) / den
+end
+
+"""
+    HOURLY_LOAD_FC_SQL
+
+Hourly D-1 load forecast per zone over a half-open date window [\$1, \$2) —
+the WEIGHTS of `load_weighted_err_pct` (shared by both map exporters, so the
+parquet and JSON planes stay value-identical). Hour-averaged so PT15M/PT30M
+zones weigh like PT60M ones; same area_type_code filter as src/Loads.jl.
+"""
+const HOURLY_LOAD_FC_SQL = """
+    SELECT area_map_code AS z,
+           date_trunc('hour', date_time_utc AT TIME ZONE 'UTC') AS t,
+           AVG(total_load_mw) AS load_mw
+    FROM entsoe.day_ahead_total_load_forecast
+    WHERE date_time_utc >= (\$1::date::timestamp AT TIME ZONE 'UTC')
+      AND date_time_utc < (\$2::date::timestamp AT TIME ZONE 'UTC')
+      AND area_type_code IN ('BZN', 'BZN/CTA', 'BZN/CTY', 'BZN/CTA/CTY')
+    GROUP BY 1, 2
+"""
+
+"""
     collapse_metrics(sim::Vector{Float64}, act::Vector{Float64}; threshold=5.0)
         -> (n, n_collapse_actual, n_collapse_pred, hits, false_alarms,
             hit_rate, false_alarm_rate)

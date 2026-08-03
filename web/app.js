@@ -2234,10 +2234,14 @@
 
   var mapState = { data: null, geo: null, dayIdx: null, metric: "sim" };
 
+  // "err" is the LOAD-WEIGHTED absolute percentage error, computed server-side
+  // by the exporter (Σ_h load_h·|fc_h − act_h| / Σ_h load_h·|act_h| × 100) and
+  // shipped per (zone, day, track) as `err_pct`. The SPA never computes it —
+  // when the payload predates the field it says so instead of mislabeling €.
   var MAP_METRICS = [
     ["sim", "Forecast"],
     ["act", "Actual (settled)"],
-    ["err", "Error (fc − act)"],
+    ["err", "Error % (load-wtd)"],
   ];
 
   function loadMap() {
@@ -2254,9 +2258,9 @@
     return Promise.all([pData, pGeo]);
   }
 
-  // color ramps (low -> high); diverging ramp for error
+  // color ramp (low -> high) — shared by all three metrics (err_pct is a
+  // non-negative magnitude, so the sequential ramp reads correctly there too)
   var RAMP_SEQ = ["#2C6BA8", "#7FA8CB", "#EAE2CF", "#DA9A6B", "#C4643C", "#8E2F1C"];
-  var RAMP_DIV = ["#16375F", "#2C6BA8", "#EAE2CF", "#C4643C", "#8E2F1C"];
 
   function hex2rgb(h) {
     return [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
@@ -2284,8 +2288,36 @@
     if (!z) return null;
     if (metric === "sim") return z.sim;
     if (metric === "act") return z.act;
-    if (z.act === null || z.act === undefined) return null;
-    return z.sim - z.act;
+    // "err": the exporter-computed load-weighted % error only — never a
+    // client-side € recomputation dressed up as a percentage.
+    return (z.err_pct === null || z.err_pct === undefined) ? null : z.err_pct;
+  }
+
+  function zoneSettled(z) { return z && z.act !== null && z.act !== undefined; }
+
+  // Does the selected day (on the selected track) have ANY settled zone?
+  function daySettledCount(day) {
+    return Object.keys(day.zones).filter(function (zn) {
+      return zoneSettled(day.zones[zn]);
+    }).length;
+  }
+
+  // Does ANY zone on ANY day of the current payload carry err_pct? False on a
+  // data plane published before the metric existed.
+  function dataHasErrPct() {
+    var days = mapState.data && mapState.data.days ? mapState.data.days : [];
+    for (var i = 0; i < days.length; i++) {
+      var tr = days[i].tracks || { any: days[i].zones };
+      var found = Object.keys(tr).some(function (t) {
+        var zonesObj = tr[t] || {};
+        return Object.keys(zonesObj).some(function (zn) {
+          var z = zonesObj[zn];
+          return z && z.err_pct !== null && z.err_pct !== undefined;
+        });
+      });
+      if (found) return true;
+    }
+    return false;
   }
 
   function metricDomain(metric) {
@@ -2298,19 +2330,27 @@
     });
     vals.sort(function (a, b) { return a - b; });
     if (metric === "err") {
-      var m = Math.max(Math.abs(quantile(vals, 0.05)), Math.abs(quantile(vals, 0.95)), 5);
-      return [-m, m];
+      // err_pct is a magnitude (load-weighted |fc − act| as % of settled value):
+      // non-negative, sequential ramp from 0.
+      return [0, Math.max(quantile(vals, 0.95), 25)];
     }
     return [Math.min(0, quantile(vals, 0.02)), Math.max(quantile(vals, 0.98), 10)];
   }
 
-  function renderMapMetricButtons() {
+  function renderMapMetricButtons(day) {
     var box = $("map-metric");
     box.textContent = "";
+    var settled = day ? daySettledCount(day) > 0 : true;
     MAP_METRICS.forEach(function (m) {
       var b = el("button", null, m[1]);
       b.type = "button";
       b.setAttribute("aria-pressed", String(mapState.metric === m[0]));
+      // Settled-only metrics cannot exist for a day that has not settled
+      // (future delivery days included) — annotate instead of rendering blank.
+      if (m[0] !== "sim" && !settled) {
+        b.disabled = true;
+        b.title = "No settled prices for this market day yet — pick an earlier day.";
+      }
       b.addEventListener("click", function () {
         mapState.metric = m[0];
         renderMap();
@@ -2318,6 +2358,38 @@
       });
       box.appendChild(b);
     });
+  }
+
+  // Honest empty state for the map area: no synthetic numbers, ever. Renders a
+  // message (+ optional action) into #map-wrap and blanks the legend.
+  function mapEmptyState(title, msg, actionLabel, action) {
+    var wrap = $("map-wrap");
+    wrap.textContent = "";
+    var box = el("div", "live-unavailable");
+    box.setAttribute("role", "status");
+    box.appendChild(el("p", "lu-title", title));
+    box.appendChild(el("p", "lu-msg", msg));
+    if (action) {
+      var btn = el("button", "lu-retry", actionLabel);
+      btn.type = "button";
+      btn.addEventListener("click", action);
+      box.appendChild(btn);
+    }
+    wrap.appendChild(box);
+    $("map-legend-lo").textContent = "";
+    $("map-legend-hi").textContent = "";
+    $("map-legend-bar").style.backgroundImage = "none";
+  }
+
+  // Index of the newest day with at least one settled zone, or null.
+  function latestSettledDayIdx() {
+    var days = mapState.data.days;
+    for (var i = days.length - 1; i >= 0; i--) {
+      var zonesObj = (days[i].tracks && days[i].tracks[state.track]) || days[i].zones;
+      var has = Object.keys(zonesObj).some(function (zn) { return zoneSettled(zonesObj[zn]); });
+      if (has) return i;
+    }
+    return null;
   }
 
   function buildMapComment(day) {
@@ -2395,16 +2467,47 @@
     slider.max = days.length - 1;
     slider.value = mapState.dayIdx;
     $("map-day-label").textContent = dayLabel(day.date);
-    renderMapMetricButtons();
+    renderMapMetricButtons(day);
 
     var mDef = MAP_METRICS.filter(function (m) { return m[0] === metric; })[0];
     $("map-title").textContent = mDef[1] + " — " + dayLabel(day.date) +
-      " (€/MWh, day average · " + currentTrack().adj + " track)";
+      (metric === "err" ? " (load-weighted |fc − act| as % of settled value · "
+                        : " (€/MWh, day average · ") + currentTrack().adj + " track)";
+
+    // Honest empty states — settled-only metrics on a day with no settled data
+    // (future delivery days included) say so explicitly; never a blank map.
+    if (metric !== "sim" && daySettledCount(day) === 0) {
+      var todayStr = new Date().toISOString().slice(0, 10);
+      var future = day.date > todayStr;
+      var settledIdx = latestSettledDayIdx();
+      mapEmptyState("Not settled yet",
+        (future
+          ? "Delivery day " + dayLabel(day.date) + " is in the future — settled prices " +
+            "for it cannot exist yet."
+          : "Settled prices for " + dayLabel(day.date) + " have not been published yet.") +
+        " This site never substitutes synthetic data; the forecast for this day is on " +
+        "the Forecast metric.",
+        settledIdx !== null ? "Jump to the latest settled day" : null,
+        settledIdx !== null ? function () { mapState.dayIdx = settledIdx; renderMap(); } : null);
+      $("map-comment").textContent = "";
+      return;
+    }
+    if (metric === "err" && !dataHasErrPct()) {
+      // The data plane predates the load-weighted % metric: say so rather than
+      // mislabeling a € difference as a percentage.
+      mapEmptyState("Error % not yet published",
+        "The load-weighted error percentage is computed by the data exporter and " +
+        "arrives with the next data publish. Until then this metric has no honest " +
+        "value to show — per-zone € errors remain in each zone's tooltip on the " +
+        "Forecast and Actual metrics.");
+      $("map-comment").textContent = "";
+      return;
+    }
 
     var dom = metricDomain(metric);
-    var ramp = metric === "err" ? RAMP_DIV : RAMP_SEQ;
-    $("map-legend-lo").textContent = "€" + fmt(dom[0], 0);
-    $("map-legend-hi").textContent = "€" + fmt(dom[1], 0) + (metric === "err" ? "" : "+");
+    var ramp = RAMP_SEQ;
+    $("map-legend-lo").textContent = metric === "err" ? "0%" : "€" + fmt(dom[0], 0);
+    $("map-legend-hi").textContent = (metric === "err" ? fmt(dom[1], 0) + "%" : "€" + fmt(dom[1], 0)) + "+";
     $("map-legend-bar").style.backgroundImage = rampCss(ramp);
 
     var wrap = $("map-wrap");
@@ -2434,7 +2537,9 @@
         fill: has ? rampColor(ramp, t) : "rgba(128,128,128,0.12)",
         stroke: C.page, "stroke-width": 1.1, "stroke-linejoin": "round",
         tabindex: "0", role: "button",
-        "aria-label": zn + (has ? ": " + fmt(v, 1) + " €/MWh" : ": no data"),
+        "aria-label": zn + (has
+          ? ": " + fmt(v, 1) + (metric === "err" ? " % load-weighted error" : " €/MWh")
+          : ": no data"),
       });
 
       var lx = mapX(f.properties.lx), ly = mapY(f.properties.ly);
@@ -2446,7 +2551,8 @@
         if (z) {
           rows.push(["forecast", z.sim]);
           rows.push(["actual", z.act]);
-          if (z.act !== null && z.act !== undefined) rows.push(["error", z.sim - z.act]);
+          if (z.act !== null && z.act !== undefined) rows.push(["error €", z.sim - z.act]);
+          if (z.err_pct !== null && z.err_pct !== undefined) rows.push(["error % (load-wtd)", z.err_pct]);
           if (z.mae !== null && z.mae !== undefined) rows.push(["MAE", z.mae]);
           if (z.corr !== null && z.corr !== undefined) rows.push(["corr", z.corr]);
         }
@@ -2486,7 +2592,7 @@
         var short = zn.replace("IT-", "").replace("DE_LU", "DE/LU");
         labels.push({ x: lx, y: ly, text: short, size: area >= 6 ? 13 : 10, fill: fill, dy: area >= 6 ? -3 : 3 });
         if (has && area >= 6) {
-          labels.push({ x: lx, y: ly, text: (metric === "err" && v > 0 ? "+" : "") + fmt(v, 0),
+          labels.push({ x: lx, y: ly, text: fmt(v, 0) + (metric === "err" ? "%" : ""),
                         size: 12, fill: fill, dy: 13 });
         }
       }
@@ -3373,7 +3479,7 @@
     if (isPending(day)) {
       p.textContent = "Prediction only — frozen " +
         (day.prediction_made_utc ? day.prediction_made_utc.replace("T", " ").replace("Z", " UTC") : "") +
-        ", never revised. Commentary appears once the day settles.";
+        ". Commentary appears once the day settles.";
       return;
     }
     var tier = (day.corr >= 0.9 && day.mae < 15) ? "An excellent day for the model" :
