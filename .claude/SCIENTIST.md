@@ -31,7 +31,18 @@
 9. **Suspect the data first**: the program's largest gains came from input
    bugs (ATC contamination, lookahead flows), found by reading rows, not by
    fitting. When a zone breaks, check what its book actually consumed.
-10. **Token/machine efficiency is part of rigor**: reuse baseline cells,
+10. **Same-version comparisons only** (owner, 2026-08): any cross-track or
+    cross-time score comparison pairs slices of the SAME code_version —
+    never conflate model-version deltas with input deltas ("n/a (cv
+    mismatch)" beats a wrong number). The announced track has NO lead
+    ladder: one D-1 freeze per delivery day.
+11. **Retro/reset labeling contract**: genuine live vintages are immutable;
+    a retroactive fill is explicitly labeled (is_retro + reset_tag), the
+    writer REFUSES to touch live slices by default, and supersede-with-
+    backup (forecast_prices_pre_reset, backup==replaced asserted) is the
+    only sanctioned exception. Data gaps at source are documented, never
+    fabricated (e.g. announced 2026-07-11 = 32/33).
+12. **Token/machine efficiency is part of rigor**: reuse baseline cells,
     grouped day-level scans with caches, extensive sweeps on the full machine
     when the design is frozen — but never at the cost of a fresh-process or
     identity guarantee.

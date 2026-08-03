@@ -32,3 +32,31 @@ can miss a failure mode is a watcher that lies.
 **Ex-ante SQL discipline**: trailing windows end strictly before the delivery
 day; vintages via previous-runs (per-timestamp semantics, constant lag 1 for
 past days); lagged public data is fine, same-day observed data is lookahead.
+
+## Product-surface rules (owner-ratified 2026-08)
+
+- **No synthetic data at runtime, anywhere.** Views load live only; on
+  failure an honest "Live data unavailable — retry" state. Fixture/sample
+  data exists ONLY under workers/api/test/ and never ships in web/.
+- **Never hand-author a number the site could compute** — decompositions
+  render from the same constants the engine uses and SELF-CHECK that the
+  parts reconcile (show ⚠, never silently disagree). Vocabularies (strategy
+  labels, glossaries) have one generated source of truth — no hand-mirrored
+  maps.
+- Measured scores on pages are QUOTED from ledger/docs artifacts, never
+  recomputed ad hoc; every number traces to a committed artifact.
+- PR references to the owner always carry the full clickable URL.
+
+## Long-running pipeline operations
+
+- A multi-hour pipeline is ONE detached `setsid` script (survives harness
+  task sweeps) with a status.log, per-stage pidfile, per-cell .err files and
+  internal retries/resume-skip — never a chain of agent re-invocations
+  (three silent multi-hour stalls taught this).
+- Supervision is belt-and-braces: an external Monitor on a LINE-ANCHORED
+  completion marker (^RETRO_DONE — substring markers false-fire on plan
+  text) PLUS a ScheduleWakeup heartbeat that eyeballs progress; every
+  watchdog gets a simulated-failure test before it is trusted, and no
+  monitor may process-name-match a pattern it contains itself.
+- Scheduled GitHub workflows fire late or skip; every cron carries a
+  manual-dispatch recovery input replicating the scheduled profile.
