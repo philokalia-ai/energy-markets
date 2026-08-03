@@ -308,6 +308,36 @@ include(joinpath(@__DIR__, "..", "bin", "forecast_common.jl"))
         @test_throws ArgumentError score_series([1.0], Float64[])
     end
 
+    @testset "load-weighted err % (map metric)" begin
+        # uniform load → plain WAPE: Σ|err| / Σ|act| × 100
+        act = Float64[100, 100]
+        sim = Float64[110, 90]
+        w1 = Float64[500, 500]
+        @test load_weighted_err_pct(sim, act, w1) ≈ 10.0
+
+        # weights matter: all the error in the high-load hour counts more
+        act2 = Float64[100, 100]
+        sim2 = Float64[120, 100]
+        w2 = Float64[900, 100]
+        # (900·20 + 100·0) / (900·100 + 100·100) × 100 = 18
+        @test load_weighted_err_pct(sim2, act2, w2) ≈ 18.0
+        # …and with the weights flipped the same errors weigh less
+        @test load_weighted_err_pct(sim2, act2, reverse(w2)) ≈ 2.0
+
+        # negative settled prices enter by magnitude (|act|), not sign
+        @test load_weighted_err_pct([0.0], [-50.0], [1000.0]) ≈ 100.0
+
+        # near-zero denominator (settled prices ≈ 0) → nothing, never a huge %
+        @test load_weighted_err_pct([30.0, 30.0], [0.1, -0.2], [1000.0, 1000.0]) === nothing
+        # …but a denominator at the guard is fine
+        @test load_weighted_err_pct([2.0, 2.0], [1.0, 1.0], [1000.0, 1000.0]) ≈ 100.0
+
+        # degenerate inputs → nothing / throw (never fabricated)
+        @test load_weighted_err_pct(Float64[], Float64[], Float64[]) === nothing
+        @test load_weighted_err_pct([10.0], [20.0], [0.0]) === nothing
+        @test_throws ArgumentError load_weighted_err_pct([1.0], [1.0], Float64[])
+    end
+
     @testset "json serializer" begin
         @test json_string(nothing) == "null"
         @test json_string(missing) == "null"

@@ -36,7 +36,12 @@ were noise). Views:
   upcoming days as forecast alone. The seam marks the last settled hour; retro
   (post data-reset) days appear inline with a reset note. Below it, "What we said,
   when" shows one delivery day's freshest forecast vs actual.
-- **Map** — day-average price per bidding zone.
+- **Map** — day-average price per bidding zone (Forecast / Actual metrics), plus
+  an **Error %** metric: the exporter-computed load-weighted WAPE per zone-day
+  (`err_pct`; Σ_h load_h·|fc_h − act_h| / Σ_h load_h·|act_h| × 100 — null until
+  the day fully settles, or when the denominator is degenerate). Settled-only
+  metrics on a day with no settled data render an explicit "Not settled yet"
+  state — never a blank map, never synthetic numbers.
 - **Solver** — pillar 1: how the 39-zone coupled auction produces those prices.
   The GME/OMIE €0.00 validation, "a price is a dual", an interactive two-zone toy
   (drag the ATC slider to walk islanded → congested → coupled — the clear is a

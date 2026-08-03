@@ -206,9 +206,11 @@ end
 
 # web/data/map.json — the map view's data contract: one entry per market day
 # (last MAP_DAYS), each with per-zone day aggregates from the FRESHEST lead:
-#   {"days":[{"date","zones":{"GR":{"sim","act","mae","corr","lead","made"},…}},…]}
-# "sim"/"act" are day-average €/MWh (act null until settled); mae/corr are the
-# day scores for that zone-day at the same lead (null until scored).
+#   {"days":[{"date","zones":{"GR":{"sim","act","err_pct","mae","corr","lead","made"},…}},…]}
+# "sim"/"act" are day-average €/MWh (act null until settled); "err_pct" is the
+# load-weighted WAPE % (load_weighted_err_pct — null until the day fully
+# settles, or when the denominator is degenerate); mae/corr are the day scores
+# for that zone-day at the same lead (null until scored).
 const MAP_DAYS = 60
 
 map_track_expr(col) = "CASE WHEN $(col) LIKE 'weather%' THEN 'predicted' ELSE 'announced' END"
@@ -265,17 +267,29 @@ function export_map_json()
     act = resolution_aware_actuals(sd - Day(1), ed)
     actmap = Dict{Tuple{String,DateTime},Float64}(
         (String(a.z), DateTime(a.t)) => Float64(a.act) for a in eachrow(act))
+    # Hourly D-1 load forecast: the weights of err_pct (load-weighted WAPE).
+    loads = Euphemia.sql2df_with_retry(HOURLY_LOAD_FC_SQL, [sd - Day(1), ed + Day(1)])
+    loadmap = Dict{Tuple{String,DateTime},Float64}(
+        (String(r.z), DateTime(r.t)) => Float64(r.load_mw) for r in eachrow(loads))
 
     zone_agg(zp, d, track) = begin
+        zone = String(zp.z[1])
         hours = [DateTime(t) for t in zp.t]
-        acts = [get(actmap, (String(zp.z[1]), h), nothing) for h in hours]
+        acts = [get(actmap, (zone, h), nothing) for h in hours]
         settled = [a for a in acts if a !== nothing]
         lead = Int(zp.lead_days[1])
-        sc = get(scoremap, (String(zp.z[1]), d, lead, track), nothing)
+        sc = get(scoremap, (zone, d, lead, track), nothing)
+        # err_pct: only for fully-settled days with full load coverage (the
+        # metric is undefined otherwise — never fabricated).
+        loadv = [get(loadmap, (zone, h), nothing) for h in hours]
+        ep = (length(settled) == length(hours) && all(!isnothing, loadv)) ?
+            load_weighted_err_pct(Float64.(zp.sim), Float64.(settled), Float64.(loadv)) :
+            nothing
         Dict(
             "sim" => round(mean(Float64.(zp.sim)); digits=2),
             "act" => length(settled) == length(hours) ?
                      round(mean(Float64.(settled)); digits=2) : nothing,
+            "err_pct" => ep === nothing ? nothing : round(ep; digits=2),
             "mae" => sc === nothing ? nothing : nn(sc.mae),
             "corr" => sc === nothing ? nothing : nn(sc.corr),
             "lead" => lead,

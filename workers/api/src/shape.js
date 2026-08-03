@@ -321,6 +321,9 @@ export function shapeMap(rows, manifest) {
     day.tracks[track][r.zone] = {
       sim: num(r.sim),
       act: num(r.act),
+      // load-weighted WAPE % (exporter-computed; null on parquets published
+      // before the column existed — the SPA then shows its honest empty state)
+      err_pct: num(r.err_pct),
       mae: num(r.mae),
       corr: num(r.corr),
       lead: num(r.lead),
