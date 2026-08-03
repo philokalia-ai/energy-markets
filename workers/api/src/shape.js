@@ -137,7 +137,9 @@ export function shapeScoreboard(rows, manifest) {
  *
  * The CLEARING price ("πού έκατσε η μπίλια") and the settled actual are NOT in
  * the book — the frontend overlays them from the zone forecast series
- * (zones/<Z>) by aligning hour index, so this endpoint stays purely structural.
+ * (zones/<Z>) by DELIVERY TIMESTAMP (hours here are UTC-day keyed while the
+ * zone series is Athens-market-day keyed, so the same index is a different
+ * hour), so this endpoint stays purely structural.
  */
 export function shapeBook(rows, zone, date) {
   const owners = [];
@@ -171,11 +173,24 @@ export function shapeBook(rows, zone, date) {
     (r.side === "supply" ? h.supply : h.demand).push(order);
   }
   const hours = Array.from(byTs.keys()).sort();
+  // Deterministic order at EQUAL price: the parquet's ORDER BY (zone, ts,
+  // side, price) leaves the tie order unspecified, so the €1 price-taking
+  // IMPORT injection sometimes landed ABOVE the country's €1 RES block on the
+  // supply ladder (and the cap-priced IMPORT export-demand above the
+  // country's firm demand). Rank the domestic RES / DEMAND blocks first,
+  // IMPORT after, everything else in between (the stable sort preserves
+  // parquet order within a rank). Pure presentation — prices and quantities
+  // are untouched, and equal-price order is economically meaningless.
+  const TIE_RANK = { RES: 0, DEMAND: 0, IMPORT: 1 };
+  function tieRank(o) {
+    const r = TIE_RANK[owners[o[2]]];
+    return r === undefined ? 0.5 : r;
+  }
   const supply = [], demand = [];
   for (const ts of hours) {
     const h = byTs.get(ts);
-    h.supply.sort(function (a, b) { return a[0] - b[0]; });   // merit order
-    h.demand.sort(function (a, b) { return b[0] - a[0]; });   // willingness to pay
+    h.supply.sort(function (a, b) { return (a[0] - b[0]) || (tieRank(a) - tieRank(b)); });   // merit order
+    h.demand.sort(function (a, b) { return (b[0] - a[0]) || (tieRank(a) - tieRank(b)); });   // willingness to pay
     supply.push(h.supply);
     demand.push(h.demand);
   }

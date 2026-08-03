@@ -10,6 +10,7 @@
     "test:units": "node test/units.test.mjs",
     "test:flows": "node test/flows.test.mjs",
     "test:table": "node test/book_table.test.mjs",
+    "test:ladder": "node test/book_ladder.test.mjs",
     "test:solver": "node test/solver_toy.test.mjs",
     "test:inputs-routes": "node test/inputs_routes.test.mjs",
     "test:predict": "node test/predict.test.mjs",
