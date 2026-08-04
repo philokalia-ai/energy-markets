@@ -312,6 +312,7 @@ function _fetch_atc_aggregated(date::Date, table::String, codes::Vector{String};
     contract_type::Union{String,Nothing}=nothing)
     ct_filter = contract_type === nothing ? "" : "AND contract_type = \$3"
     params = contract_type === nothing ? Any[date, codes] : Any[date, codes, contract_type]
+    asof_filter = _atc_asof_filter()
     # Day-ahead preference (2026-07 EE diagnosis): the implicit table mixes
     # Intraday rows (often 0, and the ONLY rows on FBMC borders since late
     # 2024) with the Day-ahead offered capacity. Per border-hour, use the
@@ -333,9 +334,27 @@ function _fetch_atc_aggregated(date::Date, table::String, codes::Vector{String};
       AND (out_map_code = ANY(\$2) OR in_map_code = ANY(\$2))
       AND capacity_mw IS NOT NULL
       $ct_filter
+      $asof_filter
     GROUP BY out_map_code, in_map_code, (EXTRACT(HOUR FROM date_time_utc) + 1)::int
     """
     return safe_sql2df(query, params)
+end
+
+# EUPHEMIA_ATC_ASOF: replay/testing filter for the offered-ATC readers. When
+# set to an ISO datetime, only rows the TSO had PUBLISHED by that instant
+# (update_time_utc <= t) are visible — emulating the table a pre-gate morning
+# build saw, so race-dependent runs become reproducible A/B arms. Absent
+# (default) the interpolated string is empty and every query is char-identical
+# to before. The value is parsed and re-formatted, never interpolated raw.
+function _atc_asof_filter()
+    v = get(ENV, "EUPHEMIA_ATC_ASOF", "")
+    isempty(v) && return ""
+    t = try
+        DateTime(v)
+    catch
+        error("EUPHEMIA_ATC_ASOF must be an ISO datetime (got: $v)")
+    end
+    return "AND update_time_utc <= TIMESTAMP '$(Dates.format(t, dateformat"yyyy-mm-dd HH:MM:SS"))'"
 end
 
 # cv27 T1 (docs/cv27-import-hydro-prereg.md): demonstrated interconnector
@@ -419,6 +438,51 @@ end
 
 "Clear the cv27 demonstrated-capability day cache (tests / long processes)."
 clear_fbmc_capability_cache!() = (lock(_FBMC_CAP_LOCK) do; empty!(_FBMC_CAP_DAY_CACHE); end; nothing)
+
+# Pre-gate trailing-DA fallback (the BG 2026-08-04/05 phantom-cap fix —
+# docs/experiments/bg-pregate-atc-race-2026-08.md). Flow-demonstrated
+# capability is ASYMMETRIC for chronically-exporting zones: their import
+# directions demonstrate ≈ 0, so a pre-gate build that misses a border's
+# Day-ahead publication starves them into coupled phantom caps (BG 19–21Z,
+# €3,000 vs settled ~€300). For a border-direction that PUBLISHES Day-ahead
+# rows, yesterday's offered profile is a far better stand-in than observed
+# flows: this returns the per-hour AVG of Day-ahead capacity over the trailing
+# 7 delivery days (strictly < D — ex-ante), day-cached like the capability
+# map. Borders with no trailing DA rows (the true FBMC population) stay on
+# flow capability. Kill-switch EUPHEMIA_DISABLE_PREGATE_TRAILING_DA restores
+# the pure-capability fallback; the block as a whole still only runs when
+# PREGATE_ATC_FALLBACK[] is set (pre-gate/retro), so record paths are
+# untouched by construction.
+const _TRAILING_DA_DAY_CACHE = Dict{Date,Dict{Tuple{String,String,Int},Float64}}()
+
+function _pregate_trailing_da(date::Date)
+    lock(_FBMC_CAP_LOCK) do
+        haskey(_TRAILING_DA_DAY_CACHE, date) && return _TRAILING_DA_DAY_CACHE[date]
+        asof_filter = _atc_asof_filter()
+        df = safe_sql2df("""
+            SELECT out_map_code AS s, in_map_code AS k,
+                   EXTRACT(HOUR FROM date_time_utc)::int AS h,
+                   AVG(capacity_mw)::float8 AS cap
+            FROM entsoe.offered_transfer_capacities_implicit
+            WHERE contract_type = 'Day-ahead'
+              AND date_time_utc >= ((\$1::date - 7)::timestamp AT TIME ZONE 'UTC')
+              AND date_time_utc < (\$1::date::timestamp AT TIME ZONE 'UTC')
+              AND capacity_mw IS NOT NULL
+              $asof_filter
+            GROUP BY 1, 2, 3
+            """, Any[date])
+        out = Dict{Tuple{String,String,Int},Float64}()
+        for r in eachrow(df)
+            (ismissing(r.cap) || ismissing(r.s) || ismissing(r.k)) && continue
+            out[(String(r.s), String(r.k), Int(r.h))] = Float64(r.cap)
+        end
+        _TRAILING_DA_DAY_CACHE[date] = out
+        return out
+    end
+end
+
+"Clear the pre-gate trailing-DA day cache (tests / long processes)."
+clear_trailing_da_cache!() = (lock(_FBMC_CAP_LOCK) do; empty!(_TRAILING_DA_DAY_CACHE); end; nothing)
 
 """
     _subzones_of(aggregate, footprint) -> Vector{String}
@@ -550,21 +614,38 @@ function _create_transfer_capacity_enriched(date::Date, bidding_zones::Vector{St
     # (sub-zone codes, as physical_flows reports them), so aggregate external
     # borders are untouched here. Never overwrites a present row.
     n_pregate_added = 0
+    n_pregate_tda = 0
     if PREGATE_ATC_FALLBACK[] && isempty(get(ENV, "EUPHEMIA_DISABLE_PREGATE_ATC", ""))
         capf = _fbmc_capability(date)  # (source, sink, blk) => p95 gross flow (day-cached)
+        # Trailing-DA preference (BG phantom-cap fix): for a border-direction
+        # that publishes Day-ahead rows, the trailing-7-day per-hour DA average
+        # is the fallback of FIRST resort; flow capability only where no DA
+        # history exists. Kill-switch restores pure capability.
+        tda = isempty(get(ENV, "EUPHEMIA_DISABLE_PREGATE_TRAILING_DA", "")) ?
+            _pregate_trailing_da(date) : Dict{Tuple{String,String,Int},Float64}()
         present = Set{Tuple{String,String,Int}}(
             (String(r.source_zone), String(r.sink_zone), Int(r.time_period)) for r in rows)
-        for ((s, k, blk), c) in capf
-            (s in fpset && k in fpset && s != k && c > 0.0) || continue
-            for tp in (4blk + 1):(4blk + 4)   # 4h block → its four hourly periods
+        cands = Set{Tuple{String,String}}()
+        for (s, k, _) in keys(capf); push!(cands, (s, k)); end
+        for (s, k, _) in keys(tda);  push!(cands, (s, k)); end
+        for (s, k) in cands
+            (s in fpset && k in fpset && s != k) || continue
+            for tp in 1:24
                 (s, k, tp) in present && continue           # never clobber a real row
+                h = tp - 1
+                c = get(tda, (s, k, h), 0.0)
+                from_tda = c > 0.0
+                from_tda || (c = get(capf, (s, k, h ÷ 4), 0.0))
+                c > 0.0 || continue
                 push!(rows, (source_zone=s, sink_zone=k, time_period=tp, capacity=c))
                 n_pregate_added += 1
+                from_tda && (n_pregate_tda += 1)
             end
         end
         n_pregate_added > 0 &&
-            println("   🌅 pre-gate ATC fallback: +$n_pregate_added demonstrated-capability " *
-                    "border-hours (Day-ahead ATC not yet published for $date)")
+            println("   🌅 pre-gate ATC fallback: +$n_pregate_added border-hours " *
+                    "($n_pregate_tda trailing-DA, $(n_pregate_added - n_pregate_tda) " *
+                    "demonstrated-capability; Day-ahead ATC not yet published for $date)")
     end
 
     # Apply aggregate → sub-zone remap. Precompute, per aggregate, the set of
