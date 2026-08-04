@@ -623,6 +623,14 @@ function _create_transfer_capacity_enriched(date::Date, bidding_zones::Vector{St
         # history exists. Kill-switch restores pure capability.
         tda = isempty(get(ENV, "EUPHEMIA_DISABLE_PREGATE_TRAILING_DA", "")) ?
             _pregate_trailing_da(date) : Dict{Tuple{String,String,Int},Float64}()
+        # Borders whose CANONICAL capacity source is demonstrated capability
+        # (the cv27 shipped set) keep it at pre-gate too — trailing-DA there
+        # would diverge from the full-table treatment (measured: IT-Sicily/
+        # Calabria/CH +1.0..+2.2 farther from reference when preempted).
+        cv27set = Set{Tuple{String,String}}()
+        for tok in split(CV27_SHIPPED_BORDERS, ',')
+            p = split(tok, '>'); push!(cv27set, (String(p[1]), String(p[2])))
+        end
         present = Set{Tuple{String,String,Int}}(
             (String(r.source_zone), String(r.sink_zone), Int(r.time_period)) for r in rows)
         cands = Set{Tuple{String,String}}()
@@ -633,7 +641,7 @@ function _create_transfer_capacity_enriched(date::Date, bidding_zones::Vector{St
             for tp in 1:24
                 (s, k, tp) in present && continue           # never clobber a real row
                 h = tp - 1
-                c = get(tda, (s, k, h), 0.0)
+                c = (s, k) in cv27set ? 0.0 : get(tda, (s, k, h), 0.0)
                 from_tda = c > 0.0
                 from_tda || (c = get(capf, (s, k, h ÷ 4), 0.0))
                 c > 0.0 || continue
