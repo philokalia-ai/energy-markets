@@ -1789,3 +1789,17 @@ html, body { overflow-x: hidden; }
   .boundary-field { grid-template-columns: 1fr; gap: 2px; }
   .boundary-roadmap-row { grid-template-columns: 1fr; gap: 2px; }
 }
+
+/* The About quick-start block (extract download + reproduce) */
+.repro-steps {
+  background: var(--code-bg, rgba(127,127,127,0.08));
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  overflow-x: auto;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 12.5px;
+  line-height: 1.55;
+  margin: 14px 0 18px;
+}
+.repro-steps code { background: none; padding: 0; font-size: inherit; }
