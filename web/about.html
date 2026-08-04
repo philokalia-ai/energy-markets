@@ -699,13 +699,30 @@
     the full investigation record, kept whether or not the answer was yes.
   </p>
 
-  <h2>Open by default</h2>
+  <h2 id="open-by-default">Open by default — run it yourself</h2>
   <p>
     The model, the calibration history, the experiment scripts, and a self-contained
     public data extract are on GitHub —
     <a href="https://github.com/philokalia-ai/energy-markets">philokalia-ai/energy-markets</a>.
-    The full 39-zone clear reproduces offline from the published artifact, no database
-    required. Data: ENTSO-E Transparency Platform, TTF/EUA via public market feeds,
+    The full 39-zone clear reproduces offline, no database required: the daily-refreshed
+    living extract (~3&nbsp;GB DuckDB, checksum-verified) is one script away, and
+    <code>bin/reproduce.jl --quick</code> clears Greece plus the whole EU footprint
+    on your machine.
+  </p>
+  <pre class="repro-steps"><code>git clone https://github.com/philokalia-ai/energy-markets &amp;&amp; cd energy-markets
+julia --project=. -e 'using Pkg; Pkg.instantiate()'
+bin/pull_live_extract.sh        # ~3 GB from data.philokalia.ai, sha256-verified
+EUPHEMIA_DATA_STORE=duckdb \
+  EUPHEMIA_DUCKDB_PATH=data/extracts/euphemia-live.duckdb \
+  EUPHEMIA_DUCKDB_READONLY=true \
+  julia --project=. bin/reproduce.jl --quick</code></pre>
+  <p>
+    Results land in a separate <code>data/results.duckdb</code> — the source extract is
+    read-only, so nothing you run can mutate the published data. The frozen, versioned
+    parquet artifact (with <code>MANIFEST.json</code> + <code>SHA256SUMS</code>) and the
+    full recipe — custom windows, parallel workers, the pipelined backfill — are in
+    <a href="https://github.com/philokalia-ai/energy-markets/blob/main/docs/reproducibility.md">docs/reproducibility.md</a>.
+    Data: ENTSO-E Transparency Platform, TTF/EUA via public market feeds,
     OpenStreetMap (turbine locations), open-meteo (weather); bidding-zone
     boundaries adapted from the
     <a href="https://github.com/electricitymaps/electricitymaps-contrib">Electricity Maps contrib</a>
