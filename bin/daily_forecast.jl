@@ -877,7 +877,18 @@ function main()
     now_utc = now(UTC)
     today_athens = athens_date(now_utc)
     latest_actual = latest_actual_load_date()
-    first_candidate = latest_actual + Day(1)
+    # Never PLAN a delivery day whose Athens window has already begun: the
+    # earliest legal candidate is tomorrow-Athens (athens_date rolls over at
+    # 21:00 UTC, so today_athens+1 is exactly the first day with a fully-future
+    # window). Before 2026-08-04 the start was latest_actual+1 alone; on
+    # mornings where the intraday actuals ETL hadn't landed yet, that put the
+    # ALREADY-BEGUN day first in the plan, the writer's begun-hours guard
+    # (correctly) errored, and all three workflow attempts died on that poison
+    # slice before ever reaching the real leads — the day's product was lost.
+    first_candidate = max(latest_actual + Day(1), today_athens + Day(1))
+    latest_actual + Day(1) < first_candidate &&
+        println("Begun-day guard: raising candidate start $(latest_actual + Day(1)) → " *
+                "$first_candidate (delivery windows already begun are never planned)")
     last_candidate = today_athens + Day(MAX_LEAD_DAYS)
     println("Realized-data horizon (actual_total_load): $latest_actual")
     println("Candidate Athens market days: $first_candidate .. $last_candidate " *
