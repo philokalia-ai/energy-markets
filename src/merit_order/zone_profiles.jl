@@ -222,6 +222,54 @@ UA_BOOK(flow_codes::Vector{String}=["UA"]) = BoundaryBook(
 const UA_BOOK_DEFAULT = UA_BOOK(["UA"])            # HU / SK / RO
 const UA_BOOK_PL = UA_BOOK(["UA", "UA_DobTPP"])    # PL adds the Dobrotvir radial
 
+"""
+    TRMK_BG_BOOK / TR_GR_BOOK
+
+The TR/MK boundary book (docs/experiments/tr-boundary/prereg-2026-08.md) — the
+third BoundaryBook instance, and the first anchored on the counterparty's OWN
+published market data (`epias.mcp`, trailing-7d mean, strictly lagged). The
+2026-08 census fixed the roles: **TR is an import SOURCE** into BG (+38..+138
+MW avg per 4h block, p10 ≈ 0) selling at its own — administratively TL-capped,
+currently hydro-long — price level; **MK is the export DRAIN** (p10 −126..−435
+MW, strongest evenings) that does not curtail on price (firm slice); GR exports
+to TR mildly. Directional ladders inside ONE book per zone carry the role
+split; capability/firm are runtime demonstrated quantities (the UA recipe).
+
+EXPERIMENTAL, default OFF: the books attach to the GR/BG profiles only when
+`EUPHEMIA_ENABLE_TRMK` is set (opt-in at module load — every default path is
+byte-identical). Activation/scoping is a separate ship decision: GR/BG sit in
+the SEE single-zone/5-zone products, so a default-ON would deliberately end
+that byte-identity chain like cv22-C/cv26 did.
+"""
+const TRMK_BG_BOOK = BoundaryBook(
+    counterparty = "TR+MK",
+    flow_codes = ["TR", "MK"],
+    anchor = :tr_trailing_mcp,
+    anchor_mult = 1.0,
+    imp_ladder = [(1.00, 0.5), (1.15, 0.3), (1.35, 0.2)],
+    exp_ladder = [(0.95, 0.4), (0.80, 0.35), (0.60, 0.25)],
+    capability_mode = :p95_block,
+    firm_slice = true,
+    firm_price = 2999.0,
+    firm_window_days = 28,
+    firm_quantile = 0.10,
+    disable_env = "EUPHEMIA_DISABLE_TRMK",
+)
+const TR_GR_BOOK = BoundaryBook(
+    counterparty = "TR",
+    flow_codes = ["TR"],
+    anchor = :tr_trailing_mcp,
+    anchor_mult = 1.0,
+    imp_ladder = [(1.00, 0.5), (1.20, 0.5)],
+    exp_ladder = [(0.95, 0.5), (0.75, 0.5)],
+    capability_mode = :p95_block,
+    firm_slice = true,
+    firm_price = 2999.0,
+    firm_window_days = 28,
+    firm_quantile = 0.10,
+    disable_env = "EUPHEMIA_DISABLE_TRMK",
+)
+
 # =============================================================================
 # ZONE PROFILES — per-region bid-construction calibration
 # =============================================================================
@@ -1085,7 +1133,12 @@ const ZONE_PROFILES = Dict{String,ZoneProfile}(
     # Slovakia treatment (cv17): AT–SI drop + :hydro anchor + backstop.
     # RO/HU add the cv22 UA firm-slice boundary book on top of their cv17
     # backstop (UA is excluded from injections + backstop headroom by the book).
-    "GR" => SEE_PROFILE, "BG" => SEE_PROFILE,
+    # TR/MK boundary books (EXPERIMENTAL, docs/experiments/tr-boundary/):
+    # attached here but STRIPPED at runtime unless EUPHEMIA_ENABLE_TRMK is set
+    # (opt-in, resolved in the profile-resolution switch block below — an env
+    # read here would be baked in by precompilation).
+    "GR" => with_profile(SEE_PROFILE; boundary_book = TR_GR_BOOK),
+    "BG" => with_profile(SEE_PROFILE; boundary_book = TRMK_BG_BOOK),
     "RO" => with_profile(SEE_IMPORT_BACKED_PROFILE; boundary_book = UA_BOOK_DEFAULT),
     "RS" => SEE_IMPORT_BACKED_PROFILE,
     "HU" => with_profile(SEE_IMPORT_BACKED_PROFILE; boundary_book = UA_BOOK_DEFAULT),
@@ -1177,6 +1230,16 @@ function get_zone_profile(zone::AbstractString)
     # the other switches: any non-empty value disables.
     if p.boundary_book !== nothing &&
        !isempty(get(ENV, p.boundary_book.disable_env, ""))
+        p = with_profile(p; boundary_book=nothing)
+    end
+    # TR/MK boundary books are EXPERIMENTAL opt-IN (the inverse of
+    # disable_env; docs/experiments/tr-boundary/prereg-2026-08.md): stripped
+    # unless EUPHEMIA_ENABLE_TRMK is set. Keyed on the anchor — only the TR
+    # books carry :tr_trailing_mcp. Read at runtime so precompilation cannot
+    # bake the choice in.
+    if p.boundary_book !== nothing &&
+       p.boundary_book.anchor === :tr_trailing_mcp &&
+       isempty(get(ENV, "EUPHEMIA_ENABLE_TRMK", ""))
         p = with_profile(p; boundary_book=nothing)
     end
     # cv25 Phase-4 re-calibration treatments (docs/cv25-phase4-prereg.md), gated

@@ -12,6 +12,38 @@
 const GB_CCGT_EFFICIENCY = 0.52   # GB CCGT fleet efficiency (LHV) — the anchor
                                   # divisor for the GB fundamental SRMC.
 
+# Trailing TR MCP anchor cache (day-keyed, like TTF_PRICE_CACHE; never cached
+# on DB error so a transient failure retries).
+const _TR_MCP_CACHE = Dict{Date,Float64}()
+const _TR_MCP_LOCK = ReentrantLock()
+
+function _tr_trailing_mcp(day::Date, zone::String)
+    lock(_TR_MCP_LOCK) do
+        haskey(_TR_MCP_CACHE, day) && return _TR_MCP_CACHE[day]
+        v = try
+            df = sql2df_with_retry("""
+                SELECT AVG(price_eur)::float8 AS a FROM epias.mcp
+                WHERE date_time_utc >= ((\$1::date - 8)::timestamp AT TIME ZONE 'UTC')
+                  AND date_time_utc < ((\$1::date - 1)::timestamp AT TIME ZONE 'UTC')
+                  AND price_eur IS NOT NULL""", Any[day])
+            (nrow(df) == 1 && !ismissing(df.a[1]) && df.a[1] > 0) ? Float64(df.a[1]) : nothing
+        catch
+            nothing
+        end
+        if v === nothing
+            # Feed unreachable (offline extract has no epias.*) — the
+            # documented UA-style generic-anchor compromise. NOT cached, so a
+            # live process recovers as soon as the feed does.
+            return 0.55 * get_marginal_cost(day, "Fossil Gas", zone)
+        end
+        _TR_MCP_CACHE[day] = v
+        return v
+    end
+end
+
+"Clear the trailing TR-MCP anchor cache (tests / long processes)."
+clear_tr_mcp_cache!() = (lock(_TR_MCP_LOCK) do; empty!(_TR_MCP_CACHE); end; nothing)
+
 """
     _boundary_anchor(book::BoundaryBook, day::Date, zone::String) -> Float64
 
@@ -32,6 +64,15 @@ function _boundary_anchor(book::BoundaryBook, day::Date, zone::String)
     # feed, so this is the documented wave-1 generic-anchor compromise; the firm
     # slice, not the elastic anchor, does the load-bearing work.
     book.anchor === :zone_gas_srmc && return get_marginal_cost(day, "Fossil Gas", zone)
+    # :tr_trailing_mcp (TR/MK book, docs/experiments/tr-boundary/) — Turkey's
+    # OWN day-ahead clearing price, trailing-7-day mean over [D−8, D−1) from
+    # epias.mcp (published by EPİAŞ; strictly lagged ⇒ ex-ante). The measured
+    # 2026 regime has TR MCP BELOW its own CCGT SRMC (hydro/RES-long, gas
+    # rarely marginal) and administratively TL-capped, so the observed price
+    # level is the honest willingness anchor, not an SRMC construction. When
+    # the feed is unreachable (e.g. the offline extract carries no epias.*)
+    # fall back to 0.55 × zone gas SRMC — the documented UA-style compromise.
+    book.anchor === :tr_trailing_mcp && return _tr_trailing_mcp(day, zone)
     book.anchor === :gb_ccgt_srmc ||
         error("unknown boundary anchor $(book.anchor)")
     carbon = book.carbon_source === :uka ? uka_price(day) : eua_price(day)
