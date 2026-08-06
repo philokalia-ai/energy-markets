@@ -591,6 +591,11 @@ function run_pipelined_backfill(days, zones::Vector{String}=String[];
                   "EUPHEMIA_SOLAR_REGIME_BLOCKS", "EUPHEMIA_SOLAR_REGIME_ZONES")
             haskey(ENV, k) && push!(extract_env, k => ENV[k])
         end
+        # TR/MK boundary book (docs/experiments/tr-boundary/): the opt-in and
+        # its kill-switch travel to the book workers for the same reason.
+        for k in ("EUPHEMIA_ENABLE_TRMK", "EUPHEMIA_DISABLE_TRMK")
+            haskey(ENV, k) && push!(extract_env, k => ENV[k])
+        end
         # Workers share the source extract read-only; the coordinator keeps the
         # source read-only too (so it can coexist with them) but opts into result
         # writes, which land in the SEPARATE writable results_db file.

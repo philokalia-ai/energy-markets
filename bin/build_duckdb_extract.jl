@@ -121,6 +121,7 @@ function table_specs()
                                aux_back_days=AUX_BACK_DAYS,
                                agen_back_days=AGEN_BACK_DAYS)
     append!(specs, yfinance_table_specs())
+    append!(specs, epias_table_specs())
     append!(specs, simulations_table_specs(ZONES))
     INCLUDE_WEATHER && append!(specs, weather_table_specs(back_days=WEATHER_BACK_DAYS))
     return specs
