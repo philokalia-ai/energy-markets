@@ -26,8 +26,9 @@ function _tr_trailing_mcp(day::Date, zone::String)
                 WHERE date_time_utc >= ((\$1::date - 8)::timestamp AT TIME ZONE 'UTC')
                   AND date_time_utc < ((\$1::date - 1)::timestamp AT TIME ZONE 'UTC')
                   AND price_eur IS NOT NULL""", Any[day])
-            (nrow(df) == 1 && !ismissing(df.a[1]) && df.a[1] > 0) ? Float64(df.a[1]) : nothing
-        catch
+            (size(df, 1) == 1 && !ismissing(df.a[1]) && df.a[1] > 0) ? Float64(df.a[1]) : nothing
+        catch e
+            @warn "TR MCP anchor query failed — using the 0.55×gas fallback" day error = sprint(showerror, e)
             nothing
         end
         if v === nothing
