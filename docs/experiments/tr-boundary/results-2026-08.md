@@ -52,3 +52,42 @@ evidence for the default path (it is the plain record path re-clear). The
 stored-record pairing rejection (maxdelta 66.8 — extract-snapshot vs live
 Postgres data drift) is Amendment 1's documented reason for the fresh
 baseline.
+
+## Full-year A/B (2025-08-01..2026-07-31, owner-requested before the ship call)
+
+310,752 paired zone-hours (pipelined, epias-patched extract, fresh arms).
+**Footprint MAE 29.52 → 29.56 (+0.04); false-collapse BG+GR −3%; target zones
+worse (GR +0.47, RO +0.41, BG +0.24); the Set-B NO/SK/AT gains do not survive
+the year (NO1 +0.02, SK +0.17, AT +0.11) — window-regime effects, the cv18
+lesson now measured at 14-day scale too.**
+
+Decompositions that settle both owner questions:
+
+1. **The distant "gains" are bistability, not mechanism.** ES's whole-year
+   corr +0.116 lives in ONE month (2026-07: base corr 0.466 → 0.899, max
+   |arm-diff| = €2,990 — the BASE arm hit phantom-cap hours the treatment's
+   tiny SEE perturbation avoided); IT-CSOUTH's +0.140 likewise (2026-04, max
+   diff €2,997). Eleven of twelve months sit at dMAE ≈ 0.00. The coupled
+   clear has near-degenerate branches around cap events; ANY small
+   perturbation flips them — coin-luck, not signal. (This also retroactively
+   discounts part of Set B's NO/SK/AT fortnight gains.)
+2. **The target-zone damage is real and seasonal.** GR loses +2.25/+2.15 in
+   Apr/May 2026 — TR's hydro-flood season, when the trailing-MCP anchor
+   bottoms at €11–18 and the book floods GR with phantom cheap elasticity
+   (65–78 hours/month with |Δ| > €20, sustained — mechanism, not luck).
+3. **The theory the book encodes is empirically false on this border.** The
+   census itself showed TR importing from BG at settled €270 while its own
+   capped price sat at €73: TR/MK flows are SCHEDULED/bilateral, not
+   price-responsive. The "dumb" :v3 analogue injection is the correct
+   empirical model of a scheduled border; replacing it with rational
+   arbitrage ladders replaces measurement with a theory the border violates.
+   "Model the country" holds where the border clears through real auctions
+   (GB/Viking); it fails where the flow is administrative.
+
+**Final verdict: NO-SHIP confirmed at year scale, now with the mechanism of
+its own failure measured.** The book stays opt-in-experimental; what ships
+regardless: the epias feed in the extract builder, the `:tr_trailing_mcp`
+anchor machinery, the pipeline switch forwarding, and the census. Successor
+threads: the SEE solar-regime-floor extension (the false-collapse mass), and
+the degenerate-branch/phantom-cap bistability revealed by the flip months
+(base-arm ES July / IT-CSOUTH April caps) — its own diagnosis.
