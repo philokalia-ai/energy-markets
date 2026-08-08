@@ -74,7 +74,7 @@ per day; never cached on DB error (the exception propagates out of `get!`).
 function get_day_outages(day::Dates.Date)
     return lock(_OUTAGE_DAY_CACHE_LOCK) do
         get!(_OUTAGE_DAY_CACHE, day) do
-            Euphemia.sql2df_with_retry(
+            df = Euphemia.sql2df_with_retry(
                 """
                 WITH active_outages AS (
                     SELECT asset_code,
@@ -101,6 +101,70 @@ function get_day_outages(day::Dates.Date)
                 FROM active_outages o
                 """,
                 [day])
+            # Nuclear recent-silence derate (EXPERIMENTAL, opt-in —
+            # docs/experiments/nuke-silence/prereg-2026-08.md): a nuclear unit
+            # dark for the trailing 72h (< 5% p_max), demonstrably alive in the
+            # trailing 30d (> 20% p_max) and carrying NO Active filing covering
+            # the day gets a SYNTHETIC outage row at its trailing-72h max —
+            # darkness is never economic withholding for nuclear (the measured
+            # persistence of the pattern into the delivery day is ~90%: SE3
+            # 262/272, FR 129/149, avg missing ~0.5-1.1 GW). Mirror of the
+            # stale-outage override. Absent env ⇒ the block never runs and the
+            # cached frame is byte-identical.
+            if !isempty(get(ENV, "EUPHEMIA_ENABLE_NUKE_SILENCE", ""))
+                sil = Euphemia.sql2df_with_retry(
+                    """
+                    WITH nukes AS (
+                        SELECT generation_unit_code AS u, area_map_code AS z,
+                               MAX(generation_unit_installed_capacity_mw) AS pmax
+                        FROM entsoe.production_and_generation_units
+                        WHERE generation_unit_type LIKE '%uclear%'
+                          AND generation_unit_installed_capacity_mw >= 300
+                        GROUP BY generation_unit_code, area_map_code
+                    )
+                    SELECT n.u AS asset_code, n.z AS area_map_code,
+                           COALESCE(MAX(CASE WHEN a.date_time_utc >= \$1::timestamp - INTERVAL '4 days'
+                                              AND a.date_time_utc < \$1::timestamp - INTERVAL '1 day'
+                                             THEN a.actual_generation_output_mw END), 0.0)
+                               AS available_capacity_mw,
+                           MAX(n.pmax) AS pmax,
+                           MAX(a.actual_generation_output_mw) AS t30
+                    FROM nukes n
+                    JOIN entsoe.actual_generation_output_per_generation_unit a
+                      ON a.generation_unit_code = n.u
+                     AND a.date_time_utc >= \$1::timestamp - INTERVAL '31 days'
+                     AND a.date_time_utc < \$1::timestamp - INTERVAL '1 day'
+                    -- v2 feed-freshness precondition (Amendment 2): only when
+                    -- the per-unit feed demonstrably covers the trailing
+                    -- window — the extract's per-unit table lags weeks behind
+                    -- its edge, and without this every unit looks "dark" in
+                    -- the lag window (the measured SE3/DK1 confound).
+                    WHERE EXISTS (
+                        SELECT 1 FROM entsoe.actual_generation_output_per_generation_unit f
+                        WHERE f.date_time_utc >= \$1::timestamp - INTERVAL '2 days'
+                          AND f.date_time_utc < \$1::timestamp - INTERVAL '1 day'
+                          AND f.actual_generation_output_mw > 0
+                    )
+                    GROUP BY n.u, n.z
+                    """,
+                    [day])
+                filed = Set(String.(df.asset_code))
+                n_syn = 0
+                for r in eachrow(sil)
+                    (ismissing(r.t30) || ismissing(r.pmax)) && continue
+                    ok = Float64(r.available_capacity_mw) < 0.05 * Float64(r.pmax) &&
+                         Float64(r.t30) > 0.2 * Float64(r.pmax) &&
+                         !(String(r.asset_code) in filed)
+                    ok || continue
+                    push!(df, (asset_code=r.asset_code, area_map_code=r.area_map_code,
+                               available_capacity_mw=Float64(r.available_capacity_mw),
+                               stale_override=false))
+                    n_syn += 1
+                end
+                n_syn > 0 &&
+                    println("   🌑 nuclear recent-silence derate: $n_syn synthetic outage row(s) for $day")
+            end
+            df
         end
     end
 end
