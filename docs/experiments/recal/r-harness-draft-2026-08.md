@@ -32,12 +32,12 @@ relax these.
 
 ## R0 outputs feeding this harness
 
-### Actuals trust tiers (3 of 4 family audits in; Nordics pending)
+### Actuals trust tiers (ALL 4 family audits in)
 
 | Tier | Zones | Consequence |
 |---|---|---|
-| **1 (trusted)** | IT×7, CH, ES, PT, FR, BE, DE_LU, AT, HU, RS | actuals usable for input scoring, oracle bounds valid |
-| **2 (caveats)** | GR, RO (clean actuals, TRUE fc overshoot 1.24/1.40), SI, SK, CZ (night-artifact 9.3%), PL | inputs correctable; actual-based metrics need the caveat noted |
+| **1 (trusted)** | IT×7, CH, ES, PT, FR, BE, DE_LU, AT, HU, RS, NO1–NO5, SE1–SE4 | actuals usable for input scoring, oracle bounds valid |
+| **2 (caveats)** | GR, RO (clean actuals, TRUE fc overshoot 1.24/1.40), SI, SK, CZ (night 9.3%), PL, **DK1 (wind fc 25–45% UNDER actual — prime R1 target)**, DK2, FI/EE/LV/LT (Baltic solar night artifacts 9–20%) | inputs correctable; actual-based metrics carry the caveat |
 | **3 (untrusted)** | **NL** (solar actual = 2–7% of fleet — never substitute/score against it), **BG** (noisy actuals: night 7.6%, wind cf 3.3) | no actual-anchored derivation; input work goes through forecasts/ML only |
 
 Cross-cutting registry finding (both agents, independently): the unit
@@ -45,7 +45,24 @@ registry carries ~0 distributed solar for most zones (only HU sane) —
 **installed-capacity parameters must come from p99-of-actuals or forecast
 ceilings, not the registry**, for RES.
 
+Additional audit findings folded in:
+- **Per-unit feed tail lag** (~3 weeks behind the extract edge, source-side):
+  any trailing per-unit logic near "now" needs a feed-freshness
+  precondition (measured confound: nuke-silence v1's July mass-derates).
+- **SE3 nuclear reporting is complete** — the code-mismatch hypothesis is
+  refuted; nuke-silence is backfill-NULL (v2) and lives on as a proposed
+  FORWARD live A/B only.
+- Load actuals trustworthy in all 39 zones.
+
 ### Bistability: contained (rule 5); solver reproducer parked on pillar 1.
+
+Rule-5 refinement (evidence of 2026-08-08 night): treatment-created cap
+cells that are THEMSELVES quarantine-class (isolated + settled ≤ 300) count
+as branch noise and are reported, not failed; only new NON-quarantine caps
+(clustered, or settled-corroborated) fail the guard. Rationale: the base
+arm carries such cells too (2 in 310k) and perturbations toss knife-edge
+hours in AND out of cap branches — a strict zero would make every arm
+unshippable on coin flips.
 
 ## R1 spec (inputs per zone × target)
 
