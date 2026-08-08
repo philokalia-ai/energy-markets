@@ -323,6 +323,26 @@ function yfinance_table_specs()
     ]
 end
 
+"""
+EPİAŞ Turkish market feeds (the TR/MK boundary book's `:tr_trailing_mcp`
+anchor + census inputs — docs/experiments/tr-boundary/): full history, tiny
+(mcp/load_forecast ~31k rows, gas_reference_price ~1.3k, actual_generation
+~500k). `date_time_utc` is already a NAIVE UTC timestamp in the source.
+Without these the offline anchor silently degrades to the 0.55×gas fallback.
+"""
+function epias_table_specs()
+    return NamedTuple[
+        mkspec(schema="epias", table="mcp", ts_col="date_time_utc", ts_tz=false,
+               sort_by="date_time_utc", refresh=:append),
+        mkspec(schema="epias", table="load_forecast", ts_col="date_time_utc", ts_tz=false,
+               sort_by="date_time_utc", refresh=:append),
+        mkspec(schema="epias", table="gas_reference_price", ts_col="date_time_utc", ts_tz=false,
+               sort_by="date_time_utc", refresh=:append),
+        mkspec(schema="epias", table="actual_generation", ts_col="date_time_utc", ts_tz=false,
+               sort_by="date_time_utc, source", refresh=:append),
+    ]
+end
+
 "simulations reference caches: tiny, mutable → replace."
 function simulations_table_specs(zones::Vector{String})
     return NamedTuple[
