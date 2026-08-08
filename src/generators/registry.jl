@@ -134,6 +134,17 @@ function get_day_outages(day::Dates.Date)
                       ON a.generation_unit_code = n.u
                      AND a.date_time_utc >= \$1::timestamp - INTERVAL '31 days'
                      AND a.date_time_utc < \$1::timestamp - INTERVAL '1 day'
+                    -- v2 feed-freshness precondition (Amendment 2): only when
+                    -- the per-unit feed demonstrably covers the trailing
+                    -- window — the extract's per-unit table lags weeks behind
+                    -- its edge, and without this every unit looks "dark" in
+                    -- the lag window (the measured SE3/DK1 confound).
+                    WHERE EXISTS (
+                        SELECT 1 FROM entsoe.actual_generation_output_per_generation_unit f
+                        WHERE f.date_time_utc >= \$1::timestamp - INTERVAL '2 days'
+                          AND f.date_time_utc < \$1::timestamp - INTERVAL '1 day'
+                          AND f.actual_generation_output_mw > 0
+                    )
                     GROUP BY n.u, n.z
                     """,
                     [day])
