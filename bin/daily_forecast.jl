@@ -98,6 +98,7 @@ include(joinpath(@__DIR__, "forecast_common.jl"))
 include(joinpath(@__DIR__, "weather_res.jl"))    # guarded main; pure helpers + open-meteo fetch
 include(joinpath(@__DIR__, "weather_load.jl"))   # guarded main; load model (features + fetch + predict)
 include(joinpath(@__DIR__, "ml_inputs.jl"))      # LightGBM input models (scorer + feature port, PR #252)
+include(joinpath(@__DIR__, "emit_input_corrections.jl"))  # cv32 daily correction emitter (PR #318 follow-up)
 
 const OPTIMIZER = get(ENV, "OPTIMIZER", "highs")
 const INPUT_MODE = let m = lowercase(get(ENV, "INPUT_MODE", "entsoe"))
@@ -1065,6 +1066,26 @@ function main()
 
     # UTC-day clear cache: market days D and D+1 share the UTC-day-D solve.
     clear_cache = Dict{Date,Union{Nothing,Dict{String,Dict{DateTime,Float64}}}}()
+
+    # cv32: emit input corrections BEFORE the clears so the lead-1 book
+    # consumes them (profile-gated in src). The lead-1 day gets its D-1
+    # morning emission (solar runs on previous_day1 weather — vintage-exact);
+    # the trailing catch-up days exist because the DK1 fc-debias rule needs
+    # the ENTSO-E D-1 fc, which only lands in our DB at 00:00 UTC of the
+    # delivery day (ceres ETL timing) — the sweep fills those rows on the
+    # first run where the fc exists. ON CONFLICT DO NOTHING keeps the
+    # earliest vintage (solar catch-up re-emissions are no-ops, and the
+    # solar previous_day1 vintage is D-1 regardless of when it is queried).
+    # Non-fatal by contract.
+    if !SKIP_CLEAR
+        for cday in (first_candidate - Day(3)):Day(1):first_candidate
+            try
+                emit_input_corrections!(cday)
+            catch e
+                @warn "cv32 correction emission failed for $cday — books fall soft to raw fc" exception=(e, catch_backtrace())
+            end
+        end
+    end
 
     n_predicted = 0
     for day in first_candidate:Day(1):last_candidate

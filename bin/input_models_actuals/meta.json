@@ -1,0 +1,346 @@
+{
+"GR_solar": {
+"feat_cols": [
+"ghi",
+"cloud",
+"pres",
+"se",
+"clearness",
+"hod",
+"doy_s",
+"doy_c",
+"doy_s2",
+"doy_c2",
+"cap95_solar",
+"v100m"
+],
+"best_iter": 117,
+"clamp_night": true,
+"n_train": 16822,
+"ref_col": "cap95_solar"
+},
+"GR_wind": {
+"feat_cols": [
+"v100m",
+"cloud",
+"pres",
+"hod",
+"dow",
+"doy_s",
+"doy_c",
+"doy_s2",
+"doy_c2",
+"cap95_wind"
+],
+"best_iter": 145,
+"clamp_night": false,
+"n_train": 16822,
+"ref_col": "cap95_wind"
+},
+"DK1_solar": {
+"feat_cols": [
+"ghi",
+"cloud",
+"pres",
+"se",
+"clearness",
+"hod",
+"doy_s",
+"doy_c",
+"doy_s2",
+"doy_c2",
+"cap95_solar",
+"v100m"
+],
+"best_iter": 353,
+"clamp_night": true,
+"n_train": 16820,
+"ref_col": "cap95_solar"
+},
+"DK1_wind": {
+"feat_cols": [
+"v100m",
+"cloud",
+"pres",
+"hod",
+"dow",
+"doy_s",
+"doy_c",
+"doy_s2",
+"doy_c2",
+"cap95_wind"
+],
+"best_iter": 184,
+"clamp_night": false,
+"n_train": 16820,
+"ref_col": "cap95_wind"
+},
+"IT-CNORTH_solar": {
+"feat_cols": [
+"ghi",
+"cloud",
+"pres",
+"se",
+"clearness",
+"hod",
+"doy_s",
+"doy_c",
+"doy_s2",
+"doy_c2",
+"cap95_solar",
+"v100m"
+],
+"best_iter": 116,
+"clamp_night": true,
+"n_train": 16824,
+"ref_col": "cap95_solar"
+},
+"IT-CSOUTH_solar": {
+"feat_cols": [
+"ghi",
+"cloud",
+"pres",
+"se",
+"clearness",
+"hod",
+"doy_s",
+"doy_c",
+"doy_s2",
+"doy_c2",
+"cap95_solar",
+"v100m"
+],
+"best_iter": 156,
+"clamp_night": true,
+"n_train": 16824,
+"ref_col": "cap95_solar"
+},
+"IT-CSOUTH_wind": {
+"feat_cols": [
+"v100m",
+"cloud",
+"pres",
+"hod",
+"dow",
+"doy_s",
+"doy_c",
+"doy_s2",
+"doy_c2",
+"cap95_wind"
+],
+"best_iter": 74,
+"clamp_night": false,
+"n_train": 16824,
+"ref_col": "cap95_wind"
+},
+"IT-Calabria_solar": {
+"feat_cols": [
+"ghi",
+"cloud",
+"pres",
+"se",
+"clearness",
+"hod",
+"doy_s",
+"doy_c",
+"doy_s2",
+"doy_c2",
+"cap95_solar",
+"v100m"
+],
+"best_iter": 177,
+"clamp_night": true,
+"n_train": 16824,
+"ref_col": "cap95_solar"
+},
+"IT-Calabria_wind": {
+"feat_cols": [
+"v100m",
+"cloud",
+"pres",
+"hod",
+"dow",
+"doy_s",
+"doy_c",
+"doy_s2",
+"doy_c2",
+"cap95_wind"
+],
+"best_iter": 66,
+"clamp_night": false,
+"n_train": 16824,
+"ref_col": "cap95_wind"
+},
+"IT-NORTH_solar": {
+"feat_cols": [
+"ghi",
+"cloud",
+"pres",
+"se",
+"clearness",
+"hod",
+"doy_s",
+"doy_c",
+"doy_s2",
+"doy_c2",
+"cap95_solar",
+"v100m"
+],
+"best_iter": 81,
+"clamp_night": true,
+"n_train": 16824,
+"ref_col": "cap95_solar"
+},
+"IT-SOUTH_solar": {
+"feat_cols": [
+"ghi",
+"cloud",
+"pres",
+"se",
+"clearness",
+"hod",
+"doy_s",
+"doy_c",
+"doy_s2",
+"doy_c2",
+"cap95_solar",
+"v100m"
+],
+"best_iter": 172,
+"clamp_night": true,
+"n_train": 16824,
+"ref_col": "cap95_solar"
+},
+"IT-SOUTH_wind": {
+"feat_cols": [
+"v100m",
+"cloud",
+"pres",
+"hod",
+"dow",
+"doy_s",
+"doy_c",
+"doy_s2",
+"doy_c2",
+"cap95_wind"
+],
+"best_iter": 374,
+"clamp_night": false,
+"n_train": 16824,
+"ref_col": "cap95_wind"
+},
+"IT-Sardinia_solar": {
+"feat_cols": [
+"ghi",
+"cloud",
+"pres",
+"se",
+"clearness",
+"hod",
+"doy_s",
+"doy_c",
+"doy_s2",
+"doy_c2",
+"cap95_solar",
+"v100m"
+],
+"best_iter": 119,
+"clamp_night": true,
+"n_train": 16824,
+"ref_col": "cap95_solar"
+},
+"IT-Sardinia_wind": {
+"feat_cols": [
+"v100m",
+"cloud",
+"pres",
+"hod",
+"dow",
+"doy_s",
+"doy_c",
+"doy_s2",
+"doy_c2",
+"cap95_wind"
+],
+"best_iter": 199,
+"clamp_night": false,
+"n_train": 16824,
+"ref_col": "cap95_wind"
+},
+"IT-Sicily_solar": {
+"feat_cols": [
+"ghi",
+"cloud",
+"pres",
+"se",
+"clearness",
+"hod",
+"doy_s",
+"doy_c",
+"doy_s2",
+"doy_c2",
+"cap95_solar",
+"v100m"
+],
+"best_iter": 573,
+"clamp_night": true,
+"n_train": 16824,
+"ref_col": "cap95_solar"
+},
+"IT-Sicily_wind": {
+"feat_cols": [
+"v100m",
+"cloud",
+"pres",
+"hod",
+"dow",
+"doy_s",
+"doy_c",
+"doy_s2",
+"doy_c2",
+"cap95_wind"
+],
+"best_iter": 247,
+"clamp_night": false,
+"n_train": 16824,
+"ref_col": "cap95_wind"
+},
+"RO_solar": {
+"feat_cols": [
+"ghi",
+"cloud",
+"pres",
+"se",
+"clearness",
+"hod",
+"doy_s",
+"doy_c",
+"doy_s2",
+"doy_c2",
+"cap95_solar",
+"v100m"
+],
+"best_iter": 136,
+"clamp_night": true,
+"n_train": 16824,
+"ref_col": "cap95_solar"
+},
+"RO_wind": {
+"feat_cols": [
+"v100m",
+"cloud",
+"pres",
+"hod",
+"dow",
+"doy_s",
+"doy_c",
+"doy_s2",
+"doy_c2",
+"cap95_wind"
+],
+"best_iter": 90,
+"clamp_night": false,
+"n_train": 16824,
+"ref_col": "cap95_wind"
+}
+}
