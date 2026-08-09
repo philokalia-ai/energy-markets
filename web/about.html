@@ -166,7 +166,10 @@
         <li><strong>Regime-gated behaviours that exist in the market</strong>, gated
           ex-ante and kill-switchable — e.g. the solar-surplus price-taker floor
           (cv31), which only activates when the day-ahead solar share of load is high,
-          and is inert everywhere else.</li>
+          and is inert everywhere else; or the winner-input RES corrections (cv32),
+          which replace the TSO's solar forecast for IT-Sicily and IT-Sardinia with a
+          D-1-legal measured correction, only where the TSO forecast is demonstrably
+          the weaker input.</li>
         <li><strong>Cross-border ATC coupling on 39 zones</strong> with two-pass
           opportunity anchors; zonal prices are the duals of the balance constraints,
           exactly as in the real coupling.</li>
@@ -433,13 +436,20 @@
   </p>
   <ul>
     <li><strong>The record measures the MECHANISM.</strong> The counterfactual
-      backfill — the multi-year history at the current code version
-      (<strong>cv31</strong>) — runs on the <strong>reference inputs</strong>:
-      ENTSO-E's published D-1 load and wind/solar forecasts, the same information set
-      the market itself cleared on. Holding the inputs fixed to the market's own
-      isolates one question — <em>given those inputs, where would competitive prices
-      sit?</em> — so the residual is a clean measurement of the clearing mechanism and
-      of conduct. <strong>Our fitted weather predictions never enter the record.</strong></li>
+      backfill — the multi-year history at its record code version
+      (<strong>cv31</strong>; the current code is <strong>cv32</strong>, whose scope
+      enters the record at the next refill) — runs on the <strong>reference
+      inputs</strong>: ENTSO-E's published D-1 load and wind/solar forecasts, the same
+      information set the market itself cleared on. Holding the inputs fixed to the
+      market's own isolates one question — <em>given those inputs, where would
+      competitive prices sit?</em> — so the residual is a clean measurement of the
+      clearing mechanism and of conduct. <strong>Our fitted weather predictions never
+      enter the record</strong>, with one measured, narrowly-scoped exception from
+      cv32: for IT-Sicily and IT-Sardinia the record's solar input is a D-1-legal
+      actuals-target correction, adopted because the TSO forecast there is
+      systematically wrong (45% / 32% error reduction against measured output) and
+      validated at year scale with zero collateral damage elsewhere. Everywhere else
+      the reference-input rule stands.</li>
     <li><strong>The ex-ante track measures the PRODUCT.</strong> The live forecast runs
       on <em>our own</em> fitted weather inputs (Layer 1) and freezes
       <strong>before the auction gate</strong>, so every row is provable ex-ante by its
@@ -609,7 +619,9 @@
     <strong>bias</strong> (mean simulated&nbsp;−&nbsp;actual — negative means the model
     under-prices, which for a competitive counterfactual is a signal, not a bug), and
     <strong>correlation</strong> of hourly prices. Whole-sample, never cherry-picked. On
-    the current record (<strong>cv31</strong>, all 39 zones, pooled hourly), correlation
+    the current published record (<strong>cv31</strong>, all 39 zones, pooled hourly —
+    the cv32 code is live and its island-input scope enters the record at the next
+    refill), correlation
     rises year over year with the solar buildout: <strong>0.634 in 2025</strong> (MAE
     <strong>€26.5</strong>) and <strong>0.669 in 2026</strong> (MAE <strong>€30.3</strong>).
     Weighting each zone by its traded volume, zones at correlation ≥ 0.75 cover
@@ -693,6 +705,21 @@
       three frozen gates on the calibration set — it manufactured new cap-hours and
       breached correlation envelopes — so it was not scored on the hold-out and did not
       ship (<a href="https://github.com/philokalia-ai/energy-markets/blob/main/docs/experiments/cv30-results.md">results</a>).</li>
+    <li><strong>The market-implied forecast experiment</strong> inverted our own
+      order book to recover the solar quantity the market "believed". Both frozen
+      hypotheses were rejected — but the inversion returned the TSO forecast almost
+      exactly (bias −38&nbsp;MW), the sharpest measurement yet that a long-calibrated
+      book co-adapts to its inputs, and it sized Greece's collapse deficit at
+      ~2.5&nbsp;GW of missing surplus quantity
+      (<a href="https://github.com/philokalia-ai/energy-markets/blob/main/docs/experiments/market-implied/results-gr-2026-08.md">results</a>).</li>
+    <li><strong>The GR surplus-quantity package</strong> (a negative floor plus a
+      cycling-avoidance "valley continuation" tranche, the hourly projection of a
+      block order — true Gurobi block orders were prototyped and proved
+      price-identical at this design) failed its frozen primary on the calibration
+      set: the coupled 39-zone clear already captures 87% of Greek collapse hours,
+      so levers sized to the single-zone deficit overshoot. The recorded lesson:
+      diagnose coupled-path packages ON the coupled path
+      (<a href="https://github.com/philokalia-ai/energy-markets/blob/main/docs/experiments/gr-surplus-quantity/setA-results-2026-08.md">results</a>).</li>
   </ul>
   <p>
     Each of these has its numbers and prereg in the repository's <code>docs/</code> —
