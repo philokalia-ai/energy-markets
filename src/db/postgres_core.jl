@@ -155,7 +155,21 @@
 # stays thermal, and the floor bottoms at -20 while settled reaches -100..-300)
 # — versions 28/29/30 are consumed by documented NO-SHIP labels (cv28/cv29
 # floor family, cv30 — docs/experiments/cv{28,29,30}-results.md). August 2026.
-const ENERGY_PRICES_CODE_VERSION = 31
+# v31 -> v32: winner-input corrections, Sicily+Sardinia scope (#318 ship;
+# docs/experiments/recal/cv32-results-2026-08.md). The record path's RES input
+# for IT-Sicily / IT-Sardinia comes from simulations.input_corrections
+# (actuals-target LightGBM solar, D-1-legal, emitted daily by
+# bin/emit_input_corrections.jl since #319), profile-scoped to the EU path
+# (ZoneProfile.input_corrections), kill-switch EUPHEMIA_DISABLE_CV32.
+# Owner-ratified adoption; the full 5-zone winner set was measured and
+# REJECTED at year scale (GR +2.03 / DK1 +2.68 — co-adaptation; those series
+# stay in the table awaiting joint mechanism packages, PL joined the queue in
+# #321). Validation cv32b_fy: Sicily −0.20 / corr +0.009, footprint −0.06,
+# zero new caps; SEE byte-identity untouched (neither island is in the SEE
+# products). Prices change ONLY on the two islands; every other zone is
+# byte-identical to cv31 code. Bumped so daily forecasts and the next record
+# never mix cv32 books with cv31 rows. August 2026.
+const ENERGY_PRICES_CODE_VERSION = 32
 
 # Pool size: env-tunable (EUPHEMIA_PG_POOL) because the threaded book build
 # runs up to nzones concurrent queries — 5 connections cap the parallelism
