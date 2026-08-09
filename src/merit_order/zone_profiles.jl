@@ -1096,9 +1096,11 @@ const ZONE_PROFILES = Dict{String,ZoneProfile}(
     # Slovakia treatment (cv17): AT–SI drop + :hydro anchor + backstop.
     # RO/HU add the cv22 UA firm-slice boundary book on top of their cv17
     # backstop (UA is excluded from injections + backstop headroom by the book).
-    "GR" => with_profile(SEE_PROFILE; input_corrections = true), "BG" => SEE_PROFILE,
-    "RO" => with_profile(SEE_IMPORT_BACKED_PROFILE; boundary_book = UA_BOOK_DEFAULT,
-                         input_corrections = true),
+    # GR/RO/DK1 corrections MEASURED co-adaptation damage on the native year
+    # (GR +2.03, DK1 +2.68 — recal/cv32 validation): their rows stay in the
+    # table but consumption waits for their joint mechanism packages.
+    "GR" => SEE_PROFILE, "BG" => SEE_PROFILE,
+    "RO" => with_profile(SEE_IMPORT_BACKED_PROFILE; boundary_book = UA_BOOK_DEFAULT),
     "RS" => SEE_IMPORT_BACKED_PROFILE,
     "HU" => with_profile(SEE_IMPORT_BACKED_PROFILE; boundary_book = UA_BOOK_DEFAULT),
     "SI" => SLOVENIA_PROFILE,
@@ -1141,7 +1143,7 @@ const ZONE_PROFILES = Dict{String,ZoneProfile}(
     # cv18: DK1 adds the export-absorption ladder (prototype corr 0.495→0.569,
     # MAE −2.0, binds only in RES-surplus hours). DK2 unchanged pending its own A/B.
     # DK1 adds the cv21 Viking-Link (DK1–GB) boundary book; DK2 stays plain.
-    "DK1" => with_profile(DK1_PROFILE; input_corrections = true), "DK2" => DENMARK_PROFILE,
+    "DK1" => DK1_PROFILE, "DK2" => DENMARK_PROFILE,
     # Baltic
     "EE" => BALTIC_PROFILE, "LT" => BALTIC_PROFILE, "LV" => BALTIC_PROFILE,
     # France (nuclear-heavy: continental scarcity + availability-scaled nuclear
