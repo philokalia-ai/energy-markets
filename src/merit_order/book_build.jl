@@ -52,6 +52,7 @@ const STRATEGY_DESCRIPTIONS = Dict{String,String}(
     "demand_elastic"         => "price-sensitive demand tail (curtails above the elastic bid price)",
     "extra"                  => "scenario order added via the extra_orders hook",
     "strategist"             => "order produced by the strategist hook (replaces the source ladder)",
+    "valley_continuation"    => "overnight-committed MW repriced to the floor through the surplus valley (GRSQ lever 2 — the hourly projection of a valley block order)",
 )
 
 """
@@ -309,6 +310,62 @@ end
 
 "Clear the cv32 winner-input delta cache (tests / long processes)."
 clear_input_correction_cache!() = (lock(_CV32_DELTA_LOCK) do; empty!(_CV32_DELTA_CACHE); end; nothing)
+
+# ── GR surplus-quantity lever 2: overnight-runner commitments ─────────────
+# (prereg docs/experiments/gr-surplus-quantity/prereg-2026-08.md, opt-in via
+# EUPHEMIA_ENABLE_GRSQ_T2 — NOT shipped until the package's gates pass.)
+const _GRSQ_COMMIT_CACHE = Dict{Tuple{String,Date},Dict{String,Float64}}()
+const _GRSQ_COMMIT_LOCK = ReentrantLock()
+
+"""
+Valley-continuation commitments: unit_code → demonstrated committed MW.
+A thermal unit qualifies as an overnight runner if its per-day mean 00–04 UTC
+output exceeded 10% of p_max on ≥60% of the trailing-28-day window (2-day
+lag — ex-ante). Committed MW = p25 of those daily overnight means, capped at
+p_max. Missing days count against the 60% (fail-soft: the ~3-week per-unit
+feed tail lag simply leaves the lever inert on recent days, live and
+offline alike). Cached per (zone, day); never cached on DB error.
+"""
+function _valley_continuation_commits(zone::String, day::Date,
+                                      generators::Vector{Generator})
+    lock(_GRSQ_COMMIT_LOCK) do
+        haskey(_GRSQ_COMMIT_CACHE, (zone, day)) &&
+            return _GRSQ_COMMIT_CACHE[(zone, day)]
+    end
+    pmax = Dict{String,Float64}(g.code => g.p_max for g in generators
+                                if !(g.fuel_type in FLEXIBLE_FUEL_TYPES) &&
+                                   g.p_max > 0)
+    isempty(pmax) && return Dict{String,Float64}()
+    df = sql2df_with_retry("""
+        SELECT generation_unit_code AS code, CAST(date_time_utc AS date) AS d,
+               AVG(actual_generation_output_mw) AS mw
+        FROM entsoe.actual_generation_output_per_generation_unit
+        WHERE generation_unit_code = ANY(\$1)
+          AND EXTRACT(HOUR FROM date_time_utc) < 4
+          AND actual_generation_output_mw IS NOT NULL
+          AND date_time_utc >= ((\$2::date - 29)::timestamp AT TIME ZONE 'UTC')
+          AND date_time_utc < ((\$2::date - 1)::timestamp AT TIME ZONE 'UTC')
+        GROUP BY 1, 2
+    """, Any[collect(keys(pmax)), day])
+    byu = Dict{String,Vector{Float64}}()
+    for r in eachrow(df)
+        ismissing(r.mw) && continue
+        push!(get!(byu, String(r.code), Float64[]), Float64(r.mw))
+    end
+    out = Dict{String,Float64}()
+    for (code, vals) in byu
+        pm = pmax[code]
+        count(v -> v > 0.10 * pm, vals) >= 0.6 * 28 || continue
+        out[code] = min(quantile(vals, 0.25), pm)
+    end
+    lock(_GRSQ_COMMIT_LOCK) do
+        _GRSQ_COMMIT_CACHE[(zone, day)] = out
+    end
+    return out
+end
+
+"Clear the valley-continuation commitment cache (tests / long processes)."
+clear_valley_commit_cache!() = (lock(_GRSQ_COMMIT_LOCK) do; empty!(_GRSQ_COMMIT_CACHE); end; nothing)
 
 function _demand_series(loads, renewables,
     target_resolution_minutes::Union{Int,Nothing},
@@ -957,6 +1014,46 @@ function create_merit_order_book(
         sr_floor(hr) = get(solar_share_hr, hr, 0.0) >= sr_theta2 ? sr_floor2 :
                        DEEP_SURPLUS_FLOOR_EUR
 
+        # ── GR surplus-quantity lever 2: valley continuation (opt-in) ────
+        # Prereg docs/experiments/gr-surplus-quantity/prereg-2026-08.md.
+        # The hourly projection of a valley BLOCK ORDER: overnight-committed
+        # thermal units offer their demonstrated committed MW at the floor
+        # through the morning surplus valley instead of at SRMC (cycling
+        # avoidance). Endogenous block acceptance is replaced by the ex-ante
+        # overnight-runner test in _valley_continuation_commits. Opt-in via
+        # EUPHEMIA_ENABLE_GRSQ_T2 (unset ⇒ fully inert, byte-identical);
+        # zone scope EUPHEMIA_GRSQ_ZONES (default GR).
+        grsq2_on = !isempty(get(ENV, "EUPHEMIA_ENABLE_GRSQ_T2", "")) &&
+                   bidding_zone in strip.(split(get(ENV, "EUPHEMIA_GRSQ_ZONES", "GR"), ","))
+        grsq2_commits = Dict{String,Float64}()
+        grsq2_share = Dict{Int,Float64}()
+        if grsq2_on
+            grsq2_commits = try
+                _valley_continuation_commits(bidding_zone, day, generators)
+            catch e
+                @warn "GRSQ T2: commitment query failed — lever inert for $bidding_zone $day" exception=e
+                Dict{String,Float64}()
+            end
+            sol2 = Dict{Int,Vector{Float64}}()
+            ld2 = Dict{Int,Vector{Float64}}()
+            for r in renewables
+                r.production_type == "Solar" || continue
+                length(r.date_time) >= 11 || continue
+                push!(get!(sol2, parse(Int, r.date_time[10:11]), Float64[]),
+                      r.aggregated_generation_forecast)
+            end
+            for (ts, v) in load_by_time
+                length(ts) >= 11 || continue
+                push!(get!(ld2, parse(Int, ts[10:11]), Float64[]), v)
+            end
+            for (h, vs) in sol2
+                lv = haskey(ld2, h) ? sum(ld2[h]) / length(ld2[h]) : 0.0
+                grsq2_share[h] = lv > 0 ? (sum(vs) / length(vs)) / lv : 0.0
+            end
+        end
+        grsq2_valley(hr) = grsq2_on && 4 <= hr <= 13 &&
+                           get(grsq2_share, hr, 0.0) >= 0.25
+
         for ts in target_timeslots
             date_time = parse_timeslot_to_datetime(ts, day)
             hr = Dates.hour(date_time)   # UTC hour key for all hour-keyed lookups
@@ -1230,6 +1327,56 @@ function create_merit_order_book(
                     end
                 end
             end
+        end
+
+        # ── Stage 6c: valley-continuation re-pricing (GRSQ lever 2) ─────
+        # For each qualifying (unit, valley hour): the unit's cheapest
+        # committed MW move to the declared floor, replacing their SRMC/
+        # discount price for that quantity ONLY (MW conserved — re-pricing,
+        # never new capacity). Orders partially covered are split; the floor
+        # part carries strategy "valley_continuation".
+        if grsq2_on && !isempty(grsq2_commits)
+            byunit = Dict{Tuple{String,DateTime},Vector{Int}}()
+            for (i, (o, tag)) in enumerate(tagged)
+                o.type == :supply || continue
+                haskey(grsq2_commits, tag) || continue
+                grsq2_valley(Dates.hour(o.date_time)) || continue
+                push!(get!(byunit, (tag, o.date_time), Int[]), i)
+            end
+            n_repriced = 0
+            for ((code, dt), idxs) in byunit
+                want = grsq2_commits[code]
+                sort!(idxs, by=i -> tagged[i][1].price)
+                for i in idxs
+                    want <= 1e-9 && break
+                    o, tag = tagged[i]
+                    if o.price <= DEEP_SURPLUS_FLOOR_EUR
+                        want -= o.quantity
+                        continue
+                    end
+                    take = min(want, o.quantity)
+                    if take >= o.quantity - 1e-9
+                        tagged[i] = (SimpleOrder(o.type, DEEP_SURPLUS_FLOOR_EUR,
+                                                 o.quantity, o.zone, o.date_time,
+                                                 o.resolution_code), tag)
+                        strategies[i] = "valley_continuation"
+                    else
+                        tagged[i] = (SimpleOrder(o.type, o.price, o.quantity - take,
+                                                 o.zone, o.date_time,
+                                                 o.resolution_code), tag)
+                        push!(tagged, (SimpleOrder(o.type, DEEP_SURPLUS_FLOOR_EUR,
+                                                   take, o.zone, o.date_time,
+                                                   o.resolution_code), tag))
+                        push!(strategies, "valley_continuation")
+                        supply_orders_count += 1
+                    end
+                    want -= take
+                    n_repriced += 1
+                end
+            end
+            n_repriced > 0 &&
+                println("   🌅 GRSQ T2: $n_repriced valley tranche(s) repriced to the floor " *
+                        "($(length(grsq2_commits)) overnight runner(s))")
         end
 
         # ── Stage 7: demand orders ──────────────────────────────────────
