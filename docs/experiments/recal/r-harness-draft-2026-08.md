@@ -64,14 +64,27 @@ arm carries such cells too (2 in 310k) and perturbations toss knife-edge
 hours in AND out of cap branches — a strict zero would make every arm
 unshippable on coin flips.
 
-## R1 spec (inputs per zone × target)
+## R1 spec (inputs per zone × target) — REVISED 2026-08-09 morning
 
-Winner = ML vs TSO forecast on the **out-of-sample scorecard vs actuals**,
-EXCEPT Tier-3-actuals zones where scoring vs actuals is invalid → those keep
-the TSO forecast (or ML scored vs forecast-consistency) until their actuals
-source is fixed. NOTE (from this audit): the #252/#301 ML RES targets are
-ENTSO-E D-1 forecasts, which shields ML from garbage actuals but also means
-"ML beats TSO on actuals" must be re-established per zone before R2 uses it.
+**Finding (measured + code-confirmed):** the current ML stack TARGETS the
+ENTSO-E D-1 forecast (docs/predictions.md; the #252 design), so it inherits
+the TSO's conditional biases by construction and cannot beat them vs
+actuals. The year TSO-vs-actuals scorecard (r1_tso_scorecard.csv, session
+scratchpad) quantifies where that matters: **DK1 wind bias −521 MW on
+1,967 avg (−26%)**, **GR solar +470 on 1,692 (+28%)**, RO solar +149/414,
+BG solar +89/785; most other zone-targets are within ±5%.
+
+**Policy (the R1 deliverable):** the training TARGET follows the trust tier
+per (zone, target):
+- Trusted actuals + biased TSO fc (DK1 wind, GR/RO solar, …): retrain with
+  **actuals as target** (same features/vintages; y changes), scored OOS vs
+  actuals — these become the R2 input legs.
+- Trusted actuals + unbiased fc: keep fc-target (cheaper, already shipped)
+  — nothing to gain.
+- Untrusted actuals (NL solar, BG per its tier): fc-target stays CORRECT —
+  never train toward garbage.
+The dual-target policy is itself a named characteristic (which truth each
+zone's input can see), recorded per zone-target in the meta.
 
 ## R2 package order (updated by R0)
 
