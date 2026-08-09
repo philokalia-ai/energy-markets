@@ -343,6 +343,18 @@ function epias_table_specs()
     ]
 end
 
+"""
+cv32 winner-input corrections (docs/experiments/recal/): the record path's
+per-hour RES input replacements — required offline or corrected zones
+silently degrade to raw forecasts (fail-soft by design).
+"""
+function input_corrections_table_specs()
+    return NamedTuple[
+        mkspec(schema="simulations", table="input_corrections", ts_col="date_time_utc",
+               ts_tz=false, sort_by="bidding_zone, date_time_utc", refresh=:replace),
+    ]
+end
+
 "simulations reference caches: tiny, mutable → replace."
 function simulations_table_specs(zones::Vector{String})
     return NamedTuple[

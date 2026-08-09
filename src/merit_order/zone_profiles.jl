@@ -558,6 +558,17 @@ Base.@kwdef struct ZoneProfile
     # (byte-identical). Only DK1 (Viking Link, GB) carries one in cv21; see
     # `BoundaryBook` / `VIKING_GB_BOOK`.
     boundary_book::Union{Nothing,BoundaryBook} = nothing
+    # cv32 (owner-ratified 2026-08-09, docs/experiments/recal/): this zone's
+    # RES forecast is replaced per-hour by the winner input from
+    # `simulations.input_corrections` (actuals-target ML solar for
+    # GR/RO/IT-Sicily/IT-Sardinia, trailing-debiased fc wind for DK1 — all
+    # strictly D-1-legal, R1 table in recal/r1-results-2026-08.md). Consumed
+    # only where a correction row exists; fail-soft to the raw forecast.
+    # false = byte-identical. Kill-switch EUPHEMIA_DISABLE_CV32 strips it at
+    # profile resolution like the other cv switches. SEE single-zone/5-zone
+    # products never read these profiles (get_zone_profile is EU-path-only),
+    # so their byte-identity chains are untouched.
+    input_corrections::Bool = false
 end
 
 """
@@ -1085,6 +1096,9 @@ const ZONE_PROFILES = Dict{String,ZoneProfile}(
     # Slovakia treatment (cv17): AT–SI drop + :hydro anchor + backstop.
     # RO/HU add the cv22 UA firm-slice boundary book on top of their cv17
     # backstop (UA is excluded from injections + backstop headroom by the book).
+    # GR/RO/DK1 corrections MEASURED co-adaptation damage on the native year
+    # (GR +2.03, DK1 +2.68 — recal/cv32 validation): their rows stay in the
+    # table but consumption waits for their joint mechanism packages.
     "GR" => SEE_PROFILE, "BG" => SEE_PROFILE,
     "RO" => with_profile(SEE_IMPORT_BACKED_PROFILE; boundary_book = UA_BOOK_DEFAULT),
     "RS" => SEE_IMPORT_BACKED_PROFILE,
@@ -1107,8 +1121,9 @@ const ZONE_PROFILES = Dict{String,ZoneProfile}(
     # subtraction phase — git holds the implementation if the redesign revives them.
     "IT-NORTH" => ITALY_PROFILE, "IT-CNORTH" => ITALY_CNORTH_PROFILE,
     "IT-CSOUTH" => ITALY_PROFILE, "IT-SOUTH" => ITALY_PROFILE,
-    "IT-Calabria" => ITALY_PROFILE, "IT-Sicily" => ITALY_PROFILE,
-    "IT-Sardinia" => ITALY_PROFILE,
+    "IT-Calabria" => ITALY_PROFILE,
+    "IT-Sicily" => with_profile(ITALY_PROFILE; input_corrections = true),
+    "IT-Sardinia" => with_profile(ITALY_PROFILE; input_corrections = true),
     # Norway — NO2 is the export gateway (direct DE/NL/DK cables), fits well on
     # plain NORWAY_PROFILE. NO1/NO3 are interior hydro pockets behind NO2: cv23
     # gives them the ex-ante import backstop (NORWAY_ANCHORED_PROFILE,
@@ -1178,6 +1193,11 @@ function get_zone_profile(zone::AbstractString)
     if p.boundary_book !== nothing &&
        !isempty(get(ENV, p.boundary_book.disable_env, ""))
         p = with_profile(p; boundary_book=nothing)
+    end
+    # cv32 input-corrections kill-switch (house isempty style): strips the
+    # winner-input replacement at resolution time, like the other cv gates.
+    if p.input_corrections && !isempty(get(ENV, "EUPHEMIA_DISABLE_CV32", ""))
+        p = with_profile(p; input_corrections=false)
     end
     # cv25 Phase-4 re-calibration treatments (docs/cv25-phase4-prereg.md), gated
     # by EUPHEMIA_DISABLE_CV25_RECAL (house isempty style). T1: BG/GR gain the

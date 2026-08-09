@@ -161,6 +161,7 @@ function main()
     specs = entsoe_table_specs(zones; start_date=start_date, end_date=today + Day(7))
     append!(specs, yfinance_table_specs())
     append!(specs, epias_table_specs())
+    append!(specs, input_corrections_table_specs())
     append!(specs, simulations_table_specs(zones))
     have_weather && append!(specs, weather_table_specs(today=today))
 
