@@ -256,6 +256,60 @@ piecewise-constant upsampling to the shared finer grid, then the scenario
 load/renewable modifiers. Returns
 `(target_timeslots, load_by_time, renewable_by_time, resolution_minutes)`.
 """
+# cv32: per-(zone, day) winner-input deltas — hour-prefix ("yyyymmdd-HH") →
+# (corrected − raw ENTSO-E fc) MW for the corrected target type(s). One small
+# query per zone-day (corrections join per-type fc, both dialects), cached
+# like the other day-level inputs; NEVER cached on error, warn-once fail-soft
+# (a missing table — e.g. an extract built before cv32 — degrades to the raw
+# forecast, not to a crash).
+const _CV32_DELTA_CACHE = Dict{Tuple{String,Date},Dict{String,Float64}}()
+const _CV32_DELTA_LOCK = ReentrantLock()
+const _CV32_WARNED = Ref{Bool}(false)
+
+function _input_correction_deltas(zone::String, day::Date)
+    lock(_CV32_DELTA_LOCK) do
+        haskey(_CV32_DELTA_CACHE, (zone, day)) && return _CV32_DELTA_CACHE[(zone, day)]
+        out = Dict{String,Float64}()
+        try
+            df = sql2df_with_retry("""
+                SELECT c.target AS tgt, c.date_time_utc AS h,
+                       c.corrected_mw - f.mw AS delta
+                FROM simulations.input_corrections c
+                JOIN (
+                    SELECT CASE WHEN production_type LIKE 'Solar%' THEN 'solar'
+                                ELSE 'wind' END AS tgt,
+                           date_trunc('hour', date_time_utc) AS h,
+                           AVG(day_ahead_generation_forecast_mw) AS mw
+                    FROM entsoe.generation_forecasts_for_wind_and_solar
+                    WHERE area_map_code = \$1 AND area_type_code LIKE 'BZN%'
+                      AND date_time_utc >= (\$2::date::timestamp AT TIME ZONE 'UTC')
+                      AND date_time_utc < ((\$2::date + 1)::timestamp AT TIME ZONE 'UTC')
+                    GROUP BY 1, 2
+                ) f ON f.tgt = c.target AND f.h = c.date_time_utc
+                WHERE c.bidding_zone = \$1
+                  AND c.date_time_utc >= (\$2::date::timestamp AT TIME ZONE 'UTC')
+                  AND c.date_time_utc < ((\$2::date + 1)::timestamp AT TIME ZONE 'UTC')
+                """, Any[zone, day])
+            for r in eachrow(df)
+                (ismissing(r.delta)) && continue
+                k = Dates.format(r.h, "yyyymmdd-HH")
+                out[k] = get(out, k, 0.0) + Float64(r.delta)
+            end
+        catch e
+            if !_CV32_WARNED[]
+                _CV32_WARNED[] = true
+                @warn "cv32 input-corrections unavailable — raw forecasts kept" zone day error = sprint(showerror, e)
+            end
+            return out   # fail-soft, NOT cached
+        end
+        _CV32_DELTA_CACHE[(zone, day)] = out
+        return out
+    end
+end
+
+"Clear the cv32 winner-input delta cache (tests / long processes)."
+clear_input_correction_cache!() = (lock(_CV32_DELTA_LOCK) do; empty!(_CV32_DELTA_CACHE); end; nothing)
+
 function _demand_series(loads, renewables,
     target_resolution_minutes::Union{Int,Nothing},
     load_modifier::Union{Nothing,Function},
@@ -693,9 +747,29 @@ function create_merit_order_book(
         end
 
         # ── Stage 2: load/RES series on the clearing grid ───────────────
+        # cv32 winner-input corrections (owner-ratified adoption, docs/
+        # experiments/recal/): when the profile carries `input_corrections`,
+        # the RES series takes the per-hour delta between the winner input
+        # (`simulations.input_corrections` — actuals-target ML solar or
+        # trailing-debiased fc wind, all D-1-legal) and the raw ENTSO-E
+        # forecast, applied BEFORE any scenario modifier so it propagates to
+        # net demand / scarcity / water values exactly like the base input.
+        # Fail-soft: no rows or a query error ⇒ empty deltas ⇒ byte-identical.
+        eff_renewable_modifier = renewable_modifier
+        if profile.input_corrections
+            cv32_deltas = _input_correction_deltas(bidding_zone, day)
+            if !isempty(cv32_deltas)
+                base_rm = renewable_modifier
+                eff_renewable_modifier = (ts, v) -> begin
+                    v2 = max(v + get(cv32_deltas, ts[1:11], 0.0), 0.0)
+                    base_rm === nothing ? v2 : base_rm(ts, v2)
+                end
+                println("  🛠️  cv32 input corrections: $(length(cv32_deltas)) corrected hour(s)")
+            end
+        end
         target_timeslots, load_by_time, renewable_by_time, resolution_minutes =
             _demand_series(loads, renewables, target_resolution_minutes,
-                load_modifier, renewable_modifier)
+                load_modifier, eff_renewable_modifier)
 
         # ── Stage 3: net imports, demand state, gas anchor, backstop ────
         # Residual demand per slot (load minus renewables) drives water value
