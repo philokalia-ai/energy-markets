@@ -917,8 +917,22 @@ function create_merit_order_book(
             "DE_LU,FR,PL,BE,CZ,CH"), ",")))
         solar_regime_on = solar_regime && (bidding_zone in sr_zones)
         sr_theta = parse(Float64, get(ENV, "EUPHEMIA_SOLAR_REGIME_THETA", "0.4"))
+        # cv34 T1 (prereg docs/experiments/continental-collapse/): a ZONAL θ
+        # override — EUPHEMIA_SOLAR_REGIME_THETA_<ZONE> (zone name with "-"
+        # mapped to "_") wins over the group θ for that zone only. Unset ⇒
+        # byte-identical to the group gate.
+        let zk = "EUPHEMIA_SOLAR_REGIME_THETA_" * replace(bidding_zone, "-" => "_")
+            haskey(ENV, zk) && (sr_theta = parse(Float64, ENV[zk]))
+        end
         sr_full = solar_regime_on &&
                   get(ENV, "EUPHEMIA_SOLAR_REGIME_BLOCKS", "full") == "full"
+        # cv34 T2: deep-tier floor — when the hour's solar share ALSO clears
+        # θ2 (EUPHEMIA_SOLAR_REGIME_THETA2), the regime floor deepens to
+        # EUPHEMIA_SOLAR_REGIME_FLOOR2 (default −80). θ2 unset ⇒ tier 2
+        # disabled entirely (single −20 floor, byte-identical to cv31).
+        sr_theta2 = haskey(ENV, "EUPHEMIA_SOLAR_REGIME_THETA2") ?
+            parse(Float64, ENV["EUPHEMIA_SOLAR_REGIME_THETA2"]) : Inf
+        sr_floor2 = parse(Float64, get(ENV, "EUPHEMIA_SOLAR_REGIME_FLOOR2", "-80"))
         solar_share_hr = Dict{Int,Float64}()
         if solar_regime_on
             sol_hr = Dict{Int,Vector{Float64}}()
@@ -939,6 +953,9 @@ function create_merit_order_book(
             end
         end
         sr_active(hr) = solar_regime_on && get(solar_share_hr, hr, 0.0) >= sr_theta
+        # cv34 T2: the floor for an ACTIVE regime hour (tier 2 if share >= θ2)
+        sr_floor(hr) = get(solar_share_hr, hr, 0.0) >= sr_theta2 ? sr_floor2 :
+                       DEEP_SURPLUS_FLOOR_EUR
 
         for ts in target_timeslots
             date_time = parse_timeslot_to_datetime(ts, day)
@@ -949,7 +966,7 @@ function create_merit_order_book(
             res_qty = get(renewable_by_time, ts, 0.0)
             if res_qty > 0.1
                 push_tagged!(SimpleOrder(:supply,
-                    sr_active(hr) ? DEEP_SURPLUS_FLOOR_EUR : 1.0, res_qty,
+                    sr_active(hr) ? sr_floor(hr) : 1.0, res_qty,
                     Symbol(bidding_zone), date_time, resolution_minutes),
                     "RES", "res_forecast")
                 supply_orders_count += 1
@@ -1124,7 +1141,7 @@ function create_merit_order_book(
                     # regime hours (price-taker, curtailment-avoidance economics).
                     if sr_full && sr_active(hr) &&
                        g.fuel_type == Symbol("Hydro Run-of-river and pondage")
-                        water_value = DEEP_SURPLUS_FLOOR_EUR
+                        water_value = sr_floor(hr)
                     end
                     push_tagged!(SimpleOrder(:supply, water_value, offered_pmax(g),
                         Symbol(bidding_zone), date_time, resolution_minutes),
@@ -1182,7 +1199,8 @@ function create_merit_order_book(
                         # NO-SHIP): explicit opt-in only.
                         deep_price = (!isempty(get(ENV, "EUPHEMIA_ENABLE_CV27_T3", "")) ||
                                       (sr_full && sr_active(hr))) ?
-                            DEEP_SURPLUS_FLOOR_EUR : gmc * must_run_price_factor
+                            (sr_active(hr) ? sr_floor(hr) : DEEP_SURPLUS_FLOOR_EUR) :
+                            gmc * must_run_price_factor
                         push_tagged!(SimpleOrder(:supply,
                             deep_price, deep_qty,
                             Symbol(bidding_zone), date_time, resolution_minutes),
