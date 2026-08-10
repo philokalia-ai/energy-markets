@@ -53,6 +53,7 @@ const STRATEGY_DESCRIPTIONS = Dict{String,String}(
     "extra"                  => "scenario order added via the extra_orders hook",
     "strategist"             => "order produced by the strategist hook (replaces the source ladder)",
     "valley_continuation"    => "overnight-committed MW repriced to the floor through the surplus valley (GRSQ lever 2 — the hourly projection of a valley block order)",
+    "pump_absorption"        => "surplus pumping demand at η × pass-1 evening value up to demonstrated pumping capability (cv34 T3)",
 )
 
 """
@@ -367,6 +368,41 @@ end
 "Clear the valley-continuation commitment cache (tests / long processes)."
 clear_valley_commit_cache!() = (lock(_GRSQ_COMMIT_LOCK) do; empty!(_GRSQ_COMMIT_CACHE); end; nothing)
 
+# ── cv34 T3: demonstrated pumping capability ──────────────────────────────
+const _PUMP_CAP_CACHE = Dict{Tuple{String,Date},Float64}()
+const _PUMP_CAP_LOCK = ReentrantLock()
+
+"""
+Trailing-30d (2-day lag) p95 of the zone's hourly pumped-storage CONSUMPTION
+(`actual_consumption_mw`, per-type aggregate) — the demonstrated surplus-
+absorption capability behind the cv34 T3 pumping-demand order. Ex-ante by
+construction; NaN when the zone reports no pumping (the CH data gap).
+Cached per (zone, day); never cached on DB error.
+"""
+function _pump_capability(zone::String, day::Date)
+    lock(_PUMP_CAP_LOCK) do
+        haskey(_PUMP_CAP_CACHE, (zone, day)) && return _PUMP_CAP_CACHE[(zone, day)]
+    end
+    df = sql2df_with_retry("""
+        SELECT percentile_cont(0.95) WITHIN GROUP (ORDER BY mw) AS p
+        FROM (SELECT AVG(actual_consumption_mw) AS mw
+              FROM entsoe.aggregated_generation_per_type
+              WHERE area_map_code = \$1 AND area_type_code LIKE 'BZN%'
+                AND production_type = 'Hydro Pumped Storage'
+                AND actual_consumption_mw IS NOT NULL
+                AND date_time_utc >= ((\$2::date - 32)::timestamp AT TIME ZONE 'UTC')
+                AND date_time_utc < ((\$2::date - 2)::timestamp AT TIME ZONE 'UTC')
+              GROUP BY date_trunc('hour', date_time_utc)) t""", Any[zone, day])
+    cap = (isempty(df) || ismissing(df.p[1])) ? NaN : Float64(df.p[1])
+    lock(_PUMP_CAP_LOCK) do
+        _PUMP_CAP_CACHE[(zone, day)] = cap
+    end
+    return cap
+end
+
+"Clear the cv34 pumping-capability cache (tests / long processes)."
+clear_pump_capability_cache!() = (lock(_PUMP_CAP_LOCK) do; empty!(_PUMP_CAP_CACHE); end; nothing)
+
 function _demand_series(loads, renewables,
     target_resolution_minutes::Union{Int,Nothing},
     load_modifier::Union{Nothing,Function},
@@ -676,6 +712,7 @@ function create_merit_order_book(
     opportunity_anchor::Union{Nothing,Symbol}=nothing,
     anchor_share::Union{Nothing,Float64}=nothing,
     anchor_prices::Union{Nothing,Dict{String,Float64}}=nothing,
+    pass1_prices::Union{Nothing,Dict{String,Float64}}=nothing,
     anchor_export_mw::Dict{Int,Float64}=Dict{Int,Float64}(),
     res_coalesce_missing::Bool=false,
     load_modifier::Union{Nothing,Function}=nothing,
@@ -1014,45 +1051,27 @@ function create_merit_order_book(
         sr_floor(hr) = get(solar_share_hr, hr, 0.0) >= sr_theta2 ? sr_floor2 :
                        DEEP_SURPLUS_FLOOR_EUR
 
-        # ── GR surplus-quantity lever 2: valley continuation (opt-in) ────
-        # Prereg docs/experiments/gr-surplus-quantity/prereg-2026-08.md.
-        # The hourly projection of a valley BLOCK ORDER: overnight-committed
-        # thermal units offer their demonstrated committed MW at the floor
-        # through the morning surplus valley instead of at SRMC (cycling
-        # avoidance). Endogenous block acceptance is replaced by the ex-ante
-        # overnight-runner test in _valley_continuation_commits. Opt-in via
-        # EUPHEMIA_ENABLE_GRSQ_T2 (unset ⇒ fully inert, byte-identical);
-        # zone scope EUPHEMIA_GRSQ_ZONES (default GR).
-        grsq2_on = !isempty(get(ENV, "EUPHEMIA_ENABLE_GRSQ_T2", "")) &&
-                   bidding_zone in strip.(split(get(ENV, "EUPHEMIA_GRSQ_ZONES", "GR"), ","))
+        # ── cv34 T4: thermal valley wall, pass-1-gated (prereg
+        # docs/experiments/continental-collapse/prereg-draft-2026-08.md) ──
+        # The valley-continuation mechanism (GR archive) re-gated with the GR
+        # selectivity lesson: the continuation tranche fires ONLY in slots
+        # where the zone's own PASS-1 coupled price <= 5 € (the model's own
+        # surplus signal — phantom control by construction). Needs
+        # pass1_prices (pass-2 rebuilds only); EUPHEMIA_CV34_T4_ZONES empty
+        # or unset ⇒ fully inert.
+        t4_zones = strip.(split(get(ENV, "EUPHEMIA_CV34_T4_ZONES", ""), ","))
+        grsq2_on = bidding_zone in t4_zones && pass1_prices !== nothing
         grsq2_commits = Dict{String,Float64}()
-        grsq2_share = Dict{Int,Float64}()
         if grsq2_on
             grsq2_commits = try
                 _valley_continuation_commits(bidding_zone, day, generators)
             catch e
-                @warn "GRSQ T2: commitment query failed — lever inert for $bidding_zone $day" exception=e
+                @warn "cv34 T4: commitment query failed — lever inert for $bidding_zone $day" exception=e
                 Dict{String,Float64}()
             end
-            sol2 = Dict{Int,Vector{Float64}}()
-            ld2 = Dict{Int,Vector{Float64}}()
-            for r in renewables
-                r.production_type == "Solar" || continue
-                length(r.date_time) >= 11 || continue
-                push!(get!(sol2, parse(Int, r.date_time[10:11]), Float64[]),
-                      r.aggregated_generation_forecast)
-            end
-            for (ts, v) in load_by_time
-                length(ts) >= 11 || continue
-                push!(get!(ld2, parse(Int, ts[10:11]), Float64[]), v)
-            end
-            for (h, vs) in sol2
-                lv = haskey(ld2, h) ? sum(ld2[h]) / length(ld2[h]) : 0.0
-                grsq2_share[h] = lv > 0 ? (sum(vs) / length(vs)) / lv : 0.0
-            end
         end
-        grsq2_valley(hr) = grsq2_on && 4 <= hr <= 13 &&
-                           get(grsq2_share, hr, 0.0) >= 0.25
+        grsq2_slot(dt) = grsq2_on &&
+            get(pass1_prices, Dates.format(dt, "yyyymmdd-HHMM"), Inf) <= 5.0
 
         for ts in target_timeslots
             date_time = parse_timeslot_to_datetime(ts, day)
@@ -1340,7 +1359,7 @@ function create_merit_order_book(
             for (i, (o, tag)) in enumerate(tagged)
                 o.type == :supply || continue
                 haskey(grsq2_commits, tag) || continue
-                grsq2_valley(Dates.hour(o.date_time)) || continue
+                grsq2_slot(o.date_time) || continue
                 push!(get!(byunit, (tag, o.date_time), Int[]), i)
             end
             n_repriced = 0
@@ -1377,6 +1396,58 @@ function create_merit_order_book(
             n_repriced > 0 &&
                 println("   🌅 GRSQ T2: $n_repriced valley tranche(s) repriced to the floor " *
                         "($(length(grsq2_commits)) overnight runner(s))")
+        end
+
+        # ── Stage 7-pre: cv34 T3 — surplus pumping demand (opt-in) ──────
+        # Prereg: elastic DEMAND up to the zone's demonstrated pumping
+        # capability in regime hours (share >= zone θ), priced at
+        # η × (pass-1 estimate of the same day's evening value) — the owner's
+        # mechanism. Needs pass1_prices (pass-2 only); EUPHEMIA_CV34_PUMP_ZONES
+        # empty/unset ⇒ fully inert. η via EUPHEMIA_CV34_PUMP_ETA (0.7).
+        t3_pump_zones = strip.(split(get(ENV, "EUPHEMIA_CV34_PUMP_ZONES", ""), ","))
+        if bidding_zone in t3_pump_zones && pass1_prices !== nothing &&
+           !isempty(pass1_prices)
+            pump_mw = try
+                _pump_capability(bidding_zone, day)
+            catch e
+                @warn "cv34 T3: capability query failed — inert for $bidding_zone $day" exception=e
+                NaN
+            end
+            if !isnan(pump_mw) && pump_mw > 10.0
+                eta = parse(Float64, get(ENV, "EUPHEMIA_CV34_PUMP_ETA", "0.7"))
+                pump_price = max(eta * maximum(values(pass1_prices)), 0.0)
+                # regime share per hour (same construction as the cv31 gate,
+                # computed here because pump zones need not be floor zones)
+                psol = Dict{Int,Vector{Float64}}(); pld = Dict{Int,Vector{Float64}}()
+                for r in renewables
+                    r.production_type == "Solar" || continue
+                    length(r.date_time) >= 11 || continue
+                    push!(get!(psol, parse(Int, r.date_time[10:11]), Float64[]),
+                          r.aggregated_generation_forecast)
+                end
+                for (ts, v) in load_by_time
+                    length(ts) >= 11 || continue
+                    push!(get!(pld, parse(Int, ts[10:11]), Float64[]), v)
+                end
+                n_pump = 0
+                for ts in target_timeslots
+                    hr = parse(Int, ts[10:11])
+                    sv = get(psol, hr, Float64[]); lv = get(pld, hr, Float64[])
+                    (isempty(sv) || isempty(lv)) && continue
+                    share = (sum(sv) / length(sv)) / max(sum(lv) / length(lv), 1.0)
+                    share >= sr_theta || continue
+                    dtp = parse_timeslot_to_datetime(ts, day)
+                    push_tagged!(SimpleOrder(:demand, pump_price, pump_mw,
+                        Symbol(bidding_zone), dtp, resolution_minutes),
+                        "PUMP", "pump_absorption")
+                    demand_orders_count += 1
+                    total_demand_quantity += pump_mw
+                    n_pump += 1
+                end
+                n_pump > 0 &&
+                    println("   ⛲ cv34 T3: $n_pump pumping-demand slot(s) at " *
+                            "$(round(pump_price, digits=1)) €/MWh × $(round(pump_mw)) MW")
+            end
         end
 
         # ── Stage 7: demand orders ──────────────────────────────────────
