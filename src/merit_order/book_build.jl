@@ -369,7 +369,7 @@ end
 clear_valley_commit_cache!() = (lock(_GRSQ_COMMIT_LOCK) do; empty!(_GRSQ_COMMIT_CACHE); end; nothing)
 
 # ── cv34 T3: demonstrated pumping capability ──────────────────────────────
-const _PUMP_CAP_CACHE = Dict{Tuple{String,Date},Float64}()
+const _PUMP_CAP_CACHE = Dict{Tuple{String,Date},Dict{Int,Float64}}()
 const _PUMP_CAP_LOCK = ReentrantLock()
 
 """
@@ -383,21 +383,32 @@ function _pump_capability(zone::String, day::Date)
     lock(_PUMP_CAP_LOCK) do
         haskey(_PUMP_CAP_CACHE, (zone, day)) && return _PUMP_CAP_CACHE[(zone, day)]
     end
+    # Round-2 INCREMENTAL basis (the round-1 double-count lesson): the ENTSO-E
+    # load fc already embeds expected pumping, so the order quantity is the
+    # HEADROOM = trailing p95 (all hours) − trailing MEAN for that hour-of-day.
     df = sql2df_with_retry("""
-        SELECT percentile_cont(0.95) WITHIN GROUP (ORDER BY mw) AS p
-        FROM (SELECT AVG(actual_consumption_mw) AS mw
-              FROM entsoe.aggregated_generation_per_type
-              WHERE area_map_code = \$1 AND area_type_code LIKE 'BZN%'
-                AND production_type = 'Hydro Pumped Storage'
-                AND actual_consumption_mw IS NOT NULL
-                AND date_time_utc >= ((\$2::date - 32)::timestamp AT TIME ZONE 'UTC')
-                AND date_time_utc < ((\$2::date - 2)::timestamp AT TIME ZONE 'UTC')
-              GROUP BY date_trunc('hour', date_time_utc)) t""", Any[zone, day])
-    cap = (isempty(df) || ismissing(df.p[1])) ? NaN : Float64(df.p[1])
-    lock(_PUMP_CAP_LOCK) do
-        _PUMP_CAP_CACHE[(zone, day)] = cap
+        WITH hourly AS (
+            SELECT date_trunc('hour', date_time_utc) AS h,
+                   AVG(actual_consumption_mw) AS mw
+            FROM entsoe.aggregated_generation_per_type
+            WHERE area_map_code = \$1 AND area_type_code LIKE 'BZN%'
+              AND production_type = 'Hydro Pumped Storage'
+              AND actual_consumption_mw IS NOT NULL
+              AND date_time_utc >= ((\$2::date - 32)::timestamp AT TIME ZONE 'UTC')
+              AND date_time_utc < ((\$2::date - 2)::timestamp AT TIME ZONE 'UTC')
+            GROUP BY 1)
+        SELECT EXTRACT(HOUR FROM h)::int AS hh, AVG(mw) AS hmean,
+               (SELECT percentile_cont(0.95) WITHIN GROUP (ORDER BY mw) FROM hourly) AS p95
+        FROM hourly GROUP BY 1""", Any[zone, day])
+    head = Dict{Int,Float64}()
+    for r in eachrow(df)
+        (ismissing(r.hmean) || ismissing(r.p95)) && continue
+        head[Int(r.hh)] = max(Float64(r.p95) - Float64(r.hmean), 0.0)
     end
-    return cap
+    lock(_PUMP_CAP_LOCK) do
+        _PUMP_CAP_CACHE[(zone, day)] = head
+    end
+    return head
 end
 
 "Clear the cv34 pumping-capability cache (tests / long processes)."
@@ -1218,9 +1229,16 @@ function create_merit_order_book(
                                       "water_value_reservoir" : "water_value_gas_anchored"
                     water_value = if anchor_active && opportunity_anchor == :hydro &&
                                      haskey(anchor_prices, ts)
+                        # cv34 T5 (round-2 prereg): in regime hours the anchored
+                        # water value may yield to the declared floor — the 2.0
+                        # lower clamp is the measured CH wall (census step 3).
+                        # EUPHEMIA_CV34_T5_ZONES empty/unset ⇒ inert.
+                        wv_lo = (bidding_zone in
+                                     strip.(split(get(ENV, "EUPHEMIA_CV34_T5_ZONES", ""), ",")) &&
+                                 sr_active(hr)) ? sr_floor(hr) : 2.0
                         clamp(anchor_prices[ts] *
                               (anchor_share + water_value_dry_boost * hydro_dryness),
-                              2.0, gas_srmc)
+                              wv_lo, gas_srmc)
                     elseif hydro_model == :reservoir_opportunity
                         # Stored water is worth a FRACTION of the continental
                         # thermal price (gas SRMC proxy): an export-opportunity
@@ -1407,13 +1425,13 @@ function create_merit_order_book(
         t3_pump_zones = strip.(split(get(ENV, "EUPHEMIA_CV34_PUMP_ZONES", ""), ","))
         if bidding_zone in t3_pump_zones && pass1_prices !== nothing &&
            !isempty(pass1_prices)
-            pump_mw = try
+            pump_head = try
                 _pump_capability(bidding_zone, day)
             catch e
                 @warn "cv34 T3: capability query failed — inert for $bidding_zone $day" exception=e
-                NaN
+                Dict{Int,Float64}()
             end
-            if !isnan(pump_mw) && pump_mw > 10.0
+            if !isempty(pump_head) && maximum(values(pump_head)) > 10.0
                 eta = parse(Float64, get(ENV, "EUPHEMIA_CV34_PUMP_ETA", "0.7"))
                 pump_price = max(eta * maximum(values(pass1_prices)), 0.0)
                 # regime share per hour (same construction as the cv31 gate,
@@ -1436,17 +1454,19 @@ function create_merit_order_book(
                     (isempty(sv) || isempty(lv)) && continue
                     share = (sum(sv) / length(sv)) / max(sum(lv) / length(lv), 1.0)
                     share >= sr_theta || continue
+                    pmw = get(pump_head, hr, 0.0)
+                    pmw > 10.0 || continue
                     dtp = parse_timeslot_to_datetime(ts, day)
-                    push_tagged!(SimpleOrder(:demand, pump_price, pump_mw,
+                    push_tagged!(SimpleOrder(:demand, pump_price, pmw,
                         Symbol(bidding_zone), dtp, resolution_minutes),
                         "PUMP", "pump_absorption")
                     demand_orders_count += 1
-                    total_demand_quantity += pump_mw
+                    total_demand_quantity += pmw
                     n_pump += 1
                 end
                 n_pump > 0 &&
-                    println("   ⛲ cv34 T3: $n_pump pumping-demand slot(s) at " *
-                            "$(round(pump_price, digits=1)) €/MWh × $(round(pump_mw)) MW")
+                    println("   ⛲ cv34 T3: $n_pump incremental pumping slot(s) at " *
+                            "$(round(pump_price, digits=1)) €/MWh (headroom basis)")
             end
         end
 
