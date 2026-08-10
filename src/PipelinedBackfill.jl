@@ -604,7 +604,8 @@ function run_pipelined_backfill(days, zones::Vector{String}=String[];
         # cv34 continental package switches (T1 zonal θ rides the existing
         # EUPHEMIA_SOLAR_REGIME* wildcarded block below if present; these are
         # the package-specific ones).
-        for k in ("EUPHEMIA_CV34_PUMP_ZONES", "EUPHEMIA_CV34_PUMP_ETA",
+        for k in ("EUPHEMIA_ENABLE_REGFLOOR", "EUPHEMIA_REGFLOOR_ZONES",
+                  "EUPHEMIA_CV34_PUMP_ZONES", "EUPHEMIA_CV34_PUMP_ETA",
                   "EUPHEMIA_CV34_T4_ZONES", "EUPHEMIA_SOLAR_REGIME_THETA2",
                   "EUPHEMIA_SOLAR_REGIME_FLOOR2", "EUPHEMIA_SOLAR_REGIME_THETA_FR")
             haskey(ENV, k) && push!(extract_env, k => ENV[k])

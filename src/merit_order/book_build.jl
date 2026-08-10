@@ -53,6 +53,7 @@ const STRATEGY_DESCRIPTIONS = Dict{String,String}(
     "extra"                  => "scenario order added via the extra_orders hook",
     "strategist"             => "order produced by the strategist hook (replaces the source ladder)",
     "valley_continuation"    => "overnight-committed MW repriced to the floor through the surplus valley (GRSQ lever 2 — the hourly projection of a valley block order)",
+    "regfloor_res"           => "World R: RES split into sourced support-scheme blocks (legacy at floor / premium depth / new at 0) — regulatory variant, never the canonical record",
     "pump_absorption"        => "surplus pumping demand at η × pass-1 evening value up to demonstrated pumping capability (cv34 T3)",
 )
 
@@ -1051,6 +1052,37 @@ function create_merit_order_book(
         sr_floor(hr) = get(solar_share_hr, hr, 0.0) >= sr_theta2 ? sr_floor2 :
                        DEEP_SURPLUS_FLOOR_EUR
 
+        # ── World R (regulatory floor) opt-in gate + per-zone parameters ──
+        # Prereg docs/experiments/regulatory-floor/prereg-draft-2026-08.md
+        # (frozen at merge, #329); sources in support-schemes-2026-08.md.
+        # (w_legacy_at_-500, w_premium, premium_depth, w_new_at_0); shares
+        # are DECLARED estimates where no official split exists (flagged in
+        # the research doc). CH deliberately absent (no per-MWh subsidy);
+        # FR is the bimodal case (no premium band).
+        regfloor_on = !isempty(get(ENV, "EUPHEMIA_ENABLE_REGFLOOR", "")) &&
+            bidding_zone in strip.(split(get(ENV, "EUPHEMIA_REGFLOOR_ZONES",
+                "DE_LU,FR,PL,BE,CZ,NL,AT"), ","))
+        regfloor_params = regfloor_on ? get(Dict(
+                # DE: pre-2016 vintages exempt from §51 (~35-40% fleet, PNE) at
+                # floor; 2016-22 premium fleet at −(aW−MV)≈−50 (BNetzA 2025
+                # auctions); post-Feb-2025 immediate rule ≈ 0.
+                "DE_LU" => (0.35, 0.45, 50.0, 0.20),
+                # FR bimodal (CRE 2024 note): OA ≈ half of supported energy at
+                # the floor; CR bids ≈ 0; no premium band.
+                "FR"    => (0.50, 0.00, 0.0, 0.50),
+                # PL: CfD made-whole inside <6h streaks (URE strikes ~€50-78);
+                # legacy certificates decoupled.
+                "PL"    => (0.20, 0.55, 65.0, 0.25),
+                # BE: offshore certificates −90..−138 inside <6h (CMS/IEA).
+                "BE"    => (0.10, 0.55, 110.0, 0.35),
+                # CZ: FiT nets to FiT+p (very deep) + bonus capped at bonus(0).
+                "CZ"    => (0.45, 0.35, 80.0, 0.20),
+                # NL: pre-2016 no rule at −premium(deep); 2016-22 6h; 2023+ ≈0.
+                "NL"    => (0.25, 0.40, 60.0, 0.35),
+                # AT: EAG aW wind ~€96, 6h rule (BMLUK).
+                "AT"    => (0.10, 0.60, 90.0, 0.30),
+            ), bidding_zone, (0.0, 0.0, 0.0, 1.0)) : (0.0, 0.0, 0.0, 1.0)
+
         # ── cv34 T4: thermal valley wall, pass-1-gated (prereg
         # docs/experiments/continental-collapse/prereg-draft-2026-08.md) ──
         # The valley-continuation mechanism (GR archive) re-gated with the GR
@@ -1081,12 +1113,32 @@ function create_merit_order_book(
             # price-taker; support schemes make it insensitive to price)
             res_qty = get(renewable_by_time, ts, 0.0)
             if res_qty > 0.1
-                push_tagged!(SimpleOrder(:supply,
-                    sr_active(hr) ? sr_floor(hr) : 1.0, res_qty,
-                    Symbol(bidding_zone), date_time, resolution_minutes),
-                    "RES", "res_forecast")
-                supply_orders_count += 1
-                total_supply_capacity += res_qty
+                if regfloor_on && sr_active(hr)
+                    # ── World R (regulatory floor, opt-in): the RES block
+                    # splits into the three sourced regime blocks (prereg
+                    # docs/experiments/regulatory-floor/, merged #329):
+                    # legacy inelastic at the exchange floor, elastic premium
+                    # fleet at −premium, new-vintage at ~0. Shares/depths per
+                    # zone from REGFLOOR_PARAMS (citations there). World-R
+                    # runs live ONLY under their own clearing_mode labels —
+                    # the canonical record never sets the switch.
+                    wa, wb, db_, wc = regfloor_params
+                    for (w, pr) in ((wa, -500.0), (wb, -db_), (wc, 0.0))
+                        w > 1e-6 || continue
+                        push_tagged!(SimpleOrder(:supply, pr, res_qty * w,
+                            Symbol(bidding_zone), date_time, resolution_minutes),
+                            "RES", "regfloor_res")
+                        supply_orders_count += 1
+                    end
+                    total_supply_capacity += res_qty
+                else
+                    push_tagged!(SimpleOrder(:supply,
+                        sr_active(hr) ? sr_floor(hr) : 1.0, res_qty,
+                        Symbol(bidding_zone), date_time, resolution_minutes),
+                        "RES", "res_forecast")
+                    supply_orders_count += 1
+                    total_supply_capacity += res_qty
+                end
             end
 
             # Net imports as price-taking supply (imports) or firm extra
