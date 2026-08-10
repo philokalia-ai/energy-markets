@@ -379,6 +379,7 @@ function _create_multi_zone_order_book_merit(zones::Vector{String}, day::Date;
             target_resolution_minutes=clear_resolution_minutes,
             res_coalesce_missing=enrich_network,
             anchor_prices=get(anchor_refs, zone, nothing),
+            pass1_prices=get(anchor_refs, zone * "@own", nothing),
             anchor_export_mw=anchor_export_mw,
             load_modifier=(sc === nothing ? nothing : sc.load_modifier),
             renewable_modifier=(sc === nothing ? nothing : sc.renewable_modifier),
@@ -615,7 +616,9 @@ function mz_extract_anchor_inputs(order_book::MPCC.MPCCOrderBook,
         [z for z in order_book.nodes
          if MeritOrderBook.get_zone_profile(z).opportunity_anchor != :none &&
             haskey(mpcc_result.market_prices, z)] : String[]
-    if isempty(anchored)
+    cv34_env_on = !isempty(strip(get(ENV, "EUPHEMIA_CV34_PUMP_ZONES", ""))) ||
+                  !isempty(strip(get(ENV, "EUPHEMIA_CV34_T4_ZONES", "")))
+    if isempty(anchored) && !cv34_env_on
         return (anchored=anchored,
             refs=Dict{String,Dict{String,Float64}}(),
             cached=Dict{String,Vector{MarketOrders.MarketOrder}}())
@@ -627,6 +630,21 @@ function mz_extract_anchor_inputs(order_book::MPCC.MPCCOrderBook,
     # `extra_weights` path it fed. git holds the implementation.
     refs = compute_opportunity_anchor_refs(anchored,
         mpcc_result.market_prices, order_book.network_topology)
+    # cv34 T3/T4: zones needing their OWN pass-1 prices in the pass-2 build
+    # (pumping demand / pass-1-gated valley wall) ride the SAME refs dict —
+    # key "<zone>@own" carries the zone's own pass-1 series (read back via
+    # the pass1_prices kwarg), and a T3/T4-only zone also gets refs[z] = own
+    # so the pass-2 rebuild set picks it up. Empty env ⇒ nothing packed,
+    # byte-identical.
+    cv34_zones = union(
+        Set(strip.(split(get(ENV, "EUPHEMIA_CV34_PUMP_ZONES", ""), ","))),
+        Set(strip.(split(get(ENV, "EUPHEMIA_CV34_T4_ZONES", ""), ","))))
+    for z in order_book.nodes
+        z in cv34_zones || continue
+        haskey(mpcc_result.market_prices, z) || continue
+        refs[z * "@own"] = mpcc_result.market_prices[z]
+        haskey(refs, z) || (refs[z] = mpcc_result.market_prices[z])
+    end
     cached = Dict{String,Vector{MarketOrders.MarketOrder}}(
         z => [o for o in order_book.orders if String(o.zone) == z]
         for z in order_book.nodes)

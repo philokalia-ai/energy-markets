@@ -596,6 +596,19 @@ function run_pipelined_backfill(days, zones::Vector{String}=String[];
         for k in ("EUPHEMIA_ENABLE_TRMK", "EUPHEMIA_DISABLE_TRMK")
             haskey(ENV, k) && push!(extract_env, k => ENV[k])
         end
+        # GR surplus-quantity lever 2 (opt-in, docs/experiments/
+        # gr-surplus-quantity/): same worker-forwarding contract.
+        for k in ("EUPHEMIA_ENABLE_GRSQ_T2", "EUPHEMIA_GRSQ_ZONES")
+            haskey(ENV, k) && push!(extract_env, k => ENV[k])
+        end
+        # cv34 continental package switches (T1 zonal θ rides the existing
+        # EUPHEMIA_SOLAR_REGIME* wildcarded block below if present; these are
+        # the package-specific ones).
+        for k in ("EUPHEMIA_CV34_PUMP_ZONES", "EUPHEMIA_CV34_PUMP_ETA",
+                  "EUPHEMIA_CV34_T4_ZONES", "EUPHEMIA_SOLAR_REGIME_THETA2",
+                  "EUPHEMIA_SOLAR_REGIME_FLOOR2", "EUPHEMIA_SOLAR_REGIME_THETA_FR")
+            haskey(ENV, k) && push!(extract_env, k => ENV[k])
+        end
         # Workers share the source extract read-only; the coordinator keeps the
         # source read-only too (so it can coexist with them) but opts into result
         # writes, which land in the SEPARATE writable results_db file.
