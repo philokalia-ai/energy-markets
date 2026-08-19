@@ -2336,7 +2336,10 @@
       // non-negative, sequential ramp from 0.
       return [0, Math.max(quantile(vals, 0.95), 25)];
     }
-    return [Math.min(0, quantile(vals, 0.02)), Math.max(quantile(vals, 0.98), 10)];
+    // Clamp the color domain to the 5th–95th percentile so a single outlier
+    // zone (a hydro-surplus NO4 at 2 €/MWh, one cap hour) doesn't compress the
+    // whole ramp; out-of-domain values saturate at the ramp ends.
+    return [quantile(vals, 0.05), Math.max(quantile(vals, 0.95), 10)];
   }
 
   function renderMapMetricButtons(day) {
