@@ -2258,9 +2258,11 @@
     return Promise.all([pData, pGeo]);
   }
 
-  // color ramp (low -> high) — shared by all three metrics (err_pct is a
-  // non-negative magnitude, so the sequential ramp reads correctly there too)
-  var RAMP_SEQ = ["#2C6BA8", "#7FA8CB", "#EAE2CF", "#DA9A6B", "#C4643C", "#8E2F1C"];
+  // color ramp (low -> high) — green = cheap/good, red = expensive/bad (the
+  // traffic-light read; owner request 2026-08). Shared by all three metrics:
+  // err_pct is a non-negative magnitude, so low-error zones read green too.
+  // RdYlGn (reversed) with a yellow midpoint keeps the mid-range legible.
+  var RAMP_SEQ = ["#1A9850", "#91CF60", "#D9EF8B", "#FEE08B", "#FC8D59", "#D73027"];
 
   function hex2rgb(h) {
     return [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
