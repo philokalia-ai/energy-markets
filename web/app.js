@@ -219,7 +219,7 @@
   function writeHash() {
     var parts = ["view=" + state.view, "zone=" + encodeURIComponent(state.zone)];
     if (state.day) parts.push("day=" + state.day);
-    if (state.revDay) parts.push("rev=" + state.revDay);
+    if (state.revDay && state.view === "explorer") parts.push("rev=" + state.revDay);
     if (state.view === "book") {
       if (state.bookDay) parts.push("bday=" + state.bookDay);
       parts.push("bhr=" + state.bookHour);
@@ -2459,6 +2459,11 @@
     }
     applyMapTrack();   // point each day at the selected track's zone prices
     var days = mapState.data.days;
+    // Deep link: a day= in the URL selects that map day (fixes the map link
+    // always opening on the furthest forecast day). Falls back to the latest.
+    if (mapState.dayIdx === null && state.day) {
+      days.forEach(function (d, i) { if (d.date === state.day) mapState.dayIdx = i; });
+    }
     if (mapState.dayIdx === null || mapState.dayIdx >= days.length) mapState.dayIdx = days.length - 1;
     var day = days[mapState.dayIdx];
     var metric = mapState.metric;
@@ -2488,7 +2493,12 @@
         " This site never substitutes synthetic data; the forecast for this day is on " +
         "the Forecast metric.",
         settledIdx !== null ? "Jump to the latest settled day" : null,
-        settledIdx !== null ? function () { mapState.dayIdx = settledIdx; renderMap(); } : null);
+        settledIdx !== null ? function () {
+          mapState.dayIdx = settledIdx;
+          var sd = mapState.data.days[settledIdx];
+          if (sd) { state.day = sd.date; writeHash(); }
+          renderMap();
+        } : null);
       $("map-comment").textContent = "";
       return;
     }
@@ -6344,6 +6354,8 @@
     });
     $("map-day-slider").addEventListener("input", function (ev) {
       mapState.dayIdx = +ev.target.value;
+      var dd = mapState.data && mapState.data.days && mapState.data.days[mapState.dayIdx];
+      if (dd) { state.day = dd.date; writeHash(); }
       renderMap();
     });
     if ($("boundary-day-slider")) {
