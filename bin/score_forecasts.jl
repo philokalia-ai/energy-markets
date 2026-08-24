@@ -31,6 +31,11 @@ include(joinpath(@__DIR__, "..", "test", "scripts", "eu_eval_metrics.jl"))
 
 const RESCORE = lowercase(get(ENV, "RESCORE", "false")) == "true"
 const RESCORE_WINDOW_DAYS = parse(Int, get(ENV, "RESCORE_WINDOW_DAYS", "7"))
+# Minimum paired hours for a (zone, day, lead) score to be persisted. Scores
+# used to be written for ANY n >= 1 (IT-* zones scored on a single 21:00 hour
+# when only four PT15M actual rows had landed) and then frozen by the
+# NOT-EXISTS discovery, entering every board average with full weight.
+const MIN_SCORE_HOURS = parse(Int, get(ENV, "MIN_SCORE_HOURS", "12"))
 
 """
 Slices of forecast_prices whose market day has realized actual DA prices.
@@ -217,6 +222,10 @@ function main()
             end
             if isempty(sv)
                 println("  $zone: no realized actual prices for this day — skipped")
+                continue
+            elseif length(sv) < MIN_SCORE_HOURS
+                println("  $zone: only $(length(sv)) paired hour(s) (< MIN_SCORE_HOURS=$MIN_SCORE_HOURS) — " *
+                        "not scored yet (rescored when the actuals complete)")
                 continue
             end
             s = score_series(sv, av)

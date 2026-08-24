@@ -29,10 +29,15 @@ function _reconstruct_component_prices(nodes::Vector{String}, periods::Vector{St
 
     prices = Dict{String,Dict{String,Float64}}(z => copy(solver_prices[z]) for z in nodes)
     fallback_periods = String[]
+    fallback_cells = 0
+    inconsistent_brackets = 0
     is_multi_zone = !isempty(zone_pairs)
-    # Well above solver feasibility tolerances (1e-6..1e-5), far
-    # below any economically meaningful partial acceptance
-    acceptance_atol = 1e-4
+    # Acceptance is classified in MW, not as a fraction of the order (bug sweep
+    # 2026-08-24): a relative 1e-4 let up to 6 MW of a 60 GW price-taker block be
+    # curtailed and still read as "fully accepted", so a genuine scarcity hour
+    # (model price = cap) was published at the top accepted supply price.
+    # Solver bound/feasibility noise is ~1e-6 x Q (<= 0.06 MW at 60 GW).
+    quantity_atol = 0.5
     # A flow within this many MW of its ATC limit counts as binding.
     # Must sit just above the solver's absolute feasibility
     # tolerance (~1e-6): anything larger decouples links whose flow
@@ -68,8 +73,12 @@ function _reconstruct_component_prices(nodes::Vector{String}, periods::Vector{St
             push!(get!(components, find_root(z), String[]), z)
         end
 
-        candidate = Dict{String,Float64}()
-        for comp_zones in values(components)
+        # Per component: the bracket [lo, hi] the accepted/rejected orders
+        # leave open, the point estimate, and whether a marginal (partially
+        # accepted) order PINS it.
+        comp_lo = Dict{String,Float64}(); comp_hi = Dict{String,Float64}()
+        comp_price = Dict{String,Float64}(); comp_pinned = Dict{String,Bool}()
+        for (root, comp_zones) in components
             order_idxs = Int[]
             for z in comp_zones
                 append!(order_idxs, get(orders_by_node_time, (z, time_period), Int[]))
@@ -78,12 +87,8 @@ function _reconstruct_component_prices(nodes::Vector{String}, periods::Vector{St
                 # Orderless component (data gap): nothing economic
                 # constrains the price — pin it to the floor so the
                 # output is at least deterministic and recognizable.
-                # (If a binding link ties this component's price to a
-                # neighbor, the rent-sign check below rejects the
-                # floor and the period keeps the solver's prices.)
-                for z in comp_zones
-                    candidate[z] = price_limits[1]
-                end
+                comp_lo[root] = comp_hi[root] = comp_price[root] = price_limits[1]
+                comp_pinned[root] = true
                 continue
             end
             lo = price_limits[1]
@@ -91,63 +96,105 @@ function _reconstruct_component_prices(nodes::Vector{String}, periods::Vector{St
             marginal_price = nothing
             for i in order_idxs
                 o = simple_orders[i]
+                q = o.quantity
+                # A zero-size order cannot constrain the price (its acceptance
+                # is a free column the solver parks anywhere).
+                q <= quantity_atol && continue
                 a = stepwise_acceptance_values[order_ids[i]]
-                if acceptance_atol < a < 1 - acceptance_atol
+                accepted_mw = a * q
+                rejected_mw = (1 - a) * q
+                if accepted_mw > quantity_atol && rejected_mw > quantity_atol
                     marginal_price = marginal_price === nothing ? o.price :
                                      (o.type == :supply ? max(marginal_price, o.price) :
                                       min(marginal_price, o.price))
                 elseif o.type == :supply
-                    a >= 1 - acceptance_atol ? (lo = max(lo, o.price)) : (hi = min(hi, o.price))
+                    rejected_mw <= quantity_atol ? (lo = max(lo, o.price)) : (hi = min(hi, o.price))
                 else
-                    a >= 1 - acceptance_atol ? (hi = min(hi, o.price)) : (lo = max(lo, o.price))
+                    rejected_mw <= quantity_atol ? (hi = min(hi, o.price)) : (lo = max(lo, o.price))
                 end
             end
+            # An inverted bracket means the accepted/rejected sets are not
+            # consistent with any single price — flag it instead of hiding it
+            # behind the clamp.
+            lo > hi + price_atol && (inconsistent_brackets += 1)
             polished = marginal_price === nothing ? lo : marginal_price
-            price = clamp(polished, min(lo, hi), max(lo, hi))
-            for z in comp_zones
-                candidate[z] = price
-            end
+            comp_lo[root] = min(lo, hi); comp_hi[root] = max(lo, hi)
+            comp_price[root] = clamp(polished, comp_lo[root], comp_hi[root])
+            comp_pinned[root] = marginal_price !== nothing
         end
 
-        # Rent-sign validation across binding links; on violation the
-        # period keeps the solver's (coupling-consistent) prices
-        consistent = true
+        # Rent-sign constraints across BINDING links: p[sink] >= p[source] on
+        # a link at its forward cap (and the mirror at the backward cap).
+        # Instead of abandoning the whole period on a violation (the pre-2026-08
+        # behaviour published the solver's arbitrary bracket point for EVERY
+        # zone, including uninvolved ones), propagate: an unpinned component may
+        # move within its own bracket to satisfy the link; only the components
+        # that genuinely cannot be reconciled keep the solver's prices.
+        constraints = Tuple{String,String}[]      # (lower_root, higher_root)
         if is_multi_zone
             for pair in zone_pairs
                 fv = flow_values[(pair, time_period)]
                 fwd_cap, bwd_cap = flow_caps[(pair, time_period)]
                 at_fwd = fv >= fwd_cap - flow_atol
                 at_bwd = fv <= -bwd_cap + flow_atol
-                p_src = candidate[pair[1]]
-                p_snk = candidate[pair[2]]
+                rs, rk = find_root(pair[1]), find_root(pair[2])
+                rs == rk && continue
                 if at_fwd && !at_bwd
-                    p_snk >= p_src - price_atol || (consistent = false)
+                    push!(constraints, (rs, rk))
                 elseif at_bwd && !at_fwd
-                    p_src >= p_snk - price_atol || (consistent = false)
+                    push!(constraints, (rk, rs))
                 end
-                consistent || break
             end
         end
-        if consistent
-            for (z, p) in candidate
-                prices[z][time_period] = p
+        bad = Set{String}()
+        changed = true
+        iter = 0
+        while changed && iter < 4 * length(constraints) + 1
+            changed = false
+            iter += 1
+            for (lo_r, hi_r) in constraints
+                (lo_r in bad || hi_r in bad) && continue
+                p_lo = comp_price[lo_r]
+                p_hi = comp_price[hi_r]
+                p_hi >= p_lo - price_atol && continue
+                if !comp_pinned[hi_r] && comp_hi[hi_r] >= p_lo - price_atol
+                    comp_price[hi_r] = min(p_lo, comp_hi[hi_r]); changed = true
+                elseif !comp_pinned[lo_r] && comp_lo[lo_r] <= p_hi + price_atol
+                    comp_price[lo_r] = max(p_hi, comp_lo[lo_r]); changed = true
+                else
+                    push!(bad, lo_r); push!(bad, hi_r); changed = true
+                end
             end
-        else
-            # cv25 observability: this fallback silently changed the published
-            # price's provenance (the reconstruction is abandoned for the WHOLE
-            # period, including consistent components — a known Phase-2 defect,
-            # pinned in test_price_reconstruction.jl). Until it is fixed, it must
-            # at least be countable.
-            push!(fallback_periods, time_period)
         end
+        # Anything still violated after the iteration cap is unreconciled too
+        for (lo_r, hi_r) in constraints
+            (lo_r in bad || hi_r in bad) && continue
+            comp_price[hi_r] >= comp_price[lo_r] - price_atol || (push!(bad, lo_r); push!(bad, hi_r))
+        end
+
+        for (root, comp_zones) in components
+            if root in bad
+                fallback_cells += length(comp_zones)    # keep the solver's prices
+            else
+                for z in comp_zones
+                    prices[z][time_period] = comp_price[root]
+                end
+            end
+        end
+        isempty(bad) || push!(fallback_periods, time_period)
     end
 
     isempty(fallback_periods) ||
-        @warn "Price reconstruction: rent-sign validation failed — " *
-              "$(length(fallback_periods)) period(s) keep the solver's raw prices " *
-              "(period-wide fallback; provenance differs from reconstructed periods)" periods = fallback_periods
+        @warn "Price reconstruction: rent-sign validation failed on " *
+              "$(length(fallback_periods)) period(s) — $fallback_cells zone-period cell(s) " *
+              "keep the solver's raw prices (component-scoped fallback; provenance " *
+              "differs from reconstructed cells)" periods = fallback_periods
+    inconsistent_brackets == 0 ||
+        @warn "Price reconstruction: $inconsistent_brackets component-period(s) had an " *
+              "inverted accepted/rejected bracket (lo > hi) — priced at the bracket edge"
 
-    return (prices = prices, fallback_periods = fallback_periods)
+    return (prices = prices, fallback_periods = fallback_periods,
+            fallback_cells = fallback_cells, inconsistent_brackets = inconsistent_brackets)
 end
 
 """

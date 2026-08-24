@@ -12,8 +12,8 @@
 # Compute it ONCE per day here — across ALL zones — and let each zone's query
 # consume the result via array parameters instead of recomputing the CTEs.
 #
-# Cached value: a DataFrame with one row per (asset_code, area_map_code) whose
-# 'Active' outage overlaps `day`, carrying:
+# Cached value: a DataFrame with one row per asset_code whose CURRENT-version
+# 'Active' outage message covers at least 12 hours of `day`, carrying:
 #   - available_capacity_mw: MIN over the asset's overlapping rows, NULL -> 0.0.
 #     (The per-zone query treats NULL and 0 identically — both fail
 #     `available_capacity_mw > 0` and both COALESCE to installed capacity — so the
@@ -21,12 +21,25 @@
 #   - stale_override: TRUE when the unit demonstrably generated (>1 MW) during its
 #     claimed outage in the 7 days before `day` (hard-evidence override for stale
 #     'Active' 0-MW records, e.g. Romanian hydro).
-# earliest_start bounds the override probe and is not retained.
+# The probe starts at the binding (0-MW) record's start, not at the earliest
+# row of any partial derate, so generation during an old partial derate cannot
+# "prove wrong" a full outage that began later.
 #
-# Matched per zone on the unavailability table's own area_map_code (exactly the
-# `WHERE area_map_code = $1` the old per-zone CTE used), so grouping globally by
-# (asset_code, area_map_code) and filtering to the zone reproduces the old
-# "filter area, then GROUP BY asset_code" result exactly.
+# Semantics fixed 2026-08-24 (bug sweep):
+#   * `NOT old_version` — ENTSO-E publishes every outage message as versioned
+#     rows sharing `instance_code`; a cancellation, withdrawal or end-date change
+#     is a NEW row and the superseded rows keep status='Active' with
+#     old_version=true. Applying them removed cancelled outages' capacity for
+#     their whole original window (2026-04-03: FR 16.0 GW, DE_LU 9.1 GW, ES 5.7 GW,
+#     PL 5.4 GW wrongly removed or derated).
+#   * Day overlap, not a midnight instant — the old predicate tested whether the
+#     outage covered D 00:00 UTC, so an outage starting 06:00 on D was ignored
+#     for all of D (~70 asset-days/day, ~18 GW) and one ending 00:30 on D
+#     excluded the unit for 24 h. p_max is a day-level quantity, so an outage
+#     counts when it covers the MAJORITY (>= 12 h) of the day.
+#   * Grouped by asset_code alone: an outage filed under a different area code
+#     than the registry's zone (Italian units filed as IT / another sub-zone)
+#     now applies to the unit wherever the registry places it.
 const _OUTAGE_DAY_CACHE = Dict{Dates.Date,DataFrames.DataFrame}()
 const _OUTAGE_DAY_CACHE_LOCK = ReentrantLock()
 
@@ -78,17 +91,21 @@ function get_day_outages(day::Dates.Date)
                 """
                 WITH active_outages AS (
                     SELECT asset_code,
-                           area_map_code,
                            MIN(available_capacity_mw) AS available_capacity_mw,
-                           MIN(start_outage_utc::timestamp) AS earliest_start
+                           COALESCE(
+                               MIN(start_outage_utc::timestamp)
+                                   FILTER (WHERE COALESCE(available_capacity_mw, 0.0) <= 0.0),
+                               MIN(start_outage_utc::timestamp)) AS earliest_start
                     FROM entsoe.unavailability_of_production_and_generation_units
                     WHERE status = 'Active'
-                      AND \$1::timestamp >= start_outage_utc::timestamp
-                      AND \$1::timestamp < end_outage_utc::timestamp
-                    GROUP BY asset_code, area_map_code
+                      AND NOT old_version
+                      AND start_outage_utc::timestamp < \$1::timestamp + INTERVAL '1 day'
+                      AND end_outage_utc::timestamp > \$1::timestamp
+                      AND LEAST(end_outage_utc::timestamp, \$1::timestamp + INTERVAL '1 day')
+                          - GREATEST(start_outage_utc::timestamp, \$1::timestamp) >= INTERVAL '12 hours'
+                    GROUP BY asset_code
                 )
                 SELECT o.asset_code,
-                       o.area_map_code,
                        COALESCE(o.available_capacity_mw, 0.0) AS available_capacity_mw,
                        EXISTS (
                            SELECT 1
@@ -140,10 +157,9 @@ function get_generators(map_code::String, day::Dates.Date;
     outage_avail = Float64[]
     stale_codes = String[]
     if exclude_unavailable
-        outages = get_day_outages(day)
-        # isequal (not ==) so a NULL area_map_code never yields `missing` in the
-        # mask — those rows are excluded, matching the old `area_map_code = $1`.
-        sub = outages[isequal.(outages.area_map_code, map_code), :]
+        # The whole day table (all zones): the query joins on asset_code, so an
+        # outage filed under another area code still reaches the zone's unit.
+        sub = get_day_outages(day)
         outage_codes = String.(sub.asset_code)
         outage_avail = Float64[ismissing(v) ? 0.0 : Float64(v) for v in sub.available_capacity_mw]
         stale_mask = Bool[coalesce(s, false) for s in sub.stale_override]
@@ -223,7 +239,8 @@ function get_generators(map_code::String, day::Dates.Date;
             -- Use available capacity if partial outage, otherwise installed capacity
             COALESCE(
                 CASE
-                    WHEN o.available_capacity_mw > 0 THEN o.available_capacity_mw
+                    WHEN o.available_capacity_mw > 0
+                        THEN LEAST(o.available_capacity_mw, g.generation_unit_installed_capacity_mw)
                     ELSE NULL
                 END,
                 g.generation_unit_installed_capacity_mw
@@ -256,7 +273,16 @@ function get_generators(map_code::String, day::Dates.Date;
             -- unit demonstrably generated during the claimed outage
             AND (o.asset_code IS NULL OR o.available_capacity_mw > 0
                  OR so.generation_unit_code IS NOT NULL)
-        ORDER BY g.generation_unit_code, g.valid_from DESC, g.generation_unit_installed_capacity_mw DESC
+        -- The validity row that actually covers the day wins; only then the most
+        -- recent valid_from (stale-date fallback) and capacity as tiebreakers.
+        -- (Without the first key a FUTURE-dated row wins for every past day —
+        -- IT-CSOUTH 26WUUUUUUBUSSI19's corrupt 13 GW 2025-12-31 row displaced its
+        -- correct 122 MW row on all dates and got the unit dropped entirely.)
+        ORDER BY g.generation_unit_code,
+                 (DATE(\$2) >= DATE(g.valid_from)
+                  AND (g.valid_to IS NULL OR DATE(\$2) < DATE(g.valid_to))) DESC,
+                 g.valid_from DESC,
+                 g.generation_unit_installed_capacity_mw DESC
         """
     else
         # Original query without unavailability filtering
@@ -317,7 +343,16 @@ function get_generators(map_code::String, day::Dates.Date;
                         )
                 OR rg.generation_unit_code IS NOT NULL
             )
-        ORDER BY g.generation_unit_code, g.valid_from DESC, g.generation_unit_installed_capacity_mw DESC
+        -- The validity row that actually covers the day wins; only then the most
+        -- recent valid_from (stale-date fallback) and capacity as tiebreakers.
+        -- (Without the first key a FUTURE-dated row wins for every past day —
+        -- IT-CSOUTH 26WUUUUUUBUSSI19's corrupt 13 GW 2025-12-31 row displaced its
+        -- correct 122 MW row on all dates and got the unit dropped entirely.)
+        ORDER BY g.generation_unit_code,
+                 (DATE(\$2) >= DATE(g.valid_from)
+                  AND (g.valid_to IS NULL OR DATE(\$2) < DATE(g.valid_to))) DESC,
+                 g.valid_from DESC,
+                 g.generation_unit_installed_capacity_mw DESC
         """
     end
 

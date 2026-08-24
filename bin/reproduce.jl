@@ -247,7 +247,8 @@ function persist_multi(results; order_method::Symbol, optimizer::String)
                 save_energy_prices(prices, zone, r.day, order_method;
                     clearing_mode="multi_zone", optimization_run_id=run_id)
             end
-            r.flows !== nothing && !isempty(r.flows) && save_transmission_flows(r.flows, r.day)
+            r.flows !== nothing && !isempty(r.flows) &&
+                save_transmission_flows(r.flows, r.day; clearing_mode="multi_zone")
             ok += 1
         end
     end

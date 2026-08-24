@@ -758,8 +758,13 @@ function build_ml_inputs(zones::Vector{String}, first_utc::Date, last_utc::Date,
                         (zpack !== nothing && haskey(zpack, "wind") && !any(isnan, vv)) ?
                             predict_wind_hour(zpack["wind"], vv) : 0.0
                     end
-                    v = (isnan(solar) ? 0.0 : solar) + (isnan(wind) ? 0.0 : wind)
-                    rp[h] = v
+                    # A NaN prediction (e.g. cap95 window empty because the
+                    # per-type actuals feed stalled) is NOT a 0-MW forecast: leave
+                    # the hour uncovered so res_covered_for_day makes the zone fall
+                    # back instead of clearing with zero wind/solar (bug sweep
+                    # 2026-08-24).
+                    (isnan(solar) || isnan(wind)) && continue
+                    rp[h] = solar + wind
                 end
                 # ── LOAD ──
                 la = get(lagg, h, nothing)
