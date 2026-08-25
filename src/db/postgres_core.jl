@@ -185,9 +185,7 @@
 # cv34-exante-conventions.md): outage versions as known at the D-1 gate from
 # the TSO-publication era (delivery days >= 2025-10-01, documented seam);
 # fuel/carbon closes strictly before D-1 (D-2's close is the last that exists
-# at the gate); the import backstop and scarcity credit size against the SAME
-# border capacity the MPCC uses (cv27 capability + border drops), switch
-# EUPHEMIA_DISABLE_BACKSTOP_ATC_SYNC for the leave-one-out arm; the entsoe
+# at the gate); the entsoe
 # track's persistence leads relabelled input_mode='entsoe_persist'; forecast
 # scores keyed by is_retro. The collapse package moves to cv35.
 const ENERGY_PRICES_CODE_VERSION = 34

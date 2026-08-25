@@ -684,8 +684,10 @@ function get_import_backstop(bidding_zone::String, day::Date;
     # re-query below re-derives it from the offered-ATC tables WITHOUT those
     # treatments, so on cv27 borders in Day-ahead-free hours it read ~0 while
     # the flows delivered the p95 capability: the backstop and the flows then
-    # supplied the same MW. EUPHEMIA_DISABLE_BACKSTOP_ATC_SYNC restores the
-    # re-query (leave-one-out arm).
+    # supplied the same MW. Measured NO-SHIP on the cv34 evaluation (neutral
+    # to slightly negative, one lost day): opt-in via
+    # EUPHEMIA_ENABLE_BACKSTOP_ATC_SYNC, the coupled path passes `nothing` by
+    # default.
     atc_endo = endogenous_import_atc !== nothing ? endogenous_import_atc :
         isempty(endo) ? Dict{Int,Float64}() :
         _endogenous_import_atc(bidding_zone, day, endogenous_counterparties)

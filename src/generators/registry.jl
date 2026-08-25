@@ -112,7 +112,8 @@ function get_day_outages(day::Dates.Date)
                            ROW_NUMBER() OVER (PARTITION BY u.instance_code ORDER BY u.version DESC) AS rn
                     FROM entsoe.unavailability_of_production_and_generation_units u
                     JOIN cand USING (instance_code)
-                    WHERE \$1::date < DATE '2025-10-01'
+                    WHERE $(isempty(get(ENV, "EUPHEMIA_DISABLE_CV34_GATE", "")) ? "" : "TRUE OR ")
+                       \$1::date < DATE '2025-10-01'
                        OR version_publication_timestamp_utc IS NULL
                        OR version_publication_timestamp_utc::timestamp < \$1::timestamp - INTERVAL '14 hours'
                 ),
