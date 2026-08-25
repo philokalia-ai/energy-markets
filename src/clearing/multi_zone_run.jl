@@ -111,6 +111,10 @@ function run_multi_zone_market_clearing(date::Date;
                                         # bin/reproduce.jl.
                                         mpcc_time_limit::Float64=900.0,
                                         mpcc_mip_gap::Float64=1e-6,
+                                        # Refuse to save a day whose coupled clear
+                                        # produced fewer periods than this (see the
+                                        # truncation gate at the save block).
+                                        min_price_periods::Int=24,
                                         mpcc_heuristic_effort::Union{Float64,Nothing}=nothing,
                                         # Per-period decomposition of the coupled
                                         # MPCC. The clear has no inter-temporal
@@ -271,6 +275,10 @@ function run_multi_zone_market_clearing(date::Date;
                 enrich_network=enrich_network,
                 apply_zone_profiles=apply_zone_profiles,
                 clear_resolution_minutes=clear_resolution_minutes,
+                # Same flow mode as pass 1 (bug sweep 2026-08-24: the kwarg was
+                # dropped here, so kwarg-driven A/B arms rebuilt the anchored
+                # zones under the env/scoped default — mixed-mode books).
+                ex_ante_mode=resolved_flow_mode,
                 scenario=scenario)
             println("\n⚡ Running pass-2 market clearing optimization...")
             result2 = mz_solve_pass(order_book2;
@@ -338,8 +346,18 @@ function run_multi_zone_market_clearing(date::Date;
             end
         end
 
-        # Save to database if requested
-        if save_to_db
+        # Save to database if requested. Truncation gate (bug sweep 2026-08-24,
+        # mirrors the pipeline's min_price_periods): one zone's short load
+        # forecast collapses the coupled timeslot intersection for every zone,
+        # and the date-range runners treat ANY saved row as "day done" — so a
+        # short day must not be saved at all (the cv24 65-day defect).
+        n_price_periods = isempty(result.market_prices) ? 0 :
+            maximum(length(pd) for pd in values(result.market_prices))
+        if save_to_db && n_price_periods < min_price_periods
+            @error "DAY $date TRUNCATED — only $n_price_periods price period(s), " *
+                   "need $min_price_periods. NOT saved (rerun once inputs are " *
+                   "complete; min_price_periods=0 disables this gate)."
+        elseif save_to_db
             println("\n💾 Saving results to database...")
             try
                 # Save optimization run record first and get the ID
@@ -365,9 +383,10 @@ function run_multi_zone_market_clearing(date::Date;
                     end
                 end
 
-                # Save transmission flows
+                # Save transmission flows under the same run label as the prices
                 if !isempty(result.transmission_flows)
-                    save_transmission_flows(result.transmission_flows, date)
+                    save_transmission_flows(result.transmission_flows, date;
+                                            clearing_mode=clearing_mode)
                 end
 
                 println("   ✅ Results saved to database")

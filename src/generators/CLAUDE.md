@@ -18,14 +18,26 @@ generators = get_generators("GR", Date(2024, 6, 15); exclude_unavailable=false)
 The `exclude_unavailable` parameter (default: `true`) filters generators based on outage data:
 - **Complete outages** (`available_capacity_mw = 0`): Generator excluded entirely
 - **Partial outages** (`available_capacity_mw > 0`): Generator's `p_max` reduced to available capacity
-- Only `status = 'Active'` outages are considered (ignores `Cancelled`/`Withdrawn`)
-- Uses `MIN(available_capacity_mw)` when multiple outage records exist (conservative)
+- Only the CURRENT version of each outage message counts (`status = 'Active'
+  AND NOT old_version`): ENTSO-E versions every message, so a cancellation or
+  end-date change is a new row and the superseded rows stay 'Active' with
+  `old_version = true`. Before 2026-08-24 those were applied too, removing
+  cancelled outages' capacity for their whole original window (2026-04-03:
+  FR 16 GW, DE_LU 9 GW, ES 5.7 GW, PL 5.4 GW).
+- An outage counts for `day` when it covers at least 12 of its 24 hours (p_max is
+  a day-level quantity); the old predicate tested D 00:00 UTC only.
+- Matched on `asset_code` alone, whatever area code the outage row carries.
+- Uses `MIN(available_capacity_mw)` when multiple outage records exist
+  (conservative); a partial outage can never raise p_max above installed.
 
 **Generator deduplication (overlapping validity periods):**
 - ENTSO-E data can have multiple rows for the same generator with overlapping `valid_from`/`valid_to` periods
 - This is a data quality issue where capacity changes create duplicate entries instead of properly versioned records
 - The query uses `DISTINCT ON (generation_unit_code)` to deduplicate
-- Priority: most recent `valid_from`, then highest capacity as tiebreaker
+- Priority: the row whose validity covers the day, then most recent `valid_from`,
+  then highest capacity (a future-dated row used to win on every past day —
+  IT-CSOUTH `26WUUUUUUBUSSI19`'s corrupt 13 GW 2025-12-31 row displaced its
+  correct 122 MW row and the plausibility bound dropped the unit entirely)
 - Example: Poland's "Dolna Odra B7" had 5 overlapping entries with capacities 210-232 MW
 
 **Date validity filter with recent generation fallback:**

@@ -353,7 +353,13 @@ function _ensure_results_attached(con)
         DBInterface.execute(con, """
             CREATE TABLE IF NOT EXISTS results_db.simulations.transmission_flows (
                 date_time_utc TIMESTAMP, source_zone VARCHAR, sink_zone VARCHAR,
-                flow_mw DOUBLE, code_version INTEGER, update_time_utc TIMESTAMP)""")
+                flow_mw DOUBLE, clearing_mode VARCHAR DEFAULT 'multi_zone',
+                code_version INTEGER, update_time_utc TIMESTAMP)""")
+        # Migration for results files created before flows carried a run label
+        # (bug sweep 2026-08-24). Legacy rows are labelled 'multi_zone'.
+        DBInterface.execute(con, """
+            ALTER TABLE results_db.simulations.transmission_flows
+            ADD COLUMN IF NOT EXISTS clearing_mode VARCHAR DEFAULT 'multi_zone'""")
         _RESULTS_ATTACHED[] = true
     end
     return nothing
@@ -523,10 +529,11 @@ function _duckdb_save_optimization_run(bidding_zone::String, date::Date, order_m
 end
 
 function _duckdb_save_transmission_flows(flows::Dict{String,Dict{String,Float64}}, date::Date;
-                                         code_version::Int)
+                                         code_version::Int, clearing_mode::String="multi_zone")
     isempty(flows) && (@warn "No transmission flows to save"; return 0)
     update_time = now(UTC)
     dts = DateTime[]; src = String[]; snk = String[]; fmw = Float64[]; cv = Int[]; ut = DateTime[]
+    cm = String[]
     for (flow_id, period_flows) in flows
         parts = split(flow_id, "_to_")
         length(parts) != 2 && (@warn "Invalid flow_id format: $flow_id"; continue)
@@ -539,15 +546,19 @@ function _duckdb_save_transmission_flows(flows::Dict{String,Dict{String,Float64}
             end
             push!(dts, dt); push!(src, String(parts[1])); push!(snk, String(parts[2]))
             push!(fmw, flow_mw); push!(cv, code_version); push!(ut, update_time)
+            push!(cm, clearing_mode)
         end
     end
     isempty(dts) && return 0
+    # Replace only THIS run label's rows for the day (the old delete keyed on
+    # (day, code_version) alone, so a 5-zone run wiped the 39-zone flows).
     _results_exec("""
         DELETE FROM results_db.simulations.transmission_flows
         WHERE CAST(date_time_utc AS DATE) = \$1 AND code_version = \$2
-        """, Any[date, code_version])
+          AND clearing_mode = \$3
+        """, Any[date, code_version, clearing_mode])
     df = DataFrame(date_time_utc=dts, source_zone=src, sink_zone=snk,
-                   flow_mw=fmw, code_version=cv, update_time_utc=ut)
+                   flow_mw=fmw, clearing_mode=cm, code_version=cv, update_time_utc=ut)
     n = _results_insert_df(df, "transmission_flows")
     @info "Saved $n transmission flow records to results_db"
     return n

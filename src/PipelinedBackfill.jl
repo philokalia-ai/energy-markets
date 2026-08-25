@@ -845,7 +845,8 @@ function run_pipelined_backfill(days, zones::Vector{String}=String[];
                                 optimization_run_id=run_id)
                         end
                         !save_prices_only && !isempty(r.final.transmission_flows) &&
-                            save_transmission_flows(r.final.transmission_flows, r.day)
+                            save_transmission_flows(r.final.transmission_flows, r.day;
+                                clearing_mode=clearing_mode)
                     catch e
                         write_ok = false
                         @error "save failed for $(r.day)" error=e

@@ -225,8 +225,14 @@ function atc_row_count(t0::DateTime, t1::DateTime, zones::Vector{String})
           AND date_time_utc < (\$2::timestamp AT TIME ZONE 'UTC')
           AND (out_map_code = ANY(\$3) OR in_map_code = ANY(\$3))
     """, [t0, t1, zones])
-    n_da = Int(df.n_da[1])
-    return n_da > 0 ? n_da : Int(df.n[1])
+    n_da = Int(df.n_da[1]); n_all = Int(df.n[1])
+    # Day-ahead rows ONLY (bug sweep 2026-08-24): the old "fall back to any row
+    # when no DA rows exist" returned the Intraday count in exactly the case the
+    # gate exists to block — only Intraday rows landed so far — so the slice
+    # froze on fallback capacity hours before the DA rows arrived.
+    n_da == 0 && n_all > 0 &&
+        @warn "ATC gate: $n_all implicit-ATC row(s) in window but NONE Day-ahead — not counting them"
+    return n_da
 end
 
 """
@@ -392,12 +398,14 @@ function write_forecast!(market_date::Date, lead_days::Int, prediction_made::Dat
                       AND is_retro = true
                 """, [market_date, lead_days, input_mode])
             else
-                # :insert (LIVE write) — cv-agnostic clear of the live slice.
+                # :insert (LIVE write) — cv-agnostic clear of the live slice,
+                # scoped to the zones being written so a partial-slice top-up
+                # never destroys the frozen zones' vintage.
                 LibPQ.execute(cnx, """
                     DELETE FROM simulations.forecast_prices
                     WHERE market_date = \$1 AND lead_days = \$2 AND input_mode = \$3
-                      AND is_retro = false
-                """, [market_date, lead_days, input_mode])
+                      AND is_retro = false AND bidding_zone = ANY(\$4)
+                """, [market_date, lead_days, input_mode, collect(keys(zone_hourly))])
             end
             for (zone, hourly) in zone_hourly
                 for (h, price) in sort!(collect(hourly); by=first)
@@ -1157,8 +1165,9 @@ function main()
         println("  VERDICT: $(eligible ? "ELIGIBLE ✅" : "INELIGIBLE ⛔") — $reason")
         eligible || continue
 
+        present = Set{String}()
         if !FORCE_RERUN
-            present = existing_forecast_zones(day, lead, day_mode)
+            present = Set{String}(existing_forecast_zones(day, lead, day_mode))
             if issubset(Set(ZONES), present)
                 println("  already predicted: all $(length(ZONES)) zones present for " *
                         "(market_date=$day, lead_days=$lead, mode=$day_mode) at some " *
@@ -1166,7 +1175,8 @@ function main()
                 continue
             elseif !isempty(present)
                 println("  partial slice exists ($(length(present)) zone(s)) — " *
-                        "re-predicting the full footprint (delete-then-insert of the slice)")
+                        "re-predicting the footprint; only the MISSING zones are written " *
+                        "(the present zones keep their earlier vintage)")
             end
         end
 
@@ -1200,6 +1210,10 @@ function main()
                         "— zone-day NOT written")
             end
         end
+        # Vintages are immutable: zones already frozen in this slice are not
+        # rewritten with a later prediction_made_utc (bug sweep 2026-08-24 — the
+        # 08:00 re-run used to delete-then-insert the whole slice).
+        !isempty(present) && filter!(kv -> !(kv.first in present), zone_hourly)
         if isempty(zone_hourly)
             println("  ❌ DAY $day: no zone produced a complete market day — nothing written")
             continue

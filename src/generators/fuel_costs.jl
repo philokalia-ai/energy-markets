@@ -242,6 +242,12 @@ const FUEL_SRMC_BASE = Dict(
     "Waste" => 25.0,                           # Gate fees offset fuel cost
     "Geothermal" => 20.0,
     "Energy storage" => 90.0,                  # Charging-cost opportunity proxy
+    # Registry types that were silently priced at the gas-like default with ZERO
+    # carbon (bug sweep 2026-08-24): oil shale is Estonia's dominant thermal fleet
+    # (2.25 GW), peat sits in FI/SE3 (1.28 GW) — both are carbon-heavy solid fuels.
+    "Fossil Oil shale" => 30.0,                # ~€8/MWh_th mined shale at η≈0.30 + VOM
+    "Fossil Peat" => 45.0,                     # ~€15/MWh_th peat at η≈0.35 + VOM
+    "Other renewable" => 45.0,                 # biogas/biomethane-like, no carbon
     "Other" => 110.0 - 0.367 * 70.0            # Assume gas-like when unknown
 )
 
@@ -251,6 +257,8 @@ const FUEL_EMISSION_FACTOR_EL = Dict(
     "Fossil Oil" => 0.75,
     "Fossil Coal-derived gas" => 0.90,
     "Fossil Gas" => 0.367,   # 0.202 tCO₂/MWh_th at η=0.55 (fallback path)
+    "Fossil Oil shale" => 1.10,  # ~0.33 tCO₂/MWh_th at η≈0.30
+    "Fossil Peat" => 1.05,       # ~0.38 tCO₂/MWh_th at η≈0.36
     "Other" => 0.367
 )
 

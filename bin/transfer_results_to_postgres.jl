@@ -82,9 +82,14 @@ function open_results_duckdb(path::AbstractString)
     return DBInterface.connect(db), db
 end
 
-# Half-open [start, end+1) day predicate (or "TRUE" when unbounded), plus params.
+# Half-open [start, end+1) day predicate, plus params. Both bounds are always
+# set by the time this is called (see `bound_window!`): an unbounded window
+# used to expand the Postgres DELETE to the ENTIRE (clearing_mode, code_version)
+# slice while restoring only what the source DuckDB held — and the verify step
+# compared the two sides AFTER the wipe, so it passed (bug sweep 2026-08-24).
 function day_window_clause(col::AbstractString, start, stop, p0::Int)
-    start === nothing && stop === nothing && return ("TRUE", Any[])
+    (start === nothing || stop === nothing) &&
+        error("day_window_clause: unbounded window — call bound_window! first")
     parts = String[]; params = Any[]; n = p0
     if start !== nothing
         push!(parts, "$col >= \$$(n)"); push!(params, start); n += 1
@@ -124,16 +129,36 @@ function read_runs(con, run_ids::Vector{<:Integer})
     return DataFrame(DBInterface.execute(con, sql, Any[collect(Int64, run_ids)]))
 end
 
+"""
+Fill a missing --start/--end from the SOURCE slice's own extent, so the Postgres
+delete can never reach beyond the days the source actually carries.
+"""
+function bound_window!(con, o)
+    (o["start"] !== nothing && o["end"] !== nothing) && return o
+    ext = DataFrame(DBInterface.execute(con, """
+        SELECT MIN(CAST(date_time_utc AS DATE)) AS d0, MAX(CAST(date_time_utc AS DATE)) AS d1
+        FROM simulations.energy_prices
+        WHERE clearing_mode = \$1 AND code_version = \$2
+        """, Any[o["clearing_mode"], o["code_version"]]))
+    (isempty(ext) || ismissing(ext.d0[1])) &&
+        error("source slice (clearing_mode=$(o["clearing_mode"]), cv=$(o["code_version"])) is empty — nothing to transfer")
+    o["start"] === nothing && (o["start"] = Date(ext.d0[1]))
+    o["end"]   === nothing && (o["end"]   = Date(ext.d1[1]))
+    @info "transfer window bounded to the source slice: $(o["start"]) .. $(o["end"])"
+    return o
+end
+
 function read_flows(con, o)
-    win, wp = day_window_clause("date_time_utc", o["start"], o["end"], 2)
+    win, wp = day_window_clause("date_time_utc", o["start"], o["end"], 3)
     sql = """
-        SELECT date_time_utc, source_zone, sink_zone, flow_mw, code_version,
+        SELECT date_time_utc, source_zone, sink_zone, flow_mw,
+               COALESCE(clearing_mode, 'multi_zone') AS clearing_mode, code_version,
                update_time_utc
         FROM simulations.transmission_flows
-        WHERE code_version = \$1 AND $win
+        WHERE code_version = \$1 AND COALESCE(clearing_mode, 'multi_zone') = \$2 AND $win
         ORDER BY source_zone, sink_zone, date_time_utc
     """
-    return DataFrame(DBInterface.execute(con, sql, Any[o["code_version"], wp...]))
+    return DataFrame(DBInterface.execute(con, sql, Any[o["code_version"], o["clearing_mode"], wp...]))
 end
 
 # ---------------------------------------------------------------------------
@@ -228,34 +253,25 @@ function transfer_prices!(pg, prices::DataFrame, idmap::Dict{Int64,Int}, o)
 end
 
 """
-Delete-then-COPY the transmission-flow slice into Postgres.
-
-CAUTION — this delete is WIDER than the price delete. `simulations.energy_prices`
-is scoped by `clearing_mode`, but `simulations.transmission_flows` has no such
-column, so the delete can only key on `(code_version, window)`. Transferring the
-`multi_zone_eu` slice therefore also removes any flow rows in that window at the
-same code_version that came from a DIFFERENT clearing mode (single-zone, the SEE
-5-zone run, iterative) and were written straight to live Postgres. The asymmetry
-is easy to miss because the price side IS mode-scoped.
+Delete-then-COPY the transmission-flow slice into Postgres, scoped exactly like
+the price slice: `(clearing_mode, code_version, window)` (the flows table gained
+`clearing_mode` in the 2026-08-24 bug sweep).
 """
 function transfer_flows!(pg, flows::DataFrame, o)
     isempty(flows) && return 0
-    @warn "transmission_flows delete is NOT clearing-mode scoped (the table has no " *
-          "such column): every flow row at code_version $(o["code_version"]) in this " *
-          "window is replaced, including rows from other clearing modes"
-    win, wp = day_window_clause("date_time_utc", o["start"], o["end"], 2)
+    win, wp = day_window_clause("date_time_utc", o["start"], o["end"], 3)
     LibPQ.execute(pg, "BEGIN")
     try
         LibPQ.execute(pg, """
             DELETE FROM simulations.transmission_flows
-            WHERE code_version = \$1 AND $win
-            """, Any[o["code_version"], wp...])
+            WHERE clearing_mode = \$1 AND code_version = \$2 AND $win
+            """, Any[o["clearing_mode"], o["code_version"], wp...])
         lines = (_csvline((row.date_time_utc, row.source_zone, row.sink_zone,
-                           row.flow_mw, row.code_version, row.update_time_utc))
+                           row.flow_mw, row.clearing_mode, row.code_version, row.update_time_utc))
                  for row in eachrow(flows))
         copy = LibPQ.CopyIn("""
             COPY simulations.transmission_flows
-            (date_time_utc, source_zone, sink_zone, flow_mw, code_version, update_time_utc)
+            (date_time_utc, source_zone, sink_zone, flow_mw, clearing_mode, code_version, update_time_utc)
             FROM STDIN (FORMAT csv, NULL '')
             """, lines)
         LibPQ.execute(pg, copy)
@@ -376,6 +392,7 @@ function main()
         Euphemia.ensure_energy_prices_table()
         o["flows"] && Euphemia.ensure_transmission_flows_table()
 
+        bound_window!(con, o)   # never an unbounded Postgres delete
         t0 = time()
         prices = read_prices(con, o)
         println("read $(nrow(prices)) price rows from results DuckDB ($(round(time()-t0, digits=1))s)")

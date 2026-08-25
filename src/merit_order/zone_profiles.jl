@@ -410,6 +410,7 @@ const FIELD_DESCRIPTIONS = Dict{Symbol,String}(
     :backstop_scarcity_credit => "also credit that headroom in the scarcity margin",
     :ref_priced_exports => "price exports over retained borders at the coupled reference",
     :boundary_book => "an out-of-footprint neighbour modelled as an elastic counterparty",
+    :input_corrections => "RES input replaced by the winner correction series in simulations.input_corrections (cv32; IT-Sicily/IT-Sardinia)",
 )
 
 """

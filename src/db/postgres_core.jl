@@ -169,7 +169,19 @@
 # products). Prices change ONLY on the two islands; every other zone is
 # byte-identical to cv31 code. Bumped so daily forecasts and the next record
 # never mix cv32 books with cv31 rows. August 2026.
-const ENERGY_PRICES_CODE_VERSION = 32
+# v33 = the 2026-08-24 bug sweep (docs/experiments/bug-sweep-2026-08-24.md):
+# input-side and record-integrity fixes only, no new mechanism. Outage
+# versioning (superseded/cancelled ENTSO-E outage versions no longer applied;
+# day-overlap instead of a midnight instant; matched on asset_code), registry
+# validity ordering (the row valid on the day wins), oil-shale/peat SRMC,
+# RES-forecast NULLs (ex-ante persistence instead of throwing/zeroing) and
+# mixed 15/60-min RES rows (one resolution per type), component-scoped
+# price-reconstruction fallback with MW acceptance tolerance, pass-2 flow-mode
+# kwarg, sequential truncation gate, and flows/runs keyed by clearing_mode +
+# the price code_version. Bumped so post-fix rows never mix with the cv32
+# record. NOTE: the cv34 prereg draft had left 33 "unused"; the sweep takes
+# it because these fixes precede the collapse package — renumber if you object.
+const ENERGY_PRICES_CODE_VERSION = 33
 
 # Pool size: env-tunable (EUPHEMIA_PG_POOL) because the threaded book build
 # runs up to nzones concurrent queries — 5 connections cap the parallelism

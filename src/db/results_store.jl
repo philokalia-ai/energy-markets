@@ -688,7 +688,10 @@ function save_optimization_run(bidding_zone::String, date::Date, order_method::S
     num_orders=nothing,
     num_price_periods=nothing,
     error_message=nothing,
-    code_version::Int=4,
+    # Keyed by the PRICE code_version (bug sweep 2026-08-24): the old hard-coded
+    # 4 made every model version share one run row per (zone, day, method,
+    # solver), so cv22/23/24 prices all pointed at whichever run wrote last.
+    code_version::Int=ENERGY_PRICES_CODE_VERSION,
     create_schema::Bool=true,
     # Iterative optimization metadata
     is_iterative::Bool=false,
@@ -796,13 +799,53 @@ function ensure_transmission_flows_table()
             source_zone VARCHAR(20) NOT NULL,
             sink_zone VARCHAR(20) NOT NULL,
             flow_mw NUMERIC(10,2) NOT NULL,
+            clearing_mode VARCHAR(20) NOT NULL DEFAULT 'multi_zone',
             code_version INTEGER NOT NULL,
             update_time_utc TIMESTAMP NOT NULL,
-            UNIQUE(date_time_utc, source_zone, sink_zone, code_version)
+            CONSTRAINT transmission_flows_unique_record
+                UNIQUE(date_time_utc, source_zone, sink_zone, clearing_mode, code_version)
         )
         """
 
         LibPQ.execute(cnx, create_table_sql)
+
+        # Migration (bug sweep 2026-08-24): flows used to be keyed on
+        # (dt, source, sink, code_version) with code_version hard-coded to 4 by
+        # every caller, so the SEE 5-zone job, the 39-zone record and every
+        # scenario label upserted over the same border-hours. Add clearing_mode
+        # (existing rows are labelled 'multi_zone' — the legacy shared key) and
+        # re-key the unique constraint.
+        LibPQ.execute(cnx, """
+            DO \$\$
+            DECLARE old_c text;
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_schema = 'simulations'
+                      AND table_name = 'transmission_flows'
+                      AND column_name = 'clearing_mode'
+                ) THEN
+                    ALTER TABLE simulations.transmission_flows
+                    ADD COLUMN clearing_mode VARCHAR(20) NOT NULL DEFAULT 'multi_zone';
+                END IF;
+                SELECT conname INTO old_c FROM pg_constraint
+                WHERE conrelid = 'simulations.transmission_flows'::regclass
+                  AND contype = 'u'
+                  AND pg_get_constraintdef(oid) NOT LIKE '%clearing_mode%';
+                IF old_c IS NOT NULL THEN
+                    EXECUTE format('ALTER TABLE simulations.transmission_flows DROP CONSTRAINT %I', old_c);
+                END IF;
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_constraint
+                    WHERE conrelid = 'simulations.transmission_flows'::regclass
+                      AND conname = 'transmission_flows_unique_record'
+                ) THEN
+                    ALTER TABLE simulations.transmission_flows
+                    ADD CONSTRAINT transmission_flows_unique_record
+                    UNIQUE (date_time_utc, source_zone, sink_zone, clearing_mode, code_version);
+                END IF;
+            END \$\$;
+        """)
 
         # Create useful indexes
         LibPQ.execute(
@@ -834,16 +877,21 @@ Save transmission flow results to the database in the simulations.transmission_f
 # Arguments
 - `flows`: Dictionary with flow_id keys ("SOURCE_to_SINK") and inner Dict of period → MW values
 - `date`: Date of the optimization
-- `code_version`: Version code (default: 4)
+- `clearing_mode`: the run label the flows belong to (same label as the prices;
+  default `"multi_zone"` = the legacy shared key)
+- `code_version`: the PRICE code_version (default `ENERGY_PRICES_CODE_VERSION`)
 - `create_schema`: Whether to create table if missing (default: true)
 
 # Returns
 - Number of records inserted
 """
 function save_transmission_flows(flows::Dict{String,Dict{String,Float64}}, date::Date;
-                                 code_version::Int=4, create_schema::Bool=true)
+                                 clearing_mode::String="multi_zone",
+                                 code_version::Int=ENERGY_PRICES_CODE_VERSION,
+                                 create_schema::Bool=true)
     if DATA_STORE[] == :duckdb
-        return _duckdb_save_transmission_flows(flows, date; code_version=code_version)
+        return _duckdb_save_transmission_flows(flows, date;
+            code_version=code_version, clearing_mode=clearing_mode)
     end
     if isempty(flows)
         @warn "No transmission flows to save"
@@ -860,9 +908,9 @@ function save_transmission_flows(flows::Dict{String,Dict{String,Float64}}, date:
 
     sql = """
     INSERT INTO simulations.transmission_flows
-    (date_time_utc, source_zone, sink_zone, flow_mw, code_version, update_time_utc)
-    VALUES (\$1, \$2, \$3, \$4, \$5, \$6)
-    ON CONFLICT (date_time_utc, source_zone, sink_zone, code_version)
+    (date_time_utc, source_zone, sink_zone, flow_mw, clearing_mode, code_version, update_time_utc)
+    VALUES (\$1, \$2, \$3, \$4, \$5, \$6, \$7)
+    ON CONFLICT (date_time_utc, source_zone, sink_zone, clearing_mode, code_version)
     DO UPDATE SET flow_mw = EXCLUDED.flow_mw, update_time_utc = EXCLUDED.update_time_utc
     """
 
@@ -897,6 +945,7 @@ function save_transmission_flows(flows::Dict{String,Dict{String,Float64}}, date:
                             source_zone,
                             sink_zone,
                             flow_mw,
+                            clearing_mode,
                             code_version,
                             update_time
                         ])
