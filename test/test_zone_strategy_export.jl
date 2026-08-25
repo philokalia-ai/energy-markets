@@ -52,7 +52,9 @@ const _MO = Euphemia.MeritOrderBook
         # GR/BG share the base profile; RO/HU share the import-backed one with the
         # UA book; RS has it without; FR and DK1 are each their own.
         @test haskey(groups, _MO.get_zone_profile("GR"))
-        @test sort(groups[_MO.get_zone_profile("GR")]) == ["BG", "GR"]
+        # cv25 T1 gives GR/BG the import backstop + full credit, which is exactly
+        # RS's SEE_IMPORT_BACKED_PROFILE — the three group together.
+        @test sort(groups[_MO.get_zone_profile("GR")]) == ["BG", "GR", "RS"]
         @test sort(groups[_MO.get_zone_profile("RO")]) == ["HU", "RO"]
         # FR's and DK1's boundary books are materially different calibrations and
         # must NOT collapse together — the bug a stringified key reintroduces.

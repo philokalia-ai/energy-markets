@@ -646,7 +646,10 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
                 @warn "MPCC solve claims INFEASIBLE — retrying with NumericFocus=3"
                 set_optimizer_attribute(model, "NumericFocus", 3)
                 set_optimizer_attribute(model, "Presolve", 1)
-                set_optimizer_attribute(model, "TimeLimit", 300.0)
+                # Same budget as the first solve (bug sweep 2026-08-25: the rung
+                # silently cut it 900 -> 300 s, so a false INFEASIBLE could come
+                # back as a poor :time_limit incumbent that callers accept).
+                set_optimizer_attribute(model, "TimeLimit", time_limit)
                 optimize!(model)
                 if termination_status(model) == MOI.INFEASIBLE
                     @warn "Still INFEASIBLE — last-resort retry with a different seed"

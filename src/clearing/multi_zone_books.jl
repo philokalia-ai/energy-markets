@@ -314,12 +314,17 @@ function _create_multi_zone_order_book_merit(zones::Vector{String}, day::Date;
     # interconnector on full-day outage) bound the flow variable to zero,
     # so excluding observed imports over such a border would remove real
     # energy with no endogenous substitute
+    # Both orientations are recorded (bug sweep 2026-08-25): the backward map
+    # only holds hours that also exist as forward keys, so a border whose two
+    # directions are published on disjoint hours was judged "cannot carry flow"
+    # while the MPCC still created its flow variable — the border's energy was
+    # then counted twice (observed injections kept AND endogenous flow).
     can_carry_flow = Set{Tuple{String,String}}()
     for ((s, d, _), cap) in transfer_capacity.capacity_forward
-        cap > 0 && push!(can_carry_flow, (s, d))
+        cap > 0 && (push!(can_carry_flow, (s, d)); push!(can_carry_flow, (d, s)))
     end
     for ((s, d, _), cap) in transfer_capacity.capacity_backward
-        cap > 0 && push!(can_carry_flow, (s, d))
+        cap > 0 && (push!(can_carry_flow, (s, d)); push!(can_carry_flow, (d, s)))
     end
     atc_linked = Dict{String,Set{String}}(z => Set{String}() for z in zones)
     for (a, b) in zone_pairs

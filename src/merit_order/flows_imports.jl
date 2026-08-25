@@ -682,8 +682,14 @@ function get_import_backstop(bidding_zone::String, day::Date;
     out = Dict{Int,Float64}()
     isempty(lagged) && return out
     for h in 0:23
-        mx_ne = maximum(get(l[1], h, 0.0) for l in lagged)
-        mx_e = maximum(get(l[2], h, 0.0) for l in lagged)
+        # A lagged week with NO observation is not a 0-MW net flow: for a net
+        # exporter that read as "demonstrated import headroom = −climatology"
+        # (phantom headroom). Only weeks that observed the hour count.
+        ne_obs = Float64[l[1][h] for l in lagged if haskey(l[1], h)]
+        e_obs = Float64[l[2][h] for l in lagged if haskey(l[2], h)]
+        isempty(ne_obs) && isempty(e_obs) && continue
+        mx_ne = isempty(ne_obs) ? -Inf : maximum(ne_obs)
+        mx_e = isempty(e_obs) ? -Inf : maximum(e_obs)
         headroom = max(0.0, mx_ne - get(clim_ne, h, 0.0)) +
                    max(0.0, mx_e - get(atc_endo, h, 0.0))
         headroom > 0.0 && (out[h] = headroom)

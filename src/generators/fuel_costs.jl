@@ -1,3 +1,10 @@
+# Set by the TTF/EUA lookups on a TRANSIENT DB failure (they fall back without
+# caching). get_generators resets it before a build and refuses to memoize a
+# fleet built while it was set — otherwise one failed query pinned every gas
+# unit of that (zone, day) at the stylized fallback cost for the process
+# lifetime, including the pass-2 rebuild (bug sweep 2026-08-25).
+const _FUEL_LOOKUP_FAILED = Ref{Bool}(false)
+
 # fuel_costs.jl — Fuel-cost model: TTF gas and EUA carbon lookups (cached per day), SRMC base table, get_marginal_cost.
 # Included by ../Generators.jl inside `module Euphemia` (definition order preserved).
 
@@ -65,6 +72,7 @@ function get_daily_eua_price(day::Dates.Date)
     catch e
         # Transient DB failure: warn and fall back WITHOUT caching, so the
         # next call retries instead of pinning this date to the fallback
+        _FUEL_LOOKUP_FAILED[] = true
         @warn "EUA price lookup failed for $day, falling back to yearly average: $e"
         return nothing
     end
@@ -182,6 +190,7 @@ function get_ttf_price(day::Dates.Date)
     catch e
         # Transient DB failure: warn and fall back WITHOUT caching, so the
         # next call retries instead of pinning this date to the fallback
+        _FUEL_LOOKUP_FAILED[] = true
         @warn "TTF price lookup failed for $day, falling back to stylized gas cost: $e"
         return nothing
     end

@@ -52,8 +52,12 @@ const V10_TRANCHES = [(0.55, 0.95), (0.20, 1.05), (0.15, 1.25), (0.10, 1.60)]
     end
 
     @testset "registry defaults to SEE for the SEE core and unknowns" begin
+        # cv25 T1: GR/BG carry the demonstrated-headroom import backstop with
+        # the full scarcity credit, applied at resolution time (get_zone_profile)
+        # so the EUPHEMIA_DISABLE_CV25_T1 leave-one-out arm can strip it.
         for z in ("GR", "BG")
-            @test get_zone_profile(z) === SEE_PROFILE
+            @test get_zone_profile(z) == with_profile(SEE_PROFILE; import_backstop=true,
+                                                      backstop_scarcity_credit=1.0)
         end
         @test get_zone_profile("ZZ-not-a-zone") === SEE_PROFILE
         # IBERIA_PROFILE was an alias for SEE_PROFILE and was removed in cv25's
@@ -65,9 +69,12 @@ const V10_TRANCHES = [(0.55, 0.95), (0.20, 1.05), (0.15, 1.25), (0.10, 1.60)]
         # the registry and force SEE_PROFILE)
         # ROMANIA/SERBIA/HUNGARY_PROFILE were three identical definitions; cv25's
         # subtraction phase names the one thing they are.
-        for (z, p) in (("RO", SEE_IMPORT_BACKED_PROFILE), ("RS", SEE_IMPORT_BACKED_PROFILE),
-                       ("HU", SEE_IMPORT_BACKED_PROFILE))
-            @test get_zone_profile(z) === p
+        # cv22: RO/HU also carry the UA firm-slice boundary book; RS does not.
+        for (z, p) in (("RO", with_profile(SEE_IMPORT_BACKED_PROFILE; boundary_book=Euphemia.MeritOrderBook.UA_BOOK_DEFAULT)),
+                       ("RS", SEE_IMPORT_BACKED_PROFILE),
+                       ("HU", with_profile(SEE_IMPORT_BACKED_PROFILE; boundary_book=Euphemia.MeritOrderBook.UA_BOOK_DEFAULT)))
+            @test get_zone_profile(z) == p
+            p = with_profile(p; boundary_book=nothing)
             @test p.import_backstop == true
             # Full scarcity credit for the demonstrated headroom (the SEE
             # cold-snap cluster's residual markup overshoot — see profile doc)
@@ -84,8 +91,9 @@ const V10_TRANCHES = [(0.55, 0.95), (0.20, 1.05), (0.15, 1.25), (0.10, 1.60)]
         @test SLOVENIA_PROFILE.scarcity_kappa == CONTINENTAL_PROFILE.scarcity_kappa
         @test SLOVENIA_PROFILE.import_backstop == true
         @test SLOVENIA_PROFILE.ref_priced_exports == true   # SI–HR retained border
-        # Denmark: NORDIC + backstop
-        @test get_zone_profile("DK1") === DENMARK_PROFILE
+        # Denmark: NORDIC + backstop; DK1 additionally carries the cv21 Viking
+        # GB boundary book (DK1_PROFILE), DK2 stays plain DENMARK_PROFILE.
+        @test get_zone_profile("DK1") == Euphemia.MeritOrderBook.DK1_PROFILE
         @test get_zone_profile("DK2") === DENMARK_PROFILE
         @test with_profile(DENMARK_PROFILE; import_backstop=false) == NORDIC_PROFILE
         # SE1/SE2/FI stay plain NORDIC (no backstop)
@@ -100,8 +108,11 @@ const V10_TRANCHES = [(0.55, 0.95), (0.20, 1.05), (0.15, 1.25), (0.10, 1.60)]
         # IT-CNORTH: ITALY + backstop; other IT sub-zones unchanged
         @test get_zone_profile("IT-CNORTH") === ITALY_CNORTH_PROFILE
         @test with_profile(ITALY_CNORTH_PROFILE; import_backstop=false) == ITALY_PROFILE
-        @test get_zone_profile("IT-NORTH") === ITALY_PROFILE
-        @test get_zone_profile("IT-Sardinia") === ITALY_PROFILE
+        # cv25 T3: IT-NORTH gains the standard backstop at resolution time;
+        # cv32: the two islands consume the winner input corrections.
+        @test get_zone_profile("IT-NORTH") == with_profile(ITALY_PROFILE; import_backstop=true)
+        @test get_zone_profile("IT-Sardinia") == with_profile(ITALY_PROFILE; input_corrections=true)
+        @test get_zone_profile("IT-Sicily") == with_profile(ITALY_PROFILE; input_corrections=true)
         # cv18's parked levers (unit_srmc_spread / export_absorption_steps) were
         # removed in cv25's subtraction phase — they were default-inert in every
         # zone and never activated. git holds the implementation.
@@ -132,17 +143,20 @@ const V10_TRANCHES = [(0.55, 0.95), (0.20, 1.05), (0.15, 1.25), (0.10, 1.60)]
         @test NORDIC_PROFILE.scarcity_kappa < SEE_PROFILE.scarcity_kappa
         @test CONTINENTAL_PROFILE.scarcity_kappa < SEE_PROFILE.scarcity_kappa
         @test get_zone_profile("IT-SOUTH") === ITALY_PROFILE
-        @test get_zone_profile("NO1") === NORWAY_PROFILE  # iter2: southern Norway
+        @test get_zone_profile("NO1") === Euphemia.MeritOrderBook.NORWAY_ANCHORED_PROFILE  # cv23: interior-Norway backstop
         @test get_zone_profile("EE") === BALTIC_PROFILE
         @test get_zone_profile("DE_LU") === CONTINENTAL_PROFILE
         @test FRANCE_PROFILE.nuclear_srmc_floor == 55.0
         @test FRANCE_PROFILE.thermal_srmc_multiplier == 1.0
         @test FRANCE_PROFILE.opportunity_anchor == :nuclear
-        @test get_zone_profile("FR") === FRANCE_PROFILE
+        @test get_zone_profile("FR") === Euphemia.MeritOrderBook.FR_PROFILE           # cv23: availability-scaled nuclear anchor
         @test NORWAY_PROFILE.opportunity_anchor == :hydro
         @test NORWAY_PROFILE.hydro_model == :reservoir_opportunity
-        for z in ("NO1", "NO2", "NO3", "NO5")
+        for z in ("NO2", "NO5")
             @test get_zone_profile(z) === NORWAY_PROFILE
+        end
+        for z in ("NO1", "NO3")   # cv23 interior-Norway import backstop
+            @test get_zone_profile(z) === Euphemia.MeritOrderBook.NORWAY_ANCHORED_PROFILE
         end
         # NO4 (far north): reservoir-opportunity, no anchor, but the seasonal
         # drawdown is OFF (iter6) — its price is set by export congestion, not
@@ -181,7 +195,8 @@ const V10_TRANCHES = [(0.55, 0.95), (0.20, 1.05), (0.15, 1.25), (0.10, 1.60)]
         @test BELGIUM_PROFILE.hydro_model == :gas_anchored
         # iter6: SK's dropped Core import borders (CZ-SK/PL-SK) need the anchor's
         # import pricing, like BE — continental params otherwise.
-        @test get_zone_profile("SK") === Euphemia.MeritOrderBook.SLOVAKIA_PROFILE
+        @test get_zone_profile("SK") == with_profile(Euphemia.MeritOrderBook.SLOVAKIA_PROFILE;
+                                                    boundary_book=Euphemia.MeritOrderBook.UA_BOOK_DEFAULT)   # cv22 UA book
         @test get_zone_profile("SK").opportunity_anchor == :hydro
         @test get_zone_profile("SK").scarcity_kappa == CONTINENTAL_PROFILE.scarcity_kappa
     end
