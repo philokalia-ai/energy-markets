@@ -475,6 +475,25 @@ function _create_multi_zone_order_book_merit(zones::Vector{String}, day::Date;
         end
     end
 
+    # A zone whose book covers less than half of the day's periods (a partial
+    # load publication caught at extract/gate time — SE1-4 on 2026-06-03 had 2
+    # of 24 hours) used to collapse the coupled timeslot intersection for
+    # EVERY zone and the whole day was refused. Treat it like a failed zone
+    # instead: it is dropped from the coupled clear and its neighbours keep
+    # their observed imports over that border (the existing failed-zone path).
+    let cov = Dict(z => length(Set(Dates.format(o.date_time, "yyyymmdd-HHMM")
+                                   for o in get(zone_orders, z, MarketOrders.MarketOrder[])))
+                   for z in zones if !(z in failed_zones))
+        if !isempty(cov)
+            modal = maximum(values(cov))
+            for (z, n) in cov
+                if n < modal ÷ 2
+                    @warn "Zone $z covers only $n of $modal period(s) — dropped from the coupled clear (partial publication)"
+                    push!(failed_zones, z)
+                end
+            end
+        end
+    end
     successful_zones = filter(z -> !(z in failed_zones), zones)
     isempty(successful_zones) && error("Failed to generate merit orders for any zone")
     if !isempty(failed_zones)
