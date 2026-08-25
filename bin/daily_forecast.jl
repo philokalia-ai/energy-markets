@@ -232,7 +232,22 @@ function atc_row_count(t0::DateTime, t1::DateTime, zones::Vector{String})
     # froze on fallback capacity hours before the DA rows arrived.
     n_da == 0 && n_all > 0 &&
         @warn "ATC gate: $n_all implicit-ATC row(s) in window but NONE Day-ahead — not counting them"
-    return n_da
+    # JAO maxBEX rows (flow-based borders, published D-1 ~10:30 CET) count as
+    # day-ahead capacity too — they are what the coupled clear now uses for
+    # every Day-ahead-free border (Network.jao_maxbex).
+    n_jao = 0
+    if Euphemia.Network.jao_atc_enabled()
+        n_jao = try
+            Int(Euphemia.sql2df_with_retry("""
+                SELECT COUNT(*) AS n FROM jao.max_exchanges
+                WHERE date_time_utc >= (\$1::timestamp AT TIME ZONE 'UTC')
+                  AND date_time_utc < (\$2::timestamp AT TIME ZONE 'UTC')
+                """, [t0, t1]).n[1])
+        catch
+            0
+        end
+    end
+    return n_da + n_jao
 end
 
 """

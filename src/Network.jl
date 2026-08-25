@@ -366,6 +366,157 @@ end
 # The 7 physical borders accepted by the cv27 border campaign
 # (docs/experiments/cv27-borders/, Set A -0.44 MAE/+0.009 corr, Set B
 # -0.41/-0.004, zero caps/breaches; both directions each).
+# ---------------------------------------------------------------------------
+# JAO flow-based max bilateral exchanges (maxBEX) — the day-ahead capacity the
+# market actually cleared on for every FLOW-BASED border (Core since 2022-06-09,
+# Nordic since 2024-10-30), published D-1 ~10:30 CET (before the gate).
+# docs/experiments/data-investigation-2026-08-25.md: every Core-FBMC and Nordic
+# zone had ZERO Day-ahead rows in the ENTSO-E implicit table for a whole year,
+# so those borders ran on intraday leftovers / the cv27 p95 fallback / drops.
+# Ingested by ceres (data/entsoe/update_JaoMaxExchanges.py) into
+# jao.max_exchanges. Consumed here per day (cached): (source, sink, period) =>
+# hourly-mean MW, virtual hubs dropped, Core hub DE => DE_LU. Absent table
+# (older extracts) or EUPHEMIA_DISABLE_JAO_ATC => empty => byte-identical
+# fallback behaviour.
+const _JAO_DAY_CACHE = Dict{Date,Dict{Tuple{String,String,Int},Float64}}()
+const _JAO_DAY_CACHE_LOCK = ReentrantLock()
+const _JAO_HUB_MAP = Dict("DE" => "DE_LU")
+const _JAO_VIRTUAL_HUBS = Set(["Baltic", "BigHub", "COBRA", "NorNed", "SwePol", "VH",
+                               "SE3SWL", "SE4SWL", "ALBE", "ALDE"])
+const _JAO_NORDIC_HUBS = Set(["NO1", "NO2", "NO3", "NO4", "NO5", "SE1", "SE2", "SE3", "SE4",
+                              "FI", "DK1", "DK2", "EE", "LT", "LV"])
+const _JAO_WARNED = Ref(false)
+
+jao_atc_enabled() = isempty(get(ENV, "EUPHEMIA_DISABLE_JAO_ATC", ""))
+
+"""
+    jao_maxbex(date) -> Dict{(source, sink, time_period), MW}
+
+Hourly-mean max bilateral exchange per directed border for `date` (UTC day,
+time_period 1..24). Where Core and Nordic both publish a border, the CCR the
+border is internal to wins (Nordic for Nordic-internal, Core otherwise).
+"""
+function jao_maxbex(date::Date)
+    lock(_JAO_DAY_CACHE_LOCK) do
+        haskey(_JAO_DAY_CACHE, date) && return _JAO_DAY_CACHE[date]
+    end
+    out = Dict{Tuple{String,String,Int},Float64}()
+    df = try
+        safe_sql2df("""
+            SELECT ccr, border_from, border_to,
+                   (EXTRACT(HOUR FROM date_time_utc AT TIME ZONE 'UTC') + 1)::int AS tp,
+                   AVG(max_exchange_mw)::float8 AS mw
+            FROM jao.max_exchanges
+            WHERE date_time_utc >= (\$1::date::timestamp AT TIME ZONE 'UTC')
+              AND date_time_utc < ((\$1::date + 1)::timestamp AT TIME ZONE 'UTC')
+              AND max_exchange_mw IS NOT NULL
+            GROUP BY 1, 2, 3, 4
+            """, [date])
+    catch e
+        if !_JAO_WARNED[]
+            @warn "jao.max_exchanges not readable — JAO maxBEX ATC disabled for this process: $(sprint(showerror, e))"
+            _JAO_WARNED[] = true
+        end
+        DataFrame()
+    end
+    per_ccr = Dict{String,Dict{Tuple{String,String,Int},Float64}}()
+    for r in eachrow(df)
+        s = get(_JAO_HUB_MAP, String(r.border_from), String(r.border_from))
+        d = get(_JAO_HUB_MAP, String(r.border_to), String(r.border_to))
+        (s in _JAO_VIRTUAL_HUBS || d in _JAO_VIRTUAL_HUBS || s == d) && continue
+        get!(per_ccr, String(r.ccr), Dict{Tuple{String,String,Int},Float64}())[(s, d, Int(r.tp))] = Float64(r.mw)
+    end
+    core = get(per_ccr, "core", Dict{Tuple{String,String,Int},Float64}())
+    nordic = get(per_ccr, "nordic", Dict{Tuple{String,String,Int},Float64}())
+    for (k, v) in core
+        out[k] = v
+    end
+    for (k, v) in nordic
+        internal = k[1] in _JAO_NORDIC_HUBS && k[2] in _JAO_NORDIC_HUBS
+        (internal || !haskey(out, k)) && (out[k] = v)
+    end
+    isempty(df) || lock(_JAO_DAY_CACHE_LOCK) do
+        _JAO_DAY_CACHE[date] = out
+    end
+    return out
+end
+
+"Directed border pairs JAO publishes for `date` (both directions as published)."
+function jao_covered_pairs(date::Date)
+    jao_atc_enabled() || return Set{Tuple{String,String}}()
+    return Set{Tuple{String,String}}((s, d) for (s, d, _) in keys(jao_maxbex(date)))
+end
+
+clear_jao_cache!() = lock(_JAO_DAY_CACHE_LOCK) do
+    empty!(_JAO_DAY_CACHE)
+end
+
+# ---------------------------------------------------------------------------
+# ENTSO-E transmission-grid unavailability (10.1.A/B) as a cap on border-hour
+# capacity. The Baltic 2025 price story is EstLink outages (EstLink 2 out
+# 2024-12-25..2025-06-19 with 358 MW remaining, EstLink 1 out Sep 2025) and the
+# table has been ingested since 2014 but never consumed. Per directed border
+# and hour: the MINIMUM `new_ntc_mw` over the Active, current-version messages
+# covering that hour (NULL new_ntc = no cap). Same gate-vintage rule as the
+# generation outages (cv34 B1): from delivery days >= 2025-10-01 only versions
+# published before D-1 10:00 UTC count. EUPHEMIA_DISABLE_TX_OUTAGE_ATC reverts.
+const _TX_OUTAGE_DAY_CACHE = Dict{Date,Dict{Tuple{String,String,Int},Float64}}()
+const _TX_OUTAGE_LOCK = ReentrantLock()
+tx_outage_atc_enabled() = isempty(get(ENV, "EUPHEMIA_DISABLE_TX_OUTAGE_ATC", ""))
+
+function tx_outage_caps(date::Date)
+    lock(_TX_OUTAGE_LOCK) do
+        haskey(_TX_OUTAGE_DAY_CACHE, date) && return _TX_OUTAGE_DAY_CACHE[date]
+    end
+    out = Dict{Tuple{String,String,Int},Float64}()
+    df = try
+        safe_sql2df("""
+            WITH cand AS (
+                SELECT DISTINCT instance_code
+                FROM entsoe.unavailability_in_the_transmission_grid
+                WHERE start_outage_utc::timestamp < \$1::timestamp + INTERVAL '1 day'
+                  AND end_outage_utc::timestamp > \$1::timestamp
+            ),
+            vers AS (
+                SELECT u.*, ROW_NUMBER() OVER (PARTITION BY u.instance_code ORDER BY u.version DESC) AS rn
+                FROM entsoe.unavailability_in_the_transmission_grid u
+                JOIN cand USING (instance_code)
+                WHERE \$1::date < DATE '2025-10-01'
+                   OR version_publication_timestamp_utc IS NULL
+                   OR version_publication_timestamp_utc::timestamp < \$1::timestamp - INTERVAL '14 hours'
+            )
+            SELECT out_area_map_code AS src, in_area_map_code AS snk,
+                   start_outage_utc::timestamp AS s, end_outage_utc::timestamp AS e,
+                   new_ntc_mw::float8 AS ntc
+            FROM vers
+            WHERE rn = 1 AND status = 'Active' AND new_ntc_mw IS NOT NULL
+              AND start_outage_utc::timestamp < \$1::timestamp + INTERVAL '1 day'
+              AND end_outage_utc::timestamp > \$1::timestamp
+              AND out_area_map_code IS NOT NULL AND in_area_map_code IS NOT NULL
+              AND out_area_map_code <> in_area_map_code
+            """, [date])
+    catch e
+        @warn "transmission-grid unavailability not readable — border caps disabled for $date: $(sprint(showerror, e))"
+        DataFrame()
+    end
+    d0 = DateTime(date)
+    for r in eachrow(df)
+        s = String(r.src); k = String(r.snk)
+        (s == "DE" || s == "LU") && (s = "DE_LU"); (k == "DE" || k == "LU") && (k = "DE_LU")
+        st = DateTime(r.s); en = DateTime(r.e)
+        for tp in 1:24
+            h0 = d0 + Hour(tp - 1); h1 = h0 + Hour(1)
+            (st < h1 && en > h0) || continue
+            key = (s, k, tp)
+            out[key] = min(get(out, key, Inf), Float64(r.ntc))
+        end
+    end
+    isempty(df) || lock(_TX_OUTAGE_LOCK) do
+        _TX_OUTAGE_DAY_CACHE[date] = out
+    end
+    return out
+end
+
 const CV27_SHIPPED_BORDERS = join([
     "DE_LU>FR", "FR>DE_LU", "CH>FR", "FR>CH", "CZ>PL", "PL>CZ",
     "SE1>SE2", "SE2>SE1", "IT-CNORTH>IT-NORTH", "IT-NORTH>IT-CNORTH",
@@ -578,19 +729,60 @@ function _create_transfer_capacity_enriched(date::Date, bidding_zones::Vector{St
     da_ever = (fbmc_cap === nothing || border_list_mode) ?
         Set{Tuple{String,String}}() : _da_ever_borders(date)
     n_fbmc_override = 0
+    jao = jao_atc_enabled() ? jao_maxbex(date) : Dict{Tuple{String,String,Int},Float64}()
+    n_jao_override = 0
+    n_jao_added = 0
     rows = NamedTuple{(:source_zone, :sink_zone, :time_period, :capacity),
                       Tuple{String,String,Int,Float64}}[]
     for r in eachrow(imp)
         capacity = Float64(r.capacity)
         pair = (String(r.source_zone), String(r.sink_zone))
-        eligible = border_list_mode ? (pair in border_set) : (pair in da_ever)
-        if fbmc_cap !== nothing && Int(r.n_da) == 0 && eligible
-            blk = (Int(r.time_period) - 1) ÷ 4
-            demo = get(fbmc_cap, (String(r.source_zone), String(r.sink_zone), blk), 0.0)
-            demo > 0.0 && (capacity = demo; n_fbmc_override += 1)
+        key = (pair[1], pair[2], Int(r.time_period))
+        if Int(r.n_da) == 0 && haskey(jao, key)
+            # a flow-based border-hour: the market's own maxBEX beats any
+            # intraday leftover or demonstrated-capability proxy
+            capacity = jao[key]; n_jao_override += 1
+        else
+            eligible = border_list_mode ? (pair in border_set) : (pair in da_ever)
+            if fbmc_cap !== nothing && Int(r.n_da) == 0 && eligible
+                blk = (Int(r.time_period) - 1) ÷ 4
+                demo = get(fbmc_cap, (String(r.source_zone), String(r.sink_zone), blk), 0.0)
+                demo > 0.0 && (capacity = demo; n_fbmc_override += 1)
+            end
         end
         push!(rows, (source_zone=r.source_zone, sink_zone=r.sink_zone,
                      time_period=Int(r.time_period), capacity=capacity))
+    end
+    # borders JAO publishes that the implicit table does not carry at all
+    for ((s, d, tp), mw) in jao
+        (s in fpset && d in fpset) || continue
+        (s, d) in imp_pairs && continue
+        push!(rows, (source_zone=s, sink_zone=d, time_period=tp, capacity=mw))
+        n_jao_added += 1
+    end
+    for ((s, d, _), _) in jao
+        (s in fpset && d in fpset) && push!(imp_pairs, (s, d))
+    end
+    (n_jao_override + n_jao_added) > 0 &&
+        println("   🧭 JAO maxBEX: $(n_jao_override) Day-ahead-free border-hours sized by the flow-based " *
+                "max exchange, $(n_jao_added) border-hours added")
+    # Transmission-grid outages: cap the border-hour at the TSO's remaining NTC
+    if tx_outage_atc_enabled()
+        caps = tx_outage_caps(date)
+        n_capped = 0
+        if !isempty(caps)
+            for i in eachindex(rows)
+                r = rows[i]
+                key = (String(r.source_zone), String(r.sink_zone), r.time_period)
+                haskey(caps, key) || continue
+                caps[key] < r.capacity || continue
+                rows[i] = (source_zone=r.source_zone, sink_zone=r.sink_zone,
+                           time_period=r.time_period, capacity=caps[key])
+                n_capped += 1
+            end
+        end
+        n_capped > 0 &&
+            println("   🚧 transmission outages: $(n_capped) border-hours capped at the TSO's remaining NTC")
     end
     n_fbmc_override > 0 &&
         println("   🔁 cv27 T1: $(n_fbmc_override) Day-ahead-free border-hours sized by demonstrated capability")

@@ -301,8 +301,21 @@ function _create_multi_zone_order_book_merit(zones::Vector{String}, day::Date;
     # failing. Left off by default so the 5-zone SEE product is byte-identical.
     aggregate_remap = enrich_network ? build_aggregate_remap(zones) : Dict{String,String}()
 
+    # A flow-based border JAO publishes for this day is NOT dropped: the drops
+    # (cv15/cv17) existed because the ENTSO-E implicit table gave those Core
+    # borders phantom (intraday-leftover) capacity — JAO's maxBEX IS the
+    # market's capacity, so the border becomes endogenous with it.
     drop_borders = enrich_network ? flow_based_drop_borders(zones) :
                    Tuple{String,String}[]
+    if enrich_network && Network.jao_atc_enabled()
+        jp = Network.jao_covered_pairs(day)
+        kept = [b for b in drop_borders if (b in jp) || ((b[2], b[1]) in jp)]
+        if !isempty(kept)
+            println("   🧭 JAO maxBEX covers $(length(kept)) of $(length(drop_borders)) flow-based drop border(s) — kept endogenous: " *
+                    join(["$a~$b" for (a, b) in kept], ", "))
+            drop_borders = [b for b in drop_borders if !((b in jp) || ((b[2], b[1]) in jp))]
+        end
+    end
 
     println("   🔌 Fetching transfer capacities between zones...")
     transfer_capacity = Network.create_transfer_capacity_from_entsoe(day, zones;
