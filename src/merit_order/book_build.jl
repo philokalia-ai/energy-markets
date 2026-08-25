@@ -152,8 +152,36 @@ function _true_up_fleet(generators::Vector{Generator}, bidding_zone::String,
             outaged = get(removed_by_outage, ptype, 0.0)
             gap = target - fleet - outaged
             if outaged > 0.0 && target - fleet > 100.0 && gap <= 100.0
-                println("  ⏸  Fleet completion: $ptype gap $(round(Int, target - fleet)) MW " *
-                        "explained by $(round(Int, outaged)) MW on outage — not re-added")
+                # Outage-response tranche (2026-08-25, owner-directed after the
+                # cv34 evaluation): the gap the outage explains is NOT re-added
+                # at SRMC (pre-#343 behaviour, which hid the outage) and NOT
+                # refused outright (#343, which put BE 2026-01-14 17:00 at the
+                # 3000 cap while the market settled at 172 — the market found
+                # ~800 MW at a premium: imports beyond the demonstrated
+                # headroom, demand response, unfiled units). It is offered as
+                # capacity of the same type at the import-backstop price
+                # (BACKSTOP_PRICE_MULT × gas SRMC): above every domestic tranche,
+                # so it binds only when the outage actually makes the hour
+                # tight, and then at a premium instead of the cap.
+                # EUPHEMIA_DISABLE_OUTAGE_TRANCHE restores the #343 refusal.
+                if isempty(get(ENV, "EUPHEMIA_DISABLE_OUTAGE_TRANCHE", ""))
+                    tranche = min(outaged, target - fleet)
+                    push!(generators, Generator(
+                        "OUT-$(bidding_zone)-$(replace(ptype, " " => "_"))",
+                        "Outage-response tranche: $ptype",
+                        Symbol(ptype),
+                        bidding_zone,
+                        tranche,
+                        0.0,
+                        bidding_zone,
+                        BACKSTOP_PRICE_MULT * get_marginal_cost(day, "Fossil Gas", bidding_zone)))
+                    println("  ⏸  Fleet completion: $ptype gap $(round(Int, target - fleet)) MW " *
+                            "explained by $(round(Int, outaged)) MW on outage — offered as a " *
+                            "$(round(Int, tranche)) MW tranche at $(BACKSTOP_PRICE_MULT)× gas SRMC")
+                else
+                    println("  ⏸  Fleet completion: $ptype gap $(round(Int, target - fleet)) MW " *
+                            "explained by $(round(Int, outaged)) MW on outage — not re-added")
+                end
             end
             gap > 100.0 || continue
             push!(generators, Generator(

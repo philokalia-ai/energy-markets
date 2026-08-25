@@ -221,6 +221,10 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
     time_limit::Float64=900.0,
     mip_gap::Float64=1e-6,
     heuristic_effort::Union{Float64,Nothing}=nothing,
+    # Extra raw optimizer attributes (name => value), applied after the model
+    # is created; each is try/caught so an unsupported name never aborts the
+    # solve. Used by the per-period HiGHS retry rungs (2026-08-25).
+    extra_attributes::Vector{Pair{String,Any}}=Pair{String,Any}[],
     # Per-period decomposition. The MPCC has NO inter-temporal coupling
     # (no ramp/storage/block/t±1 links — every period is a mathematically
     # independent clearing), so the monolithic optimum is exactly the
@@ -294,6 +298,13 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
     # Optional: crank the solver's primal-heuristic effort (HiGHS
     # "mip_heuristic_effort", default 0.05) to find a first incumbent sooner
     # on the large multi-zone complementarity MIP. No-op if unsupported.
+    for (k, v) in extra_attributes
+        try
+            set_optimizer_attribute(model, k, v)
+        catch e
+            @warn "optimizer attribute $k=$v not applied: $(sprint(showerror, e))"
+        end
+    end
     if heuristic_effort !== nothing && solver_name == "HiGHS"
         try
             set_optimizer_attribute(model, "mip_heuristic_effort", heuristic_effort)
@@ -961,6 +972,45 @@ function _solve_mpcc_by_period(order_book::MPCCOrderBook;
             time_limit=time_limit, mip_gap=mip_gap,
             heuristic_effort=heuristic_effort,
             decompose_periods=false, verbose=false)
+
+        # HiGHS per-period retry (2026-08-25). On the 52-day cv34 evaluation
+        # HiGHS returned a FALSE INFEASIBLE certificate on one period of 0-3
+        # days per arm (Gurobi clears the identical period in seconds — the
+        # documented Big-M integrality-tolerance leakage), and one bad period
+        # refused the whole day. The Gurobi retry ladder (NumericFocus /
+        # indicator constraints) does not exist on HiGHS, so re-solve THIS
+        # period with HiGHS-side numerics before giving up: rung 1 tightens
+        # the MIP/primal feasibility tolerances with presolve off; rung 2
+        # additionally changes the random seed. Only the failing period is
+        # retried; an optimal first solve is never touched.
+        _usable(x) = x.status == :optimal ||
+                     (x.status == :time_limit && !isempty(x.market_prices))
+        if !_usable(r) && r.solver_name == "HiGHS" &&
+           isempty(get(ENV, "EUPHEMIA_DISABLE_HIGHS_PERIOD_RETRY", ""))
+            rungs = [
+                Pair{String,Any}["presolve" => "off",
+                                 "mip_feasibility_tolerance" => 1e-7,
+                                 "primal_feasibility_tolerance" => 1e-8],
+                Pair{String,Any}["presolve" => "off",
+                                 "mip_feasibility_tolerance" => 1e-7,
+                                 "primal_feasibility_tolerance" => 1e-8,
+                                 "random_seed" => 42],
+            ]
+            for (ri, attrs) in enumerate(rungs)
+                @warn "Period $t: HiGHS returned $(r.status) — per-period retry rung $ri ($(join(first.(attrs), ",")))"
+                r2 = solve_mpcc_market_clearing(sub_book;
+                    preferred_solver=preferred_solver, silent=silent, big_m=big_m,
+                    time_limit=time_limit, mip_gap=mip_gap,
+                    heuristic_effort=heuristic_effort,
+                    extra_attributes=attrs,
+                    decompose_periods=false, verbose=false)
+                if _usable(r2)
+                    @info "Period $t: retry rung $ri recovered status $(r2.status)"
+                    r = r2
+                    break
+                end
+            end
+        end
 
         solver_name = r.solver_name
         push!(statuses, r.status)
