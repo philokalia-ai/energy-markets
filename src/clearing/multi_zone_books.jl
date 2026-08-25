@@ -377,12 +377,34 @@ function _create_multi_zone_order_book_merit(zones::Vector{String}, day::Date;
         # water values of every zone that references it — scenario-consistent
         # opportunity costs across the footprint.
         sc = MeritOrderBook.zone_scenario(scenario, zone)
+        # cv34 candidate, MEASURED NO-SHIP (docs/experiments/cv34-exante-
+        # conventions.md): per-UTC-hour import capacity into `zone` over its
+        # ENDOGENOUS borders as the enriched network (hence the MPCC) has it,
+        # for the import backstop sizing (see get_import_backstop). On the
+        # 47-day evaluation it was neutral-to-negative (footprint 27.32 vs
+        # 27.25 without; DK2 +1.0) and made one period of 2026-03-04
+        # non-optimal, so it is OPT-IN: EUPHEMIA_ENABLE_BACKSTOP_ATC_SYNC.
+        # Periods are hour strings "1".."24".
+        endo_atc = Dict{Int,Float64}()
+        sync_on = enrich_network && !isempty(get(ENV, "EUPHEMIA_ENABLE_BACKSTOP_ATC_SYNC", ""))
+        if sync_on
+            for p in transfer_capacity.time_periods
+                h = parse(Int, p) - 1
+                tot = 0.0
+                for cp in exclude
+                    tot += get(transfer_capacity.capacity_forward, (cp, zone, p), 0.0) +
+                           get(transfer_capacity.capacity_backward, (zone, cp, p), 0.0)
+                end
+                endo_atc[h] = tot
+            end
+        end
         return create_merit_order_book(zone, day;
             profile=profile,
             net_import_exclude=exclude,
             net_import_import_only=import_only,
             target_resolution_minutes=clear_resolution_minutes,
             res_coalesce_missing=enrich_network,
+            endogenous_import_atc=sync_on ? endo_atc : nothing,
             anchor_prices=get(anchor_refs, zone, nothing),
             pass1_prices=get(anchor_refs, zone * "@own", nothing),
             anchor_export_mw=anchor_export_mw,

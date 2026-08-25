@@ -26,12 +26,15 @@
 # "prove wrong" a full outage that began later.
 #
 # Semantics fixed 2026-08-24 (bug sweep):
-#   * `NOT old_version` — ENTSO-E publishes every outage message as versioned
-#     rows sharing `instance_code`; a cancellation, withdrawal or end-date change
-#     is a NEW row and the superseded rows keep status='Active' with
-#     old_version=true. Applying them removed cancelled outages' capacity for
-#     their whole original window (2026-04-03: FR 16.0 GW, DE_LU 9.1 GW, ES 5.7 GW,
-#     PL 5.4 GW wrongly removed or derated).
+#   * Latest version per message — ENTSO-E publishes every outage message as
+#     versioned rows sharing `instance_code`; a cancellation, withdrawal or
+#     end-date change is a NEW row and the superseded rows keep status='Active'.
+#     Applying them removed cancelled outages' capacity for their whole original
+#     window (2026-04-03: FR 16.0 GW, DE_LU 9.1 GW, ES 5.7 GW, PL 5.4 GW).
+#   * cv34: "latest" means latest AS KNOWN AT THE GATE (D-1 10:00 UTC) for
+#     delivery days from 2025-10-01, where the publication timestamp is a real
+#     TSO time; a same-day forced outage published after the gate no longer
+#     reaches the book (2026-04-03: DE_LU 1.9 GW, GR 837 MW were lookahead).
 #   * Day overlap, not a midnight instant — the old predicate tested whether the
 #     outage covered D 00:00 UTC, so an outage starting 06:00 on D was ignored
 #     for all of D (~70 asset-days/day, ~18 GW) and one ending 00:30 on D
@@ -89,16 +92,41 @@ function get_day_outages(day::Dates.Date)
         get!(_OUTAGE_DAY_CACHE, day) do
             Euphemia.sql2df_with_retry(
                 """
-                WITH active_outages AS (
+                WITH cand AS (
+                    -- every message with ANY version overlapping the day
+                    SELECT DISTINCT instance_code
+                    FROM entsoe.unavailability_of_production_and_generation_units
+                    WHERE start_outage_utc::timestamp < \$1::timestamp + INTERVAL '1 day'
+                      AND end_outage_utc::timestamp > \$1::timestamp
+                ),
+                vers AS (
+                    -- the version of each message as KNOWN AT THE GATE (D-1
+                    -- 10:00 UTC — the 12:00 CET/CEST auction, conservative):
+                    -- versions published after the gate did not exist to the
+                    -- auction. version_publication_timestamp_utc is a real TSO
+                    -- time only from 2025-09-28 (before that it holds the ETL
+                    -- ingestion time), so the vintage filter applies to delivery
+                    -- days from 2025-10-01 — the documented seam (cv34).
+                    -- Before the seam / for NULLs the latest version counts.
+                    SELECT u.*,
+                           ROW_NUMBER() OVER (PARTITION BY u.instance_code ORDER BY u.version DESC) AS rn
+                    FROM entsoe.unavailability_of_production_and_generation_units u
+                    JOIN cand USING (instance_code)
+                    WHERE $(isempty(get(ENV, "EUPHEMIA_DISABLE_CV34_GATE", "")) ? "" : "TRUE OR ")
+                       \$1::date < DATE '2025-10-01'
+                       OR version_publication_timestamp_utc IS NULL
+                       OR version_publication_timestamp_utc::timestamp < \$1::timestamp - INTERVAL '14 hours'
+                ),
+                active_outages AS (
                     SELECT asset_code,
                            MIN(available_capacity_mw) AS available_capacity_mw,
                            COALESCE(
                                MIN(start_outage_utc::timestamp)
                                    FILTER (WHERE COALESCE(available_capacity_mw, 0.0) <= 0.0),
                                MIN(start_outage_utc::timestamp)) AS earliest_start
-                    FROM entsoe.unavailability_of_production_and_generation_units
-                    WHERE status = 'Active'
-                      AND NOT old_version
+                    FROM vers
+                    WHERE rn = 1
+                      AND status = 'Active'
                       AND start_outage_utc::timestamp < \$1::timestamp + INTERVAL '1 day'
                       AND end_outage_utc::timestamp > \$1::timestamp
                       AND LEAST(end_outage_utc::timestamp, \$1::timestamp + INTERVAL '1 day')

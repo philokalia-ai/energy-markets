@@ -181,7 +181,14 @@
 # the price code_version. Bumped so post-fix rows never mix with the cv32
 # record. NOTE: the cv34 prereg draft had left 33 "unused"; the sweep takes
 # it because these fixes precede the collapse package — renumber if you object.
-const ENERGY_PRICES_CODE_VERSION = 33
+# v34 = the ex-ante conventions (owner decisions 2026-08-25, docs/experiments/
+# cv34-exante-conventions.md): outage versions as known at the D-1 gate from
+# the TSO-publication era (delivery days >= 2025-10-01, documented seam);
+# fuel/carbon closes strictly before D-1 (D-2's close is the last that exists
+# at the gate); the entsoe
+# track's persistence leads relabelled input_mode='entsoe_persist'; forecast
+# scores keyed by is_retro. The collapse package moves to cv35.
+const ENERGY_PRICES_CODE_VERSION = 34
 
 # Pool size: env-tunable (EUPHEMIA_PG_POOL) because the threaded book build
 # runs up to nzones concurrent queries — 5 connections cap the parallelism
