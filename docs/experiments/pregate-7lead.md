@@ -112,6 +112,21 @@ only if the per-lead board shows it matters.
 
 ---
 
+### 2b. Declared convention (owner decision 2026-08-25, cv34)
+
+**The lead ladder measures weather decay only.** Of the inputs a lead-*n*
+row consumes, only the weather comes from the vintage of the time; the D-2
+observed flows, the load-analogue pool, TTF/EUA, outages, the capability
+windows and the ML load model's autoregressive features all read data
+anchored to the delivery day (retro rows) or are absent/NaN (live rows at
+leads ≥ 2). A retro lead-7 row therefore answers "how much does *weather*
+degrade over 7 days with every other input at lead-1 quality", nothing more.
+Consequences baked into the code from cv34: live and retro rows are never
+pooled — `forecast_scores` is keyed by `is_retro` and the summary reports
+`<mode>/retro` separately; the `entsoe` track's leads 2–7 are weekly
+persistence copies and carry `input_mode='entsoe_persist'`. Making the
+non-weather inputs vintage-aware is a separate project, not started.
+
 ## 3. Retro labeling contract (honesty-critical, FROZEN)
 
 The retro writer has **two modes** (owner amendment, Aug 2026). Both keep the

@@ -755,6 +755,7 @@ function create_merit_order_book(
     pass1_prices::Union{Nothing,Dict{String,Float64}}=nothing,
     anchor_export_mw::Dict{Int,Float64}=Dict{Int,Float64}(),
     res_coalesce_missing::Bool=false,
+    endogenous_import_atc::Union{Nothing,Dict{Int,Float64}}=nothing,
     load_modifier::Union{Nothing,Function}=nothing,
     renewable_modifier::Union{Nothing,Function}=nothing,
     extra_orders::Union{Nothing,Function}=nothing,
@@ -969,7 +970,8 @@ function create_merit_order_book(
             get_import_backstop(bidding_zone, day;
                 weeks=BACKSTOP_WEEKS,
                 endogenous_counterparties=net_import_exclude,
-                exclude_counterparties=boundary_exclude) :
+                exclude_counterparties=boundary_exclude,
+                endogenous_import_atc=endogenous_import_atc) :
             Dict{Int,Float64}()
         backstop_price = BACKSTOP_PRICE_MULT * gas_srmc
         isempty(backstop_by_hour) ||

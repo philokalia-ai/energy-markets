@@ -90,6 +90,36 @@ function ensure_energy_prices_table()
             END \$\$;
         """)
 
+        # cv34 (owner decision 2026-08-25): the live constraint had grown an
+        # `optimizer` column that no writer populates (NULL on every row since
+        # cv7); Postgres treats NULLs as distinct, so the key rejected nothing
+        # and the only dedup was the non-transactional delete-then-insert. Re-key
+        # on the intended columns. Skipped (loudly) if duplicates already exist.
+        LibPQ.execute(cnx, """
+            DO \$\$
+            DECLARE old_c text; dups bigint;
+            BEGIN
+                SELECT conname INTO old_c FROM pg_constraint
+                WHERE conrelid = 'simulations.energy_prices'::regclass
+                  AND contype = 'u'
+                  AND pg_get_constraintdef(oid) LIKE '%optimizer%';
+                IF old_c IS NOT NULL THEN
+                    SELECT COUNT(*) INTO dups FROM (
+                        SELECT 1 FROM simulations.energy_prices
+                        GROUP BY date_time_utc, bidding_zone, contract_type, order_method, clearing_mode, code_version
+                        HAVING COUNT(*) > 1) d;
+                    IF dups > 0 THEN
+                        RAISE WARNING 'energy_prices: % duplicate groups on the intended key — unique-key migration skipped', dups;
+                    ELSE
+                        EXECUTE format('ALTER TABLE simulations.energy_prices DROP CONSTRAINT %I', old_c);
+                        ALTER TABLE simulations.energy_prices
+                        ADD CONSTRAINT energy_prices_unique_record
+                        UNIQUE (date_time_utc, bidding_zone, contract_type, order_method, clearing_mode, code_version);
+                    END IF;
+                END IF;
+            END \$\$;
+        """)
+
         # Create useful indexes
         LibPQ.execute(
             cnx,
@@ -328,7 +358,7 @@ function ensure_forecast_tables()
             is_retro BOOLEAN NOT NULL DEFAULT false,
             reset_tag TEXT,
             scored_at TIMESTAMPTZ DEFAULT now(),
-            PRIMARY KEY (market_date, bidding_zone, lead_days, code_version, input_mode)
+            PRIMARY KEY (market_date, bidding_zone, lead_days, code_version, input_mode, is_retro)
         )
         """)
 
@@ -418,6 +448,33 @@ function ensure_forecast_tables()
                 ADD COLUMN IF NOT EXISTS is_retro BOOLEAN NOT NULL DEFAULT false,
                 ADD COLUMN IF NOT EXISTS reset_tag TEXT
             """)
+        end
+        # cv34 (owner decision 2026-08-25): a superseding retro slice's score used
+        # to upsert OVER the live slice's score (PK without is_retro), and the
+        # board pooled live and retro rows of the same (track, lead) although
+        # they come from different information sets. Re-key the PK on is_retro.
+        # Catalog-first (same WEDGE GUARD as above): only touches the PK when it
+        # lacks is_retro, under a 30 s lock_timeout.
+        pk_lacks_retro = LibPQ.execute(cnx, """
+            SELECT COUNT(*) > 0 AS lacks FROM pg_constraint
+            WHERE conrelid = 'simulations.forecast_scores'::regclass
+              AND contype = 'p'
+              AND pg_get_constraintdef(oid) NOT LIKE '%is_retro%'
+            """) |> DataFrame |> df -> df.lacks[1]
+        if pk_lacks_retro
+            LibPQ.execute(cnx, "SET lock_timeout = '30s'")
+            LibPQ.execute(cnx, """
+            DO \$\$
+            DECLARE old_c text;
+            BEGIN
+                SELECT conname INTO old_c FROM pg_constraint
+                WHERE conrelid = 'simulations.forecast_scores'::regclass AND contype = 'p';
+                EXECUTE format('ALTER TABLE simulations.forecast_scores DROP CONSTRAINT %I', old_c);
+                ALTER TABLE simulations.forecast_scores
+                ADD PRIMARY KEY (market_date, bidding_zone, lead_days, code_version, input_mode, is_retro);
+            END \$\$;
+            """)
+            LibPQ.execute(cnx, "RESET lock_timeout")
         end
 
         LibPQ.execute(cnx, """

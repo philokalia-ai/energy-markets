@@ -57,7 +57,8 @@ function pending_slices()
             WHERE s.market_date = fp.market_date
               AND s.lead_days = fp.lead_days
               AND s.code_version = fp.code_version
-              AND s.input_mode = fp.input_mode))
+              AND s.input_mode = fp.input_mode
+              AND s.is_retro = fp.is_retro))
     """
     # TWO-STEP discovery (2026-07-23). The old single query ran a correlated
     # EXISTS against 1.9 GB entsoe.energy_prices for each of the ~80k
@@ -114,7 +115,7 @@ function upsert_score!(market_date::Date, zone::String, lead_days::Int, cv::Int,
              is_retro, reset_tag, scored_at)
             VALUES (\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8, \$9,
                     \$10, \$11, \$12, \$13, \$14, \$15, \$16, \$17, now())
-            ON CONFLICT (market_date, bidding_zone, lead_days, code_version, input_mode)
+            ON CONFLICT (market_date, bidding_zone, lead_days, code_version, input_mode, is_retro)
             DO UPDATE SET n_hours = EXCLUDED.n_hours, mae = EXCLUDED.mae,
                           bias = EXCLUDED.bias, corr = EXCLUDED.corr,
                           n_collapse_actual = EXCLUDED.n_collapse_actual,
@@ -136,7 +137,8 @@ end
 "Per input_mode × lead_days × zone aggregate over all stored scores (GR first, then AGG)."
 function print_summary()
     df = Euphemia.sql2df_with_retry("""
-        SELECT input_mode AS mode, lead_days, bidding_zone AS z, COUNT(*) AS n_days,
+        SELECT input_mode || CASE WHEN is_retro THEN '/retro' ELSE '' END AS mode,
+               lead_days, bidding_zone AS z, COUNT(*) AS n_days,
                AVG(mae) AS mae, AVG(bias) AS bias, AVG(corr) AS corr
         FROM simulations.forecast_scores
         GROUP BY 1, 2, 3

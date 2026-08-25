@@ -48,6 +48,21 @@ const FORCE_RERUN = lowercase(get(ENV, "FORCE_RERUN", "false")) == "true"
 const CLEARING_MODE = get(ENV, "CLEARING_MODE", "multi_zone_eu")
 const CV = Euphemia.ENERGY_PRICES_CODE_VERSION
 
+# cv34 (owner decision 2026-08-25): the leads 2..N written here are WEEKLY
+# PERSISTENCE copies of the T-7 lead-1 entsoe clear, not model clears. They
+# used to be stamped input_mode='entsoe' — indistinguishable from a real
+# clear, stamped with the running cv although the copied prices came from
+# whatever cv produced the source slice — so the per-lead board compared the
+# weather track's genuine lead-n clear against a relabelled lead-1. They now
+# carry input_mode='entsoe_persist' (the site's "As announced" track matches
+# the "entsoe*" prefix, so they still render there, labelled). One-off relabel
+# of the rows written before cv34:
+#   UPDATE simulations.forecast_prices SET input_mode = 'entsoe_persist'
+#    WHERE input_mode = 'entsoe' AND lead_days >= 2;
+#   UPDATE simulations.forecast_scores SET input_mode = 'entsoe_persist'
+#    WHERE input_mode = 'entsoe' AND lead_days >= 2;
+const PERSIST_MODE = "entsoe_persist"
+
 function latest_actual_load_date()
     df = Euphemia.sql2df_with_retry(
         "SELECT MAX((date_time_utc AT TIME ZONE 'UTC')::date) AS d FROM entsoe.actual_total_load")
@@ -90,7 +105,7 @@ end
 function slice_row_count(T::Date, lead::Int)
     df = Euphemia.sql2df_with_retry("""
         SELECT COUNT(*) AS n FROM simulations.forecast_prices
-        WHERE market_date = \$1 AND lead_days = \$2 AND input_mode = 'entsoe'
+        WHERE market_date = \$1 AND lead_days = \$2 AND input_mode = 'entsoe_persist'
     """, [T, lead])
     return Int(df.n[1])
 end
@@ -114,7 +129,7 @@ function write_slice!(T::Date, lead::Int, made::DateTime,
         try
             LibPQ.execute(cnx, """
                 DELETE FROM simulations.forecast_prices
-                WHERE market_date = \$1 AND lead_days = \$2 AND input_mode = 'entsoe'
+                WHERE market_date = \$1 AND lead_days = \$2 AND input_mode = 'entsoe_persist'
             """, [T, lead])
             for (zone, hourly) in zone_hourly
                 for (h, price) in sort!(collect(hourly); by=first)
@@ -122,7 +137,7 @@ function write_slice!(T::Date, lead::Int, made::DateTime,
                         INSERT INTO simulations.forecast_prices
                         (market_date, date_time_utc, bidding_zone, price_eur_mwh,
                          prediction_made_utc, lead_days, clearing_mode, code_version, input_mode)
-                        VALUES (\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8, 'entsoe')
+                        VALUES (\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8, 'entsoe_persist')
                     """, Any[T, tstz(h), zone, price, tstz(made), lead, CLEARING_MODE, CV])
                     n += 1
                 end

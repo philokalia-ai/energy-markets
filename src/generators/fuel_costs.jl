@@ -5,6 +5,12 @@
 # lifetime, including the pass-2 rebuild (bug sweep 2026-08-25).
 const _FUEL_LOOKUP_FAILED = Ref{Bool}(false)
 
+# Gate convention (owner decision 2026-08-25, cv34): the day-ahead auction for
+# delivery day D closes at 12:00 CET on D-1, so the LAST close that exists at
+# the gate is D-2's. Every fuel/carbon lookup below therefore reads
+# `date < D - 1 day` — the D-1 close (used until cv33) was a lookahead of
+# ~2.3 €/MWh_el on the gas SRMC on average (p90 4.9, crisis days up to 23).
+
 # fuel_costs.jl — Fuel-cost model: TTF gas and EUA carbon lookups (cached per day), SRMC base table, get_marginal_cost.
 # Included by ../Generators.jl inside `module Euphemia` (definition order preserved).
 
@@ -62,7 +68,7 @@ function get_daily_eua_price(day::Dates.Date)
             """
             SELECT close
             FROM yfinance.eua_co2
-            WHERE date < \$1 AND date > \$1::date - INTERVAL '10 days'
+            WHERE date < \$1::date - INTERVAL '1 day' AND date > \$1::date - INTERVAL '11 days'
               AND close IS NOT NULL
             ORDER BY date DESC
             LIMIT 1
@@ -131,7 +137,7 @@ function uka_price(day::Dates.Date)
             """
             SELECT price_eur
             FROM carbon.uka_price
-            WHERE price_date < \$1 AND price_eur IS NOT NULL
+            WHERE price_date < \$1::date - INTERVAL '1 day' AND price_eur IS NOT NULL
             ORDER BY price_date DESC
             LIMIT 1
             """,
@@ -180,7 +186,7 @@ function get_ttf_price(day::Dates.Date)
             """
             SELECT close
             FROM yfinance.ttf_f
-            WHERE date < \$1 AND date > \$1::date - INTERVAL '10 days'
+            WHERE date < \$1::date - INTERVAL '1 day' AND date > \$1::date - INTERVAL '11 days'
               AND close IS NOT NULL
             ORDER BY date DESC
             LIMIT 1

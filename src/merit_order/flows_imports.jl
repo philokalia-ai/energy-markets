@@ -653,7 +653,8 @@ Zero/negative headroom hours are omitted. See the `import_backstop` field of
 """
 function get_import_backstop(bidding_zone::String, day::Date;
     weeks::Int=8, endogenous_counterparties::Vector{String}=String[],
-    exclude_counterparties::Vector{String}=String[])
+    exclude_counterparties::Vector{String}=String[],
+    endogenous_import_atc::Union{Nothing,Dict{Int,Float64}}=nothing)
     endo = Set(endogenous_counterparties)
     # cv21 boundary counterparties: dropped from the non-endogenous sums entirely
     # — their elastic ladder replaces both the injection AND the backstop
@@ -677,7 +678,16 @@ function get_import_backstop(bidding_zone::String, day::Date;
     end
     lagged = [nets(_zone_border_hourly(bidding_zone, day; lag=7k)) for k in 1:weeks]
     clim_ne, _ = nets(_zone_border_hourly_clim(bidding_zone, day; weeks=weeks))
-    atc_endo = isempty(endo) ? Dict{Int,Float64}() :
+    # cv34: the coupled path hands in the per-hour import capacity of the
+    # ENRICHED network (cv27 demonstrated capability, border drops, as-of
+    # filter) — the capacity the MPCC flow variables actually have. The raw
+    # re-query below re-derives it from the offered-ATC tables WITHOUT those
+    # treatments, so on cv27 borders in Day-ahead-free hours it read ~0 while
+    # the flows delivered the p95 capability: the backstop and the flows then
+    # supplied the same MW. EUPHEMIA_DISABLE_BACKSTOP_ATC_SYNC restores the
+    # re-query (leave-one-out arm).
+    atc_endo = endogenous_import_atc !== nothing ? endogenous_import_atc :
+        isempty(endo) ? Dict{Int,Float64}() :
         _endogenous_import_atc(bidding_zone, day, endogenous_counterparties)
     out = Dict{Int,Float64}()
     isempty(lagged) && return out
