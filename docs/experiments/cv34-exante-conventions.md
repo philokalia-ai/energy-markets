@@ -168,8 +168,49 @@ cv34 vs cv31 record: zones better 28 / worse 10; max worsening (2.86450284090909
   hour: **2026-01-14 17:00 clears at the 3000 cap (settled 172, record 221)**
   in every cv34 arm. See Attribution.
 
-**Attribution of the two regressions** — see the paragraph appended after the
-single-day runs.
+**Attribution of the two regressions** (single-day re-clears of the same
+extract under three code states: pre-sweep `e974cb8`, after #342 `182256c`,
+after #343 = cv34 with every cv34 switch off).
+
+- **BE 2026-01-14 17:00 = 3000.** Pre-sweep 296.3, after #342 295.7, after
+  #343 **3000 (3 cap hours that day)**. It is #343's outage-aware fleet
+  completion: BE has 1,260 MW of gas on outage that day; the old completion
+  re-added 771 MW of gas regardless (trailing p95 5,807 MW vs 5,037 MW
+  available) and that tranche kept the evening off the cap; the new one logs
+  "Fossil Gas gap 753 MW explained by 1,260 MW on outage — not re-added", the
+  import backstop is capped at demonstrated headroom, and the peak hour hits
+  the cap. Settled was 172, so the real system found ~800 MW — imports beyond
+  the demonstrated headroom, or an outage version not binding at 17:00 (B1
+  alone reduces the day's cap hours 3 → 1). The physics of the fix is right
+  (a unit on outage does not bid); what is missing is the market's *response*
+  to a known outage, which the backstop cap does not allow. Candidate for the
+  owner: when the outage explains the gap, offer the gap as an "unfiled
+  capability" tranche at the backstop price (1.8× gas SRMC) instead of either
+  re-adding it at SRMC (pre-#343) or refusing it (now). 1 hour in 1,716
+  zone-days of this evaluation; not changed here.
+- **The SEE +9 €/MWh shift (BG/GR/RO/RS bias −4..−7 → +3..+5).** Three days
+  (2025-08-13, 2025-12-10, 2026-05-06), MAE / bias vs settled:
+
+  | zone | cv31 record | pre-sweep re-clear | after #342 | after #343 + cv34 |
+  |---|---|---|---|---|
+  | GR | 21.1 / −0.8 | 22.8 / +4.1 | 22.6 / +3.6 | 22.5 / +5.4 |
+  | BG | 26.3 / +1.8 | 26.7 / +3.9 | 26.9 / +4.3 | 26.8 / +6.7 |
+  | RO | 31.4 / −6.0 | 31.6 / −3.7 | 31.9 / −3.4 | 31.4 / −1.0 |
+  | RS | 26.3 / +8.0 | 25.8 / +10.0 | 26.0 / +10.0 | 27.1 / +11.7 |
+  | HU | 51.8 / −51.8 | 55.2 / −51.4 | 57.2 / −53.4 | 47.9 / −42.3 |
+  | footprint | 30.11 | 30.38 | 30.31 | **28.76** |
+
+  About half of the shift (GR −0.8 → +4.1) is already there when the
+  **pre-sweep code** re-clears the same days on the extract — i.e. it is the
+  **data vintage** (the public extract vs the live database at the time the
+  cv31 record was built: later ENTSO-E revisions, the cv26 Day-ahead
+  preference applied to refreshed ATC rows), not code. #342 adds nothing;
+  #343 + cv34 add the other half (~+2 €/MWh: outage-aware completion, gate-
+  vintage outages) while taking the footprint from 30.38 to 28.76 on the
+  same days. **Caveat for the whole table above: the "cv31 record" column is
+  not a same-data baseline.** The code-only effect, measured where both codes
+  saw identical inputs, is larger than the record comparison suggests
+  (−1.6 on these three days vs −1.0 record→cv34 over 44 days).
 
 **Follow-ups surfaced by the run** (not fixed here):
 1. Per-period HiGHS non-optimal on one hour refuses the whole day (0/1/0/3 of
