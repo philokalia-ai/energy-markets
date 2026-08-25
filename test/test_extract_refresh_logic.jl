@@ -169,14 +169,18 @@ include(joinpath(@__DIR__, "..", "bin", "extract_common.jl"))
                       base_where="zone = ANY(\$1)", base_args=Any[["GR"]],
                       ts_col="date_time_utc", sort_by="zone, date_time_utc")
         n = append_incremental!(con, spec; today=Date(2026, 7, 2), horizon_days=3)
-        @test n == 1
+        # rewindow_days=14 (default): rows from watermark−14d on are deleted and
+        # re-fetched, and the fetch is split per month range (Jun 17.., Jul 1..).
+        # The stub answers every range with the same one row, so 2 inserts.
+        @test n == 2
         @test duckdb_rowcount(con, spec) == 2
         @test duckdb_max_ts(con, spec) == DateTime(2026, 7, 2, 5)
         # The data query carried the naive-UTC watermark + tz conversion.
         data_sql = last(seen_sql)
         @test occursin("date_time_utc > (\$2::timestamp AT TIME ZONE 'UTC')", data_sql)
         @test occursin("\"date_time_utc\" AT TIME ZONE 'UTC' AS \"date_time_utc\"", data_sql)  # projection
-        @test last(seen_args)[2] == "2026-07-01 22:00:00.000"
+        # watermark = (max_ts − rewindow_days) − 1 s, as naive UTC text
+        @test last(seen_args)[2] == "2026-06-16 23:59:59.000"
 
         # Errors cleanly when a source has no registered query function.
         badspec = mkspec(source=:nope, schema="entsoe", table="tiny", ts_col="date_time_utc")

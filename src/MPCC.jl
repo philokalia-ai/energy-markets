@@ -101,8 +101,11 @@ function extract_time_period(order_datetime::DateTime, order_book_periods::Vecto
                     end
                 end
 
-                # Ultimate fallback: return first period of the day
-                return order_book_periods[1]
+                # An order after the book's last slot has no home; folding it
+                # into the first period stacked its MW on hour 0 (bug sweep
+                # 2026-08-25) — refuse instead.
+                error("order timeslot $timeslot is outside the order book's periods " *
+                      "($(first(order_book_periods)) .. $(last(order_book_periods)))")
             end
         else
             # Periods are simple hour numbers (1-24) - use original logic

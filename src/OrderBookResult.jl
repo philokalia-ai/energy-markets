@@ -18,19 +18,15 @@ import ..MPCC: MPCCOrderBook   # the result wraps one
 Parses a timeslot string (e.g., "20240618-0015") to DateTime.
 """
 function parse_timeslot_to_datetime(timeslot::String, day::Date)
-    try
-        if length(timeslot) >= 13
-            hour_str = timeslot[10:11]
-            min_str = timeslot[12:13]
-            hour = parse(Int, hour_str)
-            minute = parse(Int, min_str)
-            return DateTime(day) + Hour(hour) + Minute(minute)
-        end
-    catch
-        # Fallback: return start of day
-        return DateTime(day)
-    end
-    return DateTime(day)
+    # A malformed slot used to be silently mapped to 00:00 (stacking its orders
+    # on midnight) — refuse instead (bug sweep 2026-08-25).
+    length(timeslot) >= 13 ||
+        throw(ArgumentError("timeslot \"$timeslot\" is not yyyymmdd-HHMM"))
+    hour = parse(Int, timeslot[10:11])
+    minute = parse(Int, timeslot[12:13])
+    (0 <= hour <= 23 && 0 <= minute <= 59) ||
+        throw(ArgumentError("timeslot \"$timeslot\" has an invalid time"))
+    return DateTime(day) + Hour(hour) + Minute(minute)
 end
 
 struct AdjustedOrderBookResult

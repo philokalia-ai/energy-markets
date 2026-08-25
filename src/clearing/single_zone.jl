@@ -272,7 +272,8 @@ function generate_energy_prices(bidding_zone::String, date::Date;
                     # Save failed optimization run (only when persisting results —
                     # eval/backtest runs with save_to_db=false must not touch
                     # production run metadata)
-                    save_to_db && save_optimization_run(bidding_zone, date, order_method, model, optimizer, mpcc_result.status;
+                    save_to_db && save_optimization_run(bidding_zone, date, order_method, model,
+                        something(mpcc_result.solver_name, optimizer), mpcc_result.status;
                         solve_time_seconds=solve_time_seconds,
                         num_orders=length(order_book.orders),
                         error_message="MPCC optimization failed with status: $(mpcc_result.status)")
@@ -319,7 +320,8 @@ function generate_energy_prices(bidding_zone::String, date::Date;
                 # Save successful optimization run and get the ID (skipped for
                 # save_to_db=false runs so evals never touch production tables)
                 optimization_run_id = save_to_db ?
-                                      save_optimization_run(bidding_zone, date, order_method, model, optimizer, :optimal;
+                                      save_optimization_run(bidding_zone, date, order_method, model,
+                                          something(mpcc_result.solver_name, optimizer), :optimal;
                                           objective_value=mpcc_result.objective_value,
                                           solve_time_seconds=solve_time_seconds,
                                           num_orders=length(order_book.orders),

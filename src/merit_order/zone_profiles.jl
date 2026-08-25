@@ -376,6 +376,7 @@ const PROVENANCE = Dict{String,Any}(
     "backstop_scarcity_credit" => _PROV("declared", "structural switch: also credit that headroom in the scarcity margin", 17),
     "ref_priced_exports" => _PROV("declared", "structural switch: price retained-border exports at the coupled reference", 17),
     "boundary_book" => _PROV("declared", "structural choice: model an out-of-footprint neighbour as an elastic counterparty", 21),
+    "input_corrections" => _PROV("observed", "winner-input correction series (actuals-target ML solar, D-1-legal) replacing the TSO RES forecast on the opted-in islands (simulations.input_corrections)", 32),
 )
 
 """

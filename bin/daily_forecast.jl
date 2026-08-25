@@ -1273,6 +1273,11 @@ function run_retro()
         println("  ⚠️ ZONES override active ($(join(ZONES, ","))) — testing footprint, not the 39-zone product")
     println("=" ^ 70)
     start_day <= end_day || error("RETRO_START ($start_day) must be ≤ RETRO_ASOF ($end_day)")
+    # A retro row for a not-yet-realized day would later collide with the live
+    # write's UNIQUE key (the live delete clears is_retro=false only) and lose
+    # that day — bound the window to realized days.
+    end_day < Date(now(UTC)) ||
+        error("RETRO_ASOF ($end_day) must be a realized (past) day; today is $(Date(now(UTC)))")
 
     Euphemia.ensure_forecast_tables()
     # Demonstrated-capability ATC fallback ON: for a past day the offered ATC is

@@ -324,8 +324,20 @@ end
 function _ensure_results_attached(con)
     lock(_DUCKDB_LOCK) do
         _RESULTS_ATTACHED[] && return
-        _duckdb_assert_writable()
         path = RESULTS_DB_PATH[]
+        if DUCKDB_READ_ONLY[] && !DUCKDB_RESULTS_WRITABLE[]
+            # A read-only shared process (parallel worker, eval script) may
+            # still READ results — e.g. the pipeline's already-saved check.
+            # Before 2026-08-25 this asserted writability on every read too, so
+            # such a process threw, `pipeline_day_saved` swallowed the error as
+            # "not saved" and re-cleared already-saved days. Attach read-only;
+            # the writers still assert via _duckdb_assert_writable().
+            isfile(path) || error("results DuckDB $(path) does not exist and this " *
+                                  "process is read-only (cannot create it)")
+            DBInterface.execute(con, "ATTACH IF NOT EXISTS '$(path)' AS results_db (READ_ONLY)")
+            _RESULTS_ATTACHED[] = true
+            return
+        end
         dir = dirname(path)
         !isempty(dir) && !isdir(dir) && mkpath(dir)
         # A read-only source connection defaults its ATTACH to read-only too, so

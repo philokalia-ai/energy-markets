@@ -14,7 +14,7 @@
 # cached; locks follow the TTF_PRICE_CACHE pattern.
 const _TYPE_P95_DAY_CACHE = Dict{Tuple{Date,Int},Dict{String,Dict{String,Float64}}}()
 const _HYDRO_AVAIL_DAY_CACHE = Dict{Tuple{Date,Int},Dict{String,Float64}}()
-const _INSTALLED_CAP_CACHE = Ref{Union{Nothing,Dict{String,Dict{String,Float64}}}}(nothing)
+const _INSTALLED_CAP_CACHE = Dict{Date,Dict{String,Dict{String,Float64}}}()   # day -> zone -> type -> MW
 const _RESERVOIR_DAY_CACHE = Dict{Date,Dict{String,Any}}()
 const _FLEET_DATA_LOCK = ReentrantLock()
 
@@ -22,7 +22,7 @@ function clear_fleet_data_caches!()
     lock(_FLEET_DATA_LOCK) do
         empty!(_TYPE_P95_DAY_CACHE)
         empty!(_HYDRO_AVAIL_DAY_CACHE)
-        _INSTALLED_CAP_CACHE[] = nothing
+        empty!(_INSTALLED_CAP_CACHE)
         empty!(_RESERVOIR_DAY_CACHE)
     end
     return nothing
@@ -193,12 +193,14 @@ excludes genuinely-decommissioned capacity with stale COMMISSIONED status
 The registry is slowly-changing reference data (same ex-ante treatment as
 `get_generators`' use of it).
 """
-function get_installed_capacity_by_type(bidding_zone::String)
-    # Registry snapshot cached per process (the query is day-independent, so
-    # this returns exactly what per-call queries would — modulo an ETL write
-    # landing mid-process, same exposure as any long backfill already had).
+function get_installed_capacity_by_type(bidding_zone::String, day::Date)
+    # Registry snapshot cached per process AND day. Day-dependent since
+    # 2026-08-25: units whose validity starts AFTER `day` used to be counted
+    # (Flamanville 3 in FR's 2023 nuclear denominator; a CZ pumped-storage unit
+    # with valid_from 2027 counted today) — lookahead in the :installed fleet
+    # truth and the FR nuclear availability share.
     cached = lock(_FLEET_DATA_LOCK) do
-        _INSTALLED_CAP_CACHE[]
+        get(_INSTALLED_CAP_CACHE, day, nothing)
     end
     if cached === nothing
         df_all = sql2df_with_retry(
@@ -211,6 +213,7 @@ function get_installed_capacity_by_type(bidding_zone::String)
               WHERE production_unit_status = 'COMMISSIONED'
                 AND generation_unit_status = 'COMMISSIONED'
                 AND generation_unit_installed_capacity_mw > 0
+                AND (valid_from IS NULL OR DATE(valid_from) <= \$1)
                 -- cv25: same registry sanity bound as get_generators (cv24's
                 -- MAX_PLAUSIBLE_UNIT_MW). This reader feeds the :installed
                 -- fleet-truth denominators and FR's nuclear availability share;
@@ -224,7 +227,7 @@ function get_installed_capacity_by_type(bidding_zone::String)
                        generation_unit_installed_capacity_mw DESC
             ) s
             GROUP BY area_map_code, generation_unit_type
-            """, [])
+            """, [day])
         allz = Dict{String,Dict{String,Float64}}()
         for row in eachrow(df_all)
             (ismissing(row.t) || ismissing(row.mw) || ismissing(row.z)) && continue
@@ -233,7 +236,7 @@ function get_installed_capacity_by_type(bidding_zone::String)
             d[k] = get(d, k, 0.0) + Float64(row.mw)
         end
         lock(_FLEET_DATA_LOCK) do
-            _INSTALLED_CAP_CACHE[] = allz
+            _INSTALLED_CAP_CACHE[day] = allz
         end
         cached = allz
     end
@@ -322,7 +325,10 @@ function get_reservoir_dryness(bidding_zone::String, day::Date)
     # differs from BETWEEN at ISO weeks 1/2/52/53 (Dec/Jan) — invisible to the
     # mid-year confirm/guard windows; see docs/experiments/cv22.md.
     if isempty(get(ENV, "EUPHEMIA_DISABLE_CV22", ""))
-        weeks = sort(unique(Int[mod1(iso_week + d, 52) for d in -2:2]))
+        # ISO years have 52 OR 53 weeks; wrap on both moduli so week 53 (2015,
+        # 2020, 2026) is neither dropped nor left without neighbours.
+        weeks = sort(unique(vcat(Int[mod1(iso_week + d, 52) for d in -2:2],
+                                 Int[mod1(iso_week + d, 53) for d in -2:2])))
         norm = sql2df_with_retry(
             """
             SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY stored_energy_mwh) AS med

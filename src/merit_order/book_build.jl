@@ -121,12 +121,26 @@ function _true_up_fleet(generators::Vector{Generator}, bidding_zone::String,
     fleet_truth_mode = _effective_fleet_truth_mode(profile)
     if fleet_completion && fleet_truth_mode != :p95
         src = fleet_truth_mode == :installed ?
-              get_installed_capacity_by_type(bidding_zone) :
+              get_installed_capacity_by_type(bidding_zone, day) :
               Dict{String,Float64}(normalize_fuel_type_name(k) => v
                   for (k, v) in get_type_output_p95(bidding_zone, day;
                                                     lookback_days=365))
         for (t, cap) in src
             get(type_p95, t, 0.0) > 100.0 && (fleet_truth_target[t] = cap)
+        end
+    end
+    # Capacity the outage filter removed today, per type (bug sweep 2026-08-25):
+    # the completion target (trailing-30d p95 or installed) was measured with
+    # those units RUNNING, so a fresh >100 MW outage used to be re-added as an
+    # AGG unit at SRMC until it had persisted ~30 days — the outage filter was
+    # silently undone. An outage that explains the gap is not a gap.
+    removed_by_outage = Dict{String,Float64}()
+    if fleet_completion
+        unfiltered = get_generators(bidding_zone, day; exclude_unavailable=false)
+        for (ptype, _) in type_p95
+            f_all = sum((g.p_max for g in unfiltered if g.fuel_type == Symbol(ptype)); init=0.0)
+            f_avail = sum((g.p_max for g in generators if g.fuel_type == Symbol(ptype)); init=0.0)
+            removed_by_outage[ptype] = max(0.0, f_all - f_avail)
         end
     end
     if fleet_completion
@@ -135,7 +149,12 @@ function _true_up_fleet(generators::Vector{Generator}, bidding_zone::String,
             fleet = sum((g.p_max for g in generators
                          if g.fuel_type == Symbol(ptype)); init=0.0)
             target = max(p95, get(fleet_truth_target, ptype, 0.0))
-            gap = target - fleet
+            outaged = get(removed_by_outage, ptype, 0.0)
+            gap = target - fleet - outaged
+            if outaged > 0.0 && target - fleet > 100.0 && gap <= 100.0
+                println("  ⏸  Fleet completion: $ptype gap $(round(Int, target - fleet)) MW " *
+                        "explained by $(round(Int, outaged)) MW on outage — not re-added")
+            end
             gap > 100.0 || continue
             push!(generators, Generator(
                 "AGG-$(bidding_zone)-$(replace(ptype, " " => "_"))",
@@ -278,14 +297,24 @@ function _input_correction_deltas(zone::String, day::Date)
                        c.corrected_mw - f.mw AS delta
                 FROM simulations.input_corrections c
                 JOIN (
-                    SELECT CASE WHEN production_type LIKE 'Solar%' THEN 'solar'
-                                ELSE 'wind' END AS tgt,
-                           date_trunc('hour', date_time_utc) AS h,
-                           AVG(day_ahead_generation_forecast_mw) AS mw
-                    FROM entsoe.generation_forecasts_for_wind_and_solar
-                    WHERE area_map_code = \$1 AND area_type_code LIKE 'BZN%'
-                      AND date_time_utc >= (\$2::date::timestamp AT TIME ZONE 'UTC')
-                      AND date_time_utc < ((\$2::date + 1)::timestamp AT TIME ZONE 'UTC')
+                    -- hourly mean PER production type, then SUM over the types
+                    -- of the target: the emitter's corrected_mw is the SUM over
+                    -- Wind Onshore + Offshore, so an AVG across them here added
+                    -- ~half the total wind as a phantom delta (bug sweep
+                    -- 2026-08-25; latent until DK1's package is enabled).
+                    SELECT tgt, h, SUM(mw) AS mw
+                    FROM (
+                        SELECT CASE WHEN production_type LIKE 'Solar%' THEN 'solar'
+                                    ELSE 'wind' END AS tgt,
+                               production_type,
+                               date_trunc('hour', date_time_utc) AS h,
+                               AVG(day_ahead_generation_forecast_mw) AS mw
+                        FROM entsoe.generation_forecasts_for_wind_and_solar
+                        WHERE area_map_code = \$1 AND area_type_code LIKE 'BZN%'
+                          AND date_time_utc >= (\$2::date::timestamp AT TIME ZONE 'UTC')
+                          AND date_time_utc < ((\$2::date + 1)::timestamp AT TIME ZONE 'UTC')
+                        GROUP BY 1, 2, 3
+                    ) t
                     GROUP BY 1, 2
                 ) f ON f.tgt = c.target AND f.h = c.date_time_utc
                 WHERE c.bidding_zone = \$1
@@ -587,7 +616,7 @@ back to the fixed `anchor_share`).
 """
 function _nuclear_avail_frac(bidding_zone::String, day::Date)
     p95 = get(get_type_output_p95(bidding_zone, day), "Nuclear", 0.0)
-    inst = get(get_installed_capacity_by_type(bidding_zone), "Nuclear", 0.0)
+    inst = get(get_installed_capacity_by_type(bidding_zone, day), "Nuclear", 0.0)
     (p95 > 0.0 && inst > 0.0) || return nothing
     return clamp(p95 / inst, 0.0, 1.0)
 end

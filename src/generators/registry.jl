@@ -149,6 +149,7 @@ function get_generators(map_code::String, day::Dates.Date;
         get(_GENERATOR_MEMO, memo_key, nothing)
     end
     cached !== nothing && return copy(cached)
+    _FUEL_LOOKUP_FAILED[] = false
 
     # Per-zone outage arrays, sliced from the once-per-day all-zone cache and
     # fed to the query below via unnest (replacing the old zone-independent
@@ -415,9 +416,15 @@ function get_generators(map_code::String, day::Dates.Date;
         end
     end
 
-    # Memoize the canonical result and hand callers a copy (they mutate it).
-    lock(_GENERATOR_MEMO_LOCK) do
-        _GENERATOR_MEMO[memo_key] = generators
+    # Memoize the canonical result and hand callers a copy (they mutate it) —
+    # unless a fuel-price lookup failed during this build (fallback costs must
+    # not be pinned for the process lifetime; the next call retries the DB).
+    if _FUEL_LOOKUP_FAILED[]
+        @warn "get_generators($map_code, $day): fuel-price lookup failed during the build — result NOT memoized"
+    else
+        lock(_GENERATOR_MEMO_LOCK) do
+            _GENERATOR_MEMO[memo_key] = generators
+        end
     end
     return copy(generators)
 end

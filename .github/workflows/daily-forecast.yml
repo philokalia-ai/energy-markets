@@ -157,7 +157,9 @@ jobs:
             # 12:00 CET auction. Day-ahead ATC for tomorrow is not yet published,
             # so degrade the network to the demonstrated-capability fallback.
             MAX_LEAD_DAYS="7"
-            FORCE_RERUN="false"
+            # a manual pregate dispatch may still ask for a rewrite (scheduled
+            # runs have no inputs -> false)
+            FORCE_RERUN="${{ github.event.inputs.force_rerun || 'false' }}"
             INPUT_MODE="weather"
             EUPHEMIA_FORECAST_PREGATE="true"
           else
