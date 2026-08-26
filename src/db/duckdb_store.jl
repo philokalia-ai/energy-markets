@@ -394,8 +394,11 @@ function _results_exec(sql::AbstractString, params=[])
     end
 end
 
-# Bulk-insert a DataFrame into results_db.simulations.<table> (columns must match
-# the table definition order). Registers the frame and INSERT ... SELECT — fast.
+# Bulk-insert a DataFrame into results_db.simulations.<table>. Registers the
+# frame and INSERT BY NAME — column-order-proof: a results DB whose table
+# predates a migration (e.g. transmission_flows grew clearing_mode at the END)
+# has a different physical column order than a freshly created one, and the
+# positional `SELECT *` used to land strings on INT columns (2026-08-26).
 function _results_insert_df(df::DataFrame, table::AbstractString)
     isempty(df) && return 0
     con = _duckdb_connection()
@@ -412,7 +415,7 @@ function _results_insert_df(df::DataFrame, table::AbstractString)
         DuckDB.register_data_frame(con, df, view)
         try
             DBInterface.execute(con,
-                "INSERT INTO results_db.simulations.$table SELECT * FROM $view")
+                "INSERT INTO results_db.simulations.$table BY NAME SELECT * FROM $view")
         finally
             DuckDB.unregister_data_frame(con, view)
             DBInterface.execute(con, "USE \"$(prev_db)\"")
