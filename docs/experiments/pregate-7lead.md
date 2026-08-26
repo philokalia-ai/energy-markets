@@ -127,6 +127,15 @@ pooled — `forecast_scores` is keyed by `is_retro` and the summary reports
 persistence copies and carry `input_mode='entsoe_persist'`. Making the
 non-weather inputs vintage-aware is a separate project, not started.
 
+### 2c. JAO-aware lead-1 freeze (2026-08-26)
+
+Lead 1 is no longer written by the 06:30 UTC run: JAO publishes tomorrow's
+flow-based capacities at 10:30 CET on D-1, so the 06:30 run does leads 2..7
+(`MIN_LEAD_DAYS=2`) and lead 1 is frozen at 09:05 UTC (`EUPHEMIA_REQUIRE_JAO`,
+skips if JAO is not out yet) or 10:05 UTC (always). Both are before the 12:00
+CET gate (10:00 UTC summer / 11:00 UTC winter). See
+`docs/experiments/jao-maxbex-atc.md`.
+
 ## 3. Retro labeling contract (honesty-critical, FROZEN)
 
 The retro writer has **two modes** (owner amendment, Aug 2026). Both keep the

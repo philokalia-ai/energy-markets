@@ -263,3 +263,28 @@ cv34 (off)   footprint MAE  26.24  corr 0.680  cap-hours    0  collapse hit 1099
 **cv35** and backfill on Gurobi (HiGHS segfaults on the 108-link network);
 next physics step is the exact hub net-position dual in the MPCC, then the
 PTDF/RAM domain.
+
+## Is the JAO data ex-ante? (owner question, 2026-08-26)
+
+- **The values, yes.** They are the capacity-calculation output (limits), not a
+  market result. The Core publication tool handbook gives **10:30 CET on D-1**
+  for max bilateral exchanges and min/max net positions (the final flow-based
+  computation); tomorrow's Core values were on the API at 09:26 UTC on
+  2026-08-26 and the Nordic rows carry `lastModifiedOn` = 07:34 UTC that day
+  (09:34 CEST) — 1.5–2.5 h before the 12:00 CET gate.
+- **History is "as stored now".** The API serves the latest version of a day;
+  Nordic rows carry `lastModifiedOn` (now stored as `last_modified_utc`), Core
+  rows carry no timestamp, so a post-gate re-publication of a Core day cannot
+  be detected retroactively. The record/backfill use the stored values with
+  that caveat, exactly like ENTSO-E outages before Oct 2025.
+- **From now on the vintage is provable by our own fetch time.** The JAO ETL
+  runs at 08:55 and 09:55 UTC (after Core's summer / winter publication, before
+  the summer / winter gate), so every live day's `fetched_at` precedes the gate.
+- **The live pre-gate product now uses it.** The 06:30 UTC run produces leads
+  2..7 (`MIN_LEAD_DAYS=2`; JAO has nothing beyond D+1 anyway); **lead 1 is
+  frozen by the JAO-aware run** — 09:05 UTC with `EUPHEMIA_REQUIRE_JAO=true`
+  (skips the day if JAO has not published: the winter case) and 10:05 UTC
+  without it (always produces; JAO if present). Vintages stay immutable: the
+  first run to write the slice wins. ceres workflow `jao_pregate_forecast.yaml`.
+- **Solver.** The JAO network has 108 links and HiGHS segfaults on it (5 of 12
+  days in the A/B); the lead-1 pre-gate run uses Gurobi.
