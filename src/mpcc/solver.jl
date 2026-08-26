@@ -389,6 +389,37 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
                     end
                 end
 
+                # Flow-based hub net-position limits (JAO maxNetPos, 2026-08-26):
+                # min <= exports - imports over the CCR's internal borders <= max.
+                # Without this, the bilateral maxima (maxBEX) act simultaneously
+                # and a hub exports at every border's max at once (FR modelled at
+                # 16 GW net export vs a 5.4 GW max net position).
+                if !isempty(tc.net_position)
+                    n_np = 0
+                    for t in order_book.periods
+                        lookup_period = t
+                        if length(t) > 5 && contains(t, "-")
+                            lookup_period = string(parse(Int, t[10:11]) + 1)
+                        end
+                        for ((ccr, hub, per), (mn, mx)) in tc.net_position
+                            per == lookup_period || continue
+                            prs = get(tc.ccr_pairs, ccr, Set{Tuple{String,String}}())
+                            terms = Any[]
+                            for pair in zone_pairs
+                                if pair[1] == hub && ((pair[1], pair[2]) in prs || (pair[2], pair[1]) in prs)
+                                    push!(terms, flow[pair, t])
+                                elseif pair[2] == hub && ((pair[1], pair[2]) in prs || (pair[2], pair[1]) in prs)
+                                    push!(terms, -flow[pair, t])
+                                end
+                            end
+                            isempty(terms) && continue
+                            @constraint(model, mn <= sum(terms) <= mx)
+                            n_np += 1
+                        end
+                    end
+                    n_np > 0 && verbose && println("   🧭 net-position limits: $n_np hub-period constraints")
+                end
+
                 # Market-coupling price condition. Flows alone only move
                 # energy; without a price-side condition zone prices are
                 # completely uncoupled and the solver may publish arbitrary

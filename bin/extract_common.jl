@@ -279,6 +279,9 @@ function entsoe_table_specs(zones::Vector{String};
     push!(specs, mkspec(schema="jao", table="max_exchanges",
         ts_col="date_time_utc", window=(aux_back, end_excl),
         sort_by="ccr, border_from, border_to, date_time_utc"))
+    push!(specs, mkspec(schema="jao", table="hub_net_positions",
+        ts_col="date_time_utc", window=(aux_back, end_excl),
+        sort_by="ccr, hub, date_time_utc"))
 
     push!(specs, mkspec(schema="entsoe", table="physical_flows",
         base_where="(regexp_replace(in_area_map_code, '_IPS\$', '') = ANY(\$1) OR regexp_replace(out_area_map_code, '_IPS\$', '') = ANY(\$1))",

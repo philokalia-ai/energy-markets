@@ -131,7 +131,16 @@ struct TransferCapacity
     capacity_forward::Dict{Tuple{String,String,String},Float64}  # [source, sink, period] → MW
     # Negative capacity: from sink_zone → source_zone (stored as positive values)
     capacity_backward::Dict{Tuple{String,String,String},Float64} # [source, sink, period] → MW
+    # Flow-based hub limits (JAO maxNetPos, 2026-08-26): (ccr, hub, period) =>
+    # (min, max) NET POSITION over the CCR's internal borders — the constraint
+    # that keeps bilateral maxima (maxBEX) from being used simultaneously.
+    net_position::Dict{Tuple{String,String,String},Tuple{Float64,Float64}}
+    # ccr => directed pairs JAO publishes for it (its internal borders)
+    ccr_pairs::Dict{String,Set{Tuple{String,String}}}
 end
+TransferCapacity(z, p, f, b) = TransferCapacity(z, p, f, b,
+    Dict{Tuple{String,String,String},Tuple{Float64,Float64}}(),
+    Dict{String,Set{Tuple{String,String}}}())
 
 """
     add_transfer_capacity_constraints!(model::Model, transfer_capacity::TransferCapacity, FLOW)
@@ -386,6 +395,8 @@ const _JAO_VIRTUAL_HUBS = Set(["Baltic", "BigHub", "COBRA", "NorNed", "SwePol", 
 const _JAO_NORDIC_HUBS = Set(["NO1", "NO2", "NO3", "NO4", "NO5", "SE1", "SE2", "SE3", "SE4",
                               "FI", "DK1", "DK2", "EE", "LT", "LV"])
 const _JAO_WARNED = Ref(false)
+const _JAO_CCR_PAIRS = Dict{Date,Dict{String,Set{Tuple{String,String}}}}()
+const _JAO_NP_CACHE = Dict{Date,Dict{Tuple{String,String,Int},Tuple{Float64,Float64}}}()
 
 jao_atc_enabled() = isempty(get(ENV, "EUPHEMIA_DISABLE_JAO_ATC", ""))
 
@@ -426,6 +437,10 @@ function jao_maxbex(date::Date)
         (s in _JAO_VIRTUAL_HUBS || d in _JAO_VIRTUAL_HUBS || s == d) && continue
         get!(per_ccr, String(r.ccr), Dict{Tuple{String,String,Int},Float64}())[(s, d, Int(r.tp))] = Float64(r.mw)
     end
+    lock(_JAO_DAY_CACHE_LOCK) do
+        _JAO_CCR_PAIRS[date] = Dict(c => Set{Tuple{String,String}}((s, d) for (s, d, _) in keys(m))
+                                    for (c, m) in per_ccr)
+    end
     core = get(per_ccr, "core", Dict{Tuple{String,String,Int},Float64}())
     nordic = get(per_ccr, "nordic", Dict{Tuple{String,String,Int},Float64}())
     for (k, v) in core
@@ -437,6 +452,51 @@ function jao_maxbex(date::Date)
     end
     isempty(df) || lock(_JAO_DAY_CACHE_LOCK) do
         _JAO_DAY_CACHE[date] = out
+    end
+    return out
+end
+
+"ccr => directed pairs JAO publishes for `date`."
+function jao_ccr_pairs(date::Date)
+    jao_maxbex(date)   # populates the cache
+    lock(_JAO_DAY_CACHE_LOCK) do
+        get(_JAO_CCR_PAIRS, date, Dict{String,Set{Tuple{String,String}}}())
+    end
+end
+
+"""
+    jao_net_positions(date) -> Dict{(ccr, hub, time_period), (min_np, max_np)}
+
+Per-hub min/max net position (MW, export positive) inside each CCR's
+flow-based domain, hourly mean. Virtual/interconnector hubs dropped, DE => DE_LU.
+"""
+function jao_net_positions(date::Date)
+    lock(_JAO_DAY_CACHE_LOCK) do
+        haskey(_JAO_NP_CACHE, date) && return _JAO_NP_CACHE[date]
+    end
+    out = Dict{Tuple{String,String,Int},Tuple{Float64,Float64}}()
+    df = try
+        safe_sql2df("""
+            SELECT ccr, hub,
+                   (EXTRACT(HOUR FROM date_time_utc AT TIME ZONE 'UTC') + 1)::int AS tp,
+                   AVG(min_np_mw)::float8 AS mn, AVG(max_np_mw)::float8 AS mx
+            FROM jao.hub_net_positions
+            WHERE date_time_utc >= (\$1::date::timestamp AT TIME ZONE 'UTC')
+              AND date_time_utc < ((\$1::date + 1)::timestamp AT TIME ZONE 'UTC')
+            GROUP BY 1, 2, 3
+            """, [date])
+    catch e
+        @warn "jao.hub_net_positions not readable — net-position limits disabled for $date: $(sprint(showerror, e))"
+        DataFrame()
+    end
+    for r in eachrow(df)
+        hub = get(_JAO_HUB_MAP, String(r.hub), String(r.hub))
+        (occursin("_", hub) || hub in _JAO_VIRTUAL_HUBS) && continue   # virtual / interconnector hubs
+        (ismissing(r.mn) || ismissing(r.mx)) && continue
+        out[(String(r.ccr), hub, Int(r.tp))] = (Float64(r.mn), Float64(r.mx))
+    end
+    isempty(df) || lock(_JAO_DAY_CACHE_LOCK) do
+        _JAO_NP_CACHE[date] = out
     end
     return out
 end
@@ -996,11 +1056,29 @@ function build_transfer_capacity_from_dataframe(df::DataFrame)
     println("   ↔️  Bidirectional links: $bidirectional_count")
     println("   ➡️  Unidirectional links: $unidirectional_count")
 
+    # Flow-based hub limits (JAO net positions) for footprint hubs, keyed by the
+    # period strings this structure uses ("1".."24").
+    np = Dict{Tuple{String,String,String},Tuple{Float64,Float64}}()
+    ccr_pairs = Dict{String,Set{Tuple{String,String}}}()
+    if jao_atc_enabled() && isempty(get(ENV, "EUPHEMIA_DISABLE_JAO_NETPOS", ""))
+        zset = Set(zones_vec)
+        for ((ccr, hub, tp), lim) in jao_net_positions(date)
+            hub in zset || continue
+            np[(ccr, hub, string(tp))] = lim
+        end
+        for (ccr, prs) in jao_ccr_pairs(date)
+            ccr_pairs[ccr] = Set{Tuple{String,String}}((s, d) for (s, d) in prs if s in zset && d in zset)
+        end
+        isempty(np) || println("   🧭 JAO net positions: $(length(np)) hub-hours bounded " *
+                                 "($(length(Set(k[2] for k in keys(np)))) hubs)")
+    end
     return TransferCapacity(
         zones_vec,
         periods_vec,
         capacity_forward,
-        capacity_backward
+        capacity_backward,
+        np,
+        ccr_pairs
     )
 end
 
