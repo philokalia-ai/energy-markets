@@ -316,6 +316,19 @@ function entsoe_table_specs(zones::Vector{String};
         casts=Dict("start_outage_utc" => "TIMESTAMP", "end_outage_utc" => "TIMESTAMP"),
         refresh=:replace))
 
+    # Transmission-grid unavailability (10.1.A/B) — consumed since cv35 by
+    # Network.tx_outage_caps (per-border NTC caps, gate-vintage versioning).
+    # Versioned/mutable like the generation outages -> wholesale :replace,
+    # filtered to outages overlapping the extract window. No zone filter (border
+    # map codes; modest after the overlap filter). Text timestamps cast.
+    push!(specs, mkspec(schema="entsoe", table="unavailability_in_the_transmission_grid",
+        base_where="start_outage_utc IS NOT NULL AND end_outage_utc IS NOT NULL AND start_outage_utc::timestamp <= \$1::date::timestamp AND end_outage_utc::timestamp >= \$2::date::timestamp",
+        base_args=Any[end_date, back400],
+        sort_by="out_area_map_code, in_area_map_code, start_outage_utc",
+        casts=Dict("start_outage_utc" => "TIMESTAMP", "end_outage_utc" => "TIMESTAMP",
+                   "version_publication_timestamp_utc" => "TIMESTAMP"),
+        refresh=:replace))
+
     push!(specs, mkspec(schema="entsoe", table="actual_generation_output_per_generation_unit",
         base_where="generation_unit_code IN ($gen_codes)", base_args=Any[zones],
         ts_col="date_time_utc", window=(agen_back, end_excl),
