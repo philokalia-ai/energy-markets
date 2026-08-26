@@ -1175,7 +1175,51 @@ const ZONE_PROFILES = Dict{String,ZoneProfile}(
 
 Profile for a zone, defaulting to `SEE_PROFILE` for any zone not in the registry.
 """
+# Runtime profile overrides for calibration sweeps (2026-08-26). Worker-safe
+# via ENV: EUPHEMIA_PROFILE_OVERRIDES="HU,SK,SI:peak_kappa=1.8;scarcity_kappa=4|IT-NORTH:peak_kappa=0.8"
+# — zone lists separated by '|', fields by ';', applied LAST in get_zone_profile
+# so every other switch composes. Numeric, Bool and Symbol fields supported.
+const _PROFILE_OVERRIDES = Ref{Union{Nothing,Dict{String,Vector{Pair{Symbol,Any}}}}}(nothing)
+const _PROFILE_OVERRIDES_RAW = Ref{String}("")
+function _profile_overrides()
+    raw = get(ENV, "EUPHEMIA_PROFILE_OVERRIDES", "")
+    if _PROFILE_OVERRIDES[] === nothing || _PROFILE_OVERRIDES_RAW[] != raw
+        d = Dict{String,Vector{Pair{Symbol,Any}}}()
+        for grp in split(raw, '|')
+            isempty(strip(grp)) && continue
+            zs, kv = split(grp, ':'; limit=2)
+            pairs = Pair{Symbol,Any}[]
+            for tok in split(kv, ';')
+                isempty(strip(tok)) && continue
+                k, v = split(tok, '='; limit=2)
+                f = Symbol(strip(k)); ft = fieldtype(ZoneProfile, f)
+                val = ft == Bool ? (lowercase(strip(v)) in ("true", "1")) :
+                      ft == Symbol ? Symbol(strip(v)) :
+                      ft <: Real ? parse(Float64, strip(v)) :
+                      error("EUPHEMIA_PROFILE_OVERRIDES: unsupported field $f::$ft")
+                push!(pairs, f => val)
+            end
+            for z in split(zs, ',')
+                d[String(strip(z))] = pairs
+            end
+        end
+        _PROFILE_OVERRIDES[] = d; _PROFILE_OVERRIDES_RAW[] = raw
+    end
+    return _PROFILE_OVERRIDES[]
+end
+
 function get_zone_profile(zone::AbstractString)
+    p = _get_zone_profile_base(zone)
+    ov = _profile_overrides()
+    if !isempty(ov) && haskey(ov, String(zone))
+        for (f, v) in ov[String(zone)]
+            p = with_profile(p; (f => v,)...)
+        end
+    end
+    return p
+end
+
+function _get_zone_profile_base(zone::AbstractString)
     p = get(ZONE_PROFILES, String(zone), SEE_PROFILE)
     # cv23 interior-Norway kill-switch (byte-identity guard + attribution A/Bs):
     # revert the cv23 import_backstop on ONLY the cv23 NO zones, so a disabled
