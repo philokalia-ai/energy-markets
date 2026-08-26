@@ -188,7 +188,17 @@
 # at the gate); the entsoe
 # track's persistence leads relabelled input_mode='entsoe_persist'; forecast
 # scores keyed by is_retro. The collapse package moves to cv35.
-const ENERGY_PRICES_CODE_VERSION = 34
+# v35 = the flow-based capacity data (August 2026, docs/experiments/
+# jao-maxbex-atc.md): JAO max bilateral exchanges as the ATC for every
+# Day-ahead-free border-hour (Core since 2022-06, Nordic since 2024-10; the
+# borders the cv15/cv17 drops removed become endogenous where JAO covers them),
+# each hub's simultaneous bilateral maxima scaled to its JAO min/max net
+# position, and transmission-grid outage messages capping border-hours at the
+# TSO's remaining NTC. 52-Wednesday A/B on live Postgres: cv34 26.24/0.680 ->
+# 23.40/0.761 (Core cluster 35.1 -> 23.1, Nordic 29.2 -> 23.1); collapse
+# recall 43% -> 14% is the open cost. Switches EUPHEMIA_DISABLE_JAO_ATC /
+# _JAO_NETPOS / _TX_OUTAGE_ATC. Backfill on Gurobi.
+const ENERGY_PRICES_CODE_VERSION = 35
 
 # Pool size: env-tunable (EUPHEMIA_PG_POOL) because the threaded book build
 # runs up to nzones concurrent queries — 5 connections cap the parallelism

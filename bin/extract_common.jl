@@ -272,6 +272,17 @@ function entsoe_table_specs(zones::Vector{String};
             sort_by="out_map_code, in_map_code, date_time_utc"))
     end
 
+    # JAO flow-based max bilateral exchanges (all hubs — the table is small,
+    # ~3.6k Core + 6k Nordic rows/day; hub codes differ from map codes, e.g.
+    # DE for DE_LU, so no zone filter). Absent in extracts built before
+    # 2026-08-26 — Network.jao_maxbex degrades to the old fallbacks then.
+    push!(specs, mkspec(schema="jao", table="max_exchanges",
+        ts_col="date_time_utc", window=(aux_back, end_excl),
+        sort_by="ccr, border_from, border_to, date_time_utc"))
+    push!(specs, mkspec(schema="jao", table="hub_net_positions",
+        ts_col="date_time_utc", window=(aux_back, end_excl),
+        sort_by="ccr, hub, date_time_utc"))
+
     push!(specs, mkspec(schema="entsoe", table="physical_flows",
         base_where="(regexp_replace(in_area_map_code, '_IPS\$', '') = ANY(\$1) OR regexp_replace(out_area_map_code, '_IPS\$', '') = ANY(\$1))",
         base_args=Any[zones],
