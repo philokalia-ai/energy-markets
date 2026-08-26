@@ -107,6 +107,16 @@ const INPUT_MODE = let m = lowercase(get(ENV, "INPUT_MODE", "entsoe"))
     m
 end
 const MAX_LEAD_DAYS = parse(Int, get(ENV, "MAX_LEAD_DAYS", "7"))
+# JAO-aware pre-gate schedule (2026-08-26, docs/experiments/jao-maxbex-atc.md):
+# JAO publishes tomorrow's flow-based capacities at 10:30 CET on D-1 (08:30 /
+# 09:30 UTC), 1.5 h before the 12:00 CET gate. The 06:30 UTC run therefore
+# produces leads 2..7 only (MIN_LEAD_DAYS=2) and lead 1 is frozen by a later
+# run that has JAO: 09:05 UTC with EUPHEMIA_REQUIRE_JAO=true (skips the day if
+# JAO has not published yet — the winter case) and 10:05 UTC without it (always
+# produces, JAO if present). Vintages stay immutable: whichever run writes
+# first wins and the other finds the slice present.
+const MIN_LEAD_DAYS = parse(Int, get(ENV, "MIN_LEAD_DAYS", "1"))
+const REQUIRE_JAO = lowercase(get(ENV, "EUPHEMIA_REQUIRE_JAO", "false")) == "true"
 const FORCE_RERUN = lowercase(get(ENV, "FORCE_RERUN", "false")) == "true"
 const SKIP_CLEAR = lowercase(get(ENV, "SKIP_CLEAR", "false")) == "true"
 # Per-zone eligibility fill on the entsoe track: when a zone's ENTSO-E 6.1.B
@@ -909,7 +919,7 @@ function main()
     # ALREADY-BEGUN day first in the plan, the writer's begun-hours guard
     # (correctly) errored, and all three workflow attempts died on that poison
     # slice before ever reaching the real leads — the day's product was lost.
-    first_candidate = max(latest_actual + Day(1), today_athens + Day(1))
+    first_candidate = max(latest_actual + Day(1), today_athens + Day(MIN_LEAD_DAYS))
     latest_actual + Day(1) < first_candidate &&
         println("Begun-day guard: raising candidate start $(latest_actual + Day(1)) → " *
                 "$first_candidate (delivery windows already begun are never planned)")
@@ -1122,6 +1132,23 @@ function main()
         load_hours = day_load_hours[day]
         res_present = day_res_present[day]
         atc_rows = atc_row_count(w0, w1, ZONES)
+        if REQUIRE_JAO
+            n_jao = try
+                Int(Euphemia.sql2df_with_retry("""
+                    SELECT COUNT(*) AS n FROM jao.max_exchanges
+                    WHERE date_time_utc >= (\$1::timestamp AT TIME ZONE 'UTC')
+                      AND date_time_utc < (\$2::timestamp AT TIME ZONE 'UTC')
+                    """, [w0, w1]).n[1])
+            catch
+                0
+            end
+            if n_jao == 0
+                println("  ⏭  EUPHEMIA_REQUIRE_JAO: no JAO flow-based capacities for $day yet — " *
+                        "skipping (a later run without the requirement will produce the slice)")
+                continue
+            end
+            println("  🧭 JAO flow-based capacities present for $day ($n_jao rows)")
+        end
         # PRE-GATE: tomorrow's Day-ahead ATC is not yet published, so the gate
         # must not block on it — the demonstrated-capability fallback supplies
         # the borders. Treat ATC as present (the network build backstops it).

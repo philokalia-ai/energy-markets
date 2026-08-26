@@ -157,6 +157,9 @@ jobs:
             # 12:00 CET auction. Day-ahead ATC for tomorrow is not yet published,
             # so degrade the network to the demonstrated-capability fallback.
             MAX_LEAD_DAYS="7"
+            # Lead 1 is frozen by the JAO-aware runs in ceres (09:05 / 10:05
+            # UTC, after JAO's 10:30 CET publication); this run does leads 2..7.
+            MIN_LEAD_DAYS="2"
             # a manual pregate dispatch may still ask for a rewrite (scheduled
             # runs have no inputs -> false)
             FORCE_RERUN="${{ github.event.inputs.force_rerun || 'false' }}"
@@ -177,7 +180,7 @@ jobs:
           echo "📅 Max lead days: $MAX_LEAD_DAYS   🛰️ input_mode: $INPUT_MODE   🌅 pre-gate: $EUPHEMIA_FORECAST_PREGATE"
           echo "🔄 Force rerun: $FORCE_RERUN"
 
-          export OPTIMIZER MAX_LEAD_DAYS FORCE_RERUN SKIP_CLEAR INPUT_MODE EUPHEMIA_FORECAST_PREGATE
+          export OPTIMIZER MAX_LEAD_DAYS MIN_LEAD_DAYS FORCE_RERUN SKIP_CLEAR INPUT_MODE EUPHEMIA_FORECAST_PREGATE
 
           # Crash-retry (issue #182: HiGHS segfaults ~3-4% of decomposed
           # day-solves). Forecast slices are no-clobber, so a retry skips
