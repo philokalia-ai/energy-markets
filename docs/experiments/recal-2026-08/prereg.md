@@ -145,3 +145,47 @@ score once on Set B and promote to the cv36 profile default.
 unsigned; the run shows it must be signed (worse by >1.0), because the IT
 sub-zones changed by >1.0 in the *improving* direction. Only CH is a real
 breach (worse). Corrected here for the next arm.
+
+
+## Arms 2-3 — bracketing the IT peak knob (Set A)
+
+| arm | IT-N/CN peak_kappa/tsm | IT-N bias | IT-N peak | IT-N MAE | CH dMAE | footprint |
+|---|---|---|---|---|---|---|
+| base | 1.2 / 1.2 | +12 | +31 | 24.5 | — | 23.09 |
+| calA_v1 (all 11) | 0.8 / 1.1 | −13 | −10 | 18.0 | +1.9 | 22.67 |
+| calA_v2 (IT only) | 1.0 / 1.15 | −10 | −7 | 18.3 | +1.5 | 22.53 |
+| calA_v3 (IT only) | 1.1 / 1.18 | +11 | +31 | 24.2 | −0.1 | 23.05 |
+
+**Definitive finding: the IT-NORTH/CNORTH peak uplift is a STEP, not a dial.**
+peak_kappa ≥ ~1.05 → the peak tranche fires (bias +31, MAE 24.5); < ~1.0 → it
+is off (bias −7, MAE 18). There is no value that lands the bias near 0 — the
+form (a single peak tranche gated on kappa) is too coarse. So:
+
+- **Neither setting ships cleanly.** ON is over-priced (+12/+31); OFF has the
+  better MAE (−6 on IT-North, +2 on the other IT zones) but is wrong-signed
+  (−10) and drags **CH +1.5** (an importer of IT-North, already at −15 bias) —
+  a signed-envelope breach.
+- The MAE win is real and the physics is right (the old peak premium was
+  compensating for the broken pre-cv35 network), but calibration cannot express
+  the truth, which sits between the step's two levels.
+
+**Recalibration verdict (NO-SHIP of a knob value).** Of the 11 targeted
+residuals, exactly one — Italy North's stale peak premium — was a bidding-form
+error the network correction exposed, and it is a step the current form can't
+land. The rest are structural (import-set zones, inert to the knobs). Two
+decisions for the owner, neither of which is another knob arm:
+
+1. **Mechanism (recommended)**: replace the IT peak step with a GRADED peak
+   tranche (uplift proportional to how far the evening margin is inside the
+   peak band), so the bias can land near 0 without the cliff. This is the
+   cv36 form change; it also generalises to the other peak-band zones (ES/PT).
+2. **Interim knob**: ship calA_v2 (IT-only 1.0/1.15) as cv36 for the MAE win
+   now (footprint 23.09 → 22.53), documenting the −10 residual bias and the
+   CH +1.5 as known — a lower-MAE-but-wrong-signed trade.
+
+The import-set residuals (HU −46 peak, the Baltics, SE1/SE2) are NOT a
+calibration target: their lever is the exact hub net-position dual in the MPCC
+(already the next physics item from cv35), not a bidding knob.
+
+Budget spent (baseline + 3 arms). No Set B run — there is no clean Set-A
+candidate to validate; validating a wrong-signed knob would be false rigor.
