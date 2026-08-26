@@ -823,6 +823,53 @@ function _create_transfer_capacity_enriched(date::Date, bidding_zones::Vector{St
     for ((s, d, _), _) in jao
         (s in fpset && d in fpset) && push!(imp_pairs, (s, d))
     end
+    # Hub net-position scaling (2026-08-26): each maxBEX is the maximum for ONE
+    # border with the others at zero; used simultaneously they let a hub
+    # export at every border's max at once (FR: 16 GW modelled net export vs a
+    # 5.4 GW max net position). Per hub, CCR and hour, if the sum of the
+    # hub's JAO-sourced OUTGOING capacities over the CCR's internal borders
+    # exceeds its max net position, scale them down proportionally; same for
+    # INCOMING vs |min net position|. Keeps the MPCC formulation intact (the
+    # rent lands on the bilateral bounds). EUPHEMIA_DISABLE_JAO_NETPOS reverts.
+    n_np_scaled = 0
+    if jao_atc_enabled() && isempty(get(ENV, "EUPHEMIA_DISABLE_JAO_NETPOS", "")) && !isempty(jao)
+        npos = jao_net_positions(date)
+        ccrp = jao_ccr_pairs(date)
+        if !isempty(npos)
+            jao_keys = Set(keys(jao))
+            idx = Dict{Tuple{String,String,Int},Int}()
+            for (i, r) in enumerate(rows)
+                idx[(String(r.source_zone), String(r.sink_zone), r.time_period)] = i
+            end
+            for ((ccr, hub, tp), (mn, mx)) in npos
+                hub in fpset || continue
+                prs = get(ccrp, ccr, Set{Tuple{String,String}}())
+                for (dirn, lim) in ((:out, mx), (:in, -mn))
+                    lim > 0.0 || continue
+                    ks = Int[]
+                    for (s, d) in prs
+                        (s in fpset && d in fpset) || continue
+                        (dirn == :out ? s == hub : d == hub) || continue
+                        k = (s, d, tp)
+                        (k in jao_keys && haskey(idx, k)) || continue   # JAO-sourced rows only
+                        push!(ks, idx[k])
+                    end
+                    isempty(ks) && continue
+                    tot = sum(rows[i].capacity for i in ks)
+                    tot > lim || continue
+                    f = lim / tot
+                    for i in ks
+                        r = rows[i]
+                        rows[i] = (source_zone=r.source_zone, sink_zone=r.sink_zone,
+                                   time_period=r.time_period, capacity=r.capacity * f)
+                        n_np_scaled += 1
+                    end
+                end
+            end
+        end
+    end
+    n_np_scaled > 0 &&
+        println("   🧭 JAO net positions: $(n_np_scaled) border-hours scaled so simultaneous exchanges respect the hub limit")
     (n_jao_override + n_jao_added) > 0 &&
         println("   🧭 JAO maxBEX: $(n_jao_override) Day-ahead-free border-hours sized by the flow-based " *
                 "max exchange, $(n_jao_added) border-hours added")
@@ -990,7 +1037,7 @@ function _create_transfer_capacity_enriched(date::Date, bidding_zones::Vector{St
             "+$n_explicit_added explicit-only rows, $n_remapped aggregate endpoints remapped, " *
             "-$n_fb_dropped stale flow-based border-hours dropped, " *
             "$(nrow(df)) in-footprint border-hours")
-    return build_transfer_capacity_from_dataframe(df)
+    return with_net_positions(build_transfer_capacity_from_dataframe(df), date)
 end
 
 """
@@ -1056,12 +1103,33 @@ function build_transfer_capacity_from_dataframe(df::DataFrame)
     println("   ↔️  Bidirectional links: $bidirectional_count")
     println("   ➡️  Unidirectional links: $unidirectional_count")
 
-    # Flow-based hub limits (JAO net positions) for footprint hubs, keyed by the
-    # period strings this structure uses ("1".."24").
+    return TransferCapacity(
+        zones_vec,
+        periods_vec,
+        capacity_forward,
+        capacity_backward
+    )
+end
+
+"""
+    with_net_positions(tc, date) -> TransferCapacity
+
+Attach the flow-based hub limits (JAO net positions) for the footprint hubs,
+keyed by this structure's period strings ("1".."24"), plus each CCR's internal
+directed pairs. No-op (same limits: none) when JAO is disabled or absent.
+"""
+function with_net_positions(tc::TransferCapacity, date::Date)
     np = Dict{Tuple{String,String,String},Tuple{Float64,Float64}}()
     ccr_pairs = Dict{String,Set{Tuple{String,String}}}()
-    if jao_atc_enabled() && isempty(get(ENV, "EUPHEMIA_DISABLE_JAO_NETPOS", ""))
-        zset = Set(zones_vec)
+    # EXACT hub net-position constraint in the MPCC: OPT-IN ONLY. Measured
+    # 2026-08-26: without its own dual in the market-coupling price condition
+    # the constraint is inconsistent with the bilateral complementarity (an
+    # interior bilateral flow forces equal prices while the hub's net-position
+    # bound should carry the rent) and Gurobi grinds for >40 min on one day.
+    # The shipped treatment is the bilateral-maxima SCALING in the enriched
+    # build (see _scale_maxbex_by_net_position!), which keeps the formulation.
+    if jao_atc_enabled() && !isempty(get(ENV, "EUPHEMIA_ENABLE_JAO_NETPOS_CONSTRAINT", ""))
+        zset = Set(tc.bidding_zones)
         for ((ccr, hub, tp), lim) in jao_net_positions(date)
             hub in zset || continue
             np[(ccr, hub, string(tp))] = lim
@@ -1072,14 +1140,8 @@ function build_transfer_capacity_from_dataframe(df::DataFrame)
         isempty(np) || println("   🧭 JAO net positions: $(length(np)) hub-hours bounded " *
                                  "($(length(Set(k[2] for k in keys(np)))) hubs)")
     end
-    return TransferCapacity(
-        zones_vec,
-        periods_vec,
-        capacity_forward,
-        capacity_backward,
-        np,
-        ccr_pairs
-    )
+    return TransferCapacity(tc.bidding_zones, tc.time_periods, tc.capacity_forward,
+                            tc.capacity_backward, np, ccr_pairs)
 end
 
 """
