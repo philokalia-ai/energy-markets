@@ -143,3 +143,31 @@ HiGHS note: on the 108-link JAO network HiGHS segfaulted on 5 of the first 12
 days (retry-once recovered 3); the JAO arm was finished on Gurobi (4 WLS
 sessions, 40 days/h, 0 failures). Any backfill of this network should run on
 Gurobi.
+
+## Third mechanism: hub net positions (`jao.hub_net_positions`, ceres PR #525)
+
+JAO's `maxNetPos` gives, per hub and MTU, the min/max **net position** inside
+the CCR's flow-based domain (FR at 2026-04-03 00:00: export ≤ 5,375 MW,
+import ≤ 12,898 MW, against a bilateral-maxima sum of ~34 GW). Two ways to use
+it were built:
+
+- **Exact MPCC constraint** (`TransferCapacity.net_position` / `ccr_pairs`,
+  `min ≤ Σ exports − Σ imports over the CCR's internal borders ≤ max`):
+  **parked opt-in** (`EUPHEMIA_ENABLE_JAO_NETPOS_CONSTRAINT`). Measured
+  2026-08-26: without its own dual in the market-coupling price condition the
+  constraint is inconsistent with the bilateral complementarity (an interior
+  bilateral flow forces equal prices while the hub's bound should carry the
+  rent); Gurobi ground for >40 min on one day without finishing. The proper
+  version needs λ⁺/λ⁻ per (hub, CCR, period) entering the pair price
+  condition as `p_d − p_s = μ_pair + λ_s − λ_d` — a solver-core change for a
+  later PR.
+- **Scaling of bilateral maxima** (shipped, `_scale_maxbex_by_net_position`
+  in the enriched build, `EUPHEMIA_DISABLE_JAO_NETPOS` reverts): per hub, CCR
+  and hour, if the sum of the hub's JAO-sourced outgoing capacities exceeds
+  its max net position they are scaled down proportionally (same for incoming
+  vs |min|). Keeps the MPCC formulation intact; the rent lands on the
+  bilateral bounds. Sanity 2025-07-23 (Gurobi): FR net export 16.4 → 7.2 GW,
+  FR 74.7 with AT/HU/SK at DE_LU's 81.9, RO/GR 123 (the raw-maxBEX arm had
+  SEE too low), 5,895 border-hours scaled.
+
+Fourth arm `ab_jao_np` = JAO + outage caps + net-position scaling.
