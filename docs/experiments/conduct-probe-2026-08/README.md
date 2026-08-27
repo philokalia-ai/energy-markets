@@ -152,3 +152,98 @@ real OOS ΔR² · **unexplained** = neither.
 
 Budget spent as stated: one pass, no re-clearing. Scripts + CSVs in this
 directory (`probe_build.py`, `probe_gbm.py`, `probe_synth.py`).
+
+
+# 2-year re-run (2026-08-27, owner: "48 Wednesdays aren't enough")
+
+## What ran
+
+- **729-day cv35 backfill** 2024-07-01..2026-06-30, 39 zones, offline on the
+  refreshed DuckDB extract (now carrying `jao.*` and
+  `entsoe.unavailability_in_the_transmission_grid`), Gurobi ×4 —
+  **729 days/hour**, 82% solver utilization, results in `data/results.duckdb`
+  (`multi_zone_eu`/cv35), books captured at the **matching cv35 vintage**
+  (`data/backfill_books_cv35`, 729 parquets) — the 48-day run's cv31-book
+  caveat is gone. 1 day lost (2024-11-17, 23-period truncation).
+- Same two probes on 681,691 zone-hours (settled join 100%, actual-net-position
+  join 99.97%).
+
+## Two data corrections found while scaling (both fixed, both matter)
+
+1. **Sub-hourly flows were summed, not averaged**: PT15M border rows counted
+   4× in the actual net position — the 48-day run's markup levels were
+   inflated for 15-minute borders (HU book peak premium +137 → **+82**
+   corrected). Direction of every finding unchanged; sizes now honest.
+2. The results writer's positional `INSERT SELECT *` broke against a results
+   DB predating a column migration → `INSERT BY NAME` (shipped in this PR).
+
+## The 2-year conduct map
+
+Footprint: mean physics R² **0.45** (0.18 on 48 Wednesdays — the residual is
+far more learnable with 15× data), conduct ΔR² **+0.01** (still ~nothing).
+
+| zone | klass | r2_phys | d_r2 | top_phys | top_cond | mk_pk_prem | mk_win_prem | resid_pk | piv_share | tier1 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| NO3 | concentration-linked | 0.65 | 0.06 | month | hhi | -6.3 | 42.9 | -25.14 | 0.59 | 0 |
+| AT | concentration-linked | 0.44 | 0.04 | res_sh | top1_sh | -0.4 | 18.6 | 27.13 | 0.24 | 0 |
+| NO4 | concentration-linked | 0.43 | 0.06 | gas | top1_sh | -3.0 | 16.7 | -21.42 | 0.25 | 0 |
+| NO5 | model-gap | 0.69 | 0.03 | margin | hhi | -6.0 | 49.6 | -7.25 | 0.18 | 0 |
+| IT-NORTH | model-gap | 0.68 | -0.0 | D | rsi | -36.8 | -25.5 | -15.53 | 0.05 | 0 |
+| ES | model-gap | 0.63 | -0.0 | month | hhi | -16.7 | -15.6 | -15.71 | 0.01 | 0 |
+| NO1 | model-gap | 0.59 | 0.02 | np_head_exp | top1_sh | 0.5 | 52.0 | -3.43 | 0.75 | 0 |
+| PT | model-gap | 0.58 | 0.01 | month | hhi | -29.4 | -28.3 | -17.55 | 0.0 | 0 |
+| IT-CNORTH | model-gap | 0.55 | 0.0 | D | top1_sh | -91.7 | -44.1 | -10.14 | 0.88 | 0 |
+| SE3 | model-gap | 0.54 | 0.02 | np_head_exp | top1_sh | 10.1 | 10.4 | -5.88 | 0.59 | 0 |
+| SE2 | model-gap | 0.51 | 0.02 | gas | top1_sh | -4.6 | 6.7 | -17.91 | 1.0 | 0 |
+| SE1 | model-gap | 0.49 | 0.02 | gas | hhi | 6.0 | 27.6 | -15.52 | 0.24 | 0 |
+| CH | model-gap | 0.48 | 0.02 | res_sh | hhi | -2.4 | 44.9 | 15.02 | 0.19 | 0 |
+| IT-CSOUTH | model-gap | 0.48 | 0.01 | margin | rsi | -1.8 | -5.2 | -11.02 | 0.01 | 0 |
+| FI | model-gap | 0.47 | 0.02 | margin | rsi | 3.8 | -8.1 | -2.39 | 0.37 | 0 |
+| SK | model-gap | 0.44 | 0.02 | D | top1_sh | -55.1 | -68.7 | 45.57 | 0.74 | 0 |
+| CZ | model-gap | 0.44 | 0.01 | res_sh | rsi | 18.2 | 3.2 | 26.82 | 0.0 | 0 |
+| BE | model-gap | 0.44 | 0.01 | res_sh | hhi | 10.5 | -2.3 | 4.43 | 0.01 | 0 |
+| FR | model-gap | 0.42 | -0.01 | gas | rsi | -5.7 | 7.0 | -5.1 | 1.0 | 1 |
+| RO | model-gap | 0.39 | 0.01 | margin | top1_sh | -35.7 | -61.2 | 30.17 | 0.63 | 1 |
+| LT | model-gap | 0.36 | 0.03 | margin | top1_sh | 12.8 | 19.4 | 44.05 | 0.22 | 0 |
+| IT-SOUTH | model-gap | 0.36 | -0.0 | margin | rsi | -29.5 | -7.0 | -2.16 | 0.13 | 0 |
+| NO2 | model-gap | 0.36 | 0.02 | np_head_exp | top1_sh | 5.0 | 21.4 | -4.67 | 0.57 | 0 |
+| IT-Sardinia | model-gap | 0.36 | 0.01 | margin | hhi | -22.9 | 32.1 | -1.43 | 0.02 | 0 |
+| SI | model-gap | 0.35 | 0.01 | res_sh | hhi | -17.6 | 18.9 | 46.39 | 0.22 | 0 |
+| GR | model-gap | 0.31 | 0.01 | margin | top1_sh | -4.3 | -10.2 | 15.11 | 0.44 | 1 |
+| BG | model-gap | 0.28 | 0.01 | co2 | hhi | -35.9 | -9.2 | 22.02 | 0.5 | 1 |
+| DE_LU | tightness-marked | 0.65 | 0.0 | res_sh | rsi | 26.6 | 0.8 | 19.23 | 0.02 | 0 |
+| PL | tightness-marked | 0.63 | -0.0 | res_sh | rsi | 48.4 | -0.3 | 43.85 | 0.0 | 0 |
+| HU | tightness-marked | 0.53 | 0.01 | D | top1_sh | 81.8 | 12.1 | 70.96 | 0.3 | 1 |
+| NL | tightness-marked | 0.45 | 0.02 | res_sh | hhi | 42.8 | 8.2 | 25.4 | 0.0 | 0 |
+| RS | tightness-marked | 0.45 | 0.0 | imp_sh | top1_sh | 54.8 | 0.4 | 32.0 | 1.0 | 1 |
+| DK1 | tightness-marked | 0.39 | 0.01 | res_sh | top1_sh | 33.3 | -15.0 | 13.78 | 0.78 | 0 |
+| LV | tightness-marked | 0.33 | 0.02 | nx | top1_sh | 37.6 | -9.3 | 46.21 | 0.16 | 0 |
+| DK2 | tightness-marked | 0.33 | -0.0 | res_sh | top1_sh | 30.2 | -4.2 | 30.79 | 0.16 | 0 |
+| EE | tightness-marked | 0.28 | -0.01 | res_sh | rsi | 51.6 | 43.5 | 39.09 | 0.18 | 0 |
+| IT-Sicily | unexplained | 0.24 | -0.01 | res_sh | rsi | 23.8 | 5.9 | 15.68 | 0.0 | 0 |
+| IT-Calabria | unexplained | 0.23 | 0.02 | res_sh | rsi | -43.6 | -7.3 | 10.64 | 0.09 | 0 |
+| SE4 | unexplained | 0.18 | 0.02 | np_head_exp | hhi | 25.4 | -8.7 | 3.59 | 0.55 | 0 |
+
+
+## What survives 15× more data
+
+1. **The tightness-priced belt is confirmed and sharpened**: HU (+82 book peak
+   premium, **+71 €/MWh** peak residual), PL (+48/+44), NL (+43/+25), RS
+   (+55/+32), DE_LU (+27/+19), DK1/DK2, EE (+52/+39), LV (+38/+46). Physics
+   predicts *when*; the book says the market clears *above its competitive
+   stack* in exactly those hours. This is the program's central exhibit.
+2. **Conduct features stay inert OOS everywhere** (ΔR² +0.01) — whatever
+   prices the tight hours, static concentration indices don't time it.
+3. **SK/SI/RO/LT re-classified to model-gap** (2y): settled sits above the
+   coupled counterfactual at the peak but *below* their standalone books —
+   an import-pricing mechanism gap (the net-position dual), not local bidding.
+4. **Italy + Iberia stay model-gap** (we over-price; graded tranche = cv36),
+   and **AT/NO3/NO4 show small concentration signals** (ΔR² 0.04–0.06,
+   owner-level tier — verify before claiming).
+
+## Coverage line
+
+729 days × 39 zones × 24h; 1 truncated day dropped; books cv35; firm tier-1 =
+GR/HU/BG/RS/FR/RO; inversion levels still biased for anchored/exporting zones
+(within-zone structure only). Scripts and CSVs updated in this directory
+(`probe2y_*`).

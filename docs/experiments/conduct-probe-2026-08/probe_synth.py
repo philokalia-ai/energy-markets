@@ -1,8 +1,8 @@
 """Final conduct map: join GBM (feature probe) x book inversion (markup probe)."""
 import sys, numpy as np, pandas as pd
-S=sys.argv[1]
-g = pd.read_csv(f'{S}/probe_verdicts.csv').set_index('zone')
-m = pd.read_csv(f'{S}/probe_markup_structure.csv').set_index('zone')
+S=sys.argv[1]; TAG=sys.argv[2] if len(sys.argv)>2 else ''
+g = pd.read_csv(f'{S}/probe{TAG}_verdicts.csv').set_index('zone')
+m = pd.read_csv(f'{S}/probe{TAG}_markup_structure.csv').set_index('zone')
 t = g.join(m[['mk_pk_prem','mk_win_prem']])
 # classification:
 # tightness-marked: residual predictable from physics/tightness AND the book says
@@ -19,5 +19,5 @@ cols = ['klass','r2_phys','d_r2','top_phys','top_cond','mk_pk_prem','mk_win_prem
 t = t[cols].sort_values(['klass','r2_phys'], ascending=[True,False])
 pd.set_option('display.width',200)
 print(t.round(2).to_string())
-t.to_csv(f'{S}/probe_conduct_map.csv')
+t.to_csv(f'{S}/probe{TAG}_conduct_map.csv')
 print("\ncounts:", t.klass.value_counts().to_dict())
