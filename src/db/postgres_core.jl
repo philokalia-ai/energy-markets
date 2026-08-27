@@ -198,7 +198,11 @@
 # 23.40/0.761 (Core cluster 35.1 -> 23.1, Nordic 29.2 -> 23.1); collapse
 # recall 43% -> 14% is the open cost. Switches EUPHEMIA_DISABLE_JAO_ATC /
 # _JAO_NETPOS / _TX_OUTAGE_ATC. Backfill on Gurobi.
-const ENERGY_PRICES_CODE_VERSION = 35
+# v36 (2026-08-28): graded upper-tranche ladder (tranche_grading — piecewise-
+#   linear supply curve near the peak; recal-2026-08 found the IT peak uplift
+#   was a step: on=+31/off=-7 bias with nothing between). Default 1 everywhere
+#   (bit-identical); IT profiles opt in after the Set-A/Set-B gate.
+const ENERGY_PRICES_CODE_VERSION = 36
 
 # Pool size: env-tunable (EUPHEMIA_PG_POOL) because the threaded book build
 # runs up to nzones concurrent queries — 5 connections cap the parallelism
