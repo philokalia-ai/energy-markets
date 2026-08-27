@@ -37,3 +37,13 @@ FROM simulations.energy_prices ep
 JOIN simulations.optimization_runs opr ON ep.optimization_run_id = opr.id
 ```
 
+## v36 — graded upper-tranche ladder; IT-North peak recalibrated (2026-08-27)
+
+`ZoneProfile.tranche_grading` (default 1 = bit-identical staircase): K>1 makes
+the upper supply curve piecewise-linear. Promoted on IT-NORTH/IT-CNORTH
+(`ITALY_NORTH_PROFILE`: grading 4, peak_kappa 1.2→1.0, thermal 1.2→1.15) after
+a Set-A bracket + one held-out Set-B pass — all 7 IT zones' corr improve OOS
+(IT-N 0.69→0.71 … Calabria 0.76→0.81), CH/PT improve, footprint −0.16; known
+trade: IT bias ~−12 (missing middle = pumped-storage opportunity bids, the
+noted follow-up). Experiment: docs/experiments/cv36-graded-tranche/.
+

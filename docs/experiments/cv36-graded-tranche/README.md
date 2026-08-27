@@ -38,6 +38,18 @@ Findings:
 Set-A budget: 3 arms as stated. Set B (26 even-week Wednesdays) run ONCE on
 g4c + same-branch baseline — results below; ship/no-ship is the owner's call.
 
-## Set B (held out, scored once)
+## Set B (held out, scored once) — PASSES
 
-(pending)
+Base = same-branch defaults on the 26 even-week Wednesdays; g4c = the same
+overrides. MAE (base → g4c): IT-CNORTH 23.4→21.0, IT-NORTH 23.5→21.8, and the
+two guard zones IMPROVE (PT 26.4→24.6, ES 24.2→23.7); CH +0.8 (inside the 1.0
+ceiling); footprint 25.20→25.04; no new cap hours. Corr (base → g4c): IT-NORTH
+0.69→0.71, IT-CNORTH 0.70→0.70, IT-CSOUTH 0.72→0.76, IT-SOUTH 0.76→0.80,
+IT-Sicily 0.77→0.81, IT-Sardinia 0.66→0.68, IT-Calabria 0.76→0.81, CH
+0.78→0.81, PT 0.70→0.75. Bias trade confirmed OOS: IT ~−12 (wrong-signed).
+
+**Promoted** (this branch): `ITALY_NORTH_PROFILE` (IT-NORTH, and IT-CNORTH via
+`with_profile` + backstop) = grading 4, peak_kappa 1.0, tsm 1.15 — the cv36
+default. The southern IT zones keep ITALY_PROFILE; their gains come from the
+coupling. Follow-up mechanism (not built, noted): pumped-storage opportunity
+bids (~7 GW) are the missing middle that would center the bias.

@@ -1044,7 +1044,16 @@ IT-CNORTH (cv17). ITALY plus the import backstop: episodic
 IT-CSOUTH→IT-CNORTH offered-ATC dips (95 MW offered vs 1.2 GW physical on
 spike hours; avg ~3 GW) starve it a few days a year — backstop, not drop.
 """
-const ITALY_CNORTH_PROFILE = with_profile(ITALY_PROFILE; import_backstop = true)
+# cv36 (docs/experiments/cv36-graded-tranche): the northern zones price the
+# evening peak on a GRADED tranche ladder with the calibrated-down peak/thermal
+# premia. Set A: IT-N corr 0.65->0.75, MAE 24.5->18.4; Set B (held out): all 7
+# IT zones' corr improve (IT-N 0.69->0.71, CSOUTH 0.72->0.76, SOUTH 0.76->0.80),
+# CH/PT improve too. Known trade: IT bias flips to ~-12 (the "missing middle"
+# is a technology gap — pumped-storage opportunity bids — not a knob; noted in
+# the experiment doc as the follow-up mechanism).
+const ITALY_NORTH_PROFILE = with_profile(ITALY_PROFILE;
+    tranche_grading = 4, peak_kappa = 1.0, thermal_srmc_multiplier = 1.15)
+const ITALY_CNORTH_PROFILE = with_profile(ITALY_NORTH_PROFILE; import_backstop = true)
 
 """
 SEE base + import backstop + full scarcity credit (cv17). SEE calibration (exact v10 parameters)
@@ -1131,7 +1140,7 @@ const ZONE_PROFILES = Dict{String,ZoneProfile}(
     # for the border-scoped redesign (export backstop mirror) validated on the
     # coupled footprint. The fields and their kill-switch were removed in cv25's
     # subtraction phase — git holds the implementation if the redesign revives them.
-    "IT-NORTH" => ITALY_PROFILE, "IT-CNORTH" => ITALY_CNORTH_PROFILE,
+    "IT-NORTH" => ITALY_NORTH_PROFILE, "IT-CNORTH" => ITALY_CNORTH_PROFILE,
     "IT-CSOUTH" => ITALY_PROFILE, "IT-SOUTH" => ITALY_PROFILE,
     "IT-Calabria" => ITALY_PROFILE,
     "IT-Sicily" => with_profile(ITALY_PROFILE; input_corrections = true),
