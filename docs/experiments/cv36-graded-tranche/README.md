@@ -53,3 +53,15 @@ IT-Sicily 0.77→0.81, IT-Sardinia 0.66→0.68, IT-Calabria 0.76→0.81, CH
 default. The southern IT zones keep ITALY_PROFILE; their gains come from the
 coupling. Follow-up mechanism (not built, noted): pumped-storage opportunity
 bids (~7 GW) are the missing middle that would center the bias.
+
+
+## Verified: the cv36 2-year backfill (729 days, offline extract, Gurobi, 1.03 h)
+
+**energy@corr≥0.7: 82.6% → 90.0%** (D-1-load-weighted, 2024-07..2026-06,
+681,646 paired zone-hours vs cv35). Corr: IT-NORTH 0.651→0.763, IT-CNORTH
+0.635→0.740, IT-CSOUTH 0.725→0.793, IT-SOUTH 0.738→0.779, Calabria
+0.722→0.763, Sicily 0.711→0.749, Sardinia 0.686→0.716; DK2 0.691→0.702
+(crosses the line), CH 0.807→0.820; footprint 0.725→0.737. MAE footprint flat
+(25.47→25.48; IT-NORTH +1.3 — the documented corr-for-bias trade); every
+non-IT zone within ±0.003 corr and ±0.4 MAE. Results in data/results.duckdb
+(multi_zone_eu/cv36).
