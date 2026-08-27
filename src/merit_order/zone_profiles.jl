@@ -681,6 +681,10 @@ const NORDIC_PROFILE = ZoneProfile(
     scarcity_threshold = 1.2,
     scarcity_kappa = 1.0,
     peak_kappa = 0.5,
+    # cv37: wet winters damp the seasonal drawdown lift (Set-A/B mild-positive;
+    # wet-winter 2024-25 Wednesdays SE2 -8.0/SE1 -6.5; Sunday holdout SE2 -9.3
+    # corr .40->.63, SE1 -7.8 .42->.65 — docs/experiments/cv37-nordic-wet).
+    wet_adjusted_drawdown = true,
     # Demand-shape band applied to the reservoir-opportunity water value
     # (see the :reservoir_opportunity branch): 0.6 at the trough → 1.1 at the
     # peak, so hydro is cheap off-peak but firms up into the evening.
@@ -702,6 +706,7 @@ const NO4_PROFILE = ZoneProfile(
     scarcity_threshold = 1.2,
     scarcity_kappa = 1.0,
     peak_kappa = 0.5,
+    wet_adjusted_drawdown = true,   # cv37, same evidence as NORDIC_PROFILE
     water_value_base = 0.6,
     water_value_span = 0.5,
     seasonal_drawdown = false,
