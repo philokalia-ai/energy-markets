@@ -361,6 +361,7 @@ const PROVENANCE = Dict{String,Any}(
     "water_value_base" => _PROV("declared", "per-region reservoir opportunity cost (× gas SRMC), OOS-validated", 14),
     "water_value_span" => _PROV("declared", "per-region intraday water-value swing, OOS-validated", 14),
     "thermal_srmc_multiplier" => _PROV("declared", "per-region thermal running-cost premium (Italy), OOS-validated", 14),
+    "tranche_grading" => _PROV("declared", "structural form: piecewise-linear upper-tranche ladder (cliff removal), cv36", 36),
     "hydro_model" => _PROV("declared", "structural choice: gas-anchored vs reservoir-opportunity water value", 14),
     "spill_surplus_dryness" => _PROV("declared", "cv27 spill-risk gate (dryness threshold), OOS-validated", 27),
     "nuclear_srmc_floor" => _PROV("declared", "France off-peak nuclear bid floor, OOS-validated", 14),
@@ -396,6 +397,7 @@ const FIELD_DESCRIPTIONS = Dict{Symbol,String}(
     :water_value_base => "reservoir hydro's opportunity cost, as a multiple of gas SRMC",
     :water_value_span => "how much the water value swings across the day's demand range",
     :thermal_srmc_multiplier => "premium on this zone's thermal running costs (Italy: 1.20)",
+    :tranche_grading => "upper-tranche sub-slices with interpolated multipliers (1 = classic staircase)",
     :hydro_model => "gas-anchored water value, or reservoir-opportunity from weekly levels",
     :spill_surplus_dryness => "cv27 spill-risk gate: below this dryness the hydro offer chases the net-demand valley (0 = off)",
     :nuclear_srmc_floor => "floor under nuclear bids (EUR/MWh) — France's off-peak position",
@@ -442,6 +444,14 @@ Base.@kwdef struct ZoneProfile
     water_value_base::Float64 = 0.85
     water_value_span::Float64 = 0.9
     thermal_srmc_multiplier::Float64 = 1.0
+    # cv36: graded upper-tranche ladder. 1 (default) = the classic 4-step
+    # staircase (bit-identical). K>1 splits each scarcity tranche (i>=2) into K
+    # sub-slices whose price multipliers interpolate linearly from the previous
+    # tranche's multiplier to this one's, making the zone's aggregate supply
+    # curve piecewise-linear near the peak instead of a cliff — the clearing
+    # price can then land BETWEEN the old steps (the recal-2026-08 finding:
+    # IT-North's peak uplift was a step, on=+31 / off=-7 bias, nothing between).
+    tranche_grading::Int = 1
     hydro_model::Symbol = :gas_anchored
     # cv27 T2: surplus-regime gate for spill-risk pricing — when reservoir
     # dryness is BELOW this value (full reservoirs) the hydro offer follows the
@@ -1195,6 +1205,7 @@ function _profile_overrides()
                 f = Symbol(strip(k)); ft = fieldtype(ZoneProfile, f)
                 val = ft == Bool ? (lowercase(strip(v)) in ("true", "1")) :
                       ft == Symbol ? Symbol(strip(v)) :
+                      ft == Int ? round(Int, parse(Float64, strip(v))) :
                       ft <: Real ? parse(Float64, strip(v)) :
                       error("EUPHEMIA_PROFILE_OVERRIDES: unsupported field $f::$ft")
                 push!(pairs, f => val)

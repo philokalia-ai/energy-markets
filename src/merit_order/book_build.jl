@@ -1412,14 +1412,24 @@ function create_merit_order_book(
                     # cost so mid-merit keeps clearing)
                     flexible_capacity = max(offered_pmax(g) - must_run_qty, 0.0)
                     for (i, (share, mult)) in enumerate(tranches)
-                        price = min(gmc * mult * (i == 1 ? 1.0 : scarcity), nuc_ceil)
                         qty = flexible_capacity * share
                         qty < 0.1 && continue
-                        push_tagged!(SimpleOrder(:supply, price, qty,
-                            Symbol(bidding_zone), date_time, resolution_minutes),
-                            g.code, i == 1 ? "srmc_base" : "peak_tranche_$i")
-                        supply_orders_count += 1
-                        total_supply_capacity += qty
+                        K = (i == 1 || profile.tranche_grading <= 1) ? 1 :
+                            profile.tranche_grading
+                        # cv36 graded ladder: K sub-slices whose multipliers walk
+                        # linearly from the PREVIOUS tranche's multiplier to this
+                        # one's — a piecewise-linear supply curve instead of a
+                        # staircase (K=1 reproduces the classic step exactly).
+                        mult_lo = K == 1 ? mult : tranches[i-1][2]
+                        for j in 1:K
+                            m_j = K == 1 ? mult : mult_lo + (mult - mult_lo) * j / K
+                            price = min(gmc * m_j * (i == 1 ? 1.0 : scarcity), nuc_ceil)
+                            push_tagged!(SimpleOrder(:supply, price, qty / K,
+                                Symbol(bidding_zone), date_time, resolution_minutes),
+                                g.code, i == 1 ? "srmc_base" : "peak_tranche_$i")
+                            supply_orders_count += 1
+                            total_supply_capacity += qty / K
+                        end
                     end
                 end
             end
