@@ -362,6 +362,7 @@ const PROVENANCE = Dict{String,Any}(
     "water_value_span" => _PROV("declared", "per-region intraday water-value swing, OOS-validated", 14),
     "thermal_srmc_multiplier" => _PROV("declared", "per-region thermal running-cost premium (Italy), OOS-validated", 14),
     "tranche_grading" => _PROV("declared", "structural form: piecewise-linear upper-tranche ladder (cliff removal), cv36", 36),
+    "wet_adjusted_drawdown" => _PROV("declared", "structural form: wetness-conditioned seasonal drawdown (wet winters price low), cv37", 37),
     "hydro_model" => _PROV("declared", "structural choice: gas-anchored vs reservoir-opportunity water value", 14),
     "spill_surplus_dryness" => _PROV("declared", "cv27 spill-risk gate (dryness threshold), OOS-validated", 27),
     "nuclear_srmc_floor" => _PROV("declared", "France off-peak nuclear bid floor, OOS-validated", 14),
@@ -398,6 +399,7 @@ const FIELD_DESCRIPTIONS = Dict{Symbol,String}(
     :water_value_span => "how much the water value swings across the day's demand range",
     :thermal_srmc_multiplier => "premium on this zone's thermal running costs (Italy: 1.20)",
     :tranche_grading => "upper-tranche sub-slices with interpolated multipliers (1 = classic staircase)",
+    :wet_adjusted_drawdown => "wet years damp the winter reservoir-drawdown water-value lift",
     :hydro_model => "gas-anchored water value, or reservoir-opportunity from weekly levels",
     :spill_surplus_dryness => "cv27 spill-risk gate: below this dryness the hydro offer chases the net-demand valley (0 = off)",
     :nuclear_srmc_floor => "floor under nuclear bids (EUR/MWh) — France's off-peak position",
@@ -452,6 +454,15 @@ Base.@kwdef struct ZoneProfile
     # price can then land BETWEEN the old steps (the recal-2026-08 finding:
     # IT-North's peak uplift was a step, on=+31 / off=-7 bias, nothing between).
     tranche_grading::Int = 1
+    # cv37 candidate: wetness-adjusted seasonal drawdown. The reservoir-
+    # opportunity floor rises with max(dryness, drawdown), but the drawdown
+    # fires EVERY winter (reservoirs always deplete seasonally) — in a WET year
+    # the shadow value of stored water stays low even at the seasonal minimum,
+    # and the 2y probe shows the Nordic bias is +13..+23 in wet months with
+    # corr(bias, dryness) -0.26..-0.40. When true, the seasonal signal becomes
+    # clamp(drawdown + dryness, max(dryness,0), 1): wet years (dryness<0) damp
+    # the winter lift by the wetness amount, dry years keep/raise it.
+    wet_adjusted_drawdown::Bool = false
     hydro_model::Symbol = :gas_anchored
     # cv27 T2: surplus-regime gate for spill-risk pricing — when reservoir
     # dryness is BELOW this value (full reservoirs) the hydro offer follows the

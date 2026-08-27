@@ -1011,6 +1011,16 @@ function create_merit_order_book(
         hydro_pmax, hydro_scale, hydro_dryness, reservoir_drawdown =
             _hydro_state(generators, bidding_zone, day, hydro_model,
                 profile.seasonal_drawdown)
+        # cv37 wet-adjusted drawdown: the SIGNED dryness (negative = wetter than
+        # the same-week prior-year norm) damps the seasonal water-value lift.
+        # Only read when the profile opts in; every legacy consumer keeps the
+        # 0-clamped hydro_dryness.
+        signed_dryness = if profile.wet_adjusted_drawdown && hydro_pmax > 1.0
+            sd = get_reservoir_dryness(bidding_zone, day; signed=true)
+            sd === nothing ? hydro_dryness : sd
+        else
+            hydro_dryness
+        end
         offered_pmax(g) = _is_hydro(g) ? g.p_max * hydro_scale : g.p_max
 
         # Dispatchable capacity for the scarcity margin, derated for the
@@ -1310,7 +1320,11 @@ function create_merit_order_book(
                         # absolute seasonal drawdown (winter reservoir depletion
                         # raises the shadow value of stored water — SE1/SE2 draw
                         # to 55–60% of the annual peak by February at dryness 0).
-                        wv_frac = 0.35 + 0.65 * max(hydro_dryness, reservoir_drawdown)
+                        eff_seasonal = profile.wet_adjusted_drawdown ?
+                            clamp(reservoir_drawdown + signed_dryness,
+                                  max(signed_dryness, 0.0), 1.0) :
+                            reservoir_drawdown
+                        wv_frac = 0.35 + 0.65 * max(hydro_dryness, eff_seasonal)
                         gas_srmc * wv_frac * (water_value_base + water_value_span * norm_demand)
                     else
                         gas_srmc * (1.0 + water_value_dry_boost * hydro_dryness) *

@@ -300,7 +300,7 @@ Unlike output-based dryness, this measures the water itself, so it is not
 confounded by dispatch incentives (hydro running hard *because* prices are
 high looks "wet" in output terms while reservoirs are actually draining).
 """
-function get_reservoir_dryness(bidding_zone::String, day::Date)
+function get_reservoir_dryness(bidding_zone::String, day::Date; signed::Bool=false)
     iso_week = Int(Dates.week(day))
     iso_year = _reservoir_iso_year(day)
 
@@ -355,7 +355,12 @@ function get_reservoir_dryness(bidding_zone::String, day::Date)
     end
     (isempty(norm) || ismissing(norm.med[1]) || Float64(norm.med[1]) <= 0.0) && return nothing
 
-    return clamp(1.0 - Float64(current.stored_energy_mwh[1]) / Float64(norm.med[1]), 0.0, 1.0)
+    # signed=true (cv37 wet-adjusted drawdown): wetter-than-norm years return
+    # NEGATIVE dryness (down to -1) so the seasonal drawdown lift can be damped;
+    # the default stays clamped at 0 for every legacy consumer (hydro_scale,
+    # anchored dry boost, gas-anchored boost).
+    return clamp(1.0 - Float64(current.stored_energy_mwh[1]) / Float64(norm.med[1]),
+                 signed ? -1.0 : 0.0, 1.0)
 end
 
 """
