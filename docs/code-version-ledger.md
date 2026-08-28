@@ -47,3 +47,12 @@ a Set-A bracket + one held-out Set-B pass — all 7 IT zones' corr improve OOS
 trade: IT bias ~−12 (missing middle = pumped-storage opportunity bids, the
 noted follow-up). Experiment: docs/experiments/cv36-graded-tranche/.
 
+## v37 — wetness-adjusted seasonal drawdown (2026-08-27)
+
+`ZoneProfile.wet_adjusted_drawdown` (default false): wet years (signed reservoir
+dryness < 0) damp the winter water-value lift in the `:reservoir_opportunity`
+form. On NORDIC/NO4 profiles (SE1/SE2/FI/DK1/DK2/NO4). Wet-winter 2024-25:
+SE2 −8.0 MAE (corr 0.61→0.69) Wednesdays, −9.3 (0.40→0.63) on the held-out
+Sundays; SE1 −6.5/−7.8; spillover beneficial (SE3 −4.0 corr 0.73→0.80, NO3
+−3.4); mild winter Set A/B ≈ neutral-positive. Experiment:
+docs/experiments/cv37-nordic-wet/.

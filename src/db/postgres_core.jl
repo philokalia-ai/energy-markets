@@ -202,7 +202,11 @@
 #   linear supply curve near the peak; recal-2026-08 found the IT peak uplift
 #   was a step: on=+31/off=-7 bias with nothing between). Default 1 everywhere
 #   (bit-identical); IT profiles opt in after the Set-A/Set-B gate.
-const ENERGY_PRICES_CODE_VERSION = 36
+# v37 (2026-08-28 candidate): wetness-adjusted seasonal drawdown
+#   (wet_adjusted_drawdown — wet winters damp the reservoir water-value lift;
+#   probe evidence: Nordic bias +13..+23 in wet months, corr(bias,dryness)
+#   -0.26..-0.40). Default false everywhere pending the Set-A/B gate.
+const ENERGY_PRICES_CODE_VERSION = 37
 
 # Pool size: env-tunable (EUPHEMIA_PG_POOL) because the threaded book build
 # runs up to nzones concurrent queries — 5 connections cap the parallelism

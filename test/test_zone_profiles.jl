@@ -107,10 +107,12 @@ const V10_TRANCHES = [(0.55, 0.95), (0.20, 1.05), (0.15, 1.25), (0.10, 1.60)]
         @test get_zone_profile("SE4") === NORWAY_PROFILE
         # IT-CNORTH: ITALY + backstop; other IT sub-zones unchanged
         @test get_zone_profile("IT-CNORTH") === ITALY_CNORTH_PROFILE
-        @test with_profile(ITALY_CNORTH_PROFILE; import_backstop=false) == ITALY_PROFILE
+        # cv36: the northern zones moved to ITALY_NORTH_PROFILE (graded tranche
+        # ladder + recalibrated peak/thermal — docs/experiments/cv36-graded-tranche)
+        @test with_profile(ITALY_CNORTH_PROFILE; import_backstop=false) == ITALY_NORTH_PROFILE
         # cv25 T3: IT-NORTH gains the standard backstop at resolution time;
         # cv32: the two islands consume the winner input corrections.
-        @test get_zone_profile("IT-NORTH") == with_profile(ITALY_PROFILE; import_backstop=true)
+        @test get_zone_profile("IT-NORTH") == with_profile(ITALY_NORTH_PROFILE; import_backstop=true)
         @test get_zone_profile("IT-Sardinia") == with_profile(ITALY_PROFILE; input_corrections=true)
         @test get_zone_profile("IT-Sicily") == with_profile(ITALY_PROFILE; input_corrections=true)
         # cv18's parked levers (unit_srmc_spread / export_absorption_steps) were
