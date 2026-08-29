@@ -187,6 +187,19 @@ function export_zone_parquets()
     act = resolution_aware_actuals(sd - Day(1), ed)
     actmap = Dict{Tuple{String,DateTime},Float64}(
         (String(a.z), DateTime(a.t)) => Float64(a.act) for a in eachrow(act))
+    ml = try
+        Euphemia.sql2df_with_retry("""
+            SELECT bidding_zone AS z, model,
+                   (date_time_utc AT TIME ZONE 'UTC') AS t, price_eur_mwh AS p
+            FROM simulations.model_lines
+            WHERE date_time_utc >= (\$1::date - INTERVAL '1 day')::timestamp
+            """, [sd])
+    catch e
+        @warn "model_lines unavailable — overlay columns null" error=e
+        DataFrame(z=String[], model=String[], t=DateTime[], p=Float64[])
+    end
+    mlmap = Dict{Tuple{String,String,DateTime},Float64}(
+        (String(r.z), String(r.model), DateTime(r.t)) => Float64(r.p) for r in eachrow(ml))
 
     counts = Dict{String,Int}()
     for zone in sort(unique(String.(prices.z)))
@@ -286,19 +299,6 @@ function export_map_parquet()
     act = resolution_aware_actuals(sd - Day(1), ed)
     actmap = Dict{Tuple{String,DateTime},Float64}(
         (String(a.z), DateTime(a.t)) => Float64(a.act) for a in eachrow(act))
-    ml = try
-        Euphemia.sql2df_with_retry("""
-            SELECT bidding_zone AS z, model,
-                   (date_time_utc AT TIME ZONE 'UTC') AS t, price_eur_mwh AS p
-            FROM simulations.model_lines
-            WHERE date_time_utc >= (\$1::date - INTERVAL '1 day')::timestamp
-            """, [sd])
-    catch e
-        @warn "model_lines unavailable — overlay columns null" error=e
-        DataFrame(z=String[], model=String[], t=DateTime[], p=Float64[])
-    end
-    mlmap = Dict{Tuple{String,String,DateTime},Float64}(
-        (String(r.z), String(r.model), DateTime(r.t)) => Float64(r.p) for r in eachrow(ml))
     # Hourly D-1 load forecast: the weights of err_pct (load-weighted WAPE).
     loads = Euphemia.sql2df_with_retry(HOURLY_LOAD_FC_SQL, [sd - Day(1), ed + Day(1)])
     loadmap = Dict{Tuple{String,DateTime},Float64}(
