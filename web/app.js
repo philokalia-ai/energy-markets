@@ -1364,6 +1364,9 @@
       ["sim", currentTrack().series],
       ["act", isPending(day) ? "Actual (pending — not yet settled)" : "Actual (settled)"],
     ];
+    function hasVals(arr) { return arr && arr.some(function (v) { return v !== null && v !== undefined; }); }
+    if (hasVals(day.gbm)) items.push(["gbm", "Physics + ex-ante GBM"]);
+    if (hasVals(day.stats)) items.push(["stats", "Pure-stats GBM"]);
     var chips = {};
     items.forEach(function (it) {
       var span = el("span");
@@ -1426,6 +1429,8 @@
 
     var values = day.sim.slice();
     day.actual.forEach(function (a) { if (a !== null && a !== undefined) values.push(a); });
+    (day.gbm || []).forEach(function (a) { if (a !== null && a !== undefined) values.push(a); });
+    (day.stats || []).forEach(function (a) { if (a !== null && a !== undefined) values.push(a); });
     var vMin = Math.min.apply(null, values), vMax = Math.max.apply(null, values);
     if (vMin > 0) vMin = 0;               // anchor at zero unless negative prices
     var pad = (vMax - vMin) * 0.06 || 10;
@@ -1454,6 +1459,8 @@
       surface: css.getPropertyValue("--surface-1").trim(),
       sim: css.getPropertyValue("--series-sim").trim(),
       act: css.getPropertyValue("--series-act").trim(),
+      gbm: css.getPropertyValue("--series-gbm").trim(),
+      stats: css.getPropertyValue("--series-stats").trim(),
     };
 
     for (var v = y0; v <= y1 + 1e-9; v += step) {
@@ -1501,7 +1508,25 @@
       }
       return dstr.trim();
     }
-    var simEls = [], actEls = [];
+    var simEls = [], actEls = [], gbmEls = [], statsEls = [];
+    // Model-line overlays (docs/experiments/forecast-eval-2026-08): pink =
+    // physics + ex-ante GBM residual corrector; yellow = pure-stats GBM (no
+    // physics). Optional per day; dashed, drawn beneath sim/act so the physics
+    // counterfactual keeps visual primacy. See the Models page.
+    function overlayPath(arr, color, els) {
+      if (!arr || !arr.some(function (v) { return v !== null && v !== undefined; })) return;
+      var d0 = pathFor(arr);
+      if (!d0) return;
+      var pth = svgEl("path", {
+        d: d0, fill: "none", stroke: color,
+        "stroke-width": 2, "stroke-dasharray": "5 4",
+        "stroke-linejoin": "round", "stroke-linecap": "round",
+      });
+      svg.appendChild(pth);
+      els.push(pth);
+    }
+    overlayPath(day.gbm, C.gbm, gbmEls);
+    overlayPath(day.stats, C.stats, statsEls);
     var simPath = svgEl("path", {
       d: pathFor(day.sim), fill: "none", stroke: C.sim,
       "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round",
@@ -1633,7 +1658,7 @@
       wrap.appendChild(el("p", "pending-note",
         "Partially settled — remaining hours are still pending."));
     }
-    return { sim: simEls, act: actEls };   // series refs for the focus wiring
+    return { sim: simEls, act: actEls, gbm: gbmEls, stats: statsEls };   // series refs for the focus wiring
   }
 
   function renderExplorer() {
@@ -1702,6 +1727,12 @@
     if (chartEls.act.length) {
       explorerSeries.push({ key: "act", chip: legendChips.act, els: chartEls.act, baseOpacity: 1 });
     }
+    if (chartEls.gbm.length && legendChips.gbm) {
+      explorerSeries.push({ key: "gbm", chip: legendChips.gbm, els: chartEls.gbm, baseOpacity: 0.9 });
+    }
+    if (chartEls.stats.length && legendChips.stats) {
+      explorerSeries.push({ key: "stats", chip: legendChips.stats, els: chartEls.stats, baseOpacity: 0.9 });
+    }
     attachSeriesFocus($("chart-legend"), explorerSeries);
     renderHourTable(day);
   }
@@ -1717,6 +1748,8 @@
       surface: css.getPropertyValue("--surface-1").trim(),
       sim: css.getPropertyValue("--series-sim").trim(),
       act: css.getPropertyValue("--series-act").trim(),
+      gbm: css.getPropertyValue("--series-gbm").trim(),
+      stats: css.getPropertyValue("--series-stats").trim(),
       accent: css.getPropertyValue("--accent").trim(),
     };
   }

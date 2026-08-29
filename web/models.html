@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Beyond the physics — model lines · energy</title>
+  <link rel="icon" href="./favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body class="about-page">
+<header class="site-header">
+  <nav class="crumbs" aria-label="Breadcrumb"><a href="./index.html">/ energy</a><span> / models</span></nav>
+  <nav class="site-nav">
+    <a href="./about.html">About</a>
+    <a href="./index.html">Live</a>
+    <a href="https://github.com/philokalia-ai/energy-markets">GitHub</a>
+  </nav>
+</header>
+<main class="about-main">
+  <h1>Beyond the physics: the pink and yellow lines</h1>
+  <p class="lede">The blue line on every day chart is the <strong>physics counterfactual</strong> —
+  a competitive re-clearing of the European day-ahead market from fundamentals (fleets, fuels,
+  forecasts, JAO flow-based network), with <em>zero fitted parameters against prices</em>. Its job is
+  to be a defensible <em>counterfactual</em>, not the best point forecast. The two dashed lines are
+  honest statistical companions, and this page explains what they are, what they are good for, and
+  what they can never do.</p>
+
+  <h2>The three models</h2>
+  <table class="score-table">
+    <thead><tr><th>line</th><th>model</th><th>what it is</th><th>fitted on prices?</th></tr></thead>
+    <tbody>
+      <tr><td><span class="key sim" style="display:inline-block;width:18px;border-top:2px solid var(--series-sim)"></span></td>
+        <td><strong>Physics</strong> (solid blue)</td>
+        <td>The Euphemia-style competitive clearing of all 39 zones from ex-ante fundamentals.</td>
+        <td>No — zero parameters fitted to prices.</td></tr>
+      <tr><td><span style="display:inline-block;width:18px;border-top:2px dashed var(--series-gbm)"></span></td>
+        <td><strong>Physics + ex-ante GBM</strong> (dashed pink)</td>
+        <td>The physics price plus a per-zone gradient-boosted model of the <em>residual</em>
+        (settled − physics), trained only on features known before the 12:00 CET gate:
+        the order book's demand, RES/import shares and margin, D-2 fuel closes, calendar.</td>
+        <td>Yes — on the residual.</td></tr>
+      <tr><td><span style="display:inline-block;width:18px;border-top:2px dashed var(--series-stats)"></span></td>
+        <td><strong>Pure-stats GBM</strong> (dashed yellow)</td>
+        <td>No physics at all: a per-zone gradient-boosted model of the settled price itself,
+        from lagged settled prices (24 h / 48 h / 168 h, weekly mean), calendar, fuels, and the
+        published D-1 load & RES forecasts. The strongest honest "just use statistics" baseline.</td>
+        <td>Yes — directly.</td></tr>
+    </tbody>
+  </table>
+
+  <h2>How good is each? (out-of-sample, 729 days, 39 zones, energy-weighted)</h2>
+  <table class="score-table">
+    <thead><tr><th>metric</th><th>physics</th><th>+ ex-ante GBM</th><th>pure stats</th><th>what it measures</th></tr></thead>
+    <tbody>
+      <tr><td>MAE €/MWh</td><td>23.1</td><td><strong>14.9</strong></td><td><strong>14.5</strong></td><td>typical hourly miss</td></tr>
+      <tr><td>rMAE vs naive-week</td><td>0.81</td><td>0.52</td><td><strong>0.49</strong></td><td>error ÷ "same hour last week" (&lt;1 beats naive)</td></tr>
+      <tr><td>correlation</td><td>0.79</td><td>0.88</td><td><strong>0.89</strong></td><td>shape tracking</td></tr>
+      <tr><td>directional accuracy</td><td>0.61</td><td>0.75</td><td><strong>0.80</strong></td><td>hour-to-hour up/down calls</td></tr>
+      <tr><td>spike recall (≥p90)</td><td>0.39</td><td><strong>0.68</strong></td><td>0.69</td><td>expensive hours caught</td></tr>
+      <tr><td>spike precision</td><td><strong>0.77</strong></td><td>0.73</td><td>0.74</td><td>called spikes that were real</td></tr>
+      <tr><td>collapse recall (≤€5)</td><td>0.23</td><td><strong>0.49</strong></td><td>0.49</td><td>near-zero hours caught</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Who wins where</h2>
+  <p>The hybrid (pink) wins <strong>where the physics is strongest</strong> — the continental core
+  (DE/FR/BE/NL/AT/CH/CZ, MAE 13.2 vs stats 13.5), Poland–Slovakia–Hungary, the Baltics, and it ties
+  in the Nordics. The stats line (yellow) wins <strong>where the physics has a known structural
+  gap</strong> — Italy (9.7 vs 12.7) and Iberia — because a lag model isn't dragged by the model's
+  bias shape. Physics keeps the best <strong>spike precision everywhere north of the Alps</strong>
+  (0.84–1.00): when the blue line calls an extreme hour, it is calling real, mechanical scarcity —
+  not pattern-matching.</p>
+
+  <h2>What the dashed lines can never do</h2>
+  <ul>
+    <li><strong>Measure conduct.</strong> The stats model learns the market's actual bidding
+    behaviour — including any exercise of market power — into its lags. It can only ever agree with
+    the market. The physics line is the competitive benchmark the market can be <em>compared
+    against</em>; the persistent gap between blue and settled in tight evening hours (Hungary,
+    Poland, the Baltics) is a finding, not an error.</li>
+    <li><strong>Handle a regime it never saw.</strong> A fuel shock, a new interconnector, a war
+    outage move the physics line correctly on day one. A lag model needs weeks of new history.</li>
+    <li><strong>Explain itself.</strong> Every blue-line price decomposes into the order book you
+    can open on the <a href="./index.html#view=book">book page</a>. The dashed lines are
+    predictions, not explanations.</li>
+  </ul>
+
+  <h2>Honesty notes</h2>
+  <ul>
+    <li>Both dashed lines are evaluated <em>out-of-sample</em> (5-fold cross-validation grouped by
+    day), but the folds shuffle days rather than respecting time order — a strict walk-forward
+    evaluation would score both ML lines somewhat worse. The physics line has no fitting and no
+    leakage of any kind.</li>
+    <li>The pink line's features are all gate-legal (nothing after D-1 12:00 CET enters); the
+    yellow line's lagged prices are the auction results published up to D-2 12:45 CET — also
+    gate-legal.</li>
+    <li>Where a day has no dashed lines, the models had no validated series for it — gaps are
+    shown, never interpolated.</li>
+  </ul>
+
+  <h2 id="scenarios">Scenario case studies at cv37</h2>
+  <p class="lede">The scenario API re-clears the whole coupled footprint under a counterfactual
+  intervention. The worked examples from the documentation, re-run at the current model version
+  (cv37, JAO flow-based network, graded tranches, wet-adjusted Nordic water values), 2026-04-03:</p>
+  <div id="scenario-tables">
+  <h3>(i) Ships request +200 MW in Greece <span class="muted">(extra inelastic demand, all hours)</span></h3>
+  <table class="score-table"><thead><tr><th>zone</th><th>baseline €/MWh</th><th>scenario</th><th>Δ</th></tr></thead>
+  <tbody>
+    <tr><td>GR</td><td>114.03</td><td>116.07</td><td><strong>+2.04</strong></td></tr>
+    <tr><td>BG</td><td>113.49</td><td>114.64</td><td>+1.15</td></tr>
+    <tr><td>RO</td><td>113.49</td><td>114.64</td><td>+1.15</td></tr>
+    <tr><td>RS</td><td>106.53</td><td>107.68</td><td>+1.15</td></tr>
+  </tbody></table>
+  <p>The demand lands in Greece; the uncongested SEE price island (BG/RO/RS) rises with it
+  through the endogenous flows — market coupling, reproduced. Under the cv37 JAO network the
+  island is broader and shallower than in the older documentation run: more of the +200 MW is
+  absorbed by imports, so GR itself moves less (+2.0 vs +2.6 then).</p>
+
+  <h3>(ii) The incumbent (PPC) marks every offer up 20%</h3>
+  <table class="score-table"><thead><tr><th>zone</th><th>baseline</th><th>scenario</th><th>Δ</th></tr></thead>
+  <tbody>
+    <tr><td>GR</td><td>114.03</td><td>119.12</td><td><strong>+5.09</strong></td></tr>
+    <tr><td>BG</td><td>113.49</td><td>117.02</td><td>+3.53</td></tr>
+    <tr><td>RO</td><td>113.49</td><td>117.02</td><td>+3.53</td></tr>
+    <tr><td>RS</td><td>106.53</td><td>108.27</td><td>+1.74</td></tr>
+  </tbody></table>
+  <p>The markup bites only in hours where a PPC unit is marginal; elsewhere the coupled import
+  stack caps the price — a +20% across-the-board markup buys the incumbent just +4.5% on the
+  day-mean. This is the market-power counterfactual: the same machinery that measures the
+  <em>observed</em> market's premium over the competitive benchmark.</p>
+
+  <h3>(iii) Retire the 615 MW Ptolemaida lignite unit</h3>
+  <table class="score-table"><thead><tr><th>zone</th><th>baseline</th><th>scenario</th><th>Δ</th></tr></thead>
+  <tbody>
+    <tr><td>GR</td><td>114.03</td><td>114.96</td><td><strong>+0.93</strong></td></tr>
+    <tr><td>BG / RO / RS</td><td>113.49 / 113.49 / 106.53</td><td>+0.75 each</td><td>+0.75</td></tr>
+  </tbody></table>
+  <p>Under the cv37 network, losing the unit costs under a euro on the day-mean — the coupled
+  imports and the remaining fleet absorb it. (On a scarce winter evening the same retirement
+  prices very differently; this is one spring day, 2026-04-03.)</p>
+
+  <p class="muted"><strong>Reproducibility note (stated, not hidden):</strong> zones far from the
+  intervention show identical ±0.8–2.2 €/MWh movements in <em>all three</em> scenarios (e.g. FR
+  −2.21 in each) — that is run-to-run variation of the two-pass anchored clear, not a scenario
+  effect. Only deltas that differ <em>between</em> scenarios, in the coupled neighbourhood of the
+  intervention, are findings.</p>
+  </div>
+
+  <footer class="about-footer">
+    <p>Full methodology: <code>docs/experiments/forecast-eval-2026-08/</code> in the repository.
+    The evaluation window is 2024-07-01 … 2026-06-30 (729 days); the dashed series on recent days
+    are true out-of-period predictions from models frozen on that window.</p>
+  </footer>
+</main>
+</body>
+</html>

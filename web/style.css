@@ -30,6 +30,8 @@
   --heading:        var(--deep-blue);
   --series-sim:     var(--aegean);      /* simulated (ex-ante) */
   --series-act:     var(--terracotta);  /* actual (settled) */
+  --series-gbm:     #D4649B;            /* physics + ex-ante GBM (pink) */
+  --series-stats:   #C9A227;            /* pure-stats GBM (yellow) */
   --status-good:    #2E7D46;
   --status-weak:    #C0392B;
   --good-text:      #2E7D46;
@@ -73,6 +75,8 @@
   --heading:        #DCE6F2;
   --series-sim:     #6FA8DC;
   --series-act:     #E0A458;
+  --series-gbm:     #F084B8;            /* physics + ex-ante GBM (pink) */
+  --series-stats:   #E8C547;            /* pure-stats GBM (yellow) */
   --status-good:    #58B372;
   --status-weak:    #E06555;
   --good-text:      #58B372;
@@ -547,6 +551,8 @@ select {
 }
 .legend .key.sim { border-color: var(--series-sim); }
 .legend .key.act { border-color: var(--series-act); }
+.legend .key.gbm { border-color: var(--series-gbm); }
+.legend .key.stats { border-color: var(--series-stats); }
 .legend .key.dashed { border-top-style: dashed; }
 
 /* Interactive series focus: hover to highlight, click to toggle, double-click
