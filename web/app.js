@@ -1866,7 +1866,8 @@
 
     // legend: forecast + actual
     var C = chartColors();
-    [["sim", "Forecast (ex-ante)"], ["act", "Actual (settled)"]].forEach(function (it) {
+    [["sim", "Forecast (ex-ante)"], ["act", "Actual (settled)"],
+     ["gbm", "Physics + ex-ante GBM"], ["stats", "Pure-stats GBM"]].forEach(function (it) {
       var span = el("span");
       var key = el("span", "key " + it[0]);
       key.setAttribute("aria-hidden", "true");
@@ -1947,6 +1948,19 @@
         d: pathString(d.sim, Xoff, Y), fill: "none", stroke: C.sim,
         "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round",
       }));
+      // model-line overlays (dashed, beneath actual): pink = physics+GBM,
+      // yellow = pure-stats GBM — same contract as the day explorer.
+      [["gbm", C.gbm], ["stats", C.stats]].forEach(function (ov) {
+        var arr = d[ov[0]];
+        if (!arr || !arr.some(function (v) { return v !== null && v !== undefined; })) return;
+        var od = pathString(arr, Xoff, Y);
+        if (!od) return;
+        svg.appendChild(svgEl("path", {
+          d: od, fill: "none", stroke: ov[1],
+          "stroke-width": 1.8, "stroke-dasharray": "5 4",
+          "stroke-linejoin": "round", "stroke-linecap": "round",
+        }));
+      });
       // actual line (breaks at nulls)
       var actD = pathString(d.actual, Xoff, Y);
       if (actD) {
