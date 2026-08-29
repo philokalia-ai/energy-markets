@@ -102,7 +102,49 @@
   <p class="lede">The scenario API re-clears the whole coupled footprint under a counterfactual
   intervention. The worked examples from the documentation, re-run at the current model version
   (cv37, JAO flow-based network, graded tranches, wet-adjusted Nordic water values), 2026-04-03:</p>
-  <div id="scenario-tables"><!-- filled by the cv37 scenario rerun --></div>
+  <div id="scenario-tables">
+  <h3>(i) Ships request +200 MW in Greece <span class="muted">(extra inelastic demand, all hours)</span></h3>
+  <table class="score-table"><thead><tr><th>zone</th><th>baseline €/MWh</th><th>scenario</th><th>Δ</th></tr></thead>
+  <tbody>
+    <tr><td>GR</td><td>114.03</td><td>116.07</td><td><strong>+2.04</strong></td></tr>
+    <tr><td>BG</td><td>113.49</td><td>114.64</td><td>+1.15</td></tr>
+    <tr><td>RO</td><td>113.49</td><td>114.64</td><td>+1.15</td></tr>
+    <tr><td>RS</td><td>106.53</td><td>107.68</td><td>+1.15</td></tr>
+  </tbody></table>
+  <p>The demand lands in Greece; the uncongested SEE price island (BG/RO/RS) rises with it
+  through the endogenous flows — market coupling, reproduced. Under the cv37 JAO network the
+  island is broader and shallower than in the older documentation run: more of the +200 MW is
+  absorbed by imports, so GR itself moves less (+2.0 vs +2.6 then).</p>
+
+  <h3>(ii) The incumbent (PPC) marks every offer up 20%</h3>
+  <table class="score-table"><thead><tr><th>zone</th><th>baseline</th><th>scenario</th><th>Δ</th></tr></thead>
+  <tbody>
+    <tr><td>GR</td><td>114.03</td><td>119.12</td><td><strong>+5.09</strong></td></tr>
+    <tr><td>BG</td><td>113.49</td><td>117.02</td><td>+3.53</td></tr>
+    <tr><td>RO</td><td>113.49</td><td>117.02</td><td>+3.53</td></tr>
+    <tr><td>RS</td><td>106.53</td><td>108.27</td><td>+1.74</td></tr>
+  </tbody></table>
+  <p>The markup bites only in hours where a PPC unit is marginal; elsewhere the coupled import
+  stack caps the price — a +20% across-the-board markup buys the incumbent just +4.5% on the
+  day-mean. This is the market-power counterfactual: the same machinery that measures the
+  <em>observed</em> market's premium over the competitive benchmark.</p>
+
+  <h3>(iii) Retire the 615 MW Ptolemaida lignite unit</h3>
+  <table class="score-table"><thead><tr><th>zone</th><th>baseline</th><th>scenario</th><th>Δ</th></tr></thead>
+  <tbody>
+    <tr><td>GR</td><td>114.03</td><td>114.96</td><td><strong>+0.93</strong></td></tr>
+    <tr><td>BG / RO / RS</td><td>113.49 / 113.49 / 106.53</td><td>+0.75 each</td><td>+0.75</td></tr>
+  </tbody></table>
+  <p>Under the cv37 network, losing the unit costs under a euro on the day-mean — the coupled
+  imports and the remaining fleet absorb it. (On a scarce winter evening the same retirement
+  prices very differently; this is one spring day, 2026-04-03.)</p>
+
+  <p class="muted"><strong>Reproducibility note (stated, not hidden):</strong> zones far from the
+  intervention show identical ±0.8–2.2 €/MWh movements in <em>all three</em> scenarios (e.g. FR
+  −2.21 in each) — that is run-to-run variation of the two-pass anchored clear, not a scenario
+  effect. Only deltas that differ <em>between</em> scenarios, in the coupled neighbourhood of the
+  intervention, are findings.</p>
+  </div>
 
   <footer class="about-footer">
     <p>Full methodology: <code>docs/experiments/forecast-eval-2026-08/</code> in the repository.
