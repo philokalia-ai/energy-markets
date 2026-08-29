@@ -197,7 +197,8 @@ function export_zone_parquets()
                        sim=Float64[], actual=Union{Missing,Float64}[],
                        mae=Union{Missing,Float64}[], bias=Union{Missing,Float64}[],
                        corr=Union{Missing,Float64}[],
-                       is_retro=Bool[], reset_tag=Union{Missing,String}[])
+                       is_retro=Bool[], reset_tag=Union{Missing,String}[],
+                       gbm=Union{Missing,Float64}[], stats=Union{Missing,Float64}[])
         keys_ = unique(collect(zip(Date.(zp.market_date), Int.(zp.lead_days),
                                    String.(zp.mode))))
         # newest first, then by increasing lead ('entsoe' before 'weather'
@@ -218,7 +219,9 @@ function export_zone_parquets()
                 h = DateTime(r.t)
                 push!(df, (d, lead, mode, slice_cv, made, h, Float64(r.sim),
                            get(actmap, (zone, h), missing), mae, bias, corr,
-                           slice_retro, slice_tag))
+                           slice_retro, slice_tag,
+                           get(mlmap, (zone, "hybrid_gbm", h), missing),
+                           get(mlmap, (zone, "stats_gbm", h), missing)))
             end
         end
         counts["zones/$zone.parquet"] =
@@ -283,6 +286,19 @@ function export_map_parquet()
     act = resolution_aware_actuals(sd - Day(1), ed)
     actmap = Dict{Tuple{String,DateTime},Float64}(
         (String(a.z), DateTime(a.t)) => Float64(a.act) for a in eachrow(act))
+    ml = try
+        Euphemia.sql2df_with_retry("""
+            SELECT bidding_zone AS z, model,
+                   (date_time_utc AT TIME ZONE 'UTC') AS t, price_eur_mwh AS p
+            FROM simulations.model_lines
+            WHERE date_time_utc >= (\$1::date - INTERVAL '1 day')::timestamp
+            """, [sd])
+    catch e
+        @warn "model_lines unavailable — overlay columns null" error=e
+        DataFrame(z=String[], model=String[], t=DateTime[], p=Float64[])
+    end
+    mlmap = Dict{Tuple{String,String,DateTime},Float64}(
+        (String(r.z), String(r.model), DateTime(r.t)) => Float64(r.p) for r in eachrow(ml))
     # Hourly D-1 load forecast: the weights of err_pct (load-weighted WAPE).
     loads = Euphemia.sql2df_with_retry(HOURLY_LOAD_FC_SQL, [sd - Day(1), ed + Day(1)])
     loadmap = Dict{Tuple{String,DateTime},Float64}(

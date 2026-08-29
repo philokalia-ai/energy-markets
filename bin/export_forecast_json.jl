@@ -189,7 +189,9 @@ function export_zone_files()
                 "actual" => actuals,
                 "mae" => sc === nothing ? nothing : nn(sc.mae),
                 "bias" => sc === nothing ? nothing : nn(sc.bias),
-                "corr" => sc === nothing ? nothing : nn(sc.corr)))
+                "corr" => sc === nothing ? nothing : nn(sc.corr),
+                "gbm" => Any[get(mlmap, (zone, "hybrid_gbm", h), nothing) for h in hours],
+                "stats" => Any[get(mlmap, (zone, "stats_gbm", h), nothing) for h in hours]))
         end
         # newest first, then by increasing lead ('entsoe' before 'weather' within a lead)
         sort!(days; by=e -> (e["date"], -e["lead_days"],
@@ -267,6 +269,24 @@ function export_map_json()
     act = resolution_aware_actuals(sd - Day(1), ed)
     actmap = Dict{Tuple{String,DateTime},Float64}(
         (String(a.z), DateTime(a.t)) => Float64(a.act) for a in eachrow(act))
+
+    # Model-line overlays (docs/experiments/forecast-eval-2026-08): the
+    # [physics + ex-ante GBM] and [pure-stats GBM] hourly series from
+    # simulations.model_lines — optional per day; the SPA draws them as the
+    # pink / yellow lines. Absent hours stay null (honest gaps).
+    ml = try
+        Euphemia.sql2df_with_retry("""
+            SELECT bidding_zone AS z, model,
+                   (date_time_utc AT TIME ZONE 'UTC') AS t, price_eur_mwh AS p
+            FROM simulations.model_lines
+            WHERE date_time_utc >= (\$1::date - INTERVAL '1 day')::timestamp
+            """, [sd])
+    catch e
+        @warn "model_lines unavailable — overlays skipped" error=e
+        DataFrame(z=String[], model=String[], t=DateTime[], p=Float64[])
+    end
+    mlmap = Dict{Tuple{String,String,DateTime},Float64}(
+        (String(r.z), String(r.model), DateTime(r.t)) => Float64(r.p) for r in eachrow(ml))
     # Hourly D-1 load forecast: the weights of err_pct (load-weighted WAPE).
     loads = Euphemia.sql2df_with_retry(HOURLY_LOAD_FC_SQL, [sd - Day(1), ed + Day(1)])
     loadmap = Dict{Tuple{String,DateTime},Float64}(
