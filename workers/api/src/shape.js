@@ -59,6 +59,8 @@ export function shapeZone(rows, zone) {
         hours: [],
         sim: [],
         actual: [],
+        gbm: [],     // physics + ex-ante GBM overlay (null where absent)
+        stats: [],   // pure-stats GBM overlay (null where absent)
         mae: num(r.mae),
         bias: num(r.bias),
         corr: num(r.corr),
@@ -69,6 +71,8 @@ export function shapeZone(rows, zone) {
     day.hours.push(iso(r.date_time_utc));
     day.sim.push(num(r.sim));
     day.actual.push(num(r.actual));
+    day.gbm.push(num(r.gbm));
+    day.stats.push(num(r.stats));
   }
   // Defensive re-sort (same comparator as the exporter): newest date first,
   // then increasing lead, 'entsoe' before 'weather' within a lead.
