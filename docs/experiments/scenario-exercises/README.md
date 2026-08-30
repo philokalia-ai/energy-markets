@@ -124,3 +124,20 @@ island systems (Canaries, Ceuta/Melilla, Madeira/Azores, Corsica, Mayotte,
   scenario-on-the-weather-track is not wired into the pipeline scenario path
   (raised as a gap — would need `bin/ml_inputs.jl` threading into the book
   stages).
+
+## cv37 re-run (2026-08-30) — fresh-baseline pairing
+
+Both exercises re-run at cv37 (JAO flow-based network, graded tranches,
+wet-adjusted Nordic water values) via `eu37_scenarios.jl`. The record-pairing
+guard FAILED at cv37 (re-clearing record day 2025-04-15 differs by up to
+23.15 €/MWh on 85/936 cells — run-to-run nondeterminism that crept in between
+cv31, which passed at 1e-12, and cv37; open ledger issue). The method
+therefore adds a fresh `eu37_base` arm cleared by the same process, and all
+deltas pair against it. Results (labels in data/results.duckdb):
+
+- **eu37_dc574** (730 d): GR LW +7.10 €/MWh (+7.4%); EU +0.29 (+0.34%);
+  extra consumer cost €1,554.6m/2y (€834m outside GR); DC bill 10.03 TWh /
+  €1,019m. Import relief absorbs ~64% of the single-zone impact.
+- **eu37_ops_floor_paneu** (365 d): EU LW +0.139 €/MWh (+0.16%); extra cost
+  €370.8m/yr; OPS bill 2.44 TWh / €197.8m (€1 of shore power → ~€1.87 to
+  everyone else). Top zones IT-Sardinia +0.79, GR +0.60.
