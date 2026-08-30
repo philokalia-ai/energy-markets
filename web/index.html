@@ -914,8 +914,8 @@ end
       <div class="case-chips">
         <span class="chip">39 zones · 2024-07-01 → 2026-06-30</span>
         <span class="chip">hook: load_modifier (GR only)</span>
-        <span class="chip">runs: eu_scn_base vs eu_scn_dc574</span>
-        <span class="chip">1,460 coupled day-solves · 0 failures</span>
+        <span class="chip">runs: eu37_base vs eu37_dc574 · cv37</span>
+        <span class="chip">1,460 coupled day-solves · fresh-baseline paired · 0 failures</span>
       </div>
 
       <div class="editor">
@@ -942,29 +942,29 @@ end</code></pre>
       <div class="case-grid">
         <div class="case-stat accent">
           <span class="cs-label">GR increase, coupled (2025–26)</span>
-          <span class="cs-value">+9.0%</span>
-          <span class="cs-sub">+8.46&nbsp;€/MWh load-weighted (93.65&thinsp;→&thinsp;102.11),
-            €430m/yr — vs +19.46&nbsp;€/MWh single-zone: <strong>import relief absorbs
-            ~57%</strong> of the local impact.</span>
+          <span class="cs-value">+7.4%</span>
+          <span class="cs-sub">+7.10&nbsp;€/MWh load-weighted (96.40&thinsp;→&thinsp;103.50),
+            €360m/yr — vs +19.46&nbsp;€/MWh single-zone: under the cv37 JAO flow-based
+            network <strong>import relief absorbs ~64%</strong> of the local impact.</span>
         </div>
         <div class="case-stat accent">
-          <span class="cs-label">Same window as the ships (2024–25)</span>
-          <span class="cs-value">+8.1%</span>
-          <span class="cs-sub">+8.44&nbsp;€/MWh (104.34&thinsp;→&thinsp;112.78), €433m/yr —
+          <span class="cs-label">EU-wide ripple</span>
+          <span class="cs-value">+0.34%</span>
+          <span class="cs-sub">+0.29&nbsp;€/MWh load-weighted across all 39 zones —
             nearly identical to 2025–26. The window sensitivity of the single-zone runs was
             the scarcity tail, and coupling absorbs it.</span>
         </div>
         <div class="case-stat">
           <span class="cs-label">The cost doesn't vanish — it spreads</span>
-          <span class="cs-value">€0.9–1.2bn<span class="cs-unit">&thinsp;/year EU-wide</span></span>
-          <span class="cs-sub">Total extra consumer cost across all 39 zones: €897m (2025–26)
-            to €1,168m (2024–25) — <strong>€485–745m of it lands outside Greece</strong>:
-            BG&nbsp;+5.1, RO&nbsp;+4.5, RS&nbsp;+3.4, HU&nbsp;+1.6&nbsp;€/MWh (2024–25
+          <span class="cs-value">€1.55bn<span class="cs-unit">&thinsp;/ 2 years EU-wide</span></span>
+          <span class="cs-sub">Total extra consumer cost across all 39 zones, 2024-07 → 2026-06:
+            €1,554.6m — <strong>€834m of it lands outside Greece</strong>:
+            BG&nbsp;+3.27, RO&nbsp;+2.44, RS&nbsp;+1.17&nbsp;€/MWh (cv37
             load-weighted deltas).</span>
         </div>
         <div class="case-stat">
           <span class="cs-label">Cold ironing, floor &amp; coupled (2024–25)</span>
-          <span class="cs-value">+0.45%</span>
+          <span class="cs-value">+0.16%</span>
           <span class="cs-sub">Registry-confirmed ships only (322&nbsp;GWh/yr), coupled:
             +0.47&nbsp;€/MWh, <strong>€24m/yr</strong> for Greek consumers (€66m EU-wide);
             ships' own bill €28m/yr. The honest bracket with case&nbsp;2's central
@@ -975,7 +975,7 @@ end</code></pre>
         pay, but the EU-wide bill is comparable to the single-zone estimate — import relief
         doesn't delete the cost of 574&nbsp;MW of new baseload, it exports it to the
         neighbors who sell the power. The data center's own bill barely moves
-        (€486m/yr at a time-average €100.82/MWh, 2025–26).</p>
+        (€510m/yr at a time-average €101.65/MWh, cv37 2024–26).</p>
       <p class="case-note">Baseline model quality over this 730-day window, hourly simulated
         vs settled prices per zone, is in the table below — deltas are <em>paired</em>
         differences on the same model, so baseline error largely cancels in the scenario
@@ -1033,10 +1033,10 @@ end</code></pre>
           <strong>cv17</strong> model — 1,462 coupled market days, zero failures.</p>
       </div>
       <div class="case-chips">
-        <span class="chip">39 zones · 2023-07-01 → 2025-06-30</span>
+        <span class="chip">39 zones · 2024-07-01 → 2025-06-30</span>
         <span class="chip">24 zones with OPS demand · ~2,494 GWh/yr (floor)</span>
         <span class="chip">hook: extra_orders (per zone)</span>
-        <span class="chip">eu17_base vs eu17_ops_floor_paneu · 0 failures</span>
+        <span class="chip">eu37_base vs eu37_ops_floor_paneu · cv37 · 0 failures</span>
       </div>
 
       <div class="editor">
@@ -1060,39 +1060,40 @@ run_pipelined_backfill(Date(2023,7,1):Day(1):Date(2025,6,30), FOOTPRINT;
       <div class="case-grid">
         <div class="case-stat accent">
           <span class="cs-label">Scenario consumer cost (EU-wide)</span>
-          <span class="cs-value">€555m<span class="cs-unit">&thinsp;/year</span></span>
-          <span class="cs-sub">All 39 zones, each weighted by its own load. +0.214&nbsp;€/MWh
-            load-weighted (€223.5bn baseline consumer bill → €224.1bn). Two-year total
-            €1,110m; €622m in the second year vs €488m in the first.</span>
+          <span class="cs-value">€371m<span class="cs-unit">&thinsp;/year</span></span>
+          <span class="cs-sub">All 39 zones, each weighted by its own load. +0.139&nbsp;€/MWh
+            load-weighted on the 2024-25 AIS window, re-run at cv37 (the JAO
+            flow-based network spreads the berth demand into more import relief
+            than the cv17 estimate).</span>
         </div>
         <div class="case-stat accent">
           <span class="cs-label">Load-weighted price increase</span>
-          <span class="cs-value">+0.25%</span>
-          <span class="cs-sub">Everyone else pays: Baseline&nbsp;×&nbsp;(1&thinsp;+&thinsp;0.25%).
-            Cross-check: 0.248%&nbsp;×&nbsp;€223.5bn = €554m ≈ the €555m measured directly. Small
+          <span class="cs-value">+0.16%</span>
+          <span class="cs-sub">Everyone else pays: Baseline&nbsp;×&nbsp;(1&thinsp;+&thinsp;0.16%).
+            Cross-check: 0.16%&nbsp;×&nbsp;the EU-wide baseline bill ≈ the €371m measured directly. Small
             because the load is spread over the whole footprint, not one zone.</span>
         </div>
         <div class="case-stat">
           <span class="cs-label">The ships' own power bill</span>
-          <span class="cs-value">€199m<span class="cs-unit">&thinsp;/year</span></span>
-          <span class="cs-sub">4.88&nbsp;TWh of shore power over two years at an OPS-weighted
-            <strong>€81.73/MWh</strong> (below the load-weighted average — berthing is
+          <span class="cs-value">€198m<span class="cs-unit">&thinsp;/year</span></span>
+          <span class="cs-sub">2.44&nbsp;TWh of shore power in the year at an OPS-weighted
+            <strong>€81.14/MWh</strong> (below the load-weighted average — berthing is
             overnight-heavy). So every €1 of shore power raises other consumers' bills by
-            <strong>~€2.79</strong> — a stronger lever than the Greek-only ships case (~€1.50),
+            <strong>~€1.87</strong> — a stronger lever than the Greek-only ships case (~€1.50),
             because 24 zones' marginals lift together.</span>
         </div>
         <div class="case-stat">
           <span class="cs-label">Who carries it</span>
           <span class="cs-value">Med&nbsp;coast</span>
-          <span class="cs-sub">Highest per-MWh: GR&nbsp;+0.69, RO&nbsp;+0.62, BG&nbsp;+0.59,
-            IT-Sicily&nbsp;+0.42. Highest absolute (load weight): FR&nbsp;€176m/yr,
-            ES&nbsp;€62m/yr, IT-NORTH&nbsp;€58m/yr, GR&nbsp;€34m/yr. The far north barely moves
+          <span class="cs-sub">Highest per-MWh: IT-Sardinia&nbsp;+0.79, GR&nbsp;+0.60,
+            IT-CSOUTH&nbsp;+0.39, EE/DK2/LV/SE4&nbsp;≈+0.35. Highest absolute (load
+            weight): ES&nbsp;€71m/yr, FR&nbsp;€53m/yr, IT-NORTH&nbsp;€32m/yr, GR&nbsp;€30m/yr. The far north barely moves
             (SE1/SE2/NO4 ≈ 0) — the shock dies at the congested Nordic borders.</span>
         </div>
       </div>
       <p class="crosscheck"><strong>Reading.</strong> A continent-wide obligation on the biggest
         ferries and cruise ships adds ~2.5&nbsp;TWh/yr of berth demand and costs EU consumers
-        ~€555m/yr in the competitive counterfactual — about a quarter of a percent on the wholesale
+        ~€371m/yr in the competitive counterfactual (cv37) — about a quarter of a percent on the wholesale
         bill, concentrated on the Mediterranean ferry/cruise coast where the ships actually berth.
         It is a <strong>floor</strong>: registry-confirmed &gt;5000&nbsp;GT passenger ships only, full
         uptake, no container OPS.</p>
