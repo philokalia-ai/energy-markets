@@ -6,11 +6,14 @@ checksums, run one command. Everything the model reads (ENTSO-E fundamentals,
 TTF gas, EUA carbon) is bundled; the pipeline clears the market, saves prices
 to a local file, and scores them against the bundled day-ahead actuals.
 
-> **Read this before you compare numbers.** The extracts do **not** carry the
-> `jao.*` flow-based capacity tables that cv35 introduced, and the committed
-> reference metrics were generated at cv24. An offline run therefore clears the
-> pre-cv35 network and will differ from the published cv37 record, most visibly
-> on the Core and Nordic zones. See [What to expect](#what-to-expect).
+> **Read this before you compare numbers.** The `jao.*` flow-based capacity
+> tables that cv35 depends on entered the extract builder on **2026-08-26** —
+> extracts built or refreshed since carry them, the published frozen artifact
+> does not, and on a JAO-less extract the network build silently degrades to
+> the pre-cv35 fallbacks. The committed reference metrics were also generated
+> at cv24. Both gaps show up as differences against the published cv37 record,
+> most visibly on the Core and Nordic zones. See
+> [What to expect](#what-to-expect).
 
 ## What's in the artifact
 
@@ -26,7 +29,11 @@ to a local file, and scores them against the bundled day-ahead actuals.
   output table, weekly reservoir filling, the unit registry, unavailability),
   the day-ahead **actuals** used for scoring, `yfinance` TTF and EUA closes,
   and the `simulations` reference caches. Every timestamp is naive UTC.
-- **Not included:** `jao.max_exchanges` / `jao.hub_net_positions` (cv35).
+- **Not in the frozen v1.1 artifact:** `jao.max_exchanges` /
+  `jao.hub_net_positions` and `entsoe.unavailability_in_the_transmission_grid`
+  (cv35), `simulations.input_corrections` (cv32), `entsoe.actual_total_load`
+  (read by the `:v3` flow rule) — all entered the builder after v1.1 was
+  frozen. Extracts built or refreshed since carry them.
 
 Column-level documentation with per-table provenance and the known data quirks:
 [data-dictionary.md](data-dictionary.md).
@@ -145,10 +152,11 @@ changed EU-footprint prices — cv35 alone moved footprint MAE from 26.24 to
 broken run. Regenerating the reference at the current version is an open item.
 
 The gap has two separable parts, and it is worth knowing which you are looking
-at: **version distance** (the reference is 13 versions old) and **missing JAO
-data** (the extract cannot build the cv35 network at all). The second one
-concentrates in the Core and Nordic zones — on the published record those score
-far better than any extract run can.
+at: **version distance** (the reference is 13 versions old) and, on an extract
+built before 2026-08-26, **missing JAO data** — the cv35 network cannot be
+built at all and the code falls back silently. The second concentrates in the
+Core and Nordic zones. If those zones look far worse than the published record,
+check your extract's build date before suspecting the model.
 
 The model is a **competitive counterfactual, not a forecast**: persistent
 residuals are candidate findings, not bugs. Current per-zone numbers live in

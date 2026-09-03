@@ -198,11 +198,12 @@ go to a separate `data/results.duckdb` — the source extract stays read-only.
 A **living extract** refreshed daily (`refresh-extract.yml`, 02:00 UTC) is
 available for work on current data; point `EUPHEMIA_DUCKDB_PATH` at it.
 
-> **Honest scope of offline reproduction.** The public and living extracts do
-> **not** carry the `jao.*` tables, so an offline run clears the cv34 network,
-> not cv35's. Expect the flow-based zones (Core, Nordics) to score materially
-> worse than the published record — that gap is the JAO layer, not drift.
-> Reproducing cv35+ exactly needs the JAO feed.
+> **Honest scope of offline reproduction.** The `jao.*` tables entered the
+> extract builder on 2026-08-26. Extracts built or refreshed since then carry
+> them; the **published frozen artifact predates that and does not**, so a run
+> on it silently degrades to the pre-cv35 network and the flow-based zones
+> (Core, Nordics) score materially worse than the record. That gap is the JAO
+> layer, not drift. Use the living extract to reproduce cv35+.
 
 ## Scenario API
 

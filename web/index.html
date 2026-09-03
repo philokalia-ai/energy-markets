@@ -1012,14 +1012,13 @@ end</code></pre>
         </div>
         <p class="case-note">Pearson correlation and errors on hourly prices over ~16,970
           settled hours per zone. GR (the scenario zone) sits near the top: corr 0.80,
-          MAE 24.1. <strong>Read the weak zones with one caveat:</strong> the scenario
-          arms run offline on the public extract, which does not carry the JAO
-          flow-based capacity feed, so both arms clear the pre-cv35 network. The zones
-          that suffer here — the Norwegian and Danish hydro north, and the flow-based
-          continental borders AT/BE/CH/SI — are exactly the ones JAO capacity repaired;
-          on the published record they score far better (AT 0.85, DK1 0.83, NO1 0.74).
-          The scenario deltas are unaffected, because they are <em>paired</em>
-          differences on the same baseline.</p>
+          MAE 24.1. <strong>Read the weak zones with one caveat:</strong> these are the
+          scenario's own offline baseline arm, and it scores well below the published
+          record in exactly the flow-based zones — AT, BE, CH, SI and the Norwegian and
+          Danish hydro north, where the record has AT 0.85, DK1 0.83 and NO1 0.74. That
+          is the network the offline arm was able to build, not the model's accuracy.
+          The scenario numbers above are unaffected: they are <em>paired</em>
+          differences against this same baseline, so its error largely cancels.</p>
       </details>
     </article>
 
