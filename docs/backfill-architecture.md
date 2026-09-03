@@ -1,4 +1,4 @@
-# cv23 record backfill — architecture
+# Record backfill — architecture
 
 The canonical full-history EU-footprint record (`clearing_mode='multi_zone_eu'`,
 current `code_version`) is produced offline against the DuckDB extract and then
@@ -44,6 +44,44 @@ and the "Pipelined multi-zone backfill" section of `CLAUDE.md`). Under the DuckD
 backend the book-builder + solver workers open the extract **read-only** and the
 coordinator is the **single writer** into `data/results.duckdb`
 (`EUPHEMIA_RESULTS_DB` to relocate). Nothing touches Postgres in this step.
+
+### Pipeline knobs, throughput and identity
+
+`--pipeline` (on `bin/reproduce.jl`) and `run_pipelined_backfill` decouple the
+slow 39-zone book build from the fast solve, which day-parallel runs cannot:
+`--book-workers M` (default `min(10, CPU÷8)`) build complete per-day book sets
+ahead of time, and `--solver-workers S` dedicated solver processes — each
+holding one persistent solver environment — consume them back-to-back,
+including the pass-2 opportunity-anchor re-clears (only the anchored zones are
+rebuilt; every other zone's book is reused verbatim). Bounded queues (~8 days
+in flight) keep RAM flat, the run is resumable per day, and it prints per-day
+stage timings plus a final throughput / solver-utilization summary.
+
+```bash
+julia --project=. bin/reproduce.jl --range 2026-01-01 2026-06-30 --pipeline \
+    --book-workers 10 --solver-workers 2
+```
+
+Measured on a 10-day window against a DuckDB extract (80-core box, Gurobi, 2
+solver sessions, `test/scripts/pipeline_benchmark.jl`): day-parallel
+`--workers 2` took 289 s, `--pipeline` 202 s — **1.43×**, at 73–78% solver
+utilization. The pipeline also absorbs hard days gracefully: one day needing
+two ~50 s MPCC solves did not stall the others.
+
+**Identity.** The pipeline calls the same stage functions as the sequential
+path (`mz_build_books` / `mz_solve_pass` / `mz_extract_anchor_inputs` /
+`mz_rebuild_anchored`), and `test/scripts/pipeline_identity.jl` checks 3 days ×
+39 zones end-to-end. Against the DuckDB extract, pipelined and sequential are
+bit-identical. Against Postgres they are bit-identical only with serialized DB
+access (`book_workers=1, in_flight=1`); with concurrent book builds you get
+last-ULP noise (≤1e-12 €/MWh, rare near-degenerate marginal-tranche flips)
+because SQL aggregate summation order shifts under concurrent query load — a
+property of clearing against live Postgres, not of the pipeline. **For exactly
+reproducible backfills, run against the extract.**
+
+Note the pipelined path is also where the not-ex-ante-flow record defect lived
+(the book workers used same-day `:d0` flows instead of the scoped `:v3`); cv25
+closed it, and both arms have resolved the scoped default since.
 
 ## 2. Transfer to Postgres
 

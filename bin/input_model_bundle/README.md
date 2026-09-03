@@ -1,11 +1,16 @@
-# Euphemia input model — open RES & load predictor (v1)
+# Euphemia input model — open RES & load predictor (v1.0.0)
 
-A **standalone, independently usable** package of the fitted RES/load input model
-behind the Euphemia day-ahead counterfactual. It predicts, per delivery hour and
-per bidding zone, the **wind, solar and load** the market clears on — strictly
-**ex-ante** (D-1 weather only) — from free, public weather data.
+> **This bundle is the 5-zone pilot** (GR, ES, DE_LU, SE2, NL), frozen at v1.0.0.
+> The live system has since been rolled out to the **whole 39-zone footprint** with
+> per-(zone,target) winner selection and has been retrained; the numbers below are
+> the pilot's, not today's. The current recipe, the live winner map and the
+> full-footprint data plane are in
+> [`docs/predictions.md`](https://github.com/philokalia-ai/energy-markets/blob/main/docs/predictions.md).
 
-You can use this bundle with **no Euphemia, no Julia, no Postgres**:
+A **standalone** package of the fitted RES/load input model behind the Euphemia
+day-ahead counterfactual: per delivery hour and bidding zone, the **wind, solar and
+load** the market clears on — strictly **ex-ante** (D-1 weather only) — from free,
+public weather data. Usable with **no Euphemia, no Julia, no Postgres**:
 
 - **(a) Load our predictions as data** — `outputs/<ZONE>.parquet` are the model's
   own per-zone-hour predictions (plus the ENTSO-E reference and settled actuals)
@@ -15,53 +20,35 @@ You can use this bundle with **no Euphemia, no Julia, no Postgres**:
   tomorrow from the public open-meteo API in ~20 lines.
 
 Provenance and licence match the source repo (`philokalia-ai/energy-markets`, EUPL
-v1.2). Full recipe: [`docs/predictions.md`](https://github.com/philokalia-ai/energy-markets/blob/main/docs/predictions.md).
-
----
+v1.2).
 
 ## What it predicts, and against what
 
-For each zone-hour the model targets the **ENTSO-E day-ahead forecasts the auction
-actually clears on** — **NOT** the settled outturn:
+The targets are the **ENTSO-E day-ahead forecasts the auction actually clears on**
+— load, solar and wind — **not** the settled outturn, and the weather is always a
+GFS vintage admissible at the 12:00 CET gate (the current run for a future day,
+the `previous_day1` run to reconstruct settled history). Why, and the exact
+tables, columns and vintage rules:
+[`docs/predictions.md`](https://github.com/philokalia-ai/energy-markets/blob/main/docs/predictions.md)
+§1–2. Each output row is labelled by `vintage_lag` (0 = current-run nowcast,
+1 = the D-1 previous-run vintage).
 
-| target | ENTSO-E reference |
-|--------|-------------------|
-| **load** | `day_ahead_total_load_forecast.total_load_mw` |
-| **solar** | `generation_forecasts_for_wind_and_solar`, `production_type='Solar'` |
-| **wind** | same table, `Wind Onshore` + `Wind Offshore`, summed |
+**Two ex-ante scalars must be supplied by the caller** (both known before the gate):
 
-Predicting the *reference* (not the outturn) is deliberate: if the predicted inputs
-equal the TSO's published forecast, the ex-ante weather track converges to the
-reference track's price quality. Error is measured against what the market used.
-
-## The honest ex-ante contract
-
-- **Weather is a GFS `gfs_seamless` vintage.** To forecast a *future* day, use the
-  **current run** (`vintage_lag=0`, the regular open-meteo forecast API). To
-  reconstruct *settled history* exactly as the market saw it at the gate, use the
-  **`previous_day1`** vintage (the run issued on D-1) from the open-meteo
-  previous-runs API — never a later run that would peek across the 12:00 CET gate.
-  The same discipline is applied at train and serve, so there is no train/serve
-  skew. Each output row is labelled by `vintage_lag` (0 = current-run nowcast for
-  the horizon; 1 = the D-1 previous-run vintage for settled history).
-- **Targets are the ENTSO-E D-1 forecasts, not actuals** (see the table above).
-- **Two ex-ante scalars** feed the RES/load features and must be supplied by the
-  caller (both known before the gate):
-  - `cap95` (RES) — the trailing-30-day 95th-percentile of ENTSO-E **actual**
-    per-type generation, window **ending D-2** (actual generation publishes with
-    ~1–2 d lag). Solar/wind models predict a **ratio** against `cap95`, so a
-    growing fleet does not drift the forecast. A slow-moving scalar; the example
-    ships recent GR values and points at how to refresh them.
-  - `ar1`/`ar7` (load) — the ENTSO-E **D-1 and D-7 same-hour day-ahead load
-    forecasts** (both published before the gate).
+- `cap95` (RES) — the trailing-30-day 95th-percentile of ENTSO-E **actual**
+  per-type generation, window **ending D-2** (actual generation publishes with
+  ~1–2 d lag). Solar/wind predict a **ratio** against it, so a growing fleet does
+  not drift the forecast; slow-moving, and the example ships recent GR values.
+- `ar1`/`ar7` (load) — the ENTSO-E **D-1 and D-7 same-hour day-ahead load
+  forecasts** (both published before the gate).
 
 ## Per-zone winner scorecard (frozen, out-of-sample 2026-05-01…2026-07-22)
 
-Provenance is honest and **per target**. Each (zone, target) ships whichever of
-{this LightGBM model, the committed linear weather pack} won the frozen OOS
-scorecard. This bundle contains the **15 LightGBM boosters** (5 zones × 3 targets)
-and records which are the production winner; where the linear pack wins, the ML
-model is still shipped for study and the production system uses the pack.
+Provenance is per target: each (zone, target) ships whichever of {this LightGBM
+model, the committed linear weather pack} won this frozen OOS window. The bundle
+contains the **15 LightGBM boosters** (5 zones × 3 targets) and records which was
+the production winner *at v1.0.0*; where the pack won, the ML model is still
+shipped for study.
 
 | zone | load | solar | wind | notes |
 |------|:----:|:-----:|:----:|-------|
@@ -69,7 +56,13 @@ model is still shipped for study and the production system uses the pack.
 | **ES** | **ML** | pack | **ML** | ES solar pack ridge already near-perfect |
 | **DE_LU** | **ML** | **ML** | pack | |
 | **SE2** | **ML** | **ML** | pack | |
-| **NL** | **ML** | **ML** | **ML** | ML wind wins offshore-heavy NL (MAE 303 vs 750) |
+| **NL** | **ML** | pack \* | **ML** | ML wind wins offshore-heavy NL (MAE 303 vs 750) |
+
+\* **NL solar shipped as the ML winner in v1.0.0.** It was demoted afterwards by
+the correlation guard (ML corr 0.707 vs pack 0.933 below — a lower MAE bought by
+flattening the shape), and the shipped `models/meta.json` now records
+`winners["NL_solar"] = false`. The booster is still in the bundle; the production
+system uses the pack.
 
 OOS MAE (MW) / Pearson corr, LightGBM ("new") vs the linear pack ("base"):
 
@@ -88,12 +81,12 @@ OOS MAE (MW) / Pearson corr, LightGBM ("new") vs the linear pack ("base"):
 | SE2 | solar | 4 | 4 | 0.969 | 0.959 | **ML** |
 | SE2 | wind | 576 | 470 | 0.790 | 0.866 | pack |
 | NL | load | 626 | 3324 | 0.858 | 0.193 | **ML** |
-| NL | solar | 1145 | 1292 | 0.707 | 0.933 | **ML** |
+| NL | solar | 1145 | 1292 | 0.707 | 0.933 | **ML** at v1.0.0, since demoted |
 | NL | wind | 303 | 750 | 0.929 | 0.877 | **ML** |
 
-> The **34 other footprint zones** in the full Euphemia surface use the linear
-> weather packs throughout (not in this bundle). This bundle is the **5 ML pilot
-> zones**. The linear-pack recipe is documented in the source repo.
+> The other 34 footprint zones used the linear weather packs at v1.0.0 and are not
+> in this bundle. They now have their own LightGBM winners in the source repo —
+> see `docs/predictions.md`.
 
 ## Contents
 
@@ -113,6 +106,13 @@ euphemia-input-model-v1/
 ├── README.md       this file
 └── CHECKSUMS       sha256 of every shipped file
 ```
+
+> **Rebuilding v1.0.0 from current HEAD does not work.** `bin/build_input_model_bundle.sh`
+> copies all 15 `<ZONE>_<target>.txt` dumps out of `bin/input_models/`, but since
+> the 39-zone rollout that directory holds **winners only** — the six pilot targets
+> the pack won (GR wind, ES solar/wind, DE_LU wind, SE2 wind, NL solar) no longer
+> have a committed dump, so the copy step fails. Take those boosters from the
+> v1.0.0 release, or point the builder at the winners it can still ship.
 
 ### `outputs/<ZONE>.parquet` schema
 

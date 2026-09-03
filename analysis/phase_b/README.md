@@ -3,8 +3,14 @@
 Reproducible pipeline for the four pre-specified tests attributing the GR
 day-ahead residual (actual − v10 competitive counterfactual) to observable
 strategic-behaviour signals. Findings and interpretation live in
-[`docs/phase-b-analysis.md`](../../docs/phase-b-analysis.md). This directory is
+[`docs/phase-b-analysis.md`](../../docs/phase-b-analysis.md) and
+[`docs/phase-b-findings.md`](../../docs/phase-b-findings.md). This directory is
 just the code and its captured output.
+
+**Scope:** run in July 2026 against a **cv10** counterfactual baseline. It has
+not been re-run against the current record (cv37), so every number here — in
+`results.txt` and in the findings docs — is a cv10 residual. The pipeline
+itself still runs; the verdicts are as of cv10.
 
 **Register:** market-monitoring research — candidate hypotheses with alternatives
 documented, never accusations.

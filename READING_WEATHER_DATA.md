@@ -1,62 +1,45 @@
 # Reading weather data
 
-Weather (temperature, wind, solar radiation, precipitation, …) for **1,851 Greek
-cities**, hourly, from **2007 → today** plus a short forecast horizon. It's the
-RES/load driver referenced in the README ("Load – Renewable Energy Sources Output:
-Weather"). This doc is how a Euphemia agent pulls it.
+Hourly weather (temperature, wind, radiation, precipitation, …) for **1,851 Greek
+cities**, in a **separate weather database** on the *same* Postgres server as
+`energy`, populated nightly (03:00) by the `weather-etl` CronJob into `weather.*`.
+Postgres cannot join across databases, so you open a **second connection** (env
+`WEATHER_CONN_STR`) and join to `energy` data in Julia/DataFrames, not in SQL.
 
-> **TL;DR** — the weather data is **not** in the `energy` database. It's in a
-> **separate weather database** on the *same* Postgres server
-> (host/port as in your `.env`). Postgres can't join across databases, so you open a
-> **second connection** to it (env `WEATHER_CONN_STR`) and join to
-> `energy` data in Julia/DataFrames, not in SQL.
+> **The price model does not read this database.** The production weather path is
+> the open-meteo previous-runs fetch ([`bin/weather_vintage.jl`](bin/weather_vintage.jl),
+> [`docs/predictions.md`](docs/predictions.md)), which covers all 39 zones with an
+> honest D-1 vintage. This DB is GR-only; it feeds the DuckDB extract
+> (`bin/extract_common.jl`) and GR-specific experiments.
 
-The pipeline runs as a nightly `weather-etl` CronJob (03:00), upserting into
-the weather database's `weather.*` schema.
+## 1. Setup — ✅ already done
 
----
-
-## 1. One-time setup
-
-### a) Grant read access — ✅ already done
-The `ENERGY_CONN_STR` role has been granted read-only access to the `weather`
-schema in the weather database:
-
-```sql
--- (already applied) as postgres, connected to the weather database
--- (<weather-db> = its name, <role> = the ENERGY_CONN_STR role):
-GRANT CONNECT ON DATABASE <weather-db> TO <role>;
-GRANT USAGE  ON SCHEMA weather        TO <role>;
-GRANT SELECT ON ALL TABLES IN SCHEMA weather TO <role>;
-ALTER DEFAULT PRIVILEGES IN SCHEMA weather GRANT SELECT ON TABLES TO <role>;
-```
-
-Scoped to the `weather` schema only — no access to the other schemas of that
-database.
-
-### b) Connection string — ✅ already in `.env`
-`WEATHER_CONN_STR` has been added: same host/credentials as `ENERGY_CONN_STR`,
-just with the weather database's **`dbname`** instead of `energy`:
+The `ENERGY_CONN_STR` role has read-only access to the `weather` schema (`CONNECT`
+on the database, `USAGE` on the schema, `SELECT` on its tables + default
+privileges — applied as postgres; no access to that database's other schemas), and
+`.env` carries the second connection string: same host/credentials as
+`ENERGY_CONN_STR`, the weather database's **`dbname`** instead of `energy`:
 
 ```bash
 # .env
 WEATHER_CONN_STR=postgresql://<user>:<pw>@<host>:<port>/<weather-db>
 ```
 
----
-
 ## 2. Reading it from Julia
 
-`src/dbutils.jl`'s pool (`withdb` / `sql2df`) is bound to `ENERGY_CONN_STR`, so it
-only sees the `energy` DB. Use a **separate** connection for weather — same
-`LibPQ` + `DataFrames` idiom:
+`src/dbutils.jl`'s pool (`withdb` / `sql2df`) is bound to `ENERGY_CONN_STR` and
+only sees the `energy` DB. Use a separate connection — the repo already has one in
+[`bin/extract_common.jl`](bin/extract_common.jl) (`_weather_connect` /
+`weather_query`); standalone, the same idiom:
 
 ```julia
 using LibPQ, DataFrames
 
 "Run SQL against the weather database, returning a DataFrame."
 function weather2df(sql, args = [])
-    cnx = LibPQ.Connection(ENV["WEATHER_CONN_STR"] * " connect_timeout=30")
+    # WEATHER_CONN_STR is a postgres:// URI — pass options as KWARGS. Appending
+    # " connect_timeout=30" to a URI is invalid conninfo and libpq rejects it.
+    cnx = LibPQ.Connection(ENV["WEATHER_CONN_STR"]; connect_timeout = 30)
     try
         return DataFrame(LibPQ.execute(cnx, sql, args))
     finally
@@ -65,119 +48,84 @@ function weather2df(sql, args = [])
 end
 ```
 
-For repeated calls, wrap it in a small pool exactly like `cnxpool` in
-`dbutils.jl`; for occasional reads the above is enough.
-
-```julia
-df = weather2df("""
-    SELECT c.name, m.measure_ts, m.temperature_2m, m.direct_radiation, m.wind_speed_10m
-    FROM weather.city_measure m
-    JOIN weather.city c USING (city_id)
-    WHERE c.name = \$1 AND m.measure_ts >= \$2 AND m.measure_ts < \$3
-    ORDER BY m.measure_ts
-""", ["Athens", "2024-06-15", "2024-06-16"])
-```
-
----
-
 ## 3. Schema reference (the `weather` schema)
 
-| Table | Rows | What |
+| Table | Rows (2026-09-03) | What |
 |---|---|---|
-| `city` | 1,851 | city catalogue: `city_id, name, country_code, population, lat, long` (all `GR`) |
-| `city_measure` | ~316 M | **historical** hourly observations (reanalysis) |
-| `city_forecast` | ~31 M | **forecast** hourly values (rolling) |
+| `city` | 1,851 | catalogue: `city_id, name, country_code, population, lat, long` (all `GR`) |
+| `city_forecast` | ~33 M | forecast hourly values, PK `(city_id, measure_ts)` — each target hour keeps only the **latest** run (upserted in place) |
+| `city_forecast_vintage` | ~28 M | the same values **stamped by issue date**, PK `(city_id, run_date, measure_ts)` — one snapshot per ETL run, so lead-N backtests stay honest |
+| `city_measure` | ~305 M | ERA5 reanalysis history. Nothing in `src/` or `bin/` reads it; kept for GR history work |
 | `unit` | small | `unit_id → name` lookup for the `*_unit_id` columns |
 
-`city_measure` and `city_forecast` share the same columns:
+The three hourly tables share the same value columns (`city_forecast_vintage` adds
+`run_date date`):
 
 ```
-city_id                integer      -- FK → weather.city
-measure_ts             timestamp    -- WITHOUT time zone; the wall time in ts_timezone
-ts_timezone            text         -- API timezone (currently 'GMT'/UTC)
-temperature_2m         float        -- °C
-relative_humidity_2m   int          -- %
-precipitation          float        -- mm
-weather_code           int          -- WMO code
-wind_speed_10m         float        -- km/h  (open-meteo default)
-wind_direction_10m     int          -- degrees
-direct_radiation       float        -- W/m²  ← solar PV driver
-<var>_unit_id          int          -- FK → weather.unit, per variable
-PRIMARY KEY (city_id, measure_ts)
-```
-
-Units are stored by id; resolve the exact string with the `unit` table if you
-don't want to hardcode the defaults above:
-
-```sql
-SELECT u.name FROM weather.unit u
-JOIN weather.city_measure m ON m.wind_speed_10m_unit_id = u.unit_id
-LIMIT 1;
+city_id, measure_ts (timestamp WITHOUT tz, wall time in ts_timezone), ts_timezone
+temperature_2m °C · relative_humidity_2m % · precipitation mm · weather_code (WMO)
+wind_speed_10m  km/h · wind_direction_10m  deg
+wind_speed_100m km/h · wind_direction_100m deg      ← wind driver
+shortwave_radiation W/m² (GHI)                      ← solar driver
+direct_radiation W/m² · diffuse_radiation W/m² · cloud_cover %
+<var>_unit_id  int  -- FK → weather.unit, per variable
 ```
 
 ### Which variable for what
+
+Use what the models are fitted on: both the linear packs and the LightGBM input
+models train on `wind_speed_100m` + `shortwave_radiation` (`bin/ml_inputs.jl`
+`ML_RES_VARS`, `bin/weather_res.jl`), so anything scored against them must use the
+same columns.
+
 | Euphemia need | Column | Note |
 |---|---|---|
-| Solar PV output | `direct_radiation` | W/m²; pair with panel area/efficiency |
-| Wind output | `wind_speed_10m` (+ `wind_direction_10m`) | hub-height correction is on you (10 m → ~80–120 m) |
-| Load / demand | `temperature_2m` (+ humidity) | heating/cooling degree signal |
+| Solar PV output | `shortwave_radiation` | W/m² GHI; pair with sun elevation / clearness |
+| Wind output | `wind_speed_100m` | km/h, already near hub height — no 10 m extrapolation |
+| Load / demand | `temperature_2m` | heating/cooling degree signal |
 
-### Freshness & cadence — read this
-- Updated **nightly (03:00)** by the k3s `weather-etl` CronJob.
-- **`city_measure` legitimately lags ~5–6 days.** It's ERA5 reanalysis
-  (`copernicus_era5`), which is only published with that delay — so
-  `max(measure_ts)` sitting a few days behind "now" is normal, not a gap.
-- **Use `city_forecast` for the recent past + next few days** (day-ahead
-  horizon). It overlaps the measure lag window.
-- `measure_ts` is a naive timestamp; interpret it in `ts_timezone` (GMT/UTC).
-  Convert to Europe/Athens yourself if aligning to local market hours.
+`direct_radiation` and `wind_speed_10m` exist but are read nowhere in this repo.
 
----
+### Freshness
+- Forecast horizon reaches ~+7 days; refreshed nightly at 03:00.
+- `city_forecast` is **upserted in place** — past hours get overwritten by
+  post-delivery runs, so a forecast read back for a past timestamp is really a
+  near-analysis. **For backtests use `city_forecast_vintage`** and filter
+  `run_date <= delivery_date - 1` yourself. It accumulates one `run_date` per run
+  and is trimmed by a retention job — check `min(run_date)` before assuming depth.
+- `city_measure` is ERA5, published with a ~1–2 week lag; `max(measure_ts)` sitting
+  well behind "now" is normal, not a gap.
 
 ## 4. Ready-made queries
 
-**Day-ahead solar & wind for the whole GR fleet (forecast), one day:**
+**Day-ahead drivers for the GR fleet, one day (live view):**
 ```sql
 SELECT c.city_id, c.name, c.lat, c.long,
-       f.measure_ts, f.direct_radiation, f.wind_speed_10m, f.temperature_2m
+       f.measure_ts, f.shortwave_radiation, f.wind_speed_100m, f.temperature_2m
 FROM weather.city_forecast f
 JOIN weather.city c USING (city_id)
 WHERE f.measure_ts >= $1 AND f.measure_ts < $2
 ORDER BY c.city_id, f.measure_ts;
 ```
 
-**National hourly average (simple zone proxy) over a period, historical:**
+**The same day as it was seen at the D-1 gate (honest backtest):**
 ```sql
-SELECT measure_ts,
-       avg(temperature_2m)  AS temp_c,
-       avg(direct_radiation) AS ghi_wm2,
-       avg(wind_speed_10m)  AS wind_kmh
-FROM weather.city_measure
-WHERE measure_ts >= $1 AND measure_ts < $2
-GROUP BY measure_ts
-ORDER BY measure_ts;
+SELECT city_id, measure_ts, shortwave_radiation, wind_speed_100m, temperature_2m
+FROM weather.city_forecast_vintage
+WHERE run_date = $1                      -- e.g. delivery_date - 1
+  AND measure_ts >= $2 AND measure_ts < $3
+ORDER BY city_id, measure_ts;
 ```
 
-**Cities inside a bounding box (e.g. a bidding-zone footprint):**
-```sql
-SELECT city_id, name, lat, long FROM weather.city
-WHERE lat BETWEEN $1 AND $2 AND long BETWEEN $3 AND $4;
-```
-
-For a proper zone aggregate, weight cities by capacity/population near each
-wind/solar asset rather than a flat `avg()` — join to your `energy`-side asset
+For a zone aggregate, weight cities by population (load) or by capacity near each
+wind/solar asset (RES) rather than a flat `avg()` — join to your `energy`-side
 coordinates **in Julia** after pulling both DataFrames.
 
----
-
 ## 5. Gotchas
-- **Different database** (the weather DB, not `energy`): no cross-DB SQL joins —
-  join in DataFrames.
-- **Collation warnings** (`database ... has a collation version
-  mismatch …`) on connect are harmless noise from the server; ignore them.
-- **Historical vs forecast overlap**: both tables can cover the same timestamps;
-  pick one deliberately (measure = authoritative but lagged, forecast = fresh).
-- **NULLs**: rows where every variable was missing are dropped by the ETL; a
-  present row can still have individual NULL columns — filter per variable.
+- **Different database** (not `energy`): no cross-DB SQL joins — join in DataFrames.
+- **Collation warnings** on connect are harmless server noise; ignore them.
+- **NULLs**: all-missing rows are dropped by the ETL, but a present row can still
+  have individual NULL columns — filter per variable.
 - **Timestamps are UTC/GMT-naive** — don't assume Europe/Athens.
-```
+- **GR only**: `weather.city` carries no non-GR cities; for other zones use the
+  open-meteo path above.

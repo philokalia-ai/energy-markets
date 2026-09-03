@@ -25,14 +25,20 @@ parent file `include`s in definition order.
                     └───────────────┬────────────────────────────┘
                                     │
                     ┌───────────────▼────────────────────────────┐
-   clearing         │ MPCC.jl (the solver)                       │
+   clearing         │ MPCC.jl → src/mpcc/ (per-period decomposed │
+                    │   since cv20 — canonical on the EU path)   │
                     │ Euphemia.jl → src/clearing/ (orchestration)│
                     │ PipelinedBackfill.jl (throughput harness)  │
                     └────────────────────────────────────────────┘
 ```
 
-A price is produced by: **load + RES forecast + unit registry → an order book
-(one of three book builders) → the MPCC clearing solve → save/return**.
+A price is produced by: **load + RES forecast + unit registry → the merit-order
+book → the MPCC clearing solve → save/return**.
+
+Three directories carry their own `CLAUDE.md` with the gotchas that only matter
+once you work there: `src/generators/` (ENTSO-E registry and outage data
+quality, the SRMC cost model) and `src/db/` (Postgres vs DuckDB, the SQL dialect
+rewrite, building an extract).
 
 ## Directory guide
 
@@ -45,9 +51,8 @@ A price is produced by: **load + RES forecast + unit registry → an order book
 | File | Read this for |
 |---|---|
 | `single_zone.jl` | `generate_energy_prices` — one zone, one day; zone discovery |
-| `multi_zone_books.jl` | building the combined footprint book: network enrichment (implicit+explicit ATC, aggregate remap, flow-based border drops), opportunity-anchor references, and the exposed `mz_*` pipeline stages |
+| `multi_zone_books.jl` | building the combined footprint book: network enrichment (implicit + explicit ATC, JAO flow-based capacity, aggregate remap, the remaining border drops), opportunity-anchor references, and the exposed `mz_*` pipeline stages |
 | `multi_zone_run.jl` | `run_multi_zone_market_clearing` — one date, one footprint, one- or two-pass |
-| `iterative.jl` | the UC↔MPCC feedback loop (`run_iterative_multi_zone_market_clearing`) |
 | `batch_runners.jl` | date-range / all-zones orchestration and summaries |
 | `batch_workers.jl` | the internal parallel/sequential worker helpers those runners use |
 
@@ -59,7 +64,8 @@ the module header and `include`s:
 
 | File | Read this for |
 |---|---|
-| `flows_imports.jl` | day-level physical-flow cache, `get_net_imports` (same-day `:d0`, ex-ante `:v2` climatology, and the current EU-path default `:v3` anad2 load-analogue modes), import ATC capacity, the cv17 import backstop, unit→firm map |
+| `flows_imports.jl` | day-level physical-flow cache, `get_net_imports` — the EU-footprint path defaults to the ex-ante `:v3` load-analogue rule (`:v2` climatology and same-day `:d0` remain selectable for A/Bs and legacy SEE paths) — import ATC capacity, the cv17 import backstop, unit→firm map |
+| `boundary.jl` | `BoundaryBook` — out-of-footprint neighbours modeled as elastic books bidding their own fundamentals (GB on Viking, Ukraine), with their runtime capability sizing |
 | `zone_profiles.jl` | `ZoneProfile` (every per-zone calibration knob, with field docstrings), all named profiles, the `ZONE_PROFILES` registry, and the `ZoneScenario` counterfactual hooks |
 | `fleet_data.jl` | hydro availability, per-type output p95, installed capacity, reservoir dryness/drawdown queries |
 | `book_build.jl` | `create_merit_order_book` — the book construction itself, decomposed into named stages (see the file header for the stage list) |
@@ -93,12 +99,9 @@ name-based fuel inference, and `include`s:
 | `solver.jl` | `solve_mpcc_market_clearing` — the complementarity clearing solve and its robustness retry ladder; `_solve_mpcc_by_period` (per-period decomposition — canonical on the EU path since cv20, any solver) |
 | `coupling_metrics.jl` | iterative-coupling helpers: flows→net imports, convergence metrics, damping |
 
-
-
-| File | Read this for |
-|---|---|
-| `model.jl` | `solve_unit_commitment` — the UC MILP build/solve, solver tuning, IIS diagnosis |
-| `cache.jl` | UC results caching against `simulations.uc_*` |
+The unit-commitment path (`UnitCommitment.jl`, the UC↔MPCC feedback loop, and
+their `simulations.uc_*` caches) was **deleted in cv25** — `:merit_order` is the
+only order method. The tables still hold their old rows; nothing writes them.
 
 ### Standalone files (unchanged)
 

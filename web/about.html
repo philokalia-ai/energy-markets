@@ -375,7 +375,7 @@
       <g class="mm-node mm-no" tabindex="0" data-tip="&lt;b&gt;Not implemented — deliberately.&lt;/b&gt; Speculative (virtual) selling is excluded: the model is a competitive counterfactual, and strategic arbitrage bidding is part of what it measures, not what it assumes.">
         <ellipse cx="382" cy="232" rx="40" ry="22"/><text x="382" y="228">Virtual</text><text x="382" y="242">Sellers</text>
       </g>
-      <g class="mm-node mm-ok" tabindex="0" data-tip="&lt;b&gt;Implemented.&lt;/b&gt; All 39 zones clear jointly under offered transfer capacities (implicit + explicit ATC, with a Day-ahead-capacity preference and demonstrated-capability sizing on FBMC borders; flow-based borders dropped where ATC misrepresents them). The flow rule is ex-ante by design — a per-border load-analogue median blended with the fastest admissible D-2 observation, never same-day flows. The current published record (cv31) is fully ex-ante on flows; the not-ex-ante-flow defect in the earlier pipelined records (through cv24) was found by audit and corrected in cv25.">
+      <g class="mm-node mm-ok" tabindex="0" data-tip="&lt;b&gt;Implemented.&lt;/b&gt; All 39 zones clear jointly under their capacity limits: offered ATC where the market really uses ATC, and since cv35 JAO's own flow-based maximum bilateral exchanges (scaled to each hub's net-position range, capped by transmission-outage messages) on the Core and Nordic borders, which have no day-ahead ATC at all. JAO publishes at 10:30 CET on D-1, so this is ex-ante by construction. Borders to markets we do not model enter as data through a versioned ex-ante flow rule — a per-border load-analogue median blended with the fastest admissible D-2 observation, never same-day flows. &lt;i&gt;Still missing:&lt;/i&gt; the full PTDF/RAM domain, and the exact net-position constraint inside the solver.">
         <ellipse cx="480" cy="168" rx="64" ry="24"/><text x="480" y="164">Interconnections:</text><text x="480" y="178">Exports</text>
       </g>
       <g class="mm-node mm-ok" tabindex="0" data-tip="&lt;b&gt;Implemented.&lt;/b&gt; Hourly supply orders {volume, €/MWh, timeslot}. Inter-temporal block orders were built, tested on 14 zones, and &lt;i&gt;rejected&lt;/i&gt; — a recorded negative result (they help only thermal-cycling zones in winter).">
@@ -437,8 +437,7 @@
   <ul>
     <li><strong>The record measures the MECHANISM.</strong> The counterfactual
       backfill — the multi-year history at its record code version
-      (<strong>cv31</strong>; the current code is <strong>cv32</strong>, whose scope
-      enters the record at the next refill) — runs on the <strong>reference
+      (<strong>cv37</strong>) — runs on the <strong>reference
       inputs</strong>: ENTSO-E's published D-1 load and wind/solar forecasts, the same
       information set the market itself cleared on. Holding the inputs fixed to the
       market's own isolates one question — <em>given those inputs, where would
@@ -486,14 +485,18 @@
   <ul class="timeline">
     <li><span class="t-time">00:00 UTC</span><span>Data fill: actuals for settled days;
       realized days are scored and the scoreboard updates.</span></li>
-    <li><span class="t-time">08:00 UTC</span><span><strong>Morning window</strong> — fill +
-      forecast before the auction gate (10:00/11:00 UTC). Rows written here are
-      pre-auction. On days ENTSO-E inputs have not yet propagated, the run honestly
-      writes nothing.</span></li>
-    <li><span class="t-time">17:30 UTC</span><span><strong>Evening fill</strong> — ENTSO-E's
-      D-1 items propagate to the bulk export late for large zones (~19:00 UTC for
-      Germany and Italy), so the evening run fills whatever the morning could not see.
-      Writes never overwrite a morning row.</span></li>
+    <li><span class="t-time">06:30 UTC</span><span><strong>Pre-gate run</strong> — the
+      weather track for every lead D+1…D+7, hours before the auction gate
+      (10:00/11:00 UTC). Every row written here is pre-auction. Tomorrow's flow-based
+      capacity has not published yet, so the network degrades to demonstrated
+      capability rather than guessing.</span></li>
+    <li><span class="t-time">09:05 / 10:05 UTC</span><span><strong>JAO-aware freeze</strong>
+      — once JAO publishes the flow-based domain (10:30 CET), lead 1 is re-cleared on
+      the real capacity and frozen. Still pre-gate.</span></li>
+    <li><span class="t-time">evening</span><span><strong>Reference fill</strong> — ENTSO-E's
+      D-1 items propagate to the bulk export late for large zones, so an evening refresh
+      fills whatever the morning could not see. Writes never overwrite a pre-gate
+      row.</span></li>
   </ul>
 
   <h2>The 7-day horizon and the vintage record</h2>
@@ -618,30 +621,29 @@
     official day-ahead auction prices: <strong>MAE</strong> (mean absolute error, €/MWh),
     <strong>bias</strong> (mean simulated&nbsp;−&nbsp;actual — negative means the model
     under-prices, which for a competitive counterfactual is a signal, not a bug), and
-    <strong>correlation</strong> of hourly prices. Whole-sample, never cherry-picked. On
-    the current published record (<strong>cv31</strong>, all 39 zones, pooled hourly —
-    the cv32 code is live and its island-input scope enters the record at the next
-    refill), correlation
-    rises year over year with the solar buildout: <strong>0.634 in 2025</strong> (MAE
-    <strong>€26.5</strong>) and <strong>0.669 in 2026</strong> (MAE <strong>€30.3</strong>).
-    Weighting each zone by its traded volume, zones at correlation ≥ 0.75 cover
-    <strong>63.7% of that volume in 2025</strong> and <strong>61.5% in 2026</strong>;
-    Germany reaches <strong>0.86</strong> and Greece about <strong>0.85</strong>. These
-    figures come from a committed scoring artifact
-    (<a href="https://github.com/philokalia-ai/energy-markets/blob/main/docs/experiments/cv31-record-scores.md">cv31-record-scores.md</a>).
-    Weak zones (the Nordic hydro north, some small zones) are shown with the same
-    prominence as strong ones.
+    <strong>correlation</strong> of hourly prices. Whole-sample, never cherry-picked.
+    The current published record is <strong>cv37</strong>: all 39 zones, 786 delivery
+    days (2024-07-01 → 2026-08-26), 734,640 hourly cells matched against settled
+    prices. Over the comparable last 12 months (2025-07 → 2026-06, 341,160 cells) the
+    footprint sits at <strong>MAE €23.7</strong>, bias <strong>−€5.2</strong>, with a
+    median zone correlation of <strong>0.78</strong>. Weighting each zone by its energy,
+    <strong>90% of European volume</strong> now clears in zones the model tracks at
+    correlation ≥ 0.70, and <strong>56%</strong> at ≥ 0.80 — up from 44% one model
+    version ago. Germany and Greece both reach <strong>0.86</strong>.
+    Weak zones are shown with the same prominence as strong ones: SE4 at
+    <strong>0.42</strong> is the worst, and persistent level gaps remain in the Baltics
+    (≈&nbsp;−€23/MWh) and the Core evening belt.
   </p>
   <p>
-    The cv31 record activated a <strong>regime-gated price-taker floor</strong> for the
-    six continental solar zones (DE_LU, FR, PL, BE, CZ, CH): in deep-solar hours their
-    order book can now genuinely clear below zero, so the model catches midday
-    price collapses it used to miss. Measured on the floor zones, collapse-hour
-    detection (sim ≤ €5 when the settled price is ≤ €5) rises from
-    <strong>14.8% to 18.2%</strong> while the false-alarm rate barely moves
-    (<strong>0.07% → 0.10%</strong>) — +391 collapse middays caught for +47 false alarms
-    across ~160k hours. Because the gate is ex-ante and regime-scoped, all-hours
-    aggregates barely move by design and no zone is harmed outside the regime.
+    The single largest step came from the <strong>network, not the bids</strong>. Core
+    and Nordic borders no longer clear against transfer capacities at all — they clear
+    against flow-based domains, and the public capacity table carries no day-ahead rows
+    for them. Since cv35 the model takes those limits from JAO's own D-1 publication
+    instead: on 52 held-out Wednesdays the footprint went from MAE €26.2 / corr 0.68 to
+    <strong>€23.4 / 0.76</strong>, with the Core cluster halving its error. It cost
+    something honest: detection of price-collapse hours fell from 43% to
+    <strong>14%</strong> (with false alarms down 1019&nbsp;→&nbsp;174) — better
+    precision, worse recall, and the first thing the next network step should recover.
   </p>
   <p>
     The clearing solver itself is validated against <strong>real published
@@ -697,10 +699,14 @@
     <li><strong>A plant-level physical simulation of renewables</strong> was evaluated
       and found unnecessary; one sun-geometry feature carries the physics.</li>
     <li><strong>The Nordic reservoir-wetness water value</strong> was implemented
-      exactly to its frozen prereg, then measured NO-SHIP (conflicted): the only arm
+      exactly to its frozen prereg and measured NO-SHIP (conflicted): the only arm
       that met the within-regime floor tripped the envelope-correlation falsifier on
-      its own zones, so no arm passed all gates and the branch stays unmerged
-      (<a href="https://github.com/philokalia-ai/energy-markets/blob/main/docs/experiments/nordic-wetness/results.md">results</a>).</li>
+      its own zones
+      (<a href="https://github.com/philokalia-ai/energy-markets/blob/main/docs/experiments/nordic-wetness/results.md">results</a>).
+      A narrower redesign — damping the <em>winter drawdown lift</em> in wet years
+      rather than re-pricing water outright — later cleared its gates and shipped as
+      cv37 (SE2 −8.0&nbsp;MAE on the held-out window). The negative result is what
+      told us which half of the mechanism was wrong.</li>
     <li><strong>The cv30 export-capability and surplus-floor package</strong> failed
       three frozen gates on the calibration set — it manufactured new cap-hours and
       breached correlation envelopes — so it was not scored on the hold-out and did not
