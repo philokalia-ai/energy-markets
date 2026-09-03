@@ -37,3 +37,14 @@ untouched +0.48. DK1 −0.2 (its Set-A wobble did not replicate).
 (covers exactly the six tested zones; anchored Nordics unchanged). Remaining
 NO1/NO3/NO5 residual is the anchored-path / congestion-isolation story (the
 probe's NO3 flat +20 bias) — a separate mechanism, not this one.
+
+## Verified: the cv37 2-year backfill (729 days, 1.02 h)
+
+Correlation ladder vs cv35/cv36 (681,646 paired zone-hours): footprint corr
+0.725 → 0.737 → **0.740**, MAE 25.48 → **25.22**. Energy@corr≥0.7 holds at
+**90.0%**; energy@corr≥0.75 **83.0%**; **energy@corr≥0.8 44.3% → 56.0%**
+(CH 0.821, FI 0.803, ES 0.801, GR 0.800 cross the 0.8 line). SE1 0.727→0.745,
+SE2 0.711→0.740, SE3 0.628→0.635, SE4 0.506→0.516, DK2 0.702→0.708, LT/LV
++0.003; FI MAE −0.9, SE1 −2.2, SE2 −2.6, SE3 −0.9, NO3 −0.9. No zone worse
+than −0.004 corr. Below 0.7 now: NO1/NO3/NO5 (anchored/congestion), SE3/SE4,
+RS (conduct-flagged), NO2 0.684, DK2 at 0.708 margin.

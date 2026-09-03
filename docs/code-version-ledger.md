@@ -56,3 +56,5 @@ SE2 −8.0 MAE (corr 0.61→0.69) Wednesdays, −9.3 (0.40→0.63) on the held-o
 Sundays; SE1 −6.5/−7.8; spillover beneficial (SE3 −4.0 corr 0.73→0.80, NO3
 −3.4); mild winter Set A/B ≈ neutral-positive. Experiment:
 docs/experiments/cv37-nordic-wet/.
+
+Verified cv37 record (2y backfill 2026-08-28): footprint corr 0.740, MAE 25.22; energy@corr>=0.7 = 90.0%, >=0.8 = 56.0% (was 44.3% at cv36). SE1 .745 / SE2 .740.
