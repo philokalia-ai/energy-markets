@@ -55,10 +55,10 @@ print(sum(w.values()), 'LightGBM winners of', len(w), 'zone-targets')"
 ```
 
 The *shape* is stable across retrains even though the membership is not: **load is
-a near-universal LightGBM winner**; solar wins on most zones that have meaningful
-solar (the Nordic zones and RS have none — those targets are a `skip` state);
-**wind is the contested target** — the physical power-curve pack still wins
-several low/onshore zones. One LightGBM text dump ships per winner in
+the near-universal LightGBM winner** (every zone at the last retrain); solar wins
+on most zones with meaningful solar (NO1–NO5, SE1 and RS have none — those targets
+are a `skip` state); **wind is the contested target** — the physical power-curve
+pack still wins many low/onshore zones. One LightGBM text dump ships per winner in
 [`bin/input_models/`](../bin/input_models/), with geometry from
 [`geom.json`](../bin/input_models/geom.json) (39 zones); losers ship no model and
 fall back to the committed packs — [`bin/res_models_v2.json`](../bin/res_models_v2.json)

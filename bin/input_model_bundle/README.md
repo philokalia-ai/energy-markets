@@ -7,12 +7,10 @@
 > full-footprint data plane are in
 > [`docs/predictions.md`](https://github.com/philokalia-ai/energy-markets/blob/main/docs/predictions.md).
 
-A **standalone, independently usable** package of the fitted RES/load input model
-behind the Euphemia day-ahead counterfactual. It predicts, per delivery hour and
-per bidding zone, the **wind, solar and load** the market clears on — strictly
-**ex-ante** (D-1 weather only) — from free, public weather data.
-
-You can use this bundle with **no Euphemia, no Julia, no Postgres**:
+A **standalone** package of the fitted RES/load input model behind the Euphemia
+day-ahead counterfactual: per delivery hour and bidding zone, the **wind, solar and
+load** the market clears on — strictly **ex-ante** (D-1 weather only) — from free,
+public weather data. Usable with **no Euphemia, no Julia, no Postgres**:
 
 - **(a) Load our predictions as data** — `outputs/<ZONE>.parquet` are the model's
   own per-zone-hour predictions (plus the ENTSO-E reference and settled actuals)
@@ -39,9 +37,8 @@ tables, columns and vintage rules:
 
 - `cap95` (RES) — the trailing-30-day 95th-percentile of ENTSO-E **actual**
   per-type generation, window **ending D-2** (actual generation publishes with
-  ~1–2 d lag). Solar/wind models predict a **ratio** against `cap95`, so a growing
-  fleet does not drift the forecast. A slow-moving scalar; the example ships recent
-  GR values and points at how to refresh them.
+  ~1–2 d lag). Solar/wind predict a **ratio** against it, so a growing fleet does
+  not drift the forecast; slow-moving, and the example ships recent GR values.
 - `ar1`/`ar7` (load) — the ENTSO-E **D-1 and D-7 same-hour day-ahead load
   forecasts** (both published before the gate).
 
