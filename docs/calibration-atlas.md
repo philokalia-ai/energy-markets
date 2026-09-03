@@ -1,14 +1,32 @@
 # Calibration Atlas — how the EU-wide competitive counterfactual is built
 
+> **HISTORICAL RECORD — July 2026, cv14. Not a description of the current
+> model (cv37).** Kept unedited because the reasoning is the record: it shows
+> how the EU footprint was calibrated and why each choice was made. Its
+> numbers, field counts, file paths and open-work queue are all as of cv14 and
+> have not been updated. For the model as it stands today, read
+> [`docs/model-spec-exante.md`](model-spec-exante.md),
+> [`docs/code-version-ledger.md`](code-version-ledger.md) and the repo README.
+>
+> Known to have changed since:
+> - **Flow-based border drops** (§1) were largely reversed by cv35, which
+>   replaced the residual-ATC workaround with JAO capacity data.
+> - **`ZoneProfile`** now carries 24 fields, not 20, and many more per-zone
+>   profiles ship than the region table below lists (everything from cv21 on
+>   is missing here).
+> - **The unit-commitment order path was deleted in cv25**; `:merit_order` is
+>   the only book method.
+> - **File paths moved in the `src/` split**: two-pass anchoring now lives in
+>   `src/clearing/`, the zone profiles in `src/merit_order/zone_profiles.jl`.
+> - The "iteration-6 queue" of open work at the end has all shipped.
+
 Synthesis of calibration iterations 1–5 (PRs #91–#95, #97; released as v0.2.0).
 This is the single reference page; the chronological record with every measured
 sub-iteration, failure mode, and audit lives in `docs/eu-calibration-iter1..5.md`.
 
 > **Note — this page describes the v0.2.0 (cv14) state.** It documents *how* the
 > EU footprint is built and is accurate for that; the numbers below are the
-> 5-day v0.2.0 snapshot. The **current canonical record is cv22**
-> (2023-01-01…2026-07-24, 1,301 days): comparable full-year mean corr **0.67** /
-> MAE **€27.4**. See the README headline and `docs/reproducibility.md`.
+> 5-day v0.2.0 snapshot. For the current record see `docs/model-spec-exante.md`.
 
 **State at v0.2.0** (39 zones, 5-day window 2026-04-01…05, resolution-aware
 methodology, bias = sim − actual): mean MAE **23.9 €/MWh**, mean corr **0.79**,

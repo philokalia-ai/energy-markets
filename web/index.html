@@ -1012,10 +1012,14 @@ end</code></pre>
         </div>
         <p class="case-note">Pearson correlation and errors on hourly prices over ~16,970
           settled hours per zone. GR (the scenario zone) sits near the top: corr 0.80,
-          MAE 24.1. The weak spots are honest findings, not tuning targets: the Norwegian
-          hydro zones NO1/NO3 carry a large positive water-value bias in this window, and
-          continental borders with flow-based coupling (AT, BE, CH) correlate poorly under
-          the ATC approximation. Median zone correlation ≈ 0.61.</p>
+          MAE 24.1. <strong>Read the weak zones with one caveat:</strong> the scenario
+          arms run offline on the public extract, which does not carry the JAO
+          flow-based capacity feed, so both arms clear the pre-cv35 network. The zones
+          that suffer here — the Norwegian and Danish hydro north, and the flow-based
+          continental borders AT/BE/CH/SI — are exactly the ones JAO capacity repaired;
+          on the published record they score far better (AT 0.85, DK1 0.83, NO1 0.74).
+          The scenario deltas are unaffected, because they are <em>paired</em>
+          differences on the same baseline.</p>
       </details>
     </article>
 
@@ -1030,7 +1034,7 @@ end</code></pre>
           <strong>3.57 million real AIS port-call dwell events</strong> over two years, binned to
           EMSA at-berth loads and mapped to each bidding zone (Italy → 7 zones, Sweden → 4,
           Denmark → 2). Both baseline and scenario re-clear the full 39-zone footprint under the
-          <strong>cv17</strong> model — 1,462 coupled market days, zero failures.</p>
+          <strong>cv37</strong> model, as a fresh paired baseline — zero failed days.</p>
       </div>
       <div class="case-chips">
         <span class="chip">39 zones · 2024-07-01 → 2025-06-30</span>

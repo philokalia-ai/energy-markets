@@ -133,7 +133,7 @@ deprecated. Format with JuliaFormatter (`format(".")`).
 `energy_prices` is unique on `(date_time_utc, bidding_zone, contract_type,
 order_method, clearing_mode, code_version)`; `clearing_mode` labels the run
 (`single_zone`, `multi_zone`, `multi_zone_eu`, scenario labels…) and
-`code_version` the model version — **current `ENERGY_PRICES_CODE_VERSION` = 32**
+`code_version` the model version — **current `ENERGY_PRICES_CODE_VERSION` = 37**
 (`src/db/postgres_core.jl`; 4 for `optimization_runs`). Bump it for every model
 iteration that gets a backfill (each version is one selectable "Run" in the
 Metabase dashboard); scenario runs never bump it — they are labelled by

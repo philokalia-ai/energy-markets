@@ -5,6 +5,13 @@
 - code_version: 24
 - methodology: resolution-aware actuals; bias = sim − actual (€/MWh)
 
+> **Stale reference.** This was generated at cv24; the code is now cv37, and
+> cv31/32/35/36/37 all changed EU-footprint prices (cv35 alone moved footprint
+> MAE 26.24 → 23.40). `bin/reproduce.jl --quick` diffs against
+> `quick_metrics.csv` from the same run, so it **will** flag drift — read that
+> as version distance, not a broken run. Regenerating this reference at the
+> current version is an open item; see `docs/reproducibility.md`.
+
 ## GR single-zone 2026-04-01..2026-04-05
 
 | zone | n | corr | MAE | bias | sim μ | act μ |
