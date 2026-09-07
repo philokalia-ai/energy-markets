@@ -109,6 +109,10 @@ only order method. The tables still hold their old rows; nothing writes them.
 - `Network.jl` — topology, `TransferCapacity`, ATC queries.
 - `MarketOrders.jl` — `SimpleOrder` / `BlockOrder` types.
 - `Loads.jl`, `Renewables.jl` — demand and RES-forecast queries.
+- `ForecastContext.jl` — the as-of input contract (issue #368): `ForecastContext`,
+  `with_context`, `auction_gate_utc`, the publication-status audit
+  (`asof_audit_table`). Outside a context every reader is on its legacy path;
+  see `docs/experiments/asof-contract/`.
 - `FuelTypeParameters.jl` — per-fuel technical defaults.
 - `TemporalResolutionUtilities.jl` — 15/30/60-min harmonization helpers.
 - `PipelinedBackfill.jl` — producer/consumer backfill harness (book builders feed a small solver pool).

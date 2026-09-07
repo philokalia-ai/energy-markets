@@ -25,6 +25,47 @@ _gate_lag_days() = isempty(get(ENV, "EUPHEMIA_DISABLE_CV34_D2CLOSE", "")) ? 1 : 
 const TTF_PRICE_CACHE = Dict{Dates.Date,Union{Float64,Nothing}}()
 const _TTF_CACHE_LOCK = ReentrantLock()
 
+# As-of contract (issue #368). Inside a ForecastContext the last close that
+# existed at issuance is the one dated strictly before the issuance DATE: at
+# the D-1 gate that is D-2's close — identical to the legacy cv34 rule for
+# lead 1 — and for lead L (issued D-L 06:30 UTC) it is D-L-1's close instead
+# of the target-relative D-2 the legacy path would read. Cached per cutoff
+# date in separate dictionaries so the two rules never share an entry.
+const TTF_PRICE_CACHE_ASOF = Dict{Dates.Date,Union{Float64,Nothing}}()
+const EUA_PRICE_CACHE_ASOF = Dict{Dates.Date,Union{Float64,Nothing}}()
+_fuel_cutoff() = (c = current_context(); c === nothing ? nothing : Dates.Date(c.as_of_utc))
+
+function _close_before(table::String, cutoff::Dates.Date, cache::Dict, lk::ReentrantLock,
+                       source::String)
+    cached = lock(lk) do
+        get(cache, cutoff, missing)
+    end
+    cached !== missing && return cached
+    df = try
+        Euphemia.sql2df_with_retry(
+            """
+            SELECT close
+            FROM $table
+            WHERE date < \$1::date AND date > \$1::date - INTERVAL '10 days'
+              AND close IS NOT NULL
+            ORDER BY date DESC
+            LIMIT 1
+            """,
+            [cutoff])
+    catch e
+        _FUEL_LOOKUP_FAILED[] = true
+        @warn "$table lookup failed for cutoff $cutoff, falling back: $e"
+        return nothing
+    end
+    price = (isempty(df) || ismissing(df.close[1])) ? nothing : Float64(df.close[1])
+    price === nothing && @warn "No $table close within 10 days before $cutoff; using fallback"
+    record_asof_status!(source, price === nothing ? :unverifiable : :verified)
+    lock(lk) do
+        cache[cutoff] = price
+    end
+    return price
+end
+
 # Gas plant cost model constants
 const GAS_PLANT_EFFICIENCY = 0.55   # CCGT-dominated fleet efficiency (LHV basis)
 const GAS_EMISSION_FACTOR = 0.202   # tCO₂ per MWh of gas burned
@@ -62,6 +103,9 @@ Like `get_ttf_price`, uses strictly `date < day`: the day-ahead auction for
 D clears around noon on D−1, when D's own close does not exist yet.
 """
 function get_daily_eua_price(day::Dates.Date)
+    cutoff = _fuel_cutoff()
+    cutoff === nothing ||
+        return _close_before("yfinance.eua_co2", cutoff, EUA_PRICE_CACHE_ASOF, _EUA_CACHE_LOCK, "fuel_eua")
     cached_eua = lock(_EUA_CACHE_LOCK) do
         get(EUA_PRICE_CACHE, day, missing)
     end
@@ -177,6 +221,9 @@ For a market date D this returns the close of the last trading day before D,
 which is the price information available at day-ahead auction time.
 """
 function get_ttf_price(day::Dates.Date)
+    cutoff = _fuel_cutoff()
+    cutoff === nothing ||
+        return _close_before("yfinance.ttf_f", cutoff, TTF_PRICE_CACHE_ASOF, _TTF_CACHE_LOCK, "fuel_ttf")
     cached_ttf = lock(_TTF_CACHE_LOCK) do
         get(TTF_PRICE_CACHE, day, missing)
     end

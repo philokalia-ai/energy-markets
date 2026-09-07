@@ -1,0 +1,98 @@
+
+## entsoe.generation_forecasts_for_wind_and_solar
+   date_time_utc, resolution_code, area_code, area_display_name, area_type_code, area_map_code, production_type, day_ahead_generation_forecast_mw, intraday_generation_forecast_mw, current_generation_forecast_mw, update_time_utc, source
+
+## entsoe.offered_transfer_capacities_implicit
+   instance_code, date_time_utc, resolution_code, contract_type, sequence, out_area_code, out_area_display_name, out_area_type_code, out_map_code, in_area_code, in_area_display_name, in_area_type_code, in_map_code, capacity_mw, update_time_utc, source
+
+## entsoe.offered_transfer_capacities_explicit
+   instance_code, date_time_utc, resolution_code, contract_type, category, sequence, out_area_code, out_area_display_name, out_area_type_code, out_map_code, in_area_code, in_area_display_name, in_area_type_code, in_map_code, capacity_mw, update_time_utc, source
+
+## entsoe.actual_generation_output_per_generation_unit
+   date_time_utc, resolution_code, area_code, area_display_name, area_type_code, area_map_code, generation_unit_code, generation_unit_name, generation_unit_type, actual_generation_output_mw, actual_consumption_mw, update_time_utc, source
+
+## entsoe.unavailability_in_the_transmission_grid
+   instance_code, version, old_version, start_outage_utc, end_outage_utc, start_time_series_utc, end_time_series_utc, status, type, out_area_code, out_area_display_name, out_area_type_code, out_area_map_code, in_area_code, in_area_display_name, in_area_type_code, in_area_map_code, affected_assets_codes, affected_assets_names, affected_assets_types, affected_assets_locations, new_ntc_mw, reason, comment, version_publication_timestamp_utc, update_time_utc, source
+
+## carbon.uka_price
+   date_time_utc, price_date, price_gbp, price_eur, price_usd, source
+
+## simulations.input_corrections
+   bidding_zone, target, date_time_utc, corrected_mw, model_tag, created_at
+
+## entsoe.day_ahead_total_load_forecast — update_time_utc semantics (2026-07-01..2026-08-31, zones ('DE_LU', 'GR', 'FR', 'NO4', 'ES'))
+  n, n_ut, lag_h p05/p50/p95 (delivery − update), distinct ut, distinct ut-hours: [(29760, 29760, -2.084722222222222, 16.914305555555558, 32.72809722222221, 375, 353)]
+  update hour-of-day (UTC) top6: [(15, 6192), (23, 5951), (10, 5758), (16, 3980), (17, 2576), (9, 2313)]
+  keys with >1 row (revisions kept?): [(0,)]
+  per year (days 1-3 sample): n, n_ut, min/max ut: [(2024, 9504, 9504, datetime.date(2025, 9, 28), datetime.date(2025, 9, 28)), (2025, 14256, 14256, datetime.date(2025, 9, 28), datetime.date(2025, 12, 4)), (2026, 12960, 12960, datetime.date(2025, 12, 31), datetime.date(2026, 9, 3))]
+
+## entsoe.generation_forecasts_for_wind_and_solar — update_time_utc semantics (2026-07-01..2026-08-31, zones ('DE_LU', 'GR', 'FR', 'NO4', 'ES'))
+  n, n_ut, lag_h p05/p50/p95 (delivery − update), distinct ut, distinct ut-hours: [(71424, 71424, -53.71090277777777, -0.09083333333333334, 16.65145833333333, 3784, 1087)]
+  update hour-of-day (UTC) top6: [(9, 13130), (19, 8039), (10, 6632), (15, 5828), (2, 5271), (8, 4739)]
+  keys with >1 row (revisions kept?): [(29760,)]
+  per year (days 1-3 sample): n, n_ut, min/max ut: [(2024, 23324, 23324, datetime.date(2025, 10, 16), datetime.date(2025, 10, 17)), (2025, 28080, 28080, datetime.date(2025, 10, 16), datetime.date(2026, 1, 26)), (2026, 30436, 30436, datetime.date(2025, 12, 31), datetime.date(2026, 9, 4))]
+
+## entsoe.aggregated_generation_per_type — update_time_utc semantics (2026-07-01..2026-08-31, zones ('DE_LU', 'GR', 'FR', 'NO4', 'ES'))
+  n, n_ut, lag_h p05/p50/p95 (delivery − update), distinct ut, distinct ut-hours: [(374580, 374580, -519.0908333333333, -0.7544444444444445, -0.5847222222222223, 57748, 1526)]
+  update hour-of-day (UTC) top6: [(23, 52113), (11, 40141), (22, 31608), (19, 21823), (9, 14456), (13, 14299)]
+  keys with >1 row (revisions kept?): [(29759,)]
+  per year (days 1-3 sample): n, n_ut, min/max ut: [(2024, 133056, 133056, datetime.date(2025, 10, 12), datetime.date(2026, 1, 21)), (2025, 187769, 187769, datetime.date(2025, 10, 13), datetime.date(2026, 3, 9)), (2026, 152579, 152579, datetime.date(2026, 1, 1), datetime.date(2026, 9, 5))]
+
+## entsoe.actual_generation_output_per_generation_unit — update_time_utc semantics (2026-07-01..2026-08-31, zones ('DE_LU', 'GR', 'FR', 'NO4', 'ES'))
+  n, n_ut, lag_h p05/p50/p95 (delivery − update), distinct ut, distinct ut-hours: [(2376286, 2376286, -521.0913888888889, -128.02083333333334, -19.251666666666665, 68766, 1492)]
+  update hour-of-day (UTC) top6: [(16, 967875), (23, 501390), (22, 249022), (15, 195496), (10, 74571), (17, 67448)]
+  keys with >1 row (revisions kept?): [(25248,)]
+  per year (days 1-3 sample): n, n_ut, min/max ut: [(2024, 472601, 472601, datetime.date(2025, 8, 28), datetime.date(2026, 9, 3)), (2025, 1118138, 1118138, datetime.date(2025, 9, 25), datetime.date(2026, 5, 1)), (2026, 978389, 978389, datetime.date(2026, 1, 21), datetime.date(2026, 9, 7))]
+
+## entsoe.offered_transfer_capacities_implicit — update_time_utc semantics (2026-07-01..2026-08-31, zones ('DE_LU', 'GR', 'FR', 'NO4', 'ES'))
+  n, n_ut, lag_h p05/p50/p95 (delivery − update), distinct ut, distinct ut-hours: [('ERR', 'column "out_area_map_code" does not exist')]
+  update hour-of-day (UTC) top6: [('ERR', 'column "out_area_map_code" does not exist')]
+  keys with >1 row (revisions kept?): [('ERR', 'column "out_area_map_code" does not exist')]
+  per year (days 1-3 sample): n, n_ut, min/max ut: [('ERR', 'column "out_area_map_code" does not exist')]
+
+## entsoe.physical_flows — update_time_utc semantics (2026-07-01..2026-08-31, zones ('DE_LU', 'GR', 'FR', 'NO4', 'ES'))
+  n, n_ut, lag_h p05/p50/p95 (delivery − update), distinct ut, distinct ut-hours: [(166655, 166655, -924.8386111111112, -34.0925, -0.3433333333333333, 47693, 1543)]
+  update hour-of-day (UTC) top6: [(17, 24028), (23, 20119), (22, 19122), (5, 8626), (4, 8063), (7, 6917)]
+  keys with >1 row (revisions kept?): [(25296,)]
+  per year (days 1-3 sample): n, n_ut, min/max ut: [(2024, 66378, 66378, datetime.date(2026, 2, 19), datetime.date(2026, 7, 20)), (2025, 87045, 87045, datetime.date(2026, 2, 19), datetime.date(2026, 7, 20)), (2026, 72482, 72482, datetime.date(2026, 2, 1), datetime.date(2026, 9, 7))]
+
+## entsoe.actual_total_load — update_time_utc semantics (2026-07-01..2026-08-31, zones ('DE_LU', 'GR', 'FR', 'NO4', 'ES'))
+  n, n_ut, lag_h p05/p50/p95 (delivery − update), distinct ut, distinct ut-hours: [(29758, 29758, -1197.0838888888889, -34.083888888888886, -0.5838888888888889, 12179, 1531)]
+  update hour-of-day (UTC) top6: [(23, 6091), (19, 4891), (22, 2675), (20, 1489), (8, 1312), (5, 1121)]
+  keys with >1 row (revisions kept?): [(0,)]
+  per year (days 1-3 sample): n, n_ut, min/max ut: [(2024, 9504, 9504, datetime.date(2025, 8, 10), datetime.date(2025, 8, 10)), (2025, 14256, 14256, datetime.date(2025, 8, 10), datetime.date(2026, 6, 3)), (2026, 12960, 12960, datetime.date(2026, 2, 19), datetime.date(2026, 9, 4))]
+
+## outages: version_publication_timestamp_utc vs update_time_utc by month
+   (datetime.date(2024, 7, 1), 83675, 83675, 0, -10711.0614675, 10689, 70076)
+   (datetime.date(2024, 8, 1), 71039, 71039, 0, -10008.21868638889, 11438, 55311)
+   (datetime.date(2024, 9, 1), 72160, 72160, 0, -9257.545872083334, 9815, 59309)
+   (datetime.date(2024, 10, 1), 72945, 72945, 0, -8602.85169, 11601, 59140)
+   (datetime.date(2024, 11, 1), 38384, 38384, 0, -7818.440942777778, 9198, 27473)
+   (datetime.date(2024, 12, 1), 78333, 78333, 0, -6873.587893333333, 13386, 59490)
+   (datetime.date(2025, 1, 1), 133501, 133501, 0, -6342.864841111111, 11879, 119272)
+   (datetime.date(2025, 2, 1), 111261, 111261, 0, -5721.679312777777, 12906, 95811)
+   (datetime.date(2025, 3, 1), 119630, 119630, 0, -4942.607132916666, 19441, 96345)
+   (datetime.date(2025, 4, 1), 135303, 135303, 0, -4316.50539, 19859, 110955)
+   (datetime.date(2025, 5, 1), 117835, 117835, 0, -3623.6861372222224, 16110, 99288)
+   (datetime.date(2025, 6, 1), 100197, 100197, 0, -2849.6542572222224, 12238, 85354)
+   (datetime.date(2025, 7, 1), 107309, 107309, 0, -2192.8313933333334, 10897, 91333)
+   (datetime.date(2025, 8, 1), 101553, 101553, 0, -1509.5760658333334, 12009, 86224)
+   (datetime.date(2025, 9, 1), 106951, 106951, 0, -812.4913980555556, 23858, 80591)
+   (datetime.date(2025, 10, 1), 88958, 88958, 0, -657.6739551388889, 19254, 67605)
+   (datetime.date(2025, 11, 1), 81117, 81117, 0, -13.848517222222222, 21735, 54302)
+   (datetime.date(2025, 12, 1), 83135, 83135, 0, -9.874939722222223, 20323, 56521)
+   (datetime.date(2026, 1, 1), 155583, 155583, 0, -1413.8928747222221, 19141, 134312)
+   (datetime.date(2026, 2, 1), 127540, 127540, 0, -1408.7211750000001, 16179, 108898)
+   (datetime.date(2026, 3, 1), 138785, 138785, 0, -1009.3143516666667, 17308, 117389)
+   (datetime.date(2026, 4, 1), 114022, 114022, 0, -705.71303, 16175, 93750)
+   (datetime.date(2026, 5, 1), 82598, 82598, 0, -319.91160388888886, 11153, 68148)
+   (datetime.date(2026, 6, 1), 79630, 79630, 0, -174.4849001388889, 13830, 63047)
+   (datetime.date(2026, 7, 1), 70243, 70243, 0, -25.179284166666665, 12634, 53916)
+   (datetime.date(2026, 8, 1), 64766, 64766, 0, -2.348130277777778, 16296, 41128)
+
+## jao: fetched_at vs last_modified_utc vs mtu (2026-07..08)
+  jao.max_exchanges [(592224, 9, 26.48861902777778, 15.790827597222231, -599.6997630252778, datetime.date(2026, 7, 1), datetime.date(2026, 8, 31))]
+  jao.hub_net_positions [(28224, 9, 26.505884166666668, 15.80796416666667, -69.62129690916667, datetime.date(2026, 7, 1), datetime.date(2026, 8, 31))]
+
+## hydro fill: update_time_utc vs week
+[(2026, 28, datetime.date(2026, 7, 9), datetime.date(2026, 9, 2), 36), (2026, 29, datetime.date(2026, 7, 17), datetime.date(2026, 9, 2), 35), (2026, 30, datetime.date(2026, 7, 27), datetime.date(2026, 9, 2), 35), (2026, 31, datetime.date(2026, 7, 30), datetime.date(2026, 9, 2), 34), (2026, 32, datetime.date(2026, 8, 7), datetime.date(2026, 9, 2), 34), (2026, 33, datetime.date(2026, 8, 17), datetime.date(2026, 9, 2), 33), (2026, 34, datetime.date(2026, 8, 24), datetime.date(2026, 9, 2), 32), (2026, 35, datetime.date(2026, 8, 24), datetime.date(2026, 9, 4), 32)]
