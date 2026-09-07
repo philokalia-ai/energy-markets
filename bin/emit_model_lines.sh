@@ -7,6 +7,8 @@
 #    simulations.model_lines (upsert).
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# cron runs with a minimal PATH: make julia (juliaup) and uv (~/.local/bin) visible.
+export PATH="$HOME/.juliaup/bin:$HOME/.local/bin:$PATH"
 set -a; . ./.env; set +a
 export EUPHEMIA_DATA_STORE=postgres
 mkdir -p data/model_line_feats
