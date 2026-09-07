@@ -121,6 +121,28 @@ function export_scoreboard()
     println("wrote $path ($(length(entries)) score entries, $(nrow(zones)) zones)")
 end
 
+# Model-line overlays (docs/experiments/forecast-eval-2026-08): the
+# [physics + ex-ante GBM] and [pure-stats GBM] hourly series from
+# simulations.model_lines — optional per day; the SPA draws them as the
+# pink / yellow lines. Absent hours stay null (honest gaps). Shared by the
+# per-zone files and the map JSON (a per-function copy left `mlmap`
+# undefined in export_zone_files and broke the daily export 2026-08-30..09-07).
+function model_lines_map(sd::Date)
+    ml = try
+        Euphemia.sql2df_with_retry("""
+            SELECT bidding_zone AS z, model,
+                   (date_time_utc AT TIME ZONE 'UTC') AS t, price_eur_mwh AS p
+            FROM simulations.model_lines
+            WHERE date_time_utc >= (\$1::date - INTERVAL '1 day')::timestamp
+            """, [sd])
+    catch e
+        @warn "model_lines unavailable — overlays skipped" error=e
+        DataFrame(z=String[], model=String[], t=DateTime[], p=Float64[])
+    end
+    return Dict{Tuple{String,String,DateTime},Float64}(
+        (String(r.z), String(r.model), DateTime(r.t)) => Float64(r.p) for r in eachrow(ml))
+end
+
 function export_zone_files()
     # Cross-version record: one chosen slice per (market_date, lead_days,
     # input_mode), earliest-frozen-wins; code_version carried as provenance.
@@ -162,6 +184,8 @@ function export_zone_files()
     act = resolution_aware_actuals(sd - Day(1), ed)
     actmap = Dict{Tuple{String,DateTime},Float64}(
         (String(a.z), DateTime(a.t)) => Float64(a.act) for a in eachrow(act))
+
+    mlmap = model_lines_map(sd)
 
     zdir = joinpath(OUT_DIR, "zones")
     mkpath(zdir)
@@ -270,23 +294,7 @@ function export_map_json()
     actmap = Dict{Tuple{String,DateTime},Float64}(
         (String(a.z), DateTime(a.t)) => Float64(a.act) for a in eachrow(act))
 
-    # Model-line overlays (docs/experiments/forecast-eval-2026-08): the
-    # [physics + ex-ante GBM] and [pure-stats GBM] hourly series from
-    # simulations.model_lines — optional per day; the SPA draws them as the
-    # pink / yellow lines. Absent hours stay null (honest gaps).
-    ml = try
-        Euphemia.sql2df_with_retry("""
-            SELECT bidding_zone AS z, model,
-                   (date_time_utc AT TIME ZONE 'UTC') AS t, price_eur_mwh AS p
-            FROM simulations.model_lines
-            WHERE date_time_utc >= (\$1::date - INTERVAL '1 day')::timestamp
-            """, [sd])
-    catch e
-        @warn "model_lines unavailable — overlays skipped" error=e
-        DataFrame(z=String[], model=String[], t=DateTime[], p=Float64[])
-    end
-    mlmap = Dict{Tuple{String,String,DateTime},Float64}(
-        (String(r.z), String(r.model), DateTime(r.t)) => Float64(r.p) for r in eachrow(ml))
+    mlmap = model_lines_map(sd)
     # Hourly D-1 load forecast: the weights of err_pct (load-weighted WAPE).
     loads = Euphemia.sql2df_with_retry(HOURLY_LOAD_FC_SQL, [sd - Day(1), ed + Day(1)])
     loadmap = Dict{Tuple{String,DateTime},Float64}(

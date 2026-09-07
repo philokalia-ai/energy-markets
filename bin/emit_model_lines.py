@@ -45,6 +45,19 @@ def last_close(csv, day):
     return float(s.close.iloc[-1]) if len(s) else np.nan
 
 
+def refresh_fuel_csvs(cx):
+    """Rewrite probe_ttf.csv / probe_eua.csv from yfinance.* so `last_close`
+    sees the latest D-2 closes (the CSVs were static snapshots ending
+    2026-08-25 while TTF kept moving)."""
+    for csv, table in (("probe_ttf.csv", "yfinance.ttf_f"), ("probe_eua.csv", "yfinance.eua_co2")):
+        df = pd.read_sql(f"SELECT date, close FROM {table} WHERE close IS NOT NULL ORDER BY date", cx)
+        if df.empty:
+            continue
+        df["date"] = pd.to_datetime(df.date).dt.strftime("%Y-%m-%d 00:00:00")
+        df.to_csv(os.path.join(TRAIN, csv), header=False, index=False)
+        print(f"fuel csv {csv}: {len(df)} rows through {df.date.iloc[-1][:10]}", flush=True)
+
+
 def load_models():
     path = os.path.join(TRAIN, "models.joblib")
     if os.path.exists(path):
@@ -121,6 +134,7 @@ def main():
         d0, d1 = today - dt.timedelta(days=2), today + dt.timedelta(days=7)
     models = load_models()
     cx = conn(); cur = cx.cursor()
+    refresh_fuel_csvs(cx)
     # physics base: freshest weather-track forecast per (zone, hour) in window
     cur.execute("""
         SELECT bidding_zone, (date_time_utc AT TIME ZONE 'UTC'), price_eur_mwh
