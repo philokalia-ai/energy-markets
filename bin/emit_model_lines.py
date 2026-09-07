@@ -189,7 +189,10 @@ def main():
                 lk = st.copy(); lk["t"] = lk.t + pd.Timedelta(hours=lag)
                 sT = sT.merge(lk.rename(columns={"p": col})[["zone", "t", col]],
                               on=["zone", "t"], how="left")
-            r7 = st.set_index("t").groupby("zone").p.rolling("168h").mean().reset_index()
+            # rolling("168h") needs a monotonic time index per zone; the settled
+            # query order is not guaranteed (it broke the 2026-09-07 catch-up run).
+            r7 = (st.sort_values(["zone", "t"]).set_index("t").groupby("zone").p
+                    .rolling("168h").mean().reset_index())
             r7["t"] = r7.t + pd.Timedelta(hours=24)
             sT = sT.merge(r7.rename(columns={"p": "roll7"}), on=["zone", "t"], how="left")
             sT["dow"] = sT.t.dt.dayofweek
