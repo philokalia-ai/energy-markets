@@ -1,0 +1,51 @@
+## IN-GATE zone-days (ratio >= 0.95) per zone:
+     cells  base_MAE  spill_MAE   dMAE  base_bias  spill_bias  base_corr  spill_corr  settled<=5_h  recall_base  recall_spill  FA_base  FA_spill  p10_base  p10_spill
+z                                                                                                                                                                    
+NO1   24.0    11.623     11.649  0.025     -2.999      -3.025      0.666       0.666           0.0        0.000         0.000      0.0       0.0    21.799     21.799
+NO3  480.0    27.417     25.521 -1.897     16.234      14.314      0.571       0.593         121.0        0.000         0.000      0.0       0.0    24.405     22.878
+NO4  744.0    25.689     24.330 -1.359     11.291       9.932      0.645       0.666         312.0        0.000         0.003      0.0       0.0    20.560     19.960
+NO5   96.0    38.312     38.237 -0.075      6.599       6.484      0.528       0.527           5.0        0.000         0.000      0.0       0.0    23.540     23.425
+SE1  192.0    25.537     23.969 -1.568     14.411      12.843      0.903       0.900          95.0        0.000         0.000      0.0       0.0    20.940     18.490
+SE2  480.0    23.446     22.381 -1.065     12.604      10.903      0.688       0.682         281.0        0.075         0.103     33.0      41.0     1.000      1.000
+SE3  192.0    30.283     29.996 -0.287     27.467      27.104      0.532       0.535          32.0        0.000         0.000      0.0       0.0    21.610     20.719
+
+## IN-GATE pooled:
+cells           2208.000
+base_MAE          26.359
+spill_MAE         25.093
+dMAE              -1.266
+base_bias         13.970
+spill_bias        12.551
+base_corr          0.629
+spill_corr         0.638
+settled<=5_h     846.000
+recall_base        0.025
+recall_spill       0.035
+FA_base           33.000
+FA_spill          41.000
+p10_base          20.940
+p10_spill         19.435
+
+## OUT-OF-GATE pooled (guard — must be unchanged):
+cells           12768.000
+base_MAE           27.329
+spill_MAE          27.234
+dMAE               -0.095
+base_bias           0.239
+spill_bias          0.099
+base_corr           0.742
+spill_corr          0.742
+settled<=5_h     1506.000
+recall_base         0.023
+recall_spill        0.028
+FA_base            41.000
+FA_spill           49.000
+p10_base           24.850
+p10_spill          24.410
+
+## in-gate cells by ratio bin (pooled): dMAE, recall base→spill
+           cells  base_MAE  spill_MAE   dMAE  base_bias  spill_bias  recall_base  recall_spill
+bin                                                                                           
+0.95-1.0  1224.0    24.589     24.296 -0.293     11.461      10.939        0.065         0.090
+1.0-1.05   408.0    24.725     23.404 -1.321     16.939      15.618        0.000         0.000
+>=1.05     576.0    31.278     27.983 -3.295     17.197      13.804        0.000         0.003
