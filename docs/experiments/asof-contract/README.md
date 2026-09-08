@@ -124,6 +124,44 @@ revision. Status: **unverifiable**. On Core borders cv35 reads JAO instead
 - The `::timestamp` cast makes the gate 08:00/09:00 UTC on Postgres and 10:00
   UTC on the extract (§1). Fix: compare in explicit UTC in both dialects.
 
+### 3.4b Outage queries are nondeterministic on main (found while verifying this branch)
+
+Trying to show the legacy path bit-identical between this branch and main
+failed — and main is not identical to **itself** either
+(`output/07_main_self_reproducibility.txt`): two runs of unchanged main code
+on unchanged data (2025-08-20, no row touched since May) give different
+DE_LU books (8,380 → 8,378 order values, sums 12.699 M vs 12.625 M) and
+different `tx_outage_caps` sums for 2026-08-20 (2.541 M vs 2.615 M MW·h).
+GR/NO4 reproduce; DE_LU and the transmission caps do not.
+
+Cause (`scripts/07_outage_duplicate_rows.py`): an ENTSO-E outage message
+is stored as **one row per time-series interval** — the same
+`(instance_code, version)` repeated with different `available_capacity_mw`
+(example: message `0DJLlZnIqrsQN7lAOmDEbQ` v1, 368 / 90 / 20 / 87 MW over
+its intervals, `start_time_series_utc` differing, `start_outage_utc` the
+same). Both outage readers rank rows with
+`ROW_NUMBER() OVER (PARTITION BY instance_code ORDER BY version DESC)` and
+keep `rn = 1`: with ties, Postgres returns whichever row the scan produced.
+Counts for messages overlapping the day:
+
+| Delivery | (instance, version) groups | with > 1 row | rows disagree on capacity / NTC |
+|---|---|---|---|
+| 2026-08-20, generation | 9,634 | 6,388 | **1,445** |
+| 2025-08-20, generation | 11,397 | 7,134 | **1,335** |
+| 2026-08-20, transmission grid | 28,792 | 15,163 | **7,902** |
+
+So the "available capacity of the latest version" is a random pick among
+that message's intervals, once per process (the day cache pins it). This is
+a legacy defect, independent of the context: the branch's queries keep the
+same shape and inherit it. The physically right reading uses the interval
+columns (`start_time_series_utc`/`end_time_series_utc`) per hour — which is
+also what #366's "native MTU availability" and this issue's acceptance check
+on short outages ask for. It changes the record (a code_version bump), so it
+is not done here; it is filed as its own issue. Until it is fixed no
+bit-identity harness on the book can pass for outage-heavy zones, and the
+cv35–37 non-reproducibility note in the ledger has a simpler suspect than
+the JAO or graded-tranche iteration order.
+
 ### 3.5 Actual generation used at D-1
 
 `get_type_output_p95` and the per-unit activity probes read
