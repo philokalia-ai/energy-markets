@@ -56,6 +56,8 @@ const _MO = Euphemia.MeritOrderBook
         @test want ⊆ have
         for (k, v) in _MO.PROVENANCE
             @test v["kind"] in ("observed", "declared")
+            @test v["layer"] in ("engineering", "opportunity", "conduct")   # #367
+            @test v["price_informed"] isa Bool
             @test !isempty(v["source"])
             @test v["cv"] isa Integer
             @test v["cv"] <= Euphemia.ENERGY_PRICES_CODE_VERSION
