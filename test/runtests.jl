@@ -155,6 +155,13 @@ println()
         include(joinpath(@__DIR__, "test_forecast_context.jl"))
     end
 
+    @testset "Outage intervals (#370)" begin
+        println("\n" * "=" ^ 60)
+        println("Running Outage Interval Tests...")
+        println("=" ^ 60)
+        include(joinpath(@__DIR__, "test_outage_intervals.jl"))
+    end
+
     @testset "Weather RES" begin
         println("\n" * "=" ^ 60)
         println("Running Weather RES Tests...")
