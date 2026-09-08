@@ -230,10 +230,12 @@ function pipeline_book_worker(bookwork::RemoteChannel, solvework::RemoteChannel,
             (_, day, _t_feed) = job
             try
                 t0 = time()
-                ob1 = mz_build_books(zones, day;
-                    enrich_network=cfg.enrich_network,
-                    apply_zone_profiles=cfg.apply_zone_profiles,
-                    scenario=cfg.scenario)
+                ob1 = _with_job_context(cfg, day) do
+                    mz_build_books(zones, day;
+                        enrich_network=cfg.enrich_network,
+                        apply_zone_profiles=cfg.apply_zone_profiles,
+                        scenario=cfg.scenario)
+                end
                 book_secs = time() - t0
                 # Flush pass-1 books BEFORE forwarding, so the staging file is on
                 # disk before any result for this day can reach the coordinator.
@@ -249,10 +251,12 @@ function pipeline_book_worker(bookwork::RemoteChannel, solvework::RemoteChannel,
             (_, day, refs, cached, r1, book_secs, waitq, solve1_secs, _t) = job
             try
                 t0 = time()
-                ob2 = mz_rebuild_anchored(zones, day, refs, cached;
-                    enrich_network=cfg.enrich_network,
-                    apply_zone_profiles=cfg.apply_zone_profiles,
-                    scenario=cfg.scenario)
+                ob2 = _with_job_context(cfg, day) do
+                    mz_rebuild_anchored(zones, day, refs, cached;
+                        enrich_network=cfg.enrich_network,
+                        apply_zone_profiles=cfg.apply_zone_profiles,
+                        scenario=cfg.scenario)
+                end
                 rebuild_secs = time() - t0
                 # Flush pass-2 books (only the anchored zones re-fired the sink)
                 # before forwarding — same ordering guarantee as pass 1.
@@ -417,6 +421,15 @@ sequential `run_multi_zone_market_clearing(day; passes=2, ...)` path.
 Returns `(processed, saved, failed, wall_seconds, days_per_hour,
 solver_utilization, per_solver, day_prices)`.
 """
+# #368 phase 2: install the job's ForecastContext on the worker for one book
+# stage. `cfg.as_of` is a plain Symbol (serializable); `:none` runs `f` as is.
+function _with_job_context(f, cfg, day::Date)
+    rule = get(cfg, :as_of, :none)
+    rule === :none && return f()
+    rule === :gate || error("unknown as_of rule $rule (expected :none or :gate)")
+    return with_context(f, gate_context(day))
+end
+
 function run_pipelined_backfill(days, zones::Vector{String}=String[];
         solver_workers::Int=2,
         book_workers::Int=min(10, max(1, Sys.CPU_THREADS ÷ 8)),
@@ -464,6 +477,15 @@ function run_pipelined_backfill(days, zones::Vector{String}=String[];
         # NOTE: hooks are closures serialized to the book workers — define them
         # at top level of the driver script (Main) with plain captured data.
         scenario::Union{Nothing,ZoneScenario,Dict{String,ZoneScenario}}=nothing,
+        # As-of contract (#368 phase 2). `:none` (default) = the legacy readers,
+        # byte-identical. `:gate` = every book stage on the workers runs under
+        # `gate_context(day)` (issuance = the D-1 auction gate, D-1 10:00 UTC):
+        # outage versions in explicit UTC at the gate, trailing generation
+        # windows cut at the gate, fuel closes as at the gate, and the per-source
+        # publication audit collected per day. Dynamic scopes do not cross
+        # process boundaries, so the rule travels in `cfg` and the worker
+        # installs the context itself.
+        as_of::Symbol=:none,
         # Opt-in order-book capture. When set, each book worker writes every
         # zone-day's FULL tagged book (per-unit ladders + RES/IMPORT/DEMAND/
         # BACKSTOP tags, the pre-merge strategist view) and the coordinator
@@ -635,7 +657,7 @@ function run_pipelined_backfill(days, zones::Vector{String}=String[];
            apply_zone_profiles=apply_zone_profiles, mpcc_time_limit=mpcc_time_limit,
            mpcc_mip_gap=mpcc_mip_gap, mpcc_heuristic_effort=mpcc_heuristic_effort,
            scenario=scenario, decompose_periods=resolved_decompose,
-           books_dir=books_dir_abs)
+           books_dir=books_dir_abs, as_of=as_of)
 
     day_prices = Dict{Date,Dict{String,Dict{String,Float64}}}()
     saved = 0; failed = 0
