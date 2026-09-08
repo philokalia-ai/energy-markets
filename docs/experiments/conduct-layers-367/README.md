@@ -59,7 +59,64 @@ corr against settled, and — the number the issue asks for — the **premium**:
 settled minus the no-conduct benchmark, by zone and hour, its duration and
 the energy it covers, next to the residual against the full ladder.
 
-_Results appended when the arm completes._
+### Result (2026-09-08; `output/ab_score.txt`)
+
+52 paired Wednesdays, 38 zones, 47,300 paired zone-hours. Removing the
+conduct layer moves 76 % of cells (mean |Δ| 11.3):
+
+| | full ladder (`ab370_intervals`) | **competitive layer only** (`ab367_noconduct`) |
+|---|---|---|
+| footprint MAE / energy-weighted | 26.73 / 26.02 | 29.16 / 28.76 |
+| bias | −9.07 | −14.97 |
+| corr | 0.767 | 0.739 |
+
+**Where the conduct layer carries the model:** HU +6.8 MAE without it,
+PL +5.6, SI +5.5, AT +5.4, SK +5.3, CZ +4.6, LT +4.3, RO +4.1, LV +3.9,
+BG +3.5, GR/DK2/FR/DE_LU +3.0, RS +2.9. **Where it hurts:** ES −1.10 and
+PT −0.76 (bias +7.8 → −0.6 and +6.5 → −1.0: the ladder over-prices Iberia,
+whose competitive layer is already centred); BE +0.4 MAE but corr
+0.658 → 0.575. The Nordics sit in between (+0.6..+1.9 MAE, bias still
++12..+16 in SE1/SE2/NO4 without any conduct — a water-value level problem,
+the #366 finding, not conduct).
+
+**The premium over the competitive benchmark** (settled − no-conduct,
+energy-weighted mean €/MWh; share of hours above 10 €/MWh) — the number the
+issue asks for, next to the residual over the full ladder:
+
+| zone | premium (ew) | hours > 10 | residual vs full ladder |
+|---|---|---|---|
+| HU | **40.0** | 70 % | 28.3 |
+| LT / LV | 36.6 / 35.3 | 65 % | 27.3 / 28.6 |
+| AT / SI | 32.0 / 31.7 | 75 % / 70 % | 24.6 / 24.3 |
+| SK | 30.1 | 63 % | 21.9 |
+| RO / PL | 28.4 / 26.2 | 60 % / 56 % | 15.5 / 18.1 |
+| NO5 | 24.6 | 76 % | 22.2 |
+| GR / BG | 23.5 / 23.5 | 59 % | 9.9 / 13.5 |
+| IT-NORTH .. IT-SOUTH | 18–23 | 57–68 % | 9–14 |
+| CZ / NO1 / DK2 | 21.2 / 21.2 / 21.0 | 56–70 % | 15–20 |
+| DE_LU / NL | 15.3 / 13.6 | 45 % / 44 % | 8.2 / 8.7 |
+| BE / FR | 6.5 / 4.7 | 37 % / 41 % | −0.7 / −3.8 |
+| ES / PT | 1.2 / 0.6 | 38 % / 40 % | −7.8 / −6.5 |
+| FI / NO4 / SE1 / SE2 | −3.5 / −10.4 / −12.1 / −13.4 | 15–27 % | −8..−17 |
+
+By hour of day (footprint mean): 3–6 €/MWh overnight and at midday, 24 at
+05–06 UTC, **32–43 at 16–18 UTC**, 29 at 19 — the evening belt of the
+2026-09 review, now expressed as a premium over a benchmark that contains
+no conduct assumption.
+
+**Reading.** The declared conduct layer is not decoration: on the coupled
+footprint it explains 2.4 €/MWh of MAE and 6 of bias, almost all of it in
+the Core satellites and the Baltics in the evening. Its *absence* leaves an
+evening premium of 25–40 €/MWh in HU/AT/SI/SK/RO/PL/Baltics that the
+competitive layers (fuel, availability, water, nuclear, imports) do not
+produce — and a competitive layer that already over-prices Iberia and the
+wet Nordics, where the ladder should not fire at all. Two consequences for
+the claim: (i) the "premium" is identified against the no-conduct benchmark
+only up to the uncertainty of the opportunity layer (the step-3 scenario
+envelope, not run here); (ii) the same ladder is applied to zones where the
+premium is 40 and zones where it is 1 — a zone-invariant conduct prior is
+the wrong shape, and the honest benchmark reports the premium per zone
+rather than absorbing it into a shared parameter.
 
 ## 4. What remains (steps 3, 5, 6)
 
