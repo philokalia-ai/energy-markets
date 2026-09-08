@@ -31,6 +31,7 @@ catch
 end
 
 include("dbutils.jl")
+include("ForecastContext.jl")   # as-of input contract (issue #368): ForecastContext, with_context, asof_audit
 
 # =============================================================================
 # CUSTOM EXCEPTION TYPES

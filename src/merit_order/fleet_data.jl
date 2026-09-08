@@ -12,8 +12,23 @@
 # keys; only scan-order FP summation can differ at the last ULP (the same
 # documented mechanism as the physical-flows day cache). Errors are never
 # cached; locks follow the TTF_PRICE_CACHE pattern.
-const _TYPE_P95_DAY_CACHE = Dict{Tuple{Date,Int},Dict{String,Dict{String,Float64}}}()
-const _HYDRO_AVAIL_DAY_CACHE = Dict{Tuple{Date,Int},Dict{String,Float64}}()
+# Keyed on (day, lookback, issuance): `ctx_key()` is `nothing` on the legacy
+# path, the issuance instant inside a ForecastContext (issue #368).
+const _TYPE_P95_DAY_CACHE = Dict{Tuple{Date,Int,Union{Nothing,DateTime}},Dict{String,Dict{String,Float64}}}()
+const _HYDRO_AVAIL_DAY_CACHE = Dict{Tuple{Date,Int,Union{Nothing,DateTime}},Dict{String,Float64}}()
+
+# Upper bound of the trailing actual-generation windows. Legacy: delivery-day
+# 00:00 UTC (includes D-1 evening, which at the gate is not yet published).
+# In a context: the earlier of that and `as_of - AGG_GEN_PUBLICATION_LATENCY`
+# (aggregated generation per type lands ~45 min after the hour), recorded as
+# :latency_policy — no stamp is consulted, the window is simply cut.
+function _trailing_window_upper(day::Date)
+    c = current_context()
+    c === nothing && return ("(\$UB::date::timestamp AT TIME ZONE 'UTC')", day)
+    ub = min(DateTime(day), c.as_of_utc - AGG_GEN_PUBLICATION_LATENCY)
+    record_asof_status!("aggregated_generation", :latency_policy)
+    return ("(\$UB::timestamp AT TIME ZONE 'UTC')", ub)
+end
 const _INSTALLED_CAP_CACHE = Dict{Date,Dict{String,Dict{String,Float64}}}()   # day -> zone -> type -> MW
 const _RESERVOIR_DAY_CACHE = Dict{Date,Dict{String,Any}}()
 const _FLEET_DATA_LOCK = ReentrantLock()
@@ -29,11 +44,12 @@ function clear_fleet_data_caches!()
 end
 
 function _type_p95_all_zones(day::Date, lookback_days::Int)
-    key = (day, lookback_days)
+    key = (day, lookback_days, ctx_key())
     cached = lock(_FLEET_DATA_LOCK) do
         get(_TYPE_P95_DAY_CACHE, key, nothing)
     end
     cached !== nothing && return cached
+    ub_expr, ub_val = _trailing_window_upper(day)
     df = sql2df_with_retry(
         """
         SELECT area_map_code AS z, production_type,
@@ -45,12 +61,12 @@ function _type_p95_all_zones(day::Date, lookback_days::Int)
             WHERE area_type_code LIKE 'BZN%'
               AND actual_generation_output_mw IS NOT NULL
               AND date_time_utc >= (\$1::date::timestamp AT TIME ZONE 'UTC')
-              AND date_time_utc < (\$2::date::timestamp AT TIME ZONE 'UTC')
+              AND date_time_utc < $(replace(ub_expr, "\$UB" => "\$2"))
             GROUP BY area_map_code, production_type, date_time_utc
         ) hourly
         GROUP BY area_map_code, production_type
         """,
-        [day - Day(lookback_days), day])
+        [day - Day(lookback_days), ub_val])
     out = Dict{String,Dict{String,Float64}}()
     for row in eachrow(df)
         ismissing(row.p95) && continue
@@ -64,11 +80,12 @@ function _type_p95_all_zones(day::Date, lookback_days::Int)
 end
 
 function _hydro_avail_all_zones(day::Date, lookback_days::Int)
-    key = (day, lookback_days)
+    key = (day, lookback_days, ctx_key())
     cached = lock(_FLEET_DATA_LOCK) do
         get(_HYDRO_AVAIL_DAY_CACHE, key, nothing)
     end
     cached !== nothing && return cached
+    ub_expr, ub_val = _trailing_window_upper(day)
     df = sql2df_with_retry(
         """
         SELECT z, percentile_cont(0.95) WITHIN GROUP (ORDER BY hydro_mw) AS p95
@@ -80,12 +97,12 @@ function _hydro_avail_all_zones(day::Date, lookback_days::Int)
               AND area_type_code LIKE 'BZN%'
               AND actual_generation_output_mw IS NOT NULL
               AND date_time_utc >= (\$2::date::timestamp AT TIME ZONE 'UTC')
-              AND date_time_utc < (\$3::date::timestamp AT TIME ZONE 'UTC')
+              AND date_time_utc < $(replace(ub_expr, "\$UB" => "\$3"))
             GROUP BY area_map_code, date_time_utc
         ) hourly
         GROUP BY z
         """,
-        [HYDRO_PRODUCTION_TYPES, day - Day(lookback_days), day])
+        [HYDRO_PRODUCTION_TYPES, day - Day(lookback_days), ub_val])
     out = Dict{String,Float64}()
     for row in eachrow(df)
         ismissing(row.p95) && continue

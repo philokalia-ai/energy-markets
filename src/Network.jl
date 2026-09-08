@@ -408,6 +408,14 @@ time_period 1..24). Where Core and Nordic both publish a border, the CCR the
 border is internal to wins (Nordic for Nordic-internal, Core otherwise).
 """
 function jao_maxbex(date::Date)
+    # As-of audit (issue #368): JAO publishes the final MaxBEX ~07:45 UTC on
+    # D-1 (last_modified_utc, populated from delivery 2026-08-23). An issuance
+    # earlier than that (leads > 1) reads a table that did not exist yet.
+    if (ctx = _asof_ctx()) !== nothing
+        st = ctx.as_of_utc < DateTime(date - Day(1)) + Hour(8) ? :post_gate :
+             date >= Date(2026, 8, 23) ? :verified : :unverifiable
+        _asof_record!("jao_maxbex", st)
+    end
     lock(_JAO_DAY_CACHE_LOCK) do
         haskey(_JAO_DAY_CACHE, date) && return _JAO_DAY_CACHE[date]
     end
@@ -520,14 +528,34 @@ end
 # covering that hour (NULL new_ntc = no cap). Same gate-vintage rule as the
 # generation outages (cv34 B1): from delivery days >= 2025-10-01 only versions
 # published before D-1 10:00 UTC count. EUPHEMIA_DISABLE_TX_OUTAGE_ATC reverts.
-const _TX_OUTAGE_DAY_CACHE = Dict{Date,Dict{Tuple{String,String,Int},Float64}}()
+# As-of contract (issue #368): the parent module's ForecastContext, when the
+# Network module is loaded inside Euphemia (nothing when loaded standalone).
+const _PARENT_MODULE = parentmodule(@__MODULE__)
+_asof_ctx() = isdefined(_PARENT_MODULE, :current_context) ? _PARENT_MODULE.current_context() : nothing
+_asof_key() = (c = _asof_ctx(); c === nothing ? nothing : c.as_of_utc)
+_asof_record!(source, status) =
+    isdefined(_PARENT_MODULE, :record_asof_status!) && _PARENT_MODULE.record_asof_status!(source, status)
+
+# Keyed on (date, issuance): see `_OUTAGE_DAY_CACHE` in generators/registry.jl.
+const _TX_OUTAGE_DAY_CACHE = Dict{Tuple{Date,Union{Nothing,DateTime}},Dict{Tuple{String,String,Int},Float64}}()
 const _TX_OUTAGE_LOCK = ReentrantLock()
 tx_outage_atc_enabled() = isempty(get(ENV, "EUPHEMIA_DISABLE_TX_OUTAGE_ATC", ""))
 
 function tx_outage_caps(date::Date)
+    ctx = _asof_ctx()
+    ckey = (date, ctx === nothing ? nothing : ctx.as_of_utc)
     lock(_TX_OUTAGE_LOCK) do
-        haskey(_TX_OUTAGE_DAY_CACHE, date) && return _TX_OUTAGE_DAY_CACHE[date]
+        haskey(_TX_OUTAGE_DAY_CACHE, ckey) && return _TX_OUTAGE_DAY_CACHE[ckey]
     end
+    ctx === nothing || _asof_record!("outages_transmission",
+                                     date < Date(2025, 10, 1) ? :legacy_stamp : :verified)
+    # Same gate-clause split as generators/registry.jl `_outage_gate_clause`:
+    # legacy = the session-time-zone `::timestamp` form (record-identical);
+    # in a context = explicit UTC against the issuance instant bound as $2.
+    gate_tail = ctx === nothing ?
+        "version_publication_timestamp_utc::timestamp < \$1::timestamp - INTERVAL '14 hours'" :
+        "(version_publication_timestamp_utc AT TIME ZONE 'UTC') < \$2::timestamp"
+    params = ctx === nothing ? Any[date] : Any[date, ctx.as_of_utc]
     out = Dict{Tuple{String,String,Int},Float64}()
     df = try
         safe_sql2df("""
@@ -543,7 +571,7 @@ function tx_outage_caps(date::Date)
                 JOIN cand USING (instance_code)
                 WHERE \$1::date < DATE '2025-10-01'
                    OR version_publication_timestamp_utc IS NULL
-                   OR version_publication_timestamp_utc::timestamp < \$1::timestamp - INTERVAL '14 hours'
+                   OR $(gate_tail)
             )
             SELECT out_area_map_code AS src, in_area_map_code AS snk,
                    start_outage_utc::timestamp AS s, end_outage_utc::timestamp AS e,
@@ -554,7 +582,7 @@ function tx_outage_caps(date::Date)
               AND end_outage_utc::timestamp > \$1::timestamp
               AND out_area_map_code IS NOT NULL AND in_area_map_code IS NOT NULL
               AND out_area_map_code <> in_area_map_code
-            """, [date])
+            """, params)
     catch e
         @warn "transmission-grid unavailability not readable — border caps disabled for $date: $(sprint(showerror, e))"
         DataFrame()
@@ -572,7 +600,7 @@ function tx_outage_caps(date::Date)
         end
     end
     isempty(df) || lock(_TX_OUTAGE_LOCK) do
-        _TX_OUTAGE_DAY_CACHE[date] = out
+        _TX_OUTAGE_DAY_CACHE[ckey] = out
     end
     return out
 end

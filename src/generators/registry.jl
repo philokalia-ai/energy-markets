@@ -43,14 +43,17 @@
 #   * Grouped by asset_code alone: an outage filed under a different area code
 #     than the registry's zone (Italian units filed as IT / another sub-zone)
 #     now applies to the unit wherever the registry places it.
-const _OUTAGE_DAY_CACHE = Dict{Dates.Date,DataFrames.DataFrame}()
+# Keyed on (day, issuance) — `ctx_key()` is `nothing` on the legacy path, the
+# context's `as_of_utc` inside `with_context`, so two issuances of the same
+# delivery day built in one process never share an outage table.
+const _OUTAGE_DAY_CACHE = Dict{Tuple{Dates.Date,Union{Nothing,Dates.DateTime}},DataFrames.DataFrame}()
 const _OUTAGE_DAY_CACHE_LOCK = ReentrantLock()
 
 # Per-(zone, day, flags) memo of the final Vector{Generator}, so pass-2 anchored
 # rebuilds and repeated builds within one process do not re-query. Cleared per
 # process. Callers mutate the returned vector (fleet completion push!/filter), so
 # callers always receive a shallow copy — the cached vector is never handed out.
-const _GENERATOR_MEMO = Dict{Tuple{String,Dates.Date,Bool,Bool},Vector{Generator}}()
+const _GENERATOR_MEMO = Dict{Tuple{String,Dates.Date,Bool,Bool,Union{Nothing,Dates.DateTime}},Vector{Generator}}()
 const _GENERATOR_MEMO_LOCK = ReentrantLock()
 
 # Registry sanity bound. ENTSO-E's unit registry carries rare corrupt
@@ -87,9 +90,37 @@ Once-per-day (all-zone) active-outage table backing `get_generators`. See the
 `_OUTAGE_DAY_CACHE` comment for the schema and the row-identity argument. Cached
 per day; never cached on DB error (the exception propagates out of `get!`).
 """
+# The vintage clause of the outage query (issue #368). Legacy (no context):
+# the cv34 form — `::timestamp` on a timestamptz column, which Postgres
+# evaluates in the SESSION time zone (Europe/Berlin on the live server, so the
+# gate lands at D-1 08:00/09:00 UTC) and the DuckDB extract in naive UTC
+# (D-1 10:00 UTC); docs/experiments/asof-contract/README.md §1. Inside a
+# context: explicit UTC against the context's issuance instant, bound as $2 —
+# the same instant on both backends. The pre-seam and NULL branches are
+# unchanged: before 2025-10-01 the column is an ingestion time, so the latest
+# version counts and the audit records :legacy_stamp.
+function _outage_gate_clause()
+    ks = isempty(get(ENV, "EUPHEMIA_DISABLE_CV34_GATE", "")) ? "" : "TRUE OR "
+    tail = current_context() === nothing ?
+        "version_publication_timestamp_utc::timestamp < \$1::timestamp - INTERVAL '14 hours'" :
+        "(version_publication_timestamp_utc AT TIME ZONE 'UTC') < \$2::timestamp"
+    return ks * "\$1::date < DATE '2025-10-01'\n" *
+           "                       OR version_publication_timestamp_utc IS NULL\n" *
+           "                       OR " * tail
+end
+function _outage_gate_params(day::Dates.Date)
+    c = current_context()
+    return c === nothing ? Any[day] : Any[day, c.as_of_utc]
+end
+const OUTAGE_STAMP_SEAM = Dates.Date(2025, 10, 1)
+
 function get_day_outages(day::Dates.Date)
+    if current_context() !== nothing
+        record_asof_status!("outages_generation",
+                            day < OUTAGE_STAMP_SEAM ? :legacy_stamp : :verified)
+    end
     return lock(_OUTAGE_DAY_CACHE_LOCK) do
-        get!(_OUTAGE_DAY_CACHE, day) do
+        get!(_OUTAGE_DAY_CACHE, (day, ctx_key())) do
             Euphemia.sql2df_with_retry(
                 """
                 WITH cand AS (
@@ -112,10 +143,7 @@ function get_day_outages(day::Dates.Date)
                            ROW_NUMBER() OVER (PARTITION BY u.instance_code ORDER BY u.version DESC) AS rn
                     FROM entsoe.unavailability_of_production_and_generation_units u
                     JOIN cand USING (instance_code)
-                    WHERE $(isempty(get(ENV, "EUPHEMIA_DISABLE_CV34_GATE", "")) ? "" : "TRUE OR ")
-                       \$1::date < DATE '2025-10-01'
-                       OR version_publication_timestamp_utc IS NULL
-                       OR version_publication_timestamp_utc::timestamp < \$1::timestamp - INTERVAL '14 hours'
+                    WHERE $(_outage_gate_clause())
                 ),
                 active_outages AS (
                     SELECT asset_code,
@@ -145,7 +173,7 @@ function get_day_outages(day::Dates.Date)
                        ) AS stale_override
                 FROM active_outages o
                 """,
-                [day])
+                _outage_gate_params(day))
         end
     end
 end
@@ -172,7 +200,7 @@ end
 function get_generators(map_code::String, day::Dates.Date;
                        exclude_unavailable::Bool=true,
                        exclude_variable_renewables::Bool=true)
-    memo_key = (map_code, day, exclude_unavailable, exclude_variable_renewables)
+    memo_key = (map_code, day, exclude_unavailable, exclude_variable_renewables, ctx_key())
     cached = lock(_GENERATOR_MEMO_LOCK) do
         get(_GENERATOR_MEMO, memo_key, nothing)
     end

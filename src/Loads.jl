@@ -33,7 +33,7 @@ function get_loads(bidding_zone::String, day::Dates.Date; fallback_days::Int=7)
     SELECT
         date_time_utc,
         resolution_code,
-        total_load_mw
+        total_load_mw$(current_context() === nothing ? "" : ",\n        (update_time_utc AT TIME ZONE 'UTC') AS update_time_utc")
     FROM
         entsoe.day_ahead_total_load_forecast
     WHERE
@@ -46,6 +46,10 @@ function get_loads(bidding_zone::String, day::Dates.Date; fallback_days::Int=7)
 
     df = Euphemia.sql2df_with_retry(query, [day, bidding_zone])
     isempty(df) && return Load[]
+    # As-of audit (issue #368): the store keeps ONE revision per slot; classify
+    # its publication stamp against the issuance instant. Values are not
+    # changed — the pre-gate revision is not in the store to fall back to.
+    hasproperty(df, :update_time_utc) && classify_stamps!("load_forecast_d1", df.update_time_utc)
 
     # 1. one resolution: most hours with a published value, tie -> coarser
     resolutions = unique(String.(df.resolution_code))

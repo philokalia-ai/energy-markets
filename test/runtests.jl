@@ -146,6 +146,15 @@ println()
         include(joinpath(@__DIR__, "test_forecast_tracking.jl"))
     end
 
+    @testset "Forecast Context (as-of contract)" begin
+        println("\n" * "=" ^ 60)
+        println("Running Forecast Context Tests...")
+        println("=" ^ 60)
+        # Gate rule / DST fixtures, scoping, classification (pure) + two
+        # DB-backed identity checks (fuel close, outage table).
+        include(joinpath(@__DIR__, "test_forecast_context.jl"))
+    end
+
     @testset "Weather RES" begin
         println("\n" * "=" ^ 60)
         println("Running Weather RES Tests...")

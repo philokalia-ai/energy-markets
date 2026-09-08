@@ -66,6 +66,9 @@ function get_generation_forecast_for_wind_and_solar(bidding_zone::String, day::D
 
     df = Euphemia.sql2df_with_retry(query, [day, bidding_zone])
     isempty(df) && return RenewablesGenerationForecast[]
+    # As-of audit (issue #368): the row's update_time_utc tracks the intraday /
+    # current columns too, so the D-1 column's publication time is unknowable.
+    record_asof_status!("res_forecast_d1", :unverifiable, DataFrames.nrow(df))
 
     # --- 1. one resolution per production type -------------------------------
     # Compared on HOURS with at least one published value (a PT15M series with
