@@ -1,0 +1,2 @@
+paired days: 26  zones: 38  cells: 23664  (zone-hours present in both arms; per-day zone count min 36)
+arm difference: cells changed 0 of 23664 (0.0%), mean |Δ| where changed nan, max |Δ| 0.0

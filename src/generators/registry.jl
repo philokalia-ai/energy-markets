@@ -114,6 +114,121 @@ function _outage_gate_params(day::Dates.Date)
 end
 const OUTAGE_STAMP_SEAM = Dates.Date(2025, 10, 1)
 
+# Issue #370 (cv38): an ENTSO-E outage message is stored as ONE ROW PER
+# TIME-SERIES INTERVAL — the same (instance_code, version) repeated with
+# different `available_capacity_mw` and `start/end_time_series_utc` (e.g.
+# 368 / 90 / 20 / 87 MW over four intervals of one version). The legacy
+# query ranked those rows with ROW_NUMBER() ... ORDER BY version DESC and kept
+# rn = 1, i.e. WHICHEVER interval the scan produced first: the unit's
+# capacity for the day was a random pick among its intervals, once per
+# process (1,445 of 9,634 message-versions overlapping 2026-08-20 disagree
+# across their rows; DE_LU books and tx_outage_caps differed run to run —
+# docs/experiments/asof-contract §3.4b). The interval path below keeps every
+# row of the latest version, derives the unit's hourly available capacity
+# (MIN over the intervals — of any message — covering the hour, +Inf where
+# none does) and applies the SAME majority-of-day rule on the hours: the
+# day-level capacity is the 12th-smallest hourly value, so ≤ 11 affected
+# hours ⇒ no outage (as before), a single interval covering ≥ 12 h ⇒ its
+# capacity (as before), and a multi-interval message ⇒ the level that holds
+# for at least 12 hours — deterministic and backend-independent.
+# EUPHEMIA_DISABLE_OUTAGE_INTERVALS restores the legacy (nondeterministic)
+# query for A/B arms.
+_outage_intervals_enabled() = isempty(get(ENV, "EUPHEMIA_DISABLE_OUTAGE_INTERVALS", ""))
+const OUTAGE_MAJORITY_HOURS = 12
+
+"""
+    _majority_available(hourly::AbstractVector{<:Real}; k=OUTAGE_MAJORITY_HOURS) -> Float64
+
+Day-level available capacity from 24 hourly values (`Inf` = no outage that
+hour): the `k`-th smallest value, i.e. the capacity that holds for at least
+`k` hours; `Inf` when fewer than `k` hours are affected.
+"""
+function _majority_available(hourly::AbstractVector{<:Real}; k::Int=OUTAGE_MAJORITY_HOURS)
+    n = length(hourly)
+    n == 0 && return Inf
+    return Float64(partialsort(collect(Float64, hourly), min(k, n)))
+end
+
+function _day_outages_intervals(day::Dates.Date)
+    df = Euphemia.sql2df_with_retry(
+        """
+        WITH cand AS (
+            SELECT DISTINCT instance_code
+            FROM entsoe.unavailability_of_production_and_generation_units
+            WHERE start_outage_utc::timestamp < \$1::timestamp + INTERVAL '1 day'
+              AND end_outage_utc::timestamp > \$1::timestamp
+        ),
+        vers AS (
+            -- versions as known at the gate (cv34 seam rule; see _outage_gate_clause)
+            SELECT u.*, MAX(u.version) OVER (PARTITION BY u.instance_code) AS vmax
+            FROM entsoe.unavailability_of_production_and_generation_units u
+            JOIN cand USING (instance_code)
+            WHERE $(_outage_gate_clause())
+        )
+        SELECT asset_code,
+               COALESCE(available_capacity_mw, 0.0) AS cap,
+               (start_time_series_utc AT TIME ZONE 'UTC') AS s,
+               (end_time_series_utc AT TIME ZONE 'UTC') AS e
+        FROM vers
+        WHERE version = vmax
+          AND status = 'Active'
+          AND asset_code IS NOT NULL
+          AND (start_time_series_utc AT TIME ZONE 'UTC') < \$1::timestamp + INTERVAL '1 day'
+          AND (end_time_series_utc AT TIME ZONE 'UTC') > \$1::timestamp
+        ORDER BY asset_code, s, e, cap
+        """,
+        _outage_gate_params(day))
+    d0 = Dates.DateTime(day)
+    hourly = Dict{String,Vector{Float64}}()
+    zero_start = Dict{String,Dates.DateTime}()   # earliest start of a zero-capacity interval
+    any_start = Dict{String,Dates.DateTime}()    # earliest start of any interval
+    for r in eachrow(df)
+        a = String(r.asset_code)
+        cap = Float64(r.cap)
+        s = Dates.DateTime(r.s); e = Dates.DateTime(r.e)
+        v = get!(hourly, a, fill(Inf, 24))
+        for h in 1:24
+            h0 = d0 + Dates.Hour(h - 1)
+            (s < h0 + Dates.Hour(1) && e > h0) || continue
+            v[h] = min(v[h], cap)
+        end
+        any_start[a] = min(get(any_start, a, s), s)
+        cap <= 0.0 && (zero_start[a] = min(get(zero_start, a, s), s))
+    end
+    assets = String[]; avail = Float64[]; earliest = Dates.DateTime[]
+    for a in sort!(collect(keys(hourly)))
+        lvl = _majority_available(hourly[a])
+        isinf(lvl) && continue
+        push!(assets, a); push!(avail, lvl)
+        push!(earliest, get(zero_start, a, any_start[a]))
+    end
+    stale = falses(length(assets))
+    if !isempty(assets)
+        # Stale-message override (unchanged rule): the unit produced > 1 MW
+        # after the outage began within the trailing 7 days ⇒ the message is
+        # stale and is ignored. Explicit UTC on both sides.
+        gen = Euphemia.sql2df_with_retry(
+            """
+            SELECT generation_unit_code AS asset_code,
+                   MAX(date_time_utc AT TIME ZONE 'UTC') AS last_gen
+            FROM entsoe.actual_generation_output_per_generation_unit
+            WHERE generation_unit_code = ANY(\$2)
+              AND date_time_utc >= ((\$1::timestamp - INTERVAL '7 days') AT TIME ZONE 'UTC')
+              AND date_time_utc < (\$1::timestamp AT TIME ZONE 'UTC')
+              AND actual_generation_output_mw > 1
+            GROUP BY generation_unit_code
+            """,
+            Any[day, assets])
+        last = Dict(String(r.asset_code) => Dates.DateTime(r.last_gen) for r in eachrow(gen) if !ismissing(r.last_gen))
+        for (i, a) in enumerate(assets)
+            lg = get(last, a, nothing)
+            stale[i] = lg !== nothing && lg >= earliest[i]
+        end
+    end
+    return DataFrames.DataFrame(asset_code=assets, available_capacity_mw=avail,
+                                stale_override=collect(stale))
+end
+
 function get_day_outages(day::Dates.Date)
     if current_context() !== nothing
         record_asof_status!("outages_generation",
@@ -121,7 +236,13 @@ function get_day_outages(day::Dates.Date)
     end
     return lock(_OUTAGE_DAY_CACHE_LOCK) do
         get!(_OUTAGE_DAY_CACHE, (day, ctx_key())) do
-            Euphemia.sql2df_with_retry(
+            _outage_intervals_enabled() ? _day_outages_intervals(day) : _day_outages_legacy(day)
+        end
+    end
+end
+
+function _day_outages_legacy(day::Dates.Date)
+    return Euphemia.sql2df_with_retry(
                 """
                 WITH cand AS (
                     -- every message with ANY version overlapping the day
@@ -174,8 +295,6 @@ function get_day_outages(day::Dates.Date)
                 FROM active_outages o
                 """,
                 _outage_gate_params(day))
-        end
-    end
 end
 
 """
