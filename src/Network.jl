@@ -556,6 +556,17 @@ function tx_outage_caps(date::Date)
         "version_publication_timestamp_utc::timestamp < \$1::timestamp - INTERVAL '14 hours'" :
         "(version_publication_timestamp_utc AT TIME ZONE 'UTC') < \$2::timestamp"
     params = ctx === nothing ? Any[date] : Any[date, ctx.as_of_utc]
+    # Issue #370 (cv38): messages are stored one row per time-series interval;
+    # keep every row of the latest version and cap each hour by the intervals
+    # covering it (the loop below takes the MIN), instead of an arbitrary rn=1
+    # row applied over the whole message window. Same kill-switch as the
+    # generation outages: EUPHEMIA_DISABLE_OUTAGE_INTERVALS restores the legacy query.
+    intervals = isempty(get(ENV, "EUPHEMIA_DISABLE_OUTAGE_INTERVALS", ""))
+    vers_col = intervals ? "MAX(u.version) OVER (PARTITION BY u.instance_code) AS vmax" :
+                           "ROW_NUMBER() OVER (PARTITION BY u.instance_code ORDER BY u.version DESC) AS rn"
+    latest   = intervals ? "version = vmax" : "rn = 1"
+    s_col = intervals ? "(start_time_series_utc AT TIME ZONE 'UTC')" : "start_outage_utc::timestamp"
+    e_col = intervals ? "(end_time_series_utc AT TIME ZONE 'UTC')" : "end_outage_utc::timestamp"
     out = Dict{Tuple{String,String,Int},Float64}()
     df = try
         safe_sql2df("""
@@ -566,7 +577,7 @@ function tx_outage_caps(date::Date)
                   AND end_outage_utc::timestamp > \$1::timestamp
             ),
             vers AS (
-                SELECT u.*, ROW_NUMBER() OVER (PARTITION BY u.instance_code ORDER BY u.version DESC) AS rn
+                SELECT u.*, $(vers_col)
                 FROM entsoe.unavailability_in_the_transmission_grid u
                 JOIN cand USING (instance_code)
                 WHERE \$1::date < DATE '2025-10-01'
@@ -574,14 +585,15 @@ function tx_outage_caps(date::Date)
                    OR $(gate_tail)
             )
             SELECT out_area_map_code AS src, in_area_map_code AS snk,
-                   start_outage_utc::timestamp AS s, end_outage_utc::timestamp AS e,
+                   $(s_col) AS s, $(e_col) AS e,
                    new_ntc_mw::float8 AS ntc
             FROM vers
-            WHERE rn = 1 AND status = 'Active' AND new_ntc_mw IS NOT NULL
-              AND start_outage_utc::timestamp < \$1::timestamp + INTERVAL '1 day'
-              AND end_outage_utc::timestamp > \$1::timestamp
+            WHERE $(latest) AND status = 'Active' AND new_ntc_mw IS NOT NULL
+              AND $(s_col) < \$1::timestamp + INTERVAL '1 day'
+              AND $(e_col) > \$1::timestamp
               AND out_area_map_code IS NOT NULL AND in_area_map_code IS NOT NULL
               AND out_area_map_code <> in_area_map_code
+            ORDER BY src, snk, s, e, ntc
             """, params)
     catch e
         @warn "transmission-grid unavailability not readable — border caps disabled for $date: $(sprint(showerror, e))"

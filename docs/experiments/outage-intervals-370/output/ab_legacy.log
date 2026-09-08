@@ -1,0 +1,6 @@
+ARM ab370_legacy  intervals_enabled=false  days=52  2025-09-03..2026-08-26
+======================================================================
+🔀 PIPELINED BACKFILL  days=52/52  zones=38
+   solver_workers=2  book_workers=6  in_flight=6
+   optimizer=gurobi  clearing_mode=ab370_legacy  cv=37  save=true
+======================================================================
