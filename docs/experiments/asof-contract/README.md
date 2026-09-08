@@ -300,7 +300,32 @@ outage set, the transmission caps, the fuel closes and the trailing
 windows — and explicitly **not** the load and RES forecasts, which is the
 honest statement of where the record stands.
 
-### 5.5 Not done, deliberately
+### 5.5 Phase 2 (branch `feat/asof-phase2-368`): the drivers clear under a context
+
+- `bin/daily_forecast.jl`: the live run takes **one issuance instant per run**
+  (`RUN_ISSUED = now(UTC)`) and clears every market day under
+  `ForecastContext(day, RUN_ISSUED, lead)`; `run_retro` clears under the
+  reconstructed **D−lead 06:30 UTC** instant — the same `retro_of_utc` it
+  stamps on the rows — so a lead-7 retro reads the outage versions, the fuel
+  close and the trailing generation windows that existed at D−7, not the
+  delivery-relative ones. The UTC-day clear cache remembers the issuance it
+  was cleared under and re-clears under a different one (`_CLEAR_VINTAGE`),
+  which is what makes the "later-then-earlier issuance in one process" check
+  hold on the forecast path. The per-source audit prints one line per market
+  day and lead (`🔎 as-of audit …`).
+- `run_pipelined_backfill(...; as_of=:none|:gate)`: dynamic scopes do not
+  cross process boundaries, so the rule travels in the worker `cfg` and each
+  book stage installs `gate_context(day)` itself (`_with_job_context`).
+  `:none` is byte-identical. A record backfill under `:gate` is the paired
+  measurement of §5.4 at scale — a separate, budgeted run and a code_version
+  of its own.
+- Still legacy: `run_multi_zone_market_clearing` called directly (no
+  `as_of` kwarg yet; wrap the call in `with_context` from the caller), the
+  `bin/ml_inputs.jl` cap95 / AR-lag readers (fixed D-2 / D-1 horizon
+  regardless of lead — the residual `pregate-7lead.md` §2 declares), and the
+  weather-track weather vintages (already lead-aware by their own rule).
+
+### 5.6 Not done, deliberately
 
 - No `data_policy` column on `simulations.energy_prices` /
   `forecast_prices` yet: an additive migration on the live schema is the
