@@ -1,0 +1,23 @@
+physical Core-internal border-hours: 36480  directed borders: 38
+
+## net-position error, model (cv37) vs realised physical, 959 hours (MW):
+       model_mean  phys_mean      MAE     bias  corr
+h                                                   
+AT         670.41   -2371.80  3116.79  3042.21  0.18
+BE       -1132.62   -2186.37  1576.71  1053.75  0.46
+CZ       -1260.05    1103.69  2395.12 -2363.75  0.45
+DE_LU     -110.62    1120.64  2804.69 -1231.26  0.77
+FR        3425.30    2666.25  1978.18   759.06  0.41
+HR           0.00     162.06   539.16  -162.06   NaN
+HU       -1776.51   -1998.73   714.77   222.22  0.30
+NL        2972.61    2671.17  1631.64   301.44  0.35
+PL       -1677.51     155.93  2439.14 -1833.44  0.06
+RO       -1123.26    -349.81   972.26  -773.45  0.45
+SI         135.76    -570.49  1124.54   706.26 -0.46
+SK        -123.52    -402.55   398.57   279.03  0.51
+
+realised physical: violated rows 1800 of 74069 (2.4%); MTUs with a violation 505 of 672 (75.1%); median worst margin -74 MW; p05 -289
+   share of MTUs with worst margin below -100/-300/-500/-1000 MW: 43% / 4% / 0% / 0%
+
+model cv37: violated rows 2841 of 74069 (3.8%); MTUs with a violation 615 of 672 (91.5%); median worst margin -329 MW; p05 -1185
+   share of MTUs with worst margin below -100/-300/-500/-1000 MW: 83% / 55% / 37% / 9%
