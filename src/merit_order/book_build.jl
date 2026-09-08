@@ -41,6 +41,7 @@ const STRATEGY_DESCRIPTIONS = Dict{String,String}(
     "water_value_gas_anchored" => "hydro water value: reservoir opportunity cost anchored to gas SRMC (premium at peak, boosted when dry)",
     "water_value_reservoir"  => "hydro water value: shadow price of stored water — near-free when reservoirs are full, rising to the thermal alternative as they empty",
     "water_value_anchored"   => "hydro water value: export opportunity cost = the coupled reference price (two-pass anchor)",
+    "water_value_spill"      => "hydro spill regime: reservoir at/above the prior-years' same-week maximum — the water that cannot be stored is offered at run-instead-of-spill cost",
     "res_forecast"           => "renewable forecast offered as price-taker (support schemes make output price-insensitive; floored negative in a solar-surplus regime)",
     "import_fixed"           => "net scheduled imports injected as price-taking supply",
     "ref_priced_export"      => "net export re-priced at the coupled reference so the exporter curtails under domestic stress",
@@ -1029,6 +1030,23 @@ function create_merit_order_book(
             hydro_dryness
         end
         offered_pmax(g) = _is_hydro(g) ? g.p_max * hydro_scale : g.p_max
+        # Issue #366 spill-regime quantity gate (profile-gated, 0 = off).
+        spill_share = 0.0
+        # A/B arm switch: EUPHEMIA_SPILL_GATE=<ratio> turns the gate on for every
+        # :reservoir_opportunity profile that does not declare its own value
+        # (the profile field wins once promoted).
+        spill_gate_ratio = profile.spill_gate_ratio > 0.0 ? profile.spill_gate_ratio :
+            (hydro_model == :reservoir_opportunity ?
+                something(tryparse(Float64, get(ENV, "EUPHEMIA_SPILL_GATE", "")), 0.0) : 0.0)
+        if spill_gate_ratio > 0.0 && hydro_pmax > 1.0
+            fr = get_reservoir_fill_ratio(bidding_zone, day)
+            if fr !== nothing && fr >= spill_gate_ratio
+                spill_share = profile.spill_gate_share *
+                              clamp((fr - spill_gate_ratio) / 0.10, 0.0, 1.0)
+                println("  🌊 Spill regime: fill ratio $(round(fr, digits=2)) ≥ $(spill_gate_ratio) → " *
+                        "$(round(Int, 100 * spill_share))% of reservoir quantity at €$(profile.spill_gate_price)/MWh")
+            end
+        end
 
         # Dispatchable capacity for the scarcity margin, derated for the
         # realistic availability of the fleet (unreported outages) and for
@@ -1358,7 +1376,17 @@ function create_merit_order_book(
                        g.fuel_type == Symbol("Hydro Run-of-river and pondage")
                         water_value = sr_floor(hr)
                     end
-                    push_tagged!(SimpleOrder(:supply, water_value, offered_pmax(g),
+                    # #366 spill gate: split the reservoir unit's quantity —
+                    # the spill share at the spill price, the rest as priced.
+                    spill_mw = (spill_share > 0.0 && g.fuel_type == Symbol("Hydro Water Reservoir")) ?
+                               spill_share * offered_pmax(g) : 0.0
+                    if spill_mw > 0.0
+                        push_tagged!(SimpleOrder(:supply, profile.spill_gate_price, spill_mw,
+                            Symbol(bidding_zone), date_time, resolution_minutes),
+                            g.code, "water_value_spill")
+                        supply_orders_count += 1
+                    end
+                    push_tagged!(SimpleOrder(:supply, water_value, offered_pmax(g) - spill_mw,
                         Symbol(bidding_zone), date_time, resolution_minutes),
                         g.code, wv_strategy)
                     supply_orders_count += 1

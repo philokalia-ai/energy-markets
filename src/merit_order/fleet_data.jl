@@ -381,6 +381,50 @@ function get_reservoir_dryness(bidding_zone::String, day::Date; signed::Bool=fal
 end
 
 """
+    get_reservoir_fill_ratio(bidding_zone::String, day::Date) -> Union{Float64,Nothing}
+
+Spill-regime signal (issue #366, hydro slice): the latest stored energy
+strictly before `day`'s ISO week divided by the MAXIMUM stored energy seen in
+the same ISO weeks (±2, wrapped) of PRIOR years. Ex-ante by construction
+(only weeks before the market day, only prior years). ≥ 1 means the
+reservoir holds more than it ever did at this time of year in the store's
+history — inflow can no longer be stored, and the marginal value of the
+water that would spill is ~0. `nothing` when either side is unavailable.
+Measured 2024-01..2026-35 (11 zones): next-week settled ≤ 5 €/MWh share
+9 % below 0.7, 27 % at 0.95–1.0, 38 % above 1.0 (NO4: 70 %).
+"""
+function get_reservoir_fill_ratio(bidding_zone::String, day::Date)
+    iso_week = Int(Dates.week(day))
+    iso_year = _reservoir_iso_year(day)
+    current = sql2df_with_retry(
+        """
+        SELECT stored_energy_mwh
+        FROM entsoe.aggregated_hydro_storage_filling_rate
+        WHERE area_map_code = \$1 AND area_type_code LIKE 'BZN%'
+          AND stored_energy_mwh IS NOT NULL
+          AND (year < \$2 OR (year = \$2 AND week < \$3))
+        ORDER BY year DESC, week DESC
+        LIMIT 1
+        """,
+        [bidding_zone, iso_year, iso_week])
+    (isempty(current) || ismissing(current.stored_energy_mwh[1])) && return nothing
+    weeks = sort(unique(vcat(Int[mod1(iso_week + d, 52) for d in -2:2],
+                             Int[mod1(iso_week + d, 53) for d in -2:2])))
+    mx = sql2df_with_retry(
+        """
+        SELECT MAX(stored_energy_mwh) AS mx, COUNT(*) AS n
+        FROM entsoe.aggregated_hydro_storage_filling_rate
+        WHERE area_map_code = \$1 AND area_type_code LIKE 'BZN%'
+          AND stored_energy_mwh IS NOT NULL
+          AND year < \$2
+          AND week = ANY(\$3)
+        """,
+        [bidding_zone, iso_year, weeks])
+    (isempty(mx) || ismissing(mx.mx[1]) || Float64(mx.mx[1]) <= 0.0 || Int(mx.n[1]) < 5) && return nothing
+    return Float64(current.stored_energy_mwh[1]) / Float64(mx.mx[1])
+end
+
+"""
     get_reservoir_drawdown(bidding_zone::String, day::Date) -> Union{Float64,Nothing}
 
 Absolute reservoir DRAWDOWN: `clamp(1 - stored / trailing-52-week max, 0, 1)`,

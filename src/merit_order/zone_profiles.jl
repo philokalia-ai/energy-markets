@@ -384,6 +384,9 @@ const PROVENANCE = Dict{String,Any}(
     "wet_adjusted_drawdown" => _PROV("declared", "structural form: wetness-conditioned seasonal drawdown (wet winters price low), cv37", 37; layer="opportunity", price_informed=true),
     "hydro_model" => _PROV("declared", "structural choice: gas-anchored vs reservoir-opportunity water value", 14; layer="opportunity", price_informed=true),
     "spill_surplus_dryness" => _PROV("declared", "cv27 spill-risk gate (dryness threshold), OOS-validated", 27; layer="opportunity", price_informed=true),
+    "spill_gate_ratio" => _PROV("declared", "#366 spill-regime quantity gate: fill ratio vs prior-year same-week max at which spill pricing starts (physical: storage exhausted)", 38),; layer="opportunity", price_informed=true),
+    "spill_gate_share" => _PROV("declared", "#366 spill-regime: max share of reservoir quantity offered at the spill price, named form", 38),; layer="opportunity", price_informed=true),
+    "spill_gate_price" => _PROV("declared", "#366 spill-regime: price of the spill share (run-instead-of-spill O&M), named form", 38),; layer="opportunity", price_informed=true),
     "nuclear_srmc_floor" => _PROV("declared", "France off-peak nuclear bid floor, OOS-validated", 14; layer="opportunity", price_informed=true),
     "opportunity_anchor" => _PROV("declared", "structural choice: which fleet re-bids against the coupled price", 14; layer="opportunity", price_informed=true),
     "anchor_share" => _PROV("declared", "fraction of the coupled reference the anchored fleet asks for, OOS-validated", 14; layer="opportunity", price_informed=true),
@@ -421,6 +424,9 @@ const FIELD_DESCRIPTIONS = Dict{Symbol,String}(
     :wet_adjusted_drawdown => "wet years damp the winter reservoir-drawdown water-value lift",
     :hydro_model => "gas-anchored water value, or reservoir-opportunity from weekly levels",
     :spill_surplus_dryness => "cv27 spill-risk gate: below this dryness the hydro offer chases the net-demand valley (0 = off)",
+    :spill_gate_ratio => "#366 spill-regime quantity gate: reservoir fill vs prior-year same-week max at which part of the water is offered at the spill price (0 = off)",
+    :spill_gate_share => "#366 spill-regime: maximum share of reservoir quantity offered at the spill price",
+    :spill_gate_price => "#366 spill-regime: price (€/MWh) of the spill share",
     :nuclear_srmc_floor => "floor under nuclear bids (EUR/MWh) — France's off-peak position",
     :opportunity_anchor => "which fleet re-bids in pass 2 against the coupled price",
     :anchor_share => "fraction of the coupled reference the anchored fleet asks for",
@@ -488,6 +494,18 @@ Base.@kwdef struct ZoneProfile
     # within-day net-demand valley toward 0 instead of holding the water-value
     # level. 0.0 = off. One declared value on the Nordic profiles, not tuned.
     spill_surplus_dryness::Float64 = 0.0
+    # Issue #366 (hydro slice), spill-regime QUANTITY gate: when the ex-ante
+    # reservoir fill ratio (`get_reservoir_fill_ratio`, stored energy vs the
+    # prior-years' same-week maximum) is at or above `spill_gate_ratio`, a
+    # share of every reservoir unit's offered quantity — rising linearly from
+    # 0 at the gate to `spill_gate_share` at gate + 0.10 — is offered at
+    # `spill_gate_price` (the O&M of running instead of spilling) and the rest
+    # stays on the water-value curve. A quantity gate, not a level discount:
+    # the cv37 nordic-wetness T1 level discount destroyed the daily shape
+    # (NO4 corr 0.26 → −0.02). 0.0 = off (bit-identical).
+    spill_gate_ratio::Float64 = 0.0
+    spill_gate_share::Float64 = 0.5
+    spill_gate_price::Float64 = 1.0
     nuclear_srmc_floor::Float64 = 0.0
     opportunity_anchor::Symbol = :none
     anchor_share::Float64 = 0.9
