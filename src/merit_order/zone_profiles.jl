@@ -325,7 +325,26 @@ field (`FIELD_DESCRIPTIONS`), so a new lever cannot ship without declaring
 whether it is observed or declared. Extra keys describe the observed model
 INPUTS (market data feeds) that no single constant/field owns.
 """
-_PROV(kind, source, cv) = Dict{String,Any}("kind" => kind, "source" => source, "cv" => cv)
+# Issue #367: every characteristic also carries its LAYER —
+#   "engineering"  cost / availability / market rule (a fact about the fleet or
+#                  the market design; no pricing choice),
+#   "opportunity"  competitive opportunity cost (water, nuclear, imports, the
+#                  price at which a competitive seller is indifferent),
+#   "conduct"      a perturbation that is NOT implied by competitive
+#                  opportunity cost (the peak/scarcity tranche ladder and its
+#                  coefficients) — the benchmark's declared assumption about
+#                  behaviour, to be treated as uncertain and ablated —
+# and `price_informed`: whether observed prices took part in SELECTING the
+# value or the mechanism (OOS-validated calibration = true; a market rule,
+# a data feed or a physically fixed form = false). "declared + price_informed"
+# is the honest label for a calibrated market characteristic (rule 4: ex-ante
+# inputs make it a characteristic, not leakage — but it is not a fit-free
+# prior either).
+_PROV(kind, source, cv; layer::String="", price_informed::Union{Nothing,Bool}=nothing) =
+    Dict{String,Any}("kind" => kind, "source" => source, "cv" => cv,
+                     "layer" => isempty(layer) ? (kind == "observed" ? "engineering" : "opportunity") : layer,
+                     "price_informed" => price_informed === nothing ?
+                         (kind == "declared" && occursin("validated", source)) : price_informed)
 const PROVENANCE = Dict{String,Any}(
     # --- observed model inputs (market data, strictly pre-auction) ---
     "ttf" => _PROV("observed", "TTF front-month gas close, last trading day strictly before the market date (yfinance.ttf_f)", 3),
@@ -337,47 +356,47 @@ const PROVENANCE = Dict{String,Any}(
     "flow_climatology" => _PROV("observed", "ex-ante cross-border flow rule (load-analogue median + D-2 observed), :v3", 19),
     "boundary_capability" => _PROV("observed", "trailing-366d p95 gross observed flow per 4h block over the boundary border", 21),
     # --- form-level constants: the declared bidding form ---
-    "TRANCHES" => _PROV("declared", "named bidding form (share, multiplier per tranche), OOS-validated", 10),
-    "MUST_RUN_PRICE_FACTOR" => _PROV("declared", "below-cost must-run discount, named form", 10),
-    "DEEP_SURPLUS_FLOOR_EUR" => _PROV("declared", "solar-regime price-taker floor (support-scheme economics), OOS-validated", 31),
-    "MUST_RUN_SRMC_THRESHOLD" => _PROV("declared", "commitment threshold as a multiple of gas SRMC, named form", 10),
-    "AVAILABILITY_FACTOR" => _PROV("declared", "default nameplate availability, named form", 10),
-    "PEAK_EXPONENT" => _PROV("declared", "peak-hour scarcity markup exponent, named form", 10),
-    "WATER_VALUE_DRY_BOOST" => _PROV("declared", "dry-year water-value multiplier, named form", 10),
-    "DEMAND_ELASTIC_SHARE" => _PROV("declared", "elastic demand share, named form", 10),
-    "DEMAND_ELASTIC_PRICE" => _PROV("declared", "elastic demand curtailment price, named form", 10),
-    "PRICE_CAP" => _PROV("declared", "bid price cap, market rule", 10),
-    "FLEET_COMPLETION" => _PROV("declared", "structural switch: complete undersized fleets to demonstrated capability", 10),
-    "FLEET_TRUTHING" => _PROV("declared", "structural switch: derate baseload to demonstrated capability", 10),
-    "DERATE_HEADROOM" => _PROV("declared", "headroom on the derate target, named form", 10),
-    "BACKSTOP_PRICE_MULT" => _PROV("declared", "import-backstop price multiple of gas SRMC, named form", 17),
-    "BACKSTOP_WEEKS" => _PROV("declared", "import-backstop demonstration window (weeks), named form", 17),
-    "NUCLEAR_AVAIL_REF" => _PROV("declared", "nuclear no-premium availability reference, named form", 23),
-    "NUCLEAR_AVAIL_FLOOR" => _PROV("declared", "nuclear premium-saturation availability floor, named form", 23),
+    "TRANCHES" => _PROV("declared", "named bidding form (share, multiplier per tranche), OOS-validated", 10; layer="conduct", price_informed=true),
+    "MUST_RUN_PRICE_FACTOR" => _PROV("declared", "below-cost must-run discount, named form", 10; layer="opportunity", price_informed=true),
+    "DEEP_SURPLUS_FLOOR_EUR" => _PROV("declared", "solar-regime price-taker floor (support-scheme economics), OOS-validated", 31; layer="opportunity", price_informed=true),
+    "MUST_RUN_SRMC_THRESHOLD" => _PROV("declared", "commitment threshold as a multiple of gas SRMC, named form", 10; layer="engineering", price_informed=true),
+    "AVAILABILITY_FACTOR" => _PROV("declared", "default nameplate availability, named form", 10; layer="engineering", price_informed=true),
+    "PEAK_EXPONENT" => _PROV("declared", "peak-hour scarcity markup exponent, named form", 10; layer="conduct", price_informed=true),
+    "WATER_VALUE_DRY_BOOST" => _PROV("declared", "dry-year water-value multiplier, named form", 10; layer="opportunity", price_informed=true),
+    "DEMAND_ELASTIC_SHARE" => _PROV("declared", "elastic demand share, named form", 10; layer="engineering", price_informed=true),
+    "DEMAND_ELASTIC_PRICE" => _PROV("declared", "elastic demand curtailment price, named form", 10; layer="engineering", price_informed=true),
+    "PRICE_CAP" => _PROV("declared", "bid price cap, market rule", 10; layer="engineering", price_informed=false),
+    "FLEET_COMPLETION" => _PROV("declared", "structural switch: complete undersized fleets to demonstrated capability", 10; layer="engineering", price_informed=false),
+    "FLEET_TRUTHING" => _PROV("declared", "structural switch: derate baseload to demonstrated capability", 10; layer="engineering", price_informed=false),
+    "DERATE_HEADROOM" => _PROV("declared", "headroom on the derate target, named form", 10; layer="engineering", price_informed=true),
+    "BACKSTOP_PRICE_MULT" => _PROV("declared", "import-backstop price multiple of gas SRMC, named form", 17; layer="opportunity", price_informed=true),
+    "BACKSTOP_WEEKS" => _PROV("declared", "import-backstop demonstration window (weeks), named form", 17; layer="engineering", price_informed=true),
+    "NUCLEAR_AVAIL_REF" => _PROV("declared", "nuclear no-premium availability reference, named form", 23; layer="opportunity", price_informed=true),
+    "NUCLEAR_AVAIL_FLOOR" => _PROV("declared", "nuclear premium-saturation availability floor, named form", 23; layer="opportunity", price_informed=true),
     # --- per-zone ZoneProfile fields: declared, per-region calibration ---
-    "scarcity_threshold" => _PROV("declared", "per-region scarcity onset margin, OOS-validated", 14),
-    "scarcity_kappa" => _PROV("declared", "per-region scarcity steepening, OOS-validated", 14),
-    "peak_kappa" => _PROV("declared", "per-region peak uplift, OOS-validated", 14),
-    "water_value_base" => _PROV("declared", "per-region reservoir opportunity cost (× gas SRMC), OOS-validated", 14),
-    "water_value_span" => _PROV("declared", "per-region intraday water-value swing, OOS-validated", 14),
-    "thermal_srmc_multiplier" => _PROV("declared", "per-region thermal running-cost premium (Italy), OOS-validated", 14),
-    "tranche_grading" => _PROV("declared", "structural form: piecewise-linear upper-tranche ladder (cliff removal), cv36", 36),
-    "wet_adjusted_drawdown" => _PROV("declared", "structural form: wetness-conditioned seasonal drawdown (wet winters price low), cv37", 37),
-    "hydro_model" => _PROV("declared", "structural choice: gas-anchored vs reservoir-opportunity water value", 14),
-    "spill_surplus_dryness" => _PROV("declared", "cv27 spill-risk gate (dryness threshold), OOS-validated", 27),
-    "nuclear_srmc_floor" => _PROV("declared", "France off-peak nuclear bid floor, OOS-validated", 14),
-    "opportunity_anchor" => _PROV("declared", "structural choice: which fleet re-bids against the coupled price", 14),
-    "anchor_share" => _PROV("declared", "fraction of the coupled reference the anchored fleet asks for, OOS-validated", 14),
-    "nuclear_avail_share_lo" => _PROV("declared", "anchor share at the nuclear crisis floor, OOS-validated", 23),
-    "nuclear_avail_share_hi" => _PROV("declared", "anchor share at full nuclear availability, OOS-validated", 23),
-    "nuclear_bid_ref_ceiling" => _PROV("declared", "cap on anchor-lifted nuclear bids (× reference), OOS-validated", 23),
-    "scarcity_import_credit" => _PROV("declared", "structural switch: credit available import capacity against the scarcity margin", 15),
-    "fleet_truth_mode" => _PROV("declared", "structural choice: true the fleet to p95 or to installed capacity", 15),
-    "seasonal_drawdown" => _PROV("declared", "structural switch: follow the seasonal reservoir drawdown cycle (Swedish north)", 15),
-    "import_backstop" => _PROV("declared", "structural switch: offer demonstrated import headroom as elastic supply", 17),
-    "backstop_scarcity_credit" => _PROV("declared", "structural switch: also credit that headroom in the scarcity margin", 17),
-    "ref_priced_exports" => _PROV("declared", "structural switch: price retained-border exports at the coupled reference", 17),
-    "boundary_book" => _PROV("declared", "structural choice: model an out-of-footprint neighbour as an elastic counterparty", 21),
+    "scarcity_threshold" => _PROV("declared", "per-region scarcity onset margin, OOS-validated", 14; layer="conduct", price_informed=true),
+    "scarcity_kappa" => _PROV("declared", "per-region scarcity steepening, OOS-validated", 14; layer="conduct", price_informed=true),
+    "peak_kappa" => _PROV("declared", "per-region peak uplift, OOS-validated", 14; layer="conduct", price_informed=true),
+    "water_value_base" => _PROV("declared", "per-region reservoir opportunity cost (× gas SRMC), OOS-validated", 14; layer="opportunity", price_informed=true),
+    "water_value_span" => _PROV("declared", "per-region intraday water-value swing, OOS-validated", 14; layer="opportunity", price_informed=true),
+    "thermal_srmc_multiplier" => _PROV("declared", "per-region thermal running-cost premium (Italy), OOS-validated", 14; layer="opportunity", price_informed=true),
+    "tranche_grading" => _PROV("declared", "structural form: piecewise-linear upper-tranche ladder (cliff removal), cv36", 36; layer="conduct", price_informed=true),
+    "wet_adjusted_drawdown" => _PROV("declared", "structural form: wetness-conditioned seasonal drawdown (wet winters price low), cv37", 37; layer="opportunity", price_informed=true),
+    "hydro_model" => _PROV("declared", "structural choice: gas-anchored vs reservoir-opportunity water value", 14; layer="opportunity", price_informed=true),
+    "spill_surplus_dryness" => _PROV("declared", "cv27 spill-risk gate (dryness threshold), OOS-validated", 27; layer="opportunity", price_informed=true),
+    "nuclear_srmc_floor" => _PROV("declared", "France off-peak nuclear bid floor, OOS-validated", 14; layer="opportunity", price_informed=true),
+    "opportunity_anchor" => _PROV("declared", "structural choice: which fleet re-bids against the coupled price", 14; layer="opportunity", price_informed=true),
+    "anchor_share" => _PROV("declared", "fraction of the coupled reference the anchored fleet asks for, OOS-validated", 14; layer="opportunity", price_informed=true),
+    "nuclear_avail_share_lo" => _PROV("declared", "anchor share at the nuclear crisis floor, OOS-validated", 23; layer="opportunity", price_informed=true),
+    "nuclear_avail_share_hi" => _PROV("declared", "anchor share at full nuclear availability, OOS-validated", 23; layer="opportunity", price_informed=true),
+    "nuclear_bid_ref_ceiling" => _PROV("declared", "cap on anchor-lifted nuclear bids (× reference), OOS-validated", 23; layer="opportunity", price_informed=true),
+    "scarcity_import_credit" => _PROV("declared", "structural switch: credit available import capacity against the scarcity margin", 15; layer="engineering", price_informed=true),
+    "fleet_truth_mode" => _PROV("declared", "structural choice: true the fleet to p95 or to installed capacity", 15; layer="engineering", price_informed=true),
+    "seasonal_drawdown" => _PROV("declared", "structural switch: follow the seasonal reservoir drawdown cycle (Swedish north)", 15; layer="opportunity", price_informed=true),
+    "import_backstop" => _PROV("declared", "structural switch: offer demonstrated import headroom as elastic supply", 17; layer="opportunity", price_informed=true),
+    "backstop_scarcity_credit" => _PROV("declared", "structural switch: also credit that headroom in the scarcity margin", 17; layer="conduct", price_informed=true),
+    "ref_priced_exports" => _PROV("declared", "structural switch: price retained-border exports at the coupled reference", 17; layer="opportunity", price_informed=true),
+    "boundary_book" => _PROV("declared", "structural choice: model an out-of-footprint neighbour as an elastic counterparty", 21; layer="opportunity", price_informed=true),
     "input_corrections" => _PROV("observed", "winner-input correction series (actuals-target ML solar, D-1-legal) replacing the TSO RES forecast on the opted-in islands (simulations.input_corrections)", 32),
 )
 
