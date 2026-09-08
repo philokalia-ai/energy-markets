@@ -53,7 +53,14 @@ end
         Euphemia.clear_generator_caches!()
         l = Euphemia.get_day_outages(d)
         @test names(l) == names(a)
-        @test Set(l.asset_code) == Set(a.asset_code)   # same assets; capacities may differ
+        # The asset SETS differ legitimately: the hourly majority rule counts
+        # two 8-hour messages on disjoint hours (16 h out) where the legacy
+        # message-level >= 12 h rule counted neither, and vice versa for a
+        # long message whose reduced intervals cover < 12 h. They must still
+        # be mostly the same fleet.
+        la = Set(String.(skipmissing(l.asset_code))); aa = Set(a.asset_code)
+        @info "legacy vs interval outage sets" legacy=length(la) intervals=length(aa) common=length(intersect(la, aa))
+        @test length(intersect(la, aa)) / length(union(la, aa)) >= 0.8
     end
     Euphemia.clear_generator_caches!()
 end
