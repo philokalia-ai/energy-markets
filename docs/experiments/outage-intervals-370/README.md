@@ -57,4 +57,31 @@ zones × 24 h present in both arms). Note the legacy arm is itself one random
 draw; its own run-to-run spread (main vs main on the three-zone fingerprint)
 is the noise the delta must exceed.
 
-_Results: appended below when the arms complete._
+### Result (2026-09-08; `output/ab_score.txt`, `output/noise_floor_record_vs_legacy.txt`)
+
+52 paired days, 38 zones, 47,300 paired zone-hours (per-day zone count ≥ 36):
+
+| | legacy arm | **interval arm** |
+|---|---|---|
+| footprint MAE | 27.02 | **26.73** |
+| energy-weighted MAE | 26.38 | **26.02** |
+| bias | −9.47 | −9.07 |
+| corr | 0.761 | **0.767** |
+
+32 of 38 zones improve: PT −2.08 (corr 0.755 → 0.789), DK2 −0.83, NO2 −0.63,
+SI −0.58, FR −0.55 (0.826 → 0.838), AT −0.54, HU −0.52, CZ −0.50, PL −0.48,
+DE_LU −0.42 (0.787 → 0.800), NL −0.33, BE −0.25; worse: SE4 +0.65
+(corr −0.012), FI +0.13, NO4 +0.11, GR +0.04, ES +0.02. 23.0 % of cells move
+(mean |Δ| 5.4, max 111).
+
+**Noise floor of the defect removed:** the cv37 record vs the fresh legacy arm
+(same legacy code, another random draw) differs on 38.6 % of cells, mean |Δ|
+8.4, max 130; per-zone MAE swings −3.8 (IT-SOUTH) .. +1.9 (PT) between two
+draws of the *same* model; footprint 27.48 vs 27.03. The interval fix is
+both a determinism fix and a small, broad improvement inside that spread.
+
+The `optimization_runs` metadata rows of both arms were lost to a
+pre-existing VARCHAR(20) label overflow (#376); prices and flows are complete.
+
+**Ship recommendation:** merge as cv38 (`ENERGY_PRICES_CODE_VERSION` bumped
+in this PR; ledger entry added). The record backfill is a separate run.
