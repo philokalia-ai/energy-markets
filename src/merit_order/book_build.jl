@@ -761,6 +761,8 @@ multi-zone `run_multi_zone_market_clearing(...; scenario=...)` path thread these
 hooks (the latter via `ZoneScenario`). When every hook is `nothing` the built
 book is byte-identical to the no-hook book.
 """
+_conduct_layer_on() = lowercase(get(ENV, "EUPHEMIA_CONDUCT_LAYER", "")) != "off"
+
 function create_merit_order_book(
     bidding_zone::String,
     day::Date;
@@ -795,7 +797,12 @@ function create_merit_order_book(
     # Resolve every bid parameter from the profile, letting an explicit keyword
     # override its profile field. With no overrides and the default SEE_PROFILE
     # this reproduces the pre-abstraction defaults exactly (byte-identical).
-    tranches = TRANCHES
+    # Issue #367 ablation switch: EUPHEMIA_CONDUCT_LAYER=off removes the
+    # declared CONDUCT layer — the peak/scarcity tranche ladder (every tranche
+    # at 1.0 × SRMC) and the scarcity/peak markup (scarcity ≡ 1) — leaving the
+    # engineering and opportunity layers untouched. A measurement arm, never a
+    # claim about the true competitive price (the PROVENANCE layer table).
+    tranches = _conduct_layer_on() ? TRANCHES : [(1.0, 1.0)]
     must_run_price_factor = MUST_RUN_PRICE_FACTOR
     must_run_srmc_threshold = MUST_RUN_SRMC_THRESHOLD
     availability_factor = AVAILABILITY_FACTOR
@@ -1265,9 +1272,10 @@ function create_merit_order_book(
                 profile.backstop_scarcity_credit *
                 get(backstop_by_hour, hr, 0.0) : 0.0
             margin = (dispatchable_capacity + import_credit + backstop_credit) / net_demand[ts]
-            scarcity = 1.0 +
-                       scarcity_kappa * max(0.0, scarcity_threshold - margin)^2 +
-                       peak_kappa * norm_demand^peak_exponent
+            scarcity = _conduct_layer_on() ?
+                       1.0 + scarcity_kappa * max(0.0, scarcity_threshold - margin)^2 +
+                             peak_kappa * norm_demand^peak_exponent :
+                       1.0
 
             for g in generators
                 if g.fuel_type in WATER_VALUE_FUEL_TYPES
