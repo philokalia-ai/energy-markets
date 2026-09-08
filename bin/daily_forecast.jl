@@ -786,16 +786,41 @@ function res_fillable_for_day(day::Date, res_required::AbstractSet{String},
 end
 
 """
+    print_asof_audit(day, lead)
+
+One line per source with the publication-status counts recorded during the
+day's clears (issue #368 phase 2). `verified`/`latency_policy` are the
+inputs shown to exist at issuance; `post_gate` = the stored revision is
+newer than the issuance; `unverifiable`/`legacy_stamp` = no usable stamp.
+"""
+function print_asof_audit(day, lead)
+    a = Euphemia.asof_audit()
+    isempty(a) && return
+    parts = [k * "=" * join(("$(s):$(n)" for (s, n) in sort(collect(v); by=x -> string(first(x)))), ",")
+             for (k, v) in sort(collect(a); by=first)]
+    println("  🔎 as-of audit $day lead=$lead: " * join(parts, "  "))
+    return
+end
+
+"""
 Clear one UTC calendar day with the standard 39-zone machinery and collapse to
 zone → (hour → price). Returns `nothing` on failure. Results are memoized in
 `cache` so consecutive market days share their overlapping UTC-day solve.
 In weather mode, `scenario` carries the per-zone RES replacement (ENTSO-E RES
 zeroed, weather-RES injected as price-taker supply).
 """
+const _CLEAR_VINTAGE = Dict{Date,Union{Nothing,DateTime}}()   # utc_day -> issuance it was cleared under
 function clear_utc_day!(cache::Dict{Date,Union{Nothing,Dict{String,Dict{DateTime,Float64}}}},
                         utc_day::Date;
                         scenario::Union{Nothing,Dict{String,Euphemia.ZoneScenario}}=nothing)
-    haskey(cache, utc_day) && return cache[utc_day]
+    # #368 phase 2: a cached UTC-day clear is reused only for the SAME issuance
+    # (context as_of); a different issuance re-clears, so a later lead can never
+    # be served an earlier lead's input vintage. Outside a context: as before.
+    ctx = Euphemia.current_context()
+    asof = ctx === nothing ? nothing : ctx.as_of_utc
+    if haskey(cache, utc_day) && get(_CLEAR_VINTAGE, utc_day, nothing) == asof
+        return cache[utc_day]
+    end
     println("  clearing UTC day $utc_day ...")
     # #182 limitation: the try/catch below catches ordinary errors but NOT a
     # HiGHS SIGSEGV, which kills this process outright (a same-process segfault
@@ -818,6 +843,7 @@ function clear_utc_day!(cache::Dict{Date,Union{Nothing,Dict{String,Dict{DateTime
         e isa InterruptException && rethrow()
         println("  ❌ UTC day $utc_day clearing FAILED: $e")
         cache[utc_day] = nothing
+        _CLEAR_VINTAGE[utc_day] = asof
         return nothing
     end
     elapsed = round(time() - t0, digits=1)
@@ -826,6 +852,7 @@ function clear_utc_day!(cache::Dict{Date,Union{Nothing,Dict{String,Dict{DateTime
     if !ok
         println("  ❌ UTC day $utc_day clearing status=$(result.status)")
         cache[utc_day] = nothing
+        _CLEAR_VINTAGE[utc_day] = asof
         return nothing
     end
     hourly = Dict{String,Dict{DateTime,Float64}}(
@@ -834,6 +861,7 @@ function clear_utc_day!(cache::Dict{Date,Union{Nothing,Dict{String,Dict{DateTime
     println("  UTC day $utc_day cleared in $(elapsed)s (status=$(result.status), " *
             "$(length(hourly)) zones)")
     cache[utc_day] = hourly
+    _CLEAR_VINTAGE[utc_day] = asof
     return hourly
 end
 
@@ -1099,6 +1127,7 @@ function main()
 
     # UTC-day clear cache: market days D and D+1 share the UTC-day-D solve.
     clear_cache = Dict{Date,Union{Nothing,Dict{String,Dict{DateTime,Float64}}}}()
+    RUN_ISSUED = now(UTC)   # one issuance instant for every lead of this run (#368)
 
     # cv32: emit input corrections BEFORE the clears so the lead-1 book
     # consumes them (profile-gated in src). The lead-1 day gets its D-1
@@ -1230,10 +1259,22 @@ function main()
 
         # Two UTC-day clears cover the Athens window (see header comment).
         prediction_made = now(UTC)
-        prev_hourly = clear_utc_day!(clear_cache, day - Day(1); scenario=scenario)
+        # As-of contract (#368 phase 2): every reader inside the clear sees the
+        # issuance instant (= this run's compute time for a live forecast) and
+        # records what it could verify; the audit is printed per market day.
+        # The UTC-day cache is keyed on (day, lead) so a UTC day cleared for one
+        # lead is never served to another issuance.
+        asof_ctx = Euphemia.ForecastContext(day, RUN_ISSUED, lead, :fixed_10utc,
+                                            "live:$day_mode")
+        Euphemia.reset_asof_audit!()
+        prev_hourly, curr_hourly = Euphemia.with_context(asof_ctx) do
+            p = clear_utc_day!(clear_cache, day - Day(1); scenario=scenario)
+            c = p === nothing ? nothing : clear_utc_day!(clear_cache, day; scenario=scenario)
+            (p, c)
+        end
+        print_asof_audit(day, lead)
         prev_hourly === nothing && (println("  ❌ DAY $day: UTC day $(day - Day(1)) " *
                                             "clear unavailable — no prediction written"); continue)
-        curr_hourly = clear_utc_day!(clear_cache, day; scenario=scenario)
         curr_hourly === nothing && (println("  ❌ DAY $day: UTC day $day " *
                                             "clear unavailable — no prediction written"); continue)
 
@@ -1394,9 +1435,20 @@ function run_retro()
             end
             SKIP_CLEAR && (println("  SKIP_CLEAR: $day lead=$lead eligible, not cleared"); continue)
 
-            prev_hourly = clear_utc_day!(clear_cache, day - Day(1); scenario=scenario)
+            # As-of contract (#368 phase 2): the retro issuance is the reconstructed
+            # D−lead 06:30 UTC instant (the same `retro_of` stamped on the row), so
+            # the outage vintage, fuel close and trailing windows are the ones that
+            # existed then — not the delivery-relative ones.
+            retro_ctx = Euphemia.ForecastContext(day, DateTime(day - Day(lead)) + Hour(6) + Minute(30),
+                                                 lead, :fixed_10utc, "retro:$RESET_TAG")
+            Euphemia.reset_asof_audit!()
+            prev_hourly, curr_hourly = Euphemia.with_context(retro_ctx) do
+                p = clear_utc_day!(clear_cache, day - Day(1); scenario=scenario)
+                c = p === nothing ? nothing : clear_utc_day!(clear_cache, day; scenario=scenario)
+                (p, c)
+            end
+            print_asof_audit(day, lead)
             prev_hourly === nothing && (println("  ❌ $day lead=$lead: UTC $(day-Day(1)) clear failed"); continue)
-            curr_hourly = clear_utc_day!(clear_cache, day; scenario=scenario)
             curr_hourly === nothing && (println("  ❌ $day lead=$lead: UTC $day clear failed"); continue)
 
             zone_hourly = Dict{String,Dict{DateTime,Float64}}()
