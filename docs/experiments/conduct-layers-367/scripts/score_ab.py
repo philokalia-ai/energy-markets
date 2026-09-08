@@ -41,3 +41,20 @@ for arm in arms:
     print(f"FOOTPRINT {arm}: MAE={e.abs().mean():.2f} energy-wMAE={(e.abs()*w).sum()/w.sum():.2f} bias={e.mean():+.2f} corr={m[arm].corr(m.a):.3f}")
 d = (m[arms[1]] - m[arms[0]])
 print(f"arm difference: cells changed {int((d!=0).sum())} of {len(d)} ({100*(d!=0).mean():.1f}%), mean |Δ| where changed {d[d!=0].abs().mean():.2f}, max |Δ| {d.abs().max():.1f}")
+
+# ---- #367 premium: settled minus the no-conduct benchmark, where it is positive
+# (the residual the conduct layer is supposed to explain), by zone and hour.
+base, treat = arms[0], arms[1]
+m["premium"] = m.a - m[treat]                     # settled − competitive-layer benchmark
+m["resid_full"] = m.a - m[base]                   # settled − full ladder (conduct ON)
+m["hour"] = m.t.dt.hour
+print("\n## PREMIUM over the no-conduct benchmark vs residual over the full ladder (mean €/MWh; share of hours > 10 €/MWh; energy-weighted mean)")
+rows = []
+for z, g in m.groupby("z"):
+    w = g.w.fillna(g.w.mean())
+    rows.append({"zone": z, "premium_mean": g.premium.mean(), "premium_p90": g.premium.quantile(0.9),
+                 "hours_prem>10": (g.premium > 10).mean(), "premium_ew": (g.premium * w).sum() / w.sum(),
+                 "resid_full_mean": g.resid_full.mean(), "hours_resid>10": (g.resid_full > 10).mean()})
+print(pd.DataFrame(rows).sort_values("premium_ew", ascending=False).round(2).to_string(index=False))
+print("\n## premium by hour of day, footprint mean (€/MWh):")
+print(m.groupby("hour").premium.mean().round(1).to_string())
