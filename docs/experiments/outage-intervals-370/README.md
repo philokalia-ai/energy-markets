@@ -83,5 +83,12 @@ both a determinism fix and a small, broad improvement inside that spread.
 The `optimization_runs` metadata rows of both arms were lost to a
 pre-existing VARCHAR(20) label overflow (#376); prices and flows are complete.
 
+**Cross-run identity at record scale** (`output/cross_run_identity_370_vs_366base.txt`):
+the #366 base arm (same code, gate off, a separate pipelined run hours later)
+shares 26 Wednesdays with the interval arm — **0 of 23,664 paired zone-hours
+differ** (max |Δ| = 0.0). Two independent 39-zone Gurobi runs of the fixed
+code reproduce each other exactly; on cv37 code the same comparison moved
+38.6 % of cells.
+
 **Ship recommendation:** merge as cv38 (`ENERGY_PRICES_CODE_VERSION` bumped
 in this PR; ledger entry added). The record backfill is a separate run.
