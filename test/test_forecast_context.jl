@@ -132,7 +132,9 @@ end
         Euphemia.get_day_outages(d)
     end
     @test names(ctx) == names(leg)
-    @test asof_audit()["outages_generation"] == Dict(:verified => 1)
+    # row-level audit (review 2026-09-09): one entry per selected version row
+    og = asof_audit()["outages_generation"]
+    @test get(og, :verified, 0) > 100 && !haskey(og, :legacy_stamp)
     @test haskey(Euphemia._OUTAGE_DAY_CACHE, (d, nothing))
     @test haskey(Euphemia._OUTAGE_DAY_CACHE, (d, DateTime(2026, 8, 19, 10)))
     # the load reader classifies inside a context and stays silent outside

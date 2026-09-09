@@ -19,7 +19,9 @@ is 9 % when the ratio is below 0.7, 27 % at 0.95–1.0, 38 % above 1.0 (NO4:
 70 %); mean price 69 → 31–37. Physically: storage exhausted ⇒ the marginal
 value of the water that would spill is ~0.
 
-## A/B (paired, live Postgres, Gurobi, 39 zones)
+## A/B (paired, live Postgres, Gurobi — **38 zones, CH missing**, see the #370 README; re-run pending)
+
+**Status: experimental, OFF by default.** The gate ratio compares stored energy with the prior-years' same-week MAXIMUM — an unusually high seasonal inventory, not a physical storage limit (60 MWh against a seasonal max of 50 is ratio 1.2 even if usable capacity is 100); the reservoir reader also applies no publication cutoff. Treat the ratio as an empirical wetness predictor until spill volume is derived from usable capacity, eligible inventory and inflow (review 2026-09-09).
 
 52 even-ISO-week Wednesdays 2024-09-04..2026-08-19 (two years, all seasons —
 a one-year Wednesday set misses the full-reservoir regimes), `ab366_base`

@@ -47,7 +47,7 @@ values (the 368/90/20/87 example → 87; two 8-h messages → outage; 4-h
 zero on a 20-h derate → the derate), fresh-query determinism of both
 readers, legacy kill-switch path.
 
-## A/B (paired, live Postgres, Gurobi, 39 zones)
+## A/B (paired, live Postgres, Gurobi — **38 zones, CH missing**: the FOOTPRINT literal omitted CH; found by the 2026-09-09 review. Internally paired; not the full-footprint guard. Re-run on 39 zones pending.)
 
 52 Wednesdays 2025-09-03..2026-08-26 (pre- and post-seam), pipelined runner
 (`scripts/ab_arm.jl`), labels `ab370_legacy` (kill-switch set) and

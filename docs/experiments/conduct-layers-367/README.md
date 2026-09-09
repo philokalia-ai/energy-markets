@@ -61,8 +61,7 @@ the energy it covers, next to the residual against the full ladder.
 
 ### Result (2026-09-08; `output/ab_score.txt`)
 
-52 paired Wednesdays, 38 zones, 47,300 paired zone-hours. Removing the
-conduct layer moves 76 % of cells (mean |Δ| 11.3):
+52 paired Wednesdays, 38 zones (CH missing from the arm footprint — review 2026-09-09; re-run pending), 47,300 paired zone-hours. Removing the conduct layer moves 76 % of cells (mean |Δ| 11.3). This is a sensitivity experiment: the no-conduct arm is a benchmark under the *current* opportunity layer, not an identified competitive price — intertemporal opportunity costs and the network are still missing from it.
 
 | | full ladder (`ab370_intervals`) | **competitive layer only** (`ab367_noconduct`) |
 |---|---|---|
