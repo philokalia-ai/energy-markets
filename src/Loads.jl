@@ -46,6 +46,13 @@ function get_loads(bidding_zone::String, day::Dates.Date; fallback_days::Int=7)
 
     df = Euphemia.sql2df_with_retry(query, [day, bidding_zone])
     isempty(df) && return Load[]
+    # Postgres returns timestamptz as a (UTC-session) ZonedDateTime, the DuckDB
+    # extract a naive DateTime. The resolution-merge and absent-slot paths
+    # below mix these rows with naive slots (`findfirst(==(slot), …)`,
+    # `push!(converted, (t + Minute(k), …))`), which throws "no promotion
+    # exists for DateTime and ZonedDateTime" on live Postgres (cv38 record:
+    # SE1–SE4 lost on 16 days). Normalise once, here: UTC wall time either way.
+    df.date_time_utc = DateTime.(df.date_time_utc)
     # As-of audit (issue #368): the store keeps ONE revision per slot; classify
     # its publication stamp against the issuance instant. Values are not
     # changed — the pre-gate revision is not in the store to fall back to.
@@ -181,6 +188,7 @@ function get_loads(bidding_zone::String, day::Dates.Date; fallback_days::Int=7)
               AND total_load_mw IS NOT NULL
             ORDER BY date_time_utc
             """, [day, bidding_zone, res_code, fallback_days])
+        hist.date_time_utc = DateTime.(hist.date_time_utc)
         latest = Dict{Dates.Time,Float64}()
         for row in eachrow(hist)
             latest[Dates.Time(DateTime(row.date_time_utc))] = Float64(row.total_load_mw)
