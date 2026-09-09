@@ -81,3 +81,25 @@ differs on 38.6 % of cells, mean |Δ| 8.4 (footprint MAE 27.48 vs 27.03). Three-
 zone book fingerprints are bit-identical across processes on the fix. Also the
 #369 as-of contract (ForecastContext, legacy path unchanged) lands in this
 version. No record backfill yet — the daily forecast writes cv38 from merge.
+
+**Verified cv38 record (backfill 2026-09-08/09, live Postgres, Gurobi 4 solver
+workers, 15.4 h for 798 days at 56 days/h; 795 days saved 2024-07-01..2026-09-06,
+23 days with one or two zones missing at source — SI/BE/GR load gaps, the same
+gaps cv37 has; `docs/experiments/outage-intervals-370/output/cv38_record_*`,
+scorer `scripts/eval_cv.py`).** Two-year ladder 2024-07-01..2026-06-30, 729
+paired days, 38 zones, 664,076 paired zone-hours vs settled: pooled corr
+0.772 → **0.775**, MAE 25.24 → **25.08**, energy-weighted MAE 23.43 → 23.48,
+bias −3.99 → −2.48; energy@corr≥0.8 46.2 % → **48.8 %** (IT-SOUTH 0.802,
+IT-CSOUTH 0.815 cross), ≥0.75 83.4 → 83.3 %, ≥0.7 90.2 → 88.6 % (HU 0.706 →
+0.695 drops below). 22 zones better / 16 worse: DK2 −2.5 (bias −13.3 → −6.1),
+IT-SOUTH −1.8, IT-Calabria −1.5, IT-Sicily −1.4, IT-NORTH/CNORTH −0.9, LT/LV/EE
+−0.4..−0.5; worse SE4 +1.2, BE +1.1 (bias +7.8 → +10.1), DE_LU +0.9 (+0.3 →
++2.7), NL +0.7, DK1 +0.6, NO2 +0.6. By year: 2024 H2 28.76 → 29.05, 2025
+22.96 → 22.75, 2026 H1 26.27 → 25.78; evening 16–19 UTC 36.15 → 35.60, bias
+−15.2 → −14.3. Full window to 2026-09-06 (786 paired days): corr 0.775 → 0.778,
+MAE 26.13 → 25.92, ew 24.26 → 24.25, energy@corr≥0.8 60.3 → 62.8 %. Read it
+with the caveat that a record-vs-record comparison carries the cv37 draw's
+own randomness (38.8 % of cells differ, mean |Δ| 7.5 — the same magnitude as
+cv37 re-run against itself) and two weeks of source refills; the paired
+52-Wednesday A/B in the v38 entry above is the clean measurement of the fix.
+cv38 is the first record that reproduces itself bit-for-bit across runs.
