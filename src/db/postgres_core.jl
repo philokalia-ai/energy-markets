@@ -206,7 +206,7 @@
 #   (wet_adjusted_drawdown — wet winters damp the reservoir water-value lift;
 #   probe evidence: Nordic bias +13..+23 in wet months, corr(bias,dryness)
 #   -0.26..-0.40). Default false everywhere pending the Set-A/B gate.
-const ENERGY_PRICES_CODE_VERSION = 38
+const ENERGY_PRICES_CODE_VERSION = 39
 
 # Pool size: env-tunable (EUPHEMIA_PG_POOL) because the threaded book build
 # runs up to nzones concurrent queries — 5 connections cap the parallelism

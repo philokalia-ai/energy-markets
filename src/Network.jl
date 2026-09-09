@@ -547,8 +547,7 @@ function tx_outage_caps(date::Date)
     lock(_TX_OUTAGE_LOCK) do
         haskey(_TX_OUTAGE_DAY_CACHE, ckey) && return _TX_OUTAGE_DAY_CACHE[ckey]
     end
-    ctx === nothing || _asof_record!("outages_transmission",
-                                     date < Date(2025, 10, 1) ? :legacy_stamp : :verified)
+    # row-level audit after the query (NULL publication stamps are :unverifiable)
     # Same gate-clause split as generators/registry.jl `_outage_gate_clause`:
     # legacy = the `::timestamp` form (UTC in the library's session,
     # record-identical); in a context = explicit UTC against the issuance
@@ -587,7 +586,8 @@ function tx_outage_caps(date::Date)
             )
             SELECT out_area_map_code AS src, in_area_map_code AS snk,
                    $(s_col) AS s, $(e_col) AS e,
-                   new_ntc_mw::float8 AS ntc
+                   new_ntc_mw::float8 AS ntc,
+                   (version_publication_timestamp_utc AT TIME ZONE 'UTC') AS pub
             FROM vers
             WHERE $(latest) AND status = 'Active' AND new_ntc_mw IS NOT NULL
               AND $(s_col) < \$1::timestamp + INTERVAL '1 day'
@@ -599,6 +599,15 @@ function tx_outage_caps(date::Date)
     catch e
         @warn "transmission-grid unavailability not readable — border caps disabled for $date: $(sprint(showerror, e))"
         DataFrame()
+    end
+    if ctx !== nothing && !isempty(df)
+        if date < Date(2025, 10, 1)
+            _asof_record!("outages_transmission", :legacy_stamp)
+        else
+            n_null = count(ismissing, df.pub)
+            n_null > 0 && _PARENT_MODULE.record_asof_status!("outages_transmission", :unverifiable, n_null)
+            nrow(df) - n_null > 0 && _PARENT_MODULE.record_asof_status!("outages_transmission", :verified, nrow(df) - n_null)
+        end
     end
     d0 = DateTime(date)
     for r in eachrow(df)

@@ -5,12 +5,13 @@
 # Results land in simulations.energy_prices under the arm's clearing_mode
 # (scenario-labelled; the record is untouched).
 using Euphemia, Dates, Distributed
-const FOOTPRINT = String[
-    "AT", "BE", "BG", "CZ", "DE_LU", "DK1", "DK2", "EE", "ES", "FI", "FR",
+const FOOTPRINT = String[   # the canonical 39-zone record footprint (bin/reproduce.jl) — CH included
+    "AT", "BE", "BG", "CH", "CZ", "DE_LU", "DK1", "DK2", "EE", "ES", "FI", "FR",
     "GR", "HU", "LT", "LV", "NL", "NO1", "NO2", "NO3", "NO4", "NO5", "PL",
     "PT", "RO", "RS", "SE1", "SE2", "SE3", "SE4", "SI", "SK",
     "IT-NORTH", "IT-CNORTH", "IT-CSOUTH", "IT-SOUTH", "IT-Calabria",
     "IT-Sicily", "IT-Sardinia"]
+@assert length(FOOTPRINT) == 39 && "CH" in FOOTPRINT
 label = ENV["CLEARING_MODE"]
 days = collect(Date(2024, 9, 4):Day(14):Date(2026, 8, 19))   # 52 even-ISO-week Wednesdays, 2 years (seasonal regimes)
 @assert length(days) == 52

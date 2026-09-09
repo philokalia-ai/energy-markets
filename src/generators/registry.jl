@@ -77,9 +77,28 @@ const _GENERATOR_MEMO_LOCK = ReentrantLock()
 # NOTE: `get_generators` memoizes per (zone, day, ...) WITHOUT this switch in
 # the key — ablation arms must run in separate processes with the env set at
 # launch, never flip it mid-process.
-_fleet_probe_upper() =
-    isempty(get(ENV, "EUPHEMIA_DISABLE_FLEETPROBE_FIX", "")) ?
+# Per-unit generation (actual_generation_output_per_generation_unit) is
+# published ~5.3 days after delivery (median, 2026; docs/experiments/asof-contract
+# §2). Inside a ForecastContext every per-unit probe therefore ends at
+# as_of − PER_UNIT_GEN_LATENCY (or the delivery day, whichever is earlier),
+# recorded as :latency_policy — a probe that ended at delivery midnight read
+# generation that did not exist at issuance (review 2026-09-09, P1).
+const PER_UNIT_GEN_LATENCY = Dates.Day(6)
+function _per_unit_upper(day::Dates.Date)
+    c = current_context()
+    c === nothing && return nothing
+    record_asof_status!("per_unit_generation", :latency_policy)
+    return min(Dates.DateTime(day), c.as_of_utc - PER_UNIT_GEN_LATENCY)
+end
+# Zero-arg form kept for the switch tests: outside a context the fragment does
+# not depend on the day.
+_fleet_probe_upper() = _fleet_probe_upper(Dates.Date(1970, 1, 1))
+function _fleet_probe_upper(day::Dates.Date)
+    ub = _per_unit_upper(day)
+    ub === nothing || return "TIMESTAMP '$(Dates.format(ub, "yyyy-mm-dd HH:MM:SS"))'"
+    return isempty(get(ENV, "EUPHEMIA_DISABLE_FLEETPROBE_FIX", "")) ?
         "\$2::timestamp" : "\$2::timestamp + INTERVAL '1 day'"
+end
 
 const MAX_PLAUSIBLE_UNIT_MW = 25_000.0
 
@@ -148,6 +167,49 @@ function _majority_available(hourly::AbstractVector{<:Real}; k::Int=OUTAGE_MAJOR
     return Float64(partialsort(collect(Float64, hourly), min(k, n)))
 end
 
+"""
+    _hourly_availability(rows, day) -> (hourly, covered, zero_start, any_start)
+
+Pure core of the interval reading: `rows` are `(asset, cap_mw, start, end)`
+of every interval of the latest version overlapping `day`. Per asset:
+`hourly[h]` = MIN capacity over the intervals covering hour h (+Inf where
+none), `covered[h]` = the largest fraction of hour h covered by one interval,
+`zero_start` / `any_start` = earliest interval start (zero-capacity / any).
+"""
+function _hourly_availability(rows, day::Dates.Date)
+    d0 = Dates.DateTime(day)
+    hourly = Dict{String,Vector{Float64}}()
+    covered = Dict{String,Vector{Float64}}()
+    zero_start = Dict{String,Dates.DateTime}()
+    any_start = Dict{String,Dates.DateTime}()
+    for (a, cap, s, e) in rows
+        v = get!(hourly, a, fill(Inf, 24))
+        cv = get!(covered, a, zeros(24))
+        for h in 1:24
+            h0 = d0 + Dates.Hour(h - 1); h1 = h0 + Dates.Hour(1)
+            (s < h1 && e > h0) || continue
+            v[h] = min(v[h], cap)
+            cv[h] = max(cv[h], Dates.value(Dates.Millisecond(min(e, h1) - max(s, h0))) / 3_600_000)
+        end
+        any_start[a] = min(get(any_start, a, s), s)
+        cap <= 0.0 && (zero_start[a] = min(get(zero_start, a, s), s))
+    end
+    return hourly, covered, zero_start, any_start
+end
+
+"""
+    _day_level_capacity(hourly, covered) -> Float64
+
+The day-level rule: an outage counts only if its intervals cover at least
+`OUTAGE_MAJORITY_HOURS` hours of DURATION (an interval 00:30–11:30 touches
+twelve hourly buckets but lasts eleven hours and does not count); the
+capacity is then the 12th-smallest hourly value. `Inf` = no outage.
+"""
+function _day_level_capacity(hourly::AbstractVector{<:Real}, covered::AbstractVector{<:Real})
+    sum(covered) >= OUTAGE_MAJORITY_HOURS - 1e-9 || return Inf
+    return _majority_available(hourly)
+end
+
 function _day_outages_intervals(day::Dates.Date)
     df = Euphemia.sql2df_with_retry(
         """
@@ -167,7 +229,8 @@ function _day_outages_intervals(day::Dates.Date)
         SELECT asset_code,
                COALESCE(available_capacity_mw, 0.0) AS cap,
                (start_time_series_utc AT TIME ZONE 'UTC') AS s,
-               (end_time_series_utc AT TIME ZONE 'UTC') AS e
+               (end_time_series_utc AT TIME ZONE 'UTC') AS e,
+               (version_publication_timestamp_utc AT TIME ZONE 'UTC') AS pub
         FROM vers
         WHERE version = vmax
           AND status = 'Active'
@@ -177,26 +240,23 @@ function _day_outages_intervals(day::Dates.Date)
         ORDER BY asset_code, s, e, cap
         """,
         _outage_gate_params(day))
-    d0 = Dates.DateTime(day)
-    hourly = Dict{String,Vector{Float64}}()
-    zero_start = Dict{String,Dates.DateTime}()   # earliest start of a zero-capacity interval
-    any_start = Dict{String,Dates.DateTime}()    # earliest start of any interval
-    for r in eachrow(df)
-        a = String(r.asset_code)
-        cap = Float64(r.cap)
-        s = Dates.DateTime(r.s); e = Dates.DateTime(r.e)
-        v = get!(hourly, a, fill(Inf, 24))
-        for h in 1:24
-            h0 = d0 + Dates.Hour(h - 1)
-            (s < h0 + Dates.Hour(1) && e > h0) || continue
-            v[h] = min(v[h], cap)
+    # Row-level audit (review 2026-09-09, P1): a version with a NULL publication
+    # stamp passed the gate by the NULL branch, not by evidence.
+    if current_context() !== nothing
+        if day < OUTAGE_STAMP_SEAM
+            record_asof_status!("outages_generation", :legacy_stamp, DataFrames.nrow(df))
+        else
+            n_null = count(ismissing, df.pub)
+            n_null > 0 && record_asof_status!("outages_generation", :unverifiable, n_null)
+            DataFrames.nrow(df) - n_null > 0 &&
+                record_asof_status!("outages_generation", :verified, DataFrames.nrow(df) - n_null)
         end
-        any_start[a] = min(get(any_start, a, s), s)
-        cap <= 0.0 && (zero_start[a] = min(get(zero_start, a, s), s))
     end
+    hourly, covered, zero_start, any_start = _hourly_availability(
+        ((String(r.asset_code), Float64(r.cap), Dates.DateTime(r.s), Dates.DateTime(r.e)) for r in eachrow(df)), day)
     assets = String[]; avail = Float64[]; earliest = Dates.DateTime[]
     for a in sort!(collect(keys(hourly)))
-        lvl = _majority_available(hourly[a])
+        lvl = _day_level_capacity(hourly[a], covered[a])
         isinf(lvl) && continue
         push!(assets, a); push!(avail, lvl)
         push!(earliest, get(zero_start, a, any_start[a]))
@@ -206,6 +266,7 @@ function _day_outages_intervals(day::Dates.Date)
         # Stale-message override (unchanged rule): the unit produced > 1 MW
         # after the outage began within the trailing 7 days ⇒ the message is
         # stale and is ignored. Explicit UTC on both sides.
+        ub = _per_unit_upper(day)   # context: as_of − per-unit publication latency
         gen = Euphemia.sql2df_with_retry(
             """
             SELECT generation_unit_code AS asset_code,
@@ -213,11 +274,11 @@ function _day_outages_intervals(day::Dates.Date)
             FROM entsoe.actual_generation_output_per_generation_unit
             WHERE generation_unit_code = ANY(\$2)
               AND date_time_utc >= ((\$1::timestamp - INTERVAL '7 days') AT TIME ZONE 'UTC')
-              AND date_time_utc < (\$1::timestamp AT TIME ZONE 'UTC')
+              AND date_time_utc < (\$3::timestamp AT TIME ZONE 'UTC')
               AND actual_generation_output_mw > 1
             GROUP BY generation_unit_code
             """,
-            Any[day, assets])
+            Any[day, assets, ub === nothing ? Dates.DateTime(day) : ub])
         last = Dict(String(r.asset_code) => Dates.DateTime(r.last_gen) for r in eachrow(gen) if !ismissing(r.last_gen))
         for (i, a) in enumerate(assets)
             lg = get(last, a, nothing)
@@ -229,9 +290,10 @@ function _day_outages_intervals(day::Dates.Date)
 end
 
 function get_day_outages(day::Dates.Date)
-    if current_context() !== nothing
-        record_asof_status!("outages_generation",
-                            day < OUTAGE_STAMP_SEAM ? :legacy_stamp : :verified)
+    # audit is recorded per selected row inside _day_outages_intervals; the
+    # legacy query records one call-level line so the source is not silent.
+    if current_context() !== nothing && !_outage_intervals_enabled()
+        record_asof_status!("outages_generation", :unverifiable)
     end
     return lock(_OUTAGE_DAY_CACHE_LOCK) do
         get!(_OUTAGE_DAY_CACHE, (day, ctx_key())) do
@@ -381,7 +443,7 @@ function get_generators(map_code::String, day::Dates.Date;
                     FROM entsoe.production_and_generation_units
                     WHERE area_map_code = \$1)
               AND date_time_utc >= \$2::timestamp - INTERVAL '60 days'
-              AND date_time_utc < $(_fleet_probe_upper())
+              AND date_time_utc < $(_fleet_probe_upper(day))
               AND actual_generation_output_mw > 0
         ),
         -- Hard-evidence override for stale outage records (computed per day in
@@ -475,7 +537,7 @@ function get_generators(map_code::String, day::Dates.Date;
                     FROM entsoe.production_and_generation_units
                     WHERE area_map_code = \$1)
               AND date_time_utc >= \$2::timestamp - INTERVAL '60 days'
-              AND date_time_utc < $(_fleet_probe_upper())
+              AND date_time_utc < $(_fleet_probe_upper(day))
               AND actual_generation_output_mw > 0
         )
         SELECT DISTINCT ON (g.generation_unit_code)

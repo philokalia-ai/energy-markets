@@ -23,7 +23,11 @@ Read-only Postgres. Budget: one session slice (~1 h).
   construction on both sides — sanity check of the sign convention).
 - Control: the same test on **realised physical flows** (ENTSO-E, BZN both
   sides, hourly). Physical ≠ commercial (loop flows, non-Core transit), so
-  the control's violation depth is the noise floor of the test, not zero.
+  the control's violation depth is an indicative reference, not a calibrated
+  noise floor: flow concepts and omitted mappings (HR, ALEGrO) can differ
+  systematically, and HR's effect is constraint-dependent in sign. The
+  auction's own net positions (a JAO publication, requested in ceres#527)
+  are the proper control.
 
 ## Result
 
