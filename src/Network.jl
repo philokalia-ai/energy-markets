@@ -550,8 +550,9 @@ function tx_outage_caps(date::Date)
     ctx === nothing || _asof_record!("outages_transmission",
                                      date < Date(2025, 10, 1) ? :legacy_stamp : :verified)
     # Same gate-clause split as generators/registry.jl `_outage_gate_clause`:
-    # legacy = the session-time-zone `::timestamp` form (record-identical);
-    # in a context = explicit UTC against the issuance instant bound as $2.
+    # legacy = the `::timestamp` form (UTC in the library's session,
+    # record-identical); in a context = explicit UTC against the issuance
+    # instant bound as $2.
     gate_tail = ctx === nothing ?
         "version_publication_timestamp_utc::timestamp < \$1::timestamp - INTERVAL '14 hours'" :
         "(version_publication_timestamp_utc AT TIME ZONE 'UTC') < \$2::timestamp"
