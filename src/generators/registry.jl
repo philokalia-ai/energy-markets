@@ -91,12 +91,11 @@ Once-per-day (all-zone) active-outage table backing `get_generators`. See the
 per day; never cached on DB error (the exception propagates out of `get!`).
 """
 # The vintage clause of the outage query (issue #368). Legacy (no context):
-# the cv34 form — `::timestamp` on a timestamptz column, which Postgres
-# evaluates in the SESSION time zone (Europe/Berlin on the live server, so the
-# gate lands at D-1 08:00/09:00 UTC) and the DuckDB extract in naive UTC
-# (D-1 10:00 UTC); docs/experiments/asof-contract/README.md §1. Inside a
+# the cv34 form — `::timestamp` on a timestamptz column, evaluated in the
+# SESSION time zone: the library's LibPQ session is UTC (verified), the
+# extract is naive UTC, so the gate is D-1 10:00 UTC on both. Inside a
 # context: explicit UTC against the context's issuance instant, bound as $2 —
-# the same instant on both backends. The pre-seam and NULL branches are
+# session-independent by construction (docs/experiments/asof-contract §1). The pre-seam and NULL branches are
 # unchanged: before 2025-10-01 the column is an ingestion time, so the latest
 # version counts and the audit records :legacy_stamp.
 function _outage_gate_clause()

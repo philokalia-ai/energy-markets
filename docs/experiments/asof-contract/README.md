@@ -23,22 +23,21 @@ The only vintage filter in the library today is the cv34 outage gate in
 i.e. **D-1 10:00 as a naive timestamp**, applied to delivery days from
 2025-10-01 (the seam; before it the column holds ETL ingestion time).
 
-Two facts about that expression, both verified this session
-(`output/05_post_gate_share_utc.txt`):
+One fact about that expression, and one **correction** (2026-09-09):
 
-- `version_publication_timestamp_utc` is `timestamp with time zone`. The
-  Postgres session (and server) time zone is **Europe/Berlin**, so `::timestamp`
-  yields Berlin wall-clock time and the gate is effectively **08:00 UTC in
-  summer / 09:00 UTC in winter** — one to two hours stricter than the auction.
-  Conservative, not leaky.
-- The DuckDB extract stores every timestamp as **naive UTC**
-  (`src/db/CLAUDE.md` line 82; the dialect rewrite strips `AT TIME ZONE
-  'UTC'`), so the same SQL evaluates the gate at **10:00 UTC** there. **The two
-  backends admit a different set of outage versions.** Over delivery days
-  2025-10-01..2026-08-31 (1,086,377 version rows): 174,928 versions pass the
-  gate as evaluated on Postgres, 218,603 pass at an explicit 10:00 UTC. That
-  is a backend-dependent input, hence a bit-identity hazard between a Postgres
-  run and an extract run of the same day.
+- `version_publication_timestamp_utc` is `timestamp with time zone`, so the
+  meaning of `::timestamp` depends on the session time zone. The probes in
+  `scripts/` ran through a psycopg2 session that inherited the server default
+  (**Europe/Berlin**), where the cast lands the gate at 08:00/09:00 UTC and
+  174,928 vs 218,603 versions pass over 2025-10..2026-08. **The library's own
+  LibPQ session is UTC** (`show timezone` → `UTC`; verified 2026-09-09 on
+  46,711 recent version rows: `::timestamp` equals `AT TIME ZONE 'UTC'` on
+  every one). So in production the gate is **10:00 UTC on Postgres and on the
+  naive-UTC extract alike** — there is no backend-dependent input here. The
+  earlier claim in this section, in PR #369's description and in §3.4/§5.4
+  below was wrong; §3.4b's nondeterminism finding is what actually explained
+  the differing books. The explicit-UTC form inside a context stays: it is
+  correct regardless of the session, which the cast is not.
 
 Everything else (load, RES, ATC, actual generation, hydro fill, fuels, JAO)
 has **no** vintage filter: the reader takes whatever revision the table holds.
@@ -121,8 +120,9 @@ revision. Status: **unverifiable**. On Core borders cv35 reads JAO instead
   these are admitted — the pre-seam record knows forced outages before they
   happened. Magnitude on price not measured (no pre-seam timestamps exist to
   replay against).
-- The `::timestamp` cast makes the gate 08:00/09:00 UTC on Postgres and 10:00
-  UTC on the extract (§1). Fix: compare in explicit UTC in both dialects.
+- The `::timestamp` cast is session-dependent (§1); in the library's UTC
+  session it is 10:00 UTC on both backends. The context path compares in
+  explicit UTC so it cannot depend on the session.
 
 ### 3.4b Outage queries are nondeterministic on main (found while verifying this branch)
 
@@ -280,10 +280,10 @@ a smoke, not an evaluation):
 - **Books are not identical** to the legacy build for any of the three
   zones (DE_LU 9,644 → 9,646 order values; GR same count, different sum;
   NO4 2,686 → 2,688). Two causes, both by design:
-  - *Outage gate at explicit 10:00 UTC instead of the session's 08:00 UTC*:
-    same 472 assets on the day table, **23 with a different available
-    capacity** (versions published 08:00–10:00 UTC on D-1 that the record
-    excluded).
+  - *Outage table*: same 472 assets, **23 with a different available
+    capacity** — first attributed to a gate shift; with the session confirmed
+    UTC (§1) this is the legacy reader's arbitrary interval pick (§3.4b), not
+    the gate.
   - *Trailing p95 window ending D-1 09:00 instead of D 00:00*: every DE_LU
     type moves by 0.0–1.6 % (Fossil Gas 6,737 → 6,662 MW, Hydro Water
     Reservoir 452 → 430, Solar 50,499 → 50,566).
@@ -331,10 +331,8 @@ honest statement of where the record stands.
   `forecast_prices` yet: an additive migration on the live schema is the
   owner's call; the `is_retro`/`reset_tag`/`retro_of_utc` pattern in
   `src/db/results_store.jl` is the template.
-- No behaviour change on the legacy path, including the session-time-zone
-  outage gate. Fixing it in place would move the Postgres record by the
-  43,675 versions that sit between 08:00 and 10:00 UTC (§1) and needs a
-  code_version bump; a context run measures that first.
+- No behaviour change on the legacy path (the gate cast is fine in the
+  library's UTC session, §1; the context path uses explicit UTC anyway).
 
 ## 6. What cannot be repaired retroactively
 
