@@ -150,9 +150,9 @@ fix); worse only SE4 +0.97 (bias +7.2 → +10.4), NO3 +0.21, NO2/NO5 +0.17,
 NO4 +0.15, SE2 +0.13. By year: 2024 H2 flat, 2025 22.99 → 22.70 (corr 0.815
 → 0.822), 2026 H1 26.28 → 25.88; evening 16–19 UTC 35.87 → 35.43. Full window
 to 2026-09-06 (786 paired days): corr 0.775 → 0.781, MAE 26.10 → 25.85, ew
-24.28 → 24.16, energy@corr≥0.8 61.2 → 67.8 %. Cells ≥ 500 €/MWh: 4 in cv39
-vs 2 in cv37 — one new cluster, IT-Sicily 2026-02-24 17–20 UTC at 541–932
-against settled ~165, to be looked at (an interval-rule capacity removal on
+24.28 → 24.16, energy@corr≥0.8 61.2 → 67.8 %. Cells ≥ 500 €/MWh: 12 in cv39
+vs 6 in cv37 — the largest new cluster IT-Sicily 2026-02-24 17–20 UTC at
+541–932 against settled 135–148, to be looked at (an interval-rule capacity removal on
 that day is the suspect). Same caveat as before: record-vs-record carries the
 cv37 draw's own randomness (29.7 % of cells differ, mean |Δ| 6.6) and source
 refills; the paired 52-Wednesday A/B (38 zones) is the clean measurement of
