@@ -130,3 +130,31 @@ audit `:latency_policy`), row-level audit of outage versions (NULL stamps
 `:unverifiable`), load/RES readers normalised to naive UTC (#378). Legacy
 record path: the duration rule is the only behaviour change vs cv38 code.
 Record and ladder: appended below when the backfill lands.
+
+**Verified cv39 record (backfill 2026-09-09/10, live Postgres, Gurobi 4 solver
+workers, 15.7 h for 798 days at 51 days/h; 795 days saved 2024-07-01..
+2026-09-06 on the canonical 39-zone footprint incl. CH; 23 days with one or
+two zones missing at source — SI/BE/GR/RS load gaps, 2024-11-17 truncated —
+the same gaps as cv37; `docs/experiments/outage-intervals-370/output/
+cv39_record_*`, scorer `scripts/eval_cv.py`).** Two-year ladder 2024-07-01..
+2026-06-30, 729 paired days, 39 zones, 681,570 paired zone-hours vs settled:
+pooled corr 0.773 → **0.778**, MAE 25.20 → **24.96**, energy-weighted MAE
+23.45 → **23.32**, bias −4.20 → −3.54; energy@corr≥0.8 47.4 → **49.2 %**
+(IT-SOUTH 0.800, IT-CSOUTH 0.811 cross), ≥0.75 83.8 → 84.7 %, ≥0.7 90.5 →
+89.7 % (NO4 0.705 → 0.699). 28 zones better / 11 worse: DK2 −2.9 (bias −13.3
+→ −7.2, corr 0.703 → 0.734), IT-SOUTH −1.6, IT-Calabria −1.4, IT-Sicily −1.1,
+IT-CNORTH/NORTH −0.7, LT/LV/EE −0.4..−0.5; the continental hub is flat
+(DE_LU −0.02, BE +0.04, NL −0.04, FR −0.04, CH +0.005 — the BE/DE_LU/NL
+degradation of the defective 38-zone cv38 run was the missing CH, not the
+fix); worse only SE4 +0.97 (bias +7.2 → +10.4), NO3 +0.21, NO2/NO5 +0.17,
+NO4 +0.15, SE2 +0.13. By year: 2024 H2 flat, 2025 22.99 → 22.70 (corr 0.815
+→ 0.822), 2026 H1 26.28 → 25.88; evening 16–19 UTC 35.87 → 35.43. Full window
+to 2026-09-06 (786 paired days): corr 0.775 → 0.781, MAE 26.10 → 25.85, ew
+24.28 → 24.16, energy@corr≥0.8 61.2 → 67.8 %. Cells ≥ 500 €/MWh: 4 in cv39
+vs 2 in cv37 — one new cluster, IT-Sicily 2026-02-24 17–20 UTC at 541–932
+against settled ~165, to be looked at (an interval-rule capacity removal on
+that day is the suspect). Same caveat as before: record-vs-record carries the
+cv37 draw's own randomness (29.7 % of cells differ, mean |Δ| 6.6) and source
+refills; the paired 52-Wednesday A/B (38 zones) is the clean measurement of
+the fix and its 39-zone re-run is pending. cv39 supersedes cv37 as the
+canonical record; the cv38 rows are the defective 38-zone run.
