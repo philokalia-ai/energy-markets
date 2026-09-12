@@ -1,0 +1,1004 @@
+ARM ab40_base  de_hub=false  days=52  2025-09-03..2026-08-26
+======================================================================
+🔀 PIPELINED BACKFILL  days=52/52  zones=39
+   solver_workers=2  book_workers=6  in_flight=6
+   optimizer=gurobi  clearing_mode=ab40_base  cv=39  save=true
+======================================================================
+      From worker 4:	[ Info: preinit 5 done
+      From worker 4:	[ Info: Initialization done
+      From worker 7:	[ Info: preinit 5 done
+      From worker 7:	[ Info: Initialization done
+      From worker 8:	[ Info: preinit 5 done
+      From worker 8:	[ Info: Initialization done
+      From worker 3:	[ Info: preinit 5 done
+      From worker 3:	[ Info: Initialization done
+      From worker 6:	[ Info: preinit 5 done
+      From worker 6:	[ Info: Initialization done
+      From worker 5:	[ Info: preinit 5 done
+      From worker 5:	[ Info: Initialization done
+      From worker 9:	[ Info: preinit 5 done
+      From worker 9:	[ Info: Initialization done
+      From worker 2:	[ Info: preinit 5 done
+      From worker 2:	[ Info: Initialization done
+      From worker 9:	🌍 Creating multi-zone order book (merit-order method) for 39 zones
+      From worker 5:	🌍 Creating multi-zone order book (merit-order method) for 39 zones
+      From worker 6:	🌍 Creating multi-zone order book (merit-order method) for 39 zones
+      From worker 4:	🌍 Creating multi-zone order book (merit-order method) for 39 zones
+      From worker 7:	🌍 Creating multi-zone order book (merit-order method) for 39 zones
+      From worker 8:	🌍 Creating multi-zone order book (merit-order method) for 39 zones
+      From worker 4:	   🧭 JAO maxBEX covers 26 of 59 flow-based drop border(s) — kept endogenous: AT~CZ, AT~DE_LU, AT~HU, AT~SI, BE~DE_LU, BE~FR, BE~NL, CZ~SK, DK1~NO2, FI~NO4, FI~SE1, FI~SE3, HU~SK, NO1~NO2, NO1~NO3, NO1~NO5, NO1~SE3, NO2~NO5, NO3~NO4, NO3~NO5, NO3~SE2, NO4~SE1, NO4~SE2, PL~SK, SE2~SE3, SE3~SE4
+      From worker 7:	   🧭 JAO maxBEX covers 26 of 59 flow-based drop border(s) — kept endogenous: AT~CZ, AT~DE_LU, AT~HU, AT~SI, BE~DE_LU, BE~FR, BE~NL, CZ~SK, DK1~NO2, FI~NO4, FI~SE1, FI~SE3, HU~SK, NO1~NO2, NO1~NO3, NO1~NO5, NO1~SE3, NO2~NO5, NO3~NO4, NO3~NO5, NO3~SE2, NO4~SE1, NO4~SE2, PL~SK, SE2~SE3, SE3~SE4
+      From worker 4:	   🔌 Fetching transfer capacities between zones...
+      From worker 7:	   🔌 Fetching transfer capacities between zones...
+      From worker 9:	   🧭 JAO maxBEX covers 26 of 59 flow-based drop border(s) — kept endogenous: AT~CZ, AT~DE_LU, AT~HU, AT~SI, BE~DE_LU, BE~FR, BE~NL, CZ~SK, DK1~NO2, FI~NO4, FI~SE1, FI~SE3, HU~SK, NO1~NO2, NO1~NO3, NO1~NO5, NO1~SE3, NO2~NO5, NO3~NO4, NO3~NO5, NO3~SE2, NO4~SE1, NO4~SE2, PL~SK, SE2~SE3, SE3~SE4
+      From worker 9:	   🔌 Fetching transfer capacities between zones...
+      From worker 5:	   🧭 JAO maxBEX covers 26 of 59 flow-based drop border(s) — kept endogenous: AT~CZ, AT~DE_LU, AT~HU, AT~SI, BE~DE_LU, BE~FR, BE~NL, CZ~SK, DK1~NO2, FI~NO4, FI~SE1, FI~SE3, HU~SK, NO1~NO2, NO1~NO3, NO1~NO5, NO1~SE3, NO2~NO5, NO3~NO4, NO3~NO5, NO3~SE2, NO4~SE1, NO4~SE2, PL~SK, SE2~SE3, SE3~SE4
+      From worker 6:	   🧭 JAO maxBEX covers 26 of 59 flow-based drop border(s) — kept endogenous: AT~CZ, AT~DE_LU, AT~HU, AT~SI, BE~DE_LU, BE~FR, BE~NL, CZ~SK, DK1~NO2, FI~NO4, FI~SE1, FI~SE3, HU~SK, NO1~NO2, NO1~NO3, NO1~NO5, NO1~SE3, NO2~NO5, NO3~NO4, NO3~NO5, NO3~SE2, NO4~SE1, NO4~SE2, PL~SK, SE2~SE3, SE3~SE4
+      From worker 5:	   🔌 Fetching transfer capacities between zones...
+      From worker 6:	   🔌 Fetching transfer capacities between zones...
+      From worker 8:	   🧭 JAO maxBEX covers 26 of 59 flow-based drop border(s) — kept endogenous: AT~CZ, AT~DE_LU, AT~HU, AT~SI, BE~DE_LU, BE~FR, BE~NL, CZ~SK, DK1~NO2, FI~NO4, FI~SE1, FI~SE3, HU~SK, NO1~NO2, NO1~NO3, NO1~NO5, NO1~SE3, NO2~NO5, NO3~NO4, NO3~NO5, NO3~SE2, NO4~SE1, NO4~SE2, PL~SK, SE2~SE3, SE3~SE4
+      From worker 8:	   🔌 Fetching transfer capacities between zones...
+      From worker 4:	📊 Fetching ENTSO-E transfer capacity (enriched: explicit=true, remap=IT→IT-NORTH) for 2025-09-17...
+      From worker 7:	📊 Fetching ENTSO-E transfer capacity (enriched: explicit=true, remap=IT→IT-NORTH) for 2025-10-01...
+      From worker 9:	📊 Fetching ENTSO-E transfer capacity (enriched: explicit=true, remap=IT→IT-NORTH) for 2025-09-03...
+      From worker 5:	📊 Fetching ENTSO-E transfer capacity (enriched: explicit=true, remap=IT→IT-NORTH) for 2025-09-10...
+      From worker 6:	📊 Fetching ENTSO-E transfer capacity (enriched: explicit=true, remap=IT→IT-NORTH) for 2025-09-24...
+      From worker 8:	📊 Fetching ENTSO-E transfer capacity (enriched: explicit=true, remap=IT→IT-NORTH) for 2025-10-08...
+      From worker 9:	   🧭 JAO net positions: 6227 border-hours scaled so simultaneous exchanges respect the hub limit
+      From worker 9:	   🧭 JAO maxBEX: 1824 Day-ahead-free border-hours sized by the flow-based max exchange, 1968 border-hours added
+      From worker 9:	   🔁 cv27 T1: 48 Day-ahead-free border-hours sized by demonstrated capability
+      From worker 4:	   🧭 JAO net positions: 6112 border-hours scaled so simultaneous exchanges respect the hub limit
+      From worker 4:	   🧭 JAO maxBEX: 1824 Day-ahead-free border-hours sized by the flow-based max exchange, 1968 border-hours added
+      From worker 4:	   🔁 cv27 T1: 48 Day-ahead-free border-hours sized by demonstrated capability
+      From worker 7:	   🧭 JAO net positions: 5964 border-hours scaled so simultaneous exchanges respect the hub limit
+      From worker 7:	   🧭 JAO maxBEX: 1824 Day-ahead-free border-hours sized by the flow-based max exchange, 1968 border-hours added
+      From worker 7:	   🔁 cv27 T1: 48 Day-ahead-free border-hours sized by demonstrated capability
+      From worker 5:	   🧭 JAO net positions: 6191 border-hours scaled so simultaneous exchanges respect the hub limit
+      From worker 5:	   🧭 JAO maxBEX: 1956 Day-ahead-free border-hours sized by the flow-based max exchange, 1968 border-hours added
+      From worker 5:	   🔁 cv27 T1: 48 Day-ahead-free border-hours sized by demonstrated capability
+      From worker 6:	   🧭 JAO net positions: 5984 border-hours scaled so simultaneous exchanges respect the hub limit
+      From worker 6:	   🧭 JAO maxBEX: 1824 Day-ahead-free border-hours sized by the flow-based max exchange, 1968 border-hours added
+      From worker 6:	   🔁 cv27 T1: 48 Day-ahead-free border-hours sized by demonstrated capability
+      From worker 8:	   🧭 JAO net positions: 6038 border-hours scaled so simultaneous exchanges respect the hub limit
+      From worker 8:	   🧭 JAO maxBEX: 1824 Day-ahead-free border-hours sized by the flow-based max exchange, 1968 border-hours added
+      From worker 8:	   🔁 cv27 T1: 48 Day-ahead-free border-hours sized by demonstrated capability
+      From worker 7:	✅ Enriched transfer capacity: 3456 implicit rows, +1152 explicit-only rows, 192 aggregate endpoints remapped, -0 stale flow-based border-hours dropped, 5184 in-footprint border-hours
+      From worker 7:	✅ Created transfer capacity structure:
+      From worker 7:	   🌍 Bidding zones: 39 (AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK)
+      From worker 7:	   🕐 Time periods: 24
+      From worker 7:	   ➡️  Forward capacities: 5184 entries
+      From worker 7:	   ↔️  Bidirectional links: 5002
+      From worker 7:	   ➡️  Unidirectional links: 182
+      From worker 7:	   🚫 Shadowed aggregate codes excluded from observed imports: DE_50HzT, DE_Amprion, DE_TenneT_GER, DE_TransnetBW, DK, IT
+      From worker 7:	   📊 Processing zone AT...
+      From worker 7:	      ℹ️  No usable ATC link to BG, DK1, DK2, EE, ES, FI, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO1, NO2, NO3, NO4, NO5, PT, RS, SE1, SE2, SE3, SE4 — keeping observed net imports for those borders
+      From worker 7:	📊 Creating merit-order order book for AT on 2025-10-01
+      From worker 7:	   📊 Processing zone BE...
+      From worker 7:	      ℹ️  No usable ATC link to BG, CH, DK1, DK2, EE, ES, FI, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO1, NO2, NO3, NO4, NO5, PT, RS, SE1, SE2, SE3, SE4 — keeping observed net imports for those borders
+      From worker 7:	📊 Creating merit-order order book for BE on 2025-10-01
+      From worker 7:	   📊 Processing zone CZ...
+      From worker 7:	      ℹ️  No usable ATC link to BG, CH, DK1, DK2, EE, ES, FI, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO1, NO2, NO3, NO4, NO5, PT, RS, SE1, SE2, SE3, SE4 — keeping observed net imports for those borders
+      From worker 7:	📊 Creating merit-order order book for CZ on 2025-10-01
+      From worker 7:	   📊 Processing zone DK2...
+      From worker 7:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SI, SK — keeping observed net imports for those borders
+      From worker 7:	📊 Creating merit-order order book for DK2 on 2025-10-01
+      From worker 7:	   📊 Processing zone FI...
+      From worker 7:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, ES, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO5, PL, PT, RO, RS, SE2, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 7:	📊 Creating merit-order order book for FI on 2025-10-01
+      From worker 7:	   📊 Processing zone HU...
+      From worker 7:	      ℹ️  No usable ATC link to BG, CH, DK1, DK2, EE, ES, FI, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO1, NO2, NO3, NO4, NO5, PT, SE1, SE2, SE3, SE4 — keeping observed net imports for those borders
+      From worker 7:	📊 Creating merit-order order book for HU on 2025-10-01
+      From worker 7:	   📊 Processing zone NL...
+      From worker 7:	      ℹ️  No usable ATC link to BG, CH, DK2, EE, ES, FI, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO1, NO3, NO4, NO5, PT, RS, SE1, SE2, SE3, SE4 — keeping observed net imports for those borders
+      From worker 7:	📊 Creating merit-order order book for NL on 2025-10-01
+      From worker 7:	   📊 Processing zone NO3...
+      From worker 7:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO2, PL, PT, RO, RS, SE1, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 7:	📊 Creating merit-order order book for NO3 on 2025-10-01
+      From worker 7:	   📊 Processing zone PL...
+      From worker 7:	      ℹ️  No usable ATC link to BG, CH, DK1, DK2, EE, ES, FI, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LV, NO1, NO2, NO3, NO4, NO5, PT, RS, SE1, SE2, SE3, SE4 — keeping observed net imports for those borders
+      From worker 7:	📊 Creating merit-order order book for PL on 2025-10-01
+      From worker 7:	   📊 Processing zone RS...
+      From worker 7:	      ℹ️  No usable ATC link to AT, BE, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 7:	📊 Creating merit-order order book for RS on 2025-10-01
+      From worker 7:	   📊 Processing zone SE3...
+      From worker 7:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SI, SK — keeping observed net imports for those borders
+      From worker 7:	📊 Creating merit-order order book for SE3 on 2025-10-01
+      From worker 7:	   📊 Processing zone SK...
+      From worker 7:	      ℹ️  No usable ATC link to BG, CH, DK1, DK2, EE, ES, FI, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO1, NO2, NO3, NO4, NO5, PT, RS, SE1, SE2, SE3, SE4 — keeping observed net imports for those borders
+      From worker 7:	📊 Creating merit-order order book for SK on 2025-10-01
+      From worker 7:	   📊 Processing zone IT-CSOUTH...
+      From worker 7:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-Calabria, IT-NORTH, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 7:	📊 Creating merit-order order book for IT-CSOUTH on 2025-10-01
+      From worker 7:	   📊 Processing zone IT-Sicily...
+      From worker 7:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-NORTH, IT-SOUTH, IT-Sardinia, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 7:	📊 Creating merit-order order book for IT-Sicily on 2025-10-01
+      From worker 7:	   📊 Processing zone CH...
+      From worker 7:	      ℹ️  No usable ATC link to BE, BG, CZ, DK1, DK2, EE, ES, FI, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 7:	📊 Creating merit-order order book for CH on 2025-10-01
+      From worker 7:	   📊 Processing zone EE...
+      From worker 7:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, ES, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 7:	📊 Creating merit-order order book for EE on 2025-10-01
+      From worker 7:	   📊 Processing zone GR...
+      From worker 7:	      ℹ️  No usable ATC link to AT, BE, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 7:	📊 Creating merit-order order book for GR on 2025-10-01
+      From worker 7:	   📊 Processing zone NO1...
+      From worker 7:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO4, PL, PT, RO, RS, SE1, SE2, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 7:	📊 Creating merit-order order book for NO1 on 2025-10-01
+      From worker 7:	   📊 Processing zone NO5...
+      From worker 7:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO4, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 7:	📊 Creating merit-order order book for NO5 on 2025-10-01
+      From worker 7:	   📊 Processing zone SE1...
+      From worker 7:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO5, PL, PT, RO, RS, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 7:	📊 Creating merit-order order book for SE1 on 2025-10-01
+      From worker 7:	   📊 Processing zone SI...
+      From worker 7:	      ℹ️  No usable ATC link to BG, CH, DK1, DK2, EE, ES, FI, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO1, NO2, NO3, NO4, NO5, PT, RS, SE1, SE2, SE3, SE4 — keeping observed net imports for those borders
+      From worker 7:	📊 Creating merit-order order book for SI on 2025-10-01
+      From worker 7:	   📊 Processing zone IT-SOUTH...
+      From worker 7:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-NORTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 7:	📊 Creating merit-order order book for IT-SOUTH on 2025-10-01
+      From worker 7:	   📊 Processing zone BG...
+      From worker 7:	      ℹ️  No usable ATC link to AT, BE, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 7:	📊 Creating merit-order order book for BG on 2025-10-01
+      From worker 7:	   📊 Processing zone ES...
+      From worker 7:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, FI, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 7:	📊 Creating merit-order order book for ES on 2025-10-01
+      From worker 7:	   📊 Processing zone LV...
+      From worker 7:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 7:	📊 Creating merit-order order book for LV on 2025-10-01
+      From worker 7:	   📊 Processing zone PT...
+      From worker 7:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 7:	📊 Creating merit-order order book for PT on 2025-10-01
+      From worker 7:	   📊 Processing zone SE4...
+      From worker 7:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DK1, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SI, SK — keeping observed net imports for those borders
+      From worker 7:	📊 Creating merit-order order book for SE4 on 2025-10-01
+      From worker 7:	   📊 Processing zone IT-Calabria...
+      From worker 7:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-NORTH, IT-Sardinia, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 7:	📊 Creating merit-order order book for IT-Calabria on 2025-10-01
+      From worker 7:	   📊 Processing zone DK1...
+      From worker 7:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO1, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 7:	📊 Creating merit-order order book for DK1 on 2025-10-01
+      From worker 7:	   📊 Processing zone NO2...
+      From worker 7:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DK2, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO3, NO4, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 7:	📊 Creating merit-order order book for NO2 on 2025-10-01
+      From worker 7:	   📊 Processing zone SE2...
+      From worker 7:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO5, PL, PT, RO, RS, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 7:	📊 Creating merit-order order book for SE2 on 2025-10-01
+      From worker 7:	   📊 Processing zone IT-Sardinia...
+      From worker 7:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 7:	📊 Creating merit-order order book for IT-Sardinia on 2025-10-01
+      From worker 7:	   📊 Processing zone LT...
+      From worker 7:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, NL, NO1, NO2, NO3, NO4, NO5, PT, RO, RS, SE1, SE2, SE3, SI, SK — keeping observed net imports for those borders
+      From worker 7:	📊 Creating merit-order order book for LT on 2025-10-01
+      From worker 7:	   📊 Processing zone IT-NORTH...
+      From worker 7:	      ℹ️  No usable ATC link to BE, BG, CZ, DE_LU, DK1, DK2, EE, ES, FI, GR, HU, IT-CSOUTH, IT-Calabria, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SK — keeping observed net imports for those borders
+      From worker 7:	📊 Creating merit-order order book for IT-NORTH on 2025-10-01
+      From worker 7:	   📊 Processing zone FR...
+      From worker 7:	      ℹ️  No usable ATC link to BG, DK1, DK2, EE, FI, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO1, NO2, NO3, NO4, NO5, PT, RS, SE1, SE2, SE3, SE4 — keeping observed net imports for those borders
+      From worker 7:	📊 Creating merit-order order book for FR on 2025-10-01
+      From worker 7:	   📊 Processing zone IT-CNORTH...
+      From worker 7:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-Calabria, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 7:	📊 Creating merit-order order book for IT-CNORTH on 2025-10-01
+      From worker 7:	   📊 Processing zone RO...
+      From worker 7:	      ℹ️  No usable ATC link to CH, DK1, DK2, EE, ES, FI, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO1, NO2, NO3, NO4, NO5, PT, SE1, SE2, SE3, SE4 — keeping observed net imports for those borders
+      From worker 7:	📊 Creating merit-order order book for RO on 2025-10-01
+      From worker 7:	   📊 Processing zone DE_LU...
+      From worker 7:	      ℹ️  No usable ATC link to BG, EE, ES, FI, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO1, NO3, NO4, NO5, PT, RS, SE1, SE2, SE3 — keeping observed net imports for those borders
+      From worker 7:	📊 Creating merit-order order book for DE_LU on 2025-10-01
+      From worker 7:	   📊 Processing zone NO4...
+      From worker 7:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO5, PL, PT, RO, RS, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 7:	📊 Creating merit-order order book for NO4 on 2025-10-01
+      From worker 8:	✅ Enriched transfer capacity: 3456 implicit rows, +1152 explicit-only rows, 192 aggregate endpoints remapped, -0 stale flow-based border-hours dropped, 5184 in-footprint border-hours
+      From worker 8:	✅ Created transfer capacity structure:
+      From worker 8:	   🌍 Bidding zones: 39 (AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK)
+      From worker 8:	   🕐 Time periods: 24
+      From worker 8:	   ➡️  Forward capacities: 5184 entries
+      From worker 8:	   ↔️  Bidirectional links: 5087
+      From worker 8:	   ➡️  Unidirectional links: 97
+      From worker 8:	   🚫 Shadowed aggregate codes excluded from observed imports: DE_50HzT, DE_Amprion, DE_TenneT_GER, DE_TransnetBW, DK, IT
+      From worker 8:	   📊 Processing zone AT...
+      From worker 8:	      ℹ️  No usable ATC link to BG, DK1, DK2, EE, ES, FI, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO1, NO2, NO3, NO4, NO5, PT, RS, SE1, SE2, SE3, SE4 — keeping observed net imports for those borders
+      From worker 8:	📊 Creating merit-order order book for AT on 2025-10-08
+      From worker 8:	   📊 Processing zone BE...
+      From worker 8:	      ℹ️  No usable ATC link to BG, CH, DK1, DK2, EE, ES, FI, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO1, NO2, NO3, NO4, NO5, PT, RS, SE1, SE2, SE3, SE4 — keeping observed net imports for those borders
+      From worker 8:	📊 Creating merit-order order book for BE on 2025-10-08
+      From worker 8:	   📊 Processing zone CZ...
+      From worker 8:	      ℹ️  No usable ATC link to BG, CH, DK1, DK2, EE, ES, FI, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO1, NO2, NO3, NO4, NO5, PT, RS, SE1, SE2, SE3, SE4 — keeping observed net imports for those borders
+      From worker 8:	📊 Creating merit-order order book for CZ on 2025-10-08
+      From worker 8:	   📊 Processing zone DK2...
+      From worker 8:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SI, SK — keeping observed net imports for those borders
+      From worker 8:	📊 Creating merit-order order book for DK2 on 2025-10-08
+      From worker 8:	   📊 Processing zone FI...
+      From worker 8:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, ES, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO5, PL, PT, RO, RS, SE2, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 8:	📊 Creating merit-order order book for FI on 2025-10-08
+      From worker 8:	   📊 Processing zone HU...
+      From worker 8:	      ℹ️  No usable ATC link to BG, CH, DK1, DK2, EE, ES, FI, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO1, NO2, NO3, NO4, NO5, PT, SE1, SE2, SE3, SE4 — keeping observed net imports for those borders
+      From worker 8:	📊 Creating merit-order order book for HU on 2025-10-08
+      From worker 8:	   📊 Processing zone NL...
+      From worker 8:	      ℹ️  No usable ATC link to BG, CH, DK2, EE, ES, FI, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO1, NO3, NO4, NO5, PT, RS, SE1, SE2, SE3, SE4 — keeping observed net imports for those borders
+      From worker 8:	📊 Creating merit-order order book for NL on 2025-10-08
+      From worker 8:	   📊 Processing zone NO3...
+      From worker 8:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO2, PL, PT, RO, RS, SE1, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 8:	📊 Creating merit-order order book for NO3 on 2025-10-08
+      From worker 8:	   📊 Processing zone PL...
+      From worker 8:	      ℹ️  No usable ATC link to BG, CH, DK1, DK2, EE, ES, FI, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LV, NO1, NO2, NO3, NO4, NO5, PT, RS, SE1, SE2, SE3 — keeping observed net imports for those borders
+      From worker 8:	📊 Creating merit-order order book for PL on 2025-10-08
+      From worker 8:	   📊 Processing zone RS...
+      From worker 8:	      ℹ️  No usable ATC link to AT, BE, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 8:	📊 Creating merit-order order book for RS on 2025-10-08
+      From worker 8:	   📊 Processing zone SE3...
+      From worker 8:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK2, EE, ES, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SI, SK — keeping observed net imports for those borders
+      From worker 8:	📊 Creating merit-order order book for SE3 on 2025-10-08
+      From worker 8:	   📊 Processing zone SK...
+      From worker 8:	      ℹ️  No usable ATC link to BG, CH, DK1, DK2, EE, ES, FI, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO1, NO2, NO3, NO4, NO5, PT, RS, SE1, SE2, SE3, SE4 — keeping observed net imports for those borders
+      From worker 8:	📊 Creating merit-order order book for SK on 2025-10-08
+      From worker 8:	   📊 Processing zone IT-CSOUTH...
+      From worker 8:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-Calabria, IT-NORTH, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 8:	📊 Creating merit-order order book for IT-CSOUTH on 2025-10-08
+      From worker 8:	   📊 Processing zone IT-Sicily...
+      From worker 8:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-NORTH, IT-SOUTH, IT-Sardinia, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 8:	📊 Creating merit-order order book for IT-Sicily on 2025-10-08
+      From worker 8:	   📊 Processing zone CH...
+      From worker 8:	      ℹ️  No usable ATC link to BE, BG, CZ, DK1, DK2, EE, ES, FI, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 8:	📊 Creating merit-order order book for CH on 2025-10-08
+      From worker 8:	   📊 Processing zone EE...
+      From worker 8:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, ES, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 8:	📊 Creating merit-order order book for EE on 2025-10-08
+      From worker 8:	   📊 Processing zone GR...
+      From worker 8:	      ℹ️  No usable ATC link to AT, BE, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 8:	📊 Creating merit-order order book for GR on 2025-10-08
+      From worker 8:	   📊 Processing zone NO1...
+      From worker 8:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO4, PL, PT, RO, RS, SE1, SE2, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 8:	📊 Creating merit-order order book for NO1 on 2025-10-08
+      From worker 8:	   📊 Processing zone NO5...
+      From worker 8:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO4, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 8:	📊 Creating merit-order order book for NO5 on 2025-10-08
+      From worker 8:	   📊 Processing zone SE1...
+      From worker 8:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO5, PL, PT, RO, RS, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 8:	📊 Creating merit-order order book for SE1 on 2025-10-08
+      From worker 8:	   📊 Processing zone SI...
+      From worker 8:	      ℹ️  No usable ATC link to BG, CH, DK1, DK2, EE, ES, FI, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO1, NO2, NO3, NO4, NO5, PT, RS, SE1, SE2, SE3, SE4 — keeping observed net imports for those borders
+      From worker 8:	📊 Creating merit-order order book for SI on 2025-10-08
+      From worker 8:	   📊 Processing zone IT-SOUTH...
+      From worker 8:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-NORTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 8:	📊 Creating merit-order order book for IT-SOUTH on 2025-10-08
+      From worker 8:	   📊 Processing zone BG...
+      From worker 8:	      ℹ️  No usable ATC link to AT, BE, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 8:	📊 Creating merit-order order book for BG on 2025-10-08
+      From worker 8:	   📊 Processing zone ES...
+      From worker 8:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, FI, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 8:	📊 Creating merit-order order book for ES on 2025-10-08
+      From worker 8:	   📊 Processing zone LV...
+      From worker 8:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 8:	📊 Creating merit-order order book for LV on 2025-10-08
+      From worker 8:	   📊 Processing zone PT...
+      From worker 8:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 8:	📊 Creating merit-order order book for PT on 2025-10-08
+      From worker 8:	   📊 Processing zone SE4...
+      From worker 8:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DK1, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PT, RO, RS, SE1, SE2, SI, SK — keeping observed net imports for those borders
+      From worker 8:	📊 Creating merit-order order book for SE4 on 2025-10-08
+      From worker 8:	   📊 Processing zone IT-Calabria...
+      From worker 8:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-NORTH, IT-Sardinia, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 8:	📊 Creating merit-order order book for IT-Calabria on 2025-10-08
+      From worker 8:	   📊 Processing zone DK1...
+      From worker 8:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO1, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 8:	📊 Creating merit-order order book for DK1 on 2025-10-08
+      From worker 8:	   📊 Processing zone NO2...
+      From worker 8:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DK2, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO3, NO4, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 8:	📊 Creating merit-order order book for NO2 on 2025-10-08
+      From worker 8:	   📊 Processing zone SE2...
+      From worker 8:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO5, PL, PT, RO, RS, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 8:	📊 Creating merit-order order book for SE2 on 2025-10-08
+      From worker 8:	   📊 Processing zone IT-Sardinia...
+      From worker 8:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 8:	📊 Creating merit-order order book for IT-Sardinia on 2025-10-08
+      From worker 8:	   📊 Processing zone LT...
+      From worker 8:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, NL, NO1, NO2, NO3, NO4, NO5, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 8:	📊 Creating merit-order order book for LT on 2025-10-08
+      From worker 8:	   📊 Processing zone IT-NORTH...
+      From worker 8:	      ℹ️  No usable ATC link to BE, BG, CZ, DE_LU, DK1, DK2, EE, ES, FI, GR, HU, IT-CSOUTH, IT-Calabria, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SK — keeping observed net imports for those borders
+      From worker 8:	📊 Creating merit-order order book for IT-NORTH on 2025-10-08
+      From worker 8:	   📊 Processing zone FR...
+      From worker 8:	      ℹ️  No usable ATC link to BG, DK1, DK2, EE, FI, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO1, NO2, NO3, NO4, NO5, PT, RS, SE1, SE2, SE3, SE4 — keeping observed net imports for those borders
+      From worker 8:	📊 Creating merit-order order book for FR on 2025-10-08
+      From worker 8:	   📊 Processing zone IT-CNORTH...
+      From worker 8:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-Calabria, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 8:	📊 Creating merit-order order book for IT-CNORTH on 2025-10-08
+      From worker 8:	   📊 Processing zone RO...
+      From worker 8:	      ℹ️  No usable ATC link to CH, DK1, DK2, EE, ES, FI, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO1, NO2, NO3, NO4, NO5, PT, SE1, SE2, SE3, SE4 — keeping observed net imports for those borders
+      From worker 8:	📊 Creating merit-order order book for RO on 2025-10-08
+      From worker 8:	   📊 Processing zone DE_LU...
+      From worker 8:	      ℹ️  No usable ATC link to BG, EE, ES, FI, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO1, NO3, NO4, NO5, PT, RS, SE1, SE2, SE3 — keeping observed net imports for those borders
+      From worker 8:	📊 Creating merit-order order book for DE_LU on 2025-10-08
+      From worker 8:	   📊 Processing zone NO4...
+      From worker 8:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO5, PL, PT, RO, RS, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 8:	📊 Creating merit-order order book for NO4 on 2025-10-08
+      From worker 7:	[ Info: Filtered out 10 variable renewable generators (Wind/Solar) from UC
+      From worker 7:	[ Info: Filtered out 5 variable renewable generators (Wind/Solar) from UC
+      From worker 7:	[ Info: Filtered out 3 variable renewable generators (Wind/Solar) from UC
+      From worker 9:	   🚧 transmission outages: 863 border-hours capped at the TSO's remaining NTC
+      From worker 9:	✅ Enriched transfer capacity: 3456 implicit rows, +1152 explicit-only rows, 192 aggregate endpoints remapped, -0 stale flow-based border-hours dropped, 5184 in-footprint border-hours
+      From worker 9:	✅ Created transfer capacity structure:
+      From worker 9:	   🌍 Bidding zones: 39 (AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK)
+      From worker 9:	   🕐 Time periods: 24
+      From worker 9:	   ➡️  Forward capacities: 5184 entries
+      From worker 9:	   ↔️  Bidirectional links: 5076
+      From worker 9:	   ➡️  Unidirectional links: 108
+      From worker 9:	   🚫 Shadowed aggregate codes excluded from observed imports: DE_50HzT, DE_Amprion, DE_TenneT_GER, DE_TransnetBW, DK, IT
+      From worker 9:	   📊 Processing zone AT...
+      From worker 9:	      ℹ️  No usable ATC link to BG, DK1, DK2, EE, ES, FI, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO1, NO2, NO3, NO4, NO5, PT, RS, SE1, SE2, SE3, SE4 — keeping observed net imports for those borders
+      From worker 4:	   🚧 transmission outages: 862 border-hours capped at the TSO's remaining NTC
+      From worker 4:	✅ Enriched transfer capacity: 3456 implicit rows, +1152 explicit-only rows, 192 aggregate endpoints remapped, -0 stale flow-based border-hours dropped, 5184 in-footprint border-hours
+      From worker 4:	✅ Created transfer capacity structure:
+      From worker 4:	   🌍 Bidding zones: 39 (AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK)
+      From worker 4:	   🕐 Time periods: 24
+      From worker 4:	   ➡️  Forward capacities: 5184 entries
+      From worker 4:	   ↔️  Bidirectional links: 4954
+      From worker 4:	   ➡️  Unidirectional links: 230
+      From worker 4:	   🚫 Shadowed aggregate codes excluded from observed imports: DE_50HzT, DE_Amprion, DE_TenneT_GER, DE_TransnetBW, DK, IT
+      From worker 4:	   📊 Processing zone AT...
+      From worker 4:	      ℹ️  No usable ATC link to BG, DK1, DK2, EE, ES, FI, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO1, NO2, NO3, NO4, NO5, PT, RS, SE1, SE2, SE3, SE4 — keeping observed net imports for those borders
+      From worker 5:	   🚧 transmission outages: 928 border-hours capped at the TSO's remaining NTC
+      From worker 5:	✅ Enriched transfer capacity: 3456 implicit rows, +1152 explicit-only rows, 192 aggregate endpoints remapped, -0 stale flow-based border-hours dropped, 5184 in-footprint border-hours
+      From worker 5:	✅ Created transfer capacity structure:
+      From worker 5:	   🌍 Bidding zones: 39 (AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK)
+      From worker 5:	   🕐 Time periods: 24
+      From worker 5:	   ➡️  Forward capacities: 5184 entries
+      From worker 5:	   ↔️  Bidirectional links: 5034
+      From worker 5:	   ➡️  Unidirectional links: 150
+      From worker 5:	   🚫 Shadowed aggregate codes excluded from observed imports: DE_50HzT, DE_Amprion, DE_TenneT_GER, DE_TransnetBW, DK, IT
+      From worker 5:	   📊 Processing zone AT...
+      From worker 5:	      ℹ️  No usable ATC link to BG, DK1, DK2, EE, ES, FI, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO1, NO2, NO3, NO4, NO5, PT, RS, SE1, SE2, SE3, SE4 — keeping observed net imports for those borders
+      From worker 9:	📊 Creating merit-order order book for AT on 2025-09-03
+      From worker 4:	📊 Creating merit-order order book for AT on 2025-09-17
+      From worker 9:	   📊 Processing zone BE...
+      From worker 9:	      ℹ️  No usable ATC link to BG, CH, DK1, DK2, EE, ES, FI, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO1, NO2, NO3, NO4, NO5, PT, RS, SE1, SE2, SE3, SE4 — keeping observed net imports for those borders
+      From worker 9:	📊 Creating merit-order order book for BE on 2025-09-03
+      From worker 9:	   📊 Processing zone CZ...
+      From worker 9:	      ℹ️  No usable ATC link to BG, CH, DK1, DK2, EE, ES, FI, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO1, NO2, NO3, NO4, NO5, PT, RS, SE1, SE2, SE3, SE4 — keeping observed net imports for those borders
+      From worker 9:	📊 Creating merit-order order book for CZ on 2025-09-03
+      From worker 9:	   📊 Processing zone DK2...
+      From worker 9:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SI, SK — keeping observed net imports for those borders
+      From worker 9:	📊 Creating merit-order order book for DK2 on 2025-09-03
+      From worker 9:	   📊 Processing zone FI...
+      From worker 9:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, ES, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO5, PL, PT, RO, RS, SE2, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 9:	📊 Creating merit-order order book for FI on 2025-09-03
+      From worker 9:	   📊 Processing zone HU...
+      From worker 9:	      ℹ️  No usable ATC link to BG, CH, DK1, DK2, EE, ES, FI, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO1, NO2, NO3, NO4, NO5, PT, SE1, SE2, SE3, SE4 — keeping observed net imports for those borders
+      From worker 9:	📊 Creating merit-order order book for HU on 2025-09-03
+      From worker 9:	   📊 Processing zone NL...
+      From worker 9:	      ℹ️  No usable ATC link to BG, CH, DK2, EE, ES, FI, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO1, NO3, NO4, NO5, PT, RS, SE1, SE2, SE3, SE4 — keeping observed net imports for those borders
+      From worker 9:	📊 Creating merit-order order book for NL on 2025-09-03
+      From worker 9:	   📊 Processing zone NO3...
+      From worker 9:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO2, PL, PT, RO, RS, SE1, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 9:	📊 Creating merit-order order book for NO3 on 2025-09-03
+      From worker 9:	   📊 Processing zone PL...
+      From worker 9:	      ℹ️  No usable ATC link to BG, CH, DK1, DK2, EE, ES, FI, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LV, NO1, NO2, NO3, NO4, NO5, PT, RS, SE1, SE2, SE3 — keeping observed net imports for those borders
+      From worker 9:	📊 Creating merit-order order book for PL on 2025-09-03
+      From worker 9:	   📊 Processing zone RS...
+      From worker 9:	      ℹ️  No usable ATC link to AT, BE, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 9:	📊 Creating merit-order order book for RS on 2025-09-03
+      From worker 9:	   📊 Processing zone SE3...
+      From worker 9:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK2, EE, ES, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SI, SK — keeping observed net imports for those borders
+      From worker 9:	📊 Creating merit-order order book for SE3 on 2025-09-03
+      From worker 9:	   📊 Processing zone SK...
+      From worker 9:	      ℹ️  No usable ATC link to BG, CH, DK1, DK2, EE, ES, FI, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO1, NO2, NO3, NO4, NO5, PT, RS, SE1, SE2, SE3, SE4 — keeping observed net imports for those borders
+      From worker 9:	📊 Creating merit-order order book for SK on 2025-09-03
+      From worker 9:	   📊 Processing zone IT-CSOUTH...
+      From worker 9:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-Calabria, IT-NORTH, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 9:	📊 Creating merit-order order book for IT-CSOUTH on 2025-09-03
+      From worker 9:	   📊 Processing zone IT-Sicily...
+      From worker 9:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-NORTH, IT-SOUTH, IT-Sardinia, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 9:	📊 Creating merit-order order book for IT-Sicily on 2025-09-03
+      From worker 9:	   📊 Processing zone CH...
+      From worker 9:	      ℹ️  No usable ATC link to BE, BG, CZ, DK1, DK2, EE, ES, FI, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 9:	📊 Creating merit-order order book for CH on 2025-09-03
+      From worker 9:	   📊 Processing zone EE...
+      From worker 9:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, ES, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 9:	📊 Creating merit-order order book for EE on 2025-09-03
+      From worker 9:	   📊 Processing zone GR...
+      From worker 9:	      ℹ️  No usable ATC link to AT, BE, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 9:	📊 Creating merit-order order book for GR on 2025-09-03
+      From worker 9:	   📊 Processing zone NO1...
+      From worker 9:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO4, PL, PT, RO, RS, SE1, SE2, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 9:	📊 Creating merit-order order book for NO1 on 2025-09-03
+      From worker 9:	   📊 Processing zone NO5...
+      From worker 9:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO4, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 9:	📊 Creating merit-order order book for NO5 on 2025-09-03
+      From worker 9:	   📊 Processing zone SE1...
+      From worker 9:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO5, PL, PT, RO, RS, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 9:	📊 Creating merit-order order book for SE1 on 2025-09-03
+      From worker 9:	   📊 Processing zone SI...
+      From worker 9:	      ℹ️  No usable ATC link to BG, CH, DK1, DK2, EE, ES, FI, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO1, NO2, NO3, NO4, NO5, PT, RS, SE1, SE2, SE3, SE4 — keeping observed net imports for those borders
+      From worker 9:	📊 Creating merit-order order book for SI on 2025-09-03
+      From worker 9:	   📊 Processing zone IT-SOUTH...
+      From worker 9:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-NORTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 9:	📊 Creating merit-order order book for IT-SOUTH on 2025-09-03
+      From worker 9:	   📊 Processing zone BG...
+      From worker 9:	      ℹ️  No usable ATC link to AT, BE, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 9:	📊 Creating merit-order order book for BG on 2025-09-03
+      From worker 9:	   📊 Processing zone ES...
+      From worker 9:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, FI, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 9:	📊 Creating merit-order order book for ES on 2025-09-03
+      From worker 9:	   📊 Processing zone LV...
+      From worker 9:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 9:	📊 Creating merit-order order book for LV on 2025-09-03
+      From worker 9:	   📊 Processing zone PT...
+      From worker 9:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 9:	📊 Creating merit-order order book for PT on 2025-09-03
+      From worker 9:	   📊 Processing zone SE4...
+      From worker 9:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DK1, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LV, NL, NO1, NO2, NO3, NO4, NO5, PT, RO, RS, SE1, SE2, SI, SK — keeping observed net imports for those borders
+      From worker 9:	📊 Creating merit-order order book for SE4 on 2025-09-03
+      From worker 9:	   📊 Processing zone IT-Calabria...
+      From worker 9:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-NORTH, IT-Sardinia, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 9:	📊 Creating merit-order order book for IT-Calabria on 2025-09-03
+      From worker 9:	   📊 Processing zone DK1...
+      From worker 9:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO1, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 9:	📊 Creating merit-order order book for DK1 on 2025-09-03
+      From worker 9:	   📊 Processing zone NO2...
+      From worker 9:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DK2, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO3, NO4, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 9:	📊 Creating merit-order order book for NO2 on 2025-09-03
+      From worker 9:	   📊 Processing zone SE2...
+      From worker 9:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO5, PL, PT, RO, RS, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 9:	📊 Creating merit-order order book for SE2 on 2025-09-03
+      From worker 9:	   📊 Processing zone IT-Sardinia...
+      From worker 9:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 9:	📊 Creating merit-order order book for IT-Sardinia on 2025-09-03
+      From worker 9:	   📊 Processing zone LT...
+      From worker 9:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, NL, NO1, NO2, NO3, NO4, NO5, PT, RO, RS, SE1, SE2, SE3, SI, SK — keeping observed net imports for those borders
+      From worker 9:	📊 Creating merit-order order book for LT on 2025-09-03
+      From worker 9:	   📊 Processing zone IT-NORTH...
+      From worker 9:	      ℹ️  No usable ATC link to BE, BG, CZ, DE_LU, DK1, DK2, EE, ES, FI, GR, HU, IT-CSOUTH, IT-Calabria, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SK — keeping observed net imports for those borders
+      From worker 9:	📊 Creating merit-order order book for IT-NORTH on 2025-09-03
+      From worker 9:	   📊 Processing zone FR...
+      From worker 9:	      ℹ️  No usable ATC link to BG, DK1, DK2, EE, FI, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO1, NO2, NO3, NO4, NO5, PT, RS, SE1, SE2, SE3, SE4 — keeping observed net imports for those borders
+      From worker 9:	📊 Creating merit-order order book for FR on 2025-09-03
+      From worker 9:	   📊 Processing zone IT-CNORTH...
+      From worker 9:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-Calabria, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 9:	📊 Creating merit-order order book for IT-CNORTH on 2025-09-03
+      From worker 9:	   📊 Processing zone RO...
+      From worker 9:	      ℹ️  No usable ATC link to CH, DK1, DK2, EE, ES, FI, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO1, NO2, NO3, NO4, NO5, PT, SE1, SE2, SE3, SE4 — keeping observed net imports for those borders
+      From worker 9:	📊 Creating merit-order order book for RO on 2025-09-03
+      From worker 9:	   📊 Processing zone DE_LU...
+      From worker 9:	      ℹ️  No usable ATC link to BG, EE, ES, FI, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO1, NO3, NO4, NO5, PT, RS, SE1, SE2, SE3 — keeping observed net imports for those borders
+      From worker 9:	📊 Creating merit-order order book for DE_LU on 2025-09-03
+      From worker 9:	   📊 Processing zone NO4...
+      From worker 9:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO5, PL, PT, RO, RS, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 9:	📊 Creating merit-order order book for NO4 on 2025-09-03
+      From worker 4:	   📊 Processing zone LT...
+      From worker 4:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, NL, NO1, NO2, NO3, NO4, NO5, PT, RO, RS, SE1, SE2, SE3, SI, SK — keeping observed net imports for those borders
+      From worker 4:	📊 Creating merit-order order book for LT on 2025-09-17
+      From worker 4:	   📊 Processing zone CH...
+      From worker 4:	      ℹ️  No usable ATC link to BE, BG, CZ, DK1, DK2, EE, ES, FI, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 4:	📊 Creating merit-order order book for CH on 2025-09-17
+      From worker 4:	   📊 Processing zone DK1...
+      From worker 4:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO1, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 4:	📊 Creating merit-order order book for DK1 on 2025-09-17
+      From worker 4:	   📊 Processing zone ES...
+      From worker 4:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, FI, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 4:	📊 Creating merit-order order book for ES on 2025-09-17
+      From worker 4:	   📊 Processing zone GR...
+      From worker 4:	      ℹ️  No usable ATC link to AT, BE, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 4:	📊 Creating merit-order order book for GR on 2025-09-17
+      From worker 4:	   📊 Processing zone NL...
+      From worker 4:	      ℹ️  No usable ATC link to BG, CH, DK2, EE, ES, FI, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO1, NO3, NO4, NO5, PT, RS, SE1, SE2, SE3, SE4 — keeping observed net imports for those borders
+      From worker 4:	📊 Creating merit-order order book for NL on 2025-09-17
+      From worker 4:	   📊 Processing zone NO3...
+      From worker 4:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO2, PL, PT, RO, RS, SE1, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 4:	📊 Creating merit-order order book for NO3 on 2025-09-17
+      From worker 4:	   📊 Processing zone PL...
+      From worker 4:	      ℹ️  No usable ATC link to BG, CH, DK1, DK2, EE, ES, FI, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LV, NO1, NO2, NO3, NO4, NO5, PT, RS, SE1, SE2, SE3 — keeping observed net imports for those borders
+      From worker 4:	📊 Creating merit-order order book for PL on 2025-09-17
+      From worker 4:	   📊 Processing zone RS...
+      From worker 4:	      ℹ️  No usable ATC link to AT, BE, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 4:	📊 Creating merit-order order book for RS on 2025-09-17
+      From worker 4:	   📊 Processing zone SE3...
+      From worker 4:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK2, EE, ES, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SI, SK — keeping observed net imports for those borders
+      From worker 4:	📊 Creating merit-order order book for SE3 on 2025-09-17
+      From worker 4:	   📊 Processing zone SK...
+      From worker 4:	      ℹ️  No usable ATC link to BG, CH, DK1, DK2, EE, ES, FI, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO1, NO2, NO3, NO4, NO5, PT, RS, SE1, SE2, SE3, SE4 — keeping observed net imports for those borders
+      From worker 4:	📊 Creating merit-order order book for SK on 2025-09-17
+      From worker 4:	   📊 Processing zone IT-CSOUTH...
+      From worker 4:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-Calabria, IT-NORTH, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 4:	📊 Creating merit-order order book for IT-CSOUTH on 2025-09-17
+      From worker 4:	   📊 Processing zone IT-Sicily...
+      From worker 4:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-NORTH, IT-SOUTH, IT-Sardinia, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 4:	📊 Creating merit-order order book for IT-Sicily on 2025-09-17
+      From worker 4:	   📊 Processing zone BG...
+      From worker 4:	      ℹ️  No usable ATC link to AT, BE, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 4:	📊 Creating merit-order order book for BG on 2025-09-17
+      From worker 4:	   📊 Processing zone DK2...
+      From worker 4:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SI, SK — keeping observed net imports for those borders
+      From worker 4:	📊 Creating merit-order order book for DK2 on 2025-09-17
+      From worker 4:	   📊 Processing zone FR...
+      From worker 4:	      ℹ️  No usable ATC link to BG, DK1, DK2, EE, FI, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO1, NO2, NO3, NO4, NO5, PT, RS, SE1, SE2, SE3, SE4 — keeping observed net imports for those borders
+      From worker 4:	📊 Creating merit-order order book for FR on 2025-09-17
+      From worker 4:	   📊 Processing zone NO1...
+      From worker 4:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO4, PL, PT, RO, RS, SE1, SE2, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 4:	📊 Creating merit-order order book for NO1 on 2025-09-17
+      From worker 4:	   📊 Processing zone NO5...
+      From worker 4:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO4, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 4:	📊 Creating merit-order order book for NO5 on 2025-09-17
+      From worker 4:	   📊 Processing zone SE1...
+      From worker 4:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO5, PL, PT, RO, RS, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 4:	📊 Creating merit-order order book for SE1 on 2025-09-17
+      From worker 4:	   📊 Processing zone SI...
+      From worker 4:	      ℹ️  No usable ATC link to BG, CH, DK1, DK2, EE, ES, FI, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO1, NO2, NO3, NO4, NO5, PT, RS, SE1, SE2, SE3, SE4 — keeping observed net imports for those borders
+      From worker 4:	📊 Creating merit-order order book for SI on 2025-09-17
+      From worker 4:	   📊 Processing zone IT-SOUTH...
+      From worker 4:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-NORTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 4:	📊 Creating merit-order order book for IT-SOUTH on 2025-09-17
+      From worker 4:	   📊 Processing zone BE...
+      From worker 4:	      ℹ️  No usable ATC link to BG, CH, DK1, DK2, EE, ES, FI, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO1, NO2, NO3, NO4, NO5, PT, RS, SE1, SE2, SE3, SE4 — keeping observed net imports for those borders
+      From worker 4:	📊 Creating merit-order order book for BE on 2025-09-17
+      From worker 4:	   📊 Processing zone EE...
+      From worker 4:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, ES, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 4:	📊 Creating merit-order order book for EE on 2025-09-17
+      From worker 4:	   📊 Processing zone LV...
+      From worker 4:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 4:	📊 Creating merit-order order book for LV on 2025-09-17
+      From worker 4:	   📊 Processing zone PT...
+      From worker 4:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 4:	📊 Creating merit-order order book for PT on 2025-09-17
+      From worker 4:	   📊 Processing zone SE4...
+      From worker 4:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DK1, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LV, NL, NO1, NO2, NO3, NO4, NO5, PT, RO, RS, SE1, SE2, SI, SK — keeping observed net imports for those borders
+      From worker 4:	📊 Creating merit-order order book for SE4 on 2025-09-17
+      From worker 4:	   📊 Processing zone IT-Calabria...
+      From worker 4:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-NORTH, IT-Sardinia, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 4:	📊 Creating merit-order order book for IT-Calabria on 2025-09-17
+      From worker 4:	   📊 Processing zone DE_LU...
+      From worker 4:	      ℹ️  No usable ATC link to BG, EE, ES, FI, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO1, NO3, NO4, NO5, PT, RS, SE1, SE2, SE3 — keeping observed net imports for those borders
+      From worker 4:	📊 Creating merit-order order book for DE_LU on 2025-09-17
+      From worker 4:	   📊 Processing zone NO2...
+      From worker 4:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DK2, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO3, NO4, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 4:	📊 Creating merit-order order book for NO2 on 2025-09-17
+      From worker 4:	   📊 Processing zone SE2...
+      From worker 4:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO5, PL, PT, RO, RS, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 4:	📊 Creating merit-order order book for SE2 on 2025-09-17
+      From worker 4:	   📊 Processing zone IT-Sardinia...
+      From worker 4:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 4:	📊 Creating merit-order order book for IT-Sardinia on 2025-09-17
+      From worker 4:	   📊 Processing zone HU...
+      From worker 4:	      ℹ️  No usable ATC link to BG, CH, DK1, DK2, EE, ES, FI, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO1, NO2, NO3, NO4, NO5, PT, SE1, SE2, SE3, SE4 — keeping observed net imports for those borders
+      From worker 4:	📊 Creating merit-order order book for HU on 2025-09-17
+      From worker 4:	   📊 Processing zone IT-NORTH...
+      From worker 4:	      ℹ️  No usable ATC link to BE, BG, CZ, DE_LU, DK1, DK2, EE, ES, FI, GR, HU, IT-CSOUTH, IT-Calabria, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SK — keeping observed net imports for those borders
+      From worker 4:	📊 Creating merit-order order book for IT-NORTH on 2025-09-17
+      From worker 4:	   📊 Processing zone FI...
+      From worker 4:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, ES, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO5, PL, PT, RO, RS, SE2, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 4:	📊 Creating merit-order order book for FI on 2025-09-17
+      From worker 4:	   📊 Processing zone IT-CNORTH...
+      From worker 4:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-Calabria, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 4:	📊 Creating merit-order order book for IT-CNORTH on 2025-09-17
+      From worker 4:	   📊 Processing zone RO...
+      From worker 4:	      ℹ️  No usable ATC link to CH, DK1, DK2, EE, ES, FI, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO1, NO2, NO3, NO4, NO5, PT, SE1, SE2, SE3, SE4 — keeping observed net imports for those borders
+      From worker 4:	📊 Creating merit-order order book for RO on 2025-09-17
+      From worker 4:	   📊 Processing zone CZ...
+      From worker 4:	      ℹ️  No usable ATC link to BG, CH, DK1, DK2, EE, ES, FI, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO1, NO2, NO3, NO4, NO5, PT, RS, SE1, SE2, SE3, SE4 — keeping observed net imports for those borders
+      From worker 4:	📊 Creating merit-order order book for CZ on 2025-09-17
+      From worker 4:	   📊 Processing zone NO4...
+      From worker 4:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO5, PL, PT, RO, RS, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 4:	📊 Creating merit-order order book for NO4 on 2025-09-17
+      From worker 8:	[ Info: Filtered out 5 variable renewable generators (Wind/Solar) from UC
+      From worker 6:	   🚧 transmission outages: 862 border-hours capped at the TSO's remaining NTC
+      From worker 6:	✅ Enriched transfer capacity: 3456 implicit rows, +1152 explicit-only rows, 192 aggregate endpoints remapped, -0 stale flow-based border-hours dropped, 5184 in-footprint border-hours
+      From worker 6:	✅ Created transfer capacity structure:
+      From worker 6:	   🌍 Bidding zones: 39 (AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK)
+      From worker 6:	   🕐 Time periods: 24
+      From worker 6:	   ➡️  Forward capacities: 5184 entries
+      From worker 6:	   ↔️  Bidirectional links: 4967
+      From worker 6:	   ➡️  Unidirectional links: 217
+      From worker 6:	   🚫 Shadowed aggregate codes excluded from observed imports: DE_50HzT, DE_Amprion, DE_TenneT_GER, DE_TransnetBW, DK, IT
+      From worker 8:	[ Info: Filtered out 10 variable renewable generators (Wind/Solar) from UC
+      From worker 6:	   📊 Processing zone AT...
+      From worker 6:	      ℹ️  No usable ATC link to BG, DK1, DK2, EE, ES, FI, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO1, NO2, NO3, NO4, NO5, PT, RS, SE1, SE2, SE3, SE4 — keeping observed net imports for those borders
+      From worker 5:	📊 Creating merit-order order book for AT on 2025-09-10
+      From worker 5:	   📊 Processing zone BE...
+      From worker 5:	      ℹ️  No usable ATC link to BG, CH, DK1, DK2, EE, ES, FI, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO1, NO2, NO3, NO4, NO5, PT, RS, SE1, SE2, SE3, SE4 — keeping observed net imports for those borders
+      From worker 5:	📊 Creating merit-order order book for BE on 2025-09-10
+      From worker 5:	   📊 Processing zone CZ...
+      From worker 5:	      ℹ️  No usable ATC link to BG, CH, DK1, DK2, EE, ES, FI, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO1, NO2, NO3, NO4, NO5, PT, RS, SE1, SE2, SE3, SE4 — keeping observed net imports for those borders
+      From worker 5:	📊 Creating merit-order order book for CZ on 2025-09-10
+      From worker 5:	   📊 Processing zone DK2...
+      From worker 5:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SI, SK — keeping observed net imports for those borders
+      From worker 5:	📊 Creating merit-order order book for DK2 on 2025-09-10
+      From worker 5:	   📊 Processing zone FI...
+      From worker 5:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, ES, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO5, PL, PT, RO, RS, SE2, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 5:	📊 Creating merit-order order book for FI on 2025-09-10
+      From worker 5:	   📊 Processing zone HU...
+      From worker 5:	      ℹ️  No usable ATC link to BG, CH, DK1, DK2, EE, ES, FI, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO1, NO2, NO3, NO4, NO5, PT, SE1, SE2, SE3, SE4 — keeping observed net imports for those borders
+      From worker 5:	📊 Creating merit-order order book for HU on 2025-09-10
+      From worker 5:	   📊 Processing zone NL...
+      From worker 5:	      ℹ️  No usable ATC link to BG, CH, DK2, EE, ES, FI, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO1, NO3, NO4, NO5, PT, RS, SE1, SE2, SE3, SE4 — keeping observed net imports for those borders
+      From worker 5:	📊 Creating merit-order order book for NL on 2025-09-10
+      From worker 5:	   📊 Processing zone NO3...
+      From worker 5:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO2, PL, PT, RO, RS, SE1, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 5:	📊 Creating merit-order order book for NO3 on 2025-09-10
+      From worker 5:	   📊 Processing zone PL...
+      From worker 5:	      ℹ️  No usable ATC link to BG, CH, DK1, DK2, EE, ES, FI, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LV, NO1, NO2, NO3, NO4, NO5, PT, RS, SE1, SE2, SE3 — keeping observed net imports for those borders
+      From worker 5:	📊 Creating merit-order order book for PL on 2025-09-10
+      From worker 5:	   📊 Processing zone RS...
+      From worker 5:	      ℹ️  No usable ATC link to AT, BE, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 5:	📊 Creating merit-order order book for RS on 2025-09-10
+      From worker 5:	   📊 Processing zone SE3...
+      From worker 5:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK2, EE, ES, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SI, SK — keeping observed net imports for those borders
+      From worker 5:	📊 Creating merit-order order book for SE3 on 2025-09-10
+      From worker 5:	   📊 Processing zone SK...
+      From worker 5:	      ℹ️  No usable ATC link to BG, CH, DK1, DK2, EE, ES, FI, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO1, NO2, NO3, NO4, NO5, PT, RS, SE1, SE2, SE3, SE4 — keeping observed net imports for those borders
+      From worker 5:	📊 Creating merit-order order book for SK on 2025-09-10
+      From worker 5:	   📊 Processing zone IT-CSOUTH...
+      From worker 5:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-Calabria, IT-NORTH, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 5:	📊 Creating merit-order order book for IT-CSOUTH on 2025-09-10
+      From worker 5:	   📊 Processing zone IT-Sicily...
+      From worker 5:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-NORTH, IT-SOUTH, IT-Sardinia, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 5:	📊 Creating merit-order order book for IT-Sicily on 2025-09-10
+      From worker 5:	   📊 Processing zone CH...
+      From worker 5:	      ℹ️  No usable ATC link to BE, BG, CZ, DK1, DK2, EE, ES, FI, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 5:	📊 Creating merit-order order book for CH on 2025-09-10
+      From worker 5:	   📊 Processing zone EE...
+      From worker 5:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, ES, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 5:	📊 Creating merit-order order book for EE on 2025-09-10
+      From worker 5:	   📊 Processing zone GR...
+      From worker 5:	      ℹ️  No usable ATC link to AT, BE, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 5:	📊 Creating merit-order order book for GR on 2025-09-10
+      From worker 5:	   📊 Processing zone NO1...
+      From worker 5:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO4, PL, PT, RO, RS, SE1, SE2, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 5:	📊 Creating merit-order order book for NO1 on 2025-09-10
+      From worker 5:	   📊 Processing zone NO5...
+      From worker 5:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO4, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 5:	📊 Creating merit-order order book for NO5 on 2025-09-10
+      From worker 5:	   📊 Processing zone SE1...
+      From worker 5:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO5, PL, PT, RO, RS, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 5:	📊 Creating merit-order order book for SE1 on 2025-09-10
+      From worker 5:	   📊 Processing zone SI...
+      From worker 5:	      ℹ️  No usable ATC link to BG, CH, DK1, DK2, EE, ES, FI, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO1, NO2, NO3, NO4, NO5, PT, RS, SE1, SE2, SE3, SE4 — keeping observed net imports for those borders
+      From worker 5:	📊 Creating merit-order order book for SI on 2025-09-10
+      From worker 5:	   📊 Processing zone IT-SOUTH...
+      From worker 5:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-NORTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 5:	📊 Creating merit-order order book for IT-SOUTH on 2025-09-10
+      From worker 5:	   📊 Processing zone BG...
+      From worker 5:	      ℹ️  No usable ATC link to AT, BE, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 5:	📊 Creating merit-order order book for BG on 2025-09-10
+      From worker 5:	   📊 Processing zone ES...
+      From worker 5:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, FI, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 5:	📊 Creating merit-order order book for ES on 2025-09-10
+      From worker 5:	   📊 Processing zone LV...
+      From worker 5:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 5:	📊 Creating merit-order order book for LV on 2025-09-10
+      From worker 5:	   📊 Processing zone PT...
+      From worker 5:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 5:	📊 Creating merit-order order book for PT on 2025-09-10
+      From worker 5:	   📊 Processing zone SE4...
+      From worker 5:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DK1, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PT, RO, RS, SE1, SE2, SI, SK — keeping observed net imports for those borders
+      From worker 5:	📊 Creating merit-order order book for SE4 on 2025-09-10
+      From worker 5:	   📊 Processing zone IT-Calabria...
+      From worker 5:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-NORTH, IT-Sardinia, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 5:	📊 Creating merit-order order book for IT-Calabria on 2025-09-10
+      From worker 5:	   📊 Processing zone DK1...
+      From worker 5:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO1, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 5:	📊 Creating merit-order order book for DK1 on 2025-09-10
+      From worker 5:	   📊 Processing zone NO2...
+      From worker 5:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DK2, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO3, NO4, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 5:	📊 Creating merit-order order book for NO2 on 2025-09-10
+      From worker 5:	   📊 Processing zone SE2...
+      From worker 5:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO5, PL, PT, RO, RS, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 5:	📊 Creating merit-order order book for SE2 on 2025-09-10
+      From worker 5:	   📊 Processing zone IT-Sardinia...
+      From worker 5:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 5:	📊 Creating merit-order order book for IT-Sardinia on 2025-09-10
+      From worker 5:	   📊 Processing zone LT...
+      From worker 5:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, NL, NO1, NO2, NO3, NO4, NO5, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 5:	📊 Creating merit-order order book for LT on 2025-09-10
+      From worker 5:	   📊 Processing zone IT-NORTH...
+      From worker 5:	      ℹ️  No usable ATC link to BE, BG, CZ, DE_LU, DK1, DK2, EE, ES, FI, GR, HU, IT-CSOUTH, IT-Calabria, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SK — keeping observed net imports for those borders
+      From worker 5:	📊 Creating merit-order order book for IT-NORTH on 2025-09-10
+      From worker 5:	   📊 Processing zone FR...
+      From worker 5:	      ℹ️  No usable ATC link to BG, DK1, DK2, EE, FI, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO1, NO2, NO3, NO4, NO5, PT, RS, SE1, SE2, SE3, SE4 — keeping observed net imports for those borders
+      From worker 5:	📊 Creating merit-order order book for FR on 2025-09-10
+      From worker 5:	   📊 Processing zone IT-CNORTH...
+      From worker 5:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-Calabria, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 5:	📊 Creating merit-order order book for IT-CNORTH on 2025-09-10
+      From worker 5:	   📊 Processing zone RO...
+      From worker 5:	      ℹ️  No usable ATC link to CH, DK1, DK2, EE, ES, FI, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO1, NO2, NO3, NO4, NO5, PT, SE1, SE2, SE3, SE4 — keeping observed net imports for those borders
+      From worker 5:	📊 Creating merit-order order book for RO on 2025-09-10
+      From worker 5:	   📊 Processing zone DE_LU...
+      From worker 5:	      ℹ️  No usable ATC link to BG, EE, ES, FI, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO1, NO3, NO4, NO5, PT, RS, SE1, SE2, SE3 — keeping observed net imports for those borders
+      From worker 5:	📊 Creating merit-order order book for DE_LU on 2025-09-10
+      From worker 5:	   📊 Processing zone NO4...
+      From worker 5:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO5, PL, PT, RO, RS, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 5:	📊 Creating merit-order order book for NO4 on 2025-09-10
+      From worker 8:	[ Info: Filtered out 3 variable renewable generators (Wind/Solar) from UC
+      From worker 6:	📊 Creating merit-order order book for AT on 2025-09-24
+      From worker 6:	   📊 Processing zone RO...
+      From worker 6:	      ℹ️  No usable ATC link to CH, DK1, DK2, EE, ES, FI, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO1, NO2, NO3, NO4, NO5, PT, SE1, SE2, SE3, SE4 — keeping observed net imports for those borders
+      From worker 6:	📊 Creating merit-order order book for RO on 2025-09-24
+      From worker 6:	   📊 Processing zone SK...
+      From worker 6:	      ℹ️  No usable ATC link to BG, CH, DK1, DK2, EE, ES, FI, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO1, NO2, NO3, NO4, NO5, PT, RS, SE1, SE2, SE3, SE4 — keeping observed net imports for those borders
+      From worker 6:	📊 Creating merit-order order book for SK on 2025-09-24
+      From worker 6:	   📊 Processing zone CH...
+      From worker 6:	      ℹ️  No usable ATC link to BE, BG, CZ, DK1, DK2, EE, ES, FI, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 6:	📊 Creating merit-order order book for CH on 2025-09-24
+      From worker 6:	   📊 Processing zone DK1...
+      From worker 6:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO1, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 6:	📊 Creating merit-order order book for DK1 on 2025-09-24
+      From worker 6:	   📊 Processing zone ES...
+      From worker 6:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, FI, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 6:	📊 Creating merit-order order book for ES on 2025-09-24
+      From worker 6:	   📊 Processing zone GR...
+      From worker 6:	      ℹ️  No usable ATC link to AT, BE, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 6:	📊 Creating merit-order order book for GR on 2025-09-24
+      From worker 6:	   📊 Processing zone LV...
+      From worker 6:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 6:	📊 Creating merit-order order book for LV on 2025-09-24
+      From worker 6:	   📊 Processing zone NO2...
+      From worker 6:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DK2, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO3, NO4, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 6:	📊 Creating merit-order order book for NO2 on 2025-09-24
+      From worker 6:	   📊 Processing zone NO5...
+      From worker 6:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO4, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 6:	📊 Creating merit-order order book for NO5 on 2025-09-24
+      From worker 6:	   📊 Processing zone RS...
+      From worker 6:	      ℹ️  No usable ATC link to AT, BE, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 6:	📊 Creating merit-order order book for RS on 2025-09-24
+      From worker 6:	   📊 Processing zone SE3...
+      From worker 6:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK2, EE, ES, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SI, SK — keeping observed net imports for those borders
+      From worker 6:	📊 Creating merit-order order book for SE3 on 2025-09-24
+      From worker 6:	   📊 Processing zone IT-NORTH...
+      From worker 6:	      ℹ️  No usable ATC link to BE, BG, CZ, DE_LU, DK1, DK2, EE, ES, FI, GR, HU, IT-CSOUTH, IT-Calabria, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SK — keeping observed net imports for those borders
+      From worker 6:	📊 Creating merit-order order book for IT-NORTH on 2025-09-24
+      From worker 6:	   📊 Processing zone IT-SOUTH...
+      From worker 6:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-NORTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 6:	📊 Creating merit-order order book for IT-SOUTH on 2025-09-24
+      From worker 6:	   📊 Processing zone IT-Sardinia...
+      From worker 6:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 6:	📊 Creating merit-order order book for IT-Sardinia on 2025-09-24
+      From worker 6:	   📊 Processing zone CZ...
+      From worker 6:	      ℹ️  No usable ATC link to BG, CH, DK1, DK2, EE, ES, FI, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO1, NO2, NO3, NO4, NO5, PT, RS, SE1, SE2, SE3, SE4 — keeping observed net imports for those borders
+      From worker 6:	📊 Creating merit-order order book for CZ on 2025-09-24
+      From worker 6:	   📊 Processing zone EE...
+      From worker 6:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, ES, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 6:	📊 Creating merit-order order book for EE on 2025-09-24
+      From worker 6:	   📊 Processing zone HU...
+      From worker 6:	      ℹ️  No usable ATC link to BG, CH, DK1, DK2, EE, ES, FI, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO1, NO2, NO3, NO4, NO5, PT, SE1, SE2, SE3, SE4 — keeping observed net imports for those borders
+      From worker 6:	📊 Creating merit-order order book for HU on 2025-09-24
+      From worker 6:	   📊 Processing zone NO1...
+      From worker 6:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO4, PL, PT, RO, RS, SE1, SE2, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 6:	📊 Creating merit-order order book for NO1 on 2025-09-24
+      From worker 6:	   📊 Processing zone PL...
+      From worker 6:	      ℹ️  No usable ATC link to BG, CH, DK1, DK2, EE, ES, FI, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LV, NO1, NO2, NO3, NO4, NO5, PT, RS, SE1, SE2, SE3, SE4 — keeping observed net imports for those borders
+      From worker 6:	📊 Creating merit-order order book for PL on 2025-09-24
+      From worker 6:	   📊 Processing zone SE2...
+      From worker 6:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO5, PL, PT, RO, RS, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 6:	📊 Creating merit-order order book for SE2 on 2025-09-24
+      From worker 6:	   📊 Processing zone IT-CNORTH...
+      From worker 6:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-Calabria, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 6:	📊 Creating merit-order order book for IT-CNORTH on 2025-09-24
+      From worker 6:	   📊 Processing zone IT-Sicily...
+      From worker 6:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-NORTH, IT-SOUTH, IT-Sardinia, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 6:	📊 Creating merit-order order book for IT-Sicily on 2025-09-24
+      From worker 6:	   📊 Processing zone DE_LU...
+      From worker 6:	      ℹ️  No usable ATC link to BG, EE, ES, FI, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO1, NO3, NO4, NO5, PT, RS, SE1, SE2, SE3 — keeping observed net imports for those borders
+      From worker 6:	📊 Creating merit-order order book for DE_LU on 2025-09-24
+      From worker 6:	   📊 Processing zone FR...
+      From worker 6:	      ℹ️  No usable ATC link to BG, DK1, DK2, EE, FI, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO1, NO2, NO3, NO4, NO5, PT, RS, SE1, SE2, SE3, SE4 — keeping observed net imports for those borders
+      From worker 6:	📊 Creating merit-order order book for FR on 2025-09-24
+      From worker 6:	   📊 Processing zone NO3...
+      From worker 6:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO2, PL, PT, RO, RS, SE1, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 6:	📊 Creating merit-order order book for NO3 on 2025-09-24
+      From worker 6:	   📊 Processing zone SE1...
+      From worker 6:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO5, PL, PT, RO, RS, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 6:	📊 Creating merit-order order book for SE1 on 2025-09-24
+      From worker 6:	   📊 Processing zone IT-CSOUTH...
+      From worker 6:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-Calabria, IT-NORTH, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 6:	📊 Creating merit-order order book for IT-CSOUTH on 2025-09-24
+      From worker 6:	   📊 Processing zone BG...
+      From worker 6:	      ℹ️  No usable ATC link to AT, BE, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 6:	📊 Creating merit-order order book for BG on 2025-09-24
+      From worker 6:	   📊 Processing zone LT...
+      From worker 6:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, NL, NO1, NO2, NO3, NO4, NO5, PT, RO, RS, SE1, SE2, SE3, SI, SK — keeping observed net imports for those borders
+      From worker 6:	📊 Creating merit-order order book for LT on 2025-09-24
+      From worker 6:	   📊 Processing zone PT...
+      From worker 6:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 6:	📊 Creating merit-order order book for PT on 2025-09-24
+      From worker 6:	   📊 Processing zone IT-Calabria...
+      From worker 6:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-NORTH, IT-Sardinia, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 6:	📊 Creating merit-order order book for IT-Calabria on 2025-09-24
+      From worker 6:	   📊 Processing zone FI...
+      From worker 6:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, ES, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO5, PL, PT, RO, RS, SE2, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 6:	📊 Creating merit-order order book for FI on 2025-09-24
+      From worker 6:	   📊 Processing zone SE4...
+      From worker 6:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DK1, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SI, SK — keeping observed net imports for those borders
+      From worker 6:	📊 Creating merit-order order book for SE4 on 2025-09-24
+      From worker 6:	   📊 Processing zone DK2...
+      From worker 6:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, EE, ES, FI, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO3, NO4, NO5, PL, PT, RO, RS, SE1, SE2, SE3, SI, SK — keeping observed net imports for those borders
+      From worker 6:	📊 Creating merit-order order book for DK2 on 2025-09-24
+      From worker 6:	   📊 Processing zone SI...
+      From worker 6:	      ℹ️  No usable ATC link to BG, CH, DK1, DK2, EE, ES, FI, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO1, NO2, NO3, NO4, NO5, PT, RS, SE1, SE2, SE3, SE4 — keeping observed net imports for those borders
+      From worker 6:	📊 Creating merit-order order book for SI on 2025-09-24
+      From worker 6:	   📊 Processing zone NO4...
+      From worker 6:	      ℹ️  No usable ATC link to AT, BE, BG, CH, CZ, DE_LU, DK1, DK2, EE, ES, FR, GR, HU, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NL, NO1, NO2, NO5, PL, PT, RO, RS, SE3, SE4, SI, SK — keeping observed net imports for those borders
+      From worker 6:	📊 Creating merit-order order book for NO4 on 2025-09-24
+      From worker 6:	   📊 Processing zone BE...
+      From worker 6:	      ℹ️  No usable ATC link to BG, CH, DK1, DK2, EE, ES, FI, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO1, NO2, NO3, NO4, NO5, PT, RS, SE1, SE2, SE3, SE4 — keeping observed net imports for those borders
+      From worker 6:	📊 Creating merit-order order book for BE on 2025-09-24
+      From worker 6:	   📊 Processing zone NL...
+      From worker 6:	      ℹ️  No usable ATC link to BG, CH, DK2, EE, ES, FI, GR, IT-CNORTH, IT-CSOUTH, IT-Calabria, IT-NORTH, IT-SOUTH, IT-Sardinia, IT-Sicily, LT, LV, NO1, NO3, NO4, NO5, PT, RS, SE1, SE2, SE3, SE4 — keeping observed net imports for those borders
+      From worker 6:	📊 Creating merit-order order book for NL on 2025-09-24
+      From worker 8:	  ➕ Fleet completion: +264 MW Biomass (recent p95 264 MW vs 0 MW unit-level)
+      From worker 8:	  ➕ Fleet completion: +896 MW Hydro Water Reservoir (recent p95 1031 MW vs 135 MW unit-level)
+      From worker 8:	  ➕ Fleet completion: +3482 MW Hydro Run-of-river and pondage (recent p95 3482 MW vs 0 MW unit-level)
+      From worker 7:	  ➕ Fleet completion: +256 MW Biomass (recent p95 256 MW vs 0 MW unit-level)
+      From worker 7:	  ➕ Fleet completion: +942 MW Hydro Water Reservoir (recent p95 1077 MW vs 135 MW unit-level)
+      From worker 7:	  ➕ Fleet completion: +3456 MW Hydro Run-of-river and pondage (recent p95 3456 MW vs 0 MW unit-level)
+      From worker 7:	  ➕ Fleet completion: +1275 MW Hydro Water Reservoir (recent p95 1605 MW vs 330 MW unit-level)
+      From worker 7:	  ➕ Fleet completion: +385 MW Other (recent p95 385 MW vs 0 MW unit-level)
+      From worker 7:	  ➖ Fleet-truthing derate: Nuclear ×0.73 (fleet 6867 MW vs recent p95 4382 MW)
+      From worker 7:	  ➕ Fleet completion: +166 MW Biomass (recent p95 947 MW vs 781 MW unit-level)
+      From worker 7:	  ➕ Fleet completion: +1787 MW Hydro Run-of-river and pondage (recent p95 1787 MW vs 0 MW unit-level)
+      From worker 7:	  ➖ Fleet-truthing derate: Fossil Hard coal ×0.01 (fleet 1878 MW vs recent p95 16 MW)
+      From worker 7:	  ➖ Fleet-truthing derate: Fossil Peat ×0.14 (fleet 820 MW vs recent p95 97 MW)
+      From worker 7:	  ➖ Fleet-truthing derate: Nuclear ×0.96 (fleet 4372 MW vs recent p95 3644 MW)
+      From worker 8:	  ➕ Fleet completion: +259 MW Biomass (recent p95 259 MW vs 0 MW unit-level)
+      From worker 8:	  ➖ Fleet-truthing derate: Fossil Hard coal ×0.0 (fleet 1815 MW vs recent p95 0 MW)
+      From worker 8:	  ➖ Fleet-truthing derate: Fossil Coal-derived gas ×0.04 (fleet 850 MW vs recent p95 26 MW)
+      From worker 7:	  📊 Resolution analysis:
+      From worker 7:	     - Loads & Renewables: PT60M (60 minutes)
+      From worker 7:	     - Loads & Renewables: PT60M (60 minutes)
+      From worker 7:	     → Using finest resolution: 60 minutes
+      From worker 7:	  📊 Resolution analysis:
+      From worker 7:	     - Loads & Renewables: PT60M (60 minutes)
+      From worker 7:	     - Loads & Renewables: PT60M (60 minutes)
+      From worker 7:	     → Using finest resolution: 60 minutes
+      From worker 7:	  ➕ Fleet completion: +387 MW Biomass (recent p95 387 MW vs 0 MW unit-level)
+      From worker 7:	  ➕ Fleet completion: +367 MW Hydro Water Reservoir (recent p95 367 MW vs 0 MW unit-level)
+      From worker 7:	  ➕ Fleet completion: +100 MW Hydro Run-of-river and pondage (recent p95 100 MW vs 0 MW unit-level)
+      From worker 7:	  ➕ Fleet completion: +793 MW Fossil Brown coal/Lignite (installed 5685 MW vs 4892 MW unit-level)
+      From worker 7:	  ➕ Fleet completion: +268 MW Other renewable (recent p95 268 MW vs 0 MW unit-level)
+      From worker 7:	  ➖ Fleet-truthing derate: Fossil Hard coal ×0.09 (fleet 561 MW vs recent p95 45 MW)
+      From worker 7:	  ➕ Fleet completion: +257 MW Biomass (recent p95 257 MW vs 0 MW unit-level)
+      From worker 7:	  ➖ Fleet-truthing derate: Fossil Hard coal ×0.0 (fleet 1815 MW vs recent p95 0 MW)
+      From worker 7:	  ➖ Fleet-truthing derate: Fossil Coal-derived gas ×0.03 (fleet 850 MW vs recent p95 24 MW)
+      From worker 7:	[ Info: Filtered out 2 variable renewable generators (Wind/Solar) from UC
+      From worker 7:	  ➕ Fleet completion: +494 MW Geothermal (recent p95 608 MW vs 114 MW unit-level)
+      From worker 7:	[ Info: Filtered out 24 variable renewable generators (Wind/Solar) from UC
+      From worker 7:	  ➕ Fleet completion: +254 MW Hydro Water Reservoir (recent p95 971 MW vs 717 MW unit-level)
+      From worker 7:	  ➕ Fleet completion: +107 MW Energy storage (recent p95 107 MW vs 0 MW unit-level)
+      From worker 7:	  ➖ Fleet-truthing derate: Fossil Brown coal/Lignite ×0.48 (fleet 2199 MW vs recent p95 909 MW)
+      From worker 7:	  ➖ Fleet-truthing derate: Fossil Hard coal ×0.0 (fleet 130 MW vs recent p95 0 MW)
+      From worker 7:	[ Info: Filtered out 65 variable renewable generators (Wind/Solar) from UC
+      From worker 7:	[ Info: Filtered out 12 variable renewable generators (Wind/Solar) from UC
+      From worker 7:	[ Info: Reclassified generator BESS_AFD7_BARBAN_SAUCATS_1 from Other to Energy storage
+      From worker 7:	[ Info: Filtered out 8 variable renewable generators (Wind/Solar) from UC
+      From worker 7:	  ➕ Fleet completion: +115 MW Biomass (recent p95 115 MW vs 0 MW unit-level)
+      From worker 7:	  ➕ Fleet completion: +162 MW Hydro Water Reservoir (recent p95 162 MW vs 0 MW unit-level)
+      From worker 7:	  ➕ Fleet completion: +505 MW Hydro Run-of-river and pondage (recent p95 505 MW vs 0 MW unit-level)
+      From worker 7:	  ➖ Fleet-truthing derate: Fossil Brown coal/Lignite ×0.0 (fleet 330 MW vs recent p95 0 MW)
+      From worker 7:	  ➖ Fleet-truthing derate: Fossil Hard coal ×0.0 (fleet 220 MW vs recent p95 0 MW)
+      From worker 8:	  ➕ Fleet completion: +118 MW Biomass (recent p95 899 MW vs 781 MW unit-level)
+      From worker 8:	  ➕ Fleet completion: +1846 MW Hydro Run-of-river and pondage (recent p95 1846 MW vs 0 MW unit-level)
+      From worker 8:	  ➖ Fleet-truthing derate: Fossil Hard coal ×0.01 (fleet 1878 MW vs recent p95 18 MW)
+      From worker 8:	  ➖ Fleet-truthing derate: Fossil Peat ×0.24 (fleet 820 MW vs recent p95 174 MW)
+      From worker 8:	  ➕ Fleet completion: +373 MW Biomass (recent p95 373 MW vs 0 MW unit-level)
+      From worker 8:	  ⏸  Fleet completion: Hydro Pumped Storage gap 445 MW explained by 445 MW on outage — offered as a 445 MW tranche at 1.8× gas SRMC
+      From worker 8:	  ➕ Fleet completion: +363 MW Hydro Water Reservoir (recent p95 363 MW vs 0 MW unit-level)
+      From worker 8:	  ➕ Fleet completion: +100 MW Hydro Run-of-river and pondage (recent p95 100 MW vs 0 MW unit-level)
+      From worker 8:	  ⏸  Fleet completion: Fossil Gas gap 847 MW explained by 847 MW on outage — offered as a 847 MW tranche at 1.8× gas SRMC
+      From worker 8:	  ➕ Fleet completion: +793 MW Fossil Brown coal/Lignite (installed 5685 MW vs 4892 MW unit-level)
+      From worker 8:	  ⏸  Fleet completion: Nuclear gap 524 MW explained by 524 MW on outage — offered as a 524 MW tranche at 1.8× gas SRMC
+      From worker 8:	  ➕ Fleet completion: +267 MW Other renewable (recent p95 267 MW vs 0 MW unit-level)
+      From worker 7:	  ➕ Fleet completion: +175 MW Hydro Water Reservoir (recent p95 175 MW vs 0 MW unit-level)
+      From worker 7:	  ➖ Fleet-truthing derate: Fossil Brown coal/Lignite ×0.67 (fleet 4658 MW vs recent p95 2695 MW)
+      From worker 8:	  ➖ Fleet-truthing derate: Fossil Coal-derived gas ×0.55 (fleet 288 MW vs recent p95 138 MW)
+      From worker 8:	  ➕ Fleet completion: +129 MW Biomass (recent p95 129 MW vs 0 MW unit-level)
+      From worker 4:	[ Info: Filtered out 10 variable renewable generators (Wind/Solar) from UC
+      From worker 7:	  ➕ Fleet completion: +2539 MW Hydro Run-of-river and pondage (recent p95 2991 MW vs 452 MW unit-level)
+      From worker 7:	  ➖ Fleet-truthing derate: Nuclear ×0.61 (fleet 2983 MW vs recent p95 1579 MW)
+      From worker 9:	[ Info: Filtered out 5 variable renewable generators (Wind/Solar) from UC
+      From worker 9:	[ Info: Filtered out 10 variable renewable generators (Wind/Solar) from UC
+      From worker 7:	[ Info: Filtered out 1 variable renewable generators (Wind/Solar) from UC
+      From worker 8:	[ Info: Filtered out 2 variable renewable generators (Wind/Solar) from UC
+      From worker 7:	[ Info: Filtered out 6 variable renewable generators (Wind/Solar) from UC
+      From worker 7:	  📊 Resolution analysis:
+      From worker 7:	     - Loads & Renewables: PT15M (15 minutes)
+      From worker 7:	     - Loads & Renewables: PT15M (15 minutes)
+      From worker 7:	     → Using finest resolution: 15 minutes
+      From worker 7:	  🕐 Aggregated 15-min data to hourly (24 slots)
+      From worker 7:	  📊 Resolution analysis:
+      From worker 7:	     - Loads & Renewables: PT60M (60 minutes)
+      From worker 7:	     - Loads & Renewables: PT60M (60 minutes)
+      From worker 7:	     → Using finest resolution: 60 minutes
+      From worker 7:	  📊 Resolution analysis:
+      From worker 7:	     - Loads & Renewables: PT15M (15 minutes)
+      From worker 7:	     - Loads & Renewables: PT15M (15 minutes)
+      From worker 7:	     → Using finest resolution: 15 minutes
+      From worker 7:	  🕐 Aggregated 15-min data to hourly (24 slots)
+      From worker 8:	  📊 Resolution analysis:
+      From worker 8:	     - Loads & Renewables: PT15M (15 minutes)[ Info: Filtered out 28 variable renewable generators (Wind/Solar) from UC
+      From worker 8:	
+      From worker 8:	     - Loads & Renewables: PT15M (15 minutes)
+      From worker 8:	     → Using finest resolution: 15 minutes
+      From worker 8:	  🕐 Aggregated 15-min data to hourly (24 slots)
+      From worker 8:	  ➕ Fleet completion: +472 MW Hydro Run-of-river and pondage (recent p95 572 MW vs 100 MW unit-level)
+      From worker 7:	  ➖ Fleet-truthing derate: Fossil Brown coal/Lignite ×0.15 (fleet 2328 MW vs recent p95 312 MW)
+      From worker 7:	  ➕ Fleet completion: +113 MW Hydro Water Reservoir (recent p95 113 MW vs 0 MW unit-level)
+      From worker 7:	  ➕ Fleet completion: +192 MW Other (recent p95 192 MW vs 0 MW unit-level)
+      From worker 8:	[ Info: Filtered out 12 variable renewable generators (Wind/Solar) from UC
+      From worker 8:	[ Info: Filtered out 24 variable renewable generators (Wind/Solar) from UC
+      From worker 8:	[ Info: Filtered out 65 variable renewable generators (Wind/Solar) from UC
+      From worker 7:	[ Info: Filtered out 10 variable renewable generators (Wind/Solar) from UC
+      From worker 7:	  ➕ Fleet completion: +368 MW Biomass (recent p95 368 MW vs 0 MW unit-level)
+      From worker 7:	  📊 Resolution analysis:
+      From worker 7:	     - Loads & Renewables: PT15M (15 minutes)
+      From worker 7:	     - Loads & Renewables: PT15M (15 minutes)
+      From worker 7:	     → Using finest resolution: 15 minutes
+      From worker 7:	  🕐 Aggregated 15-min data to hourly (24 slots)
+      From worker 8:	  ➕ Fleet completion: +140 MW Hydro Water Reservoir (recent p95 140 MW vs 0 MW unit-level)
+      From worker 8:	  ➖ Fleet-truthing derate: Fossil Brown coal/Lignite ×0.67 (fleet 4658 MW vs recent p95 2694 MW)
+      From worker 7:	  ➕ Fleet completion: +4585 MW Hydro Water Reservoir (recent p95 5284 MW vs 699 MW unit-level)
+      From worker 5:	[ Info: Filtered out 5 variable renewable generators (Wind/Solar) from UC
+      From worker 5:	[ Info: Filtered out 10 variable renewable generators (Wind/Solar) from UC
+      From worker 7:	[ Info: Filtered out 2 variable renewable generators (Wind/Solar) from UC
+      From worker 7:	  ➖ Fleet-truthing derate: Fossil Hard coal ×0.53 (fleet 966 MW vs recent p95 448 MW)
+      From worker 7:	  📊 Resolution analysis:
+      From worker 7:	     - Loads & Renewables: PT15M (15 minutes)
+      From worker 7:	     - Loads & Renewables: PT15M (15 minutes)
+      From worker 7:	     → Using finest resolution: 15 minutes
+      From worker 7:	  🕐 Aggregated 15-min data to hourly (24 slots)
+      From worker 8:	  ➕ Fleet completion: +4673 MW Biomass (recent p95 4673 MW vs 0 MW unit-level)
+      From worker 8:	  ⏸  Fleet completion: Hydro Pumped Storage gap 970 MW explained by 970 MW on outage — offered as a 970 MW tranche at 1.8× gas SRMC
+      From worker 8:	  ➕ Fleet completion: +224 MW Other (recent p95 224 MW vs 0 MW unit-level)
+      From worker 8:	  ➕ Fleet completion: +722 MW Waste (recent p95 831 MW vs 109 MW unit-level)
+      From worker 8:	  ➕ Fleet completion: +1245 MW Hydro Run-of-river and pondage (recent p95 1709 MW vs 464 MW unit-level)
+      From worker 8:	  ➕ Fleet completion: +2405 MW Fossil Gas (installed 19334 MW vs 15310 MW unit-level)
+      From worker 8:	  ➕ Fleet completion: +9901 MW Fossil Hard coal (installed 20831 MW vs 10916 MW unit-level)
+      From worker 8:	  ➕ Fleet completion: +5278 MW Fossil Brown coal/Lignite (installed 19572 MW vs 13664 MW unit-level)
+      From worker 8:	  ➕ Fleet completion: +772 MW Fossil Oil (installed 1142 MW vs 370 MW unit-level)
+      From worker 7:	[ Info: Filtered out 24 variable renewable generators (Wind/Solar) from UC
+      From worker 7:	  ➕ Fleet completion: +165 MW Hydro Run-of-river and pondage (recent p95 259 MW vs 94 MW unit-level)
+      From worker 7:	  📊 Resolution analysis:
+      From worker 7:	     - Loads & Renewables: PT15M (15 minutes)
+      From worker 7:	     - Loads & Renewables: PT15M (15 minutes)
+      From worker 7:	     → Using finest resolution: 15 minutes
+      From worker 7:	  🕐 Aggregated 15-min data to hourly (24 slots)
+      From worker 7:	[ Info: Filtered out 12 variable renewable generators (Wind/Solar) from UC
+      From worker 7:	  ➕ Fleet completion: +1066 MW Fossil Gas (installed 14186 MW vs 13120 MW unit-level)
+      From worker 7:	  ➕ Fleet completion: +10639 MW Other (recent p95 10783 MW vs 144 MW unit-level)
+      From worker 7:	  ➕ Fleet completion: +2720 MW Fossil Hard coal (installed 6101 MW vs 3381 MW unit-level)
+      From worker 7:	  ➕ Fleet completion: +333 MW Waste (recent p95 333 MW vs 0 MW unit-level)
+      From worker 4:	  ➕ Fleet completion: +164 MW Biomass (recent p95 164 MW vs 0 MW unit-level)
+      From worker 4:	  ⏸  Fleet completion: Hydro Pumped Storage gap 1111 MW explained by 1035 MW on outage — offered as a 1035 MW tranche at 1.8× gas SRMC
+      From worker 4:	  ➕ Fleet completion: +1001 MW Hydro Water Reservoir (recent p95 1136 MW vs 135 MW unit-level)
+      From worker 4:	  ➕ Fleet completion: +3696 MW Hydro Run-of-river and pondage (recent p95 3696 MW vs 0 MW unit-level)
+      From worker 8:	  ➕ Fleet completion: +2539 MW Hydro Run-of-river and pondage (recent p95 2991 MW vs 452 MW unit-level)
+      From worker 8:	  ➖ Fleet-truthing derate: Nuclear ×0.73 (fleet 2983 MW vs recent p95 1901 MW)
+      From worker 8:	  ➖ Fleet-truthing derate: Fossil Brown coal/Lignite ×0.22 (fleet 2328 MW vs recent p95 453 MW)
+      From worker 7:	  ➕ Fleet completion: +4622 MW Biomass (recent p95 4622 MW vs 0 MW unit-level)
+      From worker 7:	  ➕ Fleet completion: +224 MW Other (recent p95 224 MW vs 0 MW unit-level)
+      From worker 7:	  ➕ Fleet completion: +661 MW Waste (recent p95 770 MW vs 109 MW unit-level)
+      From worker 7:	  ➕ Fleet completion: +1316 MW Hydro Run-of-river and pondage (recent p95 1781 MW vs 464 MW unit-level)
+      From worker 7:	  ➕ Fleet completion: +2405 MW Fossil Gas (installed 19334 MW vs 16929 MW unit-level)
+      From worker 7:	  ➕ Fleet completion: +9901 MW Fossil Hard coal (installed 20831 MW vs 10930 MW unit-level)
+      From worker 7:	  ➕ Fleet completion: +5278 MW Fossil Brown coal/Lignite (installed 19572 MW vs 14294 MW unit-level)
+      From worker 7:	  ➕ Fleet completion: +772 MW Fossil Oil (installed 1142 MW vs 370 MW unit-level)
+      From worker 7:	  📊 Resolution analysis:
+      From worker 7:	     - Loads: PT15M (15 minutes)
+      From worker 7:	     - Renewables: PT60M (60 minutes)
+      From worker 7:	     → Using finest resolution: 15 minutes
+      From worker 7:	  📊 Disaggregating renewables from 60min to 15min resolution
+      From worker 7:	  🕐 Aggregated 15-min data to hourly (24 slots)
+      From worker 7:	  📊 Resolution analysis:
+      From worker 7:	     - Loads & Renewables: PT60M (60 minutes)
+      From worker 7:	     - Loads & Renewables: PT60M (60 minutes)
+      From worker 7:	     → Using finest resolution: 60 minutes
+      From worker 7:	  📊 Resolution analysis:
+      From worker 7:	     - Loads & Renewables: PT60M (60 minutes)
+      From worker 7:	     - Loads & Renewables: PT60M (60 minutes)
+      From worker 7:	     → Using finest resolution: 60 minutes
+      From worker 8:	[ Info: Filtered out 6 variable renewable generators (Wind/Solar) from UC
+      From worker 9:	  ➕ Fleet completion: +986 MW Hydro Water Reservoir (recent p95 1316 MW vs 330 MW unit-level)
+      From worker 9:	  ➕ Fleet completion: +401 MW Other (recent p95 401 MW vs 0 MW unit-level)
+      From worker 9:	  ➖ Fleet-truthing derate: Nuclear ×0.9 (fleet 5467 MW vs recent p95 4297 MW)
+      From worker 4:	[ Info: Reclassified generator BESS_AFD7_BARBAN_SAUCATS_1 from Other to Energy storage
+      From worker 4:	[ Info: Filtered out 8 variable renewable generators (Wind/Solar) from UC
+      From worker 4:	[ Info: Filtered out 6 variable renewable generators (Wind/Solar) from UC
+      From worker 7:	  ➕ Fleet completion: +458 MW Hydro Run-of-river and pondage (recent p95 558 MW vs 100 MW unit-level)
+      From worker 9:	  ⏸  Fleet completion: Hydro Water Reservoir gap 213 MW explained by 598 MW on outage — offered as a 213 MW tranche at 1.8× gas SRMC
+      From worker 7:	  ➕ Fleet completion: +574 MW Hydro Run-of-river and pondage (recent p95 816 MW vs 242 MW unit-level)

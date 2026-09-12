@@ -162,6 +162,13 @@ println()
         include(joinpath(@__DIR__, "test_outage_intervals.jl"))
     end
 
+    @testset "cv40 review fixes" begin
+        println("\n" * "=" ^ 60)
+        println("Running cv40 Review-Fix Tests...")
+        println("=" ^ 60)
+        include(joinpath(@__DIR__, "test_cv40_fixes.jl"))
+    end
+
     @testset "Weather RES" begin
         println("\n" * "=" ^ 60)
         println("Running Weather RES Tests...")

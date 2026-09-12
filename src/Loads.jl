@@ -86,24 +86,32 @@ function get_loads(bidding_zone::String, day::Dates.Date; fallback_days::Int=7)
                    [!(trunc(DateTime(t), Dates.Hour) in covered) for t in df.date_time_utc] .&
                    .!ismissing.(df.total_load_mw), :]
         converted = DataFrame(date_time_utc=DateTime[], resolution_code=String[], total_load_mw=Float64[])
+        # cv40 (review 2026-09-13): fine→coarse aggregation is DURATION-WEIGHTED.
+        # The previous recurrence `(accumulator + next)/2` is a running mean that
+        # over-weights the last observation: four PT15M values 100/200/300/400
+        # collapsed to 312.5 MW instead of 250 MW. Accumulate MW·minutes and the
+        # covered minutes per coarse slot, then divide once (power, so a mean —
+        # not a sum). A slot covered only in part keeps the mean of what was
+        # published, which is the honest reading of a partial series.
+        acc_mwmin = Dict{DateTime,Float64}()
+        acc_min = Dict{DateTime,Float64}()
         for row in eachrow(extra)
             m = parse_resolution_to_minutes(String(row.resolution_code))
             t = DateTime(row.date_time_utc)
             if m < best_min
-                # finer -> average into the coarse slot
+                # finer -> duration-weighted mean into the coarse slot
                 slot = DateTime(Date(t)) + Dates.Minute(best_min * div(60 * Dates.hour(t) + Dates.minute(t), best_min))
-                i = findfirst(==(slot), converted.date_time_utc)
-                if i === nothing
-                    push!(converted, (slot, best, Float64(row.total_load_mw)))
-                else
-                    converted.total_load_mw[i] = (converted.total_load_mw[i] + Float64(row.total_load_mw)) / 2
-                end
+                acc_mwmin[slot] = get(acc_mwmin, slot, 0.0) + Float64(row.total_load_mw) * m
+                acc_min[slot] = get(acc_min, slot, 0.0) + m
             else
                 # coarser -> replicate the MW value to the finer slots it spans
                 for k in 0:(div(m, best_min) - 1)
                     push!(converted, (t + Dates.Minute(k * best_min), best, Float64(row.total_load_mw)))
                 end
             end
+        end
+        for slot in sort!(collect(keys(acc_mwmin)))
+            push!(converted, (slot, best, acc_mwmin[slot] / acc_min[slot]))
         end
         dropped = nrow(df) - nrow(chosen) - nrow(extra)
         @warn "Load forecast $bidding_zone $day: mixed resolutions $(resolutions) — keeping $best, " *
