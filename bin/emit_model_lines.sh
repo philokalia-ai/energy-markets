@@ -9,6 +9,23 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 # cron runs with a minimal PATH: make julia (juliaup) and uv (~/.local/bin) visible.
 export PATH="$HOME/.juliaup/bin:$HOME/.local/bin:$PATH"
+# Self-update (EMIT_NO_PULL=1 to skip). The production checkout drifted five
+# days behind main in September 2026 and cron kept running a pre-fix emitter:
+# the stats arm crashed every day ("Each group within index must be monotonic")
+# while hybrid kept publishing, so the site showed a healthy physics+GBM line
+# and a silently stale pure-stats line. Fast-forward only, and never on a dirty
+# tree or a branch other than main — a mid-experiment checkout is left alone
+# (it then keeps running its own code, which is the intended behaviour).
+if [ -z "${EMIT_NO_PULL:-}" ] && [ -d .git ]; then
+    branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+    if [ "$branch" = "main" ] && [ -z "$(git status --porcelain --untracked-files=no)" ]; then
+        git fetch --quiet origin main && git merge --ff-only --quiet origin/main \
+            && echo "checkout at $(git rev-parse --short HEAD) (fast-forwarded to origin/main)" \
+            || echo "WARNING: could not fast-forward to origin/main — running $(git rev-parse --short HEAD)"
+    else
+        echo "WARNING: checkout on branch '$branch'$([ -n "$(git status --porcelain --untracked-files=no)" ] && echo ' with local changes') — self-update skipped, running $(git rev-parse --short HEAD)"
+    fi
+fi
 set -a; . ./.env; set +a
 export EUPHEMIA_DATA_STORE=postgres
 mkdir -p data/model_line_feats
