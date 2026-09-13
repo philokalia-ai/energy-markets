@@ -902,14 +902,18 @@ function _create_transfer_capacity_enriched(date::Date, bidding_zones::Vector{St
                 hub in fpset || continue
                 prs = get(ccrp, ccr, Set{Tuple{String,String}}())
                 for (dirn, lim) in ((:out, mx), (:in, -mn))
-                    # cv40: a published limit of exactly 0 means the hub may not
-                    # exchange in that direction at all — enforce it as a zero
-                    # cap instead of skipping the constraint. Negative limits
-                    # (the opposite direction binds) remain a no-op here.
-                    lim >= 0.0 || continue
-                    zero_limit = lim == 0.0 &&
-                        isempty(get(ENV, "EUPHEMIA_DISABLE_CV40_ZEROLIM", ""))
-                    (lim > 0.0 || zero_limit) || continue
+                    # A published limit of exactly 0 bounds the hub's NET
+                    # position, not its gross exchange: a hub importing 100 MW
+                    # and exporting 100 MW has net position 0 and is feasible,
+                    # but deleting its outgoing capacity forbids that transit
+                    # (review 2026-09-13, P1). This capacity scaling is an
+                    # APPROXIMATION of `minNP <= exports - imports <= maxNP`;
+                    # representing the real constraint belongs in the solver,
+                    # not here. Until then a zero bound stays a no-op, as it was
+                    # before cv40; EUPHEMIA_ENABLE_CV40_ZEROCAP=1 turns on the
+                    # gross-capacity approximation as a measurement arm only.
+                    zero_cap = lim == 0.0 && !isempty(get(ENV, "EUPHEMIA_ENABLE_CV40_ZEROCAP", ""))
+                    (lim > 0.0 || zero_cap) || continue
                     ks = Int[]
                     for (s, d) in prs
                         (s in fpset && d in fpset) || continue

@@ -25,30 +25,48 @@ the later publication time — sequence 1 for DE_LU/AT, the blank series
 elsewhere), which is the review's priority-1 correction.
 
 **Coverage caveat:** fixes 3 and 4 are structural and run in BOTH arms, so the
-delta below measures fixes 1 and 2 only. Fix 4 fires solely on
+delta below measures fixes 1 and 2 together. Fix 2 (the zero-net-position cap)
+was subsequently **deferred** after the cv40 review — a maximum net position of
+zero bounds NET exchange and still permits balanced transit, so deleting gross
+capacity is the wrong constraint. It is now opt-in
+(`EUPHEMIA_ENABLE_CV40_ZEROCAP`) and OFF by default, which means the shipped
+default is fix 1 alone; an isolated Germany-only arm (`ab40_dehub`) is running
+to attribute it. Fix 4 fires solely on
 mixed-resolution zone-days; fix 3 only where a later capacity source supplied a
 border-hour under a transmission outage. Neither is attributed here.
 
 | | base | fixes |
 |---|---|---|
-| footprint MAE | 27.23 | 27.22 |
-| energy-weighted MAE | 26.44 | **26.39** |
-| bias | −9.94 | −9.93 |
+| footprint MAE | 27.27 | 27.26 |
+| energy-weighted MAE | 26.48 | **26.43** |
+| bias | −9.99 | −9.98 |
 | corr | 0.758 | 0.758 |
 | cells ≥ 500 €/MWh | 0 | 0 |
 | collapse recall (settled ≤ 5, n=2,268) | 0.175 | 0.175 |
+| collapse false alarms | 161 | 161 |
 
-9.8 % of cells move, mean |Δ| 2.47, max 81. **Aggregate is a wash; the
-redistribution is the finding and it is physically coherent.** Germany and the
-zones downstream of its evacuation improve — HU −0.43, DE_LU −0.27, DK1 −0.10,
-SI −0.08, RO/BG/DK2/RS −0.05..−0.07 — while the zones that now absorb the
-constrained German net position degrade: AT +0.31 (bias −25.7 → −26.1), CH
-+0.16, SK +0.12, CZ +0.09, PL +0.05. That is what a binding hub limit should
-do, and the review predicted it ("can alter German surplus evacuation and
-neighbouring prices").
+48,648 paired zone-hours, 52 days, 39 zones. 9.8 % of cells move, mean |Δ|
+2.47, max 81. **Aggregate is a wash; the redistribution is the finding and it
+is physically coherent.** Germany and the zones downstream of its evacuation
+improve — HU −0.43, DE_LU −0.27, DK1 −0.10, SI −0.08, RO/BG/DK2/RS
+−0.05..−0.07 — while the zones that now absorb the constrained German net
+position degrade: AT +0.31 (bias −25.7 → −26.1), CH +0.16, SK +0.12, CZ +0.09,
+PL +0.05. That is what a binding hub limit should do, and the cv39 review
+predicted it.
 
-The collapse tail does not move: recall 0.175 and zero false alarms either way.
-These fixes are about feasible exchange, not about the low-price mechanism.
+The collapse tail does not move: recall 0.175 and **161 false alarms in both
+arms** (an earlier draft of this line said zero — that was the ≥ 500 €/MWh
+spike count; corrected after the 2026-09-13 cv40 review).
+
+**Coverage, after the cv40 review's audit.** The first score reported 48,570
+cells against 48,648 saved. The 78 missing were 39 zones × the last two UTC
+hours of 2026-08-26: the scorer passed bare date strings to a `timestamptz`
+comparison, and the psycopg2 session runs in Europe/Berlin, so the window
+closed two hours early. The bounds are now qualified as UTC and the score
+covers every saved cell. `canonical_settlement(..., return_excluded=True)`
+emits the exclusion ledger (zone, hour, reason) the review asked for. SI is
+absent on 2025-11-12 in both arms — a source load gap, the same one cv37/cv39
+carry.
 
 ## Recommendation
 

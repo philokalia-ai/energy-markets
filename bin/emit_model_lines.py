@@ -40,7 +40,33 @@ TRAIN = os.path.join(ROOT, "data", "model_lines_train")
 # trained-on version travels with the artifact (models.joblib carries "book_cv"
 # from the retrain onwards; a legacy artifact without it is assumed cv37) and
 # the run aborts on a mismatch instead of quietly publishing.
+# The training dataset's own provenance decides the trained-on version: the
+# file name carries it (probe2y<CV>_dataset.parquet) and TRAIN_MANIFEST, when
+# present, overrides. Deriving it from the dataset — rather than from the
+# requested CV — is what stops a fresh train on cv37 data being stamped cv40
+# (review 2026-09-13, P1).
 TRAIN_CV_DEFAULT = 37
+TRAIN_MANIFEST = os.path.join(TRAIN, "manifest.json")
+
+
+def training_dataset():
+    """(path, book_cv) of the dataset the frozen models are fitted on."""
+    if os.path.exists(TRAIN_MANIFEST):
+        import json
+        man = json.load(open(TRAIN_MANIFEST))
+        path = os.path.join(TRAIN, man["dataset"])
+        if not os.path.exists(path):
+            raise SystemExit(f"model lines: manifest names {man['dataset']}, which is missing")
+        return path, int(man["book_cv"])
+    import glob as _glob, re as _re
+    cands = sorted(_glob.glob(os.path.join(TRAIN, "probe2y*_dataset.parquet")))
+    if len(cands) != 1:
+        raise SystemExit(f"model lines: cannot identify the training dataset ({cands}); "
+                         f"write {TRAIN_MANIFEST} with {{'dataset': ..., 'book_cv': N}}")
+    m = _re.search(r"probe2y(\d+)_dataset", os.path.basename(cands[0]))
+    if not m:
+        raise SystemExit(f"model lines: {cands[0]} does not carry a book version in its name")
+    return cands[0], int(m.group(1))
 CV = int(os.environ.get("MODEL_LINES_CV", str(TRAIN_CV_DEFAULT)))
 BOOKS = os.path.join(ROOT, "data", f"backfill_books_cv{CV}")
 FEATS_DIR = os.path.join(ROOT, "data", "model_line_feats")
@@ -71,9 +97,10 @@ def refresh_fuel_csvs(cx):
         print(f"fuel csv {csv}: {len(df)} rows through {df.date.iloc[-1][:10]}", flush=True)
 
 
-def _check_binding(models):
+def _check_binding(models, book_cv=None):
     """Abort unless the books being read are the ones the models were fitted on."""
-    book_cv = models.get("book_cv", TRAIN_CV_DEFAULT) if isinstance(models, dict) else TRAIN_CV_DEFAULT
+    if book_cv is None:
+        book_cv = models.get("book_cv", TRAIN_CV_DEFAULT) if isinstance(models, dict) else TRAIN_CV_DEFAULT
     if int(book_cv) != CV:
         raise SystemExit(
             f"model lines: models.joblib was trained on cv{book_cv} book features but "
@@ -91,8 +118,16 @@ def load_models():
     path = os.path.join(TRAIN, "models.joblib")
     if os.path.exists(path):
         return _check_binding(joblib.load(path))
-    print("training frozen models ...", flush=True)
-    hist = pd.read_parquet(os.path.join(TRAIN, "probe2y37_dataset.parquet")).dropna(subset=["resid"])
+    ds_path, ds_cv = training_dataset()
+    # validate BEFORE training: a fresh train must not silently relabel the
+    # dataset's book version as the requested one.
+    if ds_cv != CV:
+        raise SystemExit(
+            f"model lines: no cached models and the training dataset {os.path.basename(ds_path)} "
+            f"is cv{ds_cv}, but MODEL_LINES_CV={CV}. Build a cv{CV} probe dataset "
+            f"(and a manifest naming it) or set MODEL_LINES_CV={ds_cv}.")
+    print(f"training frozen models from {os.path.basename(ds_path)} (book_cv={ds_cv}) ...", flush=True)
+    hist = pd.read_parquet(ds_path).dropna(subset=["resid"])
     hyb = {}
     for z, d in hist.groupby("zone"):
         if len(d) < 800:
@@ -115,7 +150,9 @@ def load_models():
         m = HistGradientBoostingRegressor(max_depth=5, max_iter=250, learning_rate=0.06,
                                           l2_regularization=1.0, random_state=0)
         sta[z] = m.fit(d[STATS_FEATS], d.settled)
-    models = {"hybrid": hyb, "stats": sta, "book_cv": CV}
+    models = {"hybrid": hyb, "stats": sta, "book_cv": ds_cv,
+              "dataset": os.path.basename(ds_path)}
+    _check_binding(models, book_cv=ds_cv)   # validate again before writing
     joblib.dump(models, path)
     print(f"pickled {len(hyb)}/{len(sta)} models -> {path}", flush=True)
     return models
