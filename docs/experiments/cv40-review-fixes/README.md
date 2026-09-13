@@ -30,8 +30,7 @@ was subsequently **deferred** after the cv40 review — a maximum net position o
 zero bounds NET exchange and still permits balanced transit, so deleting gross
 capacity is the wrong constraint. It is now opt-in
 (`EUPHEMIA_ENABLE_CV40_ZEROCAP`) and OFF by default, which means the shipped
-default is fix 1 alone; an isolated Germany-only arm (`ab40_dehub`) is running
-to attribute it. Fix 4 fires solely on
+default is fix 1 alone; an isolated Germany-only arm (`ab40_dehub`) attributes it — see below. Fix 4 fires solely on
 mixed-resolution zone-days; fix 3 only where a later capacity source supplied a
 border-hour under a transmission outage. Neither is attributed here.
 
@@ -67,6 +66,26 @@ covers every saved cell. `canonical_settlement(..., return_excluded=True)`
 emits the exclusion ledger (zone, hour, reason) the review asked for. SI is
 absent on 2025-11-12 in both arms — a source load gap, the same one cv37/cv39
 carry.
+
+### Attribution: the Germany fix is the whole effect
+
+`ab40_dehub` runs fix 1 alone (the shipped default). Against the same base,
+48,648 paired cells (`output/ab_score_dehub.txt`):
+
+| | base | Germany only | Germany + zero cap |
+|---|---|---|---|
+| footprint MAE | 27.27 | 27.26 | 27.26 |
+| energy-weighted MAE | 26.48 | 26.43 | 26.43 |
+| corr | 0.758 | 0.758 | 0.758 |
+| cells moved | | 4,772 (9.8 %) | 4,749 (9.8 %) |
+
+Per zone the Germany-only arm reproduces the combined arm to the third decimal:
+HU −0.427, DE_LU −0.269, DK1 −0.099, SI −0.084, RO −0.068, BG −0.060, DK2
+−0.057, RS −0.054 against AT +0.309, CH +0.158, SK +0.115, CZ +0.087, PL
++0.054, IT-NORTH +0.031. Scoring the two treated arms against each other,
+**the zero-cap change moves 30 cells of 48,648 (0.1 %), mean |Δ| 0.51** — so
+deferring it costs nothing measurable, and the entire redistribution above is
+Germany's hub limit finally binding.
 
 ## Recommendation
 

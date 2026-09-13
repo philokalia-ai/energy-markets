@@ -4,7 +4,7 @@ from settlement_view import canonical_settlement
 cx = psycopg2.connect(os.environ["ENERGY_CONN_STR"])
 A, B = sys.argv[1], sys.argv[2]
 sim = pd.read_sql("""select clearing_mode arm, bidding_zone z, date_time_utc t, price_eur_mwh p
-   from simulations.energy_prices where clearing_mode = any(%s) and code_version = 39""", cx, params=([A, B],))
+   from simulations.energy_prices where clearing_mode = any(%s) and code_version in (39, 40)""", cx, params=([A, B],))
 sim["t"] = pd.to_datetime(sim.t)
 w = sim.pivot_table(index=["z","t"], columns="arm", values="p").dropna().reset_index()
 t0, t1 = w.t.min().date().isoformat(), (w.t.max() + pd.Timedelta(hours=1)).date().isoformat()
