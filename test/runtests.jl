@@ -162,6 +162,13 @@ println()
         include(joinpath(@__DIR__, "test_outage_intervals.jl"))
     end
 
+    @testset "Registry guard (#390 §2)" begin
+        println("\n" * "=" ^ 60)
+        println("Running Registry-Guard Tests...")
+        println("=" ^ 60)
+        include(joinpath(@__DIR__, "test_registry_guard.jl"))
+    end
+
     @testset "Effective RES components (#387)" begin
         println("\n" * "=" ^ 60)
         println("Running Effective-RES Component Tests...")
