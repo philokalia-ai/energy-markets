@@ -34,27 +34,27 @@
 # (k = tranche index 2,3,…); `strategy_description` strips the numeric suffix so
 # the single `peak_tranche` row covers them all.
 const STRATEGY_DESCRIPTIONS = Dict{String,String}(
-    "must_run_deep"          => "must-run deepest block: technical minimum offered near €0 (5% of SRMC) — shutting down and restarting costs more than running below cost",
-    "must_run_rest"          => "must-run remainder: the rest of minimum load bid below SRMC (start-up cost amortised over the committed hours)",
-    "srmc_base"              => "base tranche at short-run marginal cost: fuel/efficiency + CO₂ + O&M, no scarcity markup",
-    "peak_tranche"           => "peak tranche: upper capacity priced above cost for scarcity margin + peak-hour strategic bidding",
+    "must_run_deep" => "must-run deepest block: technical minimum offered near €0 (5% of SRMC) — shutting down and restarting costs more than running below cost",
+    "must_run_rest" => "must-run remainder: the rest of minimum load bid below SRMC (start-up cost amortised over the committed hours)",
+    "srmc_base" => "base tranche at short-run marginal cost: fuel/efficiency + CO₂ + O&M, no scarcity markup",
+    "peak_tranche" => "peak tranche: upper capacity priced above cost for scarcity margin + peak-hour strategic bidding",
     "water_value_gas_anchored" => "hydro water value: reservoir opportunity cost anchored to gas SRMC (premium at peak, boosted when dry)",
-    "water_value_reservoir"  => "hydro water value: shadow price of stored water — near-free when reservoirs are full, rising to the thermal alternative as they empty",
-    "water_value_anchored"   => "hydro water value: export opportunity cost = the coupled reference price (two-pass anchor)",
-    "water_value_spill"      => "hydro spill regime: reservoir at/above the prior-years' same-week maximum — the water that cannot be stored is offered at run-instead-of-spill cost",
-    "res_forecast"           => "renewable forecast offered as price-taker (support schemes make output price-insensitive; floored negative in a solar-surplus regime)",
-    "import_fixed"           => "net scheduled imports injected as price-taking supply",
-    "ref_priced_export"      => "net export re-priced at the coupled reference so the exporter curtails under domestic stress",
-    "export_demand"          => "net scheduled exports taken as firm demand at the price cap",
-    "import_backstop"        => "ex-ante elastic import headroom beyond the endogenous ATC, priced above every domestic tranche (binds only near the cap)",
-    "boundary_import"        => "out-of-footprint neighbour import supply, laddered on the neighbour's own fundamental SRMC over the border's demonstrated capability",
-    "boundary_export"        => "out-of-footprint neighbour export demand over the border's demonstrated capability (firm base slice + elastic tail)",
-    "demand_firm"            => "inelastic demand at the price cap (must-serve load)",
-    "demand_elastic"         => "price-sensitive demand tail (curtails above the elastic bid price)",
-    "extra"                  => "scenario order added via the extra_orders hook",
-    "strategist"             => "order produced by the strategist hook (replaces the source ladder)",
-    "valley_continuation"    => "overnight-committed MW repriced to the floor through the surplus valley (GRSQ lever 2 — the hourly projection of a valley block order)",
-    "pump_absorption"        => "surplus pumping demand at η × pass-1 evening value up to demonstrated pumping capability (cv34 T3)",
+    "water_value_reservoir" => "hydro water value: shadow price of stored water — near-free when reservoirs are full, rising to the thermal alternative as they empty",
+    "water_value_anchored" => "hydro water value: export opportunity cost = the coupled reference price (two-pass anchor)",
+    "water_value_spill" => "hydro spill regime: reservoir at/above the prior-years' same-week maximum — the water that cannot be stored is offered at run-instead-of-spill cost",
+    "res_forecast" => "renewable forecast offered as price-taker (support schemes make output price-insensitive; floored negative in a solar-surplus regime)",
+    "import_fixed" => "net scheduled imports injected as price-taking supply",
+    "ref_priced_export" => "net export re-priced at the coupled reference so the exporter curtails under domestic stress",
+    "export_demand" => "net scheduled exports taken as firm demand at the price cap",
+    "import_backstop" => "ex-ante elastic import headroom beyond the endogenous ATC, priced above every domestic tranche (binds only near the cap)",
+    "boundary_import" => "out-of-footprint neighbour import supply, laddered on the neighbour's own fundamental SRMC over the border's demonstrated capability",
+    "boundary_export" => "out-of-footprint neighbour export demand over the border's demonstrated capability (firm base slice + elastic tail)",
+    "demand_firm" => "inelastic demand at the price cap (must-serve load)",
+    "demand_elastic" => "price-sensitive demand tail (curtails above the elastic bid price)",
+    "extra" => "scenario order added via the extra_orders hook",
+    "strategist" => "order produced by the strategist hook (replaces the source ladder)",
+    "valley_continuation" => "overnight-committed MW repriced to the floor through the surplus valley (GRSQ lever 2 — the hourly projection of a valley block order)",
+    "pump_absorption" => "surplus pumping demand at η × pass-1 evening value up to demonstrated pumping capability (cv34 T3)",
 )
 
 """
@@ -80,8 +80,9 @@ end
 # and returns what later stages use.
 
 """Hydro-family test shared by the offer-scale, capacity and water-value logic."""
-_is_hydro(g::Generator) = g.fuel_type in WATER_VALUE_FUEL_TYPES ||
-                          g.fuel_type == Symbol("Hydro Run-of-river and pondage")
+_is_hydro(g::Generator) =
+    g.fuel_type in WATER_VALUE_FUEL_TYPES ||
+    g.fuel_type == Symbol("Hydro Run-of-river and pondage")
 
 """
 Stage 1 — true the offered fleet to the zone's demonstrated capability and
@@ -90,11 +91,19 @@ truth target), fleet-truthing derate of baseload types, the thermal SRMC
 premium / nuclear bid floor.
 Returns the trued-up `generators`.
 """
-function _true_up_fleet(generators::Vector{Generator}, bidding_zone::String,
-    day::Date, profile::ZoneProfile;
-    fleet_completion::Bool, fleet_truthing::Bool, derate_headroom::Float64,
-    thermal_srmc_multiplier::Float64, nuclear_srmc_floor::Float64,
-    anchor_active::Bool, opportunity_anchor::Symbol)
+function _true_up_fleet(
+    generators::Vector{Generator},
+    bidding_zone::String,
+    day::Date,
+    profile::ZoneProfile;
+    fleet_completion::Bool,
+    fleet_truthing::Bool,
+    derate_headroom::Float64,
+    thermal_srmc_multiplier::Float64,
+    nuclear_srmc_floor::Float64,
+    anchor_active::Bool,
+    opportunity_anchor::Symbol,
+)
     # Fleet completion: ENTSO-E's unit-level table only lists larger
     # units, so for some zones (RO, BG, RS) the fleet is structurally
     # undersized and the book clears at spurious shortage-cap prices.
@@ -106,10 +115,11 @@ function _true_up_fleet(generators::Vector{Generator}, bidding_zone::String,
     # good unit coverage — the gap is ~0 there (verified on GR).
     # Shared by fleet completion (upward) and fleet-truthing derate
     # (downward); keys normalized once to canonical fuel names
-    type_p95_raw = (fleet_completion || fleet_truthing) ?
-                   get_type_output_p95(bidding_zone, day) : Dict{String,Float64}()
-    type_p95 = Dict{String,Float64}(
-        normalize_fuel_type_name(k) => v for (k, v) in type_p95_raw)
+    type_p95_raw =
+        (fleet_completion || fleet_truthing) ? get_type_output_p95(bidding_zone, day) :
+        Dict{String,Float64}()
+    type_p95 =
+        Dict{String,Float64}(normalize_fuel_type_name(k) => v for (k, v) in type_p95_raw)
     # Fleet-truth mode (iter7, gated — see the ZoneProfile field docstring).
     # `fleet_truth_target` holds the per-type truth target of MARKET-ACTIVE
     # types only (trailing-30d p95 > 100 MW): those types complete UP to it
@@ -121,11 +131,13 @@ function _true_up_fleet(generators::Vector{Generator}, bidding_zone::String,
     fleet_truth_target = Dict{String,Float64}()
     fleet_truth_mode = _effective_fleet_truth_mode(profile)
     if fleet_completion && fleet_truth_mode != :p95
-        src = fleet_truth_mode == :installed ?
-              get_installed_capacity_by_type(bidding_zone, day) :
-              Dict{String,Float64}(normalize_fuel_type_name(k) => v
-                  for (k, v) in get_type_output_p95(bidding_zone, day;
-                                                    lookback_days=365))
+        src =
+            fleet_truth_mode == :installed ?
+            get_installed_capacity_by_type(bidding_zone, day) :
+            Dict{String,Float64}(
+                normalize_fuel_type_name(k) => v for
+                (k, v) in get_type_output_p95(bidding_zone, day; lookback_days = 365)
+            )
         for (t, cap) in src
             get(type_p95, t, 0.0) > 100.0 && (fleet_truth_target[t] = cap)
         end
@@ -137,18 +149,26 @@ function _true_up_fleet(generators::Vector{Generator}, bidding_zone::String,
     # silently undone. An outage that explains the gap is not a gap.
     removed_by_outage = Dict{String,Float64}()
     if fleet_completion
-        unfiltered = get_generators(bidding_zone, day; exclude_unavailable=false)
+        unfiltered = get_generators(bidding_zone, day; exclude_unavailable = false)
         for (ptype, _) in type_p95
-            f_all = sum((g.p_max for g in unfiltered if g.fuel_type == Symbol(ptype)); init=0.0)
-            f_avail = sum((g.p_max for g in generators if g.fuel_type == Symbol(ptype)); init=0.0)
+            f_all = sum(
+                (g.p_max for g in unfiltered if g.fuel_type == Symbol(ptype));
+                init = 0.0,
+            )
+            f_avail = sum(
+                (g.p_max for g in generators if g.fuel_type == Symbol(ptype));
+                init = 0.0,
+            )
             removed_by_outage[ptype] = max(0.0, f_all - f_avail)
         end
     end
     if fleet_completion
         for (ptype, p95) in type_p95
             ptype in ("Wind Onshore", "Wind Offshore", "Solar") && continue
-            fleet = sum((g.p_max for g in generators
-                         if g.fuel_type == Symbol(ptype)); init=0.0)
+            fleet = sum(
+                (g.p_max for g in generators if g.fuel_type == Symbol(ptype));
+                init = 0.0,
+            )
             target = max(p95, get(fleet_truth_target, ptype, 0.0))
             outaged = get(removed_by_outage, ptype, 0.0)
             gap = target - fleet - outaged
@@ -167,37 +187,53 @@ function _true_up_fleet(generators::Vector{Generator}, bidding_zone::String,
                 # EUPHEMIA_DISABLE_OUTAGE_TRANCHE restores the #343 refusal.
                 if isempty(get(ENV, "EUPHEMIA_DISABLE_OUTAGE_TRANCHE", ""))
                     tranche = min(outaged, target - fleet)
-                    push!(generators, Generator(
-                        "OUT-$(bidding_zone)-$(replace(ptype, " " => "_"))",
-                        "Outage-response tranche: $ptype",
-                        Symbol(ptype),
-                        bidding_zone,
-                        tranche,
-                        0.0,
-                        bidding_zone,
-                        BACKSTOP_PRICE_MULT * get_marginal_cost(day, "Fossil Gas", bidding_zone)))
-                    println("  ⏸  Fleet completion: $ptype gap $(round(Int, target - fleet)) MW " *
-                            "explained by $(round(Int, outaged)) MW on outage — offered as a " *
-                            "$(round(Int, tranche)) MW tranche at $(BACKSTOP_PRICE_MULT)× gas SRMC")
+                    push!(
+                        generators,
+                        Generator(
+                            "OUT-$(bidding_zone)-$(replace(ptype, " " => "_"))",
+                            "Outage-response tranche: $ptype",
+                            Symbol(ptype),
+                            bidding_zone,
+                            tranche,
+                            0.0,
+                            bidding_zone,
+                            BACKSTOP_PRICE_MULT *
+                            get_marginal_cost(day, "Fossil Gas", bidding_zone),
+                        ),
+                    )
+                    println(
+                        "  ⏸  Fleet completion: $ptype gap $(round(Int, target - fleet)) MW " *
+                        "explained by $(round(Int, outaged)) MW on outage — offered as a " *
+                        "$(round(Int, tranche)) MW tranche at $(BACKSTOP_PRICE_MULT)× gas SRMC",
+                    )
                 else
-                    println("  ⏸  Fleet completion: $ptype gap $(round(Int, target - fleet)) MW " *
-                            "explained by $(round(Int, outaged)) MW on outage — not re-added")
+                    println(
+                        "  ⏸  Fleet completion: $ptype gap $(round(Int, target - fleet)) MW " *
+                        "explained by $(round(Int, outaged)) MW on outage — not re-added",
+                    )
                 end
             end
             gap > 100.0 || continue
-            push!(generators, Generator(
-                "AGG-$(bidding_zone)-$(replace(ptype, " " => "_"))",
-                "Aggregate small units: $ptype",
-                Symbol(ptype),
-                bidding_zone,
-                gap,
-                0.0,
-                bidding_zone,
-                get_marginal_cost(day, ptype, bidding_zone)))
-            src = target > p95 ? "installed $(round(Int, target))" :
-                                 "recent p95 $(round(Int, p95))"
-            println("  ➕ Fleet completion: +$(round(Int, gap)) MW $ptype " *
-                    "($src MW vs $(round(Int, fleet)) MW unit-level)")
+            push!(
+                generators,
+                Generator(
+                    "AGG-$(bidding_zone)-$(replace(ptype, " " => "_"))",
+                    "Aggregate small units: $ptype",
+                    Symbol(ptype),
+                    bidding_zone,
+                    gap,
+                    0.0,
+                    bidding_zone,
+                    get_marginal_cost(day, ptype, bidding_zone),
+                ),
+            )
+            src =
+                target > p95 ? "installed $(round(Int, target))" :
+                "recent p95 $(round(Int, p95))"
+            println(
+                "  ➕ Fleet completion: +$(round(Int, gap)) MW $ptype " *
+                "($src MW vs $(round(Int, fleet)) MW unit-level)",
+            )
         end
     end
 
@@ -222,9 +258,14 @@ function _true_up_fleet(generators::Vector{Generator}, bidding_zone::String,
     # and peaking fuels (gas, oil) run below capacity simply because
     # of their merit-order position; their capacity IS available at
     # its SRMC, and derating them manufactures phantom scarcity.
-    derate_types = ("Fossil Brown coal/Lignite", "Fossil Hard coal",
-                    "Fossil Oil shale", "Fossil Coal-derived gas",
-                    "Fossil Peat", "Nuclear")
+    derate_types = (
+        "Fossil Brown coal/Lignite",
+        "Fossil Hard coal",
+        "Fossil Oil shale",
+        "Fossil Coal-derived gas",
+        "Fossil Peat",
+        "Nuclear",
+    )
     # One scale per fuel type, applied in a single pass. Iterates the
     # FLEET's types (not type_p95's keys): a derate-listed type with a
     # p95 of zero is a fully offline fleet and derates all the way
@@ -239,11 +280,14 @@ function _true_up_fleet(generators::Vector{Generator}, bidding_zone::String,
     if fleet_truthing
         for ptype in derate_types
             fsym = Symbol(ptype)
-            fleet_raw = sum((g.p_max for g in generators if g.fuel_type == fsym); init=0.0)
+            fleet_raw =
+                sum((g.p_max for g in generators if g.fuel_type == fsym); init = 0.0)
             fleet_raw > 0 || continue
             if !haskey(type_p95, ptype)
-                println("  ⚠️  Fleet-truthing: no recent output data for $ptype " *
-                        "($(round(Int, fleet_raw)) MW fleet) — derate skipped")
+                println(
+                    "  ⚠️  Fleet-truthing: no recent output data for $ptype " *
+                    "($(round(Int, fleet_raw)) MW fleet) — derate skipped",
+                )
                 continue
             end
             # Fleet-truth mode: a market-active type never derates below
@@ -252,12 +296,14 @@ function _true_up_fleet(generators::Vector{Generator}, bidding_zone::String,
             # the mechanism for precisely the baseload derate-types it
             # targets). :p95 zones (GR/SEE) have fleet_truth_target empty —
             # byte-identical v10 behaviour.
-            target = max(derate_headroom * type_p95[ptype],
-                         get(fleet_truth_target, ptype, 0.0))
+            target =
+                max(derate_headroom * type_p95[ptype], get(fleet_truth_target, ptype, 0.0))
             fleet_raw > target + 100.0 || continue
             derate_scale[fsym] = target / fleet_raw
-            println("  ➖ Fleet-truthing derate: $ptype ×$(round(target / fleet_raw, digits=2)) " *
-                    "(fleet $(round(Int, fleet_raw)) MW vs recent p95 $(round(Int, type_p95[ptype])) MW)")
+            println(
+                "  ➖ Fleet-truthing derate: $ptype ×$(round(target / fleet_raw, digits=2)) " *
+                "(fleet $(round(Int, fleet_raw)) MW vs recent p95 $(round(Int, type_p95[ptype])) MW)",
+            )
         end
     end
     # Thermal SRMC premium (ITALY_PROFILE): scale the marginal cost of
@@ -265,8 +311,12 @@ function _true_up_fleet(generators::Vector{Generator}, bidding_zone::String,
     # cost, and RES never enters the thermal stack. gas_srmc (the hydro
     # anchor) is computed separately and is unaffected. Default multiplier
     # 1.0 leaves every cost untouched (byte-identical for SEE).
-    srmc_exempt_fuels = Set{Symbol}(vcat(WATER_VALUE_FUEL_TYPES,
-        [Symbol("Hydro Run-of-river and pondage"), Symbol("Energy storage")]))
+    srmc_exempt_fuels = Set{Symbol}(
+        vcat(
+            WATER_VALUE_FUEL_TYPES,
+            [Symbol("Hydro Run-of-river and pondage"), Symbol("Energy storage")],
+        ),
+    )
     apply_srmc_premium = thermal_srmc_multiplier != 1.0
     # Nuclear bid-position floor (FRANCE_PROFILE): raise the nuclear bid
     # base to at least this level — nuclear-dominated exporters price their
@@ -277,24 +327,36 @@ function _true_up_fleet(generators::Vector{Generator}, bidding_zone::String,
     # price up in exactly the RES-surplus hours where the coupled price —
     # and EDF's opportunity cost — collapses: 2026-04 weekends, FR actual
     # €9 vs the €55 floor).
-    apply_nuclear_floor = nuclear_srmc_floor > 0.0 &&
-                          !(anchor_active && opportunity_anchor == :nuclear)
+    apply_nuclear_floor =
+        nuclear_srmc_floor > 0.0 && !(anchor_active && opportunity_anchor == :nuclear)
     if !isempty(derate_scale) || apply_srmc_premium || apply_nuclear_floor
-        generators = [begin
-            s = get(derate_scale, g.fuel_type, 1.0)
-            m = (apply_srmc_premium && !(g.fuel_type in srmc_exempt_fuels)) ?
-                thermal_srmc_multiplier : 1.0
-            mc = g.marginal_cost * m
-            if apply_nuclear_floor && g.fuel_type == Symbol("Nuclear")
-                mc = max(mc, nuclear_srmc_floor)
-            end
-            (s < 1.0 || mc != g.marginal_cost) ?
-                Generator(g.code, g.name, g.fuel_type, g.location,
-                          g.p_max * s, g.p_min * s,
-                          g.bidding_zone, mc,
-                          g.ramp_up, g.ramp_down, g.min_uptime, g.min_downtime) :
-                g
-        end for g in generators]
+        generators = [
+            begin
+                s = get(derate_scale, g.fuel_type, 1.0)
+                m =
+                    (apply_srmc_premium && !(g.fuel_type in srmc_exempt_fuels)) ?
+                    thermal_srmc_multiplier : 1.0
+                mc = g.marginal_cost * m
+                if apply_nuclear_floor && g.fuel_type == Symbol("Nuclear")
+                    mc = max(mc, nuclear_srmc_floor)
+                end
+                (s < 1.0 || mc != g.marginal_cost) ?
+                Generator(
+                    g.code,
+                    g.name,
+                    g.fuel_type,
+                    g.location,
+                    g.p_max * s,
+                    g.p_min * s,
+                    g.bidding_zone,
+                    mc,
+                    g.ramp_up,
+                    g.ramp_down,
+                    g.min_uptime,
+                    g.min_downtime,
+                ) : g
+            end for g in generators
+        ]
     end
     return generators
 end
@@ -321,35 +383,38 @@ function _input_correction_deltas(zone::String, day::Date)
         haskey(_CV32_DELTA_CACHE, (zone, day)) && return _CV32_DELTA_CACHE[(zone, day)]
         out = Dict{String,Float64}()
         try
-            df = sql2df_with_retry("""
-                SELECT c.target AS tgt, c.date_time_utc AS h,
-                       c.corrected_mw - f.mw AS delta
-                FROM simulations.input_corrections c
-                JOIN (
-                    -- hourly mean PER production type, then SUM over the types
-                    -- of the target: the emitter's corrected_mw is the SUM over
-                    -- Wind Onshore + Offshore, so an AVG across them here added
-                    -- ~half the total wind as a phantom delta (bug sweep
-                    -- 2026-08-25; latent until DK1's package is enabled).
-                    SELECT tgt, h, SUM(mw) AS mw
-                    FROM (
-                        SELECT CASE WHEN production_type LIKE 'Solar%' THEN 'solar'
-                                    ELSE 'wind' END AS tgt,
-                               production_type,
-                               date_trunc('hour', date_time_utc) AS h,
-                               AVG(day_ahead_generation_forecast_mw) AS mw
-                        FROM entsoe.generation_forecasts_for_wind_and_solar
-                        WHERE area_map_code = \$1 AND area_type_code LIKE 'BZN%'
-                          AND date_time_utc >= (\$2::date::timestamp AT TIME ZONE 'UTC')
-                          AND date_time_utc < ((\$2::date + 1)::timestamp AT TIME ZONE 'UTC')
-                        GROUP BY 1, 2, 3
-                    ) t
-                    GROUP BY 1, 2
-                ) f ON f.tgt = c.target AND f.h = c.date_time_utc
-                WHERE c.bidding_zone = \$1
-                  AND c.date_time_utc >= (\$2::date::timestamp AT TIME ZONE 'UTC')
-                  AND c.date_time_utc < ((\$2::date + 1)::timestamp AT TIME ZONE 'UTC')
-                """, Any[zone, day])
+            df = sql2df_with_retry(
+                """
+SELECT c.target AS tgt, c.date_time_utc AS h,
+       c.corrected_mw - f.mw AS delta
+FROM simulations.input_corrections c
+JOIN (
+    -- hourly mean PER production type, then SUM over the types
+    -- of the target: the emitter's corrected_mw is the SUM over
+    -- Wind Onshore + Offshore, so an AVG across them here added
+    -- ~half the total wind as a phantom delta (bug sweep
+    -- 2026-08-25; latent until DK1's package is enabled).
+    SELECT tgt, h, SUM(mw) AS mw
+    FROM (
+        SELECT CASE WHEN production_type LIKE 'Solar%' THEN 'solar'
+                    ELSE 'wind' END AS tgt,
+               production_type,
+               date_trunc('hour', date_time_utc) AS h,
+               AVG(day_ahead_generation_forecast_mw) AS mw
+        FROM entsoe.generation_forecasts_for_wind_and_solar
+        WHERE area_map_code = \$1 AND area_type_code LIKE 'BZN%'
+          AND date_time_utc >= (\$2::date::timestamp AT TIME ZONE 'UTC')
+          AND date_time_utc < ((\$2::date + 1)::timestamp AT TIME ZONE 'UTC')
+        GROUP BY 1, 2, 3
+    ) t
+    GROUP BY 1, 2
+) f ON f.tgt = c.target AND f.h = c.date_time_utc
+WHERE c.bidding_zone = \$1
+  AND c.date_time_utc >= (\$2::date::timestamp AT TIME ZONE 'UTC')
+  AND c.date_time_utc < ((\$2::date + 1)::timestamp AT TIME ZONE 'UTC')
+""",
+                Any[zone, day],
+            )
             for r in eachrow(df)
                 (ismissing(r.delta)) && continue
                 k = Dates.format(r.h, "yyyymmdd-HH")
@@ -358,7 +423,8 @@ function _input_correction_deltas(zone::String, day::Date)
         catch e
             if !_CV32_WARNED[]
                 _CV32_WARNED[] = true
-                @warn "cv32 input-corrections unavailable — raw forecasts kept" zone day error = sprint(showerror, e)
+                @warn "cv32 input-corrections unavailable — raw forecasts kept" zone day error =
+                    sprint(showerror, e)
             end
             return out   # fail-soft, NOT cached
         end
@@ -368,7 +434,9 @@ function _input_correction_deltas(zone::String, day::Date)
 end
 
 "Clear the cv32 winner-input delta cache (tests / long processes)."
-clear_input_correction_cache!() = (lock(_CV32_DELTA_LOCK) do; empty!(_CV32_DELTA_CACHE); end; nothing)
+clear_input_correction_cache!() = (lock(_CV32_DELTA_LOCK) do ;
+    empty!(_CV32_DELTA_CACHE);
+end; nothing)
 
 # ── GR surplus-quantity lever 2: overnight-runner commitments ─────────────
 # (prereg docs/experiments/gr-surplus-quantity/prereg-2026-08.md, opt-in via
@@ -385,27 +453,33 @@ p_max. Missing days count against the 60% (fail-soft: the ~3-week per-unit
 feed tail lag simply leaves the lever inert on recent days, live and
 offline alike). Cached per (zone, day); never cached on DB error.
 """
-function _valley_continuation_commits(zone::String, day::Date,
-                                      generators::Vector{Generator})
+function _valley_continuation_commits(
+    zone::String,
+    day::Date,
+    generators::Vector{Generator},
+)
     lock(_GRSQ_COMMIT_LOCK) do
-        haskey(_GRSQ_COMMIT_CACHE, (zone, day)) &&
-            return _GRSQ_COMMIT_CACHE[(zone, day)]
+        haskey(_GRSQ_COMMIT_CACHE, (zone, day)) && return _GRSQ_COMMIT_CACHE[(zone, day)]
     end
-    pmax = Dict{String,Float64}(g.code => g.p_max for g in generators
-                                if !(g.fuel_type in FLEXIBLE_FUEL_TYPES) &&
-                                   g.p_max > 0)
+    pmax = Dict{String,Float64}(
+        g.code => g.p_max for
+        g in generators if !(g.fuel_type in FLEXIBLE_FUEL_TYPES) && g.p_max > 0
+    )
     isempty(pmax) && return Dict{String,Float64}()
-    df = sql2df_with_retry("""
-        SELECT generation_unit_code AS code, CAST(date_time_utc AS date) AS d,
-               AVG(actual_generation_output_mw) AS mw
-        FROM entsoe.actual_generation_output_per_generation_unit
-        WHERE generation_unit_code = ANY(\$1)
-          AND EXTRACT(HOUR FROM date_time_utc) < 4
-          AND actual_generation_output_mw IS NOT NULL
-          AND date_time_utc >= ((\$2::date - 29)::timestamp AT TIME ZONE 'UTC')
-          AND date_time_utc < ((\$2::date - 1)::timestamp AT TIME ZONE 'UTC')
-        GROUP BY 1, 2
-    """, Any[collect(keys(pmax)), day])
+    df = sql2df_with_retry(
+        """
+    SELECT generation_unit_code AS code, CAST(date_time_utc AS date) AS d,
+           AVG(actual_generation_output_mw) AS mw
+    FROM entsoe.actual_generation_output_per_generation_unit
+    WHERE generation_unit_code = ANY(\$1)
+      AND EXTRACT(HOUR FROM date_time_utc) < 4
+      AND actual_generation_output_mw IS NOT NULL
+      AND date_time_utc >= ((\$2::date - 29)::timestamp AT TIME ZONE 'UTC')
+      AND date_time_utc < ((\$2::date - 1)::timestamp AT TIME ZONE 'UTC')
+    GROUP BY 1, 2
+""",
+        Any[collect(keys(pmax)), day],
+    )
     byu = Dict{String,Vector{Float64}}()
     for r in eachrow(df)
         ismissing(r.mw) && continue
@@ -424,7 +498,9 @@ function _valley_continuation_commits(zone::String, day::Date,
 end
 
 "Clear the valley-continuation commitment cache (tests / long processes)."
-clear_valley_commit_cache!() = (lock(_GRSQ_COMMIT_LOCK) do; empty!(_GRSQ_COMMIT_CACHE); end; nothing)
+clear_valley_commit_cache!() = (lock(_GRSQ_COMMIT_LOCK) do ;
+    empty!(_GRSQ_COMMIT_CACHE);
+end; nothing)
 
 # ── cv34 T3: demonstrated pumping capability ──────────────────────────────
 const _PUMP_CAP_CACHE = Dict{Tuple{String,Date},Dict{Int,Float64}}()
@@ -444,20 +520,23 @@ function _pump_capability(zone::String, day::Date)
     # Round-2 INCREMENTAL basis (the round-1 double-count lesson): the ENTSO-E
     # load fc already embeds expected pumping, so the order quantity is the
     # HEADROOM = trailing p95 (all hours) − trailing MEAN for that hour-of-day.
-    df = sql2df_with_retry("""
-        WITH hourly AS (
-            SELECT date_trunc('hour', date_time_utc) AS h,
-                   AVG(actual_consumption_mw) AS mw
-            FROM entsoe.aggregated_generation_per_type
-            WHERE area_map_code = \$1 AND area_type_code LIKE 'BZN%'
-              AND production_type = 'Hydro Pumped Storage'
-              AND actual_consumption_mw IS NOT NULL
-              AND date_time_utc >= ((\$2::date - 32)::timestamp AT TIME ZONE 'UTC')
-              AND date_time_utc < ((\$2::date - 2)::timestamp AT TIME ZONE 'UTC')
-            GROUP BY 1)
-        SELECT EXTRACT(HOUR FROM h)::int AS hh, AVG(mw) AS hmean,
-               (SELECT percentile_cont(0.95) WITHIN GROUP (ORDER BY mw) FROM hourly) AS p95
-        FROM hourly GROUP BY 1""", Any[zone, day])
+    df = sql2df_with_retry(
+        """
+WITH hourly AS (
+    SELECT date_trunc('hour', date_time_utc) AS h,
+           AVG(actual_consumption_mw) AS mw
+    FROM entsoe.aggregated_generation_per_type
+    WHERE area_map_code = \$1 AND area_type_code LIKE 'BZN%'
+      AND production_type = 'Hydro Pumped Storage'
+      AND actual_consumption_mw IS NOT NULL
+      AND date_time_utc >= ((\$2::date - 32)::timestamp AT TIME ZONE 'UTC')
+      AND date_time_utc < ((\$2::date - 2)::timestamp AT TIME ZONE 'UTC')
+    GROUP BY 1)
+SELECT EXTRACT(HOUR FROM h)::int AS hh, AVG(mw) AS hmean,
+       (SELECT percentile_cont(0.95) WITHIN GROUP (ORDER BY mw) FROM hourly) AS p95
+FROM hourly GROUP BY 1""",
+        Any[zone, day],
+    )
     head = Dict{Int,Float64}()
     for r in eachrow(df)
         (ismissing(r.hmean) || ismissing(r.p95)) && continue
@@ -470,12 +549,17 @@ function _pump_capability(zone::String, day::Date)
 end
 
 "Clear the cv34 pumping-capability cache (tests / long processes)."
-clear_pump_capability_cache!() = (lock(_PUMP_CAP_LOCK) do; empty!(_PUMP_CAP_CACHE); end; nothing)
+clear_pump_capability_cache!() = (lock(_PUMP_CAP_LOCK) do ;
+    empty!(_PUMP_CAP_CACHE);
+end; nothing)
 
-function _demand_series(loads, renewables,
+function _demand_series(
+    loads,
+    renewables,
     target_resolution_minutes::Union{Int,Nothing},
     load_modifier::Union{Nothing,Function},
-    renewable_modifier::Union{Nothing,Function})
+    renewable_modifier::Union{Nothing,Function},
+)
     target_timeslots, load_by_time, renewable_by_time, resolution_minutes =
         disaggregate_temporal_data(loads, renewables)
 
@@ -484,9 +568,11 @@ function _demand_series(loads, renewables,
     # combined book with mixed timeslots isolates the hourly zones in
     # sub-hour slots. Aggregate MW values to the coarser target by
     # averaging sub-slots (MW is power — averaging preserves energy).
-    if target_resolution_minutes !== nothing && resolution_minutes < target_resolution_minutes
-        target_resolution_minutes == 60 ||
-            error("Only hourly (60) target resolution is supported for down-aggregation, got $target_resolution_minutes")
+    if target_resolution_minutes !== nothing &&
+       resolution_minutes < target_resolution_minutes
+        target_resolution_minutes == 60 || error(
+            "Only hourly (60) target resolution is supported for down-aggregation, got $target_resolution_minutes",
+        )
         hour_key(ts) = ts[1:11] * "00"
         function aggregate_to_hours(d::Dict{String,Float64})
             sums = Dict{String,Tuple{Float64,Int}}()
@@ -500,9 +586,12 @@ function _demand_series(loads, renewables,
         load_by_time = aggregate_to_hours(load_by_time)
         renewable_by_time = aggregate_to_hours(renewable_by_time)
         target_timeslots = sort(collect(keys(load_by_time)))
-        println("  🕐 Aggregated $(resolution_minutes)-min data to hourly ($(length(target_timeslots)) slots)")
+        println(
+            "  🕐 Aggregated $(resolution_minutes)-min data to hourly ($(length(target_timeslots)) slots)",
+        )
         resolution_minutes = target_resolution_minutes
-    elseif target_resolution_minutes !== nothing && resolution_minutes > target_resolution_minutes
+    elseif target_resolution_minutes !== nothing &&
+           resolution_minutes > target_resolution_minutes
         # UPSAMPLE (piecewise-constant REPLICATION) to a finer target grid.
         # A zone whose native data is coarser than the shared clearing grid
         # (e.g. an hourly PT60M zone in a 15-min clear) has each native
@@ -515,13 +604,24 @@ function _demand_series(loads, renewables,
         # computations (scarcity margin, water value, demand orders, net
         # imports which are hour-keyed) then run on the shared finer grid
         # exactly as they would for a natively-fine zone.
-        target_resolution_minutes in (15, 30) ||
-            error("Only 15 or 30-min target resolution is supported for up-replication, got $target_resolution_minutes")
-        load_by_time = replicate_to_finer_resolution(load_by_time, resolution_minutes, target_resolution_minutes)
-        renewable_by_time = replicate_to_finer_resolution(renewable_by_time, resolution_minutes, target_resolution_minutes)
+        target_resolution_minutes in (15, 30) || error(
+            "Only 15 or 30-min target resolution is supported for up-replication, got $target_resolution_minutes",
+        )
+        load_by_time = replicate_to_finer_resolution(
+            load_by_time,
+            resolution_minutes,
+            target_resolution_minutes,
+        )
+        renewable_by_time = replicate_to_finer_resolution(
+            renewable_by_time,
+            resolution_minutes,
+            target_resolution_minutes,
+        )
         target_timeslots = sort(collect(keys(load_by_time)))
-        println("  🕐 Upsampled $(resolution_minutes)-min data to $(target_resolution_minutes)-min " *
-                "($(length(target_timeslots)) slots) by piecewise-constant replication")
+        println(
+            "  🕐 Upsampled $(resolution_minutes)-min data to $(target_resolution_minutes)-min " *
+            "($(length(target_timeslots)) slots) by piecewise-constant replication",
+        )
         resolution_minutes = target_resolution_minutes
     end
 
@@ -548,9 +648,14 @@ for `:reservoir_opportunity` zones, reservoir fullness), dryness (reservoir
 levels vs seasonal norm, output-based fallback) and the seasonal drawdown
 signal. Returns `(hydro_pmax, hydro_scale, hydro_dryness, reservoir_drawdown)`.
 """
-function _hydro_state(generators::Vector{Generator}, bidding_zone::String,
-    day::Date, hydro_model::Symbol, seasonal_drawdown::Bool)
-    hydro_pmax = sum((g.p_max for g in generators if _is_hydro(g)); init=0.0)
+function _hydro_state(
+    generators::Vector{Generator},
+    bidding_zone::String,
+    day::Date,
+    hydro_model::Symbol,
+    seasonal_drawdown::Bool,
+)
+    hydro_pmax = sum((g.p_max for g in generators if _is_hydro(g)); init = 0.0)
     hydro_scale = 1.0   # offered-quantity cap (fraction of nameplate)
     hydro_dryness = 0.0 # 0 = normal water conditions, →1 = severe drought
     reservoir_drawdown = 0.0 # 0 = reservoir at seasonal peak, →1 = drawn down
@@ -572,7 +677,7 @@ function _hydro_state(generators::Vector{Generator}, bidding_zone::String,
             # Fallback only when no reservoir filling data: the 365-day
             # output norm is an expensive near-full scan of the per-type
             # table, so compute it lazily here rather than unconditionally.
-            hydro_norm = get_hydro_availability(bidding_zone, day; lookback_days=365)
+            hydro_norm = get_hydro_availability(bidding_zone, day; lookback_days = 365)
             if hydro_norm !== nothing && hydro_norm > 1.0
                 hydro_dryness = clamp(1.0 - hydro_avail / hydro_norm, 0.0, 1.0)
             end
@@ -600,10 +705,15 @@ function _hydro_state(generators::Vector{Generator}, bidding_zone::String,
                 dd !== nothing && (reservoir_drawdown = dd)
             end
         end
-        println("  💧 Hydro: offer scale $(round(hydro_scale, digits=2)), " *
-                "dryness $(round(hydro_dryness, digits=2))" *
-                (reservoir_dryness !== nothing ? " (reservoir levels)" : " (output-based fallback)") *
-                (hydro_model == :reservoir_opportunity ? " [reservoir-opportunity]" : ""))
+        println(
+            "  💧 Hydro: offer scale $(round(hydro_scale, digits=2)), " *
+            "dryness $(round(hydro_dryness, digits=2))" *
+            (
+                reservoir_dryness !== nothing ? " (reservoir levels)" :
+                " (output-based fallback)"
+            ) *
+            (hydro_model == :reservoir_opportunity ? " [reservoir-opportunity]" : ""),
+        )
     end
     return hydro_pmax, hydro_scale, hydro_dryness, reservoir_drawdown
 end
@@ -613,16 +723,22 @@ Stage 5 — UC-lite committed set: the cheapest eligible thermal units whose
 derated capacity covers the day's peak residual demand. Only these units
 self-schedule their minimum load in the order loop.
 """
-function _committed_set(generators::Vector{Generator}, peak_residual::Float64,
-    gas_srmc::Float64, must_run_srmc_threshold::Float64,
-    availability_factor::Float64)
+function _committed_set(
+    generators::Vector{Generator},
+    peak_residual::Float64,
+    gas_srmc::Float64,
+    must_run_srmc_threshold::Float64,
+    availability_factor::Float64,
+)
     committed = Set{String}()
     eligible = sort(
-        [g for g in generators
-         if !(g.fuel_type in WATER_VALUE_FUEL_TYPES) &&
-            g.marginal_cost <= must_run_srmc_threshold * gas_srmc &&
-            g.p_min > 0.1],
-        by=g -> g.marginal_cost)
+        [
+            g for g in generators if !(g.fuel_type in WATER_VALUE_FUEL_TYPES) &&
+                g.marginal_cost <= must_run_srmc_threshold * gas_srmc &&
+                g.p_min > 0.1
+        ],
+        by = g -> g.marginal_cost,
+    )
     cum_capacity = 0.0
     for g in eligible
         cum_capacity >= 1.05 * peak_residual && break
@@ -662,21 +778,33 @@ the ex-ante nuclear energy budget tightens (low availability = summer maintenanc
 analogy for the energy-constrained EDF fleet. Otherwise returns `anchor_share`
 unchanged (byte-identical). See the `ZoneProfile` field docstring + the cv23 doc.
 """
-function _effective_nuclear_share(profile::ZoneProfile, anchor_active::Bool,
-    opportunity_anchor::Symbol, anchor_share::Float64,
-    bidding_zone::String, day::Date)
-    (anchor_active && opportunity_anchor == :nuclear &&
-     profile.nuclear_avail_share_hi > 0.0) || return anchor_share
+function _effective_nuclear_share(
+    profile::ZoneProfile,
+    anchor_active::Bool,
+    opportunity_anchor::Symbol,
+    anchor_share::Float64,
+    bidding_zone::String,
+    day::Date,
+)
+    (
+        anchor_active &&
+        opportunity_anchor == :nuclear &&
+        profile.nuclear_avail_share_hi > 0.0
+    ) || return anchor_share
     a = _nuclear_avail_frac(bidding_zone, day)
     a === nothing && return anchor_share
     tight = clamp(
-        (NUCLEAR_AVAIL_REF - a) /
-        max(NUCLEAR_AVAIL_REF - NUCLEAR_AVAIL_FLOOR, 1e-6),
-        0.0, 1.0)
-    share = profile.nuclear_avail_share_lo +
-            (profile.nuclear_avail_share_hi - profile.nuclear_avail_share_lo) * tight
-    println("  ⚛️  Nuclear availability $(round(a, digits=2)) → opportunity share " *
-            "$(round(share, digits=2)) (tightness $(round(tight, digits=2)))")
+        (NUCLEAR_AVAIL_REF - a) / max(NUCLEAR_AVAIL_REF - NUCLEAR_AVAIL_FLOOR, 1e-6),
+        0.0,
+        1.0,
+    )
+    share =
+        profile.nuclear_avail_share_lo +
+        (profile.nuclear_avail_share_hi - profile.nuclear_avail_share_lo) * tight
+    println(
+        "  ⚛️  Nuclear availability $(round(a, digits=2)) → opportunity share " *
+        "$(round(share, digits=2)) (tightness $(round(tight, digits=2)))",
+    )
     return share
 end
 
@@ -767,33 +895,33 @@ _conduct_layer_on() = lowercase(get(ENV, "EUPHEMIA_CONDUCT_LAYER", "")) != "off"
 function create_merit_order_book(
     bidding_zone::String,
     day::Date;
-    profile::ZoneProfile=SEE_PROFILE,
-    scarcity_threshold::Union{Nothing,Float64}=nothing,
-    scarcity_kappa::Union{Nothing,Float64}=nothing,
-    peak_kappa::Union{Nothing,Float64}=nothing,
-    water_value_base::Union{Nothing,Float64}=nothing,
-    water_value_span::Union{Nothing,Float64}=nothing,
-    include_net_imports::Bool=true,
-    net_import_exclude::Vector{String}=String[],
-    net_import_import_only::Vector{String}=String[],
-    target_resolution_minutes::Union{Int,Nothing}=nothing,
-    thermal_srmc_multiplier::Union{Nothing,Float64}=nothing,
-    hydro_model::Union{Nothing,Symbol}=nothing,
-    nuclear_srmc_floor::Union{Nothing,Float64}=nothing,
-    opportunity_anchor::Union{Nothing,Symbol}=nothing,
-    anchor_share::Union{Nothing,Float64}=nothing,
-    anchor_prices::Union{Nothing,Dict{String,Float64}}=nothing,
-    pass1_prices::Union{Nothing,Dict{String,Float64}}=nothing,
-    anchor_export_mw::Dict{Int,Float64}=Dict{Int,Float64}(),
-    res_coalesce_missing::Bool=false,
-    endogenous_import_atc::Union{Nothing,Dict{Int,Float64}}=nothing,
-    load_modifier::Union{Nothing,Function}=nothing,
-    renewable_modifier::Union{Nothing,Function}=nothing,
-    extra_orders::Union{Nothing,Function}=nothing,
-    strategist::Union{Nothing,Function}=nothing,
-    fleet_modifier::Union{Nothing,Function}=nothing,
-    load_fill::Union{Nothing,Function}=nothing,
-    res_fill::Union{Nothing,Function}=nothing
+    profile::ZoneProfile = SEE_PROFILE,
+    scarcity_threshold::Union{Nothing,Float64} = nothing,
+    scarcity_kappa::Union{Nothing,Float64} = nothing,
+    peak_kappa::Union{Nothing,Float64} = nothing,
+    water_value_base::Union{Nothing,Float64} = nothing,
+    water_value_span::Union{Nothing,Float64} = nothing,
+    include_net_imports::Bool = true,
+    net_import_exclude::Vector{String} = String[],
+    net_import_import_only::Vector{String} = String[],
+    target_resolution_minutes::Union{Int,Nothing} = nothing,
+    thermal_srmc_multiplier::Union{Nothing,Float64} = nothing,
+    hydro_model::Union{Nothing,Symbol} = nothing,
+    nuclear_srmc_floor::Union{Nothing,Float64} = nothing,
+    opportunity_anchor::Union{Nothing,Symbol} = nothing,
+    anchor_share::Union{Nothing,Float64} = nothing,
+    anchor_prices::Union{Nothing,Dict{String,Float64}} = nothing,
+    pass1_prices::Union{Nothing,Dict{String,Float64}} = nothing,
+    anchor_export_mw::Dict{Int,Float64} = Dict{Int,Float64}(),
+    res_coalesce_missing::Bool = false,
+    endogenous_import_atc::Union{Nothing,Dict{Int,Float64}} = nothing,
+    load_modifier::Union{Nothing,Function} = nothing,
+    renewable_modifier::Union{Nothing,Function} = nothing,
+    extra_orders::Union{Nothing,Function} = nothing,
+    strategist::Union{Nothing,Function} = nothing,
+    fleet_modifier::Union{Nothing,Function} = nothing,
+    load_fill::Union{Nothing,Function} = nothing,
+    res_fill::Union{Nothing,Function} = nothing,
 )
     # Resolve every bid parameter from the profile, letting an explicit keyword
     # override its profile field. With no overrides and the default SEE_PROFILE
@@ -807,23 +935,30 @@ function create_merit_order_book(
     must_run_price_factor = MUST_RUN_PRICE_FACTOR
     must_run_srmc_threshold = MUST_RUN_SRMC_THRESHOLD
     availability_factor = AVAILABILITY_FACTOR
-    scarcity_threshold = scarcity_threshold === nothing ? profile.scarcity_threshold : scarcity_threshold
+    scarcity_threshold =
+        scarcity_threshold === nothing ? profile.scarcity_threshold : scarcity_threshold
     scarcity_kappa = scarcity_kappa === nothing ? profile.scarcity_kappa : scarcity_kappa
     peak_kappa = peak_kappa === nothing ? profile.peak_kappa : peak_kappa
     peak_exponent = PEAK_EXPONENT
-    water_value_base = water_value_base === nothing ? profile.water_value_base : water_value_base
+    water_value_base =
+        water_value_base === nothing ? profile.water_value_base : water_value_base
     water_value_dry_boost = WATER_VALUE_DRY_BOOST
-    water_value_span = water_value_span === nothing ? profile.water_value_span : water_value_span
+    water_value_span =
+        water_value_span === nothing ? profile.water_value_span : water_value_span
     demand_elastic_share = DEMAND_ELASTIC_SHARE
     demand_elastic_price = DEMAND_ELASTIC_PRICE
     price_cap = PRICE_CAP
     fleet_completion = FLEET_COMPLETION
     fleet_truthing = FLEET_TRUTHING
     derate_headroom = DERATE_HEADROOM
-    thermal_srmc_multiplier = thermal_srmc_multiplier === nothing ? profile.thermal_srmc_multiplier : thermal_srmc_multiplier
+    thermal_srmc_multiplier =
+        thermal_srmc_multiplier === nothing ? profile.thermal_srmc_multiplier :
+        thermal_srmc_multiplier
     hydro_model = hydro_model === nothing ? profile.hydro_model : hydro_model
-    nuclear_srmc_floor = nuclear_srmc_floor === nothing ? profile.nuclear_srmc_floor : nuclear_srmc_floor
-    opportunity_anchor = opportunity_anchor === nothing ? profile.opportunity_anchor : opportunity_anchor
+    nuclear_srmc_floor =
+        nuclear_srmc_floor === nothing ? profile.nuclear_srmc_floor : nuclear_srmc_floor
+    opportunity_anchor =
+        opportunity_anchor === nothing ? profile.opportunity_anchor : opportunity_anchor
     anchor_share = anchor_share === nothing ? profile.anchor_share : anchor_share
     # The opportunity anchor is active only when BOTH the profile opts in AND
     # pass-1 reference prices were supplied (two-pass clearing, pass 2). With
@@ -837,10 +972,19 @@ function create_merit_order_book(
         generators = get_generators(bidding_zone, day)
 
         # ── Stage 1: true up + price the offered fleet ──────────────────
-        generators = _true_up_fleet(generators, bidding_zone, day, profile;
-                fleet_completion, fleet_truthing, derate_headroom,
-                thermal_srmc_multiplier, nuclear_srmc_floor,
-                anchor_active, opportunity_anchor)
+        generators = _true_up_fleet(
+            generators,
+            bidding_zone,
+            day,
+            profile;
+            fleet_completion,
+            fleet_truthing,
+            derate_headroom,
+            thermal_srmc_multiplier,
+            nuclear_srmc_floor,
+            anchor_active,
+            opportunity_anchor,
+        )
 
         # Scenario fleet_modifier — add / remove / derate physical units as
         # DATA. Applied AFTER fleet completion and fleet-truthing (above) on
@@ -854,11 +998,20 @@ function create_merit_order_book(
         # the hook is nothing (byte-identical).
         if fleet_modifier !== nothing
             generators = collect(fleet_modifier(bidding_zone, generators))
-            eltype(generators) <: Generator ||
-                error("fleet_modifier must return a Vector{Generator}, got eltype $(eltype(generators))")
-            isempty(generators) &&
-                return AdjustedOrderBookResult(false,
-                    "fleet_modifier removed all generators", nothing, 0, 0, 0, 0.0, 0.0, 0.0)
+            eltype(generators) <: Generator || error(
+                "fleet_modifier must return a Vector{Generator}, got eltype $(eltype(generators))",
+            )
+            isempty(generators) && return AdjustedOrderBookResult(
+                false,
+                "fleet_modifier removed all generators",
+                nothing,
+                0,
+                0,
+                0,
+                0.0,
+                0.0,
+                0.0,
+            )
         end
         loads = get_loads(bidding_zone, day)
         # Load-fill (daily-forecast eligibility fill): when the TSO day-ahead
@@ -880,12 +1033,17 @@ function create_merit_order_book(
                     push!(loads, Load(ts, "60", bidding_zone, mw))
                     added += 1
                 end
-                added > 0 && println("  🩹 load-fill: $bidding_zone added $added model hour(s) " *
-                                     "(TSO published $(length(covered))h; missing hours filled)")
+                added > 0 && println(
+                    "  🩹 load-fill: $bidding_zone added $added model hour(s) " *
+                    "(TSO published $(length(covered))h; missing hours filled)",
+                )
             end
         end
-        renewables = get_generation_forecast_for_wind_and_solar(bidding_zone, day;
-            coalesce_missing=res_coalesce_missing)
+        renewables = get_generation_forecast_for_wind_and_solar(
+            bidding_zone,
+            day;
+            coalesce_missing = res_coalesce_missing,
+        )
         # RES-fill (daily-forecast RES eligibility fill) — the twin of load-fill.
         # When the TSO 14.1.D wind/solar forecast for this zone/day is
         # missing/short, add weather-model RES for the hours the TSO did NOT
@@ -901,20 +1059,50 @@ function create_merit_order_book(
                 radded = 0
                 for (ts, mw) in rfilled
                     ts[1:11] in rcovered && continue                   # TSO already covers this hour
-                    push!(renewables, RenewablesGenerationForecast(ts, "60", bidding_zone,
-                                                                    "WeatherFill", mw))
+                    push!(
+                        renewables,
+                        RenewablesGenerationForecast(
+                            ts,
+                            "60",
+                            bidding_zone,
+                            "WeatherFill",
+                            mw,
+                        ),
+                    )
                     radded += 1
                 end
-                radded > 0 && println("  🩹 res-fill: $bidding_zone added $radded model hour(s) " *
-                                      "(TSO published $(length(rcovered))h; missing hours filled)")
+                radded > 0 && println(
+                    "  🩹 res-fill: $bidding_zone added $radded model hour(s) " *
+                    "(TSO published $(length(rcovered))h; missing hours filled)",
+                )
             end
         end
 
         if isempty(generators)
-            return AdjustedOrderBookResult(false, "No generators found", nothing, 0, 0, 0, 0.0, 0.0, 0.0)
+            return AdjustedOrderBookResult(
+                false,
+                "No generators found",
+                nothing,
+                0,
+                0,
+                0,
+                0.0,
+                0.0,
+                0.0,
+            )
         end
         if isempty(loads)
-            return AdjustedOrderBookResult(false, "No load data found", nothing, 0, 0, 0, 0.0, 0.0, 0.0)
+            return AdjustedOrderBookResult(
+                false,
+                "No load data found",
+                nothing,
+                0,
+                0,
+                0,
+                0.0,
+                0.0,
+                0.0,
+            )
         end
 
         # ── Stage 2: load/RES series on the clearing grid ───────────────
@@ -931,16 +1119,24 @@ function create_merit_order_book(
             cv32_deltas = _input_correction_deltas(bidding_zone, day)
             if !isempty(cv32_deltas)
                 base_rm = renewable_modifier
-                eff_renewable_modifier = (ts, v) -> begin
-                    v2 = max(v + get(cv32_deltas, ts[1:11], 0.0), 0.0)
-                    base_rm === nothing ? v2 : base_rm(ts, v2)
-                end
-                println("  🛠️  cv32 input corrections: $(length(cv32_deltas)) corrected hour(s)")
+                eff_renewable_modifier =
+                    (ts, v) -> begin
+                        v2 = max(v + get(cv32_deltas, ts[1:11], 0.0), 0.0)
+                        base_rm === nothing ? v2 : base_rm(ts, v2)
+                    end
+                println(
+                    "  🛠️  cv32 input corrections: $(length(cv32_deltas)) corrected hour(s)",
+                )
             end
         end
         target_timeslots, load_by_time, renewable_by_time, resolution_minutes =
-            _demand_series(loads, renewables, target_resolution_minutes,
-                load_modifier, eff_renewable_modifier)
+            _demand_series(
+                loads,
+                renewables,
+                target_resolution_minutes,
+                load_modifier,
+                eff_renewable_modifier,
+            )
 
         # ── Stage 3: net imports, demand state, gas anchor, backstop ────
         # Residual demand per slot (load minus renewables) drives water value
@@ -962,14 +1158,18 @@ function create_merit_order_book(
         # injection + backstop headroom (the elastic ladder replaces both). For
         # FR↔GB this is all four codes (aggregate GB + the three cables) so the
         # ≈2× double-count is removed, not just the aggregate — see GB_FR_BOOK.
-        boundary_exclude = boundary_book === nothing ? String[] :
-                           boundary_net_exclude(boundary_book)
-        net_imports = include_net_imports ?
-                      get_net_imports(bidding_zone, day;
-                          exclude_counterparties=vcat(net_import_exclude, boundary_exclude),
-                          import_only_counterparties=net_import_import_only) :
-                      Dict{Int,Float64}()
-        slot_import(ts) = get(net_imports, Dates.hour(parse_timeslot_to_datetime(ts, day)), 0.0)
+        boundary_exclude =
+            boundary_book === nothing ? String[] : boundary_net_exclude(boundary_book)
+        net_imports =
+            include_net_imports ?
+            get_net_imports(
+                bidding_zone,
+                day;
+                exclude_counterparties = vcat(net_import_exclude, boundary_exclude),
+                import_only_counterparties = net_import_import_only,
+            ) : Dict{Int,Float64}()
+        slot_import(ts) =
+            get(net_imports, Dates.hour(parse_timeslot_to_datetime(ts, day)), 0.0)
 
         gross_demand = Dict{String,Float64}()
         net_demand = Dict{String,Float64}()
@@ -991,8 +1191,14 @@ function create_merit_order_book(
         # once per zone-day from ex-ante nuclear availability; used in place of
         # the fixed `anchor_share` in the `:nuclear` anchor branch below. Equals
         # `anchor_share` for every zone that does not opt in (byte-identical).
-        eff_nuclear_share = _effective_nuclear_share(profile, anchor_active,
-            opportunity_anchor, anchor_share, bidding_zone, day)
+        eff_nuclear_share = _effective_nuclear_share(
+            profile,
+            anchor_active,
+            opportunity_anchor,
+            anchor_share,
+            bidding_zone,
+            day,
+        )
 
         # Ex-ante elastic import backstop (cv17, profile-gated — see the
         # `import_backstop` field docstring). Computed next to the :v2 flow
@@ -1002,29 +1208,37 @@ function create_merit_order_book(
         # carries endogenously) is subtracted so MPCC-deliverable capacity is
         # never double-counted. Empty Dict for every non-backstop profile —
         # byte-identical books.
-        backstop_by_hour = (profile.import_backstop && include_net_imports) ?
-            get_import_backstop(bidding_zone, day;
-                weeks=BACKSTOP_WEEKS,
-                endogenous_counterparties=net_import_exclude,
-                exclude_counterparties=boundary_exclude,
-                endogenous_import_atc=endogenous_import_atc) :
-            Dict{Int,Float64}()
+        backstop_by_hour =
+            (profile.import_backstop && include_net_imports) ?
+            get_import_backstop(
+                bidding_zone,
+                day;
+                weeks = BACKSTOP_WEEKS,
+                endogenous_counterparties = net_import_exclude,
+                exclude_counterparties = boundary_exclude,
+                endogenous_import_atc = endogenous_import_atc,
+            ) : Dict{Int,Float64}()
         backstop_price = BACKSTOP_PRICE_MULT * gas_srmc
-        isempty(backstop_by_hour) ||
-            println("  🛟 Import backstop: peak $(round(Int, maximum(values(backstop_by_hour)))) MW " *
-                    "@ €$(round(backstop_price, digits=1))/MWh " *
-                    "($(length(backstop_by_hour)) hours, $(BACKSTOP_WEEKS)-week window)")
+        isempty(backstop_by_hour) || println(
+            "  🛟 Import backstop: peak $(round(Int, maximum(values(backstop_by_hour)))) MW " *
+            "@ €$(round(backstop_price, digits=1))/MWh " *
+            "($(length(backstop_by_hour)) hours, $(BACKSTOP_WEEKS)-week window)",
+        )
 
         # ── Stage 4: hydro fleet state (offer scale, dryness, drawdown) ──
-        hydro_pmax, hydro_scale, hydro_dryness, reservoir_drawdown =
-            _hydro_state(generators, bidding_zone, day, hydro_model,
-                profile.seasonal_drawdown)
+        hydro_pmax, hydro_scale, hydro_dryness, reservoir_drawdown = _hydro_state(
+            generators,
+            bidding_zone,
+            day,
+            hydro_model,
+            profile.seasonal_drawdown,
+        )
         # cv37 wet-adjusted drawdown: the SIGNED dryness (negative = wetter than
         # the same-week prior-year norm) damps the seasonal water-value lift.
         # Only read when the profile opts in; every legacy consumer keeps the
         # 0-clamped hydro_dryness.
         signed_dryness = if profile.wet_adjusted_drawdown && hydro_pmax > 1.0
-            sd = get_reservoir_dryness(bidding_zone, day; signed=true)
+            sd = get_reservoir_dryness(bidding_zone, day; signed = true)
             sd === nothing ? hydro_dryness : sd
         else
             hydro_dryness
@@ -1035,16 +1249,23 @@ function create_merit_order_book(
         # A/B arm switch: EUPHEMIA_SPILL_GATE=<ratio> turns the gate on for every
         # :reservoir_opportunity profile that does not declare its own value
         # (the profile field wins once promoted).
-        spill_gate_ratio = profile.spill_gate_ratio > 0.0 ? profile.spill_gate_ratio :
-            (hydro_model == :reservoir_opportunity ?
-                something(tryparse(Float64, get(ENV, "EUPHEMIA_SPILL_GATE", "")), 0.0) : 0.0)
+        spill_gate_ratio =
+            profile.spill_gate_ratio > 0.0 ? profile.spill_gate_ratio :
+            (
+                hydro_model == :reservoir_opportunity ?
+                something(tryparse(Float64, get(ENV, "EUPHEMIA_SPILL_GATE", "")), 0.0) :
+                0.0
+            )
         if spill_gate_ratio > 0.0 && hydro_pmax > 1.0
             fr = get_reservoir_fill_ratio(bidding_zone, day)
             if fr !== nothing && fr >= spill_gate_ratio
-                spill_share = profile.spill_gate_share *
-                              clamp((fr - spill_gate_ratio) / 0.10, 0.0, 1.0)
-                println("  🌊 Spill regime: fill ratio $(round(fr, digits=2)) ≥ $(spill_gate_ratio) → " *
-                        "$(round(Int, 100 * spill_share))% of reservoir quantity at €$(profile.spill_gate_price)/MWh")
+                spill_share =
+                    profile.spill_gate_share *
+                    clamp((fr - spill_gate_ratio) / 0.10, 0.0, 1.0)
+                println(
+                    "  🌊 Spill regime: fill ratio $(round(fr, digits=2)) ≥ $(spill_gate_ratio) → " *
+                    "$(round(Int, 100 * spill_share))% of reservoir quantity at €$(profile.spill_gate_price)/MWh",
+                )
             end
         end
 
@@ -1052,17 +1273,24 @@ function create_merit_order_book(
         # realistic availability of the fleet (unreported outages) and for
         # the hydro energy limit — nameplate capacity never looks scarce.
         dispatchable_capacity =
-            availability_factor * sum((g.p_max for g in generators if !_is_hydro(g)); init=0.0) +
+            availability_factor *
+            sum((g.p_max for g in generators if !_is_hydro(g)); init = 0.0) +
             hydro_scale * hydro_pmax
 
         # Available import capacity per UTC hour, credited into the scarcity
         # margin when the profile opts in (thermal import/export zones). 0 = off.
-        import_atc_by_hour = profile.scarcity_import_credit > 0.0 ?
+        import_atc_by_hour =
+            profile.scarcity_import_credit > 0.0 ?
             get_import_atc_capacity(bidding_zone, day) : Dict{Int,Float64}()
 
         # ── Stage 5: UC-lite committed set (peak-covering cheap thermal) ─
-        committed = _committed_set(generators, nd_max, gas_srmc,
-            must_run_srmc_threshold, availability_factor)
+        committed = _committed_set(
+            generators,
+            nd_max,
+            gas_srmc,
+            must_run_srmc_threshold,
+            availability_factor,
+        )
 
         # ── Stage 6: the supply order loop (RES, imports, hydro, thermal) ─
         # Every order is tagged with an owner (Feature 5, strategist hook):
@@ -1079,7 +1307,8 @@ function create_merit_order_book(
         # `strategy` column; NEVER passed into the strategist ctx.
         strategies = String[]
         push_tagged!(o::SimpleOrder, owner::String, strat::String) = begin
-            push!(tagged, (o, owner)); push!(strategies, strat)
+            push!(tagged, (o, owner));
+            push!(strategies, strat)
         end
         supply_orders_count = 0
         demand_orders_count = 0
@@ -1107,13 +1336,19 @@ function create_merit_order_book(
         # EUPHEMIA_SOLAR_REGIME=0 forces the mechanism off, and THETA/BLOCKS/
         # ZONES override the shipped values for A/Bs. One declared parameter: θ.
         sr_disabled = !isempty(get(ENV, "EUPHEMIA_DISABLE_CV31", ""))
-        solar_regime = !sr_disabled &&
-            (haskey(ENV, "EUPHEMIA_SOLAR_REGIME") ?
-                !(isempty(ENV["EUPHEMIA_SOLAR_REGIME"]) ||
-                  ENV["EUPHEMIA_SOLAR_REGIME"] == "0") :
-                true)
-        sr_zones = Set(strip.(split(get(ENV, "EUPHEMIA_SOLAR_REGIME_ZONES",
-            "DE_LU,FR,PL,BE,CZ,CH"), ",")))
+        solar_regime =
+            !sr_disabled && (
+                haskey(ENV, "EUPHEMIA_SOLAR_REGIME") ?
+                !(
+                    isempty(ENV["EUPHEMIA_SOLAR_REGIME"]) ||
+                    ENV["EUPHEMIA_SOLAR_REGIME"] == "0"
+                ) : true
+            )
+        sr_zones = Set(
+            strip.(
+                split(get(ENV, "EUPHEMIA_SOLAR_REGIME_ZONES", "DE_LU,FR,PL,BE,CZ,CH"), ","),
+            ),
+        )
         solar_regime_on = solar_regime && (bidding_zone in sr_zones)
         sr_theta = parse(Float64, get(ENV, "EUPHEMIA_SOLAR_REGIME_THETA", "0.4"))
         # cv34 T1 (prereg docs/experiments/continental-collapse/): a ZONAL θ
@@ -1123,13 +1358,14 @@ function create_merit_order_book(
         let zk = "EUPHEMIA_SOLAR_REGIME_THETA_" * replace(bidding_zone, "-" => "_")
             haskey(ENV, zk) && (sr_theta = parse(Float64, ENV[zk]))
         end
-        sr_full = solar_regime_on &&
-                  get(ENV, "EUPHEMIA_SOLAR_REGIME_BLOCKS", "full") == "full"
+        sr_full =
+            solar_regime_on && get(ENV, "EUPHEMIA_SOLAR_REGIME_BLOCKS", "full") == "full"
         # cv34 T2: deep-tier floor — when the hour's solar share ALSO clears
         # θ2 (EUPHEMIA_SOLAR_REGIME_THETA2), the regime floor deepens to
         # EUPHEMIA_SOLAR_REGIME_FLOOR2 (default −80). θ2 unset ⇒ tier 2
         # disabled entirely (single −20 floor, byte-identical to cv31).
-        sr_theta2 = haskey(ENV, "EUPHEMIA_SOLAR_REGIME_THETA2") ?
+        sr_theta2 =
+            haskey(ENV, "EUPHEMIA_SOLAR_REGIME_THETA2") ?
             parse(Float64, ENV["EUPHEMIA_SOLAR_REGIME_THETA2"]) : Inf
         sr_floor2 = parse(Float64, get(ENV, "EUPHEMIA_SOLAR_REGIME_FLOOR2", "-80"))
         solar_share_hr = Dict{Int,Float64}()
@@ -1139,8 +1375,10 @@ function create_merit_order_book(
             for r in renewables
                 r.production_type == "Solar" || continue
                 length(r.date_time) >= 11 || continue
-                push!(get!(sol_hr, parse(Int, r.date_time[10:11]), Float64[]),
-                      r.aggregated_generation_forecast)
+                push!(
+                    get!(sol_hr, parse(Int, r.date_time[10:11]), Float64[]),
+                    r.aggregated_generation_forecast,
+                )
             end
             for (ts, v) in load_by_time
                 length(ts) >= 11 || continue
@@ -1153,8 +1391,8 @@ function create_merit_order_book(
         end
         sr_active(hr) = solar_regime_on && get(solar_share_hr, hr, 0.0) >= sr_theta
         # cv34 T2: the floor for an ACTIVE regime hour (tier 2 if share >= θ2)
-        sr_floor(hr) = get(solar_share_hr, hr, 0.0) >= sr_theta2 ? sr_floor2 :
-                       DEEP_SURPLUS_FLOOR_EUR
+        sr_floor(hr) =
+            get(solar_share_hr, hr, 0.0) >= sr_theta2 ? sr_floor2 : DEEP_SURPLUS_FLOOR_EUR
 
         # ── cv34 T4: thermal valley wall, pass-1-gated (prereg
         # docs/experiments/continental-collapse/prereg-draft-2026-08.md) ──
@@ -1175,8 +1413,8 @@ function create_merit_order_book(
                 Dict{String,Float64}()
             end
         end
-        grsq2_slot(dt) = grsq2_on &&
-            get(pass1_prices, Dates.format(dt, "yyyymmdd-HHMM"), Inf) <= 5.0
+        grsq2_slot(dt) =
+            grsq2_on && get(pass1_prices, Dates.format(dt, "yyyymmdd-HHMM"), Inf) <= 5.0
 
         for ts in target_timeslots
             date_time = parse_timeslot_to_datetime(ts, day)
@@ -1186,10 +1424,18 @@ function create_merit_order_book(
             # price-taker; support schemes make it insensitive to price)
             res_qty = get(renewable_by_time, ts, 0.0)
             if res_qty > 0.1
-                push_tagged!(SimpleOrder(:supply,
-                    sr_active(hr) ? sr_floor(hr) : 1.0, res_qty,
-                    Symbol(bidding_zone), date_time, resolution_minutes),
-                    "RES", "res_forecast")
+                push_tagged!(
+                    SimpleOrder(
+                        :supply,
+                        sr_active(hr) ? sr_floor(hr) : 1.0,
+                        res_qty,
+                        Symbol(bidding_zone),
+                        date_time,
+                        resolution_minutes,
+                    ),
+                    "RES",
+                    "res_forecast",
+                )
                 supply_orders_count += 1
                 total_supply_capacity += res_qty
             end
@@ -1206,12 +1452,24 @@ function create_merit_order_book(
                 # anchor level the import-marginal hours clear at the coupled
                 # reference, as they do in reality. Everywhere else imports
                 # stay price-taking at €1 (unchanged).
-                import_price = (anchor_active && opportunity_anchor == :hydro &&
-                                haskey(anchor_prices, ts)) ?
-                               clamp(anchor_share * anchor_prices[ts], 1.0, gas_srmc) : 1.0
-                push_tagged!(SimpleOrder(:supply, import_price, ni,
-                    Symbol(bidding_zone), date_time, resolution_minutes),
-                    "IMPORT", "import_fixed")
+                import_price =
+                    (
+                        anchor_active &&
+                        opportunity_anchor == :hydro &&
+                        haskey(anchor_prices, ts)
+                    ) ? clamp(anchor_share * anchor_prices[ts], 1.0, gas_srmc) : 1.0
+                push_tagged!(
+                    SimpleOrder(
+                        :supply,
+                        import_price,
+                        ni,
+                        Symbol(bidding_zone),
+                        date_time,
+                        resolution_minutes,
+                    ),
+                    "IMPORT",
+                    "import_fixed",
+                )
                 supply_orders_count += 1
                 total_supply_capacity += ni
             elseif ni < -0.1
@@ -1222,12 +1480,21 @@ function create_merit_order_book(
                 # domestic stress like a real one — the demand-side mirror of
                 # the dropped-border anchor_export_mw treatment. Everywhere
                 # else (and in pass 1) the export stays cap-priced firm demand.
-                ref_priced = profile.ref_priced_exports && anchor_active &&
-                             haskey(anchor_prices, ts)
+                ref_priced =
+                    profile.ref_priced_exports && anchor_active && haskey(anchor_prices, ts)
                 export_price = ref_priced ? max(anchor_prices[ts], 1.0) : price_cap
-                push_tagged!(SimpleOrder(:demand, export_price, -ni,
-                    Symbol(bidding_zone), date_time, resolution_minutes),
-                    "IMPORT", ref_priced ? "ref_priced_export" : "export_demand")
+                push_tagged!(
+                    SimpleOrder(
+                        :demand,
+                        export_price,
+                        -ni,
+                        Symbol(bidding_zone),
+                        date_time,
+                        resolution_minutes,
+                    ),
+                    "IMPORT",
+                    ref_priced ? "ref_priced_export" : "export_demand",
+                )
                 demand_orders_count += 1
                 total_demand_quantity += -ni
             end
@@ -1237,9 +1504,18 @@ function create_merit_order_book(
             # it binds only when the book would otherwise jump to the cap.
             backstop_qty = get(backstop_by_hour, hr, 0.0)
             if backstop_qty > 1.0
-                push_tagged!(SimpleOrder(:supply, backstop_price, backstop_qty,
-                    Symbol(bidding_zone), date_time, resolution_minutes),
-                    "BACKSTOP", "import_backstop")
+                push_tagged!(
+                    SimpleOrder(
+                        :supply,
+                        backstop_price,
+                        backstop_qty,
+                        Symbol(bidding_zone),
+                        date_time,
+                        resolution_minutes,
+                    ),
+                    "BACKSTOP",
+                    "import_backstop",
+                )
                 supply_orders_count += 1
                 total_supply_capacity += backstop_qty
             end
@@ -1254,13 +1530,24 @@ function create_merit_order_book(
             # manufacture cap scarcity; and it is SEPARATE from the clamped
             # import supply, so it cannot net away import energy either
             # (measured failure mode of netting: NO1 −23 → +134).
-            if anchor_active && opportunity_anchor == :hydro &&
-               haskey(anchor_prices, ts) && !isempty(anchor_export_mw)
+            if anchor_active &&
+               opportunity_anchor == :hydro &&
+               haskey(anchor_prices, ts) &&
+               !isempty(anchor_export_mw)
                 ex_mw = get(anchor_export_mw, hr, 0.0)
                 if ex_mw > 0.1
-                    push_tagged!(SimpleOrder(:demand, max(anchor_prices[ts], 1.0),
-                        ex_mw, Symbol(bidding_zone), date_time, resolution_minutes),
-                        "IMPORT", "ref_priced_export")
+                    push_tagged!(
+                        SimpleOrder(
+                            :demand,
+                            max(anchor_prices[ts], 1.0),
+                            ex_mw,
+                            Symbol(bidding_zone),
+                            date_time,
+                            resolution_minutes,
+                        ),
+                        "IMPORT",
+                        "ref_priced_export",
+                    )
                     demand_orders_count += 1
                     total_demand_quantity += ex_mw
                 end
@@ -1279,21 +1566,23 @@ function create_merit_order_book(
             # Credit available import capacity (gated): a zone that can import
             # GWs is not domestically scarce. Only the scarcity term is relieved;
             # the peak strategic-bidding term is left intact.
-            import_credit = profile.scarcity_import_credit > 0.0 ?
-                profile.scarcity_import_credit *
-                get(import_atc_by_hour, hr, 0.0) : 0.0
+            import_credit =
+                profile.scarcity_import_credit > 0.0 ?
+                profile.scarcity_import_credit * get(import_atc_by_hour, hr, 0.0) : 0.0
             # cv17: gated scarcity credit for the backstop quantity (the
             # scarcity MARKUP cannot otherwise see the backstop supply, so
             # restored-import days can keep a residual markup overshoot).
             # 0 (default) = off everywhere.
-            backstop_credit = profile.backstop_scarcity_credit > 0.0 ?
-                profile.backstop_scarcity_credit *
-                get(backstop_by_hour, hr, 0.0) : 0.0
-            margin = (dispatchable_capacity + import_credit + backstop_credit) / net_demand[ts]
-            scarcity = _conduct_layer_on() ?
-                       1.0 + scarcity_kappa * max(0.0, scarcity_threshold - margin)^2 +
-                             peak_kappa * norm_demand^peak_exponent :
-                       1.0
+            backstop_credit =
+                profile.backstop_scarcity_credit > 0.0 ?
+                profile.backstop_scarcity_credit * get(backstop_by_hour, hr, 0.0) : 0.0
+            margin =
+                (dispatchable_capacity + import_credit + backstop_credit) / net_demand[ts]
+            scarcity =
+                _conduct_layer_on() ?
+                1.0 +
+                scarcity_kappa * max(0.0, scarcity_threshold - margin)^2 +
+                peak_kappa * norm_demand^peak_exponent : 1.0
 
             for g in generators
                 if g.fuel_type in WATER_VALUE_FUEL_TYPES
@@ -1318,44 +1607,62 @@ function create_merit_order_book(
                     # (willing to undercut the continent to export), rising
                     # with dryness. Clamped to [2, gas SRMC].
                     # Strategy label mirrors the water-value branch taken below.
-                    wv_strategy = (anchor_active && opportunity_anchor == :hydro &&
-                                   haskey(anchor_prices, ts)) ? "water_value_anchored" :
-                                  hydro_model == :reservoir_opportunity ?
-                                      "water_value_reservoir" : "water_value_gas_anchored"
-                    water_value = if anchor_active && opportunity_anchor == :hydro &&
-                                     haskey(anchor_prices, ts)
-                        # cv34 T5 (round-2 prereg): in regime hours the anchored
-                        # water value may yield to the declared floor — the 2.0
-                        # lower clamp is the measured CH wall (census step 3).
-                        # EUPHEMIA_CV34_T5_ZONES empty/unset ⇒ inert.
-                        wv_lo = (bidding_zone in
-                                     strip.(split(get(ENV, "EUPHEMIA_CV34_T5_ZONES", ""), ",")) &&
-                                 sr_active(hr)) ? sr_floor(hr) : 2.0
-                        clamp(anchor_prices[ts] *
-                              (anchor_share + water_value_dry_boost * hydro_dryness),
-                              wv_lo, gas_srmc)
-                    elseif hydro_model == :reservoir_opportunity
-                        # Stored water is worth a FRACTION of the continental
-                        # thermal price (gas SRMC proxy): an export-opportunity
-                        # floor (~0.35×) when reservoirs are full, rising to the
-                        # full thermal alternative (1.0×) as they empty. Then
-                        # shaped by within-day demand. NOT gas-anchored at parity
-                        # — full Nordic reservoirs price well below gas, which is
-                        # what stops the scarcity/cap blow-up.
-                        # Floor rises with EITHER prior-year dryness OR the
-                        # absolute seasonal drawdown (winter reservoir depletion
-                        # raises the shadow value of stored water — SE1/SE2 draw
-                        # to 55–60% of the annual peak by February at dryness 0).
-                        eff_seasonal = profile.wet_adjusted_drawdown ?
-                            clamp(reservoir_drawdown + signed_dryness,
-                                  max(signed_dryness, 0.0), 1.0) :
-                            reservoir_drawdown
-                        wv_frac = 0.35 + 0.65 * max(hydro_dryness, eff_seasonal)
-                        gas_srmc * wv_frac * (water_value_base + water_value_span * norm_demand)
-                    else
-                        gas_srmc * (1.0 + water_value_dry_boost * hydro_dryness) *
-                        (water_value_base + water_value_span * norm_demand)
-                    end
+                    wv_strategy =
+                        (
+                            anchor_active &&
+                            opportunity_anchor == :hydro &&
+                            haskey(anchor_prices, ts)
+                        ) ? "water_value_anchored" :
+                        hydro_model == :reservoir_opportunity ? "water_value_reservoir" :
+                        "water_value_gas_anchored"
+                    water_value =
+                        if anchor_active &&
+                           opportunity_anchor == :hydro &&
+                           haskey(anchor_prices, ts)
+                            # cv34 T5 (round-2 prereg): in regime hours the anchored
+                            # water value may yield to the declared floor — the 2.0
+                            # lower clamp is the measured CH wall (census step 3).
+                            # EUPHEMIA_CV34_T5_ZONES empty/unset ⇒ inert.
+                            wv_lo =
+                                (
+                                    bidding_zone in strip.(
+                                        split(get(ENV, "EUPHEMIA_CV34_T5_ZONES", ""), ","),
+                                    ) && sr_active(hr)
+                                ) ? sr_floor(hr) : 2.0
+                            clamp(
+                                anchor_prices[ts] *
+                                (anchor_share + water_value_dry_boost * hydro_dryness),
+                                wv_lo,
+                                gas_srmc,
+                            )
+                        elseif hydro_model == :reservoir_opportunity
+                            # Stored water is worth a FRACTION of the continental
+                            # thermal price (gas SRMC proxy): an export-opportunity
+                            # floor (~0.35×) when reservoirs are full, rising to the
+                            # full thermal alternative (1.0×) as they empty. Then
+                            # shaped by within-day demand. NOT gas-anchored at parity
+                            # — full Nordic reservoirs price well below gas, which is
+                            # what stops the scarcity/cap blow-up.
+                            # Floor rises with EITHER prior-year dryness OR the
+                            # absolute seasonal drawdown (winter reservoir depletion
+                            # raises the shadow value of stored water — SE1/SE2 draw
+                            # to 55–60% of the annual peak by February at dryness 0).
+                            eff_seasonal =
+                                profile.wet_adjusted_drawdown ?
+                                clamp(
+                                    reservoir_drawdown + signed_dryness,
+                                    max(signed_dryness, 0.0),
+                                    1.0,
+                                ) : reservoir_drawdown
+                            wv_frac = 0.35 + 0.65 * max(hydro_dryness, eff_seasonal)
+                            gas_srmc *
+                            wv_frac *
+                            (water_value_base + water_value_span * norm_demand)
+                        else
+                            gas_srmc *
+                            (1.0 + water_value_dry_boost * hydro_dryness) *
+                            (water_value_base + water_value_span * norm_demand)
+                        end
                     # cv27 T2 (spill-risk, prereg-frozen): in surplus regimes
                     # (reservoirs full per the profile gate) stored water faces
                     # spill risk and sellers chase the within-day net-demand
@@ -1372,23 +1679,45 @@ function create_merit_order_book(
                     end
                     # Solar-regime full-blocks: run-of-river joins the floor in
                     # regime hours (price-taker, curtailment-avoidance economics).
-                    if sr_full && sr_active(hr) &&
+                    if sr_full &&
+                       sr_active(hr) &&
                        g.fuel_type == Symbol("Hydro Run-of-river and pondage")
                         water_value = sr_floor(hr)
                     end
                     # #366 spill gate: split the reservoir unit's quantity —
                     # the spill share at the spill price, the rest as priced.
-                    spill_mw = (spill_share > 0.0 && g.fuel_type == Symbol("Hydro Water Reservoir")) ?
-                               spill_share * offered_pmax(g) : 0.0
+                    spill_mw =
+                        (
+                            spill_share > 0.0 &&
+                            g.fuel_type == Symbol("Hydro Water Reservoir")
+                        ) ? spill_share * offered_pmax(g) : 0.0
                     if spill_mw > 0.0
-                        push_tagged!(SimpleOrder(:supply, profile.spill_gate_price, spill_mw,
-                            Symbol(bidding_zone), date_time, resolution_minutes),
-                            g.code, "water_value_spill")
+                        push_tagged!(
+                            SimpleOrder(
+                                :supply,
+                                profile.spill_gate_price,
+                                spill_mw,
+                                Symbol(bidding_zone),
+                                date_time,
+                                resolution_minutes,
+                            ),
+                            g.code,
+                            "water_value_spill",
+                        )
                         supply_orders_count += 1
                     end
-                    push_tagged!(SimpleOrder(:supply, water_value, offered_pmax(g) - spill_mw,
-                        Symbol(bidding_zone), date_time, resolution_minutes),
-                        g.code, wv_strategy)
+                    push_tagged!(
+                        SimpleOrder(
+                            :supply,
+                            water_value,
+                            offered_pmax(g) - spill_mw,
+                            Symbol(bidding_zone),
+                            date_time,
+                            resolution_minutes,
+                        ),
+                        g.code,
+                        wv_strategy,
+                    )
                     supply_orders_count += 1
                     total_supply_capacity += offered_pmax(g)
                 else
@@ -1399,11 +1728,14 @@ function create_merit_order_book(
                     # weekday nights and COLLAPSES with it in RES-surplus hours
                     # (weekends/midday), which a static floor cannot do.
                     # Everywhere else gmc ≡ g.marginal_cost.
-                    gmc = (anchor_active && opportunity_anchor == :nuclear &&
-                           g.fuel_type == Symbol("Nuclear") &&
-                           haskey(anchor_prices, ts)) ?
-                          max(g.marginal_cost, eff_nuclear_share * anchor_prices[ts]) :
-                          g.marginal_cost
+                    gmc =
+                        (
+                            anchor_active &&
+                            opportunity_anchor == :nuclear &&
+                            g.fuel_type == Symbol("Nuclear") &&
+                            haskey(anchor_prices, ts)
+                        ) ? max(g.marginal_cost, eff_nuclear_share * anchor_prices[ts]) :
+                        g.marginal_cost
                     # cv23 FR-cap ceiling: bound anchor-lifted nuclear supply
                     # prices (must-run second block + tranches, after the
                     # scarcity/peak markup) to a modest markup over the coupled
@@ -1411,11 +1743,14 @@ function create_merit_order_book(
                     # anchor base into the footprint-wide cap on crisis-tight
                     # winter days. Inf (no clamp) unless the profile opts in AND
                     # this is anchor-lifted nuclear (docs/experiments/cv23-fr-cap.md).
-                    nuc_ceil = (profile.nuclear_bid_ref_ceiling > 0.0 && anchor_active &&
-                                opportunity_anchor == :nuclear &&
-                                g.fuel_type == Symbol("Nuclear") &&
-                                haskey(anchor_prices, ts)) ?
-                               profile.nuclear_bid_ref_ceiling * anchor_prices[ts] : Inf
+                    nuc_ceil =
+                        (
+                            profile.nuclear_bid_ref_ceiling > 0.0 &&
+                            anchor_active &&
+                            opportunity_anchor == :nuclear &&
+                            g.fuel_type == Symbol("Nuclear") &&
+                            haskey(anchor_prices, ts)
+                        ) ? profile.nuclear_bid_ref_ceiling * anchor_prices[ts] : Inf
                     # Must-run self-scheduling: baseload-ish units (SRMC not
                     # far above gas) bid their minimum-load block near zero —
                     # shutting down and restarting costs more than running a
@@ -1440,19 +1775,36 @@ function create_merit_order_book(
                         # below zero, which the >= 0 near-free price never can.
                         # NOT shipped with cv27 (cv28/cv29 measured the floor family
                         # NO-SHIP): explicit opt-in only.
-                        deep_price = (!isempty(get(ENV, "EUPHEMIA_ENABLE_CV27_T3", "")) ||
-                                      (sr_full && sr_active(hr))) ?
-                            (sr_active(hr) ? sr_floor(hr) : DEEP_SURPLUS_FLOOR_EUR) :
+                        deep_price =
+                            (
+                                !isempty(get(ENV, "EUPHEMIA_ENABLE_CV27_T3", "")) ||
+                                (sr_full && sr_active(hr))
+                            ) ? (sr_active(hr) ? sr_floor(hr) : DEEP_SURPLUS_FLOOR_EUR) :
                             gmc * must_run_price_factor
-                        push_tagged!(SimpleOrder(:supply,
-                            deep_price, deep_qty,
-                            Symbol(bidding_zone), date_time, resolution_minutes),
-                            g.code, "must_run_deep")
-                        push_tagged!(SimpleOrder(:supply,
-                            min(max(gmc * 0.5, gmc - 40.0), nuc_ceil),
-                            must_run_qty - deep_qty,
-                            Symbol(bidding_zone), date_time, resolution_minutes),
-                            g.code, "must_run_rest")
+                        push_tagged!(
+                            SimpleOrder(
+                                :supply,
+                                deep_price,
+                                deep_qty,
+                                Symbol(bidding_zone),
+                                date_time,
+                                resolution_minutes,
+                            ),
+                            g.code,
+                            "must_run_deep",
+                        )
+                        push_tagged!(
+                            SimpleOrder(
+                                :supply,
+                                min(max(gmc * 0.5, gmc - 40.0), nuc_ceil),
+                                must_run_qty - deep_qty,
+                                Symbol(bidding_zone),
+                                date_time,
+                                resolution_minutes,
+                            ),
+                            g.code,
+                            "must_run_rest",
+                        )
                         supply_orders_count += 2
                         total_supply_capacity += must_run_qty
                     end
@@ -1464,19 +1816,29 @@ function create_merit_order_book(
                     for (i, (share, mult)) in enumerate(tranches)
                         qty = flexible_capacity * share
                         qty < 0.1 && continue
-                        K = (i == 1 || profile.tranche_grading <= 1) ? 1 :
+                        K =
+                            (i == 1 || profile.tranche_grading <= 1) ? 1 :
                             profile.tranche_grading
                         # cv36 graded ladder: K sub-slices whose multipliers walk
                         # linearly from the PREVIOUS tranche's multiplier to this
                         # one's — a piecewise-linear supply curve instead of a
                         # staircase (K=1 reproduces the classic step exactly).
                         mult_lo = K == 1 ? mult : tranches[i-1][2]
-                        for j in 1:K
+                        for j = 1:K
                             m_j = K == 1 ? mult : mult_lo + (mult - mult_lo) * j / K
                             price = min(gmc * m_j * (i == 1 ? 1.0 : scarcity), nuc_ceil)
-                            push_tagged!(SimpleOrder(:supply, price, qty / K,
-                                Symbol(bidding_zone), date_time, resolution_minutes),
-                                g.code, i == 1 ? "srmc_base" : "peak_tranche_$i")
+                            push_tagged!(
+                                SimpleOrder(
+                                    :supply,
+                                    price,
+                                    qty / K,
+                                    Symbol(bidding_zone),
+                                    date_time,
+                                    resolution_minutes,
+                                ),
+                                g.code,
+                                i == 1 ? "srmc_base" : "peak_tranche_$i",
+                            )
                             supply_orders_count += 1
                             total_supply_capacity += qty / K
                         end
@@ -1502,7 +1864,7 @@ function create_merit_order_book(
             n_repriced = 0
             for ((code, dt), idxs) in byunit
                 want = grsq2_commits[code]
-                sort!(idxs, by=i -> tagged[i][1].price)
+                sort!(idxs, by = i -> tagged[i][1].price)
                 for i in idxs
                     want <= 1e-9 && break
                     o, tag = tagged[i]
@@ -1512,17 +1874,44 @@ function create_merit_order_book(
                     end
                     take = min(want, o.quantity)
                     if take >= o.quantity - 1e-9
-                        tagged[i] = (SimpleOrder(o.type, DEEP_SURPLUS_FLOOR_EUR,
-                                                 o.quantity, o.zone, o.date_time,
-                                                 o.resolution_code), tag)
+                        tagged[i] = (
+                            SimpleOrder(
+                                o.type,
+                                DEEP_SURPLUS_FLOOR_EUR,
+                                o.quantity,
+                                o.zone,
+                                o.date_time,
+                                o.resolution_code,
+                            ),
+                            tag,
+                        )
                         strategies[i] = "valley_continuation"
                     else
-                        tagged[i] = (SimpleOrder(o.type, o.price, o.quantity - take,
-                                                 o.zone, o.date_time,
-                                                 o.resolution_code), tag)
-                        push!(tagged, (SimpleOrder(o.type, DEEP_SURPLUS_FLOOR_EUR,
-                                                   take, o.zone, o.date_time,
-                                                   o.resolution_code), tag))
+                        tagged[i] = (
+                            SimpleOrder(
+                                o.type,
+                                o.price,
+                                o.quantity - take,
+                                o.zone,
+                                o.date_time,
+                                o.resolution_code,
+                            ),
+                            tag,
+                        )
+                        push!(
+                            tagged,
+                            (
+                                SimpleOrder(
+                                    o.type,
+                                    DEEP_SURPLUS_FLOOR_EUR,
+                                    take,
+                                    o.zone,
+                                    o.date_time,
+                                    o.resolution_code,
+                                ),
+                                tag,
+                            ),
+                        )
                         push!(strategies, "valley_continuation")
                         supply_orders_count += 1
                     end
@@ -1530,9 +1919,10 @@ function create_merit_order_book(
                     n_repriced += 1
                 end
             end
-            n_repriced > 0 &&
-                println("   🌅 GRSQ T2: $n_repriced valley tranche(s) repriced to the floor " *
-                        "($(length(grsq2_commits)) overnight runner(s))")
+            n_repriced > 0 && println(
+                "   🌅 GRSQ T2: $n_repriced valley tranche(s) repriced to the floor " *
+                "($(length(grsq2_commits)) overnight runner(s))",
+            )
         end
 
         # ── Stage 7-pre: cv34 T3 — surplus pumping demand (opt-in) ──────
@@ -1542,7 +1932,8 @@ function create_merit_order_book(
         # mechanism. Needs pass1_prices (pass-2 only); EUPHEMIA_CV34_PUMP_ZONES
         # empty/unset ⇒ fully inert. η via EUPHEMIA_CV34_PUMP_ETA (0.7).
         t3_pump_zones = strip.(split(get(ENV, "EUPHEMIA_CV34_PUMP_ZONES", ""), ","))
-        if bidding_zone in t3_pump_zones && pass1_prices !== nothing &&
+        if bidding_zone in t3_pump_zones &&
+           pass1_prices !== nothing &&
            !isempty(pass1_prices)
             pump_head = try
                 _pump_capability(bidding_zone, day)
@@ -1555,12 +1946,15 @@ function create_merit_order_book(
                 pump_price = max(eta * maximum(values(pass1_prices)), 0.0)
                 # regime share per hour (same construction as the cv31 gate,
                 # computed here because pump zones need not be floor zones)
-                psol = Dict{Int,Vector{Float64}}(); pld = Dict{Int,Vector{Float64}}()
+                psol = Dict{Int,Vector{Float64}}();
+                pld = Dict{Int,Vector{Float64}}()
                 for r in renewables
                     r.production_type == "Solar" || continue
                     length(r.date_time) >= 11 || continue
-                    push!(get!(psol, parse(Int, r.date_time[10:11]), Float64[]),
-                          r.aggregated_generation_forecast)
+                    push!(
+                        get!(psol, parse(Int, r.date_time[10:11]), Float64[]),
+                        r.aggregated_generation_forecast,
+                    )
                 end
                 for (ts, v) in load_by_time
                     length(ts) >= 11 || continue
@@ -1569,23 +1963,34 @@ function create_merit_order_book(
                 n_pump = 0
                 for ts in target_timeslots
                     hr = parse(Int, ts[10:11])
-                    sv = get(psol, hr, Float64[]); lv = get(pld, hr, Float64[])
+                    sv = get(psol, hr, Float64[]);
+                    lv = get(pld, hr, Float64[])
                     (isempty(sv) || isempty(lv)) && continue
                     share = (sum(sv) / length(sv)) / max(sum(lv) / length(lv), 1.0)
                     share >= sr_theta || continue
                     pmw = get(pump_head, hr, 0.0)
                     pmw > 10.0 || continue
                     dtp = parse_timeslot_to_datetime(ts, day)
-                    push_tagged!(SimpleOrder(:demand, pump_price, pmw,
-                        Symbol(bidding_zone), dtp, resolution_minutes),
-                        "PUMP", "pump_absorption")
+                    push_tagged!(
+                        SimpleOrder(
+                            :demand,
+                            pump_price,
+                            pmw,
+                            Symbol(bidding_zone),
+                            dtp,
+                            resolution_minutes,
+                        ),
+                        "PUMP",
+                        "pump_absorption",
+                    )
                     demand_orders_count += 1
                     total_demand_quantity += pmw
                     n_pump += 1
                 end
-                n_pump > 0 &&
-                    println("   ⛲ cv34 T3: $n_pump incremental pumping slot(s) at " *
-                            "$(round(pump_price, digits=1)) €/MWh (headroom basis)")
+                n_pump > 0 && println(
+                    "   ⛲ cv34 T3: $n_pump incremental pumping slot(s) at " *
+                    "$(round(pump_price, digits=1)) €/MWh (headroom basis)",
+                )
             end
         end
 
@@ -1596,16 +2001,34 @@ function create_merit_order_book(
             gd = gross_demand[ts]
 
             inelastic_qty = gd * (1.0 - demand_elastic_share)
-            push_tagged!(SimpleOrder(:demand, price_cap, inelastic_qty,
-                Symbol(bidding_zone), date_time, resolution_minutes),
-                "DEMAND", "demand_firm")
+            push_tagged!(
+                SimpleOrder(
+                    :demand,
+                    price_cap,
+                    inelastic_qty,
+                    Symbol(bidding_zone),
+                    date_time,
+                    resolution_minutes,
+                ),
+                "DEMAND",
+                "demand_firm",
+            )
             demand_orders_count += 1
 
             elastic_qty = gd * demand_elastic_share
             if elastic_qty > 0.1
-                push_tagged!(SimpleOrder(:demand, demand_elastic_price, elastic_qty,
-                    Symbol(bidding_zone), date_time, resolution_minutes),
-                    "DEMAND", "demand_elastic")
+                push_tagged!(
+                    SimpleOrder(
+                        :demand,
+                        demand_elastic_price,
+                        elastic_qty,
+                        Symbol(bidding_zone),
+                        date_time,
+                        resolution_minutes,
+                    ),
+                    "DEMAND",
+                    "demand_elastic",
+                )
                 demand_orders_count += 1
             end
             total_demand_quantity += gd
@@ -1620,8 +2043,14 @@ function create_merit_order_book(
         # is byte-identical. Requires flow injections (include_net_imports) —
         # the ladder is the injection's elastic replacement.
         if boundary_book !== nothing && include_net_imports
-            b_orders = get_boundary_orders(boundary_book, bidding_zone, day,
-                target_timeslots, resolution_minutes, price_cap)
+            b_orders = get_boundary_orders(
+                boundary_book,
+                bidding_zone,
+                day,
+                target_timeslots,
+                resolution_minutes,
+                price_cap,
+            )
             btag = "BOUNDARY:" * boundary_book.counterparty
             for o in b_orders
                 if o.type == :supply
@@ -1634,18 +2063,24 @@ function create_merit_order_book(
                     total_demand_quantity += o.quantity
                 end
             end
-            isempty(b_orders) ||
-                println("  🌐 Boundary book ($(boundary_book.counterparty)): " *
-                        "$(length(b_orders)) orders over $(length(target_timeslots)) slots")
+            isempty(b_orders) || println(
+                "  🌐 Boundary book ($(boundary_book.counterparty)): " *
+                "$(length(b_orders)) orders over $(length(target_timeslots)) slots",
+            )
         end
 
         # ── Stage 8: scenario hooks (extra_orders, strategist) ──────────
         # Feature 3/4: extra scenario orders appended after all standard
         # orders and BEFORE merging. Both :supply and :demand are allowed.
         if extra_orders !== nothing
-            ctx = (zone=bidding_zone, day=day, timeslots=target_timeslots,
-                   resolution_minutes=resolution_minutes,
-                   load_by_time=load_by_time, renewable_by_time=renewable_by_time)
+            ctx = (
+                zone = bidding_zone,
+                day = day,
+                timeslots = target_timeslots,
+                resolution_minutes = resolution_minutes,
+                load_by_time = load_by_time,
+                renewable_by_time = renewable_by_time,
+            )
             for o in extra_orders(ctx)
                 push_tagged!(o, "EXTRA", "extra")
                 if o.type == :supply
@@ -1663,14 +2098,21 @@ function create_merit_order_book(
         # map and RETURNS the replacement tagged list.
         if strategist !== nothing
             firm_of = get_firm_of(bidding_zone)
-            sctx = (tagged_orders=tagged, zone=bidding_zone, day=day,
-                    timeslots=target_timeslots, load_by_time=load_by_time,
-                    renewable_by_time=renewable_by_time, firm_of=firm_of)
+            sctx = (
+                tagged_orders = tagged,
+                zone = bidding_zone,
+                day = day,
+                timeslots = target_timeslots,
+                load_by_time = load_by_time,
+                renewable_by_time = renewable_by_time,
+                firm_of = firm_of,
+            )
             result = strategist(sctx)
             # Accept either Vector{Tuple{SimpleOrder,String}} or a plain
             # Vector{SimpleOrder} (re-tagged "STRATEGIST").
             tagged = Tuple{SimpleOrder,String}[
-                x isa Tuple ? (x[1], x[2]) : (x, "STRATEGIST") for x in result]
+                x isa Tuple ? (x[1], x[2]) : (x, "STRATEGIST") for x in result
+            ]
             # The strategist REPLACES the ladder, so the source strategy labels no
             # longer map; the whole replacement set is labelled "strategist"
             # (scenario path — not the capture/backfill path).
@@ -1678,8 +2120,10 @@ function create_merit_order_book(
             # Recount from the replacement set so summary stats stay accurate
             supply_orders_count = count(t -> t[1].type == :supply, tagged)
             demand_orders_count = count(t -> t[1].type == :demand, tagged)
-            total_supply_capacity = sum((t[1].quantity for t in tagged if t[1].type == :supply); init=0.0)
-            total_demand_quantity = sum((t[1].quantity for t in tagged if t[1].type == :demand); init=0.0)
+            total_supply_capacity =
+                sum((t[1].quantity for t in tagged if t[1].type == :supply); init = 0.0)
+            total_demand_quantity =
+                sum((t[1].quantity for t in tagged if t[1].type == :demand); init = 0.0)
         end
 
         # Optional book sink (default nothing = byte-identical no-op): a
@@ -1697,7 +2141,8 @@ function create_merit_order_book(
                 # clears) — so capture degrades safely, never a broken clear.
                 BOOK_SINK[](bidding_zone, day, tagged, resolution_minutes, strategies)
             catch e
-                @warn "BOOK_SINK failed (book still cleared)" zone = bidding_zone day error = sprint(showerror, e)
+                @warn "BOOK_SINK failed (book still cleared)" zone = bidding_zone day error =
+                    sprint(showerror, e)
             end
         end
 
@@ -1712,13 +2157,17 @@ function create_merit_order_book(
         # count, which is what limits multi-zone solve times.
         merged = Dict{Tuple{Symbol,Float64,DateTime},Float64}()
         for o in orders
-            key = (o.type, round(o.price, digits=2), o.date_time)
+            key = (o.type, round(o.price, digits = 2), o.date_time)
             merged[key] = get(merged, key, 0.0) + o.quantity
         end
         pre_merge_count = length(orders)
-        orders = [SimpleOrder(t, p, q, Symbol(bidding_zone), dt, resolution_minutes)
-                  for ((t, p, dt), q) in merged]
-        println("  🔗 Merged $(pre_merge_count) orders into $(length(orders)) price-distinct blocks")
+        orders = [
+            SimpleOrder(t, p, q, Symbol(bidding_zone), dt, resolution_minutes) for
+            ((t, p, dt), q) in merged
+        ]
+        println(
+            "  🔗 Merged $(pre_merge_count) orders into $(length(orders)) price-distinct blocks",
+        )
 
         nodes = [bidding_zone]
         # EU day-ahead floor is -500; ceiling is the demand cap so shortage
@@ -1730,13 +2179,24 @@ function create_merit_order_book(
         demand_per_slot = total_demand_quantity / length(target_timeslots)
         ratio = demand_per_slot > 0 ? supply_per_slot / demand_per_slot : 0.0
 
-        println("  ✅ Merit-order book: $supply_orders_count supply / $demand_orders_count demand orders")
-        println("     ⚖️  Supply/Demand ratio: $(round(ratio, digits=2))  (gas SRMC €$(round(gas_srmc, digits=1))/MWh)")
+        println(
+            "  ✅ Merit-order book: $supply_orders_count supply / $demand_orders_count demand orders",
+        )
+        println(
+            "     ⚖️  Supply/Demand ratio: $(round(ratio, digits=2))  (gas SRMC €$(round(gas_srmc, digits=1))/MWh)",
+        )
 
         return AdjustedOrderBookResult(
-            true, "Merit-order book created successfully", order_book,
-            length(generators), demand_orders_count, supply_orders_count,
-            total_demand_quantity, total_supply_capacity, ratio)
+            true,
+            "Merit-order book created successfully",
+            order_book,
+            length(generators),
+            demand_orders_count,
+            supply_orders_count,
+            total_demand_quantity,
+            total_supply_capacity,
+            ratio,
+        )
 
     catch e
         e isa InterruptException && rethrow()
