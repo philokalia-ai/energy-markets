@@ -17,7 +17,9 @@ data/model_line_feats/<F>.csv (grown daily by bin/capture_book_features.jl),
 where F = T-7 or T-14. Missing feature day => T is skipped (honest gap).
 
 Usage: emit_model_lines.py [START END]   (ISO dates, inclusive)
-Env: ENERGY_CONN_STR (from .env), MODEL_LINES_CV (default 37).
+Env: ENERGY_CONN_STR (from .env), MODEL_LINES_CV (default 37) for the book/artifact
+version, MODEL_LINES_BASE_CV (default: MODEL_LINES_CV) for the PHYSICS BASE's record
+version, MODEL_LINES_ALLOW_MIXED_BASE=1 to publish on whatever version is freshest.
 First run trains and pickles the models to data/model_lines_train/models.joblib;
 delete that file to retrain (e.g. after extending the training parquet).
 """
@@ -68,6 +70,21 @@ def training_dataset():
         raise SystemExit(f"model lines: {cands[0]} does not carry a book version in its name")
     return cands[0], int(m.group(1))
 CV = int(os.environ.get("MODEL_LINES_CV", str(TRAIN_CV_DEFAULT)))
+# The PHYSICS BASE's own version (#389). The residual model is fitted against
+# the sim prices of ONE record version; adding it to a base of another version
+# is the same mismatch PR #386 closed for the book features, one table over.
+# `simulations.forecast_prices` carries cv32/34/35/37/38/39 rows side by side
+# and the emitter used to take the freshest per (zone, hour) regardless, so a
+# single emitted line could sit on a mixed base — and today it sits entirely on
+# cv39 while the artifact is cv37.
+#
+# MODEL_LINES_BASE_CV pins it; unset it follows MODEL_LINES_CV, i.e. the version
+# the artifact was trained against. A window with no row of that version emits
+# NOTHING for those cells and says so — the mismatch is the finding, not
+# something to paper over. MODEL_LINES_ALLOW_MIXED_BASE=1 restores the old
+# freshest-wins behaviour, and even then the version mix is printed.
+BASE_CV = int(os.environ.get("MODEL_LINES_BASE_CV", str(CV)))
+ALLOW_MIXED_BASE = bool(os.environ.get("MODEL_LINES_ALLOW_MIXED_BASE", ""))
 BOOKS = os.path.join(ROOT, "data", f"backfill_books_cv{CV}")
 FEATS_DIR = os.path.join(ROOT, "data", "model_line_feats")
 PHYS_FEATS = ["hour", "month", "D", "res_sh", "imp_sh", "bst_sh", "margin", "gas", "co2"]
@@ -201,19 +218,38 @@ def main():
     models = load_models()
     cx = conn(); cur = cx.cursor()
     refresh_fuel_csvs(cx)
-    # physics base: freshest weather-track forecast per (zone, hour) in window
+    # physics base: freshest weather-track forecast per (zone, hour) in window,
+    # PINNED to one record version (#389) unless explicitly allowed to mix.
     cur.execute("""
-        SELECT bidding_zone, (date_time_utc AT TIME ZONE 'UTC'), price_eur_mwh
+        SELECT bidding_zone, (date_time_utc AT TIME ZONE 'UTC'), price_eur_mwh,
+               code_version
         FROM (
-          SELECT bidding_zone, date_time_utc, price_eur_mwh,
+          SELECT bidding_zone, date_time_utc, price_eur_mwh, code_version,
                  ROW_NUMBER() OVER (PARTITION BY bidding_zone, date_time_utc
                                     ORDER BY lead_days ASC, prediction_made_utc DESC) rn
           FROM simulations.forecast_prices
           WHERE input_mode LIKE 'weather%%' AND date_time_utc >= %s::date
-            AND date_time_utc < %s::date + INTERVAL '1 day') x
-        WHERE rn = 1""", (d0.isoformat(), d1.isoformat()))
-    base = pd.DataFrame(cur.fetchall(), columns=["zone", "t", "sim"])
+            AND date_time_utc < %s::date + INTERVAL '1 day'
+            AND (%s::int IS NULL OR code_version = %s::int)) x
+        WHERE rn = 1""", (d0.isoformat(), d1.isoformat(),
+                          None if ALLOW_MIXED_BASE else BASE_CV,
+                          None if ALLOW_MIXED_BASE else BASE_CV))
+    base = pd.DataFrame(cur.fetchall(), columns=["zone", "t", "sim", "base_cv"])
     base["k"] = pd.to_datetime(base.t, utc=True).dt.strftime("%Y-%m-%dT%H")
+    mix = base.base_cv.value_counts().sort_index()
+    print("model lines: physics base " +
+          ("PINNED to cv%d" % BASE_CV if not ALLOW_MIXED_BASE else "UNPINNED (mixed base allowed)") +
+          " — cells by version: " +
+          (", ".join(f"cv{int(v)}={int(n)}" for v, n in mix.items()) if len(mix) else "NONE"),
+          flush=True)
+    if not len(base):
+        raise SystemExit(
+            f"model lines: no weather-track forecast rows at code_version {BASE_CV} in "
+            f"{d0}..{d1}. The residual artifact is bound to cv{CV}; adding it to a base of "
+            f"another version is not the model that was evaluated. Either retrain/rebind the "
+            f"artifact to the version production now runs, or set MODEL_LINES_BASE_CV to a "
+            f"version that exists, or MODEL_LINES_ALLOW_MIXED_BASE=1 to publish on a mixed "
+            f"base deliberately.")
     # settled (for stats lags): everything available before the window's end
     cur.execute("""
         SELECT map_code, (date_time_utc AT TIME ZONE 'UTC'), AVG(price_currency_mwh)
@@ -237,7 +273,7 @@ def main():
         feats["gas"] = last_close(os.path.join(TRAIN, "probe_ttf.csv"), T)
         feats["co2"] = last_close(os.path.join(TRAIN, "probe_eua.csv"), T)
         bT = base[base.k.str[:10] == T.isoformat()]
-        m = feats.merge(bT[["zone", "k", "sim"]], on=["zone", "k"], how="inner")
+        m = feats.merge(bT[["zone", "k", "sim", "base_cv"]], on=["zone", "k"], how="inner")
         if not len(m):
             print(f"{T}: no physics forecast rows — skipped", flush=True)
             continue
@@ -245,8 +281,8 @@ def main():
             mh = models["hybrid"].get(z)
             if mh is not None:
                 pred = gz.sim.values + mh.predict(gz[PHYS_FEATS])
-                out += [(z, k + ":00:00+00", "hybrid_gbm", float(p), CV)
-                        for k, p in zip(gz.k, pred)]
+                out += [(z, k + ":00:00+00", "hybrid_gbm", float(p), CV, int(b))
+                        for k, p, b in zip(gz.k, pred, gz.base_cv)]
         # stats: only if lag24 exists (T <= last settled + 1)
         if T <= last_settled + dt.timedelta(days=1):
             sT = m.copy()
@@ -264,16 +300,22 @@ def main():
                 ms = models["stats"].get(z)
                 if ms is not None and len(gz):
                     pred = ms.predict(gz[STATS_FEATS])
-                    out += [(z, k + ":00:00+00", "stats_gbm", float(p), CV)
-                            for k, p in zip(gz.k, pred)]
+                    out += [(z, k + ":00:00+00", "stats_gbm", float(p), CV, int(b))
+                            for k, p, b in zip(gz.k, pred, gz.base_cv)]
         print(f"{T}: emitted (features from T-{back})", flush=True)
     if out:
+        # Additive provenance column: which physics base each row was built on.
+        # NULL on rows written before #389; no reader breaks.
+        cur.execute("ALTER TABLE simulations.model_lines "
+                    "ADD COLUMN IF NOT EXISTS base_code_version integer")
         cur.executemany("""
             INSERT INTO simulations.model_lines
-                (bidding_zone, date_time_utc, model, price_eur_mwh, code_version)
-            VALUES (%s, %s, %s, %s, %s)
+                (bidding_zone, date_time_utc, model, price_eur_mwh, code_version,
+                 base_code_version)
+            VALUES (%s, %s, %s, %s, %s, %s)
             ON CONFLICT (bidding_zone, date_time_utc, model, code_version)
             DO UPDATE SET price_eur_mwh = EXCLUDED.price_eur_mwh,
+                          base_code_version = EXCLUDED.base_code_version,
                           generated_at = now()""", out)
         cx.commit()
     print(f"EMITTED {len(out)} rows for {d0}..{d1}")
