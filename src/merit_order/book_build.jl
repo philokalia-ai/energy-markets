@@ -493,6 +493,31 @@ function _res_fill_components(rfilled)
     return out
 end
 
+# ── Opt-in book trace (EUPHEMIA_BOOK_TRACE=<path.csv>) ──────────────────
+# One row per zone-slot with the scarcity state behind that slot's offers.
+# A diagnostic, never a production output: unset (the default) and nothing is
+# written, nothing is computed and the book is byte-identical.
+const _BOOK_TRACE_LOCK = ReentrantLock()
+const _BOOK_TRACE_HEADER = Ref{Bool}(false)
+
+function _book_trace(zone::AbstractString, day::Date, ts::AbstractString, row::NamedTuple)
+    path = get(ENV, "EUPHEMIA_BOOK_TRACE", "")
+    isempty(path) && return nothing
+    lock(_BOOK_TRACE_LOCK) do
+        if !_BOOK_TRACE_HEADER[]
+            _BOOK_TRACE_HEADER[] = true
+            isfile(path) || open(path, "w") do io
+                println(io, "zone,day,timeslot," * join(string.(keys(row)), ","))
+            end
+        end
+        open(path, "a") do io
+            println(io, zone, ",", day, ",", ts, ",",
+                    join((string(v) for v in values(row)), ","))
+        end
+    end
+    return nothing
+end
+
 """
     _apply_res_fill!(renewables, rfilled, zone) -> Dict{Symbol,Int}
 
@@ -537,19 +562,6 @@ function _apply_res_fill!(renewables, rfilled, zone::AbstractString)
     return added
 end
 
-"""
-Compose two optional per-component modifiers into one (`nothing` when both are).
-The first runs first; a scenario hook therefore sees the corrected input, which
-is the same order the aggregate path uses (corrections, then the scenario).
-"""
-function _compose_component_modifiers(
-    a::Union{Nothing,Function},
-    b::Union{Nothing,Function},
-)
-    a === nothing && return b
-    b === nothing && return a
-    return (ts, c, mw) -> b(ts, c, a(ts, c, mw))
-end
 
 "Clear the cv32 winner-input delta cache (tests / long processes)."
 clear_input_correction_cache!() = (lock(_CV32_DELTA_LOCK) do ;
@@ -678,6 +690,7 @@ function _demand_series(
     load_modifier::Union{Nothing,Function},
     renewable_modifier::Union{Nothing,Function},
     res_component_modifier::Union{Nothing,Function} = nothing,
+    res_component_realloc::Union{Nothing,Function} = nothing,
 )
     target_timeslots, load_by_time, renewable_by_time, resolution_minutes =
         disaggregate_temporal_data(loads, renewables)
@@ -792,6 +805,21 @@ function _demand_series(
                 d[ts] = after
                 renewable_by_time[ts] =
                     max(get(renewable_by_time, ts, 0.0) + (after - before), 0.0)
+            end
+        end
+    end
+    # A REALLOCATION carries an edit the AGGREGATE has ALREADY received (the
+    # cv32 input corrections, applied by `renewable_modifier` just below) into
+    # the component split, so the components record WHICH component that edit
+    # was. Components only — propagating it would count the correction twice.
+    if res_component_realloc !== nothing
+        for c in RES_COMPONENTS
+            d = get(res_comps, c, nothing)
+            d === nothing && continue
+            for ts in target_timeslots
+                before = get(d, ts, 0.0)
+                after = max(Float64(res_component_realloc(ts, c, before)), 0.0)
+                after == before || (d[ts] = after)
             end
         end
     end
@@ -1293,15 +1321,15 @@ function create_merit_order_book(
                 )
             end
         end
-        # The cv32 corrections are per TARGET (solar / wind) in the source table;
-        # the aggregate application above is unchanged (bit-identical), and the
-        # per-target deltas below carry the same edit into the COMPONENT series
-        # so the regime axis sees a corrected-solar hour as a solar hour.
-        cv32_comp =
+        # The cv32 corrections are per TARGET (solar / wind) in the source table.
+        # The AGGREGATE application above is unchanged (bit-identical); the same
+        # per-target deltas are handed to `_demand_series` as a REALLOCATION —
+        # components only, never the aggregate, which already carries them — so
+        # the regime axis sees a corrected-solar hour as a solar hour without the
+        # correction being counted twice.
+        cv32_realloc =
             profile.input_corrections ?
             _input_correction_component_modifier(bidding_zone, day) : nothing
-        eff_component_modifier =
-            _compose_component_modifiers(cv32_comp, res_component_modifier)
         target_timeslots,
         load_by_time,
         renewable_by_time,
@@ -1312,7 +1340,8 @@ function create_merit_order_book(
             target_resolution_minutes,
             load_modifier,
             eff_renewable_modifier,
-            eff_component_modifier,
+            res_component_modifier,
+            cv32_realloc,
         )
         println("  ☀️  effective RES: " * effective_res_summary(effective_res))
 
@@ -1747,6 +1776,29 @@ function create_merit_order_book(
                 1.0 +
                 scarcity_kappa * max(0.0, scarcity_threshold - margin)^2 +
                 peak_kappa * norm_demand^peak_exponent : 1.0
+            # Opt-in per-slot trace of the scarcity state (EUPHEMIA_BOOK_TRACE=
+            # <path.csv>). Off by default and byte-identical when unset. This is
+            # the attribution record the cv39/cv40 reviews ask for: what the
+            # book believed about the zone's capability in the hour it priced —
+            # dispatchable MW, the import capability it did or did not credit,
+            # the margin, and the multiplier that markup came from.
+            _book_trace(bidding_zone, day, ts, (
+                gross_demand = gross_demand[ts],
+                net_demand = net_demand[ts],
+                load = load_by_time[ts],
+                res_total = get(renewable_by_time, ts, 0.0),
+                res_solar = get(component_series(effective_res, :solar), ts, 0.0),
+                res_wind = get(component_series(effective_res, :wind), ts, 0.0),
+                dispatchable_capacity = dispatchable_capacity,
+                import_atc = get(import_atc_by_hour, hr, 0.0),
+                import_credit = import_credit,
+                backstop_credit = backstop_credit,
+                backstop_mw = get(backstop_by_hour, hr, 0.0),
+                margin = margin,
+                norm_demand = norm_demand,
+                scarcity = scarcity,
+                gas_srmc = gas_srmc,
+            ))
 
             for g in generators
                 if g.fuel_type in WATER_VALUE_FUEL_TYPES

@@ -178,3 +178,23 @@ end
     @test keys(new) == keys(old)
     @test all(new[h] ≈ old[h] for h in keys(old))
 end
+
+@testset "a reallocation splits an aggregate edit without re-applying it" begin
+    # The cv32 input corrections are applied ONCE, to the aggregate. Handing the
+    # same per-target deltas to the component series must record WHICH component
+    # they were, not add them a second time — the defect this test pins was
+    # caught on IT-Sicily, where solar read 1014 MW instead of 1051 MW.
+    slots = day_slots()
+    loads = [ld(ts, 5000.0) for ts in slots]
+    rows = vcat([res(ts, "Solar", 1000.0) for ts in slots],
+                [res(ts, "Wind Onshore", 500.0) for ts in slots])
+    agg = (ts, v) -> v + 200.0                       # the aggregate correction
+    realloc = (ts, c, mw) -> c === :solar ? mw + 200.0 : mw   # ... which was solar
+    _, lbt, ren, _, er = MOB._demand_series(loads, rows, nothing, nothing, agg,
+                                            nothing, realloc)
+    @test ren["20260301-1200"] ≈ 1700.0              # 1500 + 200, counted ONCE
+    @test MOB.component_series(er, :solar)["20260301-1200"] ≈ 1200.0
+    @test MOB.component_series(er, :wind)["20260301-1200"] ≈ 500.0
+    @test er.alloc === :exact                        # the split already adds up
+    @test MOB.solar_share_by_hour(er, lbt)[12] ≈ 1200.0 / 5000.0
+end
