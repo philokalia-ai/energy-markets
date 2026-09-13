@@ -498,8 +498,15 @@ function jao_net_positions(date::Date)
         DataFrame()
     end
     for r in eachrow(df)
-        hub = get(_JAO_HUB_MAP, String(r.hub), String(r.hub))
-        (occursin("_", hub) || hub in _JAO_VIRTUAL_HUBS) && continue   # virtual / interconnector hubs
+        raw = String(r.hub)
+        hub = get(_JAO_HUB_MAP, raw, raw)
+        # cv40 (review 2026-09-13): the underscore test identifies JAO's
+        # interconnector hubs (DK1_CO, NO2_SK, SE3_FS, …) and must therefore run
+        # on the RAW JAO name. Applied to the MAPPED name it also discarded
+        # "DE_LU" — Germany's own net-position limits never reached the clear
+        # (24 records/day silently dropped). Kill-switch EUPHEMIA_DISABLE_CV40_DEHUB.
+        skip_raw = isempty(get(ENV, "EUPHEMIA_DISABLE_CV40_DEHUB", "")) ? raw : hub
+        (occursin("_", skip_raw) || hub in _JAO_VIRTUAL_HUBS) && continue   # virtual / interconnector hubs
         (ismissing(r.mn) || ismissing(r.mx)) && continue
         out[(String(r.ccr), hub, Int(r.tp))] = (Float64(r.mn), Float64(r.mx))
     end
@@ -895,7 +902,18 @@ function _create_transfer_capacity_enriched(date::Date, bidding_zones::Vector{St
                 hub in fpset || continue
                 prs = get(ccrp, ccr, Set{Tuple{String,String}}())
                 for (dirn, lim) in ((:out, mx), (:in, -mn))
-                    lim > 0.0 || continue
+                    # A published limit of exactly 0 bounds the hub's NET
+                    # position, not its gross exchange: a hub importing 100 MW
+                    # and exporting 100 MW has net position 0 and is feasible,
+                    # but deleting its outgoing capacity forbids that transit
+                    # (review 2026-09-13, P1). This capacity scaling is an
+                    # APPROXIMATION of `minNP <= exports - imports <= maxNP`;
+                    # representing the real constraint belongs in the solver,
+                    # not here. Until then a zero bound stays a no-op, as it was
+                    # before cv40; EUPHEMIA_ENABLE_CV40_ZEROCAP=1 turns on the
+                    # gross-capacity approximation as a measurement arm only.
+                    zero_cap = lim == 0.0 && !isempty(get(ENV, "EUPHEMIA_ENABLE_CV40_ZEROCAP", ""))
+                    (lim > 0.0 || zero_cap) || continue
                     ks = Int[]
                     for (s, d) in prs
                         (s in fpset && d in fpset) || continue
@@ -907,6 +925,7 @@ function _create_transfer_capacity_enriched(date::Date, bidding_zones::Vector{St
                     isempty(ks) && continue
                     tot = sum(rows[i].capacity for i in ks)
                     tot > lim || continue
+                    tot > 0.0 || continue
                     f = lim / tot
                     for i in ks
                         r = rows[i]
@@ -923,24 +942,6 @@ function _create_transfer_capacity_enriched(date::Date, bidding_zones::Vector{St
     (n_jao_override + n_jao_added) > 0 &&
         println("   🧭 JAO maxBEX: $(n_jao_override) Day-ahead-free border-hours sized by the flow-based " *
                 "max exchange, $(n_jao_added) border-hours added")
-    # Transmission-grid outages: cap the border-hour at the TSO's remaining NTC
-    if tx_outage_atc_enabled()
-        caps = tx_outage_caps(date)
-        n_capped = 0
-        if !isempty(caps)
-            for i in eachindex(rows)
-                r = rows[i]
-                key = (String(r.source_zone), String(r.sink_zone), r.time_period)
-                haskey(caps, key) || continue
-                caps[key] < r.capacity || continue
-                rows[i] = (source_zone=r.source_zone, sink_zone=r.sink_zone,
-                           time_period=r.time_period, capacity=caps[key])
-                n_capped += 1
-            end
-        end
-        n_capped > 0 &&
-            println("   🚧 transmission outages: $(n_capped) border-hours capped at the TSO's remaining NTC")
-    end
     n_fbmc_override > 0 &&
         println("   🔁 cv27 T1: $(n_fbmc_override) Day-ahead-free border-hours sized by demonstrated capability")
     n_explicit_added = 0
@@ -1003,6 +1004,30 @@ function _create_transfer_capacity_enriched(date::Date, bidding_zones::Vector{St
             println("   🌅 pre-gate ATC fallback: +$n_pregate_added border-hours " *
                     "($n_pregate_tda trailing-DA, $(n_pregate_added - n_pregate_tda) " *
                     "demonstrated-capability; Day-ahead ATC not yet published for $date)")
+    end
+
+    # Transmission-grid outages (cv40, review 2026-09-13): the cap runs AFTER
+    # every capacity source has been assembled — JAO maxBEX, the cv27
+    # demonstrated-capability rows, explicit ATC and the pre-gate fallback.
+    # Applied before them (cv35..cv39) a border-hour added by a later source
+    # escaped the TSO's remaining-NTC cap entirely. (No kill-switch: the pass
+    # order is structural; EUPHEMIA_DISABLE_TX_OUTAGE_ATC still disables it.)
+    if tx_outage_atc_enabled()
+        caps = tx_outage_caps(date)
+        n_capped = 0
+        if !isempty(caps)
+            for i in eachindex(rows)
+                r = rows[i]
+                key = (String(r.source_zone), String(r.sink_zone), r.time_period)
+                haskey(caps, key) || continue
+                caps[key] < r.capacity || continue
+                rows[i] = (source_zone=r.source_zone, sink_zone=r.sink_zone,
+                           time_period=r.time_period, capacity=caps[key])
+                n_capped += 1
+            end
+        end
+        n_capped > 0 &&
+            println("   🚧 transmission outages: $(n_capped) border-hours capped at the TSO's remaining NTC")
     end
 
     # Apply aggregate → sub-zone remap. Precompute, per aggregate, the set of
