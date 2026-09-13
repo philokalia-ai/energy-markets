@@ -1,0 +1,46 @@
+/home/pgeorgakopoulos/.cache/uv/archive-v0/sS1xiMfk1b7QLOB8IqVDV/lib/python3.12/site-packages/sklearn/base.py:525: InconsistentVersionWarning: Trying to unpickle estimator _BinMapper from version 1.9.0 when using version 1.9.1. This might lead to breaking code or invalid results. Use at your own risk. For more info please refer to:
+https://scikit-learn.org/stable/model_persistence.html#security-maintainability-limitations
+  warnings.warn(
+/home/pgeorgakopoulos/.cache/uv/archive-v0/sS1xiMfk1b7QLOB8IqVDV/lib/python3.12/site-packages/sklearn/base.py:525: InconsistentVersionWarning: Trying to unpickle estimator HistGradientBoostingRegressor from version 1.9.0 when using version 1.9.1. This might lead to breaking code or invalid results. Use at your own risk. For more info please refer to:
+https://scikit-learn.org/stable/model_persistence.html#security-maintainability-limitations
+  warnings.warn(
+frozen artifact: book_cv=37 zones=39
+fold 1: train < 2025-07-01 (364 d) -> test 2025-07-01..2025-09-30 (92 d, 86064 cells)
+fold 2: train < 2025-10-01 (456 d) -> test 2025-10-01..2025-12-30 (91 d, 84984 cells)
+fold 3: train < 2025-12-31 (547 d) -> test 2025-12-31..2026-03-31 (91 d, 85080 cells)
+fold 4: train < 2026-04-01 (638 d) -> test 2026-04-01..2026-06-30 (91 d, 85128 cells)
+
+## rolling-origin, pooled over folds (canonical SDAC target)
+  physics (cv39)             n=341,256 MAE  23.30 bias  -4.61 corr 0.778
+  hybrid retrained (cv39)    n=341,256 MAE  24.70 bias  +2.05 corr 0.765
+  hybrid frozen (cv37)       n=341,256 MAE  15.66 bias  +0.44 corr 0.891
+  stats retrained (cv39)     n=341,256 MAE  21.05 bias  -1.30 corr 0.824
+
+## per fold (MAE)
+  fold 1 (2025-07-01..2025-09-30): phys 21.43  h39 21.92  h37 14.94  stats 16.48
+  fold 2 (2025-10-01..2025-12-30): phys 20.04  h39 28.36  h37 14.41  stats 21.28
+  fold 3 (2025-12-31..2026-03-31): phys 24.63  h39 25.62  h37 16.09  stats 24.10
+  fold 4 (2026-04-01..2026-06-30): phys 27.10  h39 22.94  h37 17.21  stats 22.40
+
+## per zone, hybrid retrained vs physics vs frozen (MAE), worst/best 12 by delta
+       zone  phys   h39   h37  h39_minus_phys  h39_minus_h37
+        SE2 25.95 17.51 11.52           -8.44           5.99
+        SE1 24.78 17.10 11.97           -7.69           5.13
+   IT-NORTH 21.22 14.34 12.14           -6.88           2.20
+  IT-CNORTH 20.66 16.29 13.09           -4.37           3.20
+  IT-CSOUTH 17.57 13.26 11.44           -4.32           1.82
+        NO4 22.39 18.40 10.18           -3.98           8.22
+        NO5 24.95 21.37 12.48           -3.58           8.89
+IT-Calabria 17.70 14.53 13.17           -3.16           1.37
+   IT-SOUTH 17.57 14.42 13.32           -3.15           1.10
+  IT-Sicily 19.15 16.37 13.58           -2.78           2.79
+      DE_LU 19.90 17.16 11.39           -2.74           5.77
+         FI 25.43 22.95 16.02           -2.48           6.92
+         SK 23.26 29.45 15.39            6.20          14.06
+        NO2 14.49 22.11 12.01            7.62          10.10
+         AT 23.11 32.31 15.01            9.20          17.30
+         RO 23.82 33.78 19.13            9.96          14.65
+         HU 28.33 43.50 17.95           15.17          25.55
+         BG 22.80 55.55 20.01           32.76          35.55
+
+zones where the retrained hybrid beats physics: 18/39; beats the frozen cv37 artifact: 0/39
