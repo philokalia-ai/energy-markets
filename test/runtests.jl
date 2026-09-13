@@ -162,6 +162,13 @@ println()
         include(joinpath(@__DIR__, "test_outage_intervals.jl"))
     end
 
+    @testset "Effective RES components (#387)" begin
+        println("\n" * "=" ^ 60)
+        println("Running Effective-RES Component Tests...")
+        println("=" ^ 60)
+        include(joinpath(@__DIR__, "test_effective_res.jl"))
+    end
+
     @testset "cv40 review fixes" begin
         println("\n" * "=" ^ 60)
         println("Running cv40 Review-Fix Tests...")

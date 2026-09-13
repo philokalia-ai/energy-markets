@@ -374,14 +374,19 @@ load/renewable modifiers. Returns
 # like the other day-level inputs; NEVER cached on error, warn-once fail-soft
 # (a missing table — e.g. an extract built before cv32 — degrades to the raw
 # forecast, not to a crash).
-const _CV32_DELTA_CACHE = Dict{Tuple{String,Date},Dict{String,Float64}}()
+const _CV32_DELTA_CACHE = Dict{Tuple{String,Date},Dict{Tuple{String,String},Float64}}()
 const _CV32_DELTA_LOCK = ReentrantLock()
 const _CV32_WARNED = Ref{Bool}(false)
 
-function _input_correction_deltas(zone::String, day::Date)
+"""
+The cv32 deltas as stored: `(target, "yyyymmdd-HH") -> MW`. One query per
+zone-day, cached; never cached on error (warn-once fail-soft, so a missing
+table degrades to the raw forecast rather than crashing).
+"""
+function _input_correction_deltas_raw(zone::String, day::Date)
     lock(_CV32_DELTA_LOCK) do
         haskey(_CV32_DELTA_CACHE, (zone, day)) && return _CV32_DELTA_CACHE[(zone, day)]
-        out = Dict{String,Float64}()
+        out = Dict{Tuple{String,String},Float64}()
         try
             df = sql2df_with_retry(
                 """
@@ -417,7 +422,7 @@ WHERE c.bidding_zone = \$1
             )
             for r in eachrow(df)
                 (ismissing(r.delta)) && continue
-                k = Dates.format(r.h, "yyyymmdd-HH")
+                k = (String(r.tgt), Dates.format(r.h, "yyyymmdd-HH"))
                 out[k] = get(out, k, 0.0) + Float64(r.delta)
             end
         catch e
@@ -431,6 +436,119 @@ WHERE c.bidding_zone = \$1
         _CV32_DELTA_CACHE[(zone, day)] = out
         return out
     end
+end
+
+"Hour-prefix -> total (solar + wind) cv32 delta, the aggregate RES series' edit."
+function _input_correction_deltas(zone::String, day::Date)
+    out = Dict{String,Float64}()
+    for ((_, h), v) in _input_correction_deltas_raw(zone, day)
+        out[h] = get(out, h, 0.0) + v
+    end
+    return out
+end
+
+"""
+    _input_correction_component_modifier(zone, day) -> Union{Nothing,Function}
+
+The cv32 corrections as a per-component modifier `(ts, component, mw) -> mw`,
+or `nothing` when the zone-day has no corrections (inert, byte-identical).
+"""
+function _input_correction_component_modifier(zone::String, day::Date)
+    raw = _input_correction_deltas_raw(zone, day)
+    isempty(raw) && return nothing
+    tgt(c::Symbol) = c === :solar ? "solar" : c === :wind ? "wind" : ""
+    return (ts, c, mw) -> begin
+        length(ts) >= 11 || return mw
+        t = tgt(c)
+        isempty(t) && return mw
+        return max(mw + get(raw, (t, ts[1:11]), 0.0), 0.0)
+    end
+end
+
+"""
+    _res_fill_components(rfilled) -> Dict{Symbol,Dict{String,Float64}}
+
+Normalise what a `res_fill` hook returned. Two shapes are accepted:
+
+- `Dict{Symbol,Dict{String,Float64}}` — the per-component fill (`:solar`,
+  `:wind`), each `"yyyymmdd-HHMM"` → MW. Filled per (component, hour), so a
+  zone that publishes wind but not solar gets its solar filled (#387);
+- `Dict{String,Float64}` — the legacy combined wind+solar fill. Its component
+  split is NOT recoverable, so it lands in `:other`: it still reaches the
+  supply stack and residual demand exactly as before, and it deliberately does
+  NOT move the solar-regime axis. Guessing a split would be worse than saying
+  we do not know one.
+"""
+function _res_fill_components(rfilled)
+    out = Dict{Symbol,Dict{String,Float64}}()
+    isempty(rfilled) && return out
+    if first(keys(rfilled)) isa Symbol
+        for (c, d) in rfilled
+            isempty(d) && continue
+            out[Symbol(c)] = Dict{String,Float64}(String(k) => Float64(v) for (k, v) in d)
+        end
+    else
+        out[:other] = Dict{String,Float64}(String(k) => Float64(v) for (k, v) in rfilled)
+    end
+    return out
+end
+
+"""
+    _apply_res_fill!(renewables, rfilled, zone) -> Dict{Symbol,Int}
+
+Merge a `res_fill` return into the zone's renewable rows and report how many
+component-hours each component contributed.
+
+Coverage is decided PER (component, hour), not per hour (#387): a zone that
+publishes wind but no solar used to block the fill for both, so its effective
+solar stayed at zero while the weather model had a number for it. A published
+ZERO still counts as coverage — `res_source_map` marks only rows with no usable
+value at all (`:absent`) as fillable, which is what keeps "the TSO says no sun"
+distinct from "the TSO said nothing".
+"""
+function _apply_res_fill!(renewables, rfilled, zone::AbstractString)
+    added = Dict{Symbol,Int}()
+    (rfilled === nothing || isempty(rfilled)) && return added
+    srcmap = res_source_map(renewables)
+    for (comp, slots) in _res_fill_components(rfilled)
+        ptype = comp === :solar ? "Solar" : comp === :wind ? "Wind" : "WeatherFill"
+        for (ts, mw) in slots
+            length(ts) >= 11 || continue
+            res_covered(srcmap, comp, ts) && continue   # TSO covers this component-hour
+            push!(
+                renewables,
+                RenewablesGenerationForecast(
+                    ts,
+                    "60",
+                    String(zone),
+                    ptype,
+                    Float64(mw),
+                    :weather_fill,
+                ),
+            )
+            added[comp] = get(added, comp, 0) + 1
+        end
+    end
+    # Issuance, carried with the effective input (#368/#390 §1): a weather fill
+    # is a model vintage chosen by the run's latency policy
+    # (`openmeteo_vintage_lag`), not a TSO publication we can stamp.
+    n = sum(values(added); init=0)
+    n > 0 && record_asof_status!("res_weather_fill", :latency_policy, n)
+    return added
+end
+
+"""
+Compose two optional per-component modifiers into one (`nothing` when both are).
+The first runs first; a scenario hook therefore sees the corrected input, which
+is the same order the aggregate path uses (corrections, then the scenario).
+"""
+function _compose_component_modifiers(
+    a::Union{Nothing,Function},
+    b::Union{Nothing,Function},
+)
+    a === nothing && return b
+    b === nothing && return a
+    return (ts, c, mw) -> b(ts, c, a(ts, c, mw))
 end
 
 "Clear the cv32 winner-input delta cache (tests / long processes)."
@@ -559,9 +677,20 @@ function _demand_series(
     target_resolution_minutes::Union{Int,Nothing},
     load_modifier::Union{Nothing,Function},
     renewable_modifier::Union{Nothing,Function},
+    res_component_modifier::Union{Nothing,Function} = nothing,
 )
     target_timeslots, load_by_time, renewable_by_time, resolution_minutes =
         disaggregate_temporal_data(loads, renewables)
+    # The per-component twin of the renewable series, on the same grid and
+    # through the same transformations (#387). It is a DERIVED signal: the
+    # aggregate below stays the authority for supply and residual demand, and
+    # `build_effective_res` reconciles the components to it.
+    res_comps = disaggregate_renewables_by_component(
+        renewables,
+        target_timeslots,
+        resolution_minutes,
+    )
+    res_srcmap = res_source_map(renewables)
 
     # Resolution harmonization for multi-zone books: zones publish at
     # different resolutions (e.g. RO/HU 15-min, GR/BG hourly) and a
@@ -585,6 +714,9 @@ function _demand_series(
         end
         load_by_time = aggregate_to_hours(load_by_time)
         renewable_by_time = aggregate_to_hours(renewable_by_time)
+        res_comps = Dict{Symbol,Dict{String,Float64}}(
+            c => aggregate_to_hours(d) for (c, d) in res_comps
+        )
         target_timeslots = sort(collect(keys(load_by_time)))
         println(
             "  🕐 Aggregated $(resolution_minutes)-min data to hourly ($(length(target_timeslots)) slots)",
@@ -617,6 +749,13 @@ function _demand_series(
             resolution_minutes,
             target_resolution_minutes,
         )
+        res_comps = Dict{Symbol,Dict{String,Float64}}(
+            c => replicate_to_finer_resolution(
+                d,
+                resolution_minutes,
+                target_resolution_minutes,
+            ) for (c, d) in res_comps
+        )
         target_timeslots = sort(collect(keys(load_by_time)))
         println(
             "  🕐 Upsampled $(resolution_minutes)-min data to $(target_resolution_minutes)-min " *
@@ -634,12 +773,40 @@ function _demand_series(
             load_by_time[ts] = load_modifier(ts, load_by_time[ts])
         end
     end
+    # Per-COMPONENT edits run FIRST and are exact: each component is modified in
+    # place and the aggregate absorbs the signed delta, so a solar perturbation
+    # moves supply, residual demand AND the solar share, while a wind
+    # perturbation moves supply and residual demand only (#390 §1). An
+    # AGGREGATE `renewable_modifier` then applies on top, and its effect is
+    # split back over the components pro rata by `build_effective_res` — the
+    # declared, recorded convention for a hook that cannot say which component
+    # it meant.
+    if res_component_modifier !== nothing
+        for c in RES_COMPONENTS
+            d = get(res_comps, c, nothing)
+            d === nothing && continue
+            for ts in target_timeslots
+                before = get(d, ts, 0.0)
+                after = max(Float64(res_component_modifier(ts, c, before)), 0.0)
+                after == before && continue
+                d[ts] = after
+                renewable_by_time[ts] =
+                    max(get(renewable_by_time, ts, 0.0) + (after - before), 0.0)
+            end
+        end
+    end
     if renewable_modifier !== nothing
         for ts in keys(renewable_by_time)
             renewable_by_time[ts] = renewable_modifier(ts, renewable_by_time[ts])
         end
     end
-    return target_timeslots, load_by_time, renewable_by_time, resolution_minutes
+    effective_res =
+        build_effective_res(renewable_by_time, res_comps, res_srcmap, resolution_minutes)
+    return target_timeslots,
+    load_by_time,
+    renewable_by_time,
+    resolution_minutes,
+    effective_res
 end
 
 """
@@ -878,12 +1045,22 @@ and is no longer a keyword argument.
   `_demand_series` stage (temporal grid, `load_modifier` if also present, demand
   orders, net demand, scarcity) as DB load.
 - `res_fill::Union{Nothing,Function}`: the RES twin of `load_fill` (same
-  signature). MERGES weather-model wind+solar MW for the hours the TSO 14.1.D
-  wind/solar forecast did NOT publish, into the renewable forecast (as hourly
-  "WeatherFill" rows) before `_demand_series` — so it propagates to
-  `renewable_by_time`, the near-zero-price RES supply orders, and the net-demand
-  residual exactly like DB RES. A present TSO RES hour is never overridden;
-  `nothing`/empty is byte-identical.
+  signature). MERGES weather-model RES for the component-hours the TSO 14.1.D
+  wind/solar forecast did NOT publish, into the renewable forecast before
+  `_demand_series` — so it propagates to `renewable_by_time`, the
+  near-zero-price RES supply orders, the net-demand residual AND the
+  solar-regime axis exactly like DB RES. Return either
+  `Dict{Symbol,Dict{String,Float64}}` (`:solar`/`:wind` → timeslot → MW; filled
+  per component-hour, so a published wind row no longer blocks an absent solar
+  one) or the legacy combined `Dict{String,Float64}` (unsplit, see
+  `_res_fill_components`). A published component-hour — including a published
+  zero — is never overridden; `nothing`/empty is byte-identical.
+- `res_component_modifier::Union{Nothing,Function}`: `(timeslot, component, mw)
+  -> mw`, the EXACT per-component twin of `renewable_modifier`. Runs before it,
+  on `:solar`/`:wind`/`:other` separately; the aggregate absorbs the signed
+  delta. This is the hook to use when a scenario means "10% more solar" — an
+  aggregate `renewable_modifier` cannot say which component it moved, and its
+  effect is split pro rata (recorded as `alloc=:pro_rata`).
 
 Both the single-zone (`:merit_order`) `generate_energy_prices` path and the
 multi-zone `run_multi_zone_market_clearing(...; scenario=...)` path thread these
@@ -922,6 +1099,7 @@ function create_merit_order_book(
     fleet_modifier::Union{Nothing,Function} = nothing,
     load_fill::Union{Nothing,Function} = nothing,
     res_fill::Union{Nothing,Function} = nothing,
+    res_component_modifier::Union{Nothing,Function} = nothing,
 )
     # Resolve every bid parameter from the profile, letting an explicit keyword
     # override its profile field. With no overrides and the default SEE_PROFILE
@@ -1053,29 +1231,15 @@ function create_merit_order_book(
         # ("60") and tagged production_type "WeatherFill". The caller only
         # attaches this hook to RES-short zones.
         if res_fill !== nothing
-            rfilled = res_fill(bidding_zone, day)
-            if rfilled !== nothing && !isempty(rfilled)
-                rcovered = Set(r.date_time[1:11] for r in renewables)  # "yyyymmdd-HH" present in TSO
-                radded = 0
-                for (ts, mw) in rfilled
-                    ts[1:11] in rcovered && continue                   # TSO already covers this hour
-                    push!(
-                        renewables,
-                        RenewablesGenerationForecast(
-                            ts,
-                            "60",
-                            bidding_zone,
-                            "WeatherFill",
-                            mw,
-                        ),
-                    )
-                    radded += 1
-                end
-                radded > 0 && println(
-                    "  🩹 res-fill: $bidding_zone added $radded model hour(s) " *
-                    "(TSO published $(length(rcovered))h; missing hours filled)",
-                )
-            end
+            radded = _apply_res_fill!(renewables, res_fill(bidding_zone, day), bidding_zone)
+            isempty(radded) || println(
+                "  🩹 res-fill: $bidding_zone added " *
+                join(
+                    ("$n $(c) hour(s)" for (c, n) in sort(collect(radded); by = first)),
+                    ", ",
+                ) *
+                " from the weather model (component-hours the TSO did not publish)",
+            )
         end
 
         if isempty(generators)
@@ -1129,14 +1293,28 @@ function create_merit_order_book(
                 )
             end
         end
-        target_timeslots, load_by_time, renewable_by_time, resolution_minutes =
-            _demand_series(
-                loads,
-                renewables,
-                target_resolution_minutes,
-                load_modifier,
-                eff_renewable_modifier,
-            )
+        # The cv32 corrections are per TARGET (solar / wind) in the source table;
+        # the aggregate application above is unchanged (bit-identical), and the
+        # per-target deltas below carry the same edit into the COMPONENT series
+        # so the regime axis sees a corrected-solar hour as a solar hour.
+        cv32_comp =
+            profile.input_corrections ?
+            _input_correction_component_modifier(bidding_zone, day) : nothing
+        eff_component_modifier =
+            _compose_component_modifiers(cv32_comp, res_component_modifier)
+        target_timeslots,
+        load_by_time,
+        renewable_by_time,
+        resolution_minutes,
+        effective_res = _demand_series(
+            loads,
+            renewables,
+            target_resolution_minutes,
+            load_modifier,
+            eff_renewable_modifier,
+            eff_component_modifier,
+        )
+        println("  ☀️  effective RES: " * effective_res_summary(effective_res))
 
         # ── Stage 3: net imports, demand state, gas anchor, backstop ────
         # Residual demand per slot (load minus renewables) drives water value
@@ -1368,27 +1546,13 @@ function create_merit_order_book(
             haskey(ENV, "EUPHEMIA_SOLAR_REGIME_THETA2") ?
             parse(Float64, ENV["EUPHEMIA_SOLAR_REGIME_THETA2"]) : Inf
         sr_floor2 = parse(Float64, get(ENV, "EUPHEMIA_SOLAR_REGIME_FLOOR2", "-80"))
-        solar_share_hr = Dict{Int,Float64}()
-        if solar_regime_on
-            sol_hr = Dict{Int,Vector{Float64}}()
-            ld_hr = Dict{Int,Vector{Float64}}()
-            for r in renewables
-                r.production_type == "Solar" || continue
-                length(r.date_time) >= 11 || continue
-                push!(
-                    get!(sol_hr, parse(Int, r.date_time[10:11]), Float64[]),
-                    r.aggregated_generation_forecast,
-                )
-            end
-            for (ts, v) in load_by_time
-                length(ts) >= 11 || continue
-                push!(get!(ld_hr, parse(Int, ts[10:11]), Float64[]), v)
-            end
-            for (h, vs) in sol_hr
-                lv = haskey(ld_hr, h) ? sum(ld_hr[h]) / length(ld_hr[h]) : 0.0
-                solar_share_hr[h] = lv > 0 ? (sum(vs) / length(vs)) / lv : 0.0
-            end
-        end
+        # #387: the regime axis is the EFFECTIVE solar series — the same one the
+        # supply stack offers — so a weather-filled or input-corrected solar hour
+        # is a solar hour here too. On the record path (no fill, no corrections in
+        # the regime zones, no scenario) this is the raw 14.1.D solar it always was.
+        solar_share_hr =
+            solar_regime_on ? solar_share_by_hour(effective_res, load_by_time) :
+            Dict{Int,Float64}()
         sr_active(hr) = solar_regime_on && get(solar_share_hr, hr, 0.0) >= sr_theta
         # cv34 T2: the floor for an ACTIVE regime hour (tier 2 if share >= θ2)
         sr_floor(hr) =
@@ -1944,30 +2108,14 @@ function create_merit_order_book(
             if !isempty(pump_head) && maximum(values(pump_head)) > 10.0
                 eta = parse(Float64, get(ENV, "EUPHEMIA_CV34_PUMP_ETA", "0.7"))
                 pump_price = max(eta * maximum(values(pass1_prices)), 0.0)
-                # regime share per hour (same construction as the cv31 gate,
-                # computed here because pump zones need not be floor zones)
-                psol = Dict{Int,Vector{Float64}}();
-                pld = Dict{Int,Vector{Float64}}()
-                for r in renewables
-                    r.production_type == "Solar" || continue
-                    length(r.date_time) >= 11 || continue
-                    push!(
-                        get!(psol, parse(Int, r.date_time[10:11]), Float64[]),
-                        r.aggregated_generation_forecast,
-                    )
-                end
-                for (ts, v) in load_by_time
-                    length(ts) >= 11 || continue
-                    push!(get!(pld, parse(Int, ts[10:11]), Float64[]), v)
-                end
+                # regime share per hour — the SAME effective axis as the cv31 gate
+                # (computed here because pump zones need not be floor zones)
+                pump_share = solar_share_by_hour(effective_res, load_by_time)
                 n_pump = 0
                 for ts in target_timeslots
                     hr = parse(Int, ts[10:11])
-                    sv = get(psol, hr, Float64[]);
-                    lv = get(pld, hr, Float64[])
-                    (isempty(sv) || isempty(lv)) && continue
-                    share = (sum(sv) / length(sv)) / max(sum(lv) / length(lv), 1.0)
-                    share >= sr_theta || continue
+                    haskey(pump_share, hr) || continue
+                    pump_share[hr] >= sr_theta || continue
                     pmw = get(pump_head, hr, 0.0)
                     pmw > 10.0 || continue
                     dtp = parse_timeslot_to_datetime(ts, day)

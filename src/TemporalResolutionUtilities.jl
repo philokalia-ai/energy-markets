@@ -273,3 +273,63 @@ function disaggregate_temporal_data(loads, renewables)
 
     return target_timeslots, load_by_time, renewable_by_time, resolution_minutes
 end
+"""
+    res_component(production_type) -> Symbol
+
+The effective-RES component a 14.1.D production type belongs to: `:solar`,
+`:wind`, or `:other` (nothing else appears in the table, but an unknown type
+is carried rather than silently folded into one of the two).
+"""
+res_component(ptype::AbstractString) =
+    startswith(ptype, "Solar") ? :solar : startswith(ptype, "Wind") ? :wind : :other
+
+"""
+    disaggregate_renewables_by_component(renewables, target_timeslots, resolution_minutes)
+        -> Dict{Symbol,Dict{String,Float64}}
+
+The per-component (`:solar`/`:wind`/`:other`) twin of the renewable branch of
+[`disaggregate_temporal_data`](@ref), projected onto the SAME grid it returned.
+Component series are summed per timeslot exactly as the aggregate is, so
+`sum(components)` reproduces the aggregate slot for slot (bar float ordering),
+which the effective-RES contract then reconciles exactly.
+
+Kept in one place with the aggregate on purpose: a component series that drifts
+from the series the book actually offers is the #387 defect in a new costume.
+"""
+function disaggregate_renewables_by_component(
+    renewables,
+    target_timeslots,
+    resolution_minutes::Int,
+)
+    comps = Dict{Symbol,Dict{String,Float64}}(
+        :solar => Dict{String,Float64}(),
+        :wind => Dict{String,Float64}(),
+        :other => Dict{String,Float64}(),
+    )
+    isempty(renewables) && return comps
+    renewable_resolution = parse_resolution_to_minutes(renewables[1].resolution_code)
+
+    if renewable_resolution > resolution_minutes
+        # coarser source: every finer sub-slot takes its parent hour's LEVEL
+        grouped = Dict{Tuple{Symbol,String},Float64}()
+        for r in renewables
+            k = (res_component(r.production_type), r.date_time)
+            grouped[k] = get(grouped, k, 0.0) + r.aggregated_generation_forecast
+        end
+        for slot in target_timeslots
+            length(slot) >= 11 || continue
+            prefix = slot[1:11]
+            for ((comp, src_slot), v) in grouped
+                (length(src_slot) >= 11 && src_slot[1:11] == prefix) || continue
+                comps[comp][slot] = get(comps[comp], slot, 0.0) + v
+            end
+        end
+    else
+        for r in renewables
+            comp = res_component(r.production_type)
+            comps[comp][r.date_time] =
+                get(comps[comp], r.date_time, 0.0) + r.aggregated_generation_forecast
+        end
+    end
+    return comps
+end

@@ -7,13 +7,36 @@ struct RES
     bidding_zone::String
 end
 
+"""
+One published (or reconstructed) 14.1.D wind/solar forecast row.
+
+`source` carries the row's PROVENANCE, which the effective-RES contract
+(`src/merit_order/effective_res.jl`, #387) needs to tell a genuine published
+zero from a missing value coalesced to zero:
+
+- `:tso`          — the TSO published this value for this interval;
+- `:persistence`  — the value was NULL and was reconstructed from the zone/type's
+  own latest published value (within-day neighbour or `fallback_days` history);
+- `:absent`       — the production type published NOTHING usable for the day and
+  the row stands at 0 MW. NOT coverage: the weather fill may replace it.
+- `:weather_fill` — added by the forecast-track `res_fill` hook, not by the TSO.
+
+The 5-argument constructor keeps every existing call site (`source = :tso`).
+"""
 struct RenewablesGenerationForecast
     date_time::String  # e.g. "20250624-00"
     resolution_code::String
     bidding_zone::String # e.g. "GR"
     production_type::String
     aggregated_generation_forecast::Float64
+    source::Symbol
 end
+
+RenewablesGenerationForecast(dt, res, zone, ptype, mw) =
+    RenewablesGenerationForecast(dt, res, zone, ptype, mw, :tso)
+
+"True when the row is real coverage of its (production type, interval) — i.e. not a missing value coalesced to 0 MW."
+res_row_covers(r::RenewablesGenerationForecast) = r.source !== :absent
 
 """
     get_generation_forecast_for_wind_and_solar(zone, day) -> Vector{RenewablesGenerationForecast}
@@ -116,6 +139,10 @@ function get_generation_forecast_for_wind_and_solar(
 
     # --- 2. NULL values -> persistence of the latest published value --------
     known = [!ismissing(v) for v in df.day_ahead_generation_forecast_mw]
+    # provenance per row, parallel to the value column (see
+    # `RenewablesGenerationForecast`): every published row is :tso until the
+    # NULL sweep below downgrades it.
+    srcs = fill(:tso, nrow(df))
     n_missing = count(!, known)
     if n_missing > 0
         hist = Euphemia.sql2df_with_retry(
@@ -156,9 +183,11 @@ ORDER BY date_time_utc
                     vals[i] = latest[k];
                     filled += 1;
                     known[i] = true
+                    srcs[i] = :persistence
                 else
                     vals[i] = 0.0;
                     zeroed += 1
+                    srcs[i] = :absent
                 end
             else
                 vals[i] = Float64(v)
@@ -194,6 +223,7 @@ ORDER BY date_time_utc
                 vals[i] = vals[best];
                 nearest += 1;
                 zeroed -= 1
+                srcs[i] = :persistence
             end
             # mark them known only after the sweep so fills don't chain
             for i = 1:nrow(df)
@@ -217,6 +247,7 @@ ORDER BY date_time_utc
         # Average the KNOWN values only (published or history-filled); an
         # unfilled NULL must not drag the average to a quarter of the truth.
         acc = Dict{Tuple{String,Dates.DateTime},Tuple{Float64,Int}}()
+        src_acc = Dict{Tuple{String,Dates.DateTime},Symbol}()
         for (i, row) in enumerate(eachrow(df))
             dt = DateTime(row.date_time_utc)
             minute_of_day = 60 * Dates.hour(dt) + Dates.minute(dt)
@@ -228,6 +259,9 @@ ORDER BY date_time_utc
             acc[k] =
                 known[i] ? (sv + Float64(row.day_ahead_generation_forecast_mw), n + 1) :
                 (sv, n)
+            # a bucket is covered when at least one row in it carries a real
+            # (published or persistence-reconstructed) value
+            known[i] && srcs[i] !== :absent && (src_acc[k] = :tso)
         end
         return [
             RenewablesGenerationForecast(
@@ -236,6 +270,7 @@ ORDER BY date_time_utc
                 bidding_zone,
                 ptype,
                 n == 0 ? 0.0 : sv / n,
+                get(src_acc, (ptype, bucket), :absent),
             ) for ((ptype, bucket), (sv, n)) in
             sort(collect(acc); by = kv -> (kv[1][2], kv[1][1]))
         ]
@@ -249,6 +284,7 @@ ORDER BY date_time_utc
             row.area_map_code,
             row.production_type,
             Float64(row.day_ahead_generation_forecast_mw),
-        ) for row in eachrow(df)
+            srcs[i],
+        ) for (i, row) in enumerate(eachrow(df))
     ]
 end

@@ -34,6 +34,7 @@ import ..FLEXIBLE_FUEL_TYPES
 import ..MarketOrders: SimpleOrder
 import ..MPCC: MPCCOrderBook
 import ..disaggregate_temporal_data, ..replicate_to_finer_resolution
+import ..disaggregate_renewables_by_component, ..res_component, ..res_row_covers
 import ..OrderBookResult: AdjustedOrderBookResult, parse_timeslot_to_datetime
 
 """
@@ -67,6 +68,7 @@ paths are unchanged.
 include("merit_order/flows_imports.jl") # physical-flow cache, net imports, ex-ante flows, import ATC/backstop, firm map
 include("merit_order/zone_profiles.jl") # ZoneProfile struct, per-zone profiles, ZONE_PROFILES, ZoneScenario
 include("merit_order/fleet_data.jl")    # hydro availability, per-type p95, installed capacity, reservoir dryness/drawdown
+include("merit_order/effective_res.jl")  # effective RES component contract (#387): EffectiveRes, solar_share_by_hour
 include("merit_order/boundary.jl")      # cv21 virtual boundary-counterparty book (DK1/Viking GB): anchor SRMC, capability, orders
 # Optional order-book sink — set by the book-export feature; nothing = the
 # exact pre-existing behaviour (guarded byte-identical).
