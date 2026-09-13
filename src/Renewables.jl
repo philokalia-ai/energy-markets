@@ -7,13 +7,36 @@ struct RES
     bidding_zone::String
 end
 
+"""
+One published (or reconstructed) 14.1.D wind/solar forecast row.
+
+`source` carries the row's PROVENANCE, which the effective-RES contract
+(`src/merit_order/effective_res.jl`, #387) needs to tell a genuine published
+zero from a missing value coalesced to zero:
+
+- `:tso`          — the TSO published this value for this interval;
+- `:persistence`  — the value was NULL and was reconstructed from the zone/type's
+  own latest published value (within-day neighbour or `fallback_days` history);
+- `:absent`       — the production type published NOTHING usable for the day and
+  the row stands at 0 MW. NOT coverage: the weather fill may replace it.
+- `:weather_fill` — added by the forecast-track `res_fill` hook, not by the TSO.
+
+The 5-argument constructor keeps every existing call site (`source = :tso`).
+"""
 struct RenewablesGenerationForecast
     date_time::String  # e.g. "20250624-00"
     resolution_code::String
     bidding_zone::String # e.g. "GR"
     production_type::String
     aggregated_generation_forecast::Float64
+    source::Symbol
 end
+
+RenewablesGenerationForecast(dt, res, zone, ptype, mw) =
+    RenewablesGenerationForecast(dt, res, zone, ptype, mw, :tso)
+
+"True when the row is real coverage of its (production type, interval) — i.e. not a missing value coalesced to 0 MW."
+res_row_covers(r::RenewablesGenerationForecast) = r.source !== :absent
 
 """
     get_generation_forecast_for_wind_and_solar(zone, day) -> Vector{RenewablesGenerationForecast}
@@ -42,8 +65,12 @@ source defects that used to reach the book (bug sweep 2026-08-24):
 the result: every path falls back the same way. Days without either defect
 are returned exactly as before (no extra query, same rows, same order).
 """
-function get_generation_forecast_for_wind_and_solar(bidding_zone::String, day::Dates.Date;
-    coalesce_missing::Bool=false, fallback_days::Int=7)
+function get_generation_forecast_for_wind_and_solar(
+    bidding_zone::String,
+    day::Dates.Date;
+    coalesce_missing::Bool = false,
+    fallback_days::Int = 7,
+)
     # UTC day window as explicit range bounds: sargable (uses
     # idx_res_fcst_zone_time instead of reading every row of the zone) and
     # independent of the session timezone, unlike date(date_time_utc) = day
@@ -81,60 +108,86 @@ function get_generation_forecast_for_wind_and_solar(bidding_zone::String, day::D
         k = (String(row.production_type), String(row.resolution_code))
         counts[k] = get(counts, k, 0) + 1
         ismissing(row.day_ahead_generation_forecast_mw) && continue
-        push!(get!(hours, k, Set{Dates.DateTime}()), trunc(DateTime(row.date_time_utc), Dates.Hour))
+        push!(
+            get!(hours, k, Set{Dates.DateTime}()),
+            trunc(DateTime(row.date_time_utc), Dates.Hour),
+        )
     end
     cover(k) = length(get(hours, k, Set{Dates.DateTime}()))
     chosen = Dict{String,String}()              # type -> resolution_code
     for (ptype, res) in keys(counts)
         cur = get(chosen, ptype, nothing)
-        if cur === nothing || cover((ptype, res)) > cover((ptype, cur)) ||
-           (cover((ptype, res)) == cover((ptype, cur)) &&
-            parse_resolution_to_minutes(res) > parse_resolution_to_minutes(cur))
+        if cur === nothing ||
+           cover((ptype, res)) > cover((ptype, cur)) ||
+           (
+               cover((ptype, res)) == cover((ptype, cur)) &&
+               parse_resolution_to_minutes(res) > parse_resolution_to_minutes(cur)
+           )
             chosen[ptype] = res
         end
     end
     if any(chosen[t] != r for (t, r) in keys(counts))
-        dropped = sum(n for ((t, r), n) in counts if chosen[t] != r; init=0)
+        dropped = sum(n for ((t, r), n) in counts if chosen[t] != r; init = 0)
         @warn "RES forecast $bidding_zone $day: mixed resolutions per production type — " *
               "keeping one per type $(chosen), discarding $dropped duplicate value(s)"
-        keep = [chosen[String(row.production_type)] == String(row.resolution_code)
-                for row in eachrow(df)]
+        keep = [
+            chosen[String(row.production_type)] == String(row.resolution_code) for
+            row in eachrow(df)
+        ]
         df = df[keep, :]
     end
 
     # --- 2. NULL values -> persistence of the latest published value --------
     known = [!ismissing(v) for v in df.day_ahead_generation_forecast_mw]
+    # provenance per row, parallel to the value column (see
+    # `RenewablesGenerationForecast`): every published row is :tso until the
+    # NULL sweep below downgrades it.
+    srcs = fill(:tso, nrow(df))
     n_missing = count(!, known)
     if n_missing > 0
-        hist = Euphemia.sql2df_with_retry("""
-            SELECT date_time_utc, resolution_code, production_type, day_ahead_generation_forecast_mw
-            FROM entsoe.generation_forecasts_for_wind_and_solar
-            WHERE date_time_utc >= ((\$1::date - \$3::int)::timestamp AT TIME ZONE 'UTC')
-              AND date_time_utc < (\$1::date::timestamp AT TIME ZONE 'UTC')
-              AND area_map_code = \$2
-              AND area_type_code IN ('BZN', 'BZN/CTA', 'BZN/CTY', 'BZN/CTA/CTY')
-              AND day_ahead_generation_forecast_mw IS NOT NULL
-            ORDER BY date_time_utc
-            """, [day, bidding_zone, fallback_days])
+        hist = Euphemia.sql2df_with_retry(
+            """
+SELECT date_time_utc, resolution_code, production_type, day_ahead_generation_forecast_mw
+FROM entsoe.generation_forecasts_for_wind_and_solar
+WHERE date_time_utc >= ((\$1::date - \$3::int)::timestamp AT TIME ZONE 'UTC')
+  AND date_time_utc < (\$1::date::timestamp AT TIME ZONE 'UTC')
+  AND area_map_code = \$2
+  AND area_type_code IN ('BZN', 'BZN/CTA', 'BZN/CTY', 'BZN/CTA/CTY')
+  AND day_ahead_generation_forecast_mw IS NOT NULL
+ORDER BY date_time_utc
+""",
+            [day, bidding_zone, fallback_days],
+        )
         # (type, resolution, time-of-day) -> latest published value (rows are
         # time-ordered, so the last write wins = the most recent day)
         latest = Dict{Tuple{String,String,Dates.Time},Float64}()
         for row in eachrow(hist)
-            latest[(String(row.production_type), String(row.resolution_code),
-                    Dates.Time(DateTime(row.date_time_utc)))] =
-                Float64(row.day_ahead_generation_forecast_mw)
+            latest[(
+                String(row.production_type),
+                String(row.resolution_code),
+                Dates.Time(DateTime(row.date_time_utc)),
+            )] = Float64(row.day_ahead_generation_forecast_mw)
         end
-        filled = 0; zeroed = 0
+        filled = 0;
+        zeroed = 0
         vals = Vector{Float64}(undef, nrow(df))
         for (i, row) in enumerate(eachrow(df))
             v = row.day_ahead_generation_forecast_mw
             if ismissing(v)
-                k = (String(row.production_type), String(row.resolution_code),
-                     Dates.Time(DateTime(row.date_time_utc)))
+                k = (
+                    String(row.production_type),
+                    String(row.resolution_code),
+                    Dates.Time(DateTime(row.date_time_utc)),
+                )
                 if haskey(latest, k)
-                    vals[i] = latest[k]; filled += 1; known[i] = true
+                    vals[i] = latest[k];
+                    filled += 1;
+                    known[i] = true
+                    srcs[i] = :persistence
                 else
-                    vals[i] = 0.0; zeroed += 1
+                    vals[i] = 0.0;
+                    zeroed += 1
+                    srcs[i] = :absent
                 end
             else
                 vals[i] = Float64(v)
@@ -147,25 +200,33 @@ function get_generation_forecast_for_wind_and_solar(bidding_zone::String, day::D
         # hour. Only a type with no value at all in the day stays at 0 MW.
         nearest = 0
         if zeroed > 0
-            for i in 1:nrow(df)
+            for i = 1:nrow(df)
                 known[i] && continue
-                ti = DateTime(df.date_time_utc[i]); kt = (String(df.production_type[i]), String(df.resolution_code[i]))
-                best = 0; bestd = typemax(Int)
-                for j in 1:nrow(df)
-                    (known[j] && !ismissing(df.day_ahead_generation_forecast_mw[j])) || continue
-                    (String(df.production_type[j]), String(df.resolution_code[j])) == kt || continue
+                ti = DateTime(df.date_time_utc[i]);
+                kt = (String(df.production_type[i]), String(df.resolution_code[i]))
+                best = 0;
+                bestd = typemax(Int)
+                for j = 1:nrow(df)
+                    (known[j] && !ismissing(df.day_ahead_generation_forecast_mw[j])) ||
+                        continue
+                    (String(df.production_type[j]), String(df.resolution_code[j])) == kt ||
+                        continue
                     d = abs(Dates.value(DateTime(df.date_time_utc[j]) - ti))
                     tj = DateTime(df.date_time_utc[j])
                     # earlier neighbours win ties
                     if d < bestd || (d == bestd && tj < DateTime(df.date_time_utc[best]))
-                        best = j; bestd = d
+                        best = j;
+                        bestd = d
                     end
                 end
                 best == 0 && continue
-                vals[i] = vals[best]; nearest += 1; zeroed -= 1
+                vals[i] = vals[best];
+                nearest += 1;
+                zeroed -= 1
+                srcs[i] = :persistence
             end
             # mark them known only after the sweep so fills don't chain
-            for i in 1:nrow(df)
+            for i = 1:nrow(df)
                 (!known[i] && vals[i] != 0.0) && (known[i] = true)
             end
         end
@@ -186,18 +247,33 @@ function get_generation_forecast_for_wind_and_solar(bidding_zone::String, day::D
         # Average the KNOWN values only (published or history-filled); an
         # unfilled NULL must not drag the average to a quarter of the truth.
         acc = Dict{Tuple{String,Dates.DateTime},Tuple{Float64,Int}}()
+        src_acc = Dict{Tuple{String,Dates.DateTime},Symbol}()
         for (i, row) in enumerate(eachrow(df))
             dt = DateTime(row.date_time_utc)
             minute_of_day = 60 * Dates.hour(dt) + Dates.minute(dt)
-            bucket = DateTime(Date(dt)) + Dates.Minute(coarsest_min * div(minute_of_day, coarsest_min))
+            bucket =
+                DateTime(Date(dt)) +
+                Dates.Minute(coarsest_min * div(minute_of_day, coarsest_min))
             k = (String(row.production_type), bucket)
             sv, n = get(acc, k, (0.0, 0))
-            acc[k] = known[i] ? (sv + Float64(row.day_ahead_generation_forecast_mw), n + 1) : (sv, n)
+            acc[k] =
+                known[i] ? (sv + Float64(row.day_ahead_generation_forecast_mw), n + 1) :
+                (sv, n)
+            # a bucket is covered when at least one row in it carries a real
+            # (published or persistence-reconstructed) value
+            known[i] && srcs[i] !== :absent && (src_acc[k] = :tso)
         end
-        return [RenewablesGenerationForecast(
-                    Dates.format(bucket, "yyyymmdd-HHMM"), coarsest, bidding_zone, ptype,
-                    n == 0 ? 0.0 : sv / n)
-                for ((ptype, bucket), (sv, n)) in sort(collect(acc); by=kv -> (kv[1][2], kv[1][1]))]
+        return [
+            RenewablesGenerationForecast(
+                Dates.format(bucket, "yyyymmdd-HHMM"),
+                coarsest,
+                bidding_zone,
+                ptype,
+                n == 0 ? 0.0 : sv / n,
+                get(src_acc, (ptype, bucket), :absent),
+            ) for ((ptype, bucket), (sv, n)) in
+            sort(collect(acc); by = kv -> (kv[1][2], kv[1][1]))
+        ]
     end
 
     return [
@@ -207,7 +283,8 @@ function get_generation_forecast_for_wind_and_solar(bidding_zone::String, day::D
             row.resolution_code,
             row.area_map_code,
             row.production_type,
-            Float64(row.day_ahead_generation_forecast_mw)
-        ) for row in eachrow(df)
+            Float64(row.day_ahead_generation_forecast_mw),
+            srcs[i],
+        ) for (i, row) in enumerate(eachrow(df))
     ]
 end

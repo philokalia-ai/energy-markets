@@ -427,7 +427,8 @@ function _create_multi_zone_order_book_merit(zones::Vector{String}, day::Date;
             strategist=(sc === nothing ? nothing : sc.strategist),
             fleet_modifier=(sc === nothing ? nothing : sc.fleet_modifier),
             load_fill=(sc === nothing ? nothing : sc.load_fill),
-            res_fill=(sc === nothing ? nothing : sc.res_fill))
+            res_fill=(sc === nothing ? nothing : sc.res_fill),
+            res_component_modifier=(sc === nothing ? nothing : sc.res_component_modifier))
     end
 
     zone_orders = Dict{String,Vector{MarketOrders.MarketOrder}}()

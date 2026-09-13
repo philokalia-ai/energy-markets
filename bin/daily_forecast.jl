@@ -472,21 +472,21 @@ function build_weather_predictions(first_utc_day::Date, last_utc_day::Date,
                                    fixed_lag::Union{Nothing,Int}=nothing)
     pack = load_res_models()
     groups = vintage_groups(first_utc_day, last_utc_day, candidates; asof, fixed_lag)
-    preds = Dict{String,Dict{DateTime,Float64}}()
+    preds = Dict{String,Dict{DateTime,ResPred}}()
     for zone in ZONES
         zm = get(pack["zones"], zone, nothing)
         if zm === nothing
             println("  ⚠️ $zone: no RES model in pack — weather RES predicted 0")
-            preds[zone] = Dict{DateTime,Float64}()
+            preds[zone] = Dict{DateTime,ResPred}()
             continue
         end
         cells = [(Float64(c[1]), Float64(c[2])) for c in zm["cells"]]
-        zp = Dict{DateTime,Float64}()
+        zp = Dict{DateTime,ResPred}()
         for (gdates, lag) in groups
             OPENMETEO_ZONE_THROTTLE_S > 0 && sleep(OPENMETEO_ZONE_THROTTLE_S)  # spread calls → avoid 429
             weather = fetch_weather(cells, gdates; vintage_lag=lag)
             ghours = collect(DateTime(first(gdates)):Hour(1):DateTime(last(gdates)) + Hour(23))
-            merge!(zp, predict_res(pack, zone, ghours, weather))
+            merge!(zp, predict_res_components(pack, zone, ghours, weather))
         end
         nspan = 24 * (Dates.value(last_utc_day - first_utc_day) + 1)
         0 < length(zp) < nspan &&
@@ -527,17 +527,26 @@ depends on which TSOs happened to publish before the run. Eligibility
 eligible days; the `mw` fallback in both modifiers is therefore unreachable
 there and kept only as a safe identity.
 """
-function weather_scenario(preds::Dict{String,Dict{DateTime,Float64}},
+function weather_scenario(preds::Dict{String,Dict{DateTime,ResPred}},
                           load_preds::Dict{String,Dict{DateTime,Float64}})
     scenario = Dict{String,Euphemia.ZoneScenario}()
     load_fill_fn = make_load_fill_fn(load_preds)
     res_fill_fn = make_res_fill_fn(preds)
     for zone in ZONES
-        zone_pred = get(preds, zone, Dict{DateTime,Float64}())
+        zone_pred = get(preds, zone, Dict{DateTime,ResPred}())
         zone_load = get(load_preds, zone, Dict{DateTime,Float64}())
-        rmod = (ts, mw) -> begin
+        # PER-COMPONENT override (#387): the weather track replaces TSO RES
+        # wholesale, so it must replace SOLAR with weather solar and WIND with
+        # weather wind. The old aggregate `renewable_modifier` moved the total
+        # and left the regime axis reading the TSO's own solar — a zone could
+        # clear on weather RES while its solar-regime gate judged a different
+        # day. The aggregate follows the components exactly (their sum is what
+        # `predict_res` used to return), so the supply stack is unchanged.
+        rmod = (ts, comp, mw) -> begin
             dt = DateTime(ts, dateformat"yyyymmdd-HHMM")
-            get(zone_pred, trunc(dt, Hour), mw)
+            p = get(zone_pred, trunc(dt, Hour), nothing)
+            p === nothing && return mw
+            return comp === :solar ? p.solar : comp === :wind ? p.wind : mw
         end
         lmod = (ts, mw) -> begin
             dt = DateTime(ts, dateformat"yyyymmdd-HHMM")
@@ -548,7 +557,7 @@ function weather_scenario(preds::Dict{String,Dict{DateTime,Float64}},
         # replace a published TSO hour) never matter here — the modifier
         # overrides every hour regardless of provenance.
         scenario[zone] = Euphemia.ZoneScenario(load_modifier=lmod,
-                                               renewable_modifier=rmod,
+                                               res_component_modifier=rmod,
                                                load_fill=load_fill_fn,
                                                res_fill=res_fill_fn)
     end
@@ -580,7 +589,7 @@ most of Germany's solar missing, corr −0.50) reintroduced from the model side,
 and forecast vintages are immutable, so it can never be corrected afterwards.
 """
 function res_covered_for_day(day::Date,
-                             res_preds::Dict{String,Dict{DateTime,Float64}})
+                             res_preds::Dict{String,Dict{DateTime,ResPred}})
     expected = expected_market_day_hours(day)
     return Set(z for (z, zp) in res_preds if all(h -> haskey(zp, h), expected))
 end
@@ -721,7 +730,7 @@ function build_res_fills(pack, zones_to_fill::Vector{String},
                          candidates::AbstractSet{Date};
                          asof::Date=Date(now(UTC)),
                          fixed_lag::Union{Nothing,Int}=nothing)
-    res_pred = Dict{String,Dict{DateTime,Float64}}()
+    res_pred = Dict{String,Dict{DateTime,ResPred}}()
     isempty(zones_to_fill) && return res_pred
     groups = vintage_groups(first_utc, last_utc, candidates; asof, fixed_lag)
     for zone in zones_to_fill
@@ -731,7 +740,7 @@ function build_res_fills(pack, zones_to_fill::Vector{String},
             continue
         end
         cells = [(Float64(c[1]), Float64(c[2])) for c in zm["cells"]]
-        pred = Dict{DateTime,Float64}()
+        pred = Dict{DateTime,ResPred}()
         ok = true
         for (gdates, lag) in groups
             OPENMETEO_ZONE_THROTTLE_S > 0 && sleep(OPENMETEO_ZONE_THROTTLE_S)  # spread calls → avoid 429
@@ -744,7 +753,7 @@ function build_res_fills(pack, zones_to_fill::Vector{String},
                 break
             end
             ghours = collect(DateTime(first(gdates)):Hour(1):DateTime(last(gdates)) + Hour(23))
-            merge!(pred, predict_res(pack, zone, ghours, weather))
+            merge!(pred, predict_res_components(pack, zone, ghours, weather))
         end
         ok || continue
         if isempty(pred)
@@ -762,8 +771,30 @@ function build_res_fills(pack, zones_to_fill::Vector{String},
     return res_pred
 end
 
-"Book hook `res_fill(zone, utc_day)` over a precomputed `res_pred`. Twin of `make_load_fill_fn`."
-make_res_fill_fn(res_pred::Dict{String,Dict{DateTime,Float64}}) = make_load_fill_fn(res_pred)
+"""
+Book hook `res_fill(zone, utc_day)` over a precomputed component prediction.
+Twin of `make_load_fill_fn`, but returning the PER-COMPONENT shape
+(`:solar`/`:wind` → timeslot → MW) the book fills per component-hour: a zone
+that publishes wind and no solar gets its solar filled, and the filled solar
+reaches the regime axis (#387).
+"""
+function make_res_fill_fn(res_pred::Dict{String,Dict{DateTime,ResPred}})
+    isempty(res_pred) && return nothing
+    return (zone, day) -> begin
+        zp = get(res_pred, String(zone), nothing)
+        zp === nothing && return nothing
+        out = Dict{Symbol,Dict{String,Float64}}(:solar => Dict{String,Float64}(),
+                                                :wind => Dict{String,Float64}())
+        for t in DateTime(day):Hour(1):(DateTime(day) + Hour(23))
+            p = get(zp, t, nothing)
+            p === nothing && continue
+            slot = Dates.format(t, "yyyymmdd-HHMM")
+            out[:solar][slot] = p.solar
+            out[:wind][slot] = p.wind
+        end
+        isempty(out[:solar]) && isempty(out[:wind]) ? nothing : out
+    end
+end
 
 """
 Zones REQUIRED to have a wind/solar forecast (had one on the last realized day)
@@ -774,7 +805,7 @@ returned (day stays ineligible). Twin of `fillable_for_day`.
 """
 function res_fillable_for_day(day::Date, res_required::AbstractSet{String},
                               res_present::AbstractSet{String},
-                              res_pred::Dict{String,Dict{DateTime,Float64}})
+                              res_pred::Dict{String,Dict{DateTime,ResPred}})
     expected = expected_market_day_hours(day)
     out = Set{String}()
     for zone in setdiff(res_required, res_present)
@@ -1047,7 +1078,7 @@ function main()
     # MISSING it on ANY candidate day are predicted ONCE from the weather→RES
     # pack. Only relevant on the entsoe reference track: the weather track has no
     # RES gate (res_required is empty) and already sources all RES from weather.
-    res_pred = Dict{String,Dict{DateTime,Float64}}()
+    res_pred = Dict{String,Dict{DateTime,ResPred}}()
     if RES_FILL && !isempty(res_required)
         res_pack = load_res_models()
         res_short = String[]
@@ -1077,7 +1108,7 @@ function main()
     # it into every clear as a per-zone scenario together with the uniform
     # model load (override + fill — see weather_scenario).
     scenario = nothing
-    res_pred_weather = Dict{String,Dict{DateTime,Float64}}()
+    res_pred_weather = Dict{String,Dict{DateTime,ResPred}}()
     if INPUT_MODE == "weather" && !SKIP_CLEAR
         println("Fetching open-meteo weather + predicting RES for UTC days " *
                 "$(first_candidate - Day(1)) .. $last_candidate ...")

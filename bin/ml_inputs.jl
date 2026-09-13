@@ -707,7 +707,10 @@ function build_ml_inputs(zones::Vector{String}, first_utc::Date, last_utc::Date,
     ar = ml_ar_load_lags(zones, span_hours)
     throttle = parse(Float64, get(ENV, "EUPHEMIA_OPENMETEO_ZONE_THROTTLE", "0.6"))  # avoid 429
 
-    res_preds = Dict{String,Dict{DateTime,Float64}}()
+    # RES is carried per COMPONENT (#387): the ML pilots already predict solar
+    # and wind separately below, and summing them here was exactly what hid the
+    # split from the book's solar-regime axis.
+    res_preds = Dict{String,Dict{DateTime,ResPred}}()
     load_preds = Dict{String,Dict{DateTime,Float64}}()
     for z in zones
         lat0, lon0 = ml_zone_centroid(geom, z)
@@ -720,7 +723,7 @@ function build_ml_inputs(zones::Vector{String}, first_utc::Date, last_utc::Date,
         # hook: the 39-zone rollout ships its winners through meta) — fallback
         # to the committed ML_USE_NEW.
         use_new(t) = ml_use_new(z, t; meta=models.meta)
-        rp = Dict{DateTime,Float64}(); lp = Dict{DateTime,Float64}()
+        rp = Dict{DateTime,ResPred}(); lp = Dict{DateTime,Float64}()
         for (gdates, lag) in groups
             throttle > 0 && sleep(throttle)
             rweather = fetch_ml_res_weather(cells, gdates; vintage_lag=lag)
@@ -764,7 +767,7 @@ function build_ml_inputs(zones::Vector{String}, first_utc::Date, last_utc::Date,
                     # back instead of clearing with zero wind/solar (bug sweep
                     # 2026-08-24).
                     (isnan(solar) || isnan(wind)) && continue
-                    rp[h] = solar + wind
+                    rp[h] = (wind=Float64(wind), solar=Float64(solar))
                 end
                 # ── LOAD ──
                 la = get(lagg, h, nothing)
@@ -813,7 +816,9 @@ if abspath(PROGRAM_FILE) == @__FILE__
     res, load = build_ml_inputs([zone], day, day, Set([day]); asof=Date(now(UTC)))
     for h in DateTime(day):Hour(1):DateTime(day)+Hour(23)
         println("  ", Dates.format(h, "yyyy-mm-dd HH:MM"),
-                "  RES=", round(get(res[zone], h, NaN), digits=1),
+                "  RES=", (p = get(res[zone], h, nothing);
+                           p === nothing ? "NaN" :
+                           "$(round(res_total(p), digits=1)) (wind $(round(p.wind, digits=1)) / solar $(round(p.solar, digits=1)))"),
                 "  LOAD=", round(get(load[zone], h, NaN), digits=1))
     end
 end

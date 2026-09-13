@@ -21,17 +21,25 @@ written to a separate `data/results.duckdb` (the source extract stays
 read-only). For current data instead of the frozen artifact:
 `./setup.sh --live`.
 
-## The five scenario hooks (`ZoneScenario`)
+## The scenario hooks (`ZoneScenario`)
 
 ```julia
 using Euphemia, Dates
 ZoneScenario(;
-  load_modifier      = (ts, mw) -> mw,        # reshape demand at the source
-  renewable_modifier = (ts, mw) -> mw,        # reshape RES forecast
-  extra_orders       = ctx -> SimpleOrder[],  # inject supply OR demand orders
-  strategist         = ctx -> ...,            # rewrite ANY owner's offers
-  fleet_modifier     = (zone, gens) -> gens)  # add/remove/derate units as data
+  load_modifier          = (ts, mw) -> mw,        # reshape demand at the source
+  renewable_modifier     = (ts, mw) -> mw,        # reshape AGGREGATE RES
+  res_component_modifier = (ts, c, mw) -> mw,     # reshape ONE component (:solar/:wind)
+  extra_orders           = ctx -> SimpleOrder[],  # inject supply OR demand orders
+  strategist             = ctx -> ...,            # rewrite ANY owner's offers
+  fleet_modifier         = (zone, gens) -> gens)  # add/remove/derate units as data
 ```
+
+- **Solar or wind specifically? Use `res_component_modifier`** (#387). The book
+  carries one effective RES series split by component, and the cv31
+  solar-regime gate reads it. A `:solar` edit moves supply, residual demand and
+  the solar share; a `:wind` edit moves supply and residual demand only. An
+  aggregate `renewable_modifier` cannot say which it meant, so its delta is
+  split across components pro rata (recorded as `alloc=:pro_rata`).
 
 - `extra_orders` ctx: `(zone, day, timeslots, resolution_minutes, load_by_time,
   renewable_by_time)`.
@@ -51,9 +59,11 @@ ZoneScenario(;
 ## Single-zone scenario (fast: seconds)
 
 ```julia
-solar = (ts, v) -> (8 <= parse(Int, ts[10:11]) <= 17) ? v + 300.0 : v  # +300 MW solar
+# +300 MW of SOLAR in the daylight hours (moves the supply stack AND the
+# solar-regime share; use :wind for a wind edit, which moves supply only)
+solar = (ts, c, v) -> (c === :solar && 8 <= parse(Int, ts[10:11]) <= 17) ? v + 300.0 : v
 prices = generate_energy_prices("GR", Date(2026, 1, 26);
-    order_method=:merit_order, save_to_db=false, renewable_modifier=solar)
+    order_method=:merit_order, save_to_db=false, res_component_modifier=solar)
 ```
 
 ## Multi-zone EU scenario (the real thing: HiGHS default ~500 s/day, Gurobi ~10 s/day)
