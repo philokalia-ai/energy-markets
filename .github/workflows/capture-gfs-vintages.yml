@@ -43,28 +43,24 @@ env:
   # Try the self-hosted instance first; the null/error fallback in the fetchers
   # routes to the public previous-runs API until the local instance can serve
   # previous runs. No public rate limit if/when it can.
-  EUPHEMIA_OPENMETEO_PREVRUNS_URL: "http://localhost:30555/v1/forecast"
+  EUPHEMIA_OPENMETEO_PREVRUNS_URL: "http://open-meteo.weather.svc.cluster.local/v1/forecast"
+  # The archive outlives the job: /data is a volume of the runner set
+  # (pankgeorg/infra, applications/arc-runners-energy-markets.yaml).
+  EUPHEMIA_VINTAGE_DIR: /data/gfs_vintages
 
 jobs:
   capture-gfs-vintages:
-    runs-on: [self-hosted, linux, ARM64]
+    runs-on: energy-markets-k8s
     timeout-minutes: 180
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          # clean:false so the durable archive under the git-ignored
-          # data/gfs_vintages/ SURVIVES between runs on the self-hosted runner
-          # (default checkout would git-clean untracked/ignored files and wipe it).
-          clean: false
 
       - name: Setup Julia
         uses: julia-actions/setup-julia@v1
         with:
           version: ${{ env.JULIA_VERSION }}
 
-      - name: Cache Julia packages
-        uses: julia-actions/cache@v1
 
       - name: Install Julia dependencies
         run: |
@@ -88,8 +84,8 @@ jobs:
           else
             julia --project=. bin/capture_gfs_vintages.jl
           fi
-          echo "📦 archive dir:"; du -sh data/gfs_vintages 2>/dev/null || echo "(no archive dir yet)"
-          ls -1 data/gfs_vintages 2>/dev/null | tail -8 || true
+          echo "📦 archive dir:"; du -sh "$EUPHEMIA_VINTAGE_DIR" 2>/dev/null || echo "(no archive dir yet)"
+          ls -1 "$EUPHEMIA_VINTAGE_DIR" 2>/dev/null | tail -8 || true
 
       - name: Notify on failure
         if: failure()

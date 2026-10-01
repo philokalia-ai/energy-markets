@@ -64,7 +64,7 @@ env:
 
 jobs:
   generate-multi-zone-prices:
-    runs-on: [self-hosted, linux, ARM64]
+    runs-on: energy-markets-k8s
     timeout-minutes: 2880 # 48 hours timeout
     steps:
       - name: Checkout repository
@@ -75,8 +75,6 @@ jobs:
         with:
           version: ${{ env.JULIA_VERSION }}
 
-      - name: Cache Julia packages
-        uses: julia-actions/cache@v1
 
       - name: Setup Gurobi license (if using Gurobi)
         if: ${{ github.event.inputs.optimizer == 'gurobi' }}

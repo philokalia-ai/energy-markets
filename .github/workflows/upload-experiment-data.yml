@@ -3,9 +3,10 @@
 # plane (v1/zones, v1/books, v1/inputs, v1/manifest.json are never touched here).
 #
 # First consumer: the published-books clearing validation
-# (docs/experiments/pubbooks-clearing/). Stage the DERIVED artifacts on the
-# runner host with docs/experiments/pubbooks-clearing/stage_r2.py, then dispatch
-# this workflow pointing `staging_dir` at that tree.
+# (docs/experiments/pubbooks-clearing/). Stage the DERIVED artifacts under
+# /opt/euphemia/data on the server (the runner pods see /opt/euphemia read-only)
+# with docs/experiments/pubbooks-clearing/stage_r2.py, then dispatch this
+# workflow pointing `staging_dir` at that tree.
 #
 # ADDITIVE ONLY. This uploads with `aws s3 cp` (no `sync --delete` anywhere) — the
 # 2026-08-01 incident (a root `sync --delete` on v1/ wiped the record books) is
@@ -19,7 +20,7 @@ on:
       staging_dir:
         description: "Absolute path on the runner host of the staged artifact tree (stage_r2.py output; must contain MANIFEST.json + SHA256SUMS)"
         required: true
-        default: "/home/pgeorgakopoulos/armada/energy-markets/data/experiments/pubbooks/v1"
+        default: "/opt/euphemia/data/experiments/pubbooks/v1"
       prefix:
         description: "Destination key prefix under the bucket (no leading/trailing slash)"
         required: true
@@ -27,7 +28,7 @@ on:
 
 jobs:
   upload:
-    runs-on: [self-hosted, linux, ARM64]
+    runs-on: energy-markets-k8s
     steps:
       - name: Validate staging tree
         run: |

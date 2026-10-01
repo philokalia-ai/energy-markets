@@ -1,5 +1,5 @@
 # Publish a public data artifact from the local canonical extract store
-# (/opt/euphemia/extracts on the self-hosted runner) to the R2 bucket, using
+# (/opt/euphemia/extracts on the server, which the runner pods see read-only) to the R2 bucket, using
 # the same secrets as refresh-extract.yml. Manual trigger only — publishing a
 # frozen artifact is a deliberate release act, not a scheduled one.
 #
@@ -22,7 +22,7 @@ on:
 
 jobs:
   publish:
-    runs-on: [self-hosted]
+    runs-on: energy-markets-k8s
     timeout-minutes: 60
     env:
       EXTRACT_S3_ENDPOINT: ${{ secrets.EXTRACT_S3_ENDPOINT }}
