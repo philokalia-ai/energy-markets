@@ -4,8 +4,9 @@
 #   2. the zone-strategies JSON -> web bucket /v1/zone_strategies.json (the
 #      /about table; deliberately OUTSIDE the web data-plane auto-sync, so
 #      publishing it is an explicit act — this workflow IS that act).
-# Runs on the self-hosted runner, which lives on the machine that holds the
-# backfill books (data/ is git-ignored; books never enter the repo).
+# Runs in a runner pod that sees /opt/euphemia of the server read-only: stage
+# the backfill books under /opt/euphemia/data first (data/ is git-ignored;
+# books never enter the repo).
 name: publish-record-artifacts
 
 on:
@@ -14,7 +15,7 @@ on:
       books_dir:
         description: "Absolute path (on the runner host) of the per-day book parquets; 'none' = skip books"
         required: false
-        default: "/home/pgeorgakopoulos/armada/energy-markets/data/backfill_books_cv26"
+        default: "/opt/euphemia/data/backfill_books_cv26"
       publish_zone_strategies:
         description: "Also publish the zone-strategies JSON to the web bucket"
         type: boolean
@@ -22,7 +23,7 @@ on:
 
 jobs:
   publish:
-    runs-on: [self-hosted, linux, ARM64]
+    runs-on: energy-markets-k8s
     steps:
       - uses: actions/checkout@v4
 
@@ -91,11 +92,11 @@ jobs:
           # but `using Euphemia` still needs A store — point it read-only at
           # the live extract on the runner host.
           EUPHEMIA_DATA_STORE: duckdb
-          EUPHEMIA_DUCKDB_PATH: /home/pgeorgakopoulos/armada/energy-markets/data/extracts/euphemia-live.duckdb
+          EUPHEMIA_DUCKDB_PATH: /opt/euphemia/extracts/euphemia-live.duckdb
           EUPHEMIA_DUCKDB_READONLY: "true"
         run: |
           set -euo pipefail
-          julia --project=. -e 'using Pkg; Pkg.instantiate()'
+          julia --project=. -e 'using Pkg; isempty(Pkg.Registry.reachable_registries()) && Pkg.Registry.add(); Pkg.instantiate()'
           julia --project=. bin/export_zone_strategies.jl
           julia --project=. bin/export_book_methodology.jl
           julia --project=. bin/export_boundaries.jl

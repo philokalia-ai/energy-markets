@@ -14,12 +14,12 @@ on:
 
 jobs:
   deploy:
-    runs-on: [self-hosted, linux, ARM64]
+    runs-on: energy-markets-k8s
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
     steps:
       - uses: actions/checkout@v4
-      # The runner's system node is v18; wrangler 4.x requires >=22.
+      # wrangler 4.x requires node >=22; the runner image has none.
       - uses: actions/setup-node@v4
         with:
           node-version: 22

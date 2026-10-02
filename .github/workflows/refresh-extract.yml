@@ -49,7 +49,7 @@ env:
 
 jobs:
   refresh-extract:
-    runs-on: [self-hosted, linux, ARM64]
+    runs-on: energy-markets-k8s
     timeout-minutes: 120
     concurrency:
       group: refresh-extract
@@ -63,11 +63,9 @@ jobs:
         with:
           version: ${{ env.JULIA_VERSION }}
 
-      - name: Cache Julia packages
-        uses: julia-actions/cache@v1
 
       - name: Install Julia dependencies
-        run: julia --project=. -e "using Pkg; Pkg.instantiate()"
+        run: julia --project=. -e "using Pkg; isempty(Pkg.Registry.reachable_registries()) && Pkg.Registry.add(); Pkg.instantiate()"
 
       - name: Pull extract from store
         run: |
