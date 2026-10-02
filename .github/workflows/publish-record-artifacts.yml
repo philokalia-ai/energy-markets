@@ -96,7 +96,7 @@ jobs:
           EUPHEMIA_DUCKDB_READONLY: "true"
         run: |
           set -euo pipefail
-          julia --project=. -e 'using Pkg; Pkg.instantiate()'
+          julia --project=. -e 'using Pkg; isempty(Pkg.Registry.reachable_registries()) && Pkg.Registry.add(); Pkg.instantiate()'
           julia --project=. bin/export_zone_strategies.jl
           julia --project=. bin/export_book_methodology.jl
           julia --project=. bin/export_boundaries.jl

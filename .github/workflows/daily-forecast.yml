@@ -122,6 +122,7 @@ jobs:
         run: |
           julia --project=. -e "
             using Pkg
+            isempty(Pkg.Registry.reachable_registries()) && Pkg.Registry.add()
             println(\"📦 Resolving dependencies...\")
             Pkg.resolve()
             println(\"📦 Installing dependencies...\")
