@@ -85,9 +85,12 @@ jobs:
           if [ -z "$WEATHER_CONN_STR" ]; then
             echo "::warning::WEATHER_CONN_STR secret is not set — weather.* tables will be skipped"
           fi
+          # The tables pass through Julia DataFrames on their way into DuckDB,
+          # and the runner pod is killed at 96Gi. The hint makes the GC collect
+          # once the heap passes 64G; it is a target, not a ceiling.
           EXTRACT="data/extracts/$EXTRACT_NAME" \
           MANIFEST_OUT="refresh-manifest.json" \
-            julia --project=. bin/refresh_duckdb_extract.jl
+            julia --project=. --heap-size-hint=64G bin/refresh_duckdb_extract.jl
 
       - name: Push extract back to store
         run: bin/extract_store.sh push "data/extracts/$EXTRACT_NAME" "$EXTRACT_NAME"
