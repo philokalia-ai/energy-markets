@@ -89,6 +89,7 @@ name-based fuel inference, and `include`s:
 | `postgres_core.jl` | the `ENERGY_PRICES_CODE_VERSION` ledger (every model version, documented), the LibPQ pool, `sql2df` / `sql2df_with_retry` (the single query entry point — dispatches per backend) |
 | `duckdb_store.jl` | the offline DuckDB backend: dialect rewrite, prepared-statement cache, read-only guard, writable `results.duckdb` |
 | `results_store.jl` | `simulations.*` DDL, the `save_*` writers, `ensure_indexes` |
+| `physics_audit.jl` | `run_physics_audit` — read-only physics-consistency checks on the ingested ENTSO-E data (solar at night, load envelope/completeness, registry bounds, reservoir swings, flow spikes, ...); CLI `bin/physics_audit.jl`, daily CI step in `refresh-extract.yml`, measured sweep in `docs/experiments/physics-audit/` |
 
 ### `src/MPCC.jl` + `src/mpcc/`
 

@@ -384,6 +384,7 @@ export generate_energy_prices
 export save_energy_prices, ensure_energy_prices_table, withdb, save_optimization_run
 export save_transmission_flows, ensure_transmission_flows_table  # Multi-zone transmission flows
 export ensure_indexes  # Create indexes on ENTSOE tables for query performance
+export run_physics_audit, audit_summary, write_audit_json  # Physics-consistency data audit (read-only)
 
 # UC results caching
 

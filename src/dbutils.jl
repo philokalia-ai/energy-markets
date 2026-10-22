@@ -26,3 +26,4 @@ using DuckDB   # also brings DBInterface into scope
 include("db/duckdb_store.jl")   # DuckDB backend: connection, dialect rewrite, results.duckdb writers
 include("db/postgres_core.jl")  # code-version ledger, LibPQ pool, sql2df (+retry) dispatch
 include("db/results_store.jl")  # simulations.* DDL, save_* writers, ensure_indexes
+include("db/physics_audit.jl")  # physics-consistency audit of the ingested ENTSO-E data (read-only)
