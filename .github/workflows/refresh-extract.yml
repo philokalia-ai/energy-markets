@@ -92,6 +92,20 @@ jobs:
           MANIFEST_OUT="refresh-manifest.json" \
             julia --project=. --heap-size-hint=64G bin/refresh_duckdb_extract.jl
 
+      # Physics-consistency audit of what the refresh just ingested: every
+      # check is a physical invariant (solar at night, load envelope, missing
+      # forecast hours, registry capacity bounds, reservoir swings, ...) run
+      # over the trailing window against the refreshed extract. READ-ONLY and
+      # non-fatal: findings land in the uploaded report, never block the push.
+      - name: Physics audit (trailing 14 days)
+        continue-on-error: true
+        run: |
+          EUPHEMIA_DATA_STORE=duckdb \
+          EUPHEMIA_DUCKDB_PATH="data/extracts/$EXTRACT_NAME" \
+          AUDIT_BACK_DAYS=14 \
+          OUT_JSON=physics-audit.json OUT_CSV=physics-audit.csv \
+            julia --project=. bin/physics_audit.jl
+
       - name: Push extract back to store
         run: bin/extract_store.sh push "data/extracts/$EXTRACT_NAME" "$EXTRACT_NAME"
 
@@ -101,3 +115,14 @@ jobs:
           name: refresh-manifest
           path: refresh-manifest.json
           retention-days: 90
+
+      - name: Upload physics-audit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: physics-audit
+          path: |
+            physics-audit.json
+            physics-audit.csv
+          retention-days: 90
+          if-no-files-found: ignore
