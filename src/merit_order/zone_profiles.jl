@@ -1402,12 +1402,23 @@ Fields (see `create_merit_order_book`'s "Scenario hooks" docstring for the exact
   that zone/day; `nothing` (default) leaves the DB load untouched (byte-identical).
   Unlike `load_modifier` (which only reshapes existing entries), this can provide
   load for a zone the TSO never published — the whole point of the fill.
-- `res_fill(zone, day::Date) -> Union{Nothing,Dict{String,Float64}}` — the RES
-  twin of `load_fill`: MERGE weather-model wind+solar (timeslot `"yyyymmdd-HHMM"`
-  → MW) into the zone's renewable forecast for the hours the TSO 14.1.D forecast
-  did NOT publish. A present TSO RES hour is never overridden; `nothing` (default)
-  leaves the DB RES untouched (byte-identical). Used by the daily-forecast RES
-  eligibility fill (`bin/daily_forecast.jl`).
+- `res_fill(zone, day::Date) -> Union{Nothing,Dict{Symbol,Dict{String,Float64}},Dict{String,Float64}}`
+  — the RES twin of `load_fill`: MERGE weather-model RES (timeslot
+  `"yyyymmdd-HHMM"` → MW) into the zone's renewable forecast for the
+  COMPONENT-hours the TSO 14.1.D forecast did NOT publish. Prefer the
+  per-component shape (`:solar`/`:wind` → slots → MW): it fills solar even when
+  wind is published, and it reaches the solar-regime axis (#387). The legacy
+  combined `Dict{String,Float64}` is still accepted and still reaches supply and
+  residual demand, but its unknown split keeps it out of the regime axis. A
+  published component-hour — including a published zero — is never overridden;
+  `nothing` (default) leaves the DB RES untouched (byte-identical). Used by the
+  daily-forecast RES eligibility fill (`bin/daily_forecast.jl`).
+- `res_component_modifier(timeslot, component, mw) -> Float64` — reshape ONE
+  renewable component (`:solar`, `:wind`, `:other`) at source. The exact twin of
+  `renewable_modifier`, which can only move the aggregate and whose effect is
+  therefore split across components pro rata. Use this one whenever the scenario
+  is about solar or wind specifically: a solar edit moves supply, residual demand
+  and the solar-regime share; a wind edit moves supply and residual demand only.
 
 The `extra_orders` and `strategist` `ctx` both carry `ctx.zone`, so a single
 scenario object applied to a whole footprint can gate its edits on the zone
@@ -1423,6 +1434,7 @@ Base.@kwdef struct ZoneScenario
     fleet_modifier::Union{Nothing,Function} = nothing
     load_fill::Union{Nothing,Function} = nothing
     res_fill::Union{Nothing,Function} = nothing
+    res_component_modifier::Union{Nothing,Function} = nothing
 end
 
 """
@@ -1436,7 +1448,8 @@ is_empty_scenario(::Nothing) = true
 is_empty_scenario(s::ZoneScenario) =
     s.load_modifier === nothing && s.renewable_modifier === nothing &&
     s.extra_orders === nothing && s.strategist === nothing &&
-    s.fleet_modifier === nothing && s.load_fill === nothing && s.res_fill === nothing
+    s.fleet_modifier === nothing && s.load_fill === nothing && s.res_fill === nothing &&
+    s.res_component_modifier === nothing
 
 """
     zone_scenario(scenario, zone) -> Union{Nothing,ZoneScenario}

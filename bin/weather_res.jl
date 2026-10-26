@@ -334,16 +334,26 @@ function fetch_weather(cells::Vector{Tuple{Float64,Float64}}, dates::Vector{Date
 end
 
 """
-    predict_res(models, zone, hours::Vector{DateTime}, weather) -> Dict{DateTime,Float64}
-
-Per-hour wind+solar MW for `zone` from the model pack and fetched `weather`
-(cell → hour → (v100, ghi)). Components with no model in the pack predict 0
-(physically negligible). Hours with incomplete weather across the zone's
-cells are skipped with a warning.
+The two renewable components of one predicted hour, in MW. Kept SPLIT all the
+way to the book: the solar-regime axis is a solar signal, and a combined
+wind+solar number cannot say whether a filled hour was sunny or windy (#387).
+`res_total` is the sum the supply stack offers.
 """
-function predict_res(models, zone::String, hours::Vector{DateTime}, weather)
+const ResPred = @NamedTuple{wind::Float64, solar::Float64}
+res_total(p::ResPred) = p.wind + p.solar
+res_total(p::Real) = Float64(p)          # legacy combined predictions
+
+"""
+    predict_res_components(models, zone, hours::Vector{DateTime}, weather) -> Dict{DateTime,ResPred}
+
+Per-hour wind and solar MW for `zone` from the model pack and fetched `weather`
+(cell → hour → (v100, ghi)). A component with no model in the pack predicts 0
+(physically negligible). Hours with incomplete weather across the zone's cells
+are skipped with a warning.
+"""
+function predict_res_components(models, zone::String, hours::Vector{DateTime}, weather)
     zm = get(models["zones"], zone, nothing)
-    out = Dict{DateTime,Float64}()
+    out = Dict{DateTime,ResPred}()
     if zm === nothing
         @warn "predict_res: zone $zone not in model pack — RES predicted 0"
         return out
@@ -371,15 +381,25 @@ function predict_res(models, zone::String, hours::Vector{DateTime}, weather)
             continue
         end
         g = ghi_sum / length(cells)
-        mw = 0.0
-        wind_model !== nothing && (mw += predict_wind_hour(wind_model, v100))
-        solar_model !== nothing && (mw += predict_solar_hour(solar_model, g, t))
-        out[t] = mw
+        w = wind_model === nothing ? 0.0 : predict_wind_hour(wind_model, v100)
+        sol = solar_model === nothing ? 0.0 : predict_solar_hour(solar_model, g, t)
+        out[t] = (wind=w, solar=sol)
     end
     n_skipped > 0 &&
         @warn "predict_res: $zone — $n_skipped/$(length(hours)) hour(s) skipped (incomplete weather)"
     return out
 end
+
+"""
+    predict_res(models, zone, hours, weather) -> Dict{DateTime,Float64}
+
+Combined wind+solar MW — [`predict_res_components`](@ref) summed. The forecast
+pipeline carries the components; this stays for smoke tests and callers that
+only need the total.
+"""
+predict_res(models, zone::String, hours::Vector{DateTime}, weather) =
+    Dict{DateTime,Float64}(t => res_total(p)
+                           for (t, p) in predict_res_components(models, zone, hours, weather))
 
 # ---------------------------------------------------------------------------
 # Guarded main: smoke test (fetch + predict one zone, print hourly MW)

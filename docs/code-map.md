@@ -68,6 +68,7 @@ the module header and `include`s:
 | `boundary.jl` | `BoundaryBook` — out-of-footprint neighbours modeled as elastic books bidding their own fundamentals (GB on Viking, Ukraine), with their runtime capability sizing |
 | `zone_profiles.jl` | `ZoneProfile` (every per-zone calibration knob, with field docstrings), all named profiles, the `ZONE_PROFILES` registry, and the `ZoneScenario` counterfactual hooks |
 | `fleet_data.jl` | hydro availability, per-type output p95, installed capacity, reservoir dryness/drawdown queries |
+| `effective_res.jl` | `EffectiveRes` — the one renewable series per zone-interval, split by component (`:solar`/`:wind`/`:other`) with its provenance. Supply, residual demand and the cv31 solar-regime axis all read it, so they cannot drift apart (#387); `solar_share_by_hour` is the regime gate's single definition |
 | `book_build.jl` | `create_merit_order_book` — the book construction itself, decomposed into named stages (see the file header for the stage list) |
 
 ### `src/Generators.jl` + `src/generators/`

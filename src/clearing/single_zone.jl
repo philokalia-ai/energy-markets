@@ -206,7 +206,8 @@ function generate_energy_prices(bidding_zone::String, date::Date;
     renewable_modifier::Union{Nothing,Function}=nothing,
     extra_orders::Union{Nothing,Function}=nothing,
     strategist::Union{Nothing,Function}=nothing,
-    fleet_modifier::Union{Nothing,Function}=nothing)
+    fleet_modifier::Union{Nothing,Function}=nothing,
+    res_component_modifier::Union{Nothing,Function}=nothing)
 
     # Validate inputs
     if order_method != :merit_order
@@ -233,7 +234,8 @@ function generate_energy_prices(bidding_zone::String, date::Date;
                                     renewable_modifier=renewable_modifier,
                                     extra_orders=extra_orders,
                                     strategist=strategist,
-                                    fleet_modifier=fleet_modifier)
+                                    fleet_modifier=fleet_modifier,
+                                    res_component_modifier=res_component_modifier)
 
             if !order_book_result.success
                 # Check if this is a data availability issue (non-retryable)

@@ -23,13 +23,37 @@ targeting). `nothing` (the default) is byte-identical to the no-scenario run.
 
 ```julia
 Base.@kwdef struct ZoneScenario
-    load_modifier      # (timeslot, load_mw) -> Float64
-    renewable_modifier # (timeslot, mw)      -> Float64
-    extra_orders       # ctx -> Vector{SimpleOrder}
-    strategist         # ctx -> Vector{Tuple{SimpleOrder,String}}
-    fleet_modifier     # (zone, gens::Vector{Generator}) -> Vector{Generator}
+    load_modifier          # (timeslot, load_mw)        -> Float64
+    renewable_modifier     # (timeslot, mw)             -> Float64   (aggregate RES)
+    res_component_modifier # (timeslot, component, mw)  -> Float64   (:solar / :wind / :other)
+    extra_orders           # ctx -> Vector{SimpleOrder}
+    strategist             # ctx -> Vector{Tuple{SimpleOrder,String}}
+    fleet_modifier         # (zone, gens::Vector{Generator}) -> Vector{Generator}
+    load_fill              # (zone, day) -> Union{Nothing,Dict{String,Float64}}
+    res_fill               # (zone, day) -> Union{Nothing,Dict{Symbol,Dict{String,Float64}}}
 end
 ```
+
+### Aggregate RES vs the components (#387)
+
+The book carries **one effective renewable series per zone-interval, split by
+component** (`src/merit_order/effective_res.jl`). Supply orders, residual demand
+*and* the cv31 solar-regime gate all read that same object, so a scenario cannot
+move the stack and leave the regime signal behind — which is exactly what used to
+happen on the forecast track.
+
+Which hook to use:
+
+| you mean | hook | effect |
+|---|---|---|
+| "10% more solar" | `res_component_modifier` with `component === :solar` | supply, residual demand **and** the solar share move |
+| "10% more wind" | `res_component_modifier` with `component === :wind` | supply and residual demand move; the solar share does not |
+| "10% more renewables, unspecified" | `renewable_modifier` | the aggregate moves; the components are rescaled **pro rata** and the book records `alloc=:pro_rata` |
+
+The pro-rata split is a declared convention, not a measurement: an aggregate
+hook cannot say which component it meant, and guessing quietly would put a
+wind-driven edit into the solar axis. Use `res_component_modifier` whenever the
+distinction matters.
 
 The `ctx` shapes are exactly those of the single-zone `create_merit_order_book`
 hooks (see `.claude/skills/scenarios`); `extra_orders` and

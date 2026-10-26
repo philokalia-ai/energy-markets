@@ -6,7 +6,7 @@ Convert ENTSO-E resolution code (e.g., "PT15M", "PT60M") to minutes.
 function parse_resolution_to_minutes(resolution_code::String)::Int
     # Handle standard ENTSO-E ISO 8601 duration format: PT<number>M
     if startswith(resolution_code, "PT") && endswith(resolution_code, "M")
-        minutes_str = resolution_code[3:end-1]
+        minutes_str = resolution_code[3:(end-1)]
         try
             return parse(Int, minutes_str)
         catch
@@ -57,7 +57,11 @@ end
 """
 Generate time slots at target resolution based on coarser source data.
 """
-function generate_sub_slots_from_source(source_slots::Vector{String}, source_resolution::Int, target_resolution::Int)
+function generate_sub_slots_from_source(
+    source_slots::Vector{String},
+    source_resolution::Int,
+    target_resolution::Int,
+)
     if source_resolution <= target_resolution
         return source_slots  # Already at finer or equal resolution
     end
@@ -72,7 +76,7 @@ function generate_sub_slots_from_source(source_slots::Vector{String}, source_res
             hour_part = source_slot[10:11]  # "00", "01", etc.
 
             # Generate sub-slots for this period
-            for i in 0:(slots_per_source-1)
+            for i = 0:(slots_per_source-1)
                 minutes = i * target_resolution
                 hour_int = parse(Int, hour_part)
                 total_minutes = hour_int * 60 + minutes
@@ -106,7 +110,11 @@ is shorter, but the level is unchanged. It must NOT divide by the sub-slot count
 (that would quarter both demand and supply and misprice the clear). `target_res`
 must evenly divide `native_res`.
 """
-function replicate_to_finer_resolution(d::Dict{String,Float64}, native_res::Int, target_res::Int)
+function replicate_to_finer_resolution(
+    d::Dict{String,Float64},
+    native_res::Int,
+    target_res::Int,
+)
     native_res % target_res == 0 ||
         error("Target resolution $target_res must evenly divide native $native_res")
     n_sub = native_res ÷ target_res
@@ -115,7 +123,7 @@ function replicate_to_finer_resolution(d::Dict{String,Float64}, native_res::Int,
         date_part = ts[1:8]
         hh = ts[10:11]
         mm = parse(Int, ts[12:13])
-        for k in 0:(n_sub - 1)
+        for k = 0:(n_sub-1)
             newmm = mm + k * target_res
             out["$(date_part)-$(hh)$(lpad(newmm, 2, '0'))"] = v
         end
@@ -137,7 +145,9 @@ function disaggregate_temporal_data(loads, renewables)
             minutes = parse_resolution_to_minutes(res)
             # Determine which data sources have this resolution
             in_loads = !isempty(loads) && any(load.resolution_code == res for load in loads)
-            in_renewables = !isempty(renewables) && any(ren.resolution_code == res for ren in renewables)
+            in_renewables =
+                !isempty(renewables) &&
+                any(ren.resolution_code == res for ren in renewables)
 
             data_type = if in_loads && in_renewables
                 "Loads & Renewables"
@@ -161,7 +171,11 @@ function disaggregate_temporal_data(loads, renewables)
     if load_resolution > resolution_minutes
         # Need to generate finer slots from load data
         load_timeslots = [load.timeslot for load in loads]
-        target_timeslots = generate_sub_slots_from_source(load_timeslots, load_resolution, resolution_minutes)
+        target_timeslots = generate_sub_slots_from_source(
+            load_timeslots,
+            load_resolution,
+            resolution_minutes,
+        )
     else
         # Loads already at finest resolution
         target_timeslots = [load.timeslot for load in loads]
@@ -170,7 +184,9 @@ function disaggregate_temporal_data(loads, renewables)
     # Disaggregate load data to finest resolution if needed
     load_by_time = Dict{String,Float64}()
     if load_resolution > resolution_minutes
-        println("  📊 Disaggregating loads from $(load_resolution)min to $(resolution_minutes)min resolution")
+        println(
+            "  📊 Disaggregating loads from $(load_resolution)min to $(resolution_minutes)min resolution",
+        )
         # Group loads by their timeslot first
         loads_grouped = Dict{String,Float64}()
         for load in loads
@@ -206,10 +222,14 @@ function disaggregate_temporal_data(loads, renewables)
 
     # Disaggregate renewable data to finest resolution if needed
     renewable_by_time = Dict{String,Float64}()
-    renewable_resolution = !isempty(renewables) ? parse_resolution_to_minutes(renewables[1].resolution_code) : resolution_minutes
+    renewable_resolution =
+        !isempty(renewables) ? parse_resolution_to_minutes(renewables[1].resolution_code) :
+        resolution_minutes
 
     if renewable_resolution > resolution_minutes
-        println("  📊 Disaggregating renewables from $(renewable_resolution)min to $(resolution_minutes)min resolution")
+        println(
+            "  📊 Disaggregating renewables from $(renewable_resolution)min to $(resolution_minutes)min resolution",
+        )
         # Group renewables by timeslot first
         renewables_grouped = Dict{String,Float64}()
         for renewable in renewables
@@ -252,4 +272,64 @@ function disaggregate_temporal_data(loads, renewables)
     end
 
     return target_timeslots, load_by_time, renewable_by_time, resolution_minutes
+end
+"""
+    res_component(production_type) -> Symbol
+
+The effective-RES component a 14.1.D production type belongs to: `:solar`,
+`:wind`, or `:other` (nothing else appears in the table, but an unknown type
+is carried rather than silently folded into one of the two).
+"""
+res_component(ptype::AbstractString) =
+    startswith(ptype, "Solar") ? :solar : startswith(ptype, "Wind") ? :wind : :other
+
+"""
+    disaggregate_renewables_by_component(renewables, target_timeslots, resolution_minutes)
+        -> Dict{Symbol,Dict{String,Float64}}
+
+The per-component (`:solar`/`:wind`/`:other`) twin of the renewable branch of
+[`disaggregate_temporal_data`](@ref), projected onto the SAME grid it returned.
+Component series are summed per timeslot exactly as the aggregate is, so
+`sum(components)` reproduces the aggregate slot for slot (bar float ordering),
+which the effective-RES contract then reconciles exactly.
+
+Kept in one place with the aggregate on purpose: a component series that drifts
+from the series the book actually offers is the #387 defect in a new costume.
+"""
+function disaggregate_renewables_by_component(
+    renewables,
+    target_timeslots,
+    resolution_minutes::Int,
+)
+    comps = Dict{Symbol,Dict{String,Float64}}(
+        :solar => Dict{String,Float64}(),
+        :wind => Dict{String,Float64}(),
+        :other => Dict{String,Float64}(),
+    )
+    isempty(renewables) && return comps
+    renewable_resolution = parse_resolution_to_minutes(renewables[1].resolution_code)
+
+    if renewable_resolution > resolution_minutes
+        # coarser source: every finer sub-slot takes its parent hour's LEVEL
+        grouped = Dict{Tuple{Symbol,String},Float64}()
+        for r in renewables
+            k = (res_component(r.production_type), r.date_time)
+            grouped[k] = get(grouped, k, 0.0) + r.aggregated_generation_forecast
+        end
+        for slot in target_timeslots
+            length(slot) >= 11 || continue
+            prefix = slot[1:11]
+            for ((comp, src_slot), v) in grouped
+                (length(src_slot) >= 11 && src_slot[1:11] == prefix) || continue
+                comps[comp][slot] = get(comps[comp], slot, 0.0) + v
+            end
+        end
+    else
+        for r in renewables
+            comp = res_component(r.production_type)
+            comps[comp][r.date_time] =
+                get(comps[comp], r.date_time, 0.0) + r.aggregated_generation_forecast
+        end
+    end
+    return comps
 end

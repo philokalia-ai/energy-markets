@@ -377,6 +377,52 @@ end
 # pull from postgres, for now only active units of given date (I think)
 # exclude_unavailable: if true, excludes generators with active outages and reduces capacity for partial outages
 # infer_ramp_rates: if true, infer ramp rates from historical generation data (3 months)
+"""
+    _assert_registry_really_empty(zone, day)
+
+Called when the unit-registry query returns NOTHING for `zone` on `day`. Asks
+one cheap question — does this zone have registry rows for ANY day in the
+surrounding fortnight? — and throws if it does: an empty read for a zone with a
+fleet is a failed read, and continuing on aggregate fleet completion prices a
+fraction of the real capability without saying so.
+
+A zone with genuinely no registry coverage (small zones, and EE for a week in
+2025) returns empty here too and is let through unchanged, with a warning.
+
+`EUPHEMIA_ALLOW_EMPTY_REGISTRY` set ⇒ warn only (the pre-guard behaviour).
+"""
+function _assert_registry_really_empty(map_code::String, day::Dates.Date)
+    n = try
+        df = Euphemia.sql2df_with_retry("""
+            SELECT COUNT(*) AS n FROM entsoe.production_and_generation_units
+            WHERE area_map_code = \$1
+              AND production_unit_status = 'COMMISSIONED'
+              AND generation_unit_status = 'COMMISSIONED'
+              AND area_type_code IN ('BZN', 'BZN/CTA')
+              AND DATE(valid_from) <= DATE(\$3)
+              AND COALESCE(DATE(valid_to), DATE(\$3)) >= DATE(\$2)
+            """, Any[map_code, day - Dates.Day(7), day + Dates.Day(7)])
+        isempty(df) ? 0 : Int(df.n[1])
+    catch e
+        @warn "registry emptiness probe failed — cannot tell a bad read from an empty zone" zone=map_code day=day error=sprint(showerror, e)
+        return nothing
+    end
+    if n == 0
+        @warn "No registry units for this zone in the surrounding fortnight — " *
+              "the book will be built from aggregate fleet completion" zone=map_code day=day
+        return nothing
+    end
+    msg = "registry read returned 0 units for $map_code on $day, but the zone has " *
+          "$n registry row(s) within ±7 days — this is a failed read, not an empty " *
+          "fleet; the book would silently price aggregate completion instead " *
+          "(set EUPHEMIA_ALLOW_EMPTY_REGISTRY=1 to proceed anyway)"
+    if isempty(get(ENV, "EUPHEMIA_ALLOW_EMPTY_REGISTRY", ""))
+        error(msg)
+    end
+    @warn msg
+    return nothing
+end
+
 function get_generators(map_code::String, day::Dates.Date;
                        exclude_unavailable::Bool=true,
                        exclude_variable_renewables::Bool=true)
@@ -598,6 +644,18 @@ function get_generators(map_code::String, day::Dates.Date;
     query_args = exclude_unavailable ? Any[map_code, day, outage_codes, outage_avail, stale_codes] :
                  Any[map_code, day]
     df = Euphemia.sql2df_with_retry(query, query_args)
+    # An EMPTY result for a zone that normally has units is not "this zone has
+    # no fleet" — it is a bad read, and the book silently falls through to
+    # aggregate fleet completion at a fraction of the real capability. That is
+    # the whole of the cv39 record's worst outlier: on 2026-02-24 the registry
+    # returned zero units for NINE of the 39 zones at once, IT-Sicily's offered
+    # fleet fell from 13 units / 3,352 MW dispatchable to 3 aggregate blocks /
+    # ~1,150 MW, its scarcity margin fell to 0.47, the scarcity multiplier rose
+    # to 4.78 and the marginal offer became a Fossil Oil peak tranche at
+    # €932/MWh against a settled €148 (docs/experiments/sicily-attribution-390).
+    # The collapses cluster on four market days across 795 — a read-time
+    # failure (the registry is re-ingested wholesale), never a zone property.
+    isempty(df) && _assert_registry_really_empty(map_code, day)
 
     # Build generators (without ramp rates initially)
     generators = Generator[]
