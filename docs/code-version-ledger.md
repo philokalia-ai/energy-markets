@@ -200,3 +200,10 @@ bias -200, IT-SOUTH -207, the sim near 26 and 2 against settled 226 and 209. The
 the neighbouring spill zones (CH, AT, SI, HU, SK, RO, RS, BG, GR) went from -29 to
 -82. Measured from the published vintages; the fix itself has not yet been cleared
 on a real day. Frozen cv40 vintages stay as they are, and no backfill ships with this.
+
+**v42 = the unit bound applies to the raw registry row (November 2026).** `get_generators`
+checked the bound after `DISTINCT ON` and after the outage `LEAST`. So a corrupt row
+derated below 5 GW passed, and a corrupt row that won the dedupe cost the unit its
+valid row. The bound is now a `WHERE` clause on the raw capacity, which runs before
+both and matches what `get_installed_capacity_by_type` already did. Rejected rows are
+logged per zone and day. No backfill ships with this.
