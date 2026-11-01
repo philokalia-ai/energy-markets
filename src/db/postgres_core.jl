@@ -206,7 +206,9 @@
 #   (wet_adjusted_drawdown — wet winters damp the reservoir water-value lift;
 #   probe evidence: Nordic bias +13..+23 in wet months, corr(bias,dryness)
 #   -0.26..-0.40). Default false everywhere pending the Set-A/B gate.
-const ENERGY_PRICES_CODE_VERSION = 40
+# v40 -> v41: MAX_PLAUSIBLE_UNIT_MW 25 GW -> 5 GW (the two ~23 GW Italian rows
+# that broke the IT zones from market day 2026-09-17); see the ledger.
+const ENERGY_PRICES_CODE_VERSION = 41
 
 # Pool size: env-tunable (EUPHEMIA_PG_POOL) because the threaded book build
 # runs up to nzones concurrent queries — 5 connections cap the parallelism
