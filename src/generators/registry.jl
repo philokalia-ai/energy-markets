@@ -100,7 +100,12 @@ function _fleet_probe_upper(day::Dates.Date)
         "\$2::timestamp" : "\$2::timestamp + INTERVAL '1 day'"
 end
 
-const MAX_PLAUSIBLE_UNIT_MW = 25_000.0
+# cv41: 25 GW -> 5 GW. Two rows that entered on market day 2026-09-17 sat just
+# under the old ceiling: IT-NORTH 26WTRGNRZNMRF10A (22,600 MW) and IT-SOUTH
+# 26WMTRIAGASCM106 (23,940 MW), both "Geothermal", at about EUR 29. They put
+# 15-25 GW of cheap supply in the zones' books and held IT-NORTH near 20 and
+# IT-SOUTH near 1 EUR/MWh until at least 2026-11-01 (settled ~210-280).
+const MAX_PLAUSIBLE_UNIT_MW = 5_000.0
 
 """
     get_day_outages(day::Date) -> DataFrame
@@ -604,8 +609,7 @@ function get_generators(map_code::String, day::Dates.Date;
     for row in eachrow(df)
         # Registry sanity bound: drop rows whose installed capacity exceeds any
         # physically-plausible generation unit (corrupt ENTSO-E capacities — see
-        # MAX_PLAUSIBLE_UNIT_MW). Only IT-CSOUTH carries such a row in the
-        # footprint, so every other zone is byte-identical.
+        # MAX_PLAUSIBLE_UNIT_MW).
         if Float64(row.generation_unit_installed_capacity_mw) > MAX_PLAUSIBLE_UNIT_MW
             @warn "Dropping corrupt registry capacity" unit=row.generation_unit_code zone=map_code capacity_mw=Float64(row.generation_unit_installed_capacity_mw)
             continue

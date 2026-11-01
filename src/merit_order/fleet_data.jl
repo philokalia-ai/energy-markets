@@ -236,7 +236,7 @@ function get_installed_capacity_by_type(bidding_zone::String, day::Date)
                 -- fleet-truth denominators and FR's nuclear availability share;
                 -- without the bound, one corrupt row (the 13 TW IT unit) would
                 -- poison exactly the quantities Phase 4 re-calibrates around.
-                AND generation_unit_installed_capacity_mw <= 25000
+                AND generation_unit_installed_capacity_mw <= 5000
               -- DISTINCT ON per (zone, unit): a unit re-zoned across validity
               -- rows must dedup WITHIN each zone exactly like the old
               -- per-zone query did, not once globally.
@@ -276,7 +276,7 @@ function _get_installed_capacity_by_type_singlezone(bidding_zone::String)
                 -- fleet-truth denominators and FR's nuclear availability share;
                 -- without the bound, one corrupt row (the 13 TW IT unit) would
                 -- poison exactly the quantities Phase 4 re-calibrates around.
-                AND generation_unit_installed_capacity_mw <= 25000
+                AND generation_unit_installed_capacity_mw <= 5000
           ORDER BY generation_unit_code, valid_from DESC,
                    generation_unit_installed_capacity_mw DESC
         ) s
