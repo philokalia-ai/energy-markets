@@ -43,6 +43,12 @@ on:
           - highs
           - gurobi
 
+# The k3s 06:30 dispatch (pregate=true) and the late GitHub schedule are the same
+# job. Serialized, the second finds every slice frozen and only rescores.
+concurrency:
+  group: daily-forecast
+  cancel-in-progress: false
+
 env:
   JULIA_VERSION: "1.12"
   JULIA_NUM_THREADS: 4
