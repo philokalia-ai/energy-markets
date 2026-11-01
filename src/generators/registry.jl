@@ -105,7 +105,31 @@ end
 # 26WMTRIAGASCM106 (23,940 MW), both "Geothermal", at about EUR 29. They put
 # 15-25 GW of cheap supply in the zones' books and held IT-NORTH near 20 and
 # IT-SOUTH near 1 EUR/MWh until at least 2026-11-01 (settled ~210-280).
+#
+# cv42: applied to the RAW installed capacity inside the get_generators SQL, so
+# it runs before two steps that used to hide a corrupt row from it. DISTINCT ON
+# could let a corrupt row displace the unit's valid one, and the outage LEAST
+# could derate a corrupt row below the bound.
 const MAX_PLAUSIBLE_UNIT_MW = 5_000.0
+
+# The rows the bound rejects never reach Julia, so report them here: the
+# 2026-09-17 rows ran for six weeks without anyone seeing them.
+function _warn_quarantined_capacity_rows(map_code::String, day::Dates.Date)
+    df = Euphemia.sql2df_with_retry(
+        """
+        SELECT DISTINCT generation_unit_code,
+               generation_unit_installed_capacity_mw AS capacity_mw
+        FROM entsoe.production_and_generation_units
+        WHERE area_map_code = \$1
+          AND generation_unit_status = 'COMMISSIONED'
+          AND DATE(valid_from) <= \$2
+          AND generation_unit_installed_capacity_mw > $(MAX_PLAUSIBLE_UNIT_MW)
+        """, Any[map_code, day])
+    for row in eachrow(df)
+        @warn "Rejected corrupt registry capacity" unit=row.generation_unit_code zone=map_code capacity_mw=Float64(row.capacity_mw)
+    end
+    return nothing
+end
 
 """
     get_day_outages(day::Date) -> DataFrame
@@ -501,6 +525,8 @@ function get_generators(map_code::String, day::Dates.Date;
             AND g.generation_unit_status = 'COMMISSIONED'
             AND g.area_type_code IN ('BZN', 'BZN/CTA')
             AND g.area_map_code = \$1
+            -- Registry sanity bound, on the raw row (see MAX_PLAUSIBLE_UNIT_MW)
+            AND g.generation_unit_installed_capacity_mw <= $(MAX_PLAUSIBLE_UNIT_MW)
             -- Include if: passes date validity OR has recent actual generation
             AND (
                 DATE(\$2)
@@ -575,6 +601,8 @@ function get_generators(map_code::String, day::Dates.Date;
             AND g.generation_unit_status = 'COMMISSIONED'
             AND g.area_type_code IN ('BZN', 'BZN/CTA')
             AND g.area_map_code = \$1
+            -- Registry sanity bound, on the raw row (see MAX_PLAUSIBLE_UNIT_MW)
+            AND g.generation_unit_installed_capacity_mw <= $(MAX_PLAUSIBLE_UNIT_MW)
             -- Include if: passes date validity OR has recent actual generation
             AND (
                 DATE(\$2)
@@ -603,17 +631,11 @@ function get_generators(map_code::String, day::Dates.Date;
     query_args = exclude_unavailable ? Any[map_code, day, outage_codes, outage_avail, stale_codes] :
                  Any[map_code, day]
     df = Euphemia.sql2df_with_retry(query, query_args)
+    _warn_quarantined_capacity_rows(map_code, day)
 
     # Build generators (without ramp rates initially)
     generators = Generator[]
     for row in eachrow(df)
-        # Registry sanity bound: drop rows whose installed capacity exceeds any
-        # physically-plausible generation unit (corrupt ENTSO-E capacities — see
-        # MAX_PLAUSIBLE_UNIT_MW).
-        if Float64(row.generation_unit_installed_capacity_mw) > MAX_PLAUSIBLE_UNIT_MW
-            @warn "Dropping corrupt registry capacity" unit=row.generation_unit_code zone=map_code capacity_mw=Float64(row.generation_unit_installed_capacity_mw)
-            continue
-        end
         # Infer actual fuel type from name if declared as "Other".
         # normalize_fuel_type_name folds ENTSO-E spelling variants (e.g.
         # Romania publishes "Hydro Run-of-river and pondage") onto the

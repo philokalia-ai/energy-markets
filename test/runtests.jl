@@ -169,6 +169,13 @@ println()
         include(joinpath(@__DIR__, "test_cv40_fixes.jl"))
     end
 
+    @testset "Registry unit bound" begin
+        println("\n" * "=" ^ 60)
+        println("Running Registry Unit Bound Tests...")
+        println("=" ^ 60)
+        include(joinpath(@__DIR__, "test_registry_unit_bound.jl"))
+    end
+
     @testset "Weather RES" begin
         println("\n" * "=" ^ 60)
         println("Running Weather RES Tests...")
