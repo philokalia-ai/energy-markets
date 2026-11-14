@@ -469,7 +469,8 @@ Zones without a model in the pack predict 0 for all hours (warned).
 function build_weather_predictions(first_utc_day::Date, last_utc_day::Date,
                                    candidates::AbstractSet{Date};
                                    asof::Date=Date(now(UTC)),
-                                   fixed_lag::Union{Nothing,Int}=nothing)
+                                   fixed_lag::Union{Nothing,Int}=nothing,
+                                   solar_out::Union{Nothing,Dict{String,Dict{DateTime,Float64}}}=nothing)
     pack = load_res_models()
     groups = vintage_groups(first_utc_day, last_utc_day, candidates; asof, fixed_lag)
     preds = Dict{String,Dict{DateTime,Float64}}()
@@ -487,6 +488,9 @@ function build_weather_predictions(first_utc_day::Date, last_utc_day::Date,
             weather = fetch_weather(cells, gdates; vintage_lag=lag)
             ghours = collect(DateTime(first(gdates)):Hour(1):DateTime(last(gdates)) + Hour(23))
             merge!(zp, predict_res(pack, zone, ghours, weather))
+            solar_out === nothing ||
+                merge!(get!(solar_out, zone, Dict{DateTime,Float64}()),
+                       predict_res(pack, zone, ghours, weather; component=:solar))
         end
         nspan = 24 * (Dates.value(last_utc_day - first_utc_day) + 1)
         0 < length(zp) < nspan &&
@@ -528,10 +532,12 @@ eligible days; the `mw` fallback in both modifiers is therefore unreachable
 there and kept only as a safe identity.
 """
 function weather_scenario(preds::Dict{String,Dict{DateTime,Float64}},
-                          load_preds::Dict{String,Dict{DateTime,Float64}})
+                          load_preds::Dict{String,Dict{DateTime,Float64}};
+                          solar_preds::Dict{String,Dict{DateTime,Float64}}=Dict{String,Dict{DateTime,Float64}}())
     scenario = Dict{String,Euphemia.ZoneScenario}()
     load_fill_fn = make_load_fill_fn(load_preds)
-    res_fill_fn = make_res_fill_fn(preds)
+    res_fill_fn = isempty(solar_preds) ? make_res_fill_fn(preds) :
+                  make_typed_res_fill_fn(preds, solar_preds)
     for zone in ZONES
         zone_pred = get(preds, zone, Dict{DateTime,Float64}())
         zone_load = get(load_preds, zone, Dict{DateTime,Float64}())
@@ -764,6 +770,40 @@ end
 
 "Book hook `res_fill(zone, utc_day)` over a precomputed `res_pred`. Twin of `make_load_fill_fn`."
 make_res_fill_fn(res_pred::Dict{String,Dict{DateTime,Float64}}) = make_load_fill_fn(res_pred)
+
+"""
+Weather-track RES fill that keeps the SOLAR component typed: per hour one
+`(ts, solar, "Solar")` row and one `(ts, total − solar, "WeatherFill")` row.
+The quantity is unchanged (rows sum into renewable_by_time and the
+renewable_modifier overrides the total anyway); what changes is that the cv31
+solar-regime gate — which reads "Solar" rows — sees the issued weather solar
+instead of nothing (TSO 14.1.D solar for D publishes after the morning run).
+A zone/hour without a solar component falls back to a single untyped row.
+"""
+function make_typed_res_fill_fn(res_pred::Dict{String,Dict{DateTime,Float64}},
+                                solar_pred::Dict{String,Dict{DateTime,Float64}})
+    isempty(res_pred) && return nothing
+    return (zone, day) -> begin
+        zp = get(res_pred, String(zone), nothing)
+        zp === nothing && return nothing
+        zs = get(solar_pred, String(zone), Dict{DateTime,Float64}())
+        rows = Tuple{String,Float64,String}[]
+        for t in DateTime(day):Hour(1):(DateTime(day) + Hour(23))
+            mw = get(zp, t, nothing)
+            mw === nothing && continue
+            ts = Dates.format(t, "yyyymmdd-HHMM")
+            s = get(zs, t, nothing)
+            if s === nothing
+                push!(rows, (ts, mw, "WeatherFill"))
+            else
+                s = clamp(s, 0.0, max(mw, 0.0))
+                push!(rows, (ts, s, "Solar"))
+                push!(rows, (ts, mw - s, "WeatherFill"))
+            end
+        end
+        isempty(rows) ? nothing : rows
+    end
+end
 
 """
 Zones REQUIRED to have a wind/solar forecast (had one on the last realized day)
@@ -1082,9 +1122,10 @@ function main()
         println("Fetching open-meteo weather + predicting RES for UTC days " *
                 "$(first_candidate - Day(1)) .. $last_candidate ...")
         t0 = time()
+        solar_preds = Dict{String,Dict{DateTime,Float64}}()
         preds = build_weather_predictions(first_candidate - Day(1), last_candidate,
                                           Set(first_candidate:Day(1):last_candidate);
-                                          asof=vintage_asof)
+                                          asof=vintage_asof, solar_out=solar_preds)
         # ML input models: OVERLAY the per-zone-winner LightGBM predictions onto
         # the pilot zones (in-footprint), replacing their linear-pack RES + load.
         # Same D-1 vintage discipline (build_ml_inputs uses vintage_groups +
@@ -1098,11 +1139,15 @@ function main()
                     "(EUPHEMIA_ML_INPUTS on)")
             tml = time()
             try
+                ml_solar = Dict{String,Dict{DateTime,Float64}}()
                 ml_res, ml_load = build_ml_inputs(ml_pilots, first_candidate - Day(1),
                                                   last_candidate,
                                                   Set(first_candidate:Day(1):last_candidate);
-                                                  asof=vintage_asof)
-                for (z, zp) in ml_res; preds[z] = zp; end
+                                                  asof=vintage_asof, solar_out=ml_solar)
+                for (z, zp) in ml_res
+                    preds[z] = zp
+                    solar_preds[z] = get(ml_solar, z, Dict{DateTime,Float64}())
+                end
                 for (z, zp) in ml_load; fill_pred[z] = zp; end
                 println("ML inputs ready in $(round(time() - tml, digits=1))s")
             catch e
@@ -1114,7 +1159,7 @@ function main()
             end
         end
         res_pred_weather = preds
-        scenario = weather_scenario(preds, fill_pred)
+        scenario = weather_scenario(preds, fill_pred; solar_preds=solar_preds)
         # Enabler β1: the :v3 analogue thermometer now reads OUR model load, not
         # the published ENTSO-E D-1 forecast (weather-track-scoped).
         install_thermometer!(fill_pred, first_candidate - Day(1), last_candidate)
@@ -1401,20 +1446,26 @@ function run_retro()
         # Weather-track inputs at THIS lead's fixed vintage.
         fill_pred = build_load_fills(load_pack, sort(copy(ZONES)), first_utc, last_utc,
                                      candidates; asof=vintage_asof, fixed_lag=fixed_lag)
+        solar_preds = Dict{String,Dict{DateTime,Float64}}()
         preds = build_weather_predictions(first_utc, last_utc, candidates;
-                                          asof=vintage_asof, fixed_lag=fixed_lag)
+                                          asof=vintage_asof, fixed_lag=fixed_lag,
+                                          solar_out=solar_preds)
         if ML_INPUTS_ON && !isempty(ml_pilots0)
             try
+                ml_solar = Dict{String,Dict{DateTime,Float64}}()
                 ml_res, ml_load = build_ml_inputs(ml_pilots0, first_utc, last_utc,
                                                   candidates; asof=vintage_asof,
-                                                  fixed_lag=fixed_lag)
-                for (z, zp) in ml_res; preds[z] = zp; end
+                                                  fixed_lag=fixed_lag, solar_out=ml_solar)
+                for (z, zp) in ml_res
+                    preds[z] = zp
+                    solar_preds[z] = get(ml_solar, z, Dict{DateTime,Float64}())
+                end
                 for (z, zp) in ml_load; fill_pred[z] = zp; end
             catch e
                 @warn "retro ML overlay failed for lead $lead — packs kept" exception=(e, catch_backtrace())
             end
         end
-        scenario = weather_scenario(preds, fill_pred)
+        scenario = weather_scenario(preds, fill_pred; solar_preds=solar_preds)
         install_thermometer!(fill_pred, first_utc, last_utc)
 
         clear_cache = Dict{Date,Union{Nothing,Dict{String,Dict{DateTime,Float64}}}}()
