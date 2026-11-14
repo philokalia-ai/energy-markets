@@ -113,4 +113,54 @@ The inference CLI defaults to --settled-lag 1 and writes priceL1 artifacts. Use 
 
 ## Physical-price ablation
 
-Corrected-fleet eight-day run pending. It clears UTC delivery days under a 10:00 issuance context (recent-generation latency cutoffs active), with latest-revision ENTSO-E forecasts. Both arms include analyst patch ac0ab5bfe079. It is separate from the Athens market-day probability evaluation.
+One fixed zero-cost RES candidate, with supported-share overrides unset, on the eight prescribed UTC delivery days. Both arms include analyst fleet correction ac0ab5bfe079 and use the same 10:00 issuance context, HiGHS, two passes and latest-revision ENTSO-E forecasts. This is separate from the Athens-day probability evaluation. The per-period solver limit is 120 seconds (production default 900); full returned time-limit incumbents are included explicitly, without a repeat-solve or parameter search. September20/October19 used eight Julia threads; other dates used four. Each same-date pair shared its worker/settings. Incumbents can depend on solver scheduling.
+
+| Arm | Footprint | n | MAE | Bias | Corr | Events | TP | FP | Recall | Precision | FP rate | Caps |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| baseline | all39 | 7486 | 55.7234 | -34.7084 | 0.8102 | 253 | 1 | 1 | 0.0040 | 0.5000 | 0.0001 | 0 |
+| baseline | excluding_italy | 6144 | 56.4224 | -31.3417 | 0.7939 | 238 | 1 | 1 | 0.0042 | 0.5000 | 0.0002 | 0 |
+| res_zero | all39 | 7486 | 58.1904 | -39.2692 | 0.8133 | 253 | 46 | 20 | 0.1818 | 0.6970 | 0.0028 | 0 |
+| res_zero | excluding_italy | 6144 | 58.9731 | -36.3195 | 0.7983 | 238 | 31 | 7 | 0.1303 | 0.8158 | 0.0012 | 0 |
+
+Paired coverage: 7,486 cells per arm; two Sardinia actual UTC hours on September20 are missing. **Six of eight baseline days and four of eight RES days hit solver time limits on the old HiGHS stack** (Julia1.12.7, HiGHS.jl1.24.0/native1.15.0). Baseline time-limit cells: 5,616; candidate: 3,744. The MAE verdict is **low confidence**, and is not a certified economic comparison. Final-wrapper-optimal status does not certify an earlier anchor pass. The two arms' individual optimal-only slices have different coverage and should not be compared directly. On exactly the same cells where both final wrappers are optimal:
+
+| Arm | n | MAE | Bias | Corr | Events | TP | FP | Recall | Precision | FP rate | Caps |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| baseline | 934 | 49.3435 | 2.1647 | 0.7900 | 121 | 0 | 0 | 0.0000 | — | 0.0000 | 0 |
+| res_zero | 934 | 49.2700 | 2.1855 | 0.7907 | 121 | 6 | 0 | 0.0496 | 1.0000 | 0.0000 | 0 |
+
+### Every prescribed day
+
+| UTC day | Arm | Final wrapper | n | MAE | Bias | Corr | Events | TP | FP | Recall | Precision | FP rate | Caps |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 2026-09-16 | baseline | time_limit | 936 | 36.2353 | -19.3333 | 0.8801 | 6 | 0 | 0 | 0.0000 | — | 0.0000 | 0 |
+| 2026-09-16 | res_zero | time_limit | 936 | 36.1089 | -20.0864 | 0.8845 | 6 | 5 | 0 | 0.8333 | 1.0000 | 0.0000 | 0 |
+| 2026-09-20 | baseline | optimal | 934 | 49.3435 | 2.1647 | 0.7900 | 121 | 0 | 0 | 0.0000 | — | 0.0000 | 0 |
+| 2026-09-20 | res_zero | optimal | 934 | 49.2700 | 2.1855 | 0.7907 | 121 | 6 | 0 | 0.0496 | 1.0000 | 0.0000 | 0 |
+| 2026-09-27 | baseline | time_limit | 936 | 40.4921 | -21.5282 | 0.8155 | 70 | 1 | 1 | 0.0143 | 0.5000 | 0.0012 | 0 |
+| 2026-09-27 | res_zero | optimal | 936 | 40.4701 | -21.4906 | 0.8152 | 70 | 10 | 13 | 0.1429 | 0.4348 | 0.0150 | 0 |
+| 2026-10-06 | baseline | time_limit | 936 | 48.9032 | -34.3141 | 0.8523 | 37 | 0 | 0 | 0.0000 | — | 0.0000 | 0 |
+| 2026-10-06 | res_zero | optimal | 936 | 48.8496 | -34.2754 | 0.8524 | 37 | 7 | 0 | 0.1892 | 1.0000 | 0.0000 | 0 |
+| 2026-10-19 | baseline | time_limit | 936 | 66.8126 | -52.6486 | 0.7046 | 0 | 0 | 0 | — | — | 0.0000 | 0 |
+| 2026-10-19 | res_zero | time_limit | 936 | 67.2910 | -53.8237 | 0.7101 | 0 | 0 | 3 | — | 0.0000 | 0.0032 | 0 |
+| 2026-11-02 | baseline | time_limit | 936 | 65.0088 | -37.6180 | 0.7154 | 0 | 0 | 0 | — | — | 0.0000 | 0 |
+| 2026-11-02 | res_zero | time_limit | 936 | 85.3316 | -73.7612 | 0.7598 | 0 | 0 | 0 | — | — | 0.0000 | 0 |
+| 2026-11-04 | baseline | time_limit | 936 | 84.9078 | -69.6887 | 0.6771 | 0 | 0 | 0 | — | — | 0.0000 | 0 |
+| 2026-11-04 | res_zero | optimal | 936 | 84.9078 | -69.6887 | 0.6771 | 0 | 0 | 0 | — | — | 0.0000 | 0 |
+| 2026-11-13 | baseline | optimal | 936 | 54.0705 | -44.6224 | 0.8078 | 19 | 0 | 0 | 0.0000 | — | 0.0000 | 0 |
+| 2026-11-13 | res_zero | time_limit | 936 | 53.2750 | -43.1246 | 0.8024 | 19 | 18 | 4 | 0.9474 | 0.8182 | 0.0044 | 0 |
+
+### Existing-log solver audit
+
+| Arm | Retained periods | Nonoptimal | Pass2 nonoptimal | Retained solve seconds | Mean seconds/period | Discarded clears |
+| --- | --- | --- | --- | --- | --- | --- |
+| baseline | 384 | 20 | 12 | 7424.7000 | 19.3352 | 1 |
+| res_zero | 384 | 16 | 7 | 7131.1000 | 18.5706 | 0 |
+
+Counts come from each 24-period progress summary in the original logs. Timing is the engine's summed retained solve_time, not individual native HiGHS timers; per-hour timing quantiles were not logged. This aggregate does not show a uniform RES slowdown, while individual hard hours remain possible. November2 baseline discarded an incomplete first pass (773.2 seconds decomposition elapsed) and automatically rebuilt with p95 fleet books; the RES arm did not take that fallback. Its paired MAE delta is therefore confounded by a different effective fleet, and most previously unattributed baseline wall time is explained. Existing per-period retry rungs also remained enabled; no additional arm or manual score-driven rerun was made. Excluding that date from the existing outputs leaves 6,550 cells, MAE54.3966→54.3119 (−0.0847 €/MWh), a diagnostic slice rather than a new independent test.
+
+931 paired prices change by more than 1e-6 €/MWh; 104 of these are actual collapse hours. Largest absolute change: 284.0100 €/MWh. Per-zone MAE/bias/correlation and event counts are in clearing-by-zone.csv; exact run statuses and both-pass timings are in clearing-runs.csv. The engine's solve_time field alone is final-pass-only.
+
+The direct RES offer change does not alter thermal/hydro/must-run bidding rules, but coupling and the endogenous second-pass anchors can transmit its effect. On September20, the existing cv31 solar gate already fires in the offline TSO-input run; DE_LU still clears above zero because neighbours' positive supply sets the coupled margin. A zero RES offer alone does not remove that wall. These bounded incumbent diagnostics do not establish a general collapse-price cure; keep the RES flag off pending review and fuller solver validation.
+
+Independent second measurement: blocks' RES-only arm on September27 + November2, with its Italy + in-merit base, reports MAE delta −0.01 €/MWh, hits 1→10 and false alarms 1→13. A later seven-day relay excludes cap/floor cells and reports 6,523 cells, MAE delta+0.30, hits1→27 and false alarms1→16; its September20 RES pass2 had 2/24 time-limit periods and a 12:00 all-zone 3000 €/MWh cap incumbent. Its legacy/no-context contract differs from this experiment; its paired deltas are not pooled here. See the [archived report excerpt and relay](independent-res.md), sourced from em-team/reports/blocks.md at20:55UTC and the leader's subsequent message. Together these limited measurements support leaving the default unchanged, rather than a confident MAE verdict about the RES mechanism.

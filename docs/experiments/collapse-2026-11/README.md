@@ -44,6 +44,8 @@ shares from settled negative-price frequency. The extract has no contract/cohort
 register, so a national support ladder with asserted official shares would be
 unsupported. The existing six-zone solar gate still governs the other affected
 blocks; this experiment changes RES alone and can reveal a thermal/hydro wall.
+With zero supported shares it also replaces the gated negative RES offer with
+zero; the existing negative must-run floor rule stays in place.
 
 Sources consulted on 2026-11-14 (mechanism evidence, not calibration inputs):
 
@@ -211,8 +213,38 @@ the same public price-history cutoff; this does not admit unissued load/RES.
 | Latest-D1 gate proxy / D−1 (unverified timing) | 0.007966 | 0.98307 | 0.035341 | 0.94965 |
 | Latest-D1 gate proxy / D−2 (conservative history, unverified timing) | 0.008382 | 0.97857 | 0.038644 | 0.93535 |
 
-Corrected-fleet physical-price results will be added after the eight-day run.
-The running team report is `em-team/reports/collapse.md`.
+The corrected-fleet physical matrix is complete: 16 full vectors, eight paired
+UTC days, 7,486 matched cells per arm (two Sardinia actual hours absent). The
+zero-cost RES candidate is **NO-SHIP as a default change**: MAE rises **55.7234→58.1904 €/MWh**,
+while collapse detection changes from 1 TP / 1 FP to 46 TP / 20 FP out of 253
+events. Excluding Italy, MAE rises 56.4224→58.9731. November 2 drives the level
+regression (65.0088→85.3316 MAE; both arms hit time limits). Baseline/candidate
+include 5,616/3,744 time-limit cells; same-cell final-wrapper-optimal evidence is
+only 934 cells on September 20 (0→6 hits, no false alarms). Keep the RES flag off.
+**Six of eight baseline days and four of eight RES days hit solver time limits
+on old HiGHS** (HiGHS.jl 1.24.0 / native 1.15.0, Julia 1.12.7), so the MAE
+verdict is **low confidence**, not a certified economic comparison.
+The existing-log audit also finds an automatic `p95` fleet fallback on November
+2's baseline only, which materially confounds that day's level difference.
+Excluding it from the existing outputs leaves MAE 54.3966→54.3119 over 6,550
+cells. This diagnostic slice is not another arm or an independent test.
+
+Blocks' independent RES-only arm on September 27 + November 2, using its
+Italy + in-merit base, reports MAE Δ **−0.01 €/MWh**, hits **1→10**, false
+alarms **1→13** (`em-team/reports/blocks.md`, 20:55 UTC;
+[archived excerpt](independent-res.md)). Its legacy/no-context inputs differ
+from this context-bound matrix; these are two separate measurements. They
+support retaining the current default while leaving the mechanism verdict open.
+Their later seven-day relay excludes cap/floor cells: 6,523 cells, MAE Δ+0.30,
+hits 1→27, false alarms 1→16; one September 20 RES incumbent priced all zones
+at the 3000 cap. Our retained per-period log audit instead shows 20→16
+nonoptimal outcomes across 384 periods/arm and mean engine solve time
+19.34→18.57 seconds/period, so it does not show an aggregate RES slowdown.
+Individual native HiGHS timings were not logged; exact tail comparisons remain
+unavailable. No further arms were run.
+Full [physical tables](results.md#physical-price-ablation),
+[per-zone scores](clearing-by-zone.csv) and [run timings/status](clearing-runs.csv)
+are retained. The team report is `em-team/reports/collapse.md`.
 
 The physical scorer uses only complete paired day/arm price vectors. It includes
 full returned time-limit incumbents explicitly, counts those cells separately,
