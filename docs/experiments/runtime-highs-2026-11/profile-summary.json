@@ -1,0 +1,21 @@
+{
+  "date": "2026-11-13",
+  "julia": "1.12.7",
+  "highs_jl": "1.27.0",
+  "highs_native": "1.16.0",
+  "source": "fixed JAO + analyst fleet patch",
+  "context": "legacy retrospective, no ForecastContext",
+  "wall_seconds": 698.355459514,
+  "book_seconds": 37.486613301,
+  "native_seconds": 232.11842799186707,
+  "library_seconds": 244.36678457260132,
+  "residual_outside_books_and_library_seconds": 416.5020616403987,
+  "book_fingerprint_seconds": 369.776620518,
+  "remaining_unassigned_seconds": 46.7254411223987,
+  "prices_compared": 936,
+  "bit_differences": 0,
+  "max_abs_price_delta": 0.0,
+  "native_calls": 48,
+  "optimal_native_calls": 48,
+  "implementation": "one-line byte-buffer fix in benchmark utility only; all18recordedhashesidentical"
+}

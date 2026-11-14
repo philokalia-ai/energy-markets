@@ -42,7 +42,9 @@ function fingerprint_book(book)
         append!(capacity_rows, [join((label, a, b, t, bitstring(mw)), "|")
                                 for ((a, b, t), mw) in capacities])
     end
-    digest(rows) = bytes2hex(sha256(join(rows, "\n")))
+    # Julia 1.12's CodeUnits alias checks rehash the immutable input per SHA block.
+    # Materialize identical bytes once; every recorded digest stays unchanged.
+    digest(rows) = bytes2hex(sha256(Vector{UInt8}(codeunits(join(rows, "\n")))))
     result = Dict{String,Any}("orders" => length(order_rows),
         "order_sequence_sha256" => digest(order_rows),
         "order_multiset_sha256" => digest(sort(order_rows)),

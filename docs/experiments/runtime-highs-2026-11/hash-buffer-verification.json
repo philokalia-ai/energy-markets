@@ -1,0 +1,6 @@
+{
+  "checks": 18,
+  "failures": 0,
+  "sha_evaluation_seconds": 0.37617580000000006,
+  "scope": "18 recorded sequence/multiset/capacity hashes over six accepted books; byte buffer allocations included, file reading/sorting excluded"
+}
