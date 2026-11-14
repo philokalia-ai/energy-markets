@@ -245,7 +245,11 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
     # the full-day master LP, which caps every family member at its energy
     # allocation; everything below then clears plain SimpleOrders as always.
     if any(o -> o isa LinkedHourlyOrder, order_book.orders)
-        order_book = resolve_complex_orders(order_book;
+        return solve_with_complex_orders(order_book,
+            ob -> solve_mpcc_market_clearing(ob; preferred_solver=preferred_solver,
+                silent=silent, big_m=big_m, time_limit=time_limit, mip_gap=mip_gap,
+                heuristic_effort=heuristic_effort, extra_attributes=extra_attributes,
+                decompose_periods=decompose_periods, verbose=verbose);
             preferred_solver=preferred_solver, verbose=verbose)
     end
 

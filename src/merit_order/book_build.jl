@@ -1294,6 +1294,10 @@ function create_merit_order_book(
         demand_orders_count = 0
         total_demand_quantity = 0.0
         total_supply_capacity = 0.0
+        # Complex orders `blocks` (EUPHEMIA_COMPLEX_ORDERS): committed units' must-run
+        # profiles, (unit code, block limit price, hourly slice). Empty otherwise.
+        blocks_on = "blocks" in complex_order_kinds()
+        block_members = Tuple{String,Float64,SimpleOrder}[]
 
         # ── Solar-regime price-taker floor (cv31, default-ON) ───────────
         # Regime-gated revival of the cv28/cv29 price-taker floor. The gate is
@@ -1629,7 +1633,20 @@ function create_merit_order_book(
                     # few hours below cost. This is what lets midday prices
                     # collapse below thermal SRMC in renewable-surplus hours.
                     must_run_qty = 0.0
-                    if g.code in committed
+                    if g.code in committed && blocks_on
+                        # Complex orders `blocks`: the unit's minimum load is ONE
+                        # regular block over the day (all-or-nothing, limit price
+                        # = SRMC) instead of the two hourly must-run orders; the
+                        # master MILP decides acceptance, accepted blocks inject
+                        # their profile as price-takers (fix-and-reprice).
+                        must_run_qty = min(g.p_min, offered_pmax(g))
+                        if must_run_qty > 0.1
+                            push!(block_members, (g.code, g.marginal_cost,
+                                SimpleOrder(:supply, g.marginal_cost, must_run_qty,
+                                    Symbol(bidding_zone), date_time, resolution_minutes)))
+                            total_supply_capacity += must_run_qty
+                        end
+                    elseif g.code in committed
                         must_run_qty = min(g.p_min, offered_pmax(g))
                         # Graduated self-scheduling: the deepest block is
                         # near-free (never shut down), the rest bids below
@@ -1957,6 +1974,17 @@ function create_merit_order_book(
                 println("  🔋 complex orders: family $f — budget $(round(e, digits=0)) MWh/day " *
                         "vs offered $(round(mw, digits=0)) MW × $(length(target_timeslots)) slots")
             end
+        end
+
+        if !isempty(block_members)
+            all_orders = MarketOrder[orders...]
+            for (code, b, o) in block_members
+                push!(all_orders, LinkedHourlyOrder(:supply, b, o.quantity, o.zone,
+                    o.date_time, o.resolution_code, "BLK:$(bidding_zone):$(code)", NaN))
+            end
+            orders = all_orders
+            println("  🧱 complex orders: $(length(unique(first.(block_members)))) thermal " *
+                    "block(s) replace the static must-run split")
         end
 
         nodes = [bidding_zone]

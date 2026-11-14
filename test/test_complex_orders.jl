@@ -47,3 +47,43 @@ using Euphemia.MarketOrders: SimpleOrder, LinkedHourlyOrder, MarketOrder
     ob = MPCC.MPCCOrderBook(copy(base), ["Z"], periods, (-500.0, 3000.0), nothing)
     @test MPCC.resolve_complex_orders(ob) === ob
 end
+
+@testset "Complex orders: regular thermal blocks (MILP master + PAB loop)" begin
+    periods = ["20261104-0000", "20261104-0100"]
+    dt = [DateTime(2026, 11, 4, 0), DateTime(2026, 11, 4, 1)]
+    Z = :Z
+    book(demand, blk_price, gas) = begin
+        o = MarketOrder[]
+        for h in 1:2
+            push!(o, SimpleOrder(:demand, 3000.0, demand[h], Z, dt[h], 60))
+            push!(o, SimpleOrder(:supply, gas[h], 200.0, Z, dt[h], 60))
+            push!(o, LinkedHourlyOrder(:supply, blk_price, 50.0, Z, dt[h], 60, "BLK:Z:u1", NaN))
+        end
+        MPCC.MPCCOrderBook(o, ["Z"], periods, (-500.0, 3000.0), nothing)
+    end
+    clear(ob) = MPCC.solve_mpcc_market_clearing(ob; preferred_solver="highs",
+        decompose_periods=true, verbose=false)
+
+    # Block at 60 vs gas 80/100: accepted, injects 50 MW in both hours, gas sets both prices.
+    r = clear(book([100.0, 100.0], 60.0, [80.0, 100.0]))
+    @test r.market_prices["Z"]["20261104-0000"] ≈ 80.0
+    @test haskey(MPCC.LAST_COMPLEX_INFO[].blocks, "BLK:Z:u1")
+
+    # Block at 90 vs gas 80/100: average saving (−10 + 10)·50 = 0 → welfare-indifferent;
+    # at 95: rejected (welfare loss). Hourly orders would have run in hour 2 only.
+    r = clear(book([100.0, 100.0], 95.0, [80.0, 100.0]))
+    @test isempty(MPCC.LAST_COMPLEX_INFO[].blocks)
+    @test r.market_prices["Z"]["20261104-0100"] ≈ 100.0
+
+    # PAB: hour 1 demand 50 with 30 MW of cheap supply at 10. The master accepts the
+    # block (welfare: −1100 in hour 1, +2000 in hour 2), but with its 50 MW fixed hour 1
+    # reprices to ≤ 10 and the block loses money over the day ((≤10−60)·50 + 40·50 < 0)
+    # → paradoxically accepted → rejected and re-solved: hour 1 back to gas at 80.
+    ob = book([50.0, 100.0], 60.0, [80.0, 100.0])
+    push!(ob.orders, SimpleOrder(:supply, 10.0, 30.0, Z, dt[1], 60))
+    r = clear(ob)
+    info = MPCC.LAST_COMPLEX_INFO[]
+    @test "BLK:Z:u1" in info.forced
+    @test isempty(info.blocks)
+    @test r.market_prices["Z"]["20261104-0000"] ≈ 80.0
+end
