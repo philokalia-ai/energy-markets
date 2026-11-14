@@ -282,6 +282,23 @@ vintages stay as they are.
    - **Fix.** Every factor is computed from the ORIGINAL capacities, one minimum
      factor is applied per border-hour, and summation keys are sorted. The
      zero-bound opt-in and the JAO-only scope are unchanged.
-   - **TODO (ops): price impact,** measured old vs fixed on production settings.
-     No kill-switch: this is a determinism fix.
+   - **Measured (ops, 2026-11-14).** Old source vs the min-factor fixed source on
+     Julia 1.12.7 + HiGHS.jl 1.27.0 (native 1.16.0), with the feed-anchor fix in
+     both arms. Three UTC days (2026-09-20, 11-04, 11-13), retrospective
+     legacy-record inputs without a ForecastContext (not a live/ex-ante score).
+     All 144 period solves optimal per arm.
+     - All 39 zones, n = 2,806: **pooled ΔMAE −1.07 €/MWh**, Δbias +0.76. Per day:
+       09-20 −0.75, 11-04 −1.62, 11-13 −0.85; all 3 days better. 463–498 of 936
+       cells move per day, max |Δprice| 46.8 / 120.7 / 60.9.
+     - Excluding Italy, n = 2,304: **pooled ΔMAE −1.32**, Δbias +0.94. Per day:
+       09-20 −0.85, 11-04 −2.02, 11-13 −1.09.
+     - The fix adds 2 non-positive hits (0 false alarms). Changing the runtime
+       from 1.12 to 1.13.4 on the fixed source changes 0 of 2,808 prices.
+     - Cell deltas: `em-team/results/ops/fixed/{score_deltas,price_differences}.csv`
+       (sprint workspace).
+   - **Single-day check (analyst).** The 2026-11-02 39-zone HiGHS clear, cv43
+     head vs cv43 without this commit, library-default kwargs: 273/936 cells
+     move (max |Δ| 150 €/MWh, NO1/NO2 18 UTC), MAE 66.79 → 66.52, corr
+     0.731 → 0.743. Neutral to slightly better, consistent with ops.
+   - No kill-switch: this is a determinism fix.
 
