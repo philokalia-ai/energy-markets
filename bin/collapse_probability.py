@@ -228,6 +228,7 @@ def predict_logistic(model, x):
     missing = ~np.isfinite(x)
     x = np.where(missing, model["mean"], x)
     x[:, ~model["active"]] = model["mean"][~model["active"]]
+    missing[:, ~model["active"]] = True
     design = np.c_[(x - model["mean"]) / model["scale"], missing.astype(float)]
     return expit(design @ model["coef"] + model["intercept"])
 
@@ -245,6 +246,8 @@ def probability_metrics(y, p):
             "log_loss": float(-np.mean(y * np.log(q) + (1 - y) * np.log1p(-q))),
             "auc": float(roc_auc_score(y, p)) if 0 < positives < len(y) else None,
             "hits": hits, "false_alarms": fa,
+            "precision": hits / (hits + fa) if hits + fa else None,
+            "f1": 2 * hits / (positives + hits + fa) if positives + hits + fa else None,
             "hit_rate": hits / positives if positives else None,
             "false_alarm_rate": fa / (len(y) - positives) if positives < len(y) else None}
 

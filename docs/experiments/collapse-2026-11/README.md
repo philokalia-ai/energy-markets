@@ -93,6 +93,11 @@ latest revisions; `ForecastContext` records availability problems but does
 not rewind a source to an unavailable revision. Do not relabel either proxy
 as an operational 06:30 result.
 
+Both physical arms include the analyst's feed-anchored fleet rescue correction
+(`ac0ab5bfe079`; same patch retained on this branch). Without it, missing Italian
+per-unit telemetry removes roughly 40 GW from several September–November day
+books. It is an upstream data correction, not part of the RES treatment.
+
 ## Reproduce
 
 Python dependencies are isolated from the Julia market engine. Install the
@@ -129,6 +134,33 @@ bins; AUC/recall are null when undefined. Climatology is per-zone expanding
 training frequency with Laplace smoothing. The live comparator is paired on the
 same UTC zone-hours; timestamps after 06:30 are counted, not silently called
 pre-gate forecasts.
+
+Tomorrow's experimental output can be generated explicitly, without publishing:
+
+```bash
+python bin/predict_collapse.py --extract "$EUPHEMIA_DUCKDB_PATH" \
+  --delivery 2026-11-15 --output /private/path/tomorrow
+python bin/collapse_diagnostics.py --extract "$EUPHEMIA_DUCKDB_PATH" \
+  --probability-dir /private/path/probabilities --live-dir /path/to/frozen/live-json \
+  --output /private/path/diagnostics
+```
+
+The first command writes both hourly probabilities and a separately fitted
+**any-hour-tomorrow ≤0** day-event probability per zone. The latter uses only
+complete local market days (23/24/25 hours), with the minimum settled price as
+its label. It fits the same fixed L2 logistic model on day-level summaries of
+the accepted ex-ante features: mean/min/max of lagged prices, frequencies and
+forecast shares, season and weekday. It does not multiply independent hourly
+non-event probabilities. This prediction is statistical and experimental; it is
+not sent to the live product.
+
+Threshold diagnostics report 0.2 / 0.3 / 0.5, test-set maximum-F1 and test-set
+matched-false-alarm operating points. The latter two are explicitly **oracle
+descriptions of the ROC/precision-recall curve**, not thresholds deployable
+from this test. A separate F1 threshold uses preceding-origin predictions on
+the 28 days ending origin D−2. An additional frozen 2026-08-16 origin supplies
+the first pre-test calibration window; later origins use previously issued
+held-forward predictions. No current test labels enter threshold selection.
 
 ## Results
 

@@ -2,6 +2,7 @@
 import importlib.util
 from pathlib import Path
 import unittest
+import sys
 
 import numpy as np
 import pandas as pd
@@ -9,6 +10,8 @@ import pandas as pd
 spec = importlib.util.spec_from_file_location("collapse_probability", Path(__file__).resolve().parents[1] / "bin" / "collapse_probability.py")
 cp = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(cp)
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "bin"))
+import collapse_diagnostics as cd
 
 
 class CollapseProbabilityTest(unittest.TestCase):
@@ -55,6 +58,9 @@ class CollapseProbabilityTest(unittest.TestCase):
         p = cp.predict_logistic(model, x)
         self.assertTrue(np.all((p >= 0) & (p <= 1)))
         self.assertLess(p[0], p[-1])
+        # A feature never observed in training remains inactive at inference.
+        np.testing.assert_array_equal(cp.predict_logistic(model, [[1., np.nan]]),
+                                      cp.predict_logistic(model, [[1., 1e10]]))
         all_negative = cp.probability_metrics([0, 0], [0, 0])
         self.assertIsNone(all_negative["auc"])
         self.assertIsNone(all_negative["hit_rate"])
@@ -78,6 +84,27 @@ class CollapseProbabilityTest(unittest.TestCase):
         lag = cp.lag_by_market_day(source, ["actual"], 2)
         target = source.market_date == "2026-10-26"
         self.assertTrue((lag.loc[target, "actual"] == 24).all())
+
+    def test_daily_event_requires_complete_day(self):
+        actual, fc = self.fixture()
+        df, f = cp.build_features(actual, fc, "pregate_0630")
+        day, day_features = cd.daily_dataset(df, f)
+        complete = day[day.market_date == "2026-10-10"]
+        self.assertEqual(len(complete), 1)
+        self.assertEqual(complete.actual.iloc[0], 0)
+        self.assertTrue(np.isnan(day.actual.iloc[0]))  # first local day partial
+        df.loc[df.market_date == "2026-10-10", "actual"] = np.nan
+        day2, _ = cd.daily_dataset(df, f)
+        self.assertTrue(day2.loc[day2.market_date == "2026-10-10", "actual"].isna().all())
+
+    def test_threshold_diagnostics(self):
+        y, p = np.array([0, 0, 1, 1]), np.array([0.1, 0.6, 0.5, 0.9])
+        threshold = cd.best_f1_threshold(y, p)
+        self.assertEqual(threshold, 0.5)
+        zero = cd.matched_fpr_threshold(y, p, 0)
+        score = cd.detection(y, p, zero)
+        self.assertEqual(score["false_alarms"], 0)
+        self.assertEqual(score["hits"], 1)
 
 
 if __name__ == "__main__":
