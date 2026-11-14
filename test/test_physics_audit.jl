@@ -203,6 +203,62 @@ INSERT INTO entsoe.energy_prices VALUES
     close(db)
 end
 
+@testset "Physics audit — feed staleness, ATC/JAO coverage, unit bound" begin
+    AUD = parentmodule(Euphemia.run_physics_audit)
+    # The registry bound IS the loader's bound (cv41/cv42: 5 GW), so the 22.6 /
+    # 23.9 GW Italian rows of 2026-09-17 are errors here, not passes.
+    @test AUD.MAX_PLAUSIBLE_UNIT_MW == 5_000.0
+    reg = DataFrame(zone = ["IT-NORTH", "IT-NORTH"], unit = ["GEO", "OK"],
+                    cap = Union{Missing,Float64}[22_600.0, 800.0],
+                    valid_from = Union{Missing,Date}[Date(2026, 9, 17), Date(2020, 1, 1)],
+                    valid_to = Union{Missing,Date}[missing, missing])
+    f = AUD.check_registry(reg)
+    @test nrow(f[f.check .== "registry_bounds", :]) == 1
+    @test f.value[1] == 22_600.0 && f.bound[1] == 5_000.0 && f.severity[1] == "error"
+
+    # Feed staleness: IT feed dark after 07-19, DE continuous, a stray code
+    # with 5 observed days, a zone whose data arrives late (ingest-stamped).
+    dd(a, b) = collect(a:Day(1):b)
+    obs = DataFrame(zone = String[], d = Date[], avail = Date[])
+    for d in dd(Date(2026, 4, 1), Date(2026, 7, 19)); push!(obs, ("IT-NORTH", d, d + Day(1))); end
+    for d in dd(Date(2026, 11, 3), Date(2026, 11, 13)); push!(obs, ("IT-NORTH", d, d + Day(1))); end
+    for d in dd(Date(2026, 4, 1), Date(2026, 11, 13)); push!(obs, ("DE_LU", d, d + Day(1))); end
+    for d in dd(Date(2026, 6, 25), Date(2026, 6, 29)); push!(obs, ("STRAY", d, d + Day(1))); end
+    days = dd(Date(2026, 7, 20), Date(2026, 11, 13))
+    s = AUD.check_per_unit_feed_stale(obs, days)
+    @test Set(s.zone) == Set(["IT-NORTH"])
+    @test nrow(s) == 1
+    @test s.period[1] == "2026-07-27..2026-11-04"    # age 8 on 07-27; 11-03 data usable from 11-05
+    @test s.severity[1] == "error" && s.value[1] == Dates.value(Date(2026, 11, 4) - Date(2026, 7, 19))
+    # ingestion as-of: data delivered but not yet ingested does not count
+    late = DataFrame(zone = fill("LATE", 30), d = dd(Date(2026, 6, 1), Date(2026, 6, 30)),
+                     avail = fill(Date(2026, 7, 15), 30))
+    s2 = AUD.check_per_unit_feed_stale(late, dd(Date(2026, 7, 1), Date(2026, 7, 15)))
+    @test nrow(s2) == 0                                # nothing ingested before 07-15: no feed yet
+    s3 = AUD.check_per_unit_feed_stale(late, [Date(2026, 7, 16)])
+    @test nrow(s3) == 1 && s3.value[1] == 16           # ingested on 07-15, latest delivery 06-30
+
+    # ATC coverage: 3 regular borders for 28 days; on D one disappears; JAO
+    # rows halve on D, vanish on D+1.
+    D = Date(2026, 9, 10)
+    b = DataFrame(d = Date[], border = String[])
+    for t in dd(D - Day(28), D + Day(1)), x in ("RO>BG", "BG>RO", "GR>BG")
+        (t == D && x == "GR>BG") && continue
+        push!(b, (t, x))
+    end
+    push!(b, (D - Day(3), "RARE>X"))                    # irregular: never required
+    c = DataFrame(source = String[], d = Date[], n = Int[])
+    for t in dd(D - Day(28), D - Day(1)); push!(c, ("JAO_MAX_EXCHANGES", t, 9552)); end
+    push!(c, ("JAO_MAX_EXCHANGES", D, 4000))
+    cov = AUD.check_atc_coverage(b, c, [D, D + Day(1)])
+    atc = cov[cov.zone .== "IMPLICIT_DA", :]
+    @test nrow(atc) == 1 && atc.period[1] == string(D) && occursin("GR>BG", atc.detail[1])
+    @test atc.severity[1] == "warn"
+    jao = sort(cov[cov.zone .== "JAO_MAX_EXCHANGES", :], :period)
+    @test nrow(jao) == 2
+    @test jao.severity == ["warn", "error"] && jao.value == [4000.0, 0.0]
+end
+
 @testset "Physics audit" begin
     extract = joinpath(mktempdir(), "audit_test.duckdb")
     _build_audit_extract(extract)

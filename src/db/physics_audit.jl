@@ -46,6 +46,18 @@
 #                        here, which is why it is :warn, a review queue
 #   price_caps           settled day-ahead price outside the harmonized
 #                        EUPHEMIA caps (validation data only, :info)
+#   per_unit_feed_stale  a zone's per-unit actual-generation feed has gone
+#                        silent: as of day D its latest observation (delivered
+#                        AND ingested before D) is > 7 days old. The fleet
+#                        loader's stale-registry rescue reads this feed — the
+#                        IT feed was dark 2026-07-20 .. 11-03 and ~40 GW of
+#                        Italian fleet left the books from 09-17 (sprint
+#                        2026-11-14, fix lead/analyst ac0ab5b)
+#   atc_coverage         Day-ahead implicit ATC border-directions and JAO
+#                        (max_exchanges, hub_net_positions) rows for delivery
+#                        day D far below their trailing-28-day level, naming
+#                        the regular borders that disappeared (the pre-gate
+#                        fallback then sizes them — the BG phantom-cap class)
 #
 # Baselines (quantiles, historical maxima, climatologies) are computed from
 # the store over the audit window plus `lookback_days` (default 400, the
@@ -137,6 +149,13 @@ const UNIT_OVER_CAP_FACTOR = 1.2        # output above 1.2x installed capacity
 const UNIT_OVER_CAP_ERROR_RATIO = 2.0   # above 2x it is :error, not :warn
 const PRICE_CAP_LOW = -500.0            # EUPHEMIA harmonized floor
 const PRICE_CAP_HIGH = 4100.0           # harmonized cap (4,000) + headroom
+const FEED_STALE_WARN_DAYS = 7          # per-unit feed silent > 7 d: :warn
+const FEED_STALE_ERROR_DAYS = 30        # > 30 d: :error (half the 60-d rescue window)
+const FEED_LOOKBACK_DAYS = 120          # how far back the latest observation is sought
+const FEED_MIN_DAYS = 14                # a zone "has a feed" with >= 14 observed days in the lookback
+const COVERAGE_TRAIL_DAYS = 28          # trailing baseline for atc_coverage
+const COVERAGE_LOW_FRAC = 0.8           # below 80 % of the trailing median: :warn
+const COVERAGE_REGULAR_FRAC = 0.8       # a border is "regular" if present on ≥ 80 % of trailing days
 
 const AUDIT_FINDING_COLS = [:check, :severity, :zone, :period, :n, :value, :bound, :detail]
 
@@ -856,6 +875,199 @@ function _fetch_price_caps(d0::Date, d1::Date, zones)
     return sql2df_with_retry(sql, args)
 end
 
+"""
+    check_per_unit_feed_stale(obs::DataFrame, days) -> findings
+
+`obs`: `zone, d::Date, avail::Date` — one row per zone and delivery day that
+carries per-unit actual generation, with `avail` the first day that data was
+in the store (ingestion date; `d + 1` where the store has no ingestion stamp).
+For each audit day `D` in `days` the zone's as-of latest observation is the
+newest `d < D` with `avail < D`; an age `D − d` above
+$(FEED_STALE_WARN_DAYS) d is :warn, above $(FEED_STALE_ERROR_DAYS) d :error.
+Consecutive stale days collapse into one finding per zone run
+(`period = "first..last"`, `n` = days, `value` = max age). Zones with no
+observation inside the lookback never had a feed and are skipped, as are
+zones with fewer than $(FEED_MIN_DAYS) observed days (stray rows under a
+retired area code, e.g. DE_AT_LU).
+"""
+function check_per_unit_feed_stale(obs::DataFrame, days)
+    out = _audit_empty()
+    isempty(obs) && return out
+    for sub in groupby(obs, :zone)
+        zone = String(sub.zone[1])
+        length(unique(sub.d)) >= FEED_MIN_DAYS || continue
+        pairs = sort(collect(zip(sub.d, sub.avail)))
+        run = Tuple{Date,Int}[]
+        flush!() = begin
+            if !isempty(run)
+                maxage = maximum(last.(run))
+                _audit_row!(
+                    out;
+                    check = "per_unit_feed_stale",
+                    severity = maxage > FEED_STALE_ERROR_DAYS ? "error" : "warn",
+                    zone = zone,
+                    period = "$(first(run)[1])..$(last(run)[1])",
+                    n = length(run),
+                    value = Float64(maxage),
+                    bound = Float64(FEED_STALE_WARN_DAYS),
+                    detail = "per-unit actual generation silent: as of each day the latest " *
+                             "observation is up to $maxage d old (stale-registry units drop " *
+                             "out of the fleet once it exceeds the 60-d rescue window)",
+                )
+                empty!(run)
+            end
+        end
+        for D in days
+            last_d = nothing
+            for (d, a) in pairs
+                (d < D && a < D) && (last_d = d)
+            end
+            if last_d === nothing
+                flush!()
+                continue
+            end
+            age = Dates.value(D - last_d)
+            age > FEED_STALE_WARN_DAYS ? push!(run, (D, age)) : flush!()
+        end
+        flush!()
+    end
+    return out
+end
+
+"""
+    check_atc_coverage(borders::DataFrame, counts::DataFrame, days) -> findings
+
+`borders`: `d::Date, border` — distinct Day-ahead implicit border-directions
+("OUT>IN") per delivery day. `counts`: `source, d::Date, n` — row counts per
+delivery day for the JAO tables. For each audit day `D` the trailing
+$(COVERAGE_TRAIL_DAYS) days are the baseline: implicit ATC is flagged when
+`D` lacks borders that were present on ≥ $(Int(COVERAGE_REGULAR_FRAC*100)) % of
+the trailing days (named in `detail`; :error when more than half the regular
+set is missing), JAO when `n` is below $(Int(COVERAGE_LOW_FRAC*100)) % of the
+trailing median (:error when 0). Days without a full baseline are skipped.
+"""
+function check_atc_coverage(borders::DataFrame, counts::DataFrame, days)
+    out = _audit_empty()
+    by_day = Dict{Date,Set{String}}()
+    for r in eachrow(borders)
+        push!(get!(by_day, r.d, Set{String}()), String(r.border))
+    end
+    for D in days
+        trail = [D - Day(k) for k = 1:COVERAGE_TRAIL_DAYS]
+        have = [haskey(by_day, t) for t in trail]
+        count(have) >= COVERAGE_TRAIL_DAYS ÷ 2 || continue
+        freq = Dict{String,Int}()
+        for t in trail, b in get(by_day, t, Set{String}())
+            freq[b] = get(freq, b, 0) + 1
+        end
+        regular = Set(b for (b, c) in freq if c >= COVERAGE_REGULAR_FRAC * count(have))
+        isempty(regular) && continue
+        missing_b = sort(collect(setdiff(regular, get(by_day, D, Set{String}()))))
+        isempty(missing_b) && continue
+        _audit_row!(
+            out;
+            check = "atc_coverage",
+            severity = length(missing_b) > length(regular) / 2 ? "error" : "warn",
+            zone = "IMPLICIT_DA",
+            period = string(D),
+            n = length(missing_b),
+            value = Float64(length(regular) - length(missing_b)),
+            bound = Float64(length(regular)),
+            detail = "$(length(missing_b))/$(length(regular)) regular Day-ahead border-directions " *
+                     "absent: " * join(first(missing_b, 12), ", ") *
+                     (length(missing_b) > 12 ? ", …" : ""),
+        )
+    end
+    for sub in groupby(counts, :source)
+        src = String(sub.source[1])
+        n_of = Dict(r.d => Int(r.n) for r in eachrow(sub))
+        for D in days
+            base = [n_of[D-Day(k)] for k = 1:COVERAGE_TRAIL_DAYS if haskey(n_of, D - Day(k))]
+            length(base) >= COVERAGE_TRAIL_DAYS ÷ 2 || continue
+            med = median(base)
+            med > 0 || continue
+            n = get(n_of, D, 0)
+            n < COVERAGE_LOW_FRAC * med || continue
+            _audit_row!(
+                out;
+                check = "atc_coverage",
+                severity = n == 0 ? "error" : "warn",
+                zone = src,
+                period = string(D),
+                n = n,
+                value = Float64(n),
+                bound = Float64(med),
+                detail = "$src: $n rows for delivery day $D vs trailing median $(round(Int, med))",
+            )
+        end
+    end
+    return out
+end
+
+function _fetch_per_unit_obs(d0::Date, d1::Date, zones; asof_ingest::Bool = false)
+    # Bidding-zone rows only (the table also carries CTA/country codes). The
+    # default as-of is the DELIVERY timeline: for audit day D, the data the
+    # store holds for days before D (what the daily refresh-time audit sees).
+    # `asof_ingest=true` additionally requires the row's ingestion stamp < D;
+    # measured on the 2026-11-14 extract that is noisy — update_time lags
+    # delivery by 8–16 d for most TSOs (batch ingest, re-ingest stamps) — so it
+    # is opt-in. Stores without the area/type columns map zones via the registry.
+    avail = asof_ingest ? "CAST(MIN(o.update_time_utc) AS DATE)" : "CAST(o.date_time_utc AS DATE) + 1"
+    q(zcol, join, extra) = """
+        SELECT $zcol AS zone, CAST(o.date_time_utc AS DATE) AS d, $avail AS avail
+        FROM entsoe.actual_generation_output_per_generation_unit o $join
+        WHERE o.date_time_utc >= (\$1::date::timestamp AT TIME ZONE 'UTC')
+          AND o.date_time_utc < (\$2::date::timestamp AT TIME ZONE 'UTC')
+          AND o.actual_generation_output_mw IS NOT NULL $extra""" *
+        _zone_filter_sql(zones, zcol) * "\nGROUP BY 1, 2"
+    regjoin = "JOIN (SELECT DISTINCT generation_unit_code, area_map_code " *
+              "FROM entsoe.production_and_generation_units) r " *
+              "ON r.generation_unit_code = o.generation_unit_code"
+    df = try
+        (sql, args) = _audit_sql(q("o.area_map_code", "", "AND o.area_type_code LIKE 'BZN%'"),
+                                 Any[d0, d1], zones)
+        sql2df_with_retry(sql, args)
+    catch
+        asof_ingest && rethrow()
+        (sql, args) = _audit_sql(q("r.area_map_code", regjoin, ""), Any[d0, d1], zones)
+        sql2df_with_retry(sql, args)
+    end
+    isempty(df) && return DataFrame(zone = String[], d = Date[], avail = Date[])
+    keep = .!ismissing.(df.zone)
+    return DataFrame(zone = String.(df.zone[keep]), d = Date.(df.d[keep]),
+                     avail = [ismissing(a) ? Date(d) + Day(1) : Date(a)
+                              for (a, d) in zip(df.avail[keep], df.d[keep])])
+end
+
+function _fetch_atc_coverage(d0::Date, d1::Date)
+    b = sql2df_with_retry("""
+        SELECT DISTINCT CAST(date_time_utc AS DATE) AS d, out_map_code || '>' || in_map_code AS border
+        FROM entsoe.offered_transfer_capacities_implicit
+        WHERE contract_type = 'Day-ahead'
+          AND date_time_utc >= (\$1::date::timestamp AT TIME ZONE 'UTC')
+          AND date_time_utc < (\$2::date::timestamp AT TIME ZONE 'UTC')
+          AND capacity_mw IS NOT NULL""", Any[d0, d1])
+    borders = isempty(b) ? DataFrame(d = Date[], border = String[]) :
+              DataFrame(d = Date.(b.d), border = String.(b.border))
+    counts = DataFrame(source = String[], d = Date[], n = Int[])
+    for (src, tbl) in (("JAO_MAX_EXCHANGES", "jao.max_exchanges"),
+                       ("JAO_HUB_NET_POSITIONS", "jao.hub_net_positions"))
+        c = try
+            sql2df_with_retry("""
+                SELECT CAST(date_time_utc AS DATE) AS d, COUNT(*) AS n FROM $tbl
+                WHERE date_time_utc >= (\$1::date::timestamp AT TIME ZONE 'UTC')
+                  AND date_time_utc < (\$2::date::timestamp AT TIME ZONE 'UTC')
+                GROUP BY 1""", Any[d0, d1])
+        catch
+            DataFrame()
+        end
+        for r in eachrow(c)
+            push!(counts, (src, Date(r.d), Int(r.n)))
+        end
+    end
+    return borders, counts
+end
+
 # ----------------------------------------------------------------------------
 # Orchestration
 # ----------------------------------------------------------------------------
@@ -871,6 +1083,8 @@ const AUDIT_CHECKS = [
     :reservoir,
     :flow_spike,
     :price_caps,
+    :per_unit_feed_stale,
+    :atc_coverage,
 ]
 
 """
@@ -967,6 +1181,36 @@ function run_physics_audit(
     if :price_caps in checks
         f = check_price_caps(_fetch_price_caps(start_date, end_date, zones))
         log("price_caps: $(nrow(f)) finding(s)")
+        append!(findings, f)
+    end
+
+    days = collect(start_date:Day(1):(end_date-Day(1)))
+    if :per_unit_feed_stale in checks
+        f = try
+            check_per_unit_feed_stale(
+                _fetch_per_unit_obs(start_date - Day(FEED_LOOKBACK_DAYS), end_date, zones), days)
+        catch e
+            log("per_unit_feed_stale: skipped ($(sprint(showerror, e)))")
+            _audit_empty()
+        end
+        log("per_unit_feed_stale: $(nrow(f)) finding(s)")
+        append!(findings, f)
+    end
+
+    if :atc_coverage in checks
+        # Footprint-level (not per zone): run only for an unrestricted scan.
+        f = if zones === nothing
+            try
+                (b, c) = _fetch_atc_coverage(start_date - Day(COVERAGE_TRAIL_DAYS), end_date)
+                check_atc_coverage(b, c, days)
+            catch e
+                log("atc_coverage: skipped ($(sprint(showerror, e)))")
+                _audit_empty()
+            end
+        else
+            _audit_empty()
+        end
+        log("atc_coverage: $(nrow(f)) finding(s)")
         append!(findings, f)
     end
 
