@@ -71,6 +71,16 @@ function strategy_description(s::AbstractString)
 end
 
 
+# Baseload/fuel-constrained thermal types the fleet-truthing derate applies to
+# (see `_true_up_fleet`). Shared with the in-merit truthing switch.
+const BASELOAD_DERATE_TYPES = ("Fossil Brown coal/Lignite", "Fossil Hard coal",
+                               "Fossil Oil shale", "Fossil Coal-derived gas",
+                               "Fossil Peat", "Nuclear")
+
+# In-merit truthing switch (level investigation, 2026-11). Read at call time so
+# pipeline workers see the coordinator's env. "1"/"true" ⇒ on; unset ⇒ off.
+_inmerit_truth_on() = get(ENV, "EUPHEMIA_INMERIT_TRUTH", "") in ("1", "true")
+
 # =============================================================================
 # Stage helpers for create_merit_order_book
 # =============================================================================
@@ -128,6 +138,31 @@ function _true_up_fleet(generators::Vector{Generator}, bidding_zone::String,
                                                     lookback_days=365))
         for (t, cap) in src
             get(type_p95, t, 0.0) > 100.0 && (fleet_truth_target[t] = cap)
+        end
+        # In-merit truthing (EUPHEMIA_INMERIT_TRUTH, default OFF ⇒ byte-identical).
+        # The truth target exists to re-add capacity that is idle ON MERIT ORDER
+        # (mid-merit fuel priced above the marginal unit never shows in the 30d
+        # p95). That premise fails for a baseload derate-type whose SRMC sits
+        # BELOW gas SRMC — today AND at the start of the 30-day window: it was in
+        # merit whenever gas set the price, so output below capacity means it
+        # could not run (grid reserve, mothballing, fuel/mining limits) — the
+        # derate rule below, verbatim. Such a type drops out of the truth target
+        # and falls back to the :p95 path (complete to 30d p95, derate to
+        # 1.15 × 30d p95). Measured case: autumn 2026, TTF ≈ 90 ⇒ hard coal
+        # (≈110) far below gas (≈190); `:installed` offered DE_LU 17.5 GW of hard
+        # coal against a 30d output p95 of 4.7 GW. Inputs are the same ex-ante
+        # closes (strictly before D−1) and strictly historical output.
+        if _inmerit_truth_on() && !isempty(fleet_truth_target)
+            gas_now = get_marginal_cost(day, "Fossil Gas", bidding_zone)
+            gas_then = get_marginal_cost(day - Dates.Day(30), "Fossil Gas", bidding_zone)
+            for ptype in BASELOAD_DERATE_TYPES
+                haskey(fleet_truth_target, ptype) || continue
+                get_marginal_cost(day, ptype, bidding_zone) < gas_now || continue
+                get_marginal_cost(day - Dates.Day(30), ptype, bidding_zone) < gas_then || continue
+                delete!(fleet_truth_target, ptype)
+                println("  ⚖️  In-merit truthing: $ptype below gas SRMC — truth target dropped " *
+                        "(30d p95 $(round(Int, get(type_p95, ptype, 0.0))) MW governs)")
+            end
         end
     end
     # Capacity the outage filter removed today, per type (bug sweep 2026-08-25):
@@ -222,9 +257,7 @@ function _true_up_fleet(generators::Vector{Generator}, bidding_zone::String,
     # and peaking fuels (gas, oil) run below capacity simply because
     # of their merit-order position; their capacity IS available at
     # its SRMC, and derating them manufactures phantom scarcity.
-    derate_types = ("Fossil Brown coal/Lignite", "Fossil Hard coal",
-                    "Fossil Oil shale", "Fossil Coal-derived gas",
-                    "Fossil Peat", "Nuclear")
+    derate_types = BASELOAD_DERATE_TYPES
     # One scale per fuel type, applied in a single pass. Iterates the
     # FLEET's types (not type_p95's keys): a derate-listed type with a
     # p95 of zero is a fully offline fleet and derates all the way
