@@ -134,6 +134,7 @@ def main():
     ap.add_argument("--threads", type=int, default=16)
     ap.add_argument("--tag", default="")
     ap.add_argument("--ctx", type=int, default=8192)
+    ap.add_argument("--dates", default="", help="comma-separated ISO dates; overrides --start/--end")
     ap.add_argument("--settled-lag", type=int, default=2, choices=[1, 2])
     a = ap.parse_args()
     torch.set_num_threads(a.threads)
@@ -141,8 +142,12 @@ def main():
     zones, grid, wide = load_inputs()
     t0 = time.time(); m = Model(a.model); t_load = time.time() - t0
     rows, times = [], []
-    d, end = date.fromisoformat(a.start), date.fromisoformat(a.end)
-    while d <= end:
+    if a.dates:
+        days = [date.fromisoformat(x) for x in a.dates.split(",")]
+    else:
+        d0, end = date.fromisoformat(a.start), date.fromisoformat(a.end)
+        days = [d0 + timedelta(days=i) for i in range((end - d0).days + 1)]
+    for d in days:
         ctx, known, H, nD, cutoff, s_D, simD = build_inputs(d, a.variant, zones, grid, wide, a.settled_lag)
         t1 = time.time()
         q, lv = m.forecast(ctx.astype(np.float32), H, None if known is None else known.astype(np.float32))
@@ -164,7 +169,6 @@ def main():
                     r[f"q{int(round(l * 100)):02d}"] = float(q[zi, h, k])
                 rows.append(r)
         print(f"{d} H={H} ctx={ctx.shape} {dt:.1f}s", flush=True)
-        d += timedelta(days=1)
     df = pd.DataFrame(rows)
     fn = f"{OUT}/fc_{a.model}_{a.variant}{a.tag}.parquet"
     df.to_parquet(fn)
