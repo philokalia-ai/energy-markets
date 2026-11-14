@@ -10,6 +10,9 @@ Usage: python evaluate.py fc_t209_uni fc_c2_uni ...   (files in $TSFM_OUT, witho
 """
 import os, sys
 import numpy as np, pandas as pd
+from zoneinfo import ZoneInfo
+
+ATH = ZoneInfo("Europe/Athens")
 
 OUT = os.environ.get("TSFM_OUT", "/home/pgeorgakopoulos/armada/em-team/results/tsfm")
 START, END = os.environ.get("EVAL_START", "2026-09-14"), os.environ.get("EVAL_END", "2026-11-13")
@@ -42,12 +45,25 @@ def load(names):
     panel = pd.read_parquet(f"{OUT}/panel.parquet")[["zone", "t", "price"]]
     live = pd.read_parquet(f"{OUT}/live_lead1.parquet")
     live = live[(live.input_mode == "weather") & (live.date >= START) & (live.date <= END)]
-    df = live[["zone", "date", "t", "sim", "gbm", "stats", "code_version"]].merge(panel, on=["zone", "t"], how="left")
+    df = live[["zone", "date", "t", "sim", "gbm", "stats", "code_version", "made"]].merge(panel, on=["zone", "t"], how="left")
     df = df.rename(columns={"price": "actual"})
-    pz = panel.set_index(["zone", "t"]).price
-    for lag, nm in ((24, "naive_D1"), (48, "naive_D2"), (168, "naive_D7")):
-        idx = pd.MultiIndex.from_arrays([df.zone, df.t - pd.Timedelta(hours=lag)])
-        df[nm] = pz.reindex(idx).values
+    # Live sim availability: the lead-1 sim is published at `made` (08:16-10:06 UTC D-1 in this
+    # window). Variants that read sim (`sim`, `resid`) are POST-SIM products (~10:15 UTC D-1);
+    # `sim_late` flags market days whose sim came after D-1 10:00 UTC (reported with and without).
+    made = pd.to_datetime(df.made, utc=True).dt.tz_localize(None)
+    d1_10 = pd.to_datetime(df.date) - pd.Timedelta(days=1) + pd.Timedelta(hours=10)
+    df["sim_late"] = made > d1_10
+    # Naive lags by Athens market day and local hour (not UTC hours: the 25-h DST day 2026-10-25
+    # would otherwise pull a target-day price into "D-1"). Repeated local hour (fall-back 03:00)
+    # policy: the source value is the mean of the duplicated source hours; both repeated target
+    # hours map to the same source local hour.
+    loc = panel.t.dt.tz_localize("UTC").dt.tz_convert(ATH)
+    pl = panel.assign(ld=loc.dt.tz_localize(None).dt.normalize(), lh=loc.dt.hour).groupby(["zone", "ld", "lh"]).price.mean()
+    tl = df.t.dt.tz_localize("UTC").dt.tz_convert(ATH)
+    assert (tl.dt.date.astype(str) == df.date).all(), "live hours must fall in their Athens market day"
+    for k, nm in ((1, "naive_D1"), (2, "naive_D2"), (7, "naive_D7")):
+        idx = pd.MultiIndex.from_arrays([df.zone, tl.dt.tz_localize(None).dt.normalize() - pd.Timedelta(days=k), tl.dt.hour])
+        df[nm] = pl.reindex(idx).values
     prob = {}
     for n in names:
         f = pd.read_parquet(f"{OUT}/{n}.parquet")
@@ -66,8 +82,14 @@ def main(names):
     base = df.dropna(subset=["actual"] + methods)
     print(f"cells: live lead-1 weather {len(df)}, with actual {df.actual.notna().sum()}, "
           f"common set {len(base)} ({base.zone.nunique()} zones, {base.date.nunique()} days)")
+    late = base[base.sim_late]
+    print(f"sim published after D-1 10:00 UTC: {len(late)} cells on {late.date.nunique()} days "
+          f"({sorted(late.date.unique())}); scopes *_ontime exclude them")
+    exit_ = ~base.zone.str.startswith("IT-")
+    scopes = (("all39", base), ("exIT", base[exit_]),
+              ("all39_ontime", base[~base.sim_late]), ("exIT_ontime", base[exit_ & ~base.sim_late]))
     res = []
-    for scope, sub in (("all39", base), ("exIT", base[~base.zone.str.startswith("IT-")])):
+    for scope, sub in scopes:
         for m in methods:
             r = dict(scope=scope, method=m, **metrics(sub, m))
             if m in keys:

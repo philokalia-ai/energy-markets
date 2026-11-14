@@ -13,18 +13,29 @@ the way the existing `gbm` / `stats` overlays do, never inside the clearing.
 
 ## Verdict (numbers below; ship/no-ship is the owner's call)
 
-All verdicts are on 54,231 cells (39 zones × 58 days, 2026-09-14..11-13). Every method is
-lead-1 and uses information available at D-1 06:30 UTC.
+All verdicts are on 54,231 cells (39 zones × 58 days, 2026-09-14..11-13), lead-1. Issuance
+labels:
 
-- **Zero-shot point forecast.** Timestral-209M on settled prices alone scores **MAE 28.0 €/MWh,
-  corr 0.90**. The live lead-1 product scores **81.5 / 0.39**, and naive D-1 39.7 / 0.81.
+- **(a) 06:30** — prices only.
+- **(a′) post-sim, about 10:15 UTC D-1, still pre-gate** — anything that reads the live `sim`.
+  `sim` is published 08:16–10:06 UTC D-1.
+- **(b) gate-time proxy** — ENTSO-E latest revisions, publication time not verified.
+
+- **Zero-shot point forecast, (a) 06:30.** Timestral-209M on settled prices alone scores
+  **MAE 28.0 €/MWh, corr 0.90**. The live lead-1 product scores **81.5 / 0.39**, and naive D-1 39.7 / 0.81.
   Chronos-2 is about 1 €/MWh behind (29.0).
-- **Hybrid.** Feeding the live counterfactual `sim` to the TSFM as a known-future covariate
-  gives **25.1 / 0.92**. The gain is concentrated where the physics matters (Nordic, Baltic and
-  NW-European wind zones).
-- **Failure.** Correcting `sim` with a TSFM forecast of its residual does **not** work (42.3).
-- **P(price ≤ 0).** From the TSFM quantiles: Brier 0.0094, AUC 0.945. An unfitted average with
-  agent `collapse`'s logistic reaches **Brier 0.0091, AUC 0.971**.
+- **Hybrid, (a′) post-sim about 10:15 UTC — not a 06:30 product.** Feeding the live
+  counterfactual `sim` to the TSFM as a known-future covariate gives **25.1 / 0.92**.
+  - On the 47,679 cells where `sim` was published by 10:00 UTC D-1 it gives **25.3**, against
+    28.8 for the same-context prices-only control.
+  - The gain is concentrated where the physics matters (Nordic, Baltic and NW-European wind
+    zones).
+- **Failure, (a′).** Correcting `sim` with a TSFM forecast of its residual does **not** work
+  (42.3).
+- **P(price ≤ 0).** Like-for-like against agent `collapse`'s D-1 logistic (Brier 0.0098, AUC 0.952):
+  - Timestral (a) scores Brier **0.0094**, AUC 0.945.
+  - An unfitted 50/50 average of the two, also (a), reaches **Brier 0.0090, AUC 0.967**.
+  - Averaging with Timestral+`sim` (a′) reaches 0.0088 / 0.972.
 - **Runtime.** About 30 s for all 39 zones on 16 CPU cores, which fits the 06:30 job trivially.
 - **This is a prediction product, not a change to the counterfactual.**
 
@@ -50,7 +61,12 @@ models were enough for the budget.
 
 ## Information set (enforced in `run_tsfm.py::build_inputs`)
 
-- **Issuance and lead.** Issued at D-1 06:30 UTC, lead 1. The delivery day D is the
+- **Issuance and lead.** Lead 1. Prices-only variants issue nominally at D-1 06:30 UTC (`issued_utc` in
+  the outputs). Variants that read `sim` can only issue after `sim` is published (live
+  `prediction_made_utc` = 08:16–10:06 UTC D-1 in this window), so they are **post-sim, about
+  10:15 UTC** reconstructions. The nominal `issued_utc` stamp does not apply to them. On 7 days
+  (6,552 cells: 10-08, 10-09, 10-11, 10-12, 10-13, 10-16, 10-20) `sim` came after 10:00 UTC; the
+  `*_ontime` scopes in `evaluate.py` exclude them. The delivery day D is the
   Europe/Athens market day, with the same 24/23/25 UTC hours as the live JSON.
 - **Primary context: settled prices through D-1** (`settled_lag=1`, files `*_L1`). D-1's prices
   were auctioned on D-2 at 12:00 CET and published around 12:45 CET D-2, so they are public at
@@ -58,12 +74,18 @@ models were enough for the budget.
 - **Conservative context: through D-2** (`settled_lag=2`). This was the sprint brief's original
   rule, kept as a variant.
 - **Covariates and their labels:**
-  - `uni`, `resid` and `sim` read only prices plus the live pre-gate `sim`. Label **(a) pre-gate
-    06:30**.
+  - `uni` reads only prices. Label **(a) 06:30**.
+  - `sim` and `resid` also read the live `sim` for D-1 and D. Label **(a′) post-sim about
+    10:15 UTC D-1**, still before the 12:00 CET gate.
   - `cov` adds the ENTSO-E D-1 load, wind and solar forecasts, latest vintage in the extract.
-    Label **(b) gate-time ~10:00 proxy**. A publication audit (`update_time_utc` < D-1 06:30 UTC,
+    Label **(b) gate-time proxy**: these are latest revisions with no publication filter, so the
+    label does not imply verified 10:00 availability. A publication audit (`update_time_utc` < D-1 06:30 UTC,
     2026-09-14..11-13) found load forecasts provably pre-gate only for the 7 IT zones (and part
     of HU/RS/LT). RES forecasts were never provably pre-gate.
+- **Naive baselines:** same local hour on Athens market day D-1 / D-2 / D-7, not UTC−24 h, so
+  the 25-h DST day 10-25 cannot pull a target-day price. Policy for the repeated fall-back 03:00
+  hour: the source value is the mean of the duplicated hours, and both repeated target hours map
+  to the same source hour.
 - **Settled actuals:** resolution-aware hourly mean, highest `sequence`
   (`test/scripts/eu_eval_metrics.jl` convention), rounded to 1e-8 so exact zeros stay zero.
 
@@ -86,20 +108,35 @@ models were enough for the budget.
 | method | context | label | MAE all39 | bias | pooled corr | per-zone corr | MAE exIT |
 |---|---|---|---|---|---|---|---|
 | live `sim` (lead-1 weather, cv40–42) | – | (a) | 81.5 | −51.2 | 0.39 | 0.61 | 65.9 |
-| naive: D-1 same hour | D-1 | (a) | 39.7 | −1.0 | 0.81 | 0.67 | 41.9 |
-| naive: D-2 same hour | D-2 | (a) | 51.0 | −2.3 | 0.72 | 0.52 | 54.4 |
-| naive: D-7 same hour | D-7 | (a) | 54.4 | −11.0 | 0.68 | 0.46 | 58.1 |
+| naive: D-1 same local hour | D-1 | (a) | 39.7 | −1.0 | 0.81 | 0.67 | 42.0 |
+| naive: D-2 same local hour | D-2 | (a) | 51.1 | −2.2 | 0.72 | 0.52 | 54.4 |
+| naive: D-7 same local hour | D-7 | (a) | 54.4 | −11.0 | 0.68 | 0.46 | 58.2 |
 | **Timestral-209M, prices only** | **D-1** | (a) | **28.0** | −3.2 | **0.90** | **0.80** | **29.0** |
 | Chronos-2, prices only | D-1 | (a) | 29.0 | −3.7 | 0.89 | 0.79 | 30.2 |
 | Timestral-209M, prices only | D-2 | (a) | 37.5 | −6.8 | 0.84 | 0.68 | 39.9 |
 | Chronos-2, prices only | D-2 | (a) | 38.6 | −5.4 | 0.83 | 0.66 | 41.2 |
-| Chronos-2 residual corrector (`sim` + TSFM(settled − `sim`)) | D-1 | (a) | 42.8 | +0.1 | 0.65 | 0.68 | 34.9 |
-| Chronos-2 residual corrector | D-2 | (a) | 47.4 | −0.3 | 0.62 | 0.65 | 39.3 |
-| Timestral-209M residual corrector | D-1 | (a) | 42.3 | +1.0 | 0.65 | 0.69 | 34.9 |
+| Chronos-2 residual corrector (`sim` + TSFM(settled − `sim`)) | D-1 | (a′) | 42.8 | +0.1 | 0.65 | 0.68 | 34.9 |
+| Chronos-2 residual corrector | D-2 | (a′) | 47.4 | −0.3 | 0.62 | 0.65 | 39.3 |
+| Timestral-209M residual corrector | D-1 | (a′) | 42.3 | +1.0 | 0.65 | 0.69 | 34.9 |
 | Timestral-209M, prices only, 2048-h context (control) | D-1 | (a) | 28.6 | −3.4 | 0.89 | 0.79 | 29.7 |
-| **Timestral-209M + live `sim` as known-future covariate** (2048 h) | **D-1** | (a) | **25.1** | −2.7 | **0.92** | **0.85** | **25.4** |
-| Chronos-2 + live `sim` as known-future covariate | D-1 | (a) | 26.1 | −2.9 | 0.91 | 0.84 | 26.5 |
+| **Timestral-209M + live `sim` as known-future covariate** (2048 h) | **D-1** | **(a′) post-sim** | **25.1** | −2.7 | **0.92** | **0.85** | **25.4** |
+| Chronos-2 + live `sim` as known-future covariate | D-1 | (a′) post-sim | 26.1 | −2.9 | 0.91 | 0.84 | 26.5 |
 | Chronos-2 + ENTSO-E D-1 load/wind/solar (known-future) | D-1 | **(b) gate-time** | 24.7 | −1.9 | 0.92 | 0.85 | 25.3 |
+
+**Excluding the 7 days with `sim` after 10:00 UTC** (47,679 cells, `all39_ontime`):
+
+| method | MAE all39 | corr | MAE exIT |
+|---|---|---|---|
+| live `sim` | 81.8 | 0.40 | 66.8 |
+| naive D-1 | 39.5 | 0.82 | 41.9 |
+| Timestral, prices only (8192 h), (a) | 28.2 | 0.90 | 29.4 |
+| Timestral, prices only (2048 h control), (a) | 28.8 | 0.89 | 30.1 |
+| Timestral + `sim`, (a′) | 25.3 | 0.92 | 25.7 |
+| Chronos-2 + `sim`, (a′) | 26.3 | 0.91 | 27.0 |
+| Chronos-2 + ENTSO-E, (b) | 25.0 | 0.92 | 25.7 |
+| Timestral residual corrector, (a′) | 43.6 | 0.64 | 35.6 |
+
+The hybrid's 3.5 €/MWh gain is the same with and without those days.
 
 **Gate-time covariates on the 8 calibration days only** (7,488 cells). The full Timestral run
 was stopped at the budget, at 75 s/day.
@@ -108,14 +145,15 @@ was stopped at the budget, at 75 s/day.
 |---|---|---|---|---|---|
 | live `sim` | (a) | 85.2 | 0.37 | 0.60 | 68.5 |
 | Timestral, prices only, 2048 h (control) | (a) | 30.1 | 0.91 | 0.84 | 31.0 |
-| Timestral + `sim` covariate, 2048 h | (a) | 27.3 | 0.92 | 0.87 | 27.7 |
+| Timestral + `sim` covariate, 2048 h | (a′) | 27.3 | 0.92 | 0.87 | 27.7 |
 | Timestral + ENTSO-E load/wind/solar, 2048 h | (b) | 24.8 | 0.94 | 0.90 | 25.2 |
 
 Over the full window, Chronos-2 + ENTSO-E (gate-time) scores 24.7, against 26.1 with `sim` and
 29.0 on prices only. At gate time, ENTSO-E's own load and RES forecasts help more than `sim`, as expected: they
-are the fundamentals the auction clears on. At 06:30 they are not provably published, which is
-why the pre-gate product uses `sim` (built on the weather-track RES/load) as its carrier of
-fundamentals.
+are the fundamentals the auction clears on. Their publication before the gate is not verified
+in the extract (latest revisions), and at 06:30 they are not provably published. That is why
+the pre-gate hybrid uses `sim`, which is built on the weather-track RES/load and published about
+10:15 UTC, as its carrier of fundamentals.
 
 - **Per month (all39, Sep / Oct / Nov):** Timestral D-1 27.0 / 27.0 / 31.4; live `sim`
   65.2 / 82.6 / 100.5; naive D-1 40.1 / 37.7 / 43.6.
@@ -145,7 +183,7 @@ fundamentals.
   has a hit-rate of 0.21 and a false-alarm ratio of 0.31; `sim` has a hit-rate of 0. The
   probability below is the useful output.
 
-### The hybrid that works: the counterfactual as a covariate
+### The hybrid that works: the counterfactual as a covariate (post-sim, about 10:15 UTC)
 
 Giving the TSFM the live lead-1 `sim` (history plus D-1 and D) as a known-future covariate cuts
 MAE by **3.5 €/MWh at equal context**: 28.6 → 25.1 for Timestral, 29.0 → 26.1 for Chronos-2.
@@ -170,30 +208,47 @@ merit order) is real information that the statistical model uses. This is the ri
 combine them: the TSFM supplies the level from recent settled prices, `sim` supplies the
 physics of tomorrow, and `sim` itself stays untouched as the conduct instrument.
 
+The hybrid is **not** a 06:30 result. It can only run once that day's `sim` exists (08:16–10:06
+UTC D-1 here), so it is a post-sim, pre-gate (about 10:15 UTC) product. A genuine 06:30 hybrid
+would need a `sim` archived by then, which the live pipeline does not produce today.
+
 ### P(price ≤ 0), against agent `collapse`'s pre-gate logistic
 
-Cells: `collapse-probability-v2`'s 57,111 cells / 743 events. The TSFM probability comes from
-interpolating the 21 quantiles.
+The comparators are pinned in `compare_collapse.py`, which asserts 57,111 cells, 743 events and
+label equality with our panel (0 disagreements):
 
-| model | Brier all39 | AUC all39 | log-loss | Brier exIT | AUC exIT |
-|---|---|---|---|---|---|
-| climatology (collapse's) | 0.01348 | 0.657 | 0.0770 | 0.01377 | 0.711 |
-| collapse logistic (load/RES persistence + calendar, D-2 rule) | 0.01049 | 0.931 | 0.0460 | 0.01024 | 0.925 |
-| **Timestral-209M, D-1** | **0.00938** | 0.945 | 0.0400 | **0.00891** | 0.970 |
-| Chronos-2, D-1 | 0.01028 | 0.899 | 0.0455 | 0.00992 | 0.937 |
-| Timestral-209M, D-2 | 0.01088 | 0.923 | 0.0487 | 0.01059 | 0.951 |
-| **unfitted 50/50 blend: logistic + Timestral D-1** | 0.00937 | **0.971** | **0.0371** | 0.00900 | **0.976** |
-| Timestral-209M + `sim` covariate, D-1 | 0.00961 | 0.953 | 0.0408 | 0.00901 | 0.970 |
-| **unfitted 50/50 blend: logistic + Timestral+`sim` D-1** | **0.00913** | **0.971** | **0.0364** | **0.00864** | **0.977** |
-| unfitted 50/50 blend: logistic + Timestral D-2 | 0.01027 | 0.949 | 0.0432 | 0.01001 | 0.956 |
+- **D1** (default): `results/collapse-probability-primary/`, `settled_history_lag=1`. This is
+  like-for-like with the `*_L1` runs.
+- **D2:** `results/collapse-probability-v2/`, conservative. This is like-for-like with the D-2 runs.
+- The superseded `collapse-probability/` (741 events, unrounded labels) is not used.
+
+The TSFM probability comes from interpolating the 21 quantiles.
+
+**D-1 information set (primary):**
+
+| model | label | Brier all39 | AUC all39 | log-loss | Brier exIT | AUC exIT |
+|---|---|---|---|---|---|---|
+| climatology (collapse's) | | 0.01348 | 0.657 | 0.0770 | 0.01377 | 0.711 |
+| collapse logistic, D-1 (load/RES persistence + calendar + D-1 prices) | (a) | 0.00983 | 0.952 | 0.0412 | 0.00911 | 0.954 |
+| **Timestral-209M, D-1** | (a) | **0.00938** | 0.945 | 0.0400 | 0.00891 | 0.970 |
+| Chronos-2, D-1 | (a) | 0.01028 | 0.899 | 0.0455 | 0.00992 | 0.937 |
+| Timestral-209M + `sim`, D-1 | (a′) | 0.00961 | 0.953 | 0.0408 | 0.00901 | 0.970 |
+| **unfitted 50/50 blend: logistic D-1 + Timestral D-1** | (a) | **0.00900** | **0.967** | **0.0365** | **0.00851** | **0.977** |
+| unfitted 50/50 blend: logistic D-1 + Timestral+`sim` | (a′) | 0.00882 | 0.972 | 0.0356 | 0.00821 | 0.981 |
+
+**D-2 information set (conservative):**
+
+| model | Brier all39 | AUC all39 | Brier exIT | AUC exIT |
+|---|---|---|---|---|
+| collapse logistic, D-2 | 0.01049 | 0.931 | 0.01024 | 0.925 |
+| Timestral-209M, D-2 | 0.01088 | 0.923 | 0.01059 | 0.951 |
+| unfitted 50/50 blend | 0.01027 | 0.949 | 0.01001 | 0.956 |
 
 - **TSFM probabilities rank well but are over-dispersed.** Mean p is 0.017–0.022 against a base
-  rate of 0.013, and the 0.01–0.05 bin realises 1.1%.
-- **The logistic and the TSFM are complementary.** An equal-weight average with no fitting beats
-  both on AUC and log-loss.
-- **The logistic comparison is not like-for-like.** The logistic was built on the D-2 rule; the
-  like-for-like comparison is Timestral D-2, where the logistic still has the better Brier. A
-  calibrated stack would need a rolling-origin fit, which was not done here.
+  rate of 0.013.
+- **The logistic and the TSFM are complementary.** At equal information the TSFM has the better
+  Brier and the logistic the better AUC. Their unfitted average beats both on every score.
+- **Not done here:** a calibrated stack would need a rolling-origin fit.
 
 ### Failed: residual corrector (one paragraph)
 
@@ -243,6 +298,9 @@ not touch the clearing, the books or `code_version`.
    11 s with the 28M model. Add a one-time ~800 MB weight download, which should be cached in the
    pod image or a PVC with `HF_HUB_OFFLINE=1`. This is negligible against the job's 120-min budget
    (live lead-1 rows are stamped ~09:10 UTC today, so the Julia part is the bottleneck).
+   - The prices-only line can issue at 06:30. The `sim`-covariate hybrid must run **after** that
+     day's lead-1 `sim` is written (about 10:15 UTC, before the 12:00 CET gate). In practice it is
+     a second step at the end of the forecast job.
    - Leads 2–7 are a longer horizon in the same call: one forward pass covers 168 h. They are
      **not evaluated here**.
 5. **What it must not do.** Feed the counterfactual. `sim` stays the conduct instrument. The gap

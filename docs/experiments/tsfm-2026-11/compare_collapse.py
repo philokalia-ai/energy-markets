@@ -1,14 +1,22 @@
 """Compare TSFM P(price <= 0) with agent `collapse`'s pre-gate logistic on common cells.
 
 Target y = settled hourly-mean price <= 0 (from the panel; cross-checked against collapse's y).
-Usage: python compare_collapse.py fc_t209_uni fc_c2_uni ...
+Usage: COLLAPSE_SET=D1|D2 python compare_collapse.py fc_t209_uni_L1 ...  (default D1)
 """
 import os, sys
 import numpy as np, pandas as pd
 
 OUT = os.environ.get("TSFM_OUT", "/home/pgeorgakopoulos/armada/em-team/results/tsfm")
-COL = os.environ.get("COLLAPSE_PRED",
-                     "/home/pgeorgakopoulos/armada/em-team/results/collapse-probability/pregate_0630-predictions.csv.gz")
+RES = "/home/pgeorgakopoulos/armada/em-team/results"
+# Pinned comparators (agent `collapse`, canonical 1e-8-rounded labels, 57,111 cells / 743 events):
+#   D1 (default, like-for-like with the *_L1 TSFM runs): collapse-probability-primary, settled_history_lag=1
+#   D2 (conservative, like-for-like with the untagged D-2 runs): collapse-probability-v2
+# The superseded collapse-probability/ (741 events, unrounded labels) must not be used.
+COMPARATORS = {"D1": f"{RES}/collapse-probability-primary/pregate_0630-predictions.csv.gz",
+               "D2": f"{RES}/collapse-probability-v2/pregate_0630-predictions.csv.gz"}
+WHICH = os.environ.get("COLLAPSE_SET", "D1")
+COL = COMPARATORS[WHICH]
+N_CELLS, N_EVENTS = 57111, 743
 
 
 def auc(s, y):
@@ -32,8 +40,10 @@ def main(names):
         df = df.merge(f, on=["zone", "t"], how="inner")
     panel = pd.read_parquet(f"{OUT}/panel.parquet")[["zone", "t", "price"]]
     df = df.merge(panel, on=["zone", "t"], how="left")
-    print(f"common cells {len(df)}, y==1 {int(df.y.sum())}, y vs panel price<=0 disagreements "
-          f"{int(((df.price <= 0).astype(int) != df.y).sum())}")
+    dis = int(((df.price <= 0).astype(int) != df.y).sum())
+    print(f"comparator {WHICH}: {COL}\ncommon cells {len(df)}, y==1 {int(df.y.sum())}, label disagreements {dis}")
+    assert len(df) == N_CELLS and int(df.y.sum()) == N_EVENTS, "unexpected comparator cells/events"
+    assert dis == 0 and df.price.notna().all(), "comparator labels must equal panel price<=0"
     models = ["climatology", "logistic"] + [n.replace("fc_", "") for n in names]
     rows = []
     for scope, sub in (("all39", df), ("exIT", df[~df.zone.str.startswith("IT-")])):
@@ -48,7 +58,7 @@ def main(names):
     tab = pd.DataFrame(rows)
     pd.set_option("display.width", 200)
     print(tab.round(5).to_string(index=False))
-    tab.to_csv(f"{OUT}/collapse_compare.csv", index=False)
+    tab.to_csv(f"{OUT}/collapse_compare_{WHICH}.csv", index=False)
     # reliability of each model (deciles of predicted p, events only where p >= 0.01)
     bins = [0, 0.01, 0.05, 0.1, 0.2, 0.4, 0.6, 0.8, 1.0001]
     for m in models[1:]:

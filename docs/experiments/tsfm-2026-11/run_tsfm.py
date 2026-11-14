@@ -1,18 +1,22 @@
 """Zero-shot / hybrid TSFM day-ahead price forecasts, lead-1, pre-gate information set.
 
 Information-set rule (enforced in `build_inputs`): for delivery day D (Europe/Athens market day,
-same hours as the live JSON), the forecast is issued nominally at D-1 06:30 UTC. The last
-settled day known then is **D-2** (BRIEF addendum), so the price context ends at the start of
-Athens day D-1 and the model forecasts D-1 and D (48 h, 47/49 on DST days); only D is kept.
+same hours as the live JSON), lead 1. `--settled-lag 1` (primary): the price context ends at
+the start of Athens day D (D-1's prices were auctioned on D-2 and are public at a D-1 morning
+issue); the model forecasts the 24 (23/25) hours of D. `--settled-lag 2` (conservative): the
+context ends at the start of D-1; the model forecasts D-1 and D (48 h) and keeps D.
 
 Variants
-  uni    prices only                                                 -> label (a) pre-gate 06:30
-  cov    + ENTSO-E D-1 load / wind / solar forecasts as known-future  -> label (b) gate-time ~10:00
-         covariates (latest vintage in the extract; RES update stamps are not provably pre-gate)
-  sim    + the live lead-1 weather-track counterfactual `sim` as a     -> label (a) (sim is the
-         known-future covariate (history + D-1 + D)                       pre-gate live product)
-  resid  forecast the residual (settled - sim) through D-2, add it     -> label (a)
-         to sim for D
+  uni    prices only                                                 -> label (a) 06:30
+  cov    + ENTSO-E D-1 load / wind / solar forecasts as known-future  -> label (b) gate-time proxy
+         covariates (latest revisions, no publication filter: availability by 10:00 not verified)
+  sim    + the live lead-1 weather-track counterfactual `sim` as a     -> label (a') POST-SIM:
+         known-future covariate (history + D-1 + D)                       sim is published 08:16-10:06
+                                                                          UTC D-1, so ~10:15 UTC issue
+  resid  forecast the residual (settled - sim) through the context    -> label (a') post-sim
+         end, add it to sim for D
+`issued_utc` in the output is the nominal 06:30 stamp and is valid only for `uni`/`cov`;
+for `sim`/`resid` the effective issue time is the live sim's `prediction_made_utc`.
 
 Models: t209 / t28 = mistralai/Timestral-{209M,28M}; c2 = amazon/chronos-2.
 Output: $TSFM_OUT/fc_<model>_<variant>.parquet, one row per (zone, hour of D).
