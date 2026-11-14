@@ -45,7 +45,7 @@ def forecast_date(con, delivery):
     result = pd.concat(output, ignore_index=True)
     result["input_variant"] = "pregate_0630_persistence"
     result["target"] = "hourly_mean_settled_le_zero"
-    result["model_version"] = "collapse_logistic_202611_v1"
+    result["model_version"] = "collapse_logistic_202611_v3"
     metadata = {"delivery": str(delivery.date()), "training_labels_through": str((delivery - pd.Timedelta(days=2)).date()),
                 "training_rows": int(train.sum()), "feature_names": list(features.columns), "zones": models,
                 "generated_at_utc": pd.Timestamp.now(tz="UTC").isoformat(),
@@ -65,7 +65,7 @@ def forecast_date(con, delivery):
     day_result = pd.concat(daily_rows, ignore_index=True)
     day_result["issue_utc"] = delivery - pd.Timedelta(days=1) + pd.Timedelta(hours=6, minutes=30)
     day_result["input_variant"] = "pregate_0630_persistence"
-    day_result["model_version"] = "collapse_daily_logistic_202611_v1"
+    day_result["model_version"] = "collapse_daily_logistic_202611_v3"
     return result, day_result, metadata
 
 

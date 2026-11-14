@@ -166,6 +166,7 @@ def main():
         common = hourly.merge(live, on=["zone", "t"], how="inner", suffixes=("", "_live"))
         common_clim = pred[pred.model == "climatology"][["zone", "t", "probability"]].rename(columns={"probability": "climatology"})
         common = common.merge(common_clim, on=["zone", "t"], validate="one_to_one")
+        summary["common_live_label_disagreements"] = int(((common.actual_live <= 0).astype(int) != common.y).sum())
         summary["common_live_hourly"] = {}
         for group, x in [("all39", common), ("excluding_italy", common[~common.zone.str.startswith("IT-")])]:
             summary["common_live_hourly"][group] = {

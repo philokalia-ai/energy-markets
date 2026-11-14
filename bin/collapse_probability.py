@@ -64,13 +64,24 @@ def hourly_actuals(con, start, end):
         QUALIFY row_number() OVER (PARTITION BY map_code,date_time_utc
           ORDER BY try_cast(trim(sequence) AS INTEGER) DESC NULLS LAST,
                    update_time_utc DESC, resolution_code, instance_code)=1)
-      SELECT zone,date_trunc('hour',t) AS t,avg(actual) AS actual
+      SELECT zone,date_trunc('hour',t) AS t,round(avg(actual),8) AS actual
       FROM dedup GROUP BY 1,2 ORDER BY 1,2
     """, [start, end]).df()
 
 
-def hourly_forecasts(con, start, end):
-    """One resolution per UTC day/type: max covered hours, coarser on ties."""
+def hourly_forecasts(con, start, end, *, cutoff_offset=None, snapshots=True):
+    """Max covered hours/type, coarser on ties; as-of groups use local days."""
+    # For an as-of snapshot, discard unavailable raw revisions BEFORE choosing
+    # resolution/coverage. Future publication coverage must not pick a feature.
+    local_day = "cast(timezone('Europe/Athens', timezone('UTC', date_time_utc)) AS DATE)"
+    if cutoff_offset is None:
+        snapshot_filter = ""
+        day_group = "cast(date_time_utc AS DATE)"
+    else:
+        offset = int(cutoff_offset) - 1
+        snapshot_filter = f"""AND date_time_utc >= TIMESTAMP '2025-11-01'
+          AND update_time_utc < ({local_day} + INTERVAL '{offset} days' + INTERVAL '6 hours 30 minutes')"""
+        day_group = local_day
     frames = []
     for table, value, kind in [
         ("day_ahead_total_load_forecast", "total_load_mw", "'load'"),
@@ -79,12 +90,14 @@ def hourly_forecasts(con, start, end):
         frames.append(con.execute(f"""
           WITH raw AS (
             SELECT area_map_code AS zone,date_time_utc AS t,
-                   {kind} AS kind,resolution_code,{value} AS mw,update_time_utc AS stamp
+                   {kind} AS kind,resolution_code,{value} AS mw,update_time_utc AS stamp,
+                   {day_group} AS delivery_group
             FROM entsoe.{table}
             WHERE area_type_code LIKE 'BZN%' AND {value} IS NOT NULL
-              AND date_time_utc >= ?::TIMESTAMP AND date_time_utc < ?::TIMESTAMP),
+              AND date_time_utc >= ?::TIMESTAMP AND date_time_utc < ?::TIMESTAMP
+              {snapshot_filter}),
           coverage AS (
-            SELECT zone,t::DATE AS d,kind,resolution_code,
+            SELECT zone,delivery_group AS d,kind,resolution_code,
                    count(DISTINCT date_trunc('hour',t)) AS nh
             FROM raw GROUP BY 1,2,3,4),
           best AS (
@@ -93,7 +106,7 @@ def hourly_forecasts(con, start, end):
               CASE resolution_code WHEN 'PT60M' THEN 60 WHEN 'PT30M' THEN 30 ELSE 15 END DESC)=1),
           slots AS (
             SELECT r.zone,r.t,r.kind,avg(r.mw) AS mw,max(r.stamp) AS stamp
-            FROM raw r JOIN best b ON r.zone=b.zone AND r.t::DATE=b.d
+            FROM raw r JOIN best b ON r.zone=b.zone AND r.delivery_group=b.d
               AND r.kind=b.kind AND r.resolution_code=b.resolution_code GROUP BY 1,2,3)
           SELECT zone,date_trunc('hour',t) AS t,kind,avg(mw) AS mw,max(stamp) AS stamp
           FROM slots GROUP BY 1,2,3
@@ -110,6 +123,11 @@ def hourly_forecasts(con, start, end):
         if k not in out:
             out[k] = np.nan
             out[k + "_stamp"] = pd.NaT
+    if snapshots and cutoff_offset is None:
+        for offset, suffix in [(0, "_pre0630"), (2, "_persist0630")]:
+            snap = hourly_forecasts(con, start, end, cutoff_offset=offset, snapshots=False)
+            snap = snap.rename(columns={k: k + suffix for k in snap.columns if k not in ["zone", "t"]})
+            out = out.merge(snap, on=["zone", "t"], how="outer", validate="one_to_one")
     # No national solar/wind series means unknown, not a silently measured 0.
     return out
 
@@ -163,19 +181,25 @@ def build_features(actuals, forecasts, variant):
 
     if variant == "pregate_0630":
         # Stored load revision is usable only in its audited genuine-stamp era.
-        legal_load = (df.t >= "2025-11-01") & (pd.to_datetime(df.load_stamp) <= df.issue_utc)
+        snapshots_available = "load_pre0630" in df.columns
+        load_col = "load_pre0630" if snapshots_available else "load"
+        load_stamp_col = "load_stamp_pre0630" if snapshots_available else "load_stamp"
+        legal_load = (df.t >= "2025-11-01") & (pd.to_datetime(df[load_stamp_col]) < df.issue_utc)
         physical = pd.DataFrame(index=df.index)
         for k in ["load", "solar", "wind"]:
             # Entire older row last updated by issuance is a sufficient upper
             # bound for persistence; no claim about D-1 RES publication time.
-            prev = df[["zone", "market_date", "local_hour", k, k + "_stamp"]].copy()
+            value_col = k + "_persist0630" if snapshots_available else k
+            stamp_col = k + "_stamp_persist0630" if snapshots_available else k + "_stamp"
+            prev = df[["zone", "market_date", "local_hour", value_col, stamp_col]].copy()
+            prev = prev.rename(columns={value_col: k, stamp_col: k + "_stamp"})
             prev["market_date"] += pd.Timedelta(days=2)
             prev = prev.groupby(["zone", "market_date", "local_hour"], as_index=False).agg(**{
                 k: (k, "mean"), k + "_stamp": (k + "_stamp", "max")})
             x = df[["zone", "market_date", "local_hour"]].merge(prev, how="left", on=["zone", "market_date", "local_hour"])
-            safe = (x.market_date >= "2025-11-03") & (pd.to_datetime(x[k + "_stamp"]) <= df.issue_utc)
+            safe = (x.market_date >= "2025-11-03") & (pd.to_datetime(x[k + "_stamp"]) < df.issue_utc)
             physical[k] = x[k].where(safe)
-        physical["load"] = df.load.where(legal_load, physical.load)
+        physical["load"] = df[load_col].where(legal_load, physical.load)
         f["load_is_direct"] = legal_load.astype(float)
     elif variant == "gate_1000_latest_proxy":
         physical = df[["load", "solar", "wind"]].copy()
@@ -305,7 +329,7 @@ def live_baseline(live_dir, start, end):
             for t, sim, actual in zip(day["hours"], day["sim"], day["actual"]):
                 if sim is not None and actual is not None:
                     rows.append({"zone": doc["zone"], "t": pd.Timestamp(t).tz_convert(None),
-                                 "market_date": day["date"], "sim": sim, "actual_live": actual,
+                                 "market_date": day["date"], "sim": sim, "actual_live": round(actual, 8),
                                  "issued": day.get("prediction_made_utc"), "code_version": day["code_version"]})
     return pd.DataFrame(rows).drop_duplicates(["zone", "t"], keep="first")
 
@@ -317,6 +341,8 @@ def main():
     parser.add_argument("--live-dir")
     parser.add_argument("--test-start", default="2026-09-14")
     parser.add_argument("--test-end", default="2026-11-13")
+    parser.add_argument("--variants", nargs="+", default=["pregate_0630", "gate_1000_latest_proxy"],
+                        choices=["pregate_0630", "gate_1000_latest_proxy"])
     args = parser.parse_args()
     out = Path(args.output)
     out.mkdir(parents=True, exist_ok=True)
@@ -328,7 +354,7 @@ def main():
     audit = {"actual_rows": len(actuals), "forecast_rows": len(forecasts), "train_start": "2024-07-01",
              "test_start": args.test_start, "test_end": args.test_end, "threshold_eur": 0,
              "target": "hourly mean settled DA price <= 0", "latest_revision_proxy": True}
-    for variant in ["pregate_0630", "gate_1000_latest_proxy"]:
+    for variant in args.variants:
         print("features", variant, flush=True)
         df, f = build_features(actuals, forecasts, variant)
         test = (df.market_date >= args.test_start) & (df.market_date <= args.test_end)

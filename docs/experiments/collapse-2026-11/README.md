@@ -58,14 +58,18 @@ quarter-hour whose hourly mean is positive is not an event under this target.
 Actuals follow the repository's resolution-aware policy: latest sequence per
 zone/timestamp, then average subhours. All dates are Europe/Athens market days;
 the output retains UTC hours, including the repeated hour at the DST transition.
+Hourly means are rounded to eight decimal €/MWh places before classification:
+decimal-price cancellations can otherwise leave a mathematical zero at ±10⁻¹⁸,
+changing a ≤0 label with DuckDB's parallel reduction order. This is far below
+the settlement price tick and makes the event definition reproducible.
 
 | Feature | 06:30 UTC D−1 variant (`pregate_0630`) | ~10:00 D−1 variant (`gate_1000_latest_proxy`) |
 |---|---|---|
 | Hour, weekday, annual sine/cosine | Known before issuance | Same |
 | Same-hour settled price and ≤0 indicator, lags 2 and 7 market days | Only D−2 / D−7; no D−1 settled data | Same conservative cutoff |
 | Settled collapse frequency, 7 / 28 days | Window ends D−2, weighted by observed hours | Same |
-| D−1 load forecast | Only audited genuine-stamp era (delivery ≥2025-11-01) and stored update ≤06:30 issuance; otherwise D−2 same-hour forecast persistence if its stored update ≤issuance | Latest stored D−1 revision; **not proven available by 10:00** |
-| Wind and solar | D−2 same-hour forecast persistence only; older row's last update must be ≤issuance and source delivery in genuine-stamp era | Latest D−1 forecast column; D−1-specific publication **unverifiable** |
+| D−1 load forecast | Only audited genuine-stamp era (delivery ≥2025-11-01) and stored update <06:30 issuance; otherwise D−2 same-hour forecast persistence if its stored update <issuance | Latest stored D−1 revision; **not proven available by 10:00** |
+| Wind and solar | D−2 same-hour forecast persistence only; older row's last update must be <issuance and source delivery in genuine-stamp era | Latest D−1 forecast column; D−1-specific publication **unverifiable** |
 | Load, solar/wind/RES share, residual-load share | From the accepted forecasts/persistence above; no actual D load or actual D RES | From latest D−1 forecast proxy |
 | Weekend × RES share | Same accepted RES/load inputs | Same proxy inputs |
 | Neighbour residual share and collapse frequency | Unweighted geographic/trading-neighbour means, under the same issuance contract; fixed topology | Same topology, proxy residuals |
@@ -79,6 +83,12 @@ than misread as the D−1 publication time. Pre-2025-11 physical values fail thi
 test and are missing. Missing features are imputed to **training-only** means
 with explicit missing indicators. All-missing training columns are inactive.
 Missing national wind or solar series are not asserted to be measured zero.
+The 06:30 reader filters **raw rows before resolution selection and hourly
+aggregation**, grouping coverage by local market day. Otherwise an unpublished
+more-complete resolution could suppress an earlier available series, leaking
+future coverage through missingness. Direct-load and D−2-persistence snapshots
+have separate issuance cutoffs. A synthetic early-hourly/late-quarterly fixture
+guards this ordering.
 
 Per-zone scaling and fitting use only training labels through **origin D−2**.
 Features for later days can use their own D−2 settled history, but fitted
@@ -92,6 +102,14 @@ not an honest replay at the auction gate. The clearing experiment also uses
 latest revisions; `ForecastContext` records availability problems but does
 not rewind a source to an unavailable revision. Do not relabel either proxy
 as an operational 06:30 result.
+
+The physical runner puts **both arms** inside a fixed 10:00 issuance context.
+This also applies the existing publication-latency cutoffs to recent-generation
+statistics; it is not just a logging wrapper. D−1 forecast revisions still
+cannot be reconstructed. Its absolute baseline should therefore not be pooled
+with a legacy/no-context experiment; compare each treatment with its own
+same-input baseline. Physical coverage is the selected UTC delivery days,
+whereas the probability target uses complete Europe/Athens market days.
 
 Both physical arms include the analyst's feed-anchored fleet rescue correction
 (`ac0ab5bfe079`; same patch retained on this branch). Without it, missing Italian
@@ -164,5 +182,20 @@ held-forward predictions. No current test labels enter threshold selection.
 
 ## Results
 
-Pending measured outputs. See the final result tables in this directory and
-the running team report `em-team/reports/collapse.md`.
+[Probability results](results.md), [per-zone scores](probability-by-zone.csv),
+[thresholds](thresholds.csv), [reliability](reliability.csv), and the
+[timestamp-qualified leakage bound](stamp-bound.md) are complete. The 06:30
+hourly model improves Brier from 0.01349 (climatology) to 0.01049 on 57,111
+cells; the directly fitted day model improves 0.07313 to 0.05315 on 2,377
+complete zone-days. The stronger latest-D1 proxy is **not** verified at 10:00:
+only 877 fully stamped cells survive, containing no collapse events.
+
+Corrected-fleet physical-price results will be added after the eight-day run.
+The running team report is `em-team/reports/collapse.md`.
+
+`bin/report_collapse.py --probability-dir ... --diagnostics-dir ... --output ...`
+renders the frozen evaluation artifacts into the CSVs and Markdown tables.
+The final statistical artifacts are labelled `collapse-probability-final`,
+`collapse-diagnostics-final` and `collapse-tomorrow-final` in the team results
+directory. Earlier raw-floating-point / pre-snapshot artifacts are retained as
+superseded diagnostics and do not supply the final tables.

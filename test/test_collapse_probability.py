@@ -6,6 +6,7 @@ import sys
 
 import numpy as np
 import pandas as pd
+import duckdb
 
 spec = importlib.util.spec_from_file_location("collapse_probability", Path(__file__).resolve().parents[1] / "bin" / "collapse_probability.py")
 cp = importlib.util.module_from_spec(spec)
@@ -105,6 +106,39 @@ class CollapseProbabilityTest(unittest.TestCase):
         score = cd.detection(y, p, zero)
         self.assertEqual(score["false_alarms"], 0)
         self.assertEqual(score["hits"], 1)
+
+    def test_decimal_hourly_zero_is_a_collapse(self):
+        con = duckdb.connect(":memory:")
+        con.execute("CREATE SCHEMA entsoe")
+        con.execute("""CREATE TABLE entsoe.energy_prices AS SELECT
+          'GR' AS map_code, TIMESTAMP '2026-09-20' + i*INTERVAL '15 minutes' AS date_time_utc,
+          v AS price_currency_mwh, 'Day-ahead' AS contract_type, 'BZN' AS area_type_code,
+          'EUR' AS currency, '1' AS sequence, TIMESTAMP '2026-09-19' AS update_time_utc,
+          'PT15M' AS resolution_code, cast(i AS VARCHAR) AS instance_code
+          FROM (VALUES (0,0.01::DOUBLE),(1,0.02::DOUBLE),(2,-0.01::DOUBLE),(3,-0.02::DOUBLE)) t(i,v)""")
+        a = cp.hourly_actuals(con, "2026-09-20", "2026-09-21")
+        self.assertEqual(a.actual.iloc[0], 0)
+        self.assertTrue(a.actual.iloc[0] <= 0)
+
+    def test_publication_filter_precedes_resolution_selection(self):
+        con = duckdb.connect(":memory:")
+        con.execute("CREATE SCHEMA entsoe")
+        con.execute("""CREATE TABLE entsoe.day_ahead_total_load_forecast AS
+          SELECT 'GR' AS area_map_code, TIMESTAMP '2026-09-20' AS date_time_utc,
+          'PT60M' AS resolution_code, 50.::DOUBLE AS total_load_mw,
+          TIMESTAMP '2026-09-19 05:00' AS update_time_utc, 'BZN' AS area_type_code""")
+        # A later, more complete resolution must not suppress the early row.
+        con.execute("""INSERT INTO entsoe.day_ahead_total_load_forecast
+          SELECT 'GR',TIMESTAMP '2026-09-20'+i*INTERVAL '15 minutes','PT15M',200.,
+          TIMESTAMP '2026-09-19 15:00','BZN' FROM range(96) t(i)""")
+        con.execute("""CREATE TABLE entsoe.generation_forecasts_for_wind_and_solar
+          (area_map_code VARCHAR,date_time_utc TIMESTAMP,resolution_code VARCHAR,
+           production_type VARCHAR,day_ahead_generation_forecast_mw DOUBLE,
+           update_time_utc TIMESTAMP,area_type_code VARCHAR)""")
+        fc = cp.hourly_forecasts(con, "2026-09-20", "2026-09-21")
+        row = fc[fc.t == pd.Timestamp("2026-09-20")].iloc[0]
+        self.assertEqual(row.load, 200)
+        self.assertEqual(row.load_pre0630, 50)
 
 
 if __name__ == "__main__":
