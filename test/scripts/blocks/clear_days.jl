@@ -18,7 +18,10 @@ for ds in ARGS[2:end]
     t0 = time()
     res = run_multi_zone_market_clearing(d; zones=FOOTPRINT, order_method=:merit_order,
         optimizer="highs", silent=true, save_to_db=false, clearing_mode="multi_zone",
-        enrich_network=true, passes=2)
+        enrich_network=true, passes=2,
+        # rerun budget for time-limited days: CLEAR_TIME_LIMIT=3600 (bin/reproduce.jl's HiGHS budget)
+        mpcc_time_limit=parse(Float64, get(ENV, "CLEAR_TIME_LIMIT", "900")),
+        mpcc_heuristic_effort=haskey(ENV, "CLEAR_TIME_LIMIT") ? 0.3 : nothing)
     el = time() - t0
     ok = res.status == :optimal || (res.status == :time_limit && !isempty(res.market_prices))
     open(joinpath(outdir, "timing.tsv"), "a") do io

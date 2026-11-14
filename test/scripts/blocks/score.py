@@ -47,6 +47,11 @@ def both(g):
 pd.set_option("display.width", 250); pd.set_option("display.max_rows", 200)
 fmt = lambda df: df.round(2).to_string()
 print(f"days: {days}  cells paired with actuals: {len(m)}  (base {len(b)}, treat {len(t)})")
+cap = (m.price_b >= 2999) | (m.price_t >= 2999) | (m.price_b <= -499) | (m.price_t <= -499)
+print(f"cells at cap/floor in either arm (solver-artifact suspects): {int(cap.sum())}")
+mc = m[~cap]
+print("\n== footprint EXCLUDING cap/floor cells ==")
+print(fmt(pd.DataFrame({"all39": both(mc), "exIT": both(mc[~mc.IT])}).T))
 print("\n== footprint ==")
 print(fmt(pd.DataFrame({"all39": both(m), "exIT": both(m[~m.IT])}).T))
 print("\n== per day (all / exIT) ==")
