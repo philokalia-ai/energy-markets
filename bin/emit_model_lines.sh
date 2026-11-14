@@ -26,6 +26,12 @@ if [ -z "${EMIT_NO_PULL:-}" ] && [ -d .git ]; then
         echo "WARNING: checkout on branch '$branch'$([ -n "$(git status --porcelain --untracked-files=no)" ] && echo ' with local changes') — self-update skipped, running $(git rev-parse --short HEAD)"
     fi
 fi
+# Install whatever the (possibly just fast-forwarded) manifest needs. A pull that
+# bumps a dependency (e.g. HiGHS 1.24 → 1.27, Julia-version-specific
+# Manifest-v1.13.toml) otherwise fails the first uncached day with "required but
+# does not seem to be installed". Instantiate never rewrites the manifest and
+# is a few seconds when everything is already present.
+julia --project=. --startup-file=no -e 'using Pkg; Pkg.instantiate()'
 set -a; . ./.env; set +a
 export EUPHEMIA_DATA_STORE=postgres
 mkdir -p data/model_line_feats

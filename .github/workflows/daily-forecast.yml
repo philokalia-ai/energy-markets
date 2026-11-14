@@ -50,7 +50,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  JULIA_VERSION: "1.12"
+  JULIA_VERSION: "1.13.4"
   JULIA_NUM_THREADS: 4
   # Weather source: the SELF-HOSTED open-meteo (a Service in the cluster the
   # runner pod is in; serves wind_speed_100m + shortwave_radiation since infra#9). No public

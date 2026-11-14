@@ -1,0 +1,7 @@
+reference,config,date,pass_number,reference_orders,treatment_orders,order_sequence_identical,order_multiset_identical,capacities_identical,nodes_identical,periods_identical
+new12,stable13,2026-09-20,1,25237,25237,False,False,True,True,True
+new12,stable13,2026-09-20,2,25268,25268,False,False,True,True,True
+new12,stable13,2026-11-04,1,26492,26492,False,False,True,True,True
+new12,stable13,2026-11-04,2,26538,26538,False,False,True,True,True
+new12,stable13,2026-11-13,1,26282,26282,False,False,True,True,True
+new12,stable13,2026-11-13,2,26328,26328,False,False,True,True,True
