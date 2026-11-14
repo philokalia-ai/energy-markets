@@ -274,7 +274,8 @@ end
 
 include("MarketOrders.jl")
 using .MarketOrders: MarketOrder, SimpleOrder, BlockOrder, LinkedBlockOrder, ExclusiveBlockOrder,
-    FlexibleOrder, AggregatedPeriodicOrder, MICOrder, LoadGradientOrder, MeritOrder, PUNOrder
+    FlexibleOrder, AggregatedPeriodicOrder, MICOrder, LoadGradientOrder, MeritOrder, PUNOrder,
+    LinkedHourlyOrder
 
 include("Generators.jl")
 include("FuelTypeParameters.jl")

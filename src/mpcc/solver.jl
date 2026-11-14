@@ -240,6 +240,15 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
     # passes false to its (many) single-period sub-solves.
     verbose::Bool=true)
 
+    # Complex orders (stage 1, fix-and-reprice): a book carrying
+    # LinkedHourlyOrders (only built under EUPHEMIA_COMPLEX_ORDERS) first runs
+    # the full-day master LP, which caps every family member at its energy
+    # allocation; everything below then clears plain SimpleOrders as always.
+    if any(o -> o isa LinkedHourlyOrder, order_book.orders)
+        order_book = resolve_complex_orders(order_book;
+            preferred_solver=preferred_solver, verbose=verbose)
+    end
+
     # Period decomposition: solve each period independently and merge. Only
     # engages with >1 period; a single-period book already IS the per-period
     # problem, so it falls through to the monolithic path unchanged.
