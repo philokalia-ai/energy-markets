@@ -67,6 +67,17 @@ println()
     end
 
     # -------------------------------------------------------------------------
+    # Physics-consistency data audit
+    # (self-contained: synthetic extract with planted violations, no Postgres)
+    # -------------------------------------------------------------------------
+    @testset "Physics Audit" begin
+        println("\n" * "=" ^ 60)
+        println("Running Physics Audit Tests...")
+        println("=" ^ 60)
+        include(joinpath(@__DIR__, "test_physics_audit.jl"))
+    end
+
+    # -------------------------------------------------------------------------
     # Initial Conditions Tests
     # Tests for generator initial state determination for UC optimization
     # -------------------------------------------------------------------------
