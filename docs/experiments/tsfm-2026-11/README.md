@@ -99,7 +99,7 @@ models were enough for the budget.
 | Timestral-209M, prices only, 2048-h context (control) | D-1 | (a) | 28.6 | −3.4 | 0.89 | 0.79 | 29.7 |
 | **Timestral-209M + live `sim` as known-future covariate** (2048 h) | **D-1** | (a) | **25.1** | −2.7 | **0.92** | **0.85** | **25.4** |
 | Chronos-2 + live `sim` as known-future covariate | D-1 | (a) | 26.1 | −2.9 | 0.91 | 0.84 | 26.5 |
-| Chronos-2 + ENTSO-E D-1 load/wind/solar (known-future) | D-1 | **(b) gate-time** | C2COV |
+| Chronos-2 + ENTSO-E D-1 load/wind/solar (known-future) | D-1 | **(b) gate-time** | 24.7 | −1.9 | 0.92 | 0.85 | 25.3 |
 
 **Gate-time covariates on the 8 calibration days only** (7,488 cells). The full Timestral run
 was stopped at the budget, at 75 s/day.
@@ -111,7 +111,8 @@ was stopped at the budget, at 75 s/day.
 | Timestral + `sim` covariate, 2048 h | (a) | 27.3 | 0.92 | 0.87 | 27.7 |
 | Timestral + ENTSO-E load/wind/solar, 2048 h | (b) | 24.8 | 0.94 | 0.90 | 25.2 |
 
-At gate time, ENTSO-E's own load and RES forecasts help more than `sim`, as expected: they
+Over the full window, Chronos-2 + ENTSO-E (gate-time) scores 24.7, against 26.1 with `sim` and
+29.0 on prices only. At gate time, ENTSO-E's own load and RES forecasts help more than `sim`, as expected: they
 are the fundamentals the auction clears on. At 06:30 they are not provably published, which is
 why the pre-gate product uses `sim` (built on the weather-track RES/load) as its carrier of
 fundamentals.
