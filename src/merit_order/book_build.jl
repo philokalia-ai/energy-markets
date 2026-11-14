@@ -43,6 +43,8 @@ const STRATEGY_DESCRIPTIONS = Dict{String,String}(
     "water_value_anchored"   => "hydro water value: export opportunity cost = the coupled reference price (two-pass anchor)",
     "water_value_spill"      => "hydro spill regime: reservoir at/above the prior-years' same-week maximum — the water that cannot be stored is offered at run-instead-of-spill cost",
     "res_forecast"           => "renewable forecast offered as price-taker (support schemes make output price-insensitive; floored negative in a solar-surplus regime)",
+    "res_supported"          => "explicitly configured RES share retaining a production incentive, offered at minus that incentive",
+    "res_zero_cost"          => "merchant or negative-price support-suspended RES offered at zero variable cost",
     "import_fixed"           => "net scheduled imports injected as price-taking supply",
     "ref_priced_export"      => "net export re-priced at the coupled reference so the exporter curtails under domestic stress",
     "export_demand"          => "net scheduled exports taken as firm demand at the price cap",
@@ -1268,6 +1270,10 @@ function create_merit_order_book(
         grsq2_slot(dt) = grsq2_on &&
             get(pass1_prices, Dates.format(dt, "yyyymmdd-HHMM"), Inf) <= 5.0
 
+        # Resolve once per book. Default off preserves the original RES order.
+        res_ladder = res_offer_ladder_enabled()
+        res_policy = res_ladder ? res_offer_policy(bidding_zone) : nothing
+
         for ts in target_timeslots
             date_time = parse_timeslot_to_datetime(ts, day)
             hr = Dates.hour(date_time)   # UTC hour key for all hour-keyed lookups
@@ -1276,11 +1282,20 @@ function create_merit_order_book(
             # price-taker; support schemes make it insensitive to price)
             res_qty = get(renewable_by_time, ts, 0.0)
             if res_qty > 0.1
-                push_tagged!(SimpleOrder(:supply,
-                    sr_active(hr) ? sr_floor(hr) : 1.0, res_qty,
-                    Symbol(bidding_zone), date_time, resolution_minutes),
-                    "RES", "res_forecast")
-                supply_orders_count += 1
+                if res_ladder
+                    for (offer, mw, strategy) in res_offer_tranches(res_qty, res_policy)
+                        push_tagged!(SimpleOrder(:supply, offer, mw,
+                            Symbol(bidding_zone), date_time, resolution_minutes),
+                            "RES", strategy)
+                        supply_orders_count += 1
+                    end
+                else
+                    push_tagged!(SimpleOrder(:supply,
+                        sr_active(hr) ? sr_floor(hr) : 1.0, res_qty,
+                        Symbol(bidding_zone), date_time, resolution_minutes),
+                        "RES", "res_forecast")
+                    supply_orders_count += 1
+                end
                 total_supply_capacity += res_qty
             end
 

@@ -1,0 +1,31 @@
+{
+  "all39": {
+    "n": 54303,
+    "mae": 81.61682991540063,
+    "bias": -51.286877611411896,
+    "corr": 0.3935098119274099,
+    "actual_le_zero": 710,
+    "predicted_le_zero": 0,
+    "hits": 0,
+    "false_alarms": 0,
+    "hit_rate": 0.0,
+    "false_alarm_rate": 0.0,
+    "cap_prints": 46,
+    "near_zero_positive": 0
+  },
+  "excluding_italy": {
+    "n": 44576,
+    "mae": 65.87699709251615,
+    "bias": -39.57689120675924,
+    "corr": 0.5700963633428174,
+    "actual_le_zero": 599,
+    "predicted_le_zero": 0,
+    "hits": 0,
+    "false_alarms": 0,
+    "hit_rate": 0.0,
+    "false_alarm_rate": 0.0,
+    "cap_prints": 13,
+    "near_zero_positive": 0
+  },
+  "canonical_live_events": 710
+}

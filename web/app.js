@@ -3861,6 +3861,8 @@
     water_value_reservoir:    { label: "water value · reservoir", explain: "Shadow price of stored water — near-free when reservoirs are full, rising toward the thermal alternative as they empty." },
     water_value_anchored:     { label: "water value · coupled anchor", explain: "Export opportunity cost set to the pass-1 coupled reference price (two-pass anchor)." },
     res_forecast:             { label: "RES forecast", explain: "Renewable forecast offered as a price-taker (support schemes make output price-insensitive); floored negative in a solar-surplus regime." },
+    res_supported:            { label: "Supported RES", explain: "An explicitly configured RES share retaining a production incentive, offered at minus that incentive." },
+    res_zero_cost:            { label: "Zero-cost RES", explain: "Merchant or negative-price support-suspended RES offered at zero variable cost." },
     import_fixed:             { label: "scheduled import", explain: "Net scheduled cross-border imports injected as price-taking supply." },
     ref_priced_export:        { label: "ref-priced export", explain: "Net export re-priced at the coupled reference so the exporter curtails under domestic stress." },
     export_demand:            { label: "scheduled export", explain: "Net scheduled cross-border exports taken as firm demand at the price cap." },

@@ -1,0 +1,3 @@
+arm,retained_periods,retained_nonoptimal_periods,pass2_nonoptimal_periods,retained_solve_seconds,mean_retained_solve_seconds_per_period,discarded_decomposed_clears,discarded_decomposition_elapsed_seconds,final_wrapper_time_limit_days
+baseline,384,20,12,7424.700000000001,19.33515625,1,773.2,6
+res_zero,384,16,7,7131.099999999999,18.570572916666666,0,0.0,4

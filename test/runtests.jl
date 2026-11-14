@@ -281,6 +281,10 @@ println()
         include(joinpath(@__DIR__, "test_boundaries_export.jl"))
     end
 
+    @testset "Experimental RES offers (pure, DB-free)" begin
+        include(joinpath(@__DIR__, "test_res_offers.jl"))
+    end
+
     @testset "Price reconstruction (pure, DB-free)" begin
         println("\n" * "=" ^ 60)
         println("Running competitive price reconstruction unit tests...")
