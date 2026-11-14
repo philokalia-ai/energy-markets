@@ -324,3 +324,15 @@ default. **The promising follow-up is a winter/tight-day-GATED endogenous
 must-run** (the lever is cheap: a per-zone-day 1–2 s Gurobi MILP behind a
 `ZoneProfile` field, with a guaranteed `:static` fallback), best tested next
 on the frozen 36-day stratified sample before committing to any 365-day run.
+
+## 9. First-class complex orders in the clear (2026-11 sprint)
+
+`EUPHEMIA_COMPLEX_ORDERS` adds a master/sub-problem layer (full-day master →
+unchanged per-period MPCC with complex decisions fixed; decomposition kept) with
+two order kinds: `ps` — pumped storage as an energy-limited `LinkedHourlyOrder`
+family (budget = demonstrated daily generation, D-15..D-2) and `blocks` —
+committed units' p_min as all-or-nothing regular blocks at SRMC with the EUPHEMIA
+PAB loop. 8 calibration days on cv43: `ps` MAE −1.08 (ex-IT −1.20), corr flat,
+−3.3 where its budget binds; `blocks` reproduces the §8 trade (level up, shape
+down: corr 0.84→0.74, collapse days worse) — opt-in only. Details and numbers:
+[experiments/complex-orders-2026-11](experiments/complex-orders-2026-11/README.md).
