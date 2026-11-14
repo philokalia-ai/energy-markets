@@ -1,0 +1,7 @@
+reference,config,book,capacity_common,capacity_missing_reference,capacity_missing_treatment,capacity_differences,capacity_max_abs_mw,capacity_max_relative,capacity_criterion_pass,order_groups_match,order_group_counts_match,order_pairs_differ,order_max_price_delta,order_max_quantity_delta_mw
+new12,stable13,20260920-0000-pass1,9696,0,0,0,0.0,0.0,True,True,True,283,0.0,1.4551915228366852e-11
+new12,stable13,20260920-0000-pass2,9696,0,0,0,0.0,0.0,True,True,True,289,0.0,1.4551915228366852e-11
+new12,stable13,20261104-0000-pass1,10340,0,0,0,0.0,0.0,True,True,True,187,0.0,7.275957614183426e-12
+new12,stable13,20261104-0000-pass2,10340,0,0,0,0.0,0.0,True,True,True,187,0.0,7.275957614183426e-12
+new12,stable13,20261113-0000-pass1,10340,0,0,0,0.0,0.0,True,True,True,220,0.0,7.275957614183426e-12
+new12,stable13,20261113-0000-pass2,10340,0,0,0,0.0,0.0,True,True,True,221,0.0,7.275957614183426e-12

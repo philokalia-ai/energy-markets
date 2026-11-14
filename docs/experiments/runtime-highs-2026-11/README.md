@@ -59,8 +59,11 @@ An earlier 60 s / heuristic-0.3 diagnostic is archived separately and excluded
 from parity, timing recommendations and production scores. If production's own
 limit returns an incumbent, nonoptimal periods/gaps still qualify comparisons.
 
-Benchmark CPU affinity 0–7; Julia threads 4, DuckDB threads 4, BLAS threads 1,
-DuckDB memory limit 8 GB. Other ops tests run only on 8–15. Package caches exist;
+Old-source references and the aborted old-solver arm use CPU affinity 0–7;
+the fixed-source Julia 1.12/new-HiGHS and Julia 1.13.4/new-HiGHS pair run
+sequentially on 8–15. All use 4 Julia threads, 4 DuckDB threads, BLAS threads 1,
+8 GB DuckDB memory limit; native HiGHS threads stay automatic (8 available cores).
+Supporting tests and monolithic runs use 8–15 after the timed runtime pair. Package caches exist;
 one timed attempt/day/configuration; first date includes function compilation,
 subsequent dates run in the same
 process. Different dates prevent interpreting a cold/warm ratio as compilation
@@ -96,10 +99,119 @@ rather than rounded away. Both all-39 and non-Italian-32 scores are supplied.
 
 ## Timing and price comparisons
 
-Pending final fixed-source matrix. Full cell differences, per-zone scores, gaps and raw logs
-are retained in the sprint results directory. The committed summarizer emits
-portable CSV tables from benchmark JSON, including all-39 and non-Italian-32
-coverage, MAE/bias/correlation, nonpositive-price hits and false alarms.
+The source-fix price impact uses **matched Julia 1.12.7/new HiGHS** before
+and after the network patch. Its old-source September result comes from the
+original production-settings attempt; the November pair was completed in a
+separate process after the old solver exhausted its useful reference budget.
+Both sides have all 144 period solves optimal. There are two cold starts in
+that composite old-source arm, so its wall times are observations rather than
+a controlled source-fix speed ratio. Original old-HiGHS data remains a separate
+old-source reference; **fixed-source old/new solver parity is inconclusive**.
+
+The original baseline and original September new-solver attempt preceded the
+full-book audit; subsequent attempts include it. Raw wall times therefore do
+not isolate production performance across those cohorts. The full-book audit
+contributes work outside timed book/native scopes. First
+and warm Julia 1.12 days have a ~316–330 s residual; its cause is **unattributed
+until the separately authorized post-22:42 profile**. Do not call this compilation,
+book construction, a stall, or a production runtime speed improvement.
+RSS in the table is sampled; [performance.csv](performance.csv) also provides
+cumulative process high-water RSS, gaps, call counts, per-period median/maximum,
+startup and residual values. Samples can miss peaks.
+
+### Canonical timings
+
+Native and library values sum **both passes**; residual = wall − books − library scope.
+
+| Config | UTC day | Wall s | Books s | Native s | Library s | Residual s | RSS MiB | Nonoptimal / calls |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| old source / 1.12 / old HiGHS | 2026-09-20 | 1728.0 | 34.6 | 1637.5 | 1651.9 | 41.6 | 3455 | 0/48 |
+| old source / 1.12 / old HiGHS | 2026-11-04 | 1348.5 | 15.6 | 1320.5 | 1331.2 | 1.7 | 3680 | 0/48 |
+| old source / 1.12 / old HiGHS | 2026-11-13 | 1020.0 | 13.7 | 994.0 | 1004.9 | 1.4 | 3976 | 0/48 |
+| old source / 1.12 / new HiGHS | 2026-09-20 | 225.4 | 35.1 | 142.5 | 151.1 | 39.2 | 3318 | 0/48 |
+| old source / 1.12 / new HiGHS | 2026-11-04 | 518.0 | 33.8 | 125.0 | 133.5 | 350.6 | 3348 | 0/48 |
+| old source / 1.12 / new HiGHS | 2026-11-13 | 446.5 | 14.0 | 122.6 | 127.9 | 304.7 | 3642 | 0/48 |
+| fixed / 1.12 / new HiGHS | 2026-09-20 | 523.7 | 33.7 | 151.5 | 160.3 | 329.7 | 3365 | 0/48 |
+| fixed / 1.12 / new HiGHS | 2026-11-04 | 520.7 | 15.2 | 181.0 | 187.1 | 318.3 | 3631 | 0/48 |
+| fixed / 1.12 / new HiGHS | 2026-11-13 | 526.3 | 13.6 | 190.8 | 196.7 | 316.0 | 3935 | 0/48 |
+| fixed / 1.13.4 / new HiGHS | 2026-09-20 | 229.6 | 27.9 | 144.6 | 157.7 | 44.0 | 3408 | 0/48 |
+| fixed / 1.13.4 / new HiGHS | 2026-11-04 | 145.1 | 14.2 | 123.9 | 129.2 | 1.7 | 3649 | 0/48 |
+| fixed / 1.13.4 / new HiGHS | 2026-11-13 | 327.5 | 15.2 | 304.8 | 310.2 | 2.0 | 4010 | 0/48 |
+
+### Source fix on Julia 1.12 / matched new HiGHS
+
+| UTC day | Zones | n | MAE € old→new | ΔMAE | Bias € old→new | Δbias | Cells >1e-8 | Max |Δprice| € |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 2026-09-20 | all39 | 934 | 49.28 → 48.53 | -0.75 | -0.42 → -1.55 | -1.13 | 498 | 46.83 |
+| 2026-09-20 | excluding_italy32 | 768 | 46.24 → 45.38 | -0.85 | 13.09 → 11.66 | -1.43 | 467 | 46.83 |
+| 2026-11-04 | all39 | 936 | 89.82 → 88.19 | -1.62 | -76.96 → -74.88 | 2.08 | 463 | 120.68 |
+| 2026-11-04 | excluding_italy32 | 768 | 96.64 → 94.62 | -2.02 | -80.97 → -78.39 | 2.58 | 460 | 120.68 |
+| 2026-11-13 | all39 | 936 | 54.57 → 53.72 | -0.85 | -45.18 → -43.85 | 1.33 | 472 | 60.85 |
+| 2026-11-13 | excluding_italy32 | 768 | 55.87 → 54.77 | -1.09 | -45.13 → -43.45 | 1.68 | 464 | 60.85 |
+
+### Old-source HiGHS comparison (fixed-source parity inconclusive)
+
+| UTC day | Zones | n | MAE € old→new | ΔMAE | Bias € old→new | Δbias | Cells >1e-8 | Max |Δprice| € |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 2026-09-20 | all39 | 934 | 49.27 → 49.28 | 0.00 | -0.39 → -0.42 | -0.03 | 13 | 12.58 |
+| 2026-09-20 | excluding_italy32 | 768 | 46.23 → 46.24 | 0.00 | 13.13 → 13.09 | -0.04 | 8 | 12.58 |
+| 2026-11-04 | all39 | 936 | 89.77 → 89.82 | 0.05 | -76.91 → -76.96 | -0.05 | 5 | 21.75 |
+| 2026-11-04 | excluding_italy32 | 768 | 96.58 → 96.64 | 0.06 | -80.91 → -80.97 | -0.06 | 5 | 21.75 |
+| 2026-11-13 | all39 | 936 | 54.41 → 54.57 | 0.16 | -44.98 → -45.18 | -0.20 | 12 | 46.21 |
+| 2026-11-13 | excluding_italy32 | 768 | 55.67 → 55.87 | 0.19 | -44.89 → -45.13 | -0.24 | 12 | 46.21 |
+
+### Julia upgrade on fixed source / matched new HiGHS
+
+| UTC day | Zones | n | MAE € old→new | ΔMAE | Bias € old→new | Δbias | Cells >1e-8 | Max |Δprice| € |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 2026-09-20 | all39 | 934 | 48.53 → 48.53 | 0.00 | -1.55 → -1.55 | 0.00 | 0 | 0.00 |
+| 2026-09-20 | excluding_italy32 | 768 | 45.38 → 45.38 | 0.00 | 11.66 → 11.66 | 0.00 | 0 | 0.00 |
+| 2026-11-04 | all39 | 936 | 88.19 → 88.19 | 0.00 | -74.88 → -74.88 | 0.00 | 0 | 0.00 |
+| 2026-11-04 | excluding_italy32 | 768 | 94.62 → 94.62 | 0.00 | -78.39 → -78.39 | 0.00 | 0 | 0.00 |
+| 2026-11-13 | all39 | 936 | 53.72 → 53.72 | 0.00 | -43.85 → -43.85 | 0.00 | 0 | 0.00 |
+| 2026-11-13 | excluding_italy32 | 768 | 54.77 → 54.77 | 0.00 | -43.45 → -43.45 | 0.00 | 0 | 0.00 |
+
+### Pooled retrospective scores
+
+| Config | Zones | n | MAE € | Bias € | Correlation | ≤0 hits / actual | False alarms |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| old source / 1.12 / old HiGHS | all39 | 2806 | 64.49 | -40.79 | 0.7933 | 0/140 | 0 |
+| old source / 1.12 / old HiGHS | excluding_italy32 | 2304 | 66.16 | -37.56 | 0.7705 | 0/125 | 0 |
+| old source / 1.12 / new HiGHS | all39 | 2806 | 64.57 | -40.88 | 0.7932 | 0/140 | 0 |
+| old source / 1.12 / new HiGHS | excluding_italy32 | 2304 | 66.25 | -37.67 | 0.7703 | 0/125 | 0 |
+| fixed / 1.12 / new HiGHS | all39 | 2806 | 63.49 | -40.12 | 0.7989 | 2/140 | 0 |
+| fixed / 1.12 / new HiGHS | excluding_italy32 | 2304 | 64.93 | -36.73 | 0.7772 | 2/125 | 0 |
+| fixed / 1.13.4 / new HiGHS | all39 | 2806 | 63.49 | -40.12 | 0.7989 | 2/140 | 0 |
+| fixed / 1.13.4 / new HiGHS | excluding_italy32 | 2304 | 64.93 | -36.73 | 0.7772 | 2/125 | 0 |
+
+Portable artifacts: [every native period/attempt timing](period_timings.csv), [cell differences](price_differences.csv),
+[per-zone and pooled accuracy](accuracy.csv), [score deltas](score_deltas.csv),
+[price parity](parity.csv), [exact book fingerprints](book_parity.csv),
+[book value tolerances](book_value_deltas.csv),
+[objective comparisons](objective_comparison.csv),
+[mechanical two-decimal criteria](acceptance.csv).
+The criteria CSV contains comparisons, not an assertion that source changes
+should preserve prices. The intended JAO model change moves prices; the Julia
+runtime comparison moves none. Old-source solver differences are not relabelled
+as degenerate ties. New-solver acceptance follows the leader's stated stability
+and optimality decision despite inconclusive fixed-source old-solver parity.
+
+### Startup and precompile observations
+
+Cache states differ: these are observations, not a controlled compiler speed
+ratio. First clear includes additional method compilation. Full raw wall/RSS
+records are retained with the sprint results.
+
+| Process | Julia / native HiGHS | Startup to ready s | Euphemia load s |
+|---|---|---:|---:|
+| old-source baseline | 1.12.7 / 1.15.0 | 16.66 | 7.95 |
+| fixed latest on1.12 | 1.12.7 / 1.16.0 | 63.72 | 54.99 |
+| fixed latest on1.13.4 | 1.13.4 / 1.16.0 | 30.27 | 22.06 |
+| old-source latest November process | 1.12.7 / 1.16.0 | 31.28 | 23.00 |
+
+Pkg precompile calls during setup were approximately 168 s on 1.12, 170.99 s on
+1.13.4 and 128.8 s on beta 1.14; package-cache states differ, so do not interpret
+those as a benchmark ratio.
 
 ## Monolithic experiment
 
@@ -122,7 +234,7 @@ future inter-temporal block orders will be tractable.
 
 ## Tests
 
-All four configurations passed **1,384** self-contained assertions (the
+Before the JAO source fix, all four configurations passed **1,384** self-contained assertions (the
 1.12 arms ran 1,378 core + 6 fleet-rescue checks separately; beta and stable
 also passed the combined 17-file runner). Both newer runtimes passed the
 39-zone weather-forecast entrypoint load with autorun disabled.
@@ -137,7 +249,19 @@ failures are not presented as passing tests.
 No local licensed Gurobi solve was run. Retained Actions logs provided **21**
 39-zone two-pass HiGHS forecast clears and **11** five-zone HiGHS price clears,
 all ARM64; no retained verified Gurobi run. Four older dispatch candidates return
-HTTP 410. No workflows were dispatched.
+HTTP 410. No workflows were dispatched. Per-day observations and run links
+are in [ci-timings.csv](ci-timings.csv).
+
+| Retained Actions run | Scope / n | Median final-pass s | Median both-pass s | Median total wall s |
+|---|---|---:|---:|---:|
+| 33058024670 | 39-zone forecast / 7 | 42.96 | 121.46 | 451.53 |
+| 33151450276 | 39-zone forecast / 7 | 54.45 | 115.99 | 481.85 |
+| 43566629499 | 39-zone forecast / 7 | 43.85 | 96.31 | 462.58 |
+
+These HiGHS CI jobs use different dates/inputs and runner allocation from the
+local experiment. The additional 11 five-zone clears are a separate scope;
+there is **no verified retained Gurobi observation (n=0)** for a current paired
+ratio. Final-pass time alone omits pass 1 and any discarded attempt.
 
 The historical [period-decomposition experiment](../../period-decomposition.md)
 uses `@elapsed mz_solve_pass` over one prebuilt 39-zone book, 2026-04-03,
