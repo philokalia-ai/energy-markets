@@ -504,6 +504,12 @@ function run_pipelined_backfill(days, zones::Vector{String}=String[];
     isempty(zones) && error("run_pipelined_backfill: `zones` must be non-empty")
     days = collect(Date, days)
     cv = ENERGY_PRICES_CODE_VERSION
+    # The store mode to restore when the run ends: the coordinator switches to
+    # read-only + writable results below, and must hand back exactly what the
+    # caller had — never a read-WRITE extract (a shared extract opened by
+    # several processes, or chmod 444, would break the next run or worse).
+    prev_read_only = DUCKDB_READ_ONLY[]
+    prev_results_writable = DUCKDB_RESULTS_WRITABLE[]
 
     # Resume: drop already-saved days up front, so the total to process is known.
     # Under the DuckDB backend the resume probe READS simulations.* which lives
@@ -919,7 +925,8 @@ function run_pipelined_backfill(days, zones::Vector{String}=String[];
     finally
         rmprocs(ws)
         DATA_STORE[] == :duckdb &&
-            configure_data_store!(backend=:duckdb, duckdb_path=abspath(DUCKDB_PATH[]), read_only=false)
+            configure_data_store!(backend=:duckdb, duckdb_path=abspath(DUCKDB_PATH[]),
+                                  read_only=prev_read_only, results_writable=prev_results_writable)
     end
 
     wall = time() - wall0
