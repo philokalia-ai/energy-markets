@@ -176,6 +176,13 @@ println()
         include(joinpath(@__DIR__, "test_registry_unit_bound.jl"))
     end
 
+    @testset "Registry feed-anchored rescue window" begin
+        println("\n" * "=" ^ 60)
+        println("Running Registry Feed-Anchor Tests...")
+        println("=" ^ 60)
+        include(joinpath(@__DIR__, "test_registry_feed_anchor.jl"))
+    end
+
     @testset "Weather RES" begin
         println("\n" * "=" ^ 60)
         println("Running Weather RES Tests...")
