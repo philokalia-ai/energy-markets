@@ -210,7 +210,9 @@
 # that broke the IT zones from market day 2026-09-17); see the ledger.
 # v41 -> v42: the unit bound moves to the raw row, before dedupe and the outage
 # derate; see the ledger.
-const ENERGY_PRICES_CODE_VERSION = 42
+# v42 -> v43: feed-anchored fleet rescue window (Italy), weather-track solar gate
+# input, in-merit truthing default-on; see the ledger.
+const ENERGY_PRICES_CODE_VERSION = 43
 
 # Pool size: env-tunable (EUPHEMIA_PG_POOL) because the threaded book build
 # runs up to nzones concurrent queries — 5 connections cap the parallelism
