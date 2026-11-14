@@ -87,6 +87,7 @@ println()
         println("Running Network Module Tests...")
         println("=" ^ 60)
         include(joinpath(@__DIR__, "test_network_module.jl"))
+        include(joinpath(@__DIR__, "test_jao_scaling_order.jl"))
     end
 
     # -------------------------------------------------------------------------
