@@ -766,6 +766,51 @@ function _subzones_of(aggregate::String, footprint)
 end
 
 """
+Scale JAO border capacities using factors calculated from the original rows.
+
+A directed border participates in both its source's outgoing limit and its
+sink's incoming limit (possibly in several CCRs). Apply the minimum applicable
+factor once: sequential scaling makes the result depend on Dict traversal.
+Sorted border keys also make floating-point totals independent of Set order.
+The existing zero-net-position opt-in remains a gross-capacity approximation.
+Returns the number of distinct border-hours assigned a factor below one.
+"""
+function _scale_jao_net_positions!(rows, npos, ccrp, jao_keys, fpset;
+                                  enable_zero_cap::Bool=false)
+    idx = Dict((String(r.source_zone), String(r.sink_zone), r.time_period) => i
+               for (i, r) in enumerate(rows))
+    factors = ones(Float64, length(rows))
+    for ((ccr, hub, tp), (mn, mx)) in npos
+        hub in fpset || continue
+        prs = get(ccrp, ccr, Set{Tuple{String,String}}())
+        for (dirn, lim) in ((:out, mx), (:in, -mn))
+            (lim > 0.0 || (lim == 0.0 && enable_zero_cap)) || continue
+            keys = sort!([(s, d, tp) for (s, d) in prs
+                          if s in fpset && d in fpset &&
+                             (dirn == :out ? s == hub : d == hub) &&
+                             (s, d, tp) in jao_keys && haskey(idx, (s, d, tp))])
+            isempty(keys) && continue
+            total = sum(rows[idx[k]].capacity for k in keys)
+            total > lim && total > 0.0 || continue
+            factor = lim / total
+            for k in keys
+                i = idx[k]
+                factors[i] = min(factors[i], factor)
+            end
+        end
+    end
+    scaled = 0
+    for (i, factor) in enumerate(factors)
+        factor < 1.0 || continue
+        r = rows[i]
+        rows[i] = (source_zone=r.source_zone, sink_zone=r.sink_zone,
+                   time_period=r.time_period, capacity=r.capacity * factor)
+        scaled += 1
+    end
+    return scaled
+end
+
+"""
     _create_transfer_capacity_enriched(date, bidding_zones; include_explicit, aggregate_remap)
 
 Enriched transfer-capacity build (opt-in via `create_transfer_capacity_from_entsoe`).
@@ -893,48 +938,9 @@ function _create_transfer_capacity_enriched(date::Date, bidding_zones::Vector{St
         npos = jao_net_positions(date)
         ccrp = jao_ccr_pairs(date)
         if !isempty(npos)
-            jao_keys = Set(keys(jao))
-            idx = Dict{Tuple{String,String,Int},Int}()
-            for (i, r) in enumerate(rows)
-                idx[(String(r.source_zone), String(r.sink_zone), r.time_period)] = i
-            end
-            for ((ccr, hub, tp), (mn, mx)) in npos
-                hub in fpset || continue
-                prs = get(ccrp, ccr, Set{Tuple{String,String}}())
-                for (dirn, lim) in ((:out, mx), (:in, -mn))
-                    # A published limit of exactly 0 bounds the hub's NET
-                    # position, not its gross exchange: a hub importing 100 MW
-                    # and exporting 100 MW has net position 0 and is feasible,
-                    # but deleting its outgoing capacity forbids that transit
-                    # (review 2026-09-13, P1). This capacity scaling is an
-                    # APPROXIMATION of `minNP <= exports - imports <= maxNP`;
-                    # representing the real constraint belongs in the solver,
-                    # not here. Until then a zero bound stays a no-op, as it was
-                    # before cv40; EUPHEMIA_ENABLE_CV40_ZEROCAP=1 turns on the
-                    # gross-capacity approximation as a measurement arm only.
-                    zero_cap = lim == 0.0 && !isempty(get(ENV, "EUPHEMIA_ENABLE_CV40_ZEROCAP", ""))
-                    (lim > 0.0 || zero_cap) || continue
-                    ks = Int[]
-                    for (s, d) in prs
-                        (s in fpset && d in fpset) || continue
-                        (dirn == :out ? s == hub : d == hub) || continue
-                        k = (s, d, tp)
-                        (k in jao_keys && haskey(idx, k)) || continue   # JAO-sourced rows only
-                        push!(ks, idx[k])
-                    end
-                    isempty(ks) && continue
-                    tot = sum(rows[i].capacity for i in ks)
-                    tot > lim || continue
-                    tot > 0.0 || continue
-                    f = lim / tot
-                    for i in ks
-                        r = rows[i]
-                        rows[i] = (source_zone=r.source_zone, sink_zone=r.sink_zone,
-                                   time_period=r.time_period, capacity=r.capacity * f)
-                        n_np_scaled += 1
-                    end
-                end
-            end
+            n_np_scaled = _scale_jao_net_positions!(
+                rows, npos, ccrp, Set(keys(jao)), fpset;
+                enable_zero_cap=!isempty(get(ENV, "EUPHEMIA_ENABLE_CV40_ZEROCAP", "")))
         end
     end
     n_np_scaled > 0 &&

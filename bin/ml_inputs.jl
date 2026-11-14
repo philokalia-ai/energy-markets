@@ -696,7 +696,8 @@ pilot zones in `preds`/`load_preds` before `weather_scenario`.
 """
 function build_ml_inputs(zones::Vector{String}, first_utc::Date, last_utc::Date,
                          candidates::AbstractSet{Date}; asof::Date=Date(now(UTC)),
-                         fixed_lag::Union{Nothing,Int}=nothing)
+                         fixed_lag::Union{Nothing,Int}=nothing,
+                         solar_out::Union{Nothing,Dict{String,Dict{DateTime,Float64}}}=nothing)
     models = load_ml_models(zones)
     geom = ml_geom()
     res_pack = load_res_models()
@@ -721,6 +722,7 @@ function build_ml_inputs(zones::Vector{String}, first_utc::Date, last_utc::Date,
         # to the committed ML_USE_NEW.
         use_new(t) = ml_use_new(z, t; meta=models.meta)
         rp = Dict{DateTime,Float64}(); lp = Dict{DateTime,Float64}()
+        sp = Dict{DateTime,Float64}()   # solar component of rp (solar_out)
         for (gdates, lag) in groups
             throttle > 0 && sleep(throttle)
             rweather = fetch_ml_res_weather(cells, gdates; vintage_lag=lag)
@@ -765,6 +767,7 @@ function build_ml_inputs(zones::Vector{String}, first_utc::Date, last_utc::Date,
                     # 2026-08-24).
                     (isnan(solar) || isnan(wind)) && continue
                     rp[h] = solar + wind
+                    sp[h] = solar
                 end
                 # ── LOAD ──
                 la = get(lagg, h, nothing)
@@ -790,6 +793,7 @@ function build_ml_inputs(zones::Vector{String}, first_utc::Date, last_utc::Date,
             end
         end
         res_preds[z] = rp
+        solar_out === nothing || (solar_out[z] = sp)
         use_new(:load) && (load_preds[z] = lp)   # pack-load pilots keep their fill
     end
     return res_preds, load_preds

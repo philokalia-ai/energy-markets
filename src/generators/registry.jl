@@ -112,6 +112,59 @@ end
 # could derate a corrupt row below the bound.
 const MAX_PLAUSIBLE_UNIT_MW = 5_000.0
 
+# cv43 candidate (sprint 2026-11-14, docs: reports/analyst.md): FEED-ANCHORED
+# rescue window. The 60-day `recent_generation` probe is what keeps
+# stale-registry units in the fleet (rows whose validity ended, e.g. Italy's
+# 2025-12-30 vintage). Measured: the Italian per-unit generation feed is absent
+# from ~2026-07-19 until data for 2026-11-03 (first ingested 11-06). Once the
+# 60-day window slid past the last observation — market day 2026-09-17 — ~70 %
+# of Italy's conventional fleet (59 → 16 GW; gas 41 → 8 GW) silently left the
+# book. Missing telemetry is not a retired plant. When a zone's per-unit feed is
+# stale, the window is therefore anchored at the zone's LAST observation instead
+# of the delivery day. Strictly ex-ante: the anchor only reads observations
+# older than the D-1 10:00 UTC gate minus the per-unit publication latency
+# (PER_UNIT_GEN_LATENCY), capped by the existing probe upper bound. A healthy
+# feed (anchor within FEED_STALE_DAYS of that bound) keeps the original window
+# byte-for-byte. Kill-switch EUPHEMIA_DISABLE_FEED_ANCHOR restores it always.
+# The memo key does not carry the switch: A/B arms run in separate processes.
+const FEED_STALE_DAYS = Dates.Day(7)
+const RESCUE_WINDOW = Dates.Day(60)
+const _FEED_ANCHOR_CACHE = Dict{Tuple{String,Dates.DateTime},Union{Nothing,Dates.DateTime}}()
+const _FEED_ANCHOR_LOCK = ReentrantLock()
+
+function _rescue_window_lower(map_code::String, day::Dates.Date)
+    default = "\$2::timestamp - INTERVAL '60 days'"
+    isempty(get(ENV, "EUPHEMIA_DISABLE_FEED_ANCHOR", "")) || return default
+    gate = Dates.DateTime(day) - Dates.Day(1) + Dates.Hour(10)
+    bound = gate - PER_UNIT_GEN_LATENCY
+    ub = _per_unit_upper(day)
+    ub === nothing || (bound = min(bound, ub))
+    last_obs = lock(_FEED_ANCHOR_LOCK) do
+        get!(_FEED_ANCHOR_CACHE, (map_code, bound)) do
+            df = Euphemia.sql2df_with_retry(
+                """
+                SELECT MAX(date_time_utc) AS last_obs
+                FROM entsoe.actual_generation_output_per_generation_unit
+                WHERE generation_unit_code IN (
+                        SELECT DISTINCT generation_unit_code
+                        FROM entsoe.production_and_generation_units
+                        WHERE area_map_code = \$1)
+                  AND date_time_utc < TIMESTAMP '$(Dates.format(bound, "yyyy-mm-dd HH:MM:SS"))'
+                  AND actual_generation_output_mw > 0
+                """, Any[map_code])
+            (DataFrames.nrow(df) == 0 || ismissing(df.last_obs[1])) ? nothing : Dates.DateTime(df.last_obs[1])
+        end
+    end
+    # A zone that never had per-unit data keeps the original window.
+    last_obs === nothing && return default
+    if last_obs < bound - FEED_STALE_DAYS
+        @warn "Per-unit generation feed stale — rescue window anchored at the last observation" zone=map_code day=day last_obs=last_obs age_days=round((bound - last_obs).value / 86_400_000; digits=1)
+        lower = last_obs - RESCUE_WINDOW
+        return "TIMESTAMP '$(Dates.format(lower, "yyyy-mm-dd HH:MM:SS"))'"
+    end
+    return default
+end
+
 # The rows the bound rejects never reach Julia, so report them here: the
 # 2026-09-17 rows ran for six weeks without anyone seeing them.
 function _warn_quarantined_capacity_rows(map_code::String, day::Dates.Date)
@@ -400,6 +453,9 @@ function clear_generator_caches!()
     lock(_GENERATOR_MEMO_LOCK) do
         empty!(_GENERATOR_MEMO)
     end
+    lock(_FEED_ANCHOR_LOCK) do
+        empty!(_FEED_ANCHOR_CACHE)
+    end
     return nothing
 end
 
@@ -431,6 +487,8 @@ function get_generators(map_code::String, day::Dates.Date;
         stale_mask = Bool[coalesce(s, false) for s in sub.stale_override]
         stale_codes = String.(sub.asset_code[stale_mask])
     end
+
+    rescue_lower = _rescue_window_lower(map_code, day)
 
     if exclude_unavailable
         # Query with unavailability filtering:
@@ -471,7 +529,7 @@ function get_generators(map_code::String, day::Dates.Date;
                     SELECT DISTINCT generation_unit_code
                     FROM entsoe.production_and_generation_units
                     WHERE area_map_code = \$1)
-              AND date_time_utc >= \$2::timestamp - INTERVAL '60 days'
+              AND date_time_utc >= $(rescue_lower)
               AND date_time_utc < $(_fleet_probe_upper(day))
               AND actual_generation_output_mw > 0
         ),
@@ -567,7 +625,7 @@ function get_generators(map_code::String, day::Dates.Date;
                     SELECT DISTINCT generation_unit_code
                     FROM entsoe.production_and_generation_units
                     WHERE area_map_code = \$1)
-              AND date_time_utc >= \$2::timestamp - INTERVAL '60 days'
+              AND date_time_utc >= $(rescue_lower)
               AND date_time_utc < $(_fleet_probe_upper(day))
               AND actual_generation_output_mw > 0
         )

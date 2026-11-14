@@ -163,6 +163,9 @@ include(joinpath(@__DIR__, "..", "bin", "forecast_common.jl"))   # vintage_group
         pred2 = predict_res(pack, "SOLARONLY", [t], weather)
         @test pred2[t] ≈ 55.0
 
+        # component=:solar returns the solar part only (cv31 gate input)
+        @test predict_res(pack, "ZZ", [t], weather; component=:solar)[t] ≈ 55.0
+
         # hour with incomplete weather is skipped (not zero-filled)
         t2 = DateTime(2026, 7, 14, 13)
         pred3 = predict_res(pack, "ZZ", [t, t2], weather)

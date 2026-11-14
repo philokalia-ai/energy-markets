@@ -87,6 +87,7 @@ println()
         println("Running Network Module Tests...")
         println("=" ^ 60)
         include(joinpath(@__DIR__, "test_network_module.jl"))
+        include(joinpath(@__DIR__, "test_jao_scaling_order.jl"))
     end
 
     # -------------------------------------------------------------------------
@@ -155,6 +156,12 @@ println()
         include(joinpath(@__DIR__, "test_forecast_context.jl"))
     end
 
+    @testset "In-merit truthing merit test (cv43)" begin
+        # DB-free: synthetic closes seeded in the as-of caches; the D−30 merit
+        # test inside a ForecastContext (review P1 of #401).
+        include(joinpath(@__DIR__, "test_inmerit_truth.jl"))
+    end
+
     @testset "Outage intervals (#370)" begin
         println("\n" * "=" ^ 60)
         println("Running Outage Interval Tests...")
@@ -174,6 +181,17 @@ println()
         println("Running Registry Unit Bound Tests...")
         println("=" ^ 60)
         include(joinpath(@__DIR__, "test_registry_unit_bound.jl"))
+    end
+
+    @testset "Registry feed-anchored rescue window" begin
+        println("\n" * "=" ^ 60)
+        println("Running Registry Feed-Anchor Tests...")
+        println("=" ^ 60)
+        include(joinpath(@__DIR__, "test_registry_feed_anchor.jl"))
+    end
+
+    @testset "Solar-regime gate: issued weather solar" begin
+        include(joinpath(@__DIR__, "test_solar_gate_issued.jl"))
     end
 
     @testset "Weather RES" begin

@@ -336,12 +336,14 @@ end
 """
     predict_res(models, zone, hours::Vector{DateTime}, weather) -> Dict{DateTime,Float64}
 
-Per-hour wind+solar MW for `zone` from the model pack and fetched `weather`
+Per-hour wind+solar MW (`component=:solar`: the solar part only) for `zone`
+from the model pack and fetched `weather`
 (cell → hour → (v100, ghi)). Components with no model in the pack predict 0
 (physically negligible). Hours with incomplete weather across the zone's
 cells are skipped with a warning.
 """
-function predict_res(models, zone::String, hours::Vector{DateTime}, weather)
+function predict_res(models, zone::String, hours::Vector{DateTime}, weather;
+                     component::Symbol=:total)
     zm = get(models["zones"], zone, nothing)
     out = Dict{DateTime,Float64}()
     if zm === nothing
@@ -372,7 +374,8 @@ function predict_res(models, zone::String, hours::Vector{DateTime}, weather)
         end
         g = ghi_sum / length(cells)
         mw = 0.0
-        wind_model !== nothing && (mw += predict_wind_hour(wind_model, v100))
+        component == :solar ||
+            (wind_model !== nothing && (mw += predict_wind_hour(wind_model, v100)))
         solar_model !== nothing && (mw += predict_solar_hour(solar_model, g, t))
         out[t] = mw
     end

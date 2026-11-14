@@ -71,6 +71,76 @@ function strategy_description(s::AbstractString)
 end
 
 
+# Baseload/fuel-constrained thermal types the fleet-truthing derate applies to
+# (see `_true_up_fleet`). Shared with the in-merit truthing switch.
+const BASELOAD_DERATE_TYPES = ("Fossil Brown coal/Lignite", "Fossil Hard coal",
+                               "Fossil Oil shale", "Fossil Coal-derived gas",
+                               "Fossil Peat", "Nuclear")
+
+# In-merit truthing switch (level investigation, 2026-11; cv43 DEFAULT-ON).
+# Read at call time so pipeline workers see the coordinator's env. Kill-switch
+# EUPHEMIA_DISABLE_INMERIT_TRUTH set ⇒ off (byte-identical to cv42 truthing);
+# an explicit EUPHEMIA_INMERIT_TRUTH=0/false also forces it off (house
+# convention: explicit env wins over the shipped default).
+_inmerit_truth_on() = isempty(get(ENV, "EUPHEMIA_DISABLE_INMERIT_TRUTH", "")) &&
+                      !(lowercase(get(ENV, "EUPHEMIA_INMERIT_TRUTH", "")) in ("0", "false"))
+
+"""
+    _solar_share_by_hour(renewables, load_by_time, issued_solar) -> Dict{Int,Float64}
+
+Solar share of forecast load per UTC hour-of-day for the cv31 solar-regime
+gate: mean solar MW / mean load MW. Solar comes from the TSO "Solar" RES rows,
+except that an hour present in `issued_solar` (the weather track's own typed
+solar forecast, collected regardless of TSO coverage) uses those values
+instead — so on the weather track the gate never depends on which TSO rows
+were ingested by issuance. `issued_solar` empty ⇒ the pre-existing rule.
+"""
+function _solar_share_by_hour(renewables, load_by_time,
+                              issued_solar::Dict{Int,Vector{Float64}}=Dict{Int,Vector{Float64}}())
+    sol_hr = Dict{Int,Vector{Float64}}()
+    ld_hr = Dict{Int,Vector{Float64}}()
+    for r in renewables
+        r.production_type == "Solar" || continue
+        length(r.date_time) >= 11 || continue
+        push!(get!(sol_hr, parse(Int, r.date_time[10:11]), Float64[]),
+              r.aggregated_generation_forecast)
+    end
+    merge!(sol_hr, issued_solar)
+    for (ts, v) in load_by_time
+        length(ts) >= 11 || continue
+        push!(get!(ld_hr, parse(Int, ts[10:11]), Float64[]), v)
+    end
+    share = Dict{Int,Float64}()
+    for (h, vs) in sol_hr
+        isempty(vs) && continue
+        lv = haskey(ld_hr, h) ? sum(ld_hr[h]) / length(ld_hr[h]) : 0.0
+        share[h] = lv > 0 ? (sum(vs) / length(vs)) / lv : 0.0
+    end
+    return share
+end
+
+"""
+    _inmerit_types(day, zone, candidates) -> Vector{String}
+
+The in-merit truthing merit test: the subset of `candidates` whose SRMC is below
+gas SRMC both on `day` and on `day − 30` (the start of the 30d p95 window).
+The D−30 side reads its fuel/carbon closes with an EXPLICIT cutoff,
+`legacy_fuel_cutoff(day − 30)`, which `get_marginal_cost` bounds by issuance
+inside a ForecastContext — without it the context's issuance cutoff applied to
+every requested day and the D−30 test collapsed onto today's prices (cv43
+review P1). Outside a context the D−30 cutoff equals the legacy rule for that
+day, so record-path results are unchanged.
+"""
+function _inmerit_types(day::Dates.Date, zone::String, candidates)
+    then = day - Dates.Day(30)
+    then_cut = legacy_fuel_cutoff(then)
+    gas_now = get_marginal_cost(day, "Fossil Gas", zone)
+    gas_then = get_marginal_cost(then, "Fossil Gas", zone; cutoff=then_cut)
+    return String[t for t in candidates
+                  if get_marginal_cost(day, t, zone) < gas_now &&
+                     get_marginal_cost(then, t, zone; cutoff=then_cut) < gas_then]
+end
+
 # =============================================================================
 # Stage helpers for create_merit_order_book
 # =============================================================================
@@ -128,6 +198,27 @@ function _true_up_fleet(generators::Vector{Generator}, bidding_zone::String,
                                                     lookback_days=365))
         for (t, cap) in src
             get(type_p95, t, 0.0) > 100.0 && (fleet_truth_target[t] = cap)
+        end
+        # In-merit truthing (cv43 default ON; EUPHEMIA_DISABLE_INMERIT_TRUTH ⇒ cv42 behaviour).
+        # The truth target exists to re-add capacity that is idle ON MERIT ORDER
+        # (mid-merit fuel priced above the marginal unit never shows in the 30d
+        # p95). That premise fails for a baseload derate-type whose SRMC sits
+        # BELOW gas SRMC — today AND at the start of the 30-day window: it was in
+        # merit whenever gas set the price, so output below capacity means it
+        # could not run (grid reserve, mothballing, fuel/mining limits) — the
+        # derate rule below, verbatim. Such a type drops out of the truth target
+        # and falls back to the :p95 path (complete to 30d p95, derate to
+        # 1.15 × 30d p95). Measured case: autumn 2026, TTF ≈ 90 ⇒ hard coal
+        # (≈110) far below gas (≈190); `:installed` offered DE_LU 17.5 GW of hard
+        # coal against a 30d output p95 of 4.7 GW. Inputs are the same ex-ante
+        # closes (strictly before D−1) and strictly historical output.
+        if _inmerit_truth_on() && !isempty(fleet_truth_target)
+            for ptype in _inmerit_types(day, bidding_zone,
+                                        [t for t in BASELOAD_DERATE_TYPES if haskey(fleet_truth_target, t)])
+                delete!(fleet_truth_target, ptype)
+                println("  ⚖️  In-merit truthing: $ptype below gas SRMC — truth target dropped " *
+                        "(30d p95 $(round(Int, get(type_p95, ptype, 0.0))) MW governs)")
+            end
         end
     end
     # Capacity the outage filter removed today, per type (bug sweep 2026-08-25):
@@ -222,9 +313,7 @@ function _true_up_fleet(generators::Vector{Generator}, bidding_zone::String,
     # and peaking fuels (gas, oil) run below capacity simply because
     # of their merit-order position; their capacity IS available at
     # its SRMC, and derating them manufactures phantom scarcity.
-    derate_types = ("Fossil Brown coal/Lignite", "Fossil Hard coal",
-                    "Fossil Oil shale", "Fossil Coal-derived gas",
-                    "Fossil Peat", "Nuclear")
+    derate_types = BASELOAD_DERATE_TYPES
     # One scale per fuel type, applied in a single pass. Iterates the
     # FLEET's types (not type_p95's keys): a derate-listed type with a
     # p95 of zero is a fully offline fleet and derates all the way
@@ -894,15 +983,31 @@ function create_merit_order_book(
         # `nothing`/empty is a no-op (byte-identical). Filled rows are hourly
         # ("60") and tagged production_type "WeatherFill". The caller only
         # attaches this hook to RES-short zones.
+        # Issued solar per UTC hour from TYPED fill entries (the weather track's
+        # own solar forecast). It feeds the solar-regime share directly,
+        # INDEPENDENT of the gap-fill precedence below: a TSO RES row covering
+        # the hour still wins for QUANTITIES, but the gate must judge the
+        # issued forecast, not whatever TSO rows happened to be ingested
+        # (review of PR #401, P2). Empty on every untyped/ENTSO-E path.
+        issued_solar = Dict{Int,Vector{Float64}}()
         if res_fill !== nothing
             rfilled = res_fill(bidding_zone, day)
             if rfilled !== nothing && !isempty(rfilled)
                 rcovered = Set(r.date_time[1:11] for r in renewables)  # "yyyymmdd-HH" present in TSO
                 radded = 0
-                for (ts, mw) in rfilled
+                # Entries are (ts, mw) — tagged "WeatherFill" — or typed
+                # (ts, mw, production_type): the weather track passes its solar
+                # component as "Solar" rows so the cv31 solar-regime gate (which
+                # reads "Solar" rows) sees the issued solar forecast instead of
+                # nothing. Quantity-neutral: all rows sum into renewable_by_time.
+                for entry in rfilled
+                    ts, mw = entry[1], entry[2]
+                    ptype = length(entry) >= 3 ? String(entry[3]) : "WeatherFill"
+                    ptype == "Solar" && length(ts) >= 11 &&
+                        push!(get!(issued_solar, parse(Int, ts[10:11]), Float64[]), Float64(mw))
                     ts[1:11] in rcovered && continue                   # TSO already covers this hour
                     push!(renewables, RenewablesGenerationForecast(ts, "60", bidding_zone,
-                                                                    "WeatherFill", mw))
+                                                                    ptype, mw))
                     radded += 1
                 end
                 radded > 0 && println("  🩹 res-fill: $bidding_zone added $radded model hour(s) " *
@@ -1134,22 +1239,7 @@ function create_merit_order_book(
         sr_floor2 = parse(Float64, get(ENV, "EUPHEMIA_SOLAR_REGIME_FLOOR2", "-80"))
         solar_share_hr = Dict{Int,Float64}()
         if solar_regime_on
-            sol_hr = Dict{Int,Vector{Float64}}()
-            ld_hr = Dict{Int,Vector{Float64}}()
-            for r in renewables
-                r.production_type == "Solar" || continue
-                length(r.date_time) >= 11 || continue
-                push!(get!(sol_hr, parse(Int, r.date_time[10:11]), Float64[]),
-                      r.aggregated_generation_forecast)
-            end
-            for (ts, v) in load_by_time
-                length(ts) >= 11 || continue
-                push!(get!(ld_hr, parse(Int, ts[10:11]), Float64[]), v)
-            end
-            for (h, vs) in sol_hr
-                lv = haskey(ld_hr, h) ? sum(ld_hr[h]) / length(ld_hr[h]) : 0.0
-                solar_share_hr[h] = lv > 0 ? (sum(vs) / length(vs)) / lv : 0.0
-            end
+            solar_share_hr = _solar_share_by_hour(renewables, load_by_time, issued_solar)
         end
         sr_active(hr) = solar_regime_on && get(solar_share_hr, hr, 0.0) >= sr_theta
         # cv34 T2: the floor for an ACTIVE regime hour (tier 2 if share >= θ2)
@@ -1562,6 +1652,7 @@ function create_merit_order_book(
                     push!(get!(psol, parse(Int, r.date_time[10:11]), Float64[]),
                           r.aggregated_generation_forecast)
                 end
+                merge!(psol, issued_solar)   # issued weather solar wins (see _solar_share_by_hour)
                 for (ts, v) in load_by_time
                     length(ts) >= 11 || continue
                     push!(get!(pld, parse(Int, ts[10:11]), Float64[]), v)
