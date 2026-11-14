@@ -49,11 +49,18 @@ def forecast_date(con, delivery, *, settled_lag=1):
     result["input_variant"] = variant
     result["target"] = "hourly_mean_settled_le_zero"
     result["model_version"] = "collapse_logistic_202611_v3"
-    metadata = {"delivery": str(delivery.date()), "training_labels_through": str((delivery - pd.Timedelta(days=settled_lag)).date()),
+    metadata = {"delivery": str(delivery.date()),
+                "training_label_cutoff": str((delivery - pd.Timedelta(days=settled_lag)).date()),
+                "training_labels_through": str(df.loc[train, "market_date"].max().date()),
+                "training_labels_through_by_zone": {z: str(s.market_date.max().date()) for z, s in df.loc[train].groupby("zone")},
                 "training_rows": int(train.sum()), "feature_names": list(features.columns), "zones": models,
                 "settled_history_lag": settled_lag,
                 "generated_at_utc": pd.Timestamp.now(tz="UTC").isoformat(),
                 "status": "offline_asof_reconstruction_not_published"}
+    target = df.market_date == delivery
+    metadata["target_feature_available_cells"] = {name: int(features.loc[target, name].notna().sum())
+                                                   for name in [f"price_lag{settled_lag}", "price_lag7", "res_share", "log_load"]}
+    metadata["target_cells"] = int(target.sum())
     daily, day_features = daily_dataset(df, features)
     day_train = daily.actual.notna() & (daily.market_date >= "2024-07-01") & (daily.market_date <= delivery - pd.Timedelta(days=settled_lag))
     daily_rows, day_models = [], {}

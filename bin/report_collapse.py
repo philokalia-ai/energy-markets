@@ -20,6 +20,37 @@ def table(rows, columns):
     return "\n".join(out)
 
 
+def physical_report(data, out):
+    """Preserve paired coverage and the bounded solver's incumbent status."""
+    summary, days, runs = [], [], []
+    statuses = {(r["day"], r["arm"]): r for r in data["status"]}
+    for arm in ["baseline", "res_zero"]:
+        for footprint in ["all39", "excluding_italy"]:
+            summary.append(dict(arm=arm, footprint=footprint, **data[arm][footprint]))
+        for day, metrics in sorted(data[arm]["by_utc_day"].items()):
+            status = statuses[(day, arm)]
+            days.append(dict(day=day, arm=arm, status=status["status"], **metrics))
+        for status in sorted((r for r in data["status"] if r["arm"] == arm), key=lambda r: r["day"]):
+            runs.append({k: status.get(k) for k in ["day", "arm", "status", "n", "wall_seconds", "pass1_solve_seconds", "pass2_solve_seconds", "both_passes_solve_seconds"]})
+    pd.DataFrame(summary).to_csv(out / "clearing-summary.csv", index=False)
+    pd.DataFrame(days).to_csv(out / "clearing-by-day.csv", index=False)
+    pd.DataFrame(runs).to_csv(out / "clearing-runs.csv", index=False)
+    change = data["paired_change"]
+    cols = [("n", "n"), ("mae", "MAE"), ("bias", "Bias"), ("corr", "Corr"),
+            ("actual_le_zero", "Events"), ("hits", "TP"), ("false_alarms", "FP"),
+            ("hit_rate", "Recall"), ("precision", "Precision"), ("false_alarm_rate", "FP rate"), ("cap_prints", "Caps")]
+    optimal = [dict(arm=arm, **metrics) for arm, metrics in data["same_cells_both_wrapper_optimal"].items()]
+    return ["## Physical-price ablation", "",
+            "One fixed zero-cost RES candidate, with supported-share overrides unset, on the eight prescribed UTC delivery days. Both arms include analyst fleet correction ac0ab5bfe079 and use the same 10:00 issuance context, HiGHS, two passes and latest-revision ENTSO-E forecasts. This is separate from the Athens-day probability evaluation. The per-period solver limit is 120 seconds (production default 900); full returned time-limit incumbents are included explicitly, without a repeat-solve or parameter search.", "",
+            table(summary, [("arm", "Arm"), ("footprint", "Footprint")] + cols), "",
+            f"Paired coverage: {change['n']:,} cells per arm; two Sardinia actual UTC hours on September20 are missing. Baseline time-limit cells: {data['baseline']['time_limit_cells']:,}; candidate: {data['res_zero']['time_limit_cells']:,}. Final-wrapper-optimal status does not certify an earlier anchor pass. The two arms' individual optimal-only slices have different coverage and should not be compared directly. On exactly the same cells where both final wrappers are optimal:", "",
+            table(optimal, [("arm", "Arm")] + cols), "",
+            "### Every prescribed day", "",
+            table(days, [("day", "UTC day"), ("arm", "Arm"), ("status", "Final wrapper")] + cols), "",
+            f"{change['changed_cells']:,} paired prices change by more than 1e-6 €/MWh; {change['changed_actual_le_zero']} of these are actual collapse hours. Largest absolute change: {change['max_abs_change']:.4f} €/MWh. Per-zone MAE/bias/correlation and event counts are in clearing-by-zone.csv; exact run statuses and both-pass timings are in clearing-runs.csv. The engine's solve_time field alone is final-pass-only.", "",
+            "The direct RES offer change does not alter thermal/hydro/must-run bidding rules, but coupling and the endogenous second-pass anchors can transmit its effect. On September20, the existing cv31 solar gate already fires in the offline TSO-input run; DE_LU still clears above zero because neighbours' positive supply sets the coupled margin. A zero RES offer alone does not remove that wall. These bounded incumbent diagnostics do not establish a general collapse-price cure; keep the RES flag off pending review and fuller solver validation.", ""]
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--probability-dir", required=True)
@@ -34,6 +65,8 @@ def main():
     hourly = {v: read(source / f"{v}-metrics.json") for v in variants}
     audit = read(Path(args.probability_dir) / "audit.json")
     history_lag = audit.get("settled_history_lag", 2)
+    history_description = ("The headline/default uses already-public D−1 delivery prices. The [D−2 conservative benchmark](conservative-lag2/results.md) is retained separately."
+                           if history_lag == 1 else "This table is the labelled conservative D−2 price-history variant; the CLI default is D−1.")
     rows, byzone, reliability, thresholds, top_thresholds, selected_origins = [], [], [], [], [], []
     for variant in variants:
         d = diagnostics[variant]
@@ -71,7 +104,7 @@ def main():
                         precision_02=thresholds_z["fixed"]["0.2"]["precision"], proxy_brier=b["brier"], proxy_auc=b["auc"]))
     first_bin = diagnostics[variants[0]]["daily"]["logistic"]["reliability"][0]
     text = ["# Held-forward probability results", "",
-            f"Window: 2026-09-14..2026-11-13; training starts 2024-07-01. Monthly origins 09-14 / 10-01 / 11-01; training labels through origin D−{history_lag}. The headline/default uses already-public D−1 delivery prices. The [D−2 conservative benchmark](conservative-lag2/results.md) is retained separately. Hourly target is the mean SDAC settled price ≤0; daily target is any hourly mean ≤0 in a complete Athens market day. Numeric sequences are ordered before deduplication, and hourly means are rounded to eight decimal places. All classification figures in the first table use threshold 0.5.", "",
+            f"Window: 2026-09-14..2026-11-13; training starts 2024-07-01. Monthly origins 09-14 / 10-01 / 11-01; training labels through origin D−{history_lag}. {history_description} Hourly target is the mean SDAC settled price ≤0; daily target is any hourly mean ≤0 in a complete Athens market day. Numeric sequences are ordered before deduplication, and hourly means are rounded to eight decimal places. All classification figures in the first table use threshold 0.5.", "",
             table(rows, [("variant", "Variant"), ("target", "Target"), ("footprint", "Footprint"), ("model", "Model"),
                          ("n", "n"), ("positive", "Events"), ("brier", "Brier"), ("log_loss", "Log-loss"),
                          ("auc", "AUC"), ("hit_rate", "Recall"), ("precision", "Precision"), ("false_alarm_rate", "FP rate")]), "",
@@ -107,8 +140,12 @@ def main():
                        ("n", "n"), ("positive", "Events"), ("brier", "Brier"), ("log_loss", "Log-loss"), ("auc", "AUC"),
                        ("hit_rate", "Recall .5"), ("precision", "Precision .5"), ("false_alarm_rate", "FP rate .5")]), "",
                  "The inference CLI defaults to --settled-lag 1 and writes priceL1 artifacts. Use --settled-lag 2 for the labelled conservative variant. Threshold-0.2/0.3 metrics are in price-history-sensitivity.csv; every zone is in price-history-by-zone.csv.", ""]
-    text += ["## Physical-price ablation", "",
-             "Corrected-fleet eight-day run pending. It clears UTC delivery days under a 10:00 issuance context (recent-generation latency cutoffs active), with latest-revision ENTSO-E forecasts. Both arms include analyst patch ac0ab5bfe079. It is separate from the Athens market-day probability evaluation.", ""]
+    clearing = out / "clearing-metrics.json"
+    if clearing.exists():
+        text += physical_report(read(clearing), out)
+    else:
+        text += ["## Physical-price ablation", "",
+                 "Corrected-fleet eight-day run pending. It clears UTC delivery days under a 10:00 issuance context (recent-generation latency cutoffs active), with latest-revision ENTSO-E forecasts. Both arms include analyst patch ac0ab5bfe079. It is separate from the Athens market-day probability evaluation.", ""]
     (out / "results.md").write_text("\n".join(text))
 
 

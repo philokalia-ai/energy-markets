@@ -29,7 +29,7 @@ solar-regime gate with a two-tranche ladder:
 | `1 - supported_share` | 0 €/MWh | Near-zero variable cost; merchant or support suspended at negative prices |
 | `supported_share` | `-support_eur_mwh` | A known per-MWh production incentive remains payable when prices are negative |
 
-Supply MW is preserved, and thermal, hydro, must-run and demand bids are untouched.
+Supply MW is preserved. Thermal, hydro, must-run and demand bidding rules stay fixed; coupled prices and the second-pass anchors can still respond.
 The flag defaults off. Supported shares default to **zero in every zone**;
 set a zone explicitly with `EUPHEMIA_RES_SUPPORTED_SHARE_DE_LU=...` (hyphens
 become underscores). `EUPHEMIA_RES_SUPPORT_EUR` defaults to 20 €/MWh. This is a
@@ -179,7 +179,9 @@ not sent to the live product.
 The inference CLI refits at the requested as-of date using its then-known
 history. Reported backtest scores use monthly frozen coefficients; they do
 not measure a daily-retraining policy. The output records its generation time
-and labels itself an offline as-of reconstruction.
+and labels itself an offline as-of reconstruction. Metadata distinguishes the legal
+training cutoff from the last observed training date, and counts available target
+price-history/load/RES features, so an extract gap is visible.
 
 Threshold diagnostics report 0.2 / 0.3 / 0.5, test-set maximum-F1 and test-set
 matched-false-alarm operating points. The latter two are explicitly **oracle

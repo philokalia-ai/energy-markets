@@ -22,6 +22,7 @@ def price_metrics(df):
             "corr": float(df.price.corr(df.actual)) if df.price.std() > 0 and df.actual.std() > 0 else None,
             "actual_le_zero": int(actual.sum()), "predicted_le_zero": int(pred.sum()),
             "hits": tp, "false_alarms": fp,
+            "precision": tp / (tp + fp) if tp + fp else None,
             "hit_rate": tp / int(actual.sum()) if actual.any() else None,
             "false_alarm_rate": fp / int((~actual).sum()) if (~actual).any() else None,
             "cap_prints": int((df.price >= 2999).sum()),
@@ -101,6 +102,10 @@ def main():
                                 "changed_actual_le_zero": int((changed & (paired.actual <= 0)).sum()),
                                 "both_wrapper_optimal_cells": int(((paired.wrapper_status_base == "optimal") & (paired.wrapper_status_candidate == "optimal")).sum()),
                                 "changed_by_zone": paired.assign(changed=changed).groupby("zone").changed.sum().to_dict()}
+    optimal = paired[(paired.wrapper_status_base == "optimal") & (paired.wrapper_status_candidate == "optimal")]
+    results["same_cells_both_wrapper_optimal"] = {
+        arm: price_metrics(optimal.rename(columns={column: "price"}))
+        for arm, column in [("baseline", "price_base"), ("res_zero", "price_candidate")]}
     results["status"] = status
     results["unpaired_completed_days_excluded"] = unpaired
     results["coverage_contract"] = "Selected UTC delivery days, not stitched Athens market days; latest-revision ENTSO-E proxy; both arms include analyst ac0ab5bfe079 fleet correction. Full time-limit incumbents are included and counted separately; final wrapper-optimal status does not certify an earlier anchor pass."
