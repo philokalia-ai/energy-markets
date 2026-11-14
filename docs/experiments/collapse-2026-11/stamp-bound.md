@@ -4,12 +4,12 @@ Fixed held-forward predictions, 2026-09-14..11-13. Subsets are selected by sourc
 
 | Subset | Model | n | ≤0 | Brier | Log-loss | AUC | Recall | Precision | FP rate |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| All test cells | pre-gate 06:30 | 57111 | 743 | 0.0105 | 0.0459 | 0.9317 | 0.1211 | 0.6164 | 0.0010 |
-| All test cells | gate latest proxy | 57111 | 743 | 0.0084 | 0.0326 | 0.9786 | 0.5437 | 0.6322 | 0.0042 |
-| Genuine load-stamp era | pre-gate 06:30 | 57015 | 743 | 0.0105 | 0.0460 | 0.9317 | 0.1211 | 0.6164 | 0.0010 |
-| Genuine load-stamp era | gate latest proxy | 57015 | 743 | 0.0084 | 0.0327 | 0.9785 | 0.5437 | 0.6322 | 0.0042 |
-| Load stored revision <10:00 | pre-gate 06:30 | 35886 | 310 | 0.0079 | 0.0368 | 0.9141 | 0.0290 | 0.3333 | 0.0005 |
-| Load stored revision <10:00 | gate latest proxy | 35886 | 310 | 0.0072 | 0.0291 | 0.9709 | 0.3774 | 0.5087 | 0.0032 |
+| All test cells | pre-gate 06:30 | 57111 | 743 | 0.0098 | 0.0412 | 0.9525 | 0.2288 | 0.5986 | 0.0020 |
+| All test cells | gate latest proxy | 57111 | 743 | 0.0080 | 0.0302 | 0.9831 | 0.5451 | 0.6299 | 0.0042 |
+| Genuine load-stamp era | pre-gate 06:30 | 57015 | 743 | 0.0098 | 0.0412 | 0.9525 | 0.2288 | 0.5986 | 0.0020 |
+| Genuine load-stamp era | gate latest proxy | 57015 | 743 | 0.0080 | 0.0303 | 0.9830 | 0.5451 | 0.6299 | 0.0042 |
+| Load stored revision <10:00 | pre-gate 06:30 | 35886 | 310 | 0.0081 | 0.0359 | 0.9306 | 0.1161 | 0.3333 | 0.0020 |
+| Load stored revision <10:00 | gate latest proxy | 35886 | 310 | 0.0069 | 0.0271 | 0.9767 | 0.3613 | 0.5000 | 0.0031 |
 | Load+solar+wind stored revisions <10:00 | pre-gate 06:30 | 877 | 0 | 0.0000 | 0.0001 | — | — | — | 0.0000 |
 | Load+solar+wind stored revisions <10:00 | gate latest proxy | 877 | 0 | 0.0000 | 0.0002 | — | — | — | 0.0000 |
 

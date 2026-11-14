@@ -3,6 +3,7 @@ import importlib.util
 from pathlib import Path
 import unittest
 import sys
+import json
 
 import numpy as np
 import pandas as pd
@@ -26,16 +27,16 @@ class CollapseProbabilityTest(unittest.TestCase):
 
     def test_labels_after_d2_do_not_change_target_features(self):
         actual, fc = self.fixture()
-        df, f = cp.build_features(actual, fc, "pregate_0630")
+        df, f = cp.build_features(actual, fc, "pregate_0630", settled_lag=2)
         market = cp.with_calendar(actual).market_date
         altered = actual.copy()
         altered.loc[market >= "2026-10-09", "actual"] = -1000
-        df2, f2 = cp.build_features(altered, fc, "pregate_0630")
+        df2, f2 = cp.build_features(altered, fc, "pregate_0630", settled_lag=2)
         target = df.market_date == "2026-10-10"
         np.testing.assert_allclose(f[target], f2[target], equal_nan=True)
         # Changes in D-2 must remain informative.
         altered.loc[market == "2026-10-08", "actual"] = -1000
-        _, f3 = cp.build_features(altered, fc, "pregate_0630")
+        _, f3 = cp.build_features(altered, fc, "pregate_0630", settled_lag=2)
         self.assertFalse(np.allclose(f.loc[target, "price_lag2"], f3.loc[target, "price_lag2"]))
 
     def test_post_issuance_forecasts_are_excluded(self):
@@ -74,6 +75,12 @@ class CollapseProbabilityTest(unittest.TestCase):
         before = cp.predict_logistic(model, [[1.5]])[0]
         after = cp.predict_logistic(model, [[1.5], [1e10]])[0]
         self.assertEqual(before, after)
+
+    def test_serialized_model_is_directly_usable(self):
+        x = np.array([[0., np.nan], [1., np.nan], [2., np.nan], [3., np.nan]])
+        model = cp.fit_logistic(x, np.array([0, 0, 1, 1]))
+        saved = json.loads(json.dumps({k: v.tolist() if isinstance(v, np.ndarray) else v for k, v in model.items()}))
+        np.testing.assert_array_equal(cp.predict_logistic(model, x), cp.predict_logistic(saved, x))
 
     def test_dst_lag_is_market_day(self):
         actual, fc = self.fixture()
@@ -139,6 +146,25 @@ class CollapseProbabilityTest(unittest.TestCase):
         row = fc[fc.t == pd.Timestamp("2026-09-20")].iloc[0]
         self.assertEqual(row.load, 200)
         self.assertEqual(row.load_pre0630, 50)
+
+    def test_public_d1_price_history_still_excludes_target(self):
+        actual, fc = self.fixture()
+        df, f = cp.build_features(actual, fc, "pregate_0630", settled_lag=1)
+        changed = actual.copy()
+        market = cp.with_calendar(actual).market_date
+        changed.loc[market >= "2026-10-10", "actual"] = -1000
+        _, after = cp.build_features(changed, fc, "pregate_0630", settled_lag=1)
+        target = df.market_date == "2026-10-10"
+        np.testing.assert_allclose(f[target], after[target], equal_nan=True)
+        self.assertIn("price_lag1", f)
+        self.assertNotIn("price_lag2", f)
+        _, default_features = cp.build_features(actual, fc, "pregate_0630")
+        self.assertIn("price_lag1", default_features)
+        changed.loc[market == "2026-10-09", "actual"] = -1000
+        _, previous_day = cp.build_features(changed, fc, "pregate_0630", settled_lag=1)
+        self.assertFalse(np.allclose(f.loc[target, "price_lag1"], previous_day.loc[target, "price_lag1"]))
+        with self.assertRaises(ValueError):
+            cp.build_features(actual, fc, "pregate_0630", settled_lag=0)
 
 
 if __name__ == "__main__":

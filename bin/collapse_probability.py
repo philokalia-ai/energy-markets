@@ -2,7 +2,7 @@
 """Offline, rolling-origin P(hourly settled day-ahead price <= 0).
 
 No database writes. The 06:30 variant uses calendar, settled prices through
-D-2, and timestamp-filtered load forecasts (otherwise persistence). RES in
+D-1, and timestamp-filtered load forecasts (otherwise persistence). RES in
 that variant is persistence from D-2 only, with the entire stored row last
 updated before issuance. The 10:00 proxy uses latest-revision D-1 forecasts;
 its RES vintage is unverifiable and its metrics are NOT a pre-gate claim.
@@ -150,8 +150,10 @@ def lag_by_market_day(df, columns, days):
         old, on=["zone", "market_date", "local_hour"], how="left", validate="many_to_one")[columns].set_axis(df.index)
 
 
-def build_features(actuals, forecasts, variant):
+def build_features(actuals, forecasts, variant, *, settled_lag=1):
     """Never accepts target labels as numeric predictors; labels only enter lags."""
+    if settled_lag not in (1, 2):
+        raise ValueError("Settled-price history lag must be 1 or 2 market days")
     df = with_calendar(actuals.merge(forecasts, on=["zone", "t"], how="left", validate="one_to_one"))
     df = df.sort_values(["zone", "t"]).reset_index(drop=True)
     f = pd.DataFrame(index=df.index)
@@ -163,19 +165,19 @@ def build_features(actuals, forecasts, variant):
         f[f"weekday_{d}"] = (dow == d).astype(float)
     phase = 2 * np.pi * (df.market_date.dt.dayofyear - 1) / 365.25
     f["season_sin"], f["season_cos"] = np.sin(phase), np.cos(phase)
-    for days in [2, 7]:
+    for days in [settled_lag, 7]:
         lag = lag_by_market_day(df, ["actual"], days).actual
         # Compress extreme spikes without treating negative prices as missing.
         f[f"price_lag{days}"] = np.arcsinh(lag / 50)
         f[f"collapse_lag{days}"] = np.where(lag.notna(), lag <= 0, np.nan)
     daily = df.assign(y=np.where(df.actual.notna(), df.actual <= 0, np.nan)).groupby(
         ["zone", "market_date"]).agg(events=("y", "sum"), n=("y", "count"))
-    # Reindex missing days so shift(2) means calendar days, not observed rows.
+    # Reindex missing days so shifts mean calendar days, not observed rows.
     grid = pd.MultiIndex.from_product([ZONES, pd.date_range(df.market_date.min(), df.market_date.max())], names=["zone", "market_date"])
     daily = daily.reindex(grid)
     for window in [7, 28]:
-        numer = daily.events.groupby(level=0).transform(lambda s: s.rolling(window, min_periods=1).sum().shift(2))
-        denom = daily.n.groupby(level=0).transform(lambda s: s.rolling(window, min_periods=1).sum().shift(2))
+        numer = daily.events.groupby(level=0).transform(lambda s: s.rolling(window, min_periods=1).sum().shift(settled_lag))
+        denom = daily.n.groupby(level=0).transform(lambda s: s.rolling(window, min_periods=1).sum().shift(settled_lag))
         freq = (numer / denom).rename(f"recent_{window}d").reset_index()
         f[f"recent_{window}d"] = df[["zone", "market_date"]].merge(freq, how="left", on=["zone", "market_date"])[f"recent_{window}d"].to_numpy()
 
@@ -249,11 +251,14 @@ def predict_logistic(model, x):
     x = np.asarray(x, dtype=float)
     if "constant" in model:
         return np.full(len(x), model["constant"])
+    mean = np.asarray(model["mean"], dtype=float)
+    scale = np.asarray(model["scale"], dtype=float)
+    active = np.asarray(model["active"], dtype=bool)
     missing = ~np.isfinite(x)
-    x = np.where(missing, model["mean"], x)
-    x[:, ~model["active"]] = model["mean"][~model["active"]]
-    missing[:, ~model["active"]] = True
-    design = np.c_[(x - model["mean"]) / model["scale"], missing.astype(float)]
+    x = np.where(missing, mean, x)
+    x[:, ~active] = mean[~active]
+    missing[:, ~active] = True
+    design = np.c_[(x - mean) / scale, missing.astype(float)]
     return expit(design @ model["coef"] + model["intercept"])
 
 
@@ -290,14 +295,16 @@ def evaluate_predictions(predictions):
     return out
 
 
-def rolling_evaluate(df, features, test_start, test_end, train_start="2024-07-01"):
-    """Monthly expanding origins; training labels end at origin D-2."""
+def rolling_evaluate(df, features, test_start, test_end, train_start="2024-07-01", *, settled_lag=1):
+    """Monthly expanding origins; only already-public DA price labels enter."""
+    if settled_lag not in (1, 2):
+        raise ValueError("Settled-price history lag must be 1 or 2 market days")
     starts = [pd.Timestamp(test_start)]
     starts += list(pd.date_range(pd.Timestamp(test_start) + pd.offsets.MonthBegin(1), test_end, freq="MS"))
     output, artifacts = [], {}
     for origin, stop in zip(starts, starts[1:] + [pd.Timestamp(test_end) + pd.Timedelta(days=1)]):
-        # At the origin's D-1 issuance only D-2 labels are admitted.
-        train = (df.market_date >= train_start) & (df.market_date <= origin - pd.Timedelta(days=2)) & df.actual.notna()
+        # D-1 delivery DA prices were auctioned on D-2; lag 2 is conservative.
+        train = (df.market_date >= train_start) & (df.market_date <= origin - pd.Timedelta(days=settled_lag)) & df.actual.notna()
         test = (df.market_date >= origin) & (df.market_date < stop) & df.actual.notna()
         print(f"origin={origin.date()} train={train.sum()} test={test.sum()}", flush=True)
         for zone in ZONES:
@@ -341,6 +348,7 @@ def main():
     parser.add_argument("--live-dir")
     parser.add_argument("--test-start", default="2026-09-14")
     parser.add_argument("--test-end", default="2026-11-13")
+    parser.add_argument("--settled-lag", type=int, choices=[1, 2], default=1)
     parser.add_argument("--variants", nargs="+", default=["pregate_0630", "gate_1000_latest_proxy"],
                         choices=["pregate_0630", "gate_1000_latest_proxy"])
     args = parser.parse_args()
@@ -353,14 +361,15 @@ def main():
     forecasts = hourly_forecasts(con, "2024-06-01", end)
     audit = {"actual_rows": len(actuals), "forecast_rows": len(forecasts), "train_start": "2024-07-01",
              "test_start": args.test_start, "test_end": args.test_end, "threshold_eur": 0,
-             "target": "hourly mean settled DA price <= 0", "latest_revision_proxy": True}
+             "target": "hourly mean settled DA price <= 0", "latest_revision_proxy": True,
+             "settled_history_lag": args.settled_lag}
     for variant in args.variants:
         print("features", variant, flush=True)
-        df, f = build_features(actuals, forecasts, variant)
+        df, f = build_features(actuals, forecasts, variant, settled_lag=args.settled_lag)
         test = (df.market_date >= args.test_start) & (df.market_date <= args.test_end)
         audit[variant] = {"cells": int(test.sum()), "physical_complete": int(f.loc[test, "res_share"].notna().sum()),
                           "feature_names": list(f.columns)}
-        pred, artifacts = rolling_evaluate(df, f, args.test_start, args.test_end)
+        pred, artifacts = rolling_evaluate(df, f, args.test_start, args.test_end, settled_lag=args.settled_lag)
         pred.to_csv(out / f"{variant}-predictions.csv.gz", index=False)
         report = evaluate_predictions(pred)
         if args.live_dir:

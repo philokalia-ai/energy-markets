@@ -32,7 +32,9 @@ def main():
     variants = ["pregate_0630", "gate_1000_latest_proxy"]
     diagnostics = {v: read(source / f"{v}-diagnostics.json") for v in variants}
     hourly = {v: read(source / f"{v}-metrics.json") for v in variants}
-    rows, byzone, reliability, thresholds = [], [], [], []
+    audit = read(Path(args.probability_dir) / "audit.json")
+    history_lag = audit.get("settled_history_lag", 2)
+    rows, byzone, reliability, thresholds, top_thresholds, selected_origins = [], [], [], [], [], []
     for variant in variants:
         d = diagnostics[variant]
         for target, data in [("hour", hourly[variant]), ("day", d["daily"])]:
@@ -45,11 +47,20 @@ def main():
             for footprint in ["all39", "excluding_italy"]:
                 for threshold, metrics in d[key][footprint]["fixed"].items():
                     thresholds.append(dict(variant=variant, target=target, footprint=footprint, choice="fixed_" + threshold, **metrics))
-                for choice in ["oracle_test_max_f1", "oracle_test_matched_zero_fpr", "lag2_indicator", "oracle_test_matched_lag2_fpr"]:
+                lag = d.get("settled_history_lag", history_lag)
+                for choice in ["oracle_test_max_f1", "oracle_test_matched_zero_fpr", f"lag{lag}_indicator", f"oracle_test_matched_lag{lag}_fpr"]:
                     thresholds.append(dict(variant=variant, target=target, footprint=footprint, choice=choice, **d[key][footprint][choice]))
-        thresholds.append(dict(variant=variant, target="hour", footprint="all39", choice="prior_origin_selected_f1",
-                               **d["hourly"]["validation_selected_max_f1"]["combined"]))
-    for name, data in [("probability-summary", rows), ("probability-by-zone", byzone), ("reliability", reliability), ("thresholds", thresholds)]:
+        selected = dict(d["hourly"]["validation_selected_max_f1"]["combined"])
+        selected["threshold"] = None  # Each origin has its own preceding-window threshold.
+        thresholds.append(dict(variant=variant, target="hour", footprint="all39", choice="prior_origin_selected_f1", **selected))
+        for origin in d["hourly"]["validation_selected_max_f1"]["origins"]:
+            selected_origins.append(dict(variant=variant, origin=origin["origin"],
+                                         validation_n=origin["validation_n"],
+                                         validation_positive=origin["validation_positive"], **origin["test"]))
+        for zone, data in d["hourly_top8"].items():
+            for threshold, metrics in data["fixed"].items():
+                top_thresholds.append(dict(variant=variant, zone=zone, choice="fixed_" + threshold, **metrics))
+    for name, data in [("probability-summary", rows), ("probability-by-zone", byzone), ("reliability", reliability), ("thresholds", thresholds), ("top8-thresholds", top_thresholds), ("selected-thresholds-by-origin", selected_origins)]:
         pd.DataFrame(data).to_csv(out / f"{name}.csv", index=False)
     top = []
     for z, thresholds_z in diagnostics[variants[0]]["hourly_top8"].items():
@@ -58,19 +69,19 @@ def main():
                         hits=a["hits"], fp=a["false_alarms"], recall=a["hit_rate"], precision=a["precision"],
                         recall_02=thresholds_z["fixed"]["0.2"]["recall"],
                         precision_02=thresholds_z["fixed"]["0.2"]["precision"], proxy_brier=b["brier"], proxy_auc=b["auc"]))
-    audit = read(Path(args.probability_dir) / "audit.json")
+    first_bin = diagnostics[variants[0]]["daily"]["logistic"]["reliability"][0]
     text = ["# Held-forward probability results", "",
-            "Window: 2026-09-14..2026-11-13; training starts 2024-07-01. Monthly origins 09-14 / 10-01 / 11-01; training labels through origin D−2. Hourly target is the mean SDAC settled price ≤0; daily target is any hourly mean ≤0 in a complete Athens market day. Numeric sequences are ordered before deduplication, and hourly means are rounded to eight decimal places. All classification figures in the first table use threshold 0.5.", "",
+            f"Window: 2026-09-14..2026-11-13; training starts 2024-07-01. Monthly origins 09-14 / 10-01 / 11-01; training labels through origin D−{history_lag}. The headline/default uses already-public D−1 delivery prices. The [D−2 conservative benchmark](conservative-lag2/results.md) is retained separately. Hourly target is the mean SDAC settled price ≤0; daily target is any hourly mean ≤0 in a complete Athens market day. Numeric sequences are ordered before deduplication, and hourly means are rounded to eight decimal places. All classification figures in the first table use threshold 0.5.", "",
             table(rows, [("variant", "Variant"), ("target", "Target"), ("footprint", "Footprint"), ("model", "Model"),
                          ("n", "n"), ("positive", "Events"), ("brier", "Brier"), ("log_loss", "Log-loss"),
                          ("auc", "AUC"), ("hit_rate", "Recall"), ("precision", "Precision"), ("false_alarm_rate", "FP rate")]), "",
             "## Threshold choice", "",
-            "No score-driven model search. Test-optimal F1 and matched-FP points are **oracle descriptions of the held-forward ROC/PR curve**, not deployable thresholds. A separate F1 threshold uses previously issued predictions on the 28-day window ending origin D−2. Later test labels never select an earlier threshold.", "",
+            f"No score-driven model search. Test-optimal F1 and matched-FP points are **oracle descriptions of the held-forward ROC/PR curve**, not deployable thresholds. A separate F1 threshold uses previously issued predictions on the 28-day window ending origin D−{history_lag}. Later test labels never select an earlier threshold.", "",
             table([r for r in thresholds if r["footprint"] == "all39"],
                   [("variant", "Variant"), ("target", "Target"), ("choice", "Choice"), ("threshold", "Threshold"),
                    ("recall", "Recall"), ("precision", "Precision"), ("f1", "F1"), ("hits", "TP"), ("false_alarms", "FP"), ("false_alarm_rate", "FP rate")]), "",
             "## Eight zones with most hourly collapses", "",
-            "Ranking is for presentation only; ties use zone name. Each row has 1,465 held-forward hours. The main table gives per-zone precision and recall at 0.5; the adjacent CSVs cover every zone and thresholds 0.2/0.3.", "",
+            "Ranking is for presentation only; ties use zone name. Each row has 1,465 held-forward hours. The main table gives per-zone precision and recall at 0.5; probability-by-zone.csv covers every zone, top8-thresholds.csv adds 0.2/0.3/0.5 for these eight zones, and selected-thresholds-by-origin.csv records the preceding-window F1 thresholds.", "",
             table(top, [("zone", "Zone"), ("events", "Events"), ("brier", "Pre-gate Brier"), ("auc", "AUC"),
                         ("hits", "TP"), ("fp", "FP"), ("recall", "Recall .5"), ("precision", "Precision .5"),
                         ("recall_02", "Recall .2"), ("precision_02", "Precision .2"), ("proxy_brier", "Proxy Brier"), ("proxy_auc", "Proxy AUC")]), "",
@@ -78,15 +89,24 @@ def main():
             "On 54,303 exact common live cells there are **710 canonical collapse labels**, with no disagreement after normalizing both sources to eight decimals. The immutable sim has zero ≤0 predictions. Published lead-1 weather forecasts were frozen 08:16–10:06 UTC D−1, later than 06:30; seven days were a few minutes after the summer auction gate.", "",
             "## Leakage and calibration limits", "",
             "The [timestamp-bound table](stamp-bound.md) prevents a gate-time performance claim: only 877 cells have load+solar+wind stored revisions all before 10:00, containing zero collapse events. Latest-D1 scores measure potential information, not a verified gate-time replay. Pre-gate raw revisions are filtered before resolution selection. No ERA5, target-day observations or future labels enter the 06:30 model.", "",
-            "Reliability is imperfect: the pre-gate day model's <0.1 bin predicts about 1.5% risk while observing about 3.7%; higher bins have few samples. This is a candidate for a prospective archived-input pilot, not a claim of calibrated operational alerts. Reliability counts are in reliability.csv; undefined AUC/recall/precision are null. No seasonal-generalization claim or uncertainty interval is inferred from two months.", ""]
+            f"Reliability is imperfect: the pre-gate day model's lowest bin averages {100*first_bin['mean_probability']:.1f}% risk while observing {100*first_bin['event_rate']:.1f}% over {first_bin['n']} zone-days; higher bins have few samples. This is a candidate for a prospective archived-input pilot, not a claim of calibrated operational alerts. Reliability counts are in reliability.csv; undefined AUC/recall/precision are null. No seasonal-generalization claim or uncertainty interval is inferred from two months.", ""]
     foundation = out / "foundation-comparison.csv"
     if foundation.exists():
         f = pd.read_csv(foundation)
         text += ["## Foundation-model comparator", "",
-                 "Chronos-2 prices-only D−2 forecasts match the conservative settled-information cutoff, verified from every context_end_utc. Both models are scored on exactly 57,111 cells; the logistic model additionally uses calendar and accepted load/RES persistence. This compares these pipelines, not model families in isolation. Quantile-interpolated Chronos probabilities are clipped to [0.005, 0.995] by its author.", "",
+                 f"Chronos-2 prices-only D−{history_lag} forecasts match the headline settled-information cutoff, verified from every context_end_utc and the prior auction's price availability. Both models are scored on exactly 57,111 cells; the logistic model additionally uses calendar and accepted load/RES persistence. This compares these pipelines, not model families in isolation. Quantile-interpolated Chronos probabilities are clipped to [0.005, 0.995] by its author.", "",
                  table(f[f.footprint.isin(["all39", "excluding_italy"])].to_dict("records"),
                        [("footprint", "Footprint"), ("model", "Model"), ("n", "n"), ("positive", "Events"),
                         ("brier", "Brier"), ("log_loss", "Log-loss"), ("auc", "AUC"), ("hit_rate", "Recall .5"), ("precision", "Precision .5")]), ""]
+    history = out / "price-history-sensitivity.csv"
+    if history.exists():
+        h = pd.read_csv(history)
+        text += ["## Default D−1 history and conservative D−2 comparison", "",
+                 "D−1 delivery day-ahead prices are auctioned/published on D−2, so they are normally known by the D−1 morning issue ([Nord Pool daily process](https://www.nordpoolgroup.com/en/the-power-market/Day-ahead-market/)). The default uses this price history, recent price-event frequencies and training labels through D−1. Forecast-publication rules and physical D−2 forecast persistence stay unchanged. C=1 and monthly origins are identical in the labelled conservative D−2 benchmark. This is additional public information, with no model-parameter search. Initial price revisions are not archived in the extract.", "",
+                 table(h.to_dict("records"), [("variant", "Price history"), ("target", "Target"), ("footprint", "Footprint"),
+                       ("n", "n"), ("positive", "Events"), ("brier", "Brier"), ("log_loss", "Log-loss"), ("auc", "AUC"),
+                       ("hit_rate", "Recall .5"), ("precision", "Precision .5"), ("false_alarm_rate", "FP rate .5")]), "",
+                 "The inference CLI defaults to --settled-lag 1 and writes priceL1 artifacts. Use --settled-lag 2 for the labelled conservative variant. Threshold-0.2/0.3 metrics are in price-history-sensitivity.csv; every zone is in price-history-by-zone.csv.", ""]
     text += ["## Physical-price ablation", "",
              "Corrected-fleet eight-day run pending. It clears UTC delivery days under a 10:00 issuance context (recent-generation latency cutoffs active), with latest-revision ENTSO-E forecasts. Both arms include analyst patch ac0ab5bfe079. It is separate from the Athens market-day probability evaluation.", ""]
     (out / "results.md").write_text("\n".join(text))

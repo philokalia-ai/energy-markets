@@ -50,7 +50,7 @@ def matched_fpr_threshold(y, p, target_fpr):
     return float(np.nextafter(negatives[allowed], np.inf))
 
 
-def threshold_report(pred, lag2):
+def threshold_report(pred, lag2, *, settled_lag=1):
     joined = pred.merge(lag2, on=["zone", "t"], how="left", validate="one_to_one")
     y, p = joined.y.to_numpy(), joined.probability.to_numpy()
     valid = joined.lag2.notna()
@@ -60,14 +60,15 @@ def threshold_report(pred, lag2):
     return {"fixed": {str(t): detection(y, p, t) for t in [0.2, 0.3, 0.5]},
             "oracle_test_max_f1": detection(y, p, best_f1_threshold(y, p)),
             "oracle_test_matched_zero_fpr": detection(y, p, zero),
-            "lag2_indicator": base,
-            "oracle_test_matched_lag2_fpr": detection(joined.loc[valid, "y"], joined.loc[valid, "probability"], matched)}
+            f"lag{settled_lag}_indicator": base,
+            f"oracle_test_matched_lag{settled_lag}_fpr": detection(joined.loc[valid, "y"], joined.loc[valid, "probability"], matched)}
 
 
 def daily_dataset(df, features):
     """One label per COMPLETE market day; direct event, no independence trick."""
-    columns = ["season_sin", "season_cos", "price_lag2", "price_lag7",
-               "collapse_lag2", "collapse_lag7", "recent_7d", "recent_28d",
+    lag = 1 if "price_lag1" in features else 2
+    columns = ["season_sin", "season_cos", f"price_lag{lag}", "price_lag7",
+               f"collapse_lag{lag}", "collapse_lag7", "recent_7d", "recent_28d",
                "log_load", "solar_share", "wind_share", "res_share",
                "residual_share", "neighbour_recent_7d", "neighbour_residual_share"]
     x = pd.concat([df[["zone", "market_date"]], features[columns]], axis=1)
@@ -87,9 +88,9 @@ def daily_dataset(df, features):
     return daily, agg.reset_index(drop=True).astype(float)
 
 
-def prior_origin_predictions(df, features, start, end, origin):
+def prior_origin_predictions(df, features, start, end, origin, *, settled_lag=1):
     """One fixed origin for pre-test threshold calibration (no tuning loop)."""
-    tr_all = df.actual.notna() & (df.market_date >= "2024-07-01") & (df.market_date <= pd.Timestamp(origin) - pd.Timedelta(days=2))
+    tr_all = df.actual.notna() & (df.market_date >= "2024-07-01") & (df.market_date <= pd.Timestamp(origin) - pd.Timedelta(days=settled_lag))
     te_all = df.actual.notna() & (df.market_date >= start) & (df.market_date <= end)
     rows = []
     for zone in cp.ZONES:
@@ -104,14 +105,14 @@ def prior_origin_predictions(df, features, start, end, origin):
     return pd.concat(rows, ignore_index=True)
 
 
-def validation_selected_thresholds(test, prior):
-    """Pooled F1 threshold from preceding 28 days, ending origin D-2."""
+def validation_selected_thresholds(test, prior, *, settled_lag=1):
+    """Pooled F1 threshold from a preceding already-public 28-day window."""
     all_rows = pd.concat([prior, test], ignore_index=True)
     reports, chunks = [], []
     for origin, part in test.groupby("origin"):
         date = pd.Timestamp(origin)
-        val = all_rows[(all_rows.market_date >= date - pd.Timedelta(days=29)) &
-                       (all_rows.market_date <= date - pd.Timedelta(days=2))]
+        val = all_rows[(all_rows.market_date >= date - pd.Timedelta(days=27 + settled_lag)) &
+                       (all_rows.market_date <= date - pd.Timedelta(days=settled_lag))]
         threshold = best_f1_threshold(val.y, val.probability)
         reports.append({"origin": str(origin), "validation_n": len(val),
                         "validation_positive": int(val.y.sum()),
@@ -127,6 +128,7 @@ def main():
     p.add_argument("--probability-dir", required=True)
     p.add_argument("--live-dir", required=True)
     p.add_argument("--output", required=True)
+    p.add_argument("--settled-lag", type=int, choices=[1, 2], default=1)
     args = p.parse_args()
     out = Path(args.output)
     out.mkdir(parents=True, exist_ok=True)
@@ -137,30 +139,32 @@ def main():
     live = cp.live_baseline(args.live_dir, "2026-09-14", "2026-11-13")
     for variant in ["pregate_0630", "gate_1000_latest_proxy"]:
         print("diagnostics", variant, flush=True)
-        df, features = cp.build_features(actuals, forecasts, variant)
+        df, features = cp.build_features(actuals, forecasts, variant, settled_lag=args.settled_lag)
         pred = pd.read_csv(Path(args.probability_dir) / f"{variant}-predictions.csv.gz", parse_dates=["t", "market_date"])
         hourly = pred[pred.model == "logistic"].copy()
         lag2 = df[["zone", "t"]].copy()
-        lag2["lag2"] = features.collapse_lag2
+        lag2["lag2"] = features[f"collapse_lag{args.settled_lag}"]
         top = hourly.groupby("zone").y.sum().sort_values(ascending=False, kind="stable").head(8).index.tolist()
-        summary = {"hourly": {"all39": threshold_report(hourly, lag2),
-                               "excluding_italy": threshold_report(hourly[~hourly.zone.str.startswith("IT-")], lag2)},
-                   "hourly_top8": {z: threshold_report(hourly[hourly.zone == z], lag2) for z in top}}
+        summary = {"settled_history_lag": args.settled_lag,
+                   "hourly": {"all39": threshold_report(hourly, lag2, settled_lag=args.settled_lag),
+                               "excluding_italy": threshold_report(hourly[~hourly.zone.str.startswith("IT-")], lag2, settled_lag=args.settled_lag)},
+                   "hourly_top8": {z: threshold_report(hourly[hourly.zone == z], lag2, settled_lag=args.settled_lag) for z in top}}
         # Rebuild aggregate files from saved predictions; no repeated main fit.
         cp.dump_json(out / f"{variant}-metrics.json", cp.evaluate_predictions(pred))
         print("prior threshold fit", variant, flush=True)
-        prior = prior_origin_predictions(df, features, "2026-08-16", "2026-09-12", "2026-08-16")
-        summary["hourly"]["validation_selected_max_f1"] = validation_selected_thresholds(hourly, prior)
+        prior_end = "2026-09-13" if args.settled_lag == 1 else "2026-09-12"
+        prior = prior_origin_predictions(df, features, "2026-08-16", prior_end, "2026-08-16", settled_lag=args.settled_lag)
+        summary["hourly"]["validation_selected_max_f1"] = validation_selected_thresholds(hourly, prior, settled_lag=args.settled_lag)
         daily, day_features = daily_dataset(df, features)
-        day_pred, day_models = cp.rolling_evaluate(daily, day_features, "2026-09-14", "2026-11-13")
+        day_pred, day_models = cp.rolling_evaluate(daily, day_features, "2026-09-14", "2026-11-13", settled_lag=args.settled_lag)
         day_pred.to_csv(out / f"{variant}-day-predictions.csv.gz", index=False)
         cp.dump_json(out / f"{variant}-day-models.json", {"features": list(day_features.columns), "origins": day_models})
         summary["daily"] = cp.evaluate_predictions(day_pred)
         day_hour = day_pred[day_pred.model == "logistic"]
         day_lag = daily[["zone", "t"]].copy()
-        day_lag["lag2"] = day_features.collapse_lag2_max
-        summary["daily_thresholds"] = {"all39": threshold_report(day_hour, day_lag),
-                                       "excluding_italy": threshold_report(day_hour[~day_hour.zone.str.startswith("IT-")], day_lag)}
+        day_lag["lag2"] = day_features[f"collapse_lag{args.settled_lag}_max"]
+        summary["daily_thresholds"] = {"all39": threshold_report(day_hour, day_lag, settled_lag=args.settled_lag),
+                                       "excluding_italy": threshold_report(day_hour[~day_hour.zone.str.startswith("IT-")], day_lag, settled_lag=args.settled_lag)}
         summary["daily_top8"] = {z: cp.probability_metrics(s.y, s.probability) for z, s in day_hour[day_hour.zone.isin(top)].groupby("zone")}
         # Exact common-live comparators, hourly and daily, all39 and ex-Italy.
         common = hourly.merge(live, on=["zone", "t"], how="inner", suffixes=("", "_live"))

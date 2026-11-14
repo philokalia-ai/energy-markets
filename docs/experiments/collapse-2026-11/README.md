@@ -1,7 +1,9 @@
 # Collapse probabilities and RES offers — November 2026 experiment
 
-Two independent, experimental mechanisms. Neither changes production defaults,
-the forecast schema, the model version, or settled/counterfactual prices.
+Two independent, experimental mechanisms. The RES ladder defaults off and the
+probability tools produce labelled local artifacts. The forecast schema and
+model version stay unchanged. This branch also carries the analyst's active
+fleet-rescue correction as the shared baseline dependency described below.
 The physical counterfactual remains a market model; the statistical probability
 predicts the settled market and must not be interpreted as a competitive price.
 
@@ -66,8 +68,8 @@ the settlement price tick and makes the event definition reproducible.
 | Feature | 06:30 UTC D−1 variant (`pregate_0630`) | ~10:00 D−1 variant (`gate_1000_latest_proxy`) |
 |---|---|---|
 | Hour, weekday, annual sine/cosine | Known before issuance | Same |
-| Same-hour settled price and ≤0 indicator, lags 2 and 7 market days | Only D−2 / D−7; no D−1 settled data | Same conservative cutoff |
-| Settled collapse frequency, 7 / 28 days | Window ends D−2, weighted by observed hours | Same |
+| Same-hour DA price and ≤0 indicator, lags 1 and 7 market days | Default: D−1 prices, already auctioned/published on D−2; `--settled-lag 2` retains D−2 conservative history | Same public price-history cutoff |
+| Settled collapse frequency, 7 / 28 days | Window ends D−1, weighted by observed hours (D−2 in the conservative variant) | Same |
 | D−1 load forecast | Only audited genuine-stamp era (delivery ≥2025-11-01) and stored update <06:30 issuance; otherwise D−2 same-hour forecast persistence if its stored update <issuance | Latest stored D−1 revision; **not proven available by 10:00** |
 | Wind and solar | D−2 same-hour forecast persistence only; older row's last update must be <issuance and source delivery in genuine-stamp era | Latest D−1 forecast column; D−1-specific publication **unverifiable** |
 | Load, solar/wind/RES share, residual-load share | From the accepted forecasts/persistence above; no actual D load or actual D RES | From latest D−1 forecast proxy |
@@ -90,12 +92,15 @@ future coverage through missingness. Direct-load and D−2-persistence snapshots
 have separate issuance cutoffs. A synthetic early-hourly/late-quarterly fixture
 guards this ordering.
 
-Per-zone scaling and fitting use only training labels through **origin D−2**.
-Features for later days can use their own D−2 settled history, but fitted
+Per-zone scaling and fitting use only already-public DA price labels through
+**origin D−1** by default. Those prices were auctioned on D−2 ([Nord Pool daily
+process](https://www.nordpoolgroup.com/en/the-power-market/Day-ahead-market/)).
+Features for later days can use their own already-public D−1 price history, but fitted
 coefficients stay frozen until the next monthly origin. There are no random
 splits, future labels, resampling or test-fit calibration. The settled-price
-history is a latest-settled reconstruction under the team's D−2 availability
-assumption, not an archive of initial auction-price revisions.
+history is a latest-settled reconstruction, not an archive of initial auction-price
+revisions. The labelled `--settled-lag 2` variant remains available and its
+[frozen benchmark](conservative-lag2/results.md) is retained separately.
 
 The gate-time proxy measures informational value of the D−1 forecast fields,
 not an honest replay at the auction gate. The clearing experiment also uses
@@ -171,12 +176,16 @@ the accepted ex-ante features: mean/min/max of lagged prices, frequencies and
 forecast shares, season and weekday. It does not multiply independent hourly
 non-event probabilities. This prediction is statistical and experimental; it is
 not sent to the live product.
+The inference CLI refits at the requested as-of date using its then-known
+history. Reported backtest scores use monthly frozen coefficients; they do
+not measure a daily-retraining policy. The output records its generation time
+and labels itself an offline as-of reconstruction.
 
 Threshold diagnostics report 0.2 / 0.3 / 0.5, test-set maximum-F1 and test-set
 matched-false-alarm operating points. The latter two are explicitly **oracle
 descriptions of the ROC/precision-recall curve**, not thresholds deployable
 from this test. A separate F1 threshold uses preceding-origin predictions on
-the 28 days ending origin D−2. An additional frozen 2026-08-16 origin supplies
+the 28 days ending origin D−1 (D−2 in the conservative variant). An additional frozen 2026-08-16 origin supplies
 the first pre-test calibration window; later origins use previously issued
 held-forward predictions. No current test labels enter threshold selection.
 
@@ -185,17 +194,34 @@ held-forward predictions. No current test labels enter threshold selection.
 [Probability results](results.md), [per-zone scores](probability-by-zone.csv),
 [thresholds](thresholds.csv), [reliability](reliability.csv), and the
 [timestamp-qualified leakage bound](stamp-bound.md) are complete. The 06:30
-hourly model improves Brier from 0.01349 (climatology) to 0.01049 on 57,111
-cells; the directly fitted day model improves 0.07313 to 0.05315 on 2,377
+default uses already-public **D−1 price history**: hourly Brier is **0.00983** on
+57,111 cells; directly fitted day-event Brier is **0.04693** on 2,377
 complete zone-days. The stronger latest-D1 proxy is **not** verified at 10:00:
 only 877 fully stamped cells survive, containing no collapse events.
+
+The headline and CLI default are `--settled-lag 1`. Both issuance variants use
+the same public price-history cutoff; this does not admit unissued load/RES.
+
+| Forecast inputs / public price history | Hourly Brier | Hourly AUC | Day-event Brier | Day-event AUC |
+|---|---:|---:|---:|---:|
+| **06:30 / D−1 (default)** | **0.009827** | **0.95247** | **0.046930** | **0.89276** |
+| 06:30 / D−2 (conservative) | 0.010485 | 0.93165 | 0.053149 | 0.84458 |
+| Latest-D1 gate proxy / D−1 (unverified timing) | 0.007966 | 0.98307 | 0.035341 | 0.94965 |
+| Latest-D1 gate proxy / D−2 (conservative history, unverified timing) | 0.008382 | 0.97857 | 0.038644 | 0.93535 |
 
 Corrected-fleet physical-price results will be added after the eight-day run.
 The running team report is `em-team/reports/collapse.md`.
 
+The physical scorer uses only complete paired day/arm price vectors. It includes
+full returned time-limit incumbents explicitly, counts those cells separately,
+and also reports a final-wrapper-optimal subset. Neither the incumbent scores
+nor a final optimal status certify an earlier anchor pass. Per-run wall time
+and both pass solve times come from the logs: the engine's `solve_time` field
+alone is **only the final pass**, not the full day's solver cost.
+
 `bin/report_collapse.py --probability-dir ... --diagnostics-dir ... --output ...`
 renders the frozen evaluation artifacts into the CSVs and Markdown tables.
-The final statistical artifacts are labelled `collapse-probability-final`,
-`collapse-diagnostics-final` and `collapse-tomorrow-final` in the team results
-directory. Earlier raw-floating-point / pre-snapshot artifacts are retained as
-superseded diagnostics and do not supply the final tables.
+Primary artifacts are labelled `collapse-probability-primary`,
+`collapse-diagnostics-primary` and `collapse-tomorrow-priceL1` in team results.
+The earlier `*-final` D−2 artifacts are the labelled conservative benchmark.
+Raw-floating-point / pre-snapshot artifacts remain superseded diagnostics.
