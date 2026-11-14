@@ -1640,9 +1640,17 @@ function create_merit_order_book(
                         # master MILP decides acceptance, accepted blocks inject
                         # their profile as price-takers (fix-and-reprice).
                         must_run_qty = min(g.p_min, offered_pmax(g))
+                        # Block limit price: SRMC (the competitive avoidable cost of
+                        # running the day) by default; EUPHEMIA_BLOCK_PRICE=mustrun
+                        # keeps the static split's calibrated economics (0.6 at
+                        # factor×SRMC + 0.4 at max(SRMC/2, SRMC−40)) so ONLY the
+                        # acceptance rule changes (isolation arm).
+                        mc = g.marginal_cost
+                        bprice = get(ENV, "EUPHEMIA_BLOCK_PRICE", "srmc") == "mustrun" ?
+                            0.6 * mc * must_run_price_factor + 0.4 * max(mc * 0.5, mc - 40.0) : mc
                         if must_run_qty > 0.1
-                            push!(block_members, (g.code, g.marginal_cost,
-                                SimpleOrder(:supply, g.marginal_cost, must_run_qty,
+                            push!(block_members, (g.code, bprice,
+                                SimpleOrder(:supply, bprice, must_run_qty,
                                     Symbol(bidding_zone), date_time, resolution_minutes)))
                             total_supply_capacity += must_run_qty
                         end
