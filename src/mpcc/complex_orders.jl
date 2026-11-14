@@ -65,6 +65,13 @@ function resolve_complex_orders(order_book::MPCCOrderBook;
         optimizer, _ = select_solver(preferred_solver == "auto" ? "highs" : preferred_solver)
         model = Model(optimizer)
         set_silent(model)
+        # One thread: deterministic, and avoids the HiGHS parallel-MIP scheduler
+        # segfault (HighsSplitDeque::publishWork in a RENS sub-MIP) observed once on
+        # a 39-zone block master. No-op for solvers without the option.
+        try
+            set_optimizer_attribute(model, "threads", 1)
+        catch
+        end
         ns, nl = length(simple), length(linked)
         @variable(model, 0 <= x[1:ns] <= 1)
         @variable(model, 0 <= y[1:nl] <= 1)
