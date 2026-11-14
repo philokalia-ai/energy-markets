@@ -1,7 +1,9 @@
 """Build the hourly panel used by the TSFM experiments (read-only on the extract).
 
 Output (outside the repo): $TSFM_OUT/panel.parquet with one row per (zone, UTC hour):
-  price      settled day-ahead, resolution-aware hourly mean (highest `sequence` wins,
+  price      settled day-ahead, resolution-aware hourly mean rounded to 1e-8 (decimal
+             cancellation can leave +/-1e-18 at exact zeros; sign depends on DuckDB threads)
+             (highest `sequence` wins,
              tie-break latest update_time_utc) — same convention as test/scripts/eu_eval_metrics.jl
   load_fc    ENTSO-E day-ahead total load forecast, hourly mean
   load_upd   max(update_time_utc) of the load rows in that hour (publication audit)
@@ -29,7 +31,7 @@ WITH d AS (
   FROM entsoe.energy_prices
   WHERE contract_type='Day-ahead' AND area_type_code LIKE 'BZN%' AND price_currency_mwh IS NOT NULL
     AND map_code IN ({zl}))
-SELECT map_code zone, date_trunc('hour', date_time_utc) t, avg(price_currency_mwh) price
+SELECT map_code zone, date_trunc('hour', date_time_utc) t, round(avg(price_currency_mwh), 8) price
 FROM d WHERE rn=1 GROUP BY 1,2""").df()
 
 load = c.execute(f"""
@@ -52,7 +54,7 @@ FROM h GROUP BY 1,2""").df()
 
 panel = price.merge(load, on=["zone", "t"], how="outer").merge(res, on=["zone", "t"], how="outer")
 panel = panel.sort_values(["zone", "t"]).reset_index(drop=True)
-panel.to_parquet(f"{OUT}/panel.parquet")
+panel.to_parquet(f"{OUT}/panel.tmp.parquet"); os.replace(f"{OUT}/panel.tmp.parquet", f"{OUT}/panel.parquet")
 print("panel", panel.shape, panel.t.min(), panel.t.max())
 
 rows = []
@@ -68,5 +70,5 @@ for z in zones:
                              actual_json=day["actual"][i],
                              gbm=(day.get("gbm") or [None] * 24)[i], stats=(day.get("stats") or [None] * 24)[i]))
 live = pd.DataFrame(rows)
-live.to_parquet(f"{OUT}/live_lead1.parquet")
+live.to_parquet(f"{OUT}/live_lead1.tmp.parquet"); os.replace(f"{OUT}/live_lead1.tmp.parquet", f"{OUT}/live_lead1.parquet")
 print("live", live.shape, live.input_mode.value_counts().to_dict())

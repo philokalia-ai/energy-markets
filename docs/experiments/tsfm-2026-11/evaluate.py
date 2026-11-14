@@ -45,7 +45,7 @@ def load(names):
     df = live[["zone", "date", "t", "sim", "gbm", "stats", "code_version"]].merge(panel, on=["zone", "t"], how="left")
     df = df.rename(columns={"price": "actual"})
     pz = panel.set_index(["zone", "t"]).price
-    for lag, nm in ((48, "naive_D2"), (168, "naive_D7")):
+    for lag, nm in ((24, "naive_D1"), (48, "naive_D2"), (168, "naive_D7")):
         idx = pd.MultiIndex.from_arrays([df.zone, df.t - pd.Timedelta(hours=lag)])
         df[nm] = pz.reindex(idx).values
     prob = {}
@@ -62,7 +62,7 @@ def load(names):
 
 def main(names):
     df, keys = load(names)
-    methods = ["sim", "naive_D2", "naive_D7"] + keys
+    methods = ["sim", "naive_D1", "naive_D2", "naive_D7"] + keys
     base = df.dropna(subset=["actual"] + methods)
     print(f"cells: live lead-1 weather {len(df)}, with actual {df.actual.notna().sum()}, "
           f"common set {len(base)} ({base.zone.nunique()} zones, {base.date.nunique()} days)")
