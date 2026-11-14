@@ -112,8 +112,8 @@ The original baseline and original September new-solver attempt preceded the
 full-book audit; subsequent attempts include it. Raw wall times therefore do
 not isolate production performance across those cohorts. The full-book audit
 contributes work outside timed book/native scopes. First
-and warm Julia 1.12 days have a ~316–330 s residual; its cause is **unattributed
-until the separately authorized post-22:42 profile**. Do not call this compilation,
+and warm Julia 1.12 days have a ~316–330 s residual; the post-22:42 profile identifies the dominant cause as **benchmark SHA
+audit overhead**, now corrected with byte-identical digests. See [profiling.md](profiling.md). Do not call this compilation,
 book construction, a stall, or a production runtime speed improvement.
 RSS in the table is sampled; [performance.csv](performance.csv) also provides
 cumulative process high-water RSS, gaps, call counts, per-period median/maximum,
@@ -307,3 +307,12 @@ reports exact differences and maximum absolute MW and relative capacity error.
 Book fingerprints and full dumps add audit/compilation overhead; report the
 residual outside timed books and native/library solves separately. In
 particular, first-call wall differences are not pure compiler or solver gains.
+
+## Post-acceptance profiling
+
+The [completed profile](profiling.md) returns936bit-identicalprices with48optimal
+solves. Fingerprint auditing accounts for369.78sof416.50sprofiledresidual. CPU
+samples identifySHA/CodeUnits alias checks; a one-line byte-buffer conversion in
+the benchmark utility preservesall18recordedhashes and avoids that path. This
+is instrumentation overhead, not a production compiler/book speed claim. The
+profile includes ranked sinks, deferred fix ideas and output-identity evidence.
