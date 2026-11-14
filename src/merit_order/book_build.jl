@@ -77,9 +77,13 @@ const BASELOAD_DERATE_TYPES = ("Fossil Brown coal/Lignite", "Fossil Hard coal",
                                "Fossil Oil shale", "Fossil Coal-derived gas",
                                "Fossil Peat", "Nuclear")
 
-# In-merit truthing switch (level investigation, 2026-11). Read at call time so
-# pipeline workers see the coordinator's env. "1"/"true" ⇒ on; unset ⇒ off.
-_inmerit_truth_on() = get(ENV, "EUPHEMIA_INMERIT_TRUTH", "") in ("1", "true")
+# In-merit truthing switch (level investigation, 2026-11; cv43 DEFAULT-ON).
+# Read at call time so pipeline workers see the coordinator's env. Kill-switch
+# EUPHEMIA_DISABLE_INMERIT_TRUTH set ⇒ off (byte-identical to cv42 truthing);
+# an explicit EUPHEMIA_INMERIT_TRUTH=0/false also forces it off (house
+# convention: explicit env wins over the shipped default).
+_inmerit_truth_on() = isempty(get(ENV, "EUPHEMIA_DISABLE_INMERIT_TRUTH", "")) &&
+                      !(lowercase(get(ENV, "EUPHEMIA_INMERIT_TRUTH", "")) in ("0", "false"))
 
 # =============================================================================
 # Stage helpers for create_merit_order_book
@@ -139,7 +143,7 @@ function _true_up_fleet(generators::Vector{Generator}, bidding_zone::String,
         for (t, cap) in src
             get(type_p95, t, 0.0) > 100.0 && (fleet_truth_target[t] = cap)
         end
-        # In-merit truthing (EUPHEMIA_INMERIT_TRUTH, default OFF ⇒ byte-identical).
+        # In-merit truthing (cv43 default ON; EUPHEMIA_DISABLE_INMERIT_TRUTH ⇒ cv42 behaviour).
         # The truth target exists to re-add capacity that is idle ON MERIT ORDER
         # (mid-merit fuel priced above the marginal unit never shows in the 30d
         # p95). That premise fails for a baseload derate-type whose SRMC sits
