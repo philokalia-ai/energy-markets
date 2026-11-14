@@ -250,6 +250,10 @@ vintages stay as they are.
      negative-priced supply orders, total supply identical.
    - **Not price-measured** (open-meteo is not reachable offline). The record path
      and the entsoe track are unchanged.
+   - **Review fix (#401 P2).** The issued solar is collected from the typed fill
+     entries BEFORE the TSO-coverage check and overrides TSO "Solar" rows in the
+     share (`_solar_share_by_hour`). So a wind-only or partial TSO row no longer
+     masks the weather gate. Quantities keep merge-never-replace.
 3. **In-merit truthing, default-on** (`src/merit_order/book_build.jl`,
    `EUPHEMIA_DISABLE_INMERIT_TRUTH`; `EUPHEMIA_INMERIT_TRUTH=0` also forces off).
    - **Defect.** Under `fleet_truth_mode=:installed` (DE_LU/NL/PL/CZ, Baltics),
@@ -264,6 +268,11 @@ vintages stay as they are.
      worse (SE3 +4.3, NO3 +2.5).
    - **Exposed.** Evening (15–20 UTC) cells > +50 too high, 107 → 208 of 1,536.
      That is the gas peak-tranche conduct layer, previously masked by coal.
+   - **Review fix (#401 P1, level).** Inside a ForecastContext the fuel readers
+     used the issuance cutoff for every requested day, so the D−30 side of the
+     merit test collapsed onto today's prices. The D−30 costs now read with an
+     explicit cutoff (`legacy_fuel_cutoff(D−30)`, bounded by issuance). Outside a
+     context the record-path D−30 costs are unchanged (8 days × 4 fuels, 32/32).
 4. **Deterministic JAO hub net-position scaling** (`src/Network.jl`, ops;
    `test/test_jao_scaling_order.jl`).
    - **Defect.** The per-hub/CCR/direction scaling of bilateral maxima to the JAO
