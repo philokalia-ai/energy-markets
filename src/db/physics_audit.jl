@@ -151,7 +151,7 @@ const PRICE_CAP_LOW = -500.0            # EUPHEMIA harmonized floor
 const PRICE_CAP_HIGH = 4100.0           # harmonized cap (4,000) + headroom
 const FEED_STALE_WARN_DAYS = 7          # per-unit feed silent > 7 d: :warn
 const FEED_STALE_ERROR_DAYS = 30        # > 30 d: :error (half the 60-d rescue window)
-const FEED_LOOKBACK_DAYS = 120          # how far back the latest observation is sought
+const FEED_LOOKBACK_DAYS = 120          # minimum per-unit lookback (the audit's lookback_days, default 400, governs)
 const FEED_MIN_DAYS = 14                # a zone "has a feed" with >= 14 observed days in the lookback
 const COVERAGE_TRAIL_DAYS = 28          # trailing baseline for atc_coverage
 const COVERAGE_LOW_FRAC = 0.8           # below 80 % of the trailing median: :warn
@@ -935,32 +935,58 @@ function check_per_unit_feed_stale(obs::DataFrame, days)
 end
 
 """
-    check_atc_coverage(borders::DataFrame, counts::DataFrame, days) -> findings
+    check_atc_coverage(borders::DataFrame, counts::DataFrame, days; present) -> findings
 
 `borders`: `d::Date, border` — distinct Day-ahead implicit border-directions
 ("OUT>IN") per delivery day. `counts`: `source, d::Date, n` — row counts per
-delivery day for the JAO tables. For each audit day `D` the trailing
-$(COVERAGE_TRAIL_DAYS) days are the baseline: implicit ATC is flagged when
-`D` lacks borders that were present on ≥ $(Int(COVERAGE_REGULAR_FRAC*100)) % of
-the trailing days (named in `detail`; :error when more than half the regular
-set is missing), JAO when `n` is below $(Int(COVERAGE_LOW_FRAC*100)) % of the
-trailing median (:error when 0). Days without a full baseline are skipped.
+delivery day for the JAO tables (fetched over the audit's lookback);
+`present`: the JAO sources whose table exists in the store.
+- Implicit ATC: a border is regular when present on ≥ $(Int(COVERAGE_REGULAR_FRAC*100)) % of
+  the $(COVERAGE_TRAIL_DAYS) trailing CALENDAR days; `D` lacking regular borders is
+  flagged with them named (:error when more than half the regular set is
+  missing). Fewer populated trailing days than that ⇒ an explicit
+  "baseline unavailable" :warn instead of silence.
+- JAO: `n` below $(Int(COVERAGE_LOW_FRAC*100)) % of the median of the last $(COVERAGE_TRAIL_DAYS)
+  POPULATED days before `D` (searched over the whole lookback, so a
+  continuing outage keeps alerting until recovery; :error when 0). A present
+  source with no rows in the whole window is one :error.
 """
-function check_atc_coverage(borders::DataFrame, counts::DataFrame, days)
+function check_atc_coverage(borders::DataFrame, counts::DataFrame, days;
+                            present = Set{String}())
     out = _audit_empty()
     by_day = Dict{Date,Set{String}}()
     for r in eachrow(borders)
         push!(get!(by_day, r.d, Set{String}()), String(r.border))
     end
+    need = ceil(Int, COVERAGE_REGULAR_FRAC * COVERAGE_TRAIL_DAYS)   # 23 of 28 calendar days
     for D in days
         trail = [D - Day(k) for k = 1:COVERAGE_TRAIL_DAYS]
         have = [haskey(by_day, t) for t in trail]
-        count(have) >= COVERAGE_TRAIL_DAYS ÷ 2 || continue
+        if count(have) < need && !isempty(by_day)
+            # Too few populated baseline days to call any border regular:
+            # say so instead of returning clean (review of #400).
+            _audit_row!(
+                out;
+                check = "atc_coverage",
+                severity = "warn",
+                zone = "IMPLICIT_DA",
+                period = string(D),
+                n = count(have),
+                value = Float64(count(have)),
+                bound = Float64(need),
+                detail = "baseline unavailable: Day-ahead implicit ATC present on only " *
+                         "$(count(have))/$(COVERAGE_TRAIL_DAYS) trailing days " *
+                         "(need $need to judge border regularity)",
+            )
+            continue
+        end
         freq = Dict{String,Int}()
         for t in trail, b in get(by_day, t, Set{String}())
             freq[b] = get(freq, b, 0) + 1
         end
-        regular = Set(b for (b, c) in freq if c >= COVERAGE_REGULAR_FRAC * count(have))
+        # Calendar denominator: a border is regular when present on >= 23 of
+        # the 28 trailing CALENDAR days, not of the populated ones.
+        regular = Set(b for (b, c) in freq if c >= need)
         isempty(regular) && continue
         missing_b = sort(collect(setdiff(regular, get(by_day, D, Set{String}()))))
         isempty(missing_b) && continue
@@ -978,11 +1004,33 @@ function check_atc_coverage(borders::DataFrame, counts::DataFrame, days)
                      (length(missing_b) > 12 ? ", …" : ""),
         )
     end
-    for sub in groupby(counts, :source)
-        src = String(sub.source[1])
+    for src in sort(unique(vcat(String.(counts.source), String.(collect(present)))))
+        sub = counts[counts.source .== src, :]
         n_of = Dict(r.d => Int(r.n) for r in eachrow(sub))
+        if isempty(n_of)
+            # The table exists but holds no rows anywhere in the fetched
+            # window: an unresolved outage longer than the lookback.
+            _audit_row!(
+                out;
+                check = "atc_coverage",
+                severity = "error",
+                zone = src,
+                period = isempty(days) ? "" : "$(first(days))..$(last(days))",
+                n = 0,
+                value = 0.0,
+                bound = 0.0,
+                detail = "$src: no rows in the whole fetched window (unresolved outage)",
+            )
+            continue
+        end
+        populated = sort(collect(keys(n_of)))
         for D in days
-            base = [n_of[D-Day(k)] for k = 1:COVERAGE_TRAIL_DAYS if haskey(n_of, D - Day(k))]
+            # Reference = the last COVERAGE_TRAIL_DAYS POPULATED days before D
+            # (searching the whole fetched lookback), so a continuing outage
+            # keeps alerting against the last healthy level until recovery
+            # instead of going silent once its own zeros fill the window.
+            prior = filter(t -> t < D, populated)
+            base = [n_of[t] for t in last(prior, COVERAGE_TRAIL_DAYS)]
             length(base) >= COVERAGE_TRAIL_DAYS ÷ 2 || continue
             med = median(base)
             med > 0 || continue
@@ -997,7 +1045,8 @@ function check_atc_coverage(borders::DataFrame, counts::DataFrame, days)
                 n = n,
                 value = Float64(n),
                 bound = Float64(med),
-                detail = "$src: $n rows for delivery day $D vs trailing median $(round(Int, med))",
+                detail = "$src: $n rows for delivery day $D vs reference median $(round(Int, med)) " *
+                         "(last $(length(base)) populated days)",
             )
         end
     end
@@ -1039,7 +1088,7 @@ function _fetch_per_unit_obs(d0::Date, d1::Date, zones; asof_ingest::Bool = fals
                               for (a, d) in zip(df.avail[keep], df.d[keep])])
 end
 
-function _fetch_atc_coverage(d0::Date, d1::Date)
+function _fetch_atc_coverage(d0::Date, d1::Date; counts_d0::Date = d0)
     b = sql2df_with_retry("""
         SELECT DISTINCT CAST(date_time_utc AS DATE) AS d, out_map_code || '>' || in_map_code AS border
         FROM entsoe.offered_transfer_capacities_implicit
@@ -1050,6 +1099,7 @@ function _fetch_atc_coverage(d0::Date, d1::Date)
     borders = isempty(b) ? DataFrame(d = Date[], border = String[]) :
               DataFrame(d = Date.(b.d), border = String.(b.border))
     counts = DataFrame(source = String[], d = Date[], n = Int[])
+    present = Set{String}()   # JAO tables that exist in this store
     for (src, tbl) in (("JAO_MAX_EXCHANGES", "jao.max_exchanges"),
                        ("JAO_HUB_NET_POSITIONS", "jao.hub_net_positions"))
         c = try
@@ -1057,15 +1107,17 @@ function _fetch_atc_coverage(d0::Date, d1::Date)
                 SELECT CAST(date_time_utc AS DATE) AS d, COUNT(*) AS n FROM $tbl
                 WHERE date_time_utc >= (\$1::date::timestamp AT TIME ZONE 'UTC')
                   AND date_time_utc < (\$2::date::timestamp AT TIME ZONE 'UTC')
-                GROUP BY 1""", Any[d0, d1])
+                GROUP BY 1""", Any[counts_d0, d1])
         catch
-            DataFrame()
+            nothing
         end
+        c === nothing && continue          # table absent from this store: skip
+        push!(present, src)
         for r in eachrow(c)
             push!(counts, (src, Date(r.d), Int(r.n)))
         end
     end
-    return borders, counts
+    return borders, counts, present
 end
 
 # ----------------------------------------------------------------------------
@@ -1188,7 +1240,8 @@ function run_physics_audit(
     if :per_unit_feed_stale in checks
         f = try
             check_per_unit_feed_stale(
-                _fetch_per_unit_obs(start_date - Day(FEED_LOOKBACK_DAYS), end_date, zones), days)
+                _fetch_per_unit_obs(start_date - Day(max(lookback_days, FEED_LOOKBACK_DAYS)),
+                                    end_date, zones), days)
         catch e
             log("per_unit_feed_stale: skipped ($(sprint(showerror, e)))")
             _audit_empty()
@@ -1201,8 +1254,9 @@ function run_physics_audit(
         # Footprint-level (not per zone): run only for an unrestricted scan.
         f = if zones === nothing
             try
-                (b, c) = _fetch_atc_coverage(start_date - Day(COVERAGE_TRAIL_DAYS), end_date)
-                check_atc_coverage(b, c, days)
+                (b, c, present) = _fetch_atc_coverage(start_date - Day(COVERAGE_TRAIL_DAYS), end_date;
+                                                      counts_d0 = start_date - Day(lookback_days))
+                check_atc_coverage(b, c, days; present = present)
             catch e
                 log("atc_coverage: skipped ($(sprint(showerror, e)))")
                 _audit_empty()

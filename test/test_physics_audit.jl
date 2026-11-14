@@ -257,6 +257,38 @@ end
     jao = sort(cov[cov.zone .== "JAO_MAX_EXCHANGES", :], :period)
     @test nrow(jao) == 2
     @test jao.severity == ["warn", "error"] && jao.value == [4000.0, 0.0]
+
+    # Review of #400: (1) a continuing JAO outage keeps alerting until
+    # recovery; a present source with no rows at all is one error.
+    c2 = DataFrame(source = String[], d = Date[], n = Int[])
+    for t in dd(Date(2026, 5, 1), Date(2026, 6, 30)); push!(c2, ("JAO_HUB_NET_POSITIONS", t, 3528)); end
+    for t in dd(Date(2026, 8, 24), Date(2026, 9, 10)); push!(c2, ("JAO_HUB_NET_POSITIONS", t, 3528)); end
+    out2 = AUD.check_atc_coverage(DataFrame(d = Date[], border = String[]), c2,
+                                  dd(Date(2026, 7, 1), Date(2026, 9, 10));
+                                  present = Set(["JAO_HUB_NET_POSITIONS", "JAO_MAX_EXCHANGES"]))
+    hub = out2[out2.zone .== "JAO_HUB_NET_POSITIONS", :]
+    @test nrow(hub) == length(dd(Date(2026, 7, 1), Date(2026, 8, 23)))   # every outage day, none after recovery
+    @test all(hub.severity .== "error")
+    mx = out2[out2.zone .== "JAO_MAX_EXCHANGES", :]
+    @test nrow(mx) == 1 && mx.severity[1] == "error" && occursin("no rows", mx.detail[1])
+    # (3) regularity uses the calendar denominator: a border on 14 of 28 days
+    # is not regular; too few populated days is an explicit warn.
+    b3 = DataFrame(d = Date[], border = String[])
+    for (k, t) in enumerate(dd(D - Day(28), D - Day(1)))
+        push!(b3, (t, "RO>BG"))
+        isodd(k) && push!(b3, (t, "HALF>X"))            # 14/28 days
+    end
+    push!(b3, (D, "RO>BG"))
+    @test nrow(AUD.check_atc_coverage(b3, DataFrame(source = String[], d = Date[], n = Int[]), [D])) == 0
+    b4 = DataFrame(d = dd(D - Day(10), D - Day(1)), border = fill("RO>BG", 10))
+    w4 = AUD.check_atc_coverage(b4, DataFrame(source = String[], d = Date[], n = Int[]), [D])
+    @test nrow(w4) == 1 && w4.severity[1] == "warn" && occursin("baseline unavailable", w4.detail[1])
+    # (2) a 14-day audit deep inside an unresolved blackout still flags, given
+    # the lookback the audit now fetches (lookback_days, default 400).
+    blk = DataFrame(zone = String[], d = Date[], avail = Date[])
+    for t in dd(Date(2025, 11, 1), Date(2026, 7, 19)); push!(blk, ("IT-NORTH", t, t + Day(1))); end
+    sb = AUD.check_per_unit_feed_stale(blk, dd(Date(2026, 11, 6), Date(2026, 11, 20)))
+    @test nrow(sb) == 1 && sb.severity[1] == "error" && sb.value[1] == Dates.value(Date(2026, 11, 20) - Date(2026, 7, 19))
 end
 
 @testset "Physics audit" begin
