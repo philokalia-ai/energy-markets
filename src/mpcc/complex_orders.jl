@@ -39,24 +39,47 @@ UNCAPPED (exactly the pre-complex-order book) with a warning — the clear never
 breaks.
 """
 is_block_family(f::AbstractString) = startswith(f, "BLK:")
+is_block_fallback(f::AbstractString) = startswith(f, "BLKFB:")
+_plain(o::LinkedHourlyOrder) = SimpleOrder(o.type, o.price, o.quantity, o.zone,
+                                           o.date_time, o.resolution_code)
 
 function resolve_complex_orders(order_book::MPCCOrderBook;
     preferred_solver::String="highs", verbose::Bool=true,
-    forced_reject::Set{String}=Set{String}(), block_time_limit::Float64=300.0)
-    linked = LinkedHourlyOrder[o for o in order_book.orders if o isa LinkedHourlyOrder]
-    isempty(linked) && return order_book
+    forced_reject::Set{String}=Set{String}(), block_time_limit::Float64=300.0,
+    release_blocks::Bool=false)
+    all_linked = LinkedHourlyOrder[o for o in order_book.orders if o isa LinkedHourlyOrder]
+    isempty(all_linked) && return order_book
     rest = MarketOrder[o for o in order_book.orders if !(o isa LinkedHourlyOrder)]
+    # `BLKFB:` members are the ORIGINAL calibrated must-run offers a block replaced:
+    # never in the master; restored verbatim whenever the blocks are released.
+    fallback = MarketOrder[_plain(o) for o in all_linked if is_block_fallback(o.family)]
+    has_blocks = any(o -> is_block_family(o.family), all_linked)
+    linked = LinkedHourlyOrder[o for o in all_linked if !is_block_fallback(o.family) &&
+                               !(release_blocks && is_block_family(o.family))]
+    if release_blocks && has_blocks
+        rest = vcat(rest, fallback)
+    end
     simple = SimpleOrder[o for o in rest if o isa SimpleOrder]
     nodes, periods = order_book.nodes, order_book.periods
     nset = Set(nodes)
+    fixed_in = order_book.fixed_injections
     release(msg) = begin
-        @warn "complex orders: $msg — releasing family members uncapped (baseline book)"
+        @warn "complex orders: $msg — releasing to the baseline book"
         LAST_COMPLEX_INFO[] = (status=:fallback, message=msg)
-        # Storage members come back uncapped at their bid; block members come back
-        # as plain hourly orders at their limit price (= no block condition).
-        MPCCOrderBook(vcat(rest, MarketOrder[SimpleOrder(o.type, o.price, o.quantity,
-                o.zone, o.date_time, o.resolution_code) for o in linked]),
-            nodes, periods, order_book.price_limits, order_book.network_topology)
+        # Baseline book exactly: storage members uncapped at their bid, blocks
+        # dropped, their original calibrated must-run offers restored.
+        base = MarketOrder[o for o in order_book.orders if !(o isa LinkedHourlyOrder)]
+        MPCCOrderBook(vcat(base, fallback,
+                MarketOrder[_plain(o) for o in all_linked
+                            if !is_block_family(o.family) && !is_block_fallback(o.family)]),
+            nodes, periods, order_book.price_limits, order_book.network_topology, fixed_in)
+    end
+    if isempty(linked)   # only blocks, and they were released
+        LAST_COMPLEX_INFO[] = (status=:blocks_released, solve_time=0.0,
+            families=Dict{String,Any}(), blocks=Dict{String,Any}(), n_blocks=0,
+            forced=copy(forced_reject), master_status="none")
+        return MPCCOrderBook(rest, nodes, periods, order_book.price_limits,
+            order_book.network_topology, fixed_in)
     end
     t0 = time()
     try
@@ -84,6 +107,9 @@ function resolve_complex_orders(order_book::MPCCOrderBook;
             t = extract_time_period(o.date_time, periods)
             haskey(bal, (n, t)) || continue
             add_to_expression!(bal[(n, t)], o.type == :supply ? -o.quantity : o.quantity, x[i])
+        end
+        for ((n, t), mw) in fixed_in
+            haskey(bal, (n, t)) && add_to_constant!(bal[(n, t)], -mw)
         end
         fam_rows = Dict{String,AffExpr}()
         fam_budget = Dict{String,Float64}()
@@ -179,6 +205,7 @@ function resolve_complex_orders(order_book::MPCCOrderBook;
 
         yv = value.(y)
         out = copy(rest)
+        fixed = copy(fixed_in)
         info = Dict{String,Any}()
         blocks = Dict{String,Any}()   # accepted block -> (zone, price, [(dt, MW, res)])
         nblk_rej = 0
@@ -188,9 +215,10 @@ function resolve_complex_orders(order_book::MPCCOrderBook;
                     b = get!(blocks, o.family, (zone=string(o.zone), price=o.price,
                         slices=Tuple{DateTime,Float64,Int}[]))
                     push!(b.slices, (o.date_time, o.quantity, o.resolution_code))
-                    # fixed injection: price-taker at the book's floor
-                    push!(out, SimpleOrder(:supply, order_book.price_limits[1], o.quantity,
-                        o.zone, o.date_time, o.resolution_code))
+                    # accepted block = a FIXED injection in the pricing problem (not an
+                    # order the clear could partially reject)
+                    k = (string(o.zone), extract_time_period(o.date_time, periods))
+                    fixed[k] = get(fixed, k, 0.0) + o.quantity
                 end
                 continue
             end
@@ -219,7 +247,7 @@ function resolve_complex_orders(order_book::MPCCOrderBook;
                     "accepted ($(length(forced_reject)) PAB-rejected), $st, $(round(el, digits=1)) s")
         end
         return MPCCOrderBook(out, nodes, periods, order_book.price_limits,
-            order_book.network_topology)
+            order_book.network_topology, fixed)
     catch e
         e isa InterruptException && rethrow()
         return release("master LP raised $(sprint(showerror, e))")
@@ -230,17 +258,22 @@ end
     solve_with_complex_orders(order_book, solve; max_pab_rounds=4) -> MPCCResult
 
 EUPHEMIA acceptance loop around fix-and-reprice: master → per-period MPCC with
-the complex decisions fixed → check every ACCEPTED block is in the money at the
-resulting prices (Σ_t (P_t − b)·q_t ≥ 0); paradoxically accepted blocks are
-rejected (forced out of the master) and the day re-solved. Paradoxical
-REJECTION is allowed, as in EUPHEMIA. `solve(book)` is the plain MPCC solve.
+the complex decisions fixed (accepted blocks as fixed injections) → check every
+ACCEPTED block is in the money at the resulting prices (Σ_t (P_t − b)·q_t ≥ 0);
+paradoxically accepted blocks are rejected (forced out of the master) and the
+day re-solved. Paradoxical REJECTION is allowed, as in EUPHEMIA.
+
+If blocks are still paradoxically accepted after `max_pab_rounds`, the clear is
+NOT returned: the blocks are released to their original calibrated must-run
+offers (the baseline book; storage families keep their master caps) and that
+book is cleared instead. The result's `message` and `LAST_COMPLEX_INFO.status =
+:pab_fallback` say so explicitly. `solve(book)` is the plain MPCC solve.
 Storage families need no check: their members re-enter at their own bid, so the
 MPCC complementarity already keeps every accepted part in the money.
 """
 function solve_with_complex_orders(order_book::MPCCOrderBook, solve::Function;
     preferred_solver::String="highs", verbose::Bool=true, max_pab_rounds::Int=4)
     forced = Set{String}()
-    res = nothing
     for rnd in 1:max_pab_rounds
         ob2 = resolve_complex_orders(order_book; preferred_solver=preferred_solver,
             verbose=verbose, forced_reject=forced)
@@ -266,8 +299,18 @@ function solve_with_complex_orders(order_book::MPCCOrderBook, solve::Function;
                            "accepted block(s) of $(length(info.blocks)) accepted")
         isempty(pab) && return res
         union!(forced, pab)
-        rnd == max_pab_rounds &&
-            @warn "complex orders: $(length(pab)) block(s) still paradoxically accepted after $max_pab_rounds rounds — returning the last clear"
     end
-    return res
+    # Exhausted: never expose a clear that violates the block acceptance rule.
+    @warn "complex orders: blocks still paradoxically accepted after $max_pab_rounds " *
+          "round(s) — releasing the blocks to the original must-run offers (baseline book)"
+    ob3 = resolve_complex_orders(order_book; preferred_solver=preferred_solver,
+        verbose=verbose, release_blocks=true)
+    inner = LAST_COMPLEX_INFO[]
+    res = solve(ob3)
+    LAST_COMPLEX_INFO[] = (status=:pab_fallback, inner=inner,
+        message="PAB rounds exhausted ($max_pab_rounds); blocks released to baseline must-run offers")
+    return MPCCResult(res.status, res.objective_value, res.market_prices,
+        res.stepwise_acceptance, res.block_acceptance, res.block_activation,
+        res.transmission_flows, res.solve_time, res.total_time, res.solver_name,
+        "COMPLEX-ORDERS PAB FALLBACK (blocks released to baseline must-run): " * res.message)
 end

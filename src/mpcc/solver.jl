@@ -557,6 +557,8 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
                 ) +
                 # Load shedding (emergency)
                 load_shed[node_id, time_period] -
+                # Fixed injections (accepted blocks; supply, hence negative)
+                get(order_book.fixed_injections, (node_id, time_period), 0.0) -
                 # Inflows: power coming INTO this zone (flow[source, this_zone])
                 sum(flow[(z, node_id), time_period] for z in get(zones_to, node_id, String[]); init=0.0) +
                 # Outflows: power going OUT of this zone (flow[this_zone, sink])
@@ -572,7 +574,8 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
                     for i in get(orders_by_node_time, (node_id, time_period), Int[]);
                     init=0.0
                 ) +
-                load_shed[node_id, time_period] == 0
+                load_shed[node_id, time_period] -
+                get(order_book.fixed_injections, (node_id, time_period), 0.0) == 0
             )
         end
 
@@ -1009,7 +1012,9 @@ function _solve_mpcc_by_period(order_book::MPCCOrderBook;
             order_book.nodes,
             [t],
             order_book.price_limits,
-            order_book.network_topology
+            order_book.network_topology,
+            Dict{Tuple{String,String},Float64}(k => v for (k, v) in order_book.fixed_injections
+                                               if k[2] == t)
         )
         r = solve_mpcc_market_clearing(sub_book;
             preferred_solver=preferred_solver, silent=silent, big_m=big_m,

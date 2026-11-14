@@ -56,7 +56,14 @@ struct MPCCOrderBook
     periods::Vector{String}                    # Time period identifiers (e.g., "1", "2", ..., "24")
     price_limits::Tuple{Float64,Float64}       # (min_price, max_price) bounds
     network_topology::Union{Nothing,NetworkTopology,TransferCapacity}  # Optional network constraints (TransferCapacity for multi-zone)
+    # Fixed MW injections per (node, period) that the clear must take as given
+    # (accepted regular blocks under fix-and-reprice, src/mpcc/complex_orders.jl).
+    # Empty for every ordinary book — the nodal balance is then unchanged.
+    fixed_injections::Dict{Tuple{String,String},Float64}
 end
+MPCCOrderBook(orders, nodes, periods, price_limits, network_topology) =
+    MPCCOrderBook(orders, nodes, periods, price_limits, network_topology,
+                  Dict{Tuple{String,String},Float64}())
 
 # Configuration constants
 const DEFAULT_MARKUP_FACTOR = 1.1

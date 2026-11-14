@@ -579,16 +579,36 @@ const _STORAGE_BUDGET_CACHE = Dict{Tuple{String,String,Date},Float64}()
 const _STORAGE_BUDGET_LOCK = ReentrantLock()
 
 """
+    _storage_cutoff_day(day) -> Date
+
+First day NOT usable for the storage budget: only COMPLETE UTC days strictly
+before it enter the window. Legacy path: D-1 (the window ends with D-2; D-2 is
+complete and published by D-1 ~01:00 UTC). Inside a `ForecastContext`: the
+earlier of that and the UTC date of `as_of - AGG_GEN_PUBLICATION_LATENCY`, so a
+long-lead issuance never sees generation published after it (recorded as
+:latency_policy, the same convention as the fleet-data trailing windows).
+Lead 1 at the 10:00 UTC D-1 gate resolves to D-1 — identical to legacy.
+"""
+function _storage_cutoff_day(day::Date)
+    c = current_context()
+    c === nothing && return day - Day(1)
+    record_asof_status!("aggregated_generation", :latency_policy)
+    return min(day - Day(1), Date(c.as_of_utc - AGG_GEN_PUBLICATION_LATENCY))
+end
+
+"""
     _storage_daily_budget(zone, day, production_type) -> Float64
 
 Mean daily generation energy (MWh) of `production_type` in `zone` over the 14
-full UTC days D-15..D-2 (`entsoe.aggregated_generation_per_type`, hourly mean
-per hour then summed per day; days with < 20 reported hours skipped). Strictly
-before the auction gate (D-2 is complete by D-1 01:00 UTC). NaN when there is no
-data. Cached per (zone, type, day); never cached on DB error.
+complete UTC days before `_storage_cutoff_day(day)` (legacy: D-15..D-2) from
+`entsoe.aggregated_generation_per_type` (hourly mean per hour, summed per day;
+days with < 20 reported hours skipped). NaN when there is no data. Cached per
+(zone, type, effective cutoff) — the cutoff carries the issuance context, so
+vintages never share an entry. Never cached on DB error.
 """
 function _storage_daily_budget(zone::String, day::Date, production_type::String)
-    key = (zone, production_type, day)
+    cutoff = _storage_cutoff_day(day)
+    key = (zone, production_type, cutoff)
     cached = lock(_STORAGE_BUDGET_LOCK) do
         get(_STORAGE_BUDGET_CACHE, key, nothing)
     end
@@ -608,7 +628,7 @@ function _storage_daily_budget(zone::String, day::Date, production_type::String)
             SELECT date_trunc('day', h) AS d, SUM(mw) AS e, COUNT(*) AS n
             FROM hourly GROUP BY 1)
         SELECT AVG(e) AS e FROM daily WHERE n >= 20""",
-        Any[zone, production_type, day - Day(15), day - Day(1)])
+        Any[zone, production_type, cutoff - Day(14), cutoff])
     e = (size(df, 1) == 0 || ismissing(df.e[1])) ? NaN : Float64(df.e[1])
     lock(_STORAGE_BUDGET_LOCK) do
         _STORAGE_BUDGET_CACHE[key] = e
@@ -1298,6 +1318,7 @@ function create_merit_order_book(
         # profiles, (unit code, block limit price, hourly slice). Empty otherwise.
         blocks_on = "blocks" in complex_order_kinds()
         block_members = Tuple{String,Float64,SimpleOrder}[]
+        block_fallback = Tuple{String,SimpleOrder}[]   # the static must-run offers they replace
 
         # ── Solar-regime price-taker floor (cv31, default-ON) ───────────
         # Regime-gated revival of the cv28/cv29 price-taker floor. The gate is
@@ -1652,6 +1673,22 @@ function create_merit_order_book(
                             push!(block_members, (g.code, bprice,
                                 SimpleOrder(:supply, bprice, must_run_qty,
                                     Symbol(bidding_zone), date_time, resolution_minutes)))
+                            # The ORIGINAL calibrated must-run offers (identical to the
+                            # `elseif` branch below) ride along as the block's fallback:
+                            # restored verbatim whenever the blocks are released (master
+                            # failure, PAB exhaustion), so a fallback IS the baseline book.
+                            fb_deep_qty = must_run_qty * 0.6
+                            fb_deep_price = (!isempty(get(ENV, "EUPHEMIA_ENABLE_CV27_T3", "")) ||
+                                             (sr_full && sr_active(hr))) ?
+                                (sr_active(hr) ? sr_floor(hr) : DEEP_SURPLUS_FLOOR_EUR) :
+                                gmc * must_run_price_factor
+                            push!(block_fallback, (g.code, SimpleOrder(:supply,
+                                fb_deep_price, fb_deep_qty,
+                                Symbol(bidding_zone), date_time, resolution_minutes)))
+                            push!(block_fallback, (g.code, SimpleOrder(:supply,
+                                min(max(gmc * 0.5, gmc - 40.0), nuc_ceil),
+                                must_run_qty - fb_deep_qty,
+                                Symbol(bidding_zone), date_time, resolution_minutes)))
                             total_supply_capacity += must_run_qty
                         end
                     elseif g.code in committed
@@ -1989,6 +2026,10 @@ function create_merit_order_book(
             for (code, b, o) in block_members
                 push!(all_orders, LinkedHourlyOrder(:supply, b, o.quantity, o.zone,
                     o.date_time, o.resolution_code, "BLK:$(bidding_zone):$(code)", NaN))
+            end
+            for (code, o) in block_fallback
+                push!(all_orders, LinkedHourlyOrder(:supply, o.price, o.quantity, o.zone,
+                    o.date_time, o.resolution_code, "BLKFB:$(bidding_zone):$(code)", NaN))
             end
             orders = all_orders
             println("  🧱 complex orders: $(length(unique(first.(block_members)))) thermal " *

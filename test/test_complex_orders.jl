@@ -87,3 +87,60 @@ end
     @test isempty(info.blocks)
     @test r.market_prices["Z"]["20261104-0000"] ≈ 80.0
 end
+
+@testset "Complex orders: review fixes (fixed injections, PAB fallback, release, as-of cutoff)" begin
+    t0 = ["20261104-0000"]; d0 = DateTime(2026, 11, 4, 0); Z = :Z
+    # (4) the MPCC honours fixed injections (single-zone, decomposed path)
+    o = MarketOrder[SimpleOrder(:demand, 3000.0, 100.0, Z, d0, 60),
+                    SimpleOrder(:supply, 50.0, 100.0, Z, d0, 60),
+                    SimpleOrder(:supply, 10.0, 30.0, Z, d0, 60)]
+    ob = MPCC.MPCCOrderBook(o, ["Z"], t0, (-500.0, 3000.0), nothing)
+    @test MPCC.solve_mpcc_market_clearing(ob; preferred_solver="highs", verbose=false).market_prices["Z"][t0[1]] ≈ 50.0
+    obf = MPCC.MPCCOrderBook(o, ["Z"], t0, (-500.0, 3000.0), nothing, Dict(("Z", t0[1]) => 80.0))
+    @test MPCC.solve_mpcc_market_clearing(obf; preferred_solver="highs", verbose=false).market_prices["Z"][t0[1]] ≈ 10.0
+
+    # (2)+(3) PAB exhaustion → blocks released to the ORIGINAL must-run offers (BLKFB)
+    periods = ["20261104-0000", "20261104-0100"]
+    dt = [DateTime(2026, 11, 4, 0), DateTime(2026, 11, 4, 1)]
+    orders = MarketOrder[]
+    for (h, dem, gas) in ((1, 50.0, 80.0), (2, 100.0, 100.0))
+        push!(orders, SimpleOrder(:demand, 3000.0, dem, Z, dt[h], 60))
+        push!(orders, SimpleOrder(:supply, gas, 200.0, Z, dt[h], 60))
+        push!(orders, LinkedHourlyOrder(:supply, 60.0, 50.0, Z, dt[h], 60, "BLK:Z:u1", NaN))
+        push!(orders, LinkedHourlyOrder(:supply, 3.0, 30.0, Z, dt[h], 60, "BLKFB:Z:u1", NaN))
+        push!(orders, LinkedHourlyOrder(:supply, 30.0, 20.0, Z, dt[h], 60, "BLKFB:Z:u1", NaN))
+    end
+    push!(orders, SimpleOrder(:supply, 10.0, 30.0, Z, dt[1], 60))
+    bk = MPCC.MPCCOrderBook(orders, ["Z"], periods, (-500.0, 3000.0), nothing)
+    r = MPCC.solve_with_complex_orders(bk,
+        b -> MPCC.solve_mpcc_market_clearing(b; preferred_solver="highs", decompose_periods=true, verbose=false);
+        verbose=false, max_pab_rounds=1)
+    @test MPCC.LAST_COMPLEX_INFO[].status == :pab_fallback
+    @test startswith(r.message, "COMPLEX-ORDERS PAB FALLBACK")
+    # baseline book: hour 1 = 30 MW @3 + 20 MW from the 10-€ unit → 10; hour 2 = 50 MW
+    # of must-run + 50 MW gas → 100
+    @test r.market_prices["Z"]["20261104-0000"] ≈ 10.0
+    @test r.market_prices["Z"]["20261104-0100"] ≈ 100.0
+
+    # (3) master failure releases to exactly the baseline book (blocks dropped,
+    # original must-run restored, storage uncapped) — failure injected via an
+    # out-of-grid member
+    bad = vcat(bk.orders, MarketOrder[LinkedHourlyOrder(:supply, 40.0, 5.0, Z,
+        DateTime(2026, 11, 4, 5), 60, "ESTOR:Z", 10.0)])
+    rel = MPCC.resolve_complex_orders(MPCC.MPCCOrderBook(bad, ["Z"], periods, (-500.0, 3000.0), nothing); verbose=false)
+    @test MPCC.LAST_COMPLEX_INFO[].status == :fallback
+    @test all(o -> o isa SimpleOrder, rel.orders)
+    @test count(o -> o.price == 3.0 && o.quantity == 30.0, rel.orders) == 2   # must-run deep restored
+    @test !any(o -> o.price == 60.0, rel.orders)                               # no block slices
+    @test count(o -> o.price == 40.0, rel.orders) == 1                          # storage uncapped
+
+    # (1) storage budget cutoff respects the issuance context
+    D = Date(2026, 11, 20)
+    @test Euphemia.MeritOrderBook._storage_cutoff_day(D) == Date(2026, 11, 19)
+    Euphemia.with_context(Euphemia.gate_context(D)) do
+        @test Euphemia.MeritOrderBook._storage_cutoff_day(D) == Date(2026, 11, 19)   # lead 1 = legacy
+    end
+    Euphemia.with_context(Euphemia.issuance_context(D, 7; issue_time=Time(6, 30))) do
+        @test Euphemia.MeritOrderBook._storage_cutoff_day(D) == Date(2026, 11, 13)   # lead 7: only days < 11-13
+    end
+end
