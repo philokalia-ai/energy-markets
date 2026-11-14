@@ -1,9 +1,12 @@
 # Collapse probabilities and RES offers — November 2026 experiment
 
 Two independent, experimental mechanisms. The RES ladder defaults off and the
-probability tools produce labelled local artifacts. The forecast schema and
-model version stay unchanged. This branch also carries the analyst's active
-fleet-rescue correction as the shared baseline dependency described below.
+probability tools produce labelled local artifacts. The forecast schema stays
+unchanged, and this experiment adds no model-version bump. After rebasing,
+the branch inherits cv43 and the analyst's fleet-rescue correction from main
+(PR #401); its duplicate dependency commit was dropped. Frozen physical scores
+below were measured before that rebase on cv42 plus the Italy fix, and are not
+a new cv43 backtest. Future runner output uses the loaded engine's version.
 The physical counterfactual remains a market model; the statistical probability
 predicts the settled market and must not be interpreted as a competitive price.
 

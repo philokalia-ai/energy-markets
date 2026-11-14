@@ -31,7 +31,8 @@ for day in days, arm in arms
         rows = NamedTuple[]
         for (zone, prices) in result.market_prices, (t, price) in prices
             push!(rows, (; zone, t=string(t), price=price, arm,
-                         input_variant="gate_1000_latest_proxy", code_version=42))
+                         input_variant="gate_1000_latest_proxy",
+                         code_version=Euphemia.ENERGY_PRICES_CODE_VERSION))
         end
         CSV.write(path, DataFrame(rows))
         open(joinpath(outdir, "$(day)-$(arm)-status.json"), "w") do io
