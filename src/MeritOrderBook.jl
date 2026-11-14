@@ -27,7 +27,7 @@ using Dates
 using Statistics: median, quantile
 import ..get_generators, ..get_loads, ..get_generation_forecast_for_wind_and_solar, ..Load, ..RenewablesGenerationForecast
 import ..get_marginal_cost, ..sql2df_with_retry, ..Generator, ..normalize_fuel_type_name
-import ..get_ttf_price, ..eua_price, ..uka_price
+import ..get_ttf_price, ..eua_price, ..uka_price, ..legacy_fuel_cutoff
 import ..current_context, ..ctx_key, ..record_asof_status!, ..AGG_GEN_PUBLICATION_LATENCY   # as-of contract (issue #368)
 import ..GAS_PLANT_EFFICIENCY, ..GAS_EMISSION_FACTOR, ..GAS_VOM_COST
 import ..FLEXIBLE_FUEL_TYPES

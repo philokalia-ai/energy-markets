@@ -35,6 +35,25 @@ const TTF_PRICE_CACHE_ASOF = Dict{Dates.Date,Union{Float64,Nothing}}()
 const EUA_PRICE_CACHE_ASOF = Dict{Dates.Date,Union{Float64,Nothing}}()
 _fuel_cutoff() = (c = current_context(); c === nothing ? nothing : Dates.Date(c.as_of_utc))
 
+# Explicit as-of cutoff for a HISTORICAL comparison (e.g. the in-merit truthing
+# merit test at D−30). Inside a ForecastContext `_fuel_cutoff()` returns the
+# issuance date for every requested day, so a "D−30 price" silently became the
+# current price (cv43 review P1). An explicit `cutoff` (read "last close
+# strictly before `cutoff`") is bounded by BOTH the caller's date and issuance:
+# min(cutoff, issuance date). `nothing` ⇒ the unchanged legacy/context rule.
+_fuel_cutoff(cap::Union{Nothing,Dates.Date}) =
+    (c = _fuel_cutoff(); cap === nothing ? c : (c === nothing ? cap : min(cap, c)))
+
+"""
+    legacy_fuel_cutoff(day) -> Date
+
+The cutoff the legacy (no-context) path uses for delivery day `day`: the last
+close strictly before `day − gate lag` (D−2's close under cv34). Pass it as
+`cutoff=` to read a historical day's fuel price under the same rule, bounded by
+issuance inside a ForecastContext.
+"""
+legacy_fuel_cutoff(day::Dates.Date) = day - Dates.Day(_gate_lag_days())
+
 function _close_before(table::String, cutoff::Dates.Date, cache::Dict, lk::ReentrantLock,
                        source::String)
     cached = lock(lk) do
@@ -102,8 +121,8 @@ the yearly lookup.
 Like `get_ttf_price`, uses strictly `date < day`: the day-ahead auction for
 D clears around noon on D−1, when D's own close does not exist yet.
 """
-function get_daily_eua_price(day::Dates.Date)
-    cutoff = _fuel_cutoff()
+function get_daily_eua_price(day::Dates.Date; cutoff::Union{Nothing,Dates.Date}=nothing)
+    cutoff = _fuel_cutoff(cutoff)
     cutoff === nothing ||
         return _close_before("yfinance.eua_co2", cutoff, EUA_PRICE_CACHE_ASOF, _EUA_CACHE_LOCK, "fuel_eua")
     cached_eua = lock(_EUA_CACHE_LOCK) do
@@ -143,8 +162,8 @@ function get_daily_eua_price(day::Dates.Date)
     return price
 end
 
-function eua_price(day::Dates.Date)
-    daily = get_daily_eua_price(day)
+function eua_price(day::Dates.Date; cutoff::Union{Nothing,Dates.Date}=nothing)
+    daily = get_daily_eua_price(day; cutoff=cutoff)
     return daily === nothing ? get(EUA_PRICE_BY_YEAR, year(day), EUA_PRICE_DEFAULT) : daily
 end
 
@@ -220,8 +239,8 @@ history starts), in which case callers should fall back to stylized costs.
 For a market date D this returns the close of the last trading day before D,
 which is the price information available at day-ahead auction time.
 """
-function get_ttf_price(day::Dates.Date)
-    cutoff = _fuel_cutoff()
+function get_ttf_price(day::Dates.Date; cutoff::Union{Nothing,Dates.Date}=nothing)
+    cutoff = _fuel_cutoff(cutoff)
     cutoff === nothing ||
         return _close_before("yfinance.ttf_f", cutoff, TTF_PRICE_CACHE_ASOF, _TTF_CACHE_LOCK, "fuel_ttf")
     cached_ttf = lock(_TTF_CACHE_LOCK) do
@@ -265,22 +284,26 @@ function get_ttf_price(day::Dates.Date)
     return price
 end
 
-function get_marginal_cost(day::Dates.Date, fuel_type::String, bidding_zone::String="GR")
+# `cutoff` (optional): explicit as-of cutoff for the fuel/carbon closes, bounded
+# by issuance inside a ForecastContext (see `_fuel_cutoff(cap)`); `nothing` ⇒
+# the unchanged rule. Use `legacy_fuel_cutoff(d)` for a historical day `d`.
+function get_marginal_cost(day::Dates.Date, fuel_type::String, bidding_zone::String="GR";
+                           cutoff::Union{Nothing,Dates.Date}=nothing)
     # Gas-fired units: use real TTF fuel prices when available.
     # marginal cost = fuel cost / efficiency + carbon cost + variable O&M
     # No bid markup here — the bidding layer applies its own markup_factor.
     if fuel_type == "Fossil Gas"
-        ttf = get_ttf_price(day)
+        ttf = get_ttf_price(day; cutoff=cutoff)
         if ttf !== nothing
             fuel_cost = ttf / GAS_PLANT_EFFICIENCY
-            carbon_cost = GAS_EMISSION_FACTOR / GAS_PLANT_EFFICIENCY * eua_price(day)
+            carbon_cost = GAS_EMISSION_FACTOR / GAS_PLANT_EFFICIENCY * eua_price(day; cutoff=cutoff)
             return fuel_cost + carbon_cost + GAS_VOM_COST
         end
     end
 
     base = get(FUEL_SRMC_BASE, fuel_type, 105.0 - 0.367 * EUA_PRICE_DEFAULT)
     ef = get(FUEL_EMISSION_FACTOR_EL, fuel_type, fuel_type in ("Fossil Gas", "Other") ? 0.367 : 0.0)
-    return base + ef * eua_price(day)
+    return base + ef * eua_price(day; cutoff=cutoff)
 end
 
 # Non-carbon SRMC component (fuel/efficiency + VOM, €/MWh electric) and

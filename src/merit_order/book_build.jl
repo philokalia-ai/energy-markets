@@ -119,6 +119,28 @@ function _solar_share_by_hour(renewables, load_by_time,
     return share
 end
 
+"""
+    _inmerit_types(day, zone, candidates) -> Vector{String}
+
+The in-merit truthing merit test: the subset of `candidates` whose SRMC is below
+gas SRMC both on `day` and on `day − 30` (the start of the 30d p95 window).
+The D−30 side reads its fuel/carbon closes with an EXPLICIT cutoff,
+`legacy_fuel_cutoff(day − 30)`, which `get_marginal_cost` bounds by issuance
+inside a ForecastContext — without it the context's issuance cutoff applied to
+every requested day and the D−30 test collapsed onto today's prices (cv43
+review P1). Outside a context the D−30 cutoff equals the legacy rule for that
+day, so record-path results are unchanged.
+"""
+function _inmerit_types(day::Dates.Date, zone::String, candidates)
+    then = day - Dates.Day(30)
+    then_cut = legacy_fuel_cutoff(then)
+    gas_now = get_marginal_cost(day, "Fossil Gas", zone)
+    gas_then = get_marginal_cost(then, "Fossil Gas", zone; cutoff=then_cut)
+    return String[t for t in candidates
+                  if get_marginal_cost(day, t, zone) < gas_now &&
+                     get_marginal_cost(then, t, zone; cutoff=then_cut) < gas_then]
+end
+
 # =============================================================================
 # Stage helpers for create_merit_order_book
 # =============================================================================
@@ -191,12 +213,8 @@ function _true_up_fleet(generators::Vector{Generator}, bidding_zone::String,
         # coal against a 30d output p95 of 4.7 GW. Inputs are the same ex-ante
         # closes (strictly before D−1) and strictly historical output.
         if _inmerit_truth_on() && !isempty(fleet_truth_target)
-            gas_now = get_marginal_cost(day, "Fossil Gas", bidding_zone)
-            gas_then = get_marginal_cost(day - Dates.Day(30), "Fossil Gas", bidding_zone)
-            for ptype in BASELOAD_DERATE_TYPES
-                haskey(fleet_truth_target, ptype) || continue
-                get_marginal_cost(day, ptype, bidding_zone) < gas_now || continue
-                get_marginal_cost(day - Dates.Day(30), ptype, bidding_zone) < gas_then || continue
+            for ptype in _inmerit_types(day, bidding_zone,
+                                        [t for t in BASELOAD_DERATE_TYPES if haskey(fleet_truth_target, t)])
                 delete!(fleet_truth_target, ptype)
                 println("  ⚖️  In-merit truthing: $ptype below gas SRMC — truth target dropped " *
                         "(30d p95 $(round(Int, get(type_p95, ptype, 0.0))) MW governs)")
