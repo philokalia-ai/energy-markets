@@ -1,0 +1,136 @@
+# Collapse probabilities and RES offers — November 2026 experiment
+
+Two independent, experimental mechanisms. Neither changes production defaults,
+the forecast schema, the model version, or settled/counterfactual prices.
+The physical counterfactual remains a market model; the statistical probability
+predicts the settled market and must not be interpreted as a competitive price.
+
+## Budget and frozen choices
+
+Six hours total. One physical candidate against cv42 on eight days, no parameter
+search. Monthly expanding logistic origins 2026-09-14, 10-01 and 11-01; history
+starts 2024-07-01, tests end 2026-11-13. Per-zone logistic regression, L2 `C=1`,
+no class weights, 300 L-BFGS iterations, 0.5 decision threshold. No tuning on
+test labels. A one-class training set uses a Laplace-smoothed constant.
+
+The analyst's day set is 09-16, 09-20, 09-27, 10-06, 10-19, 11-02, 11-04,
+11-13 (2026). November 9 is excluded because Spain's RES input is absent.
+The four inner-loop inspection days are 09-20, 10-19, 11-04, 11-13.
+
+## Physical mechanism
+
+`EUPHEMIA_RES_OFFER_LADDER=1` replaces **only** the aggregated RES offer's
+solar-regime gate with a two-tranche ladder:
+
+| Generation share | Offer price | Interpretation |
+|---|---:|---|
+| `1 - supported_share` | 0 €/MWh | Near-zero variable cost; merchant or support suspended at negative prices |
+| `supported_share` | `-support_eur_mwh` | A known per-MWh production incentive remains payable when prices are negative |
+
+Supply MW is preserved, and thermal, hydro, must-run and demand bids are untouched.
+The flag defaults off. Supported shares default to **zero in every zone**;
+set a zone explicitly with `EUPHEMIA_RES_SUPPORTED_SHARE_DE_LU=...` (hyphens
+become underscores). `EUPHEMIA_RES_SUPPORT_EUR` defaults to 20 €/MWh. This is a
+declared scenario parameter, not an estimate of a country's subsidy. The share
+is a share of forecast generation, not of nameplate capacity, and must be
+documented and fixed before issuance. Configuring a share does not implement
+contract-specific multi-hour suspension rules.
+
+The measured candidate uses zero supported shares everywhere: the smallest
+change removing the artificial +1 €/MWh RES floor. We do not infer supported
+shares from settled negative-price frequency. The extract has no contract/cohort
+register, so a national support ladder with asserted official shares would be
+unsupported. The existing six-zone solar gate still governs the other affected
+blocks; this experiment changes RES alone and can reveal a thermal/hydro wall.
+
+Sources consulted on 2026-11-14 (mechanism evidence, not calibration inputs):
+
+- [Bundesnetzagentur / SMARD explanation](https://www.smard.de/page/en/topic-article/5892/15618/negative-electricity-prices): production-linked premia can justify negative offers; costs and technical restrictions can keep conventional plants operating. Its €30 example is from 2020, not a 2026 estimate.
+- [German EEG §51](https://www.gesetze-im-internet.de/eeg_2014/__51.html): negative-price support suspension and exemptions; transition provisions mean current law alone does not identify all existing-cohort bidding incentives.
+- [French CRE support contracts, 2024 tender annex §9.3](https://www.cre.fr/fileadmin/Documents/Appels_d_offres/2024/20241129_AO7_Cahier_des_charges__Annexe_4.pdf): remuneration is suspended in negative hours, with conditional non-production compensation.
+- [Italian FER1 decree, GSE official copy](https://www.gse.it/documenti_site/Documenti%20GSE/Servizi%20per%20te/FER%20ELETTRICHE/NORMATIVE/DM%204%20luglio%202019%20-%20Incentivazione%20dell%E2%80%99energia%20elettrica%20prodotta%20dagli%20impianti.pdf): support is subject to zero/negative-price suspension rules; it does not establish a uniform negative bid for all Italian RES.
+- [Spanish RD413/2014](https://www.boe.es/eli/es/rd/2014/06/06/413/con/20250625): investment and operating remuneration are distinct, so investment support cannot simply be converted into a negative €/MWh offer.
+
+## Probability target and feature timing
+
+Target: **hourly mean settled day-ahead price ≤ 0 €/MWh**. A negative
+quarter-hour whose hourly mean is positive is not an event under this target.
+Actuals follow the repository's resolution-aware policy: latest sequence per
+zone/timestamp, then average subhours. All dates are Europe/Athens market days;
+the output retains UTC hours, including the repeated hour at the DST transition.
+
+| Feature | 06:30 UTC D−1 variant (`pregate_0630`) | ~10:00 D−1 variant (`gate_1000_latest_proxy`) |
+|---|---|---|
+| Hour, weekday, annual sine/cosine | Known before issuance | Same |
+| Same-hour settled price and ≤0 indicator, lags 2 and 7 market days | Only D−2 / D−7; no D−1 settled data | Same conservative cutoff |
+| Settled collapse frequency, 7 / 28 days | Window ends D−2, weighted by observed hours | Same |
+| D−1 load forecast | Only audited genuine-stamp era (delivery ≥2025-11-01) and stored update ≤06:30 issuance; otherwise D−2 same-hour forecast persistence if its stored update ≤issuance | Latest stored D−1 revision; **not proven available by 10:00** |
+| Wind and solar | D−2 same-hour forecast persistence only; older row's last update must be ≤issuance and source delivery in genuine-stamp era | Latest D−1 forecast column; D−1-specific publication **unverifiable** |
+| Load, solar/wind/RES share, residual-load share | From the accepted forecasts/persistence above; no actual D load or actual D RES | From latest D−1 forecast proxy |
+| Weekend × RES share | Same accepted RES/load inputs | Same proxy inputs |
+| Neighbour residual share and collapse frequency | Unweighted geographic/trading-neighbour means, under the same issuance contract; fixed topology | Same topology, proxy residuals |
+| Counterfactual price / surplus at floor | **Excluded from fitted features**: no historical issued model/surplus series in extract | Same; published live model ≤0 is a held-out comparator only |
+| ERA5 / retrospective weather | Excluded: `weather.cell_hourly` is ERA5 | Excluded |
+| Weather `city_forecast_vintage` | Excluded: Greek cities only; run date is not a proven 06:30 issue timestamp | Excluded |
+
+RES persistence is conservative: an older complete row last updated before
+issuance demonstrably existed by issuance; a later update is rejected rather
+than misread as the D−1 publication time. Pre-2025-11 physical values fail this
+test and are missing. Missing features are imputed to **training-only** means
+with explicit missing indicators. All-missing training columns are inactive.
+Missing national wind or solar series are not asserted to be measured zero.
+
+Per-zone scaling and fitting use only training labels through **origin D−2**.
+Features for later days can use their own D−2 settled history, but fitted
+coefficients stay frozen until the next monthly origin. There are no random
+splits, future labels, resampling or test-fit calibration. The settled-price
+history is a latest-settled reconstruction under the team's D−2 availability
+assumption, not an archive of initial auction-price revisions.
+
+The gate-time proxy measures informational value of the D−1 forecast fields,
+not an honest replay at the auction gate. The clearing experiment also uses
+latest revisions; `ForecastContext` records availability problems but does
+not rewind a source to an unavailable revision. Do not relabel either proxy
+as an operational 06:30 result.
+
+## Reproduce
+
+Python dependencies are isolated from the Julia market engine. Install the
+versions in `requirements.txt` in a private venv. Pin heavy work to your assigned
+cores (the sprint assigned collapse 36–51).
+
+```bash
+export EUPHEMIA_DATA_STORE=duckdb
+export EUPHEMIA_DUCKDB_PATH=/path/to/euphemia-live-20261114.duckdb
+export EUPHEMIA_DUCKDB_READONLY=true  # literal true, not 1
+export EUPHEMIA_RESULTS_DB=/private/path/collapse.duckdb
+export JULIA_DEPOT_PATH=/private/path/depot-collapse
+export JULIA_NUM_THREADS=8
+export EUPHEMIA_DUCKDB_THREADS=4
+export EUPHEMIA_DUCKDB_MEMORY=8GB
+export EUPHEMIA_DUCKDB_TEMP=/private/path/duckdb-tmp
+
+taskset -c 36-43 julia +1.12 --project=. bin/collapse_clearing.jl
+taskset -c 44-47 env OPENBLAS_NUM_THREADS=4 python bin/collapse_probability.py \
+  --extract "$EUPHEMIA_DUCKDB_PATH" --output /private/path/probabilities \
+  --live-dir /path/to/frozen/live-json
+python -m unittest discover -s test -p test_collapse_probability.py
+julia +1.12 --project=. test/test_res_offers.jl
+```
+
+The Python reader opens the source explicitly read-only; the Julia runner
+refuses to load the engine unless `EUPHEMIA_DUCKDB_READONLY=true` and confirms
+the library's read-only flag. All results go to labelled CSV/JSON artifacts,
+not Postgres, R2 or source tables. Model artifacts store coefficients, train-only
+scaling, feature order and monthly origins; inference is the exported
+`predict_logistic(model, features)` function. Scores include pooled and per-zone
+Brier, clipped log-loss (ε=10⁻⁶), AUC, recall, false-positive rate and reliability
+bins; AUC/recall are null when undefined. Climatology is per-zone expanding
+training frequency with Laplace smoothing. The live comparator is paired on the
+same UTC zone-hours; timestamps after 06:30 are counted, not silently called
+pre-gate forecasts.
+
+## Results
+
+Pending measured outputs. See the final result tables in this directory and
+the running team report `em-team/reports/collapse.md`.
