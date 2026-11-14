@@ -899,10 +899,17 @@ function create_merit_order_book(
             if rfilled !== nothing && !isempty(rfilled)
                 rcovered = Set(r.date_time[1:11] for r in renewables)  # "yyyymmdd-HH" present in TSO
                 radded = 0
-                for (ts, mw) in rfilled
+                # Entries are (ts, mw) — tagged "WeatherFill" — or typed
+                # (ts, mw, production_type): the weather track passes its solar
+                # component as "Solar" rows so the cv31 solar-regime gate (which
+                # reads "Solar" rows) sees the issued solar forecast instead of
+                # nothing. Quantity-neutral: all rows sum into renewable_by_time.
+                for entry in rfilled
+                    ts, mw = entry[1], entry[2]
+                    ptype = length(entry) >= 3 ? String(entry[3]) : "WeatherFill"
                     ts[1:11] in rcovered && continue                   # TSO already covers this hour
                     push!(renewables, RenewablesGenerationForecast(ts, "60", bidding_zone,
-                                                                    "WeatherFill", mw))
+                                                                    ptype, mw))
                     radded += 1
                 end
                 radded > 0 && println("  🩹 res-fill: $bidding_zone added $radded model hour(s) " *
