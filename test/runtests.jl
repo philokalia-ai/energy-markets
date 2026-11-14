@@ -184,6 +184,10 @@ println()
         include(joinpath(@__DIR__, "test_registry_feed_anchor.jl"))
     end
 
+    @testset "Solar-regime gate: issued weather solar" begin
+        include(joinpath(@__DIR__, "test_solar_gate_issued.jl"))
+    end
+
     @testset "Weather RES" begin
         println("\n" * "=" ^ 60)
         println("Running Weather RES Tests...")

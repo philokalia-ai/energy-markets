@@ -85,6 +85,40 @@ const BASELOAD_DERATE_TYPES = ("Fossil Brown coal/Lignite", "Fossil Hard coal",
 _inmerit_truth_on() = isempty(get(ENV, "EUPHEMIA_DISABLE_INMERIT_TRUTH", "")) &&
                       !(lowercase(get(ENV, "EUPHEMIA_INMERIT_TRUTH", "")) in ("0", "false"))
 
+"""
+    _solar_share_by_hour(renewables, load_by_time, issued_solar) -> Dict{Int,Float64}
+
+Solar share of forecast load per UTC hour-of-day for the cv31 solar-regime
+gate: mean solar MW / mean load MW. Solar comes from the TSO "Solar" RES rows,
+except that an hour present in `issued_solar` (the weather track's own typed
+solar forecast, collected regardless of TSO coverage) uses those values
+instead — so on the weather track the gate never depends on which TSO rows
+were ingested by issuance. `issued_solar` empty ⇒ the pre-existing rule.
+"""
+function _solar_share_by_hour(renewables, load_by_time,
+                              issued_solar::Dict{Int,Vector{Float64}}=Dict{Int,Vector{Float64}}())
+    sol_hr = Dict{Int,Vector{Float64}}()
+    ld_hr = Dict{Int,Vector{Float64}}()
+    for r in renewables
+        r.production_type == "Solar" || continue
+        length(r.date_time) >= 11 || continue
+        push!(get!(sol_hr, parse(Int, r.date_time[10:11]), Float64[]),
+              r.aggregated_generation_forecast)
+    end
+    merge!(sol_hr, issued_solar)
+    for (ts, v) in load_by_time
+        length(ts) >= 11 || continue
+        push!(get!(ld_hr, parse(Int, ts[10:11]), Float64[]), v)
+    end
+    share = Dict{Int,Float64}()
+    for (h, vs) in sol_hr
+        isempty(vs) && continue
+        lv = haskey(ld_hr, h) ? sum(ld_hr[h]) / length(ld_hr[h]) : 0.0
+        share[h] = lv > 0 ? (sum(vs) / length(vs)) / lv : 0.0
+    end
+    return share
+end
+
 # =============================================================================
 # Stage helpers for create_merit_order_book
 # =============================================================================
@@ -931,6 +965,13 @@ function create_merit_order_book(
         # `nothing`/empty is a no-op (byte-identical). Filled rows are hourly
         # ("60") and tagged production_type "WeatherFill". The caller only
         # attaches this hook to RES-short zones.
+        # Issued solar per UTC hour from TYPED fill entries (the weather track's
+        # own solar forecast). It feeds the solar-regime share directly,
+        # INDEPENDENT of the gap-fill precedence below: a TSO RES row covering
+        # the hour still wins for QUANTITIES, but the gate must judge the
+        # issued forecast, not whatever TSO rows happened to be ingested
+        # (review of PR #401, P2). Empty on every untyped/ENTSO-E path.
+        issued_solar = Dict{Int,Vector{Float64}}()
         if res_fill !== nothing
             rfilled = res_fill(bidding_zone, day)
             if rfilled !== nothing && !isempty(rfilled)
@@ -944,6 +985,8 @@ function create_merit_order_book(
                 for entry in rfilled
                     ts, mw = entry[1], entry[2]
                     ptype = length(entry) >= 3 ? String(entry[3]) : "WeatherFill"
+                    ptype == "Solar" && length(ts) >= 11 &&
+                        push!(get!(issued_solar, parse(Int, ts[10:11]), Float64[]), Float64(mw))
                     ts[1:11] in rcovered && continue                   # TSO already covers this hour
                     push!(renewables, RenewablesGenerationForecast(ts, "60", bidding_zone,
                                                                     ptype, mw))
@@ -1178,22 +1221,7 @@ function create_merit_order_book(
         sr_floor2 = parse(Float64, get(ENV, "EUPHEMIA_SOLAR_REGIME_FLOOR2", "-80"))
         solar_share_hr = Dict{Int,Float64}()
         if solar_regime_on
-            sol_hr = Dict{Int,Vector{Float64}}()
-            ld_hr = Dict{Int,Vector{Float64}}()
-            for r in renewables
-                r.production_type == "Solar" || continue
-                length(r.date_time) >= 11 || continue
-                push!(get!(sol_hr, parse(Int, r.date_time[10:11]), Float64[]),
-                      r.aggregated_generation_forecast)
-            end
-            for (ts, v) in load_by_time
-                length(ts) >= 11 || continue
-                push!(get!(ld_hr, parse(Int, ts[10:11]), Float64[]), v)
-            end
-            for (h, vs) in sol_hr
-                lv = haskey(ld_hr, h) ? sum(ld_hr[h]) / length(ld_hr[h]) : 0.0
-                solar_share_hr[h] = lv > 0 ? (sum(vs) / length(vs)) / lv : 0.0
-            end
+            solar_share_hr = _solar_share_by_hour(renewables, load_by_time, issued_solar)
         end
         sr_active(hr) = solar_regime_on && get(solar_share_hr, hr, 0.0) >= sr_theta
         # cv34 T2: the floor for an ACTIVE regime hour (tier 2 if share >= θ2)
@@ -1606,6 +1634,7 @@ function create_merit_order_book(
                     push!(get!(psol, parse(Int, r.date_time[10:11]), Float64[]),
                           r.aggregated_generation_forecast)
                 end
+                merge!(psol, issued_solar)   # issued weather solar wins (see _solar_share_by_hour)
                 for (ts, v) in load_by_time
                     length(ts) >= 11 || continue
                     push!(get!(pld, parse(Int, ts[10:11]), Float64[]), v)
