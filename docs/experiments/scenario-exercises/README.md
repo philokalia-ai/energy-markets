@@ -1,5 +1,110 @@
 # Scenario exercises — the cv31 ledger (data center & cold ironing)
 
+## cv43 rerun (Nov 2026): data center, cold ironing, "bring your own power"
+
+Rerun on **cv43** (feed-anchored Italian fleet, in-merit truthing, deterministic
+JAO scaling), Julia 1.13.4, HiGHS 1.27 (canonical per-period decomposition), the
+offline extract of 2026-11-14 (read-only). Driver: `eu43_scenarios.jl`. BYOP
+ledger: `scn_byop.py`. DC and cold-ironing ledgers: `scn_analysis.py`
+(unchanged). Each arm is paired with a **fresh `eu43_base`** cleared by the same
+code; no stored cv43 record exists.
+
+**Sampling and coverage.** To fit one night of compute, every arm runs on a
+deterministic stratified day sample, not the full window:
+- **Stride 4:** every 4th day of 2024-07-01..2026-06-29, 183 days covering all
+  seasons and weekdays. Used for base, DC and BYOP s = 0/50/100 %.
+- **Stride 4, year 1 only:** the sample days ≤ 2025-06-30, 92 days (the AIS
+  window). Used for cold ironing.
+- **Stride 8:** every 8th day, 92 days, a subset of the stride-4 days. Used for
+  the s = 150/200 % bracket arms.
+
+Every saved day solved 24/24 periods optimal, with 0 failed days. **€ sums cover
+the sampled days only:** multiply by 4 (stride 4) or 8 (stride 8) for a
+full-window estimate. Price Δs are means and need no scaling. Paired cells are
+inner-joined (zone, hour); BYOP tables use complete days only (39 zones,
+≥ 24 h). The stride-4 DC ledger reproduces the cv37 full-window run below
+within 2 % (GR +6.98 vs +7.10 €/MWh; extra cost ×4 ≈ €1,556m vs €1,555m), so
+the sample is representative.
+
+### GR data center +574 MW (`eu43_dc574` − `eu43_base`)
+183/183 days, 4,392 paired hours, 171,044 zone-hour cells.
+
+| | value |
+|---|---|
+| GR LW Δ | **+6.98 €/MWh** (base 94.19) |
+| EU-wide LW Δ | +0.289 €/MWh (+0.33 %) |
+| extra cost to everyone else (sample) | **€388.9m** (GR 178.1, outside GR 210.8); ×4 ≈ €1.56bn / 2 yr |
+| DC's own bill (sample) | 2.52 TWh, €251.0m (€234.1m at baseline prices) |
+| the ledger | **every €1 the DC spends raises others' bills by ~€1.55** |
+
+Spill: BG +2.73, RO +1.84, RS +1.09, IT-SOUTH +0.28; all other zones ≤ +0.23 €/MWh.
+
+### Pan-EU cold ironing, FLOOR (`eu43_ops_floor_paneu` − `eu43_base`)
+92/92 days (year 1), 2,208 paired hours, 86,015 cells.
+
+| | value |
+|---|---|
+| EU-wide LW Δ | **+0.166 €/MWh** (+0.19 % on 88.48) |
+| extra cost to everyone else (sample) | **€111.7m** (GR 7.0, outside GR 104.7); ×4 ≈ €447m / yr |
+| ships' bill (sample) | 0.615 TWh, €50.5m (OPS-weighted €82.08/MWh); ×4 ≈ 2.46 TWh |
+| the ledger | **every €1 of shore power raises others' bills by ~€2.21** |
+
+Top per-MWh: IT-Sardinia +0.84, GR +0.54, IT-CSOUTH +0.40, IT-CNORTH +0.40,
+ES +0.39 (largest €, 23.1m), IT-SOUTH +0.35, PT +0.31. Vs cv37 (365 d): EU LW
++0.139 → +0.166 and multiplier 1.87 → 2.21. The cause is not attributed: the
+model and the sample both differ.
+
+### "Bring your own power": the DC brings a share s of its load as a new GR CCGT
+**Setup.** The DC (+574 MW flat) plus a new **merchant** CCGT in GR that offers
+s × 574 MW every hour (nameplate = offered / 0.90 availability) at its own
+SRMC = TTF/0.59 + 0.202/0.59 · EUA + 2 €/MWh. That is the fleet's gas formula
+with an H-class efficiency, using the same ex-ante closes. It enters through
+the `extra_orders` hook on both passes.
+
+**Question.** At which s is the GR load-weighted price with DC + plant no higher
+than the no-DC baseline ("lower than today")? Also: the EU-wide consumer cost at
+each s.
+
+Stride-8 subset, **89 complete common days** across all arms, 2,136 GR hours.
+€ sums cover those 89 days.
+
+| s | GR LW Δ (€/MWh) | EU LW Δ | EU extra cost €m | GR €m | outside GR €m | plant TWh | plant CF |
+|---|---|---|---|---|---|---|---|
+| 0 % (DC only) | +6.96 | +0.273 | +178.5 | +86.6 | +91.9 | 0 | — |
+| 50 % | +4.82 | +0.187 | +122.1 | +60.0 | +62.1 | 0.41 | 0.68 |
+| 100 % | +3.04 | +0.111 | +72.3 | +37.8 | +34.5 | 0.80 | 0.66 |
+| 150 % | +1.42 | +0.038 | +24.8 | +17.6 | +7.2 | 1.18 | 0.64 |
+| 200 % | **−0.22** | **−0.031** | **−20.2** | −2.7 | −17.5 | 1.54 | 0.63 |
+
+(The stride-4 sample, 175 complete days, gives +6.97 / +4.85 / +3.09 for
+s = 0 / 50 / 100 %, which agrees with the subset to within 0.05 €/MWh.)
+
+- **s\* ≈ 193 %** (linear interpolation between the bracketing arms 150 % and
+  200 %). A merchant CCGT must offer about **1.9× the DC's load** (~1,110 MW,
+  ~1,230 MW nameplate) before the Greek price is no higher than today's.
+- The EU-wide consumer cost crosses zero earlier, at ≈ 178 % (interpolated).
+- **Why ~2×:** the plant runs only when the GR price exceeds its SRMC (capacity
+  factor 0.63–0.68, falling as it grows). In the other third of hours the DC is
+  an unhedged +574 MW load.
+- **Merchant vs behind the meter:** the arms measure the **merchant** case. If
+  the plant were **behind the meter** (self-supply netted against the DC load
+  whenever the DC runs), s = 100 % gives Δ ≈ 0 by construction, and "lower than
+  today" then requires s > 100 % with the surplus sold into the market.
+- Plant dispatch in `scn_byop.py` is inferred from the GR clearing price vs the
+  plant's SRMC (marginal hours counted half), not read from the solver.
+
+**Not run:** s = 25 % / 75 % (refine the curve inside 0–100 %, irrelevant to s\*).
+**Reproduce:** see the header of `eu43_scenarios.jl` (`SCN_ARMS`, `SCN_STEP`,
+`SCN_SOLVERS`/`SCN_BOOKS`/`SCN_INFLIGHT`). Then run:
+
+```bash
+python3 scn_analysis.py RESULTS EXTRACT eu43_base:43 eu43_dc574:43 2024-07-01 2026-07-01 dc574
+python3 scn_analysis.py RESULTS EXTRACT eu43_base:43 eu43_ops_floor_paneu:43 2024-07-01 2025-07-01 ops ops_hourly_eu_floor_2023H2_2025H1.csv.gz
+BYOP_ARMS=eu43_dc574,eu43_byop_s50,eu43_byop_s100,eu43_byop_s150,eu43_byop_s200 python3 scn_byop.py RESULTS EXTRACT 0.59 43
+```
+
+---
+
 The two counterfactual demand exercises, **merged and rerun on the current
 model (cv31)** via the first-class scenario API (`docs/scenario-api.md`) on the
 coupled 39-zone footprint. Earlier iterations (single-zone GR runs, the GR-only
