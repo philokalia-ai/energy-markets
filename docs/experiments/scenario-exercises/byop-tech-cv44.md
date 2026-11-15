@@ -34,7 +34,7 @@ Question (owner): would a different technology neutralise the GR data center
 
 **Crossing points (GR LW Δ = 0, linear):**
 - PV e\* ≈ 80 %, wind e\* ≈ 82 % of the DC's energy.
-- CCGT s\* ≈ 187 % on these days, i.e. ≈ 115 % of the DC's energy actually generated.
+- CCGT s\* ≈ 187 % on these 44 days (the 89-day stride-8 cv44 figure above is 192 %), i.e. ≈ 115 % of the DC's energy actually generated.
 - The EU-wide cost crosses later for PV (≈ e117 %): PV leaves the evening peak and the RO/RS spill in place. A 4-hour battery removes them.
 
 **Mechanism:**
