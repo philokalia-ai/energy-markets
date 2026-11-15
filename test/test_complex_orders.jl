@@ -162,3 +162,50 @@ end
         @test kinds() == Set(["blocks"])
     end
 end
+
+@testset "PS opportunity reference: vintage-safe snapshot + true 06:30 context" begin
+    include(joinpath(@__DIR__, "scripts", "blocks", "contexts.jl"))
+    M = Euphemia.MeritOrderBook
+    D = Date(2026, 11, 20)
+    # the eval context is really 06:30 on D-1 (issuance_context lead 1 would be 10:00)
+    @test pregate_0630(D).as_of_utc == DateTime(2026, 11, 19, 6, 30)
+    @test Euphemia.issuance_context(D, 1; issue_time=Time(6, 30)).as_of_utc == DateTime(2026, 11, 19, 10, 0)
+    f = tempname() * ".csv"
+    pv(x) = join(string.(collect(range(x, x - 230; length=24))), ",")
+    write(f, "zone,day,issued_utc,$(join(["p$i" for i in 1:24], ","))\n" *
+             "CH,2026-11-20,2026-11-19 06:30:00,$(pv(300.0))\n" *          # the D-1 06:30 vintage
+             "CH,2026-11-20,2026-11-20 23:00:00,$(pv(500.0))\n")           # a FUTURE vintage
+    withenv("EUPHEMIA_PS_OPP_REF_FILE" => f, "EUPHEMIA_PS_OPP_ZONES" => "CH") do
+        snap = M.ps_opp_snapshot!()
+        @test snap !== nothing
+        # 06:30 lead-1 issuance: the future vintage is rejected, the D-1 06:30 one used
+        Euphemia.with_context(pregate_0630(D)) do
+            @test M._ps_opp_prices(snap, "CH", D)[1] == 300.0
+        end
+        # legacy path: explicit D-1 10:00 cutoff → same admissible vintage
+        @test M._ps_opp_prices(snap, "CH", D)[1] == 300.0
+        # lead 7 (issued 2026-11-13 06:30): no admissible vintage → off
+        Euphemia.with_context(Euphemia.issuance_context(D, 7; issue_time=Time(6, 30))) do
+            @test M._ps_opp_prices(snap, "CH", D) === nothing
+        end
+        # a later issuance that legitimately sees both picks the latest vintage
+        Euphemia.with_context(Euphemia.ForecastContext(D, DateTime(2026, 11, 21), 1, :fixed_10utc, "")) do
+            @test M._ps_opp_prices(snap, "CH", D)[1] == 500.0
+        end
+        @test M._ps_opp_prices(snap, "AT", D) === nothing          # zone not listed
+        # snapshot is immutable: rewriting the file does not change the loaded rows
+        write(f, "zone,day,issued_utc,$(join(["p$i" for i in 1:24], ","))\n")
+        @test M._ps_opp_prices(M.PS_OPP_SNAPSHOT[], "CH", D)[1] == 300.0
+    end
+    withenv("EUPHEMIA_PS_OPP_REF_FILE" => nothing, "EUPHEMIA_PS_OPP_ZONES" => nothing) do
+        @test M.ps_opp_snapshot!() === nothing                      # off ⇒ fail closed
+        @test M.PS_OPP_SNAPSHOT[] === nothing
+    end
+    # malformed file (unsorted prices) is an error, not a silent degrade
+    bad = tempname() * ".csv"
+    write(bad, "zone,day,issued_utc,$(join(["p$i" for i in 1:24], ","))\n" *
+               "CH,2026-11-20,2026-11-19 06:30:00,$(join(string.(1.0:24.0), ","))\n")
+    withenv("EUPHEMIA_PS_OPP_REF_FILE" => bad, "EUPHEMIA_PS_OPP_ZONES" => "CH") do
+        @test_throws ErrorException M.ps_opp_snapshot!()
+    end
+end

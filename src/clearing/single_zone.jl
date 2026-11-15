@@ -219,6 +219,7 @@ function generate_energy_prices(bidding_zone::String, date::Date;
 
     try
         println("🔄 Generating energy prices for $bidding_zone on $date")
+        MeritOrderBook.ps_opp_snapshot!()   # opt-in PS opportunity reference: pre-pass snapshot
         println("   📋 Order method: $order_method")
         println("   ⚖️  Model: $model")
 

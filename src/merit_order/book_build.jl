@@ -645,6 +645,93 @@ function _storage_daily_budget(zone::String, day::Date, production_type::String)
 end
 
 """
+Forecast snapshot for the PS opportunity reference (experiment, planner-p2 idea 2).
+Loaded and validated ONCE per clear by `ps_opp_snapshot!()` — called at the start of
+`run_multi_zone_market_clearing` / `generate_energy_prices`, before pass 1 — and
+never re-read during the clear, so pass 2 sees exactly the pass-1 input even if the
+file changes on disk. `nothing` ⇒ the reference is off (fail closed).
+"""
+const PS_OPP_SNAPSHOT = Ref{Any}(nothing)
+
+"""
+    ps_opp_snapshot!() -> Union{Nothing,NamedTuple}
+
+Read `EUPHEMIA_PS_OPP_REF_FILE` (CSV header `zone,day,issued_utc,p1..p24`; p sorted
+descending; `issued_utc` = the forecast's issuance, ISO `yyyy-mm-dd HH:MM:SS`) into an
+immutable snapshot of every vintage, validating each row (24 finite prices, sorted
+descending, parseable issuance). Returns/stores `nothing` when the switch is off.
+Invalid file ⇒ error (an opt-in experiment must not silently degrade).
+"""
+function ps_opp_snapshot!()
+    f = get(ENV, "EUPHEMIA_PS_OPP_REF_FILE", "")
+    zones = filter(!isempty, strip.(split(get(ENV, "EUPHEMIA_PS_OPP_ZONES", ""), ",")))
+    if isempty(f) || isempty(zones)
+        PS_OPP_SNAPSHOT[] = nothing
+        return nothing
+    end
+    rows = Dict{Tuple{String,String},Vector{Tuple{DateTime,Vector{Float64}}}}()
+    lines = readlines(f)
+    startswith(lines[1], "zone,day,issued_utc,p1") ||
+        error("PS opportunity file $f: unexpected header $(lines[1])")
+    for (i, line) in enumerate(lines[2:end])
+        isempty(strip(line)) && continue
+        c = split(line, ",")
+        length(c) == 27 || error("PS opportunity file $f row $(i+1): $(length(c)) columns")
+        issued = DateTime(replace(String(c[3]), " " => "T")[1:min(end, 19)])
+        p = parse.(Float64, c[4:27])
+        (all(isfinite, p) && issorted(p; rev=true)) ||
+            error("PS opportunity file $f row $(i+1): prices not finite/sorted descending")
+        push!(get!(rows, (String(c[1]), String(c[2])), Tuple{DateTime,Vector{Float64}}[]),
+              (issued, p))
+    end
+    snap = (file=f, zones=Set(zones), rows=rows, loaded_utc=Dates.now(Dates.UTC))
+    PS_OPP_SNAPSHOT[] = snap
+    println("  🎯 PS opportunity snapshot: $(length(rows)) zone-days from $f (zones $(join(zones, ",")))")
+    return snap
+end
+
+"""
+Issuance cutoff for the PS opportunity forecast: inside a `ForecastContext` its
+`as_of_utc`; on the legacy (record) path the explicit D-1 10:00 UTC gate. Only rows
+issued at or before it are admissible; the latest admissible vintage wins.
+"""
+_ps_opp_cutoff(day::Date) = (c = current_context(); c === nothing ?
+    DateTime(day - Day(1)) + Hour(10) : c.as_of_utc)
+
+"Pure vintage selection: sorted-descending prices of the latest admissible vintage, or `nothing`."
+function _ps_opp_prices(snap, zone::String, day::Date)
+    (snap !== nothing && zone in snap.zones) || return nothing
+    vint = get(snap.rows, (zone, string(day)), nothing)
+    vint === nothing && return nothing
+    cutoff = _ps_opp_cutoff(day)
+    ok = [(t, p) for (t, p) in vint if t <= cutoff]
+    isempty(ok) && return nothing
+    return last(sort(ok; by=first))[2]
+end
+
+"""
+    _ps_opp_reference(zone, day, anchored, generators, offered_pmax) -> Union{Nothing,Float64}
+
+r = p_H of the latest forecast vintage for (zone, market day `day`) issued at or
+before `_ps_opp_cutoff(day)`, H = round(E14 / offered PS MW) clamped to 1..24. Uses
+only the pre-pass snapshot; `nothing` if off, not anchored, zone not listed, or no
+admissible vintage (a later-vintage forecast never feeds an earlier issuance or a
+longer lead).
+"""
+function _ps_opp_reference(zone::String, day::Date, anchored::Bool, generators, offered_pmax)
+    anchored || return nothing
+    p = _ps_opp_prices(PS_OPP_SNAPSHOT[], zone, day)
+    p === nothing && return nothing
+    psmw = sum((offered_pmax(g) for g in generators
+                if g.fuel_type == Symbol("Hydro Pumped Storage")); init=0.0)
+    psmw > 1.0 || return nothing
+    e14 = _storage_daily_budget(zone, day, "Hydro Pumped Storage")
+    isnan(e14) && return nothing
+    H = clamp(round(Int, e14 / psmw), 1, 24)
+    return p[H]
+end
+
+"""
     _split_storage_families(tagged, strategies, generators, zone, day,
                             hydro_model, n_slots, resolution_minutes)
         -> (keep::BitVector, members::Vector{Tuple{SimpleOrder,String}},
@@ -1409,6 +1496,16 @@ function create_merit_order_book(
         res_ladder = res_offer_ladder_enabled()
         res_policy = res_ladder ? res_offer_policy(bidding_zone) : nothing
 
+        # PS opportunity reference (experiment, planner-p2 #2; opt-in — unset ⇒
+        # nothing). In :hydro-anchored pass-2 books of the listed zones, PS units
+        # price against 0.5·(coupled reference) + 0.5·r, r = the H-th highest
+        # hour of a frozen ex-ante price forecast for the delivery day,
+        # H = E14 / offered PS MW ∈ [1, 24].
+        ps_opp_r = _ps_opp_reference(bidding_zone, day, anchor_active &&
+            opportunity_anchor == :hydro && !isempty(anchor_prices),
+            generators, offered_pmax)
+        ps_opp_changed = 0
+
         for ts in target_timeslots
             date_time = parse_timeslot_to_datetime(ts, day)
             hr = Dates.hour(date_time)   # UTC hour key for all hour-keyed lookups
@@ -1571,9 +1668,18 @@ function create_merit_order_book(
                         wv_lo = (bidding_zone in
                                      strip.(split(get(ENV, "EUPHEMIA_CV34_T5_ZONES", ""), ",")) &&
                                  sr_active(hr)) ? sr_floor(hr) : 2.0
-                        clamp(anchor_prices[ts] *
+                        aref = (ps_opp_r !== nothing &&
+                                g.fuel_type == Symbol("Hydro Pumped Storage")) ?
+                            0.5 * anchor_prices[ts] + 0.5 * ps_opp_r : anchor_prices[ts]
+                        wv = clamp(aref *
                               (anchor_share + water_value_dry_boost * hydro_dryness),
                               wv_lo, gas_srmc)
+                        if aref != anchor_prices[ts] && wv != clamp(anchor_prices[ts] *
+                              (anchor_share + water_value_dry_boost * hydro_dryness),
+                              wv_lo, gas_srmc)
+                            ps_opp_changed += 1
+                        end
+                        wv
                     elseif hydro_model == :reservoir_opportunity
                         # Stored water is worth a FRACTION of the continental
                         # thermal price (gas SRMC proxy): an export-opportunity
@@ -1761,6 +1867,10 @@ function create_merit_order_book(
                 end
             end
         end
+
+        ps_opp_r !== nothing &&
+            println("  🎯 PS opportunity ref: r=$(round(ps_opp_r, digits=1)) €/MWh — " *
+                    "$ps_opp_changed PS slot price(s) changed (0 ⇒ clamps make it inert)")
 
         # ── Stage 6c: valley-continuation re-pricing (GRSQ lever 2) ─────
         # For each qualifying (unit, valley hour): the unit's cheapest

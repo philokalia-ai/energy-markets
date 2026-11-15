@@ -145,6 +145,9 @@ function run_multi_zone_market_clearing(date::Date;
                                         scenario::Union{Nothing,ZoneScenario,Dict{String,ZoneScenario}}=nothing)
 
     start_time = time()
+    # PS opportunity-reference experiment (opt-in): snapshot + validate the forecast
+    # file ONCE, before pass 1; both passes read this immutable snapshot.
+    MeritOrderBook.ps_opp_snapshot!()
     # Resolve the ex-ante flow mode (scoped :v3 default, cv19): the
     # EU-footprint path (enriched network, merit order) defaults to the
     # anad2 :v3 flow rule (analogue x D-2 blend — measured better than :v2
