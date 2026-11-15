@@ -225,7 +225,9 @@ function resolve_complex_orders(order_book::MPCCOrderBook;
             a = o.quantity * clamp(yv[j], 0.0, 1.0)
             d = get!(info, o.family, Dict{String,Any}("budget" => o.family_budget_mwh,
                 "used" => 0.0, "offered_mwh" => 0.0, "slots_capped" => 0, "slots_zero" => 0,
-                "capped" => Tuple{DateTime,Float64,Float64}[]))
+                "capped" => Tuple{DateTime,Float64,Float64}[],
+                "all" => Tuple{DateTime,Float64,Float64}[]))
+            push!(d["all"], (o.date_time, o.quantity, a))
             d["offered_mwh"] += o.quantity * o.resolution_code / 60.0
             d["used"] += a * o.resolution_code / 60.0
             if a < o.quantity - 0.1

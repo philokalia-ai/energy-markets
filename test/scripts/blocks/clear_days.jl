@@ -16,12 +16,15 @@ for ds in ARGS[2:end]
     f = joinpath(outdir, "$(d).csv")
     isfile(f) && (println("skip $d"); continue)
     t0 = time()
-    res = run_multi_zone_market_clearing(d; zones=FOOTPRINT, order_method=:merit_order,
+    clear() = run_multi_zone_market_clearing(d; zones=FOOTPRINT, order_method=:merit_order,
         optimizer="highs", silent=true, save_to_db=false, clearing_mode="multi_zone",
         enrich_network=true, passes=2,
         # rerun budget for time-limited days: CLEAR_TIME_LIMIT=3600 (bin/reproduce.jl's HiGHS budget)
         mpcc_time_limit=parse(Float64, get(ENV, "CLEAR_TIME_LIMIT", "900")),
         mpcc_heuristic_effort=haskey(ENV, "CLEAR_TIME_LIMIT") ? 0.3 : nothing)
+    # CLEAR_CONTEXT=0630: the lead-1 06:30 UTC D-1 issuance context (pre-gate product)
+    res = get(ENV, "CLEAR_CONTEXT", "") == "0630" ?
+        Euphemia.with_context(clear, Euphemia.issuance_context(d, 1; issue_time=Time(6, 30))) : clear()
     el = time() - t0
     ok = res.status == :optimal || (res.status == :time_limit && !isempty(res.market_prices))
     open(joinpath(outdir, "timing.tsv"), "a") do io
@@ -45,6 +48,14 @@ for ds in ARGS[2:end]
                 end
             else
                 println(io, ",,,,,,$(info.status),")
+            end
+        end
+        if info.status == :optimal
+            open(joinpath(outdir, "$(d).alloc.csv"), "w") do io
+                println(io, "family,date_time,offered_mw,alloc_mw")
+                for (fam, dd) in sort(collect(info.families); by=first), (dt, q, a) in get(dd, "all", [])
+                    println(io, "$fam,$dt,$q,$a")
+                end
             end
         end
         Euphemia.MPCC.LAST_COMPLEX_INFO[] = nothing

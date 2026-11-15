@@ -644,6 +644,41 @@ function _storage_daily_budget(zone::String, day::Date, production_type::String)
     return e
 end
 
+const _PS_OPP_FILE_CACHE = Dict{String,Dict{Tuple{String,String},Vector{Float64}}}()
+"""
+    _ps_opp_reference(zone, day, anchored, generators, offered_pmax) -> Union{Nothing,Float64}
+
+Experiment (planner-p2 idea 2), opt-in: `EUPHEMIA_PS_OPP_REF_FILE` (CSV: zone, day,
+issued_utc, p1..p24 = the frozen ex-ante forecast prices of market day `day`, sorted
+descending) and `EUPHEMIA_PS_OPP_ZONES`. Returns r = p_H with H = round(E14 / offered
+PS MW) clamped to 1..24, or `nothing` (not anchored / zone not listed / no data).
+"""
+function _ps_opp_reference(zone::String, day::Date, anchored::Bool, generators, offered_pmax)
+    f = get(ENV, "EUPHEMIA_PS_OPP_REF_FILE", "")
+    (anchored && !isempty(f)) || return nothing
+    zone in strip.(split(get(ENV, "EUPHEMIA_PS_OPP_ZONES", ""), ",")) || return nothing
+    tab = lock(_STORAGE_BUDGET_LOCK) do
+        get!(_PS_OPP_FILE_CACHE, f) do
+            t = Dict{Tuple{String,String},Vector{Float64}}()
+            for (i, line) in enumerate(eachline(f))
+                i == 1 && continue
+                c = split(line, ",")
+                t[(String(c[1]), String(c[2]))] = parse.(Float64, c[4:27])
+            end
+            t
+        end
+    end
+    p = get(tab, (zone, string(day)), nothing)
+    p === nothing && return nothing
+    psmw = sum((offered_pmax(g) for g in generators
+                if g.fuel_type == Symbol("Hydro Pumped Storage")); init=0.0)
+    psmw > 1.0 || return nothing
+    e14 = _storage_daily_budget(zone, day, "Hydro Pumped Storage")
+    isnan(e14) && return nothing
+    H = clamp(round(Int, e14 / psmw), 1, 24)
+    return p[H]
+end
+
 """
     _split_storage_families(tagged, strategies, generators, zone, day,
                             hydro_model, n_slots, resolution_minutes)
@@ -1409,6 +1444,16 @@ function create_merit_order_book(
         res_ladder = res_offer_ladder_enabled()
         res_policy = res_ladder ? res_offer_policy(bidding_zone) : nothing
 
+        # PS opportunity reference (experiment, planner-p2 #2; opt-in — unset ⇒
+        # nothing). In :hydro-anchored pass-2 books of the listed zones, PS units
+        # price against 0.5·(coupled reference) + 0.5·r, r = the H-th highest
+        # hour of a frozen ex-ante price forecast for the delivery day,
+        # H = E14 / offered PS MW ∈ [1, 24].
+        ps_opp_r = _ps_opp_reference(bidding_zone, day, anchor_active &&
+            opportunity_anchor == :hydro && !isempty(anchor_prices),
+            generators, offered_pmax)
+        ps_opp_changed = 0
+
         for ts in target_timeslots
             date_time = parse_timeslot_to_datetime(ts, day)
             hr = Dates.hour(date_time)   # UTC hour key for all hour-keyed lookups
@@ -1571,9 +1616,18 @@ function create_merit_order_book(
                         wv_lo = (bidding_zone in
                                      strip.(split(get(ENV, "EUPHEMIA_CV34_T5_ZONES", ""), ",")) &&
                                  sr_active(hr)) ? sr_floor(hr) : 2.0
-                        clamp(anchor_prices[ts] *
+                        aref = (ps_opp_r !== nothing &&
+                                g.fuel_type == Symbol("Hydro Pumped Storage")) ?
+                            0.5 * anchor_prices[ts] + 0.5 * ps_opp_r : anchor_prices[ts]
+                        wv = clamp(aref *
                               (anchor_share + water_value_dry_boost * hydro_dryness),
                               wv_lo, gas_srmc)
+                        if aref != anchor_prices[ts] && wv != clamp(anchor_prices[ts] *
+                              (anchor_share + water_value_dry_boost * hydro_dryness),
+                              wv_lo, gas_srmc)
+                            ps_opp_changed += 1
+                        end
+                        wv
                     elseif hydro_model == :reservoir_opportunity
                         # Stored water is worth a FRACTION of the continental
                         # thermal price (gas SRMC proxy): an export-opportunity
@@ -1761,6 +1815,10 @@ function create_merit_order_book(
                 end
             end
         end
+
+        ps_opp_r !== nothing &&
+            println("  🎯 PS opportunity ref: r=$(round(ps_opp_r, digits=1)) €/MWh — " *
+                    "$ps_opp_changed PS slot price(s) changed (0 ⇒ clamps make it inert)")
 
         # ── Stage 6c: valley-continuation re-pricing (GRSQ lever 2) ─────
         # For each qualifying (unit, valley hour): the unit's cheapest
