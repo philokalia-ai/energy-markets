@@ -32,6 +32,7 @@
   --series-act:     var(--terracotta);  /* actual (settled) */
   --series-gbm:     #D4649B;            /* physics + ex-ante GBM (pink) */
   --series-stats:   #C9A227;            /* pure-stats GBM (yellow) */
+  --series-tsfm:    #7B5EA7;            /* Timestral TSFM overlay (violet) */
   --status-good:    #2E7D46;
   --status-weak:    #C0392B;
   --good-text:      #2E7D46;
@@ -77,6 +78,7 @@
   --series-act:     #E0A458;
   --series-gbm:     #F084B8;            /* physics + ex-ante GBM (pink) */
   --series-stats:   #E8C547;            /* pure-stats GBM (yellow) */
+  --series-tsfm:    #B39DDB;            /* Timestral TSFM overlay (violet) */
   --status-good:    #58B372;
   --status-weak:    #E06555;
   --good-text:      #58B372;
@@ -508,6 +510,12 @@ select {
 }
 .pill.pending { color: var(--text-muted); font-style: italic; }
 .pill.weather { color: var(--series-sim, var(--text-secondary)); border-color: currentColor; }
+/* negative-price risk: P(any hour <= 0) >= 0.3 (TSFM overlay) */
+.pill.risk { color: var(--status-weak); border-color: currentColor; font-weight: 600; }
+/* the risk pill may not fit beside MAE/r in the narrow day list: let the badges wrap */
+.day-btn .d-badges { flex-wrap: wrap; justify-content: flex-end; row-gap: 3px; }
+.stat.risk .s-value { color: var(--status-weak); }
+.tooltip .tt-risk { color: var(--status-weak); font-variant-numeric: tabular-nums; }
 
 /* ---------- chart card ---------- */
 .chart-head { margin-bottom: 6px; }
@@ -553,6 +561,7 @@ select {
 .legend .key.act { border-color: var(--series-act); }
 .legend .key.gbm { border-color: var(--series-gbm); }
 .legend .key.stats { border-color: var(--series-stats); }
+.legend .key.tsfm { border-color: var(--series-tsfm); border-top-style: dashed; }
 .legend .key.dashed { border-top-style: dashed; }
 
 /* Interactive series focus: hover to highlight, click to toggle, double-click

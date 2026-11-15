@@ -8,7 +8,7 @@
 using Test, Dates, JSON, DataFrames, DuckDB
 const D = Date(get(ENV, "OVERLAY_TEST_DATE", "2026-11-14"))
 const ZONE = get(ENV, "OVERLAY_TEST_ZONE", "GR")
-tmp = mktempdir()
+tmp = get(ENV, "OVERLAY_TEST_OUT", "") == "" ? mktempdir() : mkpath(ENV["OVERLAY_TEST_OUT"])
 ENV["WEB_PARQUET_OUT"] = joinpath(tmp, "web")
 src(f) = replace(read(joinpath(@__DIR__, "..", "..", "bin", f), String), r"\nmain\(\)\s*$" => "\n")
 # JSON exporter into a temp OUT_DIR (its const points at web/data)
