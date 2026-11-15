@@ -1,7 +1,6 @@
 # `tsfm` + collapse-probability overlay — in production (owner decision 2026-11-15)
 
-**Status:** published daily by `.github/workflows/daily-forecast.yml` (step "TSFM overlay
-(Timestral, pre-gate)"), model **Timestral-209M** (`TSFM_ARM=timestral-209m`, Hub revision
+**Status:** published daily by `.github/workflows/daily-forecast.yml`, job `tsfm-overlay`, model **Timestral-209M** (`TSFM_ARM=timestral-209m`, Hub revision
 `9874d25` pinned). Shown on energy.philokalia.ai (Recent days + Zone explorer) and in
 `api.philokalia.ai/api/v1/zones/<Z>`. **Licence:** the Timestral weights are Modified-MIT
 with a revenue cap; the owner confirmed the licence is fine for this deployment (2026-11-15).
@@ -10,19 +9,22 @@ with a revenue cap; the owner confirmed the licence is fine for this deployment 
 
 | layer | what | where |
 |---|---|---|
-| schedule | after "Score realized forecasts", before "Export forecast JSON"; `continue-on-error` | `daily-forecast.yml` |
+| schedule | separate job `tsfm-overlay`: `needs: daily-forecast`, runs only if the core job succeeded, i.e. AFTER the core export + R2 publish; own deadline (150 min, every step bounded). The core job is byte-for-byte main: an overlay failure or hang cannot cancel or delay it. The job then re-runs the idempotent JSON export + R2 parquet publish so the overlay reaches the site the same morning | `daily-forecast.yml` |
 | mode | **`pregate0630`**: settled prices through D−1, issue D−1 06:30 UTC, `after_gate=false`. `postsim` is not possible in this job: it produces leads 2–7 only, and D's lead-1 sim is frozen later by the ceres JAO runs. A `postsim` refresh belongs after the lead-1 freeze (e.g. the 10:40 `emit_model_lines.sh` cron); not wired | `OVERLAY_MODE` |
 | deps | uv 0.12.21, Python 3.12, `bin/requirements-overlay.txt` (the backtest venv, pinned; timestral @a534bdb) | runner |
 | weights | `actions/cache`, key = Hub revision, `HF_HOME=$GITHUB_WORKSPACE/.hf` | runner |
 | read | Postgres through DuckDB's postgres scanner (`ATTACH … READ_ONLY` + `USE pg`), so the SQL is identical to the extract's | `open_store` |
-| write | idempotent `CREATE TABLE IF NOT EXISTS simulations.overlay_probabilities`; upserts `model_lines` (`tsfm`, `tsfm_q10`, `tsfm_q90`, code_version 1) and `overlay_probabilities` (day rows at the market-day start, `level='day'`) | `write_db` |
-| export | zone JSON + zone parquet: `tsfm`, `tsfm_q10`, `tsfm_q90`, `p_le0` hourly; `p_any_le0`, `tsfm_input_mode`, `tsfm_issue_utc`, `tsfm_arm` per zone-day (latest issue wins) | `bin/export_*`, `tsfm_overlay_maps` |
+| write | idempotent `CREATE TABLE IF NOT EXISTS simulations.tsfm_overlay`; ONE vintage per run = lines (`tsfm_median`, `tsfm_q10`, `tsfm_q90`) + probabilities, keyed by (input_mode, arm), stamped `issue_utc`; day rows at the market-day start (`level='day'`). The upsert rejects an older issue over a newer one (`WHERE existing.issue_utc <= EXCLUDED.issue_utc`). `model_lines` is not touched | `write_db` |
+| export | zone JSON + zone parquet: `tsfm`, `tsfm_q10`, `tsfm_q90`, `p_le0` hourly; `p_any_le0`, `tsfm_input_mode`, `tsfm_issue_utc`, `tsfm_arm` per zone-day. ONE vintage per zone-day (latest issue), every value from it, so a line is never paired with another vintage's risk | `bin/export_*`, `tsfm_overlay_maps` |
 | API | `shapeZone` passes the fields through when present (older parquets: old shape) | `workers/api/src/shape.js` |
 | site | violet dashed TSFM + q10–q90 band (legend chip), tooltip, `P(any hour ≤ 0)` stat, `≤0 risk N%` badge at ≥ 0.3 | `web/app.js` |
 | arms | `ARMS` registry: a new arm (e.g. a physics-anchored residual) is one entry; select with `TSFM_ARM` | emitter |
 
-Measured locally (PostgreSQL 16 throwaway cluster, real weights, D = 2026-11-16): fresh venv
-install + run **225 s** on 4 threads (TSFM 80 s, logistic over the scanner ~135 s), peak RSS 3.7 GB.
+Runtime (aarch64, real weights, local PostgreSQL 16, machine load average ~65 on 80 cores):
+218 s with 4 threads on 4 cores (TSFM 81 s, logistic over the scanner ~132 s, 329 % CPU) and
+260 s with 4 threads squeezed onto 2 cores (TSFM 152 s, 176 % CPU); peak RSS 3.7 GB. A
+reviewer's run under heavier contention did not finish within 420 s. The emitter step is bounded at
+30 min (~4x the worst observed) to leave room for production scanner latency, which is unmeasured.
 
 ## Original draft notes (2026-11-14)
 

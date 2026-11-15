@@ -215,49 +215,6 @@ jobs:
         run: |
           julia --project=. bin/score_forecasts.jl
 
-      # TSFM overlay (owner decision 2026-11-15: publish, model Timestral-209M):
-      # tomorrow's lead-1 TSFM price line (median/q10/q90) + hourly P(price<=0)
-      # + P(any hour<=0) per zone-day, written to simulations.model_lines /
-      # simulations.overlay_probabilities BEFORE the export below picks them up.
-      # PRE-GATE: issue = D-1 06:30 UTC from settled prices only (`postsim`
-      # needs D's lead-1 sim, which this run does not produce — leads 2..7 only;
-      # docs/experiments/tsfm-2026-11/overlay.md). A prediction product next to
-      # sim/gbm/stats; it never feeds the counterfactual. continue-on-error on
-      # every overlay step: an overlay failure never blocks export/publish.
-      - name: Setup uv (TSFM overlay)
-        if: ${{ !cancelled() }}
-        continue-on-error: true
-        uses: astral-sh/setup-uv@v6
-        with:
-          version: "0.12.21"
-          enable-cache: true
-          cache-dependency-glob: bin/requirements-overlay.txt
-
-      - name: Cache Timestral weights (pinned Hub revision)
-        if: ${{ !cancelled() }}
-        continue-on-error: true
-        uses: actions/cache@v4
-        with:
-          path: ${{ github.workspace }}/.hf
-          key: hf-timestral-209m-9874d252ab0aae16f7f7c999f98f98d6ad7d8365
-
-      - name: TSFM overlay (Timestral, pre-gate)
-        if: ${{ !cancelled() }}
-        continue-on-error: true
-        timeout-minutes: 20
-        env:
-          ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
-          HF_HOME: ${{ github.workspace }}/.hf
-          TSFM_ARM: timestral-209m      # pluggable: any arm registered in bin/emit_tsfm_overlay.py ARMS
-          OVERLAY_MODE: pregate0630
-          TSFM_THREADS: "4"
-        run: |
-          uv venv --python 3.12 .venv-overlay
-          VIRTUAL_ENV=.venv-overlay uv pip install --index-strategy unsafe-best-match \
-            -r bin/requirements-overlay.txt
-          .venv-overlay/bin/python bin/emit_tsfm_overlay.py \
-            --delivery tomorrow --mode "$OVERLAY_MODE" --write --threads "$TSFM_THREADS"
-
       - name: Export forecast JSON
         if: ${{ !cancelled() }}
         env:
@@ -310,3 +267,108 @@ jobs:
             🚨 Daily ex-ante forecast failed!
             🔗 View details: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         continue-on-error: true
+
+  # ---------------------------------------------------------------------------
+  # TSFM overlay (owner decision 2026-11-15: publish, model Timestral-209M).
+  # A SEPARATE job, so the core forecast job above is byte-for-byte unaffected by
+  # anything here: it starts only after the core job finished successfully
+  # (forecast + score + export + R2 publish done), has its own deadline and
+  # bounded steps, and a failure or hang here can never cancel or delay the core
+  # publication. It writes tomorrow's overlay vintage (lines + P(<=0)) into
+  # simulations.tsfm_overlay, then re-runs the (idempotent) JSON export + R2
+  # parquet publish so the overlay fields reach the site the same morning.
+  # PRE-GATE: issue = D-1 06:30 UTC from settled prices only (`postsim` needs D's
+  # lead-1 sim, which this workflow does not produce — leads 2..7 only;
+  # docs/experiments/tsfm-2026-11/overlay.md). A prediction product next to
+  # sim/gbm/stats; it never feeds the counterfactual.
+  # Timeouts (measured 2026-11-15 on aarch64 under load, real weights + local
+  # PostgreSQL 16): emitter 218 s (4 threads/4 cores) and 260 s (4 threads on
+  # 2 cores); a reviewer run exceeded 420 s under heavier contention. The emitter
+  # bound (30 min) is ~4x the worst observed, leaving room for production
+  # scanner latency; the job bound is the sum of the step bounds.
+  tsfm-overlay:
+    needs: daily-forecast
+    if: ${{ always() && needs.daily-forecast.result == 'success' }}
+    runs-on: energy-markets-k8s
+    timeout-minutes: 150
+    env:
+      HF_HOME: ${{ github.workspace }}/.hf
+      TSFM_ARM: timestral-209m      # pluggable: any arm registered in bin/emit_tsfm_overlay.py ARMS
+      OVERLAY_MODE: pregate0630
+      TSFM_THREADS: "4"
+    steps:
+      - name: Checkout repository
+        timeout-minutes: 5
+        uses: actions/checkout@v4
+
+      - name: Setup uv
+        timeout-minutes: 5
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.12.21"
+          enable-cache: true
+          cache-dependency-glob: bin/requirements-overlay.txt
+
+      - name: Cache Timestral weights (pinned Hub revision)
+        timeout-minutes: 10
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.hf
+          key: hf-timestral-209m-9874d252ab0aae16f7f7c999f98f98d6ad7d8365
+
+      - name: Install overlay Python environment (pinned)
+        timeout-minutes: 15
+        run: |
+          uv venv --python 3.12 .venv-overlay
+          VIRTUAL_ENV=.venv-overlay uv pip install --index-strategy unsafe-best-match \
+            -r bin/requirements-overlay.txt
+
+      - name: TSFM overlay (Timestral, pre-gate)
+        timeout-minutes: 30
+        env:
+          ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
+        run: |
+          .venv-overlay/bin/python bin/emit_tsfm_overlay.py \
+            --delivery tomorrow --mode "$OVERLAY_MODE" --write --threads "$TSFM_THREADS"
+
+      # Re-publish so the overlay reaches the site today. Same commands as the
+      # core job's export/publish (idempotent: the zone parquets are regenerated
+      # in full, `--delete` touches only v1/zones; inputs/books/flows are synced
+      # without delete or skipped when absent, so nothing the core job published
+      # is removed).
+      - name: Setup Julia
+        timeout-minutes: 5
+        uses: julia-actions/setup-julia@v1
+        with:
+          version: ${{ env.JULIA_VERSION }}
+
+      - name: Install Julia dependencies
+        timeout-minutes: 30
+        run: |
+          julia --project=. -e "
+            using Pkg
+            isempty(Pkg.Registry.reachable_registries()) && Pkg.Registry.add()
+            Pkg.instantiate()
+            Pkg.precompile()
+          "
+
+      - name: Export forecast JSON (with overlay)
+        timeout-minutes: 15
+        env:
+          ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
+        run: |
+          julia --project=. bin/export_forecast_json.jl
+
+      - name: Re-publish web data plane to R2 (with overlay)
+        timeout-minutes: 20
+        env:
+          ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
+          EXTRACT_S3_ENDPOINT: ${{ secrets.EXTRACT_S3_ENDPOINT }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          WEB_S3_ACCESS_KEY_ID: ${{ secrets.WEB_S3_ACCESS_KEY_ID }}
+          WEB_S3_SECRET_ACCESS_KEY: ${{ secrets.WEB_S3_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+        run: |
+          julia --project=. bin/export_web_parquet.jl
+          bash bin/web_data_push.sh
