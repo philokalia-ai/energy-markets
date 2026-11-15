@@ -26,8 +26,14 @@
 # Example:
 #   julia --project=. test/scripts/eu_eval_metrics.jl multi_zone_eu_cal9 10 \
 #       2026-04-01 2026-04-05 both all
+#   EVAL_Q15=true julia --project=. test/scripts/eu_eval_metrics.jl <cm> <cv> <start> <end>
+#       (opt-in native 15-minute columns, see `metrics(...; q15=true)`)
 
 using Euphemia, Dates, Statistics, Printf, DataFrames
+# Pure q15 helpers (`q15_forecast`, `score_q15`) live in bin/forecast_common.jl;
+# the bin/ scripts include it before this file, standalone use loads it here.
+isdefined(@__MODULE__, :score_q15) ||
+    include(joinpath(@__DIR__, "..", "..", "bin", "forecast_common.jl"))
 
 """
     resolution_aware_actuals(sd, ed; contract="Day-ahead") -> DataFrame(z, t, act)
@@ -56,6 +62,49 @@ function resolution_aware_actuals(sd::Date, ed::Date; contract::String="Day-ahea
                AVG(price_currency_mwh) AS act
         FROM dedup
         GROUP BY 1, 2
+    """, [contract, sd, ed])
+end
+
+"""
+Non-SDAC day-ahead `sequence`s to drop from the NATIVE 15-MIN target, per zone.
+AT and DE_LU carry two day-ahead auctions in `entsoe.energy_prices`. Sequence 2
+is the early EXAA auction, not SDAC. In the read-only 2026-11-15 extract,
+Oct 15-Nov 13, latest row per zone/time/sequence/resolution: AT sequence 1
+equals CZ in 279/2,880 quarters, sequence 2 in 0/2,876; DE_LU sequence 1 equals
+NL in 339/2,880, sequence 2 in 1/2,880. Monthly 2022-12..2026-11, sequence 1
+matches its coupled neighbour in roughly 2-48 % of MTUs, sequence 2 in at most
+about 0.2 %. Sequence 2's update stamp is about 11:10 local time (an ingestion
+stamp, not an authenticated exchange publication time), ahead of the SDAC batch.
+The #424 review confirmed this independently. DK1/DK2 sequence 2 rows are
+float-noise copies of the same SDAC price. The hourly score's
+`resolution_aware_actuals` (highest sequence) is deliberately left unchanged.
+Flip an entry to "1" to target the other auction.
+"""
+const Q15_NON_SDAC_SEQUENCE = Dict("AT" => "2", "DE_LU" => "2")
+
+"""
+    native_q15_actuals(sd, ed; contract="Day-ahead") -> DataFrame(z, t, act, res)
+
+Day-ahead actuals at their NATIVE resolution for the 15-minute score: SDAC only
+(`Q15_NON_SDAC_SEQUENCE` dropped), latest revision (`update_time_utc`) per
+(zone, interval start, resolution code), UTC interval starts over the UTC days
+sd..ed. `res` is the ENTSO-E resolution code (PT15M / PT30M / PT60M); only PT15M
+rows are scored (`score_q15`), so PT60M/PT30M zones stay out of the 15-min mask.
+"""
+function native_q15_actuals(sd::Date, ed::Date; contract::String="Day-ahead")
+    excl = join(["(map_code = '$z' AND trim(COALESCE(sequence, '')) = '$q')"
+                 for (z, q) in sort(collect(Q15_NON_SDAC_SEQUENCE))], " OR ")
+    Euphemia.sql2df("""
+        SELECT DISTINCT ON (map_code, date_time_utc, resolution_code)
+               map_code AS z, (date_time_utc AT TIME ZONE 'UTC') AS t,
+               price_currency_mwh AS act, trim(resolution_code) AS res
+        FROM entsoe.energy_prices
+        WHERE contract_type = \$1 AND area_type_code LIKE 'BZN%'
+          AND price_currency_mwh IS NOT NULL
+          AND date_time_utc >= (\$2::date::timestamp AT TIME ZONE 'UTC')
+          AND date_time_utc <  ((\$3::date + 1)::timestamp AT TIME ZONE 'UTC')
+          $(isempty(excl) ? "" : "AND NOT ($excl)")
+        ORDER BY map_code, date_time_utc, resolution_code, update_time_utc DESC
     """, [contract, sd, ed])
 end
 
@@ -89,13 +138,21 @@ function sim_prices(cm::String, cv::Int, sd::Date, ed::Date)
 end
 
 """
-    metrics(cm, cv, sd, ed; method=:new, zones=nothing) -> Vector of NamedTuple
+    metrics(cm, cv, sd, ed; method=:new, zones=nothing, q15=false) -> Vector of NamedTuple
 
 Per-zone (n, corr, mae, bias, simμ, actμ). Joins sim to actuals on (zone, hour).
+`q15=true` (opt-in; CLI: EVAL_Q15=true) adds the native 15-minute view pooled
+over the window: the sim replicated x4 (or used as is when the clear is natively
+quarter-hourly) against native PT15M SDAC actuals (`native_q15_actuals`,
+`score_q15` from bin/forecast_common.jl) — n_q15, mae_q15, bias_q15, corr_q15,
+shape_floor_q15, q15_res ("PT60M" = replicated hourly, "PT15M" = native). A zone
+without native PT15M actuals gets nothing for these fields. The hourly fields
+are computed exactly as before.
 """
 function metrics(cm::String, cv::Int, sd::Date, ed::Date;
-                 method::Symbol=:new, zones=nothing)
+                 method::Symbol=:new, zones=nothing, q15::Bool=false)
     sim = sim_prices(cm, cv, sd, ed)
+    a15 = q15 ? native_q15_actuals(sd, ed) : nothing
     act = method === :old ? legacy_actuals(sd, ed) : resolution_aware_actuals(sd, ed)
     # Build actual lookup keyed on (zone, DateTime). `t` is naive-UTC.
     actmap = Dict{Tuple{String,DateTime},Float64}()
@@ -114,8 +171,16 @@ function metrics(cm::String, cv::Int, sd::Date, ed::Date;
         end
         length(sv) < 3 && continue
         c = (std(sv) > 0 && std(av) > 0) ? cor(sv, av) : NaN
-        push!(out, (z=z, n=length(sv), corr=c, mae=mean(abs.(sv .- av)),
-                    bias=mean(sv .- av), simμ=mean(sv), actμ=mean(av)))
+        r = (z=z, n=length(sv), corr=c, mae=mean(abs.(sv .- av)),
+             bias=mean(sv .- av), simμ=mean(sv), actμ=mean(av))
+        if q15
+            fq, res = q15_forecast(DateTime.(sub.t), Float64.(sub.sim))
+            za = a15[String.(a15.z) .== z, :]
+            q = score_q15(fq, za.t, za.act, za.res)
+            r = merge(r, (n_q15=q.n_q15, mae_q15=q.mae_q15, bias_q15=q.bias_q15,
+                          corr_q15=q.corr_q15, shape_floor_q15=q.shape_floor_q15, q15_res=res))
+        end
+        push!(out, r)
     end
     return out
 end
@@ -132,6 +197,22 @@ function print_table(res; title="")
                 length(res), mean(r.mae for r in res), mean(r.bias for r in res),
                 median(r.mae for r in res), mean(r.corr for r in res))
     end
+    any(r -> haskey(r, :mae_q15), res) && print_q15_table(res)
+end
+
+"The opt-in native 15-minute columns (EVAL_Q15=true); zones without native PT15M actuals print '-'."
+function print_q15_table(res)
+    f(x, d=1) = x === nothing ? "-" : @sprintf("%.*f", d, x)
+    println("### native 15-min (PT15M SDAC actuals; forecast replicated x4 unless q15_res=PT15M)")
+    @printf("%-12s %5s %7s %8s %6s %7s %6s\n", "zone", "n_q15", "MAE15", "bias15", "corr15", "shape", "res")
+    for r in res
+        @printf("%-12s %5d %7s %8s %6s %7s %6s\n", r.z, r.n_q15, f(r.mae_q15), f(r.bias_q15),
+                f(r.corr_q15, 2), f(r.shape_floor_q15), r.q15_res)
+    end
+    ok = [r for r in res if r.mae_q15 !== nothing]
+    isempty(ok) || @printf("AGG15 zones=%d (native PT15M only)  meanMAE15=%.1f  meanShape=%.1f  (hourly meanMAE on the same zones %.1f)\n",
+                           length(ok), mean(r.mae_q15 for r in ok),
+                           mean(something(r.shape_floor_q15, NaN) for r in ok), mean(r.mae for r in ok))
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__
@@ -167,6 +248,7 @@ if abspath(PROGRAM_FILE) == @__FILE__
                 mean(r.mae for r in ro), mean(r.bias for r in ro),
                 median(r.mae for r in ro), mean(r.corr for r in ro))
     else
-        print_table(metrics(cm, cv, sd, ed; method=mode, zones=zones))
+        print_table(metrics(cm, cv, sd, ed; method=mode, zones=zones,
+                            q15=lowercase(get(ENV, "EVAL_Q15", "false")) == "true"))
     end
 end

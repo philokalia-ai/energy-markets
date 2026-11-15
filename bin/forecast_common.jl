@@ -279,6 +279,140 @@ function score_series(sim::Vector{Float64}, act::Vector{Float64})
     return (n=n, mae=mae, bias=bias, corr=c)
 end
 
+# ---------------------------------------------------------------------------
+# Native 15-minute scores (phase 3, planner-p3 option (ii)): the HOURLY forecast
+# replicated x4 onto its quarters, scored against native PT15M SDAC actuals, in
+# ADDITION to the hourly score (which is unchanged). Pure; DB access lives in
+# test/scripts/eu_eval_metrics.jl (`native_q15_actuals`).
+# ---------------------------------------------------------------------------
+
+"Minimum paired native quarters for a 15-min zone-day score (analogous to MIN_SCORE_HOURS)."
+const MIN_SCORE_Q15_DEFAULT = 48
+
+"UTC quarter starts of Europe/Athens market day `d`: 96 (92 / 100 on DST days)."
+function athens_day_quarters(d::Date)
+    t0, t1 = athens_market_day_window(d)
+    return collect(t0:Minute(15):(t1 - Minute(15)))
+end
+
+"""
+    q15_forecast(ts, vals) -> (Dict{DateTime,Float64}, res::String)
+
+The 15-minute view of one zone's forecast slice. An hourly slice (every stamp on
+the hour) is replicated onto its four quarters (`res = "PT60M"`, recorded so a
+replicated score is never mistaken for a native one); a slice with any
+sub-hourly stamp is natively quarter-hourly and used as is (`res = "PT15M"`).
+"""
+function q15_forecast(ts::AbstractVector, vals::AbstractVector)
+    length(ts) == length(vals) || throw(ArgumentError("ts/vals length mismatch"))
+    native = any(t -> minute(DateTime(t)) != 0, ts)
+    out = Dict{DateTime,Float64}()
+    for (t, v) in zip(ts, vals)
+        t = DateTime(t)
+        if native
+            out[t] = Float64(v)
+        else
+            for q in 0:3
+                out[t + Minute(15q)] = Float64(v)
+            end
+        end
+    end
+    return out, native ? "PT15M" : "PT60M"
+end
+
+"""
+    score_q15(fq, act_t, act_v, act_res; window=nothing, min_n=MIN_SCORE_Q15_DEFAULT)
+        -> NamedTuple
+
+One zone-day's native 15-minute score. `fq` is the quarter forecast from
+`q15_forecast`; `act_*` are the zone's deduplicated actual rows (UTC interval
+start, price, ENTSO-E resolution code); `window` optionally restricts to a set
+of quarter starts (the Athens market day).
+
+Complete coverage is enforced (the #423 review):
+- only natively PT15M actual rows are considered. PT60M/PT30M rows never enter,
+  so a PT60M-only zone gets `n_q15 = 0` and null metrics, never a copy of its
+  hourly score;
+- (zone, ts) keys must be unique. A duplicated PT15M quarter makes the whole
+  zone-day ambiguous, so all metrics are null and `q15_status = "duplicate_keys"`;
+- a quarter counts only with a finite actual AND a finite forecast;
+- an hour enters ONLY when all 4 of its quarters qualify. Every metric (MAE,
+  bias, corr, shape floor, ≤0 counts) is computed on those complete hours, so a
+  missing quarter removes its whole hour instead of silently dropping one
+  (possibly large-error) quarter;
+- the zone-day is scored when `n_q15` (quarters in complete hours) ≥ `min_n`.
+  `n_q15` is always reported, so partial days are visible.
+
+Fields: `n_q15`, `mae_q15`, `bias_q15` (forecast − actual), `corr_q15`
+(`nothing` if n < 3 or either side has zero variance, the `score_series`
+semantics), `shape_floor_q15` = mean |a − ā_hour| over the complete hours: the
+intra-hour dispersion of the actuals, a hindsight diagnostic (not a forecast
+skill). It is NOT an additive component of `mae_q15`: MAE does not decompose
+like MSE, and for an hour [0,0,0,100] with forecast 0 it exceeds the MAE (37.5
+vs 25). ≤0 counts use `round(p, digits=8) <= 0`, explicitly NOT the €5
+collapse helper: `n_le0_q15_actual`, `n_le0_q15_pred`, `le0_q15_hits`.
+`q15_status` ∈ "ok" | "below_min" | "duplicate_keys".
+"""
+function score_q15(fq::AbstractDict, act_t::AbstractVector, act_v::AbstractVector,
+                   act_res::AbstractVector; window=nothing,
+                   min_n::Int=MIN_SCORE_Q15_DEFAULT)
+    win = window === nothing ? nothing : Set(DateTime.(window))
+    seen = Dict{DateTime,Float64}()
+    dup = false
+    for (t, v, r) in zip(act_t, act_v, act_res)
+        t = DateTime(t)
+        (r isa AbstractString && strip(r) == "PT15M") || continue
+        win === nothing || t in win || continue
+        haskey(seen, t) && (dup = true)
+        seen[t] = (v === missing || v === nothing) ? NaN : Float64(v)
+    end
+    none(n, status) = (n_q15=n, mae_q15=nothing, bias_q15=nothing, corr_q15=nothing,
+                       shape_floor_q15=nothing, n_le0_q15_actual=nothing,
+                       n_le0_q15_pred=nothing, le0_q15_hits=nothing, q15_status=status)
+    dup && return none(0, "duplicate_keys")
+    ok(t) = haskey(seen, t) && isfinite(seen[t]) && haskey(fq, t) && isfinite(fq[t])
+    ts = DateTime[]; f = Float64[]; a = Float64[]; dev = Float64[]
+    for h in sort(unique(trunc.(collect(keys(seen)), Hour)))
+        qs = [h + Minute(15k) for k in 0:3]
+        all(ok, qs) || continue
+        av = [seen[q] for q in qs]
+        m = mean(av)
+        append!(ts, qs); append!(f, [fq[q] for q in qs]); append!(a, av)
+        append!(dev, abs.(av .- m))
+    end
+    n = length(ts)
+    n < max(min_n, 1) && return none(n, "below_min")
+    s = score_series(f, a)
+    le0(x) = round(x; digits=8) <= 0
+    return (n_q15=n, mae_q15=s.mae, bias_q15=s.bias, corr_q15=s.corr,
+            shape_floor_q15=mean(dev),
+            n_le0_q15_actual=count(le0, a), n_le0_q15_pred=count(le0, f),
+            le0_q15_hits=count(i -> le0(a[i]) && le0(f[i]), 1:n), q15_status="ok")
+end
+
+# ---------------------------------------------------------------------------
+# Native 15-minute score columns of forecast_scores (added by
+# bin/score_forecasts.jl `ensure_q15_columns`). Selected only when present, so
+# the exporters keep working against a database the new scorer has not run on
+# yet (the q15 fields are then all null).
+# ---------------------------------------------------------------------------
+const Q15_SCORE_COLS = ("n_q15", "mae_q15", "bias_q15", "corr_q15", "shape_floor_q15")
+
+function q15_select(alias::String="s")
+    have = try
+        df = Euphemia.sql2df_with_retry("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_schema = 'simulations' AND table_name = 'forecast_scores'
+              AND column_name = 'mae_q15'""")
+        !isempty(df)
+    catch
+        false
+    end
+    have && return join(("$alias.$c" for c in Q15_SCORE_COLS), ", ")
+    return "NULL::int AS n_q15, " *
+           join(("NULL::double precision AS $c" for c in Q15_SCORE_COLS[2:end]), ", ")
+end
+
 """
     load_weighted_err_pct(sim, act, load; min_den_eur=1.0) -> Union{Float64,Nothing}
 

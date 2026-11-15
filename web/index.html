@@ -695,6 +695,14 @@
         <span class="filter-label">Window</span>
         <select id="window-select" aria-label="Scoring window"></select>
       </label>
+      <label class="filter">
+        <span class="filter-label">Resolution</span>
+        <select id="res-select" aria-label="Scoring resolution"
+                title="Hourly is the headline score. 15-min scores the same hourly forecast against native quarter-hour prices; the two are never ranked together.">
+          <option value="h60">Hourly MAE (all zones)</option>
+          <option value="q15">15-min MAE (native PT15M zones)</option>
+        </select>
+      </label>
     </div>
     <div class="chart-card">
       <div class="table-scroll">
@@ -709,6 +717,12 @@
         <span class="dot dot-mid" aria-hidden="true"></span>&nbsp;0.40–0.75,
         <span class="dot dot-weak" aria-hidden="true"></span>&nbsp;weak&nbsp;&lt;&nbsp;0.40.
         Click a column header to sort (bias sorts by distance from zero); GR stays pinned first.
+        <strong>Resolution:</strong> <em>15-min</em> scores the same hourly forecast, repeated on its
+        four quarters, against native quarter-hour (PT15M) SDAC prices. It covers only zone-days
+        whose settled prices are natively quarter-hourly; other zones show “—”. Hover a 15-min MAE
+        for its <em>shape floor</em>: how far quarter-hour prices moved around their hour's mean,
+        measured after the fact. It describes intra-hour movement; it is neither a skill score nor
+        a share of the MAE.
         Hover a cell for the number of scored days.
       </p>
     </div>

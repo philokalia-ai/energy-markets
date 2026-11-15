@@ -62,7 +62,8 @@ function export_scoreboard()
         WITH $(CHOSEN_SLICE_CTE)
         SELECT s.bidding_zone AS z, s.lead_days, s.input_mode AS mode,
                to_char(s.market_date, 'YYYY-MM') AS month,
-               s.market_date, s.code_version AS cv, s.mae, s.bias, s.corr
+               s.market_date, s.code_version AS cv, s.mae, s.bias, s.corr,
+               $(q15_select("s"))
         FROM simulations.forecast_scores s
         JOIN chosen c ON c.market_date = s.market_date AND c.lead_days = s.lead_days
                      AND c.input_mode = s.input_mode AND c.code_version = s.code_version
@@ -83,7 +84,16 @@ function export_scoreboard()
          mae=isempty(mae_v) ? nothing : mean(mae_v),
          bias=isempty(bias_v) ? nothing : mean(bias_v),
          corr=isempty(corr_v) ? nothing : mean(corr_v),
-         cv=length(cvs) == 1 ? cvs[1] : nothing)
+         cv=length(cvs) == 1 ? cvs[1] : nothing,
+         q15=q15_board_fields(sub))
+    end
+    # 15-min: mean over the zone-days that HAVE a native-15 score only (same as the parquet).
+    q15_board_fields(sub) = begin
+        q = sub[.!ismissing.(sub.mae_q15), :]
+        qm(col) = (v = collect(skipmissing(q[!, col])); isempty(v) ? nothing : mean(v))
+        Dict{String,Any}("n_days_q15" => length(unique(q.market_date)),
+                         "mae_q15" => qm(:mae_q15), "bias_q15" => qm(:bias_q15),
+                         "corr_q15" => qm(:corr_q15), "shape_floor_q15" => qm(:shape_floor_q15))
     end
 
     entries = Any[]
@@ -94,19 +104,19 @@ function export_scoreboard()
             sub = scores[(scores.z .== zone) .& (scores.lead_days .== lead) .&
                          (scores.mode .== mode), :]
             a = agg(sub)
-            push!(entries, Dict("zone" => zone, "lead_days" => lead, "window" => "all",
+            push!(entries, merge(Dict{String,Any}("zone" => zone, "lead_days" => lead, "window" => "all",
                                 "input_mode" => mode,
                                 "n_days" => a.n_days, "mae" => nn(a.mae),
                                 "bias" => nn(a.bias), "corr" => nn(a.corr),
-                                "code_version" => a.cv))
+                                "code_version" => a.cv), a.q15))
             for month in sort(unique(String.(sub.month)))
                 m = sub[sub.month .== month, :]
                 am = agg(m)
-                push!(entries, Dict("zone" => zone, "lead_days" => lead, "window" => month,
+                push!(entries, merge(Dict{String,Any}("zone" => zone, "lead_days" => lead, "window" => month,
                                     "input_mode" => mode,
                                     "n_days" => am.n_days, "mae" => nn(am.mae),
                                     "bias" => nn(am.bias), "corr" => nn(am.corr),
-                                    "code_version" => am.cv))
+                                    "code_version" => am.cv), am.q15))
             end
         end
     end
@@ -198,7 +208,7 @@ function export_zone_files()
     scores = Euphemia.sql2df_with_retry("""
         WITH $(CHOSEN_SLICE_CTE)
         SELECT s.bidding_zone AS z, s.market_date, s.lead_days, s.input_mode AS mode,
-               s.mae, s.bias, s.corr
+               s.mae, s.bias, s.corr, $(q15_select("s"))
         FROM simulations.forecast_scores s
         JOIN chosen c ON c.market_date = s.market_date AND c.lead_days = s.lead_days
                      AND c.input_mode = s.input_mode AND c.code_version = s.code_version
@@ -244,6 +254,12 @@ function export_zone_files()
                 "mae" => sc === nothing ? nothing : nn(sc.mae),
                 "bias" => sc === nothing ? nothing : nn(sc.bias),
                 "corr" => sc === nothing ? nothing : nn(sc.corr),
+                # native 15-min day score (null without native PT15M actuals)
+                "n_q15" => (sc === nothing || ismissing(sc.n_q15)) ? nothing : Int(sc.n_q15),
+                "mae_q15" => sc === nothing ? nothing : nn(sc.mae_q15),
+                "bias_q15" => sc === nothing ? nothing : nn(sc.bias_q15),
+                "corr_q15" => sc === nothing ? nothing : nn(sc.corr_q15),
+                "shape_floor_q15" => sc === nothing ? nothing : nn(sc.shape_floor_q15),
                 "gbm" => Any[get(mlmap, (zone, "hybrid_gbm", h), nothing) for h in hours],
                 "stats" => Any[get(mlmap, (zone, "stats_gbm", h), nothing) for h in hours]),
                 tsfm_fields(zone, d, hours, ovh, ovd)))

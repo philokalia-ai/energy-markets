@@ -1,0 +1,55 @@
+# One-off / on-demand history backfill of the native 15-minute score columns of
+# simulations.forecast_scores (phase 3). The daily scorer fills them for new
+# days and re-scores the last RESCORE_WINDOW_DAYS (7); older rows keep NULL q15
+# until this runs. Q15_ONLY=true: every realized slice, q15 columns UPDATEd on
+# the existing rows, the hourly columns are never written. Idempotent.
+# Dispatch-only (no schedule). The site picks the history up at the next web
+# publish (daily-forecast 06:30, or dispatch publish-web-data).
+name: rescore-q15
+
+on:
+  workflow_dispatch:
+    inputs:
+      min_score_q15:
+        description: "Minimum paired native quarters for a 15-min zone-day score"
+        required: false
+        default: "48"
+
+permissions:
+  contents: read
+
+env:
+  JULIA_VERSION: "1.13.4"   # same pin as transfer-record.yml
+
+# Own group: joining `daily-forecast` could let this pending run supersede a pending
+# daily run. Overlapping with the daily scorer is benign (same q15 values UPDATEd).
+concurrency:
+  group: rescore-q15
+  cancel-in-progress: false
+
+jobs:
+  rescore-q15:
+    runs-on: energy-markets-k8s
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Julia
+        uses: julia-actions/setup-julia@v1
+        with:
+          version: ${{ env.JULIA_VERSION }}
+      - name: Install Julia dependencies
+        timeout-minutes: 30
+        run: |
+          julia --project=. -e "
+            using Pkg
+            isempty(Pkg.Registry.reachable_registries()) && Pkg.Registry.add()
+            Pkg.instantiate()
+            Pkg.precompile()
+          "
+      - name: Backfill 15-min scores (hourly columns untouched)
+        timeout-minutes: 80
+        env:
+          ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
+          Q15_ONLY: "true"
+          MIN_SCORE_Q15: ${{ inputs.min_score_q15 }}
+        run: julia --project=. bin/score_forecasts.jl
