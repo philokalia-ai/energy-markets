@@ -40,9 +40,17 @@ function dateStr(v) {
  * with hours ascending inside each group; grouping by first appearance
  * reproduces the JSON exporter's day order exactly.
  */
+// TSFM overlay (bin/emit_tsfm_overlay.py → the additive zone-parquet columns):
+// hourly series and per-zone-day scalars. Passed through only when the parquet
+// carries the columns, so a parquet exported before the overlay existed yields
+// exactly the old shape (backwards compatible: new optional fields only).
+const TSFM_HOURLY = ["tsfm", "tsfm_q10", "tsfm_q90", "p_le0"];
+const TSFM_DAY = ["p_any_le0", "tsfm_input_mode", "tsfm_issue_utc", "tsfm_arm"];
+
 export function shapeZone(rows, zone) {
   const days = [];
   const byKey = new Map();
+  const hasTsfm = rows.length > 0 && Object.prototype.hasOwnProperty.call(rows[0], "tsfm");
   for (const r of rows) {
     const date = dateStr(r.market_date);
     const lead = num(r.lead_days);
@@ -65,6 +73,10 @@ export function shapeZone(rows, zone) {
         bias: num(r.bias),
         corr: num(r.corr),
       };
+      if (hasTsfm) {
+        for (const k of TSFM_HOURLY) day[k] = [];
+        for (const k of TSFM_DAY) day[k] = null;
+      }
       byKey.set(key, day);
       days.push(day);
     }
@@ -73,6 +85,16 @@ export function shapeZone(rows, zone) {
     day.actual.push(num(r.actual));
     day.gbm.push(num(r.gbm));
     day.stats.push(num(r.stats));
+    if (hasTsfm) {
+      for (const k of TSFM_HOURLY) day[k].push(num(r[k]));
+      // day-level scalars repeat on every row of the zone-day; first non-null wins
+      if (day.p_any_le0 === null && r.p_any_le0 !== null && r.p_any_le0 !== undefined) {
+        day.p_any_le0 = num(r.p_any_le0);
+        day.tsfm_input_mode = r.tsfm_input_mode ?? null;
+        day.tsfm_issue_utc = iso(r.tsfm_issue_utc);
+        day.tsfm_arm = r.tsfm_arm ?? null;
+      }
+    }
   }
   // Defensive re-sort (same comparator as the exporter): newest date first,
   // then increasing lead, 'entsoe' before 'weather' within a lead.

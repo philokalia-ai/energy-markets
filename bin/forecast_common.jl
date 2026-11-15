@@ -515,3 +515,56 @@ function vintage_groups(first_utc::Date, last_utc::Date, candidates::AbstractSet
     end
     return groups
 end
+
+# ---------------------------------------------------------------------------
+# TSFM overlay (bin/emit_tsfm_overlay.py → simulations.tsfm_overlay): per
+# zone-day VINTAGES (input_mode, arm, issue_utc), each holding the hourly lines
+# tsfm_median / tsfm_q10 / tsfm_q90, the hourly P(price ≤ 0) and the day-level
+# P(any hour ≤ 0). Read by both exporters (zone JSON + zone parquet).
+const TSFM_OVERLAY_QUANTITIES = ("tsfm_median", "tsfm_q10", "tsfm_q90", "p_le0")
+const TSFM_OVERLAY_SQL = """
+    SELECT bidding_zone AS z, market_date AS d,
+           (date_time_utc AT TIME ZONE 'UTC') AS t, level, quantity AS q, value AS v,
+           input_mode AS m, (issue_utc AT TIME ZONE 'UTC') AS issue, model_version AS arm
+    FROM simulations.tsfm_overlay
+    WHERE market_date >= \$1::date
+      AND quantity IN ('tsfm_median', 'tsfm_q10', 'tsfm_q90', 'p_le0', 'p_any_le0')
+    """
+
+"""
+    tsfm_overlay_maps(rows) -> (hourly, day)
+
+Pure selection over simulations.tsfm_overlay rows (fields z, d, t, level, q, v,
+m, issue, arm). Per (zone, market_date) ONE vintage is chosen — the one with
+the latest issue among those carrying a day row — and every published value
+(the three lines, hourly p_le0, day p_any_le0) comes from that vintage only, so
+a line of one issue is never shown with the risk of another.
+`hourly[(zone, quantity, t)]` for quantity ∈ TSFM_OVERLAY_QUANTITIES;
+`day[(zone, date)] = (p_any_le0, input_mode, issue_utc, arm)`. Missing values
+stay absent (the exporters write null).
+"""
+function tsfm_overlay_maps(rows)
+    rows = collect(rows)
+    best = Dict{Tuple{String,Date},Tuple{DateTime,String,String}}()
+    for r in rows
+        (r.level == "day" && r.q == "p_any_le0") || continue
+        k = (String(r.z), Date(r.d))
+        cand = (DateTime(r.issue), String(r.m), String(r.arm))
+        (!haskey(best, k) || cand[1] > best[k][1]) && (best[k] = cand)
+    end
+    hourly = Dict{Tuple{String,String,DateTime},Float64}()
+    day = Dict{Tuple{String,Date},NamedTuple{(:p_any_le0, :input_mode, :issue_utc, :arm),
+                                            Tuple{Float64,String,DateTime,String}}}()
+    for r in rows
+        k = (String(r.z), Date(r.d))
+        b = get(best, k, nothing)
+        (b === nothing || (DateTime(r.issue), String(r.m), String(r.arm)) != b) && continue
+        (r.v === missing || r.v === nothing) && continue
+        if r.level == "hour" && String(r.q) in TSFM_OVERLAY_QUANTITIES
+            hourly[(k[1], String(r.q), DateTime(r.t))] = Float64(r.v)
+        elseif r.level == "day" && r.q == "p_any_le0"
+            day[k] = (p_any_le0=Float64(r.v), input_mode=b[2], issue_utc=b[1], arm=b[3])
+        end
+    end
+    return hourly, day
+end

@@ -1,0 +1,402 @@
+#!/usr/bin/env python3
+"""emit_tsfm_overlay.py — DRAFT (owner decision): lead-1 TSFM price overlay + P(price <= 0).
+
+A *prediction* overlay next to sim / gbm / stats. It reads settled prices, so it must never
+feed the counterfactual. Experiment record: docs/experiments/tsfm-2026-11/README.md.
+
+Per zone-hour of delivery day D (Europe/Athens market day):
+  tsfm_median, tsfm_q10, tsfm_q90   zero-shot TSFM forecast (Chronos-2 default; Timestral selectable)
+  p_le0_tsfm                        P(price <= 0) from the TSFM's 21 quantiles
+  p_le0_logit                       agent collapse's D-1 logistic (bin/predict_collapse.py)
+  p_le0                             unfitted 50/50 blend of the two (TSFM-only if the logistic is absent)
+Per zone-day: p_any_le0_tsfm (max over hours: the Fréchet lower bound of P(any hour <= 0)),
+p_any_le0_logit (collapse's direct day logistic) and their 50/50 blend p_any_le0.
+
+Information set (enforced in `build_context` / `sim_known`, tested in test/test_tsfm_overlay.py):
+  * settled prices strictly before the start of Athens day D (D-1's prices were auctioned on D-2);
+  * --mode pregate0630: prices only, issue_utc = D-1 06:30 UTC;
+  * --mode postsim: + the live lead-1 weather-track `sim` as a known-future covariate, using only
+    sim rows with prediction_made_utc <= issue_utc, where issue_utc = the latest made time of D's
+    lead-1 sim (08:16-10:06 UTC D-1 in Sep-Nov 2026); `after_gate` flags issue_utc > D-1 10:00 UTC.
+  * input_mode in the output says which of the two a row is.
+
+Modes of operation
+  default (dry run): read the offline DuckDB extract (read-only) + live JSON for sim, write CSVs
+                     to --output. No database access at all.
+  --write          : production (.github/workflows/daily-forecast.yml). Reads Postgres
+                     (ENERGY_CONN_STR) through DuckDB's postgres scanner (`USE pg`, so the SQL is the
+                     same as on the extract), creates the overlay table if absent (idempotent DDL)
+                     and upserts ONE vintage — lines (tsfm_median/q10/q90) and probabilities —
+                     into simulations.tsfm_overlay, keyed by (input_mode, arm) and stamped with
+                     issue_utc; an older issue never overwrites a newer one. Refuses an
+                     after-gate issue.
+Env: TSFM_ARM = timestral-209m (published default, owner decision 2026-11-15) | timestral-28m |
+     chronos2 | any arm added to ARMS (e.g. a physics-anchored residual arm). TSFM_MODEL is the
+     legacy name of the same switch. Timestral weights: Modified-MIT with a revenue cap — licence
+     acknowledged by the owner for this deployment, see docs/experiments/tsfm-2026-11/overlay.md.
+"""
+from __future__ import annotations
+
+import argparse
+import glob
+import json
+import os
+import sys
+import time
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+ATH = "Europe/Athens"
+CTX_HOURS = 8192
+GATE_UTC_HOUR = 10          # conservative: 12:00 CEST = 10:00 UTC; 11:00 UTC in winter
+# Hourly quantities of one vintage: the TSFM lines and the probabilities live in the SAME table
+# with the same vintage key, so a reader can never pair a line of one issue with risk of another.
+HOUR_QUANTITIES = ("tsfm_median", "tsfm_q10", "tsfm_q90", "p_le0", "p_le0_tsfm", "p_le0_logit")
+DAY_QUANTITIES = ("p_any_le0", "p_any_le0_tsfm", "p_any_le0_logit")
+MODELS = {"chronos2": "amazon/chronos-2",
+          "timestral-209m": "mistralai/Timestral-209M",
+          "timestral-28m": "mistralai/Timestral-28M"}
+# Pinned Hub revisions (the weights the 2026-11 backtest ran; a Hub update never changes the product).
+MODEL_REVISIONS = {"timestral-209m": "9874d252ab0aae16f7f7c999f98f98d6ad7d8365",
+                   "timestral-28m": "49b26409ac87b5935539a5d8ffe7f397b720db47"}
+DEFAULT_ARM = "timestral-209m"
+# One row per (zone, market day, hour | day, quantity, vintage). A vintage = (input_mode, arm)
+# with its issue_utc. Day-level quantities sit at date_time_utc = start of the Athens market day
+# (NOT NULL: a NULL inside a Postgres UNIQUE key never conflicts, so a nullable key would
+# duplicate the day rows on every re-run instead of upserting them).
+OVERLAY_DDL = """
+CREATE TABLE IF NOT EXISTS simulations.tsfm_overlay (
+    bidding_zone   text        NOT NULL,
+    market_date    date        NOT NULL,
+    date_time_utc  timestamptz NOT NULL,   -- the hour; day-level rows: start of the market day
+    level          text        NOT NULL,   -- 'hour' | 'day'
+    quantity       text        NOT NULL,   -- tsfm_median/q10/q90 (EUR/MWh), p_le0*, p_any_le0*
+    value          double precision,
+    input_mode     text        NOT NULL,   -- pregate0630 | postsim
+    issue_utc      timestamptz NOT NULL,   -- vintage issuance (information cutoff)
+    model_version  text        NOT NULL,   -- the TSFM arm
+    generated_at   timestamptz DEFAULT now(),
+    UNIQUE (bidding_zone, market_date, date_time_utc, quantity, input_mode, model_version));
+CREATE INDEX IF NOT EXISTS tsfm_overlay_date_idx ON simulations.tsfm_overlay (market_date);
+"""
+SIM_SQL = """
+SELECT bidding_zone zone, date_time_utc t, price_eur_mwh sim, prediction_made_utc made
+FROM simulations.forecast_prices
+WHERE lead_days = 1 AND input_mode LIKE 'weather%' AND date_time_utc >= ? AND date_time_utc < ?"""
+
+PRICE_SQL = """
+WITH d AS (
+  SELECT map_code, date_time_utc, price_currency_mwh,
+         row_number() OVER (PARTITION BY map_code, date_time_utc
+            ORDER BY TRY_CAST(trim(sequence) AS INTEGER) DESC NULLS LAST, update_time_utc DESC) rn
+  FROM entsoe.energy_prices
+  WHERE contract_type='Day-ahead' AND area_type_code LIKE 'BZN%' AND price_currency_mwh IS NOT NULL
+    AND date_time_utc >= ? AND date_time_utc < ?)
+SELECT map_code zone, date_trunc('hour', date_time_utc) t, round(avg(price_currency_mwh), 8) price
+FROM d WHERE rn = 1 GROUP BY 1, 2"""
+
+
+# ----------------------------------------------------------------------------- information set
+def day_start_utc(d) -> pd.Timestamp:
+    """Start of Athens market day `d` as a naive UTC timestamp."""
+    return pd.Timestamp(d).normalize().tz_localize(ATH).tz_convert("UTC").tz_localize(None)
+
+
+def market_day_hours(d) -> pd.DatetimeIndex:
+    """The 24 (23/25 on DST days) UTC hours of Athens market day `d`."""
+    d = pd.Timestamp(d).normalize()
+    return pd.date_range(day_start_utc(d), day_start_utc(d + pd.Timedelta(days=1)), freq="h", inclusive="left")
+
+
+def build_context(prices: pd.DataFrame, zones, delivery, ctx_hours: int = CTX_HOURS):
+    """(Z, ctx_hours) settled-price context ending strictly before the start of Athens day D."""
+    cutoff = day_start_utc(delivery)
+    grid = pd.date_range(cutoff - pd.Timedelta(hours=ctx_hours), cutoff, freq="h", inclusive="left")
+    used = prices[(prices.t >= grid[0]) & (prices.t < cutoff)]
+    wide = used.pivot_table(index="t", columns="zone", values="price").reindex(index=grid, columns=list(zones))
+    assert grid[-1] < cutoff and (used.t < cutoff).all()
+    return wide.to_numpy().T.astype(np.float32), cutoff, grid
+
+
+def sim_known(sim: pd.DataFrame, delivery):
+    """Lead-1 sim rows knowable at the post-sim issue time of D. Returns (rows, issue_utc).
+
+    issue_utc = latest prediction_made_utc of D's lead-1 sim; history = all lead-1 sim rows made
+    at or before it. Rows made later (including later re-runs) are dropped."""
+    hours = market_day_hours(delivery)
+    target = sim[(sim.t >= hours[0]) & (sim.t <= hours[-1])]
+    if target.empty:
+        raise ValueError(f"no lead-1 sim for {pd.Timestamp(delivery).date()}: use --mode pregate0630")
+    issue = target.made.max()
+    known = sim[sim.made <= issue].sort_values("made").drop_duplicates(["zone", "t"], keep="last")
+    return known, issue
+
+
+def sim_covariate(sim_rows, zones, grid, hours):
+    """(Z, 1, T+H) known-future covariate on context grid + delivery hours; NaN where absent."""
+    full = grid.append(hours)
+    w = sim_rows.pivot_table(index="t", columns="zone", values="sim").reindex(index=full, columns=list(zones))
+    return w.to_numpy().T[:, None, :].astype(np.float32)
+
+
+# ----------------------------------------------------------------------------- probabilities
+def p_le(q: np.ndarray, levels: np.ndarray, x: float = 0.0) -> np.ndarray:
+    """P(Y <= x) from quantiles q[..., K] at `levels`; linear inside, tails at half the outer level."""
+    flat = np.maximum.accumulate(q.reshape(-1, q.shape[-1]), axis=1)
+    out = np.array([levels[0] / 2 if x < r[0] else (1 - (1 - levels[-1]) / 2 if x >= r[-1]
+                    else np.interp(x, r, levels)) for r in flat])
+    return out.reshape(q.shape[:-1])
+
+
+def blend(a, b):
+    """Unfitted equal-weight average; falls back to `a` where `b` is missing."""
+    a, b = np.asarray(a, float), np.asarray(b, float)
+    return np.where(np.isnan(b), a, 0.5 * (a + b))
+
+
+# ----------------------------------------------------------------------------- model
+def resolve_arm(env=os.environ) -> str:
+    """TSFM_ARM (new) > TSFM_MODEL (legacy) > the published default."""
+    arm = env.get("TSFM_ARM") or env.get("TSFM_MODEL") or DEFAULT_ARM
+    if arm not in ARMS:
+        raise SystemExit(f"unknown TSFM_ARM={arm!r}; known: {sorted(ARMS)}")
+    return arm
+
+
+class TSFM:
+    def __init__(self, name: str, threads: int = 16):
+        import torch
+        torch.set_num_threads(threads)
+        self.name, repo = name, MODELS[name]
+        if name.startswith("timestral"):
+            from timestral import TimestralForecaster
+            self.m = TimestralForecaster.from_pretrained(repo, revision=MODEL_REVISIONS.get(name))
+        else:
+            from chronos import BaseChronosPipeline
+            self.m = BaseChronosPipeline.from_pretrained(repo, device_map="cpu")
+
+    def forecast(self, ctx, H, known=None):
+        """ctx (Z, T); known (Z, C, T+H) or None -> quantiles (Z, H, K), levels (K,)."""
+        if self.name.startswith("timestral"):
+            f = self.m.forecast(ctx[:, None, :], prediction_length=H,
+                                **({"known_covariates": known} if known is not None else {}))
+            return np.asarray(f.quantiles)[:, 0], np.asarray(f.quantile_levels)
+        T, items = ctx.shape[1], []
+        for z in range(ctx.shape[0]):
+            it = {"target": ctx[z]}
+            if known is not None:
+                it["past_covariates"] = {f"c{j}": known[z, j, :T] for j in range(known.shape[1])}
+                it["future_covariates"] = {f"c{j}": known[z, j, T:] for j in range(known.shape[1])}
+            items.append(it)
+        preds = self.m.predict(items, prediction_length=H)
+        return np.stack([p[0].numpy().T for p in preds]), np.asarray(self.m.quantiles)
+
+
+# Arm registry: name -> factory(threads) returning an object with .name and
+# .forecast(ctx (Z,T), H, known (Z,C,T+H)|None) -> (quantiles (Z,H,K), levels (K,)).
+# A new arm (e.g. the tsfm agent's physics-anchored residual) is one entry here.
+ARMS = {name: (lambda threads, _n=name: TSFM(_n, threads)) for name in MODELS}
+
+
+# ----------------------------------------------------------------------------- core
+def overlay(model, prices, zones, delivery, mode, sim=None, ctx_hours=CTX_HOURS):
+    """Hourly + day-level TSFM overlay for Athens day `delivery` (logistic columns added later)."""
+    d = pd.Timestamp(delivery).normalize()
+    ctx, cutoff, grid = build_context(prices, zones, d, ctx_hours)
+    hours = market_day_hours(d)
+    known, sim_made, issue = None, pd.NaT, d - pd.Timedelta(days=1) + pd.Timedelta(hours=6, minutes=30)
+    if mode == "postsim":
+        rows, issue = sim_known(sim, d)
+        known, sim_made = sim_covariate(rows, zones, grid, hours), issue
+    elif mode != "pregate0630":
+        raise ValueError(mode)
+    q, lv = model.forecast(ctx, len(hours), known)
+    k = lambda x: int(np.argmin(np.abs(lv - x)))
+    p0 = p_le(q, lv, 0.0)
+    out = []
+    for zi, z in enumerate(zones):
+        out.append(pd.DataFrame({
+            "zone": z, "market_date": d.date().isoformat(), "t_utc": hours, "issue_utc": issue,
+            "input_mode": mode, "model": model.name, "context_end_utc": cutoff, "sim_made_utc": sim_made,
+            "after_gate": bool(issue > d - pd.Timedelta(days=1) + pd.Timedelta(hours=GATE_UTC_HOUR)),
+            "tsfm_median": q[zi, :, k(0.5)], "tsfm_q10": q[zi, :, k(0.1)], "tsfm_q90": q[zi, :, k(0.9)],
+            "p_le0_tsfm": p0[zi]}))
+    hourly = pd.concat(out, ignore_index=True)
+    day = (hourly.groupby(["zone", "market_date", "issue_utc", "input_mode", "model"], as_index=False)
+           .p_le0_tsfm.max().rename(columns={"p_le0_tsfm": "p_any_le0_tsfm"}))
+    return hourly, day
+
+
+def add_logistic(hourly, day, logit_hourly=None, logit_day=None):
+    """Attach collapse's D-1 logistic and the 50/50 blends (TSFM-only where it is absent)."""
+    if logit_hourly is not None:
+        lh = logit_hourly.rename(columns={"t": "t_utc", "collapse_probability": "p_le0_logit"})
+        lh["t_utc"] = pd.to_datetime(lh.t_utc)
+        hourly = hourly.merge(lh[["zone", "t_utc", "p_le0_logit"]], on=["zone", "t_utc"], how="left")
+    else:
+        hourly["p_le0_logit"] = np.nan
+    hourly["p_le0"] = blend(hourly.p_le0_tsfm, hourly.p_le0_logit)
+    if logit_day is not None:
+        ld = logit_day.rename(columns={"any_hour_collapse_probability": "p_any_le0_logit"})
+        ld["market_date"] = pd.to_datetime(ld.market_date).dt.date.astype(str)
+        day = day.merge(ld[["zone", "market_date", "p_any_le0_logit"]], on=["zone", "market_date"], how="left")
+    else:
+        day["p_any_le0_logit"] = np.nan
+    day["p_any_le0"] = blend(day.p_any_le0_tsfm, day.p_any_le0_logit)
+    return hourly, day
+
+
+# ----------------------------------------------------------------------------- I/O
+def prices_duckdb(con, delivery, ctx_hours=CTX_HOURS):
+    cutoff = day_start_utc(delivery)
+    return con.execute(PRICE_SQL, [cutoff - pd.Timedelta(hours=ctx_hours + 24), cutoff]).df()
+
+
+def open_store(backend, extract=None):
+    """DuckDB connection whose default catalog holds the entsoe.* / simulations.* tables.
+
+    duckdb: the offline extract, read-only. postgres: an in-memory DuckDB with the live database
+    ATTACHed read-only through the postgres scanner and made the default catalog (`USE pg`), so
+    every reader here and in predict_collapse runs unchanged SQL. Writes go through psycopg2."""
+    import duckdb
+    if backend == "duckdb":
+        if not extract:
+            raise SystemExit("--backend duckdb needs --extract or EUPHEMIA_DUCKDB_PATH")
+        return duckdb.connect(extract, read_only=True, config={"threads": 4, "memory_limit": "8GB"})
+    if backend != "postgres":
+        raise ValueError(backend)
+    con = duckdb.connect(config={"threads": 4, "memory_limit": "8GB"})
+    con.execute("INSTALL postgres; LOAD postgres;")
+    con.execute("ATTACH ? AS pg (TYPE postgres, READ_ONLY)", [os.environ["ENERGY_CONN_STR"]])
+    con.execute("USE pg")
+    return con
+
+
+def sim_from_db(con, delivery, days=60):
+    """Lead-1 weather-track sim rows (all vintages) for the post-sim covariate, from the store."""
+    end = day_start_utc(pd.Timestamp(delivery) + pd.Timedelta(days=1))
+    df = con.execute(SIM_SQL, [end - pd.Timedelta(days=days + 1), end]).df()
+    for c in ("t", "made"):
+        df[c] = pd.to_datetime(df[c], utc=True).dt.tz_localize(None)
+    return df
+
+
+def sim_from_live_json(live_dir, zones):
+    """Offline sim source: em-team/live/<ZONE>.json (lead-1 weather rows with prediction_made_utc)."""
+    rows = []
+    for z in zones:
+        p = Path(live_dir) / f"{z}.json"
+        if not p.exists():
+            continue
+        for day in json.load(open(p))["days"]:
+            if day["lead_days"] == 1 and day["input_mode"].startswith("weather"):
+                made = pd.Timestamp(day["prediction_made_utc"]).tz_localize(None)
+                rows += [(z, pd.Timestamp(h).tz_localize(None), s, made) for h, s in zip(day["hours"], day["sim"])]
+    return pd.DataFrame(rows, columns=["zone", "t", "sim", "made"])
+
+
+def db_rows(hourly, day, arm):
+    """simulations.tsfm_overlay rows of one vintage (lines + probabilities) — pure, unit-tested."""
+    ts = lambda x: pd.Timestamp(x).isoformat() + "+00"
+    nn = lambda v: None if pd.isna(v) else float(v)
+    rows = [(r.zone, r.market_date, ts(r.t_utc), "hour", qn, nn(getattr(r, qn)), r.input_mode,
+             ts(r.issue_utc), arm)
+            for r in hourly.itertuples() for qn in HOUR_QUANTITIES]
+    rows += [(r.zone, r.market_date, ts(day_start_utc(r.market_date)), "day", qn, nn(getattr(r, qn)),
+              r.input_mode, ts(r.issue_utc), arm)
+             for r in day.itertuples() for qn in DAY_QUANTITIES]
+    return rows
+
+
+# The WHERE on DO UPDATE rejects an older issue overwriting a newer one of the same vintage key
+# (e.g. a delayed retry of a run after a later re-issue); different modes/arms are different rows
+# and the exporter picks the latest-issue vintage per zone-day.
+OVERLAY_UPSERT = """INSERT INTO simulations.tsfm_overlay
+    (bidding_zone, market_date, date_time_utc, level, quantity, value, input_mode, issue_utc, model_version)
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+    ON CONFLICT (bidding_zone, market_date, date_time_utc, quantity, input_mode, model_version)
+    DO UPDATE SET value = EXCLUDED.value, issue_utc = EXCLUDED.issue_utc, level = EXCLUDED.level,
+                  generated_at = now()
+    WHERE simulations.tsfm_overlay.issue_utc <= EXCLUDED.issue_utc"""
+
+
+def write_db(hourly, day, arm, cx=None, allow_after_gate=False):
+    """Idempotent: CREATE ... IF NOT EXISTS, then upserts, one transaction."""
+    if hourly.after_gate.any() and not allow_after_gate:
+        raise SystemExit("refusing to publish an after-gate overlay (issue_utc > D-1 10:00 UTC); "
+                         "use --mode pregate0630 or --allow-after-gate")
+    rows = db_rows(hourly, day, arm)
+    own = cx is None
+    if own:  # pragma: no cover - needs Postgres
+        import psycopg2
+        cx = psycopg2.connect(os.environ["ENERGY_CONN_STR"])
+    try:
+        cur = cx.cursor()
+        cur.execute(OVERLAY_DDL)
+        cur.executemany(OVERLAY_UPSERT, rows)
+        cx.commit()
+    finally:
+        if own:
+            cx.close()
+    print(f"upserted {len(rows)} simulations.tsfm_overlay rows "
+          f"(vintage {hourly.input_mode.iloc[0]}/{arm} issued {hourly.issue_utc.iloc[0]}; "
+          f"rows of a newer issue are kept)")
+    return len(rows)
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--delivery", required=True, help="Athens market day D (lead 1); 'tomorrow' = UTC today + 1")
+    ap.add_argument("--mode", choices=["pregate0630", "postsim"], default="pregate0630")
+    ap.add_argument("--backend", choices=["duckdb", "postgres"], default=None,
+                    help="data store (default: postgres with --write, else duckdb)")
+    ap.add_argument("--extract", default=os.environ.get("EUPHEMIA_DUCKDB_PATH"))
+    ap.add_argument("--live-json", default=None,
+                    help="dry-run sim source for postsim (dir of api zone JSONs); default: the store")
+    ap.add_argument("--output", default="data/tsfm_overlay")
+    ap.add_argument("--no-logistic", action="store_true", help="skip collapse's logistic (TSFM-only p_le0)")
+    ap.add_argument("--write", action="store_true", help="upsert into Postgres (production)")
+    ap.add_argument("--allow-after-gate", action="store_true")
+    ap.add_argument("--threads", type=int, default=int(os.environ.get("TSFM_THREADS", "16")))
+    a = ap.parse_args()
+    delivery = (pd.Timestamp.utcnow().tz_localize(None).normalize() + pd.Timedelta(days=1)).date().isoformat() \
+        if a.delivery == "tomorrow" else a.delivery
+    backend = a.backend or ("postgres" if a.write else "duckdb")
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from collapse_probability import ZONES
+    arm = resolve_arm()
+    con = open_store(backend, a.extract)
+    t0 = time.time()
+    prices = prices_duckdb(con, delivery)
+    sim = None
+    if a.mode == "postsim":
+        sim = sim_from_live_json(a.live_json, ZONES) if a.live_json else sim_from_db(con, delivery)
+    model = ARMS[arm](a.threads)
+    hourly, day = overlay(model, prices, ZONES, delivery, a.mode, sim)
+    t_tsfm = time.time() - t0
+    lh = ld = None
+    if not a.no_logistic:
+        try:
+            from predict_collapse import forecast_date
+            lh, ld, _ = forecast_date(con, delivery, settled_lag=1)
+        except Exception as e:  # the TSFM half still publishes; p_le0 falls back to TSFM-only
+            print(f"WARNING: collapse logistic failed ({type(e).__name__}: {e}); publishing TSFM-only p_le0")
+    hourly, day = add_logistic(hourly, day, lh, ld)
+    print(f"{arm} {a.mode} D={delivery}: {len(hourly)} hourly / {len(day)} day rows; tsfm {t_tsfm:.1f}s "
+          f"total {time.time() - t0:.1f}s; issue_utc {hourly.issue_utc.iloc[0]} "
+          f"after_gate={bool(hourly.after_gate.iloc[0])} logistic={'yes' if lh is not None else 'no'}")
+    if a.write:
+        write_db(hourly, day, arm, allow_after_gate=a.allow_after_gate)
+    else:
+        out = Path(a.output); out.mkdir(parents=True, exist_ok=True)
+        stem = f"{delivery}-{a.mode}-{arm}"
+        hourly.to_csv(out / f"{stem}-hourly.csv", index=False)
+        day.to_csv(out / f"{stem}-day.csv", index=False)
+        print(f"DRY RUN (no DB writes): {out}/{stem}-hourly.csv, -day.csv")
+    print(day.sort_values("p_any_le0", ascending=False).head(10).to_string(index=False))
+
+
+if __name__ == "__main__":
+    main()

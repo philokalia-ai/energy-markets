@@ -143,6 +143,35 @@ function model_lines_map(sd::Date)
         (String(r.z), String(r.model), DateTime(r.t)) => Float64(r.p) for r in eachrow(ml))
 end
 
+# TSFM overlay (lines + P(≤0) hourly + P(any hour ≤0) per zone-day, one vintage
+# per zone-day) — see tsfm_overlay_maps in forecast_common.jl. Optional: an
+# absent table → empty maps (fields null; the emitter's first run creates it).
+function tsfm_overlay(sd::Date)
+    ov = try
+        Euphemia.sql2df_with_retry(TSFM_OVERLAY_SQL, [sd - Day(1)])
+    catch e
+        @warn "tsfm_overlay unavailable — tsfm fields null" error=e
+        return (Dict{Tuple{String,String,DateTime},Float64}(), Dict{Tuple{String,Date},Any}())
+    end
+    return tsfm_overlay_maps(eachrow(ov))
+end
+
+# The additive TSFM fields of one zone-day entry (new optional keys; older
+# consumers ignore them). All values come from the zone-day's chosen vintage.
+function tsfm_fields(zone, d, hours, ovh, ovd)
+    od = get(ovd, (zone, d), nothing)
+    line(q) = Any[get(ovh, (zone, q, h), nothing) for h in hours]
+    return Dict{String,Any}(
+        "tsfm" => line("tsfm_median"),
+        "tsfm_q10" => line("tsfm_q10"),
+        "tsfm_q90" => line("tsfm_q90"),
+        "p_le0" => line("p_le0"),
+        "p_any_le0" => od === nothing ? nothing : od.p_any_le0,
+        "tsfm_input_mode" => od === nothing ? nothing : od.input_mode,
+        "tsfm_issue_utc" => od === nothing ? nothing : od.issue_utc,
+        "tsfm_arm" => od === nothing ? nothing : od.arm)
+end
+
 function export_zone_files()
     # Cross-version record: one chosen slice per (market_date, lead_days,
     # input_mode), earliest-frozen-wins; code_version carried as provenance.
@@ -186,6 +215,7 @@ function export_zone_files()
         (String(a.z), DateTime(a.t)) => Float64(a.act) for a in eachrow(act))
 
     mlmap = model_lines_map(sd)
+    ovh, ovd = tsfm_overlay(sd)
 
     zdir = joinpath(OUT_DIR, "zones")
     mkpath(zdir)
@@ -202,7 +232,7 @@ function export_zone_files()
             sims = Float64.(sub.sim)
             actuals = Any[get(actmap, (zone, h), nothing) for h in hours]
             sc = get(scoremap, (zone, d, lead, mode), nothing)
-            push!(days, Dict(
+            push!(days, merge(Dict{String,Any}(
                 "date" => d,
                 "lead_days" => lead,
                 "input_mode" => mode,
@@ -215,7 +245,8 @@ function export_zone_files()
                 "bias" => sc === nothing ? nothing : nn(sc.bias),
                 "corr" => sc === nothing ? nothing : nn(sc.corr),
                 "gbm" => Any[get(mlmap, (zone, "hybrid_gbm", h), nothing) for h in hours],
-                "stats" => Any[get(mlmap, (zone, "stats_gbm", h), nothing) for h in hours]))
+                "stats" => Any[get(mlmap, (zone, "stats_gbm", h), nothing) for h in hours]),
+                tsfm_fields(zone, d, hours, ovh, ovd)))
         end
         # newest first, then by increasing lead ('entsoe' before 'weather' within a lead)
         sort!(days; by=e -> (e["date"], -e["lead_days"],

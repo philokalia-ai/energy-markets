@@ -1309,6 +1309,27 @@
 
   function dayInputMode(d) { return d.input_mode || "entsoe"; }
 
+  // ---------- TSFM overlay (Timestral) + negative-price risk ----------
+  // Optional per day (zones API fields tsfm/tsfm_q10/tsfm_q90/p_le0 hourly,
+  // p_any_le0 + tsfm_input_mode/tsfm_issue_utc/tsfm_arm per zone-day). A
+  // PREDICTION product (it reads settled prices): drawn like the gbm/stats
+  // overlays, never mixed into the simulated counterfactual. See Models.
+  var RISK_BADGE_MIN = 0.3;   // P(any hour <= 0) at/above which the day list shows a badge
+  function pct(p) { return Math.round(p * 100) + "%"; }
+  function tsfmIssueText(day) {
+    var mode = day.tsfm_input_mode === "postsim" ? "after the simulated forecast" : "06:30 UTC, settled prices only";
+    var at = day.tsfm_issue_utc ? " · issued " + day.tsfm_issue_utc.replace("T", " ").replace(":00Z", " UTC") : "";
+    return mode + at;
+  }
+  function riskBadge(day) {
+    var p = day.p_any_le0;
+    if (p === null || p === undefined || p < RISK_BADGE_MIN) return null;
+    var b = el("span", "pill risk", "≤0 risk " + pct(p));
+    b.title = "Probability that at least one hour of this market day clears at or below 0 €/MWh (" +
+      tsfmIssueText(day) + ")";
+    return b;
+  }
+
   function renderDayList(days) {
     var ul = $("day-list");
     ul.textContent = "";
@@ -1325,6 +1346,8 @@
         badges.appendChild(el("span", "pill", "MAE " + fmt(d.mae, 1)));
         badges.appendChild(el("span", "pill", "r " + fmt(d.corr, 2)));
       }
+      var rb = riskBadge(d);
+      if (rb) badges.appendChild(rb);
       b.appendChild(badges);
       b.addEventListener("click", function () {
         state.day = d.date;
@@ -1347,12 +1370,16 @@
           ["Bias (sim − actual)", (day.bias > 0 ? "+" : "") + fmt(day.bias, 1), "€/MWh"],
           ["Correlation", fmt(day.corr, 2), ""],
         ];
+    if (day.p_any_le0 !== null && day.p_any_le0 !== undefined) {
+      defs.push(["P(any hour ≤ 0)", pct(day.p_any_le0), "", day.p_any_le0 >= RISK_BADGE_MIN ? "risk" : ""]);
+    }
     defs.forEach(function (d) {
-      var s = el("div", "stat");
+      var s = el("div", "stat" + (d[3] ? " " + d[3] : ""));
       s.appendChild(el("span", "s-label", d[0]));
       var v = el("span", "s-value", d[1]);
       if (d[2]) v.appendChild(el("span", "s-unit", d[2]));
       s.appendChild(v);
+      if (d[3] === "risk" || d[0] === "P(any hour ≤ 0)") s.title = "Negative-price risk (" + tsfmIssueText(day) + ")";
       row.appendChild(s);
     });
   }
@@ -1367,6 +1394,7 @@
     function hasVals(arr) { return arr && arr.some(function (v) { return v !== null && v !== undefined; }); }
     if (hasVals(day.gbm)) items.push(["gbm", "Physics + ex-ante GBM"]);
     if (hasVals(day.stats)) items.push(["stats", "Pure-stats GBM"]);
+    if (hasVals(day.tsfm)) items.push(["tsfm", "Timestral TSFM (median, q10–q90)"]);
     var chips = {};
     items.forEach(function (it) {
       var span = el("span");
@@ -1431,6 +1459,9 @@
     day.actual.forEach(function (a) { if (a !== null && a !== undefined) values.push(a); });
     (day.gbm || []).forEach(function (a) { if (a !== null && a !== undefined) values.push(a); });
     (day.stats || []).forEach(function (a) { if (a !== null && a !== undefined) values.push(a); });
+    [day.tsfm, day.tsfm_q10, day.tsfm_q90].forEach(function (arr) {
+      (arr || []).forEach(function (a) { if (a !== null && a !== undefined) values.push(a); });
+    });
     var vMin = Math.min.apply(null, values), vMax = Math.max.apply(null, values);
     if (vMin > 0) vMin = 0;               // anchor at zero unless negative prices
     var pad = (vMax - vMin) * 0.06 || 10;
@@ -1461,6 +1492,7 @@
       act: css.getPropertyValue("--series-act").trim(),
       gbm: css.getPropertyValue("--series-gbm").trim(),
       stats: css.getPropertyValue("--series-stats").trim(),
+      tsfm: css.getPropertyValue("--series-tsfm").trim(),
     };
 
     for (var v = y0; v <= y1 + 1e-9; v += step) {
@@ -1508,7 +1540,7 @@
       }
       return dstr.trim();
     }
-    var simEls = [], actEls = [], gbmEls = [], statsEls = [];
+    var simEls = [], actEls = [], gbmEls = [], statsEls = [], tsfmEls = [];
     // Model-line overlays (docs/experiments/forecast-eval-2026-08): pink =
     // physics + ex-ante GBM residual corrector; yellow = pure-stats GBM (no
     // physics). Optional per day; dashed, drawn beneath sim/act so the physics
@@ -1527,6 +1559,27 @@
     }
     overlayPath(day.gbm, C.gbm, gbmEls);
     overlayPath(day.stats, C.stats, statsEls);
+    // TSFM: q10–q90 band (translucent, breaks at gaps) beneath its dashed median.
+    if (day.tsfm_q10 && day.tsfm_q90) {
+      var run = [];
+      var flushBand = function () {
+        if (run.length > 1) {
+          var dB = run.map(function (i, j) { return (j ? "L" : "M") + X(i).toFixed(2) + " " + Y(day.tsfm_q90[i]).toFixed(2); }).join(" ");
+          dB += " " + run.slice().reverse().map(function (i) { return "L" + X(i).toFixed(2) + " " + Y(day.tsfm_q10[i]).toFixed(2); }).join(" ") + " Z";
+          var band = svgEl("path", { d: dB, fill: C.tsfm, "fill-opacity": 0.14, stroke: "none", class: "tsfm-band" });
+          svg.appendChild(band);
+          tsfmEls.push(band);
+        }
+        run = [];
+      };
+      for (var bi = 0; bi < n; bi++) {
+        var lo = day.tsfm_q10[bi], hi = day.tsfm_q90[bi];
+        if (lo === null || lo === undefined || hi === null || hi === undefined) { flushBand(); continue; }
+        run.push(bi);
+      }
+      flushBand();
+    }
+    overlayPath(day.tsfm, C.tsfm, tsfmEls);
     var simPath = svgEl("path", {
       d: pathFor(day.sim), fill: "none", stroke: C.sim,
       "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round",
@@ -1602,10 +1655,14 @@
       tooltip.textContent = "";
       tooltip.appendChild(el("div", "tt-head",
         hourLabel(day.hours[idx]) + "–" + hourEndLabel(day.hours[idx]) + " Athens"));
-      [
+      var ttRows = [
         [C.sim, day.sim[idx], "simulated"],
         [C.act, a, a === null || a === undefined ? "actual (pending)" : "actual"],
-      ].forEach(function (rowDef) {
+      ];
+      if (day.tsfm && day.tsfm[idx] !== null && day.tsfm[idx] !== undefined) {
+        ttRows.push([C.tsfm, day.tsfm[idx], "TSFM median"]);
+      }
+      ttRows.forEach(function (rowDef) {
         var row = el("div", "tt-row");
         var key = el("span", "tt-key");
         key.style.borderTopColor = rowDef[0];
@@ -1615,6 +1672,9 @@
         row.appendChild(el("span", "tt-name", rowDef[2]));
         tooltip.appendChild(row);
       });
+      if (day.p_le0 && day.p_le0[idx] !== null && day.p_le0[idx] !== undefined) {
+        tooltip.appendChild(el("div", "tt-row tt-risk", "P(price ≤ 0) " + pct(day.p_le0[idx])));
+      }
 
       // position: scale SVG coords to rendered px
       var rect = svg.getBoundingClientRect();
@@ -1658,7 +1718,7 @@
       wrap.appendChild(el("p", "pending-note",
         "Partially settled — remaining hours are still pending."));
     }
-    return { sim: simEls, act: actEls, gbm: gbmEls, stats: statsEls };   // series refs for the focus wiring
+    return { sim: simEls, act: actEls, gbm: gbmEls, stats: statsEls, tsfm: tsfmEls };   // series refs for the focus wiring
   }
 
   function renderExplorer() {
@@ -1733,6 +1793,9 @@
     if (chartEls.stats.length && legendChips.stats) {
       explorerSeries.push({ key: "stats", chip: legendChips.stats, els: chartEls.stats, baseOpacity: 0.9 });
     }
+    if (chartEls.tsfm.length && legendChips.tsfm) {
+      explorerSeries.push({ key: "tsfm", chip: legendChips.tsfm, els: chartEls.tsfm, baseOpacity: 0.9 });
+    }
     attachSeriesFocus($("chart-legend"), explorerSeries);
     renderHourTable(day);
   }
@@ -1750,6 +1813,8 @@
       act: css.getPropertyValue("--series-act").trim(),
       gbm: css.getPropertyValue("--series-gbm").trim(),
       stats: css.getPropertyValue("--series-stats").trim(),
+      tsfm: css.getPropertyValue("--series-tsfm").trim(),
+      weak: css.getPropertyValue("--status-weak").trim(),
       accent: css.getPropertyValue("--accent").trim(),
     };
   }
@@ -1866,8 +1931,12 @@
 
     // legend: forecast + actual
     var C = chartColors();
-    [["sim", "Forecast (ex-ante)"], ["act", "Actual (settled)"],
-     ["gbm", "Physics + ex-ante GBM"], ["stats", "Pure-stats GBM"]].forEach(function (it) {
+    var hzItems = [["sim", "Forecast (ex-ante)"], ["act", "Actual (settled)"],
+     ["gbm", "Physics + ex-ante GBM"], ["stats", "Pure-stats GBM"]];
+    if (days.some(function (d) { return (d.tsfm || []).some(function (v) { return v !== null && v !== undefined; }); })) {
+      hzItems.push(["tsfm", "Timestral TSFM (median, q10–q90)"]);
+    }
+    hzItems.forEach(function (it) {
       var span = el("span");
       var key = el("span", "key " + it[0]);
       key.setAttribute("aria-hidden", "true");
@@ -1886,6 +1955,11 @@
     var n = pts.length;
     var vals = pts.map(function (p) { return p.v; });
     pts.forEach(function (p) { if (p.a !== null && p.a !== undefined) vals.push(p.a); });
+    days.forEach(function (d) {
+      [d.tsfm, d.tsfm_q10, d.tsfm_q90].forEach(function (arr) {
+        (arr || []).forEach(function (v) { if (v !== null && v !== undefined) vals.push(v); });
+      });
+    });
     var sc = chartScaffold(wrap, vals, n,
       "Hourly ex-ante forecast vs actual across " + pastN + " past and " + futureN +
       " upcoming market days around now, " + state.zone);
@@ -1940,6 +2014,14 @@
         : (isPartial(d) ? "settling" : "settled");
       if (isRetro(d)) statusTxt += " ↺";
       status.textContent = statusTxt;
+      if (d.p_any_le0 !== null && d.p_any_le0 !== undefined && d.p_any_le0 >= RISK_BADGE_MIN) {
+        var rt = svgEl("tspan", { fill: C.weak, "font-weight": 600 });
+        rt.textContent = " · ≤0 risk " + pct(d.p_any_le0);
+        status.appendChild(rt);
+        var tip = svgEl("title", {});
+        tip.textContent = "P(at least one hour ≤ 0 €/MWh) = " + pct(d.p_any_le0) + " (" + tsfmIssueText(d) + ")";
+        status.appendChild(tip);
+      }
       svg.appendChild(status);
 
       var Xoff = function (i) { return X(idx0 + i); };
@@ -1950,7 +2032,23 @@
       }));
       // model-line overlays (dashed, beneath actual): pink = physics+GBM,
       // yellow = pure-stats GBM — same contract as the day explorer.
-      [["gbm", C.gbm], ["stats", C.stats]].forEach(function (ov) {
+      if (d.tsfm_q10 && d.tsfm_q90) {
+        var hzRun = [];
+        var hzFlush = function () {
+          if (hzRun.length > 1) {
+            var bd = hzRun.map(function (i, j) { return (j ? "L" : "M") + Xoff(i).toFixed(2) + " " + Y(d.tsfm_q90[i]).toFixed(2); }).join(" ") +
+              " " + hzRun.slice().reverse().map(function (i) { return "L" + Xoff(i).toFixed(2) + " " + Y(d.tsfm_q10[i]).toFixed(2); }).join(" ") + " Z";
+            svg.appendChild(svgEl("path", { d: bd, fill: C.tsfm, "fill-opacity": 0.14, stroke: "none", class: "tsfm-band" }));
+          }
+          hzRun = [];
+        };
+        d.hours.forEach(function (_, i) {
+          var lo = d.tsfm_q10[i], hi = d.tsfm_q90[i];
+          if (lo === null || lo === undefined || hi === null || hi === undefined) hzFlush(); else hzRun.push(i);
+        });
+        hzFlush();
+      }
+      [["gbm", C.gbm], ["stats", C.stats], ["tsfm", C.tsfm]].forEach(function (ov) {
         var arr = d[ov[0]];
         if (!arr || !arr.some(function (v) { return v !== null && v !== undefined; })) return;
         var od = pathString(arr, Xoff, Y);

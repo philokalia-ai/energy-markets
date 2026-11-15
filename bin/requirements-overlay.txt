@@ -1,0 +1,16 @@
+# Pinned deps of bin/emit_tsfm_overlay.py + bin/predict_collapse.py (TSFM overlay step of
+# .github/workflows/daily-forecast.yml). Versions = the environment the 2026-11 tsfm backtest ran
+# in (aarch64, Python 3.12). Install with:
+#   uv pip install --index-strategy unsafe-best-match -r bin/requirements-overlay.txt
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.15.0+cpu
+numpy==2.5.4
+pandas==3.1.1
+duckdb==2.0.0
+scikit-learn==1.9.1
+scipy==1.18.1
+huggingface_hub==2.4.0
+safetensors==0.8.0
+einops==0.8.2
+psycopg2-binary==2.9.11
+timestral @ git+https://github.com/mistralai/timestral.git@a534bdbd244d64f3d9d743f46c7bf6fc330ed4ff

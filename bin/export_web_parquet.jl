@@ -200,6 +200,13 @@ function export_zone_parquets()
     end
     mlmap = Dict{Tuple{String,String,DateTime},Float64}(
         (String(r.z), String(r.model), DateTime(r.t)) => Float64(r.p) for r in eachrow(ml))
+    # TSFM overlay (one vintage per zone-day; additive, nullable columns; absent table → all null)
+    ovh, ovd = try
+        tsfm_overlay_maps(eachrow(Euphemia.sql2df_with_retry(TSFM_OVERLAY_SQL, [sd - Day(1)])))
+    catch e
+        @warn "tsfm_overlay unavailable — tsfm columns null" error=e
+        (Dict{Tuple{String,String,DateTime},Float64}(), Dict{Tuple{String,Date},Any}())
+    end
 
     counts = Dict{String,Int}()
     for zone in sort(unique(String.(prices.z)))
@@ -211,7 +218,13 @@ function export_zone_parquets()
                        mae=Union{Missing,Float64}[], bias=Union{Missing,Float64}[],
                        corr=Union{Missing,Float64}[],
                        is_retro=Bool[], reset_tag=Union{Missing,String}[],
-                       gbm=Union{Missing,Float64}[], stats=Union{Missing,Float64}[])
+                       gbm=Union{Missing,Float64}[], stats=Union{Missing,Float64}[],
+                       tsfm=Union{Missing,Float64}[], tsfm_q10=Union{Missing,Float64}[],
+                       tsfm_q90=Union{Missing,Float64}[], p_le0=Union{Missing,Float64}[],
+                       p_any_le0=Union{Missing,Float64}[],
+                       tsfm_input_mode=Union{Missing,String}[],
+                       tsfm_issue_utc=Union{Missing,DateTime}[],
+                       tsfm_arm=Union{Missing,String}[])
         keys_ = unique(collect(zip(Date.(zp.market_date), Int.(zp.lead_days),
                                    String.(zp.mode))))
         # newest first, then by increasing lead ('entsoe' before 'weather'
@@ -228,13 +241,22 @@ function export_zone_parquets()
             slice_cv = Int(sub.cv[1])
             slice_retro = !ismissing(sub.is_retro[1]) && Bool(sub.is_retro[1])
             slice_tag = ismissing(sub.reset_tag[1]) ? missing : String(sub.reset_tag[1])
+            od = get(ovd, (zone, d), nothing)
             for r in eachrow(sub)
                 h = DateTime(r.t)
                 push!(df, (d, lead, mode, slice_cv, made, h, Float64(r.sim),
                            get(actmap, (zone, h), missing), mae, bias, corr,
                            slice_retro, slice_tag,
                            get(mlmap, (zone, "hybrid_gbm", h), missing),
-                           get(mlmap, (zone, "stats_gbm", h), missing)))
+                           get(mlmap, (zone, "stats_gbm", h), missing),
+                           get(ovh, (zone, "tsfm_median", h), missing),
+                           get(ovh, (zone, "tsfm_q10", h), missing),
+                           get(ovh, (zone, "tsfm_q90", h), missing),
+                           get(ovh, (zone, "p_le0", h), missing),
+                           od === nothing ? missing : od.p_any_le0,
+                           od === nothing ? missing : od.input_mode,
+                           od === nothing ? missing : od.issue_utc,
+                           od === nothing ? missing : od.arm))
             end
         end
         counts["zones/$zone.parquet"] =

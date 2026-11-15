@@ -418,3 +418,34 @@ include(joinpath(@__DIR__, "..", "bin", "forecast_common.jl"))
     end
 
 end
+
+@testset "tsfm_overlay_maps — one vintage per zone-day, lines and risk never mixed" begin
+    r(z, d, t, level, q, v, m, issue, arm="timestral-209m") =
+        (z=z, d=Date(d), t=DateTime(t), level=level, q=q, v=v, m=m, issue=DateTime(issue), arm=arm)
+    D, H = "2026-11-15", "2026-11-15T10:00"
+    rows = [
+        # review P2 repro: post-sim 09:13 (median 60) and a later-written pre-gate 06:30 (median 10)
+        r("GR", D, "2026-11-14T22:00", "day", "p_any_le0", 0.70, "postsim", "2026-11-14T09:13"),
+        r("GR", D, H, "hour", "tsfm_median", 60.0, "postsim", "2026-11-14T09:13"),
+        r("GR", D, H, "hour", "tsfm_q10", 55.0, "postsim", "2026-11-14T09:13"),
+        r("GR", D, H, "hour", "tsfm_q90", 65.0, "postsim", "2026-11-14T09:13"),
+        r("GR", D, H, "hour", "p_le0", 0.60, "postsim", "2026-11-14T09:13"),
+        r("GR", D, "2026-11-14T22:00", "day", "p_any_le0", 0.40, "pregate0630", "2026-11-14T06:30"),
+        r("GR", D, H, "hour", "tsfm_median", 10.0, "pregate0630", "2026-11-14T06:30"),
+        r("GR", D, H, "hour", "p_le0", 0.30, "pregate0630", "2026-11-14T06:30"),
+        r("GR", D, "2026-11-15T11:00", "hour", "tsfm_median", 11.0, "pregate0630", "2026-11-14T06:30"),  # older vintage only
+        r("ES", D, "2026-11-14T22:00", "day", "p_any_le0", missing, "pregate0630", "2026-11-14T06:30"),
+        r("ES", D, H, "hour", "p_le0", 0.05, "pregate0630", "2026-11-14T06:30"),
+        r("DE_LU", D, H, "hour", "tsfm_median", 90.0, "pregate0630", "2026-11-14T06:30")]  # no day row
+    h, d = tsfm_overlay_maps(rows)
+    g = d[("GR", Date(2026, 11, 15))]
+    @test (g.p_any_le0, g.input_mode, g.issue_utc) == (0.70, "postsim", DateTime(2026, 11, 14, 9, 13))
+    @test h[("GR", "tsfm_median", DateTime(H))] == 60.0       # the line comes from the SAME vintage as the risk
+    @test h[("GR", "tsfm_q10", DateTime(H))] == 55.0 && h[("GR", "tsfm_q90", DateTime(H))] == 65.0
+    @test h[("GR", "p_le0", DateTime(H))] == 0.60
+    @test !haskey(h, ("GR", "tsfm_median", DateTime(2026, 11, 15, 11)))   # nothing borrowed from the older vintage
+    @test !haskey(d, ("ES", Date(2026, 11, 15)))                          # missing value -> absent (null downstream)
+    @test h[("ES", "p_le0", DateTime(H))] == 0.05
+    @test !haskey(h, ("DE_LU", "tsfm_median", DateTime(H)))              # no day row -> no chosen vintage
+    @test all(isempty, tsfm_overlay_maps(NamedTuple[]))
+end
