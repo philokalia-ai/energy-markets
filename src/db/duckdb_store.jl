@@ -155,6 +155,20 @@ function configure_data_store!(; backend::Symbol=:postgres,
             if _DUCKDB_CONN[] !== nothing &&
                (DUCKDB_PATH[] != duckdb_path || DUCKDB_READ_ONLY[] != read_only)
                 _duckdb_drop_connection!()
+            elseif _DUCKDB_CONN[] !== nothing && _RESULTS_ATTACHED[] &&
+                   DUCKDB_RESULTS_WRITABLE[] != results_writable
+                # The results file's access mode follows results_writable: a
+                # surviving READ_WRITE attachment would keep the writer lock
+                # after the flag is restored to false (and a READ_ONLY one
+                # would refuse writes after it is set). Detach; the next access
+                # re-attaches lazily in the right mode.
+                try
+                    DBInterface.execute(_DUCKDB_CONN[], "DETACH results_db")
+                catch e
+                    @debug "DETACH results_db failed — reopening the connection" exception = e
+                    _duckdb_drop_connection!()
+                end
+                _RESULTS_ATTACHED[] = false
             end
             DUCKDB_PATH[] = duckdb_path
             DUCKDB_READ_ONLY[] = read_only

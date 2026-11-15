@@ -71,6 +71,8 @@ end
     G = parentmodule(Euphemia.get_generators)
     prev = Euphemia.DATA_STORE[]
     prev_path = Euphemia.DUCKDB_PATH[]
+    prev_ro = Euphemia.DUCKDB_READ_ONLY[]        # restore BOTH flags: a default
+    prev_rw = Euphemia.DUCKDB_RESULTS_WRITABLE[]  # read_only=false would reopen a shared extract writable
     mktempdir() do dir
         extract = joinpath(dir, "extract.duckdb")
         _build_extract(extract)
@@ -110,6 +112,6 @@ end
             @test_logs (:warn, "Rejected corrupt registry capacity") (:warn, "Rejected corrupt registry capacity") (:warn, "Rejected corrupt registry capacity") match_mode=:any G._warn_quarantined_capacity_rows("IT-NORTH", _DAY)
         end
         G.clear_generator_caches!()
-        try; Euphemia.configure_data_store!(backend=prev, duckdb_path=prev_path); catch; end
+        try; Euphemia.configure_data_store!(backend=prev, duckdb_path=prev_path, read_only=prev_ro, results_writable=prev_rw); catch; end
     end
 end
