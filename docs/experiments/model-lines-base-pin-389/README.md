@@ -68,3 +68,23 @@ on:
 
 Until one is chosen, the emitter tells the truth about its coverage instead of
 filling the gap with a mismatch.
+
+## Addendum (2026-11-15, phase 2): the pin must not take the stats line down
+
+As first written, a window with **no** row of the pinned version hit a
+`SystemExit` before anything was emitted. That kills the `stats_gbm` line too,
+although stats never reads the physics price (its features are settled lags,
+fuels, calendar and book fundamentals). With production on cv43 and the artifact
+on cv37 that is every day: both dashed lines would vanish from the site.
+
+Now the two lines are gated independently (`lines_for_day`):
+
+- `hybrid_gbm` needs a base row of the pinned version; without one it is skipped
+  for that cell/day, with a loud warning (stderr, stdout, and a `::warning::`
+  annotation under GitHub Actions) naming the window and the versions present;
+- `stats_gbm` keeps its pre-pin domain (cells that carry *any* weather-track
+  forecast, settled lag24 available) and is emitted regardless; its rows record
+  `base_code_version = NULL` because it has no physics base.
+
+The final line reports both counts (`EMITTED n rows … (hybrid_gbm a, stats_gbm b)`).
+Test: `test/test_emit_model_lines_pin.py` (no database needed).
