@@ -4,9 +4,18 @@
 # for tonight's run). Runs in a runner pod that sees /opt/euphemia of the
 # server read-only; record books staged under /opt/euphemia/data (data/ is
 # git-ignored) are pushed additively from there via the books_dir input.
+#
+# Scheduled 11:30 UTC (phase 3): the owner's server writes the post-sim Timestral
+# overlay vintage (and the hybrid/stats model lines) at 10:40 UTC via cron
+# (bin/emit_model_lines.sh) but holds no R2 credentials; this re-export makes
+# those DB rows reach the site the same day instead of at the next 06:30 cycle.
+# Under `schedule` the dispatch inputs are empty: the inputs export is skipped
+# and books_dir is empty (the books step warns and exits 0).
 name: publish-web-data
 
 on:
+  schedule:
+    - cron: "30 11 * * *"
   workflow_dispatch:
     inputs:
       include_inputs:
