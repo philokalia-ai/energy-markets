@@ -17,7 +17,10 @@ Information set (enforced in `build_context` / `sim_known`, tested in test/test_
   * --mode pregate0630: prices only, issue_utc = D-1 06:30 UTC;
   * --mode postsim: + the live lead-1 weather-track `sim` as a known-future covariate, using only
     sim rows with prediction_made_utc <= issue_utc, where issue_utc = the latest made time of D's
-    lead-1 sim (08:16-10:06 UTC D-1 in Sep-Nov 2026); `after_gate` flags issue_utc > D-1 10:00 UTC.
+    lead-1 sim AT OR BEFORE the D-1 gate (10:00 UTC). D's lead-1 sim was made 08:16-10:06 UTC D-1
+    in Sep-Nov 2026; a vintage made after the gate is never used (an earlier one is, if it exists),
+    and the run refuses (ValueError) only when no vintage of D's lead-1 sim was made by the gate.
+    `after_gate` (issue_utc > D-1 10:00 UTC) therefore stays False in postsim.
   * input_mode in the output says which of the two a row is.
   * TSFM_ARM=timestral-209m-phys (opt-in, postsim only): the phase-2 physics arm C — known-future
     covariates [sim, residual load = ENTSO-E D-1 load - wind - solar forecasts, gas-CCGT SRMC =
@@ -36,7 +39,8 @@ Information set (enforced in `build_context` / `sim_known`, tested in test/test_
 Modes of operation
   default (dry run): read the offline DuckDB extract (read-only) + live JSON for sim, write CSVs
                      to --output. No database access at all.
-  --write          : production (.github/workflows/daily-forecast.yml). Reads Postgres
+  --write          : production — pregate0630 from .github/workflows/daily-forecast.yml (06:30 UTC),
+                     postsim from bin/emit_tsfm_refresh.sh (owner's server, cron 10:40 UTC). Reads Postgres
                      (ENERGY_CONN_STR) through DuckDB's postgres scanner (`USE pg`, so the SQL is the
                      same as on the extract), creates the overlay table if absent (idempotent DDL)
                      and upserts ONE vintage — lines (tsfm_median/q10/q90) and probabilities —
@@ -152,17 +156,34 @@ def build_context(prices: pd.DataFrame, zones, delivery, ctx_hours: int = CTX_HO
     return wide.to_numpy().T.astype(np.float32), cutoff, grid
 
 
+def gate_utc(delivery) -> pd.Timestamp:
+    """The (conservative) D-1 auction gate of Athens market day D, naive UTC: D-1 10:00 UTC."""
+    return pd.Timestamp(delivery).normalize() - pd.Timedelta(days=1) + pd.Timedelta(hours=GATE_UTC_HOUR)
+
+
 def sim_known(sim: pd.DataFrame, delivery):
     """Lead-1 sim rows knowable at the post-sim issue time of D. Returns (rows, issue_utc).
 
-    issue_utc = latest prediction_made_utc of D's lead-1 sim; history = all lead-1 sim rows made
-    at or before it. Rows made later (including later re-runs) are dropped."""
+    issue_utc = the latest prediction_made_utc of D's lead-1 sim made at or before the D-1 gate
+    (`gate_utc`); history = all lead-1 sim rows made at or before it. Rows made later (including
+    later re-runs and a post-gate vintage of D itself) are dropped. Raises ValueError when D has
+    no lead-1 sim at all, or none made by the gate."""
     hours = market_day_hours(delivery)
     target = sim[(sim.t >= hours[0]) & (sim.t <= hours[-1])]
+    day = pd.Timestamp(delivery).date()
     if target.empty:
-        raise ValueError(f"no lead-1 sim for {pd.Timestamp(delivery).date()}: use --mode pregate0630")
-    issue = target.made.max()
+        raise ValueError(f"no lead-1 sim for {day}: use --mode pregate0630")
+    gate = gate_utc(delivery)
+    in_time = target[target.made <= gate]
+    if in_time.empty:
+        raise ValueError(f"no lead-1 sim vintage for {day} made by the gate {gate} UTC "
+                         f"(earliest {target.made.min()}): refusing the post-sim overlay")
+    issue = in_time.made.max()
     known = sim[sim.made <= issue].sort_values("made").drop_duplicates(["zone", "t"], keep="last")
+    covered = known[(known.t >= hours[0]) & (known.t <= hours[-1])].zone.nunique()
+    if covered < target.zone.nunique():
+        print(f"WARNING: post-sim vintage {issue} covers {covered}/{target.zone.nunique()} zones of {day}; "
+              f"the rest have no delivery-day sim covariate")
     return known, issue
 
 
@@ -307,7 +328,7 @@ def overlay(model, prices, zones, delivery, mode, sim=None, ctx_hours=CTX_HOURS,
         rows, issue = sim_known(sim, d)
         known, sim_made = sim_covariate(rows, zones, grid, hours), issue
         if physics:
-            gate = d - pd.Timedelta(days=1) + pd.Timedelta(hours=GATE_UTC_HOUR)
+            gate = gate_utc(d)
             pk, pub = physics_covariates(*phys, zones, grid, hours, cutoff=gate)
             known = np.concatenate([known, pk], axis=1)
             if pd.notna(pub):
@@ -322,7 +343,7 @@ def overlay(model, prices, zones, delivery, mode, sim=None, ctx_hours=CTX_HOURS,
         out.append(pd.DataFrame({
             "zone": z, "market_date": d.date().isoformat(), "t_utc": hours, "issue_utc": issue,
             "input_mode": mode, "model": model.name, "context_end_utc": cutoff, "sim_made_utc": sim_made,
-            "after_gate": bool(issue > d - pd.Timedelta(days=1) + pd.Timedelta(hours=GATE_UTC_HOUR)),
+            "after_gate": bool(issue > gate_utc(d)),
             "tsfm_median": q[zi, :, k(0.5)], "tsfm_q10": q[zi, :, k(0.1)], "tsfm_q90": q[zi, :, k(0.9)],
             "p_le0_tsfm": p0[zi]}))
     hourly = pd.concat(out, ignore_index=True)
@@ -466,8 +487,9 @@ def main():
     ap.add_argument("--backend", choices=["duckdb", "postgres"], default=None,
                     help="data store (default: postgres with --write, else duckdb)")
     ap.add_argument("--extract", default=os.environ.get("EUPHEMIA_DUCKDB_PATH"))
-    ap.add_argument("--live-json", default=None,
-                    help="dry-run sim source for postsim (dir of api zone JSONs); default: the store")
+    ap.add_argument("--live-json", "--sim-dir", dest="live_json", default=None,
+                    help="dry-run sim source for postsim (dir of api zone JSONs, e.g. em-team/live; "
+                         "only each day's final vintage); default: the store")
     ap.add_argument("--output", default="data/tsfm_overlay")
     ap.add_argument("--no-logistic", action="store_true", help="skip collapse's logistic (TSFM-only p_le0)")
     ap.add_argument("--write", action="store_true", help="upsert into Postgres (production)")
@@ -487,6 +509,7 @@ def main():
     if a.mode == "postsim":
         sim = (sim_from_live_json(a.live_json, ZONES) if a.live_json
                else sim_from_db(con, delivery, days=PHYS_CTX_HOURS // 24 + 2 if arm.endswith("-phys") else 60))
+        sim_known(sim, delivery)   # fail fast (no vintage by the gate) before loading the weights
     model = ARMS[arm](a.threads)
     phys = physics_from_store(con, delivery) if getattr(model, "physics", False) else None
     hourly, day = overlay(model, prices, ZONES, delivery, a.mode, sim, phys=phys)

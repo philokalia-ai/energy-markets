@@ -91,12 +91,38 @@ class InformationSetTest(unittest.TestCase):
         self.assertEqual(m.known.shape, (2, 1, 500 + 24))
         self.assertFalse(np.any(m.known == 9999.0))
 
-    def test_postsim_after_gate_flag_and_missing_sim(self):
-        hourly, _ = ov.overlay(StubModel(), prices(), ZONES, "2026-11-15", "postsim",
-                               sim=self.sim_frame(made_d="2026-11-14 10:20"), ctx_hours=500)
-        self.assertTrue(hourly.after_gate.all())
-        with self.assertRaises(ValueError):
+    def test_postsim_only_vintage_after_gate_refuses_and_missing_sim(self):
+        # D's only lead-1 vintage was made at 10:20 UTC D-1 (after the 10:00 gate): refuse.
+        with self.assertRaisesRegex(ValueError, "made by the gate"):
+            ov.overlay(StubModel(), prices(), ZONES, "2026-11-15", "postsim",
+                       sim=self.sim_frame(made_d="2026-11-14 10:20"), ctx_hours=500)
+        with self.assertRaisesRegex(ValueError, "no lead-1 sim"):
             ov.sim_known(self.sim_frame()[lambda s: s.t < pd.Timestamp("2026-11-14 22:00")], "2026-11-15")
+
+    def test_postsim_picks_latest_vintage_made_by_the_gate(self):
+        # Gate bug (phase 3): D's lead-1 sim has vintages 09:13 (sim 50) and a 10:06 re-run (sim 9999,
+        # observed 10:04-10:06 on 7 days in Oct 2026). The 10:06 one must be ignored, not refuse the run.
+        sim = self.sim_frame(made_d="2026-11-14 09:13")
+        rerun = sim[sim.made == pd.Timestamp("2026-11-14 09:13")].assign(sim=9999.0,
+                                                                         made=pd.Timestamp("2026-11-14 10:06"))
+        sim = pd.concat([sim, rerun], ignore_index=True)
+        self.assertEqual(ov.gate_utc("2026-11-15"), pd.Timestamp("2026-11-14 10:00"))
+        rows, issue = ov.sim_known(sim, "2026-11-15")
+        self.assertEqual(issue, pd.Timestamp("2026-11-14 09:13"))
+        self.assertFalse((rows.sim == 9999.0).any())
+        m = StubModel()
+        hourly, day = ov.overlay(m, prices(), ZONES, "2026-11-15", "postsim", sim=sim, ctx_hours=500)
+        self.assertTrue((hourly.issue_utc == issue).all())
+        self.assertFalse(hourly.after_gate.any())
+        self.assertFalse(np.any(m.known == 9999.0))
+        self.assertTrue(np.isfinite(m.known[:, 0, -24:]).all())
+        # ... and write_db accepts it (no after-gate refusal).
+        hourly["p_le0_logit"] = np.nan; hourly["p_le0"] = hourly.p_le0_tsfm
+        day["p_any_le0_logit"] = np.nan; day["p_any_le0"] = day.p_any_le0_tsfm
+        self.assertEqual(ov.write_db(hourly, day, "timestral-209m", cx=FakeConn()), 2 * 24 * 6 + 2 * 3)
+        # A vintage exactly at the gate counts as in time.
+        at_gate = pd.concat([sim, rerun.assign(sim=70.0, made=pd.Timestamp("2026-11-14 10:00"))], ignore_index=True)
+        self.assertEqual(ov.sim_known(at_gate, "2026-11-15")[1], pd.Timestamp("2026-11-14 10:00"))
 
     D_START = pd.Timestamp("2026-11-14 22:00")      # Athens day 2026-11-15 in UTC
     EARLY = pd.Timestamp("2026-11-14 08:00")        # published before the sim issue (09:13)

@@ -4,7 +4,10 @@
 #    (inputs for that past day exist; weekly persistence supplies the
 #    forecast-horizon features ex-ante);
 # 2. emit hybrid/stats model lines for today-2 .. today+7 into
-#    simulations.model_lines (upsert).
+#    simulations.model_lines (upsert);
+# 3. post-sim Timestral refresh of tomorrow's TSFM overlay (bin/emit_tsfm_refresh.sh):
+#    NON-FATAL and bounded (30 min, EMIT_TSFM_TIMEOUT) — a failure prints a WARNING and never changes this
+#    script's exit status. Kill switch: EMIT_NO_TSFM=1.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 # cron runs with a minimal PATH: make julia (juliaup) and uv (~/.local/bin) visible.
@@ -40,4 +43,18 @@ if [ ! -f "data/model_line_feats/$F.csv" ] && [ ! -f "data/backfill_books_cv37/$
     julia --project=. bin/capture_book_features.jl "$F" "data/model_line_feats/$F.csv"
 fi
 if python3 -c "import sklearn, joblib" 2>/dev/null; then PY=python3; else PY="uv run --quiet --with scikit-learn,pandas,pyarrow,duckdb,joblib,psycopg2-binary python3"; fi
-$PY bin/emit_model_lines.py
+rc=0
+$PY bin/emit_model_lines.py || rc=$?
+# 3. Post-sim TSFM refresh — after (and independent of) the model lines; their status is the exit status.
+if [ "${EMIT_NO_TSFM:-0}" != "0" ]; then
+    echo "TSFM refresh skipped (EMIT_NO_TSFM=$EMIT_NO_TSFM)"
+else
+    tsfm_timeout="${EMIT_TSFM_TIMEOUT:-1800}"
+    timeout -k 60 "$tsfm_timeout" bash bin/emit_tsfm_refresh.sh || {
+        st=$?; why=""
+        if [ "$st" -eq 124 ] || [ "$st" -eq 137 ]; then why=", timed out after $tsfm_timeout s"; fi
+        msg="WARNING: post-sim TSFM refresh FAILED (exit $st$why) — the site keeps the 06:30 pre-gate overlay; model lines unaffected"
+        echo "$msg"; echo "$msg" >&2
+    }
+fi
+exit $rc

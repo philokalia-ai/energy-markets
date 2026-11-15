@@ -10,7 +10,8 @@ with a revenue cap; the owner confirmed the licence is fine for this deployment 
 | layer | what | where |
 |---|---|---|
 | schedule | separate job `tsfm-overlay`: `needs: daily-forecast`, runs only if the core job succeeded, i.e. AFTER the core export + R2 publish; own deadline (150 min, every step bounded). The core job is byte-for-byte main: an overlay failure or hang cannot cancel or delay it. The job then re-runs the idempotent JSON export + R2 parquet publish so the overlay reaches the site the same morning | `daily-forecast.yml` |
-| mode | **`pregate0630`**: settled prices through D−1, issue D−1 06:30 UTC, `after_gate=false`. `postsim` is not possible in this job: it produces leads 2–7 only, and D's lead-1 sim is frozen later by the ceres JAO runs. A `postsim` refresh belongs after the lead-1 freeze (e.g. the 10:40 `emit_model_lines.sh` cron); not wired | `OVERLAY_MODE` |
+| mode | **`pregate0630`**: settled prices through D−1, issue D−1 06:30 UTC, `after_gate=false`. `postsim` is not possible in this job: it produces leads 2–7 only, and D's lead-1 sim is frozen later by the ceres JAO runs | `OVERLAY_MODE` |
+| post-sim refresh (phase 3) | **`postsim`, arm B `timestral-209m`** (prices + lead-1 sim), run from the owner's server: `bin/emit_model_lines.sh` (cron 10:40 UTC) step 3 → `bin/emit_tsfm_refresh.sh` (uv-bootstraps `.venv-overlay` from `requirements-overlay.txt`, rebuilt when its sha256 changes; `HF_HOME=data/hf`). Non-fatal, `timeout 1800`, kill switch `EMIT_NO_TSFM=1`; the script's exit status stays the model-lines status. issue = the latest lead-1 sim vintage of D made **≤ D−1 10:00 UTC**; no such vintage → refused (in the live record: 7 of ~60 days Sep–Nov, all 10:04–10:06 UTC in Oct). Its rows are a newer vintage than the 06:30 one, so the export serves it once re-exported: `publish-web-data.yml` scheduled 11:30 UTC | `emit_model_lines.sh` |
 | deps | uv 0.12.21, Python 3.12, `bin/requirements-overlay.txt` (the backtest venv, pinned; timestral @a534bdb) | runner |
 | weights | `actions/cache`, key = Hub revision, `HF_HOME=$GITHUB_WORKSPACE/.hf` | runner |
 | read | Postgres through DuckDB's postgres scanner (`ATTACH … READ_ONLY` + `USE pg`), so the SQL is identical to the extract's | `open_store` |
@@ -62,7 +63,7 @@ the books or `code_version`. `sim` stays the conduct instrument.
 | `--mode` | inputs | `issue_utc` | note |
 |---|---|---|---|
 | `pregate0630` (default) | settled prices through D-1 | D-1 06:30 UTC | can run in the 06:30 job |
-| `postsim` | + live lead-1 weather `sim` (history + D) as known-future covariate | latest `prediction_made_utc` of D's lead-1 `sim` (08:16–10:06 UTC in Sep–Nov) | `after_gate=True` if issue > D-1 10:00 UTC. Rows made after the issue time are excluded |
+| `postsim` | + live lead-1 weather `sim` (history + D) as known-future covariate | latest `prediction_made_utc` of D's lead-1 `sim` made ≤ D-1 10:00 UTC (made 08:16–10:06 UTC in Sep–Nov) | a vintage made after the gate is skipped (an earlier one is used); none by the gate → refused. Rows made after the issue time are excluded |
 
 - **Model:** `TSFM_MODEL=chronos2` (default, Apache-2.0) | `timestral-209m` | `timestral-28m`.
 - **Timestral licence:** the weights are "Modified MIT", which **withholds all rights from
