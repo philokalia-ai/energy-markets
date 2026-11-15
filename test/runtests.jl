@@ -299,6 +299,11 @@ println()
         include(joinpath(@__DIR__, "test_price_reconstruction.jl"))
     end
 
+    @testset "Complex orders (DB-free)" begin
+        # Energy-limited LinkedHourlyOrder families: master LP + fix-and-reprice.
+        include(joinpath(@__DIR__, "test_complex_orders.jl"))
+    end
+
     @testset "Code review 2026-07" begin
         println("\n" * "=" ^ 60)
         println("Running July 2026 code-review regression tests...")

@@ -8,7 +8,7 @@ using Distributed: myid, workers, pmap, WorkerPool
 import ..select_solver
 
 # Import required modules from parent Euphemia package
-import ..Euphemia.MarketOrders: MarketOrder, SimpleOrder, AggregatedPeriodicOrder
+import ..Euphemia.MarketOrders: MarketOrder, SimpleOrder, AggregatedPeriodicOrder, LinkedHourlyOrder
 import ..Euphemia.Network: NetworkTopology, TransferCapacity, get_connected_zones, get_zone_pairs, create_transfer_capacity_from_entsoe
 import ..Euphemia: get_loads, get_generators, get_generation_forecast_for_wind_and_solar
 
@@ -56,7 +56,14 @@ struct MPCCOrderBook
     periods::Vector{String}                    # Time period identifiers (e.g., "1", "2", ..., "24")
     price_limits::Tuple{Float64,Float64}       # (min_price, max_price) bounds
     network_topology::Union{Nothing,NetworkTopology,TransferCapacity}  # Optional network constraints (TransferCapacity for multi-zone)
+    # Fixed MW injections per (node, period) that the clear must take as given
+    # (accepted regular blocks under fix-and-reprice, src/mpcc/complex_orders.jl).
+    # Empty for every ordinary book — the nodal balance is then unchanged.
+    fixed_injections::Dict{Tuple{String,String},Float64}
 end
+MPCCOrderBook(orders, nodes, periods, price_limits, network_topology) =
+    MPCCOrderBook(orders, nodes, periods, price_limits, network_topology,
+                  Dict{Tuple{String,String},Float64}())
 
 # Configuration constants
 const DEFAULT_MARKUP_FACTOR = 1.1
@@ -125,6 +132,7 @@ end
 # so the module body is line-for-line the pre-split code.
 include("mpcc/solver.jl")           # solve_mpcc_market_clearing + the per-period decomposition variant
 include("mpcc/coupling_metrics.jl") # iterative-coupling helpers: flows -> net imports, convergence, damping
+include("mpcc/complex_orders.jl")   # complex-order master LP (EUPHEMIA_COMPLEX_ORDERS; inert otherwise)
 
 
 end  # module MPCC

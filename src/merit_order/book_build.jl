@@ -560,6 +560,128 @@ function _pump_capability(zone::String, day::Date)
     return head
 end
 
+# ── Complex orders: energy-limited storage families (EUPHEMIA_COMPLEX_ORDERS) ──
+# Families are built only when the env flag names them; unset ⇒ this code is
+# never reached and the book is byte-identical.
+#   ps        — `Hydro Pumped Storage` units: one family per zone, daily budget =
+#               demonstrated PS generation energy.
+#   reservoir — `Hydro Water Reservoir` units, same construction (zones on the
+#               `:reservoir_opportunity` hydro model are excluded: their water is
+#               already rationed through the reservoir water value).
+const COMPLEX_FAMILY_FUELS = Dict(
+    "ps" => (Symbol("Hydro Pumped Storage"), "Hydro Pumped Storage", "ESTOR"),
+    "reservoir" => (Symbol("Hydro Water Reservoir"), "Hydro Water Reservoir", "ERES"),
+)
+complex_order_kinds() = Set(filter(!isempty,
+    strip.(lowercase.(split(get(ENV, "EUPHEMIA_COMPLEX_ORDERS", ""), ",")))))
+
+const _STORAGE_BUDGET_CACHE = Dict{Tuple{String,String,Date},Float64}()
+const _STORAGE_BUDGET_LOCK = ReentrantLock()
+
+"""
+    _storage_cutoff_day(day) -> Date
+
+First day NOT usable for the storage budget: only COMPLETE UTC days strictly
+before it enter the window. Legacy path: D-1 (the window ends with D-2; D-2 is
+complete and published by D-1 ~01:00 UTC). Inside a `ForecastContext`: the
+earlier of that and the UTC date of `as_of - AGG_GEN_PUBLICATION_LATENCY`, so a
+long-lead issuance never sees generation published after it (recorded as
+:latency_policy, the same convention as the fleet-data trailing windows).
+Lead 1 at the 10:00 UTC D-1 gate resolves to D-1 — identical to legacy.
+"""
+function _storage_cutoff_day(day::Date)
+    c = current_context()
+    c === nothing && return day - Day(1)
+    record_asof_status!("aggregated_generation", :latency_policy)
+    return min(day - Day(1), Date(c.as_of_utc - AGG_GEN_PUBLICATION_LATENCY))
+end
+
+"""
+    _storage_daily_budget(zone, day, production_type) -> Float64
+
+Mean daily generation energy (MWh) of `production_type` in `zone` over the 14
+complete UTC days before `_storage_cutoff_day(day)` (legacy: D-15..D-2) from
+`entsoe.aggregated_generation_per_type` (hourly mean per hour, summed per day;
+days with < 20 reported hours skipped). NaN when there is no data. Cached per
+(zone, type, effective cutoff) — the cutoff carries the issuance context, so
+vintages never share an entry. Never cached on DB error.
+"""
+function _storage_daily_budget(zone::String, day::Date, production_type::String)
+    cutoff = _storage_cutoff_day(day)
+    key = (zone, production_type, cutoff)
+    cached = lock(_STORAGE_BUDGET_LOCK) do
+        get(_STORAGE_BUDGET_CACHE, key, nothing)
+    end
+    cached === nothing || return cached
+    df = sql2df_with_retry("""
+        WITH hourly AS (
+            SELECT date_trunc('hour', date_time_utc) AS h,
+                   AVG(actual_generation_output_mw) AS mw
+            FROM entsoe.aggregated_generation_per_type
+            WHERE area_map_code = \$1 AND area_type_code LIKE 'BZN%'
+              AND production_type = \$2
+              AND actual_generation_output_mw IS NOT NULL
+              AND date_time_utc >= (\$3::date::timestamp AT TIME ZONE 'UTC')
+              AND date_time_utc < (\$4::date::timestamp AT TIME ZONE 'UTC')
+            GROUP BY 1),
+        daily AS (
+            SELECT date_trunc('day', h) AS d, SUM(mw) AS e, COUNT(*) AS n
+            FROM hourly GROUP BY 1)
+        SELECT AVG(e) AS e FROM daily WHERE n >= 20""",
+        Any[zone, production_type, cutoff - Day(14), cutoff])
+    e = (size(df, 1) == 0 || ismissing(df.e[1])) ? NaN : Float64(df.e[1])
+    lock(_STORAGE_BUDGET_LOCK) do
+        _STORAGE_BUDGET_CACHE[key] = e
+    end
+    return e
+end
+
+"""
+    _split_storage_families(tagged, strategies, generators, zone, day,
+                            hydro_model, n_slots, resolution_minutes)
+        -> (keep::BitVector, members::Vector{Tuple{SimpleOrder,String}},
+            budgets::Dict{String,Float64})
+
+Pick the water-value supply orders of the units in an enabled storage family out
+of the tagged book (spill blocks excluded). `keep[i] = false` marks a member.
+The budget is the demonstrated daily energy scaled to the book's slot coverage.
+A family with no data or a budget < 10 MWh is not formed (its orders stay plain).
+"""
+function _split_storage_families(tagged, strategies, generators, zone::String,
+    day::Date, hydro_model::Symbol, n_slots::Int, resolution_minutes::Int)
+    keep = trues(length(tagged))
+    members = Tuple{SimpleOrder,String}[]
+    budgets = Dict{String,Float64}()
+    kinds = complex_order_kinds()
+    for kind in sort(collect(kinds))
+        haskey(COMPLEX_FAMILY_FUELS, kind) || continue
+        fuel, ptype, prefix = COMPLEX_FAMILY_FUELS[kind]
+        kind == "reservoir" && hydro_model == :reservoir_opportunity && continue
+        codes = Set(g.code for g in generators if g.fuel_type == fuel)
+        isempty(codes) && continue
+        e = try
+            _storage_daily_budget(zone, day, ptype)
+        catch err
+            @warn "complex orders: budget query failed — $kind family not formed" zone day exception = err
+            NaN
+        end
+        (isnan(e) || e < 10.0) && continue
+        fam = "$prefix:$zone"
+        budgets[fam] = e * min(1.0, n_slots * resolution_minutes / (24 * 60))
+        n = 0
+        for (i, (o, tag)) in enumerate(tagged)
+            (tag in codes && o.type == :supply) || continue
+            s = strategies[i]
+            (startswith(s, "water_value") && s != "water_value_spill") || continue
+            keep[i] = false
+            push!(members, (o, fam))
+            n += 1
+        end
+        n == 0 && delete!(budgets, fam)
+    end
+    return keep, members, budgets
+end
+
 "Clear the cv34 pumping-capability cache (tests / long processes)."
 clear_pump_capability_cache!() = (lock(_PUMP_CAP_LOCK) do; empty!(_PUMP_CAP_CACHE); end; nothing)
 
@@ -1192,6 +1314,11 @@ function create_merit_order_book(
         demand_orders_count = 0
         total_demand_quantity = 0.0
         total_supply_capacity = 0.0
+        # Complex orders `blocks` (EUPHEMIA_COMPLEX_ORDERS): committed units' must-run
+        # profiles, (unit code, block limit price, hourly slice). Empty otherwise.
+        blocks_on = "blocks" in complex_order_kinds()
+        block_members = Tuple{String,Float64,SimpleOrder}[]
+        block_fallback = Tuple{String,SimpleOrder}[]   # the static must-run offers they replace
 
         # ── Solar-regime price-taker floor (cv31, default-ON) ───────────
         # Regime-gated revival of the cv28/cv29 price-taker floor. The gate is
@@ -1527,7 +1654,44 @@ function create_merit_order_book(
                     # few hours below cost. This is what lets midday prices
                     # collapse below thermal SRMC in renewable-surplus hours.
                     must_run_qty = 0.0
-                    if g.code in committed
+                    if g.code in committed && blocks_on
+                        # Complex orders `blocks`: the unit's minimum load is ONE
+                        # regular block over the day (all-or-nothing, limit price
+                        # = SRMC) instead of the two hourly must-run orders; the
+                        # master MILP decides acceptance, accepted blocks inject
+                        # their profile as price-takers (fix-and-reprice).
+                        must_run_qty = min(g.p_min, offered_pmax(g))
+                        # Block limit price: SRMC (the competitive avoidable cost of
+                        # running the day) by default; EUPHEMIA_BLOCK_PRICE=mustrun
+                        # keeps the static split's calibrated economics (0.6 at
+                        # factor×SRMC + 0.4 at max(SRMC/2, SRMC−40)) so ONLY the
+                        # acceptance rule changes (isolation arm).
+                        mc = g.marginal_cost
+                        bprice = get(ENV, "EUPHEMIA_BLOCK_PRICE", "srmc") == "mustrun" ?
+                            0.6 * mc * must_run_price_factor + 0.4 * max(mc * 0.5, mc - 40.0) : mc
+                        if must_run_qty > 0.1
+                            push!(block_members, (g.code, bprice,
+                                SimpleOrder(:supply, bprice, must_run_qty,
+                                    Symbol(bidding_zone), date_time, resolution_minutes)))
+                            # The ORIGINAL calibrated must-run offers (identical to the
+                            # `elseif` branch below) ride along as the block's fallback:
+                            # restored verbatim whenever the blocks are released (master
+                            # failure, PAB exhaustion), so a fallback IS the baseline book.
+                            fb_deep_qty = must_run_qty * 0.6
+                            fb_deep_price = (!isempty(get(ENV, "EUPHEMIA_ENABLE_CV27_T3", "")) ||
+                                             (sr_full && sr_active(hr))) ?
+                                (sr_active(hr) ? sr_floor(hr) : DEEP_SURPLUS_FLOOR_EUR) :
+                                gmc * must_run_price_factor
+                            push!(block_fallback, (g.code, SimpleOrder(:supply,
+                                fb_deep_price, fb_deep_qty,
+                                Symbol(bidding_zone), date_time, resolution_minutes)))
+                            push!(block_fallback, (g.code, SimpleOrder(:supply,
+                                min(max(gmc * 0.5, gmc - 40.0), nuc_ceil),
+                                must_run_qty - fb_deep_qty,
+                                Symbol(bidding_zone), date_time, resolution_minutes)))
+                            total_supply_capacity += must_run_qty
+                        end
+                    elseif g.code in committed
                         must_run_qty = min(g.p_min, offered_pmax(g))
                         # Graduated self-scheduling: the deepest block is
                         # near-free (never shut down), the rest bids below
@@ -1809,6 +1973,18 @@ function create_merit_order_book(
 
         orders = SimpleOrder[t[1] for t in tagged]
 
+        # Complex orders (EUPHEMIA_COMPLEX_ORDERS, default unset ⇒ skipped):
+        # energy-limited storage families leave the plain book here and
+        # re-enter after the merge as LinkedHourlyOrders.
+        family_members = Tuple{SimpleOrder,String}[]
+        family_budgets = Dict{String,Float64}()
+        if !isempty(complex_order_kinds())
+            keep, family_members, family_budgets = _split_storage_families(
+                tagged, strategies, generators, bidding_zone, day, hydro_model,
+                length(target_timeslots), resolution_minutes)
+            orders = orders[keep]
+        end
+
         # ── Stage 9: merge identical blocks + assemble the MPCC book ────
         # Merge orders with identical (type, price, timeslot): all units of a
         # fuel type bid the same SRMC-derived tranche prices, so a zone-day
@@ -1825,6 +2001,40 @@ function create_merit_order_book(
         orders = [SimpleOrder(t, p, q, Symbol(bidding_zone), dt, resolution_minutes)
                   for ((t, p, dt), q) in merged]
         println("  🔗 Merged $(pre_merge_count) orders into $(length(orders)) price-distinct blocks")
+        if !isempty(family_members)
+            fm = Dict{Tuple{String,Float64,DateTime},Float64}()
+            for (o, f) in family_members
+                k = (f, round(o.price, digits=2), o.date_time)
+                fm[k] = get(fm, k, 0.0) + o.quantity
+            end
+            all_orders = MarketOrder[orders...]
+            for ((f, p, dt), q) in sort(collect(fm); by=first)
+                push!(all_orders, LinkedHourlyOrder(:supply, p, q, Symbol(bidding_zone),
+                    dt, resolution_minutes, f, family_budgets[f]))
+            end
+            orders = all_orders
+            for (f, e) in sort(collect(family_budgets))
+                mw = sum((q for ((ff, _, _), q) in fm if ff == f); init=0.0) /
+                     max(length(target_timeslots), 1)
+                println("  🔋 complex orders: family $f — budget $(round(e, digits=0)) MWh/day " *
+                        "vs offered $(round(mw, digits=0)) MW × $(length(target_timeslots)) slots")
+            end
+        end
+
+        if !isempty(block_members)
+            all_orders = MarketOrder[orders...]
+            for (code, b, o) in block_members
+                push!(all_orders, LinkedHourlyOrder(:supply, b, o.quantity, o.zone,
+                    o.date_time, o.resolution_code, "BLK:$(bidding_zone):$(code)", NaN))
+            end
+            for (code, o) in block_fallback
+                push!(all_orders, LinkedHourlyOrder(:supply, o.price, o.quantity, o.zone,
+                    o.date_time, o.resolution_code, "BLKFB:$(bidding_zone):$(code)", NaN))
+            end
+            orders = all_orders
+            println("  🧱 complex orders: $(length(unique(first.(block_members)))) thermal " *
+                    "block(s) replace the static must-run split")
+        end
 
         nodes = [bidding_zone]
         # EU day-ahead floor is -500; ceiling is the demand cap so shortage
