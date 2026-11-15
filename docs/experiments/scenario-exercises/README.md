@@ -1,5 +1,46 @@
 # Scenario exercises — the cv31 ledger (data center & cold ironing)
 
+## cv44 check (Nov 2026, stride-8 sample): do the cv43 results hold with PS complex orders?
+
+**This is a sample.** cv44 (pumped storage as energy-limited complex orders, on by default) was
+rerun on the **stride-8** days only: every 8th day of 2024-07-01..2026-06-29, 92 days, the
+same subset as the cv43 s = 150/200 % arms. Cold ironing uses the 46 stride-8 days ≤ 2025-06-30.
+- Extract: the **same** 2026-11-14 extract (read-only).
+- Driver: `eu44_scenarios.jl`, a copy of eu43_scenarios.jl with labels `eu44_*`.
+- Solves: 506/506 days optimal, 0 failed, no cap prints.
+- Comparison: on **identical complete days** of both versions: 89 for DC/BYOP, 44 for cold ironing.
+- € sums cover the sampled days only (×8 ≈ full window).
+- Not measured: the sampling error. Cold ironing on cv43 alone gives +0.166 at stride 4 and +0.136 at
+  stride 8, so the magnitudes are sample-sensitive. The cv43 → cv44 change below is like-for-like.
+
+| | cv43 | cv44 |
+|---|---|---|
+| DC: GR LW Δ (€/MWh) | +6.96 | **+7.00** |
+| DC: EU LW Δ | +0.273 | +0.288 |
+| DC: extra cost, €m (outside GR) | 178.5 (91.9) | 188.3 (101.2) |
+| DC: others' extra cost per €1 the DC spends | €1.49 | €1.57 |
+| DC: spill BG / RO / RS | +2.36 / +1.55 / +1.05 | +2.37 / +1.55 / +1.07 |
+| BYOP GR LW Δ at s = 100 / 150 / 200 % | +3.04 / +1.42 / −0.22 | +3.03 / +1.37 / −0.28 |
+| **BYOP s\*** (linear interpolation 150–200 %; a quadratic gives the same) | **193 %** | **192 %** (191.5) |
+| BYOP: EU consumer cost crosses zero at | ≈ 178 % | ≈ 179 % |
+| cold ironing: EU LW Δ | +0.136 | +0.140 |
+| cold ironing: others' extra cost per €1 of shore power | €1.82 | €1.86 |
+| cold ironing: top zones | IT-Sardinia +0.66, GR +0.57, ES +0.36 | IT-Sardinia +0.66, GR +0.56, ES +0.36 |
+
+**Verdict: the scenario results hold on cv44, and s\* ≈ 2× the DC load stands.**
+
+Mechanism (PS master allocation, base vs DC, on 8 probe days):
+- GR's PS is mostly price-limited: its budget binds on 2 of 8 days. It **adds** energy for the DC, +62 %, shifted into the DC's peak hours (top-6-hour share 0.74 → 0.88). The GR Δ therefore stays flat.
+- Energy-limited PS elsewhere (CH, AT, NO5, SI) can no longer absorb remote shocks with unlimited energy, as it did on cv43. Slightly more cost leaks into FR, DE_LU and PL: outside-GR cost +10 % for the DC, +4 % for cold ironing.
+
+Timestral does not enter any of this. Scenarios use the physics-delta composite, and cv44's Δsim matches the cv43 profile to within 0.06 €/MWh.
+
+Reproduce with `SCN_STEP=8 SCN_ARMS=eu44_base,eu44_dc574,eu44_byop_s100,eu44_byop_s150,eu44_byop_s200,eu44_ops_floor_paneu julia --project=. docs/experiments/scenario-exercises/eu44_scenarios.jl`. Then:
+- write the common days with `test/scripts/blocks/scn_common_days.py`;
+- run `scn_byop.py` with `SCN_PREFIX=eu44` and `scn_analysis.py`, both with `SCN_RESTRICT_DAYS=<days file>`.
+
+For the mechanism probe, run `test/scripts/blocks/scn_ps_mechanism.jl` and then `.py`.
+
 ## cv43 rerun (Nov 2026): data center, cold ironing, "bring your own power"
 
 Rerun on **cv43** (feed-anchored Italian fleet, in-merit truthing, deterministic
