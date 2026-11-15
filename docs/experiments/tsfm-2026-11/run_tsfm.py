@@ -17,6 +17,9 @@ Variants
                                                                    -> label (b) gate-time proxy
                                                                       (ENTSO-E RES not provably pre-gate)
   physresid  target = settled - sim with the `phys` covariates; final = sim + forecast  -> (b)
+  physfilt  = phys, but the residual-load row is publication-filtered exactly as the production
+         emitter does (bin/emit_tsfm_overlay.py::physics_covariates, cutoff D-1 10:00 UTC; delivery
+         hours without a verified value -> residual load at t-168 h)   -> label (b) honest gate time
   physpre  + known-future [lead-2 weather sim (latest issued before D-1 06:30 UTC), residual load
          persisted from t-168 h, gas SRMC]; same definitions in history and horizon -> label (a) 06:30
   resid  forecast the residual (settled - sim) through the context    -> label (a') post-sim
@@ -149,6 +152,32 @@ def srmc_series(grid):
     return pd.Series(out["ttf_f"] / 0.5 + 0.202 / 0.5 * out["eua_co2"] + 2.0, index=grid)
 
 
+_RAW = {}
+
+
+def _emitter():
+    if "ov" not in _RAW:
+        import importlib.util
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "bin", "emit_tsfm_overlay.py")
+        spec = importlib.util.spec_from_file_location("emit_tsfm_overlay", path)
+        _RAW["ov"] = importlib.util.module_from_spec(spec); spec.loader.exec_module(_RAW["ov"])
+    return _RAW["ov"]
+
+
+def filtered_resload(d, zones, ctx_grid, hours):
+    """Residual load on context + delivery hours as the production emitter builds it at the D-1 gate."""
+    ov = _emitter()
+    if "phys" not in _RAW:   # raw rows with publication stamps for the whole backtest span, read once
+        db = os.environ.get("EUPHEMIA_DUCKDB_PATH", "/home/pgeorgakopoulos/armada/em-data/euphemia-live-20261114.duckdb")
+        con = ov.open_store("duckdb", db)
+        _RAW["phys"] = ov.physics_from_store(con, "2026-11-13", ctx_hours=CTX + 70 * 24)
+        _RAW["fallback"] = []
+    load, res, fuel = _RAW["phys"]
+    gate = pd.Timestamp(d) - pd.Timedelta(days=1) + pd.Timedelta(hours=ov.GATE_UTC_HOUR)
+    k, pub = ov.physics_covariates(load, res, fuel, zones, ctx_grid, hours, cutoff=gate)
+    return k[:, 0, :]
+
+
 def build_inputs(d, variant, zones, grid, wide, settled_lag=2):
     # settled_lag=2 (default, BRIEF rule): context ends with Athens day D-2.
     # settled_lag=1 (sensitivity): context includes D-1 (its prices were auctioned on D-2 ~12:45 CET).
@@ -174,8 +203,10 @@ def build_inputs(d, variant, zones, grid, wide, settled_lag=2):
         known = sim[:, i0 - CTX:i0 + H][:, None, :].copy()
     elif variant == "physpre":
         known = np.stack([wide[c].values.T[:, i0 - CTX:i0 + H] for c in ("sim2", "resload7", "srmc")], axis=1).copy()
-    elif variant in ("phys", "physresid"):
+    elif variant in ("phys", "physresid", "physfilt"):
         known = np.stack([wide[c].values.T[:, i0 - CTX:i0 + H] for c in ("sim", "resload", "srmc")], axis=1).copy()
+        if variant == "physfilt":
+            known[:, 1, :] = filtered_resload(d, zones, grid[i0 - CTX:i0], grid[i0:i0 + H])
         if variant == "physresid":
             ctx = ctx - sim[:, ctx_idx]
             first = np.where(~np.all(np.isnan(ctx), axis=0))[0][0]

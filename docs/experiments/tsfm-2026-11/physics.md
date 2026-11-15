@@ -7,15 +7,21 @@ has never seen, so an off-support change reaches the forecast only through an in
 it can map from history.
 
 **Answer in one line.**
-- Physics covariates make Timestral clearly better day to day: arm C has MAE 22.8 against 28.0 on
-  prices only, and it is better in all 39 zones.
+- **Corrected 2026-11-15 15:40 after the publication-filtered backtest.**
+  - Unfiltered, arm C scores MAE 22.8 against 28.0 on prices only.
+  - That gain comes from load/RES forecasts that are not provably published before the gate.
+  - Built only from rows published by the D-1 10:00 UTC gate, C scores 29.5: worse than prices
+    only (28.0) and than sim-only B (25.1). See "Publication-filtered backtest" below.
+  - The honest day-to-day gain from physics is B (sim, post-sim, 25.1) and, at 06:30, C-pre
+    (25.5 vs 28.1 on the line).
 - They do make the forecast move with a scenario: the pass-through is not ~0.
 - But the movement is a per-zone statistical load→price sensitivity, not the coupled physics:
   - in GR it is 1.65–1.85× Euphemia's Δ;
   - in the neighbours it is 0.1–0.4×;
   - its hourly shape differs from Euphemia's;
   - it varies 1.3–2.8× from day to day.
-- For scenarios, Euphemia must carry the structural Δ: scenario = C's base forecast + Δsim.
+- For scenarios, Euphemia must carry the structural Δ: scenario = TSFM base forecast (B post-sim,
+  A at 06:30) + Δsim.
 
 ## Arms (Timestral-209M, zero-shot, no finetuning)
 
@@ -80,6 +86,45 @@ All 39 zones, 54,231 cells. ≤0 metrics use the same quantile→P(≤0) map as 
   days.
 - Its P(≤0) is worse than A's.
 - Most of C's gain needs the lead-1 sim and the D-1 ENTSO-E forecasts.
+
+## Publication-filtered backtest (`--variant physfilt`, 2026-11-15)
+
+Arm C, but with the residual-load row built exactly as the production emitter builds it
+(`bin/emit_tsfm_overlay.py::physics_covariates`, #416):
+- only raw load/RES rows with `update_time_utc` ≤ D-1 10:00 UTC, filtered before hourly
+  aggregation;
+- delivery hours without a verified value use the residual load at t−168 h;
+- a reported RES type that is missing makes the hour missing.
+
+Everything else is identical to C (prices, sim, SRMC, 2,048-h context). The window, scoring and
+cells are the same: 61 days, 39 zones, 54,231 cells.
+
+| arm | MAE | bias | corr | Brier ≤0 | AUC ≤0 | 80% cov | exIT MAE | on-time MAE |
+|---|---|---|---|---|---|---|---|---|
+| A | 28.0 | −3.2 | 0.897 | 0.0094 | 0.945 | 0.75 | 29.0 | 28.2 |
+| B | **25.1** | −2.7 | **0.917** | 0.0096 | **0.954** | 0.75 | **25.4** | **25.3** |
+| C, unfiltered (gate-time proxy) | 22.8 | −2.4 | 0.933 | 0.0087 | 0.972 | 0.75 | 23.2 | 22.9 |
+| **C, publication-filtered** | **29.5** | −4.5 | 0.888 | 0.0106 | 0.903 | 0.66 | 29.8 | 29.4 |
+
+- **Filtered C is worse than A in 22/39 zones and worse than B in 37/39.** It is worse than B in
+  every month:
+
+  | | Sep | Oct | Nov |
+  |---|---|---|---|
+  | filtered C | 26.5 | 28.7 | 35.0 |
+  | B | 23.2 | 24.1 | 29.7 |
+
+- Its 80% intervals cover only 66% of outcomes.
+- **Why.** On this store, 98% of the delivery day's RES rows and 31% of its load rows carry a stamp
+  after the gate. The ETL overwrites the day-ahead forecast with intraday revisions (median RES
+  stamp ~10 h into the delivery day), so the pre-gate vintage is lost and the horizon falls back to
+  last week's residual load. A plausible but untested reading: the in-context mapping is learned on
+  history covariates of the latest revision, and the stale horizon misleads it.
+- **C-pre (06:30) is publication-clean.** Of the rows it uses, 97.4% of the horizon load rows,
+  99.8% of the horizon RES rows and >99.98% of the history rows are stamped before 06:30 (mean
+  over the 61 days). Its 31-day result stands without re-running.
+- **Not tested:** filtered C with t−168 h also in the history, so that history and horizon match.
+  No new arms in this phase.
 
 ## Scenario pass-through (`passthrough.py`, `summarize_passthrough.py`)
 
@@ -149,22 +194,21 @@ On cold ironing, the arms' responses correlate with Euphemia's Δ at cell level 
 
 ## Recommendation (ship/no-ship is the owner's call)
 
-**(a) Daily overlay.**
-- **C is the best arm on every metric** and could be a post-sim refresh at about 10:40 UTC, after
-  the lead-1 freeze (the slot `emit_model_lines.sh` already uses).
-- The published 06:30 job (#415) cannot run it, because D's lead-1 sim does not exist yet. At
-  06:30 the choice is A versus C-pre. C-pre is better on the line but worse on P(≤0) (AUC 0.937
-  vs 0.956), so it is not a clear win: **keep A at 06:30.**
-- Opt-in emitter arm: `TSFM_ARM=timestral-209m-phys --mode postsim` (PR #416). On an extract it reproduces the backtest's arm-C forecast to ≤1.5e-5 €/MWh.
-- In production, the ENTSO-E forecasts are what the database holds at run time, so the label-(b)
-  caveat applies to the backtest score, not to the live product.
+**(a) Daily overlay** (revised after the publication-filtered backtest).
+- **06:30: keep A.** C-pre is better on the line (25.5 vs 28.1 on 31 days) but worse on P(≤0)
+  (AUC 0.937 vs 0.956), so it is not a clear win.
+- **Post-sim refresh (~10:40 UTC, after the lead-1 freeze): B,** i.e. the existing `postsim` mode
+  with the sim covariate (25.1), **not C.**
+  - The opt-in emitter arm `TSFM_ARM=timestral-209m-phys` (#416) publication-filters correctly,
+    but on this store it scores 29.5. It should stay off.
+  - It is only worth revisiting with a load/RES source that keeps pre-gate vintages.
 
 **(b) Scenarios.**
 - **Use no TSFM arm's own response as the scenario Δ.**
-- Use the physics-anchored delta: scenario forecast = C base forecast (or A at 06:30) +
+- Use the physics-anchored delta: scenario forecast = TSFM base forecast (B post-sim, A at 06:30) +
   (sim_scenario − sim_base), per zone-hour.
   - Euphemia carries the structure (coupling, hourly shape, merit order).
-  - C carries the level and daily dynamics.
+  - The TSFM carries the level and daily dynamics.
   - Pass-through is 1 by construction, and nothing new is trained.
 - Use C's own load response only as a cross-check. Where it disagrees with Euphemia's Δ by more
   than 2× (GR on the DC scenario), report both.
@@ -184,8 +228,7 @@ On cold ironing, the arms' responses correlate with Euphemia's Δ at cell level 
     - so the residual load for D falls back to t−168 h.
   - On the one day checked (11-13), the filtered C has MAE 43.4, against 32.6 unfiltered and 35.9
     for A.
-  - C's 22.8 is therefore an upper bound until a publication-filtered backtest is run, or a RES
-    source that keeps pre-gate vintages exists.
+  - The full publication-filtered backtest was then run (section above): filtered C scores 29.5.
 
 - **Backtest:** 61 days × 39 zones, 54,231 common cells. Scenario test: 8 days. DC: 4 zones ×
   24 h. Cold ironing: 30 zones with |Δsim| > 0.1 or a load shift.
@@ -197,7 +240,8 @@ On cold ironing, the arms' responses correlate with Euphemia's Δ at cell level 
 
 ## Files
 
-- `run_tsfm.py`: `--variant phys|physresid|physpre` (phase 2).
+- `run_tsfm.py`: `--variant phys|physresid|physpre|physfilt` (phase 2; `physfilt` reuses the
+  emitter's `physics_covariates`).
 - `scenario_profiles.py`: cv43 Δsim and load profiles.
 - `passthrough.py`, `summarize_passthrough.py`: scenario pass-through.
 - `dose_response.py`: proportionality check.
