@@ -715,7 +715,8 @@ clear_fbmc_capability_cache!() = (lock(_FBMC_CAP_LOCK) do; empty!(_FBMC_CAP_DAY_
 # €3,000 vs settled ~€300). For a border-direction that PUBLISHES Day-ahead
 # rows, yesterday's offered profile is a far better stand-in than observed
 # flows: this returns the per-hour AVG of Day-ahead capacity over the trailing
-# 7 delivery days (strictly < D — ex-ante), day-cached like the capability
+# 7 delivery days (strictly < D — ex-ante; negative rows floored at 0, see
+# build_transfer_capacity_from_dataframe), day-cached like the capability
 # map. Borders with no trailing DA rows (the true FBMC population) stay on
 # flow capability. Kill-switch EUPHEMIA_DISABLE_PREGATE_TRAILING_DA restores
 # the pure-capability fallback; the block as a whole still only runs when
@@ -730,7 +731,7 @@ function _pregate_trailing_da(date::Date)
         df = safe_sql2df("""
             SELECT out_map_code AS s, in_map_code AS k,
                    EXTRACT(HOUR FROM date_time_utc)::int AS h,
-                   AVG(capacity_mw)::float8 AS cap
+                   AVG(GREATEST(capacity_mw, 0))::float8 AS cap
             FROM entsoe.offered_transfer_capacities_implicit
             WHERE contract_type = 'Day-ahead'
               AND date_time_utc >= ((\$1::date - 7)::timestamp AT TIME ZONE 'UTC')
@@ -1138,6 +1139,7 @@ function build_transfer_capacity_from_dataframe(df::DataFrame)
     zones = Set{String}()
     time_periods = Set{String}()
     capacity_forward = Dict{Tuple{String,String,String},Float64}()
+    n_negative = 0
 
     # First pass: collect all forward capacities from the data
     for row in eachrow(df)
@@ -1145,6 +1147,17 @@ function build_transfer_capacity_from_dataframe(df::DataFrame)
         sink = row.sink_zone
         period = string(Int(row.time_period))
         capacity = row.capacity
+        # An offered capacity is a non-negative MW figure. ENTSO-E carries the
+        # occasional negative one (DK1->NL Day-ahead -700 MW on 2026-09-01 22:00
+        # .. 09-02 21:45, during a TSO outage message with new NTC 0). Taken
+        # as-is it becomes the flow's UPPER bound below the -backward LOWER
+        # bound: every such period is infeasible (HiGHS "optimize_not_called"),
+        # and where backward = 700 the flow is pinned at a fictitious 700 MW
+        # import. Every capacity source funnels through here, so floor at 0.
+        if capacity < 0.0
+            capacity = 0.0
+            n_negative += 1
+        end
 
         # Collect unique zones and time periods
         push!(zones, source, sink)
@@ -1153,6 +1166,9 @@ function build_transfer_capacity_from_dataframe(df::DataFrame)
         # Store forward capacity (source → sink)
         capacity_forward[(source, sink, period)] = capacity
     end
+
+    n_negative > 0 &&
+        @warn "transfer capacity: $(n_negative) negative offered border-hour capacities floored at 0 MW"
 
     # Convert to sorted vectors
     zones_vec = sort(collect(zones))
