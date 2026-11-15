@@ -75,6 +75,21 @@ end
         @test Euphemia.DUCKDB_READ_ONLY[] == false
         @test Euphemia.DUCKDB_RESULTS_WRITABLE[] == false
 
+        # (d) a run that reaches the end (the day fails in its book build on
+        # this empty extract — counted, not thrown) returns its summary. The
+        # run state is read after the outer try/finally; binding it inside
+        # made every completed run throw `UndefVarError: wall0` (1dcf995).
+        Euphemia.configure_data_store!(backend = :duckdb, duckdb_path = extract,
+                                       read_only = true, results_writable = false)
+        before = Set(procs())
+        r = Euphemia.run_pipelined_backfill([D], zones; clearing_mode = "t405d",
+            resume = false, save_to_db = false, solver_workers = 1, book_workers = 1)
+        @test r.processed == 1
+        @test r.saved + r.failed == 1
+        @test r.wall_seconds > 0
+        @test Set(procs()) == before
+        @test Euphemia.DUCKDB_READ_ONLY[] == true
+
         # (c) the results attachment follows results_writable on an existing
         # connection: (true,false) -> (true,true) -> (true,false).
         Euphemia.configure_data_store!(backend = :duckdb, duckdb_path = extract,
