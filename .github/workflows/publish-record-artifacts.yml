@@ -77,6 +77,12 @@ jobs:
           [ "$missing" -eq 0 ] || { echo "$missing keys failed after retries"; exit 1; }
           echo "books: uploaded $n_local parquets, 3 spot-verified by HeadObject" 
 
+      - name: Setup Julia
+        if: ${{ inputs.publish_zone_strategies }}
+        uses: julia-actions/setup-julia@v1
+        with:
+          version: "1.13.4"   # runner image no longer ships Julia; same pin as daily-forecast.yml
+
       - name: Export + publish zone-strategies JSON to the web bucket
         if: ${{ inputs.publish_zone_strategies }}
         env:
