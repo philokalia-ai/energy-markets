@@ -1,6 +1,8 @@
 # Pinned deps of bin/emit_tsfm_overlay.py + bin/predict_collapse.py (TSFM overlay step of
-# .github/workflows/daily-forecast.yml). Versions = the environment the 2026-11 tsfm backtest ran
-# in (aarch64, Python 3.12). Install with:
+# .github/workflows/daily-forecast.yml, and the 10:40 post-sim refresh bin/emit_tsfm_refresh.sh).
+# Versions = the environment the 2026-11 tsfm backtest ran in (aarch64, Python 3.12). Resolves on
+# x86_64 AND aarch64 Linux (checked: uv pip compile --python-version 3.12 --python-platform
+# {x86_64,aarch64}-unknown-linux-gnu -> torch 2.15.0+cpu from the CPU index, no CUDA wheels). Install with:
 #   uv pip install --index-strategy unsafe-best-match -r bin/requirements-overlay.txt
 --extra-index-url https://download.pytorch.org/whl/cpu
 torch==2.15.0+cpu

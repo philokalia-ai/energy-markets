@@ -41,3 +41,6 @@ docs/experiments/cv21-dk1-viking/out_*.tsv
 # Standalone input-model bundle (built by bin/build_input_model_bundle.sh;
 # published as a GitHub Release, never committed)
 dist/
+
+# TSFM overlay venv of bin/emit_tsfm_refresh.sh
+.venv-overlay/
