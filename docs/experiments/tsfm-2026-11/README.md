@@ -1,5 +1,8 @@
 # Time-series foundation models as a lead-1 price forecast (sprint 2026-11-14)
 
+> **Phase 2 (2026-11-15): Timestral with physics covariates and the scenario pass-through test →
+> [physics.md](physics.md).**
+
 **Question (owner):** "it would be interesting to try more advanced tools, like Timestral, for
 this job." Can a zero-shot time-series foundation model (TSFM), run on CPU, forecast the
 day-ahead price better than the live product, and is there a simple way to combine it with the
@@ -328,6 +331,8 @@ not touch the clearing, the books or `code_version`.
 - `evaluate.py`: MAE, bias, corr, per-zone corr, ≤0/≤5 hit and false-alarm rates, Brier, AUC
   and 80% interval coverage, vs `sim`, naive D-1/D-2/D-7 and the site's `gbm`/`stats` overlays.
 - `compare_collapse.py`: P(≤0) vs `collapse`'s logistic on common cells.
+- Phase 2 ([physics.md](physics.md)): `run_tsfm.py --variant phys|physresid|physpre`,
+  `scenario_profiles.py`, `passthrough.py`, `summarize_passthrough.py`, `dose_response.py`.
 
 Environment: a Python 3.12 venv outside the repo with `torch` (CPU), `timestral` (git) and
 `chronos-forecasting` 2.3.2. Weights come from the HF cache; none are committed.

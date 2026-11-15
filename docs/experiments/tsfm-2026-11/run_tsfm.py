@@ -13,6 +13,12 @@ Variants
   sim    + the live lead-1 weather-track counterfactual `sim` as a     -> label (a') POST-SIM:
          known-future covariate (history + D-1 + D)                       sim is published 08:16-10:06
                                                                           UTC D-1, so ~10:15 UTC issue
+  phys   + known-future [sim, residual load (ENTSO-E D-1 load-wind-solar), gas SRMC]
+                                                                   -> label (b) gate-time proxy
+                                                                      (ENTSO-E RES not provably pre-gate)
+  physresid  target = settled - sim with the `phys` covariates; final = sim + forecast  -> (b)
+  physpre  + known-future [lead-2 weather sim (latest issued before D-1 06:30 UTC), residual load
+         persisted from t-168 h, gas SRMC]; same definitions in history and horizon -> label (a) 06:30
   resid  forecast the residual (settled - sim) through the context    -> label (a') post-sim
          end, add it to sim for D
 `issued_utc` in the output is the nominal 06:30 stamp and is valid only for `uni`/`cov`;
@@ -95,7 +101,52 @@ def load_inputs():
     wide = {c: panel.pivot_table(index="t", columns="zone", values=c).reindex(index=grid, columns=zones)
             for c in ["price", "load_fc", "wind_fc", "solar_fc"]}
     wide["sim"] = live.pivot_table(index="t", columns="zone", values="sim").reindex(index=grid, columns=zones)
+    # phase-2 physics covariates
+    wide["resload"] = wide["load_fc"] - wide["wind_fc"].fillna(0) - wide["solar_fc"].fillna(0)
+    wide["srmc"] = pd.DataFrame(np.repeat(srmc_series(grid).values[:, None], len(zones), axis=1),
+                                index=grid, columns=zones)
+    # pre-gate (06:30) physics: lead-2 sim and weekly-persisted residual load
+    wide["sim2"] = lead2_sim(zones).reindex(index=grid, columns=zones)
+    wide["resload7"] = wide["resload"].shift(168)
     return zones, grid, wide
+
+
+def lead2_sim(zones):
+    """Live weather-track sim at lead 2 for each Athens day D: the latest row issued before
+    D-1 06:30 UTC (in practice the D-2 ~07:00 UTC daily run)."""
+    import json
+    live_dir = os.environ.get("TSFM_LIVE", "/home/pgeorgakopoulos/armada/em-team/live")
+    rows = []
+    for z in zones:
+        for day in json.load(open(f"{live_dir}/{z}.json"))["days"]:
+            if day["lead_days"] != 2 or day["input_mode"] != "weather":
+                continue
+            made = pd.Timestamp(day["prediction_made_utc"]).tz_localize(None)
+            gate = pd.Timestamp(day["date"]) - pd.Timedelta(days=1) + pd.Timedelta(hours=6, minutes=30)
+            if made >= gate:
+                continue
+            for i, h in enumerate(day["hours"]):
+                rows.append((z, made, pd.Timestamp(h).tz_localize(None), day["sim"][i]))
+    df = pd.DataFrame(rows, columns=["zone", "made", "t", "sim"]).sort_values("made")
+    df = df.drop_duplicates(["zone", "t"], keep="last")
+    return df.pivot(index="t", columns="zone", values="sim")
+
+
+def srmc_series(grid):
+    """Gas-CCGT SRMC per hour (EUR/MWh) = TTF/0.5 + 0.202/0.5*EUA + 2, using the last closes dated
+    strictly before D-1 of the hour's Athens market day (known at a D-1 morning issue)."""
+    import duckdb
+    db = os.environ.get("EUPHEMIA_DUCKDB_PATH", "/home/pgeorgakopoulos/armada/em-data/euphemia-live-20261114.duckdb")
+    c = duckdb.connect(db, read_only=True)
+    f = {t: c.execute(f"SELECT date, close FROM yfinance.{t} WHERE close IS NOT NULL ORDER BY date").df()
+         for t in ("ttf_f", "eua_co2")}
+    day = grid.tz_localize("UTC").tz_convert(ATH).tz_localize(None).normalize()
+    known_by = day - pd.Timedelta(days=1)              # closes dated < D-1
+    out = {}
+    for t, df in f.items():
+        idx = np.searchsorted(df.date.values, known_by.values, side="left") - 1
+        out[t] = np.where(idx >= 0, df.close.values[np.clip(idx, 0, None)], np.nan)
+    return pd.Series(out["ttf_f"] / 0.5 + 0.202 / 0.5 * out["eua_co2"] + 2.0, index=grid)
 
 
 def build_inputs(d, variant, zones, grid, wide, settled_lag=2):
@@ -121,6 +172,14 @@ def build_inputs(d, variant, zones, grid, wide, settled_lag=2):
         known = np.stack(rows, axis=1)
     elif variant == "sim":
         known = sim[:, i0 - CTX:i0 + H][:, None, :].copy()
+    elif variant == "physpre":
+        known = np.stack([wide[c].values.T[:, i0 - CTX:i0 + H] for c in ("sim2", "resload7", "srmc")], axis=1).copy()
+    elif variant in ("phys", "physresid"):
+        known = np.stack([wide[c].values.T[:, i0 - CTX:i0 + H] for c in ("sim", "resload", "srmc")], axis=1).copy()
+        if variant == "physresid":
+            ctx = ctx - sim[:, ctx_idx]
+            first = np.where(~np.all(np.isnan(ctx), axis=0))[0][0]
+            ctx, known = ctx[:, first:], known[:, :, first:]
     elif variant == "resid":
         ctx = ctx - sim[:, ctx_idx]
         # keep it compact: trim to the span where sim exists (live lead-1 from 2026-07-25)
@@ -157,7 +216,7 @@ def main():
         q, lv = m.forecast(ctx.astype(np.float32), H, None if known is None else known.astype(np.float32))
         dt = time.time() - t1; times.append(dt)
         q = q[:, H - nD:, :]                                 # keep delivery day D only
-        if a.variant == "resid":
+        if a.variant in ("resid", "physresid"):
             q = q + np.nan_to_num(simD)[:, :, None]          # sim + residual quantiles
         med = q[:, :, np.argmin(np.abs(lv - 0.5))]
         p0 = p_le(q, lv, 0.0)
