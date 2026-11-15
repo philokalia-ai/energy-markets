@@ -181,6 +181,26 @@ _csvline(vals) = join(_csv.(vals), ",") * "\n"
 # ---------------------------------------------------------------------------
 # Postgres upserts
 # ---------------------------------------------------------------------------
+"""
+Refuse the transfer unless every optimization_run referenced by the slice's prices
+belongs to the slice: same code_version and optimization_date inside
+[start, end]. The run upsert keys on (zone, date, method, model, code_version,
+optimizer), so a price row pointing at another version's run would otherwise
+overwrite that version's run metadata (e.g. a cv39 run) even though the
+price/flow deletes are correctly scoped.
+"""
+function check_runs_in_slice(runs::DataFrame, o)
+    isempty(runs) && return nothing
+    cv = o["code_version"]; d0 = o["start"]; d1 = o["end"]
+    bad = [r.id for r in eachrow(runs) if r.code_version != cv ||
+           !(d0 <= Date(r.optimization_date) <= d1)]
+    isempty(bad) || error("transfer refused: $(length(bad)) referenced optimization_runs " *
+        "fall outside the slice (code_version=$cv, $d0..$d1), e.g. ids $(first(bad, 5)). " *
+        "Nothing was written.")
+    println("referenced optimization_runs all inside the slice (cv$cv, $d0..$d1)")
+    return nothing
+end
+
 """Upsert optimization_runs one row at a time, returning duckdb_id → pg_id."""
 function transfer_runs!(pg, runs::DataFrame)
     idmap = Dict{Int64,Int}()
@@ -388,10 +408,6 @@ function main()
             exit(ok ? 0 : 1)
         end
 
-        # Make sure destination tables exist.
-        Euphemia.ensure_energy_prices_table()
-        o["flows"] && Euphemia.ensure_transmission_flows_table()
-
         bound_window!(con, o)   # never an unbounded Postgres delete
         t0 = time()
         prices = read_prices(con, o)
@@ -401,6 +417,11 @@ function main()
         run_ids = Int64[Int64(x) for x in skipmissing(prices.optimization_run_id)]
         runs = read_runs(con, unique(run_ids))
         println("referenced optimization_runs: $(nrow(runs))")
+        check_runs_in_slice(runs, o)   # before ANY destination mutation
+
+        # Make sure destination tables exist.
+        Euphemia.ensure_energy_prices_table()
+        o["flows"] && Euphemia.ensure_transmission_flows_table()
 
         idmap = transfer_runs!(pg, runs)
         println("upserted $(length(idmap)) optimization_runs into Postgres")

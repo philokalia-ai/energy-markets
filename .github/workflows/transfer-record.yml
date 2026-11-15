@@ -64,18 +64,23 @@ jobs:
           SHA: ${{ inputs.sha256 }}
         run: |
           set -euo pipefail
+          # The digest must be exactly 64 hex chars; it is compared directly, never
+          # fed to `sha256sum -c` (whose checklist syntax a crafted input could abuse).
+          [[ "$SHA" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::sha256 input must be 64 lowercase hex chars"; exit 1; }
           api="https://api.github.com/repos/${GITHUB_REPOSITORY}"
           hdr=(-H "Authorization: Bearer ${GH_TOKEN}" -H "X-GitHub-Api-Version: 2022-11-28")
           # Drafts have no tag ref yet: find the release by tag_name in the list.
           rel=$(curl -fsSL "${hdr[@]}" "$api/releases?per_page=100" \
-                | python3 -c "import json,sys,os; r=[x for x in json.load(sys.stdin) if x['tag_name']==os.environ['TAG']]; print(json.dumps(r[0]) if r else '')")
-          [ -n "$rel" ] || { echo "::error::no release with tag $TAG"; exit 1; }
+                | python3 -c "import json,sys,os; r=[x for x in json.load(sys.stdin) if x['tag_name']==os.environ['TAG'] and x.get('draft')]; print(json.dumps(r[0]) if r else '')")
+          [ -n "$rel" ] || { echo "::error::no DRAFT release with tag $TAG"; exit 1; }
           id=$(printf '%s' "$rel" | python3 -c "import json,sys,os; r=json.load(sys.stdin); a=[x for x in r['assets'] if x['name']==os.environ['ASSET']]; print(a[0]['id'] if a else '')")
           [ -n "$id" ] || { echo "::error::asset $ASSET not on release $TAG"; exit 1; }
           mkdir -p data/transfer
           curl -fsSL "${hdr[@]}" -H "Accept: application/octet-stream" \
                -o "data/transfer/$ASSET" "$api/releases/assets/$id"
-          echo "$SHA  data/transfer/$ASSET" | sha256sum -c -
+          got=$(sha256sum "data/transfer/$ASSET" | cut -d' ' -f1)
+          [ "$got" = "$SHA" ] || { echo "::error::sha256 mismatch: got $got"; exit 1; }
+          echo "sha256 OK"
           ls -la "data/transfer/$ASSET"
 
       - name: Setup Julia
