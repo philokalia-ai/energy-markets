@@ -22,7 +22,8 @@
     "test:boundaryview": "node test/boundary_view.test.mjs",
     "dev": "wrangler dev --config wrangler.toml",
     "deploy": "wrangler deploy --config wrangler.toml",
-    "test:overlay": "node test/tsfm_overlay.test.mjs"
+    "test:overlay": "node test/tsfm_overlay.test.mjs",
+    "test:q15": "node test/q15_scores.test.mjs"
   },
   "dependencies": {
     "hyparquet": "^1.26.2",

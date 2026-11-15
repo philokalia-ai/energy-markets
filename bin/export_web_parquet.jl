@@ -22,9 +22,17 @@
 #                             date_time_utc TIMESTAMP, sim DOUBLE,
 #                             actual DOUBLE (null until settled), and the
 #                             day-level scores mae/bias/corr DOUBLE (null until
-#                             scored; repeated on each hourly row).
+#                             scored; repeated on each hourly row); additive
+#                             day-level 15-min scores n_q15, mae_q15, bias_q15,
+#                             corr_q15, shape_floor_q15 (null for zone-days
+#                             without native PT15M actuals).
 #   v1/scoreboard.parquet     zone, lead_days, window ("all" | "YYYY-MM"),
-#                             input_mode, n_days, mae, bias, corr.
+#                             input_mode, n_days, mae, bias, corr, code_version,
+#                             then (additive, phase 3) n_days_q15, mae_q15,
+#                             bias_q15, corr_q15, shape_floor_q15: the native
+#                             15-minute score averaged over the zone-days that
+#                             HAVE one (native PT15M actuals; null otherwise —
+#                             never a copy of the hourly score).
 #   v1/map.parquet            market_date, zone, track, sim, act, err_pct, mae,
 #                             corr, lead, made — freshest-lead day aggregates,
 #                             BOTH tracks (track = 'predicted' | 'announced';
@@ -89,7 +97,8 @@ function export_scoreboard_parquet()
         WITH $(CHOSEN_SLICE_CTE)
         SELECT s.bidding_zone AS z, s.lead_days, s.input_mode AS mode,
                to_char(s.market_date, 'YYYY-MM') AS month,
-               s.market_date, s.code_version AS cv, s.mae, s.bias, s.corr
+               s.market_date, s.code_version AS cv, s.mae, s.bias, s.corr,
+               $(q15_select("s"))
         FROM simulations.forecast_scores s
         JOIN chosen c ON c.market_date = s.market_date AND c.lead_days = s.lead_days
                      AND c.input_mode = s.input_mode AND c.code_version = s.code_version
@@ -108,17 +117,28 @@ function export_scoreboard_parquet()
         # SAME model version. A single value when the cell is single-cv, else
         # missing (mixed) so the SPA shows the chip as "n/a (cv mismatch)".
         cvs = unique(Int.(sub.cv))
+        # 15-min: mean over the zone-days that HAVE a native-15 score only.
+        q = sub[.!ismissing.(sub.mae_q15), :]
+        qm(col) = (v = collect(skipmissing(q[!, col])); isempty(v) ? missing : mean(v))
         (n_days=length(unique(sub.market_date)),
          mae=isempty(mae_v) ? missing : mean(mae_v),
          bias=isempty(bias_v) ? missing : mean(bias_v),
          corr=isempty(corr_v) ? missing : mean(corr_v),
-         cv=length(cvs) == 1 ? cvs[1] : missing)
+         cv=length(cvs) == 1 ? cvs[1] : missing,
+         n_days_q15=length(unique(q.market_date)),
+         mae_q15=qm(:mae_q15), bias_q15=qm(:bias_q15), corr_q15=qm(:corr_q15),
+         shape_floor_q15=qm(:shape_floor_q15))
     end
+    q15vals(a) = (a.n_days_q15, nm(a.mae_q15), nm(a.bias_q15), nm(a.corr_q15),
+                  nm(a.shape_floor_q15))
 
     df = DataFrame(zone=String[], lead_days=Int[], window=String[],
                    input_mode=String[], n_days=Int[],
                    mae=Union{Missing,Float64}[], bias=Union{Missing,Float64}[],
-                   corr=Union{Missing,Float64}[], code_version=Union{Missing,Int}[])
+                   corr=Union{Missing,Float64}[], code_version=Union{Missing,Int}[],
+                   n_days_q15=Int[], mae_q15=Union{Missing,Float64}[],
+                   bias_q15=Union{Missing,Float64}[], corr_q15=Union{Missing,Float64}[],
+                   shape_floor_q15=Union{Missing,Float64}[])
     if !isempty(scores)
         for zlm in unique(collect(zip(String.(scores.z), Int.(scores.lead_days),
                                       String.(scores.mode))))
@@ -127,12 +147,12 @@ function export_scoreboard_parquet()
                          (scores.mode .== mode), :]
             a = agg(sub)
             push!(df, (zone, lead, "all", mode, a.n_days,
-                       nm(a.mae), nm(a.bias), nm(a.corr), a.cv))
+                       nm(a.mae), nm(a.bias), nm(a.corr), a.cv, q15vals(a)...))
             for month in sort(unique(String.(sub.month)))
                 m = sub[sub.month .== month, :]
                 am = agg(m)
                 push!(df, (zone, lead, month, mode, am.n_days,
-                           nm(am.mae), nm(am.bias), nm(am.corr), am.cv))
+                           nm(am.mae), nm(am.bias), nm(am.corr), am.cv, q15vals(am)...))
             end
         end
     end
@@ -172,7 +192,7 @@ function export_zone_parquets()
     scores = Euphemia.sql2df_with_retry("""
         WITH $(CHOSEN_SLICE_CTE)
         SELECT s.bidding_zone AS z, s.market_date, s.lead_days, s.input_mode AS mode,
-               s.mae, s.bias, s.corr
+               s.mae, s.bias, s.corr, $(q15_select("s"))
         FROM simulations.forecast_scores s
         JOIN chosen c ON c.market_date = s.market_date AND c.lead_days = s.lead_days
                      AND c.input_mode = s.input_mode AND c.code_version = s.code_version
@@ -224,7 +244,10 @@ function export_zone_parquets()
                        p_any_le0=Union{Missing,Float64}[],
                        tsfm_input_mode=Union{Missing,String}[],
                        tsfm_issue_utc=Union{Missing,DateTime}[],
-                       tsfm_arm=Union{Missing,String}[])
+                       tsfm_arm=Union{Missing,String}[],
+                       n_q15=Union{Missing,Int}[], mae_q15=Union{Missing,Float64}[],
+                       bias_q15=Union{Missing,Float64}[], corr_q15=Union{Missing,Float64}[],
+                       shape_floor_q15=Union{Missing,Float64}[])
         keys_ = unique(collect(zip(Date.(zp.market_date), Int.(zp.lead_days),
                                    String.(zp.mode))))
         # newest first, then by increasing lead ('entsoe' before 'weather'
@@ -237,6 +260,9 @@ function export_zone_parquets()
             mae = sc === nothing ? missing : nm(sc.mae)
             bias = sc === nothing ? missing : nm(sc.bias)
             corr = sc === nothing ? missing : nm(sc.corr)
+            q15 = sc === nothing ? (missing, missing, missing, missing, missing) :
+                  ((ismissing(sc.n_q15) ? missing : Int(sc.n_q15)), nm(sc.mae_q15),
+                   nm(sc.bias_q15), nm(sc.corr_q15), nm(sc.shape_floor_q15))
             made = DateTime(sub.made[1])
             slice_cv = Int(sub.cv[1])
             slice_retro = !ismissing(sub.is_retro[1]) && Bool(sub.is_retro[1])
@@ -256,7 +282,8 @@ function export_zone_parquets()
                            od === nothing ? missing : od.p_any_le0,
                            od === nothing ? missing : od.input_mode,
                            od === nothing ? missing : od.issue_utc,
-                           od === nothing ? missing : od.arm))
+                           od === nothing ? missing : od.arm,
+                           q15...))
             end
         end
         counts["zones/$zone.parquet"] =

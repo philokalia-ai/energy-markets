@@ -46,11 +46,19 @@ function dateStr(v) {
 // exactly the old shape (backwards compatible: new optional fields only).
 const TSFM_HOURLY = ["tsfm", "tsfm_q10", "tsfm_q90", "p_le0"];
 const TSFM_DAY = ["p_any_le0", "tsfm_input_mode", "tsfm_issue_utc", "tsfm_arm"];
+// Native 15-minute day scores (bin/score_forecasts.jl → additive zone-parquet /
+// scoreboard columns): passed through only when the parquet carries them, so an
+// older parquet yields exactly the old shape. Null for zone-days without native
+// PT15M actuals — never a copy of the hourly score.
+const Q15_DAY = ["n_q15", "mae_q15", "bias_q15", "corr_q15", "shape_floor_q15"];
+const Q15_BOARD = ["n_days_q15", "mae_q15", "bias_q15", "corr_q15", "shape_floor_q15"];
+const has = (rows, k) => rows.length > 0 && Object.prototype.hasOwnProperty.call(rows[0], k);
 
 export function shapeZone(rows, zone) {
   const days = [];
   const byKey = new Map();
   const hasTsfm = rows.length > 0 && Object.prototype.hasOwnProperty.call(rows[0], "tsfm");
+  const hasQ15 = has(rows, "mae_q15");
   for (const r of rows) {
     const date = dateStr(r.market_date);
     const lead = num(r.lead_days);
@@ -77,6 +85,7 @@ export function shapeZone(rows, zone) {
         for (const k of TSFM_HOURLY) day[k] = [];
         for (const k of TSFM_DAY) day[k] = null;
       }
+      if (hasQ15) for (const k of Q15_DAY) day[k] = num(r[k]);
       byKey.set(key, day);
       days.push(day);
     }
@@ -113,13 +122,14 @@ export function shapeZone(rows, zone) {
  * generated_utc is the data-plane freshness stamp (manifest.updated_at).
  */
 export function shapeScoreboard(rows, manifest) {
+  const hasQ15 = has(rows, "mae_q15");
   return {
     generated_utc: manifest.updated_at,
     code_version: manifest.code_version,
     market_day_tz: MARKET_DAY_TZ,
     zones: manifest.zones,
     scores: rows.map(function (r) {
-      return {
+      const out = {
         zone: r.zone,
         lead_days: num(r.lead_days),
         window: r.window,
@@ -130,6 +140,8 @@ export function shapeScoreboard(rows, manifest) {
         corr: num(r.corr),
         code_version: num(r.code_version),   // single-cv guard for the track-gap chip
       };
+      if (hasQ15) for (const k of Q15_BOARD) out[k] = num(r[k]);
+      return out;
     }),
   };
 }
