@@ -19,6 +19,19 @@ Information set (enforced in `build_context` / `sim_known`, tested in test/test_
     sim rows with prediction_made_utc <= issue_utc, where issue_utc = the latest made time of D's
     lead-1 sim (08:16-10:06 UTC D-1 in Sep-Nov 2026); `after_gate` flags issue_utc > D-1 10:00 UTC.
   * input_mode in the output says which of the two a row is.
+  * TSFM_ARM=timestral-209m-phys (opt-in, postsim only): the phase-2 physics arm C — known-future
+    covariates [sim, residual load = ENTSO-E D-1 load - wind - solar forecasts, gas-CCGT SRMC =
+    TTF/0.5 + 0.404*EUA + 2 from closes dated before D-1], 2048-h context. Backtest 2026-09-14..11-13
+    (39 zones, 54,231 cells): MAE 22.8 vs 25.1 (sim only) / 28.0 (prices only), AUC<=0 0.972; see
+    docs/experiments/tsfm-2026-11/physics.md.
+    Publication control (`physics_covariates`): raw load/RES rows enter only if their publication
+    stamp (update_time_utc) is set and <= the D-1 gate (10:00 UTC), filtered BEFORE hourly
+    aggregation; a delivery-day hour left without a verified value falls back to the residual load
+    of t-168 h (as arm C-pre), a context hour stays missing; a RES type that exists for the zone
+    but is missing after the filter makes the hour missing (never "0 MW"). issue_utc = max(sim issue,
+    latest publication stamp among the load/RES rows actually used), and `after_gate` / the write
+    refusal are evaluated on that stamp. (The extract backtest used latest revisions: a gate-time
+    proxy, see physics.md.)
 
 Modes of operation
   default (dry run): read the offline DuckDB extract (read-only) + live JSON for sim, write CSVs
@@ -62,6 +75,7 @@ MODELS = {"chronos2": "amazon/chronos-2",
 MODEL_REVISIONS = {"timestral-209m": "9874d252ab0aae16f7f7c999f98f98d6ad7d8365",
                    "timestral-28m": "49b26409ac87b5935539a5d8ffe7f397b720db47"}
 DEFAULT_ARM = "timestral-209m"
+PHYS_CTX_HOURS = 2048       # covariate cost grows ~quadratically with context; the arm-C backtest ran 2048
 # One row per (zone, market day, hour | day, quantity, vintage). A vintage = (input_mode, arm)
 # with its issue_utc. Day-level quantities sit at date_time_utc = start of the Athens market day
 # (NOT NULL: a NULL inside a Postgres UNIQUE key never conflicts, so a nullable key would
@@ -85,6 +99,24 @@ SIM_SQL = """
 SELECT bidding_zone zone, date_time_utc t, price_eur_mwh sim, prediction_made_utc made
 FROM simulations.forecast_prices
 WHERE lead_days = 1 AND input_mode LIKE 'weather%' AND date_time_utc >= ? AND date_time_utc < ?"""
+
+# Raw (sub-hourly) rows with their publication stamp: the publication filter must act before
+# hourly aggregation, so these are aggregated in Python (`physics_covariates`).
+LOAD_SQL = """
+SELECT area_map_code zone, date_time_utc t, total_load_mw load_fc, update_time_utc upd
+FROM entsoe.day_ahead_total_load_forecast
+WHERE total_load_mw IS NOT NULL AND date_time_utc >= ? AND date_time_utc < ?"""
+
+RES_SQL = """
+SELECT area_map_code zone, date_time_utc t, production_type pt, day_ahead_generation_forecast_mw mw,
+       update_time_utc upd
+FROM entsoe.generation_forecasts_for_wind_and_solar
+WHERE day_ahead_generation_forecast_mw IS NOT NULL AND date_time_utc >= ? AND date_time_utc < ?
+  AND (production_type LIKE 'Wind%' OR production_type = 'Solar')"""
+
+FUEL_SQL = """
+SELECT 'ttf' fuel, date, close FROM yfinance.ttf_f WHERE close IS NOT NULL
+UNION ALL SELECT 'eua' fuel, date, close FROM yfinance.eua_co2 WHERE close IS NOT NULL"""
 
 PRICE_SQL = """
 WITH d AS (
@@ -139,6 +171,53 @@ def sim_covariate(sim_rows, zones, grid, hours):
     full = grid.append(hours)
     w = sim_rows.pivot_table(index="t", columns="zone", values="sim").reindex(index=full, columns=list(zones))
     return w.to_numpy().T[:, None, :].astype(np.float32)
+
+
+def srmc_hourly(fuel: pd.DataFrame, hours: pd.DatetimeIndex) -> np.ndarray:
+    """Gas-CCGT SRMC (EUR/MWh) per UTC hour = TTF/0.5 + 0.202/0.5*EUA + 2, from the last closes dated
+    strictly before D-1 of the hour's Athens market day (the close of D-1 itself is not yet known
+    at a D-1 morning issue)."""
+    known_by = (hours.tz_localize("UTC").tz_convert(ATH).tz_localize(None).normalize()
+                - pd.Timedelta(days=1)).values
+    out = {}
+    for f in ("ttf", "eua"):
+        s = fuel[fuel.fuel == f].sort_values("date")
+        dates = pd.to_datetime(s.date).values
+        idx = np.searchsorted(dates, known_by, side="left") - 1
+        out[f] = np.where(idx >= 0, s.close.to_numpy(float)[np.clip(idx, 0, None)], np.nan)
+    return out["ttf"] / 0.5 + 0.202 / 0.5 * out["eua"] + 2.0
+
+
+def physics_covariates(load, res, fuel, zones, grid, hours, cutoff):
+    """Known-future [residual load, SRMC] on context grid + delivery hours, publication-filtered.
+
+    load: raw rows (zone, t, load_fc, upd); res: raw rows (zone, t, pt, mw, upd), pt = 'Wind ...' or
+    'Solar'. Only rows with upd set and <= `cutoff` are used, before hourly aggregation. residual
+    load = load - wind - solar; a RES type the zone never reports (in the window, before filtering)
+    counts as 0, one it reports but whose hour did not survive the filter makes the hour NaN.
+    Delivery hours still NaN take the residual load of t-168 h. Returns ((Z, 2, T+H) array,
+    latest publication stamp among the rows used, NaT if none)."""
+    full, zones = grid.append(hours), list(zones)
+    ok = lambda df: df[df.upd.notna() & (df.upd <= cutoff) & (df.t >= full[0])
+                       & (df.t < full[-1] + pd.Timedelta(hours=1))]
+    hourly = lambda df, val, keys: (df.assign(t=df.t.dt.floor("h")).groupby(keys + ["t"])[val].mean())
+    L, R = ok(load), ok(res)
+    load_w = hourly(L, "load_fc", ["zone"]).unstack("zone").reindex(index=full, columns=zones)
+    resload = load_w.copy()
+    window = res[(res.t >= full[0]) & (res.t < full[-1] + pd.Timedelta(hours=1))]
+    if len(window):
+        rh = hourly(R, "mw", ["zone", "pt"]).unstack(["zone", "pt"]) if len(R) else pd.DataFrame(index=full)
+        for (z, pt) in window[["zone", "pt"]].drop_duplicates().itertuples(index=False):
+            if z in zones:   # reported type: subtract it, NaN where its hour was not verified
+                col = rh[(z, pt)] if (z, pt) in rh.columns else pd.Series(np.nan, index=full)
+                resload[z] = resload[z] - col.reindex(full)
+    H = len(hours)
+    rl = resload.to_numpy().T                                   # (Z, T+H)
+    persist = resload.shift(168).to_numpy().T
+    rl[:, -H:] = np.where(np.isnan(rl[:, -H:]), persist[:, -H:], rl[:, -H:])
+    srmc = np.repeat(srmc_hourly(fuel, full)[None, :], len(zones), axis=0)
+    used = pd.concat([L.upd, R.upd]) if len(L) or len(R) else pd.Series([], dtype="datetime64[ns]")
+    return np.stack([rl, srmc], axis=1).astype(np.float32), (used.max() if len(used) else pd.NaT)
 
 
 # ----------------------------------------------------------------------------- probabilities
@@ -200,16 +279,39 @@ class TSFM:
 ARMS = {name: (lambda threads, _n=name: TSFM(_n, threads)) for name in MODELS}
 
 
+def _physics_arm(threads):
+    m = TSFM("timestral-209m", threads)
+    m.name, m.physics = "timestral-209m-phys", True
+    return m
+
+
+# Phase-2 arm C (opt-in): Timestral-209M + [sim, residual load, SRMC]; needs --mode postsim.
+ARMS["timestral-209m-phys"] = _physics_arm
+
+
 # ----------------------------------------------------------------------------- core
-def overlay(model, prices, zones, delivery, mode, sim=None, ctx_hours=CTX_HOURS):
-    """Hourly + day-level TSFM overlay for Athens day `delivery` (logistic columns added later)."""
+def overlay(model, prices, zones, delivery, mode, sim=None, ctx_hours=CTX_HOURS, phys=None):
+    """Hourly + day-level TSFM overlay for Athens day `delivery` (logistic columns added later).
+
+    A physics arm (model.physics) needs mode postsim and `phys` = (load, res, fuel) frames."""
     d = pd.Timestamp(delivery).normalize()
+    physics = getattr(model, "physics", False)
+    if physics:
+        if mode != "postsim":
+            raise ValueError(f"arm {model.name} needs the lead-1 sim: use --mode postsim")
+        ctx_hours = min(ctx_hours, PHYS_CTX_HOURS)
     ctx, cutoff, grid = build_context(prices, zones, d, ctx_hours)
     hours = market_day_hours(d)
     known, sim_made, issue = None, pd.NaT, d - pd.Timedelta(days=1) + pd.Timedelta(hours=6, minutes=30)
     if mode == "postsim":
         rows, issue = sim_known(sim, d)
         known, sim_made = sim_covariate(rows, zones, grid, hours), issue
+        if physics:
+            gate = d - pd.Timedelta(days=1) + pd.Timedelta(hours=GATE_UTC_HOUR)
+            pk, pub = physics_covariates(*phys, zones, grid, hours, cutoff=gate)
+            known = np.concatenate([known, pk], axis=1)
+            if pd.notna(pub):
+                issue = max(issue, pub)                         # information set = all inputs used
     elif mode != "pregate0630":
         raise ValueError(mode)
     q, lv = model.forecast(ctx, len(hours), known)
@@ -272,6 +374,17 @@ def open_store(backend, extract=None):
     con.execute("ATTACH ? AS pg (TYPE postgres, READ_ONLY)", [os.environ["ENERGY_CONN_STR"]])
     con.execute("USE pg")
     return con
+
+
+def physics_from_store(con, delivery, ctx_hours=PHYS_CTX_HOURS):
+    """(load, res, fuel) frames for the physics arm: context window + delivery day."""
+    start = day_start_utc(delivery) - pd.Timedelta(hours=ctx_hours + 24)
+    end = day_start_utc(pd.Timestamp(delivery) + pd.Timedelta(days=1))
+    load, res = (con.execute(q, [start, end]).df() for q in (LOAD_SQL, RES_SQL))
+    for df in (load, res):
+        for c in ("t", "upd"):
+            df[c] = pd.to_datetime(df[c], utc=True).dt.tz_localize(None)
+    return load, res, con.execute(FUEL_SQL).df()
 
 
 def sim_from_db(con, delivery, days=60):
@@ -372,9 +485,11 @@ def main():
     prices = prices_duckdb(con, delivery)
     sim = None
     if a.mode == "postsim":
-        sim = sim_from_live_json(a.live_json, ZONES) if a.live_json else sim_from_db(con, delivery)
+        sim = (sim_from_live_json(a.live_json, ZONES) if a.live_json
+               else sim_from_db(con, delivery, days=PHYS_CTX_HOURS // 24 + 2 if arm.endswith("-phys") else 60))
     model = ARMS[arm](a.threads)
-    hourly, day = overlay(model, prices, ZONES, delivery, a.mode, sim)
+    phys = physics_from_store(con, delivery) if getattr(model, "physics", False) else None
+    hourly, day = overlay(model, prices, ZONES, delivery, a.mode, sim, phys=phys)
     t_tsfm = time.time() - t0
     lh = ld = None
     if not a.no_logistic:
