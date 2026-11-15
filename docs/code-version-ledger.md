@@ -342,7 +342,19 @@ pipelined-backfill workers. `blocks` (thermal regular blocks + PAB loop) and
   IT-Sicily, NO2, NO5): MAE −3.3 (CH −7.3, SK −4.1, SI −3.6, AT −3.2).
 - **Spillover:** HU and RO −3.2, CZ −2.4, FR −2.1.
 - **Slack budgets:** DE_LU, ES, PT and FR PS rarely run in the money.
-- **Cost:** master LP 0.6–1.0 s per pass.
+- **Cost:** master LP 0.6–1.0 s per pass. Wall time per day, single process,
+  39 zones, two passes:
+
+  | Day | cv43 (`off`) | cv44 |
+  |---|---|---|
+  | 09-20 | 285 s | 314 s |
+  | 11-04 | 246 s | 285 s |
+
+  That is +30–40 s per day (+10–16 %), so a 60-day serial backfill takes about
+  +0.5 h.
+- **Default-on evidence:** cv44 with the env unset reproduces the flagged `ps`
+  arm bit-for-bit, and `EUPHEMIA_COMPLEX_ORDERS=off` reproduces the cv43 base
+  bit-for-bit. Checked on 09-20 and 11-04: 936/936 cells each, max |Δ| 0.
 
 Every path that builds merit-order books changes where a PS family forms. That
 includes the SEE single-zone and 5-zone products (GR and BG have PS), so their
