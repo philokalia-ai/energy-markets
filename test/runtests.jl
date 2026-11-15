@@ -201,6 +201,10 @@ println()
         include(joinpath(@__DIR__, "test_registry_feed_anchor.jl"))
     end
 
+    @testset "Negative offered capacity floored" begin
+        include(joinpath(@__DIR__, "test_negative_atc.jl"))
+    end
+
     @testset "Pipelined backfill store restoration" begin
         include(joinpath(@__DIR__, "test_pipeline_store_restore.jl"))
     end
