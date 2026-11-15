@@ -23,9 +23,15 @@ Information set (enforced in `build_context` / `sim_known`, tested in test/test_
     covariates [sim, residual load = ENTSO-E D-1 load - wind - solar forecasts, gas-CCGT SRMC =
     TTF/0.5 + 0.404*EUA + 2 from closes dated before D-1], 2048-h context. Backtest 2026-09-14..11-13
     (39 zones, 54,231 cells): MAE 22.8 vs 25.1 (sim only) / 28.0 (prices only), AUC<=0 0.972; see
-    docs/experiments/tsfm-2026-11/physics.md. The ENTSO-E forecasts are read as the store holds them
-    at run time (production: what was published by then; a dry run on an extract sees the latest
-    revisions, i.e. the backtest's gate-time-proxy information set).
+    docs/experiments/tsfm-2026-11/physics.md.
+    Publication control (`physics_covariates`): raw load/RES rows enter only if their publication
+    stamp (update_time_utc) is set and <= the D-1 gate (10:00 UTC), filtered BEFORE hourly
+    aggregation; a delivery-day hour left without a verified value falls back to the residual load
+    of t-168 h (as arm C-pre), a context hour stays missing; a RES type that exists for the zone
+    but is missing after the filter makes the hour missing (never "0 MW"). issue_utc = max(sim issue,
+    latest publication stamp among the load/RES rows actually used), and `after_gate` / the write
+    refusal are evaluated on that stamp. (The extract backtest used latest revisions: a gate-time
+    proxy, see physics.md.)
 
 Modes of operation
   default (dry run): read the offline DuckDB extract (read-only) + live JSON for sim, write CSVs
@@ -94,21 +100,19 @@ SELECT bidding_zone zone, date_time_utc t, price_eur_mwh sim, prediction_made_ut
 FROM simulations.forecast_prices
 WHERE lead_days = 1 AND input_mode LIKE 'weather%' AND date_time_utc >= ? AND date_time_utc < ?"""
 
+# Raw (sub-hourly) rows with their publication stamp: the publication filter must act before
+# hourly aggregation, so these are aggregated in Python (`physics_covariates`).
 LOAD_SQL = """
-SELECT area_map_code zone, date_trunc('hour', date_time_utc) t, avg(total_load_mw) load_fc
+SELECT area_map_code zone, date_time_utc t, total_load_mw load_fc, update_time_utc upd
 FROM entsoe.day_ahead_total_load_forecast
-WHERE date_time_utc >= ? AND date_time_utc < ? GROUP BY 1, 2"""
+WHERE total_load_mw IS NOT NULL AND date_time_utc >= ? AND date_time_utc < ?"""
 
 RES_SQL = """
-WITH h AS (
-  SELECT area_map_code zone, date_trunc('hour', date_time_utc) t, production_type pt,
-         avg(day_ahead_generation_forecast_mw) mw
-  FROM entsoe.generation_forecasts_for_wind_and_solar
-  WHERE day_ahead_generation_forecast_mw IS NOT NULL AND date_time_utc >= ? AND date_time_utc < ?
-  GROUP BY 1, 2, 3)
-SELECT zone, t, sum(CASE WHEN pt LIKE 'Wind%' THEN mw END) wind_fc,
-       sum(CASE WHEN pt = 'Solar' THEN mw END) solar_fc
-FROM h GROUP BY 1, 2"""
+SELECT area_map_code zone, date_time_utc t, production_type pt, day_ahead_generation_forecast_mw mw,
+       update_time_utc upd
+FROM entsoe.generation_forecasts_for_wind_and_solar
+WHERE day_ahead_generation_forecast_mw IS NOT NULL AND date_time_utc >= ? AND date_time_utc < ?
+  AND (production_type LIKE 'Wind%' OR production_type = 'Solar')"""
 
 FUEL_SQL = """
 SELECT 'ttf' fuel, date, close FROM yfinance.ttf_f WHERE close IS NOT NULL
@@ -184,16 +188,36 @@ def srmc_hourly(fuel: pd.DataFrame, hours: pd.DatetimeIndex) -> np.ndarray:
     return out["ttf"] / 0.5 + 0.202 / 0.5 * out["eua"] + 2.0
 
 
-def physics_covariates(load, res, fuel, zones, grid, hours):
-    """(Z, 2, T+H) known-future [residual load, SRMC] on context grid + delivery hours.
+def physics_covariates(load, res, fuel, zones, grid, hours, cutoff):
+    """Known-future [residual load, SRMC] on context grid + delivery hours, publication-filtered.
 
-    residual load = load forecast - wind - solar (a zone without a RES type counts it as 0; NaN
-    where the load forecast is absent)."""
-    full = grid.append(hours)
-    w = lambda df, c: df.pivot_table(index="t", columns="zone", values=c).reindex(index=full, columns=list(zones))
-    resload = w(load, "load_fc") - w(res, "wind_fc").fillna(0) - w(res, "solar_fc").fillna(0)
+    load: raw rows (zone, t, load_fc, upd); res: raw rows (zone, t, pt, mw, upd), pt = 'Wind ...' or
+    'Solar'. Only rows with upd set and <= `cutoff` are used, before hourly aggregation. residual
+    load = load - wind - solar; a RES type the zone never reports (in the window, before filtering)
+    counts as 0, one it reports but whose hour did not survive the filter makes the hour NaN.
+    Delivery hours still NaN take the residual load of t-168 h. Returns ((Z, 2, T+H) array,
+    latest publication stamp among the rows used, NaT if none)."""
+    full, zones = grid.append(hours), list(zones)
+    ok = lambda df: df[df.upd.notna() & (df.upd <= cutoff) & (df.t >= full[0])
+                       & (df.t < full[-1] + pd.Timedelta(hours=1))]
+    hourly = lambda df, val, keys: (df.assign(t=df.t.dt.floor("h")).groupby(keys + ["t"])[val].mean())
+    L, R = ok(load), ok(res)
+    load_w = hourly(L, "load_fc", ["zone"]).unstack("zone").reindex(index=full, columns=zones)
+    resload = load_w.copy()
+    window = res[(res.t >= full[0]) & (res.t < full[-1] + pd.Timedelta(hours=1))]
+    if len(window):
+        rh = hourly(R, "mw", ["zone", "pt"]).unstack(["zone", "pt"]) if len(R) else pd.DataFrame(index=full)
+        for (z, pt) in window[["zone", "pt"]].drop_duplicates().itertuples(index=False):
+            if z in zones:   # reported type: subtract it, NaN where its hour was not verified
+                col = rh[(z, pt)] if (z, pt) in rh.columns else pd.Series(np.nan, index=full)
+                resload[z] = resload[z] - col.reindex(full)
+    H = len(hours)
+    rl = resload.to_numpy().T                                   # (Z, T+H)
+    persist = resload.shift(168).to_numpy().T
+    rl[:, -H:] = np.where(np.isnan(rl[:, -H:]), persist[:, -H:], rl[:, -H:])
     srmc = np.repeat(srmc_hourly(fuel, full)[None, :], len(zones), axis=0)
-    return np.stack([resload.to_numpy().T, srmc], axis=1).astype(np.float32)
+    used = pd.concat([L.upd, R.upd]) if len(L) or len(R) else pd.Series([], dtype="datetime64[ns]")
+    return np.stack([rl, srmc], axis=1).astype(np.float32), (used.max() if len(used) else pd.NaT)
 
 
 # ----------------------------------------------------------------------------- probabilities
@@ -283,7 +307,11 @@ def overlay(model, prices, zones, delivery, mode, sim=None, ctx_hours=CTX_HOURS,
         rows, issue = sim_known(sim, d)
         known, sim_made = sim_covariate(rows, zones, grid, hours), issue
         if physics:
-            known = np.concatenate([known, physics_covariates(*phys, zones, grid, hours)], axis=1)
+            gate = d - pd.Timedelta(days=1) + pd.Timedelta(hours=GATE_UTC_HOUR)
+            pk, pub = physics_covariates(*phys, zones, grid, hours, cutoff=gate)
+            known = np.concatenate([known, pk], axis=1)
+            if pd.notna(pub):
+                issue = max(issue, pub)                         # information set = all inputs used
     elif mode != "pregate0630":
         raise ValueError(mode)
     q, lv = model.forecast(ctx, len(hours), known)
@@ -354,7 +382,8 @@ def physics_from_store(con, delivery, ctx_hours=PHYS_CTX_HOURS):
     end = day_start_utc(pd.Timestamp(delivery) + pd.Timedelta(days=1))
     load, res = (con.execute(q, [start, end]).df() for q in (LOAD_SQL, RES_SQL))
     for df in (load, res):
-        df["t"] = pd.to_datetime(df["t"], utc=True).dt.tz_localize(None)
+        for c in ("t", "upd"):
+            df[c] = pd.to_datetime(df[c], utc=True).dt.tz_localize(None)
     return load, res, con.execute(FUEL_SQL).df()
 
 

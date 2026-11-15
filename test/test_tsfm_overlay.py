@@ -98,10 +98,24 @@ class InformationSetTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             ov.sim_known(self.sim_frame()[lambda s: s.t < pd.Timestamp("2026-11-14 22:00")], "2026-11-15")
 
-    def phys_frames(self):
-        t = pd.date_range("2026-08-01", "2026-11-16", freq="h")
-        load = pd.concat([pd.DataFrame({"zone": z, "t": t, "load_fc": 1000.0}) for z in ZONES])
-        res = pd.DataFrame({"zone": "GR", "t": t, "wind_fc": 100.0, "solar_fc": 50.0})   # DE_LU: no RES rows
+    D_START = pd.Timestamp("2026-11-14 22:00")      # Athens day 2026-11-15 in UTC
+    EARLY = pd.Timestamp("2026-11-14 08:00")        # published before the sim issue (09:13)
+
+    def phys_frames(self, d_load=1100.0, d_load_upd=None, d_wind_upd=None, d_wind=100.0):
+        """Raw quarter-hourly rows with publication stamps. History load 1000, delivery-day load 1100;
+        GR wind 100 + solar 50 (DE_LU reports no RES). Delivery-day rows may carry another stamp."""
+        t = pd.date_range("2026-08-01", "2026-11-16", freq="15min")
+        D = (t >= self.D_START) & (t < self.D_START + pd.Timedelta(hours=24))
+        load = pd.concat([pd.DataFrame({"zone": z, "t": t, "load_fc": np.where(D, d_load, 1000.0),
+                                        "upd": self.EARLY}) for z in ZONES], ignore_index=True)
+        if d_load_upd is not None:
+            load.loc[load.t.isin(t[D]), "upd"] = d_load_upd
+        res = pd.concat([pd.DataFrame({"zone": "GR", "t": t, "pt": "Wind Onshore",
+                                       "mw": np.where(D, d_wind, 100.0), "upd": self.EARLY}),
+                         pd.DataFrame({"zone": "GR", "t": t, "pt": "Solar", "mw": 50.0, "upd": self.EARLY})],
+                        ignore_index=True)
+        if d_wind_upd is not None:
+            res.loc[res.t.isin(t[D]) & (res.pt == "Wind Onshore"), "upd"] = d_wind_upd
         days = pd.date_range("2026-08-01", "2026-11-14", freq="D")
         fuel = pd.concat([pd.DataFrame({"fuel": "ttf", "date": days.date, "close": 30.0}),
                           pd.DataFrame({"fuel": "eua", "date": days.date, "close": 70.0})])
@@ -109,20 +123,58 @@ class InformationSetTest(unittest.TestCase):
         fuel.loc[(fuel.fuel == "ttf") & (fuel.date == pd.Timestamp("2026-11-14").date()), "close"] = 1e6
         return load, res, fuel
 
+    def run_phys(self, **kw):
+        m = StubModel(); m.physics = True
+        hourly, _ = ov.overlay(m, prices(), ZONES, "2026-11-15", "postsim", sim=self.sim_frame(),
+                               phys=self.phys_frames(**kw))
+        return m, hourly
+
     def test_physics_arm_covariates_and_postsim_only(self):
         m = StubModel(); m.physics = True
         with self.assertRaises(ValueError):
             ov.overlay(m, prices(), ZONES, "2026-11-15", "pregate0630", phys=self.phys_frames())
-        hourly, _ = ov.overlay(m, prices(), ZONES, "2026-11-15", "postsim", sim=self.sim_frame(),
-                               phys=self.phys_frames())
+        m, hourly = self.run_phys()
         self.assertEqual(m.ctx.shape, (2, ov.PHYS_CTX_HOURS))         # context capped at 2048 h
         self.assertEqual(m.known.shape, (2, 3, ov.PHYS_CTX_HOURS + 24))
         H = 24
-        np.testing.assert_allclose(m.known[0, 1, -H:], 850.0)        # GR: 1000 - 100 - 50
-        np.testing.assert_allclose(m.known[1, 1, -H:], 1000.0)       # DE_LU: no RES -> load only
+        np.testing.assert_allclose(m.known[0, 1, -H:], 950.0)        # GR: 1100 - 100 - 50
+        np.testing.assert_allclose(m.known[1, 1, -H:], 1100.0)       # DE_LU: no RES -> load only
+        np.testing.assert_allclose(m.known[0, 1, :-H], 850.0)        # history 1000 - 150
         np.testing.assert_allclose(m.known[:, 2, -H:], 30 / 0.5 + 0.202 / 0.5 * 70 + 2)  # D-2 closes
         self.assertTrue(np.all(m.known[:, 2, :] < 1e5))              # D-1 close never enters
         self.assertTrue((hourly.input_mode == "postsim").all())
+        self.assertTrue((hourly.issue_utc == pd.Timestamp("2026-11-14 09:13")).all())  # all inputs earlier
+        self.assertFalse(hourly.after_gate.any())
+
+    def test_physics_load_published_after_gate_never_enters(self):
+        # The store holds only a 10:30 revision (5,850 MW) of D's load: it must not enter, D falls
+        # back to t-168 h, and the stamp stays at the sim issue (the reviewer's counterexample).
+        m, hourly = self.run_phys(d_load=5850.0, d_load_upd=pd.Timestamp("2026-11-14 10:30"))
+        np.testing.assert_allclose(m.known[0, 1, -24:], 850.0)       # persistence, GR
+        np.testing.assert_allclose(m.known[1, 1, -24:], 1000.0)      # persistence, DE_LU
+        self.assertFalse(np.any(np.isin(m.known[:, 1, :], [5850.0, 5700.0])))
+        self.assertTrue((hourly.issue_utc == pd.Timestamp("2026-11-14 09:13")).all())
+        self.assertFalse(hourly.after_gate.any())
+        # an unstamped row is unverifiable and is treated the same way
+        m2, _ = self.run_phys(d_load=5850.0, d_load_upd=pd.NaT)
+        np.testing.assert_allclose(m2.known[:, 1, -24:], m.known[:, 1, -24:])
+
+    def test_physics_res_published_after_gate_never_enters(self):
+        # GR wind for D only as a 10:30 revision: neither its value nor "0 MW wind" may be used.
+        m, hourly = self.run_phys(d_wind=1e5, d_wind_upd=pd.Timestamp("2026-11-14 10:30"))
+        np.testing.assert_allclose(m.known[0, 1, -24:], 850.0)       # persistence, not 1100 - 0 - 50
+        np.testing.assert_allclose(m.known[1, 1, -24:], 1100.0)      # DE_LU unaffected
+        self.assertTrue(np.all(np.abs(m.known[0, 1, :]) < 5e4))
+        self.assertTrue((hourly.issue_utc == pd.Timestamp("2026-11-14 09:13")).all())
+
+    def test_physics_pre_gate_revision_enters_and_moves_the_stamp(self):
+        # A 09:40 load revision (after the 09:13 sim, before the 10:00 gate) is used, and the vintage
+        # is stamped 09:40 so its information set covers every input actually read.
+        m, hourly = self.run_phys(d_load=1200.0, d_load_upd=pd.Timestamp("2026-11-14 09:40"))
+        np.testing.assert_allclose(m.known[0, 1, -24:], 1050.0)
+        self.assertTrue((hourly.issue_utc == pd.Timestamp("2026-11-14 09:40")).all())
+        self.assertTrue((hourly.sim_made_utc == pd.Timestamp("2026-11-14 09:13")).all())
+        self.assertFalse(hourly.after_gate.any())
 
     def test_probabilities_and_blend(self):
         q = np.linspace(-10, 10, 21)[None]          # symmetric around 0 -> P(<=0) = median level
