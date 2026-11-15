@@ -17,11 +17,27 @@
 # (zone, timestamp), then average sub-hourly (PT15M/PT30M) prices into each
 # hour — a no-op for hourly zones.
 #
+# Native 15-minute scores (additive, phase 3): in the same pass, each zone-day
+# also gets n_q15 / mae_q15 / bias_q15 / corr_q15 / shape_floor_q15 (+ ≤0
+# quarter counts): the HOURLY forecast replicated x4 onto its quarters (or used
+# as is when the slice is natively quarter-hourly — `q15_forecast_res` records
+# which) against native PT15M SDAC actuals (`native_q15_actuals`: latest
+# revision, EXAA sequence dropped for AT/DE_LU), quarters of the Athens market
+# day only. Zone-days without native PT15M actuals (PT60M/PT30M zones) keep the
+# q15 columns NULL. Written by a separate UPDATE after the unchanged hourly
+# upsert, into nullable columns added by `ensure_q15_columns` — the hourly
+# columns are byte-for-byte what they were.
+#
 # forecast_scores is STRICTLY for forecast_prices rows — never for the
 # energy_prices backfill tables (those are scored by the eval scripts).
 #
 # Env vars:
 #   RESCORE  'true' to recompute slices that already have scores
+#   RESCORE_WINDOW_DAYS  recent days always rescored (default 7)
+#   MIN_SCORE_Q15  minimum paired native quarters for a 15-min score (default 48)
+#   Q15_ONLY  'true' = history backfill of the 15-min columns: every realized
+#             slice, q15 UPDATE only — the hourly columns are never written
+#             (so ENTSO-E revisions since a day was scored cannot move them)
 
 using Euphemia, Dates, Statistics, Printf, DataFrames, LibPQ
 
@@ -29,13 +45,72 @@ include(joinpath(@__DIR__, "forecast_common.jl"))
 # Reuse the shared resolution-aware actuals (guarded __main__, safe to include).
 include(joinpath(@__DIR__, "..", "test", "scripts", "eu_eval_metrics.jl"))
 
-const RESCORE = lowercase(get(ENV, "RESCORE", "false")) == "true"
+const Q15_ONLY = lowercase(get(ENV, "Q15_ONLY", "false")) == "true"
+const RESCORE = Q15_ONLY || lowercase(get(ENV, "RESCORE", "false")) == "true"
 const RESCORE_WINDOW_DAYS = parse(Int, get(ENV, "RESCORE_WINDOW_DAYS", "7"))
 # Minimum paired hours for a (zone, day, lead) score to be persisted. Scores
 # used to be written for ANY n >= 1 (IT-* zones scored on a single 21:00 hour
 # when only four PT15M actual rows had landed) and then frozen by the
 # NOT-EXISTS discovery, entering every board average with full weight.
 const MIN_SCORE_HOURS = parse(Int, get(ENV, "MIN_SCORE_HOURS", "12"))
+const MIN_SCORE_Q15 = parse(Int, get(ENV, "MIN_SCORE_Q15", string(MIN_SCORE_Q15_DEFAULT)))
+
+"Nullable 15-minute score columns of simulations.forecast_scores (additive, idempotent)."
+const Q15_COLUMNS = [("n_q15", "INT"), ("mae_q15", "DOUBLE PRECISION"),
+                     ("bias_q15", "DOUBLE PRECISION"), ("corr_q15", "DOUBLE PRECISION"),
+                     ("shape_floor_q15", "DOUBLE PRECISION"), ("q15_forecast_res", "TEXT"),
+                     ("n_le0_q15_actual", "INT"), ("n_le0_q15_pred", "INT"),
+                     ("le0_q15_hits", "INT")]
+
+function ensure_q15_columns()
+    Euphemia.withdb() do cnx
+        for (c, ty) in Q15_COLUMNS
+            LibPQ.execute(cnx, "ALTER TABLE simulations.forecast_scores ADD COLUMN IF NOT EXISTS $c $ty")
+        end
+    end
+end
+
+"Write one zone-day's 15-min score into the row the hourly upsert just wrote (NULLs when not native)."
+function update_q15!(market_date::Date, zone::String, lead_days::Int, cv::Int,
+                     input_mode::String, is_retro::Bool, q, res::String)
+    nn(x) = x === nothing ? missing : x
+    Euphemia.withdb() do cnx
+        LibPQ.execute(cnx, """
+            UPDATE simulations.forecast_scores
+            SET n_q15 = \$1, mae_q15 = \$2, bias_q15 = \$3, corr_q15 = \$4,
+                shape_floor_q15 = \$5, q15_forecast_res = \$6, n_le0_q15_actual = \$7,
+                n_le0_q15_pred = \$8, le0_q15_hits = \$9
+            WHERE market_date = \$10 AND bidding_zone = \$11 AND lead_days = \$12
+              AND code_version = \$13 AND input_mode = \$14 AND is_retro = \$15
+        """, Any[q.n_q15, nn(q.mae_q15), nn(q.bias_q15), nn(q.corr_q15),
+                 nn(q.shape_floor_q15), res, nn(q.n_le0_q15_actual), nn(q.n_le0_q15_pred),
+                 nn(q.le0_q15_hits), market_date, zone, lead_days, cv, input_mode, is_retro])
+    end
+end
+
+"Compute + write one zone-day's 15-min score (into the existing hourly row) and log it."
+function score_q15_zone!(market_date, zone, lead_days, cv, input_mode, is_retro, sub, a15, qwin)
+    fq, fres = q15_forecast(DateTime.(sub.t), Float64.(sub.sim))
+    za = get(a15, zone, (t=DateTime[], act=Float64[], res=String[]))
+    q = score_q15(fq, za.t, za.act, za.res; window=qwin, min_n=MIN_SCORE_Q15)
+    update_q15!(market_date, zone, lead_days, cv, input_mode, is_retro, q, fres)
+    @printf("  %-12s q15 n=%3d MAE=%s shape=%s (%s forecast, %s)\n", zone, q.n_q15,
+            q.mae_q15 === nothing ? "     -" : @sprintf("%6.1f", q.mae_q15),
+            q.shape_floor_q15 === nothing ? "   -" : @sprintf("%4.1f", q.shape_floor_q15),
+            fres == "PT60M" ? "hourly x4" : "native 15-min", q.q15_status)
+    return q
+end
+
+"Native actuals of one market day grouped by zone: zone => (t, act, res)."
+function q15_actuals_by_zone(market_date::Date)
+    a = native_q15_actuals(market_date - Day(1), market_date)
+    out = Dict{String,NamedTuple}()
+    for z in unique(String.(a.z))
+        sub = a[String.(a.z) .== z, :]
+        out[z] = (t=DateTime.(sub.t), act=Float64.(sub.act), res=String.(sub.res))
+    end
+    return out
+end
 
 """
 Slices of forecast_prices whose market day has realized actual DA prices.
@@ -177,10 +252,11 @@ end
 
 function main()
     println("=" ^ 70)
-    println("SCORE FORECASTS  rescore=$RESCORE")
+    println("SCORE FORECASTS  rescore=$RESCORE" * (Q15_ONLY ? "  Q15_ONLY (hourly columns untouched)" : ""))
     println("=" ^ 70)
 
     Euphemia.ensure_forecast_tables()
+    ensure_q15_columns()
 
     slices = pending_slices()
     if isempty(slices)
@@ -189,6 +265,7 @@ function main()
         return
     end
     println("$(nrow(slices)) slice(s) to score")
+    q15_cache = Dict{Date,Dict{String,NamedTuple}}()
 
     for r in eachrow(slices)
         market_date = Date(r.market_date)
@@ -210,12 +287,20 @@ function main()
         sim = slice_sim(market_date, lead_days, cv, input_mode)
         # market_date is the Europe/Athens market day: its window starts at
         # 21:00/22:00 UTC on market_date-1, so actuals must cover BOTH UTC days.
-        act = resolution_aware_actuals(market_date - Day(1), market_date)
+        # (Q15_ONLY skips the hourly actuals: they are not used.)
+        act = Q15_ONLY ? DataFrame(z=String[], t=DateTime[], act=Float64[]) :
+              resolution_aware_actuals(market_date - Day(1), market_date)
         actmap = Dict{Tuple{String,DateTime},Float64}(
             (String(a.z), DateTime(a.t)) => Float64(a.act) for a in eachrow(act))
+        a15 = get!(() -> q15_actuals_by_zone(market_date), q15_cache, market_date)
+        qwin = athens_day_quarters(market_date)
 
         for zone in sort(unique(String.(sim.z)))
             sub = sim[sim.z .== zone, :]
+            if Q15_ONLY   # history backfill: q15 columns only, on rows the hourly scorer wrote
+                score_q15_zone!(market_date, zone, lead_days, cv, input_mode, is_retro, sub, a15, qwin)
+                continue
+            end
             sv = Float64[]; av = Float64[]
             for row in eachrow(sub)
                 k = (zone, trunc(DateTime(row.t), Hour))
@@ -239,6 +324,7 @@ function main()
             @printf("  %-12s n=%2d MAE=%6.1f bias=%+7.1f corr=%s  collapse[act=%d pred=%d hit=%d FA=%d]\n",
                     zone, s.n, s.mae, s.bias, corr_str,
                     cm.n_collapse_actual, cm.n_collapse_pred, cm.hits, cm.false_alarms)
+            score_q15_zone!(market_date, zone, lead_days, cv, input_mode, is_retro, sub, a15, qwin)
         end
     end
 

@@ -449,3 +449,92 @@ end
     @test !haskey(h, ("DE_LU", "tsfm_median", DateTime(H)))              # no day row -> no chosen vintage
     @test all(isempty, tsfm_overlay_maps(NamedTuple[]))
 end
+
+@testset "native 15-min scores (score_q15 / q15_forecast / athens_day_quarters)" begin
+    # Market-day quarters: 96, and 92 / 100 on the DST days (UTC interval starts, Athens day).
+    q = athens_day_quarters(Date(2026, 11, 13))
+    @test length(q) == 96 && q[1] == DateTime(2026, 11, 12, 22) && q[end] == DateTime(2026, 11, 13, 21, 45)
+    @test length(athens_day_quarters(Date(2026, 3, 29))) == 92
+    q100 = athens_day_quarters(Date(2026, 10, 25))
+    @test length(q100) == 100 && q100[1] == DateTime(2026, 10, 24, 21) && length(unique(q100)) == 100
+
+    # Replication: an hourly slice -> 4 identical quarters, flagged PT60M.
+    fq, res = q15_forecast([DateTime(2026, 11, 13, 5), DateTime(2026, 11, 13, 6)], [10.0, 20.0])
+    @test res == "PT60M" && length(fq) == 8
+    @test fq[DateTime(2026, 11, 13, 5, 45)] == 10.0 && fq[DateTime(2026, 11, 13, 6, 0)] == 20.0
+    @test !haskey(fq, DateTime(2026, 11, 13, 7))
+    # A natively quarter-hourly slice is used as is, flagged PT15M.
+    fqn, resn = q15_forecast([DateTime(2026, 11, 13, 5), DateTime(2026, 11, 13, 5, 15)], [1.0, 2.0])
+    @test resn == "PT15M" && length(fqn) == 2 && fqn[DateTime(2026, 11, 13, 5, 15)] == 2.0
+
+    # A full DST-long day: 25 hourly stamps -> 100 paired quarters.
+    hrs = expected_market_day_hours(Date(2026, 10, 25))
+    fd, _ = q15_forecast(hrs, fill(100.0, length(hrs)))
+    acts = q100; av = [100.0 + (i % 4) for i in eachindex(acts)]   # quarters 101,102,103,100 ...
+    s = score_q15(fd, acts, av, fill("PT15M", 100); window=q100)
+    @test s.n_q15 == 100
+    @test s.bias_q15 ≈ -mean(i % 4 for i in 1:100)
+    # Shape floor: every hour holds {101,102,103,100} -> mean 101.5, mean |dev| = 1.0
+    @test s.shape_floor_q15 ≈ 1.0
+    @test s.corr_q15 === nothing                     # replicated constant forecast: zero variance
+
+    # Mask: PT60M (and PT30M) actuals never enter -> n_q15 = 0, all metrics null (not the hourly score).
+    s60 = score_q15(fd, hrs, fill(90.0, length(hrs)), fill("PT60M", length(hrs)))
+    @test s60.n_q15 == 0 && s60.mae_q15 === nothing && s60.shape_floor_q15 === nothing
+    s30 = score_q15(fd, acts, av, fill("PT30M", 100))
+    @test s30.n_q15 == 0 && s30.mae_q15 === nothing
+
+    # Min-count rule: 47 native quarters -> null; 48 -> scored. Window restricts the pairing.
+    @test score_q15(fd, acts[1:47], av[1:47], fill("PT15M", 47)).mae_q15 === nothing
+    s48 = score_q15(fd, acts[1:48], av[1:48], fill("PT15M", 48))
+    @test s48.n_q15 == 48 && s48.mae_q15 !== nothing
+    @test score_q15(fd, acts, av, fill("PT15M", 100); window=acts[1:40]).n_q15 == 40
+    @test score_q15(fd, acts, av, fill("PT15M", 100); min_n=200).mae_q15 === nothing
+
+    # Complete hours only: an hour with 3 native quarters is skipped by EVERY metric.
+    t0 = DateTime(2026, 11, 13, 10)
+    ft, _ = q15_forecast([t0, t0 + Hour(1)], [25.0, 50.0])
+    at = vcat([t0 + Minute(15k) for k in 0:3], [t0 + Hour(1) + Minute(15k) for k in 0:2])
+    sv = score_q15(ft, at, [10.0, 20.0, 30.0, 40.0, 0.0, 100.0, 50.0], fill("PT15M", 7); min_n=3)
+    @test sv.n_q15 == 4 && sv.q15_status == "ok"
+    @test sv.shape_floor_q15 ≈ 10.0                  # |10-25|,|20-25|,|30-25|,|40-25| -> 10
+    @test sv.mae_q15 ≈ 10.0                          # the 3-quarter hour does not enter
+    @test sv.corr_q15 === nothing                    # one replicated hour: zero forecast variance
+    at2 = vcat(at, [t0 + Hour(1) + Minute(45)])
+    sv2 = score_q15(ft, at2, [10.0, 20.0, 30.0, 40.0, 0.0, 100.0, 50.0, 70.0], fill("PT15M", 8); min_n=3)
+    @test sv2.n_q15 == 8 && sv2.corr_q15 !== nothing
+    @test sv2.shape_floor_q15 ≈ mean([15, 5, 5, 15, 55, 45, 5, 15])   # hour 2: mean 55
+
+    # Coverage (#423): duplicate (zone, ts) keys -> the zone-day is ambiguous -> null.
+    sd = score_q15(fd, vcat(acts, acts[5:5]), vcat(av, [999.0]), fill("PT15M", 101))
+    @test sd.mae_q15 === nothing && sd.q15_status == "duplicate_keys"
+    # A non-finite actual removes its whole hour (n 100 -> 96).
+    avn = copy(av); avn[10] = NaN
+    @test score_q15(fd, acts, avn, fill("PT15M", 100)).n_q15 == 96
+    @test score_q15(fd, acts, Any[i == 10 ? missing : x for (i, x) in enumerate(av)],
+                    fill("PT15M", 100)).n_q15 == 96
+
+    # A missing quarter must not improve the score. 13 hours: 12 with a 10 €/MWh error in every
+    # quarter, one with errors [0, 0, 0, 40]. Full day: MAE = (12*40 + 40) / 52 = 10. Dropping the
+    # 40-error quarter would give 480/51 = 9.41 if quarters were scored independently; under the
+    # complete-hour rule the hour leaves whole: 480/48 = 10, never better than the full day.
+    tq = [t0 + Minute(15k) for k in 0:51]
+    fm, _ = q15_forecast([t0 + Hour(h) for h in 0:12], fill(100.0, 13))
+    am = [k <= 4 ? (k == 4 ? 140.0 : 100.0) : 110.0 for k in 1:52]
+    full = score_q15(fm, tq, am, fill("PT15M", 52))
+    gap = score_q15(fm, tq[[1:3; 5:52]], am[[1:3; 5:52]], fill("PT15M", 51))
+    @test full.mae_q15 ≈ 10.0 && full.n_q15 == 52
+    @test gap.n_q15 == 48 && gap.mae_q15 >= full.mae_q15
+    @test gap.shape_floor_q15 == 0.0                 # the partial hour gives no shape term
+    # ... and a gap that pushes the day under the minimum makes it null (n reported).
+    g2 = score_q15(fm, tq[[1:3; 5:52]], am[[1:3; 5:52]], fill("PT15M", 51); min_n=49)
+    @test g2.mae_q15 === nothing && g2.n_q15 == 48 && g2.q15_status == "below_min"
+
+    # ≤0 counts: round(p, 8) <= 0 (a -1e-10 float residue counts as 0), NOT the €5 helper.
+    sz = score_q15(ft, at2, [-1e-10, 3.0, 4.0, 1.0, 0.0, 100.0, 50.0, 70.0], fill("PT15M", 8); min_n=3)
+    @test sz.n_le0_q15_actual == 2 && sz.n_le0_q15_pred == 0 && sz.le0_q15_hits == 0
+    fneg, _ = q15_forecast([t0], [-5.0])
+    sn = score_q15(fneg, at[1:4], [-1.0, 2.0, 0.0, 3.0], fill("PT15M", 4); min_n=3)
+    @test sn.n_le0_q15_pred == 4 && sn.le0_q15_hits == 2
+    @test_throws ArgumentError q15_forecast([t0], Float64[])
+end
