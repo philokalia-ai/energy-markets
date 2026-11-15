@@ -8,6 +8,7 @@ const FOOTPRINT = String[
     "PT", "RO", "RS", "SE1", "SE2", "SE3", "SE4", "SI", "SK",
     "IT-NORTH", "IT-CNORTH", "IT-CSOUTH", "IT-SOUTH", "IT-Calabria",
     "IT-Sicily", "IT-Sardinia", "CH"]
+include(joinpath(@__DIR__, "contexts.jl"))   # pregate_0630
 label = ARGS[1]
 outdir = joinpath("/home/pgeorgakopoulos/armada/em-team/results/blocks", label)
 mkdir!(p) = isdir(p) || mkpath(p); mkdir!(outdir)
@@ -24,7 +25,7 @@ for ds in ARGS[2:end]
         mpcc_heuristic_effort=haskey(ENV, "CLEAR_TIME_LIMIT") ? 0.3 : nothing)
     # CLEAR_CONTEXT=0630: the lead-1 06:30 UTC D-1 issuance context (pre-gate product)
     res = get(ENV, "CLEAR_CONTEXT", "") == "0630" ?
-        Euphemia.with_context(clear, Euphemia.issuance_context(d, 1; issue_time=Time(6, 30))) : clear()
+        Euphemia.with_context(clear, pregate_0630(d)) : clear()
     el = time() - t0
     ok = res.status == :optimal || (res.status == :time_limit && !isempty(res.market_prices))
     open(joinpath(outdir, "timing.tsv"), "a") do io

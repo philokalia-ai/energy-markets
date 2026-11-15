@@ -644,31 +644,83 @@ function _storage_daily_budget(zone::String, day::Date, production_type::String)
     return e
 end
 
-const _PS_OPP_FILE_CACHE = Dict{String,Dict{Tuple{String,String},Vector{Float64}}}()
+"""
+Forecast snapshot for the PS opportunity reference (experiment, planner-p2 idea 2).
+Loaded and validated ONCE per clear by `ps_opp_snapshot!()` — called at the start of
+`run_multi_zone_market_clearing` / `generate_energy_prices`, before pass 1 — and
+never re-read during the clear, so pass 2 sees exactly the pass-1 input even if the
+file changes on disk. `nothing` ⇒ the reference is off (fail closed).
+"""
+const PS_OPP_SNAPSHOT = Ref{Any}(nothing)
+
+"""
+    ps_opp_snapshot!() -> Union{Nothing,NamedTuple}
+
+Read `EUPHEMIA_PS_OPP_REF_FILE` (CSV header `zone,day,issued_utc,p1..p24`; p sorted
+descending; `issued_utc` = the forecast's issuance, ISO `yyyy-mm-dd HH:MM:SS`) into an
+immutable snapshot of every vintage, validating each row (24 finite prices, sorted
+descending, parseable issuance). Returns/stores `nothing` when the switch is off.
+Invalid file ⇒ error (an opt-in experiment must not silently degrade).
+"""
+function ps_opp_snapshot!()
+    f = get(ENV, "EUPHEMIA_PS_OPP_REF_FILE", "")
+    zones = filter(!isempty, strip.(split(get(ENV, "EUPHEMIA_PS_OPP_ZONES", ""), ",")))
+    if isempty(f) || isempty(zones)
+        PS_OPP_SNAPSHOT[] = nothing
+        return nothing
+    end
+    rows = Dict{Tuple{String,String},Vector{Tuple{DateTime,Vector{Float64}}}}()
+    lines = readlines(f)
+    startswith(lines[1], "zone,day,issued_utc,p1") ||
+        error("PS opportunity file $f: unexpected header $(lines[1])")
+    for (i, line) in enumerate(lines[2:end])
+        isempty(strip(line)) && continue
+        c = split(line, ",")
+        length(c) == 27 || error("PS opportunity file $f row $(i+1): $(length(c)) columns")
+        issued = DateTime(replace(String(c[3]), " " => "T")[1:min(end, 19)])
+        p = parse.(Float64, c[4:27])
+        (all(isfinite, p) && issorted(p; rev=true)) ||
+            error("PS opportunity file $f row $(i+1): prices not finite/sorted descending")
+        push!(get!(rows, (String(c[1]), String(c[2])), Tuple{DateTime,Vector{Float64}}[]),
+              (issued, p))
+    end
+    snap = (file=f, zones=Set(zones), rows=rows, loaded_utc=Dates.now(Dates.UTC))
+    PS_OPP_SNAPSHOT[] = snap
+    println("  🎯 PS opportunity snapshot: $(length(rows)) zone-days from $f (zones $(join(zones, ",")))")
+    return snap
+end
+
+"""
+Issuance cutoff for the PS opportunity forecast: inside a `ForecastContext` its
+`as_of_utc`; on the legacy (record) path the explicit D-1 10:00 UTC gate. Only rows
+issued at or before it are admissible; the latest admissible vintage wins.
+"""
+_ps_opp_cutoff(day::Date) = (c = current_context(); c === nothing ?
+    DateTime(day - Day(1)) + Hour(10) : c.as_of_utc)
+
+"Pure vintage selection: sorted-descending prices of the latest admissible vintage, or `nothing`."
+function _ps_opp_prices(snap, zone::String, day::Date)
+    (snap !== nothing && zone in snap.zones) || return nothing
+    vint = get(snap.rows, (zone, string(day)), nothing)
+    vint === nothing && return nothing
+    cutoff = _ps_opp_cutoff(day)
+    ok = [(t, p) for (t, p) in vint if t <= cutoff]
+    isempty(ok) && return nothing
+    return last(sort(ok; by=first))[2]
+end
+
 """
     _ps_opp_reference(zone, day, anchored, generators, offered_pmax) -> Union{Nothing,Float64}
 
-Experiment (planner-p2 idea 2), opt-in: `EUPHEMIA_PS_OPP_REF_FILE` (CSV: zone, day,
-issued_utc, p1..p24 = the frozen ex-ante forecast prices of market day `day`, sorted
-descending) and `EUPHEMIA_PS_OPP_ZONES`. Returns r = p_H with H = round(E14 / offered
-PS MW) clamped to 1..24, or `nothing` (not anchored / zone not listed / no data).
+r = p_H of the latest forecast vintage for (zone, market day `day`) issued at or
+before `_ps_opp_cutoff(day)`, H = round(E14 / offered PS MW) clamped to 1..24. Uses
+only the pre-pass snapshot; `nothing` if off, not anchored, zone not listed, or no
+admissible vintage (a later-vintage forecast never feeds an earlier issuance or a
+longer lead).
 """
 function _ps_opp_reference(zone::String, day::Date, anchored::Bool, generators, offered_pmax)
-    f = get(ENV, "EUPHEMIA_PS_OPP_REF_FILE", "")
-    (anchored && !isempty(f)) || return nothing
-    zone in strip.(split(get(ENV, "EUPHEMIA_PS_OPP_ZONES", ""), ",")) || return nothing
-    tab = lock(_STORAGE_BUDGET_LOCK) do
-        get!(_PS_OPP_FILE_CACHE, f) do
-            t = Dict{Tuple{String,String},Vector{Float64}}()
-            for (i, line) in enumerate(eachline(f))
-                i == 1 && continue
-                c = split(line, ",")
-                t[(String(c[1]), String(c[2]))] = parse.(Float64, c[4:27])
-            end
-            t
-        end
-    end
-    p = get(tab, (zone, string(day)), nothing)
+    anchored || return nothing
+    p = _ps_opp_prices(PS_OPP_SNAPSHOT[], zone, day)
     p === nothing && return nothing
     psmw = sum((offered_pmax(g) for g in generators
                 if g.fuel_type == Symbol("Hydro Pumped Storage")); init=0.0)
