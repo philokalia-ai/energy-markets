@@ -63,6 +63,62 @@ end
         @test avg >= base_avg - 1e-6
     end
 
+    @testset "(d2) extra_orders LinkedHourlyOrder family enters the complex-order master" begin
+        # a 574 MW / 2,296 MWh/day scenario battery (discharge side) as an energy-limited family
+        fam = ctx -> [Euphemia.LinkedHourlyOrder(:supply, 1.0, 574.0, Symbol(ctx.zone),
+                          DateTime(ts, dateformat"yyyymmdd-HHMM"), ctx.resolution_minutes,
+                          "XBATT:GR", 2296.0) for ts in ctx.timeslots]
+        hooked = create_merit_order_book(HOOK_ZONE, HOOK_DAY; extra_orders=fam)
+        @test hooked.success
+        members = [o for o in hooked.order_book.orders
+                   if o isa Euphemia.LinkedHourlyOrder && o.family == "XBATT:GR"]
+        @test length(members) == length(hooked.order_book.periods)   # one per slot, not merged
+        @test all(o -> o.family_budget_mwh == 2296.0 && o.quantity == 574.0, members)
+        # the plain (non-family) part of the book is the baseline book
+        plain(ob) = sort([(round(o.price, digits=6), round(o.quantity, digits=6), o.type, o.date_time)
+                          for o in ob.orders if !(o isa Euphemia.LinkedHourlyOrder && o.family == "XBATT:GR")])
+        @test plain(hooked.order_book) == order_fingerprint(base_result.order_book)
+        avg, _ = clear_avg(extra_orders=fam)
+        @test avg <= base_avg + 1e-6
+    end
+
+    @testset "(d3) hook families: collisions / reserved IDs / budgets rejected, PS budget preserved" begin
+        chk = Euphemia.MeritOrderBook._check_extra_families
+        mk(f, b; z=:GR, h=0) = Euphemia.LinkedHourlyOrder(:supply, 1.0, 100.0, z,
+                                   DateTime(2026, 1, 26, h), 60, f, b)
+        @test chk([mk("XBATT:GR", 50.0), mk("XBATT:GR", 50.0; h=1)], "GR", Set{String}()) === nothing
+        @test_throws ArgumentError chk([mk("ESTOR:GR", 7.0)], "GR", Set(["ESTOR:GR"]))   # fleet family
+        @test_throws ArgumentError chk([mk("ESTOR:GR", 7.0)], "GR", Set{String}())       # reserved prefix
+        @test_throws ArgumentError chk([mk("ERES:GR", 7.0)], "GR", Set{String}())
+        @test_throws ArgumentError chk([mk("BLK:GR:x", 7.0)], "GR", Set{String}())
+        @test_throws ArgumentError chk([mk("XBATT", 7.0)], "GR", Set{String}())          # not zone-scoped
+        @test_throws ArgumentError chk([mk("XBATT:BG", 7.0)], "GR", Set{String}())
+        @test_throws ArgumentError chk([mk("XBATT:GR", 7.0; z=:BG)], "GR", Set{String}())
+        @test_throws ArgumentError chk([mk("XBATT:GR", 50.0), mk("XBATT:GR", 70.0; h=1)], "GR", Set{String}())
+        @test_throws ArgumentError chk([mk("XBATT:GR", NaN)], "GR", Set{String}())
+        @test_throws ArgumentError chk([mk("XBATT:GR", 0.0)], "GR", Set{String}())
+
+        # end to end on the GR book: the fleet PS family keeps its own budget
+        ps_budget(ob) = unique(o.family_budget_mwh for o in ob.orders
+                               if o isa Euphemia.LinkedHourlyOrder && o.family == "ESTOR:GR")
+        hookfam(f, b) = ctx -> [Euphemia.LinkedHourlyOrder(:supply, 1.0, 574.0, Symbol(ctx.zone),
+                                    DateTime(ts, dateformat"yyyymmdd-HHMM"), ctx.resolution_minutes, f, b)
+                                for ts in ctx.timeslots]
+        base_ps = ps_budget(base_result.order_book)
+        if isempty(base_ps)
+            @info "no ESTOR:GR family on $HOOK_DAY (complex orders off?) — end-to-end PS check skipped"
+            @test_skip false
+        else
+            @test length(base_ps) == 1
+            ok = create_merit_order_book(HOOK_ZONE, HOOK_DAY; extra_orders=hookfam("XBATT:GR", 2296.0))
+            @test ok.success
+            @test ps_budget(ok.order_book) == base_ps
+            bad = create_merit_order_book(HOOK_ZONE, HOOK_DAY; extra_orders=hookfam("ESTOR:GR", 7.0))
+            @test !bad.success
+            @test occursin("ESTOR:GR", bad.message)
+        end
+    end
+
     @testset "(e) strategist identity and firm markup" begin
         # Identity strategist returns the tagged orders unchanged → identical prices
         _, id_prices = clear_avg(strategist=ctx -> ctx.tagged_orders)

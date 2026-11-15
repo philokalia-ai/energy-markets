@@ -777,6 +777,40 @@ function _split_storage_families(tagged, strategies, generators, zone::String,
     return keep, members, budgets
 end
 
+"""
+    _check_extra_families(members, zone, formed) -> nothing
+
+Validate scenario `LinkedHourlyOrder` families returned by an `extra_orders` hook
+before they join the book. The master keys its energy row on the family name, so a
+hook family that reused a fleet family (e.g. `ESTOR:GR`) would merge into it and
+overwrite its budget. Throws `ArgumentError` (the book build then fails visibly) if
+a family:
+- collides with a family already formed from the fleet (`formed`) or uses a reserved
+  prefix (`ESTOR:`, `ERES:`, `BLK:`, `BLKFB:`);
+- is not zone-scoped (`<name>:<zone>`) or has a member outside `zone` — the same
+  name in two zones would otherwise share one budget row in the multi-zone master;
+- has members with different, non-finite or non-positive budgets.
+"""
+function _check_extra_families(members, zone::AbstractString, formed::Set{String})
+    reserved = vcat([last(v) * ":" for v in values(COMPLEX_FAMILY_FUELS)], ["BLK:", "BLKFB:"])
+    budgets = Dict{String,Float64}()
+    for o in members
+        f = o.family
+        f in formed && throw(ArgumentError("extra_orders family '$f' collides with a fleet complex-order family in $zone"))
+        any(r -> startswith(f, r), reserved) &&
+            throw(ArgumentError("extra_orders family '$f' uses a reserved prefix ($(join(reserved, ", ")))"))
+        endswith(f, ":" * zone) && length(f) > length(zone) + 1 ||
+            throw(ArgumentError("extra_orders family '$f' must be zone-scoped as '<name>:$zone'"))
+        string(o.zone) == zone ||
+            throw(ArgumentError("extra_orders family '$f' has a member in zone $(o.zone), book zone is $zone"))
+        b = o.family_budget_mwh
+        (isfinite(b) && b > 0) || throw(ArgumentError("extra_orders family '$f' has an invalid budget $b MWh"))
+        b0 = get!(budgets, f, b)
+        b0 == b || throw(ArgumentError("extra_orders family '$f' has inconsistent member budgets ($b0 vs $b MWh)"))
+    end
+    return nothing
+end
+
 "Clear the cv34 pumping-capability cache (tests / long processes)."
 clear_pump_capability_cache!() = (lock(_PUMP_CAP_LOCK) do; empty!(_PUMP_CAP_CACHE); end; nothing)
 
@@ -1025,6 +1059,10 @@ and is no longer a keyword argument.
   renewable_by_time)`. Returned orders (`:supply` or `:demand`) are appended
   (tagged `"EXTRA"`). Models "ships request more power" (cap-priced demand) or
   "a new plant" (supply).
+  A returned `LinkedHourlyOrder` (supply; one `family` name and
+  `family_budget_mwh` shared by its members) is not merged: it enters the
+  complex-order master as an energy-limited family, like pumped storage
+  (a new battery's discharge or a new reservoir).
 - `strategist::Union{Nothing,Function}`: `f(ctx) -> Vector{Tuple{SimpleOrder,String}}`
   (a plain `Vector{SimpleOrder}` is also accepted and re-tagged `"STRATEGIST"`),
   called after `extra_orders` and before merging. `ctx` is a NamedTuple
@@ -2030,11 +2068,22 @@ function create_merit_order_book(
         # ── Stage 8: scenario hooks (extra_orders, strategist) ──────────
         # Feature 3/4: extra scenario orders appended after all standard
         # orders and BEFORE merging. Both :supply and :demand are allowed.
+        # A returned `LinkedHourlyOrder` (a scenario storage/energy-limited
+        # family, e.g. a new battery or reservoir) skips the merge and enters
+        # the complex-order master with its own family budget, like PS.
+        extra_linked = LinkedHourlyOrder[]
         if extra_orders !== nothing
             ctx = (zone=bidding_zone, day=day, timeslots=target_timeslots,
                    resolution_minutes=resolution_minutes,
                    load_by_time=load_by_time, renewable_by_time=renewable_by_time)
             for o in extra_orders(ctx)
+                if o isa LinkedHourlyOrder
+                    o.type == :supply || error("extra_orders: LinkedHourlyOrder families are supply-side")
+                    push!(extra_linked, o)
+                    supply_orders_count += 1
+                    total_supply_capacity += o.quantity
+                    continue
+                end
                 push_tagged!(o, "EXTRA", "extra")
                 if o.type == :supply
                     supply_orders_count += 1
@@ -2136,6 +2185,15 @@ function create_merit_order_book(
                      max(length(target_timeslots), 1)
                 println("  🔋 complex orders: family $f — budget $(round(e, digits=0)) MWh/day " *
                         "vs offered $(round(mw, digits=0)) MW × $(length(target_timeslots)) slots")
+            end
+        end
+
+        if !isempty(extra_linked)
+            _check_extra_families(extra_linked, bidding_zone, Set(keys(family_budgets)))
+            orders = MarketOrder[orders..., extra_linked...]
+            for f in sort(unique(o.family for o in extra_linked))
+                println("  🔋 complex orders: scenario family $f — budget " *
+                        "$(round(first(o.family_budget_mwh for o in extra_linked if o.family == f), digits=0)) MWh/day")
             end
         end
 
