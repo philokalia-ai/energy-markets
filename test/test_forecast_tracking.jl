@@ -418,3 +418,26 @@ include(joinpath(@__DIR__, "..", "bin", "forecast_common.jl"))
     end
 
 end
+
+@testset "tsfm_overlay_maps — latest vintage per zone-day, never mixed" begin
+    r(z, d, t, level, q, v, m, issue, arm="timestral-209m") =
+        (z=z, d=Date(d), t=DateTime(t), level=level, q=q, v=v, m=m, issue=DateTime(issue), arm=arm)
+    rows = [
+        r("GR", "2026-11-15", "2026-11-14T22:00", "day", "p_any_le0", 0.40, "pregate0630", "2026-11-14T06:30"),
+        r("GR", "2026-11-15", "2026-11-15T10:00", "hour", "p_le0", 0.30, "pregate0630", "2026-11-14T06:30"),
+        r("GR", "2026-11-15", "2026-11-14T22:00", "day", "p_any_le0", 0.70, "postsim", "2026-11-14T09:13"),
+        r("GR", "2026-11-15", "2026-11-15T10:00", "hour", "p_le0", 0.60, "postsim", "2026-11-14T09:13"),
+        r("GR", "2026-11-15", "2026-11-15T11:00", "hour", "p_le0", 0.10, "pregate0630", "2026-11-14T06:30"),  # older vintage only
+        r("ES", "2026-11-15", "2026-11-14T22:00", "day", "p_any_le0", missing, "pregate0630", "2026-11-14T06:30"),
+        r("ES", "2026-11-15", "2026-11-15T10:00", "hour", "p_le0", 0.05, "pregate0630", "2026-11-14T06:30"),
+        r("DE_LU", "2026-11-15", "2026-11-15T10:00", "hour", "p_le0", 0.02, "pregate0630", "2026-11-14T06:30")]  # no day row
+    h, d = tsfm_overlay_maps(rows)
+    @test d[("GR", Date(2026, 11, 15))].p_any_le0 == 0.70
+    @test d[("GR", Date(2026, 11, 15))].input_mode == "postsim"
+    @test h[("GR", DateTime(2026, 11, 15, 10))] == 0.60
+    @test !haskey(h, ("GR", DateTime(2026, 11, 15, 11)))   # not mixed in from the older vintage
+    @test !haskey(d, ("ES", Date(2026, 11, 15)))            # missing value -> absent (null downstream)
+    @test h[("ES", DateTime(2026, 11, 15, 10))] == 0.05
+    @test !haskey(h, ("DE_LU", DateTime(2026, 11, 15, 10)))  # no day row -> no chosen vintage
+    @test all(isempty, tsfm_overlay_maps(NamedTuple[]))
+end
