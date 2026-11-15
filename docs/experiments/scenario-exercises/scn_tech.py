@@ -66,7 +66,11 @@ con.execute("""CREATE TEMP TABLE CD AS SELECT arm, CAST(h AS DATE) d FROM P GROU
   HAVING COUNT(DISTINCT zone) >= 39 AND COUNT(DISTINCT h) >= 23""")
 present = [a for (a,) in con.execute("SELECT DISTINCT arm FROM CD ORDER BY 1").fetchall()]
 print("complete days per arm:", dict(con.execute("SELECT arm, COUNT(*) FROM CD GROUP BY 1 ORDER BY 1").fetchall()))
-arms = [a for a in ARMS if a in present]
+import os
+MIN_DAYS = int(os.environ.get("MIN_DAYS", "44"))   # drop arms still running (fewer complete stride-16 days)
+ncd = {a: n for a, n in con.execute(f"""SELECT arm, COUNT(*) FROM CD WHERE d IN ({','.join("DATE '" + str(d.date()) + "'" for d in pd.date_range('2024-07-01', '2026-06-30', freq='16D'))}) GROUP BY 1""").fetchall()}
+arms = [a for a in ARMS if a in present and ncd.get(a, 0) >= MIN_DAYS]
+print("arms skipped (< MIN_DAYS complete stride-16 days):", {a: ncd.get(a, 0) for a in ARMS if a in present and a not in arms})
 assert "eu44_base" in present, "no eu44_base"
 days = set(d for (d,) in con.execute("SELECT d FROM CD WHERE arm = 'eu44_base'").fetchall())
 stride16 = set(pd.date_range("2024-07-01", "2026-06-30", freq="16D").date)
@@ -140,6 +144,11 @@ for a in arms:
             offered, dsp = fam, fam
     r["offered_twh"] = offered.sum() / 1e6; r["disp_twh"] = dsp.sum() / 1e6
     r["curtail_twh"] = (offered.sum() - dsp.sum()) / 1e6
+    # GR at the fleet-RES floor (p <= 1.01): RES is marginal, so existing RES (bid 1.0) is being curtailed;
+    # the new plant (bid −0.01) is dispatched first. Its output in those hours = curtailment exposure.
+    r["res_floor_h"] = int((gr.ps.to_numpy() <= 1.01).sum())
+    r["at_floor_twh"] = (offered * (gr.ps.to_numpy() <= 1.01)).sum() / 1e6
+    r["e_real"] = dsp.sum() / (574.0 * len(gr))   # dispatched energy / DC energy on the sample
     r["capture"] = (dsp * gr.ps.to_numpy()).sum() / dsp.sum() if dsp.sum() > 0 else np.nan
     r["gr_base_lw"] = (gr.w * gr.pb).sum() / gr.w.sum()
     rows.append(r)
@@ -166,3 +175,23 @@ for tech, names in [("PV", ["eu44t_pv_e100", "eu44t_pv_e200"]), ("wind", ["eu44t
           + ", ".join(f"({p[0]*100:.0f}%, {p[1]:+.2f})" for p in pts))
 t.to_csv("scn_tech_summary.csv", index=False)
 print("wrote scn_tech_summary.csv (cwd)")
+
+# ---- mechanism tables -------------------------------------------------------
+jj = j[j.arm.isin(arms)].copy()
+jj["dp"] = jj.ps - jj.pb
+hourly = jj[jj.zone == "GR"].pivot_table(index="lh", columns="arm", values="dp", aggfunc="mean")
+print("\n== GR mean Δp vs base by Athens local hour (€/MWh)")
+print(hourly.round(1).to_string())
+spill = jj.pivot_table(index="zone", columns="arm", values="dp", aggfunc="mean")
+spill = spill.loc[spill.abs().max(axis=1).sort_values(ascending=False).index[:8]]
+print("\n== mean Δp vs base, top-8 moving zones (€/MWh)")
+print(spill.round(2).to_string())
+if "eu44_dc574" in arms:
+    dc = jj[(jj.zone == "GR") & (jj.arm == "eu44_dc574")].copy()
+    dc["h"] = pd.to_datetime(dc.h)
+    pr = prof.reindex(dc.h)
+    print("\n== correlation of the plant profile with the paired DC-arm GR price (hourly, sample days)")
+    for k in ["pv_norm", "wind_norm"]:
+        print(f"  {k}: r = {np.corrcoef(pr[k].fillna(0), dc.ps)[0, 1]:+.3f}; "
+              f"profile-weighted DC-arm price {np.average(dc.ps, weights=pr[k].fillna(0) + 1e-12):.1f} vs time-average {dc.ps.mean():.1f}")
+hourly.to_csv("scn_tech_hourly.csv"); spill.to_csv("scn_tech_spill.csv")

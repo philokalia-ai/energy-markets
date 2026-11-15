@@ -287,3 +287,8 @@ deltas pair against it. Results (labels in data/results.duckdb):
 - **eu37_ops_floor_paneu** (365 d): EU LW +0.139 €/MWh (+0.16%); extra cost
   €370.8m/yr; OPS bill 2.44 TWh / €197.8m (€1 of shore power → ~€1.87 to
   everyone else). Top zones IT-Sardinia +0.79, GR +0.60.
+
+---
+
+**BYOP by technology on cv44 (PV, wind, battery, reservoir, firm, DC flex):** see
+[byop-tech-cv44.md](byop-tech-cv44.md) (stride-16 sample, 44 days).

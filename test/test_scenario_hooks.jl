@@ -63,6 +63,25 @@ end
         @test avg >= base_avg - 1e-6
     end
 
+    @testset "(d2) extra_orders LinkedHourlyOrder family enters the complex-order master" begin
+        # a 574 MW / 2,296 MWh/day scenario battery (discharge side) as an energy-limited family
+        fam = ctx -> [Euphemia.LinkedHourlyOrder(:supply, 1.0, 574.0, Symbol(ctx.zone),
+                          DateTime(ts, dateformat"yyyymmdd-HHMM"), ctx.resolution_minutes,
+                          "XBATT:GR", 2296.0) for ts in ctx.timeslots]
+        hooked = create_merit_order_book(HOOK_ZONE, HOOK_DAY; extra_orders=fam)
+        @test hooked.success
+        members = [o for o in hooked.order_book.orders
+                   if o isa Euphemia.LinkedHourlyOrder && o.family == "XBATT:GR"]
+        @test length(members) == length(hooked.order_book.periods)   # one per slot, not merged
+        @test all(o -> o.family_budget_mwh == 2296.0 && o.quantity == 574.0, members)
+        # the plain (non-family) part of the book is the baseline book
+        plain(ob) = sort([(round(o.price, digits=6), round(o.quantity, digits=6), o.type, o.date_time)
+                          for o in ob.orders if !(o isa Euphemia.LinkedHourlyOrder && o.family == "XBATT:GR")])
+        @test plain(hooked.order_book) == order_fingerprint(base_result.order_book)
+        avg, _ = clear_avg(extra_orders=fam)
+        @test avg <= base_avg + 1e-6
+    end
+
     @testset "(e) strategist identity and firm markup" begin
         # Identity strategist returns the tagged orders unchanged → identical prices
         _, id_prices = clear_avg(strategist=ctx -> ctx.tagged_orders)

@@ -34,7 +34,11 @@ end
 The `ctx` shapes are exactly those of the single-zone `create_merit_order_book`
 hooks (see `.claude/skills/scenarios`); `extra_orders` and
 `strategist` both carry `ctx.zone`, so one function can serve the whole
-footprint.
+footprint. `extra_orders` may also return `LinkedHourlyOrder` (supply) members
+sharing one `family` and `family_budget_mwh`: they skip the merge and enter the
+complex-order master as an energy-limited family, like pumped storage (a new
+battery's discharge or a new reservoir; see
+`docs/experiments/scenario-exercises/eu44_tech.jl`).
 
 ## Two-pass correctness and the emergent propagation
 
