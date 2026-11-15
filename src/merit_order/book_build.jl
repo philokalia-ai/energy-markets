@@ -561,8 +561,8 @@ function _pump_capability(zone::String, day::Date)
 end
 
 # ── Complex orders: energy-limited storage families (EUPHEMIA_COMPLEX_ORDERS) ──
-# Families are built only when the env flag names them; unset ⇒ this code is
-# never reached and the book is byte-identical.
+# Families are built only for the kinds `complex_order_kinds()` returns (cv44
+# default: `ps`); `EUPHEMIA_COMPLEX_ORDERS=off` ⇒ never reached, the cv43 book.
 #   ps        — `Hydro Pumped Storage` units: one family per zone, daily budget =
 #               demonstrated PS generation energy.
 #   reservoir — `Hydro Water Reservoir` units, same construction (zones on the
@@ -572,8 +572,16 @@ const COMPLEX_FAMILY_FUELS = Dict(
     "ps" => (Symbol("Hydro Pumped Storage"), "Hydro Pumped Storage", "ESTOR"),
     "reservoir" => (Symbol("Hydro Water Reservoir"), "Hydro Water Reservoir", "ERES"),
 )
-complex_order_kinds() = Set(filter(!isempty,
-    strip.(lowercase.(split(get(ENV, "EUPHEMIA_COMPLEX_ORDERS", ""), ",")))))
+# cv44: `ps` is the DEFAULT (env unset). Kill-switch: EUPHEMIA_COMPLEX_ORDERS set to
+# `off`, `none` or present-and-empty ⇒ no complex orders (the cv43 book, byte-identical).
+# Any other value is the explicit list (`ps`, `ps,reservoir`, `blocks`, …); `blocks` and
+# `reservoir` stay opt-in. Forwarded to pipelined-backfill workers.
+const COMPLEX_ORDERS_DEFAULT = "ps"
+function complex_order_kinds()
+    raw = lowercase(strip(get(ENV, "EUPHEMIA_COMPLEX_ORDERS", COMPLEX_ORDERS_DEFAULT)))
+    raw in ("", "off", "none") && return Set{String}()
+    return Set(filter(k -> !isempty(k) && !(k in ("off", "none")), strip.(split(raw, ","))))
+end
 
 const _STORAGE_BUDGET_CACHE = Dict{Tuple{String,String,Date},Float64}()
 const _STORAGE_BUDGET_LOCK = ReentrantLock()
@@ -1973,7 +1981,7 @@ function create_merit_order_book(
 
         orders = SimpleOrder[t[1] for t in tagged]
 
-        # Complex orders (EUPHEMIA_COMPLEX_ORDERS, default unset ⇒ skipped):
+        # Complex orders (EUPHEMIA_COMPLEX_ORDERS; cv44 default `ps`, `off` ⇒ skipped):
         # energy-limited storage families leave the plain book here and
         # re-enter after the merge as LinkedHourlyOrders.
         family_members = Tuple{SimpleOrder,String}[]

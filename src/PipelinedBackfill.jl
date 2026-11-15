@@ -663,6 +663,10 @@ function _run_pipelined_backfill_impl(days, zones::Vector{String}=String[];
                   "EUPHEMIA_SOLAR_REGIME_FLOOR2", "EUPHEMIA_SOLAR_REGIME_THETA_FR")
             haskey(ENV, k) && push!(extract_env, k => ENV[k])
         end
+        # cv44 complex orders (default `ps`): forward the explicit list / the
+        # `off` kill-switch so worker books match the coordinator.
+        haskey(ENV, "EUPHEMIA_COMPLEX_ORDERS") &&
+            push!(extract_env, "EUPHEMIA_COMPLEX_ORDERS" => ENV["EUPHEMIA_COMPLEX_ORDERS"])
         # Workers share the source extract read-only; the coordinator keeps the
         # source read-only too (so it can coexist with them) but opts into result
         # writes, which land in the SEPARATE writable results_db file.
