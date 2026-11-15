@@ -331,3 +331,6 @@ not touch the clearing, the books or `code_version`.
 
 Environment: a Python 3.12 venv outside the repo with `torch` (CPU), `timestral` (git) and
 `chronos-forecasting` 2.3.2. Weights come from the HF cache; none are committed.
+
+
+Production wiring draft (owner decision): [overlay.md](overlay.md) — `bin/emit_tsfm_overlay.py`, `test/test_tsfm_overlay.py`.
