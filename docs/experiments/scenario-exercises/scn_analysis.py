@@ -9,6 +9,8 @@ Usage:
 The baseline label may carry a code_version filter (e.g. multi_zone_eu:31).
 Load weights = the hourly ENTSO-E D-1 load forecast from the extract (the
 model's own demand series, unmodified). All joins are inner (paired hours).
+Optional env SCN_RESTRICT_DAYS = a file of ISO days (one per line): only those days
+are paired (to compare two runs on identical days).
 """
 import sys, duckdb
 
@@ -53,6 +55,12 @@ def main():
     SELECT b.zone, b.h, b.p AS pb, s.p AS ps
     FROM b JOIN s ON s.zone = b.zone AND s.h = b.h
     """, [base_lab, scn_lab])
+    import os
+    if os.environ.get("SCN_RESTRICT_DAYS"):
+        keep = [l.strip() for l in open(os.environ["SCN_RESTRICT_DAYS"]) if l.strip()]
+        con.execute("DELETE FROM px WHERE CAST(CAST(h AS DATE) AS VARCHAR) NOT IN (" +
+                    ",".join(f"'{x}'" for x in keep) + ")")
+        print(f"restricted to {len(keep)} listed days")
 
     # hourly load forecast weights from the extract
     con.execute(f"""
