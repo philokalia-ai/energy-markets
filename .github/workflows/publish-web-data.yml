@@ -73,6 +73,12 @@ jobs:
       - uses: actions/checkout@v4
         if: ${{ steps.gate.outputs.go == 'true' }}
 
+      - name: Setup Julia
+        if: ${{ steps.gate.outputs.go == 'true' }}
+        uses: julia-actions/setup-julia@v1
+        with:
+          version: "1.13.4"   # same pin as daily-forecast.yml / transfer-record.yml
+
       - name: Export web parquet (prices data plane)
         if: ${{ steps.gate.outputs.go == 'true' }}
         env:
