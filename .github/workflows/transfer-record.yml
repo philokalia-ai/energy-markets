@@ -1,0 +1,127 @@
+# Owner-dispatched transfer of an OFFLINE record backfill (results DuckDB) into
+# the live Postgres `simulations.*` tables, via the existing
+# bin/transfer_results_to_postgres.jl (idempotent delete-then-insert of one
+# (clearing_mode, code_version, window) slice, then --verify checksums).
+#
+# Why a workflow: the backfill runs offline on a box without DB credentials; the
+# runner has the DB secrets. The results file travels as an asset on a DRAFT
+# GitHub release (drafts are visible only to repo writers, not public) and is
+# checked against the SHA-256 given at dispatch before anything is written.
+# First use: cv44 record 2024-07-01..2026-11-14 (2026-11-15).
+name: transfer-record
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Tag of the DRAFT release holding the results DuckDB asset"
+        required: true
+      asset:
+        description: "Asset file name (e.g. record-cv44.duckdb)"
+        required: true
+      sha256:
+        description: "Expected SHA-256 of the asset (refuses to run on mismatch)"
+        required: true
+      clearing_mode:
+        description: "Slice clearing_mode"
+        required: true
+        default: "multi_zone_eu"
+      code_version:
+        description: "Slice code_version"
+        required: true
+      start:
+        description: "First market day (YYYY-MM-DD)"
+        required: true
+      end:
+        description: "Last market day (YYYY-MM-DD)"
+        required: true
+
+permissions:
+  contents: write   # needed to read DRAFT releases with GITHUB_TOKEN; nothing is written to the repo
+
+concurrency:
+  group: transfer-record
+  cancel-in-progress: false
+
+env:
+  JULIA_VERSION: "1.13.4"
+  JULIA_NUM_THREADS: 4
+
+jobs:
+  transfer:
+    runs-on: energy-markets-k8s
+    timeout-minutes: 120
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download and verify the results asset
+        timeout-minutes: 15
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.release_tag }}
+          ASSET: ${{ inputs.asset }}
+          SHA: ${{ inputs.sha256 }}
+        run: |
+          set -euo pipefail
+          # The digest must be exactly 64 hex chars; it is compared directly, never
+          # fed to `sha256sum -c` (whose checklist syntax a crafted input could abuse).
+          [[ "$SHA" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::sha256 input must be 64 lowercase hex chars"; exit 1; }
+          api="https://api.github.com/repos/${GITHUB_REPOSITORY}"
+          hdr=(-H "Authorization: Bearer ${GH_TOKEN}" -H "X-GitHub-Api-Version: 2022-11-28")
+          # Drafts have no tag ref yet: find the release by tag_name in the list.
+          rel=$(curl -fsSL "${hdr[@]}" "$api/releases?per_page=100" \
+                | python3 -c "import json,sys,os; r=[x for x in json.load(sys.stdin) if x['tag_name']==os.environ['TAG'] and x.get('draft')]; print(json.dumps(r[0]) if r else '')")
+          [ -n "$rel" ] || { echo "::error::no DRAFT release with tag $TAG"; exit 1; }
+          id=$(printf '%s' "$rel" | python3 -c "import json,sys,os; r=json.load(sys.stdin); a=[x for x in r['assets'] if x['name']==os.environ['ASSET']]; print(a[0]['id'] if a else '')")
+          [ -n "$id" ] || { echo "::error::asset $ASSET not on release $TAG"; exit 1; }
+          mkdir -p data/transfer
+          curl -fsSL "${hdr[@]}" -H "Accept: application/octet-stream" \
+               -o "data/transfer/$ASSET" "$api/releases/assets/$id"
+          got=$(sha256sum "data/transfer/$ASSET" | cut -d' ' -f1)
+          [ "$got" = "$SHA" ] || { echo "::error::sha256 mismatch: got $got"; exit 1; }
+          echo "sha256 OK"
+          ls -la "data/transfer/$ASSET"
+
+      - name: Setup Julia
+        uses: julia-actions/setup-julia@v1
+        with:
+          version: ${{ env.JULIA_VERSION }}
+
+      - name: Install Julia dependencies
+        timeout-minutes: 30
+        run: |
+          julia --project=. -e "
+            using Pkg
+            isempty(Pkg.Registry.reachable_registries()) && Pkg.Registry.add()
+            Pkg.instantiate()
+            Pkg.precompile()
+          "
+
+      - name: Transfer slice to Postgres
+        timeout-minutes: 45
+        env:
+          ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
+          ASSET: ${{ inputs.asset }}
+          MODE: ${{ inputs.clearing_mode }}
+          CV: ${{ inputs.code_version }}
+          D0: ${{ inputs.start }}
+          D1: ${{ inputs.end }}
+        run: |
+          julia --project=. bin/transfer_results_to_postgres.jl \
+            --results-db "data/transfer/$ASSET" --clearing-mode "$MODE" \
+            --code-version "$CV" --start "$D0" --end "$D1"
+
+      - name: Verify (row counts + per zone-month checksums, no writes)
+        timeout-minutes: 30
+        env:
+          ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
+          ASSET: ${{ inputs.asset }}
+          MODE: ${{ inputs.clearing_mode }}
+          CV: ${{ inputs.code_version }}
+          D0: ${{ inputs.start }}
+          D1: ${{ inputs.end }}
+        run: |
+          julia --project=. bin/transfer_results_to_postgres.jl \
+            --results-db "data/transfer/$ASSET" --clearing-mode "$MODE" \
+            --code-version "$CV" --start "$D0" --end "$D1" --verify
