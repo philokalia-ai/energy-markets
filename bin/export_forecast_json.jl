@@ -143,28 +143,29 @@ function model_lines_map(sd::Date)
         (String(r.z), String(r.model), DateTime(r.t)) => Float64(r.p) for r in eachrow(ml))
 end
 
-# TSFM overlay probabilities (P(≤0) hourly + P(any hour ≤0) per zone-day) — see
-# tsfm_overlay_maps in forecast_common.jl. Optional: absent table → empty maps
-# (the fields are then null; the table is created by the emitter's first run).
+# TSFM overlay (lines + P(≤0) hourly + P(any hour ≤0) per zone-day, one vintage
+# per zone-day) — see tsfm_overlay_maps in forecast_common.jl. Optional: an
+# absent table → empty maps (fields null; the emitter's first run creates it).
 function tsfm_overlay(sd::Date)
     ov = try
         Euphemia.sql2df_with_retry(TSFM_OVERLAY_SQL, [sd - Day(1)])
     catch e
-        @warn "overlay_probabilities unavailable — tsfm risk fields null" error=e
-        return (Dict{Tuple{String,DateTime},Float64}(), Dict{Tuple{String,Date},Any}())
+        @warn "tsfm_overlay unavailable — tsfm fields null" error=e
+        return (Dict{Tuple{String,String,DateTime},Float64}(), Dict{Tuple{String,Date},Any}())
     end
     return tsfm_overlay_maps(eachrow(ov))
 end
 
 # The additive TSFM fields of one zone-day entry (new optional keys; older
-# consumers ignore them). Lines from model_lines, risk from overlay_probabilities.
-function tsfm_fields(zone, d, hours, mlmap, ovh, ovd)
+# consumers ignore them). All values come from the zone-day's chosen vintage.
+function tsfm_fields(zone, d, hours, ovh, ovd)
     od = get(ovd, (zone, d), nothing)
+    line(q) = Any[get(ovh, (zone, q, h), nothing) for h in hours]
     return Dict{String,Any}(
-        "tsfm" => Any[get(mlmap, (zone, "tsfm", h), nothing) for h in hours],
-        "tsfm_q10" => Any[get(mlmap, (zone, "tsfm_q10", h), nothing) for h in hours],
-        "tsfm_q90" => Any[get(mlmap, (zone, "tsfm_q90", h), nothing) for h in hours],
-        "p_le0" => Any[get(ovh, (zone, h), nothing) for h in hours],
+        "tsfm" => line("tsfm_median"),
+        "tsfm_q10" => line("tsfm_q10"),
+        "tsfm_q90" => line("tsfm_q90"),
+        "p_le0" => line("p_le0"),
         "p_any_le0" => od === nothing ? nothing : od.p_any_le0,
         "tsfm_input_mode" => od === nothing ? nothing : od.input_mode,
         "tsfm_issue_utc" => od === nothing ? nothing : od.issue_utc,
@@ -245,7 +246,7 @@ function export_zone_files()
                 "corr" => sc === nothing ? nothing : nn(sc.corr),
                 "gbm" => Any[get(mlmap, (zone, "hybrid_gbm", h), nothing) for h in hours],
                 "stats" => Any[get(mlmap, (zone, "stats_gbm", h), nothing) for h in hours]),
-                tsfm_fields(zone, d, hours, mlmap, ovh, ovd)))
+                tsfm_fields(zone, d, hours, ovh, ovd)))
         end
         # newest first, then by increasing lead ('entsoe' before 'weather' within a lead)
         sort!(days; by=e -> (e["date"], -e["lead_days"],

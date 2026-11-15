@@ -145,27 +145,27 @@ class ProductionPathTest(unittest.TestCase):
         with self.assertRaises(SystemExit):
             ov.resolve_arm({"TSFM_ARM": "nope"})
 
-    def test_db_rows_published_names_and_not_null_day_rows(self):
+    def test_db_rows_one_vintage_lines_and_probabilities(self):
         hourly, day = overlay_rows()
-        lines, probs = ov.db_rows(hourly, day, "timestral-209m")
-        self.assertEqual(sorted({r[2] for r in lines}), ["tsfm", "tsfm_q10", "tsfm_q90"])
-        self.assertEqual(len(lines), 3 * len(hourly))
-        self.assertTrue(all(r[4] == ov.LINES_VERSION for r in lines))
-        day_rows = [r for r in probs if r[3] == "day"]
-        self.assertEqual(len(day_rows), 3 * len(day))
-        # day rows sit at the start of the Athens market day (2026-11-14 22:00 UTC), never NULL
-        self.assertTrue(all(r[2] == "2026-11-14T22:00:00+00" for r in day_rows))
-        self.assertTrue(all(r[2] is not None and r[8] == "timestral-209m" for r in probs))
-        self.assertTrue(all(r[5] is None for r in probs if r[4].endswith("_logit")))  # no logistic: NULL, not NaN
+        rows = ov.db_rows(hourly, day, "timestral-209m")
+        hour_q = {r[4] for r in rows if r[3] == "hour"}
+        self.assertEqual(hour_q, set(ov.HOUR_QUANTITIES))           # lines live with the probabilities
+        self.assertEqual(len(rows), len(ov.HOUR_QUANTITIES) * len(hourly) + len(ov.DAY_QUANTITIES) * len(day))
+        self.assertEqual({(r[6], r[7], r[8]) for r in rows},        # every row carries the same vintage
+                         {("pregate0630", "2026-11-14T06:30:00+00", "timestral-209m")})
+        day_rows = [r for r in rows if r[3] == "day"]
+        self.assertTrue(all(r[2] == "2026-11-14T22:00:00+00" for r in day_rows))   # market-day start, never NULL
+        self.assertTrue(all(r[5] is None for r in rows if r[4].endswith("_logit")))  # no logistic: NULL, not NaN
 
     def test_write_db_ddl_first_one_commit_and_after_gate_guard(self):
         hourly, day = overlay_rows()
         cx = FakeConn()
-        n_lines, n_probs = ov.write_db(hourly, day, "timestral-209m", cx=cx)
+        ov.write_db(hourly, day, "timestral-209m", cx=cx)
         self.assertEqual(cx.log[0][0], "execute")
-        self.assertIn("CREATE TABLE IF NOT EXISTS simulations.overlay_probabilities", cx.log[0][1])
+        self.assertIn("CREATE TABLE IF NOT EXISTS simulations.tsfm_overlay", cx.log[0][1])
         self.assertIn("date_time_utc  timestamptz NOT NULL", cx.log[0][1])
-        self.assertEqual([e[0] for e in cx.log[1:]], ["executemany", "executemany"])
+        self.assertEqual([e[0] for e in cx.log[1:]], ["executemany"])
+        self.assertIn("WHERE simulations.tsfm_overlay.issue_utc <= EXCLUDED.issue_utc", cx.log[1][1])
         self.assertEqual(cx.commits, 1)
         late = hourly.assign(after_gate=True)
         with self.assertRaises(SystemExit):
@@ -195,26 +195,54 @@ class ProductionPathTest(unittest.TestCase):
             self.assertEqual(s.t.iloc[0], pd.Timestamp("2026-11-14 22:00"))
             self.assertEqual(s.made.iloc[0], pd.Timestamp("2026-11-14 09:00"))
 
-    @unittest.skipUnless(os.environ.get("OVERLAY_TEST_PG"), "set OVERLAY_TEST_PG=<libpq conn> for the Postgres test")
-    def test_postgres_upsert_idempotent(self):
+    def _pg(self):
         import psycopg2
         cx = psycopg2.connect(os.environ["OVERLAY_TEST_PG"]); cur = cx.cursor()
-        cur.execute("""CREATE SCHEMA IF NOT EXISTS simulations;
-            DROP TABLE IF EXISTS simulations.overlay_probabilities;
-            CREATE TABLE IF NOT EXISTS simulations.model_lines (bidding_zone text, date_time_utc timestamptz,
-              model text, price_eur_mwh double precision, code_version int, generated_at timestamptz DEFAULT now(),
-              UNIQUE (bidding_zone, date_time_utc, model, code_version));
-            DELETE FROM simulations.model_lines WHERE model LIKE 'tsfm%';""")
+        cur.execute("CREATE SCHEMA IF NOT EXISTS simulations; DROP TABLE IF EXISTS simulations.tsfm_overlay;")
         cx.commit()
+        return cx, cur
+
+    @staticmethod
+    def _vintage(mode, issue, median):
+        hourly, day = overlay_rows()
+        hourly = hourly.assign(input_mode=mode, issue_utc=pd.Timestamp(issue), tsfm_median=float(median),
+                               tsfm_q10=float(median) - 5, tsfm_q90=float(median) + 5)
+        return hourly, day.assign(input_mode=mode, issue_utc=pd.Timestamp(issue))
+
+    @unittest.skipUnless(os.environ.get("OVERLAY_TEST_PG"), "set OVERLAY_TEST_PG=<libpq conn> for the Postgres test")
+    def test_postgres_upsert_idempotent(self):
+        cx, cur = self._pg()
         hourly, day = overlay_rows()
         for _ in range(2):                                     # second run must upsert, not duplicate
             ov.write_db(hourly, day, "timestral-209m", cx=cx)
-        cur.execute("SELECT count(*) FROM simulations.model_lines WHERE model LIKE 'tsfm%'")
-        self.assertEqual(cur.fetchone()[0], 3 * len(hourly))
-        cur.execute("SELECT level, count(*) FROM simulations.overlay_probabilities GROUP BY 1 ORDER BY 1")
-        self.assertEqual(cur.fetchall(), [("day", 3 * len(day)), ("hour", 3 * len(hourly))])
+        cur.execute("SELECT level, count(*) FROM simulations.tsfm_overlay GROUP BY 1 ORDER BY 1")
+        self.assertEqual(cur.fetchall(), [("day", len(ov.DAY_QUANTITIES) * len(day)),
+                                          ("hour", len(ov.HOUR_QUANTITIES) * len(hourly))])
         cx.close()
 
+    @unittest.skipUnless(os.environ.get("OVERLAY_TEST_PG"), "set OVERLAY_TEST_PG=<libpq conn> for the Postgres test")
+    def test_postgres_newer_then_older_writes(self):
+        """Review P2 repro: post-sim 09:13 (median 60), then a delayed pre-gate 06:30 (median 10).
+        The post-sim vintage must survive intact, and a same-key older re-issue must be rejected."""
+        cx, cur = self._pg()
+        ov.write_db(*self._vintage("postsim", "2026-11-14 09:13", 60), "timestral-209m", cx=cx)
+        ov.write_db(*self._vintage("pregate0630", "2026-11-14 06:30", 10), "timestral-209m", cx=cx)
+        cur.execute("""SELECT input_mode, issue_utc AT TIME ZONE 'UTC', avg(value) FROM simulations.tsfm_overlay
+                       WHERE quantity = 'tsfm_median' GROUP BY 1, 2 ORDER BY 1""")
+        got = {m: (str(i), v) for m, i, v in cur.fetchall()}
+        self.assertEqual(got["postsim"], ("2026-11-14 09:13:00", 60.0))      # newer vintage untouched
+        self.assertEqual(got["pregate0630"], ("2026-11-14 06:30:00", 10.0))  # kept as its own vintage
+        # same vintage key, OLDER issue (a delayed retry): rejected row by row
+        ov.write_db(*self._vintage("postsim", "2026-11-14 08:00", 99), "timestral-209m", cx=cx)
+        cur.execute("""SELECT DISTINCT issue_utc AT TIME ZONE 'UTC', value FROM simulations.tsfm_overlay
+                       WHERE quantity = 'tsfm_median' AND input_mode = 'postsim'""")
+        self.assertEqual([(str(i), v) for i, v in cur.fetchall()], [("2026-11-14 09:13:00", 60.0)])
+        # same key, NEWER issue: accepted
+        ov.write_db(*self._vintage("postsim", "2026-11-14 09:40", 70), "timestral-209m", cx=cx)
+        cur.execute("""SELECT DISTINCT value FROM simulations.tsfm_overlay
+                       WHERE quantity = 'tsfm_median' AND input_mode = 'postsim'""")
+        self.assertEqual(cur.fetchall(), [(70.0,)])
+        cx.close()
 
 if __name__ == "__main__":
     unittest.main()

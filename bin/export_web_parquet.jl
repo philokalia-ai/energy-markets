@@ -200,12 +200,12 @@ function export_zone_parquets()
     end
     mlmap = Dict{Tuple{String,String,DateTime},Float64}(
         (String(r.z), String(r.model), DateTime(r.t)) => Float64(r.p) for r in eachrow(ml))
-    # TSFM overlay risk (additive, nullable columns; absent table → all null)
+    # TSFM overlay (one vintage per zone-day; additive, nullable columns; absent table → all null)
     ovh, ovd = try
         tsfm_overlay_maps(eachrow(Euphemia.sql2df_with_retry(TSFM_OVERLAY_SQL, [sd - Day(1)])))
     catch e
-        @warn "overlay_probabilities unavailable — tsfm risk columns null" error=e
-        (Dict{Tuple{String,DateTime},Float64}(), Dict{Tuple{String,Date},Any}())
+        @warn "tsfm_overlay unavailable — tsfm columns null" error=e
+        (Dict{Tuple{String,String,DateTime},Float64}(), Dict{Tuple{String,Date},Any}())
     end
 
     counts = Dict{String,Int}()
@@ -249,10 +249,10 @@ function export_zone_parquets()
                            slice_retro, slice_tag,
                            get(mlmap, (zone, "hybrid_gbm", h), missing),
                            get(mlmap, (zone, "stats_gbm", h), missing),
-                           get(mlmap, (zone, "tsfm", h), missing),
-                           get(mlmap, (zone, "tsfm_q10", h), missing),
-                           get(mlmap, (zone, "tsfm_q90", h), missing),
-                           get(ovh, (zone, h), missing),
+                           get(ovh, (zone, "tsfm_median", h), missing),
+                           get(ovh, (zone, "tsfm_q10", h), missing),
+                           get(ovh, (zone, "tsfm_q90", h), missing),
+                           get(ovh, (zone, "p_le0", h), missing),
                            od === nothing ? missing : od.p_any_le0,
                            od === nothing ? missing : od.input_mode,
                            od === nothing ? missing : od.issue_utc,

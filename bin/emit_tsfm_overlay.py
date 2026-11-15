@@ -25,10 +25,11 @@ Modes of operation
                      to --output. No database access at all.
   --write          : production (.github/workflows/daily-forecast.yml). Reads Postgres
                      (ENERGY_CONN_STR) through DuckDB's postgres scanner (`USE pg`, so the SQL is the
-                     same as on the extract), creates the overlay table if absent (idempotent DDL),
-                     upserts the published lines `tsfm`, `tsfm_q10`, `tsfm_q90` into
-                     simulations.model_lines and the probabilities into
-                     simulations.overlay_probabilities. Refuses an after-gate issue.
+                     same as on the extract), creates the overlay table if absent (idempotent DDL)
+                     and upserts ONE vintage — lines (tsfm_median/q10/q90) and probabilities —
+                     into simulations.tsfm_overlay, keyed by (input_mode, arm) and stamped with
+                     issue_utc; an older issue never overwrites a newer one. Refuses an
+                     after-gate issue.
 Env: TSFM_ARM = timestral-209m (published default, owner decision 2026-11-15) | timestral-28m |
      chronos2 | any arm added to ARMS (e.g. a physics-anchored residual arm). TSFM_MODEL is the
      legacy name of the same switch. Timestral weights: Modified-MIT with a revenue cap — licence
@@ -50,10 +51,10 @@ import pandas as pd
 ATH = "Europe/Athens"
 CTX_HOURS = 8192
 GATE_UTC_HOUR = 10          # conservative: 12:00 CEST = 10:00 UTC; 11:00 UTC in winter
-LINES_VERSION = 1           # code_version stamped on simulations.model_lines rows
-# Published series names in simulations.model_lines (what the exporters read). The arm that
-# produced them is recorded in overlay_probabilities.model_version.
-LINE_MODELS = {"tsfm_median": "tsfm", "tsfm_q10": "tsfm_q10", "tsfm_q90": "tsfm_q90"}
+# Hourly quantities of one vintage: the TSFM lines and the probabilities live in the SAME table
+# with the same vintage key, so a reader can never pair a line of one issue with risk of another.
+HOUR_QUANTITIES = ("tsfm_median", "tsfm_q10", "tsfm_q90", "p_le0", "p_le0_tsfm", "p_le0_logit")
+DAY_QUANTITIES = ("p_any_le0", "p_any_le0_tsfm", "p_any_le0_logit")
 MODELS = {"chronos2": "amazon/chronos-2",
           "timestral-209m": "mistralai/Timestral-209M",
           "timestral-28m": "mistralai/Timestral-28M"}
@@ -61,24 +62,24 @@ MODELS = {"chronos2": "amazon/chronos-2",
 MODEL_REVISIONS = {"timestral-209m": "9874d252ab0aae16f7f7c999f98f98d6ad7d8365",
                    "timestral-28m": "49b26409ac87b5935539a5d8ffe7f397b720db47"}
 DEFAULT_ARM = "timestral-209m"
-# Day-level quantities are stored at date_time_utc = start of the Athens market day (NOT NULL:
-# a NULL inside a Postgres UNIQUE key never conflicts, so a nullable key would duplicate the
-# day rows on every re-run instead of upserting them).
+# One row per (zone, market day, hour | day, quantity, vintage). A vintage = (input_mode, arm)
+# with its issue_utc. Day-level quantities sit at date_time_utc = start of the Athens market day
+# (NOT NULL: a NULL inside a Postgres UNIQUE key never conflicts, so a nullable key would
+# duplicate the day rows on every re-run instead of upserting them).
 OVERLAY_DDL = """
-CREATE TABLE IF NOT EXISTS simulations.overlay_probabilities (
+CREATE TABLE IF NOT EXISTS simulations.tsfm_overlay (
     bidding_zone   text        NOT NULL,
     market_date    date        NOT NULL,
     date_time_utc  timestamptz NOT NULL,   -- the hour; day-level rows: start of the market day
     level          text        NOT NULL,   -- 'hour' | 'day'
-    quantity       text        NOT NULL,   -- p_le0, p_le0_tsfm, p_le0_logit, p_any_le0, ...
+    quantity       text        NOT NULL,   -- tsfm_median/q10/q90 (EUR/MWh), p_le0*, p_any_le0*
     value          double precision,
     input_mode     text        NOT NULL,   -- pregate0630 | postsim
-    issue_utc      timestamptz NOT NULL,
+    issue_utc      timestamptz NOT NULL,   -- vintage issuance (information cutoff)
     model_version  text        NOT NULL,   -- the TSFM arm
     generated_at   timestamptz DEFAULT now(),
     UNIQUE (bidding_zone, market_date, date_time_utc, quantity, input_mode, model_version));
-CREATE INDEX IF NOT EXISTS overlay_probabilities_date_idx
-    ON simulations.overlay_probabilities (market_date);
+CREATE INDEX IF NOT EXISTS tsfm_overlay_date_idx ON simulations.tsfm_overlay (market_date);
 """
 SIM_SQL = """
 SELECT bidding_zone zone, date_time_utc t, price_eur_mwh sim, prediction_made_utc made
@@ -297,29 +298,28 @@ def sim_from_live_json(live_dir, zones):
 
 
 def db_rows(hourly, day, arm):
-    """(model_lines rows, overlay_probabilities rows) for the upserts — pure, unit-tested."""
+    """simulations.tsfm_overlay rows of one vintage (lines + probabilities) — pure, unit-tested."""
     ts = lambda x: pd.Timestamp(x).isoformat() + "+00"
-    lines = [(r.zone, ts(r.t_utc), LINE_MODELS[col], float(getattr(r, col)), LINES_VERSION)
-             for col in LINE_MODELS for r in hourly.itertuples() if pd.notna(getattr(r, col))]
     nn = lambda v: None if pd.isna(v) else float(v)
-    probs = [(r.zone, r.market_date, ts(r.t_utc), "hour", qn, nn(getattr(r, qn)), r.input_mode,
-              ts(r.issue_utc), arm)
-             for r in hourly.itertuples() for qn in ("p_le0", "p_le0_tsfm", "p_le0_logit")]
-    probs += [(r.zone, r.market_date, ts(day_start_utc(r.market_date)), "day", qn, nn(getattr(r, qn)),
-               r.input_mode, ts(r.issue_utc), arm)
-              for r in day.itertuples() for qn in ("p_any_le0", "p_any_le0_tsfm", "p_any_le0_logit")]
-    return lines, probs
+    rows = [(r.zone, r.market_date, ts(r.t_utc), "hour", qn, nn(getattr(r, qn)), r.input_mode,
+             ts(r.issue_utc), arm)
+            for r in hourly.itertuples() for qn in HOUR_QUANTITIES]
+    rows += [(r.zone, r.market_date, ts(day_start_utc(r.market_date)), "day", qn, nn(getattr(r, qn)),
+              r.input_mode, ts(r.issue_utc), arm)
+             for r in day.itertuples() for qn in DAY_QUANTITIES]
+    return rows
 
 
-LINES_UPSERT = """INSERT INTO simulations.model_lines (bidding_zone, date_time_utc, model, price_eur_mwh, code_version)
-    VALUES (%s, %s, %s, %s, %s) ON CONFLICT (bidding_zone, date_time_utc, model, code_version)
-    DO UPDATE SET price_eur_mwh = EXCLUDED.price_eur_mwh, generated_at = now()"""
-PROBS_UPSERT = """INSERT INTO simulations.overlay_probabilities
+# The WHERE on DO UPDATE rejects an older issue overwriting a newer one of the same vintage key
+# (e.g. a delayed retry of a run after a later re-issue); different modes/arms are different rows
+# and the exporter picks the latest-issue vintage per zone-day.
+OVERLAY_UPSERT = """INSERT INTO simulations.tsfm_overlay
     (bidding_zone, market_date, date_time_utc, level, quantity, value, input_mode, issue_utc, model_version)
     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
     ON CONFLICT (bidding_zone, market_date, date_time_utc, quantity, input_mode, model_version)
     DO UPDATE SET value = EXCLUDED.value, issue_utc = EXCLUDED.issue_utc, level = EXCLUDED.level,
-                  generated_at = now()"""
+                  generated_at = now()
+    WHERE simulations.tsfm_overlay.issue_utc <= EXCLUDED.issue_utc"""
 
 
 def write_db(hourly, day, arm, cx=None, allow_after_gate=False):
@@ -327,7 +327,7 @@ def write_db(hourly, day, arm, cx=None, allow_after_gate=False):
     if hourly.after_gate.any() and not allow_after_gate:
         raise SystemExit("refusing to publish an after-gate overlay (issue_utc > D-1 10:00 UTC); "
                          "use --mode pregate0630 or --allow-after-gate")
-    lines, probs = db_rows(hourly, day, arm)
+    rows = db_rows(hourly, day, arm)
     own = cx is None
     if own:  # pragma: no cover - needs Postgres
         import psycopg2
@@ -335,14 +335,15 @@ def write_db(hourly, day, arm, cx=None, allow_after_gate=False):
     try:
         cur = cx.cursor()
         cur.execute(OVERLAY_DDL)
-        cur.executemany(LINES_UPSERT, lines)
-        cur.executemany(PROBS_UPSERT, probs)
+        cur.executemany(OVERLAY_UPSERT, rows)
         cx.commit()
     finally:
         if own:
             cx.close()
-    print(f"wrote {len(lines)} model_lines rows, {len(probs)} overlay_probabilities rows")
-    return len(lines), len(probs)
+    print(f"upserted {len(rows)} simulations.tsfm_overlay rows "
+          f"(vintage {hourly.input_mode.iloc[0]}/{arm} issued {hourly.issue_utc.iloc[0]}; "
+          f"rows of a newer issue are kept)")
+    return len(rows)
 
 
 def main():
