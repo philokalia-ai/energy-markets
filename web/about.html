@@ -76,7 +76,8 @@
     <strong>mechanistically constructed</strong> from the physical generation fleet,
     short-run fuel costs and the coupled transmission network. The book does carry named
     characteristics that were <em>calibrated</em> — chosen with price error in view on a
-    calibration window, then checked on held-out data — and the code flags every one of
+    calibration window, many then checked on held-out days inside the same historical
+    period — and the code flags every one of
     them; the calibration table below lists them. The statistical price overlays on the
     live charts (Timestral, the GBM lines) are kept apart from this model and labelled
     as predictions.
@@ -98,10 +99,13 @@
   <p>
     The sharp claim is <strong>not "no parameters"</strong> — the book has plenty, and
     each is a nameable market characteristic (a zone's gas premium, a hydro system's
-    water value). It is that <strong>no parameter is fitted against the prices the
-    model is scored on</strong>: the methodology is transparent, every input is
-    strictly ex-ante, and activation gates are validated out-of-sample on a held-out
-    window rather than tuned in-sample. A model fitted to prices would absorb exactly
+    water value). It is that <strong>no price is ever a regression target</strong>:
+    the methodology is transparent and every input is strictly ex-ante. Most named
+    characteristics were nonetheless <em>chosen</em> with price error in view on
+    calibration windows; many were then checked on held-out days, but those days lie
+    inside the same historical period the record is scored on, and the two newest
+    mechanisms (cv43, cv44) had no separate hold-out. So the record's scores are not a
+    clean out-of-sample test of the calibration. A model fitted to prices would absorb exactly
     the competitive deviations we exist to measure.
   </p>
 
@@ -160,8 +164,8 @@
         zone's order book mechanistically</strong> and solves the same coupled auction
         the real market solves. Every parameter is a nameable market characteristic,
         justified by physics or public data. 40 of the 43 declared values were
-        calibrated — chosen with price error in view on a calibration window, then
-        validated on held-out data — and each is flagged <em>price-informed</em> in the
+        calibrated — chosen with price error in view on a calibration window, many then
+        checked on held-out days inside the same historical period — and each is flagged <em>price-informed</em> in the
         code's provenance registry. Strictly ex-ante inputs are what keep a calibrated
         value a market characteristic rather than leakage.
       </p>
@@ -185,9 +189,10 @@
           last 14 days, published before the gate), and a full-day pass places that
           energy in the hours where it is worth most — instead of offering unlimited
           energy every hour.</li>
-        <li>Calibration and scoring are kept apart: values are calibrated on a
-          calibration set (Set A) and scored once on a held-out set (Set B). The two
-          most recent mechanisms (cv43 in-merit coal/lignite truthing, cv44 pumped
+        <li>Where a mechanism had a preregistered design (e.g. cv31, cv36), it was
+          calibrated on one set of days (Set A) and scored once on held-out days
+          (Set B) — both inside the period the record covers, so not independent of
+          the historical scores. The two most recent mechanisms (cv43 in-merit coal/lignite truthing, cv44 pumped
           storage) were adopted on a measured 8-day check without a separate
           hold-out.</li>
       </ul>
@@ -513,8 +518,10 @@
     <li><span class="t-time">10:40 UTC</span><span><strong>Overlay refresh</strong> — the
       statistical overlays are issued for tomorrow: the GBM lines, and a refreshed Timestral line
       with the frozen lead-1 forecast as an input (the 06:30 Timestral line uses settled prices only).
-      Inputs are capped at the 10:00 UTC freeze; the site picks it up at about
-      11:30 UTC.</span></li>
+      Timestral takes the latest lead-1 vintage made by 10:00 UTC; the GBM lines have no
+      such cutoff in code and use the freshest vintage present. The site picks both up at
+      about 11:30 UTC — after the auction gate, so these are not pre-gate
+      publications.</span></li>
     <li><span class="t-time">evening</span><span><strong>Reference fill</strong> — ENTSO-E's
       D-1 items propagate to the bulk export late for large zones, so an evening refresh
       fills whatever the morning could not see. Writes never overwrite a pre-gate
@@ -551,7 +558,7 @@
   <h2 id="bidding-strategies">Bidding strategies — how each region's order book is built</h2>
   <p>
     Every zone's hourly supply and demand curves are constructed from fundamentals,
-    with a <strong>published bidding methodology</strong>: where a parameter is calibrated it is a market characteristic — a zone's gas premium, a hydro system's water value — fitted on ex-ante data and validated out-of-sample, never a markup tuned to the prices scored against. The common machinery:
+    with a <strong>published bidding methodology</strong>: where a parameter is calibrated it is a named market characteristic — a zone's gas premium, a hydro system's water value — built on ex-ante data and chosen with price error in view on a calibration window, but never a price regression and never a free markup per hour. The common machinery:
   </p>
   <ul>
     <li><strong>Thermal plants bid short-run marginal cost</strong>: gas plants at
@@ -572,8 +579,9 @@
       transmission constraints; where a zone structurally leans on imports, the
       available import capacity is credited against its scarcity margin.</li>
     <li><strong>Scarcity uplift</strong>: when the day's supply margin over peak
-      demand is thin, offers steepen — the competitive scarcity signal, not a
-      calibration to prices.</li>
+      demand is thin, offers steepen — the competitive scarcity signal. Its onset
+      and steepness per region are calibrated characteristics (chosen with price
+      error in view), not a regression on prices.</li>
   </ul>
   <p>On top of that, each region has a profile reflecting how its market actually sets prices:</p>
   <ul>
@@ -602,7 +610,7 @@
   <p>
     The full parameterization is one <code>ZoneProfile</code> per zone in
     <code>src/merit_order/zone_profiles.jl</code> — every choice justified by physics
-    or public data; calibrated parameters are market characteristics, validated on held-out windows rather than fitted in-sample.
+    or public data; calibrated parameters are market characteristics chosen with price error in view (flagged <code>price_informed</code>), mostly checked on held-out days inside the same historical period — never regressed on prices.
   </p>
 
   <h3 id="zone-strategy-table">The calibration, generated from the running model</h3>

@@ -29,8 +29,9 @@
   a competitive re-clearing of the European day-ahead market from fundamentals (fleets, fuels,
   forecasts, the JAO flow-based network). <em>No price is ever a regression target</em>: the
   bidding form's named characteristics (about 40 — scarcity onsets, water values, the tranche
-  ladder) were chosen with price error in view on calibration windows and checked on held-out
-  ones, and the code flags every one of them as price-informed. Its job is to be a defensible
+  ladder) were chosen with price error in view on calibration windows — most later checked on
+  held-out days inside the same historical period, the two newest without a separate hold-out —
+  and the code flags every one of them as price-informed. Its job is to be a defensible
   counterfactual, not the best point forecast. The dashed lines are its honest statistical
   companions. This page explains what they are, what they are good for, and what they can never
   do.</p>
@@ -42,8 +43,8 @@
       <tr><td style="border-bottom:3px solid var(--series-sim);width:34px"></td>
         <td><strong>Physics</strong> (solid blue)</td>
         <td>The Euphemia-style competitive clearing of all 39 zones from ex-ante fundamentals.</td>
-        <td>Not regressed on prices. Its ~40 named characteristics were calibrated on price error
-        and validated out-of-sample.</td></tr>
+        <td>Not regressed on prices. Its ~40 named characteristics were calibrated on price error;
+        no price is a regression target.</td></tr>
       <tr><td style="border-bottom:3px dashed var(--series-gbm);width:34px"></td>
         <td><strong>Physics + ex-ante GBM</strong> (dashed pink)</td>
         <td>The physics price plus a per-zone gradient-boosted model of the <em>residual</em>
@@ -62,19 +63,28 @@
       <tr><td style="border-bottom:3px dashed var(--series-tsfm);width:34px"></td>
         <td><strong>Timestral TSFM</strong> (dashed violet, shaded q10–q90)</td>
         <td>A pretrained time-series foundation model (Mistral's Timestral-209M), used zero-shot,
-        forecasting tomorrow's hourly price. It is issued twice on D-1, both before the 12:00 CET
-        gate: at 06:30 UTC from the settled price history alone, and at 10:40 UTC with the frozen
-        lead-1 physics forecast added as a known-future input. Its 21 quantiles also give
-        <strong>P(price ≤ 0)</strong> per hour; averaged 50/50 with a small D-1 logistic model of
-        collapse days (refit on settled ≤&nbsp;0 hours), the per-day maximum is the
-        <strong>negative-price risk</strong> shown as a badge when it reaches 30&nbsp;%.</td>
+        forecasting tomorrow's hourly price. It runs twice on D-1. The <strong>06:30 UTC</strong>
+        run reads the settled price history alone and is published before the 12:00 CET gate. The
+        <strong>10:40 UTC</strong> refresh adds our frozen lead-1 physics forecast as a known-future
+        input; its inputs are capped at the latest forecast vintage made by 10:00 UTC (its issue
+        time), but the run itself — and its appearance on the site at about 11:30 UTC — comes after
+        the summer gate (12:00 CEST = 10:00 UTC), and the publication is after the winter gate
+        (11:00 UTC) too. So the 10:40 line is a forecast on pre-gate inputs, not a pre-gate
+        publication. Its 21 quantiles also give <strong>P(price ≤ 0)</strong> per hour, shown
+        averaged 50/50 with an hourly logistic model of collapse (refit on settled ≤&nbsp;0 hours).
+        The <strong>negative-price risk</strong> badge (shown at 30&nbsp;% or more) is a separate
+        day-level blend: 50/50 of the highest hourly Timestral P(≤ 0) and a day-level logistic
+        model of collapse days, fitted separately.</td>
         <td>Not fine-tuned on our data — but it reads settled prices (and, at 10:40, the physics
-        forecast), and the risk blend's logistic is trained on settled prices. A prediction, never
+        forecast), and both logistic models in the risk blends are trained on settled prices. A prediction, never
         part of the counterfactual.</td></tr>
     </tbody>
   </table>
-  <p>Timestral backtest (Sep–Nov 2026, 39 zones, 54k hours, lead 1): MAE 28.0 €/MWh from prices
-  only (06:30), 25.1 with the physics forecast as input (10:40); P(≤ 0) blend Brier 0.009, AUC 0.97. It extrapolates statistically, so — like the yellow line — it
+  <p>Timestral backtest (Sep–Nov 2026, 39 zones, lead 1): MAE 28.0 €/MWh from prices only
+  (06:30, 54k hours); 25.3 with the physics forecast as input on the 47,679 cells where a forecast
+  vintage existed by 10:00 UTC — the days the 10:40 refresh can actually publish (25.1 on a broader
+  reconstruction that also includes seven days whose only vintage was made after 10:00, which
+  production refuses); hourly P(≤ 0) blend Brier 0.009, AUC 0.97. It extrapolates statistically, so — like the yellow line — it
   lags regime breaks and forecasts collapses mostly where recent history shows them. Timestral
   weights are used under their Modified-MIT licence.</p>
 
@@ -94,12 +104,14 @@
       <tr><td>collapse recall (≤€5)</td><td>0.23</td><td><strong>0.49</strong></td><td>0.49</td><td>near-zero hours caught</td></tr>
     </tbody>
   </table>
-  <p><strong>The strict test (2026-11).</strong> A rolling-origin re-test — each of the four
-  quarters 2025-07 → 2026-06 predicted only from data before it, 341,256 cells, scored against the
-  SDAC settlement — changes the picture for the pink line: retrained per fold it scores MAE
-  <strong>24.70</strong>, <em>worse</em> than the physics it corrects (23.30); the frozen model's
-  15.66 on the same cells is an in-sample fit, because its training window covers them. The yellow
-  stats line holds up: <strong>21.05</strong>
+  <p><strong>The strict test (2026-11, cv39).</strong> A rolling-origin re-test built on the cv39
+  books and cv39 physics record — each of the four quarters 2025-07 → 2026-06 predicted only from
+  data before it, 341,256 cells, scored against the SDAC settlement — changes the picture for the
+  pink line: retrained per fold it scores MAE <strong>24.70</strong>, <em>worse</em> than the cv39
+  physics it corrects (23.30). The yellow stats line, retrained per fold, holds up:
+  <strong>21.05</strong>. (The deployed cv37 artifact scores 15.66 on the same cells, but that is
+  an in-sample fit: its training window covers them.) This is a cv39 rebuild, not a direct
+  re-score of the deployed cv37 lines
   (<a href="https://github.com/philokalia-ai/energy-markets/tree/main/docs/experiments/model-lines-rolling-origin">docs/experiments/model-lines-rolling-origin</a>).</p>
 
   <h2>Who wins where</h2>
@@ -129,13 +141,15 @@
   <h2>Honesty notes</h2>
   <ul>
     <li>The cross-validated table uses 5-fold cross-validation grouped by day, but the folds
-    shuffle days rather than respecting time order, and the published pink line's frozen model was
-    trained on the whole window — so its 14.9 is flattering. The strict rolling-origin test above
-    is the honest comparison. The physics line is never regressed on prices and uses only ex-ante
+    shuffle days rather than respecting time order, so each fold trains on days that come after
+    the ones it predicts — its 14.9 for the pink line is held-out but not chronological, and
+    flattering. The strict rolling-origin test above is the honest comparison. The physics line is never regressed on prices and uses only ex-ante
     inputs, but its calibrated characteristics were chosen on windows inside this same period, so
     its number is not a strict hold-out either.</li>
-    <li>All pink-line features are gate-legal (nothing after D-1 12:00 CET); the yellow line's
-    lagged prices are auction results published up to D-2 12:45 CET — also gate-legal.</li>
+    <li>The pink-line features are chosen to be gate-legal (nothing after D-1 12:00 CET), and the
+    yellow line's lagged prices are auction results published up to D-2 12:45 CET. The live
+    emitter does not enforce an as-of cutoff on either: it uses the freshest physics vintage and
+    settled rows present when it runs.</li>
     <li>Where a day has no dashed lines, the models had no validated series for it — gaps are
     shown, never interpolated.</li>
   </ul>

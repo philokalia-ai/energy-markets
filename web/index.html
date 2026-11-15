@@ -645,7 +645,7 @@
           produces, and a provenance badge: <span class="prov-badge prov-observed">observed</span>
           (market data, no choice) or <span class="prov-badge prov-declared">declared</span>
           (a named characteristic, chosen — usually with price error in view on a calibration
-          window — then validated out-of-sample; never regressed on prices).</p>
+          window, often then checked on held-out days; never regressed on prices).</p>
       </div>
       <div id="b3-table" class="method-table-wrap"></div>
     </div>
@@ -681,8 +681,9 @@
         <h2 class="chart-title">6 · Calibration honesty — constructed, calibrated, never regressed</h2>
         <p class="chart-sub">Pillar 5 is <strong>constructed</strong>: its <em>inputs</em> are
           market-observed, its <em>form</em> is a small set of declared parameters. Most of those
-          were calibrated — chosen with price error in view on a calibration window, then validated
-          on held-out windows — and the code flags each one as price-informed.
+          were calibrated — chosen with price error in view on a calibration window, many then
+          checked on held-out days inside the same period — and the code flags each one as
+          price-informed.
           <strong>No price is regressed.</strong> Below: the observed/declared
           census, then the calibration history — every shipped mechanism with its measured Set A /
           Set B deltas, and the NO-SHIPs kept visible beside them.</p>
@@ -1125,7 +1126,7 @@ run_pipelined_backfill(Date(2023,7,1):Day(1):Date(2025,6,30), FOOTPRINT;
       This is a <strong>constructed competitive counterfactual</strong> — a fundamentals-based
       market-clearing model, not a statistical forecaster: no price is ever a regression target.
       Its bidding form has about 40 named characteristics that were calibrated with price error in
-      view and validated on held-out windows; each is published and flagged. The dashed
+      view; each is published and flagged. The dashed
       overlays (Timestral, the GBM lines, the ≤&nbsp;0 risk) are separate, openly statistical
       predictions that read settled prices. Predictions are frozen before
       delivery, never revised, and scored honestly as days settle. The switch at the top
