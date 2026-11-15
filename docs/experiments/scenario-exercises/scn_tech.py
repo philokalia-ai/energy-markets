@@ -61,9 +61,19 @@ con.execute("CREATE TEMP TABLE P AS SELECT arm, zone, h, MIN(p) p FROM P0 GROUP 
 con.execute("""CREATE TEMP TABLE LW AS SELECT area_map_code zone, date_trunc('hour', date_time_utc) h, AVG(total_load_mw) w
   FROM ext.entsoe.day_ahead_total_load_forecast
   WHERE date_time_utc >= (SELECT min(h) FROM P) AND date_time_utc <= (SELECT max(h) FROM P) GROUP BY 1, 2""")
-# the model's day = the UTC date (stored hours 00-23 UTC)
-con.execute("""CREATE TEMP TABLE CD AS SELECT arm, CAST(h AS DATE) d FROM P GROUP BY 1, 2
-  HAVING COUNT(DISTINCT zone) >= 39 AND COUNT(DISTINCT h) >= 23""")
+# The model's day = the UTC date (stored hours 00-23 UTC). A day is COMPLETE for an
+# arm only when EVERY footprint zone has the full UTC-hour set 00..23 (review P2:
+# overall distinct-zone / distinct-hour counts accept a day with one zone-hour missing).
+FOOTPRINT = ["AT", "BE", "BG", "CZ", "DE_LU", "DK1", "DK2", "EE", "ES", "FI", "FR", "GR", "HU", "LT", "LV",
+             "NL", "NO1", "NO2", "NO3", "NO4", "NO5", "PL", "PT", "RO", "RS", "SE1", "SE2", "SE3", "SE4", "SI",
+             "SK", "IT-NORTH", "IT-CNORTH", "IT-CSOUTH", "IT-SOUTH", "IT-Calabria", "IT-Sicily", "IT-Sardinia", "CH"]
+con.execute("CREATE TEMP TABLE FP (zone VARCHAR)")
+con.executemany("INSERT INTO FP VALUES (?)", [(z,) for z in FOOTPRINT])
+con.execute("""CREATE TEMP TABLE CD AS
+  WITH zh AS (SELECT arm, CAST(h AS DATE) d, zone, COUNT(DISTINCT hour(h)) nh FROM P
+              WHERE zone IN (SELECT zone FROM FP) GROUP BY 1, 2, 3)
+  SELECT arm, d FROM zh GROUP BY 1, 2
+  HAVING COUNT(*) FILTER (WHERE nh = 24) = (SELECT COUNT(*) FROM FP)""")
 present = [a for (a,) in con.execute("SELECT DISTINCT arm FROM CD ORDER BY 1").fetchall()]
 print("complete days per arm:", dict(con.execute("SELECT arm, COUNT(*) FROM CD GROUP BY 1 ORDER BY 1").fetchall()))
 import os
@@ -87,13 +97,30 @@ j = con.execute("""SELECT x.arm, b.zone, b.h, b.p pb, x.p ps, LW.w,
   FROM P b JOIN P x ON x.zone = b.zone AND x.h = b.h AND x.arm <> 'eu44_base'
   JOIN LW ON LW.zone = b.zone AND LW.h = b.h
   WHERE b.arm = 'eu44_base' AND CAST(b.h AS DATE) IN (SELECT d FROM DAYS)""").df()
+# ONE common paired cell mask for every arm (review P2): a (zone, hour) is scored only if
+# base, every reported arm and a finite non-negative load weight all exist for it.
+j = j[j.arm.isin(arms) & np.isfinite(j.w) & (j.w >= 0)]
+ncell = j.groupby(["zone", "h"]).arm.nunique()
+keep = ncell[ncell == len(arms)].index
+n_before = j.groupby(["zone", "h"]).ngroups
+j = j.set_index(["zone", "h"]).loc[lambda x: x.index.isin(keep)].reset_index()
+n_exp = len(days) * len(FOOTPRINT) * 24
+print(f"common paired cell mask: {len(keep)} of {n_exp} expected zone-hours scored, identically for every arm "
+      f"({n_exp - len(keep)} excluded: missing in some arm or no load-forecast weight); "
+      f"GR hours {int((keep.get_level_values(0) == 'GR').sum())}")
 prof = pd.read_csv(prof_csv)
 prof["h"] = pd.to_datetime(prof.ts, format="%Y%m%d-%H")
 prof = prof.set_index("h")
+# CCGT SRMC exactly as the hooked plant saw it: get_ttf_price / eua_price(D) read closes dated
+# strictly before D-1 (cv34 gate rule, src/generators/fuel_costs.jl). No TTF close ⇒ the hook
+# offers nothing that day; no EUA close ⇒ eua_price falls back to its yearly table (reported).
 fuel = con.execute("""SELECT d,
-    (SELECT close FROM ext.yfinance.ttf_f t WHERE t.date < d ORDER BY t.date DESC LIMIT 1) ttf,
-    (SELECT close FROM ext.yfinance.eua_co2 e WHERE e.date < d ORDER BY e.date DESC LIMIT 1) eua FROM DAYS""").df()
-fuel["srmc"] = fuel.ttf / 0.59 + 0.202 / 0.59 * fuel.eua + 2.0
+    (SELECT close FROM ext.yfinance.ttf_f t WHERE t.date < d - INTERVAL 1 DAY ORDER BY t.date DESC LIMIT 1) ttf,
+    (SELECT close FROM ext.yfinance.eua_co2 e WHERE e.date < d - INTERVAL 1 DAY ORDER BY e.date DESC LIMIT 1) eua FROM DAYS""").df()
+print(f"CCGT fuel (closes < D-1): {len(fuel)} days, no TTF close on {int(fuel.ttf.isna().sum())}, "
+      f"no EUA close on {int(fuel.eua.isna().sum())}")
+assert fuel.eua.notna().all(), "EUA yearly-table fallback not implemented here — a sample day lacks an EUA close"
+fuel["srmc"] = fuel.ttf / 0.59 + 0.202 / 0.59 * fuel.eua + 2.0      # NaN where no TTF ⇒ not offered
 fuel = fuel.set_index("d").srmc
 
 
@@ -123,7 +150,8 @@ for a in arms:
         offered = np.full(len(gr), par["mw"]); dsp = offered * disp(gr.ps.to_numpy(), par["bid"])
     elif kind == "ccgt":
         sr = gr.d.map(fuel).to_numpy()
-        offered = np.full(len(gr), par["mw"]); dsp = offered * disp(gr.ps.to_numpy(), sr)
+        offered = np.where(np.isnan(sr), 0.0, par["mw"])
+        dsp = offered * disp(gr.ps.to_numpy(), np.nan_to_num(sr, nan=np.inf))
     elif kind in ("batt", "fam"):
         if kind == "batt":
             pmw = 574.0 * prof.reindex(gr.h)["pv_norm"].fillna(0).to_numpy()
@@ -195,3 +223,13 @@ if "eu44_dc574" in arms:
         print(f"  {k}: r = {np.corrcoef(pr[k].fillna(0), dc.ps)[0, 1]:+.3f}; "
               f"profile-weighted DC-arm price {np.average(dc.ps, weights=pr[k].fillna(0) + 1e-12):.1f} vs time-average {dc.ps.mean():.1f}")
 hourly.to_csv("scn_tech_hourly.csv"); spill.to_csv("scn_tech_spill.csv")
+
+# CCGT (blocks' BYOP arms): s* where GR LW Δ crosses 0 and the realised energy share there
+cc = [(0.0, t.loc[t.arm == "eu44_dc574", "gr_lw"].item(), 0.0)] if "eu44_dc574" in t.arm.values else []
+cc += [(float(a.split("_s")[-1]) / 100, t.loc[t.arm == a, "gr_lw"].item(), t.loc[t.arm == a, "e_real"].item())
+       for a in ["eu44_byop_s100", "eu44_byop_s150", "eu44_byop_s200"] if a in t.arm.values]
+for (s0, g0, e0), (s1, g1, e1) in zip(cc, cc[1:]):
+    if g0 > 0 >= g1:
+        f = g0 / (g0 - g1)
+        print(f"CCGT s* = {100 * (s0 + f * (s1 - s0)):.1f} %, realised energy at s* = {e0 + f * (e1 - e0):.3f} × DC "
+              f"(linear between s{100*s0:.0f} and s{100*s1:.0f})")

@@ -777,6 +777,40 @@ function _split_storage_families(tagged, strategies, generators, zone::String,
     return keep, members, budgets
 end
 
+"""
+    _check_extra_families(members, zone, formed) -> nothing
+
+Validate scenario `LinkedHourlyOrder` families returned by an `extra_orders` hook
+before they join the book. The master keys its energy row on the family name, so a
+hook family that reused a fleet family (e.g. `ESTOR:GR`) would merge into it and
+overwrite its budget. Throws `ArgumentError` (the book build then fails visibly) if
+a family:
+- collides with a family already formed from the fleet (`formed`) or uses a reserved
+  prefix (`ESTOR:`, `ERES:`, `BLK:`, `BLKFB:`);
+- is not zone-scoped (`<name>:<zone>`) or has a member outside `zone` — the same
+  name in two zones would otherwise share one budget row in the multi-zone master;
+- has members with different, non-finite or non-positive budgets.
+"""
+function _check_extra_families(members, zone::AbstractString, formed::Set{String})
+    reserved = vcat([last(v) * ":" for v in values(COMPLEX_FAMILY_FUELS)], ["BLK:", "BLKFB:"])
+    budgets = Dict{String,Float64}()
+    for o in members
+        f = o.family
+        f in formed && throw(ArgumentError("extra_orders family '$f' collides with a fleet complex-order family in $zone"))
+        any(r -> startswith(f, r), reserved) &&
+            throw(ArgumentError("extra_orders family '$f' uses a reserved prefix ($(join(reserved, ", ")))"))
+        endswith(f, ":" * zone) && length(f) > length(zone) + 1 ||
+            throw(ArgumentError("extra_orders family '$f' must be zone-scoped as '<name>:$zone'"))
+        string(o.zone) == zone ||
+            throw(ArgumentError("extra_orders family '$f' has a member in zone $(o.zone), book zone is $zone"))
+        b = o.family_budget_mwh
+        (isfinite(b) && b > 0) || throw(ArgumentError("extra_orders family '$f' has an invalid budget $b MWh"))
+        b0 = get!(budgets, f, b)
+        b0 == b || throw(ArgumentError("extra_orders family '$f' has inconsistent member budgets ($b0 vs $b MWh)"))
+    end
+    return nothing
+end
+
 "Clear the cv34 pumping-capability cache (tests / long processes)."
 clear_pump_capability_cache!() = (lock(_PUMP_CAP_LOCK) do; empty!(_PUMP_CAP_CACHE); end; nothing)
 
@@ -2155,6 +2189,7 @@ function create_merit_order_book(
         end
 
         if !isempty(extra_linked)
+            _check_extra_families(extra_linked, bidding_zone, Set(keys(family_budgets)))
             orders = MarketOrder[orders..., extra_linked...]
             for f in sort(unique(o.family for o in extra_linked))
                 println("  🔋 complex orders: scenario family $f — budget " *
