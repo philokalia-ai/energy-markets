@@ -1,4 +1,31 @@
-# DRAFT: `tsfm` + collapse-probability overlay (owner decision, not wired into cron)
+# `tsfm` + collapse-probability overlay — in production (owner decision 2026-11-15)
+
+**Status:** published daily by `.github/workflows/daily-forecast.yml` (step "TSFM overlay
+(Timestral, pre-gate)"), model **Timestral-209M** (`TSFM_ARM=timestral-209m`, Hub revision
+`9874d25` pinned). Shown on energy.philokalia.ai (Recent days + Zone explorer) and in
+`api.philokalia.ai/api/v1/zones/<Z>`. **Licence:** the Timestral weights are Modified-MIT
+with a revenue cap; the owner confirmed the licence is fine for this deployment (2026-11-15).
+
+## Production wiring (what runs every day)
+
+| layer | what | where |
+|---|---|---|
+| schedule | after "Score realized forecasts", before "Export forecast JSON"; `continue-on-error` | `daily-forecast.yml` |
+| mode | **`pregate0630`**: settled prices through D−1, issue D−1 06:30 UTC, `after_gate=false`. `postsim` is not possible in this job: it produces leads 2–7 only, and D's lead-1 sim is frozen later by the ceres JAO runs. A `postsim` refresh belongs after the lead-1 freeze (e.g. the 10:40 `emit_model_lines.sh` cron); not wired | `OVERLAY_MODE` |
+| deps | uv 0.12.21, Python 3.12, `bin/requirements-overlay.txt` (the backtest venv, pinned; timestral @a534bdb) | runner |
+| weights | `actions/cache`, key = Hub revision, `HF_HOME=$GITHUB_WORKSPACE/.hf` | runner |
+| read | Postgres through DuckDB's postgres scanner (`ATTACH … READ_ONLY` + `USE pg`), so the SQL is identical to the extract's | `open_store` |
+| write | idempotent `CREATE TABLE IF NOT EXISTS simulations.overlay_probabilities`; upserts `model_lines` (`tsfm`, `tsfm_q10`, `tsfm_q90`, code_version 1) and `overlay_probabilities` (day rows at the market-day start, `level='day'`) | `write_db` |
+| export | zone JSON + zone parquet: `tsfm`, `tsfm_q10`, `tsfm_q90`, `p_le0` hourly; `p_any_le0`, `tsfm_input_mode`, `tsfm_issue_utc`, `tsfm_arm` per zone-day (latest issue wins) | `bin/export_*`, `tsfm_overlay_maps` |
+| API | `shapeZone` passes the fields through when present (older parquets: old shape) | `workers/api/src/shape.js` |
+| site | violet dashed TSFM + q10–q90 band (legend chip), tooltip, `P(any hour ≤ 0)` stat, `≤0 risk N%` badge at ≥ 0.3 | `web/app.js` |
+| arms | `ARMS` registry: a new arm (e.g. a physics-anchored residual) is one entry; select with `TSFM_ARM` | emitter |
+
+Measured locally (PostgreSQL 16 throwaway cluster, real weights, D = 2026-11-16): fresh venv
+install + run **225 s** on 4 threads (TSFM 80 s, logistic over the scanner ~135 s), peak RSS 3.7 GB.
+
+## Original draft notes (2026-11-14)
+
 
 This is the smallest production path for two overlay series next to `sim` / `gbm` / `stats`.
 Evidence for both is in [README.md](README.md): Sep–Nov 2026, 39 zones, 54,231 cells.

@@ -215,6 +215,49 @@ jobs:
         run: |
           julia --project=. bin/score_forecasts.jl
 
+      # TSFM overlay (owner decision 2026-11-15: publish, model Timestral-209M):
+      # tomorrow's lead-1 TSFM price line (median/q10/q90) + hourly P(price<=0)
+      # + P(any hour<=0) per zone-day, written to simulations.model_lines /
+      # simulations.overlay_probabilities BEFORE the export below picks them up.
+      # PRE-GATE: issue = D-1 06:30 UTC from settled prices only (`postsim`
+      # needs D's lead-1 sim, which this run does not produce — leads 2..7 only;
+      # docs/experiments/tsfm-2026-11/overlay.md). A prediction product next to
+      # sim/gbm/stats; it never feeds the counterfactual. continue-on-error on
+      # every overlay step: an overlay failure never blocks export/publish.
+      - name: Setup uv (TSFM overlay)
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.12.21"
+          enable-cache: true
+          cache-dependency-glob: bin/requirements-overlay.txt
+
+      - name: Cache Timestral weights (pinned Hub revision)
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.hf
+          key: hf-timestral-209m-9874d252ab0aae16f7f7c999f98f98d6ad7d8365
+
+      - name: TSFM overlay (Timestral, pre-gate)
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        timeout-minutes: 20
+        env:
+          ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
+          HF_HOME: ${{ github.workspace }}/.hf
+          TSFM_ARM: timestral-209m      # pluggable: any arm registered in bin/emit_tsfm_overlay.py ARMS
+          OVERLAY_MODE: pregate0630
+          TSFM_THREADS: "4"
+        run: |
+          uv venv --python 3.12 .venv-overlay
+          VIRTUAL_ENV=.venv-overlay uv pip install --index-strategy unsafe-best-match \
+            -r bin/requirements-overlay.txt
+          .venv-overlay/bin/python bin/emit_tsfm_overlay.py \
+            --delivery tomorrow --mode "$OVERLAY_MODE" --write --threads "$TSFM_THREADS"
+
       - name: Export forecast JSON
         if: ${{ !cancelled() }}
         env:

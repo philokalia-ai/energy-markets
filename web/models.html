@@ -53,8 +53,21 @@
         and the published D-1 load &amp; RES forecasts. The strongest honest "just use statistics"
         baseline.</td>
         <td>Yes — directly.</td></tr>
+      <tr><td style="border-bottom:3px dashed var(--series-tsfm);width:34px"></td>
+        <td><strong>Timestral TSFM</strong> (dashed violet, shaded q10–q90)</td>
+        <td>A zero-shot time-series foundation model (Mistral's Timestral-209M) forecasting
+        tomorrow's hourly price from the settled price history alone, issued at 06:30 UTC on D-1 —
+        before the 12:00 CET gate. Its 21 quantiles also give <strong>P(price ≤ 0)</strong> per hour;
+        averaged 50/50 with a small D-1 logistic model of collapse days, the per-day maximum is the
+        <strong>negative-price risk</strong> shown as a badge when it reaches 30&nbsp;%.</td>
+        <td>No training on our data — but it reads settled prices, so it is a prediction, never part
+        of the counterfactual.</td></tr>
     </tbody>
   </table>
+  <p>Timestral backtest (Sep–Nov 2026, 39 zones, 54k hours, lead 1, prices only): MAE 28.0 €/MWh;
+  P(≤ 0) blend Brier 0.009, AUC 0.97. It extrapolates statistically, so — like the yellow line — it
+  lags regime breaks and forecasts collapses mostly where recent history shows them. Timestral
+  weights are used under their Modified-MIT licence.</p>
 
   <h2>How good is each?</h2>
   <p>Out-of-sample, 729 days × 39 zones (2024-07 → 2026-06), energy-weighted;
