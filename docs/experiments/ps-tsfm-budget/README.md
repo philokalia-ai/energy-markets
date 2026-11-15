@@ -78,10 +78,13 @@ The day's forecast prices are sorted, so r uses their rank, not their hour.
 **Not inert.** Between 11 and 384 PS unit-slots change price per zone-day, with
 r between 186 and 328 €/MWh.
 
-**Evaluation**
+**Evaluation** (true 06:30, rerun after the #414 review).
 - **Code:** cv44 default (`ps` on) on both arms; base vs treatment differ only
   in this switch.
-- **Context:** the 06:30 lead-1 ForecastContext (`CLEAR_CONTEXT=0630`).
+- **Context:** the lead-1 issuance at **06:30 UTC D-1**, built directly as
+  `ForecastContext(d, D-1 06:30, 1, …)`. `issuance_context(d, 1; …)` would
+  silently use the 10:00 gate.
+- **Forecast vintage:** issued D-1 06:30, admissible at that issuance.
 - **Days:** the 8 calibration days; all 16 clears `optimal`.
 - **Pairing:** 7,486 paired cells against the live-JSON SDAC actual.
 - **PS generation:** the master LP's hourly PS allocation is used as model
@@ -89,31 +92,43 @@ r between 186 and 328 €/MWh.
 
 | gate | base → treatment | threshold | |
 |---|---|---|---|
-| CH hourly PS-generation MAE | 662 → 505 MW (**+23.6 %**) | ≥ 10 % | pass |
-| AT hourly PS-generation MAE | 402 → 319 MW (**+20.6 %**) | ≥ 10 % | pass |
-| CH/AT price MAE (384 cells) | 55.12 → 54.20 (**−0.92**) | ≤ −0.5 | pass |
-| footprint MAE | 47.12 → 47.02 (−0.10) | degradation ≤ +0.5 | pass |
+| CH hourly PS-generation MAE | 653 → 479 MW (**+26.7 %**) | ≥ 10 % | pass |
+| AT hourly PS-generation MAE | 402 → 326 MW (**+19.0 %**) | ≥ 10 % | pass |
+| CH/AT price MAE (384 cells) | 56.61 → 55.62 (**−0.99**) | ≤ −0.5 | pass |
+| footprint MAE | 48.05 → 47.93 (−0.13) | degradation ≤ +0.5 | pass |
 | cap/floor prints | 0 → 0 | no new | pass |
 
 **Coverage, read before trusting the price number**
-- Only 27 of the 384 CH/AT cells move, and all 27 improve (Σ |err| −354).
-- 149 cells move footprint-wide; outside CH/AT the MAE change is −0.06.
+- Only 34 of the 384 CH/AT cells move, and all 34 improve.
+- 187 cells move footprint-wide.
 - By day, the price gain comes from:
 
   | Day | ΔMAE (CH/AT) | Cells moved |
   |---|---|---|
-  | 11-13 | −4.81 | 16 |
+  | 11-13 | −5.34 | 23 |
   | 09-27 | −1.53 | 4 |
-  | 09-20 | −0.73 | 5 |
-  | 09-16 | −0.29 | 2 |
+  | 09-20 | −0.74 | 5 |
+  | 09-16 | −0.34 | 2 |
   | 10-06, 10-19, 11-02, 11-04 | 0 | 0 |
 
-  On the four zero days the PS price change does not alter the marginal order.
-- The PS-generation gain is broad. Model dispatch was too high in CH (653 MW
-  mean vs 586 actual) and now sits slightly low (470). In AT it moves from 409
-  to 316 against 433 actual.
-- The CH level bias (−69) is essentially untouched, which is not this lever's
-  job.
+- The PS-generation gain is broad. Model dispatch moves from 657 to 449 MW
+  mean in CH (actual 586) and from 397 to 301 in AT (actual 433).
+- The CH level bias (−71) is essentially untouched.
+
+**An earlier run, labelled "06:30", actually ran at 10:00** (the
+`issuance_context` lead-1 delegation, caught in review). It gave the same
+verdict: CH/AT price −0.92, PS generation +23.6 % (CH) and +20.6 % (AT),
+footprint −0.10, caps 0→0. Its results are kept as `o_*_1000`.
+
+**Review fixes in the code.**
+- `issued_utc` is parsed, and only vintages issued at or before the active
+  issuance are admissible. On the legacy path the explicit cutoff is
+  D-1 10:00 UTC. The latest admissible vintage wins.
+- Later vintages therefore never feed earlier issuances or leads 2–7.
+- The file is snapshotted and validated once, before pass 1, and both passes
+  read that immutable snapshot.
+- With no snapshot (e.g. pipelined-backfill book workers) the switch is off;
+  a malformed file is an error.
 
 **Caveats**
 - *Circularity:* historic prices already embody storage behaviour and conduct.
