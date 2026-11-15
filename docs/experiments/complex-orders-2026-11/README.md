@@ -44,9 +44,13 @@ full-load hours. For example, DE_LU offers 114.7 GWh/day against 25.2 GWh/day
 demonstrated.
 
 With `ps`, a zone's PS water-value offers become one `LinkedHourlyOrder`
-family. Its daily budget is the mean daily PS generation over D-15..D-2 from
-`entsoe.aggregated_generation_per_type`. That window closes before the gate, so
-the input is ex-ante. This is the divisible form of an exclusive group of
+family. Its daily budget is the mean daily PS generation over the 14 complete
+UTC days before the cutoff, from `entsoe.aggregated_generation_per_type`:
+- **Cutoff:** `min(D-1, date(as_of − AGG_GEN_PUBLICATION_LATENCY))`.
+- **Legacy path and lead 1 at the gate:** D-15..D-2.
+- **Lead 7 issuance:** only days before D-7.
+- **Cache:** keyed on the effective cutoff, so issuance vintages never share an
+  entry (review fix). This is the divisible form of an exclusive group of
 profile blocks, the instrument PS operators use.
 
 The master allocates each family's energy across the hours. Each member then
@@ -73,11 +77,20 @@ the static must-run split, which bid 0.6·p_min at 5 % of SRMC and 0.4·p_min at
 max(SRMC/2, SRMC−40).
 
 The master MILP decides acceptance:
-- **Accepted blocks** inject their profile as price-takers.
+- **Accepted blocks** enter the pricing MPCC as **fixed injections**
+  (`MPCCOrderBook.fixed_injections`). They are not orders the clear could
+  partially reject. A surplus they force goes to the same penalised slack in
+  the master and in the MPCC (review fix).
 - **Paradoxically accepted blocks** are rejected and the day is re-solved, as
   EUPHEMIA does, for at most 4 rounds. A block is paradoxically accepted when
   Σ_t (P_t − b)·q_t < 0 at the repriced prices. Paradoxical rejection is
   allowed.
+- **If PABs remain after 4 rounds,** the clear is **not** returned. The blocks
+  are released to their original calibrated must-run offers, which every block
+  carries as `BLKFB:` members, and that baseline book is cleared. The result
+  message and `LAST_COMPLEX_INFO.status = :pab_fallback` say so.
+- **On a master failure,** the release is exactly the baseline book (review
+  fixes).
 
 `EUPHEMIA_BLOCK_PRICE=mustrun` sets the block's limit price to the static
 split's blend. That isolates the acceptance rule from the price change.
@@ -189,7 +202,16 @@ adds ≤ 0 hits (3 → 67) together with false alarms (3 → 57).
 
 **Byte-identity guard.** origin/main 35d603d, cleared directly, versus
 `lead/blocks` with the flag unset, on 2026-11-13: 936 of 936 cells identical,
-max |Δ| = 0.
+max |Δ| = 0. This holds both before the review fixes (d2ad46c) and after them
+(45fb9de).
+
+**Review-fix verification (45fb9de).**
+- **`ps`:** re-cleared 11-04 and 11-13. Both are bit-identical to the table's
+  `ps` run (936/936, max |Δ| 0). The context-aware budget cutoff equals the
+  legacy D-15..D-2 window on the record path and at the lead-1 gate, which the
+  unit test also checks.
+- **`blocks`:** the rows in the table predate the fixed-injection and
+  PAB-fallback fixes. The post-fix re-measure on the inner days is below.
 
 ## Verdict (ship/no-ship is the owner's call)
 
