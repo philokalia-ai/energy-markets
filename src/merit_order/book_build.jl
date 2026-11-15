@@ -1025,6 +1025,10 @@ and is no longer a keyword argument.
   renewable_by_time)`. Returned orders (`:supply` or `:demand`) are appended
   (tagged `"EXTRA"`). Models "ships request more power" (cap-priced demand) or
   "a new plant" (supply).
+  A returned `LinkedHourlyOrder` (supply; one `family` name and
+  `family_budget_mwh` shared by its members) is not merged: it enters the
+  complex-order master as an energy-limited family, like pumped storage
+  (a new battery's discharge or a new reservoir).
 - `strategist::Union{Nothing,Function}`: `f(ctx) -> Vector{Tuple{SimpleOrder,String}}`
   (a plain `Vector{SimpleOrder}` is also accepted and re-tagged `"STRATEGIST"`),
   called after `extra_orders` and before merging. `ctx` is a NamedTuple
@@ -2030,11 +2034,22 @@ function create_merit_order_book(
         # ── Stage 8: scenario hooks (extra_orders, strategist) ──────────
         # Feature 3/4: extra scenario orders appended after all standard
         # orders and BEFORE merging. Both :supply and :demand are allowed.
+        # A returned `LinkedHourlyOrder` (a scenario storage/energy-limited
+        # family, e.g. a new battery or reservoir) skips the merge and enters
+        # the complex-order master with its own family budget, like PS.
+        extra_linked = LinkedHourlyOrder[]
         if extra_orders !== nothing
             ctx = (zone=bidding_zone, day=day, timeslots=target_timeslots,
                    resolution_minutes=resolution_minutes,
                    load_by_time=load_by_time, renewable_by_time=renewable_by_time)
             for o in extra_orders(ctx)
+                if o isa LinkedHourlyOrder
+                    o.type == :supply || error("extra_orders: LinkedHourlyOrder families are supply-side")
+                    push!(extra_linked, o)
+                    supply_orders_count += 1
+                    total_supply_capacity += o.quantity
+                    continue
+                end
                 push_tagged!(o, "EXTRA", "extra")
                 if o.type == :supply
                     supply_orders_count += 1
@@ -2136,6 +2151,14 @@ function create_merit_order_book(
                      max(length(target_timeslots), 1)
                 println("  🔋 complex orders: family $f — budget $(round(e, digits=0)) MWh/day " *
                         "vs offered $(round(mw, digits=0)) MW × $(length(target_timeslots)) slots")
+            end
+        end
+
+        if !isempty(extra_linked)
+            orders = MarketOrder[orders..., extra_linked...]
+            for f in sort(unique(o.family for o in extra_linked))
+                println("  🔋 complex orders: scenario family $f — budget " *
+                        "$(round(first(o.family_budget_mwh for o in extra_linked if o.family == f), digits=0)) MWh/day")
             end
         end
 
