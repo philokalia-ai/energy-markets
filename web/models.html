@@ -27,10 +27,13 @@
   <h1>Beyond the physics: the pink and yellow lines</h1>
   <p class="lede">The solid blue line on every chart is the <strong>physics counterfactual</strong> —
   a competitive re-clearing of the European day-ahead market from fundamentals (fleets, fuels,
-  forecasts, the JAO flow-based network), with <em>zero parameters fitted against prices</em>. Its
-  job is to be a defensible counterfactual, not the best point forecast. The two dashed lines are
-  its honest statistical companions. This page explains what they are, what they are good for, and
-  what they can never do.</p>
+  forecasts, the JAO flow-based network). <em>No price is ever a regression target</em>: the
+  bidding form's named characteristics (about 40 — scarcity onsets, water values, the tranche
+  ladder) were chosen with price error in view on calibration windows and checked on held-out
+  ones, and the code flags every one of them as price-informed. Its job is to be a defensible
+  counterfactual, not the best point forecast. The dashed lines are its honest statistical
+  companions. This page explains what they are, what they are good for, and what they can never
+  do.</p>
 
   <h2>The three models</h2>
   <table>
@@ -39,12 +42,15 @@
       <tr><td style="border-bottom:3px solid var(--series-sim);width:34px"></td>
         <td><strong>Physics</strong> (solid blue)</td>
         <td>The Euphemia-style competitive clearing of all 39 zones from ex-ante fundamentals.</td>
-        <td>No — zero fitted parameters.</td></tr>
+        <td>Not regressed on prices. Its ~40 named characteristics were calibrated on price error
+        and validated out-of-sample.</td></tr>
       <tr><td style="border-bottom:3px dashed var(--series-gbm);width:34px"></td>
         <td><strong>Physics + ex-ante GBM</strong> (dashed pink)</td>
         <td>The physics price plus a per-zone gradient-boosted model of the <em>residual</em>
         (settled − physics), trained only on features known before the 12:00 CET gate: the order
-        book's demand, RES/import shares and margin, D-2 fuel closes, calendar.</td>
+        book's demand, RES/import shares and margin, D-2 fuel closes, calendar. It is trained on the
+        cv37 physics line, so it is drawn only on days that have a cv37 physics base — not on days
+        produced by the current model.</td>
         <td>Yes — on the residual.</td></tr>
       <tr><td style="border-bottom:3px dashed var(--series-stats);width:34px"></td>
         <td><strong>Pure-stats GBM</strong> (dashed yellow)</td>
@@ -55,23 +61,27 @@
         <td>Yes — directly.</td></tr>
       <tr><td style="border-bottom:3px dashed var(--series-tsfm);width:34px"></td>
         <td><strong>Timestral TSFM</strong> (dashed violet, shaded q10–q90)</td>
-        <td>A zero-shot time-series foundation model (Mistral's Timestral-209M) forecasting
-        tomorrow's hourly price from the settled price history alone, issued at 06:30 UTC on D-1 —
-        before the 12:00 CET gate. Its 21 quantiles also give <strong>P(price ≤ 0)</strong> per hour;
-        averaged 50/50 with a small D-1 logistic model of collapse days, the per-day maximum is the
+        <td>A pretrained time-series foundation model (Mistral's Timestral-209M), used zero-shot,
+        forecasting tomorrow's hourly price. It is issued twice on D-1, both before the 12:00 CET
+        gate: at 06:30 UTC from the settled price history alone, and at 10:40 UTC with the frozen
+        lead-1 physics forecast added as a known-future input. Its 21 quantiles also give
+        <strong>P(price ≤ 0)</strong> per hour; averaged 50/50 with a small D-1 logistic model of
+        collapse days (refit on settled ≤&nbsp;0 hours), the per-day maximum is the
         <strong>negative-price risk</strong> shown as a badge when it reaches 30&nbsp;%.</td>
-        <td>No training on our data — but it reads settled prices, so it is a prediction, never part
-        of the counterfactual.</td></tr>
+        <td>Not fine-tuned on our data — but it reads settled prices (and, at 10:40, the physics
+        forecast), and the risk blend's logistic is trained on settled prices. A prediction, never
+        part of the counterfactual.</td></tr>
     </tbody>
   </table>
-  <p>Timestral backtest (Sep–Nov 2026, 39 zones, 54k hours, lead 1, prices only): MAE 28.0 €/MWh;
-  P(≤ 0) blend Brier 0.009, AUC 0.97. It extrapolates statistically, so — like the yellow line — it
+  <p>Timestral backtest (Sep–Nov 2026, 39 zones, 54k hours, lead 1): MAE 28.0 €/MWh from prices
+  only (06:30), 25.1 with the physics forecast as input (10:40); P(≤ 0) blend Brier 0.009, AUC 0.97. It extrapolates statistically, so — like the yellow line — it
   lags regime breaks and forecasts collapses mostly where recent history shows them. Timestral
   weights are used under their Modified-MIT licence.</p>
 
   <h2>How good is each?</h2>
-  <p>Out-of-sample, 729 days × 39 zones (2024-07 → 2026-06), energy-weighted;
-  <em>naive</em> = "same hour last week".</p>
+  <p>Cross-validated, 729 days × 39 zones (2024-07 → 2026-06), energy-weighted;
+  <em>naive</em> = "same hour last week". The folds group by day but shuffle days rather than
+  respecting time order — read the honesty notes below before the table.</p>
   <table>
     <thead><tr><th>metric</th><th>physics</th><th>+ ex-ante GBM</th><th>pure stats</th><th>what it measures</th></tr></thead>
     <tbody>
@@ -84,15 +94,23 @@
       <tr><td>collapse recall (≤€5)</td><td>0.23</td><td><strong>0.49</strong></td><td>0.49</td><td>near-zero hours caught</td></tr>
     </tbody>
   </table>
+  <p><strong>The strict test (2026-11).</strong> A rolling-origin re-test — each of the four
+  quarters 2025-07 → 2026-06 predicted only from data before it, 341,256 cells, scored against the
+  SDAC settlement — changes the picture for the pink line: retrained per fold it scores MAE
+  <strong>24.70</strong>, <em>worse</em> than the physics it corrects (23.30); the frozen model's
+  15.66 on the same cells is an in-sample fit, because its training window covers them. The yellow
+  stats line holds up: <strong>21.05</strong>
+  (<a href="https://github.com/philokalia-ai/energy-markets/tree/main/docs/experiments/model-lines-rolling-origin">docs/experiments/model-lines-rolling-origin</a>).</p>
 
   <h2>Who wins where</h2>
-  <p>The hybrid (pink) wins <strong>where the physics is strongest</strong> — the continental core
+  <p>On the cross-validated table above, the hybrid (pink) wins <strong>where the physics is strongest</strong> — the continental core
   (DE/FR/BE/NL/AT/CH/CZ: MAE 13.2 vs stats 13.5), Poland–Slovakia–Hungary, the Baltics — and ties
   in the Nordics. The stats line (yellow) wins <strong>where the physics has a known structural
   gap</strong> — Italy (9.7 vs 12.7) and Iberia — because a lag model isn't dragged by the model's
   bias shape. Physics keeps the best <strong>spike precision everywhere north of the Alps</strong>
   (0.84–1.00): when the blue line calls an extreme hour, it is calling real, mechanical scarcity —
-  not pattern-matching.</p>
+  not pattern-matching. Under the strict rolling-origin test the hybrid beats physics in all four
+  quarters only in IT-NORTH, IT-CNORTH, IT-CSOUTH, IT-SOUTH, IT-Calabria, SE1 and SE2.</p>
 
   <h2>What the dashed lines can never do</h2>
   <ul>
@@ -110,10 +128,12 @@
 
   <h2>Honesty notes</h2>
   <ul>
-    <li>Both dashed lines are evaluated out-of-sample (5-fold cross-validation grouped by day),
-    but the folds shuffle days rather than respecting time order — a strict walk-forward
-    evaluation would score both ML lines somewhat worse. The physics line has no fitting and no
-    leakage of any kind.</li>
+    <li>The cross-validated table uses 5-fold cross-validation grouped by day, but the folds
+    shuffle days rather than respecting time order, and the published pink line's frozen model was
+    trained on the whole window — so its 14.9 is flattering. The strict rolling-origin test above
+    is the honest comparison. The physics line is never regressed on prices and uses only ex-ante
+    inputs, but its calibrated characteristics were chosen on windows inside this same period, so
+    its number is not a strict hold-out either.</li>
     <li>All pink-line features are gate-legal (nothing after D-1 12:00 CET); the yellow line's
     lagged prices are auction results published up to D-2 12:45 CET — also gate-legal.</li>
     <li>Where a day has no dashed lines, the models had no validated series for it — gaps are
@@ -121,12 +141,15 @@
   </ul>
 
   <h2 id="scenarios">Scenario counterfactuals and the model lines</h2>
-  <p>The scenario <a href="./index.html#view=cases">case studies</a> (the data-center and
-  cold-ironing exercises) are pure-physics by construction: a scenario compares two competitive
-  clearings, so any statistical correction applied to both sides largely cancels in the delta —
-  and only the physics engine can clear a world that never happened. The case-study page carries
-  the current-model reruns; the model lines on this page are about the <em>forecast</em> product,
-  not the counterfactuals.</p>
+  <p>The scenario <a href="./index.html#view=cases">case studies</a> (the data-center,
+  cold-ironing and bring-your-own-power exercises) take their <em>delta</em> from physics alone: a
+  scenario compares two competitive clearings by the same engine, and only the physics engine can
+  clear a world that never happened. Where a scenario is shown as a <em>forecast</em> (tomorrow's
+  price with the data center connected, say), it is the <strong>physics-delta composite</strong>:
+  the Timestral base forecast plus Euphemia's Δ (scenario − base) for each zone-hour. It is never
+  Timestral's own response to the change — a statistical model reacts to a structural shift
+  unreliably (0.1× to 1.9× the physics Δ in our tests). The case-study figures are labelled with
+  the model version that produced them; a rerun on the current model (cv44) is in progress.</p>
 
   <p class="lede" style="font-size:0.95rem">Full methodology and per-zone tables:
   <a href="https://github.com/philokalia-ai/energy-markets/tree/main/docs/experiments/forecast-eval-2026-08">docs/experiments/forecast-eval-2026-08</a>.

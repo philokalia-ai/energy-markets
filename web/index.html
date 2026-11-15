@@ -399,8 +399,10 @@
       </div>
       <div class="chart-wrap solver-pass" id="solver-pass"></div>
       <p class="chart-sub solver-caption">A two-pass approximation, not a full storage
-        optimisation — the storage charge/discharge cycle is a known modelling gap, kept
-        visible (see the model map on the <a href="./about.html#model-map">About page</a>).</p>
+        optimisation. Since cv44 pumped storage is energy-limited — a daily budget from its own
+        recent output, spread over the day by a full-day pass before the hourly clear — but pumping
+        demand is still not bid, so the charge half of the cycle remains a known gap, kept visible
+        (see the model map on the <a href="./about.html#model-map">About page</a>).</p>
     </div>
 
     <!-- S6 — where this sits -->
@@ -642,7 +644,8 @@
         <p class="chart-sub">Every named characteristic, its value/source, the strategy label it
           produces, and a provenance badge: <span class="prov-badge prov-observed">observed</span>
           (market data, no choice) or <span class="prov-badge prov-declared">declared</span>
-          (a named characteristic, chosen then validated out-of-sample — never fitted to prices).</p>
+          (a named characteristic, chosen — usually with price error in view on a calibration
+          window — then validated out-of-sample; never regressed on prices).</p>
       </div>
       <div id="b3-table" class="method-table-wrap"></div>
     </div>
@@ -675,10 +678,12 @@
     <!-- B6 · Calibration honesty — observed/declared census + cv-ledger timeline -->
     <div class="chart-card method-section" id="method-b6">
       <div class="chart-head">
-        <h2 class="chart-title">6 · Calibration honesty — constructed, not fitted</h2>
+        <h2 class="chart-title">6 · Calibration honesty — constructed, calibrated, never regressed</h2>
         <p class="chart-sub">Pillar 5 is <strong>constructed</strong>: its <em>inputs</em> are
-          market-observed, its <em>form</em> is a small set of declared parameters validated on
-          held-out windows. <strong>No price is regressed.</strong> Below: the observed/declared
+          market-observed, its <em>form</em> is a small set of declared parameters. Most of those
+          were calibrated — chosen with price error in view on a calibration window, then validated
+          on held-out windows — and the code flags each one as price-informed.
+          <strong>No price is regressed.</strong> Below: the observed/declared
           census, then the calibration history — every shipped mechanism with its measured Set A /
           Set B deltas, and the NO-SHIPs kept visible beside them.</p>
       </div>
@@ -731,6 +736,11 @@
           more does everyone pay?</strong> The two runs differ only in the scenario, so the
           price delta is causal within the model — and because the model is a competitive
           counterfactual, these are competitive-market estimates.
+          The coupled cases 3 and 4 below are cv37 runs. A
+          sampled rerun on cv43 — with a new "bring your own power" arm — is in the repository
+          (e.g. Greece +6.98&nbsp;€/MWh for the data center at cv43 vs +7.10 at cv37; a merchant
+          CCGT would need to offer ≈&nbsp;193&nbsp;% of the data center's load before the Greek price
+          is no higher than today's, cv43). A rerun on the current model, cv44, is in progress.
           Full records, scripts and provenance:
           <a href="https://github.com/philokalia-ai/energy-markets/tree/main/docs/experiments/scenario-exercises">docs/experiments/scenario-exercises</a>.
         </p>
@@ -1112,15 +1122,19 @@ run_pipelined_backfill(Date(2023,7,1):Day(1):Date(2025,6,30), FOOTPRINT;
   <section class="about-card">
     <h2 class="panel-title">About these numbers</h2>
     <p>
-      This is a <strong>no-fit competitive counterfactual</strong> — a fundamentals-based
-      market-clearing model, not a statistical forecaster. Predictions are frozen before
+      This is a <strong>constructed competitive counterfactual</strong> — a fundamentals-based
+      market-clearing model, not a statistical forecaster: no price is ever a regression target.
+      Its bidding form has about 40 named characteristics that were calibrated with price error in
+      view and validated on held-out windows; each is published and flagged. The dashed
+      overlays (Timestral, the GBM lines, the ≤&nbsp;0 risk) are separate, openly statistical
+      predictions that read settled prices. Predictions are frozen before
       delivery, never revised, and scored honestly as days settle. The switch at the top
       flips the whole site between two tracks: <strong>Predicted</strong> — our own
       weather-based inputs, frozen before the 12:00 CET auction gate ("how much can you
       trust our model") — and <strong>As announced</strong> — the TSOs' published D-1
       inputs run through the same bid-construction and solver ("the fair test of the bidding
       mechanism with inputs held at the official figures"). The gap between them, where
-      announced beats predicted, is itself the measured cost of our inputs. Nothing is fitted
+      announced beats predicted, is itself the measured cost of our inputs. No price is fitted
       to the outcomes it is scored against, so persistent gaps between simulated and actual
       prices are <em>findings</em> about how the real market deviates from competitive
       behavior — not model errors to be tuned away.

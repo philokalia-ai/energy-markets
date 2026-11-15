@@ -1317,7 +1317,7 @@
   var RISK_BADGE_MIN = 0.3;   // P(any hour <= 0) at/above which the day list shows a badge
   function pct(p) { return Math.round(p * 100) + "%"; }
   function tsfmIssueText(day) {
-    var mode = day.tsfm_input_mode === "postsim" ? "after the simulated forecast" : "06:30 UTC, settled prices only";
+    var mode = day.tsfm_input_mode === "postsim" ? "10:40 UTC refresh, settled prices + our frozen lead-1 forecast" : "06:30 UTC, settled prices only";
     var at = day.tsfm_issue_utc ? " · issued " + day.tsfm_issue_utc.replace("T", " ").replace(":00Z", " UTC") : "";
     return mode + at;
   }
@@ -5721,9 +5721,15 @@
       c.appendChild(ul);
       return c;
     }
+    // price_informed (zone_profiles.jl PROVENANCE): observed prices took part in
+    // SELECTING the value. Older payloads lack the field — then no count is shown.
+    var nPI = dec.filter(function (k) { return prov[k].price_informed === true; }).length;
     census.appendChild(el("p", "method-census-head",
       "The inputs are overwhelmingly observed; the form is a small set of declared, " +
-      "peer-reviewable parameters — the precise, honest version of “no price is fitted.”"));
+      "peer-reviewable parameters" +
+      (nPI ? " — " + nPI + " of the " + dec.length + " declared ones were calibrated with price error in view " +
+             "(chosen on a calibration window, validated on held-out data)" : "") +
+      ". No price is regressed: that, not “no parameters”, is the claim."));
     var cols = el("div", "method-census-cols");
     cols.appendChild(col("observed — market data, no choice", "prov-observed", obs));
     cols.appendChild(col("declared — named, OOS-validated", "prov-declared", dec));
