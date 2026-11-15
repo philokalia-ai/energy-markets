@@ -144,3 +144,21 @@ end
         @test Euphemia.MeritOrderBook._storage_cutoff_day(D) == Date(2026, 11, 13)   # lead 7: only days < 11-13
     end
 end
+
+@testset "Complex orders: cv44 default and kill-switch" begin
+    kinds() = Euphemia.MeritOrderBook.complex_order_kinds()
+    withenv("EUPHEMIA_COMPLEX_ORDERS" => nothing) do
+        @test kinds() == Set(["ps"])                      # cv44 default
+    end
+    for off in ("off", "OFF", "none", "", "  ")
+        withenv("EUPHEMIA_COMPLEX_ORDERS" => off) do
+            @test isempty(kinds())                        # kill-switch ⇒ cv43 book
+        end
+    end
+    withenv("EUPHEMIA_COMPLEX_ORDERS" => "ps,blocks") do
+        @test kinds() == Set(["ps", "blocks"])            # blocks stays opt-in
+    end
+    withenv("EUPHEMIA_COMPLEX_ORDERS" => "blocks") do
+        @test kinds() == Set(["blocks"])
+    end
+end

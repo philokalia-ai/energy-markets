@@ -212,7 +212,10 @@
 # derate; see the ledger.
 # v42 -> v43: feed-anchored fleet rescue window (Italy), weather-track solar gate
 # input, in-merit truthing default-on; see the ledger.
-const ENERGY_PRICES_CODE_VERSION = 43
+# v43 -> v44: pumped-storage complex orders on by default (EUPHEMIA_COMPLEX_ORDERS
+# default `ps`: energy-limited LinkedHourlyOrder families + full-day master LP,
+# fix-and-reprice); kill-switch EUPHEMIA_COMPLEX_ORDERS=off; see the ledger.
+const ENERGY_PRICES_CODE_VERSION = 44
 
 # Pool size: env-tunable (EUPHEMIA_PG_POOL) because the threaded book build
 # runs up to nzones concurrent queries — 5 connections cap the parallelism
