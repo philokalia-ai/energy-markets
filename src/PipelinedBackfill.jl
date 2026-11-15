@@ -676,6 +676,15 @@ function _run_pipelined_backfill_impl(days, zones::Vector{String}=String[];
     # from a failing addprocs) is removed on ANY exit by the outer finally.
     pre_pids = Set(procs())
     ws = Int[]
+    # Run state read AFTER the outer try/finally (summary + return value).
+    # `try` opens a new local scope in Julia: a variable first assigned inside
+    # it is not visible after `end`, so these must be bound out here. (1dcf995
+    # wrapped worker startup in this outer try and left them inside — every
+    # SUCCESSFUL run then threw `UndefVarError: wall0` after saving its days.)
+    day_prices = Dict{Date,Dict{String,Dict{String,Float64}}}()
+    saved = 0; failed = 0
+    wall0 = 0.0
+    solver_futs = []
     try
     ws = isempty(extract_env) ?
         addprocs(nprocs_add; exeflags="--project=$proj") :
@@ -696,10 +705,6 @@ function _run_pipelined_backfill_impl(days, zones::Vector{String}=String[];
            scenario=scenario, decompose_periods=resolved_decompose,
            books_dir=books_dir_abs, as_of=as_of)
 
-    day_prices = Dict{Date,Dict{String,Dict{String,Float64}}}()
-    saved = 0; failed = 0
-    wall0 = 0.0
-    solver_futs = []
     try
         # Load Dates alongside Euphemia: scenario hooks are closures serialized
         # from the coordinator's Main, and the documented examples reference
