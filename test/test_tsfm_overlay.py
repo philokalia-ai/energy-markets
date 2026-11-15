@@ -98,6 +98,32 @@ class InformationSetTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             ov.sim_known(self.sim_frame()[lambda s: s.t < pd.Timestamp("2026-11-14 22:00")], "2026-11-15")
 
+    def phys_frames(self):
+        t = pd.date_range("2026-08-01", "2026-11-16", freq="h")
+        load = pd.concat([pd.DataFrame({"zone": z, "t": t, "load_fc": 1000.0}) for z in ZONES])
+        res = pd.DataFrame({"zone": "GR", "t": t, "wind_fc": 100.0, "solar_fc": 50.0})   # DE_LU: no RES rows
+        days = pd.date_range("2026-08-01", "2026-11-14", freq="D")
+        fuel = pd.concat([pd.DataFrame({"fuel": "ttf", "date": days.date, "close": 30.0}),
+                          pd.DataFrame({"fuel": "eua", "date": days.date, "close": 70.0})])
+        # the D-1 (2026-11-14) close is published after a D-1 morning issue: must not be used for D
+        fuel.loc[(fuel.fuel == "ttf") & (fuel.date == pd.Timestamp("2026-11-14").date()), "close"] = 1e6
+        return load, res, fuel
+
+    def test_physics_arm_covariates_and_postsim_only(self):
+        m = StubModel(); m.physics = True
+        with self.assertRaises(ValueError):
+            ov.overlay(m, prices(), ZONES, "2026-11-15", "pregate0630", phys=self.phys_frames())
+        hourly, _ = ov.overlay(m, prices(), ZONES, "2026-11-15", "postsim", sim=self.sim_frame(),
+                               phys=self.phys_frames())
+        self.assertEqual(m.ctx.shape, (2, ov.PHYS_CTX_HOURS))         # context capped at 2048 h
+        self.assertEqual(m.known.shape, (2, 3, ov.PHYS_CTX_HOURS + 24))
+        H = 24
+        np.testing.assert_allclose(m.known[0, 1, -H:], 850.0)        # GR: 1000 - 100 - 50
+        np.testing.assert_allclose(m.known[1, 1, -H:], 1000.0)       # DE_LU: no RES -> load only
+        np.testing.assert_allclose(m.known[:, 2, -H:], 30 / 0.5 + 0.202 / 0.5 * 70 + 2)  # D-2 closes
+        self.assertTrue(np.all(m.known[:, 2, :] < 1e5))              # D-1 close never enters
+        self.assertTrue((hourly.input_mode == "postsim").all())
+
     def test_probabilities_and_blend(self):
         q = np.linspace(-10, 10, 21)[None]          # symmetric around 0 -> P(<=0) = median level
         self.assertAlmostEqual(ov.p_le(q, LEVELS, 0.0).item(), 0.5)
