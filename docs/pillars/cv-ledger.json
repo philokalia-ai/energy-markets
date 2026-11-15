@@ -2,6 +2,22 @@
   "_comment": "The calibration cv-ledger for the pillar-5 bid-methodology surface (B6 timeline). CURATED, not generated — but every row cites a committed docs/experiments/ file and carries ONLY the measured deltas from it. This is the one admissible hand-entry on the surface (per docs/pillars/pillar-5-book-methodology-plan.md §7), because these are EXPERIMENT OUTCOMES (results), not book numbers. bin/export_book_methodology.jl READS (never regenerates) this file and folds it into the payload; test_book_methodology_export.jl asserts every `doc` path exists and every `cv` is <= ENERGY_PRICES_CODE_VERSION. NO-SHIPs are listed at equal prominence with status:\"no_ship\" — the discipline is the point.",
   "rows": [
     {
+      "cv": 44,
+      "characteristic": "pumped-storage complex orders (EUPHEMIA_COMPLEX_ORDERS=ps)",
+      "change": "each zone's pumped-storage water-value offers become one energy-limited linked family; daily budget = mean PS generation over the 14 complete days published before the gate (D-15..D-2); a full-day welfare LP over the coupled footprint allocates the energy across hours, then the unchanged hourly clear prices it. No pumping demand. Adopted by owner decision on an 8-day calibration-set measurement (no separate hold-out).",
+      "status": "shipped",
+      "measured": { "days": 8, "cells": 7486, "dMAE": -1.08, "dMAE_exIT": -1.20, "dMAE_budget_binding_zone_hours": -3.3, "new_caps": 0 },
+      "doc": "docs/experiments/complex-orders-2026-11"
+    },
+    {
+      "cv": 43,
+      "characteristic": "in-merit coal/lignite truthing (default-on)",
+      "change": "under fleet_truth_mode=:installed, a baseload type whose SRMC is below gas SRMC on D and D-30 falls back to the trailing-p95 derate instead of installed capacity (DE_LU offered 17.5 GW of hard coal against a 4.7 GW output p95). Adopted on an 8-day calibration-set measurement (no separate hold-out).",
+      "status": "shipped",
+      "measured": { "days": 8, "cells": 7486, "MAE": "60.52 -> 50.01", "bias": "-43.3 -> -28.6", "corr": "0.82 -> 0.84", "new_caps": 0 },
+      "doc": "docs/code-version-ledger.md"
+    },
+    {
       "cv": 31,
       "characteristic": "DEEP_SURPLUS_FLOOR_EUR (solar-regime price-taker floor)",
       "change": "regime-gated -20 EUR/MWh floor on the RES + run-of-river + deepest must-run blocks for the CONTINENTAL_SOLAR group (DE_LU/FR/PL/BE/CZ/CH) in hours whose ex-ante day-ahead solar share of forecast load >= 0.4, so the coupled clear can genuinely fall below zero.",

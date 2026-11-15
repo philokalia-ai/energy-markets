@@ -70,12 +70,17 @@
   </p>
   <p class="lede" style="font-size:1rem">
     One distinction runs through everything below, so we make it first and plainly:
-    <strong>we fit the inputs, but we never fit the prices.</strong> Wind, solar and
-    load are <em>predictions</em> — openly statistical machine-learning models, scored
-    like any forecast. Prices are not predicted at all: they are
+    <strong>we fit the inputs, but prices are never a fitting target.</strong> Wind,
+    solar and load are <em>predictions</em> — openly statistical machine-learning models,
+    scored like any forecast. Prices are not regressed at all: they are
     <strong>mechanistically constructed</strong> from the physical generation fleet,
-    short-run fuel costs and the coupled transmission network. No price parameter is
-    ever tuned against the price errors we report.
+    short-run fuel costs and the coupled transmission network. The book does carry named
+    characteristics that were <em>calibrated</em> — chosen with price error in view on a
+    calibration window, many then checked on held-out days inside the same historical
+    period — and the code flags every one of
+    them; the calibration table below lists them. The statistical price overlays on the
+    live charts (Timestral, the GBM lines) are kept apart from this model and labelled
+    as predictions.
   </p>
 
   <div class="meander" aria-hidden="true"></div>
@@ -94,10 +99,13 @@
   <p>
     The sharp claim is <strong>not "no parameters"</strong> — the book has plenty, and
     each is a nameable market characteristic (a zone's gas premium, a hydro system's
-    water value). It is that <strong>no parameter is fitted against the prices the
-    model is scored on</strong>: the methodology is transparent, every input is
-    strictly ex-ante, and activation gates are validated out-of-sample on a held-out
-    window rather than tuned in-sample. A model fitted to prices would absorb exactly
+    water value). It is that <strong>no price is ever a regression target</strong>:
+    the methodology is transparent and every input is strictly ex-ante. Most named
+    characteristics were nonetheless <em>chosen</em> with price error in view on
+    calibration windows; many were then checked on held-out days, but those days lie
+    inside the same historical period the record is scored on, and the two newest
+    mechanisms (cv43, cv44) had no separate hold-out. So the record's scores are not a
+    clean out-of-sample test of the calibration. A model fitted to prices would absorb exactly
     the competitive deviations we exist to measure.
   </p>
 
@@ -150,13 +158,16 @@
     </div>
     <div class="layer-card layer-build">
       <span class="layer-tag">Layer 2 · constructed</span>
-      <h3>The prices — never fitted</h3>
+      <h3>The prices — never regressed</h3>
       <p>
         Prices are not a regression target. The clearing engine <strong>builds each
         zone's order book mechanistically</strong> and solves the same coupled auction
         the real market solves. Every parameter is a nameable market characteristic,
-        justified by physics or public data — never a knob turned to reduce a price
-        error.
+        justified by physics or public data. 40 of the 43 declared values were
+        calibrated — chosen with price error in view on a calibration window, many then
+        checked on held-out days inside the same historical period — and each is flagged <em>price-informed</em> in the
+        code's provenance registry. Strictly ex-ante inputs are what keep a calibrated
+        value a market characteristic rather than leakage.
       </p>
       <ul>
         <li>Unit-level supply ladders at <strong>short-run marginal cost</strong>
@@ -173,9 +184,17 @@
         <li><strong>Cross-border ATC coupling on 39 zones</strong> with two-pass
           opportunity anchors; zonal prices are the duals of the balance constraints,
           exactly as in the real coupling.</li>
-        <li>No parameter is tuned against price errors on the evaluation sets;
-          activation <strong>gates are preregistered and held out</strong> (Set A to
-          calibrate, Set B scored once).</li>
+        <li><strong>Pumped storage as energy-limited orders</strong> (cv44): each
+          zone's pumped-storage fleet can only produce its recent daily output (its own
+          last 14 days, published before the gate), and a full-day pass places that
+          energy in the hours where it is worth most — instead of offering unlimited
+          energy every hour.</li>
+        <li>Where a mechanism had a preregistered design (e.g. cv31, cv36), it was
+          calibrated on one set of days (Set A) and scored once on held-out days
+          (Set B) — both inside the period the record covers, so not independent of
+          the historical scores. The two most recent mechanisms (cv43 in-merit coal/lignite truthing, cv44 pumped
+          storage) were adopted on a measured 8-day check without a separate
+          hold-out.</li>
       </ul>
       <p>
         <a class="more-link" href="./#view=book">See the constructed order book &rarr;</a>
@@ -187,7 +206,7 @@
       Want to see a price being built rather than described? Open the
       <strong>constructed order book</strong> for any zone and day — the per-plant
       supply ladders, the demand curve, and the exact tranche where they cross to set
-      the clearing price. Nothing is fitted; every step is visible.
+      the clearing price. Nothing is regressed; every step is visible.
     </p>
     <a class="book-cta-btn" href="./#view=book">Open the order book &rarr;</a>
   </div>
@@ -196,7 +215,7 @@
   <p>
     Underneath the two layers, the system is <strong>six pillars over one clearing
     engine</strong> — two <em>fitted</em> (openly statistical predictions), three
-    <em>constructed</em> (mechanistic, never fitted to price), and one
+    <em>constructed</em> (mechanistic, never regressed on price), and one
     <em>constructed with declared anchors</em> (out-of-EU neighbours priced on their
     own fundamentals). Each pillar has a live surface you can open today — the
     <em>&ldquo;How it works&rdquo;</em> row on the results page is exactly this list —
@@ -267,7 +286,9 @@
     <li><strong>The order book.</strong> Thermal units bid their marginal cost;
       renewables bid the D-1 forecast as price-takers; reservoir hydro bids its
       opportunity cost (a water value tied to gas prices, reservoir dryness and
-      seasonal drawdown); demand is the D-1 load forecast, nearly inelastic at the cap.</li>
+      seasonal drawdown); pumped storage bids as an energy-limited family capped at
+      its recent daily output; demand is the D-1 load forecast, nearly inelastic at the
+      cap.</li>
     <li><strong>The coupled clear.</strong> All 39 zones clear simultaneously under
       cross-border capacity limits (the ex-ante flow rule uses flow climatology — never
       same-day observations). Zonal prices are the duals of the zonal balance
@@ -366,7 +387,7 @@
       <g class="mm-node mm-ok" tabindex="0" data-tip="&lt;b&gt;Implemented.&lt;/b&gt; Per-unit fleet from the ENTSO-E registry: outage filtering (planned + forced), stale-validity fallback via recent generation, deduplication, fleet completion and installed-capacity truthing where the registry undercounts.">
         <ellipse cx="300" cy="410" rx="54" ry="24"/><text x="300" y="406">Conventional</text><text x="300" y="420">Plants</text>
       </g>
-      <g class="mm-node mm-part" tabindex="0" data-tip="&lt;b&gt;Partial.&lt;/b&gt; Pumped storage and batteries offer as flexible supply (no minimum load), but there is no inter-temporal charge/discharge arbitrage optimization — a known gap for CH/AT price shape.">
+      <g class="mm-node mm-part" tabindex="0" data-tip="&lt;b&gt;Partial.&lt;/b&gt; Since cv44 pumped storage is energy-limited: each zone's fleet gets a daily energy budget from its own last 14 days of output, a full-day pass over the coupled footprint places it in the most valuable hours, and the hourly clear prices it. Batteries still offer as flexible supply. Pumping demand is not bid (see Charging), so this is not a full charge/discharge optimization.">
         <ellipse cx="370" cy="490" rx="54" ry="22"/><text x="370" y="486">Storage:</text><text x="370" y="500">Discharging</text>
       </g>
       <g class="mm-node mm-ok" tabindex="0" data-tip="&lt;b&gt;Implemented.&lt;/b&gt; The merit-order book: SRMC bids, must-run discounts for the cheapest units, scarcity uplift when the margin over peak is thin. Strategy is &lt;i&gt;competitive by construction&lt;/i&gt; — no markup; the gap to reality is the finding.">
@@ -378,7 +399,7 @@
       <g class="mm-node mm-ok" tabindex="0" data-tip="&lt;b&gt;Implemented.&lt;/b&gt; All 39 zones clear jointly under their capacity limits: offered ATC where the market really uses ATC, and since cv35 JAO's own flow-based maximum bilateral exchanges (scaled to each hub's net-position range, capped by transmission-outage messages) on the Core and Nordic borders, which have no day-ahead ATC at all. JAO publishes at 10:30 CET on D-1, so this is ex-ante by construction. Borders to markets we do not model enter as data through a versioned ex-ante flow rule — a per-border load-analogue median blended with the fastest admissible D-2 observation, never same-day flows. &lt;i&gt;Still missing:&lt;/i&gt; the full PTDF/RAM domain, and the exact net-position constraint inside the solver.">
         <ellipse cx="480" cy="168" rx="64" ry="24"/><text x="480" y="164">Interconnections:</text><text x="480" y="178">Exports</text>
       </g>
-      <g class="mm-node mm-ok" tabindex="0" data-tip="&lt;b&gt;Implemented.&lt;/b&gt; Hourly supply orders {volume, €/MWh, timeslot}. Inter-temporal block orders were built, tested on 14 zones, and &lt;i&gt;rejected&lt;/i&gt; — a recorded negative result (they help only thermal-cycling zones in winter).">
+      <g class="mm-node mm-ok" tabindex="0" data-tip="&lt;b&gt;Implemented.&lt;/b&gt; Hourly supply orders {volume, €/MWh, timeslot}. Inter-temporal block orders were built, tested on 14 zones, and &lt;i&gt;rejected&lt;/i&gt; — a recorded negative result (they help only thermal-cycling zones in winter). Since cv44 pumped storage enters as linked, energy-limited hourly families; rebuilt thermal block orders remain opt-in, not in production.">
         <ellipse cx="560" cy="350" rx="76" ry="26"/><text x="560" y="346">Sell</text><text x="560" y="360">{Vol, €/MWh, Timeslot}</text>
       </g>
 
@@ -407,7 +428,7 @@
       <g class="mm-node mm-ok" tabindex="0" data-tip="&lt;b&gt;Implemented.&lt;/b&gt; Imports enter through the coupled clearing; structurally import-leaning zones (e.g. the Baltics) additionally credit interconnector capacity against their scarcity margin. Single-zone mode instead injects historical net imports, fixed.">
         <ellipse cx="800" cy="188" rx="64" ry="24"/><text x="800" y="184">Interconnections:</text><text x="800" y="198">Imports</text>
       </g>
-      <g class="mm-node mm-no" tabindex="0" data-tip="&lt;b&gt;Not implemented.&lt;/b&gt; Pumping / battery-charging demand is not bid into the book — storage participates on the supply side only. The missing half of the arbitrage cycle.">
+      <g class="mm-node mm-no" tabindex="0" data-tip="&lt;b&gt;Not implemented.&lt;/b&gt; Pumping / battery-charging demand is not bid into the book — storage participates on the supply side only. A pumping-demand order was tested and made prices worse in both tests, so it stays off. The missing half of the arbitrage cycle.">
         <ellipse cx="872" cy="470" rx="50" ry="22"/><text x="872" y="466">Storage:</text><text x="872" y="480">Charging</text>
       </g>
       <g class="mm-node mm-ok" tabindex="0" data-tip="&lt;b&gt;Implemented.&lt;/b&gt; Hourly demand orders {volume, €/MWh, timeslot}. The scenario API injects extra demand here — the data-center and cold-ironing case studies are exactly this hook.">
@@ -415,7 +436,7 @@
       </g>
 
       <!-- clearing -->
-      <g class="mm-node mm-ok" tabindex="0" data-tip="&lt;b&gt;Implemented.&lt;/b&gt; EUPHEMIA-style clearing: a MILP with complementarity conditions; zonal prices are the duals of the zonal balance constraints, exactly as in the real coupling. Two passes propagate opportunity costs across the footprint. Solvers: Gurobi / HiGHS.">
+      <g class="mm-node mm-ok" tabindex="0" data-tip="&lt;b&gt;Implemented.&lt;/b&gt; EUPHEMIA-style clearing: a MILP with complementarity conditions; zonal prices are the duals of the zonal balance constraints, exactly as in the real coupling. Two passes propagate opportunity costs across the footprint; since cv44 a full-day pass first allocates pumped-storage energy. Solvers: Gurobi / HiGHS.">
         <ellipse cx="660" cy="512" rx="52" ry="28"/><text x="660" y="504">Market</text><text x="660" y="517">Clearing</text><text x="660" y="530">Price</text>
       </g>
     </svg>
@@ -437,7 +458,8 @@
   <ul>
     <li><strong>The record measures the MECHANISM.</strong> The counterfactual
       backfill — the multi-year history at its record code version
-      (<strong>cv37</strong>) — runs on the <strong>reference
+      (<strong>cv37</strong> in the figures below; a cv44 rerun of 2024-07 → 2026-11
+      has been computed and is being loaded) — runs on the <strong>reference
       inputs</strong>: ENTSO-E's published D-1 load and wind/solar forecasts, the same
       information set the market itself cleared on. Holding the inputs fixed to the
       market's own isolates one question — <em>given those inputs, where would
@@ -493,6 +515,13 @@
     <li><span class="t-time">09:05 / 10:05 UTC</span><span><strong>JAO-aware freeze</strong>
       — once JAO publishes the flow-based domain (10:30 CET), lead 1 is re-cleared on
       the real capacity and frozen. Still pre-gate.</span></li>
+    <li><span class="t-time">10:40 UTC</span><span><strong>Overlay refresh</strong> — the
+      statistical overlays are issued for tomorrow: the GBM lines, and a refreshed Timestral line
+      with the frozen lead-1 forecast as an input (the 06:30 Timestral line uses settled prices only).
+      Timestral takes the latest lead-1 vintage made by 10:00 UTC; the GBM lines have no
+      such cutoff in code and use the freshest vintage present. The site picks both up at
+      about 11:30 UTC — after the auction gate, so these are not pre-gate
+      publications.</span></li>
     <li><span class="t-time">evening</span><span><strong>Reference fill</strong> — ENTSO-E's
       D-1 items propagate to the bulk export late for large zones, so an evening refresh
       fills whatever the morning could not see. Writes never overwrite a pre-gate
@@ -529,7 +558,7 @@
   <h2 id="bidding-strategies">Bidding strategies — how each region's order book is built</h2>
   <p>
     Every zone's hourly supply and demand curves are constructed from fundamentals,
-    with a <strong>published bidding methodology</strong>: where a parameter is calibrated it is a market characteristic — a zone's gas premium, a hydro system's water value — fitted on ex-ante data and validated out-of-sample, never a markup tuned to the prices scored against. The common machinery:
+    with a <strong>published bidding methodology</strong>: where a parameter is calibrated it is a named market characteristic — a zone's gas premium, a hydro system's water value — built on ex-ante data and chosen with price error in view on a calibration window, but never a price regression and never a free markup per hour. The common machinery:
   </p>
   <ul>
     <li><strong>Thermal plants bid short-run marginal cost</strong>: gas plants at
@@ -550,8 +579,9 @@
       transmission constraints; where a zone structurally leans on imports, the
       available import capacity is credited against its scarcity margin.</li>
     <li><strong>Scarcity uplift</strong>: when the day's supply margin over peak
-      demand is thin, offers steepen — the competitive scarcity signal, not a
-      calibration to prices.</li>
+      demand is thin, offers steepen — the competitive scarcity signal. Its onset
+      and steepness per region are calibrated characteristics (chosen with price
+      error in view), not a regression on prices.</li>
   </ul>
   <p>On top of that, each region has a profile reflecting how its market actually sets prices:</p>
   <ul>
@@ -580,7 +610,7 @@
   <p>
     The full parameterization is one <code>ZoneProfile</code> per zone in
     <code>src/merit_order/zone_profiles.jl</code> — every choice justified by physics
-    or public data; calibrated parameters are market characteristics, validated on held-out windows rather than fitted in-sample.
+    or public data; calibrated parameters are market characteristics chosen with price error in view (flagged <code>price_informed</code>), mostly checked on held-out days inside the same historical period — never regressed on prices.
   </p>
 
   <h3 id="zone-strategy-table">The calibration, generated from the running model</h3>
@@ -622,7 +652,8 @@
     <strong>bias</strong> (mean simulated&nbsp;−&nbsp;actual — negative means the model
     under-prices, which for a competitive counterfactual is a signal, not a bug), and
     <strong>correlation</strong> of hourly prices. Whole-sample, never cherry-picked.
-    The current published record is <strong>cv37</strong>: all 39 zones, 786 delivery
+    The record quoted here is <strong>cv37</strong> (the current model is cv44; its
+    record figures will replace these once loaded): all 39 zones, 786 delivery
     days (2024-07-01 → 2026-08-26), 734,640 hourly cells matched against settled
     prices. Over the comparable last 12 months (2025-07 → 2026-06, 341,160 cells) the
     footprint sits at <strong>MAE €23.7</strong>, bias <strong>−€5.2</strong>, with a

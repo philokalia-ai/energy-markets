@@ -106,12 +106,18 @@ series, hours ascending: `temp_c`, `ghi_wm2`, `cloud_pct`, `pressure_hpa`,
 `GET /api/v1/inputs/manifest` — freshness, column dictionary, and the per-zone
 midday RES-coverage summary the map colours by.
 
-Every payload carries the producing `code_version` (currently 37). Metric
+Every payload carries the producing `code_version` (the exporter's
+`ENERGY_PRICES_CODE_VERSION`, currently 44; zone rows carry the version that
+produced each forecast). Metric
 conventions: **bias** = simulated − actual (negative = model under-prices),
 **MAE** in €/MWh, **corr** = Pearson on hourly prices, all over realized hours
 only. Predictions are frozen at `prediction_made_utc` and never revised — this
-is a no-fit ex-ante counterfactual, so persistent residuals are findings about
-the real market, not tuning targets.
+is an ex-ante counterfactual whose prices are never a regression target (its
+calibrated bidding characteristics are flagged `price_informed` in
+`src/merit_order/zone_profiles.jl`), so persistent residuals are findings about
+the real market, not tuning targets. The `gbm`, `stats`, `tsfm*` and `p_le0`
+fields are statistical overlays that read settled prices, never part of the
+counterfactual.
 
 Reference JSON shapes are produced by `bin/export_forecast_json.jl`; the R2
 parquet by `bin/export_web_parquet.jl` and `bin/export_prediction_inputs.jl`.
