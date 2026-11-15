@@ -140,3 +140,15 @@ single-period slice fine. Verified bit-exact against the Gurobi monolith
 
 Also deferred: scenario-hook propagation and the single-zone / `:uc_based` /
 `:alternative` paths (Increment 1 is coupled merit-order only).
+
+## PS master at 15-min (2026-11 pilot)
+
+The independent-period proof above predates the cv44 storage master. The master
+couples the day's periods (an MWh budget per family; each quarter's MW counts ×0.25), and it
+runs unchanged at 96 periods. Because the storage LP is degenerate across the four
+quarters of an hour, it can swing a whole family 0↔Pmax between quarters even when every
+input is hourly-replicated. In that case the reduces-to-hourly identity no longer holds
+for books with PS. `EUPHEMIA_PS_INTRAHOUR=flat` keeps each family's MW constant
+within the hour, a coarse ramp proxy. It is opt-in and a no-op on hourly books. The 8-day
+evaluation is in
+[experiments/15min-pilot-2026-11](experiments/15min-pilot-2026-11/README.md).
