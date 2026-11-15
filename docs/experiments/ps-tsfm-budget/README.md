@@ -50,3 +50,79 @@ than univariate history. The circularity caveat applies: generation is
 dispatch, not stored energy. Archived; the cv44 budget stays E₁₄.
 
 Script: `gate1_budget.py`. Output: `em-team/results/blocks/p2_gate1.csv`.
+
+---
+
+# Idea 2 — PS opportunity reference from a frozen 06:30 Timestral price forecast: PASS (2026-11-15)
+
+**Mechanism.** Opt-in, behind two environment variables:
+`EUPHEMIA_PS_OPP_REF_FILE` (the forecast file) and `EUPHEMIA_PS_OPP_ZONES`
+(which zones apply it).
+
+The inputs are frozen before either clearing pass:
+- **Forecast:** the tsfm agent's prices-only Timestral-209M forecast of
+  delivery day D, issued 06:30 UTC D-1 (`fc_t209_uni_L1`).
+- **Context:** ends D-1 21:00 UTC. D-1's prices were auctioned on D-2, so the
+  input is ex-ante.
+
+In the `:hydro`-anchored pass-2 books of the listed zones (here CH and AT),
+**pumped-storage units only** change their reference price:
+- The reference becomes **0.5 × the coupled reference + 0.5 × r**. Everything
+  else is unchanged: the anchor share, the dryness boost and the
+  [2, gas SRMC] clamp. Reservoir hydro is untouched.
+- **r** is the H-th highest forecast hourly price of D.
+- **H** = round(E₁₄ / offered PS MW), bounded to 1–24.
+
+The day's forecast prices are sorted, so r uses their rank, not their hour.
+
+**Not inert.** Between 11 and 384 PS unit-slots change price per zone-day, with
+r between 186 and 328 €/MWh.
+
+**Evaluation**
+- **Code:** cv44 default (`ps` on) on both arms; base vs treatment differ only
+  in this switch.
+- **Context:** the 06:30 lead-1 ForecastContext (`CLEAR_CONTEXT=0630`).
+- **Days:** the 8 calibration days; all 16 clears `optimal`.
+- **Pairing:** 7,486 paired cells against the live-JSON SDAC actual.
+- **PS generation:** the master LP's hourly PS allocation is used as model
+  dispatch and compared with ENTSO-E actual PS generation (381 CH/AT hours).
+
+| gate | base → treatment | threshold | |
+|---|---|---|---|
+| CH hourly PS-generation MAE | 662 → 505 MW (**+23.6 %**) | ≥ 10 % | pass |
+| AT hourly PS-generation MAE | 402 → 319 MW (**+20.6 %**) | ≥ 10 % | pass |
+| CH/AT price MAE (384 cells) | 55.12 → 54.20 (**−0.92**) | ≤ −0.5 | pass |
+| footprint MAE | 47.12 → 47.02 (−0.10) | degradation ≤ +0.5 | pass |
+| cap/floor prints | 0 → 0 | no new | pass |
+
+**Coverage, read before trusting the price number**
+- Only 27 of the 384 CH/AT cells move, and all 27 improve (Σ |err| −354).
+- 149 cells move footprint-wide; outside CH/AT the MAE change is −0.06.
+- By day, the price gain comes from:
+
+  | Day | ΔMAE (CH/AT) | Cells moved |
+  |---|---|---|
+  | 11-13 | −4.81 | 16 |
+  | 09-27 | −1.53 | 4 |
+  | 09-20 | −0.73 | 5 |
+  | 09-16 | −0.29 | 2 |
+  | 10-06, 10-19, 11-02, 11-04 | 0 | 0 |
+
+  On the four zero days the PS price change does not alter the marginal order.
+- The PS-generation gain is broad. Model dispatch was too high in CH (653 MW
+  mean vs 586 actual) and now sits slightly low (470). In AT it moves from 409
+  to 316 against 433 actual.
+- The CH level bias (−69) is essentially untouched, which is not this lever's
+  job.
+
+**Caveats**
+- *Circularity:* historic prices already embody storage behaviour and conduct.
+  This is a statistically informed predictive variant, not an independent
+  conduct benchmark. The forecast is frozen, and no clearing price is fed back
+  into it.
+- 8 days is a pilot gate, not seasonal validation.
+- Turning it on in production needs the daily 06:30 Timestral forecast
+  written where the clear can read it (the tsfm overlay pipeline) before the
+  clear runs. Until then the switch stays off.
+
+Scripts: `gate_oppref.py`. Forecast table: `em-team/results/blocks/p2_oppref.csv`.
