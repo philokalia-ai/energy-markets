@@ -21,19 +21,21 @@ quarters of an hour (423 of 3,576 family-hours; CH up to 3.8 GW) even where inpu
 hourly-replicated. `EUPHEMIA_PS_INTRAHOUR=flat` (src/mpcc/complex_orders.jl) holds
 each family's MW constant within the hour. It is opt-in and a no-op on hourly books.
 
-## Scores (7,486 hourly cells vs live SDAC; 29,364 native-PT15M quarter cells)
+## Scores: primary cohort = complete paired zone-days (UTC days, legacy D-1 inputs)
 
-| | hourly MAE (H 48.59) | days better | 15-min MAE (H-rep 49.21) | days better |
+The primary cohort has 7,464 hourly cells scored against live SDAC (311 of 312 zone-days) and 29,184 native-PT15M quarter cells (304 zone-days). The partial cohort is reported separately in the score files: IT-Sardinia 09-20 (88/96 quarters, 22/24 hours) and AT 11-13 (92/96 quarters). A Q hour enters Q̄ only with all 4 quarters present.
+
+| | hourly MAE (H 48.58) | days better | 15-min MAE (H-rep 49.12) | days better |
 |---|---|---|---|---|
-| Q | 48.32 (−0.27) | 6/8 | 48.77 (−0.9 %) | 7/8 |
-| Qf | 48.25 (−0.35) | 6/8 | 48.73 (−1.0 %) | 7/8 |
+| Q | 48.31 (−0.27) | 6/8 | 48.68 (−0.9 %) | 7/8 |
+| Qf | 48.23 (−0.35) | 6/8 | 48.63 (−1.0 %) | 7/8 |
 
 Where the gain comes from:
-- solar-ramp hours: −0.47, against −0.28 elsewhere (Qf);
+- solar-ramp hours: −0.48, against −0.29 elsewhere (Qf);
 - zones with native PT15M load and RES: −1.1 %, against −0.3 % for replicated-only zones (Qf, 15-min).
 
 Shape floor (hindsight):
-- S_mean = mean|a − ā_h| = 8.44 €/MWh, which is 17 % of the 15-min MAE.
+- S_mean = mean|a − ā_h| = 8.42 €/MWh, which is 17 % of the 15-min MAE.
 - Intra-hour variance is 6 % of the replicated MSE.
 - Q reproduces half of the actual intra-hour dispersion (4.4 vs 8.4) and about 3 % of the centred shape.
 

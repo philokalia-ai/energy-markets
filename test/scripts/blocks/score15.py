@@ -25,6 +25,11 @@ def load(label):
         df["day"] = os.path.basename(f)[:10]
         out.append(df[["zone", "t", "day", "price"]])
     df = pd.concat(out)
+    dup = df.duplicated(["zone", "t"]).sum()
+    if dup: sys.exit(f"{label}: {dup} duplicate (zone, period) keys — refusing to score")
+    bad = ~np.isfinite(df.price)
+    if bad.any(): print(f"{label}: dropped {int(bad.sum())} non-finite prices")
+    df = df[~bad].copy()
     df["price"] = df.price.round(8)
     return df
 
@@ -44,6 +49,7 @@ a15["sequence"] = a15.sequence.astype(str).str.strip()
 a15 = a15[~a15.zone.isin(["AT", "DE_LU"]) | (a15.sequence == "2")]
 a15 = a15.sort_values("u").drop_duplicates(["zone", "t"], keep="last")[["zone", "t", "act"]]
 a15 = a15[a15.zone.isin(zones)]
+a15 = a15[np.isfinite(a15.act)]
 a15["act"] = a15.act.round(8)
 
 rows = []
@@ -55,19 +61,35 @@ for z in zones:
             if a is not None: rows.append((z, h, a))
 a60 = pd.DataFrame(rows, columns=["zone", "t", "act"])
 a60["t"] = pd.to_datetime(a60.t, utc=True).dt.tz_localize(None)
-a60 = a60.drop_duplicates(["zone", "t"])
-a60["act"] = a60.act.round(8)
+a60 = a60[np.isfinite(a60.act.astype(float))].drop_duplicates(["zone", "t"])
+a60["act"] = a60.act.astype(float).round(8)
 a60 = a60[a60.t.dt.strftime("%Y-%m-%d").isin(days)]
 
-# ---- (a) quarter-hour frame on the native-15 mask
+# ---- coverage contract (planner-p3): primary = complete paired zone-days only.
+# UTC-day windows: expected 24 hourly / 96 quarter periods per zone-day.
 Q["h"] = Q.t.dt.floor("h"); H = H.rename(columns={"t": "h"})
+Q["nqh"] = Q.groupby(["zone", "h"]).t.transform("nunique")
+qm = Q[Q.nqh == 4].groupby(["zone", "h", "day"], as_index=False).price.mean()   # Qbar: 4 quarters required
+# ---- (a) quarter-hour frame on the native-15 mask
 qa = Q.merge(H[["zone", "h", "price"]], on=["zone", "h"], suffixes=("_q", "_h")).merge(a15, on=["zone", "t"])
 qa["hm_act"] = qa.groupby(["zone", "h"]).act.transform("mean")
 qa["nq"] = qa.groupby(["zone", "h"]).act.transform("size")
+qa["qday"] = qa.t.dt.strftime("%Y-%m-%d")
 # ---- (b) hourly frame
-qm = Q.groupby(["zone", "h", "day"], as_index=False).price.mean()
 ha = H.merge(qm, on=["zone", "h", "day"], suffixes=("_h", "_q")).merge(
     a60.rename(columns={"t": "h"}), on=["zone", "h"])
+nq_zd = qa.groupby(["zone", "qday"]).size().rename("n").reset_index()
+nh_zd = ha.groupby(["zone", "day"]).size().rename("n").reset_index()
+qa = qa.merge(nq_zd, on=["zone", "qday"]); ha = ha.merge(nh_zd, on=["zone", "day"])
+qa["complete"] = qa.n == 96; ha["complete"] = ha.n == 24
+native_zd = a15.assign(qday=a15.t.dt.strftime("%Y-%m-%d")).groupby(["zone", "qday"]).size()
+cov = (f"coverage (UTC days, expected {len(zones)}x{len(days)} = {len(zones)*len(days)} zone-days): "
+       f"(b) hourly complete {int((nh_zd.n == 24).sum())}, partial {int((nh_zd.n < 24).sum())}; "
+       f"(a) native-15 zone-days {len(native_zd)}, complete {int((nq_zd.n == 96).sum())}, partial {int((nq_zd.n < 96).sum())}")
+part_a = nq_zd[nq_zd.n < 96].assign(expected=96); part_b = nh_zd[nh_zd.n < 24].assign(expected=24)
+qa_all, ha_all = qa, ha
+qa, ha = qa_all[qa_all.complete].copy(), ha_all[ha_all.complete].copy()
+qa_p, ha_p = qa_all[~qa_all.complete].copy(), ha_all[~ha_all.complete].copy()
 
 def st(sim, act):
     e = sim - act
@@ -116,10 +138,14 @@ def tab_b(g):
 pd.set_option("display.width", 300); pd.set_option("display.max_rows", 200); pd.set_option("display.max_columns", 40)
 f = lambda df: df.round(2).to_string()
 by = lambda df, key, fn: pd.DataFrame({k: fn(g) for k, g in df.groupby(key)}).T   # full frames per group
-qa["qday"] = qa.t.dt.strftime("%Y-%m-%d")
-for fr in (qa, ha): fr["IT"] = fr.zone.str.startswith("IT-")
+for fr in (qa, ha, qa_p, ha_p): fr["IT"] = fr.zone.str.startswith("IT-")
 print(f"days {days}  zones {len(zones)}   UTC-day windows (both arms identical)")
-print(f"(a) quarter cells on native-15 mask: {len(qa)}   (b) hourly cells with act60: {len(ha)}")
+print("inputs: legacy D-1 path (not the 06:30 issuance context); UTC-day windows, not stitched Athens days")
+print(cov)
+print(f"PRIMARY cohort = complete paired zone-days: (a) {len(qa)} quarter cells   (b) {len(ha)} hourly cells")
+print("partial zone-days (n/expected), reported separately:")
+for _, r in part_b.iterrows(): print(f"   (b) {r.zone} {r.day}: {r.n}/{r.expected}")
+for _, r in part_a.iterrows(): print(f"   (a) {r.zone} {r.qday}: {r.n}/{r.expected}")
 print("\n== (b) HOURLY score (current metric): H vs Qbar (mean of 4 quarters) ==")
 print(f(pd.DataFrame({"all": tab_b(ha), "exIT": tab_b(ha[~ha.IT])}).T))
 print("\n== (a) 15-MIN score, same native-15 mask: Q vs H replicated x4 ==")
@@ -140,6 +166,9 @@ print(f(pd.DataFrame({"ctrl": tab_a(qa[qa.ctrl]), "native": tab_a(qa[~qa.ctrl])}
 ramp = ha.h.dt.hour.isin([5, 6, 7, 8, 14, 15, 16, 17])
 print("\n== (b) hourly, ramp hours 05-08 & 14-17 UTC vs rest ==")
 print(f(pd.DataFrame({"ramp": tab_b(ha[ramp]), "rest": tab_b(ha[~ramp])}).T))
+print("\n== PARTIAL cohort (not in the primary numbers above) ==")
+if len(ha_p): print("(b) hourly\n" + f(pd.DataFrame({"partial": tab_b(ha_p)}).T))
+if len(qa_p): print("(a) 15-min\n" + f(pd.DataFrame({"partial": tab_a(qa_p)}).T))
 out = os.environ.get("SCORE15_OUT")
 if out:
     qa.to_parquet(out + "_q.parquet"); ha.to_parquet(out + "_h.parquet")
