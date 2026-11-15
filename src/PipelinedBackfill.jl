@@ -430,7 +430,39 @@ function _with_job_context(f, cfg, day::Date)
     return with_context(f, gate_context(day))
 end
 
-function run_pipelined_backfill(days, zones::Vector{String}=String[];
+function run_pipelined_backfill(days, zones::Vector{String}=String[]; kwargs...)
+    # The coordinator re-configures the data store (read-only source +
+    # writable results) and may return early (everything already saved) or
+    # fail while starting workers. Whatever happens, hand the caller back the
+    # store exactly as it was — never a read-WRITE extract (a shared or
+    # chmod-444 extract would break the next run; on a writable file the
+    # coordinator would silently hold DuckDB's write lock).
+    prev = (store = DATA_STORE[], path = DUCKDB_PATH[], read_only = DUCKDB_READ_ONLY[],
+            results_writable = DUCKDB_RESULTS_WRITABLE[])
+    try
+        return _run_pipelined_backfill_impl(days, zones; kwargs...)
+    finally
+        _restore_data_store!(prev)
+    end
+end
+
+"Restore the data-store mode captured before a pipelined run (DuckDB only)."
+function _restore_data_store!(prev)
+    prev.store == :duckdb || return nothing
+    (DATA_STORE[] == :duckdb && DUCKDB_PATH[] == prev.path &&
+     DUCKDB_READ_ONLY[] == prev.read_only &&
+     DUCKDB_RESULTS_WRITABLE[] == prev.results_writable) && return nothing
+    try
+        configure_data_store!(backend = :duckdb, duckdb_path = prev.path,
+                              read_only = prev.read_only,
+                              results_writable = prev.results_writable)
+    catch e
+        @error "pipeline: could not restore the caller's data store" prev exception = e
+    end
+    return nothing
+end
+
+function _run_pipelined_backfill_impl(days, zones::Vector{String}=String[];
         solver_workers::Int=2,
         book_workers::Int=min(10, max(1, Sys.CPU_THREADS ÷ 8)),
         in_flight::Int=8,
@@ -640,6 +672,11 @@ function run_pipelined_backfill(days, zones::Vector{String}=String[];
 
     nprocs_add = solver_workers + book_workers
     proj = dirname(Base.active_project())
+    # Every process this run adds (pool, crash replacements, a partial pool
+    # from a failing addprocs) is removed on ANY exit by the outer finally.
+    pre_pids = Set(procs())
+    ws = Int[]
+    try
     ws = isempty(extract_env) ?
         addprocs(nprocs_add; exeflags="--project=$proj") :
         addprocs(nprocs_add; exeflags="--project=$proj", env=extract_env)
@@ -917,9 +954,22 @@ function run_pipelined_backfill(days, zones::Vector{String}=String[];
         solver_futs = [(try; fetch(f); catch; (0.0, 0); end) for f in all_solver_futs]
         put!(progress, :stop)
     finally
-        rmprocs(ws)
-        DATA_STORE[] == :duckdb &&
-            configure_data_store!(backend=:duckdb, duckdb_path=abspath(DUCKDB_PATH[]), read_only=false)
+        try
+            rmprocs(ws)
+        catch e
+            @warn "pipeline: rmprocs of the worker pool failed" exception = e
+        end
+    end
+    finally
+        # Outer cleanup: anything this run added that is still alive.
+        extra = setdiff(procs(), pre_pids)
+        if !isempty(extra)
+            try
+                rmprocs(collect(extra))
+            catch e
+                @warn "pipeline: removing leftover workers failed" pids = collect(extra) exception = e
+            end
+        end
     end
 
     wall = time() - wall0

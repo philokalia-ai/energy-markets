@@ -201,6 +201,10 @@ println()
         include(joinpath(@__DIR__, "test_registry_feed_anchor.jl"))
     end
 
+    @testset "Pipelined backfill store restoration" begin
+        include(joinpath(@__DIR__, "test_pipeline_store_restore.jl"))
+    end
+
     @testset "Solar-regime gate: issued weather solar" begin
         include(joinpath(@__DIR__, "test_solar_gate_issued.jl"))
     end

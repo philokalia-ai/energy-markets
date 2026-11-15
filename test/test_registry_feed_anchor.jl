@@ -80,6 +80,7 @@ end
     prev = Euphemia.DATA_STORE[]
     prev_path = Euphemia.DUCKDB_PATH[]
     prev_ro = Euphemia.DUCKDB_READ_ONLY[]   # never reopen a shared extract writable
+    prev_rw = Euphemia.DUCKDB_RESULTS_WRITABLE[]
     # Feed silent since 07-19 (> 60 days before the day): both units last seen then.
     silent = [("STALE", "2026-07-19 12:00:00"), ("CURRENT", "2026-07-19 12:00:00")]
     @test _fa_fleet(silent; disable=true) == ["CURRENT"]          # the defect
@@ -106,5 +107,5 @@ end
         G.clear_generator_caches!()
     end
     @test_logs (:warn, r"feed stale") match_mode=:any _fa_fleet(silent)
-    try; Euphemia.configure_data_store!(backend=prev, duckdb_path=prev_path, read_only=prev_ro); catch; end
+    try; Euphemia.configure_data_store!(backend=prev, duckdb_path=prev_path, read_only=prev_ro, results_writable=prev_rw); catch; end
 end

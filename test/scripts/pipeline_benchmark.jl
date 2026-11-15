@@ -56,12 +56,14 @@ proj(secs_per_day, ndays) = secs_per_day * ndays / 3600      # hours
 # Baseline: today's --workers 2 day-parallel path (read-only workers, pmap).
 # --------------------------------------------------------------------------
 function run_baseline(days, nworkers)
+    pre_pids = Set(procs())
+    ws = Int[]
+    local wall, solve_secs
+    try
     Euphemia.configure_data_store!(backend=:duckdb, duckdb_path=extract, read_only=true)
     ws = addprocs(nworkers; exeflags="--project=$(dirname(Base.active_project()))",
         env=["EUPHEMIA_DATA_STORE" => "duckdb", "EUPHEMIA_DUCKDB_PATH" => extract,
              "EUPHEMIA_DUCKDB_READONLY" => "true", "ENERGY_CONN_STR" => ""])
-    local wall, solve_secs
-    try
         @everywhere ws @eval using Euphemia
         t0 = time()
         results = pmap(days) do d
@@ -74,15 +76,28 @@ function run_baseline(days, nworkers)
         wall = time() - t0
         solve_secs = isempty(results) ? 0.0 : sum(r.solve for r in results)
     finally
-        rmprocs(ws)
+        extra = setdiff(procs(), pre_pids)
+        if !isempty(extra)
+            try
+                rmprocs(collect(extra))
+            catch e
+                @warn "benchmark: removing workers failed" exception = e
+            end
+        end
     end
     return wall, solve_secs
 end
 
 # --------------------------------------------------------------------------
 println("\n" * "="^70 * "\n▶ BASELINE (day-parallel, $sw workers)\n" * "="^70)
-base_wall, base_solve = run_baseline(days, sw)
-Euphemia.configure_data_store!(backend=:duckdb, duckdb_path=extract, read_only=false)
+prev_store = (read_only = Euphemia.DUCKDB_READ_ONLY[], results_writable = Euphemia.DUCKDB_RESULTS_WRITABLE[])
+base_wall, base_solve = try
+    run_baseline(days, sw)
+finally
+    # Back to the caller's mode — never a read-write reopen of the extract.
+    Euphemia.configure_data_store!(backend=:duckdb, duckdb_path=extract,
+        read_only=prev_store.read_only, results_writable=prev_store.results_writable)
+end
 @printf("baseline wall = %.0f s  (%.1f s/day, %.1f days/h)\n",
     base_wall, base_wall / N, N / base_wall * 3600)
 

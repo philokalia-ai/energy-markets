@@ -144,6 +144,10 @@ function with_worker_pool(f, nworkers::Int)
     Euphemia.DATA_STORE[] == :duckdb ||
         error("--workers requires the DuckDB extract backend")
     extract = abspath(Euphemia.DUCKDB_PATH[])
+    prev_read_only = Euphemia.DUCKDB_READ_ONLY[]
+    pre_pids = Set(procs())
+    ws = Int[]
+    try
     Euphemia.configure_data_store!(backend=:duckdb, duckdb_path=extract, read_only=true)
     ws = addprocs(nworkers;
         exeflags="--project=$(dirname(Base.active_project()))",
@@ -155,13 +159,23 @@ function with_worker_pool(f, nworkers::Int)
              # ~CPU÷N threads and ~60%RAM÷N). Env-overridable per the settings.
              "EUPHEMIA_DUCKDB_NPROCS_HINT" => string(nworkers),
              "ENERGY_CONN_STR" => ""])
-    try
         @everywhere ws @eval using Euphemia
         return f()
     finally
-        rmprocs(ws)
-        # Back to read-write so the coordinator can persist results and score.
-        Euphemia.configure_data_store!(backend=:duckdb, duckdb_path=extract, read_only=false)
+        extra = setdiff(procs(), pre_pids)   # the pool, or a partial one from a failing addprocs
+        if !isempty(extra)
+            try
+                rmprocs(collect(extra))
+            catch e
+                @warn "reproduce: removing workers failed" exception = e
+            end
+        end
+        # The coordinator persists the returned prices next: results must be
+        # writable, but the SOURCE goes back to the caller's mode — never
+        # reopened read-write (a shared / chmod-444 extract would break, a
+        # writable one would hold DuckDB's write lock against other readers).
+        Euphemia.configure_data_store!(backend=:duckdb, duckdb_path=extract,
+                                       read_only=prev_read_only, results_writable=true)
     end
 end
 
