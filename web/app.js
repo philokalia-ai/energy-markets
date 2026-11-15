@@ -212,7 +212,9 @@
     if (params.bhr && !isNaN(+params.bhr)) state.bookHour = +params.bhr;
     if (params.metric && ["sim", "act", "err"].indexOf(params.metric) !== -1) mapState.metric = params.metric;
     if (params.window) state.window = params.window;
-    if (params.res === "q15") state.res = "q15";
+    // Board resolution: absent / anything else = the hourly default, so Back from a
+    // #res=q15 URL to a plain board URL returns to hourly.
+    state.res = params.res === "q15" ? "q15" : "h60";
     // The global track lens: URL overrides the localStorage preference.
     if (params.track && TRACKS[params.track]) state.track = params.track;
   }
@@ -3877,10 +3879,9 @@
             td.title = q15
               ? "15-min MAE " + fmt(s.mae, 2) + " €/MWh: the hourly forecast repeated on its 4 quarters " +
                 "vs native PT15M SDAC prices · n=" + s.n_days + " days with native quarter-hour prices.\n" +
-                "Shape floor " + fmt(s.shape, 2) + " €/MWh" +
-                (s.shape !== null && s.shape !== undefined && s.mae ? " (" + fmt(100 * s.shape / s.mae, 0) + "% of this MAE)" : "") +
-                ": the error even a perfect hourly price would still make, because prices move within the hour " +
-                "(mean |quarter − its hour's mean|, measured after the fact). The rest is hourly level error."
+                "Shape floor " + fmt(s.shape, 2) + " €/MWh: how far quarter-hour prices moved around their " +
+                "hour's mean (mean |quarter − hour mean|), measured after the fact. A diagnostic of " +
+                "intra-hour movement, not a part of the MAE (MAE does not split additively)."
               : "MAE " + fmt(s.mae, 2) + " €/MWh · n=" + s.n_days + " days";
             // Track-gap chip: when the OTHER track also scored this (zone, lead,
             // window), show the input-cost delta inline (the difference IS the

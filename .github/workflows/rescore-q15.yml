@@ -15,6 +15,12 @@ on:
         required: false
         default: "48"
 
+permissions:
+  contents: read
+
+env:
+  JULIA_VERSION: "1.13.4"   # same pin as transfer-record.yml
+
 # Own group: joining `daily-forecast` could let this pending run supersede a pending
 # daily run. Overlapping with the daily scorer is benign (same q15 values UPDATEd).
 concurrency:
@@ -27,9 +33,19 @@ jobs:
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
-      - name: Instantiate
+      - name: Setup Julia
+        uses: julia-actions/setup-julia@v1
+        with:
+          version: ${{ env.JULIA_VERSION }}
+      - name: Install Julia dependencies
         timeout-minutes: 30
-        run: julia --project=. -e 'using Pkg; isempty(Pkg.Registry.reachable_registries()) && Pkg.Registry.add(); Pkg.instantiate()'
+        run: |
+          julia --project=. -e "
+            using Pkg
+            isempty(Pkg.Registry.reachable_registries()) && Pkg.Registry.add()
+            Pkg.instantiate()
+            Pkg.precompile()
+          "
       - name: Backfill 15-min scores (hourly columns untouched)
         timeout-minutes: 80
         env:

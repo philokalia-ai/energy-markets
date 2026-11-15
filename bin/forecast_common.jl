@@ -345,9 +345,11 @@ Complete coverage is enforced (the #423 review):
 
 Fields: `n_q15`, `mae_q15`, `bias_q15` (forecast − actual), `corr_q15`
 (`nothing` if n < 3 or either side has zero variance, the `score_series`
-semantics), `shape_floor_q15` = mean |a − ā_hour| over the complete hours, i.e.
-the error a perfect hourly level would still make (a hindsight diagnostic, not a
-forecast skill). ≤0 counts use `round(p, digits=8) <= 0`, explicitly NOT the €5
+semantics), `shape_floor_q15` = mean |a − ā_hour| over the complete hours: the
+intra-hour dispersion of the actuals, a hindsight diagnostic (not a forecast
+skill). It is NOT an additive component of `mae_q15`: MAE does not decompose
+like MSE, and for an hour [0,0,0,100] with forecast 0 it exceeds the MAE (37.5
+vs 25). ≤0 counts use `round(p, digits=8) <= 0`, explicitly NOT the €5
 collapse helper: `n_le0_q15_actual`, `n_le0_q15_pred`, `le0_q15_hits`.
 `q15_status` ∈ "ok" | "below_min" | "duplicate_keys".
 """

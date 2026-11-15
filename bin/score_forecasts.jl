@@ -62,10 +62,40 @@ const Q15_COLUMNS = [("n_q15", "INT"), ("mae_q15", "DOUBLE PRECISION"),
                      ("n_le0_q15_actual", "INT"), ("n_le0_q15_pred", "INT"),
                      ("le0_q15_hits", "INT")]
 
+"""
+    ensure_q15_columns() -> Bool
+
+Catalog first: read which q15 columns `simulations.forecast_scores` lacks; in the
+steady state none are missing and NO DDL is issued (an `ADD COLUMN IF NOT EXISTS`
+on an existing column still takes ACCESS EXCLUSIVE and can queue behind a long
+reader, blocking every later reader behind it). When some are missing, add them
+in ONE transaction under `SET LOCAL lock_timeout = '5s'` (reset automatically at
+COMMIT/ROLLBACK, so the connection keeps its default), mirroring
+`ensure_forecast_tables`. Returns whether the q15 columns are available; a lock
+timeout is NOT fatal — the hourly scoring proceeds and q15 is skipped this run.
+"""
 function ensure_q15_columns()
     Euphemia.withdb() do cnx
-        for (c, ty) in Q15_COLUMNS
-            LibPQ.execute(cnx, "ALTER TABLE simulations.forecast_scores ADD COLUMN IF NOT EXISTS $c $ty")
+        have = Set(String.(DataFrame(LibPQ.execute(cnx, """
+            SELECT column_name FROM information_schema.columns
+            WHERE table_schema = 'simulations' AND table_name = 'forecast_scores'
+        """)).column_name))
+        missing_cols = [(c, ty) for (c, ty) in Q15_COLUMNS if !(c in have)]
+        isempty(missing_cols) && return true
+        LibPQ.execute(cnx, "BEGIN")
+        try
+            LibPQ.execute(cnx, "SET LOCAL lock_timeout = '5s'")
+            LibPQ.execute(cnx, "ALTER TABLE simulations.forecast_scores " *
+                               join(("ADD COLUMN IF NOT EXISTS $c $ty" for (c, ty) in missing_cols), ", "))
+            LibPQ.execute(cnx, "COMMIT")
+            println("added q15 columns to simulations.forecast_scores: ",
+                    join(first.(missing_cols), ", "))
+            return true
+        catch e
+            try LibPQ.execute(cnx, "ROLLBACK") catch end
+            @warn "could not add the q15 columns (lock timeout?) — hourly scoring continues, " *
+                  "15-min scores skipped this run" exception = e
+            return false
         end
     end
 end
@@ -256,7 +286,8 @@ function main()
     println("=" ^ 70)
 
     Euphemia.ensure_forecast_tables()
-    ensure_q15_columns()
+    q15_ok = ensure_q15_columns()
+    Q15_ONLY && !q15_ok && error("Q15_ONLY: the q15 columns are missing and could not be added")
 
     slices = pending_slices()
     if isempty(slices)
@@ -292,7 +323,8 @@ function main()
               resolution_aware_actuals(market_date - Day(1), market_date)
         actmap = Dict{Tuple{String,DateTime},Float64}(
             (String(a.z), DateTime(a.t)) => Float64(a.act) for a in eachrow(act))
-        a15 = get!(() -> q15_actuals_by_zone(market_date), q15_cache, market_date)
+        a15 = q15_ok ? get!(() -> q15_actuals_by_zone(market_date), q15_cache, market_date) :
+              Dict{String,NamedTuple}()
         qwin = athens_day_quarters(market_date)
 
         for zone in sort(unique(String.(sim.z)))
@@ -324,7 +356,7 @@ function main()
             @printf("  %-12s n=%2d MAE=%6.1f bias=%+7.1f corr=%s  collapse[act=%d pred=%d hit=%d FA=%d]\n",
                     zone, s.n, s.mae, s.bias, corr_str,
                     cm.n_collapse_actual, cm.n_collapse_pred, cm.hits, cm.false_alarms)
-            score_q15_zone!(market_date, zone, lead_days, cv, input_mode, is_retro, sub, a15, qwin)
+            q15_ok && score_q15_zone!(market_date, zone, lead_days, cv, input_mode, is_retro, sub, a15, qwin)
         end
     end
 

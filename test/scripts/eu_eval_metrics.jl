@@ -68,13 +68,17 @@ end
 """
 Non-SDAC day-ahead `sequence`s to drop from the NATIVE 15-MIN target, per zone.
 AT and DE_LU carry two day-ahead auctions in `entsoe.energy_prices`. Sequence 2
-is EXAA, not SDAC. In every month 2022-12..2026-11 its prices never equal the
-coupled neighbours' (NL for DE_LU, CZ for AT: 0.0-0.2 % of MTUs), against
-10-48 % for sequence 1. It is published at about 11:10 local time, which is
-EXAA's slot, while sequence 1 comes in the SDAC results batch (about 12:15-13:15
-local). DK1/DK2 sequence 2 rows are float-noise copies of the same SDAC price.
-The hourly score's `resolution_aware_actuals` (highest sequence) is deliberately
-left unchanged. Flip an entry to "1" to target the other auction.
+is the early EXAA auction, not SDAC. In the read-only 2026-11-15 extract,
+Oct 15-Nov 13, latest row per zone/time/sequence/resolution: AT sequence 1
+equals CZ in 279/2,880 quarters, sequence 2 in 0/2,876; DE_LU sequence 1 equals
+NL in 339/2,880, sequence 2 in 1/2,880. Monthly 2022-12..2026-11, sequence 1
+matches its coupled neighbour in roughly 2-48 % of MTUs, sequence 2 in at most
+about 0.2 %. Sequence 2's update stamp is about 11:10 local time (an ingestion
+stamp, not an authenticated exchange publication time), ahead of the SDAC batch.
+The #424 review confirmed this independently. DK1/DK2 sequence 2 rows are
+float-noise copies of the same SDAC price. The hourly score's
+`resolution_aware_actuals` (highest sequence) is deliberately left unchanged.
+Flip an entry to "1" to target the other auction.
 """
 const Q15_NON_SDAC_SEQUENCE = Dict("AT" => "2", "DE_LU" => "2")
 

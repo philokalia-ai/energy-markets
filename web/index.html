@@ -720,8 +720,9 @@
         <strong>Resolution:</strong> <em>15-min</em> scores the same hourly forecast, repeated on its
         four quarters, against native quarter-hour (PT15M) SDAC prices. It covers only zone-days
         whose settled prices are natively quarter-hourly; other zones show “—”. Hover a 15-min MAE
-        for its <em>shape floor</em>: the error even a perfect hourly price would still make,
-        because prices move within the hour. It is measured after the fact and is not a skill score.
+        for its <em>shape floor</em>: how far quarter-hour prices moved around their hour's mean,
+        measured after the fact. It describes intra-hour movement; it is neither a skill score nor
+        a share of the MAE.
         Hover a cell for the number of scored days.
       </p>
     </div>
