@@ -175,6 +175,18 @@ On cold ironing, the arms' responses correlate with Euphemia's Δ at cell level 
 
 ## Coverage and what was not done
 
+- **The backtest residual load is a gate-time proxy** (latest ENTSO-E revisions, not
+  publication-filtered).
+  - With strict publication filtering at the D-1 10:00 UTC gate, as the opt-in emitter arm now
+    enforces (#416), most delivery-day inputs are not provably pre-gate on the extract:
+    - 98% of D's RES rows and 31% of its load rows carry a later stamp, because the ETL overwrites
+      them with intraday revisions;
+    - so the residual load for D falls back to t−168 h.
+  - On the one day checked (11-13), the filtered C has MAE 43.4, against 32.6 unfiltered and 35.9
+    for A.
+  - C's 22.8 is therefore an upper bound until a publication-filtered backtest is run, or a RES
+    source that keeps pre-gate vintages exists.
+
 - **Backtest:** 61 days × 39 zones, 54,231 common cells. Scenario test: 8 days. DC: 4 zones ×
   24 h. Cold ironing: 30 zones with |Δsim| > 0.1 or a load shift.
 - **One model, Timestral-209M.** Chronos-2 was not re-run (budget).
