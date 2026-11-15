@@ -42,6 +42,7 @@
     bookDay: null,         // "YYYY-MM-DD" selected in the order-book view
     bookHour: 12,          // hour index selected in the order-book view
     window: "all",
+    res: "h60",            // scoreboard resolution: "h60" (hourly, default) | "q15" (native 15-min)
     sort: { lead: null, metric: "mae", dir: 1 }, // dir 1 = best first
     hoverIdx: null,
     track: "predicted",    // the global lens: "predicted" | "announced" (see TRACKS)
@@ -211,6 +212,7 @@
     if (params.bhr && !isNaN(+params.bhr)) state.bookHour = +params.bhr;
     if (params.metric && ["sim", "act", "err"].indexOf(params.metric) !== -1) mapState.metric = params.metric;
     if (params.window) state.window = params.window;
+    if (params.res === "q15") state.res = "q15";
     // The global track lens: URL overrides the localStorage preference.
     if (params.track && TRACKS[params.track]) state.track = params.track;
   }
@@ -228,6 +230,7 @@
     if (state.view === "method" && state.methodZone) parts.push("mzone=" + encodeURIComponent(state.methodZone));
     if (state.view === "map" && mapState.metric !== "sim") parts.push("metric=" + mapState.metric);
     if (state.window && state.window !== "all") parts.push("window=" + encodeURIComponent(state.window));
+    if (state.view === "board" && state.res === "q15") parts.push("res=q15");
     // The global track lens is shareable via the URL (non-default only, to keep
     // links clean); localStorage carries the default between visits.
     if (state.track && state.track !== "predicted") parts.push("track=" + state.track);
@@ -3751,14 +3754,31 @@
       return;
     }
     var leads = scoreboardLeads();
-    var scores = tracked.filter(function (s) { return s.window === state.window; });
+    // Resolution: the hourly board (default) or the native 15-min board. The two
+    // are NEVER mixed in one ranking — in 15-min mode every cell, sort and the
+    // track-gap chip use only the q15 fields, and zone-days without native PT15M
+    // actuals (PT60M/PT30M zones) are absent ("—"), not filled with hourly scores.
+    var q15 = state.res === "q15";
+    if ($("res-select")) $("res-select").value = state.res;   // URL (#res=q15) / back-forward sync
+    function atRes(arr) {
+      if (!q15) return arr;
+      return arr.filter(function (s) {
+        return s.mae_q15 !== null && s.mae_q15 !== undefined && s.n_days_q15 > 0;
+      }).map(function (s) {
+        return { zone: s.zone, lead_days: s.lead_days, window: s.window, input_mode: s.input_mode,
+                 n_days: s.n_days_q15, mae: s.mae_q15, bias: s.bias_q15, corr: s.corr_q15,
+                 shape: s.shape_floor_q15, code_version: s.code_version };
+      });
+    }
+    var resLabel = q15 ? "15-min " : "";
+    var scores = atRes(tracked.filter(function (s) { return s.window === state.window; }));
     var byKey = {};
     scores.forEach(function (s) { byKey[s.zone + "|" + s.lead_days] = s; });
     // Track-gap counterpart: the OTHER track's score for the same slice. The
     // announced track has NO lead dimension (one D-1 freeze per day), so its side
     // is ALWAYS the freeze = the min-lead slice, keyed by zone alone. This also
     // guards against pairing a predicted lead against a stale lead>1 announced row.
-    var altScores = altTrackScores().filter(function (s) { return s.window === state.window; });
+    var altScores = atRes(altTrackScores().filter(function (s) { return s.window === state.window; }));
     var altByZoneFreeze = {};   // announced freeze (min lead) per zone
     altScores.forEach(function (s) {
       var cur = altByZoneFreeze[s.zone];
@@ -3784,8 +3804,8 @@
     tr1.appendChild(thZone);
     leads.forEach(function (l) {
       // Announced = the single D-1 freeze (no lead ladder); label it as such.
-      var th = el("th", "group lead-sep",
-        state.track === "announced" ? "D-1 announcement" : "Lead D-" + l);
+      var th = el("th", "group lead-sep", (q15 ? "15-min · " : "") +
+        (state.track === "announced" ? "D-1 announcement" : "Lead D-" + l));
       th.colSpan = METRICS.length;
       tr1.appendChild(th);
     });
@@ -3797,7 +3817,7 @@
         var th = el("th", "sortable" + (mi === 0 ? " lead-sep" : "") + (isSorted ? " sorted" : ""),
           mdef[1] + (isSorted ? (state.sort.dir === 1 ? " ↓" : " ↑") : ""));
         th.setAttribute("role", "button");
-        th.title = "Sort by " + mdef[1] + " (lead D-" + l + ")";
+        th.title = "Sort by " + resLabel + mdef[1] + " (lead D-" + l + ")";
         th.addEventListener("click", function () {
           if (state.sort.lead === l && state.sort.metric === mdef[0]) {
             state.sort.dir = -state.sort.dir;
@@ -3847,14 +3867,21 @@
               var dot = el("span", "dot dot-" + cls);
               dot.setAttribute("aria-hidden", "true");
               td.appendChild(dot);
-              td.title = "corr " + fmt(s.corr, 2) + " (" +
+              td.title = resLabel + "corr " + fmt(s.corr, 2) + " (" +
                 (cls === "good" ? "good" : cls === "weak" ? "weak" : "moderate") +
                 ") · n=" + s.n_days + " days";
             }
             td.appendChild(document.createTextNode(fmt(s.corr, 2)));
           } else if (mdef[0] === "mae") {
             td.appendChild(document.createTextNode(fmt(s.mae, 1)));
-            td.title = "MAE " + fmt(s.mae, 2) + " €/MWh · n=" + s.n_days + " days";
+            td.title = q15
+              ? "15-min MAE " + fmt(s.mae, 2) + " €/MWh: the hourly forecast repeated on its 4 quarters " +
+                "vs native PT15M SDAC prices · n=" + s.n_days + " days with native quarter-hour prices.\n" +
+                "Shape floor " + fmt(s.shape, 2) + " €/MWh" +
+                (s.shape !== null && s.shape !== undefined && s.mae ? " (" + fmt(100 * s.shape / s.mae, 0) + "% of this MAE)" : "") +
+                ": the error even a perfect hourly price would still make, because prices move within the hour " +
+                "(mean |quarter − its hour's mean|, measured after the fact). The rest is hourly level error."
+              : "MAE " + fmt(s.mae, 2) + " €/MWh · n=" + s.n_days + " days";
             // Track-gap chip: when the OTHER track also scored this (zone, lead,
             // window), show the input-cost delta inline (the difference IS the
             // measured cost of our inputs). Client-side, honestly absent otherwise.
@@ -3869,7 +3896,7 @@
             }
           } else {
             td.textContent = (s.bias > 0 ? "+" : "") + fmt(s.bias, 1);
-            td.title = "bias " + fmt(s.bias, 2) + " €/MWh · n=" + s.n_days + " days";
+            td.title = resLabel + "bias " + fmt(s.bias, 2) + " €/MWh · n=" + s.n_days + " days";
           }
           tr.appendChild(td);
         });
@@ -6561,6 +6588,14 @@
       renderScoreboard();
       writeHash();
     });
+    if ($("res-select")) {
+      $("res-select").value = state.res;
+      $("res-select").addEventListener("change", function (ev) {
+        state.res = ev.target.value === "q15" ? "q15" : "h60";
+        renderScoreboard();
+        writeHash();
+      });
+    }
     if ($("solver-atc")) {
       $("solver-atc").addEventListener("input", renderSolverToy);
     }
