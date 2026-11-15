@@ -211,7 +211,22 @@ max |Δ| = 0. This holds both before the review fixes (d2ad46c) and after them
   legacy D-15..D-2 window on the record path and at the lead-1 gate, which the
   unit test also checks.
 - **`blocks`:** the rows in the table predate the fixed-injection and
-  PAB-fallback fixes. The post-fix re-measure on the inner days is below.
+  PAB-fallback fixes. The post-fix re-measure ran on the 4 inner days (3,742
+  cells, all optimal):
+  - **Footprint:** MAE −1.71 (ex-IT −0.29), correlation 0.821 → 0.794, bias
+    −30.9 → −17.4. No cap or floor prints; the 10-19 ES/PT €3000 is gone.
+  - **PAB fallback on 2 of 4 days** (10-19, 11-04): the PAB loop was still
+    violated after 4 rounds in the final pass. Those days clear the baseline
+    book bit-identically (0 cells moved), which confirms that the fallback
+    restores the original must-run offers.
+  - **09-20 (+3.31) and 11-13 (−10.15)** are unchanged from the pre-fix run.
+  - **Pre-fix on the same 4 days:** −2.79 (ex-IT −0.49), correlation
+    0.82 → 0.66.
+  - **Reading:** with the acceptance rule now enforced, `blocks` is valid but
+    converges within 4 rounds on only half of these days. That is one more
+    reason to keep it opt-in.
+  - **`combo` was not re-run:** the 2-process memory cap during verification
+    didn't allow it. Its pre-fix row inherits the `blocks` caveat.
 
 ## Verdict (ship/no-ship is the owner's call)
 
