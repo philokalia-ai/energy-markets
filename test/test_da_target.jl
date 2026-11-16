@@ -31,14 +31,15 @@ end
         for (z, q) in Q15_NON_SDAC_SEQUENCE
             @test SDAC_SEQUENCE[z] != q
         end
+        # #431 C2: sdac is the default evaluation target; highest_seq is the kill switch
         withenv("EUPHEMIA_DA_TARGET" => nothing) do
-            @test da_target_policy() === :highest_seq
+            @test da_target_policy() === :sdac
         end
         withenv("EUPHEMIA_DA_TARGET" => "") do
-            @test da_target_policy() === :highest_seq
-        end
-        withenv("EUPHEMIA_DA_TARGET" => " SDAC ") do
             @test da_target_policy() === :sdac
+        end
+        withenv("EUPHEMIA_DA_TARGET" => " HIGHEST_SEQ ") do
+            @test da_target_policy() === :highest_seq
         end
         withenv("EUPHEMIA_DA_TARGET" => "exaa") do
             @test_throws ErrorException da_target_policy()
@@ -93,11 +94,13 @@ end
             want_l = _expect(reduce(vcat, [c["legacy"] for c in DA_FIX["cases"]]))
             @test _same(_got(sdac_hourly_actuals(d, d)), want_s)
             @test _same(_got(resolution_aware_actuals(d, d)), want_l)
-            withenv("EUPHEMIA_DA_TARGET" => nothing) do
+            withenv("EUPHEMIA_DA_TARGET" => "highest_seq") do   # kill switch = the legacy reader
                 @test _got(da_target_actuals(d, d)) == _got(resolution_aware_actuals(d, d))
             end
-            withenv("EUPHEMIA_DA_TARGET" => "sdac") do
-                @test _same(_got(da_target_actuals(d, d)), want_s)
+            for v in (nothing, "", "sdac")                     # the default, and explicit
+                withenv("EUPHEMIA_DA_TARGET" => v) do
+                    @test _same(_got(da_target_actuals(d, d)), want_s)
+                end
             end
             # the raw reader returns the column types the pure function expects
             raw = da_raw_rows(d, d)

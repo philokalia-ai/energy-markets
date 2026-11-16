@@ -4,15 +4,23 @@ Python twin of the Julia helper in test/scripts/eu_eval_metrics.jl
 (`da_target_actuals`, `canonical_hourly_actuals`). The two share the fixtures in
 test/fixtures/da_target_cases.json; change both or neither.
 
-Policies, selected by EUPHEMIA_DA_TARGET (unset or empty = highest_seq):
+Two SEPARATE settings (#431 PR C2, owner decision 2026-11-16):
 
-* ``highest_seq`` (default, today's behaviour): latest numeric ``sequence`` per
+* EUPHEMIA_DA_TARGET — EVALUATION targets (scores, actual charts, naives, evaluation labels).
+  Unset or empty = ``sdac`` since 2026-11-17; ``highest_seq`` is the kill switch.
+* EUPHEMIA_DA_INPUT — MODEL INPUTS (Timestral price context, GBM lag history, collapse logistic
+  training labels and features). Unset or empty = ``highest_seq``, pinned: flipping the target
+  can never change a model input. Changing it is a separate model decision.
+
+Policies:
+
+* ``highest_seq`` (the pre-2026-11-17 target; the input default): latest numeric ``sequence`` per
   (zone, interval), tie-broken by latest ``update_time_utc``, then a plain mean
   of the sub-hourly prices in each hour. In AT and DE_LU this selects sequence 2,
   the early EXAA auction. Readers keep their own legacy SQL for this policy, so
   their frames stay byte-identical; ``highest_seq_hourly`` is the same rule as a
   pure function for offline comparisons.
-* ``sdac``: the SDAC auction only, from an explicit zone -> sequence map
+* ``sdac`` (the target default): the SDAC auction only, from an explicit zone -> sequence map
   (``SDAC_SEQUENCE``), ported from
   docs/experiments/cv40-review-fixes/scripts/settlement_view.py:
     1. a zone in the map keeps only its mapped sequence; a zone with one sequence
@@ -27,13 +35,14 @@ Policies, selected by EUPHEMIA_DA_TARGET (unset or empty = highest_seq):
   There is no fallback to EXAA when SDAC is missing: the hour is simply absent.
 
 Public API (stable; the 431E evaluator imports it):
-  policy(env=os.environ) -> "highest_seq" | "sdac"
+  policy(env=os.environ) -> "highest_seq" | "sdac"         (EUPHEMIA_DA_TARGET, default sdac)
+  input_policy(env=os.environ) -> "highest_seq" | "sdac"   (EUPHEMIA_DA_INPUT, default highest_seq)
   SDAC_SEQUENCE, RES_MINUTES, RAW_SQL
   auction_map(raw, sequence_map=SDAC_SEQUENCE) -> DataFrame[z, seq, how, n_seq]
   raw_rows(con, start, end) -> DataFrame[z, seq, res, t, p, u]   (DuckDB, [start, end) UTC)
   highest_seq_hourly(raw) -> DataFrame[z, t, act]
   sdac_hourly(raw, sequence_map=SDAC_SEQUENCE) -> (act, excluded, smap)
-  hourly_actuals(con, start, end, target=None) -> DataFrame[z, t, act]
+  hourly_actuals(con, start, end, target=None) -> DataFrame[z, t, act]   (target=None: policy())
 """
 from __future__ import annotations
 
@@ -44,7 +53,10 @@ import numpy as np
 import pandas as pd
 
 ENV = "EUPHEMIA_DA_TARGET"
+INPUT_ENV = "EUPHEMIA_DA_INPUT"
 POLICIES = ("highest_seq", "sdac")
+DEFAULT_TARGET = "sdac"          # evaluation targets, since 2026-11-17 (#431 PR C2)
+DEFAULT_INPUT = "highest_seq"    # model inputs, pinned
 
 # Explicit zone -> SDAC sequence. AT/DE_LU sequence "2" is EXAA (the Julia
 # Q15_NON_SDAC_SEQUENCE drops it from the 15-min target for the same reason);
@@ -64,12 +76,21 @@ WHERE contract_type = 'Day-ahead' AND area_type_code LIKE 'BZN%' AND currency = 
 _EXCL_COLS = ["z", "t", "seq", "res", "p", "reason"]
 
 
-def policy(env=os.environ) -> str:
-    """The selected target policy; an unknown value raises (never a silent default)."""
-    v = (env.get(ENV) or "highest_seq").strip().lower()
+def _read(env, name, default) -> str:
+    v = (env.get(name) or default).strip().lower()
     if v not in POLICIES:
-        raise ValueError(f"{ENV}={v!r}: expected one of {POLICIES}")
+        raise ValueError(f"{name}={v!r}: expected one of {POLICIES}")
     return v
+
+
+def policy(env=os.environ) -> str:
+    """The EVALUATION target policy (default sdac); an unknown value raises."""
+    return _read(env, ENV, DEFAULT_TARGET)
+
+
+def input_policy(env=os.environ) -> str:
+    """The MODEL INPUT policy (default highest_seq, pinned); an unknown value raises."""
+    return _read(env, INPUT_ENV, DEFAULT_INPUT)
 
 
 def _check(target) -> str:

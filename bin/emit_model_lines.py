@@ -301,12 +301,16 @@ def target_helper():
 
 
 def target_policy():
+    """Auction of the settled lag HISTORY. It is a model INPUT, so it reads the pinned
+    input setting EUPHEMIA_DA_INPUT (default highest_seq), never the evaluation target
+    EUPHEMIA_DA_TARGET (default sdac since 2026-11-17, #431 PR C2). Changing it is a
+    separate model decision. (Name and manifest key kept for provenance continuity.)"""
     helper = target_helper()
     if helper is not None:
-        return helper.policy()
-    policy = (os.environ.get("EUPHEMIA_DA_TARGET") or "highest_seq").strip().lower()
+        return helper.input_policy()
+    policy = (os.environ.get("EUPHEMIA_DA_INPUT") or "highest_seq").strip().lower()
     if policy != "highest_seq":
-        raise ValueError("EUPHEMIA_DA_TARGET requires bin/da_target.py for sdac; "
+        raise ValueError("EUPHEMIA_DA_INPUT requires bin/da_target.py for sdac; "
                          "fallback supports highest_seq only")
     return policy
 

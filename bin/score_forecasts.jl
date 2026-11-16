@@ -16,10 +16,12 @@
 # directly): dedup entsoe.energy_prices to the latest `sequence` revision per
 # (zone, timestamp), then average sub-hourly (PT15M/PT30M) prices into each
 # hour — a no-op for hourly zones. The auction is selected by
-# EUPHEMIA_DA_TARGET via `da_target_actuals` (#431): unset/highest_seq = the
-# rule above (EXAA in AT/DE_LU); sdac = the SDAC auction only. This scorer
-# rewrites only the last RESCORE_WINDOW_DAYS, so flipping the policy without a
-# full rescore mixes targets — see docs/experiments/sdac-target-2026-11/.
+# EUPHEMIA_DA_TARGET via `da_target_actuals` (#431): since 2026-11-17 the
+# default (unset) is sdac = the SDAC auction only; highest_seq = the rule above
+# (EXAA in AT/DE_LU) is the kill switch. This scorer rewrites only the last
+# RESCORE_WINDOW_DAYS, so the flip shipped with one full hourly rescore
+# (.github/workflows/rescore-hourly.yml, the env vars below) —
+# see docs/experiments/sdac-target-2026-11/README.md.
 #
 # Native 15-minute scores (additive, phase 3): in the same pass, each zone-day
 # also gets n_q15 / mae_q15 / bias_q15 / corr_q15 / shape_floor_q15 (+ ≤0
@@ -42,6 +44,14 @@
 #   Q15_ONLY  'true' = history backfill of the 15-min columns: every realized
 #             slice, q15 UPDATE only — the hourly columns are never written
 #             (so ENTSO-E revisions since a day was scored cannot move them)
+# Hourly rescore (rescore-hourly.yml, #431 C2; all unset = the daily behaviour):
+#   HOURLY_ONLY  'true' = hourly columns only; the q15 columns are never written
+#   RESCORE_START / RESCORE_END  market-date bounds (inclusive) of the slices
+#   RESCORE_ZONES  comma list of zones to (re)score (others are skipped)
+#   DRY_RUN  'true' = print slice and existing-row counts, write nothing
+#   SCORE_LOCK_TIMEOUT  e.g. '5s': each slice's upserts run in ONE transaction
+#             under SET LOCAL lock_timeout (+ statement_timeout 120s), retried
+#             3x with backoff, so the rescore never queues behind a long lock
 
 using Euphemia, Dates, Statistics, Printf, DataFrames, LibPQ
 
@@ -52,6 +62,24 @@ include(joinpath(@__DIR__, "..", "test", "scripts", "eu_eval_metrics.jl"))
 const Q15_ONLY = lowercase(get(ENV, "Q15_ONLY", "false")) == "true"
 const RESCORE = Q15_ONLY || lowercase(get(ENV, "RESCORE", "false")) == "true"
 const RESCORE_WINDOW_DAYS = parse(Int, get(ENV, "RESCORE_WINDOW_DAYS", "7"))
+const HOURLY_ONLY = lowercase(get(ENV, "HOURLY_ONLY", "false")) == "true"
+const DRY_RUN = lowercase(get(ENV, "DRY_RUN", "false")) == "true"
+_envdate(k) = (v = strip(get(ENV, k, ""))) == "" ? nothing : Date(v)
+const RESCORE_START = _envdate("RESCORE_START")
+const RESCORE_END = _envdate("RESCORE_END")
+# both are interpolated into SQL: validated here, not only by the workflow
+const RESCORE_ZONES = let v = strip(get(ENV, "RESCORE_ZONES", ""))
+    zs = v == "" || lowercase(v) == "all" ? nothing : Set(String.(strip.(split(v, ","))))
+    zs === nothing || all(z -> occursin(r"^[A-Za-z0-9_-]+$", z), zs) ||
+        error("RESCORE_ZONES=$(repr(v)): expected a comma list of zone codes or 'all'")
+    zs
+end
+const SCORE_LOCK_TIMEOUT = let v = strip(get(ENV, "SCORE_LOCK_TIMEOUT", ""))
+    v == "" || occursin(r"^[0-9]+(ms|s)$", v) ||
+        error("SCORE_LOCK_TIMEOUT=$(repr(v)): expected e.g. 5s or 500ms")
+    v
+end
+Q15_ONLY && HOURLY_ONLY && error("Q15_ONLY and HOURLY_ONLY are mutually exclusive")
 # Minimum paired hours for a (zone, day, lead) score to be persisted. Scores
 # used to be written for ANY n >= 1 (IT-* zones scored on a single 21:00 hour
 # when only four PT15M actual rows had landed) and then frozen by the
@@ -182,6 +210,8 @@ function pending_slices()
                fp.is_retro
         FROM simulations.forecast_prices fp
         WHERE TRUE
+        $(RESCORE_START === nothing ? "" : "AND fp.market_date >= DATE '$(RESCORE_START)'")
+        $(RESCORE_END === nothing ? "" : "AND fp.market_date <= DATE '$(RESCORE_END)'")
         $rescore_clause
         ORDER BY 1, 2
     """)
@@ -212,9 +242,14 @@ end
 
 function upsert_score!(market_date::Date, zone::String, lead_days::Int, cv::Int,
                        input_mode::String, n::Int, mae, bias, corr, cm;
-                       is_retro::Bool=false, reset_tag::Union{Nothing,String}=nothing)
+                       is_retro::Bool=false, reset_tag::Union{Nothing,String}=nothing,
+                       cnx=nothing)
     tonull(x) = x === nothing ? missing : x
-    Euphemia.withdb() do cnx
+    cnx === nothing && return Euphemia.withdb() do c
+        upsert_score!(market_date, zone, lead_days, cv, input_mode, n, mae, bias, corr, cm;
+                      is_retro=is_retro, reset_tag=reset_tag, cnx=c)
+    end
+    begin
         LibPQ.execute(cnx, """
             INSERT INTO simulations.forecast_scores
             (market_date, bidding_zone, lead_days, code_version, input_mode,
@@ -240,6 +275,46 @@ function upsert_score!(market_date::Date, zone::String, lead_days::Int, cv::Int,
                  cm.n_collapse_actual, cm.n_collapse_pred, cm.hits,
                  cm.false_alarms, tonull(cm.hit_rate), tonull(cm.false_alarm_rate),
                  is_retro, reset_tag === nothing ? missing : reset_tag])
+    end
+end
+
+"""
+    write_slice!(rows)
+
+Upsert one slice's hourly scores (`rows`: NamedTuples of `upsert_score!` args).
+Without SCORE_LOCK_TIMEOUT: one autocommitted upsert per row, the daily behaviour.
+With it (the rescore): ONE transaction per slice under `SET LOCAL lock_timeout`
+and `statement_timeout` (reset at COMMIT/ROLLBACK, the #424 pattern), retried 3x
+with backoff; a slice that still cannot get its locks fails the run, which is
+resumable with RESCORE_START.
+"""
+function write_slice!(rows)
+    isempty(rows) && return
+    w(r; cnx=nothing) = upsert_score!(r.market_date, r.zone, r.lead_days, r.cv, r.input_mode,
+                                      r.n, r.mae, r.bias, r.corr, r.cm; is_retro=r.is_retro,
+                                      reset_tag=r.reset_tag, cnx=cnx)
+    if isempty(SCORE_LOCK_TIMEOUT)
+        foreach(w, rows)
+        return
+    end
+    for attempt in 1:3
+        ok = Euphemia.withdb() do cnx
+            LibPQ.execute(cnx, "BEGIN")
+            try
+                LibPQ.execute(cnx, "SET LOCAL lock_timeout = '$(SCORE_LOCK_TIMEOUT)'")
+                LibPQ.execute(cnx, "SET LOCAL statement_timeout = '120s'")
+                foreach(r -> w(r; cnx=cnx), rows)
+                LibPQ.execute(cnx, "COMMIT")
+                true
+            catch e
+                try LibPQ.execute(cnx, "ROLLBACK") catch end
+                attempt == 3 && rethrow()
+                @warn "slice write failed (attempt $attempt/3), retrying" exception = e
+                false
+            end
+        end
+        ok && return
+        sleep(10 * attempt)
     end
 end
 
@@ -284,22 +359,57 @@ function print_summary()
     end
 end
 
+"""
+    dry_run_report(slices)
+
+DRY_RUN: what a rescore over `slices` would touch — slices per lead and mode, and
+the existing forecast_scores rows in the same range per zone (the rows whose
+hourly columns would be rewritten). Reads only.
+"""
+function dry_run_report(slices)
+    d0, d1 = extrema(Date.(slices.market_date))
+    println("DRY_RUN slices: $(nrow(slices)) over market dates $d0..$d1")
+    for g in groupby(sort(DataFrame(lead=slices.lead_days, mode=slices.input_mode)), [:mode, :lead])
+        @printf("  mode=%-24s lead=%d  slices=%d\n", g.mode[1], g.lead[1], nrow(g))
+    end
+    zf = RESCORE_ZONES === nothing ? "" :
+         "AND bidding_zone IN (" * join(("'$z'" for z in sort(collect(RESCORE_ZONES))), ",") * ")"
+    ex = Euphemia.sql2df_with_retry("""
+        SELECT bidding_zone AS z, COUNT(*) AS n FROM simulations.forecast_scores
+        WHERE market_date BETWEEN \$1 AND \$2 $zf GROUP BY 1 ORDER BY 1
+    """, [d0, d1])
+    println("DRY_RUN existing forecast_scores rows in range (hourly columns would be rewritten): " *
+            "$(sum(ex.n; init=0))")
+    for r in eachrow(ex)
+        @printf("  %-12s %d\n", r.z, r.n)
+    end
+    println("DRY_RUN: nothing written")
+end
+
 function main()
     println("=" ^ 70)
-    println("SCORE FORECASTS  rescore=$RESCORE" * (Q15_ONLY ? "  Q15_ONLY (hourly columns untouched)" : ""))
+    println("SCORE FORECASTS  rescore=$RESCORE" * (Q15_ONLY ? "  Q15_ONLY (hourly columns untouched)" : "") *
+            (HOURLY_ONLY ? "  HOURLY_ONLY (q15 columns untouched)" : "") * (DRY_RUN ? "  DRY_RUN" : ""))
+    # Scoring-policy provenance: forecast_scores has no policy column, so the run
+    # log (and the rescore workflow's summary) records it.
+    println("TARGET_POLICY=$(Q15_ONLY ? "q15 native SDAC" : da_target_policy())" *
+            (RESCORE_START === nothing && RESCORE_END === nothing ? "" :
+             "  range=$(something(RESCORE_START, "first"))..$(something(RESCORE_END, "last"))") *
+            (RESCORE_ZONES === nothing ? "" : "  zones=$(join(sort(collect(RESCORE_ZONES)), ","))"))
     println("=" ^ 70)
 
-    Euphemia.ensure_forecast_tables()
-    q15_ok = ensure_q15_columns()
+    DRY_RUN || Euphemia.ensure_forecast_tables()
+    q15_ok = (HOURLY_ONLY || DRY_RUN) ? false : ensure_q15_columns()
     Q15_ONLY && !q15_ok && error("Q15_ONLY: the q15 columns are missing and could not be added")
 
     slices = pending_slices()
     if isempty(slices)
         println("No realized, unscored forecast slices — nothing to score.")
-        print_summary()
+        DRY_RUN || print_summary()
         return
     end
     println("$(nrow(slices)) slice(s) to score")
+    DRY_RUN && return dry_run_report(slices)
     q15_cache = Dict{Date,Dict{String,NamedTuple}}()
 
     for r in eachrow(slices)
@@ -331,7 +441,9 @@ function main()
               Dict{String,NamedTuple}()
         qwin = athens_day_quarters(market_date)
 
+        batch = NamedTuple[]
         for zone in sort(unique(String.(sim.z)))
+            RESCORE_ZONES === nothing || zone in RESCORE_ZONES || continue
             sub = sim[sim.z .== zone, :]
             if Q15_ONLY   # history backfill: q15 columns only, on rows the hourly scorer wrote
                 score_q15_zone!(market_date, zone, lead_days, cv, input_mode, is_retro, sub, a15, qwin)
@@ -353,15 +465,18 @@ function main()
             end
             s = score_series(sv, av)
             cm = collapse_metrics(sv, av)   # SCIENTIST.md §4, threshold ≤ €5
-            upsert_score!(market_date, zone, lead_days, cv, input_mode,
-                          s.n, s.mae, s.bias, s.corr, cm;
-                          is_retro=is_retro, reset_tag=reset_tag)
+            row = (market_date=market_date, zone=zone, lead_days=lead_days, cv=cv,
+                   input_mode=input_mode, n=s.n, mae=s.mae, bias=s.bias, corr=s.corr, cm=cm,
+                   is_retro=is_retro, reset_tag=reset_tag)
+            # daily: written now, so the q15 UPDATE below finds the row; rescore: batched
+            isempty(SCORE_LOCK_TIMEOUT) ? write_slice!([row]) : push!(batch, row)
             corr_str = s.corr === nothing ? "-" : @sprintf("%.2f", s.corr)
             @printf("  %-12s n=%2d MAE=%6.1f bias=%+7.1f corr=%s  collapse[act=%d pred=%d hit=%d FA=%d]\n",
                     zone, s.n, s.mae, s.bias, corr_str,
                     cm.n_collapse_actual, cm.n_collapse_pred, cm.hits, cm.false_alarms)
             q15_ok && score_q15_zone!(market_date, zone, lead_days, cv, input_mode, is_retro, sub, a15, qwin)
         end
+        write_slice!(batch)
     end
 
     print_summary()

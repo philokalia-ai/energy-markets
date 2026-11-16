@@ -74,7 +74,8 @@ class EvaluateTargetTest(unittest.TestCase):
 
     def load(self, **env):
         with mock.patch.dict(os.environ, env):   # restores the whole environment afterwards
-            for k in {"EUPHEMIA_DA_TARGET", "EVAL_TARGET_PANEL", "EVAL_EXTRACT"} - env.keys():
+            for k in {"EUPHEMIA_DA_TARGET", "EVAL_TARGET_PANEL", "EVAL_EXTRACT",
+                      "EUPHEMIA_DUCKDB_PATH"} - env.keys():
                 os.environ.pop(k, None)
             return self.ev.load(["fc_x"])[0].sort_values(["zone", "t"]).reset_index(drop=True)
 
@@ -83,8 +84,8 @@ class EvaluateTargetTest(unittest.TestCase):
         s = src[(src.zone == zone) & src.t.isin(utc_hours(d))].sort_values("t")
         return s.price.to_numpy()
 
-    def test_default_is_frozen_panel(self):
-        df = self.load()
+    def test_kill_switch_is_frozen_panel(self):
+        df = self.load(EUPHEMIA_DA_TARGET="highest_seq")
         at = df[df.zone == "AT"]
         np.testing.assert_allclose(at.actual, self.expect(self.panel, "AT", 0))      # EXAA (seq 2)
         np.testing.assert_allclose(at.actual, self.expect(self.sdac, "AT", 0) - 30)  # sanity: 30 below SDAC
@@ -92,8 +93,10 @@ class EvaluateTargetTest(unittest.TestCase):
         np.testing.assert_allclose(at.naive_D7, self.expect(self.panel, "AT", 7))
 
     def test_sdac_routes_labels_and_naives_not_forecasts(self):
-        base = self.load()
-        for env in ({"EUPHEMIA_DA_TARGET": "sdac", "EVAL_EXTRACT": self.ext},
+        base = self.load(EUPHEMIA_DA_TARGET="highest_seq")
+        for env in ({"EVAL_EXTRACT": self.ext},                       # the default target (#431 C2)
+                    {"EUPHEMIA_DUCKDB_PATH": self.ext},
+                    {"EUPHEMIA_DA_TARGET": "sdac", "EVAL_EXTRACT": self.ext},
                     {"EUPHEMIA_DA_TARGET": "sdac", "EVAL_TARGET_PANEL": f"{self.tmp}/target_sdac.parquet"}):
             with self.subTest(env=sorted(env)):
                 df = self.load(**env)
@@ -109,8 +112,8 @@ class EvaluateTargetTest(unittest.TestCase):
                     pd.testing.assert_series_equal(df[c], base[c])
 
     def test_sdac_without_artifact_fails(self):
-        with self.assertRaises(ValueError):
-            self.load(EUPHEMIA_DA_TARGET="sdac")
+        with mock.patch.object(self.ev, "default_extract", return_value=None), self.assertRaises(ValueError):
+            self.load()
 
     def test_bad_target_override_rejected(self):
         con = duckdb.connect(self.ext, read_only=True)

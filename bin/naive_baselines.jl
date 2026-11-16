@@ -3,7 +3,7 @@
 # Included by bin/export_forecast_json.jl and bin/export_web_parquet.jl AFTER
 # bin/forecast_common.jl (Athens time helpers, CHOSEN_SLICE_CTE) and
 # test/scripts/eu_eval_metrics.jl (`da_target_actuals`, the scorer's actuals; it follows
-# EUPHEMIA_DA_TARGET, default highest_seq = `resolution_aware_actuals`).
+# EUPHEMIA_DA_TARGET, default sdac; highest_seq = `resolution_aware_actuals`).
 # No DDL, no new tables, no stored score changes: the naive is recomputed at export
 # time on exactly the zone-days and hours the board's physics score covers, so it
 # follows whatever actuals function the scorer uses.
@@ -222,7 +222,7 @@ function naive_zone_day_parts(scores::AbstractDataFrame)
                      AND c.input_mode = f.input_mode AND c.code_version = f.code_version
         WHERE f.market_date BETWEEN \$1 AND \$2
     """, [sd, ed])
-    act = da_target_actuals(sd - Day(8), ed)  # EUPHEMIA_DA_TARGET (default highest_seq)
+    act = da_target_actuals(sd - Day(8), ed)  # EUPHEMIA_DA_TARGET (default sdac; highest_seq = kill switch)
     actz = Dict{String,Dict{DateTime,Float64}}()
     for r in eachrow(act)
         (r.act === missing || r.act === nothing) && continue

@@ -69,13 +69,16 @@ def _da_target():
     return da_target
 
 
-def hourly_actuals(con, start, end):
-    # Target policy (#431): EUPHEMIA_DA_TARGET=sdac reads the SDAC auction only
-    # (bin/da_target.py, the same rule as the Julia scorer's da_target_actuals).
-    # Unset/highest_seq: the SQL below, unchanged. Note these actuals are both the
-    # labels and the settled-price lag features of this model.
+def hourly_actuals(con, start, end, role="input"):
+    # #431 C2: two separate policies (bin/da_target.py).
+    #   role="input"  — the model's training labels and settled-price lag features:
+    #                   EUPHEMIA_DA_INPUT, default highest_seq (pinned; a model decision).
+    #   role="target" — evaluation labels only: EUPHEMIA_DA_TARGET, default sdac.
+    # highest_seq: the SQL below, unchanged. sdac: the SDAC auction only.
     dt = _da_target()
-    if dt.policy() == "sdac":
+    if role not in ("input", "target"):
+        raise ValueError(f"role={role!r}: expected 'input' or 'target'")
+    if (dt.input_policy() if role == "input" else dt.policy()) == "sdac":
         a = dt.hourly_actuals(con, start, end, target="sdac")
         a = a.rename(columns={"z": "zone", "act": "actual"})
         a["actual"] = a.actual.round(8)
@@ -356,6 +359,18 @@ def rolling_evaluate(df, features, test_start, test_end, train_start="2024-07-01
     return pd.concat(output, ignore_index=True), artifacts
 
 
+def retarget_labels(pred, target):
+    """Evaluation labels `y` from the TARGET actuals (zone, t, actual); the model itself was
+    trained on the input actuals. Cells without a target actual are dropped and counted."""
+    m = pred[["zone", "t"]].assign(t=pd.to_datetime(pred.t)).merge(
+        target[["zone", "t", "actual"]].assign(t=pd.to_datetime(target.t)),
+        on=["zone", "t"], how="left", validate="many_to_one")
+    keep = m.actual.notna().to_numpy()
+    out = pred.loc[keep].copy()
+    out["y"] = (m.actual.to_numpy()[keep] <= 0).astype(int)
+    return out.reset_index(drop=True), int((~keep).sum())
+
+
 def live_baseline(live_dir, start, end):
     rows = []
     for path in sorted(Path(live_dir).glob("*.json")):
@@ -386,8 +401,13 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     con = duckdb.connect(args.extract, read_only=True, config={"threads": 4, "memory_limit": "8GB"})
     end = str(pd.Timestamp(args.test_end) + pd.Timedelta(days=2))
-    actuals = hourly_actuals(con, "2024-06-01", end)
+    actuals = hourly_actuals(con, "2024-06-01", end, role="input")   # training labels + features
     actuals = actuals[actuals.zone.isin(ZONES)].reset_index(drop=True)
+    dt = _da_target()
+    target = None   # evaluation labels: re-read only when the target policy differs
+    if dt.policy() != dt.input_policy():
+        target = hourly_actuals(con, args.test_start, end, role="target")
+        target = target[target.zone.isin(ZONES)].reset_index(drop=True)
     forecasts = hourly_forecasts(con, "2024-06-01", end)
     audit = {"actual_rows": len(actuals), "forecast_rows": len(forecasts), "train_start": "2024-07-01",
              "test_start": args.test_start, "test_end": args.test_end, "threshold_eur": 0,
@@ -400,6 +420,10 @@ def main():
         audit[variant] = {"cells": int(test.sum()), "physical_complete": int(f.loc[test, "res_share"].notna().sum()),
                           "feature_names": list(f.columns)}
         pred, artifacts = rolling_evaluate(df, f, args.test_start, args.test_end, settled_lag=args.settled_lag)
+        if target is not None:
+            pred, dropped = retarget_labels(pred, target)
+            audit[variant]["labels"] = {"input_policy": dt.input_policy(), "target_policy": dt.policy(),
+                                        "cells_without_target": dropped}
         pred.to_csv(out / f"{variant}-predictions.csv.gz", index=False)
         report = evaluate_predictions(pred)
         if args.live_dir:

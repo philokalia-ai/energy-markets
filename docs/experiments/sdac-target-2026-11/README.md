@@ -1,6 +1,6 @@
 # SDAC hourly target: flag and shadow diff (#431, PR C)
 
-**Status:** the flag ships with its default off. Nothing published changes. Flipping it is the owner's decision; see "Rescore workflow" below.
+**Status (2026-11-17, PR C2):** the flag has been flipped. `EUPHEMIA_DA_TARGET` now defaults to `sdac` for evaluation targets, and model inputs are pinned by `EUPHEMIA_DA_INPUT` (default `highest_seq`). The history is rescored by `rescore-hourly.yml`; see "C2: the flip" at the end. The sections up to "Reproduce" describe PR C as it shipped, with the flag off.
 
 ## What this adds
 
@@ -92,7 +92,7 @@ The cell sets are identical under both targets in both windows, so every Δ is a
   - Julia and Python agree on both policies (same rows, max |diff| 1.1e-13).
   - The scorer and exporter themselves can't run on the extract, which has no `simulations.forecast_*`. Identity is shown at their single changed input. With the flag unset, `da_target_actuals` *is* `resolution_aware_actuals`.
 
-## Rescore workflow (for the owner decision; not added here)
+## Rescore workflow (PR C proposal; implemented in C2, below)
 
 The flip must not be a code change alone. `score_forecasts.jl` rescores only the last `RESCORE_WINDOW_DAYS` (7), so the target would mix within one series:
 - If the default flips without a full rescore, the last week becomes SDAC and all older days stay EXAA.
@@ -132,3 +132,40 @@ python docs/experiments/sdac-target-2026-11/compare_python.py --extract <extract
 ```
 
 Python needs duckdb 2.0 (`bin/requirements-overlay.txt`). With duckdb 1.5, `zone` is a reserved word and the overlay's `PRICE_SQL` fails to parse.
+
+## C2: the flip (owner decision 2026-11-16, effective 2026-11-17)
+
+### Two settings
+
+| Setting | Default | Covers |
+|---|---|---|
+| `EUPHEMIA_DA_TARGET` (evaluation) | `sdac`; `highest_seq` is the kill switch | `score_forecasts.jl` (hourly); `export_forecast_json.jl` and `export_web_parquet.jl` (actual charts); `naive_baselines.jl` (scoreboard naives and rMAE); `eu_eval_metrics.metrics(:new)`; collapse **evaluation labels** (`collapse_probability.main` relabels predictions through `retarget_labels`); `emit_tsfm_overlay.eval_actuals_duckdb`; `tsfm-2026-11/evaluate.py` (labels and naives; the target is read from `EVAL_TARGET_PANEL`, `EVAL_EXTRACT`, `EUPHEMIA_DUCKDB_PATH`, or the newest shared extract) |
+| `EUPHEMIA_DA_INPUT` (model inputs, pinned) | `highest_seq` | Timestral price context (`emit_tsfm_overlay.prices_duckdb`, i.e. `PRICE_SQL`); GBM lag history (`emit_model_lines.target_policy` / `canonical_settled`; the function name and manifest key are kept); collapse logistic training labels and features (`collapse_probability.hourly_actuals(role="input")`, the default role, which `collapse_diagnostics.py` and `collapse_history_sensitivity.py` also use) |
+
+Both settings accept only `highest_seq` or `sdac`; any other value raises. `daily-forecast.yml` and `publish-web-data.yml` pass the repo variable `vars.EUPHEMIA_DA_TARGET`: empty means the default, and `highest_seq` switches back without a code change. The 10:40 server cron re-exports the JSON with whatever its environment says, so the kill switch there is the same env var in the cron environment.
+
+### rescore-hourly.yml
+Dispatch-only, its own concurrency group, `contents: read` + `actions: read`, Julia 1.13.4.
+
+1. **Guard.** It refuses to start between 06:15–08:30 or 10:30–12:15 UTC, or while daily-forecast or publish-web-data has a queued or active run. It also validates the inputs.
+2. **Snapshot.** `bin/forecast_scores_snapshot.jl snapshot` dumps the hourly columns of all `forecast_scores` rows (key, n_hours, mae, bias, corr, collapse metrics, reset_tag, scored_at) and uploads them as the artifact `forecast-scores-hourly-snapshot-<run_id>`, kept 90 days.
+3. **Dry run.** The scorer runs with `DRY_RUN=true` and prints the slices per mode and lead and the existing rows per zone that would be rewritten.
+4. **Rescore.** The scorer runs with `RESCORE=true HOURLY_ONLY=true SCORE_LOCK_TIMEOUT=5s EUPHEMIA_DA_TARGET=sdac`, in `chunk_days` market-date chunks.
+   - Each slice is one transaction under `SET LOCAL lock_timeout` and `statement_timeout`, retried 3 times.
+   - The q15 columns are never written.
+   - The default zones are `AT,DE_LU,DK1,DK2`, the only zones whose target changes. Rescoring the others would only fold in unrelated ENTSO-E revisions; pass `all` if wanted.
+   - The run is resumable with `start=`.
+5. **Summary.** The policy and range go to the step summary, together with a snapshot-vs-now MAE table per zone.
+6. **Rollback.** Dispatch `action=restore restore_run_id=<run>`, which writes that run's snapshot back onto the matching rows, and set the variable to `highest_seq`.
+
+**No mixed target.** Merge after 12:15 UTC and dispatch the rescore the same afternoon, around 13:30, before the next 06:15. After the merge, every daily score (including its 7-day rescore window) uses SDAC, and the one full rescore covers everything older. `forecast_scores` has no policy column, so the policy goes in the scorer log (`TARGET_POLICY=…`), the workflow summary and the ledger (`docs/code-version-ledger.md`, "scoring policy sdac-v1").
+
+### Verification
+- **Kill switch:** `identity_check.jl` on 10 market days: with `EUPHEMIA_DA_TARGET=highest_seq`, the actuals are byte-identical to main's pre-flip default (18,680 rows, sha256 74a35cf4…). The new default is byte-identical to main's `sdac` output.
+- **Python, kill switch** (separate processes against origin/main e758b93): collapse target labels, overlay eval actuals and `evaluate.load` (54,327 rows) are identical to main.
+- **Python, default:** collapse input actuals and the Timestral context (320,064 rows) are identical to main. Evaluation labels change only in AT/DE_LU, plus DK by float noise.
+- **Local dry run, DuckDB store mode,** on a scratch store built from the extract and the live JSON (5 zones, 2026-10-27..11-13):
+  - the dry run reports 54 slices and 216 rows for AT/DE_LU/DK1/DK2;
+  - snapshot and compare work;
+  - restore refuses without `CONFIRM_RESTORE`.
+  - The write path is Postgres-only, so it wasn't exercised here.

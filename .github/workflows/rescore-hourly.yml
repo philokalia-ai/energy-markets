@@ -1,0 +1,208 @@
+# Full-history rescore of the HOURLY score columns of simulations.forecast_scores
+# against the SDAC target (#431 PR C2, owner decision 2026-11-16). The daily scorer
+# rescores only the last RESCORE_WINDOW_DAYS (7); everything older keeps the target
+# it was scored with until this runs. Run it ONCE in the afternoon the flip merges,
+# before the next 06:15 UTC, so no daily run can leave a mixed EXAA/SDAC history.
+#
+# Order of steps: refuse in the daily windows or while daily-forecast/publish-web-data
+# is active -> snapshot (rollback artifact) -> dry-run counts -> rescore in date
+# chunks (one transaction per slice under SET LOCAL lock_timeout, #424 pattern;
+# q15 columns never written) -> snapshot-vs-now summary.
+# Rollback: dispatch with action=restore and restore_run_id=<this run's id>, and set
+# the repo variable EUPHEMIA_DA_TARGET=highest_seq. Dispatch-only; the site picks the
+# new scores up at the next publish (daily 06:30, or dispatch publish-web-data).
+name: rescore-hourly
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "rescore (default) or restore (writes a previous run's snapshot back)"
+        required: false
+        default: rescore
+        type: choice
+        options: [rescore, restore]
+      start:
+        description: "First market date (YYYY-MM-DD); empty = full history"
+        required: false
+        default: ""
+      end:
+        description: "Last market date (YYYY-MM-DD); empty = up to today"
+        required: false
+        default: ""
+      zones:
+        description: "Zones to rescore: the four whose target changes (default) or 'all'"
+        required: false
+        default: "AT,DE_LU,DK1,DK2"
+      chunk_days:
+        description: "Market days per scorer invocation"
+        required: false
+        default: "31"
+      dry_run:
+        description: "Snapshot + counts only, write nothing"
+        required: false
+        default: false
+        type: boolean
+      restore_run_id:
+        description: "action=restore: the rescore-hourly run id whose snapshot artifact to restore"
+        required: false
+        default: ""
+
+# contents: checkout; actions: read the run state of daily-forecast/publish-web-data
+# for the guard, and a previous run's artifact for restore. Nothing is written to GitHub.
+permissions:
+  contents: read
+  actions: read
+
+env:
+  JULIA_VERSION: "1.13.4"   # same pin as daily-forecast.yml / rescore-q15.yml
+
+# Own group: joining daily-forecast's could let a pending rescore supersede a daily run.
+concurrency:
+  group: rescore-hourly
+  cancel-in-progress: false
+
+jobs:
+  rescore-hourly:
+    runs-on: energy-markets-k8s
+    timeout-minutes: 240
+    env:
+      ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
+      ACTION: ${{ inputs.action }}
+      START: ${{ inputs.start }}
+      END: ${{ inputs.end }}
+      ZONES: ${{ inputs.zones }}
+      CHUNK_DAYS: ${{ inputs.chunk_days }}
+      DRY: ${{ inputs.dry_run }}
+      RESTORE_RUN_ID: ${{ inputs.restore_run_id }}
+    steps:
+      - name: Guard (time windows, active writers, inputs)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          now=$((10#$(date -u +%H%M)))
+          if { [ "$now" -ge 615 ] && [ "$now" -lt 830 ]; } || { [ "$now" -ge 1030 ] && [ "$now" -lt 1215 ]; }; then
+            echo "::error::refusing to start at $(date -u +%H:%M) UTC: inside 06:15-08:30 (daily-forecast) or 10:30-12:15 (server cron). Suggested slot ~13:30 UTC."
+            exit 1
+          fi
+          for wf in daily-forecast.yml publish-web-data.yml; do
+            api="https://api.github.com/repos/$REPO/actions/workflows/$wf/runs"
+            for st in queued in_progress waiting pending requested; do
+              c=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+                    "$api?status=$st&per_page=1" | python3 -c "import json,sys; print(json.load(sys.stdin)['total_count'])") || c=1
+              if [ "$c" -ne 0 ]; then
+                echo "::error::$wf has a $st run (or the API check failed); refusing to start"
+                exit 1
+              fi
+            done
+          done
+          for d in "$START" "$END"; do
+            if [ -n "$d" ] && ! [[ "$d" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then echo "::error::bad date '$d'"; exit 1; fi
+          done
+          if ! [[ "$CHUNK_DAYS" =~ ^[1-9][0-9]*$ ]]; then echo "::error::bad chunk_days '$CHUNK_DAYS'"; exit 1; fi
+          if ! [[ "$ZONES" =~ ^(all|[A-Za-z0-9_,-]+)$ ]]; then echo "::error::bad zones '$ZONES'"; exit 1; fi
+          if [ "$ACTION" = restore ] && ! [[ "$RESTORE_RUN_ID" =~ ^[0-9]+$ ]]; then
+            echo "::error::action=restore needs restore_run_id"; exit 1
+          fi
+          echo "guard ok at $(date -u +%H:%M) UTC"
+
+      - uses: actions/checkout@v4
+
+      - name: Setup Julia
+        uses: julia-actions/setup-julia@v1
+        with:
+          version: ${{ env.JULIA_VERSION }}
+
+      - name: Install Julia dependencies
+        timeout-minutes: 30
+        run: |
+          julia --project=. -e "
+            using Pkg
+            isempty(Pkg.Registry.reachable_registries()) && Pkg.Registry.add()
+            Pkg.instantiate()
+            Pkg.precompile()
+          "
+
+      - name: Snapshot hourly score columns (rollback artifact)
+        run: |
+          mkdir -p snapshot
+          julia --project=. bin/forecast_scores_snapshot.jl snapshot snapshot/forecast_scores_hourly.csv
+          gzip -9 snapshot/forecast_scores_hourly.csv
+
+      - name: Upload snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: forecast-scores-hourly-snapshot-${{ github.run_id }}
+          path: snapshot/forecast_scores_hourly.csv.gz
+          retention-days: 90
+          if-no-files-found: error
+
+      - name: Dry run (counts only)
+        if: ${{ inputs.action == 'rescore' }}
+        env:
+          DRY_RUN: "true"
+          RESCORE: "true"
+          HOURLY_ONLY: "true"
+          EUPHEMIA_DA_TARGET: sdac
+          RESCORE_START: ${{ inputs.start }}
+          RESCORE_END: ${{ inputs.end }}
+          RESCORE_ZONES: ${{ inputs.zones }}
+        run: |
+          set -o pipefail
+          julia --project=. bin/score_forecasts.jl | tee dry_run.txt
+
+      - name: Rescore hourly columns (SDAC target, q15 untouched)
+        if: ${{ inputs.action == 'rescore' && !inputs.dry_run }}
+        timeout-minutes: 150
+        env:
+          RESCORE: "true"
+          HOURLY_ONLY: "true"
+          SCORE_LOCK_TIMEOUT: 5s
+          EUPHEMIA_DA_TARGET: sdac
+          RESCORE_ZONES: ${{ inputs.zones }}
+        run: |
+          first=$(grep -m1 '^DRY_RUN slices:' dry_run.txt | sed -E 's/.* over market dates ([0-9-]+)\.\.([0-9-]+)$/\1/')
+          last=$(grep -m1 '^DRY_RUN slices:' dry_run.txt | sed -E 's/.* over market dates ([0-9-]+)\.\.([0-9-]+)$/\2/')
+          if [ -z "$first" ] || [ -z "$last" ]; then echo "nothing to rescore"; exit 0; fi
+          d="$first"
+          while [[ ! "$d" > "$last" ]]; do
+            e=$(date -u -d "$d + $((CHUNK_DAYS - 1)) days" +%F)
+            [[ "$e" > "$last" ]] && e="$last"
+            echo "::group::rescore $d..$e"
+            RESCORE_START="$d" RESCORE_END="$e" julia --project=. bin/score_forecasts.jl
+            echo "::endgroup::"
+            echo "chunk done $d..$e (resume from the next day with start=)"
+            d=$(date -u -d "$e + 1 day" +%F)
+          done
+
+      - name: Restore a previous snapshot
+        if: ${{ inputs.action == 'restore' && !inputs.dry_run }}
+        uses: actions/download-artifact@v4
+        with:
+          name: forecast-scores-hourly-snapshot-${{ inputs.restore_run_id }}
+          run-id: ${{ inputs.restore_run_id }}
+          github-token: ${{ github.token }}
+          path: restore
+
+      - name: Write the restored hourly columns
+        if: ${{ inputs.action == 'restore' && !inputs.dry_run }}
+        env:
+          CONFIRM_RESTORE: "yes"
+        run: |
+          gunzip -k restore/forecast_scores_hourly.csv.gz
+          julia --project=. bin/forecast_scores_snapshot.jl restore restore/forecast_scores_hourly.csv
+
+      - name: Summary (scoring policy + snapshot vs now)
+        if: ${{ always() }}
+        run: |
+          {
+            echo "## rescore-hourly: action=$ACTION dry_run=$DRY"
+            echo "Scoring policy: hourly target **sdac** (SDAC sequence 1 in AT/DE_LU; #431 C2, 2026-11-17)."
+            echo "Range: ${START:-first}..${END:-today}; zones: $ZONES; q15 columns untouched."
+            if [ -f dry_run.txt ]; then echo; echo '```'; grep '^DRY_RUN\|^  ' dry_run.txt | head -80; echo '```'; fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ -f snapshot/forecast_scores_hourly.csv.gz ]; then
+            gunzip -kf snapshot/forecast_scores_hourly.csv.gz
+            julia --project=. bin/forecast_scores_snapshot.jl compare snapshot/forecast_scores_hourly.csv "$GITHUB_STEP_SUMMARY" || true
+          fi

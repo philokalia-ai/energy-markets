@@ -85,6 +85,8 @@ jobs:
           ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
           # naive baselines on the scoreboard (#431); repo variable EXPORT_NAIVE=0 switches them off
           EXPORT_NAIVE: ${{ vars.EXPORT_NAIVE || '1' }}
+          # evaluation target (#431 C2): empty = sdac; repo variable EUPHEMIA_DA_TARGET=highest_seq = kill switch
+          EUPHEMIA_DA_TARGET: ${{ vars.EUPHEMIA_DA_TARGET }}
         run: |
           julia --project=. -e 'using Pkg; isempty(Pkg.Registry.reachable_registries()) && Pkg.Registry.add(); Pkg.instantiate()'
           julia --project=. bin/export_web_parquet.jl

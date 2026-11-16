@@ -83,8 +83,8 @@
   </table>
   <p>Timestral backtest (2026-09-14 → 11-13, 58 days × 39 zones, lead 1; zero-shot, so each
   day is forecast only from the history before it — no training split; target: the settled
-  price as the live scorer reads it, which for AT and DE_LU is currently the EXAA auction, see
-  below): MAE 28.0 €/MWh from prices only
+  price as the live scorer read it before 2026-11-17, which for AT and DE_LU was the EXAA
+  auction; not yet rerun on the SDAC target now used for all hourly scores): MAE 28.0 €/MWh from prices only
   (06:30, 54k hours); 25.3 with the physics forecast as input on the 47,679 cells where a forecast
   vintage existed by 10:00 UTC — the days the 10:40 refresh can actually publish (25.1 on a broader
   reconstruction that also includes seven days whose only vintage was made after 10:00, which

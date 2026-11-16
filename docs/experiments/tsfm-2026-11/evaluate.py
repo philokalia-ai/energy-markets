@@ -8,8 +8,10 @@ Probabilistic: Brier score of P(price <= 0) and P(<= 5), AUC.
 
 Usage: python evaluate.py fc_t209_uni fc_c2_uni ...   (files in $TSFM_OUT, without .parquet)
 
-Target (#431): labels and naives follow EUPHEMIA_DA_TARGET (`target_panel`). Unset/highest_seq =
-the frozen panel's prices, unchanged. sdac = EVAL_TARGET_PANEL or EVAL_EXTRACT (read-only extract).
+Target (#431): labels and naives follow EUPHEMIA_DA_TARGET (`target_panel`). Default (sdac since
+2026-11-17) = EVAL_TARGET_PANEL, else the read-only extract EVAL_EXTRACT (default:
+EUPHEMIA_DUCKDB_PATH, else the newest em-data/euphemia-live-*.duckdb). highest_seq (kill switch) =
+the frozen panel's prices, unchanged. The models' input context (the panel) is never changed.
 """
 import os, sys
 from pathlib import Path
@@ -48,24 +50,35 @@ def metrics(df, col, act="actual"):
     return out
 
 
+def default_extract():
+    """EVAL_EXTRACT, else EUPHEMIA_DUCKDB_PATH, else the newest shared read-only extract."""
+    for k in ("EVAL_EXTRACT", "EUPHEMIA_DUCKDB_PATH"):
+        if os.environ.get(k):
+            return os.environ[k]
+    import glob
+    found = sorted(glob.glob("/home/pgeorgakopoulos/armada/em-data/euphemia-live-*.duckdb"))
+    return found[-1] if found else None
+
+
 def target_panel(panel):
     """Evaluation labels (zone, t, price) under EUPHEMIA_DA_TARGET (#431).
 
-    highest_seq (default): the frozen panel itself, i.e. the settled prices the models were fed
-    (highest sequence: EXAA in AT/DE_LU). sdac: an explicit target artifact, never the panel:
-    EVAL_TARGET_PANEL (a parquet with zone, t, price), else computed from the read-only extract
-    EVAL_EXTRACT with bin/da_target.py over the panel's hours. Neither given -> error (no silent
-    fallback to the EXAA labels). Only labels and naives change; forecasts (built from the frozen
+    highest_seq (kill switch): the frozen panel itself, i.e. the settled prices the models were
+    fed (highest sequence: EXAA in AT/DE_LU). sdac (default): an explicit target artifact, never
+    the panel: EVAL_TARGET_PANEL (a parquet with zone, t, price), else computed from the read-only
+    extract (`default_extract`) with bin/da_target.py over the panel's hours. Neither available ->
+    error (no silent fallback to the EXAA labels). Only labels and naives change; forecasts (built from the frozen
     panel by run_tsfm.py) and the model input context are untouched."""
     pol = da_target.policy()
     if pol == "highest_seq":
         return panel
     art = os.environ.get("EVAL_TARGET_PANEL")
+    ext = default_extract()
     if art:
         tgt = pd.read_parquet(art)[["zone", "t", "price"]]
-    elif os.environ.get("EVAL_EXTRACT"):
+    elif ext:
         import duckdb
-        con = duckdb.connect(os.environ["EVAL_EXTRACT"], read_only=True)
+        con = duckdb.connect(ext, read_only=True)
         try:
             a = da_target.hourly_actuals(con, panel.t.min(), panel.t.max() + pd.Timedelta(hours=1),
                                          target=pol)
@@ -74,7 +87,8 @@ def target_panel(panel):
         tgt = a.rename(columns={"z": "zone", "act": "price"}).assign(price=lambda x: x.price.round(8))
     else:
         raise ValueError(f"EUPHEMIA_DA_TARGET={pol}: set EVAL_TARGET_PANEL or EVAL_EXTRACT "
-                         "(the frozen panel holds highest-sequence prices)")
+                         "(the frozen panel holds highest-sequence prices; "
+                         "EUPHEMIA_DA_TARGET=highest_seq scores against it)")
     tgt = tgt.assign(t=pd.to_datetime(tgt.t))
     assert not tgt.duplicated(["zone", "t"]).any(), "target artifact: duplicate (zone, t)"
     return tgt

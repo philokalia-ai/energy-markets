@@ -122,11 +122,11 @@ FUEL_SQL = """
 SELECT 'ttf' fuel, date, close FROM yfinance.ttf_f WHERE close IS NOT NULL
 UNION ALL SELECT 'eua' fuel, date, close FROM yfinance.eua_co2 WHERE close IS NOT NULL"""
 
-# Model INPUT context: highest-sequence settled prices (EXAA in AT/DE_LU). Deliberately NOT
-# routed through EUPHEMIA_DA_TARGET (#431 PR C): changing Timestral's context is a model-input
-# change, evaluated and versioned separately.
-# TODO(#431): decide whether the AT/DE_LU context should become SDAC (bin/da_target.py) once
-# the owner flips the evaluation target; evaluate it as its own arm before switching.
+# Model INPUT context: highest-sequence settled prices (EXAA in AT/DE_LU). Pinned by
+# EUPHEMIA_DA_INPUT (default highest_seq, `prices_duckdb`), never by the evaluation target
+# EUPHEMIA_DA_TARGET (default sdac since 2026-11-17, #431 C2): changing Timestral's context is a
+# model-input change, evaluated and versioned separately.
+# TODO(#431): evaluate an SDAC-context arm (EUPHEMIA_DA_INPUT=sdac) before any switch.
 PRICE_SQL = """
 WITH d AS (
   SELECT map_code, date_time_utc, price_currency_mwh,
@@ -390,14 +390,24 @@ def naive_utc(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def prices_duckdb(con, delivery, ctx_hours=CTX_HOURS):
+    """Model input context (zone, t, price): PRICE_SQL unless EUPHEMIA_DA_INPUT=sdac (opt-in)."""
     cutoff = day_start_utc(delivery)
-    return naive_utc(con.execute(PRICE_SQL, [cutoff - pd.Timedelta(hours=ctx_hours + 24), cutoff]).df())
+    lo = cutoff - pd.Timedelta(hours=ctx_hours + 24)
+    here = str(Path(__file__).resolve().parent)
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    import da_target
+    if da_target.input_policy() == "sdac":
+        a = da_target.hourly_actuals(con, lo, cutoff, target="sdac")
+        return a.rename(columns={"z": "zone", "act": "price"}).assign(price=lambda x: x.price.round(8))
+    return naive_utc(con.execute(PRICE_SQL, [lo, cutoff]).df())
 
 
 def eval_actuals_duckdb(con, start, end):
     """Hourly EVALUATION actuals (zone, t, price) over UTC [start, end), under EUPHEMIA_DA_TARGET.
 
-    Unset/highest_seq: exactly PRICE_SQL's frame. sdac: the SDAC auction only (bin/da_target.py).
+    Default (sdac since 2026-11-17): the SDAC auction only (bin/da_target.py). highest_seq (kill
+    switch): exactly PRICE_SQL's frame.
     Never feed this to the model context; that is `prices_duckdb`."""
     here = str(Path(__file__).resolve().parent)
     if here not in sys.path:
