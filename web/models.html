@@ -173,6 +173,12 @@
     flattering. The rolling-origin numbers (cv39: 23.30 / 24.70 / 21.05) are the headline. The physics line is never regressed on prices and uses only ex-ante
     inputs, but its calibrated characteristics were chosen on windows inside this same period, so
     its number is not a strict hold-out either.</li>
+    <li>Because calibration overlaps every historical evaluation window, the only clean
+    out-of-sample record of the physics line is the live one since its calibrated
+    characteristics were frozen with cv44 on 2026-11-15; any later change to one of them gets
+    a new code version and restarts that clock. The scoreboard shows it as the window
+    “since freeze (cv44, 2026-11-15)”. It is still very short, so read it as a running
+    tally, not yet a verdict.</li>
     <li>The pink-line features are chosen to be gate-legal (nothing after D-1 12:00 CET), and the
     yellow line's lagged prices are auction results published up to D-2 12:45 CET. From 2026-11-17,
     GBM rows are issued before the gate and are not rewritten afterwards; older rows were

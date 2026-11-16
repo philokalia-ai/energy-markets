@@ -320,7 +320,10 @@ but most declared entries are not fit-free priors either: 40 of the 43 are
 selecting the value or the mechanism, usually followed by a check on held-out
 days inside the same historical period that is later scored (cv43/cv44 had no
 separate hold-out). The three exceptions are PRICE_CAP, FLEET_COMPLETION and
-FLEET_TRUTHING. Emitted by `export_book_methodology.jl` for the observed/declared
+FLEET_TRUTHING. Freeze rule: these characteristics are frozen as of cv44
+(2026-11-15); changing a `price_informed=true` one or its calibration bumps
+`ENERGY_PRICES_CODE_VERSION` and restarts the out-of-sample clock — see
+"Freeze rule" in `docs/code-version-ledger.md`. Emitted by `export_book_methodology.jl` for the observed/declared
 badge on the methodology page (§6 of the plan).
 
 Lives beside the constants and the `ZoneProfile` fields, guarded by the same
