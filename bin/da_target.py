@@ -72,6 +72,14 @@ def policy(env=os.environ) -> str:
     return v
 
 
+def _check(target) -> str:
+    """An explicit target override, validated like the env value (a typo must not fall back)."""
+    v = str(target).strip().lower()
+    if v not in POLICIES:
+        raise ValueError(f"target={target!r}: expected one of {POLICIES}")
+    return v
+
+
 def raw_rows(con, start, end) -> pd.DataFrame:
     """Every day-ahead BZN row with sequence/resolution/update stamp, UTC [start, end)."""
     df = con.execute(RAW_SQL, [str(start), str(end)]).df()
@@ -176,7 +184,7 @@ def sdac_hourly(raw: pd.DataFrame, sequence_map=SDAC_SEQUENCE):
 
 def hourly_actuals(con, start, end, target=None) -> pd.DataFrame:
     """Hourly actuals under `target` (default: the env policy), naive-UTC hours in [start, end)."""
-    target = target or policy()
+    target = policy() if target is None else _check(target)
     raw = raw_rows(con, start, end)
     if target == "sdac":
         return sdac_hourly(raw)[0]

@@ -2,7 +2,8 @@
 #
 # Included by bin/export_forecast_json.jl and bin/export_web_parquet.jl AFTER
 # bin/forecast_common.jl (Athens time helpers, CHOSEN_SLICE_CTE) and
-# test/scripts/eu_eval_metrics.jl (`resolution_aware_actuals`, the scorer's actuals).
+# test/scripts/eu_eval_metrics.jl (`da_target_actuals`, the scorer's actuals; it follows
+# EUPHEMIA_DA_TARGET, default highest_seq = `resolution_aware_actuals`).
 # No DDL, no new tables, no stored score changes: the naive is recomputed at export
 # time on exactly the zone-days and hours the board's physics score covers, so it
 # follows whatever actuals function the scorer uses.
@@ -203,7 +204,7 @@ const NAIVE_BOARD_COLS = ("n_naive", "mae_paired", "mae_naive_d1", "mae_naive_d7
 
 DB step: per-zone-day naive sums for every row of the board's chosen-slice score
 frame `scores` (columns z, lead_days, mode, market_date). Reads the chosen slices'
-hourly sim rows and the scorer's actuals (`resolution_aware_actuals`) over the
+hourly sim rows and the scorer's actuals (`da_target_actuals`, EUPHEMIA_DA_TARGET) over the
 scored dates plus the 8 days before (lag 7 of the first local hour).
 """
 function naive_zone_day_parts(scores::AbstractDataFrame)
@@ -221,7 +222,7 @@ function naive_zone_day_parts(scores::AbstractDataFrame)
                      AND c.input_mode = f.input_mode AND c.code_version = f.code_version
         WHERE f.market_date BETWEEN \$1 AND \$2
     """, [sd, ed])
-    act = resolution_aware_actuals(sd - Day(8), ed)
+    act = da_target_actuals(sd - Day(8), ed)  # EUPHEMIA_DA_TARGET (default highest_seq)
     actz = Dict{String,Dict{DateTime,Float64}}()
     for r in eachrow(act)
         (r.act === missing || r.act === nothing) && continue

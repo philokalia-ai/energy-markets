@@ -22,7 +22,7 @@ Implementations:
 | Where | What |
 |---|---|
 | Julia: `test/scripts/eu_eval_metrics.jl` | `da_target_policy`, `da_target_actuals` (the switch), `sdac_hourly_actuals`, the pure `canonical_hourly_actuals`, `SDAC_SEQUENCE` (checked at load against `Q15_NON_SDAC_SEQUENCE`) |
-| Python: `bin/da_target.py` | `policy`, `raw_rows`, `highest_seq_hourly`, `sdac_hourly`, `hourly_actuals` |
+| Python: `bin/da_target.py` | `policy`, `raw_rows`, `highest_seq_hourly`, `sdac_hourly`, `hourly_actuals` (an explicit `target=` is validated against `POLICIES`; an unknown value raises) |
 | Shared fixtures: `test/fixtures/da_target_cases.json` | Read by `test/test_da_target.jl` (pure code, plus both SQL paths on a temporary DuckDB) and `test/test_da_target.py` (helper and reader SQL on an in-memory DuckDB). Cases: AT/DE_LU sequences 1 and 2, no EXAA fallback, DK copies with NULL sequence, duplicate revisions and an update-stamp tie, an incomplete quarter-hour, mixed PT60M/PT15M and PT30M/PT15M, misaligned PT30M, an ambiguous auction. |
 
 Routed through the switch:
@@ -35,6 +35,8 @@ Routed through the switch:
 | `test/scripts/eu_eval_metrics.jl` `metrics(:new)` | calibration evaluations |
 | `bin/collapse_probability.py` | `hourly_actuals`; these are both its labels and its settled-price lags |
 | `bin/emit_tsfm_overlay.py` | new `eval_actuals_duckdb`, for evaluation actuals only |
+| `bin/naive_baselines.jl` `naive_zone_day_parts` (#437) | the scoreboard naives (D-1/D-7/weekday) read `da_target_actuals`, so naive and rMAE follow the target (review fix) |
+| `docs/experiments/tsfm-2026-11/evaluate.py` `load` (and `prob_scores.load_backtest` through it) | labels and naives via `target_panel`: default = the frozen panel (unchanged); `sdac` = `EVAL_TARGET_PANEL` artifact or `EVAL_EXTRACT` through `bin/da_target.py`, otherwise an error. Forecasts and the model context are untouched. Integration test: `test/test_tsfm_evaluate_target.py` (review fix) |
 
 **Not routed:**
 - `PRICE_SQL` / `prices_duckdb`, Timestral's input context. That would be a model-input change. It is left as a `TODO(#431)` and has a test showing it is unchanged even with `sdac`.
