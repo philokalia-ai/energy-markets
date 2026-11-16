@@ -274,6 +274,60 @@ class AsOfTest(PinTest):
             self.assertEqual(m['physics_prediction_made_utc'],self.issue.isoformat() if r[2]=='hybrid_gbm' else None)
 
 
+    def test_strict_is_default_and_only_zero_disables_it(self):
+        self.assertTrue(eml.strict_asof({}))
+        self.assertTrue(eml.strict_asof({'MODEL_LINES_STRICT_ASOF':'1'}))
+        self.assertTrue(eml.strict_asof({'MODEL_LINES_STRICT_ASOF':''}))
+        self.assertFalse(eml.strict_asof({'MODEL_LINES_STRICT_ASOF':'0'}))
+
+    def test_main_default_and_zero_kill_switch_wiring(self):
+        from unittest.mock import patch, Mock
+        import io
+        from contextlib import redirect_stdout
+        feats,base,st=frames([37]);base['prediction_made_utc']=self.issue
+        expected,_,_=eml.lines_for_day(T,feats,base,base,st,
+            eml.zone_last_settled(st,self.issue),self.models,self.issue,False)
+        expected=eml.provenance_rows(expected,base,self.issue,7,False)
+        original_issue=eml.utc_issue
+        for flag,strict in [(None,True),('0',False)]:
+            with self.subTest(flag=flag):
+                cx=Mock();log=io.StringIO()
+                env={} if flag is None else {'MODEL_LINES_STRICT_ASOF':flag}
+                with patch.dict(os.environ,env,clear=True), \
+                     patch.object(sys,'argv',['emit_model_lines.py',str(T),str(T)]), \
+                     patch.object(eml,'utc_issue',side_effect=lambda v=None:self.issue if v is None else original_issue(v)), \
+                     patch.object(eml,'load_models',return_value=self.models), \
+                     patch.object(eml,'conn',return_value=cx), \
+                     patch.object(eml,'refresh_fuel_csvs'), \
+                     patch.object(eml,'physics_base',return_value=base) as physics, \
+                     patch.object(eml,'settled_history',return_value=st) as settled, \
+                     patch.object(eml,'features_for',return_value=(feats,7)), \
+                     patch.object(eml,'ensure_metadata_columns',return_value=True), \
+                     redirect_stdout(log):
+                    eml.main()
+                self.assertTrue(all(c.args[-1]==(self.issue if strict else None)
+                                    for c in physics.call_args_list))
+                self.assertEqual(settled.call_args.args[-1],self.issue if strict else None)
+                sql,rows=cx.cursor.return_value.executemany.call_args.args
+                self.assertEqual(sql,eml.UPSERT_STRICT_SQL if strict else eml.UPSERT_SQL)
+                if not strict:
+                    self.assertEqual(rows,expected)  # exact #439 False-path rows + metadata
+                self.assertEqual(log.getvalue().count('model lines gate:'),1)
+                self.assertIn(f'strict_asof={strict}',log.getvalue())
+
+    def test_gate_log_counts_next_day_weather_domain(self):
+        for issue,ts,kept,dropped in [
+            ('2026-11-13T10:40Z',['2026-11-13T22:00Z','2026-11-14T00:00Z','2026-11-14T22:00Z'],2,0),
+            ('2026-07-13T10:40Z',['2026-07-13T21:00Z','2026-07-14T00:00Z','2026-07-14T21:00Z'],0,2)]:
+            base=pd.DataFrame({'t':pd.to_datetime(ts)})
+            text=eml.gate_run_summary(base,eml.utc_issue(issue),True)
+            self.assertIn(f'cells_kept={kept} cells_dropped={dropped}',text)
+            self.assertIn('scope=next_day_weather_cells',text)
+            self.assertIn('gate_utc=',text);self.assertIn('issue_utc=',text)
+            self.assertIn('cells_kept=2 cells_dropped=0',eml.gate_run_summary(base,eml.utc_issue(issue),False))
+            self.assertIn('cells_kept=2 cells_dropped=0',eml.gate_run_summary(base,eml.utc_issue(issue),True,True))
+
+
 class MetadataDDLTest(unittest.TestCase):
     def test_catalog_first_and_bounded_transaction(self):
         from unittest.mock import Mock

@@ -158,6 +158,8 @@ println()
         include(joinpath(@__DIR__, "test_forecast_tracking.jl"))
         # Naive baselines + rMAE for the scoreboard (#431): pure, no DB.
         include(joinpath(@__DIR__, "test_naive_baselines.jl"))
+        # The "since_freeze" scoreboard window (#431 G): pure, no DB.
+        include(joinpath(@__DIR__, "test_scoreboard_windows.jl"))
     end
 
     @testset "Forecast Context (as-of contract)" begin

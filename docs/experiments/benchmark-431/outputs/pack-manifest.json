@@ -1,0 +1,31 @@
+{
+  "contracts": [
+    {
+      "path": "live_saved-highest_seq/manifest.json",
+      "sha256": "d8eebb1bc89d5ec33f11d4b11b8f0dfafca8470419612f4b3339dc23e62abb67"
+    },
+    {
+      "path": "live_saved-sdac/manifest.json",
+      "sha256": "e9b67fedef88b91e301f2afebb6531740cf7755d50449d91c5db742f8cfc12aa"
+    },
+    {
+      "path": "live_since_cv43-highest_seq/manifest.json",
+      "sha256": "fe7c101e9230301a004cc6c36c669c1b9faa1c54346ff30b5ac727eadc80fc26"
+    },
+    {
+      "path": "live_since_cv43-sdac/manifest.json",
+      "sha256": "5d40a1de8d68b32cb73095f5ecd169b1619fd2275ddeaa134c1e61716c0f430c"
+    },
+    {
+      "path": "timestral_ontime-highest_seq/manifest.json",
+      "sha256": "6164960f2c8abc594764553bf86decee558241e38df17326c247ce74b9b78af4"
+    },
+    {
+      "path": "timestral_ontime-sdac/manifest.json",
+      "sha256": "9f311d42e64e5378d79bc327f348fa29f0bccde3b9a13729219df61e184d2a28"
+    }
+  ],
+  "headlines_sha256": "73fc40771a905bbb035528513e2995500c46760aaf83a4caa37b4b4c8978bed9",
+  "dm_sha256": "2be281d0d85233e5937f5779e7220bcd926a011aca5b2b807a6c6231a06f9289",
+  "mask_index_sha256": "6a8906689005375262251d15c0ed0b7e115ea71a8e6385b86c1bb655b8e78c56"
+}

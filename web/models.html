@@ -180,9 +180,9 @@
     “since freeze (cv44, 2026-11-15)”. It is still very short, so read it as a running
     tally, not yet a verdict.</li>
     <li>The pink-line features are chosen to be gate-legal (nothing after D-1 12:00 CET), and the
-    yellow line's lagged prices are auction results published up to D-2 12:45 CET. The live
-    emitter does not enforce an as-of cutoff on either: it uses the freshest physics vintage and
-    settled rows present when it runs.</li>
+    yellow line's lagged prices are auction results published up to D-2 12:45 CET. From 2026-11-17,
+    GBM rows are issued before the gate and are not rewritten afterwards; older rows were
+    rewritten daily. Physics and settled-price vintages are limited to issue time.</li>
     <li>Where a day has no dashed lines, the models had no validated series for it — gaps are
     shown, never interpolated.</li>
   </ul>

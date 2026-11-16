@@ -11,7 +11,12 @@ cp "$ROOT/bin/emit_model_lines.sh" "$SB/repo/bin/"
 touch "$SB/repo/.env" "$SB/repo/data/model_line_feats/$(date -u -d '-6 days' +%F).csv"
 printf '#!/bin/bash\nexit 0\n' > "$SB/home/.juliaup/bin/julia"
 # `uv run ... python3 bin/emit_model_lines.py` -> exit $MODEL_LINES_RC
-printf '#!/bin/bash\necho "model lines (stub)"; exit ${MODEL_LINES_RC:-0}\n' > "$SB/home/.local/bin/uv"
+cat > "$SB/home/.local/bin/uv" <<'EOF'
+#!/bin/bash
+echo "model lines (stub)"
+echo "MODEL_LINES_STRICT_ASOF=${MODEL_LINES_STRICT_ASOF-unset} MODEL_LINES_REWRITE_PAST=${MODEL_LINES_REWRITE_PAST-unset}"
+exit ${MODEL_LINES_RC:-0}
+EOF
 printf '#!/bin/bash\nexit 1\n' > "$SB/home/.local/bin/python3"   # no sklearn -> the uv branch
 cat > "$SB/repo/bin/emit_tsfm_refresh.sh" <<'EOF'
 #!/bin/bash
@@ -35,4 +40,6 @@ run 0 "TSFM refresh skipped"                            TSFM_STUB=fail EMIT_NO_T
 run 3 "tsfm refresh \(stub: ok\)"                       TSFM_STUB=ok MODEL_LINES_RC=3
 run 3 "FAILED \(exit 7\)"                               TSFM_STUB=fail MODEL_LINES_RC=3
 run 0 "tsfm refresh \(stub: ok\)"                       TSFM_STUB=ok EMIT_NO_TSFM=0
+run 0 "MODEL_LINES_STRICT_ASOF=unset"                    TSFM_STUB=ok
+run 0 "MODEL_LINES_STRICT_ASOF=0 MODEL_LINES_REWRITE_PAST=1" TSFM_STUB=ok MODEL_LINES_STRICT_ASOF=0 MODEL_LINES_REWRITE_PAST=1
 [ $fails -eq 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }

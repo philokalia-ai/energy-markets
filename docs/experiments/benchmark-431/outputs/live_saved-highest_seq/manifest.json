@@ -1,0 +1,385 @@
+{
+  "contract_version": "benchmark-431-v1",
+  "name": "live_saved",
+  "target_policy": "highest_seq",
+  "source": {
+    "extract": {
+      "path": "/home/pgeorgakopoulos/armada/em-data/euphemia-live-20261115.duckdb",
+      "sha256": "fbeb02e849ae47e6b6a004b6a8e6cceb4bd1b397a6b221ccbe8f9da17e0abe13"
+    },
+    "actuals": {
+      "path": "/home/pgeorgakopoulos/armada/em-team/results/benchmark-431-inputs/highest_seq-actuals.csv.gz",
+      "sha256": "4890bb434e010f05aead8da4100ac4d8f14209d3affe771c1c91fb589a7ccf30",
+      "n": 840153
+    },
+    "forecasts": {
+      "path": "/home/pgeorgakopoulos/armada/em-team/results/benchmark-431-inputs/live_saved-forecasts.csv.gz",
+      "sha256": "769dd694164c558c88f83109cf56ca43557b7e653f44e6c435d893460a1df4ff",
+      "n": 1135251
+    },
+    "saved_sources": [
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live/AT.json",
+        "sha256": "c8b321e4b80e9772ec7631aa7c822144e016d1221ac73b9dd32ce82b70d2d513"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live/BE.json",
+        "sha256": "1984bb5e6592559152af06032896d784c864d7088d5aab25d5b56296957e0c04"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live/BG.json",
+        "sha256": "99d94e4236761fd529088d394d0ba6173537ac0facc6accee22ea05dbdface29"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live/CH.json",
+        "sha256": "9468f08618cca06f4b1efa86915a79fb5e8aa7c4e5da11802ae41972d5241cb5"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live/CZ.json",
+        "sha256": "53e34a67f07fd024a4b8bc77a46a0d03f3d0ee147a60b083d76686e2aee040f4"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live/DE_LU.json",
+        "sha256": "42a21596fc715d28a7b59480ca4f2b43b830568b695f9b7789df4013f97ff306"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live/DK1.json",
+        "sha256": "7ec5345aabe3a98178f4216498e77ea3624502fbad9aec5eec715430f6616bea"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live/DK2.json",
+        "sha256": "b6ddb8ae440ac7fedaad352d87aedb912652acbb3b8211a0af518609d1968149"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live/EE.json",
+        "sha256": "e810caf4edc606c8754bbd0f414b2e492925352145d82b3328da8b1910c44686"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live/ES.json",
+        "sha256": "e6515919ee4f258451d6e4615fdacd520afe4351d309c1e4e6ce0354db66b869"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live/FI.json",
+        "sha256": "dc66b1a392f618f537276d7b0397dc870292ee65348efacb395e73cf0b2bcdff"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live/FR.json",
+        "sha256": "a760b9a0f7ed0bfc4e3e552532004d2c76c3af19b053a58e342c5021778a28b8"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live/GR.json",
+        "sha256": "7049dd0e539b01325b3fb7aebbc0e770fa2ad398842e38969aa62d49776e513c"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live/HU.json",
+        "sha256": "e51f1a18a78b20e0fcfa02d654667e02a47ed13a4ce69dd4cfd1d4ddde2e933f"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live/IT-CNORTH.json",
+        "sha256": "4ced3ab890895ff844055ef6231c4171db322233679d0abcd93cbd0a4c54087b"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live/IT-CSOUTH.json",
+        "sha256": "62d6495fec164a1c2b77f334c7b3c75d160082857fccc703b0161f4c246808aa"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live/IT-Calabria.json",
+        "sha256": "06c276e4b228d13f26c6eac25b1d9aab520fb13f76a631375fa62136c2d19ab5"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live/IT-NORTH.json",
+        "sha256": "680949e366e7d58eada958fe072caebc0fca1a3a0e316ef198bc525ace303882"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live/IT-SOUTH.json",
+        "sha256": "b203b7e889cb50d9b46598135c402563075ac258aaa5ab2384ef6f4e90206e75"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live/IT-Sardinia.json",
+        "sha256": "339a7ea8ffef98b2c319a6bb7aa30aa496616b30e6dd1dc0f9b8a44f129e8c4a"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live/IT-Sicily.json",
+        "sha256": "9fb5942e6ad28f059015df5deca957a34e36628664b4e2ea03a74f841aafb9bd"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live/LT.json",
+        "sha256": "035557a0fdda707d78b68f48f502d95a9ec97a1fdac68367d6bbcb7dd77c876d"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live/LV.json",
+        "sha256": "bdf4d25b5a70c3da6955ba9fc13b958a7e3cba339b27a8c4977b70d8561272db"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live/NL.json",
+        "sha256": "e760d4d6e501e8f5a839b2fd99e9433eb330c1d06d2103eba8c97d7c7c2e8aa6"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live/NO1.json",
+        "sha256": "29057c07d7198be746901ffa7038ff5144c52c9fdeb2de757a91bb93b55a0573"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live/NO2.json",
+        "sha256": "dced139a92163c7cc3aaa8c1eed0a79420aecc3af811795f148580e71f4557a1"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live/NO3.json",
+        "sha256": "648c0b63482555e475e88e65fd642fb38a604a77758f08ab9911768d65b3e748"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live/NO4.json",
+        "sha256": "f53772236369978e3c9e8152bb52bf22f42fcc4487015eb82f6f380f7d43ea8a"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live/NO5.json",
+        "sha256": "d7a0ed4de83b4e23b5efd6c564d8adc960b4c7d012d13a8eabf2a3527dbf4e35"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live/PL.json",
+        "sha256": "3a52df0d715c9766d31dda5f058d1cc54e8365fe57f917be136f2860b9576cfd"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live/PT.json",
+        "sha256": "88741f50c02494a961caf53213a9f9a6ba8ffa005349eba0ddb99f4f5ccc5abd"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live/RO.json",
+        "sha256": "fcb83e50ad3196cb9493659bcfad20a9f5cab368cd40c2c4e8b81d3f08d9db90"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live/RS.json",
+        "sha256": "95b3d55a235d6691ee40d0b57d9f52321ed2f8cb8441239947ad8fd635d6c4d8"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live/SE1.json",
+        "sha256": "fafe08473f8d6e013423630e226c377ff7469a6066c8c1c6ce325dc3b933e695"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live/SE2.json",
+        "sha256": "4b11ba34015425d9e31f0a316e529e33b48e4d10d9f37004aa540117729cf9ac"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live/SE3.json",
+        "sha256": "d13d53beb6ce39db4d4af1f8e0751088a2d562478e7a7f51f0913f5a8bccc91f"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live/SE4.json",
+        "sha256": "d8cd022320ac31cc097f0a9500eb68d59b2a29fcc0cbee503c120d6fc111bb50"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live/SI.json",
+        "sha256": "0a4a201c361469be25a838066e55f4ef978924dd0b0d5564a0e8b73623778c6f"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live/SK.json",
+        "sha256": "352cfe90cadf8a7b0bca0bc5b4c095d1f45fdbb1b2a1a9c246b7dedf04469f7f"
+      }
+    ],
+    "target_helper": {
+      "path": "/home/pgeorgakopoulos/armada/em-team/worktrees/collapse-431/bin/da_target.py",
+      "sha256": "08f5c26237f51a105c552724fc50b99b5a1488d79e02e05e6dded2b0d09bdf32"
+    }
+  },
+  "resolution": "PT60M",
+  "market_day_timezone": "Europe/Athens",
+  "saved_predictions_changed": false,
+  "models": [
+    {
+      "id": "gbm_overlay",
+      "model_cv": null,
+      "model_cv_missing_reason": "learned model ID is separate from physics code version",
+      "model_id": "gbm_overlay",
+      "artifact_cv": null,
+      "artifact_sha256": null,
+      "artifact_missing_reason": "checkpoint/artifact not identified by saved predictions",
+      "base_cv": [
+        37,
+        38,
+        39,
+        40
+      ],
+      "base_cv_missing_reason": null,
+      "base_cv_counts": {
+        "37": 2808,
+        "38": 2808,
+        "39": 18720,
+        "40": 111384
+      },
+      "cohort_physics_cv_counts": null,
+      "version_cohort": "finite predictions with declared eligibility; before target-policy and complete-zone-day score restrictions",
+      "version_cohort_n": 135720,
+      "model_input_price_policy": "not established from snapshot",
+      "leads": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "fit_end": null,
+      "fit_end_class": "unverifiable from saved overlays; no retraining here",
+      "publication_class": "reconstructed overlay, independent issuance unavailable"
+    },
+    {
+      "id": "physics",
+      "model_cv": [
+        37,
+        38,
+        39,
+        40,
+        42
+      ],
+      "model_cv_missing_reason": null,
+      "model_id": "physics",
+      "artifact_cv": null,
+      "artifact_sha256": null,
+      "artifact_missing_reason": "rule engine; no serialized learned artifact",
+      "base_cv": [
+        37,
+        38,
+        39,
+        40,
+        42
+      ],
+      "base_cv_missing_reason": null,
+      "base_cv_counts": {
+        "37": 2808,
+        "38": 2808,
+        "39": 18720,
+        "40": 301665,
+        "42": 52416
+      },
+      "cohort_physics_cv_counts": null,
+      "version_cohort": "finite predictions with declared eligibility; before target-policy and complete-zone-day score restrictions",
+      "version_cohort_n": 378417,
+      "model_input_price_policy": "no direct settled-price lag context; calibration overlap remains",
+      "leads": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "fit_end": null,
+      "fit_end_class": "no single fit cutoff; calibration overlaps evaluation",
+      "publication_class": "physics made-time in saved snapshot; first publication unverified"
+    },
+    {
+      "id": "stats_overlay",
+      "model_cv": null,
+      "model_cv_missing_reason": "learned model ID is separate from physics code version",
+      "model_id": "stats_overlay",
+      "artifact_cv": null,
+      "artifact_sha256": null,
+      "artifact_missing_reason": "checkpoint/artifact not identified by saved predictions",
+      "base_cv": [
+        37,
+        38,
+        39,
+        40
+      ],
+      "base_cv_missing_reason": null,
+      "base_cv_counts": {
+        "37": 2388,
+        "38": 2520,
+        "39": 14649,
+        "40": 79656
+      },
+      "cohort_physics_cv_counts": null,
+      "version_cohort": "finite predictions with declared eligibility; before target-policy and complete-zone-day score restrictions",
+      "version_cohort_n": 99213,
+      "model_input_price_policy": "not established from snapshot",
+      "leads": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "fit_end": null,
+      "fit_end_class": "unverifiable from saved overlays; no retraining here",
+      "publication_class": "reconstructed overlay, independent issuance unavailable"
+    }
+  ],
+  "fit_end": null,
+  "fit_end_reason": "not authenticated for saved overlays; foundation pretraining cutoff unknown",
+  "cutoff_publication_class": "saved public snapshot; made-time is not immutable first-publication proof; overlays may be retrospectively rewritten",
+  "naive_availability": "D1 and weekday: lead1 only; D7: leads1..7; source auction prices normally known by morning issue, initial revisions not archived",
+  "target_history": "latest-revised read-only extract",
+  "window": {
+    "start": "2026-09-14",
+    "end": "2026-11-13"
+  },
+  "zones": [
+    "AT",
+    "BE",
+    "BG",
+    "CH",
+    "CZ",
+    "DE_LU",
+    "DK1",
+    "DK2",
+    "EE",
+    "ES",
+    "FI",
+    "FR",
+    "GR",
+    "HU",
+    "IT-CNORTH",
+    "IT-CSOUTH",
+    "IT-Calabria",
+    "IT-NORTH",
+    "IT-SOUTH",
+    "IT-Sardinia",
+    "IT-Sicily",
+    "LT",
+    "LV",
+    "NL",
+    "NO1",
+    "NO2",
+    "NO3",
+    "NO4",
+    "NO5",
+    "PL",
+    "PT",
+    "RO",
+    "RS",
+    "SE1",
+    "SE2",
+    "SE3",
+    "SE4",
+    "SI",
+    "SK"
+  ],
+  "missingness": "no imputation; pairwise finite actual/forecast/naive; complete zone-days primary, partial cells separate; unknown SDAC auctions fail closed",
+  "mask_sha256": "4779f9155f73a42fba3fe4268b39d941a8b63a9722103df930bbe1f724333751",
+  "all_model_intersection": false,
+  "aggregation": [
+    "pooled_cell",
+    "mean_daily"
+  ],
+  "aggregation_definition": "mean_daily weights each paired zone-day equally; no energy weights in new cohorts",
+  "rmae": "ratio of paired aggregate absolute errors, never mean daily ratios; zero naive error undefined",
+  "dst": "all23/25 UTC hours retained in point scores; source repeated local hour averaged; DM drops23/25-hour days",
+  "dm": {
+    "loss": "daily24h L1 vector",
+    "hac": "Bartlett calendar lags max(7,lead-1)",
+    "minimum_days": 30,
+    "p_values": "one-sided model better; exploratory, unadjusted"
+  },
+  "prepared_utc": "2026-11-16T21:00:24.585422+00:00",
+  "source_git_commit": "16ceca223df665eefd5d8041ad949bf781a83e08",
+  "evaluator_sha256": "3ed8f43655e0fa50ac55e81e4d4dbe4db9b776ec872808f961749c2ba6c736fe",
+  "output_sha256": {
+    "metrics": "7fe705d4e83e670d545cc439e7d1479a479ff1ba8c5deff578bb56759c7b05f5",
+    "masks": "4779f9155f73a42fba3fe4268b39d941a8b63a9722103df930bbe1f724333751",
+    "exclusions": "a773ba1c1c28dfc1a8f4b76dcf8b6e7b26680ed31e33ccf82e8ae77d665d7340",
+    "dm": "d719357bf0d7b10200967ec1bb88f928e849cda6e4096b8d995441228ff4d3fc"
+  }
+}

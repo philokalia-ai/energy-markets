@@ -39,6 +39,8 @@
 #                             rmae_d7, rmae_epf: naive baselines on the cohort's
 #                             paired hours (bin/naive_baselines.jl); d1/epf are
 #                             null at leads >= 2 (not known at issue).
+#                             window may also be "since_freeze" (#431 G): the
+#                             cv >= 44, market_date >= 2026-11-15 rows only.
 #   v1/map.parquet            market_date, zone, track, sim, act, err_pct, mae,
 #                             corr, lead, made — freshest-lead day aggregates,
 #                             BOTH tracks (track = 'predicted' | 'announced';
@@ -67,6 +69,8 @@ include(joinpath(@__DIR__, "forecast_common.jl"))
 include(joinpath(@__DIR__, "..", "test", "scripts", "eu_eval_metrics.jl"))
 # naive baselines + rMAE for the scoreboard (#431; EXPORT_NAIVE=0 skips them)
 include(joinpath(@__DIR__, "naive_baselines.jl"))
+# the "since_freeze" window (#431 G; EXPORT_SINCE_FREEZE=0 skips it)
+include(joinpath(@__DIR__, "scoreboard_windows.jl"))
 
 const CV = Euphemia.ENERGY_PRICES_CODE_VERSION
 const OUT_ROOT = get(ENV, "WEB_PARQUET_OUT", joinpath(dirname(@__DIR__), "data", "web"))
@@ -141,12 +145,12 @@ function export_scoreboard_parquet()
                   nm(a.shape_floor_q15))
     naive_parts = naive_parts_or_nothing(scores)   # nothing = no naive columns
     naive_rows = Dict{String,Vector{Any}}(c => Any[] for c in NAIVE_BOARD_COLS)
-    push_naive!(sub) = naive_parts === nothing || begin
+    naive_vals(sub) = naive_parts === nothing ? nothing : begin
         f = naive_cohort_fields(naive_parts, sub)
-        for c in NAIVE_BOARD_COLS
-            push!(naive_rows[c], c == "n_naive" ? f[c] : nm(get(f, c, missing)))
-        end
+        Any[c == "n_naive" ? f[c] : nm(get(f, c, missing)) for c in NAIVE_BOARD_COLS]
     end
+    push_naive!(v) = v === nothing ||
+        foreach(((c, x),) -> push!(naive_rows[c], x), zip(NAIVE_BOARD_COLS, v))
 
     df = DataFrame(zone=String[], lead_days=Int[], window=String[],
                    input_mode=String[], n_days=Int[],
@@ -164,15 +168,25 @@ function export_scoreboard_parquet()
             a = agg(sub)
             push!(df, (zone, lead, "all", mode, a.n_days,
                        nm(a.mae), nm(a.bias), nm(a.corr), a.cv, q15vals(a)...))
-            push_naive!(sub)
+            push_naive!(naive_vals(sub))
             for month in sort(unique(String.(sub.month)))
                 m = sub[sub.month .== month, :]
                 am = agg(m)
                 push!(df, (zone, lead, month, mode, am.n_days,
                            nm(am.mae), nm(am.bias), nm(am.corr), am.cv, q15vals(am)...))
-                push_naive!(m)
+                push_naive!(naive_vals(m))
             end
         end
+    end
+    # "since_freeze" (bin/scoreboard_windows.jl): rows built first, appended only when
+    # the whole window succeeded (all-or-nothing; never fails the export).
+    for (row, nv) in since_freeze_entries(scores) do zone, lead, mode, fsub
+            af = agg(fsub)
+            ((zone, lead, SINCE_FREEZE_WINDOW, mode, af.n_days,
+              nm(af.mae), nm(af.bias), nm(af.corr), af.cv, q15vals(af)...), naive_vals(fsub))
+        end
+        push!(df, row)
+        push_naive!(nv)
     end
     if naive_parts !== nothing   # appended after the existing columns (additive)
         df.n_naive = Int.(naive_rows["n_naive"])

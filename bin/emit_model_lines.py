@@ -11,7 +11,8 @@ For each target day T (default: today-2 .. today+7, UTC):
   stats_gbm    = the pure-stats GBM (settled lags), emitted ONLY where its lags
                  legally exist (T no later than last-settled-day + 1).
 Rows are UPSERTED into simulations.model_lines (overlay series, not a vintage).
-MODEL_LINES_STRICT_ASOF=1 opts into gate/physics/settled publication cutoffs;
+Gate/physics/settled publication cutoffs default ON; MODEL_LINES_STRICT_ASOF=0
+restores the pre-strict #439 path;
 MODEL_LINES_REWRITE_PAST=1 allows an explicit backfill past the gate. Each run
 records issue_utc and a source_manifest; these do not reconstruct old vintages.
 
@@ -244,6 +245,11 @@ def market_date(value):
     return utc_issue(value).tz_convert("Europe/Athens").date()
 
 
+def strict_asof(env=os.environ):
+    """Owner-approved default: only explicit 0 disables the issuance guards."""
+    return env.get("MODEL_LINES_STRICT_ASOF", "1") != "0"
+
+
 def gate_utc(target):
     """Day-ahead noon Brussels gate before the Athens delivery date."""
     return pd.Timestamp(dt.datetime.combine(target - dt.timedelta(days=1),
@@ -252,6 +258,19 @@ def gate_utc(target):
 
 def may_emit(target, issue, strict=False, rewrite_past=False):
     return not strict or rewrite_past or utc_issue(issue) < gate_utc(target)
+
+
+def gate_run_summary(base, issue, strict, rewrite_past=False):
+    """One next-day gate line; counts the weather domain, not trained-model rows."""
+    day = market_date(issue) + dt.timedelta(days=1)
+    gate = gate_utc(day)
+    delivery_days = pd.to_datetime(base.t, utc=True).dt.tz_convert("Europe/Athens").dt.date
+    cells = int((delivery_days == day).sum())
+    kept = cells if may_emit(day, issue, strict, rewrite_past) else 0
+    return (f"model lines gate: delivery_day={day} gate_utc={gate.isoformat()} "
+            f"issue_utc={utc_issue(issue).isoformat()} strict_asof={strict} "
+            f"rewrite_past={rewrite_past} scope=next_day_weather_cells "
+            f"cells_kept={kept} cells_dropped={cells-kept}")
 
 
 def physics_base(cur, d0, d1, pin, issue=None):
@@ -528,7 +547,7 @@ def lines_for_day(T, feats, base_h, base_any, st, last_settled, models,
 
 def main():
     issue = utc_issue()
-    strict = os.environ.get("MODEL_LINES_STRICT_ASOF") == "1"
+    strict = strict_asof()
     rewrite_past = os.environ.get("MODEL_LINES_REWRITE_PAST") == "1"
     today = issue.date()
     if len(sys.argv) >= 3:
@@ -544,6 +563,7 @@ def main():
     # allowed to mix. The stats line does not use it (see lines_for_day).
     base_any = physics_base(cur, d0, d1, None, issue if strict else None)
     base_h = base_any if ALLOW_MIXED_BASE else physics_base(cur, d0, d1, BASE_CV, issue if strict else None)
+    print(gate_run_summary(base_any, issue, strict, rewrite_past), flush=True)
     print("model lines: physics base " +
           ("PINNED to cv%d" % BASE_CV if not ALLOW_MIXED_BASE else "UNPINNED (mixed base allowed)") +
           " — hybrid cells by version: " + _mix(base_h) +

@@ -376,6 +376,12 @@ Dated reminders and scoring-policy notes that do not change `code_version`.
     the live scores since the freeze are the only out-of-sample physics record.
     On the site this is the scoreboard window "since freeze (cv44, 2026-11-15)".
   - Recalibration aimed at benchmark rankings is out of policy.
+- **2026-11-16 — owner-approved GBM strict as-of default from 2026-11-17
+  (#431 D2).** GBM rows freeze at their delivery-day gate; `MODEL_LINES_STRICT_ASOF=0`
+  restores the #439 non-strict path, and `MODEL_LINES_REWRITE_PAST=1` permits explicit
+  backfills. Before **2027-03-28**, arrange an earlier summer GBM issue or accept
+  empty next-day lines: the unchanged 10:40 UTC cron is after the 10:00 UTC summer
+  gate (winter gate 11:00 UTC). No schedule or clearing code-version change here.
 
 - **2026-11-16 — revisit the 10:40 UTC overlay refresh before 2027-03-28
   (#431).** The refresh (Timestral postsim + GBM lines) is scheduled in UTC.
