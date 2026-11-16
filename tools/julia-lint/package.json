@@ -13,10 +13,8 @@
     "prettier-plugin-julia": "0.2.1"
   },
   "scripts": {
-    "lint": "node lint.mjs all",
-    "lint:changed": "node lint.mjs changed",
-    "format:check": "node format.mjs",
-    "test": "node --test test/*.test.mjs",
-    "baseline": "node baseline.mjs"
+    "lint": "cd ../.. && eslint -c tools/julia-lint/eslint.config.js \"**/*.jl\"",
+    "format:check": "prettier --config .prettierrc.json --check \"../../**/*.jl\"",
+    "format": "prettier --config .prettierrc.json --write \"../../**/*.jl\""
   }
 }
