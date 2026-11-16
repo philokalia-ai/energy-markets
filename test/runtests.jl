@@ -156,6 +156,8 @@ println()
         # Pure logic only (eligibility gate, lead-day arithmetic, realized-day
         # write guard, scoring math, JSON serializer) — no DB, no solver.
         include(joinpath(@__DIR__, "test_forecast_tracking.jl"))
+        # Naive baselines + rMAE for the scoreboard (#431): pure, no DB.
+        include(joinpath(@__DIR__, "test_naive_baselines.jl"))
     end
 
     @testset "Forecast Context (as-of contract)" begin

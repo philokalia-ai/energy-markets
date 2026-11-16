@@ -43,6 +43,7 @@
     bookHour: 12,          // hour index selected in the order-book view
     window: "all",
     res: "h60",            // scoreboard resolution: "h60" (hourly, default) | "q15" (native 15-min)
+    naive: "auto",         // scoreboard naive baseline: "auto" (weekday rule at D-1, D-7 otherwise) | "d7" | "d1" | "off"
     sort: { lead: null, metric: "mae", dir: 1 }, // dir 1 = best first
     hoverIdx: null,
     track: "predicted",    // the global lens: "predicted" | "announced" (see TRACKS)
@@ -3734,6 +3735,63 @@
     return "mid";
   }
 
+  // ---------- naive baselines on the scoreboard (#431) ----------
+  // The export (bin/naive_baselines.jl) carries, per board cohort, naive MAEs and
+  // rMAE pooled over the cohort's paired hours: d1 = same hour yesterday, d7 = same
+  // hour last week, epf = the epftoolbox weekday rule (d7 on Sat/Sun/Mon, d1
+  // otherwise). D-1 prices are known at issue only for lead D-1, so leads D-2..D-7
+  // carry d7 only. rMAE = model MAE / naive MAE on the SAME hours (a ratio of sums).
+  var NAIVE_LABEL = {
+    d1: "D-1 naive (same hour yesterday)",
+    d7: "D-7 naive (same hour, same weekday last week)",
+    epf: "weekday-rule naive (D-7 on Sat/Sun/Mon, D-1 otherwise)",
+  };
+  // The naive shown for one score entry under the current selector, or null.
+  function naiveFor(s) {
+    if (!s || s.n_naive === undefined || state.naive === "off") return null;
+    var kind = state.naive === "auto" ? (s.lead_days <= 1 ? "epf" : "d7") : state.naive;
+    var mae = s["mae_naive_" + kind];
+    if (mae === undefined) return { kind: kind, mae: null, rmae: null, n: s.n_naive, unavailable: true };
+    return { kind: kind, mae: mae, rmae: s["rmae_" + kind], n: s.n_naive, paired: s.mae_paired };
+  }
+  function naiveUnavailableTitle(nb, s) {
+    return NAIVE_LABEL[nb.kind] + ": not available at lead D-" + s.lead_days +
+      " (D-1 prices are not yet settled when that forecast is issued; only the D-7 naive is fair here).";
+  }
+  function naiveMaeCell(td, s) {
+    var nb = naiveFor(s);
+    if (!nb || nb.mae === null || nb.mae === undefined) {
+      td.textContent = "—";
+      td.className = ((td.className || "") + " null").trim();
+      if (nb && nb.unavailable) td.title = naiveUnavailableTitle(nb, s);
+      else if (nb) td.title = "No paired hours for the naive in this window.";
+      return;
+    }
+    td.textContent = fmt(nb.mae, 1);
+    td.title = NAIVE_LABEL[nb.kind] + " MAE " + fmt(nb.mae, 2) + " €/MWh on " + nb.n +
+      " paired hours. The model's MAE on the same hours is " + fmt(nb.paired, 2) +
+      " (the MAE column averages daily MAEs, so it can differ slightly).";
+  }
+  function naiveRmaeCell(td, s) {
+    var nb = naiveFor(s);
+    if (!nb || nb.rmae === null || nb.rmae === undefined) {
+      td.textContent = "—";
+      td.className = ((td.className || "") + " null").trim();
+      if (nb && nb.unavailable) td.title = naiveUnavailableTitle(nb, s);
+      else if (nb && nb.mae === 0) td.title = "rMAE undefined: the naive error is zero.";
+      return;
+    }
+    var beats = nb.rmae < 1;
+    td.appendChild(document.createTextNode(fmt(nb.rmae, 2)));
+    var mark = el("span", "naive-mark " + (beats ? "naive-beats" : "naive-loses"),
+      beats ? " beats" : " loses");
+    td.appendChild(mark);
+    td.title = "rMAE " + fmt(nb.rmae, 3) + " = model MAE " + fmt(nb.paired, 2) + " ÷ " +
+      NAIVE_LABEL[nb.kind] + " MAE " + fmt(nb.mae, 2) + " on the same " + nb.n + " hours. " +
+      (beats ? "Below 1: the model beat the naive" : "1 or above: the model did not beat the naive") +
+      " on this window. Not a test of statistical significance.";
+  }
+
   function renderScoreboard() {
     var table = $("scoreboard-table");
     table.textContent = "";
@@ -3797,6 +3855,17 @@
     if (state.sort.lead === null || leads.indexOf(state.sort.lead) === -1) state.sort.lead = leads[0];
 
     var METRICS = [["corr", "corr"], ["mae", "MAE"], ["bias", "bias"]];
+    // Naive baseline columns (#431): only when the export carries the naive fields
+    // (old JSON / EXPORT_NAIVE=0 render exactly as before) and only on the hourly
+    // board (there is no 15-min naive; atRes drops the fields in 15-min mode).
+    var hasNaive = scores.some(function (s) { return s.n_naive !== undefined; });
+    if ($("naive-filter")) $("naive-filter").hidden = !hasNaive;
+    if ($("naive-select")) $("naive-select").value = state.naive;
+    var naiveOn = hasNaive && state.naive !== "off";
+    if (naiveOn) METRICS = METRICS.concat([["naive", "naive"], ["rmae", "rMAE"]]);
+    if (!naiveOn && (state.sort.metric === "naive" || state.sort.metric === "rmae")) {
+      state.sort = { lead: state.sort.lead, metric: "mae", dir: 1 };
+    }
 
     // header
     var thead = el("thead");
@@ -3842,6 +3911,11 @@
       var m = state.sort.metric;
       if (m === "corr") return s.corr === null ? Infinity : -s.corr; // higher corr = better
       if (m === "bias") return s.bias === null ? Infinity : Math.abs(s.bias); // closer to 0 = better
+      if (m === "naive" || m === "rmae") {   // lower naive MAE / lower rMAE first
+        var nb = naiveFor(s);
+        var nv = nb ? (m === "naive" ? nb.mae : nb.rmae) : null;
+        return nv === null || nv === undefined ? Infinity : nv;
+      }
       return s.mae === null ? Infinity : s.mae; // lower MAE = better
     }
     zones.sort(function (a, b) {
@@ -3895,6 +3969,10 @@
               var chip = trackGapChip(predMae, annMae, predCv, annCv);
               if (chip) td.appendChild(chip);
             }
+          } else if (mdef[0] === "naive") {
+            naiveMaeCell(td, s);
+          } else if (mdef[0] === "rmae") {
+            naiveRmaeCell(td, s);
           } else {
             td.textContent = (s.bias > 0 ? "+" : "") + fmt(s.bias, 1);
             td.title = resLabel + "bias " + fmt(s.bias, 2) + " €/MWh · n=" + s.n_days + " days";
@@ -6601,6 +6679,14 @@
         state.res = ev.target.value === "q15" ? "q15" : "h60";
         renderScoreboard();
         writeHash();
+      });
+    }
+    if ($("naive-select")) {
+      $("naive-select").value = state.naive;
+      $("naive-select").addEventListener("change", function (ev) {
+        var v = ev.target.value;
+        state.naive = (v === "d7" || v === "d1" || v === "off") ? v : "auto";
+        renderScoreboard();
       });
     }
     if ($("solver-atc")) {

@@ -219,6 +219,8 @@ jobs:
         if: ${{ !cancelled() }}
         env:
           ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
+          # naive baselines on the scoreboard (#431); repo variable EXPORT_NAIVE=0 switches them off
+          EXPORT_NAIVE: ${{ vars.EXPORT_NAIVE || '1' }}
         run: |
           julia --project=. bin/export_forecast_json.jl
 
@@ -226,6 +228,7 @@ jobs:
         if: ${{ !cancelled() }}
         env:
           ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
+          EXPORT_NAIVE: ${{ vars.EXPORT_NAIVE || '1' }}   # naive baselines (#431)
           EXTRACT_S3_ENDPOINT: ${{ secrets.EXTRACT_S3_ENDPOINT }}
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
@@ -356,6 +359,7 @@ jobs:
         timeout-minutes: 15
         env:
           ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
+          EXPORT_NAIVE: ${{ vars.EXPORT_NAIVE || '1' }}   # naive baselines (#431)
         run: |
           julia --project=. bin/export_forecast_json.jl
 
@@ -363,6 +367,7 @@ jobs:
         timeout-minutes: 20
         env:
           ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
+          EXPORT_NAIVE: ${{ vars.EXPORT_NAIVE || '1' }}   # naive baselines (#431)
           EXTRACT_S3_ENDPOINT: ${{ secrets.EXTRACT_S3_ENDPOINT }}
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}

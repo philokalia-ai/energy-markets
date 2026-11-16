@@ -347,6 +347,9 @@ h1 {
   margin-bottom: 16px;
 }
 .filter { display: flex; flex-direction: column; gap: 4px; }
+/* `.filter` sets display:flex, which beats the UA [hidden] rule; keep hidden filters hidden
+   (the #431 Naive selector is hidden for old JSON and on the 15-min board). */
+.filter[hidden] { display: none; }
 .filter-label {
   font-family: var(--mono);
   font-size: 10.5px;
@@ -427,6 +430,10 @@ select {
 .track-gap-chip.cost-na { border-style: dashed; opacity: 0.8; }
 .track-gap-chip.cost-na .tg-cost { color: var(--text-muted); font-style: italic; }
 .track-gap-stat .track-gap-chip { margin-left: 0; }
+/* naive-baseline marker on the scoreboard (#431): rMAE < 1 on that cohort */
+.naive-mark { font-size: 0.8em; margin-left: 0.25em; color: var(--text-muted); }
+.naive-mark.naive-beats { color: var(--status-good, #2E7D32); font-weight: 600; }
+.naive-mark.naive-loses { color: var(--terracotta, #B45309); }
 
 /* Inline "this surface is the Predicted pillar" note (predict + book views). */
 .track-inline-note {
