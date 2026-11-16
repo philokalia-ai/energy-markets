@@ -38,17 +38,18 @@ changed prepared inputs. Each comparison's `mask_sha256` hashes sorted
 manifest pins the mask-index CSV; output hashes also pin metrics, exclusions and
 DM. `--save-masks` optionally writes the exact keys to a separate directory.
 Exclusion counts by zone/reason can overlap; `excluded_union=expected-n` is the
-non-overlapping total. Expected cells include missing forecast rows.
+non-overlapping total. Expected cells include missing forecast rows. Optional all-model masks intersect
+final admissible pairwise masks per lead and naive, including model-specific
+issue-time availability; all participating models then share identical keys.
 
 ## Two targets; no silent retarget
 
-`targets.py` uses the fixed `bin/da_target.py` API from PR C when available.
-Until it lands, `_target_fallback.py` is a marked local copy of that API and the
-repository's `settlement_view.py` rule. The manifest records the actual helper
-used. The committed API (b70636b) was checked against all prepared actuals:
-840,153 highest-sequence and840,129 SDAC hours, with identical keys and zero
-price differences ([parity audit](outputs/target-helper-parity.csv)). Neither
-branch reads a production connection or changes its environment.
+`targets.py` imports the canonical `bin/da_target.py` API merged in #440
+(`e758b93`); there is no docs-local fallback. The manifest pins that helper's
+path and hash. The former API port (b70636b) was checked against all prepared
+actuals: 840,153 highest-sequence and840,129 SDAC hours, with identical keys and
+zero price differences ([parity audit](outputs/target-helper-parity.csv)).
+Regeneration with the merged helper preserves all targets and scores.
 
 - **highest_seq** reproduces the current legacy target: highest numeric auction
   sequence per interval, latest revision tie-break, then hourly mean. This
@@ -139,7 +140,7 @@ The formulas are implemented locally; epftoolbox is not imported or vendored.
   pooled cells. Saved per-cell predictions are absent, so there is no new
   retarget, naive denominator, mask or DM. These remain reported summaries.
 - **Saved live:** September14–November13, 2026, `em-team/live/`, weather rows,
-  all saved leads, mixed cv40/42. GBM/stats are explicitly named overlays: their
+  all saved leads, mixed cv39/40/42. GBM/stats are explicitly named overlays: their
   independent issuance/artifact fit stamps are absent and they may have been
   rewritten. Multi-lead overlay scores are descriptive, not authenticated
   multi-day forecasts. Physics `prediction_made_utc` is creation-time evidence,
@@ -153,7 +154,12 @@ The formulas are implemented locally; epftoolbox is not imported or vendored.
   complete new zone-days**. Partial scores are separate, never a two-day SDAC
   performance claim. Both DM results are insufficient data.
 - **Timestral:** saved209M forecasts, original frozen on-time physics cohort,
-  exactly47,679 cells. The original cohort required D−1/D−2/D−7 price coverage;
+  exactly47,679 cells:936 cv39,36,447 cv40 and10,296 cv42. Physics code versions
+  are carried from the saved rows; physics model and post-sim base version
+  lists/counts derive from this eligible original cohort. Prices-only models
+  have no physics base. These provenance counts precede target-policy and
+  complete-zone-day restrictions, whose masks/counts are reported separately.
+  The original cohort required D−1/D−2/D−7 price coverage;
   D−2 is preserved only as a cohort condition, not evaluated as a benchmark.
   Original highest-sequence MAE25.2647 vs same-context prices-only28.8191 is
   reproduced. New SDAC/complete-day estimators differ as expected. “On-time”

@@ -29,6 +29,22 @@ def main():
         assert metrics.loc[metrics.lead > 1, "naive"].eq("d7").all()
         assert (masks.complete_day_n + masks.partial_day_n).eq(masks.n).all()
         assert masks.excluded_union.eq(masks.expected - masks.n).all()
+        shared = masks[masks.mask_family.eq("all_models")]
+        for _, group in shared.groupby(["lead", "naive"]):
+            assert group.mask_sha256.nunique() == 1
+            assert group.complete_day_mask_sha256.nunique() == 1
+        if manifest["name"] == "timestral_ontime":
+            expected_versions = {"39": 936, "40": 36447, "42": 10296}
+            for model in manifest["models"]:
+                assert model["cohort_physics_cv_counts"] == expected_versions
+                assert model["version_cohort_n"] == sum(expected_versions.values())
+                if model["id"] in ["physics", "timestral_postsim"]:
+                    assert model["base_cv"] == [39, 40, 42]
+                    assert model["base_cv_counts"] == expected_versions
+                else:
+                    assert model["base_cv"] is None and model["base_cv_missing_reason"]
+                if model["id"] == "physics":
+                    assert model["model_cv"] == [39, 40, 42]
         assert metrics.n.ge(0).all() and metrics.share_le_zero.dropna().between(0, 1).all()
         available = metrics.naive_mae.gt(0) & metrics.n.gt(0)
         np.testing.assert_allclose(metrics.loc[available, "rmae"],

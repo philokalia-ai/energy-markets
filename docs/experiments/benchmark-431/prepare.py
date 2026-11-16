@@ -124,7 +124,10 @@ def tsfm_forecasts(folder):
     eligible &= made.le(cutoff)
     for model, column in [("physics", "sim")] + [(name, name) for name in files]:
         rows.append(joined[["zone", "t"]].assign(model=model, prediction=joined[column], lead=1,
-                                                 eligible=eligible, issue_utc=cutoff))
+                                                 eligible=eligible, issue_utc=cutoff,
+                                                 physics_code_version=joined.code_version,
+                                                 base_cv=(joined.code_version if model in ["physics", "timestral_postsim"]
+                                                          else np.nan)))
     control = joined[eligible]
     reconciliation = [{"model": name, "n": len(control),
                        "mae": float((control[column] - control.actual).abs().mean())}
@@ -169,13 +172,31 @@ def historical_reconciliation(output):
 
 
 def model_metadata(model, frame):
-    base = (sorted(frame.base_cv.dropna().astype(int).unique().tolist()) if "base_cv" in frame
-            else None if "prices" in model else [40, 42])
+    # Describe only the finite declared cohort, not excluded saved rows. The
+    # Timestral reconciliation freezes this original 47,679-cell cohort before
+    # target-policy and complete-zone-day restrictions in the score tables.
+    eligible = frame.get("eligible", pd.Series(True, index=frame.index)).fillna(False)
+    cohort = frame[eligible & np.isfinite(frame.prediction)]
+    def version_counts(column):
+        if column not in cohort:
+            return None
+        counts = cohort[column].dropna().astype(int).value_counts().sort_index()
+        return {str(version): int(count) for version, count in counts.items()} or None
+    base_counts = version_counts("base_cv")
+    base = sorted(map(int, base_counts)) if base_counts else None
+    no_physics_input = model.startswith("timestral_") and "prices" in model
+    base_reason = ("prices-only model; no physics input" if no_physics_input
+                   else "physics version absent from finite declared cohort" if base is None else None)
     return {"id": model, "model_cv": base if model == "physics" else None,
+            "model_cv_missing_reason": (base_reason if model == "physics" else "learned model ID is separate from physics code version"),
             "model_id": "mistralai/Timestral-209M" if model.startswith("timestral_") else model,
             "artifact_cv": None, "artifact_sha256": None,
             "artifact_missing_reason": "rule engine; no serialized learned artifact" if model == "physics" else "checkpoint/artifact not identified by saved predictions",
-            "base_cv": base,
+            "base_cv": base, "base_cv_missing_reason": base_reason,
+            "base_cv_counts": base_counts,
+            "cohort_physics_cv_counts": version_counts("physics_code_version"),
+            "version_cohort": "finite predictions with declared eligibility; before target-policy and complete-zone-day score restrictions",
+            "version_cohort_n": len(cohort),
             "model_input_price_policy": ("highest_seq saved context; unchanged by evaluation retarget" if model.startswith("timestral_")
                                          else "not established from snapshot" if model != "physics"
                                          else "no direct settled-price lag context; calibration overlap remains"),

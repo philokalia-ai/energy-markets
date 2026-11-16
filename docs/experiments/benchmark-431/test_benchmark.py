@@ -259,3 +259,69 @@ def test_misaligned_intervals_do_not_fake_a_complete_sdac_hour():
                            p=[1., 2.], u=pd.Timestamp("2026-09-14")))
     act, exclusions, _ = helper.sdac_hourly(raw)
     assert act.empty and set(exclusions.reason) == {"misaligned interval"}
+
+
+@pytest.mark.parametrize("early_hours", [0, 12])
+@pytest.mark.parametrize("d7_already_public", [False, True])
+def test_all_models_intersects_final_issue_dependent_masks(early_hours, d7_already_public):
+    # Review #441: identical forecasts can have different admissible naive
+    # histories at 06:30 and 10:00. Intersect after those checks, per naive.
+    a = history()
+    f = forecast(a, end="2026-09-15")
+    a["available_utc"] = pd.Timestamp("2026-09-14 09:00Z")
+    local = b.calendar(a, "Europe/Athens")
+    earlier = local.local_hour.lt(early_hours)
+    if d7_already_public:
+        earlier |= local.market_date.eq("2026-09-08")
+    a.loc[earlier, "available_utc"] = pd.Timestamp("2026-09-14 06:00Z")
+    early = f.assign(model="early", issue_utc=pd.Timestamp("2026-09-14 06:30Z"))
+    late = f.assign(model="late", issue_utc=pd.Timestamp("2026-09-14 10:00Z"))
+    out = b.evaluate(a, pd.concat([early, late]), start="2026-09-15", end="2026-09-15", intersection=True)
+    for naive in b.NAIVES:
+        expected = 24 if naive == "d7" and d7_already_public else early_hours
+        masks = out["masks"].query("naive == @naive")
+        pairs = masks.query("mask_family == 'pairwise'").set_index("model")
+        assert pairs.loc["early", "n"] == expected
+        assert pairs.loc["late", "n"] == 24
+        shared = masks.query("mask_family == 'all_models'")
+        assert shared.n.eq(expected).all()
+        assert shared.mask_sha256.nunique() == 1
+        assert shared.complete_day_mask_sha256.nunique() == 1
+
+
+def test_prepared_timestral_versions_follow_eligible_saved_physics(monkeypatch, tmp_path):
+    import prepare as prep
+    a = history()
+    target = forecast(a, end="2026-09-15").iloc[:4]
+    old = target[["zone", "t"]].assign(input_mode="weather", date="2026-09-15",
+        code_version=[39, 40, 42, 99], made=["2026-09-14T06:30Z"] * 3 + ["2026-09-14T12:00Z"],
+        sim=target.prediction.to_numpy())
+    sources = {"live_lead1.parquet": old, "panel.parquet": a.rename(columns={"actual": "price"})}
+    for name in ["fc_t209_uni_L1.parquet", "fc_t209_uni_L1_c2048.parquet", "fc_t209_sim_L1.parquet"]:
+        sources[name] = target[["zone", "t"]].assign(median=target.prediction.to_numpy())
+    monkeypatch.setattr(prep, "read_frame", lambda path: sources[path.name].copy())
+    monkeypatch.setattr(prep, "sha256_file", lambda path: "synthetic")
+    forecasts, _, _ = prep.tsfm_forecasts(tmp_path)
+    expected = {"39": 1, "40": 1, "42": 1}
+    for model, frame in forecasts.groupby("model"):
+        assert frame.physics_code_version.tolist() == [39, 40, 42, 99]
+        meta = prep.model_metadata(model, frame)
+        assert meta["version_cohort_n"] == 3
+        assert meta["cohort_physics_cv_counts"] == expected
+        if model in ["physics", "timestral_postsim"]:
+            assert meta["base_cv"] == [39, 40, 42]
+            assert meta["base_cv_counts"] == expected
+            assert meta["base_cv_missing_reason"] is None
+        else:
+            assert meta["base_cv"] is None
+            assert meta["base_cv_missing_reason"] == "prices-only model; no physics input"
+        assert meta["model_cv"] == ([39, 40, 42] if model == "physics" else None)
+
+
+def test_absent_physics_version_is_not_guessed():
+    from prepare import model_metadata
+    frame = forecast(history()).assign(eligible=True)
+    meta = model_metadata("physics", frame)
+    assert meta["model_cv"] is None and meta["base_cv"] is None
+    assert meta["cohort_physics_cv_counts"] is None
+    assert meta["model_cv_missing_reason"] and meta["base_cv_missing_reason"]

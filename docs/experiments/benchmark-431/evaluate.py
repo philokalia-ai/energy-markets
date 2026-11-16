@@ -234,69 +234,75 @@ def evaluate(actuals, forecasts, *, start, end, zones=None, timezone="Europe/Ath
         stamp_fields = [c for c in ["available_utc"] if c in actuals]
         if not stamp_fields:
             grid = naive_forecasts(actuals[KEY + ["actual"]], grid, timezone)
-        valid_models = lead_fc.assign(valid=lambda x: np.isfinite(x.prediction) & x.eligible.fillna(False))
-        wide = valid_models.pivot(index=KEY, columns="model", values="valid")
-        common_keys = wide.index[wide.fillna(False).all(axis=1)]
+        # Materialize the final pairwise masks before intersecting. Naive
+        # availability depends on each model's issue time, so forecast validity
+        # alone cannot define a shared comparison cohort.
+        comparisons = []
+        common_keys = {}
         for model, model_fc in lead_fc.groupby("model", sort=True):
             fields = KEY + ["prediction", "eligible"] + (["issue_utc"] if "issue_utc" in model_fc else [])
             x = grid.merge(model_fc[fields], on=KEY, how="left", validate="one_to_one")
             if stamp_fields:
                 x = naive_forecasts(actuals[KEY + ["actual"] + stamp_fields], x, timezone)
             for naive in NAIVES:
-                allowed = lead == 1 or naive == "d7"
-                if not allowed:
+                if lead != 1 and naive != "d7":
                     for zone, count in x.groupby("zone").size().items():
                         excluded.append(dict(model=str(model), lead=int(lead), naive=naive,
                                              mask_family="not_evaluated", zone=zone,
                                              reason="naive_unavailable_at_issue_for_lead", n=int(count)))
                     continue
-                value = x["naive_" + naive]
                 conditions = {
                     "missing_or_nonfinite_actual": ~np.isfinite(x.actual),
                     "missing_or_nonfinite_forecast": ~np.isfinite(x.prediction),
                     "excluded_by_declared_cohort": x.eligible.eq(False),
                     "unknown_eligibility": x.eligible.isna() & np.isfinite(x.prediction),
-                    "missing_or_nonfinite_naive": ~np.isfinite(value) if allowed else pd.Series(False, index=x.index),
-                    "naive_unavailable_at_issue_for_lead": pd.Series(not allowed, index=x.index),
+                    "missing_or_nonfinite_naive": ~np.isfinite(x["naive_" + naive]),
+                    "naive_unavailable_at_issue_for_lead": pd.Series(False, index=x.index),
                 }
                 pair_ok = ~pd.DataFrame(conditions).any(axis=1)
-                families = {"pairwise": pair_ok}
+                comparisons.append((model, naive, x, conditions, pair_ok))
                 if intersection:
-                    in_common = pd.MultiIndex.from_frame(x[KEY]).isin(common_keys)
-                    families["all_models"] = pair_ok & in_common
-                for family, mask in families.items():
-                    identity = dict(model=str(model), lead=int(lead), naive=naive, mask_family=family)
-                    sub = x[mask].copy()
-                    sub["naive"] = sub["naive_" + naive]
-                    digest = mask_hash(sub, lead)
-                    complete = sub[complete_day_mask(sub, timezone)]
-                    masks.append(dict(identity, mask_sha256=digest, n=len(sub), expected=len(grid),
-                                      complete_day_n=len(complete), partial_day_n=len(sub) - len(complete),
-                                      complete_day_mask_sha256=mask_hash(complete, lead), excluded_union=len(grid) - len(sub)))
-                    if save_masks:
-                        name = hashlib.sha256((json.dumps(identity, sort_keys=True) + digest).encode()).hexdigest()[:24] + ".csv.gz"
-                        sub[KEY].sort_values(KEY).to_csv(Path(save_masks) / name, index=False)
-                        masks[-1]["mask_file"] = name
-                    local_conditions = dict(conditions)
-                    if family == "all_models":
-                        local_conditions["outside_all_model_intersection"] = ~pd.MultiIndex.from_frame(x[KEY]).isin(common_keys)
-                    for reason, lost in local_conditions.items():
-                        for zone, n in x[lost].groupby("zone").size().items():
-                            excluded.append(dict(identity, zone=zone, reason=reason, n=int(n)))
-                    groups = [(z, [z]) for z in zones] + [("all", zones)]
-                    non_it = [z for z in zones if not z.startswith("IT-")]
-                    if non_it and len(non_it) < len(zones):
-                        groups.append(("excluding_italy", non_it))
-                    for group, group_zones in groups:
-                        selection = sub[sub.zone.isin(group_zones)]
-                        for coverage, subset in [("all_paired_cells", selection),
-                                                 ("complete_zone_days", selection[complete_day_mask(selection, timezone)])]:
-                            for aggregation in ["pooled_cell", "mean_daily"]:
-                                metrics.append(dict(identity, group=group, coverage=coverage, aggregation=aggregation,
-                                                    mask_sha256=mask_hash(subset, lead), **summarize(subset, aggregation)))
-                        significance.append(dict(identity, group=group,
-                                                 **dm_for_group(selection, group_zones, timezone, lead, min_dm_days,
-                                                                expected_dates=pd.date_range(start, end))))
+                    keys = pd.MultiIndex.from_frame(x.loc[pair_ok, KEY])
+                    common_keys[naive] = (keys if naive not in common_keys
+                                          else common_keys[naive].intersection(keys))
+        for model, naive, x, conditions, pair_ok in comparisons:
+            families = {"pairwise": pair_ok}
+            if intersection:
+                in_common = pd.MultiIndex.from_frame(x[KEY]).isin(common_keys[naive])
+                families["all_models"] = pair_ok & in_common
+            for family, mask in families.items():
+                identity = dict(model=str(model), lead=int(lead), naive=naive, mask_family=family)
+                sub = x[mask].copy()
+                sub["naive"] = sub["naive_" + naive]
+                digest = mask_hash(sub, lead)
+                complete = sub[complete_day_mask(sub, timezone)]
+                masks.append(dict(identity, mask_sha256=digest, n=len(sub), expected=len(grid),
+                                  complete_day_n=len(complete), partial_day_n=len(sub) - len(complete),
+                                  complete_day_mask_sha256=mask_hash(complete, lead), excluded_union=len(grid) - len(sub)))
+                if save_masks:
+                    name = hashlib.sha256((json.dumps(identity, sort_keys=True) + digest).encode()).hexdigest()[:24] + ".csv.gz"
+                    sub[KEY].sort_values(KEY).to_csv(Path(save_masks) / name, index=False)
+                    masks[-1]["mask_file"] = name
+                local_conditions = dict(conditions)
+                if family == "all_models":
+                    local_conditions["outside_all_model_intersection"] = ~pd.MultiIndex.from_frame(x[KEY]).isin(common_keys[naive])
+                for reason, lost in local_conditions.items():
+                    for zone, n in x[lost].groupby("zone").size().items():
+                        excluded.append(dict(identity, zone=zone, reason=reason, n=int(n)))
+                groups = [(z, [z]) for z in zones] + [("all", zones)]
+                non_it = [z for z in zones if not z.startswith("IT-")]
+                if non_it and len(non_it) < len(zones):
+                    groups.append(("excluding_italy", non_it))
+                for group, group_zones in groups:
+                    selection = sub[sub.zone.isin(group_zones)]
+                    for coverage, subset in [("all_paired_cells", selection),
+                                             ("complete_zone_days", selection[complete_day_mask(selection, timezone)])]:
+                        for aggregation in ["pooled_cell", "mean_daily"]:
+                            metrics.append(dict(identity, group=group, coverage=coverage, aggregation=aggregation,
+                                                mask_sha256=mask_hash(subset, lead), **summarize(subset, aggregation)))
+                    significance.append(dict(identity, group=group,
+                                             **dm_for_group(selection, group_zones, timezone, lead, min_dm_days,
+                                                            expected_dates=pd.date_range(start, end))))
     return {"metrics": pd.DataFrame(metrics), "masks": pd.DataFrame(masks),
             "exclusions": pd.DataFrame(excluded), "dm": pd.DataFrame(significance)}
 
