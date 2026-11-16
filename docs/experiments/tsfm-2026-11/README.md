@@ -331,6 +331,9 @@ not touch the clearing, the books or `code_version`.
 - `evaluate.py`: MAE, bias, corr, per-zone corr, ≤0/≤5 hit and false-alarm rates, Brier, AUC
   and 80% interval coverage, vs `sim`, naive D-1/D-2/D-7 and the site's `gbm`/`stats` overlays.
 - `compare_collapse.py`: P(≤0) vs `collapse`'s logistic on common cells.
+- `prob_scores.py` ([prob-scores.md](prob-scores.md), #431): per-quantile pinball loss, a 21-grid CRPS
+  approximation (backtest only), 50/80/90/98 % coverage and width, P(≤0) reliability for raw TSFM
+  and the hourly/day blends, and an offline split-conformal test. `--live-api` scores the live overlay.
 - Phase 2 ([physics.md](physics.md)): `run_tsfm.py --variant phys|physresid|physpre`,
   `scenario_profiles.py`, `passthrough.py`, `summarize_passthrough.py`, `dose_response.py`.
 
