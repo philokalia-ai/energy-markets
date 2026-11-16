@@ -1,6 +1,8 @@
+import os
+import sys
 import duckdb, math, collections
-RES="/home/pgeorgakopoulos/armada/energy-markets/data/results.duckdb"
-EXT="/home/pgeorgakopoulos/armada/energy-markets/data/extracts/euphemia-live.duckdb"
+RES=(os.environ.get('EUPHEMIA_RESULTS_DB') or sys.exit("Set EUPHEMIA_RESULTS_DB to the required local file or directory"))
+EXT=(os.environ.get('EUPHEMIA_DUCKDB_PATH') or sys.exit("Set EUPHEMIA_DUCKDB_PATH to the required local file or directory"))
 con = duckdb.connect(EXT, read_only=True)
 con.execute(f"ATTACH '{RES}' AS res (READ_ONLY)")
 FLOOR={"DE_LU","FR","PL","BE","CZ","CH"}

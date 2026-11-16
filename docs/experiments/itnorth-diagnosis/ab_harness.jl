@@ -6,7 +6,7 @@
 # Loops per day, retries a failed day once (HiGHS ~3-4% segfault, #182).
 using Dates, Printf
 ENV["EUPHEMIA_DATA_STORE"]="duckdb"
-ENV["EUPHEMIA_DUCKDB_PATH"]="/home/pgeorgakopoulos/armada/energy-markets/data/extracts/euphemia-live.duckdb"
+ENV["EUPHEMIA_DUCKDB_PATH"]=get(() -> error("Set EUPHEMIA_DUCKDB_PATH to the required local file or directory"), ENV, "EUPHEMIA_DUCKDB_PATH")
 ENV["EUPHEMIA_DUCKDB_READONLY"]="true"
 ENV["EUPHEMIA_DUCKDB_NPROCS_HINT"]="6"
 using Euphemia

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """fit-iteration 4 before/after scorecard summary + solar collapse view."""
+import os
 import json, numpy as np, pandas as pd, sys
 SP=sys.argv[1] if len(sys.argv)>1 else \
-  "/tmp/claude-1000/-home-pgeorgakopoulos-armada-energy-markets/b12b1e25-3bbc-44fb-b4b2-77f8400fd203/scratchpad/input_upgrade"
+  (os.environ.get('INPUT_UPGRADE_DIR') or sys.exit("Set INPUT_UPGRADE_DIR to the required local file or directory"))
 vp=pd.read_parquet(f"{SP}/valid_preds39.parquet")
 win={tuple(k.split("|")):v for k,v in json.load(open(f"{SP}/winners39.json")).items()}
 def mae(p,t): return float(np.mean(np.abs(p-t)))

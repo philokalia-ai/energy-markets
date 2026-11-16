@@ -23,7 +23,7 @@ import da_target  # noqa: E402
 
 ATH = ZoneInfo("Europe/Athens")
 
-OUT = os.environ.get("TSFM_OUT", "/home/pgeorgakopoulos/armada/em-team/results/tsfm")
+OUT = (os.environ.get('TSFM_OUT') or sys.exit("Set TSFM_OUT to the required local file or directory"))
 START, END = os.environ.get("EVAL_START", "2026-09-14"), os.environ.get("EVAL_END", "2026-11-13")
 CAL_DAYS = ["2026-09-16", "2026-09-20", "2026-09-27", "2026-10-06", "2026-10-19", "2026-11-04",
             "2026-11-09", "2026-11-13"]

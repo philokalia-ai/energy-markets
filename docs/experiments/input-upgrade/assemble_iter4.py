@@ -5,10 +5,11 @@ verbatim from the current commit — their geom/lineage differs from geom39 so t
 not re-swept, exactly the train39+wire design). Winners-only .txt; emits a staging dir,
 the ML_USE_NEW Julia constant, and a winner-churn diff vs the currently-committed map.
 Replaces the stale wire_ml.py (its PILOT_WIN predated iteration 1's NL_solar demotion)."""
+from pathlib import Path
 import json, os, shutil, sys
 SP=sys.argv[1] if len(sys.argv)>1 else \
-  "/tmp/claude-1000/-home-pgeorgakopoulos-armada-energy-markets/b12b1e25-3bbc-44fb-b4b2-77f8400fd203/scratchpad/input_upgrade"
-BIN="/home/pgeorgakopoulos/armada/energy-markets/bin"
+  (os.environ.get('INPUT_UPGRADE_DIR') or sys.exit("Set INPUT_UPGRADE_DIR to the required local file or directory"))
+BIN=str(Path(__file__).resolve().parents[3] / 'bin')
 COMMITTED=f"{BIN}/input_models"
 STAGE=f"{SP}/input_models_stage"
 TARGETS=["load","solar","wind"]

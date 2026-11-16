@@ -6,10 +6,11 @@ vs the FRESH baseline on VALID with iteration 1's corr guard. Ship the enriched 
 only if it beats the fresh baseline (MAE better AND corr loss <= 0.02). DE_LU-scoped:
 no other zone is touched. features.py de_school_holiday()/windchill() are the training
 authority; ml_inputs.jl mirrors them (lockstep, cmp asserted separately)."""
+from pathlib import Path
 import os, sys, json, glob, numpy as np, pandas as pd, lightgbm as lgb
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import features as F
-SP=F.SP; BIN="/home/pgeorgakopoulos/armada/energy-markets/bin"
+SP=F.SP; BIN=str(Path(__file__).resolve().parents[3] / 'bin')
 GFS=f"{SP}/gfs"; GEOM=json.load(open(f"{SP}/geom39.json"))
 LOADP=json.load(open(f"{BIN}/load_models_v1.json"))["zones"]
 TGT_LOAD=pd.read_parquet(f"{SP}/tgt_load39.parquet"); TGT_LOAD["h"]=pd.to_datetime(TGT_LOAD["h"])

@@ -1,7 +1,9 @@
 """Gates for planner-p2 idea #2 (PS opportunity reference): CH/AT hourly PS-generation MAE
 (master allocation vs ENTSO-E actual), CH/AT price MAE, footprint MAE, new cap prints."""
+import sys
+from pathlib import Path
 import glob, os, json, duckdb, numpy as np, pandas as pd
-R = "/home/pgeorgakopoulos/armada/em-team/results/blocks"; Z = ["CH", "AT"]
+R = (os.environ.get('BLOCKS_RESULTS_DIR') or sys.exit("Set BLOCKS_RESULTS_DIR to the required local file or directory")); Z = ["CH", "AT"]
 def prices(label):
     out = []
     for f in glob.glob(f"{R}/{label}/2026-*-??.csv"):
@@ -14,7 +16,7 @@ def alloc(label):
     a = pd.concat(out); a["zone"] = a.family.str.split(":").str[1]; a["t"] = pd.to_datetime(a.date_time)
     return a[a.zone.isin(Z)].groupby(["zone", "t", "day"]).alloc_mw.sum().reset_index()
 rows = []
-for f in glob.glob("/home/pgeorgakopoulos/armada/em-team/live/*.json"):
+for f in glob.glob(str(Path((os.environ.get('EM_LIVE_DIR') or sys.exit("Set EM_LIVE_DIR to the required local file or directory"))) / '*.json')):
     z = os.path.basename(f)[:-5]
     for d in json.load(open(f))["days"]:
         for h, a in zip(d.get("hours", []), d.get("actual", []) or []):
@@ -33,7 +35,7 @@ for z in Z:
 capb = int(((m.price_b >= 2999) | (m.price_b <= -499)).sum()); capt = int(((m.price_t >= 2999) | (m.price_t <= -499)).sum())
 print(f"cap/floor prints base {capb} treat {capt}  [gate: no new]")
 print(f"cells moved (|d|>0.5): all {int((abs(m.price_t-m.price_b)>0.5).sum())}, CH/AT {int((abs(loc.price_t-loc.price_b)>0.5).sum())}")
-con = duckdb.connect("/home/pgeorgakopoulos/armada/em-data/euphemia-live-20261114.duckdb", read_only=True)
+con = duckdb.connect((os.environ.get('EUPHEMIA_DUCKDB_PATH') or sys.exit("Set EUPHEMIA_DUCKDB_PATH to the required local file or directory")), read_only=True)
 g = con.sql("""select area_map_code zone, date_trunc('hour', date_time_utc) t, avg(actual_generation_output_mw) gen
   from entsoe.aggregated_generation_per_type where production_type='Hydro Pumped Storage' and area_type_code like 'BZN%'
   and area_map_code in ('CH','AT') and date_time_utc >= '2026-09-15' and date_time_utc < '2026-11-15' group by 1,2""").df()

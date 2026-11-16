@@ -1,6 +1,8 @@
+import os
+from pathlib import Path
 import duckdb, numpy as np, sys
-DDB='/home/pgeorgakopoulos/armada/energy-markets/data/extracts/euphemia-live.duckdb'
-MODEL='/tmp/claude-1000/-home-pgeorgakopoulos-armada-energy-markets/b12b1e25-3bbc-44fb-b4b2-77f8400fd203/scratchpad/cv23_model.csv'
+DDB=(os.environ.get('EUPHEMIA_DUCKDB_PATH') or sys.exit("Set EUPHEMIA_DUCKDB_PATH to the required local file or directory"))
+MODEL=str(Path((os.environ.get('EM_SCRATCH_DIR') or sys.exit("Set EM_SCRATCH_DIR to the required local file or directory"))) / 'cv23_model.csv')
 c=duckdb.connect(DDB, read_only=True)
 c.execute("SET TimeZone='UTC'")
 c.execute("""

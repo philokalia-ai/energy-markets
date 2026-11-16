@@ -3,9 +3,11 @@
 written by panel_cell.jl and the settled DA prices from the extract; print the
 GR+NL midday panel (UTC 09-15) vs settled and the collapse (<=EUR5 / <0)
 hit / false-alarm counts per arm. Arms: old (committed packs) | ml (LightGBM)."""
+import os
+import sys
 import json, glob, duckdb, numpy as np, pandas as pd
-SP = "/tmp/claude-1000/-home-pgeorgakopoulos-armada-energy-markets/b12b1e25-3bbc-44fb-b4b2-77f8400fd203/scratchpad/input_upgrade"
-EXT = "/home/pgeorgakopoulos/armada/energy-markets/data/extracts/euphemia-live.duckdb"
+SP = (os.environ.get('INPUT_UPGRADE_DIR') or sys.exit("Set INPUT_UPGRADE_DIR to the required local file or directory"))
+EXT = (os.environ.get('EUPHEMIA_DUCKDB_PATH') or sys.exit("Set EUPHEMIA_DUCKDB_PATH to the required local file or directory"))
 DAYS = ["2026-07-24", "2026-07-25", "2026-07-26", "2026-07-27"]
 PILOTS = ["GR", "ES", "DE_LU", "SE2", "NL"]
 ARMS = ["old", "ml"]

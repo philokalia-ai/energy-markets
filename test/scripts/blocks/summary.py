@@ -1,7 +1,8 @@
 """Compact PR table: each arm vs base on the paired (day, zone, UTC hour) cells.
 usage: summary.py BASE ARM1 ARM2 ...   (labels = dirs under results/blocks)"""
+from pathlib import Path
 import sys, os, glob, json, re, pandas as pd, numpy as np
-R = "/home/pgeorgakopoulos/armada/em-team/results/blocks"
+R = (os.environ.get('BLOCKS_RESULTS_DIR') or sys.exit("Set BLOCKS_RESULTS_DIR to the required local file or directory"))
 def load(label):
     out = []
     for f in sorted(glob.glob(f"{R}/{label}/2026-*-??.csv")):
@@ -9,7 +10,7 @@ def load(label):
         df["day"] = os.path.basename(f)[:10]; out.append(df[["zone", "t", "day", "price"]])
     return pd.concat(out) if out else None
 rows = []
-for f in glob.glob("/home/pgeorgakopoulos/armada/em-team/live/*.json"):
+for f in glob.glob(str(Path((os.environ.get('EM_LIVE_DIR') or sys.exit("Set EM_LIVE_DIR to the required local file or directory"))) / '*.json')):
     z = os.path.basename(f)[:-5]
     for d in json.load(open(f))["days"]:
         for h, a in zip(d.get("hours", []), d.get("actual", []) or []):

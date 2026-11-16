@@ -5,9 +5,10 @@ wind prediction's relative volume bias per zone on the fit-iteration-4 VALID
 multiplicative level term on one month, verify it reduces |bias| on the OTHER month
 without hurting corr (scale-invariant). Ship a month-of-year multiplier only if it
 verifies out-of-sample on >=15 zones; else NO-SHIP honestly."""
+import os
 import json, numpy as np, pandas as pd, sys
 SP=sys.argv[1] if len(sys.argv)>1 else \
-  "/tmp/claude-1000/-home-pgeorgakopoulos-armada-energy-markets/b12b1e25-3bbc-44fb-b4b2-77f8400fd203/scratchpad/input_upgrade"
+  (os.environ.get('INPUT_UPGRADE_DIR') or sys.exit("Set INPUT_UPGRADE_DIR to the required local file or directory"))
 vp=pd.read_parquet(f"{SP}/valid_preds39.parquet"); vp["h"]=pd.to_datetime(vp["h"])
 win={tuple(k.split("|")):v for k,v in json.load(open(f"{SP}/winners39.json")).items()}
 w=vp[vp.target=="wind"].copy(); w["mon"]=w["h"].dt.month

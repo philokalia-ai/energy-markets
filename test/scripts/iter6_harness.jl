@@ -134,7 +134,7 @@ end
 
 function main()
     label = get(ENV, "LABEL", "run")
-    resdir = get(ENV, "RESULTS", "/tmp/claude-1000/-home-pgeorgakopoulos-armada-energy-markets/b12b1e25-3bbc-44fb-b4b2-77f8400fd203/scratchpad/iter6_results")
+    resdir = get(ENV, "RESULTS", get(() -> error("Set RESULTS to the required local file or directory"), ENV, "RESULTS"))
     mkpath(resdir)
     nworkers = parse(Int, get(ENV, "WORKERS", "2"))
     zones = haskey(ENV, "ZONES") ? Set(String[strip(z) for z in split(ENV["ZONES"], ",")]) : nothing

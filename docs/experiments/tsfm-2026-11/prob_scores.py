@@ -45,10 +45,6 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-OUT = os.environ.get("TSFM_OUT", "/home/pgeorgakopoulos/armada/em-team/results/tsfm")
-RES = os.environ.get("TEAM_RESULTS", "/home/pgeorgakopoulos/armada/em-team/results")
-LOGIT_HOUR = f"{RES}/collapse-probability-primary/pregate_0630-predictions.csv.gz"
-LOGIT_DAY = f"{RES}/collapse-diagnostics-primary/pregate_0630-day-predictions.csv.gz"
 
 LEVELS = np.array([0.01, 0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50,
                    0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90, 0.95, 0.99])
@@ -199,6 +195,7 @@ def adjust_band(lo, hi, offset, policy):
 
 # ----------------------------------------------------------------------------- data
 def load_backtest():
+    out = os.environ.get("TSFM_OUT") or sys.exit("Set TSFM_OUT to the saved forecast directory")
     import evaluate as ev
     names = [a[0] for a in ARMS]
     base_df, keys = ev.load(names)
@@ -208,7 +205,7 @@ def load_backtest():
     assert (n_common, n_on) == (N_COMMON, N_ONTIME), f"cell set changed: {n_common}/{n_on}"
     arms = {}
     for fn, _, _ in ARMS:
-        f = pd.read_parquet(f"{OUT}/{fn}.parquet")
+        f = pd.read_parquet(f"{out}/{fn}.parquet")
         assert f.lead_days.eq(1).all() and np.allclose(f["median"], f["q50"])
         f, crossed = check_grid(f, QCOLS)
         m = base.merge(f[["zone", "t", "median", "p_le0"] + QCOLS], on=["zone", "t"], how="left")
@@ -218,9 +215,12 @@ def load_backtest():
 
 
 def load_logits(base):
-    h = pd.read_csv(LOGIT_HOUR, parse_dates=["t"])
+    res = os.environ.get("TEAM_RESULTS") or sys.exit("Set TEAM_RESULTS to the saved results directory")
+    logit_hour = Path(res) / "collapse-probability-primary/pregate_0630-predictions.csv.gz"
+    logit_day = Path(res) / "collapse-diagnostics-primary/pregate_0630-day-predictions.csv.gz"
+    h = pd.read_csv(logit_hour, parse_dates=["t"])
     h = h[h.model == "logistic"][["zone", "t", "y", "probability"]].rename(columns={"probability": "p_logit"})
-    d = pd.read_csv(LOGIT_DAY)
+    d = pd.read_csv(logit_day)
     d = d[d.model == "logistic"][["zone", "market_date", "y", "probability"]].rename(
         columns={"probability": "p_any_logit", "y": "y_day", "market_date": "date"})
     return h, d
@@ -350,8 +350,11 @@ def scopes_of(m):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--live-api", default=None)
-    ap.add_argument("--out", default=f"{OUT}/prob431")
+    ap.add_argument("--out", default=None)
     a = ap.parse_args()
+    if a.out is None:
+        out = os.environ.get("TSFM_OUT") or sys.exit("Set TSFM_OUT to the saved forecast directory")
+        a.out = str(Path(out) / "prob431")
     os.makedirs(a.out, exist_ok=True)
     pd.set_option("display.width", 250, "display.max_columns", 40)
     base, arms = load_backtest()

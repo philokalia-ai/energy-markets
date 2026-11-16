@@ -4,43 +4,43 @@
   "target_policy": "highest_seq",
   "source": {
     "extract": {
-      "path": "/home/pgeorgakopoulos/armada/em-data/euphemia-live-20261115.duckdb",
+      "path": "$EM_DATA_DIR/euphemia-live-20261115.duckdb",
       "sha256": "fbeb02e849ae47e6b6a004b6a8e6cceb4bd1b397a6b221ccbe8f9da17e0abe13"
     },
     "actuals": {
-      "path": "/home/pgeorgakopoulos/armada/em-team/results/benchmark-431-inputs/highest_seq-actuals.csv.gz",
+      "path": "$EM_RESULTS_DIR/benchmark-431-inputs/highest_seq-actuals.csv.gz",
       "sha256": "4890bb434e010f05aead8da4100ac4d8f14209d3affe771c1c91fb589a7ccf30",
       "n": 840153
     },
     "forecasts": {
-      "path": "/home/pgeorgakopoulos/armada/em-team/results/benchmark-431-inputs/timestral_ontime-forecasts.csv.gz",
+      "path": "$EM_RESULTS_DIR/benchmark-431-inputs/timestral_ontime-forecasts.csv.gz",
       "sha256": "8cbd52e67f4bf8238d23a25076daeb24940fc610ad5ffdfd27db4eb2ebfdfd00",
       "n": 217308
     },
     "saved_sources": [
       {
-        "path": "/home/pgeorgakopoulos/armada/em-team/results/tsfm/fc_t209_uni_L1.parquet",
+        "path": "$EM_RESULTS_DIR/tsfm/fc_t209_uni_L1.parquet",
         "sha256": "d7a198de0a329a193f86aa1cc7145e928b4d4df4133520cafeec2ca89bfe9ea7"
       },
       {
-        "path": "/home/pgeorgakopoulos/armada/em-team/results/tsfm/fc_t209_uni_L1_c2048.parquet",
+        "path": "$EM_RESULTS_DIR/tsfm/fc_t209_uni_L1_c2048.parquet",
         "sha256": "b1c8f5115fe336547c0ecf3520f6754b61335e8afa5c874fb185a1bc0b85454c"
       },
       {
-        "path": "/home/pgeorgakopoulos/armada/em-team/results/tsfm/fc_t209_sim_L1.parquet",
+        "path": "$EM_RESULTS_DIR/tsfm/fc_t209_sim_L1.parquet",
         "sha256": "214d8456ea121c13e55c4306a6ed166ca51fe859b2de05b897dae0e649b4ae26"
       },
       {
-        "path": "/home/pgeorgakopoulos/armada/em-team/results/tsfm/live_lead1.parquet",
+        "path": "$EM_RESULTS_DIR/tsfm/live_lead1.parquet",
         "sha256": "38881328adb36ef78bcd1d5ea37b12da29ffd03c77b1e00d763f26ade6756763"
       },
       {
-        "path": "/home/pgeorgakopoulos/armada/em-team/results/tsfm/panel.parquet",
+        "path": "$EM_RESULTS_DIR/tsfm/panel.parquet",
         "sha256": "01cfe02e66e869e9eed353aa9ce433074a7f938696166eebf605de37ea529f6a"
       }
     ],
     "target_helper": {
-      "path": "/home/pgeorgakopoulos/armada/em-team/worktrees/collapse-431/bin/da_target.py",
+      "path": "$REPO_ROOT/bin/da_target.py",
       "sha256": "08f5c26237f51a105c552724fc50b99b5a1488d79e02e05e6dded2b0d09bdf32"
     }
   },

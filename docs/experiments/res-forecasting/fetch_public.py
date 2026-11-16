@@ -1,9 +1,11 @@
 # Fetch 100m wind + GHI from public open-meteo: ERA5 archive (truth-side
 # features) and previous-runs (honest lead-1/2 GFS vintages), for the study
 # year, at the selected cells. Stdlib only.
+import os
+from pathlib import Path
 import json, time, csv, sys, urllib.request, urllib.parse
 
-SP = "/tmp/claude-1000/-home-pgeorgakopoulos-armada-energy-markets/b12b1e25-3bbc-44fb-b4b2-77f8400fd203/scratchpad/res"
+SP = str(Path((os.environ.get('EM_SCRATCH_DIR') or sys.exit("Set EM_SCRATCH_DIR to the required local file or directory"))) / 'res')
 START, END = "2025-07-01", "2026-06-30"
 
 def get(url, params, tries=5):

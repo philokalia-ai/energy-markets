@@ -1,5 +1,5 @@
 #!/bin/bash
-CSV="/tmp/claude-1000/-home-pgeorgakopoulos-armada-energy-markets/b12b1e25-3bbc-44fb-b4b2-77f8400fd203/scratchpad/cv25_summer.csv"
+CSV="${EM_SCRATCH_DIR:?Set EM_SCRATCH_DIR to the experiment scratch directory}/cv25_summer.csv"
 TARGET="${1:-1000}"
 i=0
 while true; do

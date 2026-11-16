@@ -8,7 +8,7 @@ ENV["EUPHEMIA_DISABLE_CV27_T2"] = "1"
 ENV["EUPHEMIA_DISABLE_CV27_T3"] = "1"
 ENV["EUPHEMIA_CV27_T1_BORDERS"] = spec   # present (even if empty) => border-list mode
 ENV["EUPHEMIA_DATA_STORE"] = "duckdb"
-ENV["EUPHEMIA_DUCKDB_PATH"] = "/home/pgeorgakopoulos/armada/energy-markets/data/extracts/euphemia-live.duckdb"
+ENV["EUPHEMIA_DUCKDB_PATH"] = get(() -> error("Set EUPHEMIA_DUCKDB_PATH to the required local file or directory"), ENV, "EUPHEMIA_DUCKDB_PATH")
 ENV["EUPHEMIA_DUCKDB_READONLY"] = "true"
 ENV["EUPHEMIA_DUCKDB_NPROCS_HINT"] = get(ENV, "P7_NPROCS_HINT", "12")
 

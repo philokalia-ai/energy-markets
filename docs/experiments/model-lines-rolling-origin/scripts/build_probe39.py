@@ -8,12 +8,13 @@
 #
 # Writes the dataset plus manifest.json so the emitter can derive the
 # trained-on version from provenance rather than from a requested constant.
+from pathlib import Path
 import os, sys, json, datetime as dt
 import duckdb, pandas as pd, psycopg2
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from settlement_view import canonical_settlement
 
-ROOT = "/home/pgeorgakopoulos/armada/energy-markets"
+ROOT = str(Path(__file__).resolve().parents[4])
 CV = int(os.environ.get("BUILD_CV", "39"))
 BOOKS = os.path.join(ROOT, "data", f"backfill_books_cv{CV}")
 TRAIN = os.path.join(ROOT, "data", "model_lines_train")

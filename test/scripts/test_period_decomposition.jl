@@ -18,7 +18,7 @@
 # Offline run:
 #   EUPHEMIA_DATA_STORE=duckdb \
 #   EUPHEMIA_DUCKDB_PATH=data/public/euphemia-public.duckdb \
-#   GRB_LICENSE_FILE=/home/pgeorgakopoulos/gurobi.lic \
+#   GRB_LICENSE_FILE=/path/to/gurobi.lic \
 #     julia --project=. test/scripts/test_period_decomposition.jl
 #
 # Env knobs:

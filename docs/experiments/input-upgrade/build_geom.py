@@ -3,10 +3,13 @@
 solar/wind presence per zone (amendment 2). cells<-res_models_v2, cities<-load_models_v1.
 Solar/wind skip decision: a target is MODELED if the trailing p95 of actual per-type
 generation reaches a meaningful level, else skip (pack/zero passthrough)."""
+import os
+import sys
+from pathlib import Path
 import json, duckdb, numpy as np
-BIN="/home/pgeorgakopoulos/armada/energy-markets/bin"
-SP="/tmp/claude-1000/-home-pgeorgakopoulos-armada-energy-markets/b12b1e25-3bbc-44fb-b4b2-77f8400fd203/scratchpad/input_upgrade"
-EXT="/home/pgeorgakopoulos/armada/energy-markets/data/extracts/euphemia-live.duckdb"
+BIN=str(Path(__file__).resolve().parents[3] / 'bin')
+SP=(os.environ.get('INPUT_UPGRADE_DIR') or sys.exit("Set INPUT_UPGRADE_DIR to the required local file or directory"))
+EXT=(os.environ.get('EUPHEMIA_DUCKDB_PATH') or sys.exit("Set EUPHEMIA_DUCKDB_PATH to the required local file or directory"))
 RESP=json.load(open(f"{BIN}/res_models_v2.json"))["zones"]
 LOADP=json.load(open(f"{BIN}/load_models_v1.json"))["zones"]
 con=duckdb.connect(EXT, read_only=True)

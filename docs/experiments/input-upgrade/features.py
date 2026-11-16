@@ -2,9 +2,10 @@
 """Shared ex-ante feature engineering for the input-upgrade models.
 Targets = ENTSO-E DA forecasts. Weather = GFS previous_day1 vintages.
 All features available at the 08:00 UTC D-1 gate."""
+import sys
 import os, glob, json, numpy as np, pandas as pd
 
-SP="/tmp/claude-1000/-home-pgeorgakopoulos-armada-energy-markets/b12b1e25-3bbc-44fb-b4b2-77f8400fd203/scratchpad/input_upgrade"
+SP=(os.environ.get('INPUT_UPGRADE_DIR') or sys.exit("Set INPUT_UPGRADE_DIR to the required local file or directory"))
 import os as _os
 ZONES=["GR","ES","DE_LU","SE2"]+(["NL"] if _os.path.exists(SP+"/gfs/res_nl_ch0.parquet") else [])
 GEOM=json.load(open(f"{SP}/geom.json"))

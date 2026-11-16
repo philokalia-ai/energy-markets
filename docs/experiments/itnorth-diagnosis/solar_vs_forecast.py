@@ -1,5 +1,7 @@
+import os
+import sys
 import duckdb
-DDB='/home/pgeorgakopoulos/armada/energy-markets/data/extracts/euphemia-live.duckdb'
+DDB=(os.environ.get('EUPHEMIA_DUCKDB_PATH') or sys.exit("Set EUPHEMIA_DUCKDB_PATH to the required local file or directory"))
 c=duckdb.connect(DDB, read_only=True); c.execute("SET TimeZone='UTC'")
 # Forecast solar (D-1, what model uses) hourly avg, IT-NORTH, midday UTC 10-13
 fc=c.execute("""

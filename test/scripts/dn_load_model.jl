@@ -22,7 +22,7 @@
 using CSV, DataFrames, Dates, Statistics, LinearAlgebra, Printf, JSON
 
 const SP = get(ENV, "DN_OUT",
-    "/tmp/claude-1000/-home-pgeorgakopoulos-armada-energy-markets/b12b1e25-3bbc-44fb-b4b2-77f8400fd203/scratchpad/dn")
+    get(() -> error("Set DN_OUT to the required local file or directory"), ENV, "DN_OUT"))
 const ZONES = ["GR", "DE_LU", "FR", "ES", "PL", "SE3"]
 const TRAIN0 = DateTime(2022, 7, 1)
 const TRAIN1 = DateTime(2025, 6, 30, 23)

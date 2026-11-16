@@ -1,0 +1,39 @@
+name: Repository hygiene
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  no-local-paths:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test path detection and offline launchers
+        run: python3 -m unittest discover -s test -p test_repo_hygiene.py
+      - name: Reject personal absolute paths
+        shell: bash
+        run: |
+          # Exclude only this file, which contains the detection expressions.
+          # Any nonempty component is covered, including spaces and Unicode.
+          # Both bounding slashes are required; bare roots are not user paths.
+          # No path allowlist: temporary test homes use a neutral directory name.
+          if git grep -nIE '/home/[^/]+/|/Users/[^/]+/' -- . ':!.github/workflows/repo-hygiene.yml'; then
+            echo 'Replace local home paths with repository-relative paths or explicit environment variables.'
+            exit 1
+          else
+            status=$?
+            if [ "$status" -ne 1 ]; then exit "$status"; fi
+          fi
+          # Session scratch paths also encode usernames and private directories.
+          if git grep -nIE '/tmp/claude-[^/[:space:]]+/-home-[^/[:space:]]+/' -- . ':!.github/workflows/repo-hygiene.yml'; then
+            echo 'Replace session scratch paths with symbolic provenance or explicit environment variables.'
+            exit 1
+          else
+            status=$?
+            if [ "$status" -ne 1 ]; then exit "$status"; fi
+          fi

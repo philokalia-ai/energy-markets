@@ -1,5 +1,7 @@
+import os
+import sys
 import duckdb
-DDB='/home/pgeorgakopoulos/armada/energy-markets/data/extracts/euphemia-live.duckdb'
+DDB=(os.environ.get('EUPHEMIA_DUCKDB_PATH') or sys.exit("Set EUPHEMIA_DUCKDB_PATH to the required local file or directory"))
 c=duckdb.connect(DDB, read_only=True); c.execute("SET TimeZone='UTC'")
 # Actual generation by type, IT-NORTH, evening peak (UTC 16-19) vs midday (10-13), 2025
 for lbl,lo,hi in [("midday",10,13),("evening",16,19)]:

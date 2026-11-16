@@ -10,10 +10,10 @@
 #   DAYS=... SPREAD=0.10 OUTDIR=docs/experiments/pl-diagnosis \
 #     julia --project=. docs/experiments/pl-diagnosis/ab_pl_both.jl
 ENV["EUPHEMIA_DATA_STORE"] = "duckdb"
-ENV["EUPHEMIA_DUCKDB_PATH"] = "/home/pgeorgakopoulos/armada/energy-markets/data/extracts/euphemia-live.duckdb"
+ENV["EUPHEMIA_DUCKDB_PATH"] = get(() -> error("Set EUPHEMIA_DUCKDB_PATH to the required local file or directory"), ENV, "EUPHEMIA_DUCKDB_PATH")
 ENV["EUPHEMIA_DUCKDB_READONLY"] = "true"          # shared read-only — never lock the extract
 haskey(ENV, "EUPHEMIA_RESULTS_DB") || (ENV["EUPHEMIA_RESULTS_DB"] =
-    "/home/pgeorgakopoulos/armada/energy-markets/.claude/worktrees/agent-a62ce346a9048029f/scratch_results_ab.duckdb")
+    get(() -> error("Set EUPHEMIA_RESULTS_DB to the required local file or directory"), ENV, "EUPHEMIA_RESULTS_DB"))
 using Euphemia, Dates, Printf
 # belt-and-braces: force read-only even if load-time auto-config differed
 Euphemia.configure_data_store!(backend=:duckdb,

@@ -30,13 +30,14 @@ for `sim`/`resid` the effective issue time is the live sim's `prediction_made_ut
 Models: t209 / t28 = mistralai/Timestral-{209M,28M}; c2 = amazon/chronos-2.
 Output: $TSFM_OUT/fc_<model>_<variant>.parquet, one row per (zone, hour of D).
 """
+import sys
 import argparse, os, time
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import numpy as np, pandas as pd, torch
 
-OUT = os.environ.get("TSFM_OUT", "/home/pgeorgakopoulos/armada/em-team/results/tsfm")
+OUT = (os.environ.get('TSFM_OUT') or sys.exit("Set TSFM_OUT to the required local file or directory"))
 ATH = ZoneInfo("Europe/Athens")
 CTX = 8192  # hours of context (~341 days); Chronos-2 default context; Timestral max is 32768
 
@@ -118,7 +119,7 @@ def lead2_sim(zones):
     """Live weather-track sim at lead 2 for each Athens day D: the latest row issued before
     D-1 06:30 UTC (in practice the D-2 ~07:00 UTC daily run)."""
     import json
-    live_dir = os.environ.get("TSFM_LIVE", "/home/pgeorgakopoulos/armada/em-team/live")
+    live_dir = (os.environ.get('TSFM_LIVE') or sys.exit("Set TSFM_LIVE to the required local file or directory"))
     rows = []
     for z in zones:
         for day in json.load(open(f"{live_dir}/{z}.json"))["days"]:
@@ -139,7 +140,7 @@ def srmc_series(grid):
     """Gas-CCGT SRMC per hour (EUR/MWh) = TTF/0.5 + 0.202/0.5*EUA + 2, using the last closes dated
     strictly before D-1 of the hour's Athens market day (known at a D-1 morning issue)."""
     import duckdb
-    db = os.environ.get("EUPHEMIA_DUCKDB_PATH", "/home/pgeorgakopoulos/armada/em-data/euphemia-live-20261114.duckdb")
+    db = (os.environ.get('EUPHEMIA_DUCKDB_PATH') or sys.exit("Set EUPHEMIA_DUCKDB_PATH to the required local file or directory"))
     c = duckdb.connect(db, read_only=True)
     f = {t: c.execute(f"SELECT date, close FROM yfinance.{t} WHERE close IS NOT NULL ORDER BY date").df()
          for t in ("ttf_f", "eua_co2")}
@@ -168,7 +169,7 @@ def filtered_resload(d, zones, ctx_grid, hours):
     """Residual load on context + delivery hours as the production emitter builds it at the D-1 gate."""
     ov = _emitter()
     if "phys" not in _RAW:   # raw rows with publication stamps for the whole backtest span, read once
-        db = os.environ.get("EUPHEMIA_DUCKDB_PATH", "/home/pgeorgakopoulos/armada/em-data/euphemia-live-20261114.duckdb")
+        db = (os.environ.get('EUPHEMIA_DUCKDB_PATH') or sys.exit("Set EUPHEMIA_DUCKDB_PATH to the required local file or directory"))
         con = ov.open_store("duckdb", db)
         _RAW["phys"] = ov.physics_from_store(con, "2026-11-13", ctx_hours=CTX + 70 * 24)
         _RAW["fallback"] = []
