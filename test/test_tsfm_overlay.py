@@ -302,7 +302,14 @@ class ProductionPathTest(unittest.TestCase):
                          100.0 + i price_currency_mwh, 'Day-ahead' contract_type, 'BZN' area_type_code, '1' sequence,
                          TIMESTAMP '2026-11-13 12:00' update_time_utc FROM range(8) t(i)""")
             c.execute("""CREATE TABLE simulations.forecast_prices AS SELECT 'GR' bidding_zone, TIMESTAMPTZ '2026-11-14 22:00+00' date_time_utc,
-                         55.0 price_eur_mwh, TIMESTAMPTZ '2026-11-14 09:00+00' prediction_made_utc, 1 lead_days, 'weather' input_mode""")
+                         55.0 price_eur_mwh, TIMESTAMPTZ '2026-11-14 09:00+00' prediction_made_utc, 1 lead_days, 'weather' input_mode,
+                         false is_retro, NULL::VARCHAR reset_tag, NULL::TIMESTAMPTZ retro_of_utc""")
+            # retro rows of the same slice (#431 R1): computed later, must never reach the LIVE reader
+            c.execute("""INSERT INTO simulations.forecast_prices VALUES
+                         ('GR', TIMESTAMPTZ '2026-11-14 22:00+00', 77.0, TIMESTAMPTZ '2026-11-17 01:00+00', 1, 'weather',
+                          true, 'cv44-backfill-2026-11', TIMESTAMPTZ '2026-11-14 06:30+00'),
+                         ('GR', TIMESTAMPTZ '2026-11-14 22:00+00', 88.0, TIMESTAMPTZ '2026-11-17 02:00+00', 1, 'weather',
+                          true, 'other-tag', TIMESTAMPTZ '2026-11-14 06:30+00')""")
             c.close()
             con = duckdb.connect()
             con.execute(f"ATTACH '{f}' AS pg (READ_ONLY)"); con.execute("USE pg")
@@ -310,6 +317,8 @@ class ProductionPathTest(unittest.TestCase):
             self.assertEqual(len(p), 2)                      # two hours of 15-min prices
             self.assertAlmostEqual(p.sort_values("t").price.iloc[0], 101.5)
             s = ov.sim_from_db(con, "2026-11-15")
+            self.assertEqual(len(s), 1)                      # live row only: retro rows never read live
+            self.assertEqual(s.sim.iloc[0], 55.0)
             self.assertEqual(s.t.iloc[0], pd.Timestamp("2026-11-14 22:00"))
             self.assertEqual(s.made.iloc[0], pd.Timestamp("2026-11-14 09:00"))
 

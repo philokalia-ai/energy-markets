@@ -99,10 +99,14 @@ CREATE TABLE IF NOT EXISTS simulations.tsfm_overlay (
     UNIQUE (bidding_zone, market_date, date_time_utc, quantity, input_mode, model_version));
 CREATE INDEX IF NOT EXISTS tsfm_overlay_date_idx ON simulations.tsfm_overlay (market_date);
 """
+# LIVE covariate: genuine live rows only. Retro rows (is_retro, e.g. the cv44 backfill) are written
+# later than the live issue of subsequent days, so without this filter they would enter later live
+# runs' sim history and win the latest-made dedupe.
 SIM_SQL = """
 SELECT bidding_zone zone, date_time_utc t, price_eur_mwh sim, prediction_made_utc made
 FROM simulations.forecast_prices
-WHERE lead_days = 1 AND input_mode LIKE 'weather%' AND date_time_utc >= ? AND date_time_utc < ?"""
+WHERE lead_days = 1 AND input_mode LIKE 'weather%' AND NOT coalesce(is_retro, false)
+  AND date_time_utc >= ? AND date_time_utc < ?"""
 
 # Raw (sub-hourly) rows with their publication stamp: the publication filter must act before
 # hourly aggregation, so these are aggregated in Python (`physics_covariates`).
