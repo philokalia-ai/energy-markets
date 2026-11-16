@@ -3745,9 +3745,28 @@
                insufficient: true };
     });
   }
+  // "Backfilled" window (#431 R1, bin/scoreboard_windows.jl): the cv44 physics lead-1
+  // reconstruction of 2026-09-14..2026-11-15, scored on its own rows. In-sample: the
+  // cv44 characteristics were calibrated on overlapping data. Never pooled into the
+  // live windows; shown only here.
+  var BACKFILL_WINDOW = "backfilled";
+  var BACKFILL_LABEL = "backfilled (reconstructed, cv44; in-sample — calibration overlaps)";
+  function backfillNoteText(scores) {
+    var nd = 0, made = null;
+    scores.forEach(function (s) {
+      if (s.n_days > nd) nd = s.n_days;
+      if (s.reconstructed_utc && (!made || s.reconstructed_utc > made)) made = s.reconstructed_utc;
+    });
+    return "Backfilled: the cv44 model re-run for past market days (lead D-1, weather track) from the " +
+      "weather forecasts that existed the day before" + (made ? ", reconstructed on " + made : "") + " · " +
+      nd + " market day" + (nd === 1 ? "" : "s") + ". In-sample: the 43 characteristics (40 price-informed) " +
+      "were calibrated on data that overlaps these days, so this is not an out-of-sample score and is " +
+      "never mixed into the live record.";
+  }
   function renderWindowNote(scores) {
     var note = $("window-note");
     if (!note) return;
+    if (state.window === BACKFILL_WINDOW) { note.hidden = false; note.textContent = backfillNoteText(scores); return; }
     if (state.window !== FREEZE_WINDOW) { note.hidden = true; note.textContent = ""; return; }
     var nd = 0;
     scores.forEach(function (s) { if (s.n_days > nd) nd = s.n_days; });
@@ -3765,9 +3784,9 @@
     trackScores().forEach(function (s) { seen[s.window] = true; });
     var wins = Object.keys(seen);
     if (!wins.length) wins = ["all"];
-    var rank = function (w) { return w === "all" ? 0 : w === FREEZE_WINDOW ? 1 : 2; };
+    var rank = function (w) { return w === "all" ? 0 : w === FREEZE_WINDOW ? 1 : w === BACKFILL_WINDOW ? 2 : 3; };
     wins.sort(function (a, b) {
-      if (rank(a) !== rank(b)) return rank(a) - rank(b);   // all, since freeze, then months
+      if (rank(a) !== rank(b)) return rank(a) - rank(b);   // all, since freeze, backfilled, then months
       return a < b ? 1 : -1; // months newest first
     });
     return wins;
@@ -3788,7 +3807,8 @@
     var sel = $("window-select");
     sel.textContent = "";
     scoreboardWindows().forEach(function (w) {
-      var o = el("option", null, w === "all" ? "All days" : w === FREEZE_WINDOW ? FREEZE_LABEL : w);
+      var o = el("option", null, w === "all" ? "All days" : w === FREEZE_WINDOW ? FREEZE_LABEL :
+        w === BACKFILL_WINDOW ? BACKFILL_LABEL : w);
       o.value = w;
       sel.appendChild(o);
     });
