@@ -26,6 +26,8 @@
 #   naive step failed): "n_naive", "mae_paired", "mae_naive_d7", "rmae_d7", and
 #   at lead <= 1 also "mae_naive_d1", "mae_naive_epf", "rmae_d1", "rmae_epf" —
 #   pooled over the cohort's paired hours, rMAE as a ratio of sums.
+#   "window" may also be "since_freeze" (#431 G, bin/scoreboard_windows.jl): the
+#   cv >= 44, market_date >= 2026-11-15 rows only (the out-of-sample record).
 #   Scores aggregate ONLY the chosen slices (duplicates that were scored twice
 #   across cvs are never double-counted).
 #
@@ -52,6 +54,8 @@ include(joinpath(@__DIR__, "forecast_common.jl"))
 include(joinpath(@__DIR__, "..", "test", "scripts", "eu_eval_metrics.jl"))
 # naive baselines + rMAE for the scoreboard (#431; EXPORT_NAIVE=0 skips them)
 include(joinpath(@__DIR__, "naive_baselines.jl"))
+# the "since_freeze" window (#431 G; EXPORT_SINCE_FREEZE=0 skips it)
+include(joinpath(@__DIR__, "scoreboard_windows.jl"))
 
 const CV = Euphemia.ENERGY_PRICES_CODE_VERSION
 const OUT_DIR = joinpath(dirname(@__DIR__), "web", "data")
@@ -129,6 +133,16 @@ function export_scoreboard()
             end
         end
     end
+    # "since_freeze" (bin/scoreboard_windows.jl): same aggregation on the cv >= 44,
+    # >= 2026-11-15 rows; appended last, all-or-nothing, never fails the export.
+    append!(entries, since_freeze_entries(scores) do zone, lead, mode, fsub
+        af = agg(fsub)
+        merge(Dict{String,Any}("zone" => zone, "lead_days" => lead, "window" => SINCE_FREEZE_WINDOW,
+                               "input_mode" => mode,
+                               "n_days" => af.n_days, "mae" => nn(af.mae),
+                               "bias" => nn(af.bias), "corr" => nn(af.corr),
+                               "code_version" => af.cv), af.q15, naive_or_empty(af.naive)...)
+    end)
 
     doc = Dict("generated_utc" => now(UTC), "code_version" => CV,
                "market_day_tz" => "Europe/Athens",
