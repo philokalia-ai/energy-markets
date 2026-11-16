@@ -105,7 +105,7 @@ def main():
     report={'kind':'source-coverage and lag24 probe, NOT trained-GBM price validation',
             'extract':str(Path(args.extract).resolve()),'live_sha256':hashes,
             'base_cv':args.base_cv,'target_policy':eml.target_policy(),
-            'delivery_day_timezone':'Europe/Athens',
+            'delivery_day_timezone':'Europe/Athens','configured_strict_asof':eml.strict_asof(),
             'target_helper_sha256':hashlib.sha256(Path(args.target_helper).read_bytes()).hexdigest() if args.target_helper else None,
             'book_and_model_coverage_assumption':'all available forecast cells have book features and a model; synthetic fundamentals',
             'versions':{'duckdb':duckdb.__version__,'pandas':pd.__version__},'issues':[]}
@@ -136,6 +136,14 @@ def main():
             old=run_days(issue,pinned,any_base,old_st,False,zones,True)
             default=run_days(issue,pinned,any_base,settled,False,zones)
             strict=run_days(issue,strict_pinned,strict_any,strict_settled,True,zones)
+            mode=eml.strict_asof()
+            configured=run_days(issue,strict_pinned if mode else pinned,
+                                strict_any if mode else any_base,
+                                strict_settled if mode else settled,mode,zones)
+            assert configured == (strict if mode else default)
+            # SQL row order is unspecified; hash complete cells in primary-key order.
+            digest=lambda rows:hashlib.sha256(json.dumps(sorted(rows,key=lambda r:(r[0],r[1],r[2],r[4])),
+                                                        default=str,separators=(',',':')).encode()).hexdigest()
             assert all(eml.market_date(r[1])>eml.market_date(issue) for r in strict)
             for rows in (default,strict):
                 assert not any(r[2]=='stats_gbm'
@@ -174,6 +182,8 @@ def main():
             lost=keys(default)-keys(strict)
             print(f'{issue.isoformat()}: default={len(default)} strict={len(strict)}; checks pass', flush=True)
             report['issues'].append({'issue_utc':issue.isoformat(),'default_rows':len(default),'strict_rows':len(strict),
+                'configured_rows':len(configured),'configured_output_sha256':digest(configured),
+                'kill_switch_output_sha256':digest(default),'strict_output_sha256':digest(strict),
                 'legacy_probe_rows':len(old),'default_by_zone_model_lead':coverage(default,issue),
                 'strict_by_zone_model_lead':coverage(strict,issue),
                 'strict_lost_by_zone_model_lead':coverage([r for r in default if (r[0],r[1],r[2],r[4]) in lost],issue),

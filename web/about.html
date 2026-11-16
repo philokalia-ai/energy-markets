@@ -496,9 +496,9 @@
   <ul>
     <li><strong>Frozen before delivery.</strong> For the physics forecasts, an hour-level
       guard makes it impossible to write a value whose delivery hour has passed; they are
-      never revised, and the record is append-only. The statistical overlays are not held to
-      this: the GBM rows are rewritten daily (including the two most recent days), and a
-      same-mode Timestral reissue replaces the earlier values.</li>
+      never revised, and the record is append-only. From 2026-11-17, GBM rows are issued
+      before the auction gate and are not rewritten afterwards; older GBM rows were
+      rewritten daily. A same-mode Timestral reissue replaces the earlier values.</li>
     <li><strong>Provenance per row.</strong> Every prediction records the timestamp it
       was made, so anyone can verify what was known when.</li>
     <li><strong>Pre-auction where possible.</strong> The morning run freezes predictions
@@ -525,8 +525,10 @@
     <li><span class="t-time">10:40 UTC</span><span><strong>Overlay refresh</strong> — the
       statistical overlays are issued for tomorrow: the GBM lines, and a refreshed Timestral line
       with the frozen lead-1 forecast as an input (the 06:30 Timestral line uses settled prices only).
-      Timestral takes the latest lead-1 vintage made by 10:00 UTC; the GBM lines have no
-      such cutoff in code and use the freshest vintage present. The site picks both up at
+      Timestral takes the latest lead-1 vintage made by 10:00 UTC; from 2026-11-17,
+      GBM physics and settled-price vintages are limited to issue time and rows freeze at the gate.
+      At 10:40 UTC in summer, the gate has passed, so next-day GBM lines are empty unless issued
+      earlier. The site picks both up at
       about 11:30 UTC — after the auction gate, so these are not pre-gate
       publications.</span></li>
     <li><span class="t-time">evening</span><span><strong>Reference fill</strong> — ENTSO-E's

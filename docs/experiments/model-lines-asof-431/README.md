@@ -17,7 +17,8 @@ missing, and rolls back/fails emission if it cannot add them. It never executes
 an unconditional ALTER on routine runs. Exact reruns with the same issue/source
 are no-op upserts, including `generated_at`.
 
-`MODEL_LINES_STRICT_ASOF=1` is **opt-in**, default off. It gates each cell by its
+`MODEL_LINES_STRICT_ASOF` is **on by default** from2026-11-17 (owner-approved431D2);
+`MODEL_LINES_STRICT_ASOF=0` restores the #439 non-strict path. It gates each cell by its
 Athens delivery date and the previous-day noon Europe/Brussels deadline. The
 upsert checks wall time for inserts and rechecks it in the conflict-update
 predicate after obtaining the row lock. Strict mode also limits physics vintages
@@ -68,8 +69,8 @@ Three fixed issue instants: 2026-09-19, 10-24, 11-13 at 10:40 UTC. Output has co
 by zone/model/lead, dropped coverage, next-day lag24 deltas, source hashes, and
 Athens-date assertions for no strict past rows/no D+2 stats/issue metadata/idempotent
 upserts. `--base-cv` defaults to the emitter's production pin (37); another pin is
-an explicitly labelled diagnostic. Strict mode is not enabled in production by
-this change. In summer 10:40 UTC is past the SDAC gate: tomorrow is excluded.
+an explicitly labelled diagnostic. The audit records the configured default arm and full output hashes; the
+owner-approved431D2 flip enables strict mode by default. In summer 10:40 UTC is past the SDAC gate: tomorrow is excluded.
 
 **Limits:** the extract has no forecast/model-lines tables. Saved JSON vintages
 fill the physics table in memory. Frozen production GBM artifacts and book
@@ -82,9 +83,10 @@ owner's saved artifact and features; no retrospective training substitutes for
 that validation. See the ops report for measured results and the enablement
 recommendation.
 
-Measured on the saved panel, production pin37 / highest_seq:
+Measured source-coverage arms on the saved panel, production pin37 / highest_seq
+(non-strict is the #439 comparator; strict is now the configured default):
 
-| Issue (10:40 UTC) | Default cells | Strict cells | Future lead1 retained |
+| Issue (10:40 UTC) | Non-strict cells | Strict cells (now default) | Future lead1 retained |
 |---|---:|---:|---:|
 | 2026-09-19 | 3,627 | 0 | 0/936 |
 | 2026-10-24 | 3,666 | 0 | 0/975 |
@@ -101,5 +103,11 @@ These are input-coverage counts under the stated probe assumptions.
 
 Fallback and unmerged PR C highest_seq audit outputs agree across all three
 panels; a separate real-data SDAC integration check agrees on1,872 hourly cells
-across39 zones. Keep strict off pending owner review of coverage and the missing
-trained-artifact price replay. The emitter defect fix remains default-on.
+across39 zones. The owner approved strict as-of by default, accepting the summer coverage gap;
+the trained-artifact price replay remains a validation limit. The emitter defect fix remains default-on.
+
+The per-run gate line reports gate/issue and cells kept/dropped specifically for
+the next Athens day's weather-forecast domain (`scope=next_day_weather_cells`),
+not a claim of available GBM artifacts/books or successfully inserted model rows.
+The separate EMITTED line reports model rows. No cron timing changes: before
+2027-03-28, arrange an earlier summer issue or accept empty next-day GBM lines.

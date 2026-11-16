@@ -4,7 +4,8 @@
 #    (inputs for that past day exist; weekly persistence supplies the
 #    forecast-horizon features ex-ante);
 # 2. emit hybrid/stats model lines for today-2 .. today+7 into
-#    simulations.model_lines (upsert);
+#    simulations.model_lines (upsert); strict as-of is ON by default in Python,
+#    MODEL_LINES_STRICT_ASOF=0 disables it; MODEL_LINES_REWRITE_PAST=1 allows backfills;
 # 3. post-sim Timestral refresh of tomorrow's TSFM overlay (bin/emit_tsfm_refresh.sh):
 #    NON-FATAL and bounded (30 min, EMIT_TSFM_TIMEOUT) — a failure prints a WARNING and never changes this
 #    script's exit status. Kill switch: EMIT_NO_TSFM=1.
