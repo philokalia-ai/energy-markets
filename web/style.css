@@ -347,6 +347,9 @@ h1 {
   margin-bottom: 16px;
 }
 .filter { display: flex; flex-direction: column; gap: 4px; }
+/* `.filter` sets display:flex, which beats the UA [hidden] rule; keep hidden filters hidden
+   (the #431 Naive selector is hidden for old JSON and on the 15-min board). */
+.filter[hidden] { display: none; }
 .filter-label {
   font-family: var(--mono);
   font-size: 10.5px;

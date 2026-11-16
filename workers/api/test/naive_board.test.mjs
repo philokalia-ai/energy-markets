@@ -173,5 +173,13 @@ ok(sh[1].mae_naive_d7 === 54 && !("mae_naive_d1" in sh[1]) && !("mae_naive_epf" 
 const legacyKeys = Object.keys(shapeScoreboard([Object.assign({ lead_days: 1n }, pq)], manifest).scores[0]);
 ok(!legacyKeys.some((k) => /naive|rmae|paired/.test(k)), "worker: old parquet -> no naive keys");
 
+// 6. the hidden attribute must actually hide the selector: `.filter { display:flex }`
+//    overrides the UA [hidden] rule, so style.css needs a higher-specificity
+//    `.filter[hidden] { display:none }` (#437 review P3; the browser check is
+//    test/scripts/naive_filter_visibility.py).
+const css = readFileSync(join(here, "../../..", "web/style.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+ok(/(^|[},\s])\.filter\[hidden\]\s*(,[^{]*)?\{[^}]*display\s*:\s*none/m.test(css),
+  "style.css: .filter[hidden] { display: none } overrides .filter { display: flex }");
+
 if (failures) { console.error(failures + " failure(s)"); process.exit(1); }
 console.log("naive_board: all assertions passed");
