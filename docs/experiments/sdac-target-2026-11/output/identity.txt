@@ -1,0 +1,20 @@
+# Flag-off identity and Julia/Python agreement (extract euphemia-live-20261115, read-only)
+# identity_check.jl on origin/main (d759080, re-run after rebase on 521565c with the same sha256) and on 431/da-target-policy, 10 market days, window D-1..D:
+main   actuals_default.csv sha256 74a35cf414b07592b774444c2571991263717e1beebcdb2ed93e72576893d161 rows 18680
+branch actuals_default.csv sha256 74a35cf414b07592b774444c2571991263717e1beebcdb2ed93e72576893d161 rows 18680
+cmp: IDENTICAL (byte for byte)
+branch actuals_sdac.csv rows 18679; the one row fewer: 2026-11-15,DE_LU,2026-11-15T23:00:00 (EXAA only; SDAC not yet published -> absent, no fallback)
+sdac vs default max |diff| by zone (zones with any difference):
+z
+AT       133.700000
+DE_LU    172.597500
+DK1        0.000006
+DK2        0.000006
+# compare_python.py (bin/da_target.py on the same windows):
+default: julia 18680 rows, python 18680 rows, only-julia 0, only-python 0, max |diff| 1.14e-13
+sdac: julia 18679 rows, python 18679 rows, only-julia 0, only-python 0, max |diff| 1.14e-13
+# Python readers vs origin/main (re-run on 521565c, which adds naive_utc), flag unset, same extract:
+collapse hourly_actuals flag-off identical to main: (43041, 3)
+overlay prices_duckdb (model context) 2026-11-14 identical to main: (320064, 3)
+overlay prices_duckdb (model context) 2026-11-16 identical to main: (320064, 3)
+overlay context unchanged even with EUPHEMIA_DA_TARGET=sdac

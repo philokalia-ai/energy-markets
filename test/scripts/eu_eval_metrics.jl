@@ -108,6 +108,183 @@ function native_q15_actuals(sd::Date, ed::Date; contract::String="Day-ahead")
     """, [contract, sd, ed])
 end
 
+# ---------------------------------------------------------------------------
+# Day-ahead TARGET POLICY for the hourly actuals (#431 PR C). Python twin:
+# bin/da_target.py; shared fixtures: test/fixtures/da_target_cases.json.
+#
+# EUPHEMIA_DA_TARGET selects which auction an hourly "actual" is:
+#   highest_seq (default; unset/empty) — `resolution_aware_actuals`, unchanged:
+#       highest sequence, so EXAA (sequence 2) in AT and DE_LU.
+#   sdac — the SDAC auction only (`sdac_hourly_actuals`), the rule of
+#       docs/experiments/cv40-review-fixes/scripts/settlement_view.py.
+# Switching it changes published AT/DE_LU numbers and must come with a full
+# hourly rescore (the scorer rewrites only its last 7 days); see
+# docs/experiments/sdac-target-2026-11/README.md.
+# ---------------------------------------------------------------------------
+
+"""
+Explicit zone → SDAC `sequence` (trimmed; "" = blank/NULL). AT and DE_LU: "1"
+(their "2" is EXAA, the sequence `Q15_NON_SDAC_SEQUENCE` drops); DK1/DK2: the
+blank main series (their "2" is a float-noise copy of it). A zone not listed
+must publish a single sequence in the window, otherwise it is ambiguous and
+fails closed.
+"""
+const SDAC_SEQUENCE = Dict("AT" => "1", "DE_LU" => "1", "DK1" => "", "DK2" => "")
+for (z, q) in Q15_NON_SDAC_SEQUENCE
+    get(SDAC_SEQUENCE, z, q) == q &&
+        error("SDAC_SEQUENCE[$z] must name the SDAC auction, not the excluded sequence $q")
+end
+const DA_RES_MINUTES = Dict("PT15M" => 15, "PT30M" => 30, "PT60M" => 60)
+
+"""
+    da_target_policy() -> :highest_seq | :sdac
+
+Reads `EUPHEMIA_DA_TARGET` (unset/empty = `:highest_seq`). Any other value
+throws: a typo must not silently score against the default target.
+"""
+function da_target_policy()
+    v = lowercase(strip(get(ENV, "EUPHEMIA_DA_TARGET", "")))
+    isempty(v) && return :highest_seq
+    v in ("highest_seq", "sdac") ||
+        error("EUPHEMIA_DA_TARGET=$(repr(v)): expected highest_seq or sdac")
+    return Symbol(v)
+end
+
+"""
+    da_target_actuals(sd, ed; contract="Day-ahead") -> DataFrame(z, t, act)
+
+The hourly actuals every scorer/exporter uses: `resolution_aware_actuals`
+under `highest_seq` (default), `sdac_hourly_actuals` under `sdac`.
+"""
+da_target_actuals(sd::Date, ed::Date; contract::String="Day-ahead") =
+    da_target_policy() === :sdac ? sdac_hourly_actuals(sd, ed; contract=contract) :
+                                   resolution_aware_actuals(sd, ed; contract=contract)
+
+"""
+    da_raw_rows(sd, ed; contract="Day-ahead") -> DataFrame(z, seq, res, t, p, u)
+
+Every day-ahead BZN EUR row over the UTC days sd..ed, with trimmed sequence
+(NULL → "") and resolution and the update stamp — the input of
+`canonical_hourly_actuals`.
+"""
+function da_raw_rows(sd::Date, ed::Date; contract::String="Day-ahead")
+    Euphemia.sql2df("""
+        SELECT map_code AS z, trim(COALESCE(sequence, '')) AS seq,
+               trim(COALESCE(resolution_code, '')) AS res,
+               (date_time_utc AT TIME ZONE 'UTC') AS t,
+               price_currency_mwh AS p, update_time_utc AS u
+        FROM entsoe.energy_prices
+        WHERE contract_type = \$1 AND area_type_code LIKE 'BZN%' AND currency = 'EUR'
+          AND price_currency_mwh IS NOT NULL
+          AND date_time_utc >= (\$2::date::timestamp AT TIME ZONE 'UTC')
+          AND date_time_utc <  ((\$3::date + 1)::timestamp AT TIME ZONE 'UTC')
+    """, [contract, sd, ed])
+end
+
+# missing update stamps sort first (oldest), so any stamped revision beats them
+_u_before(a, b) = ismissing(a) ? !ismissing(b) : (!ismissing(b) && isless(a, b))
+
+"""
+    canonical_hourly_actuals(raw; sequence_map=SDAC_SEQUENCE)
+        -> (act=DataFrame(z, t, act), excluded=DataFrame(z, t, seq, res, p, reason),
+            smap=DataFrame(z, seq, how, n_seq))
+
+Pure SDAC hourly target from raw rows (`da_raw_rows`):
+1. auction: a mapped zone keeps its mapped sequence; an unmapped zone with one
+   sequence keeps it; an unmapped zone with several is "ambiguous" — all its
+   rows are excluded (fail closed) and it is listed in `smap`;
+2. revisions: latest `u` per (zone, resolution, interval) (ties: higher price);
+3. intervals must start on their resolution's grid ("misaligned interval"
+   otherwise); one resolution per (zone, hour): the finest with every aligned
+   slot present; an hour none covers is dropped ("incomplete hour") — no
+   partial-hour means;
+4. duration-weighted mean over the hour. No fallback to another auction.
+"""
+function canonical_hourly_actuals(raw::DataFrame; sequence_map=SDAC_SEQUENCE)
+    excl = DataFrame(z=String[], t=DateTime[], seq=String[], res=String[],
+                     p=Float64[], reason=String[])
+    seqs = Dict{String,Set{String}}()
+    for r in eachrow(raw)
+        push!(get!(Set{String}, seqs, String(r.z)), strip(String(coalesce(r.seq, ""))))
+    end
+    smap = DataFrame(z=String[], seq=Union{String,Missing}[], how=String[], n_seq=Int[])
+    chosen = Dict{String,String}()
+    for z in sort(collect(keys(seqs)))
+        s = seqs[z]
+        if haskey(sequence_map, z)
+            chosen[z] = sequence_map[z]; push!(smap, (z, chosen[z], "mapped", length(s)))
+        elseif length(s) == 1
+            chosen[z] = first(s); push!(smap, (z, chosen[z], "single", 1))
+        else
+            push!(smap, (z, missing, "ambiguous", length(s)))
+        end
+    end
+    amb = smap.z[smap.how .== "ambiguous"]
+    isempty(amb) || @warn "EUPHEMIA_DA_TARGET=sdac: zones with several auctions and no SDAC mapping, excluded (fail closed)" zones = amb
+
+    # 1-2: auction filter, then latest revision per (z, res, t)
+    best = Dict{Tuple{String,String,DateTime},Any}()
+    for r in eachrow(raw)
+        z = String(r.z); q = strip(String(coalesce(r.seq, ""))); res = strip(String(r.res))
+        t = DateTime(r.t); p = Float64(r.p)
+        if !haskey(chosen, z) || chosen[z] != q
+            push!(excl, (z, t, q, res, p, haskey(chosen, z) ? "other auction" : "ambiguous auction"))
+            continue
+        end
+        if !haskey(DA_RES_MINUTES, res)
+            push!(excl, (z, t, q, res, p, "unknown resolution")); continue
+        end
+        # on-grid starts only: a summed-duration test alone would accept PT30M at
+        # 00:15 + 00:45 and leave 00:00-00:15 empty
+        if minute(t) % DA_RES_MINUTES[res] != 0 || second(t) != 0 || millisecond(t) != 0
+            push!(excl, (z, t, q, res, p, "misaligned interval")); continue
+        end
+        k = (z, res, t); cur = get(best, k, nothing)
+        if cur === nothing
+            best[k] = (u=r.u, p=p, seq=q)
+        elseif _u_before(cur.u, r.u) || (!_u_before(r.u, cur.u) && p > cur.p)
+            push!(excl, (z, t, q, res, cur.p, "superseded revision")); best[k] = (u=r.u, p=p, seq=q)
+        else
+            push!(excl, (z, t, q, res, p, "superseded revision"))
+        end
+    end
+    # 3: covered minutes per (z, hour, res); pick the finest full resolution
+    cov = Dict{Tuple{String,DateTime,String},Int}()
+    for ((z, res, t), _) in best
+        k = (z, floor(t, Hour), res); cov[k] = get(cov, k, 0) + DA_RES_MINUTES[res]
+    end
+    pick = Dict{Tuple{String,DateTime},String}()
+    for ((z, h, res), m) in cov
+        m == 60 || continue   # aligned + deduplicated: 60 min == every slot present
+        cur = get(pick, (z, h), nothing)
+        (cur === nothing || DA_RES_MINUTES[res] < DA_RES_MINUTES[cur]) && (pick[(z, h)] = res)
+    end
+    # 4: duration-weighted mean
+    acc = Dict{Tuple{String,DateTime},Tuple{Float64,Int}}()
+    for ((z, res, t), b) in best
+        h = floor(t, Hour)
+        if get(pick, (z, h), "") != res
+            push!(excl, (z, t, b.seq, res, b.p, haskey(pick, (z, h)) ?
+                         "resolution not chosen for the hour" : "incomplete hour"))
+            continue
+        end
+        pm, m = get(acc, (z, h), (0.0, 0))
+        acc[(z, h)] = (pm + b.p * DA_RES_MINUTES[res], m + DA_RES_MINUTES[res])
+    end
+    ks = sort(collect(keys(acc)))
+    act = DataFrame(z=first.(ks), t=last.(ks), act=[acc[k][1] / acc[k][2] for k in ks])
+    return (act=act, excluded=excl, smap=smap)
+end
+
+"""
+    sdac_hourly_actuals(sd, ed; contract="Day-ahead") -> DataFrame(z, t, act)
+
+SDAC hourly actuals over the UTC days sd..ed (`canonical_hourly_actuals` on
+`da_raw_rows`). Ambiguous zones are excluded and logged.
+"""
+sdac_hourly_actuals(sd::Date, ed::Date; contract::String="Day-ahead") =
+    canonical_hourly_actuals(da_raw_rows(sd, ed; contract=contract)).act
+
 """
     legacy_actuals(sd, ed; contract="Day-ahead") -> DataFrame(z, t, act)
 
@@ -153,7 +330,7 @@ function metrics(cm::String, cv::Int, sd::Date, ed::Date;
                  method::Symbol=:new, zones=nothing, q15::Bool=false)
     sim = sim_prices(cm, cv, sd, ed)
     a15 = q15 ? native_q15_actuals(sd, ed) : nothing
-    act = method === :old ? legacy_actuals(sd, ed) : resolution_aware_actuals(sd, ed)
+    act = method === :old ? legacy_actuals(sd, ed) : da_target_actuals(sd, ed)
     # Build actual lookup keyed on (zone, DateTime). `t` is naive-UTC.
     actmap = Dict{Tuple{String,DateTime},Float64}()
     for r in eachrow(act)
