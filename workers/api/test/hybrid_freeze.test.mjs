@@ -111,6 +111,8 @@ ok(gbmChip && /experimental — loses to naive live/.test(gbmChip.textContent), 
 ok(gbmChip && gbmChip.classList.contains("series-off") && gbmChip.getAttribute("aria-pressed") === "true",
   "hybrid chip starts switched off");
 ok(statsChip && !statsChip.classList.contains("series-off"), "stats chip stays on");
+const resetBtn = () => getById("chart-legend").children.find((c) => c.className === "series-reset");
+ok(resetBtn() && resetBtn().hidden === true, "no 'show all' prompt just because the hybrid starts off");
 const paths = () => getById("chart-wrap")._all((e) => e.tagName === "path" && e.attrs["stroke-dasharray"] === "5 4", []);
 // overlay order: gbm then stats (overlayPath calls); opacity set by the series focus
 ok(paths().length >= 2 && paths()[0].style.opacity === 0, "hybrid line drawn but invisible (opacity 0)");
@@ -174,6 +176,17 @@ ok(/2 scored market days/.test(note.textContent) && /Insufficient data/.test(not
   "under 14 days everywhere: the note says insufficient data");
 T.state.window = "all"; T.renderScoreboard();
 ok(note.hidden === true && /70\.0/.test(rowOf("GR").textContent), "back to All days: note hidden, numbers back");
+
+// URL: a shared #window=since_freeze link selects the window; Back to a plain board
+// URL (no window=) returns to All days (writeHash writes non-default windows only).
+globalThis.window.location.hash = "#view=board&zone=GR&window=since_freeze";
+T.readHash(); T.renderScoreboard();
+ok(T.state.window === "since_freeze" && note.hidden === false, "#window=since_freeze selects the window");
+T.state.view = "board"; T.writeHash();
+ok(/window=since_freeze/.test(globalThis.window.location.hash), "writeHash keeps window=since_freeze");
+globalThis.window.location.hash = "#view=board&zone=GR";
+T.readHash(); T.renderScoreboard();
+ok(T.state.window === "all" && note.hidden === true, "Back to a URL without window= -> All days, note hidden");
 
 if (failures) { console.error(failures + " failure(s)"); process.exit(1); }
 console.log("hybrid_freeze: all assertions passed");

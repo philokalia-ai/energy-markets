@@ -228,7 +228,9 @@
     if (params.bday && /^\d{4}-\d{2}-\d{2}$/.test(params.bday)) state.bookDay = params.bday;
     if (params.bhr && !isNaN(+params.bhr)) state.bookHour = +params.bhr;
     if (params.metric && ["sim", "act", "err"].indexOf(params.metric) !== -1) mapState.metric = params.metric;
-    if (params.window) state.window = params.window;
+    // Board window: absent = "all" (writeHash always writes a non-default window), so
+    // Back from #window=since_freeze or a month to a plain URL returns to All days.
+    state.window = params.window || "all";
     // Board resolution: absent / anything else = the hourly default, so Back from a
     // #res=q15 URL to a plain board URL returns to hourly.
     state.res = params.res === "q15" ? "q15" : "h60";
@@ -2225,7 +2227,9 @@
       var anyOff = false;
       series.forEach(function (s) {
         var isOff = !!off[s.key];
-        if (isOff) anyOff = true;
+        // "show all" offers itself only when the reader hid something beyond the
+        // default (a series that starts off — the hybrid line — does not count).
+        if (isOff && !(opts.initialOff && opts.initialOff[s.key])) anyOff = true;
         var op = isOff ? 0
           : hover === null ? s.baseOpacity
           : hover === s.key ? 1
