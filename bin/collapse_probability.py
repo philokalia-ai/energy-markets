@@ -60,7 +60,26 @@ def naive_utc(df):
     return df
 
 
+def _da_target():
+    import sys
+    here = str(Path(__file__).resolve().parent)
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    import da_target
+    return da_target
+
+
 def hourly_actuals(con, start, end):
+    # Target policy (#431): EUPHEMIA_DA_TARGET=sdac reads the SDAC auction only
+    # (bin/da_target.py, the same rule as the Julia scorer's da_target_actuals).
+    # Unset/highest_seq: the SQL below, unchanged. Note these actuals are both the
+    # labels and the settled-price lag features of this model.
+    dt = _da_target()
+    if dt.policy() == "sdac":
+        a = dt.hourly_actuals(con, start, end, target="sdac")
+        a = a.rename(columns={"z": "zone", "act": "actual"})
+        a["actual"] = a.actual.round(8)
+        return a.sort_values(["zone", "t"]).reset_index(drop=True)
     # Exactly the shared resolution_aware_actuals policy: latest sequence at
     # each timestamp, then mean across subhours. Never sum PT15M and PT60M.
     return naive_utc(con.execute("""

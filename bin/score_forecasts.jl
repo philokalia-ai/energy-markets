@@ -15,7 +15,11 @@
 # test/scripts/eu_eval_metrics.jl (whose `resolution_aware_actuals` is reused
 # directly): dedup entsoe.energy_prices to the latest `sequence` revision per
 # (zone, timestamp), then average sub-hourly (PT15M/PT30M) prices into each
-# hour — a no-op for hourly zones.
+# hour — a no-op for hourly zones. The auction is selected by
+# EUPHEMIA_DA_TARGET via `da_target_actuals` (#431): unset/highest_seq = the
+# rule above (EXAA in AT/DE_LU); sdac = the SDAC auction only. This scorer
+# rewrites only the last RESCORE_WINDOW_DAYS, so flipping the policy without a
+# full rescore mixes targets — see docs/experiments/sdac-target-2026-11/.
 #
 # Native 15-minute scores (additive, phase 3): in the same pass, each zone-day
 # also gets n_q15 / mae_q15 / bias_q15 / corr_q15 / shape_floor_q15 (+ ≤0
@@ -320,7 +324,7 @@ function main()
         # 21:00/22:00 UTC on market_date-1, so actuals must cover BOTH UTC days.
         # (Q15_ONLY skips the hourly actuals: they are not used.)
         act = Q15_ONLY ? DataFrame(z=String[], t=DateTime[], act=Float64[]) :
-              resolution_aware_actuals(market_date - Day(1), market_date)
+              da_target_actuals(market_date - Day(1), market_date)  # EUPHEMIA_DA_TARGET
         actmap = Dict{Tuple{String,DateTime},Float64}(
             (String(a.z), DateTime(a.t)) => Float64(a.act) for a in eachrow(act))
         a15 = q15_ok ? get!(() -> q15_actuals_by_zone(market_date), q15_cache, market_date) :

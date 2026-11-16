@@ -7,10 +7,17 @@ hit-rate = P(pred <= thr | actual <= thr), false-alarm ratio = P(actual > thr | 
 Probabilistic: Brier score of P(price <= 0) and P(<= 5), AUC.
 
 Usage: python evaluate.py fc_t209_uni fc_c2_uni ...   (files in $TSFM_OUT, without .parquet)
+
+Target (#431): labels and naives follow EUPHEMIA_DA_TARGET (`target_panel`). Unset/highest_seq =
+the frozen panel's prices, unchanged. sdac = EVAL_TARGET_PANEL or EVAL_EXTRACT (read-only extract).
 """
 import os, sys
+from pathlib import Path
 import numpy as np, pandas as pd
 from zoneinfo import ZoneInfo
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "bin"))
+import da_target  # noqa: E402
 
 ATH = ZoneInfo("Europe/Athens")
 
@@ -41,8 +48,41 @@ def metrics(df, col, act="actual"):
     return out
 
 
+def target_panel(panel):
+    """Evaluation labels (zone, t, price) under EUPHEMIA_DA_TARGET (#431).
+
+    highest_seq (default): the frozen panel itself, i.e. the settled prices the models were fed
+    (highest sequence: EXAA in AT/DE_LU). sdac: an explicit target artifact, never the panel:
+    EVAL_TARGET_PANEL (a parquet with zone, t, price), else computed from the read-only extract
+    EVAL_EXTRACT with bin/da_target.py over the panel's hours. Neither given -> error (no silent
+    fallback to the EXAA labels). Only labels and naives change; forecasts (built from the frozen
+    panel by run_tsfm.py) and the model input context are untouched."""
+    pol = da_target.policy()
+    if pol == "highest_seq":
+        return panel
+    art = os.environ.get("EVAL_TARGET_PANEL")
+    if art:
+        tgt = pd.read_parquet(art)[["zone", "t", "price"]]
+    elif os.environ.get("EVAL_EXTRACT"):
+        import duckdb
+        con = duckdb.connect(os.environ["EVAL_EXTRACT"], read_only=True)
+        try:
+            a = da_target.hourly_actuals(con, panel.t.min(), panel.t.max() + pd.Timedelta(hours=1),
+                                         target=pol)
+        finally:
+            con.close()
+        tgt = a.rename(columns={"z": "zone", "act": "price"}).assign(price=lambda x: x.price.round(8))
+    else:
+        raise ValueError(f"EUPHEMIA_DA_TARGET={pol}: set EVAL_TARGET_PANEL or EVAL_EXTRACT "
+                         "(the frozen panel holds highest-sequence prices)")
+    tgt = tgt.assign(t=pd.to_datetime(tgt.t))
+    assert not tgt.duplicated(["zone", "t"]).any(), "target artifact: duplicate (zone, t)"
+    return tgt
+
+
 def load(names):
-    panel = pd.read_parquet(f"{OUT}/panel.parquet")[["zone", "t", "price"]]
+    # labels and naives follow the selected target; the frozen panel is the default target
+    panel = target_panel(pd.read_parquet(f"{OUT}/panel.parquet")[["zone", "t", "price"]])
     live = pd.read_parquet(f"{OUT}/live_lead1.parquet")
     live = live[(live.input_mode == "weather") & (live.date >= START) & (live.date <= END)]
     df = live[["zone", "date", "t", "sim", "gbm", "stats", "code_version", "made"]].merge(panel, on=["zone", "t"], how="left")
