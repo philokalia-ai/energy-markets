@@ -368,6 +368,10 @@ function write_forecast!(market_date::Date, lead_days::Int, prediction_made::Dat
     # ALONGSIDE (#431 R1): a retro campaign ADDED next to the live record under its
     # own code_version + reset_tag. Hard guards: retro only, a tag is required, and
     # supersede is impossible (retro_write_plan throws if both are requested).
+    # A campaign tag (ALONGSIDE_RESET_TAGS / EUPHEMIA_RETRO_ALONGSIDE) FORCES this mode
+    # here in the writer, whatever the caller passes — `alongside=false` cannot
+    # reopen the supersede path for it (#449 review).
+    alongside = alongside || (is_retro && retro_alongside(reset_tag))
     if alongside
         is_retro || throw(ArgumentError("alongside write needs is_retro=true"))
         (reset_tag === nothing || isempty(strip(reset_tag))) &&
@@ -1515,6 +1519,14 @@ function run_retro()
         end
         for chunk in retro_day_chunks(todo, chunk_days)
             stopped && break
+            # Deadline check BEFORE the chunk's weather/input preparation too (#449
+            # review): allow 10 min for the fetch on top of one market day.
+            if retro_should_stop(now(UTC) + Minute(10), deadline, day_secs)
+                println("  🛑 clean stop before chunk $(first(chunk)) .. $(last(chunk)) lead=$lead: inputs + one " *
+                        "day would not finish by $deadline UTC. Re-dispatch to resume.")
+                stopped = true
+                break
+            end
             first_utc, last_utc = first(chunk) - Day(1), last(chunk)
             candidates = Set(chunk)
             println("\n" * "#" ^ 70)

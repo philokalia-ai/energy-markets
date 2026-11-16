@@ -3918,7 +3918,8 @@
       }).map(function (s) {
         return { zone: s.zone, lead_days: s.lead_days, window: s.window, input_mode: s.input_mode,
                  n_days: s.n_days_q15, mae: s.mae_q15, bias: s.bias_q15, corr: s.corr_q15,
-                 shape: s.shape_floor_q15, code_version: s.code_version };
+                 shape: s.shape_floor_q15, code_version: s.code_version,
+                 reconstructed_utc: s.reconstructed_utc };   // backfilled window note (#449 review)
       });
     }
     var resLabel = q15 ? "15-min " : "";

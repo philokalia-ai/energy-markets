@@ -54,6 +54,18 @@ q("DELETE FROM simulations.forecast_prices WHERE is_retro AND reset_tag = \$1", 
                                                    reset_tag=TAG, retro_of_utc=retro_of, alongside=true)
     end
     @test live_sig(DAY) == l0 && retro_n(DAY) == nexp
+    # ... also when the caller OMITS alongside: the campaign tag forces it in the writer
+    withenv("EUPHEMIA_RETRO_SUPERSEDE" => "1") do
+        @test_throws ArgumentError write_forecast!(DAY, 1, now(UTC), zh, "weather"; is_retro=true,
+                                                   reset_tag=TAG, retro_of_utc=retro_of)
+        @test_throws ArgumentError write_forecast!(DAY, 1, now(UTC), zh, "weather"; is_retro=true,
+                                                   reset_tag=TAG, retro_of_utc=retro_of, alongside=false)
+    end
+    @test live_sig(DAY) == l0 && retro_n(DAY) == nexp
+    # without supersede, omitting alongside still writes alongside (live kept)
+    @test write_forecast!(DAY, 1, now(UTC), zh, "weather"; is_retro=true, reset_tag=TAG,
+                          retro_of_utc=retro_of) == nexp
+    @test live_sig(DAY) == l0 && retro_n(DAY) == nexp
     @test Int(q("SELECT COUNT(*) AS n FROM simulations.forecast_prices_pre_reset WHERE market_date = \$1", [DAY]).n[1]) == 0
     @test_throws ArgumentError write_forecast!(DAY, 1, now(UTC), zh, "weather"; is_retro=false, alongside=true)
     @test_throws ArgumentError write_forecast!(DAY, 1, now(UTC), zh, "weather"; is_retro=true, alongside=true)  # no tag

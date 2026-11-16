@@ -121,6 +121,13 @@ ok(note.hidden === false && /reconstructed on 2026-11-18/.test(note.textContent)
 const gr = rowOf("GR").querySelectorAll("td"), de = rowOf("DE_LU").querySelectorAll("td");
 ok(/^64\.3/.test(gr[2].textContent), "GR backfilled MAE shown (" + gr[2].textContent + ")");
 ok(/^1\.85 loses$/.test(gr[5].textContent) && /^0\.82 beats$/.test(de[5].textContent), "naive rMAE columns work in the window");
+// the 15-min projection keeps the reconstruction date (#449 review P3)
+T.state.scoreboard.scores.forEach((s) => { if (s.window === "backfilled") Object.assign(s,
+  { n_days_q15: 60, mae_q15: s.mae + 1, bias_q15: -1, corr_q15: 0.8, shape_floor_q15: 7 }); });
+T.state.res = "q15"; T.renderScoreboard();
+ok(/reconstructed on 2026-11-18/.test(note.textContent) && /60 market days/.test(note.textContent),
+  "15-min board: the note still names the reconstruction date (" + note.textContent.slice(0, 120) + ")");
+T.state.res = "h60";
 T.state.window = "all"; T.renderScoreboard();
 ok(note.hidden === true && /70\.0/.test(rowOf("GR").textContent), "All days: live numbers, note hidden");
 

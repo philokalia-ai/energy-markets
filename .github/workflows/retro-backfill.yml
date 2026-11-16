@@ -76,7 +76,9 @@ jobs:
           [[ "$TAG" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "::error::reset_tag: letters, digits, . _ - only"; exit 1; }
           # Blackouts (UTC): 06:00-08:30 (daily forecast) and 10:30-12:15 (server refresh + publish).
           # The deadline is the next blackout start minus 25 min (scoring + margin).
-          read -r dl hm <<<"$(python3 - <<'PY'
+          # The clock computation's exit status is checked explicitly: inside
+          # `read <<<"$(...)"` a failure would be silent and leave no deadline.
+          clock="$(python3 - <<'PY'
           from datetime import datetime, timedelta, timezone
           now = datetime.now(timezone.utc)
           m = now.hour * 60 + now.minute
@@ -90,11 +92,14 @@ jobs:
               print("BLOCKED", now.strftime("%H:%M")); raise SystemExit
           print((nxt - timedelta(minutes=25)).strftime("%Y-%m-%dT%H:%M:%S"), now.strftime("%H:%M"))
           PY
-          )"
+          )" || { echo "::error::clock computation failed (status $?)"; exit 1; }
+          read -r dl hm <<<"$clock" || true
           if [ "$dl" = "BLOCKED" ]; then
             echo "::error::$hm UTC is inside, or under 45 min before, a blackout window (06:00-08:30, 10:30-12:15 UTC); dispatch later"
             exit 1
           fi
+          [[ "$dl" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}$ ]] \
+            || { echo "::error::no valid clean-stop deadline computed ('$clock'); refusing to start"; exit 1; }
           for wf in daily-forecast.yml publish-web-data.yml; do
             api="https://api.github.com/repos/$REPO/actions/workflows/$wf/runs"
             for st in queued in_progress waiting pending requested; do
@@ -144,11 +149,25 @@ jobs:
         if: ${{ inputs.score }}
         env:
           ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
+          DEADLINE: ${{ steps.guard.outputs.deadline }}
         run: |
           # Scores every realized, unscored slice (the new is_retro rows get their own
           # score rows) plus the usual 7-day live rescore window — the same scorer the
-          # daily run uses.
-          julia --project=. bin/score_forecasts.jl
+          # daily run uses. Bounded: it must end 5 min before the blackout (deadline +
+          # 20 min). Each zone-day is upserted on its own, so a cut-off run is safe and
+          # the next daily run (or a re-dispatch) scores the rest.
+          end=$(date -u -d "${DEADLINE}Z" +%s) || { echo "::error::bad deadline '$DEADLINE'"; exit 1; }
+          secs=$(( end + 20 * 60 - $(date -u +%s) ))
+          if [ "$secs" -lt 300 ]; then
+            echo "::warning::under 5 min left before the blackout; scoring skipped (the daily scorer picks the rows up)"
+            exit 0
+          fi
+          echo "scoring with a ${secs}s budget"
+          rc=0; timeout -k 60 "$secs" julia --project=. bin/score_forecasts.jl || rc=$?
+          if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
+            echo "::warning::scoring stopped at the blackout budget; the daily scorer finishes it"; exit 0
+          fi
+          exit "$rc"
 
       - name: Summary
         if: ${{ always() }}
