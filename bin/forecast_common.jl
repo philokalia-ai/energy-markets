@@ -32,6 +32,13 @@ MIN(prediction_made_utc) (never per-row, so a chosen slice stays internally
 consistent across zones), with the lowest code_version as a deterministic
 tiebreaker.
 
+LIVE BEFORE RETRO (#431 R1): a slice version made only of retro rows
+(`is_retro`, a reconstruction written after the day) never beats a version that
+holds live rows, whatever the timestamps. With live vintages always frozen
+before their day this is what MIN(prediction_made_utc) already gave; it is now a
+hard rule, so a reconstruction (e.g. the cv44 backfill, written alongside the
+live slices) can never replace a live day on the zone charts or the map.
+
 Usage: `WITH \$(CHOSEN_SLICE_CTE) SELECT ... JOIN chosen c ON c.market_date =
 … AND c.lead_days = … AND c.input_mode = … AND c.code_version = …`.
 """
@@ -40,10 +47,11 @@ const CHOSEN_SLICE_CTE = """
         SELECT DISTINCT ON (market_date, lead_days, input_mode)
                market_date, lead_days, input_mode, code_version
         FROM (SELECT market_date, lead_days, input_mode, code_version,
-                     MIN(prediction_made_utc) AS made_min
+                     MIN(prediction_made_utc) AS made_min,
+                     BOOL_AND(is_retro) AS all_retro
               FROM simulations.forecast_prices
               GROUP BY 1, 2, 3, 4) slice_versions
-        ORDER BY market_date, lead_days, input_mode, made_min, code_version)"""
+        ORDER BY market_date, lead_days, input_mode, all_retro, made_min, code_version)"""
 
 """
     forecast_lead_days(market_date::Date, today_utc::Date) -> Int
@@ -520,12 +528,89 @@ Truth table:
 | true     | *         | false    | :insert    |
 | true     | false     | true     | :refuse    |
 | true     | true      | true     | :supersede |
+
+ALONGSIDE (#431 R1, `alongside=true`; on for every tag in `ALONGSIDE_RESET_TAGS`):
+the retro rows are ADDED next to the live slice under their own code_version and
+reset_tag — never skipped because a live vintage exists, never superseding it.
+- `:alongside`        — delete only this campaign's prior rows for the slice
+                        (`is_retro AND reset_tag AND code_version`), then insert.
+- `:refuse_same_cv`   — a LIVE row already holds this slice at the SAME
+                        code_version (the forecast table's unique key would
+                        collide): the live slice is the real record; skip.
+`alongside` with `supersede` or without `is_retro` is an ERROR (hard guard).
 """
-function retro_write_plan(; is_retro::Bool, supersede::Bool, has_live::Bool)
+function retro_write_plan(; is_retro::Bool, supersede::Bool, has_live::Bool,
+                          alongside::Bool=false, has_live_same_cv::Bool=false)
+    if alongside
+        is_retro || throw(ArgumentError("alongside retro mode needs is_retro=true"))
+        supersede && throw(ArgumentError("alongside retro mode never supersedes a live vintage " *
+                                         "(EUPHEMIA_RETRO_SUPERSEDE must be off)"))
+        return has_live_same_cv ? :refuse_same_cv : :alongside
+    end
     is_retro || return :insert
     has_live || return :insert
     return supersede ? :supersede : :refuse
 end
+
+"""
+Retro campaigns written ALONGSIDE the live record (never skipped, never
+superseding). `cv44-backfill-2026-11`: the cv44 physics lead-1 weather-track
+reconstruction of 2026-09-14..2026-11-15 (#431 R1, owner 2026-11-16), scored into
+its own score rows and published only as the scoreboard's "backfilled" window.
+"""
+const ALONGSIDE_RESET_TAGS = ("cv44-backfill-2026-11",)
+
+"""
+    retro_day_chunks(days, n) -> Vector{Vector{Date}}
+
+Split the retro work list into chunks of at most `n` CONSECUTIVE days (a gap,
+e.g. a day already written and skipped, starts a new chunk: the UTC-day clear
+cache is shared only between consecutive days). `n <= 0` = one chunk per run of
+consecutive days (the legacy whole-window behaviour for a gap-free window).
+"""
+function retro_day_chunks(days::AbstractVector{Date}, n::Integer)
+    out = Vector{Vector{Date}}()
+    for d in sort(unique(days))
+        if isempty(out) || d != last(last(out)) + Day(1) || (n > 0 && length(last(out)) >= n)
+            push!(out, Date[d])
+        else
+            push!(last(out), d)
+        end
+    end
+    return out
+end
+
+"""
+    retro_should_stop(now_utc, deadline, day_secs; first_guess=600.0, margin=1.25) -> Bool
+
+Clean stop before the next blackout: true when starting one more market day at
+`now_utc` would not finish by `deadline`, estimating a day as `margin` × the
+slowest day so far (`first_guess` seconds before any day has run).
+`deadline === nothing` never stops.
+"""
+function retro_should_stop(now_utc::DateTime, deadline, day_secs::AbstractVector{<:Real};
+                           first_guess::Real=600.0, margin::Real=1.25)
+    deadline === nothing && return false
+    est = isempty(day_secs) ? first_guess : margin * maximum(day_secs)
+    return now_utc + Millisecond(round(Int, 1000 * est)) > deadline
+end
+
+"""
+    live_only_sql(alias) -> String
+
+SQL predicate (with a leading AND) keeping LIVE rows only — `alias.is_retro = false`
+— for the scoreboard's live windows ("all", the months, "since_freeze") and their
+naive baselines (#431 R1). Retro reconstructions (the 2026-08 data reset, the cv44
+backfill) never pool into the live record; the backfill has its own "backfilled"
+window. `EXPORT_LIVE_RETRO=1` restores the old pooling (rollback only).
+"""
+live_only_sql(alias::AbstractString) =
+    get(ENV, "EXPORT_LIVE_RETRO", "0") == "1" ? "" : " AND $(alias).is_retro = false"
+
+"Whether a retro campaign writes alongside the live record (its tag, or EUPHEMIA_RETRO_ALONGSIDE=1)."
+retro_alongside(reset_tag) =
+    (reset_tag !== nothing && reset_tag in ALONGSIDE_RESET_TAGS) ||
+    lowercase(get(ENV, "EUPHEMIA_RETRO_ALONGSIDE", "")) in ("1", "true", "yes", "on")
 
 # ---------------------------------------------------------------------------
 # Minimal JSON serializer (avoids adding a package dependency). Handles the

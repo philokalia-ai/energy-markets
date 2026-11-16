@@ -61,3 +61,105 @@ function since_freeze_entries(build, scores::AbstractDataFrame)
         return Any[]
     end
 end
+
+# ---------------------------------------------------------------------------
+# The "backfilled" window (#431 R1; owner decision 2026-11-16).
+#
+# The cv44 physics lead-1 weather-track RECONSTRUCTION of 2026-09-14..2026-11-15
+# (bin/daily_forecast.jl run_retro, reset_tag BACKFILL_RESET_TAG, written alongside
+# the live slices; scored into its own is_retro=true score rows). It is IN-SAMPLE:
+# the cv44 characteristics were calibrated on data that overlaps these days. So it is
+# published only as this separate window — never pooled into "all", the months or
+# "since_freeze" (those read live rows only, `live_only_sql`).
+#
+# Per cohort (zone, lead 1, input_mode): n_days, mae/bias/corr, the q15 fields, the
+# #437 naive fields (same paired-cell rules, on the campaign's own sim rows),
+# code_version 44, and "reconstructed_utc" (the reconstruction date, YYYY-MM-DD).
+# EXTENSION POINT (R2, tsfm): `backfilled_extra_fields` returns the Timestral fields
+# for a cohort; it returns nothing today.
+#
+# Non-fatal and all-or-nothing (warning, window omitted). Kill switch EXPORT_BACKFILLED=0.
+
+const BACKFILLED_WINDOW = "backfilled"
+const BACKFILL_RESET_TAG = "cv44-backfill-2026-11"
+const BACKFILL_CODE_VERSION = 44
+const BACKFILL_LEAD = 1
+
+"Whether the backfilled window is exported (`EXPORT_BACKFILLED=0` switches it off)."
+backfilled_enabled() = get(ENV, "EXPORT_BACKFILLED", "1") != "0"
+
+"""
+    backfilled_extra_fields(zone, lead, mode, rows) -> Dict{String,Any}
+
+EXTENSION POINT for R2 (tsfm): additional per-cohort fields of the backfilled
+window (e.g. the reconstructed Timestral MAE / rMAE on the same zone-days). Empty
+today; whatever it returns is merged into the JSON entry. A parquet column needs
+the matching addition in export_web_parquet.jl and workers/api/src/shape.js.
+"""
+backfilled_extra_fields(zone, lead, mode, rows) = Dict{String,Any}()
+
+"""
+    backfilled_cohorts(build, scores, parts, reconstructed) -> Vector{Any}
+
+Pure: one `build(zone, lead, mode, rows, parts, reconstructed)` per (zone, lead,
+input_mode) cohort of the campaign's score rows.
+"""
+function backfilled_cohorts(build, scores::AbstractDataFrame, parts, reconstructed)
+    out = Any[]
+    isempty(scores) && return out
+    for (zone, lead, mode) in unique(zip(String.(scores.z), Int.(scores.lead_days), String.(scores.mode)))
+        sub = scores[(scores.z .== zone) .& (scores.lead_days .== lead) .& (scores.mode .== mode), :]
+        push!(out, build(zone, lead, mode, sub, parts, reconstructed))
+    end
+    return out
+end
+
+"""
+    backfilled_entries(build; load=backfilled_load) -> Vector{Any}
+
+The backfilled window behind the kill switch and a non-fatal guard: `load()` reads
+the campaign's score rows, naive parts and reconstruction date; `build` makes one
+board entry per cohort (see `backfilled_cohorts`). Any failure -> warning, no entry.
+"""
+function backfilled_entries(build; load=backfilled_load)
+    backfilled_enabled() || (println("backfilled window: skipped (EXPORT_BACKFILLED=0)"); return Any[])
+    try
+        sc, parts, made = load()
+        out = backfilled_cohorts(build, sc, parts, made)
+        println("backfilled window ($BACKFILL_RESET_TAG, cv$BACKFILL_CODE_VERSION, lead $BACKFILL_LEAD): " *
+                "$(length(out)) cohorts, $(isempty(sc) ? 0 : length(unique(sc.market_date))) market day(s)" *
+                (made === nothing ? "" : ", reconstructed $made"))
+        return out
+    catch e
+        @warn "backfilled window failed — board exported without it" exception = (e, catch_backtrace())
+        return Any[]
+    end
+end
+
+"DB step of the backfilled window: (score rows, naive parts or nothing, reconstruction date or nothing)."
+function backfilled_load()
+    sc = Euphemia.sql2df_with_retry("""
+        SELECT s.bidding_zone AS z, s.lead_days, s.input_mode AS mode,
+               to_char(s.market_date, 'YYYY-MM') AS month,
+               s.market_date, s.code_version AS cv, s.mae, s.bias, s.corr,
+               $(q15_select("s"))
+        FROM simulations.forecast_scores s
+        WHERE s.is_retro = true AND s.reset_tag = \$1 AND s.code_version = \$2
+          AND s.lead_days = \$3
+    """, [BACKFILL_RESET_TAG, BACKFILL_CODE_VERSION, BACKFILL_LEAD])
+    isempty(sc) && return (sc, nothing, nothing)
+    parts = nothing
+    if naive_enabled()
+        try
+            parts = naive_zone_day_parts(sc; reset_tag=BACKFILL_RESET_TAG, code_version=BACKFILL_CODE_VERSION)
+        catch e
+            @warn "backfilled naive baselines failed — window exported without naive fields" exception = (e, catch_backtrace())
+        end
+    end
+    m = Euphemia.sql2df_with_retry("""
+        SELECT MAX(prediction_made_utc AT TIME ZONE 'UTC') AS made FROM simulations.forecast_prices
+        WHERE is_retro = true AND reset_tag = \$1 AND code_version = \$2
+    """, [BACKFILL_RESET_TAG, BACKFILL_CODE_VERSION])
+    made = (isempty(m) || ismissing(m.made[1])) ? nothing : Dates.format(Date(DateTime(m.made[1])), "yyyy-mm-dd")
+    return (sc, parts, made)
+end

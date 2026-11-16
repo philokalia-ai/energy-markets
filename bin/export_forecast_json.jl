@@ -28,6 +28,9 @@
 #   pooled over the cohort's paired hours, rMAE as a ratio of sums.
 #   "window" may also be "since_freeze" (#431 G, bin/scoreboard_windows.jl): the
 #   cv >= 44, market_date >= 2026-11-15 rows only (the out-of-sample record).
+#   Live windows read is_retro = false rows only (#431 R1). "window" may also be
+#   "backfilled": the cv44 reconstruction (lead 1, in-sample), with an extra
+#   "reconstructed_utc" (YYYY-MM-DD); never pooled into the live windows.
 #   Scores aggregate ONLY the chosen slices (duplicates that were scored twice
 #   across cvs are never double-counted).
 #
@@ -79,6 +82,7 @@ function export_scoreboard()
         FROM simulations.forecast_scores s
         JOIN chosen c ON c.market_date = s.market_date AND c.lead_days = s.lead_days
                      AND c.input_mode = s.input_mode AND c.code_version = s.code_version
+        WHERE TRUE$(live_only_sql("s"))   -- live rows only (#431 R1): retro never pools in
     """)
     zones = Euphemia.sql2df_with_retry("""
         SELECT DISTINCT bidding_zone AS z FROM simulations.forecast_prices
@@ -88,7 +92,7 @@ function export_scoreboard()
     naive_parts = naive_parts_or_nothing(scores)   # nothing = no naive fields
     # No naive fields -> merge exactly the arguments main merged (same Dict, same bytes).
     naive_or_empty(x) = x === nothing ? () : (x,)
-    agg(sub) = begin
+    agg(sub, parts=naive_parts) = begin
         mae_v = collect(skipmissing(sub.mae))
         bias_v = collect(skipmissing(sub.bias))
         corr_v = collect(skipmissing(sub.corr))
@@ -100,7 +104,7 @@ function export_scoreboard()
          bias=isempty(bias_v) ? nothing : mean(bias_v),
          corr=isempty(corr_v) ? nothing : mean(corr_v),
          cv=length(cvs) == 1 ? cvs[1] : nothing,
-         q15=q15_board_fields(sub), naive=naive_cohort_fields(naive_parts, sub))
+         q15=q15_board_fields(sub), naive=naive_cohort_fields(parts, sub))
     end
     # 15-min: mean over the zone-days that HAVE a native-15 score only (same as the parquet).
     q15_board_fields(sub) = begin
@@ -144,6 +148,19 @@ function export_scoreboard()
                                "n_days" => af.n_days, "mae" => nn(af.mae),
                                "bias" => nn(af.bias), "corr" => nn(af.corr),
                                "code_version" => af.cv), af.q15, naive_or_empty(af.naive)...)
+    end)
+    # "backfilled" (#431 R1, bin/scoreboard_windows.jl): the cv44 reconstruction
+    # (is_retro, reset_tag cv44-backfill-2026-11, lead 1), its own window only.
+    append!(entries, backfilled_entries() do zone, lead, mode, bsub, bparts, made
+        ab = agg(bsub, bparts)
+        # live naive on but the campaign's naive failed -> empty naive fields (as the parquet)
+        bnaive = (bparts === nothing && naive_parts !== nothing) ? naive_board_fields(NamedTuple[], lead) : ab.naive
+        merge(Dict{String,Any}("zone" => zone, "lead_days" => lead, "window" => BACKFILLED_WINDOW,
+                               "input_mode" => mode,
+                               "n_days" => ab.n_days, "mae" => nn(ab.mae),
+                               "bias" => nn(ab.bias), "corr" => nn(ab.corr),
+                               "code_version" => ab.cv, "reconstructed_utc" => made),
+              ab.q15, naive_or_empty(bnaive)..., backfilled_extra_fields(zone, lead, mode, bsub))
     end)
 
     doc = Dict("generated_utc" => now(UTC), "code_version" => CV,

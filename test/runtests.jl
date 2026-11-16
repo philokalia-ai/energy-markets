@@ -160,6 +160,8 @@ println()
         include(joinpath(@__DIR__, "test_naive_baselines.jl"))
         # The "since_freeze" scoreboard window (#431 G): pure, no DB.
         include(joinpath(@__DIR__, "test_scoreboard_windows.jl"))
+        # cv44 retro backfill (#431 R1): write plan, chunks, deadline, windows. Pure.
+        include(joinpath(@__DIR__, "test_retro_backfill.jl"))
         include(joinpath(@__DIR__, "test_tsfm_backfill_scores.jl"))
     end
 
