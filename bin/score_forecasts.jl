@@ -198,16 +198,20 @@ function pending_slices()
     return slices[[d in realized_days for d in slices.market_date], :]
 end
 
-"Sim forecast rows of one slice, keyed (zone, naive-UTC hour)."
-function slice_sim(market_date::Date, lead_days::Int, cv::Int, input_mode::String)
+"""Sim forecast rows of one slice, keyed (zone, naive-UTC hour). The slice includes
+`is_retro` (#431 R1): a retro campaign written ALONGSIDE the live record can share
+(market_date, lead, cv, mode) with live rows of other zones, so live and retro rows
+are never read — or scored — together."""
+function slice_sim(market_date::Date, lead_days::Int, cv::Int, input_mode::String,
+                   is_retro::Bool=false)
     return Euphemia.sql2df_with_retry("""
         SELECT bidding_zone AS z, (date_time_utc AT TIME ZONE 'UTC') AS t,
                price_eur_mwh AS sim
         FROM simulations.forecast_prices
         WHERE market_date = \$1 AND lead_days = \$2 AND code_version = \$3
-          AND input_mode = \$4
+          AND input_mode = \$4 AND is_retro = \$5
         ORDER BY 1, 2
-    """, [market_date, lead_days, cv, input_mode])
+    """, [market_date, lead_days, cv, input_mode, is_retro])
 end
 
 function upsert_score!(market_date::Date, zone::String, lead_days::Int, cv::Int,
@@ -312,14 +316,14 @@ function main()
         reset_tag = let rt = Euphemia.sql2df_with_retry("""
                 SELECT MAX(reset_tag) AS t FROM simulations.forecast_prices
                 WHERE market_date = \$1 AND lead_days = \$2 AND code_version = \$3
-                  AND input_mode = \$4
-            """, [market_date, lead_days, cv, input_mode])
+                  AND input_mode = \$4 AND is_retro = \$5
+            """, [market_date, lead_days, cv, input_mode, is_retro])
             (isempty(rt) || ismissing(rt.t[1])) ? nothing : String(rt.t[1])
         end
         println("\nScoring market_date=$market_date lead_days=$lead_days cv=$cv mode=$input_mode" *
                 (is_retro ? " [RETRO $(reset_tag)]" : ""))
 
-        sim = slice_sim(market_date, lead_days, cv, input_mode)
+        sim = slice_sim(market_date, lead_days, cv, input_mode, is_retro)
         # market_date is the Europe/Athens market day: its window starts at
         # 21:00/22:00 UTC on market_date-1, so actuals must cover BOTH UTC days.
         # (Q15_ONLY skips the hourly actuals: they are not used.)
