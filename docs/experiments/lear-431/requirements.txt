@@ -1,0 +1,9 @@
+# Pinned environment for the LEAR pilot (private venv, outside the repo):
+#   uv venv --python 3.12 <venv> && uv pip install --python <venv>/bin/python -r requirements.txt
+numpy==2.5.4
+pandas==3.1.1
+scikit-learn==1.9.1
+scipy==1.18.1
+duckdb==2.0.0
+pyarrow==26.0.1
+pytest==8.4.2
