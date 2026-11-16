@@ -725,7 +725,10 @@
         Click a column header to sort (bias sorts by distance from zero); GR stays pinned first.
         <strong>Resolution:</strong> <em>15-min</em> scores the same hourly forecast, repeated on its
         four quarters, against native quarter-hour (PT15M) SDAC prices. It covers only zone-days
-        whose settled prices are natively quarter-hourly; other zones show “—”. Hover a 15-min MAE
+        whose settled prices are natively quarter-hourly; other zones show “—”.
+        <strong>AT and DE_LU:</strong> their hourly scores currently use the early EXAA auction as
+        the “actual”, while their native 15-min scores use SDAC; a switch of the hourly target to
+        SDAC is pending. Hover a 15-min MAE
         for its <em>shape floor</em>: how far quarter-hour prices moved around their hour's mean,
         measured after the fact. It describes intra-hour movement; it is neither a skill score nor
         a share of the MAE.
@@ -922,7 +925,7 @@ end
         ≈51.1&nbsp;TWh consumed in the window ≈ €148m — again the same fact in two units,
         exact by construction.</p>
       <p class="case-note">Honesty notes: the profile is the <em>central</em> (imputed)
-        scenario and leans high — the confirmed-ships floor is ~3.3× smaller. Full uptake
+        scenario and leans high — the registry-confirmed ships case is ~3.3× smaller. Full uptake
         assumed (every in-scope ship connects). No scenario hour reaches the price cap.
         Single-zone caveat as above.</p>
     </article>
@@ -972,8 +975,9 @@ end</code></pre>
           <span class="cs-label">GR increase, coupled (2025–26)</span>
           <span class="cs-value">+7.4%</span>
           <span class="cs-sub">+7.10&nbsp;€/MWh load-weighted (96.40&thinsp;→&thinsp;103.50),
-            €360m/yr — vs +19.46&nbsp;€/MWh single-zone: under the cv37 JAO flow-based
-            network <strong>import relief absorbs ~64%</strong> of the local impact.</span>
+            €360m/yr — vs +19.46&nbsp;€/MWh single-zone: under cv37's ATC coupling (JAO's
+            maximum bilateral exchanges as capacities on flow-based borders)
+            <strong>import relief absorbs ~64%</strong> of the local impact.</span>
         </div>
         <div class="case-stat accent">
           <span class="cs-label">EU-wide ripple</span>
@@ -991,7 +995,7 @@ end</code></pre>
             load-weighted deltas).</span>
         </div>
         <div class="case-stat">
-          <span class="cs-label">Cold ironing, floor &amp; coupled (2024–25)</span>
+          <span class="cs-label">Cold ironing, confirmed ships &amp; coupled (2024–25)</span>
           <span class="cs-value">+0.16%</span>
           <span class="cs-sub">Registry-confirmed ships only (322&nbsp;GWh/yr), coupled:
             +0.47&nbsp;€/MWh, <strong>€24m/yr</strong> for Greek consumers (€66m EU-wide);
@@ -1042,7 +1046,8 @@ end</code></pre>
           settled hours per zone. GR (the scenario zone) sits near the top: corr 0.80,
           MAE 24.1. <strong>Read the weak zones with one caveat:</strong> these are the
           scenario's own offline baseline arm, and it scores well below the published
-          record in exactly the flow-based zones — AT, BE, CH, SI and the Norwegian and
+          record in exactly the zones on flow-based borders, where the record takes JAO's maximum
+          bilateral exchanges as capacities — AT, BE, CH, SI and the Norwegian and
           Danish hydro north, where the record has AT 0.85, DK1 0.83 and NO1 0.74. That
           is the network the offline arm was able to build, not the model's accuracy.
           The scenario numbers above are unaffected: they are <em>paired</em>
@@ -1065,7 +1070,7 @@ end</code></pre>
       </div>
       <div class="case-chips">
         <span class="chip">39 zones · 2024-07-01 → 2025-06-30</span>
-        <span class="chip">24 zones with OPS demand · ~2,494 GWh/yr (floor)</span>
+        <span class="chip">24 zones with OPS demand · ~2,494 GWh/yr (registry-confirmed passenger ships)</span>
         <span class="chip">hook: extra_orders (per zone)</span>
         <span class="chip">eu37_base vs eu37_ops_floor_paneu · cv37 · 0 failures</span>
       </div>
@@ -1093,9 +1098,9 @@ run_pipelined_backfill(Date(2023,7,1):Day(1):Date(2025,6,30), FOOTPRINT;
           <span class="cs-label">Scenario consumer cost (EU-wide)</span>
           <span class="cs-value">€371m<span class="cs-unit">&thinsp;/year</span></span>
           <span class="cs-sub">All 39 zones, each weighted by its own load. +0.139&nbsp;€/MWh
-            load-weighted on the 2024-25 AIS window, re-run at cv37 (the JAO
-            flow-based network spreads the berth demand into more import relief
-            than the cv17 estimate).</span>
+            load-weighted on the 2024-25 AIS window, re-run at cv37 (ATC coupling with JAO's
+            maximum bilateral exchanges on flow-based borders spreads the berth demand into
+            more import relief than the cv17 estimate).</span>
         </div>
         <div class="case-stat accent">
           <span class="cs-label">Load-weighted price increase</span>
@@ -1126,8 +1131,11 @@ run_pipelined_backfill(Date(2023,7,1):Day(1):Date(2025,6,30), FOOTPRINT;
         ferries and cruise ships adds ~2.5&nbsp;TWh/yr of berth demand and costs EU consumers
         ~€371m/yr in the competitive counterfactual (cv37) — about a quarter of a percent on the wholesale
         bill, concentrated on the Mediterranean ferry/cruise coast where the ships actually berth.
-        It is a <strong>floor</strong>: registry-confirmed &gt;5000&nbsp;GT passenger ships only, full
-        uptake, no container OPS.</p>
+        It is the <strong>registry-confirmed passenger-ship case under stated load assumptions</strong>:
+        &gt;5000&nbsp;GT passenger ships only, full uptake, no container OPS. Not a strict lower
+        bound: the nearest external estimate, ICCT's (2023) TEN-T ≥&nbsp;5,000&nbsp;GT passenger and
+        cruise segment, is 1.72&nbsp;TWh/yr on a narrower scope (EU ports only, 2019); the two have
+        not yet been reconciled.</p>
       <p class="case-note">Model: cv17 (built through the pipeline, so with <code>:d0</code> same-day flows, not the <code>:v2</code> rule intended) — the same engine and flow
         rule as the live EU product. Deltas are <em>paired</em> (identical coverage, inner-joined on
         the 17,159 priced hours per zone), so baseline error cancels. Full record, per-zone table and
@@ -1145,8 +1153,9 @@ run_pipelined_backfill(Date(2023,7,1):Day(1):Date(2025,6,30), FOOTPRINT;
       Its bidding form has about 40 named characteristics that were calibrated with price error in
       view; each is published and flagged. The dashed
       overlays (Timestral, the GBM lines, the ≤&nbsp;0 risk) are separate, openly statistical
-      predictions that read settled prices. Predictions are frozen before
-      delivery, never revised, and scored honestly as days settle. The switch at the top
+      predictions that read settled prices. The physics forecasts are frozen before
+      delivery, never revised, and scored honestly as days settle (the GBM overlay rows are
+      rewritten daily, and a same-mode Timestral reissue replaces the earlier values). The switch at the top
       flips the whole site between two tracks: <strong>Predicted</strong> — our own
       weather-based inputs, frozen before the 12:00 CET auction gate ("how much can you
       trust our model") — and <strong>As announced</strong> — the TSOs' published D-1
@@ -1154,8 +1163,9 @@ run_pipelined_backfill(Date(2023,7,1):Day(1):Date(2025,6,30), FOOTPRINT;
       mechanism with inputs held at the official figures"). The gap between them, where
       announced beats predicted, is itself the measured cost of our inputs. No price is fitted
       to the outcomes it is scored against, so persistent gaps between simulated and actual
-      prices are <em>findings</em> about how the real market deviates from competitive
-      behavior — not model errors to be tuned away.
+      prices are <em>findings</em> about how the real market deviates from this benchmark —
+      which itself carries a declared, price-informed scarcity/peak (conduct) layer — not
+      model errors to be tuned away.
       <a class="more-link" href="./about.html">Read the full explanation &rarr;</a>
     </p>
   </section>

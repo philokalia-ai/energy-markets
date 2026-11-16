@@ -313,9 +313,14 @@ const CONST_DESCRIPTIONS = Dict{String,String}(
 The fit/construct wall, drawn INSIDE pillar 5 and machine-readable: for every
 named characteristic, whether it is `observed` (a value read from data that
 exists before the auction gate — no choice involved) or `declared` (a named
-market characteristic CHOSEN and then validated out-of-sample, never fitted to
-the scored prices), its one-line source, and the code version that introduced /
-last moved it. Emitted by `export_book_methodology.jl` for the observed/declared
+market characteristic CHOSEN by the modeller), its one-line source, and the code
+version that introduced / last moved it. No price is ever a regression target,
+but most declared entries are not fit-free priors either: 40 of the 43 are
+`price_informed=true` — price error on calibration windows took part in
+selecting the value or the mechanism, usually followed by a check on held-out
+days inside the same historical period that is later scored (cv43/cv44 had no
+separate hold-out). The three exceptions are PRICE_CAP, FLEET_COMPLETION and
+FLEET_TRUTHING. Emitted by `export_book_methodology.jl` for the observed/declared
 badge on the methodology page (§6 of the plan).
 
 Lives beside the constants and the `ZoneProfile` fields, guarded by the same
@@ -335,7 +340,8 @@ INPUTS (market data feeds) that no single constant/field owns.
 #                  coefficients) — the benchmark's declared assumption about
 #                  behaviour, to be treated as uncertain and ablated —
 # and `price_informed`: whether observed prices took part in SELECTING the
-# value or the mechanism (OOS-validated calibration = true; a market rule,
+# value or the mechanism (a calibration chosen with price error in view = true,
+# whether or not it was later checked on held-out days; a market rule,
 # a data feed or a physically fixed form = false). "declared + price_informed"
 # is the honest label for a calibrated market characteristic (rule 4: ex-ante
 # inputs make it a characteristic, not leakage — but it is not a fit-free

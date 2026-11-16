@@ -111,8 +111,11 @@ Every payload carries the producing `code_version` (the exporter's
 produced each forecast). Metric
 conventions: **bias** = simulated − actual (negative = model under-prices),
 **MAE** in €/MWh, **corr** = Pearson on hourly prices, all over realized hours
-only. Predictions are frozen at `prediction_made_utc` and never revised — this
-is an ex-ante counterfactual whose prices are never a regression target (its
+only (AT and DE_LU hourly scores currently use the early EXAA auction as the
+actual, their native 15-min scores SDAC; a switch to SDAC is pending). Physics
+forecasts are frozen at `prediction_made_utc` and never revised (the `gbm` /
+`stats` rows are rewritten daily, and a same-mode `tsfm*` reissue replaces the
+earlier values) — this is an ex-ante counterfactual whose prices are never a regression target (its
 calibrated bidding characteristics are flagged `price_informed` in
 `src/merit_order/zone_profiles.jl`), so persistent residuals are findings about
 the real market, not tuning targets. The `gbm`, `stats`, `tsfm*` and `p_le0`

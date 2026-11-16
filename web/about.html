@@ -117,7 +117,11 @@
     seasons, or hours — that residual is a <strong>finding about market behavior</strong>:
     scarcity signals, strategic bidding, or the exercise of market power. This is why we
     refuse to fit the model to prices: a fitted model would absorb exactly the deviations
-    we are trying to measure.
+    we are trying to measure. One qualification: the bidding form carries a declared
+    <em>conduct layer</em> (the upper tranche ladder, scarcity/peak markups) chosen with price
+    error in view, so the residual is measured against a benchmark that already contains
+    declared conduct. Switching it off (<code>EUPHEMIA_CONDUCT_LAYER=off</code>) is a
+    sensitivity check, not an identified competitive price.
   </p>
 
   <h2 id="two-layers">The two layers — what we fit, what we construct</h2>
@@ -390,7 +394,7 @@
       <g class="mm-node mm-part" tabindex="0" data-tip="&lt;b&gt;Partial.&lt;/b&gt; Since cv44 pumped storage is energy-limited: each zone's fleet gets a daily energy budget from its own last 14 days of output, a full-day pass over the coupled footprint places it in the most valuable hours, and the hourly clear prices it. Batteries still offer as flexible supply. Pumping demand is not bid (see Charging), so this is not a full charge/discharge optimization.">
         <ellipse cx="370" cy="490" rx="54" ry="22"/><text x="370" y="486">Storage:</text><text x="370" y="500">Discharging</text>
       </g>
-      <g class="mm-node mm-ok" tabindex="0" data-tip="&lt;b&gt;Implemented.&lt;/b&gt; The merit-order book: SRMC bids, must-run discounts for the cheapest units, scarcity uplift when the margin over peak is thin. Strategy is &lt;i&gt;competitive by construction&lt;/i&gt; — no markup; the gap to reality is the finding.">
+      <g class="mm-node mm-ok" tabindex="0" data-tip="&lt;b&gt;Implemented.&lt;/b&gt; The merit-order book: SRMC bids, must-run discounts for the cheapest units, scarcity uplift when the margin over peak is thin. Strategy is a competitive cost form plus a declared, price-informed scarcity/peak markup (the conduct layer, switchable off as a sensitivity check); the gap to reality is the finding.">
         <ellipse cx="400" cy="352" rx="42" ry="20"/><text x="400" y="357">Producers</text>
       </g>
       <g class="mm-node mm-no" tabindex="0" data-tip="&lt;b&gt;Not implemented — deliberately.&lt;/b&gt; Speculative (virtual) selling is excluded: the model is a competitive counterfactual, and strategic arbitrage bidding is part of what it measures, not what it assumes.">
@@ -399,7 +403,7 @@
       <g class="mm-node mm-ok" tabindex="0" data-tip="&lt;b&gt;Implemented.&lt;/b&gt; All 39 zones clear jointly under their capacity limits: offered ATC where the market really uses ATC, and since cv35 JAO's own flow-based maximum bilateral exchanges (scaled to each hub's net-position range, capped by transmission-outage messages) on the Core and Nordic borders, which have no day-ahead ATC at all. JAO publishes at 10:30 CET on D-1, so this is ex-ante by construction. Borders to markets we do not model enter as data through a versioned ex-ante flow rule — a per-border load-analogue median blended with the fastest admissible D-2 observation, never same-day flows. &lt;i&gt;Still missing:&lt;/i&gt; the full PTDF/RAM domain, and the exact net-position constraint inside the solver.">
         <ellipse cx="480" cy="168" rx="64" ry="24"/><text x="480" y="164">Interconnections:</text><text x="480" y="178">Exports</text>
       </g>
-      <g class="mm-node mm-ok" tabindex="0" data-tip="&lt;b&gt;Implemented.&lt;/b&gt; Hourly supply orders {volume, €/MWh, timeslot}. Inter-temporal block orders were built, tested on 14 zones, and &lt;i&gt;rejected&lt;/i&gt; — a recorded negative result (they help only thermal-cycling zones in winter). Since cv44 pumped storage enters as linked, energy-limited hourly families; rebuilt thermal block orders remain opt-in, not in production.">
+      <g class="mm-node mm-ok" tabindex="0" data-tip="&lt;b&gt;Implemented.&lt;/b&gt; Hourly supply orders {volume, €/MWh, timeslot}. Inter-temporal block orders were built, tested on 14 zones, and &lt;i&gt;rejected&lt;/i&gt; as a default — a recorded negative result (they help only thermal-cycling zones in winter). Since cv44 pumped storage enters as linked, energy-limited hourly families by default; thermal block orders (with paradoxically-accepted-block rejection) are opt-in, not in production. Minimum-income (MIC) orders are not modelled.">
         <ellipse cx="560" cy="350" rx="76" ry="26"/><text x="560" y="346">Sell</text><text x="560" y="360">{Vol, €/MWh, Timeslot}</text>
       </g>
 
@@ -490,9 +494,11 @@
   <h2>The ex-ante guarantees</h2>
   <p>Every prediction on this site satisfies, by construction:</p>
   <ul>
-    <li><strong>Frozen before delivery.</strong> An hour-level guard makes it impossible
-      to write a value whose delivery hour has passed. Predictions are never revised;
-      the record is append-only.</li>
+    <li><strong>Frozen before delivery.</strong> For the physics forecasts, an hour-level
+      guard makes it impossible to write a value whose delivery hour has passed; they are
+      never revised, and the record is append-only. The statistical overlays are not held to
+      this: the GBM rows are rewritten daily (including the two most recent days), and a
+      same-mode Timestral reissue replaces the earlier values.</li>
     <li><strong>Provenance per row.</strong> Every prediction records the timestamp it
       was made, so anyone can verify what was known when.</li>
     <li><strong>Pre-auction where possible.</strong> The morning run freezes predictions
@@ -509,12 +515,13 @@
       realized days are scored and the scoreboard updates.</span></li>
     <li><span class="t-time">06:30 UTC</span><span><strong>Pre-gate run</strong> — the
       weather track for every lead D+1…D+7, hours before the auction gate
-      (10:00/11:00 UTC). Every row written here is pre-auction. Tomorrow's flow-based
-      capacity has not published yet, so the network degrades to demonstrated
-      capability rather than guessing.</span></li>
+      (10:00/11:00 UTC). Every row written here is pre-auction. JAO's capacities for
+      tomorrow (maximum bilateral exchanges on flow-based borders) have not been published
+      yet, so the network degrades to demonstrated capability rather than guessing.</span></li>
     <li><span class="t-time">09:05 / 10:05 UTC</span><span><strong>JAO-aware freeze</strong>
-      — once JAO publishes the flow-based domain (10:30 CET), lead 1 is re-cleared on
-      the real capacity and frozen. Still pre-gate.</span></li>
+      — once JAO publishes its D-1 maximum bilateral exchanges (10:30 CET), lead 1 is
+      re-cleared with them as capacities on the flow-based borders and frozen. Still
+      pre-gate.</span></li>
     <li><span class="t-time">10:40 UTC</span><span><strong>Overlay refresh</strong> — the
       statistical overlays are issued for tomorrow: the GBM lines, and a refreshed Timestral line
       with the frozen lead-1 forecast as an input (the 06:30 Timestral line uses settled prices only).
@@ -563,8 +570,9 @@
   <ul>
     <li><strong>Thermal plants bid short-run marginal cost</strong>: gas plants at
       TTF futures / efficiency + CO₂ (daily EUA price × emission factor) + O&amp;M;
-      coal and lignite from their own fuel and carbon stacks. No strategic markup —
-      that gap is what we measure, not what we assume.</li>
+      coal and lignite from their own fuel and carbon stacks. No strategic markup on the
+      cost itself; the scarcity/peak tranches described below are a declared,
+      price-informed conduct layer, flagged as such.</li>
     <li><strong>Must-run behavior</strong>: the cheapest thermal units (within ~15%
       of gas cost, up to the day's residual peak) offer the deepest part of their
       minimum load nearly free — mimicking plants that will not cycle off for a
@@ -652,6 +660,9 @@
     <strong>bias</strong> (mean simulated&nbsp;−&nbsp;actual — negative means the model
     under-prices, which for a competitive counterfactual is a signal, not a bug), and
     <strong>correlation</strong> of hourly prices. Whole-sample, never cherry-picked.
+    One caveat on the target: for AT and DE_LU the hourly “actual” is currently the early
+    EXAA auction, not SDAC (their native 15-min scores use SDAC); a switch of the hourly
+    target to SDAC is pending.
     The record quoted here is <strong>cv37</strong> (the current model is cv44; its
     record figures will replace these once loaded): all 39 zones, 786 delivery
     days (2024-07-01 → 2026-08-26), 734,640 hourly cells matched against settled
@@ -670,7 +681,8 @@
     and Nordic borders no longer clear against transfer capacities at all — they clear
     against flow-based domains, and the public capacity table carries no day-ahead rows
     for them. Since cv35 the model takes those limits from JAO's own D-1 publication
-    instead: on 52 held-out Wednesdays the footprint went from MAE €26.2 / corr 0.68 to
+    instead — its maximum bilateral exchanges, used as ATC-style capacities; the full
+    PTDF/RAM domain is not modelled: on 52 held-out Wednesdays the footprint went from MAE €26.2 / corr 0.68 to
     <strong>€23.4 / 0.76</strong>, with the Core cluster halving its error. It cost
     something honest: detection of price-collapse hours fell from 43% to
     <strong>14%</strong> (with false alarms down 1019&nbsp;→&nbsp;174) — better
@@ -725,8 +737,11 @@
   </p>
   <ul>
     <li><strong>Inter-temporal commitment bidding</strong> (block orders with startup
-      dynamics) was built, tested across 14 zones, and rejected — it helps only
-      thermal-cycling zones in winter and hurts hydro-dominated ones.</li>
+      dynamics) was built, tested across 14 zones, and rejected as a default — it helps
+      only thermal-cycling zones in winter and hurts hydro-dominated ones. Thermal block
+      orders remain available opt-in (with paradoxically-accepted-block rejection); the
+      default complex orders since cv44 are pumped storage's energy-limited families, and
+      MIC orders are not modelled.</li>
     <li><strong>A plant-level physical simulation of renewables</strong> was evaluated
       and found unnecessary; one sun-geometry feature carries the physics.</li>
     <li><strong>The Nordic reservoir-wetness water value</strong> was implemented
