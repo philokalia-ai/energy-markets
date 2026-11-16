@@ -1,4 +1,4 @@
-extract /home/pgeorgakopoulos/armada/em-data/euphemia-live-20261115.duckdb; raw rows 2,439,688 over UTC [2024-06-30, 2026-11-17); hourly legacy 813,009, sdac 812,985
+extract $EM_DATA_DIR/euphemia-live-20261115.duckdb; raw rows 2,439,688 over UTC [2024-06-30, 2026-11-17); hourly legacy 813,009, sdac 812,985
 auction map: [{'z': 'AT', 'seq': '1', 'how': 'mapped', 'n_seq': 2}, {'z': 'DE_LU', 'seq': '1', 'how': 'mapped', 'n_seq': 2}, {'z': 'DK1', 'seq': '', 'how': 'mapped', 'n_seq': 2}, {'z': 'DK2', 'seq': '', 'how': 'mapped', 'n_seq': 2}]
 ambiguous zones (fail closed): []
 live: 54,327 lead-1 weather* cells, 2026-09-14..2026-11-13, cv [np.int64(39), np.int64(40), np.int64(42)]; published JSON actual vs recomputed legacy on 54,303 cells: max |diff| 73.0850 (JSON rounds to 2 dp)

@@ -3,13 +3,14 @@
 holidays) + the 34 new footprint zones, scores NEW vs the committed linear packs on
 the frozen VALID window, and emits a per-zone-winner ship map. Reuses the FROZEN
 protocol exactly (features.py functions imported for holiday/calendar lockstep)."""
+from pathlib import Path
 import os, sys, json, glob, numpy as np, pandas as pd, lightgbm as lgb
 # fit-iteration 4: import the CO-LOCATED features.py (carries iteration 2's 25-country
 # holiday maps, which activate on this retrain) rather than a stale sibling worktree.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import features as F   # holidays(), orthodox_easter(), sinel(), eu_dst_offset(), S0
 
-SP=F.SP; BIN="/home/pgeorgakopoulos/armada/energy-markets/bin"
+SP=F.SP; BIN=str(Path(__file__).resolve().parents[3] / 'bin')
 COMMITTED=f"{BIN}/input_models"   # iter4: the currently-shipped models, scored on the NEW VALID
 GFS=f"{SP}/gfs"
 RESP=json.load(open(f"{BIN}/res_models_v2.json"))["zones"]

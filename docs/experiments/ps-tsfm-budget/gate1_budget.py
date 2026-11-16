@@ -4,9 +4,10 @@ PS generation better than E14 and D-7 persistence? No fitting, no price input.
 usage: venv-tsfm/bin/python -I gate1_budget.py OUT.csv
 Context ends at the lead-1 cutoff = D-1 00:00 UTC (complete days through D-2), the same
 cutoff `_storage_cutoff_day` uses at lead 1 / on the record path."""
+import os
 import sys, duckdb, numpy as np, pandas as pd, torch
 torch.set_num_threads(16)
-EXTRACT = "/home/pgeorgakopoulos/armada/em-data/euphemia-live-20261114.duckdb"
+EXTRACT = (os.environ.get('EUPHEMIA_DUCKDB_PATH') or sys.exit("Set EUPHEMIA_DUCKDB_PATH to the required local file or directory"))
 DAYS = ["2026-09-16", "2026-09-20", "2026-09-27", "2026-10-06", "2026-10-19", "2026-11-02", "2026-11-04", "2026-11-13"]
 CTX = 2048
 con = duckdb.connect(EXTRACT, read_only=True)

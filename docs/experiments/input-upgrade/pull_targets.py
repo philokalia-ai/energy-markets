@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 # Pull hourly-aggregated ENTSO-E DA-forecast targets + actual per-type generation
 # (capacity signal) from the extract for the 4 pilot zones.
+import sys
 import duckdb, os
-SP="/tmp/claude-1000/-home-pgeorgakopoulos-armada-energy-markets/b12b1e25-3bbc-44fb-b4b2-77f8400fd203/scratchpad/input_upgrade"
-EXT="/home/pgeorgakopoulos/armada/energy-markets/data/extracts/euphemia-live.duckdb"
+SP=(os.environ.get('INPUT_UPGRADE_DIR') or sys.exit("Set INPUT_UPGRADE_DIR to the required local file or directory"))
+EXT=(os.environ.get('EUPHEMIA_DUCKDB_PATH') or sys.exit("Set EUPHEMIA_DUCKDB_PATH to the required local file or directory"))
 con=duckdb.connect(EXT, read_only=True)
 ZONES="('GR','ES','DE_LU','SE2','NL')"
 

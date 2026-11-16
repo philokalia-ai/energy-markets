@@ -6,7 +6,7 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 
 export EUPHEMIA_DATA_STORE=duckdb
-export EUPHEMIA_DUCKDB_PATH="${EUPHEMIA_DUCKDB_PATH:-/home/pgeorgakopoulos/armada/energy-markets/data/extracts/euphemia-live.duckdb}"
+export EUPHEMIA_DUCKDB_PATH="${EUPHEMIA_DUCKDB_PATH:?Set EUPHEMIA_DUCKDB_PATH to the read-only extract}"
 export EUPHEMIA_DUCKDB_READONLY=true
 
 EX="$1"; shift

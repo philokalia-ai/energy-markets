@@ -12,7 +12,7 @@ SP = os.path.dirname(os.path.abspath(__file__))          # border_program
 ROOT = os.path.dirname(SP)                                # scratchpad
 P7 = os.path.join(ROOT, "p7")
 CELLS = os.path.join(SP, "cells")
-EXTRACT = "/home/pgeorgakopoulos/armada/energy-markets/data/extracts/euphemia-live.duckdb"
+EXTRACT = (os.environ.get('EUPHEMIA_DUCKDB_PATH') or sys.exit("Set EUPHEMIA_DUCKDB_PATH to the required local file or directory"))
 DAYS = ["2025-01-01","2025-01-15","2025-05-01","2025-05-15",
         "2025-07-01","2025-07-15","2026-01-01","2026-01-15"]
 BORDERS = {

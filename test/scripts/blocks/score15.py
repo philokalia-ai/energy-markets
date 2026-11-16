@@ -12,9 +12,10 @@ Targets:
     (the error a hourly-replicated forecast with a perfect hourly level would still make),
     and H60-replicated 15-min MAE split into level error and that dispersion.
 <=0 hit/false alarm after 8-decimal rounding. Simulated prices rounded to 8 decimals."""
+from pathlib import Path
 import sys, os, glob, json, pandas as pd, numpy as np, duckdb
-R = "/home/pgeorgakopoulos/armada/em-team/results/blocks"
-EXTRACT = "/home/pgeorgakopoulos/armada/em-data/euphemia-live-20261115.duckdb"
+R = (os.environ.get('BLOCKS_RESULTS_DIR') or sys.exit("Set BLOCKS_RESULTS_DIR to the required local file or directory"))
+EXTRACT = (os.environ.get('EUPHEMIA_DUCKDB_PATH') or sys.exit("Set EUPHEMIA_DUCKDB_PATH to the required local file or directory"))
 h60, q15 = sys.argv[1], sys.argv[2]
 
 def load(label):
@@ -54,7 +55,7 @@ a15["act"] = a15.act.round(8)
 
 rows = []
 for z in zones:
-    f = f"/home/pgeorgakopoulos/armada/em-team/live/{z}.json"
+    f = str(Path(os.environ.get("EM_LIVE_DIR") or sys.exit("Set EM_LIVE_DIR to the saved public JSON directory")) / f"{z}.json")
     if not os.path.exists(f): continue
     for d in json.load(open(f))["days"]:
         for h, a in zip(d.get("hours", []), d.get("actual", []) or []):

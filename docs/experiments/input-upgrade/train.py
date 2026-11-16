@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Train LightGBM ex-ante input models + score vs committed baseline packs.
 Writes: models/*.txt, models/meta.json, scorecard.csv, valid_preds.parquet."""
+from pathlib import Path
 import os, json, numpy as np, pandas as pd, lightgbm as lgb
 import features as F
 SP=F.SP; ZONES=F.ZONES
-BIN="/home/pgeorgakopoulos/armada/energy-markets/bin"
+BIN=str(Path(__file__).resolve().parents[3] / 'bin')
 RESP=json.load(open(f"{BIN}/res_models_v2.json"))
 LOADP=json.load(open(f"{BIN}/load_models_v1.json"))
 os.makedirs(f"{SP}/models",exist_ok=True)

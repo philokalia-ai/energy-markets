@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Committed-pack baseline replication (identical GFS-vintage weather inputs) +
 shared calendar feature helper. Imported by train.py and predict_inputs.py."""
+from pathlib import Path
 import json, numpy as np, pandas as pd
 import features as F
-BIN="/home/pgeorgakopoulos/armada/energy-markets/bin"
+BIN=str(Path(__file__).resolve().parents[3] / 'bin')
 RESP=json.load(open(f"{BIN}/res_models_v2.json"))
 LOADP=json.load(open(f"{BIN}/load_models_v1.json"))
 

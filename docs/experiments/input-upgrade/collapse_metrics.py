@@ -3,9 +3,11 @@
 Ground truth = settled DA prices. Classify collapse (<=EUR5) and negative (<0)
 per zone-hour; compare each arm (ref/base/new) confusion vs settled.
 Also midday MAE-vs-settled per arm."""
+import os
+import sys
 import json, duckdb, numpy as np, pandas as pd
-SP="/tmp/claude-1000/-home-pgeorgakopoulos-armada-energy-markets/b12b1e25-3bbc-44fb-b4b2-77f8400fd203/scratchpad/input_upgrade"
-EXT="/home/pgeorgakopoulos/armada/energy-markets/data/extracts/euphemia-live.duckdb"
+SP=(os.environ.get('INPUT_UPGRADE_DIR') or sys.exit("Set INPUT_UPGRADE_DIR to the required local file or directory"))
+EXT=(os.environ.get('EUPHEMIA_DUCKDB_PATH') or sys.exit("Set EUPHEMIA_DUCKDB_PATH to the required local file or directory"))
 PILOTS=["GR","ES","DE_LU","SE2","NL"]
 hr=json.load(open(f"{SP}/price_hourly.json"))
 # settled hourly (naive UTC hour)

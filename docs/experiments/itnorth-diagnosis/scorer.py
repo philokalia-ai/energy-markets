@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 # Score IT-NORTH A/B arms vs realized ENTSO-E Day-ahead prices.
 # Usage: scorer.py ab_base.csv ab_backstop.csv
+import os
 import duckdb, numpy as np, pandas as pd, sys
-DDB='/home/pgeorgakopoulos/armada/energy-markets/data/extracts/euphemia-live.duckdb'
+DDB=(os.environ.get('EUPHEMIA_DUCKDB_PATH') or sys.exit("Set EUPHEMIA_DUCKDB_PATH to the required local file or directory"))
 base_csv, treat_csv = sys.argv[1], sys.argv[2]
 c=duckdb.connect(DDB, read_only=True); c.execute("SET TimeZone='UTC'")
 # settled hourly UTC

@@ -4,7 +4,7 @@
 # supply + load override, applied to the 4 pilot zones (neighbours keep reference).
 using Euphemia, Dates, JSON, Statistics, Printf
 
-const SP="/tmp/claude-1000/-home-pgeorgakopoulos-armada-energy-markets/b12b1e25-3bbc-44fb-b4b2-77f8400fd203/scratchpad/input_upgrade"
+const SP=get(() -> error("Set INPUT_UPGRADE_DIR to the required local file or directory"), ENV, "INPUT_UPGRADE_DIR")
 const PILOTS=["GR","ES","DE_LU","SE2","NL"]
 const DAYS=[Date(2026,7,24),Date(2026,7,25),Date(2026,7,26),Date(2026,7,27)]
 

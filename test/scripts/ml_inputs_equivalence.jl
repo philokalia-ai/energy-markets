@@ -22,8 +22,8 @@
 # from the COMMITTED bin/input_models) and the GFS parquets exist under <SP>/gfs.
 # The test reads whatever zones the ref names and compares only committed targets.
 
-const SP = "/tmp/claude-1000/-home-pgeorgakopoulos-armada-energy-markets/b12b1e25-3bbc-44fb-b4b2-77f8400fd203/scratchpad/input_upgrade"
-const EXTRACT = "/home/pgeorgakopoulos/armada/energy-markets/data/extracts/euphemia-live.duckdb"
+const SP = get(() -> error("Set INPUT_UPGRADE_DIR to the required local file or directory"), ENV, "INPUT_UPGRADE_DIR")
+const EXTRACT = get(() -> error("Set EUPHEMIA_DUCKDB_PATH to the required local file or directory"), ENV, "EUPHEMIA_DUCKDB_PATH")
 
 get(ENV, "EUPHEMIA_DATA_STORE", "") == "duckdb" || (ENV["EUPHEMIA_DATA_STORE"] = "duckdb")
 get(ENV, "EUPHEMIA_DUCKDB_PATH", "") == "" && (ENV["EUPHEMIA_DUCKDB_PATH"] = EXTRACT)

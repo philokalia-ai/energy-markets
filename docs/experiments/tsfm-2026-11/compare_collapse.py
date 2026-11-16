@@ -6,8 +6,8 @@ Usage: COLLAPSE_SET=D1|D2 python compare_collapse.py fc_t209_uni_L1 ...  (defaul
 import os, sys
 import numpy as np, pandas as pd
 
-OUT = os.environ.get("TSFM_OUT", "/home/pgeorgakopoulos/armada/em-team/results/tsfm")
-RES = "/home/pgeorgakopoulos/armada/em-team/results"
+OUT = (os.environ.get('TSFM_OUT') or sys.exit("Set TSFM_OUT to the required local file or directory"))
+RES = (os.environ.get('EM_RESULTS_DIR') or sys.exit("Set EM_RESULTS_DIR to the required local file or directory"))
 # Pinned comparators (agent `collapse`, canonical 1e-8-rounded labels, 57,111 cells / 743 events):
 #   D1 (default, like-for-like with the *_L1 TSFM runs): collapse-probability-primary, settled_history_lag=1
 #   D2 (conservative, like-for-like with the untagged D-2 runs): collapse-probability-v2

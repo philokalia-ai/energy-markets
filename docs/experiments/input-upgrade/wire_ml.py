@@ -2,9 +2,11 @@
 """Assemble the committed bin/input_models/ from the rollout-39 winners + the
 unchanged pilot models, winners-only. Emits staging dir + Julia constants +
 winners/losers tables. Idempotent."""
+import sys
+from pathlib import Path
 import json, os, shutil
-SP="/tmp/claude-1000/-home-pgeorgakopoulos-armada-energy-markets/b12b1e25-3bbc-44fb-b4b2-77f8400fd203/scratchpad/input_upgrade"
-WT="/home/pgeorgakopoulos/armada/energy-markets/.claude/worktrees/agent-a534d70e414d18b80"
+SP=(os.environ.get('INPUT_UPGRADE_DIR') or sys.exit("Set INPUT_UPGRADE_DIR to the required local file or directory"))
+WT=str(Path(__file__).resolve().parents[3])
 COMMITTED=f"{WT}/bin/input_models"          # existing pilot dir (source for pilot winners)
 STAGE=f"{SP}/input_models_stage"
 if os.path.exists(STAGE): shutil.rmtree(STAGE)

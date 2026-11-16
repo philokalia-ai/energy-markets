@@ -1,5 +1,7 @@
+import os
+import sys
 import duckdb
-EXTRACT='/home/pgeorgakopoulos/armada/energy-markets/data/extracts/euphemia-live.duckdb'
+EXTRACT=(os.environ.get('EUPHEMIA_DUCKDB_PATH') or sys.exit("Set EUPHEMIA_DUCKDB_PATH to the required local file or directory"))
 con=duckdb.connect(EXTRACT, read_only=True); con.execute("SET TimeZone='UTC'")
 # PL net imports by hour (physical flows), 2024-06..2025-06
 r=con.execute("""

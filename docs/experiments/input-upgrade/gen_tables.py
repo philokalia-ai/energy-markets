@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Fill rollout-39.md placeholders from scorecard39.csv + winners + fetch_status + geom."""
+import os
+import sys
+from pathlib import Path
 import json, csv
-SP="/tmp/claude-1000/-home-pgeorgakopoulos-armada-energy-markets/b12b1e25-3bbc-44fb-b4b2-77f8400fd203/scratchpad/input_upgrade"
-DOC="/home/pgeorgakopoulos/armada/energy-markets/.claude/worktrees/agent-a534d70e414d18b80/docs/experiments/input-upgrade/rollout-39.md"
+SP=(os.environ.get('INPUT_UPGRADE_DIR') or sys.exit("Set INPUT_UPGRADE_DIR to the required local file or directory"))
+DOC=str(Path(__file__).resolve().parents[3] / 'docs/experiments/input-upgrade/rollout-39.md')
 geom=json.load(open(f"{SP}/geom39.json"))
 win39={tuple(k.split("|")):v for k,v in json.load(open(f"{SP}/winners39.json")).items()}
 PW={("ES","load"):True,("ES","solar"):False,("ES","wind"):False,("DE_LU","load"):True,("DE_LU","solar"):True,("DE_LU","wind"):False,("SE2","load"):True,("SE2","solar"):True,("SE2","wind"):False,("NL","load"):True,("NL","solar"):True,("NL","wind"):True}

@@ -1,7 +1,7 @@
 # cv25 validation: byte-identity (non-IT unchanged) + IT floor fires + ≤€0 volume.
 using Dates
 ENV["EUPHEMIA_DATA_STORE"]="duckdb"
-ENV["EUPHEMIA_DUCKDB_PATH"]="/home/pgeorgakopoulos/armada/energy-markets/data/extracts/euphemia-live.duckdb"
+ENV["EUPHEMIA_DUCKDB_PATH"]=get(() -> error("Set EUPHEMIA_DUCKDB_PATH to the required local file or directory"), ENV, "EUPHEMIA_DUCKDB_PATH")
 ENV["EUPHEMIA_DUCKDB_READONLY"]="true"
 using Euphemia
 const MO = Euphemia.MeritOrderBook

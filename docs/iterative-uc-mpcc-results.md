@@ -169,4 +169,4 @@ Poland had duplicate generator codes causing UC cache failures.
 
 ## Raw Output Location
 
-Full test output: `/tmp/claude-1002/-home-johnkgeorg-energy-markets/tasks/b08afe3.output` (1.5 MB)
+Full test output: `$EM_SCRATCH_DIR/b08afe3.output` (1.5 MB)

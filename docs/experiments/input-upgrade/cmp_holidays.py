@@ -1,7 +1,9 @@
+import os
+from pathlib import Path
 import sys, json
-sys.path.insert(0,"/home/pgeorgakopoulos/armada/energy-markets/.claude/worktrees/agent-a534d70e414d18b80/docs/experiments/input-upgrade")
+sys.path.insert(0,str(Path(__file__).resolve().parents[3] / 'docs/experiments/input-upgrade'))
 import features as F
-jl=json.load(open("/tmp/claude-1000/-home-pgeorgakopoulos-armada-energy-markets/b12b1e25-3bbc-44fb-b4b2-77f8400fd203/scratchpad/input_upgrade/ml_holidays_jl.json"))
+jl=json.load(open(str(Path((os.environ.get('INPUT_UPGRADE_DIR') or sys.exit("Set INPUT_UPGRADE_DIR to the required local file or directory"))) / 'ml_holidays_jl.json')))
 ok=True
 for c in ["GR","BG","RO","RS","ES","DE","SE","NL","FR","PL"]:
     py=sorted(str(d.date()) for d in F.holidays(c,range(2024,2028)))

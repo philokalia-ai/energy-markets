@@ -10,7 +10,7 @@
 #   EUPHEMIA_DUCKDB_PATH=<extract> julia --project=. \
 #     docs/experiments/input-upgrade/panel_cell.jl 2026-07-24 ml
 
-const SP = "/tmp/claude-1000/-home-pgeorgakopoulos-armada-energy-markets/b12b1e25-3bbc-44fb-b4b2-77f8400fd203/scratchpad/input_upgrade"
+const SP = get(() -> error("Set INPUT_UPGRADE_DIR to the required local file or directory"), ENV, "INPUT_UPGRADE_DIR")
 using Euphemia, Dates, JSON, Statistics
 const REPO = dirname(dirname(dirname(@__DIR__)))
 include(joinpath(REPO, "bin", "forecast_common.jl"))

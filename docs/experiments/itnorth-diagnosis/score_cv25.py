@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 # Score a cv25 A/B window CSV (arm,zone,day,hour_utc,price) vs realized ENTSO-E Day-ahead.
+import os
 import duckdb, numpy as np, pandas as pd, sys
-DDB='/home/pgeorgakopoulos/armada/energy-markets/data/extracts/euphemia-live.duckdb'
+DDB=(os.environ.get('EUPHEMIA_DUCKDB_PATH') or sys.exit("Set EUPHEMIA_DUCKDB_PATH to the required local file or directory"))
 csv=sys.argv[1]; label=sys.argv[2] if len(sys.argv)>2 else csv
 c=duckdb.connect(DDB, read_only=True); c.execute("SET TimeZone='UTC'")
 s=c.execute("""select map_code as zone, date_trunc('hour',date_time_utc) as hh, avg(price_currency_mwh) as settled

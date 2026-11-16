@@ -5,7 +5,7 @@ Usage: python summarize_passthrough.py sim phys physresid
 import os, sys
 import numpy as np, pandas as pd
 
-OUT = os.environ.get("TSFM_OUT", "/home/pgeorgakopoulos/armada/em-team/results/tsfm")
+OUT = (os.environ.get('TSFM_OUT') or sys.exit("Set TSFM_OUT to the required local file or directory"))
 
 
 def main(arms):

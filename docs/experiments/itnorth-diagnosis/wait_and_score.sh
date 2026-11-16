@@ -1,7 +1,7 @@
 #!/bin/bash
 # Wait until the summer CSV has enough completed base+treat pairs, then score.
-CSV="/tmp/claude-1000/-home-pgeorgakopoulos-armada-energy-markets/b12b1e25-3bbc-44fb-b4b2-77f8400fd203/scratchpad/cv25_summer.csv"
-DIR="/home/pgeorgakopoulos/armada/energy-markets/.claude/worktrees/agent-a483a94dc4173ee7e/docs/experiments/itnorth-diagnosis"
+CSV="${EM_SCRATCH_DIR:?Set EM_SCRATCH_DIR to the experiment scratch directory}/cv25_summer.csv"
+DIR="$(cd "$(dirname "$0")" && pwd)"
 TARGET="${1:-1040}"   # ~2 full pairs
 i=0
 while true; do

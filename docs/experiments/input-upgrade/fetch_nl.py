@@ -1,5 +1,6 @@
+import sys
 import json,os,time,urllib.request,urllib.parse,numpy as np,pandas as pd
-SP="/tmp/claude-1000/-home-pgeorgakopoulos-armada-energy-markets/b12b1e25-3bbc-44fb-b4b2-77f8400fd203/scratchpad/input_upgrade"
+SP=(os.environ.get('INPUT_UPGRADE_DIR') or sys.exit("Set INPUT_UPGRADE_DIR to the required local file or directory"))
 OUT=os.path.join(SP,"gfs");PREV="https://previous-runs-api.open-meteo.com/v1/forecast"
 UA={"User-Agent":"philokalia-energy/1.0 (contact: pankgeorg@gmail.com)"}
 CHUNKS=[("2024-07-14","2024-12-31"),("2025-01-01","2025-06-30"),("2025-07-01","2025-12-31"),("2026-01-01","2026-07-27")]
