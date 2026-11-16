@@ -1,0 +1,221 @@
+model,lead,naive,mask_family,group,n_days,status,statistic,p_model_better,dst_or_incomplete_days,mean_naive_minus_model_loss,hac_lag,window,target_policy
+gbm_overlay,1,d1,pairwise,all,18,insufficient data,,,43,,,live_saved,highest_seq
+gbm_overlay,1,d1,pairwise,excluding_italy,21,insufficient data,,,40,,,live_saved,highest_seq
+gbm_overlay,1,d7,pairwise,all,17,insufficient data,,,44,,,live_saved,highest_seq
+gbm_overlay,1,d7,pairwise,excluding_italy,21,insufficient data,,,40,,,live_saved,highest_seq
+gbm_overlay,1,epf,pairwise,all,17,insufficient data,,,44,,,live_saved,highest_seq
+gbm_overlay,1,epf,pairwise,excluding_italy,21,insufficient data,,,40,,,live_saved,highest_seq
+physics,1,d1,pairwise,all,54,ok,-7.142603657140395,0.9999999999995421,7,-42.94239617338853,7.0,live_saved,highest_seq
+physics,1,d1,pairwise,excluding_italy,57,ok,-4.02464634857638,0.9999714694998802,4,-23.84488077893709,7.0,live_saved,highest_seq
+physics,1,d7,pairwise,all,53,ok,-6.451545007870875,0.9999999999446422,8,-28.504218770989553,7.0,live_saved,highest_seq
+physics,1,d7,pairwise,excluding_italy,57,ok,-1.510717937555326,0.9345698348635147,4,-8.210455184147706,7.0,live_saved,highest_seq
+physics,1,epf,pairwise,all,53,ok,-7.318927204058877,0.999999999999875,8,-36.632453631128044,7.0,live_saved,highest_seq
+physics,1,epf,pairwise,excluding_italy,57,ok,-2.701400260968665,0.9965475906711372,4,-15.730840781244286,7.0,live_saved,highest_seq
+stats_overlay,1,d1,pairwise,all,7,insufficient data,,,54,,,live_saved,highest_seq
+stats_overlay,1,d1,pairwise,excluding_italy,10,insufficient data,,,51,,,live_saved,highest_seq
+stats_overlay,1,d7,pairwise,all,7,insufficient data,,,54,,,live_saved,highest_seq
+stats_overlay,1,d7,pairwise,excluding_italy,10,insufficient data,,,51,,,live_saved,highest_seq
+stats_overlay,1,epf,pairwise,all,7,insufficient data,,,54,,,live_saved,highest_seq
+stats_overlay,1,epf,pairwise,excluding_italy,10,insufficient data,,,51,,,live_saved,highest_seq
+gbm_overlay,2,d7,pairwise,all,16,insufficient data,,,45,,,live_saved,highest_seq
+gbm_overlay,2,d7,pairwise,excluding_italy,20,insufficient data,,,41,,,live_saved,highest_seq
+physics,2,d7,pairwise,all,53,ok,-8.073514882868745,0.9999999999999997,8,-35.96302390359418,7.0,live_saved,highest_seq
+physics,2,d7,pairwise,excluding_italy,57,ok,-2.8600324009059284,0.9978820113657085,4,-18.170514349735015,7.0,live_saved,highest_seq
+stats_overlay,2,d7,pairwise,all,7,insufficient data,,,54,,,live_saved,highest_seq
+stats_overlay,2,d7,pairwise,excluding_italy,10,insufficient data,,,51,,,live_saved,highest_seq
+gbm_overlay,3,d7,pairwise,all,16,insufficient data,,,45,,,live_saved,highest_seq
+gbm_overlay,3,d7,pairwise,excluding_italy,20,insufficient data,,,41,,,live_saved,highest_seq
+physics,3,d7,pairwise,all,53,ok,-7.524510023061068,0.9999999999999736,8,-36.68526023772375,7.0,live_saved,highest_seq
+physics,3,d7,pairwise,excluding_italy,57,ok,-3.0197403369848423,0.9987350425936128,4,-19.410102881430465,7.0,live_saved,highest_seq
+stats_overlay,3,d7,pairwise,all,7,insufficient data,,,54,,,live_saved,highest_seq
+stats_overlay,3,d7,pairwise,excluding_italy,10,insufficient data,,,51,,,live_saved,highest_seq
+gbm_overlay,4,d7,pairwise,all,16,insufficient data,,,45,,,live_saved,highest_seq
+gbm_overlay,4,d7,pairwise,excluding_italy,20,insufficient data,,,41,,,live_saved,highest_seq
+physics,4,d7,pairwise,all,53,ok,-7.375152248419601,0.999999999999918,8,-37.77985919320472,7.0,live_saved,highest_seq
+physics,4,d7,pairwise,excluding_italy,57,ok,-3.52886398035453,0.9997913262090793,4,-21.307279758794774,7.0,live_saved,highest_seq
+stats_overlay,4,d7,pairwise,all,7,insufficient data,,,54,,,live_saved,highest_seq
+stats_overlay,4,d7,pairwise,excluding_italy,10,insufficient data,,,51,,,live_saved,highest_seq
+gbm_overlay,5,d7,pairwise,all,17,insufficient data,,,44,,,live_saved,highest_seq
+gbm_overlay,5,d7,pairwise,excluding_italy,21,insufficient data,,,40,,,live_saved,highest_seq
+physics,5,d7,pairwise,all,53,ok,-6.771422552856306,0.9999999999936239,8,-38.127022099661346,7.0,live_saved,highest_seq
+physics,5,d7,pairwise,excluding_italy,57,ok,-3.7610511665298536,0.9999153995943367,4,-22.393320682154606,7.0,live_saved,highest_seq
+stats_overlay,5,d7,pairwise,all,7,insufficient data,,,54,,,live_saved,highest_seq
+stats_overlay,5,d7,pairwise,excluding_italy,10,insufficient data,,,51,,,live_saved,highest_seq
+gbm_overlay,6,d7,pairwise,all,17,insufficient data,,,44,,,live_saved,highest_seq
+gbm_overlay,6,d7,pairwise,excluding_italy,21,insufficient data,,,40,,,live_saved,highest_seq
+physics,6,d7,pairwise,all,52,ok,-6.7363184930872215,0.9999999999918775,9,-40.70377881236132,7.0,live_saved,highest_seq
+physics,6,d7,pairwise,excluding_italy,56,ok,-3.657033034919998,0.9998724242461203,5,-24.172396965942387,7.0,live_saved,highest_seq
+stats_overlay,6,d7,pairwise,all,7,insufficient data,,,54,,,live_saved,highest_seq
+stats_overlay,6,d7,pairwise,excluding_italy,10,insufficient data,,,51,,,live_saved,highest_seq
+gbm_overlay,7,d7,pairwise,all,18,insufficient data,,,43,,,live_saved,highest_seq
+gbm_overlay,7,d7,pairwise,excluding_italy,22,insufficient data,,,39,,,live_saved,highest_seq
+physics,7,d7,pairwise,all,52,ok,-6.857597799709437,0.9999999999964986,9,-42.58518685910277,7.0,live_saved,highest_seq
+physics,7,d7,pairwise,excluding_italy,56,ok,-3.9966867338556655,0.9999678823925017,5,-25.970178889317104,7.0,live_saved,highest_seq
+stats_overlay,7,d7,pairwise,all,6,insufficient data,,,55,,,live_saved,highest_seq
+stats_overlay,7,d7,pairwise,excluding_italy,9,insufficient data,,,52,,,live_saved,highest_seq
+gbm_overlay,1,d1,pairwise,all,18,insufficient data,,,43,,,live_saved,sdac
+gbm_overlay,1,d1,pairwise,excluding_italy,21,insufficient data,,,40,,,live_saved,sdac
+gbm_overlay,1,d7,pairwise,all,17,insufficient data,,,44,,,live_saved,sdac
+gbm_overlay,1,d7,pairwise,excluding_italy,21,insufficient data,,,40,,,live_saved,sdac
+gbm_overlay,1,epf,pairwise,all,17,insufficient data,,,44,,,live_saved,sdac
+gbm_overlay,1,epf,pairwise,excluding_italy,21,insufficient data,,,40,,,live_saved,sdac
+physics,1,d1,pairwise,all,54,ok,-7.151953059753902,0.9999999999995722,7,-42.92943655527857,7.0,live_saved,sdac
+physics,1,d1,pairwise,excluding_italy,57,ok,-4.034937486101994,0.9999726915814802,4,-23.793689121893273,7.0,live_saved,sdac
+physics,1,d7,pairwise,all,53,ok,-6.457205337029993,0.9999999999466729,8,-28.44105832224641,7.0,live_saved,sdac
+physics,1,d7,pairwise,excluding_italy,57,ok,-1.4869852928897505,0.9314906523311588,4,-8.064821763066519,7.0,live_saved,sdac
+physics,1,epf,pairwise,all,53,ok,-7.3046245171023205,0.999999999999861,8,-36.55953261066763,7.0,live_saved,sdac
+physics,1,epf,pairwise,excluding_italy,57,ok,-2.65219981757715,0.9960015399667249,4,-15.520967253746345,7.0,live_saved,sdac
+stats_overlay,1,d1,pairwise,all,7,insufficient data,,,54,,,live_saved,sdac
+stats_overlay,1,d1,pairwise,excluding_italy,10,insufficient data,,,51,,,live_saved,sdac
+stats_overlay,1,d7,pairwise,all,7,insufficient data,,,54,,,live_saved,sdac
+stats_overlay,1,d7,pairwise,excluding_italy,10,insufficient data,,,51,,,live_saved,sdac
+stats_overlay,1,epf,pairwise,all,7,insufficient data,,,54,,,live_saved,sdac
+stats_overlay,1,epf,pairwise,excluding_italy,10,insufficient data,,,51,,,live_saved,sdac
+gbm_overlay,2,d7,pairwise,all,16,insufficient data,,,45,,,live_saved,sdac
+gbm_overlay,2,d7,pairwise,excluding_italy,20,insufficient data,,,41,,,live_saved,sdac
+physics,2,d7,pairwise,all,53,ok,-8.059532966117668,0.9999999999999997,8,-35.87525114396872,7.0,live_saved,sdac
+physics,2,d7,pairwise,excluding_italy,57,ok,-2.8202474157319277,0.9976006682604595,4,-17.970401475694445,7.0,live_saved,sdac
+stats_overlay,2,d7,pairwise,all,7,insufficient data,,,54,,,live_saved,sdac
+stats_overlay,2,d7,pairwise,excluding_italy,10,insufficient data,,,51,,,live_saved,sdac
+gbm_overlay,3,d7,pairwise,all,16,insufficient data,,,45,,,live_saved,sdac
+gbm_overlay,3,d7,pairwise,excluding_italy,20,insufficient data,,,41,,,live_saved,sdac
+physics,3,d7,pairwise,all,53,ok,-7.505663703247586,0.9999999999999695,8,-36.60680044045315,7.0,live_saved,sdac
+physics,3,d7,pairwise,excluding_italy,57,ok,-2.9819567600191674,0.9985679377595503,4,-19.22603447094298,7.0,live_saved,sdac
+stats_overlay,3,d7,pairwise,all,7,insufficient data,,,54,,,live_saved,sdac
+stats_overlay,3,d7,pairwise,excluding_italy,10,insufficient data,,,51,,,live_saved,sdac
+gbm_overlay,4,d7,pairwise,all,16,insufficient data,,,45,,,live_saved,sdac
+gbm_overlay,4,d7,pairwise,excluding_italy,20,insufficient data,,,41,,,live_saved,sdac
+physics,4,d7,pairwise,all,53,ok,-7.34988166029451,0.9999999999999009,8,-37.690953147677796,7.0,live_saved,sdac
+physics,4,d7,pairwise,excluding_italy,57,ok,-3.4801208541595035,0.9997494061768983,4,-21.10544093795687,7.0,live_saved,sdac
+stats_overlay,4,d7,pairwise,all,7,insufficient data,,,54,,,live_saved,sdac
+stats_overlay,4,d7,pairwise,excluding_italy,10,insufficient data,,,51,,,live_saved,sdac
+gbm_overlay,5,d7,pairwise,all,17,insufficient data,,,44,,,live_saved,sdac
+gbm_overlay,5,d7,pairwise,excluding_italy,21,insufficient data,,,40,,,live_saved,sdac
+physics,5,d7,pairwise,all,53,ok,-6.7532209407493555,0.9999999999927701,8,-38.04234062550395,7.0,live_saved,sdac
+physics,5,d7,pairwise,excluding_italy,57,ok,-3.718167568231967,0.9998996634268592,4,-22.207211771290204,7.0,live_saved,sdac
+stats_overlay,5,d7,pairwise,all,7,insufficient data,,,54,,,live_saved,sdac
+stats_overlay,5,d7,pairwise,excluding_italy,10,insufficient data,,,51,,,live_saved,sdac
+gbm_overlay,6,d7,pairwise,all,17,insufficient data,,,44,,,live_saved,sdac
+gbm_overlay,6,d7,pairwise,excluding_italy,21,insufficient data,,,40,,,live_saved,sdac
+physics,6,d7,pairwise,all,52,ok,-6.713290458134265,0.9999999999904858,9,-40.612822798528924,7.0,live_saved,sdac
+physics,6,d7,pairwise,excluding_italy,56,ok,-3.611614576237556,0.9998478517057293,5,-23.980069696335566,7.0,live_saved,sdac
+stats_overlay,6,d7,pairwise,all,7,insufficient data,,,54,,,live_saved,sdac
+stats_overlay,6,d7,pairwise,excluding_italy,10,insufficient data,,,51,,,live_saved,sdac
+gbm_overlay,7,d7,pairwise,all,18,insufficient data,,,43,,,live_saved,sdac
+gbm_overlay,7,d7,pairwise,excluding_italy,22,insufficient data,,,39,,,live_saved,sdac
+physics,7,d7,pairwise,all,52,ok,-6.837831693085038,0.99999999999598,9,-42.50330813917654,7.0,live_saved,sdac
+physics,7,d7,pairwise,excluding_italy,56,ok,-3.953608125801685,0.9999615092740727,5,-25.793306070963542,7.0,live_saved,sdac
+stats_overlay,7,d7,pairwise,all,6,insufficient data,,,55,,,live_saved,sdac
+stats_overlay,7,d7,pairwise,excluding_italy,9,insufficient data,,,52,,,live_saved,sdac
+physics,1,d1,pairwise,all,2,insufficient data,,,1,,,live_since_cv43,highest_seq
+physics,1,d1,pairwise,excluding_italy,2,insufficient data,,,1,,,live_since_cv43,highest_seq
+physics,1,d7,pairwise,all,2,insufficient data,,,1,,,live_since_cv43,highest_seq
+physics,1,d7,pairwise,excluding_italy,2,insufficient data,,,1,,,live_since_cv43,highest_seq
+physics,1,epf,pairwise,all,2,insufficient data,,,1,,,live_since_cv43,highest_seq
+physics,1,epf,pairwise,excluding_italy,2,insufficient data,,,1,,,live_since_cv43,highest_seq
+physics,2,d7,pairwise,all,1,insufficient data,,,2,,,live_since_cv43,highest_seq
+physics,2,d7,pairwise,excluding_italy,1,insufficient data,,,2,,,live_since_cv43,highest_seq
+physics,1,d1,pairwise,all,0,insufficient data,,,3,,,live_since_cv43,sdac
+physics,1,d1,pairwise,excluding_italy,0,insufficient data,,,3,,,live_since_cv43,sdac
+physics,1,d7,pairwise,all,0,insufficient data,,,3,,,live_since_cv43,sdac
+physics,1,d7,pairwise,excluding_italy,0,insufficient data,,,3,,,live_since_cv43,sdac
+physics,1,epf,pairwise,all,0,insufficient data,,,3,,,live_since_cv43,sdac
+physics,1,epf,pairwise,excluding_italy,0,insufficient data,,,3,,,live_since_cv43,sdac
+physics,2,d7,pairwise,all,0,insufficient data,,,3,,,live_since_cv43,sdac
+physics,2,d7,pairwise,excluding_italy,0,insufficient data,,,3,,,live_since_cv43,sdac
+physics,1,d1,pairwise,all,44,ok,-6.612323391051097,0.9999999999810832,17,-44.57825568889618,7.0,timestral_ontime,highest_seq
+physics,1,d1,pairwise,excluding_italy,50,ok,-3.8197915658369506,0.9999332177534411,11,-24.765816889739586,7.0,timestral_ontime,highest_seq
+physics,1,d1,all_models,all,44,ok,-6.612323391051097,0.9999999999810832,17,-44.57825568889618,7.0,timestral_ontime,highest_seq
+physics,1,d1,all_models,excluding_italy,50,ok,-3.8197915658369506,0.9999332177534411,11,-24.765816889739586,7.0,timestral_ontime,highest_seq
+physics,1,d7,pairwise,all,44,ok,-5.551805443327867,0.9999999858632916,17,-28.607172927344354,7.0,timestral_ontime,highest_seq
+physics,1,d7,pairwise,excluding_italy,50,ok,-1.4354620845845463,0.9244222673585347,11,-8.708679653378907,7.0,timestral_ontime,highest_seq
+physics,1,d7,all_models,all,44,ok,-5.551805443327867,0.9999999858632916,17,-28.607172927344354,7.0,timestral_ontime,highest_seq
+physics,1,d7,all_models,excluding_italy,50,ok,-1.4354620845845463,0.9244222673585347,11,-8.708679653378907,7.0,timestral_ontime,highest_seq
+physics,1,epf,pairwise,all,44,ok,-6.299039006766389,0.9999999998502517,17,-35.96556004373665,7.0,timestral_ontime,highest_seq
+physics,1,epf,pairwise,excluding_italy,50,ok,-2.3693433346043427,0.9910901486092671,11,-15.25912919630208,7.0,timestral_ontime,highest_seq
+physics,1,epf,all_models,all,44,ok,-6.299039006766389,0.9999999998502517,17,-35.96556004373665,7.0,timestral_ontime,highest_seq
+physics,1,epf,all_models,excluding_italy,50,ok,-2.3693433346043427,0.9910901486092671,11,-15.25912919630208,7.0,timestral_ontime,highest_seq
+timestral_0630_prices,1,d1,pairwise,all,44,ok,8.685013475154767,1.8934874346490808e-18,17,11.119773871091333,7.0,timestral_ontime,highest_seq
+timestral_0630_prices,1,d1,pairwise,excluding_italy,50,ok,10.30128679506575,3.4762491492195985e-25,11,12.67485771666543,7.0,timestral_ontime,highest_seq
+timestral_0630_prices,1,d1,all_models,all,44,ok,8.685013475154767,1.8934874346490808e-18,17,11.119773871091333,7.0,timestral_ontime,highest_seq
+timestral_0630_prices,1,d1,all_models,excluding_italy,50,ok,10.30128679506575,3.4762491492195985e-25,11,12.67485771666543,7.0,timestral_ontime,highest_seq
+timestral_0630_prices,1,d7,pairwise,all,44,ok,6.304386565927389,1.4466876732629752e-10,17,27.090856632643145,7.0,timestral_ontime,highest_seq
+timestral_0630_prices,1,d7,pairwise,excluding_italy,50,ok,6.415963350229335,6.996755567077395e-11,11,28.731994953026103,7.0,timestral_ontime,highest_seq
+timestral_0630_prices,1,d7,all_models,all,44,ok,6.304386565927389,1.4466876732629752e-10,17,27.090856632643145,7.0,timestral_ontime,highest_seq
+timestral_0630_prices,1,d7,all_models,excluding_italy,50,ok,6.415963350229335,6.996755567077395e-11,11,28.731994953026103,7.0,timestral_ontime,highest_seq
+timestral_0630_prices,1,epf,pairwise,all,44,ok,6.729148717473898,8.53292808492893e-12,17,19.732469516250863,7.0,timestral_ontime,highest_seq
+timestral_0630_prices,1,epf,pairwise,excluding_italy,50,ok,6.866955181194265,3.2793331958019144e-12,11,22.181545410102927,7.0,timestral_ontime,highest_seq
+timestral_0630_prices,1,epf,all_models,all,44,ok,6.729148717473898,8.53292808492893e-12,17,19.732469516250863,7.0,timestral_ontime,highest_seq
+timestral_0630_prices,1,epf,all_models,excluding_italy,50,ok,6.866955181194265,3.2793331958019144e-12,11,22.181545410102927,7.0,timestral_ontime,highest_seq
+timestral_postsim,1,d1,pairwise,all,44,ok,8.843640042434819,4.632487692815522e-19,17,13.660234047460875,7.0,timestral_ontime,highest_seq
+timestral_postsim,1,d1,pairwise,excluding_italy,50,ok,10.623826341147307,1.1544911264744437e-26,11,16.37923760702444,7.0,timestral_ontime,highest_seq
+timestral_postsim,1,d1,all_models,all,44,ok,8.843640042434819,4.632487692815522e-19,17,13.660234047460875,7.0,timestral_ontime,highest_seq
+timestral_postsim,1,d1,all_models,excluding_italy,50,ok,10.623826341147307,1.1544911264744437e-26,11,16.37923760702444,7.0,timestral_ontime,highest_seq
+timestral_postsim,1,d7,pairwise,all,44,ok,6.932734372515104,2.063914294997402e-12,17,29.631316809012695,7.0,timestral_ontime,highest_seq
+timestral_postsim,1,d7,pairwise,excluding_italy,50,ok,7.34889852705187,9.992341297396755e-14,11,32.43637484338512,7.0,timestral_ontime,highest_seq
+timestral_postsim,1,d7,all_models,all,44,ok,6.932734372515104,2.063914294997402e-12,17,29.631316809012695,7.0,timestral_ontime,highest_seq
+timestral_postsim,1,d7,all_models,excluding_italy,50,ok,7.34889852705187,9.992341297396755e-14,11,32.43637484338512,7.0,timestral_ontime,highest_seq
+timestral_postsim,1,epf,pairwise,all,44,ok,7.554516629827145,2.1020912450497194e-14,17,22.272929692620405,7.0,timestral_ontime,highest_seq
+timestral_postsim,1,epf,pairwise,excluding_italy,50,ok,7.9821734773663175,7.188938083075508e-16,11,25.885925300461942,7.0,timestral_ontime,highest_seq
+timestral_postsim,1,epf,all_models,all,44,ok,7.554516629827145,2.1020912450497194e-14,17,22.272929692620405,7.0,timestral_ontime,highest_seq
+timestral_postsim,1,epf,all_models,excluding_italy,50,ok,7.9821734773663175,7.188938083075508e-16,11,25.885925300461942,7.0,timestral_ontime,highest_seq
+timestral_prices_matched_context,1,d1,pairwise,all,44,ok,9.025372055034175,8.954288918172305e-20,17,10.46593941026749,7.0,timestral_ontime,highest_seq
+timestral_prices_matched_context,1,d1,pairwise,excluding_italy,50,ok,10.701628041706657,5.000274770939166e-27,11,11.987734365672178,7.0,timestral_ontime,highest_seq
+timestral_prices_matched_context,1,d1,all_models,all,44,ok,9.025372055034175,8.954288918172305e-20,17,10.46593941026749,7.0,timestral_ontime,highest_seq
+timestral_prices_matched_context,1,d1,all_models,excluding_italy,50,ok,10.701628041706657,5.000274770939166e-27,11,11.987734365672178,7.0,timestral_ontime,highest_seq
+timestral_prices_matched_context,1,d7,pairwise,all,44,ok,6.085781113815004,5.796236416697484e-10,17,26.437022171819308,7.0,timestral_ontime,highest_seq
+timestral_prices_matched_context,1,d7,pairwise,excluding_italy,50,ok,6.218026306946219,2.5172358473926397e-10,11,28.04487160203286,7.0,timestral_ontime,highest_seq
+timestral_prices_matched_context,1,d7,all_models,all,44,ok,6.085781113815004,5.796236416697484e-10,17,26.437022171819308,7.0,timestral_ontime,highest_seq
+timestral_prices_matched_context,1,d7,all_models,excluding_italy,50,ok,6.218026306946219,2.5172358473926397e-10,11,28.04487160203286,7.0,timestral_ontime,highest_seq
+timestral_prices_matched_context,1,epf,pairwise,all,44,ok,6.438851044374083,6.019063322430208e-11,17,19.078635055427018,7.0,timestral_ontime,highest_seq
+timestral_prices_matched_context,1,epf,pairwise,excluding_italy,50,ok,6.619067258582369,1.8073618519567736e-11,11,21.494422059109684,7.0,timestral_ontime,highest_seq
+timestral_prices_matched_context,1,epf,all_models,all,44,ok,6.438851044374083,6.019063322430208e-11,17,19.078635055427018,7.0,timestral_ontime,highest_seq
+timestral_prices_matched_context,1,epf,all_models,excluding_italy,50,ok,6.619067258582369,1.8073618519567736e-11,11,21.494422059109684,7.0,timestral_ontime,highest_seq
+physics,1,d1,pairwise,all,44,ok,-6.593096007619176,0.9999999999784626,17,-44.5239393635878,7.0,timestral_ontime,sdac
+physics,1,d1,pairwise,excluding_italy,50,ok,-3.824947058028204,0.9999345999042345,11,-24.706126236979166,7.0,timestral_ontime,sdac
+physics,1,d1,all_models,all,44,ok,-6.593096007619176,0.9999999999784626,17,-44.5239393635878,7.0,timestral_ontime,sdac
+physics,1,d1,all_models,excluding_italy,50,ok,-3.824947058028204,0.9999345999042345,11,-24.706126236979166,7.0,timestral_ontime,sdac
+physics,1,d7,pairwise,all,44,ok,-5.562152823473247,0.999999986676661,17,-28.567077657585468,7.0,timestral_ontime,sdac
+physics,1,d7,pairwise,excluding_italy,50,ok,-1.4155157778739376,0.9215413371626137,11,-8.572563802083334,7.0,timestral_ontime,sdac
+physics,1,d7,all_models,all,44,ok,-5.562152823473247,0.999999986676661,17,-28.567077657585468,7.0,timestral_ontime,sdac
+physics,1,d7,all_models,excluding_italy,50,ok,-1.4155157778739376,0.9215413371626137,11,-8.572563802083334,7.0,timestral_ontime,sdac
+physics,1,epf,pairwise,all,44,ok,-6.272166811520534,0.9999999998219711,17,-35.871264477709786,7.0,timestral_ontime,sdac
+physics,1,epf,pairwise,excluding_italy,50,ok,-2.322798669119067,0.9899050146924432,11,-15.036684244791667,7.0,timestral_ontime,sdac
+physics,1,epf,all_models,all,44,ok,-6.272166811520534,0.9999999998219711,17,-35.871264477709786,7.0,timestral_ontime,sdac
+physics,1,epf,all_models,excluding_italy,50,ok,-2.322798669119067,0.9899050146924432,11,-15.036684244791667,7.0,timestral_ontime,sdac
+timestral_0630_prices,1,d1,pairwise,all,44,ok,8.473359873006258,1.1920729559632819e-17,17,11.032658449965295,7.0,timestral_ontime,sdac
+timestral_0630_prices,1,d1,pairwise,excluding_italy,50,ok,10.028359299051315,5.72008635323866e-24,11,12.562718452690044,7.0,timestral_ontime,sdac
+timestral_0630_prices,1,d1,all_models,all,44,ok,8.473359873006258,1.1920729559632819e-17,17,11.032658449965295,7.0,timestral_ontime,sdac
+timestral_0630_prices,1,d1,all_models,excluding_italy,50,ok,10.028359299051315,5.72008635323866e-24,11,12.562718452690044,7.0,timestral_ontime,sdac
+timestral_0630_prices,1,d7,pairwise,all,44,ok,6.287826165463013,1.6097105513316942e-10,17,26.989520155967625,7.0,timestral_ontime,sdac
+timestral_0630_prices,1,d7,pairwise,excluding_italy,50,ok,6.425316273039766,6.579781013275746e-11,11,28.696280887585875,7.0,timestral_ontime,sdac
+timestral_0630_prices,1,d7,all_models,all,44,ok,6.287826165463013,1.6097105513316942e-10,17,26.989520155967625,7.0,timestral_ontime,sdac
+timestral_0630_prices,1,d7,all_models,excluding_italy,50,ok,6.425316273039766,6.579781013275746e-11,11,28.696280887585875,7.0,timestral_ontime,sdac
+timestral_0630_prices,1,epf,pairwise,all,44,ok,6.725726092025611,8.7359482073127e-12,17,19.685333335843307,7.0,timestral_ontime,sdac
+timestral_0630_prices,1,epf,pairwise,excluding_italy,50,ok,6.854219003013638,3.5851581570271988e-12,11,22.232160444877547,7.0,timestral_ontime,sdac
+timestral_0630_prices,1,epf,all_models,all,44,ok,6.725726092025611,8.7359482073127e-12,17,19.685333335843307,7.0,timestral_ontime,sdac
+timestral_0630_prices,1,epf,all_models,excluding_italy,50,ok,6.854219003013638,3.5851581570271988e-12,11,22.232160444877547,7.0,timestral_ontime,sdac
+timestral_postsim,1,d1,pairwise,all,44,ok,8.695597995426795,1.725039505475404e-18,17,13.631976291829522,7.0,timestral_ontime,sdac
+timestral_postsim,1,d1,pairwise,excluding_italy,50,ok,10.448112629888353,7.473504594679729e-26,11,16.323466026500864,7.0,timestral_ontime,sdac
+timestral_postsim,1,d1,all_models,all,44,ok,8.695597995426795,1.725039505475404e-18,17,13.631976291829522,7.0,timestral_ontime,sdac
+timestral_postsim,1,d1,all_models,excluding_italy,50,ok,10.448112629888353,7.473504594679729e-26,11,16.323466026500864,7.0,timestral_ontime,sdac
+timestral_postsim,1,d7,pairwise,all,44,ok,6.924588011813445,2.1862306653320936e-12,17,29.588837997831853,7.0,timestral_ontime,sdac
+timestral_postsim,1,d7,pairwise,excluding_italy,50,ok,7.3605153044367135,9.160081416169837e-14,11,32.457028461396696,7.0,timestral_ontime,sdac
+timestral_postsim,1,d7,all_models,all,44,ok,6.924588011813445,2.1862306653320936e-12,17,29.588837997831853,7.0,timestral_ontime,sdac
+timestral_postsim,1,d7,all_models,excluding_italy,50,ok,7.3605153044367135,9.160081416169837e-14,11,32.457028461396696,7.0,timestral_ontime,sdac
+timestral_postsim,1,epf,pairwise,all,44,ok,7.558527640667615,2.0382869649373938e-14,17,22.28465117770753,7.0,timestral_ontime,sdac
+timestral_postsim,1,epf,pairwise,excluding_italy,50,ok,7.9609530538681765,8.535957817514914e-16,11,25.992908018688357,7.0,timestral_ontime,sdac
+timestral_postsim,1,epf,all_models,all,44,ok,7.558527640667615,2.0382869649373938e-14,17,22.28465117770753,7.0,timestral_ontime,sdac
+timestral_postsim,1,epf,all_models,excluding_italy,50,ok,7.9609530538681765,8.535957817514914e-16,11,25.992908018688357,7.0,timestral_ontime,sdac
+timestral_prices_matched_context,1,d1,pairwise,all,44,ok,8.821411650025395,5.651284092314227e-19,17,10.384382098883089,7.0,timestral_ontime,sdac
+timestral_prices_matched_context,1,d1,pairwise,excluding_italy,50,ok,10.437973756337582,8.31614306511828e-26,11,11.887295415913561,7.0,timestral_ontime,sdac
+timestral_prices_matched_context,1,d1,all_models,all,44,ok,8.821411650025395,5.651284092314227e-19,17,10.384382098883089,7.0,timestral_ontime,sdac
+timestral_prices_matched_context,1,d1,all_models,excluding_italy,50,ok,10.437973756337582,8.31614306511828e-26,11,11.887295415913561,7.0,timestral_ontime,sdac
+timestral_prices_matched_context,1,d7,pairwise,all,44,ok,6.066194102874791,6.548841332872256e-10,17,26.341243804885426,7.0,timestral_ontime,sdac
+timestral_prices_matched_context,1,d7,pairwise,excluding_italy,50,ok,6.224452836052699,2.416197414223938e-10,11,28.020857850809392,7.0,timestral_ontime,sdac
+timestral_prices_matched_context,1,d7,all_models,all,44,ok,6.066194102874791,6.548841332872256e-10,17,26.341243804885426,7.0,timestral_ontime,sdac
+timestral_prices_matched_context,1,d7,all_models,excluding_italy,50,ok,6.224452836052699,2.416197414223938e-10,11,28.020857850809392,7.0,timestral_ontime,sdac
+timestral_prices_matched_context,1,epf,pairwise,all,44,ok,6.4319749878644075,6.2978235650815e-11,17,19.037056984761097,7.0,timestral_ontime,sdac
+timestral_prices_matched_context,1,epf,pairwise,excluding_italy,50,ok,6.603783098929098,2.0039790552893668e-11,11,21.55673740810106,7.0,timestral_ontime,sdac
+timestral_prices_matched_context,1,epf,all_models,all,44,ok,6.4319749878644075,6.2978235650815e-11,17,19.037056984761097,7.0,timestral_ontime,sdac
+timestral_prices_matched_context,1,epf,all_models,excluding_italy,50,ok,6.603783098929098,2.0039790552893668e-11,11,21.55673740810106,7.0,timestral_ontime,sdac

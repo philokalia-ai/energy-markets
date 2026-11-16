@@ -1,0 +1,566 @@
+{
+  "contract_version": "benchmark-431-v1",
+  "name": "live_since_cv43",
+  "target_policy": "sdac",
+  "source": {
+    "extract": {
+      "path": "/home/pgeorgakopoulos/armada/em-data/euphemia-live-20261115.duckdb",
+      "sha256": "fbeb02e849ae47e6b6a004b6a8e6cceb4bd1b397a6b221ccbe8f9da17e0abe13"
+    },
+    "actuals": {
+      "path": "/home/pgeorgakopoulos/armada/em-team/results/benchmark-431-inputs/sdac-actuals.csv.gz",
+      "sha256": "4307127b6169ddf4b0291a7991501f1dc85ce7d5855f6769226fcbe161abb307",
+      "n": 840129
+    },
+    "forecasts": {
+      "path": "/home/pgeorgakopoulos/armada/em-team/results/benchmark-431-inputs/live_since_cv43-forecasts.csv.gz",
+      "sha256": "28e95b294470665d0dd8f420091dc32c7077dec87c5294aefae0bf51dc85691d",
+      "n": 2808
+    },
+    "saved_sources": [
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live-20261116/AT.json",
+        "sha256": "50cfe12c02be1412571df042dab4dbe4eaa94c084b546788d3cdf7e2f5869511"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live-20261116/BE.json",
+        "sha256": "d7c144207da440e5d8241854a38b5d9a96e16020d97774f33053bca761436874"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live-20261116/BG.json",
+        "sha256": "24246fcafc96eccfa4604f611055c027285495547cc4cfd38d15063267b50b7d"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live-20261116/CH.json",
+        "sha256": "fa18e6868707c999a6ec69079edf1c5a33aa090d9793aa935edc377f1cb7bf58"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live-20261116/CZ.json",
+        "sha256": "41cb691d3011fe5585cc75073f27c00637776e8cbd30788766ed4d0efbec66bd"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live-20261116/DE_LU.json",
+        "sha256": "b0f879499342654a9e6a52e2c95af7f2c3e8a9a20989c13bdd659b8ef51b8bf0"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live-20261116/DK1.json",
+        "sha256": "eab262b1915eb07a679a7a0319775020c49eb7757a0e39e0fe331df0b6cbbea7"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live-20261116/DK2.json",
+        "sha256": "ce2ea7d51f58cc1a6aca2be343cedeac7da0252567eabff9ae6330a63a6472ac"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live-20261116/EE.json",
+        "sha256": "54326f706316a427fdfbe61e53a2afbc79cf755d6326f71c6a285c4f8dc992ac"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live-20261116/ES.json",
+        "sha256": "e64ca134130395777ce6220b74bbf57260a786184deadb71d974ba8c99286582"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live-20261116/FI.json",
+        "sha256": "b18bd564d8ebda32f7ed326373f34bbca2cb889b104d5dad7c950a57ea2e955a"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live-20261116/FR.json",
+        "sha256": "1bef07359626fdcdf42146cb10b0488499200a27975eddb2ff30665d06430fb3"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live-20261116/GR.json",
+        "sha256": "abaf931522a38b7c280e052772e15b06c344381fe149e95e317e0f7721e342a1"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live-20261116/HU.json",
+        "sha256": "61e6cfae5524d282c768b67b854e988e102d9007ba872502cef77628757d44d0"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live-20261116/IT-CNORTH.json",
+        "sha256": "728315e05a491cb8ba1c7156e745d987b0858a7c09890a2e7db7d75e08acde1c"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live-20261116/IT-CSOUTH.json",
+        "sha256": "8edf021deeae1f80da67e3624fd2651a77ff4933bc181a503d401f2dd2b49108"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live-20261116/IT-Calabria.json",
+        "sha256": "4a913fec1f6544ae0b3faf3075b5137080a2cae0292daed87fe846c5ee46804b"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live-20261116/IT-NORTH.json",
+        "sha256": "0e71937b1b3a9ffcd49a25f690715d3ba6b5d66d8ea886f2d694edb84bf41bf6"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live-20261116/IT-SOUTH.json",
+        "sha256": "019e8ed136315541c947e45f69398a3ff8ac713698d085f5aa3948858a7a0ab8"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live-20261116/IT-Sardinia.json",
+        "sha256": "da123c471b9ee9ae95ac4145b7b2be4f50ad14d1476b8e85782598840380d5d3"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live-20261116/IT-Sicily.json",
+        "sha256": "957f3388665c0dd0a2046ec801d2b92166d390bf5f9535cdd9a416577515a591"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live-20261116/LT.json",
+        "sha256": "cc0378f601856b8f580f2a9c501da3661d79e06b36a331e7be1f00bd6f85b99f"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live-20261116/LV.json",
+        "sha256": "4a9228f9fd352c76604dc21c0f3b8dc255b1f8ee0ad5ad4af9d56cb4b888fdd4"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live-20261116/NL.json",
+        "sha256": "216e39ac37d1c8214f4954716416d03523c8724e21694ab897cde27ae953f873"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live-20261116/NO1.json",
+        "sha256": "d59c688d4db0875f439ea1e054a4e977b6091816345ffa82cc5160c71effc464"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live-20261116/NO2.json",
+        "sha256": "3c332332efa5241fe6c1899ef0155ed9f10e56a28e83b3ef5627e523032d2e92"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live-20261116/NO3.json",
+        "sha256": "975b2ce34039339394cbf7d2a3d784c1883a401fff065d95ac9d946b049abeab"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live-20261116/NO4.json",
+        "sha256": "b039f6783780fbde04c47f9fc5e521367f3ece5dd9f7a4589b97f0854ac35ccd"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live-20261116/NO5.json",
+        "sha256": "e71f364f0ae51c2cbf79d4de9ed0a87aa8ed677f169cf85b366d6cd7ebbf2f95"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live-20261116/PL.json",
+        "sha256": "987efa8b34ddee2a0d32ee1e2ff94015c150bf61dc0d05671e907b6ce9553eff"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live-20261116/PT.json",
+        "sha256": "7a1dc7633086a6a9596839ee64c67cac66b5a840646eca2f85284c570e9a0bed"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live-20261116/RO.json",
+        "sha256": "8b43361771122412c63868218cd9bfc33a04e015f9e0bc97d6ac3179208710ce"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live-20261116/RS.json",
+        "sha256": "17b4ce2fd822c54b1ca648984d567d69d5132565248ff49de4dfe6c33fa39b77"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live-20261116/SE1.json",
+        "sha256": "0312bb4e6512e5b49933cc8ca6cf1ccb92407432f50d7e8f4cd5e82b06df2261"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live-20261116/SE2.json",
+        "sha256": "b52a457dbc489d563fba142e9feeb7d5e5e10b45e16fb5bd5a19045979ac85c2"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live-20261116/SE3.json",
+        "sha256": "d5b804551f89d041a6b05201a5db5866d62d9a3d370d0f169da5ea2fe5302d14"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live-20261116/SE4.json",
+        "sha256": "75f337bf3b2987182c82de50f6c48378eab70925654072907aff9c1f8debf8f2"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live-20261116/SI.json",
+        "sha256": "04654c1e620825f2bca57fe941488db73646b29e9270ce470673f3d88ebb3202"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/live-20261116/SK.json",
+        "sha256": "04781487486b2554031f4ce039c078e50c042403382fc678176905ed0669ab17"
+      }
+    ],
+    "target_helper": {
+      "path": "/home/pgeorgakopoulos/armada/em-team/worktrees/collapse-431/docs/experiments/benchmark-431/_target_fallback.py",
+      "sha256": "e2ec73daa1efb8fb47a25641e95ab08b9d522b437f45dd04d3b7884fa9bcf0c7"
+    }
+  },
+  "resolution": "PT60M",
+  "market_day_timezone": "Europe/Athens",
+  "models": [
+    {
+      "id": "physics",
+      "model_cv": [
+        43,
+        44
+      ],
+      "model_id": "physics",
+      "artifact_cv": null,
+      "artifact_sha256": null,
+      "artifact_missing_reason": "rule engine; no serialized learned artifact",
+      "base_cv": [
+        43,
+        44
+      ],
+      "model_input_price_policy": "no direct settled-price lag context; calibration overlap remains",
+      "leads": [
+        1,
+        2
+      ],
+      "fit_end": null,
+      "fit_end_class": "no single fit cutoff; calibration overlaps evaluation",
+      "publication_class": "physics made-time in saved snapshot; first publication unverified"
+    }
+  ],
+  "fit_end": null,
+  "fit_end_reason": "not authenticated for saved overlays; foundation pretraining cutoff unknown",
+  "cutoff_publication_class": "saved public snapshot; made-time is not immutable first-publication proof; overlays may be retrospectively rewritten",
+  "naive_availability": "D1 and weekday: lead1 only; D7: leads1..7; source auction prices normally known by morning issue, initial revisions not archived",
+  "target_history": "latest-revised read-only extract",
+  "window": {
+    "start": "2026-11-15",
+    "end": "2026-11-17"
+  },
+  "zones": [
+    "AT",
+    "BE",
+    "BG",
+    "CH",
+    "CZ",
+    "DE_LU",
+    "DK1",
+    "DK2",
+    "EE",
+    "ES",
+    "FI",
+    "FR",
+    "GR",
+    "HU",
+    "IT-CNORTH",
+    "IT-CSOUTH",
+    "IT-Calabria",
+    "IT-NORTH",
+    "IT-SOUTH",
+    "IT-Sardinia",
+    "IT-Sicily",
+    "LT",
+    "LV",
+    "NL",
+    "NO1",
+    "NO2",
+    "NO3",
+    "NO4",
+    "NO5",
+    "PL",
+    "PT",
+    "RO",
+    "RS",
+    "SE1",
+    "SE2",
+    "SE3",
+    "SE4",
+    "SI",
+    "SK"
+  ],
+  "missingness": "no imputation; pairwise finite actual/forecast/naive; complete zone-days primary, partial cells separate; unknown SDAC auctions fail closed",
+  "mask_sha256": "b71e16e4a55295c29b960cc80cc852e6b03f989a579c204fc448dfa2c7fc3f4f",
+  "all_model_intersection": false,
+  "aggregation": [
+    "pooled_cell",
+    "mean_daily"
+  ],
+  "rmae": "ratio of paired aggregate absolute errors, never mean daily ratios; zero naive error undefined",
+  "dst": "all23/25 UTC hours retained in point scores; source repeated local hour averaged; DM drops23/25-hour days",
+  "dm": {
+    "loss": "daily24h L1 vector",
+    "hac": "Bartlett calendar lags max(7,lead-1)",
+    "minimum_days": 30,
+    "p_values": "one-sided model better; exploratory, unadjusted"
+  },
+  "prepared_utc": "2026-11-16T19:46:04.657623+00:00",
+  "source_git_commit": "d7590802d4085ef1808359dbc612a449962b0357",
+  "public_fetch": {
+    "fetch_started_utc": "2026-11-16T19:28:39.552841+00:00",
+    "source": "https://api.philokalia.ai/api/v1/zones/",
+    "files": [
+      {
+        "zone": "AT",
+        "filename": "AT.json",
+        "sha256": "50cfe12c02be1412571df042dab4dbe4eaa94c084b546788d3cdf7e2f5869511",
+        "bytes": 3305875,
+        "fetched_utc": "2026-11-16T19:28:40.755405+00:00"
+      },
+      {
+        "zone": "BE",
+        "filename": "BE.json",
+        "sha256": "d7c144207da440e5d8241854a38b5d9a96e16020d97774f33053bca761436874",
+        "bytes": 3317764,
+        "fetched_utc": "2026-11-16T19:28:42.313986+00:00"
+      },
+      {
+        "zone": "BG",
+        "filename": "BG.json",
+        "sha256": "24246fcafc96eccfa4604f611055c027285495547cc4cfd38d15063267b50b7d",
+        "bytes": 3294769,
+        "fetched_utc": "2026-11-16T19:28:45.601460+00:00"
+      },
+      {
+        "zone": "CH",
+        "filename": "CH.json",
+        "sha256": "fa18e6868707c999a6ec69079edf1c5a33aa090d9793aa935edc377f1cb7bf58",
+        "bytes": 3113268,
+        "fetched_utc": "2026-11-16T19:28:47.134806+00:00"
+      },
+      {
+        "zone": "CZ",
+        "filename": "CZ.json",
+        "sha256": "41cb691d3011fe5585cc75073f27c00637776e8cbd30788766ed4d0efbec66bd",
+        "bytes": 3307738,
+        "fetched_utc": "2026-11-16T19:28:48.784879+00:00"
+      },
+      {
+        "zone": "DE_LU",
+        "filename": "DE_LU.json",
+        "sha256": "b0f879499342654a9e6a52e2c95af7f2c3e8a9a20989c13bdd659b8ef51b8bf0",
+        "bytes": 3306939,
+        "fetched_utc": "2026-11-16T19:28:50.850057+00:00"
+      },
+      {
+        "zone": "DK1",
+        "filename": "DK1.json",
+        "sha256": "eab262b1915eb07a679a7a0319775020c49eb7757a0e39e0fe331df0b6cbbea7",
+        "bytes": 3336450,
+        "fetched_utc": "2026-11-16T19:28:52.368716+00:00"
+      },
+      {
+        "zone": "DK2",
+        "filename": "DK2.json",
+        "sha256": "ce2ea7d51f58cc1a6aca2be343cedeac7da0252567eabff9ae6330a63a6472ac",
+        "bytes": 3359098,
+        "fetched_utc": "2026-11-16T19:28:55.377829+00:00"
+      },
+      {
+        "zone": "EE",
+        "filename": "EE.json",
+        "sha256": "54326f706316a427fdfbe61e53a2afbc79cf755d6326f71c6a285c4f8dc992ac",
+        "bytes": 3252397,
+        "fetched_utc": "2026-11-16T19:28:58.931598+00:00"
+      },
+      {
+        "zone": "ES",
+        "filename": "ES.json",
+        "sha256": "e64ca134130395777ce6220b74bbf57260a786184deadb71d974ba8c99286582",
+        "bytes": 3279196,
+        "fetched_utc": "2026-11-16T19:29:00.217456+00:00"
+      },
+      {
+        "zone": "FI",
+        "filename": "FI.json",
+        "sha256": "b18bd564d8ebda32f7ed326373f34bbca2cb889b104d5dad7c950a57ea2e955a",
+        "bytes": 3240060,
+        "fetched_utc": "2026-11-16T19:29:01.538207+00:00"
+      },
+      {
+        "zone": "FR",
+        "filename": "FR.json",
+        "sha256": "1bef07359626fdcdf42146cb10b0488499200a27975eddb2ff30665d06430fb3",
+        "bytes": 3290617,
+        "fetched_utc": "2026-11-16T19:29:03.271452+00:00"
+      },
+      {
+        "zone": "GR",
+        "filename": "GR.json",
+        "sha256": "abaf931522a38b7c280e052772e15b06c344381fe149e95e317e0f7721e342a1",
+        "bytes": 3283317,
+        "fetched_utc": "2026-11-16T19:29:04.604933+00:00"
+      },
+      {
+        "zone": "HU",
+        "filename": "HU.json",
+        "sha256": "61e6cfae5524d282c768b67b854e988e102d9007ba872502cef77628757d44d0",
+        "bytes": 3309100,
+        "fetched_utc": "2026-11-16T19:29:06.748967+00:00"
+      },
+      {
+        "zone": "IT-CNORTH",
+        "filename": "IT-CNORTH.json",
+        "sha256": "728315e05a491cb8ba1c7156e745d987b0858a7c09890a2e7db7d75e08acde1c",
+        "bytes": 3285772,
+        "fetched_utc": "2026-11-16T19:29:08.239873+00:00"
+      },
+      {
+        "zone": "IT-CSOUTH",
+        "filename": "IT-CSOUTH.json",
+        "sha256": "8edf021deeae1f80da67e3624fd2651a77ff4933bc181a503d401f2dd2b49108",
+        "bytes": 3289423,
+        "fetched_utc": "2026-11-16T19:29:09.775731+00:00"
+      },
+      {
+        "zone": "IT-Calabria",
+        "filename": "IT-Calabria.json",
+        "sha256": "4a913fec1f6544ae0b3faf3075b5137080a2cae0292daed87fe846c5ee46804b",
+        "bytes": 3268965,
+        "fetched_utc": "2026-11-16T19:29:11.553625+00:00"
+      },
+      {
+        "zone": "IT-NORTH",
+        "filename": "IT-NORTH.json",
+        "sha256": "0e71937b1b3a9ffcd49a25f690715d3ba6b5d66d8ea886f2d694edb84bf41bf6",
+        "bytes": 3280860,
+        "fetched_utc": "2026-11-16T19:29:13.700681+00:00"
+      },
+      {
+        "zone": "IT-SOUTH",
+        "filename": "IT-SOUTH.json",
+        "sha256": "019e8ed136315541c947e45f69398a3ff8ac713698d085f5aa3948858a7a0ab8",
+        "bytes": 3264831,
+        "fetched_utc": "2026-11-16T19:29:15.417195+00:00"
+      },
+      {
+        "zone": "IT-Sardinia",
+        "filename": "IT-Sardinia.json",
+        "sha256": "da123c471b9ee9ae95ac4145b7b2be4f50ad14d1476b8e85782598840380d5d3",
+        "bytes": 3265618,
+        "fetched_utc": "2026-11-16T19:29:16.856599+00:00"
+      },
+      {
+        "zone": "IT-Sicily",
+        "filename": "IT-Sicily.json",
+        "sha256": "957f3388665c0dd0a2046ec801d2b92166d390bf5f9535cdd9a416577515a591",
+        "bytes": 3270909,
+        "fetched_utc": "2026-11-16T19:29:18.351852+00:00"
+      },
+      {
+        "zone": "LT",
+        "filename": "LT.json",
+        "sha256": "cc0378f601856b8f580f2a9c501da3661d79e06b36a331e7be1f00bd6f85b99f",
+        "bytes": 3282934,
+        "fetched_utc": "2026-11-16T19:29:20.283358+00:00"
+      },
+      {
+        "zone": "LV",
+        "filename": "LV.json",
+        "sha256": "4a9228f9fd352c76604dc21c0f3b8dc255b1f8ee0ad5ad4af9d56cb4b888fdd4",
+        "bytes": 3284762,
+        "fetched_utc": "2026-11-16T19:29:21.701509+00:00"
+      },
+      {
+        "zone": "NL",
+        "filename": "NL.json",
+        "sha256": "216e39ac37d1c8214f4954716416d03523c8724e21694ab897cde27ae953f873",
+        "bytes": 3293731,
+        "fetched_utc": "2026-11-16T19:29:25.863867+00:00"
+      },
+      {
+        "zone": "NO1",
+        "filename": "NO1.json",
+        "sha256": "d59c688d4db0875f439ea1e054a4e977b6091816345ffa82cc5160c71effc464",
+        "bytes": 3309315,
+        "fetched_utc": "2026-11-16T19:29:29.210021+00:00"
+      },
+      {
+        "zone": "NO2",
+        "filename": "NO2.json",
+        "sha256": "3c332332efa5241fe6c1899ef0155ed9f10e56a28e83b3ef5627e523032d2e92",
+        "bytes": 3324629,
+        "fetched_utc": "2026-11-16T19:29:32.559205+00:00"
+      },
+      {
+        "zone": "NO3",
+        "filename": "NO3.json",
+        "sha256": "975b2ce34039339394cbf7d2a3d784c1883a401fff065d95ac9d946b049abeab",
+        "bytes": 3300268,
+        "fetched_utc": "2026-11-16T19:29:34.011497+00:00"
+      },
+      {
+        "zone": "NO4",
+        "filename": "NO4.json",
+        "sha256": "b039f6783780fbde04c47f9fc5e521367f3ece5dd9f7a4589b97f0854ac35ccd",
+        "bytes": 3286034,
+        "fetched_utc": "2026-11-16T19:29:35.482073+00:00"
+      },
+      {
+        "zone": "NO5",
+        "filename": "NO5.json",
+        "sha256": "e71f364f0ae51c2cbf79d4de9ed0a87aa8ed677f169cf85b366d6cd7ebbf2f95",
+        "bytes": 3312244,
+        "fetched_utc": "2026-11-16T19:29:37.213768+00:00"
+      },
+      {
+        "zone": "PL",
+        "filename": "PL.json",
+        "sha256": "987efa8b34ddee2a0d32ee1e2ff94015c150bf61dc0d05671e907b6ce9553eff",
+        "bytes": 3318621,
+        "fetched_utc": "2026-11-16T19:29:39.470122+00:00"
+      },
+      {
+        "zone": "PT",
+        "filename": "PT.json",
+        "sha256": "7a1dc7633086a6a9596839ee64c67cac66b5a840646eca2f85284c570e9a0bed",
+        "bytes": 3278776,
+        "fetched_utc": "2026-11-16T19:29:41.061035+00:00"
+      },
+      {
+        "zone": "RO",
+        "filename": "RO.json",
+        "sha256": "8b43361771122412c63868218cd9bfc33a04e015f9e0bc97d6ac3179208710ce",
+        "bytes": 3307722,
+        "fetched_utc": "2026-11-16T19:29:42.516924+00:00"
+      },
+      {
+        "zone": "RS",
+        "filename": "RS.json",
+        "sha256": "17b4ce2fd822c54b1ca648984d567d69d5132565248ff49de4dfe6c33fa39b77",
+        "bytes": 3121962,
+        "fetched_utc": "2026-11-16T19:29:44.349146+00:00"
+      },
+      {
+        "zone": "SE1",
+        "filename": "SE1.json",
+        "sha256": "0312bb4e6512e5b49933cc8ca6cf1ccb92407432f50d7e8f4cd5e82b06df2261",
+        "bytes": 3220383,
+        "fetched_utc": "2026-11-16T19:29:46.327749+00:00"
+      },
+      {
+        "zone": "SE2",
+        "filename": "SE2.json",
+        "sha256": "b52a457dbc489d563fba142e9feeb7d5e5e10b45e16fb5bd5a19045979ac85c2",
+        "bytes": 3223366,
+        "fetched_utc": "2026-11-16T19:29:47.764601+00:00"
+      },
+      {
+        "zone": "SE3",
+        "filename": "SE3.json",
+        "sha256": "d5b804551f89d041a6b05201a5db5866d62d9a3d370d0f169da5ea2fe5302d14",
+        "bytes": 3282453,
+        "fetched_utc": "2026-11-16T19:29:49.144493+00:00"
+      },
+      {
+        "zone": "SE4",
+        "filename": "SE4.json",
+        "sha256": "75f337bf3b2987182c82de50f6c48378eab70925654072907aff9c1f8debf8f2",
+        "bytes": 3298168,
+        "fetched_utc": "2026-11-16T19:29:50.616859+00:00"
+      },
+      {
+        "zone": "SI",
+        "filename": "SI.json",
+        "sha256": "04654c1e620825f2bca57fe941488db73646b29e9270ce470673f3d88ebb3202",
+        "bytes": 3311579,
+        "fetched_utc": "2026-11-16T19:29:51.919733+00:00"
+      },
+      {
+        "zone": "SK",
+        "filename": "SK.json",
+        "sha256": "04781487486b2554031f4ce039c078e50c042403382fc678176905ed0669ab17",
+        "bytes": 3312532,
+        "fetched_utc": "2026-11-16T19:29:53.325043+00:00"
+      }
+    ],
+    "fetch_finished_utc": "2026-11-16T19:29:53.826567+00:00"
+  },
+  "aggregation_definition": "mean_daily weights each paired zone-day equally; no energy weights in new cohorts",
+  "saved_predictions_changed": false,
+  "evaluator_sha256": "a27b9ba363d3c5e6fb616a690f5725c1f7fc88583138e9307a87f925d40a9b0a",
+  "output_sha256": {
+    "metrics": "203e97a89c06e4ef7d8953f36558246094d939e531ce62aa10574128b0d12429",
+    "masks": "b71e16e4a55295c29b960cc80cc852e6b03f989a579c204fc448dfa2c7fc3f4f",
+    "exclusions": "fb63f8ac155552fd1e229b22be251ac83af884803a97ca8881f6de5f644cd1ef",
+    "dm": "e26cecea18e36f289bde3efff8b31fe809c43c981f6e09d10f25ae17e3bfbb79"
+  }
+}

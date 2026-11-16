@@ -1,0 +1,5 @@
+model,n,mae
+physics,47679,81.78950795795843
+timestral_0630_prices,47679,28.213134185516196
+timestral_prices_matched_context,47679,28.819069161499655
+timestral_postsim,47679,25.264710774186288

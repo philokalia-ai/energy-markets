@@ -1,0 +1,49 @@
+{
+  "contract_version": "benchmark-431-v1",
+  "name": "example_replace_hashes_and_metadata",
+  "source": {
+    "actuals": {
+      "path": "/saved/actuals.csv",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "forecasts": {
+      "path": "/saved/forecasts.csv",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "source_git_commit": "replace_with_source_commit",
+    "target_helper_sha256": "replace_with_bin_da_target_or_local_fallback_hash"
+  },
+  "target_policy": "sdac",
+  "resolution": "PT60M",
+  "market_day_timezone": "Europe/Athens",
+  "zones": ["DE_LU", "GR"],
+  "models": [
+    {
+      "id": "physics",
+      "model_cv": 44,
+      "artifact_cv": null,
+      "artifact_cv_reason": "rule engine, no serialized learned artifact",
+      "base_cv": 44,
+      "fit_end": null,
+      "fit_end_reason": "no single fit cutoff; price-informed calibration overlaps earlier evaluation",
+      "publication_class": "replace_with_verified_or_explicitly_unverifiable_class"
+    }
+  ],
+  "fit_end": null,
+  "fit_end_reason": "nullable only with explicit per-model explanation; never infer a training cutoff",
+  "cutoff_publication_class": "saved reconstruction; first-publication evidence unavailable",
+  "naive_availability": "D1 and weekday: lead1 only; D7: leads1..7; initial price revisions not archived",
+  "window": {"start": "2026-09-14", "end": "2026-11-13"},
+  "missingness": "finite actual/forecast/naive on the same cells, no imputation; complete local zone-days primary",
+  "aggregation": ["pooled_cell", "mean_daily"],
+  "all_model_intersection": false,
+  "mask_sha256": null,
+  "mask_hash_rule": "filled by evaluator: SHA256 of masks.csv; each row pins sorted zone/UTC-hour/lead keys",
+  "dm": {
+    "loss": "daily 24-hour L1 vector",
+    "minimum_days": 30,
+    "hac": "Bartlett, calendar lags max(7,lead-1)",
+    "dst": "exclude 23/25-hour and incomplete days from inference only",
+    "p_values": "one-sided model better; exploratory, unadjusted"
+  }
+}

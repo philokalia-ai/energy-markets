@@ -1,0 +1,5 @@
+window,target_policy,status,n_scored,mask_sha256,reason
+record,highest_seq,raw-cell reconciliation unavailable,0,,saved probe/OOS/rolling prediction parquet absent; confirmed by leader
+record,sdac,raw-cell reconciliation unavailable,0,,saved probe/OOS/rolling prediction parquet absent; confirmed by leader
+rolling_cv39,highest_seq,raw-cell reconciliation unavailable,0,,saved probe/OOS/rolling prediction parquet absent; confirmed by leader
+rolling_cv39,sdac,raw-cell reconciliation unavailable,0,,saved probe/OOS/rolling prediction parquet absent; confirmed by leader

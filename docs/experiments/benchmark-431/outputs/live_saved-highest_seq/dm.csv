@@ -1,0 +1,1108 @@
+model,lead,naive,mask_family,group,n_days,status,statistic,p_model_better,dst_or_incomplete_days,mean_naive_minus_model_loss,hac_lag
+gbm_overlay,1,d1,pairwise,AT,21,insufficient data,,,40,,
+gbm_overlay,1,d1,pairwise,BE,21,insufficient data,,,40,,
+gbm_overlay,1,d1,pairwise,BG,21,insufficient data,,,40,,
+gbm_overlay,1,d1,pairwise,CH,21,insufficient data,,,40,,
+gbm_overlay,1,d1,pairwise,CZ,21,insufficient data,,,40,,
+gbm_overlay,1,d1,pairwise,DE_LU,21,insufficient data,,,40,,
+gbm_overlay,1,d1,pairwise,DK1,21,insufficient data,,,40,,
+gbm_overlay,1,d1,pairwise,DK2,21,insufficient data,,,40,,
+gbm_overlay,1,d1,pairwise,EE,21,insufficient data,,,40,,
+gbm_overlay,1,d1,pairwise,ES,21,insufficient data,,,40,,
+gbm_overlay,1,d1,pairwise,FI,21,insufficient data,,,40,,
+gbm_overlay,1,d1,pairwise,FR,21,insufficient data,,,40,,
+gbm_overlay,1,d1,pairwise,GR,21,insufficient data,,,40,,
+gbm_overlay,1,d1,pairwise,HU,21,insufficient data,,,40,,
+gbm_overlay,1,d1,pairwise,IT-CNORTH,21,insufficient data,,,40,,
+gbm_overlay,1,d1,pairwise,IT-CSOUTH,21,insufficient data,,,40,,
+gbm_overlay,1,d1,pairwise,IT-Calabria,21,insufficient data,,,40,,
+gbm_overlay,1,d1,pairwise,IT-NORTH,21,insufficient data,,,40,,
+gbm_overlay,1,d1,pairwise,IT-SOUTH,21,insufficient data,,,40,,
+gbm_overlay,1,d1,pairwise,IT-Sardinia,18,insufficient data,,,43,,
+gbm_overlay,1,d1,pairwise,IT-Sicily,21,insufficient data,,,40,,
+gbm_overlay,1,d1,pairwise,LT,21,insufficient data,,,40,,
+gbm_overlay,1,d1,pairwise,LV,21,insufficient data,,,40,,
+gbm_overlay,1,d1,pairwise,NL,21,insufficient data,,,40,,
+gbm_overlay,1,d1,pairwise,NO1,21,insufficient data,,,40,,
+gbm_overlay,1,d1,pairwise,NO2,21,insufficient data,,,40,,
+gbm_overlay,1,d1,pairwise,NO3,21,insufficient data,,,40,,
+gbm_overlay,1,d1,pairwise,NO4,21,insufficient data,,,40,,
+gbm_overlay,1,d1,pairwise,NO5,21,insufficient data,,,40,,
+gbm_overlay,1,d1,pairwise,PL,21,insufficient data,,,40,,
+gbm_overlay,1,d1,pairwise,PT,21,insufficient data,,,40,,
+gbm_overlay,1,d1,pairwise,RO,21,insufficient data,,,40,,
+gbm_overlay,1,d1,pairwise,RS,21,insufficient data,,,40,,
+gbm_overlay,1,d1,pairwise,SE1,21,insufficient data,,,40,,
+gbm_overlay,1,d1,pairwise,SE2,21,insufficient data,,,40,,
+gbm_overlay,1,d1,pairwise,SE3,21,insufficient data,,,40,,
+gbm_overlay,1,d1,pairwise,SE4,21,insufficient data,,,40,,
+gbm_overlay,1,d1,pairwise,SI,21,insufficient data,,,40,,
+gbm_overlay,1,d1,pairwise,SK,21,insufficient data,,,40,,
+gbm_overlay,1,d1,pairwise,all,18,insufficient data,,,43,,
+gbm_overlay,1,d1,pairwise,excluding_italy,21,insufficient data,,,40,,
+gbm_overlay,1,d7,pairwise,AT,21,insufficient data,,,40,,
+gbm_overlay,1,d7,pairwise,BE,21,insufficient data,,,40,,
+gbm_overlay,1,d7,pairwise,BG,21,insufficient data,,,40,,
+gbm_overlay,1,d7,pairwise,CH,21,insufficient data,,,40,,
+gbm_overlay,1,d7,pairwise,CZ,21,insufficient data,,,40,,
+gbm_overlay,1,d7,pairwise,DE_LU,21,insufficient data,,,40,,
+gbm_overlay,1,d7,pairwise,DK1,21,insufficient data,,,40,,
+gbm_overlay,1,d7,pairwise,DK2,21,insufficient data,,,40,,
+gbm_overlay,1,d7,pairwise,EE,21,insufficient data,,,40,,
+gbm_overlay,1,d7,pairwise,ES,21,insufficient data,,,40,,
+gbm_overlay,1,d7,pairwise,FI,21,insufficient data,,,40,,
+gbm_overlay,1,d7,pairwise,FR,21,insufficient data,,,40,,
+gbm_overlay,1,d7,pairwise,GR,21,insufficient data,,,40,,
+gbm_overlay,1,d7,pairwise,HU,21,insufficient data,,,40,,
+gbm_overlay,1,d7,pairwise,IT-CNORTH,21,insufficient data,,,40,,
+gbm_overlay,1,d7,pairwise,IT-CSOUTH,21,insufficient data,,,40,,
+gbm_overlay,1,d7,pairwise,IT-Calabria,21,insufficient data,,,40,,
+gbm_overlay,1,d7,pairwise,IT-NORTH,21,insufficient data,,,40,,
+gbm_overlay,1,d7,pairwise,IT-SOUTH,21,insufficient data,,,40,,
+gbm_overlay,1,d7,pairwise,IT-Sardinia,17,insufficient data,,,44,,
+gbm_overlay,1,d7,pairwise,IT-Sicily,21,insufficient data,,,40,,
+gbm_overlay,1,d7,pairwise,LT,21,insufficient data,,,40,,
+gbm_overlay,1,d7,pairwise,LV,21,insufficient data,,,40,,
+gbm_overlay,1,d7,pairwise,NL,21,insufficient data,,,40,,
+gbm_overlay,1,d7,pairwise,NO1,21,insufficient data,,,40,,
+gbm_overlay,1,d7,pairwise,NO2,21,insufficient data,,,40,,
+gbm_overlay,1,d7,pairwise,NO3,21,insufficient data,,,40,,
+gbm_overlay,1,d7,pairwise,NO4,21,insufficient data,,,40,,
+gbm_overlay,1,d7,pairwise,NO5,21,insufficient data,,,40,,
+gbm_overlay,1,d7,pairwise,PL,21,insufficient data,,,40,,
+gbm_overlay,1,d7,pairwise,PT,21,insufficient data,,,40,,
+gbm_overlay,1,d7,pairwise,RO,21,insufficient data,,,40,,
+gbm_overlay,1,d7,pairwise,RS,21,insufficient data,,,40,,
+gbm_overlay,1,d7,pairwise,SE1,21,insufficient data,,,40,,
+gbm_overlay,1,d7,pairwise,SE2,21,insufficient data,,,40,,
+gbm_overlay,1,d7,pairwise,SE3,21,insufficient data,,,40,,
+gbm_overlay,1,d7,pairwise,SE4,21,insufficient data,,,40,,
+gbm_overlay,1,d7,pairwise,SI,21,insufficient data,,,40,,
+gbm_overlay,1,d7,pairwise,SK,21,insufficient data,,,40,,
+gbm_overlay,1,d7,pairwise,all,17,insufficient data,,,44,,
+gbm_overlay,1,d7,pairwise,excluding_italy,21,insufficient data,,,40,,
+gbm_overlay,1,epf,pairwise,AT,21,insufficient data,,,40,,
+gbm_overlay,1,epf,pairwise,BE,21,insufficient data,,,40,,
+gbm_overlay,1,epf,pairwise,BG,21,insufficient data,,,40,,
+gbm_overlay,1,epf,pairwise,CH,21,insufficient data,,,40,,
+gbm_overlay,1,epf,pairwise,CZ,21,insufficient data,,,40,,
+gbm_overlay,1,epf,pairwise,DE_LU,21,insufficient data,,,40,,
+gbm_overlay,1,epf,pairwise,DK1,21,insufficient data,,,40,,
+gbm_overlay,1,epf,pairwise,DK2,21,insufficient data,,,40,,
+gbm_overlay,1,epf,pairwise,EE,21,insufficient data,,,40,,
+gbm_overlay,1,epf,pairwise,ES,21,insufficient data,,,40,,
+gbm_overlay,1,epf,pairwise,FI,21,insufficient data,,,40,,
+gbm_overlay,1,epf,pairwise,FR,21,insufficient data,,,40,,
+gbm_overlay,1,epf,pairwise,GR,21,insufficient data,,,40,,
+gbm_overlay,1,epf,pairwise,HU,21,insufficient data,,,40,,
+gbm_overlay,1,epf,pairwise,IT-CNORTH,21,insufficient data,,,40,,
+gbm_overlay,1,epf,pairwise,IT-CSOUTH,21,insufficient data,,,40,,
+gbm_overlay,1,epf,pairwise,IT-Calabria,21,insufficient data,,,40,,
+gbm_overlay,1,epf,pairwise,IT-NORTH,21,insufficient data,,,40,,
+gbm_overlay,1,epf,pairwise,IT-SOUTH,21,insufficient data,,,40,,
+gbm_overlay,1,epf,pairwise,IT-Sardinia,17,insufficient data,,,44,,
+gbm_overlay,1,epf,pairwise,IT-Sicily,21,insufficient data,,,40,,
+gbm_overlay,1,epf,pairwise,LT,21,insufficient data,,,40,,
+gbm_overlay,1,epf,pairwise,LV,21,insufficient data,,,40,,
+gbm_overlay,1,epf,pairwise,NL,21,insufficient data,,,40,,
+gbm_overlay,1,epf,pairwise,NO1,21,insufficient data,,,40,,
+gbm_overlay,1,epf,pairwise,NO2,21,insufficient data,,,40,,
+gbm_overlay,1,epf,pairwise,NO3,21,insufficient data,,,40,,
+gbm_overlay,1,epf,pairwise,NO4,21,insufficient data,,,40,,
+gbm_overlay,1,epf,pairwise,NO5,21,insufficient data,,,40,,
+gbm_overlay,1,epf,pairwise,PL,21,insufficient data,,,40,,
+gbm_overlay,1,epf,pairwise,PT,21,insufficient data,,,40,,
+gbm_overlay,1,epf,pairwise,RO,21,insufficient data,,,40,,
+gbm_overlay,1,epf,pairwise,RS,21,insufficient data,,,40,,
+gbm_overlay,1,epf,pairwise,SE1,21,insufficient data,,,40,,
+gbm_overlay,1,epf,pairwise,SE2,21,insufficient data,,,40,,
+gbm_overlay,1,epf,pairwise,SE3,21,insufficient data,,,40,,
+gbm_overlay,1,epf,pairwise,SE4,21,insufficient data,,,40,,
+gbm_overlay,1,epf,pairwise,SI,21,insufficient data,,,40,,
+gbm_overlay,1,epf,pairwise,SK,21,insufficient data,,,40,,
+gbm_overlay,1,epf,pairwise,all,17,insufficient data,,,44,,
+gbm_overlay,1,epf,pairwise,excluding_italy,21,insufficient data,,,40,,
+physics,1,d1,pairwise,AT,57,ok,-5.273283480201365,0.9999999329978354,4,-56.66972587719298,7.0
+physics,1,d1,pairwise,BE,57,ok,-1.4984381847036758,0.9329902791203282,4,-13.737335526315789,7.0
+physics,1,d1,pairwise,BG,57,ok,-7.7972553881769295,0.9999999999999969,4,-74.30364491959064,7.0
+physics,1,d1,pairwise,CH,57,ok,-9.033007234139122,1.0,4,-90.24091191520466,7.0
+physics,1,d1,pairwise,CZ,57,ok,-1.8361222033823243,0.9668302074154022,4,-21.46530244883041,7.0
+physics,1,d1,pairwise,DE_LU,57,ok,-0.9374118892626199,0.8257266362123953,4,-10.2192278874269,7.0
+physics,1,d1,pairwise,DK1,57,ok,-0.28779785203926955,0.6132492591678483,4,-2.889071575475146,7.0
+physics,1,d1,pairwise,DK2,57,ok,-1.5213361281654099,0.9359122458077349,4,-23.21422866483918,7.0
+physics,1,d1,pairwise,EE,57,ok,5.282431030462069,6.374041686950273e-08,4,17.66194353070176,7.0
+physics,1,d1,pairwise,ES,57,ok,-1.9262648017468398,0.9729643409777327,4,-10.085974963450292,7.0
+physics,1,d1,pairwise,FI,57,ok,2.066259295435236,0.01940200133033335,4,15.996401681286551,7.0
+physics,1,d1,pairwise,FR,57,ok,-1.7744937166571852,0.9620092397489008,4,-12.596141264619881,7.0
+physics,1,d1,pairwise,GR,57,ok,-4.893537407803563,0.9999995048026064,4,-28.75393914473684,7.0
+physics,1,d1,pairwise,HU,57,ok,-6.556641429941936,0.9999999999724835,4,-62.53759685672515,7.0
+physics,1,d1,pairwise,IT-CNORTH,57,ok,-7.164679381109194,0.9999999999996102,4,-146.95865405701755,7.0
+physics,1,d1,pairwise,IT-CSOUTH,57,ok,-5.271515991643907,0.9999999323492518,4,-101.23948190789474,7.0
+physics,1,d1,pairwise,IT-Calabria,57,ok,-8.408057928572873,1.0,4,-124.22232547514619,7.0
+physics,1,d1,pairwise,IT-NORTH,57,ok,-8.64754291835135,1.0,4,-151.1212161915205,7.0
+physics,1,d1,pairwise,IT-SOUTH,57,ok,-7.488018123353139,0.999999999999965,4,-162.30865405701755,7.0
+physics,1,d1,pairwise,IT-Sardinia,54,ok,-15.860914358093247,1.0,7,-92.18187596450618,7.0
+physics,1,d1,pairwise,IT-Sicily,57,ok,-5.6813744588378405,0.9999999933191713,4,-95.70057291666667,7.0
+physics,1,d1,pairwise,LT,57,ok,-0.4026100858539214,0.6563824556063806,4,-4.290276864035087,7.0
+physics,1,d1,pairwise,LV,57,ok,-1.5649245976113666,0.9411997048140932,4,-18.680485197368423,7.0
+physics,1,d1,pairwise,NL,57,ok,-1.6701924728362232,0.9525593556031053,4,-14.74219572368421,7.0
+physics,1,d1,pairwise,NO1,57,ok,-5.8096619961829825,0.9999999968700451,4,-28.253081140350876,7.0
+physics,1,d1,pairwise,NO2,57,ok,-1.6579574990747366,0.9513369774413472,4,-19.78152412280702,7.0
+physics,1,d1,pairwise,NO3,57,ok,-2.152128611545831,0.9843063868734729,4,-6.7142004751462,7.0
+physics,1,d1,pairwise,NO4,57,ok,-5.70237196210951,0.9999999940924172,4,-26.36909996345029,7.0
+physics,1,d1,pairwise,NO5,57,ok,-5.025087699325716,0.9999997483987343,4,-22.572616045321638,7.0
+physics,1,d1,pairwise,PL,57,ok,-0.057196159245721016,0.5228055311841207,4,-0.28809576023391864,7.0
+physics,1,d1,pairwise,PT,57,ok,-2.8388980187323467,0.997736518878804,4,-22.03522386695906,7.0
+physics,1,d1,pairwise,RO,57,ok,-6.195309805730578,0.9999999997091475,4,-53.14923976608187,7.0
+physics,1,d1,pairwise,RS,57,ok,-4.20340416550001,0.99998685347496,4,-45.6823903508772,7.0
+physics,1,d1,pairwise,SE1,57,ok,-1.9358211916049168,0.9735551977430236,4,-10.138977521929823,7.0
+physics,1,d1,pairwise,SE2,57,ok,-0.7952996163447734,0.7867803816606431,4,-4.922213998538012,7.0
+physics,1,d1,pairwise,SE3,57,ok,1.8745190452950111,0.03042945976846549,4,5.7446098318713466,7.0
+physics,1,d1,pairwise,SE4,57,ok,-1.3897224622404296,0.9176934144135448,4,-18.92284265350877,7.0
+physics,1,d1,pairwise,SI,57,ok,-6.501161530602617,0.9999999999601489,4,-58.77026133040935,7.0
+physics,1,d1,pairwise,SK,57,ok,-4.000562682312371,0.999968403977383,4,-40.41331414473684,7.0
+physics,1,d1,pairwise,all,54,ok,-7.142603657140395,0.9999999999995421,7,-42.94239617338853,7.0
+physics,1,d1,pairwise,excluding_italy,57,ok,-4.02464634857638,0.9999714694998802,4,-23.84488077893709,7.0
+physics,1,d7,pairwise,AT,57,ok,-5.6548015537392216,0.9999999921986782,4,-51.642103435672524,7.0
+physics,1,d7,pairwise,BE,57,ok,1.2842256584986842,0.0995315049279622,4,10.920529970760233,7.0
+physics,1,d7,pairwise,BG,57,ok,-5.810606535747532,0.9999999968876547,4,-62.61466282894738,7.0
+physics,1,d7,pairwise,CH,57,ok,-11.025033385555203,1.0,4,-86.64948464912281,7.0
+physics,1,d7,pairwise,CZ,57,ok,-0.33400397223094036,0.6308117193847429,4,-3.8526160453216365,7.0
+physics,1,d7,pairwise,DE_LU,57,ok,1.6127699649110003,0.05339724685843192,4,15.751013340643272,7.0
+physics,1,d7,pairwise,DK1,57,ok,3.0543288784355433,0.0011278232800292197,4,29.45003299013158,7.0
+physics,1,d7,pairwise,DK2,57,ok,0.6559426060932292,0.2559305266184269,4,9.476840261878655,7.0
+physics,1,d7,pairwise,EE,57,ok,5.14257675245879,1.3549783616875543e-07,4,33.99285544590643,7.0
+physics,1,d7,pairwise,ES,57,ok,0.01922398959762585,0.4923312101030212,4,0.09874908625731213,7.0
+physics,1,d7,pairwise,FI,57,ok,3.169253734415279,0.0007641545538379965,4,20.740699926900586,7.0
+physics,1,d7,pairwise,FR,57,ok,1.6776054059228347,0.04671207838783943,4,12.238213633040935,7.0
+physics,1,d7,pairwise,GR,57,ok,-3.2208225473052257,0.9993608836664871,4,-16.664514802631583,7.0
+physics,1,d7,pairwise,HU,57,ok,-5.395465017867894,0.9999999658268458,4,-51.07352887426901,7.0
+physics,1,d7,pairwise,IT-CNORTH,57,ok,-7.273993291045071,0.9999999999998255,4,-144.4171335891813,7.0
+physics,1,d7,pairwise,IT-CSOUTH,57,ok,-5.561130146700456,0.9999999865983394,4,-99.6337966008772,7.0
+physics,1,d7,pairwise,IT-Calabria,57,ok,-8.4749228219575,1.0,4,-113.53701663011697,7.0
+physics,1,d7,pairwise,IT-NORTH,57,ok,-8.902682377711269,1.0,4,-148.76083972953217,7.0
+physics,1,d7,pairwise,IT-SOUTH,57,ok,-7.433906067894655,0.9999999999999473,4,-155.32622532894734,7.0
+physics,1,d7,pairwise,IT-Sardinia,53,ok,-8.58531041160661,1.0,8,-76.83974547955975,7.0
+physics,1,d7,pairwise,IT-Sicily,57,ok,-5.234672059226003,0.9999999173609765,4,-77.97699652777777,7.0
+physics,1,d7,pairwise,LT,57,ok,2.1021437061154478,0.01777034464482455,4,30.78462445175439,7.0
+physics,1,d7,pairwise,LV,57,ok,1.0731662493585166,0.14159826540290618,4,15.21906706871345,7.0
+physics,1,d7,pairwise,NL,57,ok,1.0377928739801427,0.14968324756667778,4,8.892535635964915,7.0
+physics,1,d7,pairwise,NO1,57,ok,-2.1524881036000596,0.9843205343734434,4,-11.616796418128654,7.0
+physics,1,d7,pairwise,NO2,57,ok,0.3727338038242975,0.354673287370327,4,3.7842397660818725,7.0
+physics,1,d7,pairwise,NO3,57,ok,-0.013806801560992843,0.5055079419047901,4,-0.037118969298245576,7.0
+physics,1,d7,pairwise,NO4,57,ok,-5.125279001770846,0.9999998514512666,4,-24.188891630116956,7.0
+physics,1,d7,pairwise,NO5,57,ok,-0.9339875888087867,0.8248448524241185,4,-4.074439875730996,7.0
+physics,1,d7,pairwise,PL,57,ok,0.12824017407189847,0.44897945410548223,4,0.8307839912280708,7.0
+physics,1,d7,pairwise,PT,57,ok,-2.107441229795039,0.9824603245371143,4,-13.181804641812862,7.0
+physics,1,d7,pairwise,RO,57,ok,-5.039672577801692,0.999999766835521,4,-43.18000548245614,7.0
+physics,1,d7,pairwise,RS,57,ok,-3.3686724795352356,0.9996223443872565,4,-34.081542397660826,7.0
+physics,1,d7,pairwise,SE1,57,ok,-0.9742328124338694,0.8350295219746262,4,-5.174905884502924,7.0
+physics,1,d7,pairwise,SE2,57,ok,0.32106415953636935,0.37408088507243387,4,1.947908442982456,7.0
+physics,1,d7,pairwise,SE3,57,ok,4.296598741253461,8.671936543304602e-06,4,24.653950109649124,7.0
+physics,1,d7,pairwise,SE4,57,ok,0.7339711160693252,0.23148317104620167,4,10.721846673976609,7.0
+physics,1,d7,pairwise,SI,57,ok,-6.454359536871921,0.9999999999456612,4,-52.315648757309944,7.0
+physics,1,d7,pairwise,SK,57,ok,-3.441095254986451,0.9997103177332355,4,-31.890391995614035,7.0
+physics,1,d7,pairwise,all,53,ok,-6.451545007870875,0.9999999999446422,8,-28.504218770989553,7.0
+physics,1,d7,pairwise,excluding_italy,57,ok,-1.510717937555326,0.9345698348635147,4,-8.210455184147706,7.0
+physics,1,epf,pairwise,AT,57,ok,-5.837382690334228,0.9999999973486398,4,-57.942065058479535,7.0
+physics,1,epf,pairwise,BE,57,ok,-0.08871516680076241,0.5353458606498641,4,-0.7471747076023398,7.0
+physics,1,epf,pairwise,BG,57,ok,-7.439721109956635,0.9999999999999496,4,-73.40544499269006,7.0
+physics,1,epf,pairwise,CH,57,ok,-10.34521368984438,1.0,4,-91.70611842105262,7.0
+physics,1,epf,pairwise,CZ,57,ok,-0.9473923347608123,0.8282805521945871,4,-11.655805007309942,7.0
+physics,1,epf,pairwise,DE_LU,57,ok,0.49065054250777296,0.31183681612810243,4,5.123100328947371,7.0
+physics,1,epf,pairwise,DK1,57,ok,1.7338017164672583,0.04147663550378143,4,18.811750783991226,7.0
+physics,1,epf,pairwise,DK2,57,ok,-0.11408228990473948,0.5454137194161878,4,-1.8368383495979494,7.0
+physics,1,epf,pairwise,EE,57,ok,4.627539278260177,1.85018034095941e-06,4,28.79404148391813,7.0
+physics,1,epf,pairwise,ES,57,ok,-1.9744687554861557,0.9758357666159696,4,-8.388825840643273,7.0
+physics,1,epf,pairwise,FI,57,ok,2.308515863821709,0.010485230766569707,4,21.092576754385966,7.0
+physics,1,epf,pairwise,FR,57,ok,-0.4198164145455012,0.6626902136530545,4,-2.6160462353801157,7.0
+physics,1,epf,pairwise,GR,57,ok,-5.672037347725648,0.9999999929445399,4,-26.16937408625731,7.0
+physics,1,epf,pairwise,HU,57,ok,-6.344805234392709,0.9999999998886465,4,-59.912441520467844,7.0
+physics,1,epf,pairwise,IT-CNORTH,57,ok,-7.444206555312535,0.9999999999999513,4,-149.07513614766083,7.0
+physics,1,epf,pairwise,IT-CSOUTH,57,ok,-5.666171964767565,0.999999992698851,4,-102.83282072368421,7.0
+physics,1,epf,pairwise,IT-Calabria,57,ok,-8.652938279259834,1.0,4,-122.17344389619885,7.0
+physics,1,epf,pairwise,IT-NORTH,57,ok,-9.214178005017521,1.0,4,-153.31478527046784,7.0
+physics,1,epf,pairwise,IT-SOUTH,57,ok,-8.023670623686666,0.9999999999999994,4,-163.45090003654974,7.0
+physics,1,epf,pairwise,IT-Sardinia,53,ok,-15.4868560702904,1.0,8,-89.8176149764151,7.0
+physics,1,epf,pairwise,IT-Sicily,57,ok,-5.768576798075361,0.999999996002811,4,-90.28429550438597,7.0
+physics,1,epf,pairwise,LT,57,ok,1.4814210345743712,0.0692472064708309,4,19.87200018274854,7.0
+physics,1,epf,pairwise,LV,57,ok,0.33365022701350705,0.3693217561399214,4,4.5932373903508745,7.0
+physics,1,epf,pairwise,NL,57,ok,-0.11544346256400757,0.5459531844597174,4,-0.9479120979532147,7.0
+physics,1,epf,pairwise,NO1,57,ok,-2.676926973146679,0.9962849586216289,4,-15.724548611111112,7.0
+physics,1,epf,pairwise,NO2,57,ok,-0.35378867584332147,0.6382513696429646,4,-4.1180226608187125,7.0
+physics,1,epf,pairwise,NO3,57,ok,-0.014999728761231852,0.5059838016121221,4,-0.04408351608187151,7.0
+physics,1,epf,pairwise,NO4,57,ok,-5.08077206833828,0.9999998120480317,4,-24.67734375,7.0
+physics,1,epf,pairwise,NO5,57,ok,-1.7941314870760372,0.9636039078043952,4,-9.356168676900586,7.0
+physics,1,epf,pairwise,PL,57,ok,-0.0058801798815877075,0.5023458388526345,4,-0.03651315789473704,7.0
+physics,1,epf,pairwise,PT,57,ok,-4.142431001957451,0.999982817811515,4,-22.40905975877193,7.0
+physics,1,epf,pairwise,RO,57,ok,-6.1079463574664175,0.9999999994953938,4,-52.58787828947368,7.0
+physics,1,epf,pairwise,RS,57,ok,-4.728790659141836,0.9999988706944387,4,-45.882463450292406,7.0
+physics,1,epf,pairwise,SE1,57,ok,-1.3524961160375317,0.9118916697840406,4,-7.357877375730994,7.0
+physics,1,epf,pairwise,SE2,57,ok,-0.20592013810816515,0.5815733526957871,4,-1.3622158260233916,7.0
+physics,1,epf,pairwise,SE3,57,ok,3.809228062482843,6.970066595340081e-05,4,15.785421235380115,7.0
+physics,1,epf,pairwise,SE4,57,ok,-0.1017376305084943,0.540517533863234,4,-1.4360060307017533,7.0
+physics,1,epf,pairwise,SI,57,ok,-6.257767781368966,0.9999999998047366,4,-58.521346856725145,7.0
+physics,1,epf,pairwise,SK,57,ok,-3.662388146551224,0.9998750625659868,4,-38.61745888157895,7.0
+physics,1,epf,pairwise,all,53,ok,-7.318927204058877,0.999999999999875,8,-36.632453631128044,7.0
+physics,1,epf,pairwise,excluding_italy,57,ok,-2.701400260968665,0.9965475906711372,4,-15.730840781244286,7.0
+stats_overlay,1,d1,pairwise,AT,14,insufficient data,,,47,,
+stats_overlay,1,d1,pairwise,BE,13,insufficient data,,,48,,
+stats_overlay,1,d1,pairwise,BG,13,insufficient data,,,48,,
+stats_overlay,1,d1,pairwise,CH,13,insufficient data,,,48,,
+stats_overlay,1,d1,pairwise,CZ,13,insufficient data,,,48,,
+stats_overlay,1,d1,pairwise,DE_LU,14,insufficient data,,,47,,
+stats_overlay,1,d1,pairwise,DK1,13,insufficient data,,,48,,
+stats_overlay,1,d1,pairwise,DK2,13,insufficient data,,,48,,
+stats_overlay,1,d1,pairwise,EE,13,insufficient data,,,48,,
+stats_overlay,1,d1,pairwise,ES,13,insufficient data,,,48,,
+stats_overlay,1,d1,pairwise,FI,13,insufficient data,,,48,,
+stats_overlay,1,d1,pairwise,FR,10,insufficient data,,,51,,
+stats_overlay,1,d1,pairwise,GR,10,insufficient data,,,51,,
+stats_overlay,1,d1,pairwise,HU,10,insufficient data,,,51,,
+stats_overlay,1,d1,pairwise,IT-CNORTH,13,insufficient data,,,48,,
+stats_overlay,1,d1,pairwise,IT-CSOUTH,13,insufficient data,,,48,,
+stats_overlay,1,d1,pairwise,IT-Calabria,13,insufficient data,,,48,,
+stats_overlay,1,d1,pairwise,IT-NORTH,13,insufficient data,,,48,,
+stats_overlay,1,d1,pairwise,IT-SOUTH,13,insufficient data,,,48,,
+stats_overlay,1,d1,pairwise,IT-Sardinia,10,insufficient data,,,51,,
+stats_overlay,1,d1,pairwise,IT-Sicily,13,insufficient data,,,48,,
+stats_overlay,1,d1,pairwise,LT,13,insufficient data,,,48,,
+stats_overlay,1,d1,pairwise,LV,13,insufficient data,,,48,,
+stats_overlay,1,d1,pairwise,NL,10,insufficient data,,,51,,
+stats_overlay,1,d1,pairwise,NO1,13,insufficient data,,,48,,
+stats_overlay,1,d1,pairwise,NO2,13,insufficient data,,,48,,
+stats_overlay,1,d1,pairwise,NO3,13,insufficient data,,,48,,
+stats_overlay,1,d1,pairwise,NO4,13,insufficient data,,,48,,
+stats_overlay,1,d1,pairwise,NO5,13,insufficient data,,,48,,
+stats_overlay,1,d1,pairwise,PL,13,insufficient data,,,48,,
+stats_overlay,1,d1,pairwise,PT,13,insufficient data,,,48,,
+stats_overlay,1,d1,pairwise,RO,10,insufficient data,,,51,,
+stats_overlay,1,d1,pairwise,RS,13,insufficient data,,,48,,
+stats_overlay,1,d1,pairwise,SE1,13,insufficient data,,,48,,
+stats_overlay,1,d1,pairwise,SE2,13,insufficient data,,,48,,
+stats_overlay,1,d1,pairwise,SE3,13,insufficient data,,,48,,
+stats_overlay,1,d1,pairwise,SE4,13,insufficient data,,,48,,
+stats_overlay,1,d1,pairwise,SI,13,insufficient data,,,48,,
+stats_overlay,1,d1,pairwise,SK,10,insufficient data,,,51,,
+stats_overlay,1,d1,pairwise,all,7,insufficient data,,,54,,
+stats_overlay,1,d1,pairwise,excluding_italy,10,insufficient data,,,51,,
+stats_overlay,1,d7,pairwise,AT,14,insufficient data,,,47,,
+stats_overlay,1,d7,pairwise,BE,13,insufficient data,,,48,,
+stats_overlay,1,d7,pairwise,BG,13,insufficient data,,,48,,
+stats_overlay,1,d7,pairwise,CH,13,insufficient data,,,48,,
+stats_overlay,1,d7,pairwise,CZ,13,insufficient data,,,48,,
+stats_overlay,1,d7,pairwise,DE_LU,14,insufficient data,,,47,,
+stats_overlay,1,d7,pairwise,DK1,13,insufficient data,,,48,,
+stats_overlay,1,d7,pairwise,DK2,13,insufficient data,,,48,,
+stats_overlay,1,d7,pairwise,EE,13,insufficient data,,,48,,
+stats_overlay,1,d7,pairwise,ES,13,insufficient data,,,48,,
+stats_overlay,1,d7,pairwise,FI,13,insufficient data,,,48,,
+stats_overlay,1,d7,pairwise,FR,10,insufficient data,,,51,,
+stats_overlay,1,d7,pairwise,GR,10,insufficient data,,,51,,
+stats_overlay,1,d7,pairwise,HU,10,insufficient data,,,51,,
+stats_overlay,1,d7,pairwise,IT-CNORTH,13,insufficient data,,,48,,
+stats_overlay,1,d7,pairwise,IT-CSOUTH,13,insufficient data,,,48,,
+stats_overlay,1,d7,pairwise,IT-Calabria,13,insufficient data,,,48,,
+stats_overlay,1,d7,pairwise,IT-NORTH,13,insufficient data,,,48,,
+stats_overlay,1,d7,pairwise,IT-SOUTH,13,insufficient data,,,48,,
+stats_overlay,1,d7,pairwise,IT-Sardinia,10,insufficient data,,,51,,
+stats_overlay,1,d7,pairwise,IT-Sicily,13,insufficient data,,,48,,
+stats_overlay,1,d7,pairwise,LT,13,insufficient data,,,48,,
+stats_overlay,1,d7,pairwise,LV,13,insufficient data,,,48,,
+stats_overlay,1,d7,pairwise,NL,10,insufficient data,,,51,,
+stats_overlay,1,d7,pairwise,NO1,13,insufficient data,,,48,,
+stats_overlay,1,d7,pairwise,NO2,13,insufficient data,,,48,,
+stats_overlay,1,d7,pairwise,NO3,13,insufficient data,,,48,,
+stats_overlay,1,d7,pairwise,NO4,13,insufficient data,,,48,,
+stats_overlay,1,d7,pairwise,NO5,13,insufficient data,,,48,,
+stats_overlay,1,d7,pairwise,PL,13,insufficient data,,,48,,
+stats_overlay,1,d7,pairwise,PT,13,insufficient data,,,48,,
+stats_overlay,1,d7,pairwise,RO,10,insufficient data,,,51,,
+stats_overlay,1,d7,pairwise,RS,13,insufficient data,,,48,,
+stats_overlay,1,d7,pairwise,SE1,13,insufficient data,,,48,,
+stats_overlay,1,d7,pairwise,SE2,13,insufficient data,,,48,,
+stats_overlay,1,d7,pairwise,SE3,13,insufficient data,,,48,,
+stats_overlay,1,d7,pairwise,SE4,13,insufficient data,,,48,,
+stats_overlay,1,d7,pairwise,SI,13,insufficient data,,,48,,
+stats_overlay,1,d7,pairwise,SK,10,insufficient data,,,51,,
+stats_overlay,1,d7,pairwise,all,7,insufficient data,,,54,,
+stats_overlay,1,d7,pairwise,excluding_italy,10,insufficient data,,,51,,
+stats_overlay,1,epf,pairwise,AT,14,insufficient data,,,47,,
+stats_overlay,1,epf,pairwise,BE,13,insufficient data,,,48,,
+stats_overlay,1,epf,pairwise,BG,13,insufficient data,,,48,,
+stats_overlay,1,epf,pairwise,CH,13,insufficient data,,,48,,
+stats_overlay,1,epf,pairwise,CZ,13,insufficient data,,,48,,
+stats_overlay,1,epf,pairwise,DE_LU,14,insufficient data,,,47,,
+stats_overlay,1,epf,pairwise,DK1,13,insufficient data,,,48,,
+stats_overlay,1,epf,pairwise,DK2,13,insufficient data,,,48,,
+stats_overlay,1,epf,pairwise,EE,13,insufficient data,,,48,,
+stats_overlay,1,epf,pairwise,ES,13,insufficient data,,,48,,
+stats_overlay,1,epf,pairwise,FI,13,insufficient data,,,48,,
+stats_overlay,1,epf,pairwise,FR,10,insufficient data,,,51,,
+stats_overlay,1,epf,pairwise,GR,10,insufficient data,,,51,,
+stats_overlay,1,epf,pairwise,HU,10,insufficient data,,,51,,
+stats_overlay,1,epf,pairwise,IT-CNORTH,13,insufficient data,,,48,,
+stats_overlay,1,epf,pairwise,IT-CSOUTH,13,insufficient data,,,48,,
+stats_overlay,1,epf,pairwise,IT-Calabria,13,insufficient data,,,48,,
+stats_overlay,1,epf,pairwise,IT-NORTH,13,insufficient data,,,48,,
+stats_overlay,1,epf,pairwise,IT-SOUTH,13,insufficient data,,,48,,
+stats_overlay,1,epf,pairwise,IT-Sardinia,10,insufficient data,,,51,,
+stats_overlay,1,epf,pairwise,IT-Sicily,13,insufficient data,,,48,,
+stats_overlay,1,epf,pairwise,LT,13,insufficient data,,,48,,
+stats_overlay,1,epf,pairwise,LV,13,insufficient data,,,48,,
+stats_overlay,1,epf,pairwise,NL,10,insufficient data,,,51,,
+stats_overlay,1,epf,pairwise,NO1,13,insufficient data,,,48,,
+stats_overlay,1,epf,pairwise,NO2,13,insufficient data,,,48,,
+stats_overlay,1,epf,pairwise,NO3,13,insufficient data,,,48,,
+stats_overlay,1,epf,pairwise,NO4,13,insufficient data,,,48,,
+stats_overlay,1,epf,pairwise,NO5,13,insufficient data,,,48,,
+stats_overlay,1,epf,pairwise,PL,13,insufficient data,,,48,,
+stats_overlay,1,epf,pairwise,PT,13,insufficient data,,,48,,
+stats_overlay,1,epf,pairwise,RO,10,insufficient data,,,51,,
+stats_overlay,1,epf,pairwise,RS,13,insufficient data,,,48,,
+stats_overlay,1,epf,pairwise,SE1,13,insufficient data,,,48,,
+stats_overlay,1,epf,pairwise,SE2,13,insufficient data,,,48,,
+stats_overlay,1,epf,pairwise,SE3,13,insufficient data,,,48,,
+stats_overlay,1,epf,pairwise,SE4,13,insufficient data,,,48,,
+stats_overlay,1,epf,pairwise,SI,13,insufficient data,,,48,,
+stats_overlay,1,epf,pairwise,SK,10,insufficient data,,,51,,
+stats_overlay,1,epf,pairwise,all,7,insufficient data,,,54,,
+stats_overlay,1,epf,pairwise,excluding_italy,10,insufficient data,,,51,,
+gbm_overlay,2,d7,pairwise,AT,20,insufficient data,,,41,,
+gbm_overlay,2,d7,pairwise,BE,20,insufficient data,,,41,,
+gbm_overlay,2,d7,pairwise,BG,20,insufficient data,,,41,,
+gbm_overlay,2,d7,pairwise,CH,20,insufficient data,,,41,,
+gbm_overlay,2,d7,pairwise,CZ,20,insufficient data,,,41,,
+gbm_overlay,2,d7,pairwise,DE_LU,20,insufficient data,,,41,,
+gbm_overlay,2,d7,pairwise,DK1,20,insufficient data,,,41,,
+gbm_overlay,2,d7,pairwise,DK2,20,insufficient data,,,41,,
+gbm_overlay,2,d7,pairwise,EE,20,insufficient data,,,41,,
+gbm_overlay,2,d7,pairwise,ES,20,insufficient data,,,41,,
+gbm_overlay,2,d7,pairwise,FI,20,insufficient data,,,41,,
+gbm_overlay,2,d7,pairwise,FR,20,insufficient data,,,41,,
+gbm_overlay,2,d7,pairwise,GR,20,insufficient data,,,41,,
+gbm_overlay,2,d7,pairwise,HU,20,insufficient data,,,41,,
+gbm_overlay,2,d7,pairwise,IT-CNORTH,20,insufficient data,,,41,,
+gbm_overlay,2,d7,pairwise,IT-CSOUTH,20,insufficient data,,,41,,
+gbm_overlay,2,d7,pairwise,IT-Calabria,20,insufficient data,,,41,,
+gbm_overlay,2,d7,pairwise,IT-NORTH,20,insufficient data,,,41,,
+gbm_overlay,2,d7,pairwise,IT-SOUTH,20,insufficient data,,,41,,
+gbm_overlay,2,d7,pairwise,IT-Sardinia,16,insufficient data,,,45,,
+gbm_overlay,2,d7,pairwise,IT-Sicily,20,insufficient data,,,41,,
+gbm_overlay,2,d7,pairwise,LT,20,insufficient data,,,41,,
+gbm_overlay,2,d7,pairwise,LV,20,insufficient data,,,41,,
+gbm_overlay,2,d7,pairwise,NL,20,insufficient data,,,41,,
+gbm_overlay,2,d7,pairwise,NO1,20,insufficient data,,,41,,
+gbm_overlay,2,d7,pairwise,NO2,20,insufficient data,,,41,,
+gbm_overlay,2,d7,pairwise,NO3,20,insufficient data,,,41,,
+gbm_overlay,2,d7,pairwise,NO4,20,insufficient data,,,41,,
+gbm_overlay,2,d7,pairwise,NO5,20,insufficient data,,,41,,
+gbm_overlay,2,d7,pairwise,PL,20,insufficient data,,,41,,
+gbm_overlay,2,d7,pairwise,PT,20,insufficient data,,,41,,
+gbm_overlay,2,d7,pairwise,RO,20,insufficient data,,,41,,
+gbm_overlay,2,d7,pairwise,RS,20,insufficient data,,,41,,
+gbm_overlay,2,d7,pairwise,SE1,20,insufficient data,,,41,,
+gbm_overlay,2,d7,pairwise,SE2,20,insufficient data,,,41,,
+gbm_overlay,2,d7,pairwise,SE3,20,insufficient data,,,41,,
+gbm_overlay,2,d7,pairwise,SE4,20,insufficient data,,,41,,
+gbm_overlay,2,d7,pairwise,SI,20,insufficient data,,,41,,
+gbm_overlay,2,d7,pairwise,SK,20,insufficient data,,,41,,
+gbm_overlay,2,d7,pairwise,all,16,insufficient data,,,45,,
+gbm_overlay,2,d7,pairwise,excluding_italy,20,insufficient data,,,41,,
+physics,2,d7,pairwise,AT,57,ok,-11.516408196410204,1.0,4,-128.07461074561405,7.0
+physics,2,d7,pairwise,BE,57,ok,1.1110195144840105,0.13327997480914633,4,12.128097587719301,7.0
+physics,2,d7,pairwise,BG,57,ok,-3.986578921468098,0.9999664835814486,4,-33.36577028508772,7.0
+physics,2,d7,pairwise,CH,57,ok,-13.264065294614877,1.0,4,-139.6011951754386,7.0
+physics,2,d7,pairwise,CZ,57,ok,-2.028832575515601,0.9787623269423827,4,-27.71236385233918,7.0
+physics,2,d7,pairwise,DE_LU,57,ok,-0.10298639191247097,0.5410131143985848,4,-1.1416511330409362,7.0
+physics,2,d7,pairwise,DK1,57,ok,0.9537749778237169,0.17009877893966346,4,11.66152236988304,7.0
+physics,2,d7,pairwise,DK2,57,ok,-0.08838639643950748,0.5352152134762048,4,-1.3119810131578982,7.0
+physics,2,d7,pairwise,EE,57,ok,3.6170578036049905,0.0001489853897975377,4,28.577700109649125,7.0
+physics,2,d7,pairwise,ES,57,ok,0.13480240528432003,0.44638405202817844,4,0.5051635599415218,7.0
+physics,2,d7,pairwise,FI,57,ok,5.643626004171201,8.325278187710728e-09,4,28.88497076023392,7.0
+physics,2,d7,pairwise,FR,57,ok,-2.5437075593726077,0.9945158564720378,4,-21.290554641812864,7.0
+physics,2,d7,pairwise,GR,57,ok,-2.945787730702123,0.9983893330803277,4,-13.608622989766081,7.0
+physics,2,d7,pairwise,HU,57,ok,-6.287060571998105,0.9999999998382334,4,-67.62275219298245,7.0
+physics,2,d7,pairwise,IT-CNORTH,57,ok,-7.481613502445984,0.9999999999999633,4,-136.35313870614036,7.0
+physics,2,d7,pairwise,IT-CSOUTH,57,ok,-7.108638419047166,0.999999999999414,4,-128.5599296418129,7.0
+physics,2,d7,pairwise,IT-Calabria,57,ok,-5.761496069039071,0.9999999958314197,4,-107.30682657163744,7.0
+physics,2,d7,pairwise,IT-NORTH,57,ok,-7.829108867087305,0.9999999999999976,4,-147.63048519736842,7.0
+physics,2,d7,pairwise,IT-SOUTH,57,ok,-6.315042952724809,0.9999999998649568,4,-129.6810773026316,7.0
+physics,2,d7,pairwise,IT-Sardinia,53,ok,-5.273073601390397,0.9999999329211358,8,-82.74468848270439,7.0
+physics,2,d7,pairwise,IT-Sicily,57,ok,-4.50116699137436,0.9999966209308672,4,-63.5566456505848,7.0
+physics,2,d7,pairwise,LT,57,ok,1.2104916458568784,0.11304514724928688,4,19.8626471125731,7.0
+physics,2,d7,pairwise,LV,57,ok,0.7539479754918444,0.22544023065131066,4,12.804067068713449,7.0
+physics,2,d7,pairwise,NL,57,ok,-0.7037698131687916,0.7592119321916777,4,-6.985649671052631,7.0
+physics,2,d7,pairwise,NO1,57,ok,-1.5319698501253594,0.9372350625119515,4,-51.719817251462,7.0
+physics,2,d7,pairwise,NO2,57,ok,2.7014298367628715,0.003452102297047099,4,18.535244883040935,7.0
+physics,2,d7,pairwise,NO3,57,ok,-0.416212887798295,0.661372885032232,4,-1.603622989766081,7.0
+physics,2,d7,pairwise,NO4,57,ok,-4.637228891337809,0.9999982344434463,4,-24.51499908625731,7.0
+physics,2,d7,pairwise,NO5,57,ok,1.0974524311879044,0.13622183211970224,4,7.153400036549708,7.0
+physics,2,d7,pairwise,PL,57,ok,-1.8131054331786902,0.9650922193223083,4,-15.225109649122807,7.0
+physics,2,d7,pairwise,PT,57,ok,0.4450735398596548,0.32813330500569493,4,1.5807282529239777,7.0
+physics,2,d7,pairwise,RO,57,ok,-4.925576242495509,0.9999995794394728,4,-33.901087353801174,7.0
+physics,2,d7,pairwise,RS,57,ok,-2.5992196708535196,0.9953282020311839,4,-26.83448830409357,7.0
+physics,2,d7,pairwise,SE1,57,ok,3.0110000982343346,0.0013019438418169435,4,8.936841191520468,7.0
+physics,2,d7,pairwise,SE2,57,ok,3.9599646581587993,3.748042812002434e-05,4,12.476322185672513,7.0
+physics,2,d7,pairwise,SE3,57,ok,3.306768491160548,0.00047189428320695284,4,23.693855080409357,7.0
+physics,2,d7,pairwise,SE4,57,ok,-0.005599662594855703,0.5022339304904612,4,-0.084313779239765,7.0
+physics,2,d7,pairwise,SI,57,ok,-8.577679947074177,1.0,4,-118.63074378654971,7.0
+physics,2,d7,pairwise,SK,57,ok,-5.140670949140648,0.9999998631204404,4,-55.027685489766085,7.0
+physics,2,d7,pairwise,all,53,ok,-8.073514882868745,0.9999999999999997,8,-35.96302390359418,7.0
+physics,2,d7,pairwise,excluding_italy,57,ok,-2.8600324009059284,0.9978820113657085,4,-18.170514349735015,7.0
+stats_overlay,2,d7,pairwise,AT,14,insufficient data,,,47,,
+stats_overlay,2,d7,pairwise,BE,13,insufficient data,,,48,,
+stats_overlay,2,d7,pairwise,BG,13,insufficient data,,,48,,
+stats_overlay,2,d7,pairwise,CH,13,insufficient data,,,48,,
+stats_overlay,2,d7,pairwise,CZ,13,insufficient data,,,48,,
+stats_overlay,2,d7,pairwise,DE_LU,14,insufficient data,,,47,,
+stats_overlay,2,d7,pairwise,DK1,13,insufficient data,,,48,,
+stats_overlay,2,d7,pairwise,DK2,13,insufficient data,,,48,,
+stats_overlay,2,d7,pairwise,EE,13,insufficient data,,,48,,
+stats_overlay,2,d7,pairwise,ES,13,insufficient data,,,48,,
+stats_overlay,2,d7,pairwise,FI,13,insufficient data,,,48,,
+stats_overlay,2,d7,pairwise,FR,10,insufficient data,,,51,,
+stats_overlay,2,d7,pairwise,GR,10,insufficient data,,,51,,
+stats_overlay,2,d7,pairwise,HU,10,insufficient data,,,51,,
+stats_overlay,2,d7,pairwise,IT-CNORTH,13,insufficient data,,,48,,
+stats_overlay,2,d7,pairwise,IT-CSOUTH,13,insufficient data,,,48,,
+stats_overlay,2,d7,pairwise,IT-Calabria,13,insufficient data,,,48,,
+stats_overlay,2,d7,pairwise,IT-NORTH,13,insufficient data,,,48,,
+stats_overlay,2,d7,pairwise,IT-SOUTH,13,insufficient data,,,48,,
+stats_overlay,2,d7,pairwise,IT-Sardinia,10,insufficient data,,,51,,
+stats_overlay,2,d7,pairwise,IT-Sicily,13,insufficient data,,,48,,
+stats_overlay,2,d7,pairwise,LT,13,insufficient data,,,48,,
+stats_overlay,2,d7,pairwise,LV,13,insufficient data,,,48,,
+stats_overlay,2,d7,pairwise,NL,10,insufficient data,,,51,,
+stats_overlay,2,d7,pairwise,NO1,13,insufficient data,,,48,,
+stats_overlay,2,d7,pairwise,NO2,13,insufficient data,,,48,,
+stats_overlay,2,d7,pairwise,NO3,13,insufficient data,,,48,,
+stats_overlay,2,d7,pairwise,NO4,13,insufficient data,,,48,,
+stats_overlay,2,d7,pairwise,NO5,13,insufficient data,,,48,,
+stats_overlay,2,d7,pairwise,PL,13,insufficient data,,,48,,
+stats_overlay,2,d7,pairwise,PT,13,insufficient data,,,48,,
+stats_overlay,2,d7,pairwise,RO,10,insufficient data,,,51,,
+stats_overlay,2,d7,pairwise,RS,13,insufficient data,,,48,,
+stats_overlay,2,d7,pairwise,SE1,13,insufficient data,,,48,,
+stats_overlay,2,d7,pairwise,SE2,13,insufficient data,,,48,,
+stats_overlay,2,d7,pairwise,SE3,13,insufficient data,,,48,,
+stats_overlay,2,d7,pairwise,SE4,13,insufficient data,,,48,,
+stats_overlay,2,d7,pairwise,SI,13,insufficient data,,,48,,
+stats_overlay,2,d7,pairwise,SK,10,insufficient data,,,51,,
+stats_overlay,2,d7,pairwise,all,7,insufficient data,,,54,,
+stats_overlay,2,d7,pairwise,excluding_italy,10,insufficient data,,,51,,
+gbm_overlay,3,d7,pairwise,AT,20,insufficient data,,,41,,
+gbm_overlay,3,d7,pairwise,BE,20,insufficient data,,,41,,
+gbm_overlay,3,d7,pairwise,BG,20,insufficient data,,,41,,
+gbm_overlay,3,d7,pairwise,CH,20,insufficient data,,,41,,
+gbm_overlay,3,d7,pairwise,CZ,20,insufficient data,,,41,,
+gbm_overlay,3,d7,pairwise,DE_LU,20,insufficient data,,,41,,
+gbm_overlay,3,d7,pairwise,DK1,20,insufficient data,,,41,,
+gbm_overlay,3,d7,pairwise,DK2,20,insufficient data,,,41,,
+gbm_overlay,3,d7,pairwise,EE,20,insufficient data,,,41,,
+gbm_overlay,3,d7,pairwise,ES,20,insufficient data,,,41,,
+gbm_overlay,3,d7,pairwise,FI,20,insufficient data,,,41,,
+gbm_overlay,3,d7,pairwise,FR,20,insufficient data,,,41,,
+gbm_overlay,3,d7,pairwise,GR,20,insufficient data,,,41,,
+gbm_overlay,3,d7,pairwise,HU,20,insufficient data,,,41,,
+gbm_overlay,3,d7,pairwise,IT-CNORTH,20,insufficient data,,,41,,
+gbm_overlay,3,d7,pairwise,IT-CSOUTH,20,insufficient data,,,41,,
+gbm_overlay,3,d7,pairwise,IT-Calabria,20,insufficient data,,,41,,
+gbm_overlay,3,d7,pairwise,IT-NORTH,20,insufficient data,,,41,,
+gbm_overlay,3,d7,pairwise,IT-SOUTH,20,insufficient data,,,41,,
+gbm_overlay,3,d7,pairwise,IT-Sardinia,16,insufficient data,,,45,,
+gbm_overlay,3,d7,pairwise,IT-Sicily,20,insufficient data,,,41,,
+gbm_overlay,3,d7,pairwise,LT,20,insufficient data,,,41,,
+gbm_overlay,3,d7,pairwise,LV,20,insufficient data,,,41,,
+gbm_overlay,3,d7,pairwise,NL,20,insufficient data,,,41,,
+gbm_overlay,3,d7,pairwise,NO1,20,insufficient data,,,41,,
+gbm_overlay,3,d7,pairwise,NO2,20,insufficient data,,,41,,
+gbm_overlay,3,d7,pairwise,NO3,20,insufficient data,,,41,,
+gbm_overlay,3,d7,pairwise,NO4,20,insufficient data,,,41,,
+gbm_overlay,3,d7,pairwise,NO5,20,insufficient data,,,41,,
+gbm_overlay,3,d7,pairwise,PL,20,insufficient data,,,41,,
+gbm_overlay,3,d7,pairwise,PT,20,insufficient data,,,41,,
+gbm_overlay,3,d7,pairwise,RO,20,insufficient data,,,41,,
+gbm_overlay,3,d7,pairwise,RS,20,insufficient data,,,41,,
+gbm_overlay,3,d7,pairwise,SE1,20,insufficient data,,,41,,
+gbm_overlay,3,d7,pairwise,SE2,20,insufficient data,,,41,,
+gbm_overlay,3,d7,pairwise,SE3,20,insufficient data,,,41,,
+gbm_overlay,3,d7,pairwise,SE4,20,insufficient data,,,41,,
+gbm_overlay,3,d7,pairwise,SI,20,insufficient data,,,41,,
+gbm_overlay,3,d7,pairwise,SK,20,insufficient data,,,41,,
+gbm_overlay,3,d7,pairwise,all,16,insufficient data,,,45,,
+gbm_overlay,3,d7,pairwise,excluding_italy,20,insufficient data,,,41,,
+physics,3,d7,pairwise,AT,57,ok,-11.00475076803683,1.0,4,-128.69330409356726,7.0
+physics,3,d7,pairwise,BE,57,ok,1.4087030405641336,0.07946149773936774,4,14.000102339181288,7.0
+physics,3,d7,pairwise,BG,57,ok,-3.651103529559401,0.9998694420256956,4,-36.45009411549707,7.0
+physics,3,d7,pairwise,CH,57,ok,-12.360106665786462,1.0,4,-141.2693019005848,7.0
+physics,3,d7,pairwise,CZ,57,ok,-2.226492934530037,0.9870094091396968,4,-30.83477247807017,7.0
+physics,3,d7,pairwise,DE_LU,57,ok,-0.29624012797530774,0.61647664715712,4,-3.189608004385963,7.0
+physics,3,d7,pairwise,DK1,57,ok,0.7802976764102945,0.21760784009214734,4,9.319216069627194,7.0
+physics,3,d7,pairwise,DK2,57,ok,-0.2976875850149274,0.6170291900978511,4,-4.4525877710160815,7.0
+physics,3,d7,pairwise,EE,57,ok,2.7882001524534923,0.002650089331395254,4,22.2142278874269,7.0
+physics,3,d7,pairwise,ES,57,ok,-0.9696032414136817,0.8338778516976635,4,-4.09813870614035,7.0
+physics,3,d7,pairwise,FI,57,ok,5.099136093365424,1.706035853471995e-07,4,24.4375456871345,7.0
+physics,3,d7,pairwise,FR,57,ok,-3.1098984300266714,0.9990642415633683,4,-27.771631030701755,7.0
+physics,3,d7,pairwise,GR,57,ok,-2.5436416479447637,0.9945148216462811,4,-15.991042580409355,7.0
+physics,3,d7,pairwise,HU,57,ok,-6.064257121459807,0.9999999993371753,4,-69.48461988304093,7.0
+physics,3,d7,pairwise,IT-CNORTH,57,ok,-7.351849526519979,0.9999999999999023,4,-137.29219206871343,7.0
+physics,3,d7,pairwise,IT-CSOUTH,57,ok,-6.9930857763663195,0.9999999999986555,4,-129.34231999269005,7.0
+physics,3,d7,pairwise,IT-Calabria,57,ok,-5.458537138514981,0.9999999759963272,4,-100.67773483187133,7.0
+physics,3,d7,pairwise,IT-NORTH,57,ok,-7.6807742835012816,0.9999999999999921,4,-148.4391036184211,7.0
+physics,3,d7,pairwise,IT-SOUTH,57,ok,-6.370695189497064,0.9999999999059134,4,-130.2067096125731,7.0
+physics,3,d7,pairwise,IT-Sardinia,53,ok,-5.165867044662823,0.9999998803365626,8,-79.96924036949686,7.0
+physics,3,d7,pairwise,IT-Sicily,57,ok,-3.9039857349669225,0.9999526893198099,4,-56.80731451023392,7.0
+physics,3,d7,pairwise,LT,57,ok,0.9521053082004637,0.17052178861566397,4,15.836616410818714,7.0
+physics,3,d7,pairwise,LV,57,ok,0.41539947865434707,0.33892474412955564,4,7.2164208698830405,7.0
+physics,3,d7,pairwise,NL,57,ok,-0.8540437105518203,0.8034596146145696,4,-8.284916849415204,7.0
+physics,3,d7,pairwise,NO1,57,ok,-1.3942178660315327,0.9183740877857122,4,-13.060495248538013,7.0
+physics,3,d7,pairwise,NO2,57,ok,2.5744770455150547,0.0050195873911693814,4,16.80034722222222,7.0
+physics,3,d7,pairwise,NO3,57,ok,-0.29432105347431037,0.6157437067994282,4,-1.0450447733918145,7.0
+physics,3,d7,pairwise,NO4,57,ok,-4.036890192198019,0.9999729177974921,4,-21.14764528508772,7.0
+physics,3,d7,pairwise,NO5,57,ok,0.921919580867844,0.17828526235773717,4,5.890794042397662,7.0
+physics,3,d7,pairwise,PL,57,ok,-2.0926309040662625,0.981808942189957,4,-17.817278874269007,7.0
+physics,3,d7,pairwise,PT,57,ok,-0.9589899751294778,0.83121810227032,4,-3.903343384502923,7.0
+physics,3,d7,pairwise,RO,57,ok,-4.858772300214656,0.9999994094206087,4,-41.02173611111111,7.0
+physics,3,d7,pairwise,RS,57,ok,-2.909571339621224,0.9981903761160502,4,-32.402587719298246,7.0
+physics,3,d7,pairwise,SE1,57,ok,3.851948421430102,5.8590854265186794e-05,4,8.923719846491228,7.0
+physics,3,d7,pairwise,SE2,57,ok,4.764517729781631,9.465293626202711e-07,4,12.340223866959064,7.0
+physics,3,d7,pairwise,SE3,57,ok,3.5972947142422314,0.00016077204477830048,4,24.372524671052627,7.0
+physics,3,d7,pairwise,SE4,57,ok,-0.30989578409358864,0.6216798955477909,4,-4.677210343567251,7.0
+physics,3,d7,pairwise,SI,57,ok,-8.19685469233941,0.9999999999999999,4,-120.49781067251463,7.0
+physics,3,d7,pairwise,SK,57,ok,-5.096866027258621,0.999999827338735,4,-56.38186129385965,7.0
+physics,3,d7,pairwise,all,53,ok,-7.524510023061068,0.9999999999999736,8,-36.68526023772375,7.0
+physics,3,d7,pairwise,excluding_italy,57,ok,-3.0197403369848423,0.9987350425936128,4,-19.410102881430465,7.0
+stats_overlay,3,d7,pairwise,AT,14,insufficient data,,,47,,
+stats_overlay,3,d7,pairwise,BE,13,insufficient data,,,48,,
+stats_overlay,3,d7,pairwise,BG,13,insufficient data,,,48,,
+stats_overlay,3,d7,pairwise,CH,13,insufficient data,,,48,,
+stats_overlay,3,d7,pairwise,CZ,13,insufficient data,,,48,,
+stats_overlay,3,d7,pairwise,DE_LU,14,insufficient data,,,47,,
+stats_overlay,3,d7,pairwise,DK1,13,insufficient data,,,48,,
+stats_overlay,3,d7,pairwise,DK2,13,insufficient data,,,48,,
+stats_overlay,3,d7,pairwise,EE,13,insufficient data,,,48,,
+stats_overlay,3,d7,pairwise,ES,13,insufficient data,,,48,,
+stats_overlay,3,d7,pairwise,FI,13,insufficient data,,,48,,
+stats_overlay,3,d7,pairwise,FR,10,insufficient data,,,51,,
+stats_overlay,3,d7,pairwise,GR,10,insufficient data,,,51,,
+stats_overlay,3,d7,pairwise,HU,10,insufficient data,,,51,,
+stats_overlay,3,d7,pairwise,IT-CNORTH,13,insufficient data,,,48,,
+stats_overlay,3,d7,pairwise,IT-CSOUTH,13,insufficient data,,,48,,
+stats_overlay,3,d7,pairwise,IT-Calabria,13,insufficient data,,,48,,
+stats_overlay,3,d7,pairwise,IT-NORTH,13,insufficient data,,,48,,
+stats_overlay,3,d7,pairwise,IT-SOUTH,13,insufficient data,,,48,,
+stats_overlay,3,d7,pairwise,IT-Sardinia,10,insufficient data,,,51,,
+stats_overlay,3,d7,pairwise,IT-Sicily,13,insufficient data,,,48,,
+stats_overlay,3,d7,pairwise,LT,13,insufficient data,,,48,,
+stats_overlay,3,d7,pairwise,LV,13,insufficient data,,,48,,
+stats_overlay,3,d7,pairwise,NL,10,insufficient data,,,51,,
+stats_overlay,3,d7,pairwise,NO1,13,insufficient data,,,48,,
+stats_overlay,3,d7,pairwise,NO2,13,insufficient data,,,48,,
+stats_overlay,3,d7,pairwise,NO3,13,insufficient data,,,48,,
+stats_overlay,3,d7,pairwise,NO4,13,insufficient data,,,48,,
+stats_overlay,3,d7,pairwise,NO5,13,insufficient data,,,48,,
+stats_overlay,3,d7,pairwise,PL,13,insufficient data,,,48,,
+stats_overlay,3,d7,pairwise,PT,13,insufficient data,,,48,,
+stats_overlay,3,d7,pairwise,RO,10,insufficient data,,,51,,
+stats_overlay,3,d7,pairwise,RS,13,insufficient data,,,48,,
+stats_overlay,3,d7,pairwise,SE1,13,insufficient data,,,48,,
+stats_overlay,3,d7,pairwise,SE2,13,insufficient data,,,48,,
+stats_overlay,3,d7,pairwise,SE3,13,insufficient data,,,48,,
+stats_overlay,3,d7,pairwise,SE4,13,insufficient data,,,48,,
+stats_overlay,3,d7,pairwise,SI,13,insufficient data,,,48,,
+stats_overlay,3,d7,pairwise,SK,10,insufficient data,,,51,,
+stats_overlay,3,d7,pairwise,all,7,insufficient data,,,54,,
+stats_overlay,3,d7,pairwise,excluding_italy,10,insufficient data,,,51,,
+gbm_overlay,4,d7,pairwise,AT,20,insufficient data,,,41,,
+gbm_overlay,4,d7,pairwise,BE,20,insufficient data,,,41,,
+gbm_overlay,4,d7,pairwise,BG,20,insufficient data,,,41,,
+gbm_overlay,4,d7,pairwise,CH,20,insufficient data,,,41,,
+gbm_overlay,4,d7,pairwise,CZ,20,insufficient data,,,41,,
+gbm_overlay,4,d7,pairwise,DE_LU,20,insufficient data,,,41,,
+gbm_overlay,4,d7,pairwise,DK1,20,insufficient data,,,41,,
+gbm_overlay,4,d7,pairwise,DK2,20,insufficient data,,,41,,
+gbm_overlay,4,d7,pairwise,EE,20,insufficient data,,,41,,
+gbm_overlay,4,d7,pairwise,ES,20,insufficient data,,,41,,
+gbm_overlay,4,d7,pairwise,FI,20,insufficient data,,,41,,
+gbm_overlay,4,d7,pairwise,FR,20,insufficient data,,,41,,
+gbm_overlay,4,d7,pairwise,GR,20,insufficient data,,,41,,
+gbm_overlay,4,d7,pairwise,HU,20,insufficient data,,,41,,
+gbm_overlay,4,d7,pairwise,IT-CNORTH,20,insufficient data,,,41,,
+gbm_overlay,4,d7,pairwise,IT-CSOUTH,20,insufficient data,,,41,,
+gbm_overlay,4,d7,pairwise,IT-Calabria,20,insufficient data,,,41,,
+gbm_overlay,4,d7,pairwise,IT-NORTH,20,insufficient data,,,41,,
+gbm_overlay,4,d7,pairwise,IT-SOUTH,20,insufficient data,,,41,,
+gbm_overlay,4,d7,pairwise,IT-Sardinia,16,insufficient data,,,45,,
+gbm_overlay,4,d7,pairwise,IT-Sicily,20,insufficient data,,,41,,
+gbm_overlay,4,d7,pairwise,LT,20,insufficient data,,,41,,
+gbm_overlay,4,d7,pairwise,LV,20,insufficient data,,,41,,
+gbm_overlay,4,d7,pairwise,NL,20,insufficient data,,,41,,
+gbm_overlay,4,d7,pairwise,NO1,20,insufficient data,,,41,,
+gbm_overlay,4,d7,pairwise,NO2,20,insufficient data,,,41,,
+gbm_overlay,4,d7,pairwise,NO3,20,insufficient data,,,41,,
+gbm_overlay,4,d7,pairwise,NO4,20,insufficient data,,,41,,
+gbm_overlay,4,d7,pairwise,NO5,20,insufficient data,,,41,,
+gbm_overlay,4,d7,pairwise,PL,20,insufficient data,,,41,,
+gbm_overlay,4,d7,pairwise,PT,20,insufficient data,,,41,,
+gbm_overlay,4,d7,pairwise,RO,20,insufficient data,,,41,,
+gbm_overlay,4,d7,pairwise,RS,20,insufficient data,,,41,,
+gbm_overlay,4,d7,pairwise,SE1,20,insufficient data,,,41,,
+gbm_overlay,4,d7,pairwise,SE2,20,insufficient data,,,41,,
+gbm_overlay,4,d7,pairwise,SE3,20,insufficient data,,,41,,
+gbm_overlay,4,d7,pairwise,SE4,20,insufficient data,,,41,,
+gbm_overlay,4,d7,pairwise,SI,20,insufficient data,,,41,,
+gbm_overlay,4,d7,pairwise,SK,20,insufficient data,,,41,,
+gbm_overlay,4,d7,pairwise,all,16,insufficient data,,,45,,
+gbm_overlay,4,d7,pairwise,excluding_italy,20,insufficient data,,,41,,
+physics,4,d7,pairwise,AT,57,ok,-10.124720219305562,1.0,4,-127.62260782163742,7.0
+physics,4,d7,pairwise,BE,57,ok,0.8469466873779944,0.19851241893556698,4,7.880034722222223,7.0
+physics,4,d7,pairwise,BG,57,ok,-3.5617463186323732,0.9998158018716381,4,-37.10872350146199,7.0
+physics,4,d7,pairwise,CH,57,ok,-11.397985325213881,1.0,4,-139.178307748538,7.0
+physics,4,d7,pairwise,CZ,57,ok,-2.466392530832593,0.9931759161443819,4,-33.56345668859649,7.0
+physics,4,d7,pairwise,DE_LU,57,ok,-0.5426406082058932,0.7063113631050969,4,-5.492698282163742,7.0
+physics,4,d7,pairwise,DK1,57,ok,0.5336020766237524,0.2968084356075468,4,5.831926225877194,7.0
+physics,4,d7,pairwise,DK2,57,ok,-0.4685501802744703,0.6803044025792359,4,-6.871752593567253,7.0
+physics,4,d7,pairwise,EE,57,ok,2.4228025930312556,0.007700646653533002,4,19.450942068713445,7.0
+physics,4,d7,pairwise,ES,57,ok,-1.0890277080191983,0.8619291664305552,4,-4.075072185672514,7.0
+physics,4,d7,pairwise,FI,57,ok,4.085819499373245,2.196075729233407e-05,4,22.298748172514617,7.0
+physics,4,d7,pairwise,FR,57,ok,-3.461266742615798,0.9997311800951786,4,-32.15239491959065,7.0
+physics,4,d7,pairwise,GR,57,ok,-2.200277352266647,0.9861063884439768,4,-15.53534630847953,7.0
+physics,4,d7,pairwise,HU,57,ok,-6.198060886862219,0.9999999997141849,4,-71.06851425438596,7.0
+physics,4,d7,pairwise,IT-CNORTH,57,ok,-7.295089138470256,0.9999999999998508,4,-138.3579577850877,7.0
+physics,4,d7,pairwise,IT-CSOUTH,57,ok,-6.927627757853314,0.9999999999978603,4,-130.15184484649123,7.0
+physics,4,d7,pairwise,IT-Calabria,57,ok,-5.308110906015423,0.9999999446163799,4,-96.6219033260234,7.0
+physics,4,d7,pairwise,IT-NORTH,57,ok,-7.528731625128772,0.9999999999999744,4,-149.35882766812864,7.0
+physics,4,d7,pairwise,IT-SOUTH,57,ok,-6.512943040531675,0.9999999999631538,4,-131.03402320906432,7.0
+physics,4,d7,pairwise,IT-Sardinia,53,ok,-5.2150510702805,0.9999999081167008,8,-77.25685436320755,7.0
+physics,4,d7,pairwise,IT-Sicily,57,ok,-3.8176642427048924,0.9999326394506299,4,-50.951658442982456,7.0
+physics,4,d7,pairwise,LT,57,ok,0.9136262320391316,0.18045663888017074,4,14.95686677631579,7.0
+physics,4,d7,pairwise,LV,57,ok,0.3723196294211157,0.3548274426697639,4,6.478495065789473,7.0
+physics,4,d7,pairwise,NL,57,ok,-1.1137005104290825,0.8672961548655204,4,-10.035031980994155,7.0
+physics,4,d7,pairwise,NO1,57,ok,-2.3314639568848263,0.9901355457559371,4,-25.784870248538017,7.0
+physics,4,d7,pairwise,NO2,57,ok,2.486480666091689,0.006450678981003884,4,15.065310672514618,7.0
+physics,4,d7,pairwise,NO3,57,ok,-0.2902453149667634,0.6141857144093751,4,-1.035408442982456,7.0
+physics,4,d7,pairwise,NO4,57,ok,-4.030735151744722,0.9999721986653498,4,-21.495132492690058,7.0
+physics,4,d7,pairwise,NO5,57,ok,0.7324777712307322,0.23193850272718405,4,4.424405153508773,7.0
+physics,4,d7,pairwise,PL,57,ok,-2.3490158251375033,0.9905884466079312,4,-19.902196637426904,7.0
+physics,4,d7,pairwise,PT,57,ok,-1.1663320344337484,0.8782598869592286,4,-4.356130299707601,7.0
+physics,4,d7,pairwise,RO,57,ok,-4.741642191409269,0.9999989400360509,4,-42.156511330409366,7.0
+physics,4,d7,pairwise,RS,57,ok,-3.0465283716009437,0.998842496847721,4,-33.858457602339186,7.0
+physics,4,d7,pairwise,SE1,57,ok,3.048340046709565,0.0011505468911133525,4,6.584962536549709,7.0
+physics,4,d7,pairwise,SE2,57,ok,4.095397610059345,2.107222290657415e-05,4,9.821811951754384,7.0
+physics,4,d7,pairwise,SE3,57,ok,3.1985271987425654,0.0006906575120442767,4,21.811519554093564,7.0
+physics,4,d7,pairwise,SE4,57,ok,-0.4136898761275665,0.660449378847291,4,-6.11248446637427,7.0
+physics,4,d7,pairwise,SI,57,ok,-7.633063121258541,0.9999999999999886,4,-121.74627010233918,7.0
+physics,4,d7,pairwise,SK,57,ok,-5.148707368267854,0.9999998688561467,4,-57.286607273391816,7.0
+physics,4,d7,pairwise,all,53,ok,-7.375152248419601,0.999999999999918,8,-37.77985919320472,7.0
+physics,4,d7,pairwise,excluding_italy,57,ok,-3.52886398035453,0.9997913262090793,4,-21.307279758794774,7.0
+stats_overlay,4,d7,pairwise,AT,14,insufficient data,,,47,,
+stats_overlay,4,d7,pairwise,BE,13,insufficient data,,,48,,
+stats_overlay,4,d7,pairwise,BG,13,insufficient data,,,48,,
+stats_overlay,4,d7,pairwise,CH,13,insufficient data,,,48,,
+stats_overlay,4,d7,pairwise,CZ,13,insufficient data,,,48,,
+stats_overlay,4,d7,pairwise,DE_LU,14,insufficient data,,,47,,
+stats_overlay,4,d7,pairwise,DK1,13,insufficient data,,,48,,
+stats_overlay,4,d7,pairwise,DK2,13,insufficient data,,,48,,
+stats_overlay,4,d7,pairwise,EE,13,insufficient data,,,48,,
+stats_overlay,4,d7,pairwise,ES,13,insufficient data,,,48,,
+stats_overlay,4,d7,pairwise,FI,13,insufficient data,,,48,,
+stats_overlay,4,d7,pairwise,FR,10,insufficient data,,,51,,
+stats_overlay,4,d7,pairwise,GR,10,insufficient data,,,51,,
+stats_overlay,4,d7,pairwise,HU,10,insufficient data,,,51,,
+stats_overlay,4,d7,pairwise,IT-CNORTH,13,insufficient data,,,48,,
+stats_overlay,4,d7,pairwise,IT-CSOUTH,13,insufficient data,,,48,,
+stats_overlay,4,d7,pairwise,IT-Calabria,13,insufficient data,,,48,,
+stats_overlay,4,d7,pairwise,IT-NORTH,13,insufficient data,,,48,,
+stats_overlay,4,d7,pairwise,IT-SOUTH,13,insufficient data,,,48,,
+stats_overlay,4,d7,pairwise,IT-Sardinia,10,insufficient data,,,51,,
+stats_overlay,4,d7,pairwise,IT-Sicily,13,insufficient data,,,48,,
+stats_overlay,4,d7,pairwise,LT,13,insufficient data,,,48,,
+stats_overlay,4,d7,pairwise,LV,13,insufficient data,,,48,,
+stats_overlay,4,d7,pairwise,NL,10,insufficient data,,,51,,
+stats_overlay,4,d7,pairwise,NO1,13,insufficient data,,,48,,
+stats_overlay,4,d7,pairwise,NO2,13,insufficient data,,,48,,
+stats_overlay,4,d7,pairwise,NO3,13,insufficient data,,,48,,
+stats_overlay,4,d7,pairwise,NO4,13,insufficient data,,,48,,
+stats_overlay,4,d7,pairwise,NO5,13,insufficient data,,,48,,
+stats_overlay,4,d7,pairwise,PL,13,insufficient data,,,48,,
+stats_overlay,4,d7,pairwise,PT,13,insufficient data,,,48,,
+stats_overlay,4,d7,pairwise,RO,10,insufficient data,,,51,,
+stats_overlay,4,d7,pairwise,RS,13,insufficient data,,,48,,
+stats_overlay,4,d7,pairwise,SE1,13,insufficient data,,,48,,
+stats_overlay,4,d7,pairwise,SE2,13,insufficient data,,,48,,
+stats_overlay,4,d7,pairwise,SE3,13,insufficient data,,,48,,
+stats_overlay,4,d7,pairwise,SE4,13,insufficient data,,,48,,
+stats_overlay,4,d7,pairwise,SI,13,insufficient data,,,48,,
+stats_overlay,4,d7,pairwise,SK,10,insufficient data,,,51,,
+stats_overlay,4,d7,pairwise,all,7,insufficient data,,,54,,
+stats_overlay,4,d7,pairwise,excluding_italy,10,insufficient data,,,51,,
+gbm_overlay,5,d7,pairwise,AT,21,insufficient data,,,40,,
+gbm_overlay,5,d7,pairwise,BE,21,insufficient data,,,40,,
+gbm_overlay,5,d7,pairwise,BG,21,insufficient data,,,40,,
+gbm_overlay,5,d7,pairwise,CH,21,insufficient data,,,40,,
+gbm_overlay,5,d7,pairwise,CZ,21,insufficient data,,,40,,
+gbm_overlay,5,d7,pairwise,DE_LU,21,insufficient data,,,40,,
+gbm_overlay,5,d7,pairwise,DK1,21,insufficient data,,,40,,
+gbm_overlay,5,d7,pairwise,DK2,21,insufficient data,,,40,,
+gbm_overlay,5,d7,pairwise,EE,21,insufficient data,,,40,,
+gbm_overlay,5,d7,pairwise,ES,21,insufficient data,,,40,,
+gbm_overlay,5,d7,pairwise,FI,21,insufficient data,,,40,,
+gbm_overlay,5,d7,pairwise,FR,21,insufficient data,,,40,,
+gbm_overlay,5,d7,pairwise,GR,21,insufficient data,,,40,,
+gbm_overlay,5,d7,pairwise,HU,21,insufficient data,,,40,,
+gbm_overlay,5,d7,pairwise,IT-CNORTH,21,insufficient data,,,40,,
+gbm_overlay,5,d7,pairwise,IT-CSOUTH,21,insufficient data,,,40,,
+gbm_overlay,5,d7,pairwise,IT-Calabria,21,insufficient data,,,40,,
+gbm_overlay,5,d7,pairwise,IT-NORTH,21,insufficient data,,,40,,
+gbm_overlay,5,d7,pairwise,IT-SOUTH,21,insufficient data,,,40,,
+gbm_overlay,5,d7,pairwise,IT-Sardinia,17,insufficient data,,,44,,
+gbm_overlay,5,d7,pairwise,IT-Sicily,21,insufficient data,,,40,,
+gbm_overlay,5,d7,pairwise,LT,21,insufficient data,,,40,,
+gbm_overlay,5,d7,pairwise,LV,21,insufficient data,,,40,,
+gbm_overlay,5,d7,pairwise,NL,21,insufficient data,,,40,,
+gbm_overlay,5,d7,pairwise,NO1,21,insufficient data,,,40,,
+gbm_overlay,5,d7,pairwise,NO2,21,insufficient data,,,40,,
+gbm_overlay,5,d7,pairwise,NO3,21,insufficient data,,,40,,
+gbm_overlay,5,d7,pairwise,NO4,21,insufficient data,,,40,,
+gbm_overlay,5,d7,pairwise,NO5,21,insufficient data,,,40,,
+gbm_overlay,5,d7,pairwise,PL,21,insufficient data,,,40,,
+gbm_overlay,5,d7,pairwise,PT,21,insufficient data,,,40,,
+gbm_overlay,5,d7,pairwise,RO,21,insufficient data,,,40,,
+gbm_overlay,5,d7,pairwise,RS,21,insufficient data,,,40,,
+gbm_overlay,5,d7,pairwise,SE1,21,insufficient data,,,40,,
+gbm_overlay,5,d7,pairwise,SE2,21,insufficient data,,,40,,
+gbm_overlay,5,d7,pairwise,SE3,21,insufficient data,,,40,,
+gbm_overlay,5,d7,pairwise,SE4,21,insufficient data,,,40,,
+gbm_overlay,5,d7,pairwise,SI,21,insufficient data,,,40,,
+gbm_overlay,5,d7,pairwise,SK,21,insufficient data,,,40,,
+gbm_overlay,5,d7,pairwise,all,17,insufficient data,,,44,,
+gbm_overlay,5,d7,pairwise,excluding_italy,21,insufficient data,,,40,,
+physics,5,d7,pairwise,AT,57,ok,-9.496965855329268,1.0,4,-126.11629568713451,7.0
+physics,5,d7,pairwise,BE,57,ok,1.1918315561975237,0.11666364985370659,4,10.319539473684213,7.0
+physics,5,d7,pairwise,BG,57,ok,-3.3803272423311346,0.999638002134063,4,-35.980947551169585,7.0
+physics,5,d7,pairwise,CH,57,ok,-10.3062204517092,1.0,4,-136.83370248538012,7.0
+physics,5,d7,pairwise,CZ,57,ok,-2.5514443423021747,0.9946361271418936,4,-33.58866867690058,7.0
+physics,5,d7,pairwise,DE_LU,57,ok,-0.568184556416528,0.7150451715799068,4,-5.634209612573101,7.0
+physics,5,d7,pairwise,DK1,57,ok,0.5564846443032981,0.28893979448083607,4,5.790319883040934,7.0
+physics,5,d7,pairwise,DK2,57,ok,-0.6071641176362254,0.7281289987089771,4,-8.335513546783632,7.0
+physics,5,d7,pairwise,EE,57,ok,1.9533000551432538,0.025392025488283475,4,14.003920869883041,7.0
+physics,5,d7,pairwise,ES,57,ok,-1.3956025092714743,0.918582886797565,4,-5.259379568713449,7.0
+physics,5,d7,pairwise,FI,57,ok,2.4233880926884797,0.007688244977670527,4,13.788797514619885,7.0
+physics,5,d7,pairwise,FR,57,ok,-3.5405175300160496,0.9998003284473418,4,-34.31499360380116,7.0
+physics,5,d7,pairwise,GR,57,ok,-2.116008660206447,0.9828279644848954,4,-15.79177722953216,7.0
+physics,5,d7,pairwise,HU,57,ok,-5.822759161023078,0.999999997105803,4,-70.8491264619883,7.0
+physics,5,d7,pairwise,IT-CNORTH,57,ok,-7.089009428853037,0.9999999999993247,4,-138.39524396929826,7.0
+physics,5,d7,pairwise,IT-CSOUTH,57,ok,-6.739170570398658,0.9999999999920354,4,-130.25217562134503,7.0
+physics,5,d7,pairwise,IT-Calabria,57,ok,-5.019506284570971,0.9999997409777461,4,-88.38264163011695,7.0
+physics,5,d7,pairwise,IT-NORTH,57,ok,-7.360607571737281,0.9999999999999085,4,-149.90551078216376,7.0
+physics,5,d7,pairwise,IT-SOUTH,57,ok,-6.42897198982115,0.999999999935765,4,-131.42336714181286,7.0
+physics,5,d7,pairwise,IT-Sardinia,53,ok,-5.391053528621169,0.999999964977098,8,-75.72698604559749,7.0
+physics,5,d7,pairwise,IT-Sicily,57,ok,-3.925921834273937,0.9999568008943434,4,-50.280271381578956,7.0
+physics,5,d7,pairwise,LT,57,ok,0.781454832490116,0.2172675160594214,4,11.629346673976606,7.0
+physics,5,d7,pairwise,LV,57,ok,0.2886535907275776,0.38642324037057996,4,4.838924524853802,7.0
+physics,5,d7,pairwise,NL,57,ok,-1.1174693915159504,0.868103160106428,4,-9.839701206140347,7.0
+physics,5,d7,pairwise,NO1,57,ok,-2.503174254440901,0.9938457536832812,4,-34.21043859649123,7.0
+physics,5,d7,pairwise,NO2,57,ok,2.855211763795481,0.002150407087416059,4,15.523437499999998,7.0
+physics,5,d7,pairwise,NO3,57,ok,-0.2245325985221658,0.5888285477940329,4,-0.9091620979532175,7.0
+physics,5,d7,pairwise,NO4,57,ok,-4.304643106441497,0.9999916372426126,4,-21.658250182748535,7.0
+physics,5,d7,pairwise,NO5,57,ok,0.9945733687176699,0.15997190263355432,4,5.2105966739766085,7.0
+physics,5,d7,pairwise,PL,57,ok,-2.5223717888247488,0.9941716782843232,4,-20.777196637426897,7.0
+physics,5,d7,pairwise,PT,57,ok,-1.5747260789242072,0.942340157253861,4,-5.604107273391811,7.0
+physics,5,d7,pairwise,RO,57,ok,-4.291364136719828,0.9999911210580456,4,-40.5139236111111,7.0
+physics,5,d7,pairwise,RS,57,ok,-2.9941390810274857,0.998623897716888,4,-33.559649122807016,7.0
+physics,5,d7,pairwise,SE1,57,ok,0.9929236269289177,0.16037358734857238,4,2.4538422880116952,7.0
+physics,5,d7,pairwise,SE2,57,ok,2.0782830780719643,0.01884164704900805,4,5.851503106725146,7.0
+physics,5,d7,pairwise,SE3,57,ok,3.024478378642706,0.0012453113668839547,4,20.484662828947368,7.0
+physics,5,d7,pairwise,SE4,57,ok,-0.5416079956946245,0.7059557087506652,4,-7.362829861111109,7.0
+physics,5,d7,pairwise,SI,57,ok,-7.039012410287372,0.999999999999032,4,-121.40330043859649,7.0
+physics,5,d7,pairwise,SK,57,ok,-5.5018155538101245,0.9999999812049952,4,-57.937979714912274,7.0
+physics,5,d7,pairwise,all,53,ok,-6.771422552856306,0.9999999999936239,8,-38.127022099661346,7.0
+physics,5,d7,pairwise,excluding_italy,57,ok,-3.7610511665298536,0.9999153995943367,4,-22.393320682154606,7.0
+stats_overlay,5,d7,pairwise,AT,14,insufficient data,,,47,,
+stats_overlay,5,d7,pairwise,BE,13,insufficient data,,,48,,
+stats_overlay,5,d7,pairwise,BG,13,insufficient data,,,48,,
+stats_overlay,5,d7,pairwise,CH,13,insufficient data,,,48,,
+stats_overlay,5,d7,pairwise,CZ,13,insufficient data,,,48,,
+stats_overlay,5,d7,pairwise,DE_LU,14,insufficient data,,,47,,
+stats_overlay,5,d7,pairwise,DK1,13,insufficient data,,,48,,
+stats_overlay,5,d7,pairwise,DK2,13,insufficient data,,,48,,
+stats_overlay,5,d7,pairwise,EE,13,insufficient data,,,48,,
+stats_overlay,5,d7,pairwise,ES,13,insufficient data,,,48,,
+stats_overlay,5,d7,pairwise,FI,13,insufficient data,,,48,,
+stats_overlay,5,d7,pairwise,FR,10,insufficient data,,,51,,
+stats_overlay,5,d7,pairwise,GR,10,insufficient data,,,51,,
+stats_overlay,5,d7,pairwise,HU,10,insufficient data,,,51,,
+stats_overlay,5,d7,pairwise,IT-CNORTH,13,insufficient data,,,48,,
+stats_overlay,5,d7,pairwise,IT-CSOUTH,13,insufficient data,,,48,,
+stats_overlay,5,d7,pairwise,IT-Calabria,13,insufficient data,,,48,,
+stats_overlay,5,d7,pairwise,IT-NORTH,13,insufficient data,,,48,,
+stats_overlay,5,d7,pairwise,IT-SOUTH,13,insufficient data,,,48,,
+stats_overlay,5,d7,pairwise,IT-Sardinia,10,insufficient data,,,51,,
+stats_overlay,5,d7,pairwise,IT-Sicily,13,insufficient data,,,48,,
+stats_overlay,5,d7,pairwise,LT,13,insufficient data,,,48,,
+stats_overlay,5,d7,pairwise,LV,13,insufficient data,,,48,,
+stats_overlay,5,d7,pairwise,NL,10,insufficient data,,,51,,
+stats_overlay,5,d7,pairwise,NO1,13,insufficient data,,,48,,
+stats_overlay,5,d7,pairwise,NO2,13,insufficient data,,,48,,
+stats_overlay,5,d7,pairwise,NO3,13,insufficient data,,,48,,
+stats_overlay,5,d7,pairwise,NO4,13,insufficient data,,,48,,
+stats_overlay,5,d7,pairwise,NO5,13,insufficient data,,,48,,
+stats_overlay,5,d7,pairwise,PL,13,insufficient data,,,48,,
+stats_overlay,5,d7,pairwise,PT,13,insufficient data,,,48,,
+stats_overlay,5,d7,pairwise,RO,10,insufficient data,,,51,,
+stats_overlay,5,d7,pairwise,RS,13,insufficient data,,,48,,
+stats_overlay,5,d7,pairwise,SE1,13,insufficient data,,,48,,
+stats_overlay,5,d7,pairwise,SE2,13,insufficient data,,,48,,
+stats_overlay,5,d7,pairwise,SE3,13,insufficient data,,,48,,
+stats_overlay,5,d7,pairwise,SE4,13,insufficient data,,,48,,
+stats_overlay,5,d7,pairwise,SI,13,insufficient data,,,48,,
+stats_overlay,5,d7,pairwise,SK,10,insufficient data,,,51,,
+stats_overlay,5,d7,pairwise,all,7,insufficient data,,,54,,
+stats_overlay,5,d7,pairwise,excluding_italy,10,insufficient data,,,51,,
+gbm_overlay,6,d7,pairwise,AT,21,insufficient data,,,40,,
+gbm_overlay,6,d7,pairwise,BE,21,insufficient data,,,40,,
+gbm_overlay,6,d7,pairwise,BG,21,insufficient data,,,40,,
+gbm_overlay,6,d7,pairwise,CH,21,insufficient data,,,40,,
+gbm_overlay,6,d7,pairwise,CZ,21,insufficient data,,,40,,
+gbm_overlay,6,d7,pairwise,DE_LU,21,insufficient data,,,40,,
+gbm_overlay,6,d7,pairwise,DK1,21,insufficient data,,,40,,
+gbm_overlay,6,d7,pairwise,DK2,21,insufficient data,,,40,,
+gbm_overlay,6,d7,pairwise,EE,21,insufficient data,,,40,,
+gbm_overlay,6,d7,pairwise,ES,21,insufficient data,,,40,,
+gbm_overlay,6,d7,pairwise,FI,21,insufficient data,,,40,,
+gbm_overlay,6,d7,pairwise,FR,21,insufficient data,,,40,,
+gbm_overlay,6,d7,pairwise,GR,21,insufficient data,,,40,,
+gbm_overlay,6,d7,pairwise,HU,21,insufficient data,,,40,,
+gbm_overlay,6,d7,pairwise,IT-CNORTH,21,insufficient data,,,40,,
+gbm_overlay,6,d7,pairwise,IT-CSOUTH,21,insufficient data,,,40,,
+gbm_overlay,6,d7,pairwise,IT-Calabria,21,insufficient data,,,40,,
+gbm_overlay,6,d7,pairwise,IT-NORTH,21,insufficient data,,,40,,
+gbm_overlay,6,d7,pairwise,IT-SOUTH,21,insufficient data,,,40,,
+gbm_overlay,6,d7,pairwise,IT-Sardinia,17,insufficient data,,,44,,
+gbm_overlay,6,d7,pairwise,IT-Sicily,21,insufficient data,,,40,,
+gbm_overlay,6,d7,pairwise,LT,21,insufficient data,,,40,,
+gbm_overlay,6,d7,pairwise,LV,21,insufficient data,,,40,,
+gbm_overlay,6,d7,pairwise,NL,21,insufficient data,,,40,,
+gbm_overlay,6,d7,pairwise,NO1,21,insufficient data,,,40,,
+gbm_overlay,6,d7,pairwise,NO2,21,insufficient data,,,40,,
+gbm_overlay,6,d7,pairwise,NO3,21,insufficient data,,,40,,
+gbm_overlay,6,d7,pairwise,NO4,21,insufficient data,,,40,,
+gbm_overlay,6,d7,pairwise,NO5,21,insufficient data,,,40,,
+gbm_overlay,6,d7,pairwise,PL,21,insufficient data,,,40,,
+gbm_overlay,6,d7,pairwise,PT,21,insufficient data,,,40,,
+gbm_overlay,6,d7,pairwise,RO,21,insufficient data,,,40,,
+gbm_overlay,6,d7,pairwise,RS,21,insufficient data,,,40,,
+gbm_overlay,6,d7,pairwise,SE1,21,insufficient data,,,40,,
+gbm_overlay,6,d7,pairwise,SE2,21,insufficient data,,,40,,
+gbm_overlay,6,d7,pairwise,SE3,21,insufficient data,,,40,,
+gbm_overlay,6,d7,pairwise,SE4,21,insufficient data,,,40,,
+gbm_overlay,6,d7,pairwise,SI,21,insufficient data,,,40,,
+gbm_overlay,6,d7,pairwise,SK,21,insufficient data,,,40,,
+gbm_overlay,6,d7,pairwise,all,17,insufficient data,,,44,,
+gbm_overlay,6,d7,pairwise,excluding_italy,21,insufficient data,,,40,,
+physics,6,d7,pairwise,AT,56,ok,-9.576297183941149,1.0,5,-128.00936383928573,7.0
+physics,6,d7,pairwise,BE,56,ok,1.4062892296735499,0.07981912850732624,5,10.278324032738096,7.0
+physics,6,d7,pairwise,BG,56,ok,-3.48036482228113,0.999749634282625,5,-38.12160435267857,7.0
+physics,6,d7,pairwise,CH,56,ok,-9.93915687968004,1.0,5,-137.60065848214285,7.0
+physics,6,d7,pairwise,CZ,56,ok,-2.552703375270056,0.9946554757514636,5,-35.35049200148809,7.0
+physics,6,d7,pairwise,DE_LU,56,ok,-0.801289278227625,0.7885179017765552,5,-7.809459635416667,7.0
+physics,6,d7,pairwise,DK1,56,ok,0.43811999302993343,0.33064965102658017,5,4.655576692336308,7.0
+physics,6,d7,pairwise,DK2,56,ok,-0.6622908501043189,0.7461075801606064,5,-9.706132839099704,7.0
+physics,6,d7,pairwise,EE,56,ok,1.845125466749131,0.032509644706571104,5,12.795707775297618,7.0
+physics,6,d7,pairwise,ES,56,ok,-2.5373158923355317,0.9944146946703468,5,-10.323525855654761,7.0
+physics,6,d7,pairwise,FI,56,ok,1.85243008967986,0.03198204392048586,5,8.318606770833332,7.0
+physics,6,d7,pairwise,FR,56,ok,-3.3947117352912204,0.9996564955294059,5,-36.893191034226184,7.0
+physics,6,d7,pairwise,GR,56,ok,-2.210842506690843,0.9864766274226333,5,-17.78654110863095,7.0
+physics,6,d7,pairwise,HU,56,ok,-5.776555096927007,0.9999999961877228,5,-72.98744605654763,7.0
+physics,6,d7,pairwise,IT-CNORTH,56,ok,-7.216329269482467,0.999999999999733,5,-139.94776320684522,7.0
+physics,6,d7,pairwise,IT-CSOUTH,56,ok,-7.067766252898776,0.9999999999992127,5,-132.8939927455357,7.0
+physics,6,d7,pairwise,IT-Calabria,56,ok,-5.168583297896952,0.9999998820624225,5,-86.49097005208334,7.0
+physics,6,d7,pairwise,IT-NORTH,56,ok,-7.388758586742566,0.999999999999926,5,-151.80583984375,7.0
+physics,6,d7,pairwise,IT-SOUTH,56,ok,-6.754180695676191,0.9999999999928177,5,-135.62249348958335,7.0
+physics,6,d7,pairwise,IT-Sardinia,52,ok,-5.78799845624757,0.9999999964384967,9,-77.5342217548077,7.0
+physics,6,d7,pairwise,IT-Sicily,56,ok,-3.958654737198135,0.999962313448848,5,-48.39170479910714,7.0
+physics,6,d7,pairwise,LT,56,ok,0.6659409669036794,0.25272441695555464,5,10.745313430059525,7.0
+physics,6,d7,pairwise,LV,56,ok,0.15766902093521185,0.4373588064088567,5,2.7337899925595215,7.0
+physics,6,d7,pairwise,NL,56,ok,-1.3651103558602498,0.9138908161680019,5,-11.44865978422619,7.0
+physics,6,d7,pairwise,NO1,56,ok,-2.1935890818807127,0.9858675179828758,5,-32.98611979166667,7.0
+physics,6,d7,pairwise,NO2,56,ok,2.6303535932869297,0.004264805009527241,5,14.101504836309525,7.0
+physics,6,d7,pairwise,NO3,56,ok,-0.07439335172308477,0.5296513006486796,5,-0.3262230282738093,7.0
+physics,6,d7,pairwise,NO4,56,ok,-4.6094886179397445,0.9999979816968466,5,-23.089502418154762,7.0
+physics,6,d7,pairwise,NO5,56,ok,0.9868325159561179,0.16186237573892756,5,5.148356584821429,7.0
+physics,6,d7,pairwise,PL,56,ok,-2.7263014196138653,0.9967975760231733,5,-22.95159970238095,7.0
+physics,6,d7,pairwise,PT,56,ok,-3.119154759189838,0.9990931466446462,5,-12.012545572916665,7.0
+physics,6,d7,pairwise,RO,56,ok,-4.382353971915566,0.9999941298072043,5,-42.0653515625,7.0
+physics,6,d7,pairwise,RS,56,ok,-2.994919395174733,0.9986274131248493,5,-34.97229910714286,7.0
+physics,6,d7,pairwise,SE1,56,ok,0.044853623691646166,0.4821119912723119,5,0.10374534970238106,7.0
+physics,6,d7,pairwise,SE2,56,ok,1.0787248278660284,0.14035520714503327,5,2.874249441964285,7.0
+physics,6,d7,pairwise,SE3,56,ok,3.173373425547592,0.0007533929302755059,5,21.835821242559526,7.0
+physics,6,d7,pairwise,SE4,56,ok,-0.5104902423615476,0.6951459755471664,5,-7.312837611607142,7.0
+physics,6,d7,pairwise,SI,56,ok,-7.165952811888116,0.9999999999996138,5,-124.98975632440475,7.0
+physics,6,d7,pairwise,SK,56,ok,-5.30207469639834,0.9999999427530136,5,-60.36438895089285,7.0
+physics,6,d7,pairwise,all,52,ok,-6.7363184930872215,0.9999999999918775,9,-40.70377881236132,7.0
+physics,6,d7,pairwise,excluding_italy,56,ok,-3.657033034919998,0.9998724242461203,5,-24.172396965942387,7.0
+stats_overlay,6,d7,pairwise,AT,13,insufficient data,,,48,,
+stats_overlay,6,d7,pairwise,BE,12,insufficient data,,,49,,
+stats_overlay,6,d7,pairwise,BG,12,insufficient data,,,49,,
+stats_overlay,6,d7,pairwise,CH,12,insufficient data,,,49,,
+stats_overlay,6,d7,pairwise,CZ,12,insufficient data,,,49,,
+stats_overlay,6,d7,pairwise,DE_LU,13,insufficient data,,,48,,
+stats_overlay,6,d7,pairwise,DK1,12,insufficient data,,,49,,
+stats_overlay,6,d7,pairwise,DK2,12,insufficient data,,,49,,
+stats_overlay,6,d7,pairwise,EE,12,insufficient data,,,49,,
+stats_overlay,6,d7,pairwise,ES,12,insufficient data,,,49,,
+stats_overlay,6,d7,pairwise,FI,12,insufficient data,,,49,,
+stats_overlay,6,d7,pairwise,FR,10,insufficient data,,,51,,
+stats_overlay,6,d7,pairwise,GR,10,insufficient data,,,51,,
+stats_overlay,6,d7,pairwise,HU,10,insufficient data,,,51,,
+stats_overlay,6,d7,pairwise,IT-CNORTH,12,insufficient data,,,49,,
+stats_overlay,6,d7,pairwise,IT-CSOUTH,12,insufficient data,,,49,,
+stats_overlay,6,d7,pairwise,IT-Calabria,12,insufficient data,,,49,,
+stats_overlay,6,d7,pairwise,IT-NORTH,12,insufficient data,,,49,,
+stats_overlay,6,d7,pairwise,IT-SOUTH,12,insufficient data,,,49,,
+stats_overlay,6,d7,pairwise,IT-Sardinia,9,insufficient data,,,52,,
+stats_overlay,6,d7,pairwise,IT-Sicily,12,insufficient data,,,49,,
+stats_overlay,6,d7,pairwise,LT,12,insufficient data,,,49,,
+stats_overlay,6,d7,pairwise,LV,12,insufficient data,,,49,,
+stats_overlay,6,d7,pairwise,NL,10,insufficient data,,,51,,
+stats_overlay,6,d7,pairwise,NO1,12,insufficient data,,,49,,
+stats_overlay,6,d7,pairwise,NO2,12,insufficient data,,,49,,
+stats_overlay,6,d7,pairwise,NO3,12,insufficient data,,,49,,
+stats_overlay,6,d7,pairwise,NO4,12,insufficient data,,,49,,
+stats_overlay,6,d7,pairwise,NO5,12,insufficient data,,,49,,
+stats_overlay,6,d7,pairwise,PL,12,insufficient data,,,49,,
+stats_overlay,6,d7,pairwise,PT,12,insufficient data,,,49,,
+stats_overlay,6,d7,pairwise,RO,10,insufficient data,,,51,,
+stats_overlay,6,d7,pairwise,RS,12,insufficient data,,,49,,
+stats_overlay,6,d7,pairwise,SE1,12,insufficient data,,,49,,
+stats_overlay,6,d7,pairwise,SE2,12,insufficient data,,,49,,
+stats_overlay,6,d7,pairwise,SE3,12,insufficient data,,,49,,
+stats_overlay,6,d7,pairwise,SE4,12,insufficient data,,,49,,
+stats_overlay,6,d7,pairwise,SI,12,insufficient data,,,49,,
+stats_overlay,6,d7,pairwise,SK,10,insufficient data,,,51,,
+stats_overlay,6,d7,pairwise,all,7,insufficient data,,,54,,
+stats_overlay,6,d7,pairwise,excluding_italy,10,insufficient data,,,51,,
+gbm_overlay,7,d7,pairwise,AT,22,insufficient data,,,39,,
+gbm_overlay,7,d7,pairwise,BE,22,insufficient data,,,39,,
+gbm_overlay,7,d7,pairwise,BG,22,insufficient data,,,39,,
+gbm_overlay,7,d7,pairwise,CH,22,insufficient data,,,39,,
+gbm_overlay,7,d7,pairwise,CZ,22,insufficient data,,,39,,
+gbm_overlay,7,d7,pairwise,DE_LU,22,insufficient data,,,39,,
+gbm_overlay,7,d7,pairwise,DK1,22,insufficient data,,,39,,
+gbm_overlay,7,d7,pairwise,DK2,22,insufficient data,,,39,,
+gbm_overlay,7,d7,pairwise,EE,22,insufficient data,,,39,,
+gbm_overlay,7,d7,pairwise,ES,22,insufficient data,,,39,,
+gbm_overlay,7,d7,pairwise,FI,22,insufficient data,,,39,,
+gbm_overlay,7,d7,pairwise,FR,22,insufficient data,,,39,,
+gbm_overlay,7,d7,pairwise,GR,22,insufficient data,,,39,,
+gbm_overlay,7,d7,pairwise,HU,22,insufficient data,,,39,,
+gbm_overlay,7,d7,pairwise,IT-CNORTH,22,insufficient data,,,39,,
+gbm_overlay,7,d7,pairwise,IT-CSOUTH,22,insufficient data,,,39,,
+gbm_overlay,7,d7,pairwise,IT-Calabria,22,insufficient data,,,39,,
+gbm_overlay,7,d7,pairwise,IT-NORTH,22,insufficient data,,,39,,
+gbm_overlay,7,d7,pairwise,IT-SOUTH,22,insufficient data,,,39,,
+gbm_overlay,7,d7,pairwise,IT-Sardinia,18,insufficient data,,,43,,
+gbm_overlay,7,d7,pairwise,IT-Sicily,22,insufficient data,,,39,,
+gbm_overlay,7,d7,pairwise,LT,22,insufficient data,,,39,,
+gbm_overlay,7,d7,pairwise,LV,22,insufficient data,,,39,,
+gbm_overlay,7,d7,pairwise,NL,22,insufficient data,,,39,,
+gbm_overlay,7,d7,pairwise,NO1,22,insufficient data,,,39,,
+gbm_overlay,7,d7,pairwise,NO2,22,insufficient data,,,39,,
+gbm_overlay,7,d7,pairwise,NO3,22,insufficient data,,,39,,
+gbm_overlay,7,d7,pairwise,NO4,22,insufficient data,,,39,,
+gbm_overlay,7,d7,pairwise,NO5,22,insufficient data,,,39,,
+gbm_overlay,7,d7,pairwise,PL,22,insufficient data,,,39,,
+gbm_overlay,7,d7,pairwise,PT,22,insufficient data,,,39,,
+gbm_overlay,7,d7,pairwise,RO,22,insufficient data,,,39,,
+gbm_overlay,7,d7,pairwise,RS,22,insufficient data,,,39,,
+gbm_overlay,7,d7,pairwise,SE1,22,insufficient data,,,39,,
+gbm_overlay,7,d7,pairwise,SE2,22,insufficient data,,,39,,
+gbm_overlay,7,d7,pairwise,SE3,22,insufficient data,,,39,,
+gbm_overlay,7,d7,pairwise,SE4,22,insufficient data,,,39,,
+gbm_overlay,7,d7,pairwise,SI,22,insufficient data,,,39,,
+gbm_overlay,7,d7,pairwise,SK,22,insufficient data,,,39,,
+gbm_overlay,7,d7,pairwise,all,18,insufficient data,,,43,,
+gbm_overlay,7,d7,pairwise,excluding_italy,22,insufficient data,,,39,,
+physics,7,d7,pairwise,AT,56,ok,-9.110836077212594,1.0,5,-127.61094494047619,7.0
+physics,7,d7,pairwise,BE,56,ok,-0.12010123105933997,0.5477985213964045,5,-1.6449534970238082,7.0
+physics,7,d7,pairwise,BG,56,ok,-3.423270459575658,0.9996906375863727,5,-36.36538039434523,7.0
+physics,7,d7,pairwise,CH,56,ok,-9.37796187593078,1.0,5,-136.95001116071427,7.0
+physics,7,d7,pairwise,CZ,56,ok,-2.7987864344446374,0.9974352474136604,5,-37.49533389136905,7.0
+physics,7,d7,pairwise,DE_LU,56,ok,-1.075618215422576,0.858950981255759,5,-10.87666945684524,7.0
+physics,7,d7,pairwise,DK1,56,ok,0.04748509197630474,0.4810633059060082,5,0.5124126558779756,7.0
+physics,7,d7,pairwise,DK2,56,ok,-0.7308500814851421,0.767564635273895,5,-10.533690499441965,7.0
+physics,7,d7,pairwise,EE,56,ok,1.4751638359186514,0.07008425077677503,5,10.05964564732143,7.0
+physics,7,d7,pairwise,ES,56,ok,-3.2585405780238696,0.9994400657015229,5,-14.43179222470238,7.0
+physics,7,d7,pairwise,FI,56,ok,2.6597314326658044,0.003910149105254263,5,12.644308035714285,7.0
+physics,7,d7,pairwise,FR,56,ok,-3.5055887840415765,0.9997722007393982,5,-41.014132254464286,7.0
+physics,7,d7,pairwise,GR,56,ok,-2.263513621519739,0.9881979770572747,5,-18.591384858630953,7.0
+physics,7,d7,pairwise,HU,56,ok,-5.677887442150458,0.9999999931815803,5,-72.22977120535714,7.0
+physics,7,d7,pairwise,IT-CNORTH,56,ok,-7.315428137323189,0.9999999999998718,5,-139.27108351934524,7.0
+physics,7,d7,pairwise,IT-CSOUTH,56,ok,-7.252405319964086,0.9999999999997953,5,-132.8941248139881,7.0
+physics,7,d7,pairwise,IT-Calabria,56,ok,-5.632056820227767,0.9999999910963505,5,-79.52701543898809,7.0
+physics,7,d7,pairwise,IT-NORTH,56,ok,-7.525405926983352,0.9999999999999737,5,-152.8571326264881,7.0
+physics,7,d7,pairwise,IT-SOUTH,56,ok,-6.850573778070961,0.9999999999963223,5,-137.31636625744048,7.0
+physics,7,d7,pairwise,IT-Sardinia,52,ok,-6.341241723679318,0.9999999998860397,9,-81.54748898237182,7.0
+physics,7,d7,pairwise,IT-Sicily,56,ok,-4.644782625973655,0.9999982978264486,5,-46.57252139136905,7.0
+physics,7,d7,pairwise,LT,56,ok,0.25034142294457,0.4011616625866903,5,3.769840959821429,7.0
+physics,7,d7,pairwise,LV,56,ok,-0.15725483170211216,0.5624779918216621,5,-2.71424572172619,7.0
+physics,7,d7,pairwise,NL,56,ok,-1.6130297796462083,0.9466309809411302,5,-13.685908668154761,7.0
+physics,7,d7,pairwise,NO1,56,ok,-3.5039152147868515,0.9997707643488577,5,-39.1343359375,7.0
+physics,7,d7,pairwise,NO2,56,ok,1.7459592599188916,0.040409015653258024,5,10.24642857142857,7.0
+physics,7,d7,pairwise,NO3,56,ok,-0.5639112736725376,0.7135927413806131,5,-2.4444540550595244,7.0
+physics,7,d7,pairwise,NO4,56,ok,-3.9544946029088623,0.9999616516984866,5,-20.941682477678572,7.0
+physics,7,d7,pairwise,NO5,56,ok,0.6522560115599136,0.2571180160190696,5,3.4822219122023808,7.0
+physics,7,d7,pairwise,PL,56,ok,-3.1184797534794804,0.9990910668435884,5,-26.292503720238095,7.0
+physics,7,d7,pairwise,PT,56,ok,-3.6967973800848988,0.9998908317669639,5,-15.138267299107143,7.0
+physics,7,d7,pairwise,RO,56,ok,-4.447058039550396,0.9999956472838595,5,-39.981171874999994,7.0
+physics,7,d7,pairwise,RS,56,ok,-2.868793489687123,0.9979397963650396,5,-33.082775297619044,7.0
+physics,7,d7,pairwise,SE1,56,ok,0.297181699824522,0.3831638962565429,5,0.7384328497023808,7.0
+physics,7,d7,pairwise,SE2,56,ok,1.2933604585588034,0.09794320964269915,5,3.7507914806547618,7.0
+physics,7,d7,pairwise,SE3,56,ok,2.537833452117978,0.005577052600442563,5,16.525664992559523,7.0
+physics,7,d7,pairwise,SE4,56,ok,-0.6321292858488506,0.7363487999860141,5,-8.575080915178571,7.0
+physics,7,d7,pairwise,SI,56,ok,-6.681443852738045,0.99999999998817,5,-123.39253534226191,7.0
+physics,7,d7,pairwise,SK,56,ok,-5.042398171151945,0.9999997701332924,5,-59.64844587053572,7.0
+physics,7,d7,pairwise,all,52,ok,-6.857597799709437,0.9999999999964986,9,-42.58518685910277,7.0
+physics,7,d7,pairwise,excluding_italy,56,ok,-3.9966867338556655,0.9999678823925017,5,-25.970178889317104,7.0
+stats_overlay,7,d7,pairwise,AT,13,insufficient data,,,48,,
+stats_overlay,7,d7,pairwise,BE,12,insufficient data,,,49,,
+stats_overlay,7,d7,pairwise,BG,12,insufficient data,,,49,,
+stats_overlay,7,d7,pairwise,CH,12,insufficient data,,,49,,
+stats_overlay,7,d7,pairwise,CZ,12,insufficient data,,,49,,
+stats_overlay,7,d7,pairwise,DE_LU,13,insufficient data,,,48,,
+stats_overlay,7,d7,pairwise,DK1,12,insufficient data,,,49,,
+stats_overlay,7,d7,pairwise,DK2,12,insufficient data,,,49,,
+stats_overlay,7,d7,pairwise,EE,12,insufficient data,,,49,,
+stats_overlay,7,d7,pairwise,ES,12,insufficient data,,,49,,
+stats_overlay,7,d7,pairwise,FI,12,insufficient data,,,49,,
+stats_overlay,7,d7,pairwise,FR,9,insufficient data,,,52,,
+stats_overlay,7,d7,pairwise,GR,9,insufficient data,,,52,,
+stats_overlay,7,d7,pairwise,HU,9,insufficient data,,,52,,
+stats_overlay,7,d7,pairwise,IT-CNORTH,12,insufficient data,,,49,,
+stats_overlay,7,d7,pairwise,IT-CSOUTH,12,insufficient data,,,49,,
+stats_overlay,7,d7,pairwise,IT-Calabria,12,insufficient data,,,49,,
+stats_overlay,7,d7,pairwise,IT-NORTH,12,insufficient data,,,49,,
+stats_overlay,7,d7,pairwise,IT-SOUTH,12,insufficient data,,,49,,
+stats_overlay,7,d7,pairwise,IT-Sardinia,9,insufficient data,,,52,,
+stats_overlay,7,d7,pairwise,IT-Sicily,12,insufficient data,,,49,,
+stats_overlay,7,d7,pairwise,LT,12,insufficient data,,,49,,
+stats_overlay,7,d7,pairwise,LV,12,insufficient data,,,49,,
+stats_overlay,7,d7,pairwise,NL,9,insufficient data,,,52,,
+stats_overlay,7,d7,pairwise,NO1,12,insufficient data,,,49,,
+stats_overlay,7,d7,pairwise,NO2,12,insufficient data,,,49,,
+stats_overlay,7,d7,pairwise,NO3,12,insufficient data,,,49,,
+stats_overlay,7,d7,pairwise,NO4,12,insufficient data,,,49,,
+stats_overlay,7,d7,pairwise,NO5,12,insufficient data,,,49,,
+stats_overlay,7,d7,pairwise,PL,12,insufficient data,,,49,,
+stats_overlay,7,d7,pairwise,PT,12,insufficient data,,,49,,
+stats_overlay,7,d7,pairwise,RO,9,insufficient data,,,52,,
+stats_overlay,7,d7,pairwise,RS,12,insufficient data,,,49,,
+stats_overlay,7,d7,pairwise,SE1,12,insufficient data,,,49,,
+stats_overlay,7,d7,pairwise,SE2,12,insufficient data,,,49,,
+stats_overlay,7,d7,pairwise,SE3,12,insufficient data,,,49,,
+stats_overlay,7,d7,pairwise,SE4,12,insufficient data,,,49,,
+stats_overlay,7,d7,pairwise,SI,12,insufficient data,,,49,,
+stats_overlay,7,d7,pairwise,SK,9,insufficient data,,,52,,
+stats_overlay,7,d7,pairwise,all,6,insufficient data,,,55,,
+stats_overlay,7,d7,pairwise,excluding_italy,9,insufficient data,,,52,,
