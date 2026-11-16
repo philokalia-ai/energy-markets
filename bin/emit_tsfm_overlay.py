@@ -372,9 +372,21 @@ def add_logistic(hourly, day, logit_hourly=None, logit_day=None):
 
 
 # ----------------------------------------------------------------------------- I/O
+def naive_utc(df: pd.DataFrame) -> pd.DataFrame:
+    """Every tz-aware datetime column as naive UTC, the extract's convention.
+
+    The extract stores each Postgres `timestamptz` column as naive UTC (bin/extract_common.jl);
+    through the postgres scanner (`--backend postgres`) the same columns arrive tz-aware, and
+    comparing them with this module's naive UTC grid raises. Naive columns are left alone."""
+    for c in df.columns:
+        if isinstance(df[c].dtype, pd.DatetimeTZDtype):
+            df[c] = df[c].dt.tz_convert("UTC").dt.tz_localize(None)
+    return df
+
+
 def prices_duckdb(con, delivery, ctx_hours=CTX_HOURS):
     cutoff = day_start_utc(delivery)
-    return con.execute(PRICE_SQL, [cutoff - pd.Timedelta(hours=ctx_hours + 24), cutoff]).df()
+    return naive_utc(con.execute(PRICE_SQL, [cutoff - pd.Timedelta(hours=ctx_hours + 24), cutoff]).df())
 
 
 def open_store(backend, extract=None):
@@ -391,6 +403,9 @@ def open_store(backend, extract=None):
     if backend != "postgres":
         raise ValueError(backend)
     con = duckdb.connect(config={"threads": 4, "memory_limit": "8GB"})
+    # UTC session: naive query parameters, date_trunc and timestamptz->timestamp casts then mean
+    # UTC, as in the extract, whatever the host's local time zone is.
+    con.execute("SET TimeZone = 'UTC'")
     con.execute("INSTALL postgres; LOAD postgres;")
     con.execute("ATTACH ? AS pg (TYPE postgres, READ_ONLY)", [os.environ["ENERGY_CONN_STR"]])
     con.execute("USE pg")

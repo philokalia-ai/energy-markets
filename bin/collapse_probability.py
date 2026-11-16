@@ -51,10 +51,19 @@ def dump_json(path, value):
     Path(path).write_text(json.dumps(clean(value), indent=2, allow_nan=False) + "\n")
 
 
+def naive_utc(df):
+    """tz-aware datetime columns -> naive UTC (the extract's convention; the postgres scanner
+    returns `timestamptz` columns tz-aware). Naive columns are left alone."""
+    for c in df.columns:
+        if isinstance(df[c].dtype, pd.DatetimeTZDtype):
+            df[c] = df[c].dt.tz_convert("UTC").dt.tz_localize(None)
+    return df
+
+
 def hourly_actuals(con, start, end):
     # Exactly the shared resolution_aware_actuals policy: latest sequence at
     # each timestamp, then mean across subhours. Never sum PT15M and PT60M.
-    return con.execute("""
+    return naive_utc(con.execute("""
       WITH dedup AS (
         SELECT map_code AS zone, date_time_utc AS t, price_currency_mwh AS actual
         FROM entsoe.energy_prices
@@ -66,14 +75,16 @@ def hourly_actuals(con, start, end):
                    update_time_utc DESC, resolution_code, instance_code)=1)
       SELECT zone,date_trunc('hour',t) AS t,round(avg(actual),8) AS actual
       FROM dedup GROUP BY 1,2 ORDER BY 1,2
-    """, [start, end]).df()
+    """, [start, end]).df())
 
 
 def hourly_forecasts(con, start, end, *, cutoff_offset=None, snapshots=True):
     """Max covered hours/type, coarser on ties; as-of groups use local days."""
     # For an as-of snapshot, discard unavailable raw revisions BEFORE choosing
     # resolution/coverage. Future publication coverage must not pick a feature.
-    local_day = "cast(timezone('Europe/Athens', timezone('UTC', date_time_utc)) AS DATE)"
+    # ::TIMESTAMP first: a no-op on the extract's naive UTC column; on a timestamptz column (postgres
+    # scanner, UTC session) it yields the UTC wall clock, so both stores give the same Athens date.
+    local_day = "cast(timezone('Europe/Athens', timezone('UTC', date_time_utc::TIMESTAMP)) AS DATE)"
     if cutoff_offset is None:
         snapshot_filter = ""
         day_group = "cast(date_time_utc AS DATE)"
@@ -87,7 +98,7 @@ def hourly_forecasts(con, start, end, *, cutoff_offset=None, snapshots=True):
         ("day_ahead_total_load_forecast", "total_load_mw", "'load'"),
         ("generation_forecasts_for_wind_and_solar", "day_ahead_generation_forecast_mw", "production_type"),
     ]:
-        frames.append(con.execute(f"""
+        frames.append(naive_utc(con.execute(f"""
           WITH raw AS (
             SELECT area_map_code AS zone,date_time_utc AS t,
                    {kind} AS kind,resolution_code,{value} AS mw,update_time_utc AS stamp,
@@ -110,7 +121,7 @@ def hourly_forecasts(con, start, end, *, cutoff_offset=None, snapshots=True):
               AND r.kind=b.kind AND r.resolution_code=b.resolution_code GROUP BY 1,2,3)
           SELECT zone,date_trunc('hour',t) AS t,kind,avg(mw) AS mw,max(stamp) AS stamp
           FROM slots GROUP BY 1,2,3
-        """, [start, end]).df())
+        """, [start, end]).df()))
     raw = pd.concat(frames, ignore_index=True)
     raw = raw[raw.zone.isin(ZONES)]
     raw["kind"] = raw.kind.replace({"Solar": "solar", "Wind Onshore": "wind", "Wind Offshore": "wind"})
