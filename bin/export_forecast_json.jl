@@ -22,6 +22,10 @@
 #                "n_days","mae","bias","corr","input_mode"}, ...]}
 #   — "input_mode" is 'entsoe' (reference track) or 'weather' (ex-ante track);
 #   the SPA treats an absent input_mode as 'entsoe' (backward compatible).
+#   Additive (#431, bin/naive_baselines.jl; absent when EXPORT_NAIVE=0 or the
+#   naive step failed): "n_naive", "mae_paired", "mae_naive_d7", "rmae_d7", and
+#   at lead <= 1 also "mae_naive_d1", "mae_naive_epf", "rmae_d1", "rmae_epf" —
+#   pooled over the cohort's paired hours, rMAE as a ratio of sums.
 #   Scores aggregate ONLY the chosen slices (duplicates that were scored twice
 #   across cvs are never double-counted).
 #
@@ -46,6 +50,8 @@ using Euphemia, Dates, Statistics, DataFrames
 include(joinpath(@__DIR__, "forecast_common.jl"))
 # resolution-aware actuals (guarded __main__, safe to include)
 include(joinpath(@__DIR__, "..", "test", "scripts", "eu_eval_metrics.jl"))
+# naive baselines + rMAE for the scoreboard (#431; EXPORT_NAIVE=0 skips them)
+include(joinpath(@__DIR__, "naive_baselines.jl"))
 
 const CV = Euphemia.ENERGY_PRICES_CODE_VERSION
 const OUT_DIR = joinpath(dirname(@__DIR__), "web", "data")
@@ -73,6 +79,9 @@ function export_scoreboard()
         ORDER BY 1
     """)
 
+    naive_parts = naive_parts_or_nothing(scores)   # nothing = no naive fields
+    # No naive fields -> merge exactly the arguments main merged (same Dict, same bytes).
+    naive_or_empty(x) = x === nothing ? () : (x,)
     agg(sub) = begin
         mae_v = collect(skipmissing(sub.mae))
         bias_v = collect(skipmissing(sub.bias))
@@ -85,7 +94,7 @@ function export_scoreboard()
          bias=isempty(bias_v) ? nothing : mean(bias_v),
          corr=isempty(corr_v) ? nothing : mean(corr_v),
          cv=length(cvs) == 1 ? cvs[1] : nothing,
-         q15=q15_board_fields(sub))
+         q15=q15_board_fields(sub), naive=naive_cohort_fields(naive_parts, sub))
     end
     # 15-min: mean over the zone-days that HAVE a native-15 score only (same as the parquet).
     q15_board_fields(sub) = begin
@@ -108,7 +117,7 @@ function export_scoreboard()
                                 "input_mode" => mode,
                                 "n_days" => a.n_days, "mae" => nn(a.mae),
                                 "bias" => nn(a.bias), "corr" => nn(a.corr),
-                                "code_version" => a.cv), a.q15))
+                                "code_version" => a.cv), a.q15, naive_or_empty(a.naive)...))
             for month in sort(unique(String.(sub.month)))
                 m = sub[sub.month .== month, :]
                 am = agg(m)
@@ -116,7 +125,7 @@ function export_scoreboard()
                                     "input_mode" => mode,
                                     "n_days" => am.n_days, "mae" => nn(am.mae),
                                     "bias" => nn(am.bias), "corr" => nn(am.corr),
-                                    "code_version" => am.cv), am.q15))
+                                    "code_version" => am.cv), am.q15, naive_or_empty(am.naive)...))
             end
         end
     end
