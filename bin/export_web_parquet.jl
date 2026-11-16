@@ -71,6 +71,8 @@ include(joinpath(@__DIR__, "..", "test", "scripts", "eu_eval_metrics.jl"))
 include(joinpath(@__DIR__, "naive_baselines.jl"))
 # the "since_freeze" window (#431 G; EXPORT_SINCE_FREEZE=0 skips it)
 include(joinpath(@__DIR__, "scoreboard_windows.jl"))
+# Timestral fields for R1's "backfilled" window (#431 R2; EXPORT_TSFM_BACKFILL=0 skips them)
+include(joinpath(@__DIR__, "tsfm_backfill_scores.jl"))
 
 const CV = Euphemia.ENERGY_PRICES_CODE_VERSION
 const OUT_ROOT = get(ENV, "WEB_PARQUET_OUT", joinpath(dirname(@__DIR__), "data", "web"))

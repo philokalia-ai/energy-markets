@@ -47,6 +47,23 @@ Modes of operation
                      into simulations.tsfm_overlay, keyed by (input_mode, arm) and stamped with
                      issue_utc; an older issue never overwrites a newer one. Refuses an
                      after-gate issue.
+Backfill mode (#431 R2, offline reconstruction; never shown as live)
+  --backfill-tag TAG --start D0 --end D1 [--write]: postsim arm over the retro physics rows of ONE
+                     reset_tag (simulations.forecast_prices is_retro AND reset_tag = TAG, written by
+                     daily_forecast.jl retro mode; #431 R1), day by day:
+    * the sim covariate (history AND D) comes from that tag's retro rows only, never live rows;
+      live mode, conversely, never reads retro rows (SIM_SQL filters is_retro = false);
+    * issue_utc = the retro rows' `retro_of_utc` (the natural D-1 instant they stand in for), not
+      their `prediction_made_utc` (the actual, later compute time);
+    * the price context ends before D exactly as live, but it reads TODAY's store, not the archive
+      as of D-1 (late price revisions, if any, are visible);
+    * rows are written with input_mode = 'postsim_backfill' and model_version = '<arm>@<TAG>'; the
+      exporters' live vintage selection drops that mode (forecast_common.jl tsfm_overlay_maps);
+    * resumable: a day already written for the tag is skipped, a day whose retro physics is not
+      complete for every zone is skipped (re-run later); per-day failures and timeouts are
+      non-fatal; the loop stops cleanly inside the protected UTC windows or while daily-forecast /
+      publish-web-data runs (`backfill_guard`). Rollback: DELETE ... WHERE input_mode =
+      'postsim_backfill' AND model_version LIKE '%@TAG'.
 Env: TSFM_ARM = timestral-209m (published default, owner decision 2026-11-15) | timestral-28m |
      chronos2 | any arm added to ARMS (e.g. a physics-anchored residual arm). TSFM_MODEL is the
      legacy name of the same switch. Timestral weights: Modified-MIT with a revenue cap — licence
@@ -99,10 +116,25 @@ CREATE TABLE IF NOT EXISTS simulations.tsfm_overlay (
     UNIQUE (bidding_zone, market_date, date_time_utc, quantity, input_mode, model_version));
 CREATE INDEX IF NOT EXISTS tsfm_overlay_date_idx ON simulations.tsfm_overlay (market_date);
 """
+# LIVE covariate: genuine live rows only. Retro rows (is_retro, e.g. the cv44 backfill) are written
+# later than the live issue of subsequent days, so without this filter they would enter later live
+# runs' sim history and win the latest-made dedupe.
 SIM_SQL = """
 SELECT bidding_zone zone, date_time_utc t, price_eur_mwh sim, prediction_made_utc made
 FROM simulations.forecast_prices
-WHERE lead_days = 1 AND input_mode LIKE 'weather%' AND date_time_utc >= ? AND date_time_utc < ?"""
+WHERE lead_days = 1 AND input_mode LIKE 'weather%' AND NOT coalesce(is_retro, false)
+  AND date_time_utc >= ? AND date_time_utc < ?"""
+
+# BACKFILL covariate: the retro rows of ONE reset_tag; `made` = retro_of_utc (the natural instant the
+# row stands in for), `computed` = prediction_made_utc (when it was actually computed).
+RETRO_SIM_SQL = """
+SELECT bidding_zone zone, date_time_utc t, price_eur_mwh sim, retro_of_utc made,
+       prediction_made_utc computed
+FROM simulations.forecast_prices
+WHERE lead_days = 1 AND input_mode LIKE 'weather%' AND coalesce(is_retro, false) AND reset_tag = ?
+  AND date_time_utc >= ? AND date_time_utc < ?"""
+
+BACKFILL_MODE = "postsim_backfill"
 
 # Raw (sub-hourly) rows with their publication stamp: the publication filter must act before
 # hourly aggregation, so these are aggregated in Python (`physics_covariates`).
@@ -452,6 +484,33 @@ def sim_from_db(con, delivery, days=60):
     return df
 
 
+def sim_from_retro(con, tag, delivery, days=60):
+    """Lead-1 retro sim rows of reset_tag `tag` (backfill covariate); `made` = retro_of_utc."""
+    if not tag:
+        raise ValueError("a backfill needs a reset_tag")
+    end = day_start_utc(pd.Timestamp(delivery) + pd.Timedelta(days=1))
+    df = con.execute(RETRO_SIM_SQL, [tag, end - pd.Timedelta(days=days + 1), end]).df()
+    for c in ("t", "made", "computed"):
+        df[c] = pd.to_datetime(df[c], utc=True).dt.tz_localize(None)
+    if df.made.isna().any():
+        raise ValueError(f"{int(df.made.isna().sum())} retro rows of {tag} lack retro_of_utc: refusing")
+    return df
+
+
+def backfill_label(arm, tag):
+    """model_version of a backfill vintage: the arm plus the reset_tag it was built from."""
+    return f"{arm}@{tag}"
+
+
+def as_backfill(hourly, day, tag):
+    """Relabel a postsim vintage built from retro rows as a backfill vintage (never live)."""
+    if not (hourly.input_mode == "postsim").all():
+        raise ValueError("a backfill vintage is a postsim vintage")
+    hourly = hourly.assign(input_mode=BACKFILL_MODE, reset_tag=tag)
+    day = day.assign(input_mode=BACKFILL_MODE, reset_tag=tag)
+    return hourly, day
+
+
 def sim_from_live_json(live_dir, zones):
     """Offline sim source: em-team/live/<ZONE>.json (lead-1 weather rows with prediction_made_utc)."""
     rows = []
@@ -515,6 +574,134 @@ def write_db(hourly, day, arm, cx=None, allow_after_gate=False):
     return len(rows)
 
 
+# ----------------------------------------------------------------------------- backfill runner
+# Protected UTC windows (#431 R1/R2): no backfill work from 10 minutes before each window opens, so
+# a ~1-5 min day never spills into the 06:00-08:30 forecast/publish or 10:30-12:15 refresh/gate slots.
+BACKFILL_BLOCKED_UTC = (((5, 50), (8, 30)), ((10, 20), (12, 15)))
+BACKFILL_BLOCKING_WORKFLOWS = ("daily-forecast.yml", "publish-web-data.yml")
+
+
+def in_blocked_window(now_utc) -> bool:
+    m = now_utc.hour * 60 + now_utc.minute
+    return any(a * 60 + b <= m < c * 60 + d for (a, b), (c, d) in BACKFILL_BLOCKED_UTC)
+
+
+def workflows_active(env=os.environ, workflows=BACKFILL_BLOCKING_WORKFLOWS):  # pragma: no cover - network
+    """Names of blocking workflows with a queued/running run (GitHub API; needs GITHUB_TOKEN and
+    GITHUB_REPOSITORY, i.e. inside Actions). Outside Actions the check is skipped (empty list);
+    an API error counts as active (fail safe)."""
+    tok, repo = env.get("GITHUB_TOKEN"), env.get("GITHUB_REPOSITORY")
+    if not (tok and repo):
+        return []
+    import urllib.request
+    active = []
+    for wf in workflows:
+        for st in ("queued", "in_progress", "waiting", "pending", "requested"):
+            url = f"https://api.github.com/repos/{repo}/actions/workflows/{wf}/runs?status={st}&per_page=1"
+            req = urllib.request.Request(url, headers={"Authorization": f"Bearer {tok}",
+                                                       "Accept": "application/vnd.github+json"})
+            try:
+                with urllib.request.urlopen(req, timeout=30) as r:
+                    n = json.load(r)["total_count"]
+            except Exception as e:
+                print(f"WARNING: GitHub API check of {wf} failed ({e}); treating it as active")
+                n = 1
+            if n:
+                active.append(wf)
+                break
+    return active
+
+
+def backfill_guard(now_utc=None, active=workflows_active):
+    """None when a backfill day may start, else the reason to stop (the loop stops cleanly)."""
+    now_utc = now_utc or pd.Timestamp.utcnow().tz_localize(None)
+    if in_blocked_window(now_utc):
+        return f"inside a protected UTC window at {now_utc:%H:%M}"
+    busy = active()
+    return f"blocking workflow(s) active: {', '.join(busy)}" if busy else None
+
+
+def retro_ready(sim, delivery, zones):
+    """Zones of `zones` WITHOUT a complete retro lead-1 day for D (empty = ready)."""
+    hours = market_day_hours(delivery)
+    d = sim[(sim.t >= hours[0]) & (sim.t <= hours[-1])]
+    have = d.groupby("zone").t.nunique()
+    return sorted(z for z in zones if have.get(z, 0) < len(hours))
+
+
+def backfill_done(con, delivery, label):
+    """Whether this backfill vintage (label) already has day rows for D (resume)."""
+    try:
+        n = con.execute("SELECT count(*) FROM simulations.tsfm_overlay WHERE market_date = ? "
+                        "AND input_mode = ? AND model_version = ? AND level = 'day'",
+                        [pd.Timestamp(delivery).date(), BACKFILL_MODE, label]).fetchone()[0]
+    except Exception as e:  # table absent before the first write
+        if "does not exist" in str(e) or "Catalog Error" in str(e):
+            return False
+        raise
+    return n > 0
+
+
+class DayTimeout(Exception):
+    pass
+
+
+def _run_with_timeout(fn, seconds):
+    import signal
+
+    def handler(*_):
+        raise DayTimeout(f"day exceeded {seconds} s")
+    old = signal.signal(signal.SIGALRM, handler)
+    signal.alarm(int(seconds))
+    try:
+        return fn()
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old)
+
+
+def run_backfill(days, tag, arm, zones, *, load_sim, load_prices, model, emit, done,
+                 logistic=None, guard=backfill_guard, timeout_s=900):
+    """Backfill vintages for `days` (Athens market days) from reset_tag `tag`. Pure orchestration;
+    the I/O is injected (load_sim(d), load_prices(d), done(d, label), emit(hourly, day, label)).
+    Returns one status row per day: done | exists | no_physics | failed | stopped."""
+    label, out = backfill_label(arm, tag), []
+    for i, d in enumerate(days):
+        d = pd.Timestamp(d).date().isoformat()
+        why = guard()
+        if why:
+            out += [dict(day=x, status="stopped", detail=why)
+                    for x in (pd.Timestamp(y).date().isoformat() for y in days[i:])]
+            print(f"backfill stopped before {d}: {why} (resumable: re-dispatch later)")
+            break
+        if done(d, label):
+            out.append(dict(day=d, status="exists", detail=label)); continue
+        t0 = time.time()
+        try:
+            def one():
+                sim = load_sim(d)
+                missing = retro_ready(sim, d, zones)
+                if missing:
+                    return dict(status="no_physics", detail=f"retro physics incomplete for {len(missing)} zone(s): "
+                                                            f"{','.join(missing[:6])}")
+                hourly, day = overlay(model, load_prices(d), zones, d, "postsim", sim)
+                lh = ld = None
+                if logistic is not None:
+                    try:
+                        lh, ld = logistic(d)
+                    except Exception as e:
+                        print(f"WARNING {d}: collapse logistic failed ({type(e).__name__}: {e}); TSFM-only p_le0")
+                hourly, day = as_backfill(*add_logistic(hourly, day, lh, ld), tag)
+                emit(hourly, day, label)
+                return dict(status="done", detail=f"issue_utc {hourly.issue_utc.iloc[0]}")
+            r = _run_with_timeout(one, timeout_s)
+        except Exception as e:   # non-fatal per day (incl. DayTimeout)
+            r = dict(status="failed", detail=f"{type(e).__name__}: {e}")
+        out.append(dict(day=d, secs=round(time.time() - t0, 1), **r))
+        print(f"backfill {d}: {r['status']} ({out[-1]['secs']} s) {r['detail']}", flush=True)
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--delivery", required=True, help="Athens market day D (lead 1); 'tomorrow' = UTC today + 1")
@@ -530,7 +717,18 @@ def main():
     ap.add_argument("--write", action="store_true", help="upsert into Postgres (production)")
     ap.add_argument("--allow-after-gate", action="store_true")
     ap.add_argument("--threads", type=int, default=int(os.environ.get("TSFM_THREADS", "16")))
-    a = ap.parse_args()
+    ap.add_argument("--backfill-tag", default=None,
+                    help="backfill mode: build postsim vintages from the retro rows of this reset_tag "
+                         "(with --start/--end; --delivery is then ignored)")
+    ap.add_argument("--start"); ap.add_argument("--end")
+    ap.add_argument("--day-timeout", type=int, default=int(os.environ.get("TSFM_BACKFILL_DAY_TIMEOUT", "900")))
+    ap.add_argument("--no-guard", action="store_true", help="backfill: skip the time-window/workflow guard")
+    argv = sys.argv[1:]
+    if "--backfill-tag" in argv and "--delivery" not in argv:
+        argv = argv + ["--delivery", "backfill"]
+    a = ap.parse_args(argv)
+    if a.backfill_tag:
+        return main_backfill(a)
     delivery = (pd.Timestamp.utcnow().tz_localize(None).normalize() + pd.Timedelta(days=1)).date().isoformat() \
         if a.delivery == "tomorrow" else a.delivery
     backend = a.backend or ("postgres" if a.write else "duckdb")
@@ -571,5 +769,48 @@ def main():
     print(day.sort_values("p_any_le0", ascending=False).head(10).to_string(index=False))
 
 
+def main_backfill(a):
+    """--backfill-tag: resumable day loop (see run_backfill); prints a JSON status summary."""
+    if not (a.start and a.end):
+        raise SystemExit("--backfill-tag needs --start and --end")
+    arm = resolve_arm()
+    if arm.endswith("-phys"):
+        raise SystemExit("backfill supports the sim-covariate arms only (not the physics arm)")
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from collapse_probability import ZONES
+    backend = a.backend or ("postgres" if a.write else "duckdb")
+    con = open_store(backend, a.extract)
+    days = pd.date_range(a.start, a.end, freq="D")
+    model = ARMS[arm](a.threads)
+    logistic = None
+    if not a.no_logistic:
+        from predict_collapse import forecast_date
+        logistic = lambda d: forecast_date(con, d, settled_lag=1)[:2]
+    out_dir = Path(a.output)
+
+    def emit(hourly, day, label):
+        if a.write:
+            write_db(hourly, day, label)
+        else:
+            out_dir.mkdir(parents=True, exist_ok=True)
+            stem = f"{hourly.market_date.iloc[0]}-{BACKFILL_MODE}-{label.replace('@', '_')}"
+            hourly.to_csv(out_dir / f"{stem}-hourly.csv", index=False)
+            day.to_csv(out_dir / f"{stem}-day.csv", index=False)
+
+    done = (lambda d, label: backfill_done(con, d, label)) if a.write else \
+        (lambda d, label: (out_dir / f"{d}-{BACKFILL_MODE}-{label.replace('@', '_')}-day.csv").exists())
+    res = run_backfill(days, a.backfill_tag, arm, ZONES,
+                       load_sim=lambda d: sim_from_retro(con, a.backfill_tag, d),
+                       load_prices=lambda d: prices_duckdb(con, d), model=model, emit=emit, done=done,
+                       logistic=logistic, guard=(lambda: None) if a.no_guard else backfill_guard,
+                       timeout_s=a.day_timeout)
+    counts = pd.Series([r["status"] for r in res]).value_counts().to_dict()
+    secs = [r["secs"] for r in res if r.get("status") == "done"]
+    print("BACKFILL SUMMARY " + json.dumps({"tag": a.backfill_tag, "arm": arm, "write": a.write,
+                                            "counts": counts, "median_secs_per_done_day":
+                                            float(np.median(secs)) if secs else None}))
+    return 0
+
+
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

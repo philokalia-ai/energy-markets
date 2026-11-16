@@ -236,6 +236,84 @@ class InformationSetTest(unittest.TestCase):
         np.testing.assert_allclose(h3.p_le0, h3.p_le0_tsfm)
 
 
+TAG = "cv44-backfill-2026-11"
+
+
+class BackfillTest(unittest.TestCase):
+    """#431 R2: backfill vintages from retro physics rows; never live, resumable, guarded."""
+    DAYS = ["2026-11-14", "2026-11-15"]
+
+    def retro_sim(self, skip_zone_on=None):
+        """Retro rows: made = retro_of_utc (D-1 06:30), computed = the actual run (2026-11-17, after any gate)."""
+        rows = []
+        for d in ["2026-11-12", "2026-11-13"] + self.DAYS:
+            retro_of = pd.Timestamp(d) - pd.Timedelta(days=1) + pd.Timedelta(hours=6, minutes=30)
+            for h in ov.market_day_hours(d):
+                for z in ZONES:
+                    if d == skip_zone_on and z == "DE_LU":
+                        continue
+                    rows.append((z, h, 40.0, retro_of, pd.Timestamp("2026-11-17 01:00")))
+        return pd.DataFrame(rows, columns=["zone", "t", "sim", "made", "computed"])
+
+    def go(self, sim=None, done=lambda d, label: False, guard=lambda: None, load_sim=None):
+        written = []
+        res = ov.run_backfill(self.DAYS, TAG, "stub", ZONES,
+                              load_sim=load_sim or (lambda d: sim if sim is not None else self.retro_sim()),
+                              load_prices=lambda d: prices(), model=StubModel(),
+                              emit=lambda h, dd, label: written.append((h, dd, label)), done=done,
+                              guard=guard, timeout_s=60)
+        return res, written
+
+    def test_issue_time_is_retro_of_utc_and_rows_are_backfill_labelled(self):
+        res, written = self.go()
+        self.assertEqual([r["status"] for r in res], ["done", "done"])
+        h, d, label = written[1]
+        self.assertEqual(label, "stub@" + TAG)
+        self.assertTrue((h.issue_utc == pd.Timestamp("2026-11-14 06:30")).all())    # not 2026-11-17 01:00
+        self.assertFalse(h.after_gate.any())
+        self.assertTrue((h.input_mode == ov.BACKFILL_MODE).all() and (d.input_mode == ov.BACKFILL_MODE).all())
+        rows = ov.db_rows(h, d, label)
+        self.assertTrue(all(r[6] == ov.BACKFILL_MODE and r[8] == label for r in rows))
+
+    def test_resume_missing_physics_failure_and_guard(self):
+        res, written = self.go(done=lambda d, label: d == "2026-11-14")
+        self.assertEqual([r["status"] for r in res], ["exists", "done"])
+        res, _ = self.go(sim=self.retro_sim(skip_zone_on="2026-11-15"))
+        self.assertEqual([r["status"] for r in res], ["done", "no_physics"])
+        self.assertIn("DE_LU", res[1]["detail"])
+
+        def boom(d):
+            if d == "2026-11-14":
+                raise RuntimeError("db hiccup")
+            return self.retro_sim()
+        res, written = self.go(load_sim=boom)
+        self.assertEqual([r["status"] for r in res], ["failed", "done"])   # non-fatal per day
+        calls = iter([None, "inside a protected UTC window at 05:55"])
+        res, written = self.go(guard=lambda: next(calls))
+        self.assertEqual([r["status"] for r in res], ["done", "stopped"])
+        self.assertEqual(len(written), 1)
+
+    def test_blocked_windows(self):
+        t = lambda hm: pd.Timestamp(f"2026-11-20 {hm}")
+        for hm in ("05:50", "06:00", "08:29", "10:20", "11:00", "12:14"):
+            self.assertTrue(ov.in_blocked_window(t(hm)), hm)
+        for hm in ("05:49", "08:30", "10:19", "12:15", "23:00"):
+            self.assertFalse(ov.in_blocked_window(t(hm)), hm)
+        self.assertIn("blocking", ov.backfill_guard(t("14:00"), active=lambda: ["daily-forecast.yml"]))
+        self.assertIsNone(ov.backfill_guard(t("14:00"), active=lambda: []))
+
+    def test_live_vintages_cannot_be_relabelled_and_live_sim_never_feeds_backfill(self):
+        hourly, day = ov.overlay(StubModel(), prices(), ZONES, "2026-11-15", "pregate0630")
+        with self.assertRaises(ValueError):
+            ov.as_backfill(hourly, day, TAG)
+        # a backfill with live-shaped rows only (no retro rows for D) is "no_physics", never built from live
+        res, written = self.go(load_sim=lambda d: self.retro_sim().iloc[0:0])
+        self.assertEqual([r["status"] for r in res], ["no_physics", "no_physics"])
+        self.assertEqual(written, [])
+        self.assertIn("NOT coalesce(is_retro, false)", ov.SIM_SQL)
+        self.assertIn("reset_tag = ?", ov.RETRO_SIM_SQL)
+
+
 class FakeCursor:
     def __init__(self, log): self.log = log
     def execute(self, sql, *a): self.log.append(("execute", sql))
@@ -302,7 +380,14 @@ class ProductionPathTest(unittest.TestCase):
                          100.0 + i price_currency_mwh, 'Day-ahead' contract_type, 'BZN' area_type_code, '1' sequence,
                          TIMESTAMP '2026-11-13 12:00' update_time_utc FROM range(8) t(i)""")
             c.execute("""CREATE TABLE simulations.forecast_prices AS SELECT 'GR' bidding_zone, TIMESTAMPTZ '2026-11-14 22:00+00' date_time_utc,
-                         55.0 price_eur_mwh, TIMESTAMPTZ '2026-11-14 09:00+00' prediction_made_utc, 1 lead_days, 'weather' input_mode""")
+                         55.0 price_eur_mwh, TIMESTAMPTZ '2026-11-14 09:00+00' prediction_made_utc, 1 lead_days, 'weather' input_mode,
+                         false is_retro, NULL::VARCHAR reset_tag, NULL::TIMESTAMPTZ retro_of_utc""")
+            # retro rows of the same slice (#431 R1): computed later, must never reach the LIVE reader
+            c.execute("""INSERT INTO simulations.forecast_prices VALUES
+                         ('GR', TIMESTAMPTZ '2026-11-14 22:00+00', 77.0, TIMESTAMPTZ '2026-11-17 01:00+00', 1, 'weather',
+                          true, 'cv44-backfill-2026-11', TIMESTAMPTZ '2026-11-14 06:30+00'),
+                         ('GR', TIMESTAMPTZ '2026-11-14 22:00+00', 88.0, TIMESTAMPTZ '2026-11-17 02:00+00', 1, 'weather',
+                          true, 'other-tag', TIMESTAMPTZ '2026-11-14 06:30+00')""")
             c.close()
             con = duckdb.connect()
             con.execute(f"ATTACH '{f}' AS pg (READ_ONLY)"); con.execute("USE pg")
@@ -310,8 +395,16 @@ class ProductionPathTest(unittest.TestCase):
             self.assertEqual(len(p), 2)                      # two hours of 15-min prices
             self.assertAlmostEqual(p.sort_values("t").price.iloc[0], 101.5)
             s = ov.sim_from_db(con, "2026-11-15")
+            self.assertEqual(len(s), 1)                      # live row only: retro rows never read live
+            self.assertEqual(s.sim.iloc[0], 55.0)
             self.assertEqual(s.t.iloc[0], pd.Timestamp("2026-11-14 22:00"))
             self.assertEqual(s.made.iloc[0], pd.Timestamp("2026-11-14 09:00"))
+            r = ov.sim_from_retro(con, "cv44-backfill-2026-11", "2026-11-15")
+            self.assertEqual(r.sim.tolist(), [77.0])         # that tag's retro row only: no live, no other tag
+            self.assertEqual(r.made.iloc[0], pd.Timestamp("2026-11-14 06:30"))       # made = retro_of_utc
+            self.assertEqual(r.computed.iloc[0], pd.Timestamp("2026-11-17 01:00"))
+            with self.assertRaises(ValueError):
+                ov.sim_from_retro(con, "", "2026-11-15")
 
     def _pg(self):
         import psycopg2

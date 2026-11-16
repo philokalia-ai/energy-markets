@@ -656,6 +656,11 @@ end
 # tsfm_median / tsfm_q10 / tsfm_q90, the hourly P(price ≤ 0) and the day-level
 # P(any hour ≤ 0). Read by both exporters (zone JSON + zone parquet).
 const TSFM_OVERLAY_QUANTITIES = ("tsfm_median", "tsfm_q10", "tsfm_q90", "p_le0")
+# Backfill vintages (#431 R2: input_mode 'postsim_backfill', model_version '<arm>@<reset_tag>') are an
+# offline reconstruction over retro physics: never a live vintage. Excluded twice — in the SQL and in
+# the pure selection below — so neither exporter can ever show them as live.
+const TSFM_BACKFILL_MODE = "postsim_backfill"
+is_tsfm_backfill(m) = endswith(String(m), "_backfill")
 const TSFM_OVERLAY_SQL = """
     SELECT bidding_zone AS z, market_date AS d,
            (date_time_utc AT TIME ZONE 'UTC') AS t, level, quantity AS q, value AS v,
@@ -663,6 +668,7 @@ const TSFM_OVERLAY_SQL = """
     FROM simulations.tsfm_overlay
     WHERE market_date >= \$1::date
       AND quantity IN ('tsfm_median', 'tsfm_q10', 'tsfm_q90', 'p_le0', 'p_any_le0')
+      AND input_mode NOT LIKE '%backfill'
     """
 
 """
@@ -672,7 +678,8 @@ Pure selection over simulations.tsfm_overlay rows (fields z, d, t, level, q, v,
 m, issue, arm). Per (zone, market_date) ONE vintage is chosen — the one with
 the latest issue among those carrying a day row — and every published value
 (the three lines, hourly p_le0, day p_any_le0) comes from that vintage only, so
-a line of one issue is never shown with the risk of another.
+a line of one issue is never shown with the risk of another. Backfill vintages
+(`is_tsfm_backfill(m)`, #431 R2) are never candidates, whatever their issue.
 `hourly[(zone, quantity, t)]` for quantity ∈ TSFM_OVERLAY_QUANTITIES;
 `day[(zone, date)] = (p_any_le0, input_mode, issue_utc, arm)`. Missing values
 stay absent (the exporters write null).
@@ -680,6 +687,7 @@ stay absent (the exporters write null).
 function tsfm_overlay_maps(rows)
     rows = collect(rows)
     best = Dict{Tuple{String,Date},Tuple{DateTime,String,String}}()
+    rows = [r for r in rows if !is_tsfm_backfill(r.m)]
     for r in rows
         (r.level == "day" && r.q == "p_any_le0") || continue
         k = (String(r.z), Date(r.d))
