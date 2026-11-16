@@ -1,0 +1,251 @@
+{
+  "contract_version": "benchmark-431-v1",
+  "name": "timestral_ontime",
+  "target_policy": "highest_seq",
+  "source": {
+    "extract": {
+      "path": "/home/pgeorgakopoulos/armada/em-data/euphemia-live-20261115.duckdb",
+      "sha256": "fbeb02e849ae47e6b6a004b6a8e6cceb4bd1b397a6b221ccbe8f9da17e0abe13"
+    },
+    "actuals": {
+      "path": "/home/pgeorgakopoulos/armada/em-team/results/benchmark-431-inputs/highest_seq-actuals.csv.gz",
+      "sha256": "4890bb434e010f05aead8da4100ac4d8f14209d3affe771c1c91fb589a7ccf30",
+      "n": 840153
+    },
+    "forecasts": {
+      "path": "/home/pgeorgakopoulos/armada/em-team/results/benchmark-431-inputs/timestral_ontime-forecasts.csv.gz",
+      "sha256": "8cbd52e67f4bf8238d23a25076daeb24940fc610ad5ffdfd27db4eb2ebfdfd00",
+      "n": 217308
+    },
+    "saved_sources": [
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/results/tsfm/fc_t209_uni_L1.parquet",
+        "sha256": "d7a198de0a329a193f86aa1cc7145e928b4d4df4133520cafeec2ca89bfe9ea7"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/results/tsfm/fc_t209_uni_L1_c2048.parquet",
+        "sha256": "b1c8f5115fe336547c0ecf3520f6754b61335e8afa5c874fb185a1bc0b85454c"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/results/tsfm/fc_t209_sim_L1.parquet",
+        "sha256": "214d8456ea121c13e55c4306a6ed166ca51fe859b2de05b897dae0e649b4ae26"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/results/tsfm/live_lead1.parquet",
+        "sha256": "38881328adb36ef78bcd1d5ea37b12da29ffd03c77b1e00d763f26ade6756763"
+      },
+      {
+        "path": "/home/pgeorgakopoulos/armada/em-team/results/tsfm/panel.parquet",
+        "sha256": "01cfe02e66e869e9eed353aa9ce433074a7f938696166eebf605de37ea529f6a"
+      }
+    ],
+    "target_helper": {
+      "path": "/home/pgeorgakopoulos/armada/em-team/worktrees/collapse-431/bin/da_target.py",
+      "sha256": "08f5c26237f51a105c552724fc50b99b5a1488d79e02e05e6dded2b0d09bdf32"
+    }
+  },
+  "resolution": "PT60M",
+  "market_day_timezone": "Europe/Athens",
+  "saved_predictions_changed": false,
+  "models": [
+    {
+      "id": "physics",
+      "model_cv": [
+        39,
+        40,
+        42
+      ],
+      "model_cv_missing_reason": null,
+      "model_id": "physics",
+      "artifact_cv": null,
+      "artifact_sha256": null,
+      "artifact_missing_reason": "rule engine; no serialized learned artifact",
+      "base_cv": [
+        39,
+        40,
+        42
+      ],
+      "base_cv_missing_reason": null,
+      "base_cv_counts": {
+        "39": 936,
+        "40": 36447,
+        "42": 10296
+      },
+      "cohort_physics_cv_counts": {
+        "39": 936,
+        "40": 36447,
+        "42": 10296
+      },
+      "version_cohort": "finite predictions with declared eligibility; before target-policy and complete-zone-day score restrictions",
+      "version_cohort_n": 47679,
+      "model_input_price_policy": "no direct settled-price lag context; calibration overlap remains",
+      "leads": [
+        1
+      ],
+      "fit_end": null,
+      "fit_end_class": "no single fit cutoff; calibration overlaps evaluation",
+      "publication_class": "physics made-time in saved snapshot; first publication unverified"
+    },
+    {
+      "id": "timestral_0630_prices",
+      "model_cv": null,
+      "model_cv_missing_reason": "learned model ID is separate from physics code version",
+      "model_id": "mistralai/Timestral-209M",
+      "artifact_cv": null,
+      "artifact_sha256": null,
+      "artifact_missing_reason": "checkpoint/artifact not identified by saved predictions",
+      "base_cv": null,
+      "base_cv_missing_reason": "prices-only model; no physics input",
+      "base_cv_counts": null,
+      "cohort_physics_cv_counts": {
+        "39": 936,
+        "40": 36447,
+        "42": 10296
+      },
+      "version_cohort": "finite predictions with declared eligibility; before target-policy and complete-zone-day score restrictions",
+      "version_cohort_n": 47679,
+      "model_input_price_policy": "highest_seq saved context; unchanged by evaluation retarget",
+      "leads": [
+        1
+      ],
+      "fit_end": null,
+      "fit_end_class": "pretraining cutoff unknown",
+      "publication_class": "saved reconstruction; input cutoff is not first publication"
+    },
+    {
+      "id": "timestral_postsim",
+      "model_cv": null,
+      "model_cv_missing_reason": "learned model ID is separate from physics code version",
+      "model_id": "mistralai/Timestral-209M",
+      "artifact_cv": null,
+      "artifact_sha256": null,
+      "artifact_missing_reason": "checkpoint/artifact not identified by saved predictions",
+      "base_cv": [
+        39,
+        40,
+        42
+      ],
+      "base_cv_missing_reason": null,
+      "base_cv_counts": {
+        "39": 936,
+        "40": 36447,
+        "42": 10296
+      },
+      "cohort_physics_cv_counts": {
+        "39": 936,
+        "40": 36447,
+        "42": 10296
+      },
+      "version_cohort": "finite predictions with declared eligibility; before target-policy and complete-zone-day score restrictions",
+      "version_cohort_n": 47679,
+      "model_input_price_policy": "highest_seq saved context; unchanged by evaluation retarget",
+      "leads": [
+        1
+      ],
+      "fit_end": null,
+      "fit_end_class": "pretraining cutoff unknown",
+      "publication_class": "saved reconstruction; input cutoff is not first publication"
+    },
+    {
+      "id": "timestral_prices_matched_context",
+      "model_cv": null,
+      "model_cv_missing_reason": "learned model ID is separate from physics code version",
+      "model_id": "mistralai/Timestral-209M",
+      "artifact_cv": null,
+      "artifact_sha256": null,
+      "artifact_missing_reason": "checkpoint/artifact not identified by saved predictions",
+      "base_cv": null,
+      "base_cv_missing_reason": "prices-only model; no physics input",
+      "base_cv_counts": null,
+      "cohort_physics_cv_counts": {
+        "39": 936,
+        "40": 36447,
+        "42": 10296
+      },
+      "version_cohort": "finite predictions with declared eligibility; before target-policy and complete-zone-day score restrictions",
+      "version_cohort_n": 47679,
+      "model_input_price_policy": "highest_seq saved context; unchanged by evaluation retarget",
+      "leads": [
+        1
+      ],
+      "fit_end": null,
+      "fit_end_class": "pretraining cutoff unknown",
+      "publication_class": "saved reconstruction; input cutoff is not first publication"
+    }
+  ],
+  "fit_end": null,
+  "fit_end_reason": "not authenticated for saved overlays; foundation pretraining cutoff unknown",
+  "cutoff_publication_class": "offline reconstruction on original on-time physics subset; not authenticated first publication",
+  "naive_availability": "D1 and weekday: lead1 only; D7: leads1..7; source auction prices normally known by morning issue, initial revisions not archived",
+  "target_history": "latest-revised read-only extract",
+  "window": {
+    "start": "2026-09-14",
+    "end": "2026-11-13"
+  },
+  "zones": [
+    "AT",
+    "BE",
+    "BG",
+    "CH",
+    "CZ",
+    "DE_LU",
+    "DK1",
+    "DK2",
+    "EE",
+    "ES",
+    "FI",
+    "FR",
+    "GR",
+    "HU",
+    "IT-CNORTH",
+    "IT-CSOUTH",
+    "IT-Calabria",
+    "IT-NORTH",
+    "IT-SOUTH",
+    "IT-Sardinia",
+    "IT-Sicily",
+    "LT",
+    "LV",
+    "NL",
+    "NO1",
+    "NO2",
+    "NO3",
+    "NO4",
+    "NO5",
+    "PL",
+    "PT",
+    "RO",
+    "RS",
+    "SE1",
+    "SE2",
+    "SE3",
+    "SE4",
+    "SI",
+    "SK"
+  ],
+  "missingness": "no imputation; pairwise finite actual/forecast/naive; complete zone-days primary, partial cells separate; unknown SDAC auctions fail closed",
+  "mask_sha256": "8f7e29b2c23d54fa9ea11c81853a3f0cd9de746a0571cbec73f2658c7c730f4b",
+  "all_model_intersection": true,
+  "aggregation": [
+    "pooled_cell",
+    "mean_daily"
+  ],
+  "aggregation_definition": "mean_daily weights each paired zone-day equally; no energy weights in new cohorts",
+  "rmae": "ratio of paired aggregate absolute errors, never mean daily ratios; zero naive error undefined",
+  "dst": "all23/25 UTC hours retained in point scores; source repeated local hour averaged; DM drops23/25-hour days",
+  "dm": {
+    "loss": "daily24h L1 vector",
+    "hac": "Bartlett calendar lags max(7,lead-1)",
+    "minimum_days": 30,
+    "p_values": "one-sided model better; exploratory, unadjusted"
+  },
+  "prepared_utc": "2026-11-16T21:00:28.917898+00:00",
+  "source_git_commit": "16ceca223df665eefd5d8041ad949bf781a83e08",
+  "evaluator_sha256": "3ed8f43655e0fa50ac55e81e4d4dbe4db9b776ec872808f961749c2ba6c736fe",
+  "output_sha256": {
+    "metrics": "44bfe0f0be9a316faa4bdb9677f0a93239271c36e7aa09f615290d0a22b29005",
+    "masks": "8f7e29b2c23d54fa9ea11c81853a3f0cd9de746a0571cbec73f2658c7c730f4b",
+    "exclusions": "98de9bf0a4c9d685d4e6df88468279edeb504420d1bdeeba5fa05e219f149981",
+    "dm": "af2f30ac457ed51128032f67bef66d0e5c5c61bf8df8e7b02a2a348fbbe81dd7"
+  }
+}
