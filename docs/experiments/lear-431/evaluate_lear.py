@@ -39,11 +39,19 @@ def load_bench():
     return m
 
 
+def sdac_gate_utc(day):
+    """SDAC gate for market day D: D-1 12:00 Europe/Brussels, as naive UTC (10:00 summer / 11:00 winter)."""
+    return ((pd.Timestamp(day) - pd.Timedelta(days=1) + pd.Timedelta(hours=12))
+            .tz_localize("Europe/Brussels").tz_convert("UTC").tz_localize(None))
+
+
 def live_rows(live_dir, zones=ZONES):
     """Lead-1 weather-track rows (sim, gbm, stats) from the public zone JSON snapshot.
 
     One row per (zone, hour): if a market day has several lead-1 weather rows, the latest
-    prediction_made_utc is kept and the count is reported."""
+    prediction_made_utc is kept and the count is reported. Each row carries `pre_gate`:
+    prediction_made_utc <= the SDAC gate of its market day. The archive keeps one vintage per day,
+    so a late day has no earlier on-time vintage to fall back to."""
     rows, dup_days = [], 0
     for z in zones:
         js = json.loads(Path(live_dir, f"{z}.json").read_text())
@@ -59,11 +67,29 @@ def live_rows(live_dir, zones=ZONES):
             for i, h in enumerate(d["hours"]):
                 for model in ("sim", "gbm", "stats"):
                     v = (d.get(model) or [None] * len(d["hours"]))[i]
+                    made = pd.Timestamp(d["prediction_made_utc"]).tz_localize(None)
                     rows.append(dict(zone=z, t=pd.Timestamp(h).tz_localize(None), model=f"live_{model}",
-                                     prediction=v, lead=1, issue_utc=pd.Timestamp(d["prediction_made_utc"]).tz_localize(None),
+                                     prediction=v, lead=1, issue_utc=made, date=d["date"],
+                                     pre_gate=bool(made <= sdac_gate_utc(d["date"])),
                                      code_version=d["code_version"]))
     df = pd.DataFrame(rows).dropna(subset=["prediction"])
     return df, dup_days
+
+
+def cohort_note(fc, act, start, end, ontime):
+    """Cells common to every model (finite prediction + settled actual) and the physics vintages in them."""
+    ok = fc[np.isfinite(fc.prediction.astype(float))].merge(act.dropna()[["zone", "t"]], on=["zone", "t"])
+    loc = ok.t.dt.tz_localize("UTC").dt.tz_convert("Europe/Athens").dt.date.astype(str)
+    ok = ok[(loc >= start) & (loc <= end)]
+    n_models = ok.model.nunique()
+    keys = ok.groupby(["zone", "t"]).model.nunique()
+    keys = keys[keys == n_models].index.to_frame(index=False)
+    sim = fc[fc.model == "live_sim"].merge(keys, on=["zone", "t"])
+    pre = sim.pre_gate.astype(bool)
+    if ontime:
+        sim = sim[pre]; pre = pre[pre]
+    return (f"{len(sim)} common cells; physics code versions {sorted(int(v) for v in sim.code_version.unique())}; "
+            f"post-gate physics cells {int((~pre).sum())}")
 
 
 def tsfm_rows(tsfm_out, zones=ZONES):
@@ -95,6 +121,14 @@ def main():
     live, dup = live_rows(a.live)
     tsfm = tsfm_rows(a.tsfm)
     print(f"evaluator {BENCH_EVAL} ({bench.VERSION}); live lead-1 weather days with >1 row: {dup}")
+    sim = live[live.model == "live_sim"]
+    lw = sim[(sim.date >= WINDOWS["live"][0]) & (sim.date <= WINDOWS["live"][1])]
+    late = lw[~lw.pre_gate].groupby(["zone", "date"]).issue_utc.first()
+    print(f"live physics vintages after the SDAC gate: {len(late)} zone-days "
+          f"({sorted(set(d for _, d in late.index))}), issued {late.min()}..{late.max()}")
+    # cohorts: `ontime` (primary) = only cells whose physics vintage was issued by the gate; every
+    # model is scored on that intersection. `mixed` = the archived latest vintage, pre- and post-gate.
+    ontime_keys = sim[sim.pre_gate][["zone", "t"]]
     res = {}
     pd.set_option("display.width", 250, "display.max_columns", 30)
     cols = ["window", "model", "group", "naive", "mask_family", "n", "n_zone_days", "mae", "bias", "naive_mae", "rmae",
@@ -103,7 +137,10 @@ def main():
     for w, (s, e) in WINDOWS.items():
         runs = [("lear", lear, False)]
         if w == "live":
-            runs = [("live_core", pd.concat([lear, live[live.model == "live_sim"], tsfm]), True),
+            core = pd.concat([lear, sim, tsfm])
+            onk = core.merge(ontime_keys.assign(_ok=True), on=["zone", "t"], how="left")._ok.fillna(False).to_numpy()
+            runs = [("live_core_ontime", core.assign(eligible=onk), True),
+                    ("live_core_mixed", core, True),
                     ("live_gbm", pd.concat([lear, live[live.model == "live_gbm"]]), True),
                     ("live_stats", pd.concat([lear, live[live.model == "live_stats"]]), True)]
         for run, fc, inter in runs:
@@ -114,6 +151,8 @@ def main():
             dm = t["dm"].assign(window=w, run=run)
             dm = dm[dm.mask_family == fam]
             allm.append(mt); alld.append(dm)
+            if run.startswith("live_core"):
+                print(f"{run}: " + cohort_note(fc, act, s, e, run.endswith("ontime")))
     M, D = pd.concat(allm), pd.concat(alld)
     M.to_csv(f"{a.out}/bench_metrics.csv", index=False)
     D.to_csv(f"{a.out}/bench_dm.csv", index=False)

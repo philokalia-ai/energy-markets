@@ -50,14 +50,21 @@ split and hyperparameters locked before the test. No production integration and 
 
 ## The second arm (D-1 load/RES forecasts + fuels lagged 2 days) is dropped
 
-The brief allows the arm only where the vintages are authentic. Neither zone has them:
+The brief allows the arm only where the vintages are authentic. Neither zone has them.
 
-| zone, years | load rows stamped ≤ D-1 10:00 UTC | RES rows stamped ≤ D-1 10:00 UTC |
+`audit_vintages.py` reports the share of forecast rows stamped ≤ D-1 10:00 UTC (the earliest SDAC
+gate), with **D = the row's Europe/Athens market day** (the pilot's convention) and years by D:
+
+| zone, years | load rows pre-gate | RES rows pre-gate |
 |---|---|---|
-| DE_LU 2022–2025 | 0.0–0.8 % | 0 % |
-| DE_LU 2026 | 2.4 % | 0 % |
-| GR 2022–2025 | 0 % | 0 % |
-| GR 2026 | 0.3 % | 0.3 % |
+| DE_LU 2022–2024 | 0 % | 0 % |
+| DE_LU 2025 | 1.32 % | 0 % |
+| DE_LU 2026 | 6.50 % | 0.62 % |
+| GR 2022–2024 | 0 % | 0 % |
+| GR 2025 | 0.57 % | 0 % |
+| GR 2026 | 1.64 % | 0.31 % |
+
+(The first version of this table used the UTC date as D, which gave 2.4 % / 0.3 % for 2026 load.)
 
 - The historical stamps are bulk-load times, months to years after delivery.
 - In 2026 the ETL overwrites the day-ahead values with later revisions.
@@ -99,22 +106,47 @@ The gain is modest, though: it removes 13–31 % of the epf naive's error, less 
 
 ### Live window 2026-09-14..11-13, same cells (intersection of every model; SDAC target)
 
+**Physics vintages and the gate.** The archive keeps one lead-1 weather vintage per zone-day
+(`prediction_made_utc`). Each is classified against the SDAC gate of its market day: D-1 12:00
+Europe/Brussels, i.e. 10:00 UTC in summer time and 11:00 UTC in winter.
+- On **7 October days** (10-08, 10-09, 10-11, 10-12, 10-13, 10-16, 10-20; both zones, 14
+  zone-days, 336 cells) the vintage was issued **10:05–10:06 UTC, after the 10:00 UTC summer gate**.
+- No earlier on-time vintage of those days is archived.
+- The physics code versions in the window are **cv39 (09-14), cv40 (09-15..11-02) and cv42
+  (11-03..11-13)**.
+
+**Primary: the on-time cohort.** Only cells whose physics vintage was issued by the gate are
+kept, and every model is scored on that intersection. That is 2,450 cells, 2 zones × 51 days.
+
 | model | info set | DE_LU MAE | GR MAE | both: MAE | rMAE vs d1 | vs epf | DM vs epf, p |
 |---|---|---|---|---|---|---|---|
-| naive d1 | (a) | | | 45.12 | 1 | | |
-| naive epf | (a) | | | 57.70 | | 1 | |
-| live physics `sim` (lead-1 weather, cv40–42) | (a) | 59.17 | 71.06 | 65.11 | 1.443 | 1.128 | 0.90 |
-| **LEAR, prices only** | (a) 06:30 | 43.96 | 41.33 | **42.64** | 0.945 | 0.739 | 1e-4 |
-| Timestral-209M, prices only | (a) 06:30 | 33.91 | 33.08 | 33.49 | 0.742 | 0.580 | < 1e-4 |
-| Timestral-209M + `sim` | (a′) post-sim | 25.90 | 32.37 | 29.14 | 0.646 | 0.505 | < 1e-4 |
+| naive d1 | (a) | | | 45.03 | 1 | | |
+| naive epf | (a) | | | 59.85 | | 1 | |
+| live physics `sim` (lead-1 weather, cv39/40/42, pre-gate) | (a) | 61.20 | 67.98 | 64.59 | 1.434 | 1.079 | 0.79 |
+| **LEAR, prices only** | (a) 06:30 | 45.78 | 40.68 | **43.23** | 0.960 | 0.722 | 3e-4 |
+| Timestral-209M, prices only | (a) 06:30 | 34.17 | 33.00 | 33.58 | 0.746 | 0.561 | < 1e-4 |
+| Timestral-209M + `sim` | (a′) post-sim, pre-gate | 24.91 | 32.46 | 28.69 | 0.637 | 0.479 | < 1e-4 |
 
-- **Coverage:** 2,786 cells, 2 zones × 58 days.
-- **On the GBM lines' own, smaller coverage:**
+**Secondary: the mixed cohort.** These are the archived vintages as served, pre- and post-gate:
+2,786 cells, 2 zones × 58 days, including the 336 post-gate physics cells. Timestral + `sim` read
+the same late vintages on those days.
+
+| model | DE_LU MAE | GR MAE | both: MAE | rMAE vs d1 | vs epf |
+|---|---|---|---|---|---|
+| live physics `sim` (cv39/40/42, mixed pre/post-gate) | 59.17 | 71.06 | 65.11 | 1.443 | 1.128 |
+| LEAR, prices only | 43.96 | 41.33 | 42.64 | 0.945 | 0.739 |
+| Timestral-209M, prices only | 33.91 | 33.08 | 33.49 | 0.742 | 0.580 |
+| Timestral-209M + `sim` (mixed) | 25.90 | 32.37 | 29.14 | 0.646 | 0.505 |
+
+The ranking is the same in both cohorts.
+- **On the GBM lines' own, smaller coverage** (their issue time is not in the archive; they are
+  overlay rows that the #431 plan describes as rewritten daily, so they are descriptive only):
   - GBM: 1,008 cells over 21 zone-days; LEAR 35.8 vs `gbm` 43.0.
   - Stats: 710 cells over 35 zone-days; LEAR 38.1 vs `stats` 63.2.
   - DM is "insufficient data" (< 30 complete days) for both.
-- **LEAR's bias in the live autumn is −22 €/MWh.** The 364-day window anchors it below the
-  sharply higher autumn prices. Against d1 it is not significantly better (p = 0.21).
+- **LEAR's bias in the live autumn is −21 €/MWh** (on-time cohort). The 364-day window anchors it
+  below the sharply higher autumn prices. Against d1 it is not significantly better (p = 0.29
+  on-time, 0.21 mixed).
 - **Rolling-origin physics and stats GBM on the same cells: not done.** Their per-cell predictions
   (`model-lines-rolling-origin`) were never saved, and rebuilding them needs the Postgres
   `simulations` tables. This box has no access, by rule. The published per-zone figures
@@ -127,8 +159,8 @@ The gain is modest, though: it removes 13–31 % of the epf naive's error, less 
   - It beats every naive in every window.
   - It beats the live physics line by a wide margin on identical cells.
   - It beats the live GBM/stats lines on their thin coverage, which is not significant.
-  - It loses clearly to zero-shot Timestral on the same information set: 42.6 vs 33.5, with
-    rMAE vs epf 0.74 vs 0.58.
+  - It loses clearly to zero-shot Timestral on the same information set: 43.2 vs 33.6 on the
+    on-time cohort, with rMAE vs epf 0.72 vs 0.56.
 - **On this evidence it does not replace Timestral or justify retiring the stats GBM.** It is an
   honest, reproducible floor that any statistical line should beat. Promotion or retirement is
   the owner's call.
@@ -139,7 +171,9 @@ The gain is modest, though: it removes 13–31 % of the epf naive's error, less 
 - `lear.py`: data (`prices`), the model, the parallel runner (`run`), hyperparameter locking
   (`select`), and the long-format export for the contract (`export`): zone, t, model, prediction,
   lead, issue_utc, fit_end.
-- `evaluate_lear.py`: windows and comparisons through benchmark-431's `evaluate()`.
+- `evaluate_lear.py`: windows and comparisons through benchmark-431's `evaluate()`. The live
+  physics vintages are gate-classified; on-time and mixed cohorts are both scored.
+- `audit_vintages.py`: the load/RES publication audit (Athens market day).
 - `hparams.json`: the lock. `requirements.txt`: the pinned private venv.
 - Tests: `test/test_lear_431.py`.
 
