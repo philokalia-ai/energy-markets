@@ -18,7 +18,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: julia-lint-${{ github.workflow }}-${{ github.ref }}
+  group: julia-lint-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -32,28 +32,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: '22.23.3'
           cache: npm
           cache-dependency-path: tools/julia-lint/package-lock.json
-      - name: Install pinned tooling
-        run: npm ci --ignore-scripts --no-audit --no-fund
-      - name: Test changed-file selection
-        run: npm test
-      - name: ESLint changed Julia files (blocking on PRs)
-        if: github.event_name == 'pull_request'
-        env:
-          LINT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          LINT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: npm run lint:changed
-      - name: ESLint full-tree report (advisory)
-        if: always()
-        continue-on-error: true
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: ESLint (fails on error rules only)
         run: npm run lint
-      - name: Prettier check (advisory)
-        if: always()
+      - name: Prettier check (advisory until the repo is formatted)
         continue-on-error: true
         run: npm run format:check
