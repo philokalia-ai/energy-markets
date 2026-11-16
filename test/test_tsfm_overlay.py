@@ -202,6 +202,20 @@ class InformationSetTest(unittest.TestCase):
         self.assertTrue((hourly.sim_made_utc == pd.Timestamp("2026-11-14 09:13")).all())
         self.assertFalse(hourly.after_gate.any())
 
+    def test_physics_homogeneous_one_zone_frame_is_writable(self):
+        # One zone and no RES columns: the residual-load frame is a single homogeneous block, whose
+        # to_numpy() is a read-only view under pandas copy-on-write. The delivery fallback (t-168 h
+        # where D's load was published after the gate) must still be assignable (#436 review P3).
+        load, res, fuel = self.phys_frames(d_load=5850.0, d_load_upd=pd.Timestamp("2026-11-14 10:30"))
+        load = load[load.zone == "DE_LU"]
+        res = res[res.zone == "DE_LU"]                                # empty: DE_LU reports no RES
+        hours = ov.market_day_hours("2026-11-15")
+        grid = pd.date_range(hours[0] - pd.Timedelta(hours=400), periods=400, freq="h")
+        known, pub = ov.physics_covariates(load, res, fuel, ["DE_LU"], grid, hours, ov.gate_utc("2026-11-15"))
+        self.assertEqual(known.shape, (1, 2, 424))
+        np.testing.assert_allclose(known[0, 0, -24:], 1000.0)          # persistence, not the 10:30 revision
+        self.assertEqual(pub, self.EARLY)
+
     def test_probabilities_and_blend(self):
         q = np.linspace(-10, 10, 21)[None]          # symmetric around 0 -> P(<=0) = median level
         self.assertAlmostEqual(ov.p_le(q, LEVELS, 0.0).item(), 0.5)

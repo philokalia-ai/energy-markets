@@ -233,7 +233,7 @@ def physics_covariates(load, res, fuel, zones, grid, hours, cutoff):
                 col = rh[(z, pt)] if (z, pt) in rh.columns else pd.Series(np.nan, index=full)
                 resload[z] = resload[z] - col.reindex(full)
     H = len(hours)
-    rl = resload.to_numpy().T                                   # (Z, T+H)
+    rl = resload.to_numpy(copy=True).T                          # (Z, T+H); writable (a CoW view is read-only)
     persist = resload.shift(168).to_numpy().T
     rl[:, -H:] = np.where(np.isnan(rl[:, -H:]), persist[:, -H:], rl[:, -H:])
     srmc = np.repeat(srmc_hourly(fuel, full)[None, :], len(zones), axis=0)
