@@ -24,7 +24,10 @@ missing required variable before using that path.
 
 Existing positional arguments and other explicit path overrides are retained.
 `REPO`, where supported by shell launchers, still selects another checkout;
-otherwise they locate the repository from their script location. Pure scoring
+otherwise they locate the repository from their script location. Block launchers
+quote results, log and executable paths (including spaces), and return nonzero
+for setup failures. Their existing `env.sh` supplies `J`, a Julia executable
+path or command name. Pure scoring
 functions remain importable without external data; their readers require the
 variables when called.
 
@@ -37,6 +40,10 @@ identity of the original external files. Manifest-container hashes and the
 hash of the path-sanitized historical text source are updated consistently;
 scientific tables are not regenerated.
 
-The repository hygiene workflow rejects personal home-directory paths and
-session scratch paths that encode usernames. No allowlist is used. This
+The repository hygiene workflow rejects any nonempty slash-bounded home
+component, including Unicode, spaces and dollar signs, and
+session scratch paths that encode usernames. Bare roots have no user component;
+a component without its terminating slash is outside the bounded pattern. No
+username, including `runner`, is allowlisted. The workflow also runs retained
+offline detector/launcher fixtures (`test/test_repo_hygiene.py`). This
 cleanup changes the current tree only: old commits retain their original paths.

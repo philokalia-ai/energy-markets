@@ -13,12 +13,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Test path detection and offline launchers
+        run: python3 -m unittest discover -s test -p test_repo_hygiene.py
       - name: Reject personal absolute paths
         shell: bash
         run: |
           # Exclude only this file, which contains the detection expressions.
+          # Any nonempty component is covered, including spaces and Unicode.
+          # Both bounding slashes are required; bare roots are not user paths.
           # No path allowlist: temporary test homes use a neutral directory name.
-          if git grep -nIE '/home/[A-Za-z0-9._-]+/|/Users/[A-Za-z0-9._-]+/' -- . ':!.github/workflows/repo-hygiene.yml'; then
+          if git grep -nIE '/home/[^/]+/|/Users/[^/]+/' -- . ':!.github/workflows/repo-hygiene.yml'; then
             echo 'Replace local home paths with repository-relative paths or explicit environment variables.'
             exit 1
           else
