@@ -1,0 +1,23 @@
+{
+  "files": 241,
+  "changed": 240,
+  "added_lines": 21694,
+  "deleted_lines": 9404,
+  "idempotence_failures": 0,
+  "formatter_exceptions": 0,
+  "formatter_warnings": 0,
+  "commit": "d7590802d4085ef1808359dbc612a449962b0357",
+  "node": "22.23.3",
+  "eslint": "10.15.0",
+  "eslint_plugin_julia": "0.3.1",
+  "prettier": "3.9.10",
+  "prettier_plugin_julia": "0.2.1",
+  "eslint_errors": 0,
+  "eslint_warnings": 576,
+  "ast_equal": 241,
+  "ast_differences": 0,
+  "input_parse_failures": 0,
+  "formatted_parse_failures": 0,
+  "julia_ast_version": "1.13.4",
+  "excluded_paths": []
+}

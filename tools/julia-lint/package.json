@@ -1,0 +1,22 @@
+{
+  "name": "energy-markets-julia-lint",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": "22.23.3"
+  },
+  "devDependencies": {
+    "eslint": "10.15.0",
+    "eslint-plugin-julia": "0.3.1",
+    "prettier": "3.9.10",
+    "prettier-plugin-julia": "0.2.1"
+  },
+  "scripts": {
+    "lint": "node lint.mjs all",
+    "lint:changed": "node lint.mjs changed",
+    "format:check": "node format.mjs",
+    "test": "node --test test/*.test.mjs",
+    "baseline": "node baseline.mjs"
+  }
+}
