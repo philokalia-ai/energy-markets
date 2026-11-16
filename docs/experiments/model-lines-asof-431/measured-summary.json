@@ -1,0 +1,188 @@
+{
+  "base_cv": 37,
+  "delivery_day_timezone": "Europe/Athens",
+  "issues": [
+    {
+      "checks": {
+        "idempotent": true,
+        "issue_set": true,
+        "no_at_de_d2": true,
+        "no_market_d2_stats": true,
+        "no_strict_past": true
+      },
+      "default_cells": 3627,
+      "default_future_lead1_cells": 936,
+      "issue_utc": "2026-09-19T10:40:00+00:00",
+      "lag24_input_delta_AT_DE_LU": {
+        "AT": {
+          "changed": 24,
+          "lag24_cells": 24,
+          "max_abs_delta": 89.05499999999998,
+          "mean_abs_delta": 28.49795138888889,
+          "mean_delta": -10.669756944444446
+        },
+        "DE_LU": {
+          "changed": 24,
+          "lag24_cells": 24,
+          "max_abs_delta": 45.682500000000005,
+          "mean_abs_delta": 10.815104166666666,
+          "mean_delta": -1.7940624999999983
+        }
+      },
+      "lead1_losses_by_zone": {
+        "AT": 24,
+        "BE": 24,
+        "BG": 24,
+        "CH": 24,
+        "CZ": 24,
+        "DE_LU": 24,
+        "DK1": 24,
+        "DK2": 24,
+        "EE": 24,
+        "ES": 24,
+        "FI": 24,
+        "FR": 24,
+        "GR": 24,
+        "HU": 24,
+        "IT-CNORTH": 24,
+        "IT-CSOUTH": 24,
+        "IT-Calabria": 24,
+        "IT-NORTH": 24,
+        "IT-SOUTH": 24,
+        "IT-Sardinia": 24,
+        "IT-Sicily": 24,
+        "LT": 24,
+        "LV": 24,
+        "NL": 24,
+        "NO1": 24,
+        "NO2": 24,
+        "NO3": 24,
+        "NO4": 24,
+        "NO5": 24,
+        "PL": 24,
+        "PT": 24,
+        "RO": 24,
+        "RS": 24,
+        "SE1": 24,
+        "SE2": 24,
+        "SE3": 24,
+        "SE4": 24,
+        "SI": 24,
+        "SK": 24
+      },
+      "other_lag24_cells_changed": 827,
+      "other_zones_lag24_changed": 35,
+      "strict_cells": 0,
+      "strict_future_lead1_cells": 0
+    },
+    {
+      "checks": {
+        "idempotent": true,
+        "issue_set": true,
+        "no_at_de_d2": true,
+        "no_market_d2_stats": true,
+        "no_strict_past": true
+      },
+      "default_cells": 3666,
+      "default_future_lead1_cells": 975,
+      "issue_utc": "2026-10-24T10:40:00+00:00",
+      "lag24_input_delta_AT_DE_LU": {
+        "AT": {
+          "changed": 25,
+          "lag24_cells": 25,
+          "max_abs_delta": 49.412499999999966,
+          "mean_abs_delta": 16.38523333333334,
+          "mean_delta": -11.283099999999997
+        },
+        "DE_LU": {
+          "changed": 25,
+          "lag24_cells": 25,
+          "max_abs_delta": 25.68249999999999,
+          "mean_abs_delta": 9.600799999999998,
+          "mean_delta": -4.942400000000001
+        }
+      },
+      "lead1_losses_by_zone": {
+        "AT": 25,
+        "BE": 25,
+        "BG": 25,
+        "CH": 25,
+        "CZ": 25,
+        "DE_LU": 25,
+        "DK1": 25,
+        "DK2": 25,
+        "EE": 25,
+        "ES": 25,
+        "FI": 25,
+        "FR": 25,
+        "GR": 25,
+        "HU": 25,
+        "IT-CNORTH": 25,
+        "IT-CSOUTH": 25,
+        "IT-Calabria": 25,
+        "IT-NORTH": 25,
+        "IT-SOUTH": 25,
+        "IT-Sardinia": 25,
+        "IT-Sicily": 25,
+        "LT": 25,
+        "LV": 25,
+        "NL": 25,
+        "NO1": 25,
+        "NO2": 25,
+        "NO3": 25,
+        "NO4": 25,
+        "NO5": 25,
+        "PL": 25,
+        "PT": 25,
+        "RO": 25,
+        "RS": 25,
+        "SE1": 25,
+        "SE2": 25,
+        "SE3": 25,
+        "SE4": 25,
+        "SI": 25,
+        "SK": 25
+      },
+      "other_lag24_cells_changed": 851,
+      "other_zones_lag24_changed": 35,
+      "strict_cells": 0,
+      "strict_future_lead1_cells": 0
+    },
+    {
+      "checks": {
+        "idempotent": true,
+        "issue_set": true,
+        "no_at_de_d2": true,
+        "no_market_d2_stats": true,
+        "no_strict_past": true
+      },
+      "default_cells": 3666,
+      "default_future_lead1_cells": 936,
+      "issue_utc": "2026-11-13T10:40:00+00:00",
+      "lag24_input_delta_AT_DE_LU": {
+        "AT": {
+          "changed": 24,
+          "lag24_cells": 24,
+          "max_abs_delta": 54.64999999999995,
+          "mean_abs_delta": 18.56045138888889,
+          "mean_delta": 3.751909722222223
+        },
+        "DE_LU": {
+          "changed": 24,
+          "lag24_cells": 24,
+          "max_abs_delta": 32.83000000000001,
+          "mean_abs_delta": 14.06333333333333,
+          "mean_delta": -4.362499999999999
+        }
+      },
+      "lead1_losses_by_zone": {},
+      "other_lag24_cells_changed": 841,
+      "other_zones_lag24_changed": 36,
+      "strict_cells": 936,
+      "strict_future_lead1_cells": 936
+    }
+  ],
+  "kind": "source-coverage and lag24 probe, NOT trained-GBM price validation",
+  "limits": "Source-coverage upper bound with synthetic book/model availability; no frozen GBM artifacts; lag deltas are inputs, not trained predictions.",
+  "target_policy": "highest_seq"
+}

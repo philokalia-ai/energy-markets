@@ -11,6 +11,9 @@ For each target day T (default: today-2 .. today+7, UTC):
   stats_gbm    = the pure-stats GBM (settled lags), emitted ONLY where its lags
                  legally exist (T no later than last-settled-day + 1).
 Rows are UPSERTED into simulations.model_lines (overlay series, not a vintage).
+MODEL_LINES_STRICT_ASOF=1 opts into gate/physics/settled publication cutoffs;
+MODEL_LINES_REWRITE_PAST=1 allows an explicit backfill past the gate. Each run
+records issue_utc and a source_manifest; these do not reconstruct old vintages.
 
 Feature sources, in order: data/backfill_books_cv37/<F>.parquet, then
 data/model_line_feats/<F>.csv (grown daily by bin/capture_book_features.jl),
@@ -23,7 +26,8 @@ version, MODEL_LINES_ALLOW_MIXED_BASE=1 to publish on whatever version is freshe
 First run trains and pickles the models to data/model_lines_train/models.joblib;
 delete that file to retrain (e.g. after extending the training parquet).
 """
-import os, sys, glob, datetime as dt, warnings
+import os, sys, glob, datetime as dt, warnings, json, importlib
+from zoneinfo import ZoneInfo
 warnings.filterwarnings("ignore")
 import numpy as np, pandas as pd, duckdb, joblib, psycopg2
 from sklearn.ensemble import HistGradientBoostingRegressor
@@ -213,25 +217,215 @@ def features_for(target):
 
 BASE_SQL = """
     SELECT bidding_zone, (date_time_utc AT TIME ZONE 'UTC'), price_eur_mwh,
-           code_version
+           code_version, (prediction_made_utc AT TIME ZONE 'UTC')
     FROM (
       SELECT bidding_zone, date_time_utc, price_eur_mwh, code_version,
+             prediction_made_utc,
              ROW_NUMBER() OVER (PARTITION BY bidding_zone, date_time_utc
                                 ORDER BY lead_days ASC, prediction_made_utc DESC) rn
       FROM simulations.forecast_prices
       WHERE input_mode LIKE 'weather%%' AND date_time_utc >= %s::date
         AND date_time_utc < %s::date + INTERVAL '1 day'
-        AND (%s::int IS NULL OR code_version = %s::int)) x
+        AND (%s::int IS NULL OR code_version = %s::int)
+        {cutoff}) x
     WHERE rn = 1"""
 
 
-def physics_base(cur, d0, d1, pin):
-    """Freshest weather-track forecast per (zone, hour) in d0..d1, restricted to
-    record version `pin` (None = any version, freshest wins)."""
-    cur.execute(BASE_SQL, (d0.isoformat(), d1.isoformat(), pin, pin))
-    base = pd.DataFrame(cur.fetchall(), columns=["zone", "t", "sim", "base_cv"])
+def utc_issue(value=None):
+    """One timezone-aware issue instant for the whole run (injectable offline)."""
+    t = pd.Timestamp.now(tz="UTC") if value is None else pd.Timestamp(value)
+    if t.tzinfo is None:
+        raise ValueError("issue_utc must include a timezone")
+    return t.tz_convert("UTC")
+
+
+def market_date(value):
+    """Website delivery/issue date, independent of UTC batching and lag offsets."""
+    return utc_issue(value).tz_convert("Europe/Athens").date()
+
+
+def gate_utc(target):
+    """Day-ahead noon Brussels gate before the Athens delivery date."""
+    return pd.Timestamp(dt.datetime.combine(target - dt.timedelta(days=1),
+                        dt.time(12), tzinfo=ZoneInfo("Europe/Brussels"))).tz_convert("UTC")
+
+
+def may_emit(target, issue, strict=False, rewrite_past=False):
+    return not strict or rewrite_past or utc_issue(issue) < gate_utc(target)
+
+
+def physics_base(cur, d0, d1, pin, issue=None):
+    """Select the legacy base, optionally limiting vintages BEFORE ranking."""
+    cutoff = "AND prediction_made_utc <= %s" if issue is not None else ""
+    args = [d0.isoformat(), d1.isoformat(), pin, pin]
+    if issue is not None:
+        args.append(utc_issue(issue).to_pydatetime())
+    cur.execute(BASE_SQL.format(cutoff=cutoff), args)
+    base = pd.DataFrame(cur.fetchall(), columns=["zone", "t", "sim", "base_cv", "prediction_made_utc"])
+    base["prediction_made_utc"] = pd.to_datetime(base.prediction_made_utc, utc=True)
     base["k"] = pd.to_datetime(base.t, utc=True).dt.strftime("%Y-%m-%dT%H")
     return base
+
+
+def target_helper():
+    # PR C owns this module. Keep the highest_seq fallback until it lands;
+    # errors inside an installed helper must never silently select another target.
+    bindir = os.path.join(ROOT, "bin")
+    if bindir not in sys.path:
+        sys.path.insert(0, bindir)
+    try:
+        return importlib.import_module("da_target")
+    except ModuleNotFoundError as exc:
+        if exc.name != "da_target":
+            raise
+        return None
+
+
+def target_policy():
+    helper = target_helper()
+    if helper is not None:
+        return helper.policy()
+    policy = (os.environ.get("EUPHEMIA_DA_TARGET") or "highest_seq").strip().lower()
+    if policy != "highest_seq":
+        raise ValueError("EUPHEMIA_DA_TARGET requires bin/da_target.py for sdac; "
+                         "fallback supports highest_seq only")
+    return policy
+
+
+def canonical_settled(raw, issue=None):
+    """Single auction per interval, hourly lags; filter revisions before selection.
+
+    raw has PR C's z/seq/res/t/p/u schema. NULL or absent publication stamps
+    are unverifiable in strict mode, never treated as evidence of availability.
+    """
+    raw = raw.copy()
+    raw["t"] = pd.to_datetime(raw.t, utc=True).dt.tz_localize(None)
+    raw["u"] = pd.to_datetime(raw.u, utc=True).dt.tz_localize(None)
+    if issue is not None:
+        issue = utc_issue(issue).tz_localize(None)
+        unverifiable = set(raw.loc[raw.u.isna(), "z"])
+        available = raw.u.notna() & (raw.u <= issue) & ~raw.z.isin(unverifiable)
+        for zone in sorted(unverifiable | (set(raw.z) - set(raw.loc[available, "z"]))):
+            warn(f"strict as-of: {zone} settled vintages unavailable/unverifiable at {issue} UTC; fail closed")
+        raw = raw[available].copy()
+    helper = target_helper()
+    policy = target_policy()
+    if helper is not None:
+        if policy == "sdac":
+            act, excluded, _ = helper.sdac_hourly(raw)
+            if len(excluded):
+                print("model lines: target exclusions " + str(excluded.reason.value_counts().to_dict()), flush=True)
+        else:
+            act = helper.highest_seq_hourly(raw)
+    else:
+        # Same pure highest_seq contract as PR C. Never average auctions.
+        raw["seq"] = raw.seq.fillna("").astype(str).str.strip()
+        raw["seqn"] = pd.to_numeric(raw.seq, errors="coerce")
+        raw = raw.sort_values(["z", "t", "seqn", "u"],
+                              ascending=[True, True, False, False],
+                              na_position="last", kind="mergesort")
+        raw = raw.drop_duplicates(["z", "t"], keep="first")
+        raw["h"] = raw.t.dt.floor("h")
+        act = raw.groupby(["z", "h"], as_index=False).p.mean().rename(columns={"h": "t", "p": "act"})
+    st = act.rename(columns={"z": "zone", "act": "p"})[["zone", "t", "p"]].copy()
+    st["t"] = pd.to_datetime(st.t, utc=True)
+    return st.sort_values(["zone", "t"]).reset_index(drop=True)
+
+
+def settled_history(cur, d0, d1, issue=None):
+    cur.execute("""SELECT column_name FROM information_schema.columns
+        WHERE table_schema='entsoe' AND table_name='energy_prices'""")
+    has_update = "update_time_utc" in {row[0] for row in cur.fetchall()}
+    update = "(update_time_utc AT TIME ZONE 'UTC')" if has_update else "NULL"
+    cur.execute(f"""SELECT map_code, trim(coalesce(sequence, '')), trim(resolution_code),
+        (date_time_utc AT TIME ZONE 'UTC'), price_currency_mwh, {update}
+        FROM entsoe.energy_prices
+        WHERE contract_type='Day-ahead' AND currency='EUR' AND area_type_code LIKE 'BZN%%'
+          AND price_currency_mwh IS NOT NULL
+          AND date_time_utc >= %s::date - INTERVAL '10 days'
+          AND date_time_utc < %s::date + INTERVAL '1 day'""", (d0.isoformat(), d1.isoformat()))
+    raw = pd.DataFrame(cur.fetchall(), columns=["z", "seq", "res", "t", "p", "u"])
+    return canonical_settled(raw, issue)
+
+
+def zone_last_settled(st, issue):
+    # Early EXAA for tomorrow must not authorize D+2, even in its own zone.
+    cap = market_date(issue)
+    return {z: min(market_date(g.t.max()), cap) for z, g in st.groupby("zone")}
+
+
+MODEL_LINE_COLUMNS = {
+    "base_code_version": "integer",
+    "issue_utc": "timestamptz",
+    "source_manifest": "jsonb",
+}
+
+
+def ensure_metadata_columns(cx):
+    """Catalog-first additive DDL, bounded locks, no ALTER on normal runs (#424)."""
+    cur = cx.cursor()
+    cur.execute("""SELECT column_name FROM information_schema.columns
+        WHERE table_schema='simulations' AND table_name='model_lines'""")
+    have = {row[0] for row in cur.fetchall()}
+    missing = [(c, t) for c, t in MODEL_LINE_COLUMNS.items() if c not in have]
+    if not missing:
+        return True
+    cx.commit()  # end the read-only catalog/source transaction before the DDL
+    try:
+        cur.execute("BEGIN")
+        cur.execute("SET LOCAL lock_timeout = '5s'")
+        cur.execute("ALTER TABLE simulations.model_lines " + ", ".join(
+            f"ADD COLUMN IF NOT EXISTS {c} {t}" for c, t in missing))
+        cx.commit()
+        return True
+    except Exception as exc:
+        cx.rollback()
+        warn(f"model lines: metadata migration failed; no rows written: {exc}")
+        return False
+
+
+def provenance_rows(rows, base_h, issue, back, strict):
+    """Append issuance/source metadata without changing model values."""
+    vintages = {(r.zone, r.k): getattr(r, "prediction_made_utc", None)
+                for r in base_h.itertuples()}
+    out = []
+    policy = target_policy()
+    for row in rows:
+        z, timestamp, model, _, _, base_cv = row
+        vintage = vintages.get((z, timestamp[:13])) if model == "hybrid_gbm" else None
+        manifest = {"physics_prediction_made_utc": None if pd.isna(vintage) else utc_issue(vintage).isoformat(),
+                    "base_code_version": base_cv, "book_cv": CV, "feature_back_days": back,
+                    "target_policy": policy, "strict_asof": strict}
+        out.append((*row, utc_issue(issue).to_pydatetime(), json.dumps(manifest, sort_keys=True)))
+    return out
+
+
+UPSERT_SQL = """
+    INSERT INTO simulations.model_lines
+        (bidding_zone, date_time_utc, model, price_eur_mwh, code_version,
+         base_code_version, issue_utc, source_manifest)
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+    ON CONFLICT (bidding_zone, date_time_utc, model, code_version)
+    DO UPDATE SET price_eur_mwh = EXCLUDED.price_eur_mwh,
+                  base_code_version = EXCLUDED.base_code_version,
+                  issue_utc = EXCLUDED.issue_utc,
+                  source_manifest = EXCLUDED.source_manifest,
+                  generated_at = now()
+    WHERE (model_lines.price_eur_mwh, model_lines.base_code_version,
+           model_lines.issue_utc, model_lines.source_manifest)
+          IS DISTINCT FROM
+          (EXCLUDED.price_eur_mwh, EXCLUDED.base_code_version,
+           EXCLUDED.issue_utc, EXCLUDED.source_manifest)"""
+
+
+# The source SELECT rejects late inserts. The conflict predicate is evaluated
+# after obtaining the row lock, so it must recheck wall time as well: a writer
+# can enter before gate and finish a conflicting-row lock wait after gate.
+# clock_timestamp() is wall time; now() is frozen at transaction start.
+UPSERT_STRICT_SQL = UPSERT_SQL.replace(
+    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb)",
+    "SELECT %s, %s, %s, %s, %s, %s, %s, %s::jsonb WHERE clock_timestamp() < %s"
+) + "\n    AND clock_timestamp() < %s"
 
 
 def _mix(base):
@@ -247,7 +441,8 @@ def warn(msg):
     print(f"WARNING: {msg}", flush=True)
 
 
-def lines_for_day(T, feats, base_h, base_any, st, last_settled, models):
+def lines_for_day(T, feats, base_h, base_any, st, last_settled, models,
+                  issue=None, strict=False, rewrite_past=False):
     """Rows for target day T: (rows, hybrid_status, stats_status).
 
     The two lines have different inputs, so they are gated independently:
@@ -262,11 +457,27 @@ def lines_for_day(T, feats, base_h, base_any, st, last_settled, models):
                    forecast (base_any), i.e. unchanged from before the pin, and
                    its rows record base_code_version NULL — it has no base.
     """
+    if strict:
+        if issue is None:
+            raise ValueError("strict mode requires issue_utc")
+        def asof_base(base):
+            if "prediction_made_utc" not in base:
+                return base.iloc[:0]
+            stamp = pd.to_datetime(base.prediction_made_utc, utc=True)
+            return base[stamp.notna() & (stamp <= utc_issue(issue))]
+        base_h, base_any = asof_base(base_h), asof_base(base_any)
     feats = feats[feats.k.str[:10] == T.isoformat()].copy()
+    if strict and len(feats):
+        # A UTC batch straddles two Athens delivery dates. Gate each cell, too.
+        feats = feats.loc[feats.k.map(lambda k: may_emit(
+            market_date(k + ":00:00Z"), issue, True, rewrite_past))]
+        if feats.empty:
+            return [], "skipped (delivery gate passed)", "skipped (delivery gate passed)"
     feats["hour"] = feats.k.str[11:13].astype(int)
     feats["month"] = int(T.month)
-    feats["gas"] = last_close(os.path.join(TRAIN, "probe_ttf.csv"), T)
-    feats["co2"] = last_close(os.path.join(TRAIN, "probe_eua.csv"), T)
+    fuel_day = min(T, utc_issue(issue).date() + dt.timedelta(days=1)) if strict else T
+    feats["gas"] = last_close(os.path.join(TRAIN, "probe_ttf.csv"), fuel_day)
+    feats["co2"] = last_close(os.path.join(TRAIN, "probe_eua.csv"), fuel_day)
     out = []
     mh_df = feats.merge(base_h[base_h.k.str[:10] == T.isoformat()][["zone", "k", "sim", "base_cv"]],
                         on=["zone", "k"], how="inner")
@@ -282,12 +493,19 @@ def lines_for_day(T, feats, base_h, base_any, st, last_settled, models):
         hyb = "SKIPPED (no physics base at the pinned version)"
     sT = feats.merge(base_any[base_any.k.str[:10] == T.isoformat()][["zone", "k"]],
                      on=["zone", "k"], how="inner")
-    if not len(sT):
+    due = last_settled if isinstance(last_settled, dict) else {z: last_settled for z in sT.zone.unique()}
+    if issue is not None:
+        due = {z: min(day, market_date(issue)) for z, day in due.items()}
+    had_domain = len(sT)
+    sT["t"] = pd.to_datetime(sT.k, format="%Y-%m-%dT%H", utc=True)
+    delivery_days = sT.t.dt.tz_convert("Europe/Athens").dt.date
+    allowed_days = sT.zone.map(lambda z: due[z] + dt.timedelta(days=1) if z in due else dt.date.min)
+    sT = sT.loc[delivery_days <= allowed_days]
+    if not had_domain:
         sta = "skipped (no physics forecast rows for any version)"
-    elif T > last_settled + dt.timedelta(days=1):
+    elif not len(sT):
         sta = "not due (lag24 not settled yet)"
     else:
-        sT["t"] = pd.to_datetime(sT.k, format="%Y-%m-%dT%H", utc=True)
         for lag, col in ((24, "lag24"), (48, "lag48"), (168, "lag168")):
             lk = st.copy(); lk["t"] = lk.t + pd.Timedelta(hours=lag)
             sT = sT.merge(lk.rename(columns={"p": col})[["zone", "t", col]],
@@ -309,19 +527,23 @@ def lines_for_day(T, feats, base_h, base_any, st, last_settled, models):
 
 
 def main():
-    today = dt.date.today()
+    issue = utc_issue()
+    strict = os.environ.get("MODEL_LINES_STRICT_ASOF") == "1"
+    rewrite_past = os.environ.get("MODEL_LINES_REWRITE_PAST") == "1"
+    today = issue.date()
     if len(sys.argv) >= 3:
         d0, d1 = dt.date.fromisoformat(sys.argv[1]), dt.date.fromisoformat(sys.argv[2])
     else:
         d0, d1 = today - dt.timedelta(days=2), today + dt.timedelta(days=7)
+    policy = target_policy()  # validate before any model/database work
     models = load_models()
     cx = conn(); cur = cx.cursor()
     refresh_fuel_csvs(cx)
     # physics base for the HYBRID line: freshest weather-track forecast per
     # (zone, hour), PINNED to one record version (#389) unless explicitly
     # allowed to mix. The stats line does not use it (see lines_for_day).
-    base_any = physics_base(cur, d0, d1, None)
-    base_h = base_any if ALLOW_MIXED_BASE else physics_base(cur, d0, d1, BASE_CV)
+    base_any = physics_base(cur, d0, d1, None, issue if strict else None)
+    base_h = base_any if ALLOW_MIXED_BASE else physics_base(cur, d0, d1, BASE_CV, issue if strict else None)
     print("model lines: physics base " +
           ("PINNED to cv%d" % BASE_CV if not ALLOW_MIXED_BASE else "UNPINNED (mixed base allowed)") +
           " — hybrid cells by version: " + _mix(base_h) +
@@ -334,46 +556,48 @@ def main():
              f"is still emitted. To restore the hybrid: retrain/rebind the artifact to the "
              f"version production runs, set MODEL_LINES_BASE_CV to a version that exists, "
              f"or MODEL_LINES_ALLOW_MIXED_BASE=1 to publish on a mixed base deliberately.")
-    # settled (for stats lags): everything available before the window's end
-    cur.execute("""
-        SELECT map_code, (date_time_utc AT TIME ZONE 'UTC'), AVG(price_currency_mwh)
-        FROM entsoe.energy_prices
-        WHERE contract_type='Day-ahead' AND currency='EUR'
-          AND date_time_utc >= %s::date - INTERVAL '10 days'
-        GROUP BY 1, 2""", (d0.isoformat(),))
-    st = pd.DataFrame(cur.fetchall(), columns=["zone", "t", "p"])
-    st["t"] = pd.to_datetime(st.t, utc=True)
-    last_settled = st.t.max().date() if len(st) else d0 - dt.timedelta(days=10)
+    st = settled_history(cur, d0, d1, issue if strict else None)
+    last_settled = zone_last_settled(st, issue)
+    print(f"model lines: issue_utc={issue.isoformat()} strict_asof={strict} "
+          f"rewrite_past={rewrite_past} target={policy}", flush=True)
     out, hyb_skipped = [], []
     for n in range((d1 - d0).days + 1):
         T = d0 + dt.timedelta(days=n)
+        last_delivery_day = market_date(pd.Timestamp(T, tz="UTC") + pd.Timedelta(hours=23))
+        if not may_emit(last_delivery_day, issue, strict, rewrite_past):
+            print(f"{T}: delivery gate passed — skipped (strict as-of)", flush=True)
+            continue
         feats, back = features_for(T)
         if feats is None:
             print(f"{T}: no feature source (T-7/T-14 book missing) — skipped", flush=True)
             continue
-        rows, hyb, sta = lines_for_day(T, feats, base_h, base_any, st, last_settled, models)
-        out += rows
+        rows, hyb, sta = lines_for_day(T, feats, base_h, base_any, st, last_settled, models,
+                                       issue, strict, rewrite_past)
+        out += provenance_rows(rows, base_h, issue, back, strict)
         if hyb.startswith("SKIPPED"):
             hyb_skipped.append(T)
         print(f"{T}: hybrid {hyb}; stats {sta} (features from T-{back})", flush=True)
     if hyb_skipped and len(base_h):
         warn(f"model lines: hybrid line skipped on {len(hyb_skipped)} day(s) "
              f"({', '.join(map(str, hyb_skipped))}) — no cv{BASE_CV} physics base")
+    if out and strict and not rewrite_past:
+        # Loading/training can cross the gate. Recheck at publication as well.
+        write_time = utc_issue()
+        before = len(out)
+        out = [r for r in out if may_emit(market_date(r[1]), write_time, True)]
+        if before != len(out):
+            warn(f"strict as-of: gate passed during run; dropped {before - len(out)} rows before write")
     if out:
-        # Additive provenance column: which physics base each row was built on.
-        # NULL on rows written before #389 and on stats rows (no base); no
-        # reader breaks.
-        cur.execute("ALTER TABLE simulations.model_lines "
-                    "ADD COLUMN IF NOT EXISTS base_code_version integer")
-        cur.executemany("""
-            INSERT INTO simulations.model_lines
-                (bidding_zone, date_time_utc, model, price_eur_mwh, code_version,
-                 base_code_version)
-            VALUES (%s, %s, %s, %s, %s, %s)
-            ON CONFLICT (bidding_zone, date_time_utc, model, code_version)
-            DO UPDATE SET price_eur_mwh = EXCLUDED.price_eur_mwh,
-                          base_code_version = EXCLUDED.base_code_version,
-                          generated_at = now()""", out)
+        if not ensure_metadata_columns(cx):
+            raise RuntimeError("model lines: required metadata unavailable; no emission")
+        if strict and not rewrite_past:
+            guarded = []
+            for row in out:
+                gate = gate_utc(market_date(row[1])).to_pydatetime()
+                guarded.append((*row, gate, gate))
+            cur.executemany(UPSERT_STRICT_SQL, guarded)
+        else:
+            cur.executemany(UPSERT_SQL, out)
         cx.commit()
     nh = sum(r[2] == "hybrid_gbm" for r in out)
     print(f"EMITTED {len(out)} rows for {d0}..{d1} (hybrid_gbm {nh}, stats_gbm {len(out) - nh})")
