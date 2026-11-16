@@ -65,7 +65,7 @@ class PinTest(unittest.TestCase):
     def tearDown(self):
         eml.TRAIN = self._train; self.tmp.cleanup()
 
-    def run_day(self, base_h, base_any, st, feats, last_settled=T - dt.timedelta(days=1)):
+    def run_day(self, base_h, base_any, st, feats, last_settled=T):
         return eml.lines_for_day(T, feats, base_h, base_any, st, last_settled, self.models)
 
     def test_pinned_base_empty_keeps_stats(self):
@@ -119,7 +119,7 @@ class AsOfTest(PinTest):
                            't': pd.to_datetime(['2026-11-11T23:00Z', '2026-11-14T23:00Z']),
                            'p': [90., 120.]})
         self.assertEqual(eml.zone_last_settled(st, self.issue),
-                         {'GR': dt.date(2026, 11, 11), 'AT': dt.date(2026, 11, 13)})
+                         {'GR': dt.date(2026, 11, 12), 'AT': dt.date(2026, 11, 13)})
 
     def test_one_zones_settlement_does_not_authorize_another(self):
         feats, base, st = frames([37])
@@ -145,6 +145,54 @@ class AsOfTest(PinTest):
                                          eml.zone_last_settled(st, d2_issue), models, d2_issue)
         self.assertEqual(rows, [])
         self.assertTrue(sta.startswith('not due'))
+
+    def test_athens_cell_cap_across_winter_and_summer_midnight(self):
+        # The previous UTC-date cap leaked two winter / three summer D+2 cells.
+        for issue_text, boundary_hour in [('2026-11-13T10:40Z',22),
+                                          ('2026-07-13T10:40Z',21),
+                                          ('2026-11-13T22:30Z',22),
+                                          ('2026-07-13T21:30Z',21)]:
+            with self.subTest(issue=issue_text):
+                issue=eml.utc_issue(issue_text)
+                day=eml.market_date(issue)+dt.timedelta(days=1)
+                hours=pd.date_range(str(day),periods=24,freq='h',tz='UTC')
+                base=pd.DataFrame({'zone':'AT','t':hours,'k':hours.strftime('%Y-%m-%dT%H'),
+                                   'base_cv':44,'sim':100.,'prediction_made_utc':issue})
+                feats=base[['zone','k']].assign(D=5000.,res_sh=.3,imp_sh=.1,bst_sh=0.,margin=1.4)
+                # Includes the early EXAA market day, so every elapsed-hour lag exists.
+                history=pd.date_range(pd.Timestamp(day,tz='UTC')-pd.Timedelta(days=12),
+                                      pd.Timestamp(day,tz='UTC'),freq='h',inclusive='left')
+                st=pd.DataFrame({'zone':'AT','t':history,'p':120.})
+                rows,_,_=eml.lines_for_day(day,feats,base.iloc[:0],base,st,
+                    eml.zone_last_settled(st,issue),{'hybrid':{},'stats':{'AT':Const(120.)}},issue)
+                self.assertEqual(len(rows),boundary_hour)
+                self.assertEqual([pd.Timestamp(r[1]).hour for r in rows],list(range(boundary_hour)))
+                self.assertTrue(all(eml.market_date(r[1])==day for r in rows))
+                self.assertTrue(all(eml.market_date(r[1])<=eml.market_date(issue)+dt.timedelta(days=1)
+                                    for r in rows))
+
+    def test_strict_gate_uses_each_cells_athens_delivery_day(self):
+        for text, boundary_hour in [('2026-11-13T10:40Z',22),('2026-07-13T09:40Z',21)]:
+            with self.subTest(issue=text):
+                issue=eml.utc_issue(text)
+                day=issue.date()
+                hours=pd.date_range(str(day),periods=24,freq='h',tz='UTC')
+                base=pd.DataFrame({'zone':'AT','t':hours,'k':hours.strftime('%Y-%m-%dT%H'),
+                                   'base_cv':44,'sim':100.,'prediction_made_utc':issue})
+                feats=base[['zone','k']].assign(D=5000.,res_sh=.3,imp_sh=.1,bst_sh=0.,margin=1.4)
+                history=pd.date_range(pd.Timestamp(day,tz='UTC')-pd.Timedelta(days=12),
+                                      pd.Timestamp(day,tz='UTC'),freq='h',inclusive='left')
+                st=pd.DataFrame({'zone':'AT','t':history,'p':120.})
+                models={'hybrid':{},'stats':{'AT':Const(120.)}}
+                rows,_,_=eml.lines_for_day(day,feats,base.iloc[:0],base,st,
+                    eml.zone_last_settled(st,issue),models,issue,True)
+                self.assertEqual([pd.Timestamp(r[1]).hour for r in rows],list(range(boundary_hour,24)))
+                self.assertTrue(all(eml.market_date(r[1])==eml.market_date(issue)+dt.timedelta(days=1)
+                                    for r in rows))
+                closed=eml.gate_utc(eml.market_date(issue)+dt.timedelta(days=1))
+                rows,_,_=eml.lines_for_day(day,feats,base.iloc[:0],base,st,
+                    eml.zone_last_settled(st,closed),models,closed,True)
+                self.assertEqual(rows,[])
 
     def test_revision_filter_precedes_canonical_selection(self):
         from unittest.mock import patch
@@ -191,7 +239,7 @@ class AsOfTest(PinTest):
         base['prediction_made_utc'] = self.issue
         rows, _, _ = eml.lines_for_day(T,feats,base,base,st,eml.zone_last_settled(st,self.issue),
                                        self.models,self.issue,True)
-        self.assertEqual(len(rows),96)
+        self.assertEqual(len(rows),92)  # last two UTC hours in each zone are Athens D+2
         rows2, _, _ = eml.lines_for_day(T,feats,base.iloc[:0],base,st,
                                         eml.zone_last_settled(st,self.issue),self.models,self.issue,True)
         self.assertEqual({r[2] for r in rows2},{'stats_gbm'})
@@ -278,7 +326,8 @@ class PhysicsSQLTest(unittest.TestCase):
         self.assertNotIn('clock_timestamp',eml.UPSERT_SQL)
         self.assertIn('WHERE clock_timestamp() < %s',eml.UPSERT_STRICT_SQL)
         self.assertNotIn('VALUES (',eml.UPSERT_STRICT_SQL)
-        self.assertEqual(eml.UPSERT_STRICT_SQL.count('%s'),9)
+        self.assertEqual(eml.UPSERT_STRICT_SQL.count('%s'),10)
+        self.assertIn('AND clock_timestamp() < %s',eml.UPSERT_STRICT_SQL)
 
 
     @unittest.skipUnless(hasattr(sys.modules.get('duckdb'),'connect'), 'DuckDB optional for SQL fixture')
@@ -295,10 +344,10 @@ class PhysicsSQLTest(unittest.TestCase):
             UNIQUE(bidding_zone,date_time_utc,model,code_version))''')
         row=('GR','2026-11-14T00:00:00Z','hybrid_gbm',80.,37,37,now,'{}')
         sql=eml.UPSERT_STRICT_SQL.replace('%s','?').replace('::jsonb','::JSON')
-        cx.execute(sql,(*row,eml.utc_issue('2026-11-13T10:00Z').to_pydatetime()))
+        cx.execute(sql,(*row,*([eml.utc_issue('2026-11-13T10:00Z').to_pydatetime()]*2)))
         self.assertEqual(cx.execute('SELECT count(*) FROM simulations.model_lines').fetchone()[0],0)
-        cx.execute(sql,(*row,eml.utc_issue('2026-11-13T12:00Z').to_pydatetime()))
-        cx.execute(sql,(*row[:3],999.,*row[4:],eml.utc_issue('2026-11-13T10:00Z').to_pydatetime()))
+        cx.execute(sql,(*row,*([eml.utc_issue('2026-11-13T12:00Z').to_pydatetime()]*2)))
+        cx.execute(sql,(*row[:3],999.,*row[4:],*([eml.utc_issue('2026-11-13T10:00Z').to_pydatetime()]*2)))
         self.assertEqual(cx.execute('SELECT price_eur_mwh FROM simulations.model_lines').fetchone()[0],80.)
         cx.close()
 

@@ -239,8 +239,13 @@ def utc_issue(value=None):
     return t.tz_convert("UTC")
 
 
+def market_date(value):
+    """Website delivery/issue date, independent of UTC batching and lag offsets."""
+    return utc_issue(value).tz_convert("Europe/Athens").date()
+
+
 def gate_utc(target):
-    """Day-ahead noon Brussels gate on the day before the UTC target date."""
+    """Day-ahead noon Brussels gate before the Athens delivery date."""
     return pd.Timestamp(dt.datetime.combine(target - dt.timedelta(days=1),
                         dt.time(12), tzinfo=ZoneInfo("Europe/Brussels"))).tz_convert("UTC")
 
@@ -345,8 +350,8 @@ def settled_history(cur, d0, d1, issue=None):
 
 def zone_last_settled(st, issue):
     # Early EXAA for tomorrow must not authorize D+2, even in its own zone.
-    cap = utc_issue(issue).date()
-    return {z: min(g.t.max().date(), cap) for z, g in st.groupby("zone")}
+    cap = market_date(issue)
+    return {z: min(market_date(g.t.max()), cap) for z, g in st.groupby("zone")}
 
 
 MODEL_LINE_COLUMNS = {
@@ -413,12 +418,14 @@ UPSERT_SQL = """
            EXCLUDED.issue_utc, EXCLUDED.source_manifest)"""
 
 
-# A publication-time guard inside each statement also covers crossing the gate
-# during a large executemany batch. clock_timestamp() is wall time, unlike now()
-# which is frozen at the start of the source-reading transaction.
+# The source SELECT rejects late inserts. The conflict predicate is evaluated
+# after obtaining the row lock, so it must recheck wall time as well: a writer
+# can enter before gate and finish a conflicting-row lock wait after gate.
+# clock_timestamp() is wall time; now() is frozen at transaction start.
 UPSERT_STRICT_SQL = UPSERT_SQL.replace(
     "VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb)",
-    "SELECT %s, %s, %s, %s, %s, %s, %s, %s::jsonb WHERE clock_timestamp() < %s")
+    "SELECT %s, %s, %s, %s, %s, %s, %s, %s::jsonb WHERE clock_timestamp() < %s"
+) + "\n    AND clock_timestamp() < %s"
 
 
 def _mix(base):
@@ -450,8 +457,6 @@ def lines_for_day(T, feats, base_h, base_any, st, last_settled, models,
                    forecast (base_any), i.e. unchanged from before the pin, and
                    its rows record base_code_version NULL — it has no base.
     """
-    if issue is not None and not may_emit(T, issue, strict, rewrite_past):
-        return [], "skipped (delivery gate passed)", "skipped (delivery gate passed)"
     if strict:
         if issue is None:
             raise ValueError("strict mode requires issue_utc")
@@ -462,6 +467,12 @@ def lines_for_day(T, feats, base_h, base_any, st, last_settled, models,
             return base[stamp.notna() & (stamp <= utc_issue(issue))]
         base_h, base_any = asof_base(base_h), asof_base(base_any)
     feats = feats[feats.k.str[:10] == T.isoformat()].copy()
+    if strict and len(feats):
+        # A UTC batch straddles two Athens delivery dates. Gate each cell, too.
+        feats = feats.loc[feats.k.map(lambda k: may_emit(
+            market_date(k + ":00:00Z"), issue, True, rewrite_past))]
+        if feats.empty:
+            return [], "skipped (delivery gate passed)", "skipped (delivery gate passed)"
     feats["hour"] = feats.k.str[11:13].astype(int)
     feats["month"] = int(T.month)
     fuel_day = min(T, utc_issue(issue).date() + dt.timedelta(days=1)) if strict else T
@@ -484,15 +495,17 @@ def lines_for_day(T, feats, base_h, base_any, st, last_settled, models,
                      on=["zone", "k"], how="inner")
     due = last_settled if isinstance(last_settled, dict) else {z: last_settled for z in sT.zone.unique()}
     if issue is not None:
-        due = {z: min(day, utc_issue(issue).date()) for z, day in due.items()}
+        due = {z: min(day, market_date(issue)) for z, day in due.items()}
     had_domain = len(sT)
-    sT = sT[sT.zone.map(lambda z: z in due and T <= due[z] + dt.timedelta(days=1))]
+    sT["t"] = pd.to_datetime(sT.k, format="%Y-%m-%dT%H", utc=True)
+    delivery_days = sT.t.dt.tz_convert("Europe/Athens").dt.date
+    allowed_days = sT.zone.map(lambda z: due[z] + dt.timedelta(days=1) if z in due else dt.date.min)
+    sT = sT.loc[delivery_days <= allowed_days]
     if not had_domain:
         sta = "skipped (no physics forecast rows for any version)"
     elif not len(sT):
         sta = "not due (lag24 not settled yet)"
     else:
-        sT["t"] = pd.to_datetime(sT.k, format="%Y-%m-%dT%H", utc=True)
         for lag, col in ((24, "lag24"), (48, "lag48"), (168, "lag168")):
             lk = st.copy(); lk["t"] = lk.t + pd.Timedelta(hours=lag)
             sT = sT.merge(lk.rename(columns={"p": col})[["zone", "t", col]],
@@ -550,7 +563,8 @@ def main():
     out, hyb_skipped = [], []
     for n in range((d1 - d0).days + 1):
         T = d0 + dt.timedelta(days=n)
-        if not may_emit(T, issue, strict, rewrite_past):
+        last_delivery_day = market_date(pd.Timestamp(T, tz="UTC") + pd.Timedelta(hours=23))
+        if not may_emit(last_delivery_day, issue, strict, rewrite_past):
             print(f"{T}: delivery gate passed — skipped (strict as-of)", flush=True)
             continue
         feats, back = features_for(T)
@@ -570,15 +584,18 @@ def main():
         # Loading/training can cross the gate. Recheck at publication as well.
         write_time = utc_issue()
         before = len(out)
-        out = [r for r in out if may_emit(pd.Timestamp(r[1]).date(), write_time, True)]
+        out = [r for r in out if may_emit(market_date(r[1]), write_time, True)]
         if before != len(out):
             warn(f"strict as-of: gate passed during run; dropped {before - len(out)} rows before write")
     if out:
         if not ensure_metadata_columns(cx):
             raise RuntimeError("model lines: required metadata unavailable; no emission")
         if strict and not rewrite_past:
-            cur.executemany(UPSERT_STRICT_SQL,
-                            [(*r, gate_utc(pd.Timestamp(r[1]).date()).to_pydatetime()) for r in out])
+            guarded = []
+            for row in out:
+                gate = gate_utc(market_date(row[1])).to_pydatetime()
+                guarded.append((*row, gate, gate))
+            cur.executemany(UPSERT_STRICT_SQL, guarded)
         else:
             cur.executemany(UPSERT_SQL, out)
         cx.commit()

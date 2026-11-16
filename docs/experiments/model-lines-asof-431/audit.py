@@ -55,7 +55,7 @@ def keys(rows): return {(r[0],r[1],r[2],r[4]) for r in rows}
 def coverage(rows, issue):
     counts = {}
     for r in rows:
-        key = f'{r[0]}/{r[2]}/lead{(pd.Timestamp(r[1]).date()-issue.date()).days}'
+        key = f'{r[0]}/{r[2]}/lead{(eml.market_date(r[1])-eml.market_date(issue)).days}'
         counts[key] = counts.get(key,0)+1
     return dict(sorted(counts.items()))
 
@@ -105,6 +105,7 @@ def main():
     report={'kind':'source-coverage and lag24 probe, NOT trained-GBM price validation',
             'extract':str(Path(args.extract).resolve()),'live_sha256':hashes,
             'base_cv':args.base_cv,'target_policy':eml.target_policy(),
+            'delivery_day_timezone':'Europe/Athens',
             'target_helper_sha256':hashlib.sha256(Path(args.target_helper).read_bytes()).hexdigest() if args.target_helper else None,
             'book_and_model_coverage_assumption':'all available forecast cells have book features and a model; synthetic fundamentals',
             'versions':{'duckdb':duckdb.__version__,'pandas':pd.__version__},'issues':[]}
@@ -135,10 +136,10 @@ def main():
             old=run_days(issue,pinned,any_base,old_st,False,zones,True)
             default=run_days(issue,pinned,any_base,settled,False,zones)
             strict=run_days(issue,strict_pinned,strict_any,strict_settled,True,zones)
-            assert all(pd.Timestamp(r[1]).date()>issue.date() for r in strict)
+            assert all(eml.market_date(r[1])>eml.market_date(issue) for r in strict)
             for rows in (default,strict):
-                assert not any(r[0] in ('AT','DE_LU') and r[2]=='stats_gbm'
-                               and pd.Timestamp(r[1]).date()>=issue.date()+dt.timedelta(days=2) for r in rows)
+                assert not any(r[2]=='stats_gbm'
+                               and eml.market_date(r[1])>=eml.market_date(issue)+dt.timedelta(days=2) for r in rows)
                 assert all(r[6]==issue.to_pydatetime() for r in rows)
                 con.execute('DELETE FROM simulations.model_lines')
                 columns=['bidding_zone','date_time_utc','model','price_eur_mwh','code_version',
@@ -158,7 +159,8 @@ def main():
             joined=old_st.merge(settled,on=['zone','t'],suffixes=('_old','_new'))
             lag_delta={}
             for z in zones:
-                g=joined[(joined.zone==z)&(joined.t.dt.date==issue.date())]
+                delivery_day=(joined.t+pd.Timedelta(hours=24)).dt.tz_convert('Europe/Athens').dt.date
+                g=joined[(joined.zone==z)&(delivery_day==eml.market_date(issue)+dt.timedelta(days=1))]
                 delta=g.p_new-g.p_old
                 lag_delta[z]={'lag24_cells':len(g),'changed':int((delta.abs()>1e-8).sum()),
                               'mean_delta':float(delta.mean()),'mean_abs_delta':float(delta.abs().mean()),
@@ -177,7 +179,7 @@ def main():
                 'strict_lost_by_zone_model_lead':coverage([r for r in default if (r[0],r[1],r[2],r[4]) in lost],issue),
                 'settled_raw_rows':len(raw),'settled_hours':len(settled),'settled_hours_at_issue':len(strict_settled),
                 'lag24_delta_for_next_day':lag_delta,'stats_probe_input_impact':impact,
-                'checks':{'no_strict_past':True,'no_at_de_d2':True,'issue_set':True,'idempotent':True}})
+                'checks':{'no_strict_past':True,'no_at_de_d2':True,'no_market_d2_stats':True,'issue_set':True,'idempotent':True}})
     Path(args.output).write_text(json.dumps(report,indent=2,sort_keys=True)+'\n')
     for row in report['issues']:
         print(row['issue_utc'],row['default_rows'],row['strict_rows'], {z:row['lag24_delta_for_next_day'][z] for z in ('AT','DE_LU')})

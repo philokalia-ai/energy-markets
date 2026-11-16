@@ -1,7 +1,7 @@
 # Model-lines issuance audit (#431D)
 
 Default changes fix the emitter's lag inputs: settlement eligibility is per zone,
-never later than the UTC issue day, and one canonical auction supplies each
+bounded by the Athens issue day, with a per-cell Athens D+1 delivery cap, and one canonical auction supplies each
 settled interval via PR C's `bin/da_target.py`. Until that module lands, an explicit
 `highest_seq` fallback implements its pure function; requesting SDAC without it is
 an error. `EUPHEMIA_DA_TARGET` still defaults to `highest_seq`. The helper's hourly
@@ -17,9 +17,11 @@ missing, and rolls back/fails emission if it cannot add them. It never executes
 an unconditional ALTER on routine runs. Exact reruns with the same issue/source
 are no-op upserts, including `generated_at`.
 
-`MODEL_LINES_STRICT_ASOF=1` is **opt-in**, default off. It skips UTC target dates
-whose previous-day noon Europe/Brussels gate has passed, checks that again before
-writing (including an atomic wall-clock gate in each upsert statement), limits physics vintages before choosing the winning base, and selects
+`MODEL_LINES_STRICT_ASOF=1` is **opt-in**, default off. It gates each cell by its
+Athens delivery date and the previous-day noon Europe/Brussels deadline. The
+upsert checks wall time for inserts and rechecks it in the conflict-update
+predicate after obtaining the row lock. Strict mode also limits physics vintages
+before choosing the winning base, and selects
 settled revisions only when their non-null `update_time_utc` is <= issue. Missing
 publication evidence fails closed for the affected zone; it is not guessed from delivery timestamps.
 Per-cell lag24/48/168/roll7 checks still apply. `MODEL_LINES_REWRITE_PAST=1` permits
@@ -27,8 +29,8 @@ past-gate backfills but retains the strict input cutoffs. Fuel closes in strict
 mode cannot come from a date after issue. The default -2..+7 refresh window stays
 unchanged; strict mode filters it. No code-version bump or schedule change.
 
-Dates and lag offsets remain the emitter's existing UTC convention (24/48/168
-elapsed hours). This does not migrate the trained artifact to market-local/DST
+Delivery eligibility, gate dates, and reported leads use Europe/Athens. UTC
+execution batches and the trained 24/48/168 elapsed-hour lag offsets remain unchanged. This does not migrate the trained artifact to market-local/DST
 lag semantics. Book snapshots, trained artifact and fuel revision histories are
 not retrospectively authenticated by this flag. Issue/source columns describe
 this run; the mutable table is not an append-only archive of historical issues.
@@ -38,6 +40,16 @@ Run tests without DB access:
 ```sh
 python test/test_emit_model_lines_pin.py
 ```
+
+Native Postgres contention regression (creates and stops its own temporary
+cluster, no external DSN/credentials):
+
+```sh
+python test/scripts/test_emit_model_lines_pg.py --pg-bin /usr/lib/postgresql/16/bin
+```
+
+The positive control reproduces the old 80→999 late update; the fixed conflict
+predicate keeps 80 and all provenance/generated_at unchanged after the lock wait.
 
 The offline audit needs duckdb, pandas, numpy, pytz, scikit-learn, joblib and
 psycopg2-binary (emitter imports). It opens the extract with `read_only=True`, reads
@@ -54,7 +66,7 @@ python docs/experiments/model-lines-asof-431/audit.py \
 
 Three fixed issue instants: 2026-09-19, 10-24, 11-13 at 10:40 UTC. Output has counts
 by zone/model/lead, dropped coverage, next-day lag24 deltas, source hashes, and
-assertions for no strict past rows/no AT-DE D+2 stats/issue metadata/idempotent
+Athens-date assertions for no strict past rows/no D+2 stats/issue metadata/idempotent
 upserts. `--base-cv` defaults to the emitter's production pin (37); another pin is
 an explicitly labelled diagnostic. Strict mode is not enabled in production by
 this change. In summer 10:40 UTC is past the SDAC gate: tomorrow is excluded.
@@ -74,14 +86,16 @@ Measured on the saved panel, production pin37 / highest_seq:
 
 | Issue (10:40 UTC) | Default cells | Strict cells | Future lead1 retained |
 |---|---:|---:|---:|
-| 2026-09-19 | 3,744 | 0 | 0/936 |
-| 2026-10-24 | 3,744 | 0 | 0/936 |
-| 2026-11-13 | 3,744 | 898 | 898/936 |
+| 2026-09-19 | 3,627 | 0 | 0/936 |
+| 2026-10-24 | 3,666 | 0 | 0/975 |
+| 2026-11-13 | 3,666 | 936 | 936/936 |
 
 All default cells here are stats; the saved window has no cv37 physics base.
-Default includes four UTC days (-2,-1,0,+1); strict excludes the first three.
-The two summer issues also exclude lead1 because the gate passed at10:00 UTC.
-The winter issue drops one lead1 cell in38 zones and retains all24 in RS.
+Default includes Athens leads -2,-1,0,+1; lead -2 is partial because execution
+batches start at UTC midnight. Strict excludes past delivery dates. The two
+summer issues exclude lead1 because the gate passed at10:00 UTC; Oct25 is a
+25-hour delivery day (975 cells). The winter issue retains all24 hours in39 zones.
+These figures replace the pre-review UTC-day counts of3744 and0/0/898.
 These are input-coverage counts under the stated probe assumptions.
 [measured-summary.json](measured-summary.json) records the losses and lag deltas.
 
