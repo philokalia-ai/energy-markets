@@ -163,7 +163,7 @@ T.state.window = "since_freeze";
 T.renderScoreboard();
 const note = getById("window-note");
 ok(note.hidden === false && /20 scored market days/.test(note.textContent) &&
-   /only out-of-sample physics record/.test(note.textContent), "note shows the day count and the claim");
+   /only out-of-sample physics record/.test(note.textContent) && /43 characteristics \(40 price-informed\)/.test(note.textContent), "note shows the day count and the claim");
 const gr = rowOf("GR").querySelectorAll("td"), de = rowOf("DE_LU").querySelectorAll("td");
 ok(gr[2].textContent === "insufficient data" && gr[1].textContent === "—" && /2 scored days/.test(gr[2].title),
   "GR (2 days < 14): insufficient data");

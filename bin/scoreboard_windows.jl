@@ -3,7 +3,7 @@
 # Included by bin/export_forecast_json.jl and bin/export_web_parquet.jl after
 # bin/naive_baselines.jl. Export-side only: no DDL, no stored-score change.
 #
-# THE FREEZE RULE: the 43 price-informed characteristics are frozen from the cv44
+# THE FREEZE RULE: the 43 characteristics (40 price-informed) are frozen from the cv44
 # adoption, 2026-11-15. Any change to a price-informed characteristic bumps
 # code_version and restarts the clock — update FREEZE_CODE_VERSION / FREEZE_DATE
 # here AND the label in web/app.js (FREEZE_LABEL) together when that happens.

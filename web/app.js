@@ -3753,7 +3753,7 @@
     scores.forEach(function (s) { if (s.n_days > nd) nd = s.n_days; });
     note.hidden = false;
     note.textContent = "Since the freeze (cv44, 2026-11-15): " + nd + " scored market day" +
-      (nd === 1 ? "" : "s") + ". The 43 price-informed characteristics have not changed since, so " +
+      (nd === 1 ? "" : "s") + ". The 43 characteristics (40 price-informed) have not changed since, so " +
       "these days are the only out-of-sample physics record. " +
       (nd < FREEZE_MIN_DAYS
         ? "Insufficient data: numbers are shown once a cohort has " + FREEZE_MIN_DAYS + " scored days."
