@@ -1,0 +1,157 @@
+# cv44 physics RETRO BACKFILL (#431 R1, owner approved 2026-11-16). Dispatch-only.
+#
+# Reconstructs the lead-1 weather-track physics forecast for past market days with the
+# CURRENT code (cv44) from the historical previous_day1 weather vintages
+# (bin/daily_forecast.jl run_retro), writing the rows ALONGSIDE the live record:
+# is_retro=true, reset_tag=<input>, code_version=44. Live rows are never skipped,
+# never superseded (EUPHEMIA_RETRO_ALONGSIDE=1; supersede is a hard error), and no
+# order books are captured. Then scores them into their own is_retro=true score rows.
+# The site shows them only in the scoreboard's "backfilled" window.
+#
+# Scheduling guard: refuses to start inside 06:00-08:30 or 10:30-12:15 UTC (the daily
+# forecast and the 11:30 publish) or while daily-forecast / publish-web-data is
+# active, and stops cleanly before the next of those windows (the run checks a
+# deadline before each market day). Resumable and idempotent: days already written
+# for the tag are skipped, so re-dispatch to continue. Per-day timing is printed
+# ("⏱") for the runtime estimate.
+#
+# Rollback: DELETE FROM simulations.forecast_prices WHERE is_retro AND reset_tag = '<tag>';
+#           DELETE FROM simulations.forecast_scores WHERE is_retro AND reset_tag = '<tag>';
+name: retro-backfill
+
+on:
+  workflow_dispatch:
+    inputs:
+      start:
+        description: "First market day to reconstruct (YYYY-MM-DD)"
+        required: true
+        default: "2026-09-14"
+      end:
+        description: "Last market day to reconstruct (YYYY-MM-DD, a past day)"
+        required: true
+        default: "2026-11-15"
+      reset_tag:
+        description: "Campaign label stamped on every row (rollback key)"
+        required: true
+        default: "cv44-backfill-2026-11"
+      score:
+        description: "Score the written rows after the reconstruction"
+        type: boolean
+        default: true
+
+concurrency:
+  group: retro-backfill
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read   # the guard reads daily-forecast / publish-web-data run status (read-only)
+
+env:
+  JULIA_VERSION: "1.13.4"
+  JULIA_NUM_THREADS: 4
+  # Same weather endpoints as daily-forecast.yml (previous-runs fall through to the
+  # public API while the self-hosted instance holds no previous-run chunks).
+  EUPHEMIA_OPENMETEO_URL: "http://open-meteo.weather.svc.cluster.local/v1/forecast"
+  EUPHEMIA_OPENMETEO_ARCHIVE_URL: "http://open-meteo.weather.svc.cluster.local/v1/archive"
+  EUPHEMIA_OPENMETEO_PREVRUNS_URL: "http://open-meteo.weather.svc.cluster.local/v1/forecast"
+
+jobs:
+  backfill:
+    runs-on: energy-markets-k8s
+    timeout-minutes: 1080   # the longest allowed window, 12:15 -> 06:00 UTC
+    steps:
+      - name: Guard (blackout windows, other runs) and clean-stop deadline
+        id: guard
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          START: ${{ inputs.start }}
+          END: ${{ inputs.end }}
+          TAG: ${{ inputs.reset_tag }}
+        run: |
+          set -euo pipefail
+          [[ "$START" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ && "$END" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] \
+            || { echo "::error::start/end must be YYYY-MM-DD"; exit 1; }
+          [[ "$TAG" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "::error::reset_tag: letters, digits, . _ - only"; exit 1; }
+          # Blackouts (UTC): 06:00-08:30 (daily forecast) and 10:30-12:15 (server refresh + publish).
+          # The deadline is the next blackout start minus 25 min (scoring + margin).
+          read -r dl hm <<<"$(python3 - <<'PY'
+          from datetime import datetime, timedelta, timezone
+          now = datetime.now(timezone.utc)
+          m = now.hour * 60 + now.minute
+          if 6 * 60 <= m < 8 * 60 + 30 or 10 * 60 + 30 <= m < 12 * 60 + 15:
+              print("BLOCKED", now.strftime("%H:%M")); raise SystemExit
+          day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+          starts = [day + timedelta(hours=6), day + timedelta(hours=10, minutes=30),
+                    day + timedelta(days=1, hours=6)]
+          nxt = min(t for t in starts if t > now)
+          if nxt - now < timedelta(minutes=45):   # too close to a blackout for even one day
+              print("BLOCKED", now.strftime("%H:%M")); raise SystemExit
+          print((nxt - timedelta(minutes=25)).strftime("%Y-%m-%dT%H:%M:%S"), now.strftime("%H:%M"))
+          PY
+          )"
+          if [ "$dl" = "BLOCKED" ]; then
+            echo "::error::$hm UTC is inside, or under 45 min before, a blackout window (06:00-08:30, 10:30-12:15 UTC); dispatch later"
+            exit 1
+          fi
+          for wf in daily-forecast.yml publish-web-data.yml; do
+            api="https://api.github.com/repos/$REPO/actions/workflows/$wf/runs"
+            for st in queued in_progress waiting pending requested; do
+              c=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+                    "$api?status=$st&per_page=1" | python3 -c "import json,sys; print(json.load(sys.stdin)['total_count'])") \
+                || { echo "::error::cannot read $wf run status"; exit 1; }
+              if [ "$c" -gt 0 ]; then echo "::error::$wf is active ($st); dispatch later"; exit 1; fi
+            done
+          done
+          echo "deadline=$dl" >> "$GITHUB_OUTPUT"
+          echo "✅ $hm UTC, no daily-forecast/publish-web-data run active; clean-stop deadline $dl UTC"
+          echo "   window $START .. $END, lead 1, weather track, reset_tag $TAG"
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Julia
+        uses: julia-actions/setup-julia@v1
+        with:
+          version: ${{ env.JULIA_VERSION }}
+
+      - name: Install Julia dependencies
+        timeout-minutes: 30
+        run: |
+          julia --project=. -e '
+            using Pkg
+            isempty(Pkg.Registry.reachable_registries()) && Pkg.Registry.add()
+            Pkg.instantiate(); Pkg.precompile()'
+
+      - name: Reconstruct (cv44, lead 1, alongside the live record)
+        env:
+          ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
+          OPTIMIZER: highs
+          INPUT_MODE: weather
+          MAX_LEAD_DAYS: "1"   # fixed for this campaign
+          EUPHEMIA_FORECAST_RETRO_START: ${{ inputs.start }}
+          EUPHEMIA_FORECAST_RETRO_ASOF: ${{ inputs.end }}
+          EUPHEMIA_FORECAST_RESET_TAG: ${{ inputs.reset_tag }}
+          EUPHEMIA_RETRO_ALONGSIDE: "1"     # never skip because of a live vintage, never supersede
+          EUPHEMIA_RETRO_CHUNK_DAYS: "14"   # one weather fetch + one extra UTC-day clear per chunk
+          EUPHEMIA_RETRO_DEADLINE_UTC: ${{ steps.guard.outputs.deadline }}
+        run: |
+          # No EUPHEMIA_RETRO_SUPERSEDE and no bucket credentials here, on purpose.
+          julia --project=. bin/daily_forecast.jl
+
+      - name: Score the reconstructed rows
+        if: ${{ inputs.score }}
+        env:
+          ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
+        run: |
+          # Scores every realized, unscored slice (the new is_retro rows get their own
+          # score rows) plus the usual 7-day live rescore window — the same scorer the
+          # daily run uses.
+          julia --project=. bin/score_forecasts.jl
+
+      - name: Summary
+        if: ${{ always() }}
+        run: |
+          echo "Re-dispatch with the same inputs to resume: days already written for the tag are skipped."
+          echo "Publish: the next 06:30 daily-forecast export (or publish-web-data) shows the 'backfilled' window."
