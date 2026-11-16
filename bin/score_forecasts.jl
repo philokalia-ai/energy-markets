@@ -52,6 +52,8 @@
 #   SCORE_LOCK_TIMEOUT  e.g. '5s': each slice's upserts run in ONE transaction
 #             under SET LOCAL lock_timeout (+ statement_timeout 120s), retried
 #             3x with backoff, so the rescore never queues behind a long lock
+#   RESCORE_KEYS_OUT  path: append every committed key + the scored_at written
+#             (the campaign record the restore is scoped to)
 
 using Euphemia, Dates, Statistics, Printf, DataFrames, LibPQ
 
@@ -74,12 +76,18 @@ const RESCORE_ZONES = let v = strip(get(ENV, "RESCORE_ZONES", ""))
         error("RESCORE_ZONES=$(repr(v)): expected a comma list of zone codes or 'all'")
     zs
 end
+# Campaign record (rescore-hourly): every key the rescore wrote, with the scored_at it
+# wrote, appended after each slice's COMMIT. The restore touches only these keys and
+# only while their scored_at is still the campaign's (a later rescore wins).
+const RESCORE_KEYS_OUT = strip(get(ENV, "RESCORE_KEYS_OUT", ""))
 const SCORE_LOCK_TIMEOUT = let v = strip(get(ENV, "SCORE_LOCK_TIMEOUT", ""))
     v == "" || occursin(r"^[0-9]+(ms|s)$", v) ||
         error("SCORE_LOCK_TIMEOUT=$(repr(v)): expected e.g. 5s or 500ms")
     v
 end
 Q15_ONLY && HOURLY_ONLY && error("Q15_ONLY and HOURLY_ONLY are mutually exclusive")
+isempty(RESCORE_KEYS_OUT) || !isempty(SCORE_LOCK_TIMEOUT) ||
+    error("RESCORE_KEYS_OUT needs SCORE_LOCK_TIMEOUT (keys are recorded per committed slice)")
 # Minimum paired hours for a (zone, day, lead) score to be persisted. Scores
 # used to be written for ANY n >= 1 (IT-* zones scored on a single 21:00 hour
 # when only four PT15M actual rows had landed) and then frozen by the
@@ -270,7 +278,8 @@ function upsert_score!(market_date::Date, zone::String, lead_days::Int, cv::Int,
                           collapse_false_alarm_rate = EXCLUDED.collapse_false_alarm_rate,
                           is_retro = EXCLUDED.is_retro, reset_tag = EXCLUDED.reset_tag,
                           scored_at = now()
-        """, Any[market_date, zone, lead_days, cv, input_mode,
+        """ * (isempty(RESCORE_KEYS_OUT) ? "" : "\n        RETURNING scored_at::text"),
+              Any[market_date, zone, lead_days, cv, input_mode,
                  n, tonull(mae), tonull(bias), tonull(corr),
                  cm.n_collapse_actual, cm.n_collapse_pred, cm.hits,
                  cm.false_alarms, tonull(cm.hit_rate), tonull(cm.false_alarm_rate),
@@ -303,8 +312,9 @@ function write_slice!(rows)
             try
                 LibPQ.execute(cnx, "SET LOCAL lock_timeout = '$(SCORE_LOCK_TIMEOUT)'")
                 LibPQ.execute(cnx, "SET LOCAL statement_timeout = '120s'")
-                foreach(r -> w(r; cnx=cnx), rows)
+                stamps = [w(r; cnx=cnx) for r in rows]
                 LibPQ.execute(cnx, "COMMIT")
+                isempty(RESCORE_KEYS_OUT) || record_keys!(rows, stamps)
                 true
             catch e
                 try LibPQ.execute(cnx, "ROLLBACK") catch end
@@ -315,6 +325,18 @@ function write_slice!(rows)
         end
         ok && return
         sleep(10 * attempt)
+    end
+end
+
+"Append the committed slice's keys + the scored_at the rescore wrote (RESCORE_KEYS_OUT)."
+function record_keys!(rows, results)
+    new = !isfile(RESCORE_KEYS_OUT)
+    open(RESCORE_KEYS_OUT, "a") do io
+        new && println(io, "market_date,bidding_zone,lead_days,code_version,input_mode,is_retro,campaign_scored_at")
+        for (r, res) in zip(rows, results)
+            stamp = String(DataFrame(res)[1, 1])
+            println(io, join((r.market_date, r.zone, r.lead_days, r.cv, r.input_mode, r.is_retro, stamp), ","))
+        end
     end
 end
 

@@ -402,7 +402,8 @@ Dated reminders and scoring-policy notes that do not change `code_version`.
   and features. Changing them is a separate model decision.
 
   **Kill switch:** repo variable / env `EUPHEMIA_DA_TARGET=highest_seq`, then rescore-hourly
-  `action=restore`. No code_version bump.
+  `action=restore restore_run_id=<run>`. That restores only that run's campaign keys, and
+  only rows not rescored since. No code_version bump.
 
 - **2026-11-16 — revisit the 10:40 UTC overlay refresh before 2027-03-28
   (#431).** The refresh (Timestral postsim + GBM lines) is scheduled in UTC.

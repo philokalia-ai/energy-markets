@@ -139,7 +139,7 @@ Python needs duckdb 2.0 (`bin/requirements-overlay.txt`). With duckdb 1.5, `zone
 
 | Setting | Default | Covers |
 |---|---|---|
-| `EUPHEMIA_DA_TARGET` (evaluation) | `sdac`; `highest_seq` is the kill switch | `score_forecasts.jl` (hourly); `export_forecast_json.jl` and `export_web_parquet.jl` (actual charts); `naive_baselines.jl` (scoreboard naives and rMAE); `eu_eval_metrics.metrics(:new)`; collapse **evaluation labels** (`collapse_probability.main` relabels predictions through `retarget_labels`); `emit_tsfm_overlay.eval_actuals_duckdb`; `tsfm-2026-11/evaluate.py` (labels and naives; the target is read from `EVAL_TARGET_PANEL`, `EVAL_EXTRACT`, `EUPHEMIA_DUCKDB_PATH`, or the newest shared extract) |
+| `EUPHEMIA_DA_TARGET` (evaluation) | `sdac`; `highest_seq` is the kill switch | `score_forecasts.jl` (hourly); `export_forecast_json.jl` and `export_web_parquet.jl` (actual charts); `naive_baselines.jl` (scoreboard naives and rMAE); `eu_eval_metrics.metrics(:new)`; collapse **evaluation labels** (`collapse_probability.main` relabels predictions through `retarget_labels`; `score_collapse_clearing.py` reads `role="target"`); `emit_tsfm_overlay.eval_actuals_duckdb`; `tsfm-2026-11/evaluate.py` (labels and naives; the target is read from `EVAL_TARGET_PANEL`, `EVAL_EXTRACT` or `EUPHEMIA_DUCKDB_PATH`, and it raises if none is set) |
 | `EUPHEMIA_DA_INPUT` (model inputs, pinned) | `highest_seq` | Timestral price context (`emit_tsfm_overlay.prices_duckdb`, i.e. `PRICE_SQL`); GBM lag history (`emit_model_lines.target_policy` / `canonical_settled`; the function name and manifest key are kept); collapse logistic training labels and features (`collapse_probability.hourly_actuals(role="input")`, the default role, which `collapse_diagnostics.py` and `collapse_history_sensitivity.py` also use) |
 
 Both settings accept only `highest_seq` or `sdac`; any other value raises. `daily-forecast.yml` and `publish-web-data.yml` pass the repo variable `vars.EUPHEMIA_DA_TARGET`: empty means the default, and `highest_seq` switches back without a code change. The 10:40 server cron re-exports the JSON with whatever its environment says, so the kill switch there is the same env var in the cron environment.
@@ -147,16 +147,22 @@ Both settings accept only `highest_seq` or `sdac`; any other value raises. `dail
 ### rescore-hourly.yml
 Dispatch-only, its own concurrency group, `contents: read` + `actions: read`, Julia 1.13.4.
 
-1. **Guard.** It refuses to start between 06:15–08:30 or 10:30–12:15 UTC, or while daily-forecast or publish-web-data has a queued or active run. It also validates the inputs.
-2. **Snapshot.** `bin/forecast_scores_snapshot.jl snapshot` dumps the hourly columns of all `forecast_scores` rows (key, n_hours, mae, bias, corr, collapse metrics, reset_tag, scored_at) and uploads them as the artifact `forecast-scores-hourly-snapshot-<run_id>`, kept 90 days.
+1. **Guard** (`bin/rescore_guard.sh`). It refuses inside 06:15–08:30 or 10:30–12:15 UTC, or while daily-forecast or publish-web-data has a queued or active run; an API failure counts as active.
+   - At start it needs 30 min of headroom before a blackout, to cover setup.
+   - It is **rechecked before every write chunk and before a restore**, with 20 min of headroom. On refusal the run stops; resume with `start=`.
+2. **Snapshot.** `bin/forecast_scores_snapshot.jl snapshot` dumps the hourly columns of all `forecast_scores` rows (key, hourly columns, exact `scored_at::text`) as the artifact `forecast-scores-hourly-snapshot-<run_id>`, kept 90 days.
 3. **Dry run.** The scorer runs with `DRY_RUN=true` and prints the slices per mode and lead and the existing rows per zone that would be rewritten.
-4. **Rescore.** The scorer runs with `RESCORE=true HOURLY_ONLY=true SCORE_LOCK_TIMEOUT=5s EUPHEMIA_DA_TARGET=sdac`, in `chunk_days` market-date chunks.
+4. **Rescore.** The scorer runs with `RESCORE=true HOURLY_ONLY=true SCORE_LOCK_TIMEOUT=5s EUPHEMIA_DA_TARGET=sdac RESCORE_KEYS_OUT=campaign/keys.csv`, in `chunk_days` market-date chunks.
    - Each slice is one transaction under `SET LOCAL lock_timeout` and `statement_timeout`, retried 3 times.
+   - After each slice's COMMIT, every key written and the exact `scored_at` it wrote are appended to the **campaign record**, uploaded even if the run fails as `rescore-hourly-campaign-<run_id>`.
    - The q15 columns are never written.
    - The default zones are `AT,DE_LU,DK1,DK2`, the only zones whose target changes. Rescoring the others would only fold in unrelated ENTSO-E revisions; pass `all` if wanted.
-   - The run is resumable with `start=`.
-5. **Summary.** The policy and range go to the step summary, together with a snapshot-vs-now MAE table per zone.
-6. **Rollback.** Dispatch `action=restore restore_run_id=<run>`, which writes that run's snapshot back onto the matching rows, and set the variable to `highest_seq`.
+5. **Summary.** The policy, the range and the campaign key count go to the step summary, together with a snapshot-vs-now MAE table per zone.
+6. **Rollback** (campaign-scoped). Dispatch `action=restore restore_run_id=<rescore run>`. It restores **only that run's campaign keys**, and only rows whose `scored_at` is still the campaign's: a row rescored since by a daily window or another run is skipped and counted.
+   - Restored rows get their snapshot hourly columns and `scored_at` back, i.e. their exact pre-campaign state.
+   - Keys the campaign created are reported, not deleted.
+   - Also set the variable to `highest_seq`.
+   - The test is `test/scripts/test_rescore_restore_pg.jl`, which runs on its own throwaway PostgreSQL cluster and goes through the real scorer and restore.
 
 **No mixed target.** Merge after 12:15 UTC and dispatch the rescore the same afternoon, around 13:30, before the next 06:15. After the merge, every daily score (including its 7-day rescore window) uses SDAC, and the one full rescore covers everything older. `forecast_scores` has no policy column, so the policy goes in the scorer log (`TARGET_POLICY=…`), the workflow summary and the ledger (`docs/code-version-ledger.md`, "scoring policy sdac-v1").
 

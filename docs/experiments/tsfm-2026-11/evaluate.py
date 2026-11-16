@@ -10,7 +10,7 @@ Usage: python evaluate.py fc_t209_uni fc_c2_uni ...   (files in $TSFM_OUT, witho
 
 Target (#431): labels and naives follow EUPHEMIA_DA_TARGET (`target_panel`). Default (sdac since
 2026-11-17) = EVAL_TARGET_PANEL, else the read-only extract EVAL_EXTRACT (default:
-EUPHEMIA_DUCKDB_PATH, else the newest em-data/euphemia-live-*.duckdb). highest_seq (kill switch) =
+EUPHEMIA_DUCKDB_PATH; neither set -> error). highest_seq (kill switch) =
 the frozen panel's prices, unchanged. The models' input context (the panel) is never changed.
 """
 import os, sys
@@ -51,13 +51,12 @@ def metrics(df, col, act="actual"):
 
 
 def default_extract():
-    """EVAL_EXTRACT, else EUPHEMIA_DUCKDB_PATH, else the newest shared read-only extract."""
+    """The read-only extract for SDAC labels: EVAL_EXTRACT, else EUPHEMIA_DUCKDB_PATH (no
+    machine-specific fallback; neither set -> None and `target_panel` raises)."""
     for k in ("EVAL_EXTRACT", "EUPHEMIA_DUCKDB_PATH"):
         if os.environ.get(k):
             return os.environ[k]
-    import glob
-    found = sorted(glob.glob("/home/pgeorgakopoulos/armada/em-data/euphemia-live-*.duckdb"))
-    return found[-1] if found else None
+    return None
 
 
 def target_panel(panel):
