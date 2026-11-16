@@ -27,7 +27,8 @@
   <h1>Beyond the physics: the pink and yellow lines</h1>
   <p class="lede">The solid blue line on every chart is the <strong>physics counterfactual</strong> —
   a competitive re-clearing of the European day-ahead market from fundamentals (fleets, fuels,
-  forecasts, the JAO flow-based network). <em>No price is ever a regression target</em>: the
+  forecasts, ATC coupling of the 39 zones — on flow-based borders JAO's maximum bilateral
+  exchanges stand in as capacities; the full PTDF/RAM domain is not modelled). <em>No price is ever a regression target</em>: the
   bidding form's named characteristics (about 40 — scarcity onsets, water values, the tranche
   ladder) were chosen with price error in view on calibration windows — most later checked on
   held-out days inside the same historical period, the two newest without a separate hold-out —
@@ -80,7 +81,10 @@
         part of the counterfactual.</td></tr>
     </tbody>
   </table>
-  <p>Timestral backtest (Sep–Nov 2026, 39 zones, lead 1): MAE 28.0 €/MWh from prices only
+  <p>Timestral backtest (2026-09-14 → 11-13, 58 days × 39 zones, lead 1; zero-shot, so each
+  day is forecast only from the history before it — no training split; target: the settled
+  price as the live scorer reads it, which for AT and DE_LU is currently the EXAA auction, see
+  below): MAE 28.0 €/MWh from prices only
   (06:30, 54k hours); 25.3 with the physics forecast as input on the 47,679 cells where a forecast
   vintage existed by 10:00 UTC — the days the 10:40 refresh can actually publish (25.1 on a broader
   reconstruction that also includes seven days whose only vintage was made after 10:00, which
@@ -89,48 +93,72 @@
   weights are used under their Modified-MIT licence.</p>
 
   <h2>How good is each?</h2>
-  <p>Cross-validated, 729 days × 39 zones (2024-07 → 2026-06), energy-weighted;
-  <em>naive</em> = "same hour last week". The folds group by day but shuffle days rather than
-  respecting time order — read the honesty notes below before the table.</p>
+  <p><strong>The strict test: rolling origin (2026-11, cv39).</strong> Built on the cv39 books
+  and the cv39 physics record. Each of the four quarters 2025-07-01 → 2026-06-30 is predicted
+  only from data before it (training from 2024-07-01): chronological, 39 zones, 341,256
+  zone-hours, scored against the canonical SDAC settlement (for AT and DE_LU the SDAC auction,
+  not EXAA). MAE is the plain mean over all cells, pooled across the four folds.</p>
+  <table>
+    <thead><tr><th>metric</th><th>physics (cv39)</th><th>+ hybrid GBM, retrained per fold</th><th>pure stats, retrained per fold</th><th>what it measures</th></tr></thead>
+    <tbody>
+      <tr><td>MAE €/MWh</td><td>23.30</td><td>24.70</td><td><strong>21.05</strong></td><td>typical hourly miss</td></tr>
+      <tr><td>bias €/MWh</td><td>−4.61</td><td>+2.05</td><td>−1.30</td><td>mean (forecast − settled)</td></tr>
+      <tr><td>correlation</td><td>0.778</td><td>0.765</td><td><strong>0.824</strong></td><td>shape tracking</td></tr>
+    </tbody>
+  </table>
+  <p>Out of sample the pink line is <em>worse</em> than the physics it corrects (24.70 vs 23.30);
+  the yellow stats line holds up (21.05). The deployed cv37 hybrid artifact scores 15.66 on the
+  same cells, but that is an <strong>in-sample</strong> fit — its training window covers them —
+  not skill. This is a cv39 rebuild, not a direct re-score of the deployed cv37 lines
+  (<a href="https://github.com/philokalia-ai/energy-markets/tree/main/docs/experiments/model-lines-rolling-origin">docs/experiments/model-lines-rolling-origin</a>).</p>
+
+  <p><strong>The older, flattering table: non-chronological cross-validation (2026-08,
+  cv37).</strong> GroupKFold(5) by day over 729 days × 39 zones (2024-07 → 2026-06): the folds
+  group hours by day but shuffle days rather than respecting time order, so each fold trains on
+  days that come after the ones it predicts. Target: the settled view then in use (where two
+  day-ahead auctions are stored, e.g. AT and DE_LU, an average of both — not canonical SDAC).
+  Each metric is computed per zone, then averaged across zones weighted by each zone's energy.
+  <em>rMAE vs weekly naive</em> = a zone's MAE ÷ the MAE of "same hour last week" in that zone,
+  then the energy-weighted mean of those zone ratios.</p>
   <table>
     <thead><tr><th>metric</th><th>physics</th><th>+ ex-ante GBM</th><th>pure stats</th><th>what it measures</th></tr></thead>
     <tbody>
-      <tr><td>MAE €/MWh</td><td>23.1</td><td><strong>14.9</strong></td><td><strong>14.5</strong></td><td>typical hourly miss</td></tr>
-      <tr><td>rMAE vs naive</td><td>0.81</td><td>0.52</td><td><strong>0.49</strong></td><td>error ÷ naive (&lt;1 beats it)</td></tr>
-      <tr><td>correlation</td><td>0.79</td><td>0.88</td><td><strong>0.89</strong></td><td>shape tracking</td></tr>
-      <tr><td>directional accuracy</td><td>0.61</td><td>0.75</td><td><strong>0.80</strong></td><td>hour-to-hour up/down calls</td></tr>
-      <tr><td>spike recall (≥p90)</td><td>0.39</td><td><strong>0.68</strong></td><td>0.69</td><td>expensive hours caught</td></tr>
-      <tr><td>spike precision</td><td><strong>0.77</strong></td><td>0.73</td><td>0.74</td><td>called spikes that were real</td></tr>
-      <tr><td>collapse recall (≤€5)</td><td>0.23</td><td><strong>0.49</strong></td><td>0.49</td><td>near-zero hours caught</td></tr>
+      <tr><td>MAE €/MWh</td><td>23.1</td><td>14.9</td><td>14.5</td><td>typical hourly miss</td></tr>
+      <tr><td>rMAE vs weekly naive</td><td>0.81</td><td>0.52</td><td>0.49</td><td>error ÷ naive (&lt;1 beats it)</td></tr>
+      <tr><td>correlation</td><td>0.79</td><td>0.88</td><td>0.89</td><td>shape tracking</td></tr>
+      <tr><td>directional accuracy</td><td>0.61</td><td>0.75</td><td>0.80</td><td>hour-to-hour up/down calls</td></tr>
+      <tr><td>spike recall (≥p90)</td><td>0.39</td><td>0.68</td><td>0.69</td><td>expensive hours caught</td></tr>
+      <tr><td>spike precision</td><td>0.77</td><td>0.73</td><td>0.74</td><td>called spikes that were real</td></tr>
+      <tr><td>collapse recall (≤€5)</td><td>0.23</td><td>0.49</td><td>0.49</td><td>near-zero hours caught</td></tr>
     </tbody>
   </table>
-  <p><strong>The strict test (2026-11, cv39).</strong> A rolling-origin re-test built on the cv39
-  books and cv39 physics record — each of the four quarters 2025-07 → 2026-06 predicted only from
-  data before it, 341,256 cells, scored against the SDAC settlement — changes the picture for the
-  pink line: retrained per fold it scores MAE <strong>24.70</strong>, <em>worse</em> than the cv39
-  physics it corrects (23.30). The yellow stats line, retrained per fold, holds up:
-  <strong>21.05</strong>. (The deployed cv37 artifact scores 15.66 on the same cells, but that is
-  an in-sample fit: its training window covers them.) This is a cv39 rebuild, not a direct
-  re-score of the deployed cv37 lines
-  (<a href="https://github.com/philokalia-ai/energy-markets/tree/main/docs/experiments/model-lines-rolling-origin">docs/experiments/model-lines-rolling-origin</a>).</p>
+  <p>Read this table for the relative shape of the three lines, not their level: the strict test
+  above is the honest comparison.</p>
 
   <h2>Who wins where</h2>
-  <p>On the cross-validated table above, the hybrid (pink) wins <strong>where the physics is strongest</strong> — the continental core
+  <p>Under the strict rolling-origin test the hybrid beats physics in all four quarters only in
+  IT-NORTH, IT-CNORTH, IT-CSOUTH, IT-SOUTH, IT-Calabria, SE1 and SE2, and loses heavily in BG,
+  HU, RO and AT; the stats line beats physics in 105 of 156 zone-quarters. On the older
+  non-chronological table, the hybrid (pink) wins <strong>where the physics is strongest</strong> — the continental core
   (DE/FR/BE/NL/AT/CH/CZ: MAE 13.2 vs stats 13.5), Poland–Slovakia–Hungary, the Baltics — and ties
   in the Nordics. The stats line (yellow) wins <strong>where the physics has a known structural
   gap</strong> — Italy (9.7 vs 12.7) and Iberia — because a lag model isn't dragged by the model's
   bias shape. Physics keeps the best <strong>spike precision everywhere north of the Alps</strong>
   (0.84–1.00): when the blue line calls an extreme hour, it is calling real, mechanical scarcity —
-  not pattern-matching. Under the strict rolling-origin test the hybrid beats physics in all four
-  quarters only in IT-NORTH, IT-CNORTH, IT-CSOUTH, IT-SOUTH, IT-Calabria, SE1 and SE2.</p>
+  not pattern-matching.</p>
 
   <h2>What the dashed lines can never do</h2>
   <ul>
     <li><strong>Measure conduct.</strong> The stats model learns the market's actual bidding
     behaviour — including any exercise of market power — into its lags; it can only ever agree
-    with the market. The physics line is the competitive benchmark the market is <em>compared
-    against</em>: the persistent gap between blue and settled in tight evening hours (Hungary,
-    Poland, the Baltics) is a finding, not an error.</li>
+    with the market. The physics line is the benchmark the market is <em>compared against</em>,
+    with one caveat: its bidding form includes a declared <em>conduct layer</em> (the upper
+    tranche ladder and the scarcity/peak markups) whose values were chosen with price error in
+    view. Switching that layer off (<code>EUPHEMIA_CONDUCT_LAYER=off</code>,
+    <a href="https://github.com/philokalia-ai/energy-markets/tree/main/docs/experiments/conduct-layers-367">conduct-layers-367</a>)
+    is a sensitivity check under the current opportunity-cost layer, not an identified
+    competitive benchmark. So the persistent gap between blue and settled in tight evening hours
+    (Hungary, Poland, the Baltics) is a finding to explain, not a measured markup.</li>
     <li><strong>Handle a regime they never saw.</strong> A fuel shock, a new interconnector, a war
     outage move the physics line correctly on day one; a lag model needs weeks of new history.</li>
     <li><strong>Explain themselves.</strong> Every blue-line price decomposes into the order book
@@ -140,10 +168,9 @@
 
   <h2>Honesty notes</h2>
   <ul>
-    <li>The cross-validated table uses 5-fold cross-validation grouped by day, but the folds
-    shuffle days rather than respecting time order, so each fold trains on days that come after
-    the ones it predicts — its 14.9 for the pink line is held-out but not chronological, and
-    flattering. The strict rolling-origin test above is the honest comparison. The physics line is never regressed on prices and uses only ex-ante
+    <li>The older table's 14.9 for the pink line (and 14.5 / 0.52 / 0.49 beside it) comes from
+    non-chronological GroupKFold cross-validation that trains on later days — held-out, but
+    flattering. The rolling-origin numbers (cv39: 23.30 / 24.70 / 21.05) are the headline. The physics line is never regressed on prices and uses only ex-ante
     inputs, but its calibrated characteristics were chosen on windows inside this same period, so
     its number is not a strict hold-out either.</li>
     <li>The pink-line features are chosen to be gate-legal (nothing after D-1 12:00 CET), and the

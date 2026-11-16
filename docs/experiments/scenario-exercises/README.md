@@ -310,8 +310,12 @@ built by `build_eu_ops_profiles.py` from the `pan-european-cold-ironing-data/`
 AIS dataset: 3.57M port-call dwell events over 294 TEN-T ports, GT-binned EMSA
 at-berth loads (2.5/5/12 MW), per-call MW × hourly berth overlap aggregated per
 bidding zone; explicit UN/LOCODE→zone mapping for multi-zone countries.
-**FLOOR** = registry-confirmed >5000 GT passenger ships only (~2,494 GWh/yr
-in-footprint); excluded: IE/HR/MT/CY (outside footprint) and non-coupled
+**FLOOR** (the arm label; read it as the *registry-confirmed passenger-ship
+case under stated load assumptions*, not a strict lower bound) =
+registry-confirmed >5000 GT passenger ships only (~2,494 GWh/yr
+in-footprint). The nearest external estimate, ICCT (Osipova & Carraro 2023),
+gives 1.72 TWh for TEN-T ≥ 5,000 GT passenger + cruise on a narrower scope
+(EU ports only, 2019); the two are not yet reconciled (#431). Excluded: IE/HR/MT/CY (outside footprint) and non-coupled
 island systems (Canaries, Ceuta/Melilla, Madeira/Azores, Corsica, Mayotte,
 ~540 GWh/yr). Per-country energies validated ±1% against
 `eu_cold_ironing_by_country.csv`.

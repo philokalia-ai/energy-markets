@@ -359,3 +359,16 @@ pipelined-backfill workers. `blocks` (thermal regular blocks + PAB loop) and
 Every path that builds merit-order books changes where a PS family forms. That
 includes the SEE single-zone and 5-zone products (GR and BG have PS), so their
 byte-identity chain ends here.
+
+## Operations and scoring notes (not code versions)
+
+Dated reminders and scoring-policy notes that do not change `code_version`.
+
+- **2026-11-16 — revisit the 10:40 UTC overlay refresh before 2027-03-28
+  (#431).** The refresh (Timestral postsim + GBM lines) is scheduled in UTC.
+  In winter it runs before the 11:00 UTC SDAC gate, but its site pickup at
+  about 11:30 UTC comes after it. From 2027-03-28 (CEST) the gate is 10:00 UTC,
+  so the run itself is after the gate too. The site describes it as "a forecast
+  on pre-gate inputs, not a pre-gate publication". Before the switch, decide
+  whether to keep that label (no change) or move to local-time scheduling (an
+  ops PR plus a server crontab edit by the owner).
