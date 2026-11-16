@@ -176,16 +176,18 @@
       }
     ],
     "target_helper": {
-      "path": "/home/pgeorgakopoulos/armada/em-team/worktrees/collapse-431/docs/experiments/benchmark-431/_target_fallback.py",
-      "sha256": "e2ec73daa1efb8fb47a25641e95ab08b9d522b437f45dd04d3b7884fa9bcf0c7"
+      "path": "/home/pgeorgakopoulos/armada/em-team/worktrees/collapse-431/bin/da_target.py",
+      "sha256": "08f5c26237f51a105c552724fc50b99b5a1488d79e02e05e6dded2b0d09bdf32"
     }
   },
   "resolution": "PT60M",
   "market_day_timezone": "Europe/Athens",
+  "saved_predictions_changed": false,
   "models": [
     {
       "id": "gbm_overlay",
       "model_cv": null,
+      "model_cv_missing_reason": "learned model ID is separate from physics code version",
       "model_id": "gbm_overlay",
       "artifact_cv": null,
       "artifact_sha256": null,
@@ -194,9 +196,18 @@
         37,
         38,
         39,
-        40,
-        42
+        40
       ],
+      "base_cv_missing_reason": null,
+      "base_cv_counts": {
+        "37": 2808,
+        "38": 2808,
+        "39": 18720,
+        "40": 111384
+      },
+      "cohort_physics_cv_counts": null,
+      "version_cohort": "finite predictions with declared eligibility; before target-policy and complete-zone-day score restrictions",
+      "version_cohort_n": 135720,
       "model_input_price_policy": "not established from snapshot",
       "leads": [
         1,
@@ -220,6 +231,7 @@
         40,
         42
       ],
+      "model_cv_missing_reason": null,
       "model_id": "physics",
       "artifact_cv": null,
       "artifact_sha256": null,
@@ -231,6 +243,17 @@
         40,
         42
       ],
+      "base_cv_missing_reason": null,
+      "base_cv_counts": {
+        "37": 2808,
+        "38": 2808,
+        "39": 18720,
+        "40": 301665,
+        "42": 52416
+      },
+      "cohort_physics_cv_counts": null,
+      "version_cohort": "finite predictions with declared eligibility; before target-policy and complete-zone-day score restrictions",
+      "version_cohort_n": 378417,
       "model_input_price_policy": "no direct settled-price lag context; calibration overlap remains",
       "leads": [
         1,
@@ -248,6 +271,7 @@
     {
       "id": "stats_overlay",
       "model_cv": null,
+      "model_cv_missing_reason": "learned model ID is separate from physics code version",
       "model_id": "stats_overlay",
       "artifact_cv": null,
       "artifact_sha256": null,
@@ -256,9 +280,18 @@
         37,
         38,
         39,
-        40,
-        42
+        40
       ],
+      "base_cv_missing_reason": null,
+      "base_cv_counts": {
+        "37": 2388,
+        "38": 2520,
+        "39": 14649,
+        "40": 79656
+      },
+      "cohort_physics_cv_counts": null,
+      "version_cohort": "finite predictions with declared eligibility; before target-policy and complete-zone-day score restrictions",
+      "version_cohort_n": 99213,
       "model_input_price_policy": "not established from snapshot",
       "leads": [
         1,
@@ -331,6 +364,7 @@
     "pooled_cell",
     "mean_daily"
   ],
+  "aggregation_definition": "mean_daily weights each paired zone-day equally; no energy weights in new cohorts",
   "rmae": "ratio of paired aggregate absolute errors, never mean daily ratios; zero naive error undefined",
   "dst": "all23/25 UTC hours retained in point scores; source repeated local hour averaged; DM drops23/25-hour days",
   "dm": {
@@ -339,15 +373,13 @@
     "minimum_days": 30,
     "p_values": "one-sided model better; exploratory, unadjusted"
   },
-  "prepared_utc": "2026-11-16T19:46:04.569844+00:00",
-  "source_git_commit": "d7590802d4085ef1808359dbc612a449962b0357",
-  "aggregation_definition": "mean_daily weights each paired zone-day equally; no energy weights in new cohorts",
-  "saved_predictions_changed": false,
-  "evaluator_sha256": "a27b9ba363d3c5e6fb616a690f5725c1f7fc88583138e9307a87f925d40a9b0a",
+  "prepared_utc": "2026-11-16T21:00:24.624280+00:00",
+  "source_git_commit": "16ceca223df665eefd5d8041ad949bf781a83e08",
+  "evaluator_sha256": "3ed8f43655e0fa50ac55e81e4d4dbe4db9b776ec872808f961749c2ba6c736fe",
   "output_sha256": {
     "metrics": "631e5e501166195a729eda32cd50ff2369de81a80d34a102205a77da1bda6226",
     "masks": "4779f9155f73a42fba3fe4268b39d941a8b63a9722103df930bbe1f724333751",
-    "exclusions": "acdad18b77bdbda86ab4749a2233a3915e862f39b7fde9d692b08e993ebf3daf",
+    "exclusions": "a773ba1c1c28dfc1a8f4b76dcf8b6e7b26680ed31e33ccf82e8ae77d665d7340",
     "dm": "9899473338d649e88ae0f95d222b06380488d0e98acbcc3e5f36224f6088c899"
   }
 }

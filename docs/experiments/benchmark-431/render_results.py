@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Render the committed benchmark outputs; no data access beyond these files."""
 import argparse
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -50,6 +51,10 @@ def main():
         elif window == "live_since_cv43":
             text += ["Only two complete highest-sequence lead1 dates, November16/17, mixed cv43/44. November17's DA prices were already in the fetched public snapshot; physical delivery need not be complete for a settled DA-price target. The older raw extract supplies only39 partial SDAC cells (one hour per zone), so **zero complete SDAC zone-days** are scored. Their secondary partial-cell MAE below is not a comparable two-day estimate. Both DM cohorts are insufficient data; no new-cv generalization claim.", ""]
         else:
+            provenance = json.loads((root / "timestral_ontime-highest_seq/manifest.json").read_text())
+            physics = next(model for model in provenance["models"] if model["id"] == "physics")
+            versions = ", ".join(f"{count:,} cv{version}" for version, count in physics["base_cv_counts"].items())
+            text += [f"Saved physics provenance in the eligible original cohort: {versions}. The physics model and post-sim base share these versions; prices-only models have no physics base. These counts precede target-policy and complete-zone-day restrictions.", ""]
             text += ["The original on-time cohort has exactly47,679 paired cells. Highest-sequence all-paired MAE is25.2647108 for post-sim versus28.8190692 for its matched-context prices-only control; replay is exact. Complete paired zone-days leave47,631 cells, hence slightly different primary estimates. The SDAC retarget also changes the targets, while saved model contexts stay unchanged. On-time refers to the physics-input cutoff, not authenticated first public release.", ""]
     text += ["## Secondary: all paired cells, pooled estimator", "",
              "Partial zone-days and DST hours are retained here. Mean-daily values on this same partial cohort are also present in headlines.csv, so estimator and coverage changes can be separated.", "",

@@ -39,6 +39,8 @@ Only two complete highest-sequence lead1 dates, November16/17, mixed cv43/44. No
 | sdac | timestral_postsim | 47631 | 51 | 25.4916 | -2.71342 | 48.5214 | 0.525368 | 176.09 | 0.144765 | 0.013451 |
 | sdac | timestral_prices_matched_context | 47631 | 51 | 29.0868 | -3.66429 | 48.5214 | 0.599464 | 176.09 | 0.165182 | 0.013451 |
 
+Saved physics provenance in the eligible original cohort: 936 cv39, 36,447 cv40, 10,296 cv42. The physics model and post-sim base share these versions; prices-only models have no physics base. These counts precede target-policy and complete-zone-day restrictions.
+
 The original on-time cohort has exactly47,679 paired cells. Highest-sequence all-paired MAE is25.2647108 for post-sim versus28.8190692 for its matched-context prices-only control; replay is exact. Complete paired zone-days leave47,631 cells, hence slightly different primary estimates. The SDAC retarget also changes the targets, while saved model contexts stay unchanged. On-time refers to the physics-input cutoff, not authenticated first public release.
 
 ## Secondary: all paired cells, pooled estimator
