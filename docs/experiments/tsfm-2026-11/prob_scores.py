@@ -16,12 +16,18 @@ Scores what is saved; nothing is re-forecast.
 * Split-conformal recalibration (CQR) of the central intervals, offline only. It is one fixed
   specification, declared before scoring:
   - per zone, additive;
-  - calibration on the 28 market days D-28..D-1, strictly before the evaluation day D. D-1's
-    prices are public at the D-1 06:30 issue, because they were published on D-2;
-  - evaluated only on days with a full 28-day window.
-  Reports coverage, width, endpoint pinball and interval score before and after.
+  - calibration on the zone's cells in the trailing 28 CALENDAR days D-28..D-1, strictly before
+    the evaluation day D. D-1's prices are public at the D-1 06:30 issue (published on D-2).
+    Cohort exclusions leave gaps, so a window holds fewer than 28 market days: D is evaluated
+    only if it is >= 28 days after the zone's own first day and the window has >= 14 distinct
+    calibration days (the realised counts are reported);
+  - two band policies (`adjust_band`): `signed` CQR, where an inverted band is the empty set,
+    scored as a zero-width interval and counted; and `widen` (offsets clipped at 0), the only
+    one publishable as an ordered q_lo <= q_hi pair.
+  Reports coverage, width, endpoint pinball, interval score and the inversion frequency.
 * Live (`--live-api DIR`, zone JSONs as served by api.philokalia.ai/api/v1/zones/<Z>): scores
-  tsfm/tsfm_q10/tsfm_q90/p_le0 and p_any_le0 where both the overlay and the settled actual exist.
+  tsfm/tsfm_q10/tsfm_q90, the hourly p_le0 and the day p_any_le0 (reliability bins, alarm
+  thresholds, counts, arm/mode labels) where the overlay and the settled actuals exist.
 
 Cells: the README's common set (54,231 = 39 zones x 58 days) and its on-time subset (47,679,
 lead-1 `sim` published by D-1 10:00 UTC), reproduced through evaluate.load and asserted.
@@ -50,6 +56,8 @@ QCOLS = [f"q{int(round(100 * l)):02d}" for l in LEVELS]
 INTERVALS = {50: ("q25", "q75"), 80: ("q10", "q90"), 90: ("q05", "q95"), 98: ("q01", "q99")}
 CONFORMAL_LEVELS = (50, 80, 90)
 CAL_DAYS = 28
+MIN_CAL_DAYS = 14                 # distinct calibration market days required inside the window
+BAND_POLICIES = ("signed", "widen")
 REL_BINS = [0, 0.01, 0.05, 0.1, 0.2, 0.4, 0.6, 0.8, 1.0000001]
 ALARMS = (0.1, 0.3, 0.5)          # 0.3 = the site's "<=0 risk" badge threshold
 
@@ -137,33 +145,56 @@ def alarm_table(p, y, thresholds=ALARMS):
     return pd.DataFrame(rows)
 
 
-def conformal_offsets(cal, lo, hi, level, days=CAL_DAYS, group="zone", day_col="date"):
+def conformal_offsets(cal, lo, hi, level, days=CAL_DAYS, group="zone", day_col="date",
+                      min_cal_days=MIN_CAL_DAYS):
     """Split-conformal (CQR) offsets per (group, evaluation day), strictly chronological.
 
-    For evaluation day D the calibration set is every cell of the same group with day in
-    [D-days, D-1]. Score s = max(lo - y, y - hi); offset = the ceil((n+1)*level)-th smallest
-    score. Only days whose window lies fully inside the data are returned. Columns: group,
-    eval_day, offset, n_cal, cal_first, cal_last (for the no-overlap audit)."""
+    For evaluation day D the calibration set is every cell of the same group with day in the
+    trailing calendar window [D-days, D-1]. Eligibility is per group: D must be at least `days`
+    after THAT group's first day, and the window must hold >= `min_cal_days` distinct market
+    days with cells (cohort exclusions such as late-sim days leave gaps). Score
+    s = max(lo - y, y - hi); offset = the ceil((n+1)*level)-th smallest score. Columns: group,
+    eval_day, offset, n_cal, n_cal_days, cal_first, cal_last (for the no-overlap audit)."""
     alpha_cov = level / 100.0
     d = cal[[group, day_col, "actual", lo, hi]].copy()
     d["day"] = pd.to_datetime(d[day_col])
     d["s"] = np.maximum(d[lo] - d.actual, d.actual - d[hi])
-    first = d.day.min()
     out = []
     for z, g in d.groupby(group):
+        first = g.day.min()                  # per-group history, never the table's earliest day
         for D in sorted(g.day.unique()):
             if D - pd.Timedelta(days=days) < first:
                 continue
             w = g[(g.day >= D - pd.Timedelta(days=days)) & (g.day < D)]
             n = len(w)
-            if n == 0:
+            if w.day.nunique() < min_cal_days:
                 continue
             k = int(np.ceil((n + 1) * alpha_cov))
             s = np.sort(w.s.to_numpy())
             off = s[min(k, n) - 1] if k <= n else s[-1]
-            out.append({group: z, "eval_day": D, "offset": off, "n_cal": n,
+            out.append({group: z, "eval_day": D, "offset": off, "n_cal": n, "n_cal_days": w.day.nunique(),
                         "cal_first": w.day.min(), "cal_last": w.day.max()})
     return pd.DataFrame(out)
+
+
+def adjust_band(lo, hi, offset, policy):
+    """Apply a CQR offset under an explicit band policy. Returns (lo', hi', inverted mask).
+
+    signed  the CQR set [lo - off, hi + off]; a negative offset larger than the half-width gives
+            lo' > hi', i.e. the EMPTY prediction set. It is never shown as a band with negative
+            width: it is scored as the degenerate interval at the band's midpoint (width 0,
+            covered only if y equals it) and counted in `inverted`.
+    widen   offsets clipped at 0 (widen-only): the band is never narrowed, never inverted. This is
+            the only policy compatible with publishing it as an ordered q_lo <= q_hi pair."""
+    lo, hi, off = (np.asarray(v, float) for v in (lo, hi, offset))
+    if policy == "widen":
+        off = np.maximum(off, 0.0)
+    elif policy != "signed":
+        raise ValueError(policy)
+    alo, ahi = lo - off, hi + off
+    inv = alo > ahi
+    mid = (alo + ahi) / 2
+    return np.where(inv, mid, alo), np.where(inv, mid, ahi), inv
 
 
 # ----------------------------------------------------------------------------- data
@@ -195,13 +226,23 @@ def load_logits(base):
     return h, d
 
 
+def zone_files(api_dir):
+    """Zone JSONs of an API snapshot (skips e.g. snapshot-manifest.json: no zone/days keys)."""
+    out = []
+    for f in sorted(Path(api_dir).glob("*.json")):
+        js = json.loads(f.read_text())
+        if isinstance(js, dict) and "zone" in js and "days" in js:
+            out.append(f)
+    return out
+
+
 def load_live(api_dir):
     """Hourly + day rows of the published overlay with a settled actual (lead-1 market days).
 
     The overlay fields are per (zone, market day), repeated on every lead/input_mode row of that
     day in the API, so each (zone, hour) is kept once; a day whose rows disagree is an error."""
     rows, days = [], []
-    for f in sorted(Path(api_dir).glob("*.json")):
+    for f in zone_files(api_dir):
         js = json.loads(f.read_text())
         z = js["zone"]
         for r in js["days"]:
@@ -214,16 +255,74 @@ def load_live(api_dir):
                                  issue=r.get("tsfm_issue_utc"), arm=r.get("tsfm_arm"),
                                  mode=r.get("tsfm_input_mode")))
             days.append(dict(zone=z, date=r["date"], p_any_le0=r.get("p_any_le0"),
-                             issue=r.get("tsfm_issue_utc"), mode=r.get("tsfm_input_mode")))
+                             issue=r.get("tsfm_issue_utc"), arm=r.get("tsfm_arm"), mode=r.get("tsfm_input_mode")))
     cols = ["zone", "date", "t", "actual", "median", "q10", "q90", "p_le0", "issue", "arm", "mode"]
     h = pd.DataFrame(rows, columns=cols)
-    if len(h):
-        k = ["zone", "t"]
-        dup = h.drop_duplicates(k + ["median", "q10", "q90", "p_le0", "issue"])
-        if dup.duplicated(k).any():
-            raise ValueError("live overlay disagrees across rows of the same (zone, hour)")
-        h = dup
-    return h, pd.DataFrame(days).drop_duplicates() if days else pd.DataFrame(days)
+    d = pd.DataFrame(days, columns=["zone", "date", "p_any_le0", "issue", "arm", "mode"])
+    # one vintage per (zone, hour) / (zone, day): any field differing between repeated rows,
+    # values or provenance (issue, arm, mode), is an error, never a silent pick
+    for frame, key, what in ((h, ["zone", "t"], "hour"), (d, ["zone", "date"], "day")):
+        if len(frame) and frame.astype(str).drop_duplicates().duplicated(key).any():
+            raise ValueError(f"live overlay disagrees across repeated rows of the same (zone, {what})")
+    h = h.astype({"actual": float}).drop_duplicates(["zone", "t"]).reset_index(drop=True) if len(h) else h
+    d = d.drop_duplicates(["zone", "date"]).reset_index(drop=True) if len(d) else d
+    return h, d
+
+
+def score_live(h, d):
+    """Score the saved live overlay. Returns (summary, reliability bins, alarm table).
+
+    Hourly: pinball of q10/median/q90, inclusive 80 % coverage and width, and the published
+    hourly probability `p_le0` (the 50/50 blend, or the TSFM-only fallback when the logistic
+    failed) against actual <= 0. Day: the published `p_any_le0` against "any hour of the Athens
+    market day <= 0", only on days whose every overlay hour has a settled actual (incomplete days
+    are counted, not scored). Every block is labelled with its source, arm(s), mode(s) and counts."""
+    summ = {"overlay_hours": int(len(h)), "overlay_days": int(len(d))}
+    bins, alarms = [], []
+    hs = h.dropna(subset=["actual", "median", "q10", "q90"]) if len(h) else h
+    summ["cells"] = int(len(hs))
+    if len(hs):
+        y = hs.actual.to_numpy(float)
+        summ["quantiles"] = dict(
+            source="live tsfm_q10 / tsfm (median) / tsfm_q90", n=int(len(hs)), days=int(hs.date.nunique()),
+            zones=int(hs.zone.nunique()), arms=sorted(hs.arm.dropna().unique().tolist()),
+            modes=sorted(hs["mode"].dropna().unique().tolist()),
+            pinball_q10=float(pinball(y, hs.q10, .1).mean()), pinball_q50=float(pinball(y, hs["median"], .5).mean()),
+            pinball_q90=float(pinball(y, hs.q90, .9).mean()), cov80=float(covered(y, hs.q10, hs.q90).mean()),
+            width80=float((hs.q90 - hs.q10).mean()))
+    hp = h.dropna(subset=["actual", "p_le0"]) if len(h) else h
+    blocks = []
+    if len(hp):
+        blocks.append(("hour", "live p_le0 (published hourly probability)", hp, hp.p_le0, hp.actual <= 0))
+    if len(d) and len(h):
+        g = h.groupby(["zone", "date"]).agg(hours=("t", "size"), settled=("actual", "count"),
+                                            y_day=("actual", lambda s: int((s <= 0).any())))
+        dd = d.merge(g.reset_index(), on=["zone", "date"], how="left")
+        complete = dd.hours.notna() & (dd.hours == dd.settled) & dd.p_any_le0.notna()
+        summ["day_incomplete_or_missing"] = int((~complete).sum())
+        dd = dd[complete]
+        if len(dd):
+            blocks.append(("day", "live p_any_le0 (published day probability)", dd, dd.p_any_le0, dd.y_day.astype(bool)))
+    for level, src, frame, p, y in blocks:
+        t, s = reliability(np.asarray(p, float), np.asarray(y, float))
+        summ[f"{level}_probability"] = dict(source=src, arms=sorted(frame.arm.dropna().unique().tolist()),
+                                           modes=sorted(frame["mode"].dropna().unique().tolist()),
+                                           **{k: (float(v) if not isinstance(v, int) else v) for k, v in s.items()})
+        bins.append(t.assign(level=level, source=src))
+        alarms.append(alarm_table(np.asarray(p, float), np.asarray(y, bool)).assign(level=level, source=src))
+    return (summ, pd.concat(bins, ignore_index=True) if bins else pd.DataFrame(),
+            pd.concat(alarms, ignore_index=True) if alarms else pd.DataFrame())
+
+
+def live_report(api_dir, out):
+    """Load + score the live overlay from a directory of zone JSONs; write live*.{json,csv}."""
+    h, d = load_live(api_dir)
+    summ, bins, alarms = score_live(h, d)
+    summ = {"api_dir": str(api_dir), "zone_files": len(zone_files(api_dir)), **summ}
+    Path(f"{out}/live.json").write_text(json.dumps(summ, indent=1, default=float))
+    bins.to_csv(f"{out}/live_reliability_bins.csv", index=False)
+    alarms.to_csv(f"{out}/live_alarms.csv", index=False)
+    return summ, bins, alarms
 
 
 # ----------------------------------------------------------------------------- report
@@ -336,16 +435,21 @@ def main():
             offs_all.append(offs.assign(arm=fn, level=lev))
             ev_ = on.merge(offs, left_on=["zone", "day"], right_on=["zone", "eval_day"], how="inner")
             raw_before = ev_[[lo, hi]].copy()
-            alo, ahi = ev_[lo] - ev_.offset, ev_[hi] + ev_.offset
-            assert ev_[[lo, hi]].equals(raw_before)
             tl, th = (1 - lev / 100) / 2, 1 - (1 - lev / 100) / 2
-            for scope, sel in (("all39_ontime", np.ones(len(ev_), bool)), ("exIT_ontime", ~ev_.zone.str.startswith("IT-").to_numpy())):
-                e = ev_[sel]; al, ah = alo[sel], ahi[sel]
+            for policy in BAND_POLICIES:
+              alo, ahi, inv = adjust_band(ev_[lo], ev_[hi], ev_.offset, policy)
+              assert ev_[[lo, hi]].equals(raw_before) and (ahi >= alo).all()
+              for scope, sel in (("all39_ontime", np.ones(len(ev_), bool)), ("exIT_ontime", ~ev_.zone.str.startswith("IT-").to_numpy())):
+                e = ev_[sel]; al, ah, iv = alo[sel], ahi[sel], inv[sel]
                 zc_b = e.assign(c=covered(e.actual, e[lo], e[hi])).groupby("zone").c.mean()
                 zc_a = e.assign(c=covered(e.actual, al, ah)).groupby("zone").c.mean()
                 conf.append(dict(
-                    arm=fn, level=lev, scope=scope, n=len(e), days=e.date.nunique(),
+                    arm=fn, level=lev, policy=policy, scope=scope, n=len(e), days=e.date.nunique(),
                     first_eval=e.date.min(), cal_n_median=int(e.n_cal.median()),
+                    cal_days_min=int(e.n_cal_days.min()), cal_days_median=float(e.n_cal_days.median()),
+                    cal_days_max=int(e.n_cal_days.max()), cal_n_min=int(e.n_cal.min()), cal_n_max=int(e.n_cal.max()),
+                    n_inverted=int(iv.sum()), share_inverted=float(iv.mean()),
+                    neg_offset_share=float((e.offset < 0).mean()),
                     cov_before=covered(e.actual, e[lo], e[hi]).mean(), cov_after=covered(e.actual, al, ah).mean(),
                     width_before=(e[hi] - e[lo]).mean(), width_after=(ah - al).mean(),
                     pinball_lo_before=pinball(e.actual, e[lo], tl).mean(), pinball_lo_after=pinball(e.actual, al, tl).mean(),
@@ -355,35 +459,21 @@ def main():
                     zone_cov_before_min=zc_b.min(), zone_cov_before_max=zc_b.max(),
                     zone_cov_after_min=zc_a.min(), zone_cov_after_max=zc_a.max()))
     conf = pd.DataFrame(conf)
-    print("\n== split-conformal (per zone, additive, 28 days strictly before D; days with a full window)")
+    print("\n== split-conformal (per zone, additive, trailing 28 calendar days strictly before D, "
+          f">= {MIN_CAL_DAYS} distinct calibration days; band policies {BAND_POLICIES})")
     print(conf.round(3).to_string(index=False))
 
     # 4. live
-    live_summary = {"cells": 0}
     if a.live_api:
-        h, d = load_live(a.live_api)
-        hs = h.dropna(subset=["actual", "median", "q10", "q90"])
-        live_summary = {"api_dir": a.live_api, "zone_files": len(list(Path(a.live_api).glob("*.json"))),
-                        "overlay_hours": len(h), "cells": len(hs)}
-        if len(hs):
-            y = hs.actual.to_numpy(float)
-            live_summary.update(
-                days=int(hs.date.nunique()), zones=int(hs.zone.nunique()),
-                arms=sorted(hs.arm.dropna().unique().tolist()), modes=sorted(hs["mode"].dropna().unique().tolist()),
-                pinball_q10=pinball(y, hs.q10, .1).mean(), pinball_q50=pinball(y, hs["median"], .5).mean(),
-                pinball_q90=pinball(y, hs.q90, .9).mean(), cov80=covered(y, hs.q10, hs.q90).mean(),
-                width80=(hs.q90 - hs.q10).mean())
-            ps = hs.dropna(subset=["p_le0"])
-            if len(ps):
-                _, s = reliability(ps.p_le0, ps.actual <= 0)
-                live_summary["p_le0"] = s
-        print("\n== live overlay:", live_summary)
+        live_summary, lbins, lalarms = live_report(a.live_api, a.out)
+        print("\n== live overlay:", json.dumps(live_summary, indent=1, default=float))
+        if len(lbins):
+            print(lbins.round(4).to_string(index=False)); print(lalarms.round(3).to_string(index=False))
 
     for nm, t in (("pinball", pin), ("crps", crps), ("intervals", ivl), ("reliability_summary", rel),
                   ("reliability_bins", relt), ("alarms", alarms), ("conformal", conf),
                   ("conformal_offsets", pd.concat(offs_all))):
         t.to_csv(f"{a.out}/{nm}.csv", index=False)
-    Path(f"{a.out}/live.json").write_text(json.dumps(live_summary, indent=1, default=float))
     print(f"\nwrote {a.out}/")
 
 

@@ -129,6 +129,104 @@ class ConformalTest(unittest.TestCase):
         self.assertGreater(o[o.zone == "A"].offset.median(), 5 * abs(o[o.zone == "B"].offset.median()))
 
 
+    def test_per_zone_history_eligibility(self):
+        # zone B starts 30 days after A: B is evaluated only from its OWN first day + 28
+        a = self.data(days=80, zones=("A",))
+        b = self.data(days=50, zones=("B",)).assign(
+            date=lambda d: (pd.to_datetime(d.date) + pd.Timedelta(days=30)).dt.date.astype(str))
+        o = ps.conformal_offsets(pd.concat([a, b]), "q10", "q90", 80)
+        self.assertEqual(o[o.zone == "A"].eval_day.min(), pd.Timestamp("2026-09-29"))
+        self.assertEqual(o[o.zone == "B"].eval_day.min(), pd.Timestamp("2026-10-29"))
+        self.assertTrue((o.n_cal_days >= ps.MIN_CAL_DAYS).all())
+
+    def test_sparse_window_refused(self):
+        df = self.data(days=60)
+        keep = pd.to_datetime(df.date).dt.day % 3 == 0          # ~10 of every 28 days survive
+        o = ps.conformal_offsets(df[keep], "q10", "q90", 80)
+        self.assertTrue(o.empty)
+        o = ps.conformal_offsets(df[keep], "q10", "q90", 80, min_cal_days=5)
+        self.assertFalse(o.empty)
+        self.assertTrue((o.n_cal_days < 28).all())
+
+
+class BandPolicyTest(unittest.TestCase):
+    def test_signed_inversion_is_counted_and_zero_width(self):
+        lo, hi, off = np.array([0.0, 0.0]), np.array([10.0, 10.0]), np.array([-2.0, -7.0])
+        alo, ahi, inv = ps.adjust_band(lo, hi, off, "signed")
+        self.assertEqual(inv.tolist(), [False, True])
+        np.testing.assert_allclose(alo, [2.0, 5.0]); np.testing.assert_allclose(ahi, [8.0, 5.0])
+        self.assertTrue((ahi >= alo).all())
+        self.assertFalse(ps.covered(5.1, alo[1], ahi[1]))       # empty set: (practically) never covers
+
+    def test_widen_only_never_narrows(self):
+        lo, hi, off = np.array([0.0, 0.0]), np.array([10.0, 10.0]), np.array([-7.0, 3.0])
+        alo, ahi, inv = ps.adjust_band(lo, hi, off, "widen")
+        self.assertFalse(inv.any())
+        np.testing.assert_allclose(alo, [0.0, -3.0]); np.testing.assert_allclose(ahi, [10.0, 13.0])
+        with self.assertRaises(ValueError):
+            ps.adjust_band(lo, hi, off, "other")
+
+
+def api_day(date, hours, actual, p_any, **kw):
+    n = len(hours)
+    d = dict(date=date, hours=hours, actual=actual, tsfm=[50.0] * n, tsfm_q10=[10.0] * n,
+             tsfm_q90=[90.0] * n, p_le0=[0.1] * n, p_any_le0=p_any, tsfm_issue_utc="2026-11-15T06:30:00Z",
+             tsfm_arm="timestral-209m", tsfm_input_mode="pregate0630", lead_days=1, input_mode="weather")
+    d.update(kw)
+    return d
+
+
+class LiveIntegrationTest(unittest.TestCase):
+    HOURS = [f"2026-11-15T{h:02d}:00:00Z" for h in range(22, 24)] + [f"2026-11-16T{h:02d}:00:00Z" for h in range(22)]
+    HOURS_NEXT = [f"2026-11-16T{h:02d}:00:00Z" for h in range(22, 24)] + [f"2026-11-17T{h:02d}:00:00Z" for h in range(22)]
+
+    def write(self, d, days):
+        Path(d, "GR.json").write_text(json.dumps({"zone": "GR", "days": days}))
+        Path(d, "snapshot-manifest.json").write_text(json.dumps({"files": []}))   # must be skipped
+
+    def run_case(self, p_any):
+        actual = [60.0] * 24
+        actual[13] = -1.0                                                # one negative hour
+        with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as out:
+            self.write(d, [api_day("2026-11-16", self.HOURS, actual, p_any),
+                           api_day("2026-11-16", self.HOURS, actual, p_any, lead_days=2, input_mode="entsoe_persist"),
+                           api_day("2026-11-17", self.HOURS_NEXT, [None] * 24, 0.5)])   # unsettled day
+            summ, bins, alarms = ps.live_report(d, out)
+            saved = json.loads(Path(out, "live.json").read_text())
+            self.assertTrue(Path(out, "live_reliability_bins.csv").exists() and Path(out, "live_alarms.csv").exists())
+        return summ, bins, alarms, saved
+
+    def test_nonempty_live_scores_hour_and_day(self):
+        s05, bins, alarms, saved = self.run_case(0.05)
+        s95, *_ = self.run_case(0.95)
+        self.assertEqual(saved["zone_files"], 1)
+        self.assertEqual(s05["cells"], 24)
+        self.assertEqual(s05["overlay_days"], 2)
+        self.assertEqual(s05["day_incomplete_or_missing"], 1)
+        self.assertAlmostEqual(s05["day_probability"]["Brier"], 0.9025)
+        self.assertAlmostEqual(s95["day_probability"]["Brier"], 0.0025)
+        self.assertEqual(s05["day_probability"]["n"], 1)
+        # hourly p_le0 = 0.1 everywhere, one event: Brier = (23 * 0.01 + 0.81) / 24
+        self.assertAlmostEqual(s05["hour_probability"]["Brier"], (23 * 0.01 + 0.81) / 24)
+        self.assertEqual(s05["hour_probability"]["events"], 1)
+        self.assertEqual(s05["hour_probability"]["arms"], ["timestral-209m"])
+        self.assertEqual(s05["hour_probability"]["modes"], ["pregate0630"])
+        self.assertAlmostEqual(s05["quantiles"]["cov80"], 23 / 24)      # -1 is below q10 = 10
+        self.assertEqual(set(bins.level), {"hour", "day"})
+        self.assertEqual(set(alarms.level), {"hour", "day"})
+        self.assertEqual(int(bins[bins.level == "hour"].n.sum()), 24)
+
+    def test_disagreement_guard_day_arm_mode(self):
+        actual = [60.0] * 24
+        for change in (dict(p_any_le0=0.9), dict(tsfm_arm="chronos2"), dict(tsfm_input_mode="postsim")):
+            with tempfile.TemporaryDirectory() as d:
+                base = api_day("2026-11-16", self.HOURS, actual, 0.05)
+                other = dict(api_day("2026-11-16", self.HOURS, actual, 0.05, lead_days=2), **change)
+                self.write(d, [base, other])
+                with self.assertRaises(ValueError, msg=str(change)):
+                    ps.load_live(d)
+
+
 class LiveLoaderTest(unittest.TestCase):
     def test_dedup_and_disagreement(self):
         day = dict(date="2026-11-16", hours=["2026-11-15T22:00:00Z", "2026-11-15T23:00:00Z"],

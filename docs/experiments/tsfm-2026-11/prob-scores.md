@@ -2,7 +2,7 @@
 
 **What this is:** an offline scoring of the quantiles and P(price ≤ 0) that were already saved.
 Nothing is re-forecast and nothing live changes. Script: [`prob_scores.py`](prob_scores.py);
-tests: `test/test_tsfm_prob_scores.py` (13). Outputs go to `$TSFM_OUT/prob431/*.csv`, which is
+tests: `test/test_tsfm_prob_scores.py` (19). Outputs go to `$TSFM_OUT/prob431/*.csv`, which is
 not committed.
 
 ## Coverage of the evaluation
@@ -12,7 +12,7 @@ not committed.
 | backtest, common | 54,231 | 39 × 58 (2026-09-14..11-13) | the README's common set, asserted |
 | **backtest, on-time** (primary) | **47,679** | 39 × 51 | excludes the 7 days whose lead-1 `sim` came after D-1 10:00 UTC |
 | backtest, on-time ex-IT | 39,200 | 32 × 51 | |
-| conformal evaluation | 26,247 | 39 × 28 (10-14..11-13) | days with a full 28-day calibration window; median 481 calibration cells per zone-day |
+| conformal evaluation | 26,247 | 39 × 28 (10-14..11-13) | days ≥ 28 days after the zone's first day; the trailing 28-calendar-day window holds 18–25 distinct on-time market days (median 20), 384–601 cells |
 | day-level P(any hour ≤ 0) | 1,986 zone-days (on-time) | | 2,259 overall; labels identical to collapse's (0 disagreements) |
 | **live overlay rows** | **0** | | see "Live" below |
 
@@ -110,51 +110,106 @@ Reliability bins for t209_uni (on-time):
   interval.
   - **Per zone, additive.** The score is `max(lo − y, y − hi)`, and the offset is its
     `⌈(n+1)·level⌉`-th smallest value.
-  - **Calibration** uses the zone's on-time cells on the **28 market days D-28..D-1, strictly before
-    D.** D-1's prices are public at the D-1 06:30 issue.
-  - **Evaluation** is only on days with a full window: 10-14..11-13, 28 days, 26,247 cells.
-- **Tests** check that the calibration days are strictly before D, that changing future rows leaves
-  earlier offsets unchanged, and that the raw quantiles are unchanged.
+  - **Calibration.** The zone's on-time cells in the **trailing 28 calendar days D-28..D-1,
+    strictly before D.** D-1's prices are public at the D-1 06:30 issue.
+    - The 7 late-sim days are excluded from the cohort, so a window holds fewer than 28 market
+      days: **18–25 distinct calibration days, median 20, and 384–601 cells (median 481)** per
+      zone-day.
+    - **Eligibility is per zone:** D must be ≥ 28 days after *that zone's* first day, and the
+      window must hold **≥ 14 distinct calibration days**, the declared minimum usable sample. In
+      this run every zone starts on 09-14 and the minimum realised is 18, so nothing is excluded.
+  - **Evaluation:** 10-14..11-13, 28 days, 26,247 cells.
+- **Band policy.** A negative offset narrows the band, and a large one can **invert** it
+  (lo′ > hi′). Two policies are reported (`adjust_band`):
+  - **`signed`** is standard CQR. An inverted band is the *empty* prediction set. It is never
+    shown as a band of negative width: it is scored as a zero-width interval at the midpoint
+    (it misses unless y equals that point) and counted.
+  - **`widen`** clips offsets at 0. It never narrows and never inverts, so it is the only policy
+    that can be published as an ordered q10 ≤ q90 pair.
+- **Tests:**
+  - calibration days are strictly before D;
+  - changing future rows leaves earlier offsets unchanged, and raw quantiles are unchanged;
+  - eligibility is per zone, and sparse windows are refused;
+  - the band policies behave as specified.
 
-Results, before → after, on all 39 zones, on-time:
+**Inversions under `signed`** (all 39 zones, on-time, out of 26,247 cells):
 
-| arm | level | coverage | width | pinball lo | pinball hi | interval score | per-zone coverage range after |
-|---|---|---|---|---|---|---|---|
-| t209_uni | 50 | 0.463 → 0.496 | 43.1 → 46.0 | 12.08 → 12.13 | 12.72 → 12.69 | 99.19 → 99.28 | 0.44–0.56 |
-| t209_uni | **80** | **0.746 → 0.783** | 85.1 → 92.4 | 6.871 → 6.877 | 7.765 → 7.711 | 146.4 → 145.9 | 0.73–0.83 |
-| t209_uni | 90 | 0.857 → 0.887 | 114.4 → 124.5 | 4.089 → 4.093 | 4.932 → 4.898 | 180.4 → 179.8 | 0.84–0.93 |
-| c2_uni | **80** | **0.711 → 0.779** | 81.8 → 92.9 | 7.173 → 7.125 | 8.417 → 8.237 | 155.9 → 153.6 | 0.73–0.85 |
-| t209_sim | **80** | **0.743 → 0.777** | 75.9 → 82.3 | 5.933 → 5.963 | 7.191 → 7.088 | 131.2 → 130.5 | 0.74–0.83 |
+| arm | 50 % | 80 % | 90 % |
+|---|---|---|---|
+| t209_uni | 30 (0.11 %) | 8 (0.03 %) | 5 (0.02 %) |
+| c2_uni | 19 (0.07 %) | 6 (0.02 %) | 11 (0.04 %) |
+| t209_sim | 25 (0.10 %) | 11 (0.04 %) | 5 (0.02 %) |
 
-Ex-IT: t209_uni 80 % 0.738 → 0.783. All rows are in `conformal.csv`.
+Negative offsets, i.e. a narrowed band, occur on 16–24 % of cells for Timestral and 4–6 % for
+Chronos-2 (`neg_offset_share`). Under `widen`, those cells keep the raw band.
+
+**Results, before → after, all 39 zones, on-time:**
+
+| arm | level | policy | coverage | width | pinball lo | pinball hi | interval score | per-zone coverage after |
+|---|---|---|---|---|---|---|---|---|
+| t209_uni | 50 | signed | 0.463 → 0.496 | 43.1 → 46.0 | 12.08 → 12.13 | 12.72 → 12.69 | 99.19 → 99.28 | 0.44–0.56 |
+| t209_uni | 50 | widen | 0.463 → 0.503 | 43.1 → 46.3 | 12.08 → 12.13 | 12.72 → 12.68 | 99.19 → 99.23 | 0.46–0.61 |
+| t209_uni | **80** | signed | 0.746 → 0.783 | 85.1 → 92.4 | 6.871 → 6.877 | 7.765 → 7.711 | 146.4 → 145.9 | 0.73–0.83 |
+| t209_uni | **80** | **widen** | **0.746 → 0.788** | 85.1 → 92.6 | 6.871 → 6.875 | 7.765 → 7.706 | 146.4 → 145.8 | 0.74–0.84 |
+| t209_uni | 90 | signed | 0.857 → 0.887 | 114.4 → 124.5 | 4.089 → 4.093 | 4.932 → 4.898 | 180.4 → 179.8 | 0.84–0.93 |
+| t209_uni | 90 | widen | 0.857 → 0.892 | 114.4 → 124.8 | 4.089 → 4.091 | 4.932 → 4.891 | 180.4 → 179.6 | 0.86–0.93 |
+| c2_uni | **80** | signed | 0.711 → 0.779 | 81.8 → 92.9 | 7.173 → 7.125 | 8.417 → 8.237 | 155.9 → 153.6 | 0.73–0.85 |
+| c2_uni | **80** | **widen** | **0.711 → 0.781** | 81.8 → 92.9 | 7.173 → 7.123 | 8.417 → 8.236 | 155.9 → 153.6 | 0.73–0.85 |
+| t209_sim | **80** | signed | 0.743 → 0.777 | 75.9 → 82.3 | 5.933 → 5.963 | 7.191 → 7.088 | 131.2 → 130.5 | 0.74–0.83 |
+| t209_sim | **80** | **widen** | **0.743 → 0.783** | 75.9 → 82.6 | 5.933 → 5.957 | 7.191 → 7.082 | 131.2 → 130.4 | 0.74–0.84 |
+
+Ex-IT, t209_uni 80 %: 0.738 → 0.783 (signed) / 0.787 (widen). All rows are in `conformal.csv`.
 
 **Reading.**
 - **Coverage.** Pooled 80 % coverage moves into Fable's 77–83 % acceptance band for all three arms
-  (0.777–0.783). The 50 % and 90 % levels end 0.4–2 points short of nominal.
-- **Interval score** improves slightly at 80 % and 90 %.
+  under both policies: signed 0.777–0.783, widen 0.781–0.788. Under widen, 50 % ends within 1.2
+  points of nominal (t209_uni 0.503, just above), and 90 % ends 0.8–1.7 points short.
+- **Interval score** improves at 80 % and 90 % under both policies, slightly more under widen.
 - **Pinball loss.**
   - The **upper endpoint's pinball improves** in every arm.
-  - The **lower endpoint's** gets marginally worse for Timestral: +0.1 % for t209_uni and +0.5 %
-    for t209_sim. It improves for Chronos-2.
+  - The **lower endpoint's** gets marginally worse for Timestral under widen: +0.06 % for t209_uni
+    and +0.4 % for t209_sim. It improves for Chronos-2.
   - The q50 is untouched.
   - Net endpoint pinball is lower in every arm.
-- **Per-zone coverage** still ranges 0.73–0.85 at 80 %. A 28-day per-zone window holds ~480
-  cells, so zone-level coverage stays noisy.
+- **Per-zone coverage** still ranges 0.73–0.85 at 80 %. A zone's window holds 384–601 cells, so
+  zone-level coverage stays noisy.
 
 **Proposal (owner/leader decision, not implemented).** A `TSFM_CONFORMAL=1` follow-up, default
-off, would widen the published q10/q90 by the per-zone CQR offset from the trailing 28 days of
-settled prices. It meets the brief's bar only in the qualified sense above: coverage is fixed;
-summed endpoint pinball and interval score are better; one endpoint is +0.1 % worse for
-Timestral. The evidence is 28 evaluation days in one autumn window. A live flag should log both
-the raw and the widened band, so it can be re-checked on the first 28 live days.
+off, under the **widen-only** policy: q10 − max(off, 0) and q90 + max(off, 0), with the per-zone CQR
+offset from the trailing 28 calendar days (≥ 14 calibration days) of settled prices.
+- Widen-only, because signed CQR can produce empty sets (0.02–0.04 % of cells at 80 %), which
+  cannot be published as a band.
+- It meets the brief's bar only in a qualified sense:
+  - coverage is fixed: 0.781–0.788;
+  - summed endpoint pinball and interval score are better;
+  - one endpoint is +0.06 % (prices only) / +0.4 % (with `sim`) worse for Timestral.
+- The evidence is 28 evaluation days in one autumn window.
+- A live flag should log both the raw and the widened band, so it can be re-checked on the first
+  28 live days.
 
 ## Live
 
-- **Live keeps only q10/q50/q90 and p_le0 / p_any_le0.** `prob_scores.py --live-api DIR` scores them
-  from the public zone JSONs: pinball on the three levels, 80 % coverage and width, and the
-  Brier/reliability of p_le0.
+- **Live keeps only q10/q50/q90 and p_le0 / p_any_le0.** `prob_scores.py --live-api DIR`
+  (`live_report`) scores them from the public zone JSONs and writes `live.json`,
+  `live_reliability_bins.csv` and `live_alarms.csv`. Each block carries its source label, arm(s),
+  mode(s) and counts:
+  - **quantiles:** pinball of q10/median/q90, and inclusive 80 % coverage and width;
+  - **hourly probability:** the published `p_le0` (the 50/50 blend, or the TSFM-only fallback)
+    against actual ≤ 0. Scored with Brier and the Murphy decomposition, the same reliability bins,
+    and alarms at 0.1/0.3/0.5;
+  - **day probability:** the published `p_any_le0` against "any hour of the Athens day ≤ 0",
+    scored the same way. Only days on which every overlay hour has a settled actual are scored;
+    incomplete days are counted.
+- **Repeated rows must agree.** The API repeats each day's overlay on every lead/input-mode row.
+  Any disagreement in values (`tsfm`, the quantiles, `p_le0`, `p_any_le0`) or provenance (issue,
+  arm, mode) between repeats of the same (zone, hour) or (zone, day) is an error.
+- **Tests.** An integration test runs the whole live path on a nonempty fixture: 24 hours, one
+  negative actual. It checks that the day Brier moves from 0.9025 to 0.0025 when `p_any_le0` goes
+  from 0.05 to 0.95.
 - **On 2026-11-16 at 19:30 UTC, all 39 zone JSONs at `api.philokalia.ai/api/v1/zones/<Z>` had no
-  non-null `tsfm`/`tsfm_q10`/`p_le0` value on any day.** The local extract (2026-11-15) has no
+  non-null `tsfm`/`tsfm_q10`/`p_le0` value on any day.** That covers my fetch and collapse's
+  `live-20261116` snapshot (19:28 UTC), and rerunning on the snapshot gives 0 overlay hours and 0
+  overlay days. The local extract (2026-11-15) has no
   `simulations.tsfm_overlay` table either.
 - So the live sample is **0 cells**. There is nothing to report until overlay rows and their
   settled actuals exist.
