@@ -52,6 +52,12 @@ const TSFM_DAY = ["p_any_le0", "tsfm_input_mode", "tsfm_issue_utc", "tsfm_arm"];
 // PT15M actuals — never a copy of the hourly score.
 const Q15_DAY = ["n_q15", "mae_q15", "bias_q15", "corr_q15", "shape_floor_q15"];
 const Q15_BOARD = ["n_days_q15", "mae_q15", "bias_q15", "corr_q15", "shape_floor_q15"];
+// Naive baselines + rMAE (#431, bin/naive_baselines.jl → additive scoreboard
+// columns): passed through only when the parquet carries them. d1 / epf need
+// D-1 prices, which exist at issue only for lead <= 1: at leads >= 2 those keys
+// are ABSENT (as in the JSON exporter), not null.
+const NAIVE_BOARD = ["n_naive", "mae_paired", "mae_naive_d7", "rmae_d7"];
+const NAIVE_BOARD_LEAD1 = ["mae_naive_d1", "mae_naive_epf", "rmae_d1", "rmae_epf"];
 const has = (rows, k) => rows.length > 0 && Object.prototype.hasOwnProperty.call(rows[0], k);
 
 export function shapeZone(rows, zone) {
@@ -123,6 +129,7 @@ export function shapeZone(rows, zone) {
  */
 export function shapeScoreboard(rows, manifest) {
   const hasQ15 = has(rows, "mae_q15");
+  const hasNaive = has(rows, "n_naive");
   return {
     generated_utc: manifest.updated_at,
     code_version: manifest.code_version,
@@ -141,6 +148,10 @@ export function shapeScoreboard(rows, manifest) {
         code_version: num(r.code_version),   // single-cv guard for the track-gap chip
       };
       if (hasQ15) for (const k of Q15_BOARD) out[k] = num(r[k]);
+      if (hasNaive) {
+        for (const k of NAIVE_BOARD) out[k] = num(r[k]);
+        if (out.lead_days <= 1) for (const k of NAIVE_BOARD_LEAD1) out[k] = num(r[k]);
+      }
       return out;
     }),
   };

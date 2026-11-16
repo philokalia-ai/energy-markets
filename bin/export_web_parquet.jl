@@ -32,7 +32,13 @@
 #                             bias_q15, corr_q15, shape_floor_q15: the native
 #                             15-minute score averaged over the zone-days that
 #                             HAVE one (native PT15M actuals; null otherwise —
-#                             never a copy of the hourly score).
+#                             never a copy of the hourly score). Then (additive,
+#                             #431; columns absent when EXPORT_NAIVE=0 or the
+#                             naive step failed) n_naive, mae_paired,
+#                             mae_naive_d1, mae_naive_d7, mae_naive_epf, rmae_d1,
+#                             rmae_d7, rmae_epf: naive baselines on the cohort's
+#                             paired hours (bin/naive_baselines.jl); d1/epf are
+#                             null at leads >= 2 (not known at issue).
 #   v1/map.parquet            market_date, zone, track, sim, act, err_pct, mae,
 #                             corr, lead, made — freshest-lead day aggregates,
 #                             BOTH tracks (track = 'predicted' | 'announced';
@@ -59,6 +65,8 @@ using Euphemia, Dates, Statistics, DataFrames, DuckDB   # DuckDB re-exports DBIn
 include(joinpath(@__DIR__, "forecast_common.jl"))
 # resolution-aware actuals (guarded __main__, safe to include)
 include(joinpath(@__DIR__, "..", "test", "scripts", "eu_eval_metrics.jl"))
+# naive baselines + rMAE for the scoreboard (#431; EXPORT_NAIVE=0 skips them)
+include(joinpath(@__DIR__, "naive_baselines.jl"))
 
 const CV = Euphemia.ENERGY_PRICES_CODE_VERSION
 const OUT_ROOT = get(ENV, "WEB_PARQUET_OUT", joinpath(dirname(@__DIR__), "data", "web"))
@@ -131,6 +139,14 @@ function export_scoreboard_parquet()
     end
     q15vals(a) = (a.n_days_q15, nm(a.mae_q15), nm(a.bias_q15), nm(a.corr_q15),
                   nm(a.shape_floor_q15))
+    naive_parts = naive_parts_or_nothing(scores)   # nothing = no naive columns
+    naive_rows = Dict{String,Vector{Any}}(c => Any[] for c in NAIVE_BOARD_COLS)
+    push_naive!(sub) = naive_parts === nothing || begin
+        f = naive_cohort_fields(naive_parts, sub)
+        for c in NAIVE_BOARD_COLS
+            push!(naive_rows[c], c == "n_naive" ? f[c] : nm(get(f, c, missing)))
+        end
+    end
 
     df = DataFrame(zone=String[], lead_days=Int[], window=String[],
                    input_mode=String[], n_days=Int[],
@@ -148,12 +164,20 @@ function export_scoreboard_parquet()
             a = agg(sub)
             push!(df, (zone, lead, "all", mode, a.n_days,
                        nm(a.mae), nm(a.bias), nm(a.corr), a.cv, q15vals(a)...))
+            push_naive!(sub)
             for month in sort(unique(String.(sub.month)))
                 m = sub[sub.month .== month, :]
                 am = agg(m)
                 push!(df, (zone, lead, month, mode, am.n_days,
                            nm(am.mae), nm(am.bias), nm(am.corr), am.cv, q15vals(am)...))
+                push_naive!(m)
             end
+        end
+    end
+    if naive_parts !== nothing   # appended after the existing columns (additive)
+        df.n_naive = Int.(naive_rows["n_naive"])
+        for c in NAIVE_BOARD_COLS[2:end]
+            df[!, c] = Vector{Union{Missing,Float64}}(naive_rows[c])
         end
     end
     sort!(df, [:zone, :lead_days, :input_mode, :window])

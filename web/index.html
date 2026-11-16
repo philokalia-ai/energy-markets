@@ -709,6 +709,16 @@
           <option value="q15">15-min MAE (native PT15M zones)</option>
         </select>
       </label>
+      <label class="filter" id="naive-filter" hidden>
+        <span class="filter-label">Naive baseline</span>
+        <select id="naive-select" aria-label="Naive baseline"
+                title="The naive forecast each model is compared with, on the same hours. Only prices already settled when the forecast was issued are used.">
+          <option value="auto">Weekday rule at D-1, D-7 otherwise</option>
+          <option value="d7">D-7 (same hour last week)</option>
+          <option value="d1">D-1 (same hour yesterday; lead D-1 only)</option>
+          <option value="off">Hide</option>
+        </select>
+      </label>
     </div>
     <div class="chart-card">
       <div class="table-scroll">
@@ -732,6 +742,12 @@
         for its <em>shape floor</em>: how far quarter-hour prices moved around their hour's mean,
         measured after the fact. It describes intra-hour movement; it is neither a skill score nor
         a share of the MAE.
+        <strong>Naive baseline</strong> (hourly only): the settled price of the same hour one day
+        earlier (D-1), one week earlier (D-7), or the weekday rule (D-7 on Saturday, Sunday and
+        Monday, D-1 otherwise). A forecast issued D-2…D-7 days ahead could not have seen
+        yesterday's price, so those leads are compared with D-7 only. <strong>rMAE</strong> is the
+        model's MAE divided by the naive's MAE on the same hours; <em>beats</em> means rMAE below 1
+        on this window, not a statistically significant difference.
         Hover a cell for the number of scored days.
       </p>
     </div>
