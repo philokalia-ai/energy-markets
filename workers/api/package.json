@@ -24,7 +24,8 @@
     "deploy": "wrangler deploy --config wrangler.toml",
     "test:overlay": "node test/tsfm_overlay.test.mjs",
     "test:q15": "node test/q15_scores.test.mjs",
-    "test:q15route": "node test/q15_board_route.test.mjs"
+    "test:q15route": "node test/q15_board_route.test.mjs",
+    "test:naive": "node test/naive_board.test.mjs"
   },
   "dependencies": {
     "hyparquet": "^1.26.2",
