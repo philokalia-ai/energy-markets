@@ -348,5 +348,85 @@ class ProductionPathTest(unittest.TestCase):
         self.assertEqual(cur.fetchall(), [(70.0,)])
         cx.close()
 
+    # ---- 2026-11-16 production failure: the postgres scanner returns timestamptz tz-aware ----------
+    @staticmethod
+    def _mini_store(path, ts):
+        """Tiny entsoe store; `ts` = 'TIMESTAMP' (extract) or 'TIMESTAMPTZ' (live Postgres)."""
+        import duckdb
+        c = duckdb.connect(path)
+        c.execute("SET TimeZone = 'UTC'; CREATE SCHEMA entsoe;")
+        c.execute(f"""CREATE TABLE entsoe.energy_prices AS SELECT z map_code,
+                      (TIMESTAMP '2026-11-10 00:00' + i * INTERVAL 15 MINUTE)::{ts} date_time_utc,
+                      50.0 + (i % 96) price_currency_mwh, 'Day-ahead' contract_type, 'BZN' area_type_code,
+                      'EUR' currency, '1' sequence, 'PT15M' resolution_code, 'x' instance_code,
+                      (TIMESTAMP '2026-11-09 12:00' + (i // 96) * INTERVAL 1 DAY)::{ts} update_time_utc
+                      FROM range(96 * 6) t(i), (VALUES ('GR'), ('DE_LU')) v(z)""")
+        for table, col, kind in (("day_ahead_total_load_forecast", "total_load_mw", "NULL::VARCHAR"),
+                                 ("generation_forecasts_for_wind_and_solar", "day_ahead_generation_forecast_mw",
+                                  "'Solar'")):
+            c.execute(f"""CREATE TABLE entsoe.{table} AS SELECT z area_map_code, 'BZN' area_type_code,
+                          (TIMESTAMP '2026-11-10 00:00' + i * INTERVAL 1 HOUR)::{ts} date_time_utc,
+                          {kind} production_type, 'PT60M' resolution_code, 1000.0 + i {col},
+                          (TIMESTAMP '2026-11-09 05:00' + (i // 24) * INTERVAL 1 DAY)::{ts} update_time_utc
+                          FROM range(24 * 6) t(i), (VALUES ('GR'), ('DE_LU')) v(z)""")
+        c.close()
+
+    def test_tz_aware_store_matches_naive_extract(self):
+        """Live Postgres (timestamptz, tz-aware frames) and the extract (naive UTC) must give the
+        same prices, context and collapse inputs. Before the fix build_context raised
+        'Invalid comparison between dtype=datetime64[us, UTC] and Timestamp'."""
+        import duckdb, tempfile, importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "collapse_probability", Path(__file__).resolve().parents[1] / "bin" / "collapse_probability.py")
+        cp = importlib.util.module_from_spec(spec); spec.loader.exec_module(cp)
+        with tempfile.TemporaryDirectory() as tmp:
+            out = {}
+            for ts in ("TIMESTAMP", "TIMESTAMPTZ"):
+                f = os.path.join(tmp, f"{ts}.duckdb")
+                self._mini_store(f, ts)
+                con = duckdb.connect()
+                # the session open_store('postgres') sets; a non-UTC host zone must not leak in
+                con.execute("SET TimeZone = 'UTC'")
+                con.execute(f"ATTACH '{f}' AS pg (READ_ONLY)"); con.execute("USE pg")
+                p = ov.prices_duckdb(con, "2026-11-15", ctx_hours=72)
+                self.assertFalse(isinstance(p.t.dtype, pd.DatetimeTZDtype))
+                ctx, _, _ = ov.build_context(p, ZONES, "2026-11-15", ctx_hours=72)
+                act = cp.hourly_actuals(con, "2026-11-10", "2026-11-16")
+                fc = cp.hourly_forecasts(con, "2026-11-10", "2026-11-16")
+                for frame in (act, fc):
+                    self.assertFalse(any(isinstance(frame[c].dtype, pd.DatetimeTZDtype) for c in frame))
+                out[ts] = (p.sort_values(["zone", "t"]).reset_index(drop=True), ctx,
+                           act.sort_values(["zone", "t"]).reset_index(drop=True),
+                           fc.sort_values(["zone", "t"]).reset_index(drop=True))
+                con.close()
+            naive, aware = out["TIMESTAMP"], out["TIMESTAMPTZ"]
+            pd.testing.assert_frame_equal(naive[0], aware[0])
+            np.testing.assert_array_equal(naive[1], aware[1])
+            self.assertTrue(np.isfinite(naive[1][:, -24:]).all())          # D-1 is in the context
+            pd.testing.assert_frame_equal(naive[2], aware[2])
+            pd.testing.assert_frame_equal(naive[3], aware[3])                # incl. the pre-06:30 snapshots
+            self.assertTrue(naive[3].load_pre0630.notna().any())
+
+    def test_naive_utc_converts_only_aware_columns(self):
+        df = pd.DataFrame({"a": pd.to_datetime(["2026-11-14 22:00"]).tz_localize("UTC").tz_convert("Europe/Athens"),
+                           "b": pd.to_datetime(["2026-11-14 22:00"]), "v": [1.0]})
+        got = ov.naive_utc(df.copy())
+        self.assertEqual(got.a.iloc[0], pd.Timestamp("2026-11-14 22:00"))
+        self.assertEqual(got.b.iloc[0], pd.Timestamp("2026-11-14 22:00"))
+
+    @unittest.skipUnless(os.environ.get("OVERLAY_TEST_PG"), "set OVERLAY_TEST_PG=<libpq conn> for the Postgres test")
+    def test_postgres_write_is_utc_whatever_the_server_zone(self):
+        """Rows must land as UTC instants even when the session TimeZone is not UTC: db_rows writes
+        explicit '+00' offsets (guard for the 2026-11-16 tz audit)."""
+        cx, cur = self._pg()
+        cur.execute("SET TIME ZONE 'Europe/Athens'"); cx.commit()
+        ov.write_db(*self._vintage("postsim", "2026-11-14 09:13", 60), "timestral-209m", cx=cx)
+        cur.execute("""SELECT DISTINCT issue_utc AT TIME ZONE 'UTC' FROM simulations.tsfm_overlay""")
+        self.assertEqual([str(r[0]) for r in cur.fetchall()], ["2026-11-14 09:13:00"])
+        cur.execute("""SELECT min(date_time_utc AT TIME ZONE 'UTC') FROM simulations.tsfm_overlay WHERE level='hour'""")
+        self.assertEqual(str(cur.fetchone()[0]), "2026-11-14 22:00:00")
+        cx.close()
+
+
 if __name__ == "__main__":
     unittest.main()
