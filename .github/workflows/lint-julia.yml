@@ -1,0 +1,59 @@
+name: Julia lint and format
+
+on:
+  pull_request:
+    paths:
+      - '**/*.jl'
+      - 'tools/julia-lint/**'
+      - '.github/workflows/lint-julia.yml'
+  push:
+    branches: [main]
+    paths:
+      - '**/*.jl'
+      - 'tools/julia-lint/**'
+      - '.github/workflows/lint-julia.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: julia-lint-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  julia-lint:
+    # Fork PR code must run on GitHub-hosted, never on our self-hosted runners.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: tools/julia-lint
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.23.3'
+          cache: npm
+          cache-dependency-path: tools/julia-lint/package-lock.json
+      - name: Install pinned tooling
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Test changed-file selection
+        run: npm test
+      - name: ESLint changed Julia files (blocking on PRs)
+        if: github.event_name == 'pull_request'
+        env:
+          LINT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          LINT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: npm run lint:changed
+      - name: ESLint full-tree report (advisory)
+        if: always()
+        continue-on-error: true
+        run: npm run lint
+      - name: Prettier check (advisory)
+        if: always()
+        continue-on-error: true
+        run: npm run format:check

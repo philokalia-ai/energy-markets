@@ -1,0 +1,78 @@
+rule,errors,warnings,files,paths
+julia/no-collapsible-if,0,0,0,
+julia/no-collect-before-range-iteration,0,0,0,
+julia/no-compare-negative-zero,0,0,0,
+julia/no-concat-growth-in-loop,0,0,0,
+julia/no-cond-assign,0,0,0,
+julia/no-const-reassign,0,0,0,
+julia/no-constant-condition,0,0,0,
+julia/no-debugger,0,0,0,
+julia/no-discarded-copy-result,0,0,0,
+julia/no-dupe-args,0,0,0,
+julia/no-dupe-elseif,0,0,0,
+julia/no-duplicate-dict-keys,0,0,0,
+julia/no-duplicate-keyword-arguments,0,0,0,
+julia/no-duplicate-logical-operands,0,0,0,
+julia/no-duplicate-method-signatures,0,0,0,
+julia/no-duplicate-struct-fields,0,0,0,
+julia/no-empty-block,0,0,0,
+julia/no-empty-catch,0,19,10,bin/build_duckdb_extract.jl; bin/export_prediction_scorecard.jl; bin/extract_common.jl; bin/score_forecasts.jl; docs/experiments/gr-strategic-bidding/run_coupled_topslice_seq.jl; src/Euphemia.jl; src/PipelinedBackfill.jl; src/db/duckdb_store.jl; src/mpcc/complex_orders.jl; src/mpcc/solver.jl
+julia/no-empty-literal-range,0,0,0,
+julia/no-env-mutation,0,126,37,bin/build_duckdb_extract.jl; bin/cv17_backfill.jl; bin/cv18_backfill.jl; bin/cv18_backfill_offline.jl; bin/refresh_duckdb_extract.jl; docs/experiments/analogue-flows/ab_price_v3.jl; docs/experiments/cv21-dk1-viking/ab_confirm.jl; docs/experiments/cv23/ab_cv23.jl; docs/experiments/cv23/frcap_cleanchk.jl; docs/experiments/cv23/frcap_decomp.jl; docs/experiments/cv23/frcap_verify.jl; docs/experiments/cv27-borders/border_day.jl; docs/experiments/gr-strategic-bidding/common.jl; docs/experiments/gr-strategic-bidding/run_coupled.jl; docs/experiments/gr-strategic-bidding/run_coupled_topslice_seq.jl; docs/experiments/gr-surplus-quantity/block_order_pilot.jl; docs/experiments/itnorth-diagnosis/ab_combined.jl; docs/experiments/itnorth-diagnosis/ab_cv25.jl; docs/experiments/itnorth-diagnosis/ab_cv25_interleaved.jl; docs/experiments/itnorth-diagnosis/ab_harness.jl; docs/experiments/itnorth-diagnosis/debug2_cv25.jl; docs/experiments/itnorth-diagnosis/debug_cv25.jl; docs/experiments/itnorth-diagnosis/validate_cv25.jl; docs/experiments/nl-diagnosis/ab_harness.jl; docs/experiments/pl-diagnosis/ab_pl_both.jl; docs/experiments/scenario-exercises/eu31_scenarios.jl; docs/experiments/scenario-exercises/eu37_scenarios.jl; docs/experiments/scenario-exercises/eu43_scenarios.jl; docs/experiments/scenario-exercises/eu44_scenarios.jl; docs/experiments/scenario-exercises/eu44_tech.jl; docs/experiments/strategic-layer/zone_common.jl; test/manual/test_tsfm_overlay_export.jl; test/scripts/cv17_bench.jl; test/scripts/cv21_guards.jl; test/scripts/dn_price_test.jl; test/scripts/ml_inputs_equivalence.jl; test/scripts/weak_zone_prototypes.jl
+julia/no-eval-local-symbol,0,0,0,
+julia/no-fill-with-mutable,0,0,0,
+julia/no-full-slice-in-consumer,0,0,0,
+julia/no-identical-branches,0,6,4,src/Euphemia.jl; src/FuelTypeParameters.jl; src/db/duckdb_store.jl; src/mpcc/solver.jl
+julia/no-import-assign,0,0,0,
+julia/no-impossible-length-comparison,0,0,0,
+julia/no-invalid-foreign-call-signature,0,0,0,
+julia/no-isdefined-local-call,0,0,0,
+julia/no-loss-of-float-integer-precision,0,0,0,
+julia/no-nothing-return-conversion,0,0,0,
+julia/no-obvious-type-piracy,0,0,0,
+julia/no-orphan-file,0,7,7,test/manual/test_date_range_processing.jl; test/scripts/collapse_book_guard.jl; test/scripts/dn_load_model.jl; test/scripts/explore_fuel_types.jl; test/scripts/runtime_upgrade_core.jl; test/test_atc_dapref.jl; test/test_eu_footprint.jl
+julia/no-overwritten-literal-index,0,0,0,
+julia/no-reassigned-capture,0,26,15,bin/capture_gfs_vintages.jl; bin/daily_forecast.jl; bin/horizon_forecast.jl; bin/multi_zone_main.jl; bin/reproduce.jl; docs/experiments/gr-surplus-quantity/block_order_pilot.jl; src/PipelinedBackfill.jl; src/clearing/multi_zone_books.jl; src/generators/fuel_costs.jl; src/generators/registry.jl; src/merit_order/book_build.jl; test/scripts/dn_load_model.jl; test/scripts/pubbooks_clear.jl; test/scripts/test_parallel_individual_zones.jl; test/test_registry_feed_anchor.jl
+julia/no-redundant-type-assertion,0,0,0,
+julia/no-redundant-union-members,0,0,0,
+julia/no-restricted-calls,0,0,0,
+julia/no-restricted-imports,0,0,0,
+julia/no-restricted-macros,0,0,0,
+julia/no-self-assign,0,0,0,
+julia/no-self-identity-comparison,0,0,0,
+julia/no-shadowed-loop-var,0,0,0,
+julia/no-show-macro,0,0,0,
+julia/no-single-iteration-loop,0,0,0,
+julia/no-string-growth-in-loop,0,0,0,
+julia/no-throw-literal,0,0,0,
+julia/no-unbound-type-parameters,0,0,0,
+julia/no-undef,0,260,29,bin/build_duckdb_from_parquet.jl; bin/build_duckdb_v11.jl; bin/capture_gfs_vintages.jl; bin/emit_input_corrections.jl; bin/scenario_delta.jl; docs/experiments/cv23/score_cv23.jl; docs/experiments/gr-strategic-bidding/run_all.jl; docs/experiments/gr-surplus-quantity/block_order_mip.jl; docs/experiments/nl-diagnosis/diag_analyze.jl; docs/experiments/nl-diagnosis/diag_build_resid.jl; docs/experiments/nl-diagnosis/diag_regime.jl; docs/experiments/nl-diagnosis/neighbor_perday.jl; docs/experiments/nl-diagnosis/score_ab.jl; docs/experiments/nl-diagnosis/score_final.jl; docs/experiments/pl-diagnosis/score_pl.jl; docs/experiments/res-forecasting/fit_res.jl; docs/experiments/res-forecasting/fit_res_v2.jl; docs/experiments/res-forecasting/fit_wind2.jl; docs/experiments/res-forecasting/make_predictions.jl; docs/experiments/res-forecasting/solar_hod_test.jl; src/clearing/single_zone.jl; test/archive/compare_bidding_strategies.jl; test/manual/test_oct1_uc_all_zones.jl; test/manual/test_tsfm_overlay_export.jl; test/scripts/check_db_prices.jl; test/scripts/dn_load_model.jl; test/scripts/test_gurobi.jl; test/scripts/test_parallel_multi_zone.jl; test/scripts/verify_fix.jl
+julia/no-undefined-exports,0,0,0,
+julia/no-uninitialized-ref-read,0,0,0,
+julia/no-unreachable,0,0,0,
+julia/no-unsafe-finally,0,0,0,
+julia/no-unsafe-negation,0,0,0,
+julia/no-unused-expressions,0,0,0,
+julia/no-unused-type-parameters,0,0,0,
+julia/no-unused-vars,0,79,39,bin/daily_forecast.jl; bin/export_forecast_json.jl; bin/fit_load_models.jl; bin/horizon_forecast.jl; bin/monitor_db_interactive.jl; bin/multi_zone_main.jl; bin/reproduce.jl; docs/experiments/cv22/see_delta.jl; docs/experiments/gr-strategic-bidding/common.jl; docs/experiments/gr-strategic-bidding/run_coupled_topslice_seq.jl; docs/experiments/gr-strategic-bidding/strat_withholding.jl; docs/experiments/nl-diagnosis/score_ab.jl; docs/experiments/nl-diagnosis/score_final.jl; docs/experiments/res-forecasting/fit_res_v2.jl; docs/experiments/strategic-layer/dk1_surplus_proto.jl; docs/experiments/strategic-layer/it_ladder_proto.jl; docs/experiments/strategic-layer/it_marginal_probe.jl; docs/experiments/strategic-layer/it_unitspread_proto.jl; docs/experiments/strategic-layer/se3_watervalue_proto.jl; src/MPCC.jl; src/PipelinedBackfill.jl; src/clearing/batch_workers.jl; src/db/postgres_core.jl; src/merit_order/book_build.jl; src/mpcc/complex_orders.jl; src/mpcc/solver.jl; test/archive/compare_bidding_strategies.jl; test/manual/test_date_range_processing.jl; test/scripts/explore_fuel_types.jl; test/scripts/ml_inputs_equivalence.jl; test/scripts/test_high_scale_workers.jl; test/scripts/test_parallel_dates.jl; test/scripts/test_parallel_external.jl; test/scripts/test_solver_caching.jl; test/test_book_methodology_export.jl; test/test_data_store_selection.jl; test/test_mpcc.jl; test/test_multi_zone_mpcc.jl; test/test_network_module.jl
+julia/no-use-before-define,0,0,0,
+julia/no-useless-assignment,0,0,0,
+julia/no-useless-catch,0,0,0,
+julia/parse-errors,0,0,0,
+julia/prefer-any,0,0,0,
+julia/prefer-const-global,0,4,2,bin/capture_book_features.jl; docs/experiments/cv23/frcap_decomp.jl
+julia/prefer-count-over-findall-length,0,0,0,
+julia/prefer-eachindex,0,1,1,test/scripts/test_high_scale_workers.jl
+julia/prefer-extreme-over-sort,0,0,0,
+julia/prefer-generator-sum,0,0,0,
+julia/prefer-identity-nothing,0,0,0,
+julia/prefer-in,0,0,0,
+julia/prefer-isa,0,0,0,
+julia/prefer-isempty,0,23,18,bin/ml_inputs.jl; bin/weather_load.jl; bin/weather_res.jl; docs/experiments/itnorth-diagnosis/ab_combined.jl; docs/experiments/itnorth-diagnosis/ab_cv25.jl; docs/experiments/itnorth-diagnosis/ab_cv25_interleaved.jl; docs/experiments/itnorth-diagnosis/ab_harness.jl; src/merit_order/book_build.jl; test/manual/test_oct1_quick.jl; test/manual/test_oct1_uc_all_zones.jl; test/scripts/check_db_prices.jl; test/scripts/eu_duckdb_parity.jl; test/scripts/eval_pricing_accuracy.jl; test/scripts/load_fill_book_identity.jl; test/scripts/test_optimizer_comparison.jl; test/scripts/test_optimizer_comparison_simple.jl; test/scripts/test_uc_fixes_parallel.jl; test/scripts/validate_load_fill.jl
+julia/prefer-ismissing,0,0,0,
+julia/prefer-parenthesized-interpolation,0,10,6,bin/build_duckdb_extract.jl; bin/export_forecast_json.jl; bin/export_prediction_inputs.jl; bin/export_web_parquet.jl; test/manual/test_tsfm_overlay_export.jl; test/scripts/iter6_harness.jl
+julia/prefer-size-dimension,0,0,0,
+julia/prefer-sized-push-buffer,0,0,0,
+julia/prefer-typed-empty-array,0,10,10,src/Euphemia.jl; test/archive/compare_bidding_strategies.jl; test/manual/test_oct1_quick.jl; test/manual/test_oct1_uc_all_zones.jl; test/scripts/check_db_prices.jl; test/scripts/eval_pricing_accuracy.jl; test/scripts/test_greece_prices.jl; test/scripts/test_high_scale_workers.jl; test/scripts/test_parallel_dates.jl; test/scripts/test_simple_scaling.jl
+julia/require-typed-global,0,5,3,docs/experiments/nl-diagnosis/score_final.jl; docs/experiments/proto_ramp_dispatch.jl; src/Euphemia.jl
+julia/use-isnan,0,0,0,
