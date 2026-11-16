@@ -43,7 +43,8 @@
     bookHour: 12,          // hour index selected in the order-book view
     window: "all",
     res: "h60",            // scoreboard resolution: "h60" (hourly, default) | "q15" (native 15-min)
-    naive: "auto",         // scoreboard naive baseline: "auto" (weekday rule at D-1, D-7 otherwise) | "d7" | "d1" | "off"
+    naive: "auto",
+    showHybrid: false,     // hybrid (gbm) line drawn/visible: off by default, persisted (#431 G)         // scoreboard naive baseline: "auto" (weekday rule at D-1, D-7 otherwise) | "d7" | "d1" | "off"
     sort: { lead: null, metric: "mae", dir: 1 }, // dir 1 = best first
     hoverIdx: null,
     track: "predicted",    // the global lens: "predicted" | "announced" (see TRACKS)
@@ -92,6 +93,21 @@
   }
   function saveTrackPref() {
     try { window.localStorage.setItem(TRACK_LS_KEY, state.track); } catch (e) {}
+  }
+  // The hybrid line (pink, physics + ex-ante GBM) is OFF by default (#431 G, owner
+  // 2026-11-16): it loses to the naive baselines live. The reader can switch it on
+  // from its legend chip; the choice persists like the track (localStorage).
+  var HYBRID_LS_KEY = "euphemia.hybridLine";
+  var HYBRID_LABEL = "Physics + ex-ante GBM · experimental — loses to naive live";
+  function loadHybridPref() {
+    try { state.showHybrid = window.localStorage.getItem(HYBRID_LS_KEY) === "on"; }
+    catch (e) { /* private mode / no storage — stays off */ }
+  }
+  function setHybridPref(on) {
+    on = !!on;
+    if (state.showHybrid === on) return;
+    state.showHybrid = on;
+    try { window.localStorage.setItem(HYBRID_LS_KEY, on ? "on" : "off"); } catch (e) {}
   }
 
   // ---------- helpers ----------
@@ -1398,7 +1414,7 @@
       ["act", isPending(day) ? "Actual (pending — not yet settled)" : "Actual (settled)"],
     ];
     function hasVals(arr) { return arr && arr.some(function (v) { return v !== null && v !== undefined; }); }
-    if (hasVals(day.gbm)) items.push(["gbm", "Physics + ex-ante GBM"]);
+    if (hasVals(day.gbm)) items.push(["gbm", HYBRID_LABEL]);
     if (hasVals(day.stats)) items.push(["stats", "Pure-stats GBM"]);
     if (hasVals(day.tsfm)) items.push(["tsfm", "Timestral TSFM (median, q10–q90)"]);
     var chips = {};
@@ -1802,7 +1818,10 @@
     if (chartEls.tsfm.length && legendChips.tsfm) {
       explorerSeries.push({ key: "tsfm", chip: legendChips.tsfm, els: chartEls.tsfm, baseOpacity: 0.9 });
     }
-    attachSeriesFocus($("chart-legend"), explorerSeries);
+    attachSeriesFocus($("chart-legend"), explorerSeries, {
+      initialOff: { gbm: !state.showHybrid },                       // hybrid off by default
+      onChange: function (off) { if (chartEls.gbm.length) setHybridPref(!off.gbm); },
+    });
     renderHourTable(day);
   }
 
@@ -1938,7 +1957,7 @@
     // legend: forecast + actual
     var C = chartColors();
     var hzItems = [["sim", "Forecast (ex-ante)"], ["act", "Actual (settled)"],
-     ["gbm", "Physics + ex-ante GBM"], ["stats", "Pure-stats GBM"]];
+     ["gbm", HYBRID_LABEL], ["stats", "Pure-stats GBM"]];
     if (days.some(function (d) { return (d.tsfm || []).some(function (v) { return v !== null && v !== undefined; }); })) {
       hzItems.push(["tsfm", "Timestral TSFM (median, q10–q90)"]);
     }
@@ -1948,6 +1967,18 @@
       key.setAttribute("aria-hidden", "true");
       span.appendChild(key);
       span.appendChild(document.createTextNode(it[1]));
+      if (it[0] === "gbm") {   // the hybrid chip toggles the (default-off) line here too
+        span.className = "series-chip" + (state.showHybrid ? "" : " series-off");
+        span.setAttribute("role", "button");
+        span.setAttribute("tabindex", "0");
+        span.setAttribute("aria-pressed", String(!state.showHybrid));
+        span.title = state.showHybrid ? "Hide the hybrid line" : "Show the hybrid line (off by default)";
+        var flip = function () { setHybridPref(!state.showHybrid); renderHorizon(); };
+        span.addEventListener("click", flip);
+        span.addEventListener("keydown", function (ev) {
+          if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); flip(); }
+        });
+      }
       lg.appendChild(span);
     });
 
@@ -2055,6 +2086,7 @@
         hzFlush();
       }
       [["gbm", C.gbm], ["stats", C.stats], ["tsfm", C.tsfm]].forEach(function (ov) {
+        if (ov[0] === "gbm" && !state.showHybrid) return;   // hybrid off by default (#431 G)
         var arr = d[ov[0]];
         if (!arr || !arr.some(function (v) { return v !== null && v !== undefined; })) return;
         var od = pathString(arr, Xoff, Y);
@@ -2176,9 +2208,11 @@
   // No deps, CSS transitions only. `series` = [{ key, chip, els:[svgEl…],
   // baseOpacity }]. Non-line charts (map) don't use it; multi-line charts do.
   var DIM_OPACITY = 0.15;
-  function attachSeriesFocus(legendEl, series) {
+  function attachSeriesFocus(legendEl, series, opts) {
     if (!series.length) return null;
+    opts = opts || {};
     var off = {};        // key -> true when toggled off
+    Object.keys(opts.initialOff || {}).forEach(function (k) { if (opts.initialOff[k]) off[k] = true; });
     var hover = null;    // key currently hovered (via chip or line)
 
     var resetBtn = el("button", "series-reset", "show all");
@@ -2207,6 +2241,7 @@
         }
       });
       resetBtn.hidden = !anyOff;
+      if (opts.onChange) opts.onChange(off);
     }
     function isolate(key) {
       series.forEach(function (s) { off[s.key] = s.key !== key; });
@@ -2218,7 +2253,7 @@
         s.chip.classList.add("series-chip");
         s.chip.setAttribute("role", "button");
         s.chip.setAttribute("tabindex", "0");
-        s.chip.setAttribute("aria-pressed", "false");
+        s.chip.setAttribute("aria-pressed", String(!!off[s.key]));
         // "only" affordance (double-click also isolates)
         var only = el("span", "series-only", "⌾ only");
         s.chip.appendChild(only);
@@ -3689,14 +3724,46 @@
     });
   }
 
+  // "Since freeze" window (#431 G, bin/scoreboard_windows.jl): the cv44 characteristics
+  // are frozen from 2026-11-15, so these days are the only out-of-sample physics
+  // record. Change FREEZE_LABEL together with FREEZE_CODE_VERSION / FREEZE_DATE there.
+  var FREEZE_WINDOW = "since_freeze";
+  var FREEZE_LABEL = "since freeze (cv44, 2026-11-15) — the only out-of-sample physics record";
+  var FREEZE_MIN_DAYS = 14;
+  // Below FREEZE_MIN_DAYS scored days a since-freeze cohort shows "insufficient data":
+  // its metrics are blanked (so it never ranks or feeds the track-gap chip).
+  function atFreezeWindow(arr) {
+    if (state.window !== FREEZE_WINDOW) return arr;
+    return arr.map(function (s) {
+      if (s.n_days >= FREEZE_MIN_DAYS) return s;
+      return { zone: s.zone, lead_days: s.lead_days, window: s.window, input_mode: s.input_mode,
+               n_days: s.n_days, mae: null, bias: null, corr: null, code_version: s.code_version,
+               insufficient: true };
+    });
+  }
+  function renderWindowNote(scores) {
+    var note = $("window-note");
+    if (!note) return;
+    if (state.window !== FREEZE_WINDOW) { note.hidden = true; note.textContent = ""; return; }
+    var nd = 0;
+    scores.forEach(function (s) { if (s.n_days > nd) nd = s.n_days; });
+    note.hidden = false;
+    note.textContent = "Since the freeze (cv44, 2026-11-15): " + nd + " scored market day" +
+      (nd === 1 ? "" : "s") + ". The 43 price-informed characteristics have not changed since, so " +
+      "these days are the only out-of-sample physics record. " +
+      (nd < FREEZE_MIN_DAYS
+        ? "Insufficient data: numbers are shown once a cohort has " + FREEZE_MIN_DAYS + " scored days."
+        : "Cohorts with fewer than " + FREEZE_MIN_DAYS + " scored days show “insufficient data”.");
+  }
+
   function scoreboardWindows() {
     var seen = {};
     trackScores().forEach(function (s) { seen[s.window] = true; });
     var wins = Object.keys(seen);
     if (!wins.length) wins = ["all"];
+    var rank = function (w) { return w === "all" ? 0 : w === FREEZE_WINDOW ? 1 : 2; };
     wins.sort(function (a, b) {
-      if (a === "all") return -1;
-      if (b === "all") return 1;
+      if (rank(a) !== rank(b)) return rank(a) - rank(b);   // all, since freeze, then months
       return a < b ? 1 : -1; // months newest first
     });
     return wins;
@@ -3717,7 +3784,7 @@
     var sel = $("window-select");
     sel.textContent = "";
     scoreboardWindows().forEach(function (w) {
-      var o = el("option", null, w === "all" ? "All days" : w);
+      var o = el("option", null, w === "all" ? "All days" : w === FREEZE_WINDOW ? FREEZE_LABEL : w);
       o.value = w;
       sel.appendChild(o);
     });
@@ -3831,14 +3898,15 @@
       });
     }
     var resLabel = q15 ? "15-min " : "";
-    var scores = atRes(tracked.filter(function (s) { return s.window === state.window; }));
+    var scores = atFreezeWindow(atRes(tracked.filter(function (s) { return s.window === state.window; })));
+    renderWindowNote(scores);
     var byKey = {};
     scores.forEach(function (s) { byKey[s.zone + "|" + s.lead_days] = s; });
     // Track-gap counterpart: the OTHER track's score for the same slice. The
     // announced track has NO lead dimension (one D-1 freeze per day), so its side
     // is ALWAYS the freeze = the min-lead slice, keyed by zone alone. This also
     // guards against pairing a predicted lead against a stale lead>1 announced row.
-    var altScores = atRes(altTrackScores().filter(function (s) { return s.window === state.window; }));
+    var altScores = atFreezeWindow(atRes(altTrackScores().filter(function (s) { return s.window === state.window; })));
     var altByZoneFreeze = {};   // announced freeze (min lead) per zone
     altScores.forEach(function (s) {
       var cur = altByZoneFreeze[s.zone];
@@ -3937,6 +4005,11 @@
           if (!s) {
             td.textContent = "—";
             td.className = ((td.className || "") + " null").trim();
+          } else if (s.insufficient) {
+            td.textContent = mdef[0] === "mae" ? "insufficient data" : "—";
+            td.className = ((td.className || "") + " null").trim();
+            td.title = "Since the freeze: " + s.n_days + " scored day" + (s.n_days === 1 ? "" : "s") +
+              " (numbers are shown from " + FREEZE_MIN_DAYS + ").";
           } else if (mdef[0] === "corr") {
             var cls = corrClass(s.corr);
             if (cls) {
@@ -6603,6 +6676,7 @@
     // bootstrapData/applyHash) overrides it. Render the switch immediately so it
     // is present even before the data plane answers.
     loadTrackPref();
+    loadHybridPref();
     renderTrackSwitch();
     document.querySelectorAll(".tab").forEach(function (t) {
       t.addEventListener("click", function () {
@@ -6828,7 +6902,10 @@
       currentTrack: currentTrack,
       renderTrackSwitch: renderTrackSwitch,
       renderExplorer: renderExplorer,
+      renderHorizon: renderHorizon,
+      loadHybridPref: loadHybridPref,
       renderScoreboard: renderScoreboard,
+      renderWindowSelect: renderWindowSelect,
       writeHash: writeHash,
       readHash: readHash,
     };
