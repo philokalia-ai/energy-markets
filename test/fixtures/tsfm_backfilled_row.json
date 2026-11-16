@@ -1,0 +1,23 @@
+{
+ "_comment": "A backfilled scoreboard row with the #431 R2 Timestral fields, as bin/tsfm_backfill_scores.jl builds it (checked by test/test_tsfm_backfill_scores.jl) and as the worker/UI consume it (workers/api/test/tsfm_backfill_fields.test.mjs).",
+ "zone": "GR",
+ "lead_days": 1,
+ "window": "backfilled",
+ "input_mode": "weather",
+ "n_days": 2,
+ "mae": 61.0,
+ "bias": -1.0,
+ "corr": 0.8,
+ "code_version": 44,
+ "reconstructed_utc": "2026-11-18",
+ "tsfm_arm": "timestral-209m@cv44-backfill-2026-11",
+ "tsfm_n_days": 2,
+ "tsfm_n": 36,
+ "tsfm_mae": 3.3333333333333335,
+ "tsfm_mae_naive_d1": 10.0,
+ "tsfm_mae_naive_d7": 70.0,
+ "tsfm_mae_naive_epf": 10.0,
+ "tsfm_rmae_d1": 0.33333333333333337,
+ "tsfm_rmae_d7": 0.04761904761904762,
+ "tsfm_rmae_epf": 0.33333333333333337
+}

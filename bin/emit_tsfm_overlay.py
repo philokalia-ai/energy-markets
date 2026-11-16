@@ -512,13 +512,16 @@ def as_backfill(hourly, day, tag):
 
 
 def sim_from_live_json(live_dir, zones):
-    """Offline sim source: em-team/live/<ZONE>.json (lead-1 weather rows with prediction_made_utc)."""
+    """Offline LIVE sim source: zone JSONs (lead-1 weather rows with prediction_made_utc). Days the export
+    stamps is_retro (reconstructions) are skipped, as SIM_SQL skips retro rows."""
     rows = []
     for z in zones:
         p = Path(live_dir) / f"{z}.json"
         if not p.exists():
             continue
         for day in json.load(open(p))["days"]:
+            if day.get("is_retro"):      # reconstructed day (#431 R1): never a live covariate
+                continue
             if day["lead_days"] == 1 and day["input_mode"].startswith("weather"):
                 made = pd.Timestamp(day["prediction_made_utc"]).tz_localize(None)
                 rows += [(z, pd.Timestamp(h).tz_localize(None), s, made) for h, s in zip(day["hours"], day["sim"])]
@@ -575,15 +578,25 @@ def write_db(hourly, day, arm, cx=None, allow_after_gate=False):
 
 
 # ----------------------------------------------------------------------------- backfill runner
-# Protected UTC windows (#431 R1/R2): no backfill work from 10 minutes before each window opens, so
-# a ~1-5 min day never spills into the 06:00-08:30 forecast/publish or 10:30-12:15 refresh/gate slots.
-BACKFILL_BLOCKED_UTC = (((5, 50), (8, 30)), ((10, 20), (12, 15)))
+# Protected UTC windows (#431 R1/R2): the 06:00-08:30 forecast/publish and 10:30-12:15 refresh/gate
+# slots. A day is admitted only if its whole budget [now, now + reserve] (the per-day timeout, which
+# bounds reads, inference and writes, plus GUARD_MARGIN_S) ends before the next window opens.
+BACKFILL_BLOCKED_UTC = (((6, 0), (8, 30)), ((10, 30), (12, 15)))
+GUARD_MARGIN_S = 60
 BACKFILL_BLOCKING_WORKFLOWS = ("daily-forecast.yml", "publish-web-data.yml")
 
 
-def in_blocked_window(now_utc) -> bool:
-    m = now_utc.hour * 60 + now_utc.minute
-    return any(a * 60 + b <= m < c * 60 + d for (a, b), (c, d) in BACKFILL_BLOCKED_UTC)
+def in_blocked_window(now_utc, reserve_s: float = 0.0) -> bool:
+    """Whether [now, now + reserve_s] overlaps a protected window (wrapping past midnight)."""
+    t0 = now_utc.hour * 3600 + now_utc.minute * 60 + now_utc.second
+    t1 = t0 + reserve_s
+    for (a, b), (c, d) in BACKFILL_BLOCKED_UTC:
+        ws, we = a * 3600 + b * 60, c * 3600 + d * 60
+        for shift in (0, 86400):                       # tomorrow's occurrence, for late-evening starts
+            ws_, we_ = ws + shift, we + shift
+            if ws_ <= t0 < we_ or t0 < ws_ < t1:      # starts inside, or a window opens before it ends
+                return True
+    return False
 
 
 def workflows_active(env=os.environ, workflows=BACKFILL_BLOCKING_WORKFLOWS):  # pragma: no cover - network
@@ -612,13 +625,22 @@ def workflows_active(env=os.environ, workflows=BACKFILL_BLOCKING_WORKFLOWS):  # 
     return active
 
 
-def backfill_guard(now_utc=None, active=workflows_active):
-    """None when a backfill day may start, else the reason to stop (the loop stops cleanly)."""
-    now_utc = now_utc or pd.Timestamp.utcnow().tz_localize(None)
-    if in_blocked_window(now_utc):
-        return f"inside a protected UTC window at {now_utc:%H:%M}"
+def backfill_guard(now_utc=None, active=workflows_active, reserve_s: float = 0.0,
+                   clock=lambda: pd.Timestamp.utcnow().tz_localize(None)):
+    """None when a backfill day may start, else the reason to stop (the loop stops cleanly).
+
+    The day's full budget `reserve_s` must end before the next protected window; the clock is
+    read again AFTER the (slow) GitHub API checks, so their latency cannot eat the reservation."""
+    now_utc = now_utc or clock()
+    if in_blocked_window(now_utc, reserve_s):
+        return f"a {reserve_s:.0f} s day starting {now_utc:%H:%M:%S} would reach a protected UTC window"
     busy = active()
-    return f"blocking workflow(s) active: {', '.join(busy)}" if busy else None
+    if busy:
+        return f"blocking workflow(s) active: {', '.join(busy)}"
+    later = clock()
+    if in_blocked_window(later, reserve_s):
+        return f"after the workflow checks, a {reserve_s:.0f} s day starting {later:%H:%M:%S} would reach a protected UTC window"
+    return None
 
 
 def retro_ready(sim, delivery, zones):
@@ -661,11 +683,13 @@ def _run_with_timeout(fn, seconds):
 
 
 def run_backfill(days, tag, arm, zones, *, load_sim, load_prices, model, emit, done,
-                 logistic=None, guard=backfill_guard, timeout_s=900):
+                 logistic=None, guard=None, timeout_s=900):
     """Backfill vintages for `days` (Athens market days) from reset_tag `tag`. Pure orchestration;
     the I/O is injected (load_sim(d), load_prices(d), done(d, label), emit(hourly, day, label)).
     Returns one status row per day: done | exists | no_physics | failed | stopped."""
     label, out = backfill_label(arm, tag), []
+    if guard is None:   # reserve the whole day budget before every admission
+        guard = lambda: backfill_guard(reserve_s=timeout_s + GUARD_MARGIN_S)
     for i, d in enumerate(days):
         d = pd.Timestamp(d).date().isoformat()
         why = guard()
@@ -674,11 +698,11 @@ def run_backfill(days, tag, arm, zones, *, load_sim, load_prices, model, emit, d
                     for x in (pd.Timestamp(y).date().isoformat() for y in days[i:])]
             print(f"backfill stopped before {d}: {why} (resumable: re-dispatch later)")
             break
-        if done(d, label):
-            out.append(dict(day=d, status="exists", detail=label)); continue
         t0 = time.time()
         try:
-            def one():
+            def one():                       # everything of the day, reads included, under the alarm
+                if done(d, label):
+                    return dict(status="exists", detail=label)
                 sim = load_sim(d)
                 missing = retro_ready(sim, d, zones)
                 if missing:
@@ -689,6 +713,8 @@ def run_backfill(days, tag, arm, zones, *, load_sim, load_prices, model, emit, d
                 if logistic is not None:
                     try:
                         lh, ld = logistic(d)
+                    except DayTimeout:       # the day's bound, not a logistic failure
+                        raise
                     except Exception as e:
                         print(f"WARNING {d}: collapse logistic failed ({type(e).__name__}: {e}); TSFM-only p_le0")
                 hourly, day = as_backfill(*add_logistic(hourly, day, lh, ld), tag)
@@ -802,7 +828,7 @@ def main_backfill(a):
     res = run_backfill(days, a.backfill_tag, arm, ZONES,
                        load_sim=lambda d: sim_from_retro(con, a.backfill_tag, d),
                        load_prices=lambda d: prices_duckdb(con, d), model=model, emit=emit, done=done,
-                       logistic=logistic, guard=(lambda: None) if a.no_guard else backfill_guard,
+                       logistic=logistic, guard=(lambda: None) if a.no_guard else None,
                        timeout_s=a.day_timeout)
     counts = pd.Series([r["status"] for r in res]).value_counts().to_dict()
     secs = [r["secs"] for r in res if r.get("status") == "done"]

@@ -44,7 +44,9 @@
 #                             Live windows read is_retro = false rows only
 #                             (#431 R1). window "backfilled": the cv44 lead-1
 #                             reconstruction (in-sample), plus a column
-#                             reconstructed_utc (present only when such rows exist).
+#                             reconstructed_utc (present only when such rows exist),
+#                             and the tsfm_* Timestral columns (#431 R2,
+#                             TSFM_BACKFILL_BOARD_COLS) when backfill vintages exist.
 #   v1/map.parquet            market_date, zone, track, sim, act, err_pct, mae,
 #                             corr, lead, made — freshest-lead day aggregates,
 #                             BOTH tracks (track = 'predicted' | 'announced';
@@ -206,12 +208,13 @@ function export_scoreboard_parquet()
              naive_parts === nothing ? nothing :
                  something(naive_vals(bsub, bparts),
                            Any[c == "n_naive" ? 0 : missing for c in NAIVE_BOARD_COLS]),
-             made)
+             made, backfilled_extra_fields(zone, lead, mode, bsub))   # + Timestral fields (#431 R2)
         end
         push!(bf_rows, e)
     end
+    tsfm_cols = tsfm_backfill_columns(nrow(df), [x[4] for x in bf_rows])   # nothing = no columns
     recon = Union{Missing,String}[missing for _ in 1:nrow(df)]
-    for (row, nv, made) in bf_rows
+    for (row, nv, made, _) in bf_rows
         push!(df, row)
         push_naive!(nv)
         push!(recon, made === nothing ? missing : made)
@@ -223,6 +226,9 @@ function export_scoreboard_parquet()
         end
     end
     isempty(bf_rows) || (df.reconstructed_utc = recon)   # backfilled rows only (additive)
+    tsfm_cols === nothing || for c in TSFM_BACKFILL_BOARD_COLS   # Timestral fields (#431 R2, additive)
+        df[!, c] = tsfm_cols[c]
+    end
     sort!(df, [:zone, :lead_days, :input_mode, :window])
     n = write_parquet(df, joinpath(V1_DIR, "scoreboard.parquet"))
     println("wrote v1/scoreboard.parquet ($n score entries, $(nrow(zones)) zones)")

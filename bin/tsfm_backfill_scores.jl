@@ -12,10 +12,11 @@
 # common-mask rule, so the Timestral MAE and its naives are paired on the same cells and those
 # cells are a subset of the physics backfill's own.
 #
-# EXTENSION POINT FOR R1's `backfilled` window (one call per export, one merge per cohort):
-#     tp = tsfm_backfill_parts_or_nothing(BACKFILL_TAG, window_rows)   # once
-#     merge(entry, tsfm_backfilled_fields(tp, zone, dates))             # per (zone, lead 1) cohort
-# `window_rows` = the window's score rows (columns z, market_date). Fields, all prefixed tsfm_:
+# WIRING: R1's `backfilled_extra_fields(zone, lead, mode, rows)` (bin/scoreboard_windows.jl)
+# delegates to `tsfm_backfill_cohort_fields`, which loads every zone-day ONCE per export
+# (cached by tag) and pools the cohort's market days. The JSON exporter merges the fields into
+# the entry; the parquet exporter adds them as columns (TSFM_BACKFILL_BOARD_COLS) on the
+# backfilled rows; workers/api/src/shape.js passes them through. Fields, all prefixed tsfm_:
 # tsfm_arm, tsfm_n_days, tsfm_n, tsfm_mae, tsfm_mae_naive_{d1,d7,epf}, tsfm_rmae_{d1,d7,epf}.
 # An empty Dict (no fields) when switched off (EXPORT_TSFM_BACKFILL=0), when no backfill rows
 # exist, or when anything fails — the board is then exported exactly as without this file.
@@ -74,19 +75,20 @@ end
 DB step: Timestral backfill medians of `tsfm_backfill_label(tag)`, the retro physics hours of
 `tag`, and the scorer's actuals, over the zone-days of `rows` (columns z, market_date).
 """
-function tsfm_backfill_parts(tag::AbstractString, rows::AbstractDataFrame; arm=TSFM_BACKFILL_ARM)
+function tsfm_backfill_parts(tag::AbstractString, rows::Union{Nothing,AbstractDataFrame}=nothing;
+                             arm=TSFM_BACKFILL_ARM)
     parts = Dict{Tuple{String,Date},NamedTuple}()
-    isempty(rows) && return parts
-    dates = Date.(rows.market_date)
-    sd, ed = minimum(dates), maximum(dates)
-    keep = Set(zip(String.(rows.z), dates))
+    rows !== nothing && isempty(rows) && return parts
     ts = Euphemia.sql2df_with_retry("""
         SELECT bidding_zone AS z, market_date, (date_time_utc AT TIME ZONE 'UTC') AS t, value AS v
         FROM simulations.tsfm_overlay
         WHERE input_mode = '$(TSFM_BACKFILL_MODE)' AND model_version = \$1 AND level = 'hour'
-          AND quantity = 'tsfm_median' AND market_date BETWEEN \$2 AND \$3
-    """, [tsfm_backfill_label(tag; arm=arm), sd, ed])
+          AND quantity = 'tsfm_median'
+    """, [tsfm_backfill_label(tag; arm=arm)])
     isempty(ts) && return parts
+    dates = Date.(ts.market_date)
+    sd, ed = minimum(dates), maximum(dates)
+    keep = rows === nothing ? nothing : Set(zip(String.(rows.z), Date.(rows.market_date)))
     ph = Euphemia.sql2df_with_retry("""
         SELECT bidding_zone AS z, market_date, (date_time_utc AT TIME ZONE 'UTC') AS t
         FROM simulations.forecast_prices
@@ -108,7 +110,7 @@ function tsfm_backfill_parts(tag::AbstractString, rows::AbstractDataFrame; arm=T
     empty_d, empty_s = Dict{DateTime,Float64}(), Set{DateTime}()
     for g in groupby(ts, [:z, :market_date])
         key = (String(g.z[1]), Date(g.market_date[1]))
-        key in keep || continue
+        keep === nothing || key in keep || continue
         parts[key] = tsfm_backfill_zone_day(g.t, g.v, get(phys, key, empty_s), get(actz, key[1], empty_d),
                                             get(locz, key[1], empty_d), key[2])
     end
@@ -120,7 +122,7 @@ end
 
 `tsfm_backfill_parts` behind the kill switch and a non-fatal guard (`nothing` = no tsfm fields).
 """
-function tsfm_backfill_parts_or_nothing(tag::AbstractString, rows::AbstractDataFrame)
+function tsfm_backfill_parts_or_nothing(tag::AbstractString, rows::Union{Nothing,AbstractDataFrame}=nothing)
     tsfm_backfill_enabled() || (println("tsfm backfill fields: skipped (EXPORT_TSFM_BACKFILL=0)"); return nothing)
     try
         parts = tsfm_backfill_parts(tag, rows)
@@ -131,4 +133,43 @@ function tsfm_backfill_parts_or_nothing(tag::AbstractString, rows::AbstractDataF
         @warn "tsfm backfill fields failed — backfilled window exported without them" exception = (e, catch_backtrace())
         return nothing
     end
+end
+
+"Per-export cache: tag => parts (or nothing). One DB step per export, whatever the cohort count."
+const TSFM_BACKFILL_PARTS_CACHE = Dict{String,Any}()
+
+"""
+    tsfm_backfill_cohort_fields(zone, lead, rows; tag, load) -> Dict{String,Any}
+
+The tsfm_* fields of one backfilled cohort (lead 1 only), pooled over the cohort's market days
+(`rows.market_date`, the physics backfill's own zone-days). `load(tag)` (default
+`tsfm_backfill_parts_or_nothing`, non-fatal) runs once per tag per process.
+"""
+function tsfm_backfill_cohort_fields(zone, lead, rows; tag=BACKFILL_RESET_TAG,
+                                     load=tsfm_backfill_parts_or_nothing)
+    Int(lead) == 1 || return Dict{String,Any}()
+    parts = get!(() -> load(tag), TSFM_BACKFILL_PARTS_CACHE, tag)
+    return tsfm_backfilled_fields(parts, String(zone), rows.market_date; label=tsfm_backfill_label(tag))
+end
+
+"""
+    tsfm_backfill_columns(n_live, extras) -> Union{Nothing,Dict{String,Vector}}
+
+Parquet columns for TSFM_BACKFILL_BOARD_COLS: `n_live` leading rows (the live windows) are missing,
+then one value per backfilled row from its extra-fields Dict (missing where absent). `nothing` (no
+columns, the parquet stays as before) when no backfilled row carries Timestral fields.
+"""
+function tsfm_backfill_columns(n_live::Integer, extras)
+    any(x -> haskey(x, "tsfm_mae"), extras) || return nothing
+    cols = Dict{String,Vector}()
+    for c in TSFM_BACKFILL_BOARD_COLS
+        T = c == "tsfm_arm" ? String : c in ("tsfm_n_days", "tsfm_n") ? Int : Float64
+        v = Vector{Union{Missing,T}}(missing, n_live)
+        for x in extras
+            y = get(x, c, missing)
+            push!(v, (y === nothing || y === missing) ? missing : convert(T, y))
+        end
+        cols[c] = v
+    end
+    return cols
 end

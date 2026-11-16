@@ -1,7 +1,7 @@
 # Timestral fields for the "backfilled" scoreboard window (#431 R2, bin/tsfm_backfill_scores.jl).
 # Pure, no DB.   julia --project=. test/test_tsfm_backfill_scores.jl
 
-using Test, Dates, Statistics, DataFrames
+using Test, Dates, Statistics, DataFrames, JSON
 
 isdefined(@__MODULE__, :athens_market_day_window) ||
     include(joinpath(@__DIR__, "..", "bin", "forecast_common.jl"))
@@ -48,4 +48,37 @@ include(joinpath(@__DIR__, "..", "bin", "tsfm_backfill_scores.jl"))
     end
     # the backfill vintage is exactly the mode the live selection drops
     @test is_tsfm_backfill(TSFM_BACKFILL_MODE)
+
+    # --- publishing path (#450 review P2): R1's extension point -> JSON entry / parquet columns ---
+    isdefined(@__MODULE__, :backfilled_entries) || include(joinpath(@__DIR__, "..", "bin", "scoreboard_windows.jl"))
+    empty!(TSFM_BACKFILL_PARTS_CACHE)
+    calls = Ref(0)
+    stub_load = tag -> (calls[] += 1; parts)
+    rowsGR = DataFrame(z=["GR", "GR"], market_date=[D, D - Day(1)], lead_days=[1, 1], mode=["weather", "weather"],
+                       mae=[60.0, 62.0], bias=[-1.0, -1.0], corr=[0.8, 0.8], cv=[44, 44])
+    cf = tsfm_backfill_cohort_fields("GR", 1, rowsGR; tag="cv44-backfill-2026-11", load=stub_load)
+    @test cf == f
+    @test isempty(tsfm_backfill_cohort_fields("GR", 2, rowsGR; tag="cv44-backfill-2026-11", load=stub_load))
+    tsfm_backfill_cohort_fields("DE_LU", 1, rowsGR; tag="cv44-backfill-2026-11", load=stub_load)
+    @test calls[] == 1                                    # one DB step per export, whatever the cohorts
+    # R1's backfilled_extra_fields delegates here (default tag = BACKFILL_RESET_TAG, cache filled above)
+    @test backfilled_extra_fields("GR", 1, "weather", rowsGR) == f
+    # through R1's backfilled_entries with the JSON exporter's merge
+    ents = backfilled_entries(load=() -> (rowsGR, nothing, "2026-11-18")) do zone, lead, mode, bsub, bparts, made
+        merge(Dict{String,Any}("zone" => zone, "lead_days" => lead, "window" => BACKFILLED_WINDOW,
+                               "input_mode" => mode, "reconstructed_utc" => made),
+              backfilled_extra_fields(zone, lead, mode, bsub))
+    end
+    @test length(ents) == 1 && ents[1]["tsfm_mae"] ≈ f["tsfm_mae"] && ents[1]["tsfm_arm"] == lab
+    # parquet columns: missing on the live rows, values on the backfilled rows; none without fields
+    cols = tsfm_backfill_columns(3, [ents[1], Dict{String,Any}()])
+    @test length(cols["tsfm_mae"]) == 5 && all(ismissing, cols["tsfm_mae"][[1, 2, 3, 5]])
+    @test cols["tsfm_mae"][4] ≈ f["tsfm_mae"] && cols["tsfm_n"][4] == 36 && cols["tsfm_arm"][4] == lab
+    @test tsfm_backfill_columns(3, [Dict{String,Any}()]) === nothing
+    # golden API-row fixture consumed by workers/api/test/tsfm_backfill_fields.test.mjs (end to end)
+    fx = JSON.parsefile(joinpath(@__DIR__, "fixtures", "tsfm_backfilled_row.json"))
+    for c in TSFM_BACKFILL_BOARD_COLS
+        @test c == "tsfm_arm" ? String(fx[c]) == cols[c][4] : isapprox(Float64(fx[c]), Float64(cols[c][4]); atol=1e-9)
+    end
+    empty!(TSFM_BACKFILL_PARTS_CACHE)
 end

@@ -96,7 +96,11 @@ window (e.g. the reconstructed Timestral MAE / rMAE on the same zone-days). Empt
 today; whatever it returns is merged into the JSON entry. A parquet column needs
 the matching addition in export_web_parquet.jl and workers/api/src/shape.js.
 """
-backfilled_extra_fields(zone, lead, mode, rows) = Dict{String,Any}()
+backfilled_extra_fields(zone, lead, mode, rows) =
+    # R2 (#431, bin/tsfm_backfill_scores.jl): the Timestral fields, when that file is included
+    # (both exporters include it; pure tests of this file may not).
+    isdefined(@__MODULE__, :tsfm_backfill_cohort_fields) ?
+        tsfm_backfill_cohort_fields(zone, lead, rows) : Dict{String,Any}()
 
 """
     backfilled_cohorts(build, scores, parts, reconstructed) -> Vector{Any}

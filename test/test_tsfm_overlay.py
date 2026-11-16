@@ -1,6 +1,8 @@
 """Information-set invariants of bin/emit_tsfm_overlay.py; runs without the extract or model weights."""
 import importlib.util
+import json
 import os
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -293,14 +295,86 @@ class BackfillTest(unittest.TestCase):
         self.assertEqual([r["status"] for r in res], ["done", "stopped"])
         self.assertEqual(len(written), 1)
 
-    def test_blocked_windows(self):
-        t = lambda hm: pd.Timestamp(f"2026-11-20 {hm}")
-        for hm in ("05:50", "06:00", "08:29", "10:20", "11:00", "12:14"):
+    def test_blocked_windows_and_reservation(self):
+        t = lambda hms: pd.Timestamp(f"2026-11-20 {hms}")
+        for hm in ("06:00:00", "08:29:59", "10:30:00", "12:14:59"):
             self.assertTrue(ov.in_blocked_window(t(hm)), hm)
-        for hm in ("05:49", "08:30", "10:19", "12:15", "23:00"):
+        for hm in ("05:59:59", "08:30:00", "10:29:59", "12:15:00", "23:00:00"):
             self.assertFalse(ov.in_blocked_window(t(hm)), hm)
-        self.assertIn("blocking", ov.backfill_guard(t("14:00"), active=lambda: ["daily-forecast.yml"]))
-        self.assertIsNone(ov.backfill_guard(t("14:00"), active=lambda: []))
+        R = 900 + ov.GUARD_MARGIN_S                                   # the default day reservation
+        self.assertTrue(ov.in_blocked_window(t("05:49:00"), R))      # review: 05:49 + 900 s -> 06:04
+        self.assertTrue(ov.in_blocked_window(t("10:19:00"), R))      # review: 10:19 + 900 s -> 10:34
+        self.assertFalse(ov.in_blocked_window(t("05:44:00"), R))     # ends 06:00:00, the window's start
+        self.assertTrue(ov.in_blocked_window(t("05:44:01"), R))
+        self.assertTrue(ov.in_blocked_window(t("23:59:00"), 7 * 3600))   # wraps into tomorrow 06:00
+
+    def test_guard_admits_only_days_that_end_before_the_next_window(self):
+        R = 900 + ov.GUARD_MARGIN_S
+        windows = [(6 * 3600, 8 * 3600 + 1800), (10 * 3600 + 1800, 12 * 3600 + 900)]
+        for sec in range(0, 86400, 37):                               # every 37 s of the day
+            now = pd.Timestamp("2026-11-20") + pd.Timedelta(seconds=sec)
+            ok = ov.backfill_guard(now, active=lambda: [], reserve_s=R, clock=lambda: now) is None
+            end = sec + R
+            hits = any(ws + sh <= sec < we + sh or sec < ws + sh < end for ws, we in windows for sh in (0, 86400))
+            self.assertEqual(ok, not hits, f"{now:%H:%M:%S}")
+            if ok:   # independent statement of the guarantee: outside every window, and the next opening
+                     # (today's or tomorrow's) is no earlier than the end of the whole day budget
+                self.assertFalse(any(ws <= sec < we for ws, we in windows))
+                nxt = min(ws + sh for ws, _ in windows for sh in (0, 86400) if ws + sh > sec)
+                self.assertLessEqual(sec + R, nxt, f"{now:%H:%M:%S}")
+        # the GitHub checks take time: the clock is read again after them
+        start = pd.Timestamp("2026-11-20 05:40:00")
+        clock = iter([start, start + pd.Timedelta(minutes=5)])        # 05:40 ok, 05:45 + 960 s is not
+        why = ov.backfill_guard(None, active=lambda: [], reserve_s=R, clock=lambda: next(clock))
+        self.assertIn("after the workflow checks", why)
+        self.assertIn("blocking", ov.backfill_guard(pd.Timestamp("2026-11-20 14:00"),
+                                                     active=lambda: ["daily-forecast.yml"], reserve_s=R))
+
+    def test_logistic_timeout_is_the_day_timeout(self):
+        written = []
+
+        def slow_logistic(d):
+            raise ov.DayTimeout("day exceeded 60 s")
+        res = ov.run_backfill(self.DAYS[:1], TAG, "stub", ZONES, load_sim=lambda d: self.retro_sim(),
+                              load_prices=lambda d: prices(), model=StubModel(),
+                              emit=lambda h, dd, label: written.append(label), done=lambda d, label: False,
+                              logistic=slow_logistic, guard=lambda: None, timeout_s=60)
+        self.assertEqual(res[0]["status"], "failed")
+        self.assertIn("DayTimeout", res[0]["detail"])
+        self.assertEqual(written, [])                                 # nothing emitted after the bound
+        # an ordinary logistic failure still falls back to TSFM-only p_le0
+        res = ov.run_backfill(self.DAYS[:1], TAG, "stub", ZONES, load_sim=lambda d: self.retro_sim(),
+                              load_prices=lambda d: prices(), model=StubModel(),
+                              emit=lambda h, dd, label: written.append(label), done=lambda d, label: False,
+                              logistic=lambda d: 1 / 0, guard=lambda: None, timeout_s=60)
+        self.assertEqual(res[0]["status"], "done")
+        self.assertEqual(len(written), 1)
+
+    def test_resume_check_runs_under_the_day_alarm(self):
+        def slow_done(d, label):
+            raise ov.DayTimeout("day exceeded 60 s")                  # e.g. a hung DB read
+        res, written = self.go(done=slow_done)
+        self.assertEqual([r["status"] for r in res], ["failed", "failed"])
+
+    def test_live_json_reader_skips_retro_days(self):
+        # review fixture: a reconstructed history day (is_retro, value 900) next to live days
+        with tempfile.TemporaryDirectory() as dd:
+            days = []
+            for d, made, val, retro in (("2026-11-16", "2026-11-17T00:00:00Z", 900.0, True),
+                                        ("2026-11-17", "2026-11-16T09:10:00Z", 50.0, False),
+                                        ("2026-11-18", "2026-11-17T06:30:00Z", 60.0, False)):
+                hrs = [h.isoformat() + "Z" for h in ov.market_day_hours(d)]
+                day = dict(date=d, lead_days=1, input_mode="weather", prediction_made_utc=made,
+                           hours=hrs, sim=[val] * len(hrs))
+                if retro:
+                    day.update(is_retro=True, reset_tag=TAG)
+                days.append(day)
+            Path(dd, "GR.json").write_text(json.dumps({"zone": "GR", "days": days}))
+            sim = ov.sim_from_live_json(dd, ["GR"])
+            self.assertNotIn(900.0, sim.sim.tolist())
+            known, issue = ov.sim_known(sim, "2026-11-18")
+            self.assertNotIn(900.0, known.sim.tolist())
+            self.assertEqual(issue, pd.Timestamp("2026-11-17 06:30"))
 
     def test_live_vintages_cannot_be_relabelled_and_live_sim_never_feeds_backfill(self):
         hourly, day = ov.overlay(StubModel(), prices(), ZONES, "2026-11-15", "pregate0630")

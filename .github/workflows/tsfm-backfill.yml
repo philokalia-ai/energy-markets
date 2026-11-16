@@ -6,11 +6,13 @@
 # simulations.tsfm_overlay as input_mode='postsim_backfill', model_version='timestral-209m@<tag>'.
 # The live exporters never select that mode; the scoreboard's `backfilled` window scores it.
 #
-# Runtime: ~6.3 min per day (63 days ~6.6 h) on 4 threads. Dispatch-only. Run it AFTER retro-backfill.yml has written the days (days without complete
-# physics are skipped and picked up by a later dispatch). Resumable and idempotent: days already
-# written for the tag are skipped. Per day: timeout (TSFM_BACKFILL_DAY_TIMEOUT) and non-fatal.
-# The loop stops cleanly (exit 0) before 05:50 / 10:20 UTC (the protected 06:00-08:30 and
-# 10:30-12:15 windows) and whenever daily-forecast or publish-web-data is queued or running.
+# Runtime: ~6.3 min per day (63 days ~6.6 h) on 4 threads. Dispatch-only. Run it AFTER
+# retro-backfill.yml has written the days (days without complete physics are skipped and picked
+# up by a later dispatch). Resumable and idempotent: days already written for the tag are skipped. Per day: timeout (TSFM_BACKFILL_DAY_TIMEOUT) and non-fatal.
+# A day is admitted only if its whole budget (TSFM_BACKFILL_DAY_TIMEOUT + 60 s, which bounds the
+# day's reads, inference and writes) ends before the next protected window (06:00-08:30,
+# 10:30-12:15 UTC); the clock is re-read after the GitHub checks. Otherwise, or while
+# daily-forecast / publish-web-data is queued or running, the loop stops cleanly (exit 0).
 #
 # Rollback (by tag):
 #   DELETE FROM simulations.tsfm_overlay

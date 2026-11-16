@@ -55,8 +55,14 @@ reviewer's run under heavier contention did not finish within 420 s. The emitter
   written the days.
   - Days without complete physics are skipped, and so are days already written; it is resumable.
   - Per-day timeout; failures are non-fatal.
-  - It stops cleanly from 05:50 and from 10:20 UTC, and while daily-forecast or publish-web-data
-    is queued or running.
+  - A day is admitted only if its whole budget (the per-day timeout, which bounds its reads,
+    inference and writes, plus 60 s) ends before the next protected window (06:00–08:30,
+    10:30–12:15 UTC). The clock is re-read after the GitHub checks. Otherwise, or while
+    daily-forecast or publish-web-data is queued or running, it stops cleanly.
+  - The live sim readers (`SIM_SQL` and the zone-JSON reader) both skip retro rows.
+- **Published.** The Timestral fields reach the scoreboard JSON and parquet, the Worker
+  (`shape.js`) and the UI: "Timestral MAE" and "Timestral rMAE" columns in the backfilled window,
+  on the hourly board only.
 - **Rollback by tag:** `DELETE FROM simulations.tsfm_overlay WHERE input_mode = 'postsim_backfill'
   AND model_version = 'timestral-209m@<tag>'`.
 

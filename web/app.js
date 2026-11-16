@@ -3883,6 +3883,33 @@
       " on this window. Not a test of statistical significance.";
   }
 
+  // Timestral fields of the "backfilled" window (#431 R2, bin/tsfm_backfill_scores.jl): the
+  // post-sim Timestral line reconstructed over the same cv44 retro physics, scored on the hours of
+  // the physics backfill that also carry a Timestral median; rMAE against the board's naive.
+  function tsfmNaiveKind(s) {
+    return state.naive === "auto" || state.naive === "off" ? (s.lead_days <= 1 ? "epf" : "d7") : state.naive;
+  }
+  function tsfmMaeCell(td, s) {
+    if (s.tsfm_mae === null || s.tsfm_mae === undefined) {
+      td.textContent = "—"; td.className = ((td.className || "") + " null").trim(); return;
+    }
+    td.textContent = fmt(s.tsfm_mae, 1);
+    td.title = "Timestral (post-sim, reconstructed on the cv44 retro physics) MAE " + fmt(s.tsfm_mae, 2) +
+      " €/MWh on " + s.tsfm_n + " hours over " + s.tsfm_n_days + " days" +
+      (s.tsfm_arm ? " · " + s.tsfm_arm : "") + ". In-sample reconstruction, like the physics backfill.";
+  }
+  function tsfmRmaeCell(td, s) {
+    var kind = tsfmNaiveKind(s), r = s["tsfm_rmae_" + kind];
+    if (r === null || r === undefined) {
+      td.textContent = "—"; td.className = ((td.className || "") + " null").trim(); return;
+    }
+    var beats = r < 1;
+    td.appendChild(document.createTextNode(fmt(r, 2)));
+    td.appendChild(el("span", "naive-mark " + (beats ? "naive-beats" : "naive-loses"), beats ? " beats" : " loses"));
+    td.title = "Timestral rMAE " + fmt(r, 3) + " = Timestral MAE " + fmt(s.tsfm_mae, 2) + " ÷ " +
+      NAIVE_LABEL[kind] + " MAE " + fmt(s["tsfm_mae_naive_" + kind], 2) + " on the same " + s.tsfm_n + " hours.";
+  }
+
   function renderScoreboard() {
     var table = $("scoreboard-table");
     table.textContent = "";
@@ -3959,6 +3986,13 @@
     if (!naiveOn && (state.sort.metric === "naive" || state.sort.metric === "rmae")) {
       state.sort = { lead: state.sort.lead, metric: "mae", dir: 1 };
     }
+    // Timestral columns (#431 R2): backfilled window, hourly board, only when exported.
+    var tsfmOn = state.window === BACKFILL_WINDOW && !q15 &&
+      scores.some(function (s) { return s.tsfm_mae !== undefined; });
+    if (tsfmOn) METRICS = METRICS.concat([["tsfm", "Timestral MAE"], ["tsfm_rmae", "Timestral rMAE"]]);
+    if (!tsfmOn && (state.sort.metric === "tsfm" || state.sort.metric === "tsfm_rmae")) {
+      state.sort = { lead: state.sort.lead, metric: "mae", dir: 1 };
+    }
 
     // header
     var thead = el("thead");
@@ -4004,6 +4038,10 @@
       var m = state.sort.metric;
       if (m === "corr") return s.corr === null ? Infinity : -s.corr; // higher corr = better
       if (m === "bias") return s.bias === null ? Infinity : Math.abs(s.bias); // closer to 0 = better
+      if (m === "tsfm" || m === "tsfm_rmae") {   // lower first
+        var tv = m === "tsfm" ? s.tsfm_mae : s["tsfm_rmae_" + tsfmNaiveKind(s)];
+        return tv === null || tv === undefined ? Infinity : tv;
+      }
       if (m === "naive" || m === "rmae") {   // lower naive MAE / lower rMAE first
         var nb = naiveFor(s);
         var nv = nb ? (m === "naive" ? nb.mae : nb.rmae) : null;
@@ -4071,6 +4109,10 @@
             naiveMaeCell(td, s);
           } else if (mdef[0] === "rmae") {
             naiveRmaeCell(td, s);
+          } else if (mdef[0] === "tsfm") {
+            tsfmMaeCell(td, s);
+          } else if (mdef[0] === "tsfm_rmae") {
+            tsfmRmaeCell(td, s);
           } else {
             td.textContent = (s.bias > 0 ? "+" : "") + fmt(s.bias, 1);
             td.title = resLabel + "bias " + fmt(s.bias, 2) + " €/MWh · n=" + s.n_days + " days";
