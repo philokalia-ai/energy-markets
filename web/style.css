@@ -350,6 +350,9 @@ h1 {
 /* `.filter` sets display:flex, which beats the UA [hidden] rule; keep hidden filters hidden
    (the #431 Naive selector is hidden for old JSON and on the 15-min board). */
 .filter[hidden] { display: none; }
+/* since-freeze window note above the scoreboard (#431 G) */
+.caption.window-note { margin: 0 2px 10px; }
+.window-note[hidden] { display: none; }
 .filter-label {
   font-family: var(--mono);
   font-size: 10.5px;
