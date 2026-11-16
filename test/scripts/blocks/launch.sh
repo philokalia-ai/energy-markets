@@ -1,12 +1,12 @@
 #!/bin/bash
 # launch.sh LABEL KINDS CORE_START  — clear the 8 calibration days for one arm, 4 procs x 2 days
 # KINDS = value of EUPHEMIA_COMPLEX_ORDERS ("" = baseline)
-source /home/pgeorgakopoulos/armada/em-team/results/blocks/env.sh
+source "${BLOCKS_RESULTS_DIR:?Set BLOCKS_RESULTS_DIR to the experiment results directory}/env.sh"
 [ -n "$EXTRA_ENV" ] && export $EXTRA_ENV
 export JULIA_NUM_THREADS=2
-R=/home/pgeorgakopoulos/armada/em-team/results/blocks
+R="${BLOCKS_RESULTS_DIR:?Set BLOCKS_RESULTS_DIR to the experiment results directory}"
 label=$1; kinds=$2; c=$3
-cd ${REPO:-/home/pgeorgakopoulos/armada/em-blocks}
+cd "${REPO:-$(cd "$(dirname "$0")/../../.." && pwd)}"
 mkdir -p $R/$label; echo "$(git rev-parse HEAD) kinds=$kinds $(date -u)" > $R/$label/PROVENANCE
 if [ -z "$kinds" ]; then unset EUPHEMIA_COMPLEX_ORDERS; else export EUPHEMIA_COMPLEX_ORDERS=$kinds; fi
 i=0

@@ -25,8 +25,7 @@ PUB = Path(os.environ["PUBBOOKS_DIR"])
 RAW = PUB / "raw"
 OUT = PUB / "intermediate"
 OUT.mkdir(exist_ok=True)
-EXTRACT = os.environ.get("EUPHEMIA_DUCKDB_PATH",
-                         "/home/pgeorgakopoulos/armada/energy-markets/data/extracts/euphemia-live.duckdb")
+EXTRACT = (os.environ.get('EUPHEMIA_DUCKDB_PATH') or sys.exit("Set EUPHEMIA_DUCKDB_PATH to the required local file or directory"))
 
 GME_DAYS = ["2025-01-15", "2025-04-15", "2025-07-15", "2025-10-15",
             "2026-01-15", "2026-04-15", "2026-07-15"]

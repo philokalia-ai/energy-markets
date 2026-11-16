@@ -25,7 +25,7 @@
 
 ENV["EUPHEMIA_DATA_STORE"] = "duckdb"
 get!(ENV, "EUPHEMIA_DUCKDB_PATH",
-     "/home/pgeorgakopoulos/armada/energy-markets/data/extracts/euphemia-live.duckdb")
+     get(() -> error("Set EUPHEMIA_DUCKDB_PATH to the required local file or directory"), ENV, "EUPHEMIA_DUCKDB_PATH"))
 ENV["EUPHEMIA_DUCKDB_READONLY"] = "true"
 delete!(ENV, "EUPHEMIA_ENABLE_GRSQ_T2")   # arms b/d build with the lever OFF
 

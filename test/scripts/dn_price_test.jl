@@ -34,7 +34,7 @@ Euphemia.configure_data_store!(backend=:duckdb, read_only=true,
 include(joinpath(@__DIR__, "..", "..", "bin", "weather_res.jl"))  # pure helpers (guarded main)
 
 const SP = get(ENV, "DN_OUT",
-    "/tmp/claude-1000/-home-pgeorgakopoulos-armada-energy-markets/b12b1e25-3bbc-44fb-b4b2-77f8400fd203/scratchpad/dn")
+    get(() -> error("Set DN_OUT to the required local file or directory"), ENV, "DN_OUT"))
 const LEADS = [parse(Int, s) for s in split(get(ENV, "DN_LEADS", "1,2,3,4,5,6,7"), ",")]
 const STEP = parse(Int, get(ENV, "DN_STEP", "12"))
 const T0, T1 = Date(2025, 7, 8), Date(2026, 6, 30)

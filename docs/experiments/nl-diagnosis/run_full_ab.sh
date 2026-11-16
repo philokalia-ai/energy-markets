@@ -1,11 +1,11 @@
 #!/bin/bash
 # Restart-until-complete wrapper. The harness is resumable (skips done day,arm
 # from the CSV), so a HiGHS segfault (#182) just restarts and continues.
-cd /home/pgeorgakopoulos/armada/energy-markets/.claude/worktrees/agent-a2e9a829cb1e0a48e
+cd "${REPO:-$(cd "$(dirname "$0")/../../.." && pwd)}"
 export EUPHEMIA_DATA_STORE=duckdb
-export EUPHEMIA_DUCKDB_PATH=/home/pgeorgakopoulos/armada/energy-markets/data/extracts/euphemia-live.duckdb
+export EUPHEMIA_DUCKDB_PATH="${EUPHEMIA_DUCKDB_PATH:?Set EUPHEMIA_DUCKDB_PATH to the read-only extract}"
 export EUPHEMIA_DUCKDB_READONLY=true
-export EUPHEMIA_RESULTS_DB=/tmp/claude-1000/-home-pgeorgakopoulos-armada-energy-markets/b12b1e25-3bbc-44fb-b4b2-77f8400fd203/scratchpad/scratch_results.duckdb
+export EUPHEMIA_RESULTS_DB="${EUPHEMIA_RESULTS_DB:?Set EUPHEMIA_RESULTS_DB to a writable scratch results database}"
 export NL_DAYS="$1"
 export NL_OUT="$2"
 LOG="$3"

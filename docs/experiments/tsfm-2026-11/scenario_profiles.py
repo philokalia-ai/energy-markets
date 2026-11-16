@@ -5,8 +5,10 @@ dsim  = mean (scenario - eu43_base) cv43 price per zone x Athens local hour over
 dload = scenario load added: DC +574 MW flat in GR; cold ironing = the eu37/eu43 FLOOR profile
         (docs/experiments/scenario-exercises/ops_hourly_eu_floor_2023H2_2025H1.csv.gz), SON mean.
 """
+import os
+import sys
 import duckdb, pandas as pd
-R = '/home/pgeorgakopoulos/armada/em-team/results'
+R = (os.environ.get('EM_RESULTS_DIR') or sys.exit("Set EM_RESULTS_DIR to the required local file or directory"))
 c = duckdb.connect(R + '/scenarios-cv43.duckdb', read_only=True)
 df = c.execute("""select clearing_mode m, bidding_zone zone, date_time_utc t, price_eur_mwh p
   from simulations.energy_prices where clearing_mode in ('eu43_base','eu43_dc574','eu43_ops_floor_paneu')""").df()

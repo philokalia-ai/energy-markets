@@ -2,27 +2,27 @@
   "contracts": [
     {
       "path": "live_saved-highest_seq/manifest.json",
-      "sha256": "d8eebb1bc89d5ec33f11d4b11b8f0dfafca8470419612f4b3339dc23e62abb67"
+      "sha256": "29902aaa237cfc9cdf39c154f6b9e36d1a072266d7ff5575a0b42dfe1d7b154f"
     },
     {
       "path": "live_saved-sdac/manifest.json",
-      "sha256": "e9b67fedef88b91e301f2afebb6531740cf7755d50449d91c5db742f8cfc12aa"
+      "sha256": "eef7c9a2d3638c747d65dd370187577774685fe19611b3763c1df081489fcc5f"
     },
     {
       "path": "live_since_cv43-highest_seq/manifest.json",
-      "sha256": "fe7c101e9230301a004cc6c36c669c1b9faa1c54346ff30b5ac727eadc80fc26"
+      "sha256": "7aa6313b40ef1bc75fc17888de73be6df92a293f900239a04251878e54c26b51"
     },
     {
       "path": "live_since_cv43-sdac/manifest.json",
-      "sha256": "5d40a1de8d68b32cb73095f5ecd169b1619fd2275ddeaa134c1e61716c0f430c"
+      "sha256": "f1db3fc2a295b0b99d8a795f3315a2ac1e99afd9b4a6f9098a3612b99b1e4600"
     },
     {
       "path": "timestral_ontime-highest_seq/manifest.json",
-      "sha256": "6164960f2c8abc594764553bf86decee558241e38df17326c247ce74b9b78af4"
+      "sha256": "9fe50efbe27a32467bba6aea403fde9250154dd615e0e94ed9ef1cf020e392e5"
     },
     {
       "path": "timestral_ontime-sdac/manifest.json",
-      "sha256": "9f311d42e64e5378d79bc327f348fa29f0bccde3b9a13729219df61e184d2a28"
+      "sha256": "28b82e00887584bcb12db27bd455dea2ff136020f722d7a610d939d0d4b8368e"
     }
   ],
   "headlines_sha256": "73fc40771a905bbb035528513e2995500c46760aaf83a4caa37b4b4c8978bed9",

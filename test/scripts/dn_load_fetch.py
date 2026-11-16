@@ -14,8 +14,7 @@
 # training window.
 import json, time, csv, os, sys, urllib.request, urllib.parse
 
-OUT = os.environ.get("DN_OUT",
-    "/tmp/claude-1000/-home-pgeorgakopoulos-armada-energy-markets/b12b1e25-3bbc-44fb-b4b2-77f8400fd203/scratchpad/dn")
+OUT = (os.environ.get('DN_OUT') or sys.exit("Set DN_OUT to the required local file or directory"))
 ERA5_START, ERA5_END = "2022-07-01", "2026-06-30"
 PREV_START, PREV_END = "2025-07-01", "2026-06-30"   # OOS test year
 ARCH = "https://archive-api.open-meteo.com/v1/archive"

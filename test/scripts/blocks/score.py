@@ -1,8 +1,9 @@
 """Score blocks-experiment arms against settled day-ahead (resolution-aware hourly mean,
 latest sequence) from the read-only extract. usage: score.py BASE_LABEL TREAT_LABEL [days...]"""
+from pathlib import Path
 import sys, os, glob, pandas as pd, numpy as np
-R = "/home/pgeorgakopoulos/armada/em-team/results/blocks"
-EXTRACT = "/home/pgeorgakopoulos/armada/em-data/euphemia-live-20261114.duckdb"
+R = (os.environ.get('BLOCKS_RESULTS_DIR') or sys.exit("Set BLOCKS_RESULTS_DIR to the required local file or directory"))
+EXTRACT = (os.environ.get('EUPHEMIA_DUCKDB_PATH') or sys.exit("Set EUPHEMIA_DUCKDB_PATH to the required local file or directory"))
 base, treat = sys.argv[1], sys.argv[2]
 def load(label):
     fs = sorted(glob.glob(f"{R}/{label}/2026-*-??.csv"))
@@ -21,7 +22,7 @@ b, t = b[b.day.isin(days)], t[t.day.isin(days)]
 # sequence 2 per the leader's 19:50 addendum), any lead, deduped per UTC hour.
 import json
 rows = []
-for f in glob.glob("/home/pgeorgakopoulos/armada/em-team/live/*.json"):
+for f in glob.glob(str(Path((os.environ.get('EM_LIVE_DIR') or sys.exit("Set EM_LIVE_DIR to the required local file or directory"))) / '*.json')):
     z = os.path.basename(f)[:-5]
     for d in json.load(open(f))["days"]:
         for h, a in zip(d.get("hours", []), d.get("actual", []) or []):

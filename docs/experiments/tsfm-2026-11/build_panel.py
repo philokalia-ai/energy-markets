@@ -12,12 +12,13 @@ Output (outside the repo): $TSFM_OUT/panel.parquet with one row per (zone, UTC h
   res_upd    max(update_time_utc) of the RES rows in that hour
 and $TSFM_OUT/live_lead1.parquet: live published lead-1 rows (all input modes) from em-team/live/*.json.
 """
+import sys
 import json, os, glob
 import duckdb, pandas as pd
 
-DB = os.environ.get("EUPHEMIA_DUCKDB_PATH", "/home/pgeorgakopoulos/armada/em-data/euphemia-live-20261114.duckdb")
-LIVE = os.environ.get("TSFM_LIVE", "/home/pgeorgakopoulos/armada/em-team/live")
-OUT = os.environ.get("TSFM_OUT", "/home/pgeorgakopoulos/armada/em-team/results/tsfm")
+DB = (os.environ.get('EUPHEMIA_DUCKDB_PATH') or sys.exit("Set EUPHEMIA_DUCKDB_PATH to the required local file or directory"))
+LIVE = (os.environ.get('TSFM_LIVE') or sys.exit("Set TSFM_LIVE to the required local file or directory"))
+OUT = (os.environ.get('TSFM_OUT') or sys.exit("Set TSFM_OUT to the required local file or directory"))
 
 zones = sorted(os.path.basename(p)[:-5] for p in glob.glob(f"{LIVE}/*.json"))
 c = duckdb.connect(DB, read_only=True)

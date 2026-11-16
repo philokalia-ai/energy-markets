@@ -2,8 +2,10 @@
 """Add the #280 meta-driven wiring keys ('pilot_zones' + 'winners') to the staged
 meta.json, so bin/ml_inputs.jl's ml_pilot_zones()/ml_use_new() resolve the whole
 39-zone rollout at run time (no const edits)."""
+import os
+import sys
 import json
-SP="/tmp/claude-1000/-home-pgeorgakopoulos-armada-energy-markets/b12b1e25-3bbc-44fb-b4b2-77f8400fd203/scratchpad/input_upgrade"
+SP=(os.environ.get('INPUT_UPGRADE_DIR') or sys.exit("Set INPUT_UPGRADE_DIR to the required local file or directory"))
 STAGE=f"{SP}/input_models_stage"
 geom=json.load(open(f"{SP}/geom39.json"))
 win39={tuple(k.split("|")):v for k,v in json.load(open(f"{SP}/winners39.json")).items()}

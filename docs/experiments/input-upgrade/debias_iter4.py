@@ -4,9 +4,10 @@ Level debias (b=1, a=-mean bias) for the R2 high-bias NEW-load zones. Fit on the
 first 2/3 of VALID, verify on the last 1/3: ship only zones that are (a) a NEW load
 winner after the retrain AND (b) improve (or do not worsen) holdout MAE with |bias|
 reduced. Emits the LOAD_BIAS_CORRECTION entries + a decision table."""
+import os
 import json, numpy as np, pandas as pd, sys
 SP=sys.argv[1] if len(sys.argv)>1 else \
-  "/tmp/claude-1000/-home-pgeorgakopoulos-armada-energy-markets/b12b1e25-3bbc-44fb-b4b2-77f8400fd203/scratchpad/input_upgrade"
+  (os.environ.get('INPUT_UPGRADE_DIR') or sys.exit("Set INPUT_UPGRADE_DIR to the required local file or directory"))
 CANDIDATES=["FR","IT-NORTH","HU","RO","NO3"]   # R2 named zones
 vp=pd.read_parquet(f"{SP}/valid_preds39.parquet"); vp["h"]=pd.to_datetime(vp["h"])
 win=json.load(open(f"{SP}/winners39.json")); win={tuple(k.split("|")):v for k,v in win.items()}

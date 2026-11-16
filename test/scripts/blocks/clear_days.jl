@@ -10,7 +10,7 @@ const FOOTPRINT = String[
     "IT-Sicily", "IT-Sardinia", "CH"]
 include(joinpath(@__DIR__, "contexts.jl"))   # pregate_0630
 label = ARGS[1]
-outdir = joinpath("/home/pgeorgakopoulos/armada/em-team/results/blocks", label)
+outdir = joinpath(get(() -> error("Set BLOCKS_RESULTS_DIR to the required local file or directory"), ENV, "BLOCKS_RESULTS_DIR"), label)
 mkdir!(p) = isdir(p) || mkpath(p); mkdir!(outdir)
 for ds in ARGS[2:end]
     d = Date(ds)

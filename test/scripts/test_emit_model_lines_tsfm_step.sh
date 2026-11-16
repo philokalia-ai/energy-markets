@@ -6,29 +6,29 @@
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 SB="$(mktemp -d)"; trap 'rm -rf "$SB"' EXIT
-mkdir -p "$SB/repo/bin" "$SB/home/.local/bin" "$SB/home/.juliaup/bin" "$SB/repo/data/model_line_feats"
+mkdir -p "$SB/repo/bin" "$SB/user/.local/bin" "$SB/user/.juliaup/bin" "$SB/repo/data/model_line_feats"
 cp "$ROOT/bin/emit_model_lines.sh" "$SB/repo/bin/"
 touch "$SB/repo/.env" "$SB/repo/data/model_line_feats/$(date -u -d '-6 days' +%F).csv"
-printf '#!/bin/bash\nexit 0\n' > "$SB/home/.juliaup/bin/julia"
+printf '#!/bin/bash\nexit 0\n' > "$SB/user/.juliaup/bin/julia"
 # `uv run ... python3 bin/emit_model_lines.py` -> exit $MODEL_LINES_RC
-cat > "$SB/home/.local/bin/uv" <<'EOF'
+cat > "$SB/user/.local/bin/uv" <<'EOF'
 #!/bin/bash
 echo "model lines (stub)"
 echo "MODEL_LINES_STRICT_ASOF=${MODEL_LINES_STRICT_ASOF-unset} MODEL_LINES_REWRITE_PAST=${MODEL_LINES_REWRITE_PAST-unset}"
 exit ${MODEL_LINES_RC:-0}
 EOF
-printf '#!/bin/bash\nexit 1\n' > "$SB/home/.local/bin/python3"   # no sklearn -> the uv branch
+printf '#!/bin/bash\nexit 1\n' > "$SB/user/.local/bin/python3"   # no sklearn -> the uv branch
 cat > "$SB/repo/bin/emit_tsfm_refresh.sh" <<'EOF'
 #!/bin/bash
 echo "tsfm refresh (stub: $TSFM_STUB)"
 case "$TSFM_STUB" in ok) exit 0 ;; fail) exit 7 ;; hang) sleep 30 ;; esac
 EOF
-chmod +x "$SB"/home/.local/bin/* "$SB"/home/.juliaup/bin/* "$SB"/repo/bin/*
+chmod +x "$SB"/user/.local/bin/* "$SB"/user/.juliaup/bin/* "$SB"/repo/bin/*
 
 fails=0
 run() {  # run <expect_rc> <expect_regex> [ENV=...]
     local want_rc=$1 want=$2; shift 2
-    out=$(cd "$SB/repo" && env -i HOME="$SB/home" PATH=/usr/bin:/bin EMIT_NO_PULL=1 "$@" \
+    out=$(cd "$SB/repo" && env -i HOME="$SB/user" PATH=/usr/bin:/bin EMIT_NO_PULL=1 "$@" \
           bash bin/emit_model_lines.sh 2>&1); rc=$?
     if [ "$rc" = "$want_rc" ] && grep -qE "$want" <<<"$out"; then echo "ok   rc=$rc  $*"
     else echo "FAIL rc=$rc (want $want_rc, /$want/)  $*"; echo "$out" | sed 's/^/     /'; fails=$((fails+1)); fi

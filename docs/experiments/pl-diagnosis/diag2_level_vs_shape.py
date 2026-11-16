@@ -1,6 +1,9 @@
+import os
+import sys
+from pathlib import Path
 import duckdb
-EXTRACT='/home/pgeorgakopoulos/armada/energy-markets/data/extracts/euphemia-live.duckdb'
-CSV='/tmp/claude-1000/-home-pgeorgakopoulos-armada-energy-markets/b12b1e25-3bbc-44fb-b4b2-77f8400fd203/scratchpad/cv23_model.csv'
+EXTRACT=(os.environ.get('EUPHEMIA_DUCKDB_PATH') or sys.exit("Set EUPHEMIA_DUCKDB_PATH to the required local file or directory"))
+CSV=str(Path((os.environ.get('EM_SCRATCH_DIR') or sys.exit("Set EM_SCRATCH_DIR to the required local file or directory"))) / 'cv23_model.csv')
 con=duckdb.connect(EXTRACT, read_only=True); con.execute("SET TimeZone='UTC'")
 con.execute(f"""create temp table model as select (h::timestamptz at time zone 'UTC') ts_utc, price_eur_mwh model
 from read_csv_auto('{CSV}',header=true) where bidding_zone='PL'""")

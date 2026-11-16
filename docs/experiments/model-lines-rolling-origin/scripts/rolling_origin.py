@@ -12,6 +12,7 @@
 #   stats(cv39)    the pure-statistics GBM retrained per fold
 #
 # Reported against the canonical SDAC target, energy-weighted where load exists.
+from pathlib import Path
 import os
 for _v in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"):
     os.environ.setdefault(_v, "4")
@@ -19,7 +20,7 @@ import sys, json
 import numpy as np, pandas as pd, joblib
 from sklearn.ensemble import HistGradientBoostingRegressor
 
-ROOT = "/home/pgeorgakopoulos/armada/energy-markets"
+ROOT = str(Path(__file__).resolve().parents[4])
 TRAIN = os.path.join(ROOT, "data", "model_lines_train")
 PHYS = ["hour", "month", "D", "res_sh", "imp_sh", "bst_sh", "margin", "gas", "co2"]
 STATS = ["lag24", "lag48", "lag168", "roll7", "hour", "dow", "month", "gas", "co2", "D", "res_sh"]

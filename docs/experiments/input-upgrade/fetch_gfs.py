@@ -5,7 +5,7 @@
 import json, time, os, sys, urllib.request, urllib.parse
 import pandas as pd, numpy as np
 
-SP = "/tmp/claude-1000/-home-pgeorgakopoulos-armada-energy-markets/b12b1e25-3bbc-44fb-b4b2-77f8400fd203/scratchpad/input_upgrade"
+SP = (os.environ.get('INPUT_UPGRADE_DIR') or sys.exit("Set INPUT_UPGRADE_DIR to the required local file or directory"))
 OUT = os.path.join(SP, "gfs"); os.makedirs(OUT, exist_ok=True)
 PREV = "https://previous-runs-api.open-meteo.com/v1/forecast"
 UA = {"User-Agent": "philokalia-energy/1.0 (contact: pankgeorg@gmail.com)"}

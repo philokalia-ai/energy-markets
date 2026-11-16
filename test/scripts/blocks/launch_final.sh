@@ -1,10 +1,10 @@
 #!/bin/bash
 # launch_final.sh LABEL CORE_START "ENV=VAL ..." — 8 calibration days, 4 procs x 2 days, retry-wrapped
-source /home/pgeorgakopoulos/armada/em-team/results/blocks/env.sh
+source "${BLOCKS_RESULTS_DIR:?Set BLOCKS_RESULTS_DIR to the experiment results directory}/env.sh"
 export J JULIA_NUM_THREADS=2
-R=/home/pgeorgakopoulos/armada/em-team/results/blocks
+R="${BLOCKS_RESULTS_DIR:?Set BLOCKS_RESULTS_DIR to the experiment results directory}"
 label=$1; c=$2; envs=$3
-cd ${REPO:-/home/pgeorgakopoulos/armada/em-blocks}
+cd "${REPO:-$(cd "$(dirname "$0")/../../.." && pwd)}"
 unset EUPHEMIA_COMPLEX_ORDERS EUPHEMIA_RES_OFFER_LADDER EUPHEMIA_BLOCK_PRICE EUPHEMIA_INMERIT_TRUTH
 [ -n "$envs" ] && export $envs
 mkdir -p $R/$label
