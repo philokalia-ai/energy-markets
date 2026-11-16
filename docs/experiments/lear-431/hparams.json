@@ -1,0 +1,30 @@
+{
+ "locked_utc": "2026-11-16T19:37:37+00:00",
+ "rule": "per zone, lowest validation MAE among single windows and their mean",
+ "validation": [
+  "2024-01-01",
+  "2024-06-30"
+ ],
+ "windows": [
+  56,
+  84,
+  182,
+  364
+ ],
+ "validation_mae": {
+  "DE_LU/W182": 16.3966,
+  "DE_LU/W364": 15.2372,
+  "DE_LU/W56": 16.3568,
+  "DE_LU/W84": 16.6559,
+  "DE_LU/ens": 15.4975,
+  "GR/W182": 14.5752,
+  "GR/W364": 13.8811,
+  "GR/W56": 15.0068,
+  "GR/W84": 14.7925,
+  "GR/ens": 14.0526
+ },
+ "choice": {
+  "DE_LU": 364,
+  "GR": 364
+ }
+}
