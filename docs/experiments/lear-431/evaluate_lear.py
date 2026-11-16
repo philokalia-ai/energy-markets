@@ -25,7 +25,7 @@ import numpy as np
 import pandas as pd
 
 BENCH_EVAL = os.environ.get(
-    "BENCH_EVAL", "/home/pgeorgakopoulos/armada/em-team/worktrees/collapse-431/docs/experiments/benchmark-431/evaluate.py")
+    "BENCH_EVAL", str(Path(__file__).resolve().parents[1] / "benchmark-431" / "evaluate.py"))
 ZONES = ["DE_LU", "GR"]
 WINDOWS = {"test": ("2024-07-01", "2026-11-13"), "emz": ("2024-07-01", "2025-01-14"),
            "record": ("2024-07-01", "2026-06-30"), "rolling": ("2025-07-01", "2026-06-30"),

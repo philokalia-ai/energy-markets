@@ -188,5 +188,5 @@ python lear.py run --out $O --start 2024-01-01 --end 2024-06-30 --tag validation
 python lear.py select --out $O --tag validation
 python lear.py run --out $O --start 2024-07-01 --end 2026-11-13 --windows 364 --tag test --procs 20
 python lear.py export --out $O --tag test
-BENCH_EVAL=<benchmark-431/evaluate.py> python evaluate_lear.py --out $O --live <live snapshot> --tsfm <tsfm results>
+python evaluate_lear.py --out $O --live <live snapshot> --tsfm <tsfm results>
 ```
