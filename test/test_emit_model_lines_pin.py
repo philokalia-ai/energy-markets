@@ -133,7 +133,7 @@ class AsOfTest(PinTest):
                                  u='2026-11-13T09:00:00Z')
                             for t in pd.date_range('2026-11-03', '2026-11-15', freq='h', inclusive='left')
                             for seq, p in [('1', 100.), ('2', 120.)]])
-        with patch.object(eml, 'target_helper', return_value=None), patch.dict(os.environ, {'EUPHEMIA_DA_TARGET':'highest_seq'}):
+        with patch.object(eml, 'target_helper', return_value=None), patch.dict(os.environ, {'EUPHEMIA_DA_INPUT':'highest_seq'}):
             st = eml.canonical_settled(raw)
         self.assertEqual(set(st.p), {120.})
         feats, base, _ = frames([37])
@@ -199,7 +199,7 @@ class AsOfTest(PinTest):
         raw = pd.DataFrame([dict(z='GR', seq='1', res='PT60M', t='2026-11-12T00:00Z',
                                  p=p, u=u) for p,u in [(80.,'2026-11-12T09:00Z'),
                                                        (999.,'2026-11-14T09:00Z')]])
-        with patch.object(eml,'target_helper',return_value=None), patch.dict(os.environ,{'EUPHEMIA_DA_TARGET':'highest_seq'}):
+        with patch.object(eml,'target_helper',return_value=None), patch.dict(os.environ,{'EUPHEMIA_DA_INPUT':'highest_seq'}):
             self.assertEqual(eml.canonical_settled(raw).p.tolist(), [999.])
             self.assertEqual(eml.canonical_settled(raw,self.issue).p.tolist(), [80.])
             raw['u'] = None
@@ -212,13 +212,28 @@ class AsOfTest(PinTest):
         from unittest.mock import patch
         with patch.object(eml,'target_helper',return_value=None):
             for value in ('sdac','wrong'):
-                with patch.dict(os.environ,{'EUPHEMIA_DA_TARGET':value}), self.assertRaises(ValueError):
+                with patch.dict(os.environ,{'EUPHEMIA_DA_INPUT':value}), self.assertRaises(ValueError):
                     eml.target_policy()
+
+    def test_lag_history_is_pinned_to_the_input_policy(self):
+        # #431 C2: the evaluation target defaults to sdac; the lag history (a model input)
+        # stays highest_seq unless EUPHEMIA_DA_INPUT says otherwise.
+        from unittest.mock import patch
+        raw = pd.DataFrame([dict(z='AT', seq=seq, res='PT60M', t='2026-11-12T00:00Z', p=p,
+                                 u='2026-11-11T13:00Z') for seq, p in [('1', 100.), ('2', 120.)]])
+        env = {k: v for k, v in os.environ.items() if k not in ('EUPHEMIA_DA_TARGET', 'EUPHEMIA_DA_INPUT')}
+        for target in (None, 'sdac', 'highest_seq'):
+            e = dict(env, **({} if target is None else {'EUPHEMIA_DA_TARGET': target}))
+            with patch.dict(os.environ, e, clear=True):
+                self.assertEqual(eml.target_policy(), 'highest_seq')
+                self.assertEqual(eml.canonical_settled(raw).p.tolist(), [120.])
+        with patch.dict(os.environ, dict(env, EUPHEMIA_DA_INPUT='sdac'), clear=True):
+            self.assertEqual(eml.canonical_settled(raw).p.tolist(), [100.])
 
     def test_helper_api_is_used(self):
         from unittest.mock import patch, Mock
         act = pd.DataFrame({'z':['GR'],'t':[pd.Timestamp('2026-11-12')],'act':[42.]})
-        helper = Mock(); helper.policy.return_value = 'sdac'
+        helper = Mock(); helper.input_policy.return_value = 'sdac'
         helper.sdac_hourly.return_value = (act,pd.DataFrame(),pd.DataFrame())
         raw = pd.DataFrame(columns=['z','seq','res','t','p','u'])
         with patch.object(eml,'target_helper',return_value=helper):

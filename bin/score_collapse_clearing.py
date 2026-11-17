@@ -96,7 +96,9 @@ def main():
     if prices.empty:
         raise ValueError("No completed baseline/treatment day pairs yet")
     con = duckdb.connect(args.extract, read_only=True, config={"threads": 4, "memory_limit": "8GB"})
-    actuals = cp.hourly_actuals(con, "2026-09-01", "2026-11-15")
+    # evaluation labels: the target policy (EUPHEMIA_DA_TARGET, default sdac), not the
+    # pinned model-input actuals (#431 C2)
+    actuals = cp.hourly_actuals(con, "2026-09-01", "2026-11-15", role="target")
     prices = prices.merge(actuals, on=["zone", "t"], how="inner", validate="many_to_one")
     results, tables = {}, []
     for arm, x in prices.groupby("arm"):

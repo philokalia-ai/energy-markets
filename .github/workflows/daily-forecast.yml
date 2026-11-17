@@ -52,6 +52,10 @@ concurrency:
 env:
   JULIA_VERSION: "1.13.4"
   JULIA_NUM_THREADS: 4
+  # Evaluation target of the scorer/exporters (#431 C2): empty = sdac (the default since
+  # 2026-11-17). Kill switch without a code change: repo variable EUPHEMIA_DA_TARGET=highest_seq.
+  # Model inputs are pinned separately (EUPHEMIA_DA_INPUT, default highest_seq).
+  EUPHEMIA_DA_TARGET: ${{ vars.EUPHEMIA_DA_TARGET }}
   # Weather source: the SELF-HOSTED open-meteo (a Service in the cluster the
   # runner pod is in; serves wind_speed_100m + shortwave_radiation since infra#9). No public
   # rate limits, no external dependency for the ex-ante product; if it is

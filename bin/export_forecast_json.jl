@@ -262,7 +262,7 @@ function export_zone_files()
     sd, ed = extrema(Date.(prices.market_date))
     # market_date is the Europe/Athens market day: its window starts at
     # 21:00/22:00 UTC on the previous UTC day, so fetch actuals from sd-1.
-    act = da_target_actuals(sd - Day(1), ed)  # EUPHEMIA_DA_TARGET (default highest_seq)
+    act = da_target_actuals(sd - Day(1), ed)  # EUPHEMIA_DA_TARGET (default sdac; highest_seq = kill switch)
     actmap = Dict{Tuple{String,DateTime},Float64}(
         (String(a.z), DateTime(a.t)) => Float64(a.act) for a in eachrow(act))
 
@@ -379,7 +379,7 @@ function export_map_json()
         for r in eachrow(scores))
 
     sd, ed = extrema(Date.(prices.market_date))
-    act = da_target_actuals(sd - Day(1), ed)  # EUPHEMIA_DA_TARGET (default highest_seq)
+    act = da_target_actuals(sd - Day(1), ed)  # EUPHEMIA_DA_TARGET (default sdac; highest_seq = kill switch)
     actmap = Dict{Tuple{String,DateTime},Float64}(
         (String(a.z), DateTime(a.t)) => Float64(a.act) for a in eachrow(act))
 

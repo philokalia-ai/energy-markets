@@ -398,6 +398,28 @@ Dated reminders and scoring-policy notes that do not change `code_version`.
   empty next-day lines: the unchanged 10:40 UTC cron is after the 10:00 UTC summer
   gate (winter gate 11:00 UTC). No schedule or clearing code-version change here.
 
+- **2026-11-17 — scoring policy `sdac-v1`: hourly evaluation target = SDAC (#431 PR C2,
+  owner decision 2026-11-16).** `EUPHEMIA_DA_TARGET` now defaults to `sdac`. That covers
+  the scorer, the actual charts, the scoreboard naives, collapse evaluation labels and the
+  TSFM evaluator: AT and DE_LU use SDAC sequence 1 instead of the EXAA sequence 2, and
+  DK1/DK2 use their main series (float-noise change only). Every other zone is identical.
+  Shadow diff (`docs/experiments/sdac-target-2026-11/`):
+  - live lead-1 physics MAE: AT 85.16 → 88.83, DE_LU 58.46 → 59.17;
+  - cv44 record: AT 18.00 → 20.43, DE_LU 19.09 → 20.20.
+
+  The full hourly history is rescored once by `.github/workflows/rescore-hourly.yml`
+  (snapshot artifact first; AT/DE_LU/DK1/DK2; q15 columns untouched). `forecast_scores` has
+  no policy column, so the policy is recorded here and in that run's summary. Rows scored
+  after the rescore run carry `TARGET_POLICY=sdac` in the scorer log.
+
+  **Model inputs are pinned separately:** `EUPHEMIA_DA_INPUT`, default `highest_seq`, covers
+  Timestral's price context, the GBM lag history and the collapse logistic's training labels
+  and features. Changing them is a separate model decision.
+
+  **Kill switch:** repo variable / env `EUPHEMIA_DA_TARGET=highest_seq`, then rescore-hourly
+  `action=restore restore_run_id=<run>`. That restores only that run's campaign keys, and
+  only rows not rescored since. No code_version bump.
+
 - **2026-11-16 — revisit the 10:40 UTC overlay refresh before 2027-03-28
   (#431).** The refresh (Timestral postsim + GBM lines) is scheduled in UTC.
   In winter it runs before the 11:00 UTC SDAC gate, but its site pickup at

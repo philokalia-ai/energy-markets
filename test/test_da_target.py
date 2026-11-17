@@ -73,11 +73,17 @@ class DaTargetTest(unittest.TestCase):
         self.assertEqual(dt.SDAC_SEQUENCE, FIX["sdac_sequence"])
 
     def test_policy_parsing(self):
-        self.assertEqual(dt.policy({}), "highest_seq")
-        self.assertEqual(dt.policy({dt.ENV: ""}), "highest_seq")
-        self.assertEqual(dt.policy({dt.ENV: " SDAC "}), "sdac")
+        # #431 C2: evaluation target defaults to sdac; model inputs stay pinned to highest_seq
+        self.assertEqual(dt.policy({}), "sdac")
+        self.assertEqual(dt.policy({dt.ENV: ""}), "sdac")
+        self.assertEqual(dt.policy({dt.ENV: " HIGHEST_SEQ "}), "highest_seq")
         with self.assertRaises(ValueError):
             dt.policy({dt.ENV: "exaa"})
+        self.assertEqual(dt.input_policy({}), "highest_seq")
+        self.assertEqual(dt.input_policy({dt.ENV: "sdac"}), "highest_seq")   # target never leaks
+        self.assertEqual(dt.input_policy({dt.INPUT_ENV: "sdac"}), "sdac")
+        with self.assertRaises(ValueError):
+            dt.input_policy({dt.INPUT_ENV: "exaa"})
 
     def test_cases_pure(self):
         for c in FIX["cases"]:
@@ -119,21 +125,43 @@ class DaTargetTest(unittest.TestCase):
         self.assert_frame(as_map(dt.hourly_actuals(con, lo, hi, target="sdac")), want_s)
         self.assert_frame(as_map(dt.hourly_actuals(con, lo, hi, target="highest_seq")), want_l)
         cp, ov = load("collapse_probability"), load("emit_tsfm_overlay")
-        with mock.patch.dict(os.environ, {dt.ENV: ""}):
-            legacy_cp = cp.hourly_actuals(con, lo, hi)
+        with mock.patch.dict(os.environ, {dt.ENV: "highest_seq"}):   # the kill switch
+            legacy_cp = cp.hourly_actuals(con, lo, hi, role="target")
             legacy_ov = ov.eval_actuals_duckdb(con, lo, hi)
             pd.testing.assert_frame_equal(srt(legacy_ov), srt(con.execute(ov.PRICE_SQL, [lo, hi]).df()))
             self.assert_frame(as_map(legacy_cp, "zone", "actual"), want_l)
             self.assert_frame(as_map(legacy_ov, "zone", "price"), want_l)
-        with mock.patch.dict(os.environ, {dt.ENV: "sdac"}):
+        cut = ov.day_start_utc("2026-11-11")
+        ctx_legacy = srt(con.execute(ov.PRICE_SQL, [cut - pd.Timedelta(hours=48), cut]).df())
+        for env in ({}, {dt.ENV: "sdac"}):   # the default target, and explicit
+            with mock.patch.dict(os.environ, env):
+                os.environ.pop(dt.INPUT_ENV, None)
+                if not env:
+                    os.environ.pop(dt.ENV, None)
+                self.assert_frame(as_map(cp.hourly_actuals(con, lo, hi, role="target"), "zone", "actual"), want_s)
+                self.assert_frame(as_map(ov.eval_actuals_duckdb(con, lo, hi), "zone", "price"), want_s)
+                # model inputs stay pinned: collapse's training actuals and Timestral's context
+                self.assert_frame(as_map(cp.hourly_actuals(con, lo, hi), "zone", "actual"), want_l)
+                pd.testing.assert_frame_equal(srt(ov.prices_duckdb(con, "2026-11-11", ctx_hours=24)), ctx_legacy)
+        with mock.patch.dict(os.environ, {dt.INPUT_ENV: "sdac"}):   # explicit opt-in only
             self.assert_frame(as_map(cp.hourly_actuals(con, lo, hi), "zone", "actual"), want_s)
-            self.assert_frame(as_map(ov.eval_actuals_duckdb(con, lo, hi), "zone", "price"), want_s)
-            # the model-input context is not routed through the policy
-            cut = ov.day_start_utc("2026-11-11")
-            pd.testing.assert_frame_equal(srt(ov.prices_duckdb(con, "2026-11-11", ctx_hours=24)),
-                                          srt(con.execute(ov.PRICE_SQL, [cut - pd.Timedelta(hours=48), cut]).df()))
         with mock.patch.dict(os.environ, {dt.ENV: "bogus"}), self.assertRaises(ValueError):
+            cp.hourly_actuals(con, lo, hi, role="target")
+        with mock.patch.dict(os.environ, {dt.INPUT_ENV: "bogus"}), self.assertRaises(ValueError):
             cp.hourly_actuals(con, lo, hi)
+        with self.assertRaises(ValueError):
+            cp.hourly_actuals(con, lo, hi, role="label")
+
+    def test_collapse_relabel_uses_target(self):
+        cp = load("collapse_probability")
+        pred = pd.DataFrame({"zone": ["AT", "AT", "GR"], "t": pd.to_datetime(["2026-11-10 00:00", "2026-11-10 01:00", "2026-11-10 00:00"]),
+                             "y": [0, 0, 1], "probability": [.1, .2, .9]})
+        target = pd.DataFrame({"zone": ["AT", "GR"], "t": pd.to_datetime(["2026-11-10 00:00", "2026-11-10 00:00"]),
+                               "actual": [-1.0, 5.0]})
+        out, dropped = cp.retarget_labels(pred, target)
+        self.assertEqual(dropped, 1)                       # AT 01:00 has no target actual
+        self.assertEqual(out.y.tolist(), [1, 0])           # labels from the target, not the input
+        self.assertEqual(out.probability.tolist(), [.1, .9])
 
 
 if __name__ == "__main__":

@@ -112,14 +112,17 @@ end
 # Day-ahead TARGET POLICY for the hourly actuals (#431 PR C). Python twin:
 # bin/da_target.py; shared fixtures: test/fixtures/da_target_cases.json.
 #
-# EUPHEMIA_DA_TARGET selects which auction an hourly "actual" is:
-#   highest_seq (default; unset/empty) — `resolution_aware_actuals`, unchanged:
-#       highest sequence, so EXAA (sequence 2) in AT and DE_LU.
-#   sdac — the SDAC auction only (`sdac_hourly_actuals`), the rule of
+# EUPHEMIA_DA_TARGET selects which auction an hourly EVALUATION "actual" is:
+#   sdac (default since 2026-11-17, #431 PR C2; unset/empty) — the SDAC auction
+#       only (`sdac_hourly_actuals`), the rule of
 #       docs/experiments/cv40-review-fixes/scripts/settlement_view.py.
-# Switching it changes published AT/DE_LU numbers and must come with a full
-# hourly rescore (the scorer rewrites only its last 7 days); see
-# docs/experiments/sdac-target-2026-11/README.md.
+#   highest_seq — the kill switch: `resolution_aware_actuals`, unchanged
+#       (highest sequence, so EXAA = sequence 2 in AT and DE_LU).
+# The flip shipped with the full hourly rescore (.github/workflows/rescore-hourly.yml;
+# the daily scorer rewrites only its last 7 days); see
+# docs/experiments/sdac-target-2026-11/README.md. Model INPUTS are a separate
+# setting (EUPHEMIA_DA_INPUT, default highest_seq, bin/da_target.py); nothing in
+# Julia reads settled prices as a model input.
 # ---------------------------------------------------------------------------
 
 """
@@ -139,12 +142,13 @@ const DA_RES_MINUTES = Dict("PT15M" => 15, "PT30M" => 30, "PT60M" => 60)
 """
     da_target_policy() -> :highest_seq | :sdac
 
-Reads `EUPHEMIA_DA_TARGET` (unset/empty = `:highest_seq`). Any other value
-throws: a typo must not silently score against the default target.
+Reads `EUPHEMIA_DA_TARGET` (unset/empty = `:sdac` since 2026-11-17; `highest_seq`
+is the kill switch). Any other value throws: a typo must not silently score
+against the default target.
 """
 function da_target_policy()
     v = lowercase(strip(get(ENV, "EUPHEMIA_DA_TARGET", "")))
-    isempty(v) && return :highest_seq
+    isempty(v) && return :sdac
     v in ("highest_seq", "sdac") ||
         error("EUPHEMIA_DA_TARGET=$(repr(v)): expected highest_seq or sdac")
     return Symbol(v)
@@ -153,8 +157,8 @@ end
 """
     da_target_actuals(sd, ed; contract="Day-ahead") -> DataFrame(z, t, act)
 
-The hourly actuals every scorer/exporter uses: `resolution_aware_actuals`
-under `highest_seq` (default), `sdac_hourly_actuals` under `sdac`.
+The hourly actuals every scorer/exporter uses: `sdac_hourly_actuals` under
+`sdac` (default), `resolution_aware_actuals` under `highest_seq` (kill switch).
 """
 da_target_actuals(sd::Date, ed::Date; contract::String="Day-ahead") =
     da_target_policy() === :sdac ? sdac_hourly_actuals(sd, ed; contract=contract) :

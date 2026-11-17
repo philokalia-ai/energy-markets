@@ -665,9 +665,10 @@
     <strong>bias</strong> (mean simulated&nbsp;−&nbsp;actual — negative means the model
     under-prices, which for a competitive counterfactual is a signal, not a bug), and
     <strong>correlation</strong> of hourly prices. Whole-sample, never cherry-picked.
-    One caveat on the target: for AT and DE_LU the hourly “actual” is currently the early
-    EXAA auction, not SDAC (their native 15-min scores use SDAC); a switch of the hourly
-    target to SDAC is pending.
+    The target is the SDAC auction everywhere: since 2026-11-17 the AT and DE_LU hourly
+    “actual” is SDAC (sequence&nbsp;1), as their native 15-min scores already were, and all
+    stored hourly scores were rescored on it. Before that date it was the early EXAA auction
+    there. The switch moved AT 85.16&nbsp;→&nbsp;88.83 and DE_LU 58.46&nbsp;→&nbsp;59.17 €/MWh on the live lead-1 physics forecast (2026-09-14&nbsp;→&nbsp;11-13); on the cv44 record (2024-07&nbsp;→&nbsp;2026-06) AT 18.00&nbsp;→&nbsp;20.43 and DE_LU 19.09&nbsp;→&nbsp;20.20 (MAE, €/MWh). The record tables below predate it.
     The record quoted here is <strong>cv37</strong> (the current model is cv44; its
     record figures will replace these once loaded): all 39 zones, 786 delivery
     days (2024-07-01 → 2026-08-26), 734,640 hourly cells matched against settled
