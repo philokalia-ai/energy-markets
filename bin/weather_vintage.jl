@@ -262,6 +262,85 @@ isdefined(@__MODULE__, :OPENMETEO_BREAKER_OPEN) || global OPENMETEO_BREAKER_OPEN
 "Arm (or disarm) the per-chunk public breaker; `reset_weather_fetch_log!` closes it."
 openmeteo_breaker_arm!(on::Bool=true) = (OPENMETEO_BREAKER_ARMED[] = on; OPENMETEO_BREAKER_OPEN[] = false; on)
 
+# Public-request pacer (retro only; armed by run_retro, #455 review): every request
+# to open-meteo's own servers first waits until its weighted-call count fits the
+# sliding 60 s and 3600 s windows at `headroom` × the free limits. A per-zone sleep
+# cannot bound this: batches differ in size (1–50 locations) and one zone makes up
+# to two requests per sleep. Process-wide (the limits are per IP and per wall
+# clock), so it spans chunks. The daily limit is not paced (waiting for the next
+# day is never useful inside a run); the 💸 lines report it. Kill switch:
+# EUPHEMIA_OPENMETEO_PUBLIC_PACE=0. Clock/sleep are Refs so tests use a virtual clock.
+isdefined(@__MODULE__, :OPENMETEO_PACER_ARMED) || global OPENMETEO_PACER_ARMED = Ref(false)
+isdefined(@__MODULE__, :OPENMETEO_PACE_LOG) || global OPENMETEO_PACE_LOG = Tuple{Float64,Float64}[]
+isdefined(@__MODULE__, :OPENMETEO_PACE_LOCK) || global OPENMETEO_PACE_LOCK = ReentrantLock()
+isdefined(@__MODULE__, :OPENMETEO_PACE_CLOCK) || global OPENMETEO_PACE_CLOCK = Ref{Any}(time)
+isdefined(@__MODULE__, :OPENMETEO_PACE_SLEEP) || global OPENMETEO_PACE_SLEEP = Ref{Any}(sleep)
+
+"Arm (or disarm) the public-request pacer (run_retro arms it)."
+openmeteo_pacer_arm!(on::Bool=true) = (OPENMETEO_PACER_ARMED[] = on; on)
+"True when public requests are paced: armed and not killed by EUPHEMIA_OPENMETEO_PUBLIC_PACE=0."
+openmeteo_pacer_active() = OPENMETEO_PACER_ARMED[] && get(ENV, "EUPHEMIA_OPENMETEO_PUBLIC_PACE", "1") != "0"
+
+"The pacer's sliding windows `(span_s, max weighted calls)`: `headroom` × the per-minute and per-hour limits."
+openmeteo_pace_windows(limits=openmeteo_free_limits(); headroom::Real=0.9) =
+    ((60.0, headroom * limits.minute), (3600.0, headroom * limits.hour))
+
+"""
+    openmeteo_pace_wait(log, t, w; windows=openmeteo_pace_windows()) -> seconds
+
+How long a request of weight `w` arriving at time `t` must wait so that, at its
+send time `t + wait`, every window `(span, cap)` holds the weights sent in the
+last `span` seconds plus `w` within `cap`. `log` is `(send_time, weight)` in
+send order; an entry leaves a window `span` seconds after it was sent. A request
+heavier than a cap on its own waits until that window is empty. Pure.
+"""
+function openmeteo_pace_wait(log::AbstractVector, t::Real, w::Real; windows=openmeteo_pace_windows())
+    wait = 0.0
+    for (span, cap) in windows
+        inwin = [e for e in log if e[1] > t - span]
+        s = sum(e -> e[2], inwin; init=0.0)
+        need = min(s + w - cap, s)          # weight that must leave the window first
+        need > 0 || continue
+        acc = 0.0
+        for (ti, wi) in inwin
+            acc += wi
+            if acc >= need
+                wait = max(wait, ti + span - t)
+                break
+            end
+        end
+    end
+    return wait
+end
+
+"""
+    openmeteo_pace!(w) -> seconds waited
+
+Block (via `OPENMETEO_PACE_SLEEP`) until a public request of weight `w` fits the
+pacer windows, then record it as sent. A no-op returning 0 unless
+`openmeteo_pacer_active()`.
+"""
+function openmeteo_pace!(w::Real)
+    openmeteo_pacer_active() || return 0.0
+    windows = openmeteo_pace_windows()
+    maxspan = maximum(first, windows)
+    waited = 0.0
+    lock(OPENMETEO_PACE_LOCK) do
+        while true
+            t = Float64(OPENMETEO_PACE_CLOCK[]())
+            filter!(e -> e[1] > t - maxspan, OPENMETEO_PACE_LOG)
+            d = openmeteo_pace_wait(OPENMETEO_PACE_LOG, t, w; windows)
+            if d <= 0
+                push!(OPENMETEO_PACE_LOG, (t, Float64(w)))
+                break
+            end
+            OPENMETEO_PACE_SLEEP[](d)
+            waited += d
+        end
+    end
+    return waited
+end
+
 # Per-batch fetch record for the self-diagnosing retro skip line (#431 R3). A plain
 # global (this file is included more than once; no const redefinition).
 isdefined(@__MODULE__, :WEATHER_FETCH_LOG) || global WEATHER_FETCH_LOG = NamedTuple[]
@@ -278,13 +357,14 @@ skipped by the breaker, and cache hits.
 function _log_weather_batch!(kind::AbstractString, n_cellhours::Int, primary_missing::Int,
                              action::Symbol, final_missing::Int, primary_first; public_ok::Bool=false,
                              weight::Real=0.0, nvars::Int=0, ndays::Int=0, pub_req::Int=0,
-                             pub_weight::Real=0.0, pub_fail::Int=0, pub_skip::Int=0, cache_hits::Int=0)
+                             pub_weight::Real=0.0, pub_fail::Int=0, pub_skip::Int=0, cache_hits::Int=0,
+                             pace_wait::Real=0.0)
     length(WEATHER_FETCH_LOG) >= 100_000 && popfirst!(WEATHER_FETCH_LOG)   # bounded in long processes
     push!(WEATHER_FETCH_LOG, (kind=String(kind), cellhours=n_cellhours, primary_missing=primary_missing,
                               action=action, final_missing=final_missing, primary_first=primary_first,
                               public_ok=public_ok, weight=Float64(weight), nvars=nvars, ndays=ndays,
                               pub_req=pub_req, pub_weight=Float64(pub_weight), pub_fail=pub_fail,
-                              pub_skip=pub_skip, cache_hits=cache_hits))
+                              pub_skip=pub_skip, cache_hits=cache_hits, pace_wait=Float64(pace_wait)))
     return nothing
 end
 
@@ -335,19 +415,21 @@ function weather_fetch_summary(log::AbstractVector=WEATHER_FETCH_LOG)
 end
 
 """
-    openmeteo_budget_lines(log=WEATHER_FETCH_LOG; span_days, chunk_days, n_zone_calls,
-                           throttle_s, limits=openmeteo_free_limits(), headroom=0.9) -> Vector{String}
+    openmeteo_budget_lines(log=WEATHER_FETCH_LOG; span_days, chunk_days,
+                           paced=openmeteo_pacer_active(), limits=openmeteo_free_limits(),
+                           headroom=0.9) -> Vector{String}
 
 The public-API cost of one retro chunk and a request size / rate that stays under
 open-meteo's free limits (`limits`, weighted calls per minute / hour / day, used at
 `headroom`). "Worst case" is the chunk with every batch served publicly and no cache
 (each batch's request weight, `openmeteo_call_weight`); "spent" is what the public
-requests of this chunk actually cost. `span_days` is the chunk's UTC span,
-`n_zone_calls` the throttled per-zone fetch calls (the sleep of
-`EUPHEMIA_OPENMETEO_ZONE_THROTTLE` = `throttle_s` precedes each). Pure.
+requests of this chunk actually cost. `span_days` is the chunk's UTC span;
+`paced` whether the public-request pacer (`openmeteo_pace!`, same `headroom`)
+bounds the rate — the per-zone sleep EUPHEMIA_OPENMETEO_ZONE_THROTTLE does not
+(uneven batch sizes, up to two requests per sleep). Pure.
 """
 function openmeteo_budget_lines(log::AbstractVector=WEATHER_FETCH_LOG; span_days::Int, chunk_days::Int,
-                                n_zone_calls::Int, throttle_s::Real,
+                                paced::Bool=openmeteo_pacer_active(),
                                 limits=openmeteo_free_limits(), headroom::Real=0.9)
     rs = [r for r in log if hasproperty(r, :weight)]
     isempty(rs) && return String[]
@@ -367,12 +449,13 @@ function openmeteo_budget_lines(log::AbstractVector=WEATHER_FETCH_LOG; span_days
                "(1 per location below 10 variables and 140/variables days) ⇒ at most " *
                "$(floor(Int, per_h / wc)) such chunk(s) per hour and $(floor(Int, per_d / wc)) per day " *
                "at $(round(Int, 100headroom))% of the limits")
-    nz = max(n_zone_calls, 1)
-    t_min = 60 * wc / (per_min * nz)
-    t_hour = 3600 * wc / (per_h * nz)
-    push!(out, "rate: a fully public chunk needs ≥ $(ceil(Int, wc / per_min)) min of fetching for the per-minute limit; " *
-               "EUPHEMIA_OPENMETEO_ZONE_THROTTLE ≥ $(round(t_min; digits=1)) s over $nz zone call(s) holds it " *
-               "(≥ $(round(t_hour; digits=1)) s if chunks fetch back to back within an hour); now $(throttle_s) s")
+    waited = sum((r.pace_wait for r in rs if hasproperty(r, :pace_wait)); init=0.0)
+    push!(out, "rate: a fully public chunk needs ≥ $(ceil(Int, wc / per_min)) min of fetching for the per-minute limit" *
+               (wc > per_h ? " and ≥ $(ceil(Int, 60 * wc / per_h)) min for the hourly one" : "") * "; " *
+               (paced ? "public requests are paced by weight to ≤ $(_fmt_calls(per_min))/min and ≤ $(_fmt_calls(per_h))/h " *
+                        "(waited $(round(Int, waited)) s this chunk; EUPHEMIA_OPENMETEO_PUBLIC_PACE=0 disables)" :
+                        "public pacing OFF — nothing but response latency bounds the per-minute rate " *
+                        "(the per-zone throttle does not; unset EUPHEMIA_OPENMETEO_PUBLIC_PACE=0)"))
     # Request size: the weight is per location, so locations per request do not
     # change it; the date window is free while v/10·d/14 ≤ 1, i.e. d ≤ 140/v.
     nmax = minimum(floor(Int, 140 / max(r.nvars, 1)) - max(r.ndays - span_days, 0) - 1 for r in rs)
@@ -400,7 +483,8 @@ drift (the R3 bug was exactly such a drift):
 Every request first consults the on-disk cache (`EUPHEMIA_OPENMETEO_CACHE_DIR`; off
 by default) and stores a complete past previous-runs answer there. With the retro
 breaker armed, a public request after an exhausted one in the same chunk fails at
-once. Every batch is recorded in `WEATHER_FETCH_LOG` for `weather_fetch_summary`
+once; with the retro pacer armed, every public request first waits until its weight
+fits the per-minute and per-hour windows (`openmeteo_pace!`). Every batch is recorded in `WEATHER_FETCH_LOG` for `weather_fetch_summary`
 and `openmeteo_budget_lines`, a failing one as `:failed` before the rethrow.
 """
 function _fetch_batch_with_fallback(kind::AbstractString, url::String, url_base::AbstractString,
@@ -414,6 +498,7 @@ function _fetch_batch_with_fallback(kind::AbstractString, url::String, url_base:
     nv, nd = shape === nothing ? (0, 0) : (shape.variables, shape.days)
     acct = Dict(:pub_req => 0, :pub_fail => 0, :pub_skip => 0, :hits => 0)
     pub_w = Ref(0.0)
+    pace_s = Ref(0.0)
     from_cache = Set{String}()
     # Body for `u`: the cache, else the network (public accounting + breaker).
     fetch_body = function (u::String)
@@ -424,6 +509,10 @@ function _fetch_batch_with_fallback(kind::AbstractString, url::String, url_base:
             acct[:pub_skip] += 1
             error("public open-meteo request skipped: an earlier public request in this chunk " *
                   "exhausted its retries (breaker open until the next chunk)")
+        end
+        if pub
+            s0 = openmeteo_url_shape(u)
+            pace_s[] += openmeteo_pace!(s0 === nothing ? 1.0 : openmeteo_call_weight(s0...))
         end
         b = try
             get_fn(u)
@@ -447,7 +536,8 @@ function _fetch_batch_with_fallback(kind::AbstractString, url::String, url_base:
     record!(action, primary_missing, final_missing, first_h; public_ok=false) =
         _log_weather_batch!(kind, n_ch, primary_missing, action, final_missing, first_h; public_ok,
                             weight=w, nvars=nv, ndays=nd, pub_req=acct[:pub_req], pub_weight=pub_w[],
-                            pub_fail=acct[:pub_fail], pub_skip=acct[:pub_skip], cache_hits=acct[:hits])
+                            pub_fail=acct[:pub_fail], pub_skip=acct[:pub_skip], cache_hits=acct[:hits],
+                            pace_wait=pace_s[])
     try
         http_failed = false
         used = url

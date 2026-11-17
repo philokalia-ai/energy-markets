@@ -162,9 +162,8 @@ jobs:
           EUPHEMIA_RETRO_ALONGSIDE: "1"     # never skip because of a live vintage, never supersede
           EUPHEMIA_RETRO_CHUNK_DAYS: ${{ inputs.chunk_days }}   # one weather fetch + one extra UTC-day clear per chunk
           EUPHEMIA_OPENMETEO_CACHE_DIR: ${{ github.workspace }}/.openmeteo-prevruns
-          # Public free limit 600 weighted calls/min: a fully public chunk is ≈3,200 calls
-          # (1 per location) over 156 throttled zone calls → ≥2.3 s each (the 💸 lines).
-          EUPHEMIA_OPENMETEO_ZONE_THROTTLE: "2.5"
+          # Public requests are paced by weighted calls in run_retro (≤540/min, ≤4,500/h;
+          # kill switch EUPHEMIA_OPENMETEO_PUBLIC_PACE=0), so no zone-throttle override here.
           EUPHEMIA_RETRO_DEADLINE_UTC: ${{ steps.guard.outputs.deadline }}
         run: |
           # No EUPHEMIA_RETRO_SUPERSEDE and no bucket credentials here, on purpose.

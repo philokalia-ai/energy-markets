@@ -1513,6 +1513,12 @@ function run_retro()
     # EUPHEMIA_RETRO_ABORT_ON_FETCH_FAIL=1 restores the old abort.
     skip_failed = get(ENV, "EUPHEMIA_RETRO_ABORT_ON_FETCH_FAIL", "0") != "1"
     openmeteo_breaker_arm!(skip_failed)
+    # Pace every public open-meteo request by its weighted-call count (≤ 90% of
+    # 600/min and 5000/h; #455 review: the per-zone sleep cannot bound it). Kill
+    # switch EUPHEMIA_OPENMETEO_PUBLIC_PACE=0. Never armed live.
+    openmeteo_pacer_arm!(true)
+    openmeteo_pacer_active() ||
+        println("  ⚠️ public open-meteo pacing OFF (EUPHEMIA_OPENMETEO_PUBLIC_PACE=0)")
     # With the on-disk previous-runs cache on, chunks sit on a fixed grid so a
     # re-dispatch issues the same requests (cache hits) wherever it resumes.
     cache_dir = openmeteo_cache_dir()
@@ -1554,10 +1560,8 @@ function run_retro()
             # Weather-track inputs at THIS lead's fixed vintage.
             reset_weather_fetch_log!()   # per-chunk fetch record for the skip diagnosis (#431 R3)
             res_src = Dict{String,String}(); load_src = Dict{String,String}()
-            n_zone_calls = 2 * length(ZONES) + (ML_INPUTS_ON ? 2 * length(ml_pilots0) : 0)
             budget() = for l in openmeteo_budget_lines(; span_days=Dates.value(last_utc - first_utc) + 1,
-                                                        chunk_days=chunk_days, n_zone_calls=n_zone_calls,
-                                                        throttle_s=OPENMETEO_ZONE_THROTTLE_S)
+                                                        chunk_days=chunk_days)
                 println("  💸 $l")
             end
             local fill_pred, preds, solar_preds
@@ -1712,6 +1716,7 @@ function run_retro()
                 "($(join(failed_chunks, "; "))) — re-dispatch to retry")
     end
     openmeteo_breaker_arm!(false)
+    openmeteo_pacer_arm!(false)
     Euphemia.MeritOrderBook.clear_thermometer_overrides!()
     println("\n" * "=" ^ 70)
     println("RETRO BACKFILL COMPLETE — $n_total retro rows written (reset_tag=$RESET_TAG)")

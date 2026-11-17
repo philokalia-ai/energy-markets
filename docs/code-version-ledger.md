@@ -433,7 +433,14 @@ Dated reminders and scoring-policy notes that do not change `code_version`.
     `calculateQueryWeight`) is per location `max(1, v/10 · max(1, d/14))`: our
     requests cost 1 call per location, so a fully public 14-day chunk of the 39-zone
     footprint is ≈3,200 calls, and chunks up to 34 days cost the same.
-  - The live run is unchanged: the cache is off and the breaker unarmed there.
+  - Every public open-meteo request in a retro run first waits until its weighted
+    calls fit sliding 60 s / 3600 s windows at 90% of the free limits (≤540/min,
+    ≤4,500/h; `openmeteo_pace!`, armed by `run_retro` only). The per-zone sleep could
+    not bound the rate (uneven batch sizes; one sleep before two ML requests: ≈656/min
+    on a fully public chunk with fast responses, #455 review). A fully public chunk now
+    takes ≥6 min of fetching, two back to back ≈63 min. The daily limit is not paced
+    (the `💸` lines report it). `EUPHEMIA_OPENMETEO_PUBLIC_PACE=0` disables the pacer.
+  - The live run is unchanged: the cache is off and the breaker and pacer unarmed there.
   - The nightly GFS-vintage capture (`bin/capture_gfs_vintages.jl`) now also archives
     cloud_cover and surface_pressure (the rest of `ML_RES_VARS`, via
     `fetch_ml_res_weather` over the RES cells), so `/data/gfs_vintages` covers every

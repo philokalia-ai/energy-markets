@@ -166,14 +166,70 @@ end
         for _ in 1:7; push!(log, rec(50, 2, 17)); end
         for _ in 1:28; push!(log, rec(50, 4, 15)); end
         push!(log, rec(25, 4, 15))
-        ls = openmeteo_budget_lines(log; span_days=15, chunk_days=14, n_zone_calls=156, throttle_s=0.6)
+        ls = openmeteo_budget_lines(log; span_days=15, chunk_days=14, paced=false)
         @test length(ls) == 4
         @test occursin("28 request(s), ≈1400 weighted call(s) spent, 37 cache hit(s)", ls[1])
         @test occursin("≈3200 weighted calls", ls[2])
         @test occursin("at most 1 such chunk(s) per hour and 2 per day", ls[2])
-        @test occursin("≥ 6 min of fetching", ls[3]) && occursin("now 0.6 s", ls[3])
+        @test occursin("≥ 6 min of fetching for the per-minute limit;", ls[3])
+        @test occursin("public pacing OFF", ls[3])
         @test occursin("a chunk of up to 34 day(s)", ls[4]) && occursin("≈229 calls/day at 14-day chunks, ≈94 at 34", ls[4])
-        @test isempty(openmeteo_budget_lines(NamedTuple[]; span_days=15, chunk_days=14, n_zone_calls=1, throttle_s=0))
+        push!(log, merge(log[1], (pace_wait=42.4,)))
+        ls = openmeteo_budget_lines(log; span_days=15, chunk_days=14, paced=true)
+        @test occursin("paced by weight to ≤ 540/min and ≤ 4500/h (waited 42 s this chunk", ls[3])
+        @test !occursin("hourly one", ls[3])                        # 3,250 < 4,500/h
+        for _ in 1:28; push!(log, rec(50, 4, 15)); end              # +1,400 → over the hourly cap
+        @test occursin("and ≥ 62 min for the hourly one", openmeteo_budget_lines(log; span_days=15, chunk_days=14)[3])
+        @test isempty(openmeteo_budget_lines(NamedTuple[]; span_days=15, chunk_days=14))
+    end
+
+    @testset "public pacer: sliding-window wait (pure) and the armed driver" begin
+        win = openmeteo_pace_windows()
+        @test win == ((60.0, 540.0), (3600.0, 4500.0))
+        @test openmeteo_pace_wait(Tuple{Float64,Float64}[], 0.0, 50.0) == 0.0
+        log = [(0.0, 500.0)]
+        @test openmeteo_pace_wait(log, 10.0, 40.0) == 0.0          # 540 fits exactly
+        @test openmeteo_pace_wait(log, 10.0, 41.0) == 50.0         # waits until t=60, when 500 leaves
+        log = [(0.0, 300.0), (20.0, 200.0), (30.0, 40.0)]
+        @test openmeteo_pace_wait(log, 30.0, 100.0) == 30.0        # the oldest 300 must leave (t=60)
+        @test openmeteo_pace_wait(log, 30.0, 400.0) == 50.0        # 300 + 200 must leave (t=80)
+        @test openmeteo_pace_wait(log, 30.0, 600.0) == 60.0        # heavier than the cap: window empty (t=90)
+        # hourly window: 4,500 sent over the last hour, minute window empty
+        hlog = [(Float64(60i), 75.0) for i in 0:59]
+        @test openmeteo_pace_wait(hlog, 3590.0, 50.0) == 10.0      # first 75 leaves at t=3600
+        @test openmeteo_pace_wait(hlog, 3590.0, 50.0; windows=((60.0, 540.0),)) == 0.0
+        # the driver: armed pacer + public fallback → waits on the injected clock
+        clock = Ref(0.0)
+        OPENMETEO_PACE_CLOCK[] = () -> clock[]; OPENMETEO_PACE_SLEEP[] = d -> (clock[] += d)
+        empty!(OPENMETEO_PACE_LOG); reset_weather_fetch_log!()
+        cells = [(48.0 + i, 16.0) for i in 1:50]; hours = openmeteo_request_hours(Date(2026, 9, 13), Date(2026, 9, 14))
+        full = _rcr_body(cells, hours); allnull = _rcr_body(cells, hours; isnull=(c, h) -> true)
+        q = "?latitude=" * join((c[1] for c in cells), ",") * "&longitude=" * join((c[2] for c in cells), ",") *
+            "&hourly=wind_speed_100m_previous_day1,shortwave_radiation_previous_day1&models=gfs_seamless" *
+            "&start_date=2026-09-13&end_date=2026-09-14&timezone=UTC"
+        PRI, PUB = "http://selfhosted.test/v1/forecast", "https://previous-runs-api.open-meteo.com/v1/forecast"
+        go() = _fetch_batch_with_fallback("res", PRI * q, PRI, PUB, cells, hours;
+            get_fn=u -> startswith(u, PRI) ? allnull : full,
+            parse_fn=b -> parse_openmeteo_response(b, cells; var_suffix="_previous_day1"),
+            prevruns=true, can_fallback=true)
+        quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
+        try
+            openmeteo_pacer_arm!(false)
+            quiet(() -> for _ in 1:12; go(); end)
+            @test clock[] == 0.0 && isempty(OPENMETEO_PACE_LOG)  # unarmed (live): untouched
+            openmeteo_pacer_arm!(true)
+            quiet(() -> for _ in 1:12; go(); end)               # 12 × 50 = 600 > 540
+            @test clock[] == 60.0                               # the 11th request waited one window
+            @test WEATHER_FETCH_LOG[end-1].pace_wait == 60.0 && WEATHER_FETCH_LOG[end].pace_wait == 0.0
+            withenv("EUPHEMIA_OPENMETEO_PUBLIC_PACE" => "0") do
+                @test !openmeteo_pacer_active()
+                quiet(() -> for _ in 1:20; go(); end)
+                @test clock[] == 60.0
+            end
+        finally
+            openmeteo_pacer_arm!(false); empty!(OPENMETEO_PACE_LOG)
+            OPENMETEO_PACE_CLOCK[] = time; OPENMETEO_PACE_SLEEP[] = sleep
+        end
     end
 
     @testset "grid-aligned retro chunks" begin

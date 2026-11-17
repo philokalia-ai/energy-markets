@@ -239,6 +239,9 @@ println()
         include(joinpath(@__DIR__, "test_retro_chunk_resilience.jl"))
         # GFS-vintage capture archives every ML_RES_VARS variable (stub fetchers).
         include(joinpath(@__DIR__, "test_capture_gfs_vintages.jl"))
+        # #455 review: weight-paced public requests on the real retro preparation
+        # loops (stub HTTP, virtual clock) stay under 90% of 600/min and 5000/h.
+        include(joinpath(@__DIR__, "test_openmeteo_pacing.jl"))
     end
 
     @testset "Weather Load Model" begin
