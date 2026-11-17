@@ -236,6 +236,12 @@ println()
         include(joinpath(@__DIR__, "test_weather_gapfill.jl"))
     end
 
+    @testset "Weather vintages from DuckDB" begin
+        # EUPHEMIA_WEATHER_DUCKDB shim + exporter pure parts on a temp DuckDB built
+        # from literal open-meteo JSON — no network, no extract.
+        include(joinpath(@__DIR__, "test_weather_duckdb.jl"))
+    end
+
     @testset "Weather Load Model" begin
         println("\n" * "=" ^ 60)
         println("Running Weather Load Model Tests...")
