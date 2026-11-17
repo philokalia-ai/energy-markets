@@ -5,10 +5,11 @@
 #   julia --project=. bin/export_weather_vintages.jl [START [END]]
 #
 # Env:
-#   WEATHER_VINTAGES_OUT   output DuckDB (default ~/armada/em-data/weather-vintages.duckdb;
+#   WEATHER_VINTAGES_OUT   output DuckDB (default data/weather-vintages.duckdb, git-ignored;
 #                          created if missing; must not be open by a reader while exporting)
-#   WEATHER_VINTAGES_URL   open-meteo forecast-family base (default the local instance
-#                          http://localhost:30555/v1/forecast)
+#   WEATHER_VINTAGES_URL   open-meteo forecast-family base of the instance to export
+#                          (default EUPHEMIA_OPENMETEO_PREVRUNS_URL; one of the two is
+#                          required, so the export never hits the public API by accident)
 #   WEATHER_VINTAGES_LAGS  vintage lags, comma-separated (default "1": `_previous_day1`;
 #                          "0" = the plain current-run variables)
 #   WEATHER_VINTAGES_CHUNK_DAYS  days per chunk / transaction (default 31)
@@ -173,13 +174,14 @@ function fetch_weather_chunk(base, batches, sfx, d0, d1, models; ntasks::Int=8, 
 end
 
 function export_weather_vintages(start::Date, stop::Date;
-                                 out=get(ENV, "WEATHER_VINTAGES_OUT", joinpath(homedir(), "armada", "em-data", "weather-vintages.duckdb")),
-                                 base=get(ENV, "WEATHER_VINTAGES_URL", "http://localhost:30555/v1/forecast"),
+                                 out=get(ENV, "WEATHER_VINTAGES_OUT", joinpath(dirname(@__DIR__), "data", "weather-vintages.duckdb")),
+                                 base=get(ENV, "WEATHER_VINTAGES_URL", get(ENV, "EUPHEMIA_OPENMETEO_PREVRUNS_URL", "")),
                                  lags=parse.(Int, split(get(ENV, "WEATHER_VINTAGES_LAGS", "1"), ',')),
                                  chunk_days=parse(Int, get(ENV, "WEATHER_VINTAGES_CHUNK_DAYS", "31")),
                                  redo=get(ENV, "WEATHER_VINTAGES_REDO", "nulls"),
                                  ntasks=parse(Int, get(ENV, "WEATHER_VINTAGES_TASKS", "8")),
                                  models=get(ENV, "EUPHEMIA_OPENMETEO_MODELS", "gfs_seamless"))
+    isempty(base) && error("set WEATHER_VINTAGES_URL (or EUPHEMIA_OPENMETEO_PREVRUNS_URL) to the open-meteo instance to export")
     occursin(',', models) && error("export one model at a time (got models=$models)")
     redo in ("nulls", "none", "all") || error("WEATHER_VINTAGES_REDO must be nulls|none|all")
     all(l -> 0 <= l <= 7, lags) || error("lags must be 0..7")

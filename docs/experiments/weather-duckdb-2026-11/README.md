@@ -23,7 +23,9 @@ middle step. Default behaviour is unchanged; the flag is off unless set.
   `models=gfs_seamless`, in 31-day chunks. Each chunk is one transaction: values,
   per-cell coverage and a log row. A rerun skips logged chunks without nulls
   (`WEATHER_VINTAGES_REDO=nulls`, the default), so rerunning after the rebuild fills
-  the rest. Output: `~/armada/em-data/weather-vintages.duckdb`
+  the rest. Source: `WEATHER_VINTAGES_URL` (else `EUPHEMIA_OPENMETEO_PREVRUNS_URL`;
+  required). Output: `WEATHER_VINTAGES_OUT` (default `data/weather-vintages.duckdb`; the
+  team's export is `em-data/weather-vintages.duckdb`)
   (`weather_vintages(lat, lon, var, time_utc, value)`, non-null values only,
   `weather_vintages_coverage`, `weather_vintages_chunks`, `weather_vintages_meta`).
 - `EUPHEMIA_WEATHER_DUCKDB=<path>` (`bin/weather_duckdb.jl`): `_openmeteo_get` and
@@ -66,4 +68,4 @@ writer or many readers.
 
 **Scale:** on a synthetic file the size of two years (105M rows, 693 MB), the 33 batch requests a market day's three fetches need take 1.2 s once warm (8.4 s on first open, including compilation). In the harness, weather fetching took about 11 s with the DuckDB file vs about 7 s over local HTTP, because of the one-time open and compilation per process. Prep and clearing time are otherwise unchanged (~7.5 min per day on 4 threads). The gain is no dependence on the server and no request load from 40 workers, not raw speed.
 
-**Full export:** `~/armada/em-data/weather-vintages.duckdb`, 2024-11-13 .. 2026-11-16, lag 1, 24 chunks at 3–9 s each. Only 2026-08-26 onward has data so far: chunks up to 2026-08-25 came back all-null, because the cluster rebuild hasn't reached them yet. Once the rebuild finishes, rerun `julia --project=. bin/export_weather_vintages.jl`. It redoes only chunks with nulls, and no worker may have the file open while it runs.
+**Full export:** `em-data/weather-vintages.duckdb` (the team data directory), 2024-11-13 .. 2026-11-16, lag 1, 24 chunks at 3–9 s each. Only 2026-08-26 onward has data so far: chunks up to 2026-08-25 came back all-null, because the cluster rebuild hasn't reached them yet. Once the rebuild finishes, rerun `bin/export_weather_vintages.jl` with the same `WEATHER_VINTAGES_OUT`/`WEATHER_VINTAGES_URL`. It redoes only chunks with nulls, and no worker may have the file open while it runs.
