@@ -154,10 +154,11 @@ reset_weather_fetch_log!() = empty!(WEATHER_FETCH_LOG)
 
 "Record one fetched batch: `kind` (\"res\", \"load\", \"ml-res\"), sizes, what fell back, what is still missing."
 function _log_weather_batch!(kind::AbstractString, n_cellhours::Int, primary_missing::Int,
-                             action::Symbol, final_missing::Int, primary_first)
+                             action::Symbol, final_missing::Int, primary_first; public_ok::Bool=false)
     length(WEATHER_FETCH_LOG) >= 100_000 && popfirst!(WEATHER_FETCH_LOG)   # bounded in long processes
     push!(WEATHER_FETCH_LOG, (kind=String(kind), cellhours=n_cellhours, primary_missing=primary_missing,
-                              action=action, final_missing=final_missing, primary_first=primary_first))
+                              action=action, final_missing=final_missing, primary_first=primary_first,
+                              public_ok=public_ok))
     return nothing
 end
 
@@ -165,7 +166,10 @@ end
     weather_fetch_summary(log=WEATHER_FETCH_LOG) -> Vector{String}
 
 One line per fetch kind: batches, how many the primary answered completely / all
-null / with gaps (and what the public API filled), the primary's first data hour,
+null / with gaps, how many gap batches the public API actually filled (its request
+succeeded and recovered at least one cell-hour) and how many cell-hours it recovered
+(a gap attempt whose public request failed counts as attempted, not filled), the
+primary's first data hour,
 and the cell-hours still missing after the fallback (> 0 means the public API
 could not serve them either: rate limit after retries, or beyond its coverage).
 `action` `:primary_off` marks a batch whose primary was missing with no fallback
@@ -179,11 +183,14 @@ function weather_fetch_summary(log::AbstractVector=WEATHER_FETCH_LOG)
         n_ok = count(r -> r.primary_missing == 0, rs)
         n_null = count(r -> r.action == :all_null, rs)
         n_gap = count(r -> r.action == :gaps, rs)
+        gaps_filled = [r for r in rs if r.action == :gaps && r.public_ok && r.final_missing < r.primary_missing]
+        n_gap_ok = length(gaps_filled)
+        ch_gap_ok = isempty(gaps_filled) ? 0 : sum(r.primary_missing - r.final_missing for r in gaps_filled)
         n_nofb = count(r -> r.primary_missing > 0 && r.action in (:none, :primary_off), rs)
         firsts = [r.primary_first for r in rs if r.primary_first !== nothing]
         fin = sum(r.final_missing for r in rs)
         push!(out, "$kind: $(length(rs)) batch(es); primary complete $n_ok, all-null→public $n_null, " *
-                   "gaps→public-filled $n_gap" * (n_nofb > 0 ? ", missing with NO fallback $n_nofb" : "") *
+                   "gaps→public attempted $n_gap, filled $n_gap_ok ($ch_gap_ok cell-hours)" * (n_nofb > 0 ? ", missing with NO fallback $n_nofb" : "") *
                    "; primary data from " * (isempty(firsts) ? "— (none)" : Dates.format(minimum(firsts), "yyyy-mm-dd HH:MM")) *
                    "; still missing $fin/$ch cell-hours")
     end
@@ -224,26 +231,29 @@ function _fetch_batch_with_fallback(kind::AbstractString, url::String, url_base:
     parsed = parse_fn(body)
     if http_failed
         miss = _batch_missing_cell_hours(parsed, batch, hours)
-        _log_weather_batch!(kind, n_ch, n_ch, :http_error, miss, nothing)
+        _log_weather_batch!(kind, n_ch, n_ch, :http_error, miss, nothing; public_ok=true)
         return parsed
     end
     primary_missing = _batch_missing_cell_hours(parsed, batch, hours)
     primary_first = _first_hour(parsed)
     mode = _public_fallback_mode(parsed, batch, hours; prevruns, can_fallback)
+    public_ok = false
     if mode === :all_null
         @warn "open-meteo primary ($url_base) returned all-null data; falling back to public API"
         parsed = parse_fn(get_fn(fb_url))
+        public_ok = true
     elseif mode === :gaps
         @warn "open-meteo primary ($url_base) left $primary_missing/$n_ch cell-hours null " *
               "(primary data from $primary_first); filling them from the public API"
         try
             _gapfill_merge!(parsed, parse_fn(get_fn(fb_url)), batch)
+            public_ok = true
         catch e
             @warn "public gap-fill failed — keeping the partial primary answer" exception=e
         end
     end
     action = (primary_missing > 0 && mode === :none) ? :primary_off : mode
     _log_weather_batch!(kind, n_ch, primary_missing, action,
-                        _batch_missing_cell_hours(parsed, batch, hours), primary_first)
+                        _batch_missing_cell_hours(parsed, batch, hours), primary_first; public_ok)
     return parsed
 end

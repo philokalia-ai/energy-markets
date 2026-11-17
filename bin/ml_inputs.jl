@@ -668,7 +668,8 @@ previous-runs API when `vintage_lag>0`, same retry/URL conventions.
 """
 function fetch_ml_res_weather(cells::Vector{Tuple{Float64,Float64}}, dates::Vector{Date};
                               vintage_lag::Int=0,
-                              models::String=get(ENV, "EUPHEMIA_OPENMETEO_MODELS", "gfs_seamless"))
+                              models::String=get(ENV, "EUPHEMIA_OPENMETEO_MODELS", "gfs_seamless"),
+                              get_fn=_openmeteo_get)
     0 <= vintage_lag <= 7 || error("fetch_ml_res_weather: vintage_lag must be 0..7 (got $vintage_lag)")
     isempty(cells) && return Dict{Tuple{Float64,Float64},Dict{DateTime,NTuple{4,Float64}}}()
     url_base = vintage_lag > 0 ?
@@ -682,9 +683,11 @@ function fetch_ml_res_weather(cells::Vector{Tuple{Float64,Float64}}, dates::Vect
     # had NONE, so a self-hosted instance answering all-null for old previous-run
     # dates emptied the overlay's RES for every pilot zone and the retro backfill
     # skipped 2026-09-14..10-17. The kill switch EUPHEMIA_OPENMETEO_GAPFILL=0
-    # restores the old no-fallback behaviour exactly.
+    # restores the old no-fallback behaviour exactly. Scoped to previous-run vintages
+    # (vintage_lag > 0): the live lag-0 ML fetch keeps its pre-R3 behaviour (one
+    # request, no public fallback, an HTTP error propagates), byte-identical to main.
     public_default = vintage_lag > 0 ? OPENMETEO_PREVRUNS_URL_DEFAULT : OPENMETEO_URL_DEFAULT
-    can_fallback = openmeteo_gapfill_enabled() && url_base != public_default
+    can_fallback = openmeteo_gapfill_enabled() && vintage_lag > 0 && url_base != public_default
     out = Dict{Tuple{Float64,Float64},Dict{DateTime,NTuple{4,Float64}}}()
     for lo in 1:OPENMETEO_BATCH:length(cells)
         batch = cells[lo:min(lo + OPENMETEO_BATCH - 1, length(cells))]
@@ -695,7 +698,7 @@ function fetch_ml_res_weather(cells::Vector{Tuple{Float64,Float64}}, dates::Vect
               "&start_date=" * Dates.format(d0, "yyyy-mm-dd") *
               "&end_date=" * Dates.format(d1, "yyyy-mm-dd") * "&timezone=UTC"
         parsed = _fetch_batch_with_fallback("ml-res", url, url_base, public_default, batch, req_hours;
-            get_fn=_openmeteo_get, parse_fn=b -> parse_ml_res_response(b, batch, sfx),
+            get_fn=get_fn, parse_fn=b -> parse_ml_res_response(b, batch, sfx),
             prevruns=vintage_lag > 0, can_fallback=can_fallback)
         merge!(out, parsed)
     end

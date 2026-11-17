@@ -404,8 +404,10 @@ Dated reminders and scoring-policy notes that do not change `code_version`.
     all-null answer with the public one and fills only the cell-hours missing from a
     partial answer; a primary hour is never overwritten.
   - The vintage is unchanged: the same `<var>_previous_day{n}` of the same
-    `models=` (gfs_seamless), only from another server. The live lag-0 path keeps
-    the all-null-only fallback.
+    `models=` (gfs_seamless), only from another server. The live lag-0 path is
+    unchanged: the pack fetchers keep their all-null/HTTP-error fallback, and the ML
+    RES fetch at lag 0 still has no fallback (one request, an HTTP error propagates);
+    its new fallback applies to previous-run vintages only (#453 review).
   - The retro `⛔` skip now names the failing input per zone, e.g.
     `RES[ml] 0/24 h: AT,… (39)`, and each chunk prints a `📡 weather` line per fetch
     kind: the primary's first data hour, what fell back, and what is still missing.

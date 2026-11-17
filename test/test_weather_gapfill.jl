@@ -96,7 +96,9 @@ withenv_gapfill(f, v) = withenv(f, "EUPHEMIA_OPENMETEO_GAPFILL" => v)
             @test _batch_missing_cell_hours(r, cells, hours) == 0
             s = weather_fetch_summary()
             @test length(s) == 1
-            @test occursin("ml-res: 5 batch(es); primary complete 1, all-null→public 1, gaps→public-filled 2", s[1])
+            # review P3: the failed public gap-fill counts as attempted, not filled
+            @test occursin("ml-res: 5 batch(es); primary complete 1, all-null→public 1, " *
+                           "gaps→public attempted 2, filled 1 (54 cell-hours)", s[1])
             @test occursin("primary data from 2026-10-11 00:00", s[1])
             @test occursin("still missing 54/480 cell-hours", s[1])
         end
@@ -113,6 +115,73 @@ withenv_gapfill(f, v) = withenv(f, "EUPHEMIA_OPENMETEO_GAPFILL" => v)
             @test_throws ErrorException run(u -> error("down"); can_fallback=false)
             s = weather_fetch_summary()
             @test occursin("missing with NO fallback 2", s[1]) && occursin("primary data from 2026-10-12 03:00", s[1])
+        end
+    end
+
+    @testset "gap-fill summary: exhausted 429 is not a fill (review P3)" begin
+        withenv_gapfill("1") do
+            reset_weather_fetch_log!()
+            r = run(stub(partial; public_body=ErrorException("HTTP 429 after retries")))
+            @test _batch_missing_cell_hours(r, cells, hours) == 54
+            s = weather_fetch_summary()
+            @test occursin("gaps→public attempted 1, filled 0 (0 cell-hours)", s[1])
+            @test occursin("still missing 54/96 cell-hours", s[1])
+            # a public answer that is itself null in the gap recovers nothing → not filled
+            reset_weather_fetch_log!()
+            run(stub(partial; public_body=allnull))
+            @test occursin("gaps→public attempted 1, filled 0 (0 cell-hours)", weather_fetch_summary()[1])
+        end
+    end
+
+    @testset "ML RES fetch: fallback only for previous-run vintages (review P2)" begin
+        mlbody(cs, hs; sfx="", isnull=false) = "[" * join(map(cs) do c
+            t = join(("\"" * Dates.format(h, "yyyy-mm-ddTHH:MM") * "\"" for h in hs), ",")
+            v(x) = join((isnull ? "null" : x for _ in hs), ",")
+            """{"latitude":$(c[1]),"longitude":$(c[2]),"hourly":{"time":[$t],""" *
+            """"wind_speed_100m$sfx":[$(v("5.0"))],"shortwave_radiation$sfx":[$(v("100.0"))],""" *
+            """"cloud_cover$sfx":[$(v("10.0"))],"surface_pressure$sfx":[$(v("1000.0"))]}}"""
+        end, ",") * "]"
+        days = [Date(2026, 10, 11), Date(2026, 10, 12)]
+        LIVE_PRI = "http://open-meteo.local/v1/forecast"
+        mlstub(primary; public, calls) = u -> begin
+            push!(calls, u)
+            if startswith(u, "https://")
+                public isa Exception ? throw(public) : public
+            else
+                primary isa Exception ? throw(primary) : primary
+            end
+        end
+        for flag in ("1", "0")
+            withenv("EUPHEMIA_OPENMETEO_GAPFILL" => flag, "EUPHEMIA_OPENMETEO_URL" => LIVE_PRI,
+                    "EUPHEMIA_OPENMETEO_PREVRUNS_URL" => LIVE_PRI) do
+                # live lag 0, self-hosted all-null → ONE request, empty result (as on main)
+                calls = String[]
+                r = fetch_ml_res_weather(cells, days; vintage_lag=0,
+                        get_fn=mlstub(mlbody(cells, hours; isnull=true); public=mlbody(cells, hours), calls))
+                @test length(calls) == 1 && startswith(calls[1], LIVE_PRI)
+                @test all(isempty(get(r, c, Dict())) for c in cells)
+                # live lag 0, self-hosted partial → ONE request, partial kept
+                calls = String[]
+                fetch_ml_res_weather(cells, days; vintage_lag=0,
+                        get_fn=mlstub(mlbody(cells, hours[1:10]); public=mlbody(cells, hours), calls))
+                @test length(calls) == 1
+                # live lag 0, HTTP error → propagates (the caller keeps its pack series), no public call
+                calls = String[]
+                @test_throws ErrorException fetch_ml_res_weather(cells, days; vintage_lag=0,
+                        get_fn=mlstub(ErrorException("connection refused"); public=mlbody(cells, hours), calls))
+                @test length(calls) == 1
+                # previous-run lag 1, all-null → public fallback only with the switch on
+                calls = String[]
+                r = fetch_ml_res_weather(cells, days; vintage_lag=1,
+                        get_fn=mlstub(mlbody(cells, hours; sfx="_previous_day1", isnull=true);
+                                      public=mlbody(cells, hours; sfx="_previous_day1"), calls))
+                if flag == "1"
+                    @test length(calls) == 2 && startswith(calls[2], OPENMETEO_PREVRUNS_URL_DEFAULT)
+                    @test all(length(r[c]) == 48 for c in cells)
+                else
+                    @test length(calls) == 1 && all(isempty(get(r, c, Dict())) for c in cells)
+                end
+            end
         end
     end
 
