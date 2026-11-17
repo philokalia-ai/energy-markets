@@ -392,6 +392,7 @@ function fetch_load_weather(cells::Vector{Tuple{Float64,Float64}}, dates::Vector
     sfx = vintage_lag > 0 ? "_previous_day$(vintage_lag)" : ""
     vintage_lag > 0 &&
         println("  🕰️ vintage fetch: previous_day$(vintage_lag) via $url_base")
+    req_hours = openmeteo_request_hours(d0, d1)
     out = Dict{Tuple{Float64,Float64},Dict{DateTime,Tuple{Float64,Float64}}}()
     for lo in 1:LOAD_OPENMETEO_BATCH:length(cells)
         batch = cells[lo:min(lo + LOAD_OPENMETEO_BATCH - 1, length(cells))]
@@ -402,23 +403,13 @@ function fetch_load_weather(cells::Vector{Tuple{Float64,Float64}}, dates::Vector
               "&start_date=" * Dates.format(d0, "yyyy-mm-dd") *
               "&end_date=" * Dates.format(d1, "yyyy-mm-dd") * "&timezone=UTC"
         archive || (url *= "&models=" * models)
-        body = try
-            _load_openmeteo_get(url)
-        catch e
-            # Self-hosted instance down → fall back to the public API (mirrors
-            # fetch_weather in weather_res.jl).
-            can_fallback || rethrow(e)
-            @warn "open-meteo primary ($url_base) failed; falling back to public API" exception=e
-            _load_openmeteo_get(replace(url, url_base => public_default))
-        end
-        parsed = parse_load_weather_response(body, batch; var_suffix=sfx)
-        # Null-data fallback (previous_dayN the instance can't serve → HTTP 200
-        # with all-null arrays the parser drops): fall through to the public API.
-        if can_fallback && _batch_all_empty(parsed, batch)
-            @warn "open-meteo primary ($url_base) returned all-null data; falling back to public API"
-            parsed = parse_load_weather_response(
-                _load_openmeteo_get(replace(url, url_base => public_default)), batch; var_suffix=sfx)
-        end
+        # HTTP error / all-null / (previous-runs) partial primary answer → the public
+        # API of the SAME family for this batch (mirrors fetch_weather; shared
+        # driver `_fetch_batch_with_fallback`, weather_vintage.jl, #431 R3).
+        parsed = _fetch_batch_with_fallback("load", url, url_base, public_default, batch, req_hours;
+            get_fn=_load_openmeteo_get,
+            parse_fn=b -> parse_load_weather_response(b, batch; var_suffix=sfx),
+            prevruns=vintage_lag > 0, can_fallback=can_fallback)
         merge!(out, parsed)
     end
     return out

@@ -230,6 +230,12 @@ println()
         include(joinpath(@__DIR__, "test_weather_res.jl"))
     end
 
+    @testset "Weather gap-fill + retro skip diagnosis" begin
+        # #431 R3: public gap-fill of a self-hosted previous-runs primary (stub
+        # HTTP closure) and the per-input ⛔ reasons — no network, no DB.
+        include(joinpath(@__DIR__, "test_weather_gapfill.jl"))
+    end
+
     @testset "Weather Load Model" begin
         println("\n" * "=" ^ 60)
         println("Running Weather Load Model Tests...")

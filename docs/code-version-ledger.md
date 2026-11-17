@@ -391,6 +391,27 @@ Dated reminders and scoring-policy notes that do not change `code_version`.
     in-sample — calibration overlaps)". The zone charts keep reconstructed days with
     the ↺ mark, and a reconstruction never replaces a live day there.
   - Rollback: `EXPORT_LIVE_RETRO=1` on the export steps restores the old pooling.
+- **2026-11-17 — previous-runs weather: public gap-fill of the self-hosted instance
+  (#431 R3; input plumbing, no code_version change).** The cv44 backfill run
+  43990408427 skipped 2026-09-14..10-17. The self-hosted open-meteo has
+  previous-run data only from about 2026-10-17 03:00 UTC. For earlier dates it
+  answered HTTP 200 all-null: the pack fetchers fell back to the public API, but the
+  ML overlay's RES fetch (`fetch_ml_res_weather`) had no fallback, so the overlay
+  emptied RES for all 39 pilot zones. The chunk straddling the boundary came back
+  partial, which nothing filled.
+  - Now all three previous-runs fetchers (pack RES, pack load, ML RES) share one
+    driver (`_fetch_batch_with_fallback`, `bin/weather_vintage.jl`). It replaces an
+    all-null answer with the public one and fills only the cell-hours missing from a
+    partial answer; a primary hour is never overwritten.
+  - The vintage is unchanged: the same `<var>_previous_day{n}` of the same
+    `models=` (gfs_seamless), only from another server. The live lag-0 path is
+    unchanged: the pack fetchers keep their all-null/HTTP-error fallback, and the ML
+    RES fetch at lag 0 still has no fallback (one request, an HTTP error propagates);
+    its new fallback applies to previous-run vintages only (#453 review).
+  - The retro `⛔` skip now names the failing input per zone, e.g.
+    `RES[ml] 0/24 h: AT,… (39)`, and each chunk prints a `📡 weather` line per fetch
+    kind: the primary's first data hour, what fell back, and what is still missing.
+  - Rollback: `EUPHEMIA_OPENMETEO_GAPFILL=0` restores the old fetch behaviour exactly.
 - **2026-11-16 — owner-approved GBM strict as-of default from 2026-11-17
   (#431 D2).** GBM rows freeze at their delivery-day gate; `MODEL_LINES_STRICT_ASOF=0`
   restores the #439 non-strict path, and `MODEL_LINES_REWRITE_PAST=1` permits explicit

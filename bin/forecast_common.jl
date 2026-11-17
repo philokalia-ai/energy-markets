@@ -128,6 +128,41 @@ function expected_market_day_hours(d::Date)
 end
 
 """
+    input_coverage_reasons(day, zones, load_preds, res_preds;
+                           load_src=Dict(), res_src=Dict()) -> Vector{String}
+
+Why each of `zones` is not covered for `day` on the weather track (#431 R3), so a
+`⛔` skip line names the failing INPUT instead of only the zones. Per zone and per
+input — load (`load_preds`, the eligibility fill) and RES (`res_preds`) — the hours
+of the Athens market window present out of expected, tagged with the input's
+source (`load_src` / `res_src`: zone → e.g. "ml" for the LightGBM overlay; default
+"pack"); "absent" when the zone has no series at all. Zones sharing the same
+reason are grouped: `"RES[ml] 0/24 h: AT,BE,… (39)"`. A fully covered zone yields
+nothing. Pure.
+"""
+function input_coverage_reasons(day::Date, zones,
+                                load_preds::AbstractDict, res_preds::AbstractDict;
+                                load_src::AbstractDict=Dict{String,String}(),
+                                res_src::AbstractDict=Dict{String,String}())
+    expected = expected_market_day_hours(day)
+    n = length(expected)
+    part(name, preds, src, z) = begin
+        tag = "$name[$(get(src, z, "pack"))]"
+        zp = get(preds, z, nothing)
+        zp === nothing && return "$tag absent"
+        k = count(h -> haskey(zp, h), expected)
+        k == n ? nothing : "$tag $k/$n h"
+    end
+    groups = Dict{String,Vector{String}}()
+    for z in zones
+        ps = filter(!isnothing, [part("load", load_preds, load_src, z), part("RES", res_preds, res_src, z)])
+        isempty(ps) && continue
+        push!(get!(groups, join(ps, " + "), String[]), String(z))
+    end
+    return ["$r: $(join(sort(zs), ",")) ($(length(zs)))" for (r, zs) in sort(collect(groups); by=first)]
+end
+
+"""
     stitch_market_day(d::Date, hourly_prev::Dict{DateTime,Float64},
                       hourly_curr::Dict{DateTime,Float64})
         -> (stitched, missing_hours, expected)
