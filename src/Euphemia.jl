@@ -160,6 +160,7 @@ end
 function __init__()
     DotEnv.load!(".")
     # Runtime (not precompile-time) environment overrides.
+    _init_pg_pool!()  # empty runtime-sized pool, before backend initialization
     RESULTS_DB_PATH[] = get(ENV, "EUPHEMIA_RESULTS_DB", "data/results.duckdb")
     # Ex-ante flow lag: read at runtime so the precompiled image doesn't bake in
     # whatever EUPHEMIA_FLOW_ASOF_LAG was set (or unset) at precompile time.

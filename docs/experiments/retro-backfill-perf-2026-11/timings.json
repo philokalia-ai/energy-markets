@@ -1,0 +1,139 @@
+{
+  "metadata": {
+    "source": "ddbeead",
+    "clearing_code_version": 44,
+    "julia": "1.13.4",
+    "source_extract": "euphemia-live-20261115.duckdb",
+    "input_fixture_sha256": "ed15507e3192b916e94a793d50f7e6703babdeedcc95ba3abbeff0889116b7ed",
+    "information_cutoff": "market day minus 1 at 06:30 UTC",
+    "days": [
+      "2026-09-14",
+      "2026-09-15"
+    ],
+    "zones": 39,
+    "cpu_affinity": {
+      "serial4": [
+        60,
+        61,
+        62,
+        63,
+        64,
+        65,
+        66,
+        67
+      ],
+      "parallel2": {
+        "worker1": [
+          60,
+          61,
+          62,
+          63
+        ],
+        "worker2": [
+          64,
+          65,
+          66,
+          67
+        ]
+      }
+    },
+    "julia_threads_per_process": 4,
+    "duckdb_threads_per_process": 2,
+    "duckdb_memory_limit": "4GB",
+    "production_postgres_access": false,
+    "forecast_database_writes": false,
+    "public_weather_fetched_once": true
+  },
+  "weather_preparation_seconds": {
+    "load": 28.42925500869751,
+    "res": 113.94397592544556,
+    "ml": 160.53758096694946,
+    "http_retry_nested": 214.98171019554138
+  },
+  "serial4": {
+    "command_wall_seconds": 591.75,
+    "cpu_percent": 143,
+    "days": [
+      {
+        "day": "2026-09-14",
+        "wall": 333.58114981651306,
+        "sql": 29.573063373565674,
+        "queries": 1919.0,
+        "rss": 4001562624.0,
+        "cpu_seconds": 482.49489700000004,
+        "threads": 4.0,
+        "phases": {
+          "model_build": 7.233242988586426,
+          "MPCC.solve_mpcc_market_clearing": 123.17463970184326,
+          "mz_rebuild_anchored": 3.5728399753570557,
+          "mz_solve_pass": 133.6732840538025,
+          "_create_multi_zone_order_book_merit": 35.830739974975586,
+          "optimize": 246.15691900253296,
+          "write_csv": 0.0008268356323242188
+        }
+      },
+      {
+        "day": "2026-09-15",
+        "wall": 241.4328408241272,
+        "sql": 16.856563568115234,
+        "queries": 1081.0,
+        "rss": 4126425088.0,
+        "cpu_seconds": 348.8258900000001,
+        "threads": 4.0,
+        "phases": {
+          "model_build": 5.44187331199646,
+          "MPCC.solve_mpcc_market_clearing": 119.36836791038513,
+          "mz_rebuild_anchored": 2.217164993286133,
+          "mz_solve_pass": 102.78179621696472,
+          "_create_multi_zone_order_book_merit": 16.92357087135315,
+          "optimize": 214.41361498832703,
+          "write_csv": 0.0007560253143310547
+        }
+      }
+    ]
+  },
+  "parallel2": {
+    "command_wall_seconds": 353.71,
+    "cpu_percent": 268,
+    "days": [
+      {
+        "day": "2026-09-15",
+        "wall": 321.2430248260498,
+        "sql": 32.372753381729126,
+        "queries": 1723.0,
+        "rss": 3970330624.0,
+        "cpu_seconds": 448.065889,
+        "threads": 4.0,
+        "phases": {
+          "model_build": 8.004175186157227,
+          "MPCC.solve_mpcc_market_clearing": 130.32656002044678,
+          "mz_rebuild_anchored": 4.05703592300415,
+          "mz_solve_pass": 110.2407078742981,
+          "_create_multi_zone_order_book_merit": 38.03334999084473,
+          "optimize": 228.7548632621765,
+          "write_csv": 0.0007750988006591797
+        }
+      },
+      {
+        "day": "2026-09-14",
+        "wall": 336.4496359825134,
+        "sql": 30.264268398284912,
+        "queries": 1949.0,
+        "rss": 3939737600.0,
+        "cpu_seconds": 464.061514,
+        "threads": 4.0,
+        "phases": {
+          "model_build": 7.377841472625732,
+          "MPCC.solve_mpcc_market_clearing": 123.42227292060852,
+          "mz_rebuild_anchored": 3.796088695526123,
+          "mz_solve_pass": 134.80211305618286,
+          "_create_multi_zone_order_book_merit": 36.15040612220764,
+          "optimize": 247.39132285118103,
+          "write_csv": 0.0007870197296142578
+        }
+      }
+    ]
+  },
+  "speedup": 1.6729806903960873,
+  "wall_reduction_fraction": 0.4022644697929869
+}

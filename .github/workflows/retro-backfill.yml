@@ -40,6 +40,11 @@ on:
         description: "Days per weather-fetch chunk (≤34 keeps every public request at 1 call per location)"
         required: true
         default: "14"
+      workers:
+        description: "Independent chunk processes (1 = original path; 2 = opt-in, eight CPUs total)"
+        type: choice
+        options: ["1", "2"]
+        default: "1"
       score:
         description: "Score the written rows after the reconstruction"
         type: boolean
@@ -160,14 +165,16 @@ jobs:
           EUPHEMIA_FORECAST_RETRO_ASOF: ${{ inputs.end }}
           EUPHEMIA_FORECAST_RESET_TAG: ${{ inputs.reset_tag }}
           EUPHEMIA_RETRO_ALONGSIDE: "1"     # never skip because of a live vintage, never supersede
-          EUPHEMIA_RETRO_CHUNK_DAYS: ${{ inputs.chunk_days }}   # one weather fetch + one extra UTC-day clear per chunk
+          EUPHEMIA_RETRO_CHUNK_DAYS: ${{ inputs.chunk_days }}   # weather batched per chunk; two issuance-specific UTC clears per market day
           EUPHEMIA_OPENMETEO_CACHE_DIR: ${{ github.workspace }}/.openmeteo-prevruns
-          # Public requests are paced by weighted calls in run_retro (≤540/min, ≤4,500/h;
-          # kill switch EUPHEMIA_OPENMETEO_PUBLIC_PACE=0), so no zone-throttle override here.
+          # Public requests are paced by weighted calls in run_retro (≤540/min, ≤4,500/h in
+          # total; with workers=2 each process gets half; kill switch
+          # EUPHEMIA_OPENMETEO_PUBLIC_PACE=0), so no zone-throttle override here.
           EUPHEMIA_RETRO_DEADLINE_UTC: ${{ steps.guard.outputs.deadline }}
+          RETRO_WORKERS: ${{ inputs.workers }}
         run: |
           # No EUPHEMIA_RETRO_SUPERSEDE and no bucket credentials here, on purpose.
-          julia --project=. bin/daily_forecast.jl
+          python3 bin/run_retro_backfill.py --workers "${RETRO_WORKERS:-1}"
 
       - name: Save open-meteo previous-runs cache
         if: ${{ always() && hashFiles('.openmeteo-prevruns/*.json') != '' }}

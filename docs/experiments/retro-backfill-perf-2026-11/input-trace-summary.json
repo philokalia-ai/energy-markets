@@ -1,0 +1,739 @@
+{
+  "2026-09-14": {
+    "families": {
+      "analogue_flow_day_relation": {
+        "calls": 805,
+        "execute_s": 6.056356191635132
+      },
+      "feed_anchor": {
+        "calls": 78,
+        "execute_s": 7.689835548400879
+      },
+      "generator_registry": {
+        "calls": 156,
+        "execute_s": 5.682600021362305
+      },
+      "jao": {
+        "calls": 16,
+        "execute_s": 1.4481234550476074
+      },
+      "other": {
+        "calls": 84,
+        "execute_s": 3.240065336227417
+      },
+      "fleet_hydro_batch": {
+        "calls": 38,
+        "execute_s": 2.0182974338531494
+      },
+      "transmission_outages": {
+        "calls": 4,
+        "execute_s": 1.2053048610687256
+      },
+      "day_ahead_load": {
+        "calls": 102,
+        "execute_s": 0.7653663158416748
+      },
+      "analogue_load_history": {
+        "calls": 78,
+        "execute_s": 0.7624673843383789
+      },
+      "reservoir": {
+        "calls": 214,
+        "execute_s": 0.994619607925415
+      },
+      "registry_quarantine_warnings": {
+        "calls": 156,
+        "execute_s": 0.36234545707702637
+      },
+      "day_ahead_res": {
+        "calls": 106,
+        "execute_s": 0.41037869453430176
+      },
+      "offered_atc": {
+        "calls": 128,
+        "execute_s": 1.163243293762207
+      }
+    },
+    "query_summary_sha256": "10e7bb725dc8ed6e74692dde9e2433b4a54fc9b9e85709c3fa00bf3c93bae897",
+    "forecast_sha256": "c75fa919e8a128fcab7a9c6975b22861b6259c45fc8f9b4bcf1c3eab0d4245d7",
+    "forecast_rows": 936,
+    "trace_sha256": "1dabd306745a1977d99ecc06cc30562c1b26ea50eb520bc4537ddce4a3efefcd",
+    "reuse": {
+      "analogue_flow_day_relation": {
+        "calls": 805,
+        "distinct_query_args_issuance": 257,
+        "distinct_query_args": 257
+      },
+      "analogue_load_history": {
+        "calls": 78,
+        "distinct_query_args_issuance": 78,
+        "distinct_query_args": 78
+      },
+      "day_ahead_load": {
+        "calls": 102,
+        "distinct_query_args_issuance": 78,
+        "distinct_query_args": 78
+      },
+      "day_ahead_res": {
+        "calls": 106,
+        "distinct_query_args_issuance": 82,
+        "distinct_query_args": 82
+      },
+      "feed_anchor": {
+        "calls": 78,
+        "distinct_query_args_issuance": 78,
+        "distinct_query_args": 78
+      },
+      "fleet_hydro_batch": {
+        "calls": 38,
+        "distinct_query_args_issuance": 6,
+        "distinct_query_args": 6
+      },
+      "generator_registry": {
+        "calls": 156,
+        "distinct_query_args_issuance": 156,
+        "distinct_query_args": 156
+      },
+      "jao": {
+        "calls": 16,
+        "distinct_query_args_issuance": 4,
+        "distinct_query_args": 4
+      },
+      "offered_atc": {
+        "calls": 128,
+        "distinct_query_args_issuance": 92,
+        "distinct_query_args": 92
+      },
+      "other": {
+        "calls": 84,
+        "distinct_query_args_issuance": 78,
+        "distinct_query_args": 78
+      },
+      "registry_quarantine_warnings": {
+        "calls": 156,
+        "distinct_query_args_issuance": 78,
+        "distinct_query_args": 78
+      },
+      "reservoir": {
+        "calls": 214,
+        "distinct_query_args_issuance": 144,
+        "distinct_query_args": 144
+      },
+      "transmission_outages": {
+        "calls": 4,
+        "distinct_query_args_issuance": 2,
+        "distinct_query_args": 2
+      }
+    },
+    "zone_queries": {
+      "AT": {
+        "calls": 65,
+        "execute_s": 0.749945878982544,
+        "duckdb_lock_wait_s": 16.44747042655945
+      },
+      "BE": {
+        "calls": 56,
+        "execute_s": 0.9337561130523682,
+        "duckdb_lock_wait_s": 16.25495481491089
+      },
+      "BG": {
+        "calls": 52,
+        "execute_s": 1.2348461151123047,
+        "duckdb_lock_wait_s": 14.774016857147217
+      },
+      "CH": {
+        "calls": 63,
+        "execute_s": 0.5539443492889404,
+        "duckdb_lock_wait_s": 15.776968717575073
+      },
+      "CZ": {
+        "calls": 45,
+        "execute_s": 0.7281036376953125,
+        "duckdb_lock_wait_s": 14.510284423828125
+      },
+      "DE_LU": {
+        "calls": 44,
+        "execute_s": 0.9445021152496338,
+        "duckdb_lock_wait_s": 14.72452163696289
+      },
+      "DK1": {
+        "calls": 45,
+        "execute_s": 0.7401254177093506,
+        "duckdb_lock_wait_s": 13.24161171913147
+      },
+      "DK2": {
+        "calls": 40,
+        "execute_s": 0.4244191646575928,
+        "duckdb_lock_wait_s": 13.424474954605103
+      },
+      "EE": {
+        "calls": 42,
+        "execute_s": 0.4727134704589844,
+        "duckdb_lock_wait_s": 13.718120336532593
+      },
+      "ES": {
+        "calls": 45,
+        "execute_s": 0.9511358737945557,
+        "duckdb_lock_wait_s": 12.236278533935547
+      },
+      "FI": {
+        "calls": 48,
+        "execute_s": 0.6248483657836914,
+        "duckdb_lock_wait_s": 14.096182107925415
+      },
+      "FR": {
+        "calls": 65,
+        "execute_s": 1.1344451904296875,
+        "duckdb_lock_wait_s": 15.043869256973267
+      },
+      "GR": {
+        "calls": 51,
+        "execute_s": 0.5625460147857666,
+        "duckdb_lock_wait_s": 15.679724216461182
+      },
+      "HU": {
+        "calls": 46,
+        "execute_s": 1.0313727855682373,
+        "duckdb_lock_wait_s": 15.120083570480347
+      },
+      "IT-CNORTH": {
+        "calls": 44,
+        "execute_s": 0.5807485580444336,
+        "duckdb_lock_wait_s": 14.813039064407349
+      },
+      "IT-CSOUTH": {
+        "calls": 47,
+        "execute_s": 0.7739269733428955,
+        "duckdb_lock_wait_s": 15.248875141143799
+      },
+      "IT-Calabria": {
+        "calls": 42,
+        "execute_s": 0.5735728740692139,
+        "duckdb_lock_wait_s": 13.605117082595825
+      },
+      "IT-NORTH": {
+        "calls": 45,
+        "execute_s": 0.8572971820831299,
+        "duckdb_lock_wait_s": 14.157047986984253
+      },
+      "IT-SOUTH": {
+        "calls": 40,
+        "execute_s": 0.7134194374084473,
+        "duckdb_lock_wait_s": 13.526217937469482
+      },
+      "IT-Sardinia": {
+        "calls": 43,
+        "execute_s": 0.5440928936004639,
+        "duckdb_lock_wait_s": 13.690927028656006
+      },
+      "IT-Sicily": {
+        "calls": 43,
+        "execute_s": 1.0454468727111816,
+        "duckdb_lock_wait_s": 13.431188344955444
+      },
+      "LT": {
+        "calls": 45,
+        "execute_s": 0.7032685279846191,
+        "duckdb_lock_wait_s": 13.81070613861084
+      },
+      "LV": {
+        "calls": 49,
+        "execute_s": 0.8376493453979492,
+        "duckdb_lock_wait_s": 14.394333362579346
+      },
+      "NL": {
+        "calls": 44,
+        "execute_s": 0.590174674987793,
+        "duckdb_lock_wait_s": 12.597785472869873
+      },
+      "NO1": {
+        "calls": 61,
+        "execute_s": 0.788846492767334,
+        "duckdb_lock_wait_s": 15.292693614959717
+      },
+      "NO2": {
+        "calls": 57,
+        "execute_s": 0.751171350479126,
+        "duckdb_lock_wait_s": 13.883014678955078
+      },
+      "NO3": {
+        "calls": 62,
+        "execute_s": 0.5778741836547852,
+        "duckdb_lock_wait_s": 15.14370846748352
+      },
+      "NO4": {
+        "calls": 46,
+        "execute_s": 0.5293149948120117,
+        "duckdb_lock_wait_s": 13.899033784866333
+      },
+      "NO5": {
+        "calls": 56,
+        "execute_s": 0.6504349708557129,
+        "duckdb_lock_wait_s": 16.38049578666687
+      },
+      "PL": {
+        "calls": 48,
+        "execute_s": 0.9935507774353027,
+        "duckdb_lock_wait_s": 15.067029237747192
+      },
+      "PT": {
+        "calls": 43,
+        "execute_s": 0.7755680084228516,
+        "duckdb_lock_wait_s": 13.032540082931519
+      },
+      "RO": {
+        "calls": 47,
+        "execute_s": 0.7127940654754639,
+        "duckdb_lock_wait_s": 15.783000230789185
+      },
+      "RS": {
+        "calls": 48,
+        "execute_s": 0.6738746166229248,
+        "duckdb_lock_wait_s": 14.984495639801025
+      },
+      "SE1": {
+        "calls": 50,
+        "execute_s": 0.627948522567749,
+        "duckdb_lock_wait_s": 15.479676008224487
+      },
+      "SE2": {
+        "calls": 51,
+        "execute_s": 0.5138583183288574,
+        "duckdb_lock_wait_s": 15.744148015975952
+      },
+      "SE3": {
+        "calls": 60,
+        "execute_s": 0.5517418384552002,
+        "duckdb_lock_wait_s": 15.895008325576782
+      },
+      "SE4": {
+        "calls": 44,
+        "execute_s": 0.510523796081543,
+        "duckdb_lock_wait_s": 10.9304838180542
+      },
+      "SI": {
+        "calls": 57,
+        "execute_s": 0.49024319648742676,
+        "duckdb_lock_wait_s": 15.626692056655884
+      },
+      "SK": {
+        "calls": 54,
+        "execute_s": 0.7873077392578125,
+        "duckdb_lock_wait_s": 15.139445304870605
+      },
+      "shared": {
+        "calls": 32,
+        "execute_s": 3.5576488971710205,
+        "duckdb_lock_wait_s": 2.002716064453125e-05
+      }
+    },
+    "zone_builds_summary": {
+      "count": 102,
+      "min_task_wall_s": 0.07142806053161621,
+      "max_task_wall_s": 21.841372966766357,
+      "sum_overlapping_task_wall_s": 1101.4381132125854
+    }
+  },
+  "2026-09-15": {
+    "families": {
+      "feed_anchor": {
+        "calls": 78,
+        "execute_s": 7.020986557006836
+      },
+      "generator_registry": {
+        "calls": 156,
+        "execute_s": 5.190429925918579
+      },
+      "fleet_hydro_batch": {
+        "calls": 28,
+        "execute_s": 1.403564453125
+      },
+      "transmission_outages": {
+        "calls": 4,
+        "execute_s": 0.8104238510131836
+      },
+      "other": {
+        "calls": 43,
+        "execute_s": 1.421980619430542
+      },
+      "reservoir": {
+        "calls": 214,
+        "execute_s": 0.6848080158233643
+      },
+      "registry_quarantine_warnings": {
+        "calls": 156,
+        "execute_s": 0.3587944507598877
+      },
+      "day_ahead_res": {
+        "calls": 104,
+        "execute_s": 0.33800649642944336
+      },
+      "offered_atc": {
+        "calls": 125,
+        "execute_s": 0.6482517719268799
+      },
+      "day_ahead_load": {
+        "calls": 102,
+        "execute_s": 0.2962527275085449
+      },
+      "analogue_load_history": {
+        "calls": 39,
+        "execute_s": 0.2754361629486084
+      },
+      "analogue_flow_day_relation": {
+        "calls": 22,
+        "execute_s": 0.16141724586486816
+      },
+      "jao": {
+        "calls": 16,
+        "execute_s": 0.0955359935760498
+      }
+    },
+    "query_summary_sha256": "f3dab258fa4c1e3689f29c4950c15cfa40a90d124fbd1f41b90a76e428217cf5",
+    "forecast_sha256": "d4b69db0b917bf3bc03982c052d6dc50899c75c656d65cd6ed3c9694e3f66bb3",
+    "forecast_rows": 936,
+    "trace_sha256": "9c7141a6cb91036b92171cdcfd4a00b121ba35700f296fc3ecc1ecf61760d8b8",
+    "reuse": {
+      "analogue_flow_day_relation": {
+        "calls": 22,
+        "distinct_query_args_issuance": 12,
+        "distinct_query_args": 12
+      },
+      "analogue_load_history": {
+        "calls": 39,
+        "distinct_query_args_issuance": 39,
+        "distinct_query_args": 39
+      },
+      "day_ahead_load": {
+        "calls": 102,
+        "distinct_query_args_issuance": 78,
+        "distinct_query_args": 78
+      },
+      "day_ahead_res": {
+        "calls": 104,
+        "distinct_query_args_issuance": 80,
+        "distinct_query_args": 80
+      },
+      "feed_anchor": {
+        "calls": 78,
+        "distinct_query_args_issuance": 78,
+        "distinct_query_args": 78
+      },
+      "fleet_hydro_batch": {
+        "calls": 28,
+        "distinct_query_args_issuance": 6,
+        "distinct_query_args": 6
+      },
+      "generator_registry": {
+        "calls": 156,
+        "distinct_query_args_issuance": 156,
+        "distinct_query_args": 156
+      },
+      "jao": {
+        "calls": 16,
+        "distinct_query_args_issuance": 4,
+        "distinct_query_args": 4
+      },
+      "offered_atc": {
+        "calls": 125,
+        "distinct_query_args_issuance": 89,
+        "distinct_query_args": 89
+      },
+      "other": {
+        "calls": 43,
+        "distinct_query_args_issuance": 42,
+        "distinct_query_args": 42
+      },
+      "registry_quarantine_warnings": {
+        "calls": 156,
+        "distinct_query_args_issuance": 78,
+        "distinct_query_args": 78
+      },
+      "reservoir": {
+        "calls": 214,
+        "distinct_query_args_issuance": 72,
+        "distinct_query_args": 72
+      },
+      "transmission_outages": {
+        "calls": 4,
+        "distinct_query_args_issuance": 2,
+        "distinct_query_args": 2
+      }
+    },
+    "zone_queries": {
+      "AT": {
+        "calls": 40,
+        "execute_s": 0.3835916519165039,
+        "duckdb_lock_wait_s": 7.008060693740845
+      },
+      "BE": {
+        "calls": 32,
+        "execute_s": 0.3372647762298584,
+        "duckdb_lock_wait_s": 6.308706521987915
+      },
+      "BG": {
+        "calls": 24,
+        "execute_s": 0.27673768997192383,
+        "duckdb_lock_wait_s": 6.031988620758057
+      },
+      "CH": {
+        "calls": 42,
+        "execute_s": 0.3614213466644287,
+        "duckdb_lock_wait_s": 7.269901275634766
+      },
+      "CZ": {
+        "calls": 23,
+        "execute_s": 0.5274388790130615,
+        "duckdb_lock_wait_s": 5.5469136238098145
+      },
+      "DE_LU": {
+        "calls": 22,
+        "execute_s": 0.6131393909454346,
+        "duckdb_lock_wait_s": 6.086132049560547
+      },
+      "DK1": {
+        "calls": 22,
+        "execute_s": 0.42338991165161133,
+        "duckdb_lock_wait_s": 6.418954849243164
+      },
+      "DK2": {
+        "calls": 20,
+        "execute_s": 0.29970216751098633,
+        "duckdb_lock_wait_s": 5.133781433105469
+      },
+      "EE": {
+        "calls": 17,
+        "execute_s": 0.24431610107421875,
+        "duckdb_lock_wait_s": 4.708370208740234
+      },
+      "ES": {
+        "calls": 24,
+        "execute_s": 0.7765417098999023,
+        "duckdb_lock_wait_s": 4.75034499168396
+      },
+      "FI": {
+        "calls": 27,
+        "execute_s": 0.4526481628417969,
+        "duckdb_lock_wait_s": 5.510796546936035
+      },
+      "FR": {
+        "calls": 40,
+        "execute_s": 0.6664683818817139,
+        "duckdb_lock_wait_s": 6.854297637939453
+      },
+      "GR": {
+        "calls": 25,
+        "execute_s": 0.3169088363647461,
+        "duckdb_lock_wait_s": 6.572073698043823
+      },
+      "HU": {
+        "calls": 23,
+        "execute_s": 0.4871070384979248,
+        "duckdb_lock_wait_s": 5.848919153213501
+      },
+      "IT-CNORTH": {
+        "calls": 24,
+        "execute_s": 0.40708398818969727,
+        "duckdb_lock_wait_s": 6.677567481994629
+      },
+      "IT-CSOUTH": {
+        "calls": 22,
+        "execute_s": 0.44736409187316895,
+        "duckdb_lock_wait_s": 5.074718475341797
+      },
+      "IT-Calabria": {
+        "calls": 20,
+        "execute_s": 0.4804561138153076,
+        "duckdb_lock_wait_s": 5.965214252471924
+      },
+      "IT-NORTH": {
+        "calls": 24,
+        "execute_s": 0.6329259872436523,
+        "duckdb_lock_wait_s": 6.153918981552124
+      },
+      "IT-SOUTH": {
+        "calls": 20,
+        "execute_s": 0.5871713161468506,
+        "duckdb_lock_wait_s": 5.5028228759765625
+      },
+      "IT-Sardinia": {
+        "calls": 23,
+        "execute_s": 0.4418623447418213,
+        "duckdb_lock_wait_s": 5.01296067237854
+      },
+      "IT-Sicily": {
+        "calls": 27,
+        "execute_s": 0.6575324535369873,
+        "duckdb_lock_wait_s": 6.039144039154053
+      },
+      "LT": {
+        "calls": 28,
+        "execute_s": 0.3388786315917969,
+        "duckdb_lock_wait_s": 6.738223314285278
+      },
+      "LV": {
+        "calls": 22,
+        "execute_s": 0.2518167495727539,
+        "duckdb_lock_wait_s": 5.403170585632324
+      },
+      "NL": {
+        "calls": 17,
+        "execute_s": 0.3052964210510254,
+        "duckdb_lock_wait_s": 4.797847032546997
+      },
+      "NO1": {
+        "calls": 39,
+        "execute_s": 0.4145183563232422,
+        "duckdb_lock_wait_s": 5.807270526885986
+      },
+      "NO2": {
+        "calls": 33,
+        "execute_s": 0.48494720458984375,
+        "duckdb_lock_wait_s": 7.230209589004517
+      },
+      "NO3": {
+        "calls": 40,
+        "execute_s": 0.44719767570495605,
+        "duckdb_lock_wait_s": 6.72434401512146
+      },
+      "NO4": {
+        "calls": 26,
+        "execute_s": 0.4011356830596924,
+        "duckdb_lock_wait_s": 5.587696313858032
+      },
+      "NO5": {
+        "calls": 35,
+        "execute_s": 0.545034646987915,
+        "duckdb_lock_wait_s": 6.050053596496582
+      },
+      "PL": {
+        "calls": 25,
+        "execute_s": 0.993208646774292,
+        "duckdb_lock_wait_s": 5.820956707000732
+      },
+      "PT": {
+        "calls": 21,
+        "execute_s": 0.42644333839416504,
+        "duckdb_lock_wait_s": 4.932051420211792
+      },
+      "RO": {
+        "calls": 27,
+        "execute_s": 0.5626027584075928,
+        "duckdb_lock_wait_s": 6.883972644805908
+      },
+      "RS": {
+        "calls": 24,
+        "execute_s": 0.2910325527191162,
+        "duckdb_lock_wait_s": 5.165298700332642
+      },
+      "SE1": {
+        "calls": 29,
+        "execute_s": 0.42415332794189453,
+        "duckdb_lock_wait_s": 5.779338359832764
+      },
+      "SE2": {
+        "calls": 27,
+        "execute_s": 0.37813782691955566,
+        "duckdb_lock_wait_s": 5.200950622558594
+      },
+      "SE3": {
+        "calls": 40,
+        "execute_s": 0.4223017692565918,
+        "duckdb_lock_wait_s": 6.408747673034668
+      },
+      "SE4": {
+        "calls": 19,
+        "execute_s": 0.3134469985961914,
+        "duckdb_lock_wait_s": 4.015007734298706
+      },
+      "SI": {
+        "calls": 37,
+        "execute_s": 0.3233988285064697,
+        "duckdb_lock_wait_s": 6.477574348449707
+      },
+      "SK": {
+        "calls": 27,
+        "execute_s": 0.40549778938293457,
+        "duckdb_lock_wait_s": 6.442912340164185
+      },
+      "shared": {
+        "calls": 30,
+        "execute_s": 1.1557667255401611,
+        "duckdb_lock_wait_s": 2.1696090698242188e-05
+      }
+    },
+    "zone_builds_summary": {
+      "count": 102,
+      "min_task_wall_s": 0.05410194396972656,
+      "max_task_wall_s": 9.475529909133911,
+      "sum_overlapping_task_wall_s": 634.7619824409485
+    }
+  },
+  "combined_reuse": {
+    "analogue_flow_day_relation": {
+      "calls": 827,
+      "distinct_query_args_issuance": 269,
+      "distinct_query_args": 269
+    },
+    "analogue_load_history": {
+      "calls": 117,
+      "distinct_query_args_issuance": 117,
+      "distinct_query_args": 117
+    },
+    "day_ahead_load": {
+      "calls": 204,
+      "distinct_query_args_issuance": 156,
+      "distinct_query_args": 117
+    },
+    "day_ahead_res": {
+      "calls": 210,
+      "distinct_query_args_issuance": 162,
+      "distinct_query_args": 123
+    },
+    "feed_anchor": {
+      "calls": 156,
+      "distinct_query_args_issuance": 156,
+      "distinct_query_args": 156
+    },
+    "fleet_hydro_batch": {
+      "calls": 66,
+      "distinct_query_args_issuance": 12,
+      "distinct_query_args": 12
+    },
+    "generator_registry": {
+      "calls": 312,
+      "distinct_query_args_issuance": 312,
+      "distinct_query_args": 312
+    },
+    "jao": {
+      "calls": 32,
+      "distinct_query_args_issuance": 8,
+      "distinct_query_args": 6
+    },
+    "offered_atc": {
+      "calls": 253,
+      "distinct_query_args_issuance": 181,
+      "distinct_query_args": 138
+    },
+    "other": {
+      "calls": 127,
+      "distinct_query_args_issuance": 120,
+      "distinct_query_args": 120
+    },
+    "registry_quarantine_warnings": {
+      "calls": 312,
+      "distinct_query_args_issuance": 156,
+      "distinct_query_args": 117
+    },
+    "reservoir": {
+      "calls": 428,
+      "distinct_query_args_issuance": 216,
+      "distinct_query_args": 144
+    },
+    "transmission_outages": {
+      "calls": 8,
+      "distinct_query_args_issuance": 4,
+      "distinct_query_args": 4
+    }
+  }
+}
