@@ -1,4 +1,12 @@
-# cv44 retro backfill: bounded chunk parallelism
+# cv44 retro backfill: input bottleneck and bounded chunk parallelism
+
+**Updated after production run 43990408427 completed:** input/book construction
+accounts for **88.2% of production wall time** (2,353–3,948 seconds/day). Prioritize
+per-chunk input snapshots/batched reads and existing cache misses before enabling
+parallel chunks. The local 1.67× gain below is valid, but does not measure the
+production Postgres bottleneck. See [production input analysis](production-inputs.md)
+for actual phase timings, query-count × latency calculations, batching targets,
+and the revised ranking. **Keep workers=1 until input/DB pressure is measured.**
 
 The opt-in two-process replay took **353.71 s versus 591.75 s sequentially**
 (**1.67× faster / 40.2% less wall time**, including process startup). All
@@ -43,7 +51,7 @@ Two processes are the proposed initial ceiling, not a recommendation for 80
 workers. They can increase shared weather-API pressure despite existing retry and
 backoff; Postgres contention and live-source revision timing are not reproduced
 by the fixed-extract experiment. Keep the default at one; the leader should use
-an explicit off-hours canary before a larger campaign. No dispatch or production
+an explicit off-hours canary only after input/DB pressure has been measured. No dispatch or production
 DB access was performed for this PR.
 
 ## Measurement protocol

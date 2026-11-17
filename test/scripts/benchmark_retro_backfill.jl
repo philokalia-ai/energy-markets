@@ -1,11 +1,27 @@
 # Offline timing/identity harness for run_retro's weather inputs and two UTC clears.
 # See docs/experiments/retro-backfill-perf-2026-11/README.md. No forecast DB writes.
-using Dates, Serialization, Printf, Statistics
+using Dates, Serialization, Printf, Statistics, SHA
 const ROOT = normpath(joinpath(@__DIR__, "..", ".."))
 const OUT = abspath(ENV["RETRO_PERF_OUT"])
 mkpath(OUT)
 const LABEL = get(ENV,"PERF_LABEL","replay")
 const PHASE = Dict{String,Float64}()
+const TRACE_INPUTS = get(ENV, "RETRO_PERF_TRACE_INPUTS", "") == "1"
+const QUERY_TRACE = Vector{Any}()
+const ZONE_TRACE = Vector{Any}()
+const TRACE_LOCK = ReentrantLock()
+function traced_zone(f, zone, day)
+    t = time()
+    task_local_storage(:retro_perf_zone, zone) do
+        try
+            return f()
+        finally
+            lock(TRACE_LOCK) do
+                push!(ZONE_TRACE, (zone, string(day), time() - t))
+            end
+        end
+    end
+end
 function measured(f, name)
     t = time()
     try return f() finally PHASE[name] = get(PHASE,name,0.0) + time()-t end
@@ -19,11 +35,20 @@ t=time(); include(joinpath(ROOT,"bin/daily_forecast.jl")); PHASE["include"] = ti
     const PERF_QUERY_LOCK = ReentrantLock()
     function sql2df(sql, args=[])
         DATA_STORE[] == :duckdb || error("offline profiler forbids Postgres")
+        requested = time()
         lock(_DUCKDB_LOCK) do
             t=time()
             try return _duckdb_sql2df(sql,args) finally
+                elapsed = time()-t
                 lock(PERF_QUERY_LOCK) do
-                    n,s=get(PERF_QUERIES,sql,(0,0.0)); PERF_QUERIES[sql]=(n+1,s+time()-t)
+                    n,s=get(PERF_QUERIES,sql,(0,0.0)); PERF_QUERIES[sql]=(n+1,s+elapsed)
+                end
+                if Main.TRACE_INPUTS
+                    lock(Main.TRACE_LOCK) do
+                        # Separate backend execution from waiting on DuckDB's connection lock.
+                        push!(Main.QUERY_TRACE, (get(task_local_storage(), :retro_perf_zone, "shared"),
+                            string(ctx_key()), t-requested, elapsed, String(sql), repr(args)))
+                    end
                 end
             end
         end
@@ -38,6 +63,21 @@ function instrument(ex)
     return Expr(ex.head,map(instrument,ex.args)...)
 end
 Core.eval(Euphemia,instrument(Meta.parseall(read(joinpath(ROOT,"src/clearing/multi_zone_run.jl"),String))))
+# Tag queries with the zone task, preserving production build arguments and return values.
+if TRACE_INPUTS
+    path = joinpath(ROOT, "src/clearing/multi_zone_books.jl")
+    source = read(path, String)
+    needle = "result = build_zone_book(zone, zone_exclude(sort(collect(atc_linked[zone]))))"
+    @assert occursin(needle, source)
+    source = replace(source, needle => "result = Main.traced_zone(() -> build_zone_book(zone, zone_exclude(sort(collect(atc_linked[zone])))), zone, day)"; count=1)
+    # Re-evaluate function definitions only; shared constants retain their identities.
+    for ex in Meta.parseall(source).args
+        ex isa Expr || continue
+        if ex.head == :function || (ex.head == :macrocall && ex.args[end] isa Expr && ex.args[end].head == :function)
+            Core.eval(Euphemia, ex)
+        end
+    end
+end
 # Split native optimize time from JuMP construction, in this process only.
 for file in ("solver.jl","complex_orders.jl")
     path=joinpath(ROOT,"src/mpcc",file)
@@ -104,7 +144,7 @@ cache=Dict{Date,Union{Nothing,Dict{String,Dict{DateTime,Float64}}}}()
 for day in days
     @assert issubset(Set(ZONES),model_covered_for_day(day,fill_pred)) "load coverage $day"
     @assert issubset(Set(ZONES),res_covered_for_day(day,preds)) "RES coverage $day"
-    empty!(PHASE); empty!(Euphemia.PERF_QUERIES)
+    empty!(PHASE); empty!(Euphemia.PERF_QUERIES); empty!(QUERY_TRACE); empty!(ZONE_TRACE)
     t=time(); cpu0=ccall(:clock,Clong,())/1e6
     ctx=Euphemia.ForecastContext(day,DateTime(day-Day(1))+Hour(6)+Minute(30),1,:fixed_10utc,"retro:cv44-backfill-2026-11")
     prev,curr=Euphemia.with_context(ctx) do
@@ -135,6 +175,21 @@ for day in days
     println("PERF_DAY $day wall=",time()-t," sql=",sql_s," queries=",sql_n," rss=",Sys.maxrss()," cpu_seconds=",ccall(:clock,Clong,())/1e6-cpu0," threads=",Threads.nthreads()," phases=",PHASE)
     open(joinpath(OUT,"queries-$LABEL-$day.tsv"),"w") do io
         for (s,(n,t)) in sort(collect(Euphemia.PERF_QUERIES);by=x->-last(x)[2]); println(io,n,'\t',t,'\t',replace(s,r"\s+"=>" ")); end
+    end
+    if TRACE_INPUTS
+        clean(s) = replace(string(s), r"\s+" => " ")
+        open(joinpath(OUT, "query-trace-$LABEL-$day.tsv"), "w") do io
+            println(io, "zone\tissuance\tlock_wait_s\texecute_s\tquery_sha256\targs_sha256\tsql\targs")
+            for (z, issue, wait_s, exec_s, sql, args) in QUERY_TRACE
+                println(io, join((z, issue, wait_s, exec_s, bytes2hex(sha256(sql)), bytes2hex(sha256(args)), clean(sql), clean(args)), '\t'))
+            end
+        end
+        open(joinpath(OUT, "zone-trace-$LABEL-$day.tsv"), "w") do io
+            println(io, "zone\tutc_day\twall_s")
+            for row in ZONE_TRACE
+                println(io, join(row, '\t'))
+            end
+        end
     end
     flush(stdout)
 end
