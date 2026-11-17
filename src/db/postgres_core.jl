@@ -221,8 +221,16 @@ const ENERGY_PRICES_CODE_VERSION = 44
 # runs up to nzones concurrent queries — 5 connections cap the parallelism
 # and lock convoys made 8 threads SLOWER than 1 in the 2026-07-24 benchmark.
 # Default stays 5 (the long-standing footprint-friendly value).
-const poolsize = max(1, parse(Int, get(ENV, "EUPHEMIA_PG_POOL", "5")))
-cnxpool = Pools.Pool{LibPQ.Connection}(poolsize)
+# Precompilation must not freeze a caller's runtime resource limit. These empty
+# placeholders are replaced once in __init__, before any connection is acquired.
+poolsize::Int = 5
+cnxpool::Pools.Pool{Nothing,LibPQ.Connection} = Pools.Pool{LibPQ.Connection}(5)
+
+function _init_pg_pool!()
+    global poolsize = max(1, parse(Int, get(ENV, "EUPHEMIA_PG_POOL", "5")))
+    global cnxpool = Pools.Pool{LibPQ.Connection}(poolsize)
+    return nothing
+end
 
 function cnxisok(cnx::LibPQ.Connection)
     return LibPQ.status(cnx) == LibPQ.libpq_c.CONNECTION_OK

@@ -19,6 +19,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 TRUTHY = {"1", "true", "yes", "on"}
+TERMINATE_GRACE_SECONDS = 10
 
 
 def day_chunks(start: date, end: date, size: int):
@@ -65,24 +66,54 @@ def worker_env(env, start, end):
     return result
 
 
-async def terminate_owned(processes):
-    """Only process groups created by this invocation; never runner processes."""
-    for proc in processes:
+def group_exists(pgid):
+    try:
+        os.killpg(pgid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+
+
+async def finish_shielded(task):
+    """Finish an owned task despite repeated cancellation; report interruption."""
+    interrupted = False
+    while not task.done():
         try:
-            os.killpg(proc.pid, signal.SIGTERM)
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            interrupted = True
+    return task.result(), interrupted
+
+
+async def terminate_owned(processes):
+    """Signal owned groups even when their leaders have already exited.
+
+    Reap direct children; orphaned descendants are reaped by their adopter.
+    Group existence, not leader returncode, controls TERM-to-KILL escalation.
+    """
+    groups = {p.pid for p in processes}
+    for pgid in groups:
+        try:
+            os.killpg(pgid, signal.SIGTERM)
         except ProcessLookupError:
             pass
-    if not processes:
-        return
-    try:
-        await asyncio.wait_for(asyncio.gather(*(p.wait() for p in processes)), 10)
-    except asyncio.TimeoutError:
-        for proc in processes:
-            try:
-                os.killpg(proc.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-        await asyncio.gather(*(p.wait() for p in processes))
+    loop = asyncio.get_running_loop()
+    until = loop.time() + TERMINATE_GRACE_SECONDS
+    while groups:
+        groups = {pgid for pgid in groups if group_exists(pgid)}
+        if not groups or loop.time() >= until:
+            break
+        await asyncio.sleep(min(.05, max(0, until - loop.time())))
+    for pgid in groups:
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    await asyncio.gather(*(p.wait() for p in processes))
+
+
+class WorkerFailed(Exception):
+    """A child failed; stop admission and terminate every owned group."""
 
 
 async def run_parallel(command, env, chunks, deadline, cpus, *, now=None):
@@ -115,37 +146,57 @@ async def run_parallel(command, env, chunks, deadline, cpus, *, now=None):
             except asyncio.CancelledError:
                 # Cancellation can arrive after fork but before subprocess
                 # creation returns. Claim that child before global cleanup.
-                active.add(await creation)
+                proc, _ = await finish_shielded(creation)
+                active.add(proc)
                 raise
             active.add(proc)
-            completed = False
-            try:
+            async def drain_output():
                 async for line in proc.stdout:
                     print(prefix + line.decode("utf-8", errors="replace").rstrip("\n"), flush=True)
-                rc = await proc.wait()
+
+            reader = asyncio.create_task(drain_output())
+            try:
+                # Process.wait() can wait for inherited stdout to close even
+                # after the leader exits. Observe returncode independently so
+                # a descendant cannot conceal a failed leader by holding a pipe.
+                while proc.returncode is None:
+                    if reader.done():
+                        reader.result()
+                    await asyncio.sleep(.05)
+                rc = proc.returncode
                 if rc:
                     failed = True
-                    print(prefix + f"FAILED (exit {rc}); no more chunks will start", flush=True)
-                completed = True
+                    print(prefix + f"FAILED (exit {rc}); stopping owned groups", flush=True)
+                    raise WorkerFailed(prefix)
+                # Successful leaders may also leave detached descendants.
+                await terminate_owned([proc])
+                await reader
+                active.discard(proc)
             finally:
-                if completed:
-                    active.discard(proc)
+                reader.cancel()
+                await asyncio.gather(reader, return_exceptions=True)
 
     tasks = [asyncio.create_task(worker(slot)) for slot in range(2)]
     try:
         await asyncio.wait_for(
             asyncio.gather(*tasks), max(0, (deadline - now()).total_seconds())
         )
+    except WorkerFailed:
+        failed = True
     except asyncio.TimeoutError:
         print("🛑 parallel deadline reached: stopping owned workers; completed days are preserved, re-dispatch to resume", flush=True)
     finally:
-        # Stop sibling schedulers before taking the cleanup snapshot: a failed
-        # spawn/read must not leave another coroutine admitting a new child.
-        for task in tasks:
-            if not task.done():
-                task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
-        await terminate_owned(list(active))
+        async def stop_and_reap():
+            # Claim in-flight spawns before taking the final group snapshot.
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            await terminate_owned(list(active))
+
+        _, interrupted = await finish_shielded(asyncio.create_task(stop_and_reap()))
+        if interrupted:
+            raise asyncio.CancelledError
     return 1 if failed else 0
 
 
@@ -166,11 +217,13 @@ def main():
     async def run():
         task = asyncio.current_task()
         loop = asyncio.get_running_loop()
-        loop.add_signal_handler(signal.SIGTERM, task.cancel)
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            loop.add_signal_handler(sig, task.cancel)
         try:
             return await run_parallel(command, os.environ, chunks, deadline, cpus)
         finally:
-            loop.remove_signal_handler(signal.SIGTERM)
+            for sig in (signal.SIGTERM, signal.SIGINT):
+                loop.remove_signal_handler(sig)
 
     try:
         return asyncio.run(run())

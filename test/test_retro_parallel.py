@@ -70,6 +70,7 @@ class PlanTest(unittest.TestCase):
 
 class ProcessTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
+        self.enterContext(patch.object(retro, "TERMINATE_GRACE_SECONDS", .15))
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.env = dict(os.environ, **config(), PERF_TEST_DIR=self.tmp.name)
@@ -150,6 +151,8 @@ time.sleep(.5)
                 await asyncio.sleep(.005)
             self.assertEqual(len(spawned), 2)
             task.cancel()
+            await asyncio.sleep(.01)
+            task.cancel()  # another cancellation while spawn ownership is pending
             try:
                 with self.assertRaises(asyncio.CancelledError):
                     await asyncio.wait_for(task, 2)
@@ -174,6 +177,134 @@ time.sleep(.5)
         for proc in spawned:
             if proc is not None:
                 self.assertIsNotNone(proc.returncode)
+
+    async def group_fixture(self, *, exit_code=None, leader_ignores_term=False, detached=True):
+        # Each grandchild acknowledges its TERM handler before the leader reports ready.
+        child = "import pathlib, signal, sys, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); pathlib.Path(sys.argv[1]).touch(); time.sleep(60)"
+        code = f"""
+import os, pathlib, signal, subprocess, sys, time
+root=pathlib.Path(os.environ['PERF_TEST_DIR'])
+s=os.environ['EUPHEMIA_FORECAST_RETRO_START']
+if {leader_ignores_term!r}: signal.signal(signal.SIGTERM, signal.SIG_IGN)
+ready=root/(s+'.ready')
+child=subprocess.Popen([sys.executable, '-c', {child!r}, str(ready)],
+    stdout=subprocess.DEVNULL if {detached!r} else None,
+    stderr=subprocess.DEVNULL if {detached!r} else None)
+while not ready.exists(): time.sleep(.005)
+(root/(s+'.pids')).write_text(str(os.getpid())+','+str(child.pid))
+while len(list(root.glob('*.pids'))) < 2: time.sleep(.005)
+exit_code={exit_code!r}
+if exit_code is not None: sys.exit(exit_code)
+time.sleep(60)
+"""
+        task = asyncio.create_task(retro.run_parallel([sys.executable, "-c", code], self.env, self.chunks, self.deadline, self.cpus))
+        for _ in range(200):
+            if len(list(Path(self.tmp.name).glob('*.pids'))) == 2:
+                break
+            await asyncio.sleep(.01)
+        self.assertEqual(len(list(Path(self.tmp.name).glob('*.pids'))), 2)
+        return task
+
+    async def assert_fixture_dead(self):
+        for _ in range(100):
+            alive = []
+            for path in Path(self.tmp.name).glob('*.pids'):
+                for pid in map(int, path.read_text().split(',')):
+                    status = Path(f'/proc/{pid}/status')
+                    if status.exists() and '\nState:\tZ' not in status.read_text():
+                        alive.append(pid)
+            if not alive:
+                return
+            await asyncio.sleep(.01)
+        self.fail(f"owned fixture processes survived: {alive}")
+
+    async def asyncTearDown(self):
+        # Failure-safe fixture cleanup; only our start_new_session group IDs.
+        for path in Path(self.tmp.name).glob('*.pids'):
+            try:
+                os.killpg(int(path.read_text().split(',')[0]), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+    async def test_failed_exited_leaders_do_not_abandon_detached_descendants(self):
+        task = await self.group_fixture(exit_code=7)
+        self.assertEqual(await asyncio.wait_for(task, 3), 1)
+        self.assertEqual(len(list(Path(self.tmp.name).glob('*.pids'))), 2)
+        await self.assert_fixture_dead()
+
+    async def test_failed_leader_with_inherited_pipe_is_detected(self):
+        task = await self.group_fixture(exit_code=7, detached=False)
+        self.assertEqual(await asyncio.wait_for(task, 3), 1)
+        await self.assert_fixture_dead()
+
+    async def test_successful_exited_leaders_do_not_abandon_descendants(self):
+        self.chunks = self.chunks[:2]
+        task = await self.group_fixture(exit_code=0)
+        self.assertEqual(await asyncio.wait_for(task, 3), 0)
+        await self.assert_fixture_dead()
+
+    async def test_term_escalates_after_leaders_exit(self):
+        task = await self.group_fixture()
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await asyncio.wait_for(task, 3)
+        await self.assert_fixture_dead()
+
+    async def test_repeated_cancellation_finishes_kill_and_reaping(self):
+        task = await self.group_fixture(leader_ignores_term=True)
+        task.cancel()
+        await asyncio.sleep(.05)
+        task.cancel()
+        await asyncio.sleep(.05)
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await asyncio.wait_for(task, 3)
+        await self.assert_fixture_dead()
+
+    async def test_repeated_term_signals_finish_main_cleanup(self):
+        fake_julia = Path(self.tmp.name) / "julia"
+        fake_julia.write_text(f"#!{sys.executable}\n" + r"""
+import os, pathlib, signal, subprocess, sys, time
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+root=pathlib.Path(os.environ['PERF_TEST_DIR'])
+s=os.environ['EUPHEMIA_FORECAST_RETRO_START']
+ready=root/(s+'.ready')
+child_code="import pathlib, signal, sys, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); pathlib.Path(sys.argv[1]).touch(); time.sleep(60)"
+child=subprocess.Popen([sys.executable, '-c', child_code, str(ready)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+while not ready.exists(): time.sleep(.005)
+(root/(s+'.pids')).write_text(str(os.getpid())+','+str(child.pid))
+time.sleep(60)
+""")
+        fake_julia.chmod(0o755)
+        entry = f"""
+import importlib.util, sys
+spec=importlib.util.spec_from_file_location('retro', {str(SPEC.origin)!r})
+retro=importlib.util.module_from_spec(spec); spec.loader.exec_module(retro)
+retro.TERMINATE_GRACE_SECONDS=.3
+sys.argv=['run_retro_backfill.py', '--workers', '2']
+sys.exit(retro.main())
+"""
+        env = self.env | {"PATH": self.tmp.name + os.pathsep + os.environ['PATH'],
+                          "EUPHEMIA_RETRO_DEADLINE_UTC": self.deadline.isoformat()}
+        launcher = await asyncio.create_subprocess_exec(sys.executable, "-c", entry, env=env,
+                                                        stdout=asyncio.subprocess.DEVNULL,
+                                                        stderr=asyncio.subprocess.DEVNULL,
+                                                        start_new_session=True)
+        try:
+            for _ in range(200):
+                if len(list(Path(self.tmp.name).glob('*.pids'))) == 2:
+                    break
+                await asyncio.sleep(.01)
+            self.assertEqual(len(list(Path(self.tmp.name).glob('*.pids'))), 2)
+            launcher.send_signal(signal.SIGTERM)
+            await asyncio.sleep(.05)
+            launcher.send_signal(signal.SIGTERM)
+            self.assertEqual(await asyncio.wait_for(launcher.wait(), 3), 130)
+            await self.assert_fixture_dead()
+        finally:
+            if launcher.returncode is None:
+                launcher.kill()
+            await launcher.wait()
 
     async def test_cancellation_reaps_owned_child_groups(self):
         code = """

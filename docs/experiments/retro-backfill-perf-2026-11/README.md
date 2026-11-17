@@ -29,6 +29,8 @@ contiguous chunks through the unchanged `run_retro` implementation:
 
 - Four allowed CPUs, four Julia threads, and two Postgres connections per child;
   total eight CPUs/four connections. BLAS/OMP thread counts are bounded at one.
+  The PG pool is constructed during runtime initialization, so a cache compiled
+  with the default five cannot override each child's requested two.
   Postgres server work is additional to the worker CPU limit. The parallel path
   refuses fewer than eight allowed CPUs; no automatic full-machine fan-out.
 - Original 14-day weather batching, lead-1 information cutoff, two-pass clearing,
@@ -38,11 +40,12 @@ contiguous chunks through the unchanged `run_retro` implementation:
   supersede is refused. The existing no-clobber and completed-day checks still run
   inside every child. No writer/scorer/table/model code changes.
 - No new chunks after a worker failure or within the preparation/day allowance.
-  In-flight peers may finish after a failure; any failure makes the step fail.
+  A worker failure terminates all owned worker groups and fails the step.
   At the supplied deadline, remaining owned worker groups are terminated (10 s
   TERM grace, then KILL). Completed transactions remain; an interrupted day is
-  retried by the existing idempotent campaign writer. Cancellation likewise cleans
-  up only process groups this launcher created.
+  retried by the existing idempotent campaign writer. Cleanup tracks groups after
+  leaders exit, escalates TERM-resistant descendants to KILL, and finishes despite
+  repeated cancellation or TERM/INT signals. Only owned groups are signalled.
 - Scoring runs once after the children, with the existing bounded scoring step.
   The workflow's blackout/active-run guard and concurrency group are unchanged.
   `workers=1` is the rollback. Nothing affects an already-running workflow.
@@ -157,3 +160,25 @@ python3 -m unittest discover -s test -p test_retro_parallel.py -v
 Process tests use synthetic children and skip on hosts exposing fewer than eight
 allowed CPUs. They ran on all eight assigned cores for this change. All model
 clears are manual offline checks, not CI work.
+
+### Review regressions: runtime pool and process groups
+
+`test/test_retro_parallel.py` covers failed/successful exited leaders with
+surviving descendants, inherited output pipes, TERM-resistant descendants,
+repeated cancellation/signals, and cancellation during subprocess creation.
+Failure now stops and cleans up peers immediately, rather than allowing them to
+finish. Cleanup reaps direct children; orphaned descendants are reaped by their
+adopter after their owned group is terminated.
+
+With the same private depot and CPU affinity used for the offline benchmark:
+
+```sh
+taskset -c 60-67 julia --project=. test/scripts/test_pg_pool_runtime.jl
+```
+
+This creates a tiny synthetic DuckDB, warms the **actual Euphemia** package cache
+with the default pool size five, then starts fresh processes using
+`--compiled-modules=strict` with limits two, default five, three, and zero (clamped
+to one). It checks the actual pool capacity and unchanged cache hashes. No PG
+connection is opened. The serial launcher still passes argv/environment through
+unchanged; the library now honors the caller's pool override at runtime.
