@@ -1,0 +1,103 @@
+# Timestral backfill over the cv44 retro physics (#431 R2; owner approved 2026-11-16).
+#
+# For every Athens market day in [start, end] whose retro lead-1 physics rows of `reset_tag`
+# exist for every zone (written by retro-backfill.yml, #431 R1), builds the post-sim Timestral
+# vintage from THOSE rows (issue_utc = their retro_of_utc) and writes it to
+# simulations.tsfm_overlay as input_mode='postsim_backfill', model_version='timestral-209m@<tag>'.
+# The live exporters never select that mode; the scoreboard's `backfilled` window scores it.
+#
+# Runtime: ~6.3 min per day (63 days ~6.6 h) on 4 threads. Dispatch-only. Run it AFTER
+# retro-backfill.yml has written the days (days without complete physics are skipped and picked
+# up by a later dispatch). Resumable and idempotent: days already written for the tag are skipped. Per day: timeout (TSFM_BACKFILL_DAY_TIMEOUT) and non-fatal.
+# A day is admitted only if its whole budget (TSFM_BACKFILL_DAY_TIMEOUT + 60 s, which bounds the
+# day's reads, inference and writes) ends before the next protected window (06:00-08:30,
+# 10:30-12:15 UTC); the clock is re-read after the GitHub checks. Otherwise, or while
+# daily-forecast / publish-web-data is queued or running, the loop stops cleanly (exit 0).
+#
+# Rollback (by tag):
+#   DELETE FROM simulations.tsfm_overlay
+#    WHERE input_mode = 'postsim_backfill' AND model_version = 'timestral-209m@<reset_tag>';
+name: tsfm-backfill
+
+on:
+  workflow_dispatch:
+    inputs:
+      start:
+        description: "First Athens market day (YYYY-MM-DD)"
+        required: true
+        default: "2026-09-14"
+      end:
+        description: "Last Athens market day (YYYY-MM-DD)"
+        required: true
+        default: "2026-11-15"
+      reset_tag:
+        description: "reset_tag of the retro physics rows (the cv44 campaign)"
+        required: true
+        default: "cv44-backfill-2026-11"
+
+permissions:
+  contents: read
+  actions: read          # the guard reads the daily-forecast / publish-web-data run status
+
+# Own group: never queued behind or ahead of daily-forecast / publish-web-data.
+concurrency:
+  group: tsfm-backfill
+  cancel-in-progress: false
+
+jobs:
+  tsfm-backfill:
+    runs-on: energy-markets-k8s
+    # ~6.3 min/day measured (TSFM ~4.8 + logistic ~1.5, 4 threads): 63 days ~6.6 h. Dispatch after
+    # 12:15 UTC; the guard stops it at 05:50 anyway and a re-dispatch resumes.
+    timeout-minutes: 600
+    env:
+      HF_HOME: ${{ github.workspace }}/.hf
+      TSFM_ARM: timestral-209m
+      TSFM_THREADS: "4"
+      TSFM_BACKFILL_DAY_TIMEOUT: "900"
+    steps:
+      - name: Refuse inside the protected windows
+        run: |
+          hm=$(date -u +%H%M)
+          if { [ "$hm" -ge 0550 ] && [ "$hm" -lt 0830 ]; } || { [ "$hm" -ge 1020 ] && [ "$hm" -lt 1215 ]; }; then
+            echo "::error::dispatched inside a protected UTC window ($hm); re-dispatch after 08:30 or 12:15 UTC"
+            exit 1
+          fi
+
+      - name: Checkout repository
+        timeout-minutes: 5
+        uses: actions/checkout@v4
+
+      - name: Setup uv
+        timeout-minutes: 5
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.12.21"
+          enable-cache: true
+          cache-dependency-glob: bin/requirements-overlay.txt
+
+      - name: Cache Timestral weights (pinned Hub revision)
+        timeout-minutes: 10
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.hf
+          key: hf-timestral-209m-9874d252ab0aae16f7f7c999f98f98d6ad7d8365
+
+      - name: Install overlay Python environment (pinned)
+        timeout-minutes: 15
+        run: |
+          uv venv --python 3.12 .venv-overlay
+          VIRTUAL_ENV=.venv-overlay uv pip install --index-strategy unsafe-best-match \
+            -r bin/requirements-overlay.txt
+
+      - name: Timestral backfill (per day, resumable, guarded)
+        timeout-minutes: 570
+        env:
+          ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
+          GITHUB_TOKEN: ${{ github.token }}
+          START: ${{ inputs.start }}
+          END: ${{ inputs.end }}
+          RESET_TAG: ${{ inputs.reset_tag }}
+        run: |
+          .venv-overlay/bin/python bin/emit_tsfm_overlay.py --backfill-tag "$RESET_TAG" \
+            --start "$START" --end "$END" --write --threads "$TSFM_THREADS"

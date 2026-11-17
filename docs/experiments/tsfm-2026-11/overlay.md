@@ -27,6 +27,45 @@ Runtime (aarch64, real weights, local PostgreSQL 16, machine load average ~65 on
 reviewer's run under heavier contention did not finish within 420 s. The emitter step is bounded at
 30 min (~4x the worst observed) to leave room for production scanner latency, which is unmeasured.
 
+## Backfill over the cv44 retro physics (#431 R2; offline reconstruction, never live)
+
+- **What it builds.** `emit_tsfm_overlay.py --backfill-tag cv44-backfill-2026-11 --start D0 --end D1
+  [--write]` builds, per Athens market day, the post-sim Timestral vintage (arm B, `timestral-209m`)
+  from the **retro** lead-1 physics rows of that `reset_tag`. Those rows are written by R1's
+  `retro-backfill.yml`, from `daily_forecast.jl` retro mode.
+- **Sim covariate.** History and D both come from that tag's retro rows only (`RETRO_SIM_SQL`).
+  Live mode never reads retro rows: `SIM_SQL` filters `is_retro = false`.
+- **Issue time.** `issue_utc` = the retro rows' `retro_of_utc`, the natural D-1 06:30 UTC instant
+  they stand in for. It is not their `prediction_made_utc`, which is the actual, later compute time.
+- **Price context.** It ends before D exactly as live, but it reads **today's** store, not the
+  archive as of D-1.
+- **Covariate history is short early on.** The tag's retro rows start on 2026-09-14, so early days
+  have a short sim history; the hours before that are missing covariates.
+- **Storage that cannot reach the live display.** Rows go to `simulations.tsfm_overlay` with
+  `input_mode = 'postsim_backfill'` and `model_version = 'timestral-209m@<tag>'`. No DDL change
+  is needed.
+  - Both exporters drop that mode twice: in `TSFM_OVERLAY_SQL`, and in the pure vintage selection
+    `tsfm_overlay_maps`, where a backfill vintage is never chosen even with a later issue.
+  - Both are tested in `test/test_forecast_tracking.jl`.
+- **Scoreboard.** `bin/tsfm_backfill_scores.jl` provides the Timestral fields for R1's
+  `backfilled` window: `tsfm_mae` plus the d1/d7/epf naives on the same cells, which are the hours
+  of the tag's physics rows that also carry a Timestral median. Kill switch:
+  `EXPORT_TSFM_BACKFILL=0`.
+- **Workflow.** `tsfm-backfill.yml` is dispatch-only. Dispatch it after `retro-backfill.yml` has
+  written the days.
+  - Days without complete physics are skipped, and so are days already written; it is resumable.
+  - Per-day timeout; failures are non-fatal.
+  - A day is admitted only if its whole budget (the per-day timeout, which bounds its reads,
+    inference and writes, plus 60 s) ends before the next protected window (06:00–08:30,
+    10:30–12:15 UTC). The clock is re-read after the GitHub checks. Otherwise, or while
+    daily-forecast or publish-web-data is queued or running, it stops cleanly.
+  - The live sim readers (`SIM_SQL` and the zone-JSON reader) both skip retro rows.
+- **Published.** The Timestral fields reach the scoreboard JSON and parquet, the Worker
+  (`shape.js`) and the UI: "Timestral MAE" and "Timestral rMAE" columns in the backfilled window,
+  on the hourly board only.
+- **Rollback by tag:** `DELETE FROM simulations.tsfm_overlay WHERE input_mode = 'postsim_backfill'
+  AND model_version = 'timestral-209m@<tag>'`.
+
 ## Original draft notes (2026-11-14)
 
 
