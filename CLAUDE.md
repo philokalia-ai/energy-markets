@@ -14,14 +14,15 @@ prices from a physically right model are the finding. A better score is
 evidence; it is not the goal and never the verdict.
 
 1. **Disagree early, then commit.** Objections, doubts and "there's a cheaper
-   way" are raised ONCE, at the prompt, with the cost stated. Once the owner
+   way" are raised once, at the prompt, with the cost stated. Once the owner
    decides, execute — never stop mid-task citing a rule, a gate, or a file.
    A surprise found mid-task is reported in the result, and work continues
    unless it is irreversible or unsafe.
 2. **The owner sets the mode at the prompt.** *Explore*: work autonomously,
    come back with ideas AND the evidence for them. *Research this*: the idea is
    the owner's; come back with the numbers. If the mode is unclear, ask one
-   question at the start — not later.
+   question at the start, not later. If nobody can answer (an agent working
+   while the owner is away), pick the likelier mode, say which, and go.
 3. **Physics beats scores.** A mechanism that is physically right is not
    rejected because an aggregate metric moved. Evaluate it where it acts
    (the hours/zones/regime it touches), and state plainly what the evaluation
@@ -32,10 +33,11 @@ evidence; it is not the goal and never the verdict.
    auction gate. This is the only invariant the conduct claim cannot survive
    without: with it a calibrated parameter is a market characteristic,
    without it it is leakage.
-5. **No circles.** Every line of work carries a budget stated up front (wall
-   time, cells, or attempts). When it is spent, stop and report what was
-   learned — do not re-run with new knobs. A failed idea is written down in
-   one paragraph and left.
+5. **No circles.** Don't re-run a failed idea with new knobs to chase a
+   score. Stop a line of work when the evidence says it won't pay off, write
+   it down in one paragraph, and leave it. A time or cell estimate stated up
+   front is for planning, not a stop signal: running past it is fine while the
+   work is converging, as long as the report says so.
 6. **Report what actually ran.** What was measured, what was skipped, and
    why — short, with the counts. No numbers without their coverage.
 7. **Everything saved is labelled, nothing live is overwritten.** Results
