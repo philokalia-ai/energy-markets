@@ -1,0 +1,183 @@
+{
+  "run_id": 43990408427,
+  "log_sha256": "0ef195c221aca651fb1ea15e0e3156ca7f7ad41540da8d08c90031476ffc9d19",
+  "method": "Timestamp differences from existing log markers; solver scopes include model/backend work; books include network enrichment and assembly, not SQL-only timings.",
+  "market_days": [
+    {
+      "market_day": "2026-10-18",
+      "wall_s": 4380.8,
+      "clear_s": 4379.7,
+      "book_s": 3947.6405219999997,
+      "solve_scope_s": 432.101576,
+      "outside_clears_s_rounded": 1.1000000000003638
+    },
+    {
+      "market_day": "2026-10-19",
+      "wall_s": 2787.8,
+      "clear_s": 2787.5,
+      "book_s": 2428.828249,
+      "solve_scope_s": 358.636146,
+      "outside_clears_s_rounded": 0.3000000000001819
+    },
+    {
+      "market_day": "2026-10-20",
+      "wall_s": 2832.9,
+      "clear_s": 2832.5,
+      "book_s": 2437.5016,
+      "solve_scope_s": 395.02074700000003,
+      "outside_clears_s_rounded": 0.40000000000009095
+    },
+    {
+      "market_day": "2026-10-21",
+      "wall_s": 2663.0,
+      "clear_s": 2662.6000000000004,
+      "book_s": 2352.981709,
+      "solve_scope_s": 309.64448799999997,
+      "outside_clears_s_rounded": 0.3999999999996362
+    }
+  ],
+  "clears": [
+    {
+      "utc_day": "2026-10-17",
+      "start": "2026-11-17T01:02:56.021597",
+      "book1_start": "2026-11-17T01:02:56.028494",
+      "solve1_start": "2026-11-17T01:38:41.581598",
+      "book2_start": "2026-11-17T01:40:40.738357",
+      "solve2_start": "2026-11-17T01:41:49.957508",
+      "solve2_end": "2026-11-17T01:44:06.550983",
+      "reported_pass1_s": 108.3,
+      "reported_pass2_s": 135.4,
+      "reported_clear_s": 2470.5,
+      "book1_s": 2145.553104,
+      "solve1_scope_s": 119.156759,
+      "book2_s": 69.219151,
+      "solve2_scope_s": 136.593475
+    },
+    {
+      "utc_day": "2026-10-18",
+      "start": "2026-11-17T01:44:06.564994",
+      "book1_start": "2026-11-17T01:44:06.565719",
+      "solve1_start": "2026-11-17T02:11:49.741538",
+      "book2_start": "2026-11-17T02:12:52.753554",
+      "solve2_start": "2026-11-17T02:14:02.446002",
+      "solve2_end": "2026-11-17T02:15:55.785328",
+      "reported_pass1_s": 61.8,
+      "reported_pass2_s": 112.2,
+      "reported_clear_s": 1909.2,
+      "book1_s": 1663.175819,
+      "solve1_scope_s": 63.012016,
+      "book2_s": 69.692448,
+      "solve2_scope_s": 113.339326
+    },
+    {
+      "utc_day": "2026-10-18",
+      "start": "2026-11-17T02:15:56.656190",
+      "book1_start": "2026-11-17T02:15:56.658440",
+      "solve1_start": "2026-11-17T02:35:21.569785",
+      "book2_start": "2026-11-17T02:36:25.682020",
+      "solve2_start": "2026-11-17T02:37:31.293857",
+      "solve2_end": "2026-11-17T02:40:18.772964",
+      "reported_pass1_s": 62.9,
+      "reported_pass2_s": 166.3,
+      "reported_clear_s": 1462.1,
+      "book1_s": 1164.911345,
+      "solve1_scope_s": 64.112235,
+      "book2_s": 65.611837,
+      "solve2_scope_s": 167.479107
+    },
+    {
+      "utc_day": "2026-10-19",
+      "start": "2026-11-17T02:40:18.788570",
+      "book1_start": "2026-11-17T02:40:18.789349",
+      "solve1_start": "2026-11-17T02:59:07.081467",
+      "book2_start": "2026-11-17T03:00:13.610291",
+      "solve2_start": "2026-11-17T03:01:23.623240",
+      "solve2_end": "2026-11-17T03:02:24.139220",
+      "reported_pass1_s": 65.3,
+      "reported_pass2_s": 59.4,
+      "reported_clear_s": 1325.4,
+      "book1_s": 1128.292118,
+      "solve1_scope_s": 66.528824,
+      "book2_s": 70.012949,
+      "solve2_scope_s": 60.51598
+    },
+    {
+      "utc_day": "2026-10-19",
+      "start": "2026-11-17T03:02:24.487226",
+      "book1_start": "2026-11-17T03:02:24.489487",
+      "solve1_start": "2026-11-17T03:21:35.695613",
+      "book2_start": "2026-11-17T03:22:25.283467",
+      "solve2_start": "2026-11-17T03:23:30.356716",
+      "solve2_end": "2026-11-17T03:25:45.123700",
+      "reported_pass1_s": 48.4,
+      "reported_pass2_s": 133.7,
+      "reported_clear_s": 1400.6,
+      "book1_s": 1151.206126,
+      "solve1_scope_s": 49.587854,
+      "book2_s": 65.073249,
+      "solve2_scope_s": 134.766984
+    },
+    {
+      "utc_day": "2026-10-20",
+      "start": "2026-11-17T03:25:45.136161",
+      "book1_start": "2026-11-17T03:25:45.136941",
+      "solve1_start": "2026-11-17T03:45:04.944745",
+      "book2_start": "2026-11-17T03:47:18.584426",
+      "solve2_start": "2026-11-17T03:48:19.998847",
+      "solve2_end": "2026-11-17T03:49:37.025075",
+      "reported_pass1_s": 132.4,
+      "reported_pass2_s": 75.9,
+      "reported_clear_s": 1431.9,
+      "book1_s": 1159.807804,
+      "solve1_scope_s": 133.639681,
+      "book2_s": 61.414421,
+      "solve2_scope_s": 77.026228
+    },
+    {
+      "utc_day": "2026-10-20",
+      "start": "2026-11-17T03:49:37.378280",
+      "book1_start": "2026-11-17T03:49:37.380518",
+      "solve1_start": "2026-11-17T04:07:45.204947",
+      "book2_start": "2026-11-17T04:09:35.269999",
+      "solve2_start": "2026-11-17T04:10:36.482942",
+      "solve2_end": "2026-11-17T04:11:33.811248",
+      "reported_pass1_s": 108.9,
+      "reported_pass2_s": 56.2,
+      "reported_clear_s": 1316.4,
+      "book1_s": 1087.824429,
+      "solve1_scope_s": 110.065052,
+      "book2_s": 61.212943,
+      "solve2_scope_s": 57.328306
+    },
+    {
+      "utc_day": "2026-10-21",
+      "start": "2026-11-17T04:11:33.824839",
+      "book1_start": "2026-11-17T04:11:33.825616",
+      "solve1_start": "2026-11-17T04:30:28.001351",
+      "book2_start": "2026-11-17T04:31:56.705622",
+      "solve2_start": "2026-11-17T04:33:06.474224",
+      "solve2_end": "2026-11-17T04:34:00.021083",
+      "reported_pass1_s": 87.5,
+      "reported_pass2_s": 52.4,
+      "reported_clear_s": 1346.2,
+      "book1_s": 1134.175735,
+      "solve1_scope_s": 88.704271,
+      "book2_s": 69.768602,
+      "solve2_scope_s": 53.546859
+    }
+  ],
+  "weather_events": [
+    {
+      "utc": "2026-11-17T00:56:56.882264",
+      "message": "\u250c Warning: open-meteo request rate-limited (429) (attempt 1/6); retrying in 22.3s"
+    },
+    {
+      "utc": "2026-11-17T00:57:49.128243",
+      "message": "\u250c Warning: open-meteo request rate-limited (429) (attempt 1/6); retrying in 23.0s"
+    },
+    {
+      "utc": "2026-11-17T00:58:12.168202",
+      "message": "\u250c Warning: open-meteo request rate-limited (429) (attempt 2/6); retrying in 18.9s"
+    }
+  ]
+}
