@@ -177,6 +177,8 @@ end
         push!(log, merge(log[1], (pace_wait=42.4,)))
         ls = openmeteo_budget_lines(log; span_days=15, chunk_days=14, paced=true)
         @test occursin("paced by weight to ≤ 540/min and ≤ 4500/h (waited 42 s this chunk", ls[3])
+        @test occursin("paced by weight to ≤ 270/min and ≤ 2250/h (this process's share 0.5 of the limits) (waited 42 s",
+                       openmeteo_budget_lines(log; span_days=15, chunk_days=14, paced=true, share=0.5)[3])
         @test !occursin("hourly one", ls[3])                        # 3,250 < 4,500/h
         for _ in 1:28; push!(log, rec(50, 4, 15)); end              # +1,400 → over the hourly cap
         @test occursin("and ≥ 62 min for the hourly one", openmeteo_budget_lines(log; span_days=15, chunk_days=14)[3])
@@ -186,6 +188,15 @@ end
     @testset "public pacer: sliding-window wait (pure) and the armed driver" begin
         win = openmeteo_pace_windows()
         @test win == ((60.0, 540.0), (3600.0, 4500.0))
+        # two concurrent retro workers (bin/run_retro_backfill.py) share one IP's limits
+        withenv("EUPHEMIA_OPENMETEO_PACE_SHARE" => "0.5") do
+            @test openmeteo_pace_windows() == ((60.0, 270.0), (3600.0, 2250.0))
+        end
+        for (v, x) in (("abc", 1.0), ("0", 0.05), ("2", 1.0), ("NaN", 1.0), (" 0.25 ", 0.25))
+            withenv("EUPHEMIA_OPENMETEO_PACE_SHARE" => v) do
+                @test openmeteo_pace_share() == x
+            end
+        end
         @test openmeteo_pace_wait(Tuple{Float64,Float64}[], 0.0, 50.0) == 0.0
         log = [(0.0, 500.0)]
         @test openmeteo_pace_wait(log, 10.0, 40.0) == 0.0          # 540 fits exactly

@@ -65,6 +65,7 @@ class PlanTest(unittest.TestCase):
             self.assertEqual(actual[key], original[key])
         self.assertEqual(actual["JULIA_NUM_THREADS"], "4")
         self.assertEqual(actual["EUPHEMIA_PG_POOL"], "2")
+        self.assertEqual(actual["EUPHEMIA_OPENMETEO_PACE_SHARE"], "0.5")
         self.assertEqual(original["EUPHEMIA_FORECAST_RETRO_START"], "2026-09-14")
 
 

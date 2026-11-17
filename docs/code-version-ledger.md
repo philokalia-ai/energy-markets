@@ -440,6 +440,8 @@ Dated reminders and scoring-policy notes that do not change `code_version`.
     on a fully public chunk with fast responses, #455 review). A fully public chunk now
     takes ≥6 min of fetching, two back to back ≈63 min. The daily limit is not paced
     (the `💸` lines report it). `EUPHEMIA_OPENMETEO_PUBLIC_PACE=0` disables the pacer.
+    `bin/run_retro_backfill.py --workers 2` sets `EUPHEMIA_OPENMETEO_PACE_SHARE=0.5` in
+    each child, so the two concurrent processes together stay within the same caps.
   - The live run is unchanged: the cache is off and the breaker and pacer unarmed there.
   - The nightly GFS-vintage capture (`bin/capture_gfs_vintages.jl`) now also archives
     cloud_cover and surface_pressure (the rest of `ML_RES_VARS`, via

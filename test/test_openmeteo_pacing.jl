@@ -78,7 +78,7 @@ end
 withenv("EUPHEMIA_OPENMETEO_PREVRUNS_URL" => PRIMARY, "EUPHEMIA_OPENMETEO_URL" => PRIMARY,
         "EUPHEMIA_OPENMETEO_ZONE_THROTTLE" => "0", "EUPHEMIA_OPENMETEO_CACHE_DIR" => nothing,
         "EUPHEMIA_OPENMETEO_GAPFILL" => nothing, "EUPHEMIA_OPENMETEO_PUBLIC_PACE" => nothing,
-        "EUPHEMIA_OPENMETEO_MODELS" => nothing) do
+        "EUPHEMIA_OPENMETEO_MODELS" => nothing, "EUPHEMIA_OPENMETEO_PACE_SHARE" => nothing) do
     lim = openmeteo_free_limits()
     d0, d1 = Date(2026, 9, 13), Date(2026, 9, 27)     # one 14-day chunk's UTC span
     @testset "public pacing on the real retro fetch loops (#455 review)" begin
@@ -109,6 +109,19 @@ withenv("EUPHEMIA_OPENMETEO_PREVRUNS_URL" => PRIMARY, "EUPHEMIA_OPENMETEO_URL" =
             println("  pacing: chunk 1 fully public in $(round(t1 / 60; digits=1)) virtual min, " *
                     "two chunks in $(round(clock[] / 60; digits=1)); peak 60 s window $(peak(60.0)), " *
                     "peak 3600 s window $(peak(3600.0)) weighted calls")
+        end
+        @testset "two workers: each process paces to half (EUPHEMIA_OPENMETEO_PACE_SHARE=0.5)" begin
+            # bin/run_retro_backfill.py --workers 2 runs two such processes at once; each
+            # bounded by half the caps, their sum stays within 540/min and 4,500/h.
+            withenv("EUPHEMIA_OPENMETEO_PACE_SHARE" => "0.5") do
+                reset!(armed=true)
+                prepare_chunk(d0, d1)
+                @test sum(last, sent) == 3200
+                @test peak(60.0) <= 0.5 * 0.9 * lim.minute
+                @test clock[] >= 60 * (3200 / (0.45 * lim.minute) - 1)
+                println("  pacing (share 0.5): chunk fully public in $(round(clock[] / 60; digits=1)) virtual min, " *
+                        "peak 60 s window $(peak(60.0))")
+            end
         end
         @testset "kill switch EUPHEMIA_OPENMETEO_PUBLIC_PACE=0" begin
             withenv("EUPHEMIA_OPENMETEO_PUBLIC_PACE" => "0") do

@@ -281,9 +281,19 @@ openmeteo_pacer_arm!(on::Bool=true) = (OPENMETEO_PACER_ARMED[] = on; on)
 "True when public requests are paced: armed and not killed by EUPHEMIA_OPENMETEO_PUBLIC_PACE=0."
 openmeteo_pacer_active() = OPENMETEO_PACER_ARMED[] && get(ENV, "EUPHEMIA_OPENMETEO_PUBLIC_PACE", "1") != "0"
 
-"The pacer's sliding windows `(span_s, max weighted calls)`: `headroom` × the per-minute and per-hour limits."
-openmeteo_pace_windows(limits=openmeteo_free_limits(); headroom::Real=0.9) =
-    ((60.0, headroom * limits.minute), (3600.0, headroom * limits.hour))
+"""
+This process's share of the public limits, `EUPHEMIA_OPENMETEO_PACE_SHARE` (default 1;
+bin/run_retro_backfill.py sets 0.5 for each of its two concurrent workers, which
+share one IP). Clamped to 0.05..1; an unparsable value counts as 1.
+"""
+function openmeteo_pace_share()
+    x = tryparse(Float64, strip(get(ENV, "EUPHEMIA_OPENMETEO_PACE_SHARE", "1")))
+    return x === nothing || isnan(x) ? 1.0 : clamp(x, 0.05, 1.0)
+end
+
+"The pacer's sliding windows `(span_s, max weighted calls)`: `share` × `headroom` × the per-minute and per-hour limits."
+openmeteo_pace_windows(limits=openmeteo_free_limits(); headroom::Real=0.9, share::Real=openmeteo_pace_share()) =
+    ((60.0, share * headroom * limits.minute), (3600.0, share * headroom * limits.hour))
 
 """
     openmeteo_pace_wait(log, t, w; windows=openmeteo_pace_windows()) -> seconds
@@ -424,12 +434,13 @@ open-meteo's free limits (`limits`, weighted calls per minute / hour / day, used
 `headroom`). "Worst case" is the chunk with every batch served publicly and no cache
 (each batch's request weight, `openmeteo_call_weight`); "spent" is what the public
 requests of this chunk actually cost. `span_days` is the chunk's UTC span;
-`paced` whether the public-request pacer (`openmeteo_pace!`, same `headroom`)
+`paced` whether the public-request pacer (`openmeteo_pace!`, same `headroom`, at
+this process's `share`)
 bounds the rate — the per-zone sleep EUPHEMIA_OPENMETEO_ZONE_THROTTLE does not
 (uneven batch sizes, up to two requests per sleep). Pure.
 """
 function openmeteo_budget_lines(log::AbstractVector=WEATHER_FETCH_LOG; span_days::Int, chunk_days::Int,
-                                paced::Bool=openmeteo_pacer_active(),
+                                paced::Bool=openmeteo_pacer_active(), share::Real=openmeteo_pace_share(),
                                 limits=openmeteo_free_limits(), headroom::Real=0.9)
     rs = [r for r in log if hasproperty(r, :weight)]
     isempty(rs) && return String[]
@@ -452,7 +463,8 @@ function openmeteo_budget_lines(log::AbstractVector=WEATHER_FETCH_LOG; span_days
     waited = sum((r.pace_wait for r in rs if hasproperty(r, :pace_wait)); init=0.0)
     push!(out, "rate: a fully public chunk needs ≥ $(ceil(Int, wc / per_min)) min of fetching for the per-minute limit" *
                (wc > per_h ? " and ≥ $(ceil(Int, 60 * wc / per_h)) min for the hourly one" : "") * "; " *
-               (paced ? "public requests are paced by weight to ≤ $(_fmt_calls(per_min))/min and ≤ $(_fmt_calls(per_h))/h " *
+               (paced ? "public requests are paced by weight to ≤ $(_fmt_calls(share * per_min))/min and ≤ $(_fmt_calls(share * per_h))/h " *
+                        (share < 1 ? "(this process's share $(share) of the limits) " : "") *
                         "(waited $(round(Int, waited)) s this chunk; EUPHEMIA_OPENMETEO_PUBLIC_PACE=0 disables)" :
                         "public pacing OFF — nothing but response latency bounds the per-minute rate " *
                         "(the per-zone throttle does not; unset EUPHEMIA_OPENMETEO_PUBLIC_PACE=0)"))
