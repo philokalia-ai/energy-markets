@@ -278,6 +278,7 @@ using .MarketOrders: MarketOrder, SimpleOrder, BlockOrder, LinkedBlockOrder, Exc
     FlexibleOrder, AggregatedPeriodicOrder, MICOrder, LoadGradientOrder, MeritOrder, PUNOrder,
     LinkedHourlyOrder
 
+include("cv45_knobs.jl")       # cv45 per-change env knobs (cv45_on)
 include("Generators.jl")
 include("FuelTypeParameters.jl")
 include("Loads.jl")

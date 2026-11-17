@@ -1,0 +1,48 @@
+# cv45 knobs (src/cv45_knobs.jl): master switch, per-knob override, value rules.
+# DB-free, < 1 s.
+using Test
+using Euphemia
+const MOB = Euphemia.MeritOrderBook
+
+function withenv_cv45(f, pairs...)
+    keys_ = ["EUPHEMIA_CV45", Euphemia.CV45_KNOBS..., "EUPHEMIA_COMPLEX_ORDERS"]
+    saved = Dict(k => get(ENV, k, nothing) for k in keys_)
+    try
+        foreach(k -> delete!(ENV, k), keys_)
+        for (k, v) in pairs; ENV[k] = v; end
+        f()
+    finally
+        for (k, v) in saved
+            v === nothing ? delete!(ENV, k) : (ENV[k] = v)
+        end
+    end
+end
+
+@testset "cv45 knobs" begin
+    withenv_cv45() do      # unset ⇒ the full cv45 set
+        @test all(Euphemia.cv45_on, Euphemia.CV45_KNOBS)
+        @test MOB.complex_order_kinds() == Set(["ps", "reservoir"])
+    end
+    withenv_cv45("EUPHEMIA_CV45" => "off") do      # master off ⇒ cv44
+        @test !any(Euphemia.cv45_on, Euphemia.CV45_KNOBS)
+        @test MOB.complex_order_kinds() == Set(["ps"])
+    end
+    withenv_cv45("EUPHEMIA_CV45" => "off", "EUPHEMIA_CV45_PUMP" => "on") do   # single-change arm
+        @test Euphemia.cv45_on("EUPHEMIA_CV45_PUMP")
+        @test !Euphemia.cv45_on("EUPHEMIA_CV45_RESERVOIR")
+    end
+    withenv_cv45("EUPHEMIA_CV45_ELASTIC" => "off") do   # full set minus one
+        @test !Euphemia.cv45_on("EUPHEMIA_CV45_ELASTIC")
+        @test Euphemia.cv45_on("EUPHEMIA_CV45_GAS_HHV")
+    end
+    withenv_cv45("EUPHEMIA_COMPLEX_ORDERS" => "off") do   # complex-orders kill switch still wins
+        @test isempty(MOB.complex_order_kinds())
+    end
+    withenv_cv45("EUPHEMIA_CV45_PUMP" => "maybe") do
+        @test_throws ErrorException Euphemia.cv45_on("EUPHEMIA_CV45_PUMP")
+    end
+    # Values come from declared constants, not new free parameters
+    @test MOB.TRANCHES[end][2] == 1.6
+    @test MOB.BACKSTOP_PRICE_MULT == 1.8
+    @test Euphemia.GAS_NCV_PER_GCV == 0.90
+end

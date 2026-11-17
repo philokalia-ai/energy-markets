@@ -215,7 +215,12 @@
 # v43 -> v44: pumped-storage complex orders on by default (EUPHEMIA_COMPLEX_ORDERS
 # default `ps`: energy-limited LinkedHourlyOrder families + full-day master LP,
 # fix-and-reprice); kill-switch EUPHEMIA_COMPLEX_ORDERS=off; see the ledger.
-const ENERGY_PRICES_CODE_VERSION = 44
+# v44 -> v45: quantity and cost-level fixes from the November-2026 bias review
+# (pumping demand, energy-limited reservoir hydro, oil/"Other" availability, gas
+# HHV basis, hydro anchor clamp, elastic-demand ordering), each behind its own
+# EUPHEMIA_CV45_* knob; EUPHEMIA_CV45=off reproduces cv44 (src/cv45_knobs.jl);
+# see the ledger.
+const ENERGY_PRICES_CODE_VERSION = 45
 
 # Pool size: env-tunable (EUPHEMIA_PG_POOL) because the threaded book build
 # runs up to nzones concurrent queries — 5 connections cap the parallelism

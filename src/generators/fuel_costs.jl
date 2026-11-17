@@ -89,6 +89,14 @@ end
 const GAS_PLANT_EFFICIENCY = 0.55   # CCGT-dominated fleet efficiency (LHV basis)
 const GAS_EMISSION_FACTOR = 0.202   # tCO₂ per MWh of gas burned
 const GAS_VOM_COST = 2.0            # €/MWh variable O&M
+# cv45 EUPHEMIA_CV45_GAS_HHV: TTF is traded per MWh of GROSS calorific value
+# (GTS, the TTF operator, states energy on the superior/gross calorific value,
+# Hs = 35.17 MJ/m³ — Definitions Code Gas). GAS_PLANT_EFFICIENCY is an LHV (net)
+# efficiency, so the fuel term needs TTF / (η_LHV × NCV/GCV). NCV/GCV ≈ 0.90 for
+# natural gas (IEA/Eurostat/UN Energy Statistics Manual, 2005, §"Calorific
+# values": net ≈ 90% of gross for natural gas). The carbon term is unchanged:
+# 0.202 tCO₂/MWh is already on an NCV basis (IPCC 2006 default 56.1 t/TJ NCV).
+const GAS_NCV_PER_GCV = 0.90
 
 # EUA carbon price (€/tCO₂): approximate yearly averages of the EU ETS
 # December-contract price. Fallback for dates before the daily feed's
@@ -295,7 +303,9 @@ function get_marginal_cost(day::Dates.Date, fuel_type::String, bidding_zone::Str
     if fuel_type == "Fossil Gas"
         ttf = get_ttf_price(day; cutoff=cutoff)
         if ttf !== nothing
-            fuel_cost = ttf / GAS_PLANT_EFFICIENCY
+            fuel_cost = cv45_on("EUPHEMIA_CV45_GAS_HHV") ?
+                        ttf / (GAS_PLANT_EFFICIENCY * GAS_NCV_PER_GCV) :
+                        ttf / GAS_PLANT_EFFICIENCY
             carbon_cost = GAS_EMISSION_FACTOR / GAS_PLANT_EFFICIENCY * eua_price(day; cutoff=cutoff)
             return fuel_cost + carbon_cost + GAS_VOM_COST
         end
