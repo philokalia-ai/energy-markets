@@ -167,7 +167,8 @@ function pending_slices()
               AND s.lead_days = fp.lead_days
               AND s.code_version = fp.code_version
               AND s.input_mode = fp.input_mode
-              AND s.is_retro = fp.is_retro))
+              AND s.is_retro = fp.is_retro
+              AND s.reset_tag IS NOT DISTINCT FROM fp.reset_tag))
     """
     # TWO-STEP discovery (2026-07-23). The old single query ran a correlated
     # EXISTS against 1.9 GB entsoe.energy_prices for each of the ~80k
@@ -179,7 +180,7 @@ function pending_slices()
     # for realized market days, intersected in Julia. Same result set.
     slices = Euphemia.sql2df_with_retry("""
         SELECT DISTINCT fp.market_date, fp.lead_days, fp.code_version, fp.input_mode,
-               fp.is_retro
+               fp.is_retro, fp.reset_tag
         FROM simulations.forecast_prices fp
         WHERE TRUE
         $rescore_clause
@@ -198,16 +199,21 @@ function pending_slices()
     return slices[[d in realized_days for d in slices.market_date], :]
 end
 
-"Sim forecast rows of one slice, keyed (zone, naive-UTC hour)."
-function slice_sim(market_date::Date, lead_days::Int, cv::Int, input_mode::String)
+"""Sim forecast rows of one slice, keyed (zone, naive-UTC hour). The slice includes
+`is_retro` and `reset_tag` (#431 R1): a retro campaign written ALONGSIDE the live record
+can share (market_date, lead, cv, mode) with live rows — or another campaign's rows —
+of other zones, so they are never read, scored or stamped together."""
+function slice_sim(market_date::Date, lead_days::Int, cv::Int, input_mode::String,
+                   is_retro::Bool=false, reset_tag::Union{Nothing,String}=nothing)
     return Euphemia.sql2df_with_retry("""
         SELECT bidding_zone AS z, (date_time_utc AT TIME ZONE 'UTC') AS t,
                price_eur_mwh AS sim
         FROM simulations.forecast_prices
         WHERE market_date = \$1 AND lead_days = \$2 AND code_version = \$3
-          AND input_mode = \$4
+          AND input_mode = \$4 AND is_retro = \$5 AND reset_tag IS NOT DISTINCT FROM \$6
         ORDER BY 1, 2
-    """, [market_date, lead_days, cv, input_mode])
+    """, [market_date, lead_days, cv, input_mode, is_retro,
+          reset_tag === nothing ? missing : reset_tag])
 end
 
 function upsert_score!(market_date::Date, zone::String, lead_days::Int, cv::Int,
@@ -308,18 +314,13 @@ function main()
         cv = Int(r.code_version)
         input_mode = String(r.input_mode)
         is_retro = "is_retro" in names(slices) && !ismissing(r.is_retro) && Bool(r.is_retro)
-        # reset_tag is uniform within a slice — read one row's value.
-        reset_tag = let rt = Euphemia.sql2df_with_retry("""
-                SELECT MAX(reset_tag) AS t FROM simulations.forecast_prices
-                WHERE market_date = \$1 AND lead_days = \$2 AND code_version = \$3
-                  AND input_mode = \$4
-            """, [market_date, lead_days, cv, input_mode])
-            (isempty(rt) || ismissing(rt.t[1])) ? nothing : String(rt.t[1])
-        end
+        # reset_tag is part of the slice identity (discovered per tag, #449 review):
+        # two campaigns in disjoint zones of one (date, lead, cv, mode) never merge.
+        reset_tag = ("reset_tag" in names(slices) && !ismissing(r.reset_tag)) ? String(r.reset_tag) : nothing
         println("\nScoring market_date=$market_date lead_days=$lead_days cv=$cv mode=$input_mode" *
                 (is_retro ? " [RETRO $(reset_tag)]" : ""))
 
-        sim = slice_sim(market_date, lead_days, cv, input_mode)
+        sim = slice_sim(market_date, lead_days, cv, input_mode, is_retro, reset_tag)
         # market_date is the Europe/Athens market day: its window starts at
         # 21:00/22:00 UTC on market_date-1, so actuals must cover BOTH UTC days.
         # (Q15_ONLY skips the hourly actuals: they are not used.)

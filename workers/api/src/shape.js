@@ -148,6 +148,8 @@ export function shapeScoreboard(rows, manifest) {
         code_version: num(r.code_version),   // single-cv guard for the track-gap chip
       };
       if (hasQ15) for (const k of Q15_BOARD) out[k] = num(r[k]);
+      // backfilled window (#431 R1): the reconstruction date, on those rows only
+      if (r.reconstructed_utc !== undefined && r.reconstructed_utc !== null) out.reconstructed_utc = String(r.reconstructed_utc);
       if (hasNaive) {
         for (const k of NAIVE_BOARD) out[k] = num(r[k]);
         if (out.lead_days <= 1) for (const k of NAIVE_BOARD_LEAD1) out[k] = num(r[k]);
