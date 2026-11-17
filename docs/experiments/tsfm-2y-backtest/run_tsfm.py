@@ -21,6 +21,10 @@ order, as the physics scorer (`offline-bf/score.py`) does.
 Price context: `prices_duckdb`'s frame (EUPHEMIA_DA_INPUT, default highest_seq), loaded once for the
 whole range and cut per day by `build_context` (strictly before the start of D).
 
+Post-sim readiness: day D runs once every physics day in [max(D-60, --phys-start), D] has landed
+(live had a full 60-day sim history; the window's first 60 days get what exists). --loop re-scans
+until the physics run is finished (offline-bf/run2y.out: ALLDONE, or the run is gone).
+
 Resumable: one CSV per (mode, day) in --out/<mode>/<day>.csv, written atomically; done days skip.
 Parallel: --workers processes x --threads torch threads, each pinned by the caller (taskset).
 
@@ -101,43 +105,77 @@ def claim(f: Path) -> bool:
     return False
 
 
+def history_ready(files, delivery, phys_start, days=SIM_HISTORY_DAYS):
+    """Post-sim day D is ready when every physics day in [max(D - days, phys_start), D] has landed
+    (live ran with a full 60-day sim history; the window's first days get what exists)."""
+    d = pd.Timestamp(delivery).normalize()
+    lo = max(d - pd.Timedelta(days=days), pd.Timestamp(phys_start))
+    return all(x.date().isoformat() in files for x in pd.date_range(lo, d, freq="D"))
+
+
+def physics_finished(a):
+    """The offline physics run (offline-bf/run2y.sh > run2y.out) is over: its ALLDONE marker, or
+    its output exists and no run2y.sh process is left (it died). Not started yet = not finished."""
+    out = Path(a.phys_done)
+    try:
+        text = out.read_text()
+    except OSError:
+        return False
+    if "ALLDONE" in text:
+        return True
+    import subprocess
+    ps = subprocess.run(["ps", "-eo", "args"], capture_output=True, text=True).stdout
+    return not any("run2y.sh" in l for l in ps.splitlines())
+
+
 def worker(args):
     days, a = args
     os.environ.setdefault("HF_HUB_OFFLINE", "1")
     con = eto.open_store("duckdb", a.extract)
-    # one price frame for all of this worker's days; build_context cuts it strictly before each D
+    # one price frame for all days; build_context cuts it strictly before each D
     first, last = min(days), max(days)
     span = eto.day_start_utc(last) - eto.day_start_utc(first)
     prices = eto.prices_duckdb(con, last, ctx_hours=eto.CTX_HOURS + int(span / pd.Timedelta(hours=1)))
     con.close()
     model = eto.ARMS["timestral-209m"](a.threads)
-    files = physics_files(a.phys_dir) if a.mode == "postsim" else {}
     outdir = Path(a.out) / a.mode
-    for d in days:
-        f = outdir / f"{d}.csv"
-        if f.exists() or not claim(f):
-            continue
-        sim = None
-        if a.mode == "postsim":
-            if d not in files:
-                print(f"{d} skip: no physics", flush=True)
+    cols = ["zone", "market_date", "t_utc", "issue_utc", "input_mode", "context_end_utc",
+            "sim_made_utc", "after_gate", "tsfm_median", "tsfm_q10", "tsfm_q90", "p_le0_tsfm"]
+    while True:
+        finished = a.mode != "postsim" or physics_finished(a)   # read BEFORE the scan
+        files = physics_files(a.phys_dir) if a.mode == "postsim" else {}
+        did, waiting = 0, 0
+        for d in days:
+            f = outdir / f"{d}.csv"
+            if f.exists():
+                continue
+            if a.mode == "postsim" and not history_ready(files, d, a.phys_start):
+                waiting += 1
+                continue
+            if not claim(f):
+                continue
+            sim = physics_sim(files, d) if a.mode == "postsim" else None
+            t0 = time.time()
+            try:
+                hourly, _ = eto.overlay(model, prices, ZONES, d, a.mode, sim)
+            except Exception as e:  # one day never stops the run; it is reported and retried
+                print(f"{d} FAILED {type(e).__name__}: {e}", flush=True)
                 f.with_suffix(".lock").unlink(missing_ok=True)
                 continue
-            sim = physics_sim(files, d)
-        t0 = time.time()
-        try:
-            hourly, _ = eto.overlay(model, prices, ZONES, d, a.mode, sim)
-        except Exception as e:  # one day never stops the run; it is reported and retried next run
-            print(f"{d} FAILED {type(e).__name__}: {e}", flush=True)
+            tmp = f.with_suffix(".tmp")
+            hourly[cols].to_csv(tmp, index=False)
+            tmp.rename(f)
             f.with_suffix(".lock").unlink(missing_ok=True)
-            continue
-        cols = ["zone", "market_date", "t_utc", "issue_utc", "input_mode", "context_end_utc",
-                "sim_made_utc", "after_gate", "tsfm_median", "tsfm_q10", "tsfm_q90", "p_le0_tsfm"]
-        tmp = f.with_suffix(".tmp")
-        hourly[cols].to_csv(tmp, index=False)
-        tmp.rename(f)
-        f.with_suffix(".lock").unlink(missing_ok=True)
-        print(f"{d} done {time.time() - t0:.1f}s", flush=True)
+            did += 1
+            print(f"{d} done {time.time() - t0:.1f}s", flush=True)
+            if a.mode == "postsim":
+                files = physics_files(a.phys_dir)   # pick up newly landed days mid-pass
+        if not a.loop or finished or (waiting == 0 and did == 0):
+            if waiting:
+                print(f"pass over: {waiting} days still lack a complete physics history", flush=True)
+            return
+        if did == 0:
+            time.sleep(300)
 
 
 def main():
@@ -151,6 +189,10 @@ def main():
     ap.add_argument("--workers", type=int, default=1)
     ap.add_argument("--threads", type=int, default=4)
     ap.add_argument("--seed", type=int, default=431)
+    ap.add_argument("--phys-start", default="2024-11-16", help="first day of the physics backfill")
+    ap.add_argument("--phys-done", default=os.path.expanduser("~/armada/em-team/results/offline-bf/run2y.out"))
+    ap.add_argument("--loop", action="store_true",
+                    help="postsim: keep re-scanning until the physics run is finished and every ready day is done")
     a = ap.parse_args()
     if not a.extract:
         raise SystemExit("--extract or EUPHEMIA_DUCKDB_PATH")
@@ -158,7 +200,9 @@ def main():
     # shuffled order: partial results cover the whole period evenly
     order = list(np.random.default_rng(a.seed).permutation(days))
     (Path(a.out) / a.mode).mkdir(parents=True, exist_ok=True)
-    chunks = [order[w::a.workers] for w in range(a.workers)]
+    # every worker walks the whole order (rotated), claims keep them off each other's days
+    step = max(1, len(order) // a.workers)
+    chunks = [order[w * step:] + order[:w * step] for w in range(a.workers)]
     if a.workers == 1:
         worker((chunks[0], a))
         return
