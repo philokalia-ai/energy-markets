@@ -9,7 +9,14 @@ SB="$(mktemp -d)"; trap 'rm -rf "$SB"' EXIT
 mkdir -p "$SB/repo/bin" "$SB/user/.local/bin" "$SB/user/.juliaup/bin" "$SB/repo/data/model_line_feats"
 cp "$ROOT/bin/emit_model_lines.sh" "$SB/repo/bin/"
 touch "$SB/repo/.env" "$SB/repo/data/model_line_feats/$(date -u -d '-6 days' +%F).csv"
-printf '#!/bin/bash\nexit 0\n' > "$SB/user/.juliaup/bin/julia"
+cat > "$SB/user/.juliaup/bin/julia" <<'EOF'
+#!/bin/bash
+case "$*" in
+  *'using Pkg'*) exit "${PKG_RC:-0}" ;;
+  *capture_book_features.jl*) exit "${CAPTURE_RC:-0}" ;;
+esac
+exit 0
+EOF
 # `uv run ... python3 bin/emit_model_lines.py` -> exit $MODEL_LINES_RC
 cat > "$SB/user/.local/bin/uv" <<'EOF'
 #!/bin/bash
@@ -42,4 +49,10 @@ run 3 "FAILED \(exit 7\)"                               TSFM_STUB=fail MODEL_LIN
 run 0 "tsfm refresh \(stub: ok\)"                       TSFM_STUB=ok EMIT_NO_TSFM=0
 run 0 "MODEL_LINES_STRICT_ASOF=unset"                    TSFM_STUB=ok
 run 0 "MODEL_LINES_STRICT_ASOF=0 MODEL_LINES_REWRITE_PAST=1" TSFM_STUB=ok MODEL_LINES_STRICT_ASOF=0 MODEL_LINES_REWRITE_PAST=1
+# A failed Julia prerequisite must not suppress the independent post-sim step.
+run 41 "tsfm refresh \(stub: ok\)" TSFM_STUB=ok PKG_RC=41
+run 41 "TSFM refresh skipped" TSFM_STUB=ok PKG_RC=41 EMIT_NO_TSFM=1
+rm "$SB/repo/data/model_line_feats/$(date -u -d '-6 days' +%F).csv"
+run 42 "tsfm refresh \(stub: ok\)" TSFM_STUB=ok CAPTURE_RC=42
+run 42 "post-sim TSFM refresh FAILED \(exit 7\)" TSFM_STUB=fail CAPTURE_RC=42
 [ $fails -eq 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }

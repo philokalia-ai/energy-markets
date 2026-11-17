@@ -30,22 +30,32 @@ if [ -z "${EMIT_NO_PULL:-}" ] && [ -d .git ]; then
         echo "WARNING: checkout on branch '$branch'$([ -n "$(git status --porcelain --untracked-files=no)" ] && echo ' with local changes') — self-update skipped, running $(git rev-parse --short HEAD)"
     fi
 fi
-# Install whatever the (possibly just fast-forwarded) manifest needs. A pull that
-# bumps a dependency (e.g. HiGHS 1.24 → 1.27, Julia-version-specific
-# Manifest-v1.13.toml) otherwise fails the first uncached day with "required but
-# does not seem to be installed". Instantiate never rewrites the manifest and
-# is a few seconds when everything is already present.
-julia --project=. --startup-file=no -e 'using Pkg; Pkg.instantiate()'
+# Both emitters need the cron environment, even when Julia/model-line preparation fails.
 set -a; . ./.env; set +a
 export EUPHEMIA_DATA_STORE=postgres
-mkdir -p data/model_line_feats
-F=$(date -u -d "-6 days" +%F)
-if [ ! -f "data/model_line_feats/$F.csv" ] && [ ! -f "data/backfill_books_cv37/$F.parquet" ]; then
-    julia --project=. bin/capture_book_features.jl "$F" "data/model_line_feats/$F.csv"
-fi
-if python3 -c "import sklearn, joblib" 2>/dev/null; then PY=python3; else PY="uv run --quiet --with scikit-learn,pandas,pyarrow,duckdb,joblib,psycopg2-binary python3"; fi
+
+emit_model_lines() {
+    # This function is called in an OR-list; Bash disables errexit there, so each
+    # preparation command must explicitly return its original failure status.
+    julia --project=. --startup-file=no -e 'using Pkg; Pkg.instantiate()' || return $?
+    mkdir -p data/model_line_feats || return $?
+    local feature_day
+    feature_day=$(date -u -d "-6 days" +%F) || return $?
+    if [ ! -f "data/model_line_feats/$feature_day.csv" ] && [ ! -f "data/backfill_books_cv37/$feature_day.parquet" ]; then
+        julia --project=. bin/capture_book_features.jl "$feature_day" "data/model_line_feats/$feature_day.csv" || return $?
+    fi
+    local -a py=(python3)
+    if ! python3 -c "import sklearn, joblib" 2>/dev/null; then
+        py=(uv run --quiet --with scikit-learn,pandas,pyarrow,duckdb,joblib,psycopg2-binary python3)
+    fi
+    "${py[@]}" bin/emit_model_lines.py
+}
+
 rc=0
-$PY bin/emit_model_lines.py || rc=$?
+emit_model_lines || {
+    rc=$?
+    echo "WARNING: model-lines stage FAILED (exit $rc) — post-sim refresh remains independent" >&2
+}
 # 3. Post-sim TSFM refresh — after (and independent of) the model lines; their status is the exit status.
 if [ "${EMIT_NO_TSFM:-0}" != "0" ]; then
     echo "TSFM refresh skipped (EMIT_NO_TSFM=$EMIT_NO_TSFM)"
