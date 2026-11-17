@@ -134,6 +134,30 @@ time.sleep(.5)
         self.assertEqual(rc, 1)
         self.assertLessEqual(len(list(Path(self.tmp.name).iterdir())), 2)
 
+    async def test_cancellation_during_spawn_claims_the_child(self):
+        original = retro.asyncio.create_subprocess_exec
+        spawned = []
+        async def slow_creation(*args, **kwargs):
+            proc = await original(*args, **kwargs)
+            spawned.append(proc)
+            await asyncio.sleep(.2)
+            return proc
+        with patch.object(retro.asyncio, "create_subprocess_exec", side_effect=slow_creation):
+            task = asyncio.create_task(retro.run_parallel([sys.executable, "-c", "import time; time.sleep(60)"], self.env, self.chunks, self.deadline, self.cpus))
+            for _ in range(100):
+                if len(spawned) == 2:
+                    break
+                await asyncio.sleep(.005)
+            self.assertEqual(len(spawned), 2)
+            task.cancel()
+            try:
+                with self.assertRaises(asyncio.CancelledError):
+                    await asyncio.wait_for(task, 2)
+                for proc in spawned:
+                    self.assertIsNotNone(proc.returncode)
+            finally:
+                await retro.terminate_owned(spawned)
+
     async def test_spawn_failure_does_not_leave_sibling_work(self):
         original = retro.asyncio.create_subprocess_exec
         spawned = []

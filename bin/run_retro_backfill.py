@@ -104,12 +104,19 @@ async def run_parallel(command, env, chunks, deadline, cpus, *, now=None):
             index, (start, end) = pending.popleft()
             prefix = f"[chunk {index} {start}..{end}] "
             print(prefix + f"starting on CPUs {affinity}; PG pool 2", flush=True)
-            proc = await asyncio.create_subprocess_exec(
+            creation = asyncio.create_task(asyncio.create_subprocess_exec(
                 "taskset", "-c", affinity, *command,
                 cwd=ROOT, env=worker_env(env, start, end),
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
                 start_new_session=True,
-            )
+            ))
+            try:
+                proc = await asyncio.shield(creation)
+            except asyncio.CancelledError:
+                # Cancellation can arrive after fork but before subprocess
+                # creation returns. Claim that child before global cleanup.
+                active.add(await creation)
+                raise
             active.add(proc)
             completed = False
             try:
