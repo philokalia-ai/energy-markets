@@ -226,6 +226,7 @@ BASE_SQL = """
                                 ORDER BY lead_days ASC, prediction_made_utc DESC) rn
       FROM simulations.forecast_prices
       WHERE input_mode LIKE 'weather%%' AND date_time_utc >= %s::date
+        AND NOT COALESCE(is_retro, FALSE)
         AND date_time_utc < %s::date + INTERVAL '1 day'
         AND (%s::int IS NULL OR code_version = %s::int)
         {cutoff}) x

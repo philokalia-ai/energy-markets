@@ -448,6 +448,19 @@ end
     @test h[("ES", "p_le0", DateTime(H))] == 0.05
     @test !haskey(h, ("DE_LU", "tsfm_median", DateTime(H)))              # no day row -> no chosen vintage
     @test all(isempty, tsfm_overlay_maps(NamedTuple[]))
+    # #431 R2: a backfill vintage is never the live one — not even with a later issue, and a
+    # zone-day that has ONLY backfill rows stays absent from the live maps.
+    bf = "timestral-209m@cv44-backfill-2026-11"
+    rows2 = vcat(rows, [
+        r("GR", D, "2026-11-14T22:00", "day", "p_any_le0", 0.99, "postsim_backfill", "2026-11-14T09:59", bf),
+        r("GR", D, H, "hour", "tsfm_median", 999.0, "postsim_backfill", "2026-11-14T09:59", bf),
+        r("PT", D, "2026-11-14T22:00", "day", "p_any_le0", 0.50, "postsim_backfill", "2026-11-14T06:30", bf),
+        r("PT", D, H, "hour", "tsfm_median", 42.0, "postsim_backfill", "2026-11-14T06:30", bf)])
+    h2, d2 = tsfm_overlay_maps(rows2)
+    @test d2[("GR", Date(2026, 11, 15))] == g && h2[("GR", "tsfm_median", DateTime(H))] == 60.0
+    @test !haskey(d2, ("PT", Date(2026, 11, 15))) && !haskey(h2, ("PT", "tsfm_median", DateTime(H)))
+    @test is_tsfm_backfill(TSFM_BACKFILL_MODE) && !is_tsfm_backfill("postsim") && !is_tsfm_backfill("pregate0630")
+    @test occursin("NOT LIKE '%backfill'", TSFM_OVERLAY_SQL)
 end
 
 @testset "native 15-min scores (score_q15 / q15_forecast / athens_day_quarters)" begin

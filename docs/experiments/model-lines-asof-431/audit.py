@@ -44,9 +44,9 @@ def live_forecasts(directory, start, end):
                 if start <= stamp.date() <= end and price is not None:
                     rows.append((obj['zone'], stamp, float(price), int(day['code_version']),
                                  pd.Timestamp(day.get('prediction_made_utc')),
-                                 int(day['lead_days']), day['input_mode']))
+                                 int(day['lead_days']), day['input_mode'], day.get('is_retro', False)))
     return pd.DataFrame(rows, columns=['bidding_zone', 'date_time_utc', 'price_eur_mwh',
-                        'code_version', 'prediction_made_utc', 'lead_days', 'input_mode']), hashes
+                        'code_version', 'prediction_made_utc', 'lead_days', 'input_mode', 'is_retro']), hashes
 
 
 def keys(rows): return {(r[0],r[1],r[2],r[4]) for r in rows}

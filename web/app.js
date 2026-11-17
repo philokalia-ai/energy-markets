@@ -3745,9 +3745,28 @@
                insufficient: true };
     });
   }
+  // "Backfilled" window (#431 R1, bin/scoreboard_windows.jl): the cv44 physics lead-1
+  // reconstruction of 2026-09-14..2026-11-15, scored on its own rows. In-sample: the
+  // cv44 characteristics were calibrated on overlapping data. Never pooled into the
+  // live windows; shown only here.
+  var BACKFILL_WINDOW = "backfilled";
+  var BACKFILL_LABEL = "backfilled (reconstructed, cv44; in-sample — calibration overlaps)";
+  function backfillNoteText(scores) {
+    var nd = 0, made = null;
+    scores.forEach(function (s) {
+      if (s.n_days > nd) nd = s.n_days;
+      if (s.reconstructed_utc && (!made || s.reconstructed_utc > made)) made = s.reconstructed_utc;
+    });
+    return "Backfilled: the cv44 model re-run for past market days (lead D-1, weather track) from the " +
+      "weather forecasts that existed the day before" + (made ? ", reconstructed on " + made : "") + " · " +
+      nd + " market day" + (nd === 1 ? "" : "s") + ". In-sample: the 43 characteristics (40 price-informed) " +
+      "were calibrated on data that overlaps these days, so this is not an out-of-sample score and is " +
+      "never mixed into the live record.";
+  }
   function renderWindowNote(scores) {
     var note = $("window-note");
     if (!note) return;
+    if (state.window === BACKFILL_WINDOW) { note.hidden = false; note.textContent = backfillNoteText(scores); return; }
     if (state.window !== FREEZE_WINDOW) { note.hidden = true; note.textContent = ""; return; }
     var nd = 0;
     scores.forEach(function (s) { if (s.n_days > nd) nd = s.n_days; });
@@ -3765,9 +3784,9 @@
     trackScores().forEach(function (s) { seen[s.window] = true; });
     var wins = Object.keys(seen);
     if (!wins.length) wins = ["all"];
-    var rank = function (w) { return w === "all" ? 0 : w === FREEZE_WINDOW ? 1 : 2; };
+    var rank = function (w) { return w === "all" ? 0 : w === FREEZE_WINDOW ? 1 : w === BACKFILL_WINDOW ? 2 : 3; };
     wins.sort(function (a, b) {
-      if (rank(a) !== rank(b)) return rank(a) - rank(b);   // all, since freeze, then months
+      if (rank(a) !== rank(b)) return rank(a) - rank(b);   // all, since freeze, backfilled, then months
       return a < b ? 1 : -1; // months newest first
     });
     return wins;
@@ -3788,7 +3807,8 @@
     var sel = $("window-select");
     sel.textContent = "";
     scoreboardWindows().forEach(function (w) {
-      var o = el("option", null, w === "all" ? "All days" : w === FREEZE_WINDOW ? FREEZE_LABEL : w);
+      var o = el("option", null, w === "all" ? "All days" : w === FREEZE_WINDOW ? FREEZE_LABEL :
+        w === BACKFILL_WINDOW ? BACKFILL_LABEL : w);
       o.value = w;
       sel.appendChild(o);
     });
@@ -3863,6 +3883,33 @@
       " on this window. Not a test of statistical significance.";
   }
 
+  // Timestral fields of the "backfilled" window (#431 R2, bin/tsfm_backfill_scores.jl): the
+  // post-sim Timestral line reconstructed over the same cv44 retro physics, scored on the hours of
+  // the physics backfill that also carry a Timestral median; rMAE against the board's naive.
+  function tsfmNaiveKind(s) {
+    return state.naive === "auto" || state.naive === "off" ? (s.lead_days <= 1 ? "epf" : "d7") : state.naive;
+  }
+  function tsfmMaeCell(td, s) {
+    if (s.tsfm_mae === null || s.tsfm_mae === undefined) {
+      td.textContent = "—"; td.className = ((td.className || "") + " null").trim(); return;
+    }
+    td.textContent = fmt(s.tsfm_mae, 1);
+    td.title = "Timestral (post-sim, reconstructed on the cv44 retro physics) MAE " + fmt(s.tsfm_mae, 2) +
+      " €/MWh on " + s.tsfm_n + " hours over " + s.tsfm_n_days + " days" +
+      (s.tsfm_arm ? " · " + s.tsfm_arm : "") + ". In-sample reconstruction, like the physics backfill.";
+  }
+  function tsfmRmaeCell(td, s) {
+    var kind = tsfmNaiveKind(s), r = s["tsfm_rmae_" + kind];
+    if (r === null || r === undefined) {
+      td.textContent = "—"; td.className = ((td.className || "") + " null").trim(); return;
+    }
+    var beats = r < 1;
+    td.appendChild(document.createTextNode(fmt(r, 2)));
+    td.appendChild(el("span", "naive-mark " + (beats ? "naive-beats" : "naive-loses"), beats ? " beats" : " loses"));
+    td.title = "Timestral rMAE " + fmt(r, 3) + " = Timestral MAE " + fmt(s.tsfm_mae, 2) + " ÷ " +
+      NAIVE_LABEL[kind] + " MAE " + fmt(s["tsfm_mae_naive_" + kind], 2) + " on the same " + s.tsfm_n + " hours.";
+  }
+
   function renderScoreboard() {
     var table = $("scoreboard-table");
     table.textContent = "";
@@ -3898,7 +3945,8 @@
       }).map(function (s) {
         return { zone: s.zone, lead_days: s.lead_days, window: s.window, input_mode: s.input_mode,
                  n_days: s.n_days_q15, mae: s.mae_q15, bias: s.bias_q15, corr: s.corr_q15,
-                 shape: s.shape_floor_q15, code_version: s.code_version };
+                 shape: s.shape_floor_q15, code_version: s.code_version,
+                 reconstructed_utc: s.reconstructed_utc };   // backfilled window note (#449 review)
       });
     }
     var resLabel = q15 ? "15-min " : "";
@@ -3936,6 +3984,13 @@
     var naiveOn = hasNaive && state.naive !== "off";
     if (naiveOn) METRICS = METRICS.concat([["naive", "naive"], ["rmae", "rMAE"]]);
     if (!naiveOn && (state.sort.metric === "naive" || state.sort.metric === "rmae")) {
+      state.sort = { lead: state.sort.lead, metric: "mae", dir: 1 };
+    }
+    // Timestral columns (#431 R2): backfilled window, hourly board, only when exported.
+    var tsfmOn = state.window === BACKFILL_WINDOW && !q15 &&
+      scores.some(function (s) { return s.tsfm_mae !== undefined; });
+    if (tsfmOn) METRICS = METRICS.concat([["tsfm", "Timestral MAE"], ["tsfm_rmae", "Timestral rMAE"]]);
+    if (!tsfmOn && (state.sort.metric === "tsfm" || state.sort.metric === "tsfm_rmae")) {
       state.sort = { lead: state.sort.lead, metric: "mae", dir: 1 };
     }
 
@@ -3983,6 +4038,10 @@
       var m = state.sort.metric;
       if (m === "corr") return s.corr === null ? Infinity : -s.corr; // higher corr = better
       if (m === "bias") return s.bias === null ? Infinity : Math.abs(s.bias); // closer to 0 = better
+      if (m === "tsfm" || m === "tsfm_rmae") {   // lower first
+        var tv = m === "tsfm" ? s.tsfm_mae : s["tsfm_rmae_" + tsfmNaiveKind(s)];
+        return tv === null || tv === undefined ? Infinity : tv;
+      }
       if (m === "naive" || m === "rmae") {   // lower naive MAE / lower rMAE first
         var nb = naiveFor(s);
         var nv = nb ? (m === "naive" ? nb.mae : nb.rmae) : null;
@@ -4050,6 +4109,10 @@
             naiveMaeCell(td, s);
           } else if (mdef[0] === "rmae") {
             naiveRmaeCell(td, s);
+          } else if (mdef[0] === "tsfm") {
+            tsfmMaeCell(td, s);
+          } else if (mdef[0] === "tsfm_rmae") {
+            tsfmRmaeCell(td, s);
           } else {
             td.textContent = (s.bias > 0 ? "+" : "") + fmt(s.bias, 1);
             td.title = resLabel + "bias " + fmt(s.bias, 2) + " €/MWh · n=" + s.n_days + " days";

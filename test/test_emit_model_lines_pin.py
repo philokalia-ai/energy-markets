@@ -379,16 +379,43 @@ class PhysicsSQLTest(unittest.TestCase):
         cx.execute('CREATE SCHEMA simulations')
         cx.execute('''CREATE TABLE simulations.forecast_prices (
             bidding_zone VARCHAR,date_time_utc TIMESTAMPTZ,price_eur_mwh DOUBLE,
-            code_version INTEGER,prediction_made_utc TIMESTAMPTZ,lead_days INTEGER,input_mode VARCHAR)''')
+            code_version INTEGER,prediction_made_utc TIMESTAMPTZ,lead_days INTEGER,input_mode VARCHAR,
+            is_retro BOOLEAN)''')
         cx.execute("""INSERT INTO simulations.forecast_prices VALUES
-            ('GR','2026-11-14T00:00Z',80,37,'2026-11-12T06:30Z',2,'weather'),
-            ('GR','2026-11-14T00:00Z',999,37,'2026-11-13T18:00Z',1,'weather')""")
+            ('GR','2026-11-14T00:00Z',80,37,'2026-11-12T06:30Z',2,'weather',FALSE),
+            ('GR','2026-11-14T00:00Z',999,37,'2026-11-13T18:00Z',1,'weather',FALSE)""")
         class Cursor:
             def execute(self,sql,args):cx.execute(sql.replace('%s','?').replace('%%','%'),args)
             def fetchall(self):return cx.fetchall()
         cur=Cursor()
         self.assertEqual(eml.physics_base(cur,T,T,37).sim.tolist(),[999.])
         self.assertEqual(eml.physics_base(cur,T,T,37,eml.utc_issue('2026-11-13T10:40Z')).sim.tolist(),[80.])
+        cx.close()
+
+    @unittest.skipUnless(hasattr(sys.modules.get('duckdb'),'connect'), 'DuckDB optional for SQL fixture')
+    def test_reconstructed_rows_never_supply_physics_or_stats_domain(self):
+        import duckdb
+        cx=duckdb.connect(':memory:')
+        cx.execute('CREATE SCHEMA simulations')
+        cx.execute('''CREATE TABLE simulations.forecast_prices (
+            bidding_zone VARCHAR,date_time_utc TIMESTAMPTZ,price_eur_mwh DOUBLE,
+            code_version INTEGER,prediction_made_utc TIMESTAMPTZ,lead_days INTEGER,
+            input_mode VARCHAR,is_retro BOOLEAN)''')
+        cx.execute("""INSERT INTO simulations.forecast_prices VALUES
+            ('GR','2026-11-14T00:00Z',80,37,'2026-11-12T06:30Z',2,'weather',FALSE),
+            ('GR','2026-11-14T01:00Z',70,37,'2026-11-12T06:30Z',2,'weather',NULL),
+            ('GR','2026-11-14T00:00Z',999,37,'2026-11-13T09:00Z',1,'weather',TRUE),
+            ('GR','2026-11-14T01:00Z',999,37,'2026-11-13T09:00Z',1,'weather',TRUE),
+            ('BG','2026-11-14T00:00Z',555,37,'2026-11-13T09:00Z',1,'weather',TRUE)""")
+        class Cursor:
+            def execute(self,sql,args):cx.execute(sql.replace('%s','?').replace('%%','%'),args)
+            def fetchall(self):return cx.fetchall()
+        for pin in (None,37):
+            for issue in (None,eml.utc_issue('2026-11-13T10:40Z')):
+                with self.subTest(pin=pin,issue=issue):
+                    base=eml.physics_base(Cursor(),T,T,pin,issue).sort_values('k')
+                    self.assertEqual(base.zone.tolist(),['GR','GR'])
+                    self.assertEqual(base.sim.tolist(),[80.,70.])
         cx.close()
 
     def test_atomic_write_guard_is_only_on_strict_path(self):

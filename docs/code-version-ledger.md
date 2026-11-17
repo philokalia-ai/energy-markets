@@ -376,6 +376,21 @@ Dated reminders and scoring-policy notes that do not change `code_version`.
     the live scores since the freeze are the only out-of-sample physics record.
     On the site this is the scoreboard window "since freeze (cv44, 2026-11-15)".
   - Recalibration aimed at benchmark rankings is out of policy.
+- **2026-11-17 — live scoreboard windows exclude reconstructed rows (#431 R1,
+  #449; scoring/export policy, no code_version change).** The scoreboard's live
+  windows — "all", the months and "since freeze" — and their naive baselines now
+  read live rows only (`is_retro = false`, `live_only_sql` in
+  `bin/forecast_common.jl`, both exporters). Before, a market day that had only
+  reconstructed (`is_retro`) rows pooled into those windows: the 2026-08 data-reset
+  gap-fills (`reset_tag = 2026-08-01-reset`).
+  - Published "all" and monthly numbers in the reset window change: fewer `n_days`
+    and different MAE/bias/corr where reconstructed days were counted. No live score
+    row changes.
+  - Reconstructions are published only in their own window: the cv44 backfill
+    (`reset_tag = cv44-backfill-2026-11`) as "backfilled (reconstructed, cv44;
+    in-sample — calibration overlaps)". The zone charts keep reconstructed days with
+    the ↺ mark, and a reconstruction never replaces a live day there.
+  - Rollback: `EXPORT_LIVE_RETRO=1` on the export steps restores the old pooling.
 - **2026-11-16 — owner-approved GBM strict as-of default from 2026-11-17
   (#431 D2).** GBM rows freeze at their delivery-day gate; `MODEL_LINES_STRICT_ASOF=0`
   restores the #439 non-strict path, and `MODEL_LINES_REWRITE_PAST=1` permits explicit

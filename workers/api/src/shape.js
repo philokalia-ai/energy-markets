@@ -58,6 +58,10 @@ const Q15_BOARD = ["n_days_q15", "mae_q15", "bias_q15", "corr_q15", "shape_floor
 // are ABSENT (as in the JSON exporter), not null.
 const NAIVE_BOARD = ["n_naive", "mae_paired", "mae_naive_d7", "rmae_d7"];
 const NAIVE_BOARD_LEAD1 = ["mae_naive_d1", "mae_naive_epf", "rmae_d1", "rmae_epf"];
+// Timestral fields of the "backfilled" window (#431 R2, bin/tsfm_backfill_scores.jl
+// TSFM_BACKFILL_BOARD_COLS). Passed through on the rows that carry them only.
+const TSFM_BACKFILL_NUM = ["tsfm_n_days", "tsfm_n", "tsfm_mae", "tsfm_mae_naive_d1", "tsfm_mae_naive_d7",
+  "tsfm_mae_naive_epf", "tsfm_rmae_d1", "tsfm_rmae_d7", "tsfm_rmae_epf"];
 const has = (rows, k) => rows.length > 0 && Object.prototype.hasOwnProperty.call(rows[0], k);
 
 export function shapeZone(rows, zone) {
@@ -148,6 +152,13 @@ export function shapeScoreboard(rows, manifest) {
         code_version: num(r.code_version),   // single-cv guard for the track-gap chip
       };
       if (hasQ15) for (const k of Q15_BOARD) out[k] = num(r[k]);
+      // backfilled window (#431 R1): the reconstruction date, on those rows only
+      if (r.reconstructed_utc !== undefined && r.reconstructed_utc !== null) out.reconstructed_utc = String(r.reconstructed_utc);
+      // Timestral backfill fields (#431 R2): only where the row has them (other rows unchanged)
+      if (r.tsfm_mae !== undefined && r.tsfm_mae !== null) {
+        for (const k of TSFM_BACKFILL_NUM) out[k] = num(r[k]);
+        if (r.tsfm_arm !== undefined && r.tsfm_arm !== null) out.tsfm_arm = String(r.tsfm_arm);
+      }
       if (hasNaive) {
         for (const k of NAIVE_BOARD) out[k] = num(r[k]);
         if (out.lead_days <= 1) for (const k of NAIVE_BOARD_LEAD1) out[k] = num(r[k]);

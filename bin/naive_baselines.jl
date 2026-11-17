@@ -206,22 +206,34 @@ DB step: per-zone-day naive sums for every row of the board's chosen-slice score
 frame `scores` (columns z, lead_days, mode, market_date). Reads the chosen slices'
 hourly sim rows and the scorer's actuals (`da_target_actuals`, EUPHEMIA_DA_TARGET) over the
 scored dates plus the 8 days before (lag 7 of the first local hour).
+
+The default reads LIVE sim rows only (`live_only_sql`, #431 R1). With
+`reset_tag`/`code_version` it reads that retro campaign's rows instead (the
+"backfilled" window): the same pure functions and paired-cell rules.
 """
-function naive_zone_day_parts(scores::AbstractDataFrame)
+function naive_zone_day_parts(scores::AbstractDataFrame;
+                              reset_tag::Union{Nothing,String}=nothing,
+                              code_version::Union{Nothing,Int}=nothing)
     parts = Dict{Tuple{String,Int,String,Date},NamedTuple}()
     isempty(scores) && return parts
     dates = Date.(scores.market_date)
     sd, ed = minimum(dates), maximum(dates)
     keep = Set(zip(String.(scores.z), Int.(scores.lead_days), String.(scores.mode), dates))
-    sim = Euphemia.sql2df_with_retry("""
+    sim = reset_tag === nothing ? Euphemia.sql2df_with_retry("""
         WITH $(CHOSEN_SLICE_CTE)
         SELECT f.bidding_zone AS z, f.lead_days, f.input_mode AS mode, f.market_date,
                (f.date_time_utc AT TIME ZONE 'UTC') AS t, f.price_eur_mwh AS sim
         FROM simulations.forecast_prices f
         JOIN chosen c ON c.market_date = f.market_date AND c.lead_days = f.lead_days
                      AND c.input_mode = f.input_mode AND c.code_version = f.code_version
+        WHERE f.market_date BETWEEN \$1 AND \$2$(live_only_sql("f"))
+    """, [sd, ed]) : Euphemia.sql2df_with_retry("""
+        SELECT f.bidding_zone AS z, f.lead_days, f.input_mode AS mode, f.market_date,
+               (f.date_time_utc AT TIME ZONE 'UTC') AS t, f.price_eur_mwh AS sim
+        FROM simulations.forecast_prices f
         WHERE f.market_date BETWEEN \$1 AND \$2
-    """, [sd, ed])
+          AND f.is_retro = true AND f.reset_tag = \$3 AND f.code_version = \$4
+    """, [sd, ed, reset_tag, something(code_version, -1)])
     act = da_target_actuals(sd - Day(8), ed)  # EUPHEMIA_DA_TARGET (default sdac; highest_seq = kill switch)
     actz = Dict{String,Dict{DateTime,Float64}}()
     for r in eachrow(act)

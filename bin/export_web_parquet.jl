@@ -41,6 +41,12 @@
 #                             null at leads >= 2 (not known at issue).
 #                             window may also be "since_freeze" (#431 G): the
 #                             cv >= 44, market_date >= 2026-11-15 rows only.
+#                             Live windows read is_retro = false rows only
+#                             (#431 R1). window "backfilled": the cv44 lead-1
+#                             reconstruction (in-sample), plus a column
+#                             reconstructed_utc (present only when such rows exist),
+#                             and the tsfm_* Timestral columns (#431 R2,
+#                             TSFM_BACKFILL_BOARD_COLS) when backfill vintages exist.
 #   v1/map.parquet            market_date, zone, track, sim, act, err_pct, mae,
 #                             corr, lead, made — freshest-lead day aggregates,
 #                             BOTH tracks (track = 'predicted' | 'announced';
@@ -71,6 +77,8 @@ include(joinpath(@__DIR__, "..", "test", "scripts", "eu_eval_metrics.jl"))
 include(joinpath(@__DIR__, "naive_baselines.jl"))
 # the "since_freeze" window (#431 G; EXPORT_SINCE_FREEZE=0 skips it)
 include(joinpath(@__DIR__, "scoreboard_windows.jl"))
+# Timestral fields for R1's "backfilled" window (#431 R2; EXPORT_TSFM_BACKFILL=0 skips them)
+include(joinpath(@__DIR__, "tsfm_backfill_scores.jl"))
 
 const CV = Euphemia.ENERGY_PRICES_CODE_VERSION
 const OUT_ROOT = get(ENV, "WEB_PARQUET_OUT", joinpath(dirname(@__DIR__), "data", "web"))
@@ -114,6 +122,7 @@ function export_scoreboard_parquet()
         FROM simulations.forecast_scores s
         JOIN chosen c ON c.market_date = s.market_date AND c.lead_days = s.lead_days
                      AND c.input_mode = s.input_mode AND c.code_version = s.code_version
+        WHERE TRUE$(live_only_sql("s"))   -- live rows only (#431 R1): retro never pools in
     """)
     zones = Euphemia.sql2df_with_retry("""
         SELECT DISTINCT bidding_zone AS z FROM simulations.forecast_prices
@@ -145,8 +154,8 @@ function export_scoreboard_parquet()
                   nm(a.shape_floor_q15))
     naive_parts = naive_parts_or_nothing(scores)   # nothing = no naive columns
     naive_rows = Dict{String,Vector{Any}}(c => Any[] for c in NAIVE_BOARD_COLS)
-    naive_vals(sub) = naive_parts === nothing ? nothing : begin
-        f = naive_cohort_fields(naive_parts, sub)
+    naive_vals(sub, parts=naive_parts) = parts === nothing ? nothing : begin
+        f = naive_cohort_fields(parts, sub)
         Any[c == "n_naive" ? f[c] : nm(get(f, c, missing)) for c in NAIVE_BOARD_COLS]
     end
     push_naive!(v) = v === nothing ||
@@ -188,11 +197,37 @@ function export_scoreboard_parquet()
         push!(df, row)
         push_naive!(nv)
     end
+    # "backfilled" (#431 R1): the cv44 reconstruction, its own window only. Its naive
+    # parts come from the campaign's rows; when the live naive is off (no naive
+    # columns) the backfilled rows carry none either, so the columns stay aligned.
+    bf_rows = Any[]
+    for e in backfilled_entries() do zone, lead, mode, bsub, bparts, made
+            ab = agg(bsub)
+            ((zone, lead, BACKFILLED_WINDOW, mode, ab.n_days,
+              nm(ab.mae), nm(ab.bias), nm(ab.corr), ab.cv, q15vals(ab)...),
+             naive_parts === nothing ? nothing :
+                 something(naive_vals(bsub, bparts),
+                           Any[c == "n_naive" ? 0 : missing for c in NAIVE_BOARD_COLS]),
+             made, backfilled_extra_fields(zone, lead, mode, bsub))   # + Timestral fields (#431 R2)
+        end
+        push!(bf_rows, e)
+    end
+    tsfm_cols = tsfm_backfill_columns(nrow(df), [x[4] for x in bf_rows])   # nothing = no columns
+    recon = Union{Missing,String}[missing for _ in 1:nrow(df)]
+    for (row, nv, made, _) in bf_rows
+        push!(df, row)
+        push_naive!(nv)
+        push!(recon, made === nothing ? missing : made)
+    end
     if naive_parts !== nothing   # appended after the existing columns (additive)
         df.n_naive = Int.(naive_rows["n_naive"])
         for c in NAIVE_BOARD_COLS[2:end]
             df[!, c] = Vector{Union{Missing,Float64}}(naive_rows[c])
         end
+    end
+    isempty(bf_rows) || (df.reconstructed_utc = recon)   # backfilled rows only (additive)
+    tsfm_cols === nothing || for c in TSFM_BACKFILL_BOARD_COLS   # Timestral fields (#431 R2, additive)
+        df[!, c] = tsfm_cols[c]
     end
     sort!(df, [:zone, :lead_days, :input_mode, :window])
     n = write_parquet(df, joinpath(V1_DIR, "scoreboard.parquet"))
