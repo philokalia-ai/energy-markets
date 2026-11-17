@@ -281,6 +281,8 @@ function withdb(f)
 end
 
 function sql2df(sql, args=[])
+    snapshot = CURRENT_INPUT_SNAPSHOT[]
+    snapshot === nothing || return snapshot_sql2df(snapshot, sql, args)
     if DATA_STORE[] == :duckdb
         return _duckdb_sql2df(sql, args)
     end
@@ -296,6 +298,8 @@ end
 Execute SQL query with automatic retry on connection failures.
 """
 function sql2df_with_retry(sql, args=[]; max_retries=3, retry_delay=2.0)
+    # A snapshot failure must not retry on the ordinary pool at a new revision.
+    CURRENT_INPUT_SNAPSHOT[] === nothing || return sql2df(sql, args)
     last_error = nothing
     # Under the DuckDB backend there is NO Postgres pool to reset, and offline
     # workers run with ENERGY_CONN_STR emptied — so the LibPQ connection-error
@@ -347,4 +351,12 @@ function sql2df_with_retry(sql, args=[]; max_retries=3, retry_delay=2.0)
 
     # If we get here, all retries failed
     throw(last_error)
+end
+
+# Explicit live/state read boundary. Even a caller inside an input scope cannot
+# redirect these reads into the frozen input cache.
+function sql2df_live_with_retry(sql, args=[]; kwargs...)
+    return with(CURRENT_INPUT_SNAPSHOT => nothing) do
+        sql2df_with_retry(sql, args; kwargs...)
+    end
 end

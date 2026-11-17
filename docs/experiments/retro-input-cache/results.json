@@ -1,0 +1,144 @@
+{
+  "baseline_commit": "461e6cf9798ebc055c438c0e59c89646a83f2d7f",
+  "branch": "perf/retro-input-snapshot",
+  "independent_of_pr": 452,
+  "julia": "1.13.4",
+  "julia_threads": 4,
+  "duckdb_threads": 2,
+  "blas_omp_threads": 1,
+  "cpu_affinity": "60-67",
+  "extract": "euphemia-live-20261115.duckdb",
+  "weather_fixture": "inputs-2026-09-13-2026-09-15.jls",
+  "scope": "two full UTC clears per market day, saved weather/ML fixture, read-only local extract; no production PG, HTTP or forecast writes",
+  "runs": {
+    "main": {
+      "2026-09-14": {
+        "wall_seconds": 323.695188999176,
+        "backend_sql_seconds": 28.386163234710693,
+        "source_queries": 1953,
+        "peak_rss_bytes": 4064391168,
+        "cpu_seconds": 467.743742,
+        "phases_seconds": {
+          "model_build": 7.203046560287476,
+          "MPCC.solve_mpcc_market_clearing": 119.23035621643066,
+          "mz_rebuild_anchored": 3.481764793395996,
+          "mz_solve_pass": 129.18981385231018,
+          "_create_multi_zone_order_book_merit": 35.30706810951233,
+          "optimize": 237.7198987007141,
+          "write_csv": 0.0007250308990478516
+        },
+        "book_seconds": 38.788832902908325,
+        "anchor_queries": 78,
+        "anchor_sql_seconds": 6.36479640007019
+      },
+      "2026-09-15": {
+        "wall_seconds": 235.7693910598755,
+        "backend_sql_seconds": 15.690317392349243,
+        "source_queries": 1076,
+        "peak_rss_bytes": 4271247360,
+        "cpu_seconds": 340.71286900000007,
+        "phases_seconds": {
+          "model_build": 5.896111249923706,
+          "MPCC.solve_mpcc_market_clearing": 115.62837195396423,
+          "mz_rebuild_anchored": 2.197072982788086,
+          "mz_solve_pass": 101.97854709625244,
+          "_create_multi_zone_order_book_merit": 15.82114577293396,
+          "optimize": 209.43154621124268,
+          "write_csv": 0.0006890296936035156
+        },
+        "book_seconds": 18.018218755722046,
+        "anchor_queries": 78,
+        "anchor_sql_seconds": 5.621117115020752
+      },
+      "total": {
+        "wall_seconds": 559.4645800590515,
+        "backend_sql_seconds": 44.07648062705994,
+        "source_queries": 3029,
+        "book_seconds": 56.80705165863037,
+        "anchor_queries": 156,
+        "anchor_sql_seconds": 11.985913515090942
+      }
+    },
+    "cached": {
+      "2026-09-14": {
+        "wall_seconds": 321.45355200767517,
+        "backend_sql_seconds": 22.999304056167603,
+        "source_queries": 1057,
+        "peak_rss_bytes": 4029628416,
+        "cpu_seconds": 453.046368,
+        "phases_seconds": {
+          "model_build": 7.344125509262085,
+          "MPCC.solve_mpcc_market_clearing": 119.26215386390686,
+          "mz_rebuild_anchored": 2.651215076446533,
+          "mz_solve_pass": 128.8704011440277,
+          "_create_multi_zone_order_book_merit": 33.00239586830139,
+          "optimize": 237.287579536438,
+          "write_csv": 0.0008449554443359375
+        },
+        "book_seconds": 35.653610944747925,
+        "anchor_queries": 2,
+        "anchor_sql_seconds": 2.5594711303710938
+      },
+      "2026-09-15": {
+        "wall_seconds": 231.61094403266907,
+        "backend_sql_seconds": 10.996434926986694,
+        "source_queries": 660,
+        "peak_rss_bytes": 4225236992,
+        "cpu_seconds": 323.447037,
+        "phases_seconds": {
+          "model_build": 5.26307487487793,
+          "MPCC.solve_mpcc_market_clearing": 115.57197713851929,
+          "mz_rebuild_anchored": 1.3174760341644287,
+          "mz_solve_pass": 101.76588702201843,
+          "_create_multi_zone_order_book_merit": 12.74171757698059,
+          "optimize": 209.8219871520996,
+          "write_csv": 0.0006968975067138672
+        },
+        "book_seconds": 14.05919361114502,
+        "anchor_queries": 2,
+        "anchor_sql_seconds": 2.332390069961548
+      },
+      "total": {
+        "wall_seconds": 553.0644960403442,
+        "backend_sql_seconds": 33.9957389831543,
+        "source_queries": 1717,
+        "book_seconds": 49.712804555892944,
+        "anchor_queries": 4,
+        "anchor_sql_seconds": 4.891861200332642
+      }
+    }
+  },
+  "parity": {
+    "2026-09-14": {
+      "main_sha256": "c75fa919e8a128fcab7a9c6975b22861b6259c45fc8f9b4bcf1c3eab0d4245d7",
+      "main_full_utc_sha256": "45046f3bb9f6a6d5885e76540fa2258d21bb57294184366f9d57e7e0b9c6b6ab",
+      "cached_sha256": "c75fa919e8a128fcab7a9c6975b22861b6259c45fc8f9b4bcf1c3eab0d4245d7",
+      "cached_full_utc_sha256": "45046f3bb9f6a6d5885e76540fa2258d21bb57294184366f9d57e7e0b9c6b6ab",
+      "rows": 936,
+      "zones": 39,
+      "full_utc_rows": 1872
+    },
+    "2026-09-15": {
+      "main_sha256": "d4b69db0b917bf3bc03982c052d6dc50899c75c656d65cd6ed3c9694e3f66bb3",
+      "main_full_utc_sha256": "443638d032ee7abd1a0760c9fc3df9471da09d3b98e7180327f013117ef92240",
+      "cached_sha256": "d4b69db0b917bf3bc03982c052d6dc50899c75c656d65cd6ed3c9694e3f66bb3",
+      "cached_full_utc_sha256": "443638d032ee7abd1a0760c9fc3df9471da09d3b98e7180327f013117ef92240",
+      "rows": 936,
+      "zones": 39,
+      "full_utc_rows": 1872
+    }
+  },
+  "weather_fixture_sha256": "ed15507e3192b916e94a793d50f7e6703babdeedcc95ba3abbeff0889116b7ed",
+  "cache_summary": {
+    "hits": 1771.0,
+    "misses": 1717.0,
+    "retained_bytes": 136950157.0,
+    "source_query_seconds": 695.5938539505005
+  },
+  "speedups": {
+    "wall_seconds": 1.0115720391826424,
+    "backend_sql_seconds": 1.296529563569743,
+    "book_seconds": 1.1427046244144452
+  },
+  "source_query_reduction_fraction": 0.4331462528887422
+}
