@@ -1,0 +1,68 @@
+{
+  "main_commit": "0406dd5b2f3da2b7b4488648de92ccf93c6b2f86",
+  "feature_parent_commit": "e3481ee463a9038578c658bea8b54193b2de4d76",
+  "validation": "Fresh two-market-day replays on main and the resolved merge tree, then comparison with each other and the original committed outputs",
+  "date_utc": "2026-11-17",
+  "purpose": "Identity check, not a new performance benchmark: concurrent arms on separate four-core subsets, cores 60-67 total",
+  "julia": "1.13.4",
+  "julia_threads_per_arm": 4,
+  "ordinary_pool_setting": 2,
+  "extract": "euphemia-live-20261115.duckdb",
+  "weather_fixture": "inputs-2026-09-13-2026-09-15.jls",
+  "parity": {
+    "2026-09-14": {
+      "market_day": {
+        "rows": 936,
+        "main_sha256": "c75fa919e8a128fcab7a9c6975b22861b6259c45fc8f9b4bcf1c3eab0d4245d7",
+        "cached_sha256": "c75fa919e8a128fcab7a9c6975b22861b6259c45fc8f9b4bcf1c3eab0d4245d7",
+        "matches_original_artifact": true
+      },
+      "full_utc": {
+        "rows": 1872,
+        "main_sha256": "45046f3bb9f6a6d5885e76540fa2258d21bb57294184366f9d57e7e0b9c6b6ab",
+        "cached_sha256": "45046f3bb9f6a6d5885e76540fa2258d21bb57294184366f9d57e7e0b9c6b6ab",
+        "matches_original_artifact": true
+      }
+    },
+    "2026-09-15": {
+      "market_day": {
+        "rows": 936,
+        "main_sha256": "d4b69db0b917bf3bc03982c052d6dc50899c75c656d65cd6ed3c9694e3f66bb3",
+        "cached_sha256": "d4b69db0b917bf3bc03982c052d6dc50899c75c656d65cd6ed3c9694e3f66bb3",
+        "matches_original_artifact": true
+      },
+      "full_utc": {
+        "rows": 1872,
+        "main_sha256": "443638d032ee7abd1a0760c9fc3df9471da09d3b98e7180327f013117ef92240",
+        "cached_sha256": "443638d032ee7abd1a0760c9fc3df9471da09d3b98e7180327f013117ef92240",
+        "matches_original_artifact": true
+      }
+    }
+  },
+  "native_pg_launcher_composition": {
+    "single_worker": {
+      "ordinary": 5,
+      "snapshot": 2,
+      "observed_connections": 7
+    },
+    "two_workers": {
+      "ordinary": 4,
+      "snapshot": 4,
+      "observed_connections": 8
+    },
+    "launch_path": "actual run_parallel with full Euphemia module for two synthetic PG worker processes",
+    "assertions": "cache flag inherited; runtime pool cap honored; input reads frozen at 10 after external update to 11; live reads see 11; ordinary-pool writes succeed; no connections remain",
+    "production_access": false
+  },
+  "checks": {
+    "cache_lifecycle_assertions": 40,
+    "native_pg_assertions": 27,
+    "launcher_tests": 17,
+    "hygiene_tests": 8,
+    "runtime_pg_pool": "same warmed cache; requested/effective 2,5,3,1",
+    "actionlint": "pass with existing self-hosted runner label configured",
+    "julia_lint_errors": 0,
+    "julia_lint_warnings": 44,
+    "launcher_ast": "unchanged from main except module docstring"
+  }
+}

@@ -38,6 +38,11 @@ on:
         description: "Freeze input revisions once per chunk and cache/batch reads (canary)"
         type: boolean
         default: false
+      workers:
+        description: "Independent chunk processes (1 = original path; 2 = opt-in, eight CPUs total)"
+        type: choice
+        options: ["1", "2"]
+        default: "1"
       score:
         description: "Score the written rows after the reconstruction"
         type: boolean
@@ -146,9 +151,10 @@ jobs:
           EUPHEMIA_RETRO_INPUT_CACHE: ${{ inputs.input_cache }}
           EUPHEMIA_RETRO_CHUNK_DAYS: "14"   # one weather batch per chunk; two issuance-specific UTC clears per market day
           EUPHEMIA_RETRO_DEADLINE_UTC: ${{ steps.guard.outputs.deadline }}
+          RETRO_WORKERS: ${{ inputs.workers }}
         run: |
           # No EUPHEMIA_RETRO_SUPERSEDE and no bucket credentials here, on purpose.
-          julia --project=. bin/daily_forecast.jl
+          python3 bin/run_retro_backfill.py --workers "${RETRO_WORKERS:-1}"
 
       - name: Score the reconstructed rows
         if: ${{ inputs.score }}

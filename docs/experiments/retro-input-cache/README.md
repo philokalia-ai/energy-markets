@@ -1,8 +1,9 @@
 # Retro per-chunk input snapshot/cache (opt-in canary)
 
-Independent of #452, based on main `461e6cf`. Enable the workflow's `input_cache`
+Originally based on main `461e6cf`; now composed with main `0406dd5`, including
+#452's parallel launcher and runtime PG pool sizing. Enable the workflow's `input_cache`
 boolean or set `EUPHEMIA_RETRO_INPUT_CACHE=true`; both default **off**. The ordinary
-Julia entry point, single-process scheduling, model, solver, two UTC clears and
+Julia entry point, worker scheduling, model, solver, two UTC clears and
 code_version remain unchanged. Snapshot mode requires alongside writes, a PG
 state/write backend, and chunks of 1–14 market days.
 
@@ -16,7 +17,7 @@ no 60/90-day extraction truncation or new model lookback.
 
 At the start of each chunk, after weather preparation, two dedicated read-only
 PG connections begin `REPEATABLE READ` transactions sharing one exported snapshot.
-The exporting connection is also a reader: **two input connections total**, in
+The exporting connection is also a reader: **two input connections per worker process**, in
 addition to the unchanged ordinary PG pool. The log states the chunk, server
 capture time in UTC and precise MVCC revision cutoff/snapshot ID. This freezes
 **source database revisions at chunk start**; it does not claim that the source
@@ -57,8 +58,20 @@ first canary.
 
 ## Operational limits and rollback
 
-- Keep one campaign worker for the first canary; this PR neither depends on nor
-  enables #452's parallel launcher. Do not infer spare DB capacity from host cores.
+- Keep one campaign worker for the first canary. #452's launcher is now on main;
+  `workers=2` caps each worker's **ordinary** PG pool at two. Snapshot connections
+  sit outside `EUPHEMIA_PG_POOL`. With the default one-worker ordinary pool of five:
+
+  | Workers | Input cache off | Input cache on |
+  |---|---:|---:|
+  | 1 | up to 5 PG connections | up to **7** (5 ordinary + 2 snapshot) |
+  | 2 | up to 4 PG connections | up to **8** (2 × [2 ordinary + 2 snapshot]) |
+
+  These totals cover the campaign worker processes, excluding other jobs or
+  administrative clients. A one-worker `EUPHEMIA_PG_POOL` override changes its
+  ordinary-pool allowance; caching still adds two per process. The launcher's
+  two-connections-per-worker cap applies only to the ordinary pool. Do not infer
+  spare DB capacity from host cores.
 - Snapshot readers use 10-minute statement and 15-minute idle-transaction timeouts.
   A timeout or lost connection poisons the chunk; it never silently switches to
   fresh reads. Successful completed-day writes remain resumable.
@@ -158,7 +171,7 @@ avoided call, that is 11.3/45.0/112.6 seconds per market day, before changes in
 server scans or shared-cache waiting; actual concurrent waits are not additive.
 Batching anchors also removes repeated server work, which a call-count-only model
 cannot quantify. A leader-run short canary must measure book wall time, source
-query durations and DB load before scaling to 14 days or combining with #452.
+query durations and DB load before scaling to 14 days or enabling two workers.
 A durable DuckDB materialization remains a separate extension if remote misses
 still dominate.
 
@@ -166,3 +179,26 @@ Validation: 40 cache/lifecycle assertions, 27 real disposable-PG assertions,
 8 repository-hygiene tests; Julia lint 0 errors / 38 warnings. Required inputs
 fail closed even if loaders swallow SQL exceptions; an optional missing UKA table
 retains the documented EUA fallback without changing the source revision.
+
+## Main integration verification
+
+Main `0406dd5` (including #452) was merged into this branch with a merge commit.
+The workflow retains both `workers` and `input_cache`, both environment inputs,
+and the Python launcher invocation. The launcher's behavior matches main exactly;
+only its module docstring is changed to clarify the combined connection budget.
+
+Fresh full replays on current main and the resolved merge tree again matched all
+**1,872 forecast prices and 3,744 full UTC-clear prices**, including exact equality
+with the original committed outputs. Each arm used four of cores 60–67 concurrently;
+this rerun checks identity and does not replace the original timing experiment.
+[merge-validation.json](merge-validation.json) records both source parents, hashes
+and integration checks.
+
+A disposable PG16 test used the actual `run_parallel` launcher and full Euphemia
+module in two Julia worker processes: **eight** worker connections were observed,
+four in source snapshot transactions. The serial fixture observed **seven**, two
+in source transactions. Both configurations retained the old source value after
+an external update, saw the new value through live reads, wrote through the
+ordinary pool and disconnected completely. Cache/lifecycle 40/40, native PG 27/27,
+launcher 17/17, hygiene 8/8, unchanged-precompile runtime pool checks, actionlint
+(with the existing runner label configured), and Julia lint (0 errors) passed.

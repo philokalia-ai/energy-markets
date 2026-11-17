@@ -1,0 +1,81 @@
+{
+  "metadata": {
+    "source": "ddbeead",
+    "clearing_code_version": 44,
+    "julia": "1.13.4",
+    "source_extract": "euphemia-live-20261115.duckdb",
+    "input_fixture_sha256": "ed15507e3192b916e94a793d50f7e6703babdeedcc95ba3abbeff0889116b7ed",
+    "information_cutoff": "market day minus 1 at 06:30 UTC",
+    "days": [
+      "2026-09-14",
+      "2026-09-15"
+    ],
+    "zones": 39,
+    "cpu_affinity": {
+      "serial4": [
+        60,
+        61,
+        62,
+        63,
+        64,
+        65,
+        66,
+        67
+      ],
+      "parallel2": {
+        "worker1": [
+          60,
+          61,
+          62,
+          63
+        ],
+        "worker2": [
+          64,
+          65,
+          66,
+          67
+        ]
+      }
+    },
+    "julia_threads_per_process": 4,
+    "duckdb_threads_per_process": 2,
+    "duckdb_memory_limit": "4GB",
+    "production_postgres_access": false,
+    "forecast_database_writes": false,
+    "public_weather_fetched_once": true
+  },
+  "forecast_prices": [
+    {
+      "day": "2026-09-14",
+      "cells": 936,
+      "byte_identical": true,
+      "max_abs_eur_mwh": 0.0,
+      "serial_sha256": "c75fa919e8a128fcab7a9c6975b22861b6259c45fc8f9b4bcf1c3eab0d4245d7",
+      "parallel_sha256": "c75fa919e8a128fcab7a9c6975b22861b6259c45fc8f9b4bcf1c3eab0d4245d7"
+    },
+    {
+      "day": "2026-09-15",
+      "cells": 936,
+      "byte_identical": true,
+      "max_abs_eur_mwh": 0.0,
+      "serial_sha256": "d4b69db0b917bf3bc03982c052d6dc50899c75c656d65cd6ed3c9694e3f66bb3",
+      "parallel_sha256": "d4b69db0b917bf3bc03982c052d6dc50899c75c656d65cd6ed3c9694e3f66bb3"
+    }
+  ],
+  "unsafe_overlap_reuse": {
+    "full_utc_day": {
+      "cells": 936,
+      "different": 429,
+      "different_above_1e_8": 429,
+      "max_abs_eur_mwh": 2681.62,
+      "mean_abs_eur_mwh": 20.17479700854701
+    },
+    "next_market_day_tail": {
+      "cells": 117,
+      "different": 61,
+      "different_above_1e_8": 61,
+      "max_abs_eur_mwh": 63.93999999999998,
+      "mean_abs_eur_mwh": 2.043675213675217
+    }
+  }
+}

@@ -1,0 +1,120 @@
+{
+  "2026-09-14": {
+    "families": {
+      "analogue_flow_day_relation": {
+        "calls": 753,
+        "execute_s": 5.748917102813721
+      },
+      "feed_anchor": {
+        "calls": 78,
+        "execute_s": 6.1075685024261475
+      },
+      "generator_registry": {
+        "calls": 156,
+        "execute_s": 5.04603123664856
+      },
+      "fleet_hydro_batch": {
+        "calls": 41,
+        "execute_s": 2.756765365600586
+      },
+      "jao": {
+        "calls": 16,
+        "execute_s": 1.4754011631011963
+      },
+      "transmission_outages": {
+        "calls": 4,
+        "execute_s": 1.1493279933929443
+      },
+      "other": {
+        "calls": 87,
+        "execute_s": 2.9384632110595703
+      },
+      "analogue_load_history": {
+        "calls": 78,
+        "execute_s": 0.9039926528930664
+      },
+      "day_ahead_load": {
+        "calls": 102,
+        "execute_s": 0.7545566558837891
+      },
+      "reservoir": {
+        "calls": 214,
+        "execute_s": 0.7623107433319092
+      },
+      "day_ahead_res": {
+        "calls": 106,
+        "execute_s": 0.41213560104370117
+      },
+      "offered_atc": {
+        "calls": 128,
+        "execute_s": 1.185781478881836
+      },
+      "registry_quarantine_warnings": {
+        "calls": 156,
+        "execute_s": 0.33181166648864746
+      }
+    },
+    "query_summary_sha256": "8cbd834c8fe00f4b4309b4a65a36d31370df2a7bfe2630e842bd6fcb563dfb51",
+    "forecast_sha256": "c75fa919e8a128fcab7a9c6975b22861b6259c45fc8f9b4bcf1c3eab0d4245d7",
+    "forecast_rows": 936
+  },
+  "2026-09-15": {
+    "families": {
+      "feed_anchor": {
+        "calls": 78,
+        "execute_s": 5.696906328201294
+      },
+      "generator_registry": {
+        "calls": 156,
+        "execute_s": 4.413464546203613
+      },
+      "fleet_hydro_batch": {
+        "calls": 22,
+        "execute_s": 1.5195717811584473
+      },
+      "transmission_outages": {
+        "calls": 4,
+        "execute_s": 0.8072850704193115
+      },
+      "other": {
+        "calls": 45,
+        "execute_s": 1.2355523109436035
+      },
+      "analogue_load_history": {
+        "calls": 39,
+        "execute_s": 0.4303781986236572
+      },
+      "analogue_flow_day_relation": {
+        "calls": 20,
+        "execute_s": 0.38380885124206543
+      },
+      "day_ahead_res": {
+        "calls": 104,
+        "execute_s": 0.35379838943481445
+      },
+      "day_ahead_load": {
+        "calls": 102,
+        "execute_s": 0.3271758556365967
+      },
+      "reservoir": {
+        "calls": 214,
+        "execute_s": 0.6361722946166992
+      },
+      "registry_quarantine_warnings": {
+        "calls": 156,
+        "execute_s": 0.30017542839050293
+      },
+      "offered_atc": {
+        "calls": 125,
+        "execute_s": 0.649587869644165
+      },
+      "jao": {
+        "calls": 16,
+        "execute_s": 0.10268664360046387
+      }
+    },
+    "query_summary_sha256": "e5278f804467dc6c8fd97b0f25a24e8aa44126de4d3140cd2452b8a5c308d1b8",
+    "forecast_sha256": "d4b69db0b917bf3bc03982c052d6dc50899c75c656d65cd6ed3c9694e3f66bb3",
+    "forecast_rows": 936
+  }
+}
