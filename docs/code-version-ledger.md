@@ -412,6 +412,28 @@ Dated reminders and scoring-policy notes that do not change `code_version`.
     `RES[ml] 0/24 h: AT,… (39)`, and each chunk prints a `📡 weather` line per fetch
     kind: the primary's first data hour, what fell back, and what is still missing.
   - Rollback: `EUPHEMIA_OPENMETEO_GAPFILL=0` restores the old fetch behaviour exactly.
+- **2026-11-17 — retro backfill: chunk-level fetch failure, previous-runs cache,
+  public cost lines (#431 R3 follow-up; retro only, no code_version change).** Run
+  44083012266 died after 4 min: the public previous-runs API answered 429 on every
+  retry for chunk 1, and the exhausted-retry error ended the whole run.
+  - A chunk whose weather fetch throws is logged (`⛔ chunk …`, the error, the `📡`
+    lines) and skipped; the run continues and ends with a `::warning::` listing the
+    skipped chunks. A per-chunk public breaker (armed by `run_retro` only) makes the
+    next public request in the same chunk fail at once instead of retrying again.
+    `EUPHEMIA_RETRO_ABORT_ON_FETCH_FAIL=1` restores the old abort.
+  - `EUPHEMIA_OPENMETEO_CACHE_DIR` (off by default; set by retro-backfill.yml, kept
+    across runs with actions/cache): every complete answer to a past `_previous_dayN`
+    request is stored keyed by the exact URL and never fetched again. Partial or null
+    answers and anything touching today are never cached. With the cache on, retro
+    chunks sit on a fixed grid (`EUPHEMIA_RETRO_CHUNK_ANCHOR`, default 2026-09-14) and
+    fetch the whole grid cell, so a re-dispatch issues the same requests.
+  - Each chunk prints `💸` lines: public requests and weighted calls spent, cache
+    hits, the worst case (every batch public), and a rate and chunk size within the
+    free limits (600/min, 5000/h, 10000/day). open-meteo's weight (its
+    `calculateQueryWeight`) is per location `max(1, v/10 · max(1, d/14))`: our
+    requests cost 1 call per location, so a fully public 14-day chunk of the 39-zone
+    footprint is ≈3,200 calls, and chunks up to 34 days cost the same.
+  - The live run is unchanged: the cache is off and the breaker unarmed there.
 - **2026-11-16 — owner-approved GBM strict as-of default from 2026-11-17
   (#431 D2).** GBM rows freeze at their delivery-day gate; `MODEL_LINES_STRICT_ASOF=0`
   restores the #439 non-strict path, and `MODEL_LINES_REWRITE_PAST=1` permits explicit

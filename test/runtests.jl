@@ -234,6 +234,9 @@ println()
         # #431 R3: public gap-fill of a self-hosted previous-runs primary (stub
         # HTTP closure) and the per-input ⛔ reasons — no network, no DB.
         include(joinpath(@__DIR__, "test_weather_gapfill.jl"))
+        # #431 R3 follow-up: on-disk previous-runs cache, public breaker, weighted-call
+        # cost, grid-aligned retro chunks — no network, no DB.
+        include(joinpath(@__DIR__, "test_retro_chunk_resilience.jl"))
     end
 
     @testset "Weather Load Model" begin

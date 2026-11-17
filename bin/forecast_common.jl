@@ -616,6 +616,37 @@ function retro_day_chunks(days::AbstractVector{Date}, n::Integer)
 end
 
 """
+    retro_aligned_chunks(days, n; anchor, last_day) -> Vector{(days, first_utc, last_utc)}
+
+The retro work list in chunks on a FIXED grid of `n`-day cells anchored at
+`anchor`, so the weather requests of a chunk are the same whatever day a
+(re-)dispatch starts from or has already written, and the on-disk open-meteo
+cache (keyed by the exact request) serves them again. Each chunk holds the
+consecutive work days of one cell (a gap starts a new chunk, as in
+`retro_day_chunks`); its fetch span is the WHOLE cell (`first_utc` = cell start −
+1 day for the Athens market day's first UTC day, `last_utc` = cell end, clipped to
+`last_day`), not just the remaining days. Pure.
+"""
+function retro_aligned_chunks(days::AbstractVector{Date}, n::Integer; anchor::Date, last_day::Date)
+    n > 0 || error("retro_aligned_chunks: n must be > 0 (got $n)")
+    out = NamedTuple{(:days, :first_utc, :last_utc),Tuple{Vector{Date},Date,Date}}[]
+    cell(k) = (anchor + Day(k * n) - Day(1), min(anchor + Day(k * n + n - 1), last_day))
+    for run in retro_day_chunks(days, 0)   # runs of consecutive days
+        cur, kcur = Date[], 0
+        for d in run
+            k = fld(Dates.value(d - anchor), n)
+            if !isempty(cur) && k != kcur
+                push!(out, (days=cur, first_utc=cell(kcur)[1], last_utc=cell(kcur)[2]))
+                cur = Date[]
+            end
+            push!(cur, d); kcur = k
+        end
+        isempty(cur) || push!(out, (days=cur, first_utc=cell(kcur)[1], last_utc=cell(kcur)[2]))
+    end
+    return out
+end
+
+"""
     retro_should_stop(now_utc, deadline, day_secs; first_guess=600.0, margin=1.25) -> Bool
 
 Clean stop before the next blackout: true when starting one more market day at

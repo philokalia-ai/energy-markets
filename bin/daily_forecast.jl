@@ -1506,6 +1506,22 @@ function run_retro()
     end
     chunk_days = parse(Int, get(ENV, "EUPHEMIA_RETRO_CHUNK_DAYS", alongside ? "7" : "0"))
     deadline === nothing || println("  clean-stop deadline $deadline UTC; chunks of $(chunk_days <= 0 ? "the whole window" : "$chunk_days days")")
+    # A chunk whose weather fetch fails (public 429 after all retries, HTTP error) is
+    # logged and skipped and the run continues with the next chunk (run 44083012266
+    # died on chunk 1 and never reached the self-hosted-covered days). The public
+    # breaker makes such a chunk fail in one exhausted request, not one per zone.
+    # EUPHEMIA_RETRO_ABORT_ON_FETCH_FAIL=1 restores the old abort.
+    skip_failed = get(ENV, "EUPHEMIA_RETRO_ABORT_ON_FETCH_FAIL", "0") != "1"
+    openmeteo_breaker_arm!(skip_failed)
+    # With the on-disk previous-runs cache on, chunks sit on a fixed grid so a
+    # re-dispatch issues the same requests (cache hits) wherever it resumes.
+    cache_dir = openmeteo_cache_dir()
+    aligned = !isempty(cache_dir) && chunk_days > 0
+    chunk_anchor = Date(get(ENV, "EUPHEMIA_RETRO_CHUNK_ANCHOR", "2026-09-14"))
+    isempty(cache_dir) ||
+        println("  open-meteo previous-runs cache: $cache_dir ($(isdir(cache_dir) ? count(f -> endswith(f, ".json"), readdir(cache_dir)) : 0) " *
+                "cached request(s))" * (aligned ? "; chunks on the $chunk_days-day grid from $chunk_anchor" : ""))
+    failed_chunks = String[]
     day_secs = Float64[]
     stopped = false
     for lead in 1:MAX_LEAD_DAYS
@@ -1517,7 +1533,10 @@ function run_retro()
             isempty(done) || println("  lead $lead: $(length(done)) day(s) already written for $RESET_TAG — skipped")
             todo = setdiff(todo, done)
         end
-        for chunk in retro_day_chunks(todo, chunk_days)
+        chunks = aligned ? retro_aligned_chunks(todo, chunk_days; anchor=chunk_anchor, last_day=end_day) :
+                 [(days=c, first_utc=first(c) - Day(1), last_utc=last(c)) for c in retro_day_chunks(todo, chunk_days)]
+        for ch in chunks
+            chunk = ch.days
             stopped && break
             # Deadline check BEFORE the chunk's weather/input preparation too (#449
             # review): allow 10 min for the fetch on top of one market day.
@@ -1527,7 +1546,7 @@ function run_retro()
                 stopped = true
                 break
             end
-            first_utc, last_utc = first(chunk) - Day(1), last(chunk)
+            first_utc, last_utc = ch.first_utc, ch.last_utc
             candidates = Set(chunk)
             println("\n" * "#" ^ 70)
             println("LEAD $lead  (vintage previous_day$fixed_lag)  days $(first(chunk)) .. $(last(chunk))  UTC span $first_utc .. $last_utc")
@@ -1535,12 +1554,34 @@ function run_retro()
             # Weather-track inputs at THIS lead's fixed vintage.
             reset_weather_fetch_log!()   # per-chunk fetch record for the skip diagnosis (#431 R3)
             res_src = Dict{String,String}(); load_src = Dict{String,String}()
-            fill_pred = build_load_fills(load_pack, sort(copy(ZONES)), first_utc, last_utc,
-                                         candidates; asof=vintage_asof, fixed_lag=fixed_lag)
-            solar_preds = Dict{String,Dict{DateTime,Float64}}()
-            preds = build_weather_predictions(first_utc, last_utc, candidates;
-                                              asof=vintage_asof, fixed_lag=fixed_lag,
-                                              solar_out=solar_preds)
+            n_zone_calls = 2 * length(ZONES) + (ML_INPUTS_ON ? 2 * length(ml_pilots0) : 0)
+            budget() = for l in openmeteo_budget_lines(; span_days=Dates.value(last_utc - first_utc) + 1,
+                                                        chunk_days=chunk_days, n_zone_calls=n_zone_calls,
+                                                        throttle_s=OPENMETEO_ZONE_THROTTLE_S)
+                println("  💸 $l")
+            end
+            local fill_pred, preds, solar_preds
+            try
+                fill_pred = build_load_fills(load_pack, sort(copy(ZONES)), first_utc, last_utc,
+                                             candidates; asof=vintage_asof, fixed_lag=fixed_lag)
+                solar_preds = Dict{String,Dict{DateTime,Float64}}()
+                preds = build_weather_predictions(first_utc, last_utc, candidates;
+                                                  asof=vintage_asof, fixed_lag=fixed_lag,
+                                                  solar_out=solar_preds)
+            catch e
+                (e isa InterruptException || !skip_failed) && rethrow()
+                msg = first(replace(sprint(showerror, e), r"\s+" => " "), 400)
+                println("  ⛔ chunk $(first(chunk)) .. $(last(chunk)) lead=$lead: weather input fetch failed — " *
+                        "$(length(chunk)) day(s) skipped, the run continues with the next chunk. Re-dispatch to retry" *
+                        (isempty(cache_dir) ? "." : " (cached requests are not re-fetched)."))
+                println("       ↳ $msg")
+                for l in weather_fetch_summary()
+                    println("  📡 weather $l")
+                end
+                budget()
+                push!(failed_chunks, "$(first(chunk))..$(last(chunk)) lead=$lead ($(length(chunk)) day(s))")
+                continue
+            end
             if ML_INPUTS_ON && !isempty(ml_pilots0)
                 try
                     ml_solar = Dict{String,Dict{DateTime,Float64}}()
@@ -1564,6 +1605,7 @@ function run_retro()
             for l in weather_fetch_summary()
                 println("  📡 weather $l")
             end
+            budget()
 
             clear_cache = Dict{Date,Union{Nothing,Dict{String,Dict{DateTime,Float64}}}}()
             for day in chunk
@@ -1663,6 +1705,13 @@ function run_retro()
     isempty(day_secs) || println("  ⏱  timing: $(length(day_secs)) day(s) written, mean $(round(sum(day_secs) / length(day_secs); digits=1)) s, " *
                                  "max $(round(maximum(day_secs); digits=1)) s per market day")
     stopped && println("  🛑 stopped cleanly at the deadline — re-dispatch to resume")
+    if !isempty(failed_chunks)
+        println("  ⛔ $(length(failed_chunks)) chunk(s) skipped on a weather fetch failure: $(join(failed_chunks, "; ")). " *
+                "Re-dispatch with the same inputs to retry them (written days are skipped).")
+        println("::warning::retro backfill: $(length(failed_chunks)) chunk(s) skipped on a weather fetch failure " *
+                "($(join(failed_chunks, "; "))) — re-dispatch to retry")
+    end
+    openmeteo_breaker_arm!(false)
     Euphemia.MeritOrderBook.clear_thermometer_overrides!()
     println("\n" * "=" ^ 70)
     println("RETRO BACKFILL COMPLETE — $n_total retro rows written (reset_tag=$RESET_TAG)")

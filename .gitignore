@@ -45,3 +45,6 @@ dist/
 
 # TSFM overlay venv of bin/emit_tsfm_refresh.sh
 .venv-overlay/
+
+# open-meteo previous-runs cache of the retro backfill (EUPHEMIA_OPENMETEO_CACHE_DIR)
+.openmeteo-prevruns/
