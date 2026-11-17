@@ -290,6 +290,7 @@ function fetch_weather(cells::Vector{Tuple{Float64,Float64}}, dates::Vector{Date
     vintage_lag > 0 &&
         println("  🕰️ vintage fetch: previous_day$(vintage_lag) via $url_base")
     d0, d1 = extrema(dates)
+    req_hours = openmeteo_request_hours(d0, d1)
     out = Dict{Tuple{Float64,Float64},Dict{DateTime,Tuple{Float64,Float64}}}()
     for lo in 1:OPENMETEO_BATCH:length(cells)
         batch = cells[lo:min(lo + OPENMETEO_BATCH - 1, length(cells))]
@@ -302,32 +303,19 @@ function fetch_weather(cells::Vector{Tuple{Float64,Float64}}, dates::Vector{Date
               "&start_date=" * Dates.format(d0, "yyyy-mm-dd") *
               "&end_date=" * Dates.format(d1, "yyyy-mm-dd") *
               "&timezone=UTC"
-        body = try
-            _openmeteo_get(url)
-        catch e
-            # Self-hosted instance down? Fall back to the public API for this
-            # batch (slower, rate-limited, but keeps the morning window alive).
-            # An EXPLICITLY passed base_url (e.g. the ERA5 archive in
-            # refresh_duckdb_extract) never falls back — that would silently
-            # cross API families.
-            (!isempty(base_url) || url_base == public_default) && rethrow(e)
-            fb_url = replace(url, url_base => public_default)
-            @warn "open-meteo primary ($url_base) failed; falling back to public API" exception=e
-            _openmeteo_get(fb_url)
-        end
-        parsed = parse_openmeteo_response(body, batch; var_suffix=sfx)
-        # Null-data fallback (today's exact failure mode for previous_dayN): a
-        # self-hosted instance answers HTTP 200 but with all-null arrays because
-        # it holds no previous-run chunks — parsing then drops every hour and the
-        # batch comes back empty. That is NOT a usable answer, so fall through to
-        # the public previous-runs API for this batch. Same guard as the
-        # HTTP-error path: never when base_url is explicit or the primary already
-        # IS public (a genuinely empty public answer is beyond-coverage, kept).
-        if isempty(base_url) && url_base != public_default && _batch_all_empty(parsed, batch)
-            fb_url = replace(url, url_base => public_default)
-            @warn "open-meteo primary ($url_base) returned all-null data; falling back to public API"
-            parsed = parse_openmeteo_response(_openmeteo_get(fb_url), batch; var_suffix=sfx)
-        end
+        # Self-hosted instance down (HTTP error), answering all-null (HTTP 200 but
+        # no previous-run chunks — the parser drops every hour) or, on a
+        # previous-runs fetch, leaving some cell-hours null (its history starts
+        # mid-window, #431 R3): fall back to / fill from the public API for this
+        # batch (`_fetch_batch_with_fallback`, weather_vintage.jl). Never when
+        # base_url is explicit (e.g. the ERA5 archive in refresh_duckdb_extract —
+        # that would silently cross API families) or the primary already IS
+        # public (a genuinely empty public answer is beyond-coverage, kept).
+        parsed = _fetch_batch_with_fallback("res", url, url_base, public_default, batch, req_hours;
+            get_fn=_openmeteo_get,
+            parse_fn=b -> parse_openmeteo_response(b, batch; var_suffix=sfx),
+            prevruns=vintage_lag > 0,
+            can_fallback=isempty(base_url) && url_base != public_default)
         merge!(out, parsed)
     end
     return out

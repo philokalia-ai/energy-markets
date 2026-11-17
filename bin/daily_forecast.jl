@@ -1533,6 +1533,8 @@ function run_retro()
             println("LEAD $lead  (vintage previous_day$fixed_lag)  days $(first(chunk)) .. $(last(chunk))  UTC span $first_utc .. $last_utc")
 
             # Weather-track inputs at THIS lead's fixed vintage.
+            reset_weather_fetch_log!()   # per-chunk fetch record for the skip diagnosis (#431 R3)
+            res_src = Dict{String,String}(); load_src = Dict{String,String}()
             fill_pred = build_load_fills(load_pack, sort(copy(ZONES)), first_utc, last_utc,
                                          candidates; asof=vintage_asof, fixed_lag=fixed_lag)
             solar_preds = Dict{String,Dict{DateTime,Float64}}()
@@ -1548,14 +1550,20 @@ function run_retro()
                     for (z, zp) in ml_res
                         preds[z] = zp
                         solar_preds[z] = get(ml_solar, z, Dict{DateTime,Float64}())
+                        res_src[z] = "ml"
                     end
-                    for (z, zp) in ml_load; fill_pred[z] = zp; end
+                    for (z, zp) in ml_load; fill_pred[z] = zp; load_src[z] = "ml"; end
                 catch e
                     @warn "retro ML overlay failed for lead $lead — packs kept" exception=(e, catch_backtrace())
                 end
             end
             scenario = weather_scenario(preds, fill_pred; solar_preds=solar_preds)
             install_thermometer!(fill_pred, first_utc, last_utc)
+            # Self-diagnosing inputs (#431 R3): where each weather fetch's data came
+            # from and what is still missing, once per chunk.
+            for l in weather_fetch_summary()
+                println("  📡 weather $l")
+            end
 
             clear_cache = Dict{Date,Union{Nothing,Dict{String,Dict{DateTime,Float64}}}}()
             for day in chunk
@@ -1575,6 +1583,12 @@ function run_retro()
                     if !isempty(uncovered)
                         println("  ⛔ $day lead=$lead: weather-track inputs cannot cover " *
                                 "$(length(uncovered)) zone(s) ($(join(sort(uncovered), ","))) — skipped")
+                        # Per input: which one failed, from which source, how many
+                        # market-window hours it has (#431 R3).
+                        for r in input_coverage_reasons(day, uncovered, fill_pred, preds;
+                                                        load_src=load_src, res_src=res_src)
+                            println("       ↳ $r")
+                        end
                         return :skip
                     end
                     if alongside

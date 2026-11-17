@@ -630,6 +630,36 @@ end
 const ML_RES_VARS = ["wind_speed_100m", "shortwave_radiation", "cloud_cover", "surface_pressure"]
 
 """
+    parse_ml_res_response(body, batch, sfx) -> cell → hour → (v100, ghi, cloud, pres)
+
+Parse one batched 4-variable open-meteo answer; an hour with any of the four
+variables null is dropped (left uncovered). Pure.
+"""
+function parse_ml_res_response(body::AbstractString, batch::AbstractVector, sfx::AbstractString)
+    parsed = JSON.parse(String(body))
+    locs = parsed isa AbstractVector ? parsed : [parsed]
+    length(locs) == length(batch) ||
+        error("open-meteo returned $(length(locs)) locations for $(length(batch)) cells")
+    out = Dict{Tuple{Float64,Float64},Dict{DateTime,NTuple{4,Float64}}}()
+    for (cell, loc) in zip(batch, locs)
+        hb = loc["hourly"]
+        times = [DateTime(String(t), dateformat"yyyy-mm-ddTHH:MM") for t in hb["time"]]
+        v = average_hourly(hb, ML_RES_VARS[1] * sfx)
+        g = average_hourly(hb, ML_RES_VARS[2] * sfx)
+        c = average_hourly(hb, ML_RES_VARS[3] * sfx)
+        p = average_hourly(hb, ML_RES_VARS[4] * sfx)
+        d = Dict{DateTime,NTuple{4,Float64}}()
+        for (i, t) in enumerate(times)
+            (i <= length(v) && v[i] !== nothing && i <= length(g) && g[i] !== nothing &&
+             i <= length(c) && c[i] !== nothing && i <= length(p) && p[i] !== nothing) || continue
+            d[t] = (Float64(v[i]), Float64(g[i]), Float64(c[i]), Float64(p[i]))
+        end
+        out[cell] = d
+    end
+    return out
+end
+
+"""
     fetch_ml_res_weather(cells, dates; vintage_lag, models) -> cell → hour → (v100,ghi,cloud,pres)
 
 The 4-variable RES fetch the ML solar/wind models need (the baseline pack fetch
@@ -647,6 +677,14 @@ function fetch_ml_res_weather(cells::Vector{Tuple{Float64,Float64}}, dates::Vect
     sfx = vintage_lag > 0 ? "_previous_day$(vintage_lag)" : ""
     hourly = join((v * sfx for v in ML_RES_VARS), ",")
     d0, d1 = extrema(dates)
+    req_hours = openmeteo_request_hours(d0, d1)
+    # Same local-instance-first fallbacks as the pack fetchers (#431 R3): this fetch
+    # had NONE, so a self-hosted instance answering all-null for old previous-run
+    # dates emptied the overlay's RES for every pilot zone and the retro backfill
+    # skipped 2026-09-14..10-17. The kill switch EUPHEMIA_OPENMETEO_GAPFILL=0
+    # restores the old no-fallback behaviour exactly.
+    public_default = vintage_lag > 0 ? OPENMETEO_PREVRUNS_URL_DEFAULT : OPENMETEO_URL_DEFAULT
+    can_fallback = openmeteo_gapfill_enabled() && url_base != public_default
     out = Dict{Tuple{Float64,Float64},Dict{DateTime,NTuple{4,Float64}}}()
     for lo in 1:OPENMETEO_BATCH:length(cells)
         batch = cells[lo:min(lo + OPENMETEO_BATCH - 1, length(cells))]
@@ -656,26 +694,10 @@ function fetch_ml_res_weather(cells::Vector{Tuple{Float64,Float64}}, dates::Vect
               "&hourly=" * hourly * "&models=" * models *
               "&start_date=" * Dates.format(d0, "yyyy-mm-dd") *
               "&end_date=" * Dates.format(d1, "yyyy-mm-dd") * "&timezone=UTC"
-        body = _openmeteo_get(url)
-        parsed = JSON.parse(body)
-        locs = parsed isa AbstractVector ? parsed : [parsed]
-        length(locs) == length(batch) ||
-            error("open-meteo returned $(length(locs)) locations for $(length(batch)) cells")
-        for (cell, loc) in zip(batch, locs)
-            hb = loc["hourly"]
-            times = [DateTime(String(t), dateformat"yyyy-mm-ddTHH:MM") for t in hb["time"]]
-            v = average_hourly(hb, ML_RES_VARS[1] * sfx)
-            g = average_hourly(hb, ML_RES_VARS[2] * sfx)
-            c = average_hourly(hb, ML_RES_VARS[3] * sfx)
-            p = average_hourly(hb, ML_RES_VARS[4] * sfx)
-            d = Dict{DateTime,NTuple{4,Float64}}()
-            for (i, t) in enumerate(times)
-                (i <= length(v) && v[i] !== nothing && i <= length(g) && g[i] !== nothing &&
-                 i <= length(c) && c[i] !== nothing && i <= length(p) && p[i] !== nothing) || continue
-                d[t] = (Float64(v[i]), Float64(g[i]), Float64(c[i]), Float64(p[i]))
-            end
-            out[cell] = d
-        end
+        parsed = _fetch_batch_with_fallback("ml-res", url, url_base, public_default, batch, req_hours;
+            get_fn=_openmeteo_get, parse_fn=b -> parse_ml_res_response(b, batch, sfx),
+            prevruns=vintage_lag > 0, can_fallback=can_fallback)
+        merge!(out, parsed)
     end
     return out
 end
