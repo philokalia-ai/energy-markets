@@ -42,7 +42,7 @@ REGIONS = {
     "Italy": ["IT-CNORTH", "IT-CSOUTH", "IT-Calabria", "IT-NORTH", "IT-SOUTH", "IT-Sardinia", "IT-Sicily"],
     "Nordic": ["DK1", "DK2", "FI", "NO1", "NO2", "NO3", "NO4", "NO5", "SE1", "SE2", "SE3", "SE4"],
     "Baltic": ["EE", "LT", "LV"],
-    "SEE": ["BG", "GR", "HR", "HU", "RO", "RS", "SI"],
+    "SEE": ["BG", "GR", "HU", "RO", "RS", "SI"],
 }
 ZONE_REGION = {z: r for r, zs in REGIONS.items() for z in zs}
 TIMESTRAL_RELEASE = "2026-10-15"
@@ -118,12 +118,15 @@ def score(frames):
     return res
 
 
-def fmt(s):
-    return "—" if s is None else f"{s['rmae']:.3f} | {s['mae']:.1f} | {s['bias']:+.1f} | {s['naive_mae']:.1f} | {s['cells']:,} | {s['days']}"
+def row(key, arm, s):
+    if s is None:
+        return f"| {key} | ({arm}) | — | — | — | — | 0 | 0 |"
+    return (f"| {key} | ({arm}) | {s['rmae']:.3f} | {s['mae']:.1f} | {s['bias']:+.1f} | {s['naive_mae']:.1f} | "
+            f"{s['cells']:,} | {s['days']} |")
 
 
-def to_md(res):
-    out = []
+def to_md(res, parts=("pooled", "period", "region", "month")):
+    out = ["Arms: " + "; ".join(f"({k}) {v}" for k, v in ARMS.items()), ""]
     for cs in ("common", "own"):
         if cs not in res:
             continue
@@ -131,14 +134,14 @@ def to_md(res):
         title = ("Common cells (every arm present: " + ", ".join(res["common_arms"]) + ")") if cs == "common" \
             else "Each arm on its own cells"
         out.append(f"### {title}\n")
-        for part in ("pooled", "period", "region", "month"):
-            out.append(f"**{part}** — rMAE | MAE | bias | naive MAE | cells | days\n")
-            out.append("| " + " | ".join(["slice"] + [f"({k}) {ARMS[k].split(' (')[0]}" for k in arms]) + " |")
-            out.append("|" + "---|" * (len(arms) + 1))
+        for part in parts:
+            out.append(f"**by {part}**\n")
+            out.append("| slice | arm | rMAE | MAE | bias | naive MAE | cells | days |")
+            out.append("|---|---|---|---|---|---|---|---|")
             keys = ["all"] if part == "pooled" else sorted({x for k in arms for x in res[cs][k][part]})
             for key in keys:
-                cells = [fmt(res[cs][k]["pooled"] if part == "pooled" else res[cs][k][part].get(key)) for k in arms]
-                out.append(f"| {key} | " + " | ".join(cells) + " |")
+                for k in arms:
+                    out.append(row(key, k, res[cs][k]["pooled"] if part == "pooled" else res[cs][k][part].get(key)))
             out.append("")
     return "\n".join(out)
 
