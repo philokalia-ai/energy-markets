@@ -34,6 +34,11 @@ on:
         description: "Campaign label stamped on every row (rollback key)"
         required: true
         default: "cv44-backfill-2026-11"
+      workers:
+        description: "Independent chunk processes (1 = original path; 2 = opt-in, eight CPUs total)"
+        type: choice
+        options: ["1", "2"]
+        default: "1"
       score:
         description: "Score the written rows after the reconstruction"
         type: boolean
@@ -139,11 +144,12 @@ jobs:
           EUPHEMIA_FORECAST_RETRO_ASOF: ${{ inputs.end }}
           EUPHEMIA_FORECAST_RESET_TAG: ${{ inputs.reset_tag }}
           EUPHEMIA_RETRO_ALONGSIDE: "1"     # never skip because of a live vintage, never supersede
-          EUPHEMIA_RETRO_CHUNK_DAYS: "14"   # one weather fetch + one extra UTC-day clear per chunk
+          EUPHEMIA_RETRO_CHUNK_DAYS: "14"   # weather batched per chunk; two issuance-specific UTC clears per market day
           EUPHEMIA_RETRO_DEADLINE_UTC: ${{ steps.guard.outputs.deadline }}
+          RETRO_WORKERS: ${{ inputs.workers }}
         run: |
           # No EUPHEMIA_RETRO_SUPERSEDE and no bucket credentials here, on purpose.
-          julia --project=. bin/daily_forecast.jl
+          python3 bin/run_retro_backfill.py --workers "${RETRO_WORKERS:-1}"
 
       - name: Score the reconstructed rows
         if: ${{ inputs.score }}
