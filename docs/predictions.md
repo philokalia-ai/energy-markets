@@ -100,7 +100,9 @@ The `previous_dayN` history is served publicly only by the rate-limited
 
 - **Durable archive.** [`bin/capture_gfs_vintages.jl`](../bin/capture_gfs_vintages.jl)
   (nightly `capture-gfs-vintages.yml`, ~07:30 UTC) appends the day's
-  `previous_day1..7` vintages for all 39 zones' cells and cities into
+  `previous_day1..7` vintages (wind_speed_100m, shortwave_radiation,
+  temperature_2m, and since 2026-11-17 the ML RES cloud_cover and
+  surface_pressure) for all 39 zones' cells and cities into
   **`data/gfs_vintages/`** — one parquet per delivery day (`delivery_date,
   valid_time_utc, lead_days, lat, lon, variable, value`), through the exact
   serve-time fetch machinery. Idempotent, additive and non-fatal (always exits 0;

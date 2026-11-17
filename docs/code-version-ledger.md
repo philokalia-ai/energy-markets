@@ -434,6 +434,11 @@ Dated reminders and scoring-policy notes that do not change `code_version`.
     requests cost 1 call per location, so a fully public 14-day chunk of the 39-zone
     footprint is ≈3,200 calls, and chunks up to 34 days cost the same.
   - The live run is unchanged: the cache is off and the breaker unarmed there.
+  - The nightly GFS-vintage capture (`bin/capture_gfs_vintages.jl`) now also archives
+    cloud_cover and surface_pressure (the rest of `ML_RES_VARS`, via
+    `fetch_ml_res_weather` over the RES cells), so `/data/gfs_vintages` covers every
+    weather input going forward; files before 2026-11-17 lack them.
+    `EUPHEMIA_VINTAGE_ML_VARS=0` restores the old variable list.
 - **2026-11-16 — owner-approved GBM strict as-of default from 2026-11-17
   (#431 D2).** GBM rows freeze at their delivery-day gate; `MODEL_LINES_STRICT_ASOF=0`
   restores the #439 non-strict path, and `MODEL_LINES_REWRITE_PAST=1` permits explicit

@@ -237,6 +237,8 @@ println()
         # #431 R3 follow-up: on-disk previous-runs cache, public breaker, weighted-call
         # cost, grid-aligned retro chunks — no network, no DB.
         include(joinpath(@__DIR__, "test_retro_chunk_resilience.jl"))
+        # GFS-vintage capture archives every ML_RES_VARS variable (stub fetchers).
+        include(joinpath(@__DIR__, "test_capture_gfs_vintages.jl"))
     end
 
     @testset "Weather Load Model" begin
