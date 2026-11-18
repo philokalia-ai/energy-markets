@@ -152,11 +152,20 @@ def main():
     ap.add_argument("--phys-dir", default=os.path.expanduser("~/armada/em-team/results/offline-bf/out"))
     ap.add_argument("--extract", default=os.environ.get("EUPHEMIA_DUCKDB_PATH",
                     os.path.expanduser("~/armada/em-data/euphemia-live-20261115.duckdb")))
+    ap.add_argument("--start", default="2024-11-16"); ap.add_argument("--end", default="2026-11-15")
+    ap.add_argument("--c-root", default=None, help="root of the (c) postsim/ outputs (default: --tsfm)")
+    ap.add_argument("--physics", choices=["weather", "record"], default="weather",
+                    help="label of the physics source of (b) and (c): weather track or record (ENTSO-E D-1)")
     ap.add_argument("--json"); ap.add_argument("--md")
     a = ap.parse_args()
     import duckdb
     con = duckdb.connect(a.extract, read_only=True)
-    frames = {"a": load_tsfm(a.tsfm, "pregate0630"), "b": load_phys(a.phys_dir), "c": load_tsfm(a.tsfm, "postsim")}
+    if a.physics == "record":
+        ARMS["b"] = "cv44 RECORD physics (ENTSO-E D-1 inputs)"
+        ARMS["c"] = "Timestral + RECORD physics (post-sim overlay path)"
+    frames = {"a": load_tsfm(a.tsfm, "pregate0630"), "b": load_phys(a.phys_dir),
+              "c": load_tsfm(a.c_root or a.tsfm, "postsim")}
+    frames = {k: f[(f.day >= a.start) & (f.day <= a.end)] for k, f in frames.items()}
     frames = attach_actuals(con, {k: f for k, f in frames.items() if len(f)})
     res = score(frames)
     md = to_md(res)
