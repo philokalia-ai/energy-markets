@@ -4,6 +4,8 @@
 
 using Dates
 
+include(joinpath(@__DIR__, "weather_duckdb.jl"))   # EUPHEMIA_WEATHER_DUCKDB shim (default off)
+
 """
     _batch_all_empty(parsed, batch) -> Bool
 
