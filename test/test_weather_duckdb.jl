@@ -151,3 +151,68 @@ end
     @test collect(zip(r.lats, r.lons)) == WXT_CELLS && r.hourly == ["a_previous_day1"] &&
           r.start_date == "2026-09-13" && r.end_date == "2026-09-14" && r.timezone == "UTC"
 end
+
+# The exporter's resume decisions, through the real exporter with a one-cell stub server
+# (review of #459: a resume with another model, and an overlapping refill, must not skip).
+@testset "weather vintage export: resume identity" begin
+    calls = String[]
+    stub(u) = begin
+        push!(calls, u)
+        r = parse_openmeteo_request(u)
+        hs = openmeteo_request_hours(Date(r.start_date), Date(r.end_date))
+        synthesize_openmeteo_json(r.latstr, r.lonstr, r.hourly, hs,
+            (k, v, h) -> r.models == "gfs_seamless" ? 10.0 : 20.0)
+    end
+    base = "http://127.0.0.1:9/v1/forecast"
+    one = Dict((48.0, 17.0) => ["temperature_2m"])
+    run_(p, a, b; kw...) = redirect_stdout(devnull) do
+        export_weather_vintages(Date(a), Date(b); out=p, base=base, ntasks=1, lags=[1],
+                                get_fn=stub, kw...)
+    end
+    q(p, sql) = let db = DuckDB.DB(p; readonly=true), con = DBInterface.connect(db)
+        try Tables_rows(DBInterface.execute(con, sql)) finally DBInterface.close!(con); DuckDB.close(db) end
+    end
+    dir = mktempdir()
+    # 1. resume with another model: refused before anything is fetched or written
+    p = joinpath(dir, "models.duckdb")
+    run_(p, "2026-09-13", "2026-09-15"; chunk_days=2, models="gfs_seamless", cell_vars=one)
+    empty!(calls)
+    @test_throws ErrorException run_(p, "2026-09-13", "2026-09-16"; chunk_days=2,
+                                     models="icon_seamless", cell_vars=one)
+    @test isempty(calls)
+    @test q(p, "SELECT value FROM weather_vintages_meta WHERE key='models'") == [("gfs_seamless",)]
+    @test q(p, "SELECT DISTINCT value FROM weather_vintages") == [(10.0,)]
+    # same model resumes normally: logged complete chunks skipped, the new tail fetched
+    run_(p, "2026-09-13", "2026-09-16"; chunk_days=2, models="gfs_seamless", cell_vars=one)
+    @test length(calls) == 1 && occursin("start_date=2026-09-15", calls[1])
+    # 2. a changed footprint (an added cell) refetches the logged chunk
+    empty!(calls)
+    two = Dict((48.0, 17.0) => ["temperature_2m"], (50.0, 10.0) => ["temperature_2m"])
+    run_(p, "2026-09-13", "2026-09-14"; chunk_days=2, cell_vars=two)
+    @test length(calls) == 1
+    @test q(p, "SELECT count(*) FROM weather_vintages_coverage WHERE lat = 50.0") == [(1,)]
+    # 3. an overlapping refill: the full-window rerun repairs the dropped coverage
+    p = joinpath(dir, "overlap.duckdb")
+    run_(p, "2026-09-13", "2026-09-15"; chunk_days=3, cell_vars=one)
+    run_(p, "2026-09-14", "2026-09-14"; chunk_days=1, redo="all", cell_vars=one)
+    @test q(p, "SELECT count(*) FROM weather_vintages_chunks") == [(1,)]   # the 3-day log is gone
+    empty!(calls)
+    run_(p, "2026-09-13", "2026-09-15"; chunk_days=3, cell_vars=one)
+    @test length(calls) == 1
+    @test q(p, "SELECT count(*) FROM weather_vintages") == [(72,)]
+    withenv("EUPHEMIA_WEATHER_DUCKDB" => p) do
+        u = weather_vintage_url(base, [(48.0, 17.0)], ["temperature_2m_previous_day1"],
+                                Date(2026, 9, 13), Date(2026, 9, 15), "gfs_seamless")
+        @test JSON.parse(weather_duckdb_answer(u))["hourly"]["temperature_2m_previous_day1"] == fill(10.0, 72)
+    end
+    # a further rerun skips (logged and covered)
+    empty!(calls)
+    run_(p, "2026-09-13", "2026-09-15"; chunk_days=3, cell_vars=one)
+    @test isempty(calls)
+    for st in values(WEATHER_DUCKDB_STATE)
+        DBInterface.close!(st.con)
+    end
+    empty!(WEATHER_DUCKDB_STATE)
+    GC.gc()
+    rm(dir; recursive=true, force=true)
+end

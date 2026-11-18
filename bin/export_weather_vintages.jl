@@ -25,7 +25,10 @@
 #   load pack cities, ML geom cities       temperature_2m, shortwave_radiation   (fetch_load_weather)
 # each with the lag's suffix, queried in ≤50-cell batches with the fetchers' URL shape.
 # Resumable: every chunk is one transaction (values + per-cell coverage + a log row);
-# a rerun skips logged complete chunks.
+# a rerun skips a chunk only when it is logged without nulls AND the coverage table still
+# covers every requested cell × variable for all its days (a changed footprint or an
+# overlapping refill makes it refetch). One file holds one model: resuming into a file
+# written with another model is an error.
 using Dates, JSON, DataFrames, DuckDB
 
 isdefined(@__MODULE__, :parse_openmeteo_response) || include(joinpath(@__DIR__, "weather_res.jl"))
@@ -128,7 +131,9 @@ end
 
 One chunk as ONE transaction: replace the values of these variables in d0..d1, replace
 the coverage of these variables overlapping d0..d1 (a partly overlapped older range is
-dropped whole: those days read as uncovered, i.e. a loud error, never as nulls), and log.
+dropped whole: those days read as uncovered, i.e. a loud error, never as nulls), drop
+every log row of this lag overlapping d0..d1 (its coverage is gone, so it is no longer
+complete), and log.
 """
 function write_weather_chunk!(con, d0::Date, d1::Date, lag::Int, sfx_vars::AbstractVector,
                               rows, cellvars::AbstractVector; source::AbstractString, models::AbstractString)
@@ -142,7 +147,7 @@ function write_weather_chunk!(con, d0::Date, d1::Date, lag::Int, sfx_vars::Abstr
             AND time_utc >= TIMESTAMP '$d0' AND time_utc < TIMESTAMP '$(d1 + Day(1))'""")
         DBInterface.execute(con, """DELETE FROM weather_vintages_coverage WHERE var IN ($varin)
             AND start_date <= DATE '$d1' AND end_date >= DATE '$d0'""")
-        DBInterface.execute(con, "DELETE FROM weather_vintages_chunks WHERE lag = $lag AND start_date = DATE '$d0' AND end_date = DATE '$d1'")
+        DBInterface.execute(con, "DELETE FROM weather_vintages_chunks WHERE lag = $lag AND start_date <= DATE '$d1' AND end_date >= DATE '$d0'")
         DuckDB.register_data_frame(con, df, "wx_chunk")
         DuckDB.register_data_frame(con, cov, "wx_cov")
         DBInterface.execute(con, "INSERT INTO weather_vintages SELECT * FROM wx_chunk ORDER BY var, time_utc, lat, lon")
@@ -173,6 +178,43 @@ function fetch_weather_chunk(base, batches, sfx, d0, d1, models; ntasks::Int=8, 
             n_null=sum(p.n_null for p in parts))
 end
 
+"""
+    weather_vintages_check_models(con, models)
+
+Error unless the file is empty (no values, no coverage) or was written with `models` (one file, one
+model: a resume with another model would relabel the old values).
+"""
+function weather_vintages_check_models(con, models::AbstractString)
+    have = [String(r[1]) for r in Tables_rows(DBInterface.execute(con,
+                "SELECT value FROM weather_vintages_meta WHERE key = 'models'"))]
+    # coverage rows alone (an all-null export) also carry the model: they answer as nulls
+    nrows = Tables_rows(DBInterface.execute(con,
+        "SELECT (SELECT count(*) FROM weather_vintages) + (SELECT count(*) FROM weather_vintages_coverage)"))[1][1]
+    if !isempty(have) && any(!=(models), have) && nrows > 0
+        error("the file holds models=$(join(have, ",")); this export asks models=$models " *
+              "(export another model into a separate WEATHER_VINTAGES_OUT)")
+    end
+    return nothing
+end
+
+"(lat, lon, var) => [(start_date, end_date)] of the file's coverage table."
+function weather_vintages_coverage(con)
+    cov = Dict{Tuple{Float64,Float64,String},Vector{Tuple{Date,Date}}}()
+    for r in Tables_rows(DBInterface.execute(con,
+            "SELECT lat, lon, var, start_date, end_date FROM weather_vintages_coverage"))
+        push!(get!(Vector{Tuple{Date,Date}}, cov, (Float64(r[1]), Float64(r[2]), String(r[3]))),
+              (Date(r[4]), Date(r[5])))
+    end
+    return cov
+end
+
+"True when `cov` covers every (lat, lon, var) of `cellvars` for all days d0..d1. Pure."
+weather_vintages_chunk_covered(cov, cellvars, d0::Date, d1::Date) =
+    all(cellvars) do c
+        rs = get(cov, c, nothing)
+        rs !== nothing && _wx_covers(rs, d0, d1)
+    end
+
 function export_weather_vintages(start::Date, stop::Date;
                                  out=get(ENV, "WEATHER_VINTAGES_OUT", joinpath(dirname(@__DIR__), "data", "weather-vintages.duckdb")),
                                  base=get(ENV, "WEATHER_VINTAGES_URL", get(ENV, "EUPHEMIA_OPENMETEO_PREVRUNS_URL", "")),
@@ -180,19 +222,22 @@ function export_weather_vintages(start::Date, stop::Date;
                                  chunk_days=parse(Int, get(ENV, "WEATHER_VINTAGES_CHUNK_DAYS", "31")),
                                  redo=get(ENV, "WEATHER_VINTAGES_REDO", "nulls"),
                                  ntasks=parse(Int, get(ENV, "WEATHER_VINTAGES_TASKS", "8")),
-                                 models=get(ENV, "EUPHEMIA_OPENMETEO_MODELS", "gfs_seamless"))
+                                 models=get(ENV, "EUPHEMIA_OPENMETEO_MODELS", "gfs_seamless"),
+                                 cell_vars=nothing, get_fn=_openmeteo_get)
     isempty(base) && error("set WEATHER_VINTAGES_URL (or EUPHEMIA_OPENMETEO_PREVRUNS_URL) to the open-meteo instance to export")
     occursin(',', models) && error("export one model at a time (got models=$models)")
     redo in ("nulls", "none", "all") || error("WEATHER_VINTAGES_REDO must be nulls|none|all")
     all(l -> 0 <= l <= 7, lags) || error("lags must be 0..7")
     delete!(ENV, "EUPHEMIA_WEATHER_DUCKDB")   # never answer the export from a file
-    cv = weather_vintage_cell_vars()
+    cv = cell_vars === nothing ? weather_vintage_cell_vars() : cell_vars
     batches = weather_vintage_batches(cv)
     println("EXPORT cells=$(length(cv)) cell-vars=$(sum(length, values(cv))) batches/chunk=$(length(batches)) " *
             "lags=$lags $start..$stop chunk=$(chunk_days)d -> $out (source $base, models=$models)")
     db = DuckDB.DB(out)
     con = DBInterface.connect(db)
     weather_vintages_schema!(con)
+    weather_vintages_check_models(con, models)
+    cov = weather_vintages_coverage(con)
     done = DataFrame(DBInterface.execute(con, "SELECT start_date, end_date, lag, n_null FROM weather_vintages_chunks"))
     try
         for lag in lags
@@ -203,11 +248,12 @@ function export_weather_vintages(start::Date, stop::Date;
             while d0 <= stop
                 d1 = min(d0 + Day(chunk_days - 1), stop)
                 prev = done[(Date.(done.start_date) .== d0) .& (Date.(done.end_date) .== d1) .& (done.lag .== lag), :]
-                if !isempty(prev) && (redo == "none" || (redo == "nulls" && prev.n_null[1] == 0))
-                    println("  skip $d0..$d1 lag $lag (logged, n_null=$(prev.n_null[1]))")
+                logged = !isempty(prev) && (redo == "none" || (redo == "nulls" && prev.n_null[1] == 0))
+                if logged && weather_vintages_chunk_covered(cov, cellvars, d0, d1)
+                    println("  skip $d0..$d1 lag $lag (logged, n_null=$(prev.n_null[1]), covered)")
                 else
                     t = time()
-                    rows = fetch_weather_chunk(base, batches, sfx, d0, d1, models; ntasks)
+                    rows = fetch_weather_chunk(base, batches, sfx, d0, d1, models; ntasks, get_fn)
                     write_weather_chunk!(con, d0, d1, lag, sfx_vars, rows, cellvars; source=base, models)
                     n = length(rows.value)
                     println("  $d0..$d1 lag $lag: values=$n null=$(rows.n_null) " *
