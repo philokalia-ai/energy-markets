@@ -23,7 +23,7 @@ whole range and cut per day by `build_context` (strictly before the start of D).
 
 Post-sim readiness: day D runs once every physics day in [max(D-60, --phys-start), D] has landed
 (live had a full 60-day sim history; the window's first 60 days get what exists). --loop re-scans
-until the physics run is finished (offline-bf/run2y.out: ALLDONE, or the run is gone).
+until the physics run is finished (offline-bf/run2y.out ends with ALLDONE).
 
 Resumable: one CSV per (mode, day) in --out/<mode>/<day>.csv, written atomically; done days skip.
 Parallel: --workers processes x --threads torch threads, each pinned by the caller (taskset).
@@ -123,18 +123,12 @@ def history_ready(files, delivery, phys_start, days=SIM_HISTORY_DAYS):
 
 
 def physics_finished(a):
-    """The offline physics run (offline-bf/run2y.sh > run2y.out) is over: its ALLDONE marker, or
-    its output exists and no run2y.sh process is left (it died). Not started yet = not finished."""
-    out = Path(a.phys_done)
+    """The offline physics run (offline-bf/run2y.sh > run2y.out) is over: its ALLDONE marker, and
+    nothing else (a process-name test misfired: the run's argv need not contain run2y.sh)."""
     try:
-        text = out.read_text()
+        return "ALLDONE" in Path(a.phys_done).read_text()
     except OSError:
         return False
-    if "ALLDONE" in text:
-        return True
-    import subprocess
-    ps = subprocess.run(["ps", "-eo", "args"], capture_output=True, text=True).stdout
-    return not any("run2y.sh" in l for l in ps.splitlines())
 
 
 def worker(args):
