@@ -53,11 +53,20 @@ SIM_HISTORY_DAYS = 60          # sim_from_db(days=60) in the live post-sim run
 SIM_MADE_OFFSET = pd.Timedelta(hours=-17, minutes=-30)  # D-1 06:30 UTC relative to D 00:00 UTC (naive)
 
 
-def physics_files(phys_dir):
-    """{market day: csv path} — first file per day in sorted order (the scorer's dedupe)."""
+def physics_files(phys_dir, min_age_s=120):
+    """{market day: csv path} — first file per day in sorted order (the scorer's dedupe).
+
+    Files modified less than `min_age_s` ago are skipped: the physics backfill writes each day's CSV
+    in place, so a fresh file may still be half-written while the run is landing days."""
     out = {}
+    now = time.time()
     for f in sorted(glob.glob(f"{phys_dir}/*-20*.csv")):
         if f.endswith("-utc.csv"):
+            continue
+        try:
+            if now - os.path.getmtime(f) < min_age_s:
+                continue
+        except OSError:
             continue
         m = re.search(r"(20\d\d-\d\d-\d\d)\.csv$", f)
         if m:
@@ -143,7 +152,8 @@ def worker(args):
             "sim_made_utc", "after_gate", "tsfm_median", "tsfm_q10", "tsfm_q90", "p_le0_tsfm"]
     while True:
         finished = a.mode != "postsim" or physics_finished(a)   # read BEFORE the scan
-        files = physics_files(a.phys_dir) if a.mode == "postsim" else {}
+        age = 0 if finished else 120     # once the run is over every file is complete
+        files = physics_files(a.phys_dir, age) if a.mode == "postsim" else {}
         did, waiting = 0, 0
         for d in days:
             f = outdir / f"{d}.csv"
@@ -169,7 +179,7 @@ def worker(args):
             did += 1
             print(f"{d} done {time.time() - t0:.1f}s", flush=True)
             if a.mode == "postsim":
-                files = physics_files(a.phys_dir)   # pick up newly landed days mid-pass
+                files = physics_files(a.phys_dir, age)   # pick up newly landed days mid-pass
         if not a.loop or finished or (waiting == 0 and did == 0):
             if waiting:
                 print(f"pass over: {waiting} days still lack a complete physics history", flush=True)
