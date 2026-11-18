@@ -74,12 +74,37 @@ def paper_lear():
     return PaperLEAR
 
 
+EXOG = {
+    "full": "load forecast (6.1.B) + wind/solar day-ahead forecast (14.1.D) for D, as in the paper",
+    "load": "GATE-CLEAN: load forecast (6.1.B, due 2 h before the gate) only; no wind/solar",
+    "load_res_lag1": "GATE-CLEAN: load forecast + the 14.1.D wind/solar series shifted by one day (day D's "
+                     "input is the day-ahead forecast FOR D-1, published by 18:00 D-2)",
+}
+
+
+def exog_variant(df, exog):
+    """The exogenous inputs of the run. 14.1.D (day-ahead wind/solar) is due by 18:00 D-1, i.e. after
+    the 12:00 D-1 gate, so `full` may look ahead; the two gate-clean variants use only inputs
+    published before the gate. The extract holds one (day-ahead) issue per slot, so no gate-clean
+    wind/solar forecast for D itself exists in it."""
+    if exog == "full":
+        return df
+    if exog == "load":
+        return df[["Price", "Exogenous 1"]]
+    if exog == "load_res_lag1":
+        x = df.copy()
+        x["Exogenous 2"] = x["Exogenous 2"].shift(24)   # same wall-clock hour, previous day
+        return x.iloc[24:]
+    raise ValueError(exog)
+
+
 def run_zone(zone, a):
     LEAR = paper_lear()
     warnings.filterwarnings("ignore")
     out = Path(a.out) / f"{zone}.csv"
     done = set(pd.read_csv(out, usecols=["market_date"]).market_date) if out.exists() else set()
     df = pd.read_parquet(Path(a.out) / "frames" / f"{zone}.parquet")
+    df = exog_variant(df, a.exog)
     print(f"{zone}: frame {df.index[0]} .. {df.index[-1]}, {len(done)} days already done", flush=True)
     days = [d.date().isoformat() for d in pd.date_range(a.start, a.end, freq="D")]
     days = list(np.random.default_rng(a.seed).permutation(days))
@@ -117,6 +142,7 @@ def main():
                     os.path.expanduser("~/armada/em-data/euphemia-live-20261115.duckdb")))
     ap.add_argument("--out", required=True)
     ap.add_argument("--seed", type=int, default=431)
+    ap.add_argument("--exog", choices=list(EXOG), default="full", help="; ".join(f"{k}: {v}" for k, v in EXOG.items()))
     ap.add_argument("--procs", type=int, default=1, help="zones run in parallel (one process each)")
     a = ap.parse_args()
     fdir = Path(a.out) / "frames"
