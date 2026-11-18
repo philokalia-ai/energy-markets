@@ -324,6 +324,11 @@ function _true_up_fleet(generators::Vector{Generator}, bidding_zone::String,
     # target is the same declared DERATE_HEADROOM × trailing-30d p95, never
     # lifted by a truth target.
     cv45_avail_types = cv45_on("EUPHEMIA_CV45_AVAIL") ? ("Fossil Oil", "Other") : ()
+    # An expensive peaker can sit idle while fully available. Reuse the cv43
+    # merit test, including its historical fuel cutoff, before capping capacity.
+    if fleet_truthing && !isempty(cv45_avail_types) && cv45_on("EUPHEMIA_CV45_AVAIL_INMERIT")
+        cv45_avail_types = _inmerit_types(day, bidding_zone, cv45_avail_types)
+    end
     derate_types = (derate_types..., cv45_avail_types...)
     # One scale per fuel type, applied in a single pass. Iterates the
     # FLEET's types (not type_p95's keys): a derate-listed type with a

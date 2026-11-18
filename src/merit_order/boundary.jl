@@ -41,7 +41,7 @@ function _boundary_anchor(book::BoundaryBook, day::Date, zone::String)
         return (gas - GAS_VOM_COST) *
                (GAS_PLANT_EFFICIENCY / GB_CCGT_EFFICIENCY) + GAS_VOM_COST
     end
-    return ttf / GB_CCGT_EFFICIENCY +
+    return _gas_fuel_cost(ttf, GB_CCGT_EFFICIENCY, cv45_on("EUPHEMIA_CV45_GB_HHV")) +
            GAS_EMISSION_FACTOR / GB_CCGT_EFFICIENCY * carbon +
            GAS_VOM_COST
 end

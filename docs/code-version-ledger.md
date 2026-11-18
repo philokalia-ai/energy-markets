@@ -380,7 +380,9 @@ byte-identical.
 | `EUPHEMIA_CV45_PUMP` | expected pumping (same-hour mean PS consumption, the PS budget's 14-day window) added to load | load excludes pumping (review §2.3 regression) |
 | `EUPHEMIA_CV45_RESERVOIR` | `reservoir` complex family on by default (non-`:reservoir_opportunity` zones) | existing family |
 | `EUPHEMIA_CV45_AVAIL` | `Fossil Oil` and `Other` in the fleet-truthing derate (1.15 × 30d p95) | declared `DERATE_HEADROOM` |
+| `EUPHEMIA_CV45_AVAIL_INMERIT` | With AVAIL enabled, cap each fuel only when its SRMC is below gas on both D and D−30. To replay the original AVAIL arm, turn this modifier off. | cv43 in-merit test and historical close cutoff |
 | `EUPHEMIA_CV45_GAS_HHV` | gas fuel term `TTF / (0.55 × 0.90)` | TTF on GCV (GTS Definitions Code Gas); NCV/GCV 0.90 (Energy Statistics Manual 2005) |
+| `EUPHEMIA_CV45_GB_HHV` | GB boundary fuel term `TTF / (0.52 × 0.90)` on DK1 and FR. Carbon and the missing-TTF fallback retain their existing calculations. | declared LHV GB efficiency and the domestic NCV/GCV conversion |
 | `EUPHEMIA_CV45_HYDRO_CAP` | anchored water-value clamp `TRANCHES[end]` (1.6) × gas SRMC | declared constant |
 | `EUPHEMIA_CV45_ELASTIC` | elastic-demand price `max(250, BACKSTOP_PRICE_MULT × gas SRMC)` | declared constant |
 

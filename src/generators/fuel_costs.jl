@@ -98,6 +98,9 @@ const GAS_VOM_COST = 2.0            # €/MWh variable O&M
 # 0.202 tCO₂/MWh is already on an NCV basis (IPCC 2006 default 56.1 t/TJ NCV).
 const GAS_NCV_PER_GCV = 0.90
 
+_gas_fuel_cost(ttf, efficiency, hhv::Bool) =
+    hhv ? ttf / (efficiency * GAS_NCV_PER_GCV) : ttf / efficiency
+
 # EUA carbon price (€/tCO₂): approximate yearly averages of the EU ETS
 # December-contract price. Fallback for dates before the daily feed's
 # history starts (Nov 2021) and for transient DB failures — carbon is the
@@ -303,9 +306,7 @@ function get_marginal_cost(day::Dates.Date, fuel_type::String, bidding_zone::Str
     if fuel_type == "Fossil Gas"
         ttf = get_ttf_price(day; cutoff=cutoff)
         if ttf !== nothing
-            fuel_cost = cv45_on("EUPHEMIA_CV45_GAS_HHV") ?
-                        ttf / (GAS_PLANT_EFFICIENCY * GAS_NCV_PER_GCV) :
-                        ttf / GAS_PLANT_EFFICIENCY
+            fuel_cost = _gas_fuel_cost(ttf, GAS_PLANT_EFFICIENCY, cv45_on("EUPHEMIA_CV45_GAS_HHV"))
             carbon_cost = GAS_EMISSION_FACTOR / GAS_PLANT_EFFICIENCY * eua_price(day; cutoff=cutoff)
             return fuel_cost + carbon_cost + GAS_VOM_COST
         end

@@ -35,6 +35,13 @@ end
         @test !Euphemia.cv45_on("EUPHEMIA_CV45_ELASTIC")
         @test Euphemia.cv45_on("EUPHEMIA_CV45_GAS_HHV")
     end
+    withenv_cv45("EUPHEMIA_CV45" => "off", "EUPHEMIA_CV45_AVAIL" => "on") do
+        @test !Euphemia.cv45_on("EUPHEMIA_CV45_AVAIL_INMERIT")
+    end
+    for efficiency in (Euphemia.GAS_PLANT_EFFICIENCY, MOB.GB_CCGT_EFFICIENCY)
+        @test Euphemia._gas_fuel_cost(35.0, efficiency, false) === 35.0 / efficiency
+        @test Euphemia._gas_fuel_cost(35.0, efficiency, true) == 35.0 / (efficiency * 0.90)
+    end
     withenv_cv45("EUPHEMIA_COMPLEX_ORDERS" => "off") do   # complex-orders kill switch still wins
         @test isempty(MOB.complex_order_kinds())
     end
