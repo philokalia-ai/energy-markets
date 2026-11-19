@@ -31,7 +31,9 @@ BIN = Path(__file__).resolve().parents[3] / "bin"
 sys.path.insert(0, str(BIN))
 import da_target  # noqa: E402
 
-ARMS = {"lear": "LEAR-Ens (epftoolbox, 4 windows)", "dnn": "DNN-Ens (epftoolbox)",
+ARMS = {"lear": "LEAR-Ens (epftoolbox, 4 windows)",
+        "lear_gl": "LEAR-Ens gate-clean: load only", "lear_gr": "LEAR-Ens gate-clean: load + RES lag1",
+        "dnn": "DNN-Ens (epftoolbox)",
         "a": "(a) Timestral alone", "b": "(b) cv44 RECORD physics",
         "c_rec": "(c) Timestral + RECORD physics", "c_wx": "(c) Timestral + WEATHER physics"}
 
@@ -48,6 +50,8 @@ def read_many(pattern, col, name, zones):
 def load(a, zones):
     R = a.tsfm
     arms = {"lear": read_many(f"{a.lear}/*.csv", "lear", "lear", zones),
+            "lear_gl": read_many(f"{a.lear_gl}/*.csv", "lear", "lear_gl", zones) if a.lear_gl else None,
+            "lear_gr": read_many(f"{a.lear_gr}/*.csv", "lear", "lear_gr", zones) if a.lear_gr else None,
             "dnn": read_many(f"{a.dnn}/*.csv", "dnn", "dnn", zones) if a.dnn else None,
             "a": read_many(f"{R}/pregate0630/*.csv", "tsfm_median", "a", zones),
             "c_rec": read_many(f"{R}/record/postsim/*.csv", "tsfm_median", "c_rec", zones),
@@ -100,7 +104,10 @@ def table(d, arms, title):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--lear", required=True)
+    ap.add_argument("--lear-gl", help="gate-clean LEAR, load only (lear_run.py --exog load)")
+    ap.add_argument("--lear-gr", help="gate-clean LEAR, load + RES lag1 (lear_run.py --exog load_res_lag1)")
     ap.add_argument("--dnn")
+    ap.add_argument("--arms", nargs="+", help="arms of the common-cells table (default: all present)")
     ap.add_argument("--tsfm", default=os.path.expanduser("~/armada/em-team/results/tsfm-2y"))
     ap.add_argument("--record", default=os.path.expanduser("~/armada/em-team/results/record-cv44.duckdb"))
     ap.add_argument("--extract", default=os.path.expanduser("~/armada/em-data/euphemia-live-20261115.duckdb"))
@@ -115,6 +122,8 @@ def main():
     d = cells(con, arms, a.start, a.end)
     order = [k for k in ARMS if k in arms]
     res, md = {}, []
+    if a.arms:
+        order = [k for k in order if k in a.arms]
     common = d.dropna(subset=order)
     res["common"], m = table(common, order, f"Common cells: every arm present ({', '.join(order)})")
     md.append(m)
