@@ -37,7 +37,9 @@ WINDOWS = (56, 84, 1092, 1456)
 
 
 def paper_lear():
-    """epftoolbox's LEAR with one change: LassoLarsIC gets noise_variance = var(y), the AIC of the
+    """epftoolbox's LEAR with two changes. (1) A zero-MAD guard in the Invariant scaling (see
+    `invariant`; inert wherever epftoolbox's own scaling is finite). (2) LassoLarsIC gets
+    noise_variance = var(y), the AIC of the
     scikit-learn the paper ran on (< 1.1: criterion = RSS / var(y) + 2 df). scikit-learn >= 1.1
     estimates the noise variance by OLS instead and refuses n_samples <= n_features, i.e. the 56- and
     84-day windows (49/77 days vs 247 features). The new criterion with that variance differs from the
@@ -52,10 +54,25 @@ def paper_lear():
     from epftoolbox.data import scaling
     from sklearn.linear_model import Lasso, LassoLarsIC
 
+    def invariant(data):
+        """epftoolbox's 'Invariant' scaling, asinh((x - median) / MAD), with one guard: a column whose
+        MAD is 0 (more than half its values equal, e.g. night-hour solar in a solar-only zone, or no
+        wind/solar at all in NO5) is scaled by its standard deviation, or by 1 when it is constant
+        (it then scales to 0 and carries no weight). Unguarded, it gives NaN/inf and LassoLarsIC
+        stops. Columns with MAD > 0 are scaled exactly as in epftoolbox."""
+        raw = np.array(data, dtype=float)
+        [_], scaler = scaling([raw.copy()], 'Invariant')
+        inner = scaler.scaler                  # DataScaler -> InvariantScaler (holds median, mad)
+        bad = ~(inner.mad > 0)
+        if bad.any():
+            sd = raw.std(axis=0)
+            inner.mad = np.where(bad, np.where(sd > 0, sd, 1.0), inner.mad)
+        return scaler.transform(raw), scaler
+
     class PaperLEAR(LEAR):
         def recalibrate(self, Xtrain, Ytrain):
-            [Ytrain], self.scalerY = scaling([Ytrain], 'Invariant')
-            [Xtrain_no_dummies], self.scalerX = scaling([Xtrain[:, :-7]], 'Invariant')
+            Ytrain, self.scalerY = invariant(Ytrain)
+            Xtrain_no_dummies, self.scalerX = invariant(Xtrain[:, :-7])
             Xtrain[:, :-7] = Xtrain_no_dummies
             self.models = {}
             for h in range(24):
