@@ -21,9 +21,13 @@ order, as the physics scorer (`offline-bf/score.py`) does.
 Price context: `prices_duckdb`'s frame (EUPHEMIA_DA_INPUT, default highest_seq), loaded once for the
 whole range and cut per day by `build_context` (strictly before the start of D).
 
-Post-sim readiness: day D runs once every physics day in [max(D-60, --phys-start), D] has landed
-(live had a full 60-day sim history; the window's first 60 days get what exists). --loop re-scans
-until the physics run is finished (offline-bf/run2y.out ends with ALLDONE).
+Post-sim readiness: while the physics run is landing days, day D waits until every physics day in
+[max(D-60, --phys-start), D] has landed (live had a full 60-day sim history; the window's first 60
+days get what exists). --loop re-scans until the physics run is finished (--phys-done holds ALLDONE).
+Once it is finished no further day will land, so day D needs only its own physics file and the
+history is whatever exists, as live's sim_from_db reads whatever sims the DB holds: a physics day the
+backfill never produced is a hole in the history of the 60 days after it. Each output row records
+`sim_days`, the physics days the forecast saw in [max(D-60, --phys-start), D].
 
 Resumable: one CSV per (mode, day) in --out/<mode>/<day>.csv, written atomically; done days skip.
 Parallel: --workers processes x --threads torch threads, each pinned by the caller (taskset).
@@ -114,10 +118,13 @@ def claim(f: Path) -> bool:
     return False
 
 
-def history_ready(files, delivery, phys_start, days=SIM_HISTORY_DAYS):
+def history_ready(files, delivery, phys_start, final=False, days=SIM_HISTORY_DAYS):
     """Post-sim day D is ready when every physics day in [max(D - days, phys_start), D] has landed
-    (live ran with a full 60-day sim history; the window's first days get what exists)."""
+    (live ran with a full 60-day sim history; the window's first days get what exists). Once the
+    physics run is over (`final`), missing days will never land: D needs only its own file."""
     d = pd.Timestamp(delivery).normalize()
+    if final:
+        return d.date().isoformat() in files
     lo = max(d - pd.Timedelta(days=days), pd.Timestamp(phys_start))
     return all(x.date().isoformat() in files for x in pd.date_range(lo, d, freq="D"))
 
@@ -144,6 +151,8 @@ def worker(args):
     outdir = Path(a.out) / a.mode
     cols = ["zone", "market_date", "t_utc", "issue_utc", "input_mode", "context_end_utc",
             "sim_made_utc", "after_gate", "tsfm_median", "tsfm_q10", "tsfm_q90", "p_le0_tsfm"]
+    if a.mode == "postsim":
+        cols.append("sim_days")
     while True:
         finished = a.mode != "postsim" or physics_finished(a)   # read BEFORE the scan
         age = 0 if finished else 120     # once the run is over every file is complete
@@ -153,7 +162,7 @@ def worker(args):
             f = outdir / f"{d}.csv"
             if f.exists():
                 continue
-            if a.mode == "postsim" and not history_ready(files, d, a.phys_start):
+            if a.mode == "postsim" and not history_ready(files, d, a.phys_start, final=finished):
                 waiting += 1
                 continue
             if not claim(f):
@@ -167,6 +176,8 @@ def worker(args):
                 f.with_suffix(".lock").unlink(missing_ok=True)
                 continue
             tmp = f.with_suffix(".tmp")
+            if a.mode == "postsim":
+                hourly["sim_days"] = sim.made.nunique()
             hourly[cols].to_csv(tmp, index=False)
             tmp.rename(f)
             f.with_suffix(".lock").unlink(missing_ok=True)
