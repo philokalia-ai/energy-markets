@@ -323,13 +323,7 @@ function _create_multi_zone_order_book_merit(zones::Vector{String}, day::Date;
         include_explicit=enrich_network, aggregate_remap=aggregate_remap,
         drop_borders=drop_borders)
     zone_pairs = Network.get_zone_pairs(transfer_capacity)
-    oracle = MeritOrderBook.oracle_day(zones, day; pairs=zone_pairs,
-        shadow=shadowed_aggregate_codes(zones), cfg=cfg)
-    if oracle !== nothing && oracle.flow !== nothing
-        tc = transfer_capacity
-        transfer_capacity = Network.TransferCapacity(tc.bidding_zones, tc.time_periods,
-            tc.capacity_forward, tc.capacity_backward, tc.net_position, tc.ccr_pairs, oracle.flow.pins)
-    end
+    oracle = MeritOrderBook.oracle_day(zones, day; cfg, log_coverage=isempty(cached_zone_orders))
     # A border only counts as endogenous if it can actually carry flow:
     # ATC rows with zero capacity in both directions all day (e.g. an
     # interconnector on full-day outage) bound the flow variable to zero,
@@ -388,9 +382,6 @@ function _create_multi_zone_order_book_merit(zones::Vector{String}, day::Date;
         # structural exporters (NO5) their outlet without touching imports.
         import_only = sort([other for (a, b) in drop_borders
                             for other in ((a == zone) ? [b] : (b == zone) ? [a] : String[])])
-        if oracle !== nothing && oracle.flow !== nothing
-            filter!(cp -> !(cp in oracle.targets || zone in oracle.targets), import_only)
-        end
         anchor_export_mw = haskey(anchor_refs, zone) && !isempty(import_only) ?
             MeritOrderBook.get_dropped_border_exports(zone, day, import_only) :
             Dict{Int,Float64}()
@@ -416,7 +407,6 @@ function _create_multi_zone_order_book_merit(zones::Vector{String}, day::Date;
                 h = parse(Int, p) - 1
                 tot = 0.0
                 for cp in exclude
-                    oracle !== nothing && oracle.flow !== nothing && cp in oracle.targets && continue
                     tot += get(transfer_capacity.capacity_forward, (cp, zone, p), 0.0) +
                            get(transfer_capacity.capacity_backward, (zone, cp, p), 0.0)
                 end
@@ -520,15 +510,8 @@ function _create_multi_zone_order_book_merit(zones::Vector{String}, day::Date;
         end
     end
     if oracle !== nothing
-        required = copy(oracle.targets)
-        if oracle.flow !== nothing
-            # Losing a pinned peer would also erase its share of target exchange.
-            for (a, b, _) in keys(oracle.flow.pins)
-                push!(required, a, b)
-            end
-        end
-        missing_zones = intersect(required, failed_zones)
-        isempty(missing_zones) || error("Oracle book missing required zone(s): $missing_zones on $day")
+        missing_targets = intersect(keys(oracle), failed_zones)
+        isempty(missing_targets) || error("Oracle book missing target zone(s): $missing_targets on $day")
     end
     successful_zones = filter(z -> !(z in failed_zones), zones)
     isempty(successful_zones) && error("Failed to generate merit orders for any zone")
@@ -594,8 +577,7 @@ function _create_multi_zone_order_book_merit(zones::Vector{String}, day::Date;
         successful_zones,
         periods_vector,
         (-500.0, 3000.0),       # EU day-ahead floor / merit demand cap
-        transfer_capacity,
-        MeritOrderBook.oracle_fixed(oracle, successful_zones, periods_vector)
+        transfer_capacity, MeritOrderBook.oracle_fixed(oracle, successful_zones, periods_vector)
     )
 
     println("✅ Created multi-zone order book (merit-order):")

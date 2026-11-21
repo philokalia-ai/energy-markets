@@ -9,7 +9,7 @@ import ..select_solver
 
 # Import required modules from parent Euphemia package
 import ..Euphemia.MarketOrders: MarketOrder, SimpleOrder, AggregatedPeriodicOrder, LinkedHourlyOrder
-import ..Euphemia.Network: NetworkTopology, TransferCapacity, flow_bounds, get_connected_zones, get_zone_pairs, create_transfer_capacity_from_entsoe
+import ..Euphemia.Network: NetworkTopology, TransferCapacity, get_connected_zones, get_zone_pairs, create_transfer_capacity_from_entsoe
 import ..Euphemia: get_loads, get_generators, get_generation_forecast_for_wind_and_solar
 
 # Result structure

@@ -64,6 +64,8 @@ function resolve_complex_orders(order_book::MPCCOrderBook;
     nset = Set(nodes)
     fixed_in = order_book.fixed_injections
     release(msg) = begin
+        any(o -> startswith(o.family, "ERES:observed:"), all_linked) &&
+            error("Cannot release an observed reservoir energy budget: $msg")
         @warn "complex orders: $msg — releasing to the baseline book"
         LAST_COMPLEX_INFO[] = (status=:fallback, message=msg)
         # Baseline book exactly: storage members uncapped at their bid, blocks
@@ -153,9 +155,11 @@ function resolve_complex_orders(order_book::MPCCOrderBook;
             for pair in zone_pairs, t in periods
                 lp = _hourly_lookup(t)
                 s, d = pair
-                lower, upper = flow_bounds(tc, s, d, lp)
-                set_lower_bound(flow[pair, t], lower)
-                set_upper_bound(flow[pair, t], upper)
+                fw = get(tc.capacity_forward, (s, d, lp), 0.0)
+                bw = get(tc.capacity_backward, (s, d, lp),
+                    get(tc.capacity_forward, (d, s, lp), 0.0))
+                set_lower_bound(flow[pair, t], -bw)
+                set_upper_bound(flow[pair, t], fw)
                 # inflow to d (−), outflow from s (+)
                 add_to_expression!(bal[(d, t)], -1.0, flow[pair, t])
                 add_to_expression!(bal[(s, t)], 1.0, flow[pair, t])
