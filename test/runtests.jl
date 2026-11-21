@@ -234,6 +234,14 @@ println()
         # #431 R3: public gap-fill of a self-hosted previous-runs primary (stub
         # HTTP closure) and the per-input ⛔ reasons — no network, no DB.
         include(joinpath(@__DIR__, "test_weather_gapfill.jl"))
+        # #431 R3 follow-up: on-disk previous-runs cache, public breaker, weighted-call
+        # cost, grid-aligned retro chunks — no network, no DB.
+        include(joinpath(@__DIR__, "test_retro_chunk_resilience.jl"))
+        # GFS-vintage capture archives every ML_RES_VARS variable (stub fetchers).
+        include(joinpath(@__DIR__, "test_capture_gfs_vintages.jl"))
+        # #455 review: weight-paced public requests on the real retro preparation
+        # loops (stub HTTP, virtual clock) stay under 90% of 600/min and 5000/h.
+        include(joinpath(@__DIR__, "test_openmeteo_pacing.jl"))
     end
 
     @testset "Weather vintages from DuckDB" begin

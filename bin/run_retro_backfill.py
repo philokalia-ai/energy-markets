@@ -62,7 +62,10 @@ def worker_env(env, start, end):
     result.update(EUPHEMIA_FORECAST_RETRO_START=start.isoformat(),
                   EUPHEMIA_FORECAST_RETRO_ASOF=end.isoformat(),
                   JULIA_NUM_THREADS="4", EUPHEMIA_PG_POOL="2",
-                  OPENBLAS_NUM_THREADS="1", OMP_NUM_THREADS="1")
+                  OPENBLAS_NUM_THREADS="1", OMP_NUM_THREADS="1",
+                  # Two concurrent children share one IP's open-meteo limits:
+                  # each paces its public requests to half (weather_vintage.jl).
+                  EUPHEMIA_OPENMETEO_PACE_SHARE="0.5")
     return result
 
 

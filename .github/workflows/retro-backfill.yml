@@ -13,7 +13,9 @@
 # active, and stops cleanly before the next of those windows (the run checks a
 # deadline before each market day). Resumable and idempotent: days already written
 # for the tag are skipped, so re-dispatch to continue. Per-day timing is printed
-# ("⏱") for the runtime estimate.
+# ("⏱") for the runtime estimate. A chunk whose weather fetch fails (public 429
+# after all retries) is skipped and the run continues; previous-runs answers are
+# cached across runs (actions/cache), so a re-dispatch never re-fetches them.
 #
 # Rollback: DELETE FROM simulations.forecast_prices WHERE is_retro AND reset_tag = '<tag>';
 #           DELETE FROM simulations.forecast_scores WHERE is_retro AND reset_tag = '<tag>';
@@ -34,6 +36,10 @@ on:
         description: "Campaign label stamped on every row (rollback key)"
         required: true
         default: "cv44-backfill-2026-11"
+      chunk_days:
+        description: "Days per weather-fetch chunk (≤34 keeps every public request at 1 call per location)"
+        required: true
+        default: "14"
       workers:
         description: "Independent chunk processes (1 = original path; 2 = opt-in, eight CPUs total)"
         type: choice
@@ -74,11 +80,13 @@ jobs:
           START: ${{ inputs.start }}
           END: ${{ inputs.end }}
           TAG: ${{ inputs.reset_tag }}
+          CHUNK: ${{ inputs.chunk_days }}
         run: |
           set -euo pipefail
           [[ "$START" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ && "$END" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] \
             || { echo "::error::start/end must be YYYY-MM-DD"; exit 1; }
           [[ "$TAG" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "::error::reset_tag: letters, digits, . _ - only"; exit 1; }
+          [[ "$CHUNK" =~ ^[1-9][0-9]?$ ]] || { echo "::error::chunk_days must be 1..99"; exit 1; }
           # Blackouts (UTC): 06:00-08:30 (daily forecast) and 10:30-12:15 (server refresh + publish).
           # The deadline is the next blackout start minus 25 min (scoring + margin).
           # The clock computation's exit status is checked explicitly: inside
@@ -134,6 +142,19 @@ jobs:
             isempty(Pkg.Registry.reachable_registries()) && Pkg.Registry.add()
             Pkg.instantiate(); Pkg.precompile()'
 
+      # Persistent previous-runs weather cache (#431 R3 follow-up): every complete
+      # past previous_dayN answer, keyed by the exact request, so a retry or a
+      # re-dispatch never re-fetches it from the rate-limited public API. Restored
+      # from the newest earlier run, saved (as a new immutable entry) even when the
+      # run fails.
+      - name: Restore open-meteo previous-runs cache
+        continue-on-error: true   # a cache outage only costs public requests
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/.openmeteo-prevruns
+          key: openmeteo-prevruns-v1-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: openmeteo-prevruns-v1-
+
       - name: Reconstruct (cv44, lead 1, alongside the live record)
         env:
           ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
@@ -144,12 +165,24 @@ jobs:
           EUPHEMIA_FORECAST_RETRO_ASOF: ${{ inputs.end }}
           EUPHEMIA_FORECAST_RESET_TAG: ${{ inputs.reset_tag }}
           EUPHEMIA_RETRO_ALONGSIDE: "1"     # never skip because of a live vintage, never supersede
-          EUPHEMIA_RETRO_CHUNK_DAYS: "14"   # weather batched per chunk; two issuance-specific UTC clears per market day
+          EUPHEMIA_RETRO_CHUNK_DAYS: ${{ inputs.chunk_days }}   # weather batched per chunk; two issuance-specific UTC clears per market day
+          EUPHEMIA_OPENMETEO_CACHE_DIR: ${{ github.workspace }}/.openmeteo-prevruns
+          # Public requests are paced by weighted calls in run_retro (≤540/min, ≤4,500/h in
+          # total; with workers=2 each process gets half; kill switch
+          # EUPHEMIA_OPENMETEO_PUBLIC_PACE=0), so no zone-throttle override here.
           EUPHEMIA_RETRO_DEADLINE_UTC: ${{ steps.guard.outputs.deadline }}
           RETRO_WORKERS: ${{ inputs.workers }}
         run: |
           # No EUPHEMIA_RETRO_SUPERSEDE and no bucket credentials here, on purpose.
           python3 bin/run_retro_backfill.py --workers "${RETRO_WORKERS:-1}"
+
+      - name: Save open-meteo previous-runs cache
+        if: ${{ always() && hashFiles('.openmeteo-prevruns/*.json') != '' }}
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ github.workspace }}/.openmeteo-prevruns
+          key: openmeteo-prevruns-v1-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Score the reconstructed rows
         if: ${{ inputs.score }}
