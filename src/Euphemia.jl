@@ -179,6 +179,7 @@ function __init__()
         data_store=get(ENV, "EUPHEMIA_DATA_STORE", ""),
         duckdb_path=get(ENV, "EUPHEMIA_DUCKDB_PATH", ""),
         energy_conn_str=get(ENV, "ENERGY_CONN_STR", ""))
+    research_oracle(; backend, read_only=lowercase(get(ENV, "EUPHEMIA_DUCKDB_READONLY", "")) == "true")
     if backend == :duckdb
         # EUPHEMIA_DUCKDB_READONLY=true opens the extract in shared read-only
         # mode (required for multi-process parallel workers; see bin/reproduce.jl).
@@ -278,6 +279,7 @@ using .MarketOrders: MarketOrder, SimpleOrder, BlockOrder, LinkedBlockOrder, Exc
     FlexibleOrder, AggregatedPeriodicOrder, MICOrder, LoadGradientOrder, MeritOrder, PUNOrder,
     LinkedHourlyOrder
 
+include("research_oracle.jl")
 include("cv45_knobs.jl")       # cv45 per-change env knobs (cv45_on)
 include("Generators.jl")
 include("FuelTypeParameters.jl")

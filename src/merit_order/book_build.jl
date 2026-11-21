@@ -1183,6 +1183,7 @@ function create_merit_order_book(
     bidding_zone::String,
     day::Date;
     profile::ZoneProfile=SEE_PROFILE,
+    oracle=oracle_day([bidding_zone], day),
     scarcity_threshold::Union{Nothing,Float64}=nothing,
     scarcity_kappa::Union{Nothing,Float64}=nothing,
     peak_kappa::Union{Nothing,Float64}=nothing,
@@ -1246,6 +1247,12 @@ function create_merit_order_book(
     # single-pass path (incl. SEE) are unchanged.
     anchor_active = opportunity_anchor != :none && anchor_prices !== nothing
 
+    qty = oracle === nothing ? nothing : get(oracle.quantities, bidding_zone, nothing)
+    hydro = qty === nothing ? nothing : qty.hydro
+    fund = qty === nothing ? nothing : qty.fund
+    flow = oracle === nothing ? nothing : oracle.flow
+    fixed_exchange = flow !== nothing && bidding_zone in oracle.targets
+    pinned_peers = flow === nothing ? String[] : sort!(collect(oracle.targets))
     try
         println("📊 Creating merit-order order book for $bidding_zone on $day")
 
@@ -1275,7 +1282,7 @@ function create_merit_order_book(
                 return AdjustedOrderBookResult(false,
                     "fleet_modifier removed all generators", nothing, 0, 0, 0, 0.0, 0.0, 0.0)
         end
-        loads = get_loads(bidding_zone, day)
+        loads = fund === nothing ? get_loads(bidding_zone, day) : fund.loads
         # Load-fill (daily-forecast eligibility fill): when the TSO day-ahead
         # load for this zone/day is missing/short, add model load for the hours
         # the TSO did NOT publish. MERGE, never replace: a present TSO hour
@@ -1285,7 +1292,7 @@ function create_merit_order_book(
         # (bin/daily_forecast.jl) only attaches this hook to short zones, so on a
         # fully-published zone `filled` covers only already-present hours and
         # nothing is added. Filled slots are hourly ("60").
-        if load_fill !== nothing
+        if fund === nothing && load_fill !== nothing
             filled = load_fill(bidding_zone, day)
             if filled !== nothing && !isempty(filled)
                 covered = Set(l.timeslot[1:11] for l in loads)   # "yyyymmdd-HH" present in TSO
@@ -1299,8 +1306,8 @@ function create_merit_order_book(
                                      "(TSO published $(length(covered))h; missing hours filled)")
             end
         end
-        renewables = get_generation_forecast_for_wind_and_solar(bidding_zone, day;
-            coalesce_missing=res_coalesce_missing)
+        renewables = fund === nothing ? get_generation_forecast_for_wind_and_solar(bidding_zone, day;
+            coalesce_missing=res_coalesce_missing) : fund.res
         # RES-fill (daily-forecast RES eligibility fill) — the twin of load-fill.
         # When the TSO 14.1.D wind/solar forecast for this zone/day is
         # missing/short, add weather-model RES for the hours the TSO did NOT
@@ -1316,7 +1323,7 @@ function create_merit_order_book(
         # issued forecast, not whatever TSO rows happened to be ingested
         # (review of PR #401, P2). Empty on every untyped/ENTSO-E path.
         issued_solar = Dict{Int,Vector{Float64}}()
-        if res_fill !== nothing
+        if fund === nothing && res_fill !== nothing
             rfilled = res_fill(bidding_zone, day)
             if rfilled !== nothing && !isempty(rfilled)
                 rcovered = Set(r.date_time[1:11] for r in renewables)  # "yyyymmdd-HH" present in TSO
@@ -1358,7 +1365,7 @@ function create_merit_order_book(
         # net demand / scarcity / water values exactly like the base input.
         # Fail-soft: no rows or a query error ⇒ empty deltas ⇒ byte-identical.
         eff_renewable_modifier = renewable_modifier
-        if profile.input_corrections
+        if fund === nothing && profile.input_corrections
             cv32_deltas = _input_correction_deltas(bidding_zone, day)
             if !isempty(cv32_deltas)
                 base_rm = renewable_modifier
@@ -1371,7 +1378,11 @@ function create_merit_order_book(
         end
         target_timeslots, load_by_time, renewable_by_time, resolution_minutes =
             _demand_series(loads, renewables, target_resolution_minutes,
-                load_modifier, eff_renewable_modifier)
+                fund === nothing ? load_modifier : nothing,
+                fund === nothing ? eff_renewable_modifier : nothing)
+        if oracle !== nothing && length(oracle.hours) < 24
+            filter!(ts -> parse(Int, ts[10:11]) in oracle.hours, target_timeslots)
+        end
 
         # ── Stage 3: net imports, demand state, gas anchor, backstop ────
         # Residual demand per slot (load minus renewables) drives water value
@@ -1395,12 +1406,11 @@ function create_merit_order_book(
         # ≈2× double-count is removed, not just the aggregate — see GB_FR_BOOK.
         boundary_exclude = boundary_book === nothing ? String[] :
                            boundary_net_exclude(boundary_book)
-        net_imports = include_net_imports ?
+        net_imports = include_net_imports && !fixed_exchange ?
                       get_net_imports(bidding_zone, day;
-                          exclude_counterparties=vcat(net_import_exclude, boundary_exclude),
+                          exclude_counterparties=vcat(net_import_exclude, boundary_exclude, pinned_peers),
                           import_only_counterparties=net_import_import_only) :
                       Dict{Int,Float64}()
-        slot_import(ts) = get(net_imports, Dates.hour(parse_timeslot_to_datetime(ts, day)), 0.0)
 
         gross_demand = Dict{String,Float64}()
         net_demand = Dict{String,Float64}()
@@ -1412,12 +1422,18 @@ function create_merit_order_book(
                     "peak $(round(Int, maximum(values(pump_mw)))) MW (trailing-14d same-hour mean)")
         end
         for ts in target_timeslots
-            load_value = get(load_by_time, ts, 0.0) +
-                         get(pump_mw, Dates.hour(parse_timeslot_to_datetime(ts, day)), 0.0)
+            h = Dates.hour(parse_timeslot_to_datetime(ts, day))
+            load_value = get(load_by_time, ts, 0.0) + get(pump_mw, h, 0.0)
             renewable_gen = get(renewable_by_time, ts, 0.0)
             gross_demand[ts] = max(10.0, load_value)
             # Residual demand on domestic thermal: load - RES - net imports
-            net_demand[ts] = max(10.0, load_value - renewable_gen - slot_import(ts))
+            residual = load_value - renewable_gen - get(net_imports, h, 0.0)
+            if flow !== nothing
+                observed = fixed_exchange ? flow.total : flow.residual
+                residual -= get(observed[bidding_zone], h, 0.0)
+            end
+            hydro === nothing || (residual -= hydro[h])
+            net_demand[ts] = max(10.0, residual)
         end
         nd_values = [net_demand[ts] for ts in target_timeslots]
         nd_min, nd_max = minimum(nd_values), maximum(nd_values)
@@ -1452,11 +1468,11 @@ function create_merit_order_book(
         # carries endogenously) is subtracted so MPCC-deliverable capacity is
         # never double-counted. Empty Dict for every non-backstop profile —
         # byte-identical books.
-        backstop_by_hour = (profile.import_backstop && include_net_imports) ?
+        backstop_by_hour = (profile.import_backstop && include_net_imports && !fixed_exchange) ?
             get_import_backstop(bidding_zone, day;
                 weeks=BACKSTOP_WEEKS,
-                endogenous_counterparties=net_import_exclude,
-                exclude_counterparties=boundary_exclude,
+                endogenous_counterparties=flow === nothing ? net_import_exclude : setdiff(net_import_exclude, pinned_peers),
+                exclude_counterparties=vcat(boundary_exclude, pinned_peers),
                 endogenous_import_atc=endogenous_import_atc) :
             Dict{Int,Float64}()
         backstop_price = BACKSTOP_PRICE_MULT * gas_srmc
@@ -1469,6 +1485,12 @@ function create_merit_order_book(
         hydro_pmax, hydro_scale, hydro_dryness, reservoir_drawdown =
             _hydro_state(generators, bidding_zone, day, hydro_model,
                 profile.seasonal_drawdown)
+        if hydro !== nothing
+            # Preserve the original pumped-storage derating, then remove every
+            # fixed generator before commitments, tranches and family budgets.
+            generators = filter(g -> !(string(g.fuel_type) in ORACLE_HYDRO_FUELS), generators)
+            hydro_pmax = sum((g.p_max for g in generators if _is_hydro(g)); init=0.0)
+        end
         # cv37 wet-adjusted drawdown: the SIGNED dryness (negative = wetter than
         # the same-week prior-year norm) damps the seasonal water-value lift.
         # Only read when the profile opts in; every legacy consumer keeps the
@@ -1507,7 +1529,7 @@ function create_merit_order_book(
 
         # Available import capacity per UTC hour, credited into the scarcity
         # margin when the profile opts in (thermal import/export zones). 0 = off.
-        import_atc_by_hour = profile.scarcity_import_credit > 0.0 ?
+        import_atc_by_hour = !fixed_exchange && profile.scarcity_import_credit > 0.0 ?
             get_import_atc_capacity(bidding_zone, day) : Dict{Int,Float64}()
 
         # ── Stage 5: UC-lite committed set (peak-covering cheap thermal) ─
@@ -2133,7 +2155,7 @@ function create_merit_order_book(
         # backstop headroom. Inert (nothing) for every zone but DK1 ⇒ the book
         # is byte-identical. Requires flow injections (include_net_imports) —
         # the ladder is the injection's elastic replacement.
-        if boundary_book !== nothing && include_net_imports
+        if boundary_book !== nothing && include_net_imports && !fixed_exchange
             b_orders = get_boundary_orders(boundary_book, bidding_zone, day,
                 target_timeslots, resolution_minutes, price_cap)
             btag = "BOUNDARY:" * boundary_book.counterparty
@@ -2304,7 +2326,8 @@ function create_merit_order_book(
         # EU day-ahead floor is -500; ceiling is the demand cap so shortage
         # hours can price exactly at the cap
         price_limits = (-500.0, price_cap)
-        order_book = MPCCOrderBook(orders, nodes, target_timeslots, price_limits, nothing)
+        order_book = MPCCOrderBook(orders, nodes, target_timeslots, price_limits, nothing,
+            oracle_fixed(oracle, nodes, target_timeslots))
 
         supply_per_slot = total_supply_capacity / length(target_timeslots)
         demand_per_slot = total_demand_quantity / length(target_timeslots)
