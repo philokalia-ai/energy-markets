@@ -59,6 +59,10 @@ println()
     # (self-contained: synthetic flows extract, no Postgres) — proves the
     # day-level physical-flow cache is behavior-identical to the original SQL
     # -------------------------------------------------------------------------
+    @testset "Retro input snapshot" begin
+        include(joinpath(@__DIR__, "test_input_snapshot.jl"))
+    end
+
     @testset "DuckDB Perf Paths" begin
         println("\n" * "=" ^ 60)
         println("Running DuckDB Perf Path Tests...")

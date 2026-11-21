@@ -141,6 +141,8 @@ function _rescue_window_lower(map_code::String, day::Dates.Date)
     ub === nothing || (bound = min(bound, ub))
     last_obs = lock(_FEED_ANCHOR_LOCK) do
         get!(_FEED_ANCHOR_CACHE, (map_code, bound)) do
+            snapshot = CURRENT_INPUT_SNAPSHOT[]
+            snapshot === nothing || return snapshot_feed_anchor(snapshot, map_code, bound)
             df = Euphemia.sql2df_with_retry(
                 """
                 SELECT MAX(date_time_utc) AS last_obs

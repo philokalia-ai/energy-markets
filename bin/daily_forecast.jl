@@ -267,7 +267,7 @@ code_version must never be rewritten by a later one).
 """
 function existing_forecast_zones(market_date::Date, lead_days::Int,
                                  input_mode::String=INPUT_MODE)
-    df = Euphemia.sql2df_with_retry("""
+    df = Euphemia.sql2df_live_with_retry("""
         SELECT DISTINCT bidding_zone AS z FROM simulations.forecast_prices
         WHERE market_date = \$1 AND lead_days = \$2 AND input_mode = \$3
     """, [market_date, lead_days, input_mode])
@@ -277,7 +277,7 @@ end
 "Zones holding retro rows of campaign `reset_tag` at `cv` for the slice (alongside resume check)."
 function existing_retro_zones(market_date::Date, lead_days::Int, input_mode::String,
                               reset_tag::String, cv::Int)
-    df = Euphemia.sql2df_with_retry("""
+    df = Euphemia.sql2df_live_with_retry("""
         SELECT DISTINCT bidding_zone AS z FROM simulations.forecast_prices
         WHERE market_date = \$1 AND lead_days = \$2 AND input_mode = \$3
           AND is_retro = true AND reset_tag = \$4 AND code_version = \$5
@@ -287,7 +287,7 @@ end
 
 "Whether a LIVE row exists for the slice at code_version `cv` (the unique key would collide)."
 function live_slice_has_cv(market_date::Date, lead_days::Int, input_mode::String, cv::Int)
-    df = Euphemia.sql2df_with_retry("""
+    df = Euphemia.sql2df_live_with_retry("""
         SELECT COUNT(*) AS n FROM simulations.forecast_prices
         WHERE market_date = \$1 AND lead_days = \$2 AND input_mode = \$3
           AND code_version = \$4 AND is_retro = false
@@ -1505,6 +1505,12 @@ function run_retro()
         isempty(s) ? nothing : DateTime(replace(String(s), "Z" => ""))
     end
     chunk_days = parse(Int, get(ENV, "EUPHEMIA_RETRO_CHUNK_DAYS", alongside ? "7" : "0"))
+    input_cache_on = lowercase(get(ENV, "EUPHEMIA_RETRO_INPUT_CACHE", "false")) in ("true", "1")
+    if input_cache_on
+        alongside || error("input snapshot canary requires alongside mode")
+        Euphemia.DATA_STORE[] == :postgres || error("run_retro input snapshot requires live PG for state and writes")
+        1 <= chunk_days <= 14 || error("input snapshot requires chunks of 1..14 market days")
+    end
     deadline === nothing || println("  clean-stop deadline $deadline UTC; chunks of $(chunk_days <= 0 ? "the whole window" : "$chunk_days days")")
     day_secs = Float64[]
     stopped = false
@@ -1565,99 +1571,103 @@ function run_retro()
                 println("  📡 weather $l")
             end
 
-            clear_cache = Dict{Date,Union{Nothing,Dict{String,Dict{DateTime,Float64}}}}()
-            for day in chunk
-                if retro_should_stop(now(UTC), deadline, day_secs)
-                    println("  🛑 clean stop before $day lead=$lead: the next day would not finish by " *
-                            "$deadline UTC (slowest day so far $(isempty(day_secs) ? "n/a" : round(maximum(day_secs); digits=0)) s). " *
-                            "Re-dispatch to resume (days already written are skipped).")
-                    stopped = true
-                    break
-                end
-                t_day = time()
-                status = (function ()
-                    expected = expected_market_day_hours(day)
-                    covered = model_covered_for_day(day, fill_pred)
-                    res_covered = res_covered_for_day(day, preds)
-                    uncovered = [z for z in ZONES if !(z in covered) || !(z in res_covered)]
-                    if !isempty(uncovered)
-                        println("  ⛔ $day lead=$lead: weather-track inputs cannot cover " *
-                                "$(length(uncovered)) zone(s) ($(join(sort(uncovered), ","))) — skipped")
-                        # Per input: which one failed, from which source, how many
-                        # market-window hours it has (#431 R3).
-                        for r in input_coverage_reasons(day, uncovered, fill_pred, preds;
-                                                        load_src=load_src, res_src=res_src)
-                            println("       ↳ $r")
-                        end
-                        return :skip
+            Euphemia.with_retro_input_chunk(ZONES, first(chunk), last(chunk); enabled=input_cache_on) do input_snapshot
+                clear_cache = Dict{Date,Union{Nothing,Dict{String,Dict{DateTime,Float64}}}}()
+                for day in chunk
+                    if retro_should_stop(now(UTC), deadline, day_secs)
+                        println("  🛑 clean stop before $day lead=$lead: the next day would not finish by " *
+                                "$deadline UTC (slowest day so far $(isempty(day_secs) ? "n/a" : round(maximum(day_secs); digits=0)) s). " *
+                                "Re-dispatch to resume (days already written are skipped).")
+                        stopped = true
+                        break
                     end
-                    if alongside
-                        # Alongside: resumable on THIS campaign's rows only (live rows never
-                        # count), and no clear at all when a live slice holds the same cv.
-                        if !FORCE_RERUN && issubset(Set(ZONES), existing_retro_zones(day, lead, INPUT_MODE, RESET_TAG, CV))
-                            println("  ⏭️  $day lead=$lead already written for $RESET_TAG — skipping"); return :skip
-                        end
-                        if live_slice_has_cv(day, lead, INPUT_MODE, CV)
-                            println("  ⏭️  $day lead=$lead: a LIVE cv$CV slice exists (the real record) — not reconstructed")
+                    t_day = time()
+                    status = (function ()
+                        expected = expected_market_day_hours(day)
+                        covered = model_covered_for_day(day, fill_pred)
+                        res_covered = res_covered_for_day(day, preds)
+                        uncovered = [z for z in ZONES if !(z in covered) || !(z in res_covered)]
+                        if !isempty(uncovered)
+                            println("  ⛔ $day lead=$lead: weather-track inputs cannot cover " *
+                                    "$(length(uncovered)) zone(s) ($(join(sort(uncovered), ","))) — skipped")
+                            # Per input: which one failed, from which source, how many
+                            # market-window hours it has (#431 R3).
+                            for r in input_coverage_reasons(day, uncovered, fill_pred, preds;
+                                                            load_src=load_src, res_src=res_src)
+                                println("       ↳ $r")
+                            end
                             return :skip
                         end
-                    elseif !FORCE_RERUN
-                        present = existing_forecast_zones(day, lead, INPUT_MODE)
-                        issubset(Set(ZONES), present) &&
-                            (println("  ⏭️  $day lead=$lead already present — skipping (FORCE_RERUN to rewrite)"); return :skip)
-                    end
-                    SKIP_CLEAR && (println("  SKIP_CLEAR: $day lead=$lead eligible, not cleared"); return :skip)
-
-                    # As-of contract (#368 phase 2): the retro issuance is the reconstructed
-                    # D−lead 06:30 UTC instant (the same `retro_of` stamped on the row), so
-                    # the outage vintage, fuel close and trailing windows are the ones that
-                    # existed then — not the delivery-relative ones.
-                    retro_ctx = Euphemia.ForecastContext(day, DateTime(day - Day(lead)) + Hour(6) + Minute(30),
-                                                         lead, :fixed_10utc, "retro:$RESET_TAG")
-                    Euphemia.reset_asof_audit!()
-                    prev_hourly, curr_hourly = Euphemia.with_context(retro_ctx) do
-                        p = clear_utc_day!(clear_cache, day - Day(1); scenario=scenario)
-                        c = p === nothing ? nothing : clear_utc_day!(clear_cache, day; scenario=scenario)
-                        (p, c)
-                    end
-                    print_asof_audit(day, lead)
-                    prev_hourly === nothing && (println("  ❌ $day lead=$lead: UTC $(day-Day(1)) clear failed"); return :fail)
-                    curr_hourly === nothing && (println("  ❌ $day lead=$lead: UTC $day clear failed"); return :fail)
-
-                    zone_hourly = Dict{String,Dict{DateTime,Float64}}()
-                    empty_hourly = Dict{DateTime,Float64}()
-                    for zone in union(keys(prev_hourly), keys(curr_hourly))
-                        st = stitch_market_day(day, get(prev_hourly, zone, empty_hourly),
-                                               get(curr_hourly, zone, empty_hourly))
-                        isempty(st.missing_hours) && (zone_hourly[zone] = st.stitched)
-                    end
-                    isempty(zone_hourly) &&
-                        (println("  ❌ $day lead=$lead: no complete zone-day — nothing written"); return :fail)
-
-                    # Honest stamping: prediction_made_utc = ACTUAL compute time (now);
-                    # retro_of_utc = the natural D−lead ~06:30 UTC instant reconstructed.
-                    retro_of = DateTime(day - Day(lead)) + Hour(6) + Minute(30)
-                    n = write_forecast!(day, lead, now(UTC), zone_hourly, INPUT_MODE;
-                                        is_retro=true, reset_tag=RESET_TAG, retro_of_utc=retro_of,
-                                        alongside=alongside)
-                    n_total += n
-                    if !alongside   # alongside campaigns never capture books (the live day's books stay)
-                        try
-                            lock(_BOOKS_LOCK) do; flush_books!(_BOOKS, day); end
-                        catch e
-                            @warn "retro book export failed (forecast unaffected)" day error = sprint(showerror, e)
+                        if alongside
+                            # Alongside: resumable on THIS campaign's rows only (live rows never
+                            # count), and no clear at all when a live slice holds the same cv.
+                            if !FORCE_RERUN && issubset(Set(ZONES), existing_retro_zones(day, lead, INPUT_MODE, RESET_TAG, CV))
+                                println("  ⏭️  $day lead=$lead already written for $RESET_TAG — skipping"); return :skip
+                            end
+                            if live_slice_has_cv(day, lead, INPUT_MODE, CV)
+                                println("  ⏭️  $day lead=$lead: a LIVE cv$CV slice exists (the real record) — not reconstructed")
+                                return :skip
+                            end
+                        elseif !FORCE_RERUN
+                            present = existing_forecast_zones(day, lead, INPUT_MODE)
+                            issubset(Set(ZONES), present) &&
+                                (println("  ⏭️  $day lead=$lead already present — skipping (FORCE_RERUN to rewrite)"); return :skip)
                         end
-                    end
-                    n > 0 && println("  ✅ $day lead=$lead — wrote $n retro rows across " *
-                                     "$(length(zone_hourly)) zone(s) (retro_of_utc=$retro_of)")
-                    return n > 0 ? :written : :skip
+                        SKIP_CLEAR && (println("  SKIP_CLEAR: $day lead=$lead eligible, not cleared"); return :skip)
 
-                end)()
-                dt = time() - t_day
-                status === :written && push!(day_secs, dt)
-                println("  ⏱  $day lead=$lead: $(round(dt; digits=1)) s ($status)" *
-                        (isempty(day_secs) ? "" : " — mean written day $(round(sum(day_secs) / length(day_secs); digits=1)) s over $(length(day_secs))"))
-            end
+                        # As-of contract (#368 phase 2): the retro issuance is the reconstructed
+                        # D−lead 06:30 UTC instant (the same `retro_of` stamped on the row), so
+                        # the outage vintage, fuel close and trailing windows are the ones that
+                        # existed then — not the delivery-relative ones.
+                        retro_ctx = Euphemia.ForecastContext(day, DateTime(day - Day(lead)) + Hour(6) + Minute(30),
+                                                             lead, :fixed_10utc, "retro:$RESET_TAG")
+                        Euphemia.reset_asof_audit!()
+                        prev_hourly, curr_hourly = Euphemia.with_input_snapshot(input_snapshot) do
+                            Euphemia.with_context(retro_ctx) do
+                                p = clear_utc_day!(clear_cache, day - Day(1); scenario=scenario)
+                                c = p === nothing ? nothing : clear_utc_day!(clear_cache, day; scenario=scenario)
+                                (p, c)
+                            end
+                        end
+                        print_asof_audit(day, lead)
+                        prev_hourly === nothing && (println("  ❌ $day lead=$lead: UTC $(day-Day(1)) clear failed"); return :fail)
+                        curr_hourly === nothing && (println("  ❌ $day lead=$lead: UTC $day clear failed"); return :fail)
+
+                        zone_hourly = Dict{String,Dict{DateTime,Float64}}()
+                        empty_hourly = Dict{DateTime,Float64}()
+                        for zone in union(keys(prev_hourly), keys(curr_hourly))
+                            st = stitch_market_day(day, get(prev_hourly, zone, empty_hourly),
+                                                   get(curr_hourly, zone, empty_hourly))
+                            isempty(st.missing_hours) && (zone_hourly[zone] = st.stitched)
+                        end
+                        isempty(zone_hourly) &&
+                            (println("  ❌ $day lead=$lead: no complete zone-day — nothing written"); return :fail)
+
+                        # Honest stamping: prediction_made_utc = ACTUAL compute time (now);
+                        # retro_of_utc = the natural D−lead ~06:30 UTC instant reconstructed.
+                        retro_of = DateTime(day - Day(lead)) + Hour(6) + Minute(30)
+                        n = write_forecast!(day, lead, now(UTC), zone_hourly, INPUT_MODE;
+                                            is_retro=true, reset_tag=RESET_TAG, retro_of_utc=retro_of,
+                                            alongside=alongside)
+                        n_total += n
+                        if !alongside   # alongside campaigns never capture books (the live day's books stay)
+                            try
+                                lock(_BOOKS_LOCK) do; flush_books!(_BOOKS, day); end
+                            catch e
+                                @warn "retro book export failed (forecast unaffected)" day error = sprint(showerror, e)
+                            end
+                        end
+                        n > 0 && println("  ✅ $day lead=$lead — wrote $n retro rows across " *
+                                         "$(length(zone_hourly)) zone(s) (retro_of_utc=$retro_of)")
+                        return n > 0 ? :written : :skip
+
+                    end)()
+                    dt = time() - t_day
+                    status === :written && push!(day_secs, dt)
+                    println("  ⏱  $day lead=$lead: $(round(dt; digits=1)) s ($status)" *
+                            (isempty(day_secs) ? "" : " — mean written day $(round(sum(day_secs) / length(day_secs); digits=1)) s over $(length(day_secs))"))
+                end
+            end # chunk input snapshot lifecycle; live state/writes stay outside its read scope
         end
     end
     isempty(day_secs) || println("  ⏱  timing: $(length(day_secs)) day(s) written, mean $(round(sum(day_secs) / length(day_secs); digits=1)) s, " *

@@ -2,8 +2,12 @@
 """Opt-in, bounded process parallelism for the alongside retro campaign.
 
 One worker execs the original command unchanged. Two workers run disjoint,
-contiguous chunks with four CPUs and at most two PG connections each. No solver,
-weather-vintage, write, resume, scoring or model-version logic is duplicated here.
+contiguous chunks with four CPUs and an ordinary PG pool capped at two connections
+each. Input caching adds two dedicated snapshot connections per worker outside
+that cap: up to eight total PG connections for two workers, or seven for one
+worker with the default ordinary pool of five (five without input caching).
+No solver, weather-vintage, write, resume, scoring or model-version logic is
+duplicated here.
 The existing run_retro guards remain authoritative inside every child.
 """
 from __future__ import annotations

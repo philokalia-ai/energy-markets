@@ -34,6 +34,10 @@ on:
         description: "Campaign label stamped on every row (rollback key)"
         required: true
         default: "cv44-backfill-2026-11"
+      input_cache:
+        description: "Freeze input revisions once per chunk and cache/batch reads (canary)"
+        type: boolean
+        default: false
       workers:
         description: "Independent chunk processes (1 = original path; 2 = opt-in, eight CPUs total)"
         type: choice
@@ -144,7 +148,8 @@ jobs:
           EUPHEMIA_FORECAST_RETRO_ASOF: ${{ inputs.end }}
           EUPHEMIA_FORECAST_RESET_TAG: ${{ inputs.reset_tag }}
           EUPHEMIA_RETRO_ALONGSIDE: "1"     # never skip because of a live vintage, never supersede
-          EUPHEMIA_RETRO_CHUNK_DAYS: "14"   # weather batched per chunk; two issuance-specific UTC clears per market day
+          EUPHEMIA_RETRO_INPUT_CACHE: ${{ inputs.input_cache }}
+          EUPHEMIA_RETRO_CHUNK_DAYS: "14"   # one weather batch per chunk; two issuance-specific UTC clears per market day
           EUPHEMIA_RETRO_DEADLINE_UTC: ${{ steps.guard.outputs.deadline }}
           RETRO_WORKERS: ${{ inputs.workers }}
         run: |

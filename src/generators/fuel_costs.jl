@@ -200,7 +200,7 @@ function uka_price(day::Dates.Date)
     price = nothing
     structural_absence = false
     try
-        df = Euphemia.sql2df(
+        df = Euphemia.sql2df_optional_input(
             """
             SELECT price_eur
             FROM carbon.uka_price

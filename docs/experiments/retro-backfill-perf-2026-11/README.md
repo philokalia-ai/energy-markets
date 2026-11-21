@@ -27,8 +27,13 @@ optimization/model construction to the enclosing clearing scopes.
 original Julia command with its original environment. Two workers run disjoint
 contiguous chunks through the unchanged `run_retro` implementation:
 
-- Four allowed CPUs, four Julia threads, and two Postgres connections per child;
-  total eight CPUs/four connections. BLAS/OMP thread counts are bounded at one.
+- Four allowed CPUs, four Julia threads, and an ordinary Postgres pool capped at
+  two connections per child; total eight CPUs/four ordinary connections. Enabling
+  `EUPHEMIA_RETRO_INPUT_CACHE=true` adds two dedicated snapshot connections per
+  child outside this cap: **up to eight PG connections for two workers**. The
+  default single-worker pool uses up to five without caching, **seven with it**.
+  See the [combined budget](../retro-input-cache/README.md#operational-limits-and-rollback).
+  BLAS/OMP thread counts are bounded at one.
   The PG pool is constructed during runtime initialization, so a cache compiled
   with the default five cannot override each child's requested two.
   Postgres server work is additional to the worker CPU limit. The parallel path
