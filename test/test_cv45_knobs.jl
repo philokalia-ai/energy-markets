@@ -19,8 +19,12 @@ function withenv_cv45(f, pairs...)
 end
 
 @testset "cv45 knobs" begin
-    withenv_cv45() do      # unset ⇒ the full cv45 set
-        @test all(Euphemia.cv45_on, Euphemia.CV45_KNOBS)
+    withenv_cv45() do      # unset ⇒ the adopted set only
+        @test all(Euphemia.cv45_on, Euphemia.CV45_SHIPPED)
+        @test !any(Euphemia.cv45_on, setdiff(Euphemia.CV45_KNOBS, Euphemia.CV45_SHIPPED))
+        @test MOB.complex_order_kinds() == Set(["ps"])
+    end
+    withenv_cv45("EUPHEMIA_CV45_RESERVOIR" => "on") do   # deferred knob, opt-in
         @test MOB.complex_order_kinds() == Set(["ps", "reservoir"])
     end
     withenv_cv45("EUPHEMIA_CV45" => "off") do      # master off ⇒ cv44
@@ -31,8 +35,8 @@ end
         @test Euphemia.cv45_on("EUPHEMIA_CV45_PUMP")
         @test !Euphemia.cv45_on("EUPHEMIA_CV45_RESERVOIR")
     end
-    withenv_cv45("EUPHEMIA_CV45_ELASTIC" => "off") do   # full set minus one
-        @test !Euphemia.cv45_on("EUPHEMIA_CV45_ELASTIC")
+    withenv_cv45("EUPHEMIA_CV45_AVAIL" => "off") do   # adopted set minus one
+        @test !Euphemia.cv45_on("EUPHEMIA_CV45_AVAIL")
         @test Euphemia.cv45_on("EUPHEMIA_CV45_GAS_HHV")
     end
     withenv_cv45("EUPHEMIA_CV45" => "off", "EUPHEMIA_CV45_AVAIL" => "on") do
