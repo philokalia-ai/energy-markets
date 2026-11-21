@@ -22,8 +22,8 @@
 # Kill switch: EXPORT_SINCE_FREEZE=0.
 
 const SINCE_FREEZE_WINDOW = "since_freeze"
-const FREEZE_CODE_VERSION = 44
-const FREEZE_DATE = Date(2026, 11, 15)
+const FREEZE_CODE_VERSION = 45   # v45 changes gas SRMC ⇒ clock restarts (ledger v45)
+const FREEZE_DATE = Date(2026, 11, 21)
 "Minimum scored days before the site shows since-freeze numbers (display rule only)."
 const FREEZE_MIN_DAYS = 14
 

@@ -74,8 +74,10 @@ function cost_model()
             "efficiency" => Euphemia.GAS_PLANT_EFFICIENCY,
             "emission_factor_th" => Euphemia.GAS_EMISSION_FACTOR,
             "vom" => Euphemia.GAS_VOM_COST,
-            "formula" => "TTF/η + EUA·EF_th/η + VOM",
-            "source" => "GAS_PLANT_EFFICIENCY / GAS_EMISSION_FACTOR / GAS_VOM_COST",
+            # cv45 GAS_HHV: TTF is quoted on gross CV, η is on net CV (1.0 when the knob is off)
+            "ncv_per_gcv" => Euphemia.cv45_on("EUPHEMIA_CV45_GAS_HHV") ? Euphemia.GAS_NCV_PER_GCV : 1.0,
+            "formula" => "TTF/(η·NCV/GCV) + EUA·EF_th/η + VOM",
+            "source" => "GAS_PLANT_EFFICIENCY / GAS_NCV_PER_GCV / GAS_EMISSION_FACTOR / GAS_VOM_COST",
         ),
         "fuels" => fuels,
         "live" => Dict{String,Any}(

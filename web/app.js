@@ -3728,11 +3728,11 @@
     });
   }
 
-  // "Since freeze" window (#431 G, bin/scoreboard_windows.jl): the cv44 characteristics
-  // are frozen from 2026-11-15, so these days are the only out-of-sample physics
+  // "Since freeze" window (#431 G, bin/scoreboard_windows.jl): the clock restarted with
+  // cv45 on 2026-11-21 (cv44 froze the characteristics on 2026-11-15), so these days are the only out-of-sample physics
   // record. Change FREEZE_LABEL together with FREEZE_CODE_VERSION / FREEZE_DATE there.
   var FREEZE_WINDOW = "since_freeze";
-  var FREEZE_LABEL = "since freeze (cv44, 2026-11-15) — the only out-of-sample physics record";
+  var FREEZE_LABEL = "since freeze (cv45, 2026-11-21) — the only out-of-sample physics record";
   var FREEZE_MIN_DAYS = 14;
   // Below FREEZE_MIN_DAYS scored days a since-freeze cohort shows "insufficient data":
   // its metrics are blanked (so it never ranks or feeds the track-gap chip).
@@ -5584,7 +5584,7 @@
   // SRMC arithmetic — the SAME formulas the model uses, computed in the browser.
   function gasSRMC(cost, ttf, eua) {
     var g = cost.gas;
-    return ttf / g.efficiency + eua * g.emission_factor_th / g.efficiency + g.vom;
+    return ttf / (g.efficiency * (g.ncv_per_gcv || 1)) + eua * g.emission_factor_th / g.efficiency + g.vom;
   }
   function fuelSRMC(cost, fuel, eua) {
     var f = cost.fuels[fuel];
