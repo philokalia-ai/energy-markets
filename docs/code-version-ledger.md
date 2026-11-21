@@ -360,7 +360,7 @@ Every path that builds merit-order books changes where a PS family forms. That
 includes the SEE single-zone and 5-zone products (GR and BG have PS), so their
 byte-identity chain ends here.
 
-## v45 — quantity and cost-level fixes from the November-2026 bias review (November 2026, flag-gated)
+## v45 — gas on the TTF gross (HHV) basis + guarded oil/"Other" availability (adopted 2026-11-21)
 
 **Why.** The offline cv44 weather-track backfill was biased −45 €/MWh on
 Nov 8–15 2026 (−80 on Nov 10), and the cv44 record shows sim/SRMC falling
@@ -371,20 +371,22 @@ pumping demand, flat storage hydro and over-offered oil/"Other". Fixing those
 plus the gas units error lets the existing tranche ladder lift the clear.
 Nothing here re-tunes `TRANCHES`, `scarcity_*` or `peak_kappa`.
 
-**Changes.** One env knob each (`src/cv45_knobs.jl`). Each is `on`/`off`;
-unset follows `EUPHEMIA_CV45` (default `on`); `EUPHEMIA_CV45=off` ⇒ cv44
+**Changes.** One env knob each (`src/cv45_knobs.jl`). Each is `on`/`off`.
+**Shipped** (`CV45_SHIPPED`; unset follows `EUPHEMIA_CV45`, default `on`):
+GAS_HHV, GB_HHV, AVAIL, AVAIL_INMERIT. **Deferred** (unset ⇒ off; opt-in with
+`=on`): PUMP, RESERVOIR, HYDRO_CAP, ELASTIC. `EUPHEMIA_CV45=off` ⇒ cv44
 byte-identical.
 
 | Knob | Change | Value source |
 |---|---|---|
-| `EUPHEMIA_CV45_PUMP` | expected pumping (same-hour mean PS consumption, the PS budget's 14-day window) added to load | load excludes pumping (review §2.3 regression) |
-| `EUPHEMIA_CV45_RESERVOIR` | `reservoir` complex family on by default (non-`:reservoir_opportunity` zones) | existing family |
+| `EUPHEMIA_CV45_PUMP` | expected pumping (same-hour mean PS consumption, the PS budget's 14-day window) added to load — *deferred: failed do-no-harm alone (fixed midday load where cv44 already over-prices); priced pumping is a cv46 candidate* | load excludes pumping (review §2.3 regression) |
+| `EUPHEMIA_CV45_RESERVOIR` | `reservoir` complex family on by default (non-`:reservoir_opportunity` zones) — *deferred: no measurable gain* | existing family |
 | `EUPHEMIA_CV45_AVAIL` | `Fossil Oil` and `Other` in the fleet-truthing derate (1.15 × 30d p95) | declared `DERATE_HEADROOM` |
 | `EUPHEMIA_CV45_AVAIL_INMERIT` | With AVAIL enabled, cap each fuel only when its SRMC is below gas on both D and D−30. To replay the original AVAIL arm, turn this modifier off. | cv43 in-merit test and historical close cutoff |
 | `EUPHEMIA_CV45_GAS_HHV` | gas fuel term `TTF / (0.55 × 0.90)` | TTF on GCV (GTS Definitions Code Gas); NCV/GCV 0.90 (Energy Statistics Manual 2005) |
 | `EUPHEMIA_CV45_GB_HHV` | GB boundary fuel term `TTF / (0.52 × 0.90)` on DK1 and FR. Carbon and the missing-TTF fallback retain their existing calculations. | declared LHV GB efficiency and the domestic NCV/GCV conversion |
-| `EUPHEMIA_CV45_HYDRO_CAP` | anchored water-value clamp `TRANCHES[end]` (1.6) × gas SRMC | declared constant |
-| `EUPHEMIA_CV45_ELASTIC` | elastic-demand price `max(250, BACKSTOP_PRICE_MULT × gas SRMC)` | declared constant |
+| `EUPHEMIA_CV45_HYDRO_CAP` | anchored water-value clamp `TRANCHES[end]` (1.6) × gas SRMC — *deferred: small gain, spends the Nordic margin* | declared constant |
+| `EUPHEMIA_CV45_ELASTIC` | elastic-demand price `max(250, BACKSTOP_PRICE_MULT × gas SRMC)` — *deferred: no measurable gain* | declared constant |
 
 Not in v45: the coal price feed (no series in the extract for the window),
 the gas heat-rate ladder (a cv46 candidate only if a gap remains), and
@@ -392,9 +394,27 @@ the gas heat-rate ladder (a cv46 candidate only if a gap remains), and
 
 **Freeze rule.** These change price-informed behaviour (gas SRMC moves every
 water value and threshold), so v45 restarts the out-of-sample clock from its
-adoption date. Pre-registered pass criteria and periods:
-`reports/analyst-cv45.md` §0. Status: **not adopted**, pending the 2-year
-backtest (record mode and weather track; one arm per knob plus the full set).
+adoption date: the scoreboard's since-freeze window is cv ≥ 45 from 2026-11-21
+(`bin/scoreboard_windows.jl`). Pre-registered pass criteria and periods:
+`reports/analyst-cv45.md` §0.
+
+**Evidence (record mode, gate-matched, HiGHS; 2024-07-01..2026-11-14, 866 days,
+808,704 paired zone-hours vs cv44; 2024-11-17 fails in both arms).**
+- The full eight-knob set **failed** criterion (1): do-no-harm (2024-07..2026-06)
+  dMAE +0.72, Iberia +3.93, Nordic south +2.14, Nordic north +2.07.
+- Single-knob arms on 185 sample days (every 5th day + 2026-11-01..14)
+  attributed the harm to PUMP (+0.66 alone) and showed no gain from RESERVOIR or
+  ELASTIC; two independent reviews (`reviews/{fable,astra}-cv45-singles.md`)
+  chose the shipped set, pre-registered in `reports/analyst-cv45.md` §0c before
+  its clear.
+- **Shipped set, full window — criterion (1) PASS:** do-no-harm dMAE **−0.16**
+  (bias −1.06 → +3.17); worst region Nordic north **+1.70** (≤ +2.00); Iberia
+  +1.59, Nordic south +0.61, others negative. Development (2026-07..11-14)
+  **−3.46** (bias −17.7 → −6.5). November 2026 **−7.97** (bias −38.7 → −16.5).
+  All days −0.68.
+- Known weak spots (cv46): Nordic north and Iberia already run high in cv44 and
+  v45 raises them (Nordic north development +3.35); the extract lacks ES D-1
+  wind/solar on 2026-11-06..11, inflating Iberia on those days in every arm.
 
 ## Operations and scoring notes (not code versions)
 
