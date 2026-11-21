@@ -228,6 +228,9 @@ function _openmeteo_is_rate_limited(e)
 end
 
 function _openmeteo_get(url::String)
+    # EUPHEMIA_WEATHER_DUCKDB: answer from the exported vintages file, no HTTP (bin/weather_duckdb.jl)
+    wx = weather_duckdb_answer(url)
+    wx === nothing || return wx
     last_err = nothing
     for attempt in 1:OPENMETEO_RETRIES
         try
