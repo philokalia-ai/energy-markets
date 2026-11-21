@@ -316,6 +316,20 @@ function _true_up_fleet(generators::Vector{Generator}, bidding_zone::String,
     # of their merit-order position; their capacity IS available at
     # its SRMC, and derating them manufactures phantom scarcity.
     derate_types = BASELOAD_DERATE_TYPES
+    # cv45 EUPHEMIA_CV45_AVAIL: oil and "Other" join the derate. Measured
+    # 2026-11-10 (reviews/fable-nov-bias.md §2.3): CE offered 3.1 GW of oil and
+    # 3.5 GW of "Other" against 0.9 / 1.4 GW actually run on a 400 €/MWh day, so
+    # the "available at its SRMC" premise above fails for them (NL "Other" also
+    # broke from 5.5 to < 0.4 GW in mid-2026; the trailing p95 follows it). Their
+    # target is the same declared DERATE_HEADROOM × trailing-30d p95, never
+    # lifted by a truth target.
+    cv45_avail_types = cv45_on("EUPHEMIA_CV45_AVAIL") ? ("Fossil Oil", "Other") : ()
+    # An expensive peaker can sit idle while fully available. Reuse the cv43
+    # merit test, including its historical fuel cutoff, before capping capacity.
+    if fleet_truthing && !isempty(cv45_avail_types) && cv45_on("EUPHEMIA_CV45_AVAIL_INMERIT")
+        cv45_avail_types = _inmerit_types(day, bidding_zone, cv45_avail_types)
+    end
+    derate_types = (derate_types..., cv45_avail_types...)
     # One scale per fuel type, applied in a single pass. Iterates the
     # FLEET's types (not type_p95's keys): a derate-listed type with a
     # p95 of zero is a fully offline fleet and derates all the way
@@ -343,7 +357,8 @@ function _true_up_fleet(generators::Vector{Generator}, bidding_zone::String,
             # the mechanism for precisely the baseload derate-types it
             # targets). :p95 zones (GR/SEE) have fleet_truth_target empty —
             # byte-identical v10 behaviour.
-            target = max(derate_headroom * type_p95[ptype],
+            target = ptype in cv45_avail_types ? derate_headroom * type_p95[ptype] :
+                     max(derate_headroom * type_p95[ptype],
                          get(fleet_truth_target, ptype, 0.0))
             fleet_raw > target + 100.0 || continue
             derate_scale[fsym] = target / fleet_raw
@@ -580,7 +595,11 @@ const COMPLEX_ORDERS_DEFAULT = "ps"
 function complex_order_kinds()
     raw = lowercase(strip(get(ENV, "EUPHEMIA_COMPLEX_ORDERS", COMPLEX_ORDERS_DEFAULT)))
     raw in ("", "off", "none") && return Set{String}()
-    return Set(filter(k -> !isempty(k) && !(k in ("off", "none")), strip.(split(raw, ","))))
+    kinds = Set(filter(k -> !isempty(k) && !(k in ("off", "none")), strip.(split(raw, ","))))
+    # cv45 EUPHEMIA_CV45_RESERVOIR: reservoir hydro energy-limited by default
+    # (the existing `reservoir` family; :reservoir_opportunity zones stay out).
+    cv45_on("EUPHEMIA_CV45_RESERVOIR") && push!(kinds, "reservoir")
+    return kinds
 end
 
 const _STORAGE_BUDGET_CACHE = Dict{Tuple{String,String,Date},Float64}()
@@ -809,6 +828,56 @@ function _check_extra_families(members, zone::AbstractString, formed::Set{String
         b0 == b || throw(ArgumentError("extra_orders family '$f' has inconsistent member budgets ($b0 vs $b MWh)"))
     end
     return nothing
+end
+
+# ── cv45: expected pumping demand (EUPHEMIA_CV45_PUMP) ────────────────────
+const _CV45_PUMP_CACHE = Dict{Tuple{String,Date},Dict{Int,Float64}}()
+const _CV45_PUMP_LOCK = ReentrantLock()
+
+"""
+    _cv45_pump_profile(zone, day) -> Dict{Int,Float64}
+
+Expected pumped-storage CONSUMPTION (MW) per UTC hour-of-day: the mean of the
+zone's hourly `actual_consumption_mw` (`Hydro Pumped Storage`) over the same
+14 complete UTC days the PS discharge budget uses (`_storage_cutoff_day`;
+legacy D-15..D-2). Ex-ante by the same as-of rule as the budget. Added to the
+zone's load: ENTSO-E's reported load EXCLUDES pumping — regressing
+(generation + net imports − load) on pumping consumption, Oct 1–Nov 14 2026,
+gives slope ≈ 1 (AT 0.94, PL 1.01, CZ 1.00, ES 1.13, PT 0.90;
+reviews/fable-nov-bias.md §2.3), contrary to the cv34 T3 comment above.
+Empty when the zone reports no pumping (CH). Cached per (zone, effective
+cutoff); never cached on DB error.
+"""
+function _cv45_pump_profile(zone::String, day::Date)
+    cutoff = _storage_cutoff_day(day)
+    key = (zone, cutoff)
+    cached = lock(_CV45_PUMP_LOCK) do
+        get(_CV45_PUMP_CACHE, key, nothing)
+    end
+    cached === nothing || return cached
+    df = sql2df_with_retry("""
+        WITH hourly AS (
+            SELECT date_trunc('hour', date_time_utc) AS h,
+                   AVG(actual_consumption_mw) AS mw
+            FROM entsoe.aggregated_generation_per_type
+            WHERE area_map_code = \$1 AND area_type_code LIKE 'BZN%'
+              AND production_type = 'Hydro Pumped Storage'
+              AND actual_consumption_mw IS NOT NULL
+              AND date_time_utc >= (\$2::date::timestamp AT TIME ZONE 'UTC')
+              AND date_time_utc < (\$3::date::timestamp AT TIME ZONE 'UTC')
+            GROUP BY 1)
+        SELECT EXTRACT(HOUR FROM h)::int AS hh, AVG(mw) AS mw, COUNT(*) AS n
+        FROM hourly GROUP BY 1""", Any[zone, cutoff - Day(14), cutoff])
+    prof = Dict{Int,Float64}()
+    for r in eachrow(df)
+        (ismissing(r.mw) || r.n < 7) && continue
+        v = Float64(r.mw)
+        v > 1.0 && (prof[Int(r.hh)] = v)
+    end
+    lock(_CV45_PUMP_LOCK) do
+        _CV45_PUMP_CACHE[key] = prof
+    end
+    return prof
 end
 
 "Clear the cv34 pumping-capability cache (tests / long processes)."
@@ -1335,8 +1404,16 @@ function create_merit_order_book(
 
         gross_demand = Dict{String,Float64}()
         net_demand = Dict{String,Float64}()
+        # cv45 EUPHEMIA_CV45_PUMP: expected pumping added to load (see _cv45_pump_profile).
+        pump_mw = cv45_on("EUPHEMIA_CV45_PUMP") ? _cv45_pump_profile(bidding_zone, day) :
+                  Dict{Int,Float64}()
+        if !isempty(pump_mw)
+            println("  ⛲ cv45 pumping demand: mean $(round(Int, sum(values(pump_mw)) / 24)) MW, " *
+                    "peak $(round(Int, maximum(values(pump_mw)))) MW (trailing-14d same-hour mean)")
+        end
         for ts in target_timeslots
-            load_value = get(load_by_time, ts, 0.0)
+            load_value = get(load_by_time, ts, 0.0) +
+                         get(pump_mw, Dates.hour(parse_timeslot_to_datetime(ts, day)), 0.0)
             renewable_gen = get(renewable_by_time, ts, 0.0)
             gross_demand[ts] = max(10.0, load_value)
             # Residual demand on domestic thermal: load - RES - net imports
@@ -1348,6 +1425,17 @@ function create_merit_order_book(
 
         # Gas SRMC anchors hydro water value (TTF-based when data exists)
         gas_srmc = get_marginal_cost(day, "Fossil Gas", bidding_zone)
+        # cv45 EUPHEMIA_CV45_HYDRO_CAP: the anchored water value may rise to the top
+        # tranche multiplier × gas SRMC (TRANCHES[end], 1.6) instead of stopping at
+        # gas SRMC — an opportunity cost can exceed gas SRMC in scarcity; the 1.0×
+        # clamp was a stability guard that became a cap (CH pinned at gas SRMC all
+        # evening on 2026-11-10). cv44: 1.0 × gas SRMC.
+        hydro_wv_cap = cv45_on("EUPHEMIA_CV45_HYDRO_CAP") ? TRANCHES[end][2] * gas_srmc : gas_srmc
+        # cv45 EUPHEMIA_CV45_ELASTIC: the elastic-demand block must sit above the
+        # thermal ladder, or 2% of demand curtails before the last gas tranche runs;
+        # BACKSTOP_PRICE_MULT is the declared "above every domestic tranche" multiple.
+        cv45_on("EUPHEMIA_CV45_ELASTIC") &&
+            (demand_elastic_price = max(DEMAND_ELASTIC_PRICE, BACKSTOP_PRICE_MULT * gas_srmc))
 
         # cv23 availability-scaled nuclear opportunity-cost share (FR). Computed
         # once per zone-day from ex-ante nuclear availability; used in place of
@@ -1711,10 +1799,10 @@ function create_merit_order_book(
                             0.5 * anchor_prices[ts] + 0.5 * ps_opp_r : anchor_prices[ts]
                         wv = clamp(aref *
                               (anchor_share + water_value_dry_boost * hydro_dryness),
-                              wv_lo, gas_srmc)
+                              wv_lo, hydro_wv_cap)
                         if aref != anchor_prices[ts] && wv != clamp(anchor_prices[ts] *
                               (anchor_share + water_value_dry_boost * hydro_dryness),
-                              wv_lo, gas_srmc)
+                              wv_lo, hydro_wv_cap)
                             ps_opp_changed += 1
                         end
                         wv

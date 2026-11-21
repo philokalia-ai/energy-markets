@@ -667,6 +667,12 @@ function _run_pipelined_backfill_impl(days, zones::Vector{String}=String[];
         # `off` kill-switch so worker books match the coordinator.
         haskey(ENV, "EUPHEMIA_COMPLEX_ORDERS") &&
             push!(extract_env, "EUPHEMIA_COMPLEX_ORDERS" => ENV["EUPHEMIA_COMPLEX_ORDERS"])
+        # cv45 per-change knobs (src/cv45_knobs.jl): the master switch and each
+        # knob travel to the book workers, so every backtest arm's worker books
+        # match the coordinator (SSH workers do not inherit ENV).
+        for k in ("EUPHEMIA_CV45", CV45_KNOBS...)
+            haskey(ENV, k) && push!(extract_env, k => ENV[k])
+        end
         # Workers share the source extract read-only; the coordinator keeps the
         # source read-only too (so it can coexist with them) but opts into result
         # writes, which land in the SEPARATE writable results_db file.

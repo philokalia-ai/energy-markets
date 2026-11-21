@@ -29,8 +29,9 @@ using Euphemia: with_context, gate_context, get_marginal_cost, legacy_fuel_cutof
              get_marginal_cost(d - Day(30), "Fossil Gas", "DE_LU"),   # the P1 bug path
              get_marginal_cost(d, "Fossil Hard coal", "DE_LU"))
         end
-        @test gas_now ≈ 195.02 atol = 0.01
-        @test gas_then ≈ 67.75 atol = 0.01
+        # cv45 GAS_HHV default-on: fuel term TTF/(η·0.90) (cv44: 195.02 / 67.75)
+        @test gas_now ≈ 213.20 atol = 0.01
+        @test gas_then ≈ 71.79 atol = 0.01
         @test gas_then_naive ≈ gas_now          # documents why the explicit cutoff is needed
         @test coal ≈ 109.0
         # The merit test: coal was out of merit at D−30 ⇒ must NOT be released.

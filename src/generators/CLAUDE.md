@@ -81,12 +81,14 @@ Gas-fired generators ("Fossil Gas") use real TTF front-month futures prices from
 # Most recent TTF close at or before a date (€/MWh), nothing if no data within 10 days
 ttf = Euphemia.get_ttf_price(Date(2024, 6, 15))
 
-# Gas marginal cost = TTF/efficiency + carbon + O&M (no bid markup)
+# Gas marginal cost = TTF/(efficiency × 0.90) + carbon + O&M (no bid markup);
+# TTF is on gross CV, efficiency on net CV (cv45 GAS_HHV; TTF/efficiency with it off)
 mc = Euphemia.get_marginal_cost(Date(2024, 6, 15), "Fossil Gas")  # ≈ €97/MWh
 ```
 
 Cost model constants (in `src/Generators.jl`): `GAS_PLANT_EFFICIENCY = 0.55`,
-`GAS_EMISSION_FACTOR = 0.202` tCO₂/MWh gas, `GAS_VOM_COST = 2.0` €/MWh.
+`GAS_EMISSION_FACTOR = 0.202` tCO₂/MWh gas, `GAS_VOM_COST = 2.0` €/MWh,
+`GAS_NCV_PER_GCV = 0.90` (`src/generators/fuel_costs.jl`).
 
 EUA carbon prices come from `yfinance.eua_co2` (daily EUR closes of the
 SparkChange Physical Carbon ETC "CO2.L", populated by the ceres yfinance ETL
