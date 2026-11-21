@@ -331,6 +331,10 @@ println()
         include(joinpath(@__DIR__, "test_complex_orders.jl"))
     end
 
+    @testset "Research quantity oracles (DB-free)" begin
+        include(joinpath(@__DIR__, "test_research_oracle.jl"))
+    end
+
     @testset "cv45 knobs (DB-free)" begin
         include(joinpath(@__DIR__, "test_cv45_knobs.jl"))
     end

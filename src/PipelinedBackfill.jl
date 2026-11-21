@@ -437,6 +437,7 @@ function run_pipelined_backfill(days, zones::Vector{String}=String[]; kwargs...)
     # store exactly as it was — never a read-WRITE extract (a shared or
     # chmod-444 extract would break the next run; on a writable file the
     # coordinator would silently hold DuckDB's write lock).
+    research_oracle()   # validate before resume checks or worker startup
     prev = (store = DATA_STORE[], path = DUCKDB_PATH[], read_only = DUCKDB_READ_ONLY[],
             results_writable = DUCKDB_RESULTS_WRITABLE[])
     try
@@ -672,6 +673,10 @@ function _run_pipelined_backfill_impl(days, zones::Vector{String}=String[];
         # match the coordinator (SSH workers do not inherit ENV).
         for k in ("EUPHEMIA_CV45", CV45_KNOBS...)
             haskey(ENV, k) && push!(extract_env, k => ENV[k])
+        end
+        # Explicit empty values also clear any ambient lookahead flags on remote workers.
+        for k in ORACLE_ENV
+            push!(extract_env, k => get(ENV, k, ""))
         end
         # Workers share the source extract read-only; the coordinator keeps the
         # source read-only too (so it can coexist with them) but opts into result

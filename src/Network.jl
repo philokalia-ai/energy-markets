@@ -137,6 +137,18 @@ struct TransferCapacity
     net_position::Dict{Tuple{String,String,String},Tuple{Float64,Float64}}
     # ccr => directed pairs JAO publishes for it (its internal borders)
     ccr_pairs::Dict{String,Set{Tuple{String,String}}}
+    # Signed MW in get_zone_pairs orientation. Keep original ATC for anchor weights.
+    pinned_flows::Dict{Tuple{String,String,String},Float64}
+end
+TransferCapacity(z, p, f, b, np, pairs) = TransferCapacity(z, p, f, b, np, pairs,
+    Dict{Tuple{String,String,String},Float64}())
+
+function flow_bounds(tc::TransferCapacity, s, d, p)
+    q = get(tc.pinned_flows, (s, d, p), nothing)
+    q === nothing || return (q, q)
+    forward = get(tc.capacity_forward, (s, d, p), 0.0)
+    backward = get(tc.capacity_backward, (s, d, p), get(tc.capacity_forward, (d, s, p), 0.0))
+    return (-backward, forward)
 end
 TransferCapacity(z, p, f, b) = TransferCapacity(z, p, f, b,
     Dict{Tuple{String,String,String},Tuple{Float64,Float64}}(),

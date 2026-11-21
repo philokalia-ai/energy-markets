@@ -109,7 +109,7 @@ function resolve_complex_orders(order_book::MPCCOrderBook;
             add_to_expression!(bal[(n, t)], o.type == :supply ? -o.quantity : o.quantity, x[i])
         end
         for ((n, t), mw) in fixed_in
-            haskey(bal, (n, t)) && add_to_constant!(bal[(n, t)], -mw)
+            haskey(bal, (n, t)) && add_to_expression!(bal[(n, t)], -mw)
         end
         fam_rows = Dict{String,AffExpr}()
         fam_budget = Dict{String,Float64}()
@@ -153,11 +153,9 @@ function resolve_complex_orders(order_book::MPCCOrderBook;
             for pair in zone_pairs, t in periods
                 lp = _hourly_lookup(t)
                 s, d = pair
-                fw = get(tc.capacity_forward, (s, d, lp), 0.0)
-                bw = get(tc.capacity_backward, (s, d, lp),
-                    get(tc.capacity_forward, (d, s, lp), 0.0))
-                set_lower_bound(flow[pair, t], -bw)
-                set_upper_bound(flow[pair, t], fw)
+                lower, upper = flow_bounds(tc, s, d, lp)
+                set_lower_bound(flow[pair, t], lower)
+                set_upper_bound(flow[pair, t], upper)
                 # inflow to d (−), outflow from s (+)
                 add_to_expression!(bal[(d, t)], -1.0, flow[pair, t])
                 add_to_expression!(bal[(s, t)], 1.0, flow[pair, t])

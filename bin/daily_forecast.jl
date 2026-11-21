@@ -988,6 +988,7 @@ function install_thermometer!(preds::Dict{String,Dict{DateTime,Float64}},
 end
 
 function main()
+    Euphemia.research_oracle() === nothing || error("Research quantity oracles cannot run in the daily forecast")
     println("=" ^ 70)
     println("DAILY EX-ANTE FORECAST  zones=$(length(ZONES))  optimizer=$OPTIMIZER")
     println("  code_version=$CV  clearing_mode=$CLEARING_MODE  max_lead_days=$MAX_LEAD_DAYS")

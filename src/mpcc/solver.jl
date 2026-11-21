@@ -384,21 +384,10 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
                             lookup_period = string(hour)
                         end
 
-                        forward_cap = get(tc.capacity_forward, (source, sink, lookup_period), 0.0)
-                        # `capacity_backward[(A,B,p)]` only exists when `(A,B,p)`
-                        # is itself a published forward key; since `get_zone_pairs`
-                        # now returns ONE orientation per border, a period that
-                        # publishes only the reverse direction would otherwise
-                        # silently lose its capacity. Fall back to the reverse
-                        # forward key — which is exactly how `capacity_backward`
-                        # is defined, so this is identical wherever both exist.
-                        backward_cap = get(tc.capacity_backward, (source, sink, lookup_period),
-                            get(tc.capacity_forward, (sink, source, lookup_period), 0.0))
-
-                        # ATC bounds: -backward <= flow <= forward
-                        set_lower_bound(flow[pair, t], -backward_cap)
-                        set_upper_bound(flow[pair, t], forward_cap)
-                        flow_caps[(pair, t)] = (forward_cap, backward_cap)
+                        lower, upper = flow_bounds(tc, source, sink, lookup_period)
+                        set_lower_bound(flow[pair, t], lower)
+                        set_upper_bound(flow[pair, t], upper)
+                        flow_caps[(pair, t)] = (upper, -lower)
                     end
                 end
 
