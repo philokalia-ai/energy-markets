@@ -290,6 +290,7 @@ function _create_multi_zone_order_book_merit(zones::Vector{String}, day::Date;
     cached_zone_orders::Dict{String,Vector{MarketOrders.MarketOrder}}=Dict{String,Vector{MarketOrders.MarketOrder}}(),
     clear_resolution_minutes::Int=60,
     scenario::Union{Nothing,ZoneScenario,Dict{String,ZoneScenario}}=nothing)
+    cfg = research_oracle()
     isempty(zones) && error("At least one bidding zone must be specified")
 
     println("🌍 Creating multi-zone order book (merit-order method) for $(length(zones)) zones")
@@ -322,6 +323,7 @@ function _create_multi_zone_order_book_merit(zones::Vector{String}, day::Date;
         include_explicit=enrich_network, aggregate_remap=aggregate_remap,
         drop_borders=drop_borders)
     zone_pairs = Network.get_zone_pairs(transfer_capacity)
+    oracle = MeritOrderBook.oracle_day(zones, day; cfg, log_coverage=isempty(cached_zone_orders))
     # A border only counts as endogenous if it can actually carry flow:
     # ATC rows with zero capacity in both directions all day (e.g. an
     # interconnector on full-day outage) bound the flow variable to zero,
@@ -412,7 +414,7 @@ function _create_multi_zone_order_book_merit(zones::Vector{String}, day::Date;
             end
         end
         return create_merit_order_book(zone, day;
-            profile=profile,
+            profile=profile, oracle=oracle,
             net_import_exclude=exclude,
             net_import_import_only=import_only,
             target_resolution_minutes=clear_resolution_minutes,
@@ -507,6 +509,10 @@ function _create_multi_zone_order_book_merit(zones::Vector{String}, day::Date;
             end
         end
     end
+    if oracle !== nothing
+        missing_targets = intersect(keys(oracle), failed_zones)
+        isempty(missing_targets) || error("Oracle book missing target zone(s): $missing_targets on $day")
+    end
     successful_zones = filter(z -> !(z in failed_zones), zones)
     isempty(successful_zones) && error("Failed to generate merit orders for any zone")
     if !isempty(failed_zones)
@@ -571,7 +577,7 @@ function _create_multi_zone_order_book_merit(zones::Vector{String}, day::Date;
         successful_zones,
         periods_vector,
         (-500.0, 3000.0),       # EU day-ahead floor / merit demand cap
-        transfer_capacity
+        transfer_capacity, MeritOrderBook.oracle_fixed(oracle, successful_zones, periods_vector)
     )
 
     println("✅ Created multi-zone order book (merit-order):")

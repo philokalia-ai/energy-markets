@@ -64,6 +64,8 @@ function resolve_complex_orders(order_book::MPCCOrderBook;
     nset = Set(nodes)
     fixed_in = order_book.fixed_injections
     release(msg) = begin
+        any(o -> startswith(o.family, "ERES:observed:"), all_linked) &&
+            error("Cannot release an observed reservoir energy budget: $msg")
         @warn "complex orders: $msg — releasing to the baseline book"
         LAST_COMPLEX_INFO[] = (status=:fallback, message=msg)
         # Baseline book exactly: storage members uncapped at their bid, blocks
@@ -109,7 +111,7 @@ function resolve_complex_orders(order_book::MPCCOrderBook;
             add_to_expression!(bal[(n, t)], o.type == :supply ? -o.quantity : o.quantity, x[i])
         end
         for ((n, t), mw) in fixed_in
-            haskey(bal, (n, t)) && add_to_constant!(bal[(n, t)], -mw)
+            haskey(bal, (n, t)) && add_to_expression!(bal[(n, t)], -mw)
         end
         fam_rows = Dict{String,AffExpr}()
         fam_budget = Dict{String,Float64}()

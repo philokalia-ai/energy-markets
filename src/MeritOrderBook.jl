@@ -31,7 +31,7 @@ import ..get_ttf_price, ..eua_price, ..uka_price, ..legacy_fuel_cutoff
 import ..current_context, ..ctx_key, ..record_asof_status!, ..AGG_GEN_PUBLICATION_LATENCY   # as-of contract (issue #368)
 import ..GAS_PLANT_EFFICIENCY, ..GAS_EMISSION_FACTOR, ..GAS_VOM_COST
 import ..FLEXIBLE_FUEL_TYPES
-import ..cv45_on, .._gas_fuel_cost
+import ..research_oracle, ..cv45_on, .._gas_fuel_cost
 import ..MarketOrders: SimpleOrder, MarketOrder, LinkedHourlyOrder
 import ..MPCC: MPCCOrderBook
 import ..disaggregate_temporal_data, ..replicate_to_finer_resolution
@@ -74,6 +74,7 @@ include("merit_order/res_offers.jl")    # default-off, ex-ante RES support offer
 # exact pre-existing behaviour (guarded byte-identical).
 const BOOK_SINK = Ref{Union{Nothing,Function}}(nothing)
 
+include("merit_order/oracle_inputs.jl")
 include("merit_order/book_build.jl")    # create_merit_order_book — the merit-order book construction itself
 
 
