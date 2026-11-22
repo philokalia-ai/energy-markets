@@ -1246,6 +1246,9 @@ function create_merit_order_book(
     # either missing the whole mechanism is dead code — pass 1 and every
     # single-pass path (incl. SEE) are unchanged.
     anchor_active = opportunity_anchor != :none && anchor_prices !== nothing
+    # cv46 P2: no gas-SRMC ceiling on anchored observed imports in the
+    # south-east block (src/network/cv46_see_limit.jl). False when off.
+    see_noclamp = parentmodule(@__MODULE__).Network.cv46_see_noclamp(bidding_zone)
 
     try
         println("📊 Creating merit-order order book for $bidding_zone on $day")
@@ -1681,7 +1684,8 @@ function create_merit_order_book(
                 # stay price-taking at €1 (unchanged).
                 import_price = (anchor_active && opportunity_anchor == :hydro &&
                                 haskey(anchor_prices, ts)) ?
-                               clamp(anchor_share * anchor_prices[ts], 1.0, gas_srmc) : 1.0
+                               (see_noclamp ? max(anchor_share * anchor_prices[ts], 1.0) :
+                                clamp(anchor_share * anchor_prices[ts], 1.0, gas_srmc)) : 1.0
                 push_tagged!(SimpleOrder(:supply, import_price, ni,
                     Symbol(bidding_zone), date_time, resolution_minutes),
                     "IMPORT", "import_fixed")

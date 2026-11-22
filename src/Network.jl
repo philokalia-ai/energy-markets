@@ -543,6 +543,9 @@ _asof_key() = (c = _asof_ctx(); c === nothing ? nothing : c.as_of_utc)
 _asof_record!(source, status) =
     isdefined(_PARENT_MODULE, :record_asof_status!) && _PARENT_MODULE.record_asof_status!(source, status)
 
+include("network/cv46_see_limit.jl")   # cv46 P2: south-east cut limit (EUPHEMIA_CV46_SEE_LIMIT)
+include("network/cv46_it_limits.jl")   # cv46 P3b: Italian internal floors (EUPHEMIA_CV46_IT_LIMITS)
+
 # Keyed on (date, issuance): see `_OUTAGE_DAY_CACHE` in generators/registry.jl.
 const _TX_OUTAGE_DAY_CACHE = Dict{Tuple{Date,Union{Nothing,DateTime}},Dict{Tuple{String,String,Int},Float64}}()
 const _TX_OUTAGE_LOCK = ReentrantLock()
@@ -946,6 +949,11 @@ function _create_transfer_capacity_enriched(date::Date, bidding_zones::Vector{St
     end
     n_np_scaled > 0 &&
         println("   🧭 JAO net positions: $(n_np_scaled) border-hours scaled so simultaneous exchanges respect the hub limit")
+    # cv46 P2 (EUPHEMIA_CV46_SEE_LIMIT): south-east cut caps, after the
+    # net-position scaling so the cut is the binding last step.
+    if cv46_see_on() && !isempty(jao)
+        cv46_apply_see_limit!(rows, date, jao, jao_ccr_pairs(date), fpset)
+    end
     (n_jao_override + n_jao_added) > 0 &&
         println("   🧭 JAO maxBEX: $(n_jao_override) Day-ahead-free border-hours sized by the flow-based " *
                 "max exchange, $(n_jao_added) border-hours added")
@@ -1012,6 +1020,10 @@ function _create_transfer_capacity_enriched(date::Date, bidding_zones::Vector{St
                     "($n_pregate_tda trailing-DA, $(n_pregate_added - n_pregate_tda) " *
                     "demonstrated-capability; Day-ahead ATC not yet published for $date)")
     end
+
+    # cv46 P3b (EUPHEMIA_CV46_IT_LIMITS): Italian internal border-hours floored
+    # at trailing demonstrated flow, before the outage cap (a TSO message wins).
+    cv46_it_on() && cv46_apply_it_limits!(rows, date, fpset)
 
     # Transmission-grid outages (cv40, review 2026-09-13): the cap runs AFTER
     # every capacity source has been assembled — JAO maxBEX, the cv27
