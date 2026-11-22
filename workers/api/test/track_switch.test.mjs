@@ -140,17 +140,15 @@ T.renderTrackSwitch();
      "predicted is the active button by default");
   ok(/Predicted/.test(getById("track-explainer").textContent),
      "explainer names the selected track (Predicted)");
-  ok(/measured cost of our inputs/.test(getById("track-explainer").textContent),
-     "explainer states the gap = cost-of-inputs framing");
-  ok(/not a strictly pre-gate/.test(getById("track-explainer").textContent),
-     "explainer carries the 'as announced != strictly pre-gate' honesty note");
+  ok(/weather-based inputs/.test(getById("track-explainer").textContent),
+     "explainer says what the predicted track runs on");
 }
 
 /* ---- render explorer on the predicted track ---- */
 T.renderExplorer();
 const subPredicted = getById("chart-sub").textContent;
 const tablePredicted = getById("hour-table").textContent;
-ok(/predicted inputs/.test(subPredicted), "explorer sub reads the predicted-track series label");
+ok(/predicted track/.test(subPredicted), "explorer sub names the predicted track");
 ok(/10\.00/.test(tablePredicted) && /20\.00/.test(tablePredicted),
    "explorer hour table shows the PREDICTED sim series (10, 20)");
 ok(getById("day-stats").querySelector(".track-gap-chip") != null,
@@ -196,7 +194,7 @@ ok(store["euphemia.track"] === "announced", "the preference is persisted to loca
 const subAnnounced = getById("chart-sub").textContent;
 const tableAnnounced = getById("hour-table").textContent;
 ok(subAnnounced !== subPredicted, "the explorer sub LABEL changed on the flip");
-ok(/announced D-1 inputs/.test(subAnnounced), "explorer sub reads the announced-track series label");
+ok(/as-announced track/.test(subAnnounced), "explorer sub names the announced track");
 ok(/11\.00/.test(tableAnnounced) && /21\.00/.test(tableAnnounced),
    "explorer hour table now shows the ANNOUNCED sim series (11, 21) — the series changed");
 ok(!/10\.00/.test(tableAnnounced), "the predicted series (10) is no longer shown");

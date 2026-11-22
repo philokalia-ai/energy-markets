@@ -30,9 +30,7 @@
   --heading:        var(--deep-blue);
   --series-sim:     var(--aegean);      /* simulated (ex-ante) */
   --series-act:     var(--terracotta);  /* actual (settled) */
-  --series-gbm:     #D4649B;            /* physics + ex-ante GBM (pink) */
-  --series-stats:   #C9A227;            /* pure-stats GBM (yellow) */
-  --series-tsfm:    #7B5EA7;            /* Timestral TSFM overlay (violet) */
+  --series-tsfm:    #7B5EA7;            /* Timestral + physics, the headline forecast (violet) */
   --status-good:    #2E7D46;
   --status-weak:    #C0392B;
   --good-text:      #2E7D46;
@@ -76,9 +74,7 @@
   --heading:        #DCE6F2;
   --series-sim:     #6FA8DC;
   --series-act:     #E0A458;
-  --series-gbm:     #F084B8;            /* physics + ex-ante GBM (pink) */
-  --series-stats:   #E8C547;            /* pure-stats GBM (yellow) */
-  --series-tsfm:    #B39DDB;            /* Timestral TSFM overlay (violet) */
+  --series-tsfm:    #B39DDB;            /* Timestral + physics, the headline forecast (violet) */
   --status-good:    #58B372;
   --status-weak:    #E06555;
   --good-text:      #58B372;
@@ -414,8 +410,6 @@ select {
   font-size: 12.5px; line-height: 1.45; color: var(--text-muted);
 }
 .track-explainer strong { color: var(--text-secondary); }
-.track-explainer-gap { color: var(--text-secondary); }
-.track-explainer-note { font-style: italic; opacity: 0.85; }
 
 /* Track-gap chip: "announced MAE 12.1 · predicted 14.3 → input cost +2.2" */
 .track-gap-chip {
@@ -569,9 +563,7 @@ select {
 }
 .legend .key.sim { border-color: var(--series-sim); }
 .legend .key.act { border-color: var(--series-act); }
-.legend .key.gbm { border-color: var(--series-gbm); }
-.legend .key.stats { border-color: var(--series-stats); }
-.legend .key.tsfm { border-color: var(--series-tsfm); border-top-style: dashed; }
+.legend .key.tsfm { border-color: var(--series-tsfm); }
 .legend .key.dashed { border-top-style: dashed; }
 
 /* Interactive series focus: hover to highlight, click to toggle, double-click
@@ -894,7 +886,7 @@ table.book-table td {
 .timeline { list-style: none; padding: 0; margin: 0.8rem 0; }
 .timeline li {
   display: grid;
-  grid-template-columns: 7.5rem 1fr;
+  grid-template-columns: 9rem 1fr;
   gap: 0.9rem;
   padding: 0.55rem 0;
   border-bottom: 1px solid var(--grid);

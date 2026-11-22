@@ -1,8 +1,8 @@
-/* DOM test (#431 PR G): the hybrid line is OFF by default and the "since freeze" window.
- *  - zone explorer: the hybrid (gbm) chip reads "experimental — loses to naive live", starts
- *    switched off (line invisible), the stats line stays visible; switching it on persists
- *    (localStorage "euphemia.hybridLine") and is restored on the next render;
- *  - recent-days chart: the hybrid line is not drawn by default, its chip toggles it;
+/* DOM test: the site shows the latest and best only (web/CLAUDE.md), and the "since freeze" window.
+ *  - zone explorer: Timestral + physics is the headline series, the physics clear is labelled
+ *    with its code_version, no GBM line is drawn even when the payload carries gbm/stats, and a
+ *    06:30 prices-only Timestral issue is labelled and dashed as such;
+ *  - recent-days chart: same series; a cleared day with no published actual reads "no actual";
  *  - scoreboard: the since_freeze window is offered right after "All days" with its label,
  *    cohorts under 14 scored days show "insufficient data", the note shows the day count;
  *    old JSON (no since_freeze entries) offers no such window and hides the note.
@@ -91,52 +91,47 @@ const T = globalThis.window.__euphemiaTrack;
 ok(T && typeof T.readHash === "function", "app.js exposed readHash/renderScoreboard");
 
 
-/* ---------- 1. zone explorer: hybrid off by default ---------- */
+/* ---------- 1. zone explorer: Timestral + physics headline, no GBM lines ---------- */
 const HOURS = ["2026-11-14T22:00:00Z", "2026-11-14T23:00:00Z", "2026-11-15T00:00:00Z"];
-const mkDay = (date, actual) => ({ date: date, lead_days: 1, input_mode: "weather", code_version: 44,
+const mkDay = (date, actual, mode) => ({ date: date, lead_days: 1, input_mode: "weather", code_version: 45,
   prediction_made_utc: "2026-11-14T09:00:00Z", hours: HOURS.slice(), sim: [100, 110, 120],
-  actual: actual, gbm: [90, 95, 99], stats: [105, 108, 111], mae: 5, bias: 1, corr: 0.9 });
+  actual: actual, gbm: [90, 95, 99], stats: [105, 108, 111],
+  tsfm: [101, 109, 119], tsfm_q10: [90, 100, 110], tsfm_q90: [110, 120, 130],
+  tsfm_input_mode: mode || "postsim", tsfm_issue_utc: "2026-11-14T09:00:00Z", tsfm_arm: "timestral-209m",
+  mae: actual[0] === null ? null : 5, bias: actual[0] === null ? null : 1, corr: actual[0] === null ? null : 0.9 });
+const NA = [null, null, null], SET = [98, 107, 118];
 T.state.zone = "GR"; T.state.track = "predicted"; T.state.view = "explorer";
 T.state.zoneCache["GR"] = { zone: "GR", market_day_tz: "Europe/Athens",
-  days: [mkDay("2026-11-16", [null, null, null]), mkDay("2026-11-15", [98, 107, 118])] };
-T.state.day = "2026-11-15";
-T.loadHybridPref();
-ok(T.state.showHybrid === false, "default: hybrid preference off (nothing stored)");
+  days: [mkDay("2026-11-18", NA), mkDay("2026-11-17", SET), mkDay("2026-11-16", NA, "pregate0630"),
+         mkDay("2026-11-15", SET)] };
+T.state.day = "2026-11-17";
 T.renderExplorer();
-const chips = () => getById("chart-legend").children.filter((c) => c.tagName === "span");
-const chipOf = (txt) => chips().find((c) => c.textContent.indexOf(txt) !== -1);
-const gbmChip = chipOf("Physics + ex-ante GBM");
-const statsChip = chipOf("Pure-stats GBM");
-ok(gbmChip && /experimental — loses to naive live/.test(gbmChip.textContent), "hybrid chip reads 'experimental — loses to naive live'");
-ok(gbmChip && gbmChip.classList.contains("series-off") && gbmChip.getAttribute("aria-pressed") === "true",
-  "hybrid chip starts switched off");
-ok(statsChip && !statsChip.classList.contains("series-off"), "stats chip stays on");
-const resetBtn = () => getById("chart-legend").children.find((c) => c.className === "series-reset");
-ok(resetBtn() && resetBtn().hidden === true, "no 'show all' prompt just because the hybrid starts off");
-const paths = () => getById("chart-wrap")._all((e) => e.tagName === "path" && e.attrs["stroke-dasharray"] === "5 4", []);
-// overlay order: gbm then stats (overlayPath calls); opacity set by the series focus
-ok(paths().length >= 2 && paths()[0].style.opacity === 0, "hybrid line drawn but invisible (opacity 0)");
-ok(paths()[1].style.opacity === 0.9, "stats line visible (opacity 0.9)");
-gbmChip._fire("keydown", { key: "Enter", preventDefault() {} });
-ok(T.state.showHybrid === true && store["euphemia.hybridLine"] === "on", "switching it on persists to localStorage");
-ok(paths()[0].style.opacity === 0.9, "hybrid line visible after switching on");
-T.state.showHybrid = false; T.loadHybridPref(); T.renderExplorer();
-ok(T.state.showHybrid === true && !chipOf("Physics + ex-ante GBM").classList.contains("series-off") &&
-   paths()[0].style.opacity === 0.9, "the stored choice is restored on the next render");
-chipOf("Physics + ex-ante GBM")._fire("keydown", { key: " ", preventDefault() {} });
-ok(store["euphemia.hybridLine"] === "off" && T.state.showHybrid === false, "switching it off persists too");
+const chipTexts = (id) => getById(id).children.filter((c) => c.tagName === "span").map((c) => c.textContent);
+const exChips = chipTexts("chart-legend");
+ok(/^Timestral \+ physics/.test(exChips[0]), "explorer: Timestral + physics is the first (headline) series — " + exChips[0]);
+ok(exChips.some((t) => /^Physics \(cv45\)/.test(t)), "explorer: the physics series is labelled with its code_version");
+ok(!exChips.some((t) => /GBM/.test(t)), "explorer: no GBM series in the legend");
+const exPaths = () => getById("chart-wrap")._all((e) => e.tagName === "path", []);
+ok(exPaths().length === 4, "explorer: band + Timestral + physics + actual paths, nothing else (" + exPaths().length + ")");
+ok(!exPaths().some((e) => e.attrs["stroke-dasharray"]), "explorer: the combined Timestral line is solid");
+ok(/^Timestral \+ physics €\/MWh/.test(getById("hour-table").querySelectorAll("th")[1].textContent),
+  "explorer: the hour table carries the Timestral + physics column");
+T.state.day = "2026-11-16"; T.renderExplorer();
+ok(/^Timestral \(prices only\)/.test(chipTexts("chart-legend")[0]), "explorer: a 06:30 prices-only issue is never labelled as the combined model");
+ok(exPaths().some((e) => e.attrs["stroke-dasharray"] === "5 4"), "explorer: the prices-only issue is drawn dashed");
+const dayPills = getById("day-list")._all((e) => e._classes().includes("pill"), []).map((e) => e.textContent);
+ok(dayPills.indexOf("no actual") !== -1 && dayPills.indexOf("forecast") !== -1,
+  "explorer day list: a cleared day without an actual reads 'no actual', the next day 'forecast'");
 
 /* ---------- 2. recent-days chart ---------- */
-const hzDashed = () => getById("hz-wrap")._all((e) => e.tagName === "path" && e.attrs["stroke-dasharray"] === "5 4", []);
 T.renderHorizon();
-const nOff = hzDashed().length;
-const hzChip = getById("hz-legend").children.find((c) => c.textContent.indexOf("Physics + ex-ante GBM") !== -1);
-ok(hzChip && /experimental — loses to naive live/.test(hzChip.textContent) && hzChip.classList.contains("series-off"),
-  "recent days: hybrid chip labelled and off");
-ok(nOff === 2, "recent days: only the stats line drawn by default (2 days x stats) — got " + nOff);
-hzChip._fire("click");
-ok(T.state.showHybrid === true && hzDashed().length === 4, "recent days: chip click draws the hybrid line (4 dashed)");
-T.state.showHybrid = false; store["euphemia.hybridLine"] = "off";
+const hzChips = chipTexts("hz-legend");
+ok(/^Timestral \+ physics \(prices only where marked\)/.test(hzChips[0]), "recent days: mixed issues are labelled — " + hzChips[0]);
+ok(hzChips.length === 3 && !hzChips.some((t) => /GBM/.test(t)), "recent days: three series, no GBM");
+const texts = getById("hz-wrap")._all((e) => e.tagName === "text", []).map((e) => e.textContent);
+ok(texts.indexOf("no actual") !== -1, "recent days: the cleared day without an actual reads 'no actual' (not 'forecast')");
+ok(texts.filter((t) => t === "forecast").length === 1, "recent days: only the not-yet-cleared day reads 'forecast'");
+ok(texts.some((t) => /^MAE 5 · \+1Physics MAE/.test(t)), "recent days: settled days carry a short MAE · bias caption — " + texts.filter((t) => /MAE/.test(t)).join(" | "));
 
 /* ---------- 3. scoreboard: since_freeze window ---------- */
 const S = (zone, lead, win, n, mae) => ({ zone: zone, lead_days: lead, window: win, input_mode: "weather",
@@ -157,7 +152,7 @@ ok(getById("window-note").hidden === true, "old JSON: no since-freeze note");
 T.state.scoreboard.scores.push(S("GR", 1, "since_freeze", 2, 40), S("DE_LU", 1, "since_freeze", 20, 30));
 const opts = optLabels();
 ok(opts[0] === "all=All days" &&
-   opts[1] === "since_freeze=since freeze (cv44, 2026-11-15) — the only out-of-sample physics record" &&
+   opts[1] === "since_freeze=since freeze (cv45, 2026-11-21) — the only out-of-sample physics record" &&
    opts[2].startsWith("2026-10="), "window options: All days, since freeze (labelled), then months");
 T.state.window = "since_freeze";
 T.renderScoreboard();
@@ -189,4 +184,4 @@ T.readHash(); T.renderScoreboard();
 ok(T.state.window === "all" && note.hidden === true, "Back to a URL without window= -> All days, note hidden");
 
 if (failures) { console.error(failures + " failure(s)"); process.exit(1); }
-console.log("hybrid_freeze: all assertions passed");
+console.log("latest_only: all assertions passed");

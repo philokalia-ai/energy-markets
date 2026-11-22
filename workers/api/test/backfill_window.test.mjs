@@ -110,9 +110,10 @@ T.state.scoreboard.scores.push(S("GR", "since_freeze", 2, 40),
   S("GR", "backfilled", 62, 64.3, Object.assign({ reconstructed_utc: "2026-11-18" }, nv)),
   S("DE_LU", "backfilled", 62, 51.0, Object.assign({ reconstructed_utc: "2026-11-18" }, nv, { rmae_epf: 0.82 })));
 const o = optLabels();
-ok(o[0] === "all=All days" && /^since_freeze=/.test(o[1]) &&
-   o[2] === "backfilled=backfilled (reconstructed, cv44; in-sample — calibration overlaps)" && /^2026-10=/.test(o[3]),
-  "options: All days, since freeze, backfilled (labelled), months — " + o.join(" | "));
+// The cv44 reconstruction is superseded by cv45 (web/CLAUDE.md): the window is no longer offered
+// in the select; the rendering below is kept for old #window=backfilled links.
+ok(o[0] === "all=All days" && /^since_freeze=/.test(o[1]) && /^2026-10=/.test(o[2]) && !o.some((x) => /backfilled/.test(x)),
+  "options: All days, since freeze, months — no backfilled window — " + o.join(" | "));
 T.state.window = "backfilled"; T.renderScoreboard();
 const note = getById("window-note");
 ok(note.hidden === false && /reconstructed on 2026-11-18/.test(note.textContent) && /62 market days/.test(note.textContent) &&

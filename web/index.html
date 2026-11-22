@@ -61,10 +61,10 @@
 <div class="hero-lite">
   <p class="hero-kicker">Ex-ante day-ahead electricity price forecasts</p>
   <h1>The competitive counterfactual, live</h1>
-  <p class="subtitle">A fundamentals-based simulation of the European day-ahead market,
-    scored per bidding zone as days settle.
-    Flip the whole site between the two tracks below: our fitted inputs, or the TSOs'
-    announced D-1 figures through the same engine.
+  <p class="subtitle">Two forecasts for every European bidding zone, scored as days settle:
+    <strong>Timestral + physics</strong>, our best price forecast, and the <strong>physics
+    clear</strong> (cv45), a competitive simulation of the day-ahead auction whose gaps to the
+    settled price show market conduct.
     <a class="more-link" href="./about.html">How it works &rarr;</a></p>
 
   <!-- The GLOBAL TRACK SWITCH — a site-wide lens over every series surface. -->
@@ -495,21 +495,6 @@
       <div id="hz-wrap" class="chart-wrap"></div>
     </div>
 
-    <div class="chart-card" style="margin-top: 16px">
-      <div class="chart-head">
-        <h2 id="rev-title" class="chart-title"></h2>
-        <p class="chart-sub">The freshest ex-ante (weather) forecast we published for this
-          delivery day, plus the settled actual.</p>
-      </div>
-      <div class="filter-row" style="margin: 10px 0 4px">
-        <div class="filter">
-          <span class="filter-label">Delivery day</span>
-          <div id="rev-daybtns" class="segmented" role="group" aria-label="Delivery day"></div>
-        </div>
-      </div>
-      <div id="rev-legend" class="legend"></div>
-      <div id="rev-wrap" class="chart-wrap"></div>
-    </div>
   </section>
 
   <!-- ============ Zone explorer ============ -->
@@ -1166,24 +1151,17 @@ run_pipelined_backfill(Date(2023,7,1):Day(1):Date(2025,6,30), FOOTPRINT;
   <section class="about-card">
     <h2 class="panel-title">About these numbers</h2>
     <p>
-      This is a <strong>constructed competitive counterfactual</strong> — a fundamentals-based
-      market-clearing model, not a statistical forecaster: no price is ever a regression target.
-      Its bidding form has about 40 named characteristics that were calibrated with price error in
-      view; each is published and flagged. The dashed
-      overlays (Timestral, the GBM lines, the ≤&nbsp;0 risk) are separate, openly statistical
-      predictions that read settled prices. The physics forecasts are frozen before
-      delivery, never revised, and scored honestly as days settle (the GBM overlay rows are
-      rewritten daily, and a same-mode Timestral reissue replaces the earlier values). The switch at the top
-      flips the whole site between two tracks: <strong>Predicted</strong> — our own
-      weather-based inputs, frozen before the 12:00 CET auction gate ("how much can you
-      trust our model") — and <strong>As announced</strong> — the TSOs' published D-1
-      inputs run through the same bid-construction and solver ("the fair test of the bidding
-      mechanism with inputs held at the official figures"). The gap between them, where
-      announced beats predicted, is itself the measured cost of our inputs. No price is fitted
-      to the outcomes it is scored against, so persistent gaps between simulated and actual
-      prices are <em>findings</em> about how the real market deviates from this benchmark —
-      which itself carries a declared, price-informed scarcity/peak (conduct) layer — not
-      model errors to be tuned away.
+      <strong>Timestral + physics</strong> is the headline forecast: the Timestral time-series model,
+      given the settled prices up to the day before and our frozen lead-1 physics clear as a
+      known-future input (cv45 record: rMAE 0.555 against the D-1 naive). It reads settled prices,
+      so it is a prediction, not part of the counterfactual. The <strong>physics clear</strong> is a
+      constructed competitive counterfactual: a market-clearing model in which no price is ever a
+      regression target. Its bidding form has about 40 named characteristics calibrated with price
+      error in view, each published and flagged. Its forecasts are frozen before the 12:00 CET
+      auction gate and never revised, so persistent gaps between simulated and settled prices are
+      <em>findings</em> about how the real market deviates from competition, not errors to tune
+      away. The switch at the top runs the physics on our own weather-based inputs
+      (<strong>Predicted</strong>) or on the TSOs' published D-1 figures (<strong>As announced</strong>).
       <a class="more-link" href="./about.html">Read the full explanation &rarr;</a>
     </p>
   </section>
