@@ -117,7 +117,7 @@ MPCC.RESEARCH_SOLVE_HOOK[] = function (stage, model, book)
         k = (o.family, n, t); coef[k] = get(coef, k, 0.0) - o.quantity
         w = o.quantity * o.resolution_code / 60.0
         add_to_expression!(pab[o.family], w, P[n, t])
-        add_to_constant!(pab[o.family], -w * o.price)
+        pab[o.family].constant -= w * o.price
         M[o.family] += w * max(0.0, o.price - floor_)
     end
     for ((f, n, t), c) in coef

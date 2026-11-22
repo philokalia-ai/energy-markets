@@ -669,6 +669,10 @@ function _run_pipelined_backfill_impl(days, zones::Vector{String}=String[];
         # `off` kill-switch so worker books match the coordinator.
         haskey(ENV, "EUPHEMIA_COMPLEX_ORDERS") &&
             push!(extract_env, "EUPHEMIA_COMPLEX_ORDERS" => ENV["EUPHEMIA_COMPLEX_ORDERS"])
+        # highs-blocks M1 research flag + its JSONL dir (inert when unset).
+        for k in ("EUPHEMIA_MPCC_LP_CERT", "EUPHEMIA_MPCC_LP_CERT_LOG")
+            haskey(ENV, k) && push!(extract_env, k => ENV[k])
+        end
         # cv45 per-change knobs (src/cv45_knobs.jl): the master switch and each
         # knob travel to the book workers, so every backtest arm's worker books
         # match the coordinator (SSH workers do not inherit ENV).

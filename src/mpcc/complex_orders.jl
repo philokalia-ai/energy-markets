@@ -322,6 +322,11 @@ function solve_with_complex_orders(order_book::MPCCOrderBook, solve::Function;
     preferred_solver::String="highs", verbose::Bool=true,
     max_pab_rounds::Int=_max_pab_rounds_default())
     forced = Set{String}()
+    cert_ctx = lp_cert_mode() !== :off   # research (M1 shadow logging) only
+    if cert_ctx
+        dkey = "pass_" * _cert_day(order_book.periods)
+        CERT_CTX[dkey] = get(CERT_CTX, dkey, 0) + 1
+    end
     # Research dump (EUPHEMIA_DUMP_MODELS, research_dump.jl): inert when unset.
     dumping = dump_enabled()
     D = nothing; ddir = ""
@@ -331,6 +336,7 @@ function solve_with_complex_orders(order_book::MPCCOrderBook, solve::Function;
     end
     for rnd in 1:max_pab_rounds
         dumping && (_DUMP_MASTER_LAST[] = nothing; tm = time())
+        cert_ctx && (CERT_CTX["round"] = rnd)
         ob2 = resolve_complex_orders(order_book; preferred_solver=preferred_solver,
             verbose=verbose, forced_reject=forced,
             dump=dumping ? (ddir, "master_r$rnd") : nothing)
@@ -375,6 +381,7 @@ function solve_with_complex_orders(order_book::MPCCOrderBook, solve::Function;
     # Exhausted: never expose a clear that violates the block acceptance rule.
     @warn "complex orders: blocks still paradoxically accepted after $max_pab_rounds " *
           "round(s) — releasing the blocks to the original must-run offers (baseline book)"
+    cert_ctx && (CERT_CTX["round"] = "fallback")
     ob3 = resolve_complex_orders(order_book; preferred_solver=preferred_solver,
         verbose=verbose, release_blocks=true)
     inner = LAST_COMPLEX_INFO[]

@@ -6,7 +6,8 @@ ENV["EUPHEMIA_DATA_STORE"] = "duckdb"
 using Euphemia, Dates, JuMP, JSON, Serialization
 const MPCC = Euphemia.MPCC
 out = ENV["HB_OUT"]
-ob, anchored = deserialize(joinpath(out, "book.jls"))
+ENV["EUPHEMIA_COMPLEX_ORDERS"] = get(ENV, "HB_COMPLEX", "ps")
+bk = deserialize(joinpath(out, get(ENV, "HB_BOOK", "book.jls"))); ob = bk[1]
 arms = split(get(ENV, "HB_ARMS", "base,cert"), ",")
 reps = parse(Int, get(ENV, "HB_REPS", "1"))
 
@@ -30,7 +31,11 @@ function run_arm(arm)
     wall = time() - t
     MPCC.RESEARCH_SOLVE_HOOK[] = nothing
     log = MPCC.LP_CERT_LOG[]; MPCC.LP_CERT_LOG[] = nothing
-    return (r=r, wall=wall, per=per, log=log)
+    ci = MPCC.LAST_COMPLEX_INFO[]
+    cinfo = ci === nothing ? nothing : Dict("status" => string(ci.status),
+        "accepted" => hasproperty(ci, :blocks) ? sort(collect(keys(ci.blocks))) : String[],
+        "forced" => hasproperty(ci, :forced) ? sort(collect(ci.forced)) : String[])
+    return (r=r, wall=wall, per=per, log=log, cinfo=cinfo)
 end
 
 # no separate warm-up: run HB_REPS=2 and read rep 2 for timing (rep 1 includes JIT)
@@ -40,6 +45,7 @@ for rep in 1:reps, a in arms
     key = "$(a)#$(rep)"
     results[key] = res
     n_cert = count(d -> get(d, "outcome", "") == "certified", res.log)
+    res.cinfo === nothing || println("HB M1 $key complex: $(res.cinfo["status"]) accepted=$(length(res.cinfo["accepted"])) forced=$(length(res.cinfo["forced"])) msg=$(first(res.r.message, 80))")
     println("HB M1 $key: status=$(res.r.status) obj=$(res.r.objective_value) wall=$(round(res.wall, digits=1))s " *
             "certified=$n_cert/$(length(res.log))")
 end
@@ -64,6 +70,6 @@ end
 open(joinpath(out, "m1_$(get(ENV, "HB_TAG", "run")).json"), "w") do io
     JSON.print(io, Dict("summary" => summary,
         "runs" => Dict(k => Dict("wall" => v.wall, "status" => string(v.r.status),
-                                 "obj" => v.r.objective_value, "per" => v.per, "cert" => v.log)
+                                 "obj" => v.r.objective_value, "per" => v.per, "cert" => v.log, "complex" => v.cinfo)
                        for (k, v) in results)), 1)
 end

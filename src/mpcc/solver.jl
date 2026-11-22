@@ -718,21 +718,28 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
         end
 
         # Research flag (highs-blocks M1, default off): LP certificate / MIP start.
+        # `1`: the certificate replaces the MIP where it holds. `shadow`: the MIP
+        # runs as always (its result is used) and the certificate runs on a copy.
         lp_cert_ok = false
-        if lp_cert_enabled()
-            lp_cert_ok, lp_info = try
-                _lp_certify!(model, optimizer)
-            catch e
-                @warn "LP certificate failed — plain MIP" exception = (e, catch_backtrace())
-                (false, Dict{String,Any}("outcome" => "error"))
-            end
+        cert_mode = lp_cert_mode()
+        lp_info = nothing
+        shadow = nothing
+        if cert_mode === :on
+            lp_cert_ok, lp_info = _lp_certify_safe!(model, optimizer)
+        elseif cert_mode === :shadow
+            shadow = _lp_certify_shadow(model, optimizer, silent, time_limit, mip_gap)
+            lp_info = shadow.info
+        end
+        if lp_info !== nothing
             lp_info["periods"] = order_book.periods
             LP_CERT_LOG[] isa Vector && push!(LP_CERT_LOG[], lp_info)
         end
 
         # Solve the model
         dump_ctx === nothing || _dump_write_model(model, dump_ctx[1], dump_ctx[2])
+        t_mip = time()
         lp_cert_ok || optimize!(model)
+        cert_mode === :off || (lp_info["mip_s"] = lp_cert_ok ? 0.0 : time() - t_mip)
         dump_ctx === nothing || _dump_write_solution(model, dump_ctx[1], dump_ctx[2];
             extra=Dict{String,Any}("solve_time" => _safe_solve_time(model)))
 
@@ -890,6 +897,11 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
             dump_ctx === nothing || _dump_write_recon(model, dump_ctx[1], dump_ctx[2],
                 market_prices, recon, recon_diag, dump_np, flow_values, flow_caps)
             market_prices = recon.prices
+            if cert_mode !== :off
+                _lp_cert_record!(lp_info, shadow, model, order_book, market_prices,
+                    zone_pairs, flow_caps, orders_by_node_time, simple_orders, order_ids,
+                    stepwise_acceptance, flow, market_price)
+            end
 
 
             # Extract transmission flow values if multi-zone
@@ -934,6 +946,9 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
                 string(termination_status(model))
             )
         else
+            cert_mode === :off || _lp_cert_record!(lp_info, shadow, model, order_book,
+                nothing, zone_pairs, flow_caps, orders_by_node_time, simple_orders,
+                order_ids, stepwise_acceptance, flow, market_price)
             # A proven INFEASIBLE deserves diagnostics: compute the Gurobi IIS
             # (same machinery as the UC solver) so the conflicting constraint
             # set is printed instead of a blind failure.
@@ -1045,6 +1060,7 @@ function _solve_mpcc_by_period(order_book::MPCCOrderBook;
 
     periods = order_book.periods
     println("   🧩 Period-decomposition: $(length(periods)) independent single-period clears (solver=$(preferred_solver))")
+    lp_cert_mode() === :off || _lp_cert_call_begin!(periods)
 
     simple_orders = filter(o -> isa(o, SimpleOrder), order_book.orders)
 
@@ -1199,6 +1215,7 @@ function _solve_mpcc_by_period(order_book::MPCCOrderBook;
                "(per-period statuses: $stat_list)"
     end
 
+    lp_cert_mode() === :off || _lp_cert_call_end!(periods)
     n_opt = count(s -> s == :optimal, statuses)
     msg = "Period-decomposed clear: $(n_opt)/$(length(periods)) periods optimal, " *
           "merged status $(merged_status)"
