@@ -63,7 +63,8 @@
   the delivery day. The <strong>physics clear (cv45)</strong> is the competitive counterfactual
   itself: a re-clearing of the 39-zone European day-ahead market from fundamentals. The forecast
   is the best point prediction we have; the physics is the benchmark the market is measured
-  against. Headline: <strong>cv45 record: rMAE 0.555 vs the D-1 naive.</strong></p>
+  against. Headline: <strong>rMAE 0.578 vs the D-1 naive</strong> over two years of the live
+  configuration (details below).</p>
 
   <h2>The models on the charts</h2>
   <h3>Timestral + physics: the forecast</h3>
@@ -90,11 +91,15 @@
   (the settled price of the same hour one day earlier), on the same hours; below 1 beats it.
   Scored against the SDAC day-ahead price, lead 1.</p>
   <ul>
-    <li><strong>cv45 record: rMAE 0.555</strong> vs the D-1 naive.</li>
-    <li><strong>Two-year backtest</strong> of the live configuration, Athens market days
-    2024-11-16 → 2026-11-15: 718 days × 39 zones (671,328 hours; 12 days have no physics run).
-    rMAE <strong>0.578</strong>, MAE 14.5 €/MWh against a naive MAE of 25.0, bias −0.8.
-    By region the rMAE runs from 0.530 (Nordic) to 0.662 (Italy).</li>
+    <li><strong>The live configuration: rMAE 0.578.</strong> Timestral conditioned on the
+    weather-track lead-1 physics (our own 06:30 weather inputs, as the site's forecast uses), Athens
+    market days 2024-11-16 → 2026-11-15: 718 days × 39 zones, 671,328 hours on which every compared
+    model has a value (12 days have no physics run). MAE 14.5 €/MWh against a naive MAE of 25.0,
+    bias −0.8; by region from 0.530 (Nordic) to 0.662 (Italy). The physics in this backtest is
+    cv44.</li>
+    <li><strong>With physics on the TSOs' D-1 inputs: rMAE 0.555.</strong> Timestral conditioned on
+    the cv45 record physics (ENTSO-E D-1 load and RES forecasts at their latest revision, a
+    gate-time information set), same window: 729 days × 39 zones, 679,848 common hours.</li>
   </ul>
   <p>Zero-shot means no training split: each day is forecast only from the history before it.
   Live scores per zone and window are on the <a href="./index.html#view=board">scoreboard</a>.</p>

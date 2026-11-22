@@ -1137,7 +1137,8 @@ run_pipelined_backfill(Date(2023,7,1):Day(1):Date(2025,6,30), FOOTPRINT;
     <p>
       <strong>Timestral + physics</strong> is the headline forecast: the Timestral time-series model,
       given the settled prices up to the day before and our frozen lead-1 physics clear as a
-      known-future input (cv45 record: rMAE 0.555 against the D-1 naive). It reads settled prices,
+      known-future input (rMAE 0.578 against the D-1 naive over a two-year backtest of this
+      configuration). It reads settled prices,
       so it is a prediction, not part of the counterfactual. The <strong>physics clear</strong> is a
       constructed competitive counterfactual: a market-clearing model in which no price is ever a
       regression target. Its bidding form has about 40 named characteristics calibrated with price

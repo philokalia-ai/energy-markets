@@ -3,7 +3,8 @@
 **Nobody reads the website yet.** It shows the latest and best only:
 
 - the current champion forecast, **Timestral + physics** (Timestral conditioned on
-  the lead-1 physics clear; cv45 record rMAE 0.555 vs the D-1 naive);
+  the lead-1 physics clear; rMAE 0.578 vs the D-1 naive on the live weather track, 0.555 on the
+  cv45 record physics — see `models.html` for the coverage of each);
 - the current physics clear (**cv45**);
 - the current methods.
 
