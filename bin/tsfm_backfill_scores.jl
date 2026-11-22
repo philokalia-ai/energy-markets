@@ -187,10 +187,7 @@ end
 # common-mask rule, as the backfill). Pooled over the cohort's market days (the physics
 # cohort's scored days). `tsfm_n_days_postsim` counts the days whose vintage is the post-sim
 # (Timestral + physics) issue; the rest are the 06:30 prices-only issue. Export-side only;
-# kill switch EXPORT_TSFM_LIVE=0; any failure exports the board without these fields.
-
-"Whether the live Timestral board fields are exported (`EXPORT_TSFM_LIVE=0` switches them off)."
-tsfm_live_enabled() = get(ENV, "EXPORT_TSFM_LIVE", "1") != "0"
+# any failure exports the board without these fields.
 
 """
     tsfm_live_parts(hourly, day, actz, locz) -> (parts, postsim)
@@ -234,18 +231,20 @@ function tsfm_live_fields(pp, zone, lead, mode, dates)
 end
 
 """
-    tsfm_live_parts_or_nothing() -> Union{Tuple,Nothing}
+    tsfm_live_parts_or_nothing(; read_overlay, read_actuals) -> Union{Tuple,Nothing}
 
-DB step behind the kill switch and a non-fatal guard: every live overlay vintage
-(TSFM_OVERLAY_SQL), the published one per zone-day, and the scorer's actuals.
+DB step behind a non-fatal guard (`nothing` = the board is exported without the live
+Timestral fields): every live overlay vintage (TSFM_OVERLAY_SQL), the published one per
+zone-day, and the scorer's actuals. The readers are injectable for tests.
 """
-function tsfm_live_parts_or_nothing()
-    tsfm_live_enabled() || (println("tsfm live board fields: skipped (EXPORT_TSFM_LIVE=0)"); return nothing)
+function tsfm_live_parts_or_nothing(;
+        read_overlay=() -> Euphemia.sql2df_with_retry(TSFM_OVERLAY_SQL, [Date(2000, 1, 1)]),
+        read_actuals=(a, b) -> da_target_actuals(a, b))
     try
-        h, d = tsfm_overlay_maps(eachrow(Euphemia.sql2df_with_retry(TSFM_OVERLAY_SQL, [Date(2000, 1, 1)])))
+        h, d = tsfm_overlay_maps(eachrow(read_overlay()))
         isempty(d) && return nothing
         ds = [k[2] for k in keys(d)]
-        act = da_target_actuals(minimum(ds) - Day(8), maximum(ds))
+        act = read_actuals(minimum(ds) - Day(8), maximum(ds))
         actz = Dict{String,Dict{DateTime,Float64}}()
         for r in eachrow(act)
             (r.act === missing || r.act === nothing) && continue

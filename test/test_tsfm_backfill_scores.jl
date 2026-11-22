@@ -115,15 +115,16 @@ end
     @test f["tsfm_n"] == 48 && f["tsfm_n_days"] == 2 && f["tsfm_mae"] ≈ 3.0
     @test f["tsfm_n_days_postsim"] == 1                      # D only (D+30 is not in the cohort)
     @test f["tsfm_mae_naive_d1"] ≈ 10.0 && f["tsfm_rmae_d1"] ≈ 0.3 && f["tsfm_arm"] == "timestral-209m"
-    # announced track, leads >= 2, unknown zone, no Timestral day scored, switched off -> no fields
+    # announced track, leads >= 2, unknown zone, no Timestral day scored -> no fields
     @test isempty(tsfm_live_fields((parts, postsim), "GR", 1, "entsoe", [D]))
     @test isempty(tsfm_live_fields((parts, postsim), "GR", 2, "weather", [D]))
     @test isempty(tsfm_live_fields((parts, postsim), "ES", 1, "weather", [D]))
     @test isempty(tsfm_live_fields((parts, postsim), "GR", 1, "weather", [D + Day(30)]))
     @test isempty(tsfm_live_fields(nothing, "GR", 1, "weather", [D]))
-    withenv("EXPORT_TSFM_LIVE" => "0") do
-        @test tsfm_live_parts_or_nothing() === nothing
-    end
+    # non-fatal: a failing DB step yields nothing (the board is exported without the fields)
+    @test tsfm_live_parts_or_nothing(read_overlay=() -> error("db down")) === nothing
+    @test tsfm_live_parts_or_nothing(read_overlay=() -> DataFrame(z=String[], d=Date[], t=DateTime[], level=String[],
+        q=String[], v=Float64[], m=String[], issue=DateTime[], arm=String[])) === nothing   # no vintage yet
     # parquet columns over live + backfilled rows, including the post-sim count
     cols = tsfm_backfill_columns(0, [f, Dict{String,Any}()])
     @test cols["tsfm_n_days_postsim"][1] == 1 && ismissing(cols["tsfm_n_days_postsim"][2])

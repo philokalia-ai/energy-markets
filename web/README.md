@@ -54,7 +54,8 @@ dimension is collapsed everywhere to the **freshest forecast per delivery day**.
   Hour slider + play-through-day.
 - **Scoreboard** — physics MAE / bias / Pearson corr / naive rMAE by window, plus
   Timestral MAE / rMAE in the D-1 group (the published Timestral vintage per day,
-  `bin/tsfm_backfill_scores.jl` `tsfm_live_fields`; kill switch `EXPORT_TSFM_LIVE=0`).
+  `bin/tsfm_backfill_scores.jl` `tsfm_live_fields`; a failure exports the board
+  without them).
 - **Models** (`models.html`) — what the two forecasts are and how good they are.
 
 ## Data plane
