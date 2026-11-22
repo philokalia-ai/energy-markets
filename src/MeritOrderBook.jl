@@ -77,6 +77,7 @@ include("merit_order/res_offers.jl")    # default-off, ex-ante RES support offer
 const BOOK_SINK = Ref{Union{Nothing,Function}}(nothing)
 
 include("merit_order/cv46_nordic_wv.jl") # cv46 P1 Nordic water value (EUPHEMIA_CV46_NORDIC_WV), default off
+include("merit_order/cv46_it_eff.jl")   # cv46 P3a Italian unit gas efficiency (EUPHEMIA_CV46_IT_EFF)
 include("merit_order/book_build.jl")    # create_merit_order_book — the merit-order book construction itself
 
 

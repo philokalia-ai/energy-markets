@@ -1251,6 +1251,8 @@ function create_merit_order_book(
         println("📊 Creating merit-order order book for $bidding_zone on $day")
 
         generators = get_generators(bidding_zone, day)
+        # cv46 P3a: documented Italian gas unit efficiencies (src/merit_order/cv46_it_eff.jl); off ⇒ untouched
+        cv46_on("EUPHEMIA_CV46_IT_EFF") && (generators = cv46_it_eff_reprice(generators, bidding_zone, day))
 
         # ── Stage 1: true up + price the offered fleet ──────────────────
         generators = _true_up_fleet(generators, bidding_zone, day, profile;
