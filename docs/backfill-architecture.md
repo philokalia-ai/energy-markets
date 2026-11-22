@@ -62,8 +62,8 @@ julia --project=. bin/reproduce.jl --range 2026-01-01 2026-06-30 --pipeline \
     --book-workers 10 --solver-workers 2
 ```
 
-Measured on a 10-day window against a DuckDB extract (80-core box, Gurobi, 2
-solver sessions, `test/scripts/pipeline_benchmark.jl`): day-parallel
+Measured on a 10-day window against a DuckDB extract (80-core box, Gurobi — since
+removed — with 2 solver sessions, `test/scripts/pipeline_benchmark.jl`): day-parallel
 `--workers 2` took 289 s, `--pipeline` 202 s — **1.43×**, at 73–78% solver
 utilization. The pipeline also absorbs hard days gracefully: one day needing
 two ~50 s MPCC solves did not stall the others.

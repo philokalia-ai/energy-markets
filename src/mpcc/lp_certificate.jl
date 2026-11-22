@@ -12,8 +12,8 @@
 #    fixed binaries is an LP; if it is optimal at the welfare-LP objective, the MPCC is solved
 #    to optimality and the caller skips its MIP solve.
 # 3. Otherwise the binaries are unfixed and the pattern (with the best values at hand) becomes
-#    the MIP start. The caller then solves the MIP; only if that MIP fails do its retry ladder
-#    (solver.jl) and the per-period HiGHS rungs (`_solve_mpcc_by_period`) run.
+#    the MIP start. The caller then solves the MIP; only if that MIP fails do the per-period
+#    HiGHS retry rungs (`_solve_mpcc_by_period`) run.
 #
 # Time: the welfare LP gets the caller's `time_limit`, the fixed-pattern solve what is left of
 # it, and the caller gives the fallback MIP the remainder. An exception anywhere in here is

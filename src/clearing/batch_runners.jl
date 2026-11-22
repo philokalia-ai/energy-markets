@@ -23,7 +23,7 @@ Provides comprehensive progress tracking and timing statistics.
 - `end_date::Date`: Last date to process (inclusive)
 - `zones::Vector{String}`: List of bidding zones to include (default: auto-discover from DB)
 - `order_method::Symbol`: only `:merit_order` (the UC-based and alternative books were removed in cv25)
-- `optimizer::String`: Optimization solver - "highs" (default), "gurobi", "cplex", "auto"
+- `optimizer::String`: "highs" (default) or "auto" — HiGHS is the only solver
 - `markup_factor::Float64`: Price markup factor for supply bids (default: 1.1)
 - `silent::Bool`: Whether to suppress solver output (default: true)
 - `save_to_db::Bool`: Whether to save results to database (default: false)
@@ -310,7 +310,7 @@ progress tracking, and optional parallel processing.
 - `date::Date`: The date for which to generate prices for all zones
 - `order_method::Symbol`: only `:merit_order` (the UC-based and alternative books were removed in cv25)
 - `model::Symbol`: Market clearing model - `:mpcc` (default, more may be added later)
-- `optimizer::String`: Optimization solver - "highs" (default), "gurobi", "cplex", "auto"
+- `optimizer::String`: "highs" (default) or "auto" — HiGHS is the only solver
 - `markup_factor::Float64`: Price markup factor for UC-based orders (default: 1.1)
 - `random_seed::Union{Int,Nothing}`: Random seed for alternative order book (default: nothing)
 - `silent::Bool`: Whether to suppress solver output (default: true)
@@ -367,9 +367,8 @@ result = generate_energy_prices_for_all_zones(Date(2024, 10, 1);
     max_workers=16,
     chunk_size=2)
 
-# With database saving and Gurobi optimizer (parallel)
+# With database saving (parallel)
 result = generate_energy_prices_for_all_zones(Date(2024, 10, 1);
-    optimizer="gurobi",
     save_to_db=true,
     silent=true,
     parallel=true)
@@ -671,7 +670,7 @@ and result aggregation across the entire date range.
 - All other arguments are passed through to `generate_energy_prices_for_all_zones()`:
   - `order_method::Symbol`: only `:merit_order` (the UC-based and alternative books were removed in cv25)
   - `model::Symbol`: Market clearing model - `:mpcc` (default)
-  - `optimizer::String`: Optimization solver - "highs" (default), "gurobi", "cplex", "auto"
+  - `optimizer::String`: "highs" (default) or "auto" — HiGHS is the only solver
   - `markup_factor::Float64`: Price markup factor for UC-based orders (default: 1.1)
   - `random_seed::Union{Int,Nothing}`: Random seed for alternative order book (default: nothing)
   - `silent::Bool`: Whether to suppress solver output (default: true)
@@ -732,8 +731,7 @@ result = generate_energy_prices_for_date_range(
     Date(2024, 1, 7);
     parallel=true,
     max_workers=20,
-    save_to_db=true,
-    optimizer="gurobi"
+    save_to_db=true
 )
 
 # Process specific date range with custom progress tracking

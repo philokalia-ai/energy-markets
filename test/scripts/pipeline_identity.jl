@@ -5,7 +5,7 @@
 # timeslot) price. Target: bit-identical (Δ == 0). Reports the max abs diff and
 # the first few mismatches; exits nonzero if any diff exceeds --tol (default 0).
 #
-#   julia --project=. test/scripts/pipeline_identity.jl [START END] [--tol X] [--optimizer gurobi|highs]
+#   julia --project=. test/scripts/pipeline_identity.jl [START END] [--tol X] [--optimizer highs]
 
 # cv25 fix 2 note: this harness previously compared a SEQUENTIAL arm (which
 # resolved the scoped :v3 flow default) against a PIPELINED arm (whose book
@@ -31,7 +31,7 @@ const FOOTPRINT = String[
 
 function parse_cli(argv)
     sd, ed = Date(2026, 4, 1), Date(2026, 4, 3)
-    tol = 0.0; optimizer = "gurobi"
+    tol = 0.0; optimizer = "highs"
     pos = String[]
     i = 1
     while i <= length(argv)

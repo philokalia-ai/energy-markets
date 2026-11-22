@@ -1,9 +1,8 @@
 #!/usr/bin/env julia
 # Acceptance guards for the 15-minute coupled multi-zone clear (INCREMENT 1).
 #
-# Runs against the public DuckDB extract with a MILP solver (Gurobi recommended):
+# Runs against the public DuckDB extract with HiGHS:
 #
-#   GRB_LICENSE_FILE=/path/to/gurobi.lic \
 #   EUPHEMIA_DATA_STORE=duckdb \
 #   EUPHEMIA_DUCKDB_PATH=data/public/euphemia-public.duckdb \
 #     julia --project=. test/scripts/test_15min_clearing.jl
@@ -23,7 +22,7 @@
 
 using Euphemia, Dates, Printf, Statistics, Test
 
-const OPT = get(ENV, "EUPHEMIA_TEST_OPTIMIZER", "gurobi")
+const OPT = "highs"
 const DAY = Date(2026, 4, 3)
 clear(zs, res) = run_multi_zone_market_clearing(DAY; zones=zs,
     order_method=:merit_order, optimizer=OPT, enrich_network=true,

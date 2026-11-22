@@ -420,6 +420,11 @@ adoption date: the scoreboard's since-freeze window is cv ≥ 45 from 2026-11-21
 
 Dated reminders and scoring-policy notes that do not change `code_version`.
 
+- **2026-11-22 — Gurobi removed; HiGHS only; prices unchanged.** The Gurobi dependency, optimizer choice,
+  licence handling and Gurobi-only retry rungs are deleted; HiGHS (with the LP certificate and the
+  per-period HiGHS rungs) is the only solve path. The HiGHS path itself is unchanged, so no `code_version`
+  bump (the rule: bump for every model iteration that gets a backfill).
+
 - **2026-11-22 — LP certificate replaces the MIP-first MPCC solve (cv46/lp-cert).** Each MPCC is
   solved by the welfare LP + fixed-pattern LP (`src/mpcc/lp_certificate.jl`); the MIP runs only on
   a failed certificate. Full-record re-clear (2024-07-01..2026-11-14) vs the cv45 record: 809,611 of

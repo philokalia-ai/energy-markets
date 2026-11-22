@@ -6,12 +6,10 @@
 # 1. Variable renewables (Wind, Solar) filtered from generators
 # 2. Day-ahead load forecast used instead of actual load
 #
-# Uses automatic worker selection: 2 for Gurobi, 50 for HiGHS
+# Uses 50 HiGHS workers.
 #
 # Usage:
-#   julia --project=. test/scripts/test_uc_fixes_parallel.jl [optimizer]
-#
-#   optimizer: "highs" (default) or "gurobi"
+#   julia --project=. test/scripts/test_uc_fixes_parallel.jl
 
 using Euphemia, Dates
 using Distributed
@@ -19,15 +17,8 @@ using Distributed
 const TEST_DATE = Date(2025, 12, 10)
 const ORDER_METHOD = :uc_based
 
-# Parse command line argument for optimizer
-optimizer = length(ARGS) >= 1 ? lowercase(ARGS[1]) : "highs"
-if optimizer ∉ ["highs", "gurobi"]
-    println("Invalid optimizer: $optimizer. Use 'highs' or 'gurobi'")
-    exit(1)
-end
-
-# Worker count based on optimizer (Gurobi WLS license limits to 2)
-num_workers = optimizer == "gurobi" ? 2 : 50
+optimizer = "highs"
+num_workers = 50
 
 println("=" ^ 70)
 println("UC INFEASIBILITY FIXES TEST (PARALLEL)")

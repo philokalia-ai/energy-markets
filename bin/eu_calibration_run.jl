@@ -13,7 +13,7 @@
 #   CLEARING_MODE          save key (default 'multi_zone_eu_cal')
 #   APPLY_PROFILES         'true' (Phase 1+2+3) or 'false' (Phase-1-only ablation)
 #   SAVE                   'true'/'false' (default true)
-#   OPTIMIZER              'auto'/'gurobi'/'highs' (default auto)
+#   OPTIMIZER              'auto'/'highs' (default auto; HiGHS is the only solver)
 
 using Euphemia, Dates, Statistics
 

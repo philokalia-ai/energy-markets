@@ -156,12 +156,11 @@ Two neighbours (GB on Viking, Ukraine) are instead modeled as elastic
 
 ## Solvers
 
-**HiGHS is the default and needs no license.** Since cv20 the EU-footprint
-path clears in canonical per-period-decomposed mode, which is **bit-identical
-across HiGHS and Gurobi** at 60-minute resolution (~511 s/day vs ~10 s), so
-the open stack reproduces the record exactly. Gurobi (ours is academic) is the
-faster development option via `optimizer="gurobi"` — and is *required* for the
-cv35 JAO network, where HiGHS segfaults on the 108-link problem.
+**HiGHS is the only solver and needs no license.** Since cv20 the EU-footprint
+path clears in canonical per-period-decomposed mode, and since cv46 each period is
+solved by an LP certificate without branch-and-bound (the MIP runs only where the
+certificate fails; docs/experiments/lp-certificate.md), so the open stack produces
+the record directly.
 
 **15-minute clearing** is opt-in (`clear_resolution_minutes=15`): hourly inputs
 are upsampled by replication, never division, and at 60-minute settings the
@@ -308,8 +307,7 @@ workers/    Cloudflare Worker serving the public /v1/ data API
 ## Requirements
 
 - **Julia** (`julia --project=. -e "using Pkg; Pkg.instantiate()"`).
-- **Solver:** bundled **HiGHS** by default, no license. **Gurobi** optional
-  (faster; required for the cv35 JAO network).
+- **Solver:** bundled **HiGHS** (the only solver), no license.
 - **Data:** the public DuckDB extract (recommended, no database required) or a
   PostgreSQL database with the ENTSO-E schema (maintainers).
 

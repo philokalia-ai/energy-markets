@@ -155,7 +155,7 @@ Supports hourly and sub-hourly temporal resolutions, following the input data.
 - `order_method::Symbol`: only `:merit_order` (the UC-based and alternative books
   were removed in cv25)
 - `model::Symbol`: Market clearing model - `:mpcc` (more models may be added later)
-- `optimizer::String`: Optimization solver - "highs" (default), "gurobi", "cplex", "auto"
+- `optimizer::String`: "highs" (default) or "auto" — HiGHS is the only solver
 - `markup_factor`, `random_seed`, `force_rerun`: INERT since cv25 — they served the
   deleted UC / alternative books and are accepted only so existing callers do not break
 - `silent::Bool`: Whether to suppress solver output (default: true)

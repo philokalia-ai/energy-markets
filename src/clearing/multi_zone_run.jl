@@ -22,7 +22,7 @@ transmission flow constraints between zones based on ENTSO-E ATC data.
 - `date::Date`: The date for which to run market clearing
 - `zones::Vector{String}`: List of bidding zones to include (default: auto-discover from DB)
 - `order_method::Symbol`: only `:merit_order` (the UC-based and alternative books were removed in cv25) (default: `:merit_order`)
-- `optimizer::String`: Optimization solver - "highs" (default), "gurobi", "cplex", "auto"
+- `optimizer::String`: "highs" (default) or "auto" — HiGHS is the only solver
 - `markup_factor::Float64`: Price markup factor for supply bids (default: 1.1)
 - `silent::Bool`: Whether to suppress solver output (default: true)
 - `save_to_db::Bool`: Whether to save results to database (default: false)
@@ -105,10 +105,9 @@ function run_multi_zone_market_clearing(date::Date;
                                         # An explicit env value always wins.
                                         ex_ante_mode::Union{Nothing,Symbol}=nothing,
                                         # MPCC solver budget. Defaults unchanged
-                                        # (900 s / 1e-6). HiGHS needs a longer
-                                        # budget than Gurobi to find a first
-                                        # incumbent on the 39-zone MIP — see
-                                        # bin/reproduce.jl.
+                                        # (900 s / 1e-6). A failed-certificate
+                                        # MIP on the monolithic 39-zone book can
+                                        # need longer — see bin/reproduce.jl.
                                         mpcc_time_limit::Float64=900.0,
                                         mpcc_mip_gap::Float64=1e-6,
                                         # Refuse to save a day whose coupled clear
@@ -167,10 +166,8 @@ function run_multi_zone_market_clearing(date::Date;
         println("   🔮 Ex-ante flow mode: $resolved_flow_mode (scoped default)")
 
     # Resolve the period-decomposition policy (cv20): decomposed is the
-    # canonical mode on the EU-footprint path for every solver (bit-identical
-    # across Gurobi/HiGHS — the record becomes solver-invariant, and HiGHS can
-    # actually solve it: the monolithic 39-zone MIP finds no HiGHS incumbent
-    # in 20+ min). Non-enriched paths stay monolithic so the SEE legacy record
+    # canonical mode on the EU-footprint path (HiGHS can actually solve it:
+    # the monolithic 39-zone MIP finds no HiGHS incumbent in 20+ min). Non-enriched paths stay monolithic so the SEE legacy record
     # keeps its byte-identity. An explicit kwarg wins over the policy.
     resolved_decompose = decompose_periods !== nothing ? decompose_periods :
         (enrich_network && order_method == :merit_order)
@@ -224,9 +221,8 @@ function run_multi_zone_market_clearing(date::Date;
                                                    decompose_periods=resolved_decompose)
 
     # PER-DAY ROBUSTNESS FALLBACK (iter8). If the coupled MPCC is still unusable
-    # after the LP certificate and, where it failed, the MIP with its retry
-    # ladder (the indicator-form rung is Gurobi-only; HiGHS gets the per-period
-    # rungs) and any zone's profile uses a non-:p95 fleet-truth
+    # after the LP certificate and, where it failed, the MIP with the per-period
+    # HiGHS retry rungs, and any zone's profile uses a non-:p95 fleet-truth
     # mode, re-clear the WHOLE day with baseline :p95 books (the measured
     # iter6 state) rather than ship a missing day. Implemented as a guarded
     # recursion with a process-wide override so pass 2's anchored rebuilds
