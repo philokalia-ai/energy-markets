@@ -211,6 +211,11 @@ function _reconstruct_component_prices(nodes::Vector{String}, periods::Vector{St
             fallback_cells = fallback_cells, inconsistent_brackets = inconsistent_brackets)
 end
 
+# Research-only hook (highs-blocks Track 2), called as hook(:pre, model, book)
+# right before the monolithic optimize! and hook(:post, model, book) after the
+# retry ladder. `nothing` (default) leaves the solve path byte-identical.
+const RESEARCH_SOLVE_HOOK = Ref{Any}(nothing)
+
 """
     solve_mpcc_market_clearing(order_book::MPCCOrderBook; 
                               preferred_solver::String="auto", 
@@ -700,9 +705,34 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
                                     for node_id in order_book.nodes, time_period in order_book.periods)
         )
 
+        # Research hook (highs-blocks Track 2): `nothing` by default, so the
+        # solve path is unchanged. A hook may inspect/rename/dump the model;
+        # returning :skip returns an :error result without solving.
+        research_hook = RESEARCH_SOLVE_HOOK[]
+        if research_hook !== nothing &&
+           research_hook(:pre, model, order_book) === :skip
+            return MPCCResult(:error, 0.0, Dict{String,Dict{String,Float64}}(),
+                Dict{String,Float64}(), Dict{String,Float64}(), Dict{String,Float64}(),
+                Dict{String,Dict{String,Float64}}(), 0.0, 0.0, solver_name,
+                "research hook: solve skipped")
+        end
+
+        # Research flag (highs-blocks M1, default off): LP certificate / MIP start.
+        lp_cert_ok = false
+        if lp_cert_enabled()
+            lp_cert_ok, lp_info = try
+                _lp_certify!(model, optimizer)
+            catch e
+                @warn "LP certificate failed — plain MIP" exception = (e, catch_backtrace())
+                (false, Dict{String,Any}("outcome" => "error"))
+            end
+            lp_info["periods"] = order_book.periods
+            LP_CERT_LOG[] isa Vector && push!(LP_CERT_LOG[], lp_info)
+        end
+
         # Solve the model
         dump_ctx === nothing || _dump_write_model(model, dump_ctx[1], dump_ctx[2])
-        optimize!(model)
+        lp_cert_ok || optimize!(model)
         dump_ctx === nothing || _dump_write_solution(model, dump_ctx[1], dump_ctx[2];
             extra=Dict{String,Any}("solve_time" => _safe_solve_time(model)))
 
@@ -788,6 +818,7 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
                 @warn "Indicator retry unavailable ($(sprint(showerror, e))) — keeping INFEASIBLE"
             end
         end
+        research_hook === nothing || research_hook(:post, model, order_book)
         solve_time = time() - start_time
 
         # Extract results
