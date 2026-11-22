@@ -887,7 +887,8 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
                     flow_values[(pair, t)] = value(flow[pair, t])
                 end
             end
-            recon_diag = dump_ctx === nothing ? nothing : Any[]
+            p1_on = P1_COLLECT[] isa Vector   # research P1 (EUPHEMIA_BLOCK_PRICE), inert otherwise
+            recon_diag = (dump_ctx === nothing && !p1_on) ? nothing : Any[]
             recon = _reconstruct_component_prices(
                 order_book.nodes, order_book.periods,
                 zone_pairs,   # already empty whenever flow === nothing
@@ -896,6 +897,7 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
                 market_prices; diag=recon_diag)
             dump_ctx === nothing || _dump_write_recon(model, dump_ctx[1], dump_ctx[2],
                 market_prices, recon, recon_diag, dump_np, flow_values, flow_caps)
+            p1_on && _p1_collect!(recon_diag, flow_values, flow_caps, recon.prices)
             market_prices = recon.prices
             if cert_mode !== :off
                 _lp_cert_record!(lp_info, shadow, model, order_book, market_prices,

@@ -47,7 +47,8 @@ function resolve_complex_orders(order_book::MPCCOrderBook;
     preferred_solver::String="highs", verbose::Bool=true,
     forced_reject::Set{String}=Set{String}(), block_time_limit::Float64=300.0,
     release_blocks::Bool=false, dump=nothing,
-    fixed_accept::Union{Nothing,Set{String}}=nothing)   # research (replay scorer): z[f] := f ∈ A
+    fixed_accept::Union{Nothing,Set{String}}=nothing,   # research (replay scorer): z[f] := f ∈ A
+    pre_optimize=nothing)   # research (hb-lazy in-tree PAB): f(model, z) called just before optimize!
     all_linked = LinkedHourlyOrder[o for o in order_book.orders if o isa LinkedHourlyOrder]
     isempty(all_linked) && return order_book
     rest = MarketOrder[o for o in order_book.orders if !(o isa LinkedHourlyOrder)]
@@ -226,6 +227,7 @@ function resolve_complex_orders(order_book::MPCCOrderBook;
         end
         @objective(model, Max, obj - 10000.0 * sum(shed))
         dump === nothing || _dump_master_pre(model, dump, simple, linked, periods)
+        pre_optimize === nothing || pre_optimize(model, isempty(blk_fams) ? nothing : model[:z])
         optimize!(model)
         dump === nothing || _dump_master_post(model, dump, t0, length(blk_fams),
                                               length(forced_reject))
@@ -341,11 +343,32 @@ function solve_with_complex_orders(order_book::MPCCOrderBook, solve::Function;
             verbose=verbose, forced_reject=forced,
             dump=dumping ? (ddir, "master_r$rnd") : nothing)
         info = LAST_COMPLEX_INFO[]
-        if dumping
-            master_wall = time() - tm
-            res, plog, mpcc_secs = _dump_solve(solve, ob2, ddir, "mpcc_blk_r$rnd")
-        else
-            res = solve(ob2)
+        # research P1 (EUPHEMIA_BLOCK_PRICE=existence): collect the reconstruction brackets
+        p1 = block_price_mode() === :existence
+        p1c = Any[]
+        p1 && (P1_COLLECT[] = p1c)
+        local res, plog, mpcc_secs
+        dumping && (master_wall = time() - tm)
+        try
+            if dumping
+                res, plog, mpcc_secs = _dump_solve(solve, ob2, ddir, "mpcc_blk_r$rnd")
+            else
+                res = solve(ob2)
+            end
+        finally
+            P1_COLLECT[] = nothing
+        end
+        if p1 && res.status == :optimal && info !== nothing && info.status == :optimal &&
+           !isempty(info.blocks)
+            # research P1: search the admissible prices for one that keeps every accepted block
+            # in the money; the PAB check below then runs at the repaired prices
+            newp, p1stats = block_price_repair(res.market_prices, p1c, info.blocks,
+                order_book.periods; preferred_solver=preferred_solver)
+            P1_LAST[] = p1stats
+            verbose && println("   🧮 P1 block-price repair round $rnd: $(p1stats)")
+            res = MPCCResult(res.status, res.objective_value, newp, res.stepwise_acceptance,
+                res.block_acceptance, res.block_activation, res.transmission_flows,
+                res.solve_time, res.total_time, res.solver_name, res.message)
         end
         usable = res.status == :optimal ||
                  (res.status == :time_limit && !isempty(res.market_prices))
