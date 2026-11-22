@@ -2336,17 +2336,24 @@ function create_merit_order_book(
         # identically-priced originals). This directly cuts the MPCC binary
         # count, which is what limits multi-zone solve times.
         merged = Dict{Tuple{Symbol,Float64,DateTime},Float64}()
-        for o in orders
+        # EUPHEMIA_DETERMINISTIC_SUMS=1 (research): the incoming order comes from DB
+        # queries without ORDER BY, so the float sums below depend on row order (measured:
+        # AT 2026-10-19 01:00 merged quantity 2 ulp apart between runs). With the flag the
+        # terms are summed in a total order and the merged blocks are emitted sorted.
+        det = _deterministic_sums()
+        merge_src = det ? sort(orders; by=o -> (o.type, o.date_time, o.price, o.quantity)) : orders
+        for o in merge_src
             key = (o.type, round(o.price, digits=2), o.date_time)
             merged[key] = get(merged, key, 0.0) + o.quantity
         end
         pre_merge_count = length(orders)
         orders = [SimpleOrder(t, p, q, Symbol(bidding_zone), dt, resolution_minutes)
-                  for ((t, p, dt), q) in merged]
+                  for ((t, p, dt), q) in (det ? sort(collect(merged); by=first) : merged)]
         println("  🔗 Merged $(pre_merge_count) orders into $(length(orders)) price-distinct blocks")
         if !isempty(family_members)
             fm = Dict{Tuple{String,Float64,DateTime},Float64}()
-            for (o, f) in family_members
+            for (o, f) in (det ? sort(family_members; by=x -> (x[2], x[1].date_time, x[1].price, x[1].quantity)) :
+                           family_members)
                 k = (f, round(o.price, digits=2), o.date_time)
                 fm[k] = get(fm, k, 0.0) + o.quantity
             end
