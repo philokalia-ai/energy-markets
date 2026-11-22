@@ -25,8 +25,12 @@ exact NP constraint is opt-in on the record path) — `test/test_lp_certificate.
   fresh process pays ~60 s of JIT).
 - Complex-order books (`EUPHEMIA_COMPLEX_ORDERS=blocks` / `ps,blocks`, 4 days, every PAB round incl.
   fallbacks), shadow mode: 1,176 / 1,176 certified, 45,864 / 45,864 published cells identical.
-- Before shipping: full cv45 record (2024-07-01..2026-11-14) re-cleared with this code vs c1 — see
-  the PR.
+- Full cv45 record (2024-07-01..2026-11-14, 866 days) re-cleared with this code vs the cv45 record:
+  0 MIP fallbacks in 41,614 period solves; 809,611 / 809,616 prices identical. The 5 others (RS
+  2025-11-19 18:00, SE3 2026-11-02 20:00, BG 2026-09-05 11:00, NO3/NO5 2025-05-09 08:00) are
+  equal-welfare ties: same objective to ≤ 1 ulp, a different flow pattern at an ATC limit, which the
+  price reconstruction maps to a different price component; the MIP-first path flips on the same
+  cells under ulp-level input changes. Day median 59 s vs 261 s.
 
 **Why it works.** Without inter-temporal coupling and without unpriced primal rows, the MPCC's
 price conditions are the KKT conditions of the welfare LP, so the welfare optimum is an MPCC

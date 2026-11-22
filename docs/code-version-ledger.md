@@ -422,9 +422,12 @@ Dated reminders and scoring-policy notes that do not change `code_version`.
 
 - **2026-11-22 — LP certificate replaces the MIP-first MPCC solve (cv46/lp-cert).** Each MPCC is
   solved by the welfare LP + fixed-pattern LP (`src/mpcc/lp_certificate.jl`); the MIP runs only on
-  a failed certificate. Prices are byte-identical to cv45 (full-record identity vs the cv45 record,
-  docs/experiments/lp-certificate.md), so no `code_version` bump: no backfill and no model change,
-  only a faster solve.
+  a failed certificate. Full-record re-clear (2024-07-01..2026-11-14) vs the cv45 record: 809,611 of
+  809,616 hourly prices identical; the 5 others are equal-welfare ties (same objective to ≤ 1 ulp,
+  a different but equally optimal flow pattern that the price reconstruction maps to another
+  component), the same class as the decomposed-vs-monolithic ties, and the MIP-first path itself flips
+  on such ties between runs. No model change and no backfill, so no `code_version` bump (the rule:
+  bump for every model iteration that gets a backfill); docs/experiments/lp-certificate.md.
 
 - **2026-11-15 — Freeze rule (owner-approved 2026-11-16, #431).** The 43
   declared `PROVENANCE` characteristics in `src/merit_order/zone_profiles.jl`
