@@ -48,7 +48,7 @@ using Euphemia.MarketOrders: SimpleOrder, LinkedHourlyOrder, MarketOrder
     @test MPCC.resolve_complex_orders(ob) === ob
 end
 
-@testset "Complex orders: regular thermal blocks (MILP master + PAB loop)" begin
+@testset "Complex orders: regular thermal blocks (MILP master + acceptance search)" begin
     periods = ["20261104-0000", "20261104-0100"]
     dt = [DateTime(2026, 11, 4, 0), DateTime(2026, 11, 4, 1)]
     Z = :Z
@@ -78,7 +78,8 @@ end
     # PAB: hour 1 demand 50 with 30 MW of cheap supply at 10. The master accepts the
     # block (welfare: −1100 in hour 1, +2000 in hour 2), but with its 50 MW fixed hour 1
     # reprices to ≤ 10 and the block loses money over the day ((≤10−60)·50 + 40·50 < 0)
-    # → paradoxically accepted → rejected and re-solved: hour 1 back to gas at 80.
+    # → paradoxically accepted → forced out by the seed round 2: hour 1 back to gas at 80.
+    # (It is now paradoxically rejected; the gap to UB is far below the stop, so it stays out.)
     ob = book([50.0, 100.0], 60.0, [80.0, 100.0])
     push!(ob.orders, SimpleOrder(:supply, 10.0, 30.0, Z, dt[1], 60))
     r = clear(ob)
@@ -88,7 +89,52 @@ end
     @test r.market_prices["Z"]["20261104-0000"] ≈ 80.0
 end
 
-@testset "Complex orders: review fixes (fixed injections, PAB fallback, release, as-of cutoff)" begin
+@testset "Complex orders: block search is PAB-free, deterministic, beats permanent rejection" begin
+    # Two blocks a (60 €) and b (61 €), 1000 MW in both hours. Hour 1: demand 2000, 800 MW
+    # at 10 €, gas at 80 €; hour 2: demand 4000, gas at 100 €. The master takes both (a alone
+    # saves 60 k€; b adds +2 k€). With both fixed, hour 1 needs no other supply, its price
+    # drops to ≤ 10 €, and both blocks lose money: both PAB. A loop that rejects PABs
+    # permanently (the old 4-round loop) then has ∅ — PAB-free, 64 k€ below the UB. The
+    # search reinserts the in-the-money a (hour 1 back on gas at 80 €) and stops within the
+    # gap; b stays paradoxically rejected.
+    periods = ["20261104-0000", "20261104-0100"]
+    dt = [DateTime(2026, 11, 4, 0), DateTime(2026, 11, 4, 1)]
+    Z = :Z
+    o = MarketOrder[]
+    for (h, dem, gas) in ((1, 2000.0, 80.0), (2, 4000.0, 100.0))
+        push!(o, SimpleOrder(:demand, 3000.0, dem, Z, dt[h], 60))
+        push!(o, SimpleOrder(:supply, gas, 10000.0, Z, dt[h], 60))
+        push!(o, LinkedHourlyOrder(:supply, 60.0, 1000.0, Z, dt[h], 60, "BLK:Z:a", NaN))
+        push!(o, LinkedHourlyOrder(:supply, 61.0, 1000.0, Z, dt[h], 60, "BLK:Z:b", NaN))
+    end
+    push!(o, SimpleOrder(:supply, 10.0, 800.0, Z, dt[1], 60))
+    ob = MPCC.MPCCOrderBook(o, ["Z"], periods, (-500.0, 3000.0), nothing)
+    mpcc(b) = MPCC.solve_mpcc_market_clearing(b; preferred_solver="highs", decompose_periods=true, verbose=false)
+
+    r = MPCC.solve_with_complex_orders(ob, mpcc; verbose=false)
+    info = MPCC.LAST_COMPLEX_INFO[]
+    @test r.status == :optimal
+    @test sort(collect(keys(info.blocks))) == ["BLK:Z:a"]
+    @test r.market_prices["Z"]["20261104-0000"] ≈ 80.0
+    @test r.market_prices["Z"]["20261104-0100"] ≈ 100.0
+    # PAB-free: every accepted block is in the money at the returned prices
+    B = MPCC._block_structure(ob)
+    @test all(MPCC._block_surplus(B[f], r.market_prices) >= -1e-3 for f in keys(info.blocks))
+    # better W than permanent rejection: the old loop's round 2 (both forced out) is ∅
+    MPCC.resolve_complex_orders(ob; verbose=false, forced_reject=Set(["BLK:Z:a", "BLK:Z:b"]))
+    w_loop = MPCC.LAST_COMPLEX_INFO[].master_objective
+    @test isempty(MPCC.LAST_COMPLEX_INFO[].blocks)
+    @test info.search.W ≈ w_loop + 60_000.0 atol = 1e-3
+    @test info.search.gap ≈ 2_000.0 atol = 1e-3
+    @test info.search.phase == "insert"
+    # deterministic: a second run gives the same set, prices and pricing count, bit for bit
+    r2 = MPCC.solve_with_complex_orders(ob, mpcc; verbose=false)
+    @test isequal(r2.market_prices, r.market_prices)
+    @test keys(MPCC.LAST_COMPLEX_INFO[].blocks) == keys(info.blocks)
+    @test MPCC.LAST_COMPLEX_INFO[].search.pricings == info.search.pricings
+end
+
+@testset "Complex orders: review fixes (fixed injections, rejection, release, as-of cutoff)" begin
     t0 = ["20261104-0000"]; d0 = DateTime(2026, 11, 4, 0); Z = :Z
     # (4) the MPCC honours fixed injections (single-zone, decomposed path)
     o = MarketOrder[SimpleOrder(:demand, 3000.0, 100.0, Z, d0, 60),
@@ -99,7 +145,9 @@ end
     obf = MPCC.MPCCOrderBook(o, ["Z"], t0, (-500.0, 3000.0), nothing, Dict(("Z", t0[1]) => 80.0))
     @test MPCC.solve_mpcc_market_clearing(obf; preferred_solver="highs", verbose=false).market_prices["Z"][t0[1]] ≈ 10.0
 
-    # (2)+(3) PAB exhaustion → blocks released to the ORIGINAL must-run offers (BLKFB)
+    # (2) a block whose acceptance is paradoxical is REJECTED (the plant does not run): its
+    # original must-run offers (BLKFB) are not restored — they only come back on a master
+    # failure (3). Hour 1: 50 MW from the 10-€ unit (30) and gas → 80; hour 2: gas → 100.
     periods = ["20261104-0000", "20261104-0100"]
     dt = [DateTime(2026, 11, 4, 0), DateTime(2026, 11, 4, 1)]
     orders = MarketOrder[]
@@ -112,15 +160,27 @@ end
     end
     push!(orders, SimpleOrder(:supply, 10.0, 30.0, Z, dt[1], 60))
     bk = MPCC.MPCCOrderBook(orders, ["Z"], periods, (-500.0, 3000.0), nothing)
-    r = MPCC.solve_with_complex_orders(bk,
-        b -> MPCC.solve_mpcc_market_clearing(b; preferred_solver="highs", decompose_periods=true, verbose=false);
-        verbose=false, max_pab_rounds=1)
-    @test MPCC.LAST_COMPLEX_INFO[].status == :pab_fallback
-    @test startswith(r.message, "COMPLEX-ORDERS PAB FALLBACK")
-    # baseline book: hour 1 = 30 MW @3 + 20 MW from the 10-€ unit → 10; hour 2 = 50 MW
-    # of must-run + 50 MW gas → 100
-    @test r.market_prices["Z"]["20261104-0000"] ≈ 10.0
+    mpcc(b) = MPCC.solve_mpcc_market_clearing(b; preferred_solver="highs", decompose_periods=true, verbose=false)
+    r = MPCC.solve_with_complex_orders(bk, mpcc; verbose=false)
+    @test MPCC.LAST_COMPLEX_INFO[].status == :optimal
+    @test isempty(MPCC.LAST_COMPLEX_INFO[].blocks)
+    @test r.market_prices["Z"]["20261104-0000"] ≈ 80.0
     @test r.market_prices["Z"]["20261104-0100"] ≈ 100.0
+    # budget spent in the seed (1 pricing): the prune goes straight to ∅ — still PAB-free
+    r = MPCC.solve_with_complex_orders(bk, mpcc; verbose=false, max_pricings=1)
+    @test isempty(MPCC.LAST_COMPLEX_INFO[].blocks)
+    @test MPCC.LAST_COMPLEX_INFO[].search.phase == "prune"
+    @test r.market_prices["Z"]["20261104-0000"] ≈ 80.0
+    # a pricing solve that fails before any PAB-free set: its result is returned as is
+    # (no release to the must-run offers), as a plain clear would
+    n = Ref(0)
+    failing(b) = (n[] += 1; res = mpcc(b); n[] == 1 ? res :
+        MPCC.MPCCResult(:infeasible, NaN, Dict{String,Dict{String,Float64}}(), res.stepwise_acceptance,
+            res.block_acceptance, res.block_activation, res.transmission_flows, 0.0, 0.0,
+            res.solver_name, "injected failure"))
+    r = MPCC.solve_with_complex_orders(bk, failing; verbose=false)
+    @test r.status == :infeasible && r.message == "injected failure"
+    @test n[] == 2
 
     # (3) master failure releases to exactly the baseline book (blocks dropped,
     # original must-run restored, storage uncapped) — failure injected via an
