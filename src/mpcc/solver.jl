@@ -1,4 +1,4 @@
-# solver.jl — solve_mpcc_market_clearing — the complementarity clearing solve with its robustness retry ladder — plus _solve_mpcc_by_period (period decomposition for HiGHS).
+# solver.jl — solve_mpcc_market_clearing — the complementarity clearing solve (LP certificate first, lp_certificate.jl; the MIP with its robustness retry ladder only when the certificate fails) — plus _solve_mpcc_by_period (period decomposition).
 # Included by ../MPCC.jl inside `module MPCC` (definition order preserved).
 
 
@@ -200,16 +200,20 @@ end
 """
     solve_mpcc_market_clearing(order_book::MPCCOrderBook; 
                               preferred_solver::String="auto", 
-                              silent::Bool=true,
-                              big_m::Float64=BIG_M_PARAMETER)
+                              silent::Bool=true)
 
 Solves the MPCC-based market clearing problem using typed order book structure.
+
+The model is built as a big-M complementarity MIP, then solved by the LP certificate
+(`_lp_certify!`, lp_certificate.jl): welfare LP → complementarity pattern → fixed-pattern
+LP. When that certifies (every period of the cv45 production check did), no MIP is solved;
+otherwise the MIP runs from the pattern as a start, followed (only on a failed MIP) by
+the retry ladder below and the per-period HiGHS rungs in `_solve_mpcc_by_period`.
 
 # Arguments
 - `order_book::MPCCOrderBook`: Typed market order book structure
 - `preferred_solver::String`: Preferred solver ("auto", "highs", "gurobi", or "cplex")
 - `silent::Bool`: Whether to suppress solver output
-- `big_m::Float64`: Big-M parameter for complementarity constraints
 
 # Returns
 - `MPCCResult`: Market clearing results including prices and order acceptance
@@ -217,7 +221,6 @@ Solves the MPCC-based market clearing problem using typed order book structure.
 function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
     preferred_solver::String="auto",
     silent::Bool=true,
-    big_m::Float64=BIG_M_PARAMETER,
     time_limit::Float64=900.0,
     mip_gap::Float64=1e-6,
     heuristic_effort::Union{Float64,Nothing}=nothing,
@@ -247,7 +250,7 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
     if any(o -> o isa LinkedHourlyOrder, order_book.orders)
         return solve_with_complex_orders(order_book,
             ob -> solve_mpcc_market_clearing(ob; preferred_solver=preferred_solver,
-                silent=silent, big_m=big_m, time_limit=time_limit, mip_gap=mip_gap,
+                silent=silent, time_limit=time_limit, mip_gap=mip_gap,
                 heuristic_effort=heuristic_effort, extra_attributes=extra_attributes,
                 decompose_periods=decompose_periods, verbose=verbose);
             preferred_solver=preferred_solver, verbose=verbose)
@@ -258,7 +261,7 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
     # problem, so it falls through to the monolithic path unchanged.
     if decompose_periods && length(order_book.periods) > 1
         return _solve_mpcc_by_period(order_book;
-            preferred_solver=preferred_solver, silent=silent, big_m=big_m,
+            preferred_solver=preferred_solver, silent=silent,
             time_limit=time_limit, mip_gap=mip_gap,
             heuristic_effort=heuristic_effort, verbose=verbose)
     end
@@ -307,22 +310,6 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
         set_attribute(model, MOI.RelativeGapTolerance(), mip_gap)
     catch
         # attribute not supported by this solver version — proceed with defaults
-    end
-    # Optional: crank the solver's primal-heuristic effort (HiGHS
-    # "mip_heuristic_effort", default 0.05) to find a first incumbent sooner
-    # on the large multi-zone complementarity MIP. No-op if unsupported.
-    for (k, v) in extra_attributes
-        try
-            set_optimizer_attribute(model, k, v)
-        catch e
-            @warn "optimizer attribute $k=$v not applied: $(sprint(showerror, e))"
-        end
-    end
-    if heuristic_effort !== nothing && solver_name == "HiGHS"
-        try
-            set_optimizer_attribute(model, "mip_heuristic_effort", heuristic_effort)
-        catch
-        end
     end
 
     start_time = time()
@@ -670,8 +657,35 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
                                     for node_id in order_book.nodes, time_period in order_book.periods)
         )
 
-        # Solve the model
-        optimize!(model)
+        # Solve the model: the LP certificate first (lp_certificate.jl). The MIP runs
+        # only when the certificate does not hold (or raised), started from its
+        # pattern, within what is left of the time budget; the retry ladder below
+        # and the per-period HiGHS rungs (_solve_mpcc_by_period) act on that MIP.
+        t_cert = time()
+        certified = _lp_certify_guarded!(model, optimizer; time_limit=time_limit)
+        c = LP_CERT_COUNTS[]
+        LP_CERT_COUNTS[] = certified ? (certified=c.certified + 1, fallback=c.fallback) :
+                                       (certified=c.certified, fallback=c.fallback + 1)
+        if !certified
+            set_time_limit_sec(model, max(time_limit - (time() - t_cert), 1.0))
+            # MIP-only options, applied here so a certified solve never sees them:
+            # raw attributes (the per-period HiGHS retry rungs) and HiGHS's
+            # primal-heuristic effort ("mip_heuristic_effort", default 0.05).
+            for (k, v) in extra_attributes
+                try
+                    set_optimizer_attribute(model, k, v)
+                catch e
+                    @warn "optimizer attribute $k=$v not applied: $(sprint(showerror, e))"
+                end
+            end
+            if heuristic_effort !== nothing && solver_name == "HiGHS"
+                try
+                    set_optimizer_attribute(model, "mip_heuristic_effort", heuristic_effort)
+                catch
+                end
+            end
+            optimize!(model)
+        end
 
         # Gurobi's presolve can return the ambiguous INFEASIBLE_OR_UNBOUNDED
         # on numerically borderline instances (observed: the 2026-04-02 EU
@@ -941,7 +955,7 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
 end
 
 """
-    _solve_mpcc_by_period(order_book; preferred_solver, silent, big_m,
+    _solve_mpcc_by_period(order_book; preferred_solver, silent,
                           time_limit, mip_gap, heuristic_effort, verbose) -> MPCCResult
 
 Period-decomposition driver. Because the MPCC has no inter-temporal coupling,
@@ -953,9 +967,10 @@ solves each on its own via the monolithic `solve_mpcc_market_clearing`, and
 merges the per-period results into one full-day `MPCCResult` of the same shape
 that all downstream code (saving, scoring, two-pass anchor extraction) expects.
 
-Each per-period solve runs the FULL retry ladder in
-`solve_mpcc_market_clearing`, so a single numerically hard period falls back on
-its own without sinking the rest of the day.
+Each period is solved on its own by `solve_mpcc_market_clearing` (LP certificate;
+on a failed certificate the MIP with its retry ladder) and, if that result is
+unusable, re-solved by the HiGHS rungs below, so a single numerically hard period
+falls back on its own without sinking the rest of the day.
 
 Merge semantics:
 - `market_prices` / `transmission_flows`: union of per-period slices.
@@ -970,7 +985,6 @@ Merge semantics:
 function _solve_mpcc_by_period(order_book::MPCCOrderBook;
     preferred_solver::String="auto",
     silent::Bool=true,
-    big_m::Float64=BIG_M_PARAMETER,
     time_limit::Float64=900.0,
     mip_gap::Float64=1e-6,
     heuristic_effort::Union{Float64,Nothing}=nothing,
@@ -978,6 +992,7 @@ function _solve_mpcc_by_period(order_book::MPCCOrderBook;
 
     periods = order_book.periods
     println("   🧩 Period-decomposition: $(length(periods)) independent single-period clears (solver=$(preferred_solver))")
+    cert0 = LP_CERT_COUNTS[]
 
     simple_orders = filter(o -> isa(o, SimpleOrder), order_book.orders)
 
@@ -1017,7 +1032,7 @@ function _solve_mpcc_by_period(order_book::MPCCOrderBook;
                                                if k[2] == t)
         )
         r = solve_mpcc_market_clearing(sub_book;
-            preferred_solver=preferred_solver, silent=silent, big_m=big_m,
+            preferred_solver=preferred_solver, silent=silent,
             time_limit=time_limit, mip_gap=mip_gap,
             heuristic_effort=heuristic_effort,
             decompose_periods=false, verbose=false)
@@ -1048,7 +1063,7 @@ function _solve_mpcc_by_period(order_book::MPCCOrderBook;
             for (ri, attrs) in enumerate(rungs)
                 @warn "Period $t: HiGHS returned $(r.status) — per-period retry rung $ri ($(join(first.(attrs), ",")))"
                 r2 = solve_mpcc_market_clearing(sub_book;
-                    preferred_solver=preferred_solver, silent=silent, big_m=big_m,
+                    preferred_solver=preferred_solver, silent=silent,
                     time_limit=time_limit, mip_gap=mip_gap,
                     heuristic_effort=heuristic_effort,
                     extra_attributes=attrs,
@@ -1125,6 +1140,9 @@ function _solve_mpcc_by_period(order_book::MPCCOrderBook;
                "(per-period statuses: $stat_list)"
     end
 
+    cert1 = LP_CERT_COUNTS[]
+    println("   🧾 LP certificate: $(cert1.certified - cert0.certified) period solve(s) certified, " *
+            "$(cert1.fallback - cert0.fallback) fell back to the MIP")
     n_opt = count(s -> s == :optimal, statuses)
     msg = "Period-decomposed clear: $(n_opt)/$(length(periods)) periods optimal, " *
           "merged status $(merged_status)"

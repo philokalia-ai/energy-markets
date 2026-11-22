@@ -223,9 +223,10 @@ function run_multi_zone_market_clearing(date::Date;
                                                    heuristic_effort=mpcc_heuristic_effort,
                                                    decompose_periods=resolved_decompose)
 
-    # PER-DAY ROBUSTNESS FALLBACK (iter8). If the coupled MPCC stays
-    # infeasible through the entire retry ladder (including the exact
-    # indicator-form rung) and any zone's profile uses a non-:p95 fleet-truth
+    # PER-DAY ROBUSTNESS FALLBACK (iter8). If the coupled MPCC is still unusable
+    # after the LP certificate and, where it failed, the MIP with its retry
+    # ladder (the indicator-form rung is Gurobi-only; HiGHS gets the per-period
+    # rungs) and any zone's profile uses a non-:p95 fleet-truth
     # mode, re-clear the WHOLE day with baseline :p95 books (the measured
     # iter6 state) rather than ship a missing day. Implemented as a guarded
     # recursion with a process-wide override so pass 2's anchored rebuilds
@@ -235,7 +236,7 @@ function run_multi_zone_market_clearing(date::Date;
     if !pass1_usable && order_method == :merit_order && apply_zone_profiles &&
        MeritOrderBook.FLEET_TRUTH_OVERRIDE[] === nothing &&
        any(MeritOrderBook.get_zone_profile(z).fleet_truth_mode != :p95 for z in zones)
-        @warn "MPCC unusable after the full retry ladder (status=$(mpcc_result.status)) — " *
+        @warn "MPCC unusable after the LP certificate and the MIP fallback (status=$(mpcc_result.status)) — " *
               "re-clearing $date with fleet_truth_mode=:p95 books (installed-fleet fallback)"
         MeritOrderBook.FLEET_TRUTH_OVERRIDE[] = :p95
         try

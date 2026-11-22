@@ -67,7 +67,6 @@ MPCCOrderBook(orders, nodes, periods, price_limits, network_topology) =
 
 # Configuration constants
 const DEFAULT_MARKUP_FACTOR = 1.1
-const BIG_M_PARAMETER = 4000000.0
 
 """
     extract_time_period(order_datetime::DateTime, order_book_periods::Vector{String})
@@ -130,6 +129,7 @@ end
 
 # Split by concern; each file is `include`d in the original definition order,
 # so the module body is line-for-line the pre-split code.
+include("mpcc/lp_certificate.jl")   # LP certificate: solves each MPCC without branch-and-bound
 include("mpcc/solver.jl")           # solve_mpcc_market_clearing + the per-period decomposition variant
 include("mpcc/coupling_metrics.jl") # iterative-coupling helpers: flows -> net imports, convergence, damping
 include("mpcc/complex_orders.jl")   # complex-order master LP (EUPHEMIA_COMPLEX_ORDERS; inert otherwise)
