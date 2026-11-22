@@ -32,16 +32,10 @@ end
         end
     end
 
-    @testset "calibration-only cut selector" begin
-        old = get(ENV, "EUPHEMIA_CV46_SEE_CUTS", nothing)
-        try
-            delete!(ENV, "EUPHEMIA_CV46_SEE_CUTS"); @test NW.cv46_see_cuts() == NW.CV46_SEE_CUTS
-            ENV["EUPHEMIA_CV46_SEE_CUTS"] = "nested"; @test NW.cv46_see_cuts() == NW.CV46_SEE_CUTS
-            ENV["EUPHEMIA_CV46_SEE_CUTS"] = "inner"; @test [c.name for c in NW.cv46_see_cuts()] == ["INNER"]
-            ENV["EUPHEMIA_CV46_SEE_CUTS"] = "outer"; @test_throws ErrorException NW.cv46_see_cuts()
-        finally
-            old === nothing ? delete!(ENV, "EUPHEMIA_CV46_SEE_CUTS") : (ENV["EUPHEMIA_CV46_SEE_CUTS"] = old)
-        end
+    @testset "frozen cut set: INNER only (calibration winner)" begin
+        @test [c.name for c in NW.CV46_SEE_CUTS] == ["INNER"]
+        @test Set(only(NW.CV46_SEE_CUTS).hubs) == Set(["HU", "RO", "SI", "SK"])
+        @test !isdefined(NW, :cv46_see_cuts)
     end
 
     @testset "quantile matches percentile_cont" begin
@@ -57,17 +51,22 @@ end
         for i in 0:(20 * 24 - 1)
             h = t0 + Hour(i)
             hourly[(h, "AT", "HU")] = 1000.0 + i          # INNER cut border
-            hourly[(h, "CZ", "SK")] = 500.0                # INNER only (CZ, SK both inside OUTER)
-            hourly[(h, "PL", "SK")] = 300.0                # INNER and OUTER
+            hourly[(h, "CZ", "SK")] = 500.0                # INNER border (internal to OUTER)
+            hourly[(h, "PL", "SK")] = 300.0                # INNER and OUTER border
             hourly[(h, "HR", "HU")] = 9999.0               # HR excluded (observed injection)
             hourly[(h, "SK", "HU")] = 7777.0               # internal to both cuts
             hourly[(h, "DE_LU", "AT")] = 2000.0            # OUTER only
             hourly[(h, "HU", "AT")] = -50.0                # negative rows floored at 0
         end
-        caps = NW.cv46_cut_caps(hourly)
+        caps = NW.cv46_cut_caps(hourly)                    # frozen default: INNER only
         inner = [1800.0 + i for i in 0:(20 * 24 - 1)]
         @test caps["INNER"] ≈ NW.cv46_quantile(inner, 0.95)
-        @test caps["OUTER"] ≈ 2300.0                       # DE_LU→AT + PL→SK; AT→HU, CZ→SK internal
+        @test !haskey(caps, "OUTER")
+        # generic machinery with an explicit second cut
+        OUTER = (name="OUTER", hubs=("AT", "CZ", "HU", "RO", "SI", "SK"))
+        caps2 = NW.cv46_cut_caps(hourly, (only(NW.CV46_SEE_CUTS), OUTER))
+        @test caps2["INNER"] ≈ caps["INNER"]
+        @test caps2["OUTER"] ≈ 2300.0                      # DE_LU→AT + PL→SK; AT→HU, CZ→SK internal
         # fewer than 14×24 hours ⇒ cut inert
         short = Dict(k => v for (k, v) in hourly if k[1] < t0 + Hour(14 * 24 - 1))
         @test isempty(NW.cv46_cut_caps(short))
@@ -92,20 +91,35 @@ end
         rows = [r for r in rows]
         jao_keys = Set((r.source_zone, r.sink_zone, r.time_period) for r in rows
                        if r.source_zone in NW.CV46_CORE_HUBS && r.sink_zone in NW.CV46_CORE_HUBS)
-        caps = Dict("INNER" => 4400.0, "OUTER" => 6000.0)
+        caps = Dict("INNER" => 4400.0, "OUTER" => 6000.0)   # OUTER cap ignored by the frozen cut set
         orig = copy(rows)
         summary = NW.cv46_scale_cut_links!(rows, caps, core, jao_keys, fp)
-        inbound(cut, tp) = sum(r.capacity for r in rows if r.time_period == tp &&
-                               r.sink_zone in cut.hubs && !(r.source_zone in cut.hubs) &&
-                               (r.source_zone, r.sink_zone) in core)
+        inbound(rs, cut, tp) = sum(r.capacity for r in rs if r.time_period == tp &&
+                                   r.sink_zone in cut.hubs && !(r.source_zone in cut.hubs) &&
+                                   (r.source_zone, r.sink_zone) in core)
         for cut in NW.CV46_SEE_CUTS, tp in 1:24
-            @test inbound(cut, tp) <= caps[cut.name] + 1e-9
+            @test inbound(rows, cut, tp) <= caps[cut.name] + 1e-9
         end
-        get_cap(s, d) = only(r.capacity for r in rows if r.source_zone == s && r.sink_zone == d && r.time_period == 1)
+        cap_of(rs, s, d) = only(r.capacity for r in rs if r.source_zone == s && r.sink_zone == d && r.time_period == 1)
+        get_cap(s, d) = cap_of(rows, s, d)
         f_in = 4400.0 / 11500.0; f_out = 6000.0 / 15000.0
-        @test get_cap("DE_LU", "HU") ≈ 3000.0 * min(f_in, f_out)   # in both cuts: smaller factor
+        @test get_cap("DE_LU", "HU") ≈ 3000.0 * f_in
         @test get_cap("AT", "HU") ≈ 3000.0 * f_in
-        @test get_cap("DE_LU", "AT") ≈ 5000.0 * f_out
+        @test get_cap("CZ", "SK") ≈ 2500.0 * f_in
+        @test get_cap("DE_LU", "AT") == 5000.0                    # not into INNER: untouched
+        @test get_cap("PL", "CZ") == 4000.0
+        @test length(summary) == 1
+        # generic machinery, two cuts: a link in both takes the smaller factor, applied once
+        OUTER = (name="OUTER", hubs=("AT", "CZ", "HU", "RO", "SI", "SK"))
+        two = (only(NW.CV46_SEE_CUTS), OUTER)
+        rows2c = copy(orig)
+        NW.cv46_scale_cut_links!(rows2c, caps, core, jao_keys, fp; cuts=two)
+        for cut in two, tp in 1:24
+            @test inbound(rows2c, cut, tp) <= caps[cut.name] + 1e-9
+        end
+        @test cap_of(rows2c, "DE_LU", "HU") ≈ 3000.0 * min(f_in, f_out)
+        @test cap_of(rows2c, "AT", "HU") ≈ 3000.0 * f_in
+        @test cap_of(rows2c, "DE_LU", "AT") ≈ 5000.0 * f_out
         @test get_cap("SK", "HU") == 2800.0
         @test get_cap("IT-NORTH", "SI") == 600.0
         @test get_cap("IT-SOUTH", "GR") == 500.0

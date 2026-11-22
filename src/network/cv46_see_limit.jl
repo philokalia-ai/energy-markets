@@ -12,11 +12,17 @@
 # clears at the German price (model p90 spread to DE_LU 0.0 in HU/SK/SI/CZ/AT;
 # actual +50..+105).
 #
-# What. Two nested cuts around the south-east. Per cut and hour, when the summed
-# capacity of the JAO-sourced Core links from Core hubs OUTSIDE the cut into hubs
-# INSIDE it exceeds the cut's cap, those links are scaled down proportionally.
-# A link that crosses both cuts takes the smaller factor, applied once (sorted
-# keys, so the result is independent of Dict/Set order). Only bounds change: no
+# What. One cut around the south-east, INNER = {HU, RO, SI, SK}. Per hour, when
+# the summed capacity of the JAO-sourced Core links from Core hubs OUTSIDE the cut
+# into hubs INSIDE it exceeds the cut's cap, those links are scaled down
+# proportionally (sorted keys, so the result is independent of Dict/Set order).
+# The machinery takes any list of cuts (a link crossing several takes the smallest
+# factor, applied once); the frozen P2 uses INNER only. Structure choice: nested
+# INNER+OUTER {AT, CZ, HU, RO, SI, SK} vs INNER-only, decided once on the
+# calibration days 2026-01-29, 2026-04-11, 2026-06-14 by a rule fixed before the
+# runs (cp-orch: MAE vs SDAC over AT, CZ, SK, HU, SI, RO, DE_LU, all hours pooled;
+# nested unless INNER-only is lower by > 0.5 €/MWh): nested 23.60, INNER-only
+# 21.89 (A 21.04) -> INNER-only. cp-flows/REPORT.md. Only bounds change: no
 # new constraint type, no new rows/orders, so the MPCC and its LP certificate
 # keep their form (the exact group constraint was measured to break the coupling
 # complementarity, see `with_net_positions`). Non-Core links into the block
@@ -27,8 +33,8 @@
 # fallback (forecast path only) fills border-hours with no row at all.
 #
 # Cap. p95 of the hourly GROSS physical flow summed over the Core borders from
-# Core hubs outside the cut into the cut (INNER: AT→HU, AT→SI, CZ→SK, PL→SK;
-# OUTER: DE_LU→AT, DE_LU→CZ, PL→CZ, PL→SK), entsoe.physical_flows, BZN on both
+# Core hubs outside the cut into the cut (INNER: AT→HU, AT→SI, CZ→SK, PL→SK),
+# entsoe.physical_flows, BZN on both
 # sides, hourly mean of the quarter-hour rows. HR is excluded: it is outside the
 # footprint, its flows enter the books as observed injections. One cap per
 # cut-day, applied to every hour (hour-of-day p95s are flat within ±15%: a
@@ -47,30 +53,13 @@
 "Core CCR hubs (JAO `core` CCR, DE mapped to DE_LU)."
 const CV46_CORE_HUBS = ("AT", "BE", "CZ", "DE_LU", "FR", "HR", "HU", "NL", "PL", "RO", "SI", "SK")
 
-"Nested south-east cuts (Core hubs inside each cut). STATUS.md design note."
+"South-east cut (Core hubs inside it). INNER-only won the calibration (header)."
 const CV46_SEE_CUTS = (
     (name="INNER", hubs=("HU", "RO", "SI", "SK")),
-    (name="OUTER", hubs=("AT", "CZ", "HU", "RO", "SI", "SK")),
 )
 
 "Zones of the south-east block (cut hubs plus the non-Core SEE zones behind them)."
 const CV46_SEE_BLOCK_ZONES = ("AT", "BG", "CZ", "GR", "HU", "RO", "RS", "SI", "SK")
-
-"""
-    cv46_see_cuts() -> Tuple
-
-CALIBRATION-ONLY selector (cp-orch, 2026-11-22): EUPHEMIA_CV46_SEE_CUTS =
-`nested` (default: INNER and OUTER) or `inner` (INNER only). Decided once on the
-calibration days 2026-01-29/04-11/06-14 by a rule fixed before the runs (MAE vs
-SDAC over AT, CZ, SK, HU, SI, RO, DE_LU; nested kept unless inner is lower by more
-than 0.5 €/MWh); the final P2 code keeps only the winner and drops this env.
-"""
-function cv46_see_cuts()
-    v = lowercase(strip(get(ENV, "EUPHEMIA_CV46_SEE_CUTS", "")))
-    v in ("", "nested") && return CV46_SEE_CUTS
-    v == "inner" && return Tuple(c for c in CV46_SEE_CUTS if c.name == "INNER")
-    error("EUPHEMIA_CV46_SEE_CUTS must be nested or inner (got \"$v\")")
-end
 
 const CV46_SEE_CAP_QUANTILE = 0.95      # Fable §3 F2
 const CV46_SEE_WINDOW_DAYS = 28         # design choice, see header
@@ -232,7 +221,7 @@ per cut (cap MW, pre-scale inbound max, smallest factor, binding hours).
 function cv46_apply_see_limit!(rows, date::Date, jao::AbstractDict, ccrp::AbstractDict, fpset)
     caps = cv46_see_caps(date)
     core_pairs = get(ccrp, "core", Set{Tuple{String,String}}())
-    cuts = cv46_see_cuts()
+    cuts = CV46_SEE_CUTS
     summary = cv46_scale_cut_links!(rows, caps, core_pairs, Set(keys(jao)), fpset; cuts=cuts)
     for cut in cuts
         sm = findfirst(x -> x.name == cut.name, summary)
