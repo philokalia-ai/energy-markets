@@ -115,6 +115,13 @@ function _net_imports_day_relation_at(qday::Date)
         get(_NET_IMPORTS_DAY_CACHE, qday, nothing)
     end
     cached !== nothing && return cached
+    if _deterministic_sums()   # research flag (book_build.jl): fixed-order mean, sorted rows
+        rows = _net_imports_day_relation_det(qday)
+        lock(_NET_IMPORTS_CACHE_LOCK) do
+            _NET_IMPORTS_DAY_CACHE[qday] = rows
+        end
+        return rows
+    end
     df = sql2df_with_retry(
         """
         SELECT EXTRACT(HOUR FROM date_time_utc AT TIME ZONE 'UTC')::int AS h,
@@ -136,6 +143,37 @@ function _net_imports_day_relation_at(qday::Date)
     end
     lock(_NET_IMPORTS_CACHE_LOCK) do
         _NET_IMPORTS_DAY_CACHE[qday] = rows
+    end
+    return rows
+end
+
+# EUPHEMIA_DETERMINISTIC_SUMS=1: the SQL AVG above sums in a parallel-scan order and the
+# rows arrive unordered (so the per-zone border sums downstream also vary in order;
+# measured: AT 2026-11-13 01:00 pass-2 import 129.92081249999956 vs …991). Same mean,
+# computed from rows fetched in a total order; rows emitted sorted by (h, in, out).
+function _net_imports_day_relation_det(qday::Date)
+    df = sql2df_with_retry(
+        """
+        SELECT EXTRACT(HOUR FROM date_time_utc AT TIME ZONE 'UTC')::int AS h,
+               in_area_map_code AS in_code, out_area_map_code AS out_code, flow_mw AS f
+        FROM entsoe.physical_flows
+        WHERE in_area_type_code LIKE 'BZN%' AND out_area_type_code LIKE 'BZN%'
+          AND flow_mw IS NOT NULL
+          AND date_time_utc >= (\$1::date::timestamp AT TIME ZONE 'UTC')
+          AND date_time_utc < ((\$1::date + 1)::timestamp AT TIME ZONE 'UTC')
+        ORDER BY 1, 2, 3, 4
+        """,
+        [qday])
+    acc = Dict{Tuple{Int,String,String},Tuple{Float64,Int}}()
+    for r in eachrow(df)
+        k = (Int(r.h), String(r.in_code), String(r.out_code))
+        s, n = get(acc, k, (0.0, 0))
+        acc[k] = (s + Float64(r.f), n + 1)
+    end
+    rows = _NetBorderRow[]
+    for k in sort!(collect(keys(acc)))
+        s, n = acc[k]
+        push!(rows, (h=k[1], in_code=k[2], out_code=k[3], avg_flow=s / n))
     end
     return rows
 end
