@@ -40,14 +40,16 @@ dump_level() = lowercase(strip(get(ENV, "EUPHEMIA_DUMP_LEVEL", "all")))
 dump_masters() = dump_enabled() && dump_level() in ("all", "master")
 dump_periods() = dump_enabled() && dump_level() == "all"
 
-# Every complex-order call of a day gets its own dir <root>/<day>/call<NN>_<tag>
+# Every complex-order call of a day gets its own dir <root>/<day>[/<label>]/call<NN>_<tag>
 # (NN = 01, 02, ... in call order; atomic mkdir, so concurrent solver processes
 # never share one); <root>/<day>/<tag> is a symlink to the latest call with that tag.
 function _dump_day_dir(order_book)
     dts = DateTime[o.date_time for o in order_book.orders]
     day = isempty(dts) ? "unknown-day" : string(Date(minimum(dts)))
     tag = isempty(DUMP_TAG[]) ? "solo" : DUMP_TAG[]
-    root = joinpath(dump_root(), day)
+    # EUPHEMIA_DUMP_LABEL (runner label): each run writes its own <root>/<day>/<label>/
+    lab = strip(get(ENV, "EUPHEMIA_DUMP_LABEL", ""))
+    root = isempty(lab) ? joinpath(dump_root(), day) : joinpath(dump_root(), day, lab)
     mkpath(root)
     for k in 1:999
         d = joinpath(root, "call$(lpad(k, 2, '0'))_$tag")
@@ -215,7 +217,8 @@ function _dump_begin(order_book, max_pab_rounds)
     blocks_s, fb_s, st_s = _dump_book_structure(order_book)
     periods = order_book.periods
     D = Dict{String,Any}(
-        "day" => basename(dirname(ddir)), "call_dir" => basename(ddir),
+        "day" => string(Date(minimum(o.date_time for o in order_book.orders))), "call_dir" => basename(ddir),
+        "run_label" => get(ENV, "EUPHEMIA_DUMP_LABEL", ""),
         "pass_tag" => DUMP_TAG[], "pid" => getpid(), "host_myid" => myid(),
         "nodes" => order_book.nodes, "periods" => periods,
         "period_file_index" => Dict(t => _pidx(i) for (i, t) in enumerate(periods)),
