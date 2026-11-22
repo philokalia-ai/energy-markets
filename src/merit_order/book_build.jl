@@ -640,6 +640,13 @@ function _storage_daily_budget(zone::String, day::Date, production_type::String)
         get(_STORAGE_BUDGET_CACHE, key, nothing)
     end
     cached === nothing || return cached
+    if _deterministic_sums()
+        e = _storage_daily_budget_det(zone, production_type, cutoff)
+        lock(_STORAGE_BUDGET_LOCK) do
+            _STORAGE_BUDGET_CACHE[key] = e
+        end
+        return e
+    end
     df = sql2df_with_retry("""
         WITH hourly AS (
             SELECT date_trunc('hour', date_time_utc) AS h,
@@ -661,6 +668,48 @@ function _storage_daily_budget(zone::String, day::Date, production_type::String)
         _STORAGE_BUDGET_CACHE[key] = e
     end
     return e
+end
+
+# Research flag EUPHEMIA_DETERMINISTIC_SUMS=1 (highs-blocks): DuckDB's parallel hash
+# aggregation sums floats in a thread-schedule-dependent order, so the SQL budget above
+# can differ in its last bits between executions (measured: NO5 2026-11-13, two values
+# 1 ulp apart within one process). Those 1e-16 differences flip near-tied block
+# acceptances in the complex-order master. With the flag, the same mean-of-daily-sums
+# is computed in Julia from rows fetched in a total order. Default off = unchanged.
+_deterministic_sums() = get(ENV, "EUPHEMIA_DETERMINISTIC_SUMS", "") == "1"
+
+function _storage_daily_budget_det(zone::String, production_type::String, cutoff::Date)
+    df = sql2df_with_retry("""
+        SELECT date_time_utc AS t, actual_generation_output_mw AS mw
+        FROM entsoe.aggregated_generation_per_type
+        WHERE area_map_code = \$1 AND area_type_code LIKE 'BZN%'
+          AND production_type = \$2
+          AND actual_generation_output_mw IS NOT NULL
+          AND date_time_utc >= (\$3::date::timestamp AT TIME ZONE 'UTC')
+          AND date_time_utc < (\$4::date::timestamp AT TIME ZONE 'UTC')
+        ORDER BY 1, 2""",
+        Any[zone, production_type, cutoff - Day(14), cutoff])
+    size(df, 1) == 0 && return NaN
+    # hourly mean (rows already in (t, mw) order), then daily sum over hours in order
+    hs = Dict{DateTime,Tuple{Float64,Int}}()
+    for r in eachrow(df)
+        h = floor(DateTime(r.t), Hour)
+        s, n = get(hs, h, (0.0, 0))
+        hs[h] = (s + Float64(r.mw), n + 1)
+    end
+    ds = Dict{Date,Tuple{Float64,Int}}()
+    for h in sort!(collect(keys(hs)))
+        s, n = hs[h]
+        e, k = get(ds, Date(h), (0.0, 0))
+        ds[Date(h)] = (e + s / n, k + 1)
+    end
+    tot = 0.0; nd = 0
+    for d in sort!(collect(keys(ds)))
+        e, k = ds[d]
+        k >= 20 || continue
+        tot += e; nd += 1
+    end
+    return nd == 0 ? NaN : tot / nd
 end
 
 """
@@ -855,6 +904,13 @@ function _cv45_pump_profile(zone::String, day::Date)
         get(_CV45_PUMP_CACHE, key, nothing)
     end
     cached === nothing || return cached
+    if _deterministic_sums()   # research flag: fixed summation order (see _storage_daily_budget_det)
+        prof = _cv45_pump_profile_det(zone, cutoff)
+        lock(_CV45_PUMP_LOCK) do
+            _CV45_PUMP_CACHE[key] = prof
+        end
+        return prof
+    end
     df = sql2df_with_retry("""
         WITH hourly AS (
             SELECT date_trunc('hour', date_time_utc) AS h,
@@ -876,6 +932,38 @@ function _cv45_pump_profile(zone::String, day::Date)
     end
     lock(_CV45_PUMP_LOCK) do
         _CV45_PUMP_CACHE[key] = prof
+    end
+    return prof
+end
+
+function _cv45_pump_profile_det(zone::String, cutoff::Date)
+    df = sql2df_with_retry("""
+        SELECT date_time_utc AS t, actual_consumption_mw AS mw
+        FROM entsoe.aggregated_generation_per_type
+        WHERE area_map_code = \$1 AND area_type_code LIKE 'BZN%'
+          AND production_type = 'Hydro Pumped Storage'
+          AND actual_consumption_mw IS NOT NULL
+          AND date_time_utc >= (\$2::date::timestamp AT TIME ZONE 'UTC')
+          AND date_time_utc < (\$3::date::timestamp AT TIME ZONE 'UTC')
+        ORDER BY 1, 2""", Any[zone, cutoff - Day(14), cutoff])
+    hs = Dict{DateTime,Tuple{Float64,Int}}()
+    for r in eachrow(df)
+        h = floor(DateTime(r.t), Hour)
+        a, n = get(hs, h, (0.0, 0))
+        hs[h] = (a + Float64(r.mw), n + 1)
+    end
+    byhh = Dict{Int,Tuple{Float64,Int}}()
+    for h in sort!(collect(keys(hs)))
+        a, n = hs[h]
+        b, k = get(byhh, Dates.hour(h), (0.0, 0))
+        byhh[Dates.hour(h)] = (b + a / n, k + 1)
+    end
+    prof = Dict{Int,Float64}()
+    for hh in sort!(collect(keys(byhh)))
+        b, k = byhh[hh]
+        k < 7 && continue
+        v = b / k
+        v > 1.0 && (prof[hh] = v)
     end
     return prof
 end
