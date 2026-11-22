@@ -90,6 +90,8 @@ function export_scoreboard()
     """)
 
     naive_parts = naive_parts_or_nothing(scores)   # nothing = no naive fields
+    tsfm_live = tsfm_live_parts_or_nothing()        # nothing = no live Timestral fields
+    tlive(zone, lead, mode, sub) = tsfm_live_fields(tsfm_live, zone, lead, mode, sub.market_date)
     # No naive fields -> merge exactly the arguments main merged (same Dict, same bytes).
     naive_or_empty(x) = x === nothing ? () : (x,)
     agg(sub, parts=naive_parts) = begin
@@ -127,7 +129,8 @@ function export_scoreboard()
                                 "input_mode" => mode,
                                 "n_days" => a.n_days, "mae" => nn(a.mae),
                                 "bias" => nn(a.bias), "corr" => nn(a.corr),
-                                "code_version" => a.cv), a.q15, naive_or_empty(a.naive)...))
+                                "code_version" => a.cv), a.q15, naive_or_empty(a.naive)...,
+                                tlive(zone, lead, mode, sub)))
             for month in sort(unique(String.(sub.month)))
                 m = sub[sub.month .== month, :]
                 am = agg(m)
@@ -135,7 +138,8 @@ function export_scoreboard()
                                     "input_mode" => mode,
                                     "n_days" => am.n_days, "mae" => nn(am.mae),
                                     "bias" => nn(am.bias), "corr" => nn(am.corr),
-                                    "code_version" => am.cv), am.q15, naive_or_empty(am.naive)...))
+                                    "code_version" => am.cv), am.q15, naive_or_empty(am.naive)...,
+                                    tlive(zone, lead, mode, m)))
             end
         end
     end
@@ -147,7 +151,8 @@ function export_scoreboard()
                                "input_mode" => mode,
                                "n_days" => af.n_days, "mae" => nn(af.mae),
                                "bias" => nn(af.bias), "corr" => nn(af.corr),
-                               "code_version" => af.cv), af.q15, naive_or_empty(af.naive)...)
+                               "code_version" => af.cv), af.q15, naive_or_empty(af.naive)...,
+              tlive(zone, lead, mode, fsub))
     end)
     # "backfilled" (#431 R1, bin/scoreboard_windows.jl): the cv44 reconstruction
     # (is_retro, reset_tag cv44-backfill-2026-11, lead 1), its own window only.

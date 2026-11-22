@@ -131,7 +131,16 @@ ok(hzChips.length === 3 && !hzChips.some((t) => /GBM/.test(t)), "recent days: th
 const texts = getById("hz-wrap")._all((e) => e.tagName === "text", []).map((e) => e.textContent);
 ok(texts.indexOf("no actual") !== -1, "recent days: the cleared day without an actual reads 'no actual' (not 'forecast')");
 ok(texts.filter((t) => t === "forecast").length === 1, "recent days: only the not-yet-cleared day reads 'forecast'");
-ok(texts.some((t) => /^MAE 5 · \+1Physics MAE/.test(t)), "recent days: settled days carry a short MAE · bias caption — " + texts.filter((t) => /MAE/.test(t)).join(" | "));
+ok(texts.some((t) => /^Timestral 2Timestral \+ physics MAE 2\.0 €\/MWh on 3 h · physics MAE 5\.0/.test(t)),
+  "recent days: the caption is the headline (Timestral) MAE, named; physics MAE/bias in its title");
+const tPaths = getById("hz-wrap")._all((e) => e.tagName === "path" && String(e.attrs["stroke-width"]) === "2.2", []);
+ok(tPaths.length === 4, "recent days: a Timestral line on every day it was issued for, the not-yet-cleared day included (" + tPaths.length + ")");
+ok(getById("hz-wrap")._all((e) => e.tagName === "text" && e.textContent === "forecast", []).length === 1 &&
+   /issued 06:30 UTC for the next day/.test(getById("hz-sub").textContent),
+  "recent days: the subtitle says when Timestral is issued");
+T.state.day = "2026-11-17"; T.renderExplorer();
+const pills = getById("day-list")._all((e) => e._classes().includes("pill-tsfm"), []).map((e) => e.textContent);
+ok(pills.indexOf("Timestral 2.0") !== -1, "explorer day list: the MAE pill names the headline model (" + pills.join(",") + ")");
 
 /* ---------- 3. scoreboard: since_freeze window ---------- */
 const S = (zone, lead, win, n, mae) => ({ zone: zone, lead_days: lead, window: win, input_mode: "weather",

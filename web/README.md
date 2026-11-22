@@ -29,8 +29,10 @@ dimension is collapsed everywhere to the **freshest forecast per delivery day**.
 - **Recent days** — a ribbon around now (6 cleared + 3 upcoming days; 3 + 2 on a
   phone): Timestral + physics (solid violet, q10–q90 band; a day that only has the
   06:30 prices-only issue is labelled so and dashed), the physics clear labelled
-  with its code_version, and the settled actual with a per-day physics MAE · bias
-  caption. A cleared day whose actual is missing reads "no actual". See
+  with its code_version, and the settled actual. Each day's caption gives the
+  headline forecast's MAE, named ("Timestral 31", or "physics 47" on a day without a
+  Timestral issue); Timestral is lead-1 only, so the days right of "now" carry it
+  only between its 06:30 UTC issue and the noon auction. A cleared day whose actual is missing reads "no actual". See
   `models.html`.
 - **Map** — day-average price per zone (Forecast / Actual), plus **Error %**:
   the exporter-computed load-weighted WAPE per zone-day (null until the day
@@ -50,7 +52,10 @@ dimension is collapsed everywhere to the **freshest forecast per delivery day**.
   by ascending offer price (x = cumulative MW, y = €/MWh), coloured by owner,
   with dashed markers where the clearing price and the settled actual landed.
   Hour slider + play-through-day.
-- **Scoreboard** — physics MAE / bias / Pearson corr / naive rMAE by window.
+- **Scoreboard** — physics MAE / bias / Pearson corr / naive rMAE by window, plus
+  Timestral MAE / rMAE in the D-1 group (the published Timestral vintage per day,
+  `bin/tsfm_backfill_scores.jl` `tsfm_live_fields`; a failure exports the board
+  without them).
 - **Models** (`models.html`) — what the two forecasts are and how good they are.
 
 ## Data plane

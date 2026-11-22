@@ -25,6 +25,8 @@ const TSFM_BACKFILL_ARM = "timestral-209m"
 const TSFM_BACKFILL_BOARD_COLS = ("tsfm_arm", "tsfm_n_days", "tsfm_n", "tsfm_mae", "tsfm_mae_naive_d1",
                                   "tsfm_mae_naive_d7", "tsfm_mae_naive_epf", "tsfm_rmae_d1",
                                   "tsfm_rmae_d7", "tsfm_rmae_epf")
+# Parquet board columns: the above plus the live windows' post-sim day count (tsfm_live_fields).
+const TSFM_BOARD_COLS = (TSFM_BACKFILL_BOARD_COLS..., "tsfm_n_days_postsim")
 
 "Whether the Timestral backfill fields are exported (`EXPORT_TSFM_BACKFILL=0` switches them off)."
 tsfm_backfill_enabled() = get(ENV, "EXPORT_TSFM_BACKFILL", "1") != "0"
@@ -155,15 +157,15 @@ end
 """
     tsfm_backfill_columns(n_live, extras) -> Union{Nothing,Dict{String,Vector}}
 
-Parquet columns for TSFM_BACKFILL_BOARD_COLS: `n_live` leading rows (the live windows) are missing,
-then one value per backfilled row from its extra-fields Dict (missing where absent). `nothing` (no
+Parquet columns for TSFM_BOARD_COLS: `n_live` leading rows are missing, then one value per row
+from its extra-fields Dict (missing where absent). `nothing` (no
 columns, the parquet stays as before) when no backfilled row carries Timestral fields.
 """
 function tsfm_backfill_columns(n_live::Integer, extras)
     any(x -> haskey(x, "tsfm_mae"), extras) || return nothing
     cols = Dict{String,Vector}()
-    for c in TSFM_BACKFILL_BOARD_COLS
-        T = c == "tsfm_arm" ? String : c in ("tsfm_n_days", "tsfm_n") ? Int : Float64
+    for c in TSFM_BOARD_COLS
+        T = c == "tsfm_arm" ? String : c in ("tsfm_n_days", "tsfm_n", "tsfm_n_days_postsim") ? Int : Float64
         v = Vector{Union{Missing,T}}(missing, n_live)
         for x in extras
             y = get(x, c, missing)
@@ -172,4 +174,90 @@ function tsfm_backfill_columns(n_live::Integer, extras)
         cols[c] = v
     end
     return cols
+end
+
+# ---------------------------------------------------------------------------
+# Live windows: the published Timestral vintage per zone-day, scored on the board
+# ---------------------------------------------------------------------------
+# The same tsfm_* fields on the LIVE windows (all / months / since_freeze), lead-1 weather
+# cohorts only (the track the site shows and the live post-sim issue is conditioned on).
+# Per zone-day the vintage is the one the zone export publishes (`tsfm_overlay_maps`: latest
+# issue, backfill vintages never), so the board scores exactly the line the charts draw.
+# Cells: that vintage's median hours with a finite actual and every lead-1 naive (the #437
+# common-mask rule, as the backfill). Pooled over the cohort's market days (the physics
+# cohort's scored days). `tsfm_n_days_postsim` counts the days whose vintage is the post-sim
+# (Timestral + physics) issue; the rest are the 06:30 prices-only issue. Export-side only;
+# any failure exports the board without these fields.
+
+"""
+    tsfm_live_parts(hourly, day, actz, locz) -> (parts, postsim)
+
+Pure. `hourly`/`day` are `tsfm_overlay_maps` output; `actz[zone][t]` the actuals and `locz` their
+`local_price_index`. `parts[(zone, market_date)]` = `naive_zone_day` (lead 1) on that zone-day's
+published median hours; `postsim` = the zone-days whose vintage is the post-sim issue.
+"""
+function tsfm_live_parts(hourly::AbstractDict, day::AbstractDict, actz::AbstractDict, locz::AbstractDict)
+    byday = Dict{Tuple{String,Date},Vector{Tuple{DateTime,Float64}}}()
+    for ((z, q, t), v) in hourly
+        q == "tsfm_median" || continue
+        push!(get!(Vector{Tuple{DateTime,Float64}}, byday, (String(z), athens_date(DateTime(t)))), (DateTime(t), v))
+    end
+    parts = Dict{Tuple{String,Date},NamedTuple}()
+    postsim = Set{Tuple{String,Date}}()
+    empty_d = Dict{DateTime,Float64}()
+    for (k, tv) in byday
+        sort!(tv)
+        parts[k] = naive_zone_day(first.(tv), last.(tv), get(actz, k[1], empty_d), get(locz, k[1], empty_d), k[2], 1)
+        d = get(day, k, nothing)
+        d !== nothing && d.input_mode == "postsim" && push!(postsim, k)
+    end
+    return parts, postsim
+end
+
+"""
+    tsfm_live_fields(pp, zone, lead, mode, dates) -> Dict{String,Any}
+
+The tsfm_* fields of one live cohort from `pp = (parts, postsim)` (empty unless lead 1, a weather
+mode and at least one scored Timestral day).
+"""
+function tsfm_live_fields(pp, zone, lead, mode, dates)
+    (pp === nothing || Int(lead) != 1 || !startswith(String(mode), "weather")) && return Dict{String,Any}()
+    parts, postsim = pp
+    f = tsfm_backfilled_fields(parts, String(zone), dates; label=TSFM_BACKFILL_ARM)
+    (isempty(f) || f["tsfm_n"] == 0) && return Dict{String,Any}()
+    f["tsfm_n_days_postsim"] = count(d -> (String(zone), d) in postsim && parts[(String(zone), d)].n > 0,
+                                     filter(d -> haskey(parts, (String(zone), d)), unique(Date.(dates))))
+    return f
+end
+
+"""
+    tsfm_live_parts_or_nothing(; read_overlay, read_actuals) -> Union{Tuple,Nothing}
+
+DB step behind a non-fatal guard (`nothing` = the board is exported without the live
+Timestral fields): every live overlay vintage (TSFM_OVERLAY_SQL), the published one per
+zone-day, and the scorer's actuals. The readers are injectable for tests.
+"""
+function tsfm_live_parts_or_nothing(;
+        read_overlay=() -> Euphemia.sql2df_with_retry(TSFM_OVERLAY_SQL, [Date(2000, 1, 1)]),
+        read_actuals=(a, b) -> da_target_actuals(a, b))
+    try
+        h, d = tsfm_overlay_maps(eachrow(read_overlay()))
+        isempty(d) && return nothing
+        ds = [k[2] for k in keys(d)]
+        act = read_actuals(minimum(ds) - Day(8), maximum(ds))
+        actz = Dict{String,Dict{DateTime,Float64}}()
+        for r in eachrow(act)
+            (r.act === missing || r.act === nothing) && continue
+            x = Float64(r.act)
+            isfinite(x) && (get!(Dict{DateTime,Float64}, actz, String(r.z))[DateTime(r.t)] = x)
+        end
+        locz = Dict(z => local_price_index(collect(keys(v)), collect(values(v))) for (z, v) in actz)
+        pp = tsfm_live_parts(h, d, actz, locz)
+        println("tsfm live board fields: $(length(pp[1])) zone-days ($(length(pp[2])) post-sim), " *
+                "$(sum((p.n for p in values(pp[1])); init=0)) paired hours")
+        return pp
+    catch e
+        @warn "tsfm live board fields failed — live windows exported without them" exception = (e, catch_backtrace())
+        return nothing
+    end
 end

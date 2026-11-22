@@ -46,7 +46,7 @@
 #                             reconstruction (in-sample), plus a column
 #                             reconstructed_utc (present only when such rows exist),
 #                             and the tsfm_* Timestral columns (#431 R2,
-#                             TSFM_BACKFILL_BOARD_COLS) when backfill vintages exist.
+#                             TSFM_BOARD_COLS) on the live lead-1 weather rows and the backfilled rows.
 #   v1/map.parquet            market_date, zone, track, sim, act, err_pct, mae,
 #                             corr, lead, made — freshest-lead day aggregates,
 #                             BOTH tracks (track = 'predicted' | 'announced';
@@ -160,6 +160,9 @@ function export_scoreboard_parquet()
     end
     push_naive!(v) = v === nothing ||
         foreach(((c, x),) -> push!(naive_rows[c], x), zip(NAIVE_BOARD_COLS, v))
+    tsfm_live = tsfm_live_parts_or_nothing()   # nothing = no live Timestral fields
+    live_tsfm = Dict{String,Any}[]              # one per live row, aligned with df
+    push_tsfm!(zone, lead, mode, sub) = push!(live_tsfm, tsfm_live_fields(tsfm_live, zone, lead, mode, sub.market_date))
 
     df = DataFrame(zone=String[], lead_days=Int[], window=String[],
                    input_mode=String[], n_days=Int[],
@@ -178,24 +181,28 @@ function export_scoreboard_parquet()
             push!(df, (zone, lead, "all", mode, a.n_days,
                        nm(a.mae), nm(a.bias), nm(a.corr), a.cv, q15vals(a)...))
             push_naive!(naive_vals(sub))
+            push_tsfm!(zone, lead, mode, sub)
             for month in sort(unique(String.(sub.month)))
                 m = sub[sub.month .== month, :]
                 am = agg(m)
                 push!(df, (zone, lead, month, mode, am.n_days,
                            nm(am.mae), nm(am.bias), nm(am.corr), am.cv, q15vals(am)...))
                 push_naive!(naive_vals(m))
+                push_tsfm!(zone, lead, mode, m)
             end
         end
     end
     # "since_freeze" (bin/scoreboard_windows.jl): rows built first, appended only when
     # the whole window succeeded (all-or-nothing; never fails the export).
-    for (row, nv) in since_freeze_entries(scores) do zone, lead, mode, fsub
+    for (row, nv, tf) in since_freeze_entries(scores) do zone, lead, mode, fsub
             af = agg(fsub)
             ((zone, lead, SINCE_FREEZE_WINDOW, mode, af.n_days,
-              nm(af.mae), nm(af.bias), nm(af.corr), af.cv, q15vals(af)...), naive_vals(fsub))
+              nm(af.mae), nm(af.bias), nm(af.corr), af.cv, q15vals(af)...), naive_vals(fsub),
+             tsfm_live_fields(tsfm_live, zone, lead, mode, fsub.market_date))
         end
         push!(df, row)
         push_naive!(nv)
+        push!(live_tsfm, tf)
     end
     # "backfilled" (#431 R1): the cv44 reconstruction, its own window only. Its naive
     # parts come from the campaign's rows; when the live naive is off (no naive
@@ -212,7 +219,10 @@ function export_scoreboard_parquet()
         end
         push!(bf_rows, e)
     end
-    tsfm_cols = tsfm_backfill_columns(nrow(df), [x[4] for x in bf_rows])   # nothing = no columns
+    # Timestral fields: live rows (aligned with df so far) then the backfilled rows; nothing = no columns
+    tsfm_cols = length(live_tsfm) == nrow(df) ?
+        tsfm_backfill_columns(0, vcat(live_tsfm, Dict{String,Any}[x[4] for x in bf_rows])) :
+        (@warn("live Timestral fields misaligned with the board rows — exported without them"); nothing)
     recon = Union{Missing,String}[missing for _ in 1:nrow(df)]
     for (row, nv, made, _) in bf_rows
         push!(df, row)
@@ -226,7 +236,7 @@ function export_scoreboard_parquet()
         end
     end
     isempty(bf_rows) || (df.reconstructed_utc = recon)   # backfilled rows only (additive)
-    tsfm_cols === nothing || for c in TSFM_BACKFILL_BOARD_COLS   # Timestral fields (#431 R2, additive)
+    tsfm_cols === nothing || for c in TSFM_BOARD_COLS   # Timestral fields (live + backfilled, additive)
         df[!, c] = tsfm_cols[c]
     end
     sort!(df, [:zone, :lead_days, :input_mode, :window])

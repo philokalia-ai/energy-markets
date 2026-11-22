@@ -1915,8 +1915,8 @@ function create_merit_order_book(
                                     Symbol(bidding_zone), date_time, resolution_minutes)))
                             # The ORIGINAL calibrated must-run offers (identical to the
                             # `elseif` branch below) ride along as the block's fallback:
-                            # restored verbatim whenever the blocks are released (master
-                            # failure, PAB exhaustion), so a fallback IS the baseline book.
+                            # restored verbatim when the blocks are released (a master
+                            # failure), so a fallback IS the baseline book.
                             fb_deep_qty = must_run_qty * 0.6
                             fb_deep_price = (!isempty(get(ENV, "EUPHEMIA_ENABLE_CV27_T3", "")) ||
                                              (sr_full && sr_active(hr))) ?

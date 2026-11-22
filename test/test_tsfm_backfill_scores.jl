@@ -82,3 +82,51 @@ include(joinpath(@__DIR__, "..", "bin", "tsfm_backfill_scores.jl"))
     end
     empty!(TSFM_BACKFILL_PARTS_CACHE)
 end
+
+@testset "tsfm live board fields (published vintage per zone-day)" begin
+    loc_price(t) = (l = athens_local(t); 10.0 * day(l) + hour(l) / 100)
+    ts = DateTime[]
+    for d in Date(2026, 10, 1):Day(1):Date(2026, 10, 20)
+        append!(ts, expected_market_day_hours(d))
+    end
+    actz = Dict("GR" => Dict(t => loc_price(t) for t in ts))
+    locz = Dict(z => local_price_index(collect(keys(a)), collect(values(a))) for (z, a) in actz)
+    D = Date(2026, 10, 15)
+    # tsfm_overlay_maps-shaped input: D post-sim (errs 2), D-1 the 06:30 issue (errs 4), D+30 unsettled
+    hourly = Dict{Tuple{String,String,DateTime},Float64}()
+    for t in expected_market_day_hours(D)
+        hourly[("GR", "tsfm_median", t)] = loc_price(t) + 2.0
+        hourly[("GR", "tsfm_q10", t)] = 0.0                      # only the median is scored
+    end
+    for t in expected_market_day_hours(D - Day(1))
+        hourly[("GR", "tsfm_median", t)] = loc_price(t) + 4.0
+    end
+    for t in expected_market_day_hours(D + Day(30))
+        hourly[("GR", "tsfm_median", t)] = 1.0
+    end
+    mk(m) = (p_any_le0=0.1, input_mode=m, issue_utc=DateTime(2026, 10, 14, 9), arm="timestral-209m")
+    dayd = Dict(("GR", D) => mk("postsim"), ("GR", D - Day(1)) => mk("pregate0630"), ("GR", D + Day(30)) => mk("postsim"))
+    parts, postsim = tsfm_live_parts(hourly, dayd, actz, locz)
+    @test parts[("GR", D)].n == 24 && parts[("GR", D)].model ≈ 48.0
+    @test parts[("GR", D - Day(1))].n == 24 && parts[("GR", D + Day(30))].n == 0
+    @test postsim == Set([("GR", D), ("GR", D + Day(30))])
+
+    f = tsfm_live_fields((parts, postsim), "GR", 1, "weather", [D, D - Day(1), D - Day(2)])
+    @test f["tsfm_n"] == 48 && f["tsfm_n_days"] == 2 && f["tsfm_mae"] ≈ 3.0
+    @test f["tsfm_n_days_postsim"] == 1                      # D only (D+30 is not in the cohort)
+    @test f["tsfm_mae_naive_d1"] ≈ 10.0 && f["tsfm_rmae_d1"] ≈ 0.3 && f["tsfm_arm"] == "timestral-209m"
+    # announced track, leads >= 2, unknown zone, no Timestral day scored -> no fields
+    @test isempty(tsfm_live_fields((parts, postsim), "GR", 1, "entsoe", [D]))
+    @test isempty(tsfm_live_fields((parts, postsim), "GR", 2, "weather", [D]))
+    @test isempty(tsfm_live_fields((parts, postsim), "ES", 1, "weather", [D]))
+    @test isempty(tsfm_live_fields((parts, postsim), "GR", 1, "weather", [D + Day(30)]))
+    @test isempty(tsfm_live_fields(nothing, "GR", 1, "weather", [D]))
+    # non-fatal: a failing DB step yields nothing (the board is exported without the fields)
+    @test tsfm_live_parts_or_nothing(read_overlay=() -> error("db down")) === nothing
+    @test tsfm_live_parts_or_nothing(read_overlay=() -> DataFrame(z=String[], d=Date[], t=DateTime[], level=String[],
+        q=String[], v=Float64[], m=String[], issue=DateTime[], arm=String[])) === nothing   # no vintage yet
+    # parquet columns over live + backfilled rows, including the post-sim count
+    cols = tsfm_backfill_columns(0, [f, Dict{String,Any}()])
+    @test cols["tsfm_n_days_postsim"][1] == 1 && ismissing(cols["tsfm_n_days_postsim"][2])
+    @test cols["tsfm_mae"][1] ≈ 3.0 && Set(keys(cols)) == Set(TSFM_BOARD_COLS)
+end
