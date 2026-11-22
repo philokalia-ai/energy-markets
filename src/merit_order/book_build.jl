@@ -1199,6 +1199,7 @@ function create_merit_order_book(
     anchor_share::Union{Nothing,Float64}=nothing,
     anchor_prices::Union{Nothing,Dict{String,Float64}}=nothing,
     pass1_prices::Union{Nothing,Dict{String,Float64}}=nothing,
+    nwv_p1_prices::Union{Nothing,Dict{String,Dict{String,Float64}}}=nothing,
     anchor_export_mw::Dict{Int,Float64}=Dict{Int,Float64}(),
     res_coalesce_missing::Bool=false,
     endogenous_import_atc::Union{Nothing,Dict{Int,Float64}}=nothing,
@@ -1497,6 +1498,13 @@ function create_merit_order_book(
                         "$(round(Int, 100 * spill_share))% of reservoir quantity at €$(profile.spill_gate_price)/MWh")
             end
         end
+        # cv46 P1 (EUPHEMIA_CV46_NORDIC_WV, src/merit_order/cv46_nordic_wv.jl):
+        # unanchored reservoir-opportunity zones only; `nothing` ⇒ the branch below
+        # runs the pre-cv46 code verbatim.
+        nwv = (hydro_model == :reservoir_opportunity && opportunity_anchor == :none &&
+               hydro_pmax > 1.0 && cv46_on("EUPHEMIA_CV46_NORDIC_WV")) ?
+            _nwv_zone_setup(bidding_zone, day, generators, offered_pmax, spill_share,
+                net_import_import_only, nwv_p1_prices) : nothing
 
         # Dispatchable capacity for the scarcity margin, derated for the
         # realistic availability of the fleet (unreported outages) and for
@@ -1822,8 +1830,15 @@ function create_merit_order_book(
                             clamp(reservoir_drawdown + signed_dryness,
                                   max(signed_dryness, 0.0), 1.0) :
                             reservoir_drawdown
+                        if nwv !== nothing
+                            _nwv_storable!(nwv, ts, hr, gas_srmc,
+                                water_value_base + water_value_span * norm_demand,
+                                max(hydro_dryness, eff_seasonal), profile.spill_gate_price,
+                                get(load_by_time, ts, 0.0) - get(renewable_by_time, ts, 0.0))
+                        else
                         wv_frac = 0.35 + 0.65 * max(hydro_dryness, eff_seasonal)
                         gas_srmc * wv_frac * (water_value_base + water_value_span * norm_demand)
+                        end
                     else
                         gas_srmc * (1.0 + water_value_dry_boost * hydro_dryness) *
                         (water_value_base + water_value_span * norm_demand)
@@ -1858,7 +1873,18 @@ function create_merit_order_book(
                             g.code, "water_value_spill")
                         supply_orders_count += 1
                     end
-                    push_tagged!(SimpleOrder(:supply, water_value, offered_pmax(g) - spill_mw,
+                    # cv46 P1: the unavoidable-release share of this reservoir unit
+                    # at the spill price (0 ⇒ no order, the pre-cv46 book).
+                    nwv_u = (nwv !== nothing && g.fuel_type == Symbol("Hydro Water Reservoir")) ?
+                            _nwv_unit_unavoidable(nwv, hr, offered_pmax(g)) : 0.0
+                    if nwv_u > 0.0
+                        push_tagged!(SimpleOrder(:supply, profile.spill_gate_price, nwv_u,
+                            Symbol(bidding_zone), date_time, resolution_minutes),
+                            g.code, NWV_UNAVOIDABLE)
+                        supply_orders_count += 1
+                    end
+                    push_tagged!(SimpleOrder(:supply, water_value,
+                        nwv_u > 0.0 ? max(offered_pmax(g) - spill_mw - nwv_u, 0.0) : offered_pmax(g) - spill_mw,
                         Symbol(bidding_zone), date_time, resolution_minutes),
                         g.code, wv_strategy)
                     supply_orders_count += 1
@@ -2311,6 +2337,7 @@ function create_merit_order_book(
         ratio = demand_per_slot > 0 ? supply_per_slot / demand_per_slot : 0.0
 
         println("  ✅ Merit-order book: $supply_orders_count supply / $demand_orders_count demand orders")
+        nwv === nothing || _nwv_report(nwv)   # cv46 P1 summary line (switch on only)
         println("     ⚖️  Supply/Demand ratio: $(round(ratio, digits=2))  (gas SRMC €$(round(gas_srmc, digits=1))/MWh)")
 
         return AdjustedOrderBookResult(
