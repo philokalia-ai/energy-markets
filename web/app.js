@@ -3365,8 +3365,8 @@
     var wc = (predictState.scorecard && predictState.scorecard.winner_counts) || {};
     var total = (wc.ml || 0) + (wc.pack || 0) + (wc.skip || 0);
     head.appendChild(el("p", "chart-sub",
-      (wc.ml || 0) + " of " + (total || 117) + " zone-targets ship the NEW LightGBM model; " +
-      (wc.pack || 0) + " keep the linear pack; " + (wc.skip || 0) + " have no resource (not modeled). " +
+      (wc.ml || 0) + " of " + (total || 117) + " zone-targets use a LightGBM model; " +
+      (wc.pack || 0) + " use a linear pack; " + (wc.skip || 0) + " have no resource (not modeled). " +
       "Each cell links into that zone's target page."));
     card.appendChild(head);
     var scroll = el("div", "table-scroll");

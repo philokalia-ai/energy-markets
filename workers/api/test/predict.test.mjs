@@ -144,7 +144,7 @@ for (const [zone, target] of [["GR", "load"], ["GR", "solar"], ["GR", "wind"]]) 
   const ft = fam.textContent;
   ok(fam.querySelector(".data-table") != null, "hub: family table rendered");
   ok(fam.querySelectorAll("th").length === 4, "hub: family table has zone/load/solar/wind headers");
-  ok(/ship the NEW LightGBM/.test(ft), "hub: family headline (winner breakdown)");
+  ok(/use a LightGBM model/.test(ft), "hub: family headline (winner breakdown)");
   ok(fam.querySelectorAll(".fam-badge").length > 0, "hub: per-zone winner badges rendered");
 
   const cards = P.buildTargetCards();
