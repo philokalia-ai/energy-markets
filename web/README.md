@@ -1,7 +1,9 @@
 # Euphemia results browser (static SPA)
 
-A dependency-free single-page app for browsing the model's ex-ante day-ahead
-price predictions against settled actuals, per bidding zone. Plain HTML/CSS/JS
+A dependency-free single-page app for browsing the two current forecasts per
+bidding zone against settled actuals: **Timestral + physics** (the headline
+forecast) and the **physics clear** (cv45). Owner rule: the site shows the latest
+and best only — see [CLAUDE.md](CLAUDE.md). Plain HTML/CSS/JS
 — no build step, no CDNs, no external requests.
 
 ```bash
@@ -12,33 +14,24 @@ Any static file server works; `file://` will not, because browsers block
 `fetch` there. Production is Cloudflare (energy.philokalia.ai) serving `web/`
 from `main`.
 
-## The global track switch
+## One track
 
-A header-level segmented control flips the whole site between two tracks — a
-lens over every price surface, not a separate view:
-
-- **Predicted** (default) — our fitted inputs end-to-end (`input_mode` starting
-  with `weather`): "how much can you trust our model".
-- **As announced** — the TSOs' announced D-1 inputs (`input_mode` `entsoe*`)
-  through the same bid construction and solver: "the fair test of the bidding
-  mechanism with inputs held at the official figures".
-
-State lives in the URL (`&track=`) + `localStorage`. The gap between tracks is
-itself a product: where announced beats predicted, a **track-gap chip**
-("announced MAE 12.1 · predicted 14.3 → input cost +2.2") surfaces the measured
-cost of our inputs. Views where the announced track has no meaning (the
-Predictions input-model cards, which *are* the Predicted pillar) say so inline.
+The site shows the physics on our own ex-ante weather inputs (`input_mode`
+starting with `weather`) only; the payloads also carry the announced-input
+(`entsoe*`) rows, which the SPA filters out. The live Timestral + physics issue is
+conditioned on this same weather-track lead-1 sim.
 
 Because every forecast uses the latest admissible inputs, the lead/D-n
 dimension is collapsed everywhere to the **freshest forecast per delivery day**.
 
 ## Views
 
-- **Recent days** — a continuous ±5-day ribbon around now: settled days carry
-  the actual overlaid with a per-day MAE·bias chip; today and the next ~5 days
-  are forecast alone. The seam marks the last settled hour. Two statistical
-  **model lines** (hybrid and pure-stats GBM) overlay the physics as dashed
-  series — see `models.html` for what they are and what they can't do.
+- **Recent days** — a ribbon around now (6 cleared + 3 upcoming days; 3 + 2 on a
+  phone): Timestral + physics (solid violet, q10–q90 band; a day that only has the
+  06:30 prices-only issue is labelled so and dashed), the physics clear labelled
+  with its code_version, and the settled actual with a per-day physics MAE · bias
+  caption. A cleared day whose actual is missing reads "no actual". See
+  `models.html`.
 - **Map** — day-average price per zone (Forecast / Actual), plus **Error %**:
   the exporter-computed load-weighted WAPE per zone-day (null until the day
   settles). A settled-only metric on an unsettled day renders an explicit
@@ -52,15 +45,13 @@ dimension is collapsed everywhere to the **freshest forecast per delivery day**.
   and flags collapse risk; clicking one opens the driver time series
   (temperature, GHI, cloud, pressure, 100 m wind, reservoir) aligned with the
   prediction and the actual. Recipe: [docs/predictions.md](../docs/predictions.md).
-- **Zone explorer** — per-day hourly forecast vs actual.
+- **Zone explorer** — per-day hourly Timestral + physics, physics and actual.
 - **Order book** — per zone × market day × hour, the merit-order supply ladder
   by ascending offer price (x = cumulative MW, y = €/MWh), coloured by owner,
   with dashed markers where the clearing price and the settled actual landed.
   Hour slider + play-through-day.
-- **Scoreboard** — MAE / bias / Pearson corr by window on the selected track,
-  with the track-gap chip on each cell where both tracks scored.
-- **Case studies** and **models** — scenario results and the two statistical
-  reference lines, as standalone pages.
+- **Scoreboard** — physics MAE / bias / Pearson corr / naive rMAE by window.
+- **Models** (`models.html`) — what the two forecasts are and how good they are.
 
 ## Data plane
 
@@ -107,7 +98,7 @@ series, hours ascending: `temp_c`, `ghi_wm2`, `cloud_pct`, `pressure_hpa`,
 midday RES-coverage summary the map colours by.
 
 Every payload carries the producing `code_version` (the exporter's
-`ENERGY_PRICES_CODE_VERSION`, currently 44; zone rows carry the version that
+`ENERGY_PRICES_CODE_VERSION`, currently 45; zone rows carry the version that
 produced each forecast). Metric
 conventions: **bias** = simulated − actual (negative = model under-prices),
 **MAE** in €/MWh, **corr** = Pearson on hourly prices, all over realized hours
@@ -120,7 +111,9 @@ calibrated bidding characteristics are flagged `price_informed` in
 `src/merit_order/zone_profiles.jl`), so persistent residuals are findings about
 the real market, not tuning targets. The `gbm`, `stats`, `tsfm*` and `p_le0`
 fields are statistical overlays that read settled prices, never part of the
-counterfactual.
+counterfactual. The site draws `tsfm*` (labelled "Timestral + physics" when
+`tsfm_input_mode` is `postsim`) and `p_le0`; `gbm` / `stats` stay in the payload
+but are not shown.
 
 Reference JSON shapes are produced by `bin/export_forecast_json.jl`; the R2
 parquet by `bin/export_web_parquet.jl` and `bin/export_prediction_inputs.jl`.

@@ -78,9 +78,9 @@
     characteristics that were <em>calibrated</em> — chosen with price error in view on a
     calibration window, many then checked on held-out days inside the same historical
     period — and the code flags every one of
-    them; the calibration table below lists them. The statistical price overlays on the
-    live charts (Timestral, the GBM lines) are kept apart from this model and labelled
-    as predictions.
+    them; the calibration table below lists them. The headline forecast on the live
+    charts, <a href="./models.html">Timestral + physics</a>, is a statistical model kept
+    apart from this one and labelled as a prediction.
   </p>
 
   <div class="meander" aria-hidden="true"></div>
@@ -103,13 +103,12 @@
     the methodology is transparent and every input is strictly ex-ante. Most named
     characteristics were nonetheless <em>chosen</em> with price error in view on
     calibration windows; many were then checked on held-out days, but those days lie
-    inside the same historical period the record is scored on, and the two newest
-    mechanisms (cv43, cv44) had no separate hold-out. So the record's scores are not a
-    clean out-of-sample test of the calibration. The calibrated characteristics are frozen
-    as of cv44 (2026-11-15), and any later change to one gets a new code version, so the
-    only clean out-of-sample physics record is the live one since then — the scoreboard's
-    “since freeze (cv44, 2026-11-15)” window, still very short. A model fitted to prices would absorb exactly
-    the competitive deviations we exist to measure.
+    inside the same historical period the record is scored on, so the record's scores are
+    not a clean out-of-sample test of the calibration. The calibrated characteristics are
+    frozen, and any change to one gets a new code version, so the only clean
+    out-of-sample physics record is the live one since the current version (cv45,
+    2026-11-21): the scoreboard's “since freeze” window, still short. A model fitted to
+    prices would absorb exactly the competitive deviations we exist to measure.
   </p>
 
   <h2>Why — the research thesis</h2>
@@ -182,26 +181,20 @@
           its <strong>opportunity cost</strong> — a water value tied to dryness and
           drawdown versus the seasonal norm.</li>
         <li><strong>Regime-gated behaviours that exist in the market</strong>, gated
-          ex-ante and kill-switchable — e.g. the solar-surplus price-taker floor
-          (cv31), which only activates when the day-ahead solar share of load is high,
-          and is inert everywhere else; or the winner-input RES corrections (cv32),
+          ex-ante and kill-switchable — e.g. the solar-surplus price-taker floor,
+          which only activates when the day-ahead solar share of load is high,
+          and is inert everywhere else; or the winner-input RES corrections,
           which replace the TSO's solar forecast for IT-Sicily and IT-Sardinia with a
           D-1-legal measured correction, only where the TSO forecast is demonstrably
           the weaker input.</li>
         <li><strong>Cross-border ATC coupling on 39 zones</strong> with two-pass
           opportunity anchors; zonal prices are the duals of the balance constraints,
           exactly as in the real coupling.</li>
-        <li><strong>Pumped storage as energy-limited orders</strong> (cv44): each
+        <li><strong>Pumped storage as energy-limited orders</strong>: each
           zone's pumped-storage fleet can only produce its recent daily output (its own
           last 14 days, published before the gate), and a full-day pass places that
           energy in the hours where it is worth most — instead of offering unlimited
           energy every hour.</li>
-        <li>Where a mechanism had a preregistered design (e.g. cv31, cv36), it was
-          calibrated on one set of days (Set A) and scored once on held-out days
-          (Set B) — both inside the period the record covers, so not independent of
-          the historical scores. The two most recent mechanisms (cv43 in-merit coal/lignite truthing, cv44 pumped
-          storage) were adopted on a measured 8-day check without a separate
-          hold-out.</li>
       </ul>
       <p>
         <a class="more-link" href="./#view=book">See the constructed order book &rarr;</a>
@@ -288,7 +281,7 @@
   <h2>How the model works</h2>
   <ol>
     <li><strong>Fleet and costs.</strong> Every dispatchable generator in each zone, with
-      marginal costs built from real TTF gas futures, daily EUA carbon prices, and fuel
+      marginal costs built from real TTF gas futures (on their gross calorific basis), daily EUA carbon prices, and fuel
       emission factors — short-run marginal cost, no bid markup.</li>
     <li><strong>The order book.</strong> Thermal units bid their marginal cost;
       renewables bid the D-1 forecast as price-takers; reservoir hydro bids its
@@ -394,7 +387,7 @@
       <g class="mm-node mm-ok" tabindex="0" data-tip="&lt;b&gt;Implemented.&lt;/b&gt; Per-unit fleet from the ENTSO-E registry: outage filtering (planned + forced), stale-validity fallback via recent generation, deduplication, fleet completion and installed-capacity truthing where the registry undercounts.">
         <ellipse cx="300" cy="410" rx="54" ry="24"/><text x="300" y="406">Conventional</text><text x="300" y="420">Plants</text>
       </g>
-      <g class="mm-node mm-part" tabindex="0" data-tip="&lt;b&gt;Partial.&lt;/b&gt; Since cv44 pumped storage is energy-limited: each zone's fleet gets a daily energy budget from its own last 14 days of output, a full-day pass over the coupled footprint places it in the most valuable hours, and the hourly clear prices it. Batteries still offer as flexible supply. Pumping demand is not bid (see Charging), so this is not a full charge/discharge optimization.">
+      <g class="mm-node mm-part" tabindex="0" data-tip="&lt;b&gt;Partial.&lt;/b&gt; Pumped storage is energy-limited: each zone's fleet gets a daily energy budget from its own last 14 days of output, a full-day pass over the coupled footprint places it in the most valuable hours, and the hourly clear prices it. Batteries still offer as flexible supply. Pumping demand is not bid (see Charging), so this is not a full charge/discharge optimization.">
         <ellipse cx="370" cy="490" rx="54" ry="22"/><text x="370" y="486">Storage:</text><text x="370" y="500">Discharging</text>
       </g>
       <g class="mm-node mm-ok" tabindex="0" data-tip="&lt;b&gt;Implemented.&lt;/b&gt; The merit-order book: SRMC bids, must-run discounts for the cheapest units, scarcity uplift when the margin over peak is thin. Strategy is a competitive cost form plus a declared, price-informed scarcity/peak markup (the conduct layer, switchable off as a sensitivity check); the gap to reality is the finding.">
@@ -403,10 +396,10 @@
       <g class="mm-node mm-no" tabindex="0" data-tip="&lt;b&gt;Not implemented — deliberately.&lt;/b&gt; Speculative (virtual) selling is excluded: the model is a competitive counterfactual, and strategic arbitrage bidding is part of what it measures, not what it assumes.">
         <ellipse cx="382" cy="232" rx="40" ry="22"/><text x="382" y="228">Virtual</text><text x="382" y="242">Sellers</text>
       </g>
-      <g class="mm-node mm-ok" tabindex="0" data-tip="&lt;b&gt;Implemented.&lt;/b&gt; All 39 zones clear jointly under their capacity limits: offered ATC where the market really uses ATC, and since cv35 JAO's own flow-based maximum bilateral exchanges (scaled to each hub's net-position range, capped by transmission-outage messages) on the Core and Nordic borders, which have no day-ahead ATC at all. JAO publishes at 10:30 CET on D-1, so this is ex-ante by construction. Borders to markets we do not model enter as data through a versioned ex-ante flow rule — a per-border load-analogue median blended with the fastest admissible D-2 observation, never same-day flows. &lt;i&gt;Still missing:&lt;/i&gt; the full PTDF/RAM domain, and the exact net-position constraint inside the solver.">
+      <g class="mm-node mm-ok" tabindex="0" data-tip="&lt;b&gt;Implemented.&lt;/b&gt; All 39 zones clear jointly under their capacity limits: offered ATC where the market really uses ATC, and JAO's own flow-based maximum bilateral exchanges (scaled to each hub's net-position range, capped by transmission-outage messages) on the Core and Nordic borders, which have no day-ahead ATC at all. JAO publishes at 10:30 CET on D-1, so this is ex-ante by construction. Borders to markets we do not model enter as data through a versioned ex-ante flow rule — a per-border load-analogue median blended with the fastest admissible D-2 observation, never same-day flows. &lt;i&gt;Still missing:&lt;/i&gt; the full PTDF/RAM domain, and the exact net-position constraint inside the solver.">
         <ellipse cx="480" cy="168" rx="64" ry="24"/><text x="480" y="164">Interconnections:</text><text x="480" y="178">Exports</text>
       </g>
-      <g class="mm-node mm-ok" tabindex="0" data-tip="&lt;b&gt;Implemented.&lt;/b&gt; Hourly supply orders {volume, €/MWh, timeslot}. Inter-temporal block orders were built, tested on 14 zones, and &lt;i&gt;rejected&lt;/i&gt; as a default — a recorded negative result (they help only thermal-cycling zones in winter). Since cv44 pumped storage enters as linked, energy-limited hourly families by default; thermal block orders (with paradoxically-accepted-block rejection) are opt-in, not in production. Minimum-income (MIC) orders are not modelled.">
+      <g class="mm-node mm-ok" tabindex="0" data-tip="&lt;b&gt;Implemented.&lt;/b&gt; Hourly supply orders {volume, €/MWh, timeslot}. Inter-temporal block orders were built, tested on 14 zones, and &lt;i&gt;rejected&lt;/i&gt; as a default — a recorded negative result (they help only thermal-cycling zones in winter). Pumped storage enters as linked, energy-limited hourly families by default; thermal block orders (with paradoxically-accepted-block rejection) are opt-in, not in production. Minimum-income (MIC) orders are not modelled.">
         <ellipse cx="560" cy="350" rx="76" ry="26"/><text x="560" y="346">Sell</text><text x="560" y="360">{Vol, €/MWh, Timeslot}</text>
       </g>
 
@@ -420,7 +413,7 @@
       <g class="mm-node mm-no" tabindex="0" data-tip="&lt;b&gt;Not decomposed.&lt;/b&gt; Industrial load is inside the total. Large flexible industrial demand (and its price response) is a candidate future refinement.">
         <ellipse cx="1008" cy="150" rx="46" ry="22"/><text x="1008" y="146">Heavy</text><text x="1008" y="160">Industry</text>
       </g>
-      <g class="mm-node mm-part" tabindex="0" data-tip="&lt;b&gt;Partial — now shipped on pilots.&lt;/b&gt; We DO model weather→demand: per-zone LightGBM load models on GFS &lt;code&gt;previous_day1&lt;/code&gt; temperature + irradiance, degree-hours and calendar features, capacity-free and strictly D-1-legal. Default-ON in the ex-ante track for the five pilot zones (GR/ES/DE_LU/SE2/NL); the 39-zone rollout is in progress. Where our model is not yet live the reference track still uses ENTSO-E's D-1 load forecast.">
+      <g class="mm-node mm-part" tabindex="0" data-tip="&lt;b&gt;Partial.&lt;/b&gt; We DO model weather→demand: per-zone LightGBM load models on GFS &lt;code&gt;previous_day1&lt;/code&gt; temperature + irradiance, degree-hours and calendar features, capacity-free and strictly D-1-legal. Default-ON in the ex-ante track for the five pilot zones (GR/ES/DE_LU/SE2/NL); the 39-zone rollout is in progress. Where our model is not yet live the reference track still uses ENTSO-E's D-1 load forecast.">
         <ellipse cx="908" cy="162" rx="44" ry="17"/><text x="908" y="167">Weather ⛅</text>
       </g>
       <g class="mm-node mm-ok" tabindex="0" data-tip="&lt;b&gt;Implemented.&lt;/b&gt; ENTSO-E's D-1 total load forecast per zone — the same demand information the real auction cleared on. If it isn't published in time, the day is honestly skipped.">
@@ -438,12 +431,12 @@
       <g class="mm-node mm-no" tabindex="0" data-tip="&lt;b&gt;Not implemented.&lt;/b&gt; Pumping / battery-charging demand is not bid into the book — storage participates on the supply side only. A pumping-demand order was tested and made prices worse in both tests, so it stays off. The missing half of the arbitrage cycle.">
         <ellipse cx="872" cy="470" rx="50" ry="22"/><text x="872" y="466">Storage:</text><text x="872" y="480">Charging</text>
       </g>
-      <g class="mm-node mm-ok" tabindex="0" data-tip="&lt;b&gt;Implemented.&lt;/b&gt; Hourly demand orders {volume, €/MWh, timeslot}. The scenario API injects extra demand here — the data-center and cold-ironing case studies are exactly this hook.">
+      <g class="mm-node mm-ok" tabindex="0" data-tip="&lt;b&gt;Implemented.&lt;/b&gt; Hourly demand orders {volume, €/MWh, timeslot}. The scenario API injects extra demand here.">
         <ellipse cx="762" cy="374" rx="74" ry="26"/><text x="762" y="370">Buy</text><text x="762" y="384">{Vol, €/MWh, Timeslot}</text>
       </g>
 
       <!-- clearing -->
-      <g class="mm-node mm-ok" tabindex="0" data-tip="&lt;b&gt;Implemented.&lt;/b&gt; EUPHEMIA-style clearing: a MILP with complementarity conditions; zonal prices are the duals of the zonal balance constraints, exactly as in the real coupling. Two passes propagate opportunity costs across the footprint; since cv44 a full-day pass first allocates pumped-storage energy. Solvers: Gurobi / HiGHS.">
+      <g class="mm-node mm-ok" tabindex="0" data-tip="&lt;b&gt;Implemented.&lt;/b&gt; EUPHEMIA-style clearing: a MILP with complementarity conditions; zonal prices are the duals of the zonal balance constraints, exactly as in the real coupling. Two passes propagate opportunity costs across the footprint; a full-day pass first allocates pumped-storage energy. Solvers: Gurobi / HiGHS.">
         <ellipse cx="660" cy="512" rx="52" ry="28"/><text x="660" y="504">Market</text><text x="660" y="517">Clearing</text><text x="660" y="530">Price</text>
       </g>
     </svg>
@@ -457,51 +450,38 @@
     kept visible on purpose.
   </p>
 
-  <h2 id="two-tracks">The two tracks, stated plainly — the record vs the product</h2>
+  <h2 id="two-tracks">The record and the product</h2>
   <p>
-    The two layers above give the model two distinct jobs, and we keep their
-    scoreboards separate on purpose. It is important not to confuse them:
+    The two layers above give the model two distinct jobs:
   </p>
   <ul>
     <li><strong>The record measures the MECHANISM.</strong> The counterfactual
-      backfill — the multi-year history at its record code version
-      (<strong>cv37</strong> in the figures below; a cv44 rerun of 2024-07 → 2026-11
-      has been computed and is being loaded) — runs on the <strong>reference
-      inputs</strong>: ENTSO-E's published D-1 load and wind/solar forecasts, the same
+      backfill — the multi-year history at the current code version — runs on the
+      <strong>reference inputs</strong>: ENTSO-E's published D-1 load and wind/solar forecasts, the same
       information set the market itself cleared on. Holding the inputs fixed to the
       market's own isolates one question — <em>given those inputs, where would
       competitive prices sit?</em> — so the residual is a clean measurement of the
       clearing mechanism and of conduct. <strong>Our fitted weather predictions never
-      enter the record</strong>, with one measured, narrowly-scoped exception from
-      cv32: for IT-Sicily and IT-Sardinia the record's solar input is a D-1-legal
-      actuals-target correction, adopted because the TSO forecast there is
-      systematically wrong (45% / 32% error reduction against measured output) and
-      validated at year scale with zero collateral damage elsewhere. Everywhere else
-      the reference-input rule stands.</li>
+      enter the record</strong>, with one narrow exception: for IT-Sicily and
+      IT-Sardinia the record's solar input is a D-1-legal correction against measured
+      output, because the TSO forecast there is systematically wrong.</li>
     <li><strong>The ex-ante track measures the PRODUCT.</strong> The live forecast runs
       on <em>our own</em> fitted weather inputs (Layer 1) and freezes
       <strong>before the auction gate</strong>, so every row is provable ex-ante by its
       timestamp. This is the deployable forecast a participant could act on the evening
-      before delivery; it is scored separately and becomes the headline as it
-      accumulates.</li>
+      before delivery. Every chart and score on this site is this track. Its physics clear
+      is the covariate of the headline forecast, <a href="./models.html">Timestral +
+      physics</a>.</li>
   </ul>
-  <p>
-    The reference track (what the historical scoreboard shows today) freezes in the
-    evening — before delivery, but <em>after</em> the auction results are public — and
-    answers "given the market's own inputs, where would competitive prices sit?". The
-    ex-ante track answers the harder question "what will the market do tomorrow?" from
-    weather alone. Same clearing engine, different inputs, two honestly-labelled
-    scoreboards.
-  </p>
 
   <h2>The ex-ante guarantees</h2>
   <p>Every prediction on this site satisfies, by construction:</p>
   <ul>
     <li><strong>Frozen before delivery.</strong> For the physics forecasts, an hour-level
       guard makes it impossible to write a value whose delivery hour has passed; they are
-      never revised, and the record is append-only. From 2026-11-17, GBM rows are issued
-      before the auction gate and are not rewritten afterwards; older GBM rows were
-      rewritten daily. A same-mode Timestral reissue replaces the earlier values.</li>
+      never revised, and the record is append-only. The Timestral + physics forecast
+      reads only settled prices before the delivery day and a physics vintage made by
+      10:00 UTC on D&minus;1.</li>
     <li><strong>Provenance per row.</strong> Every prediction records the timestamp it
       was made, so anyone can verify what was known when.</li>
     <li><strong>Pre-auction where possible.</strong> The morning run freezes predictions
@@ -525,15 +505,11 @@
       — once JAO publishes its D-1 maximum bilateral exchanges (10:30 CET), lead 1 is
       re-cleared with them as capacities on the flow-based borders and frozen. Still
       pre-gate.</span></li>
-    <li><span class="t-time">10:40 UTC</span><span><strong>Overlay refresh</strong> — the
-      statistical overlays are issued for tomorrow: the GBM lines, and a refreshed Timestral line
-      with the frozen lead-1 forecast as an input (the 06:30 Timestral line uses settled prices only).
-      Timestral takes the latest lead-1 vintage made by 10:00 UTC; from 2026-11-17,
-      GBM physics and settled-price vintages are limited to issue time and rows freeze at the gate.
-      At 10:40 UTC in summer, the gate has passed, so next-day GBM lines are empty unless issued
-      earlier. The site picks both up at
-      about 11:30 UTC — after the auction gate, so these are not pre-gate
-      publications.</span></li>
+    <li><span class="t-time">≈ 11:30 UTC</span><span><strong>Timestral + physics</strong> —
+      tomorrow's forecast, with the latest lead-1 physics vintage made by 10:00 UTC as an
+      input, reaches the site after the auction gate: a forecast on pre-gate inputs, not a
+      pre-gate publication. Where it is missing, the site shows the 06:30 UTC prices-only
+      issue.</span></li>
     <li><span class="t-time">evening</span><span><strong>Reference fill</strong> — ENTSO-E's
       D-1 items propagate to the bulk export late for large zones, so an evening refresh
       fills whatever the morning could not see. Writes never overwrite a pre-gate
@@ -542,28 +518,11 @@
 
   <h2>The 7-day horizon and the vintage record</h2>
   <p>
-    The <a href="./index.html">Next 7 days</a> view publishes an hourly price
-    forecast for every upcoming market day. Because the decisive ENTSO-E inputs
-    exist only for tomorrow, the leads are honest about their information:
-  </p>
-  <ul>
-    <li><strong>D&minus;1</strong> is the full model forecast on complete published
-      inputs — frozen the evening before delivery.</li>
-    <li><strong>D&minus;2 … D&minus;7</strong> are the <em>weekly-persistence
-      baseline</em>: the frozen model forecast from the same weekday one week earlier —
-      a deliberately simple bar to beat. Now that the weather layer has shipped, these
-      leads are being converted to true re-forecasts on fresh multi-day weather
-      vintages, pilot zones first, with the per-lead scoreboard showing the improvement
-      against exactly this baseline as the rollout reaches each zone.</li>
-  </ul>
-  <p>
-    Every day the pipeline writes the newly-due vintage for each future day and
-    <strong>never overwrites an earlier one</strong> — so for every delivery day D the
-    record holds what we said at D&minus;7, D&minus;6, …, D&minus;1, each stamped with
-    the moment it was made. The "What we said, when" panel shows exactly that:
-    all vintages overlaid, oldest faintest, against the settled actual once the day
-    realizes. Forecast revisions are data, not embarrassments — they are how the
-    model's information gain per day of lead time is measured.
+    The physics clears every market day up to seven days ahead, each lead a full clear on
+    that day's weather vintage. Every day the pipeline writes the newly-due vintage for each future
+    day and <strong>never overwrites an earlier one</strong>, each stamped with the moment
+    it was made. The <a href="./index.html">recent-days</a> view shows the freshest
+    vintage per delivery day.
   </p>
 
 
@@ -574,7 +533,7 @@
   </p>
   <ul>
     <li><strong>Thermal plants bid short-run marginal cost</strong>: gas plants at
-      TTF futures / efficiency + CO₂ (daily EUA price × emission factor) + O&amp;M;
+      TTF futures (gross calorific basis) / efficiency + CO₂ (daily EUA price × emission factor) + O&amp;M;
       coal and lignite from their own fuel and carbon stacks. No strategic markup on the
       cost itself; the scarcity/peak tranches described below are a declared,
       price-informed conduct layer, flagged as such.</li>
@@ -631,13 +590,11 @@
     The table below is not a description of the calibration — it <em>is</em> the
     calibration, read out of the code by resolving every zone's profile in-process.
     Nothing here is maintained by hand, because a hand-kept calibration table drifts
-    from the model within one iteration (ours did: it listed four zones on the base
-    profile that the registry had already moved onto an import-backed one).
+    from the model within one iteration.
   </p>
   <p>
     For an interactive walk through the same profiles — with the SRMC cost model,
-    the tranche/must-run form, the observed/declared provenance wall and the
-    calibration timeline — see
+    the tranche/must-run form and the observed/declared provenance wall — see
     <a href="./index.html#view=method">How bids are built</a>. It reads the same
     generated objects, so the two can never disagree.
   </p>
@@ -661,38 +618,16 @@
   <h2>Scoring, honestly</h2>
   <p>
     As days settle, predictions are scored per zone and per lead time against the
-    official day-ahead auction prices: <strong>MAE</strong> (mean absolute error, €/MWh),
-    <strong>bias</strong> (mean simulated&nbsp;−&nbsp;actual — negative means the model
-    under-prices, which for a competitive counterfactual is a signal, not a bug), and
-    <strong>correlation</strong> of hourly prices. Whole-sample, never cherry-picked.
-    The target is the SDAC auction everywhere: since 2026-11-17 the AT and DE_LU hourly
-    “actual” is SDAC (sequence&nbsp;1), as their native 15-min scores already were, and all
-    stored hourly scores were rescored on it. Before that date it was the early EXAA auction
-    there. The switch moved AT 85.16&nbsp;→&nbsp;88.83 and DE_LU 58.46&nbsp;→&nbsp;59.17 €/MWh on the live lead-1 physics forecast (2026-09-14&nbsp;→&nbsp;11-13); on the cv44 record (2024-07&nbsp;→&nbsp;2026-06) AT 18.00&nbsp;→&nbsp;20.43 and DE_LU 19.09&nbsp;→&nbsp;20.20 (MAE, €/MWh). The record tables below predate it.
-    The record quoted here is <strong>cv37</strong> (the current model is cv44; its
-    record figures will replace these once loaded): all 39 zones, 786 delivery
-    days (2024-07-01 → 2026-08-26), 734,640 hourly cells matched against settled
-    prices. Over the comparable last 12 months (2025-07 → 2026-06, 341,160 cells) the
-    footprint sits at <strong>MAE €23.7</strong>, bias <strong>−€5.2</strong>, with a
-    median zone correlation of <strong>0.78</strong>. Weighting each zone by its energy,
-    <strong>90% of European volume</strong> now clears in zones the model tracks at
-    correlation ≥ 0.70, and <strong>56%</strong> at ≥ 0.80 — up from 44% one model
-    version ago. Germany and Greece both reach <strong>0.86</strong>.
-    Weak zones are shown with the same prominence as strong ones: SE4 at
-    <strong>0.42</strong> is the worst, and persistent level gaps remain in the Baltics
-    (≈&nbsp;−€23/MWh) and the Core evening belt.
-  </p>
-  <p>
-    The single largest step came from the <strong>network, not the bids</strong>. Core
-    and Nordic borders no longer clear against transfer capacities at all — they clear
-    against flow-based domains, and the public capacity table carries no day-ahead rows
-    for them. Since cv35 the model takes those limits from JAO's own D-1 publication
-    instead — its maximum bilateral exchanges, used as ATC-style capacities; the full
-    PTDF/RAM domain is not modelled: on 52 held-out Wednesdays the footprint went from MAE €26.2 / corr 0.68 to
-    <strong>€23.4 / 0.76</strong>, with the Core cluster halving its error. It cost
-    something honest: detection of price-collapse hours fell from 43% to
-    <strong>14%</strong> (with false alarms down 1019&nbsp;→&nbsp;174) — better
-    precision, worse recall, and the first thing the next network step should recover.
+    official SDAC day-ahead auction prices: <strong>MAE</strong> (mean absolute error,
+    €/MWh), <strong>bias</strong> (mean simulated&nbsp;−&nbsp;actual — negative means the
+    model under-prices, which for a competitive counterfactual is a signal, not a bug),
+    <strong>correlation</strong> of hourly prices, and <strong>rMAE</strong>: MAE divided
+    by that of a naive forecast (the settled price one day earlier) on the same hours.
+    Whole-sample, never cherry-picked; weak zones are shown with the same prominence as
+    strong ones. The headline forecast, Timestral + physics, scores
+    <strong>rMAE 0.578 vs the D-1 naive</strong> over a two-year backtest of the live
+    configuration, 718 days × 39 zones (<a href="./models.html">details and coverage</a>). The physics clear's live scores by zone and
+    window are on the <a href="./index.html#view=board">scoreboard</a>.
   </p>
   <p>
     The clearing solver itself is validated against <strong>real published
@@ -703,90 +638,29 @@
     <a href="https://github.com/philokalia-ai/energy-markets/blob/main/docs/experiments/pubbooks-clearing/REPRODUCE.md">reproduce&nbsp;it&nbsp;→</a>.
   </p>
 
-  <h2>The weather layer — shipped, and independent of late inputs</h2>
+  <h2>The weather layer — independent of late inputs</h2>
   <p>
     ENTSO-E's day-ahead load and renewables forecasts publish late and only for the
-    next day, which caps the reference track at lead&nbsp;1. The weather layer removes
-    that ceiling by predicting wind, solar and load ourselves from raw weather — and
-    it has <strong>shipped</strong>: per-zone LightGBM models on GFS
-    <code>previous_day1</code> vintages, default-ON in the ex-ante track for the five
-    pilot zones (GR/ES/DE_LU/SE2/NL), with the 39-zone rollout underway. Wind uses an
-    OpenStreetMap extraction of <strong>115,390 turbines</strong> across the footprint;
-    solar uses GFS irradiance, a clearness index and sun geometry; load uses
-    temperature, irradiance and degree-hours over population-weighted cities.
+    next day. The weather layer predicts wind, solar and load ourselves from raw
+    weather: per-zone LightGBM models on GFS <code>previous_day1</code> vintages,
+    default-ON in the ex-ante track for the five pilot zones (GR/ES/DE_LU/SE2/NL).
+    Wind uses an OpenStreetMap extraction of <strong>115,390 turbines</strong> across
+    the footprint; solar uses GFS irradiance, a clearness index and sun geometry; load
+    uses temperature, irradiance and degree-hours over population-weighted cities.
   </p>
   <p>
-    The point of predicting the inputs is not tidier forecasts — it is the
-    <strong>collapse question</strong>. Near the point where predicted wind+solar
-    approaches load, a small solar-forecast error flips whether the midday price
-    <em>collapses</em> to ≤ €5 (or below zero), and that classification dominates
-    continuous error there. The committed input scorecard measures exactly this:
-    against the broken linear pack, the ML solar restores Greek collapse-hour
-    detection from <strong>8/16 to 13/16</strong> midday hours — matching the reference
-    track's own <strong>14/16</strong> — because the capacity-normalized model
-    <em>sees</em> the crashes the pack's clear-sky under-prediction hid. And where the
-    committed pack was outright broken, the ML repairs it: the
-    <strong>Dutch load model's correlation goes 0.19&nbsp;→&nbsp;0.86</strong>. Both
-    numbers are from committed artifacts
-    (<a href="https://github.com/philokalia-ai/energy-markets/blob/main/docs/experiments/input-upgrade/wiring.md">wiring.md</a>,
-    <a href="https://github.com/philokalia-ai/energy-markets/blob/main/docs/experiments/input-upgrade/README.md">the input-upgrade scorecard</a>).
-    Discipline shows in the costs too: richer solar over-collapses Greece on the one
-    genuinely-expensive pilot day, a false alarm we report rather than hide, per the
-    rule "gate activation on the collapse false-alarm rate, not MAE alone".
-  </p>
-
-  <h2>What we tested and rejected</h2>
-  <p>
-    Negative results are part of the record, and we keep them visible as evidence of
-    the discipline — a mechanism ships only when it clears its preregistered gates on
-    held-out data:
-  </p>
-  <ul>
-    <li><strong>Inter-temporal commitment bidding</strong> (block orders with startup
-      dynamics) was built, tested across 14 zones, and rejected as a default — it helps
-      only thermal-cycling zones in winter and hurts hydro-dominated ones. Thermal block
-      orders remain available opt-in (with paradoxically-accepted-block rejection); the
-      default complex orders since cv44 are pumped storage's energy-limited families, and
-      MIC orders are not modelled.</li>
-    <li><strong>A plant-level physical simulation of renewables</strong> was evaluated
-      and found unnecessary; one sun-geometry feature carries the physics.</li>
-    <li><strong>The Nordic reservoir-wetness water value</strong> was implemented
-      exactly to its frozen prereg and measured NO-SHIP (conflicted): the only arm
-      that met the within-regime floor tripped the envelope-correlation falsifier on
-      its own zones
-      (<a href="https://github.com/philokalia-ai/energy-markets/blob/main/docs/experiments/nordic-wetness/results.md">results</a>).
-      A narrower redesign — damping the <em>winter drawdown lift</em> in wet years
-      rather than re-pricing water outright — later cleared its gates and shipped as
-      cv37 (SE2 −8.0&nbsp;MAE on the held-out window). The negative result is what
-      told us which half of the mechanism was wrong.</li>
-    <li><strong>The cv30 export-capability and surplus-floor package</strong> failed
-      three frozen gates on the calibration set — it manufactured new cap-hours and
-      breached correlation envelopes — so it was not scored on the hold-out and did not
-      ship (<a href="https://github.com/philokalia-ai/energy-markets/blob/main/docs/experiments/cv30-results.md">results</a>).</li>
-    <li><strong>The market-implied forecast experiment</strong> inverted our own
-      order book to recover the solar quantity the market "believed". Both frozen
-      hypotheses were rejected — but the inversion returned the TSO forecast almost
-      exactly (bias −38&nbsp;MW), the sharpest measurement yet that a long-calibrated
-      book co-adapts to its inputs, and it sized Greece's collapse deficit at
-      ~2.5&nbsp;GW of missing surplus quantity
-      (<a href="https://github.com/philokalia-ai/energy-markets/blob/main/docs/experiments/market-implied/results-gr-2026-08.md">results</a>).</li>
-    <li><strong>The GR surplus-quantity package</strong> (a negative floor plus a
-      cycling-avoidance "valley continuation" tranche, the hourly projection of a
-      block order — true Gurobi block orders were prototyped and proved
-      price-identical at this design) failed its frozen primary on the calibration
-      set: the coupled 39-zone clear already captures 87% of Greek collapse hours,
-      so levers sized to the single-zone deficit overshoot. The recorded lesson:
-      diagnose coupled-path packages ON the coupled path
-      (<a href="https://github.com/philokalia-ai/energy-markets/blob/main/docs/experiments/gr-surplus-quantity/setA-results-2026-08.md">results</a>).</li>
-  </ul>
-  <p>
-    Each of these has its numbers and prereg in the repository's <code>docs/</code> —
-    the full investigation record, kept whether or not the answer was yes.
+    The point of predicting the inputs is the <strong>collapse question</strong>. Near
+    the point where predicted wind+solar approaches load, a small solar-forecast error
+    flips whether the midday price <em>collapses</em> to ≤ €5 (or below zero), and that
+    classification dominates continuous error there. The ML solar detects
+    <strong>13 of 16</strong> Greek midday collapse hours in the input scorecard, against
+    the reference track's <strong>14/16</strong>
+    (<a href="https://github.com/philokalia-ai/energy-markets/blob/main/docs/experiments/input-upgrade/README.md">the input-upgrade scorecard</a>).
   </p>
 
   <h2 id="open-by-default">Open by default — run it yourself</h2>
   <p>
-    The model, the calibration history, the experiment scripts, and a self-contained
+    The model, the experiment record (negative results included), and a self-contained
     public data extract are on GitHub —
     <a href="https://github.com/philokalia-ai/energy-markets">philokalia-ai/energy-markets</a>.
     The full 39-zone clear reproduces offline, no database required: the daily-refreshed

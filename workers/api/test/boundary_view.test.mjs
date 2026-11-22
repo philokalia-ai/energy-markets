@@ -11,7 +11,7 @@
  *      "NOT a book" correction + the 3-step roadmap + blank anchor;
  *   3. every measured score is QUOTED from the fixture (before→after arrows), never
  *      recomputed;
- *   4. the :v3 flow-rule panel carries the cv25 "caught our own lookahead" note.
+ *   4. the :v3 flow-rule panel shows the current rule only (no legacy path, no audit history).
  *
  * The fixture lives under workers/api/test/fixtures/ (never shipped to the site).
  */
@@ -159,9 +159,8 @@ await settle();
 {
   const fr = byId("boundary-flowrule").textContent;
   ok(/:v3/.test(fr) && /load-analogue/i.test(fr), "flow rule: :v3 load-analogue rule explained");
-  ok(/legacy/i.test(fr) && /:d0/.test(fr), "flow rule: :d0 named as legacy only");
-  const audit = byId("boundary-flowrule-audit").textContent;
-  ok(/caught our own lookahead/i.test(audit), "flow rule: the cv25 lookahead-audit note");
+  ok(!/legacy/i.test(fr) && !/:d0/.test(fr), "flow rule: current rule only (no legacy :d0 path)");
+  ok(byId("boundary-flowrule-audit").textContent === "", "flow rule: no version-history (cv25 audit) exhibit");
 }
 
 if (failures) {

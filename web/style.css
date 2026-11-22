@@ -30,9 +30,7 @@
   --heading:        var(--deep-blue);
   --series-sim:     var(--aegean);      /* simulated (ex-ante) */
   --series-act:     var(--terracotta);  /* actual (settled) */
-  --series-gbm:     #D4649B;            /* physics + ex-ante GBM (pink) */
-  --series-stats:   #C9A227;            /* pure-stats GBM (yellow) */
-  --series-tsfm:    #7B5EA7;            /* Timestral TSFM overlay (violet) */
+  --series-tsfm:    #7B5EA7;            /* Timestral + physics, the headline forecast (violet) */
   --status-good:    #2E7D46;
   --status-weak:    #C0392B;
   --good-text:      #2E7D46;
@@ -76,9 +74,7 @@
   --heading:        #DCE6F2;
   --series-sim:     #6FA8DC;
   --series-act:     #E0A458;
-  --series-gbm:     #F084B8;            /* physics + ex-ante GBM (pink) */
-  --series-stats:   #E8C547;            /* pure-stats GBM (yellow) */
-  --series-tsfm:    #B39DDB;            /* Timestral TSFM overlay (violet) */
+  --series-tsfm:    #B39DDB;            /* Timestral + physics, the headline forecast (violet) */
   --status-good:    #58B372;
   --status-weak:    #E06555;
   --good-text:      #58B372;
@@ -390,65 +386,10 @@ select {
 }
 :root[data-theme="dark"] .segmented button[aria-pressed="true"] { background: var(--accent); color: #0E1B2E; }
 
-/* ---------- the global track switch (Predicted | As-announced) ---------- */
-.track-switch-row {
-  display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 16px;
-  margin: 14px 0 4px;
-}
-.track-switch .seg-btn {
-  appearance: none; border: none; background: var(--surface-1);
-  color: var(--text-secondary); font: inherit; font-size: 13.5px;
-  padding: 6px 16px; cursor: pointer; font-weight: 500;
-}
-.track-switch .seg-btn + .seg-btn { border-left: 1px solid var(--baseline); }
-.track-switch .seg-btn.active,
-.track-switch .seg-btn[aria-checked="true"] {
-  background: var(--deep-blue); color: var(--ivory); font-weight: 600;
-}
-:root[data-theme="dark"] .track-switch .seg-btn.active,
-:root[data-theme="dark"] .track-switch .seg-btn[aria-checked="true"] {
-  background: var(--accent); color: #0E1B2E;
-}
-.track-explainer {
-  flex: 1 1 340px; min-width: 240px; margin: 0;
-  font-size: 12.5px; line-height: 1.45; color: var(--text-muted);
-}
-.track-explainer strong { color: var(--text-secondary); }
-.track-explainer-gap { color: var(--text-secondary); }
-.track-explainer-note { font-style: italic; opacity: 0.85; }
-
-/* Track-gap chip: "announced MAE 12.1 · predicted 14.3 → input cost +2.2" */
-.track-gap-chip {
-  display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap;
-  margin-left: 8px; padding: 1px 7px; border-radius: 999px;
-  border: 1px solid var(--baseline); background: var(--surface-1);
-  font-size: 11px; line-height: 1.6; vertical-align: middle;
-  font-variant-numeric: tabular-nums;
-}
-.track-gap-chip .tg-part { color: var(--text-muted); }
-.track-gap-chip .tg-part + .tg-part::before { content: "· "; }
-.track-gap-chip .tg-cost { font-weight: 600; color: var(--text-secondary); }
-.track-gap-chip.cost-pos .tg-cost { color: var(--terracotta, #B45309); }
-.track-gap-chip.cost-neg .tg-cost { color: var(--series-act, #2E7D32); }
-.track-gap-chip.cost-na { border-style: dashed; opacity: 0.8; }
-.track-gap-chip.cost-na .tg-cost { color: var(--text-muted); font-style: italic; }
-.track-gap-stat .track-gap-chip { margin-left: 0; }
 /* naive-baseline marker on the scoreboard (#431): rMAE < 1 on that cohort */
 .naive-mark { font-size: 0.8em; margin-left: 0.25em; color: var(--text-muted); }
 .naive-mark.naive-beats { color: var(--status-good, #2E7D32); font-weight: 600; }
 .naive-mark.naive-loses { color: var(--terracotta, #B45309); }
-
-/* Inline "this surface is the Predicted pillar" note (predict + book views). */
-.track-inline-note {
-  margin: 10px 0 0; padding: 8px 12px; border-radius: 6px;
-  border: 1px solid var(--baseline); background: var(--surface-1);
-  font-size: 12.5px; line-height: 1.5; color: var(--text-muted);
-}
-.track-inline-note-active {
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 10%, var(--surface-1));
-  color: var(--text-secondary);
-}
 
 /* ---------- explorer grid ---------- */
 .explorer-grid {
@@ -569,9 +510,7 @@ select {
 }
 .legend .key.sim { border-color: var(--series-sim); }
 .legend .key.act { border-color: var(--series-act); }
-.legend .key.gbm { border-color: var(--series-gbm); }
-.legend .key.stats { border-color: var(--series-stats); }
-.legend .key.tsfm { border-color: var(--series-tsfm); border-top-style: dashed; }
+.legend .key.tsfm { border-color: var(--series-tsfm); }
 .legend .key.dashed { border-top-style: dashed; }
 
 /* Interactive series focus: hover to highlight, click to toggle, double-click
@@ -894,7 +833,7 @@ table.book-table td {
 .timeline { list-style: none; padding: 0; margin: 0.8rem 0; }
 .timeline li {
   display: grid;
-  grid-template-columns: 7.5rem 1fr;
+  grid-template-columns: 9rem 1fr;
   gap: 0.9rem;
   padding: 0.55rem 0;
   border-bottom: 1px solid var(--grid);
@@ -951,10 +890,7 @@ table.book-table td {
   padding-left: 10px;
 }
 
-/* ---------- case studies ---------- */
-.case-card { margin-top: 16px; }
-
-.case-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 2px; }
+/* ---------- stat grid (solver) + chips ---------- */
 .chip {
   font-family: var(--mono);
   font-size: 11.5px;
@@ -1051,12 +987,6 @@ table.book-table td {
   border-left: 3px solid var(--terracotta-soft);
   padding-left: 10px;
 }
-.case-note {
-  margin: 10px 0 0;
-  font-size: 12.5px;
-  color: var(--text-muted);
-  max-width: 72em;
-}
 
 /* ---------- model map (About) ---------- */
 .mm-legend {
@@ -1125,6 +1055,12 @@ html, body { overflow-x: hidden; }
 .segmented button { white-space: nowrap; flex: none; }
 
 @media (max-width: 680px) {
+  /* nothing may run past the screen edge (html/body clip it): wrap tabs and chips,
+     let filters and selects shrink; long segmented strips scroll inside themselves */
+  .tabs { flex-wrap: wrap; overflow-x: visible; }
+  .filter { min-width: 0; max-width: 100%; }
+  .filter select { max-width: 100%; }
+  .chip { white-space: normal; }
   .site-header { gap: 0.7rem; padding: 0.65rem 0.9rem; }
   .site-nav { gap: 0.9rem; }
   .site-nav a { font-size: 0.85rem; }
@@ -1641,20 +1577,6 @@ html, body { overflow-x: hidden; }
 .method-census-col ul { margin: 0; padding-left: 16px; font-size: 12px; }
 .method-census-col li { margin: 3px 0; }
 .method-census-src { color: var(--text-muted); }
-.method-ledger { position: relative; margin-top: 8px; padding-left: 14px; border-left: 2px solid var(--border); }
-.method-ledger-item { margin: 0 0 16px; padding-left: 10px; position: relative; }
-.method-ledger-item::before { content: ""; position: absolute; left: -21px; top: 4px; width: 10px; height: 10px; border-radius: 50%; background: var(--accent); border: 2px solid var(--page); }
-.method-ledger-item.ledger-no_ship::before { background: var(--text-muted); }
-.method-ledger-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-.method-ledger-cv { font-weight: 700; color: var(--heading); }
-.method-ledger-status { font-size: 10.5px; font-weight: 600; padding: 1px 7px; border-radius: 999px; }
-.method-ledger-status.st-ship { background: color-mix(in srgb, var(--status-good) 18%, transparent); color: var(--status-good); }
-.method-ledger-status.st-noship { background: color-mix(in srgb, var(--text-muted) 20%, transparent); color: var(--text-muted); }
-.method-ledger-char { font-weight: 600; }
-.method-ledger-change { font-size: 12.5px; color: var(--text-secondary); margin: 4px 0; }
-.method-ledger-measured { font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; margin: 2px 0; }
-.method-ledger-doc { font-size: 12px; color: var(--accent); text-decoration: none; }
-.method-ledger-doc:hover { text-decoration: underline; }
 
 /* Component A — "explain this block" affordance + popover */
 .bt-explain { font: inherit; font-size: 11px; line-height: 1; padding: 1px 4px; border: 1px solid var(--border);
@@ -1763,7 +1685,7 @@ html, body { overflow-x: hidden; }
 .boundary-blank { font-family: var(--mono); color: var(--text-muted); font-style: italic; }
 
 .boundary-doublecount, .boundary-callout, .boundary-roadmap-panel, .boundary-lesson,
-.boundary-effect, .boundary-audit-box {
+.boundary-effect {
   border: 1px solid var(--border); border-radius: 9px; padding: 11px 13px; margin: 12px 0;
   background: color-mix(in srgb, var(--accent) 5%, transparent); font-size: 12.5px; }
 .boundary-callout { background: color-mix(in srgb, var(--status-warn, var(--accent)) 9%, transparent);
@@ -1794,8 +1716,6 @@ html, body { overflow-x: hidden; }
   color: #fff; font-family: var(--mono); font-weight: 700; font-size: 12px;
   display: inline-flex; align-items: center; justify-content: center; }
 .boundary-flow-step-title { font-family: var(--mono); font-size: 12px; color: var(--heading); font-weight: 700; }
-.boundary-audit-box { background: color-mix(in srgb, var(--status-warn, var(--accent)) 9%, transparent);
-  border-color: color-mix(in srgb, var(--status-warn, var(--accent)) 40%, transparent); }
 
 /* E · propagation */
 .boundary-prop-chain { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 12px 0; }

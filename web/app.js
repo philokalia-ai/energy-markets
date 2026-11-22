@@ -38,77 +38,23 @@
     methodEUA: null,
     zone: "GR",
     day: null,             // "YYYY-MM-DD"
-    revDay: null,          // "YYYY-MM-DD" selected in the revision panel
     bookDay: null,         // "YYYY-MM-DD" selected in the order-book view
     bookHour: 12,          // hour index selected in the order-book view
     window: "all",
     res: "h60",            // scoreboard resolution: "h60" (hourly, default) | "q15" (native 15-min)
     naive: "auto",
-    showHybrid: false,     // hybrid (gbm) line drawn/visible: off by default, persisted (#431 G)         // scoreboard naive baseline: "auto" (weekday rule at D-1, D-7 otherwise) | "d7" | "d1" | "off"
     sort: { lead: null, metric: "mae", dir: 1 }, // dir 1 = best first
     hoverIdx: null,
-    track: "predicted",    // the global lens: "predicted" | "announced" (see TRACKS)
+    track: "predicted",    // fixed: the site shows the weather (predicted-input) track only
   };
 
-  // ---------- the global track (Predicted vs As-announced) ----------
-  // A site-wide lens over EVERY series surface — the About page's fitted/
-  // constructed wall as a user-flippable switch, NOT a 7th pillar.
-  //   predicted — our fitted inputs, end-to-end (input_mode "weather*"):
-  //               "how much can you trust OUR model".
-  //   announced — the TSOs' announced D-1 inputs through the SAME
-  //               bid-construction + solver (input_mode "entsoe*"): "the fair
-  //               evaluation of the bidding mechanism with inputs held at the
-  //               official ones".
-  // The GAP between the two IS a product: where announced beats predicted, that
-  // difference is the measured cost of our inputs (the track-gap chip).
-  var TRACKS = {
-    predicted: {
-      key: "predicted", label: "Predicted", adj: "predicted",
-      series: "Simulated · predicted inputs",
-      evaluates: "our fitted inputs end-to-end — how much you can trust our model",
-    },
-    announced: {
-      key: "announced", label: "As announced", adj: "as-announced",
-      series: "Simulated · announced D-1 inputs",
-      evaluates: "the TSOs' announced D-1 inputs run through the same " +
-        "bid-construction and solver — the fair test of the bidding mechanism " +
-        "with the inputs held at the official figures",
-    },
-  };
-  var TRACK_ORDER = ["predicted", "announced"];
-  var TRACK_LS_KEY = "euphemia.track";
-
-  // The predicted track is the ex-ante WEATHER track (all model inputs,
-  // weather-based RES); any input_mode starting with "weather" (weather,
-  // weather+loadfill, …) is predicted. Everything else (entsoe,
-  // entsoe+loadfill+resfill) is the announced track.
+  // The site shows the physics on our own ex-ante WEATHER inputs only: any
+  // input_mode starting with "weather" (weather, weather+loadfill, …). The zone
+  // and scoreboard payloads also carry the announced-input (entsoe*) rows; they
+  // are filtered out client-side. The live Timestral + physics issue is
+  // conditioned on this same weather-track lead-1 sim.
   function isWeatherMode(m) { return /^weather/.test(m || ""); }
   function trackOfMode(m) { return isWeatherMode(m) ? "predicted" : "announced"; }
-  function currentTrack() { return TRACKS[state.track] || TRACKS.predicted; }
-  function loadTrackPref() {
-    try {
-      var t = window.localStorage.getItem(TRACK_LS_KEY);
-      if (t && TRACKS[t]) state.track = t;
-    } catch (e) { /* private mode / no storage — the default stays */ }
-  }
-  function saveTrackPref() {
-    try { window.localStorage.setItem(TRACK_LS_KEY, state.track); } catch (e) {}
-  }
-  // The hybrid line (pink, physics + ex-ante GBM) is OFF by default (#431 G, owner
-  // 2026-11-16): it loses to the naive baselines live. The reader can switch it on
-  // from its legend chip; the choice persists like the track (localStorage).
-  var HYBRID_LS_KEY = "euphemia.hybridLine";
-  var HYBRID_LABEL = "Physics + ex-ante GBM · experimental — loses to naive live";
-  function loadHybridPref() {
-    try { state.showHybrid = window.localStorage.getItem(HYBRID_LS_KEY) === "on"; }
-    catch (e) { /* private mode / no storage — stays off */ }
-  }
-  function setHybridPref(on) {
-    on = !!on;
-    if (state.showHybrid === on) return;
-    state.showHybrid = on;
-    try { window.localStorage.setItem(HYBRID_LS_KEY, on ? "on" : "off"); } catch (e) {}
-  }
 
   // ---------- helpers ----------
 
@@ -219,12 +165,11 @@
       var i = kv.indexOf("=");
       if (i > 0) params[decodeURIComponent(kv.slice(0, i))] = decodeURIComponent(kv.slice(i + 1));
     });
-    if (["board", "explorer", "horizon", "map", "predict", "cases", "book", "solver", "method", "boundary"].indexOf(params.view) !== -1) state.view = params.view;
+    if (["board", "explorer", "horizon", "map", "predict", "book", "solver", "method", "boundary"].indexOf(params.view) !== -1) state.view = params.view;
     if (["overview", "load", "solar", "wind"].indexOf(params.target) !== -1) state.predictTarget = params.target;
     if (params.mzone) state.methodZone = params.mzone;
     if (params.zone) state.zone = params.zone;
     if (params.day && /^\d{4}-\d{2}-\d{2}$/.test(params.day)) state.day = params.day;
-    if (params.rev && /^\d{4}-\d{2}-\d{2}$/.test(params.rev)) state.revDay = params.rev;
     if (params.bday && /^\d{4}-\d{2}-\d{2}$/.test(params.bday)) state.bookDay = params.bday;
     if (params.bhr && !isNaN(+params.bhr)) state.bookHour = +params.bhr;
     if (params.metric && ["sim", "act", "err"].indexOf(params.metric) !== -1) mapState.metric = params.metric;
@@ -234,15 +179,12 @@
     // Board resolution: absent / anything else = the hourly default, so Back from a
     // #res=q15 URL to a plain board URL returns to hourly.
     state.res = params.res === "q15" ? "q15" : "h60";
-    // The global track lens: URL overrides the localStorage preference.
-    if (params.track && TRACKS[params.track]) state.track = params.track;
   }
 
   var suppressHash = false;
   function writeHash() {
     var parts = ["view=" + state.view, "zone=" + encodeURIComponent(state.zone)];
     if (state.day) parts.push("day=" + state.day);
-    if (state.revDay && state.view === "explorer") parts.push("rev=" + state.revDay);
     if (state.view === "book") {
       if (state.bookDay) parts.push("bday=" + state.bookDay);
       parts.push("bhr=" + state.bookHour);
@@ -252,9 +194,6 @@
     if (state.view === "map" && mapState.metric !== "sim") parts.push("metric=" + mapState.metric);
     if (state.window && state.window !== "all") parts.push("window=" + encodeURIComponent(state.window));
     if (state.view === "board" && state.res === "q15") parts.push("res=q15");
-    // The global track lens is shareable via the URL (non-default only, to keep
-    // links clean); localStorage carries the default between visits.
-    if (state.track && state.track !== "predicted") parts.push("track=" + state.track);
     suppressHash = true;
     window.location.hash = parts.join("&");
     // hashchange fires async; release the guard on next tick
@@ -852,7 +791,7 @@
       if (b.carbon_source === "uka") {
         sub.appendChild(cardField("Carbon leg", ":uka — the correct UK-ETS price (carbon.uka_price), falling back to EUA on the offline extract. The EUA/UKA split between the two GB books is a real honesty detail, not noise."));
       } else if (b.counterparty === "GB") {
-        sub.appendChild(cardField("Carbon leg", ":eua — the Viking book's validated cv21 config."));
+        sub.appendChild(cardField("Carbon leg", ":eua — the Viking book's validated config."));
       }
       var capText = b.capability_mode === "atc_capped"
         ? "the day's offered Day-ahead ATC, capped at the trailing-366d demonstrated max, with a p95-per-4h-block floor on ATC gaps."
@@ -951,9 +890,6 @@
       });
       wt.appendChild(tb); p.appendChild(wt);
     }
-    if (eff.fr_corr_record !== undefined) {
-      p.appendChild(el("p", null, "FR full-year corr on the cv23 record: " + fmt(eff.fr_corr_record, 2) + "."));
-    }
     if (eff.note) p.appendChild(el("p", "boundary-effect-note", eff.note + "."));
     if (eff.spillovers && eff.spillovers.length) {
       p.appendChild(el("p", "day-comment", "Spillovers: " + eff.spillovers.join("; ") + "."));
@@ -1024,9 +960,7 @@
      ["D-2 observed blend",
       "Average that with the D-2 observed flow — the fastest admissible signal, catching a regime change within 48h."],
      ["D-7 Norwegian recency",
-      "On Norwegian reservoir borders, add the :v2 D-7 recency component."],
-     [":d0 is legacy only",
-      "Same-day observed flow is the SEE legacy / byte-identity path ONLY — never the footprint default. Tomorrow's flow does not exist at auction time."]
+      "On Norwegian reservoir borders, add the :v2 D-7 recency component."]
     ].forEach(function (s, i) {
       var box = el("div", "boundary-flow-step");
       box.appendChild(el("span", "boundary-flow-num", String(i + 1)));
@@ -1036,19 +970,11 @@
       box.appendChild(body);
       steps.appendChild(box);
     });
-    host.appendChild(el("p", "day-comment", "Footprint default: :" + fr.footprint_default +
-      " (" + (fr.ledger || "").toUpperCase() + "). Legacy: :" + fr.legacy + "."));
+    host.appendChild(el("p", "day-comment", "Footprint rule: :" + fr.footprint_default +
+      ". Every term is known before the auction gate; tomorrow's flow is never used."));
     host.appendChild(steps);
     if (d.v3) host.appendChild(el("p", "day-comment", ":v3 in one line — " + d.v3));
 
-    var audit = $("boundary-flowrule-audit");
-    if (audit) {
-      audit.textContent = "";
-      var box = el("div", "boundary-audit-box");
-      box.appendChild(el("h4", "boundary-exhibit-title", "We caught our own lookahead — the cv25 audit"));
-      box.appendChild(el("p", null, fr.audit_note));
-      audit.appendChild(box);
-    }
   }
 
   // ---- E · propagation / trade-wedge ---------------------------------------
@@ -1088,65 +1014,9 @@
     });
   }
 
-  // Entries on the CURRENTLY SELECTED track (the global Predicted / As-announced
-  // lens). Every zone file carries both tracks; the switch filters client-side.
+  // The weather-track entries of a zone file (see isWeatherMode).
   function trackDays(zoneData) {
     return zoneData.days.filter(function (d) { return trackOfMode(dayInputMode(d)) === state.track; });
-  }
-
-  // The freshest (lowest-lead) day of the OTHER track for the same delivery date
-  // — the counterpart used to compute the track-gap chip. null when the other
-  // track has no entry for that date (so the chip is honestly absent).
-  function altTrackDay(zoneData, date) {
-    var alt = state.track === "predicted" ? "announced" : "predicted";
-    var cand = zoneData.days.filter(function (d) {
-      return d.date === date && trackOfMode(dayInputMode(d)) === alt;
-    });
-    cand.sort(function (a, b) { return a.lead_days - b.lead_days; });
-    return cand.length ? cand[0] : null;
-  }
-
-  // The track-gap chip: "announced MAE 12.1 · predicted 14.3 → input cost +2.2".
-  // Rendered wherever BOTH tracks have a score for the same slice. The gap IS the
-  // product — input cost = predicted MAE − announced MAE, i.e. how much our
-  // fitted inputs cost vs holding the inputs at the TSO's official D-1 figures.
-  //
-  // SAME-CV PAIRING (owner directive): the two tracks are only comparable when
-  // they were cleared under the SAME code_version — otherwise the delta conflates
-  // a model-version change with an input change. When the cvs differ (or either is
-  // unknown / a mixed-cv aggregate), the chip shows "input cost n/a" with a
-  // cv-mismatch tooltip instead of a wrong number. The cv is always surfaced.
-  // Returns an element, or null when either MAE is missing (honest absence).
-  function trackGapChip(predMae, annMae, predCv, annCv) {
-    if (predMae === null || predMae === undefined || isNaN(predMae)) return null;
-    if (annMae === null || annMae === undefined || isNaN(annMae)) return null;
-    var cvMatch = predCv != null && annCv != null && predCv === annCv;
-    var chip = el("span", "track-gap-chip");
-    chip.appendChild(el("span", "tg-part", "announced MAE " + fmt(annMae, 1)));
-    chip.appendChild(el("span", "tg-part", "predicted " + fmt(predMae, 1)));
-    if (!cvMatch) {
-      chip.className += " cost-na";
-      chip.appendChild(el("span", "tg-cost", "input cost n/a"));
-      chip.title = "Cannot compare: the two tracks were cleared under different " +
-        "model versions (predicted cv " + (predCv == null ? "mixed/unknown" : predCv) +
-        " vs announced cv " + (annCv == null ? "mixed/unknown" : annCv) + "). " +
-        "The gap chip pairs only same-code_version slices so a model-version change " +
-        "is never mistaken for an input change.";
-      return chip;
-    }
-    var cost = predMae - annMae;
-    chip.className += (cost > 0.05 ? " cost-pos" : cost < -0.05 ? " cost-neg" : " cost-tie");
-    chip.appendChild(el("span", "tg-cost",
-      "input cost " + (cost >= 0 ? "+" : "") + fmt(cost, 1)));
-    chip.title = "Both tracks scored this slice under code_version " + predCv +
-      ". Input cost = predicted MAE − announced MAE = " +
-      (cost >= 0 ? "+" : "") + fmt(cost, 2) + " €/MWh. " +
-      (cost > 0.05
-        ? "Announced beats predicted here — the gap is the measured cost of our fitted inputs."
-        : cost < -0.05
-          ? "Predicted beats announced here — our inputs helped."
-          : "The two tracks tie here.");
-    return chip;
   }
 
   // Collapse the lead/D-n dimension: the single freshest (lowest-lead) entry per
@@ -1198,78 +1068,11 @@
     explorer: "zone explorer",
     board: "scoreboard",
     book: "order book",
-    method: "how bids are built",
-    cases: "case studies"
+    method: "how bids are built"
   };
 
-  // ---------- the global track switch (header-level segmented control) ----------
-
-  // Render the Predicted | As-announced buttons + the one-sentence explainer of
-  // what the SELECTED track evaluates (incl. the honesty note that "as announced"
-  // is not strictly pre-gate). Idempotent — safe to call on every flip.
-  function renderTrackSwitch() {
-    var host = $("track-switch");
-    if (host) {
-      host.textContent = "";
-      TRACK_ORDER.forEach(function (k) {
-        var b = el("button", "seg-btn" + (state.track === k ? " active" : ""), TRACKS[k].label);
-        b.type = "button";
-        b.setAttribute("role", "radio");
-        b.setAttribute("aria-checked", String(state.track === k));
-        b.dataset.track = k;
-        b.title = TRACKS[k].label + " — " + TRACKS[k].evaluates;
-        b.addEventListener("click", function () { setTrack(k); });
-        host.appendChild(b);
-      });
-    }
-    var ex = $("track-explainer");
-    if (ex) {
-      ex.textContent = "";
-      ex.appendChild(el("strong", null, currentTrack().label + ": "));
-      ex.appendChild(document.createTextNode(currentTrack().evaluates + ". "));
-      ex.appendChild(el("span", "track-explainer-gap",
-        "The gap where announced beats predicted is the measured cost of our inputs."));
-      // The owner's honesty note: the announced track is the official D-1 inputs,
-      // not a strictly pre-gate re-derivation of them.
-      ex.appendChild(el("span", "track-explainer-note",
-        " Note: “as announced” holds inputs at the TSOs' published D-1 figures — a " +
-        "fair fixed-input test, not a strictly pre-gate reconstruction."));
-    }
-  }
-
-  // Flip the global track. All zone/scoreboard data already holds BOTH tracks, so
-  // this is a pure client-side re-filter + re-render (no refetch). Persists to
-  // localStorage and the URL.
-  function setTrack(t) {
-    if (!TRACKS[t]) return;
-    if (t === state.track) { renderTrackSwitch(); return; }
-    state.track = t;
-    saveTrackPref();
-    renderTrackSwitch();
-    rerenderForTrack();
-    writeHash();
-  }
-
-  // Re-render every track-reactive surface after a flip. Guarded so it is safe
-  // before the data plane has answered.
-  function rerenderForTrack() {
-    applyMapTrack();
-    if (state.scoreboard) {
-      renderWindowSelect();
-      renderScoreboard();
-    }
-    if (state.zoneCache[state.zone]) {
-      renderExplorer();
-      renderHorizon();
-    }
-    if (state.view === "map") renderMap();
-    if (state.view === "book") renderBook();
-    if (state.view === "predict") renderPredict();
-  }
-
-  // Point each map day's `zones` at the selected track's per-track object (the
-  // map JSON carries day.tracks = {predicted, announced}). Legacy single-track
-  // map JSON (only day.zones) is left untouched — honest graceful degradation.
+  // Point each map day's `zones` at its weather-track object (the map JSON
+  // carries day.tracks = {predicted, announced}; single-track JSON is left as is).
   function applyMapTrack() {
     if (!mapState.data || !mapState.data.days) return;
     mapState.data.days.forEach(function (d) {
@@ -1288,7 +1091,6 @@
     $("view-predict").hidden = v !== "predict";
     $("view-book").hidden = v !== "book";
     if ($("view-method")) $("view-method").hidden = v !== "method";
-    $("view-cases").hidden = v !== "cases";
     var crumb = $("crumb-view");
     if (crumb) crumb.textContent = VIEW_CRUMBS[v] ? "/ " + VIEW_CRUMBS[v] : "";
     if (v === "map") loadMap().then(renderMap, function () {
@@ -1333,15 +1135,57 @@
 
   function dayInputMode(d) { return d.input_mode || "entsoe"; }
 
-  // ---------- TSFM overlay (Timestral) + negative-price risk ----------
-  // Optional per day (zones API fields tsfm/tsfm_q10/tsfm_q90/p_le0 hourly,
-  // p_any_le0 + tsfm_input_mode/tsfm_issue_utc/tsfm_arm per zone-day). A
-  // PREDICTION product (it reads settled prices): drawn like the gbm/stats
-  // overlays, never mixed into the simulated counterfactual. See Models.
+  // ---------- the forecast: Timestral + physics, and the physics clear ----------
+  // The headline forecast is Timestral conditioned on the frozen lead-1 physics
+  // clear (zones API tsfm/tsfm_q10/tsfm_q90/p_le0 hourly; tsfm_input_mode
+  // "postsim" per zone-day). When a day only carries the 06:30 issue (settled
+  // prices only), it is labelled as such — never as the combined model. It reads
+  // settled prices, so it is never mixed into the physics counterfactual (`sim`).
   var RISK_BADGE_MIN = 0.3;   // P(any hour <= 0) at/above which the day list shows a badge
   function pct(p) { return Math.round(p * 100) + "%"; }
+  function hasVals(arr) {
+    return !!arr && arr.some(function (v) { return v !== null && v !== undefined; });
+  }
+  function isCombined(day) { return day.tsfm_input_mode === "postsim"; }
+  function tsfmName(day) { return isCombined(day) ? "Timestral + physics" : "Timestral (prices only)"; }
+  // Legend label for the Timestral line over a set of days.
+  function tsfmLegend(days) {
+    var withT = days.filter(function (d) { return hasVals(d.tsfm); });
+    var nComb = withT.filter(isCombined).length;
+    var name = nComb === withT.length ? "Timestral + physics"
+      : nComb === 0 ? "Timestral (prices only)" : "Timestral + physics (prices only where marked)";
+    return name + " · median, q10–q90";
+  }
+  // Legend label for the physics clear: the code_version(s) that froze the days shown.
+  function physicsLegend(days) {
+    var cvs = {};
+    days.forEach(function (d) { if (d.code_version != null) cvs[d.code_version] = 1; });
+    var ks = Object.keys(cvs).map(Number).sort(function (a, b) { return a - b; });
+    if (!ks.length) return "Physics";
+    return "Physics (cv" + (ks.length === 1 ? ks[0] : ks[0] + "–" + ks[ks.length - 1]) + ")";
+  }
+  // The latest delivery date whose auction has cleared: at least half its hours
+  // carry a settled price. (A lone settled hour is the previous CET delivery day's
+  // last hour, which falls in the first hour of the Athens market day.) Days on or
+  // before it are past even when their actual is missing.
+  function settledHours(d) {
+    return d.actual.filter(function (a) { return a !== null && a !== undefined; }).length;
+  }
+  function lastSettledDate(days) {
+    var last = "";
+    days.forEach(function (d) { if (settledHours(d) * 2 >= d.hours.length && d.date > last) last = d.date; });
+    return last;
+  }
+  // "forecast" (not cleared yet) | "missing" (cleared, no actual published) |
+  // "partial" (cleared, some hours missing) | "settled".
+  function settleState(day, lastDate) {
+    if (day.date > lastDate) return "forecast";
+    var k = settledHours(day);
+    if (k * 2 < day.hours.length) return "missing";
+    return k < day.hours.length ? "partial" : "settled";
+  }
   function tsfmIssueText(day) {
-    var mode = day.tsfm_input_mode === "postsim" ? "10:40 UTC refresh, settled prices + our frozen lead-1 forecast" : "06:30 UTC, settled prices only";
+    var mode = isCombined(day) ? "Timestral + physics: settled prices + the frozen lead-1 physics clear" : "Timestral 06:30 UTC issue, settled prices only";
     var at = day.tsfm_issue_utc ? " · issued " + day.tsfm_issue_utc.replace("T", " ").replace(":00Z", " UTC") : "";
     return mode + at;
   }
@@ -1357,6 +1201,7 @@
   function renderDayList(days) {
     var ul = $("day-list");
     ul.textContent = "";
+    var lastDate = lastSettledDate(days);
     days.forEach(function (d) {
       var li = el("li");
       var b = el("button", "day-btn");
@@ -1364,8 +1209,11 @@
       b.setAttribute("aria-pressed", String(d.date === state.day));
       b.appendChild(el("span", "d-date", dayLabel(d.date)));
       var badges = el("span", "d-badges");
-      if (isPending(d)) {
-        badges.appendChild(el("span", "pill pending", "pending"));
+      var st = settleState(d, lastDate);
+      if (st === "forecast" || st === "missing") {
+        badges.appendChild(el("span", "pill pending", st === "missing" ? "no actual" : "forecast"));
+      } else if (d.mae === null || d.mae === undefined) {
+        badges.appendChild(el("span", "pill pending", "partial"));
       } else {
         badges.appendChild(el("span", "pill", "MAE " + fmt(d.mae, 1)));
         badges.appendChild(el("span", "pill", "r " + fmt(d.corr, 2)));
@@ -1387,11 +1235,10 @@
   function renderDayStats(day) {
     var row = $("day-stats");
     row.textContent = "";
-    var defs = isPending(day)
-      ? [["Status", "Pending", ""]]
+    var defs = day.mae === null || day.mae === undefined ? []
       : [
-          ["MAE", fmt(day.mae, 1), "€/MWh"],
-          ["Bias (sim − actual)", (day.bias > 0 ? "+" : "") + fmt(day.bias, 1), "€/MWh"],
+          ["Physics MAE", fmt(day.mae, 1), "€/MWh"],
+          ["Bias (physics − actual)", (day.bias > 0 ? "+" : "") + fmt(day.bias, 1), "€/MWh"],
           ["Correlation", fmt(day.corr, 2), ""],
         ];
     if (day.p_any_le0 !== null && day.p_any_le0 !== undefined) {
@@ -1411,25 +1258,21 @@
   function renderLegend(day) {
     var lg = $("chart-legend");
     lg.textContent = "";
-    var items = [
-      ["sim", currentTrack().series],
-      ["act", isPending(day) ? "Actual (pending — not yet settled)" : "Actual (settled)"],
-    ];
-    function hasVals(arr) { return arr && arr.some(function (v) { return v !== null && v !== undefined; }); }
-    if (hasVals(day.gbm)) items.push(["gbm", HYBRID_LABEL]);
-    if (hasVals(day.stats)) items.push(["stats", "Pure-stats GBM"]);
-    if (hasVals(day.tsfm)) items.push(["tsfm", "Timestral TSFM (median, q10–q90)"]);
+    var items = [];
+    if (hasVals(day.tsfm)) items.push(["tsfm", tsfmLegend([day])]);
+    items.push(["sim", physicsLegend([day])]);
+    items.push(["act", isPending(day) ? "Actual (not published yet)" : "Actual (settled)"]);
     var chips = {};
     items.forEach(function (it) {
       var span = el("span");
-      var key = el("span", "key " + it[0]);
+      var key = el("span", "key " + it[0] + (it[0] === "tsfm" && !isCombined(day) ? " dashed" : ""));
       key.setAttribute("aria-hidden", "true");
       span.appendChild(key);
       span.appendChild(document.createTextNode(it[1]));
       lg.appendChild(span);
       chips[it[0]] = span;
     });
-    return chips;   // { sim, act } — wired to the chart series by renderExplorer
+    return chips;   // { tsfm, sim, act } — wired to the chart series by renderExplorer
   }
 
   function renderHourTable(day) {
@@ -1437,7 +1280,9 @@
     t.textContent = "";
     var thead = el("thead");
     var tr = el("tr");
-    ["Hour (Europe/Athens)", "Simulated €/MWh", "Actual €/MWh", "Error €/MWh"].forEach(function (h) {
+    var withT = hasVals(day.tsfm);
+    (withT ? ["Hour (Europe/Athens)", tsfmName(day) + " €/MWh", "Physics €/MWh", "Actual €/MWh", "Physics error €/MWh"]
+      : ["Hour (Europe/Athens)", "Physics €/MWh", "Actual €/MWh", "Physics error €/MWh"]).forEach(function (h) {
       tr.appendChild(el("th", null, h));
     });
     thead.appendChild(tr);
@@ -1446,10 +1291,11 @@
     day.hours.forEach(function (h, i) {
       var r = el("tr");
       r.appendChild(el("td", null, hourLabel(h)));
+      if (withT) r.appendChild(el("td", null, fmt(day.tsfm[i], 2)));
       r.appendChild(el("td", null, fmt(day.sim[i], 2)));
       var a = day.actual[i];
       var tdA = el("td", a === null || a === undefined ? "null" : null,
-        a === null || a === undefined ? "pending" : fmt(a, 2));
+        a === null || a === undefined ? "—" : fmt(a, 2));
       r.appendChild(tdA);
       var tdE = el("td", a === null || a === undefined ? "null" : null,
         a === null || a === undefined ? "—" : fmt(day.sim[i] - a, 2));
@@ -1475,14 +1321,12 @@
     var wrap = $("chart-wrap");
     wrap.textContent = "";
 
-    var VBW = 900, VBH = 380;
+    var VBW = chartVBW(), VBH = 380;
     var m = { t: 30, r: 16, b: 32, l: 54 };
     var pw = VBW - m.l - m.r, ph = VBH - m.t - m.b;
 
     var values = day.sim.slice();
     day.actual.forEach(function (a) { if (a !== null && a !== undefined) values.push(a); });
-    (day.gbm || []).forEach(function (a) { if (a !== null && a !== undefined) values.push(a); });
-    (day.stats || []).forEach(function (a) { if (a !== null && a !== undefined) values.push(a); });
     [day.tsfm, day.tsfm_q10, day.tsfm_q90].forEach(function (arr) {
       (arr || []).forEach(function (a) { if (a !== null && a !== undefined) values.push(a); });
     });
@@ -1514,8 +1358,6 @@
       surface: css.getPropertyValue("--surface-1").trim(),
       sim: css.getPropertyValue("--series-sim").trim(),
       act: css.getPropertyValue("--series-act").trim(),
-      gbm: css.getPropertyValue("--series-gbm").trim(),
-      stats: css.getPropertyValue("--series-stats").trim(),
       tsfm: css.getPropertyValue("--series-tsfm").trim(),
     };
 
@@ -1542,8 +1384,8 @@
     unit.textContent = "€/MWh";
     svg.appendChild(unit);
 
-    // x ticks every 3 hours
-    for (var i = 0; i < n; i += 3) {
+    // x ticks every 3 hours (every 6 on a narrow chart)
+    for (var i = 0; i < n; i += (VBW < 600 ? 6 : 3)) {
       var tx = svgEl("text", {
         x: X(i), y: m.t + ph + 20, "text-anchor": "middle",
         fill: C.muted, "font-size": 11.5,
@@ -1564,26 +1406,8 @@
       }
       return dstr.trim();
     }
-    var simEls = [], actEls = [], gbmEls = [], statsEls = [], tsfmEls = [];
-    // Model-line overlays (docs/experiments/forecast-eval-2026-08): pink =
-    // physics + ex-ante GBM residual corrector; yellow = pure-stats GBM (no
-    // physics). Optional per day; dashed, drawn beneath sim/act so the physics
-    // counterfactual keeps visual primacy. See the Models page.
-    function overlayPath(arr, color, els) {
-      if (!arr || !arr.some(function (v) { return v !== null && v !== undefined; })) return;
-      var d0 = pathFor(arr);
-      if (!d0) return;
-      var pth = svgEl("path", {
-        d: d0, fill: "none", stroke: color,
-        "stroke-width": 2, "stroke-dasharray": "5 4",
-        "stroke-linejoin": "round", "stroke-linecap": "round",
-      });
-      svg.appendChild(pth);
-      els.push(pth);
-    }
-    overlayPath(day.gbm, C.gbm, gbmEls);
-    overlayPath(day.stats, C.stats, statsEls);
-    // TSFM: q10–q90 band (translucent, breaks at gaps) beneath its dashed median.
+    var simEls = [], actEls = [], tsfmEls = [];
+    // Timestral: q10–q90 band (translucent, breaks at gaps) beneath its dashed median.
     if (day.tsfm_q10 && day.tsfm_q90) {
       var run = [];
       var flushBand = function () {
@@ -1603,10 +1427,18 @@
       }
       flushBand();
     }
-    overlayPath(day.tsfm, C.tsfm, tsfmEls);
+    if (hasVals(day.tsfm)) {
+      var tPath = svgEl("path", {
+        d: pathFor(day.tsfm), fill: "none", stroke: C.tsfm,
+        "stroke-width": 2.4, "stroke-linejoin": "round", "stroke-linecap": "round",
+      });
+      if (!isCombined(day)) tPath.setAttribute("stroke-dasharray", "5 4");   // prices-only issue
+      svg.appendChild(tPath);
+      tsfmEls.push(tPath);
+    }
     var simPath = svgEl("path", {
       d: pathFor(day.sim), fill: "none", stroke: C.sim,
-      "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round",
+      "stroke-width": 1.6, "stroke-linejoin": "round", "stroke-linecap": "round",
     });
     svg.appendChild(simPath);
     simEls.push(simPath);
@@ -1679,13 +1511,12 @@
       tooltip.textContent = "";
       tooltip.appendChild(el("div", "tt-head",
         hourLabel(day.hours[idx]) + "–" + hourEndLabel(day.hours[idx]) + " Athens"));
-      var ttRows = [
-        [C.sim, day.sim[idx], "simulated"],
-        [C.act, a, a === null || a === undefined ? "actual (pending)" : "actual"],
-      ];
+      var ttRows = [];
       if (day.tsfm && day.tsfm[idx] !== null && day.tsfm[idx] !== undefined) {
-        ttRows.push([C.tsfm, day.tsfm[idx], "TSFM median"]);
+        ttRows.push([C.tsfm, day.tsfm[idx], tsfmName(day)]);
       }
+      ttRows.push([C.sim, day.sim[idx], "physics"]);
+      ttRows.push([C.act, a, a === null || a === undefined ? "actual (not published)" : "actual"]);
       ttRows.forEach(function (rowDef) {
         var row = el("div", "tt-row");
         var key = el("span", "tt-key");
@@ -1735,26 +1566,25 @@
       if (ev.key === "ArrowRight") { showIdx((state.hoverIdx === null ? 12 : state.hoverIdx) + 1); ev.preventDefault(); }
     });
 
-    if (isPending(day)) {
+    var stx = settleState(day, lastSettledDate(freshestByDate(trackDays(state.zoneCache[state.zone]))));
+    if (stx !== "settled") {
       wrap.appendChild(el("p", "pending-note",
-        "Prediction only — actual prices for this day have not settled yet."));
-    } else if (isPartial(day)) {
-      wrap.appendChild(el("p", "pending-note",
-        "Partially settled — remaining hours are still pending."));
+        stx === "forecast" ? "Forecast only — this day's auction has not cleared yet."
+          : stx === "missing" ? "No settled price has been published for this day yet, although its auction has cleared."
+          : "Some hours of this day have no published settled price."));
     }
-    return { sim: simEls, act: actEls, gbm: gbmEls, stats: statsEls, tsfm: tsfmEls };   // series refs for the focus wiring
+    return { sim: simEls, act: actEls, tsfm: tsfmEls };   // series refs for the focus wiring
   }
 
   function renderExplorer() {
     var zoneData = state.zoneCache[state.zone];
     if (!zoneData) return;
 
-    // Leads collapsed to the freshest forecast per date, on the selected track
-    // (directive 1 + the global lens). Newest day first.
+    // Leads collapsed to the freshest forecast per date. Newest day first.
     var days = freshestByDate(trackDays(zoneData));
     if (!days.length) {
       $("day-list").textContent = "";
-      $("chart-title").textContent = state.zone + " — " + currentTrack().adj + " forecast pending";
+      $("chart-title").textContent = state.zone + " — forecast pending";
       $("chart-sub").textContent = "";
       $("day-stats").textContent = "";
       $("day-comment").textContent = "";
@@ -1762,14 +1592,14 @@
       $("hour-table").textContent = "";
       var w = $("chart-wrap"); w.textContent = "";
       w.appendChild(el("p", "pending-note",
-        "No " + currentTrack().adj + "-track days for " + state.zone +
-        " yet — " + (state.track === "predicted"
-          ? "the daily weather runs fill this in as they accumulate."
-          : "the announced-input (ENTSO-E D-1) runs fill this in as they accumulate.")));
+        "No forecast days for " + state.zone + " yet."));
       return;
     }
     var found = days.some(function (d) { return d.date === state.day; });
-    if (!state.day || !found) { state.day = days[0].date; }
+    if (!state.day || !found) {   // default: the newest day carrying the headline forecast
+      var withT = days.filter(function (d) { return hasVals(d.tsfm); });
+      state.day = (withT[0] || days[0]).date;
+    }
 
     renderDayList(days);
     var day = null;
@@ -1780,50 +1610,24 @@
       ? " · prediction frozen " + day.prediction_made_utc.replace("T", " ").replace("Z", " UTC")
       : "";
     $("chart-sub").textContent =
-      currentTrack().series + " (" + currentTrack().adj + " track)" +
+      (hasVals(day.tsfm) ? tsfmName(day) + " and the physics clear" : "Physics clear") +
       madeAt +
       " · hours shown in Europe/Athens (market day)";
     renderDayStats(day);
-    // Track-gap chip: when the other track scored the same delivery day, show the
-    // input-cost delta right under the day stats.
-    if (!isPending(day)) {
-      var altd = altTrackDay(zoneData, day.date);
-      if (altd && !isPending(altd)) {
-        var predMae = state.track === "predicted" ? day.mae : altd.mae;
-        var annMae = state.track === "announced" ? day.mae : altd.mae;
-        var predCv = state.track === "predicted" ? day.code_version : altd.code_version;
-        var annCv = state.track === "announced" ? day.code_version : altd.code_version;
-        var dchip = trackGapChip(predMae, annMae, predCv, annCv);
-        if (dchip) {
-          var gapWrap = el("div", "stat track-gap-stat");
-          gapWrap.appendChild(el("span", "s-label", "Track gap"));
-          gapWrap.appendChild(dchip);
-          $("day-stats").appendChild(gapWrap);
-        }
-      }
-    }
     renderDayComment(day);
     var legendChips = renderLegend(day);
     var chartEls = renderChart(day);
     // Shared series-focus: hover/click/isolate the sim & actual lines. The
     // actual series is only wired when it actually has drawn points.
-    var explorerSeries = [{ key: "sim", chip: legendChips.sim, els: chartEls.sim, baseOpacity: 1 }];
+    var explorerSeries = [];
+    if (chartEls.tsfm.length && legendChips.tsfm) {
+      explorerSeries.push({ key: "tsfm", chip: legendChips.tsfm, els: chartEls.tsfm, baseOpacity: 1 });
+    }
+    explorerSeries.push({ key: "sim", chip: legendChips.sim, els: chartEls.sim, baseOpacity: 1 });
     if (chartEls.act.length) {
       explorerSeries.push({ key: "act", chip: legendChips.act, els: chartEls.act, baseOpacity: 1 });
     }
-    if (chartEls.gbm.length && legendChips.gbm) {
-      explorerSeries.push({ key: "gbm", chip: legendChips.gbm, els: chartEls.gbm, baseOpacity: 0.9 });
-    }
-    if (chartEls.stats.length && legendChips.stats) {
-      explorerSeries.push({ key: "stats", chip: legendChips.stats, els: chartEls.stats, baseOpacity: 0.9 });
-    }
-    if (chartEls.tsfm.length && legendChips.tsfm) {
-      explorerSeries.push({ key: "tsfm", chip: legendChips.tsfm, els: chartEls.tsfm, baseOpacity: 0.9 });
-    }
-    attachSeriesFocus($("chart-legend"), explorerSeries, {
-      initialOff: { gbm: !state.showHybrid },                       // hybrid off by default
-      onChange: function (off) { if (chartEls.gbm.length) setHybridPref(!off.gbm); },
-    });
+    attachSeriesFocus($("chart-legend"), explorerSeries);
     renderHourTable(day);
   }
 
@@ -1838,8 +1642,6 @@
       surface: css.getPropertyValue("--surface-1").trim(),
       sim: css.getPropertyValue("--series-sim").trim(),
       act: css.getPropertyValue("--series-act").trim(),
-      gbm: css.getPropertyValue("--series-gbm").trim(),
-      stats: css.getPropertyValue("--series-stats").trim(),
       tsfm: css.getPropertyValue("--series-tsfm").trim(),
       weak: css.getPropertyValue("--status-weak").trim(),
       accent: css.getPropertyValue("--accent").trim(),
@@ -1847,9 +1649,15 @@
   }
 
   // Shared scaffold: gridlines, y ticks, unit label. Returns {svg, X, Y, m, pw, ph, n}.
-  function chartScaffold(wrap, values, n, ariaLabel) {
-    var VBW = 900, VBH = 380;
-    var m = { t: 30, r: 16, b: 44, l: 54 };
+  // ViewBox width for line charts: the chart's on-screen width (clamped), so
+  // labels render near their nominal size on a phone instead of shrinking ~0.4×.
+  function chartVBW() {
+    var w = (document.documentElement.clientWidth || 900) - 56;
+    return Math.max(380, Math.min(900, w));
+  }
+  function chartScaffold(wrap, values, n, ariaLabel, margins) {
+    var VBW = chartVBW(), VBH = 380;
+    var m = Object.assign({ t: 30, r: 16, b: 44, l: 54 }, margins || {});
     var pw = VBW - m.l - m.r, ph = VBH - m.t - m.b;
     var vMin = Math.min.apply(null, values), vMax = Math.max.apply(null, values);
     if (vMin > 0) vMin = 0;
@@ -1894,27 +1702,23 @@
     return d.trim();
   }
 
-  // The ±5-day ribbon around "now": the freshest ex-ante (weather-track)
-  // forecast per delivery date, for the HZ_PAST settled days before the seam
-  // and the first pending (today) + upcoming forecast days after it — one
-  // continuous window straddling the present. The "now" seam (drawn in
-  // renderHorizon) is the boundary between the last settled actual and the
-  // first forecast-only hour; past days overlay the settled actual (+ per-day
-  // MAE/bias), today & future show the freshest forecast alone. The window is
-  // anchored on the FRONTIER — the first fully-pending (forecast-only) delivery
-  // day — so it self-locates from the data alone, without a wall clock.
-  // Leads collapsed (directive 1).
-  var HZ_PAST = 5, HZ_FUTURE = 5;
+  // The ribbon around "now": the freshest forecast per delivery date, settled
+  // days left of the seam (actual overlaid, per-day physics MAE·bias), days whose
+  // auction has not cleared right of it. The frontier is the day after the latest
+  // date carrying any settled hour, so a past day with a missing actual reads
+  // "no actual" instead of shifting the window. Leads collapsed.
   function horizonDays(zoneData) {
     var asc = freshestByDate(trackDays(zoneData)).slice().reverse();   // oldest -> newest
     if (!asc.length) return [];
-    var frontier = asc.length;   // first forecast-only (fully pending) day = today/tomorrow
+    var narrow = chartVBW() < 600;
+    var past = narrow ? 3 : 6, future = narrow ? 2 : 3;
+    var lastDate = lastSettledDate(asc);
+    var frontier = asc.length;
     for (var i = 0; i < asc.length; i++) {
-      if (isPending(asc[i])) { frontier = i; break; }
+      if (asc[i].date > lastDate) { frontier = i; break; }
     }
-    var start = Math.max(0, frontier - HZ_PAST);
-    var end = Math.min(asc.length, frontier + HZ_FUTURE);
-    return asc.slice(start, end);
+    var start = Math.max(0, frontier - past);
+    return asc.slice(start, Math.min(asc.length, frontier + future));
   }
 
   function renderHorizon() {
@@ -1930,92 +1734,58 @@
     if (!days.length) {
       $("hz-sub").textContent = "";
       wrap.appendChild(el("p", "pending-note",
-        "No " + currentTrack().adj + "-track forecast days for " + state.zone +
-        " yet — this fills as the " + (state.track === "predicted"
-          ? "daily weather runs" : "announced-input runs") + " accumulate."));
-      renderRevisions();
+        "No forecast days for " + state.zone + " yet."));
       return;
     }
-    var pastN = days.filter(function (d) { return !isPending(d); }).length;
+    var lastDate = lastSettledDate(days);
+    var pastN = days.filter(function (d) { return d.date <= lastDate; }).length;
     var futureN = days.length - pastN;
+    var hasT = days.some(function (d) { return hasVals(d.tsfm); });
     $("hz-sub").textContent =
-      "Freshest " + currentTrack().adj + " forecast per delivery day — settled actual " +
-      "overlaid on the days left of “now”, forecast alone ahead of it (" +
-      pastN + " back · " + futureN + " ahead) · hours in Europe/Athens (market day)";
+      "Freshest forecast per delivery day · settled price on the " + pastN +
+      " cleared days, forecast alone on the next " + futureN + " · hours in Europe/Athens";
 
-    // Retro rows (post data-reset backfill) shown inline, with the reset note.
-    var retroDays = days.filter(isRetro);
-    if (retroDays.length) {
-      var tags = {};
-      retroDays.forEach(function (d) { if (d.reset_tag) tags[d.reset_tag] = 1; });
-      var tagList = Object.keys(tags);
-      wrap.appendChild(el("p", "pending-note",
-        retroDays.length + (retroDays.length > 1 ? " days were" : " day was") +
-        " reconstructed retroactively after a data reset" +
-        (tagList.length ? " (" + tagList.join(", ") + ")" : "") +
-        " — shown inline (marked ↺); each prediction stays frozen at its retro compute instant."));
-    }
-
-    // legend: forecast + actual
     var C = chartColors();
-    var hzItems = [["sim", "Forecast (ex-ante)"], ["act", "Actual (settled)"],
-     ["gbm", HYBRID_LABEL], ["stats", "Pure-stats GBM"]];
-    if (days.some(function (d) { return (d.tsfm || []).some(function (v) { return v !== null && v !== undefined; }); })) {
-      hzItems.push(["tsfm", "Timestral TSFM (median, q10–q90)"]);
-    }
-    hzItems.forEach(function (it) {
+    var items = [];
+    if (hasT) items.push(["tsfm", tsfmLegend(days)]);
+    items.push(["sim", physicsLegend(days)], ["act", "Actual (settled)"]);
+    items.forEach(function (it) {
       var span = el("span");
-      var key = el("span", "key " + it[0]);
+      var key = el("span", "key " + it[0] + (it[0] === "tsfm" && !days.some(isCombined) ? " dashed" : ""));
       key.setAttribute("aria-hidden", "true");
       span.appendChild(key);
       span.appendChild(document.createTextNode(it[1]));
-      if (it[0] === "gbm") {   // the hybrid chip toggles the (default-off) line here too
-        span.className = "series-chip" + (state.showHybrid ? "" : " series-off");
-        span.setAttribute("role", "button");
-        span.setAttribute("tabindex", "0");
-        span.setAttribute("aria-pressed", String(!state.showHybrid));
-        span.title = state.showHybrid ? "Hide the hybrid line" : "Show the hybrid line (off by default)";
-        var flip = function () { setHybridPref(!state.showHybrid); renderHorizon(); };
-        span.addEventListener("click", flip);
-        span.addEventListener("keydown", function (ev) {
-          if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); flip(); }
-        });
-      }
       lg.appendChild(span);
     });
 
-    // concatenated point list (forecast + actual per hour, per day)
-    var pts = [];   // {iso, v, a, day}
+    var pts = [];   // {iso, v, a, t, day}
     days.forEach(function (d) {
       d.hours.forEach(function (h, i) {
-        pts.push({ iso: h, v: d.sim[i], a: d.actual[i], day: d });
+        pts.push({ iso: h, v: d.sim[i], a: d.actual[i], t: d.tsfm ? d.tsfm[i] : null, i: i, day: d });
       });
     });
     var n = pts.length;
-    var vals = pts.map(function (p) { return p.v; });
-    pts.forEach(function (p) { if (p.a !== null && p.a !== undefined) vals.push(p.a); });
+    var vals = [];
+    pts.forEach(function (p) {
+      [p.v, p.a].forEach(function (v) { if (v !== null && v !== undefined) vals.push(v); });
+    });
     days.forEach(function (d) {
       [d.tsfm, d.tsfm_q10, d.tsfm_q90].forEach(function (arr) {
         (arr || []).forEach(function (v) { if (v !== null && v !== undefined) vals.push(v); });
       });
     });
     var sc = chartScaffold(wrap, vals, n,
-      "Hourly ex-ante forecast vs actual across " + pastN + " past and " + futureN +
-      " upcoming market days around now, " + state.zone);
+      "Hourly forecast vs actual across " + pastN + " cleared and " + futureN +
+      " upcoming market days, " + state.zone, { b: 62 });
     var svg = sc.svg, X = sc.X, Y = sc.Y, m = sc.m;
 
-    // "now" seam: the boundary between the last hour carrying a settled actual
-    // and the first forecast-only hour. Everything to its right is pure
-    // forecast (no actual yet). Drawn as a faint wash now (behind the paths)
-    // and a labelled line after the day paths (on top).
+    // "now" seam: between the last settled hour and the first hour not yet cleared.
     var lastSettled = -1;
     for (var si = 0; si < n; si++) {
-      if (pts[si].a !== null && pts[si].a !== undefined) lastSettled = si;
+      if (pts[si].day.date <= lastDate) lastSettled = si;
     }
     var hasSeam = lastSettled >= 0 && lastSettled < n - 1;
-    var seamX = lastSettled < 0 ? m.l
-      : lastSettled >= n - 1 ? X(n - 1)
-      : (X(lastSettled) + X(lastSettled + 1)) / 2;
+    var seamX = hasSeam ? (X(lastSettled) + X(lastSettled + 1)) / 2 : 0;
     if (hasSeam) {
       svg.appendChild(svgEl("rect", {
         x: seamX, y: m.t, width: (m.l + sc.pw) - seamX, height: sc.ph,
@@ -2023,83 +1793,88 @@
       }));
     }
 
-    // day separators + weekday labels + per-day forecast & actual paths
+    // Per-day captions: up to three short lines, each dropped or shortened when
+    // it does not fit the day's width (so neighbours never overprint).
+    var FS = 11.5, FS2 = 10.5;
+    function fits(txt, size, w) { return txt.length * size * 0.56 <= w - 4; }
+    function caption(x, y, txt, size, fill, extra) {
+      var t = svgEl("text", Object.assign({ x: x, y: y, "text-anchor": "middle", fill: fill, "font-size": size }, extra || {}));
+      t.textContent = txt;
+      svg.appendChild(t);
+      return t;
+    }
     var idx0 = 0;
     days.forEach(function (d) {
       var idx1 = idx0 + d.hours.length - 1;
+      var cx = (X(idx0) + X(idx1)) / 2, w = X(idx1) - X(idx0) + (X(1) - X(0));
       if (idx0 > 0) {
         svg.appendChild(svgEl("line", {
           x1: X(idx0), x2: X(idx0), y1: m.t, y2: m.t + sc.ph,
           stroke: C.baseline, "stroke-width": 1, "stroke-dasharray": "3 4",
         }));
       }
-      var lbl = svgEl("text", {
-        x: (X(idx0) + X(idx1)) / 2, y: m.t + sc.ph + 18, "text-anchor": "middle",
-        fill: C.muted, "font-size": 11.5,
-      });
-      lbl.textContent = dayLabel(d.date).slice(0, 3) + " " + d.date.slice(5);
-      svg.appendChild(lbl);
-      var status = svgEl("text", {
-        x: (X(idx0) + X(idx1)) / 2, y: m.t + sc.ph + 32, "text-anchor": "middle",
-        fill: C.muted, "font-size": 10,
-        "font-style": isPending(d) ? "italic" : "normal",
-      });
-      // past days carry a per-day MAE·bias chip; pending days read "forecast"
+      var y = m.t + sc.ph + 17;
+      var dl = dayLabel(d.date).slice(0, 3) + " " + d.date.slice(5);
+      caption(cx, y, fits(dl, FS, w) ? dl : d.date.slice(5), FS, C.muted);
+      var st = settleState(d, lastDate);
       var scored = d.mae !== null && d.mae !== undefined;
-      var statusTxt = isPending(d) ? "forecast"
-        : scored ? ("MAE " + fmt(d.mae, 1)
-            + (d.bias === null || d.bias === undefined ? ""
-               : " · " + (d.bias >= 0 ? "+" : "−") + fmt(Math.abs(d.bias), 1)))
-        : (isPartial(d) ? "settling" : "settled");
-      if (isRetro(d)) statusTxt += " ↺";
-      status.textContent = statusTxt;
-      if (d.p_any_le0 !== null && d.p_any_le0 !== undefined && d.p_any_le0 >= RISK_BADGE_MIN) {
-        var rt = svgEl("tspan", { fill: C.weak, "font-weight": 600 });
-        rt.textContent = " · ≤0 risk " + pct(d.p_any_le0);
-        status.appendChild(rt);
-        var tip = svgEl("title", {});
-        tip.textContent = "P(at least one hour ≤ 0 €/MWh) = " + pct(d.p_any_le0) + " (" + tsfmIssueText(d) + ")";
-        status.appendChild(tip);
+      var line2, italic = false;
+      if (st === "forecast") { line2 = "forecast"; italic = true; }
+      else if (st === "missing") { line2 = "no actual"; italic = true; }
+      else if (scored) {
+        line2 = "MAE " + fmt(d.mae, 0);
+        var withBias = line2 + " · " + (d.bias >= 0 ? "+" : "−") + fmt(Math.abs(d.bias), 0);
+        if (d.bias !== null && d.bias !== undefined && fits(withBias, FS2, w)) line2 = withBias;
+      } else { line2 = "partial"; italic = true; }
+      if (fits(line2, FS2, w)) {
+        var t2 = caption(cx, y + 14, line2, FS2, C.muted, italic ? { "font-style": "italic" } : null);
+        if (scored && st !== "forecast") {
+          var tip2 = svgEl("title", {});
+          tip2.textContent = "Physics MAE " + fmt(d.mae, 1) + " €/MWh, bias (physics − actual) " +
+            (d.bias >= 0 ? "+" : "−") + fmt(Math.abs(d.bias), 1) + (st === "partial" ? " (partial day)" : "");
+          t2.appendChild(tip2);
+        }
       }
-      svg.appendChild(status);
+      if (d.p_any_le0 !== null && d.p_any_le0 !== undefined && d.p_any_le0 >= RISK_BADGE_MIN) {
+        var rtxt = fits("≤0 risk " + pct(d.p_any_le0), FS2, w) ? "≤0 risk " + pct(d.p_any_le0) : "≤0 " + pct(d.p_any_le0);
+        if (fits(rtxt, FS2, w)) {
+          var t3 = caption(cx, y + 28, rtxt, FS2, C.weak, { "font-weight": 600 });
+          var tip3 = svgEl("title", {});
+          tip3.textContent = "P(at least one hour ≤ 0 €/MWh) = " + pct(d.p_any_le0) + " (" + tsfmIssueText(d) + ")";
+          t3.appendChild(tip3);
+        }
+      }
 
       var Xoff = function (i) { return X(idx0 + i); };
-      // forecast line
-      svg.appendChild(svgEl("path", {
-        d: pathString(d.sim, Xoff, Y), fill: "none", stroke: C.sim,
-        "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round",
-      }));
-      // model-line overlays (dashed, beneath actual): pink = physics+GBM,
-      // yellow = pure-stats GBM — same contract as the day explorer.
       if (d.tsfm_q10 && d.tsfm_q90) {
-        var hzRun = [];
-        var hzFlush = function () {
-          if (hzRun.length > 1) {
-            var bd = hzRun.map(function (i, j) { return (j ? "L" : "M") + Xoff(i).toFixed(2) + " " + Y(d.tsfm_q90[i]).toFixed(2); }).join(" ") +
-              " " + hzRun.slice().reverse().map(function (i) { return "L" + Xoff(i).toFixed(2) + " " + Y(d.tsfm_q10[i]).toFixed(2); }).join(" ") + " Z";
+        var run = [];
+        var flush = function () {
+          if (run.length > 1) {
+            var bd = run.map(function (i, j) { return (j ? "L" : "M") + Xoff(i).toFixed(2) + " " + Y(d.tsfm_q90[i]).toFixed(2); }).join(" ") +
+              " " + run.slice().reverse().map(function (i) { return "L" + Xoff(i).toFixed(2) + " " + Y(d.tsfm_q10[i]).toFixed(2); }).join(" ") + " Z";
             svg.appendChild(svgEl("path", { d: bd, fill: C.tsfm, "fill-opacity": 0.14, stroke: "none", class: "tsfm-band" }));
           }
-          hzRun = [];
+          run = [];
         };
         d.hours.forEach(function (_, i) {
           var lo = d.tsfm_q10[i], hi = d.tsfm_q90[i];
-          if (lo === null || lo === undefined || hi === null || hi === undefined) hzFlush(); else hzRun.push(i);
+          if (lo === null || lo === undefined || hi === null || hi === undefined) flush(); else run.push(i);
         });
-        hzFlush();
+        flush();
       }
-      [["gbm", C.gbm], ["stats", C.stats], ["tsfm", C.tsfm]].forEach(function (ov) {
-        if (ov[0] === "gbm" && !state.showHybrid) return;   // hybrid off by default (#431 G)
-        var arr = d[ov[0]];
-        if (!arr || !arr.some(function (v) { return v !== null && v !== undefined; })) return;
-        var od = pathString(arr, Xoff, Y);
-        if (!od) return;
+      var simD = pathString(d.sim, Xoff, Y);
+      if (simD) {
         svg.appendChild(svgEl("path", {
-          d: od, fill: "none", stroke: ov[1],
-          "stroke-width": 1.8, "stroke-dasharray": "5 4",
-          "stroke-linejoin": "round", "stroke-linecap": "round",
+          d: simD, fill: "none", stroke: C.sim,
+          "stroke-width": 1.5, "stroke-linejoin": "round", "stroke-linecap": "round",
         }));
-      });
-      // actual line (breaks at nulls)
+      }
+      var tD = hasVals(d.tsfm) ? pathString(d.tsfm, Xoff, Y) : "";
+      if (tD) {
+        var tAttrs = { d: tD, fill: "none", stroke: C.tsfm, "stroke-width": 2.2, "stroke-linejoin": "round", "stroke-linecap": "round" };
+        if (!isCombined(d)) tAttrs["stroke-dasharray"] = "5 4";   // prices-only issue: marked dashed
+        svg.appendChild(svgEl("path", tAttrs));
+      }
       var actD = pathString(d.actual, Xoff, Y);
       if (actD) {
         svg.appendChild(svgEl("path", {
@@ -2110,35 +1885,23 @@
       idx0 = idx1 + 1;
     });
 
-    // the "now" seam line + labels, on top of the day paths
     if (hasSeam) {
       var seamColor = C.accent || C.act;
       svg.appendChild(svgEl("line", {
         x1: seamX, x2: seamX, y1: m.t - 6, y2: m.t + sc.ph,
         stroke: seamColor, "stroke-width": 1.6,
       }));
-      var nowLbl = svgEl("text", {
-        x: seamX, y: m.t - 10, "text-anchor": "middle",
-        fill: seamColor, "font-size": 11, "font-weight": 600,
-      });
-      nowLbl.textContent = "now";
-      svg.appendChild(nowLbl);
-      if (seamX < m.l + sc.pw - 60) {
-        var fcHint = svgEl("text", {
-          x: seamX + 6, y: m.t + 12, "text-anchor": "start",
-          fill: C.muted, "font-size": 10,
-        });
-        fcHint.textContent = "forecast →";
-        svg.appendChild(fcHint);
-      }
+      caption(seamX, m.t - 10, "now", 11, seamColor, { "font-weight": 600 });
     }
 
     // hover
     var hoverLine = svgEl("line", { y1: m.t, y2: m.t + sc.ph, stroke: C.baseline, "stroke-width": 1, visibility: "hidden" });
     svg.appendChild(hoverLine);
-    var dotS = svgEl("circle", { r: 4.5, fill: C.sim, stroke: C.surface, "stroke-width": 2, visibility: "hidden" });
-    var dotA = svgEl("circle", { r: 4.5, fill: C.act, stroke: C.surface, "stroke-width": 2, visibility: "hidden" });
-    svg.appendChild(dotS); svg.appendChild(dotA);
+    var dots = [["t", C.tsfm], ["v", C.sim], ["a", C.act]].map(function (k) {
+      var c = svgEl("circle", { r: 4.5, fill: k[1], stroke: C.surface, "stroke-width": 2, visibility: "hidden" });
+      svg.appendChild(c);
+      return { key: k[0], el: c };
+    });
     var overlay = svgEl("rect", {
       x: m.l, y: m.t, width: sc.pw, height: sc.ph, fill: "transparent",
       class: "hover-rect", tabindex: "0", "aria-label": "Forecast and actual values across recent days.",
@@ -2155,27 +1918,30 @@
       var x = X(i);
       hoverLine.setAttribute("x1", x); hoverLine.setAttribute("x2", x);
       hoverLine.setAttribute("visibility", "visible");
-      dotS.setAttribute("cx", x); dotS.setAttribute("cy", Y(p.v));
-      dotS.setAttribute("visibility", "visible");
-      if (p.a !== null && p.a !== undefined) {
-        dotA.setAttribute("cx", x); dotA.setAttribute("cy", Y(p.a));
-        dotA.setAttribute("visibility", "visible");
-      } else {
-        dotA.setAttribute("visibility", "hidden");
-      }
+      dots.forEach(function (dt) {
+        var v = p[dt.key];
+        if (v === null || v === undefined) { dt.el.setAttribute("visibility", "hidden"); return; }
+        dt.el.setAttribute("cx", x); dt.el.setAttribute("cy", Y(v));
+        dt.el.setAttribute("visibility", "visible");
+      });
       tooltip.textContent = "";
       tooltip.appendChild(el("div", "tt-head",
         dayLabel(p.day.date) + " · " + hourLabel(p.iso) + "–" + hourEndLabel(p.iso) + " Athens"));
-      [[C.sim, p.v, "forecast"], [C.act, p.a, p.a === null || p.a === undefined ? "actual (pending)" : "actual"]]
-        .forEach(function (rd) {
-          var row = el("div", "tt-row");
-          var key = el("span", "tt-key");
-          key.style.borderTopColor = rd[0];
-          row.appendChild(key);
-          row.appendChild(el("span", "tt-val", rd[1] === null || rd[1] === undefined ? "—" : fmt(rd[1], 2)));
-          row.appendChild(el("span", "tt-name", rd[2]));
-          tooltip.appendChild(row);
-        });
+      var rows = [];
+      if (p.t !== null && p.t !== undefined) rows.push([C.tsfm, p.t, tsfmName(p.day)]);
+      rows.push([C.sim, p.v, "physics"]);
+      rows.push([C.act, p.a, p.a === null || p.a === undefined ? "actual (not published)" : "actual"]);
+      rows.forEach(function (rd) {
+        var row = el("div", "tt-row");
+        var key = el("span", "tt-key");
+        key.style.borderTopColor = rd[0];
+        row.appendChild(key);
+        row.appendChild(el("span", "tt-val", rd[1] === null || rd[1] === undefined ? "—" : fmt(rd[1], 2)));
+        row.appendChild(el("span", "tt-name", rd[2]));
+        tooltip.appendChild(row);
+      });
+      var pl = p.day.p_le0 ? p.day.p_le0[p.i] : null;
+      if (pl !== null && pl !== undefined) tooltip.appendChild(el("div", "tt-row tt-risk", "P(price ≤ 0) " + pct(pl)));
       var rect = svg.getBoundingClientRect();
       var scale = rect.width / sc.VBW;
       var px = x * scale;
@@ -2193,12 +1959,9 @@
     });
     overlay.addEventListener("pointerleave", function () {
       hoverLine.setAttribute("visibility", "hidden");
-      dotS.setAttribute("visibility", "hidden");
-      dotA.setAttribute("visibility", "hidden");
+      dots.forEach(function (dt) { dt.el.setAttribute("visibility", "hidden"); });
       tooltip.style.display = "none";
     });
-
-    renderRevisions();
   }
 
   // ---------- interactive series focus (shared component) ----------
@@ -2304,120 +2067,6 @@
     return { showAll: function () { off = {}; hover = null; apply(); } };
   }
 
-  // Count of settled (non-null) actual points in a day entry.
-  function settledCount(d) {
-    return d.actual.filter(function (a) { return a !== null && a !== undefined; }).length;
-  }
-
-  // "What we said, when" — the freshest ex-ante (weather) forecast we published
-  // for one delivery day, plus the settled actual. Reduced (directive 2) from
-  // the old multi-vintage overlay: every forecast uses the latest admissible
-  // weather, so the freshest prediction is the one that matters.
-  function renderRevisions() {
-    var zoneData = state.zoneCache[state.zone];
-    if (!zoneData) return;
-    var byDate = {};
-    freshestByDate(trackDays(zoneData)).forEach(function (d) { byDate[d.date] = d; });
-    // newest 14 delivery days that have an ex-ante forecast
-    var dates = Object.keys(byDate).sort().slice(-14);
-    var wrap = $("rev-wrap");
-    var lg = $("rev-legend");
-    var btns = $("rev-daybtns");
-    wrap.textContent = ""; lg.textContent = ""; btns.textContent = "";
-    if (!dates.length) {
-      $("rev-title").textContent = "What we said, when";
-      wrap.appendChild(el("p", "pending-note",
-        "No " + currentTrack().adj + "-track forecast days for " + state.zone + " yet."));
-      return;
-    }
-    if (!state.revDay || dates.indexOf(state.revDay) === -1) {
-      state.revDay = dates[dates.length - 1];
-    }
-    dates.forEach(function (dd) {
-      var b = el("button", null, dd.slice(5));
-      b.type = "button";
-      b.title = dayLabel(dd);
-      b.setAttribute("aria-pressed", String(dd === state.revDay));
-      b.addEventListener("click", function () {
-        state.revDay = dd;
-        renderRevisions();
-        writeHash();
-      });
-      btns.appendChild(b);
-    });
-
-    var d = byDate[state.revDay];
-    var hasActual = settledCount(d) > 0;
-    $("rev-title").textContent = "What we said, when — " + state.zone + " · " + dayLabel(state.revDay);
-
-    var C = chartColors();
-    var vals = d.sim.slice();
-    if (hasActual) d.actual.forEach(function (a) { if (a !== null && a !== undefined) vals.push(a); });
-    var n = d.hours.length;
-    var sc = chartScaffold(wrap, vals, n, "Ex-ante forecast vs actual for " + state.revDay + ", " + state.zone);
-    var svg = sc.svg, X = sc.X, Y = sc.Y;
-
-    for (var i = 0; i < n; i += 3) {
-      var tx = svgEl("text", {
-        x: X(i), y: sc.m.t + sc.ph + 20, "text-anchor": "middle",
-        fill: sc.C.muted, "font-size": 11.5, "font-variant-numeric": "tabular-nums",
-      });
-      tx.textContent = hourLabel(d.hours[i]);
-      svg.appendChild(tx);
-    }
-
-    var focusSeries = [];
-    // forecast line
-    var simPath = svgEl("path", {
-      d: pathString(d.sim, X, Y), fill: "none", stroke: sc.C.sim,
-      "stroke-width": 2.4, "stroke-linejoin": "round", "stroke-linecap": "round",
-    });
-    svg.appendChild(simPath);
-    var simChip = el("span");
-    simChip.appendChild(el("span", "key sim"));
-    simChip.appendChild(document.createTextNode("Forecast (" + currentTrack().adj + ")"));
-    simChip.title = currentTrack().series + " · input_mode: " + dayInputMode(d) +
-      (d.prediction_made_utc
-        ? "  ·  frozen " + d.prediction_made_utc.replace("T", " ").replace("Z", " UTC")
-        : "");
-    lg.appendChild(simChip);
-    focusSeries.push({ key: "sim", chip: simChip, els: [simPath], baseOpacity: 1 });
-
-    if (hasActual) {
-      var actPath = svgEl("path", {
-        d: pathString(d.actual, X, Y), fill: "none", stroke: sc.C.act,
-        "stroke-width": 2.4, "stroke-linejoin": "round", "stroke-linecap": "round",
-      });
-      svg.appendChild(actPath);
-      var actEls = [actPath];
-      for (var k = 0; k < n; k++) {
-        var av = d.actual[k];
-        if (av === null || av === undefined) continue;
-        var pv = k > 0 ? d.actual[k - 1] : null;
-        var nv = k < n - 1 ? d.actual[k + 1] : null;
-        if ((pv === null || pv === undefined) && (nv === null || nv === undefined)) {
-          svg.appendChild(svgEl("circle", {
-            cx: X(k), cy: Y(av), r: 4, fill: sc.C.act, stroke: sc.C.surface, "stroke-width": 2,
-          }));
-        }
-      }
-      var actChip = el("span");
-      actChip.appendChild(el("span", "key act"));
-      var partial = settledCount(d) < n;
-      actChip.appendChild(document.createTextNode(partial ? "Actual (settling)" : "Actual (settled)"));
-      actChip.title = "Actual settled price" + (partial
-        ? " (" + settledCount(d) + "/" + n + " hours settled so far)" : "");
-      lg.appendChild(actChip);
-      focusSeries.push({ key: "act", chip: actChip, els: actEls, baseOpacity: 1 });
-    } else {
-      wrap.appendChild(el("p", "pending-note",
-        "This delivery day has not settled yet — the actual appears once it clears."));
-    }
-
-    wrap.appendChild(svg);
-    attachSeriesFocus(lg, focusSeries);
-  }
-
   // ---------- map view (bidding-zone polygons) ----------
   // Boundaries: web/geo/zones.geojson — adapted from the Electricity Maps
   // contrib project (AGPL-3.0), IT-Calabria split + simplification ours.
@@ -2429,9 +2078,9 @@
   // shipped per (zone, day, track) as `err_pct`. The SPA never computes it —
   // when the payload predates the field it says so instead of mislabeling €.
   var MAP_METRICS = [
-    ["sim", "Forecast"],
+    ["sim", "Physics"],
     ["act", "Actual (settled)"],
-    ["err", "Error % (load-wtd)"],
+    ["err", "Error %"],
   ];
 
   function loadMap() {
@@ -2671,8 +2320,8 @@
 
     var mDef = MAP_METRICS.filter(function (m) { return m[0] === metric; })[0];
     $("map-title").textContent = mDef[1] + " — " + dayLabel(day.date) +
-      (metric === "err" ? " (load-weighted |fc − act| as % of settled value · "
-                        : " (€/MWh, day average · ") + currentTrack().adj + " track)";
+      (metric === "err" ? " (load-weighted |physics − actual| as % of settled value)"
+                        : " (€/MWh, day average)");
 
     // Honest empty states — settled-only metrics on a day with no settled data
     // (future delivery days included) say so explicitly; never a blank map.
@@ -3084,7 +2733,6 @@
   function renderPredict() {
     buildPredictSubnav();
     syncPredictZoneSelect();
-    renderPredictTrackNote();
     var tgt = state.predictTarget || "overview";
     var isHub = tgt === "overview";
     var hub = $("predict-hub"), tv = $("predict-target-view");
@@ -3092,28 +2740,6 @@
     if (tv) tv.hidden = isHub;
     if (isHub) renderPredictHub();
     else renderPredictTarget(tgt);
-  }
-
-  // The input model cards ARE the Predicted pillar — the global track switch has
-  // no meaning here. State it inline rather than silently ignore the switch.
-  function renderPredictTrackNote() {
-    var note = $("predict-track-note");
-    if (!note) return;
-    note.textContent = "";
-    if (state.track === "announced") {
-      note.appendChild(el("strong", null, "You are on the As-announced track. "));
-      note.appendChild(document.createTextNode(
-        "This surface is the Predicted pillar itself — the fitted input models the " +
-        "switch evaluates. The As-announced track replaces these predictions with " +
-        "the TSO's official D-1 figures, so there is nothing to switch here; the " +
-        "price surfaces (Recent days, Map, Scoreboard, Zone explorer) are where the " +
-        "two tracks diverge."));
-      note.className = "track-inline-note track-inline-note-active";
-      note.hidden = false;
-    } else {
-      note.className = "track-inline-note";
-      note.hidden = true;
-    }
   }
 
   function renderPredictHub() {
@@ -3175,9 +2801,8 @@
     }
     card.appendChild(chips);
     var p = el("p", "chart-sub",
-      "If our predicted input equals the TSO's forecast, the Predicted price track " +
-      "converges to the As-announced track — so error is measured against what the " +
-      "market used, and the gap between the two tracks is the cost of our inputs. ");
+      "The target is the TSO's published forecast, the figure the market itself cleared on, " +
+      "so these errors measure how far our inputs are from what the market used. ");
     var a = el("a", null, "The full recipe →");
     a.href = "https://github.com/philokalia-ai/energy-markets/blob/main/docs/predictions.md";
     p.appendChild(a);
@@ -3537,8 +3162,8 @@
     var wc = (predictState.scorecard && predictState.scorecard.winner_counts) || {};
     var total = (wc.ml || 0) + (wc.pack || 0) + (wc.skip || 0);
     head.appendChild(el("p", "chart-sub",
-      (wc.ml || 0) + " of " + (total || 117) + " zone-targets ship the NEW LightGBM model; " +
-      (wc.pack || 0) + " keep the linear pack; " + (wc.skip || 0) + " have no resource (not modeled). " +
+      (wc.ml || 0) + " of " + (total || 117) + " zone-targets use a LightGBM model; " +
+      (wc.pack || 0) + " use a linear pack; " + (wc.skip || 0) + " have no resource (not modeled). " +
       "Each cell links into that zone's target page."));
     card.appendChild(head);
     var scroll = el("div", "table-scroll");
@@ -3681,15 +3306,10 @@
 
   function renderDayComment(day) {
     var p = $("day-comment");
-    if (isPending(day)) {
-      p.textContent = "Prediction only — frozen " +
-        (day.prediction_made_utc ? day.prediction_made_utc.replace("T", " ").replace("Z", " UTC") : "") +
-        ". Commentary appears once the day settles.";
-      return;
-    }
-    var tier = (day.corr >= 0.9 && day.mae < 15) ? "An excellent day for the model" :
-               day.corr >= 0.75 ? "A good day for the model" :
-               day.corr >= 0.5 ? "A mixed day" : "A hard day for the model";
+    if (day.mae === null || day.mae === undefined) { p.textContent = ""; return; }
+    var tier = (day.corr >= 0.9 && day.mae < 15) ? "An excellent day for the physics clear" :
+               day.corr >= 0.75 ? "A good day for the physics clear" :
+               day.corr >= 0.5 ? "A mixed day for the physics clear" : "A hard day for the physics clear";
     var s = tier + ": hourly correlation " + fmt(day.corr, 2) +
       " with a mean miss of €" + fmt(day.mae, 1) + "/MWh.";
     if (day.bias !== null && day.bias !== undefined && Math.abs(day.bias) >= 8) {
@@ -3712,19 +3332,10 @@
 
   // ---------- scoreboard ----------
 
-  // Scoreboard scores on the currently selected track (the global lens). Both
-  // tracks live in the data plane; the switch filters client-side.
+  // Scoreboard scores on the weather track (the payload also carries entsoe* rows).
   function trackScores() {
     return state.scoreboard.scores.filter(function (s) {
       return trackOfMode(s.input_mode) === state.track;
-    });
-  }
-
-  // Scoreboard scores on the OTHER track — the counterpart for the track-gap chip.
-  function altTrackScores() {
-    var alt = state.track === "predicted" ? "announced" : "predicted";
-    return state.scoreboard.scores.filter(function (s) {
-      return trackOfMode(s.input_mode) === alt;
     });
   }
 
@@ -3735,7 +3346,7 @@
   var FREEZE_LABEL = "since freeze (cv45, 2026-11-21) — the only out-of-sample physics record";
   var FREEZE_MIN_DAYS = 14;
   // Below FREEZE_MIN_DAYS scored days a since-freeze cohort shows "insufficient data":
-  // its metrics are blanked (so it never ranks or feeds the track-gap chip).
+  // its metrics are blanked (so it never ranks).
   function atFreezeWindow(arr) {
     if (state.window !== FREEZE_WINDOW) return arr;
     return arr.map(function (s) {
@@ -3771,7 +3382,7 @@
     var nd = 0;
     scores.forEach(function (s) { if (s.n_days > nd) nd = s.n_days; });
     note.hidden = false;
-    note.textContent = "Since the freeze (cv44, 2026-11-15): " + nd + " scored market day" +
+    note.textContent = "Since the freeze (cv45, 2026-11-21): " + nd + " scored market day" +
       (nd === 1 ? "" : "s") + ". The 43 characteristics (40 price-informed) have not changed since, so " +
       "these days are the only out-of-sample physics record. " +
       (nd < FREEZE_MIN_DAYS
@@ -3781,7 +3392,7 @@
 
   function scoreboardWindows() {
     var seen = {};
-    trackScores().forEach(function (s) { seen[s.window] = true; });
+    trackScores().forEach(function (s) { if (s.window !== BACKFILL_WINDOW) seen[s.window] = true; });
     var wins = Object.keys(seen);
     if (!wins.length) wins = ["all"];
     var rank = function (w) { return w === "all" ? 0 : w === FREEZE_WINDOW ? 1 : w === BACKFILL_WINDOW ? 2 : 3; };
@@ -3795,12 +3406,7 @@
   function scoreboardLeads() {
     var seen = {};
     trackScores().forEach(function (s) { seen[s.lead_days] = true; });
-    var arr = Object.keys(seen).map(Number).sort(function (a, b) { return a - b; });
-    // The announced track is ONE D-1 freeze per delivery day, not a 7-lead ladder
-    // (owner directive). Collapse to the freshest (min-lead) freeze slice and guard
-    // against rendering any stale lead>1 announced rows that exist in the data.
-    if (state.track === "announced" && arr.length) return [arr[0]];
-    return arr;
+    return Object.keys(seen).map(Number).sort(function (a, b) { return a - b; });
   }
 
   function renderWindowSelect() {
@@ -3915,16 +3521,9 @@
     table.textContent = "";
     var tracked = trackScores();
     if (!tracked.length) {
-      // Friendly empty state (the selected track fills as its runs accumulate).
       var tbody0 = el("tbody");
       var tr0 = el("tr");
-      var td0 = el("td", "null", state.track === "predicted"
-        ? "No scored days on the Predicted (weather) track yet — this track " +
-          "freezes before the 12:00 CET auction and starts accumulating scores " +
-          "once the weather-based morning runs begin and their delivery days settle."
-        : "No scored days on the As-announced (ENTSO-E D-1) track yet — it fills " +
-          "as the evening announced-input runs accumulate and their delivery " +
-          "days settle.");
+      var td0 = el("td", "null", "No scored days yet — scores appear as delivery days settle.");
       td0.colSpan = 1;
       tr0.appendChild(td0);
       tbody0.appendChild(tr0);
@@ -3933,8 +3532,8 @@
     }
     var leads = scoreboardLeads();
     // Resolution: the hourly board (default) or the native 15-min board. The two
-    // are NEVER mixed in one ranking — in 15-min mode every cell, sort and the
-    // track-gap chip use only the q15 fields, and zone-days without native PT15M
+    // are NEVER mixed in one ranking — in 15-min mode every cell and sort
+    // use only the q15 fields, and zone-days without native PT15M
     // actuals (PT60M/PT30M zones) are absent ("—"), not filled with hourly scores.
     var q15 = state.res === "q15";
     if ($("res-select")) $("res-select").value = state.res;   // URL (#res=q15) / back-forward sync
@@ -3954,24 +3553,6 @@
     renderWindowNote(scores);
     var byKey = {};
     scores.forEach(function (s) { byKey[s.zone + "|" + s.lead_days] = s; });
-    // Track-gap counterpart: the OTHER track's score for the same slice. The
-    // announced track has NO lead dimension (one D-1 freeze per day), so its side
-    // is ALWAYS the freeze = the min-lead slice, keyed by zone alone. This also
-    // guards against pairing a predicted lead against a stale lead>1 announced row.
-    var altScores = atFreezeWindow(atRes(altTrackScores().filter(function (s) { return s.window === state.window; })));
-    var altByZoneFreeze = {};   // announced freeze (min lead) per zone
-    altScores.forEach(function (s) {
-      var cur = altByZoneFreeze[s.zone];
-      if (!cur || s.lead_days < cur.lead_days) altByZoneFreeze[s.zone] = s;
-    });
-    var altByKey = {};          // per (zone, lead) — used when the alt IS predicted
-    altScores.forEach(function (s) { altByKey[s.zone + "|" + s.lead_days] = s; });
-    // On the predicted track the counterpart is the announced freeze (zone-keyed);
-    // on the announced track the counterpart is predicted at the shown (freeze) lead.
-    function altFor(zone, lead) {
-      return state.track === "predicted" ? altByZoneFreeze[zone] : altByKey[zone + "|" + lead];
-    }
-
     if (state.sort.lead === null || leads.indexOf(state.sort.lead) === -1) state.sort.lead = leads[0];
 
     var METRICS = [["corr", "corr"], ["mae", "MAE"], ["bias", "bias"]];
@@ -4001,9 +3582,7 @@
     thZone.rowSpan = 2;
     tr1.appendChild(thZone);
     leads.forEach(function (l) {
-      // Announced = the single D-1 freeze (no lead ladder); label it as such.
-      var th = el("th", "group lead-sep", (q15 ? "15-min · " : "") +
-        (state.track === "announced" ? "D-1 announcement" : "Lead D-" + l));
+      var th = el("th", "group lead-sep", (q15 ? "15-min · " : "") + "Lead D-" + l);
       th.colSpan = METRICS.length;
       tr1.appendChild(th);
     });
@@ -4093,18 +3672,6 @@
                 "hour's mean (mean |quarter − hour mean|), measured after the fact. A diagnostic of " +
                 "intra-hour movement, not a part of the MAE (MAE does not split additively)."
               : "MAE " + fmt(s.mae, 2) + " €/MWh · n=" + s.n_days + " days";
-            // Track-gap chip: when the OTHER track also scored this (zone, lead,
-            // window), show the input-cost delta inline (the difference IS the
-            // measured cost of our inputs). Client-side, honestly absent otherwise.
-            var alt = altFor(z, l);
-            if (alt && alt.mae !== null && alt.mae !== undefined && s.mae !== null) {
-              var predMae = state.track === "predicted" ? s.mae : alt.mae;
-              var annMae = state.track === "announced" ? s.mae : alt.mae;
-              var predCv = state.track === "predicted" ? s.code_version : alt.code_version;
-              var annCv = state.track === "announced" ? s.code_version : alt.code_version;
-              var chip = trackGapChip(predMae, annMae, predCv, annCv);
-              if (chip) td.appendChild(chip);
-            }
           } else if (mdef[0] === "naive") {
             naiveMaeCell(td, s);
           } else if (mdef[0] === "rmae") {
@@ -4469,7 +4036,7 @@
       $("book-comment").textContent = "";
       var w0 = $("book-wrap"); w0.textContent = "";
       w0.appendChild(el("p", "pending-note",
-        "No " + currentTrack().adj + "-track days for " + state.zone + " yet — the order book " +
+        "No forecast days for " + state.zone + " yet — the order book " +
         "appears once the daily runs and their captured books accumulate."));
       bookTableMessage("No order book captured for " + state.zone + " yet.");
       return;
@@ -4496,22 +4063,6 @@
     days.forEach(function (d) { if (!fday && d.date === state.bookDay) fday = d; });
 
     $("book-title").textContent = state.zone + " — order book · " + dayLabel(state.bookDay);
-    // Track honesty note: the captured ladder is the predicted-track run's book
-    // (per-track book capture is Phase 2 — see docs/pillars/track-switch-phase-2.md).
-    // The clearing-price + actual markers DO follow the switch (they overlay from
-    // the selected track's price series), so we say so rather than ignore it.
-    var bnote = $("book-track-note");
-    if (bnote) {
-      if (state.track === "announced") {
-        bnote.textContent = "You are on the As-announced track. The ladder shown is " +
-          "the captured Predicted-track book (per-track book capture is Phase 2); the " +
-          "clearing-price and actual markers follow the As-announced price series.";
-        bnote.hidden = false;
-      } else {
-        bnote.hidden = true;
-        bnote.textContent = "";
-      }
-    }
     var wrap = $("book-wrap");
     wrap.textContent = "";
     wrap.appendChild(el("p", "pending-note", "Loading order book…"));
@@ -5943,11 +5494,11 @@
     return typeof v === "number" ? fmt(v, 3) : String(v);
   }
 
-  // ---- B6: observed/declared census + cv-ledger timeline --------------------
+  // ---- B6: observed/declared census ----------------------------------------
   function renderB6() {
-    var census = $("b6-census"), ledger = $("b6-ledger");
+    var census = $("b6-census");
     if (!census) return;
-    census.textContent = ""; ledger.textContent = "";
+    census.textContent = "";
     var prov = state.methodology.provenance || {};
     var obs = [], dec = [];
     Object.keys(prov).sort().forEach(function (k) {
@@ -5981,30 +5532,6 @@
     cols.appendChild(col("declared — named, OOS-validated", "prov-declared", dec));
     census.appendChild(cols);
 
-    var rows = state.methodology.cv_ledger || [];
-    rows.forEach(function (r) {
-      var item = el("div", "method-ledger-item ledger-" + (r.status || "shipped"));
-      var head = el("div", "method-ledger-head");
-      head.appendChild(el("span", "method-ledger-cv", "cv" + r.cv));
-      head.appendChild(el("span", "method-ledger-status " + (r.status === "no_ship" ? "st-noship" : "st-ship"),
-        r.status === "no_ship" ? "NO-SHIP" : "shipped"));
-      head.appendChild(el("span", "method-ledger-char", r.characteristic));
-      item.appendChild(head);
-      if (r.change) item.appendChild(el("p", "method-ledger-change", r.change));
-      if (r.measured) {
-        var mline = Object.keys(r.measured).map(function (k) {
-          return k + ": " + r.measured[k];
-        }).join(" · ");
-        item.appendChild(el("p", "method-ledger-measured", mline));
-      }
-      if (r.doc) {
-        var a = el("a", "method-ledger-doc", r.doc);
-        a.href = "https://github.com/philokalia-ai/energy-markets/tree/main/" + r.doc;
-        a.target = "_blank"; a.rel = "noopener";
-        item.appendChild(a);
-      }
-      ledger.appendChild(item);
-    });
   }
 
   function renderMethod() {
@@ -6690,7 +6217,7 @@
 
   function selectZone(zone, keepDay) {
     state.zone = zone;
-    if (!keepDay) { state.day = null; state.revDay = null; state.bookDay = null; }
+    if (!keepDay) { state.day = null; state.bookDay = null; }
     state.hoverIdx = null;
     stopBookPlay();
     $("zone-select").value = zone;
@@ -6727,7 +6254,6 @@
 
   function applyHash() {
     readHash();
-    renderTrackSwitch();
     setView(state.view);
     if (state.scoreboard) {
       if (state.scoreboard.zones.indexOf(state.zone) === -1) state.zone = state.scoreboard.zones[0];
@@ -6739,12 +6265,6 @@
   }
 
   function init() {
-    // The global track: localStorage carries the default; the URL (read in
-    // bootstrapData/applyHash) overrides it. Render the switch immediately so it
-    // is present even before the data plane answers.
-    loadTrackPref();
-    loadHybridPref();
-    renderTrackSwitch();
     document.querySelectorAll(".tab").forEach(function (t) {
       t.addEventListener("click", function () {
         setView(t.dataset.view);
@@ -6753,6 +6273,18 @@
     });
     $("zone-select").addEventListener("change", function (ev) {
       selectZone(ev.target.value);
+    });
+    // Line charts size their viewBox to the screen: re-draw when the width class changes.
+    var lastVBW = chartVBW(), resizeTimer = null;
+    window.addEventListener("resize", function () {
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(function () {
+        var w = chartVBW();
+        if (Math.abs(w - lastVBW) < 40 || !state.zoneCache[state.zone]) return;
+        lastVBW = w;
+        renderHorizon();
+        renderExplorer();
+      }, 200);
     });
     $("hzone-select").addEventListener("change", function (ev) {
       selectZone(ev.target.value);
@@ -6876,7 +6408,6 @@
       box.hidden = true;
 
       readHash();
-      renderTrackSwitch();   // reflect a track= in the shared/deep-linked URL
       if (state.scoreboard.zones.indexOf(state.zone) === -1) {
         state.zone = state.scoreboard.zones.indexOf("GR") !== -1 ? "GR" : state.scoreboard.zones[0];
       }
@@ -6953,24 +6484,16 @@
       buildTargetCards: buildTargetCards,
       buildReservoir: buildReservoir,
     };
-    // Track-switch test surface — drives the global Predicted / As-announced lens
-    // in isolation (flip, re-render, assert series/labels + URL change).
+    // Zone/scoreboard test surface (historical name): the weather-track filter and
+    // the renderers it feeds.
     window.__euphemiaTrack = {
       state: state,
-      TRACKS: TRACKS,
-      TRACK_ORDER: TRACK_ORDER,
-      setTrack: setTrack,
       trackOfMode: trackOfMode,
       trackDays: trackDays,
       trackScores: trackScores,
-      altTrackScores: altTrackScores,
       scoreboardLeads: scoreboardLeads,
-      trackGapChip: trackGapChip,
-      currentTrack: currentTrack,
-      renderTrackSwitch: renderTrackSwitch,
       renderExplorer: renderExplorer,
       renderHorizon: renderHorizon,
-      loadHybridPref: loadHybridPref,
       renderScoreboard: renderScoreboard,
       renderWindowSelect: renderWindowSelect,
       writeHash: writeHash,

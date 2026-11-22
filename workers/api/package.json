@@ -15,7 +15,7 @@
     "test:inputs-routes": "node test/inputs_routes.test.mjs",
     "test:predict": "node test/predict.test.mjs",
     "test:views": "node test/views_empty_state.test.mjs",
-    "test:track": "node test/track_switch.test.mjs",
+    "test:track": "node test/one_track.test.mjs",
     "test:methodology": "node test/book_methodology.test.mjs",
     "test:methodview": "node test/method_view.test.mjs",
     "test:boundaries": "node test/boundaries.test.mjs",
@@ -26,7 +26,7 @@
     "test:q15": "node test/q15_scores.test.mjs",
     "test:q15route": "node test/q15_board_route.test.mjs",
     "test:naive": "node test/naive_board.test.mjs",
-    "test:hybridfreeze": "node test/hybrid_freeze.test.mjs",
+    "test:latestonly": "node test/latest_only.test.mjs",
     "test:backfill": "node test/backfill_window.test.mjs",
     "test:tsfmbackfill": "node test/tsfm_backfill_fields.test.mjs"
   },
