@@ -1148,6 +1148,24 @@
   }
   function isCombined(day) { return day.tsfm_input_mode === "postsim"; }
   function tsfmName(day) { return isCombined(day) ? "Timestral + physics" : "Timestral (prices only)"; }
+  // Timestral's MAE for one day over the hours carrying both its median and a settled
+  // price: { mae, n }, or null when there is no such hour.
+  function tsfmDayMae(day) {
+    var sum = 0, n = 0;
+    (day.tsfm || []).forEach(function (v, i) {
+      var a = day.actual[i];
+      if (v === null || v === undefined || a === null || a === undefined) return;
+      sum += Math.abs(v - a); n++;
+    });
+    return n ? { mae: sum / n, n: n } : null;
+  }
+  // The headline score of a day: Timestral's MAE when it was issued, else the physics MAE.
+  function headlineScore(day) {
+    var t = tsfmDayMae(day);
+    if (t) return { model: "Timestral", mae: t.mae, n: t.n, isT: true };
+    if (day.mae !== null && day.mae !== undefined) return { model: "physics", mae: day.mae, isT: false };
+    return null;
+  }
   // Legend label for the Timestral line over a set of days.
   function tsfmLegend(days) {
     var withT = days.filter(function (d) { return hasVals(d.tsfm); });
@@ -1212,11 +1230,14 @@
       var st = settleState(d, lastDate);
       if (st === "forecast" || st === "missing") {
         badges.appendChild(el("span", "pill pending", st === "missing" ? "no actual" : "forecast"));
-      } else if (d.mae === null || d.mae === undefined) {
-        badges.appendChild(el("span", "pill pending", "partial"));
       } else {
-        badges.appendChild(el("span", "pill", "MAE " + fmt(d.mae, 1)));
-        badges.appendChild(el("span", "pill", "r " + fmt(d.corr, 2)));
+        var hs = headlineScore(d);
+        if (!hs) badges.appendChild(el("span", "pill pending", "partial"));
+        else {
+          var pill = el("span", "pill" + (hs.isT ? " pill-tsfm" : ""), hs.model + " " + fmt(hs.mae, 1));
+          pill.title = (hs.isT ? tsfmName(d) : "Physics") + " MAE, €/MWh";
+          badges.appendChild(pill);
+        }
       }
       var rb = riskBadge(d);
       if (rb) badges.appendChild(rb);
@@ -1235,12 +1256,14 @@
   function renderDayStats(day) {
     var row = $("day-stats");
     row.textContent = "";
-    var defs = day.mae === null || day.mae === undefined ? []
+    var tm = tsfmDayMae(day);
+    var defs = tm ? [[tsfmName(day) + " MAE", fmt(tm.mae, 1), "€/MWh"]] : [];
+    defs = defs.concat(day.mae === null || day.mae === undefined ? []
       : [
           ["Physics MAE", fmt(day.mae, 1), "€/MWh"],
           ["Bias (physics − actual)", (day.bias > 0 ? "+" : "") + fmt(day.bias, 1), "€/MWh"],
-          ["Correlation", fmt(day.corr, 2), ""],
-        ];
+          ["Physics correlation", fmt(day.corr, 2), ""],
+        ]);
     if (day.p_any_le0 !== null && day.p_any_le0 !== undefined) {
       defs.push(["P(any hour ≤ 0)", pct(day.p_any_le0), "", day.p_any_le0 >= RISK_BADGE_MIN ? "risk" : ""]);
     }
@@ -1742,8 +1765,9 @@
     var futureN = days.length - pastN;
     var hasT = days.some(function (d) { return hasVals(d.tsfm); });
     $("hz-sub").textContent =
-      "Freshest forecast per delivery day · settled price on the " + pastN +
-      " cleared days, forecast alone on the next " + futureN + " · hours in Europe/Athens";
+      "Settled price on the " + pastN + " cleared days, forecast alone on the next " + futureN +
+      " · captions: MAE (€/MWh) of the named forecast" +
+      (hasT ? " · Timestral is issued 06:30 UTC for the next day" : "") + " · Athens hours";
 
     var C = chartColors();
     var items = [];
@@ -1817,21 +1841,28 @@
       var dl = dayLabel(d.date).slice(0, 3) + " " + d.date.slice(5);
       caption(cx, y, fits(dl, FS, w) ? dl : d.date.slice(5), FS, C.muted);
       var st = settleState(d, lastDate);
-      var scored = d.mae !== null && d.mae !== undefined;
-      var line2, italic = false;
+      // line 2: the headline forecast's MAE, named and coloured as its series
+      var hs = (st === "settled" || st === "partial") ? headlineScore(d) : null;
+      var line2, italic = false, fill2 = C.muted, w2 = null;
       if (st === "forecast") { line2 = "forecast"; italic = true; }
       else if (st === "missing") { line2 = "no actual"; italic = true; }
-      else if (scored) {
-        line2 = "MAE " + fmt(d.mae, 0);
-        var withBias = line2 + " · " + (d.bias >= 0 ? "+" : "−") + fmt(Math.abs(d.bias), 0);
-        if (d.bias !== null && d.bias !== undefined && fits(withBias, FS2, w)) line2 = withBias;
+      else if (hs) {
+        line2 = hs.model + " " + fmt(hs.mae, 0);
+        if (!fits(line2, FS2, w)) line2 = "MAE " + fmt(hs.mae, 0);   // the colour still names it
+        if (hs.isT) { fill2 = C.tsfm; w2 = 600; }
       } else { line2 = "partial"; italic = true; }
       if (fits(line2, FS2, w)) {
-        var t2 = caption(cx, y + 14, line2, FS2, C.muted, italic ? { "font-style": "italic" } : null);
-        if (scored && st !== "forecast") {
+        var ex2 = {};
+        if (italic) ex2["font-style"] = "italic";
+        if (w2) ex2["font-weight"] = w2;
+        var t2 = caption(cx, y + 14, line2, FS2, fill2, ex2);
+        if (hs) {
           var tip2 = svgEl("title", {});
-          tip2.textContent = "Physics MAE " + fmt(d.mae, 1) + " €/MWh, bias (physics − actual) " +
-            (d.bias >= 0 ? "+" : "−") + fmt(Math.abs(d.bias), 1) + (st === "partial" ? " (partial day)" : "");
+          tip2.textContent = (hs.isT ? tsfmName(d) + " MAE " + fmt(hs.mae, 1) + " €/MWh on " + hs.n + " h" : "") +
+            (d.mae !== null && d.mae !== undefined
+              ? (hs.isT ? " · " : "") + "physics MAE " + fmt(d.mae, 1) + " €/MWh, bias (physics − actual) " +
+                (d.bias >= 0 ? "+" : "−") + fmt(Math.abs(d.bias), 1) : "") +
+            (st === "partial" ? " (partial day)" : "");
           t2.appendChild(tip2);
         }
       }
@@ -3489,9 +3520,10 @@
       " on this window. Not a test of statistical significance.";
   }
 
-  // Timestral fields of the "backfilled" window (#431 R2, bin/tsfm_backfill_scores.jl): the
-  // post-sim Timestral line reconstructed over the same cv44 retro physics, scored on the hours of
-  // the physics backfill that also carry a Timestral median; rMAE against the board's naive.
+  // Timestral board fields (bin/tsfm_backfill_scores.jl), lead 1 only. Live windows: the published
+  // Timestral vintage per zone-day (the line the charts draw), scored on its median hours with a
+  // settled price and every naive; tsfm_n_days_postsim of those days were the Timestral + physics
+  // issue, the rest the 06:30 prices-only issue. rMAE against the board's naive on the same hours.
   function tsfmNaiveKind(s) {
     return state.naive === "auto" || state.naive === "off" ? (s.lead_days <= 1 ? "epf" : "d7") : state.naive;
   }
@@ -3500,9 +3532,10 @@
       td.textContent = "—"; td.className = ((td.className || "") + " null").trim(); return;
     }
     td.textContent = fmt(s.tsfm_mae, 1);
-    td.title = "Timestral (post-sim, reconstructed on the cv44 retro physics) MAE " + fmt(s.tsfm_mae, 2) +
-      " €/MWh on " + s.tsfm_n + " hours over " + s.tsfm_n_days + " days" +
-      (s.tsfm_arm ? " · " + s.tsfm_arm : "") + ". In-sample reconstruction, like the physics backfill.";
+    var np = s.tsfm_n_days_postsim;
+    td.title = "Timestral MAE " + fmt(s.tsfm_mae, 2) + " €/MWh on " + s.tsfm_n + " hours over " +
+      s.tsfm_n_days + " days" + (np === null || np === undefined ? ""
+        : " (" + np + " Timestral + physics, " + (s.tsfm_n_days - np) + " prices-only 06:30 issue)") + ".";
   }
   function tsfmRmaeCell(td, s) {
     var kind = tsfmNaiveKind(s), r = s["tsfm_rmae_" + kind];
@@ -3567,11 +3600,11 @@
     if (!naiveOn && (state.sort.metric === "naive" || state.sort.metric === "rmae")) {
       state.sort = { lead: state.sort.lead, metric: "mae", dir: 1 };
     }
-    // Timestral columns (#431 R2): backfilled window, hourly board, only when exported.
-    var tsfmOn = state.window === BACKFILL_WINDOW && !q15 &&
-      scores.some(function (s) { return s.tsfm_mae !== undefined; });
-    if (tsfmOn) METRICS = METRICS.concat([["tsfm", "Timestral MAE"], ["tsfm_rmae", "Timestral rMAE"]]);
-    if (!tsfmOn && (state.sort.metric === "tsfm" || state.sort.metric === "tsfm_rmae")) {
+    // Timestral columns: hourly board, lead D-1 only (Timestral is a lead-1 forecast), when exported.
+    var tsfmOn = !q15 && scores.some(function (s) { return s.tsfm_mae !== undefined; });
+    var TSFM_METRICS = [["tsfm", "Timestral MAE"], ["tsfm_rmae", "Timestral rMAE"]];
+    var metricsFor = function (l) { return tsfmOn && l === 1 ? METRICS.concat(TSFM_METRICS) : METRICS; };
+    if ((state.sort.metric === "tsfm" || state.sort.metric === "tsfm_rmae") && (!tsfmOn || state.sort.lead !== 1)) {
       state.sort = { lead: state.sort.lead, metric: "mae", dir: 1 };
     }
 
@@ -3583,13 +3616,13 @@
     tr1.appendChild(thZone);
     leads.forEach(function (l) {
       var th = el("th", "group lead-sep", (q15 ? "15-min · " : "") + "Lead D-" + l);
-      th.colSpan = METRICS.length;
+      th.colSpan = metricsFor(l).length;
       tr1.appendChild(th);
     });
     thead.appendChild(tr1);
     var tr2 = el("tr");
     leads.forEach(function (l) {
-      METRICS.forEach(function (mdef, mi) {
+      metricsFor(l).forEach(function (mdef, mi) {
         var isSorted = state.sort.lead === l && state.sort.metric === mdef[0];
         var th = el("th", "sortable" + (mi === 0 ? " lead-sep" : "") + (isSorted ? " sorted" : ""),
           mdef[1] + (isSorted ? (state.sort.dir === 1 ? " ↓" : " ↑") : ""));
@@ -3642,7 +3675,7 @@
       tr.appendChild(tdz);
       leads.forEach(function (l) {
         var s = byKey[z + "|" + l];
-        METRICS.forEach(function (mdef, mi) {
+        metricsFor(l).forEach(function (mdef, mi) {
           var td = el("td", mi === 0 ? "lead-sep" : null);
           if (!s) {
             td.textContent = "—";

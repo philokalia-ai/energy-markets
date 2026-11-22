@@ -463,6 +463,7 @@ select {
 .pill.weather { color: var(--series-sim, var(--text-secondary)); border-color: currentColor; }
 /* negative-price risk: P(any hour <= 0) >= 0.3 (TSFM overlay) */
 .pill.risk { color: var(--status-weak); border-color: currentColor; font-weight: 600; }
+.pill.pill-tsfm { color: var(--series-tsfm); border-color: currentColor; font-weight: 600; }
 /* the risk pill may not fit beside MAE/r in the narrow day list: let the badges wrap */
 .day-btn .d-badges { flex-wrap: wrap; justify-content: flex-end; row-gap: 3px; }
 .stat.risk .s-value { color: var(--status-weak); }
