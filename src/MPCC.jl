@@ -130,6 +130,7 @@ end
 
 # Split by concern; each file is `include`d in the original definition order,
 # so the module body is line-for-line the pre-split code.
+include("mpcc/research_dump.jl")    # EUPHEMIA_DUMP_MODELS research hook (inert when unset)
 include("mpcc/solver.jl")           # solve_mpcc_market_clearing + the per-period decomposition variant
 include("mpcc/coupling_metrics.jl") # iterative-coupling helpers: flows -> net imports, convergence, damping
 include("mpcc/complex_orders.jl")   # complex-order master LP (EUPHEMIA_COMPLEX_ORDERS; inert otherwise)

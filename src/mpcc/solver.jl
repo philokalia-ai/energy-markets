@@ -25,7 +25,7 @@ function _reconstruct_component_prices(nodes::Vector{String}, periods::Vector{St
     zone_pairs, flow_values::Dict{Tuple{Tuple{String,String},String},Float64},
     flow_caps, orders_by_node_time, simple_orders, order_ids,
     stepwise_acceptance_values::Dict{String,Float64}, price_limits,
-    solver_prices::Dict{String,Dict{String,Float64}})
+    solver_prices::Dict{String,Dict{String,Float64}}; diag=nothing)
 
     prices = Dict{String,Dict{String,Float64}}(z => copy(solver_prices[z]) for z in nodes)
     fallback_periods = String[]
@@ -122,6 +122,15 @@ function _reconstruct_component_prices(nodes::Vector{String}, periods::Vector{St
             comp_price[root] = clamp(polished, comp_lo[root], comp_hi[root])
             comp_pinned[root] = marginal_price !== nothing
         end
+        # research dump only (EUPHEMIA_DUMP_MODELS): the brackets per component
+        if diag !== nothing
+            for (root, comp_zones) in components
+                push!(diag, Dict{String,Any}("period" => time_period, "root" => root,
+                    "zones" => comp_zones, "lo" => comp_lo[root], "hi" => comp_hi[root],
+                    "pinned" => comp_pinned[root], "point" => comp_price[root]))
+            end
+        end
+        ndiag = diag === nothing ? 0 : length(diag)
 
         # Rent-sign constraints across BINDING links: p[sink] >= p[source] on
         # a link at its forward cap (and the mirror at the backward cap).
@@ -182,6 +191,11 @@ function _reconstruct_component_prices(nodes::Vector{String}, periods::Vector{St
             end
         end
         isempty(bad) || push!(fallback_periods, time_period)
+        if diag !== nothing
+            for k in (ndiag - length(components) + 1):ndiag
+                d = diag[k]; d["final"] = comp_price[d["root"]]; d["rent_sign_bad"] = d["root"] in bad
+            end
+        end
     end
 
     isempty(fallback_periods) ||
@@ -262,6 +276,12 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
             time_limit=time_limit, mip_gap=mip_gap,
             heuristic_effort=heuristic_effort, verbose=verbose)
     end
+
+    # Research dump (EUPHEMIA_DUMP_MODELS): the per-period driver names this model;
+    # consumed here so a retry rung never overwrites the first attempt's dump.
+    dump_ctx = _DUMP_NEXT[]
+    _DUMP_NEXT[] = nothing
+    dump_np = Any[]
 
     # Analyze orders by type - currently we only handle SimpleOrder types from UC conversion
     simple_orders = filter(o -> isa(o, SimpleOrder), order_book.orders)
@@ -426,7 +446,11 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
                                 end
                             end
                             isempty(terms) && continue
-                            @constraint(model, mn <= sum(terms) <= mx)
+                            cnp = @constraint(model, mn <= sum(terms) <= mx)
+                            if dump_ctx !== nothing   # research dump: named + recorded
+                                set_name(cnp, "np[$ccr|$hub|$t]")
+                                push!(dump_np, (cnp, ccr, hub, t, mn, mx))
+                            end
                             n_np += 1
                         end
                     end
@@ -671,7 +695,10 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
         )
 
         # Solve the model
+        dump_ctx === nothing || _dump_write_model(model, dump_ctx[1], dump_ctx[2])
         optimize!(model)
+        dump_ctx === nothing || _dump_write_solution(model, dump_ctx[1], dump_ctx[2];
+            extra=Dict{String,Any}("solve_time" => _safe_solve_time(model)))
 
         # Gurobi's presolve can return the ambiguous INFEASIBLE_OR_UNBOUNDED
         # on numerically borderline instances (observed: the 2026-04-02 EU
@@ -816,12 +843,15 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
                     flow_values[(pair, t)] = value(flow[pair, t])
                 end
             end
+            recon_diag = dump_ctx === nothing ? nothing : Any[]
             recon = _reconstruct_component_prices(
                 order_book.nodes, order_book.periods,
                 zone_pairs,   # already empty whenever flow === nothing
                 flow_values, flow_caps, orders_by_node_time, simple_orders,
                 order_ids, stepwise_acceptance_values, order_book.price_limits,
-                market_prices)
+                market_prices; diag=recon_diag)
+            dump_ctx === nothing || _dump_write_recon(model, dump_ctx[1], dump_ctx[2],
+                market_prices, recon, recon_diag, dump_np, flow_values, flow_caps)
             market_prices = recon.prices
 
 
@@ -1016,11 +1046,14 @@ function _solve_mpcc_by_period(order_book::MPCCOrderBook;
             Dict{Tuple{String,String},Float64}(k => v for (k, v) in order_book.fixed_injections
                                                if k[2] == t)
         )
+        dump_p = _DUMP_PERIODS[]
+        dump_p === nothing || (_DUMP_NEXT[] = (dump_p[1], "$(dump_p[2])_t$(_pidx(pi))"))
         r = solve_mpcc_market_clearing(sub_book;
             preferred_solver=preferred_solver, silent=silent, big_m=big_m,
             time_limit=time_limit, mip_gap=mip_gap,
             heuristic_effort=heuristic_effort,
             decompose_periods=false, verbose=false)
+        _DUMP_NEXT[] = nothing
 
         # HiGHS per-period retry (2026-08-25). On the 52-day cv34 evaluation
         # HiGHS returned a FALSE INFEASIBLE certificate on one period of 0-3
@@ -1061,6 +1094,10 @@ function _solve_mpcc_by_period(order_book::MPCCOrderBook;
             end
         end
 
+        _DUMP_PERIOD_LOG[] === nothing || push!(_DUMP_PERIOD_LOG[], Dict{String,Any}(
+            "index" => pi - 1, "period" => t, "status" => string(r.status),
+            "solve_time" => r.solve_time, "objective" => _jnum(r.objective_value),
+            "message" => r.message))
         solver_name = r.solver_name
         push!(statuses, r.status)
         total_obj += r.objective_value

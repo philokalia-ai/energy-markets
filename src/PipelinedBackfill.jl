@@ -304,6 +304,7 @@ function pipeline_solver_worker(solvework::RemoteChannel, bookwork::RemoteChanne
             waitq = time() - t_build_done
             try
                 tw = time()
+                MPCC.DUMP_TAG[] = "p1"   # research dump dir tag only (EUPHEMIA_DUMP_MODELS)
                 r1 = mz_solve_pass(ob1; optimizer=cfg.optimizer, silent=cfg.silent,
                     mpcc_time_limit=cfg.mpcc_time_limit, mpcc_mip_gap=cfg.mpcc_mip_gap,
                     mpcc_heuristic_effort=cfg.mpcc_heuristic_effort,
@@ -337,6 +338,7 @@ function pipeline_solver_worker(solvework::RemoteChannel, bookwork::RemoteChanne
             (_, day, ob2, r1, book_secs, waitq, solve1_secs, rebuild_secs, _t) = job
             try
                 tw = time()
+                MPCC.DUMP_TAG[] = "p2"   # research dump dir tag only (EUPHEMIA_DUMP_MODELS)
                 r2 = mz_solve_pass(ob2; optimizer=cfg.optimizer, silent=cfg.silent,
                     mpcc_time_limit=cfg.mpcc_time_limit, mpcc_mip_gap=cfg.mpcc_mip_gap,
                     mpcc_heuristic_effort=cfg.mpcc_heuristic_effort,

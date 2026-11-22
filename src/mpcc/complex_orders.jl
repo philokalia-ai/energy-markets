@@ -46,7 +46,7 @@ _plain(o::LinkedHourlyOrder) = SimpleOrder(o.type, o.price, o.quantity, o.zone,
 function resolve_complex_orders(order_book::MPCCOrderBook;
     preferred_solver::String="highs", verbose::Bool=true,
     forced_reject::Set{String}=Set{String}(), block_time_limit::Float64=300.0,
-    release_blocks::Bool=false)
+    release_blocks::Bool=false, dump=nothing)
     all_linked = LinkedHourlyOrder[o for o in order_book.orders if o isa LinkedHourlyOrder]
     isempty(all_linked) && return order_book
     rest = MarketOrder[o for o in order_book.orders if !(o isa LinkedHourlyOrder)]
@@ -186,7 +186,9 @@ function resolve_complex_orders(order_book::MPCCOrderBook;
             end
         end
         for n in nodes, t in periods
-            @constraint(model, bal[(n, t)] + shed[n, t] == 0)
+            cbal = @constraint(model, bal[(n, t)] + shed[n, t] == 0)
+            # research dump only: machine-mappable balance-row names (LP duals = prices)
+            dump === nothing || set_name(cbal, "bal[$n|$t]")
         end
         @constraint(model, fam[f in collect(keys(fam_rows))], fam_rows[f] <= fam_budget[f])
         # Sub-hourly books (15-min clear): the storage LP is degenerate across the
@@ -221,10 +223,25 @@ function resolve_complex_orders(order_book::MPCCOrderBook;
             add_to_expression!(obj, -o.quantity * o.price, y[j])
         end
         @objective(model, Max, obj - 10000.0 * sum(shed))
+        dump === nothing || _dump_master_pre(model, dump, simple, linked, periods)
         optimize!(model)
+        dump === nothing || _dump_master_post(model, dump, t0, length(blk_fams),
+                                              length(forced_reject))
         st = termination_status(model)
         (st == MOI.OPTIMAL || (st == MOI.TIME_LIMIT && has_values(model))) ||
             return release("master status $st")
+        # A TIME_LIMIT incumbent is used (unchanged behaviour) but it is NOT a proven
+        # optimum: say so loudly instead of accepting it silently.
+        if st == MOI.TIME_LIMIT
+            gap = try
+                relative_gap(model)
+            catch
+                NaN
+            end
+            @warn "complex orders: master MILP hit its time limit ($(block_time_limit) s) — " *
+                  "FAILURE to prove optimality; using the incumbent (rel. gap $gap, " *
+                  "$(length(forced_reject)) forced rejections)"
+        end
 
         yv = value.(y)
         out = copy(rest)
@@ -279,6 +296,9 @@ function resolve_complex_orders(order_book::MPCCOrderBook;
     end
 end
 
+_max_pab_rounds_default() = (v = strip(get(ENV, "EUPHEMIA_MAX_PAB_ROUNDS", ""));
+                             isempty(v) ? 4 : parse(Int, v))   # research hook; default 4
+
 """
     solve_with_complex_orders(order_book, solve; max_pab_rounds=4) -> MPCCResult
 
@@ -297,18 +317,39 @@ Storage families need no check: their members re-enter at their own bid, so the
 MPCC complementarity already keeps every accepted part in the money.
 """
 function solve_with_complex_orders(order_book::MPCCOrderBook, solve::Function;
-    preferred_solver::String="highs", verbose::Bool=true, max_pab_rounds::Int=4)
+    preferred_solver::String="highs", verbose::Bool=true,
+    max_pab_rounds::Int=_max_pab_rounds_default())
     forced = Set{String}()
+    # Research dump (EUPHEMIA_DUMP_MODELS, research_dump.jl): inert when unset.
+    dumping = dump_enabled()
+    D = nothing; ddir = ""
+    if dumping
+        ddir, D = _dump_begin(order_book, max_pab_rounds)
+        _dump_base!(D, ddir, order_book, solve, preferred_solver)
+    end
     for rnd in 1:max_pab_rounds
+        dumping && (_DUMP_MASTER_LAST[] = nothing; tm = time())
         ob2 = resolve_complex_orders(order_book; preferred_solver=preferred_solver,
-            verbose=verbose, forced_reject=forced)
+            verbose=verbose, forced_reject=forced,
+            dump=dumping ? (ddir, "master_r$rnd") : nothing)
         info = LAST_COMPLEX_INFO[]
-        res = solve(ob2)
+        if dumping
+            master_wall = time() - tm
+            res, plog, mpcc_secs = _dump_solve(solve, ob2, ddir, "mpcc_blk_r$rnd")
+        else
+            res = solve(ob2)
+        end
         usable = res.status == :optimal ||
                  (res.status == :time_limit && !isempty(res.market_prices))
-        (usable && info !== nothing && info.status == :optimal && !isempty(info.blocks)) ||
+        if !(usable && info !== nothing && info.status == :optimal && !isempty(info.blocks))
+            dumping && _dump_round!(D, ddir, order_book, rnd, forced, info, master_wall,
+                res, plog, mpcc_secs, Dict{String,Float64}(), String[];
+                outcome="returned (usable=$usable, master=$(info === nothing ? "none" : info.status), " *
+                        "accepted=$(info === nothing || !hasproperty(info, :blocks) ? 0 : length(info.blocks)))")
             return res
+        end
         pab = String[]
+        surplus_all = Dict{String,Float64}()
         for (f, b) in info.blocks
             haskey(res.market_prices, b.zone) || continue
             zp = res.market_prices[b.zone]
@@ -318,10 +359,14 @@ function solve_with_complex_orders(order_book::MPCCOrderBook, solve::Function;
                 haskey(zp, t) || continue
                 surplus += (zp[t] - b.price) * q * r / 60.0
             end
+            dumping && (surplus_all[f] = surplus)
             surplus < -1e-3 && push!(pab, f)
         end
         verbose && println("   🧱 PAB check round $rnd: $(length(pab)) paradoxically " *
                            "accepted block(s) of $(length(info.blocks)) accepted")
+        dumping && _dump_round!(D, ddir, order_book, rnd, forced, info, master_wall,
+            res, plog, mpcc_secs, surplus_all, pab;
+            outcome=isempty(pab) ? "PAB-free: returned" : "continue")
         isempty(pab) && return res
         union!(forced, pab)
     end
@@ -331,7 +376,12 @@ function solve_with_complex_orders(order_book::MPCCOrderBook, solve::Function;
     ob3 = resolve_complex_orders(order_book; preferred_solver=preferred_solver,
         verbose=verbose, release_blocks=true)
     inner = LAST_COMPLEX_INFO[]
-    res = solve(ob3)
+    if dumping
+        res, plog, secs = _dump_solve(solve, ob3, ddir, "mpcc_fallback"; write_models=false)
+        _dump_fallback!(D, ddir, res, plog, secs, forced)
+    else
+        res = solve(ob3)
+    end
     LAST_COMPLEX_INFO[] = (status=:pab_fallback, inner=inner,
         message="PAB rounds exhausted ($max_pab_rounds); blocks released to baseline must-run offers")
     return MPCCResult(res.status, res.objective_value, res.market_prices,

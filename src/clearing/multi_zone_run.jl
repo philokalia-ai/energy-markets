@@ -215,6 +215,7 @@ function run_multi_zone_market_clearing(date::Date;
 
     # Run MPCC market clearing with transmission constraints
     println("\n⚡ Running multi-zone market clearing optimization...")
+    MPCC.DUMP_TAG[] = "p1"   # research dump dir tag only (EUPHEMIA_DUMP_MODELS)
     mpcc_result = MPCC.solve_mpcc_market_clearing(order_book;
                                                    preferred_solver=optimizer,
                                                    silent=silent,
@@ -284,6 +285,7 @@ function run_multi_zone_market_clearing(date::Date;
                 ex_ante_mode=resolved_flow_mode,
                 scenario=scenario)
             println("\n⚡ Running pass-2 market clearing optimization...")
+            MPCC.DUMP_TAG[] = "p2"   # research dump dir tag only
             result2 = mz_solve_pass(order_book2;
                 optimizer=optimizer, silent=silent,
                 mpcc_time_limit=mpcc_time_limit, mpcc_mip_gap=mpcc_mip_gap,
