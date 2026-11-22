@@ -128,18 +128,34 @@ function solve_with_lazy(order_book::MPCCOrderBook, solve::Function;
     lazy_calls = calls[]
     nins = 0
     path = "lazy"
-    if best[] !== nothing && !stop()
-        path = "lazy+r1"
-        _, nins = _r1_reinsert(order_book, solve, B, best[], calls, max_calls, stop, note, trace;
-            preferred_solver=preferred_solver)
+    if best[] === nothing || gap() > gap_stop
+        # The in-tree phase did not get within the gap stop (e.g. it only saw the trivial empty set):
+        # run the full R1 path (loop seed -> prune -> reinsertion, its own budget) and keep the better W.
+        lazy_best = best[]
+        verbose && println("   🧱 LAZY: gap $(round(gap(), digits=1)) € after $(calls[]) in-tree pricing solves — running R1")
+        res_r1 = solve_with_r1(order_book, solve; preferred_solver=preferred_solver, verbose=verbose)
+        r1 = R1_LAST[]
+        r1_ok = r1 !== nothing && haskey(r1, "W") && !startswith(get(r1, "path", ""), "r1->loop20")
+        r1_calls = r1 === nothing ? 0 : get(r1, "calls", 0)
+        if r1_ok && (lazy_best === nothing || r1["W"] > lazy_best.W)
+            R1_LAST[] = merge(r1, Dict("path" => "lazy->r1", "lazy_calls" => lazy_calls, "lazy_rows" => nrows[],
+                "calls" => lazy_calls + r1_calls))
+            verbose && println("   🧱 LAZY summary: path=lazy->r1, pricing solves $(lazy_calls + r1_calls) (in-tree $lazy_calls, " *
+                "$(nrows[]) lazy rows), wall $(round(time() - t0, digits=1)) s, accepted $(r1["n_accepted"]), " *
+                "W $(round(r1["W"], digits=1)), gap to UB $(round(UB[] - r1["W"], digits=1)) €, " *
+                "PRB $(r1["n_prb"]) / $(round(r1["prb_eur"], digits=0)) €")
+            return res_r1
+        end
+        if lazy_best === nothing
+            # neither found a PAB-free set: R1 already ran loop20 (and its fallback); return that
+            R1_LAST[] = merge(something(r1, Dict{String,Any}()), Dict("path" => "lazy->" * get(something(r1, Dict{String,Any}()), "path", "r1")))
+            return res_r1
+        end
+        best[] = lazy_best
+        calls[] += r1_calls
+        path = "lazy(r1 worse)"
     end
     wall = time() - t0
-    if best[] === nothing
-        verbose && println("   🧱 LAZY: no PAB-free set in $(calls[]) pricing solves — using the R1 path")
-        res = solve_with_r1(order_book, solve; preferred_solver=preferred_solver, verbose=verbose)
-        R1_LAST[] = merge(something(R1_LAST[], Dict{String,Any}()), Dict("path" => "lazy->" * get(R1_LAST[], "path", "r1")))
-        return res
-    end
     o = best[]
     LAST_COMPLEX_INFO[] = o.info
     nprb = length(o.prb); prb_eur = sum(values(o.prb); init=0.0)
