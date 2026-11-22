@@ -67,7 +67,6 @@ MPCCOrderBook(orders, nodes, periods, price_limits, network_topology) =
 
 # Configuration constants
 const DEFAULT_MARKUP_FACTOR = 1.1
-const BIG_M_PARAMETER = 4000000.0
 
 """
     extract_time_period(order_datetime::DateTime, order_book_periods::Vector{String})

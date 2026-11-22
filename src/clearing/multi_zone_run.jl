@@ -115,7 +115,6 @@ function run_multi_zone_market_clearing(date::Date;
                                         # produced fewer periods than this (see the
                                         # truncation gate at the save block).
                                         min_price_periods::Int=24,
-                                        mpcc_heuristic_effort::Union{Float64,Nothing}=nothing,
                                         # Per-period decomposition of the coupled
                                         # MPCC. The clear has no inter-temporal
                                         # coupling, so solving each period
@@ -220,7 +219,6 @@ function run_multi_zone_market_clearing(date::Date;
                                                    silent=silent,
                                                    time_limit=mpcc_time_limit,
                                                    mip_gap=mpcc_mip_gap,
-                                                   heuristic_effort=mpcc_heuristic_effort,
                                                    decompose_periods=resolved_decompose)
 
     # PER-DAY ROBUSTNESS FALLBACK (iter8). If the coupled MPCC stays
@@ -248,7 +246,6 @@ function run_multi_zone_market_clearing(date::Date;
                 clear_resolution_minutes=clear_resolution_minutes,
                 ex_ante_mode=resolved_flow_mode,
                 mpcc_time_limit=mpcc_time_limit, mpcc_mip_gap=mpcc_mip_gap,
-                mpcc_heuristic_effort=mpcc_heuristic_effort,
                 decompose_periods=resolved_decompose, scenario=scenario)
         finally
             MeritOrderBook.FLEET_TRUTH_OVERRIDE[] = nothing
@@ -287,7 +284,6 @@ function run_multi_zone_market_clearing(date::Date;
             result2 = mz_solve_pass(order_book2;
                 optimizer=optimizer, silent=silent,
                 mpcc_time_limit=mpcc_time_limit, mpcc_mip_gap=mpcc_mip_gap,
-                mpcc_heuristic_effort=mpcc_heuristic_effort,
                 decompose_periods=resolved_decompose)
             if result2.status == :optimal ||
                (result2.status == :time_limit && !isempty(result2.market_prices))

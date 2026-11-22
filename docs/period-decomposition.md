@@ -93,10 +93,9 @@ the cv19-and-earlier EU records were produced monolithically with Gurobi.
      **same** `network_topology` object (the ATC lookup already derives the hour
      from each `YYYYMMDD-HHMM` slot, so it is per-period), and `periods = [t]`.
   3. Solve it via `solve_mpcc_market_clearing(...; decompose_periods=false,
-     verbose=false)` — so each period runs the **full retry ladder** (numeric
-     focus / different seed / exact indicator-form complementarity for Gurobi),
-     letting a single numerically hard period fall back on its own without
-     sinking the day.
+     verbose=false)` — so each period is solved on its own (LP certificate, the
+     MIP only if that fails; cv46 removed the numeric retry ladder), and a hard
+     period cannot sink the day.
   4. Merge into one full-day `MPCCResult`.
 
 ### Merge semantics
@@ -171,7 +170,7 @@ over-estimate.
 - `decompose_periods` policy + kwarg on the coupled merit-order path, threaded
   through both passes and the `:p95` recursion.
 - `_solve_mpcc_by_period` driver reusing the exact monolithic per-period solve
-  (same retry ladder, same price reconstruction).
+  (same solve, same price reconstruction).
 - Guards 1 & 2 at 60-min and 15-min in
   `test/scripts/test_period_decomposition.jl`.
 
