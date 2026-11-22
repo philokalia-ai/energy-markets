@@ -58,10 +58,10 @@ const Q15_BOARD = ["n_days_q15", "mae_q15", "bias_q15", "corr_q15", "shape_floor
 // are ABSENT (as in the JSON exporter), not null.
 const NAIVE_BOARD = ["n_naive", "mae_paired", "mae_naive_d7", "rmae_d7"];
 const NAIVE_BOARD_LEAD1 = ["mae_naive_d1", "mae_naive_epf", "rmae_d1", "rmae_epf"];
-// Timestral fields of the "backfilled" window (#431 R2, bin/tsfm_backfill_scores.jl
+// Timestral board fields (live lead-1 weather rows + the "backfilled" window, bin/tsfm_backfill_scores.jl
 // TSFM_BACKFILL_BOARD_COLS). Passed through on the rows that carry them only.
 const TSFM_BACKFILL_NUM = ["tsfm_n_days", "tsfm_n", "tsfm_mae", "tsfm_mae_naive_d1", "tsfm_mae_naive_d7",
-  "tsfm_mae_naive_epf", "tsfm_rmae_d1", "tsfm_rmae_d7", "tsfm_rmae_epf"];
+  "tsfm_mae_naive_epf", "tsfm_rmae_d1", "tsfm_rmae_d7", "tsfm_rmae_epf", "tsfm_n_days_postsim"];
 const has = (rows, k) => rows.length > 0 && Object.prototype.hasOwnProperty.call(rows[0], k);
 
 export function shapeZone(rows, zone) {

@@ -136,5 +136,25 @@ T.state.scoreboard.scores.forEach((s) => Object.assign(s, { n_days_q15: 2, mae_q
 T.renderScoreboard();
 ok(!/Timestral/.test(header()), "UI: no Timestral columns on the 15-min board");
 
+// ---- live windows (lead-1 weather rows carry the published Timestral vintage's score) ----
+const liveT = asParquet(Object.assign({}, fx, { window: "all", reconstructed_utc: null, tsfm_n_days_postsim: 1 }));
+liveT.tsfm_n_days_postsim = BigInt(1);
+const lead2 = asParquet({ zone: "GR", lead_days: 2, window: "all", input_mode: "weather", n_days: 60, mae: 80,
+  bias: -2, corr: 0.6, code_version: 45, reconstructed_utc: null });
+for (const k of TS) lead2[k] = null;
+lead2.tsfm_n_days_postsim = null;
+const shL = shapeScoreboard([liveT, lead2], man).scores;
+ok(shL[0].tsfm_n_days_postsim === 1 && Math.abs(shL[0].tsfm_mae - fx.tsfm_mae) < 1e-12 && !("tsfm_mae" in shL[1]),
+  "worker: a live lead-1 row passes its tsfm_* fields (incl. the post-sim day count) through");
+T.state.res = "h60"; T.state.window = "all"; T.state.sort = { lead: null, metric: "mae", dir: 1 };
+T.state.scoreboard = { zones: ["GR"], scores: shL };
+T.renderScoreboard();
+const groups = table().querySelectorAll("th").filter((t) => /^Lead D-/.test(t.textContent));
+ok(/Timestral MAE/.test(header()) && groups[0].colSpan === groups[1].colSpan + 2,
+  "UI: live window shows the Timestral columns in the D-1 group only (" + groups.map((g) => g.colSpan).join("/") + ")");
+const tcell = rowOf("GR").querySelectorAll("td").filter((td) => td.textContent === "3.3")[0];
+ok(tcell && /1 Timestral \+ physics, 1 prices-only 06:30 issue/.test(tcell.title),
+  "UI: the tooltip splits combined vs prices-only days (" + (tcell && tcell.title) + ")");
+
 if (failures) { console.error(failures + " failure(s)"); process.exit(1); }
 console.log("tsfm_backfill_fields: all assertions passed");
