@@ -81,16 +81,22 @@ The master MILP decides acceptance:
   (`MPCCOrderBook.fixed_injections`). They are not orders the clear could
   partially reject. A surplus they force goes to the same penalised slack in
   the master and in the MPCC (review fix).
-- **Paradoxically accepted blocks** are rejected and the day is re-solved, as
-  EUPHEMIA does, for at most 4 rounds. A block is paradoxically accepted when
-  Σ_t (P_t − b)·q_t < 0 at the repriced prices. Paradoxical rejection is
-  allowed.
-- **If PABs remain after 4 rounds,** the clear is **not** returned. The blocks
-  are released to their original calibrated must-run offers, which every block
-  carries as `BLKFB:` members, and that baseline book is cleared. The result
-  message and `LAST_COMPLEX_INFO.status = :pab_fallback` say so.
-- **On a master failure,** the release is exactly the baseline book (review
-  fixes).
+- **No paradoxically accepted block (PAB)** is returned: an accepted block must
+  have Σ_t (P_t − b)·q_t ≥ 0 at the repriced prices. Paradoxical rejection is
+  allowed, as in EUPHEMIA.
+- **Acceptance search (since 2026-11, `solve_with_complex_orders`).** The first
+  version re-solved the master with the PABs forced out, for at most 4 rounds,
+  and released the blocks to their `BLKFB:` must-run offers when PABs remained
+  (2 of the 4 inner days below did). It is replaced by a reversible search:
+  seed with ≤ 4 such rounds; if none is PAB-free, prune the accepted set
+  (∅ at worst, so the search always ends PAB-free); then reinsert rejected
+  blocks that are in the money, in batches, keeping a batch only if welfare
+  improves. Budget: 30 pricing solves, or stop within €50k of the first
+  master's objective. Validation: `highs-blocks` workspace (R1); every call
+  on 09-27, 10-19, 11-04, 11-13 PAB-free with no fallback.
+- **On a master failure,** the blocks are released to exactly the baseline
+  book (original `BLKFB:` must-run offers restored). This is now the only
+  release path.
 
 `EUPHEMIA_BLOCK_PRICE=mustrun` sets the block's limit price to the static
 split's blend. That isolates the acceptance rule from the price change.
@@ -211,7 +217,8 @@ max |Δ| = 0. This holds both before the review fixes (d2ad46c) and after them
   legacy D-15..D-2 window on the record path and at the lead-1 gate, which the
   unit test also checks.
 - **`blocks`:** the rows in the table predate the fixed-injection and
-  PAB-fallback fixes. The post-fix re-measure ran on the 4 inner days (3,742
+  PAB-fallback fixes (and the 2026-11 acceptance search, which removes the
+  fallback). The post-fix re-measure ran on the 4 inner days (3,742
   cells, all optimal):
   - **Footprint:** MAE −1.71 (ex-IT −0.29), correlation 0.821 → 0.794, bias
     −30.9 → −17.4. No cap or floor prints; the 10-19 ES/PT €3000 is gone.

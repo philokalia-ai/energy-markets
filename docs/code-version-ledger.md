@@ -420,6 +420,16 @@ adoption date: the scoreboard's since-freeze window is cv ≥ 45 from 2026-11-21
 
 Dated reminders and scoring-policy notes that do not change `code_version`.
 
+- **2026-11-22 — Block acceptance search replaces the PAB loop (blocks/r1-only).** With
+  `EUPHEMIA_COMPLEX_ORDERS=…blocks` (opt-in), the 4-round PAB loop and its release to the `BLKFB:`
+  must-run offers are replaced by a reversible acceptance search (seed, prune to a PAB-free set,
+  reinsert in-the-money rejected blocks; 30 pricings / €50k gap stop): every call PAB-free, no
+  fallback; release only on a master failure. Only the blocks path changes: the default config
+  clears no blocks and its code path is untouched. Block clears are deterministic for a given book;
+  book inputs can still differ at the ulp level between runs (order-dependent SQL sums), a separate
+  follow-up. No model change and no backfill, so no `code_version` bump (the rule: "bump it for
+  every model iteration that gets a backfill").
+
 - **2026-11-22 — Gurobi removed; HiGHS only; prices unchanged.** The Gurobi dependency, optimizer choice,
   licence handling and Gurobi-only retry rungs are deleted; HiGHS (with the LP certificate and the
   per-period HiGHS rungs) is the only solve path. The HiGHS path itself is unchanged, so no `code_version`
