@@ -136,6 +136,7 @@ include("mpcc/lp_certificate.jl")   # research-only M1 (EUPHEMIA_MPCC_LP_CERT; i
 include("mpcc/solver.jl")           # solve_mpcc_market_clearing + the per-period decomposition variant
 include("mpcc/coupling_metrics.jl") # iterative-coupling helpers: flows -> net imports, convergence, damping
 include("mpcc/complex_orders.jl")   # complex-order master LP (EUPHEMIA_COMPLEX_ORDERS; inert otherwise)
+include("mpcc/blocks_r1.jl")        # research-only R1 acceptance search (EUPHEMIA_BLOCKS_PAB=r1; inert otherwise)
 
 
 end  # module MPCC

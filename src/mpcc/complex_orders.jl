@@ -322,7 +322,10 @@ MPCC complementarity already keeps every accepted part in the money.
 """
 function solve_with_complex_orders(order_book::MPCCOrderBook, solve::Function;
     preferred_solver::String="highs", verbose::Bool=true,
-    max_pab_rounds::Int=_max_pab_rounds_default())
+    max_pab_rounds::Int=_max_pab_rounds_default(), _r1_dispatch::Bool=true)
+    # research (hb-lazy): EUPHEMIA_BLOCKS_PAB=r1 replaces the loop by the R1 search (blocks_r1.jl)
+    _r1_dispatch && blocks_pab_mode() === :r1 &&
+        return solve_with_r1(order_book, solve; preferred_solver=preferred_solver, verbose=verbose)
     forced = Set{String}()
     cert_ctx = lp_cert_mode() !== :off   # research (M1 shadow logging) only
     if cert_ctx
