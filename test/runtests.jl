@@ -348,6 +348,10 @@ println()
         include(joinpath(@__DIR__, "test_cv46_see_limit.jl"))
     end
 
+    @testset "cv46 P3b IT_LIMITS (DB-free)" begin
+        include(joinpath(@__DIR__, "test_cv46_it_limits.jl"))
+    end
+
     @testset "Code review 2026-07" begin
         println("\n" * "=" ^ 60)
         println("Running July 2026 code-review regression tests...")
