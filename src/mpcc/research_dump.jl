@@ -33,6 +33,36 @@ const _DUMP_PERIODS = Ref{Any}(nothing)
 const _DUMP_PERIOD_LOG = Ref{Any}(nothing)
 # last master solve facts (objective, time) for day.json
 const _DUMP_MASTER_LAST = Ref{Any}(nothing)
+# settings of the `solve` closure handed to solve_with_complex_orders (replay kit)
+const _DUMP_SOLVE_SETTINGS = Ref{Any}(nothing)
+
+# Serialization is a stdlib but not a package dependency: load it lazily by PkgId.
+_serialization() = Base.require(Base.PkgId(Base.UUID("9e88b42a-f829-5b0c-bbe9-9e923198166b"), "Serialization"))
+
+"""Replay kit: write the complex-order input book + solve settings of one call."""
+function _dump_book(ddir, order_book)
+    try
+        S = _serialization()
+        stamp = Dict{String,Any}("format" => "hb-replay-book/1",
+            "euphemia_code_version" => string(try
+                getfield(parentmodule(@__MODULE__), :ENERGY_PRICES_CODE_VERSION)
+            catch
+                "?"
+            end),
+            "git_rev" => get(ENV, "EUPHEMIA_DUMP_GITREV", ""), "julia" => string(VERSION),
+            "libhighs" => [l for l in Base.Libc.Libdl.dllist() if occursin("libhighs", l)],
+            "env" => Dict(k => v for (k, v) in ENV if startswith(k, "EUPHEMIA_") || startswith(k, "JULIA_NUM")),
+            "solve_settings" => _DUMP_SOLVE_SETTINGS[],
+            "n_orders" => length(order_book.orders), "n_nodes" => length(order_book.nodes),
+            "n_periods" => length(order_book.periods))
+        open(joinpath(ddir, "book.jls"), "w") do io
+            Base.invokelatest(S.serialize, io, (stamp=stamp, book=order_book))
+        end
+        _dump_write_json(joinpath(ddir, "book_meta.json"), stamp)
+    catch e
+        @warn "dump: writing book.jls failed: $(sprint(showerror, e))"
+    end
+end
 
 dump_root() = strip(get(ENV, "EUPHEMIA_DUMP_MODELS", ""))
 dump_enabled() = !isempty(dump_root())
@@ -236,6 +266,7 @@ function _dump_begin(order_book, max_pab_rounds)
         "blocks" => blocks_s, "block_fallback" => fb_s, "storage" => st_s,
         "base" => nothing, "rounds" => Any[], "outcome" => nothing, "t_start" => string(now()))
     _dump_write_json(joinpath(ddir, "day.json"), D)
+    get(ENV, "EUPHEMIA_DUMP_BOOK", "1") == "0" || _dump_book(ddir, order_book)
     return ddir, D
 end
 

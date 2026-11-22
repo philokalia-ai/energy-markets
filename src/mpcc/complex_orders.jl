@@ -46,7 +46,8 @@ _plain(o::LinkedHourlyOrder) = SimpleOrder(o.type, o.price, o.quantity, o.zone,
 function resolve_complex_orders(order_book::MPCCOrderBook;
     preferred_solver::String="highs", verbose::Bool=true,
     forced_reject::Set{String}=Set{String}(), block_time_limit::Float64=300.0,
-    release_blocks::Bool=false, dump=nothing)
+    release_blocks::Bool=false, dump=nothing,
+    fixed_accept::Union{Nothing,Set{String}}=nothing)   # research (replay scorer): z[f] := f ∈ A
     all_linked = LinkedHourlyOrder[o for o in order_book.orders if o isa LinkedHourlyOrder]
     isempty(all_linked) && return order_book
     rest = MarketOrder[o for o in order_book.orders if !(o isa LinkedHourlyOrder)]
@@ -119,6 +120,7 @@ function resolve_complex_orders(order_book::MPCCOrderBook;
             @variable(model, z[f in blk_fams], Bin)
             for f in blk_fams
                 f in forced_reject && fix(z[f], 0.0; force=true)
+                fixed_accept === nothing || fix(z[f], f in fixed_accept ? 1.0 : 0.0; force=true)
             end
         end
         for (j, o) in enumerate(linked)
@@ -281,7 +283,7 @@ function resolve_complex_orders(order_book::MPCCOrderBook;
         el = time() - t0
         LAST_COMPLEX_INFO[] = (status=:optimal, solve_time=el, families=info,
             blocks=blocks, n_blocks=length(blk_fams), forced=copy(forced_reject),
-            master_status=string(st))
+            master_status=string(st), master_objective=objective_value(model))
         if verbose
             nbind = count(d -> d["used"] >= d["budget"] - 1.0, values(info))
             println("   🔋 complex orders: master $(length(info)) storage families " *
