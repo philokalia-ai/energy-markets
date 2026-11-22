@@ -67,12 +67,6 @@
     settled price show market conduct.
     <a class="more-link" href="./about.html">How it works &rarr;</a></p>
 
-  <!-- The GLOBAL TRACK SWITCH — a site-wide lens over every series surface. -->
-  <div class="track-switch-row">
-    <div id="track-switch" class="segmented track-switch" role="group" aria-label="Evaluation track"></div>
-    <p id="track-explainer" class="track-explainer"></p>
-  </div>
-
   <nav class="tabs" role="tablist" aria-label="Live views">
     <button id="tab-horizon" class="tab" role="tab" aria-selected="true" data-view="horizon">Recent days</button>
     <button id="tab-map" class="tab" role="tab" aria-selected="false" data-view="map">Map</button>
@@ -433,11 +427,6 @@
       </div>
     </div>
 
-    <!-- The global track switch has no meaning on this surface: these fitted
-         input models ARE the Predicted pillar. State it inline (never silently
-         ignore the switch). -->
-    <p id="predict-track-note" class="track-inline-note" hidden></p>
-
     <!-- HUB (target=overview): the cross-cutting story + coverage map -->
     <div id="predict-hub">
       <div class="chart-card">
@@ -556,8 +545,7 @@
           the marker sits on the local supply curve at the market-wide price; the
           <strong>trade wedge</strong> to the demand curve is the cross-border
           import/export decided by the 39-zone network.</p>
-        <p id="book-track-note" class="track-inline-note" hidden></p>
-      </div>
+              </div>
 
       <div class="book-controls">
         <button id="book-play" type="button" class="book-play">▶ Play day</button>
@@ -1145,8 +1133,7 @@ run_pipelined_backfill(Date(2023,7,1):Day(1):Date(2025,6,30), FOOTPRINT;
       error in view, each published and flagged. Its forecasts are frozen before the 12:00 CET
       auction gate and never revised, so persistent gaps between simulated and settled prices are
       <em>findings</em> about how the real market deviates from competition, not errors to tune
-      away. The switch at the top runs the physics on our own weather-based inputs
-      (<strong>Predicted</strong>) or on the TSOs' published D-1 figures (<strong>As announced</strong>).
+      away. The physics runs on our own weather-based inputs, frozen before the gate.
       <a class="more-link" href="./about.html">Read the full explanation &rarr;</a>
     </p>
   </section>

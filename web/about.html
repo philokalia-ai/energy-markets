@@ -450,10 +450,9 @@
     kept visible on purpose.
   </p>
 
-  <h2 id="two-tracks">The two tracks, stated plainly — the record vs the product</h2>
+  <h2 id="two-tracks">The record and the product</h2>
   <p>
-    The two layers above give the model two distinct jobs, and we keep their
-    scoreboards separate on purpose. It is important not to confuse them:
+    The two layers above give the model two distinct jobs:
   </p>
   <ul>
     <li><strong>The record measures the MECHANISM.</strong> The counterfactual
@@ -470,17 +469,10 @@
       on <em>our own</em> fitted weather inputs (Layer 1) and freezes
       <strong>before the auction gate</strong>, so every row is provable ex-ante by its
       timestamp. This is the deployable forecast a participant could act on the evening
-      before delivery, scored separately. Its physics clear is the covariate of the
-      headline forecast, <a href="./models.html">Timestral + physics</a>.</li>
+      before delivery. Every chart and score on this site is this track. Its physics clear
+      is the covariate of the headline forecast, <a href="./models.html">Timestral +
+      physics</a>.</li>
   </ul>
-  <p>
-    The reference track (what the historical scoreboard shows today) freezes in the
-    evening — before delivery, but <em>after</em> the auction results are public — and
-    answers "given the market's own inputs, where would competitive prices sit?". The
-    ex-ante track answers the harder question "what will the market do tomorrow?" from
-    weather alone. Same clearing engine, different inputs, two honestly-labelled
-    scoreboards.
-  </p>
 
   <h2>The ex-ante guarantees</h2>
   <p>Every prediction on this site satisfies, by construction:</p>
@@ -526,10 +518,8 @@
 
   <h2>The 7-day horizon and the vintage record</h2>
   <p>
-    The physics clears every market day up to seven days ahead. On the predicted track
-    each lead is a full clear on that day's weather vintage; on the announced track,
-    ENTSO-E publishes inputs only for tomorrow, so leads 2–7 carry the latest announced
-    inputs forward. Every day the pipeline writes the newly-due vintage for each future
+    The physics clears every market day up to seven days ahead, each lead a full clear on
+    that day's weather vintage. Every day the pipeline writes the newly-due vintage for each future
     day and <strong>never overwrites an earlier one</strong>, each stamped with the moment
     it was made. The <a href="./index.html">recent-days</a> view shows the freshest
     vintage per delivery day.

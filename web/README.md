@@ -14,18 +14,12 @@ Any static file server works; `file://` will not, because browsers block
 `fetch` there. Production is Cloudflare (energy.philokalia.ai) serving `web/`
 from `main`.
 
-## The global track switch
+## One track
 
-A header-level segmented control flips the whole site between two tracks — a
-lens over every price surface, not a separate view:
-
-- **Predicted** (default) — our fitted inputs end-to-end (`input_mode` starting
-  with `weather`): "how much can you trust our model".
-- **As announced** — the TSOs' announced D-1 inputs (`input_mode` `entsoe*`)
-  through the same bid construction and solver: "the fair test of the bidding
-  mechanism with inputs held at the official figures".
-
-State lives in the URL (`&track=`) + `localStorage`.
+The site shows the physics on our own ex-ante weather inputs (`input_mode`
+starting with `weather`) only; the payloads also carry the announced-input
+(`entsoe*`) rows, which the SPA filters out. The live Timestral + physics issue is
+conditioned on this same weather-track lead-1 sim.
 
 Because every forecast uses the latest admissible inputs, the lead/D-n
 dimension is collapsed everywhere to the **freshest forecast per delivery day**.
@@ -56,8 +50,7 @@ dimension is collapsed everywhere to the **freshest forecast per delivery day**.
   by ascending offer price (x = cumulative MW, y = €/MWh), coloured by owner,
   with dashed markers where the clearing price and the settled actual landed.
   Hour slider + play-through-day.
-- **Scoreboard** — physics MAE / bias / Pearson corr / naive rMAE by window on the
-  selected track.
+- **Scoreboard** — physics MAE / bias / Pearson corr / naive rMAE by window.
 - **Case studies** and **models** — scenario results, and what the two
   forecasts are and how good they are.
 
