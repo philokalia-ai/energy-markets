@@ -51,8 +51,7 @@ dimension is collapsed everywhere to the **freshest forecast per delivery day**.
   with dashed markers where the clearing price and the settled actual landed.
   Hour slider + play-through-day.
 - **Scoreboard** — physics MAE / bias / Pearson corr / naive rMAE by window.
-- **Case studies** and **models** — scenario results, and what the two
-  forecasts are and how good they are.
+- **Models** (`models.html`) — what the two forecasts are and how good they are.
 
 ## Data plane
 

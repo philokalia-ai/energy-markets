@@ -890,10 +890,7 @@ table.book-table td {
   padding-left: 10px;
 }
 
-/* ---------- case studies ---------- */
-.case-card { margin-top: 16px; }
-
-.case-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 2px; }
+/* ---------- stat grid (solver) + chips ---------- */
 .chip {
   font-family: var(--mono);
   font-size: 11.5px;
@@ -989,12 +986,6 @@ table.book-table td {
   max-width: 72em;
   border-left: 3px solid var(--terracotta-soft);
   padding-left: 10px;
-}
-.case-note {
-  margin: 10px 0 0;
-  font-size: 12.5px;
-  color: var(--text-muted);
-  max-width: 72em;
 }
 
 /* ---------- model map (About) ---------- */

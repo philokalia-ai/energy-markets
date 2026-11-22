@@ -165,7 +165,7 @@
       var i = kv.indexOf("=");
       if (i > 0) params[decodeURIComponent(kv.slice(0, i))] = decodeURIComponent(kv.slice(i + 1));
     });
-    if (["board", "explorer", "horizon", "map", "predict", "cases", "book", "solver", "method", "boundary"].indexOf(params.view) !== -1) state.view = params.view;
+    if (["board", "explorer", "horizon", "map", "predict", "book", "solver", "method", "boundary"].indexOf(params.view) !== -1) state.view = params.view;
     if (["overview", "load", "solar", "wind"].indexOf(params.target) !== -1) state.predictTarget = params.target;
     if (params.mzone) state.methodZone = params.mzone;
     if (params.zone) state.zone = params.zone;
@@ -1068,8 +1068,7 @@
     explorer: "zone explorer",
     board: "scoreboard",
     book: "order book",
-    method: "how bids are built",
-    cases: "case studies"
+    method: "how bids are built"
   };
 
   // Point each map day's `zones` at its weather-track object (the map JSON
@@ -1092,7 +1091,6 @@
     $("view-predict").hidden = v !== "predict";
     $("view-book").hidden = v !== "book";
     if ($("view-method")) $("view-method").hidden = v !== "method";
-    $("view-cases").hidden = v !== "cases";
     var crumb = $("crumb-view");
     if (crumb) crumb.textContent = VIEW_CRUMBS[v] ? "/ " + VIEW_CRUMBS[v] : "";
     if (v === "map") loadMap().then(renderMap, function () {
