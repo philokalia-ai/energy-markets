@@ -18,7 +18,10 @@
 # If no PAB-free set is found within budget it runs the production loop with 20 rounds (which
 # itself falls back to the baseline book if that fails) and logs the path.
 
-blocks_pab_mode() = lowercase(strip(get(ENV, "EUPHEMIA_BLOCKS_PAB", ""))) == "r1" ? :r1 : :loop
+function blocks_pab_mode()
+    v = lowercase(strip(get(ENV, "EUPHEMIA_BLOCKS_PAB", "")))
+    return v == "r1" ? :r1 : v == "lazy" ? :lazy : :loop
+end
 _r1_env_int(k, d) = (v = strip(get(ENV, k, "")); isempty(v) ? d : parse(Int, v))
 _r1_env_float(k, d) = (v = strip(get(ENV, k, "")); isempty(v) ? d : parse(Float64, v))
 
@@ -123,42 +126,8 @@ function solve_with_r1(order_book::MPCCOrderBook, solve::Function;
     # 3. reinsertion
     nins = 0
     if cur !== nothing && cur.ok && isempty(cur.pab)
-        tried = Set{String}()
-        cands() = [f for (f, _) in sort(collect(cur.prb); by=x -> (-x[2], x[1])) if !(f in tried)]
-        queue = cands()
-        k = cld(length(queue), 4)
-        while !isempty(queue) && !stop()
-            k = clamp(k, 1, length(queue))
-            S = Set{String}(queue[1:k])
-            o2 = _r1_fixed(order_book, solve, union(cur.A, S), B; preferred_solver=preferred_solver)
-            calls[] += 1; note(o2); trace("insert", o2)
-            pf2 = o2.ok && isempty(o2.pab)
-            if !pf2 && o2.ok
-                np = 0
-                while o2.ok && !isempty(o2.pab) && np < 3 && calls[] < max_calls
-                    o2 = _r1_fixed(order_book, solve, setdiff(o2.A, keys(o2.pab)), B;
-                        preferred_solver=preferred_solver)
-                    calls[] += 1; np += 1; note(o2); trace("insprune", o2)
-                end
-                if o2.ok && isempty(o2.pab) && o2.W > cur.W + 1e-6
-                    for f in S
-                        f in o2.A || push!(tried, f)
-                    end
-                    nins += count(f -> f in o2.A, S)
-                    cur = o2; queue = cands(); k = min(2k, length(queue))
-                    continue
-                end
-                pf2 = false
-            end
-            if pf2 && o2.W >= cur.W - 1e-6
-                cur = o2; nins += k
-                queue = cands(); k = min(2k, length(queue))
-            elseif k == 1
-                push!(tried, queue[1]); queue = queue[2:end]
-            else
-                k = k ÷ 2
-            end
-        end
+        cur, nins = _r1_reinsert(order_book, solve, B, cur, calls, max_calls, stop, note, trace;
+            preferred_solver=preferred_solver)
     end
     wall = time() - t0
     if best[] === nothing
@@ -183,4 +152,47 @@ function solve_with_r1(order_book::MPCCOrderBook, solve::Function;
                        "accepted $(length(o.A)), W $(round(o.W, digits=1)), gap to UB $(round(UB[] - o.W, digits=1)) €, " *
                        "PRB $nprb / $(round(prb_eur, digits=0)) €")
     return o.res
+end
+
+"""Reinsertion of in-the-money rejected blocks from the PAB-free set `cur` (shared by R1 and lazy).
+`calls` is a Ref counter, `stop()` the budget/gap test, `note`/`trace` the incumbent bookkeeping."""
+function _r1_reinsert(order_book, solve, B, cur, calls, max_calls, stop, note, trace; preferred_solver)
+    nins = 0
+    tried = Set{String}()
+    cands() = [f for (f, _) in sort(collect(cur.prb); by=x -> (-x[2], x[1])) if !(f in tried)]
+    queue = cands()
+    k = cld(length(queue), 4)
+    while !isempty(queue) && !stop()
+        k = clamp(k, 1, length(queue))
+        S = Set{String}(queue[1:k])
+        o2 = _r1_fixed(order_book, solve, union(cur.A, S), B; preferred_solver=preferred_solver)
+        calls[] += 1; note(o2); trace("insert", o2)
+        pf2 = o2.ok && isempty(o2.pab)
+        if !pf2 && o2.ok
+            np = 0
+            while o2.ok && !isempty(o2.pab) && np < 3 && calls[] < max_calls
+                o2 = _r1_fixed(order_book, solve, setdiff(o2.A, keys(o2.pab)), B;
+                    preferred_solver=preferred_solver)
+                calls[] += 1; np += 1; note(o2); trace("insprune", o2)
+            end
+            if o2.ok && isempty(o2.pab) && o2.W > cur.W + 1e-6
+                for f in S
+                    f in o2.A || push!(tried, f)
+                end
+                nins += count(f -> f in o2.A, S)
+                cur = o2; queue = cands(); k = min(2k, length(queue))
+                continue
+            end
+            pf2 = false
+        end
+        if pf2 && o2.W >= cur.W - 1e-6
+            cur = o2; nins += k
+            queue = cands(); k = min(2k, length(queue))
+        elseif k == 1
+            push!(tried, queue[1]); queue = queue[2:end]
+        else
+            k = k ÷ 2
+        end
+    end
+    return cur, nins
 end

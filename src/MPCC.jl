@@ -137,6 +137,7 @@ include("mpcc/solver.jl")           # solve_mpcc_market_clearing + the per-perio
 include("mpcc/coupling_metrics.jl") # iterative-coupling helpers: flows -> net imports, convergence, damping
 include("mpcc/complex_orders.jl")   # complex-order master LP (EUPHEMIA_COMPLEX_ORDERS; inert otherwise)
 include("mpcc/blocks_r1.jl")        # research-only R1 acceptance search (EUPHEMIA_BLOCKS_PAB=r1; inert otherwise)
+include("mpcc/blocks_lazy.jl")      # research-only in-tree lazy PAB (EUPHEMIA_BLOCKS_PAB=lazy; inert otherwise)
 
 
 end  # module MPCC

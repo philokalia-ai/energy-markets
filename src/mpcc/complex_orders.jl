@@ -326,6 +326,8 @@ function solve_with_complex_orders(order_book::MPCCOrderBook, solve::Function;
     # research (hb-lazy): EUPHEMIA_BLOCKS_PAB=r1 replaces the loop by the R1 search (blocks_r1.jl)
     _r1_dispatch && blocks_pab_mode() === :r1 &&
         return solve_with_r1(order_book, solve; preferred_solver=preferred_solver, verbose=verbose)
+    _r1_dispatch && blocks_pab_mode() === :lazy &&
+        return solve_with_lazy(order_book, solve; preferred_solver=preferred_solver, verbose=verbose)
     forced = Set{String}()
     cert_ctx = lp_cert_mode() !== :off   # research (M1 shadow logging) only
     if cert_ctx
