@@ -2080,7 +2080,7 @@
   var MAP_METRICS = [
     ["sim", "Physics"],
     ["act", "Actual (settled)"],
-    ["err", "Physics error % (load-wtd)"],
+    ["err", "Error %"],
   ];
 
   function loadMap() {
