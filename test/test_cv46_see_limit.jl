@@ -32,6 +32,18 @@ end
         end
     end
 
+    @testset "calibration-only cut selector" begin
+        old = get(ENV, "EUPHEMIA_CV46_SEE_CUTS", nothing)
+        try
+            delete!(ENV, "EUPHEMIA_CV46_SEE_CUTS"); @test NW.cv46_see_cuts() == NW.CV46_SEE_CUTS
+            ENV["EUPHEMIA_CV46_SEE_CUTS"] = "nested"; @test NW.cv46_see_cuts() == NW.CV46_SEE_CUTS
+            ENV["EUPHEMIA_CV46_SEE_CUTS"] = "inner"; @test [c.name for c in NW.cv46_see_cuts()] == ["INNER"]
+            ENV["EUPHEMIA_CV46_SEE_CUTS"] = "outer"; @test_throws ErrorException NW.cv46_see_cuts()
+        finally
+            old === nothing ? delete!(ENV, "EUPHEMIA_CV46_SEE_CUTS") : (ENV["EUPHEMIA_CV46_SEE_CUTS"] = old)
+        end
+    end
+
     @testset "quantile matches percentile_cont" begin
         @test NW.cv46_quantile([1.0, 2.0, 3.0, 4.0, 5.0], 0.5) == 3.0
         @test NW.cv46_quantile(collect(0.0:100.0), 0.95) ≈ 95.0

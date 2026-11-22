@@ -56,6 +56,22 @@ const CV46_SEE_CUTS = (
 "Zones of the south-east block (cut hubs plus the non-Core SEE zones behind them)."
 const CV46_SEE_BLOCK_ZONES = ("AT", "BG", "CZ", "GR", "HU", "RO", "RS", "SI", "SK")
 
+"""
+    cv46_see_cuts() -> Tuple
+
+CALIBRATION-ONLY selector (cp-orch, 2026-11-22): EUPHEMIA_CV46_SEE_CUTS =
+`nested` (default: INNER and OUTER) or `inner` (INNER only). Decided once on the
+calibration days 2026-01-29/04-11/06-14 by a rule fixed before the runs (MAE vs
+SDAC over AT, CZ, SK, HU, SI, RO, DE_LU; nested kept unless inner is lower by more
+than 0.5 €/MWh); the final P2 code keeps only the winner and drops this env.
+"""
+function cv46_see_cuts()
+    v = lowercase(strip(get(ENV, "EUPHEMIA_CV46_SEE_CUTS", "")))
+    v in ("", "nested") && return CV46_SEE_CUTS
+    v == "inner" && return Tuple(c for c in CV46_SEE_CUTS if c.name == "INNER")
+    error("EUPHEMIA_CV46_SEE_CUTS must be nested or inner (got \"$v\")")
+end
+
 const CV46_SEE_CAP_QUANTILE = 0.95      # Fable §3 F2
 const CV46_SEE_WINDOW_DAYS = 28         # design choice, see header
 const CV46_SEE_MIN_HOURS = 14 * 24      # minimum valid hourly samples
@@ -216,8 +232,9 @@ per cut (cap MW, pre-scale inbound max, smallest factor, binding hours).
 function cv46_apply_see_limit!(rows, date::Date, jao::AbstractDict, ccrp::AbstractDict, fpset)
     caps = cv46_see_caps(date)
     core_pairs = get(ccrp, "core", Set{Tuple{String,String}}())
-    summary = cv46_scale_cut_links!(rows, caps, core_pairs, Set(keys(jao)), fpset)
-    for cut in CV46_SEE_CUTS
+    cuts = cv46_see_cuts()
+    summary = cv46_scale_cut_links!(rows, caps, core_pairs, Set(keys(jao)), fpset; cuts=cuts)
+    for cut in cuts
         sm = findfirst(x -> x.name == cut.name, summary)
         if !haskey(caps, cut.name)
             println("   🧱 cv46 SEE_LIMIT $(cut.name): inert (fewer than $(CV46_SEE_MIN_HOURS) hourly flow samples)")
