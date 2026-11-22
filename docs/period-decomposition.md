@@ -10,10 +10,12 @@ single-period clear and merges the results back into the same full-day
 `MPCCResult`. (Since cv46 each period is solved by the LP certificate —
 docs/experiments/lp-certificate.md — so the MIP runs only on a failed certificate.)
 It began as the HiGHS-viability option; **since cv20 it is the
-canonical mode on the EU-footprint path for every solver**, because it is
-bit-identical across Gurobi/HiGHS (measured below and on the 39-day mode A/B) —
-the published record is therefore **solver-invariant**: the open stack
-(DuckDB extract + HiGHS) reproduces it exactly, no commercial license involved.
+canonical mode on the EU-footprint path for every solver**, because under the
+MIP-first solve it was bit-identical across Gurobi/HiGHS (measured below and on
+the 39-day mode A/B, cv20), so the open stack (DuckDB extract + HiGHS) reproduces
+the record with no commercial license. Under the cv46 LP certificate, prices on
+equal-welfare tie cells depend on the LP vertex the solver returns; the certificate
+was measured on HiGHS only and cross-solver identity has not been re-measured.
 Gurobi (academic license) remains the faster development option via
 `optimizer="gurobi"`.
 
@@ -70,7 +72,7 @@ run_multi_zone_market_clearing(day; ..., decompose_periods=true)
 
 | path | `decompose_periods=nothing` (default) | rationale |
 |------|----------------------------------------|-----------|
-| EU footprint (`enrich_network=true` + `:merit_order`) | **decomposed** | canonical since cv20 — bit-identical across solvers (solver-invariant record); HiGHS can actually solve it |
+| EU footprint (`enrich_network=true` + `:merit_order`) | **decomposed** | canonical since cv20 — bit-identical across solvers under the MIP-first solve (not re-measured under the cv46 certificate); HiGHS can actually solve it |
 | everything else (SEE 5-zone, non-enriched) | **monolithic** | byte-identical to the legacy SEE record |
 
 An explicit `decompose_periods=true/false` always wins. Before cv20 the policy
@@ -93,9 +95,9 @@ the cv19-and-earlier EU records were produced monolithically with Gurobi.
      **same** `network_topology` object (the ATC lookup already derives the hour
      from each `YYYYMMDD-HHMM` slot, so it is per-period), and `periods = [t]`.
   3. Solve it via `solve_mpcc_market_clearing(...; decompose_periods=false,
-     verbose=false)` — so each period is solved on its own (LP certificate, the
-     MIP only if that fails; cv46 removed the numeric retry ladder), and a hard
-     period cannot sink the day.
+     verbose=false)` — so each period is solved on its own (LP certificate; the
+     MIP only if that fails; the retry ladder and the per-period HiGHS rungs only
+     if that MIP fails), and a hard period cannot sink the day.
   4. Merge into one full-day `MPCCResult`.
 
 ### Merge semantics
