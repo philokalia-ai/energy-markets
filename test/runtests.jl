@@ -326,6 +326,11 @@ println()
         include(joinpath(@__DIR__, "test_price_reconstruction.jl"))
     end
 
+    @testset "LP certificate (DB-free)" begin
+        # The MPCC solve: two LPs when the welfare-LP dispatch certifies, the MIP otherwise.
+        include(joinpath(@__DIR__, "test_lp_certificate.jl"))
+    end
+
     @testset "Complex orders (DB-free)" begin
         # Energy-limited LinkedHourlyOrder families: master LP + fix-and-reprice.
         include(joinpath(@__DIR__, "test_complex_orders.jl"))

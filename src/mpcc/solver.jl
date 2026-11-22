@@ -1,4 +1,4 @@
-# solver.jl — solve_mpcc_market_clearing — the complementarity clearing solve with its robustness retry ladder — plus _solve_mpcc_by_period (period decomposition for HiGHS).
+# solver.jl — solve_mpcc_market_clearing — the complementarity clearing solve (LP certificate first, lp_certificate.jl; the MIP with its robustness retry ladder only when the certificate fails) — plus _solve_mpcc_by_period (period decomposition).
 # Included by ../MPCC.jl inside `module MPCC` (definition order preserved).
 
 
@@ -204,6 +204,11 @@ end
                               big_m::Float64=BIG_M_PARAMETER)
 
 Solves the MPCC-based market clearing problem using typed order book structure.
+
+The model is built as a big-M complementarity MIP, then solved by the LP certificate
+(`_lp_certify!`, lp_certificate.jl): welfare LP → complementarity pattern → fixed-pattern
+LP. When that certifies (every period of the cv45 production check did), no MIP is solved;
+otherwise the MIP below runs from the pattern as a start, with its retry ladder.
 
 # Arguments
 - `order_book::MPCCOrderBook`: Typed market order book structure
@@ -670,8 +675,13 @@ function solve_mpcc_market_clearing(order_book::MPCCOrderBook;
                                     for node_id in order_book.nodes, time_period in order_book.periods)
         )
 
-        # Solve the model
-        optimize!(model)
+        # Solve the model: the LP certificate first (lp_certificate.jl); the MIP only
+        # when the certificate does not hold, starting from its pattern.
+        certified = _lp_certify!(model, optimizer)
+        c = LP_CERT_COUNTS[]
+        LP_CERT_COUNTS[] = certified ? (certified=c.certified + 1, fallback=c.fallback) :
+                                       (certified=c.certified, fallback=c.fallback + 1)
+        certified || optimize!(model)
 
         # Gurobi's presolve can return the ambiguous INFEASIBLE_OR_UNBOUNDED
         # on numerically borderline instances (observed: the 2026-04-02 EU
@@ -978,6 +988,7 @@ function _solve_mpcc_by_period(order_book::MPCCOrderBook;
 
     periods = order_book.periods
     println("   🧩 Period-decomposition: $(length(periods)) independent single-period clears (solver=$(preferred_solver))")
+    cert0 = LP_CERT_COUNTS[]
 
     simple_orders = filter(o -> isa(o, SimpleOrder), order_book.orders)
 
@@ -1125,6 +1136,9 @@ function _solve_mpcc_by_period(order_book::MPCCOrderBook;
                "(per-period statuses: $stat_list)"
     end
 
+    cert1 = LP_CERT_COUNTS[]
+    println("   🧾 LP certificate: $(cert1.certified - cert0.certified) period solve(s) certified, " *
+            "$(cert1.fallback - cert0.fallback) fell back to the MIP")
     n_opt = count(s -> s == :optimal, statuses)
     msg = "Period-decomposed clear: $(n_opt)/$(length(periods)) periods optimal, " *
           "merged status $(merged_status)"

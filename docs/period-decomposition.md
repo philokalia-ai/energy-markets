@@ -7,7 +7,9 @@ index dimension: `market_price[node, t]`, `flow[pair, t]`, congestion binaries
 
 The **period-decomposition** solve mode instead solves each period as its own
 single-period clear and merges the results back into the same full-day
-`MPCCResult`. It began as the HiGHS-viability option; **since cv20 it is the
+`MPCCResult`. (Since cv46 each period is solved by the LP certificate —
+docs/experiments/lp-certificate.md — so the MIP runs only on a failed certificate.)
+It began as the HiGHS-viability option; **since cv20 it is the
 canonical mode on the EU-footprint path for every solver**, because it is
 bit-identical across Gurobi/HiGHS (measured below and on the 39-day mode A/B) —
 the published record is therefore **solver-invariant**: the open stack

@@ -97,7 +97,8 @@ name-based fuel inference, and `include`s:
 
 | File | Read this for |
 |---|---|
-| `solver.jl` | `solve_mpcc_market_clearing` — the complementarity clearing solve and its robustness retry ladder; `_solve_mpcc_by_period` (per-period decomposition — canonical on the EU path since cv20, any solver) |
+| `lp_certificate.jl` | the LP certificate (cv46) that solves each MPCC without branch-and-bound: welfare LP → rule-based complementarity pattern → fixed-pattern LP; falls back to the MIP with the pattern as start — docs/experiments/lp-certificate.md |
+| `solver.jl` | `solve_mpcc_market_clearing` — builds the complementarity model, solves it by the LP certificate first, and only on a failed certificate by the MIP with its robustness retry ladder; `_solve_mpcc_by_period` (per-period decomposition — canonical on the EU path since cv20, any solver) |
 | `coupling_metrics.jl` | iterative-coupling helpers: flows→net imports, convergence metrics, damping |
 | `complex_orders.jl` | opt-in complex orders (`EUPHEMIA_COMPLEX_ORDERS`): the full-day master (LP/MILP) that allocates energy-limited `LinkedHourlyOrder` families and decides regular-block acceptance, plus the EUPHEMIA PAB loop; the per-period MPCC then clears with those decisions fixed. Inert unless the book carries a `LinkedHourlyOrder` — see docs/experiments/complex-orders-2026-11 |
 

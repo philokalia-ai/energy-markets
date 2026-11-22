@@ -420,6 +420,12 @@ adoption date: the scoreboard's since-freeze window is cv ≥ 45 from 2026-11-21
 
 Dated reminders and scoring-policy notes that do not change `code_version`.
 
+- **2026-11-22 — LP certificate replaces the MIP-first MPCC solve (cv46/lp-cert).** Each MPCC is
+  solved by the welfare LP + fixed-pattern LP (`src/mpcc/lp_certificate.jl`); the MIP runs only on
+  a failed certificate. Prices are byte-identical to cv45 (full-record identity vs the cv45 record,
+  docs/experiments/lp-certificate.md), so no `code_version` bump: no backfill and no model change,
+  only a faster solve.
+
 - **2026-11-15 — Freeze rule (owner-approved 2026-11-16, #431).** The 43
   declared `PROVENANCE` characteristics in `src/merit_order/zone_profiles.jl`
   (40 of them `price_informed=true`) are frozen as of cv44's adoption on
