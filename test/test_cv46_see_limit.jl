@@ -57,16 +57,17 @@ end
         for i in 0:(20 * 24 - 1)
             h = t0 + Hour(i)
             hourly[(h, "AT", "HU")] = 1000.0 + i          # INNER cut border
-            hourly[(h, "CZ", "SK")] = 500.0                # INNER and OUTER
+            hourly[(h, "CZ", "SK")] = 500.0                # INNER only (CZ, SK both inside OUTER)
+            hourly[(h, "PL", "SK")] = 300.0                # INNER and OUTER
             hourly[(h, "HR", "HU")] = 9999.0               # HR excluded (observed injection)
             hourly[(h, "SK", "HU")] = 7777.0               # internal to both cuts
             hourly[(h, "DE_LU", "AT")] = 2000.0            # OUTER only
             hourly[(h, "HU", "AT")] = -50.0                # negative rows floored at 0
         end
         caps = NW.cv46_cut_caps(hourly)
-        inner = [1500.0 + i for i in 0:(20 * 24 - 1)]
+        inner = [1800.0 + i for i in 0:(20 * 24 - 1)]
         @test caps["INNER"] ≈ NW.cv46_quantile(inner, 0.95)
-        @test caps["OUTER"] ≈ 2500.0                       # DE_LU→AT + CZ→SK; AT→HU is internal
+        @test caps["OUTER"] ≈ 2300.0                       # DE_LU→AT + PL→SK; AT→HU, CZ→SK internal
         # fewer than 14×24 hours ⇒ cut inert
         short = Dict(k => v for (k, v) in hourly if k[1] < t0 + Hour(14 * 24 - 1))
         @test isempty(NW.cv46_cut_caps(short))
