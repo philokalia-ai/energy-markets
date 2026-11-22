@@ -11,13 +11,6 @@
 # those DB rows reach the site the same day instead of at the next 06:30 cycle.
 # Under `schedule` the dispatch inputs are empty: the inputs export is skipped
 # and books_dir is empty (the books step warns and exits 0).
-#
-# Timestral + physics (the site's headline forecast): before exporting, this job
-# issues the post-sim Timestral vintage for tomorrow itself (`--mode postsim`:
-# settled prices + the lead-1 physics sim made by the D-1 10:00 UTC gate; the
-# emitter refuses when no such sim exists). It is the same idempotent upsert the
-# 10:40 server cron makes, so the combined forecast reaches the site even when that
-# cron does not write it. Non-fatal and bounded; skip with tsfm_postsim=false.
 name: publish-web-data
 
 on:
@@ -38,10 +31,6 @@ on:
         description: "Absolute path (runner host) of per-day book parquets to push additively; 'none' = skip"
         required: false
         default: "/opt/euphemia/data/web/v1/books"
-      tsfm_postsim:
-        description: "Issue tomorrow's Timestral + physics (post-sim) vintage before exporting"
-        type: boolean
-        default: true
 
 # One publisher at a time. daily-forecast has its own group (daily-forecast) and
 # pushes the same zone objects + manifest, so the first step below also waits
@@ -58,7 +47,7 @@ permissions:
 jobs:
   publish:
     runs-on: energy-markets-k8s
-    timeout-minutes: 200   # gate wait (≤ 90) + Timestral post-sim (≤ 45) + export + push
+    timeout-minutes: 150
     steps:
       - name: Wait for daily-forecast (no two writers on the R2 data plane)
         id: gate
@@ -89,43 +78,6 @@ jobs:
         uses: julia-actions/setup-julia@v1
         with:
           version: "1.13.4"   # same pin as daily-forecast.yml / transfer-record.yml
-
-      # ---- Timestral + physics: post-sim issue for tomorrow (non-fatal) ----
-      - name: Setup uv (Timestral + physics)
-        id: tsfm_uv
-        if: ${{ steps.gate.outputs.go == 'true' && (github.event_name == 'schedule' || inputs.tsfm_postsim) }}
-        continue-on-error: true
-        timeout-minutes: 5
-        uses: astral-sh/setup-uv@v6
-        with:
-          version: "0.12.21"   # same pin as daily-forecast.yml tsfm-overlay
-          enable-cache: true
-          cache-dependency-glob: bin/requirements-overlay.txt
-
-      - name: Cache Timestral weights (pinned Hub revision)
-        if: ${{ steps.tsfm_uv.outcome == 'success' }}
-        continue-on-error: true
-        timeout-minutes: 10
-        uses: actions/cache@v4
-        with:
-          path: ${{ github.workspace }}/.hf
-          key: hf-timestral-209m-9874d252ab0aae16f7f7c999f98f98d6ad7d8365
-
-      - name: Timestral + physics (post-sim issue for tomorrow)
-        if: ${{ steps.tsfm_uv.outcome == 'success' }}
-        continue-on-error: true
-        timeout-minutes: 45
-        env:
-          ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
-          HF_HOME: ${{ github.workspace }}/.hf
-          TSFM_ARM: timestral-209m        # arm B: settled prices + lead-1 sim (as the 10:40 cron)
-        run: |
-          uv venv --python 3.12 .venv-overlay
-          VIRTUAL_ENV=.venv-overlay uv pip install --index-strategy unsafe-best-match \
-            -r bin/requirements-overlay.txt
-          timeout -k 60 1800 .venv-overlay/bin/python bin/emit_tsfm_overlay.py \
-            --delivery tomorrow --mode postsim --write --threads 4 \
-            || echo "::warning::post-sim Timestral issue failed or was refused — the site keeps the 06:30 prices-only issue for tomorrow"
 
       - name: Export web parquet (prices data plane)
         if: ${{ steps.gate.outputs.go == 'true' }}
