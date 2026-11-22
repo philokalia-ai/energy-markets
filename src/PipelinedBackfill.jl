@@ -306,6 +306,7 @@ function pipeline_solver_worker(solvework::RemoteChannel, bookwork::RemoteChanne
                 tw = time()
                 r1 = mz_solve_pass(ob1; optimizer=cfg.optimizer, silent=cfg.silent,
                     mpcc_time_limit=cfg.mpcc_time_limit, mpcc_mip_gap=cfg.mpcc_mip_gap,
+                    mpcc_heuristic_effort=cfg.mpcc_heuristic_effort,
                     decompose_periods=cfg.decompose_periods)
                 solve1_secs = time() - tw
                 busy += solve1_secs; n += 1
@@ -338,6 +339,7 @@ function pipeline_solver_worker(solvework::RemoteChannel, bookwork::RemoteChanne
                 tw = time()
                 r2 = mz_solve_pass(ob2; optimizer=cfg.optimizer, silent=cfg.silent,
                     mpcc_time_limit=cfg.mpcc_time_limit, mpcc_mip_gap=cfg.mpcc_mip_gap,
+                    mpcc_heuristic_effort=cfg.mpcc_heuristic_effort,
                     decompose_periods=cfg.decompose_periods)
                 solve2_secs = time() - tw
                 busy += solve2_secs; n += 1
@@ -476,6 +478,7 @@ function _run_pipelined_backfill_impl(days, zones::Vector{String}=String[];
         collect_prices::Bool=false,
         mpcc_time_limit::Float64=900.0,
         mpcc_mip_gap::Float64=1e-6,
+        mpcc_heuristic_effort::Union{Float64,Nothing}=nothing,
         # Minimum distinct price periods a day must produce to be SAVED.
         #
         # The coupled clear intersects every zone's periods
@@ -708,7 +711,7 @@ function _run_pipelined_backfill_impl(days, zones::Vector{String}=String[];
     end
     cfg = (optimizer=optimizer, silent=silent, enrich_network=enrich_network,
            apply_zone_profiles=apply_zone_profiles, mpcc_time_limit=mpcc_time_limit,
-           mpcc_mip_gap=mpcc_mip_gap,
+           mpcc_mip_gap=mpcc_mip_gap, mpcc_heuristic_effort=mpcc_heuristic_effort,
            scenario=scenario, decompose_periods=resolved_decompose,
            books_dir=books_dir_abs, as_of=as_of)
 

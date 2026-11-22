@@ -636,7 +636,8 @@ function mz_build_books(zones::Vector{String}, date::Date;
 end
 
 """
-    mz_solve_pass(order_book; optimizer, silent, mpcc_time_limit, mpcc_mip_gap) -> MPCCResult
+    mz_solve_pass(order_book; optimizer, silent, mpcc_time_limit, mpcc_mip_gap,
+                  mpcc_heuristic_effort) -> MPCCResult
 
 Solve one MPCC pass over an order book (pass 1 or pass 2). Identical call to the
 one inside `run_multi_zone_market_clearing`.
@@ -644,10 +645,12 @@ one inside `run_multi_zone_market_clearing`.
 function mz_solve_pass(order_book::MPCC.MPCCOrderBook;
     optimizer::String="auto", silent::Bool=true,
     mpcc_time_limit::Float64=900.0, mpcc_mip_gap::Float64=1e-6,
+    mpcc_heuristic_effort::Union{Float64,Nothing}=nothing,
     decompose_periods::Bool=false)
     return MPCC.solve_mpcc_market_clearing(order_book;
         preferred_solver=optimizer, silent=silent,
         time_limit=mpcc_time_limit, mip_gap=mpcc_mip_gap,
+        heuristic_effort=mpcc_heuristic_effort,
         decompose_periods=decompose_periods)
 end
 

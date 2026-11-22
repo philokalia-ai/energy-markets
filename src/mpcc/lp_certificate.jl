@@ -12,10 +12,15 @@
 #    fixed binaries is an LP; if it is optimal at the welfare-LP objective, the MPCC is solved
 #    to optimality and the caller skips its MIP solve.
 # 3. Otherwise the binaries are unfixed and the pattern (with the best values at hand) becomes
-#    the MIP start; the MIP and its retry ladder run as before.
+#    the MIP start. The caller then solves the MIP; only if that MIP fails do its retry ladder
+#    (solver.jl) and the per-period HiGHS rungs (`_solve_mpcc_by_period`) run.
 #
-# On the 31-day cv45 production check every one of 1,488 period solves certified, with
-# prices byte-identical to the MIP-first clear (docs/experiments/lp-certificate.md).
+# Time: the welfare LP gets the caller's `time_limit`, the fixed-pattern solve what is left of
+# it, and the caller gives the fallback MIP the remainder. An exception anywhere in here is
+# caught by `_lp_certify_guarded!`, which unfixes the pattern so the MIP runs on the full model.
+#
+# Evidence (cv45 record, docs/experiments/lp-certificate.md): 0 fallbacks in 41,614 period
+# solves; prices equal to the MIP-first record except 5 equal-welfare tie cells.
 
 """Per-process counts of certified / fallen-back MPCC solves (read by the decomposition driver's log line)."""
 const LP_CERT_COUNTS = Ref((certified=0, fallback=0))
@@ -25,13 +30,15 @@ const _PRICE_SIDE = (:stepwise_dual, :market_price, :congestion_fw, :congestion_
     :congestion_fw_aux, :congestion_bw_aux)
 
 """
-    _lp_certify!(model, optimizer) -> Bool
+    _lp_certify!(model, optimizer; time_limit=Inf) -> Bool
 
 Try to solve the MPCC `model` by the LP certificate. `true`: `model` holds an optimal
 solution (binaries fixed to the certified pattern). `false`: `model` is unchanged except for
-MIP start values; the caller must solve it.
+MIP start values; the caller must solve it. `time_limit` (s) bounds the welfare LP and the
+fixed-pattern solve together.
 """
-function _lp_certify!(model::Model, optimizer)
+function _lp_certify!(model::Model, optimizer; time_limit::Real=Inf)
+    t0 = time()
     obj = object_dictionary(model)
     price_side = Set{VariableRef}(v for nm in _PRICE_SIDE if haskey(obj, nm) for v in model[nm])
 
@@ -39,6 +46,7 @@ function _lp_certify!(model::Model, optimizer)
     lp, refmap = copy_model(model)
     set_optimizer(lp, optimizer)
     set_silent(lp)
+    isfinite(time_limit) && set_time_limit_sec(lp, Float64(time_limit))
     kill = Set(refmap[v] for v in price_side)
     for (F, S) in list_of_constraint_types(lp)
         F <: AffExpr || continue
@@ -76,6 +84,7 @@ function _lp_certify!(model::Model, optimizer)
     for (v, b) in pattern
         fix(v, b; force=true)
     end
+    isfinite(time_limit) && set_time_limit_sec(model, max(time_limit - (time() - t0), 1.0))
     optimize!(model)
     if termination_status(model) == MOI.OPTIMAL &&
        abs(objective_value(model) - lp_obj) <= 1e-7 * max(1.0, abs(lp_obj))
@@ -91,4 +100,34 @@ function _lp_certify!(model::Model, optimizer)
         set_start_value(v, s)
     end
     return false
+end
+
+"""Unfix every complementarity binary of `model` that is currently fixed (the certificate's pattern)."""
+function _unfix_pattern!(model::Model)
+    obj = object_dictionary(model)
+    for nm in (:stepwise_acceptance_complementarity_aux, :stepwise_dual_complementarity_aux,
+               :congestion_fw_aux, :congestion_bw_aux)
+        haskey(obj, nm) || continue
+        for v in model[nm]
+            is_fixed(v) && unfix(v)
+        end
+    end
+    return nothing
+end
+
+"""
+    _lp_certify_guarded!(model, optimizer; time_limit=Inf) -> Bool
+
+`_lp_certify!` that never throws: on an exception it warns, unfixes the pattern and returns
+`false`, so the caller solves the full MIP as before the certificate existed.
+"""
+function _lp_certify_guarded!(model::Model, optimizer; time_limit::Real=Inf)
+    try
+        return _lp_certify!(model, optimizer; time_limit=time_limit)
+    catch e
+        e isa InterruptException && rethrow()
+        @warn "LP certificate raised — solving the MIP instead" exception = (e, catch_backtrace())
+        _unfix_pattern!(model)
+        return false
+    end
 end

@@ -23,7 +23,8 @@ for ds in ARGS[2:end]
         # CLEAR_RES=15: quarter-hourly clear (96 periods, replicate-not-divide; docs/15min-clearing.md)
         clear_resolution_minutes=parse(Int, get(ENV, "CLEAR_RES", "60")),
         # rerun budget for time-limited days: CLEAR_TIME_LIMIT=3600 (bin/reproduce.jl's HiGHS budget)
-        mpcc_time_limit=parse(Float64, get(ENV, "CLEAR_TIME_LIMIT", "900")))
+        mpcc_time_limit=parse(Float64, get(ENV, "CLEAR_TIME_LIMIT", "900")),
+        mpcc_heuristic_effort=haskey(ENV, "CLEAR_TIME_LIMIT") ? 0.3 : nothing)
     # CLEAR_CONTEXT=0630: the lead-1 06:30 UTC D-1 issuance context (pre-gate product)
     res = get(ENV, "CLEAR_CONTEXT", "") == "0630" ?
         Euphemia.with_context(clear, pregate_0630(d)) : clear()

@@ -111,7 +111,8 @@ function clear_multi_zone(zones::Vector{String}, days; order_method::Symbol, opt
             res = run_multi_zone_market_clearing(d; zones=zones, order_method=order_method,
                 optimizer=optimizer, enrich_network=true, passes=2,
                 clearing_mode="multi_zone", save_to_db=true, silent=true,
-                mpcc_time_limit=mpcc_budget(optimizer))
+                mpcc_time_limit=mpcc_budget(optimizer),
+                mpcc_heuristic_effort=optimizer == "highs" ? 0.3 : nothing)
             # A day only counts if it produced prices (TIME_LIMIT with no
             # incumbent throws nothing but yields an empty result).
             usable = res.status == :optimal ||
@@ -198,12 +199,14 @@ function parallel_clear_multi(zones::Vector{String}, days; order_method::Symbol,
     # Capture plain VALUES (not Main functions) — pmap closures must not
     # reference coordinator-only bindings.
     tl = mpcc_budget(optimizer)
+    he = optimizer == "highs" ? 0.3 : nothing
     return pmap(collect(days)) do d
         try
             res = run_multi_zone_market_clearing(d; zones=zones, order_method=order_method,
                 optimizer=optimizer, enrich_network=true, passes=2,
                 clearing_mode="multi_zone", save_to_db=false, silent=true,
-                mpcc_time_limit=tl)
+                mpcc_time_limit=tl,
+                mpcc_heuristic_effort=he)
             usable = res.status == :optimal ||
                      (res.status == :time_limit && !isempty(res.market_prices))
             usable ||
@@ -462,11 +465,13 @@ function main(argv)
         bw = parse(Int, opts["book_workers"])
         bw <= 0 && (bw = min(10, max(1, Sys.CPU_THREADS ÷ 8)))
         sw = parse(Int, opts["solver_workers"])
+        he = opt == "highs" ? 0.3 : nothing
         for (zones, days) in multi_jobs
             run_pipelined_backfill(collect(days), zones;
                 solver_workers=sw, book_workers=bw,
                 optimizer=opt, clearing_mode="multi_zone", save_to_db=true,
-                resume=true, mpcc_time_limit=mpcc_budget(opt))
+                resume=true, mpcc_time_limit=mpcc_budget(opt),
+                mpcc_heuristic_effort=he)
         end
         @printf("\nClearing done in %.0f s. Scoring...\n", time() - t0)
         score_and_report(sections, tier)
