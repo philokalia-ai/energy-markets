@@ -10,14 +10,10 @@ single-period clear and merges the results back into the same full-day
 `MPCCResult`. (Since cv46 each period is solved by the LP certificate —
 docs/experiments/lp-certificate.md — so the MIP runs only on a failed certificate.)
 It began as the HiGHS-viability option; **since cv20 it is the
-canonical mode on the EU-footprint path for every solver**, because under the
-MIP-first solve it was bit-identical across Gurobi/HiGHS (measured below and on
-the 39-day mode A/B, cv20), so the open stack (DuckDB extract + HiGHS) reproduces
-the record with no commercial license. Under the cv46 LP certificate, prices on
-equal-welfare tie cells depend on the LP vertex the solver returns; the certificate
-was measured on HiGHS only and cross-solver identity has not been re-measured.
-Gurobi (academic license) remains the faster development option via
-`optimizer="gurobi"`.
+canonical mode on the EU-footprint path**: HiGHS solves it, and in cv20 it was
+measured bit-identical across solvers (the guards below, run when Gurobi was
+still supported), so the open stack (DuckDB extract + HiGHS) produces the record
+with no commercial license. HiGHS is now the only solver.
 
 **Decomposed vs monolithic** is not bit-identical: the two modes tie-break
 degenerate pass-2 anchor books differently (flat blocks at the anchor price
@@ -51,14 +47,9 @@ the Postgres↔DuckDB residual. The parity bar is on **prices**.
 ## How to use
 
 ```julia
-# Default on the EU-footprint path: DECOMPOSED, any solver (canonical, cv20).
-# "auto" resolves to HiGHS — the open default reproduces the record exactly.
+# Default on the EU-footprint path: DECOMPOSED (canonical, cv20), HiGHS.
 run_multi_zone_market_clearing(day; zones, order_method=:merit_order,
     enrich_network=true, passes=2)
-
-# Development: Gurobi, same decomposed mode — bit-identical to the HiGHS run.
-run_multi_zone_market_clearing(day; zones, order_method=:merit_order,
-    enrich_network=true, passes=2, optimizer="gurobi")
 
 # Force either way (overrides the policy):
 run_multi_zone_market_clearing(day; ..., decompose_periods=false)  # legacy monolithic
@@ -129,7 +120,8 @@ record.
 ## Measured results
 
 39-zone EU footprint, 2026-04-03, `enrich_network=true`, offline DuckDB extract.
-See `test/scripts/test_period_decomposition.jl`.
+Measured in cv20, when Gurobi was still supported (it was removed in November 2026;
+`test/scripts/test_period_decomposition.jl` now runs both guards on HiGHS).
 
 ### Guard 1 — Gurobi monolithic == Gurobi decomposed (bit-exact prices)
 

@@ -34,7 +34,7 @@ end
 function clear(day)
     res = Euphemia.run_multi_zone_market_clearing(day;
         zones=EU39, order_method=:merit_order, save_to_db=false,
-        enrich_network=true, apply_zone_profiles=true, passes=2, optimizer="gurobi")
+        enrich_network=true, apply_zone_profiles=true, passes=2, optimizer="highs")
     return res.market_prices
 end
 

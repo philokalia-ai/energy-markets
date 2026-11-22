@@ -2,11 +2,11 @@
 # multi-zone backfill.
 #
 # Motivation (the user's goal, verbatim): "build the books in parallel, in
-# memory, and then chunk them to Gurobi so it never sits." The two-pass
+# memory, and then chunk them to the solver so it never sits." The two-pass
 # merit-order clear per day is: build pass-1 books (CPU + DB heavy, ~seconds
-# per 39-zone day) → pass-1 MPCC solve (the scarce Gurobi resource) → extract
+# per 39-zone day) → pass-1 MPCC solve (the scarce solver resource) → extract
 # opportunity-anchor refs → rebuild only the ~12 anchored zones' books →
-# pass-2 solve → save. Running that sequentially leaves Gurobi idle during
+# pass-2 solve → save. Running that sequentially leaves the solver idle during
 # every book build. This pipeline decouples the stages onto separate
 # Distributed workers connected by bounded RemoteChannels, so the solver
 # workers stay saturated while book workers build the next days ahead.
@@ -29,10 +29,8 @@
 # one (acceptance-tested in test/scripts/pipeline_identity.jl).
 #
 # Concurrency safety:
-#  - Exactly `solver_workers` solver PROCESSES exist (default 2 = Gurobi WLS
-#    concurrent-session cap); each solves one problem at a time, so at most
-#    `solver_workers` Gurobi solves run at once. Each solver process creates ONE
-#    persistent Gurobi env on first solve (SOLVER_ENV_CACHE) and reuses it.
+#  - Exactly `solver_workers` solver PROCESSES exist (default 2); each solves one
+#    problem at a time, so at most `solver_workers` HiGHS solves run at once.
 #  - A counting-token semaphore caps days-in-flight at `in_flight`; every
 #    internal channel has capacity `in_flight`, so no internal `put!` can ever
 #    block — this breaks the pass-2 feedback cycle's deadlock potential. Only
@@ -286,8 +284,7 @@ MPCC solver worker loop. Blocks on `solvework` and, per job:
 - `:pass2` → solves pass 2 and completes the day (accept pass-2 result, else
   fall back to the pass-1 result — same rule as the sequential path).
 Exits on a `:stop` sentinel. Returns `(cumulative_solve_wall_seconds,
-n_solves)` for the utilization summary. Each solver process reuses one
-persistent Gurobi env (SOLVER_ENV_CACHE) across all solves.
+n_solves)` for the utilization summary.
 """
 function pipeline_solver_worker(solvework::RemoteChannel, bookwork::RemoteChannel,
                                 results::RemoteChannel, cfg,
@@ -401,12 +398,11 @@ sequential `run_multi_zone_market_clearing(day; passes=2, ...)` path.
 # Key arguments
 - `days`            : iterable of `Date`
 - `zones`           : footprint (default 39-zone EU)
-- `solver_workers`  : number of concurrent solver processes (default 2; MUST NOT
-  exceed the Gurobi WLS concurrent-session cap — set 1 to coordinate with
-  another running backfill)
+- `solver_workers`  : number of concurrent solver processes (default 2; set 1 to
+  coordinate with another running backfill)
 - `book_workers`    : book-builder processes (default `min(10, CPU÷8)`)
 - `in_flight`       : max days in flight / channel capacity (default 8)
-- `optimizer`       : "gurobi" (default) / "highs" / "auto"
+- `optimizer`       : "highs" (default; the only solver) / "auto"
 - `clearing_mode`   : energy_prices save key (default "multi_zone_eu")
 - `save_to_db`      : persist results (default true)
 - `resume`          : skip already-saved days (default true)
@@ -466,7 +462,7 @@ function _run_pipelined_backfill_impl(days, zones::Vector{String}=String[];
         solver_workers::Int=2,
         book_workers::Int=min(10, max(1, Sys.CPU_THREADS ÷ 8)),
         in_flight::Int=8,
-        optimizer::String="gurobi",
+        optimizer::String="highs",
         order_method::Symbol=:merit_order,
         enrich_network::Bool=true,
         apply_zone_profiles::Bool=true,

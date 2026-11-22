@@ -124,25 +124,17 @@ Each run writes `results/<tier>_report.md` (per-zone corr / MAE / bias) and
 
 ### Solvers — what the open stack does and does not reproduce
 
-`bin/reproduce.jl` defaults to **HiGHS**, which needs no license.
+`bin/reproduce.jl` runs **HiGHS**, the only solver; it needs no license.
 
-- **Single-zone** clearing on HiGHS produces metrics identical to Gurobi's.
 - **The 39-zone coupled clear** runs in canonical **per-period-decomposed**
-  mode since cv20 ([period-decomposition.md](period-decomposition.md)): the
-  hourly clears are independent MILPs that HiGHS solves to optimality, and the
-  prices are **bit-identical across HiGHS and Gurobi** at 60-minute resolution
-  (~511 s/day HiGHS vs ~10 s Gurobi). The monolithic formulation genuinely
-  needs Gurobi — HiGHS found no incumbent within an hour on an 80-core box.
-- **The cv35 JAO network is the exception to the open-stack promise.** HiGHS
-  segfaults on the 108-link problem, so the record path for cv35 and later runs
-  on Gurobi. Offline reproduction on the extract does not hit this, because the
-  extract carries no JAO data — it clears the smaller pre-cv35 network.
-
-Since cv46 each MPCC is solved by the LP certificate (docs/experiments/lp-certificate.md); the
-MIP runs only where the certificate fails, and the retry ladder only where that MIP fails. Two
-notes for HiGHS runs: the indicator-constraint retry rung is Gurobi-only (the ladder detects the
-solver and skips it; HiGHS gets the per-period re-solve rungs instead), and the per-day
-`:p95`-books fallback is solver-agnostic and still fires.
+  mode since cv20 ([period-decomposition.md](period-decomposition.md)), and since
+  cv46 each period is solved by the LP certificate
+  (docs/experiments/lp-certificate.md). The MIP runs only where the certificate
+  fails, and the per-period HiGHS re-solve rungs only where that MIP fails; the
+  per-day `:p95`-books fallback still fires after that.
+- The cv45 record (every day 2024-07-01..2026-11-14) is produced on HiGHS,
+  including the JAO network. (Before cv46 the documentation said the cv35 JAO
+  network needed Gurobi; that no longer applies.)
 
 ### What to expect
 

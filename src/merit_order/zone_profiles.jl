@@ -697,8 +697,8 @@ const CONTINENTAL_PROFILE = ZoneProfile(
     # constants up to ~2.6e8 on multi-GW cap-priced demand blocks leak through
     # the integrality tolerance and produce false certificates that survived
     # the numeric retry ladder. iter8 fixes that at the root: a final MPCC
-    # retry rung swaps the Big-M complementarity for EXACT Gurobi indicator
-    # constraints (no constants), plus a per-day :p95-books fallback in
+    # retry rung swapped the Big-M complementarity for exact indicator
+    # constraints (no constants; that rung no longer exists), plus a per-day :p95-books fallback in
     # run_multi_zone_market_clearing as the safety net — so :installed is now
     # enabled. :seasonal (trailing-365d p95) was measured a NO-OP on winter
     # failure days (idle capacity never generates even across a year;

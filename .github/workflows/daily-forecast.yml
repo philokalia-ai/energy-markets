@@ -34,14 +34,6 @@ on:
         required: false
         default: false
         type: boolean
-      optimizer:
-        description: "Solver (highs = production default; gurobi = development, academic license)"
-        required: false
-        default: "highs"
-        type: choice
-        options:
-          - highs
-          - gurobi
 
 # The k3s 06:30 dispatch (pregate=true) and the late GitHub schedule are the same
 # job. Serialized, the second finds every slice frozen and only rescores.
@@ -89,44 +81,11 @@ jobs:
           version: ${{ env.JULIA_VERSION }}
 
 
-      - name: Select optimizer
-        env:
-          GUROBI_ACCESS_ID: ${{ secrets.WLSACCESSID }}
-          GUROBI_WLS_SECRET: ${{ secrets.WLSSECRET }}
-          GUROBI_LICENSE_ID: ${{ secrets.LICENSEID }}
-          REQUESTED_OPTIMIZER: ${{ github.event.inputs.optimizer || 'highs' }}
+      - name: Set forecast defaults
         run: |
-          # Production default is HiGHS (open-source): since cv20 the 39-zone
-          # clear runs in canonical per-period-decomposed mode, which HiGHS
-          # solves and which is bit-identical across solvers. Gurobi (academic
-          # license — development/research use only) is available via the
-          # workflow_dispatch optimizer input.
+          # HiGHS is the only solver.
           echo "FORECAST_SKIP_CLEAR=false" >> $GITHUB_ENV
-          if [ "$REQUESTED_OPTIMIZER" = "gurobi" ]; then
-            if [ -n "$GUROBI_ACCESS_ID" ] && [ -n "$GUROBI_WLS_SECRET" ] && [ -n "$GUROBI_LICENSE_ID" ]; then
-              echo "::add-mask::$GUROBI_ACCESS_ID"
-              echo "::add-mask::$GUROBI_WLS_SECRET"
-              echo "::add-mask::$GUROBI_LICENSE_ID"
-
-              umask 077
-              {
-                echo "WLSACCESSID=$GUROBI_ACCESS_ID"
-                echo "WLSSECRET=$GUROBI_WLS_SECRET"
-                echo "LICENSEID=$GUROBI_LICENSE_ID"
-              } > gurobi.lic
-              chmod 600 gurobi.lic
-
-              echo "GRB_LICENSE_FILE=$PWD/gurobi.lic" >> $GITHUB_ENV
-              echo "FORECAST_OPTIMIZER=gurobi" >> $GITHUB_ENV
-              echo "✅ Gurobi WLS license configured (development dispatch)"
-            else
-              echo "FORECAST_OPTIMIZER=highs" >> $GITHUB_ENV
-              echo "⚠️ Gurobi requested but WLS credentials missing — falling back to HiGHS"
-            fi
-          else
-            echo "FORECAST_OPTIMIZER=highs" >> $GITHUB_ENV
-            echo "✅ HiGHS selected (production default)"
-          fi
+          echo "FORECAST_OPTIMIZER=highs" >> $GITHUB_ENV
 
       - name: Install Julia dependencies
         run: |
@@ -259,10 +218,6 @@ jobs:
           julia --project=. bin/export_prediction_scorecard.jl \
             || echo "::warning::prediction-scorecard export failed — core web data still published"
           bash bin/web_data_push.sh
-
-      - name: Cleanup Gurobi license
-        if: always()
-        run: rm -f gurobi.lic
 
       - name: Notify on failure
         if: failure()

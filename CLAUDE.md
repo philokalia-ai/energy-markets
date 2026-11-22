@@ -102,12 +102,10 @@ populated by an external ETL and have no indexes by default; run
 
 ## Solvers and CI
 
-`optimizer="highs"` is the default (open-source; canonical EU-footprint mode is
+HiGHS is the only solver (open-source, no license; canonical EU-footprint mode is
 per-period decomposition since cv20; since cv46 each MPCC is solved by an LP
-certificate, the MIP only when it fails — docs/experiments/lp-certificate.md;
-cross-solver identity was measured for the MIP-first solve and is not re-measured
-under the certificate, where tie cells follow the solver's LP vertex); Gurobi is the development option
-(`optimizer="gurobi"`, academic WLS license). Workflows live in `.github/workflows/` — the two that
+certificate, the MIP only when it fails — docs/experiments/lp-certificate.md).
+Workflows live in `.github/workflows/` — the two that
 matter: `generate-multi-zone-prices.yml` (daily 3 AM UTC) and
 `daily-forecast.yml` (06:30 UTC, pre-gate 7-lead ex-ante forecast, see
 docs/experiments/pregate-7lead.md); all support `workflow_dispatch`.

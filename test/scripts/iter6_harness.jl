@@ -12,7 +12,7 @@
 # Env:
 #   LABEL      output tag  -> results dir <RESULTS>/<LABEL>.csv         (required)
 #   RESULTS    output dir  (default: scratchpad/iter6_results)
-#   WORKERS    Gurobi worker processes (default 2; keep <=2 while backfill runs)
+#   WORKERS    solver worker processes (default 2)
 #   SUBSAMPLE  "hard" | "weekday" | "weekend" | comma-list of YYYY-MM-DD
 #              (default: all 36). Use a subsample for fast directional checks.
 #   ZONES      comma list to restrict scoring output (clear is always full 39z)
@@ -53,7 +53,7 @@ function clear_days(days::Vector{Date}, nworkers::Int)
     do_day(d) = begin
         try
             res = run_multi_zone_market_clearing(d; zones=FOOTPRINT, order_method=:merit_order,
-                optimizer="gurobi", enrich_network=true, passes=2, clearing_mode="multi_zone",
+                optimizer="highs", enrich_network=true, passes=2, clearing_mode="multi_zone",
                 save_to_db=false, silent=true, mpcc_time_limit=tl)
             usable = res.status == :optimal || (res.status == :time_limit && !isempty(res.market_prices))
             usable ? (day=d, mp=res.market_prices, status=res.status, err=nothing) :
@@ -82,7 +82,7 @@ function clear_days(days::Vector{Date}, nworkers::Int)
         return pmap(days) do d
             try
                 res = run_multi_zone_market_clearing(d; zones=fp, order_method=:merit_order,
-                    optimizer="gurobi", enrich_network=true, passes=2, clearing_mode="multi_zone",
+                    optimizer="highs", enrich_network=true, passes=2, clearing_mode="multi_zone",
                     save_to_db=false, silent=true, mpcc_time_limit=900.0)
                 usable = res.status == :optimal || (res.status == :time_limit && !isempty(res.market_prices))
                 usable ? (day=d, mp=res.market_prices, status=res.status, err=nothing) :

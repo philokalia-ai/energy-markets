@@ -12,7 +12,7 @@
 #   START_DATE, END_DATE  (YYYY-MM-DD)
 #   FOOTPRINT             "full" (37 zones) or "core" (GR 2-ring fallback)
 #   SAVE                  "true"/"false" (default true)
-#   OPTIMIZER             "auto"/"gurobi"/"highs" (default auto)
+#   OPTIMIZER             "auto"/"highs" (default auto; HiGHS is the only solver)
 
 using Euphemia, Dates
 

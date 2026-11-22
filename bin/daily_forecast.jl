@@ -78,19 +78,18 @@
 #   the current code_version.
 #
 # Env vars:
-#   OPTIMIZER      'highs' (default, production since cv20) / 'gurobi'
-#                  (development, academic licence) / 'auto'
+#   OPTIMIZER      'highs' (default; the only solver) / 'auto'
 #   INPUT_MODE     'entsoe' (default) / 'weather' — see INPUT TRACKS above
 #   MAX_LEAD_DAYS  furthest lead to attempt, default 7
 #   FORCE_RERUN    'true' to rewrite an existing (market_date, lead, mode)
 #                  slice — at ANY code_version (vintages are otherwise immutable)
 #   ZONES          comma-separated footprint override (FOR TESTING ONLY, e.g.
-#                  a 5-zone footprint when the Gurobi license is unavailable);
+#                  a 5-zone footprint);
 #                  default = the 39-zone EU footprint
 #   CLEARING_MODE  label stored on forecast rows (default 'multi_zone_eu')
 #   SKIP_CLEAR     'true' = run discovery + eligibility logging only, never
 #                  solve (debugging escape hatch; since cv20 the clear runs
-#                  in decomposed mode, which HiGHS solves — no Gurobi needed)
+#                  in decomposed mode, which HiGHS solves)
 
 using Euphemia, Dates, Statistics, LibPQ, DataFrames, DuckDB
 

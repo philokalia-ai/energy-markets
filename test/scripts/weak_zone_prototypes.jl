@@ -42,8 +42,6 @@ ENV["EUPHEMIA_DUCKDB_READONLY"] = "true"
 # Never write into the shared results DB from a prototype run
 ENV["EUPHEMIA_RESULTS_DB"] = get(ENV, "EUPHEMIA_RESULTS_DB",
     joinpath(tempdir(), "weak_zone_proto_results.duckdb"))
-haskey(ENV, "GRB_LICENSE_FILE") ||
-    (ENV["GRB_LICENSE_FILE"] = joinpath(homedir(), "gurobi.lic"))
 
 using Euphemia, Dates
 
@@ -202,7 +200,7 @@ for day in DAYS
     println("\n===== $VARIANT $day =====")
     t0 = time()
     result = run_multi_zone_market_clearing(day;
-        zones=FOOTPRINT, order_method=:merit_order, optimizer="gurobi",
+        zones=FOOTPRINT, order_method=:merit_order, optimizer="highs",
         enrich_network=true, passes=2, save_to_db=false,
         scenario=scenario)
     if result === nothing || isempty(result.market_prices)

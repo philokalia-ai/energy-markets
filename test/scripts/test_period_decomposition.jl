@@ -6,26 +6,26 @@
 # period independently must yield the SAME prices (the duals) as the monolithic
 # solve, while making the 39-zone clear tractable for HiGHS (no license).
 #
-# Guard 1  (correctness): Gurobi monolithic == Gurobi decomposed, bit-exact
+# Guard 1  (correctness): HiGHS monolithic == HiGHS decomposed, bit-exact
 #          zonal/period PRICES (max|Δλ| ≤ 1e-9 €/MWh), at BOTH 60-min (24
 #          periods) and 15-min (96 periods). Flows need NOT match (degenerate
 #          primal / alternative optima), exactly as the repo documents for the
-#          Postgres↔DuckDB residual.
+#          Postgres↔DuckDB residual. (Monolithic HiGHS is tractable since the
+#          cv46 LP certificate; before it this guard needed a commercial MIP solver.)
 # Guard 2  (payoff): with decomposition, optimizer="highs" solves the FULL
 #          39-zone day — prices for all 39 zones, all periods — where monolithic
-#          HiGHS finds no incumbent. Report MAE/max|Δ| vs Gurobi and wall time.
+#          MIP-first HiGHS found no incumbent. Report coverage and wall time.
 #
 # Offline run:
 #   EUPHEMIA_DATA_STORE=duckdb \
 #   EUPHEMIA_DUCKDB_PATH=data/public/euphemia-public.duckdb \
-#   GRB_LICENSE_FILE=/path/to/gurobi.lic \
 #     julia --project=. test/scripts/test_period_decomposition.jl
 #
 # Env knobs:
 #   DAY=2026-04-03         market day
 #   RES=both|60|15         which resolutions to test (default both)
 #   SKIP_HIGHS=true        guard-1 only
-#   SKIP_GUROBI=true       guard-2 only (no baseline to diff against)
+#   SKIP_GUARD1=true       guard-2 only
 # =============================================================================
 
 using Euphemia, Dates, Printf
@@ -33,7 +33,7 @@ using Euphemia, Dates, Printf
 const DAY = Date(get(ENV, "DAY", "2026-04-03"))
 const RES = get(ENV, "RES", "both")
 const SKIP_HIGHS  = lowercase(get(ENV, "SKIP_HIGHS",  "false")) == "true"
-const SKIP_GUROBI = lowercase(get(ENV, "SKIP_GUROBI", "false")) == "true"
+const SKIP_GUARD1 = lowercase(get(ENV, "SKIP_GUARD1", "false")) == "true"
 
 const FOOTPRINT = String[
     "AT", "BE", "BG", "CZ", "DE_LU", "DK1", "DK2", "EE", "ES", "FI", "FR",
@@ -92,16 +92,16 @@ for res in resolutions
 
     entry = Dict{Symbol,Any}()
 
-    # --- Gurobi monolithic + decomposed (guard 1) --------------------------
-    if !SKIP_GUROBI
-        println("\n🟦 Gurobi MONOLITHIC solve...")
+    # --- HiGHS monolithic + decomposed (guard 1) ---------------------------
+    if !SKIP_GUARD1
+        println("\n🟦 HiGHS MONOLITHIC solve...")
         tm = @elapsed rmono = Euphemia.mz_solve_pass(book;
-            optimizer="gurobi", decompose_periods=false)
+            optimizer="highs", decompose_periods=false)
         @printf("   status=%s  solve=%.1fs\n", rmono.status, tm)
 
-        println("\n🟦 Gurobi DECOMPOSED solve...")
+        println("\n🟦 HiGHS DECOMPOSED solve...")
         td = @elapsed rdec = Euphemia.mz_solve_pass(book;
-            optimizer="gurobi", decompose_periods=true)
+            optimizer="highs", decompose_periods=true)
         @printf("   status=%s  solve=%.1fs\n", rdec.status, td)
 
         st = price_stats(rmono.market_prices, rdec.market_prices)
@@ -109,8 +109,8 @@ for res in resolutions
                 st.maxabs, st.mae, st.n, st.missing)
         println("   GUARD 1 ", st.maxabs <= 1e-9 ? "PASS ✅" : "CHECK ⚠️",
                 "  (bar: max|Δλ| ≤ 1e-9)")
-        entry[:gurobi_mono] = rmono
-        entry[:gurobi_dec]  = rdec
+        entry[:mono] = rmono
+        entry[:dec]  = rdec
         entry[:guard1] = st
     end
 
@@ -130,12 +130,6 @@ for res in resolutions
         entry[:highs_time] = th
         entry[:highs_cov] = cov
 
-        if haskey(entry, :gurobi_dec)
-            st = price_stats(entry[:gurobi_dec].market_prices, rhighs.market_prices)
-            @printf("   HiGHS vs Gurobi (decomp): mae=%.4f  max|Δ|=%.4f €/MWh  (n=%d)\n",
-                    st.mae, st.maxabs, st.n)
-            entry[:highs_vs_gurobi] = st
-        end
     end
 
     results[res] = entry
@@ -156,9 +150,6 @@ for res in resolutions
     if haskey(e, :highs_cov)
         @printf(" | HiGHS %d/%d zones, %.1fs", e[:highs_cov].zones_full,
                 length(FOOTPRINT), e[:highs_time])
-        if haskey(e, :highs_vs_gurobi)
-            @printf(", MAE vs Gurobi=%.4f", e[:highs_vs_gurobi].mae)
-        end
     end
     println()
 end

@@ -717,7 +717,7 @@ Save optimization run metadata to track all optimization attempts (successful an
 - `date`: Date of the optimization
 - `order_method`: always `:merit_order` since cv25
 - `model_type`: Model used (:mpcc, :mpcc_multi_zone, :mpcc_iterative, etc.)
-- `optimizer`: Solver used ("highs", "gurobi", "cplex")
+- `optimizer`: Solver used ("highs")
 - `status`: Optimization status (:optimal, :infeasible, :time_limit, etc.)
 - `objective_value`: Final objective value (nothing for failed runs)
 - `solve_time_seconds`: Solution time in seconds (for iterative runs, this is the final MPCC solve time)

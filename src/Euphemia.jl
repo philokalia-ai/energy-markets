@@ -8,27 +8,7 @@ using Dates
 using Distributed
 using Statistics
 
-# Import optimization solvers with error handling
-try
-    using HiGHS
-    global HIGHS_AVAILABLE = true
-catch
-    global HIGHS_AVAILABLE = false
-end
-
-try
-    using Gurobi
-    global GUROBI_AVAILABLE = true
-catch
-    global GUROBI_AVAILABLE = false
-end
-
-try
-    using CPLEX
-    global CPLEX_AVAILABLE = true
-catch
-    global CPLEX_AVAILABLE = false
-end
+using HiGHS                      # the only solver
 
 include("dbutils.jl")
 include("ForecastContext.jl")   # as-of input contract (issue #368): ForecastContext, with_context, asof_audit
@@ -46,116 +26,6 @@ struct DataUnavailableError <: Exception
 end
 
 Base.showerror(io::IO, e::DataUnavailableError) = print(io, "DataUnavailableError: ", e.message)
-
-# =============================================================================
-# SOLVER ENVIRONMENT CACHING SYSTEM
-# =============================================================================
-
-"""
-Global cache for solver environments to avoid repeated initialization overhead.
-Stores environments per solver type for reuse across multiple optimizations.
-"""
-const SOLVER_ENV_CACHE = Dict{String,Any}()
-
-"""
-    get_cached_optimizer(solver_name::String)
-
-Returns an optimizer constructor that reuses cached environments when possible.
-Automatically falls back to standard optimizer for unsupported solvers.
-
-# Arguments
-- `solver_name::String`: "gurobi", "cplex", "highs", etc.
-
-# Returns
-- Optimizer constructor function for use with JuMP Model()
-"""
-function get_cached_optimizer(solver_name::String)
-    lower_name = lowercase(solver_name)
-
-    if lower_name == "gurobi" && GUROBI_AVAILABLE
-        return get_cached_gurobi_optimizer()
-    elseif lower_name == "cplex" && CPLEX_AVAILABLE
-        return get_cached_cplex_optimizer()
-    elseif lower_name == "highs" && HIGHS_AVAILABLE
-        # HiGHS doesn't need caching (no license overhead)
-        return HiGHS.Optimizer
-    else
-        # Fallback for unknown solvers or when specific solver not available
-        if lower_name == "gurobi" && GUROBI_AVAILABLE
-            return Gurobi.Optimizer
-        elseif lower_name == "cplex" && CPLEX_AVAILABLE
-            return CPLEX.Optimizer
-        elseif lower_name == "highs" && HIGHS_AVAILABLE
-            return HiGHS.Optimizer
-        else
-            error("Solver '$solver_name' is not available")
-        end
-    end
-end
-
-"""
-    get_cached_gurobi_optimizer()
-
-Returns a Gurobi optimizer constructor that reuses a cached environment.
-This eliminates the license authentication overhead for subsequent model creations.
-"""
-function get_cached_gurobi_optimizer()
-    if !haskey(SOLVER_ENV_CACHE, "gurobi_env")
-        # Create and cache Gurobi environment once. A failure here means no
-        # usable license — let it propagate so select_solver falls back to
-        # the next solver, instead of returning an optimizer that would
-        # fail at solve time anyway.
-        SOLVER_ENV_CACHE["gurobi_env"] = Gurobi.Env()
-        @info "✅ Gurobi environment cached for session reuse"
-    end
-
-    # Return optimizer constructor that uses cached environment
-    env = SOLVER_ENV_CACHE["gurobi_env"]
-    return () -> Gurobi.Optimizer(env)
-end
-
-"""
-    get_cached_cplex_optimizer()
-
-Returns a CPLEX optimizer constructor that reuses a cached environment.
-Similar to Gurobi caching for license overhead reduction.
-"""
-function get_cached_cplex_optimizer()
-    if !haskey(SOLVER_ENV_CACHE, "cplex_env")
-        try
-            # CPLEX environment caching (if needed - check CPLEX.jl documentation)
-            # This is a placeholder - actual implementation depends on CPLEX.jl API
-            SOLVER_ENV_CACHE["cplex_env"] = true  # Placeholder
-            @info "✅ CPLEX environment cached for session reuse"
-        catch e
-            @warn "Failed to create cached CPLEX environment: $e. Using standard optimizer."
-            return CPLEX.Optimizer
-        end
-    end
-
-    # For now, return standard CPLEX optimizer
-    # TODO: Implement actual CPLEX environment caching if needed
-    return CPLEX.Optimizer
-end
-
-"""
-    clear_solver_cache!()
-
-Clears all cached solver environments. Useful for testing or memory management.
-"""
-function clear_solver_cache!()
-    # Properly dispose of Gurobi environment if it exists
-    if haskey(SOLVER_ENV_CACHE, "gurobi_env")
-        try
-            finalize(SOLVER_ENV_CACHE["gurobi_env"])
-        catch
-            # Ignore errors during cleanup
-        end
-    end
-
-    empty!(SOLVER_ENV_CACHE)
-    @info "Solver environment cache cleared"
-end
 
 function __init__()
     DotEnv.load!(".")
@@ -191,86 +61,16 @@ function __init__()
 end
 
 """
-    select_solver(preferred_solver::String="auto")
+    select_solver(preferred_solver::String="highs") -> (optimizer, "HiGHS")
 
-Automatically selects the best available optimization solver for energy market problems.
-Returns the optimizer constructor for use with JuMP, with environment caching for 
-solvers that benefit from it (like Gurobi).
-
-# Arguments
-- `preferred_solver::String`: "auto" (default), "highs", "gurobi", or "cplex"
-
-# Returns
-- Tuple of (optimizer_constructor, solver_name)
-
-# Examples
-```julia
-optimizer, name = select_solver("highs")
-model = Model(optimizer)
-```
+HiGHS is the only solver. `preferred_solver` stays for call-site compatibility
+(`optimizer=` kwargs, the `OPTIMIZER` env of the runners) and must be `"highs"` or
+`"auto"`; anything else is an error.
 """
-function select_solver(preferred_solver::String="auto")
-    available_solvers = []
-
-    # Check which solvers are available
-    if HIGHS_AVAILABLE
-        push!(available_solvers, ("HiGHS", "highs"))
-    end
-    if GUROBI_AVAILABLE
-        push!(available_solvers, ("Gurobi", "gurobi"))
-    end
-    if CPLEX_AVAILABLE
-        push!(available_solvers, ("CPLEX", "cplex"))
-    end
-
-    if isempty(available_solvers)
-        error("No solvers available! Please install at least one of: HiGHS.jl (recommended), Gurobi.jl, or CPLEX.jl")
-    end
-
-    # Determine priority order based on preference.
-    # "auto" prefers HiGHS (open-source, no license): since cv20 the
-    # EU-footprint clear runs in canonical per-period-decomposed mode, which
-    # HiGHS solves and which is bit-identical across solvers — so the open
-    # default reproduces the published record exactly. Gurobi (10-100x
-    # faster on the MONOLITHIC coupled MIP, benchmarked 137.6s vs 1.1s on a
-    # 5-zone book; academic license here) remains the development option via
-    # optimizer="gurobi".
-    auto_order = [("HiGHS", "highs"), ("Gurobi", "gurobi"), ("CPLEX", "cplex")]
-    auto_available = filter(s -> s in available_solvers, auto_order)
-
-    solvers_to_try = if preferred_solver == "auto"
-        auto_available
-    elseif lowercase(preferred_solver) == "highs" && HIGHS_AVAILABLE
-        [("HiGHS", "highs"); filter(x -> x[1] != "HiGHS", available_solvers)]
-    elseif lowercase(preferred_solver) == "gurobi" && GUROBI_AVAILABLE
-        [("Gurobi", "gurobi"); filter(x -> x[1] != "Gurobi", available_solvers)]
-    elseif lowercase(preferred_solver) == "cplex" && CPLEX_AVAILABLE
-        [("CPLEX", "cplex"); filter(x -> x[1] != "CPLEX", available_solvers)]
-    elseif preferred_solver != "auto"
-        @warn "Preferred solver '$preferred_solver' not available. Using auto-selection."
-        auto_available
-    else
-        auto_available
-    end
-
-    # Try solvers in order - using cached optimizers when available
-    for (i, (solver_display_name, solver_key)) in enumerate(solvers_to_try)
-        try
-            # Get cached optimizer (falls back to standard if caching fails)
-            optimizer = get_cached_optimizer(solver_key)
-
-            # If this isn't the first solver tried, announce the successful fallback
-            if i > 1
-                @info "✅ Using $solver_display_name solver as fallback"
-            end
-
-            return (optimizer, solver_display_name)
-        catch e
-            @warn "$solver_display_name failed to initialize: $(typeof(e))"
-        end
-    end
-
-    error("All available solvers failed to initialize!")
+function select_solver(preferred_solver::String="highs")
+    lowercase(preferred_solver) in ("highs", "auto") ||
+        error("optimizer=\"$preferred_solver\" is not supported: HiGHS is the only solver")
+    return (HiGHS.Optimizer, "HiGHS")
 end
 
 include("MarketOrders.jl")
@@ -351,7 +151,6 @@ export compute_net_imports_from_flows, compute_max_flow_change, apply_damping  #
 export compute_max_price_change, compute_max_relative_flow_change  # Price-based convergence
 
 # Solver Environment Caching
-export get_cached_optimizer, clear_solver_cache!
 
 # Data store configuration (Postgres | DuckDB extract)
 export configure_data_store!

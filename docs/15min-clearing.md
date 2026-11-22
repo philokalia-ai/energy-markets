@@ -14,7 +14,7 @@ run_multi_zone_market_clearing(day; zones, order_method=:merit_order,
 
 # 15-minute coupled clear (96 periods)
 run_multi_zone_market_clearing(day; zones, order_method=:merit_order,
-    enrich_network=true, optimizer="gurobi", clear_resolution_minutes=15)
+    enrich_network=true, clear_resolution_minutes=15)
 ```
 
 `clear_resolution_minutes` (default `60`) threads through the whole merit-order
@@ -104,7 +104,7 @@ nonlinear clearing).
 
 ## Performance
 
-39-zone EU footprint, 2026-04-03, `enrich_network=true, passes=2`, Gurobi:
+39-zone EU footprint, 2026-04-03, `enrich_network=true, passes=2`, Gurobi (measured before its removal in November 2026; HiGHS is now the only solver):
 
 | Resolution | Periods | Solve time | Total (incl. book build) | Status |
 |-----------|---------|-----------|--------------------------|--------|

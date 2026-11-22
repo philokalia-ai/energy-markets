@@ -1222,7 +1222,7 @@ function with_net_positions(tc::TransferCapacity, date::Date)
     # 2026-08-26: without its own dual in the market-coupling price condition
     # the constraint is inconsistent with the bilateral complementarity (an
     # interior bilateral flow forces equal prices while the hub's net-position
-    # bound should carry the rent) and Gurobi grinds for >40 min on one day.
+    # bound should carry the rent) and the MIP grinds for >40 min on one day.
     # The shipped treatment is the bilateral-maxima SCALING in the enriched
     # build (see _scale_maxbex_by_net_position!), which keeps the formulation.
     if jao_atc_enabled() && !isempty(get(ENV, "EUPHEMIA_ENABLE_JAO_NETPOS_CONSTRAINT", ""))

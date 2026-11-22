@@ -12,7 +12,7 @@
 # - START_DATE: Start date in YYYY-MM-DD format
 # - END_DATE: End date in YYYY-MM-DD format
 # - PARALLEL: Boolean for parallel UC processing (true/false)
-# - OPTIMIZER: Optimizer to use (highs/gurobi/cplex)
+# - OPTIMIZER: Optimizer to use (highs; the only solver)
 # - MAX_WORKERS: Maximum parallel workers (0 for auto-detect)
 # - ORDER_METHOD: Order generation method (uc_based/alternative)
 # - FORCE_RERUN: Force UC re-solve, bypassing cache (true/false)
@@ -41,16 +41,6 @@ max_workers = if max_workers_input == "0"
     nothing
 else
     parse(Int, max_workers_input)
-end
-
-# Limit workers to 2 for Gurobi (WLS license session baseline constraint)
-if optimizer == "gurobi" && use_parallel
-    gurobi_max = 2
-    if max_workers === nothing || max_workers > gurobi_max
-        println("⚠️ Gurobi WLS license limits concurrent sessions to $gurobi_max")
-        println("   Capping max_workers from $(max_workers === nothing ? "auto" : max_workers) to $gurobi_max")
-        max_workers = gurobi_max
-    end
 end
 
 println("🌍 Starting multi-zone market clearing")

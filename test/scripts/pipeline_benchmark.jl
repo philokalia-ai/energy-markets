@@ -1,6 +1,6 @@
 # Benchmark: pipeline vs. today's day-parallel 2-worker mode, on the DuckDB
 # extract. Runs the same 10-day window both ways (baseline first, then
-# pipeline — NEVER concurrently, to stay within the Gurobi WLS 2-session cap)
+# pipeline — never concurrently, so the two do not compete for cores)
 # and prints wall times, solver utilization, and H1-2026 / 3.5-year projections.
 #
 #   EUPHEMIA_DATA_STORE=duckdb EUPHEMIA_DUCKDB_PATH=<extract> \
@@ -39,7 +39,7 @@ end
 bw <= 0 && (bw = min(10, max(1, Sys.CPU_THREADS ÷ 8)))
 days = collect(sd:Day(1):ed)
 N = length(days)
-opt = "gurobi"
+opt = "highs"
 
 Euphemia.DATA_STORE[] == :duckdb ||
     error("benchmark expects the DuckDB extract backend (set EUPHEMIA_DATA_STORE=duckdb)")

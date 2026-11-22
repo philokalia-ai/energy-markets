@@ -4,7 +4,7 @@
 #
 #   julia --project=. test/scripts/cv17_bench.jl
 #
-# Offline (DuckDB extract, read-only), Gurobi, enrich_network + passes=2 —
+# Offline (DuckDB extract, read-only), HiGHS, enrich_network + passes=2 —
 # exactly the run_multi_zone_market_clearing configuration of the cv17 EU
 # backfill. Writes zone,ts,price CSV (resumable) for weak_zone_eval.py.
 #
@@ -19,8 +19,6 @@ ENV["EUPHEMIA_DUCKDB_PATH"] = EXTRACT_PATH
 ENV["EUPHEMIA_DUCKDB_READONLY"] = "true"
 ENV["EUPHEMIA_RESULTS_DB"] = get(ENV, "EUPHEMIA_RESULTS_DB",
     joinpath(tempdir(), "cv17_bench_results.duckdb"))
-haskey(ENV, "GRB_LICENSE_FILE") ||
-    (ENV["GRB_LICENSE_FILE"] = joinpath(homedir(), "gurobi.lic"))
 
 using Euphemia, Dates
 
@@ -74,7 +72,7 @@ for day in DAYS
     println("\n===== $VARIANT $day =====")
     t0 = time()
     result = run_multi_zone_market_clearing(day;
-        zones=FOOTPRINT, order_method=:merit_order, optimizer="gurobi",
+        zones=FOOTPRINT, order_method=:merit_order, optimizer="highs",
         enrich_network=true, passes=2, save_to_db=false)
     if result === nothing || isempty(result.market_prices)
         @warn "no prices for $day"

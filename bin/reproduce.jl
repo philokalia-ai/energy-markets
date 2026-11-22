@@ -15,7 +15,7 @@
 #                            is ~24h — available but not the default)
 #
 # Common options:
-#   --optimizer highs|gurobi   default highs (no license needed; Gurobi optional)
+#   --optimizer highs          default highs (the only solver)
 #   --order-method merit_order (default; the counterfactual path)
 #   --workers N|auto           parallelize across DAYS with N worker processes
 #                              (default 0 = sequential; auto = CPU_THREADS ÷ 2,
@@ -28,12 +28,11 @@
 #                              producer/consumer pipeline: book-builder workers
 #                              build the 39-zone two-pass books ahead in memory
 #                              while a small pool of solver workers stays
-#                              saturated with Gurobi (it "never sits"). Resumable
+#                              saturated (it "never sits"). Resumable
 #                              per day. Single-zone jobs still run sequentially.
 #         [--book-workers M]   book-builder processes (default min(10, CPU÷8))
-#         [--solver-workers S] concurrent Gurobi solver processes (default 2 =
-#                              WLS session cap; use 1 to share the license with
-#                              another running backfill)
+#         [--solver-workers S] concurrent solver processes (default 2; use 1
+#                              alongside another running backfill)
 #
 # Backend: uses the DuckDB extract auto-detected by the module, or set
 #   EUPHEMIA_DATA_STORE=duckdb EUPHEMIA_DUCKDB_PATH=/path/to/extract.duckdb
@@ -126,9 +125,9 @@ function clear_multi_zone(zones::Vector{String}, days; order_method::Symbol, opt
     println("  [$ok/$(length(days)) days]")
 end
 
-# MPCC time budget per solver: Gurobi closes the 39-zone MIP in ~10-60 s, so the
-# library default (900 s) is ample. HiGHS needs far longer to find its first
-# incumbent on the 39-zone complementarity MIP.
+# MPCC time budget: an explicit `--optimizer highs` gets 3600 s (a MIP after a failed
+# LP certificate can need long to find an incumbent on the 39-zone complementarity
+# MIP); the default "auto" keeps the library's 900 s.
 mpcc_budget(optimizer::String) = optimizer == "highs" ? 3600.0 : 900.0
 
 # --------------------------------------------------------------------------
@@ -371,9 +370,7 @@ end
 # CLI
 # --------------------------------------------------------------------------
 function parse_args(argv)
-    # Default optimizer "auto": Gurobi when installed, else HiGHS. Single-zone
-    # clears run fine on HiGHS; the 39-zone coupled MIP currently needs Gurobi
-    # to find an incumbent (HiGHS: none within 1 h — see docs/reproducibility.md).
+    # Default optimizer "auto" = HiGHS, the only solver.
     opts = Dict{String,Any}("tier" => nothing, "optimizer" => "auto",
         "order_method" => :merit_order, "zones" => FOOTPRINT, "single" => nothing,
         "start" => nothing, "stop" => nothing, "workers" => "0",
@@ -411,7 +408,7 @@ end
 function main(argv)
     opts = parse_args(argv)
     tier = opts["tier"]
-    tier === nothing && (println("usage: julia --project=. bin/reproduce.jl [--quick | --range S E [--zones ...] [--single Z] | --full] [--optimizer highs|gurobi] [--workers N|auto] [--pipeline [--book-workers M] [--solver-workers S]]"); return 1)
+    tier === nothing && (println("usage: julia --project=. bin/reproduce.jl [--quick | --range S E [--zones ...] [--single Z] | --full] [--optimizer highs] [--workers N|auto] [--pipeline [--book-workers M] [--solver-workers S]]"); return 1)
     om = opts["order_method"]
     # Resolve "auto" to the concrete solver now, so the per-solver MPCC budget
     # and the report metadata are exact.
@@ -456,7 +453,7 @@ function main(argv)
     t0 = time()
     # --pipeline: run the multi-zone EU jobs through the producer/consumer
     # pipeline (book workers build ahead while a small pool of solver workers
-    # stays saturated with Gurobi). Single-zone jobs (no two-pass structure) run
+    # stays saturated). Single-zone jobs (no two-pass structure) run
     # on the ordinary sequential path. Days already saved are skipped (resume).
     if opts["pipeline"]
         for (zone, days) in single_jobs
