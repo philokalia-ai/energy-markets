@@ -202,7 +202,6 @@
           footprint defaults to the <strong>:v3</strong> rule — the fastest admissible estimate.</p>
       </div>
       <div id="boundary-flowrule" class="boundary-flowrule"></div>
-      <div id="boundary-flowrule-audit" class="boundary-audit"></div>
     </div>
 
     <!-- E · Propagation (trade-wedge / flows tie-in) -->
@@ -399,7 +398,7 @@
       </div>
       <div class="chart-wrap solver-pass" id="solver-pass"></div>
       <p class="chart-sub solver-caption">A two-pass approximation, not a full storage
-        optimisation. Since cv44 pumped storage is energy-limited — a daily budget from its own
+        optimisation. Pumped storage is energy-limited — a daily budget from its own
         recent output, spread over the day by a full-day pass before the hourly clear — but pumping
         demand is still not bid, so the charge half of the cycle remains a known gap, kept visible
         (see the model map on the <a href="./about.html#model-map">About page</a>).</p>
@@ -660,7 +659,7 @@
       <div id="b5-outside" class="method-outside"></div>
     </div>
 
-    <!-- B6 · Calibration honesty — observed/declared census + cv-ledger timeline -->
+    <!-- B6 · Calibration honesty — observed/declared census -->
     <div class="chart-card method-section" id="method-b6">
       <div class="chart-head">
         <h2 class="chart-title">6 · Calibration honesty — constructed, calibrated, never regressed</h2>
@@ -669,13 +668,9 @@
           were calibrated — chosen with price error in view on a calibration window, many then
           checked on held-out days inside the same period — and the code flags each one as
           price-informed.
-          <strong>No price is regressed.</strong> Below: the observed/declared
-          census, then the calibration history — every shipped mechanism with its measured Set A /
-          Set B deltas, and the NO-SHIPs kept visible beside them.</p>
+          <strong>No price is regressed.</strong> Below: the observed/declared census.</p>
       </div>
       <div id="b6-census" class="method-census"></div>
-      <h3 class="panel-title" style="margin:18px 0 8px">The calibration timeline</h3>
-      <div id="b6-ledger" class="method-ledger"></div>
     </div>
   </section>
 
@@ -722,10 +717,7 @@
         <strong>Resolution:</strong> <em>15-min</em> scores the same hourly forecast, repeated on its
         four quarters, against native quarter-hour (PT15M) SDAC prices. It covers only zone-days
         whose settled prices are natively quarter-hourly; other zones show “—”.
-        <strong>AT and DE_LU (2026-11-17):</strong> all hourly scores, including history, now use the
-        SDAC auction (sequence&nbsp;1) as the “actual”, the same auction as the 15-min scores; before,
-        the hourly target there was the early EXAA auction. Effect of the switch on MAE:
-        AT 85.16&nbsp;→&nbsp;88.83 and DE_LU 58.46&nbsp;→&nbsp;59.17 €/MWh on the live lead-1 physics forecast (2026-09-14&nbsp;→&nbsp;11-13); on the cv44 record (2024-07&nbsp;→&nbsp;2026-06) AT 18.00&nbsp;→&nbsp;20.43 and DE_LU 19.09&nbsp;→&nbsp;20.20. Hover a 15-min MAE
+        Hover a 15-min MAE
         for its <em>shape floor</em>: how far quarter-hour prices moved around their hour's mean,
         measured after the fact. It describes intra-hour movement; it is neither a skill score nor
         a share of the MAE.
@@ -757,14 +749,7 @@
           more does everyone pay?</strong> The two runs differ only in the scenario, so the
           price delta is causal within the model — and because the model is a competitive
           counterfactual, these are competitive-market estimates.
-          The coupled cases 3 and 4 below are cv37 runs. A
-          sampled rerun on cv43 — with a new "bring your own power" arm — is in the repository
-          (e.g. Greece +6.98&nbsp;€/MWh for the data center at cv43 vs +7.10 at cv37; a merchant
-          CCGT would need to offer ≈&nbsp;193&nbsp;% of the data center's load before the Greek price
-          is no higher than today's, cv43). <strong>Confirmed on cv44</strong> (stride-8 re-check, the same
-          89 days on both versions): Greece +7.00&nbsp;€/MWh (cv43 +6.96), s*&nbsp;≈&nbsp;192&nbsp;% (193&nbsp;%),
-          others' extra cost per €1 of data-center spend €1.57 (€1.49); cold ironing essentially
-          unchanged (EU-wide +0.140 vs +0.136&nbsp;€/MWh).
+          Each case names the model version it was run on.
           Full records, scripts and provenance:
           <a href="https://github.com/philokalia-ai/energy-markets/tree/main/docs/experiments/scenario-exercises">docs/experiments/scenario-exercises</a>.
         </p>
@@ -1139,8 +1124,7 @@ run_pipelined_backfill(Date(2023,7,1):Day(1):Date(2025,6,30), FOOTPRINT;
         bound: the nearest external estimate, ICCT's (2023) TEN-T ≥&nbsp;5,000&nbsp;GT passenger and
         cruise segment, is 1.72&nbsp;TWh/yr on a narrower scope (EU ports only, 2019); the two have
         not yet been reconciled.</p>
-      <p class="case-note">Model: cv17 (built through the pipeline, so with <code>:d0</code> same-day flows, not the <code>:v2</code> rule intended) — the same engine and flow
-        rule as the live EU product. Deltas are <em>paired</em> (identical coverage, inner-joined on
+      <p class="case-note">Model: cv17 (<code>:d0</code> same-day flows). Deltas are <em>paired</em> (identical coverage, inner-joined on
         the 17,159 priced hours per zone), so baseline error cancels. Full record, per-zone table and
         the AIS-to-zone mapping:
         <a href="https://github.com/philokalia-ai/energy-markets/tree/main/docs/experiments/scenario-exercises">docs/experiments/scenario-exercises</a>.</p>

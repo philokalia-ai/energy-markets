@@ -102,8 +102,8 @@ ok(/MUST_RUN_SRMC_THRESHOLD/.test(byId("b2-schematic").textContent) &&
    "B2: tranche schematic + must-run economics rendered");
 ok(/FR/.test(byId("b5-zone").textContent) && byId("b5-controls").querySelectorAll(".method-chip").length > 10,
    "B5: per-zone explorer shows FR + a zone picker");
-ok(/no_ship|NO-SHIP/.test(byId("b6-ledger").textContent) && /cv31/.test(byId("b6-ledger").textContent),
-   "B6: cv-ledger timeline shows shipped + NO-SHIP rows at equal prominence");
+ok(byId("b6-ledger").textContent === "",
+   "B6: no version-history timeline is rendered (web/CLAUDE.md: current methods only)");
 ok(byId("b6-census").querySelectorAll(".method-census-col").length === 2,
    "B6: observed/declared census has both columns");
 

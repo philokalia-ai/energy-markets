@@ -831,7 +831,7 @@
       if (b.carbon_source === "uka") {
         sub.appendChild(cardField("Carbon leg", ":uka — the correct UK-ETS price (carbon.uka_price), falling back to EUA on the offline extract. The EUA/UKA split between the two GB books is a real honesty detail, not noise."));
       } else if (b.counterparty === "GB") {
-        sub.appendChild(cardField("Carbon leg", ":eua — the Viking book's validated cv21 config."));
+        sub.appendChild(cardField("Carbon leg", ":eua — the Viking book's validated config."));
       }
       var capText = b.capability_mode === "atc_capped"
         ? "the day's offered Day-ahead ATC, capped at the trailing-366d demonstrated max, with a p95-per-4h-block floor on ATC gaps."
@@ -930,9 +930,6 @@
       });
       wt.appendChild(tb); p.appendChild(wt);
     }
-    if (eff.fr_corr_record !== undefined) {
-      p.appendChild(el("p", null, "FR full-year corr on the cv23 record: " + fmt(eff.fr_corr_record, 2) + "."));
-    }
     if (eff.note) p.appendChild(el("p", "boundary-effect-note", eff.note + "."));
     if (eff.spillovers && eff.spillovers.length) {
       p.appendChild(el("p", "day-comment", "Spillovers: " + eff.spillovers.join("; ") + "."));
@@ -1003,9 +1000,7 @@
      ["D-2 observed blend",
       "Average that with the D-2 observed flow — the fastest admissible signal, catching a regime change within 48h."],
      ["D-7 Norwegian recency",
-      "On Norwegian reservoir borders, add the :v2 D-7 recency component."],
-     [":d0 is legacy only",
-      "Same-day observed flow is the SEE legacy / byte-identity path ONLY — never the footprint default. Tomorrow's flow does not exist at auction time."]
+      "On Norwegian reservoir borders, add the :v2 D-7 recency component."]
     ].forEach(function (s, i) {
       var box = el("div", "boundary-flow-step");
       box.appendChild(el("span", "boundary-flow-num", String(i + 1)));
@@ -1015,19 +1010,11 @@
       box.appendChild(body);
       steps.appendChild(box);
     });
-    host.appendChild(el("p", "day-comment", "Footprint default: :" + fr.footprint_default +
-      " (" + (fr.ledger || "").toUpperCase() + "). Legacy: :" + fr.legacy + "."));
+    host.appendChild(el("p", "day-comment", "Footprint rule: :" + fr.footprint_default +
+      ". Every term is known before the auction gate; tomorrow's flow is never used."));
     host.appendChild(steps);
     if (d.v3) host.appendChild(el("p", "day-comment", ":v3 in one line — " + d.v3));
 
-    var audit = $("boundary-flowrule-audit");
-    if (audit) {
-      audit.textContent = "";
-      var box = el("div", "boundary-audit-box");
-      box.appendChild(el("h4", "boundary-exhibit-title", "We caught our own lookahead — the cv25 audit"));
-      box.appendChild(el("p", null, fr.audit_note));
-      audit.appendChild(box);
-    }
   }
 
   // ---- E · propagation / trade-wedge ---------------------------------------
@@ -5749,11 +5736,11 @@
     return typeof v === "number" ? fmt(v, 3) : String(v);
   }
 
-  // ---- B6: observed/declared census + cv-ledger timeline --------------------
+  // ---- B6: observed/declared census ----------------------------------------
   function renderB6() {
-    var census = $("b6-census"), ledger = $("b6-ledger");
+    var census = $("b6-census");
     if (!census) return;
-    census.textContent = ""; ledger.textContent = "";
+    census.textContent = "";
     var prov = state.methodology.provenance || {};
     var obs = [], dec = [];
     Object.keys(prov).sort().forEach(function (k) {
@@ -5787,30 +5774,6 @@
     cols.appendChild(col("declared — named, OOS-validated", "prov-declared", dec));
     census.appendChild(cols);
 
-    var rows = state.methodology.cv_ledger || [];
-    rows.forEach(function (r) {
-      var item = el("div", "method-ledger-item ledger-" + (r.status || "shipped"));
-      var head = el("div", "method-ledger-head");
-      head.appendChild(el("span", "method-ledger-cv", "cv" + r.cv));
-      head.appendChild(el("span", "method-ledger-status " + (r.status === "no_ship" ? "st-noship" : "st-ship"),
-        r.status === "no_ship" ? "NO-SHIP" : "shipped"));
-      head.appendChild(el("span", "method-ledger-char", r.characteristic));
-      item.appendChild(head);
-      if (r.change) item.appendChild(el("p", "method-ledger-change", r.change));
-      if (r.measured) {
-        var mline = Object.keys(r.measured).map(function (k) {
-          return k + ": " + r.measured[k];
-        }).join(" · ");
-        item.appendChild(el("p", "method-ledger-measured", mline));
-      }
-      if (r.doc) {
-        var a = el("a", "method-ledger-doc", r.doc);
-        a.href = "https://github.com/philokalia-ai/energy-markets/tree/main/" + r.doc;
-        a.target = "_blank"; a.rel = "noopener";
-        item.appendChild(a);
-      }
-      ledger.appendChild(item);
-    });
   }
 
   function renderMethod() {

@@ -1117,6 +1117,12 @@ html, body { overflow-x: hidden; }
 .segmented button { white-space: nowrap; flex: none; }
 
 @media (max-width: 680px) {
+  /* nothing may run past the screen edge (html/body clip it): wrap tabs and chips,
+     let filters and selects shrink; long segmented strips scroll inside themselves */
+  .tabs { flex-wrap: wrap; overflow-x: visible; }
+  .filter { min-width: 0; max-width: 100%; }
+  .filter select { max-width: 100%; }
+  .chip { white-space: normal; }
   .site-header { gap: 0.7rem; padding: 0.65rem 0.9rem; }
   .site-nav { gap: 0.9rem; }
   .site-nav a { font-size: 0.85rem; }
@@ -1633,20 +1639,6 @@ html, body { overflow-x: hidden; }
 .method-census-col ul { margin: 0; padding-left: 16px; font-size: 12px; }
 .method-census-col li { margin: 3px 0; }
 .method-census-src { color: var(--text-muted); }
-.method-ledger { position: relative; margin-top: 8px; padding-left: 14px; border-left: 2px solid var(--border); }
-.method-ledger-item { margin: 0 0 16px; padding-left: 10px; position: relative; }
-.method-ledger-item::before { content: ""; position: absolute; left: -21px; top: 4px; width: 10px; height: 10px; border-radius: 50%; background: var(--accent); border: 2px solid var(--page); }
-.method-ledger-item.ledger-no_ship::before { background: var(--text-muted); }
-.method-ledger-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-.method-ledger-cv { font-weight: 700; color: var(--heading); }
-.method-ledger-status { font-size: 10.5px; font-weight: 600; padding: 1px 7px; border-radius: 999px; }
-.method-ledger-status.st-ship { background: color-mix(in srgb, var(--status-good) 18%, transparent); color: var(--status-good); }
-.method-ledger-status.st-noship { background: color-mix(in srgb, var(--text-muted) 20%, transparent); color: var(--text-muted); }
-.method-ledger-char { font-weight: 600; }
-.method-ledger-change { font-size: 12.5px; color: var(--text-secondary); margin: 4px 0; }
-.method-ledger-measured { font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; margin: 2px 0; }
-.method-ledger-doc { font-size: 12px; color: var(--accent); text-decoration: none; }
-.method-ledger-doc:hover { text-decoration: underline; }
 
 /* Component A — "explain this block" affordance + popover */
 .bt-explain { font: inherit; font-size: 11px; line-height: 1; padding: 1px 4px; border: 1px solid var(--border);
@@ -1755,7 +1747,7 @@ html, body { overflow-x: hidden; }
 .boundary-blank { font-family: var(--mono); color: var(--text-muted); font-style: italic; }
 
 .boundary-doublecount, .boundary-callout, .boundary-roadmap-panel, .boundary-lesson,
-.boundary-effect, .boundary-audit-box {
+.boundary-effect {
   border: 1px solid var(--border); border-radius: 9px; padding: 11px 13px; margin: 12px 0;
   background: color-mix(in srgb, var(--accent) 5%, transparent); font-size: 12.5px; }
 .boundary-callout { background: color-mix(in srgb, var(--status-warn, var(--accent)) 9%, transparent);
@@ -1786,8 +1778,6 @@ html, body { overflow-x: hidden; }
   color: #fff; font-family: var(--mono); font-weight: 700; font-size: 12px;
   display: inline-flex; align-items: center; justify-content: center; }
 .boundary-flow-step-title { font-family: var(--mono); font-size: 12px; color: var(--heading); font-weight: 700; }
-.boundary-audit-box { background: color-mix(in srgb, var(--status-warn, var(--accent)) 9%, transparent);
-  border-color: color-mix(in srgb, var(--status-warn, var(--accent)) 40%, transparent); }
 
 /* E · propagation */
 .boundary-prop-chain { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 12px 0; }
