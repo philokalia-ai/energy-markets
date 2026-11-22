@@ -79,6 +79,7 @@ using .MarketOrders: MarketOrder, SimpleOrder, BlockOrder, LinkedBlockOrder, Exc
     LinkedHourlyOrder
 
 include("cv45_knobs.jl")       # cv45 per-change env knobs (cv45_on)
+include("cv46_physics.jl")     # cv46 physics component switches (cv46_on)
 include("Generators.jl")
 include("FuelTypeParameters.jl")
 include("Loads.jl")

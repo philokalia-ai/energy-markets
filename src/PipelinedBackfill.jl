@@ -669,6 +669,12 @@ function _run_pipelined_backfill_impl(days, zones::Vector{String}=String[];
         for k in ("EUPHEMIA_CV45", CV45_KNOBS...)
             haskey(ENV, k) && push!(extract_env, k => ENV[k])
         end
+        # cv46 research switches (src/cv46_physics.jl and the cv46-blocks
+        # constructions): forward the whole EUPHEMIA_CV46_ prefix, so a switch
+        # added later cannot silently miss the workers.
+        for k in sort!(collect(keys(ENV)))
+            startswith(k, "EUPHEMIA_CV46_") && push!(extract_env, k => ENV[k])
+        end
         # Workers share the source extract read-only; the coordinator keeps the
         # source read-only too (so it can coexist with them) but opts into result
         # writes, which land in the SEPARATE writable results_db file.
