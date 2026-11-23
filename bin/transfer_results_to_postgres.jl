@@ -384,6 +384,20 @@ function written_days(con, o)
     return Date.(df.d)
 end
 
+"""Refuse (before any Postgres mutation) when a referenced optimization run lies outside the slice: another
+code version, or an optimization_date outside start..end. Local check on the results DuckDB's rows."""
+function check_runs_in_slice(runs::DataFrame, o)
+    isempty(runs) && return nothing
+    cv = o["code_version"]; d0 = o["start"]; d1 = o["end"]
+    bad = [r.id for r in eachrow(runs) if r.code_version != cv ||
+           !(d0 <= Date(r.optimization_date) <= d1)]
+    isempty(bad) || error("transfer refused: $(length(bad)) referenced optimization_runs " *
+        "fall outside the slice (code_version=$cv, $d0..$d1), e.g. ids $(first(bad, 5)). " *
+        "Nothing was written.")
+    println("referenced optimization_runs all inside the slice (cv$cv, $d0..$d1)")
+    return nothing
+end
+
 "Transfer one (clearing_mode, code_version, day window) slice inside Postgres: runs, prices, flows, verify."
 function transfer_window!(con, o)
     bound_window!(con, o)   # never an unbounded Postgres delete
