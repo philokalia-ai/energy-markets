@@ -43,44 +43,46 @@ net-import lags/analogues); aggregated generation 400 (365-day hydro availabilit
 7-day stale override, 7-day feed probe) plus the stale-feed extension.
 """
 const FILL_SPECS = FillSpec[
-    _fs("entsoe", "day_ahead_total_load_forecast", :window; zone_pred=_ZONE_AREA,
+    _fs("entsoe", "day_ahead_total_load_forecast", :window;   # all zones: HOURLY_LOAD_FC_SQL (map weights)
         ts_col="date_time_utc", back=31, ahead=2, sort_by="area_map_code, date_time_utc"),
-    _fs("entsoe", "actual_total_load", :window; zone_pred=_ZONE_AREA,
+    _fs("entsoe", "actual_total_load", :window;   # all zones: the realized-horizon MAX(date) probes
         ts_col="date_time_utc", back=400, ahead=0, sort_by="area_map_code, date_time_utc"),
     _fs("entsoe", "generation_forecasts_for_wind_and_solar", :window; zone_pred=_ZONE_AREA,
         ts_col="date_time_utc", back=31, ahead=2, sort_by="area_map_code, date_time_utc"),
-    _fs("entsoe", "energy_prices", :window;
-        zone_pred="map_code = ANY(\$ZONES) AND contract_type = 'Day-ahead'",
+    _fs("entsoe", "energy_prices", :window;   # all zones: da_raw_rows / native_q15_actuals read every BZN
+        zone_pred="contract_type = 'Day-ahead'",
         ts_col="date_time_utc", back=31, ahead=1, sort_by="map_code, date_time_utc"),
+    # all borders: _da_ever_borders (all history), the trailing 7-day Day-ahead read and the zone
+    # discovery take every border, so the DA sentinel covers every border too
     _fs("entsoe", "offered_transfer_capacities_implicit", :da_sentinel;
-        zone_pred="(out_map_code = ANY(\$ATCZONES) OR in_map_code = ANY(\$ATCZONES))",
         ts_col="date_time_utc", back=31, ahead=1, sort_by="out_map_code, in_map_code, date_time_utc"),
     _fs("entsoe", "offered_transfer_capacities_explicit", :window;
-        zone_pred="(out_map_code = ANY(\$ATCZONES) OR in_map_code = ANY(\$ATCZONES))",
         ts_col="date_time_utc", back=31, ahead=1, sort_by="out_map_code, in_map_code, date_time_utc"),
     _fs("jao", "max_exchanges", :window; ts_col="date_time_utc", back=31, ahead=1,
         sort_by="ccr, border_from, border_to, date_time_utc"),
     _fs("jao", "hub_net_positions", :window; ts_col="date_time_utc", back=31, ahead=1,
         sort_by="ccr, hub, date_time_utc"),
+    # all pairs: _net_imports_day_relation_at and _fbmc_capability take every BZN–BZN pair, incl. the
+    # ones touching no footprint zone (AL–ME/XK, BA–HR/ME, GE–…, UA_IPS–…, GB–IE_SEM, MK–XK)
     _fs("entsoe", "physical_flows", :window;
-        zone_pred="(regexp_replace(in_area_map_code, '_IPS\$', '') = ANY(\$ZONES) OR regexp_replace(out_area_map_code, '_IPS\$', '') = ANY(\$ZONES))",
         ts_col="date_time_utc", back=400, ahead=0, sort_by="in_area_map_code, out_area_map_code, date_time_utc"),
-    _fs("entsoe", "aggregated_generation_per_type", :window; zone_pred=_ZONE_AREA,
+    _fs("entsoe", "aggregated_generation_per_type", :window;   # all zones: _type_p95_all_zones, _hydro_avail
         ts_col="date_time_utc", back=400, ahead=0, sort_by="area_map_code, production_type, date_time_utc"),
-    _fs("entsoe", "aggregated_hydro_storage_filling_rate", :full; zone_pred=_ZONE_AREA,
+    _fs("entsoe", "aggregated_hydro_storage_filling_rate", :full;   # all zones: the inputs panel
         sort_by="area_map_code, year, week"),
-    _fs("entsoe", "production_and_generation_units", :full; zone_pred=_ZONE_AREA,
+    _fs("entsoe", "production_and_generation_units", :full;   # all zones: installed capacity, units export
         sort_by="area_map_code, generation_unit_code"),
+    # every asset: _day_outages_intervals takes every message overlapping the day
     _fs("entsoe", "unavailability_of_production_and_generation_units", :overlap;
-        zone_pred="asset_code IN ($_UNITS_OF_ZONES UNION SELECT production_unit_code FROM entsoe.production_and_generation_units WHERE area_map_code = ANY(\$ZONES))",
         back=1, ahead=1, sort_by="asset_code, start_outage_utc",
         casts=Dict("start_outage_utc" => "TIMESTAMP", "end_outage_utc" => "TIMESTAMP")),
     _fs("entsoe", "unavailability_in_the_transmission_grid", :overlap; back=1, ahead=1,
         sort_by="out_area_map_code, in_area_map_code, start_outage_utc",
         casts=Dict("start_outage_utc" => "TIMESTAMP", "end_outage_utc" => "TIMESTAMP",
                    "version_publication_timestamp_utc" => "TIMESTAMP")),
+    # every unit: the outage reader's stale-override EXISTS runs per outage asset (every asset); the
+    # stale-feed extension below the window stays per zone
     _fs("entsoe", "actual_generation_output_per_generation_unit", :per_unit;
-        zone_pred="generation_unit_code IN ($_UNITS_OF_ZONES)",
         ts_col="date_time_utc", back=75, ahead=0, sort_by="generation_unit_code, date_time_utc"),
     _fs("yfinance", "ttf_f", :full; sort_by="date"),
     _fs("yfinance", "eua_co2", :full; sort_by="date"),
@@ -92,7 +94,7 @@ const FILL_SPECS = FillSpec[
     # the results DB (single-process jobs read it back there, incl. their own cv32 writes) AND
     # copied into the inputs file for processes that cannot open the results DB (pipelined book
     # workers, EUPHEMIA_RESULTS_READBACK=inputs).
-    _fs("simulations", "unit_firms", :full; zone_pred="zone = ANY(\$ZONES)"),
+    _fs("simulations", "unit_firms", :full),   # all zones: the units export
     # GB_FR_BOOK (FR boundary, every clear) anchors on uka_price(); may be absent in a source
     # (FILL_OPTIONAL: then recorded absent and the reader's EUA fallback applies, as against it)
     _fs("carbon", "uka_price", :full),
@@ -123,11 +125,7 @@ end
 _time_pred(col, wins, tz) = "(" * join(("($col >= $(_pg_day(lo, tz)) AND $col < $(_pg_day(hi, tz)))"
                                         for (lo, hi) in wins), " OR ") * ")"
 
-# The offered-ATC readers' code list (`_create_transfer_capacity_enriched`): the footprint plus the
-# aggregate codes it remaps onto a sub-zone (e.g. `IT` → `IT-NORTH`).
-_atc_codes(zones) = sort(unique(vcat(String.(zones), collect(keys(build_aggregate_remap(zones))))))
-
-_zone_sub(pred, zones) = replace(pred, "\$ATCZONES" => _pg_zones(_atc_codes(zones)), "\$ZONES" => _pg_zones(zones))
+_zone_sub(pred, zones) = replace(pred, "\$ZONES" => _pg_zones(zones))
 
 # A timestamp column as naive UTC, independent of the source session's TimeZone: timestamptz via
 # AT TIME ZONE 'UTC'; text (production's outage start/end) via ::timestamp (no zone involved);
@@ -196,8 +194,11 @@ end
 # or, for offline proofs, a DuckDB extract attached READ_ONLY as `src` (the same filter SQL,
 # through the backend's dialect rewrite, with every source table qualified `src.`).
 const _FILL_SOURCE = Ref{Symbol}(:postgres)
-_qualify_src(sql) = replace(_duckdb_rewrite(sql),
-    r"(?<![\w.])(entsoe|jao|yfinance|epias|simulations|weather|information_schema)\." => s"src.\1.")
+# Qualify BEFORE the dialect rewrite: under a run-local fill the rewrite redirects read-back tables
+# (simulations.forecast_prices, …) to results_db, so a rewrite-first seed read the empty results table
+# instead of the source; an `src.`-qualified name is never redirected.
+_qualify_src(sql) = _duckdb_rewrite(replace(sql,
+    r"(?<![\w.])(entsoe|jao|yfinance|epias|simulations|weather|information_schema|carbon)\." => s"src.\1."))
 _src_from(sql) = _FILL_SOURCE[] === :postgres ? "postgres_query('pg', $(_pg_str(sql)))" :
                                                  "($(_qualify_src(sql)))"
 _pg_rows(con, sql) = collect(DBInterface.execute(con, "SELECT * FROM $(_src_from(sql))"))
@@ -352,6 +353,17 @@ const FORECAST_EXTRA_SPECS = FillSpec[
 ]
 
 """
+    env_int(name, default) -> Int
+
+An integer environment setting where an EMPTY or blank value means unset: a workflow passes
+`\${{ inputs.x }}`, which is "" on a schedule and on a dispatch that leaves the input blank, and
+`parse(Int, "")` threw (the scheduled publish died at the fill, review of #472 #1)."""
+function env_int(name::AbstractString, default::Integer)
+    v = strip(get(ENV, name, ""))
+    return isempty(v) ? Int(default) : parse(Int, v)
+end
+
+"""
     fill_profile(profile; start, stop, asof, zones) -> (days, zones, specs, seeds)
 
 `:record`: delivery days `start:stop`, the clearing tables. `:daily_forecast` / `:export`:
@@ -362,7 +374,8 @@ copied into results.duckdb for read-back.
 """
 function fill_profile(profile::Symbol; start::Union{Nothing,Date}=nothing, stop::Union{Nothing,Date}=nothing,
                       asof::Date=Date(Dates.now(Dates.UTC)), zones::Vector{String},
-                      inputs_back_days::Int=0, days_list::Union{Nothing,Vector{Date}}=nothing)
+                      inputs_back_days::Int=0, days_list::Union{Nothing,Vector{Date}}=nothing,
+                      needs::Union{Nothing,NamedTuple}=nothing)
     if profile === :record
         days = days_list !== nothing ? sort(unique(days_list)) :
                (start === nothing || stop === nothing) ? error("fill profile :record needs start/stop or a day list") :
@@ -375,9 +388,25 @@ function fill_profile(profile::Symbol; start::Union{Nothing,Date}=nothing, stop:
                  (table="input_corrections", where=ic, win=fill_windows(days, 1, 2))]
     elseif profile in (:daily_forecast, :export)
         days = collect((asof - Day(1)):Day(1):(asof + Day(8)))
+        # The readers' windows depend on the data (review of #472 #2/#7), so the CLI resolves them from
+        # the source first (`resolve_forecast_needs`); an unresolved call is an error, never a guess.
+        needs === nothing && error("fill profile :$profile needs `needs` from resolve_forecast_needs " *
+                                   "(map_start, history_start)")
+        # actual prices: the scorer's oldest unscored slice, the exporters' days and the naive baselines
+        # (oldest live score − 8) all lie within the forecast history: its oldest market date − 8, − 1
+        # more for the Athens window's start on the previous UTC day. Floor: the clearing readers' 31.
+        prices_back = needs.history_start === nothing ? 31 :
+                      max(31, Dates.value(days[1] - (needs.history_start - Day(9))))
+        # day-ahead load forecast: the map exporters' weights (HOURLY_LOAD_FC_SQL) over the last
+        # EXPORT_MAP_DAYS distinct forecast market dates, from map_start − 1
+        load_back = needs.map_start === nothing ? 0 : Dates.value(days[1] - (needs.map_start - Day(1)))
         specs = FillSpec[s.table == "energy_prices" ?
                          _fs("entsoe", "energy_prices", :window; zone_pred=s.zone_pred, ts_col=s.ts_col,
-                             back=400, ahead=1, sort_by=s.sort_by) : s for s in FILL_SPECS]
+                             back=prices_back, ahead=1, sort_by=s.sort_by) :
+                         (s.table == "day_ahead_total_load_forecast" && load_back > s.back) ?
+                         _fs(s.schema, s.table, s.kind; zone_pred=s.zone_pred, ts_col=s.ts_col, ts_tz=s.ts_tz,
+                             back=load_back, ahead=s.ahead, sort_by=s.sort_by, casts=s.casts) : s
+                         for s in FILL_SPECS]
         append!(specs, FORECAST_EXTRA_SPECS)
         push!(specs, _ic_spec(4, 1))   # [asof-5, asof+10), the seed's window
         # export_prediction_inputs.jl reads INPUTS_BACK_DAYS back on these tables
@@ -413,7 +442,7 @@ function fill_profile(profile::Symbol; start::Union{Nothing,Date}=nothing, stop:
         (start === nothing || stop === nothing) && error("fill profile :rescore needs start and stop")
         days = collect(start:Day(1):stop)
         specs = FillSpec[_fs("entsoe", "energy_prices", :window;
-                             zone_pred="map_code = ANY(\$ZONES) AND contract_type = 'Day-ahead'",
+                             zone_pred="contract_type = 'Day-ahead'",   # the scorer's actuals read every zone
                              ts_col="date_time_utc", back=1, ahead=1, sort_by="map_code, date_time_utc")]
         zf = "bidding_zone = ANY($(_pg_zones(zones)))"
         md = "market_date BETWEEN $(_pg_str(string(start)))::date AND $(_pg_str(string(stop)))::date"
@@ -474,6 +503,47 @@ function seed_run_results!(con, seeds)
         println("  seed results_db.simulations.$(sd.table): $n rows, $(round(time() - t0, digits=1)) s"); flush(stdout)
     end
     return out
+end
+
+"Market dates in the map exporters' window (bin/export_forecast_json.jl, bin/export_web_parquet.jl `MAP_DAYS`)."
+const EXPORT_MAP_DAYS = 60
+
+"""
+    resolve_forecast_needs(; conn_str="", source=:postgres, source_path="") -> (map_start, history_start)
+
+The data-dependent windows of the daily-forecast/export jobs' readers, resolved inside the fill step
+through the same attach (review of #472 #2/#7): `map_start` = the oldest of the last
+`EXPORT_MAP_DAYS` distinct `forecast_prices` market dates (the map exporters' window, whose load
+weights read back from `map_start − 1`); `history_start` = the oldest market date in
+`forecast_prices` ∪ `forecast_scores` (scorer, exporters, naive baselines). `nothing` when there is no
+forecast history (an offline source without the tables counts as none)."""
+function resolve_forecast_needs(; conn_str::AbstractString="", source::Symbol=:postgres,
+                                source_path::AbstractString="")
+    db = DuckDB.DB()
+    con = DBInterface.connect(db)
+    try
+        if source === :postgres
+            attach_postgres!(con, conn_str; alias="pg", read_only=true)
+        else
+            DBInterface.execute(con, "ATTACH $(_pg_str(source_path)) AS src (READ_ONLY)")
+        end
+        _FILL_SOURCE[] = source
+        if source === :duckdb
+            has = Set(String(r.table_name) for r in DBInterface.execute(con,
+                "SELECT table_name FROM duckdb_tables() WHERE database_name = 'src' AND schema_name = 'simulations'"))
+            ("forecast_prices" in has && "forecast_scores" in has) || return (map_start=nothing, history_start=nothing)
+        end
+        m = _pg_rows(con, "SELECT MIN(market_date) AS d FROM (SELECT DISTINCT market_date FROM " *
+                          "simulations.forecast_prices ORDER BY market_date DESC LIMIT $EXPORT_MAP_DAYS) s")
+        h = _pg_rows(con, "SELECT LEAST((SELECT MIN(market_date) FROM simulations.forecast_prices), " *
+                          "(SELECT MIN(market_date) FROM simulations.forecast_scores)) AS d")
+        d(r) = (isempty(r) || ismissing(r[1].d)) ? nothing : Date(r[1].d)
+        return (map_start=d(m), history_start=d(h))
+    finally
+        _FILL_SOURCE[] = :postgres
+        DBInterface.close!(con)
+        DuckDB.close(db)
+    end
 end
 
 """

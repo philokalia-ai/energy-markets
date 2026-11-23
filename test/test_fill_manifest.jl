@@ -8,6 +8,8 @@ using Test, Dates, Euphemia, DataFrames
 using DuckDB
 import DuckDB.DBInterface as DBInterface
 
+const NONEEDS = (map_start=nothing, history_start=nothing)   # no forecast history
+
 @testset "fill manifest: windows and Postgres SQL" begin
     E = Euphemia
     # union of [d - back, d + ahead + 1), merged
@@ -21,7 +23,9 @@ import DuckDB.DBInterface as DBInterface
     sql, w = E.fill_pg_query(spec("day_ahead_total_load_forecast"), cols, [Date(2026, 1, 10)], ["GR", "BG"])
     @test w == [(Date(2025, 12, 10), Date(2026, 1, 13))]
     @test occursin("\"date_time_utc\" AT TIME ZONE 'UTC' AS \"date_time_utc\"", sql)
-    @test occursin("area_map_code = ANY(ARRAY['GR', 'BG']::text[])", sql)
+    @test !occursin("area_map_code = ANY", sql)          # all zones (HOURLY_LOAD_FC_SQL reads every zone)
+    @test occursin("area_map_code = ANY(ARRAY['GR', 'BG']::text[])",       # the RES forecasts keep the zone filter
+                   E.fill_pg_query(spec("generation_forecasts_for_wind_and_solar"), cols, [Date(2026, 1, 10)], ["GR", "BG"])[1])
     @test occursin("date_time_utc >= ('2025-12-10'::date::timestamp AT TIME ZONE 'UTC')", sql)
     @test occursin("date_time_utc < ('2026-01-13'::date::timestamp AT TIME ZONE 'UTC')", sql)
 
@@ -241,7 +245,7 @@ end
     E = Euphemia
     days = [Date(2025, 5, 27), Date(2025, 6, 26)]
     for (prof, kw) in ((:record, (days_list=days,)), (:retro, (start=Date(2025, 5, 27), stop=Date(2025, 5, 29))),
-                       (:daily_forecast, (asof=Date(2025, 5, 27),)), (:export, (asof=Date(2025, 5, 27),)))
+                       (:daily_forecast, (asof=Date(2025, 5, 27), needs=NONEEDS)), (:export, (asof=Date(2025, 5, 27), needs=NONEEDS)))
         p = E.fill_profile(prof; zones=["IT-Sardinia"], kw...)
         sp = only(filter(s -> s.table == "input_corrections", p.specs))
         sd = only(filter(s -> s.table == "input_corrections", p.seeds))
@@ -278,7 +282,7 @@ end
     E = Euphemia
     @test "carbon" in E._GUARDED_SCHEMAS
     for (prof, kw) in ((:record, (days_list=[Date(2025, 5, 27)],)), (:retro, (start=Date(2025, 5, 27), stop=Date(2025, 5, 28))),
-                       (:daily_forecast, (asof=Date(2025, 5, 27),)), (:export, (asof=Date(2025, 5, 27),)))
+                       (:daily_forecast, (asof=Date(2025, 5, 27), needs=NONEEDS)), (:export, (asof=Date(2025, 5, 27), needs=NONEEDS)))
         @test count(s -> (s.schema, s.table) == ("carbon", "uka_price"), E.fill_profile(prof; zones=["FR"], kw...).specs) == 1
     end
     prev = (E.DATA_STORE[], E.DUCKDB_PATH[], E.DUCKDB_READ_ONLY[], E.DUCKDB_RESULTS_WRITABLE[])
@@ -330,35 +334,129 @@ end
     end
 end
 
-@testset "offered ATC fill covers the readers' code list (footprint + remapped aggregates)" begin
+@testset "all-zone readers: their tables are filled without a zone filter (runner 45228277028)" begin
     E = Euphemia
-    @test E._atc_codes(["FR", "IT-NORTH"]) == ["FR", "IT", "IT-NORTH"]
-    @test E._atc_codes(["FR", "GR"]) == ["FR", "GR"]                  # no representative in the footprint
-    cols = [("date_time_utc", "timestamp with time zone"), ("out_map_code", "text"), ("in_map_code", "text"),
-            ("capacity_mw", "double precision"), ("contract_type", "text")]
-    for t in ("offered_transfer_capacities_explicit", "offered_transfer_capacities_implicit")
-        sql, _ = E.fill_pg_query(only(filter(s -> s.table == t, E.FILL_SPECS)), cols, [Date(2026, 11, 19)], ["FR", "IT-NORTH"])
-        @test occursin("ARRAY['FR', 'IT', 'IT-NORTH']::text[]", sql)
-        @test !occursin("ATCZONES", sql)
+    spec(t) = only(filter(s -> s.table == t, E.FILL_SPECS))
+    cols = [("date_time_utc", "timestamp with time zone"), ("area_map_code", "text"), ("out_map_code", "text"),
+            ("in_map_code", "text"), ("in_area_map_code", "text"), ("out_area_map_code", "text"),
+            ("generation_unit_code", "text"), ("asset_code", "text"), ("start_outage_utc", "text"),
+            ("end_outage_utc", "text"), ("contract_type", "text"), ("zone", "text")]
+    for t in ("physical_flows", "aggregated_generation_per_type", "production_and_generation_units",
+              "unavailability_of_production_and_generation_units", "actual_generation_output_per_generation_unit",
+              "day_ahead_total_load_forecast", "actual_total_load", "aggregated_hydro_storage_filling_rate",
+              "offered_transfer_capacities_implicit", "offered_transfer_capacities_explicit", "unit_firms", "energy_prices")
+        sql, _ = E.fill_pg_query(spec(t), cols, [Date(2026, 11, 19)], ["FR", "GR"])
+        @test !occursin("ARRAY['FR', 'GR']", sql)                 # no zone/unit predicate on the zone list
     end
-    # offline fill: an IT↔ME explicit row (aggregate ↔ non-footprint) is copied, as the reader reads it
+    @test occursin("contract_type = 'Day-ahead'", E.fill_pg_query(spec("energy_prices"), cols, [Date(2026, 11, 19)], ["FR"])[1])
+    # the one per-zone reader set keeps its filter
+    @test occursin("ARRAY['FR', 'GR']", E.fill_pg_query(spec("generation_forecasts_for_wind_and_solar"), cols, [Date(2026, 11, 19)], ["FR", "GR"])[1])
+    # offline fill: flows on pairs touching no footprint zone are copied (the net-import reader takes every pair)
     dir = mktempdir(); src = joinpath(dir, "src.duckdb")
     let db = DuckDB.DB(src), con = DBInterface.connect(db)
         DBInterface.execute(con, "CREATE SCHEMA entsoe")
-        DBInterface.execute(con, "CREATE TABLE entsoe.offered_transfer_capacities_explicit (date_time_utc TIMESTAMP, out_map_code VARCHAR, in_map_code VARCHAR, capacity_mw DOUBLE, contract_type VARCHAR)")
-        for (o, i) in (("IT", "ME"), ("ME", "IT"), ("FR", "IT-NORTH"), ("RS", "ME"))
-            DBInterface.execute(con, "INSERT INTO entsoe.offered_transfer_capacities_explicit VALUES (TIMESTAMP '2026-11-19 10:00:00', '$o', '$i', 500.0, 'Day-ahead')")
+        DBInterface.execute(con, "CREATE TABLE entsoe.physical_flows (date_time_utc TIMESTAMP, in_area_map_code VARCHAR, in_area_type_code VARCHAR, out_area_map_code VARCHAR, out_area_type_code VARCHAR, flow_mw DOUBLE)")
+        for (i, o) in (("AL", "ME"), ("UA_IPS", "MD"), ("GR", "BG"), ("GB", "IE_SEM"))
+            DBInterface.execute(con, "INSERT INTO entsoe.physical_flows VALUES (TIMESTAMP '2026-11-19 10:00:00', '$i', 'BZN', '$o', 'BZN', 100.0)")
         end
         DBInterface.close!(con); DuckDB.close(db)
     end
     fill = joinpath(dir, "inputs.duckdb")
     redirect_stdout(devnull) do
-        E.fill_run_duckdb(fill; days=[Date(2026, 11, 19)], zones=["FR", "IT-NORTH"], source=:duckdb, source_path=src,
-                          specs=[only(filter(s -> s.table == "offered_transfer_capacities_explicit", E.FILL_SPECS))])
+        E.fill_run_duckdb(fill; days=[Date(2026, 11, 19)], zones=["GR", "BG"], source=:duckdb, source_path=src,
+                          specs=[spec("physical_flows")])
     end
-    got = let db = DuckDB.DB(fill; readonly=true), con = DBInterface.connect(db)
-        r = sort([(x.out_map_code, x.in_map_code) for x in DBInterface.execute(con, "SELECT out_map_code, in_map_code FROM entsoe.offered_transfer_capacities_explicit")])
+    n = let db = DuckDB.DB(fill; readonly=true), con = DBInterface.connect(db)
+        r = collect(DBInterface.execute(con, "SELECT count(*) AS n FROM entsoe.physical_flows"))[1].n
         DBInterface.close!(con); DuckDB.close(db); r
     end
-    @test got == [("FR", "IT-NORTH"), ("IT", "ME"), ("ME", "IT")]      # RS↔ME: outside every reader's filter
+    @test n == 4
+end
+
+@testset "env_int: an empty workflow input means unset (review of #472 #1)" begin
+    E = Euphemia
+    k = "EUPHEMIA_TEST_ENV_INT_472"
+    withenv(k => "") do; @test E.env_int(k, 0) == 0; @test E.env_int(k, 30) == 30; end
+    withenv(k => "  ") do; @test E.env_int(k, 7) == 7; end
+    withenv(k => nothing) do; @test E.env_int(k, 30) == 30; end
+    withenv(k => "45") do; @test E.env_int(k, 0) == 45; end
+    withenv(k => "x") do; @test_throws ArgumentError E.env_int(k, 0); end
+    # the export profile with the scheduled publish's empty INPUTS_BACK_DAYS = no widening
+    p0 = withenv("INPUTS_BACK_DAYS" => "") do
+        E.fill_profile(:export; asof=Date(2026, 11, 20), zones=["GR"], inputs_back_days=E.env_int("INPUTS_BACK_DAYS", 0), needs=NONEEDS)
+    end
+    p_ = E.fill_profile(:export; asof=Date(2026, 11, 20), zones=["GR"], needs=NONEEDS)
+    @test [(s.table, s.back) for s in p0.specs] == [(s.table, s.back) for s in p_.specs]
+end
+
+@testset "daily-forecast/export windows from the readers' real need (review of #472 #2, #7)" begin
+    E = Euphemia
+    asof = Date(2026, 11, 20)
+    @test_throws ErrorException E.fill_profile(:daily_forecast; asof=asof, zones=["GR"])   # unresolved: loud
+    spec(p, t) = only(filter(s -> s.table == t, p.specs))
+    lo(p, t) = first(E.fill_windows(p.days, spec(p, t).back, spec(p, t).ahead))[1]
+    # map window from 2026-09-14 (53 days back), forecast history from 2025-07-28 (480 days back)
+    n = (map_start=Date(2026, 9, 14), history_start=Date(2025, 7, 28))
+    for prof in (:daily_forecast, :export)
+        p = E.fill_profile(prof; asof=asof, zones=["GR"], needs=n)
+        @test lo(p, "day_ahead_total_load_forecast") <= n.map_start - Day(1)        # HOURLY_LOAD_FC_SQL [sd-1, …)
+        @test lo(p, "day_ahead_total_load_forecast") == n.map_start - Day(1)
+        @test lo(p, "energy_prices") == n.history_start - Day(9)                    # naive −8, Athens window −1
+    end
+    # no forecast history: the clearing readers' own windows (31 days), nothing wider
+    p0 = E.fill_profile(:daily_forecast; asof=asof, zones=["GR"], needs=NONEEDS)
+    @test spec(p0, "energy_prices").back == 31
+    @test spec(p0, "day_ahead_total_load_forecast").back == only(filter(s -> s.table == "day_ahead_total_load_forecast", E.FILL_SPECS)).back
+    # a recent map window never narrows the base window
+    p1 = E.fill_profile(:export; asof=asof, zones=["GR"], needs=(map_start=asof - Day(3), history_start=asof - Day(10)))
+    @test spec(p1, "day_ahead_total_load_forecast").back == 31 && spec(p1, "energy_prices").back == 31
+    @test E.EXPORT_MAP_DAYS == 60
+
+    # resolver on an offline source: 70 distinct forecast dates, scores reaching further back
+    dir = mktempdir(); src = joinpath(dir, "src.duckdb")
+    let db = DuckDB.DB(src), con = DBInterface.connect(db)
+        DBInterface.execute(con, "CREATE SCHEMA simulations")
+        DBInterface.execute(con, "CREATE TABLE simulations.forecast_prices (market_date DATE, bidding_zone VARCHAR)")
+        DBInterface.execute(con, "CREATE TABLE simulations.forecast_scores (market_date DATE, bidding_zone VARCHAR)")
+        for k in 0:69   # every other day: the window is the last 60 DISTINCT dates, not 60 calendar days
+            DBInterface.execute(con, "INSERT INTO simulations.forecast_prices VALUES (?, 'GR')", Any[Date(2026, 11, 19) - Day(2k)])
+        end
+        DBInterface.execute(con, "INSERT INTO simulations.forecast_scores VALUES (DATE '2025-10-01', 'GR')")
+        DBInterface.close!(con); DuckDB.close(db)
+    end
+    r = E.resolve_forecast_needs(; source=:duckdb, source_path=src)
+    @test r.map_start == Date(2026, 11, 19) - Day(2 * 59)
+    @test r.history_start == Date(2025, 10, 1)
+    bare = joinpath(dir, "bare.duckdb"); DuckDB.close(DuckDB.DB(bare))
+    @test E.resolve_forecast_needs(; source=:duckdb, source_path=bare) == (map_start=nothing, history_start=nothing)
+end
+
+@testset "offline seed reads the SOURCE's read-back tables while a fill store is open" begin
+    E = Euphemia
+    prev = (E.DATA_STORE[], E.DUCKDB_PATH[], E.DUCKDB_READ_ONLY[], E.DUCKDB_RESULTS_WRITABLE[], E.RESULTS_DB_PATH[])
+    dir = mktempdir()
+    src = joinpath(dir, "src.duckdb")
+    let db = DuckDB.DB(src), con = DBInterface.connect(db)
+        DBInterface.execute(con, "CREATE SCHEMA simulations")
+        DBInterface.execute(con, "CREATE TABLE simulations.forecast_prices (market_date DATE, date_time_utc TIMESTAMP, bidding_zone VARCHAR, price_eur_mwh DOUBLE, prediction_made_utc TIMESTAMP, lead_days INTEGER, code_version INTEGER, input_mode VARCHAR, is_retro BOOLEAN)")
+        DBInterface.execute(con, "INSERT INTO simulations.forecast_prices VALUES (DATE '2026-11-10', TIMESTAMP '2026-11-10 10:00:00', 'GR', 99.0, TIMESTAMP '2026-11-09 06:30:00', 1, 45, 'weather', false)")
+        DBInterface.close!(con); DuckDB.close(db)
+    end
+    inputs = joinpath(dir, "inputs.duckdb"); DuckDB.close(DuckDB.DB(inputs))
+    E.mark_run_local_fill!(inputs; windows=[("entsoe", "actual_total_load", Date(1900, 1, 1), Date(2999, 12, 31))])
+    try
+        E.RESULTS_DB_PATH[] = joinpath(dir, "results.duckdb")
+        E.configure_data_store!(backend=:duckdb, duckdb_path=inputs, read_only=true, results_writable=true)
+        con = E._duckdb_connection(); E._ensure_results_attached(con); E.ensure_run_results_tables!()
+        @test E._FILL_GUARD[] !== nothing                       # the redirect is armed
+        DBInterface.execute(con, "ATTACH '$src' AS src (READ_ONLY)")
+        E._FILL_SOURCE[] = :duckdb
+        s = redirect_stdout(devnull) do; E.seed_run_results!(con, [(table="forecast_prices", where="")]); end
+        @test only(s).rows == 1                                  # was 0: read results_db through the redirect
+        @test E._results_exec("SELECT price_eur_mwh AS p FROM results_db.simulations.forecast_prices").p == [99.0]
+    finally
+        E._FILL_SOURCE[] = :postgres
+        try; E._duckdb_drop_connection!(); E.RESULTS_DB_PATH[] = prev[5]
+             E.configure_data_store!(backend=prev[1], duckdb_path=prev[2], read_only=prev[3], results_writable=prev[4]); catch; end
+    end
 end

@@ -3,7 +3,7 @@
 # never become "UTC day clearing FAILED" with the day silently missing. DB-free: temp DuckDB files.
 # Runs in its own process (it configures the data store and loads bin/daily_forecast.jl):
 #   julia --project=. test/test_fill_guard_outer.jl
-using Test, Dates, DuckDB
+using Test, Dates, DuckDB, DataFrames
 
 const TMP = mktempdir()
 const INPUTS = joinpath(TMP, "inputs.duckdb")
@@ -60,4 +60,14 @@ end
         clear_utc_day!(cache, Date(2026, 11, 26))
     end
     @test r === nothing && cache[Date(2026, 11, 26)] === nothing
+end
+
+@testset "naive_parts_or_nothing does not swallow a FillGuardError (review of #472 #7)" begin
+    isdefined(@__MODULE__, :da_target_actuals) || include(joinpath(@__DIR__, "scripts", "eu_eval_metrics.jl"))
+    include(joinpath(@__DIR__, "..", "bin", "naive_baselines.jl"))
+    lock(() -> Euphemia._duckdb_drop_connection!(), Euphemia._DUCKDB_LOCK)
+    Euphemia.configure_data_store!(backend=:duckdb, duckdb_path=INPUTS, read_only=true, results_writable=true)
+    scores = DataFrame(z=["GR"], lead_days=[1], mode=["weather"], market_date=[Date(2026, 11, 20)])
+    # the sim read-back (forecast_prices, unseeded results DB) / the actuals (not in this fill) raise
+    @test_throws Euphemia.FillGuardError redirect_stdout(devnull) do; naive_parts_or_nothing(scores); end
 end

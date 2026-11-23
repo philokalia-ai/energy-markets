@@ -270,6 +270,7 @@ function naive_parts_or_nothing(scores::AbstractDataFrame)
                 "$(round(time() - t0; digits=1)) s")
         return parts
     catch e
+        Euphemia._rethrow_fill_guard(e)   # a fill miss fails the export, never "no naive fields"
         @warn "naive baselines failed — board exported without naive fields" exception = (e, catch_backtrace())
         return nothing
     end

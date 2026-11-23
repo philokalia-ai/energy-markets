@@ -79,10 +79,19 @@ function main(argv)
         start = Euphemia.resolve_rescore_start(; zones=zones, conn_str=conn, source=source, source_path=source_path)
         println("FILL rescore --start auto resolved to $start (first forecast_prices market_date for the zones)")
     end
-    ibd = parse(Int, get(ENV, "INPUTS_BACK_DAYS", "0"))
+    ibd = Euphemia.env_int("INPUTS_BACK_DAYS", 0)   # empty (schedule / blank dispatch input) = unset
     dl = haskey(a, "days") ? Date.(split(a["days"], ",")) : nothing
+    # daily-forecast / export: the readers' data-dependent windows, resolved from where the forecast
+    # tables live (the seed source: RESULTS_SOURCE_CONN_STR on a test bed, else ENERGY_CONN_STR)
+    needs = nothing
+    if profile in (:daily_forecast, :export)
+        sc = source === :postgres ? (isempty(get(ENV, "RESULTS_SOURCE_CONN_STR", "")) ? conn : ENV["RESULTS_SOURCE_CONN_STR"]) : ""
+        needs = Euphemia.resolve_forecast_needs(; conn_str=sc, source=source, source_path=source_path)
+        println("FILL $profile needs: map window from $(something(needs.map_start, "none")), " *
+                "forecast history from $(something(needs.history_start, "none"))")
+    end
     p = Euphemia.fill_profile(profile; start=start, stop=stop, asof=asof, zones=zones, inputs_back_days=ibd,
-                              days_list=dl)
+                              days_list=dl, needs=needs)
     mkpath(out)
     for f in ("inputs.duckdb", "results.duckdb")
         ispath(joinpath(out, f)) && error("$(joinpath(out, f)) exists; a run directory is filled once")
@@ -151,6 +160,8 @@ function main(argv)
                 # (pinned to UTC; attach_postgres! refuses anything else); scanner_timezone: the fill's
                 # DuckDB connection
                 "source_timezone" => source_tz, "pg_timezone" => source_tz, "scanner_timezone" => scanner_tz,
+                "map_start" => needs === nothing || needs.map_start === nothing ? nothing : string(needs.map_start),
+                "history_start" => needs === nothing || needs.history_start === nothing ? nothing : string(needs.history_start),
                 "absent_in_source" => absent,
                 "windows" => windows,
                 "seeds" => [Dict("table" => s.table, "rows" => s.rows, "seconds" => round(s.seconds, digits=2)) for s in seeded])
