@@ -2191,16 +2191,20 @@ function create_merit_order_book(
             firm_of = get_firm_of(bidding_zone)
             sctx = (tagged_orders=tagged, zone=bidding_zone, day=day,
                     timeslots=target_timeslots, load_by_time=load_by_time,
-                    renewable_by_time=renewable_by_time, firm_of=firm_of)
+                    renewable_by_time=renewable_by_time, firm_of=firm_of,
+                    strategies=strategies)
             result = strategist(sctx)
             # Accept either Vector{Tuple{SimpleOrder,String}} or a plain
             # Vector{SimpleOrder} (re-tagged "STRATEGIST").
             tagged = Tuple{SimpleOrder,String}[
                 x isa Tuple ? (x[1], x[2]) : (x, "STRATEGIST") for x in result]
-            # The strategist REPLACES the ladder, so the source strategy labels no
-            # longer map; the whole replacement set is labelled "strategist"
-            # (scenario path — not the capture/backfill path).
-            strategies = fill("strategist", length(tagged))
+            # A strategist that returns (order, tag, strategy) triples keeps its
+            # labels: the storage-family split (_split_storage_families) selects
+            # members by label, so an all-"strategist" relabel would silently
+            # drop pumped storage / reservoir families from the book. Otherwise
+            # the whole replacement set is labelled "strategist" (as before).
+            strategies = all(x -> x isa Tuple && length(x) >= 3, result) && !isempty(result) ?
+                String[String(x[3]) for x in result] : fill("strategist", length(tagged))
             # Recount from the replacement set so summary stats stay accurate
             supply_orders_count = count(t -> t[1].type == :supply, tagged)
             demand_orders_count = count(t -> t[1].type == :demand, tagged)
