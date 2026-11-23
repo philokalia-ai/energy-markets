@@ -6,6 +6,13 @@ summary; the internals live here.
 
 ### Data store: Postgres or a DuckDB extract
 
+**Owner rule (2026-11-23): DuckDB always sits between Postgres and Julia.**
+- Julia never queries Postgres, except the one step that fills DuckDB from Postgres (a bulk copy).
+- Every Julia read (inputs, books, production pipelines, backfills, research) goes to DuckDB.
+- Results go the same way back: Julia writes to DuckDB, and a bulk transfer moves them to Postgres.
+- New code that opens a Postgres connection from Julia for anything else is wrong, whatever it saves.
+- Existing direct Postgres reads in `src/` are debt to migrate, not a pattern to copy.
+
 By default the library reads from the live Postgres `energy` database. It can
 instead read from a **self-contained DuckDB extract** — a single `.duckdb`
 file that mirrors the same `schema.table` names, so both single-zone
