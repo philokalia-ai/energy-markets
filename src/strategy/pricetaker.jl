@@ -138,8 +138,18 @@ Price-taker result at prices `P` (the asset's zone). `profit` €/day (retailer:
 load); `rev` DA revenue; `dev_mwh` repaired (re-traded) MWh; `starts`; `fam` accepted families; `S` surpluses.
 """
 function evaluate(a, orders::AbstractVector{<:MarketOrder}, P::Vector{Float64}, day::Date; res::Int, pen::Float64=0.0)
-    T = length(P); dt = res / 60
     ratio, fam, S = accept(orders, P, day; res=res)
+    return settle(a, orders, ratio, P, day; res=res, pen=pen, fam=fam, S=S)
+end
+
+"""
+    settle(asset, orders, ratio, P, day; res, pen=0.0) -> NamedTuple
+
+Physical settlement of a GIVEN acceptance (`ratio` per order, e.g. from a re-clear) at prices `P`.
+"""
+function settle(a, orders::AbstractVector{<:MarketOrder}, ratio::AbstractVector{<:Real}, P::Vector{Float64}, day::Date;
+                res::Int, pen::Float64=0.0, fam=Dict{String,Float64}(), S=Dict{String,Float64}())
+    T = length(P); dt = res / 60
     x = sold(orders, ratio, T, day; res=res)
     rev = sum(P .* x) * dt
     extra = (starts=0, eod_mwh=0.0)
