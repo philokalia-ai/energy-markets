@@ -116,7 +116,7 @@ if PHASE == "check"
         ic = pg("SELECT corrected_mw FROM simulations.input_corrections"); @test ic.corrected_mw == [900.0]
         sc = pg("SELECT mae, mae_q15, n_q15 FROM simulations.forecast_scores")
         @test nrow(sc) == 1 && sc.mae[1] == 4.0 && sc.mae_q15[1] == 6.0 && sc.n_q15[1] == 96
-        tl = pg("SELECT COUNT(*) AS n FROM simulations.transfer_log"); @test tl.n[1] == 9
+        tl = pg("SELECT COUNT(*) AS n FROM simulations.transfer_log"); @test tl.n[1] == 8
         tz = pg("SELECT MIN(date_time_utc AT TIME ZONE 'UTC') AS t FROM simulations.forecast_prices WHERE market_date = \$1", Any[MD])
         @test DateTime(tz.t[1]) == DateTime(MD - Day(1), Time(22))      # naive UTC → timestamptz kept the instant
         st = pg("SELECT COUNT(*) AS n FROM information_schema.tables WHERE table_name LIKE '\\_p96t\\_%'")

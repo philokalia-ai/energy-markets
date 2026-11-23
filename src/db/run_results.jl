@@ -59,6 +59,14 @@ const _RUN_RESULTS_DDL = [
     """CREATE TABLE IF NOT EXISTS results_db.simulations.input_corrections (
         bidding_zone VARCHAR NOT NULL, target VARCHAR NOT NULL, date_time_utc TIMESTAMP NOT NULL,
         corrected_mw DOUBLE, model_tag VARCHAR, transfer_op_id BIGINT)""",
+    # Append-only copy of the rows each forecast_slice op wrote (by op): a later op of the same run may delete
+    # them from forecast_prices locally (e.g. a supersede), but the transfer must replay every op with the rows it
+    # wrote, so Postgres sees the same intermediate state (and the same supersede backup) as the run did.
+    """CREATE TABLE IF NOT EXISTS results_db.simulations.transfer_forecast_rows (
+        transfer_op_id BIGINT NOT NULL, market_date DATE NOT NULL, date_time_utc TIMESTAMP NOT NULL,
+        bidding_zone VARCHAR NOT NULL, price_eur_mwh DOUBLE NOT NULL, prediction_made_utc TIMESTAMP NOT NULL,
+        lead_days INTEGER NOT NULL, clearing_mode VARCHAR, code_version INTEGER NOT NULL, input_mode VARCHAR NOT NULL,
+        is_retro BOOLEAN NOT NULL, reset_tag VARCHAR, retro_of_utc TIMESTAMP)""",
     "CREATE SEQUENCE IF NOT EXISTS results_db.simulations.transfer_ops_seq START 1",
     """CREATE TABLE IF NOT EXISTS results_db.simulations.transfer_ops (
         op_id BIGINT NOT NULL, kind VARCHAR NOT NULL, params VARCHAR NOT NULL,

@@ -50,6 +50,8 @@ slice(md, zones, p) = Dict(z => Dict(h => p for h in hours(md)) for z in zones)
         @test p["plan"] == "insert" && p["zones"] == ["GR", "RO"] && p["is_retro"] == false
         @test !haskey(p, "rows") && length(o.params[1]) < 1000             # keys/params only, no row data
         @test count(==(o.op_id[1]), skipmissing(live.transfer_op_id)) == 48
+        @test R("SELECT COUNT(*) AS n FROM results_db.simulations.transfer_forecast_rows WHERE transfer_op_id = \$1",
+                Any[o.op_id[1]]).n[1] == 48                         # the op's own rows, kept for the transfer
     end
 
     @testset "LIVE guard: a realized day is refused" begin
@@ -78,6 +80,8 @@ slice(md, zones, p) = Dict(z => Dict(h => p for h in hours(md)) for z in zones)
         @test bk.n[1] == 72 && bk.s[1] == 24 * (120 + 120 + 90)
         rest = fp("market_date = \$1 AND lead_days = 2", Any[md])
         @test nrow(rest) == 24 && all(rest.is_retro) && all(rest.price_eur_mwh .== 7.0)
+        # the superseded live op still has its rows for the transfer (Postgres must back up the same 72)
+        @test R("SELECT COUNT(*) AS n FROM results_db.simulations.transfer_forecast_rows WHERE transfer_op_id = 1").n[1] == 48
     end
 
     @testset "ALONGSIDE campaign: only its own rows replaced" begin

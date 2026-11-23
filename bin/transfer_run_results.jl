@@ -98,7 +98,7 @@ end
 "The SELECT (over the results DuckDB `r`) whose rows an op ships, and its local row count."
 function stage_select(con, kind, op_id, p)
     if kind == "forecast_slice"
-        sel = "SELECT $FP_STAGE_SELECT FROM r.simulations.forecast_prices WHERE transfer_op_id = $op_id"
+        sel = "SELECT $FP_STAGE_SELECT FROM r.simulations.transfer_forecast_rows WHERE transfer_op_id = $op_id"
     elseif kind == "input_corrections"
         sel = "SELECT bidding_zone, target, CAST(date_time_utc AS TIMESTAMPTZ) AS date_time_utc, corrected_mw, " *
               "model_tag FROM r.simulations.input_corrections WHERE transfer_op_id = $op_id"

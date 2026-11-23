@@ -579,7 +579,8 @@ function write_forecast_duckdb!(market_date::Date, lead_days::Int, prediction_ma
                          input_mode, is_retro, something(reset_tag, missing),
                          retro_of_utc === nothing ? missing : retro_of_utc, op))
         end
-        Euphemia._results_insert_df(rows, "forecast_prices")
+        Euphemia._results_insert_df(rows, "transfer_forecast_rows")   # what the transfer replays for this op
+        Euphemia._results_insert_df(rows, "forecast_prices")          # what later steps of the job read back
     end
 end
 
