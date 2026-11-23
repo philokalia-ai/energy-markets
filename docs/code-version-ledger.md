@@ -448,9 +448,36 @@ pass-2 rebuild set).
     weighted by residual load, and each export counterparty by its outage-capped p95 capability. No settled price
     enters.
   - The P1 zones join the pass-2 rebuild set.
+  - Pass 2 runs only when the footprint has an anchored zone (`mz_extract_anchor_inputs`). Without one, P1 applies
+    only its pass-1 parts. Not a production case: the 39-zone footprint has anchored zones, and the SEE 5-zone job has
+    no P1 zone.
 - **Resolution.** P1's inputs are hourly (h, U, the weekly balance); each quarter uses its hour's values. The pass-2
   X is computed per clearing slot from that slot's pass-1 prices, so at 15 minutes each quarter carries its own X.
   Both passes therefore clear on the same grid.
+- **As-of.** Record mode reads physical flows up to D-2 and reservoir weeks up to w−2.
+  - Inside a `ForecastContext` (retro leads 2–7), each cut is the earlier of that and the issuance: flows from
+    complete UTC days before the date of as_of − 1 h, reservoir weeks by the same w−2 rule seen from the issuance.
+    Both are recorded as `:latency_policy` in the as-of audit.
+  - Lagged output uses `_storage_cutoff_day`; outage caps use the gate vintage.
+  - Lead 1 at the gate resolves to the record-mode cuts exactly.
+- **Short inputs are reported, never silent** (#477 review). Each zone-day is checked for input coverage
+  (`nwv_input_gaps`).
+  - What is checked:
+    - no flow hours, which gives h = 1 (the v45 value);
+    - < 90 % of the hours in the 364-day or 14-day windows;
+    - fewer than two reservoir readings ≤ w−2, a bridged gap, or a stale latest reading;
+    - < 4 days of lagged output (u_base = 0).
+  - Any of these gives a `@warn`, an as-of audit entry (`cv46_p1_inputs`) and a per-process count
+    (`nwv_fallback_counts()`). The values themselves are unchanged.
+  - The reservoir and output checks apply only where the zone offers reservoir MW. FI has none, so its u_base = 0
+    is structural.
+  - Coverage on the extract every arm and backfill used (`euphemia-live-20261115.duckdb`): physical flows start
+    2022-12-01, so every scored day from 2024-05-23 to 2026-11-14 has full 364-day and 14-day windows (8736/8736
+    and 336/336 h in NO4, SE1, SE2 and FI). The reservoir weeks have no gaps, and the NO4/SE1/SE2 lagged output is
+    full.
+- **ISO weeks** use real ISO-week dates (W53-safe; 2026 has 53 weeks). This is identical to the old 52·Δyear form on
+  every day up to 2026-11-14.
+- **Strategy label** `water_value_unavoidable` (in `STRATEGY_DESCRIPTIONS` and the site's `STRATEGY_LABELS`).
 - **Unchanged:** spill, the daily budgets and the drawdown/dryness lift.
 - **Constants** come from the existing book (0.35 / 0.65, base/span, gas SRMC) or are declared window lengths and
   quantiles, each with its source in the file. Nothing is fitted to prices.
@@ -481,6 +508,9 @@ fixed-pattern LP certificate (on main since #470). There is no joint-day model.
   - `run_multi_zone_market_clearing` refuses to save below 1440 ÷ res by default.
   - Resume completeness is not changed here. It is decided per saved day's `resolution_code` by the perf-96 PR D2
     (#476).
+- **Forecast-mode fills.** The daily forecast's load and RES eligibility fills are emitted on the zone's own series
+  resolution: each hourly fill value is replicated into every quarter the TSO did not publish (#477 review). Before,
+  a fill gave only the HH:00 quarter of each filled hour. Record mode never fills.
 - **Rows.** `save_energy_prices` writes 96 rows per zone-day as `15M`.
   - Scoring against hourly targets averages the quarters to the hour first.
   - Pre-MTU days (before 2025-10-01) are cleared at 15 minutes too but scored hourly.
@@ -490,7 +520,7 @@ fixed-pattern LP certificate (on main since #470). There is no joint-day model.
 - **Deleted as dead:** the `EUPHEMIA_PS_INTRAHOUR` branch and `hourly_prices` (`bin/forecast_common.jl`).
   `stitch_market_day` now takes `res_minutes`, and its `missing_hours` field is renamed `missing_slots`.
 - **Cost** (per day, record mode): 54 s warm, 110 s cold. That is about +3 min per forecast run. Peak RSS is about
-  3–6 GiB, so the forecast runner's memory request rises to ≥ 6 GiB (perf-96 PR).
+  3–6 GiB, so the forecast runner needs a memory request of ≥ 6 GiB. That runner change is not part of this PR.
 
 **Deleted** (deferred since v45, off unless set): `EUPHEMIA_CV45_PUMP`, `EUPHEMIA_CV45_RESERVOIR`,
 `EUPHEMIA_CV45_HYDRO_CAP` and `EUPHEMIA_CV45_ELASTIC`. Their code paths, `CV45_KNOBS` entries (and with them the

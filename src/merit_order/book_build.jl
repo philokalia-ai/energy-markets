@@ -42,6 +42,7 @@ const STRATEGY_DESCRIPTIONS = Dict{String,String}(
     "water_value_reservoir"  => "hydro water value: shadow price of stored water — near-free when reservoirs are full, rising to the thermal alternative as they empty",
     "water_value_anchored"   => "hydro water value: export opportunity cost = the coupled reference price (two-pass anchor)",
     "water_value_spill"      => "hydro spill regime: reservoir at/above the prior-years' same-week maximum — the water that cannot be stored is offered at run-instead-of-spill cost",
+    "water_value_unavoidable" => "hydro unavoidable release (cv46 P1): reservoir water that must run anyway (lagged low-output envelope or weekly overflow) offered at the spill price",
     "res_forecast"           => "renewable forecast offered as price-taker (support schemes make output price-insensitive; floored negative in a solar-surplus regime)",
     "res_supported"          => "explicitly configured RES share retaining a production incentive, offered at minus that incentive",
     "res_zero_cost"          => "merchant or negative-price support-suspended RES offered at zero variable cost",

@@ -26,14 +26,20 @@
 # Unavoidable release U (reservoir units only) is offered at p_s; the rest of the
 # non-spill MW is storable.
 #
-# As-of rules (D = delivery day, gate 12:00 CET on D-1):
-# - entsoe.physical_flows: complete UTC days up to D-2 (≤ D-2 23:00 UTC).
+# As-of rules (D = delivery day, gate 12:00 CET on D-1). Record mode (no
+# ForecastContext) uses the legacy cuts below; inside a context every cut is the
+# earlier of the legacy cut and the issuance (`_nwv_flow_cutoff`,
+# `_nwv_reservoir_ref`), recorded as :latency_policy. Lead 1 at the gate resolves
+# to the legacy cut exactly.
+# - entsoe.physical_flows: complete UTC days up to D-2 (≤ D-2 23:00 UTC); in a
+#   context, complete UTC days before the date of as_of − 1 h.
 # - entsoe.unavailability_in_the_transmission_grid: `Network.tx_outage_caps(D)`,
 #   its gate-vintage rule (from 2025-10-01 only versions published before
 #   D-1 10:00 UTC).
 # - entsoe.aggregated_hydro_storage_filling_rate: ISO weeks ≤ w−2 (w = ISO week of
 #   D). Week w−1 is published around Wednesday of week w, possibly after the gate;
-#   w−2 is always out before D-1.
+#   w−2 is always out before D-1. In a context: w = the ISO week of
+#   (date of as_of) + 1 day, the same rule seen from the issuance.
 # - entsoe.aggregated_generation_per_type: complete UTC days D-8..D-2 (inside a
 #   ForecastContext the `_storage_cutoff_day` latency rule).
 # - dropped-border exports: `get_dropped_border_exports`, the same flow as-of as the
@@ -57,6 +63,14 @@ const NWV_OUTPUT_DAYS = 7
 const NWV_RMIN_Q = 0.05
 "Hours per week: the weekly reservoir data resolution (inflow balance and overflow horizon)."
 const NWV_WEEK_H = 168.0
+"""Publication latency of entsoe.physical_flows assumed inside a ForecastContext (the
+aggregated-generation convention, `AGG_GEN_PUBLICATION_LATENCY`). Only complete UTC days
+before the date of `as_of − latency` are read, so any latency below the issuance's
+hour of day is covered (06:30 runs: 6.5 h)."""
+const NWV_FLOW_PUBLICATION_LATENCY = Dates.Hour(1)
+"""Input-coverage share below which P1 reports a fallback (warning and as-of audit
+only; it never changes a value): flow hours in the 364-day and 14-day windows."""
+const NWV_MIN_COVERAGE = 0.9
 "Strategy label of the unavoidable-release order."
 const NWV_UNAVOIDABLE = "water_value_unavoidable"
 
@@ -177,17 +191,33 @@ const _NWV_LOCK = ReentrantLock()
 _nwv_strip_ips(s::AbstractString) = replace(String(s), r"_IPS$" => "")
 
 """
-    _nwv_flow_stats(zone, day) -> (C, Eb, nx_sample)
+    _nwv_flow_cutoff(day) -> Date
 
-Hourly net export of `zone` over complete UTC days [D-365, D-1) from
-entsoe.physical_flows (quarter-hours averaged per hour; `_IPS` aliases deduped by
-the larger flow, as `_zone_border_hourly`). C = p95 of net export over the whole
-window, Eb[cp] = p95 of the export flow zone→cp, nx_sample = net export of the
-hours in [D-15, D-1).
+First UTC day NOT read from entsoe.physical_flows. Record mode: D-1 (complete days
+≤ D-2). Inside a ForecastContext: the earlier of that and the date of
+`as_of − NWV_FLOW_PUBLICATION_LATENCY` (recorded as :latency_policy), so a long-lead
+issuance never reads flows published after it. Lead 1 at the gate ⇒ D-1.
+"""
+function _nwv_flow_cutoff(day::Date)
+    c = current_context()
+    c === nothing && return day - Day(1)
+    record_asof_status!("physical_flows", :latency_policy)
+    return min(day - Day(1), Date(c.as_of_utc - NWV_FLOW_PUBLICATION_LATENCY))
+end
+
+"""
+    _nwv_flow_stats(zone, day) -> (C, Eb, nx_sample, n_cap)
+
+Hourly net export of `zone` over the 364 complete UTC days before
+`_nwv_flow_cutoff(day)` (record mode: [D-365, D-1)) from entsoe.physical_flows
+(quarter-hours averaged per hour; `_IPS` aliases deduped by the larger flow, as
+`_zone_border_hourly`). C = p95 of net export over the whole window, Eb[cp] = p95
+of the export flow zone→cp, nx_sample = net export of the hours in the last 14
+days (record mode: [D-15, D-1)), n_cap = hours with data in the whole window.
 """
 function _nwv_flow_stats(zone::String, day::Date)
-    lo = day - Day(1 + NWV_CAPABILITY_DAYS)
-    hi = day - Day(1)
+    hi = _nwv_flow_cutoff(day)
+    lo = hi - Day(NWV_CAPABILITY_DAYS)
     df = sql2df_with_retry(
         """
         SELECT FLOOR(EXTRACT(EPOCH FROM date_time_utc) / 3600)::BIGINT AS th,
@@ -224,14 +254,39 @@ function _nwv_flow_stats(zone::String, day::Date)
         nx[t] = get(nx, t, 0.0) + dir * v
         dir == 1 && push!(get!(expf, cp, Float64[]), max(v, 0.0))
     end
-    isempty(nx) && return (C=0.0, Eb=Dict{String,Float64}(), nx_sample=Float64[])
+    isempty(nx) && return (C=0.0, Eb=Dict{String,Float64}(), nx_sample=Float64[], n_cap=0)
     ts = sort(collect(keys(nx)))
     C = quantile([nx[t] for t in ts], NWV_CAPABILITY_Q)
     Eb = Dict{String,Float64}(cp => quantile(v, NWV_CAPABILITY_Q) for (cp, v) in expf)
-    s0 = Int(Dates.value(DateTime(day - Day(1 + NWV_SAMPLE_DAYS)) - DateTime(1970)) ÷ 3_600_000)
+    s0 = Int(Dates.value(DateTime(hi - Day(NWV_SAMPLE_DAYS)) - DateTime(1970)) ÷ 3_600_000)
     sample = Float64[nx[t] for t in ts if t >= s0]
-    return (C=C, Eb=Eb, nx_sample=sample)
+    return (C=C, Eb=Eb, nx_sample=sample, n_cap=length(ts))
 end
+
+"""
+    _nwv_reservoir_ref(day) -> Date
+
+A day of the latest admissible ISO week of the weekly reservoir readings (w−2).
+Record mode: D − 14. Inside a ForecastContext: the earlier of that and
+(date of as_of) + 1 − 14, i.e. the same w−2 rule seen from the issuance (recorded
+as :latency_policy). Lead 1 at the gate ⇒ D − 14.
+"""
+function _nwv_reservoir_ref(day::Date)
+    c = current_context()
+    c === nothing && return day - Day(14)
+    record_asof_status!("hydro_fill", :latency_policy)
+    return min(day, Date(c.as_of_utc) + Day(1)) - Day(14)
+end
+
+"Monday of ISO week `w` of ISO year `y` (week 1 holds 4 January)."
+function _nwv_iso_monday(y::Integer, w::Integer)
+    j4 = Date(y, 1, 4)
+    return j4 - Day(dayofweek(j4) - 1) + Week(w - 1)
+end
+
+"Whole ISO weeks from (y2, w2) to (y1, w1), W53 years included."
+_nwv_iso_week_gap(y1, w1, y2, w2) =
+    Dates.value(_nwv_iso_monday(y1, w1) - _nwv_iso_monday(y2, w2)) ÷ 7
 
 """
     _nwv_reservoir_weeks(zone, day) -> Union{Nothing,NamedTuple}
@@ -239,10 +294,11 @@ end
 Stored energy of the latest weekly reading with ISO week ≤ w−2 (S_now), the
 reading one week earlier (S_prev; a missing week is bridged linearly from the
 previous available reading) and the maximum over all readings ≤ w−2 (S_cap).
-`nothing` if fewer than two readings.
+`gap` = weeks between the two latest readings, `stale` = weeks the latest reading
+lies before w−2 (0 normally). `nothing` if fewer than two readings.
 """
 function _nwv_reservoir_weeks(zone::String, day::Date)
-    ref = day - Day(14)                 # any day of ISO week w−2
+    ref = _nwv_reservoir_ref(day)       # any day of ISO week w−2
     y = _reservoir_iso_year(ref)
     w = Int(Dates.week(ref))
     df = sql2df_with_retry(
@@ -256,9 +312,14 @@ function _nwv_reservoir_weeks(zone::String, day::Date)
         """, Any[zone, y, w])
     size(df, 1) >= 2 || return nothing
     s = Float64.(df.stored_energy_mwh)
-    # weeks between the two readings (1 unless a week is missing); ΔS is per week
-    gap = max(1, 52 * (Int(df.year[1]) - Int(df.year[2])) + Int(df.week[1]) - Int(df.week[2]))
-    return (S_now=s[1], S_prev=s[1] - (s[1] - s[2]) / gap, S_cap=maximum(s))
+    # weeks between the two readings (1 unless a week is missing); ΔS is per week.
+    # Real ISO-week dates, so a W53 year (2020, 2026) counts right; identical to
+    # the old 52·Δyear form whenever the earlier year has 52 weeks.
+    gap = max(1, _nwv_iso_week_gap(Int(df.year[1]), Int(df.week[1]),
+                                   Int(df.year[2]), Int(df.week[2])))
+    stale = max(0, _nwv_iso_week_gap(y, w, Int(df.year[1]), Int(df.week[1])))
+    return (S_now=s[1], S_prev=s[1] - (s[1] - s[2]) / gap, S_cap=maximum(s),
+            gap=gap, stale=stale)
 end
 
 """
@@ -293,7 +354,8 @@ end
 
 Per zone-day P1 inputs: `h[hr]` (hr = 0..23 UTC), outage-capped export capability
 `ecap[hr][cp]`, the zone-level unavoidable base `u_base` (MW; 0 when an input is
-missing) and the raw inputs for the log. Cached per (zone, day, issuance).
+missing) and the raw inputs for the log (and `nwv_input_gaps`). Cached per
+(zone, day, issuance).
 """
 function nwv_day_state(zone::String, day::Date)
     c = current_context()
@@ -321,16 +383,64 @@ function nwv_day_state(zone::String, day::Date)
         nwv_unavoidable_base(; S_now=rw.S_now, S_prev=rw.S_prev, S_cap=rw.S_cap,
                              G=lo.G, R_min=lo.R_min)
     st = (h=h, ecap=ecap, u_base=u_base, C=fs.C, n_sample=length(fs.nx_sample),
-          res=rw, out=lo)
+          n_cap=fs.n_cap, res=rw, out=lo)
     lock(_NWV_LOCK) do
         _NWV_STATE_CACHE[key] = st
     end
     return st
 end
 
+"""
+    nwv_input_gaps(st, Q) -> Vector{String}
+
+The P1 inputs that fell back on short data for one zone-day (empty = complete):
+- flows: no hours at all (C = 0 ⇒ h = 1, the pre-cv46 value), or fewer than
+  `NWV_MIN_COVERAGE` of the 364-day / 14-day window hours;
+- reservoir weeks: fewer than two readings ≤ w−2 (u_base = 0), a bridged gap,
+  or a latest reading older than w−2;
+- lagged reservoir output: fewer than 4 days (u_base = 0).
+The reservoir and output checks apply only when the zone offers reservoir MW
+(`Q > 0`); FI and DK1/DK2 have none, so their u_base = 0 is structural.
+Reporting only: the values are never changed here.
+"""
+function nwv_input_gaps(st, Q::Float64)
+    gaps = String[]
+    ncap_exp = NWV_CAPABILITY_DAYS * 24
+    nsam_exp = NWV_SAMPLE_DAYS * 24
+    if st.n_cap == 0
+        push!(gaps, "flows: no hours in the 364-day window (C = 0, h = 1)")
+    else
+        st.n_cap < NWV_MIN_COVERAGE * ncap_exp &&
+            push!(gaps, "flows: $(st.n_cap)/$ncap_exp h in the 364-day window")
+        st.n_sample < NWV_MIN_COVERAGE * nsam_exp &&
+            push!(gaps, "flows: $(st.n_sample)/$nsam_exp h in the 14-day sample")
+    end
+    if Q > 0.0
+        if st.res === nothing
+            push!(gaps, "reservoir weeks: < 2 readings ≤ w−2 (u_base = 0)")
+        else
+            st.res.gap > 1 && push!(gaps, "reservoir weeks: $(st.res.gap)-week gap bridged")
+            st.res.stale > 0 && push!(gaps, "reservoir weeks: latest reading $(st.res.stale) week(s) before w−2")
+        end
+        st.out === nothing && push!(gaps, "lagged reservoir output: < 4 days (u_base = 0)")
+    end
+    return gaps
+end
+
+const _NWV_FALLBACKS = Dict{String,Int}()   # zone => zone-day builds with a fallback (process-wide)
+
+"""
+    nwv_fallback_counts() -> Dict{String,Int}
+
+Zone => number of P1 zone books built on a short-data fallback in this process
+(run summaries; reset with `clear_nwv_cache!`).
+"""
+nwv_fallback_counts() = lock(() -> copy(_NWV_FALLBACKS), _NWV_LOCK)
+
 function clear_nwv_cache!()
     lock(_NWV_LOCK) do
         empty!(_NWV_STATE_CACHE)
+        empty!(_NWV_FALLBACKS)
     end
     return nothing
 end
@@ -369,6 +479,18 @@ function _nwv_zone_setup(zone::String, day::Date, generators, offered_pmax,
             "Q $(round(Int, Q)) MW; xdrop mean $(round(Int, sum(get(xdrop, h, 0.0) for h in 0:23) / 24)) MW; " *
             "U mean/max $(round(Int, sum(uv) / 24))/$(round(Int, maximum(uv))) MW; " *
             "pass $(p1z === nothing ? 1 : 2)")
+    # #477 finding 3: a short input window is reported, never silent (the values
+    # above are unchanged; the fallback is the documented pre-existing behaviour).
+    gaps = nwv_input_gaps(st, Q)
+    if !isempty(gaps)
+        @warn "cv46 P1 $zone $day: input FALLBACK — $(join(gaps, "; "))"
+        record_asof_status!("cv46_p1_inputs", :fallback)
+        lock(_NWV_LOCK) do
+            _NWV_FALLBACKS[zone] = get(_NWV_FALLBACKS, zone, 0) + 1
+        end
+    else
+        record_asof_status!("cv46_p1_inputs", :complete)
+    end
     return NwvZone(zone, st, U, Q, p1z, Dict{String,Float64}(), 0, 0, 0, 0)
 end
 

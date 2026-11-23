@@ -3805,6 +3805,7 @@
     water_value_gas_anchored: { label: "water value · gas-anchored", explain: "Reservoir opportunity cost anchored to gas SRMC — a premium at peak, boosted when the reservoir is dry." },
     water_value_reservoir:    { label: "water value · reservoir", explain: "Shadow price of stored water — near-free when reservoirs are full, rising toward the thermal alternative as they empty." },
     water_value_anchored:     { label: "water value · coupled anchor", explain: "Export opportunity cost set to the pass-1 coupled reference price (two-pass anchor)." },
+    water_value_unavoidable:  { label: "water value · unavoidable release", explain: "Reservoir water that must run anyway (lagged low-output envelope or weekly overflow), offered at the spill price (cv46)." },
     res_forecast:             { label: "RES forecast", explain: "Renewable forecast offered as a price-taker (support schemes make output price-insensitive); floored negative in a solar-surplus regime." },
     res_supported:            { label: "Supported RES", explain: "An explicitly configured RES share retaining a production incentive, offered at minus that incentive." },
     res_zero_cost:            { label: "Zero-cost RES", explain: "Merchant or negative-price support-suspended RES offered at zero variable cost." },
