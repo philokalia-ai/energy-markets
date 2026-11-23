@@ -167,5 +167,34 @@ class CollapseProbabilityTest(unittest.TestCase):
             cp.build_features(actual, fc, "pregate_0630", settled_lag=0)
 
 
+
+class LiveBaselineResolutionTest(unittest.TestCase):
+    """cv46 (review of #476 #6): a quarter-hour live day weighs like an hourly one (per hour, not 4x)."""
+
+    def write(self, tmp, days):
+        Path(tmp, "GR.json").write_text(json.dumps({"zone": "GR", "days": days}))
+
+    def day(self, date, stamps, sims, acts):
+        return {"date": date, "lead_days": 1, "input_mode": "weather", "code_version": 46,
+                "prediction_made_utc": f"{date}T06:30:00Z", "hours": stamps, "sim": sims, "actual": acts}
+
+    def test_hourly_unchanged_and_quarters_averaged(self):
+        import tempfile
+        hs = [f"2026-11-01T{h:02d}:00:00Z" for h in range(24)]
+        qs = [f"2026-11-02T{h:02d}:{m:02d}:00Z" for h in range(24) for m in (0, 15, 30, 45)]
+        with tempfile.TemporaryDirectory() as tmp:
+            self.write(tmp, [self.day("2026-11-01", hs, [float(h) for h in range(24)], [0.5 + h for h in range(24)]),
+                             self.day("2026-11-02", qs, [float(k) for k in range(96)], [1.0] * 96)])
+            df = cp.live_baseline(tmp, "2026-11-01", "2026-11-02")
+        self.assertEqual(list(df.columns), ["zone", "t", "market_date", "sim", "actual_live", "issued", "code_version"])
+        self.assertEqual(df.groupby("market_date").size().to_dict(), {"2026-11-01": 24, "2026-11-02": 24})
+        h = df[df.market_date == "2026-11-01"]
+        self.assertEqual(h.sim.tolist(), [float(x) for x in range(24)])          # hourly: values as published
+        self.assertEqual(h.actual_live.tolist(), [0.5 + x for x in range(24)])
+        q = df[df.market_date == "2026-11-02"]
+        self.assertEqual(q.sim.tolist(), [4 * x + 1.5 for x in range(24)])      # mean of the hour's 4 quarters
+        self.assertTrue((q.t.dt.minute == 0).all())
+
+
 if __name__ == "__main__":
     unittest.main()
