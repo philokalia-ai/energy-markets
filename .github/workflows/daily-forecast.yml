@@ -70,7 +70,7 @@ env:
 jobs:
   daily-forecast:
     runs-on: energy-markets-k8s
-    timeout-minutes: 120
+    timeout-minutes: 150   # step timeouts (fill 25 + clears 75 + transfer 10 + score 15 + transfer 10) fit inside
     env:
       # Run-local DuckDB pair: inputs.duckdb (filled from Postgres, read-only) + results.duckdb (seeded with the
       # forecast/score slices this job reads back; every result write lands here, then ONE transfer step).
@@ -105,6 +105,7 @@ jobs:
           "
 
       - name: Fill run-local DuckDB (the job's only Postgres read)
+        timeout-minutes: 25
         env:
           ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
         run: |
@@ -113,7 +114,10 @@ jobs:
           # extension; fails the job (no partial file) on any error. Per-table rows/seconds: $RUN_DIR/fill.json.
           julia --project=. bin/fill_run_duckdb.jl --profile daily-forecast --out "$RUN_DIR"
 
+      # Step timeouts sum below the job's: a step that times out FAILS (it is not cancelled), so the
+      # transfer after it still runs and every slice already written reaches Postgres.
       - name: Generate daily forecasts
+        timeout-minutes: 75
         env:
           # fill → run → transfer (owner rule 2026-11-23): reads only the run-local DuckDB, writes only its
           # results file; no Postgres credentials in this step.
@@ -170,12 +174,28 @@ jobs:
             exit 1
           fi
 
+      # The forecast slices (and the cv32 corrections) reach Postgres right after the clears, before scoring and
+      # export: a later timeout or failure cannot lose them. Exactly once (transfer_log): the second transfer
+      # below applies only the ops logged after this one (the scores).
+      - name: Transfer forecasts to Postgres
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        env:
+          ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
+        run: |
+          if [ -f "$RUN_DIR/results.duckdb" ]; then
+            julia --project=. bin/transfer_run_results.jl --results-db "$RUN_DIR/results.duckdb"
+          else
+            echo "::warning::no run-local results DuckDB (the fill failed) — nothing to transfer"
+          fi
+
       # Scoring/export/publish run even when the forecast step failed
       # (!cancelled()): whatever slices DID land — or landed in an earlier run
       # today — still get scored and pushed, so the site never goes stale
       # behind a solver crash. The job still reports failure (Slack notify).
       - name: Score realized forecasts
         if: ${{ !cancelled() }}
+        timeout-minutes: 15
         env:
           # fill → run → transfer (owner rule 2026-11-23): reads only the run-local DuckDB, writes only its
           # results file; no Postgres credentials in this step.
@@ -187,11 +207,12 @@ jobs:
         run: |
           julia --project=. bin/score_forecasts.jl
 
-      # The job's only Postgres write: replays the forecast slices, cv32 corrections and scores this job wrote
-      # into results.duckdb, in ONE Postgres transaction (guards and the retro plan re-checked on Postgres;
-      # idempotent on a re-run). Runs whenever anything may have landed, like the scoring/export steps.
-      - name: Transfer results to Postgres
+      # The second (and last) Postgres write: the scores, plus anything the first transfer could not apply. Each
+      # transfer replays the pending ops of results.duckdb in ONE Postgres transaction (guards and the retro plan
+      # re-checked on Postgres; exactly once per op). Runs whenever anything may have landed.
+      - name: Transfer scores to Postgres
         if: ${{ !cancelled() }}
+        timeout-minutes: 10
         env:
           ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
         run: |

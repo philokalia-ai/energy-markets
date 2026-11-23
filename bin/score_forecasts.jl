@@ -277,9 +277,10 @@ function slice_sim(market_date::Date, lead_days::Int, cv::Int, input_mode::Strin
 end
 
 # --- fill → run → transfer (owner rule 2026-11-23): DuckDB-backend writers -------------------------------
-# The scores go to the run-local results DuckDB; the keys each kind of write touched are logged as ONE
-# transfer op per kind at the end of main() ("score_upsert": hourly columns; "score_q15": the q15 columns),
-# and bin/transfer_run_results.jl replays them against Postgres with this file's SQL semantics.
+# The scores go to the run-local results DuckDB; the keys each kind of write touched are logged as transfer
+# ops ("score_upsert": hourly columns; "score_q15": the q15 columns) after EVERY slice, so a scorer stopped at
+# its time limit (retro-backfill's blackout budget) leaves an op for each slice it finished, and
+# bin/transfer_run_results.jl replays them against Postgres with this file's SQL semantics.
 const SCORE_KEYS_HOURLY = Set{NamedTuple}()
 const SCORE_KEYS_Q15 = Set{NamedTuple}()
 _score_key(market_date, zone, lead_days, cv, input_mode, is_retro) =
@@ -324,7 +325,8 @@ function upsert_score_duckdb!(market_date, zone, lead_days, cv, input_mode, n, m
     return Dates.format(stamp, "yyyy-mm-dd HH:MM:SS.sss") * "+00"
 end
 
-"Log the scorer's two transfer ops (keys only) — once, at the end of a DuckDB-backend run."
+"""Log the transfer ops (keys only) of the scores written since the last call, then forget those keys: called
+after every slice and at the end of a DuckDB-backend run (hourly op first, so a q15 UPDATE finds its row)."""
 function log_score_transfer_ops!()
     Euphemia.results_to_duckdb() || return nothing
     for (kind, keys) in (("score_upsert", SCORE_KEYS_HOURLY), ("score_q15", SCORE_KEYS_Q15))
@@ -332,6 +334,7 @@ function log_score_transfer_ops!()
         Euphemia.log_transfer_op!(kind, Dict("keys" => sort!(collect(keys); by=k -> (k.market_date,
             k.bidding_zone, k.lead_days, k.code_version, k.input_mode, k.is_retro)), "n" => length(keys)))
         println("transfer op $kind: $(length(keys)) key(s)")
+        empty!(keys)
     end
     return nothing
 end
@@ -594,6 +597,7 @@ function main()
             q15_ok && score_q15_zone!(market_date, zone, lead_days, cv, input_mode, is_retro, sub, a15, qwin)
         end
         write_slice!(batch)
+        log_score_transfer_ops!()   # per slice: a scorer cut off later keeps this slice's transfer ops
     end
 
     log_score_transfer_ops!()

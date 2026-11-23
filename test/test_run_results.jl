@@ -127,6 +127,15 @@ slice(md, zones, p) = Dict(z => Dict(h => p for h in hours(md)) for z in zones)
         @test o.kind[n0+1:end] == ["score_upsert", "score_q15"]
         k = JSON.parse(o.params[end])["keys"]
         @test length(k) == 1 && k[1]["bidding_zone"] == "GR" && k[1]["is_retro"] == false
+        # incremental (#472 review #5): logging forgets the logged keys, so the ops of each slice are logged once,
+        # after that slice; a scorer stopped before its last call keeps the ops of the slices it finished
+        n1 = nrow(ops()); log_score_transfer_ops!()
+        @test nrow(ops()) == n1                                                     # nothing new to log
+        upsert_score!(md + Day(1), "BG", 2, CV, "weather", 24, 3.0, 1.0, 0.9, cm)  # "slice 2"
+        log_score_transfer_ops!(); o2 = ops()
+        @test o2.kind[n1+1:end] == ["score_upsert"]
+        k2 = JSON.parse(o2.params[end])["keys"]
+        @test length(k2) == 1 && k2[1]["bidding_zone"] == "BG"                      # only slice 2's key
     end
 end
 

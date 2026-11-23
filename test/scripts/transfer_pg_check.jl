@@ -2,6 +2,8 @@
 # (never production), phase by phase, each in its own process:
 #   ENERGY_CONN_STR=<private> julia --project=. test/scripts/transfer_pg_check.jl setup  DIR
 #   julia --project=. test/scripts/transfer_pg_check.jl write  DIR [stale]   # DuckDB-backend writers → DIR/results.duckdb
+#   (or write DIR split1 → transfer → write DIR split2 → transfer: forecasts + corrections first, the scores appended
+#    to the same results DB afterwards — daily-forecast's two transfers; the check expects the same final state)
 #   ENERGY_CONN_STR=<private> julia --project=. bin/transfer_run_results.jl --results-db DIR/results.duckdb
 #   ENERGY_CONN_STR=<private> julia --project=. test/scripts/transfer_pg_check.jl check  DIR
 #   ENERGY_CONN_STR=<private> julia --project=. test/scripts/transfer_pg_check.jl unmark DIR    # clear local done marks
@@ -46,9 +48,10 @@ end
 if PHASE == "write"
     mkpath(DIR)
     inputs = joinpath(DIR, "inputs.duckdb"); results = joinpath(DIR, "results.duckdb")
-    rm(results; force=true); rm(inputs; force=true)
+    mode = length(ARGS) >= 3 ? ARGS[3] : ""
+    mode == "split2" || (rm(results; force=true); rm(inputs; force=true))
     using DuckDB
-    let db = DuckDB.DB(inputs); con = DBInterface.connect(db)
+    mode == "split2" || let db = DuckDB.DB(inputs); con = DBInterface.connect(db)
         DBInterface.execute(con, "CREATE SCHEMA entsoe")
         DBInterface.execute(con, "CREATE TABLE entsoe.actual_total_load (date_time_utc TIMESTAMP, area_map_code VARCHAR, actual_total_load_mw DOUBLE)")
         DBInterface.execute(con, "INSERT INTO entsoe.actual_total_load VALUES (TIMESTAMP '2026-11-20 23:00:00', 'GR', 5000.0)")
@@ -58,11 +61,25 @@ if PHASE == "write"
     ENV["EUPHEMIA_DUCKDB_READONLY"] = "true"; ENV["EUPHEMIA_RESULTS_WRITABLE"] = "true"
     ENV["EUPHEMIA_RESULTS_DB"] = results
     ENV["EUPHEMIA_FORECAST_NO_AUTORUN"] = "1"; ENV["INPUT_MODE"] = "weather"; ENV["EUPHEMIA_SCORE_NO_AUTORUN"] = "1"
+    using Euphemia
+    # a run-local fill (the read-back redirect and the strict guard apply, as in a workflow run)
+    lock(() -> Euphemia._duckdb_drop_connection!(), Euphemia._DUCKDB_LOCK)
+    mode == "split2" || Euphemia.mark_run_local_fill!(inputs; windows=[("entsoe", "actual_total_load", Date(1900, 1, 1), Date(2999, 12, 31))])
     include(joinpath(@__DIR__, "..", "..", "bin", "daily_forecast.jl"))
     R(sql, args=Any[]) = Euphemia._results_exec(sql, args)
     Euphemia.ensure_run_results_tables!()
+    mode == "split2" || Euphemia.mark_results_seeded!(("forecast_prices", "forecast_scores", "input_corrections"))
     slice(md, zones, p) = Dict(z => Dict(h => p for h in hours(md)) for z in zones)
-    if length(ARGS) >= 3 && ARGS[3] == "stale"
+    if mode == "split2"   # the scoring step of the same job, after the first transfer
+        include(joinpath(@__DIR__, "..", "..", "bin", "score_forecasts.jl"))
+        cm = (n_collapse_actual=1, n_collapse_pred=0, hits=0, false_alarms=0, hit_rate=0.0, false_alarm_rate=nothing)
+        upsert_score!(MD, "GR", 2, CV, "weather", 24, 5.0, 1.0, 0.9, cm)
+        update_q15!(MD, "GR", 2, CV, "weather", false, (n_q15=96, mae_q15=6.0, bias_q15=nothing, corr_q15=0.8,
+                    shape_floor_q15=nothing, n_le0_q15_actual=0, n_le0_q15_pred=0, le0_q15_hits=0), "native")
+        upsert_score!(MD, "GR", 2, CV, "weather", 24, 4.0, 1.0, 0.9, cm)
+        log_score_transfer_ops!()
+        println("write split2 done: ", R("SELECT COUNT(*) AS n FROM results_db.simulations.transfer_ops WHERE done_at IS NULL").n[1], " pending op(s)")
+    elseif mode == "stale"
         # the snapshot has no live rows for MD+3 lead 4; the check inserts one into Postgres before the transfer
         write_forecast!(MD + Day(3), 4, PM, slice(MD + Day(3), ["GR"], 3.0), "weather"; is_retro=true, reset_tag="t9")
         println("write stale done")
@@ -85,14 +102,16 @@ if PHASE == "write"
             R("INSERT INTO results_db.simulations.input_corrections VALUES ('IT-Sicily', 'solar', \$1, 900.0, 'm1', \$2)",
               Any[DateTime(2026, 11, 24, 10), op])
         end
-        include(joinpath(@__DIR__, "..", "..", "bin", "score_forecasts.jl"))
-        cm = (n_collapse_actual=1, n_collapse_pred=0, hits=0, false_alarms=0, hit_rate=0.0, false_alarm_rate=nothing)
-        upsert_score!(MD, "GR", 2, CV, "weather", 24, 5.0, 1.0, 0.9, cm)
-        update_q15!(MD, "GR", 2, CV, "weather", false, (n_q15=96, mae_q15=6.0, bias_q15=nothing, corr_q15=0.8,
-                    shape_floor_q15=nothing, n_le0_q15_actual=0, n_le0_q15_pred=0, le0_q15_hits=0), "native")
-        upsert_score!(MD, "GR", 2, CV, "weather", 24, 4.0, 1.0, 0.9, cm)
-        log_score_transfer_ops!()
-        println("write done: ", R("SELECT COUNT(*) AS n FROM results_db.simulations.transfer_ops").n[1], " op(s)")
+        if mode != "split1"
+            include(joinpath(@__DIR__, "..", "..", "bin", "score_forecasts.jl"))
+            cm = (n_collapse_actual=1, n_collapse_pred=0, hits=0, false_alarms=0, hit_rate=0.0, false_alarm_rate=nothing)
+            upsert_score!(MD, "GR", 2, CV, "weather", 24, 5.0, 1.0, 0.9, cm)
+            update_q15!(MD, "GR", 2, CV, "weather", false, (n_q15=96, mae_q15=6.0, bias_q15=nothing, corr_q15=0.8,
+                        shape_floor_q15=nothing, n_le0_q15_actual=0, n_le0_q15_pred=0, le0_q15_hits=0), "native")
+            upsert_score!(MD, "GR", 2, CV, "weather", 24, 4.0, 1.0, 0.9, cm)
+            log_score_transfer_ops!()
+        end
+        println("write $(mode) done: ", R("SELECT COUNT(*) AS n FROM results_db.simulations.transfer_ops").n[1], " op(s)")
     end
 end
 

@@ -132,18 +132,48 @@ function day_window_clause(col::AbstractString, start, stop, p0::Int)
     return (join(parts, " AND "), params)
 end
 
+# Price rows THIS run produced. A fill → run → transfer results DB also holds the slice's existing Postgres rows,
+# seeded by the :record fill (skip-existing; with their Postgres run ids, which the results DB's optimization_runs
+# does not hold). With --written-since only the rows written since then are transferred, and the Postgres delete is
+# narrowed to their (day, zone, order_method, contract_type) groups, so a seeded row is never rewritten (or its run
+# id blanked). Without --written-since every slice row must link to a run in this results DB (asset transfers,
+# transfer-record.yml): checked inside the transaction.
+produced_clause(o, n::Int) = o["written_since"] === nothing ? ("", Any[]) :
+    (" AND update_time_utc >= \$$n", Any[o["written_since"]])
+
 function read_prices(con, o)
     win, wp = day_window_clause("date_time_utc", o["start"], o["end"], 3)
+    prod, pp = produced_clause(o, 5)
     sql = """
         SELECT date_time_utc, resolution_code, bidding_zone, contract_type,
                price_eur_mwh, currency, order_method, clearing_mode,
                optimization_run_id, code_version, update_time_utc
         FROM simulations.energy_prices
-        WHERE clearing_mode = \$1 AND code_version = \$2 AND $win
+        WHERE clearing_mode = \$1 AND code_version = \$2 AND $win$prod
         ORDER BY bidding_zone, date_time_utc
     """
     return DataFrame(DBInterface.execute(con,
-        sql, Any[o["clearing_mode"], o["code_version"], wp...]))
+        sql, Any[o["clearing_mode"], o["code_version"], wp..., pp...]))
+end
+
+"""Refuse (before any Postgres mutation) when a produced (day, zone, order_method, contract_type) group also holds
+rows written before --written-since: the narrowed delete would drop them from Postgres."""
+function check_produced_groups(con, o)
+    o["written_since"] === nothing && return nothing
+    win, wp = day_window_clause("date_time_utc", o["start"], o["end"], 3)
+    df = DataFrame(DBInterface.execute(con, """
+        WITH prod AS (SELECT DISTINCT CAST(date_time_utc AS DATE) AS d, bidding_zone, order_method, contract_type
+                      FROM simulations.energy_prices
+                      WHERE clearing_mode = \$1 AND code_version = \$2 AND $win AND update_time_utc >= \$5)
+        SELECT COUNT(*) AS n FROM simulations.energy_prices e
+        JOIN prod ON prod.d = CAST(e.date_time_utc AS DATE) AND prod.bidding_zone = e.bidding_zone
+                 AND prod.order_method = e.order_method AND prod.contract_type = e.contract_type
+        WHERE e.clearing_mode = \$1 AND e.code_version = \$2 AND e.update_time_utc < \$5""",
+        Any[o["clearing_mode"], o["code_version"], wp..., o["written_since"]]))
+    n = Int(df.n[1])
+    n == 0 || error("transfer refused: $n older row(s) share a (day, zone, order_method, contract_type) group with " *
+                    "rows written since $(o["written_since"]); the narrowed delete would drop them. Nothing was written.")
+    return nothing
 end
 
 function read_runs(con, run_ids::Vector{<:Integer})
@@ -243,7 +273,12 @@ delete-then-insert with remapped ids, server-side verification. Returns the stag
 function transfer_window_pg!(con, o, prices::DataFrame, run_ids)
     st = "simulations._p96r_" * Dates.format(now(UTC), "yyyymmddHHMMSS") * "_" * string(getpid())
     win, wp = day_window_clause("date_time_utc", o["start"], o["end"], 3)
+    prod, pp = produced_clause(o, 5)
     stages = ["$(st)_runs", "$(st)_prices", "$(st)_flows", "$(st)_chk", "$(st)_years"]
+    # run linkage expected in Postgres after the transfer: the slice's NULL run ids (whole slice, seeded rows included)
+    n_null = Int(DataFrame(DBInterface.execute(con, "SELECT COUNT(*) AS n FROM simulations.energy_prices WHERE " *
+        "clearing_mode = \$1 AND code_version = \$2 AND $win AND optimization_run_id IS NULL",
+        Any[o["clearing_mode"], o["code_version"], wp...])).n[1])
     try
         DBInterface.execute(con, "CREATE TABLE pg.$(st)_runs AS SELECT id AS local_id, " *
             join(stagecol.(RUN_COLS), ", ") * " FROM simulations.optimization_runs WHERE id IN (SELECT unnest(\$1))",
@@ -252,8 +287,8 @@ function transfer_window_pg!(con, o, prices::DataFrame, run_ids)
             CREATE TABLE pg.$(st)_prices AS
             SELECT date_time_utc, resolution_code, bidding_zone, contract_type, CAST(price_eur_mwh AS VARCHAR) AS price_t,
                    currency, order_method, clearing_mode, optimization_run_id AS local_run_id, code_version, update_time_utc
-            FROM simulations.energy_prices WHERE clearing_mode = \$1 AND code_version = \$2 AND $win""",
-            Any[o["clearing_mode"], o["code_version"], wp...])
+            FROM simulations.energy_prices WHERE clearing_mode = \$1 AND code_version = \$2 AND $win$prod""",
+            Any[o["clearing_mode"], o["code_version"], wp..., pp...])
         nflows = 0
         if o["flows"]
             DBInterface.execute(con, """
@@ -293,13 +328,34 @@ BEGIN
       RETURNING id INTO new_id;
     INSERT INTO _p96_idmap VALUES (r.local_id, new_id);
   END LOOP;
-  DELETE FROM simulations.energy_prices WHERE $(pg_slice(o));
+  -- every staged row must link to a run of this results DB (a seeded row carries a Postgres id that the map lacks)
+  SELECT COUNT(*) INTO ndiff FROM $(st)_prices p LEFT JOIN _p96_idmap m ON m.local_id = p.local_run_id
+    WHERE p.local_run_id IS NOT NULL AND m.pg_id IS NULL;
+  IF ndiff > 0 THEN
+    RAISE EXCEPTION 'run linkage: % staged price row(s) reference a run that is not in this results DB (seeded rows? transfer with --written-since)', ndiff;
+  END IF;
+  $(o["written_since"] === nothing ? "DELETE FROM simulations.energy_prices WHERE $(pg_slice(o));" : """DELETE FROM simulations.energy_prices e
+    USING (SELECT DISTINCT date_time_utc::date AS d, bidding_zone, order_method, contract_type FROM $(st)_prices) k
+    WHERE $(replace(pg_slice(o), r"(?<![\w.])(clearing_mode|code_version|date_time_utc)\b" => s"e.\1"))
+      AND e.bidding_zone = k.bidding_zone AND e.order_method = k.order_method AND e.contract_type = k.contract_type
+      AND (e.date_time_utc AT TIME ZONE 'UTC')::date = k.d;""")
   INSERT INTO simulations.energy_prices
     (date_time_utc, resolution_code, bidding_zone, contract_type, price_eur_mwh, currency, order_method,
      clearing_mode, optimization_run_id, code_version, update_time_utc)
     SELECT p.date_time_utc, p.resolution_code, p.bidding_zone, p.contract_type, p.price_t::numeric, p.currency,
            p.order_method, p.clearing_mode, m.pg_id, p.code_version, p.update_time_utc
     FROM $(st)_prices p LEFT JOIN _p96_idmap m ON m.local_id = p.local_run_id;
+  -- run linkage after the write: NULL run ids exactly as in the source slice, and every id is a real run
+  SELECT COUNT(*) INTO ndiff FROM simulations.energy_prices WHERE $(pg_slice(o)) AND optimization_run_id IS NULL;
+  IF ndiff <> $n_null THEN
+    RAISE EXCEPTION 'run linkage: % price row(s) of the slice have no run id in Postgres, the source has $n_null', ndiff;
+  END IF;
+  SELECT COUNT(*) INTO ndiff FROM simulations.energy_prices e LEFT JOIN simulations.optimization_runs orun ON orun.id = e.optimization_run_id
+    WHERE $(replace(pg_slice(o), r"(?<![\w.])(clearing_mode|code_version|date_time_utc)\b" => s"e.\1"))
+      AND e.optimization_run_id IS NOT NULL AND orun.id IS NULL;
+  IF ndiff > 0 THEN
+    RAISE EXCEPTION 'run linkage: % price row(s) of the slice reference a missing optimization run', ndiff;
+  END IF;
 $flows_sql
 $(plpgsql_verify(o, st))
 END
@@ -409,6 +465,7 @@ function transfer_window!(con, o)
     runs = read_runs(con, run_ids)
     println("referenced optimization_runs: $(nrow(runs))")
     check_runs_in_slice(runs, o)   # before ANY destination mutation
+    check_produced_groups(con, o)
     n = transfer_window_pg!(con, o, prices, run_ids)
     println("upserted $(n.runs) optimization_runs, replaced $(n.prices) energy_prices + $(n.flows) transmission_flows " *
             "rows in one Postgres transaction; verification passed inside it (per-year counts, zone-month " *
