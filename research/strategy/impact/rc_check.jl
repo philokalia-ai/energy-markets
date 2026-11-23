@@ -1,7 +1,7 @@
 # Full re-clear checks of st-impact strategic optima. env JOBS = comma list of job files
 # runs/st-impact/rc/<job>.csv with columns day,zone,hour,kind,price,mw  (kind = offer | carve).
 # The company's offer enters as SimpleOrder supply; `carve` rows remove baseline supply priced exactly at `price`
-# (the company's own book orders) via the harness Carve. Writes <job>.out.csv: hour,zone_price,accepted_mw,status.
+# (the company's own book orders) via the harness Carve. kind = inj: price = sign (+1 discharge / -1 charge), mw = |MW|. Writes <job>.out.csv: hour,zone_price,accepted_mw,status.
 using Euphemia, Dates, Printf
 configure_data_store!(backend=:duckdb, duckdb_path=ENV["EUPHEMIA_DUCKDB_PATH"], read_only=true)
 include(joinpath(pkgdir(Euphemia), "src", "strategy", "StrategyHarness.jl")); using .StrategyHarness
@@ -22,7 +22,11 @@ for job in split(ENV["JOBS"], ",")
     for r in rows
         h = parse(Int, r[3]); p = parse(Float64, r[5]); mw = parse(Float64, r[6])
         mw <= 1e-6 && continue
-        if r[4] == "offer"
+        if r[4] == "inj"   # signed price-taking injection (storage schedule): supply at the floor / demand at the cap
+            lo, hi = base.book.price_limits
+            push!(company, p >= 0 ? SimpleOrder(:supply, lo, mw, Symbol(zone), ts(h), 60) :
+                                    SimpleOrder(:demand, hi, mw, Symbol(zone), ts(h), 60))
+        elseif r[4] == "offer"
             push!(company, SimpleOrder(:supply, p, mw, Symbol(zone), ts(h), 60))
         else
             # the book merges orders at round(price, 2) (book_build.jl:2253)
