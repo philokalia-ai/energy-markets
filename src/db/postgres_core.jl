@@ -298,14 +298,23 @@ function withdb(f)
     end
 end
 
+"""Optional read trace for diagnostics (bin/measure_duckdb_path.jl --trace): when set, called as
+`f(sql, args, df)` after every `sql2df` on either backend, with the caller's (pre-rewrite) SQL. `nothing`
+(the default) = off: no other code path sets it."""
+const SQL_TRACE = Ref{Any}(nothing)
+
 function sql2df(sql, args=[])
-    if DATA_STORE[] == :duckdb
-        return _duckdb_sql2df(sql, args)
+    df = if DATA_STORE[] == :duckdb
+        _duckdb_sql2df(sql, args)
+    else
+        withdb() do cnx
+            result = LibPQ.async_execute(cnx, sql, args)
+            DataFrame(fetch(result))
+        end
     end
-    return withdb() do cnx
-        result = LibPQ.async_execute(cnx, sql, args)
-        return DataFrame(fetch(result))
-    end
+    tr = SQL_TRACE[]
+    tr === nothing || tr(sql, args, df)
+    return df
 end
 
 """

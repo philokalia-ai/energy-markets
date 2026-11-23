@@ -3,6 +3,9 @@ name: Measure DuckDB path (perf-96)
 # Runner measurement for the owner rule "DuckDB between Postgres and Julia, always" (perf-96, 2026-11-23):
 # the fill time, and the day wall of the current Postgres read path vs the fill → DuckDB path, on the
 # production runner. READ-ONLY: nothing is written to Postgres (save_to_db=false, no transfer step).
+# Order (diagnostic, run 45195384063 follow-up): fill 1 → DuckDB path → Postgres path → fill 2. Both clears record
+# every source read (--trace: rows + fingerprints per read); the compare step diffs prices, the two traces (which
+# read returned different rows) and fill 1 vs fill 2 per table (did Postgres change during the run?).
 # Manual dispatch only (the lead dispatches it). It refuses to start, and stops itself, when it could
 # overlap the live forecast / publish windows or a running daily-forecast / publish-web-data job.
 on:
@@ -34,6 +37,7 @@ env:
   JULIA_VERSION: "1.13.4"
   JULIA_NUM_THREADS: 4
   RUN_DIR: ${{ github.workspace }}/run-local
+  RUN_DIR2: ${{ github.workspace }}/run-local-2
   OUT_DIR: ${{ github.workspace }}/measure-out
   PID_DIR: ${{ github.workspace }}/measure-pids
   # The job timeout; the guard refuses a start that could still be running inside a protected window.
@@ -142,22 +146,10 @@ jobs:
           print("start=" + days[0].isoformat())
           print("end=" + days[-1].isoformat())
           PY
-          mkdir -p "$OUT_DIR" "$RUN_DIR"
+          mkdir -p "$OUT_DIR"
           cat "$GITHUB_OUTPUT"
 
-      - name: Current path — clear reading Postgres directly (baseline, read-only)
-        env:
-          ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
-          EUPHEMIA_DATA_STORE: postgres
-        run: |
-          [ ! -f STOP_MEASURE ] || { cat STOP_MEASURE; exit 1; }
-          STOP_FILE="$GITHUB_WORKSPACE/STOP_MEASURE" julia --project=. bin/measure_duckdb_path.jl clear \
-            --days "${{ steps.days.outputs.days }}" --label pg --entry "${{ github.event.inputs.entry || 'forecast' }}" \
-            --out "$OUT_DIR" &
-          echo $! > "$PID_DIR/pg.pid"; wait $!
-          cat "$OUT_DIR/process_pg.csv"
-
-      - name: Fill — Postgres → run-local DuckDB (timed)
+      - name: Fill 1 — Postgres → run-local DuckDB (timed)
         env:
           ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
         run: |
@@ -166,7 +158,8 @@ jobs:
             --start "${{ steps.days.outputs.start }}" --end "${{ steps.days.outputs.end }}" --out "$RUN_DIR" &
           echo $! > "$PID_DIR/fill.pid"; wait $!
           cp "$RUN_DIR/fill.json" "$OUT_DIR/fill.json"
-          python3 -c "import json; f=json.load(open('$OUT_DIR/fill.json')); print('fill: wall', f['process_wall_s'], 's, peak RSS', f['peak_rss_kb'], 'kB, inputs', f['inputs_mib'], 'MiB, results', f['results_mib'], 'MiB')"
+          python3 -c "import json; f=json.load(open('$OUT_DIR/fill.json')); print('fill 1: wall', f['process_wall_s'], 's, peak RSS', f['peak_rss_kb'], 'kB, inputs', f['inputs_mib'], 'MiB, results', f['results_mib'], 'MiB')"
+          julia --project=. bin/measure_duckdb_path.jl fill-sums "$RUN_DIR/inputs.duckdb" "$OUT_DIR/fill1_sums.tsv"
 
       - name: DuckDB path — clear reading only the run-local DuckDB (no Postgres credentials)
         env:
@@ -178,17 +171,50 @@ jobs:
           [ ! -f STOP_MEASURE ] || { cat STOP_MEASURE; exit 1; }
           STOP_FILE="$GITHUB_WORKSPACE/STOP_MEASURE" julia --project=. bin/measure_duckdb_path.jl clear \
             --days "${{ steps.days.outputs.days }}" --label duckdb --entry "${{ github.event.inputs.entry || 'forecast' }}" \
-            --out "$OUT_DIR" &
+            --trace --out "$OUT_DIR" &
           echo $! > "$PID_DIR/duckdb.pid"; wait $!
           cat "$OUT_DIR/process_duckdb.csv"
+
+      - name: Current path — clear reading Postgres directly (baseline, read-only)
+        env:
+          ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
+          EUPHEMIA_DATA_STORE: postgres
+        run: |
+          [ ! -f STOP_MEASURE ] || { cat STOP_MEASURE; exit 1; }
+          STOP_FILE="$GITHUB_WORKSPACE/STOP_MEASURE" julia --project=. bin/measure_duckdb_path.jl clear \
+            --days "${{ steps.days.outputs.days }}" --label pg --entry "${{ github.event.inputs.entry || 'forecast' }}" \
+            --trace --out "$OUT_DIR" &
+          echo $! > "$PID_DIR/pg.pid"; wait $!
+          cat "$OUT_DIR/process_pg.csv"
+
+      - name: Fill 2 — the same days again, after the Postgres path (did Postgres change during the run?)
+        env:
+          ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
+        run: |
+          [ ! -f STOP_MEASURE ] || { cat STOP_MEASURE; exit 1; }
+          julia --project=. bin/fill_run_duckdb.jl --profile record \
+            --start "${{ steps.days.outputs.start }}" --end "${{ steps.days.outputs.end }}" --out "$RUN_DIR2" &
+          echo $! > "$PID_DIR/fill2.pid"; wait $!
+          cp "$RUN_DIR2/fill.json" "$OUT_DIR/fill2.json"
+          julia --project=. bin/measure_duckdb_path.jl fill-sums "$RUN_DIR2/inputs.duckdb" "$OUT_DIR/fill2_sums.tsv"
 
       - name: Compare prices and walls
         if: ${{ !cancelled() }}
         run: |
           # pure CSV comparison (no data store needed); fill wall/peak from fill.json
+          # no data store: prices and traces are CSV/TSV; fill-diff opens both fills read-only with DuckDB.jl.
+          # Every part runs even if an earlier one reports differences; the step fails at the end if prices differ.
+          rc=0
           julia --project=. bin/measure_duckdb_path.jl compare \
-            "$OUT_DIR/prices_pg.csv" "$OUT_DIR/prices_duckdb.csv" --out "$OUT_DIR"
+            "$OUT_DIR/prices_pg.csv" "$OUT_DIR/prices_duckdb.csv" --out "$OUT_DIR" || rc=$?
+          if [ -f "$OUT_DIR/trace_pg.tsv" ] && [ -f "$OUT_DIR/trace_duckdb.tsv" ]; then
+            julia --project=. bin/measure_duckdb_path.jl trace-diff "$OUT_DIR/trace_pg.tsv" "$OUT_DIR/trace_duckdb.tsv" --out "$OUT_DIR" || true
+          fi
+          if [ -f "$RUN_DIR/inputs.duckdb" ] && [ -f "$RUN_DIR2/inputs.duckdb" ]; then
+            julia --project=. bin/measure_duckdb_path.jl fill-diff "$RUN_DIR/inputs.duckdb" "$RUN_DIR2/inputs.duckdb" --out "$OUT_DIR" || true
+          fi
           [ -f "$OUT_DIR/fill.json" ] && python3 -c "import json; f=json.load(open('$OUT_DIR/fill.json')); print(f\"- fill: {f['process_wall_s']} s wall, peak RSS {f['peak_rss_kb']} kB, inputs {f['inputs_mib']} MiB, results {f['results_mib']} MiB\")" >> "$GITHUB_STEP_SUMMARY"
+          exit $rc
 
       - name: Upload measurement
         if: ${{ !cancelled() }}
@@ -197,6 +223,9 @@ jobs:
           name: measure-duckdb-path-${{ github.run_id }}
           path: |
             measure-out/
+            run-local/inputs.duckdb
+            run-local/fill.json
+            run-local-2/fill.json
             watchdog.log
             STOP_MEASURE
           if-no-files-found: warn
