@@ -24,3 +24,8 @@ r4 = reclear(b, co4; carve=[Carve(z, 400.0, 60.0, 180.0; ref=120.0)])
 println("CHECK4 withhold 400MW GR: mean Δp GR=$(round(sum(r4.prices[z][p]-b.prices[z][p] for p in per)/length(per); digits=2)) accepted_MWh=$(sum(r4.accepted))")
 # 5. realised
 re = load_realised(day); println("CHECK5 realised keys match book periods: $(all(p -> haskey(re["GR"], p), per)) zones=$(length(re)) GR mean=$(round(sum(values(re["GR"]))/length(re["GR"]); digits=2)) forecast GR mean=$(round(sum(values(b.prices["GR"]))/24; digits=2))")
+# 6. a company BLK block accepted in GR (cheap 100 MW 24h block at 1 €/MWh) -> blocks_accepted, accepted MW = 100/period
+fam = "BLK:hc6:GR"
+co6 = MarketOrder[Euphemia.MarketOrders.LinkedHourlyOrder(:supply, 1.0, 100.0, :GR, ts(p), 60, fam, 2400.0) for p in per]
+r6 = reclear(b, co6)
+println("CHECK6 BLK accepted=$(fam in r6.blocks_accepted) MWh=$(sum(r6.accepted)) (expect true, 2400)")
