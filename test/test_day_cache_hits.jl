@@ -45,7 +45,7 @@ import DuckDB.DBInterface as DBInterface
     try
         Euphemia.configure_data_store!(backend=:duckdb, duckdb_path=extract, read_only=true)
         N.clear_jao_cache!()
-        empty!(N._JAO_NP_CACHE); empty!(N._TX_OUTAGE_DAY_CACHE)
+        empty!(N._TX_OUTAGE_DAY_CACHE)
 
         m1 = N.jao_maxbex(day)
         @test m1[("AT", "CZ", 1)] == 1100.0
@@ -58,6 +58,35 @@ import DuckDB.DBInterface as DBInterface
         c1 = N.tx_outage_caps(day)
         @test c1[("AT", "CZ", 1)] == 150.0 && length(c1) == 24
         @test N.tx_outage_caps(day) === c1
+
+        # a cached tx_outage_caps call audits like a fresh one (#470 review)
+        N.clear_jao_cache!(); empty!(N._JAO_NP_CACHE); empty!(N._TX_OUTAGE_DAY_CACHE)
+        Euphemia.with_context(Euphemia.gate_context(day)) do
+            Euphemia.reset_asof_audit!()
+            N.tx_outage_caps(day)
+            once = Euphemia.asof_audit()["outages_transmission"]
+            N.tx_outage_caps(day)                                   # cache hit
+            twice = Euphemia.asof_audit()["outages_transmission"]
+            @test !isempty(once)
+            @test all(twice[k] == 2 * once[k] for k in keys(once))
+            Euphemia.reset_asof_audit!()
+        end
+
+        # cache keys follow the switches that change the result
+        N.clear_jao_cache!(); empty!(N._TX_OUTAGE_DAY_CACHE)
+        np_on = N.jao_net_positions(day)
+        np_off = withenv(() -> N.jao_net_positions(day), "EUPHEMIA_DISABLE_CV40_DEHUB" => "1")
+        @test np_off !== np_on                                      # separate cache entries
+        @test length(N._JAO_NP_CACHE) == 2
+        c_on = N.tx_outage_caps(day)
+        c_off = withenv(() -> N.tx_outage_caps(day), "EUPHEMIA_DISABLE_OUTAGE_INTERVALS" => "1")
+        @test c_off !== c_on
+        @test length(N._TX_OUTAGE_DAY_CACHE) == 2
+        # clear_jao_cache! empties every JAO cache
+        N.jao_maxbex(day)
+        @test !isempty(N._JAO_DAY_CACHE) && !isempty(N._JAO_NP_CACHE) && !isempty(N._JAO_CCR_PAIRS)
+        N.clear_jao_cache!()
+        @test isempty(N._JAO_DAY_CACHE) && isempty(N._JAO_NP_CACHE) && isempty(N._JAO_CCR_PAIRS)
 
         # the cached value equals a fresh computation
         N.clear_jao_cache!(); empty!(N._JAO_NP_CACHE); empty!(N._TX_OUTAGE_DAY_CACHE)

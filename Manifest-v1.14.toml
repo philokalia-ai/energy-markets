@@ -4,7 +4,7 @@ environment_id = "2e9cd046-0924-5485-92f1-d5272153d98c"
 environment_name = "Euphemia"
 julia_version = "1.14.0-beta1"
 manifest_format = "2.2"
-project_hash = "f1370ff57cdb074735f72e063cedbbc201ede06b"
+project_hash = "9c58dbc59d5be526ac996cb282f83bc71b195238"
 
 [[deps.ArgTools]]
 uuid = "0dad84c5-d112-42e6-8d28-ef12dabb789f"
@@ -305,7 +305,7 @@ version = "1.5.4+0"
     julia_version = "1.6.0"
 
 [[deps.Euphemia]]
-deps = ["CSV", "ConcurrentUtilities", "DataFrames", "Dates", "Distributed", "DotEnv", "Downloads", "DuckDB", "HiGHS", "JSON", "JuMP", "JuliaFormatter", "LibPQ", "Random", "Statistics", "Test"]
+deps = ["CSV", "ConcurrentUtilities", "DataFrames", "Dates", "Distributed", "DotEnv", "Downloads", "DuckDB", "HiGHS", "JSON", "JuMP", "JuliaFormatter", "LibPQ", "PrecompileTools", "Random", "Statistics", "Test"]
 path = "."
 uuid = "2e9cd046-0924-5485-92f1-d5272153d98c"
 version = "0.0.0"

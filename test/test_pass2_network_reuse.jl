@@ -52,3 +52,30 @@ using Euphemia.Network: TransferCapacity
     @test ob2.network_topology === tc
     @test ob2.orders == ob.orders
 end
+
+@testset "pass-2 reuse replays the transfer-capacity build's as-of audit (#470 review)" begin
+    day = Date(2026, 11, 4)
+    zones = ["A", "B"]
+    t = DateTime(day)
+    cached = Dict{String,Vector{MarketOrder}}(
+        "A" => MarketOrder[SimpleOrder(:supply, 20.0, 100.0, :A, t, 60), SimpleOrder(:demand, 3000.0, 40.0, :A, t, 60)],
+        "B" => MarketOrder[SimpleOrder(:supply, 80.0, 100.0, :B, t, 60), SimpleOrder(:demand, 3000.0, 60.0, :B, t, 60)])
+    tc = TransferCapacity(zones, [string(h) for h in 1:24],
+                          Dict(("A", "B", string(h)) => 30.0 for h in 1:24),
+                          Dict(("A", "B", string(h)) => 30.0 for h in 1:24))
+    @test isempty(tc.asof_audit)                      # every constructor starts empty
+    tc.asof_audit[("outages_transmission", :verified)] = 7
+    tc.asof_audit[("jao_maxbex", :verified)] = 2
+    Euphemia.with_context(Euphemia.gate_context(day)) do
+        Euphemia.reset_asof_audit!()
+        redirect_stdout(devnull) do
+            Euphemia._create_multi_zone_order_book_merit(zones, day; enrich_network=false,
+                cached_zone_orders=cached, transfer_capacity=tc)
+        end
+        a = Euphemia.asof_audit()
+        @test a["outages_transmission"][:verified] == 7
+        @test a["jao_maxbex"][:verified] == 2
+        Euphemia.reset_asof_audit!()
+    end
+end
+
