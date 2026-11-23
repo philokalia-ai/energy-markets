@@ -433,6 +433,30 @@ function q15_forecast(ts::AbstractVector, vals::AbstractVector)
 end
 
 """
+    q15_forecast_by_day(ts, vals) -> (Dict{DateTime,Float64}, res::String)
+
+`q15_forecast` decided per UTC day: a window spanning the hourly → quarter-hour switch keeps its
+hourly days (replicated x4) next to its native quarter days, instead of one decision over the whole
+window dropping the hourly days (review of #476 #2). `res` is the days' common resolution, or
+"mixed". A single-day window equals `q15_forecast`.
+"""
+function q15_forecast_by_day(ts::AbstractVector, vals::AbstractVector)
+    length(ts) == length(vals) || throw(ArgumentError("ts/vals length mismatch"))
+    byday = Dict{Date,Vector{Int}}()
+    for (i, t) in enumerate(ts)
+        push!(get!(byday, Date(DateTime(t)), Int[]), i)
+    end
+    out = Dict{DateTime,Float64}()
+    res = Set{String}()
+    for d in sort!(collect(keys(byday)))
+        idx = byday[d]
+        fq, r = q15_forecast(ts[idx], vals[idx])
+        merge!(out, fq); push!(res, r)
+    end
+    return out, length(res) == 1 ? only(res) : isempty(res) ? "PT60M" : "mixed"
+end
+
+"""
     score_q15(fq, act_t, act_v, act_res; window=nothing, min_n=MIN_SCORE_Q15_DEFAULT)
         -> NamedTuple
 

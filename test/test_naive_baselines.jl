@@ -95,6 +95,23 @@ sim_of(d) = (h = expected_market_day_hours(d); (h, loc_price.(h) .+ 5.0))
         @test pq.model ≈ p.model && pq.d1 ≈ p.d1 && pq.d7 ≈ p.d7 && pq.epf ≈ p.epf
     end
 
+    @testset "q15_forecast_by_day: native decided per UTC day (review of #476 #2)" begin
+        hd = Date(2025, 9, 30); qd = Date(2025, 10, 1)
+        ht = [DateTime(hd) + Hour(h) for h in 0:23]; hv = [10.0 + h for h in 0:23]
+        qt = [DateTime(qd) + Minute(15k) for k in 0:95]; qv = [100.0 + k for k in 0:95]
+        fq, res = q15_forecast_by_day(vcat(ht, qt), vcat(hv, qv))
+        @test res == "mixed"
+        @test length(fq) == 96 + 96                              # hourly day replicated x4, quarter day native
+        @test fq[DateTime(hd) + Hour(5) + Minute(30)] == 15.0    # hourly value on its quarter
+        @test fq[DateTime(qd) + Minute(15 * 7)] == 107.0         # native quarter kept
+        # the whole-window decision dropped the hourly day's :15/:30/:45 quarters
+        fw, rw = q15_forecast(vcat(ht, qt), vcat(hv, qv))
+        @test rw == "PT15M" && length(fw) == 24 + 96
+        # single-type windows equal q15_forecast
+        @test q15_forecast_by_day(ht, hv) == q15_forecast(ht, hv)
+        @test q15_forecast_by_day(qt, qv) == q15_forecast(qt, qv)
+    end
+
     @testset "leads 2-7: D-7 only, d1/epf absent" begin
         ts, vs = panel(Date(2026, 10, 10), Date(2026, 10, 23))
         st, sv = sim_of(Date(2026, 10, 23))

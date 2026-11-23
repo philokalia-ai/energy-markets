@@ -287,7 +287,8 @@ Per-zone (n, corr, mae, bias, simμ, actμ). Joins sim to actuals on (zone, hour
 over the window: the sim replicated x4 (or used as is when the clear is natively
 quarter-hourly) against native PT15M SDAC actuals (`native_q15_actuals`,
 `score_q15` from bin/forecast_common.jl) — n_q15, mae_q15, bias_q15, corr_q15,
-shape_floor_q15, q15_res ("PT60M" = replicated hourly, "PT15M" = native). A zone
+shape_floor_q15, q15_res ("PT60M" = replicated hourly, "PT15M" = native, "mixed" = both, decided per
+UTC day). A zone
 without native PT15M actuals gets nothing for these fields. The hourly fields
 are computed exactly as before.
 """
@@ -319,7 +320,7 @@ function metrics(cm::String, cv::Int, sd::Date, ed::Date;
         r = (z=z, n=length(sv), corr=c, mae=mean(abs.(sv .- av)),
              bias=mean(sv .- av), simμ=mean(sv), actμ=mean(av))
         if q15
-            fq, res = q15_forecast(DateTime.(sub.t), Float64.(sub.sim))
+            fq, res = q15_forecast_by_day(DateTime.(sub.t), Float64.(sub.sim))   # per UTC day (mixed windows)
             za = a15[String.(a15.z) .== z, :]
             q = score_q15(fq, za.t, za.act, za.res)
             r = merge(r, (n_q15=q.n_q15, mae_q15=q.mae_q15, bias_q15=q.bias_q15,
