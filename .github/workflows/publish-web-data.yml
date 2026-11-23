@@ -5,10 +5,10 @@
 # server read-only; record books staged under /opt/euphemia/data (data/ is
 # git-ignored) are pushed additively from there via the books_dir input.
 #
-# Scheduled 11:30 UTC (phase 3): the owner's server writes the post-sim Timestral
-# overlay vintage (and the hybrid/stats model lines) at 10:40 UTC via cron
-# (bin/emit_model_lines.sh) but holds no R2 credentials; this re-export makes
-# those DB rows reach the site the same day instead of at the next 06:30 cycle.
+# Scheduled 11:30 UTC (phase 3): the tsfm-postsim workflow writes the post-sim
+# Timestral overlay vintage (Timestral + physics) at 10:40 UTC (dispatched by the
+# k3s CronJob gh-energy-markets-dispatch-1040); this re-export makes those DB rows
+# reach the site the same day instead of at the next 06:30 cycle.
 # Under `schedule` the dispatch inputs are empty: the inputs export is skipped
 # and books_dir is empty (the books step warns and exits 0).
 name: publish-web-data
