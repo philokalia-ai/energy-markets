@@ -212,8 +212,13 @@ function pending_slices()
     # scores survived, showing DE_LU corr -0.01 against a chart at 0.97).
     # Always rescore recent days — upsert_score! makes this idempotent and the
     # window is a handful of slices, so the cost is negligible.
+    # DuckDB backend: the cutoff is a literal UTC date. `CURRENT_DATE - n` fails to bind on the FIRST use in a
+    # DuckDB connection (it autoloads ICU only after that failure; the retry then passes), so a run logged a
+    # spurious failed attempt; a literal also needs no session time zone.
+    cutoff = Euphemia.results_to_duckdb() ?
+        "DATE '$(Date(Dates.now(Dates.UTC)) - Day(RESCORE_WINDOW_DAYS))'" : "CURRENT_DATE - $(RESCORE_WINDOW_DAYS)"
     rescore_clause = RESCORE ? "" : """
-        AND (fp.market_date >= CURRENT_DATE - $(RESCORE_WINDOW_DAYS)
+        AND (fp.market_date >= $cutoff
              OR NOT EXISTS (
             SELECT 1 FROM simulations.forecast_scores s
             WHERE s.market_date = fp.market_date
