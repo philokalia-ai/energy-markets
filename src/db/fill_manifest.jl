@@ -196,8 +196,11 @@ end
 # or, for offline proofs, a DuckDB extract attached READ_ONLY as `src` (the same filter SQL,
 # through the backend's dialect rewrite, with every source table qualified `src.`).
 const _FILL_SOURCE = Ref{Symbol}(:postgres)
-_qualify_src(sql) = replace(_duckdb_rewrite(sql),
-    r"(?<![\w.])(entsoe|jao|yfinance|epias|simulations|weather|information_schema)\." => s"src.\1.")
+# Qualify BEFORE the dialect rewrite: under a run-local fill the rewrite redirects read-back tables
+# (simulations.forecast_prices, …) to results_db, so a rewrite-first seed read the empty results table
+# instead of the source; an `src.`-qualified name is never redirected.
+_qualify_src(sql) = _duckdb_rewrite(replace(sql,
+    r"(?<![\w.])(entsoe|jao|yfinance|epias|simulations|weather|information_schema|carbon)\." => s"src.\1."))
 _src_from(sql) = _FILL_SOURCE[] === :postgres ? "postgres_query('pg', $(_pg_str(sql)))" :
                                                  "($(_qualify_src(sql)))"
 _pg_rows(con, sql) = collect(DBInterface.execute(con, "SELECT * FROM $(_src_from(sql))"))

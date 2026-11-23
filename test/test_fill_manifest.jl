@@ -422,3 +422,33 @@ end
     bare = joinpath(dir, "bare.duckdb"); DuckDB.close(DuckDB.DB(bare))
     @test E.resolve_forecast_needs(; source=:duckdb, source_path=bare) == (map_start=nothing, history_start=nothing)
 end
+
+@testset "offline seed reads the SOURCE's read-back tables while a fill store is open" begin
+    E = Euphemia
+    prev = (E.DATA_STORE[], E.DUCKDB_PATH[], E.DUCKDB_READ_ONLY[], E.DUCKDB_RESULTS_WRITABLE[], E.RESULTS_DB_PATH[])
+    dir = mktempdir()
+    src = joinpath(dir, "src.duckdb")
+    let db = DuckDB.DB(src), con = DBInterface.connect(db)
+        DBInterface.execute(con, "CREATE SCHEMA simulations")
+        DBInterface.execute(con, "CREATE TABLE simulations.forecast_prices (market_date DATE, date_time_utc TIMESTAMP, bidding_zone VARCHAR, price_eur_mwh DOUBLE, prediction_made_utc TIMESTAMP, lead_days INTEGER, code_version INTEGER, input_mode VARCHAR, is_retro BOOLEAN)")
+        DBInterface.execute(con, "INSERT INTO simulations.forecast_prices VALUES (DATE '2026-11-10', TIMESTAMP '2026-11-10 10:00:00', 'GR', 99.0, TIMESTAMP '2026-11-09 06:30:00', 1, 45, 'weather', false)")
+        DBInterface.close!(con); DuckDB.close(db)
+    end
+    inputs = joinpath(dir, "inputs.duckdb"); DuckDB.close(DuckDB.DB(inputs))
+    E.mark_run_local_fill!(inputs; windows=[("entsoe", "actual_total_load", Date(1900, 1, 1), Date(2999, 12, 31))])
+    try
+        E.RESULTS_DB_PATH[] = joinpath(dir, "results.duckdb")
+        E.configure_data_store!(backend=:duckdb, duckdb_path=inputs, read_only=true, results_writable=true)
+        con = E._duckdb_connection(); E._ensure_results_attached(con); E.ensure_run_results_tables!()
+        @test E._FILL_GUARD[] !== nothing                       # the redirect is armed
+        DBInterface.execute(con, "ATTACH '$src' AS src (READ_ONLY)")
+        E._FILL_SOURCE[] = :duckdb
+        s = redirect_stdout(devnull) do; E.seed_run_results!(con, [(table="forecast_prices", where="")]); end
+        @test only(s).rows == 1                                  # was 0: read results_db through the redirect
+        @test E._results_exec("SELECT price_eur_mwh AS p FROM results_db.simulations.forecast_prices").p == [99.0]
+    finally
+        E._FILL_SOURCE[] = :postgres
+        try; E._duckdb_drop_connection!(); E.RESULTS_DB_PATH[] = prev[5]
+             E.configure_data_store!(backend=prev[1], duckdb_path=prev[2], read_only=prev[3], results_writable=prev[4]); catch; end
+    end
+end
