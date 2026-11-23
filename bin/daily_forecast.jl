@@ -152,6 +152,10 @@ const ZONES = let z = [String(strip(s)) for s in split(get(ENV, "ZONES", ""), ",
     isempty(z) ? FORECAST_FOOTPRINT : z
 end
 const CV = Euphemia.ENERGY_PRICES_CODE_VERSION
+# Clearing resolution of the product (cv46: 15 min, 96 periods per UTC day). The
+# clear, the stitch and the completeness check all use it; forecast rows are
+# written per slot (quarter-hour stamps).
+const CLEAR_RES = Euphemia.CLEAR_RESOLUTION_MINUTES
 
 # ── Pre-gate/7-lead + data-reset controls (docs/experiments/pregate-7lead.md) ─
 # PRE-GATE: the ~06:30 UTC run that freezes lead-1 (tomorrow) BEFORE the 12:00
@@ -898,9 +902,11 @@ function print_asof_audit(day, lead)
 end
 
 """
-Clear one UTC calendar day with the standard 39-zone machinery and collapse to
-zone → (hour → price). Returns `nothing` on failure. Results are memoized in
-`cache` so consecutive market days share their overlapping UTC-day solve.
+Clear one UTC calendar day with the standard 39-zone machinery at `CLEAR_RES`
+minutes per period and return zone → (slot-start UTC → price), one entry per
+slot (quarter-hours from cv46; the variable names still say "hourly").
+Returns `nothing` on failure. Results are memoized in `cache` so consecutive
+market days share their overlapping UTC-day solve.
 In weather mode, `scenario` carries the per-zone RES replacement (ENTSO-E RES
 zeroed, weather-RES injected as price-taker supply).
 """
@@ -933,6 +939,7 @@ function clear_utc_day!(cache::Dict{Date,Union{Nothing,Dict{String,Dict{DateTime
             clearing_mode=CLEARING_MODE,
             enrich_network=true,
             passes=2,
+            clear_resolution_minutes=CLEAR_RES,
             scenario=scenario)
     catch e
         e isa InterruptException && rethrow()
@@ -951,7 +958,7 @@ function clear_utc_day!(cache::Dict{Date,Union{Nothing,Dict{String,Dict{DateTime
         return nothing
     end
     hourly = Dict{String,Dict{DateTime,Float64}}(
-        zone => hourly_prices(result.market_prices[zone])
+        zone => slot_prices(result.market_prices[zone])
         for zone in keys(result.market_prices))
     println("  UTC day $utc_day cleared in $(elapsed)s (status=$(result.status), " *
             "$(length(hourly)) zones)")
@@ -1383,13 +1390,13 @@ function main()
         empty_hourly = Dict{DateTime,Float64}()
         for zone in union(keys(prev_hourly), keys(curr_hourly))
             st = stitch_market_day(day, get(prev_hourly, zone, empty_hourly),
-                                   get(curr_hourly, zone, empty_hourly))
-            if isempty(st.missing_hours)
+                                   get(curr_hourly, zone, empty_hourly); res_minutes=CLEAR_RES)
+            if isempty(st.missing_slots)
                 zone_hourly[zone] = st.stitched
             else
                 println("  ⚠️ $zone: market day INCOMPLETE — " *
-                        "$(length(st.missing_hours))/$(length(st.expected)) hour(s) missing " *
-                        "($(join(Dates.format.(st.missing_hours, "yyyy-mm-ddTHH:MM") .* "Z", ", "))) " *
+                        "$(length(st.missing_slots))/$(length(st.expected)) $(CLEAR_RES)-min slot(s) missing " *
+                        "($(join(Dates.format.(st.missing_slots, "yyyy-mm-ddTHH:MM") .* "Z", ", "))) " *
                         "— zone-day NOT written")
             end
         end
@@ -1627,8 +1634,8 @@ function run_retro()
                     empty_hourly = Dict{DateTime,Float64}()
                     for zone in union(keys(prev_hourly), keys(curr_hourly))
                         st = stitch_market_day(day, get(prev_hourly, zone, empty_hourly),
-                                               get(curr_hourly, zone, empty_hourly))
-                        isempty(st.missing_hours) && (zone_hourly[zone] = st.stitched)
+                                               get(curr_hourly, zone, empty_hourly); res_minutes=CLEAR_RES)
+                        isempty(st.missing_slots) && (zone_hourly[zone] = st.stitched)
                     end
                     isempty(zone_hourly) &&
                         (println("  ❌ $day lead=$lead: no complete zone-day — nothing written"); return :fail)

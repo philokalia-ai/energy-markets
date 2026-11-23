@@ -122,9 +122,19 @@ athens_market_day_window(d::Date) =
     (athens_day_start_utc(d), athens_day_start_utc(d + Day(1)))
 
 "Expected hourly UTC stamps of Europe/Athens market day `d` (24; 23/25 on DST days)."
-function expected_market_day_hours(d::Date)
+expected_market_day_hours(d::Date) = expected_market_day_slots(d, 60)
+
+"""
+    expected_market_day_slots(d::Date, res_minutes::Int) -> Vector{DateTime}
+
+Expected UTC slot-start stamps of Europe/Athens market day `d` at `res_minutes`
+per period: 96 quarter-hours at 15 (92/100 on DST days), 24 hours at 60.
+"""
+function expected_market_day_slots(d::Date, res_minutes::Int)
+    (1 <= res_minutes <= 60 && 60 % res_minutes == 0) ||
+        throw(ArgumentError("res_minutes must divide 60 (got $res_minutes)"))
     t0, t1 = athens_market_day_window(d)
-    return collect(t0:Hour(1):(t1 - Hour(1)))
+    return collect(t0:Minute(res_minutes):(t1 - Minute(res_minutes)))
 end
 
 """
@@ -163,32 +173,37 @@ function input_coverage_reasons(day::Date, zones,
 end
 
 """
-    stitch_market_day(d::Date, hourly_prev::Dict{DateTime,Float64},
-                      hourly_curr::Dict{DateTime,Float64})
-        -> (stitched, missing_hours, expected)
+    stitch_market_day(d::Date, prev::Dict{DateTime,Float64},
+                      curr::Dict{DateTime,Float64}; res_minutes::Int)
+        -> (stitched, missing_slots, expected)
 
-Assemble the full Europe/Athens market day `d` from two UTC-day clears:
-`hourly_prev` = hourly prices of the UTC-day d-1 clear (contributes only
-hours ≥ athens_day_start_utc(d), i.e. the late-evening UTC tail that belongs
-to market day `d`), `hourly_curr` = hourly prices of the UTC-day d clear
-(contributes only hours < athens_day_start_utc(d+1); its unpublished local
-tail is expected to be absent). `missing_hours` is empty iff the stitched
-day is complete — callers MUST refuse to persist an incomplete day.
+Assemble the full Europe/Athens market day `d` from two UTC-day clears at
+`res_minutes` per period (15 for the cv46 product; required, so a caller
+cannot check a quarter-hour day against the hourly grid): `prev` = slot
+prices of the UTC-day d-1 clear (contributes only slots ≥
+athens_day_start_utc(d), i.e. the late-evening UTC tail that belongs to market
+day `d`), `curr` = slot prices of the UTC-day d clear (contributes only slots
+< athens_day_start_utc(d+1); its unpublished local tail is expected to be
+absent). `expected` = `expected_market_day_slots(d, res_minutes)`;
+`missing_slots` is empty iff every expected slot is present — callers MUST
+refuse to persist an incomplete day. Stamps off the grid never enter
+`stitched`.
 """
-function stitch_market_day(d::Date, hourly_prev::Dict{DateTime,Float64},
-                           hourly_curr::Dict{DateTime,Float64})
+function stitch_market_day(d::Date, prev::Dict{DateTime,Float64},
+                           curr::Dict{DateTime,Float64}; res_minutes::Int)
     t0, t1 = athens_market_day_window(d)
     utc_midnight = DateTime(d)
+    expected = expected_market_day_slots(d, res_minutes)
+    grid = Set(expected)
     stitched = Dict{DateTime,Float64}()
-    for (h, p) in hourly_prev
-        (t0 <= h < utc_midnight) && (stitched[h] = p)
+    for (h, p) in prev
+        (t0 <= h < utc_midnight) && h in grid && (stitched[h] = p)
     end
-    for (h, p) in hourly_curr
-        (utc_midnight <= h < t1) && (stitched[h] = p)
+    for (h, p) in curr
+        (utc_midnight <= h < t1) && h in grid && (stitched[h] = p)
     end
-    expected = collect(t0:Hour(1):(t1 - Hour(1)))
-    missing_hours = [h for h in expected if !haskey(stitched, h)]
-    return (stitched=stitched, missing_hours=missing_hours, expected=expected)
+    missing_slots = [h for h in expected if !haskey(stitched, h)]
+    return (stitched=stitched, missing_slots=missing_slots, expected=expected)
 end
 
 """
@@ -285,21 +300,14 @@ function eligibility_verdict(zones::Vector{String},
 end
 
 """
-    hourly_prices(prices::Dict{String,Float64}) -> Dict{DateTime,Float64}
+    slot_prices(prices::Dict{String,Float64}) -> Dict{DateTime,Float64}
 
-Collapse a market-clearing price dict keyed by "yyyymmdd-HHMM" timeslots to
-hourly prices (mean of sub-hourly slots within each hour; identity for hourly
-books, which is what the merit-order clear produces).
+Parse a market-clearing price dict keyed by "yyyymmdd-HHMM" timeslots into
+slot-start UTC stamps, one entry per slot, unchanged: quarter-hour prices stay
+quarter-hour (cv46). (Replaces `hourly_prices`, which averaged the quarters.)
 """
-function hourly_prices(prices::Dict{String,Float64})
-    acc = Dict{DateTime,Vector{Float64}}()
-    for (ts, p) in prices
-        dt = DateTime(ts, dateformat"yyyymmdd-HHMM")
-        h = trunc(dt, Hour)
-        push!(get!(acc, h, Float64[]), p)
-    end
-    return Dict(h => mean(v) for (h, v) in acc)
-end
+slot_prices(prices::Dict{String,Float64}) =
+    Dict{DateTime,Float64}(DateTime(ts, dateformat"yyyymmdd-HHMM") => p for (ts, p) in prices)
 
 """
     score_series(sim::Vector{Float64}, act::Vector{Float64})

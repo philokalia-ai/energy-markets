@@ -232,6 +232,7 @@ function pipeline_book_worker(bookwork::RemoteChannel, solvework::RemoteChannel,
                     mz_build_books(zones, day;
                         enrich_network=cfg.enrich_network,
                         apply_zone_profiles=cfg.apply_zone_profiles,
+                        clear_resolution_minutes=cfg.clear_resolution_minutes,
                         scenario=cfg.scenario)
                 end
                 book_secs = time() - t0
@@ -254,6 +255,9 @@ function pipeline_book_worker(bookwork::RemoteChannel, solvework::RemoteChannel,
                         transfer_capacity=network,
                         enrich_network=cfg.enrich_network,
                         apply_zone_profiles=cfg.apply_zone_profiles,
+                        # Same grid as pass 1: pass-2 anchor refs (and P1's
+                        # storable-water refs) are keyed by pass-1 slot stamps.
+                        clear_resolution_minutes=cfg.clear_resolution_minutes,
                         scenario=cfg.scenario)
                 end
                 rebuild_secs = time() - t0
@@ -404,6 +408,10 @@ sequential `run_multi_zone_market_clearing(day; passes=2, ...)` path.
 - `book_workers`    : book-builder processes (default `min(10, CPU÷8)`)
 - `in_flight`       : max days in flight / channel capacity (default 8)
 - `optimizer`       : "highs" (default; the only solver) / "auto"
+- `clear_resolution_minutes` : minutes per price period (default
+  `CLEAR_RESOLUTION_MINUTES` = 15, 96 periods; 60 = hourly). The truncation
+  and resume gates require `1440 ÷ clear_resolution_minutes` periods unless
+  `min_price_periods` is given.
 - `clearing_mode`   : energy_prices save key (default "multi_zone_eu")
 - `save_to_db`      : persist results (default true)
 - `resume`          : skip already-saved days (default true)
@@ -489,10 +497,18 @@ function _run_pipelined_backfill_impl(days, zones::Vector{String}=String[];
         # single hour, losing 30,810 zone-hours (2.52% of the record).
         #
         # A UTC day always has 24 hours (no DST ambiguity), so the honest bar
-        # for an hourly clear is 24. Set 0 to restore the old save-anything
-        # behaviour. This gate never changes a price — only whether a
-        # truncated day is recorded as complete.
-        min_price_periods::Int=24,
+        # is every period of the day: `nothing` (default) resolves to
+        # 1440 ÷ clear_resolution_minutes (96 at 15 min, 24 hourly). The same
+        # bar decides resume completeness, so a short quarter-hour day is
+        # re-processed rather than skipped forever. Set 0 to restore the old
+        # save-anything behaviour. This gate never changes a price — only
+        # whether a truncated day is recorded as complete.
+        min_price_periods::Union{Nothing,Int}=nothing,
+        # Clearing resolution (minutes per price period), passed to BOTH book
+        # stages (mz_build_books / mz_rebuild_anchored). Default: the product
+        # resolution CLEAR_RESOLUTION_MINUTES (15 from cv46, 96 periods); 60
+        # gives the hourly clear. Config only — never read from the env.
+        clear_resolution_minutes::Int=CLEAR_RESOLUTION_MINUTES,
         # Same cv20 policy as run_multi_zone_market_clearing: `nothing` resolves
         # to decomposed on the enriched (EU-footprint) path — the canonical,
         # solver-invariant mode — and monolithic otherwise. Explicit wins.
@@ -533,6 +549,9 @@ function _run_pipelined_backfill_impl(days, zones::Vector{String}=String[];
     isempty(zones) && error("run_pipelined_backfill: `zones` must be non-empty")
     days = collect(Date, days)
     cv = ENERGY_PRICES_CODE_VERSION
+    (1 <= clear_resolution_minutes <= 60 && 60 % clear_resolution_minutes == 0) ||
+        error("clear_resolution_minutes must divide 60 (got $clear_resolution_minutes)")
+    min_price_periods = something(min_price_periods, 1440 ÷ clear_resolution_minutes)
 
     # Resume: drop already-saved days up front, so the total to process is known.
     # Under the DuckDB backend the resume probe READS simulations.* which lives
@@ -572,14 +591,15 @@ function _run_pipelined_backfill_impl(days, zones::Vector{String}=String[];
             # record holds 65 days that carry all 39 zones and fewer than 24
             # hours (12 of them a single hour) because one zone's short book
             # collapsed the coupled period intersection. Those days passed a
-            # zone-only check and were skipped forever.
+            # zone-only check and were skipped forever. `nh` counts distinct
+            # stamps, so at 15 min a complete day needs 96 (min_price_periods).
             complete = Set(Date(r.d) for r in eachrow(df)
                            if Int(r.nz) >= length(zones) && Int(r.nh) >= min_price_periods)
             for r in eachrow(df)
                 nz, nh = Int(r.nz), Int(r.nh)
                 (nz >= length(zones) && nh >= min_price_periods) && continue
                 @warn "resume: $(Date(r.d)) is SHORT ($nz/$(length(zones)) zones, " *
-                      "$nh/$min_price_periods hours) — re-processing"
+                      "$nh/$min_price_periods periods) — re-processing"
             end
             complete
         catch e
@@ -610,7 +630,8 @@ function _run_pipelined_backfill_impl(days, zones::Vector{String}=String[];
     println("=" ^ 70)
     println("🔀 PIPELINED BACKFILL  days=$N/$(length(days))  zones=$(length(zones))")
     println("   solver_workers=$solver_workers  book_workers=$book_workers  in_flight=$in_flight")
-    println("   optimizer=$optimizer  clearing_mode=$clearing_mode  cv=$cv  save=$save_to_db")
+    println("   optimizer=$optimizer  clearing_mode=$clearing_mode  cv=$cv  save=$save_to_db  " *
+            "resolution=$(clear_resolution_minutes)min (≥$min_price_periods periods/day)")
     println("=" ^ 70); flush(stdout)
 
     # --- spin up the worker pool -------------------------------------------
@@ -710,7 +731,8 @@ function _run_pipelined_backfill_impl(days, zones::Vector{String}=String[];
            apply_zone_profiles=apply_zone_profiles, mpcc_time_limit=mpcc_time_limit,
            mpcc_mip_gap=mpcc_mip_gap, mpcc_heuristic_effort=mpcc_heuristic_effort,
            scenario=scenario, decompose_periods=resolved_decompose,
-           books_dir=books_dir_abs, as_of=as_of)
+           books_dir=books_dir_abs, as_of=as_of,
+           clear_resolution_minutes=clear_resolution_minutes)
 
     try
         # Load Dates alongside Euphemia: scenario hooks are closures serialized
