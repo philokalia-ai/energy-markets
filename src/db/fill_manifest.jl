@@ -356,8 +356,32 @@ function fill_profile(profile::Symbol; start::Union{Nothing,Date}=nothing, stop:
                  (table="forecast_scores", where=""),
                  (table="input_corrections", where="date_time_utc >= $(_pg_day(asof - Day(5), false)) AND date_time_utc < $(_pg_day(asof + Day(10), false))"),
                  (table="transmission_flows", where="date_time_utc >= $(_pg_day(asof - Day(121), true))")]
+    elseif profile === :retro
+        # bin/daily_forecast.jl run_retro: lead 1 reconstructed for market days S..E, two UTC
+        # clears (D-1, D) per market day at D's gate. Weather comes from open-meteo / the
+        # exported vintages file (EUPHEMIA_WEATHER_DUCKDB), never Postgres.
+        (start === nothing || stop === nothing) && error("fill profile :retro needs start and stop")
+        days = collect((start - Day(1)):Day(1):stop)
+        specs = vcat(FILL_SPECS, FORECAST_EXTRA_SPECS)
+        md = "market_date BETWEEN $(_pg_str(string(start)))::date AND $(_pg_str(string(stop)))::date"
+        seeds = [(table="forecast_prices", where=md),
+                 (table="forecast_scores", where=md),
+                 (table="input_corrections", where="date_time_utc >= $(_pg_day(start - Day(2), false)) AND date_time_utc < $(_pg_day(stop + Day(3), false))")]
+    elseif profile === :rescore
+        # score_forecasts.jl rescore modes + forecast_scores_snapshot.jl (rescore-hourly/-q15):
+        # actual Day-ahead prices (every resolution) over the window; the scores table whole
+        # (the snapshot reads it all), the forecasts for the window's market days.
+        (start === nothing || stop === nothing) && error("fill profile :rescore needs start and stop")
+        days = collect(start:Day(1):stop)
+        specs = FillSpec[_fs("entsoe", "energy_prices", :window;
+                             zone_pred="map_code = ANY(\$ZONES) AND contract_type = 'Day-ahead'",
+                             ts_col="date_time_utc", back=1, ahead=1, sort_by="map_code, date_time_utc")]
+        zf = "bidding_zone = ANY($(_pg_zones(zones)))"
+        md = "market_date BETWEEN $(_pg_str(string(start)))::date AND $(_pg_str(string(stop)))::date"
+        seeds = [(table="forecast_prices", where="$md AND $zf"),
+                 (table="forecast_scores", where="")]
     else
-        error("unknown fill profile $profile (record | daily_forecast | export)")
+        error("unknown fill profile $profile (record | daily_forecast | export | retro | rescore)")
     end
     return (days=days, zones=zones, specs=specs, seeds=seeds)
 end

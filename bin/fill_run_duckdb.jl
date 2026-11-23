@@ -1,7 +1,7 @@
 # Fill step: Postgres -> run-local DuckDB (owner rule, 2026-11-23: DuckDB between Postgres and
 # Julia; Julia never queries Postgres except here and in the results transfer).
 #
-#   julia --project=. bin/fill_run_duckdb.jl --profile daily-forecast|record|export --out DIR \
+#   julia --project=. bin/fill_run_duckdb.jl --profile daily-forecast|record|export|retro|rescore --out DIR \
 #         [--start YYYY-MM-DD --end YYYY-MM-DD | --days D1,D2,...] [--as-of YYYY-MM-DD] [--zones A,B,...] \
 #         [--source duckdb:<path>] [--seed-results false]
 # Env: ENERGY_CONN_STR; ZONES (default zone list, else the 39-zone footprint); INPUTS_BACK_DAYS
@@ -86,7 +86,7 @@ function main(argv)
     inputs = joinpath(tmp, "inputs.duckdb")
     results = joinpath(tmp, "results.duckdb")
     # per-unit feed bound: record = the gate rule; forecast/export = a week before the run day
-    bound = profile === :record ? nothing : DateTime(asof) - Day(7)
+    bound = profile in (:record, :retro, :rescore) ? nothing : DateTime(asof) - Day(7)
     Euphemia.fill_run_duckdb(inputs; days=p.days, zones=zones, conn_str=conn, specs=p.specs,
                              feed_bound_min=bound, source=source, source_path=source_path)
     t_inputs = time() - t0

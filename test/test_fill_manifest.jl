@@ -49,6 +49,22 @@ import DuckDB.DBInterface as DBInterface
     @test w == [(Date(2026, 7, 7), Date(2026, 9, 21))]
     @test occursin("area_map_code = 'IT-NORTH') AND date_time_utc >= ('2026-05-19'", sql)
 
+    # profiles: retro = UTC days S-1..E + forecast extras; rescore = actual prices only
+    z = ["GR", "BG"]
+    r = E.fill_profile(:retro; start=Date(2026, 3, 10), stop=Date(2026, 3, 12), zones=z)
+    @test r.days == collect(Date(2026, 3, 9):Day(1):Date(2026, 3, 12))
+    @test any(s -> s.table == "uka_price", r.specs) && any(s -> s.table == "physical_flows", r.specs)
+    @test [sd.table for sd in r.seeds] == ["forecast_prices", "forecast_scores", "input_corrections"]
+    @test occursin("market_date BETWEEN '2026-03-10'::date AND '2026-03-12'::date", r.seeds[1].where)
+    q = E.fill_profile(:rescore; start=Date(2026, 3, 10), stop=Date(2026, 3, 12), zones=z)
+    @test [s.table for s in q.specs] == ["energy_prices"]
+    @test occursin("bidding_zone = ANY(ARRAY['GR', 'BG']::text[])", q.seeds[1].where)
+    @test q.seeds[2] == (table="forecast_scores", where="")
+    @test_throws ErrorException E.fill_profile(:retro; zones=z)
+    # record with a day list covers exactly the listed days' windows
+    rl = E.fill_profile(:record; zones=z, days_list=[Date(2026, 1, 10), Date(2026, 3, 1)])
+    @test rl.days == [Date(2026, 1, 10), Date(2026, 3, 1)]
+
     # quotes in zone codes cannot break out of the literal
     @test E._pg_zones(["A'B"]) == "ARRAY['A''B']::text[]"
 end
