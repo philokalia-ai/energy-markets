@@ -11,22 +11,17 @@
 # Required environment variables:
 # - START_DATE: Start date in YYYY-MM-DD format
 # - END_DATE: End date in YYYY-MM-DD format
-# - PARALLEL: Boolean for parallel UC processing (true/false)
 # - OPTIMIZER: Optimizer to use (highs; the only solver)
-# - MAX_WORKERS: Maximum parallel workers (0 for auto-detect)
 # - ORDER_METHOD: Order generation method (uc_based/alternative)
 # - FORCE_RERUN: Force UC re-solve, bypassing cache (true/false)
 # - MARKUP_FACTOR: Price markup factor for supply bids (default: 1.1)
 
 using Euphemia, Dates
-using Distributed
 
 # Parse inputs
 start_date = Date(ENV["START_DATE"])
 end_date = Date(ENV["END_DATE"])
-use_parallel = parse(Bool, ENV["PARALLEL"])
 optimizer = ENV["OPTIMIZER"]
-max_workers_input = ENV["MAX_WORKERS"]
 order_method = Symbol(ENV["ORDER_METHOD"])
 force_rerun = parse(Bool, get(ENV, "FORCE_RERUN", "false"))
 markup_factor = parse(Float64, get(ENV, "MARKUP_FACTOR", "1.1"))
@@ -36,47 +31,13 @@ markup_factor = parse(Float64, get(ENV, "MARKUP_FACTOR", "1.1"))
 # production runs pin the zone set explicitly.
 zones = [String(strip(z)) for z in split(get(ENV, "ZONES", ""), ",") if !isempty(strip(z))]
 
-# Parse max_workers (0 means auto-detect)
-max_workers = if max_workers_input == "0"
-    nothing
-else
-    parse(Int, max_workers_input)
-end
-
 println("🌍 Starting multi-zone market clearing")
 println("📅 Date range: $start_date to $end_date")
-println("⚡ Parallel UC: $use_parallel")
-println("👥 Max workers: $(max_workers === nothing ? "auto" : max_workers)")
 println("⚖️ Optimizer: $optimizer")
 println("📋 Order method: $order_method")
 println("🔄 Force rerun: $force_rerun")
 println("💹 Markup factor: $markup_factor")
 println()
-
-# Set up parallel processing if requested
-if use_parallel
-    initial_workers = workers()
-    println("🔍 Initial workers: $initial_workers")
-
-    # Determine number of workers to add
-    workers_to_add = if max_workers === nothing
-        min(Sys.CPU_THREADS ÷ 2, 20)  # Use half of available cores, max 20
-    else
-        max_workers
-    end
-
-    println("🚀 Adding $workers_to_add worker processes...")
-    addprocs(workers_to_add)
-
-    new_workers = workers()
-    println("✅ Workers added: $new_workers")
-
-    # Load Euphemia on all workers
-    println("📦 Loading Euphemia package on all workers...")
-    @everywhere using Euphemia
-    println("✅ All workers ready for parallel UC processing")
-    println()
-end
 
 try
     # Run multi-zone market clearing for date range
@@ -87,7 +48,6 @@ try
         optimizer=optimizer,
         save_to_db=true,
         skip_existing=true,
-        parallel=use_parallel,
         force_rerun=force_rerun,
         markup_factor=markup_factor,
         silent=true
@@ -171,26 +131,11 @@ try
         # Still exit successfully if we got some results
         if successful_dates > 0
             println("✅ Continuing as $successful_dates dates were processed successfully")
-            if use_parallel
-                println("🧹 Cleaning up worker processes...")
-                rmprocs(filter(id -> id > 1, workers()))
-            end
             exit(0)
         else
             println("❌ All dates failed - marking as failure")
-            if use_parallel
-                println("🧹 Cleaning up worker processes...")
-                rmprocs(filter(id -> id > 1, workers()))
-            end
             exit(1)
         end
-    end
-
-    # Cleanup workers on successful completion
-    if use_parallel
-        println("🧹 Cleaning up worker processes...")
-        rmprocs(filter(id -> id > 1, workers()))
-        println("✅ Worker cleanup complete")
     end
 
 catch e
@@ -204,12 +149,6 @@ catch e
         println(io, "total_dates=0")
         println(io, "status=failure")
         println(io, "error_message=$e")
-    end
-
-    # Cleanup workers before exit
-    if use_parallel
-        println("🧹 Cleaning up worker processes...")
-        rmprocs(filter(id -> id > 1, workers()))
     end
 
     exit(1)
