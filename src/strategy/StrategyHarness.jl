@@ -258,6 +258,12 @@ families). Accepted MW of a SimpleOrder: in the money → full, out → 0, at a 
 function reclear(base::BaselineDay, company::AbstractVector{<:MarketOrder};
     carve::Vector{Carve}=Carve[], extra_injections::Dict{Tuple{String,String},Float64}=Dict{Tuple{String,String},Float64}(),
     optimizer::String="highs", tol::Float64=1e-4)
+    # The master's `BLK:` path treats every member as supply (src/mpcc/complex_orders.jl; main builds supply-only
+    # blocks). A company block with demand legs must be a signed `BLKL:<zone>:<name>` root (st-blocks, 144c2a3).
+    for o in company
+        o isa LinkedHourlyOrder && startswith(o.family, "BLK:") && o.type != :supply &&
+            throw(ArgumentError("company BLK: family $(o.family) has a $(o.type) member; use BLKL:<zone>:<name> (signed)"))
+    end
     book, short = company_book(base, company; carve=carve, extra_injections=extra_injections)
     Euphemia.MPCC.LAST_COMPLEX_INFO[] = nothing
     t0 = time()
