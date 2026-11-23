@@ -43,7 +43,7 @@ end
 function main()
     days = [Date(strip(l)) for l in eachline(ARGS[1]) if !isempty(strip(l))]
     out = ARGS[2]
-    kj = JSON.parsefile(ARGS[3])["kmap"]
+    kj = JSON.parsefile(ARGS[3]; allownan=true)["kmap"]
     archs = length(ARGS) >= 4 ? split(ARGS[4], ',') : sort(collect(keys(ZONES)))
     sizes = length(ARGS) >= 5 ? parse.(Float64, split(ARGS[5], ',')) : [5.0, 1.0]
     newfile = !isfile(out)
@@ -85,7 +85,16 @@ function main()
                     o isa LinkedHourlyOrder && (fam_ix[o.family] = max(get(fam_ix, o.family, 0.0), ratio[i]))
                 end
                 _, _, Ssim = SF.accept(company, Ps, day; res=60)      # family surplus at the simulated prices
-                prb = count(f -> fam_ix[f] == 0 && Ssim[f] > 1e-3, keys(fam_ix))
+                # paradoxically rejected: rejected, in the money at the simulated prices, and eligible (a linked
+                # child only if its parent is accepted; an exclusive member only if no member of its group is)
+                acc_names = Set(SF.parse_family(f).zone * ":" * SF.parse_family(f).name for f in keys(fam_ix) if fam_ix[f] > 0)
+                gacc = Set(get(SF.parse_family(f).attrs, "group", "") for f in keys(fam_ix) if fam_ix[f] > 0)
+                function eligible(f)
+                    pf = SF.parse_family(f)
+                    par = get(pf.attrs, "parent", ""); grp = get(pf.attrs, "group", "")
+                    (isempty(par) || (pf.zone * ":" * par) in acc_names) && (isempty(grp) || !(grp in gacc))
+                end
+                prb = count(f -> fam_ix[f] == 0 && Ssim[f] > 1e-3 && eligible(f), keys(fam_ix))
                 pab = count(f -> fam_ix[f] > 0 && Ssim[f] < -1e-3 && SF.family_kind(f) != :BLKL, keys(fam_ix))
                 mr = [fam_ix[f] for f in keys(fam_ix) if SF.family_kind(f) == :BLKM]
                 dp = Ps .- F
