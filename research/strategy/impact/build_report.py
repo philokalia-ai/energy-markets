@@ -20,12 +20,23 @@ rows = "\n".join(f"| {r.zone} | {r.slope500:+.2f} | {'' if pd.isna(r.hhi_fossil)
                  for r in st.itertuples())
 mv = (T / "mv_score.md").read_text().split("\n\n")[0].strip().split("\n")
 mv = "\n".join(l for l in mv if l.startswith("|"))
+ra = pd.read_csv(T / "rc_check_absorption.csv")
+rc_abs = "<details><summary>reclear check, competitive battery schedules (24 jobs)</summary>\n\n" + "\n".join(
+    ["| job | mean abs Δp €/MWh | max abs Δp | value at re-cleared prices € | best price-taking value € | optimality gap % |",
+     "|---|---|---|---|---|---|"] + [f"| {r.job} | {r.mae_p:.2f} | {r.max_p:.1f} | {r.value_rc:,.0f} | {r.best_pt_value:,.0f} | {r.opt_gap_pct:.1f} |"
+                                    for r in ra.itertuples()]) + "\n\n</details>"
 commit = subprocess.run(["git", "-C", str(WT), "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout.strip()
 src = (D / "REPORT.src.md").read_text().replace("@@METHOD@@", (D / "METHOD.md").read_text())
 rep = {"STRUCT": rows, "TABLE_A": section("A. Thermal portfolio"), "HEDGE": section("Hedge vs forecast-optimal"),
        "STORAGE": section("A. Battery"), "HYDRO": section("A. Reservoir hydro"), "MVSCORE": mv,
        "MV_ZONE": section("B. per zone"), "MV_BAND": section("B. Implied flat markup by zone x hour band"),
-       "COMMIT": commit}
+       "COMMIT": commit,
+       "ABSORB": (T / "absorption.md").read_text().strip(),
+       "SOLAR": "\n".join(l for l in (T / "solar.md").read_text().strip().split("\n")
+                          if l.startswith("| zone") or l.startswith("|---") or any(f"| {s} |" in l for s in ("100", "1000", "2000", "4000"))),
+       "ROBUST": "\n".join(l for l in (T / "robust.md").read_text().strip().split("\n")
+                           if l.startswith("| asset") or l.startswith("|---") or "| eval |" in l or "| cal | 0 |" in l),
+       "RC_ABS": rc_abs}
 for k, v in rep.items():
     src = src.replace(f"@@{k}@@", v)
 assert "@@" not in src, re.findall(r"@@\w+@@", src)
