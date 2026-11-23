@@ -265,6 +265,11 @@ function _duckdb_rewrite(sql::AbstractString)
     for t in ("energy_prices", "optimization_runs", "transmission_flows")
         s = replace(s, "simulations.$t" => "results_db.simulations.$t")
     end
+    # The forecast-side results (run_results.jl) live there too: the fill seeds the slices a job reads back
+    # and the writers apply their slices locally, so reads see the state Postgres would have. Whole-word
+    # match (forecast_prices must not catch forecast_prices_pre_reset), never twice.
+    s = replace(s, r"(?<![\w.])simulations\.(forecast_prices_pre_reset|forecast_prices|forecast_scores|input_corrections)\b" =>
+                   s"results_db.simulations.\1")
     return s
 end
 
