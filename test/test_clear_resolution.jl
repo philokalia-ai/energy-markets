@@ -8,6 +8,15 @@ using Euphemia
     @test Euphemia.CLEAR_RESOLUTION_MINUTES == 15
     @test 1440 ÷ Euphemia.CLEAR_RESOLUTION_MINUTES == 96
 
+    # pipelined backfill truncation gate: a full UTC day at the resolution,
+    # never below min_price_periods, 0 disables
+    tms = Euphemia.truncation_min_slots
+    @test tms(24, 15) == 96
+    @test tms(24, 60) == 24
+    @test tms(24, 30) == 48
+    @test tms(100, 15) == 100
+    @test tms(0, 15) == 0
+
     # a resolution that does not divide the hour is refused up front, on both
     # entry points (before any book build, DB read or worker start)
     @test_throws ErrorException Euphemia.run_multi_zone_market_clearing(Date(2026, 11, 13);

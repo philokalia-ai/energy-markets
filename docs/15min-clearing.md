@@ -4,8 +4,9 @@
 > (`src/db/postgres_core.jl`) is the default of `run_multi_zone_market_clearing`,
 > `run_pipelined_backfill` (config `clear_resolution_minutes`, both book stages) and
 > `bin/daily_forecast.jl`. Each period is priced on the per-period (decomposed) path.
-> Pumped storage is held flat within the hour, always, with no env. The truncation and
-> resume gates require `1440 ÷ resolution` periods. `clear_resolution_minutes=60` gives
+> Pumped storage is held flat within the hour, always, with no env. The pipeline's
+> truncation gate requires a full UTC day at the resolution (`1440 ÷ resolution`
+> periods, 96 at 15 min). `clear_resolution_minutes=60` gives
 > the hourly clear. The sections below describe the original opt-in increment and are
 > kept as history. See the ledger, v46.
 

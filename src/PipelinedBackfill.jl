@@ -62,6 +62,20 @@ _result_failed(day; status=:error, book_secs=0.0, waitq_secs=0.0,
 _usable(r) = r.status == :optimal ||
              (r.status == :time_limit && !isempty(r.market_prices))
 
+"""
+    truncation_min_slots(min_price_periods, clear_resolution_minutes) -> Int
+
+Distinct price periods a cleared day must have to be SAVED by the pipelined
+backfill (the truncation gate): a full UTC day at the clearing resolution
+(1440 ÷ res: 96 at 15 min, 24 hourly), never below `min_price_periods`;
+`min_price_periods = 0` disables the gate. Resume completeness is a separate
+check, decided per saved day's resolution_code.
+"""
+function truncation_min_slots(min_price_periods::Integer, clear_resolution_minutes::Integer)
+    min_price_periods == 0 && return 0
+    return max(min_price_periods, 1440 ÷ clear_resolution_minutes)
+end
+
 # ---------------------------------------------------------------------------
 # Order-book capture (opt-in via run_pipelined_backfill(books_dir=...))
 # ---------------------------------------------------------------------------
@@ -410,8 +424,8 @@ sequential `run_multi_zone_market_clearing(day; passes=2, ...)` path.
 - `optimizer`       : "highs" (default; the only solver) / "auto"
 - `clear_resolution_minutes` : minutes per price period (default
   `CLEAR_RESOLUTION_MINUTES` = 15, 96 periods; 60 = hourly). The truncation
-  and resume gates require `1440 ÷ clear_resolution_minutes` periods unless
-  `min_price_periods` is given.
+  gate requires a full UTC day at this resolution, `max(min_price_periods,
+  1440 ÷ clear_resolution_minutes)` periods (`min_price_periods=0` disables it).
 - `clearing_mode`   : energy_prices save key (default "multi_zone_eu")
 - `save_to_db`      : persist results (default true)
 - `resume`          : skip already-saved days (default true)
@@ -497,17 +511,16 @@ function _run_pipelined_backfill_impl(days, zones::Vector{String}=String[];
         # single hour, losing 30,810 zone-hours (2.52% of the record).
         #
         # A UTC day always has 24 hours (no DST ambiguity), so the honest bar
-        # is every period of the day: `nothing` (default) resolves to
-        # 1440 ÷ clear_resolution_minutes (96 at 15 min, 24 hourly). The same
-        # bar decides resume completeness, so a short quarter-hour day is
-        # re-processed rather than skipped forever. Set 0 to restore the old
-        # save-anything behaviour. This gate never changes a price — only
-        # whether a truncated day is recorded as complete.
-        min_price_periods::Union{Nothing,Int}=nothing,
+        # for an hourly clear is 24. Set 0 to restore the old save-anything
+        # behaviour. This gate never changes a price — only whether a
+        # truncated day is recorded as complete.
+        min_price_periods::Int=24,
         # Clearing resolution (minutes per price period), passed to BOTH book
         # stages (mz_build_books / mz_rebuild_anchored). Default: the product
         # resolution CLEAR_RESOLUTION_MINUTES (15 from cv46, 96 periods); 60
-        # gives the hourly clear. Config only — never read from the env.
+        # gives the hourly clear. Config only — never read from the env. The
+        # truncation gate scales with it (`min_slots` below); resume
+        # completeness is decided per saved day's resolution_code.
         clear_resolution_minutes::Int=CLEAR_RESOLUTION_MINUTES,
         # Same cv20 policy as run_multi_zone_market_clearing: `nothing` resolves
         # to decomposed on the enriched (EU-footprint) path — the canonical,
@@ -551,7 +564,7 @@ function _run_pipelined_backfill_impl(days, zones::Vector{String}=String[];
     cv = ENERGY_PRICES_CODE_VERSION
     (1 <= clear_resolution_minutes <= 60 && 60 % clear_resolution_minutes == 0) ||
         error("clear_resolution_minutes must divide 60 (got $clear_resolution_minutes)")
-    min_price_periods = something(min_price_periods, 1440 ÷ clear_resolution_minutes)
+    min_slots = truncation_min_slots(min_price_periods, clear_resolution_minutes)
 
     # Resume: drop already-saved days up front, so the total to process is known.
     # Under the DuckDB backend the resume probe READS simulations.* which lives
@@ -591,15 +604,14 @@ function _run_pipelined_backfill_impl(days, zones::Vector{String}=String[];
             # record holds 65 days that carry all 39 zones and fewer than 24
             # hours (12 of them a single hour) because one zone's short book
             # collapsed the coupled period intersection. Those days passed a
-            # zone-only check and were skipped forever. `nh` counts distinct
-            # stamps, so at 15 min a complete day needs 96 (min_price_periods).
+            # zone-only check and were skipped forever.
             complete = Set(Date(r.d) for r in eachrow(df)
                            if Int(r.nz) >= length(zones) && Int(r.nh) >= min_price_periods)
             for r in eachrow(df)
                 nz, nh = Int(r.nz), Int(r.nh)
                 (nz >= length(zones) && nh >= min_price_periods) && continue
                 @warn "resume: $(Date(r.d)) is SHORT ($nz/$(length(zones)) zones, " *
-                      "$nh/$min_price_periods periods) — re-processing"
+                      "$nh/$min_price_periods hours) — re-processing"
             end
             complete
         catch e
@@ -631,7 +643,7 @@ function _run_pipelined_backfill_impl(days, zones::Vector{String}=String[];
     println("🔀 PIPELINED BACKFILL  days=$N/$(length(days))  zones=$(length(zones))")
     println("   solver_workers=$solver_workers  book_workers=$book_workers  in_flight=$in_flight")
     println("   optimizer=$optimizer  clearing_mode=$clearing_mode  cv=$cv  save=$save_to_db  " *
-            "resolution=$(clear_resolution_minutes)min (≥$min_price_periods periods/day)")
+            "resolution=$(clear_resolution_minutes)min (truncation gate ≥$min_slots periods/day)")
     println("=" ^ 70); flush(stdout)
 
     # --- spin up the worker pool -------------------------------------------
@@ -885,9 +897,9 @@ function _run_pipelined_backfill_impl(days, zones::Vector{String}=String[];
             # rather than to what the book intended.
             n_periods = r.ok && r.final !== nothing && !isempty(r.final.market_prices) ?
                 maximum(length(pd) for pd in values(r.final.market_prices)) : 0
-            if r.ok && _usable(r.final) && n_periods < min_price_periods
+            if r.ok && _usable(r.final) && n_periods < min_slots
                 @error "DAY $(r.day) TRUNCATED — only $n_periods price period(s), " *
-                       "need $min_price_periods. One zone's short book collapses the " *
+                       "need $min_slots. One zone's short book collapses the " *
                        "coupled intersection for every zone. NOT saved (rerun the day " *
                        "once its inputs are complete; min_price_periods=0 disables this)."
                 failed += 1
