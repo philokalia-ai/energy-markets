@@ -4,7 +4,7 @@
 #   julia --project=. bin/fill_run_duckdb.jl --profile daily-forecast|record|export|retro|rescore --out DIR \
 #         [--start YYYY-MM-DD|auto --end YYYY-MM-DD | --days D1,D2,...] [--as-of YYYY-MM-DD] [--zones A,B,...] \
 #         [--source duckdb:<path>] [--seed-results false]
-# Env: ENERGY_CONN_STR; ZONES (default zone list, else the 39-zone footprint); INPUTS_BACK_DAYS
+# Env: ENERGY_CONN_STR; RESULTS_SOURCE_CONN_STR (optional: seeds from another database); ZONES (default zone list, else the 39-zone footprint); INPUTS_BACK_DAYS
 # (export profile: export_prediction_inputs.jl's look-back on the RES/load/generation tables).
 #
 # Needs ENERGY_CONN_STR (unless --source duckdb:<path>, the offline proof mode that reads the
@@ -105,7 +105,10 @@ function main(argv)
     Euphemia._ensure_results_attached(con)
     isdefined(Euphemia, :ensure_run_results_tables!) && Euphemia.ensure_run_results_tables!()
     if source === :postgres
-        Euphemia.attach_postgres!(con, conn; alias="pg", read_only=true)
+        # RESULTS_SOURCE_CONN_STR: the results-side seeds come from another database (test beds
+        # that keep the forecast tables apart from the inputs); production leaves it unset.
+        seed_conn = get(ENV, "RESULTS_SOURCE_CONN_STR", "")
+        Euphemia.attach_postgres!(con, isempty(seed_conn) ? conn : seed_conn; alias="pg", read_only=true)
     else
         Euphemia.DBInterface.execute(con, "ATTACH '$(replace(source_path, "'" => "''"))' AS src (READ_ONLY)")
     end
