@@ -31,8 +31,8 @@ import DuckDB.DBInterface as DBInterface
     sql, w = E.fill_pg_query(spec("unavailability_in_the_transmission_grid"), tcols, [Date(2026, 1, 10)], ["GR"])
     @test occursin("instance_code IN (SELECT instance_code FROM entsoe.unavailability_in_the_transmission_grid", sql)
     @test occursin("\"start_outage_utc\"::TIMESTAMP AS \"start_outage_utc\"", sql)
-    @test occursin("start_outage_utc::timestamp < '2026-01-12'::timestamp", sql)
-    @test occursin("end_outage_utc::timestamp >= '2024-12-06'::timestamp", sql)
+    @test occursin("start_outage_utc::timestamp < '2026-01-12'::timestamp", sql)   # [d-1, d+2)
+    @test occursin("end_outage_utc::timestamp >= '2026-01-09'::timestamp", sql)
 
     # offered implicit ATC: + earliest Day-ahead row per border before the window
     acols = [("out_map_code", "text"), ("in_map_code", "text"), ("date_time_utc", "timestamp with time zone"),
