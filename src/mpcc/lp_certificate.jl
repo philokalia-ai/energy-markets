@@ -8,11 +8,11 @@
 #    JAO net-position rows, nodal balance with shed, same objective — so its optimum is an
 #    upper bound on the MPCC welfare.
 # 2. Pattern: each complementarity binary is set by rule from the LP dispatch (order rejected /
-#    partially / fully accepted; link at its forward / backward cap) and fixed. The MPCC with
-#    fixed binaries is an LP; if it is optimal at the welfare-LP objective, the MPCC is solved
-#    to optimality and the caller skips its MIP solve.
-# 3. Otherwise the binaries are unfixed and the pattern (with the best values at hand) becomes
-#    the MIP start. The caller then solves the MIP; only if that MIP fails do the per-period
+#    partially / fully accepted; link at its forward / backward cap), fixed, and its integrality
+#    dropped. The MPCC with fixed binaries is an LP and is solved as one; if it is optimal at the
+#    welfare-LP objective, the MPCC is solved to optimality and the caller skips its MIP solve.
+# 3. Otherwise the binaries are unfixed (and binary again) and the pattern (with the best values
+#    at hand) becomes the MIP start. The caller then solves the MIP; only if that MIP fails do the per-period
 #    HiGHS retry rungs (`_solve_mpcc_by_period`) run.
 #
 # Time: the welfare LP gets the caller's `time_limit`, the fixed-pattern solve what is left of
@@ -126,6 +126,11 @@ function _lp_certify!(model::Model, optimizer; time_limit::Real=Inf)
     for (v, b) in pattern
         fix(v, b; force=true)
     end
+    # With every binary fixed the model is an LP; tell HiGHS so (it would otherwise run its MIP
+    # machinery on a problem with nothing to branch on). Same optimum, same prices.
+    for v in keys(pattern)
+        unset_binary(v)
+    end
     isfinite(time_limit) && set_time_limit_sec(model, max(time_limit - (time() - t0), 1.0))
     optimize!(model)
     if termination_status(model) == MOI.OPTIMAL &&
@@ -137,6 +142,7 @@ function _lp_certify!(model::Model, optimizer; time_limit::Real=Inf)
     start = has_values(model) ? Dict(v => value(v) for v in all_variables(model)) : merge(x, pattern)
     for v in keys(pattern)
         unfix(v)
+        set_binary(v)
     end
     for (v, s) in start
         set_start_value(v, s)
@@ -152,6 +158,7 @@ function _unfix_pattern!(model::Model)
         haskey(obj, nm) || continue
         for v in model[nm]
             is_fixed(v) && unfix(v)
+            is_binary(v) || set_binary(v)   # the certificate solves the fixed pattern as an LP
         end
     end
     return nothing

@@ -428,6 +428,14 @@ Dated reminders and scoring-policy notes that do not change `code_version`.
   call compiled for ~75 s in every fresh process (cold 24-step day: certificate build 71.7 → 9.2 s,
   first solve pass 97 → 41 s); warm build 1.2 → 0.3 s per 24 periods. No `code_version` bump.
 
+- **2026-11-23 — LP certificate: the fixed-pattern model is solved as an LP (perf-96); prices
+  unchanged.** After the pattern fixes every complementarity binary, their integrality is dropped
+  before the solve (restored on a fallback, so the MIP is unchanged), and HiGHS no longer runs its
+  MIP machinery on a problem with nothing to branch on. Same optimum: prices identical on
+  2026-10-19 at 24 steps, and on both cv46 pilot days at 96 steps (all passes, with and without
+  blocks; cv46-blocks addendum 3). Speed: fixed-pattern solve 1.85 → 1.45 s per 24 periods (cold
+  first pass −9 s); at 96 steps 44 → 8 s per joint pricing. No `code_version` bump.
+
 - **2026-11-22 — Block acceptance search replaces the PAB loop (blocks/r1-only).** With
   `EUPHEMIA_COMPLEX_ORDERS=…blocks` (opt-in), the 4-round PAB loop and its release to the `BLKFB:`
   must-run offers are replaced by a reversible acceptance search (seed, prune to a PAB-free set,
