@@ -374,16 +374,45 @@
   function boundaryEdgeFlow(date, counterparty, borderZone) {
     var byTs = state.flowsCache[date];
     if (!byTs) return null;
+    // Each stamp counts for its slot length in hours (1 on an hourly day, ¼ on a
+    // quarter-hour day). The window is 25 h and starts with the previous market day's
+    // last hour, so a stamp takes the resolution of the market day it belongs to (the
+    // cached zone day of `date`, or of the day before for the leading hour); with no
+    // cached day, the spacing to its neighbour stamp.
+    var day = boundaryZoneDay(date, borderZone), prev = boundaryZoneDay(prevDayStr(date), borderZone);
+    var t0 = day && day.hours.length ? Date.parse(day.hours[0]) : null;
+    var keys = Object.keys(byTs).sort(), pos = {};
+    keys.forEach(function (ts, k) { pos[ts] = k; });
+    function slotHours(k) {
+      var t = Date.parse(keys[k]);
+      var d = t0 === null ? null : (t >= t0 ? day : prev);
+      if (d) return slotMinutes(d) / 60;
+      var gap = k + 1 < keys.length ? Date.parse(keys[k + 1]) - t : (k > 0 ? t - Date.parse(keys[k - 1]) : 3600000);
+      return gap > 0 && gap < 3600000 ? gap / 3600000 : 1;
+    }
     var net = 0, seen = false;
-    Object.keys(byTs).forEach(function (ts) {
+    Object.keys(byTs).forEach(function (ts) {   // the payload's order, as before (same float sums)
+      var w = slotHours(pos[ts]);
       (byTs[ts] || []).forEach(function (r) {
         var src = r[0], snk = r[1], mw = r[2];
-        if (src === counterparty && snk === borderZone) { net += mw; seen = true; }
-        else if (src === borderZone && snk === counterparty) { net -= mw; seen = true; }
+        if (src === counterparty && snk === borderZone) { net += mw * w; seen = true; }
+        else if (src === borderZone && snk === counterparty) { net -= mw * w; seen = true; }
       });
     });
-    // day-mean MW toward the footprint: a quarter-hour day has 4 flow stamps per hour
-    return seen ? net / 24 / slotsPerHour({ hours: Object.keys(byTs).sort() }) : null;
+    return seen ? net / 24 : null;   // day-mean MW toward the footprint
+  }
+  // The freshest weather-track zone day for a market date, from whichever zone is cached
+  // (the border zone first, then the selected zone, then any): its resolution is the day's.
+  function boundaryZoneDay(date, zone) {
+    var order = [zone, state.zone].concat(Object.keys(state.zoneCache));
+    for (var i = 0; i < order.length; i++) {
+      var zd = order[i] && state.zoneCache[order[i]];
+      if (!zd || !zd.days) continue;
+      var hit = null;
+      freshestByDate(trackDays(zd)).forEach(function (d) { if (!hit && d.date === date) hit = d; });
+      if (hit) return hit;
+    }
+    return null;
   }
 
   function renderBoundary() {
@@ -6721,6 +6750,7 @@
       slotEndLabel: slotEndLabel,
       hourEndLabel: hourEndLabel,
       hourGroups: hourGroups,
+      boundaryEdgeFlow: boundaryEdgeFlow,
       hourMean: hourMean,
       tsfmDayMae: tsfmDayMae,
       settleState: settleState,

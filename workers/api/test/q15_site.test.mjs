@@ -187,6 +187,35 @@ const seps = getById("hz-wrap")._all((e) => e.tagName === "line" && e.attrs["str
 const gaps = seps.slice(1).map((x, i) => x - seps[i]);
 ok(seps.length === 3 && gaps.every((g) => Math.abs(g - gaps[0]) < 1e-9), "day separators equally spaced across mixed days");
 
+/* ---- boundary edge: day-mean MW over the 25-h flow window (lead review #3) ---- */
+// The window starts with the previous market day's last hour: each stamp counts for its
+// own day's slot length, so a quarter day after an hourly day is not 4x too large.
+function flowWindow(startIso, nLead, leadMin, n, min, mw) {
+  const out = {};
+  const t0 = Date.parse(startIso);
+  for (let i = 0; i < nLead; i++) out[iso(t0 + i * leadMin * 60000)] = [["UA", "HU", mw]];
+  const t1 = t0 + nLead * leadMin * 60000;
+  for (let i = 0; i < n; i++) out[iso(t1 + i * min * 60000)] = [["UA", "HU", mw]];
+  return out;
+}
+const hdPrev = mkDay("2026-11-20", "2026-11-19T22:00:00Z", 24, 60);
+const hdDay = mkDay("2026-11-21", "2026-11-20T22:00:00Z", 24, 60);
+const qdDay = mkDay("2026-11-22", "2026-11-21T22:00:00Z", 96, 15, { resolution: "PT15M" });
+const qdNext = mkDay("2026-11-23", "2026-11-22T22:00:00Z", 96, 15, { resolution: "PT15M" });
+S.state.zone = "HU";
+S.state.zoneCache = { HU: { zone: "HU", market_day_tz: "Europe/Athens", days: [qdNext, qdDay, hdDay, hdPrev] } };
+S.state.flowsCache["2026-11-21"] = flowWindow("2026-11-20T21:00:00Z", 1, 60, 24, 60, 400);   // hourly day
+S.state.flowsCache["2026-11-22"] = flowWindow("2026-11-21T21:00:00Z", 1, 60, 96, 15, 400);   // first quarter day
+S.state.flowsCache["2026-11-23"] = flowWindow("2026-11-22T21:00:00Z", 4, 15, 96, 15, 400);   // quarter after quarter
+const hourlyOld = (400 * 25) / 24;   // the formula before D4 on an hourly 25-h window
+ok(S.boundaryEdgeFlow("2026-11-21", "UA", "HU") === hourlyOld, "hourly day: day-mean flow bit-identical to the old formula");
+ok(Math.abs(S.boundaryEdgeFlow("2026-11-22", "UA", "HU") - hourlyOld) < 1e-9,
+   "first quarter day (hourly leading hour): same day-mean as the hourly day, not 4x");
+ok(Math.abs(S.boundaryEdgeFlow("2026-11-23", "UA", "HU") - hourlyOld) < 1e-9, "quarter day after a quarter day: same day-mean");
+S.state.zoneCache = {};
+ok(Math.abs(S.boundaryEdgeFlow("2026-11-22", "UA", "HU") - hourlyOld) < 1e-9, "no cached zone day: stamp spacing gives the same day-mean");
+ok(S.boundaryEdgeFlow("2026-11-21", "UA", "HU") === hourlyOld, "no cached zone day, hourly window: unchanged");
+
 if (failures) {
   console.error("q15_site: " + failures + " FAILURE(S)");
   process.exit(1);
