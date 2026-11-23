@@ -232,6 +232,10 @@ println()
         include(joinpath(@__DIR__, "test_pg_attach.jl"))
     end
 
+    @testset "Fill manifest + strict read guard (temp DuckDB)" begin
+        include(joinpath(@__DIR__, "test_fill_manifest.jl"))
+    end
+
     @testset "Solar-regime gate: issued weather solar" begin
         include(joinpath(@__DIR__, "test_solar_gate_issued.jl"))
     end
