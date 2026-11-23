@@ -29,10 +29,10 @@ export Thermal, Storage, Hydro, PVBat, Flex, archetype, srmc_gas, srmc_coal,
     Prices, bids, evaluate, family_kind, parse_family, FORMATS
 
 # ---------------------------------------------------------------------------------------------- archetypes
-"""Thermal unit. Costs: SRMC €/MWh_el (repo SRMC model), start-up € per start."""
+"""Thermal unit. Costs: SRMC €/MWh_el (repo SRMC model), start-up € per start, no-load € per hour on."""
 struct Thermal
     id::String; zone::String; pmax::Float64; pmin::Float64
-    min_up::Int; min_down::Int; srmc::Float64; startup::Float64
+    min_up::Int; min_down::Int; srmc::Float64; startup::Float64; noload::Float64
 end
 """Energy storage (battery / PSP). Round-trip η split evenly between charge and discharge."""
 struct Storage
@@ -63,10 +63,15 @@ srmc_coal(fuel::String, eua) = Euphemia.FUEL_SRMC_BASE[fuel] + Euphemia.FUEL_EMI
 cost per start, the repo's own formula: docs/experiments/proto_mini_uc.jl:49)."""
 startup_cost(fuel::String, srmc, pmax) = get_fuel_type_parameters(Symbol(fuel)).startup_cost_multiplier * srmc * pmax
 
+"""No-load cost € per hour on = FuelTypeParameters.no_load_cost_fraction × SRMC × Pmin (the fleet data's 'no-load
+cost as a fraction of marginal cost', applied to the minimum stable output; gas 0.15, hard coal 0.20, lignite 0.25)."""
+noload_cost(fuel::String, srmc, pmin) = get_fuel_type_parameters(Symbol(fuel)).no_load_cost_fraction * srmc * pmin
+
 function _thermal(id, zone, fuel, pmax, srmc)
     fp = get_fuel_type_parameters(Symbol(fuel))
-    Thermal(id, zone, pmax, fp.min_load_factor * pmax, fp.min_uptime, fp.min_downtime, srmc,
-            startup_cost(fuel, srmc, pmax))
+    pmin = fp.min_load_factor * pmax
+    Thermal(id, zone, pmax, pmin, fp.min_uptime, fp.min_downtime, srmc,
+            startup_cost(fuel, srmc, pmax), noload_cost(fuel, srmc, pmin))
 end
 
 """
@@ -165,7 +170,7 @@ end
 # ---------------------------------------------------------------------------------------------- formats
 """Bid formats per archetype class (FORMATS[class] = list of format ids)."""
 const FORMATS = Dict(
-    :thermal => ["hourly_mc", "hourly_ac", "block", "linked", "exclusive", "mar"],
+    :thermal => ["hourly_mc", "hourly_ac", "block", "linked", "exclusive", "mar", "mar_full"],
     :storage => ["hourly_oc", "hourly_sched", "block", "exclusive"],
     :hydro => ["hourly_oc", "hourly_sched", "block", "linked", "exclusive", "mar"],
     :pvbat => ["hourly_oc", "hourly_sched", "block", "exclusive"],
@@ -180,28 +185,34 @@ period length `res` minutes). `k_su` scales the start-up cost recovered in a blo
 on the calibration days). Never pass realised prices of `day` as F.
 """
 function bids(a::Thermal, fmt::String, F::Vector{Float64}, day::Date; res=60, k_su=1.0, nx=5)
+    # Cost-reflective pricing rule (ex ante, fleet data): a block's price = SRMC + (k_su·start-up + no-load × run
+    # hours) / block energy, k_su ≤ 1, so no price exceeds the unit's average cost incl. start-up and no-load over the
+    # block. `mar` prices that cost at the MINIMUM acceptance ratio (above average cost when fully accepted — flagged
+    # in the report); `mar_full` prices it at full acceptance (= average cost when fully accepted, below cost when
+    # cut back towards the MAR).
+    k_su <= 1.0 + 1e-9 || error("k_su = $k_su > 1 would price above cost incl. start-up")
     T = length(F); dt = res / 60; z = a.zone; o = MarketOrder[]
     hrs(h) = max(1, round(Int, h / dt))                       # hours → periods
     Ls = hrs(a.min_up):T
-    if fmt == "hourly_mc"         # truthful: Pmax at SRMC every period
+    fixc(L) = k_su * a.startup + a.noload * L * dt            # € per run of L periods
+    if fmt == "hourly_mc"         # truthful marginal: Pmax at SRMC every period
         for i in 1:T; push!(o, _so(:supply, a.srmc, a.pmax, z, day, i, res)); end
-    elseif fmt == "hourly_ac"     # hourly at average cost: SRMC + start-up spread over the forecast run length
-        s, L, _ = best_window(F .- a.srmc, Ls, L -> k_su * a.startup / a.pmax / dt)
-        p = a.srmc + k_su * a.startup / (a.pmax * L * dt)
+    elseif fmt == "hourly_ac"     # hourly at average cost: SRMC + (start-up + no-load) over the forecast run length
+        s, L, _ = best_window((F .- a.srmc) .* a.pmax .* dt, Ls, fixc)
+        p = a.srmc + fixc(L) / (a.pmax * L * dt)
         for i in 1:T; push!(o, _so(:supply, p, a.pmax, z, day, i, res)); end
-    elseif fmt in ("block", "mar")
-        # flat Pmax block on the forecast-best window; price = average cost incl. k_su·start-up.
-        # MAR: same window, accepted ratio ≥ Pmin/Pmax, priced so the start-up is covered at the minimum ratio.
-        r = fmt == "mar" ? a.pmin / a.pmax : 1.0
-        s, L, _ = best_window((F .- a.srmc) .* a.pmax .* dt, Ls, L -> k_su * a.startup / r)
-        p = a.srmc + k_su * a.startup / (r * a.pmax * L * dt)
-        fam = fmt == "mar" ? "BLKM:$z:$(a.id)-m:mar=$(round(r, digits=4))" : "BLK:$z:$(a.id)-b"
+    elseif fmt in ("block", "mar", "mar_full")
+        r = fmt == "block" ? 1.0 : a.pmin / a.pmax
+        rp = fmt == "mar" ? r : 1.0                           # ratio at which the price recovers the fixed costs
+        s, L, _ = best_window((F .- a.srmc) .* a.pmax .* dt, Ls, L -> fixc(L) / rp)
+        p = a.srmc + fixc(L) / (rp * a.pmax * L * dt)
+        fam = fmt == "block" ? "BLK:$z:$(a.id)-b" : "BLKM:$z:$(a.id)-$(fmt == "mar" ? "m" : "mf"):mar=$(round(r, digits=4))"
         for i in s:s+L-1; push!(o, _lo(:supply, p, a.pmax, z, day, i, res, fam)); end
     elseif fmt == "linked"
-        # parent = Pmin over the window, price incl. k_su·start-up; children = (Pmax−Pmin) per period at SRMC
+        # parent = Pmin over the window, priced with start-up + no-load; children = (Pmax−Pmin) per period at SRMC
         val = [(F[i] - a.srmc) * a.pmin * dt + max(0.0, F[i] - a.srmc) * (a.pmax - a.pmin) * dt for i in 1:T]
-        s, L, _ = best_window(val, Ls, L -> k_su * a.startup)
-        pp = a.srmc + k_su * a.startup / (a.pmin * L * dt)
+        s, L, _ = best_window(val, Ls, fixc)
+        pp = a.srmc + fixc(L) / (a.pmin * L * dt)
         par = "BLKL:$z:$(a.id)-p"
         for i in s:s+L-1
             push!(o, _lo(:supply, pp, a.pmin, z, day, i, res, par))
@@ -211,8 +222,8 @@ function bids(a::Thermal, fmt::String, F::Vector{Float64}, day::Date; res=60, k_
         # nx alternative flat blocks: the forecast-best window for nx spread lengths (min_up … T)
         Lset = unique(round.(Int, range(first(Ls), T; length=nx)))
         for (k, L) in enumerate(Lset)
-            s, _, _ = best_window((F .- a.srmc) .* a.pmax .* dt, L:L, _ -> k_su * a.startup)
-            p = a.srmc + k_su * a.startup / (a.pmax * L * dt)
+            s, _, _ = best_window((F .- a.srmc) .* a.pmax .* dt, L:L, fixc)
+            p = a.srmc + fixc(L) / (a.pmax * L * dt)
             fam = "BLKX:$z:$(a.id)-x$k:group=$(a.id)"
             for i in s:s+L-1; push!(o, _lo(:supply, p, a.pmax, z, day, i, res, fam)); end
         end

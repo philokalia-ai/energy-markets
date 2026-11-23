@@ -10,15 +10,15 @@ import Euphemia.MarketOrders: MarketOrder, SimpleOrder, LinkedHourlyOrder
 const SF = StrategyFormats
 const ROOT = joinpath(homedir(), "armada/em-team/strategy/runs")
 const KEY_RE = r"^(.+)::order_\d+_z(.+)_h(\d+)_q(-?\d+)_p(-?\d+)$"
-scale(a::SF.Thermal, s) = SF.Thermal(a.id, a.zone, a.pmax * s, a.pmin * s, a.min_up, a.min_down, a.srmc, a.startup * s)
+scale(a::SF.Thermal, s) = SF.Thermal(a.id, a.zone, a.pmax * s, a.pmin * s, a.min_up, a.min_down, a.srmc, a.startup * s, a.noload * s)
 scale(a::SF.Hydro, s) = SF.Hydro(a.id, a.zone, a.p * s, a.e * s, a.wv)
 
 function main()
     kj = JSON.parsefile(ARGS[2]; allownan=true)["kmap"]
     rows = [split(l, ',') for (i, l) in enumerate(eachline(ARGS[1])) if i > 1]
-    cand = [r for r in rows if r[4] == "mar" && r[20] != "-" && 0 < parse(Float64, r[20]) < 0.999]
+    cand = [r for r in rows if r[4] in ("mar", "mar_full") && r[20] != "-" && 0 < parse(Float64, r[20]) < 0.999]
     io = open(ARGS[3], "w")
-    println(io, "MAR partial-acceptance rows: $(length(cand)) of $(count(r -> r[4] == "mar", rows)) MAR rows in $(ARGS[1])")
+    println(io, "MAR partial-acceptance rows: $(length(cand)) of $(count(r -> r[4] in ("mar", "mar_full"), rows)) MAR rows in $(ARGS[1])")
     ncell = 0; ndev = 0
     for r in cand
         day = Date(r[1]); z = String(r[2]); arch = String(r[3]); s = parse(Float64, r[5])
@@ -30,7 +30,7 @@ function main()
             [Carve(z, a.pmax, 0.5 * a.srmc, 2.0 * a.srmc * Euphemia.MPCC.DEFAULT_MARKUP_FACTOR;
                    ref=a.srmc * Euphemia.MPCC.DEFAULT_MARKUP_FACTOR)] :
             [Carve(z, a.p, 0.5 * a.wv, 2.0 * a.wv; ref=a.wv)]
-        company = bids(a, "mar", F, day; k_su=get(kj, "$z|$arch|mar|1.0", 1.0))
+        company = bids(a, String(r[4]), F, day; k_su=get(kj, "$z|$arch|$(r[4])|1.0", 1.0))
         book, _ = StrategyHarness.company_book(base, company; carve=carve)
         res = mz_solve_pass(book; optimizer="highs", silent=true, decompose_periods=true)
         info = Euphemia.MPCC.LAST_COMPLEX_INFO[]
