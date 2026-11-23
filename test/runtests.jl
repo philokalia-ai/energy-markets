@@ -220,6 +220,10 @@ println()
         include(joinpath(@__DIR__, "test_pass2_network_reuse.jl"))
     end
 
+    @testset "Day caches return hits (temp DuckDB)" begin
+        include(joinpath(@__DIR__, "test_day_cache_hits.jl"))
+    end
+
     @testset "Solar-regime gate: issued weather solar" begin
         include(joinpath(@__DIR__, "test_solar_gate_issued.jl"))
     end
