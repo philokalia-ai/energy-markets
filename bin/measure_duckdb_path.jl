@@ -7,6 +7,8 @@
 #                [--entry forecast|record]   forecast (default) = the daily forecast's call (run_multi_zone_market_clearing,
 #                passes=2): the timing production runs every day; record = the pipelined record's stage functions
 #                (bit-identical to the record, so also comparable with it). Both backends must use the same entry.
+#                [--steps 24|96]   periods per day: 24 (hourly, default) or 96 (the quarter-hour clear, cv46:
+#                clear_resolution_minutes = 15 on either entry; per-period decomposition as on main).
 #            The backend is whatever the environment selects: ENERGY_CONN_STR + EUPHEMIA_DATA_STORE=postgres for the
 #            current path; EUPHEMIA_DATA_STORE=duckdb + EUPHEMIA_DUCKDB_PATH=<filled inputs> for the DuckDB path.
 #            Each day: the chosen entry's clear (gate context, two passes), with per-day wall time. Writes DIR/prices_<label>.csv and
@@ -50,17 +52,21 @@ usable(r) = r.status == :optimal || (r.status == :time_limit && !isempty(r.marke
 """The record's clear of one day: the stage functions PipelinedBackfill's workers call (as_of=:gate), in one
 process — mz_build_books → mz_solve_pass → mz_extract_anchor_inputs → mz_rebuild_anchored → mz_solve_pass, pass 2
 accepted when usable (else pass 1). Bit-identical to the pipelined record (perf-96 profile driver vs arm A)."""
+const CLEAR_RES_MIN = Ref(60)   # --steps: 60 = 24 periods, 15 = 96 periods
+
 function record_clear(d::Date)
     gate(f) = Euphemia.with_context(f, Euphemia.gate_context(d))
     kw = (optimizer="highs", silent=true, mpcc_time_limit=900.0, mpcc_mip_gap=1e-6, mpcc_heuristic_effort=nothing,
           decompose_periods=true)
-    ob1 = gate(() -> mz_build_books(FOOTPRINT, d; enrich_network=true, apply_zone_profiles=true, scenario=nothing))
+    ob1 = gate(() -> mz_build_books(FOOTPRINT, d; enrich_network=true, apply_zone_profiles=true, scenario=nothing,
+                                    clear_resolution_minutes=CLEAR_RES_MIN[]))
     r1 = mz_solve_pass(ob1; kw...)
     usable(r1) || return r1
     ai = mz_extract_anchor_inputs(ob1, r1; apply_zone_profiles=true)
     isempty(ai.anchored) && return r1
     ob2 = gate(() -> mz_rebuild_anchored(FOOTPRINT, d, ai.refs, ai.cached; enrich_network=true,
-                                         apply_zone_profiles=true, scenario=nothing))
+                                         apply_zone_profiles=true, scenario=nothing,
+                                         clear_resolution_minutes=CLEAR_RES_MIN[]))
     r2 = mz_solve_pass(ob2; kw...)
     return usable(r2) ? r2 : r1
 end
@@ -69,7 +75,8 @@ end
 passes=2, enrich_network), here under the day's gate context and without the weather-track scenario."""
 forecast_clear(d::Date) = Euphemia.with_context(Euphemia.gate_context(d)) do
     run_multi_zone_market_clearing(d; zones=FOOTPRINT, order_method=:merit_order, optimizer="highs",
-        silent=true, save_to_db=false, enrich_network=true, passes=2)
+        silent=true, save_to_db=false, enrich_network=true, passes=2,
+        clear_resolution_minutes=CLEAR_RES_MIN[])
 end
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -132,6 +139,9 @@ function clear(args)
     entry = opt(args, "--entry", "forecast")
     entry in ("forecast", "record") || error("--entry must be forecast or record")
     clear1 = entry == "forecast" ? forecast_clear : record_clear
+    steps = parse(Int, opt(args, "--steps", "24"))
+    steps in (24, 96) || error("--steps must be 24 or 96")
+    CLEAR_RES_MIN[] = steps == 96 ? 15 : 60
     trace = "--trace" in args
     trace && (Euphemia.SQL_TRACE[] = _trace_record)
     if Euphemia.DATA_STORE[] === :postgres
@@ -151,7 +161,7 @@ function clear(args)
         println("postgres server TimeZone default (unpinned session): $tz")
         write(joinpath(out, "pg_server_timezone.txt"), tz * "\n")
     end
-    println("measure clear: backend=$(Euphemia.DATA_STORE[]) entry=$entry label=$label days=$(join(days, ","))")
+    println("measure clear: backend=$(Euphemia.DATA_STORE[]) entry=$entry steps=$steps label=$label days=$(join(days, ","))")
     open(joinpath(out, "prices_$label.csv"), "w") do pio
         open(joinpath(out, "times_$label.csv"), "w") do tio
             println(pio, "day,zone,period,price"); println(tio, "day,wall_s,status")
