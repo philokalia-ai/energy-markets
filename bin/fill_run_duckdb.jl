@@ -16,7 +16,29 @@
 # Exits non-zero on any failure. Jobs then run with EUPHEMIA_DATA_STORE=duckdb,
 # EUPHEMIA_DUCKDB_PATH=DIR/inputs.duckdb, EUPHEMIA_DUCKDB_READONLY=true,
 # EUPHEMIA_RESULTS_DB=DIR/results.duckdb and no ENERGY_CONN_STR.
-using Euphemia, Dates, JSON
+# Pin Euphemia to the DuckDB backend BEFORE loading it: with ENERGY_CONN_STR set and no
+# store chosen, module init would select Postgres and open the LibPQ pool, a stray
+# Julia -> Postgres path beside the scanner. Init needs an existing DuckDB file, and the run's
+# inputs file does not exist yet, so an empty boot file in the run's temp dir stands in.
+using DuckDB, Dates, JSON
+function _boot_store!(argv)
+    i = findfirst(==("--out"), argv)
+    (i === nothing || i == length(argv)) && error("--out DIR is required")
+    tmp = joinpath(argv[i + 1], ".tmp-$(getpid())")
+    mkpath(tmp)
+    boot = joinpath(tmp, "boot.duckdb")
+    DuckDB.close(DuckDB.DB(boot))
+    ENV["EUPHEMIA_DATA_STORE"] = "duckdb"
+    ENV["EUPHEMIA_DUCKDB_PATH"] = boot
+    ENV["EUPHEMIA_DUCKDB_READONLY"] = "false"
+    return tmp
+end
+const BOOT_TMP = try
+    _boot_store!(ARGS)
+catch e
+    showerror(stderr, e); println(stderr); exit(1)
+end
+using Euphemia
 
 const FOOTPRINT = String["AT","BE","BG","CZ","DE_LU","DK1","DK2","EE","ES","FI","FR","GR","HU","LT",
     "LV","NL","NO1","NO2","NO3","NO4","NO5","PL","PT","RO","RS","SE1","SE2","SE3","SE4","SI","SK",
@@ -56,8 +78,7 @@ function main(argv)
     for f in ("inputs.duckdb", "results.duckdb")
         ispath(joinpath(out, f)) && error("$(joinpath(out, f)) exists; a run directory is filled once")
     end
-    tmp = joinpath(out, ".tmp-$(getpid())")
-    mkpath(tmp)
+    tmp = BOOT_TMP
     t0 = time()
     inputs = joinpath(tmp, "inputs.duckdb")
     results = joinpath(tmp, "results.duckdb")
