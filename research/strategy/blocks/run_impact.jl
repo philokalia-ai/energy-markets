@@ -29,7 +29,7 @@ solver's acceptance), BLK from the accepted set, BLKM/BLKL/BLKX from the master'
 function clear_ratio(company, r)
     info = r.complex_info
     blocks = (info !== nothing && hasproperty(info, :blocks)) ? info.blocks : Dict{String,Any}()
-    Float64[begin
+    function one(i, o)
         if o isa SimpleOrder
             o.quantity > 0 ? r.accepted[i] / o.quantity : 0.0
         elseif SF.family_kind(o.family) == :BLK
@@ -37,7 +37,8 @@ function clear_ratio(company, r)
         else
             haskey(blocks, o.family) ? blocks[o.family].ratio : 0.0
         end
-    end for (i, o) in enumerate(company)]   # Float64 even when the company has no orders
+    end
+    return Float64[one(i, o) for (i, o) in enumerate(company)]   # Float64 even when the company has no orders
 end
 
 function main()
