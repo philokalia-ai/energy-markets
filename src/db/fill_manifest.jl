@@ -352,6 +352,17 @@ const FORECAST_EXTRA_SPECS = FillSpec[
 ]
 
 """
+    env_int(name, default) -> Int
+
+An integer environment setting where an EMPTY or blank value means unset: a workflow passes
+`\${{ inputs.x }}`, which is "" on a schedule and on a dispatch that leaves the input blank, and
+`parse(Int, "")` threw (the scheduled publish died at the fill, review of #472 #1)."""
+function env_int(name::AbstractString, default::Integer)
+    v = strip(get(ENV, name, ""))
+    return isempty(v) ? Int(default) : parse(Int, v)
+end
+
+"""
     fill_profile(profile; start, stop, asof, zones) -> (days, zones, specs, seeds)
 
 `:record`: delivery days `start:stop`, the clearing tables. `:daily_forecast` / `:export`:

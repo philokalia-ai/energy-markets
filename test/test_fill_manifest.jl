@@ -362,3 +362,19 @@ end
     end
     @test got == [("FR", "IT-NORTH"), ("IT", "ME"), ("ME", "IT")]      # RS↔ME: outside every reader's filter
 end
+
+@testset "env_int: an empty workflow input means unset (review of #472 #1)" begin
+    E = Euphemia
+    k = "EUPHEMIA_TEST_ENV_INT_472"
+    withenv(k => "") do; @test E.env_int(k, 0) == 0; @test E.env_int(k, 30) == 30; end
+    withenv(k => "  ") do; @test E.env_int(k, 7) == 7; end
+    withenv(k => nothing) do; @test E.env_int(k, 30) == 30; end
+    withenv(k => "45") do; @test E.env_int(k, 0) == 45; end
+    withenv(k => "x") do; @test_throws ArgumentError E.env_int(k, 0); end
+    # the export profile with the scheduled publish's empty INPUTS_BACK_DAYS = no widening
+    p0 = withenv("INPUTS_BACK_DAYS" => "") do
+        E.fill_profile(:export; asof=Date(2026, 11, 20), zones=["GR"], inputs_back_days=E.env_int("INPUTS_BACK_DAYS", 0))
+    end
+    p_ = E.fill_profile(:export; asof=Date(2026, 11, 20), zones=["GR"])
+    @test [(s.table, s.back) for s in p0.specs] == [(s.table, s.back) for s in p_.specs]
+end

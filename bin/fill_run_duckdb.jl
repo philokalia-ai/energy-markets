@@ -79,7 +79,7 @@ function main(argv)
         start = Euphemia.resolve_rescore_start(; zones=zones, conn_str=conn, source=source, source_path=source_path)
         println("FILL rescore --start auto resolved to $start (first forecast_prices market_date for the zones)")
     end
-    ibd = parse(Int, get(ENV, "INPUTS_BACK_DAYS", "0"))
+    ibd = Euphemia.env_int("INPUTS_BACK_DAYS", 0)   # empty (schedule / blank dispatch input) = unset
     dl = haskey(a, "days") ? Date.(split(a["days"], ",")) : nothing
     p = Euphemia.fill_profile(profile; start=start, stop=stop, asof=asof, zones=zones, inputs_back_days=ibd,
                               days_list=dl)
