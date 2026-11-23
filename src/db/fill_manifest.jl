@@ -16,7 +16,7 @@ One manifest entry. `back`/`ahead` are days around each delivery day `d`: the ta
 window is the union over DAYS of `[d - back, d + ahead + 1)`. `zone_pred` is a Postgres
 predicate template where `\$ZONES` becomes the zone array literal ("" = no zone filter).
 `kind`: `:window` (time column), `:full` (whole table, small), `:overlap` (interval tables:
-rows whose [start, end] overlaps the run span), `:per_unit` (per-unit generation: window plus
+all versions of every message with a version overlapping a run day window), `:per_unit` (per-unit generation: window plus
 the per-zone stale-feed extension), `:da_sentinel` (offered implicit ATC: window plus one
 earliest Day-ahead row per border, which keeps `_da_ever_borders`' all-history DISTINCT exact).
 """
@@ -73,9 +73,9 @@ const FILL_SPECS = FillSpec[
         sort_by="area_map_code, generation_unit_code"),
     _fs("entsoe", "unavailability_of_production_and_generation_units", :overlap;
         zone_pred="asset_code IN ($_UNITS_OF_ZONES UNION SELECT production_unit_code FROM entsoe.production_and_generation_units WHERE area_map_code = ANY(\$ZONES))",
-        back=400, ahead=1, sort_by="asset_code, start_outage_utc",
+        back=1, ahead=1, sort_by="asset_code, start_outage_utc",
         casts=Dict("start_outage_utc" => "TIMESTAMP", "end_outage_utc" => "TIMESTAMP")),
-    _fs("entsoe", "unavailability_in_the_transmission_grid", :overlap; back=400, ahead=1,
+    _fs("entsoe", "unavailability_in_the_transmission_grid", :overlap; back=1, ahead=1,
         sort_by="out_area_map_code, in_area_map_code, start_outage_utc",
         casts=Dict("start_outage_utc" => "TIMESTAMP", "end_outage_utc" => "TIMESTAMP",
                    "version_publication_timestamp_utc" => "TIMESTAMP")),
@@ -145,14 +145,15 @@ function fill_pg_query(spec::FillSpec, cols, days, zones; stale_lo::Dict{String,
         end
         push!(preds, tp)
     elseif spec.kind === :overlap
-        # The outage readers pick every MESSAGE with any version overlapping the day, then take
-        # the version known at the gate, which may have moved outside the day: copy ALL versions
-        # (rows) of every message (instance_code) that has one overlapping the run span.
-        lo = minimum(days) - Day(spec.back); hi = maximum(days) + Day(spec.ahead + 1)
+        # The outage readers (_day_outages_*, tx_outage_caps) pick every MESSAGE with any version
+        # overlapping the delivery day, then take the version known at the gate, which may have
+        # moved outside the day: copy ALL versions (rows) of every message (instance_code) with a
+        # version overlapping one of the run's day windows ([d - back, d + ahead + 1), unioned).
+        wins = fill_windows(days, spec.back, spec.ahead)
+        ov = join(("(start_outage_utc::timestamp < $(_pg_day(hi, false)) AND end_outage_utc::timestamp >= $(_pg_day(lo, false)))"
+                   for (lo, hi) in wins), " OR ")
         push!(preds, "instance_code IN (SELECT instance_code FROM $(spec.schema).$(spec.table) " *
-                     "WHERE start_outage_utc IS NOT NULL AND end_outage_utc IS NOT NULL " *
-                     "AND start_outage_utc::timestamp < $(_pg_day(hi, false)) AND end_outage_utc::timestamp >= $(_pg_day(lo, false)))")
-        wins = [(lo, hi)]
+                     "WHERE start_outage_utc IS NOT NULL AND end_outage_utc IS NOT NULL AND ($ov))")
     end
     where = isempty(preds) ? "" : " WHERE " * join(preds, " AND ")
     sql = "SELECT $proj FROM $(spec.schema).$(spec.table)$where"
@@ -324,13 +325,15 @@ copied into results.duckdb for read-back.
 """
 function fill_profile(profile::Symbol; start::Union{Nothing,Date}=nothing, stop::Union{Nothing,Date}=nothing,
                       asof::Date=Date(Dates.now(Dates.UTC)), zones::Vector{String},
-                      inputs_back_days::Int=0)
+                      inputs_back_days::Int=0, days_list::Union{Nothing,Vector{Date}}=nothing)
     if profile === :record
-        (start === nothing || stop === nothing) && error("fill profile :record needs start and stop")
-        days = collect(start:Day(1):stop)
+        days = days_list !== nothing ? sort(unique(days_list)) :
+               (start === nothing || stop === nothing) ? error("fill profile :record needs start/stop or a day list") :
+               collect(start:Day(1):stop)
         specs = FILL_SPECS
-        seeds = [(table="energy_prices", where="date_time_utc >= $(_pg_day(start, true)) AND date_time_utc < $(_pg_day(stop + Day(1), true))"),
-                 (table="input_corrections", where="date_time_utc >= $(_pg_day(start - Day(1), false)) AND date_time_utc < $(_pg_day(stop + Day(3), false))")]
+        ep = join(("(date_time_utc >= $(_pg_day(lo, true)) AND date_time_utc < $(_pg_day(hi, true)))" for (lo, hi) in fill_windows(days, 0, 0)), " OR ")
+        ic = join(("(date_time_utc >= $(_pg_day(lo, false)) AND date_time_utc < $(_pg_day(hi, false)))" for (lo, hi) in fill_windows(days, 1, 2)), " OR ")
+        seeds = [(table="energy_prices", where=ep), (table="input_corrections", where=ic)]
     elseif profile in (:daily_forecast, :export)
         days = collect((asof - Day(1)):Day(1):(asof + Day(8)))
         specs = FillSpec[s.table == "energy_prices" ?

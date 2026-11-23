@@ -2,7 +2,7 @@
 # Julia; Julia never queries Postgres except here and in the results transfer).
 #
 #   julia --project=. bin/fill_run_duckdb.jl --profile daily-forecast|record|export --out DIR \
-#         [--start YYYY-MM-DD --end YYYY-MM-DD] [--as-of YYYY-MM-DD] [--zones A,B,...] \
+#         [--start YYYY-MM-DD --end YYYY-MM-DD | --days D1,D2,...] [--as-of YYYY-MM-DD] [--zones A,B,...] \
 #         [--source duckdb:<path>]
 # Env: ENERGY_CONN_STR; ZONES (default zone list, else the 39-zone footprint); INPUTS_BACK_DAYS
 # (export profile: export_prediction_inputs.jl's look-back on the RES/load/generation tables).
@@ -73,7 +73,9 @@ function main(argv)
     source === :postgres && isempty(conn) && error("ENERGY_CONN_STR is not set")
 
     ibd = parse(Int, get(ENV, "INPUTS_BACK_DAYS", "0"))
-    p = Euphemia.fill_profile(profile; start=start, stop=stop, asof=asof, zones=zones, inputs_back_days=ibd)
+    dl = haskey(a, "days") ? Date.(split(a["days"], ",")) : nothing
+    p = Euphemia.fill_profile(profile; start=start, stop=stop, asof=asof, zones=zones, inputs_back_days=ibd,
+                              days_list=dl)
     mkpath(out)
     for f in ("inputs.duckdb", "results.duckdb")
         ispath(joinpath(out, f)) && error("$(joinpath(out, f)) exists; a run directory is filled once")
