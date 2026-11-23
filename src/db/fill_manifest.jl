@@ -88,8 +88,8 @@ const FILL_SPECS = FillSpec[
     _fs("epias", "load_forecast", :full; sort_by="date_time_utc"),
     _fs("epias", "gas_reference_price", :full; sort_by="date_time_utc"),
     _fs("epias", "actual_generation", :full; sort_by="date_time_utc, source"),
-    _fs("simulations", "input_corrections", :window; zone_pred="bidding_zone = ANY(\$ZONES)",
-        ts_col="date_time_utc", ts_tz=false, back=1, ahead=2, sort_by="bidding_zone, date_time_utc"),
+    # simulations.input_corrections is NOT an input: the forecast job writes it and the cv32
+    # reader reads it back through the results_db redirect, so it is a results seed (fill_profile).
     _fs("simulations", "unit_firms", :full; zone_pred="zone = ANY(\$ZONES)"),
 ]
 
