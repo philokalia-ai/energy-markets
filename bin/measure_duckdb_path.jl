@@ -14,7 +14,13 @@
 #   compare: julia --project=. bin/measure_duckdb_path.jl compare DIR/prices_pg.csv DIR/prices_duckdb.csv --out DIR
 #            Cell-by-cell comparison; every differing cell listed with its |Δ| and class (bit-identical / ≤2e-12
 #            tie class / beyond), plus DIR/summary.md (also appended to $GITHUB_STEP_SUMMARY when set).
-using Euphemia, Dates, Printf
+const _T_PROCESS0 = time()   # process wall: measured here (the runner image has no /usr/bin/time)
+using Dates, Printf
+# Euphemia (and its data-store init) only for `clear`: `compare` is a pure CSV comparison and needs no store.
+const _CMD = isempty(ARGS) ? "" : ARGS[1]
+_CMD == "clear" && @eval using Euphemia
+"Peak resident memory of this process (kB), from the kernel."
+peak_rss_kb() = try parse(Int, match(r"VmHWM:\s*(\d+)", read("/proc/self/status", String))[1]) catch; -1 end
 
 const FOOTPRINT = String[
     "AT","BE","BG","CZ","DE_LU","DK1","DK2","EE","ES","FI","FR","GR","HU","LT",
@@ -66,6 +72,10 @@ function clear(args)
         open(joinpath(out, "times_$label.csv"), "w") do tio
             println(pio, "day,zone,period,price"); println(tio, "day,wall_s,status")
             for d in days
+                stop = get(ENV, "STOP_FILE", "")
+                if !isempty(stop) && isfile(stop)   # the workflow watchdog saw a forecast/publish job start
+                    println("STOP: $(strip(read(stop, String))) — measurement stopped before $d"); exit(3)
+                end
                 t0 = time()
                 r = clear1(d)
                 wall = time() - t0
@@ -78,6 +88,10 @@ function clear(args)
                 @printf("  %s  %7.1f s  %s  %d zones\n", d, wall, status, length(prices))
             end
         end
+    end
+    open(joinpath(out, "process_$label.csv"), "w") do io
+        println(io, "label,process_wall_s,peak_rss_kb")
+        println(io, label, ",", round(time() - _T_PROCESS0, digits=2), ",", peak_rss_kb())
     end
 end
 
@@ -114,12 +128,17 @@ function compare(args)
     ta = joinpath(dirname(fa), replace(basename(fa), "prices_" => "times_"))
     tb = joinpath(dirname(fb), replace(basename(fb), "prices_" => "times_"))
     wall(f) = isfile(f) ? sum(parse(Float64, split(l, ",")[2]) for (i, l) in enumerate(eachline(f)) if i > 1) : NaN
+    pa = joinpath(dirname(fa), replace(basename(fa), "prices_" => "process_"))
+    pb = joinpath(dirname(fb), replace(basename(fb), "prices_" => "process_"))
+    proc(f) = isfile(f) ? split(collect(eachline(f))[2], ",") : ["-", "-", "-"]
     s = """
     ### DuckDB path measurement
     | | $(basename(fa)) | $(basename(fb)) |
     |---|---|---|
     | cells | $(length(a)) | $(length(b)) |
     | Σ day wall (s) | $(round(wall(ta), digits=1)) | $(round(wall(tb), digits=1)) |
+    | process wall (s) | $(proc(pa)[2]) | $(proc(pb)[2]) |
+    | peak RSS (kB) | $(proc(pa)[3]) | $(proc(pb)[3]) |
 
     Cells: bit-identical $same, tie class (≤$TIE) $tie, beyond $beyond, missing on one side $missing_
     (every differing cell is in diff_cells.csv).
@@ -130,9 +149,9 @@ function compare(args)
     return beyond == 0 && missing_ == 0
 end
 
-if !isempty(ARGS) && ARGS[1] == "clear"
+if _CMD == "clear"
     clear(ARGS)
-elseif !isempty(ARGS) && ARGS[1] == "compare"
+elseif _CMD == "compare"
     compare(ARGS) || (println("cells beyond the tie class or missing — see diff_cells.csv"); exit(1))
 else
     error("usage: measure_duckdb_path.jl clear --days D1,D2 --label L --out DIR | compare A.csv B.csv [--out DIR]")

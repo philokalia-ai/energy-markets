@@ -20,6 +20,7 @@
 # store chosen, module init would select Postgres and open the LibPQ pool, a stray
 # Julia -> Postgres path beside the scanner. Init needs an existing DuckDB file, and the run's
 # inputs file does not exist yet, so an empty boot file in the run's temp dir stands in.
+const _T_PROCESS0 = time()   # process wall (no /usr/bin/time on the runner image): measured here
 using DuckDB, Dates, JSON
 function _boot_store!(argv)
     i = findfirst(==("--out"), argv)
@@ -118,7 +119,10 @@ function main(argv)
                     "lo" => string(r.lo), "hi" => string(r.hi), "rows" => r.n_rows, "seconds" => r.seconds)
                for r in Euphemia.DBInterface.execute(wcon, "SELECT * FROM _fill.windows ORDER BY schema_name, table_name, lo")]
     Euphemia.DBInterface.close!(wcon); Euphemia.DuckDB.close(wdb)
+    # Peak resident memory of this process (kB) from the kernel: the runner image has no /usr/bin/time.
+    vmhwm = try parse(Int, match(r"VmHWM:\s*(\d+)", read("/proc/self/status", String))[1]) catch; -1 end
     info = Dict("profile" => string(profile), "days" => string.(p.days), "zones" => zones,
+                "process_wall_s" => round(time() - _T_PROCESS0, digits=2), "peak_rss_kb" => vmhwm,
                 "source" => string(source), "inputs_seconds" => round(t_inputs, digits=2),
                 "results_seconds" => round(t_results, digits=2),
                 "inputs_mib" => round(filesize(inputs) / 2^20, digits=1),
@@ -134,6 +138,7 @@ function main(argv)
     rm(tmp; recursive=true, force=true)
     println("FILL $(profile) done: inputs $(info["inputs_mib"]) MiB in $(info["inputs_seconds"]) s, " *
             "results $(info["results_mib"]) MiB in $(info["results_seconds"]) s -> $out")
+    println("FILL process: wall $(info["process_wall_s"]) s, peak RSS $(info["peak_rss_kb"]) kB")
 end
 
 try
