@@ -39,7 +39,7 @@ def slope_table(df=None, which=None):
     (negative: the price falls as the company sells more): centred ±100 MW and ±500 MW arcs. Per zone x band: the
     median over days of the day's band mean, with the day-to-day p25-p75."""
     rows = []
-    for f in sorted((RUN / "rd").glob("*.csv")):
+    for f in sorted(f for f in (RUN / "rd").glob("*.csv") if not f.name.endswith(".plus.csv")):
         day, zone = f.stem[:10], f.stem[11:]
         if which is not None and (day in CAL) != (which == "cal"):
             continue
@@ -110,8 +110,10 @@ def edge_table(df):
     """Share of zone-hours where an arm's simulated price lies at/beyond a residual-demand grid edge
     (uncarved injection D0(p) within 1 MW of the lowest or highest q on the grid)."""
     d = df[df.arm.isin(["truthful", "cournot", "hedged", "book"]) & df.d0_at_p.notna()]
-    d = d.assign(edge_lo=d.d0_at_p <= d.q_lo + 1, edge_hi=d.d0_at_p >= d.q_hi - 1)
-    return d.groupby(["zone", "S", "arm", "set"])[["edge_lo", "edge_hi"]].mean().round(3)
+    # strict edge, and the outermost grid segment ([-4000,-3000] / [+2000,+4000]: two points, linear only)
+    d = d.assign(edge_lo=d.d0_at_p <= d.q_lo + 1, edge_hi=d.d0_at_p >= d.q_hi - 1,
+                 seg_lo=d.d0_at_p < -3000, seg_hi=d.d0_at_p > 2000, p_ge_1000=d.sim_price >= 1000)
+    return d.groupby(["zone", "S", "arm", "set"])[["edge_lo", "edge_hi", "seg_lo", "seg_hi", "p_ge_1000"]].mean().round(3)
 
 
 def md_hedge(rows):
@@ -135,15 +137,20 @@ def structure_table(rows_cal, rows_eval):
                         hhi_fossil=H[H.zone == z].hhi_fossil.mean() if H is not None else np.nan,
                         top_firm=(H[H.zone == z].top_firm.mode().iloc[0] if H is not None and H[H.zone == z].top_firm.notna().any() else ""),
                         top_firm_mw=H[H.zone == z].top_firm_mw.median() if H is not None else np.nan,
-                        S_star_sim_cal=sc[z], S_star_sim_eval=se[z], S_star_imp_cal=sci[z], S_star_imp_eval=sei[z]))
+                        S_star_sim_cal=sc[z], S_star_sim_eval=se[z], S_star_imp_cal=sci[z], S_star_imp_eval=sei[z],
+                        S_star1pct_sim_cal=s_star(rows_cal, material=0.01)[z],
+                        S_star1pct_sim_eval=s_star(rows_eval, material=0.01)[z],
+                        S_star1pct_imp_cal=s_star(rows_cal, "cournot_imp", 0.01)[z],
+                        S_star1pct_imp_eval=s_star(rows_eval, "cournot_imp", 0.01)[z]))
     return pd.DataFrame(out)
 
 
-def s_star(rows, key="cournot_sim"):
+def s_star(rows, key="cournot_sim", material=0.0):
+    """Smallest S whose Δ interval lies above `material` x truthful simulated profit (0 = above zero)."""
     res = {}
     for z in ZONES:
         zs = sorted([r for r in rows if r["zone"] == z and key in r], key=lambda r: r["S"])
-        res[z] = next((r["S"] for r in zs if r[key][1] > 0), None)
+        res[z] = next((r["S"] for r in zs if r[key][1] > material * r["truthful_sim_k"] * 1e3), None)
     return res
 
 
@@ -200,6 +207,8 @@ if __name__ == "__main__":
     et = edge_table(df)
     et.to_csv(TAB / "grid_edge.csv")
     print("\n### grid edge (share of hours), GR\n" + MV.md(et.loc["GR"]))
+    print("\n### grid edge, all zones, S >= 2000, cournot/truthful\n" +
+          MV.md(et.reset_index().query("S >= 2000 and arm in ['cournot', 'truthful']").set_index(["zone", "S", "arm", "set"])))
     stt = structure_table(R_["cal"], R_["eval"])
     stt.to_csv(TAB / "structure.csv", index=False)
     print("\n### structure\n" + MV.md(stt, index=False))
