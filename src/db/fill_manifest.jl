@@ -373,7 +373,8 @@ copied into results.duckdb for read-back.
 """
 function fill_profile(profile::Symbol; start::Union{Nothing,Date}=nothing, stop::Union{Nothing,Date}=nothing,
                       asof::Date=Date(Dates.now(Dates.UTC)), zones::Vector{String},
-                      inputs_back_days::Int=0, days_list::Union{Nothing,Vector{Date}}=nothing)
+                      inputs_back_days::Int=0, days_list::Union{Nothing,Vector{Date}}=nothing,
+                      needs::Union{Nothing,NamedTuple}=nothing)
     if profile === :record
         days = days_list !== nothing ? sort(unique(days_list)) :
                (start === nothing || stop === nothing) ? error("fill profile :record needs start/stop or a day list") :
@@ -386,9 +387,20 @@ function fill_profile(profile::Symbol; start::Union{Nothing,Date}=nothing, stop:
                  (table="input_corrections", where=ic, win=fill_windows(days, 1, 2))]
     elseif profile in (:daily_forecast, :export)
         days = collect((asof - Day(1)):Day(1):(asof + Day(8)))
+        # The readers' windows depend on the data (review of #472 #2/#7), so the CLI resolves them from
+        # the source first (`resolve_forecast_needs`); an unresolved call is an error, never a guess.
+        needs === nothing && error("fill profile :$profile needs `needs` from resolve_forecast_needs " *
+                                   "(map_start, history_start)")
+        # day-ahead load forecast: the map exporters' weights (HOURLY_LOAD_FC_SQL) over the last
+        # EXPORT_MAP_DAYS distinct forecast market dates, from map_start − 1
+        load_back = needs.map_start === nothing ? 0 : Dates.value(days[1] - (needs.map_start - Day(1)))
         specs = FillSpec[s.table == "energy_prices" ?
                          _fs("entsoe", "energy_prices", :window; zone_pred=s.zone_pred, ts_col=s.ts_col,
-                             back=400, ahead=1, sort_by=s.sort_by) : s for s in FILL_SPECS]
+                             back=400, ahead=1, sort_by=s.sort_by) :
+                         (s.table == "day_ahead_total_load_forecast" && load_back > s.back) ?
+                         _fs(s.schema, s.table, s.kind; zone_pred=s.zone_pred, ts_col=s.ts_col, ts_tz=s.ts_tz,
+                             back=load_back, ahead=s.ahead, sort_by=s.sort_by, casts=s.casts) : s
+                         for s in FILL_SPECS]
         append!(specs, FORECAST_EXTRA_SPECS)
         push!(specs, _ic_spec(4, 1))   # [asof-5, asof+10), the seed's window
         # export_prediction_inputs.jl reads INPUTS_BACK_DAYS back on these tables
@@ -485,6 +497,47 @@ function seed_run_results!(con, seeds)
         println("  seed results_db.simulations.$(sd.table): $n rows, $(round(time() - t0, digits=1)) s"); flush(stdout)
     end
     return out
+end
+
+"Market dates in the map exporters' window (bin/export_forecast_json.jl, bin/export_web_parquet.jl `MAP_DAYS`)."
+const EXPORT_MAP_DAYS = 60
+
+"""
+    resolve_forecast_needs(; conn_str="", source=:postgres, source_path="") -> (map_start, history_start)
+
+The data-dependent windows of the daily-forecast/export jobs' readers, resolved inside the fill step
+through the same attach (review of #472 #2/#7): `map_start` = the oldest of the last
+`EXPORT_MAP_DAYS` distinct `forecast_prices` market dates (the map exporters' window, whose load
+weights read back from `map_start − 1`); `history_start` = the oldest market date in
+`forecast_prices` ∪ `forecast_scores` (scorer, exporters, naive baselines). `nothing` when there is no
+forecast history (an offline source without the tables counts as none)."""
+function resolve_forecast_needs(; conn_str::AbstractString="", source::Symbol=:postgres,
+                                source_path::AbstractString="")
+    db = DuckDB.DB()
+    con = DBInterface.connect(db)
+    try
+        if source === :postgres
+            attach_postgres!(con, conn_str; alias="pg", read_only=true)
+        else
+            DBInterface.execute(con, "ATTACH $(_pg_str(source_path)) AS src (READ_ONLY)")
+        end
+        _FILL_SOURCE[] = source
+        if source === :duckdb
+            has = Set(String(r.table_name) for r in DBInterface.execute(con,
+                "SELECT table_name FROM duckdb_tables() WHERE database_name = 'src' AND schema_name = 'simulations'"))
+            ("forecast_prices" in has && "forecast_scores" in has) || return (map_start=nothing, history_start=nothing)
+        end
+        m = _pg_rows(con, "SELECT MIN(market_date) AS d FROM (SELECT DISTINCT market_date FROM " *
+                          "simulations.forecast_prices ORDER BY market_date DESC LIMIT $EXPORT_MAP_DAYS) s")
+        h = _pg_rows(con, "SELECT LEAST((SELECT MIN(market_date) FROM simulations.forecast_prices), " *
+                          "(SELECT MIN(market_date) FROM simulations.forecast_scores)) AS d")
+        d(r) = (isempty(r) || ismissing(r[1].d)) ? nothing : Date(r[1].d)
+        return (map_start=d(m), history_start=d(h))
+    finally
+        _FILL_SOURCE[] = :postgres
+        DBInterface.close!(con)
+        DuckDB.close(db)
+    end
 end
 
 """

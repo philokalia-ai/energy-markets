@@ -84,7 +84,7 @@ const CV = Euphemia.ENERGY_PRICES_CODE_VERSION
 const OUT_ROOT = get(ENV, "WEB_PARQUET_OUT", joinpath(dirname(@__DIR__), "data", "web"))
 const V1_DIR = joinpath(OUT_ROOT, "v1")
 const MAX_DAYS = 120   # same recent window as export_forecast_json.jl
-const MAP_DAYS = 60
+const MAP_DAYS = Euphemia.EXPORT_MAP_DAYS   # shared with the fill manifest (resolve_forecast_needs)
 
 # nothing/missing/NaN/Inf -> missing (parquet null; JSON null downstream)
 nm(x) = (x === nothing || x === missing) ? missing :

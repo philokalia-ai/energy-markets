@@ -8,6 +8,8 @@ using Test, Dates, Euphemia, DataFrames
 using DuckDB
 import DuckDB.DBInterface as DBInterface
 
+const NONEEDS = (map_start=nothing, history_start=nothing)   # no forecast history
+
 @testset "fill manifest: windows and Postgres SQL" begin
     E = Euphemia
     # union of [d - back, d + ahead + 1), merged
@@ -241,7 +243,7 @@ end
     E = Euphemia
     days = [Date(2025, 5, 27), Date(2025, 6, 26)]
     for (prof, kw) in ((:record, (days_list=days,)), (:retro, (start=Date(2025, 5, 27), stop=Date(2025, 5, 29))),
-                       (:daily_forecast, (asof=Date(2025, 5, 27),)), (:export, (asof=Date(2025, 5, 27),)))
+                       (:daily_forecast, (asof=Date(2025, 5, 27), needs=NONEEDS)), (:export, (asof=Date(2025, 5, 27), needs=NONEEDS)))
         p = E.fill_profile(prof; zones=["IT-Sardinia"], kw...)
         sp = only(filter(s -> s.table == "input_corrections", p.specs))
         sd = only(filter(s -> s.table == "input_corrections", p.seeds))
@@ -278,7 +280,7 @@ end
     E = Euphemia
     @test "carbon" in E._GUARDED_SCHEMAS
     for (prof, kw) in ((:record, (days_list=[Date(2025, 5, 27)],)), (:retro, (start=Date(2025, 5, 27), stop=Date(2025, 5, 28))),
-                       (:daily_forecast, (asof=Date(2025, 5, 27),)), (:export, (asof=Date(2025, 5, 27),)))
+                       (:daily_forecast, (asof=Date(2025, 5, 27), needs=NONEEDS)), (:export, (asof=Date(2025, 5, 27), needs=NONEEDS)))
         @test count(s -> (s.schema, s.table) == ("carbon", "uka_price"), E.fill_profile(prof; zones=["FR"], kw...).specs) == 1
     end
     prev = (E.DATA_STORE[], E.DUCKDB_PATH[], E.DUCKDB_READ_ONLY[], E.DUCKDB_RESULTS_WRITABLE[])
@@ -373,8 +375,48 @@ end
     withenv(k => "x") do; @test_throws ArgumentError E.env_int(k, 0); end
     # the export profile with the scheduled publish's empty INPUTS_BACK_DAYS = no widening
     p0 = withenv("INPUTS_BACK_DAYS" => "") do
-        E.fill_profile(:export; asof=Date(2026, 11, 20), zones=["GR"], inputs_back_days=E.env_int("INPUTS_BACK_DAYS", 0))
+        E.fill_profile(:export; asof=Date(2026, 11, 20), zones=["GR"], inputs_back_days=E.env_int("INPUTS_BACK_DAYS", 0), needs=NONEEDS)
     end
-    p_ = E.fill_profile(:export; asof=Date(2026, 11, 20), zones=["GR"])
+    p_ = E.fill_profile(:export; asof=Date(2026, 11, 20), zones=["GR"], needs=NONEEDS)
     @test [(s.table, s.back) for s in p0.specs] == [(s.table, s.back) for s in p_.specs]
+end
+
+@testset "daily-forecast/export windows from the readers' real need (review of #472 #2)" begin
+    E = Euphemia
+    asof = Date(2026, 11, 20)
+    @test_throws ErrorException E.fill_profile(:daily_forecast; asof=asof, zones=["GR"])   # unresolved: loud
+    spec(p, t) = only(filter(s -> s.table == t, p.specs))
+    lo(p, t) = first(E.fill_windows(p.days, spec(p, t).back, spec(p, t).ahead))[1]
+    # map window from 2026-09-14 (53 days back), forecast history from 2025-07-28 (480 days back)
+    n = (map_start=Date(2026, 9, 14), history_start=Date(2025, 7, 28))
+    for prof in (:daily_forecast, :export)
+        p = E.fill_profile(prof; asof=asof, zones=["GR"], needs=n)
+        @test lo(p, "day_ahead_total_load_forecast") <= n.map_start - Day(1)        # HOURLY_LOAD_FC_SQL [sd-1, …)
+        @test lo(p, "day_ahead_total_load_forecast") == n.map_start - Day(1)
+    end
+    # no forecast history: the clearing readers' own windows (31 days), nothing wider
+    p0 = E.fill_profile(:daily_forecast; asof=asof, zones=["GR"], needs=NONEEDS)
+    @test spec(p0, "day_ahead_total_load_forecast").back == only(filter(s -> s.table == "day_ahead_total_load_forecast", E.FILL_SPECS)).back
+    # a recent map window never narrows the base window
+    p1 = E.fill_profile(:export; asof=asof, zones=["GR"], needs=(map_start=asof - Day(3), history_start=asof - Day(10)))
+    @test spec(p1, "day_ahead_total_load_forecast").back == 31
+    @test E.EXPORT_MAP_DAYS == 60
+
+    # resolver on an offline source: 70 distinct forecast dates, scores reaching further back
+    dir = mktempdir(); src = joinpath(dir, "src.duckdb")
+    let db = DuckDB.DB(src), con = DBInterface.connect(db)
+        DBInterface.execute(con, "CREATE SCHEMA simulations")
+        DBInterface.execute(con, "CREATE TABLE simulations.forecast_prices (market_date DATE, bidding_zone VARCHAR)")
+        DBInterface.execute(con, "CREATE TABLE simulations.forecast_scores (market_date DATE, bidding_zone VARCHAR)")
+        for k in 0:69   # every other day: the window is the last 60 DISTINCT dates, not 60 calendar days
+            DBInterface.execute(con, "INSERT INTO simulations.forecast_prices VALUES (?, 'GR')", Any[Date(2026, 11, 19) - Day(2k)])
+        end
+        DBInterface.execute(con, "INSERT INTO simulations.forecast_scores VALUES (DATE '2025-10-01', 'GR')")
+        DBInterface.close!(con); DuckDB.close(db)
+    end
+    r = E.resolve_forecast_needs(; source=:duckdb, source_path=src)
+    @test r.map_start == Date(2026, 11, 19) - Day(2 * 59)
+    @test r.history_start == Date(2025, 10, 1)
+    bare = joinpath(dir, "bare.duckdb"); DuckDB.close(DuckDB.DB(bare))
+    @test E.resolve_forecast_needs(; source=:duckdb, source_path=bare) == (map_start=nothing, history_start=nothing)
 end
