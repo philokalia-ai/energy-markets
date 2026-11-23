@@ -158,7 +158,7 @@ jobs:
             --start "${{ steps.days.outputs.start }}" --end "${{ steps.days.outputs.end }}" --out "$RUN_DIR" &
           echo $! > "$PID_DIR/fill.pid"; wait $!
           cp "$RUN_DIR/fill.json" "$OUT_DIR/fill.json"
-          python3 -c "import json; f=json.load(open('$OUT_DIR/fill.json')); print('fill 1: wall', f['process_wall_s'], 's, peak RSS', f['peak_rss_kb'], 'kB, inputs', f['inputs_mib'], 'MiB, results', f['results_mib'], 'MiB')"
+          python3 -c "import json; f=json.load(open('$OUT_DIR/fill.json')); print('fill 1: wall', f['process_wall_s'], 's, peak RSS', f['peak_rss_kb'], 'kB, inputs', f['inputs_mib'], 'MiB, results', f['results_mib'], 'MiB; TimeZone source', f.get('source_timezone'), 'pg', f.get('pg_timezone'), 'scanner', f.get('scanner_timezone'), '; absent in source', f.get('absent_in_source'))"
           julia --project=. bin/measure_duckdb_path.jl fill-sums "$RUN_DIR/inputs.duckdb" "$OUT_DIR/fill1_sums.tsv"
 
       - name: DuckDB path — clear reading only the run-local DuckDB (no Postgres credentials)
@@ -213,7 +213,8 @@ jobs:
           if [ -f "$RUN_DIR/inputs.duckdb" ] && [ -f "$RUN_DIR2/inputs.duckdb" ]; then
             julia --project=. bin/measure_duckdb_path.jl fill-diff "$RUN_DIR/inputs.duckdb" "$RUN_DIR2/inputs.duckdb" --out "$OUT_DIR" || true
           fi
-          [ -f "$OUT_DIR/fill.json" ] && python3 -c "import json; f=json.load(open('$OUT_DIR/fill.json')); print(f\"- fill: {f['process_wall_s']} s wall, peak RSS {f['peak_rss_kb']} kB, inputs {f['inputs_mib']} MiB, results {f['results_mib']} MiB\")" >> "$GITHUB_STEP_SUMMARY"
+          [ -f "$OUT_DIR/fill.json" ] && python3 -c "import json; f=json.load(open('$OUT_DIR/fill.json')); print(f\"- fill 1: {f['process_wall_s']} s wall, peak RSS {f['peak_rss_kb']} kB, inputs {f['inputs_mib']} MiB, results {f['results_mib']} MiB; TimeZone source={f.get('source_timezone')} pg={f.get('pg_timezone')} scanner={f.get('scanner_timezone')}; absent in source: {f.get('absent_in_source')}\")" >> "$GITHUB_STEP_SUMMARY"
+          [ -f "$OUT_DIR/pg_server_timezone.txt" ] && echo "- Postgres server TimeZone default (unpinned session): $(cat "$OUT_DIR/pg_server_timezone.txt")" >> "$GITHUB_STEP_SUMMARY"
           exit $rc
 
       - name: Upload measurement

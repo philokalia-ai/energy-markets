@@ -134,6 +134,26 @@ function clear(args)
     clear1 = entry == "forecast" ? forecast_clear : record_clear
     trace = "--trace" in args
     trace && (Euphemia.SQL_TRACE[] = _trace_record)
+    if Euphemia.DATA_STORE[] === :postgres
+        # The server's own TimeZone default: Euphemia pins its sessions to UTC (PGTZ + SET), so ask one
+        # plain libpq connection opened without PGTZ (read-only SHOW; closed at once)
+        tz = try
+            @eval using LibPQ
+            c = withenv("PGTZ" => nothing) do
+                Base.invokelatest(LibPQ.Connection, ENV["ENERGY_CONN_STR"])
+            end
+            v = try
+                String(Base.invokelatest(x -> first(LibPQ.columntable(LibPQ.execute(c, "SHOW TimeZone")))[1], c))
+            finally
+                close(c)
+            end
+            v
+        catch e
+            "unknown ($(first(sprint(showerror, e), 120)))"
+        end
+        println("postgres server TimeZone default (unpinned session): $tz")
+        write(joinpath(out, "pg_server_timezone.txt"), tz * "\n")
+    end
     println("measure clear: backend=$(Euphemia.DATA_STORE[]) entry=$entry label=$label days=$(join(days, ","))")
     open(joinpath(out, "prices_$label.csv"), "w") do pio
         open(joinpath(out, "times_$label.csv"), "w") do tio
