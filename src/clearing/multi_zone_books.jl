@@ -323,11 +323,21 @@ function _create_multi_zone_order_book_merit(zones::Vector{String}, day::Date;
     # repeated pass 1's ATC/JAO/outage reads (bit-identical on the record days).
     if transfer_capacity === nothing
         println("   🔌 Fetching transfer capacities between zones...")
+        audit0 = asof_audit()
         transfer_capacity = Network.create_transfer_capacity_from_entsoe(day, zones;
             include_explicit=enrich_network, aggregate_remap=aggregate_remap,
             drop_borders=drop_borders)
+        # keep the as-of audit rows this build made, for pass 2's reuse to replay
+        for (src, d) in asof_audit(), (st, n) in d
+            dn = n - get(get(audit0, src, Dict{Symbol,Int}()), st, 0)
+            dn > 0 && (transfer_capacity.asof_audit[(src, st)] = dn)
+        end
     else
         println("   🔌 Reusing pass-1 transfer capacities")
+        # audit as if rebuilt: a rebuild would have recorded the same rows again
+        for ((src, st), n) in transfer_capacity.asof_audit
+            record_asof_status!(src, st, n)
+        end
     end
     zone_pairs = Network.get_zone_pairs(transfer_capacity)
     # A border only counts as endogenous if it can actually carry flow:
