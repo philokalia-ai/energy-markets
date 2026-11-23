@@ -595,16 +595,19 @@ function day_resolution(ts::AbstractVector)
     return RES_HOURLY
 end
 
-"True when a prices frame (columns z, market_date, lead_days, t, and mode or track) holds any quarter-hour day."
-function any_quarter_day(prices)
+"The market days holding a quarter-hour day in a prices frame (columns z, market_date, lead_days, t, mode or track)."
+function quarter_days(prices)
     k = hasproperty(prices, :mode) ? prices.mode : prices.track
     days = Dict{Any,Vector{DateTime}}()
     for i in eachindex(prices.t)
         push!(get!(days, (prices.z[i], prices.market_date[i], prices.lead_days[i], k[i]), DateTime[]),
               DateTime(prices.t[i]))
     end
-    return any(v -> day_resolution(v) == RES_QUARTER, values(days))
+    return sort!(unique(Date(key[2]) for (key, v) in days if day_resolution(v) == RES_QUARTER))
 end
+
+"True when a prices frame holds any quarter-hour day."
+any_quarter_day(prices) = !isempty(quarter_days(prices))
 
 "The stamp an hourly series is read at for one slot: the slot's hour on a quarter day (step), the stamp itself on an hourly day."
 slot_hour(t::DateTime, res::AbstractString) = res == RES_QUARTER ? floor(t, Hour) : t
@@ -612,28 +615,41 @@ slot_hour(t::DateTime, res::AbstractString) = res == RES_QUARTER ? floor(t, Hour
 """
     slot_actuals(zone, hours, res, actmap, q15map) -> (actuals, actual_resolution)
 
-Actuals for one zone-day's slots (`nothing` where unsettled). Quarter day: the native PT15M Day-ahead actuals
-when the zone-day has any (PT15M), else the hourly actual replicated onto its quarters (PT60M). Hourly day:
-the hourly actuals, exactly as before (PT60M).
+Actuals for one zone-day's slots (`nothing` where unsettled). Quarter day, slot by slot: the native PT15M
+Day-ahead actual where published, else the slot's hourly actual (replicated onto the hour's quarters; e.g.
+2025-10-01, whose first Athens hour is still PT60M, or quarters ENTSO-E dropped). `actual_resolution`: PT15M
+when the zone-day has any native quarter, else PT60M (all hourly). Hourly day: the hourly actuals, exactly as
+before (PT60M).
 """
 function slot_actuals(zone, hours, res, actmap, q15map)
     if res == RES_QUARTER
         native = Any[get(q15map, (zone, h), nothing) for h in hours]
-        any(!isnothing, native) && return native, RES_QUARTER
-        return Any[get(actmap, (zone, floor(h, Hour)), nothing) for h in hours], RES_HOURLY
+        acts = Any[isnothing(native[i]) ? get(actmap, (zone, floor(hours[i], Hour)), nothing) : native[i]
+                   for i in eachindex(hours)]
+        return acts, any(!isnothing, native) ? RES_QUARTER : RES_HOURLY
     end
     return Any[get(actmap, (zone, h), nothing) for h in hours], RES_HOURLY
 end
 
-"""(zone, slot start) → native PT15M Day-ahead actual over market days sd..ed (`native_q15_actuals`, the SDAC
-target: non-SDAC sequences dropped). Empty unless `needed` (no quarter day in the export → no extra read)."""
-function q15_actual_map(sd::Date, ed::Date; needed::Bool=true)
-    m = Dict{Tuple{String,DateTime},Float64}()
-    needed || return m
-    for r in eachrow(native_q15_actuals(sd, ed))
-        String(r.res) == "PT15M" && (m[(String(r.z), DateTime(r.t))] = Float64(r.act))
+"""
+    q15_actual_map(days; reader=native_q15_actuals) -> Dict((zone, slot start) => actual)
+
+Native PT15M Day-ahead actuals (`native_q15_actuals`, the SDAC target: non-SDAC sequences dropped) over the
+market days of the export's QUARTER-HOUR days only (`days` = `quarter_days(prices)`; from the day before the
+first, as an Athens market day starts on the previous UTC day). Empty days → no read. Memoised per process on
+the window, so the zone and map passes of one exporter read it once.
+"""
+const _Q15_MAP_CACHE = Dict{Any,Dict{Tuple{String,DateTime},Float64}}()
+function q15_actual_map(days; reader=native_q15_actuals)
+    isempty(days) && return Dict{Tuple{String,DateTime},Float64}()
+    lo, hi = minimum(days) - Day(1), maximum(days)
+    get!(_Q15_MAP_CACHE, (lo, hi, objectid(reader))) do
+        m = Dict{Tuple{String,DateTime},Float64}()
+        for r in eachrow(reader(lo, hi))
+            String(r.res) == "PT15M" && (m[(String(r.z), DateTime(r.t))] = Float64(r.act))
+        end
+        m
     end
-    return m
 end
 
 """

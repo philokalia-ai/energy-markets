@@ -32,7 +32,7 @@ isdefined(@__MODULE__, :athens_market_day_window) ||
     end
 
     actmap = Dict(("DE_LU", h) => 100.0 + Dates.hour(h) for h in hourly)
-    q15map = Dict(("DE_LU", t) => 200.0 + Dates.minute(t) for t in quarter[1:90])   # last 6 quarters unsettled
+    q15map = Dict(("DE_LU", t) => 200.0 + Dates.minute(t) for t in quarter[1:90])   # last 6 quarters not native
 
     @testset "slot_actuals" begin
         a, r = slot_actuals("DE_LU", hourly, RES_HOURLY, actmap, q15map)          # hourly day: as before
@@ -40,7 +40,17 @@ isdefined(@__MODULE__, :athens_market_day_window) ||
         a, r = slot_actuals("DE_LU", quarter, RES_QUARTER, actmap, q15map)        # native quarters
         @test r == RES_QUARTER && length(a) == 96
         @test a[2] == 215.0 && a[90] == 200.0 + Dates.minute(quarter[90])
-        @test all(isnothing, a[91:96])                                             # unsettled stay null, no fallback mix
+        # slot by slot: a quarter without a native actual takes its hour's actual (#474 review #1)
+        @test all(i -> a[i] == 100.0 + Dates.hour(floor(quarter[i], Hour)), 91:96)
+        # 2025-10-01: the first Athens hour still PT60M, the rest native quarters
+        first_hourly = Dict(("GR", t) => 300.0 + Dates.minute(t) for t in quarter[5:96])
+        hr = Dict(("GR", h) => 50.0 + Dates.hour(h) for h in hourly)
+        a, r = slot_actuals("GR", quarter, RES_QUARTER, hr, first_hourly)
+        @test r == RES_QUARTER
+        @test a[1:4] == fill(50.0 + Dates.hour(t0), 4)                             # hour 0: hourly, replicated
+        @test a[5] == 300.0 && a[96] == 300.0 + Dates.minute(quarter[96])          # native from 00:00 Athens + 1 h
+        a, r = slot_actuals("DE_LU", quarter, RES_QUARTER, Dict{Tuple{String,DateTime},Float64}(), q15map)
+        @test all(isnothing, a[91:96])                                             # neither published: null
         a, r = slot_actuals("GR", quarter, RES_QUARTER,
                             Dict(("GR", h) => 50.0 + Dates.hour(h) for h in hourly), q15map)   # no native: hourly x4
         @test r == RES_HOURLY && all(i -> a[i] == 50.0 + Dates.hour(floor(quarter[i], Hour)), 1:96)
@@ -59,6 +69,18 @@ isdefined(@__MODULE__, :athens_market_day_window) ||
         @test !any_quarter_day(vcat(mk(hourly, Date(2026, 12, 13)), mk(hourly .+ Minute(15), Date(2026, 12, 14))))
         tr = select(mixed, :z, :market_date, :lead_days, :mode => :track, :t)        # the map frames carry `track`
         @test any_quarter_day(tr)
-        @test isempty(q15_actual_map(Date(2026, 12, 13), Date(2026, 12, 14); needed=false))   # no read when not needed
+        @test quarter_days(mixed) == [Date(2026, 12, 14)]                           # only the quarter day's date
+    end
+
+    @testset "q15_actual_map reads the quarter days only, once per window (#474 review #7)" begin
+        calls = Tuple{Date,Date}[]
+        stub(lo, hi) = (push!(calls, (lo, hi));
+                        DataFrame(z=["GR", "GR"], t=[quarter[1], hourly[2]], act=[1.5, 9.0], res=["PT15M", "PT60M"]))
+        @test isempty(q15_actual_map(Date[]; reader=stub)) && isempty(calls)       # no quarter day: no read
+        m = q15_actual_map([Date(2026, 12, 14), Date(2026, 12, 16)]; reader=stub)
+        @test calls == [(Date(2026, 12, 13), Date(2026, 12, 16))]                   # day before the first .. last
+        @test m == Dict(("GR", quarter[1]) => 1.5)                                  # PT15M rows only
+        q15_actual_map([Date(2026, 12, 14), Date(2026, 12, 16)]; reader=stub)
+        @test length(calls) == 1                                                    # memoised: the map pass reuses it
     end
 end

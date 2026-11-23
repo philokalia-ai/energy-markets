@@ -280,7 +280,7 @@ function export_zone_files()
     actmap = Dict{Tuple{String,DateTime},Float64}(
         (String(a.z), DateTime(a.t)) => Float64(a.act) for a in eachrow(act))
     # native quarter-hour actuals, read only when the export holds a quarter-hour (cv46) day
-    q15map = q15_actual_map(sd - Day(1), ed; needed=any_quarter_day(prices))
+    q15map = q15_actual_map(quarter_days(prices))
 
     mlmap = model_lines_map(sd)
     ovh, ovd = tsfm_overlay(sd)
@@ -402,7 +402,7 @@ function export_map_json()
     act = da_target_actuals(sd - Day(1), ed)  # EUPHEMIA_DA_TARGET (default sdac; highest_seq = kill switch)
     actmap = Dict{Tuple{String,DateTime},Float64}(
         (String(a.z), DateTime(a.t)) => Float64(a.act) for a in eachrow(act))
-    q15map = q15_actual_map(sd - Day(1), ed; needed=any_quarter_day(prices))
+    q15map = q15_actual_map(quarter_days(prices))
 
     mlmap = model_lines_map(sd)
     # Hourly D-1 load forecast: the weights of err_pct (load-weighted WAPE).

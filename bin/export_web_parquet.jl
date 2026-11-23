@@ -302,7 +302,7 @@ function export_zone_parquets()
     actmap = Dict{Tuple{String,DateTime},Float64}(
         (String(a.z), DateTime(a.t)) => Float64(a.act) for a in eachrow(act))
     # native quarter-hour actuals, read only when the export holds a quarter-hour (cv46) day
-    q15map = q15_actual_map(sd - Day(1), ed; needed=any_quarter_day(prices))
+    q15map = q15_actual_map(quarter_days(prices))
     ml = try
         Euphemia.sql2df_with_retry("""
             SELECT bidding_zone AS z, model,
@@ -449,7 +449,7 @@ function export_map_parquet()
     act = da_target_actuals(sd - Day(1), ed)  # EUPHEMIA_DA_TARGET (default sdac; highest_seq = kill switch)
     actmap = Dict{Tuple{String,DateTime},Float64}(
         (String(a.z), DateTime(a.t)) => Float64(a.act) for a in eachrow(act))
-    q15map = q15_actual_map(sd - Day(1), ed; needed=any_quarter_day(prices))
+    q15map = q15_actual_map(quarter_days(prices))
     # Hourly D-1 load forecast: the weights of err_pct (load-weighted WAPE).
     loads = Euphemia.sql2df_with_retry(HOURLY_LOAD_FC_SQL, [sd - Day(1), ed + Day(1)])
     loadmap = Dict{Tuple{String,DateTime},Float64}(
