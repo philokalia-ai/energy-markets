@@ -45,73 +45,63 @@ end
 
 function _type_p95_all_zones(day::Date, lookback_days::Int)
     key = (day, lookback_days, ctx_key())
-    cached = lock(_FLEET_DATA_LOCK) do
-        get(_TYPE_P95_DAY_CACHE, key, nothing)
+    return _fill_once(_FLEET_DATA_LOCK, _TYPE_P95_DAY_CACHE, key) do
+        ub_expr, ub_val = _trailing_window_upper(day)
+        df = sql2df_with_retry(
+            """
+            SELECT area_map_code AS z, production_type,
+                   percentile_cont(0.95) WITHIN GROUP (ORDER BY mw) AS p95
+            FROM (
+                SELECT area_map_code, production_type, date_time_utc,
+                       SUM(actual_generation_output_mw) AS mw
+                FROM entsoe.aggregated_generation_per_type
+                WHERE area_type_code LIKE 'BZN%'
+                  AND actual_generation_output_mw IS NOT NULL
+                  AND date_time_utc >= (\$1::date::timestamp AT TIME ZONE 'UTC')
+                  AND date_time_utc < $(replace(ub_expr, "\$UB" => "\$2"))
+                GROUP BY area_map_code, production_type, date_time_utc
+            ) hourly
+            GROUP BY area_map_code, production_type
+            """,
+            [day - Day(lookback_days), ub_val])
+        out = Dict{String,Dict{String,Float64}}()
+        for row in eachrow(df)
+            ismissing(row.p95) && continue
+            get!(out, String(row.z), Dict{String,Float64}())[String(row.production_type)] =
+                Float64(row.p95)
     end
-    cached !== nothing && return cached
-    ub_expr, ub_val = _trailing_window_upper(day)
-    df = sql2df_with_retry(
-        """
-        SELECT area_map_code AS z, production_type,
-               percentile_cont(0.95) WITHIN GROUP (ORDER BY mw) AS p95
-        FROM (
-            SELECT area_map_code, production_type, date_time_utc,
-                   SUM(actual_generation_output_mw) AS mw
-            FROM entsoe.aggregated_generation_per_type
-            WHERE area_type_code LIKE 'BZN%'
-              AND actual_generation_output_mw IS NOT NULL
-              AND date_time_utc >= (\$1::date::timestamp AT TIME ZONE 'UTC')
-              AND date_time_utc < $(replace(ub_expr, "\$UB" => "\$2"))
-            GROUP BY area_map_code, production_type, date_time_utc
-        ) hourly
-        GROUP BY area_map_code, production_type
-        """,
-        [day - Day(lookback_days), ub_val])
-    out = Dict{String,Dict{String,Float64}}()
-    for row in eachrow(df)
-        ismissing(row.p95) && continue
-        get!(out, String(row.z), Dict{String,Float64}())[String(row.production_type)] =
-            Float64(row.p95)
+    out
     end
-    lock(_FLEET_DATA_LOCK) do
-        _TYPE_P95_DAY_CACHE[key] = out
-    end
-    return out
 end
 
 function _hydro_avail_all_zones(day::Date, lookback_days::Int)
     key = (day, lookback_days, ctx_key())
-    cached = lock(_FLEET_DATA_LOCK) do
-        get(_HYDRO_AVAIL_DAY_CACHE, key, nothing)
+    return _fill_once(_FLEET_DATA_LOCK, _HYDRO_AVAIL_DAY_CACHE, key) do
+        ub_expr, ub_val = _trailing_window_upper(day)
+        df = sql2df_with_retry(
+            """
+            SELECT z, percentile_cont(0.95) WITHIN GROUP (ORDER BY hydro_mw) AS p95
+            FROM (
+                SELECT area_map_code AS z, date_time_utc,
+                       SUM(actual_generation_output_mw) AS hydro_mw
+                FROM entsoe.aggregated_generation_per_type
+                WHERE production_type = ANY(\$1)
+                  AND area_type_code LIKE 'BZN%'
+                  AND actual_generation_output_mw IS NOT NULL
+                  AND date_time_utc >= (\$2::date::timestamp AT TIME ZONE 'UTC')
+                  AND date_time_utc < $(replace(ub_expr, "\$UB" => "\$3"))
+                GROUP BY area_map_code, date_time_utc
+            ) hourly
+            GROUP BY z
+            """,
+            [HYDRO_PRODUCTION_TYPES, day - Day(lookback_days), ub_val])
+        out = Dict{String,Float64}()
+        for row in eachrow(df)
+            ismissing(row.p95) && continue
+            out[String(row.z)] = Float64(row.p95)
     end
-    cached !== nothing && return cached
-    ub_expr, ub_val = _trailing_window_upper(day)
-    df = sql2df_with_retry(
-        """
-        SELECT z, percentile_cont(0.95) WITHIN GROUP (ORDER BY hydro_mw) AS p95
-        FROM (
-            SELECT area_map_code AS z, date_time_utc,
-                   SUM(actual_generation_output_mw) AS hydro_mw
-            FROM entsoe.aggregated_generation_per_type
-            WHERE production_type = ANY(\$1)
-              AND area_type_code LIKE 'BZN%'
-              AND actual_generation_output_mw IS NOT NULL
-              AND date_time_utc >= (\$2::date::timestamp AT TIME ZONE 'UTC')
-              AND date_time_utc < $(replace(ub_expr, "\$UB" => "\$3"))
-            GROUP BY area_map_code, date_time_utc
-        ) hourly
-        GROUP BY z
-        """,
-        [HYDRO_PRODUCTION_TYPES, day - Day(lookback_days), ub_val])
-    out = Dict{String,Float64}()
-    for row in eachrow(df)
-        ismissing(row.p95) && continue
-        out[String(row.z)] = Float64(row.p95)
+    out
     end
-    lock(_FLEET_DATA_LOCK) do
-        _HYDRO_AVAIL_DAY_CACHE[key] = out
-    end
-    return out
 end
 
 """
@@ -216,10 +206,7 @@ function get_installed_capacity_by_type(bidding_zone::String, day::Date)
     # (Flamanville 3 in FR's 2023 nuclear denominator; a CZ pumped-storage unit
     # with valid_from 2027 counted today) — lookahead in the :installed fleet
     # truth and the FR nuclear availability share.
-    cached = lock(_FLEET_DATA_LOCK) do
-        get(_INSTALLED_CAP_CACHE, day, nothing)
-    end
-    if cached === nothing
+    cached = _fill_once(_FLEET_DATA_LOCK, _INSTALLED_CAP_CACHE, day) do
         df_all = sql2df_with_retry(
             """
             SELECT area_map_code AS z, generation_unit_type AS t, SUM(cap) AS mw FROM (
@@ -252,10 +239,7 @@ function get_installed_capacity_by_type(bidding_zone::String, day::Date)
             d = get!(allz, String(row.z), Dict{String,Float64}())
             d[k] = get(d, k, 0.0) + Float64(row.mw)
         end
-        lock(_FLEET_DATA_LOCK) do
-            _INSTALLED_CAP_CACHE[day] = allz
-        end
-        cached = allz
+        allz
     end
     return get(cached, bidding_zone, Dict{String,Float64}())
 end

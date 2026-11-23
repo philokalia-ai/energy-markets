@@ -416,9 +416,10 @@ function jao_maxbex(date::Date)
              date >= Date(2026, 8, 23) ? :verified : :unverifiable
         _asof_record!("jao_maxbex", st)
     end
-    lock(_JAO_DAY_CACHE_LOCK) do
-        haskey(_JAO_DAY_CACHE, date) && return _JAO_DAY_CACHE[date]
+    hit = lock(_JAO_DAY_CACHE_LOCK) do
+        get(_JAO_DAY_CACHE, date, nothing)
     end
+    hit === nothing || return hit
     out = Dict{Tuple{String,String,Int},Float64}()
     df = try
         safe_sql2df("""
@@ -479,9 +480,10 @@ Per-hub min/max net position (MW, export positive) inside each CCR's
 flow-based domain, hourly mean. Virtual/interconnector hubs dropped, DE => DE_LU.
 """
 function jao_net_positions(date::Date)
-    lock(_JAO_DAY_CACHE_LOCK) do
-        haskey(_JAO_NP_CACHE, date) && return _JAO_NP_CACHE[date]
+    hit = lock(_JAO_DAY_CACHE_LOCK) do
+        get(_JAO_NP_CACHE, date, nothing)
     end
+    hit === nothing || return hit
     out = Dict{Tuple{String,String,Int},Tuple{Float64,Float64}}()
     df = try
         safe_sql2df("""
@@ -551,9 +553,10 @@ tx_outage_atc_enabled() = isempty(get(ENV, "EUPHEMIA_DISABLE_TX_OUTAGE_ATC", "")
 function tx_outage_caps(date::Date)
     ctx = _asof_ctx()
     ckey = (date, ctx === nothing ? nothing : ctx.as_of_utc)
-    lock(_TX_OUTAGE_LOCK) do
-        haskey(_TX_OUTAGE_DAY_CACHE, ckey) && return _TX_OUTAGE_DAY_CACHE[ckey]
+    hit = lock(_TX_OUTAGE_LOCK) do
+        get(_TX_OUTAGE_DAY_CACHE, ckey, nothing)
     end
+    hit === nothing || return hit
     # row-level audit after the query (NULL publication stamps are :unverifiable)
     # Same gate-clause split as generators/registry.jl `_outage_gate_clause`:
     # legacy = the `::timestamp` form (UTC in the library's session,
