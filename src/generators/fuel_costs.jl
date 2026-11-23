@@ -54,11 +54,19 @@ issuance inside a ForecastContext.
 """
 legacy_fuel_cutoff(day::Dates.Date) = day - Dates.Day(_gate_lag_days())
 
+# Single-flight: the zone books build on several threads and all ask for the same cutoff;
+# with check-then-fill outside the lock each thread that missed ran the query and recorded
+# its own as-of audit row (run-to-run varying fuel_* counts). The tiny lookup now runs under
+# the per-fuel lock, so a cutoff is read and audited once; later callers get the cached value.
 function _close_before(table::String, cutoff::Dates.Date, cache::Dict, lk::ReentrantLock,
                        source::String)
-    cached = lock(lk) do
-        get(cache, cutoff, missing)
+    return lock(lk) do
+        _close_before_locked(table, cutoff, cache, source)
     end
+end
+
+function _close_before_locked(table::String, cutoff::Dates.Date, cache::Dict, source::String)
+    cached = get(cache, cutoff, missing)
     cached !== missing && return cached
     df = try
         Euphemia.sql2df_with_retry(
@@ -79,9 +87,7 @@ function _close_before(table::String, cutoff::Dates.Date, cache::Dict, lk::Reent
     price = (isempty(df) || ismissing(df.close[1])) ? nothing : Float64(df.close[1])
     price === nothing && @warn "No $table close within 10 days before $cutoff; using fallback"
     record_asof_status!(source, price === nothing ? :unverifiable : :verified)
-    lock(lk) do
-        cache[cutoff] = price
-    end
+    cache[cutoff] = price
     return price
 end
 

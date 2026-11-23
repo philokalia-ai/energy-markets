@@ -115,3 +115,30 @@ end
     @test !haskey(cache, 8)
     @test M._fill_once(() -> [9], lk, cache, 8) == [9]
 end
+
+@testset "fuel close lookup is single-flight (one read, one audit row per cutoff)" begin
+    prev = (Euphemia.DATA_STORE[], Euphemia.DUCKDB_PATH[], Euphemia.DUCKDB_READ_ONLY[],
+            Euphemia.DUCKDB_RESULTS_WRITABLE[])
+    dir = mktempdir(); path = joinpath(dir, "fx.duckdb")
+    let db = DuckDB.DB(path), con = DBInterface.connect(db)
+        DBInterface.execute(con, "CREATE SCHEMA yfinance")
+        DBInterface.execute(con, "CREATE TABLE yfinance.ttf_f (date TIMESTAMP, close DOUBLE)")
+        DBInterface.execute(con, "INSERT INTO yfinance.ttf_f VALUES (TIMESTAMP '2026-11-02', 31.5), (TIMESTAMP '2026-11-03', 32.0)")
+        DBInterface.close!(con); DuckDB.close(db)
+    end
+    try
+        Euphemia.configure_data_store!(backend=:duckdb, duckdb_path=path, read_only=true)
+        empty!(Euphemia.TTF_PRICE_CACHE_ASOF)
+        day = Date(2026, 11, 5)
+        Euphemia.with_context(Euphemia.gate_context(day)) do
+            Euphemia.reset_asof_audit!()
+            vals = fetch.([Threads.@spawn Euphemia.get_ttf_price(day) for _ in 1:8])
+            @test all(==(32.0), vals)
+            @test Euphemia.asof_audit()["fuel_ttf"] == Dict(:verified => 1)
+            Euphemia.reset_asof_audit!()
+        end
+    finally
+        empty!(Euphemia.TTF_PRICE_CACHE_ASOF)
+        try; Euphemia.configure_data_store!(backend=prev[1], duckdb_path=prev[2], read_only=prev[3], results_writable=prev[4]); catch; end
+    end
+end
