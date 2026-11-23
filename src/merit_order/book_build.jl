@@ -793,6 +793,85 @@ function _split_storage_families(tagged, strategies, generators, zone::String,
     return keep, members, budgets
 end
 
+# ── Eligibility fills (daily forecast) on the zone's own series resolution ──
+# A fill hook returns HOURLY model values (load: "yyyymmdd-HH00" => MW; RES:
+# (ts, MW[, production_type]) entries). The TSO series it completes has ONE
+# resolution per zone-day (get_loads / get_generation_forecast_for_wind_and_solar
+# normalise it), and _demand_series → disaggregate_temporal_data reads the series
+# resolution from its first row and uses the raw slots. So a fill must be emitted
+# on that same resolution: an hourly value is REPLICATED (MW is a power level)
+# into every sub-slot of its hour, and only slots the TSO did not publish are
+# added (MERGE, never replace, now at slot granularity). Before cv46 the fill was
+# always one "60" row per hour: on a native-15-min zone only the HH:00 quarter of
+# a filled hour existed, so the coupled intersection dropped :15/:30/:45 for every
+# zone (load) or those quarters cleared with 0 MW RES (#477 review, finding 1).
+# With no TSO rows at all the fill stays hourly (PT60M) and the book's grid
+# upsampling replicates it, as for any hourly zone. Record mode never fills.
+
+"Sub-slots of `ts`'s hour at `res_min` (the hour itself at ≥ 60)."
+function _fill_subslots(ts::AbstractString, res_min::Int)
+    res_min >= 60 && return [String(ts)]
+    60 % res_min == 0 || error("fill: series resolution $res_min min does not divide the hour")
+    head = ts[1:11]
+    return [head * lpad(k * res_min, 2, '0') for k in 0:(60 ÷ res_min - 1)]
+end
+
+"(code, minutes) of a TSO series, from its first row; hourly when it is empty."
+_series_resolution(rows, code_of) = isempty(rows) ? ("PT60M", 60) :
+    (c = String(code_of(rows[1])); (c, parse_resolution_to_minutes(c)))
+
+"""
+    _merge_load_fill!(loads, filled, zone) -> Int
+
+Add the hourly `filled` model load to `loads` on the TSO series' resolution,
+only in slots the TSO did not publish. Returns the number of slots added.
+"""
+function _merge_load_fill!(loads::Vector{Load}, filled, zone::AbstractString)
+    code, res_min = _series_resolution(loads, l -> l.resolution_code)
+    covered = Set(l.timeslot for l in loads)
+    added = 0
+    for (ts, mw) in filled
+        for sub in _fill_subslots(ts, res_min)
+            sub in covered && continue
+            push!(loads, Load(sub, code, String(zone), Float64(mw)))
+            push!(covered, sub)
+            added += 1
+        end
+    end
+    return added
+end
+
+"""
+    _merge_res_fill!(renewables, rfilled, zone, issued_solar) -> Int
+
+The RES twin of `_merge_load_fill!`. A slot with ANY published TSO RES row (even
+a coalesced 0) is never overridden. Entries are (ts, mw) — tagged "WeatherFill"
+— or typed (ts, mw, production_type): the weather track passes its solar
+component as "Solar" rows so the cv31 solar-regime gate (which reads "Solar"
+rows) sees the issued solar forecast; quantity-neutral, all rows sum into
+renewable_by_time. `issued_solar` (hour => values) takes each typed "Solar"
+entry once, per hourly entry, whether or not the TSO covers its slots.
+Returns the number of rows added.
+"""
+function _merge_res_fill!(renewables::Vector{RenewablesGenerationForecast}, rfilled,
+                          zone::AbstractString, issued_solar::Dict{Int,Vector{Float64}})
+    code, res_min = _series_resolution(renewables, r -> r.resolution_code)
+    covered = Set(r.date_time for r in renewables)
+    added = 0
+    for entry in rfilled
+        ts, mw = entry[1], entry[2]
+        ptype = length(entry) >= 3 ? String(entry[3]) : "WeatherFill"
+        ptype == "Solar" && length(ts) >= 11 &&
+            push!(get!(issued_solar, parse(Int, ts[10:11]), Float64[]), Float64(mw))
+        for sub in _fill_subslots(ts, res_min)
+            sub in covered && continue
+            push!(renewables, RenewablesGenerationForecast(sub, code, String(zone), ptype, Float64(mw)))
+            added += 1
+        end
+    end
+    return added
+end
+
 """
     _check_extra_families(members, zone, formed) -> nothing
 
@@ -1236,15 +1315,10 @@ function create_merit_order_book(
         if load_fill !== nothing
             filled = load_fill(bidding_zone, day)
             if filled !== nothing && !isempty(filled)
-                covered = Set(l.timeslot[1:11] for l in loads)   # "yyyymmdd-HH" present in TSO
-                added = 0
-                for (ts, mw) in filled
-                    ts[1:11] in covered && continue              # TSO already covers this hour
-                    push!(loads, Load(ts, "60", bidding_zone, mw))
-                    added += 1
-                end
-                added > 0 && println("  🩹 load-fill: $bidding_zone added $added model hour(s) " *
-                                     "(TSO published $(length(covered))h; missing hours filled)")
+                n_tso = length(loads)
+                added = _merge_load_fill!(loads, filled, bidding_zone)
+                added > 0 && println("  🩹 load-fill: $bidding_zone added $added model slot(s) " *
+                                     "(TSO published $n_tso slot(s); missing slots filled)")
             end
         end
         renewables = get_generation_forecast_for_wind_and_solar(bidding_zone, day;
@@ -1267,25 +1341,10 @@ function create_merit_order_book(
         if res_fill !== nothing
             rfilled = res_fill(bidding_zone, day)
             if rfilled !== nothing && !isempty(rfilled)
-                rcovered = Set(r.date_time[1:11] for r in renewables)  # "yyyymmdd-HH" present in TSO
-                radded = 0
-                # Entries are (ts, mw) — tagged "WeatherFill" — or typed
-                # (ts, mw, production_type): the weather track passes its solar
-                # component as "Solar" rows so the cv31 solar-regime gate (which
-                # reads "Solar" rows) sees the issued solar forecast instead of
-                # nothing. Quantity-neutral: all rows sum into renewable_by_time.
-                for entry in rfilled
-                    ts, mw = entry[1], entry[2]
-                    ptype = length(entry) >= 3 ? String(entry[3]) : "WeatherFill"
-                    ptype == "Solar" && length(ts) >= 11 &&
-                        push!(get!(issued_solar, parse(Int, ts[10:11]), Float64[]), Float64(mw))
-                    ts[1:11] in rcovered && continue                   # TSO already covers this hour
-                    push!(renewables, RenewablesGenerationForecast(ts, "60", bidding_zone,
-                                                                    ptype, mw))
-                    radded += 1
-                end
-                radded > 0 && println("  🩹 res-fill: $bidding_zone added $radded model hour(s) " *
-                                      "(TSO published $(length(rcovered))h; missing hours filled)")
+                n_tso = length(Set(r.date_time for r in renewables))
+                radded = _merge_res_fill!(renewables, rfilled, bidding_zone, issued_solar)
+                radded > 0 && println("  🩹 res-fill: $bidding_zone added $radded model row(s) " *
+                                      "(TSO published $n_tso slot(s); missing slots filled)")
             end
         end
 

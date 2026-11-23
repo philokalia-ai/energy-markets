@@ -35,7 +35,7 @@ import ..cv45_on, .._gas_fuel_cost
 import ..Network: tx_outage_caps, tx_outage_atc_enabled   # cv46 P1 outage-capped export capability
 import ..MarketOrders: SimpleOrder, MarketOrder, LinkedHourlyOrder
 import ..MPCC: MPCCOrderBook
-import ..disaggregate_temporal_data, ..replicate_to_finer_resolution
+import ..disaggregate_temporal_data, ..replicate_to_finer_resolution, ..parse_resolution_to_minutes
 import ..OrderBookResult: AdjustedOrderBookResult, parse_timeslot_to_datetime
 
 """
