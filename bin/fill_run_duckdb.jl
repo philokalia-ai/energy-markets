@@ -3,7 +3,7 @@
 #
 #   julia --project=. bin/fill_run_duckdb.jl --profile daily-forecast|record|export --out DIR \
 #         [--start YYYY-MM-DD --end YYYY-MM-DD | --days D1,D2,...] [--as-of YYYY-MM-DD] [--zones A,B,...] \
-#         [--source duckdb:<path>]
+#         [--source duckdb:<path>] [--seed-results false]
 # Env: ENERGY_CONN_STR; ZONES (default zone list, else the 39-zone footprint); INPUTS_BACK_DAYS
 # (export profile: export_prediction_inputs.jl's look-back on the RES/load/generation tables).
 #
@@ -103,9 +103,12 @@ function main(argv)
     else
         Euphemia.DBInterface.execute(con, "ATTACH '$(replace(source_path, "'" => "''"))' AS src (READ_ONLY)")
     end
+    # --seed-results false: an empty results.duckdb (rigs that must not resume-skip on rows the
+    # source already holds for these days; production keeps the seeds)
+    seeds = lowercase(get(a, "seed-results", "true")) == "false" ? NamedTuple[] : p.seeds
     seeded = try
         Euphemia._FILL_SOURCE[] = source
-        Euphemia.seed_run_results!(con, p.seeds)
+        Euphemia.seed_run_results!(con, seeds)
     finally
         Euphemia._FILL_SOURCE[] = :postgres
         source === :postgres ? Euphemia.detach_postgres!(con) : Euphemia.DBInterface.execute(con, "DETACH src")

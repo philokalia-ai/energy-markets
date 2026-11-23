@@ -244,7 +244,7 @@ function fill_run_duckdb(path::AbstractString; days, zones::Vector{String}, conn
         DBInterface.execute(con, "SET TimeZone = 'UTC'")
         # DuckDB sizes itself from the machine, not the process's cgroup: bound it explicitly
         # (EUPHEMIA_FILL_MEMORY / EUPHEMIA_FILL_THREADS; spill next to the run file).
-        DBInterface.execute(con, "SET memory_limit = $(_pg_str(get(ENV, "EUPHEMIA_FILL_MEMORY", "3GB")))")
+        DBInterface.execute(con, "SET memory_limit = $(_pg_str(get(ENV, "EUPHEMIA_FILL_MEMORY", "1GB")))")
         DBInterface.execute(con, "SET threads = $(parse(Int, get(ENV, "EUPHEMIA_FILL_THREADS", "4")))")
         tmpdir = String(path) * ".tmp"
         mkpath(tmpdir)
@@ -277,6 +277,9 @@ function fill_run_duckdb(path::AbstractString; days, zones::Vector{String}, conn
             DBInterface.execute(con, "CREATE SCHEMA IF NOT EXISTS $(spec.schema)")
             order = isempty(spec.sort_by) ? "" : " ORDER BY $(spec.sort_by)"
             DBInterface.execute(con, "CREATE TABLE $(spec.schema).$(spec.table) AS SELECT * FROM $(_src_from(sql))$order")
+            # flush each table to disk so its pages (and the sort's buffers) can be released:
+            # without it a multi-day fill held every finished table in memory (OOM at 6 GB)
+            DBInterface.execute(con, "CHECKPOINT")
             n = collect(DBInterface.execute(con, "SELECT count(*) AS n FROM $(spec.schema).$(spec.table)"))[1].n
             dt = time() - t0
             ws = isempty(wins) ? [(Date(1900, 1, 1), Date(2999, 12, 31))] : wins
