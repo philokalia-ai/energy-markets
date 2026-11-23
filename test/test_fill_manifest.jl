@@ -29,6 +29,7 @@ import DuckDB.DBInterface as DBInterface
     tcols = [("start_outage_utc", "text"), ("end_outage_utc", "text"), ("new_ntc_mw", "double precision"),
              ("version_publication_timestamp_utc", "text")]
     sql, w = E.fill_pg_query(spec("unavailability_in_the_transmission_grid"), tcols, [Date(2026, 1, 10)], ["GR"])
+    @test occursin("instance_code IN (SELECT instance_code FROM entsoe.unavailability_in_the_transmission_grid", sql)
     @test occursin("\"start_outage_utc\"::TIMESTAMP AS \"start_outage_utc\"", sql)
     @test occursin("start_outage_utc::timestamp < '2026-01-12'::timestamp", sql)
     @test occursin("end_outage_utc::timestamp >= '2024-12-06'::timestamp", sql)
