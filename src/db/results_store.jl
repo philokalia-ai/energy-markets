@@ -330,6 +330,10 @@ function ensure_forecast_tables()
             is_retro BOOLEAN NOT NULL DEFAULT false,
             reset_tag TEXT,
             retro_of_utc TIMESTAMPTZ,
+            -- Slot length of the slice (cv46: quarter-hour clears). ISO 8601 as
+            -- forecast_scores.q15_forecast_res: 'PT60M' | 'PT15M'. ADDITIVE; every row
+            -- written before the column existed is hourly (the default).
+            resolution_code TEXT NOT NULL DEFAULT 'PT60M',
             CONSTRAINT forecast_prices_slice_hour_key
                 UNIQUE (date_time_utc, bidding_zone, lead_days, code_version, input_mode)
         )
@@ -384,6 +388,7 @@ function ensure_forecast_tables()
             is_retro BOOLEAN,
             reset_tag TEXT,
             retro_of_utc TIMESTAMPTZ,
+            resolution_code TEXT NOT NULL DEFAULT 'PT60M',
             superseded_at_utc TIMESTAMPTZ NOT NULL DEFAULT now()
         )
         """)
@@ -449,6 +454,22 @@ function ensure_forecast_tables()
                 ADD COLUMN IF NOT EXISTS reset_tag TEXT
             """)
         end
+        # ADDITIVE migration (cv46 downstream D1): forecast_prices.resolution_code and its
+        # pre_reset mirror. NOT NULL DEFAULT 'PT60M' is a catalog-only change in Postgres ≥ 11
+        # (no table rewrite) and labels every existing row hourly, which they all are. Same
+        # catalog-first WEDGE GUARD: probe each table, ALTER only when the column is missing.
+        for tbl in ("forecast_prices", "forecast_prices_pre_reset")
+            lacks_res = LibPQ.execute(cnx, """
+                SELECT COUNT(*) = 0 AS missing FROM information_schema.columns
+                WHERE table_schema = 'simulations' AND table_name = '$tbl'
+                  AND column_name = 'resolution_code'
+                """) |> DataFrame |> df -> df.missing[1]
+            lacks_res && LibPQ.execute(cnx, """
+                ALTER TABLE simulations.$tbl
+                    ADD COLUMN IF NOT EXISTS resolution_code TEXT NOT NULL DEFAULT 'PT60M'
+                """)
+        end
+
         # cv34 (owner decision 2026-08-25): a superseding retro slice's score used
         # to upsert OVER the live slice's score (PK without is_retro), and the
         # board pooled live and retro rows of the same (track, lead) although
@@ -593,18 +614,10 @@ function save_energy_prices(prices::Dict{String,Float64}, bidding_zone::String, 
         ensure_energy_prices_table()
     end
 
-    # Detect resolution from number of periods
-    num_periods = length(prices)
-    resolution_code = if num_periods == 96
-        "15M"
-    elseif num_periods == 48
-        "30M"
-    elseif num_periods == 24
-        "1H"
-    else
-        @warn "Unexpected number of periods: $num_periods, defaulting to 1H"
-        "1H"
-    end
+    # Resolution from the slots' spacing, not their count: a quarter-hour day with 92/100 quarters
+    # (DST) or a truncated quarter set is still 15M (cv46 downstream D1).
+    resolution_code = energy_prices_resolution_code(
+        DateTime(k, dateformat"yyyymmdd-HHMM") for k in keys(prices) if occursin(r"^\d{8}-\d{4}$", k))
 
     # Prepare data for batch insertion
     # Tuple: (date_time_utc, resolution_code, bidding_zone, contract_type, price_eur_mwh, currency, order_method, clearing_mode, optimization_run_id, code_version, update_time_utc)

@@ -224,6 +224,10 @@ println()
         include(joinpath(@__DIR__, "test_day_cache_hits.jl"))
     end
 
+    @testset "Slot resolution labels from spacing (cv46 D1)" begin
+        include(joinpath(@__DIR__, "test_resolution_labels.jl"))
+    end
+
     @testset "Precompile workload leaves no state (fresh process)" begin
         include(joinpath(@__DIR__, "test_precompile_state.jl"))
     end

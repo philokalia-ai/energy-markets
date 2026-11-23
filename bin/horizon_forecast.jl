@@ -132,13 +132,15 @@ function write_slice!(T::Date, lead::Int, made::DateTime,
                 WHERE market_date = \$1 AND lead_days = \$2 AND input_mode = 'entsoe_persist'
             """, [T, lead])
             for (zone, hourly) in zone_hourly
+                res = Euphemia.forecast_resolution_code(keys(hourly))
                 for (h, price) in sort!(collect(hourly); by=first)
                     LibPQ.execute(cnx, """
                         INSERT INTO simulations.forecast_prices
                         (market_date, date_time_utc, bidding_zone, price_eur_mwh,
-                         prediction_made_utc, lead_days, clearing_mode, code_version, input_mode)
-                        VALUES (\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8, 'entsoe_persist')
-                    """, Any[T, tstz(h), zone, price, tstz(made), lead, CLEARING_MODE, CV])
+                         prediction_made_utc, lead_days, clearing_mode, code_version, input_mode,
+                         resolution_code)
+                        VALUES (\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8, 'entsoe_persist', \$9)
+                    """, Any[T, tstz(h), zone, price, tstz(made), lead, CLEARING_MODE, CV, res])
                     n += 1
                 end
             end
