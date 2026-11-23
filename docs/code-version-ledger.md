@@ -420,27 +420,19 @@ adoption date: the scoreboard's since-freeze window is cv ≥ 45 from 2026-11-21
 
 Dated reminders and scoring-policy notes that do not change `code_version`.
 
-- **2026-11-23 — LP certificate: welfare LP built by one filtered copy (perf-96); prices unchanged.**
-  The welfare LP was a full `copy_model` followed by a delete of every price-side row and a vector
-  delete of the price-side variables. It is now one `MOI.copy_to` from a filtered view of the model
-  (`_WelfareSource`) that never copies them. The result is the same LP (byte-identical MPS on all 24
-  periods of 2026-10-19; unit test), so the solve is unchanged. Speed: the vector delete's first
-  call compiled for ~75 s in every fresh process (cold 24-step day: certificate build 71.7 → 9.2 s,
-  first solve pass 97 → 41 s); warm build 1.2 → 0.3 s per 24 periods. No `code_version` bump.
-
-- **2026-11-23 — `extract_time_period` formats with a compile-time `DateFormat` (perf-96); prices
-  unchanged.** The order → timeslot id lookup parsed the format strings `"yyyymmdd"` / `"HHMM"` into
-  DateFormats on every call (3 calls per order per MPCC build, ~300k per 96-step pass). One constant
-  `dateformat"yyyymmdd-HHMM"` gives the same string (checked on every 15-min slot of 2015–2026; unit test)
-  ~8× faster. No `code_version` bump.
-
-- **2026-11-23 — LP certificate: the fixed-pattern model is solved as an LP (perf-96); prices
-  unchanged.** After the pattern fixes every complementarity binary, their integrality is dropped
-  before the solve (restored on a fallback, so the MIP is unchanged), and HiGHS no longer runs its
-  MIP machinery on a problem with nothing to branch on. Same optimum: prices identical on
-  2026-10-19 at 24 steps, and on both cv46 pilot days at 96 steps (all passes, with and without
-  blocks; cv46-blocks addendum 3). Speed: fixed-pattern solve 1.85 → 1.45 s per 24 periods (cold
-  first pass −9 s); at 96 steps 44 → 8 s per joint pricing. No `code_version` bump.
+- **2026-11-23 — perf-96: faster clearing and input reads; prices unchanged, no `code_version` bump.**
+  Bit-identical prices on the 31-day spot check vs record #2 (29,016/29,016) and on 4 days at 96 steps.
+  - LP certificate: the welfare LP is one `MOI.copy_to` from a filtered view of the model (`_WelfareSource`)
+    instead of `copy_model` + deleting the price-side rows and variables (same LP, byte-identical MPS); the
+    vector delete compiled for ~75 s in every fresh process. The fixed-pattern model is solved as an LP
+    (integrality dropped after the pattern fixes every binary, restored on a fallback): 44 → 8 s per joint
+    96-step pricing. `extract_time_period` uses one compile-time `DateFormat` (~300k calls per 96-step pass).
+  - Inputs: pass 2 reuses pass 1's transfer capacity; the feed-anchor staleness check probes the last 7 days
+    before running the full-history `MAX` (39 such scans per first clear since cv43); four day caches that
+    were write-only now return hits; `get_generators` shares one recent-generation scan per zone-day; shared
+    day caches fill once under the threaded book build.
+  - JIT: a DB-free PrecompileTools workload (3-zone clear) compiles the clearing path at precompile time;
+    module-level state after `using Euphemia` is asserted empty (`test_precompile_state.jl`).
 
 - **2026-11-22 — Block acceptance search replaces the PAB loop (blocks/r1-only).** With
   `EUPHEMIA_COMPLEX_ORDERS=…blocks` (opt-in), the 4-round PAB loop and its release to the `BLKFB:`
