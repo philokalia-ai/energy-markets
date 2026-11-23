@@ -416,6 +416,86 @@ adoption date: the scoreboard's since-freeze window is cv ≥ 45 from 2026-11-21
   v45 raises them (Nordic north development +3.35); the extract lacks ES D-1
   wind/solar on 2026-11-06..11, inflating Iberia on those days in every arm.
 
+## v46 — Nordic water value (cv46 P1); the four deferred cv45 knobs deleted (November 2026)
+
+**Why.** Under v45, NO4/SE1/SE2/FI price the storable reservoir water at a
+fraction of gas SRMC: 0.35 + 0.65·m, with m = max(dryness, drawdown). At full
+reservoirs that gives a floor of about 0.21 × gas SRMC, but 62–78 % of the actual
+NO4/SE1/SE2 hours clear below it. The cv46 physics programme
+(`reports/cv46-physics.md`) tested eight components on 48 pre-frozen decision
+days. The owner shipped P1 only (2026-11-23).
+
+**Change.** P1 is on unconditionally (no env switch; git history is the
+rollback). It lives in `src/merit_order/cv46_nordic_wv.jl` and is hooked in at
+`book_build.jl` (the `:reservoir_opportunity` branch) and
+`multi_zone_books.jl` (the pass-2 rebuild set).
+- **Scope.** Zones on the `:reservoir_opportunity` hydro model with no
+  opportunity anchor: NO4, SE1, SE2, FI. DK1/DK2 match the scope but carry no
+  water-value units. Anchored zones are untouched in both passes.
+- **Export headroom h.** The share of the 336 hours in D-15..D-2 where net
+  physical export is below its 364-day p95, after subtracting today's
+  transmission-outage cut (`Network.tx_outage_caps`). A net importer
+  (p95 ≤ 50 MW) gets h = 1.
+- **Unavoidable release U** (reservoir units only) is offered at the spill price.
+  U = max(lagged p05 output over D-8..D-2, the weekly-balance overflow from
+  ISO weeks ≤ w−2), capped by the unit quantity, net of spill and of
+  dropped-border exports.
+- **Storable water.** cap = gas·shape, B = clamp(h·X + (1−h)·p_spill, p_spill, cap),
+  wv = B + m·(cap − B).
+  - Pass 1: X = 0.35·gas·shape. At h = 1 this reproduces v45 bit for bit.
+  - Pass 2: X = the reachable displaced supply, a weighted mean of pass-1
+    model prices (own zone weighted by residual load, each export
+    counterparty by its outage-capped p95 capability). No settled price
+    enters.
+  - The P1 zones join the pass-2 rebuild set.
+- Spill, the daily budgets and the drawdown/dryness lift are unchanged.
+- **Constants** come from the existing book (0.35 / 0.65, base/span, gas SRMC)
+  or are declared window lengths and quantiles, each with its source in the
+  file. Nothing is fitted to prices.
+
+**Deleted** (deferred since v45, off unless set): `EUPHEMIA_CV45_PUMP`,
+`EUPHEMIA_CV45_RESERVOIR`, `EUPHEMIA_CV45_HYDRO_CAP` and
+`EUPHEMIA_CV45_ELASTIC`, with their code paths, `CV45_KNOBS` entries (and so
+the `PipelinedBackfill` forwarding) and tests.
+- The `reservoir` complex family itself (cv44, opt-in through
+  `EUPHEMIA_COMPLEX_ORDERS=ps,reservoir`) stays.
+- The shipped cv45 knobs (GAS_HHV, GB_HHV, AVAIL, AVAIL_INMERIT) and
+  `EUPHEMIA_CV45` are unchanged.
+- A stale deleted-knob env var is now ignored.
+- Evidence for keeping them off: alone and in the stack, RESERVOIR, HYDRO_CAP
+  and ELASTIC are ≈ 0 (LOO −0.014 / −0.002 / −0.059), and PUMP harms
+  (+0.53 alone; dropped by the LOO step, −0.63).
+
+**Evidence (48 decision days, `cv46-blocks/days.txt`, 44,726 paired cells vs
+SDAC, scorer v1.4.1, arm A = v45 default, MAE 25.22).**
+- **P1 alone (S-P1): ΔMAE −0.72 [90 % −1.01, −0.44]**, passing every clause of
+  the pre-registered rule. Bias −1.0 → −2.1, shape −0.05, pre-MTU −1.64.
+- Worst region is Italy at +0.03. Nordic north −3.87, Nordic south −0.68,
+  Baltics −0.95. All days complete, no new cap cells.
+- In the 8-component stack, removing P1 costs +0.68 [+0.39, +0.99]: NO4 −6.1,
+  SE1 −5.2, SE2 −3.8, FI −2.7 (`cv46-physics/cp-nordic/REPORT.md`).
+- Hours below the old 0.21 × SRMC floor (NO4/SE1/SE2): actual 78/62/64 %,
+  v45 2–3 %, v46 36/27/21 %. When v46 prices below the floor, the actual is
+  also below it 95 % of the time.
+- **Known weak spot.** It is flat in 2026H1 (+0.09 on NO4+SE1+SE2): with h ≈ 1,
+  the pass-2 X inherits the pass-1 spring over-pricing and has no
+  snowmelt/inflow signal. That is the follow-up.
+- **Combined check (Timestral + physics, P1 alone, 2026-09-01..11-14):** see
+  `reports/cv46-physics.md` §5b.
+
+**Freeze rule.** P1 changes price-informed behaviour (the Nordic water
+values), so v46 restarts the out-of-sample clock from its adoption date. The
+scoreboard's since-freeze window is cv ≥ 46 from `FREEZE_DATE` in
+`bin/scoreboard_windows.jl`, set to the merge day; the site label in
+`web/app.js` and `web/about.html` follows.
+
+**DuckDB rule.** P1 adds no direct-Postgres code. Its reads
+(`entsoe.physical_flows`, `aggregated_hydro_storage_filling_rate`,
+`aggregated_generation_per_type`, and the existing `tx_outage_caps`) go through
+`sql2df`, which serves DuckDB or Postgres per `DATA_STORE[]`. The research runs
+read the DuckDB extract. Production reads Postgres until the daily workflows run
+on a pre-gate DuckDB, like every existing reader.
+
 ## Operations and scoring notes (not code versions)
 
 Dated reminders and scoring-policy notes that do not change `code_version`.

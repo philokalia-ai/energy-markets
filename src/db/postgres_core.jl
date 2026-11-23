@@ -218,9 +218,14 @@
 # v44 -> v45: gas fuel term on the TTF's gross (HHV) basis (zone gas and the GB
 # boundary CCGT) and guarded oil/"Other" availability caps, from the November-2026
 # bias review. Each change has its own EUPHEMIA_CV45_* knob; PUMP, RESERVOIR,
-# HYDRO_CAP and ELASTIC exist but are off unless set (src/cv45_knobs.jl);
+# HYDRO_CAP and ELASTIC existed but were off unless set (deleted in v46);
 # EUPHEMIA_CV45=off reproduces cv44; see the ledger.
-const ENERGY_PRICES_CODE_VERSION = 45
+# v45 -> v46: Nordic water value (cv46 P1, src/merit_order/cv46_nordic_wv.jl) on
+# unconditionally for the unanchored reservoir-opportunity zones (NO4, SE1, SE2,
+# FI): export-headroom-scaled floor, unavoidable release at the spill price,
+# storable water at the reachable displaced supply in pass 2. The four deferred
+# cv45 knobs (PUMP, RESERVOIR, HYDRO_CAP, ELASTIC) are deleted; see the ledger.
+const ENERGY_PRICES_CODE_VERSION = 46
 
 # Pool size: env-tunable (EUPHEMIA_PG_POOL) because the threaded book build
 # runs up to nzones concurrent queries — 5 connections cap the parallelism

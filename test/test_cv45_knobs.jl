@@ -24,16 +24,22 @@ end
         @test !any(Euphemia.cv45_on, setdiff(Euphemia.CV45_KNOBS, Euphemia.CV45_SHIPPED))
         @test MOB.complex_order_kinds() == Set(["ps"])
     end
-    withenv_cv45("EUPHEMIA_CV45_RESERVOIR" => "on") do   # deferred knob, opt-in
-        @test MOB.complex_order_kinds() == Set(["ps", "reservoir"])
-    end
     withenv_cv45("EUPHEMIA_CV45" => "off") do      # master off ⇒ cv44
         @test !any(Euphemia.cv45_on, Euphemia.CV45_KNOBS)
         @test MOB.complex_order_kinds() == Set(["ps"])
     end
-    withenv_cv45("EUPHEMIA_CV45" => "off", "EUPHEMIA_CV45_PUMP" => "on") do   # single-change arm
-        @test Euphemia.cv45_on("EUPHEMIA_CV45_PUMP")
-        @test !Euphemia.cv45_on("EUPHEMIA_CV45_RESERVOIR")
+    withenv_cv45("EUPHEMIA_CV45" => "off", "EUPHEMIA_CV45_GAS_HHV" => "on") do   # single-change arm
+        @test Euphemia.cv45_on("EUPHEMIA_CV45_GAS_HHV")
+        @test !Euphemia.cv45_on("EUPHEMIA_CV45_AVAIL")
+    end
+    # v46: the deferred knobs are gone — a stale env var is ignored, not an error
+    withenv_cv45() do
+        ENV["EUPHEMIA_CV45_RESERVOIR"] = "on"
+        try
+            @test MOB.complex_order_kinds() == Set(["ps"])
+        finally
+            delete!(ENV, "EUPHEMIA_CV45_RESERVOIR")
+        end
     end
     withenv_cv45("EUPHEMIA_CV45_AVAIL" => "off") do   # adopted set minus one
         @test !Euphemia.cv45_on("EUPHEMIA_CV45_AVAIL")
@@ -49,11 +55,10 @@ end
     withenv_cv45("EUPHEMIA_COMPLEX_ORDERS" => "off") do   # complex-orders kill switch still wins
         @test isempty(MOB.complex_order_kinds())
     end
-    withenv_cv45("EUPHEMIA_CV45_PUMP" => "maybe") do
-        @test_throws ErrorException Euphemia.cv45_on("EUPHEMIA_CV45_PUMP")
+    withenv_cv45("EUPHEMIA_CV45_AVAIL" => "maybe") do
+        @test_throws ErrorException Euphemia.cv45_on("EUPHEMIA_CV45_AVAIL")
     end
+    @test length(Euphemia.CV45_KNOBS) == 4 && Set(Euphemia.CV45_KNOBS) == Set(Euphemia.CV45_SHIPPED)
     # Values come from declared constants, not new free parameters
-    @test MOB.TRANCHES[end][2] == 1.6
-    @test MOB.BACKSTOP_PRICE_MULT == 1.8
     @test Euphemia.GAS_NCV_PER_GCV == 0.90
 end

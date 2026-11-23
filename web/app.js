@@ -3371,10 +3371,10 @@
   }
 
   // "Since freeze" window (#431 G, bin/scoreboard_windows.jl): the clock restarted with
-  // cv45 on 2026-11-21 (cv44 froze the characteristics on 2026-11-15), so these days are the only out-of-sample physics
+  // cv46 on 2026-11-24 (cv44 froze the characteristics on 2026-11-15; cv45 restarted on 2026-11-21), so these days are the only out-of-sample physics
   // record. Change FREEZE_LABEL together with FREEZE_CODE_VERSION / FREEZE_DATE there.
   var FREEZE_WINDOW = "since_freeze";
-  var FREEZE_LABEL = "since freeze (cv45, 2026-11-21) — the only out-of-sample physics record";
+  var FREEZE_LABEL = "since freeze (cv46, 2026-11-24) — the only out-of-sample physics record";
   var FREEZE_MIN_DAYS = 14;
   // Below FREEZE_MIN_DAYS scored days a since-freeze cohort shows "insufficient data":
   // its metrics are blanked (so it never ranks).
@@ -3413,7 +3413,7 @@
     var nd = 0;
     scores.forEach(function (s) { if (s.n_days > nd) nd = s.n_days; });
     note.hidden = false;
-    note.textContent = "Since the freeze (cv45, 2026-11-21): " + nd + " scored market day" +
+    note.textContent = "Since the freeze (cv46, 2026-11-24): " + nd + " scored market day" +
       (nd === 1 ? "" : "s") + ". The 43 characteristics (40 price-informed) have not changed since, so " +
       "these days are the only out-of-sample physics record. " +
       (nd < FREEZE_MIN_DAYS
