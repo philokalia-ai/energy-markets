@@ -143,6 +143,53 @@
     return ATHENS_TIME.format(new Date(new Date(iso).getTime() + 3600000));
   }
 
+  // Delivery slots. Each market day is either hourly (24 slots; 23/25 on DST days) or
+  // quarter-hourly (96; 92/100), and the record keeps hourly days next to quarter days, so
+  // every reader decides per day. The zones API states it (`resolution`: "PT60M" | "PT15M");
+  // without the field, the spacing of the day's stamps decides.
+  function slotMinutes(day) {
+    if (day && day.resolution === "PT15M") return 15;
+    if (day && day.resolution === "PT60M") return 60;
+    var h = day && day.hours;
+    if (h && h.length > 1) {
+      var mins = (Date.parse(h[1]) - Date.parse(h[0])) / 60000;
+      if (mins > 0 && mins < 60) return mins;
+    }
+    return 60;
+  }
+  function isQuarterDay(day) { return slotMinutes(day) < 60; }
+  function slotsPerHour(day) { return 60 / slotMinutes(day); }
+
+  function slotEndLabel(iso, day) {
+    // Athens-local label of the delivery slot's end (start + the day's slot length).
+    return ATHENS_TIME.format(new Date(new Date(iso).getTime() + slotMinutes(day) * 60000));
+  }
+
+  // The day's slots grouped by delivery hour: [[first, last], …] index ranges (one index per
+  // group on an hourly day). Athens is a whole number of hours from UTC, so the UTC hour is
+  // the Athens hour.
+  function hourGroups(day) {
+    var out = [], key = null;
+    day.hours.forEach(function (iso, i) {
+      var k = Math.floor(Date.parse(iso) / 3600000);
+      if (k !== key) { out.push([i, i]); key = k; } else out[out.length - 1][1] = i;
+    });
+    return out;
+  }
+
+  // The hourly mean of a per-slot series over one hour group; null unless every slot of the
+  // hour has a value (an hourly day returns the value itself).
+  function hourMean(arr, g) {
+    if (!arr) return null;
+    var s = 0;
+    for (var i = g[0]; i <= g[1]; i++) {
+      var v = arr[i];
+      if (v === null || v === undefined) return null;
+      s += v;
+    }
+    return g[0] === g[1] ? arr[g[0]] : s / (g[1] - g[0] + 1);
+  }
+
   function isPending(day) {
     return day.actual.every(function (a) { return a === null || a === undefined; });
   }
@@ -335,7 +382,8 @@
         else if (src === borderZone && snk === counterparty) { net -= mw; seen = true; }
       });
     });
-    return seen ? net / 24 : null;   // day-mean MW toward the footprint
+    // day-mean MW toward the footprint: a quarter-hour day has 4 flow stamps per hour
+    return seen ? net / 24 / slotsPerHour({ hours: Object.keys(byTs).sort() }) : null;
   }
 
   function renderBoundary() {
@@ -684,7 +732,7 @@
         return;
       }
       // pick a representative hour (evening peak ~ index for 18:00 Athens, else mid)
-      var hi = Math.min(bk.hours.length - 1, 18);
+      var hi = Math.min(bk.hours.length - 1, 18 * slotsPerHour(bk));
       var want = "BOUNDARY:" + book.counterparty;
       var rungs = [];
       ["supply", "demand"].forEach(function (side) {
@@ -1149,11 +1197,16 @@
   function isCombined(day) { return day.tsfm_input_mode === "postsim"; }
   function tsfmName(day) { return isCombined(day) ? "Timestral + physics" : "Timestral (prices only)"; }
   // Timestral's MAE for one day over the hours carrying both its median and a settled
-  // price: { mae, n }, or null when there is no such hour.
+  // price: { mae, n }, or null when there is no such hour. Timestral is hourly: on a
+  // quarter-hour day its median repeats on the hour's quarters and is scored against the
+  // hourly mean of the settled quarters (an hour counts once all its quarters settled),
+  // the same hourly score as the board's.
   function tsfmDayMae(day) {
     var sum = 0, n = 0;
-    (day.tsfm || []).forEach(function (v, i) {
-      var a = day.actual[i];
+    if (!day.tsfm) return null;
+    hourGroups(day).forEach(function (g) {
+      var v = day.tsfm[g[0]];
+      var a = hourMean(day.actual, g);
       if (v === null || v === undefined || a === null || a === undefined) return;
       sum += Math.abs(v - a); n++;
     });
@@ -1166,26 +1219,42 @@
     if (day.mae !== null && day.mae !== undefined) return { model: "physics", mae: day.mae, isT: false };
     return null;
   }
-  // Legend label for the Timestral line over a set of days.
+  // Legend label for the Timestral line over a set of days. Over quarter-hour days it
+  // says "hourly": Timestral is drawn as an hourly step under the 15-min physics.
   function tsfmLegend(days) {
     var withT = days.filter(function (d) { return hasVals(d.tsfm); });
     var nComb = withT.filter(isCombined).length;
     var name = nComb === withT.length ? "Timestral + physics"
       : nComb === 0 ? "Timestral (prices only)" : "Timestral + physics (prices only where marked)";
-    return name + " · median, q10–q90";
+    return name + (withT.some(isQuarterDay) ? " · hourly median, q10–q90" : " · median, q10–q90");
+  }
+  // " · 15-min" when every day shown is quarter-hourly, " · hourly, then 15-min" over a
+  // mixed stretch, "" over hourly days only.
+  function resolutionSuffix(days) {
+    var nq = days.filter(isQuarterDay).length;
+    return nq === 0 ? "" : nq === days.length ? " · 15-min" : " · hourly, then 15-min";
   }
   // Legend label for the physics clear: the code_version(s) that froze the days shown.
   function physicsLegend(days) {
     var cvs = {};
     days.forEach(function (d) { if (d.code_version != null) cvs[d.code_version] = 1; });
     var ks = Object.keys(cvs).map(Number).sort(function (a, b) { return a - b; });
-    if (!ks.length) return "Physics";
-    return "Physics (cv" + (ks.length === 1 ? ks[0] : ks[0] + "–" + ks[ks.length - 1]) + ")";
+    if (!ks.length) return "Physics" + resolutionSuffix(days);
+    return "Physics (cv" + (ks.length === 1 ? ks[0] : ks[0] + "–" + ks[ks.length - 1]) + ")" + resolutionSuffix(days);
   }
-  // The latest delivery date whose auction has cleared: at least half its hours
+  // Legend label for the settled actual of one day: "Actual (settled)" on an hourly day;
+  // on a quarter-hour day it names the resolution of the settled price (hourly when the
+  // zone published no quarter prices that day and the hour's price fills its quarters).
+  function actualLegend(day) {
+    if (isPending(day)) return "Actual (not published yet)";
+    if (!isQuarterDay(day)) return "Actual (settled)";
+    return day.actual_resolution === "PT60M" ? "Actual (settled, hourly)" : "Actual (settled, 15-min)";
+  }
+  // The latest delivery date whose auction has cleared: at least half its slots
   // carry a settled price. (A lone settled hour is the previous CET delivery day's
   // last hour, which falls in the first hour of the Athens market day.) Days on or
-  // before it are past even when their actual is missing.
+  // before it are past even when their actual is missing. Slots, not hours: the
+  // share is the same on hourly and quarter-hour days.
   function settledHours(d) {
     return d.actual.filter(function (a) { return a !== null && a !== undefined; }).length;
   }
@@ -1284,7 +1353,7 @@
     var items = [];
     if (hasVals(day.tsfm)) items.push(["tsfm", tsfmLegend([day])]);
     items.push(["sim", physicsLegend([day])]);
-    items.push(["act", isPending(day) ? "Actual (not published yet)" : "Actual (settled)"]);
+    items.push(["act", actualLegend(day)]);
     var chips = {};
     items.forEach(function (it) {
       var span = el("span");
@@ -1301,6 +1370,15 @@
   function renderHourTable(day) {
     var t = $("hour-table");
     t.textContent = "";
+    var sum = $("hour-table-summary");
+    if (isQuarterDay(day)) {
+      t.classList.add("q15");
+      if (sum) sum.textContent = "15-min values (table)";
+      renderQuarterTable(t, day);
+      return;
+    }
+    if (t.classList.contains("q15")) t.classList.remove("q15");
+    if (sum) sum.textContent = "Hourly values (table)";
     var thead = el("thead");
     var tr = el("tr");
     var withT = hasVals(day.tsfm);
@@ -1327,6 +1405,39 @@
     });
     t.appendChild(tbody);
   }
+  // A quarter-hour day's table: one row per 15-min slot, grouped by hour. Timestral is
+  // hourly, so its cell spans the hour's quarters (the table form of the chart's step).
+  function renderQuarterTable(t, day) {
+    var withT = hasVals(day.tsfm);
+    var thead = el("thead");
+    var tr = el("tr");
+    (withT ? ["15 min from (Europe/Athens)", tsfmName(day) + " €/MWh (hourly)", "Physics €/MWh", "Actual €/MWh", "Physics error €/MWh"]
+      : ["15 min from (Europe/Athens)", "Physics €/MWh", "Actual €/MWh", "Physics error €/MWh"]).forEach(function (h) {
+      tr.appendChild(el("th", null, h));
+    });
+    thead.appendChild(tr);
+    t.appendChild(thead);
+    var tbody = el("tbody");
+    hourGroups(day).forEach(function (g) {
+      for (var i = g[0]; i <= g[1]; i++) {
+        var r = el("tr", i === g[0] ? "hour-start" : null);
+        r.appendChild(el("td", null, hourLabel(day.hours[i])));
+        if (withT && i === g[0]) {
+          var tdT = el("td", "hour-span", fmt(day.tsfm[i], 2));
+          tdT.setAttribute("rowspan", String(g[1] - g[0] + 1));
+          r.appendChild(tdT);
+        }
+        r.appendChild(el("td", null, fmt(day.sim[i], 2)));
+        var a = day.actual[i];
+        var none = a === null || a === undefined;
+        r.appendChild(el("td", none ? "null" : null, none ? "—" : fmt(a, 2)));
+        r.appendChild(el("td", none ? "null" : null, none ? "—" : fmt(day.sim[i] - a, 2)));
+        tbody.appendChild(r);
+      }
+    });
+    t.appendChild(tbody);
+  }
+
 
   // ---------- SVG chart ----------
 
@@ -1363,13 +1474,14 @@
     var y1 = Math.ceil(vMax / step) * step;
 
     var n = day.hours.length;
+    var q = isQuarterDay(day), sph = slotsPerHour(day);
     function X(i) { return m.l + (n === 1 ? pw / 2 : (i / (n - 1)) * pw); }
     function Y(v) { return m.t + ph - ((v - y0) / (y1 - y0)) * ph; }
 
     var svg = svgEl("svg", {
       viewBox: "0 0 " + VBW + " " + VBH,
       role: "img",
-      "aria-label": "Hourly simulated vs actual day-ahead prices for " + day.date,
+      "aria-label": (q ? "15-minute" : "Hourly") + " simulated vs actual day-ahead prices for " + day.date,
     });
 
     // gridlines + y ticks (hairline, solid, recessive)
@@ -1407,8 +1519,8 @@
     unit.textContent = "€/MWh";
     svg.appendChild(unit);
 
-    // x ticks every 3 hours (every 6 on a narrow chart)
-    for (var i = 0; i < n; i += (VBW < 600 ? 6 : 3)) {
+    // x ticks every 3 hours (every 6 on a narrow chart), counted in slots of the day
+    for (var i = 0; i < n; i += (VBW < 600 ? 6 : 3) * sph) {
       var tx = svgEl("text", {
         x: X(i), y: m.t + ph + 20, "text-anchor": "middle",
         fill: C.muted, "font-size": 11.5,
@@ -1431,7 +1543,14 @@
     }
     var simEls = [], actEls = [], tsfmEls = [];
     // Timestral: q10–q90 band (translucent, breaks at gaps) beneath its dashed median.
-    if (day.tsfm_q10 && day.tsfm_q90) {
+    // On a quarter-hour day Timestral (hourly) is drawn as a step over each hour.
+    if (q && day.tsfm_q10 && day.tsfm_q90) {
+      hourStepBands(day, X, Y).forEach(function (dB) {
+        var band = svgEl("path", { d: dB, fill: C.tsfm, "fill-opacity": 0.14, stroke: "none", class: "tsfm-band" });
+        svg.appendChild(band);
+        tsfmEls.push(band);
+      });
+    } else if (day.tsfm_q10 && day.tsfm_q90) {
       var run = [];
       var flushBand = function () {
         if (run.length > 1) {
@@ -1452,7 +1571,7 @@
     }
     if (hasVals(day.tsfm)) {
       var tPath = svgEl("path", {
-        d: pathFor(day.tsfm), fill: "none", stroke: C.tsfm,
+        d: q ? hourStepPath(day, day.tsfm, X, Y) : pathFor(day.tsfm), fill: "none", stroke: C.tsfm,
         "stroke-width": 2.4, "stroke-linejoin": "round", "stroke-linecap": "round",
       });
       if (!isCombined(day)) tPath.setAttribute("stroke-dasharray", "5 4");   // prices-only issue
@@ -1502,7 +1621,7 @@
     var overlay = svgEl("rect", {
       x: m.l, y: m.t, width: pw, height: ph, fill: "transparent",
       class: "hover-rect", tabindex: "0",
-      "aria-label": "Chart values. Use left and right arrow keys to move between hours.",
+      "aria-label": "Chart values. Use left and right arrow keys to move between " + (q ? "quarter-hours." : "hours."),
     });
     svg.appendChild(overlay);
 
@@ -1533,10 +1652,10 @@
       // tooltip content (values lead, names follow; line keys; textContent only)
       tooltip.textContent = "";
       tooltip.appendChild(el("div", "tt-head",
-        hourLabel(day.hours[idx]) + "–" + hourEndLabel(day.hours[idx]) + " Athens"));
+        hourLabel(day.hours[idx]) + "–" + slotEndLabel(day.hours[idx], day) + " Athens"));
       var ttRows = [];
       if (day.tsfm && day.tsfm[idx] !== null && day.tsfm[idx] !== undefined) {
-        ttRows.push([C.tsfm, day.tsfm[idx], tsfmName(day)]);
+        ttRows.push([C.tsfm, day.tsfm[idx], tsfmName(day) + (q ? " (hourly)" : "")]);
       }
       ttRows.push([C.sim, day.sim[idx], "physics"]);
       ttRows.push([C.act, a, a === null || a === undefined ? "actual (not published)" : "actual"]);
@@ -1581,12 +1700,12 @@
     });
     overlay.addEventListener("pointerleave", hideHover);
     overlay.addEventListener("focus", function () {
-      showIdx(state.hoverIdx === null ? 12 : state.hoverIdx);
+      showIdx(state.hoverIdx === null ? 12 * sph : state.hoverIdx);
     });
     overlay.addEventListener("blur", hideHover);
     overlay.addEventListener("keydown", function (ev) {
-      if (ev.key === "ArrowLeft") { showIdx((state.hoverIdx === null ? 12 : state.hoverIdx) - 1); ev.preventDefault(); }
-      if (ev.key === "ArrowRight") { showIdx((state.hoverIdx === null ? 12 : state.hoverIdx) + 1); ev.preventDefault(); }
+      if (ev.key === "ArrowLeft") { showIdx((state.hoverIdx === null ? 12 * sph : state.hoverIdx) - 1); ev.preventDefault(); }
+      if (ev.key === "ArrowRight") { showIdx((state.hoverIdx === null ? 12 * sph : state.hoverIdx) + 1); ev.preventDefault(); }
     });
 
     var stx = settleState(day, lastSettledDate(freshestByDate(trackDays(state.zoneCache[state.zone]))));
@@ -1594,7 +1713,7 @@
       wrap.appendChild(el("p", "pending-note",
         stx === "forecast" ? "Forecast only — this day's auction has not cleared yet."
           : stx === "missing" ? "No settled price has been published for this day yet, although its auction has cleared."
-          : "Some hours of this day have no published settled price."));
+          : (q ? "Some quarter-hours" : "Some hours") + " of this day have no published settled price."));
     }
     return { sim: simEls, act: actEls, tsfm: tsfmEls };   // series refs for the focus wiring
   }
@@ -1635,7 +1754,7 @@
     $("chart-sub").textContent =
       (hasVals(day.tsfm) ? tsfmName(day) + " and the physics clear" : "Physics clear") +
       madeAt +
-      " · hours shown in Europe/Athens (market day)";
+      (isQuarterDay(day) ? " · 15-minute periods in Europe/Athens time (market day)" : " · hours shown in Europe/Athens (market day)");
     renderDayStats(day);
     renderDayComment(day);
     var legendChips = renderLegend(day);
@@ -1725,6 +1844,39 @@
     return d.trim();
   }
 
+  // An hourly series on a quarter-hour day (Timestral: its value repeats on the hour's
+  // quarters) as a step: flat from the hour's first slot to the next hour's first slot (the
+  // last hour ends at the day's last slot, where the other series end), breaking at gaps.
+  function hourStepPath(day, arr, X, Y) {
+    var d = "", pen = false, last = arr.length - 1;
+    hourGroups(day).forEach(function (g) {
+      var v = arr[g[0]];
+      if (v === null || v === undefined) { pen = false; return; }
+      var yy = Y(v).toFixed(2);
+      d += (pen ? " L" : " M") + X(g[0]).toFixed(2) + " " + yy + " L" + X(Math.min(g[1] + 1, last)).toFixed(2) + " " + yy;
+      pen = true;
+    });
+    return d.trim();
+  }
+  // Timestral's q10–q90 band on a quarter-hour day, stepped like hourStepPath: one closed
+  // path per run of hours that carry both quantiles.
+  function hourStepBands(day, X, Y) {
+    var out = [], up = [], lo = [], last = day.hours.length - 1;
+    function flush() {
+      if (up.length) out.push("M" + up.join(" L") + " L" + lo.reverse().join(" L") + " Z");
+      up = []; lo = [];
+    }
+    hourGroups(day).forEach(function (g) {
+      var a = day.tsfm_q10[g[0]], b = day.tsfm_q90[g[0]];
+      if (a === null || a === undefined || b === null || b === undefined) { flush(); return; }
+      var x0 = X(g[0]).toFixed(2), x1 = X(Math.min(g[1] + 1, last)).toFixed(2);
+      up.push(x0 + " " + Y(b).toFixed(2), x1 + " " + Y(b).toFixed(2));
+      lo.push(x0 + " " + Y(a).toFixed(2), x1 + " " + Y(a).toFixed(2));
+    });
+    flush();
+    return out;
+  }
+
   // The ribbon around "now": the freshest forecast per delivery date, settled
   // days left of the seam (actual overlaid, per-day physics MAE·bias), days whose
   // auction has not cleared right of it. The frontier is the day after the latest
@@ -1782,13 +1934,26 @@
       lg.appendChild(span);
     });
 
-    var pts = [];   // {iso, v, a, t, day}
+    // x is time, in hours from the first slot: every day is 24 h wide (23/25 on DST days)
+    // whether it is hourly (one point per hour) or quarter-hourly (four), so a stretch that
+    // mixes hourly and 15-min days keeps equal day widths. On hourly days u = the index.
+    var pts = [];   // {iso, v, a, t, i, u, day}
+    var uDay = 0;
     days.forEach(function (d) {
+      var f = slotMinutes(d) / 60;
       d.hours.forEach(function (h, i) {
-        pts.push({ iso: h, v: d.sim[i], a: d.actual[i], t: d.tsfm ? d.tsfm[i] : null, i: i, day: d });
+        pts.push({ iso: h, v: d.sim[i], a: d.actual[i], t: d.tsfm ? d.tsfm[i] : null, i: i, u: uDay + i * f, day: d });
       });
+      uDay += d.hours.length * f;
     });
-    var n = pts.length;
+    var np = pts.length;
+    var n = np ? pts[np - 1].u + 1 : 0;   // the scaffold's x domain: 0 … n − 1 (hours)
+    // the point nearest to time u (pts ascend in u)
+    function idxAtU(u) {
+      var lo = 0, hi = np - 1;
+      while (hi - lo > 1) { var mid = (lo + hi) >> 1; if (pts[mid].u <= u) lo = mid; else hi = mid; }
+      return (hi > lo && Math.abs(pts[hi].u - u) <= Math.abs(u - pts[lo].u)) ? hi : lo;   // ties round up, as Math.round
+    }
     var vals = [];
     pts.forEach(function (p) {
       [p.v, p.a].forEach(function (v) { if (v !== null && v !== undefined) vals.push(v); });
@@ -1799,17 +1964,17 @@
       });
     });
     var sc = chartScaffold(wrap, vals, n,
-      "Hourly forecast vs actual across " + pastN + " cleared and " + futureN +
+      (days.some(isQuarterDay) ? "Forecast" : "Hourly forecast") + " vs actual across " + pastN + " cleared and " + futureN +
       " upcoming market days, " + state.zone, { b: 62 });
     var svg = sc.svg, X = sc.X, Y = sc.Y, m = sc.m;
 
     // "now" seam: between the last settled hour and the first hour not yet cleared.
     var lastSettled = -1;
-    for (var si = 0; si < n; si++) {
+    for (var si = 0; si < np; si++) {
       if (pts[si].day.date <= lastDate) lastSettled = si;
     }
-    var hasSeam = lastSettled >= 0 && lastSettled < n - 1;
-    var seamX = hasSeam ? (X(lastSettled) + X(lastSettled + 1)) / 2 : 0;
+    var hasSeam = lastSettled >= 0 && lastSettled < np - 1;
+    var seamX = hasSeam ? (X(pts[lastSettled].u) + X(pts[lastSettled + 1].u)) / 2 : 0;
     if (hasSeam) {
       svg.appendChild(svgEl("rect", {
         x: seamX, y: m.t, width: (m.l + sc.pw) - seamX, height: sc.ph,
@@ -1827,10 +1992,11 @@
       svg.appendChild(t);
       return t;
     }
-    var idx0 = 0;
+    var idx0 = 0;   // the day's first point, in hours (u)
     days.forEach(function (d) {
-      var idx1 = idx0 + d.hours.length - 1;
-      var cx = (X(idx0) + X(idx1)) / 2, w = X(idx1) - X(idx0) + (X(1) - X(0));
+      var f = slotMinutes(d) / 60;
+      var idx1 = idx0 + (d.hours.length - 1) * f;
+      var cx = (X(idx0) + X(idx1)) / 2, w = X(idx1) - X(idx0) + (X(f) - X(0));
       if (idx0 > 0) {
         svg.appendChild(svgEl("line", {
           x1: X(idx0), x2: X(idx0), y1: m.t, y2: m.t + sc.ph,
@@ -1876,8 +2042,14 @@
         }
       }
 
-      var Xoff = function (i) { return X(idx0 + i); };
-      if (d.tsfm_q10 && d.tsfm_q90) {
+      var u0 = idx0;
+      var Xoff = function (i) { return X(u0 + i * f); };
+      var qd = isQuarterDay(d);
+      if (qd && d.tsfm_q10 && d.tsfm_q90) {
+        hourStepBands(d, Xoff, Y).forEach(function (bd) {
+          svg.appendChild(svgEl("path", { d: bd, fill: C.tsfm, "fill-opacity": 0.14, stroke: "none", class: "tsfm-band" }));
+        });
+      } else if (d.tsfm_q10 && d.tsfm_q90) {
         var run = [];
         var flush = function () {
           if (run.length > 1) {
@@ -1900,7 +2072,7 @@
           "stroke-width": 1.5, "stroke-linejoin": "round", "stroke-linecap": "round",
         }));
       }
-      var tD = hasVals(d.tsfm) ? pathString(d.tsfm, Xoff, Y) : "";
+      var tD = hasVals(d.tsfm) ? (qd ? hourStepPath(d, d.tsfm, Xoff, Y) : pathString(d.tsfm, Xoff, Y)) : "";
       if (tD) {
         var tAttrs = { d: tD, fill: "none", stroke: C.tsfm, "stroke-width": 2.2, "stroke-linejoin": "round", "stroke-linecap": "round" };
         if (!isCombined(d)) tAttrs["stroke-dasharray"] = "5 4";   // prices-only issue: marked dashed
@@ -1913,7 +2085,7 @@
           "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round",
         }));
       }
-      idx0 = idx1 + 1;
+      idx0 = idx1 + f;
     });
 
     if (hasSeam) {
@@ -1944,9 +2116,9 @@
     wrap.appendChild(tooltip);
 
     function show(i) {
-      i = Math.max(0, Math.min(n - 1, i));
+      i = Math.max(0, Math.min(np - 1, i));
       var p = pts[i];
-      var x = X(i);
+      var x = X(p.u);
       hoverLine.setAttribute("x1", x); hoverLine.setAttribute("x2", x);
       hoverLine.setAttribute("visibility", "visible");
       dots.forEach(function (dt) {
@@ -1957,9 +2129,9 @@
       });
       tooltip.textContent = "";
       tooltip.appendChild(el("div", "tt-head",
-        dayLabel(p.day.date) + " · " + hourLabel(p.iso) + "–" + hourEndLabel(p.iso) + " Athens"));
+        dayLabel(p.day.date) + " · " + hourLabel(p.iso) + "–" + slotEndLabel(p.iso, p.day) + " Athens"));
       var rows = [];
-      if (p.t !== null && p.t !== undefined) rows.push([C.tsfm, p.t, tsfmName(p.day)]);
+      if (p.t !== null && p.t !== undefined) rows.push([C.tsfm, p.t, tsfmName(p.day) + (isQuarterDay(p.day) ? " (hourly)" : "")]);
       rows.push([C.sim, p.v, "physics"]);
       rows.push([C.act, p.a, p.a === null || p.a === undefined ? "actual (not published)" : "actual"]);
       rows.forEach(function (rd) {
@@ -1986,7 +2158,7 @@
     overlay.addEventListener("pointermove", function (ev) {
       var rect = svg.getBoundingClientRect();
       var xVB = (ev.clientX - rect.left) * (sc.VBW / rect.width);
-      show(Math.round(((xVB - m.l) / sc.pw) * (n - 1)));
+      show(idxAtU(((xVB - m.l) / sc.pw) * (n - 1)));
     });
     overlay.addEventListener("pointerleave", function () {
       hoverLine.setAttribute("visibility", "hidden");
@@ -3355,7 +3527,7 @@
       if (e > wv) { wv = e; wi = i; }
     });
     if (wi >= 0 && wv >= 15) {
-      s += " Largest miss: " + hourLabel(day.hours[wi]) + "–" + hourEndLabel(day.hours[wi]) +
+      s += " Largest miss: " + hourLabel(day.hours[wi]) + "–" + slotEndLabel(day.hours[wi], day) +
         " Athens (forecast €" + fmt(day.sim[wi], 0) + " vs actual €" + fmt(day.actual[wi], 0) + ").";
     }
     p.textContent = s;
@@ -3699,8 +3871,9 @@
           } else if (mdef[0] === "mae") {
             td.appendChild(document.createTextNode(fmt(s.mae, 1)));
             td.title = q15
-              ? "15-min MAE " + fmt(s.mae, 2) + " €/MWh: the hourly forecast repeated on its 4 quarters " +
-                "vs native PT15M SDAC prices · n=" + s.n_days + " days with native quarter-hour prices.\n" +
+              ? "15-min MAE " + fmt(s.mae, 2) + " €/MWh: the physics clear at its own resolution (its quarter-hour " +
+                "prices, or an hourly price on its 4 quarters) vs native PT15M SDAC prices · n=" + s.n_days +
+                " days with native quarter-hour prices.\n" +
                 "Shape floor " + fmt(s.shape, 2) + " €/MWh: how far quarter-hour prices moved around their " +
                 "hour's mean (mean |quarter − hour mean|), measured after the fact. A diagnostic of " +
                 "intra-hour movement, not a part of the MAE (MAE does not split additively)."
@@ -4128,7 +4301,8 @@
       var nH = Math.min(book.supply.length, fday.hours.length);
       var slider = $("book-hour-slider");
       slider.max = nH - 1;
-      if (state.bookHour == null || state.bookHour < 0 || state.bookHour >= nH) state.bookHour = Math.min(12, nH - 1);
+      slider.setAttribute("aria-label", isQuarterDay(fday) ? "Delivery quarter-hour" : "Delivery hour");
+      if (state.bookHour == null || state.bookHour < 0 || state.bookHour >= nH) state.bookHour = Math.min(12 * slotsPerHour(fday), nH - 1);
       slider.value = state.bookHour;
       renderBookLadder(book, fday, state.bookHour);
       // if flows exist for this day, warm up trading-neighbour prices (2nd paint)
@@ -4161,7 +4335,7 @@
     var clearing = fday.sim[hourIdx];
     var actual = fday.actual[hourIdx];
     $("book-hour-label").textContent =
-      hourLabel(ts) + "–" + hourEndLabel(ts) + " Athens";
+      hourLabel(ts) + "–" + slotEndLabel(ts, fday) + " Athens";
     var src = null, bIdx = -1;
     if (book && book.hours) {
       bIdx = book.hours.indexOf(ts);
@@ -4175,8 +4349,8 @@
       }
     }
     if (!src) {
-      var missMsg = "No captured ladder for " + hourLabel(ts) + "–" + hourEndLabel(ts) +
-        " Athens (" + ts + ") — this delivery hour is not in the day's book parquet " +
+      var missMsg = "No captured ladder for " + hourLabel(ts) + "–" + slotEndLabel(ts, fday) +
+        " Athens (" + ts + ") — this delivery " + (isQuarterDay(fday) ? "quarter-hour" : "hour") + " is not in the day's book parquet " +
         "(the first Athens hours live in the previous UTC day's book, which is not " +
         "in the data plane for this day).";
       wrap.appendChild(el("p", "pending-note", missMsg));
@@ -4314,7 +4488,7 @@
     var svg = svgEl("svg", {
       viewBox: "0 0 " + VBW + " " + VBH, role: "img",
       "aria-label": "Merit-order supply ladder for " + state.zone + " " + state.bookDay +
-        " hour " + hourLabel(fday.hours[hourIdx]),
+        (isQuarterDay(fday) ? " quarter-hour " : " hour ") + hourLabel(fday.hours[hourIdx]),
     });
     // diagonal hatch for the coupled trade wedge fill
     var defs = svgEl("defs");
@@ -5967,12 +6141,16 @@
 
   // A zone's coupled `sim` price at a UTC hour, from its (cached) forecast for
   // the exemplar's market day. null when the day/hour isn't loaded.
-  function solverZonePriceAt(zoneData, dateStr, tsIso) {
+  function solverZoneDay(zoneData, dateStr) {
     if (!zoneData || !zoneData.days) return null;
     var day = null;
     zoneData.days.forEach(function (d) {
       if (d.date === dateStr && (!day || d.lead_days < day.lead_days)) day = d;
     });
+    return day;
+  }
+  function solverZonePriceAt(zoneData, dateStr, tsIso) {
+    var day = solverZoneDay(zoneData, dateStr);
     if (!day) return null;
     var i = day.hours.indexOf(tsIso);
     return i >= 0 && day.sim ? day.sim[i] : null;
@@ -6041,11 +6219,13 @@
           "back once the record covers this date.");
         return;
       }
-      drawSolverExemplar(host, ex, pFrom, pTo, net);
+      drawSolverExemplar(host, ex, pFrom, pTo, net, solverZoneDay(res[1], ex.date));
     });
   }
 
-  function drawSolverExemplar(host, ex, pFrom, pTo, net) {
+  // slotDay: the record day the prices come from; it sets the slot end of the label (on a
+  // quarter-hour record day the exemplar is the slot starting at hour_utc).
+  function drawSolverExemplar(host, ex, pFrom, pTo, net, slotDay) {
     var C = solverColors();
     var sep = Math.abs(pFrom - pTo);
     var rent = sep * Math.abs(net);
@@ -6061,7 +6241,7 @@
 
     var head = svgEl("text", { x: W / 2, y: 22, "text-anchor": "middle", "font-size": 12,
       fill: C.muted, "font-family": "var(--mono)" });
-    head.textContent = ex.date + ", " + hourLabel(ex.hour_utc) + " (" + hourEndLabel(ex.hour_utc) + ") Athens";
+    head.textContent = ex.date + ", " + hourLabel(ex.hour_utc) + " (" + (slotDay ? slotEndLabel(ex.hour_utc, slotDay) : hourEndLabel(ex.hour_utc)) + ") Athens";
     svg.appendChild(head);
 
     var tileW = 170, tileH = 92, ty = 48, lX = 40, rX = W - 40 - tileW;
@@ -6369,7 +6549,8 @@
         days.forEach(function (d) { if (!fday && d.date === state.bookDay) fday = d; });
         var book = state.bookCache[state.zone + "|" + state.bookDay];
         if (!book || !fday) { stopBookPlay(); return; }
-        state.bookHour = (state.bookHour + 1) % nH;
+        // one hour per tick on either resolution (a quarter-hour day steps 4 slots)
+        state.bookHour = (state.bookHour + slotsPerHour(fday)) % nH;
         slider.value = state.bookHour;
         renderBookLadder(book, fday, state.bookHour);
       }, 750);
@@ -6531,6 +6712,26 @@
       renderWindowSelect: renderWindowSelect,
       writeHash: writeHash,
       readHash: readHash,
+    };
+    // Delivery-slot test surface (hourly and quarter-hour days, workers/api/test/q15_site.test.mjs).
+    window.__euphemiaSlots = {
+      state: state,
+      slotMinutes: slotMinutes,
+      isQuarterDay: isQuarterDay,
+      slotEndLabel: slotEndLabel,
+      hourEndLabel: hourEndLabel,
+      hourGroups: hourGroups,
+      hourMean: hourMean,
+      tsfmDayMae: tsfmDayMae,
+      settleState: settleState,
+      lastSettledDate: lastSettledDate,
+      hourStepPath: hourStepPath,
+      hourStepBands: hourStepBands,
+      actualLegend: actualLegend,
+      physicsLegend: physicsLegend,
+      tsfmLegend: tsfmLegend,
+      renderExplorer: renderExplorer,
+      renderHorizon: renderHorizon,
     };
     // Views test surface — lets a DOM smoke test drive each view's live-only
     // load+render with the API absent and assert the honest empty state (no

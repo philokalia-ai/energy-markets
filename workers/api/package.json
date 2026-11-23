@@ -28,7 +28,8 @@
     "test:naive": "node test/naive_board.test.mjs",
     "test:latestonly": "node test/latest_only.test.mjs",
     "test:backfill": "node test/backfill_window.test.mjs",
-    "test:tsfmbackfill": "node test/tsfm_backfill_fields.test.mjs"
+    "test:tsfmbackfill": "node test/tsfm_backfill_fields.test.mjs",
+    "test:q15site": "node test/q15_site.test.mjs"
   },
   "dependencies": {
     "hyparquet": "^1.26.2",
