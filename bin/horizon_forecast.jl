@@ -157,6 +157,9 @@ function main()
     println("=" ^ 70)
     println("HORIZON FORECAST (weekly-persistence leads 2..$MAX_LEAD_DAYS)  cv=$CV")
     println("=" ^ 70)
+    # the INSERT carries resolution_code (cv46 D1): run the forecast-table migration first, as
+    # daily_forecast.jl does (catalog-first, a no-op in the steady state)
+    Euphemia.ensure_forecast_tables()
     made = now(UTC)
     base = athens_date(made)   # today's Athens market day; T = base + n
 
