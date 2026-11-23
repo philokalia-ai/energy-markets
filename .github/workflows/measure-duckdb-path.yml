@@ -1,0 +1,175 @@
+name: Measure DuckDB path (perf-96)
+
+# Runner measurement for the owner rule "DuckDB between Postgres and Julia, always" (perf-96, 2026-11-23):
+# the fill time, and the day wall of the current Postgres read path vs the fill → DuckDB path, on the
+# production runner. READ-ONLY: nothing is written to Postgres (save_to_db=false, no transfer step).
+# Manual dispatch only (the lead dispatches it). It refuses to start, and stops itself, when it could
+# overlap the live forecast / publish windows or a running daily-forecast / publish-web-data job.
+on:
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "UTC days to clear (comma list YYYY-MM-DD). Empty = the 3 days ending 3 days ago."
+        required: false
+        default: ""
+        type: string
+
+concurrency:
+  group: measure-duckdb-path
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read   # the guard reads this repo's workflow runs
+
+env:
+  JULIA_VERSION: "1.13.4"
+  JULIA_NUM_THREADS: 4
+  RUN_DIR: ${{ github.workspace }}/run-local
+  OUT_DIR: ${{ github.workspace }}/measure-out
+  # The job timeout; the guard refuses a start that could still be running inside a protected window.
+  MEASURE_TIMEOUT_MIN: "120"
+
+jobs:
+  measure:
+    runs-on: energy-markets-k8s
+    timeout-minutes: 120
+    steps:
+      - name: Guard — protected windows and running forecast/publish jobs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Protected windows (UTC, from tasks/431-common.md): 06:00–08:30 (live forecast) and 10:30–12:15
+          # (publish). Refuse a start inside them, and a start whose MEASURE_TIMEOUT_MIN could reach them.
+          now_min=$(( 10#$(date -u +%H) * 60 + 10#$(date -u +%M) ))
+          end_min=$(( now_min + MEASURE_TIMEOUT_MIN ))
+          overlaps() {   # [now, now+timeout) intersects [a, b) on a 24 h clock (minutes)
+            local a=$1 b=$2 s=$now_min e=$end_min
+            for shift in 0 1440; do
+              if (( s < b + shift && a + shift < e )); then return 0; fi
+            done
+            return 1
+          }
+          for w in "360 510 06:00-08:30" "630 735 10:30-12:15"; do
+            set -- $w
+            if overlaps $1 $2; then
+              echo "::error::refused: now $(date -u +%H:%M) UTC + ${MEASURE_TIMEOUT_MIN} min overlaps the protected window $3 UTC"
+              exit 1
+            fi
+          done
+          # Running jobs: any daily-forecast or publish-web-data run that is not completed (queued, waiting,
+          # requested, pending or in progress) in this repository, via the Actions REST API.
+          busy=0
+          for wf in daily-forecast.yml publish-web-data.yml; do
+            for st in in_progress queued waiting requested pending; do
+              n=$(curl -fsS -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+                  "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/${wf}/runs?status=${st}&per_page=1" \
+                  | grep -o '"total_count": *[0-9]*' | grep -o '[0-9]*$')
+              if [ "${n:-1}" != "0" ]; then echo "::error::refused: $wf has a run with status $st"; busy=1; fi
+            done
+          done
+          [ "$busy" = 0 ] || exit 1
+          echo "guard OK at $(date -u +%H:%M) UTC"
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Julia
+        uses: julia-actions/setup-julia@v1
+        with:
+          version: ${{ env.JULIA_VERSION }}
+
+      - name: Install Julia dependencies
+        run: |
+          julia --project=. -e 'using Pkg; Pkg.instantiate(); Pkg.precompile()'
+
+      - name: Watchdog — stop if a forecast/publish job starts mid-measurement
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # A background check every 60 s for the rest of the job. On a hit it writes a stop marker that the
+          # measurement steps test before each phase, and kills the running julia measurement.
+          nohup bash -c '
+            while true; do
+              for wf in daily-forecast.yml publish-web-data.yml; do
+                for st in in_progress queued; do
+                  n=$(curl -fsS -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+                      "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/${wf}/runs?status=${st}&per_page=1" \
+                      | grep -o "\"total_count\": *[0-9]*" | grep -o "[0-9]*$") || n=0
+                  if [ "${n:-0}" != "0" ]; then
+                    echo "$wf $st at $(date -u +%H:%M:%S)" > "$GITHUB_WORKSPACE/STOP_MEASURE"
+                    pkill -f "bin/measure_duckdb_path.jl|bin/fill_run_duckdb.jl" || true
+                  fi
+                done
+              done
+              sleep 60
+            done' > watchdog.log 2>&1 &
+          echo "watchdog started (pid $!)"
+
+      - name: Choose days
+        id: days
+        run: |
+          D="${{ github.event.inputs.days }}"
+          if [ -z "$D" ]; then
+            D="$(date -u -d '5 days ago' +%F),$(date -u -d '4 days ago' +%F),$(date -u -d '3 days ago' +%F)"
+          fi
+          echo "$D" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}(,[0-9]{4}-[0-9]{2}-[0-9]{2})*$' || { echo "::error::bad days: $D"; exit 1; }
+          echo "days=$D" >> "$GITHUB_OUTPUT"
+          echo "start=$(echo "$D" | tr ',' '\n' | sort | head -1)" >> "$GITHUB_OUTPUT"
+          echo "end=$(echo "$D" | tr ',' '\n' | sort | tail -1)" >> "$GITHUB_OUTPUT"
+          mkdir -p "$OUT_DIR" "$RUN_DIR"
+
+      - name: Current path — clear reading Postgres directly (baseline, read-only)
+        env:
+          ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
+          EUPHEMIA_DATA_STORE: postgres
+        run: |
+          [ ! -f STOP_MEASURE ] || { cat STOP_MEASURE; exit 1; }
+          /usr/bin/time -v julia --project=. bin/measure_duckdb_path.jl clear \
+            --days "${{ steps.days.outputs.days }}" --label pg --out "$OUT_DIR" 2> "$OUT_DIR/time_pg.txt"
+          grep -E "Elapsed|Maximum resident" "$OUT_DIR/time_pg.txt"
+
+      - name: Fill — Postgres → run-local DuckDB (timed)
+        env:
+          ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
+        run: |
+          [ ! -f STOP_MEASURE ] || { cat STOP_MEASURE; exit 1; }
+          /usr/bin/time -v julia --project=. bin/fill_run_duckdb.jl --profile record \
+            --start "${{ steps.days.outputs.start }}" --end "${{ steps.days.outputs.end }}" \
+            --out "$RUN_DIR" 2> "$OUT_DIR/time_fill.txt"
+          grep -E "Elapsed|Maximum resident" "$OUT_DIR/time_fill.txt"
+          du -sh "$RUN_DIR"/*.duckdb | tee "$OUT_DIR/fill_size.txt"
+
+      - name: DuckDB path — clear reading only the run-local DuckDB (no Postgres credentials)
+        env:
+          EUPHEMIA_DATA_STORE: duckdb
+          EUPHEMIA_DUCKDB_PATH: ${{ env.RUN_DIR }}/inputs.duckdb
+          EUPHEMIA_DUCKDB_READONLY: "true"
+          EUPHEMIA_RESULTS_DB: ${{ env.RUN_DIR }}/results.duckdb
+        run: |
+          [ ! -f STOP_MEASURE ] || { cat STOP_MEASURE; exit 1; }
+          /usr/bin/time -v julia --project=. bin/measure_duckdb_path.jl clear \
+            --days "${{ steps.days.outputs.days }}" --label duckdb --out "$OUT_DIR" 2> "$OUT_DIR/time_duckdb.txt"
+          grep -E "Elapsed|Maximum resident" "$OUT_DIR/time_duckdb.txt"
+
+      - name: Compare prices and walls
+        if: ${{ !cancelled() }}
+        run: |
+          julia --project=. bin/measure_duckdb_path.jl compare \
+            "$OUT_DIR/prices_pg.csv" "$OUT_DIR/prices_duckdb.csv" --out "$OUT_DIR"
+          for f in pg fill duckdb; do
+            echo "- $f: $(grep -E 'Elapsed' "$OUT_DIR/time_$f.txt" | sed 's/.*: //') wall, peak $(grep -E 'Maximum resident' "$OUT_DIR/time_$f.txt" | awk '{print $NF}') kB" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+      - name: Upload measurement
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: measure-duckdb-path-${{ github.run_id }}
+          path: |
+            measure-out/
+            watchdog.log
+            STOP_MEASURE
+          if-no-files-found: warn
+          retention-days: 30

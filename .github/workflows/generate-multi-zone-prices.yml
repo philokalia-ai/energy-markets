@@ -57,6 +57,10 @@ jobs:
   generate-multi-zone-prices:
     runs-on: energy-markets-k8s
     timeout-minutes: 2880 # 48 hours timeout
+    env:
+      # fill → run → transfer (owner rule 2026-11-23): inputs.duckdb filled from Postgres (read-only) +
+      # results.duckdb (seeded with the window's existing energy_prices for skip_existing); one transfer.
+      RUN_DIR: ${{ github.workspace }}/run-local
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -80,33 +84,13 @@ jobs:
             println(\"✅ Dependencies installed successfully\")
           "
 
-      - name: Setup database connection
-        env:
-          ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
-        run: |
-          julia --project=. -e "
-            using Euphemia
-            println(\"🔗 Testing database connection...\")
-            try
-              result = Euphemia.sql2df(\"SELECT 1 as test\")
-              println(\"✅ Database connection successful\")
-            catch e
-              println(\"❌ Database connection failed: \$e\")
-              exit(1)
-            end
-          "
-
-      - name: Generate multi-zone prices
-        id: generate
-        env:
-          ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
+      - name: Resolve run parameters
         run: |
           # Set default dates if scheduled trigger
           if [ "${{ github.event_name }}" = "schedule" ]; then
             START_DATE=$(date -d "yesterday" +%Y-%m-%d)
             END_DATE=$START_DATE
             PARALLEL=true
-            OPTIMIZER="highs"
             MAX_WORKERS=16
             ORDER_METHOD="merit_order"
             ZONES="GR,BG,RO,RS,HU"
@@ -116,14 +100,37 @@ jobs:
             START_DATE="${{ github.event.inputs.start_date }}"
             END_DATE="${{ github.event.inputs.end_date }}"
             PARALLEL="${{ github.event.inputs.parallel }}"
-            OPTIMIZER="highs"
             MAX_WORKERS="${{ github.event.inputs.max_workers }}"
             ORDER_METHOD="${{ github.event.inputs.order_method }}"
             ZONES="${{ github.event.inputs.zones }}"
             FORCE_RERUN="${{ github.event.inputs.force_rerun }}"
             MARKUP_FACTOR="${{ github.event.inputs.markup_factor }}"
           fi
+          {
+            echo "START_DATE=$START_DATE"; echo "END_DATE=$END_DATE"; echo "PARALLEL=$PARALLEL"
+            echo "OPTIMIZER=highs"; echo "MAX_WORKERS=$MAX_WORKERS"; echo "ORDER_METHOD=$ORDER_METHOD"
+            echo "ZONES=$ZONES"; echo "FORCE_RERUN=$FORCE_RERUN"; echo "MARKUP_FACTOR=$MARKUP_FACTOR"
+            # rows the run writes carry update_time_utc >= this instant (the transfer moves only those days)
+            echo "RUN_STARTED_UTC=$(date -u +%Y-%m-%dT%H:%M:%S)"
+          } >> "$GITHUB_ENV"
 
+      - name: Fill run-local DuckDB (the job's only Postgres read)
+        env:
+          ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
+        run: |
+          julia --project=. bin/fill_run_duckdb.jl --profile record \
+            --start "$START_DATE" --end "$END_DATE" --out "$RUN_DIR"
+
+      - name: Generate multi-zone prices
+        id: generate
+        env:
+          # reads only the run-local DuckDB, writes only its results file (no Postgres credentials here)
+          EUPHEMIA_DATA_STORE: duckdb
+          EUPHEMIA_DUCKDB_PATH: ${{ env.RUN_DIR }}/inputs.duckdb
+          EUPHEMIA_DUCKDB_READONLY: "true"
+          EUPHEMIA_RESULTS_DB: ${{ env.RUN_DIR }}/results.duckdb
+          EUPHEMIA_RESULTS_WRITABLE: "true"
+        run: |
           echo "🌍 Multi-zone market clearing"
           echo "📅 Date range: $START_DATE to $END_DATE"
           echo "⚖️ Optimizer: $OPTIMIZER"
@@ -134,9 +141,22 @@ jobs:
           echo "🔄 Force rerun: $FORCE_RERUN"
           echo "💹 Markup factor: $MARKUP_FACTOR"
 
-          export START_DATE END_DATE PARALLEL OPTIMIZER MAX_WORKERS ORDER_METHOD ZONES FORCE_RERUN MARKUP_FACTOR
-
           julia --project=. bin/multi_zone_main.jl
+
+      # The job's only Postgres write: the existing record transfer (same COPY semantics as
+      # transfer-record.yml), restricted to the days this run wrote, so a skipped day is never rewritten.
+      - name: Transfer results to Postgres
+        if: ${{ !cancelled() }}
+        env:
+          ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
+        run: |
+          if [ -f "$RUN_DIR/results.duckdb" ]; then
+            julia --project=. bin/transfer_results_to_postgres.jl --clearing-mode multi_zone \
+              --start "$START_DATE" --end "$END_DATE" --written-since "$RUN_STARTED_UTC" \
+              --results-db "$RUN_DIR/results.duckdb"
+          else
+            echo "::warning::no run-local results DuckDB (the fill failed) — nothing to transfer"
+          fi
 
       - name: Create execution summary
         if: always()

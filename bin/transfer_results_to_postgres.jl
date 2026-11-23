@@ -28,6 +28,13 @@
 #       --clearing-mode multi_zone_eu --code-version 23 \
 #       --start 2023-01-01 --end 2026-07-24
 #
+#   # fill → run → transfer jobs (perf-96, owner rule 2026-11-23): the run-local results DuckDB also holds
+#   # the energy_prices rows the fill seeded for the skip-existing check; move ONLY the days this run wrote
+#   # (rows with update_time_utc >= the given UTC instant), one day window at a time, so a skipped day's
+#   # Postgres rows are never deleted or rewritten
+#   julia --project=. bin/transfer_results_to_postgres.jl --clearing-mode multi_zone \
+#       --start 2026-11-22 --end 2026-11-22 --written-since 2026-11-23T03:00:00
+#
 #   # verify only (no writes): per-year row counts + per zone-month price
 #   # checksums on both sides
 #   julia --project=. bin/transfer_results_to_postgres.jl --verify
@@ -52,6 +59,7 @@ function parse_cli(argv)
         "end"           => nothing,
         "verify"        => false,
         "flows"         => true,
+        "written_since" => nothing,
     )
     i = 1
     while i <= length(argv)
@@ -63,6 +71,7 @@ function parse_cli(argv)
         elseif a == "--end";         o["end"]   = Date(argv[i+1]); i += 1
         elseif a == "--verify";      o["verify"] = true
         elseif a == "--no-flows";    o["flows"] = false
+        elseif a == "--written-since"; o["written_since"] = DateTime(argv[i+1]); i += 1
         elseif a in ("-h", "--help")
             println("See header of $(basename(@__FILE__)) for usage."); exit(0)
         else
@@ -408,6 +417,38 @@ function main()
             exit(ok ? 0 : 1)
         end
 
+        if o["written_since"] !== nothing
+            days = written_days(con, o)
+            println("--written-since $(o["written_since"]): $(length(days)) day(s) written by this run: " *
+                    join(days, ", "))
+            isempty(days) && (println("nothing to transfer — no rows written since then"); return)
+            for d in days
+                od = copy(o); od["start"] = d; od["end"] = d
+                transfer_window!(con, pg, od)
+            end
+            return
+        end
+        transfer_window!(con, pg, o)
+    finally
+        LibPQ.close(pg)
+        DBInterface.close!(con); DuckDB.close(db)
+    end
+end
+
+"Distinct UTC days of the slice with rows written at or after o[\"written_since\"] (within --start/--end if given)."
+function written_days(con, o)
+    extra, ep = (o["start"] === nothing || o["end"] === nothing) ? ("", Any[]) :
+        (" AND " * first(day_window_clause("date_time_utc", o["start"], o["end"], 4)),
+         last(day_window_clause("date_time_utc", o["start"], o["end"], 4)))
+    df = DataFrame(DBInterface.execute(con, """
+        SELECT DISTINCT CAST(date_time_utc AS DATE) AS d FROM simulations.energy_prices
+        WHERE clearing_mode = \$1 AND code_version = \$2 AND update_time_utc >= \$3$extra
+        ORDER BY 1""", Any[o["clearing_mode"], o["code_version"], o["written_since"], ep...]))
+    return Date.(df.d)
+end
+
+"Transfer one (clearing_mode, code_version, day window) slice: runs, delete-then-COPY prices, flows, verify."
+function transfer_window!(con, pg, o)
         bound_window!(con, o)   # never an unbounded Postgres delete
         t0 = time()
         prices = read_prices(con, o)
@@ -453,10 +494,6 @@ function main()
                     "not match the source. Investigate before publishing.")
             exit(1)
         end
-    finally
-        LibPQ.close(pg)
-        DBInterface.close!(con); DuckDB.close(db)
-    end
 end
 
 main()

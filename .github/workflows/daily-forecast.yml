@@ -71,6 +71,10 @@ jobs:
   daily-forecast:
     runs-on: energy-markets-k8s
     timeout-minutes: 120
+    env:
+      # Run-local DuckDB pair: inputs.duckdb (filled from Postgres, read-only) + results.duckdb (seeded with the
+      # forecast/score slices this job reads back; every result write lands here, then ONE transfer step).
+      RUN_DIR: ${{ github.workspace }}/run-local
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -100,25 +104,24 @@ jobs:
             println(\"✅ Dependencies installed successfully\")
           "
 
-      - name: Setup database connection
+      - name: Fill run-local DuckDB (the job's only Postgres read)
         env:
           ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
         run: |
-          julia --project=. -e "
-            using Euphemia
-            println(\"🔗 Testing database connection...\")
-            try
-              result = Euphemia.sql2df(\"SELECT 1 as test\")
-              println(\"✅ Database connection successful\")
-            catch e
-              println(\"❌ Database connection failed: \$e\")
-              exit(1)
-            end
-          "
+          # Copies every row this job reads (inputs for the 7 UTC-day clears, the forecast/score slices the
+          # no-clobber checks, the scorer and the exporters read back) into $RUN_DIR via DuckDB's postgres
+          # extension; fails the job (no partial file) on any error. Per-table rows/seconds: $RUN_DIR/fill.json.
+          julia --project=. bin/fill_run_duckdb.jl --profile daily-forecast --out "$RUN_DIR"
 
       - name: Generate daily forecasts
         env:
-          ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
+          # fill → run → transfer (owner rule 2026-11-23): reads only the run-local DuckDB, writes only its
+          # results file; no Postgres credentials in this step.
+          EUPHEMIA_DATA_STORE: duckdb
+          EUPHEMIA_DUCKDB_PATH: ${{ env.RUN_DIR }}/inputs.duckdb
+          EUPHEMIA_DUCKDB_READONLY: "true"
+          EUPHEMIA_RESULTS_DB: ${{ env.RUN_DIR }}/results.duckdb
+          EUPHEMIA_RESULTS_WRITABLE: "true"
         run: |
           if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ github.event.inputs.pregate }}" = "true" ]; then
             # PRE-GATE 7-lead run: weather (ex-ante) track, ALL leads, before the
@@ -174,14 +177,37 @@ jobs:
       - name: Score realized forecasts
         if: ${{ !cancelled() }}
         env:
-          ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
+          # fill → run → transfer (owner rule 2026-11-23): reads only the run-local DuckDB, writes only its
+          # results file; no Postgres credentials in this step.
+          EUPHEMIA_DATA_STORE: duckdb
+          EUPHEMIA_DUCKDB_PATH: ${{ env.RUN_DIR }}/inputs.duckdb
+          EUPHEMIA_DUCKDB_READONLY: "true"
+          EUPHEMIA_RESULTS_DB: ${{ env.RUN_DIR }}/results.duckdb
+          EUPHEMIA_RESULTS_WRITABLE: "true"
         run: |
           julia --project=. bin/score_forecasts.jl
+
+      # The job's only Postgres write: replays the forecast slices, cv32 corrections and scores this job wrote
+      # into results.duckdb, in ONE Postgres transaction (guards and the retro plan re-checked on Postgres;
+      # idempotent on a re-run). Runs whenever anything may have landed, like the scoring/export steps.
+      - name: Transfer results to Postgres
+        if: ${{ !cancelled() }}
+        env:
+          ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
+        run: |
+          if [ -f "$RUN_DIR/results.duckdb" ]; then
+            julia --project=. bin/transfer_run_results.jl --results-db "$RUN_DIR/results.duckdb"
+          else
+            echo "::warning::no run-local results DuckDB (the fill failed) — nothing to transfer"
+          fi
 
       - name: Export forecast JSON
         if: ${{ !cancelled() }}
         env:
-          ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
+          EUPHEMIA_DATA_STORE: duckdb   # reads the run-local DuckDB only (fill → run → transfer)
+          EUPHEMIA_DUCKDB_PATH: ${{ env.RUN_DIR }}/inputs.duckdb
+          EUPHEMIA_DUCKDB_READONLY: "true"
+          EUPHEMIA_RESULTS_DB: ${{ env.RUN_DIR }}/results.duckdb
           # naive baselines on the scoreboard (#431); repo variable EXPORT_NAIVE=0 switches them off
           EXPORT_NAIVE: ${{ vars.EXPORT_NAIVE || '1' }}
         run: |
@@ -190,7 +216,10 @@ jobs:
       - name: Publish web data plane to R2 (parquet for api.philokalia.ai)
         if: ${{ !cancelled() }}
         env:
-          ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
+          EUPHEMIA_DATA_STORE: duckdb   # reads the run-local DuckDB only (fill → run → transfer)
+          EUPHEMIA_DUCKDB_PATH: ${{ env.RUN_DIR }}/inputs.duckdb
+          EUPHEMIA_DUCKDB_READONLY: "true"
+          EUPHEMIA_RESULTS_DB: ${{ env.RUN_DIR }}/results.duckdb
           EXPORT_NAIVE: ${{ vars.EXPORT_NAIVE || '1' }}   # naive baselines (#431)
           EXTRACT_S3_ENDPOINT: ${{ secrets.EXTRACT_S3_ENDPOINT }}
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -258,6 +287,7 @@ jobs:
       TSFM_ARM: timestral-209m      # pluggable: any arm registered in bin/emit_tsfm_overlay.py ARMS
       OVERLAY_MODE: pregate0630
       TSFM_THREADS: "4"
+      RUN_DIR: ${{ github.workspace }}/run-local
     steps:
       - name: Checkout repository
         timeout-minutes: 5
@@ -314,10 +344,21 @@ jobs:
             Pkg.precompile()
           "
 
-      - name: Export forecast JSON (with overlay)
+      # Fill AFTER the overlay write, so the exporters read the new vintage from DuckDB (export profile).
+      - name: Fill run-local DuckDB for the exporters
         timeout-minutes: 15
         env:
           ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
+        run: |
+          julia --project=. bin/fill_run_duckdb.jl --profile export --out "$RUN_DIR"
+
+      - name: Export forecast JSON (with overlay)
+        timeout-minutes: 15
+        env:
+          EUPHEMIA_DATA_STORE: duckdb   # reads the run-local DuckDB only (fill → run → transfer)
+          EUPHEMIA_DUCKDB_PATH: ${{ env.RUN_DIR }}/inputs.duckdb
+          EUPHEMIA_DUCKDB_READONLY: "true"
+          EUPHEMIA_RESULTS_DB: ${{ env.RUN_DIR }}/results.duckdb
           EXPORT_NAIVE: ${{ vars.EXPORT_NAIVE || '1' }}   # naive baselines (#431)
         run: |
           julia --project=. bin/export_forecast_json.jl
@@ -325,7 +366,10 @@ jobs:
       - name: Re-publish web data plane to R2 (with overlay)
         timeout-minutes: 20
         env:
-          ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
+          EUPHEMIA_DATA_STORE: duckdb   # reads the run-local DuckDB only (fill → run → transfer)
+          EUPHEMIA_DUCKDB_PATH: ${{ env.RUN_DIR }}/inputs.duckdb
+          EUPHEMIA_DUCKDB_READONLY: "true"
+          EUPHEMIA_RESULTS_DB: ${{ env.RUN_DIR }}/results.duckdb
           EXPORT_NAIVE: ${{ vars.EXPORT_NAIVE || '1' }}   # naive baselines (#431)
           EXTRACT_S3_ENDPOINT: ${{ secrets.EXTRACT_S3_ENDPOINT }}
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
