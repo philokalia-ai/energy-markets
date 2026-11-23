@@ -136,3 +136,16 @@ end
         try; E.RESULTS_DB_PATH[] = prev[5]; E.configure_data_store!(backend=prev[1], duckdb_path=prev[2], read_only=prev[3], results_writable=prev[4]); catch; end
     end
 end
+
+@testset "rescore --start auto resolves the first forecast market date (offline source)" begin
+    dir = mktempdir(); src = joinpath(dir, "src.duckdb")
+    let db = DuckDB.DB(src), con = DBInterface.connect(db)
+        DBInterface.execute(con, "CREATE SCHEMA simulations")
+        DBInterface.execute(con, "CREATE TABLE simulations.forecast_prices (market_date DATE, bidding_zone VARCHAR)")
+        DBInterface.execute(con, "INSERT INTO simulations.forecast_prices VALUES (DATE '2025-03-01', 'GR'), (DATE '2024-11-20', 'BG'), (DATE '2025-01-05', 'GR')")
+        DBInterface.close!(con); DuckDB.close(db)
+    end
+    @test Euphemia.resolve_rescore_start(; zones=["GR"], source=:duckdb, source_path=src) == Date(2025, 1, 5)
+    @test Euphemia.resolve_rescore_start(; zones=["GR", "BG"], source=:duckdb, source_path=src) == Date(2024, 11, 20)
+    @test_throws ErrorException Euphemia.resolve_rescore_start(; zones=["FR"], source=:duckdb, source_path=src)
+end

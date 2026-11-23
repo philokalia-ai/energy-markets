@@ -2,7 +2,7 @@
 # Julia; Julia never queries Postgres except here and in the results transfer).
 #
 #   julia --project=. bin/fill_run_duckdb.jl --profile daily-forecast|record|export|retro|rescore --out DIR \
-#         [--start YYYY-MM-DD --end YYYY-MM-DD | --days D1,D2,...] [--as-of YYYY-MM-DD] [--zones A,B,...] \
+#         [--start YYYY-MM-DD|auto --end YYYY-MM-DD | --days D1,D2,...] [--as-of YYYY-MM-DD] [--zones A,B,...] \
 #         [--source duckdb:<path>] [--seed-results false]
 # Env: ENERGY_CONN_STR; ZONES (default zone list, else the 39-zone footprint); INPUTS_BACK_DAYS
 # (export profile: export_prediction_inputs.jl's look-back on the RES/load/generation tables).
@@ -65,7 +65,8 @@ function main(argv)
     zones = haskey(a, "zones") ? String.(split(a["zones"], ",")) :
             (!isempty(strip(get(ENV, "ZONES", ""))) ? String.(strip.(split(ENV["ZONES"], ","))) : FOOTPRINT)
     asof = haskey(a, "as-of") ? Date(a["as-of"]) : Date(Dates.now(Dates.UTC))
-    start = haskey(a, "start") ? Date(a["start"]) : nothing
+    start_auto = get(a, "start", "") == "auto"
+    start = (haskey(a, "start") && !start_auto) ? Date(a["start"]) : nothing
     stop = haskey(a, "end") ? Date(a["end"]) : nothing
     src = get(a, "source", "postgres")
     source, source_path = src == "postgres" ? (:postgres, "") :
@@ -73,6 +74,11 @@ function main(argv)
     conn = source === :postgres ? get(ENV, "ENERGY_CONN_STR", "") : ""
     source === :postgres && isempty(conn) && error("ENERGY_CONN_STR is not set")
 
+    if start_auto
+        profile === :rescore || error("--start auto is only for --profile rescore")
+        start = Euphemia.resolve_rescore_start(; zones=zones, conn_str=conn, source=source, source_path=source_path)
+        println("FILL rescore --start auto resolved to $start (first forecast_prices market_date for the zones)")
+    end
     ibd = parse(Int, get(ENV, "INPUTS_BACK_DAYS", "0"))
     dl = haskey(a, "days") ? Date.(split(a["days"], ",")) : nothing
     p = Euphemia.fill_profile(profile; start=start, stop=stop, asof=asof, zones=zones, inputs_back_days=ibd,
@@ -124,7 +130,8 @@ function main(argv)
     Euphemia.DBInterface.close!(wcon); Euphemia.DuckDB.close(wdb)
     # Peak resident memory of this process (kB) from the kernel: the runner image has no /usr/bin/time.
     vmhwm = try parse(Int, match(r"VmHWM:\s*(\d+)", read("/proc/self/status", String))[1]) catch; -1 end
-    info = Dict("profile" => string(profile), "days" => string.(p.days), "zones" => zones,
+    info = Dict("profile" => string(profile), "start" => start === nothing ? nothing : string(start),
+                "end" => stop === nothing ? nothing : string(stop), "days" => string.(p.days), "zones" => zones,
                 "process_wall_s" => round(time() - _T_PROCESS0, digits=2), "peak_rss_kb" => vmhwm,
                 "source" => string(source), "inputs_seconds" => round(t_inputs, digits=2),
                 "results_seconds" => round(t_results, digits=2),

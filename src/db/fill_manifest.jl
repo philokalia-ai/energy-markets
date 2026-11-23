@@ -429,3 +429,32 @@ function seed_run_results!(con, seeds)
     end
     return out
 end
+
+"""
+    resolve_rescore_start(; zones, conn_str="", source=:postgres, source_path="") -> Date
+
+`--start auto` for the rescore profile (rescore-hourly's empty start = full history): the
+first market_date of simulations.forecast_prices for `zones`, resolved inside the fill step
+through the same attach (the workflow never reads Postgres outside the fill).
+"""
+function resolve_rescore_start(; zones::Vector{String}, conn_str::AbstractString="",
+                               source::Symbol=:postgres, source_path::AbstractString="")
+    db = DuckDB.DB()
+    con = DBInterface.connect(db)
+    try
+        if source === :postgres
+            attach_postgres!(con, conn_str; alias="pg", read_only=true)
+        else
+            DBInterface.execute(con, "ATTACH $(_pg_str(source_path)) AS src (READ_ONLY)")
+        end
+        _FILL_SOURCE[] = source
+        r = _pg_rows(con, "SELECT MIN(market_date) AS d FROM simulations.forecast_prices " *
+                          "WHERE bidding_zone = ANY($(_pg_zones(zones)))")
+        (isempty(r) || ismissing(r[1].d)) && error("rescore --start auto: no forecast_prices rows for these zones")
+        return Date(r[1].d)
+    finally
+        _FILL_SOURCE[] = :postgres
+        DBInterface.close!(con)
+        DuckDB.close(db)
+    end
+end
