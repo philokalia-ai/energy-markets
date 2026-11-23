@@ -72,6 +72,16 @@ class ResidualDemand:
         """Inverse demand sup{p : D(p) >= q}."""
         return inverse_nonincreasing(self.p, self.d, q)
 
+    def area(self, u):
+        """∫_0^u P(x) dx (u < 0: minus the integral from u to 0) — the welfare a price-taking injection u adds when
+        every MW is cleared at its own marginal price (competitive dispatch)."""
+        if not hasattr(self, "_aq"):
+            qs = np.linspace(min(self.d.min(), 0.0), max(self.d.max(), 0.0), 4001)
+            ps = self.P(qs)
+            cum = np.concatenate([[0.0], np.cumsum(0.5 * (ps[1:] + ps[:-1]) * np.diff(qs))])
+            self._aq, self._ac = qs, cum - np.interp(0.0, qs, cum)
+        return np.interp(u, self._aq, self._ac)
+
     def shifted_price(self, e):
         """Scenario curve P_e(q) = P(q) + e, i.e. D_e(p) = D(p - e), on the same price grid."""
         return ResidualDemand(self.p, np.interp(self.p - e, self.p, self.d))
@@ -240,13 +250,16 @@ def withhold_offer(p_grid, cost: StepCost, q):
 
 
 def energy_dp(rds, e0, e_cap, p_max_dis, p_max_ch, eta, value_end, n_e=121, n_u=None, impact=True, var_cost=0.0,
-              de=None, pt_prices=None):
+              de=None, pt_prices=None, objective="revenue"):
     """Choose hourly net injection u_t (discharge > 0, charge < 0) to maximise
          sum_t [P_t(u_t) u_t - var_cost * max(u_t,0)] + value_end * e_T
     with storage e_{t+1} = e_t - u_t (discharge) / e_t - eta * u_t (charge, u_t < 0), 0 <= e <= e_cap.
     `rds[t]` = company residual demand of hour t (ResidualDemand). impact=False -> price-taker at P_t(0).
     Hydro: p_max_ch = 0, e0 = budget, value_end = water value. Returns (u, e_path, objective).
     impact=False: price-taker at pt_prices[t] (default P_t(0)). de: energy grid step (overrides n_e).
+    objective="welfare" (with impact): maximise Σ ∫_0^{u_t} P_t — the competitive outcome of legs priced at opportunity
+    cost and cleared by the market (the schedule is then price-taker optimal at the prices it causes); "revenue" =
+    Σ P_t(u_t) u_t, the impact-aware (volume-reducing) schedule.
     DP on an energy grid; u restricted to moves between grid points (exact on the grid).
     """
     T = len(rds)
@@ -265,8 +278,12 @@ def energy_dp(rds, e0, e_cap, p_max_dis, p_max_ch, eta, value_end, n_e=121, n_u=
             dE = E[a] - E  # >0 discharge energy, <0 charge energy (stored)
             u = np.where(dE >= 0, dE, dE / eta)  # grid injection (charge draws more than stored)
             ok = (u <= p_max_dis + 1e-9) & (-u <= p_max_ch + 1e-9)
-            pr = rd.P(u) if impact else np.full_like(u, rd.P(0.0) if pt_prices is None else pt_prices[t])
-            val = pr * u - var_cost * np.maximum(u, 0.0) + Vn
+            if impact and objective == "welfare":   # competitive dispatch: every MW at its own marginal price
+                gain = rd.area(u)
+            else:
+                pr = rd.P(u) if impact else np.full_like(u, rd.P(0.0) if pt_prices is None else pt_prices[t])
+                gain = pr * u
+            val = gain - var_cost * np.maximum(u, 0.0) + Vn
             val = np.where(ok, val, -1e18)
             b = int(np.argmax(val))
             V[a] = val[b]

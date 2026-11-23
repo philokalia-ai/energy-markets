@@ -136,6 +136,21 @@ def test_energy_dp_storage():
     assert objs >= pt_on_steep - 1e-6 and abs(us).max() < abs(u).max(), (objs, pt_on_steep, us.round(1))  # spreads volume
 
 
+def test_energy_dp_welfare_is_competitive():
+    """Competitive (welfare) schedule on steep curves: price-taker optimal at the prices it causes (no profitable
+    price-taking deviation), trades more than the revenue-maximising (impact-aware) schedule."""
+    T = 24
+    base = np.where((np.arange(T) >= 17) & (np.arange(T) <= 20), 180.0, 60.0)
+    base[2:6] = 20.0
+    rds = [linear_rd(bp, 0.4) for bp in base]
+    uw, _, _ = R.energy_dp(rds, 0.0, 200.0, 100.0, 100.0, 0.88, 0.0, de=12.5, objective="welfare")
+    ur, _, _ = R.energy_dp(rds, 0.0, 200.0, 100.0, 100.0, 0.88, 0.0, de=12.5)
+    assert np.abs(uw).sum() >= np.abs(ur).sum() - 1e-9
+    pw = np.array([r.P(x) for r, x in zip(rds, uw)])
+    upt, _, vpt = R.energy_dp(rds, 0.0, 200.0, 100.0, 100.0, 0.88, 0.0, de=12.5, impact=False, pt_prices=pw)
+    assert vpt - float((pw * uw).sum()) <= 0.02 * abs(vpt) + 50.0, (vpt, float((pw * uw).sum()))
+
+
 def test_bootstrap():
     m, lo, hi = R.block_bootstrap_ci(np.arange(12.0))
     assert lo < m < hi
