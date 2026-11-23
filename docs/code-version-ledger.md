@@ -416,85 +416,141 @@ adoption date: the scoreboard's since-freeze window is cv ≥ 45 from 2026-11-21
   v45 raises them (Nordic north development +3.35); the extract lacks ES D-1
   wind/solar on 2026-11-06..11, inflating Iberia on those days in every arm.
 
-## v46 — Nordic water value (cv46 P1); the four deferred cv45 knobs deleted (November 2026)
+## v46 — Nordic water value (P1) + the 15-minute clear by default; the four deferred cv45 knobs deleted (November 2026)
 
-**Why.** Under v45, NO4/SE1/SE2/FI price the storable reservoir water at a
-fraction of gas SRMC: 0.35 + 0.65·m, with m = max(dryness, drawdown). At full
-reservoirs that gives a floor of about 0.21 × gas SRMC, but 62–78 % of the actual
-NO4/SE1/SE2 hours clear below it. The cv46 physics programme
-(`reports/cv46-physics.md`) tested eight components on 48 pre-frozen decision
-days. The owner shipped P1 only (2026-11-23).
+The owner decided on 2026-11-23 that cv46 ships two changes together as one version: one `code_version` bump, one
+restart of the out-of-sample record, and one backfill. The two are proven together as the P1+G arm.
 
-**Change.** P1 is on unconditionally (no env switch; git history is the
-rollback). It lives in `src/merit_order/cv46_nordic_wv.jl` and is hooked in at
-`book_build.jl` (the `:reservoir_opportunity` branch) and
-`multi_zone_books.jl` (the pass-2 rebuild set).
-- **Scope.** Zones on the `:reservoir_opportunity` hydro model with no
-  opportunity anchor: NO4, SE1, SE2, FI. DK1/DK2 match the scope but carry no
-  water-value units. Anchored zones are untouched in both passes.
-- **Export headroom h.** The share of the 336 hours in D-15..D-2 where net
-  physical export is below its 364-day p95, after subtracting today's
-  transmission-outage cut (`Network.tx_outage_caps`). A net importer
-  (p95 ≤ 50 MW) gets h = 1.
-- **Unavoidable release U** (reservoir units only) is offered at the spill price.
-  U = max(lagged p05 output over D-8..D-2, the weekly-balance overflow from
-  ISO weeks ≤ w−2), capped by the unit quantity, net of spill and of
-  dropped-border exports.
-- **Storable water.** cap = gas·shape, B = clamp(h·X + (1−h)·p_spill, p_spill, cap),
-  wv = B + m·(cap − B).
-  - Pass 1: X = 0.35·gas·shape. At h = 1 this reproduces v45 bit for bit.
-  - Pass 2: X = the reachable displaced supply, a weighted mean of pass-1
-    model prices (own zone weighted by residual load, each export
-    counterparty by its outage-capped p95 capability). No settled price
+**Why.**
+- **P1.** Under v45, NO4/SE1/SE2/FI price the storable reservoir water at a fraction of gas SRMC: 0.35 + 0.65·m,
+  with m = max(dryness, drawdown). With full reservoirs that gives a floor of about 0.21 × gas SRMC. Yet 62–78 % of
+  the actual NO4/SE1/SE2 hours clear below that floor. The cv46 physics programme (`reports/cv46-physics.md`) tested
+  eight components on 48 pre-frozen decision days. P1 is the one that ships.
+- **15-minute clear (G).** SDAC has cleared 96 quarter-hour MTUs per day since 2025-10-01. v45 clears 24 hourly
+  periods. Clearing the day at 15 minutes gives quarter-hour prices and improves the hourly average a little in every
+  region (`reports/cv46-blocks.md`, `reports/perf-96.md` §7–§8).
+
+**Change: P1** (`src/merit_order/cv46_nordic_wv.jl`). It is on unconditionally, with no env switch: git history is
+the rollback. The hooks are in `book_build.jl` (the `:reservoir_opportunity` branch) and `multi_zone_books.jl` (the
+pass-2 rebuild set).
+- **Scope.** Zones on the `:reservoir_opportunity` hydro model with no opportunity anchor: NO4, SE1, SE2, FI.
+  - DK1/DK2 match the scope but carry no water-value units.
+  - Anchored zones are untouched in both passes.
+- **Export headroom h.** The share of the 336 hours in D-15..D-2 in which net physical export is below its 364-day
+  p95, after subtracting today's transmission-outage cut (`Network.tx_outage_caps`). A net importer (p95 ≤ 50 MW)
+  gets h = 1.
+- **Unavoidable release U** (reservoir units only), offered at the spill price.
+  - U = max(lagged p05 output over D-8..D-2, the weekly-balance overflow from ISO weeks ≤ w−2).
+  - It is capped by the unit quantity and taken net of spill and of dropped-border exports.
+- **Storable water.** cap = gas·shape, B = clamp(h·X + (1−h)·p_spill, p_spill, cap), wv = B + m·(cap − B).
+  - **Pass 1:** X = 0.35·gas·shape. At h = 1 this reproduces v45 bit for bit.
+  - **Pass 2:** X = the reachable displaced supply. It is a weighted mean of pass-1 model prices: the own zone
+    weighted by residual load, and each export counterparty by its outage-capped p95 capability. No settled price
     enters.
   - The P1 zones join the pass-2 rebuild set.
-- Spill, the daily budgets and the drawdown/dryness lift are unchanged.
-- **Constants** come from the existing book (0.35 / 0.65, base/span, gas SRMC)
-  or are declared window lengths and quantiles, each with its source in the
-  file. Nothing is fitted to prices.
+- **Resolution.** P1's inputs are hourly (h, U, the weekly balance); each quarter uses its hour's values. The pass-2
+  X is computed per clearing slot from that slot's pass-1 prices, so at 15 minutes each quarter carries its own X.
+  Both passes therefore clear on the same grid.
+- **Unchanged:** spill, the daily budgets and the drawdown/dryness lift.
+- **Constants** come from the existing book (0.35 / 0.65, base/span, gas SRMC) or are declared window lengths and
+  quantiles, each with its source in the file. Nothing is fitted to prices.
 
-**Deleted** (deferred since v45, off unless set): `EUPHEMIA_CV45_PUMP`,
-`EUPHEMIA_CV45_RESERVOIR`, `EUPHEMIA_CV45_HYDRO_CAP` and
-`EUPHEMIA_CV45_ELASTIC`, with their code paths, `CV45_KNOBS` entries (and so
-the `PipelinedBackfill` forwarding) and tests.
-- The `reservoir` complex family itself (cv44, opt-in through
-  `EUPHEMIA_COMPLEX_ORDERS=ps,reservoir`) stays.
-- The shipped cv45 knobs (GAS_HHV, GB_HHV, AVAIL, AVAIL_INMERIT) and
-  `EUPHEMIA_CV45` are unchanged.
+**Change: 15-minute clear (G).** Every price writer clears each delivery day at
+`clear_resolution_minutes = 15`, i.e. 96 periods; v45 used 60. The decomposed per-period clear is unchanged, as is the
+fixed-pattern LP certificate (on main since #470). There is no joint-day model.
+- **Configuration.** `CLEAR_RESOLUTION_MINUTES = 15` (`src/db/postgres_core.jl`, next to the code version) is the
+  default for every price writer:
+  - `run_pipelined_backfill` (config field `clear_resolution_minutes`, passed to both book stages, `mz_build_books`
+    and `mz_rebuild_anchored`);
+  - `run_multi_zone_market_clearing` (both passes), so `bin/multi_zone_main.jl` / `generate-multi-zone-prices.yml`
+    write 96-period days too;
+  - `bin/daily_forecast.jl`. It keeps every slot (`slot_prices` replaces `hourly_prices`) and stitches the Athens
+    market day on the quarter grid (96, or 92/100 on DST days).
+  - There is no env. A resolution that does not divide 60 is refused. `clear_resolution_minutes=60` gives the
+    hourly clear for research.
+  - Hourly inputs are replicated onto the quarters, not divided.
+- **Flat intra-hour storage.** At a resolution below 60 minutes, each storage family's MW is held constant within
+  the hour (`src/mpcc/complex_orders.jl`). It was the opt-in `EUPHEMIA_PS_INTRAHOUR=flat`; it is now always on and
+  the env is gone.
+  - Without it, the storage LP is degenerate across the quarters of an hour where inputs are hourly-replicated, and
+    elsewhere it swings a family 0 ↔ Pmax on tiny price differences.
+  - On hourly books it has no effect.
+- **Truncation gate.** The pipeline saves a cleared day only if it has a full UTC day of periods at the resolution:
+  `truncation_min_slots(min_price_periods, res) = max(min_price_periods, 1440 ÷ res)`, i.e. 96 at 15 min.
+  - `min_price_periods` keeps its default of 24, and 0 disables the gate.
+  - `run_multi_zone_market_clearing` refuses to save below 1440 ÷ res by default.
+  - Resume completeness is not changed here. It is decided per saved day's `resolution_code` by the perf-96 PR D2
+    (#476).
+- **Rows.** `save_energy_prices` writes 96 rows per zone-day as `15M`.
+  - Scoring against hourly targets averages the quarters to the hour first.
+  - Pre-MTU days (before 2025-10-01) are cleared at 15 minutes too but scored hourly.
+  - The schema, reader, exporter, site and scoring changes are cb-orch's perf-96 PRs. They merge before this one, so
+    production never writes quarter rows that the site cannot show.
+  - Merge order: D1 #475 → D2 #476 → D3 #474 → D4 #473 → cv46.
+- **Deleted as dead:** the `EUPHEMIA_PS_INTRAHOUR` branch and `hourly_prices` (`bin/forecast_common.jl`).
+  `stitch_market_day` now takes `res_minutes`, and its `missing_hours` field is renamed `missing_slots`.
+- **Cost** (per day, record mode): 54 s warm, 110 s cold. That is about +3 min per forecast run. Peak RSS is about
+  3–6 GiB, so the forecast runner's memory request rises to ≥ 6 GiB (perf-96 PR).
+
+**Deleted** (deferred since v45, off unless set): `EUPHEMIA_CV45_PUMP`, `EUPHEMIA_CV45_RESERVOIR`,
+`EUPHEMIA_CV45_HYDRO_CAP` and `EUPHEMIA_CV45_ELASTIC`. Their code paths, `CV45_KNOBS` entries (and with them the
+`PipelinedBackfill` forwarding) and tests are gone.
+- The `reservoir` complex family itself (cv44, opt-in through `EUPHEMIA_COMPLEX_ORDERS=ps,reservoir`) stays.
+- The shipped cv45 knobs (GAS_HHV, GB_HHV, AVAIL, AVAIL_INMERIT) and `EUPHEMIA_CV45` are unchanged.
 - A stale deleted-knob env var is now ignored.
-- Evidence for keeping them off: alone and in the stack, RESERVOIR, HYDRO_CAP
-  and ELASTIC are ≈ 0 (LOO −0.014 / −0.002 / −0.059), and PUMP harms
-  (+0.53 alone; dropped by the LOO step, −0.63).
+- **Why they stay off:** alone and in the stack, RESERVOIR, HYDRO_CAP and ELASTIC are ≈ 0 (LOO −0.014 / −0.002 /
+  −0.059), and PUMP harms (+0.53 alone; the LOO step that drops it gains −0.63).
 
-**Evidence (48 decision days, `cv46-blocks/days.txt`, 44,726 paired cells vs
-SDAC, scorer v1.4.1, arm A = v45 default, MAE 25.22).**
-- **P1 alone (S-P1): ΔMAE −0.72 [90 % −1.01, −0.44]**, passing every clause of
-  the pre-registered rule. Bias −1.0 → −2.1, shape −0.05, pre-MTU −1.64.
-- Worst region is Italy at +0.03. Nordic north −3.87, Nordic south −0.68,
-  Baltics −0.95. All days complete, no new cap cells.
-- In the 8-component stack, removing P1 costs +0.68 [+0.39, +0.99]: NO4 −6.1,
-  SE1 −5.2, SE2 −3.8, FI −2.7 (`cv46-physics/cp-nordic/REPORT.md`).
-- Hours below the old 0.21 × SRMC floor (NO4/SE1/SE2): actual 78/62/64 %,
-  v45 2–3 %, v46 36/27/21 %. When v46 prices below the floor, the actual is
-  also below it 95 % of the time.
-- **Known weak spot.** It is flat in 2026H1 (+0.09 on NO4+SE1+SE2): with h ≈ 1,
-  the pass-2 X inherits the pass-1 spring over-pricing and has no
-  snowmelt/inflow signal. That is the follow-up.
-- **Combined check (Timestral + physics, P1 alone, 2026-09-01..11-14):** see
-  `reports/cv46-physics.md` §5b.
+**Evidence.** All runs below used scorer v1.4.1 and a day-block bootstrap (seed 4646, 10k draws, 90 % intervals).
+Quarter rows were averaged to the hour. Arm A = the v45 default.
+- **48 decision days** (`cv46-blocks/days.txt`, 44,726 paired cells vs SDAC, A MAE 25.22):
 
-**Freeze rule.** P1 changes price-informed behaviour (the Nordic water
-values), so v46 restarts the out-of-sample clock from its adoption date. The
-scoreboard's since-freeze window is cv ≥ 46 from `FREEZE_DATE` in
-`bin/scoreboard_windows.jl`, set to the merge day; the site label in
-`web/app.js` and `web/about.html` follows.
+  | arm | ΔMAE vs A [90 %] | note |
+  |---|---|---|
+  | P1 alone (S-P1, hourly) | −0.72 [−1.01, −0.44] | passes every rule clause; Nordic north −3.87, Nordic south −0.68, Baltics −0.95, worst Italy +0.03 |
+  | G alone (96 steps) | −0.21 [−0.26, −0.16] | every region improves (Iberia −0.69); shape −0.29; fails only pooled ≤ −0.50 |
+  | **P1+G (shipped)** | **−0.935 [−1.24, −0.64]** | passes all 7 rule clauses; every region better than A. The parts add up: S-P1 −0.720 + G −0.210 = −0.930, so the interaction is −0.005 |
 
-**DuckDB rule.** P1 adds no direct-Postgres code. Its reads
-(`entsoe.physical_flows`, `aggregated_hydro_storage_filling_rate`,
-`aggregated_generation_per_type`, and the existing `tx_outage_caps`) go through
-`sql2df`, which serves DuckDB or Postgres per `DATA_STORE[]`. The research runs
-read the DuckDB extract. Production reads Postgres until the daily workflows run
-on a pre-gate DuckDB, like every existing reader.
+- **Fresh 44 days** (`perf-96/days.txt`, frozen 2026-11-23T09:27Z, 41,160 cells, no overlap with the 48):
+
+  | arm | ΔMAE vs A [90 %] | note |
+  |---|---|---|
+  | G alone | −0.27 [−0.32, −0.22] | all 7 regions improve; shape −0.34; pre-MTU −0.15 |
+  | **P1+G** | **−1.11 [−1.43, −0.81]** | passes all 7 rule clauses; −0.84 beyond G alone |
+
+- **P1 diagnostics (48 days).**
+  - In the 8-component stack, removing P1 costs +0.68 [+0.39, +0.99]: NO4 −6.1, SE1 −5.2, SE2 −3.8, FI −2.7
+    (`cv46-physics/cp-nordic/REPORT.md`).
+  - Share of hours below the old 0.21 × SRMC floor (NO4/SE1/SE2): actual 78/62/64 %, v45 2–3 %, v46 36/27/21 %.
+  - When v46 prices below the floor, the actual is also below it 95 % of the time.
+- **Combined check** (Timestral + physics from 2026-07-01, scored 2026-09-01..11-14 vs combined A):
+  - **P1 hourly:** MAE −0.151 [−0.254, −0.054], rMAE 0.5656 → 0.5616.
+  - **P1+G at 96 steps** (Timestral on the hourly mean of the quarters), together with the 96-step record backfill:
+    pending, added before merge.
+- **Identity** (10-19 and 11-13):
+  - The PR with no env equals the P1+G arm at research b85721c: 7,488/7,488 cells, same table bytes.
+  - With P1 forced off, it equals A.
+  - Warm workers equal cold ones.
+  - Main's per-period path at 15 min with flat storage equals research G: 3744/3744 (cb-joint mq96).
+  - The PR's prices vs the 96-step backfill: pending, added before merge.
+- **Known weak spots.**
+  - P1 is flat in 2026H1 (+0.09 on NO4+SE1+SE2): with h ≈ 1, the pass-2 X inherits the pass-1 spring over-pricing
+    and has no snowmelt/inflow signal. That is the follow-up.
+  - G's gain (about −0.2 to −0.3) is shape, not level, and below the −0.50 bar on its own. It ships on the owner's
+    decision for quarter-hour prices.
+
+**Freeze rule.** P1 changes price-informed behaviour (the Nordic water values) and G changes the clearing grid, so v46
+restarts the out-of-sample clock from its adoption date.
+- The scoreboard's since-freeze window is cv ≥ 46 from `FREEZE_DATE` in `bin/scoreboard_windows.jl`, set to the merge
+  day. The site label in `web/app.js` and `web/about.html` follows.
+- The record is re-backfilled at 96 steps with P1+G, 2024-05-23..2026-11-14 (pending, added before merge).
+
+**DuckDB rule.** v46 adds no direct-Postgres code.
+- P1's reads (`entsoe.physical_flows`, `aggregated_hydro_storage_filling_rate`, `aggregated_generation_per_type`,
+  and the existing `tx_outage_caps`) go through `sql2df`, which serves DuckDB or Postgres according to `DATA_STORE[]`.
+- G adds no reads and changes no query.
+- The research runs read the DuckDB extract. Production reads Postgres until the daily workflows run on a pre-gate
+  DuckDB, like every existing reader.
 
 ## Operations and scoring notes (not code versions)
 
