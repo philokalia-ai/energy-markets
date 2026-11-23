@@ -43,44 +43,46 @@ net-import lags/analogues); aggregated generation 400 (365-day hydro availabilit
 7-day stale override, 7-day feed probe) plus the stale-feed extension.
 """
 const FILL_SPECS = FillSpec[
-    _fs("entsoe", "day_ahead_total_load_forecast", :window; zone_pred=_ZONE_AREA,
+    _fs("entsoe", "day_ahead_total_load_forecast", :window;   # all zones: HOURLY_LOAD_FC_SQL (map weights)
         ts_col="date_time_utc", back=31, ahead=2, sort_by="area_map_code, date_time_utc"),
-    _fs("entsoe", "actual_total_load", :window; zone_pred=_ZONE_AREA,
+    _fs("entsoe", "actual_total_load", :window;   # all zones: the realized-horizon MAX(date) probes
         ts_col="date_time_utc", back=400, ahead=0, sort_by="area_map_code, date_time_utc"),
     _fs("entsoe", "generation_forecasts_for_wind_and_solar", :window; zone_pred=_ZONE_AREA,
         ts_col="date_time_utc", back=31, ahead=2, sort_by="area_map_code, date_time_utc"),
-    _fs("entsoe", "energy_prices", :window;
-        zone_pred="map_code = ANY(\$ZONES) AND contract_type = 'Day-ahead'",
+    _fs("entsoe", "energy_prices", :window;   # all zones: da_raw_rows / native_q15_actuals read every BZN
+        zone_pred="contract_type = 'Day-ahead'",
         ts_col="date_time_utc", back=31, ahead=1, sort_by="map_code, date_time_utc"),
+    # all borders: _da_ever_borders (all history), the trailing 7-day Day-ahead read and the zone
+    # discovery take every border, so the DA sentinel covers every border too
     _fs("entsoe", "offered_transfer_capacities_implicit", :da_sentinel;
-        zone_pred="(out_map_code = ANY(\$ATCZONES) OR in_map_code = ANY(\$ATCZONES))",
         ts_col="date_time_utc", back=31, ahead=1, sort_by="out_map_code, in_map_code, date_time_utc"),
     _fs("entsoe", "offered_transfer_capacities_explicit", :window;
-        zone_pred="(out_map_code = ANY(\$ATCZONES) OR in_map_code = ANY(\$ATCZONES))",
         ts_col="date_time_utc", back=31, ahead=1, sort_by="out_map_code, in_map_code, date_time_utc"),
     _fs("jao", "max_exchanges", :window; ts_col="date_time_utc", back=31, ahead=1,
         sort_by="ccr, border_from, border_to, date_time_utc"),
     _fs("jao", "hub_net_positions", :window; ts_col="date_time_utc", back=31, ahead=1,
         sort_by="ccr, hub, date_time_utc"),
+    # all pairs: _net_imports_day_relation_at and _fbmc_capability take every BZN–BZN pair, incl. the
+    # ones touching no footprint zone (AL–ME/XK, BA–HR/ME, GE–…, UA_IPS–…, GB–IE_SEM, MK–XK)
     _fs("entsoe", "physical_flows", :window;
-        zone_pred="(regexp_replace(in_area_map_code, '_IPS\$', '') = ANY(\$ZONES) OR regexp_replace(out_area_map_code, '_IPS\$', '') = ANY(\$ZONES))",
         ts_col="date_time_utc", back=400, ahead=0, sort_by="in_area_map_code, out_area_map_code, date_time_utc"),
-    _fs("entsoe", "aggregated_generation_per_type", :window; zone_pred=_ZONE_AREA,
+    _fs("entsoe", "aggregated_generation_per_type", :window;   # all zones: _type_p95_all_zones, _hydro_avail
         ts_col="date_time_utc", back=400, ahead=0, sort_by="area_map_code, production_type, date_time_utc"),
-    _fs("entsoe", "aggregated_hydro_storage_filling_rate", :full; zone_pred=_ZONE_AREA,
+    _fs("entsoe", "aggregated_hydro_storage_filling_rate", :full;   # all zones: the inputs panel
         sort_by="area_map_code, year, week"),
-    _fs("entsoe", "production_and_generation_units", :full; zone_pred=_ZONE_AREA,
+    _fs("entsoe", "production_and_generation_units", :full;   # all zones: installed capacity, units export
         sort_by="area_map_code, generation_unit_code"),
+    # every asset: _day_outages_intervals takes every message overlapping the day
     _fs("entsoe", "unavailability_of_production_and_generation_units", :overlap;
-        zone_pred="asset_code IN ($_UNITS_OF_ZONES UNION SELECT production_unit_code FROM entsoe.production_and_generation_units WHERE area_map_code = ANY(\$ZONES))",
         back=1, ahead=1, sort_by="asset_code, start_outage_utc",
         casts=Dict("start_outage_utc" => "TIMESTAMP", "end_outage_utc" => "TIMESTAMP")),
     _fs("entsoe", "unavailability_in_the_transmission_grid", :overlap; back=1, ahead=1,
         sort_by="out_area_map_code, in_area_map_code, start_outage_utc",
         casts=Dict("start_outage_utc" => "TIMESTAMP", "end_outage_utc" => "TIMESTAMP",
                    "version_publication_timestamp_utc" => "TIMESTAMP")),
+    # every unit: the outage reader's stale-override EXISTS runs per outage asset (every asset); the
+    # stale-feed extension below the window stays per zone
     _fs("entsoe", "actual_generation_output_per_generation_unit", :per_unit;
-        zone_pred="generation_unit_code IN ($_UNITS_OF_ZONES)",
         ts_col="date_time_utc", back=75, ahead=0, sort_by="generation_unit_code, date_time_utc"),
     _fs("yfinance", "ttf_f", :full; sort_by="date"),
     _fs("yfinance", "eua_co2", :full; sort_by="date"),
@@ -92,7 +94,7 @@ const FILL_SPECS = FillSpec[
     # the results DB (single-process jobs read it back there, incl. their own cv32 writes) AND
     # copied into the inputs file for processes that cannot open the results DB (pipelined book
     # workers, EUPHEMIA_RESULTS_READBACK=inputs).
-    _fs("simulations", "unit_firms", :full; zone_pred="zone = ANY(\$ZONES)"),
+    _fs("simulations", "unit_firms", :full),   # all zones: the units export
     # GB_FR_BOOK (FR boundary, every clear) anchors on uka_price(); may be absent in a source
     # (FILL_OPTIONAL: then recorded absent and the reader's EUA fallback applies, as against it)
     _fs("carbon", "uka_price", :full),
@@ -123,11 +125,7 @@ end
 _time_pred(col, wins, tz) = "(" * join(("($col >= $(_pg_day(lo, tz)) AND $col < $(_pg_day(hi, tz)))"
                                         for (lo, hi) in wins), " OR ") * ")"
 
-# The offered-ATC readers' code list (`_create_transfer_capacity_enriched`): the footprint plus the
-# aggregate codes it remaps onto a sub-zone (e.g. `IT` → `IT-NORTH`).
-_atc_codes(zones) = sort(unique(vcat(String.(zones), collect(keys(build_aggregate_remap(zones))))))
-
-_zone_sub(pred, zones) = replace(pred, "\$ATCZONES" => _pg_zones(_atc_codes(zones)), "\$ZONES" => _pg_zones(zones))
+_zone_sub(pred, zones) = replace(pred, "\$ZONES" => _pg_zones(zones))
 
 # A timestamp column as naive UTC, independent of the source session's TimeZone: timestamptz via
 # AT TIME ZONE 'UTC'; text (production's outage start/end) via ::timestamp (no zone involved);
@@ -444,7 +442,7 @@ function fill_profile(profile::Symbol; start::Union{Nothing,Date}=nothing, stop:
         (start === nothing || stop === nothing) && error("fill profile :rescore needs start and stop")
         days = collect(start:Day(1):stop)
         specs = FillSpec[_fs("entsoe", "energy_prices", :window;
-                             zone_pred="map_code = ANY(\$ZONES) AND contract_type = 'Day-ahead'",
+                             zone_pred="contract_type = 'Day-ahead'",   # the scorer's actuals read every zone
                              ts_col="date_time_utc", back=1, ahead=1, sort_by="map_code, date_time_utc")]
         zf = "bidding_zone = ANY($(_pg_zones(zones)))"
         md = "market_date BETWEEN $(_pg_str(string(start)))::date AND $(_pg_str(string(stop)))::date"

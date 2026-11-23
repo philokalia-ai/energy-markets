@@ -294,9 +294,12 @@ function entsoe_table_specs(zones::Vector{String};
 
     zone_where = "area_map_code = ANY(\$1)"
     specs = NamedTuple[]
+    # Tables with an all-zone reader carry every zone (runner 45228277028, the DuckDB fill manifest's
+    # rule): the extract dropped e.g. the flows on pairs touching no footprint zone, which the
+    # net-import reader takes, so extract-based runs differed from production. Only the RES
+    # forecasts (per-zone readers only) keep the zone filter.
 
     push!(specs, mkspec(schema="entsoe", table="day_ahead_total_load_forecast",
-        base_where=zone_where, base_args=Any[zones],
         ts_col="date_time_utc", window=(aux_back, end_excl),
         sort_by="area_map_code, date_time_utc"))
 
@@ -306,7 +309,6 @@ function entsoe_table_specs(zones::Vector{String};
     # aggregate-output tables). Absent this table :v3 degrades gracefully to
     # exact :v2 (warn + calendar climatology).
     push!(specs, mkspec(schema="entsoe", table="actual_total_load",
-        base_where=zone_where, base_args=Any[zones],
         ts_col="date_time_utc", window=(back400, end_excl),
         sort_by="area_map_code, date_time_utc"))
 
@@ -316,16 +318,13 @@ function entsoe_table_specs(zones::Vector{String};
         sort_by="area_map_code, date_time_utc"))
 
     push!(specs, mkspec(schema="entsoe", table="energy_prices",
-        base_where="map_code = ANY(\$1) AND contract_type = 'Day-ahead'",
-        base_args=Any[zones],
+        base_where="contract_type = 'Day-ahead'",
         ts_col="date_time_utc", window=(aux_back, end_excl),
         sort_by="map_code, date_time_utc"))
 
     for tbl in ("offered_transfer_capacities_implicit",
                 "offered_transfer_capacities_explicit")
         push!(specs, mkspec(schema="entsoe", table=tbl,
-            base_where="(out_map_code = ANY(\$1) OR in_map_code = ANY(\$1))",
-            base_args=Any[zones],
             ts_col="date_time_utc", window=(aux_back, end_excl),
             sort_by="out_map_code, in_map_code, date_time_utc"))
     end
@@ -342,34 +341,27 @@ function entsoe_table_specs(zones::Vector{String};
         sort_by="ccr, hub, date_time_utc"))
 
     push!(specs, mkspec(schema="entsoe", table="physical_flows",
-        base_where="(regexp_replace(in_area_map_code, '_IPS\$', '') = ANY(\$1) OR regexp_replace(out_area_map_code, '_IPS\$', '') = ANY(\$1))",
-        base_args=Any[zones],
         ts_col="date_time_utc", window=(aux_back, end_excl),
         sort_by="in_area_map_code, out_area_map_code, date_time_utc"))
 
     push!(specs, mkspec(schema="entsoe", table="aggregated_generation_per_type",
-        base_where=zone_where, base_args=Any[zones],
         ts_col="date_time_utc", window=(back400, end_excl),
         sort_by="area_map_code, production_type, date_time_utc"))
 
     # Weekly + tiny; full history keeps the prior-year reservoir-dryness norm
     # exact. No time column usable for a watermark → wholesale replace.
     push!(specs, mkspec(schema="entsoe", table="aggregated_hydro_storage_filling_rate",
-        base_where=zone_where, base_args=Any[zones],
         sort_by="area_map_code, year, week", refresh=:replace))
 
     # Unit registry: validity rows get UPDATED (not appended) → replace.
     push!(specs, mkspec(schema="entsoe", table="production_and_generation_units",
-        base_where=zone_where, base_args=Any[zones],
         sort_by="area_map_code, generation_unit_code", refresh=:replace))
 
     # Outages overlapping [back400, end_date]: existing records change status /
     # end time, so append-by-watermark would go stale → replace.
-    gen_codes = "SELECT generation_unit_code FROM entsoe.production_and_generation_units WHERE area_map_code = ANY(\$1)"
-    unit_codes = "$gen_codes UNION SELECT production_unit_code FROM entsoe.production_and_generation_units WHERE area_map_code = ANY(\$1)"
     push!(specs, mkspec(schema="entsoe", table="unavailability_of_production_and_generation_units",
-        base_where="asset_code IN ($unit_codes) AND start_outage_utc IS NOT NULL AND end_outage_utc IS NOT NULL AND start_outage_utc::timestamp <= \$2::date::timestamp AND end_outage_utc::timestamp >= \$3::date::timestamp",
-        base_args=Any[zones, end_date, back400],
+        base_where="start_outage_utc IS NOT NULL AND end_outage_utc IS NOT NULL AND start_outage_utc::timestamp <= \$1::date::timestamp AND end_outage_utc::timestamp >= \$2::date::timestamp",
+        base_args=Any[end_date, back400],
         sort_by="asset_code, start_outage_utc",
         casts=Dict("start_outage_utc" => "TIMESTAMP", "end_outage_utc" => "TIMESTAMP"),
         refresh=:replace))
@@ -388,7 +380,6 @@ function entsoe_table_specs(zones::Vector{String};
         refresh=:replace))
 
     push!(specs, mkspec(schema="entsoe", table="actual_generation_output_per_generation_unit",
-        base_where="generation_unit_code IN ($gen_codes)", base_args=Any[zones],
         ts_col="date_time_utc", window=(agen_back, end_excl),
         sort_by="generation_unit_code, date_time_utc"))
 
@@ -441,7 +432,6 @@ end
 function simulations_table_specs(zones::Vector{String})
     return NamedTuple[
         mkspec(schema="simulations", table="unit_firms",
-               base_where="zone = ANY(\$1)", base_args=Any[zones],
                refresh=:replace),
     ]
 end

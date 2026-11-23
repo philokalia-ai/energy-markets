@@ -23,7 +23,9 @@ const NONEEDS = (map_start=nothing, history_start=nothing)   # no forecast histo
     sql, w = E.fill_pg_query(spec("day_ahead_total_load_forecast"), cols, [Date(2026, 1, 10)], ["GR", "BG"])
     @test w == [(Date(2025, 12, 10), Date(2026, 1, 13))]
     @test occursin("\"date_time_utc\" AT TIME ZONE 'UTC' AS \"date_time_utc\"", sql)
-    @test occursin("area_map_code = ANY(ARRAY['GR', 'BG']::text[])", sql)
+    @test !occursin("area_map_code = ANY", sql)          # all zones (HOURLY_LOAD_FC_SQL reads every zone)
+    @test occursin("area_map_code = ANY(ARRAY['GR', 'BG']::text[])",       # the RES forecasts keep the zone filter
+                   E.fill_pg_query(spec("generation_forecasts_for_wind_and_solar"), cols, [Date(2026, 1, 10)], ["GR", "BG"])[1])
     @test occursin("date_time_utc >= ('2025-12-10'::date::timestamp AT TIME ZONE 'UTC')", sql)
     @test occursin("date_time_utc < ('2026-01-13'::date::timestamp AT TIME ZONE 'UTC')", sql)
 
@@ -332,37 +334,43 @@ end
     end
 end
 
-@testset "offered ATC fill covers the readers' code list (footprint + remapped aggregates)" begin
+@testset "all-zone readers: their tables are filled without a zone filter (runner 45228277028)" begin
     E = Euphemia
-    @test E._atc_codes(["FR", "IT-NORTH"]) == ["FR", "IT", "IT-NORTH"]
-    @test E._atc_codes(["FR", "GR"]) == ["FR", "GR"]                  # no representative in the footprint
-    cols = [("date_time_utc", "timestamp with time zone"), ("out_map_code", "text"), ("in_map_code", "text"),
-            ("capacity_mw", "double precision"), ("contract_type", "text")]
-    for t in ("offered_transfer_capacities_explicit", "offered_transfer_capacities_implicit")
-        sql, _ = E.fill_pg_query(only(filter(s -> s.table == t, E.FILL_SPECS)), cols, [Date(2026, 11, 19)], ["FR", "IT-NORTH"])
-        @test occursin("ARRAY['FR', 'IT', 'IT-NORTH']::text[]", sql)
-        @test !occursin("ATCZONES", sql)
+    spec(t) = only(filter(s -> s.table == t, E.FILL_SPECS))
+    cols = [("date_time_utc", "timestamp with time zone"), ("area_map_code", "text"), ("out_map_code", "text"),
+            ("in_map_code", "text"), ("in_area_map_code", "text"), ("out_area_map_code", "text"),
+            ("generation_unit_code", "text"), ("asset_code", "text"), ("start_outage_utc", "text"),
+            ("end_outage_utc", "text"), ("contract_type", "text"), ("zone", "text")]
+    for t in ("physical_flows", "aggregated_generation_per_type", "production_and_generation_units",
+              "unavailability_of_production_and_generation_units", "actual_generation_output_per_generation_unit",
+              "day_ahead_total_load_forecast", "actual_total_load", "aggregated_hydro_storage_filling_rate",
+              "offered_transfer_capacities_implicit", "offered_transfer_capacities_explicit", "unit_firms", "energy_prices")
+        sql, _ = E.fill_pg_query(spec(t), cols, [Date(2026, 11, 19)], ["FR", "GR"])
+        @test !occursin("ARRAY['FR', 'GR']", sql)                 # no zone/unit predicate on the zone list
     end
-    # offline fill: an IT↔ME explicit row (aggregate ↔ non-footprint) is copied, as the reader reads it
+    @test occursin("contract_type = 'Day-ahead'", E.fill_pg_query(spec("energy_prices"), cols, [Date(2026, 11, 19)], ["FR"])[1])
+    # the one per-zone reader set keeps its filter
+    @test occursin("ARRAY['FR', 'GR']", E.fill_pg_query(spec("generation_forecasts_for_wind_and_solar"), cols, [Date(2026, 11, 19)], ["FR", "GR"])[1])
+    # offline fill: flows on pairs touching no footprint zone are copied (the net-import reader takes every pair)
     dir = mktempdir(); src = joinpath(dir, "src.duckdb")
     let db = DuckDB.DB(src), con = DBInterface.connect(db)
         DBInterface.execute(con, "CREATE SCHEMA entsoe")
-        DBInterface.execute(con, "CREATE TABLE entsoe.offered_transfer_capacities_explicit (date_time_utc TIMESTAMP, out_map_code VARCHAR, in_map_code VARCHAR, capacity_mw DOUBLE, contract_type VARCHAR)")
-        for (o, i) in (("IT", "ME"), ("ME", "IT"), ("FR", "IT-NORTH"), ("RS", "ME"))
-            DBInterface.execute(con, "INSERT INTO entsoe.offered_transfer_capacities_explicit VALUES (TIMESTAMP '2026-11-19 10:00:00', '$o', '$i', 500.0, 'Day-ahead')")
+        DBInterface.execute(con, "CREATE TABLE entsoe.physical_flows (date_time_utc TIMESTAMP, in_area_map_code VARCHAR, in_area_type_code VARCHAR, out_area_map_code VARCHAR, out_area_type_code VARCHAR, flow_mw DOUBLE)")
+        for (i, o) in (("AL", "ME"), ("UA_IPS", "MD"), ("GR", "BG"), ("GB", "IE_SEM"))
+            DBInterface.execute(con, "INSERT INTO entsoe.physical_flows VALUES (TIMESTAMP '2026-11-19 10:00:00', '$i', 'BZN', '$o', 'BZN', 100.0)")
         end
         DBInterface.close!(con); DuckDB.close(db)
     end
     fill = joinpath(dir, "inputs.duckdb")
     redirect_stdout(devnull) do
-        E.fill_run_duckdb(fill; days=[Date(2026, 11, 19)], zones=["FR", "IT-NORTH"], source=:duckdb, source_path=src,
-                          specs=[only(filter(s -> s.table == "offered_transfer_capacities_explicit", E.FILL_SPECS))])
+        E.fill_run_duckdb(fill; days=[Date(2026, 11, 19)], zones=["GR", "BG"], source=:duckdb, source_path=src,
+                          specs=[spec("physical_flows")])
     end
-    got = let db = DuckDB.DB(fill; readonly=true), con = DBInterface.connect(db)
-        r = sort([(x.out_map_code, x.in_map_code) for x in DBInterface.execute(con, "SELECT out_map_code, in_map_code FROM entsoe.offered_transfer_capacities_explicit")])
+    n = let db = DuckDB.DB(fill; readonly=true), con = DBInterface.connect(db)
+        r = collect(DBInterface.execute(con, "SELECT count(*) AS n FROM entsoe.physical_flows"))[1].n
         DBInterface.close!(con); DuckDB.close(db); r
     end
-    @test got == [("FR", "IT-NORTH"), ("IT", "ME"), ("ME", "IT")]      # RS↔ME: outside every reader's filter
+    @test n == 4
 end
 
 @testset "env_int: an empty workflow input means unset (review of #472 #1)" begin
