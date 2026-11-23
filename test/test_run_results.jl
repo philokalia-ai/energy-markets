@@ -18,6 +18,12 @@ ENV["EUPHEMIA_DATA_STORE"] = "duckdb"; ENV["EUPHEMIA_DUCKDB_PATH"] = INPUTS
 ENV["EUPHEMIA_DUCKDB_READONLY"] = "true"; ENV["EUPHEMIA_RESULTS_WRITABLE"] = "true"
 ENV["EUPHEMIA_RESULTS_DB"] = RESULTS
 ENV["EUPHEMIA_FORECAST_NO_AUTORUN"] = "1"; ENV["INPUT_MODE"] = "weather"
+using Euphemia
+# a run-local fill (as fill_run_duckdb writes it): arms the strict read guard and the read-back redirect (the
+# writers' read-backs — no-clobber checks, cv32 deltas, the scorer — see results_db, which the fill seeds)
+# (Euphemia's init already opened the store: drop that connection first; the next query reopens it, guard armed)
+lock(() -> Euphemia._duckdb_drop_connection!(), Euphemia._DUCKDB_LOCK)
+Euphemia.mark_run_local_fill!(INPUTS; windows=[("entsoe", "actual_total_load", Date(1900, 1, 1), Date(2999, 12, 31))])
 include(joinpath(@__DIR__, "..", "bin", "daily_forecast.jl"))   # write_forecast!, CV, CLEARING_MODE
 
 R(sql, args=Any[]) = Euphemia._results_exec(sql, args)
