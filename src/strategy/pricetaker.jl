@@ -155,7 +155,7 @@ function settle(a, orders::AbstractVector{<:MarketOrder}, ratio::AbstractVector{
     extra = (starts=0, eod_mwh=0.0)
     if a isa Thermal
         phys, st = _thermal_phys(a, x, dt)
-        cost = a.srmc * sum(phys) * dt + a.startup * st
+        cost = a.srmc * sum(phys) * dt + a.startup * st + a.noload * count(>(0), phys) * dt
         extra = (starts=st, eod_mwh=0.0)
     elseif a isa Storage
         phys, soc = _storage_phys(a, x, dt)

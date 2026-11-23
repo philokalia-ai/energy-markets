@@ -10,7 +10,7 @@ const ZONES = Dict("CCGT" => ["GR", "IT-SOUTH", "DE_LU", "FR", "NO2", "ES"], "CO
     "HYDRO" => ["NO2", "FR", "ES", "IT-SOUTH"], "BESS" => ["GR", "IT-SOUTH", "DE_LU", "FR", "NO2", "ES"],
     "PSP" => ["GR", "IT-SOUTH", "DE_LU", "FR", "NO2", "ES"], "PVBAT" => ["ES", "GR", "IT-SOUTH", "DE_LU"],
     "FLEX" => ["GR", "IT-SOUTH", "DE_LU", "FR", "NO2", "ES"])
-const K_SU = [0.5, 0.75, 1.0, 1.25, 1.5]      # start-up share recovered in a block price (calibrated on cal days)
+const K_SU = [0.5, 0.75, 1.0]                # start-up share in a block price (calibrated on cal days); ≤ 1 = never above cost
 const SU_SCALE = [1.0, 0.5]                   # true start-up cost sensitivity (1.0 = repo formula)
 const PEN = [0.0, 10.0]                       # €/MWh on re-traded deviations (0 = intraday at the DA price)
 
@@ -52,7 +52,7 @@ function main()
                               load_fc=get(inp["load_fc"], z, nothing), wv=wv,
                               solar_peak=get(get(inp, "solar_peak365", Dict()), z, nothing))
                 if a isa SF.Thermal && sus != 1.0
-                    a = SF.Thermal(a.id, a.zone, a.pmax, a.pmin, a.min_up, a.min_down, a.srmc, a.startup * sus)
+                    a = SF.Thermal(a.id, a.zone, a.pmax, a.pmin, a.min_up, a.min_down, a.srmc, a.startup * sus, a.noload)
                 end
                 cap = a isa SF.Thermal ? a.pmax : a isa SF.Storage ? a.p : a isa SF.Hydro ? a.p : a isa SF.PVBat ? 200.0 : 300.0
                 for fmt in FORMATS[cls(a)]

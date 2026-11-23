@@ -14,11 +14,11 @@ StrategyHarness.RD_CACHE[] = joinpath(ROOT, "st-blocks/rd")
 const ZONES = Dict("CCGT" => ["GR", "IT-SOUTH", "DE_LU", "FR", "NO2", "ES"], "COAL" => ["DE_LU", "GR"],
     "HYDRO" => ["NO2", "FR", "ES", "IT-SOUTH"], "PSP" => ["GR", "IT-SOUTH", "DE_LU", "FR", "NO2", "ES"],
     "BESS" => ["GR", "IT-SOUTH", "DE_LU", "FR", "NO2", "ES"])
-const FMTS = Dict(:thermal => ["hourly_mc", "block", "linked", "exclusive", "mar"],
+const FMTS = Dict(:thermal => ["hourly_mc", "block", "linked", "exclusive", "mar", "mar_full"],
                   :storage => ["hourly_oc", "hourly_sched", "block", "exclusive"],
                   :hydro => ["hourly_oc", "block", "mar"])
 
-scale(a::SF.Thermal, s) = SF.Thermal(a.id, a.zone, a.pmax * s, a.pmin * s, a.min_up, a.min_down, a.srmc, a.startup * s)
+scale(a::SF.Thermal, s) = SF.Thermal(a.id, a.zone, a.pmax * s, a.pmin * s, a.min_up, a.min_down, a.srmc, a.startup * s, a.noload * s)
 scale(a::SF.Storage, s) = SF.Storage(a.id, a.zone, a.p * s, a.e * s, a.eta)
 scale(a::SF.Hydro, s) = SF.Hydro(a.id, a.zone, a.p * s, a.e * s, a.wv)
 cls(a) = a isa SF.Thermal ? :thermal : a isa SF.Storage ? :storage : :hydro
