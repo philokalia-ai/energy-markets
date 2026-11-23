@@ -381,7 +381,7 @@ end
     @test [(s.table, s.back) for s in p0.specs] == [(s.table, s.back) for s in p_.specs]
 end
 
-@testset "daily-forecast/export windows from the readers' real need (review of #472 #2)" begin
+@testset "daily-forecast/export windows from the readers' real need (review of #472 #2, #7)" begin
     E = Euphemia
     asof = Date(2026, 11, 20)
     @test_throws ErrorException E.fill_profile(:daily_forecast; asof=asof, zones=["GR"])   # unresolved: loud
@@ -393,13 +393,15 @@ end
         p = E.fill_profile(prof; asof=asof, zones=["GR"], needs=n)
         @test lo(p, "day_ahead_total_load_forecast") <= n.map_start - Day(1)        # HOURLY_LOAD_FC_SQL [sd-1, …)
         @test lo(p, "day_ahead_total_load_forecast") == n.map_start - Day(1)
+        @test lo(p, "energy_prices") == n.history_start - Day(9)                    # naive −8, Athens window −1
     end
     # no forecast history: the clearing readers' own windows (31 days), nothing wider
     p0 = E.fill_profile(:daily_forecast; asof=asof, zones=["GR"], needs=NONEEDS)
+    @test spec(p0, "energy_prices").back == 31
     @test spec(p0, "day_ahead_total_load_forecast").back == only(filter(s -> s.table == "day_ahead_total_load_forecast", E.FILL_SPECS)).back
     # a recent map window never narrows the base window
     p1 = E.fill_profile(:export; asof=asof, zones=["GR"], needs=(map_start=asof - Day(3), history_start=asof - Day(10)))
-    @test spec(p1, "day_ahead_total_load_forecast").back == 31
+    @test spec(p1, "day_ahead_total_load_forecast").back == 31 && spec(p1, "energy_prices").back == 31
     @test E.EXPORT_MAP_DAYS == 60
 
     # resolver on an offline source: 70 distinct forecast dates, scores reaching further back

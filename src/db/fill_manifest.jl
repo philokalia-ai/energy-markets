@@ -391,12 +391,17 @@ function fill_profile(profile::Symbol; start::Union{Nothing,Date}=nothing, stop:
         # the source first (`resolve_forecast_needs`); an unresolved call is an error, never a guess.
         needs === nothing && error("fill profile :$profile needs `needs` from resolve_forecast_needs " *
                                    "(map_start, history_start)")
+        # actual prices: the scorer's oldest unscored slice, the exporters' days and the naive baselines
+        # (oldest live score − 8) all lie within the forecast history: its oldest market date − 8, − 1
+        # more for the Athens window's start on the previous UTC day. Floor: the clearing readers' 31.
+        prices_back = needs.history_start === nothing ? 31 :
+                      max(31, Dates.value(days[1] - (needs.history_start - Day(9))))
         # day-ahead load forecast: the map exporters' weights (HOURLY_LOAD_FC_SQL) over the last
         # EXPORT_MAP_DAYS distinct forecast market dates, from map_start − 1
         load_back = needs.map_start === nothing ? 0 : Dates.value(days[1] - (needs.map_start - Day(1)))
         specs = FillSpec[s.table == "energy_prices" ?
                          _fs("entsoe", "energy_prices", :window; zone_pred=s.zone_pred, ts_col=s.ts_col,
-                             back=400, ahead=1, sort_by=s.sort_by) :
+                             back=prices_back, ahead=1, sort_by=s.sort_by) :
                          (s.table == "day_ahead_total_load_forecast" && load_back > s.back) ?
                          _fs(s.schema, s.table, s.kind; zone_pred=s.zone_pred, ts_col=s.ts_col, ts_tz=s.ts_tz,
                              back=load_back, ahead=s.ahead, sort_by=s.sort_by, casts=s.casts) : s
