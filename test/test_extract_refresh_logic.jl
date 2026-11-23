@@ -193,3 +193,13 @@ include(joinpath(@__DIR__, "..", "bin", "extract_common.jl"))
 end
 
 println("Extract refresh logic tests passed.")
+
+# Scanner mode (owner rule 2026-11-23): the bulk copies run inside DuckDB via postgres_query;
+# the parameterized filter SQL is inlined with literals.
+@testset "extract scanner: literal inlining" begin
+    @test pg_inline("a = \$1 AND b < \$2 AND c = ANY(\$3) AND d >= \$10",
+                    Any["x'y", Date(2026, 1, 2), ["GR", "BG"], 4, 5, 6, 7, 8, 9, DateTime(2026, 1, 3, 4, 5, 6)]) ==
+          "a = 'x''y' AND b < '2026-01-02' AND c = ANY(ARRAY['GR', 'BG']::text[]) AND d >= '2026-01-03 04:05:06.000'"
+    @test_throws ErrorException pg_inline("a = \$2", Any[1])
+    @test SCAN[] === nothing   # off unless a script attaches a source
+end
