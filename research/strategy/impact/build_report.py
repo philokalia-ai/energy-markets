@@ -26,10 +26,10 @@ rc_abs = "<details><summary>reclear check, competitive battery schedules (24 job
      "|---|---|---|---|---|---|"] + [f"| {r.job} | {r.mae_p:.2f} | {r.max_p:.1f} | {r.value_rc:,.0f} | {r.best_pt_value:,.0f} | {r.opt_gap_pct:.1f} |"
                                     for r in ra.itertuples()]) + "\n\n</details>"
 mk = pd.read_csv(T / "mk_score.csv")
-mk_md = "\n".join(["| model | unit | zones | days | MAE baseline | MAE model | Δ MAE (90% CI) | share of miss explained | bias baseline | bias model | shape MAE baseline → model |",
-                    "|---|---|---|---|---|---|---|---|---|---|---|"] +
+mk_md = "\n".join(["| model | unit | zones | days | MAE baseline | MAE model | Δ MAE (90% CI) | share of miss explained | bias baseline | bias model | shape MAE baseline → model | Δ shape (90% CI) |",
+                    "|---|---|---|---|---|---|---|---|---|---|---|---|"] +
                    [f"| {r.variant} | {r.unit} | {r.zones} | {r.days} | {r.mae_base:.2f} | {r.mae_model:.2f} | {r.dmae} | {r.share} | "
-                    f"{r.bias_base:+.1f} | {r.bias_model:+.1f} | {r.shape_mae_base:.1f} → {r.shape_mae_model:.1f} |" for r in mk.itertuples()])
+                    f"{r.bias_base:+.1f} | {r.bias_model:+.1f} | {r.shape_mae_base:.1f} → {r.shape_mae_model:.1f} | {r.dshape} |" for r in mk.itertuples()])
 commit = subprocess.run(["git", "-C", str(WT), "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout.strip()
 src = (D / "REPORT.src.md").read_text().replace("@@METHOD@@", (D / "METHOD.md").read_text())
 rep = {"STRUCT": rows, "TABLE_A": section("A. Thermal portfolio"), "HEDGE": section("Hedge vs forecast-optimal"),

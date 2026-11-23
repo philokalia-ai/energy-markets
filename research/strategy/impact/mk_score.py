@@ -41,7 +41,8 @@ for V in (sys.argv[1:] or ["A", "B"]):
 D = pd.concat(rows)
 D["region"] = D.zone.map(region)
 D["eb"], D["em"] = D.real - D.price_b, D.real - D.price_m
-# shape error: the hourly error after removing each (zone, day)'s mean error
+# shape error: the hourly error after removing each (zone, day)'s mean error = (model − mean) − (actual − mean) per
+# (day, zone), the cv46 scorer's definition (cv46-blocks/cb-harness/score_cv46.py:24,174); level-independent
 for c in ("eb", "em"):
     D[c + "_s"] = D[c] - D.groupby(["V", "zone", "day"])[c].transform("mean")
 out = []
@@ -52,6 +53,8 @@ for V in sorted(D.V.unique()):
         g = D[mask & (D.V == V)]
         dd = g.groupby("day").apply(lambda x: pd.Series({"b": x.eb.abs().sum(), "m": x.em.abs().sum(), "n": len(x)}))
         dmae = R.block_bootstrap_ci(((dd.m - dd.b) / dd.n).values)
+        ds = g.groupby("day").apply(lambda x: (x.em_s.abs().sum() - x.eb_s.abs().sum()) / len(x))
+        dshape = R.block_bootstrap_ci(ds.values)
         rng = np.random.default_rng(7)
         idx = rng.integers(0, len(dd), (5000, len(dd)))
         sh = 1 - dd.m.values[idx].sum(1) / dd.b.values[idx].sum(1)
@@ -60,6 +63,7 @@ for V in sorted(D.V.unique()):
                         dmae=f"{dmae[0]:+.2f} [{dmae[1]:+.2f}, {dmae[2]:+.2f}]",
                         share=f"{1 - dd.m.sum() / dd.b.sum():+.3f} [{np.quantile(sh, .05):+.3f}, {np.quantile(sh, .95):+.3f}]",
                         shape_mae_base=g.eb_s.abs().mean(), shape_mae_model=g.em_s.abs().mean(),
+                        dshape=f"{dshape[0]:+.2f} [{dshape[1]:+.2f}, {dshape[2]:+.2f}]",
                         mean_abs_shift=(g.price_m - g.price_b).abs().mean()))
 T = pd.DataFrame(out).round(2)
 T.to_csv(MV.ROOT / "runs/st-impact/tables/mk_score.csv", index=False)
