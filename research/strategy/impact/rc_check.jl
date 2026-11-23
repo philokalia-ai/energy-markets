@@ -5,13 +5,13 @@
 using Euphemia, Dates, Printf
 configure_data_store!(backend=:duckdb, duckdb_path=ENV["EUPHEMIA_DUCKDB_PATH"], read_only=true)
 include(joinpath(pkgdir(Euphemia), "src", "strategy", "StrategyHarness.jl")); using .StrategyHarness
-using Euphemia.MarketOrders: MarketOrder, SimpleOrder
+using Euphemia.MarketOrders: MarketOrder, SimpleOrder, LinkedHourlyOrder
 const RC = joinpath(homedir(), "armada", "em-team", "strategy", "runs", "st-impact", "rc")
 bases = Dict{Date,Any}()
 for job in split(ENV["JOBS"], ",")
     f = joinpath(RC, "$job.csv"); out = joinpath(RC, "$job.out.csv")
     isfile(out) && (println("RC $job CACHED"); continue)
-    rows = [split(l, ',') for l in Iterators.drop(eachline(f), 1)]
+    rows = [split(l, ',') for l in Iterators.drop(eachline(f), 1)]   # cols day,zone,hour,kind,price,mw[,family]
     isempty(rows) && (println("RC $job EMPTY"); continue)
     day = Date(rows[1][1]); zone = String(rows[1][2])
     base = get!(() -> load_baseline(day), bases, day)
@@ -22,7 +22,9 @@ for job in split(ENV["JOBS"], ",")
     for r in rows
         h = parse(Int, r[3]); p = parse(Float64, r[5]); mw = parse(Float64, r[6])
         mw <= 1e-6 && continue
-        if r[4] == "inj"   # signed price-taking injection (storage schedule): supply at the floor / demand at the cap
+        if r[4] == "lho"   # company block member (BLKL/BLKX family in column 7), supply
+            push!(company, LinkedHourlyOrder(:supply, p, mw, Symbol(zone), ts(h), 60, String(r[7]), NaN))
+        elseif r[4] == "inj"   # signed price-taking injection (storage schedule): supply at the floor / demand at the cap
             lo, hi = base.book.price_limits
             push!(company, p >= 0 ? SimpleOrder(:supply, lo, mw, Symbol(zone), ts(h), 60) :
                                     SimpleOrder(:demand, hi, mw, Symbol(zone), ts(h), 60))
@@ -49,5 +51,14 @@ for job in split(ENV["JOBS"], ",")
         end
     end
     mv(out * ".tmp", out; force=true)
+    fams = unique(o.family for o in company if o isa LinkedHourlyOrder)
+    if !isempty(fams)
+        open(joinpath(RC, "$job.fam.csv"), "w") do io
+            println(io, "family,accepted")
+            for f in fams
+                println(io, f, ",", f in r.blocks_accepted ? 1 : 0)
+            end
+        end
+    end
     println("RC $job DONE status=$(r.status) short=$(round(short; digits=2)) wall=$(round(time()-t; digits=1))s"); flush(stdout)
 end
