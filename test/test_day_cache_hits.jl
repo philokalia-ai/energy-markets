@@ -70,3 +70,19 @@ import DuckDB.DBInterface as DBInterface
                                             results_writable=prev[4]); catch; end
     end
 end
+
+@testset "single-flight day-cache fill (_fill_once)" begin
+    M = Euphemia.MeritOrderBook
+    cache = Dict{Int,Vector{Int}}(); lk = ReentrantLock()
+    calls = Threads.Atomic{Int}(0)
+    fill() = (Threads.atomic_add!(calls, 1); sleep(0.3); [1, 2, 3])
+    tasks = [Threads.@spawn M._fill_once(fill, lk, cache, 7) for _ in 1:8]
+    vals = fetch.(tasks)
+    @test calls[] == 1                          # one fill, seven waiters
+    @test all(v -> v === vals[1], vals)
+    @test M._fill_once(fill, lk, cache, 7) === vals[1] && calls[] == 1
+    # a failed fill is not cached; the next caller retries
+    @test_throws ErrorException M._fill_once(() -> error("db down"), lk, cache, 8)
+    @test !haskey(cache, 8)
+    @test M._fill_once(() -> [9], lk, cache, 8) == [9]
+end
