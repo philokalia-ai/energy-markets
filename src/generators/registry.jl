@@ -191,7 +191,16 @@ end
 
 # The rows the bound rejects never reach Julia, so report them here: the
 # 2026-09-17 rows ran for six weeks without anyone seeing them.
+const _QUARANTINE_CHECKED = Set{Tuple{String,Dates.Date}}()
+const _QUARANTINE_LOCK = ReentrantLock()
 function _warn_quarantined_capacity_rows(map_code::String, day::Dates.Date)
+    # get_generators runs twice per zone-day (with and without the outage filter);
+    # the rejected rows are the same, so check (and warn) once per zone-day.
+    first = lock(_QUARANTINE_LOCK) do
+        (map_code, day) in _QUARANTINE_CHECKED ? false :
+            (push!(_QUARANTINE_CHECKED, (map_code, day)); true)
+    end
+    first || return nothing
     df = Euphemia.sql2df_with_retry(
         """
         SELECT DISTINCT generation_unit_code,
@@ -480,7 +489,46 @@ function clear_generator_caches!()
     lock(_FEED_ANCHOR_LOCK) do
         empty!(_FEED_ANCHOR_CACHE)
     end
+    lock(_RECENT_GEN_LOCK) do
+        empty!(_RECENT_GEN_CACHE)
+    end
+    lock(_QUARANTINE_LOCK) do
+        empty!(_QUARANTINE_CHECKED)
+    end
     return nothing
+end
+
+# Units of `map_code` with output > 0 in [lower, upper): the `recent_generation`
+# relation of both get_generators queries. A zone-day runs get_generators twice
+# (with and without the outage filter) over the same window, so the 60-day per-unit
+# scan is done once and handed to the queries as an array ($6 / $3). `lower`/`upper`
+# are the SQL fragments the queries used inline ($2 = day). Same rows: the CTE was a
+# DISTINCT list joined on the code, and a NULL code never matched that join.
+const _RECENT_GEN_CACHE = Dict{Tuple{String,Dates.Date,String,String},Vector{String}}()
+const _RECENT_GEN_LOCK = ReentrantLock()
+function _recent_generation_units(map_code::String, day::Dates.Date, lower::String, upper::String)
+    key = (map_code, day, lower, upper)
+    hit = lock(_RECENT_GEN_LOCK) do
+        get(_RECENT_GEN_CACHE, key, nothing)
+    end
+    hit === nothing || return hit
+    df = Euphemia.sql2df_with_retry(
+        """
+        SELECT DISTINCT generation_unit_code
+        FROM entsoe.actual_generation_output_per_generation_unit
+        WHERE generation_unit_code IN (
+                SELECT DISTINCT generation_unit_code
+                FROM entsoe.production_and_generation_units
+                WHERE area_map_code = \$1)
+          AND date_time_utc >= $(lower)
+          AND date_time_utc < $(upper)
+          AND actual_generation_output_mw > 0
+        """, occursin("\$2", lower * upper) ? Any[map_code, day] : Any[map_code])
+    units = String[String(c) for c in df.generation_unit_code if !ismissing(c)]
+    lock(_RECENT_GEN_LOCK) do
+        _RECENT_GEN_CACHE[key] = units
+    end
+    return units
 end
 
 # pull from postgres, for now only active units of given date (I think)
@@ -543,19 +591,12 @@ function get_generators(map_code::String, day::Dates.Date;
         ),
         -- Find generators with recent actual generation (last 60 days)
         -- This catches plants with stale validity dates that are still operating.
-        -- Restricting to the zone's unit codes lets the
-        -- (generation_unit_code, date_time_utc) index drive the lookup —
-        -- a date-only filter would scan the 54 GB table (~150 s per call).
+        -- Computed once per zone-day by _recent_generation_units (restricted to
+        -- the zone's unit codes so the (generation_unit_code, date_time_utc)
+        -- index drives it; a date-only filter would scan the 54 GB table, ~150 s
+        -- per call) and shared by both get_generators variants.
         recent_generation AS (
-            SELECT DISTINCT generation_unit_code
-            FROM entsoe.actual_generation_output_per_generation_unit
-            WHERE generation_unit_code IN (
-                    SELECT DISTINCT generation_unit_code
-                    FROM entsoe.production_and_generation_units
-                    WHERE area_map_code = \$1)
-              AND date_time_utc >= $(rescue_lower)
-              AND date_time_utc < $(_fleet_probe_upper(day))
-              AND actual_generation_output_mw > 0
+            SELECT unnest(\$6::text[]) AS generation_unit_code
         ),
         -- Hard-evidence override for stale outage records (computed per day in
         -- get_day_outages): a unit that produced power DURING its claimed
@@ -643,15 +684,7 @@ function get_generators(map_code::String, day::Dates.Date;
         # Include plants that EITHER pass date validity OR have recent actual generation.
         query = """
         WITH recent_generation AS (
-            SELECT DISTINCT generation_unit_code
-            FROM entsoe.actual_generation_output_per_generation_unit
-            WHERE generation_unit_code IN (
-                    SELECT DISTINCT generation_unit_code
-                    FROM entsoe.production_and_generation_units
-                    WHERE area_map_code = \$1)
-              AND date_time_utc >= $(rescue_lower)
-              AND date_time_utc < $(_fleet_probe_upper(day))
-              AND actual_generation_output_mw > 0
+            SELECT unnest(\$3::text[]) AS generation_unit_code
         )
         SELECT DISTINCT ON (g.generation_unit_code)
             g.valid_from,
@@ -708,10 +741,11 @@ function get_generators(map_code::String, day::Dates.Date;
         """
     end
 
-    # The exclude_unavailable query binds the day-level outage arrays as $3-$5;
-    # the else branch uses only $1/$2 (extra params are harmless but omitted).
-    query_args = exclude_unavailable ? Any[map_code, day, outage_codes, outage_avail, stale_codes] :
-                 Any[map_code, day]
+    # The exclude_unavailable query binds the day-level outage arrays as $3-$5 and
+    # the recent-generation units as $6; the else branch binds them as $3.
+    recent_units = _recent_generation_units(map_code, day, rescue_lower, _fleet_probe_upper(day))
+    query_args = exclude_unavailable ? Any[map_code, day, outage_codes, outage_avail, stale_codes, recent_units] :
+                 Any[map_code, day, recent_units]
     df = Euphemia.sql2df_with_retry(query, query_args)
     _warn_quarantined_capacity_rows(map_code, day)
 
