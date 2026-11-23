@@ -28,7 +28,13 @@
 # usage: julia --project=. bin/transfer_run_results.jl [--results-db PATH] [--dry-run]
 # env:   ENERGY_CONN_STR (libpq key=value or postgresql:// URI; never printed),
 #        EUPHEMIA_RESULTS_DB (default data/results.duckdb), EUPHEMIA_DUCKDB_EXT_DIR (see pg_attach.jl)
-using Euphemia, DuckDB, DataFrames, Dates, JSON, Printf
+using DuckDB, DataFrames, Dates, JSON, Printf
+# Not `using Euphemia`: its __init__ resolves a data store, and with ENERGY_CONN_STR set it would open a LibPQ
+# connection pool to Postgres. The transfer needs only the extension helper (attach_postgres!), loaded standalone.
+module TransferPG
+using DuckDB
+include(joinpath(@__DIR__, "..", "src", "db", "pg_attach.jl"))
+end
 
 function parse_cli(argv)
     o = Dict{String,Any}("results_db" => get(ENV, "EUPHEMIA_RESULTS_DB", "data/results.duckdb"), "dry_run" => false)
@@ -243,7 +249,7 @@ function main()
     end
     conn = strip(get(ENV, "ENERGY_CONN_STR", ""))
     isempty(conn) && error("ENERGY_CONN_STR is not set (the transfer's Postgres target)")
-    Euphemia.attach_postgres!(con, conn; read_only=false)
+    TransferPG.attach_postgres!(con, conn; read_only=false)
     t0 = time()
     nrows = Dict{Int,Int}()
     try
