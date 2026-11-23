@@ -21,7 +21,6 @@ end
 @testset "cv45 knobs" begin
     withenv_cv45() do      # unset ⇒ the adopted set only
         @test all(Euphemia.cv45_on, Euphemia.CV45_SHIPPED)
-        @test !any(Euphemia.cv45_on, setdiff(Euphemia.CV45_KNOBS, Euphemia.CV45_SHIPPED))
         @test MOB.complex_order_kinds() == Set(["ps"])
     end
     withenv_cv45("EUPHEMIA_CV45" => "off") do      # master off ⇒ cv44
@@ -60,5 +59,7 @@ end
     end
     @test length(Euphemia.CV45_KNOBS) == 4 && Set(Euphemia.CV45_KNOBS) == Set(Euphemia.CV45_SHIPPED)
     # Values come from declared constants, not new free parameters
+    @test MOB.TRANCHES[end][2] == 1.6
+    @test MOB.BACKSTOP_PRICE_MULT == 1.8
     @test Euphemia.GAS_NCV_PER_GCV == 0.90
 end

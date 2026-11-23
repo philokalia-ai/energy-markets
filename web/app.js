@@ -3371,8 +3371,9 @@
   }
 
   // "Since freeze" window (#431 G, bin/scoreboard_windows.jl): the clock restarted with
-  // cv46 on 2026-11-24 (cv44 froze the characteristics on 2026-11-15; cv45 restarted on 2026-11-21), so these days are the only out-of-sample physics
-  // record. Change FREEZE_LABEL together with FREEZE_CODE_VERSION / FREEZE_DATE there.
+  // cv46 on 2026-11-24 (cv44 froze the characteristics on 2026-11-15; cv45 restarted
+  // on 2026-11-21), so these days are the only out-of-sample physics record.
+  // Change FREEZE_LABEL together with FREEZE_CODE_VERSION / FREEZE_DATE there.
   var FREEZE_WINDOW = "since_freeze";
   var FREEZE_LABEL = "since freeze (cv46, 2026-11-24) — the only out-of-sample physics record";
   var FREEZE_MIN_DAYS = 14;

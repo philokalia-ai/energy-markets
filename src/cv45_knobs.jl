@@ -1,8 +1,9 @@
 # cv45 knobs (docs/code-version-ledger.md, v45; reviews/fable-nov-bias.md §5).
 #
 # One env var per change; each takes "on" or "off". Unset ⇒ a shipped knob
-# (CV45_SHIPPED) follows the master switch EUPHEMIA_CV45 (default "on"). So env unset = the adopted cv45 set (GAS_HHV, GB_HHV,
-# AVAIL, AVAIL_INMERIT; reports/analyst-cv45.md §0c). EUPHEMIA_CV45=off ⇒ every
+# (CV45_SHIPPED) follows the master switch EUPHEMIA_CV45 (default "on"). So env
+# unset = the adopted cv45 set (GAS_HHV, GB_HHV, AVAIL, AVAIL_INMERIT;
+# reports/analyst-cv45.md §0c). EUPHEMIA_CV45=off ⇒ every
 # knob off ⇒ the cv44 book, byte-identical. An individually set knob wins over
 # the master, so a single-change arm is
 #     EUPHEMIA_CV45=off EUPHEMIA_CV45_<NAME>=on
