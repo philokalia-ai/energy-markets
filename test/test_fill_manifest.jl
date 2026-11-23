@@ -103,3 +103,36 @@ end
         try; E.configure_data_store!(backend=prev[1], duckdb_path=prev[2], read_only=prev[3], results_writable=prev[4]); catch; end
     end
 end
+
+@testset "read-back redirect only in a fill; writes always to results_db" begin
+    E = Euphemia
+    prev = (E.DATA_STORE[], E.DUCKDB_PATH[], E.DUCKDB_READ_ONLY[], E.DUCKDB_RESULTS_WRITABLE[], E.RESULTS_DB_PATH[])
+    dir = mktempdir()
+    mk(path, v) = let db = DuckDB.DB(path), con = DBInterface.connect(db)
+        DBInterface.execute(con, "CREATE SCHEMA simulations")
+        DBInterface.execute(con, "CREATE TABLE simulations.input_corrections (target VARCHAR, date_time_utc TIMESTAMP, corrected_mw DOUBLE)")
+        DBInterface.execute(con, "INSERT INTO simulations.input_corrections VALUES ('res', TIMESTAMP '2026-11-04 10:00:00', $v)")
+        DBInterface.close!(con); DuckDB.close(db)
+    end
+    extract = joinpath(dir, "extract.duckdb"); mk(extract, 1.0)        # the extract's own corrections
+    fill = joinpath(dir, "fill.duckdb"); mk(fill, 1.0)
+    E.mark_run_local_fill!(fill; windows=[("simulations", "input_corrections", Date(1900, 1, 1), Date(2999, 12, 31))])
+    q = "SELECT corrected_mw FROM simulations.input_corrections"
+    try
+        for (inputs, expect, label) in ((extract, 1.0, "extract"), (fill, 2.0, "fill"))
+            results = joinpath(dir, "results-$label.duckdb"); mk(results, 2.0)   # seeded read-back copy
+            E.RESULTS_DB_PATH[] = results
+            E.configure_data_store!(backend=:duckdb, duckdb_path=inputs, read_only=true, results_writable=true)
+            E._ensure_results_attached(E._duckdb_connection())
+            @test E.sql2df(q).corrected_mw == [expect]                 # extract: own table; fill: results_db
+            @test (E._FILL_GUARD[] !== nothing) == (label == "fill")
+            w = E._duckdb_rewrite("INSERT INTO simulations.input_corrections VALUES ('x', TIMESTAMP '2026-01-01', 0)")
+            @test occursin("results_db.simulations.input_corrections", w)   # writes: results_db in both modes
+            u = E._duckdb_rewrite("UPDATE simulations.forecast_scores SET mae = 1")
+            @test occursin("results_db.simulations.forecast_scores", u)
+            E._duckdb_drop_connection!()
+        end
+    finally
+        try; E.RESULTS_DB_PATH[] = prev[5]; E.configure_data_store!(backend=prev[1], duckdb_path=prev[2], read_only=prev[3], results_writable=prev[4]); catch; end
+    end
+end

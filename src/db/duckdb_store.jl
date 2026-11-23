@@ -270,8 +270,20 @@ function _duckdb_rewrite(sql::AbstractString)
     # The forecast-side results (run_results.jl) live there too: the fill seeds the slices a job reads back
     # and the writers apply their slices locally, so reads see the state Postgres would have. Whole-word
     # match (forecast_prices must not catch forecast_prices_pre_reset), never twice.
-    s = replace(s, r"(?<![\w.])simulations\.(forecast_prices_pre_reset|forecast_prices|forecast_scores|input_corrections)\b" =>
-                   s"results_db.simulations.\1")
+    # input_corrections is an INPUT on an extract (the cv32 corrections it carries) and a
+    # read-back table only in a run-local fill (the fill seeds it into results_db, the job
+    # appends): redirect it only when the inputs DB is a fill, or extract runs (reproduce,
+    # research, the identity rigs) lose the corrections and IT-Sardinia/Sicily prices move.
+    # The forecast tables are read-backs too: redirected only for a fill (an extract has none;
+    # it reads them exactly as main does). A write statement keeps the full redirect in both
+    # modes, so a plain-named write can only ever land in results_db (the transfer source);
+    # the DuckDB writers name results_db.simulations.* explicitly anyway.
+    is_write = occursin(r"^\s*(INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|MERGE|COPY|TRUNCATE)\b"i, s)
+    if _FILL_GUARD[] === nothing && !is_write
+        return s
+    end
+    tabs = "forecast_prices_pre_reset|forecast_prices|forecast_scores|input_corrections"
+    s = replace(s, Regex("(?<![\\w.])simulations\\.($tabs)\\b") => s"results_db.simulations.\1")
     return s
 end
 
@@ -301,6 +313,31 @@ function _load_fill_guard(con)
 end
 
 const _FULL_LO = Dates.DateTime(1900, 1, 1)
+
+"""
+    mark_run_local_fill!(path; windows=[(schema, table, lo::Date, hi::Date), ...])
+
+Mark an existing DuckDB file as a run-local fill: write `_fill.windows` (the table
+fill_run_duckdb writes), which arms the strict read guard and the read-back redirect when
+the file is opened as the data store. For tests and tools that build small inputs files by
+hand; `lo = Date(1900,1,1)` marks a table as filled whole.
+"""
+function mark_run_local_fill!(path::AbstractString; windows)
+    db = DuckDB.DB(String(path))
+    con = DBInterface.connect(db)
+    try
+        DBInterface.execute(con, "CREATE SCHEMA IF NOT EXISTS _fill")
+        DBInterface.execute(con, "CREATE TABLE IF NOT EXISTS _fill.windows (schema_name VARCHAR, table_name VARCHAR, kind VARCHAR, lo DATE, hi DATE, n_rows BIGINT, seconds DOUBLE)")
+        for (sch, tbl, lo, hi) in windows
+            DBInterface.execute(con, "INSERT INTO _fill.windows VALUES (?, ?, 'window', ?, ?, 0, 0.0)",
+                                [String(sch), String(tbl), Dates.Date(lo), Dates.Date(hi)])
+        end
+    finally
+        DBInterface.close!(con)
+        DuckDB.close(db)
+    end
+    return String(path)
+end
 
 function _fill_guard_check(g, sql::AbstractString, args)
     tables = String[]
@@ -339,8 +376,8 @@ function _duckdb_sql2df(sql, args)
     # Dialect rewrite is pure CPU — do it outside the lock. The result is a
     # stable function of the input SQL, so it is also the prepared-statement
     # cache key.
+    con = _duckdb_connection()      # first: opening it loads the fill guard the rewrite consults
     rewritten = _duckdb_rewrite(sql)
-    con = _duckdb_connection()
     g = _FILL_GUARD[]
     g === nothing || _fill_guard_check(g, rewritten, args)
     occursin("results_db.", rewritten) && _ensure_results_attached(con)
