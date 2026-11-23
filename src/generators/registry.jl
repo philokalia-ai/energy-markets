@@ -191,16 +191,20 @@ end
 
 # The rows the bound rejects never reach Julia, so report them here: the
 # 2026-09-17 rows ran for six weeks without anyone seeing them.
+# get_generators runs twice per zone-day (with and without the outage filter); the
+# rejected rows are the same, so get_generators checks (and warns) once per zone-day.
+# The check itself stays unconditional for direct callers.
 const _QUARANTINE_CHECKED = Set{Tuple{String,Dates.Date}}()
 const _QUARANTINE_LOCK = ReentrantLock()
-function _warn_quarantined_capacity_rows(map_code::String, day::Dates.Date)
-    # get_generators runs twice per zone-day (with and without the outage filter);
-    # the rejected rows are the same, so check (and warn) once per zone-day.
+function _quarantine_check_once(map_code::String, day::Dates.Date)
     first = lock(_QUARANTINE_LOCK) do
         (map_code, day) in _QUARANTINE_CHECKED ? false :
             (push!(_QUARANTINE_CHECKED, (map_code, day)); true)
     end
-    first || return nothing
+    first && _warn_quarantined_capacity_rows(map_code, day)
+    return nothing
+end
+function _warn_quarantined_capacity_rows(map_code::String, day::Dates.Date)
     df = Euphemia.sql2df_with_retry(
         """
         SELECT DISTINCT generation_unit_code,
@@ -747,7 +751,7 @@ function get_generators(map_code::String, day::Dates.Date;
     query_args = exclude_unavailable ? Any[map_code, day, outage_codes, outage_avail, stale_codes, recent_units] :
                  Any[map_code, day, recent_units]
     df = Euphemia.sql2df_with_retry(query, query_args)
-    _warn_quarantined_capacity_rows(map_code, day)
+    _quarantine_check_once(map_code, day)
 
     # Build generators (without ramp rates initially)
     generators = Generator[]
