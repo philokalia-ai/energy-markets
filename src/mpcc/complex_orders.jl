@@ -50,6 +50,38 @@ their original `BLKFB:` must-run offers restored) with a warning — the clear
 never breaks.
 """
 is_block_family(f::AbstractString) = startswith(f, "BLK:")
+# Company block families with EUPHEMIA's block relations (strategy research, st-blocks). Books without
+# them never reach any of this code (every branch below is guarded by an empty-list check):
+#   BLKM:<zone>:<name>:mar=<r>          minimum acceptance ratio: accepted ratio ∈ {0} ∪ [r, 1]
+#   BLKL:<zone>:<name>[:parent=<p>]     linked: accepted only if the family named <p> (same zone) is
+#   BLKX:<zone>:<name>:group=<g>        exclusive group <g>: at most one member accepted
+# Members carry their own price and side (supply injects, demand withdraws), so a family may be a loop.
+is_cblock_family(f::AbstractString) = startswith(f, "BLKM:") || startswith(f, "BLKL:") || startswith(f, "BLKX:")
+function _cblock_attrs(f::AbstractString)
+    parts = split(f, ':')
+    kv = Dict{String,String}()
+    for p in parts[4:end]
+        k, v = split(p, '='; limit=2)
+        kv[String(k)] = String(v)
+    end
+    return (kind=Symbol(parts[1]), zone=String(parts[2]), name=String(parts[3]), attrs=kv)
+end
+"""family => parent family id (BLKL children), resolved by (zone, name) among the given families."""
+function _cblock_parents(fams)
+    byname = Dict{Tuple{String,String},String}()
+    for f in fams
+        a = _cblock_attrs(f); byname[(a.zone, a.name)] = f
+    end
+    par = Dict{String,String}()
+    for f in fams
+        a = _cblock_attrs(f)
+        p = get(a.attrs, "parent", "")
+        isempty(p) && continue
+        haskey(byname, (a.zone, p)) || error("linked block $f: parent '$p' not in the book")
+        par[f] = byname[(a.zone, p)]
+    end
+    return par
+end
 is_block_fallback(f::AbstractString) = startswith(f, "BLKFB:")
 _plain(o::LinkedHourlyOrder) = SimpleOrder(o.type, o.price, o.quantity, o.zone,
                                            o.date_time, o.resolution_code)
@@ -77,7 +109,8 @@ function resolve_complex_orders(order_book::MPCCOrderBook;
         base = MarketOrder[o for o in order_book.orders if !(o isa LinkedHourlyOrder)]
         MPCCOrderBook(vcat(base, fallback,
                 MarketOrder[_plain(o) for o in all_linked
-                            if !is_block_family(o.family) && !is_block_fallback(o.family)]),
+                            if !is_block_family(o.family) && !is_cblock_family(o.family) &&
+                               !is_block_fallback(o.family)]),
             nodes, periods, order_book.price_limits, order_book.network_topology, fixed_in)
     end
     t0 = time()
@@ -121,10 +154,41 @@ function resolve_complex_orders(order_book::MPCCOrderBook;
                 fixed_accept === nothing || fix(z[f], f in fixed_accept ? 1.0 : 0.0; force=true)
             end
         end
+        cblk = sort(unique(o.family for o in linked if is_cblock_family(o.family)))
+        if !isempty(cblk)
+            # company blocks: ratio zc ∈ [0,1] gated by the acceptance binary uc (MAR: r·uc ≤ zc ≤ uc)
+            @variable(model, 0 <= zc[f in cblk] <= 1)
+            @variable(model, uc[f in cblk], Bin)
+            groups = Dict{String,Vector{String}}()
+            for f in cblk
+                a = _cblock_attrs(f)
+                if a.kind == :BLKM
+                    r = parse(Float64, a.attrs["mar"])
+                    @constraint(model, zc[f] >= r * uc[f])
+                    @constraint(model, zc[f] <= uc[f])
+                else
+                    @constraint(model, zc[f] == uc[f])
+                end
+                a.kind == :BLKX && push!(get!(groups, a.zone * ":" * a.attrs["group"], String[]), f)
+                f in forced_reject && fix(uc[f], 0.0; force=true)
+                fixed_accept === nothing || fix(uc[f], f in fixed_accept ? 1.0 : 0.0; force=true)
+            end
+            for (c, p) in _cblock_parents(cblk)
+                @constraint(model, uc[c] <= uc[p])
+            end
+            for (_, fs) in groups
+                @constraint(model, sum(uc[f] for f in fs) <= 1)
+            end
+        end
         for (j, o) in enumerate(linked)
             n = string(o.zone)
             t = extract_time_period(o.date_time, periods)
             (n in nset && haskey(bal, (n, t))) || continue
+            if is_cblock_family(o.family)
+                add_to_expression!(bal[(n, t)], o.type == :supply ? -o.quantity : o.quantity, y[j])
+                @constraint(model, y[j] == model[:zc][o.family])
+                continue
+            end
             add_to_expression!(bal[(n, t)], -o.quantity, y[j])
             if is_block_family(o.family)
                 @constraint(model, y[j] == model[:z][o.family])
@@ -134,7 +198,7 @@ function resolve_complex_orders(order_book::MPCCOrderBook;
                 fam_budget[o.family] = o.family_budget_mwh
             end
         end
-        if !isempty(blk_fams)
+        if !isempty(blk_fams) || !isempty(cblk)
             set_time_limit_sec(model, block_time_limit)
             try
                 set_attribute(model, MOI.RelativeGapTolerance(), 1e-7)
@@ -197,7 +261,7 @@ function resolve_complex_orders(order_book::MPCCOrderBook;
         if lowercase(get(ENV, "EUPHEMIA_PS_INTRAHOUR", "free")) == "flat"
             fq = Dict{Tuple{String,String},AffExpr}()
             for (j, o) in enumerate(linked)
-                (is_block_family(o.family) || o.resolution_code >= 60) && continue
+                (is_block_family(o.family) || is_cblock_family(o.family) || o.resolution_code >= 60) && continue
                 t = extract_time_period(o.date_time, periods)
                 add_to_expression!(get!(fq, (o.family, t), AffExpr(0.0)), o.quantity, y[j])
             end
@@ -218,7 +282,8 @@ function resolve_complex_orders(order_book::MPCCOrderBook;
             add_to_expression!(obj, (o.type == :supply ? -o.quantity : o.quantity) * o.price, x[i])
         end
         for (j, o) in enumerate(linked)
-            add_to_expression!(obj, -o.quantity * o.price, y[j])
+            add_to_expression!(obj, (is_cblock_family(o.family) && o.type == :demand ?
+                                     o.quantity : -o.quantity) * o.price, y[j])
         end
         @objective(model, Max, obj - 10000.0 * sum(shed))
         optimize!(model)
@@ -244,6 +309,25 @@ function resolve_complex_orders(order_book::MPCCOrderBook;
         blocks = Dict{String,Any}()   # accepted block -> (zone, price, [(dt, MW, res)])
         nblk_rej = 0
         for (j, o) in enumerate(linked)
+            if is_cblock_family(o.family)
+                if value(model[:uc][o.family]) > 0.5
+                    ratio = clamp(value(model[:zc][o.family]), 0.0, 1.0)
+                    b = get!(blocks, o.family, (zone=string(o.zone), price=o.price, ratio=ratio,
+                        slices=Tuple{DateTime,Float64,Int}[]))
+                    sq = o.type == :supply ? o.quantity : -o.quantity
+                    push!(b.slices, (o.date_time, sq, o.resolution_code))
+                    if startswith(o.family, "BLKM:") && ratio < 1.0 - 1e-6
+                        # partially accepted MAR block: the marginal order, so it re-enters the pricing at
+                        # its own price capped at ratio·q (it can set the price, as a curtailable block does)
+                        push!(out, SimpleOrder(o.type, o.price, o.quantity * ratio, o.zone, o.date_time,
+                            o.resolution_code))
+                    else
+                        k = (string(o.zone), extract_time_period(o.date_time, periods))
+                        fixed[k] = get(fixed, k, 0.0) + sq * ratio
+                    end
+                end
+                continue
+            end
             if is_block_family(o.family)
                 if yv[j] > 0.5
                     b = get!(blocks, o.family, (zone=string(o.zone), price=o.price,
@@ -321,10 +405,104 @@ function _block_surplus(b, prices)
     return s
 end
 
+"""Company block structure (BLKM/BLKL/BLKX): family => (kind, zone, parent, group, slices=[(period, signed MW,
+resolution, price)]). Empty for every book without them."""
+function _cblock_structure(order_book::MPCCOrderBook)
+    C = Dict{String,Any}()
+    for o in order_book.orders
+        (o isa LinkedHourlyOrder && is_cblock_family(o.family)) || continue
+        c = get!(C, o.family) do
+            a = _cblock_attrs(o.family)
+            (kind=a.kind, zone=a.zone, group=a.kind == :BLKX ? a.zone * ":" * a.attrs["group"] : "",
+             parent=Ref(""), slices=Tuple{String,Float64,Int,Float64}[])
+        end
+        push!(c.slices, (extract_time_period(o.date_time, order_book.periods),
+                         o.type == :supply ? o.quantity : -o.quantity, o.resolution_code, o.price))
+    end
+    for (ch, p) in (isempty(C) ? Dict{String,String}() : _cblock_parents(keys(C)))
+        C[ch].parent[] = p
+    end
+    return C
+end
+
+"""Surplus Σ (P_t − p)·q_t·res/60 (signed q) of company block `c` at full ratio; NaN if a price is missing."""
+function _cblock_surplus(c, prices)
+    zp = get(prices, c.zone, nothing)
+    zp === nothing && return NaN
+    s = 0.0
+    for (t, q, r, p) in c.slices
+        haskey(zp, t) || return NaN
+        s += (zp[t] - p) * q * r / 60.0
+    end
+    return s
+end
+
+"""Make a fixed acceptance set consistent with the relations: per exclusive group keep the member with the
+highest `prio` (then name); drop linked blocks whose parent is not kept. BLK families pass through."""
+function _cblock_closure(A::Set{String}, C, prio::Dict{String,Float64})
+    isempty(C) && return A
+    A = copy(A)
+    byg = Dict{String,Vector{String}}()
+    for f in A
+        haskey(C, f) && !isempty(C[f].group) && push!(get!(byg, C[f].group, String[]), f)
+    end
+    for (_, fs) in byg
+        length(fs) > 1 || continue
+        keep = sort(fs; by=f -> (-get(prio, f, -Inf), f))[1]
+        for f in fs; f == keep || delete!(A, f); end
+    end
+    changed = true
+    while changed
+        changed = false
+        for f in collect(A)
+            haskey(C, f) || continue
+            p = C[f].parent[]
+            if !isempty(p) && !(p in A)
+                delete!(A, f); changed = true
+            end
+        end
+    end
+    return A
+end
+
+"""PAB/PRB of company blocks at `prices` given the accepted set `A` (ratios from the master info):
+accepted f is PAB when its value S_f·ratio + Σ (accepted children's values) < 0 (children may pay for a
+parent, EUPHEMIA's linked-family rule; plain/MAR/exclusive: S_f·ratio < 0); rejected f is a PRB when it is
+in the money at full ratio and eligible (its parent accepted; no member of its group accepted)."""
+function _cblock_check!(pab, prb, C, A, info, prices)
+    isempty(C) && return
+    S = Dict(f => _cblock_surplus(c, prices) for (f, c) in C)
+    kids = Dict{String,Vector{String}}()
+    for (f, c) in C
+        isempty(c.parent[]) || push!(get!(kids, c.parent[], String[]), f)
+    end
+    val = Dict{String,Float64}()
+    function v(f)
+        get!(val, f) do
+            r = haskey(info.blocks, f) ? info.blocks[f].ratio : 0.0
+            S[f] * r + sum((v(k) for k in get(kids, f, String[]) if k in A); init=0.0)
+        end
+    end
+    gacc = Set(C[f].group for f in A if haskey(C, f) && !isempty(C[f].group))
+    for (f, c) in C
+        if f in A
+            x = v(f)
+            (isnan(x) || x < -1e-3) && (pab[f] = x)
+        elseif !isnan(S[f]) && S[f] > 1e-3 && (isempty(c.parent[]) || c.parent[] in A) &&
+               (isempty(c.group) || !(c.group in gacc))
+            prb[f] = S[f]
+        end
+    end
+end
+
 """One candidate: the master (with `forced_reject` or `fixed_accept`), priced by `solve`.
 `pab`: accepted blocks out of the money (a missing price counts as PAB); `prb`: rejected
 blocks in the money (surplus €). `ok = false` when the master or the pricing failed."""
-function _block_candidate(order_book, solve, B, phase; preferred_solver, verbose, kw...)
+function _block_candidate(order_book, solve, B, phase; preferred_solver, verbose,
+                          C=Dict{String,Any}(), prio=Dict{String,Float64}(), kw...)
+    if !isempty(C) && haskey(kw, :fixed_accept)
+        kw = merge(NamedTuple(kw), (fixed_accept=_cblock_closure(kw[:fixed_accept], C, prio),))
+    end
     ob = resolve_complex_orders(order_book; preferred_solver=preferred_solver, verbose=verbose, kw...)
     info = LAST_COMPLEX_INFO[]
     pab = Dict{String,Float64}(); prb = Dict{String,Float64}()
@@ -342,6 +520,7 @@ function _block_candidate(order_book, solve, B, phase; preferred_solver, verbose
                 prb[f] = s
             end
         end
+        _cblock_check!(pab, prb, C, A, info, res.market_prices)
     end
     return (ok=ok, phase=phase, book=ob, res=res, info=info, A=A, W=info.master_objective,
             pab=pab, prb=prb)
@@ -383,7 +562,8 @@ function solve_with_complex_orders(order_book::MPCCOrderBook, solve::Function;
     preferred_solver::String="highs", verbose::Bool=true,
     max_pricings::Int=BLOCKS_MAX_PRICINGS, gap_stop::Float64=BLOCKS_GAP_STOP_EUR)
     B = _block_structure(order_book)
-    isempty(B) && return solve(resolve_complex_orders(order_book;
+    C = _cblock_structure(order_book)
+    isempty(B) && isempty(C) && return solve(resolve_complex_orders(order_book;
         preferred_solver=preferred_solver, verbose=verbose))
     t0 = time()
     calls = Ref(0); UB = Ref(NaN); best = Ref{Any}(nothing)
@@ -391,7 +571,7 @@ function solve_with_complex_orders(order_book::MPCCOrderBook, solve::Function;
     stop() = calls[] >= max_pricings || gap() <= gap_stop
     function price(phase; master_verbose=false, kw...)
         o = _block_candidate(order_book, solve, B, phase; preferred_solver=preferred_solver,
-            verbose=master_verbose, kw...)
+            verbose=master_verbose, C=C, prio=(cur === nothing ? Dict{String,Float64}() : cur.prb), kw...)
         calls[] += 1
         o.ok && isempty(o.pab) && (best[] === nothing || o.W > best[].W) && (best[] = o)
         verbose && o.info.status == :optimal &&

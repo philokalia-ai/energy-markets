@@ -168,6 +168,8 @@ end
 """
     Carve(zone, mw, price_lo, price_hi; ref=(lo+hi)/2)
 
+NB the book merges supply orders at round(price, 2) (book_build.jl:2253): express the band on rounded prices
+and check `r.carve_shortfall` is empty (st-impact, 21:15Z).
 Remove `mw` (a number, or period => MW) of baseline SUPPLY SimpleOrders in `zone` priced in [price_lo, price_hi],
 closest to `ref` first. Models the company's asset replacing equivalent capacity already in the forecast.
 """
@@ -220,7 +222,7 @@ struct ReclearResult
     prices::Dict{String,Dict{String,Float64}}
     accepted::Vector{Float64}           # MW per company order (index = position in `company`; LinkedHourly: per member)
     ambiguous::Vector{Bool}             # tie at the order's price that the acceptance keys could not resolve uniquely
-    blocks_accepted::Set{String}        # company BLK families accepted
+    blocks_accepted::Set{String}        # company block families accepted (BLK/BLKM/BLKL/BLKX); ratio in complex_info
     carve_shortfall::Dict{Tuple{String,String},Float64}
     flows::Dict{String,Dict{String,Float64}}
     solve_s::Float64
@@ -239,6 +241,9 @@ function company_book(base::BaselineDay, company::AbstractVector{<:MarketOrder};
     end
     return MPCCOrderBook(orders, b.nodes, b.periods, b.price_limits, b.network_topology, inj), short
 end
+
+_is_block(f::AbstractString) = startswith(f, "BLK:") || startswith(f, "BLKM:") || startswith(f, "BLKL:") ||
+                               startswith(f, "BLKX:")
 
 const _KEY_RE = r"^(.+)::order_\d+_z(.+)_h(\d+)_q(-?\d+)_p(-?\d+)$"
 
@@ -259,11 +264,16 @@ function reclear(base::BaselineDay, company::AbstractVector{<:MarketOrder};
     r = mz_solve_pass(book; optimizer=optimizer, silent=true, decompose_periods=true)
     el = time() - t0
     info = Euphemia.MPCC.LAST_COMPLEX_INFO[]
+    # accepted blocks: info.blocks is a Dict family => (zone, price, [ratio,] slices); company BLK:/BLKM:/BLKL:/BLKX:
     blk = Set{String}()
+    ratio = Dict{String,Float64}()
     if info !== nothing && hasproperty(info, :blocks)
-        for f in info.blocks
-            fs = string(f isa Tuple ? first(f) : f)
-            any(o -> o isa LinkedHourlyOrder && o.family == fs, company) && push!(blk, fs)
+        cf = Set(o.family for o in company if o isa LinkedHourlyOrder)
+        for (f, b) in info.blocks
+            fs = string(f)
+            fs in cf || continue
+            push!(blk, fs)
+            ratio[fs] = hasproperty(b, :ratio) ? b.ratio : 1.0
         end
     end
     # solver acceptance index: (period, zone, hour, q, p) => [acceptance...]
@@ -288,8 +298,8 @@ function reclear(base::BaselineDay, company::AbstractVector{<:MarketOrder};
         isnan(P) && (acc[i] = NaN; continue)
         q = o.quantity
         if o isa LinkedHourlyOrder
-            if startswith(o.family, "BLK:")
-                acc[i] = o.family in blk ? q : 0.0
+            if _is_block(o.family)    # BLK: all-or-nothing; BLKM/BLKL/BLKX (st-blocks): ratio from the master
+                acc[i] = o.family in blk ? q * ratio[o.family] : 0.0
                 continue
             end
             q = get(fam_alloc, (o.family, o.date_time), q)   # storage: capped at the master allocation
