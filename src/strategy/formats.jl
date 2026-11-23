@@ -7,7 +7,8 @@
 #
 # Every bid is a Vector{MarketOrder}: SimpleOrders (hourly / quarter-hourly curves) and LinkedHourlyOrder
 # families whose id names the block semantics (the same ids the complex-order master understands):
-#   BLK:<zone>:<name>                 all-or-nothing profile block (existing master semantics)
+#   BLK:<zone>:<name>                 all-or-nothing profile block (existing master semantics: SUPPLY members only —
+#                                     the BLK path ignores the side, so a block with demand members must be BLKL)
 #   BLKM:<zone>:<name>:mar=<r>        minimum acceptance ratio: accepted ratio ∈ {0} ∪ [r, 1]
 #   BLKL:<zone>:<name>[:parent=<p>]   linked family: accepted only if the block named <p> (same zone) is;
 #                                     a parent may be loss-making if its accepted descendants cover it
@@ -131,7 +132,9 @@ function parse_family(f::AbstractString)
 end
 
 # ------------------------------------------------------------------------------- forecast-side optimisers
-_lp() = (m = Model(HiGHS.Optimizer); set_silent(m); set_attribute(m, "threads", 1); m)
+# No `threads` override: HiGHS keeps one process-wide scheduler and a model asking for a different thread count than
+# the one it started with fails (no solution) — the same rule as src/mpcc/complex_orders.jl.
+_lp() = (m = Model(HiGHS.Optimizer); set_silent(m); m)
 
 """Storage arbitrage LP on forecast prices F (MW per period, `dt` hours per period), SoC empty at both ends.
 Returns (charge, discharge, μ) with μ_t = marginal value of stored energy (€/MWh_stored) after period t."""
@@ -268,7 +271,7 @@ function bids(a::Storage, fmt::String, F::Vector{Float64}, day::Date; res=60, nx
         end
     elseif fmt == "block"
         c, d, _ = storage_lp(a, F; dt=dt)
-        _loop!(o, c, d, z, day, res, "BLK:$z:$(a.id)-b")
+        _loop!(o, c, d, z, day, res, "BLKL:$z:$(a.id)-b")   # signed: a loop needs BLKL, not BLK
     elseif fmt == "exclusive"
         seen = Set{Vector{Float64}}()
         for (k, G) in enumerate(_alts(F, dt)[1:nx])
@@ -334,7 +337,7 @@ function bids(a::PVBat, fmt::String, F::Vector{Float64}, day::Date; res=60, nx=5
             c, d, _ = storage_lp(a.bat, G; dt=dt)
             net = pv .+ d .- c
             key = round.(net, digits=3); key in seen && continue; push!(seen, key)
-            fam = fmt == "block" ? "BLK:$z:PVBAT-b" : "BLKX:$z:PVBAT-x$k:group=PVBAT"
+            fam = fmt == "block" ? "BLKL:$z:PVBAT-b" : "BLKX:$z:PVBAT-x$k:group=PVBAT"
             for i in 1:T
                 net[i] > 1e-6 && push!(o, _lo(:supply, 0.0, net[i], z, day, i, res, fam))
                 net[i] < -1e-6 && push!(o, _lo(:demand, 0.0, -net[i], z, day, i, res, fam))
@@ -374,7 +377,7 @@ function bids(a::Flex, fmt::String, F::Vector{Float64}, day::Date; res=60, nx=5,
         for (k, G) in enumerate(alts)
             q, _ = plan(G)
             key = round.(q, digits=3); key in seen && continue; push!(seen, key)
-            fam = fmt == "block" ? "BLK:$z:FLEX-b" : "BLKX:$z:FLEX-x$k:group=FLEX"
+            fam = fmt == "block" ? "BLKL:$z:FLEX-b" : "BLKX:$z:FLEX-x$k:group=FLEX"
             for i in 1:T; q[i] > 1e-6 && push!(o, _lo(:demand, a.wtp, q[i], z, day, i, res, fam)); end
         end
     end

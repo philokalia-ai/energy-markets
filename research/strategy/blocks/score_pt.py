@@ -32,13 +32,13 @@ def boot(x, draws, seed):
 
 def calibrate(cal):
     c = cal[(cal.pen == 0) & (cal.res_bid == 60) & (cal.res_eval == 60)]
-    g = c.groupby(KEY + ["su_scale", "k_su"]).profit.mean().reset_index()
-    best = g.loc[g.groupby(KEY + ["su_scale"]).profit.idxmax()]
-    return {(r.zone, r.arch, r.format, r.su_scale): float(r.k_su) for r in best.itertuples()}
+    g = c.groupby(KEY + ["su_scale", "nl_scale", "k_su"]).profit.mean().reset_index()
+    best = g.loc[g.groupby(KEY + ["su_scale", "nl_scale"]).profit.idxmax()]
+    return {(r.zone, r.arch, r.format, r.su_scale, r.nl_scale): float(r.k_su) for r in best.itertuples()}
 
 
 def pick(df, kmap):
-    k = df.apply(lambda r: kmap.get((r.zone, r.arch, r.format, r.su_scale), 1.0), axis=1)
+    k = df.apply(lambda r: kmap.get((r.zone, r.arch, r.format, r.su_scale, r.nl_scale), 1.0), axis=1)
     return df[np.isclose(df.k_su, k)]
 
 
@@ -86,6 +86,24 @@ def show(t, title):
                   f"{fmt(r.acc, 2)} | {fmt(r.missed, 2)} | {fmt(r.unfilled_h)} | {r.retraded:.0f} | {r.p5:.1f} |")
 
 
+def thermal_grid(E, draws, seed):
+    """Δ of the fixed structure (CCGT exclusive / COAL linked / block) vs hourly_mc and vs hourly_ac per cost cell."""
+    out = []
+    th = E[E.arch.isin(["CCGT", "COAL"])]
+    for (z, ar, su, nl), g in th.groupby(["zone", "arch", "su_scale", "nl_scale"]):
+        cap = float(g.cap_mw.iloc[0])
+        mc = g[g.format == "hourly_mc"].set_index("day").profit
+        ac = g[g.format == "hourly_ac"].set_index("day").profit
+        for f in (["exclusive", "block"] if ar == "CCGT" else ["linked", "block"]):
+            h = g[g.format == f].set_index("day").profit
+            days = sorted(set(h.index) & set(mc.index) & set(ac.index))
+            dm = (h.loc[days] - mc.loc[days]) / cap; da = (h.loc[days] - ac.loc[days]) / cap
+            mlo, mhi = boot(dm.to_numpy(), draws, seed); alo, ahi = boot(da.to_numpy(), draws, seed)
+            out.append(dict(zone=z, arch=ar, format=f, su=su, nl=nl, dmc=dm.mean(), mlo=mlo, mhi=mhi, dac=da.mean(),
+                            alo=alo, ahi=ahi, pmc=mc.loc[days].mean() / cap, pac=ac.loc[days].mean() / cap))
+    return pd.DataFrame(out).sort_values(["arch", "zone", "format", "nl", "su"], ascending=[True, True, False, False, True])
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("cal"); ap.add_argument("eval"); ap.add_argument("--json")
@@ -96,10 +114,14 @@ def main():
     assert not set(cal.day) & set(ev.day), "calibration and evaluation days overlap"
     kmap = calibrate(cal)
     E = pick(ev, kmap)
-    main_t = table(E[(E.pen == 0) & (E.su_scale == 1) & (E.res_bid == 60) & (E.res_eval == 60)], a.draws, a.seed, "main")
-    pen_t = table(E[(E.pen == 10) & (E.su_scale == 1) & (E.res_bid == 60) & (E.res_eval == 60)], a.draws, a.seed, "pen10")
-    su_t = table(E[(E.pen == 0) & (E.su_scale == 0.5) & (E.res_bid == 60) & (E.res_eval == 60)], a.draws, a.seed, "su0.5")
-    q = E[(E.pen == 0) & (E.su_scale == 1) & (E.res_eval == 15)]
+    if "nl_scale" not in E:
+        E["nl_scale"] = 1.0
+    NL1 = E.nl_scale == 1
+    grid = thermal_grid(E[(E.pen == 0) & (E.res_bid == 60) & (E.res_eval == 60)], a.draws, a.seed)
+    main_t = table(E[NL1 & (E.pen == 0) & (E.su_scale == 1) & (E.res_bid == 60) & (E.res_eval == 60)], a.draws, a.seed, "main")
+    pen_t = table(E[NL1 & (E.pen == 10) & (E.su_scale == 1) & (E.res_bid == 60) & (E.res_eval == 60)], a.draws, a.seed, "pen10")
+    su_t = table(E[NL1 & (E.pen == 0) & (E.su_scale == 0.5) & (E.res_bid == 60) & (E.res_eval == 60)], a.draws, a.seed, "su0.5")
+    q = E[NL1 & (E.pen == 0) & (E.su_scale == 1) & (E.res_eval == 15)]
     q15 = []
     for (z, ar, f), g in q.groupby(KEY):
         h60 = g[g.res_bid == 60].set_index("day").profit; h15 = g[g.res_bid == 15].set_index("day").profit
@@ -115,6 +137,13 @@ def main():
     show(main_t, "MAIN: realised hourly SDAC, intraday re-trade at the DA price (pen 0), repo start-up cost")
     show(pen_t, "SENSITIVITY: re-traded MWh cost 10 €/MWh")
     show(su_t, "SENSITIVITY: true start-up cost × 0.5 (k_su recalibrated)")
+    print("\n### THERMAL SENSITIVITY: true no-load × start-up cost (k_su recalibrated per cell on CAL; ×1.5 = stress)")
+    print("Fixed structure per archetype (CCGT exclusive, COAL linked; plain block shown too). Δ €/MW-day [90%].")
+    print("| zone | arch | format | no-load | start-up | vs hourly_mc | vs hourly_ac | hourly_mc profit | hourly_ac profit |")
+    print("|---|---|---|---|---|---|---|---|---|")
+    for r in grid.itertuples():
+        print(f"| {r.zone} | {r.arch} | {r.format} | ×{r.nl:g} | ×{r.su:g} | {r.dmc:+.1f} [{r.mlo:+.1f},{r.mhi:+.1f}] | "
+              f"{r.dac:+.1f} [{r.alo:+.1f},{r.ahi:+.1f}] | {r.pmc:.1f} | {r.pac:.1f} |")
     print("\n### 15-MINUTE: 15-min products vs 60-min products on realised PT15M quarters (Δ = 15 − 60, €/MW-day)")
     print("| zone | arch | format | days | 60-min | 15-min | Δ [90%] |\n|---|---|---|---|---|---|---|")
     for r in q15.itertuples():
@@ -122,7 +151,7 @@ def main():
     if a.json:
         json.dump({"kmap": {"|".join(map(str, k)): v for k, v in kmap.items()},
                    "main": main_t.to_dict("records"), "pen10": pen_t.to_dict("records"),
-                   "su05": su_t.to_dict("records"), "q15": q15.to_dict("records")}, open(a.json, "w"), indent=1)
+                   "su05": su_t.to_dict("records"), "q15": q15.to_dict("records"), "thermal_grid": grid.to_dict("records")}, open(a.json, "w"), indent=1)
 
 
 if __name__ == "__main__":

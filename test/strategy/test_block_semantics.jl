@@ -93,3 +93,11 @@ end
     @test !hasproperty(acc()["BLK:Z:u"], :ratio)
     @test P(r) ≈ [80.0, 100.0]
 end
+
+@testset "loop as a root linked block (signed all-or-nothing; what storage `block` uses)" begin
+    c = MarketOrder[blk(:demand, 0.0, 100.0, 1, "BLKL:Z:b"), blk(:supply, 0.0, 80.0, 2, "BLKL:Z:b")]
+    r = clear(c; gas2=150.0)
+    @test haskey(acc(), "BLKL:Z:b")
+    @test P(r) ≈ [80.0, 150.0]           # charging 100 MW raises demand in h1 (gas still marginal), not supply
+    @test sum(s[2] for s in acc()["BLKL:Z:b"].slices) ≈ -20.0
+end

@@ -11,7 +11,8 @@ const ZONES = Dict("CCGT" => ["GR", "IT-SOUTH", "DE_LU", "FR", "NO2", "ES"], "CO
     "PSP" => ["GR", "IT-SOUTH", "DE_LU", "FR", "NO2", "ES"], "PVBAT" => ["ES", "GR", "IT-SOUTH", "DE_LU"],
     "FLEX" => ["GR", "IT-SOUTH", "DE_LU", "FR", "NO2", "ES"])
 const K_SU = [0.5, 0.75, 1.0]                # start-up share in a block price (calibrated on cal days); ≤ 1 = never above cost
-const SU_SCALE = [1.0, 0.5]                   # true start-up cost sensitivity (1.0 = repo formula)
+const SU_SCALE = [1.0, 0.5, 1.5]              # true start-up cost sensitivity (1.0 = repo formula; 1.5 = stress)
+const NL_SCALE = [1.0, 0.0]                   # true no-load cost sensitivity (1.0 = FuelTypeParameters)
 const PEN = [0.0, 10.0]                       # €/MWh on re-traded deviations (0 = intraday at the DA price)
 
 function forecast(day, dev)
@@ -36,7 +37,7 @@ function main()
     out = ARGS[2]; dev = "--dev" in ARGS
     sub = dev ? "st-blocks/dev" : "st-blocks"
     io = open(out, "w")
-    println(io, "day,zone,arch,format,k_su,su_scale,pen,res_bid,res_eval,profit,rev,cost,dev_mwh,sold_mwh,starts,n_fam,n_fam_acc,unfilled_h,cap_mw,srmc,startup,wv")
+    println(io, "day,zone,arch,format,k_su,su_scale,nl_scale,pen,res_bid,res_eval,profit,rev,cost,dev_mwh,sold_mwh,starts,n_fam,n_fam_acc,unfilled_h,cap_mw,srmc,startup,wv")
     for day in days
         inp = JSON.parsefile(joinpath(ROOT, sub, "inputs/$day.json"))
         rl = JSON.parsefile(joinpath(ROOT, sub, "realised/$day.json"))
@@ -47,12 +48,12 @@ function main()
             F = Fz[z]; any(isnan, F) && continue
             P = Float64.(rl["hourly"][z]); Q = haskey(rl["q15"], z) ? Float64.(rl["q15"][z]) : nothing
             wv = sum(F) / length(F)    # ex-ante water value: the zone's forecast daily mean (no reservoir families in the book)
-            for sus in (arch in ("CCGT", "COAL") ? SU_SCALE : [1.0])
+            for sus in (arch in ("CCGT", "COAL") ? SU_SCALE : [1.0]), nls in (arch in ("CCGT", "COAL") ? NL_SCALE : [1.0])
                 a = archetype(arch, z; ttf=inp["ttf"], eua=inp["eua"], solar_fc=get(inp["solar_fc"], z, nothing),
                               load_fc=get(inp["load_fc"], z, nothing), wv=wv,
                               solar_peak=get(get(inp, "solar_peak365", Dict()), z, nothing))
-                if a isa SF.Thermal && sus != 1.0
-                    a = SF.Thermal(a.id, a.zone, a.pmax, a.pmin, a.min_up, a.min_down, a.srmc, a.startup * sus, a.noload)
+                if a isa SF.Thermal && (sus != 1.0 || nls != 1.0)
+                    a = SF.Thermal(a.id, a.zone, a.pmax, a.pmin, a.min_up, a.min_down, a.srmc, a.startup * sus, a.noload * nls)
                 end
                 cap = a isa SF.Thermal ? a.pmax : a isa SF.Storage ? a.p : a isa SF.Hydro ? a.p : a isa SF.PVBat ? 200.0 : 300.0
                 for fmt in FORMATS[cls(a)]
@@ -60,7 +61,7 @@ function main()
                     for k in ks
                         # hourly bids on hourly prices, plus (post-MTU quarters) 60-min and 15-min products on quarters
                         cases = [(60, 60, P)]
-                        if Q !== nothing && sus == 1.0
+                        if Q !== nothing && sus == 1.0 && nls == 1.0
                             push!(cases, (60, 15, Q)); push!(cases, (15, 15, Q))
                         end
                         for (rb, re, PP) in cases
@@ -70,8 +71,8 @@ function main()
                                 r = evaluate(a, o, PP, day; res=re, pen=pen)
                                 dt = re / 60
                                 unf = a isa SF.Thermal ? count(t -> PP[t] > a.srmc && r.phys[t] <= 0, eachindex(PP)) * dt : 0.0
-                                @printf(io, "%s,%s,%s,%s,%.2f,%.2f,%.1f,%d,%d,%.2f,%.2f,%.2f,%.3f,%.3f,%d,%d,%d,%.2f,%.1f,%.3f,%.1f,%.3f\n",
-                                    day, z, arch, fmt, k, sus, pen, rb, re, r.profit, r.rev, r.cost, r.dev_mwh, r.sold_mwh,
+                                @printf(io, "%s,%s,%s,%s,%.2f,%.2f,%.2f,%.1f,%d,%d,%.2f,%.2f,%.2f,%.3f,%.3f,%d,%d,%d,%.2f,%.1f,%.3f,%.1f,%.3f\n",
+                                    day, z, arch, fmt, k, sus, nls, pen, rb, re, r.profit, r.rev, r.cost, r.dev_mwh, r.sold_mwh,
                                     r.starts, length(r.fam), count(>(0), values(r.fam)), unf, cap,
                                     a isa SF.Thermal ? a.srmc : NaN, a isa SF.Thermal ? a.startup : NaN, wv)
                                 nrow += 1
