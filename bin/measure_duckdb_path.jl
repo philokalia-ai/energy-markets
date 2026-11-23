@@ -4,10 +4,12 @@
 # save_to_db=false and never writes Postgres or the results DuckDB.
 #
 #   clear:   julia --project=. bin/measure_duckdb_path.jl clear --days 2026-11-18,2026-11-19 --label pg --out DIR
+#                [--entry forecast|record]   forecast (default) = the daily forecast's call (run_multi_zone_market_clearing,
+#                passes=2): the timing production runs every day; record = the pipelined record's stage functions
+#                (bit-identical to the record, so also comparable with it). Both backends must use the same entry.
 #            The backend is whatever the environment selects: ENERGY_CONN_STR + EUPHEMIA_DATA_STORE=postgres for the
 #            current path; EUPHEMIA_DATA_STORE=duckdb + EUPHEMIA_DUCKDB_PATH=<filled inputs> for the DuckDB path.
-#            Each day: the record's clear (the PipelinedBackfill stage functions, as_of=:gate, two passes), with
-#            per-day wall time. Writes DIR/prices_<label>.csv and
+#            Each day: the chosen entry's clear (gate context, two passes), with per-day wall time. Writes DIR/prices_<label>.csv and
 #            DIR/times_<label>.csv.
 #   compare: julia --project=. bin/measure_duckdb_path.jl compare DIR/prices_pg.csv DIR/prices_duckdb.csv --out DIR
 #            Cell-by-cell comparison; every differing cell listed with its |Δ| and class (bit-identical / ≤2e-12
@@ -46,16 +48,26 @@ function record_clear(d::Date)
     return usable(r2) ? r2 : r1
 end
 
+"""The daily forecast's clear of one UTC day (bin/daily_forecast.jl clear_utc_day!: run_multi_zone_market_clearing,
+passes=2, enrich_network), here under the day's gate context and without the weather-track scenario."""
+forecast_clear(d::Date) = Euphemia.with_context(Euphemia.gate_context(d)) do
+    run_multi_zone_market_clearing(d; zones=FOOTPRINT, order_method=:merit_order, optimizer="highs",
+        silent=true, save_to_db=false, enrich_network=true, passes=2)
+end
+
 function clear(args)
     days = Date.(split(opt(args, "--days"), ","))
     label = opt(args, "--label"); out = opt(args, "--out"); mkpath(out)
-    println("measure clear: backend=$(Euphemia.DATA_STORE[]) label=$label days=$(join(days, ","))")
+    entry = opt(args, "--entry", "forecast")
+    entry in ("forecast", "record") || error("--entry must be forecast or record")
+    clear1 = entry == "forecast" ? forecast_clear : record_clear
+    println("measure clear: backend=$(Euphemia.DATA_STORE[]) entry=$entry label=$label days=$(join(days, ","))")
     open(joinpath(out, "prices_$label.csv"), "w") do pio
         open(joinpath(out, "times_$label.csv"), "w") do tio
             println(pio, "day,zone,period,price"); println(tio, "day,wall_s,status")
             for d in days
                 t0 = time()
-                r = record_clear(d)
+                r = clear1(d)
                 wall = time() - t0
                 prices = r === nothing ? Dict() : r.market_prices
                 for z in sort(collect(keys(prices))), (p, v) in sort(collect(prices[z]))

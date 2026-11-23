@@ -13,6 +13,14 @@ on:
         required: false
         default: ""
         type: string
+      entry:
+        description: "forecast = the daily forecast's clear (production's daily timing); record = the record pipeline's stage functions"
+        required: false
+        default: forecast
+        type: choice
+        options:
+          - forecast
+          - record
 
 concurrency:
   group: measure-duckdb-path
@@ -137,7 +145,7 @@ jobs:
         run: |
           [ ! -f STOP_MEASURE ] || { cat STOP_MEASURE; exit 1; }
           /usr/bin/time -v julia --project=. bin/measure_duckdb_path.jl clear \
-            --days "${{ steps.days.outputs.days }}" --label pg --out "$OUT_DIR" 2> "$OUT_DIR/time_pg.txt"
+            --days "${{ steps.days.outputs.days }}" --label pg --entry "${{ github.event.inputs.entry || 'forecast' }}" --out "$OUT_DIR" 2> "$OUT_DIR/time_pg.txt"
           grep -E "Elapsed|Maximum resident" "$OUT_DIR/time_pg.txt"
 
       - name: Fill — Postgres → run-local DuckDB (timed)
@@ -160,7 +168,7 @@ jobs:
         run: |
           [ ! -f STOP_MEASURE ] || { cat STOP_MEASURE; exit 1; }
           /usr/bin/time -v julia --project=. bin/measure_duckdb_path.jl clear \
-            --days "${{ steps.days.outputs.days }}" --label duckdb --out "$OUT_DIR" 2> "$OUT_DIR/time_duckdb.txt"
+            --days "${{ steps.days.outputs.days }}" --label duckdb --entry "${{ github.event.inputs.entry || 'forecast' }}" --out "$OUT_DIR" 2> "$OUT_DIR/time_duckdb.txt"
           grep -E "Elapsed|Maximum resident" "$OUT_DIR/time_duckdb.txt"
 
       - name: Compare prices and walls
