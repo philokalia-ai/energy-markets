@@ -399,6 +399,12 @@ function write_forecast!(market_date::Date, lead_days::Int, prediction_made::Dat
     # them — the backup table is the honesty mechanism ("what we said then" kept
     # for audit; the live series now carries the reset). Read at call time.
     supersede = lowercase(get(ENV, "EUPHEMIA_RETRO_SUPERSEDE", "")) in ("1", "true", "yes", "on")
+    # fill → run → transfer (owner rule 2026-11-23): under the DuckDB backend the slice goes to the run-local
+    # results DuckDB with the same plan, and bin/transfer_run_results.jl replays it against Postgres.
+    Euphemia.results_to_duckdb() &&
+        return write_forecast_duckdb!(market_date, lead_days, prediction_made, zone_hourly, input_mode;
+                                      is_retro=is_retro, reset_tag=reset_tag, retro_of_utc=retro_of_utc,
+                                      alongside=alongside, supersede=supersede)
     n_inserted = 0
     Euphemia.withdb() do cnx
         # The write path (:insert / :refuse / :supersede) is decided by the pure
@@ -510,6 +516,71 @@ function write_forecast!(market_date::Date, lead_days::Int, prediction_made::Dat
         end
     end
     return n_inserted
+end
+
+"""
+    write_forecast_duckdb!(market_date, lead_days, prediction_made, zone_hourly, input_mode; ...) -> Int
+
+`write_forecast!` under the DuckDB backend: the same write plan (`retro_write_plan` on the live-row presence
+of the slice), applied to the run-local results DuckDB in one transaction, plus one `forecast_slice` transfer
+op carrying the slice keys and flags. The rows written carry that op's id; bin/transfer_run_results.jl
+replays the op against Postgres, re-deciding the plan there and refusing it if Postgres disagrees.
+"""
+function write_forecast_duckdb!(market_date::Date, lead_days::Int, prediction_made::DateTime,
+                                zone_hourly::Dict{String,Dict{DateTime,Float64}}, input_mode::String;
+                                is_retro::Bool, reset_tag, retro_of_utc, alongside::Bool, supersede::Bool)
+    R = "results_db.simulations"
+    zones = sort!(collect(keys(zone_hourly)))
+    slice = "market_date = \$1 AND lead_days = \$2 AND input_mode = \$3"
+    key = Any[market_date, lead_days, input_mode]
+    return Euphemia.results_transaction() do
+        cnt(where, args) = Int(Euphemia._results_exec(
+            "SELECT COUNT(*) AS n FROM $R.forecast_prices WHERE $slice AND $where", vcat(key, args)).n[1])
+        n_live = is_retro ? cnt("is_retro = false", Any[]) : 0
+        n_live_same_cv = alongside ? cnt("code_version = \$4 AND is_retro = false", Any[CV]) : 0
+        plan = retro_write_plan(is_retro=is_retro, supersede=supersede, has_live=(n_live > 0),
+                                alongside=alongside, has_live_same_cv=(n_live_same_cv > 0))
+        if plan in (:refuse, :refuse_same_cv)
+            println("  ⏭️  retro SKIP $market_date lead=$lead_days mode=$input_mode: plan $plan " *
+                    "(a LIVE vintage exists; nothing written)")
+            return 0
+        end
+        op = Euphemia.log_transfer_op!("forecast_slice", Dict(
+            "market_date" => string(market_date), "lead_days" => lead_days, "input_mode" => input_mode,
+            "zones" => zones, "is_retro" => is_retro, "reset_tag" => reset_tag,
+            "retro_of_utc" => retro_of_utc === nothing ? nothing : string(retro_of_utc),
+            "prediction_made_utc" => string(prediction_made), "alongside" => alongside,
+            "supersede" => supersede, "plan" => string(plan), "n_live" => n_live,
+            "code_version" => CV, "clearing_mode" => CLEARING_MODE))
+        x(sql, args=Any[]) = Euphemia._results_exec(sql, vcat(key, args))
+        if plan == :alongside
+            x("DELETE FROM $R.forecast_prices WHERE $slice AND is_retro = true AND reset_tag = \$4 " *
+              "AND code_version = \$5", Any[reset_tag, CV])
+        elseif plan == :supersede
+            cols = "market_date, date_time_utc, bidding_zone, price_eur_mwh, prediction_made_utc, lead_days, " *
+                   "clearing_mode, code_version, input_mode, is_retro, reset_tag, retro_of_utc"
+            x("INSERT INTO $R.forecast_prices_pre_reset ($cols, superseded_at_utc, transfer_op_id) " *
+              "SELECT $cols, now()::TIMESTAMP, \$4 FROM $R.forecast_prices WHERE $slice AND is_retro = false",
+              Any[op])
+            x("DELETE FROM $R.forecast_prices WHERE $slice")
+        elseif is_retro
+            x("DELETE FROM $R.forecast_prices WHERE $slice AND is_retro = true")
+        else
+            x("DELETE FROM $R.forecast_prices WHERE $slice AND is_retro = false " *
+              "AND bidding_zone IN (SELECT unnest(\$4))", Any[zones])
+        end
+        rows = DataFrame(market_date=Date[], date_time_utc=DateTime[], bidding_zone=String[],
+                         price_eur_mwh=Float64[], prediction_made_utc=DateTime[], lead_days=Int[],
+                         clearing_mode=String[], code_version=Int[], input_mode=String[], is_retro=Bool[],
+                         reset_tag=Union{Missing,String}[], retro_of_utc=Union{Missing,DateTime}[],
+                         transfer_op_id=Int64[])
+        for zone in zones, (h, price) in sort!(collect(zone_hourly[zone]); by=first)
+            push!(rows, (market_date, h, zone, price, prediction_made, lead_days, CLEARING_MODE, CV,
+                         input_mode, is_retro, something(reset_tag, missing),
+                         retro_of_utc === nothing ? missing : retro_of_utc, op))
+        end
+        Euphemia._results_insert_df(rows, "forecast_prices")
+    end
 end
 
 """

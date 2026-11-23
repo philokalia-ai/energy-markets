@@ -53,7 +53,10 @@ function __init__()
         # EUPHEMIA_DUCKDB_READONLY=true opens the extract in shared read-only
         # mode (required for multi-process parallel workers; see bin/reproduce.jl).
         ro = lowercase(get(ENV, "EUPHEMIA_DUCKDB_READONLY", "")) == "true"
-        configure_data_store!(backend=:duckdb, duckdb_path=path, read_only=ro)
+        # EUPHEMIA_RESULTS_WRITABLE=true: this process writes results (the run-local results DuckDB of a
+        # fill → run → transfer job) while the filled inputs stay read-only. Pipeline workers leave it unset.
+        rw = lowercase(get(ENV, "EUPHEMIA_RESULTS_WRITABLE", "")) == "true"
+        configure_data_store!(backend=:duckdb, duckdb_path=path, read_only=ro, results_writable=rw)
     else
         preinit_pool()
     end

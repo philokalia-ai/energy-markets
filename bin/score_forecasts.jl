@@ -115,6 +115,9 @@ COMMIT/ROLLBACK, so the connection keeps its default), mirroring
 timeout is NOT fatal — the hourly scoring proceeds and q15 is skipped this run.
 """
 function ensure_q15_columns()
+    # DuckDB (fill → run → transfer): the run-local forecast_scores carries the q15 columns; the transfer
+    # step adds any that Postgres lacks, catalog first, as below.
+    Euphemia.results_to_duckdb() && (Euphemia.ensure_run_results_tables!(); return true)
     Euphemia.withdb() do cnx
         have = Set(String.(DataFrame(LibPQ.execute(cnx, """
             SELECT column_name FROM information_schema.columns
@@ -144,6 +147,20 @@ end
 function update_q15!(market_date::Date, zone::String, lead_days::Int, cv::Int,
                      input_mode::String, is_retro::Bool, q, res::String)
     nn(x) = x === nothing ? missing : x
+    if Euphemia.results_to_duckdb()
+        Euphemia._results_exec("""
+            UPDATE results_db.simulations.forecast_scores
+            SET n_q15 = \$1, mae_q15 = \$2, bias_q15 = \$3, corr_q15 = \$4,
+                shape_floor_q15 = \$5, q15_forecast_res = \$6, n_le0_q15_actual = \$7,
+                n_le0_q15_pred = \$8, le0_q15_hits = \$9
+            WHERE market_date = \$10 AND bidding_zone = \$11 AND lead_days = \$12
+              AND code_version = \$13 AND input_mode = \$14 AND is_retro = \$15
+        """, Any[q.n_q15, nn(q.mae_q15), nn(q.bias_q15), nn(q.corr_q15),
+                 nn(q.shape_floor_q15), res, nn(q.n_le0_q15_actual), nn(q.n_le0_q15_pred),
+                 nn(q.le0_q15_hits), market_date, zone, lead_days, cv, input_mode, is_retro])
+        push!(SCORE_KEYS_Q15, _score_key(market_date, zone, lead_days, cv, input_mode, is_retro))
+        return nothing
+    end
     Euphemia.withdb() do cnx
         LibPQ.execute(cnx, """
             UPDATE simulations.forecast_scores
@@ -254,11 +271,71 @@ function slice_sim(market_date::Date, lead_days::Int, cv::Int, input_mode::Strin
           reset_tag === nothing ? missing : reset_tag])
 end
 
+# --- fill → run → transfer (owner rule 2026-11-23): DuckDB-backend writers -------------------------------
+# The scores go to the run-local results DuckDB; the keys each kind of write touched are logged as ONE
+# transfer op per kind at the end of main() ("score_upsert": hourly columns; "score_q15": the q15 columns),
+# and bin/transfer_run_results.jl replays them against Postgres with this file's SQL semantics.
+const SCORE_KEYS_HOURLY = Set{NamedTuple}()
+const SCORE_KEYS_Q15 = Set{NamedTuple}()
+_score_key(market_date, zone, lead_days, cv, input_mode, is_retro) =
+    (market_date=string(market_date), bidding_zone=zone, lead_days=lead_days, code_version=cv,
+     input_mode=input_mode, is_retro=is_retro)
+
+"Local upsert of the hourly columns (q15 columns of an existing row are kept, as ON CONFLICT DO UPDATE does)."
+function upsert_score_duckdb!(market_date, zone, lead_days, cv, input_mode, n, mae, bias, corr, cm,
+                              is_retro, reset_tag)
+    tonull(x) = x === nothing ? missing : x
+    vals = Any[n, tonull(mae), tonull(bias), tonull(corr), cm.n_collapse_actual, cm.n_collapse_pred,
+               cm.hits, cm.false_alarms, tonull(cm.hit_rate), tonull(cm.false_alarm_rate),
+               reset_tag === nothing ? missing : reset_tag]
+    key = Any[market_date, zone, lead_days, cv, input_mode, is_retro]
+    Euphemia.results_transaction() do
+        R = "results_db.simulations.forecast_scores"
+        k = "market_date = \$12 AND bidding_zone = \$13 AND lead_days = \$14 AND code_version = \$15 " *
+            "AND input_mode = \$16 AND is_retro = \$17"
+        k1 = "market_date = \$1 AND bidding_zone = \$2 AND lead_days = \$3 AND code_version = \$4 " *
+             "AND input_mode = \$5 AND is_retro = \$6"
+        have = Int(Euphemia._results_exec("SELECT COUNT(*) AS n FROM $R WHERE $k1", key).n[1])
+        if have > 0
+            Euphemia._results_exec("""
+                UPDATE $R SET n_hours = \$1, mae = \$2, bias = \$3, corr = \$4, n_collapse_actual = \$5,
+                    n_collapse_pred = \$6, collapse_hits = \$7, collapse_false_alarms = \$8,
+                    collapse_hit_rate = \$9, collapse_false_alarm_rate = \$10, reset_tag = \$11,
+                    scored_at = now()::TIMESTAMP
+                WHERE $k""", vcat(vals, key))
+        else
+            Euphemia._results_exec("""
+                INSERT INTO $R (n_hours, mae, bias, corr, n_collapse_actual, n_collapse_pred, collapse_hits,
+                    collapse_false_alarms, collapse_hit_rate, collapse_false_alarm_rate, reset_tag,
+                    market_date, bidding_zone, lead_days, code_version, input_mode, is_retro, scored_at)
+                VALUES (\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8, \$9, \$10, \$11, \$12, \$13, \$14, \$15,
+                        \$16, \$17, now()::TIMESTAMP)""", vcat(vals, key))
+        end
+    end
+    push!(SCORE_KEYS_HOURLY, _score_key(market_date, zone, lead_days, cv, input_mode, is_retro))
+    return nothing
+end
+
+"Log the scorer's two transfer ops (keys only) — once, at the end of a DuckDB-backend run."
+function log_score_transfer_ops!()
+    Euphemia.results_to_duckdb() || return nothing
+    for (kind, keys) in (("score_upsert", SCORE_KEYS_HOURLY), ("score_q15", SCORE_KEYS_Q15))
+        isempty(keys) && continue
+        Euphemia.log_transfer_op!(kind, Dict("keys" => sort!(collect(keys); by=k -> (k.market_date,
+            k.bidding_zone, k.lead_days, k.code_version, k.input_mode, k.is_retro)), "n" => length(keys)))
+        println("transfer op $kind: $(length(keys)) key(s)")
+    end
+    return nothing
+end
+
 function upsert_score!(market_date::Date, zone::String, lead_days::Int, cv::Int,
                        input_mode::String, n::Int, mae, bias, corr, cm;
                        is_retro::Bool=false, reset_tag::Union{Nothing,String}=nothing,
                        cnx=nothing)
     tonull(x) = x === nothing ? missing : x
+    Euphemia.results_to_duckdb() &&
+        return upsert_score_duckdb!(market_date, zone, lead_days, cv, input_mode, n, mae, bias, corr, cm,
+                                    is_retro, reset_tag)
     cnx === nothing && return Euphemia.withdb() do c
         upsert_score!(market_date, zone, lead_days, cv, input_mode, n, mae, bias, corr, cm;
                       is_retro=is_retro, reset_tag=reset_tag, cnx=c)
@@ -426,7 +503,14 @@ function main()
             (RESCORE_ZONES === nothing ? "" : "  zones=$(join(sort(collect(RESCORE_ZONES)), ","))"))
     println("=" ^ 70)
 
-    DRY_RUN || Euphemia.ensure_forecast_tables()
+    if Euphemia.results_to_duckdb()
+        (RESCORE || !isempty(RESCORE_KEYS_OUT) || !isempty(SCORE_LOCK_TIMEOUT)) && error(
+            "score_forecasts: the rescore modes still write Postgres directly and are not migrated to " *
+            "fill → run → transfer yet; run them on the Postgres backend")
+        DRY_RUN || Euphemia.ensure_run_results_tables!()
+    else
+        DRY_RUN || Euphemia.ensure_forecast_tables()
+    end
     q15_ok = (HOURLY_ONLY || DRY_RUN) ? false : ensure_q15_columns()
     Q15_ONLY && !q15_ok && error("Q15_ONLY: the q15 columns are missing and could not be added")
 
@@ -502,8 +586,10 @@ function main()
         write_slice!(batch)
     end
 
+    log_score_transfer_ops!()
     print_summary()
     println("\nSCORING COMPLETE")
 end
 
-main()
+# EUPHEMIA_SCORE_NO_AUTORUN lets a test load the writers without scoring (as daily_forecast.jl's guard).
+isempty(get(ENV, "EUPHEMIA_SCORE_NO_AUTORUN", "")) && main()
