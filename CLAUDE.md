@@ -83,6 +83,7 @@ definition order (`src/Euphemia.jl` + `src/clearing/`, `src/MeritOrderBook.jl`
 ## Data store (Postgres or a DuckDB extract)
 
 **Owner rule (2026-11-23): DuckDB always sits between Postgres and Julia.**
+Postgres is for long-term storage. DuckDB is for sharing and calculating.
 - Julia never queries Postgres, except the one step that fills DuckDB from Postgres (a bulk copy).
 - Every Julia read (inputs, books, production pipelines, backfills, research) goes to DuckDB.
 - Results go the same way back: Julia writes to DuckDB, and a bulk transfer moves them to Postgres.
