@@ -13,10 +13,14 @@
 # bin/forecast_common.jl. The manifest's "code_version" is the CURRENT model
 # version; each zone-parquet row carries the code_version that produced it.
 #
-# Layout (the /v1/ public data API — stable; schema changes bump /v2/):
+# Layout (the /v1/ public data API — latest only: this header is the current contract):
 #
 #   v1/zones/<ZONE>.parquet   one row per (market_date, lead_days, input_mode,
-#                             delivery hour): market_date DATE, lead_days INT,
+#                             delivery slot) at the day's own resolution
+#                             (column resolution: 'PT60M' = hourly days, 24
+#                             rows, 23/25 on DST days; 'PT15M' = cv46
+#                             quarter-hour days, 96 rows, 92/100 on DST days;
+#                             mixed history: read it per day): market_date DATE, lead_days INT,
 #                             input_mode VARCHAR, code_version INT (provenance,
 #                             additive column), prediction_made_utc TIMESTAMP,
 #                             date_time_utc TIMESTAMP, sim DOUBLE,
@@ -25,7 +29,14 @@
 #                             scored; repeated on each hourly row); additive
 #                             day-level 15-min scores n_q15, mae_q15, bias_q15,
 #                             corr_q15, shape_floor_q15 (null for zone-days
-#                             without native PT15M actuals).
+#                             without native PT15M actuals). Then
+#                             resolution VARCHAR (above) and actual_resolution
+#                             VARCHAR ('PT15M' = native quarter-hour actuals;
+#                             'PT60M' = hourly actuals, on a quarter-hour day
+#                             replicated onto its 4 quarters because the
+#                             zone-day has no native quarters). The hourly
+#                             overlays gbm/stats/tsfm*/p_le0 are replicated
+#                             onto the quarters of their hour (a step).
 #   v1/scoreboard.parquet     zone, lead_days, window ("all" | "YYYY-MM"),
 #                             input_mode, n_days, mae, bias, corr, code_version,
 #                             then (additive, phase 3) n_days_q15, mae_q15,
@@ -290,6 +301,8 @@ function export_zone_parquets()
     act = da_target_actuals(sd - Day(1), ed)  # EUPHEMIA_DA_TARGET (default sdac; highest_seq = kill switch)
     actmap = Dict{Tuple{String,DateTime},Float64}(
         (String(a.z), DateTime(a.t)) => Float64(a.act) for a in eachrow(act))
+    # native quarter-hour actuals, read only when the export holds a quarter-hour (cv46) day
+    q15map = q15_actual_map(sd - Day(1), ed; needed=any_quarter_day(prices))
     ml = try
         Euphemia.sql2df_with_retry("""
             SELECT bidding_zone AS z, model,
@@ -330,7 +343,8 @@ function export_zone_parquets()
                        tsfm_arm=Union{Missing,String}[],
                        n_q15=Union{Missing,Int}[], mae_q15=Union{Missing,Float64}[],
                        bias_q15=Union{Missing,Float64}[], corr_q15=Union{Missing,Float64}[],
-                       shape_floor_q15=Union{Missing,Float64}[])
+                       shape_floor_q15=Union{Missing,Float64}[],
+                       resolution=String[], actual_resolution=String[])
         keys_ = unique(collect(zip(Date.(zp.market_date), Int.(zp.lead_days),
                                    String.(zp.mode))))
         # newest first, then by increasing lead ('entsoe' before 'weather'
@@ -351,22 +365,26 @@ function export_zone_parquets()
             slice_retro = !ismissing(sub.is_retro[1]) && Bool(sub.is_retro[1])
             slice_tag = ismissing(sub.reset_tag[1]) ? missing : String(sub.reset_tag[1])
             od = get(ovd, (zone, d), nothing)
-            for r in eachrow(sub)
-                h = DateTime(r.t)
+            hours = [DateTime(t) for t in sub.t]
+            res = day_resolution(hours)
+            acts, act_res = slot_actuals(zone, hours, res, actmap, q15map)
+            for (i, r) in enumerate(eachrow(sub))
+                h = hours[i]
+                k = slot_hour(h, res)   # where the hourly overlays are read (the slot's hour on a quarter day)
                 push!(df, (d, lead, mode, slice_cv, made, h, Float64(r.sim),
-                           get(actmap, (zone, h), missing), mae, bias, corr,
+                           acts[i] === nothing ? missing : acts[i], mae, bias, corr,
                            slice_retro, slice_tag,
-                           get(mlmap, (zone, "hybrid_gbm", h), missing),
-                           get(mlmap, (zone, "stats_gbm", h), missing),
-                           get(ovh, (zone, "tsfm_median", h), missing),
-                           get(ovh, (zone, "tsfm_q10", h), missing),
-                           get(ovh, (zone, "tsfm_q90", h), missing),
-                           get(ovh, (zone, "p_le0", h), missing),
+                           get(mlmap, (zone, "hybrid_gbm", k), missing),
+                           get(mlmap, (zone, "stats_gbm", k), missing),
+                           get(ovh, (zone, "tsfm_median", k), missing),
+                           get(ovh, (zone, "tsfm_q10", k), missing),
+                           get(ovh, (zone, "tsfm_q90", k), missing),
+                           get(ovh, (zone, "p_le0", k), missing),
                            od === nothing ? missing : od.p_any_le0,
                            od === nothing ? missing : od.input_mode,
                            od === nothing ? missing : od.issue_utc,
                            od === nothing ? missing : od.arm,
-                           q15...))
+                           q15..., res, act_res))
             end
         end
         counts["zones/$zone.parquet"] =
@@ -431,6 +449,7 @@ function export_map_parquet()
     act = da_target_actuals(sd - Day(1), ed)  # EUPHEMIA_DA_TARGET (default sdac; highest_seq = kill switch)
     actmap = Dict{Tuple{String,DateTime},Float64}(
         (String(a.z), DateTime(a.t)) => Float64(a.act) for a in eachrow(act))
+    q15map = q15_actual_map(sd - Day(1), ed; needed=any_quarter_day(prices))
     # Hourly D-1 load forecast: the weights of err_pct (load-weighted WAPE).
     loads = Euphemia.sql2df_with_retry(HOURLY_LOAD_FC_SQL, [sd - Day(1), ed + Day(1)])
     loadmap = Dict{Tuple{String,DateTime},Float64}(
@@ -447,13 +466,15 @@ function export_map_parquet()
             for zone in sort(unique(String.(st.z)))
                 zp = st[st.z .== zone, :]
                 hours = [DateTime(t) for t in zp.t]
-                acts = [get(actmap, (zone, h), nothing) for h in hours]
+                res = day_resolution(hours)   # slot means: equal slots, so time-weighted on either resolution
+                acts, _ = slot_actuals(zone, hours, res, actmap, q15map)
                 settled = Float64[a for a in acts if a !== nothing]
                 lead = Int(zp.lead_days[1])
                 sc = get(scoremap, (zone, d, lead, track), nothing)
                 # err_pct: only for fully-settled days with full load coverage
-                # (the metric is undefined otherwise — never fabricated).
-                loadv = [get(loadmap, (zone, h), nothing) for h in hours]
+                # (the metric is undefined otherwise — never fabricated). Hourly
+                # load weights, replicated onto the quarters of a quarter-hour day.
+                loadv = [get(loadmap, (zone, slot_hour(h, res)), nothing) for h in hours]
                 ep = (length(settled) == length(hours) && all(!isnothing, loadv)) ?
                     load_weighted_err_pct(Float64.(zp.sim), settled, Float64.(loadv)) :
                     nothing

@@ -577,6 +577,65 @@ function load_weighted_err_pct(sim::Vector{Float64}, act::Vector{Float64},
     return 100 * sum(load .* abs.(sim .- act)) / den
 end
 
+# ---------------------------------------------------------------------------
+# Quarter-hour forecast days (cv46) in the exporters. A day's slot length is read from its own stamps:
+# mixed history is permanent (CHOSEN_SLICE_CTE keeps <=cv45 hourly days next to cv46 quarter days), so
+# every reader branches per DAY, never per dataset. Hourly series (the actuals fallback, the model lines,
+# Timestral, the load weights) are replicated onto the quarters of their hour (a step), never interpolated.
+# ---------------------------------------------------------------------------
+const RES_HOURLY = "PT60M"
+const RES_QUARTER = "PT15M"
+
+"ISO 8601 slot length of one forecast day from its UTC stamps: PT15M when two consecutive stamps are 15 minutes apart, else PT60M."
+function day_resolution(ts::AbstractVector)
+    st = sort(DateTime.(collect(ts)))
+    for i in 1:length(st)-1
+        st[i+1] - st[i] == Minute(15) && return RES_QUARTER
+    end
+    return RES_HOURLY
+end
+
+"True when a prices frame (columns z, market_date, lead_days, t, and mode or track) holds any quarter-hour day."
+function any_quarter_day(prices)
+    k = hasproperty(prices, :mode) ? prices.mode : prices.track
+    days = Dict{Any,Vector{DateTime}}()
+    for i in eachindex(prices.t)
+        push!(get!(days, (prices.z[i], prices.market_date[i], prices.lead_days[i], k[i]), DateTime[]),
+              DateTime(prices.t[i]))
+    end
+    return any(v -> day_resolution(v) == RES_QUARTER, values(days))
+end
+
+"The stamp an hourly series is read at for one slot: the slot's hour on a quarter day (step), the stamp itself on an hourly day."
+slot_hour(t::DateTime, res::AbstractString) = res == RES_QUARTER ? floor(t, Hour) : t
+
+"""
+    slot_actuals(zone, hours, res, actmap, q15map) -> (actuals, actual_resolution)
+
+Actuals for one zone-day's slots (`nothing` where unsettled). Quarter day: the native PT15M Day-ahead actuals
+when the zone-day has any (PT15M), else the hourly actual replicated onto its quarters (PT60M). Hourly day:
+the hourly actuals, exactly as before (PT60M).
+"""
+function slot_actuals(zone, hours, res, actmap, q15map)
+    if res == RES_QUARTER
+        native = Any[get(q15map, (zone, h), nothing) for h in hours]
+        any(!isnothing, native) && return native, RES_QUARTER
+        return Any[get(actmap, (zone, floor(h, Hour)), nothing) for h in hours], RES_HOURLY
+    end
+    return Any[get(actmap, (zone, h), nothing) for h in hours], RES_HOURLY
+end
+
+"""(zone, slot start) → native PT15M Day-ahead actual over market days sd..ed (`native_q15_actuals`, the SDAC
+target: non-SDAC sequences dropped). Empty unless `needed` (no quarter day in the export → no extra read)."""
+function q15_actual_map(sd::Date, ed::Date; needed::Bool=true)
+    m = Dict{Tuple{String,DateTime},Float64}()
+    needed || return m
+    for r in eachrow(native_q15_actuals(sd, ed))
+        String(r.res) == "PT15M" && (m[(String(r.z), DateTime(r.t))] = Float64(r.act))
+    end
+    return m
+end
+
 """
     HOURLY_LOAD_FC_SQL
 

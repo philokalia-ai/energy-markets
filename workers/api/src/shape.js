@@ -51,6 +51,11 @@ const TSFM_DAY = ["p_any_le0", "tsfm_input_mode", "tsfm_issue_utc", "tsfm_arm"];
 // older parquet yields exactly the old shape. Null for zone-days without native
 // PT15M actuals — never a copy of the hourly score.
 const Q15_DAY = ["n_q15", "mae_q15", "bias_q15", "corr_q15", "shape_floor_q15"];
+// Per-day slot length (cv46 quarter-hour days): "resolution" 'PT60M' | 'PT15M' — `hours` holds the day's
+// slot starts at that resolution (96 on a quarter-hour day) — and "actual_resolution" (native quarter
+// actuals 'PT15M', or hourly 'PT60M', replicated onto the quarters when a quarter day has no native ones).
+// Day-level values repeated on every row of the zone-day; passed through when the parquet carries them.
+const RES_DAY = ["resolution", "actual_resolution"];
 const Q15_BOARD = ["n_days_q15", "mae_q15", "bias_q15", "corr_q15", "shape_floor_q15"];
 // Naive baselines + rMAE (#431, bin/naive_baselines.jl → additive scoreboard
 // columns): passed through only when the parquet carries them. d1 / epf need
@@ -69,6 +74,7 @@ export function shapeZone(rows, zone) {
   const byKey = new Map();
   const hasTsfm = rows.length > 0 && Object.prototype.hasOwnProperty.call(rows[0], "tsfm");
   const hasQ15 = has(rows, "mae_q15");
+  const hasRes = has(rows, "resolution");
   for (const r of rows) {
     const date = dateStr(r.market_date);
     const lead = num(r.lead_days);
@@ -96,6 +102,7 @@ export function shapeZone(rows, zone) {
         for (const k of TSFM_DAY) day[k] = null;
       }
       if (hasQ15) for (const k of Q15_DAY) day[k] = num(r[k]);
+      if (hasRes) for (const k of RES_DAY) day[k] = r[k] ?? null;
       byKey.set(key, day);
       days.push(day);
     }
@@ -174,7 +181,7 @@ export function shapeScoreboard(rows, manifest) {
  *
  * Each row is one tagged order: {market_date, zone, ts, side, price, mw,
  * owner, strategy?, code_version}. We keep only the requested zone, group by
- * delivery hour (ts), and emit the supply ladder ascending in price (the merit
+ * delivery slot (ts: the hour, or the quarter on cv46 quarter-hour days), and emit the supply ladder ascending in price (the merit
  * order) and the demand ladder descending in price. Owners AND strategies are
  * de-duplicated into index tables so the long ENTSO-E unit codes / repeated
  * strategy labels are not repeated on every order (keeps the biggest zones —
@@ -183,9 +190,9 @@ export function shapeScoreboard(rows, manifest) {
  *   { zone, date, market_day_tz, code_version, has_strategy,
  *     owners:     ["RES", "IMPORT", "<unit>", …],
  *     strategies: ["res_forecast", "srmc_base", …],       // index table (see below)
- *     hours:  ["2023-01-01T00:00:00Z", …],                   // one ts per delivery hour
- *     supply: [ [ [price, mw, ownerIdx, stratIdx], … ], … ], // per hour, price ascending
- *     demand: [ [ [price, mw, ownerIdx, stratIdx], … ], … ] }// per hour, price descending
+ *     hours:  ["2023-01-01T00:00:00Z", …],                   // one ts per delivery slot (hour, or quarter on cv46 days)
+ *     supply: [ [ [price, mw, ownerIdx, stratIdx], … ], … ], // per slot, price ascending
+ *     demand: [ [ [price, mw, ownerIdx, stratIdx], … ], … ] }// per slot, price descending
  *
  * STRATEGY is the honest source-side "WHY" of each block, written by the Julia
  * book builder (STRATEGY_DESCRIPTIONS in src/merit_order/book_build.jl) into an
@@ -352,10 +359,10 @@ export function shapeUnits(rows) {
 /**
  * flows/<date>.parquet rows -> the coupled cross-border flows the Order-book
  * TRADE WEDGE decomposes (bin/export_flows_parquet.jl is the contract). Each row
- * is one solved border-hour: {date_time_utc, source_zone, sink_zone, flow_mw}.
- * Grouped by delivery hour (UTC ISO), each hour an array of compact
- * [source, sink, mw] triples so the SPA can, for a zone Z, sum the net flow per
- * neighbour into Z at the shown hour:
+ * is one solved border-slot (an hour, or a quarter on cv46 quarter-hour days):
+ * {date_time_utc, source_zone, sink_zone, flow_mw}. Grouped by delivery slot
+ * (UTC ISO), each slot an array of compact [source, sink, mw] triples so the SPA
+ * can, for a zone Z, sum the net flow per neighbour into Z at the shown slot:
  *
  *   { market_day_tz, flows: { "2026-07-27T16:00:00Z": [ ["BG","GR",1080.1], … ] } }
  *

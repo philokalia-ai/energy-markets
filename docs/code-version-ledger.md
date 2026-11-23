@@ -420,6 +420,17 @@ adoption date: the scoreboard's since-freeze window is cv ≥ 45 from 2026-11-21
 
 Dated reminders and scoring-policy notes that do not change `code_version`.
 
+- **2026-11-23 — Exporters and API carry quarter-hour days (cv46 downstream D3); hourly days unchanged, no
+  `code_version` bump.** `bin/export_forecast_json.jl` and `bin/export_web_parquet.jl` read each forecast day at its
+  own resolution (mixed history is permanent): per day `resolution` (`PT60M` / `PT15M`) and `actual_resolution`
+  (native quarter-hour actuals, or the hourly actual replicated onto the quarters when a zone-day has none); `hours`
+  holds the day's slot starts (96 on a quarter day); the hourly overlays (model lines, Timestral) are replicated onto
+  the quarters of their hour; map aggregates are slot means with hourly load weights replicated. `/v1/zones` rows
+  are per slot (one shape, latest only: no `/v2`); the worker passes the two fields through. On hourly data every
+  value is unchanged: main vs this change on an hourly fixture and on the hourly days of a mixed fixture, JSON
+  (minus the two new keys) and parquet (minus the two new columns) identical; quarter days checked against the
+  fixture tables (274 checks) and parquet → worker = JSON.
+
 - **2026-11-23 — cv46 downstream D2: hourly readers average quarter slots; prices unchanged, no `code_version` bump.**
   Every reader that pairs a forecast or record series with HOURLY actuals now averages its slots to the hour first
   (`hourly_means`, bin/forecast_common.jl; per slice/day, so mixed ≤cv45 hourly and cv46 quarter history works):
