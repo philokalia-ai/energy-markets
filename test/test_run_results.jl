@@ -36,6 +36,7 @@ slice(md, zones, p) = Dict(z => Dict(h => p for h in hours(md)) for z in zones)
 @testset "run-local results DuckDB writers" begin
     @test Euphemia.results_to_duckdb()
     Euphemia.ensure_run_results_tables!()
+    Euphemia.mark_results_seeded!(Euphemia._READBACK_TABLES)   # what the fill's seed step records
     md = Date(2026, 11, 25); pm = DateTime(2026, 11, 23, 6, 30)
     # the fill's seed: an existing live slice for GR and BG (what Postgres held at fill time)
     for (z, p) in (("GR", 100.0), ("BG", 90.0)), h in hours(md)

@@ -32,6 +32,7 @@ import ..current_context, ..ctx_key, ..record_asof_status!, ..AGG_GEN_PUBLICATIO
 import ..GAS_PLANT_EFFICIENCY, ..GAS_EMISSION_FACTOR, ..GAS_VOM_COST
 import ..FLEXIBLE_FUEL_TYPES
 import ..cv45_on, .._gas_fuel_cost
+import .._rethrow_fill_guard, .._in_fill   # run-local fill: misses fail loudly
 import ..MarketOrders: SimpleOrder, MarketOrder, LinkedHourlyOrder
 import ..MPCC: MPCCOrderBook
 import ..disaggregate_temporal_data, ..replicate_to_finer_resolution

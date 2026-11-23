@@ -80,6 +80,7 @@ function _close_before_locked(table::String, cutoff::Dates.Date, cache::Dict, so
             """,
             [cutoff])
     catch e
+        _rethrow_fill_guard(e)   # a fill miss fails loudly, never soft
         _FUEL_LOOKUP_FAILED[] = true
         @warn "$table lookup failed for cutoff $cutoff, falling back: $e"
         return nothing
@@ -160,6 +161,7 @@ function get_daily_eua_price(day::Dates.Date; cutoff::Union{Nothing,Dates.Date}=
             [day]
         )
     catch e
+        _rethrow_fill_guard(e)   # a fill miss fails loudly, never soft
         # Transient DB failure: warn and fall back WITHOUT caching, so the
         # next call retries instead of pinning this date to the fallback
         _FUEL_LOOKUP_FAILED[] = true
@@ -230,6 +232,7 @@ function uka_price(day::Dates.Date)
         price = (isempty(df) || ismissing(df.price_eur[1])) ? nothing : Float64(df.price_eur[1])
         structural_absence = true   # empty result = real data gap → cache it
     catch e
+        _rethrow_fill_guard(e)   # a fill miss fails loudly, never soft
         msg = sprint(showerror, e)
         # A missing table/schema (the offline extract carries no `carbon.*`) is
         # PERSISTENT — cache the EUA fallback so we never re-query it. A genuine
@@ -281,6 +284,7 @@ function get_ttf_price(day::Dates.Date; cutoff::Union{Nothing,Dates.Date}=nothin
             [day]
         )
     catch e
+        _rethrow_fill_guard(e)   # a fill miss fails loudly, never soft
         # Transient DB failure: warn and fall back WITHOUT caching, so the
         # next call retries instead of pinning this date to the fallback
         _FUEL_LOOKUP_FAILED[] = true

@@ -89,11 +89,13 @@ end
         E.configure_data_store!(backend=:duckdb, duckdb_path=path, read_only=true)
         q = "SELECT mw FROM entsoe.day_ahead_total_load_forecast WHERE area_map_code = \$1 AND date_time_utc >= \$2"
         @test E.sql2df(q, Any["GR", Date(2026, 1, 10)]).mw == [5000.0]            # inside the window
-        @test_throws ErrorException E.sql2df(q, Any["GR", Date(2026, 2, 1)])         # outside → loud
-        @test_throws ErrorException E.sql2df("SELECT * FROM entsoe.physical_flows")  # not in manifest → loud
+        @test_throws E.FillGuardError E.sql2df(q, Any["GR", Date(2026, 2, 1)])         # outside → loud
+        @test_throws E.FillGuardError E.sql2df("SELECT * FROM entsoe.physical_flows")  # not in manifest → loud
+        # never retried as transient, never swallowed by sql2df_with_retry
+        @test_throws E.FillGuardError E.sql2df_with_retry("SELECT * FROM entsoe.physical_flows"; retry_delay=0.0)
         @test nrow(E.sql2df("SELECT * FROM entsoe.production_and_generation_units WHERE area_map_code = \$1",
                             Any["GR"])) == 0                                         # full table: any date ok
-        @test_throws ErrorException E.sql2df(
+        @test_throws E.FillGuardError E.sql2df(
             "SELECT * FROM entsoe.day_ahead_total_load_forecast WHERE date_time_utc < TIMESTAMP '2027-01-01 00:00:00'")
         # the guard only covers the run-local inputs, never results_db.*
         g = E._FILL_GUARD[]
@@ -102,6 +104,15 @@ end
     finally
         try; E.configure_data_store!(backend=prev[1], duckdb_path=prev[2], read_only=prev[3], results_writable=prev[4]); catch; end
     end
+end
+
+"The seed marker seed_run_results! writes into a results DB (results_db._fill.seeds)."
+function mark_seeded(path, table; lo=Date(1900, 1, 1), hi=Date(2999, 12, 31))
+    db = DuckDB.DB(path); con = DBInterface.connect(db)
+    DBInterface.execute(con, "CREATE SCHEMA IF NOT EXISTS _fill")
+    DBInterface.execute(con, "CREATE TABLE IF NOT EXISTS _fill.seeds (table_name VARCHAR, lo DATE, hi DATE, n_rows BIGINT)")
+    DBInterface.execute(con, "INSERT INTO _fill.seeds VALUES (?, ?, ?, 1)", Any[table, lo, hi])
+    DBInterface.close!(con); DuckDB.close(db)
 end
 
 @testset "read-back redirect only in a fill; writes always to results_db" begin
@@ -121,6 +132,7 @@ end
     try
         for (inputs, expect, label) in ((extract, 1.0, "extract"), (fill, 2.0, "fill"))
             results = joinpath(dir, "results-$label.duckdb"); mk(results, 2.0)   # seeded read-back copy
+            mark_seeded(results, "input_corrections")
             E.RESULTS_DB_PATH[] = results
             E.configure_data_store!(backend=:duckdb, duckdb_path=inputs, read_only=true, results_writable=true)
             E._ensure_results_attached(E._duckdb_connection())
@@ -148,4 +160,94 @@ end
     @test Euphemia.resolve_rescore_start(; zones=["GR"], source=:duckdb, source_path=src) == Date(2025, 1, 5)
     @test Euphemia.resolve_rescore_start(; zones=["GR", "BG"], source=:duckdb, source_path=src) == Date(2024, 11, 20)
     @test_throws ErrorException Euphemia.resolve_rescore_start(; zones=["FR"], source=:duckdb, source_path=src)
+end
+
+@testset "cv32 read-back under a fill: the process role picks the source; misses raise" begin
+    E = Euphemia
+    prev = (E.DATA_STORE[], E.DUCKDB_PATH[], E.DUCKDB_READ_ONLY[], E.DUCKDB_RESULTS_WRITABLE[], E.RESULTS_DB_PATH[])
+    prevrole = E.RESULTS_READBACK[]
+    dir = mktempdir()
+    day = Date(2025, 5, 27); h = DateTime(2025, 5, 27, 8)
+    # corrections: inputs copy 130 MW, results DB 150 MW, raw solar forecast 100 MW → delta 30 vs 50
+    function mk(path, corrected; fc=false)
+        db = DuckDB.DB(path); con = DBInterface.connect(db); x(q, a=Any[]) = DBInterface.execute(con, q, a)
+        x("CREATE SCHEMA IF NOT EXISTS simulations")
+        x("CREATE TABLE simulations.input_corrections (bidding_zone VARCHAR, target VARCHAR, date_time_utc TIMESTAMP, corrected_mw DOUBLE, model_tag VARCHAR, created_at TIMESTAMP)")
+        x("INSERT INTO simulations.input_corrections VALUES ('IT-Sardinia', 'solar', ?, ?, 'm', ?)", Any[h, corrected, h])
+        if fc
+            x("CREATE SCHEMA entsoe")
+            x("CREATE TABLE entsoe.generation_forecasts_for_wind_and_solar (area_map_code VARCHAR, area_type_code VARCHAR, production_type VARCHAR, date_time_utc TIMESTAMP, day_ahead_generation_forecast_mw DOUBLE)")
+            x("INSERT INTO entsoe.generation_forecasts_for_wind_and_solar VALUES ('IT-Sardinia', 'BZN', 'Solar', ?, 100.0)", Any[h])
+        end
+        DBInterface.close!(con); DuckDB.close(db)
+    end
+    inputs = joinpath(dir, "inputs.duckdb"); mk(inputs, 130.0; fc=true)
+    E.mark_run_local_fill!(inputs; windows=[("entsoe", "generation_forecasts_for_wind_and_solar", Date(2025, 5, 20), Date(2025, 5, 30)),
+                                            ("simulations", "input_corrections", Date(2025, 5, 26), Date(2025, 5, 30))])
+    results = joinpath(dir, "results.duckdb"); mk(results, 150.0)
+    mark_seeded(results, "input_corrections"; lo=Date(2025, 5, 26), hi=Date(2025, 5, 30))
+    unseeded = joinpath(dir, "results-unseeded.duckdb"); mk(unseeded, 150.0)
+    open_store!(res; rw=true) = (E._duckdb_drop_connection!(); E.MeritOrderBook.clear_input_correction_cache!(); E.RESULTS_DB_PATH[] = res;
+                                 E.configure_data_store!(backend=:duckdb, duckdb_path=inputs, read_only=true, results_writable=rw))
+    deltas() = E.MeritOrderBook._input_correction_deltas("IT-Sardinia", day)
+    try
+        @test E._results_readback_role("") === :results
+        @test E._results_readback_role("inputs") === :inputs
+        @test_throws ErrorException E._results_readback_role("both")
+
+        # single-process job (role :results): reads the seeded results DB ...
+        E.RESULTS_READBACK[] = :results
+        open_store!(results)
+        @test deltas() == Dict("20250527-08" => 50.0)
+        # ... and its own writes (the daily forecast emits corrections, then clears)
+        E._results_exec("UPDATE results_db.simulations.input_corrections SET corrected_mw = 170.0")
+        E.MeritOrderBook.clear_input_correction_cache!()
+        @test deltas() == Dict("20250527-08" => 70.0)
+        # a read-back outside the seeded window raises
+        @test_throws E.FillGuardError E.sql2df("SELECT * FROM simulations.input_corrections WHERE date_time_utc >= \$1", Any[Date(2025, 6, 2)])
+
+        # pipelined book worker (role :inputs): the fill-time copy in inputs.duckdb, no results attach
+        E.RESULTS_READBACK[] = :inputs
+        open_store!(results; rw=false)
+        @test deltas() == Dict("20250527-08" => 30.0)
+        @test !E._RESULTS_ATTACHED[]
+
+        # results DB without the seed (--seed-results false / an old fill): raises, never reads empty
+        E.RESULTS_READBACK[] = :results
+        open_store!(unseeded)
+        @test_throws E.FillGuardError deltas()
+
+        # results DB that cannot be attached (here: not a DuckDB file; in the bug, another process's
+        # read-write lock): the attach raises and the cv32 reader does NOT fall back to raw forecasts
+        bad = joinpath(dir, "not-a-duckdb"); write(bad, "garbage bytes, not a database")
+        open_store!(bad; rw=false)
+        @test_throws E.FillGuardError deltas()
+        open_store!(bad; rw=false)
+        @test_throws E.FillGuardError E._ensure_results_attached(E._duckdb_connection())
+
+        # off a fill (plain extract): main's behaviour, the extract's own table, no redirect, no guard
+        extract = joinpath(dir, "extract.duckdb"); mk(extract, 130.0; fc=true)
+        E._duckdb_drop_connection!(); E.MeritOrderBook.clear_input_correction_cache!(); E.RESULTS_DB_PATH[] = bad
+        E.configure_data_store!(backend=:duckdb, duckdb_path=extract, read_only=true, results_writable=false)
+        @test deltas() == Dict("20250527-08" => 30.0)
+    finally
+        E.RESULTS_READBACK[] = prevrole
+        try; E._duckdb_drop_connection!(); E.MeritOrderBook.clear_input_correction_cache!(); E.RESULTS_DB_PATH[] = prev[5]
+             E.configure_data_store!(backend=prev[1], duckdb_path=prev[2], read_only=prev[3], results_writable=prev[4]); catch; end
+    end
+end
+
+@testset "fill profiles carry the inputs copy of input_corrections over the seed's window" begin
+    E = Euphemia
+    days = [Date(2025, 5, 27), Date(2025, 6, 26)]
+    for (prof, kw) in ((:record, (days_list=days,)), (:retro, (start=Date(2025, 5, 27), stop=Date(2025, 5, 29))),
+                       (:daily_forecast, (asof=Date(2025, 5, 27),)), (:export, (asof=Date(2025, 5, 27),)))
+        p = E.fill_profile(prof; zones=["IT-Sardinia"], kw...)
+        sp = only(filter(s -> s.table == "input_corrections", p.specs))
+        sd = only(filter(s -> s.table == "input_corrections", p.seeds))
+        @test E.fill_windows(p.days, sp.back, sp.ahead) == sd.win   # inputs copy == results seed
+        @test !sp.ts_tz
+    end
+    @test isempty(filter(s -> s.table == "input_corrections", E.fill_profile(:rescore; start=Date(2025, 5, 27),
+                                                                              stop=Date(2025, 5, 28), zones=["GR"]).specs))
 end

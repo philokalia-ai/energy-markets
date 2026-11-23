@@ -56,6 +56,7 @@ function _duckdb_drop_connection!()
     _DUCKDB_DB[] = nothing
     _FILL_GUARD[] = nothing
     _RESULTS_ATTACHED[] = false
+    _READBACK_SEEDS[] = nothing
     return nothing
 end
 
@@ -171,6 +172,7 @@ function configure_data_store!(; backend::Symbol=:postgres,
                     _duckdb_drop_connection!()
                 end
                 _RESULTS_ATTACHED[] = false
+                _READBACK_SEEDS[] = nothing
             end
             DUCKDB_PATH[] = duckdb_path
             DUCKDB_READ_ONLY[] = read_only
@@ -282,7 +284,9 @@ function _duckdb_rewrite(sql::AbstractString)
     if _FILL_GUARD[] === nothing && !is_write
         return s
     end
-    tabs = "forecast_prices_pre_reset|forecast_prices|forecast_scores|input_corrections"
+    tabs = (is_write || RESULTS_READBACK[] === :results) ?
+        "forecast_prices_pre_reset|forecast_prices|forecast_scores|input_corrections" :
+        "forecast_prices_pre_reset|forecast_prices|forecast_scores"
     s = replace(s, Regex("(?<![\\w.])simulations\\.($tabs)\\b") => s"results_db.simulations.\1")
     return s
 end
@@ -298,6 +302,92 @@ end
 # lookbacks; the identity runs prove that coverage. results_db.* is not guarded.
 # ---------------------------------------------------------------------------
 const _FILL_GUARD = Ref{Any}(nothing)
+
+"A read under a run-local fill that the fill does not cover (fail loudly; never fall back)."
+struct FillGuardError <: Exception
+    msg::String
+end
+Base.showerror(io::IO, e::FillGuardError) = print(io, "FillGuardError: ", e.msg)
+"Inside a `catch`: let a FillGuardError through every soft fallback."
+_rethrow_fill_guard(e) = e isa FillGuardError ? throw(e) : nothing
+"True when the open inputs DB is a run-local fill (carries _fill.windows)."
+_in_fill() = _FILL_GUARD[] !== nothing
+
+# Where read-back tables come from under a fill, decided explicitly per process role
+# (EUPHEMIA_RESULTS_READBACK, read in __init__): :results for single-process jobs and the
+# pipeline coordinator (they attach results_db and must see their own writes: the daily
+# forecast emits cv32 corrections, then clears); :inputs for the pipelined book workers, which
+# cannot attach the results DB the coordinator holds read-write and read the fill-time copy in
+# inputs.duckdb (record/backfill runs emit no corrections, so it equals the seed).
+const RESULTS_READBACK = Ref{Symbol}(:results)
+
+function _results_readback_role(v::AbstractString)
+    v = lowercase(strip(v))
+    v in ("", "results") && return :results
+    v == "inputs" && return :inputs
+    error("EUPHEMIA_RESULTS_READBACK=$(v): expected results | inputs")
+end
+
+# Read-back tables a fill seeds into the results DB, with the windows seeded (results_db._fill.seeds,
+# written by seed_run_results!). Under a fill a read of one of them must find its seed: a results DB
+# filled without it (or a pre-marker fill) raises instead of reading an empty table.
+const _READBACK_TABLES = ("forecast_prices", "forecast_scores", "input_corrections")
+const _READBACK_WINDOWED = ("input_corrections",)   # its readers' parameters are delivery times
+const _READBACK_SEEDS = Ref{Any}(nothing)
+
+function _load_readback_seeds(con)
+    has = !isempty(collect(DBInterface.execute(con,
+        "SELECT 1 FROM duckdb_tables() WHERE database_name = 'results_db' AND schema_name = '_fill' AND table_name = 'seeds'")))
+    seeds = Dict{String,Vector{Tuple{Dates.DateTime,Dates.DateTime}}}()
+    has || return seeds
+    for r in DBInterface.execute(con, "SELECT table_name, lo, hi FROM results_db._fill.seeds")
+        push!(get!(seeds, String(r.table_name), Tuple{Dates.DateTime,Dates.DateTime}[]),
+              (Dates.DateTime(r.lo), Dates.DateTime(r.hi)))
+    end
+    return seeds
+end
+
+"""
+    mark_results_seeded!(tables; lo=1900-01-01, hi=2999-12-31)
+
+Record read-back seeds in the attached results DB, as `seed_run_results!` does (tests and tools
+that build a results DB by hand under `mark_run_local_fill!`)."""
+function mark_results_seeded!(tables; lo=Dates.Date(1900, 1, 1), hi=Dates.Date(2999, 12, 31))
+    _results_exec("CREATE SCHEMA IF NOT EXISTS results_db._fill")
+    _results_exec("CREATE TABLE IF NOT EXISTS results_db._fill.seeds (table_name VARCHAR, lo DATE, hi DATE, n_rows BIGINT)")
+    for t in tables
+        _results_exec("INSERT INTO results_db._fill.seeds VALUES (\$1, \$2, \$3, 0)", Any[String(t), lo, hi])
+    end
+    lock(() -> (_READBACK_SEEDS[] = nothing), _DUCKDB_LOCK)
+    return nothing
+end
+
+function _readback_check(con, sql::AbstractString, args)
+    tabs = unique(m.captures[1] for m in eachmatch(r"results_db\.simulations\.([a-z_]+)\b", sql))
+    tabs = [t for t in tabs if t in _READBACK_TABLES]
+    isempty(tabs) && return nothing
+    seeds = lock(_DUCKDB_LOCK) do
+        _READBACK_SEEDS[] === nothing && (_READBACK_SEEDS[] = _load_readback_seeds(con))
+        _READBACK_SEEDS[]
+    end
+    stamps = Dates.DateTime[]
+    for a in (args === nothing ? () : args)
+        a isa Dates.Date && push!(stamps, Dates.DateTime(a))
+        a isa Dates.DateTime && push!(stamps, a)
+    end
+    for t in tabs
+        haskey(seeds, t) || throw(FillGuardError("fill guard: read-back of simulations.$t, but the results DB " *
+            "holds no seed of it (fill ran with --seed-results false, or before seed markers): re-run the fill"))
+        t in _READBACK_WINDOWED || continue
+        wins = seeds[t]
+        for ts in stamps
+            any(w -> w[1] <= ts < w[2] || w[1] == ts == w[2], wins) ||
+                throw(FillGuardError("fill guard: read-back of simulations.$t at $ts is outside the seeded " *
+                                     "windows $(wins) (extend the seed in fill_profile)"))
+        end
+    end
+    return nothing
+end
 const _GUARDED_SCHEMAS = ("entsoe", "jao", "yfinance", "epias", "simulations", "weather")
 
 function _load_fill_guard(con)
@@ -348,8 +438,8 @@ function _fill_guard_check(g, sql::AbstractString, args)
         push!(tables, string(sch, ".", m.captures[3]))
     end
     for t in unique(tables)
-        haskey(g, t) || error("fill guard: $t is not in this run's fill manifest " *
-                              "(add it to FILL_SPECS; never read Postgres directly)")
+        haskey(g, t) || throw(FillGuardError("fill guard: $t is not in this run's fill manifest " *
+                              "(add it to FILL_SPECS; never read Postgres directly)"))
     end
     stamps = Dates.DateTime[]
     for a in (args === nothing ? () : args)
@@ -365,8 +455,8 @@ function _fill_guard_check(g, sql::AbstractString, args)
         any(w -> w[1] == _FULL_LO, wins) && continue
         for ts in stamps
             any(w -> w[1] <= ts <= w[2], wins) ||
-                error("fill guard: $t read at $ts is outside the filled windows $(wins) " *
-                      "(extend the manifest lookback; never read Postgres directly)")
+                throw(FillGuardError("fill guard: $t read at $ts is outside the filled windows $(wins) " *
+                      "(extend the manifest lookback; never read Postgres directly)"))
         end
     end
     return nothing
@@ -380,7 +470,10 @@ function _duckdb_sql2df(sql, args)
     rewritten = _duckdb_rewrite(sql)
     g = _FILL_GUARD[]
     g === nothing || _fill_guard_check(g, rewritten, args)
-    occursin("results_db.", rewritten) && _ensure_results_attached(con)
+    if occursin("results_db.", rewritten)
+        _ensure_results_attached(con)
+        g === nothing || _readback_check(con, rewritten, args)
+    end
     # Lock scope narrowed to prepare-once + execute + materialize. The compiled
     # statement is cached per connection, so repeat calls skip parse/plan.
     lock(_DUCKDB_LOCK) do
@@ -441,6 +534,20 @@ function _duckdb_assert_writable()
     return nothing
 end
 
+# Under a run-local fill a failed results attach is a FillGuardError (never a soft fallback): a
+# process that cannot open the results DB (DuckDB's file lock: another process holds it
+# read-write) must be started with EUPHEMIA_RESULTS_READBACK=inputs.
+function _attach_results(con, path, mode)
+    try
+        DBInterface.execute(con, "ATTACH IF NOT EXISTS '$(path)' AS results_db ($mode)")
+    catch e
+        _in_fill() || rethrow()
+        throw(FillGuardError("fill guard: cannot attach the results DB $(path) ($mode): " *
+            sprint(showerror, e) * " — a process that cannot open it (pipelined book workers) must run " *
+            "with EUPHEMIA_RESULTS_READBACK=inputs"))
+    end
+end
+
 function _ensure_results_attached(con)
     lock(_DUCKDB_LOCK) do
         _RESULTS_ATTACHED[] && return
@@ -452,9 +559,11 @@ function _ensure_results_attached(con)
             # such a process threw, `pipeline_day_saved` swallowed the error as
             # "not saved" and re-cleared already-saved days. Attach read-only;
             # the writers still assert via _duckdb_assert_writable().
-            isfile(path) || error("results DuckDB $(path) does not exist and this " *
-                                  "process is read-only (cannot create it)")
-            DBInterface.execute(con, "ATTACH IF NOT EXISTS '$(path)' AS results_db (READ_ONLY)")
+            isfile(path) || (_in_fill() ? throw(FillGuardError("fill guard: results DuckDB $(path) does not exist " *
+                                  "(this process is read-only and cannot create it)")) :
+                             error("results DuckDB $(path) does not exist and this " *
+                                   "process is read-only (cannot create it)"))
+            _attach_results(con, path, "READ_ONLY")
             _RESULTS_ATTACHED[] = true
             return
         end
@@ -464,7 +573,7 @@ function _ensure_results_attached(con)
         # the separate results file must be attached with an explicit READ_WRITE
         # override (DuckDB honours per-attachment access mode). Harmless when the
         # source is already read-write.
-        DBInterface.execute(con, "ATTACH IF NOT EXISTS '$(path)' AS results_db (READ_WRITE)")
+        _attach_results(con, path, "READ_WRITE")
         DBInterface.execute(con, "CREATE SCHEMA IF NOT EXISTS results_db.simulations")
         DBInterface.execute(con, """
             CREATE TABLE IF NOT EXISTS results_db.simulations.energy_prices (

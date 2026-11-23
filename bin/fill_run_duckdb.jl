@@ -3,7 +3,7 @@
 #
 #   julia --project=. bin/fill_run_duckdb.jl --profile daily-forecast|record|export|retro|rescore --out DIR \
 #         [--start YYYY-MM-DD|auto --end YYYY-MM-DD | --days D1,D2,...] [--as-of YYYY-MM-DD] [--zones A,B,...] \
-#         [--source duckdb:<path>] [--seed-results false]
+#         [--source duckdb:<path>] [--seed-results false] [--seed-skip T1,T2]
 # Env: ENERGY_CONN_STR; RESULTS_SOURCE_CONN_STR (optional: seeds from another database); ZONES (default zone list, else the 39-zone footprint); INPUTS_BACK_DAYS
 # (export profile: export_prediction_inputs.jl's look-back on the RES/load/generation tables).
 #
@@ -114,7 +114,11 @@ function main(argv)
     end
     # --seed-results false: an empty results.duckdb (rigs that must not resume-skip on rows the
     # source already holds for these days; production keeps the seeds)
+    # A read-back of an unseeded table raises under the fill (results_db._fill.seeds), so a rig that only
+    # needs to recompute existing days skips just those seeds: --seed-skip energy_prices
     seeds = lowercase(get(a, "seed-results", "true")) == "false" ? NamedTuple[] : p.seeds
+    skip = haskey(a, "seed-skip") ? Set(String.(split(a["seed-skip"], ","))) : Set{String}()
+    seeds = [sd for sd in seeds if !(sd.table in skip)]
     seeded = try
         Euphemia._FILL_SOURCE[] = source
         Euphemia.seed_run_results!(con, seeds)

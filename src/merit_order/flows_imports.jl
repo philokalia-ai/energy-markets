@@ -373,6 +373,7 @@ function _analogue_days(zone::String, day::Date; k::Int=ANALOGUE_K[])
             end
         end
     catch e
+        _rethrow_fill_guard(e)   # a fill miss fails loudly, never soft
         @warn "analogue-day selection failed for $zone $day — falling back to climatology" error = sprint(showerror, e)
         had_error = true
         Date[]
@@ -756,6 +757,7 @@ function get_firm_of(bidding_zone::String)
         return Dict{String,String}(String(row.unit_code) => String(row.firm)
                                    for row in eachrow(df))
     catch e
+        _rethrow_fill_guard(e)   # a fill miss fails loudly, never soft
         @warn "simulations.unit_firms unavailable; strategist firm_of will be empty" exception=e
         return Dict{String,String}()
     end

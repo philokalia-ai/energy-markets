@@ -321,6 +321,7 @@ function sql2df_with_retry(sql, args=[]; max_retries=3, retry_delay=2.0)
         try
             return sql2df(sql, args)
         catch e
+            e isa FillGuardError && rethrow()   # a fill miss is not transient: never retried
             last_error = e
 
             if is_duckdb

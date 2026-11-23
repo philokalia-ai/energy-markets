@@ -462,6 +462,9 @@ function _input_correction_deltas(zone::String, day::Date)
                 out[k] = get(out, k, 0.0) + Float64(r.delta)
             end
         catch e
+            # Under a run-local fill the corrections source is decided explicitly (results_db, or the
+            # inputs copy for EUPHEMIA_RESULTS_READBACK=inputs): any failure is a bug, never "raw kept".
+            _in_fill() && rethrow()
             if !_CV32_WARNED[]
                 _CV32_WARNED[] = true
                 @warn "cv32 input-corrections unavailable — raw forecasts kept" zone day error = sprint(showerror, e)
@@ -777,6 +780,7 @@ function _split_storage_families(tagged, strategies, generators, zone::String,
         e = try
             _storage_daily_budget(zone, day, ptype)
         catch err
+            _rethrow_fill_guard(err)   # a fill miss fails loudly, never soft
             @warn "complex orders: budget query failed — $kind family not formed" zone day exception = err
             NaN
         end
@@ -1612,6 +1616,7 @@ function create_merit_order_book(
             grsq2_commits = try
                 _valley_continuation_commits(bidding_zone, day, generators)
             catch e
+                _rethrow_fill_guard(e)   # a fill miss fails loudly, never soft
                 @warn "cv34 T4: commitment query failed — lever inert for $bidding_zone $day" exception=e
                 Dict{String,Float64}()
             end
@@ -2061,6 +2066,7 @@ function create_merit_order_book(
             pump_head = try
                 _pump_capability(bidding_zone, day)
             catch e
+                _rethrow_fill_guard(e)   # a fill miss fails loudly, never soft
                 @warn "cv34 T3: capability query failed — inert for $bidding_zone $day" exception=e
                 Dict{Int,Float64}()
             end
@@ -2320,6 +2326,7 @@ function create_merit_order_book(
             total_demand_quantity, total_supply_capacity, ratio)
 
     catch e
+        _rethrow_fill_guard(e)   # a fill miss fails loudly, never soft
         e isa InterruptException && rethrow()
         error_msg = "Error creating merit-order book: $(sprint(showerror, e))"
         println("  ❌ $error_msg")

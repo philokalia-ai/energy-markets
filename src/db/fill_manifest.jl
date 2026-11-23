@@ -88,8 +88,10 @@ const FILL_SPECS = FillSpec[
     _fs("epias", "load_forecast", :full; sort_by="date_time_utc"),
     _fs("epias", "gas_reference_price", :full; sort_by="date_time_utc"),
     _fs("epias", "actual_generation", :full; sort_by="date_time_utc, source"),
-    # simulations.input_corrections is NOT an input: the forecast job writes it and the cv32
-    # reader reads it back through the results_db redirect, so it is a results seed (fill_profile).
+    # simulations.input_corrections is filled per profile (fill_profile, `_ic_spec`): seeded into
+    # the results DB (single-process jobs read it back there, incl. their own cv32 writes) AND
+    # copied into the inputs file for processes that cannot open the results DB (pipelined book
+    # workers, EUPHEMIA_RESULTS_READBACK=inputs).
     _fs("simulations", "unit_firms", :full; zone_pred="zone = ANY(\$ZONES)"),
 ]
 
@@ -310,6 +312,12 @@ end
 # optional table is skipped (no _fill.windows row), so any read of it fails the guard loudly.
 const FILL_OPTIONAL = Set(["carbon.uka_price", "simulations.model_lines", "simulations.tsfm_overlay"])
 
+"""
+The fill-time copy of the cv32 corrections in inputs.duckdb, over the same window as the
+results seed (the read-back of a process that cannot attach the results DB)."""
+_ic_spec(back, ahead) = _fs("simulations", "input_corrections", :window; ts_col="date_time_utc", ts_tz=false,
+                            back=back, ahead=ahead, sort_by="bidding_zone, date_time_utc")
+
 "Extra input tables of the forecast job's score/export steps and the GB boundary book."
 const FORECAST_EXTRA_SPECS = FillSpec[
     _fs("carbon", "uka_price", :full; sort_by=""),                       # fuel_costs.jl uka_price (GB boundary)
@@ -333,16 +341,19 @@ function fill_profile(profile::Symbol; start::Union{Nothing,Date}=nothing, stop:
         days = days_list !== nothing ? sort(unique(days_list)) :
                (start === nothing || stop === nothing) ? error("fill profile :record needs start/stop or a day list") :
                collect(start:Day(1):stop)
-        specs = FILL_SPECS
+        specs = vcat(FILL_SPECS, [_ic_spec(1, 2)])
         ep = join(("(date_time_utc >= $(_pg_day(lo, true)) AND date_time_utc < $(_pg_day(hi, true)))" for (lo, hi) in fill_windows(days, 0, 0)), " OR ")
         ic = join(("(date_time_utc >= $(_pg_day(lo, false)) AND date_time_utc < $(_pg_day(hi, false)))" for (lo, hi) in fill_windows(days, 1, 2)), " OR ")
-        seeds = [(table="energy_prices", where=ep), (table="input_corrections", where=ic)]
+        # energy_prices: the run days' existing prices, so skip-existing behaves as against Postgres
+        seeds = [(table="energy_prices", where=ep),
+                 (table="input_corrections", where=ic, win=fill_windows(days, 1, 2))]
     elseif profile in (:daily_forecast, :export)
         days = collect((asof - Day(1)):Day(1):(asof + Day(8)))
         specs = FillSpec[s.table == "energy_prices" ?
                          _fs("entsoe", "energy_prices", :window; zone_pred=s.zone_pred, ts_col=s.ts_col,
                              back=400, ahead=1, sort_by=s.sort_by) : s for s in FILL_SPECS]
         append!(specs, FORECAST_EXTRA_SPECS)
+        push!(specs, _ic_spec(4, 1))   # [asof-5, asof+10), the seed's window
         # export_prediction_inputs.jl reads INPUTS_BACK_DAYS back on these tables
         if inputs_back_days > 0
             ib = Set(["generation_forecasts_for_wind_and_solar", "aggregated_generation_per_type",
@@ -354,7 +365,8 @@ function fill_profile(profile::Symbol; start::Union{Nothing,Date}=nothing, stop:
         end
         seeds = [(table="forecast_prices", where=""),
                  (table="forecast_scores", where=""),
-                 (table="input_corrections", where="date_time_utc >= $(_pg_day(asof - Day(5), false)) AND date_time_utc < $(_pg_day(asof + Day(10), false))"),
+                 (table="input_corrections", where="date_time_utc >= $(_pg_day(asof - Day(5), false)) AND date_time_utc < $(_pg_day(asof + Day(10), false))",
+                  win=[(asof - Day(5), asof + Day(10))]),
                  (table="transmission_flows", where="date_time_utc >= $(_pg_day(asof - Day(121), true))")]
     elseif profile === :retro
         # bin/daily_forecast.jl run_retro: lead 1 reconstructed for market days S..E, two UTC
@@ -362,11 +374,12 @@ function fill_profile(profile::Symbol; start::Union{Nothing,Date}=nothing, stop:
         # exported vintages file (EUPHEMIA_WEATHER_DUCKDB), never Postgres.
         (start === nothing || stop === nothing) && error("fill profile :retro needs start and stop")
         days = collect((start - Day(1)):Day(1):stop)
-        specs = vcat(FILL_SPECS, FORECAST_EXTRA_SPECS)
+        specs = vcat(FILL_SPECS, FORECAST_EXTRA_SPECS, [_ic_spec(1, 2)])
         md = "market_date BETWEEN $(_pg_str(string(start)))::date AND $(_pg_str(string(stop)))::date"
         seeds = [(table="forecast_prices", where=md),
                  (table="forecast_scores", where=md),
-                 (table="input_corrections", where="date_time_utc >= $(_pg_day(start - Day(2), false)) AND date_time_utc < $(_pg_day(stop + Day(3), false))")]
+                 (table="input_corrections", where="date_time_utc >= $(_pg_day(start - Day(2), false)) AND date_time_utc < $(_pg_day(stop + Day(3), false))",
+                  win=[(start - Day(2), stop + Day(3))])]
     elseif profile === :rescore
         # score_forecasts.jl rescore modes + forecast_scores_snapshot.jl (rescore-hourly/-q15):
         # actual Day-ahead prices (every resolution) over the window; the scores table whole
@@ -396,6 +409,10 @@ such as `transfer_op_id` stay NULL); timestamptz arrive as naive UTC.
 """
 function seed_run_results!(con, seeds)
     out = NamedTuple[]
+    # results_db._fill.seeds: which read-back tables (and windows) this results DB holds; under a fill
+    # a read-back of an unseeded table, or outside a windowed seed, raises (`_readback_check`)
+    DBInterface.execute(con, "CREATE SCHEMA IF NOT EXISTS results_db._fill")
+    DBInterface.execute(con, "CREATE TABLE IF NOT EXISTS results_db._fill.seeds (table_name VARCHAR, lo DATE, hi DATE, n_rows BIGINT)")
     for sd in seeds
         t0 = time()
         tgt = collect(DBInterface.execute(con,
@@ -424,6 +441,9 @@ function seed_run_results!(con, seeds)
         clist = join(("\"$c\"" for c in cols), ", ")
         DBInterface.execute(con, "INSERT INTO results_db.simulations.$(sd.table) ($clist) SELECT * FROM $(_src_from(sql))")
         n = collect(DBInterface.execute(con, "SELECT count(*) AS n FROM results_db.simulations.$(sd.table)"))[1].n
+        for (lo, hi) in (haskey(sd, :win) ? sd.win : [(Date(1900, 1, 1), Date(2999, 12, 31))])
+            DBInterface.execute(con, "INSERT INTO results_db._fill.seeds VALUES (?, ?, ?, ?)", Any[sd.table, lo, hi, n])
+        end
         push!(out, (table=sd.table, rows=n, seconds=time() - t0))
         println("  seed results_db.simulations.$(sd.table): $n rows, $(round(time() - t0, digits=1)) s"); flush(stdout)
     end
