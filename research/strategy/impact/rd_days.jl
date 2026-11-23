@@ -19,7 +19,7 @@ for d in Date.(split(ENV["DAYS"], ","))
         println("RD $d NO-BASELINE: ", sprint(showerror, e)); flush(stdout); continue
     end
     for z in zones
-        f = joinpath(OUT, "$(d)_$(z).csv")
+        f = joinpath(OUT, "$(d)_$(z)$(get(ENV, "SUFFIX", "")).csv")
         isfile(f) && (println("RD $d $z CACHED"); continue)
         t = time()
         rd = residual_demand(base, z; q_grid=QGRID)

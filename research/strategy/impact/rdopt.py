@@ -154,7 +154,7 @@ def truthful(rd: ResidualDemand, cost: StepCost):
 # optimal monotone step offer against a set of residual-demand scenarios (Anderson-Philpott style DP)
 
 
-def optimal_offer(scenarios, weights, cost: StepCost, n_q=81):
+def optimal_offer(scenarios, weights, cost: StepCost, n_q=81, anchor=None, eps=1e-6):
     """Expected-profit-maximising non-decreasing step offer x(p) on the common price grid of `scenarios`.
 
     scenarios: list of ResidualDemand on the SAME price grid; weights sum to 1.
@@ -162,7 +162,11 @@ def optimal_offer(scenarios, weights, cost: StepCost, n_q=81):
       V_j(x) = max_{x' <= x} V_{j-1}(x') + sum_k w_k [D_k(p_{j-1}) > x'] [D_k(p_j) <= x] r_k(j, x')
     with r_k(j, x') the profit if scenario k crosses in (p_{j-1}, p_j] (see module doc). Scenarios that never cross
     clear above the grid top at P_k(x_{M-1}) with dispatch x_{M-1}. Exact for the discretised problem.
-    Returns (x_on_grid, expected_profit).
+    anchor: an offer curve on the price grid (default: truthful) that breaks ties: many curves are optimal against
+    the scenarios (only the crossings are pinned), so a penalty eps x |x_j - anchor_j| (€ per MW per grid point,
+    tiny) picks the one that stays truthful wherever deviating does not pay. Without it, the curve away from the
+    crossings is arbitrary and its realised-price score is noise.
+    Returns (x_on_grid, expected_profit) (profit without the tie-break penalty).
     """
     p = scenarios[0].p
     M = len(p)
@@ -182,7 +186,9 @@ def optimal_offer(scenarios, weights, cost: StepCost, n_q=81):
     # j = 0: crossing at the grid bottom when D_k(p_0) <= x_0
     V = np.zeros(n_q)
     ind0 = (Dk[:, 0][:, None] <= Q[None, :])  # K x N
-    V = (w[:, None] * ind0 * rA[:, 0][:, None]).sum(0)
+    anc = cost.truthful_offer(p) if anchor is None else np.asarray(anchor, float)
+    pen = lambda j: eps * np.abs(Q - anc[j])  # noqa: E731
+    V = (w[:, None] * ind0 * rA[:, 0][:, None]).sum(0) - pen(0)
     back = np.zeros((M, n_q), dtype=np.int32)
     back[0] = np.arange(n_q)
     for j in range(1, M):
@@ -195,7 +201,7 @@ def optimal_offer(scenarios, weights, cost: StepCost, n_q=81):
         tot = V[:, None] + A
         tot = np.where(Q[:, None] <= Q[None, :], tot, NEG)  # monotone: x' <= x
         back[j] = np.argmax(tot, axis=0)
-        V = tot[back[j], np.arange(n_q)]
+        V = tot[back[j], np.arange(n_q)] - pen(j)
     # scenarios never crossing on the grid: dispatch x_{M-1}, price P_k(x_{M-1})
     never = Dk[:, -1][:, None] > Q[None, :]
     V = V + (w[:, None] * never * rB).sum(0)
@@ -205,7 +211,8 @@ def optimal_offer(scenarios, weights, cost: StepCost, n_q=81):
     idx[-1] = i
     for j in range(M - 1, 0, -1):
         idx[j - 1] = back[j][idx[j]]
-    return Q[idx], best
+    x = Q[idx]
+    return x, expected_profit(scenarios, weights, x, cost)
 
 
 def expected_profit(scenarios, weights, x_on_grid, cost):

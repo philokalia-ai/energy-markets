@@ -45,6 +45,9 @@ def load_rd(day, zone):
     if not f.exists():
         return None
     d = pd.read_csv(f)
+    plus = RD_DIR / f"{day}_{zone}.plus.csv"  # q = +2000, +4000 extension (truthful at large S releases > +1000 MW)
+    if plus.exists():
+        d = pd.concat([d, pd.read_csv(plus)]).drop_duplicates(["hour_utc", "q"]).sort_values(["hour_utc", "q"])
     return {h: list(zip(g.q.values, g.price.values)) for h, g in d.groupby("hour_utc")}
 
 
@@ -158,9 +161,11 @@ def run_zone_day(day, zone, tg, base_prices, real_prices, errors=None, sizes=SIZ
                         keep[(S, h, a)] = (pg, x)
             for a, x in arms.items():
                 ps, p, q, pt, qpt, pi_, pr_, qr_ = score(rdc, x, cost, e_real, p_real)
+                d0 = float(D0.D(p))  # uncarved injection at the arm's simulated price (grid-edge diagnostic)
                 rows.append(dict(day=day, zone=zone, S=S, hour=h, arm=a, p_base=p_base, p_real=p_real,
                                  cap=cost.S, sim_profit=ps, sim_price=p, sim_q=q, pt_profit=pt, pt_q=qpt,
                                  imp_profit=pi_, imp_price=pr_, imp_q=qr_, fossil_cap=fossil_cap,
+                                 d0_at_p=d0, q_lo=float(rd[h][0][0]), q_hi=float(rd[h][-1][0]),
                                  slope_per100=float(D0.P(100.0) - D0.P(-100.0)) / 2.0,
                                  slope500_per100=float(D0.P(500.0) - D0.P(-500.0)) / 10.0))
     return rows

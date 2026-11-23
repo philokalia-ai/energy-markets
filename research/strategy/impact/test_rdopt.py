@@ -98,6 +98,16 @@ def test_dp_supply_function_linear_shocks():
         approx(q, (p - c) / b, 0.03 * 4000)
 
 
+def test_dp_tiebreak_stays_truthful_off_crossing():
+    """Small portfolio facing a flat (price-taking) curve: the optimum is truthful, and the DP curve must equal the
+    truthful offer at every price (not only at the forecast crossing)."""
+    rd = linear_rd(150.0, 1e-5)
+    cost = R.StepCost([50.0, 50.0], [80.0, 120.0])
+    x, _ = R.optimal_offer([rd], [1.0], cost, n_q=101)
+    t = cost.truthful_offer(PG)
+    assert np.max(np.abs(x - t)) <= 1.0 + 1e-9, np.max(np.abs(x - t))
+
+
 def test_markup_and_withhold_arms():
     a, b, c = 200.0, 0.05, 80.0
     rd = linear_rd(a, b)

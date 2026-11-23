@@ -77,9 +77,9 @@ if __name__ == "__main__":
     sc = pd.DataFrame(sc)
     sc.to_csv(TAB / "mv_share_explained.csv", index=False)
     pd.set_option("display.width", 250)
-    print(sc.round(2).to_markdown(index=False))
+    print(MV.md(sc.round(2), index=False))
     wide = desc[desc.set.isin(["cal", "eval"])].pivot_table(index=["zone", "tech"], columns="set",
                                                            values=["m_book_med", "m_real_med", "n"], aggfunc="median")
-    print(wide.round(2).to_markdown())
+    print(MV.md(wide.round(2)))
     cal.to_csv(RUN / "mv/hours_cal_scored.csv", index=False)
     ev.to_csv(RUN / "mv/hours_eval_scored.csv", index=False)

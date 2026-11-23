@@ -12,6 +12,7 @@ for job in split(ENV["JOBS"], ",")
     f = joinpath(RC, "$job.csv"); out = joinpath(RC, "$job.out.csv")
     isfile(out) && (println("RC $job CACHED"); continue)
     rows = [split(l, ',') for l in Iterators.drop(eachline(f), 1)]
+    isempty(rows) && (println("RC $job EMPTY"); continue)
     day = Date(rows[1][1]); zone = String(rows[1][2])
     base = get!(() -> load_baseline(day), bases, day)
     ts(h) = DateTime(day) + Hour(h)
