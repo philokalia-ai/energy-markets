@@ -47,6 +47,7 @@ function main()
     kj = JSON.parsefile(ARGS[3]; allownan=true)["kmap"]
     archs = length(ARGS) >= 4 ? split(ARGS[4], ',') : sort(collect(keys(ZONES)))
     sizes = length(ARGS) >= 5 ? parse.(Float64, split(ARGS[5], ',')) : [5.0, 1.0]
+    only = length(ARGS) >= 6 ? Set(split(ARGS[6], ',')) : nothing      # optional format subset
     newfile = !isfile(out)
     io = open(out, "a")
     newfile && println(io, "day,zone,arch,format,size,status,solve_s,pricings,k_su,dp_mean,dp_maxabs,dp_on,neigh,",
@@ -68,6 +69,7 @@ function main()
                 Carve[]
             end
             for fmt in FMTS[cls(a)]
+                only === nothing || fmt in only || continue
                 k = get(kj, "$z|$arch|$fmt|1.0", 1.0)
                 company = bids(a, fmt, F, day; k_su=k)
                 t0 = time()
