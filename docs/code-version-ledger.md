@@ -438,11 +438,13 @@ Dated reminders and scoring-policy notes that do not change `code_version`.
   - Workflows: daily-forecast (both jobs), generate-multi-zone-prices, publish-web-data, retro-backfill, rescore-hourly,
     rescore-q15; the nightly extract refresh also copies through the extension. `measure-duckdb-path.yml` is the guarded,
     read-only runner measurement.
-  - Evidence (throwaway test Postgres): 31-day spot check, Postgres path vs fill path vs record #2: <31-day>; the transfer's
+  - Evidence (throwaway test Postgres): 31-day spot check, Postgres path vs fill path vs record #2: 29,016/29,016 bit-identical on all three (0 differing
+    cells); the transfer's
     Postgres state as expected, replay a no-op, a stale plan refused; retro-backfill and rescore-hourly as written match
     Postgres; pipelined record (2 book workers) fill path = extract path; a non-UTC session gives identical outage
-    inputs on both paths; fill of the 7-lead daily forecast <fill-time>, peak <fill-rss> (record fills: 2.2–2.75 GiB RSS
-    at 10–11 days).
+    inputs on both paths; on the production runner (run 45195384063, 3 days) the fill took 242 s (330 MiB, peak
+    3.4 GiB RSS) and the day clear 14–35 s on DuckDB vs 195–280 s reading Postgres (record fills: 2.2–2.75 GiB RSS at
+    10–11 days).
 
 - **2026-11-23 — perf-96: faster clearing and input reads; prices unchanged, no `code_version` bump.**
   Bit-identical prices on the 31-day spot check vs record #2 (29,016/29,016) and on 4 days at 96 steps.
