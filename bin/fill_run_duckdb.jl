@@ -134,7 +134,8 @@ function main(argv)
     windows = [Dict("table" => string(r.schema_name, ".", r.table_name), "kind" => r.kind,
                     "lo" => string(r.lo), "hi" => string(r.hi), "rows" => r.n_rows, "seconds" => r.seconds)
                for r in Euphemia.DBInterface.execute(wcon, "SELECT * FROM _fill.windows ORDER BY schema_name, table_name, lo")]
-    source_tz = String(collect(Euphemia.DBInterface.execute(wcon, "SELECT source_timezone FROM _fill.run"))[1].source_timezone)
+    run_row = collect(Euphemia.DBInterface.execute(wcon, "SELECT source_timezone, scanner_timezone FROM _fill.run"))[1]
+    source_tz = String(run_row.source_timezone); scanner_tz = String(run_row.scanner_timezone)
     absent = [w["table"] for w in windows if w["kind"] == "absent"]
     Euphemia.DBInterface.close!(wcon); Euphemia.DuckDB.close(wdb)
     # Peak resident memory of this process (kB) from the kernel: the runner image has no /usr/bin/time.
@@ -146,7 +147,11 @@ function main(argv)
                 "results_seconds" => round(t_results, digits=2),
                 "inputs_mib" => round(filesize(inputs) / 2^20, digits=1),
                 "results_mib" => round(filesize(results) / 2^20, digits=1),
-                "source_timezone" => source_tz, "absent_in_source" => absent,
+                # pg_timezone: current_setting('TimeZone') of the Postgres session through postgres_query
+                # (pinned to UTC; attach_postgres! refuses anything else); scanner_timezone: the fill's
+                # DuckDB connection
+                "source_timezone" => source_tz, "pg_timezone" => source_tz, "scanner_timezone" => scanner_tz,
+                "absent_in_source" => absent,
                 "windows" => windows,
                 "seeds" => [Dict("table" => s.table, "rows" => s.rows, "seconds" => round(s.seconds, digits=2)) for s in seeded])
     open(joinpath(tmp, "fill.json"), "w") do io

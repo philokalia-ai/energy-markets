@@ -168,6 +168,13 @@ try
         failed_date_list = [r.date for r in result.date_results if !r.success]
         println("❌ Failed dates: $(join(failed_date_list, ", "))")
 
+        # Under a run-local fill (fill → run → transfer) every date must clear: a failed date
+        # would otherwise be dropped from the transfer while the job ends green.
+        if Euphemia.DATA_STORE[] == :duckdb && Euphemia._in_fill()
+            println("❌ Run-local fill: $failed_dates date(s) failed — failing the job")
+            use_parallel && rmprocs(filter(id -> id > 1, workers()))
+            exit(1)
+        end
         # Still exit successfully if we got some results
         if successful_dates > 0
             println("✅ Continuing as $successful_dates dates were processed successfully")

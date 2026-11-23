@@ -309,8 +309,27 @@ struct FillGuardError <: Exception
     msg::String
 end
 Base.showerror(io::IO, e::FillGuardError) = print(io, "FillGuardError: ", e.msg)
-"Inside a `catch`: let a FillGuardError through every soft fallback."
-_rethrow_fill_guard(e) = e isa FillGuardError ? throw(e) : nothing
+"""
+The FillGuardError inside `e`, or `nothing`: unwraps task, composite and remote wrappers (a guard hit
+in a threaded zone build arrives as TaskFailedException/CompositeException, from a Distributed worker
+as RemoteException → CapturedException)."""
+function _fill_guard_in(e, depth::Int=0)
+    depth > 8 && return nothing
+    e isa FillGuardError && return e
+    e isa TaskFailedException && return _fill_guard_in(e.task.exception, depth + 1)
+    e isa CompositeException && for x in e.exceptions
+        g = _fill_guard_in(x, depth + 1); g === nothing || return g
+    end
+    hasproperty(e, :captured) && return _fill_guard_in(getproperty(e, :captured), depth + 1)   # RemoteException
+    hasproperty(e, :ex) && return _fill_guard_in(getproperty(e, :ex), depth + 1)               # CapturedException
+    return nothing
+end
+"Inside a `catch`: let a FillGuardError (also wrapped) through every soft fallback."
+function _rethrow_fill_guard(e)
+    g = _fill_guard_in(e)
+    g === nothing || throw(g)
+    return nothing
+end
 "True when the open inputs DB is a run-local fill (carries _fill.windows)."
 _in_fill() = _FILL_GUARD[] !== nothing
 

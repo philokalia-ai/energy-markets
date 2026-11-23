@@ -1008,6 +1008,7 @@ function clear_utc_day!(cache::Dict{Date,Union{Nothing,Dict{String,Dict{DateTime
             scenario=scenario)
     catch e
         e isa InterruptException && rethrow()
+        Euphemia._rethrow_fill_guard(e)   # a fill miss fails the job, never a silently missing day
         println("  ❌ UTC day $utc_day clearing FAILED: $e")
         cache[utc_day] = nothing
         _CLEAR_VINTAGE[utc_day] = asof
@@ -1278,6 +1279,7 @@ function main()
                 for (z, zp) in ml_load; fill_pred[z] = zp; end
                 println("ML inputs ready in $(round(time() - tml, digits=1))s")
             catch e
+                Euphemia._rethrow_fill_guard(e)   # a fill miss fails the job (not "packs kept")
                 # A newly-wired overlay must never regress a day the packs could
                 # serve: on any ML failure keep the pack predictions already built
                 # above (a coverage gap then makes the pilot INELIGIBLE the same
@@ -1316,6 +1318,7 @@ function main()
             try
                 emit_input_corrections!(cday)
             catch e
+                Euphemia._rethrow_fill_guard(e)   # a fill miss fails the job (not "raw fc")
                 @warn "cv32 correction emission failed for $cday — books fall soft to raw fc" exception=(e, catch_backtrace())
             end
         end
@@ -1625,6 +1628,7 @@ function run_retro()
                     end
                     for (z, zp) in ml_load; fill_pred[z] = zp; load_src[z] = "ml"; end
                 catch e
+                    Euphemia._rethrow_fill_guard(e)   # a fill miss fails the job (not "packs kept")
                     @warn "retro ML overlay failed for lead $lead — packs kept" exception=(e, catch_backtrace())
                 end
             end

@@ -275,6 +275,8 @@ function fill_run_duckdb(path::AbstractString; days, zones::Vector{String}, conn
         source in (:postgres, :duckdb) || error("fill_run_duckdb: source must be :postgres or :duckdb")
         _FILL_SOURCE[] = source
         src_tz = "n/a (duckdb source)"
+        # the fill connection's own zone (SET above; DuckDB's TimeZone needs ICU, absent → "n/a")
+        scan_tz = try String(collect(DBInterface.execute(con, "SELECT current_setting('TimeZone') AS tz"))[1].tz) catch; "n/a" end
         if source === :postgres
             attach_postgres!(con, conn_str; alias="pg", read_only=true)   # pins + verifies UTC
             src_tz = postgres_session_timezone(con)
@@ -318,7 +320,7 @@ function fill_run_duckdb(path::AbstractString; days, zones::Vector{String}, conn
             end
             println("  fill $(spec.schema).$(spec.table): $n rows, $(round(dt, digits=1)) s"); flush(stdout)
         end
-        DBInterface.execute(con, "CREATE TABLE _fill.run AS SELECT $(_pg_str(join(string.(days), ","))) AS days, $(_pg_str(join(zones, ","))) AS zones, $(round(time() - t_all, digits=2)) AS seconds, now() AS filled_at, $(_pg_str(src_tz)) AS source_timezone")
+        DBInterface.execute(con, "CREATE TABLE _fill.run AS SELECT $(_pg_str(join(string.(days), ","))) AS days, $(_pg_str(join(zones, ","))) AS zones, $(round(time() - t_all, digits=2)) AS seconds, now() AS filled_at, $(_pg_str(src_tz)) AS source_timezone, $(_pg_str(scan_tz)) AS scanner_timezone")
         source === :postgres ? detach_postgres!(con) : DBInterface.execute(con, "DETACH src")
     finally
         _FILL_SOURCE[] = :postgres

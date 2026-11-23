@@ -302,6 +302,12 @@ end
         DBInterface.close!(con); DuckDB.close(db); k
     end
     @test kinds["carbon.uka_price"] == "absent"
+    let db = DuckDB.DB(fill; readonly=true), con = DBInterface.connect(db)
+        r = collect(DBInterface.execute(con, "SELECT source_timezone, scanner_timezone FROM _fill.run"))[1]
+        @test r.source_timezone == "n/a (duckdb source)"
+        @test r.scanner_timezone in ("UTC", "Etc/UTC")
+        DBInterface.close!(con); DuckDB.close(db)
+    end
     @test kinds["yfinance.eua_co2"] == "full"
     # a fill that claims the table but lacks it (no 'absent' row): the Catalog Error is a FillGuardError
     broken = joinpath(dir, "broken.duckdb"); cp(fill, broken)
