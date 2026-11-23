@@ -28,7 +28,7 @@ const _T_PROCESS0 = time()   # process wall: measured here (the runner image has
 using Dates, Printf
 # Euphemia (and its data-store init) only for `clear`: `compare` is a pure CSV comparison and needs no store.
 const _CMD = isempty(ARGS) ? "" : ARGS[1]
-_CMD == "clear" && @eval using Euphemia
+_CMD == "clear" && @eval using Euphemia, LibPQ   # LibPQ: the PG phase's server-TimeZone probe (Euphemia loads it anyway)
 _CMD in ("fill-sums", "fill-diff") && @eval using DuckDB
 "Peak resident memory of this process (kB), from the kernel."
 peak_rss_kb() = try parse(Int, match(r"VmHWM:\s*(\d+)", read("/proc/self/status", String))[1]) catch; -1 end
@@ -138,12 +138,9 @@ function clear(args)
         # The server's own TimeZone default: Euphemia pins its sessions to UTC (PGTZ + SET), so ask one
         # plain libpq connection opened without PGTZ (read-only SHOW; closed at once)
         tz = try
-            @eval using LibPQ
-            c = withenv("PGTZ" => nothing) do
-                Base.invokelatest(LibPQ.Connection, ENV["ENERGY_CONN_STR"])
-            end
+            c = withenv(() -> LibPQ.Connection(ENV["ENERGY_CONN_STR"]), "PGTZ" => nothing)
             v = try
-                String(Base.invokelatest(x -> first(LibPQ.columntable(LibPQ.execute(c, "SHOW TimeZone")))[1], c))
+                String(first(LibPQ.columntable(LibPQ.execute(c, "SHOW TimeZone")))[1])
             finally
                 close(c)
             end
