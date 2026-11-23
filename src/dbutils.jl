@@ -24,6 +24,7 @@ using DuckDB   # also brings DBInterface into scope
 # Split by concern; each file is `include`d in the original definition order,
 # so the spliced code is line-for-line the pre-split dbutils.jl.
 include("db/duckdb_store.jl")   # DuckDB backend: connection, dialect rewrite, results.duckdb writers
+include("db/pg_attach.jl")      # DuckDB postgres extension: the only Julia->Postgres path (fill, transfer)
 include("db/postgres_core.jl")  # code-version ledger, LibPQ pool, sql2df (+retry) dispatch
 include("db/results_store.jl")  # simulations.* DDL, save_* writers, ensure_indexes
 include("db/physics_audit.jl")  # physics-consistency audit of the ingested ENTSO-E data (read-only)
