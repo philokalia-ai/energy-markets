@@ -71,6 +71,7 @@ def load_tagged(day: str, zones, fuel: dict) -> pd.DataFrame:
     df = df[df.zone.isin(zones)].copy()
     df["hour"] = df.date_time_utc.dt.hour
     df["tech"] = [tech_of(t, fuel) for t in df.owner_tag]
+    df["fuel"] = [fuel.get(t, "") or ("Hydro Pumped Storage" if "Pumped" in t else "") for t in df.owner_tag]
     df["flex"] = df.strategy.str.match(FLEX) & df.tech.isin(THERMAL)
     gmc = (df[df.strategy == "srmc_base"].groupby(["zone", "hour", "owner_tag"]).price.first() / TRANCHE1_MULT)
     df = df.join(gmc.rename("gmc"), on=["zone", "hour", "owner_tag"])
@@ -155,7 +156,7 @@ def D0_from_rd(rd_points):
     pr = np.minimum.accumulate(np.array([b for _, b in rd_points], float))
     from rdopt import inverse_nonincreasing  # noqa: E402 (same directory)
 
-    return lambda p: float(inverse_nonincreasing(q, pr, p))
+    return lambda p: inverse_nonincreasing(q, pr, p)
 
 
 def read_gz_lines(path):
@@ -177,7 +178,10 @@ def price_with_markup(zh: pd.DataFrame, D0, m: float, p_ref: float, techs=None, 
     mp, mcum = np_[o], np.concatenate([[0.0], np.cumsum(u.q.values[o])])
     g = np.arange(lo, hi, step)
     dS = mcum[np.searchsorted(mp, g, side="right")] - bcum[np.searchsorted(bp, g, side="right")]
-    f = np.array([D0(p) for p in g]) - dS  # >0: excess demand at p -> price higher
+    v = D0(g)
+    if np.ndim(v) == 0:  # scalar-only D0 (islanded)
+        v = np.array([D0(p) for p in g])
+    f = np.asarray(v, float) - dS  # >0: excess demand at p -> price higher
     sgn = np.sign(f)
     idx = np.nonzero((sgn[:-1] > 0) & (sgn[1:] <= 0))[0]
     if len(idx) == 0:

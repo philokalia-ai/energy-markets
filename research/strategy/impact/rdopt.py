@@ -40,16 +40,13 @@ def inverse_nonincreasing(x_grid, y, y_query):
     yq = np.atleast_1d(np.asarray(y_query, float))
     # number of points with y >= yq  (y non-increasing => -y non-decreasing)
     idx = np.searchsorted(-y, -yq, side="right")
-    out = np.empty_like(yq)
     n = len(x_grid)
-    for m, (i, v) in enumerate(zip(idx, yq)):
-        if i == 0:
-            out[m] = x_grid[0]
-        elif i == n:
-            out[m] = x_grid[-1]
-        else:
-            a, b = i - 1, i  # y[a] >= v > y[b]
-            out[m] = x_grid[a] + (x_grid[b] - x_grid[a]) * (y[a] - v) / (y[a] - y[b])
+    a = np.clip(idx - 1, 0, n - 2)
+    b = a + 1
+    den = y[a] - y[b]
+    frac = np.where(den > 0, (y[a] - yq) / np.where(den > 0, den, 1.0), 0.0)
+    out = x_grid[a] + (x_grid[b] - x_grid[a]) * np.clip(frac, 0.0, 1.0)
+    out = np.where(idx == 0, x_grid[0], np.where(idx == n, x_grid[-1], out))
     return out if np.ndim(y_query) else out[0]
 
 
@@ -235,17 +232,22 @@ def withhold_offer(p_grid, cost: StepCost, q):
 # energy-limited assets: shifting volume between hours (hydro reservoir / storage), DP over stored energy
 
 
-def energy_dp(rds, e0, e_cap, p_max_dis, p_max_ch, eta, value_end, n_e=121, n_u=None, impact=True, var_cost=0.0):
+def energy_dp(rds, e0, e_cap, p_max_dis, p_max_ch, eta, value_end, n_e=121, n_u=None, impact=True, var_cost=0.0,
+              de=None, pt_prices=None):
     """Choose hourly net injection u_t (discharge > 0, charge < 0) to maximise
          sum_t [P_t(u_t) u_t - var_cost * max(u_t,0)] + value_end * e_T
     with storage e_{t+1} = e_t - u_t (discharge) / e_t - eta * u_t (charge, u_t < 0), 0 <= e <= e_cap.
     `rds[t]` = company residual demand of hour t (ResidualDemand). impact=False -> price-taker at P_t(0).
     Hydro: p_max_ch = 0, e0 = budget, value_end = water value. Returns (u, e_path, objective).
+    impact=False: price-taker at pt_prices[t] (default P_t(0)). de: energy grid step (overrides n_e).
     DP on an energy grid; u restricted to moves between grid points (exact on the grid).
     """
     T = len(rds)
-    E = np.linspace(0.0, e_cap, n_e)
-    de = E[1] - E[0] if n_e > 1 else 1.0
+    if de is not None:  # energy step that divides the power limits (so full-power moves are representable)
+        E = np.arange(0.0, e_cap + de / 2, de)
+        n_e = len(E)
+    else:
+        E = np.linspace(0.0, e_cap, n_e)
     Vn = value_end * E
     pol = np.zeros((T, n_e), dtype=np.int32)
     for t in range(T - 1, -1, -1):
@@ -256,7 +258,7 @@ def energy_dp(rds, e0, e_cap, p_max_dis, p_max_ch, eta, value_end, n_e=121, n_u=
             dE = E[a] - E  # >0 discharge energy, <0 charge energy (stored)
             u = np.where(dE >= 0, dE, dE / eta)  # grid injection (charge draws more than stored)
             ok = (u <= p_max_dis + 1e-9) & (-u <= p_max_ch + 1e-9)
-            pr = rd.P(u) if impact else np.full_like(u, rd.P(0.0))
+            pr = rd.P(u) if impact else np.full_like(u, rd.P(0.0) if pt_prices is None else pt_prices[t])
             val = pr * u - var_cost * np.maximum(u, 0.0) + Vn
             val = np.where(ok, val, -1e18)
             b = int(np.argmax(val))

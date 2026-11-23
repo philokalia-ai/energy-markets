@@ -11,6 +11,9 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import market_view as MV  # noqa: E402
 import strat as ST  # noqa: E402
+import hydro as HY  # noqa: E402
+
+HYDRO_ZONES = {"NO2", "FR", "ES"}
 
 OUT = MV.ROOT / "runs/st-impact/strat"
 ZONES = ["GR", "IT-SOUTH", "DE_LU", "FR", "NO2", "ES"]
@@ -29,6 +32,9 @@ def job(args):
     rows = ST.run_zone_day(day, zone, tg, pb, real.get((zone, day), {}) and {zone: real[(zone, day)]} or {},
                            errors=errors if kind == "eval" else None)
     pd.DataFrame(rows).to_csv(f, index=False)
+    if zone in HYDRO_ZONES:
+        hr = HY.run_zone_day(day, zone, tg, pb, {zone: real[(zone, day)]} if (zone, day) in real else {})
+        pd.DataFrame(hr).to_csv(OUT / f"{day}_{zone}.hydro.csv.gz", index=False)
     return f"{day} {zone} rows={len(rows)}"
 
 
@@ -44,6 +50,6 @@ if __name__ == "__main__":
         ncal = sum(1 for d in CAL if (MV.BASE / f"{d}.prices.csv").exists())
         print(f"hedge errors from {ncal} calibration days", flush=True)
     jobs = [(kind, d, z, fuel, errors, real) for d in days for z in ZONES]
-    with Pool(int(sys.argv[0] and 6)) as p:
+    with Pool(6) as p:
         for msg in p.imap_unordered(job, jobs):
             print(msg, flush=True)

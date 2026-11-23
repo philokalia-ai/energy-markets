@@ -77,9 +77,10 @@ def price_grid(rd_pts, extra):
     pr = np.array([p for _, p in rd_pts], float)
     lo = min(pr.min(), min(extra)) - 5.0
     hi = max(pr.max(), max(extra)) + 5.0
-    g = np.unique(np.round(np.concatenate([np.linspace(lo, hi, 300),
-                                           np.linspace(min(extra) - 40, max(extra) + 60, 300)]), 3))
-    return g[(g >= lo) & (g <= hi)]
+    g = np.round(np.concatenate([np.linspace(lo, hi, 300), np.linspace(min(extra) - 40, max(extra) + 60, 300)]), 3)
+    g = g[(g >= lo) & (g <= hi)]
+    # exact order prices / costs stay on the grid (ties at an order's price must resolve at that price)
+    return np.unique(np.concatenate([g, np.asarray(extra, float)]))
 
 
 def offer_on_grid(orders_price, orders_mw, pgrid):

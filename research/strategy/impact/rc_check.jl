@@ -24,7 +24,9 @@ for job in split(ENV["JOBS"], ",")
         if r[4] == "offer"
             push!(company, SimpleOrder(:supply, p, mw, Symbol(zone), ts(h), 60))
         else
-            push!(carves, Carve(zone, Dict(per(h) => mw), p - 1e-4, p + 1e-4; ref=p))
+            # the book merges orders at round(price, 2) (book_build.jl:2253)
+            pr2 = round(p, digits=2)
+            push!(carves, Carve(zone, Dict(per(h) => mw), pr2 - 1e-6, pr2 + 1e-6; ref=pr2))
         end
     end
     t = time()

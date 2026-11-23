@@ -30,6 +30,8 @@ for a in arms:
         pg, x = keep[(S, h, a)]
         x = np.maximum.accumulate(x)
         inc = np.diff(np.concatenate([[0.0], x]))
+        if a == "book":  # the book's own orders, exact prices
+            pg, inc = keep[(S, h, "carve")][:, 0], keep[(S, h, "carve")][:, 1]
         for p, d in zip(pg, inc):
             if d > 1e-6:
                 out.append((day, zone, h, "offer", round(float(p), 4), float(d)))
