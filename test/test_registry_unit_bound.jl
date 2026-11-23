@@ -109,6 +109,8 @@ end
         end
 
         @testset "rejected rows are reported" begin
+            # get_generators checks once per zone-day (perf-96); a direct call always reports
+            @test ("IT-NORTH", _DAY) in G._QUARANTINE_CHECKED
             @test_logs (:warn, "Rejected corrupt registry capacity") (:warn, "Rejected corrupt registry capacity") (:warn, "Rejected corrupt registry capacity") match_mode=:any G._warn_quarantined_capacity_rows("IT-NORTH", _DAY)
         end
         G.clear_generator_caches!()

@@ -289,7 +289,8 @@ function _create_multi_zone_order_book_merit(zones::Vector{String}, day::Date;
     anchor_refs::Dict{String,Dict{String,Float64}}=Dict{String,Dict{String,Float64}}(),
     cached_zone_orders::Dict{String,Vector{MarketOrders.MarketOrder}}=Dict{String,Vector{MarketOrders.MarketOrder}}(),
     clear_resolution_minutes::Int=60,
-    scenario::Union{Nothing,ZoneScenario,Dict{String,ZoneScenario}}=nothing)
+    scenario::Union{Nothing,ZoneScenario,Dict{String,ZoneScenario}}=nothing,
+    transfer_capacity::Union{Nothing,Network.TransferCapacity}=nothing)
     isempty(zones) && error("At least one bidding zone must be specified")
 
     println("🌍 Creating multi-zone order book (merit-order method) for $(length(zones)) zones")
@@ -317,10 +318,27 @@ function _create_multi_zone_order_book_merit(zones::Vector{String}, day::Date;
         end
     end
 
-    println("   🔌 Fetching transfer capacities between zones...")
-    transfer_capacity = Network.create_transfer_capacity_from_entsoe(day, zones;
-        include_explicit=enrich_network, aggregate_remap=aggregate_remap,
-        drop_borders=drop_borders)
+    # Pass 2 hands in pass 1's network: the enriched transfer capacity is a
+    # pure function of (day, zones, as-of context), so re-fetching it only
+    # repeated pass 1's ATC/JAO/outage reads (bit-identical on the record days).
+    if transfer_capacity === nothing
+        println("   🔌 Fetching transfer capacities between zones...")
+        audit0 = asof_audit()
+        transfer_capacity = Network.create_transfer_capacity_from_entsoe(day, zones;
+            include_explicit=enrich_network, aggregate_remap=aggregate_remap,
+            drop_borders=drop_borders)
+        # keep the as-of audit rows this build made, for pass 2's reuse to replay
+        for (src, d) in asof_audit(), (st, n) in d
+            dn = n - get(get(audit0, src, Dict{Symbol,Int}()), st, 0)
+            dn > 0 && (transfer_capacity.asof_audit[(src, st)] = dn)
+        end
+    else
+        println("   🔌 Reusing pass-1 transfer capacities")
+        # audit as if rebuilt: a rebuild would have recorded the same rows again
+        for ((src, st), n) in transfer_capacity.asof_audit
+            record_asof_status!(src, st, n)
+        end
+    end
     zone_pairs = Network.get_zone_pairs(transfer_capacity)
     # A border only counts as endogenous if it can actually carry flow:
     # ATC rows with zero capacity in both directions all day (e.g. an
@@ -682,7 +700,8 @@ function mz_extract_anchor_inputs(order_book::MPCC.MPCCOrderBook,
     if isempty(anchored) && !cv34_env_on
         return (anchored=anchored,
             refs=Dict{String,Dict{String,Float64}}(),
-            cached=Dict{String,Vector{MarketOrders.MarketOrder}}())
+            cached=Dict{String,Vector{MarketOrders.MarketOrder}}(),
+            network=order_book.network_topology)
     end
     # cv17's `anchor_include_dropped` (anchor refs weighted over DROPPED
     # borders, SE3-only) was measured and GATED OUT — the SE2-dominated ref
@@ -713,7 +732,8 @@ function mz_extract_anchor_inputs(order_book::MPCC.MPCCOrderBook,
     cached = Dict{String,Vector{MarketOrders.MarketOrder}}(
         z => [o for o in order_book.orders if String(o.zone) == z]
         for z in order_book.nodes)
-    return (anchored=anchored, refs=refs, cached=cached)
+    return (anchored=anchored, refs=refs, cached=cached,
+            network=order_book.network_topology)
 end
 
 """
@@ -731,7 +751,8 @@ function mz_rebuild_anchored(zones::Vector{String}, date::Date,
     enrich_network::Bool=false, apply_zone_profiles::Bool=true,
     clear_resolution_minutes::Int=60,
     ex_ante_mode::Union{Nothing,Symbol}=nothing,
-    scenario::Union{Nothing,ZoneScenario,Dict{String,ZoneScenario}}=nothing)
+    scenario::Union{Nothing,ZoneScenario,Dict{String,ZoneScenario}}=nothing,
+    transfer_capacity::Union{Nothing,Network.TransferCapacity}=nothing)
     # Same scoped flow-policy resolution as mz_build_books (cv25 fix 2): the
     # pipeline's pass-2 rebuilds hit this entry directly on the workers.
     resolved, prev = ex_ante_mode !== nothing ?
@@ -742,7 +763,8 @@ function mz_rebuild_anchored(zones::Vector{String}, date::Date,
         return _create_multi_zone_order_book_merit(zones, date;
             enrich_network=enrich_network, apply_zone_profiles=apply_zone_profiles,
             anchor_refs=refs, cached_zone_orders=cached,
-            clear_resolution_minutes=clear_resolution_minutes, scenario=scenario)
+            clear_resolution_minutes=clear_resolution_minutes, scenario=scenario,
+            transfer_capacity=transfer_capacity)
     finally
         MeritOrderBook.FLOW_ASOF_MODE[] = prev
     end

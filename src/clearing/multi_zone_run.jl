@@ -279,7 +279,8 @@ function run_multi_zone_market_clearing(date::Date;
                 # dropped here, so kwarg-driven A/B arms rebuilt the anchored
                 # zones under the env/scoped default — mixed-mode books).
                 ex_ante_mode=resolved_flow_mode,
-                scenario=scenario)
+                scenario=scenario,
+                transfer_capacity=anchor_inputs.network)
             println("\n⚡ Running pass-2 market clearing optimization...")
             result2 = mz_solve_pass(order_book2;
                 optimizer=optimizer, silent=silent,

@@ -9,6 +9,37 @@
 # day's flows, so a 39-zone book paid ~50 near-identical scans. Errors are never
 # cached (transient failures must be retried). Thread/process-safe via a lock;
 # each reproduce worker is its own process with its own per-day cache.
+# Single-flight fill for the shared day-level caches below and in fleet_data.jl.
+# The zone books run on several threads and all start by asking for the same
+# day-level relation; with a plain check-then-fill every thread that missed ran
+# the query too (perf-96: 62-102 net-import reads per day at 4 threads, varying
+# run to run). A per-key lock makes later callers wait for the first fill, while
+# different keys still fill in parallel. Errors are never cached (`f` throws
+# before the store); `nothing` is not a cacheable value.
+const _FILL_KEY_LOCKS = Dict{Any,ReentrantLock}()
+const _FILL_KEY_LOCKS_LOCK = ReentrantLock()
+function _fill_once(f, cachelock::ReentrantLock, cache::AbstractDict, key)
+    hit = lock(cachelock) do
+        get(cache, key, nothing)
+    end
+    hit === nothing || return hit
+    keylock = lock(_FILL_KEY_LOCKS_LOCK) do
+        get!(ReentrantLock, _FILL_KEY_LOCKS, (objectid(cache), key))
+    end
+    return lock(keylock) do
+        again = lock(cachelock) do
+            get(cache, key, nothing)
+        end
+        if again === nothing
+            again = f()
+            lock(cachelock) do
+                cache[key] = again
+            end
+        end
+        again
+    end
+end
+
 const _NetBorderRow = NamedTuple{(:h, :in_code, :out_code, :avg_flow),
                                  Tuple{Int,String,String,Float64}}
 const _NET_IMPORTS_DAY_CACHE = Dict{Date,Vector{_NetBorderRow}}()
@@ -111,33 +142,28 @@ _strip_ips(s::AbstractString) = replace(String(s), r"_IPS$" => "")
 # identical to what the old per-zone query computed.
 # Fetch (and cache) the border relation for an EXPLICIT queried day.
 function _net_imports_day_relation_at(qday::Date)
-    cached = lock(_NET_IMPORTS_CACHE_LOCK) do
-        get(_NET_IMPORTS_DAY_CACHE, qday, nothing)
+    return _fill_once(_NET_IMPORTS_CACHE_LOCK, _NET_IMPORTS_DAY_CACHE, qday) do
+        df = sql2df_with_retry(
+            """
+            SELECT EXTRACT(HOUR FROM date_time_utc AT TIME ZONE 'UTC')::int AS h,
+                   in_area_map_code AS in_code,
+                   out_area_map_code AS out_code,
+                   AVG(flow_mw) AS avg_flow
+            FROM entsoe.physical_flows
+            WHERE in_area_type_code LIKE 'BZN%' AND out_area_type_code LIKE 'BZN%'
+              AND date_time_utc >= (\$1::date::timestamp AT TIME ZONE 'UTC')
+              AND date_time_utc < ((\$1::date + 1)::timestamp AT TIME ZONE 'UTC')
+            GROUP BY 1, in_area_map_code, out_area_map_code
+            """,
+            [qday])
+        rows = _NetBorderRow[]
+        for r in eachrow(df)
+            ismissing(r.avg_flow) && continue
+            push!(rows, (h=Int(r.h), in_code=String(r.in_code),
+                         out_code=String(r.out_code), avg_flow=Float64(r.avg_flow)))
     end
-    cached !== nothing && return cached
-    df = sql2df_with_retry(
-        """
-        SELECT EXTRACT(HOUR FROM date_time_utc AT TIME ZONE 'UTC')::int AS h,
-               in_area_map_code AS in_code,
-               out_area_map_code AS out_code,
-               AVG(flow_mw) AS avg_flow
-        FROM entsoe.physical_flows
-        WHERE in_area_type_code LIKE 'BZN%' AND out_area_type_code LIKE 'BZN%'
-          AND date_time_utc >= (\$1::date::timestamp AT TIME ZONE 'UTC')
-          AND date_time_utc < ((\$1::date + 1)::timestamp AT TIME ZONE 'UTC')
-        GROUP BY 1, in_area_map_code, out_area_map_code
-        """,
-        [qday])
-    rows = _NetBorderRow[]
-    for r in eachrow(df)
-        ismissing(r.avg_flow) && continue
-        push!(rows, (h=Int(r.h), in_code=String(r.in_code),
-                     out_code=String(r.out_code), avg_flow=Float64(r.avg_flow)))
+    rows
     end
-    lock(_NET_IMPORTS_CACHE_LOCK) do
-        _NET_IMPORTS_DAY_CACHE[qday] = rows
-    end
-    return rows
 end
 
 # Reconstruct the per-zone `border_hourly` CTE from the cached day relation:

@@ -212,5 +212,8 @@ include("clearing/batch_workers.jl")    # parallel & sequential worker helpers
 # the exposed mz_* clearing stages and the save_* helpers).
 include("PipelinedBackfill.jl")
 
+# perf-96: compile the clearing path at precompile time (DB-free workload).
+include("precompile_workload.jl")
+
 
 end # module Euphemia

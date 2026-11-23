@@ -216,6 +216,18 @@ println()
         include(joinpath(@__DIR__, "test_pipeline_store_restore.jl"))
     end
 
+    @testset "Pass 2 reuses pass-1 transfer capacity (DB-free)" begin
+        include(joinpath(@__DIR__, "test_pass2_network_reuse.jl"))
+    end
+
+    @testset "Day caches return hits (temp DuckDB)" begin
+        include(joinpath(@__DIR__, "test_day_cache_hits.jl"))
+    end
+
+    @testset "Precompile workload leaves no state (fresh process)" begin
+        include(joinpath(@__DIR__, "test_precompile_state.jl"))
+    end
+
     @testset "Solar-regime gate: issued weather solar" begin
         include(joinpath(@__DIR__, "test_solar_gate_issued.jl"))
     end

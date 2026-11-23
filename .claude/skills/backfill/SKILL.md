@@ -3,6 +3,15 @@ name: backfill
 description: Run, resume, benchmark or transfer a multi-zone EU backfill with the pipelined producer/consumer runner (run_pipelined_backfill, bin/reproduce.jl --pipeline, bin/eu_calibration_run.jl PIPELINE=true), including order-book capture (books_dir) and the DuckDB-to-Postgres transfer flow. Use whenever the user asks to backfill a date range, resume a backfill, capture order books, or move offline results into Postgres.
 ---
 
+**Owner rule (2026-11-23): DuckDB always sits between Postgres and Julia.**
+Postgres is for long-term storage. DuckDB is for sharing and calculating.
+- Julia never queries Postgres, except the one step that fills DuckDB from Postgres (a bulk copy).
+- Every Julia read (inputs, books, production pipelines, backfills, research) goes to DuckDB.
+- Results go the same way back: Julia writes to DuckDB, and a bulk transfer moves them to Postgres.
+- New code that opens a Postgres connection from Julia for anything else is wrong, whatever it saves.
+- Existing direct Postgres reads in `src/` are debt to migrate, not a pattern to copy.
+
+
 # Pipelined multi-zone backfill (`run_pipelined_backfill`)
 
 Moved from the root `CLAUDE.md` (August 2026). Architecture reference:
