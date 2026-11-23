@@ -60,7 +60,8 @@ _usable(r) = r.status == :optimal || (r.status == :time_limit && !isempty(r.mark
 The record pipeline's day (src/PipelinedBackfill.jl pass1/pass2 jobs), run sequentially in this process. Uses the
 process env for every knob (the runner sets the cv46 record env: EUPHEMIA_FLOW_ASOF_MODE=v2, DuckDB read-only).
 """
-function build_baseline(day::Date; save::Bool=true, optimizer::String="highs", tagged::Bool=save)
+function build_baseline(day::Date; save::Bool=true, optimizer::String="highs", tagged::Bool=save,
+    clear_resolution_minutes::Int=60)
     t0 = time()
     # Tagged-book capture (read-only sink, as the pipeline's books_dir): zone => [(order, owner_tag, strategy)];
     # pass 2 re-fires only the anchored zones and overwrites them, so the dict ends as the FINAL book's tags.
@@ -75,7 +76,8 @@ function build_baseline(day::Date; save::Bool=true, optimizer::String="highs", t
     try
     ctx() = Euphemia.gate_context(day)
     ob1 = Euphemia.with_context(ctx()) do
-        mz_build_books(FOOTPRINT, day; enrich_network=true, apply_zone_profiles=true)
+        mz_build_books(FOOTPRINT, day; enrich_network=true, apply_zone_profiles=true,
+            clear_resolution_minutes=clear_resolution_minutes)
     end
     tb1 = time() - t0
     r1 = mz_solve_pass(ob1; optimizer=optimizer, silent=true, decompose_periods=true)
@@ -87,7 +89,7 @@ function build_baseline(day::Date; save::Bool=true, optimizer::String="highs", t
         t2 = time()
         ob2 = Euphemia.with_context(ctx()) do
             mz_rebuild_anchored(FOOTPRINT, day, ai.refs, ai.cached; transfer_capacity=ai.network,
-                enrich_network=true, apply_zone_profiles=true)
+                enrich_network=true, apply_zone_profiles=true, clear_resolution_minutes=clear_resolution_minutes)
         end
         tb2 = time() - t2
         r2 = mz_solve_pass(ob2; optimizer=optimizer, silent=true, decompose_periods=true)
@@ -106,7 +108,7 @@ function build_baseline(day::Date; save::Bool=true, optimizer::String="highs", t
     meta = Dict{String,Any}("commit" => commit, "built_utc" => string(now(UTC)), "wall_s" => time() - t0,
         "book1_s" => tb1, "book2_s" => tb2, "anchored" => ai.anchored, "status" => string(res.status),
         "env" => sort([k => v for (k, v) in ENV if startswith(k, "EUPHEMIA_")]),
-        "n_orders" => length(book.orders))
+        "n_orders" => length(book.orders), "clear_resolution_minutes" => clear_resolution_minutes)
     b = BaselineDay(day, book, res.market_prices, pass, meta)
     if save && tagged
         mkpath(CACHE[])
