@@ -21,9 +21,10 @@
 #      Any RAISE aborts the whole block: Postgres is unchanged.
 #   3. The staging tables are dropped (always), then the ops are marked done in the results DuckDB.
 #
-# Idempotent: every op is a slice replace / upsert / insert-ignore, so a re-run after a failure (before or after
-# the commit; the marks are written after it) converges to the same Postgres state; a superseded live vintage is
-# backed up once (on a replay the slice holds no live rows any more and the plan is re-decided as such).
+# Exactly once: the block records every op it applies in simulations.transfer_log (run_uuid of the results
+# DuckDB, op_id) inside the same Postgres transaction, and skips an op already recorded there. A failed transfer
+# records nothing (re-run applies everything); a transfer that committed but lost its local done marks is a
+# no-op when re-run (no duplicate supersede backup, no plan re-decided on an already-changed slice).
 #
 # usage: julia --project=. bin/transfer_run_results.jl [--results-db PATH] [--dry-run]
 # env:   ENERGY_CONN_STR (libpq key=value or postgresql:// URI; never printed),
@@ -204,15 +205,22 @@ const PLPGSQL = Dict("forecast_slice" => plpgsql_forecast_slice, "input_correcti
                      "score_upsert" => plpgsql_score_upsert, "score_q15" => plpgsql_score_q15)
 
 "The single server-side transfer block (one Postgres transaction)."
-function transfer_block(ops, stages)
+function transfer_block(ops, stages, run_uuid)
     needs_horizon = any(r -> r.kind == "forecast_slice" && !Bool(JSON.parse(r.params)["is_retro"]), eachrow(ops))
     b = IOBuffer()
     println(b, "DO \$p96transfer\$")
     println(b, "DECLARE horizon date; n_live bigint := 0; n_live_same_cv bigint := 0; n_backed bigint; plan text;")
     println(b, "BEGIN")
+    println(b, "  CREATE TABLE IF NOT EXISTS simulations.transfer_log (run_uuid text NOT NULL, op_id bigint NOT NULL, " *
+               "kind text NOT NULL, applied_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY (run_uuid, op_id));")
     needs_horizon && println(b, "  SELECT MAX((date_time_utc AT TIME ZONE 'UTC')::date) INTO horizon FROM entsoe.actual_total_load;")
     for r in eachrow(ops)
+        println(b, "  IF EXISTS (SELECT 1 FROM simulations.transfer_log WHERE run_uuid = $(lit(run_uuid)) AND op_id = $(r.op_id)) THEN")
+        println(b, "    RAISE NOTICE 'op $(r.op_id) already applied (transfer_log) — skipped';")
+        println(b, "  ELSE")
         print(b, PLPGSQL[r.kind](r.op_id, JSON.parse(r.params), stages[r.op_id]))
+        println(b, "  INSERT INTO simulations.transfer_log (run_uuid, op_id, kind) VALUES ($(lit(run_uuid)), $(r.op_id), $(lit(r.kind)));")
+        println(b, "  END IF;")
     end
     println(b, "END")
     println(b, "\$p96transfer\$;")
@@ -236,6 +244,9 @@ function main()
         haskey(PLPGSQL, r.kind) || error("op $(r.op_id): unknown kind $(r.kind)")
     end
     isempty(ops) && return
+    meta = q(con, "SELECT run_uuid FROM r.simulations.transfer_meta")
+    nrow(meta) == 1 || error("results DuckDB has $(nrow(meta)) run_uuid row(s) in transfer_meta (expected 1)")
+    run_uuid = String(meta.run_uuid[1]); occursin(r"^[0-9a-f]{32}$", run_uuid) || error("bad run_uuid")
     run = "_p96t_" * Dates.format(now(UTC), "yyyymmddHHMMSS") * "_" * string(getpid())
     ident_ok(run)
     stages = Dict(r.op_id => "simulations.$(run)_$(r.op_id)" for r in eachrow(ops))
@@ -244,7 +255,7 @@ function main()
             _, n = stage_select(con, r.kind, r.op_id, JSON.parse(r.params))
             println("  op $(r.op_id) $(r.kind): $n row(s) to stage  $(r.params)")
         end
-        println(transfer_block(ops, stages))
+        println(transfer_block(ops, stages, run_uuid))
         return
     end
     conn = strip(get(ENV, "ENERGY_CONN_STR", ""))
@@ -259,7 +270,7 @@ function main()
             nrows[r.op_id] = n
         end
         t1 = time()
-        pg_exec(con, transfer_block(ops, stages))   # 2. apply: one server-side transaction
+        pg_exec(con, transfer_block(ops, stages, run_uuid))   # 2. apply: one server-side transaction
         @printf("  staged %d row(s) in %.1f s; applied %d op(s) in one Postgres transaction in %.1f s\n",
                 sum(values(nrows)), t1 - t0, nrow(ops), time() - t1)
     catch

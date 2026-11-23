@@ -63,6 +63,9 @@ const _RUN_RESULTS_DDL = [
     """CREATE TABLE IF NOT EXISTS results_db.simulations.transfer_ops (
         op_id BIGINT NOT NULL, kind VARCHAR NOT NULL, params VARCHAR NOT NULL,
         created_at TIMESTAMP NOT NULL, done_at TIMESTAMP, outcome VARCHAR)""",
+    # One random id per results DuckDB: the transfer records (run_uuid, op_id) in Postgres inside its own
+    # transaction, so an op is applied exactly once even if the local done marks are lost.
+    "CREATE TABLE IF NOT EXISTS results_db.simulations.transfer_meta (run_uuid VARCHAR NOT NULL)",
 ]
 
 """
@@ -77,6 +80,10 @@ function ensure_run_results_tables!()
     _duckdb_assert_writable()
     for ddl in _RUN_RESULTS_DDL
         _results_exec(ddl)
+    end
+    if Int(_results_exec("SELECT COUNT(*) AS n FROM results_db.simulations.transfer_meta").n[1]) == 0
+        _results_exec("INSERT INTO results_db.simulations.transfer_meta VALUES (\$1)",
+                      Any[string(rand(UInt128); base=16, pad=32)])
     end
     return nothing
 end
