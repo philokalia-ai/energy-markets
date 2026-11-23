@@ -118,3 +118,26 @@ slice(md, zones, p) = Dict(z => Dict(h => p for h in hours(md)) for z in zones)
         @test length(k) == 1 && k[1]["bidding_zone"] == "GR" && k[1]["is_retro"] == false
     end
 end
+
+@testset "transfer --dry-run renders one server-side block for every pending op" begin
+    Euphemia._results_exec("CHECKPOINT")
+    lock(Euphemia._DUCKDB_LOCK) do              # release this process's lock on the results file
+        Euphemia._duckdb_drop_connection!()
+    end
+    GC.gc(); GC.gc()                             # finalize the dropped statements/handles: the file lock goes with them
+    jl = joinpath(Sys.BINDIR, Base.julia_exename())
+    # A minimal, explicit environment: a failing subprocess prints its env, and CI must never log secrets.
+    env = Dict(k => ENV[k] for k in ("PATH", "HOME", "USER", "LANG", "JULIA_DEPOT_PATH", "JULIA_NUM_THREADS",
+                                     "EUPHEMIA_DUCKDB_EXT_DIR", "TMPDIR") if haskey(ENV, k))
+    merge!(env, Dict("EUPHEMIA_DATA_STORE" => "duckdb", "EUPHEMIA_DUCKDB_PATH" => INPUTS,
+                     "EUPHEMIA_DUCKDB_READONLY" => "true", "EUPHEMIA_RESULTS_DB" => RESULTS))
+    cmd = `$jl --startup-file=no --project=$(dirname(@__DIR__)) $(joinpath(@__DIR__, "..", "bin", "transfer_run_results.jl")) --dry-run --results-db $RESULTS`
+    out = read(setenv(cmd, env), String)
+    o = ops()
+    @test occursin("DO \$p96transfer\$", out) && occursin("END\n\$p96transfer\$;", out)
+    @test all(id -> occursin("-- op $id", out), o.op_id)
+    @test occursin("INSERT INTO simulations.forecast_prices_pre_reset", out)          # the supersede backup
+    @test occursin("GET DIAGNOSTICS n_backed = ROW_COUNT", out)
+    @test occursin("RAISE EXCEPTION", out) && occursin("ON CONFLICT DO NOTHING", out)
+    @test !occursin("ENERGY_CONN_STR is not set", out)                                # dry run needs no Postgres
+end
