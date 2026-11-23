@@ -8,11 +8,11 @@
 #    JAO net-position rows, nodal balance with shed, same objective — so its optimum is an
 #    upper bound on the MPCC welfare.
 # 2. Pattern: each complementarity binary is set by rule from the LP dispatch (order rejected /
-#    partially / fully accepted; link at its forward / backward cap) and fixed. The MPCC with
-#    fixed binaries is an LP; if it is optimal at the welfare-LP objective, the MPCC is solved
-#    to optimality and the caller skips its MIP solve.
-# 3. Otherwise the binaries are unfixed and the pattern (with the best values at hand) becomes
-#    the MIP start. The caller then solves the MIP; only if that MIP fails do the per-period
+#    partially / fully accepted; link at its forward / backward cap), fixed, and its integrality
+#    dropped. The MPCC with fixed binaries is an LP and is solved as one; if it is optimal at the
+#    welfare-LP objective, the MPCC is solved to optimality and the caller skips its MIP solve.
+# 3. Otherwise the binaries are unfixed (and binary again) and the pattern (with the best values
+#    at hand) becomes the MIP start. The caller then solves the MIP; only if that MIP fails do the per-period
 #    HiGHS retry rungs (`_solve_mpcc_by_period`) run.
 #
 # Time: the welfare LP gets the caller's `time_limit`, the fixed-pattern solve what is left of
@@ -30,6 +30,56 @@ const _PRICE_SIDE = (:stepwise_dual, :market_price, :congestion_fw, :congestion_
     :congestion_fw_aux, :congestion_bw_aux)
 
 """
+    _WelfareSource(inner, drop)
+
+A read-only view of the MOI model `inner` without the variables in `drop` and without every constraint
+whose function touches one of them. `MOI.copy_to(dest, src)` from this view builds the welfare LP in one
+pass: the kept variables and rows arrive in the same relative order as in `inner`, so the result is the
+model that copying everything and then deleting those rows and variables gives (identical MPS), without
+the per-row deletes and the vector variable delete (whose first call compiled for ~75 s per process).
+"""
+struct _WelfareSource{T} <: MOI.ModelLike
+    inner::T
+    drop::Set{MOI.VariableIndex}
+end
+_touches(s::_WelfareSource, f::MOI.VariableIndex) = f in s.drop
+_touches(s::_WelfareSource, f::MOI.VectorOfVariables) = any(in(s.drop), f.variables)
+_touches(s::_WelfareSource, f::MOI.ScalarAffineFunction) = any(t -> t.variable in s.drop, f.terms)
+_touches(::_WelfareSource, f::MOI.AbstractFunction) =
+    error("welfare LP: unsupported constraint function $(typeof(f))")
+MOI.get(s::_WelfareSource, ::MOI.ListOfVariableIndices) =
+    filter(v -> !(v in s.drop), MOI.get(s.inner, MOI.ListOfVariableIndices()))
+MOI.get(s::_WelfareSource, ::MOI.NumberOfVariables) = length(MOI.get(s, MOI.ListOfVariableIndices()))
+MOI.get(s::_WelfareSource, attr::MOI.ListOfConstraintIndices) =
+    filter(ci -> !_touches(s, MOI.get(s.inner, MOI.ConstraintFunction(), ci)), MOI.get(s.inner, attr))
+MOI.get(s::_WelfareSource, ::MOI.NumberOfConstraints{F,S}) where {F,S} =
+    length(MOI.get(s, MOI.ListOfConstraintIndices{F,S}()))
+MOI.get(s::_WelfareSource, ::MOI.ListOfConstraintTypesPresent) =
+    [(F, S) for (F, S) in MOI.get(s.inner, MOI.ListOfConstraintTypesPresent())
+     if !isempty(MOI.get(s, MOI.ListOfConstraintIndices{F,S}()))]
+MOI.get(s::_WelfareSource, attr::MOI.AbstractModelAttribute) = MOI.get(s.inner, attr)
+MOI.get(s::_WelfareSource, attr::MOI.AbstractVariableAttribute, x::MOI.VariableIndex) = MOI.get(s.inner, attr, x)
+MOI.get(s::_WelfareSource, attr::MOI.AbstractConstraintAttribute, ci::MOI.ConstraintIndex) =
+    MOI.get(s.inner, attr, ci)
+MOI.is_empty(s::_WelfareSource) = MOI.is_empty(s.inner)
+
+"""
+    _welfare_lp(model, price_side) -> (lp, refmap)
+
+The welfare LP: a new JuMP model holding `model` without the `price_side` variables and every row that
+touches them, built by one `MOI.copy_to` from a `_WelfareSource`. `refmap[v]` is the copy of each kept
+variable `v`.
+"""
+function _welfare_lp(model::Model, price_side::Set{VariableRef})
+    lp = Model()
+    src = _WelfareSource(backend(model), Set{MOI.VariableIndex}(index(v) for v in price_side))
+    imap = MOI.copy_to(backend(lp), src)
+    refmap = Dict{VariableRef,VariableRef}(v => VariableRef(lp, imap[index(v)])
+                                           for v in all_variables(model) if !(v in price_side))
+    return lp, refmap
+end
+
+"""
     _lp_certify!(model, optimizer; time_limit=Inf) -> Bool
 
 Try to solve the MPCC `model` by the LP certificate. `true`: `model` holds an optimal
@@ -43,18 +93,10 @@ function _lp_certify!(model::Model, optimizer; time_limit::Real=Inf)
     price_side = Set{VariableRef}(v for nm in _PRICE_SIDE if haskey(obj, nm) for v in model[nm])
 
     # 1. welfare LP
-    lp, refmap = copy_model(model)
+    lp, refmap = _welfare_lp(model, price_side)
     set_optimizer(lp, optimizer)
     set_silent(lp)
     isfinite(time_limit) && set_time_limit_sec(lp, Float64(time_limit))
-    kill = Set(refmap[v] for v in price_side)
-    for (F, S) in list_of_constraint_types(lp)
-        F <: AffExpr || continue
-        for c in all_constraints(lp, F, S)
-            any(v -> v in kill, keys(constraint_object(c).func.terms)) && delete(lp, c)
-        end
-    end
-    delete(lp, collect(kill))
     optimize!(lp)
     termination_status(lp) == MOI.OPTIMAL || return false
     lp_obj = objective_value(lp)
@@ -84,6 +126,11 @@ function _lp_certify!(model::Model, optimizer; time_limit::Real=Inf)
     for (v, b) in pattern
         fix(v, b; force=true)
     end
+    # With every binary fixed the model is an LP; tell HiGHS so (it would otherwise run its MIP
+    # machinery on a problem with nothing to branch on). Same optimum, same prices.
+    for v in keys(pattern)
+        unset_binary(v)
+    end
     isfinite(time_limit) && set_time_limit_sec(model, max(time_limit - (time() - t0), 1.0))
     optimize!(model)
     if termination_status(model) == MOI.OPTIMAL &&
@@ -95,6 +142,7 @@ function _lp_certify!(model::Model, optimizer; time_limit::Real=Inf)
     start = has_values(model) ? Dict(v => value(v) for v in all_variables(model)) : merge(x, pattern)
     for v in keys(pattern)
         unfix(v)
+        set_binary(v)
     end
     for (v, s) in start
         set_start_value(v, s)
@@ -110,6 +158,7 @@ function _unfix_pattern!(model::Model)
         haskey(obj, nm) || continue
         for v in model[nm]
             is_fixed(v) && unfix(v)
+            is_binary(v) || set_binary(v)   # the certificate solves the fixed pattern as an LP
         end
     end
     return nothing

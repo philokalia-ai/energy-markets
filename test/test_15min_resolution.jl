@@ -53,3 +53,19 @@ using Euphemia: replicate_to_finer_resolution
             Dict("20260403-0000" => 1.0), 60, 45)
     end
 end
+
+using Dates
+using Euphemia: MPCC
+
+@testset "extract_time_period: timeslot ids (compile-time DateFormat)" begin
+    old_id(dt) = "$(Dates.format(dt, "yyyymmdd"))-$(Dates.format(dt, "HHMM"))"   # the previous construction
+    d0 = DateTime(2026, 3, 29)                                                    # a DST-change UTC day
+    P96 = [old_id(d0 + Minute(15k)) for k in 0:95]
+    @test all(MPCC.extract_time_period(d0 + Minute(15k), P96) == P96[k+1] for k in 0:95)
+    P24 = [old_id(d0 + Hour(h)) for h in 0:23]
+    @test MPCC.extract_time_period(d0 + Minute(30), P24) == "20260329-0100"       # fallback: next slot at/after
+    @test_throws ErrorException MPCC.extract_time_period(d0 + Hour(22), P24[1:11])  # after the last slot (time of day)
+    @test MPCC.extract_time_period(d0 + Hour(5), ["1", "2"]) == "6"                 # hourly-number periods
+    @test all(Dates.format(dt, MPCC._TIMESLOT_FORMAT) == old_id(dt)
+              for dt in DateTime(2024, 1, 1):Minute(15):DateTime(2024, 12, 31, 23, 45))
+end

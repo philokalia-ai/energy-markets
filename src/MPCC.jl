@@ -68,6 +68,11 @@ MPCCOrderBook(orders, nodes, periods, price_limits, network_topology) =
 # Configuration constants
 const DEFAULT_MARKUP_FACTOR = 1.1
 
+# Timeslot id format ("20180624-0015"). A compile-time DateFormat: a format *string* is parsed into a
+# DateFormat on every call, which made this function a measurable share of the MPCC build (3 calls per
+# order per solve; ~300k calls per 96-step pass).
+const _TIMESLOT_FORMAT = dateformat"yyyymmdd-HHMM"
+
 """
     extract_time_period(order_datetime::DateTime, order_book_periods::Vector{String})
 
@@ -82,9 +87,7 @@ function extract_time_period(order_datetime::DateTime, order_book_periods::Vecto
         # If periods look like timeslot strings (e.g., "20180624-0015")
         if length(sample_period) > 5 && contains(sample_period, "-")
             # Format DateTime to match timeslot format: "YYYYMMDD-HHMM"
-            date_str = Dates.format(order_datetime, "yyyymmdd")
-            time_str = Dates.format(order_datetime, "HHMM")
-            timeslot = "$(date_str)-$(time_str)"
+            timeslot = Dates.format(order_datetime, _TIMESLOT_FORMAT)
 
             # Return the timeslot if it exists in periods, otherwise find closest match
             if timeslot in order_book_periods
