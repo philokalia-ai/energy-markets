@@ -396,9 +396,9 @@ function transfer_window!(con, o)
     println("referenced optimization_runs: $(nrow(runs))")
     check_runs_in_slice(runs, o)   # before ANY destination mutation
     n = transfer_window_pg!(con, o, prices, run_ids)
-    @printf("upserted %d optimization_runs, replaced %d energy_prices + %d transmission_flows rows in one Postgres " *
-            "transaction; verification passed inside it (per-year counts, zone-month checksums) — %.1fs\n",
-            n.runs, n.prices, n.flows, time() - t0)
+    println("upserted $(n.runs) optimization_runs, replaced $(n.prices) energy_prices + $(n.flows) transmission_flows " *
+            "rows in one Postgres transaction; verification passed inside it (per-year counts, zone-month " *
+            "checksums) — $(round(time() - t0, digits=1))s")
     println("DONE")
 end
 
