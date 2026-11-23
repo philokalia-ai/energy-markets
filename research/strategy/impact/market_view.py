@@ -188,3 +188,13 @@ def price_with_markup(zh: pd.DataFrame, D0, m: float, p_ref: float, techs=None, 
         return np.nan
     roots = g[idx + 1]
     return float(roots[np.argmin(np.abs(roots - p_ref))])
+
+
+def md(df, index=True, floatfmt="{:.2f}"):
+    """Markdown table without tabulate (not in the venv)."""
+    d = df.reset_index() if index else df
+    cols = [" / ".join(map(str, c)) if isinstance(c, tuple) else str(c) for c in d.columns]
+    f = lambda v: floatfmt.format(v) if isinstance(v, (float, np.floating)) and not np.isnan(v) else ("" if (isinstance(v, float) and np.isnan(v)) else str(v))  # noqa: E731
+    lines = ["| " + " | ".join(cols) + " |", "|" + "---|" * len(cols)]
+    lines += ["| " + " | ".join(f(v) for v in row) + " |" for row in d.itertuples(index=False)]
+    return "\n".join(lines)
