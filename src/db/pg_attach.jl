@@ -44,9 +44,24 @@ function attach_postgres!(con, conn_str::AbstractString; alias::AbstractString="
     occursin(r"^[A-Za-z_][A-Za-z0-9_]*$", alias) || error("attach_postgres!: bad alias $(repr(alias))")
     load_postgres_extension!(con)
     opts = read_only ? "TYPE postgres, READ_ONLY" : "TYPE postgres"
+    # Pin every scanner session to UTC (libpq sends PGTZ as the TimeZone startup parameter, which
+    # outranks the server default and an `options=-c TimeZone=…` in the connection string): a
+    # server-side `::timestamp` / timestamptz comparison then cannot depend on the server's zone.
+    ENV["PGTZ"] = "UTC"
     DBInterface.execute(con, "ATTACH '$(_sql_quote(conn_str))' AS $alias ($opts)")
+    tz = postgres_session_timezone(con; alias=alias)
+    uppercase(tz) in ("UTC", "ETC/UTC") || (detach_postgres!(con; alias=alias);
+        error("attach_postgres!: the Postgres session TimeZone is $(tz), not UTC (PGTZ pin ineffective)"))
     return alias
 end
+
+"""
+    postgres_session_timezone(con; alias="pg") -> String
+
+The TimeZone of the attached Postgres session (recorded in the fill's `_fill.run`)."""
+postgres_session_timezone(con; alias::AbstractString="pg") =
+    String(collect(DBInterface.execute(con,
+        "SELECT * FROM postgres_query('$alias', 'SELECT current_setting(''TimeZone'') AS tz')"))[1].tz)
 
 """
     detach_postgres!(con; alias="pg")

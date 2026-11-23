@@ -134,6 +134,8 @@ function main(argv)
     windows = [Dict("table" => string(r.schema_name, ".", r.table_name), "kind" => r.kind,
                     "lo" => string(r.lo), "hi" => string(r.hi), "rows" => r.n_rows, "seconds" => r.seconds)
                for r in Euphemia.DBInterface.execute(wcon, "SELECT * FROM _fill.windows ORDER BY schema_name, table_name, lo")]
+    source_tz = String(collect(Euphemia.DBInterface.execute(wcon, "SELECT source_timezone FROM _fill.run"))[1].source_timezone)
+    absent = [w["table"] for w in windows if w["kind"] == "absent"]
     Euphemia.DBInterface.close!(wcon); Euphemia.DuckDB.close(wdb)
     # Peak resident memory of this process (kB) from the kernel: the runner image has no /usr/bin/time.
     vmhwm = try parse(Int, match(r"VmHWM:\s*(\d+)", read("/proc/self/status", String))[1]) catch; -1 end
@@ -144,6 +146,7 @@ function main(argv)
                 "results_seconds" => round(t_results, digits=2),
                 "inputs_mib" => round(filesize(inputs) / 2^20, digits=1),
                 "results_mib" => round(filesize(results) / 2^20, digits=1),
+                "source_timezone" => source_tz, "absent_in_source" => absent,
                 "windows" => windows,
                 "seeds" => [Dict("table" => s.table, "rows" => s.rows, "seconds" => round(s.seconds, digits=2)) for s in seeded])
     open(joinpath(tmp, "fill.json"), "w") do io

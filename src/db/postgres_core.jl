@@ -258,7 +258,12 @@ function newconnection()
         end
     end
 
+    # Session TimeZone pinned to UTC, whatever the server default: `timestamptz::timestamp` and
+    # timestamp/timestamptz comparisons in the readers depend on it (PGTZ = the libpq startup
+    # parameter; the SET makes it explicit). Same pin as attach_postgres! (the fill's scanner).
+    ENV["PGTZ"] = "UTC"
     cnx = LibPQ.Connection(conn_str)
+    LibPQ.execute(cnx, "SET TimeZone = 'UTC'")
     !isdefined(LibPQ, :setnonblocking) && return cnx
     LibPQ.setnonblocking(cnx) && return cnx
     error("Could not set connection to nonblocking")

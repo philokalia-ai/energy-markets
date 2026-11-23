@@ -31,8 +31,8 @@ import DuckDB.DBInterface as DBInterface
     sql, w = E.fill_pg_query(spec("unavailability_in_the_transmission_grid"), tcols, [Date(2026, 1, 10)], ["GR"])
     @test occursin("instance_code IN (SELECT instance_code FROM entsoe.unavailability_in_the_transmission_grid", sql)
     @test occursin("\"start_outage_utc\"::TIMESTAMP AS \"start_outage_utc\"", sql)
-    @test occursin("start_outage_utc::timestamp < '2026-01-12'::timestamp", sql)   # [d-1, d+2)
-    @test occursin("end_outage_utc::timestamp >= '2026-01-09'::timestamp", sql)
+    @test occursin("\"start_outage_utc\"::timestamp < '2026-01-12'::timestamp", sql)   # [d-1, d+2)
+    @test occursin("\"end_outage_utc\"::timestamp >= '2026-01-09'::timestamp", sql)
 
     # offered implicit ATC: + earliest Day-ahead row per border before the window
     acols = [("out_map_code", "text"), ("in_map_code", "text"), ("date_time_utc", "timestamp with time zone"),
@@ -250,4 +250,109 @@ end
     end
     @test isempty(filter(s -> s.table == "input_corrections", E.fill_profile(:rescore; start=Date(2025, 5, 27),
                                                                               stop=Date(2025, 5, 28), zones=["GR"]).specs))
+end
+
+@testset "fill timestamps are independent of the source session TimeZone" begin
+    E = Euphemia
+    spec = only(filter(s -> s.table == "unavailability_in_the_transmission_grid", E.FILL_SPECS))
+    # production: outage start/end are TEXT, the publication stamp timestamptz
+    cols = [("instance_code", "text"), ("start_outage_utc", "text"), ("end_outage_utc", "text"),
+            ("start_time_series_utc", "timestamp with time zone"),
+            ("version_publication_timestamp_utc", "timestamp with time zone"), ("version", "integer")]
+    sql, _ = E.fill_pg_query(spec, cols, [Date(2026, 11, 19)], ["FR"])
+    @test occursin("\"version_publication_timestamp_utc\" AT TIME ZONE 'UTC' AS", sql)   # not ::TIMESTAMP
+    @test !occursin("\"version_publication_timestamp_utc\"::TIMESTAMP", sql)
+    @test occursin("\"start_outage_utc\"::TIMESTAMP AS", sql)                          # text: zone-free
+    @test occursin("\"start_time_series_utc\" AT TIME ZONE 'UTC' AS", sql)
+    @test occursin("(\"start_outage_utc\"::timestamp < ", sql)                         # overlap on text
+    # the test bed's load: the same columns as timestamptz
+    tcols = [(c, t == "text" && c != "instance_code" ? "timestamp with time zone" : t) for (c, t) in cols]
+    tsql, _ = E.fill_pg_query(spec, tcols, [Date(2026, 11, 19)], ["FR"])
+    @test occursin("\"start_outage_utc\" AT TIME ZONE 'UTC' AS", tsql)
+    @test occursin("((\"start_outage_utc\" AT TIME ZONE 'UTC') < ", tsql)
+    @test !occursin("::TIMESTAMP", tsql) && !occursin("::timestamp <", tsql)
+    @test E._naive_utc("c", "timestamp without time zone") == "\"c\""
+end
+
+@testset "carbon.uka_price: filled on every clearing profile; absence recorded, otherwise loud" begin
+    E = Euphemia
+    @test "carbon" in E._GUARDED_SCHEMAS
+    for (prof, kw) in ((:record, (days_list=[Date(2025, 5, 27)],)), (:retro, (start=Date(2025, 5, 27), stop=Date(2025, 5, 28))),
+                       (:daily_forecast, (asof=Date(2025, 5, 27),)), (:export, (asof=Date(2025, 5, 27),)))
+        @test count(s -> (s.schema, s.table) == ("carbon", "uka_price"), E.fill_profile(prof; zones=["FR"], kw...).specs) == 1
+    end
+    prev = (E.DATA_STORE[], E.DUCKDB_PATH[], E.DUCKDB_READ_ONLY[], E.DUCKDB_RESULTS_WRITABLE[])
+    dir = mktempdir()
+    # an offline source without the carbon schema: the fill records it absent (never a silent skip)
+    src = joinpath(dir, "src.duckdb")
+    let db = DuckDB.DB(src), con = DBInterface.connect(db)
+        DBInterface.execute(con, "CREATE SCHEMA yfinance")
+        DBInterface.execute(con, "CREATE TABLE yfinance.eua_co2 (date DATE, close DOUBLE)")
+        DBInterface.execute(con, "INSERT INTO yfinance.eua_co2 VALUES (DATE '2025-05-25', 71.5)")
+        DBInterface.close!(con); DuckDB.close(db)
+    end
+    fill = joinpath(dir, "inputs.duckdb")
+    specs = [only(filter(s -> s.table == t, E.FILL_SPECS)) for t in ("eua_co2", "uka_price")]
+    redirect_stdout(devnull) do
+        E.fill_run_duckdb(fill; days=[Date(2025, 5, 27)], zones=["FR"], specs=specs, source=:duckdb, source_path=src)
+    end
+    kinds = let db = DuckDB.DB(fill; readonly=true), con = DBInterface.connect(db)
+        k = Dict(string(r.schema_name, ".", r.table_name) => r.kind
+                 for r in DBInterface.execute(con, "SELECT schema_name, table_name, kind FROM _fill.windows"))
+        DBInterface.close!(con); DuckDB.close(db); k
+    end
+    @test kinds["carbon.uka_price"] == "absent"
+    @test kinds["yfinance.eua_co2"] == "full"
+    # a fill that claims the table but lacks it (no 'absent' row): the Catalog Error is a FillGuardError
+    broken = joinpath(dir, "broken.duckdb"); cp(fill, broken)
+    let db = DuckDB.DB(broken), con = DBInterface.connect(db)
+        DBInterface.execute(con, "UPDATE _fill.windows SET kind = 'full' WHERE table_name = 'uka_price'")
+        DBInterface.close!(con); DuckDB.close(db)
+    end
+    uka(day) = (empty!(E.UKA_PRICE_CACHE); empty!(E.EUA_PRICE_CACHE); E.uka_price(day))
+    try
+        E.configure_data_store!(backend=:duckdb, duckdb_path=fill, read_only=true)
+        @test E._FILL_ABSENT[] == Set(["carbon.uka_price"])
+        @test uka(Date(2025, 5, 27)) == 71.5                              # recorded absent → EUA fallback
+        E._duckdb_drop_connection!()
+        E.configure_data_store!(backend=:duckdb, duckdb_path=broken, read_only=true)
+        @test_throws E.FillGuardError uka(Date(2025, 5, 27))              # not recorded → loud
+        @test_throws E.FillGuardError E.sql2df("SELECT * FROM carbon.nonexistent")   # not in manifest
+    finally
+        empty!(E.UKA_PRICE_CACHE); empty!(E.EUA_PRICE_CACHE)
+        try; E._duckdb_drop_connection!(); E.configure_data_store!(backend=prev[1], duckdb_path=prev[2], read_only=prev[3], results_writable=prev[4]); catch; end
+    end
+end
+
+@testset "offered ATC fill covers the readers' code list (footprint + remapped aggregates)" begin
+    E = Euphemia
+    @test E._atc_codes(["FR", "IT-NORTH"]) == ["FR", "IT", "IT-NORTH"]
+    @test E._atc_codes(["FR", "GR"]) == ["FR", "GR"]                  # no representative in the footprint
+    cols = [("date_time_utc", "timestamp with time zone"), ("out_map_code", "text"), ("in_map_code", "text"),
+            ("capacity_mw", "double precision"), ("contract_type", "text")]
+    for t in ("offered_transfer_capacities_explicit", "offered_transfer_capacities_implicit")
+        sql, _ = E.fill_pg_query(only(filter(s -> s.table == t, E.FILL_SPECS)), cols, [Date(2026, 11, 19)], ["FR", "IT-NORTH"])
+        @test occursin("ARRAY['FR', 'IT', 'IT-NORTH']::text[]", sql)
+        @test !occursin("ATCZONES", sql)
+    end
+    # offline fill: an IT↔ME explicit row (aggregate ↔ non-footprint) is copied, as the reader reads it
+    dir = mktempdir(); src = joinpath(dir, "src.duckdb")
+    let db = DuckDB.DB(src), con = DBInterface.connect(db)
+        DBInterface.execute(con, "CREATE SCHEMA entsoe")
+        DBInterface.execute(con, "CREATE TABLE entsoe.offered_transfer_capacities_explicit (date_time_utc TIMESTAMP, out_map_code VARCHAR, in_map_code VARCHAR, capacity_mw DOUBLE, contract_type VARCHAR)")
+        for (o, i) in (("IT", "ME"), ("ME", "IT"), ("FR", "IT-NORTH"), ("RS", "ME"))
+            DBInterface.execute(con, "INSERT INTO entsoe.offered_transfer_capacities_explicit VALUES (TIMESTAMP '2026-11-19 10:00:00', '$o', '$i', 500.0, 'Day-ahead')")
+        end
+        DBInterface.close!(con); DuckDB.close(db)
+    end
+    fill = joinpath(dir, "inputs.duckdb")
+    redirect_stdout(devnull) do
+        E.fill_run_duckdb(fill; days=[Date(2026, 11, 19)], zones=["FR", "IT-NORTH"], source=:duckdb, source_path=src,
+                          specs=[only(filter(s -> s.table == "offered_transfer_capacities_explicit", E.FILL_SPECS))])
+    end
+    got = let db = DuckDB.DB(fill; readonly=true), con = DBInterface.connect(db)
+        r = sort([(x.out_map_code, x.in_map_code) for x in DBInterface.execute(con, "SELECT out_map_code, in_map_code FROM entsoe.offered_transfer_capacities_explicit")])
+        DBInterface.close!(con); DuckDB.close(db); r
+    end
+    @test got == [("FR", "IT-NORTH"), ("IT", "ME"), ("ME", "IT")]      # RS↔ME: outside every reader's filter
 end

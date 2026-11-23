@@ -55,6 +55,7 @@ function _duckdb_drop_connection!()
     _DUCKDB_CONN[] = nothing
     _DUCKDB_DB[] = nothing
     _FILL_GUARD[] = nothing
+    _FILL_ABSENT[] = Set{String}()
     _RESULTS_ATTACHED[] = false
     _READBACK_SEEDS[] = nothing
     return nothing
@@ -388,17 +389,24 @@ function _readback_check(con, sql::AbstractString, args)
     end
     return nothing
 end
-const _GUARDED_SCHEMAS = ("entsoe", "jao", "yfinance", "epias", "simulations", "weather")
+const _GUARDED_SCHEMAS = ("entsoe", "jao", "yfinance", "epias", "simulations", "weather", "carbon")
+# Tables the fill found absent in its source (`_fill.windows` kind 'absent', FILL_OPTIONAL only): a
+# read of one may fail with DuckDB's Catalog Error and the reader's documented fallback applies,
+# exactly as against that source. Any other Catalog Error under a fill is a FillGuardError.
+const _FILL_ABSENT = Ref{Set{String}}(Set{String}())
 
 function _load_fill_guard(con)
     has = collect(DBInterface.execute(con,
         "SELECT count(*) AS n FROM information_schema.tables WHERE table_schema = '_fill' AND table_name = 'windows'"))[1].n
     has == 0 && return nothing
     g = Dict{String,Vector{Tuple{Dates.DateTime,Dates.DateTime}}}()
-    for r in DBInterface.execute(con, "SELECT schema_name, table_name, lo, hi FROM _fill.windows")
-        push!(get!(g, string(r.schema_name, ".", r.table_name), Tuple{Dates.DateTime,Dates.DateTime}[]),
-              (Dates.DateTime(r.lo), Dates.DateTime(r.hi)))
+    absent = Set{String}()
+    for r in DBInterface.execute(con, "SELECT schema_name, table_name, kind, lo, hi FROM _fill.windows")
+        t = string(r.schema_name, ".", r.table_name)
+        push!(get!(g, t, Tuple{Dates.DateTime,Dates.DateTime}[]), (Dates.DateTime(r.lo), Dates.DateTime(r.hi)))
+        coalesce(r.kind, "") == "absent" && push!(absent, t)
     end
+    _FILL_ABSENT[] = absent
     return g
 end
 
@@ -427,6 +435,21 @@ function mark_run_local_fill!(path::AbstractString; windows)
         DuckDB.close(db)
     end
     return String(path)
+end
+
+"""
+Under a run-local fill a Catalog Error (missing table/schema) is a fill miss, raised as a
+FillGuardError, unless the statement reads a table the fill recorded as absent in its source:
+then the reader's fallback applies, as it would against that source."""
+function _fill_catalog_check(e, sql::AbstractString)
+    e isa FillGuardError && return nothing
+    msg = sprint(showerror, e)
+    occursin("Catalog Error", msg) || return nothing
+    refs = [string(lowercase(m.captures[1]), ".", m.captures[2])
+            for m in eachmatch(r"(?<![\w.])([A-Za-z_]+)\.([A-Za-z_][A-Za-z0-9_]*)\b", sql)]
+    any(t -> t in _FILL_ABSENT[], refs) && return nothing
+    throw(FillGuardError("fill guard: catalog error under a run-local fill (a table the fill neither " *
+                         "copied nor recorded absent): " * first(msg, 400)))
 end
 
 function _fill_guard_check(g, sql::AbstractString, args)
@@ -477,12 +500,17 @@ function _duckdb_sql2df(sql, args)
     # Lock scope narrowed to prepare-once + execute + materialize. The compiled
     # statement is cached per connection, so repeat calls skip parse/plan.
     lock(_DUCKDB_LOCK) do
-        stmt = get!(_DUCKDB_STMT_CACHE, rewritten) do
-            DBInterface.prepare(con, rewritten)
+        try
+            stmt = get!(_DUCKDB_STMT_CACHE, rewritten) do
+                DBInterface.prepare(con, rewritten)
+            end
+            res = isempty(args) ? DBInterface.execute(stmt) :
+                  DBInterface.execute(stmt, collect(args))
+            return DataFrame(res)
+        catch e
+            g === nothing || _fill_catalog_check(e, rewritten)
+            rethrow()
         end
-        res = isempty(args) ? DBInterface.execute(stmt) :
-              DBInterface.execute(stmt, collect(args))
-        return DataFrame(res)
     end
 end
 

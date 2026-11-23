@@ -53,10 +53,10 @@ const FILL_SPECS = FillSpec[
         zone_pred="map_code = ANY(\$ZONES) AND contract_type = 'Day-ahead'",
         ts_col="date_time_utc", back=31, ahead=1, sort_by="map_code, date_time_utc"),
     _fs("entsoe", "offered_transfer_capacities_implicit", :da_sentinel;
-        zone_pred="(out_map_code = ANY(\$ZONES) OR in_map_code = ANY(\$ZONES))",
+        zone_pred="(out_map_code = ANY(\$ATCZONES) OR in_map_code = ANY(\$ATCZONES))",
         ts_col="date_time_utc", back=31, ahead=1, sort_by="out_map_code, in_map_code, date_time_utc"),
     _fs("entsoe", "offered_transfer_capacities_explicit", :window;
-        zone_pred="(out_map_code = ANY(\$ZONES) OR in_map_code = ANY(\$ZONES))",
+        zone_pred="(out_map_code = ANY(\$ATCZONES) OR in_map_code = ANY(\$ATCZONES))",
         ts_col="date_time_utc", back=31, ahead=1, sort_by="out_map_code, in_map_code, date_time_utc"),
     _fs("jao", "max_exchanges", :window; ts_col="date_time_utc", back=31, ahead=1,
         sort_by="ccr, border_from, border_to, date_time_utc"),
@@ -93,6 +93,9 @@ const FILL_SPECS = FillSpec[
     # copied into the inputs file for processes that cannot open the results DB (pipelined book
     # workers, EUPHEMIA_RESULTS_READBACK=inputs).
     _fs("simulations", "unit_firms", :full; zone_pred="zone = ANY(\$ZONES)"),
+    # GB_FR_BOOK (FR boundary, every clear) anchors on uka_price(); may be absent in a source
+    # (FILL_OPTIONAL: then recorded absent and the reader's EUA fallback applies, as against it)
+    _fs("carbon", "uka_price", :full),
 ]
 
 # ---------------------------------------------------------------------------
@@ -120,6 +123,18 @@ end
 _time_pred(col, wins, tz) = "(" * join(("($col >= $(_pg_day(lo, tz)) AND $col < $(_pg_day(hi, tz)))"
                                         for (lo, hi) in wins), " OR ") * ")"
 
+# The offered-ATC readers' code list (`_create_transfer_capacity_enriched`): the footprint plus the
+# aggregate codes it remaps onto a sub-zone (e.g. `IT` → `IT-NORTH`).
+_atc_codes(zones) = sort(unique(vcat(String.(zones), collect(keys(build_aggregate_remap(zones))))))
+
+_zone_sub(pred, zones) = replace(pred, "\$ATCZONES" => _pg_zones(_atc_codes(zones)), "\$ZONES" => _pg_zones(zones))
+
+# A timestamp column as naive UTC, independent of the source session's TimeZone: timestamptz via
+# AT TIME ZONE 'UTC'; text (production's outage start/end) via ::timestamp (no zone involved);
+# naive timestamp as is.
+_naive_utc(c, t) = t == "timestamp with time zone" ? "(\"$c\" AT TIME ZONE 'UTC')" :
+                   t == "timestamp without time zone" ? "\"$c\"" : "\"$c\"::timestamp"
+
 """
     fill_pg_query(spec, days, zones; stale_lo=Dict()) -> (sql, windows)
 
@@ -128,11 +143,14 @@ column projected `AT TIME ZONE 'UTC'` like the extract builder) and the `[lo, hi
 covers (empty for full tables). `cols` is the source column list `(name, pg_type)`.
 """
 function fill_pg_query(spec::FillSpec, cols, days, zones; stale_lo::Dict{String,Date}=Dict{String,Date}())
-    proj = join((haskey(spec.casts, c) ? "\"$c\"::$(spec.casts[c]) AS \"$c\"" :
-                 t == "timestamp with time zone" ? "\"$c\" AT TIME ZONE 'UTC' AS \"$c\"" : "\"$c\""
+    ctype = Dict(cols)
+    # timestamptz always AT TIME ZONE 'UTC' (also when a cast is listed: a `::TIMESTAMP` of a timestamptz
+    # would use the source session's TimeZone); casts apply to text columns
+    proj = join((t == "timestamp with time zone" ? "\"$c\" AT TIME ZONE 'UTC' AS \"$c\"" :
+                 haskey(spec.casts, c) && t != "timestamp without time zone" ? "\"$c\"::$(spec.casts[c]) AS \"$c\"" : "\"$c\""
                  for (c, t) in cols), ", ")
     preds = String[]
-    isempty(spec.zone_pred) || push!(preds, replace(spec.zone_pred, "\$ZONES" => _pg_zones(zones)))
+    isempty(spec.zone_pred) || push!(preds, _zone_sub(spec.zone_pred, zones))
     wins = Tuple{Date,Date}[]
     if spec.kind in (:window, :da_sentinel, :per_unit)
         wins = fill_windows(days, spec.back, spec.ahead)
@@ -152,7 +170,9 @@ function fill_pg_query(spec::FillSpec, cols, days, zones; stale_lo::Dict{String,
         # moved outside the day: copy ALL versions (rows) of every message (instance_code) with a
         # version overlapping one of the run's day windows ([d - back, d + ahead + 1), unioned).
         wins = fill_windows(days, spec.back, spec.ahead)
-        ov = join(("(start_outage_utc::timestamp < $(_pg_day(hi, false)) AND end_outage_utc::timestamp >= $(_pg_day(lo, false)))"
+        so = _naive_utc("start_outage_utc", get(ctype, "start_outage_utc", "text"))
+        eo = _naive_utc("end_outage_utc", get(ctype, "end_outage_utc", "text"))
+        ov = join(("($so < $(_pg_day(hi, false)) AND $eo >= $(_pg_day(lo, false)))"
                    for (lo, hi) in wins), " OR ")
         push!(preds, "instance_code IN (SELECT instance_code FROM $(spec.schema).$(spec.table) " *
                      "WHERE start_outage_utc IS NOT NULL AND end_outage_utc IS NOT NULL AND ($ov))")
@@ -160,7 +180,7 @@ function fill_pg_query(spec::FillSpec, cols, days, zones; stale_lo::Dict{String,
     where = isempty(preds) ? "" : " WHERE " * join(preds, " AND ")
     sql = "SELECT $proj FROM $(spec.schema).$(spec.table)$where"
     if spec.kind === :da_sentinel
-        zp = isempty(spec.zone_pred) ? "" : " AND " * replace(spec.zone_pred, "\$ZONES" => _pg_zones(zones))
+        zp = isempty(spec.zone_pred) ? "" : " AND " * _zone_sub(spec.zone_pred, zones)
         sql *= " UNION ALL SELECT * FROM (SELECT DISTINCT ON (out_map_code, in_map_code) $proj " *
                "FROM $(spec.schema).$(spec.table) WHERE contract_type = 'Day-ahead' AND " *
                "$(spec.ts_col) < $(_pg_day(wins[1][1], spec.ts_tz))$zp " *
@@ -254,8 +274,10 @@ function fill_run_duckdb(path::AbstractString; days, zones::Vector{String}, conn
         DBInterface.execute(con, "SET preserve_insertion_order = false")
         source in (:postgres, :duckdb) || error("fill_run_duckdb: source must be :postgres or :duckdb")
         _FILL_SOURCE[] = source
+        src_tz = "n/a (duckdb source)"
         if source === :postgres
-            attach_postgres!(con, conn_str; alias="pg", read_only=true)
+            attach_postgres!(con, conn_str; alias="pg", read_only=true)   # pins + verifies UTC
+            src_tz = postgres_session_timezone(con)
         else
             isfile(source_path) || error("fill_run_duckdb: source DuckDB $source_path not found")
             DBInterface.execute(con, "ATTACH $(_pg_str(source_path)) AS src (READ_ONLY)")
@@ -272,7 +294,10 @@ function fill_run_duckdb(path::AbstractString; days, zones::Vector{String}, conn
                 _pg_columns(con, spec.schema, spec.table)
             catch e
                 "$(spec.schema).$(spec.table)" in FILL_OPTIONAL || rethrow()
-                println("  fill $(spec.schema).$(spec.table): absent in the source, skipped (optional; reads fail the guard)"); flush(stdout)
+                # recorded: under this fill (and only for this table) a read's Catalog Error is
+                # allowed, so the reader's documented fallback runs exactly as against the source
+                DBInterface.execute(con, "INSERT INTO _fill.windows VALUES ($(_pg_str(spec.schema)), $(_pg_str(spec.table)), 'absent', DATE '1900-01-01', DATE '2999-12-31', 0, 0.0)")
+                println("  fill $(spec.schema).$(spec.table): ABSENT in the source (recorded; its readers fall back)"); flush(stdout)
                 continue
             end
             sql, wins = fill_pg_query(spec, cols, days, zones; stale_lo=stale_lo)
@@ -293,7 +318,7 @@ function fill_run_duckdb(path::AbstractString; days, zones::Vector{String}, conn
             end
             println("  fill $(spec.schema).$(spec.table): $n rows, $(round(dt, digits=1)) s"); flush(stdout)
         end
-        DBInterface.execute(con, "CREATE TABLE _fill.run AS SELECT $(_pg_str(join(string.(days), ","))) AS days, $(_pg_str(join(zones, ","))) AS zones, $(round(time() - t_all, digits=2)) AS seconds, now() AS filled_at")
+        DBInterface.execute(con, "CREATE TABLE _fill.run AS SELECT $(_pg_str(join(string.(days), ","))) AS days, $(_pg_str(join(zones, ","))) AS zones, $(round(time() - t_all, digits=2)) AS seconds, now() AS filled_at, $(_pg_str(src_tz)) AS source_timezone")
         source === :postgres ? detach_postgres!(con) : DBInterface.execute(con, "DETACH src")
     finally
         _FILL_SOURCE[] = :postgres
@@ -320,7 +345,6 @@ _ic_spec(back, ahead) = _fs("simulations", "input_corrections", :window; ts_col=
 
 "Extra input tables of the forecast job's score/export steps and the GB boundary book."
 const FORECAST_EXTRA_SPECS = FillSpec[
-    _fs("carbon", "uka_price", :full; sort_by=""),                       # fuel_costs.jl uka_price (GB boundary)
     _fs("simulations", "model_lines", :full),                            # exporters (model_lines_map)
     _fs("simulations", "tsfm_overlay", :full),                           # TSFM_OVERLAY_SQL reads from 2000-01-01
 ]
