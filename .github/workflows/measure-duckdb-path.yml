@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       days:
-        description: "UTC days to clear (comma list YYYY-MM-DD). Empty = the 3 days ending 3 days ago."
+        description: "UTC days to clear: CONSECUTIVE days, comma list YYYY-MM-DD (the fill covers first..last). Empty = the 3 days ending 3 days ago."
         required: false
         default: ""
         type: string
@@ -115,6 +115,16 @@ jobs:
             D="$(date -u -d '5 days ago' +%F),$(date -u -d '4 days ago' +%F),$(date -u -d '3 days ago' +%F)"
           fi
           echo "$D" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}(,[0-9]{4}-[0-9]{2}-[0-9]{2})*$' || { echo "::error::bad days: $D"; exit 1; }
+          # consecutive, ascending, at most 7 (the fill copies every input of first..last)
+          prev=""; n=0
+          for d in $(echo "$D" | tr ',' ' '); do
+            n=$((n + 1))
+            if [ -n "$prev" ] && [ "$(date -u -d "$prev + 1 day" +%F)" != "$d" ]; then
+              echo "::error::days must be consecutive and ascending: $D"; exit 1
+            fi
+            prev=$d
+          done
+          [ "$n" -le 7 ] || { echo "::error::at most 7 days per measurement: $D"; exit 1; }
           echo "days=$D" >> "$GITHUB_OUTPUT"
           echo "start=$(echo "$D" | tr ',' '\n' | sort | head -1)" >> "$GITHUB_OUTPUT"
           echo "end=$(echo "$D" | tr ',' '\n' | sort | tail -1)" >> "$GITHUB_OUTPUT"
