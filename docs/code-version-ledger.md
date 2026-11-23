@@ -420,6 +420,30 @@ adoption date: the scoreboard's since-freeze window is cv ≥ 45 from 2026-11-21
 
 Dated reminders and scoring-policy notes that do not change `code_version`.
 
+- **2026-11-23 — DuckDB between Postgres and Julia (owner rule); prices unchanged, no `code_version` bump.**
+  Every production job runs fill → run → transfer: one Postgres read (the fill) and one Postgres write (the
+  transfer), both through DuckDB's postgres extension (`attach_postgres!`, src/db/pg_attach.jl); Julia reads no
+  Postgres row and opens no LibPQ connection in those jobs.
+  - Fill: `bin/fill_run_duckdb.jl --profile record|daily-forecast|export|retro|rescore` copies exactly the rows the
+    job's readers need into a run-local `inputs.duckdb` (manifest `FILL_SPECS`, src/db/fill_manifest.jl: per table the
+    zone filter and the readers' lookback per delivery day; the filter runs inside Postgres, timestamptz arrive as naive
+    UTC) and seeds the read-back slices (forecasts, scores, cv32 corrections, recent flows, the record's existing prices)
+    into `results.duckdb`. A strict guard makes any read outside the filled tables/windows fail loudly
+    (`FillGuardError`, which no soft fallback or outer catch swallows); a table absent in the source is recorded and
+    its reader falls back exactly as against that source; every libpq session is pinned to UTC.
+  - Results: every forecast-side and record write goes to the results DuckDB and logs one op;
+    `bin/transfer_run_results.jl` / `bin/transfer_results_to_postgres.jl` stage the rows through the extension and apply
+    them in one server-side transaction (guards and plans re-decided in Postgres, a changed plan aborts with nothing
+    written; `simulations.transfer_log` makes it exactly once; record checksums verified inside the transaction).
+  - Workflows: daily-forecast (both jobs), generate-multi-zone-prices, publish-web-data, retro-backfill, rescore-hourly,
+    rescore-q15; the nightly extract refresh also copies through the extension. `measure-duckdb-path.yml` is the guarded,
+    read-only runner measurement.
+  - Evidence (throwaway test Postgres): 31-day spot check, Postgres path vs fill path vs record #2: <31-day>; the transfer's
+    Postgres state as expected, replay a no-op, a stale plan refused; retro-backfill and rescore-hourly as written match
+    Postgres; pipelined record (2 book workers) fill path = extract path; a non-UTC session gives identical outage
+    inputs on both paths; fill of the 7-lead daily forecast <fill-time>, peak <fill-rss> (record fills: 2.2–2.75 GiB RSS
+    at 10–11 days).
+
 - **2026-11-23 — perf-96: faster clearing and input reads; prices unchanged, no `code_version` bump.**
   Bit-identical prices on the 31-day spot check vs record #2 (29,016/29,016) and on 4 days at 96 steps.
   - LP certificate: the welfare LP is one `MOI.copy_to` from a filtered view of the model (`_WelfareSource`)
