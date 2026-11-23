@@ -40,7 +40,7 @@ Modes of operation
   default (dry run): read the offline DuckDB extract (read-only) + live JSON for sim, write CSVs
                      to --output. No database access at all.
   --write          : production — pregate0630 from .github/workflows/daily-forecast.yml (06:30 UTC),
-                     postsim from bin/emit_tsfm_refresh.sh (owner's server, cron 10:40 UTC). Reads Postgres
+                     postsim from .github/workflows/tsfm-postsim.yml (10:40 UTC). Reads Postgres
                      (ENERGY_CONN_STR) through DuckDB's postgres scanner (`USE pg`, so the SQL is the
                      same as on the extract), creates the overlay table if absent (idempotent DDL)
                      and upserts ONE vintage — lines (tsfm_median/q10/q90) and probabilities —

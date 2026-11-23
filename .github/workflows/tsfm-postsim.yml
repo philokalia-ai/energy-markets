@@ -1,0 +1,62 @@
+# Post-sim Timestral overlay: the combined model (Timestral + physics) for tomorrow.
+#
+# The 06:30 daily-forecast run issues the pre-gate overlay from settled prices only. By 10:40 UTC
+# tomorrow's lead-1 physics sim is frozen, so this job re-issues the overlay with that sim as a
+# known-future covariate (`--mode postsim`). The emitter uses only sim vintages and inputs made at or
+# before the D-1 gate (10:00 UTC) and refuses when none exists, so the issue is always pre-gate.
+# The rows land in simulations.tsfm_overlay as a separate, later vintage; the 11:30 UTC
+# publish-web-data run exports it and the site then shows "Timestral + physics".
+#
+# Trigger: the k3s CronJob pankgeorg/gh-energy-markets-dispatch-1040 dispatches this at 10:40 UTC
+# (GitHub's own schedule runs late, as for the 06:30 run). workflow_dispatch also serves manual recovery.
+name: tsfm-postsim
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: tsfm-postsim
+  cancel-in-progress: false
+
+jobs:
+  tsfm-postsim:
+    runs-on: energy-markets-k8s
+    timeout-minutes: 70
+    env:
+      HF_HOME: ${{ github.workspace }}/.hf
+      TSFM_ARM: timestral-209m
+      TSFM_THREADS: "4"
+    steps:
+      - name: Checkout repository
+        timeout-minutes: 5
+        uses: actions/checkout@v4
+
+      - name: Setup uv
+        timeout-minutes: 5
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.12.21"
+          enable-cache: true
+          cache-dependency-glob: bin/requirements-overlay.txt
+
+      - name: Cache Timestral weights (pinned Hub revision)
+        timeout-minutes: 10
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.hf
+          key: hf-timestral-209m-9874d252ab0aae16f7f7c999f98f98d6ad7d8365
+
+      - name: Install overlay Python environment (pinned)
+        timeout-minutes: 15
+        run: |
+          uv venv --python 3.12 .venv-overlay
+          VIRTUAL_ENV=.venv-overlay uv pip install --index-strategy unsafe-best-match \
+            -r bin/requirements-overlay.txt
+
+      - name: TSFM overlay (Timestral + physics, post-sim)
+        timeout-minutes: 30
+        env:
+          ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
+        run: |
+          .venv-overlay/bin/python bin/emit_tsfm_overlay.py \
+            --delivery tomorrow --mode postsim --write --threads "$TSFM_THREADS"
