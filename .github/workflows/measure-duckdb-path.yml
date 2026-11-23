@@ -24,6 +24,14 @@ on:
         options:
           - forecast
           - record
+      periods:
+        description: "Periods per day: 24 (hourly, today's production) or 96 (the cv46 quarter-hour clear)"
+        required: false
+        default: "24"
+        type: choice
+        options:
+          - "24"
+          - "96"
 
 concurrency:
   group: measure-duckdb-path
@@ -171,7 +179,7 @@ jobs:
           [ ! -f STOP_MEASURE ] || { cat STOP_MEASURE; exit 1; }
           STOP_FILE="$GITHUB_WORKSPACE/STOP_MEASURE" julia --project=. bin/measure_duckdb_path.jl clear \
             --days "${{ steps.days.outputs.days }}" --label duckdb --entry "${{ github.event.inputs.entry || 'forecast' }}" \
-            --trace --out "$OUT_DIR" &
+            --steps "${{ github.event.inputs.periods || '24' }}" --trace --out "$OUT_DIR" &
           echo $! > "$PID_DIR/duckdb.pid"; wait $!
           cat "$OUT_DIR/process_duckdb.csv"
 
@@ -183,7 +191,7 @@ jobs:
           [ ! -f STOP_MEASURE ] || { cat STOP_MEASURE; exit 1; }
           STOP_FILE="$GITHUB_WORKSPACE/STOP_MEASURE" julia --project=. bin/measure_duckdb_path.jl clear \
             --days "${{ steps.days.outputs.days }}" --label pg --entry "${{ github.event.inputs.entry || 'forecast' }}" \
-            --trace --out "$OUT_DIR" &
+            --steps "${{ github.event.inputs.periods || '24' }}" --trace --out "$OUT_DIR" &
           echo $! > "$PID_DIR/pg.pid"; wait $!
           cat "$OUT_DIR/process_pg.csv"
 
