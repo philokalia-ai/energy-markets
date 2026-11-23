@@ -67,6 +67,15 @@ const _RUN_RESULTS_DDL = [
         bidding_zone VARCHAR NOT NULL, price_eur_mwh DOUBLE NOT NULL, prediction_made_utc TIMESTAMP NOT NULL,
         lead_days INTEGER NOT NULL, clearing_mode VARCHAR, code_version INTEGER NOT NULL, input_mode VARCHAR NOT NULL,
         is_retro BOOLEAN NOT NULL, reset_tag VARCHAR, retro_of_utc TIMESTAMP)""",
+    # Rows of a score_restore op (bin/forecast_scores_snapshot.jl restore): the snapshot's hourly columns and
+    # scored_at for each campaign key, plus the campaign's scored_at that the row must still carry.
+    """CREATE TABLE IF NOT EXISTS results_db.simulations.transfer_score_restore (
+        transfer_op_id BIGINT NOT NULL, market_date DATE NOT NULL, bidding_zone VARCHAR NOT NULL,
+        lead_days INTEGER NOT NULL, code_version INTEGER NOT NULL, input_mode VARCHAR NOT NULL,
+        is_retro BOOLEAN NOT NULL, n_hours INTEGER, mae DOUBLE, bias DOUBLE, corr DOUBLE,
+        n_collapse_actual INTEGER, n_collapse_pred INTEGER, collapse_hits INTEGER, collapse_false_alarms INTEGER,
+        collapse_hit_rate DOUBLE, collapse_false_alarm_rate DOUBLE, reset_tag VARCHAR,
+        snapshot_scored_at VARCHAR NOT NULL, campaign_scored_at VARCHAR NOT NULL)""",
     "CREATE SEQUENCE IF NOT EXISTS results_db.simulations.transfer_ops_seq START 1",
     """CREATE TABLE IF NOT EXISTS results_db.simulations.transfer_ops (
         op_id BIGINT NOT NULL, kind VARCHAR NOT NULL, params VARCHAR NOT NULL,

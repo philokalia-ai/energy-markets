@@ -281,7 +281,9 @@ _score_key(market_date, zone, lead_days, cv, input_mode, is_retro) =
     (market_date=string(market_date), bidding_zone=zone, lead_days=lead_days, code_version=cv,
      input_mode=input_mode, is_retro=is_retro)
 
-"Local upsert of the hourly columns (q15 columns of an existing row are kept, as ON CONFLICT DO UPDATE does)."
+"""Local upsert of the hourly columns (q15 columns of an existing row are kept, as ON CONFLICT DO UPDATE does).
+`scored_at` is stamped here, at scoring time (UTC, microseconds); the transfer writes this same stamp to Postgres,
+so the rescore campaign record (RESCORE_KEYS_OUT) holds the value Postgres will hold. Returns the stamp's text."""
 function upsert_score_duckdb!(market_date, zone, lead_days, cv, input_mode, n, mae, bias, corr, cm,
                               is_retro, reset_tag)
     tonull(x) = x === nothing ? missing : x
@@ -289,6 +291,7 @@ function upsert_score_duckdb!(market_date, zone, lead_days, cv, input_mode, n, m
                cm.hits, cm.false_alarms, tonull(cm.hit_rate), tonull(cm.false_alarm_rate),
                reset_tag === nothing ? missing : reset_tag]
     key = Any[market_date, zone, lead_days, cv, input_mode, is_retro]
+    stamp = now(UTC)
     Euphemia.results_transaction() do
         R = "results_db.simulations.forecast_scores"
         k = "market_date = \$12 AND bidding_zone = \$13 AND lead_days = \$14 AND code_version = \$15 " *
@@ -301,19 +304,19 @@ function upsert_score_duckdb!(market_date, zone, lead_days, cv, input_mode, n, m
                 UPDATE $R SET n_hours = \$1, mae = \$2, bias = \$3, corr = \$4, n_collapse_actual = \$5,
                     n_collapse_pred = \$6, collapse_hits = \$7, collapse_false_alarms = \$8,
                     collapse_hit_rate = \$9, collapse_false_alarm_rate = \$10, reset_tag = \$11,
-                    scored_at = now()::TIMESTAMP
-                WHERE $k""", vcat(vals, key))
+                    scored_at = \$18
+                WHERE $k""", vcat(vals, key, Any[stamp]))
         else
             Euphemia._results_exec("""
                 INSERT INTO $R (n_hours, mae, bias, corr, n_collapse_actual, n_collapse_pred, collapse_hits,
                     collapse_false_alarms, collapse_hit_rate, collapse_false_alarm_rate, reset_tag,
                     market_date, bidding_zone, lead_days, code_version, input_mode, is_retro, scored_at)
                 VALUES (\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8, \$9, \$10, \$11, \$12, \$13, \$14, \$15,
-                        \$16, \$17, now()::TIMESTAMP)""", vcat(vals, key))
+                        \$16, \$17, \$18)""", vcat(vals, key, Any[stamp]))
         end
     end
     push!(SCORE_KEYS_HOURLY, _score_key(market_date, zone, lead_days, cv, input_mode, is_retro))
-    return nothing
+    return Dates.format(stamp, "yyyy-mm-dd HH:MM:SS.sss") * "+00"
 end
 
 "Log the scorer's two transfer ops (keys only) — once, at the end of a DuckDB-backend run."
@@ -389,6 +392,11 @@ function write_slice!(rows)
         foreach(w, rows)
         return
     end
+    if Euphemia.results_to_duckdb()   # local writes: no lock waits; the transfer applies them in one transaction
+        stamps = [w(r) for r in rows]
+        isempty(RESCORE_KEYS_OUT) || record_keys!(rows, stamps)
+        return
+    end
     for attempt in 1:3
         ok = Euphemia.withdb() do cnx
             LibPQ.execute(cnx, "BEGIN")
@@ -417,7 +425,7 @@ function record_keys!(rows, results)
     open(RESCORE_KEYS_OUT, "a") do io
         new && println(io, "market_date,bidding_zone,lead_days,code_version,input_mode,is_retro,campaign_scored_at")
         for (r, res) in zip(rows, results)
-            stamp = String(DataFrame(res)[1, 1])
+            stamp = res isa AbstractString ? String(res) : String(DataFrame(res)[1, 1])
             println(io, join((r.market_date, r.zone, r.lead_days, r.cv, r.input_mode, r.is_retro, stamp), ","))
         end
     end
@@ -504,9 +512,6 @@ function main()
     println("=" ^ 70)
 
     if Euphemia.results_to_duckdb()
-        (RESCORE || !isempty(RESCORE_KEYS_OUT) || !isempty(SCORE_LOCK_TIMEOUT)) && error(
-            "score_forecasts: the rescore modes still write Postgres directly and are not migrated to " *
-            "fill → run → transfer yet; run them on the Postgres backend")
         DRY_RUN || Euphemia.ensure_run_results_tables!()
     else
         DRY_RUN || Euphemia.ensure_forecast_tables()

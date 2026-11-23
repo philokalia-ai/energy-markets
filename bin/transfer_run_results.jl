@@ -15,9 +15,12 @@
 #                          (INSERT INTO forecast_prices_pre_reset SELECT …, ROW_COUNT must equal the live count)
 #                          + slice DELETE; then INSERT … SELECT from the stage.
 #        input_corrections INSERT … SELECT … ON CONFLICT DO NOTHING (Postgres' own key, as the emitter did).
-#        score_upsert      INSERT … ON CONFLICT (pk) DO UPDATE of the hourly columns (as upsert_score! did).
+#        score_upsert      INSERT … ON CONFLICT (pk) DO UPDATE of the hourly columns (as upsert_score! did), with
+#                          scored_at = the scorer's scoring-time stamp (a rescore campaign's key file matches it).
 #        score_q15         the q15 columns added first if missing (catalog check + ALTER under a 5 s lock
 #                          timeout, as ensure_q15_columns did), then UPDATE … FROM the stage.
+#        score_restore     forecast_scores_snapshot.jl restore: snapshot values + scored_at back, only where the
+#                          row's scored_at is still the campaign's (UPDATE … FROM the stage … AND scored_at = …).
 #      Any RAISE aborts the whole block: Postgres is unchanged.
 #   3. The staging tables are dropped (always), then the ops are marked done in the results DuckDB.
 #
@@ -104,8 +107,12 @@ function stage_select(con, kind, op_id, p)
               "model_tag FROM r.simulations.input_corrections WHERE transfer_op_id = $op_id"
     elseif kind == "score_upsert"
         score_keys!(con, p)
-        sel = "SELECT $(join(SCORE_PK, ", ")), $(join(SCORE_HOURLY, ", ")), reset_tag FROM r.simulations.forecast_scores " *
+        sel = "SELECT $(join(SCORE_PK, ", ")), $(join(SCORE_HOURLY, ", ")), reset_tag, " *
+              "CAST(scored_at AS TIMESTAMPTZ) AS scored_at FROM r.simulations.forecast_scores " *
               "JOIN k USING ($(join(SCORE_PK, ", ")))"
+    elseif kind == "score_restore"
+        sel = "SELECT $(join(SCORE_PK, ", ")), $(join(SCORE_HOURLY, ", ")), reset_tag, snapshot_scored_at, " *
+              "campaign_scored_at FROM r.simulations.transfer_score_restore WHERE transfer_op_id = $op_id"
     elseif kind == "score_q15"
         score_keys!(con, p)
         sel = "SELECT $(join(SCORE_PK, ", ")), $(join(first.(SCORE_Q15), ", ")) FROM r.simulations.forecast_scores " *
@@ -179,11 +186,22 @@ plpgsql_input_corrections(op_id, p, st) =
 
 function plpgsql_score_upsert(op_id, p, st)
     pk = join(SCORE_PK, ", "); hc = join(SCORE_HOURLY, ", ")
-    return "  -- op $op_id: score_upsert (as upsert_score!)\n" *
+    # scored_at = the stamp the scorer set at scoring time (so a rescore campaign's key file matches Postgres)
+    return "  -- op $op_id: score_upsert (as upsert_score!; scored_at = the scoring-time stamp)\n" *
            "  INSERT INTO simulations.forecast_scores ($pk, $hc, reset_tag, scored_at)\n" *
-           "    SELECT $pk, $hc, reset_tag, now() FROM $st\n" *
+           "    SELECT $pk, $hc, reset_tag, scored_at FROM $st\n" *
            "    ON CONFLICT ($pk) DO UPDATE SET " * join(("$c = EXCLUDED.$c" for c in SCORE_HOURLY), ", ") *
-           ", is_retro = EXCLUDED.is_retro, reset_tag = EXCLUDED.reset_tag, scored_at = now();\n"
+           ", is_retro = EXCLUDED.is_retro, reset_tag = EXCLUDED.reset_tag, scored_at = EXCLUDED.scored_at;\n"
+end
+
+"score_restore (as forecast_scores_snapshot.jl restore): snapshot values + scored_at back, only on rows whose
+scored_at is still the campaign's."
+function plpgsql_score_restore(op_id, p, st)
+    return "  -- op $op_id: score_restore (only where scored_at is still the campaign's)\n" *
+           "  UPDATE simulations.forecast_scores t SET " *
+           join(("$c = s.$c" for c in vcat(SCORE_HOURLY, ["reset_tag"])), ", ") *
+           ", scored_at = s.snapshot_scored_at::timestamptz FROM $st s WHERE " *
+           join(("t.$c = s.$c" for c in SCORE_PK), " AND ") * " AND t.scored_at = s.campaign_scored_at::timestamptz;\n"
 end
 
 function plpgsql_score_q15(op_id, p, st)
@@ -202,7 +220,8 @@ function plpgsql_score_q15(op_id, p, st)
 end
 
 const PLPGSQL = Dict("forecast_slice" => plpgsql_forecast_slice, "input_corrections" => plpgsql_input_corrections,
-                     "score_upsert" => plpgsql_score_upsert, "score_q15" => plpgsql_score_q15)
+                     "score_upsert" => plpgsql_score_upsert, "score_q15" => plpgsql_score_q15,
+                     "score_restore" => plpgsql_score_restore)
 
 "The single server-side transfer block (one Postgres transaction)."
 function transfer_block(ops, stages, run_uuid)
