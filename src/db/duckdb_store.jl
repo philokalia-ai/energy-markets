@@ -54,6 +54,7 @@ function _duckdb_drop_connection!()
     end
     _DUCKDB_CONN[] = nothing
     _DUCKDB_DB[] = nothing
+    _FILL_GUARD[] = nothing
     _RESULTS_ATTACHED[] = false
     return nothing
 end
@@ -122,6 +123,7 @@ function _duckdb_connection()
             _duckdb_apply_settings!(con, path)
             _DUCKDB_DB[] = db
             _DUCKDB_CONN[] = con
+            _FILL_GUARD[] = _load_fill_guard(con)   # strict mode for run-local fills
         end
         return _DUCKDB_CONN[]
     end
@@ -273,12 +275,74 @@ function _duckdb_rewrite(sql::AbstractString)
     return s
 end
 
+# ---------------------------------------------------------------------------
+# Strict read guard for run-local fills (owner rule: a read that the fill did not
+# cover must fail loudly, never come back empty and never fall back to Postgres).
+# A DuckDB that carries `_fill.windows` (written by fill_run_duckdb) is strict:
+#   (1) every schema.table a query reads must be in the manifest;
+#   (2) every Date/DateTime parameter and every TIMESTAMP '...' literal must lie in
+#       a filled [lo, hi) window of each windowed table the query reads.
+# SQL-internal offsets (`$1::date - 366`) are covered by the manifest's declared
+# lookbacks; the identity runs prove that coverage. results_db.* is not guarded.
+# ---------------------------------------------------------------------------
+const _FILL_GUARD = Ref{Any}(nothing)
+const _GUARDED_SCHEMAS = ("entsoe", "jao", "yfinance", "epias", "simulations", "weather")
+
+function _load_fill_guard(con)
+    has = collect(DBInterface.execute(con,
+        "SELECT count(*) AS n FROM information_schema.tables WHERE table_schema = '_fill' AND table_name = 'windows'"))[1].n
+    has == 0 && return nothing
+    g = Dict{String,Vector{Tuple{Dates.DateTime,Dates.DateTime}}}()
+    for r in DBInterface.execute(con, "SELECT schema_name, table_name, lo, hi FROM _fill.windows")
+        push!(get!(g, string(r.schema_name, ".", r.table_name), Tuple{Dates.DateTime,Dates.DateTime}[]),
+              (Dates.DateTime(r.lo), Dates.DateTime(r.hi)))
+    end
+    return g
+end
+
+const _FULL_LO = Dates.DateTime(1900, 1, 1)
+
+function _fill_guard_check(g, sql::AbstractString, args)
+    tables = String[]
+    for m in eachmatch(r"(?<![\w.])(results_db\.)?([A-Za-z_]+)\.([A-Za-z_][A-Za-z0-9_]*)\b", sql)
+        m.captures[1] === nothing || continue          # results_db.* is the writable results file
+        sch = lowercase(m.captures[2])
+        sch in _GUARDED_SCHEMAS || continue
+        push!(tables, string(sch, ".", m.captures[3]))
+    end
+    for t in unique(tables)
+        haskey(g, t) || error("fill guard: $t is not in this run's fill manifest " *
+                              "(add it to FILL_SPECS; never read Postgres directly)")
+    end
+    stamps = Dates.DateTime[]
+    for a in (args === nothing ? () : args)
+        a isa Dates.Date && push!(stamps, Dates.DateTime(a))
+        a isa Dates.DateTime && push!(stamps, a)
+    end
+    for m in eachmatch(r"TIMESTAMP\s+'(\d{4}-\d{2}-\d{2})(?:[ T](\d{2}:\d{2}:\d{2}))?'", sql)
+        push!(stamps, Dates.DateTime(m.captures[1] * "T" * something(m.captures[2], "00:00:00")))
+    end
+    isempty(stamps) && return nothing
+    for t in unique(tables)
+        wins = g[t]
+        any(w -> w[1] == _FULL_LO, wins) && continue
+        for ts in stamps
+            any(w -> w[1] <= ts <= w[2], wins) ||
+                error("fill guard: $t read at $ts is outside the filled windows $(wins) " *
+                      "(extend the manifest lookback; never read Postgres directly)")
+        end
+    end
+    return nothing
+end
+
 function _duckdb_sql2df(sql, args)
     # Dialect rewrite is pure CPU — do it outside the lock. The result is a
     # stable function of the input SQL, so it is also the prepared-statement
     # cache key.
     rewritten = _duckdb_rewrite(sql)
     con = _duckdb_connection()
+    g = _FILL_GUARD[]
+    g === nothing || _fill_guard_check(g, rewritten, args)
     occursin("results_db.", rewritten) && _ensure_results_attached(con)
     # Lock scope narrowed to prepare-once + execute + materialize. The compiled
     # statement is cached per connection, so repeat calls skip parse/plan.
