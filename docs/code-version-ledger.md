@@ -420,6 +420,14 @@ adoption date: the scoreboard's since-freeze window is cv ≥ 45 from 2026-11-21
 
 Dated reminders and scoring-policy notes that do not change `code_version`.
 
+- **2026-11-23 — LP certificate: welfare LP built by one filtered copy (perf-96); prices unchanged.**
+  The welfare LP was a full `copy_model` followed by a delete of every price-side row and a vector
+  delete of the price-side variables. It is now one `MOI.copy_to` from a filtered view of the model
+  (`_WelfareSource`) that never copies them. The result is the same LP (byte-identical MPS on all 24
+  periods of 2026-10-19; unit test), so the solve is unchanged. Speed: the vector delete's first
+  call compiled for ~75 s in every fresh process (cold 24-step day: certificate build 71.7 → 9.2 s,
+  first solve pass 97 → 41 s); warm build 1.2 → 0.3 s per 24 periods. No `code_version` bump.
+
 - **2026-11-22 — Block acceptance search replaces the PAB loop (blocks/r1-only).** With
   `EUPHEMIA_COMPLEX_ORDERS=…blocks` (opt-in), the 4-round PAB loop and its release to the `BLKFB:`
   must-run offers are replaced by a reversible acceptance search (seed, prune to a PAB-free set,

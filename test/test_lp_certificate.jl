@@ -117,6 +117,27 @@ end
 _lc_fixed_binaries(m) = count(is_fixed, (v for nm in (:stepwise_acceptance_complementarity_aux,
                                                      :stepwise_dual_complementarity_aux) for v in m[nm]))
 
+@testset "welfare LP: one filtered copy is the copy-then-delete model" begin
+    m, _ = _lc_handbuilt()
+    obj = object_dictionary(m)
+    ps = Set{VariableRef}(v for nm in MPCC._PRICE_SIDE if haskey(obj, nm) for v in m[nm])
+    lp1, ref1 = MPCC._welfare_lp(m, ps)
+    lp2, ref2 = copy_model(m)                     # the construction it replaces
+    kill = Set(ref2[v] for v in ps)
+    for (F, S) in list_of_constraint_types(lp2)
+        F <: AffExpr || continue
+        for c in all_constraints(lp2, F, S)
+            any(v -> v in kill, keys(constraint_object(c).func.terms)) && delete(lp2, c)
+        end
+    end
+    delete(lp2, collect(kill))
+    mps(lp) = (io = IOBuffer(); write(io, lp; format=MOI.FileFormats.FORMAT_MPS); String(take!(io)))
+    @test !isempty(ps)
+    @test mps(lp1) == mps(lp2)
+    @test num_variables(lp1) == num_variables(m) - length(ps)
+    @test all(name(ref1[v]) == name(v) for v in keys(ref1))
+end
+
 @testset "LP certificate: fallback branches (hand-built MPCC)" begin
     @testset "without the coupling row it certifies" begin
         m, opt = _lc_handbuilt(; extra=false)
