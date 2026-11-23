@@ -420,6 +420,17 @@ adoption date: the scoreboard's since-freeze window is cv ≥ 45 from 2026-11-21
 
 Dated reminders and scoring-policy notes that do not change `code_version`.
 
+- **2026-11-23 — cv46 downstream D2: hourly readers average quarter slots; prices unchanged, no `code_version` bump.**
+  Every reader that pairs a forecast or record series with HOURLY actuals now averages its slots to the hour first
+  (`hourly_means`, bin/forecast_common.jl; per slice/day, so mixed ≤cv45 hourly and cv46 quarter history works):
+  `score_forecasts.jl` (hourly MAE/bias/corr; `n_hours` and `MIN_SCORE_HOURS` count hours, not quarters),
+  `naive_baselines.jl` (one rMAE cell per hour), the record eval `eu_eval_metrics.metrics` (a 15M day joined only its
+  :00 quarter), and the Timestral postsim covariate (`emit_tsfm_overlay.py sim_covariate`, which kept the :00 quarter).
+  The q15 scores are native already and unchanged. `native_q15_actuals` (+ `Q15_NON_SDAC_SEQUENCE`) moved from
+  test/scripts/eu_eval_metrics.jl to bin/forecast_common.jl. Pipeline resume: a 15M record day needs a full UTC day of
+  quarters (`resume_slots_needed`). On hourly data every score is bit-identical (scorer on real slices; record eval on
+  real record days).
+
 - **2026-11-23 — cv46 downstream D1: resolution labels; prices unchanged, no `code_version` bump.**
   `simulations.forecast_prices` (and `forecast_prices_pre_reset`, incl. the supersede backup) gain
   `resolution_code TEXT NOT NULL DEFAULT 'PT60M'` (ISO, as `forecast_scores.q15_forecast_res`): a catalog-only

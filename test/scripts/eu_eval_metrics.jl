@@ -65,48 +65,9 @@ function resolution_aware_actuals(sd::Date, ed::Date; contract::String="Day-ahea
     """, [contract, sd, ed])
 end
 
-"""
-Non-SDAC day-ahead `sequence`s to drop from the NATIVE 15-MIN target, per zone.
-AT and DE_LU carry two day-ahead auctions in `entsoe.energy_prices`. Sequence 2
-is the early EXAA auction, not SDAC. In the read-only 2026-11-15 extract,
-Oct 15-Nov 13, latest row per zone/time/sequence/resolution: AT sequence 1
-equals CZ in 279/2,880 quarters, sequence 2 in 0/2,876; DE_LU sequence 1 equals
-NL in 339/2,880, sequence 2 in 1/2,880. Monthly 2022-12..2026-11, sequence 1
-matches its coupled neighbour in roughly 2-48 % of MTUs, sequence 2 in at most
-about 0.2 %. Sequence 2's update stamp is about 11:10 local time (an ingestion
-stamp, not an authenticated exchange publication time), ahead of the SDAC batch.
-The #424 review confirmed this independently. DK1/DK2 sequence 2 rows are
-float-noise copies of the same SDAC price. The hourly score's
-`resolution_aware_actuals` (highest sequence) is deliberately left unchanged.
-Flip an entry to "1" to target the other auction.
-"""
-const Q15_NON_SDAC_SEQUENCE = Dict("AT" => "2", "DE_LU" => "2")
+# `Q15_NON_SDAC_SEQUENCE` lives in bin/forecast_common.jl with `native_q15_actuals` (cv46 D2).
 
-"""
-    native_q15_actuals(sd, ed; contract="Day-ahead") -> DataFrame(z, t, act, res)
-
-Day-ahead actuals at their NATIVE resolution for the 15-minute score: SDAC only
-(`Q15_NON_SDAC_SEQUENCE` dropped), latest revision (`update_time_utc`) per
-(zone, interval start, resolution code), UTC interval starts over the UTC days
-sd..ed. `res` is the ENTSO-E resolution code (PT15M / PT30M / PT60M); only PT15M
-rows are scored (`score_q15`), so PT60M/PT30M zones stay out of the 15-min mask.
-"""
-function native_q15_actuals(sd::Date, ed::Date; contract::String="Day-ahead")
-    excl = join(["(map_code = '$z' AND trim(COALESCE(sequence, '')) = '$q')"
-                 for (z, q) in sort(collect(Q15_NON_SDAC_SEQUENCE))], " OR ")
-    Euphemia.sql2df("""
-        SELECT DISTINCT ON (map_code, date_time_utc, resolution_code)
-               map_code AS z, (date_time_utc AT TIME ZONE 'UTC') AS t,
-               price_currency_mwh AS act, trim(resolution_code) AS res
-        FROM entsoe.energy_prices
-        WHERE contract_type = \$1 AND area_type_code LIKE 'BZN%'
-          AND price_currency_mwh IS NOT NULL
-          AND date_time_utc >= (\$2::date::timestamp AT TIME ZONE 'UTC')
-          AND date_time_utc <  ((\$3::date + 1)::timestamp AT TIME ZONE 'UTC')
-          $(isempty(excl) ? "" : "AND NOT ($excl)")
-        ORDER BY map_code, date_time_utc, resolution_code, update_time_utc DESC
-    """, [contract, sd, ed])
-end
+# `native_q15_actuals` lives in bin/forecast_common.jl (production readers use it; cv46 D2).
 
 # ---------------------------------------------------------------------------
 # Day-ahead TARGET POLICY for the hourly actuals (#431 PR C). Python twin:
@@ -344,11 +305,14 @@ function metrics(cm::String, cv::Int, sd::Date, ed::Date;
     out = NamedTuple[]
     for z in allz
         sub = sim[sim.z .== z, :]
+        # Hourly view: the record's slots averaged to the hour (a 15M record day, cv46, joined
+        # only its :00 quarter before); hourly days pass through unchanged. Per day, so mixed
+        # 1H/15M history is scored day by day.
         sv = Float64[]; av = Float64[]
-        for r in eachrow(sub)
-            k = (z, DateTime(r.t))
+        for (h, s) in zip(hourly_means(DateTime.(sub.t), sub.sim)...)
+            k = (z, h)
             haskey(actmap, k) || continue
-            push!(sv, Float64(r.sim)); push!(av, actmap[k])
+            push!(sv, s); push!(av, actmap[k])
         end
         length(sv) < 3 && continue
         c = (std(sv) > 0 && std(av) > 0) ? cor(sv, av) : NaN

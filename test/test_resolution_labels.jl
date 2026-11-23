@@ -46,3 +46,13 @@ end
              E.configure_data_store!(backend=prev[1], duckdb_path=prev[2], read_only=prev[3], results_writable=prev[4]); catch; end
     end
 end
+
+@testset "pipeline resume: slots a saved day needs, by its resolution (cv46 D2)" begin
+    E = Euphemia
+    @test E.resume_slots_needed("1H", 24) == 24          # hourly days: unchanged
+    @test E.resume_slots_needed(missing, 24) == 24
+    @test E.resume_slots_needed("15M", 24) == 96         # a truncated quarter day (>= 24 quarters) is not complete
+    @test E.resume_slots_needed("15M", 96) == 96         # also right if the default becomes 96
+    @test E.resume_slots_needed("30M", 24) == 48
+    @test E.resume_slots_needed(" 1H ", 20) == 20
+end

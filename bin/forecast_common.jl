@@ -325,9 +325,78 @@ end
 # ---------------------------------------------------------------------------
 # Native 15-minute scores (phase 3, planner-p3 option (ii)): the HOURLY forecast
 # replicated x4 onto its quarters, scored against native PT15M SDAC actuals, in
-# ADDITION to the hourly score (which is unchanged). Pure; DB access lives in
-# test/scripts/eu_eval_metrics.jl (`native_q15_actuals`).
+# ADDITION to the hourly score (which is unchanged). The native actuals reader
+# `native_q15_actuals` is below (moved from test/scripts/eu_eval_metrics.jl, cv46 D2: the
+# scorer and the exporters use it in production).
 # ---------------------------------------------------------------------------
+
+"""
+Non-SDAC day-ahead `sequence`s to drop from the NATIVE 15-MIN target, per zone.
+AT and DE_LU carry two day-ahead auctions in `entsoe.energy_prices`. Sequence 2
+is the early EXAA auction, not SDAC. In the read-only 2026-11-15 extract,
+Oct 15-Nov 13, latest row per zone/time/sequence/resolution: AT sequence 1
+equals CZ in 279/2,880 quarters, sequence 2 in 0/2,876; DE_LU sequence 1 equals
+NL in 339/2,880, sequence 2 in 1/2,880. Monthly 2022-12..2026-11, sequence 1
+matches its coupled neighbour in roughly 2-48 % of MTUs, sequence 2 in at most
+about 0.2 %. Sequence 2's update stamp is about 11:10 local time (an ingestion
+stamp, not an authenticated exchange publication time), ahead of the SDAC batch.
+The #424 review confirmed this independently. DK1/DK2 sequence 2 rows are
+float-noise copies of the same SDAC price. The hourly score's
+`resolution_aware_actuals` (highest sequence) is deliberately left unchanged.
+Flip an entry to "1" to target the other auction.
+"""
+const Q15_NON_SDAC_SEQUENCE = Dict("AT" => "2", "DE_LU" => "2")
+
+"""
+    native_q15_actuals(sd, ed; contract="Day-ahead") -> DataFrame(z, t, act, res)
+
+Day-ahead actuals at their NATIVE resolution for the 15-minute score: SDAC only
+(`Q15_NON_SDAC_SEQUENCE` dropped), latest revision (`update_time_utc`) per
+(zone, interval start, resolution code), UTC interval starts over the UTC days
+sd..ed. `res` is the ENTSO-E resolution code (PT15M / PT30M / PT60M); only PT15M
+rows are scored (`score_q15`), so PT60M/PT30M zones stay out of the 15-min mask.
+"""
+function native_q15_actuals(sd::Date, ed::Date; contract::String="Day-ahead")
+    excl = join(["(map_code = '$z' AND trim(COALESCE(sequence, '')) = '$q')"
+                 for (z, q) in sort(collect(Q15_NON_SDAC_SEQUENCE))], " OR ")
+    Euphemia.sql2df("""
+        SELECT DISTINCT ON (map_code, date_time_utc, resolution_code)
+               map_code AS z, (date_time_utc AT TIME ZONE 'UTC') AS t,
+               price_currency_mwh AS act, trim(resolution_code) AS res
+        FROM entsoe.energy_prices
+        WHERE contract_type = \$1 AND area_type_code LIKE 'BZN%'
+          AND price_currency_mwh IS NOT NULL
+          AND date_time_utc >= (\$2::date::timestamp AT TIME ZONE 'UTC')
+          AND date_time_utc <  ((\$3::date + 1)::timestamp AT TIME ZONE 'UTC')
+          $(isempty(excl) ? "" : "AND NOT ($excl)")
+        ORDER BY map_code, date_time_utc, resolution_code, update_time_utc DESC
+    """, [contract, sd, ed])
+end
+
+"""
+    hourly_means(ts, vals) -> (hours::Vector{DateTime}, means::Vector{Float64})
+
+Average slots to the hour (`trunc(t, Hour)`), for readers that pair a forecast or record series
+with HOURLY actuals (cv46 downstream D2). Hours come out in first-appearance order, and an hour with
+a single slot keeps its value exactly (`x / 1 == x`), so on hourly data the pairs, their order and
+every sum over them are bit-identical to reading the rows directly. Values that are `missing`,
+`nothing` or non-finite are skipped."""
+function hourly_means(ts, vals)
+    order = DateTime[]
+    acc = Dict{DateTime,Tuple{Float64,Int}}()
+    for (t, v) in zip(ts, vals)
+        (v === missing || v === nothing) && continue
+        x = Float64(v)
+        isfinite(x) || continue
+        h = trunc(DateTime(t), Hour)
+        if haskey(acc, h)
+            s, n = acc[h]; acc[h] = (s + x, n + 1)
+        else
+            push!(order, h); acc[h] = (x, 1)
+        end
+    end
+    return order, [acc[h][1] / acc[h][2] for h in order]
+end
 
 "Minimum paired native quarters for a 15-min zone-day score (analogous to MIN_SCORE_HOURS)."
 const MIN_SCORE_Q15_DEFAULT = 48
