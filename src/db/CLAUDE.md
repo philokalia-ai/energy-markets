@@ -4,7 +4,7 @@ Loaded when working under `src/db/`. Moved from the root `CLAUDE.md` (August
 2026). Root keeps the short "which backend / env vars / read-only extract"
 summary; the internals live here.
 
-### Data store: Postgres or a DuckDB extract
+### Data store: DuckDB (run-local fill or extract); Postgres only behind the fill
 
 **Owner rule (2026-11-23): DuckDB always sits between Postgres and Julia.**
 Postgres is for long-term storage. DuckDB is for sharing and calculating.
@@ -14,11 +14,12 @@ Postgres is for long-term storage. DuckDB is for sharing and calculating.
 - New code that opens a Postgres connection from Julia for anything else is wrong, whatever it saves.
 - Existing direct Postgres reads in `src/` are debt to migrate, not a pattern to copy.
 
-By default the library reads from the live Postgres `energy` database. It can
-instead read from a **self-contained DuckDB extract** — a single `.duckdb`
-file that mirrors the same `schema.table` names, so both single-zone
-merit-order pricing / scenario analysis **and the full 39-zone multi-zone EU
-clearing** run fully offline with no Postgres available.
+Production jobs read a **run-local DuckDB filled from Postgres** (see "Production
+data path" below); offline and research work reads a **self-contained DuckDB
+extract**. Both are single `.duckdb` files that mirror the same `schema.table`
+names, so single-zone pricing, scenarios **and the full 39-zone multi-zone EU
+clearing** run with no Postgres connection. The Postgres backend branch of
+`sql2df` stays only for `EUPHEMIA_DATA_STORE=postgres` (legacy paths listed below).
 
 ```julia
 # Switch at runtime
@@ -129,6 +130,126 @@ build runs in ~1–3 s (was ~14 s):
   the DuckDB backend. `bin/reproduce.jl` persists each run segment in a single
   `Euphemia.results_write_transaction`, so the results DB commits once instead of
   per day.
+
+### Production data path: fill → run → transfer
+
+Every production job (daily-forecast, generate-multi-zone-prices, publish-web-data,
+retro-backfill, rescore-hourly, rescore-q15) makes exactly one Postgres read (the fill)
+and one Postgres write (the transfer), both through DuckDB's postgres extension:
+`attach_postgres!(con, conn_str; alias="pg", read_only=true|false)` (src/db/pg_attach.jl;
+extension dir `EUPHEMIA_DUCKDB_EXT_DIR`, default `<first depot>/duckdb-ext`). Rows move
+engine to engine; Julia never holds them.
+
+**Fill.** `bin/fill_run_duckdb.jl --profile P --out DIR` (needs `ENERGY_CONN_STR`;
+pins Euphemia to the DuckDB backend before loading, so no LibPQ pool opens) writes
+`DIR/inputs.duckdb` (read-only inputs), `DIR/results.duckdb` (read-back slices) and
+`DIR/fill.json` (rows/seconds per table, `absent_in_source`, `source_timezone` / `pg_timezone` /
+`scanner_timezone`, process wall and peak RSS); built under `DIR/.tmp-<pid>`, exit ≠ 0 on failure.
+
+| profile | days | inputs | results seeds |
+|---|---|---|---|
+| `record` | `--start/--end` or `--days D1,D2,…` | `FILL_SPECS` + input_corrections [d−1, d+3) | energy_prices of the run days, input_corrections |
+| `daily-forecast`, `export` | `--as-of` − 1 … + 8 | `FILL_SPECS` + actual prices 400 d, model_lines, tsfm_overlay, input_corrections [asof−5, asof+10) (`INPUTS_BACK_DAYS` widens the inputs-panel tables) | forecast_prices, forecast_scores, input_corrections, 120 d transmission_flows |
+| `retro` | `--start S --end E` → UTC days S−1 … E | as daily-forecast, input_corrections [S−2, E+3) | forecasts/scores for market days S … E, input_corrections |
+| `rescore` | `--start S` (or `auto`) `--end E [--zones]` | actual prices only | forecasts for the window, forecast_scores whole |
+
+The record seed of `energy_prices` is intended: the run days' existing prices, so the job's
+skip-existing (resume) behaves exactly as against Postgres. To recompute days that already
+have prices, pass `--seed-skip energy_prices` (or run with resume off), not
+`--seed-results false`: that drops every seed, and the first read-back then raises.
+
+Options: `--zones` (default `ZONES` env, else the 39-zone footprint), `--seed-results false`
+(no seeds at all), `--seed-skip T1,T2`, `--source duckdb:<path>` (offline proof: the same filter SQL
+against a DuckDB extract), `RESULTS_SOURCE_CONN_STR` (seeds from another database).
+
+**Memory.** DuckDB's buffer is bounded by `EUPHEMIA_FILL_MEMORY` (default 1GB; threads
+`EUPHEMIA_FILL_THREADS`, default 4) and each table is CHECKPOINTed. Measured (d4d780e, 10–11
+record days, ~0.6–1 GiB inputs): process peak RSS 2.2–2.75 GiB, flat in the day count (a 3-day
+runner fill: 3.5 GiB; up to 4.55 GiB seen with more cores/memory available: allocator and GC
+slack, not data). Page cache from writing the file fills the cgroup to whatever cap it has
+(3.4–4.3 GiB seen); it is reclaimable and needs no request. Fewer threads only slow the fill.
+Workflow memory request: 6Gi for the jobs that fill and clear (fill ≤ ~5 GiB worst case; the
+DuckDB-path clear ~2.4 GiB, a 2-book-worker pipelined record ~5 GiB); 2Gi for rescore (one
+table).
+
+**Manifest** (`FILL_SPECS`, src/db/fill_manifest.jl): per table the zone filter, the time
+column and the readers' lookback/lookahead per delivery day; a run's window is the union over
+its days of `[d − back, d + ahead + 1)`. Exactness extras: outage tables copy every version of
+each message with a version overlapping a day window (the readers pick the gate version);
+offered implicit ATC adds the earliest Day-ahead row per border (`_da_ever_borders` reads all
+history); per-unit output extends below the window for stale-feed zones (rescue window);
+offered ATC is filtered on the readers' code list (`_atc_codes`: the footprint plus the
+aggregates it remaps, e.g. `IT` → `IT-NORTH`), not the footprint alone. `carbon.uka_price`
+(the GB boundary book's anchor, read by every clear) is in `FILL_SPECS`.
+
+**Time zones.** Every libpq session is pinned to UTC (`PGTZ=UTC`, the TimeZone startup
+parameter, which outranks the server default; LibPQ connections also `SET TimeZone`;
+`attach_postgres!` refuses a scanner session that is not UTC). The fill's projections do not
+depend on it anyway: timestamptz columns `AT TIME ZONE 'UTC'`, text timestamps (production's
+outage start/end) `::timestamp`. Before d4d780e a listed `::TIMESTAMP` cast of a timestamptz
+ran in the source session's zone.
+
+**Absent in the source.** A `FILL_OPTIONAL` table (`carbon.uka_price`, `simulations.model_lines`,
+`simulations.tsfm_overlay`) missing from the source is recorded (`_fill.windows` kind `absent`,
+`fill.json` `absent_in_source`); a read of it then fails with DuckDB's Catalog Error and the
+reader's documented fallback runs (uka → EUA), exactly as against that source. Any other
+Catalog Error under a fill is a `FillGuardError`.
+
+**Strict guard.** A DuckDB carrying `_fill.windows` is a run-local fill: `_duckdb_sql2df`
+raises `FillGuardError` on a read of a table outside the manifest and on any Date/DateTime
+parameter or `TIMESTAMP` literal outside a filled window. The same error is raised on a
+failed results attach and on a read-back of a table the results DB holds no seed of
+(`results_db._fill.seeds`, written by `seed_run_results!`; input_corrections is also
+window-checked). `FillGuardError` is never retried (`sql2df_with_retry`) and every soft
+fallback rethrows it (`_rethrow_fill_guard(e)` in the `catch`, which also unwraps
+TaskFailedException / CompositeException / RemoteException): the book path, and the outer
+catches of bin/daily_forecast.jl (UTC-day clear, cv32 emission, ML overlays) and
+src/clearing/batch_runners.jl. `multi_zone_main` exits 1 on any failed date under a fill. Add
+that line to any new `catch` around a read: a guard hit must fail the job, never drop a day. Hand-built files (tests, tools) mark themselves with
+`mark_run_local_fill!(path; windows=[(schema, table, lo, hi), …])` (`lo = 1900-01-01` = whole
+table) and `mark_results_seeded!(tables)`.
+
+**Read-back redirect.** `energy_prices` / `optimization_runs` / `transmission_flows` always
+resolve to `results_db`. `forecast_prices*`, `forecast_scores` and `input_corrections` resolve
+to `results_db` only for a run-local fill (the fill seeded them there); on a plain extract they
+read the extract's own tables, exactly as main. Write statements always go to `results_db`.
+
+**Who reads input_corrections where (cv32).** Decided per process, explicitly, by
+`EUPHEMIA_RESULTS_READBACK` (read in `__init__`; nothing is attached there):
+- `results` (default): single-process jobs and the pipeline coordinator read `results_db`, so
+  the daily forecast's clear sees the corrections it emitted earlier in the same process.
+- `inputs`: the pipelined book/solver workers (`run_pipelined_backfill` sets it). The
+  coordinator holds the results DB read-write, and DuckDB's file lock keeps a second process
+  from attaching it, so the workers read the fill-time copy in `inputs.duckdb` (same window as
+  the seed). Record and backfill runs emit no corrections, so that copy equals the seed.
+Before this split (d497e41…f4948e6) the workers' attach failed and the cv32 reader kept the
+raw forecasts: 80 IT-Sardinia cells on cb-harness's tranche 2. No workflow was affected,
+because no workflow runs the pipelined backfill (reproduce.jl and eu_calibration_run.jl do),
+and generate-multi-zone-prices builds its books in the coordinator. Research runs and
+record-on-extract runs were affected.
+
+**Results and transfer.** Under `EUPHEMIA_DATA_STORE=duckdb` every forecast-side write
+(`write_forecast!` plans, cv32 corrections, scores incl. rescore and restore) goes to the
+results DuckDB (src/db/run_results.jl) and logs one op. `bin/transfer_run_results.jl` stages
+the rows through the extension and applies all ops in one server-side transaction (guards and
+plans re-decided in Postgres; a changed plan aborts with nothing written;
+`simulations.transfer_log` makes it exactly once). The record path saves to the results
+DuckDB and `bin/transfer_results_to_postgres.jl` (also `transfer-record.yml`) upserts runs,
+replaces price/flow slices and verifies checksums inside the transaction (`--written-since`).
+
+**Nightly refresh.** `bin/refresh_duckdb_extract.jl` attaches the energy DB (`pg`) and the
+weather DB (`wx`) on the extract connection and copies inside DuckDB (scanner mode in
+bin/extract_common.jl).
+
+**Adding a reader.** A new `sql2df` read of a table/window the manifest does not cover fails
+the guard. Add the table (or widen its `back`/`ahead`) in `FILL_SPECS`, or add a seed for a
+results-side table in `fill_profile`; prove it with `--source duckdb:<extract>` + a clear with
+the guard on (prices must equal the extract run). Never open Postgres from the reader.
+
+**Legacy (only with `EUPHEMIA_DATA_STORE=postgres`).** The Postgres branch of `sql2df`,
+`withdb`/`preinit_pool`, the LibPQ bodies of the writers, and `bin/build_duckdb_extract.jl`
+(manual full rebuild; the scanner mode is available via `SCAN[]`). Non-Julia emitters
+(`emit_tsfm_overlay.py`, `emit_model_lines.py`) are outside the rule and listed in the PR.
 
 ### Building a DuckDB extract
 
