@@ -140,20 +140,7 @@ function _rescue_window_lower(map_code::String, day::Dates.Date)
     ub = _per_unit_upper(day)
     ub === nothing || (bound = min(bound, ub))
     last_obs = lock(_FEED_ANCHOR_LOCK) do
-        get!(_FEED_ANCHOR_CACHE, (map_code, bound)) do
-            df = Euphemia.sql2df_with_retry(
-                """
-                SELECT MAX(date_time_utc) AS last_obs
-                FROM entsoe.actual_generation_output_per_generation_unit
-                WHERE generation_unit_code IN (
-                        SELECT DISTINCT generation_unit_code
-                        FROM entsoe.production_and_generation_units
-                        WHERE area_map_code = \$1)
-                  AND date_time_utc < TIMESTAMP '$(Dates.format(bound, "yyyy-mm-dd HH:MM:SS"))'
-                  AND actual_generation_output_mw > 0
-                """, Any[map_code])
-            (DataFrames.nrow(df) == 0 || ismissing(df.last_obs[1])) ? nothing : Dates.DateTime(df.last_obs[1])
-        end
+        get!(() -> _feed_last_obs(map_code, bound), _FEED_ANCHOR_CACHE, (map_code, bound))
     end
     # A zone that never had per-unit data keeps the original window.
     last_obs === nothing && return default
@@ -163,6 +150,43 @@ function _rescue_window_lower(map_code::String, day::Dates.Date)
         return "TIMESTAMP '$(Dates.format(lower, "yyyy-mm-dd HH:MM:SS"))'"
     end
     return default
+end
+
+# The zone's last per-unit observation before `bound`, as far as the rescue window
+# needs it: only `last_obs < bound - FEED_STALE_DAYS` matters. A cheap probe of the
+# last FEED_STALE_DAYS answers the healthy case (any output there => not stale, and
+# `bound` stands in for the exact MAX); only a stale zone pays the full-history MAX.
+# On Postgres that MAX reads the zone's whole per-unit history (54 GB table, no lower
+# time bound); since cv43 the daily forecast's first clear (which fills this cache for
+# all leads) runs ~800 s longer, consistent with 39 such scans (perf-96). The
+# probe's lower bound is rounded UP to the second, so it never calls a zone healthy
+# that the full MAX would call stale: the window decision is unchanged.
+function _feed_last_obs(map_code::String, bound::Dates.DateTime)
+    fmt(t) = Dates.format(t, "yyyy-mm-dd HH:MM:SS")
+    units = """generation_unit_code IN (
+                        SELECT DISTINCT generation_unit_code
+                        FROM entsoe.production_and_generation_units
+                        WHERE area_map_code = \$1)"""
+    recent = Euphemia.sql2df_with_retry(
+        """
+        SELECT 1 AS hit
+        FROM entsoe.actual_generation_output_per_generation_unit
+        WHERE $(units)
+          AND date_time_utc >= TIMESTAMP '$(fmt(ceil(bound - FEED_STALE_DAYS, Dates.Second)))'
+          AND date_time_utc < TIMESTAMP '$(fmt(bound))'
+          AND actual_generation_output_mw > 0
+        LIMIT 1
+        """, Any[map_code])
+    DataFrames.nrow(recent) > 0 && return bound
+    df = Euphemia.sql2df_with_retry(
+        """
+        SELECT MAX(date_time_utc) AS last_obs
+        FROM entsoe.actual_generation_output_per_generation_unit
+        WHERE $(units)
+          AND date_time_utc < TIMESTAMP '$(fmt(bound))'
+          AND actual_generation_output_mw > 0
+        """, Any[map_code])
+    return (DataFrames.nrow(df) == 0 || ismissing(df.last_obs[1])) ? nothing : Dates.DateTime(df.last_obs[1])
 end
 
 # The rows the bound rejects never reach Julia, so report them here: the

@@ -109,3 +109,33 @@ end
     @test_logs (:warn, r"feed stale") match_mode=:any _fa_fleet(silent)
     try; Euphemia.configure_data_store!(backend=prev, duckdb_path=prev_path, read_only=prev_ro, results_writable=prev_rw); catch; end
 end
+
+# perf-96: the recent-window probe must reproduce the full-history MAX decision exactly.
+# No context: bound = gate (09-19 10:00) − 6 d = 09-13 10:00; stale iff last_obs < 09-06 10:00.
+@testset "feed-anchor probe == full MAX at the staleness edge" begin
+    prev = (Euphemia.DATA_STORE[], Euphemia.DUCKDB_PATH[], Euphemia.DUCKDB_READ_ONLY[],
+            Euphemia.DUCKDB_RESULTS_WRITABLE[])
+    G = parentmodule(Euphemia.get_generators)
+    default = "\$2::timestamp - INTERVAL '60 days'"
+    lower_for(rows) = mktempdir() do dir
+        extract = joinpath(dir, "extract.duckdb")
+        _fa_build(extract; gen_rows=rows)
+        Euphemia.configure_data_store!(backend=:duckdb, duckdb_path=extract)
+        G.clear_generator_caches!()
+        l = G._rescue_window_lower("IT-NORTH", _FA_DAY)
+        G.clear_generator_caches!()
+        l
+    end
+    # last observation exactly at bound − 7 d: healthy (not strictly older) → default window
+    @test lower_for([("CURRENT", "2026-09-06 10:00:00")]) == default
+    # one second / one quarter older: stale → anchored at that observation − 60 d
+    @test occursin("2026-07-08 09:59:59", lower_for([("CURRENT", "2026-09-06 09:59:59")]))
+    @test occursin("2026-07-08 09:45:00", lower_for([("CURRENT", "2026-09-06 09:45:00")]))
+    # only observations at/after the bound: none usable → default (as the full MAX gives NULL)
+    @test lower_for([("CURRENT", "2026-09-13 10:00:00"), ("CURRENT", "2026-09-14 00:00:00")]) == default
+    # no per-unit data at all → default
+    @test lower_for(Tuple{String,String}[]) == default
+    # an observation well inside the stale range → anchored at it − 60 d
+    @test occursin("2026-06-01", lower_for([("CURRENT", "2026-07-31 00:00:00")]))
+    try; Euphemia.configure_data_store!(backend=prev[1], duckdb_path=prev[2], read_only=prev[3], results_writable=prev[4]); catch; end
+end
