@@ -428,6 +428,12 @@ Dated reminders and scoring-policy notes that do not change `code_version`.
   call compiled for ~75 s in every fresh process (cold 24-step day: certificate build 71.7 → 9.2 s,
   first solve pass 97 → 41 s); warm build 1.2 → 0.3 s per 24 periods. No `code_version` bump.
 
+- **2026-11-23 — `extract_time_period` formats with a compile-time `DateFormat` (perf-96); prices
+  unchanged.** The order → timeslot id lookup parsed the format strings `"yyyymmdd"` / `"HHMM"` into
+  DateFormats on every call (3 calls per order per MPCC build, ~300k per 96-step pass). One constant
+  `dateformat"yyyymmdd-HHMM"` gives the same string (checked on every 15-min slot of 2015–2026; unit test)
+  ~8× faster. No `code_version` bump.
+
 - **2026-11-23 — LP certificate: the fixed-pattern model is solved as an LP (perf-96); prices
   unchanged.** After the pattern fixes every complementarity binary, their integrality is dropped
   before the solve (restored on a fallback, so the MIP is unchanged), and HiGHS no longer runs its
