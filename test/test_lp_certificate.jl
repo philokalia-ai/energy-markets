@@ -116,6 +116,70 @@ function _lc_handbuilt(; extra::Bool=true)
 end
 _lc_fixed_binaries(m) = count(is_fixed, (v for nm in (:stepwise_acceptance_complementarity_aux,
                                                      :stepwise_dual_complementarity_aux) for v in m[nm]))
+_lc_all_binary(m) = all(is_binary, (v for nm in (:stepwise_acceptance_complementarity_aux,
+                                                 :stepwise_dual_complementarity_aux) for v in m[nm]))
+
+@testset "welfare LP: one filtered copy is the copy-then-delete model" begin
+    m, _ = _lc_handbuilt()
+    obj = object_dictionary(m)
+    ps = Set{VariableRef}(v for nm in MPCC._PRICE_SIDE if haskey(obj, nm) for v in m[nm])
+    lp1, ref1 = MPCC._welfare_lp(m, ps)
+    lp2, ref2 = copy_model(m)                     # the construction it replaces
+    kill = Set(ref2[v] for v in ps)
+    for (F, S) in list_of_constraint_types(lp2)
+        F <: AffExpr || continue
+        for c in all_constraints(lp2, F, S)
+            any(v -> v in kill, keys(constraint_object(c).func.terms)) && delete(lp2, c)
+        end
+    end
+    delete(lp2, collect(kill))
+    mps(lp) = (io = IOBuffer(); write(io, lp; format=MOI.FileFormats.FORMAT_MPS); String(take!(io)))
+    @test !isempty(ps)
+    @test mps(lp1) == mps(lp2)
+    @test num_variables(lp1) == num_variables(m) - length(ps)
+    @test all(name(ref1[v]) == name(v) for v in keys(ref1))
+end
+
+# #470 review (3): when the certificate fails, the fixed-pattern model was solved as an LP (perf-96 fix 2);
+# the fallback must be main's MIP again — integrality restored on every complementarity variable — and give
+# main's prices. Checked three ways: the restored model is a real MIP (binary flags, 0/1 values, no duals),
+# its prices equal a cold MIP solve of a fresh copy (main's MIP-first clear), and both equal the values the
+# pre-fix-2 code produced (asserted in main's own tests: objective 79100, price 20; A = B = 100).
+@testset "certificate failure: restored MIP fallback = main's MIP (#470)" begin
+    aux_vals(m) = [value(v) for nm in (:stepwise_acceptance_complementarity_aux,
+                                       :stepwise_dual_complementarity_aux) for v in m[nm]]
+    m, opt = _lc_handbuilt()
+    @test MPCC._lp_certify!(m, opt) == false
+    @test _lc_fixed_binaries(m) == 0 && _lc_all_binary(m)          # unfixed and binary again
+    optimize!(m)                                                     # the fallback MIP, as solver.jl runs it
+    @test termination_status(m) == MOI.OPTIMAL
+    @test !has_duals(m) && dual_status(m) == MOI.NO_SOLUTION        # solved as a MIP, not an LP
+    @test all(x -> x == 0.0 || x == 1.0, round.(aux_vals(m); digits=9))
+    ref, _ = _lc_handbuilt()                                         # main's MIP-first: a cold MIP solve
+    optimize!(ref)
+    @test termination_status(ref) == MOI.OPTIMAL
+    @test value(m[:market_price]["Z"]) == value(ref[:market_price]["Z"]) == 20.0
+    @test objective_value(m) ≈ objective_value(ref) ≈ 79100.0
+    @test value(m[:load_shed]) ≈ value(ref[:load_shed]) ≈ 10.0
+    # negative control: had integrality NOT been restored, the fallback would be the LP relaxation —
+    # a different (higher-welfare) answer, so the checks above can fail
+    bad, _ = _lc_handbuilt()
+    @test MPCC._lp_certify!(bad, opt) == false
+    for nm in (:stepwise_acceptance_complementarity_aux, :stepwise_dual_complementarity_aux), v in bad[nm]
+        unset_binary(v)
+    end
+    optimize!(bad)
+    @test objective_value(bad) > 79100.0 + 1.0
+    # end to end through solve_mpcc_market_clearing: the net-position fixture's certificate fails (pattern
+    # infeasible), the restored MIP clears it at main's prices
+    tc = TransferCapacity(["A", "B"], ["1"],
+        Dict(("A", "B", "1") => 100.0), Dict(("A", "B", "1") => 100.0),
+        Dict(("CORE", "A", "1") => (-10.0, 10.0)), Dict("CORE" => Set([("A", "B")])))
+    r, ncert, nfall = _lc_solve(tc)
+    @test (ncert, nfall) == (0, 1)
+    @test r.status == :optimal && r.objective_value == -23500.0
+    @test r.market_prices["A"][_LC_SLOT] == 100.0 && r.market_prices["B"][_LC_SLOT] == 100.0
+end
 
 @testset "LP certificate: fallback branches (hand-built MPCC)" begin
     @testset "without the coupling row it certifies" begin
@@ -129,6 +193,7 @@ _lc_fixed_binaries(m) = count(is_fixed, (v for nm in (:stepwise_acceptance_compl
         m, opt = _lc_handbuilt()
         @test MPCC._lp_certify!(m, opt) == false            # welfare LP 179300, fixed pattern 79100
         @test _lc_fixed_binaries(m) == 0                    # pattern unfixed for the MIP
+        @test _lc_all_binary(m)                             # and integral again (solved as an LP while fixed)
         @test start_value(m[:stepwise_acceptance]["s2"]) ≈ 0.4   # start = the fixed solve's values
         @test start_value(m[:load_shed]) ≈ 10.0
         optimize!(m)                                        # the fallback MIP, as solver.jl runs it
@@ -145,8 +210,12 @@ _lc_fixed_binaries(m) = count(is_fixed, (v for nm in (:stepwise_acceptance_compl
         for v in m[:stepwise_dual_complementarity_aux]      # a pattern left behind by a late throw
             fix(v, 1.0; force=true)
         end
+        for v in m[:stepwise_dual_complementarity_aux]      # ... with its integrality dropped
+            unset_binary(v)
+        end
         MPCC._unfix_pattern!(m)
         @test _lc_fixed_binaries(m) == 0
+        @test _lc_all_binary(m)
         optimize!(m)
         @test termination_status(m) == MOI.OPTIMAL
         @test objective_value(m) ≈ 79100.0

@@ -544,9 +544,10 @@ construction; NaN when the zone reports no pumping (the CH data gap).
 Cached per (zone, day); never cached on DB error.
 """
 function _pump_capability(zone::String, day::Date)
-    lock(_PUMP_CAP_LOCK) do
-        haskey(_PUMP_CAP_CACHE, (zone, day)) && return _PUMP_CAP_CACHE[(zone, day)]
+    hit = lock(_PUMP_CAP_LOCK) do
+        get(_PUMP_CAP_CACHE, (zone, day), nothing)
     end
+    hit === nothing || return hit
     # Round-2 INCREMENTAL basis (the round-1 double-count lesson): the ENTSO-E
     # load fc already embeds expected pumping, so the order quantity is the
     # HEADROOM = trailing p95 (all hours) − trailing MEAN for that hour-of-day.

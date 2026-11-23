@@ -137,10 +137,16 @@ struct TransferCapacity
     net_position::Dict{Tuple{String,String,String},Tuple{Float64,Float64}}
     # ccr => directed pairs JAO publishes for it (its internal borders)
     ccr_pairs::Dict{String,Set{Tuple{String,String}}}
+    # As-of audit records (source, status) => rows that building this capacity made (#368).
+    # Pass 2 reuses pass 1's capacity instead of rebuilding it, and replays these so the
+    # run's audit counts equal a rebuild's. Empty outside a ForecastContext.
+    asof_audit::Dict{Tuple{String,Symbol},Int}
 end
 TransferCapacity(z, p, f, b) = TransferCapacity(z, p, f, b,
     Dict{Tuple{String,String,String},Tuple{Float64,Float64}}(),
     Dict{String,Set{Tuple{String,String}}}())
+TransferCapacity(z, p, f, b, np, cp) = TransferCapacity(z, p, f, b, np, cp,
+    Dict{Tuple{String,Symbol},Int}())
 
 """
     add_transfer_capacity_constraints!(model::Model, transfer_capacity::TransferCapacity, FLOW)
@@ -396,7 +402,8 @@ const _JAO_NORDIC_HUBS = Set(["NO1", "NO2", "NO3", "NO4", "NO5", "SE1", "SE2", "
                               "FI", "DK1", "DK2", "EE", "LT", "LV"])
 const _JAO_WARNED = Ref(false)
 const _JAO_CCR_PAIRS = Dict{Date,Dict{String,Set{Tuple{String,String}}}}()
-const _JAO_NP_CACHE = Dict{Date,Dict{Tuple{String,String,Int},Tuple{Float64,Float64}}}()
+# Keyed on (date, EUPHEMIA_DISABLE_CV40_DEHUB set): the switch changes which hubs are kept.
+const _JAO_NP_CACHE = Dict{Tuple{Date,Bool},Dict{Tuple{String,String,Int},Tuple{Float64,Float64}}}()
 
 jao_atc_enabled() = isempty(get(ENV, "EUPHEMIA_DISABLE_JAO_ATC", ""))
 
@@ -416,9 +423,10 @@ function jao_maxbex(date::Date)
              date >= Date(2026, 8, 23) ? :verified : :unverifiable
         _asof_record!("jao_maxbex", st)
     end
-    lock(_JAO_DAY_CACHE_LOCK) do
-        haskey(_JAO_DAY_CACHE, date) && return _JAO_DAY_CACHE[date]
+    hit = lock(_JAO_DAY_CACHE_LOCK) do
+        get(_JAO_DAY_CACHE, date, nothing)
     end
+    hit === nothing || return hit
     out = Dict{Tuple{String,String,Int},Float64}()
     df = try
         safe_sql2df("""
@@ -479,9 +487,11 @@ Per-hub min/max net position (MW, export positive) inside each CCR's
 flow-based domain, hourly mean. Virtual/interconnector hubs dropped, DE => DE_LU.
 """
 function jao_net_positions(date::Date)
-    lock(_JAO_DAY_CACHE_LOCK) do
-        haskey(_JAO_NP_CACHE, date) && return _JAO_NP_CACHE[date]
+    npkey = (date, !isempty(get(ENV, "EUPHEMIA_DISABLE_CV40_DEHUB", "")))
+    hit = lock(_JAO_DAY_CACHE_LOCK) do
+        get(_JAO_NP_CACHE, npkey, nothing)
     end
+    hit === nothing || return hit
     out = Dict{Tuple{String,String,Int},Tuple{Float64,Float64}}()
     df = try
         safe_sql2df("""
@@ -511,7 +521,7 @@ function jao_net_positions(date::Date)
         out[(String(r.ccr), hub, Int(r.tp))] = (Float64(r.mn), Float64(r.mx))
     end
     isempty(df) || lock(_JAO_DAY_CACHE_LOCK) do
-        _JAO_NP_CACHE[date] = out
+        _JAO_NP_CACHE[npkey] = out
     end
     return out
 end
@@ -522,8 +532,12 @@ function jao_covered_pairs(date::Date)
     return Set{Tuple{String,String}}((s, d) for (s, d, _) in keys(jao_maxbex(date)))
 end
 
+"Empty every JAO day cache (maxBEX, net positions, CCR pairs)."
 clear_jao_cache!() = lock(_JAO_DAY_CACHE_LOCK) do
     empty!(_JAO_DAY_CACHE)
+    empty!(_JAO_NP_CACHE)
+    empty!(_JAO_CCR_PAIRS)
+    nothing
 end
 
 # ---------------------------------------------------------------------------
@@ -543,16 +557,28 @@ _asof_key() = (c = _asof_ctx(); c === nothing ? nothing : c.as_of_utc)
 _asof_record!(source, status) =
     isdefined(_PARENT_MODULE, :record_asof_status!) && _PARENT_MODULE.record_asof_status!(source, status)
 
-# Keyed on (date, issuance): see `_OUTAGE_DAY_CACHE` in generators/registry.jl.
-const _TX_OUTAGE_DAY_CACHE = Dict{Tuple{Date,Union{Nothing,DateTime}},Dict{Tuple{String,String,Int},Float64}}()
+# Keyed on (date, issuance, outage intervals on): see `_OUTAGE_DAY_CACHE` in
+# generators/registry.jl; EUPHEMIA_DISABLE_OUTAGE_INTERVALS changes the query.
+# _TX_OUTAGE_AUDIT holds the as-of audit rows of the cached read, replayed on a hit
+# so a cached call audits like a fresh one.
+const _TX_OUTAGE_DAY_CACHE = Dict{Tuple{Date,Union{Nothing,DateTime},Bool},Dict{Tuple{String,String,Int},Float64}}()
+const _TX_OUTAGE_AUDIT = Dict{Tuple{Date,Union{Nothing,DateTime},Bool},Vector{Tuple{Symbol,Int}}}()
 const _TX_OUTAGE_LOCK = ReentrantLock()
 tx_outage_atc_enabled() = isempty(get(ENV, "EUPHEMIA_DISABLE_TX_OUTAGE_ATC", ""))
 
 function tx_outage_caps(date::Date)
     ctx = _asof_ctx()
-    ckey = (date, ctx === nothing ? nothing : ctx.as_of_utc)
-    lock(_TX_OUTAGE_LOCK) do
-        haskey(_TX_OUTAGE_DAY_CACHE, ckey) && return _TX_OUTAGE_DAY_CACHE[ckey]
+    ckey = (date, ctx === nothing ? nothing : ctx.as_of_utc,
+            isempty(get(ENV, "EUPHEMIA_DISABLE_OUTAGE_INTERVALS", "")))
+    hit, recs = lock(_TX_OUTAGE_LOCK) do
+        get(_TX_OUTAGE_DAY_CACHE, ckey, nothing), get(_TX_OUTAGE_AUDIT, ckey, Tuple{Symbol,Int}[])
+    end
+    if hit !== nothing
+        for (st, n) in recs
+            isdefined(_PARENT_MODULE, :record_asof_status!) &&
+                _PARENT_MODULE.record_asof_status!("outages_transmission", st, n)
+        end
+        return hit
     end
     # row-level audit after the query (NULL publication stamps are :unverifiable)
     # Same gate-clause split as generators/registry.jl `_outage_gate_clause`:
@@ -607,13 +633,18 @@ function tx_outage_caps(date::Date)
         @warn "transmission-grid unavailability not readable — border caps disabled for $date: $(sprint(showerror, e))"
         DataFrame()
     end
+    audit = Tuple{Symbol,Int}[]
     if ctx !== nothing && !isempty(df)
         if date < Date(2025, 10, 1)
-            _asof_record!("outages_transmission", :legacy_stamp)
+            push!(audit, (:legacy_stamp, 1))
         else
             n_null = count(ismissing, df.pub)
-            n_null > 0 && _PARENT_MODULE.record_asof_status!("outages_transmission", :unverifiable, n_null)
-            nrow(df) - n_null > 0 && _PARENT_MODULE.record_asof_status!("outages_transmission", :verified, nrow(df) - n_null)
+            n_null > 0 && push!(audit, (:unverifiable, n_null))
+            nrow(df) - n_null > 0 && push!(audit, (:verified, nrow(df) - n_null))
+        end
+        for (st, n) in audit
+            isdefined(_PARENT_MODULE, :record_asof_status!) &&
+                _PARENT_MODULE.record_asof_status!("outages_transmission", st, n)
         end
     end
     d0 = DateTime(date)
@@ -630,6 +661,7 @@ function tx_outage_caps(date::Date)
     end
     isempty(df) || lock(_TX_OUTAGE_LOCK) do
         _TX_OUTAGE_DAY_CACHE[ckey] = out
+        _TX_OUTAGE_AUDIT[ckey] = audit
     end
     return out
 end

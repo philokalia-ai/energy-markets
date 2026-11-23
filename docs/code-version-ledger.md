@@ -420,6 +420,20 @@ adoption date: the scoreboard's since-freeze window is cv ≥ 45 from 2026-11-21
 
 Dated reminders and scoring-policy notes that do not change `code_version`.
 
+- **2026-11-23 — perf-96: faster clearing and input reads; prices unchanged, no `code_version` bump.**
+  Bit-identical prices on the 31-day spot check vs record #2 (29,016/29,016) and on 4 days at 96 steps.
+  - LP certificate: the welfare LP is one `MOI.copy_to` from a filtered view of the model (`_WelfareSource`)
+    instead of `copy_model` + deleting the price-side rows and variables (same LP, byte-identical MPS); the
+    vector delete compiled for ~75 s in every fresh process. The fixed-pattern model is solved as an LP
+    (integrality dropped after the pattern fixes every binary, restored on a fallback): 44 → 8 s per joint
+    96-step pricing. `extract_time_period` uses one compile-time `DateFormat` (~300k calls per 96-step pass).
+  - Inputs: pass 2 reuses pass 1's transfer capacity; the feed-anchor staleness check probes the last 7 days
+    before running the full-history `MAX` (39 such scans per first clear since cv43); four day caches that
+    were write-only now return hits; `get_generators` shares one recent-generation scan per zone-day; shared
+    day caches fill once under the threaded book build.
+  - JIT: a DB-free PrecompileTools workload (3-zone clear) compiles the clearing path at precompile time;
+    module-level state after `using Euphemia` is asserted empty (`test_precompile_state.jl`).
+
 - **2026-11-22 — Block acceptance search replaces the PAB loop (blocks/r1-only).** With
   `EUPHEMIA_COMPLEX_ORDERS=…blocks` (opt-in), the 4-round PAB loop and its release to the `BLKFB:`
   must-run offers are replaced by a reversible acceptance search (seed, prune to a PAB-free set,
