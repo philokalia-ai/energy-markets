@@ -131,7 +131,9 @@ function parse_family(f::AbstractString)
 end
 
 # ------------------------------------------------------------------------------- forecast-side optimisers
-_lp() = (m = Model(HiGHS.Optimizer); set_silent(m); set_attribute(m, "threads", 1); m)
+# No `threads` override: HiGHS keeps one process-wide scheduler and a model asking for a different thread count than
+# the one it started with fails (no solution) — the same rule as src/mpcc/complex_orders.jl.
+_lp() = (m = Model(HiGHS.Optimizer); set_silent(m); m)
 
 """Storage arbitrage LP on forecast prices F (MW per period, `dt` hours per period), SoC empty at both ends.
 Returns (charge, discharge, μ) with μ_t = marginal value of stored energy (€/MWh_stored) after period t."""
