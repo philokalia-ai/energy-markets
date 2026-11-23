@@ -10,5 +10,5 @@ systemd-run --user --scope -q --unit=st-impact-rd$TAG-$$ -p MemoryMax=${MEM:-750
   EUPHEMIA_DATA_STORE=duckdb EUPHEMIA_DUCKDB_READONLY=true EUPHEMIA_FLOW_ASOF_MODE=v2 \
   EUPHEMIA_DUCKDB_PATH=$HOME/armada/em-data/euphemia-live-20261115.duckdb \
   EUPHEMIA_DUCKDB_TEMP=$R/tmp/$TAG EUPHEMIA_DUCKDB_THREADS=2 EUPHEMIA_DUCKDB_MEMORY=1GB \
-  DAYS=$DAYS ZONES=${ZONES:-} QGRID=${QGRID:-} HARNESS=${HARNESS:-} JOBS=${JOBS:-} SUFFIX=${SUFFIX:-} \
+  DAYS=$DAYS ZONES=${ZONES:-} QGRID=${QGRID:-} HARNESS=${HARNESS:-} JOBS=${JOBS:-} SUFFIX=${SUFFIX:-} VARIANT=${VARIANT:-} \
   $EM/runtimes/ops/julia-1.13.4/bin/julia --startup-file=no --heap-size-hint=5G --project=. ${SCRIPT:-research/strategy/impact/rd_days.jl}
