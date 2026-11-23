@@ -41,7 +41,7 @@ using Distributed
 
 # --- message tags --------------------------------------------------------
 # bookwork items:  (:pass1, day, t_feed)
-#                  (:pass2, day, refs, cached, r1, book_secs, waitq, solve1_secs, t_solve1_done)
+#                  (:pass2, day, refs, cached, network, r1, book_secs, waitq, solve1_secs, t_solve1_done)
 #                  (:stop,)
 # solvework items: (:pass1, day, ob1, book_secs, t_build_done)
 #                  (:pass2, day, ob2, r1, book_secs, waitq, solve1_secs, rebuild_secs, t_rebuild_done)
@@ -246,11 +246,12 @@ function pipeline_book_worker(bookwork::RemoteChannel, solvework::RemoteChannel,
                     err="pass-1 book build: " * sprint(showerror, e)))
             end
         else # :pass2
-            (_, day, refs, cached, r1, book_secs, waitq, solve1_secs, _t) = job
+            (_, day, refs, cached, network, r1, book_secs, waitq, solve1_secs, _t) = job
             try
                 t0 = time()
                 ob2 = _with_job_context(cfg, day) do
                     mz_rebuild_anchored(zones, day, refs, cached;
+                        transfer_capacity=network,
                         enrich_network=cfg.enrich_network,
                         apply_zone_profiles=cfg.apply_zone_profiles,
                         scenario=cfg.scenario)
@@ -321,7 +322,7 @@ function pipeline_solver_worker(solvework::RemoteChannel, bookwork::RemoteChanne
                     put!(results, _result_ok(day, r1, ob1, book_secs, waitq,
                         solve1_secs, 0.0, 0.0))
                 else
-                    put!(bookwork, (:pass2, day, ai.refs, ai.cached, r1,
+                    put!(bookwork, (:pass2, day, ai.refs, ai.cached, ai.network, r1,
                         book_secs, waitq, solve1_secs, time()))
                 end
             catch e
