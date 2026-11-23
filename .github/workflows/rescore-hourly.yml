@@ -5,13 +5,18 @@
 # before the next 06:15 UTC, so no daily run can leave a mixed EXAA/SDAC history.
 #
 # Order: guard (time windows, active daily-forecast/publish-web-data runs; rechecked
-# before every write chunk and before a restore, bin/rescore_guard.sh) -> snapshot
+# right before the transfer, bin/rescore_guard.sh) -> fill -> snapshot
 # (artifact) -> dry-run counts -> rescore in date chunks (one transaction per slice
 # under SET LOCAL lock_timeout, #424 pattern; q15 columns never written), recording
 # every key written + its scored_at (the CAMPAIGN artifact) -> snapshot-vs-now summary.
 # Rollback: dispatch action=restore restore_run_id=<rescore run id>. It restores only
 # that run's campaign keys, and only rows not rescored since (scored_at still the
 # campaign's); also set the repo variable EUPHEMIA_DA_TARGET=highest_seq.
+# fill → run → transfer (owner rule): the fill is the job's only Postgres read and the
+# transfer its only Postgres write. Every step in between (snapshot, counts, rescore chunks,
+# restore, compare) reads and writes only the run-local DuckDB; the rescored rows reach
+# Postgres in ONE server-side transaction (exactly once), after a last guard check, with
+# the scored_at the campaign record holds. A run stopped before the transfer writes nothing.
 # Dispatch-only; the site picks the scores up at the next publish.
 name: rescore-hourly
 
@@ -69,7 +74,7 @@ jobs:
     runs-on: energy-markets-k8s
     timeout-minutes: 240
     env:
-      ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
+      RUN_DIR: ${{ github.workspace }}/run-local
       GH_TOKEN: ${{ github.token }}
       REPO: ${{ github.repository }}
       ACTION: ${{ inputs.action }}
@@ -111,6 +116,24 @@ jobs:
             Pkg.instantiate()
             Pkg.precompile()
           "
+
+      # The job's only Postgres read. rescore profile: the whole forecast_scores (snapshot, restore), the
+      # window's forecasts for the zones, the actual Day-ahead prices. Restore needs only the scores table.
+      - name: Fill run-local DuckDB (the job's only Postgres read)
+        timeout-minutes: 30
+        env:
+          ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
+        run: |
+          if [ "$ACTION" = restore ]; then s=$(date -u +%F); e="$s"; else s="${START:-auto}"; e="${END:-$(date -u +%F)}"; fi
+          z=(); [ "$ZONES" = all ] || z=(--zones "$ZONES")
+          ZONES= julia --project=. bin/fill_run_duckdb.jl --profile rescore --start "$s" --end "$e" "${z[@]}" --out "$RUN_DIR"
+          {
+            echo "EUPHEMIA_DATA_STORE=duckdb"
+            echo "EUPHEMIA_DUCKDB_PATH=$RUN_DIR/inputs.duckdb"
+            echo "EUPHEMIA_DUCKDB_READONLY=true"
+            echo "EUPHEMIA_RESULTS_DB=$RUN_DIR/results.duckdb"
+            echo "EUPHEMIA_RESULTS_WRITABLE=true"
+          } >> "$GITHUB_ENV"   # every later step reads/writes only the run-local DuckDB
 
       - name: Snapshot hourly score columns (rollback artifact)
         run: |
@@ -159,25 +182,12 @@ jobs:
           while [[ ! "$d" > "$last" ]]; do
             e=$(date -u -d "$d + $((CHUNK_DAYS - 1)) days" +%F)
             [[ "$e" > "$last" ]] && e="$last"
-            if ! bash bin/rescore_guard.sh "$GUARD_MARGIN_MIN"; then
-              echo "::error::stopped before chunk $d..$e; resume later with start=$d (campaign so far is uploaded)"
-              exit 1
-            fi
-            echo "::group::rescore $d..$e"
+            echo "::group::rescore $d..$e (run-local)"
             RESCORE_START="$d" RESCORE_END="$e" julia --project=. bin/score_forecasts.jl
             echo "::endgroup::"
             echo "chunk done $d..$e"
             d=$(date -u -d "$e + 1 day" +%F)
           done
-
-      - name: Upload campaign record (keys written + their scored_at)
-        if: ${{ always() && inputs.action == 'rescore' && !inputs.dry_run }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: rescore-hourly-campaign-${{ github.run_id }}
-          path: campaign/keys.csv
-          retention-days: 90
-          if-no-files-found: warn
 
       - name: Download the campaign to roll back
         if: ${{ inputs.action == 'restore' && !inputs.dry_run }}
@@ -196,8 +206,34 @@ jobs:
         run: |
           test -f restore/keys.csv || { echo "::error::run $RESTORE_RUN_ID has no campaign record"; exit 1; }
           gunzip -kf restore/forecast_scores_hourly.csv.gz
-          bash bin/rescore_guard.sh "$GUARD_MARGIN_MIN"
+          # run-local; the transfer step replays it on Postgres (same condition) after its guard check
           julia --project=. bin/forecast_scores_snapshot.jl restore restore/forecast_scores_hourly.csv restore/keys.csv
+
+      # The job's only Postgres write: every rescored / restored row in one server-side transaction (exactly
+      # once), after a last guard check. Refused (blackout, active writer) = nothing written; re-dispatch.
+      - name: Transfer results to Postgres
+        id: transfer
+        if: ${{ !cancelled() && !inputs.dry_run }}
+        env:
+          ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
+        run: |
+          [ -f "$RUN_DIR/results.duckdb" ] || { echo "::warning::no run-local results (the fill failed) — nothing to transfer"; exit 0; }
+          if ! bash bin/rescore_guard.sh "$GUARD_MARGIN_MIN"; then
+            echo "::error::guard refused the transfer: NOTHING was written to Postgres; re-dispatch with the same inputs"
+            exit 1
+          fi
+          julia --project=. bin/transfer_run_results.jl --results-db "$RUN_DIR/results.duckdb"
+          echo "transferred=true" >> "$GITHUB_OUTPUT"
+
+      # Uploaded only when its rows reached Postgres, so a restore never targets keys that were never written.
+      - name: Upload campaign record (keys written + their scored_at)
+        if: ${{ always() && inputs.action == 'rescore' && !inputs.dry_run && steps.transfer.outputs.transferred == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: rescore-hourly-campaign-${{ github.run_id }}
+          path: campaign/keys.csv
+          retention-days: 90
+          if-no-files-found: warn
 
       - name: Summary (scoring policy + snapshot vs now)
         if: ${{ always() }}

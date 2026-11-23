@@ -65,6 +65,8 @@ jobs:
   backfill:
     runs-on: energy-markets-k8s
     timeout-minutes: 1080   # the longest allowed window, 12:15 -> 06:00 UTC
+    env:
+      RUN_DIR: ${{ github.workspace }}/run-local   # inputs.duckdb (filled) + results*.duckdb (one per chunk)
     steps:
       - name: Guard (blackout windows, other runs) and clean-stop deadline
         id: guard
@@ -134,9 +136,25 @@ jobs:
             isempty(Pkg.Registry.reachable_registries()) && Pkg.Registry.add()
             Pkg.instantiate(); Pkg.precompile()'
 
-      - name: Reconstruct (cv44, lead 1, alongside the live record)
+      # fill → run → transfer (owner rule): the job's only Postgres read. The retro profile copies the clearing
+      # inputs for UTC days start-1..end and seeds results.duckdb with the forecast_prices / forecast_scores of the
+      # window (the alongside same-cv check, the resume skip, the scorer) and the cv32 corrections. Weather stays
+      # as before (open-meteo previous runs, not Postgres).
+      - name: Fill run-local DuckDB (the job's only Postgres read)
         env:
           ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
+        run: |
+          julia --project=. bin/fill_run_duckdb.jl --profile retro \
+            --start "${{ inputs.start }}" --end "${{ inputs.end }}" --out "$RUN_DIR"
+
+      - name: Reconstruct (cv44, lead 1, alongside the live record)
+        env:
+          # reads only the run-local DuckDB, writes only results files (each parallel chunk its own copy)
+          EUPHEMIA_DATA_STORE: duckdb
+          EUPHEMIA_DUCKDB_PATH: ${{ env.RUN_DIR }}/inputs.duckdb
+          EUPHEMIA_DUCKDB_READONLY: "true"
+          EUPHEMIA_RESULTS_DB: ${{ env.RUN_DIR }}/results.duckdb
+          EUPHEMIA_RESULTS_WRITABLE: "true"
           OPTIMIZER: highs
           INPUT_MODE: weather
           MAX_LEAD_DAYS: "1"   # fixed for this campaign
@@ -154,7 +172,10 @@ jobs:
       - name: Score the reconstructed rows
         if: ${{ inputs.score }}
         env:
-          ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
+          EUPHEMIA_DATA_STORE: duckdb
+          EUPHEMIA_DUCKDB_PATH: ${{ env.RUN_DIR }}/inputs.duckdb
+          EUPHEMIA_DUCKDB_READONLY: "true"
+          EUPHEMIA_RESULTS_WRITABLE: "true"
           DEADLINE: ${{ steps.guard.outputs.deadline }}
         run: |
           # Scores every realized, unscored slice (the new is_retro rows get their own
@@ -169,11 +190,31 @@ jobs:
             exit 0
           fi
           echo "scoring with a ${secs}s budget"
-          rc=0; timeout -k 60 "$secs" julia --project=. bin/score_forecasts.jl || rc=$?
-          if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
-            echo "::warning::scoring stopped at the blackout budget; the daily scorer finishes it"; exit 0
-          fi
-          exit "$rc"
+          # one scorer run per results file (the base file, and each parallel chunk's copy), within the budget
+          for f in "$RUN_DIR"/results*.duckdb; do
+            left=$(( end + 20 * 60 - $(date -u +%s) ))
+            [ "$left" -ge 120 ] || { echo "::warning::budget used up before $f; the daily scorer finishes it"; exit 0; }
+            rc=0; EUPHEMIA_RESULTS_DB="$f" timeout -k 60 "$left" julia --project=. bin/score_forecasts.jl || rc=$?
+            if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
+              echo "::warning::scoring stopped at the blackout budget; the daily scorer finishes it"; exit 0
+            fi
+            [ "$rc" -eq 0 ] || exit "$rc"
+          done
+
+      # The job's only Postgres write: every results file's ops (forecast slices, corrections, scores) in one
+      # server-side transaction each (exactly once; guards and the alongside plan re-checked on Postgres). Runs
+      # after a partial reconstruction too, so the days already done are not lost.
+      - name: Transfer results to Postgres
+        if: ${{ !cancelled() }}
+        env:
+          ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
+        run: |
+          shopt -s nullglob
+          files=("$RUN_DIR"/results*.duckdb)
+          [ "${#files[@]}" -gt 0 ] || { echo "::warning::no run-local results (the fill failed) — nothing to transfer"; exit 0; }
+          for f in "${files[@]}"; do
+            julia --project=. bin/transfer_run_results.jl --results-db "$f"
+          done
 
       - name: Summary
         if: ${{ always() }}

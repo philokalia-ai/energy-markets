@@ -98,10 +98,6 @@ function ensure_run_results_tables!()
     for ddl in _RUN_RESULTS_DDL
         _results_exec(ddl)
     end
-    if Int(_results_exec("SELECT COUNT(*) AS n FROM results_db.simulations.transfer_meta").n[1]) == 0
-        _results_exec("INSERT INTO results_db.simulations.transfer_meta VALUES (\$1)",
-                      Any[string(rand(UInt128); base=16, pad=32)])
-    end
     return nothing
 end
 
@@ -116,6 +112,12 @@ transfer needs (a `Dict` serialised as JSON; no row data). Returns the op id the
 """
 function log_transfer_op!(kind::AbstractString, params::AbstractDict)
     ensure_run_results_tables!()
+    # The run_uuid is created by the first op a results file logs, not by the DDL: the fill (and run_retro_backfill's
+    # per-chunk copies of the seeded file) must not share one, or their ops would collide in transfer_log.
+    if Int(_results_exec("SELECT COUNT(*) AS n FROM results_db.simulations.transfer_meta").n[1]) == 0
+        _results_exec("INSERT INTO results_db.simulations.transfer_meta VALUES (\$1)",
+                      Any[string(rand(UInt128); base=16, pad=32)])
+    end
     id = Int64(_results_exec("SELECT nextval('results_db.simulations.transfer_ops_seq') AS id").id[1])
     _results_exec("INSERT INTO results_db.simulations.transfer_ops (op_id, kind, params, created_at) " *
                   "VALUES (\$1, \$2, \$3, now()::TIMESTAMP)", Any[id, String(kind), JSON.json(params)])
