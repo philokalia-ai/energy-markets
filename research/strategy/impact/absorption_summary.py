@@ -6,7 +6,8 @@ import numpy as np, pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import market_view as MV, rdopt as R  # noqa: E402
 T = MV.ROOT / "runs/st-impact/tables"
-d = pd.read_csv(MV.ROOT / "runs/st-impact/strat/absorption.csv")
+FN = sys.argv[1] if len(sys.argv) > 1 else "absorption.csv"
+d = pd.read_csv(MV.ROOT / "runs/st-impact/strat" / FN)
 d = d[d.day >= "2026-07-01"]
 SZ = [100, 250, 500, 1000, 2000, 4000]
 
@@ -30,7 +31,7 @@ def s_half(prof_by_S):
 lines = ["| zone | arm | €/MW-day at 100 / 1000 / 4000 MW | marginal €/MW-day 2000→4000 | S where the marginal MW is worth half (90% CI) | capture spread €/MWh 100 → 4000 | zone top2−bottom2 spread: base → with 1 GW → with 4 GW |",
          "|---|---|---|---|---|---|---|"]
 rng = np.random.default_rng(3)
-for z in ["GR", "IT-SOUTH", "ES", "NO2", "FR", "DE_LU"]:
+for z in [z for z in ["GR", "IT-SOUTH", "ES", "NO2", "FR", "DE_LU"] if z in set(d.zone)]:
     for arm in ["competitive", "naive"]:
         g = d[(d.zone == z) & (d.arm == arm)]
         P = g.pivot(index="day", columns="S", values="profit")
@@ -49,5 +50,5 @@ for z in ["GR", "IT-SOUTH", "ES", "NO2", "FR", "DE_LU"]:
                      f"{(m[4000]-m[2000])/2000:.0f} | {fmtS(sh)} [{fmtS(lo)}, {fmtS(hi)}] | {cap[100]:.0f} → {cap[4000]:.0f} | "
                      f"{zs0:.0f} → {zs[1000]:.0f} → {zs[4000]:.0f} |")
 txt = "\n".join(lines)
-(T / "absorption.md").write_text(txt + "\n")
+(T / FN.replace(".csv", ".md")).write_text(txt + "\n")
 print(txt)
