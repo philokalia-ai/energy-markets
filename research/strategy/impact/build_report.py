@@ -44,7 +44,8 @@ rep = {"STRUCT": rows, "TABLE_A": section("A. Thermal portfolio"), "HEDGE": sect
        "RC_ABS": rc_abs,
        "MKSCORE": mk_md,
        "ABSORB4": (T / "absorption_4h.md").read_text().strip(),
-       "S96": (T / "s96.md").read_text().strip()}
+       "S96": (T / "s96.md").read_text().strip(),
+       "REP_TABLES": (T.parent / "rep" / "replication.md").read_text().strip()}
 for k, v in rep.items():
     src = src.replace(f"@@{k}@@", v)
 assert "@@" not in src, re.findall(r"@@\w+@@", src)
