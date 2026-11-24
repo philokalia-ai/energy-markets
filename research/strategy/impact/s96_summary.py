@@ -16,7 +16,7 @@ for c in ("profit_sim", "profit_pt", "profit_fc"):
     d[c + "_mw"] = d[c] / d.mw
 d["impact_mw"] = d.profit_sim_mw - d.profit_fc_mw
 f = lambda t: f"{t[0]:+.1f} [{t[1]:+.1f}, {t[2]:+.1f}]"  # noqa: E731
-L = ["| zone | asset | size | format | days | sim €/MW-d 60 → 15 | Δ sim (15−60) | realised PT15M €/MW-d 60 → 15 | Δ realised (15−60) | own impact €/MW-d 60 / 15 | mean abs Δp €/MWh 60 / 15 | blocks accepted / offered (15) |",
+L = ["| zone | asset | size | format | days | sim €/MW-d 60 → 15 | Δ sim (15−60) | realised PT15M €/MW-d 60 → 15 | Δ realised (15−60) | clear − price-taker at our forecast €/MW-d 60 / 15 (acceptance + own price impact) | mean abs Δp €/MWh 60 / 15 | families accepted / offered: 60 ; 15 |",
      "|" + "---|" * 12]
 for (z, a, s, fm), g in d.groupby(["zone", "asset", "size", "format"]):
     p = g.pivot_table(index="day", columns="res", values=["profit_sim_mw", "profit_pt_mw", "impact_mw", "dp_mean_abs", "n_fam", "n_fam_acc"])
@@ -29,7 +29,7 @@ for (z, a, s, fm), g in d.groupby(["zone", "asset", "size", "format"]):
              f"{p[('profit_pt_mw', 60)].mean():.0f} → {p[('profit_pt_mw', 15)].mean():.0f} | {f(dr)} | "
              f"{p[('impact_mw', 60)].mean():+.0f} / {p[('impact_mw', 15)].mean():+.0f} | "
              f"{p[('dp_mean_abs', 60)].mean():.2f} / {p[('dp_mean_abs', 15)].mean():.2f} | "
-             f"{p[('n_fam_acc', 15)].mean():.1f} / {p[('n_fam', 15)].mean():.1f} |")
+             f"{p[('n_fam_acc', 60)].mean():.1f} / {p[('n_fam', 60)].mean():.1f} ; {p[('n_fam_acc', 15)].mean():.1f} / {p[('n_fam', 15)].mean():.1f} |")
 txt = "\n".join(L)
 (MV.ROOT / "runs/st-impact/tables/s96.md").write_text(txt + "\n")
 print(txt)

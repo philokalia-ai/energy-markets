@@ -43,7 +43,8 @@ rep = {"STRUCT": rows, "TABLE_A": section("A. Thermal portfolio"), "HEDGE": sect
                            if l.startswith("| asset") or l.startswith("|---") or "| eval |" in l or "| cal | 0 |" in l),
        "RC_ABS": rc_abs,
        "MKSCORE": mk_md,
-       "ABSORB4": (T / "absorption_4h.md").read_text().strip()}
+       "ABSORB4": (T / "absorption_4h.md").read_text().strip(),
+       "S96": (T / "s96.md").read_text().strip()}
 for k, v in rep.items():
     src = src.replace(f"@@{k}@@", v)
 assert "@@" not in src, re.findall(r"@@\w+@@", src)
