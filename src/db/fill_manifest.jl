@@ -1,0 +1,582 @@
+# Fill manifest + fill step (owner rule, 2026-11-23: DuckDB between Postgres and Julia).
+#
+# A run (record days or the daily forecast's UTC days) declares its delivery DAYS and ZONES.
+# `fill_run_duckdb` copies exactly the input rows the run's readers need from Postgres into a
+# run-local DuckDB, through DuckDB's postgres extension (`postgres_query`: the filter runs inside
+# Postgres; rows stream engine to engine, never through Julia). Same `schema.table` names, naive
+# UTC timestamps and `ORDER BY` layout as the extract (bin/extract_common.jl), so the existing
+# DuckDB backend reads it unchanged. Windows come from the CODE's lookbacks (FILL_SPECS), so the
+# fill is faithful to production Postgres, which holds full history.
+#
+# `_fill.windows` records every filled (table, lo, hi); the strict guard in `_duckdb_sql2df`
+# rejects a read of a table or a date outside them (fail loudly, never fall back to Postgres).
+
+"""
+One manifest entry. `back`/`ahead` are days around each delivery day `d`: the table's filled
+window is the union over DAYS of `[d - back, d + ahead + 1)`. `zone_pred` is a Postgres
+predicate template where `\$ZONES` becomes the zone array literal ("" = no zone filter).
+`kind`: `:window` (time column), `:full` (whole table, small), `:overlap` (interval tables:
+all versions of every message with a version overlapping a run day window), `:per_unit` (per-unit generation: window plus
+the per-zone stale-feed extension), `:da_sentinel` (offered implicit ATC: window plus one
+earliest Day-ahead row per border, which keeps `_da_ever_borders`' all-history DISTINCT exact).
+"""
+const FillSpec = NamedTuple{(:schema, :table, :kind, :zone_pred, :ts_col, :ts_tz, :back, :ahead,
+                             :sort_by, :casts),
+                            Tuple{String,String,Symbol,String,String,Bool,Int,Int,String,Dict{String,String}}}
+
+_fs(schema, table, kind; zone_pred="", ts_col="", ts_tz=true, back=0, ahead=0, sort_by="",
+    casts=Dict{String,String}()) =
+    FillSpec((schema, table, kind, zone_pred, ts_col, ts_tz, back, ahead, sort_by, casts))
+
+const _ZONE_AREA = "area_map_code = ANY(\$ZONES)"
+const _UNITS_OF_ZONES = "SELECT generation_unit_code FROM entsoe.production_and_generation_units WHERE area_map_code = ANY(\$ZONES)"
+
+"""
+    FILL_SPECS
+
+The clearing path's input tables (record and forecast). Lookbacks (days) from the readers:
+load/RES forecasts and ATC/JAO: the delivery day plus the trailing windows the readers use
+(trailing Day-ahead ATC 7 d, RES baseline, analogue features); actual load 400 (:v3 analogue
+days, 365); physical flows 400 (366-day demonstrated capability, 365-day boundary flows,
+net-import lags/analogues); aggregated generation 400 (365-day hydro availability, 30-day p95,
+14-day pump profile); per-unit generation 75 (60-day recent generation from the feed bound,
+7-day stale override, 7-day feed probe) plus the stale-feed extension.
+cv46 (re-audited 2026-11-24, no window change): the Nordic water value reads physical_flows over
+[D-365, D-1) (inside 400), the weekly reservoir readings over all history (`:full`) and the
+reservoir output over D-8..D-2; `native_q15_actuals` (scorer, record eval, the exporters'
+`q15_actual_map`) reads Day-ahead prices of every zone and resolution (the energy_prices spec);
+the 15-min default clear reads the same tables at their native resolution (no resolution filter
+anywhere); the pipeline resume check reads the seeded `simulations.energy_prices`.
+"""
+const FILL_SPECS = FillSpec[
+    _fs("entsoe", "day_ahead_total_load_forecast", :window;   # all zones: HOURLY_LOAD_FC_SQL (map weights)
+        ts_col="date_time_utc", back=31, ahead=2, sort_by="area_map_code, date_time_utc"),
+    _fs("entsoe", "actual_total_load", :window;   # all zones: the realized-horizon MAX(date) probes
+        ts_col="date_time_utc", back=400, ahead=0, sort_by="area_map_code, date_time_utc"),
+    _fs("entsoe", "generation_forecasts_for_wind_and_solar", :window; zone_pred=_ZONE_AREA,
+        ts_col="date_time_utc", back=31, ahead=2, sort_by="area_map_code, date_time_utc"),
+    _fs("entsoe", "energy_prices", :window;   # all zones: da_raw_rows / native_q15_actuals read every BZN
+        zone_pred="contract_type = 'Day-ahead'",
+        ts_col="date_time_utc", back=31, ahead=1, sort_by="map_code, date_time_utc"),
+    # all borders: _da_ever_borders (all history), the trailing 7-day Day-ahead read and the zone
+    # discovery take every border, so the DA sentinel covers every border too
+    _fs("entsoe", "offered_transfer_capacities_implicit", :da_sentinel;
+        ts_col="date_time_utc", back=31, ahead=1, sort_by="out_map_code, in_map_code, date_time_utc"),
+    _fs("entsoe", "offered_transfer_capacities_explicit", :window;
+        ts_col="date_time_utc", back=31, ahead=1, sort_by="out_map_code, in_map_code, date_time_utc"),
+    _fs("jao", "max_exchanges", :window; ts_col="date_time_utc", back=31, ahead=1,
+        sort_by="ccr, border_from, border_to, date_time_utc"),
+    _fs("jao", "hub_net_positions", :window; ts_col="date_time_utc", back=31, ahead=1,
+        sort_by="ccr, hub, date_time_utc"),
+    # all pairs: _net_imports_day_relation_at and _fbmc_capability take every BZN–BZN pair, incl. the
+    # ones touching no footprint zone (AL–ME/XK, BA–HR/ME, GE–…, UA_IPS–…, GB–IE_SEM, MK–XK)
+    _fs("entsoe", "physical_flows", :window;
+        ts_col="date_time_utc", back=400, ahead=0, sort_by="in_area_map_code, out_area_map_code, date_time_utc"),
+    _fs("entsoe", "aggregated_generation_per_type", :window;   # all zones: _type_p95_all_zones, _hydro_avail
+        ts_col="date_time_utc", back=400, ahead=0, sort_by="area_map_code, production_type, date_time_utc"),
+    _fs("entsoe", "aggregated_hydro_storage_filling_rate", :full;   # all zones: the inputs panel
+        sort_by="area_map_code, year, week"),
+    _fs("entsoe", "production_and_generation_units", :full;   # all zones: installed capacity, units export
+        sort_by="area_map_code, generation_unit_code"),
+    # every asset: _day_outages_intervals takes every message overlapping the day
+    _fs("entsoe", "unavailability_of_production_and_generation_units", :overlap;
+        back=1, ahead=1, sort_by="asset_code, start_outage_utc",
+        casts=Dict("start_outage_utc" => "TIMESTAMP", "end_outage_utc" => "TIMESTAMP")),
+    _fs("entsoe", "unavailability_in_the_transmission_grid", :overlap; back=1, ahead=1,
+        sort_by="out_area_map_code, in_area_map_code, start_outage_utc",
+        casts=Dict("start_outage_utc" => "TIMESTAMP", "end_outage_utc" => "TIMESTAMP",
+                   "version_publication_timestamp_utc" => "TIMESTAMP")),
+    # every unit: the outage reader's stale-override EXISTS runs per outage asset (every asset); the
+    # stale-feed extension below the window stays per zone
+    _fs("entsoe", "actual_generation_output_per_generation_unit", :per_unit;
+        ts_col="date_time_utc", back=75, ahead=0, sort_by="generation_unit_code, date_time_utc"),
+    _fs("yfinance", "ttf_f", :full; sort_by="date"),
+    _fs("yfinance", "eua_co2", :full; sort_by="date"),
+    _fs("epias", "mcp", :full; sort_by="date_time_utc"),
+    _fs("epias", "load_forecast", :full; sort_by="date_time_utc"),
+    _fs("epias", "gas_reference_price", :full; sort_by="date_time_utc"),
+    _fs("epias", "actual_generation", :full; sort_by="date_time_utc, source"),
+    # simulations.input_corrections is filled per profile (fill_profile, `_ic_spec`): seeded into
+    # the results DB (single-process jobs read it back there, incl. their own cv32 writes) AND
+    # copied into the inputs file for processes that cannot open the results DB (pipelined book
+    # workers, EUPHEMIA_RESULTS_READBACK=inputs).
+    _fs("simulations", "unit_firms", :full),   # all zones: the units export
+    # GB_FR_BOOK (FR boundary, every clear) anchors on uka_price(); may be absent in a source
+    # (FILL_OPTIONAL: then recorded absent and the reader's EUA fallback applies, as against it)
+    _fs("carbon", "uka_price", :full),
+]
+
+# ---------------------------------------------------------------------------
+# literals and windows
+# ---------------------------------------------------------------------------
+_pg_str(s) = "'" * replace(String(s), "'" => "''") * "'"
+_pg_zones(zones) = "ARRAY[" * join((_pg_str(z) for z in zones), ", ") * "]::text[]"
+_pg_day(d::Date, tz::Bool) = tz ? "($(_pg_str(Dates.format(d, "yyyy-mm-dd")))::date::timestamp AT TIME ZONE 'UTC')" :
+                                  "$(_pg_str(Dates.format(d, "yyyy-mm-dd")))::timestamp"
+
+"Merged `[lo, hi)` day intervals: the union over `days` of `[d - back, d + ahead + 1)`."
+function fill_windows(days, back::Int, ahead::Int)
+    iv = sort([(d - Day(back), d + Day(ahead + 1)) for d in unique(days)])
+    out = Tuple{Date,Date}[]
+    for (lo, hi) in iv
+        if !isempty(out) && lo <= out[end][2]
+            out[end] = (out[end][1], max(out[end][2], hi))
+        else
+            push!(out, (lo, hi))
+        end
+    end
+    return out
+end
+
+_time_pred(col, wins, tz) = "(" * join(("($col >= $(_pg_day(lo, tz)) AND $col < $(_pg_day(hi, tz)))"
+                                        for (lo, hi) in wins), " OR ") * ")"
+
+_zone_sub(pred, zones) = replace(pred, "\$ZONES" => _pg_zones(zones))
+
+# A timestamp column as naive UTC, independent of the source session's TimeZone: timestamptz via
+# AT TIME ZONE 'UTC'; text (production's outage start/end) via ::timestamp (no zone involved);
+# naive timestamp as is.
+_naive_utc(c, t) = t == "timestamp with time zone" ? "(\"$c\" AT TIME ZONE 'UTC')" :
+                   t == "timestamp without time zone" ? "\"$c\"" : "\"$c\"::timestamp"
+
+"""
+    fill_pg_query(spec, days, zones; stale_lo=Dict()) -> (sql, windows)
+
+The Postgres-side SELECT for one manifest entry (filters with literals, every timestamptz
+column projected `AT TIME ZONE 'UTC'` like the extract builder) and the `[lo, hi)` windows it
+covers (empty for full tables). `cols` is the source column list `(name, pg_type)`.
+"""
+function fill_pg_query(spec::FillSpec, cols, days, zones; stale_lo::Dict{String,Date}=Dict{String,Date}())
+    ctype = Dict(cols)
+    # timestamptz always AT TIME ZONE 'UTC' (also when a cast is listed: a `::TIMESTAMP` of a timestamptz
+    # would use the source session's TimeZone); casts apply to text columns
+    proj = join((t == "timestamp with time zone" ? "\"$c\" AT TIME ZONE 'UTC' AS \"$c\"" :
+                 haskey(spec.casts, c) && t != "timestamp without time zone" ? "\"$c\"::$(spec.casts[c]) AS \"$c\"" : "\"$c\""
+                 for (c, t) in cols), ", ")
+    preds = String[]
+    isempty(spec.zone_pred) || push!(preds, _zone_sub(spec.zone_pred, zones))
+    wins = Tuple{Date,Date}[]
+    if spec.kind in (:window, :da_sentinel, :per_unit)
+        wins = fill_windows(days, spec.back, spec.ahead)
+        tp = _time_pred(spec.ts_col, wins, spec.ts_tz)
+        if spec.kind === :per_unit && !isempty(stale_lo)
+            # stale-feed zones: the rescue window anchors at the zone's last observation,
+            # which can lie before the common window
+            first_lo = wins[1][1]
+            ext = ["(generation_unit_code IN (SELECT generation_unit_code FROM entsoe.production_and_generation_units WHERE area_map_code = $(_pg_str(z))) AND $(spec.ts_col) >= $(_pg_day(lo, true)) AND $(spec.ts_col) < $(_pg_day(first_lo, true)))"
+                   for (z, lo) in sort(collect(stale_lo)) if lo < first_lo]
+            isempty(ext) || (tp = "($tp OR " * join(ext, " OR ") * ")")
+        end
+        push!(preds, tp)
+    elseif spec.kind === :overlap
+        # The outage readers (_day_outages_*, tx_outage_caps) pick every MESSAGE with any version
+        # overlapping the delivery day, then take the version known at the gate, which may have
+        # moved outside the day: copy ALL versions (rows) of every message (instance_code) with a
+        # version overlapping one of the run's day windows ([d - back, d + ahead + 1), unioned).
+        wins = fill_windows(days, spec.back, spec.ahead)
+        so = _naive_utc("start_outage_utc", get(ctype, "start_outage_utc", "text"))
+        eo = _naive_utc("end_outage_utc", get(ctype, "end_outage_utc", "text"))
+        ov = join(("($so < $(_pg_day(hi, false)) AND $eo >= $(_pg_day(lo, false)))"
+                   for (lo, hi) in wins), " OR ")
+        push!(preds, "instance_code IN (SELECT instance_code FROM $(spec.schema).$(spec.table) " *
+                     "WHERE start_outage_utc IS NOT NULL AND end_outage_utc IS NOT NULL AND ($ov))")
+    end
+    where = isempty(preds) ? "" : " WHERE " * join(preds, " AND ")
+    sql = "SELECT $proj FROM $(spec.schema).$(spec.table)$where"
+    if spec.kind === :da_sentinel
+        zp = isempty(spec.zone_pred) ? "" : " AND " * _zone_sub(spec.zone_pred, zones)
+        sql *= " UNION ALL SELECT * FROM (SELECT DISTINCT ON (out_map_code, in_map_code) $proj " *
+               "FROM $(spec.schema).$(spec.table) WHERE contract_type = 'Day-ahead' AND " *
+               "$(spec.ts_col) < $(_pg_day(wins[1][1], spec.ts_tz))$zp " *
+               "ORDER BY out_map_code, in_map_code, $(spec.ts_col)) s"
+    end
+    return sql, wins
+end
+
+# ---------------------------------------------------------------------------
+# the fill
+# ---------------------------------------------------------------------------
+# A fill source is Postgres (production: `postgres_query` runs the filter SQL inside Postgres)
+# or, for offline proofs, a DuckDB extract attached READ_ONLY as `src` (the same filter SQL,
+# through the backend's dialect rewrite, with every source table qualified `src.`).
+const _FILL_SOURCE = Ref{Symbol}(:postgres)
+# Qualify BEFORE the dialect rewrite: under a run-local fill the rewrite redirects read-back tables
+# (simulations.forecast_prices, …) to results_db, so a rewrite-first seed read the empty results table
+# instead of the source; an `src.`-qualified name is never redirected.
+_qualify_src(sql) = _duckdb_rewrite(replace(sql,
+    r"(?<![\w.])(entsoe|jao|yfinance|epias|simulations|weather|information_schema|carbon)\." => s"src.\1."))
+_src_from(sql) = _FILL_SOURCE[] === :postgres ? "postgres_query('pg', $(_pg_str(sql)))" :
+                                                 "($(_qualify_src(sql)))"
+_pg_rows(con, sql) = collect(DBInterface.execute(con, "SELECT * FROM $(_src_from(sql))"))
+
+"Source columns `(name, data_type)` of a Postgres table, via the attached catalog."
+function _pg_columns(con, schema, table)
+    rows = _FILL_SOURCE[] === :postgres ?
+        _pg_rows(con, "SELECT column_name, data_type FROM information_schema.columns " *
+                      "WHERE table_schema = $(_pg_str(schema)) AND table_name = $(_pg_str(table)) " *
+                      "ORDER BY ordinal_position") :
+        collect(DBInterface.execute(con, "SELECT column_name, data_type FROM information_schema.columns " *
+                      "WHERE table_catalog = 'src' AND table_schema = $(_pg_str(schema)) AND table_name = $(_pg_str(table)) " *
+                      "ORDER BY ordinal_position"))
+    isempty(rows) && error("fill: $schema.$table not found in Postgres")
+    return [(String(r.column_name), String(r.data_type)) for r in rows]
+end
+
+"""
+Per-zone lower bound of the per-unit window for stale feeds. For the earliest feed bound of the
+run (`bound_min`), zones with no positive output in its last FEED_STALE_DAYS get
+`last_obs - RESCUE_WINDOW` (their rescue window starts there on every later day too, since the
+last observation can only move forward). Same SQL semantics as `_feed_last_obs`.
+"""
+function _stale_feed_lower(con, zones, bound_min::DateTime)
+    fmt(t) = Dates.format(t, "yyyy-mm-dd HH:MM:SS")
+    units = "SELECT DISTINCT generation_unit_code, area_map_code FROM entsoe.production_and_generation_units WHERE area_map_code = ANY($(_pg_zones(zones)))"
+    healthy = Set(String(r.z) for r in _pg_rows(con,
+        "SELECT DISTINCT u.area_map_code AS z FROM entsoe.actual_generation_output_per_generation_unit a " *
+        "JOIN ($units) u USING (generation_unit_code) " *
+        "WHERE a.date_time_utc >= TIMESTAMP $(_pg_str(fmt(ceil(bound_min - FEED_STALE_DAYS, Dates.Second)))) " *
+        "AND a.date_time_utc < TIMESTAMP $(_pg_str(fmt(bound_min))) AND a.actual_generation_output_mw > 0"))
+    stale = [z for z in zones if !(z in healthy)]
+    out = Dict{String,Date}()
+    isempty(stale) && return out
+    for r in _pg_rows(con,
+        "SELECT u.area_map_code AS z, MAX(a.date_time_utc) AS last_obs FROM entsoe.actual_generation_output_per_generation_unit a " *
+        "JOIN (SELECT DISTINCT generation_unit_code, area_map_code FROM entsoe.production_and_generation_units WHERE area_map_code = ANY($(_pg_zones(stale)))) u " *
+        "USING (generation_unit_code) WHERE a.date_time_utc < TIMESTAMP $(_pg_str(fmt(bound_min))) " *
+        "AND a.actual_generation_output_mw > 0 GROUP BY 1")
+        ismissing(r.last_obs) && continue
+        out[String(r.z)] = Date(DateTime(r.last_obs) - RESCUE_WINDOW) - Day(1)
+    end
+    return out
+end
+
+"""
+    fill_run_duckdb(path; days, zones, conn_str, feed_bound_min=nothing, specs=FILL_SPECS) -> path
+
+Create the run-local inputs DuckDB at `path` (must not exist) with every manifest table for
+`days` × `zones`, copied from Postgres by DuckDB's postgres extension. `feed_bound_min` is the
+earliest per-unit feed bound of the run (record: `minimum(days) - 7 d + 10 h`; forecast:
+`issuance - 6 d`); it decides the stale-feed extension. Writes `_fill.windows` (one row per
+filled interval) and `_fill.run` (days, zones, timings) for the strict read guard.
+"""
+function fill_run_duckdb(path::AbstractString; days, zones::Vector{String}, conn_str::AbstractString="",
+                         feed_bound_min::Union{Nothing,DateTime}=nothing,
+                         specs::Vector{FillSpec}=FILL_SPECS,
+                         source::Symbol=:postgres, source_path::AbstractString="")
+    ispath(path) && error("fill_run_duckdb: $path exists (a run DB is created fresh)")
+    days = sort(unique(Date.(days)))
+    isempty(days) && error("fill_run_duckdb: no days")
+    t_all = time()
+    db = DuckDB.DB(String(path))
+    con = DBInterface.connect(db)
+    try
+        DBInterface.execute(con, "SET TimeZone = 'UTC'")
+        # DuckDB sizes itself from the machine, not the process's cgroup: bound it explicitly
+        # (EUPHEMIA_FILL_MEMORY / EUPHEMIA_FILL_THREADS; spill next to the run file).
+        DBInterface.execute(con, "SET memory_limit = $(_pg_str(get(ENV, "EUPHEMIA_FILL_MEMORY", "1GB")))")
+        DBInterface.execute(con, "SET threads = $(parse(Int, get(ENV, "EUPHEMIA_FILL_THREADS", "4")))")
+        tmpdir = String(path) * ".tmp"
+        mkpath(tmpdir)
+        DBInterface.execute(con, "SET temp_directory = $(_pg_str(tmpdir))")
+        DBInterface.execute(con, "SET preserve_insertion_order = false")
+        source in (:postgres, :duckdb) || error("fill_run_duckdb: source must be :postgres or :duckdb")
+        _FILL_SOURCE[] = source
+        src_tz = "n/a (duckdb source)"
+        # the fill connection's own zone (SET above; DuckDB's TimeZone needs ICU, absent → "n/a")
+        scan_tz = try String(collect(DBInterface.execute(con, "SELECT current_setting('TimeZone') AS tz"))[1].tz) catch; "n/a" end
+        if source === :postgres
+            attach_postgres!(con, conn_str; alias="pg", read_only=true)   # pins + verifies UTC
+            src_tz = postgres_session_timezone(con)
+        else
+            isfile(source_path) || error("fill_run_duckdb: source DuckDB $source_path not found")
+            DBInterface.execute(con, "ATTACH $(_pg_str(source_path)) AS src (READ_ONLY)")
+        end
+        DBInterface.execute(con, "CREATE SCHEMA _fill")
+        DBInterface.execute(con, "CREATE TABLE _fill.windows (schema_name VARCHAR, table_name VARCHAR, kind VARCHAR, lo DATE, hi DATE, n_rows BIGINT, seconds DOUBLE)")
+        bmin = feed_bound_min === nothing ? DateTime(minimum(days)) - Day(7) + Hour(10) : feed_bound_min
+        t0 = time()
+        stale_lo = any(s -> s.kind === :per_unit, specs) ? _stale_feed_lower(con, zones, bmin) : Dict{String,Date}()
+        println("  fill: stale-feed zones $(sort(collect(keys(stale_lo)))) ($(round(time() - t0, digits=1)) s)"); flush(stdout)
+        for spec in specs
+            t0 = time()
+            cols = try
+                _pg_columns(con, spec.schema, spec.table)
+            catch e
+                "$(spec.schema).$(spec.table)" in FILL_OPTIONAL || rethrow()
+                # recorded: under this fill (and only for this table) a read's Catalog Error is
+                # allowed, so the reader's documented fallback runs exactly as against the source
+                DBInterface.execute(con, "INSERT INTO _fill.windows VALUES ($(_pg_str(spec.schema)), $(_pg_str(spec.table)), 'absent', DATE '1900-01-01', DATE '2999-12-31', 0, 0.0)")
+                println("  fill $(spec.schema).$(spec.table): ABSENT in the source (recorded; its readers fall back)"); flush(stdout)
+                continue
+            end
+            sql, wins = fill_pg_query(spec, cols, days, zones; stale_lo=stale_lo)
+            DBInterface.execute(con, "CREATE SCHEMA IF NOT EXISTS $(spec.schema)")
+            order = isempty(spec.sort_by) ? "" : " ORDER BY $(spec.sort_by)"
+            DBInterface.execute(con, "CREATE TABLE $(spec.schema).$(spec.table) AS SELECT * FROM $(_src_from(sql))$order")
+            # flush each table to disk so its pages (and the sort's buffers) can be released:
+            # without it a multi-day fill held every finished table in memory (OOM at 6 GB)
+            DBInterface.execute(con, "CHECKPOINT")
+            n = collect(DBInterface.execute(con, "SELECT count(*) AS n FROM $(spec.schema).$(spec.table)"))[1].n
+            dt = time() - t0
+            ws = isempty(wins) ? [(Date(1900, 1, 1), Date(2999, 12, 31))] : wins
+            if spec.kind === :per_unit && !isempty(stale_lo)
+                ws = vcat(ws, [(lo, wins[1][1]) for lo in values(stale_lo) if lo < wins[1][1]])
+            end
+            for (lo, hi) in ws
+                DBInterface.execute(con, "INSERT INTO _fill.windows VALUES ($(_pg_str(spec.schema)), $(_pg_str(spec.table)), $(_pg_str(String(spec.kind))), DATE $(_pg_str(string(lo))), DATE $(_pg_str(string(hi))), $n, $dt)")
+            end
+            println("  fill $(spec.schema).$(spec.table): $n rows, $(round(dt, digits=1)) s"); flush(stdout)
+        end
+        DBInterface.execute(con, "CREATE TABLE _fill.run AS SELECT $(_pg_str(join(string.(days), ","))) AS days, $(_pg_str(join(zones, ","))) AS zones, $(round(time() - t_all, digits=2)) AS seconds, now() AS filled_at, $(_pg_str(src_tz)) AS source_timezone, $(_pg_str(scan_tz)) AS scanner_timezone")
+        source === :postgres ? detach_postgres!(con) : DBInterface.execute(con, "DETACH src")
+    finally
+        _FILL_SOURCE[] = :postgres
+        rm(String(path) * ".tmp"; force=true, recursive=true)
+        DBInterface.close!(con)
+        DuckDB.close(db)
+    end
+    return String(path)
+end
+
+# ---------------------------------------------------------------------------
+# Profiles: which input tables (inputs.duckdb) and which results-side slices (results.duckdb,
+# seeded for read-back) a production job needs.
+# ---------------------------------------------------------------------------
+# Optional inputs: tables production Postgres holds but older sources may lack. A missing
+# optional table is skipped (no _fill.windows row), so any read of it fails the guard loudly.
+const FILL_OPTIONAL = Set(["carbon.uka_price", "simulations.model_lines", "simulations.tsfm_overlay"])
+
+"""
+The fill-time copy of the cv32 corrections in inputs.duckdb, over the same window as the
+results seed (the read-back of a process that cannot attach the results DB)."""
+_ic_spec(back, ahead) = _fs("simulations", "input_corrections", :window; ts_col="date_time_utc", ts_tz=false,
+                            back=back, ahead=ahead, sort_by="bidding_zone, date_time_utc")
+
+"Extra input tables of the forecast job's score/export steps and the GB boundary book."
+const FORECAST_EXTRA_SPECS = FillSpec[
+    _fs("simulations", "model_lines", :full),                            # exporters (model_lines_map)
+    _fs("simulations", "tsfm_overlay", :full),                           # TSFM_OVERLAY_SQL reads from 2000-01-01
+]
+
+"""
+    env_int(name, default) -> Int
+
+An integer environment setting where an EMPTY or blank value means unset: a workflow passes
+`\${{ inputs.x }}`, which is "" on a schedule and on a dispatch that leaves the input blank, and
+`parse(Int, "")` threw (the scheduled publish died at the fill, review of #472 #1)."""
+function env_int(name::AbstractString, default::Integer)
+    v = strip(get(ENV, name, ""))
+    return isempty(v) ? Int(default) : parse(Int, v)
+end
+
+"""
+    fill_profile(profile; start, stop, asof, zones) -> (days, zones, specs, seeds)
+
+`:record`: delivery days `start:stop`, the clearing tables. `:daily_forecast` / `:export`:
+the run's UTC days `asof-1 … asof+8` (7 leads + the stitched next-day tails), the clearing
+tables (the score/export steps of the same job reuse the inputs), actual prices 400 days back
+(scorer and exporters), and the extra forecast tables. `seeds` are the results-side slices
+copied into results.duckdb for read-back.
+"""
+function fill_profile(profile::Symbol; start::Union{Nothing,Date}=nothing, stop::Union{Nothing,Date}=nothing,
+                      asof::Date=Date(Dates.now(Dates.UTC)), zones::Vector{String},
+                      inputs_back_days::Int=0, days_list::Union{Nothing,Vector{Date}}=nothing,
+                      needs::Union{Nothing,NamedTuple}=nothing)
+    if profile === :record
+        days = days_list !== nothing ? sort(unique(days_list)) :
+               (start === nothing || stop === nothing) ? error("fill profile :record needs start/stop or a day list") :
+               collect(start:Day(1):stop)
+        specs = vcat(FILL_SPECS, [_ic_spec(1, 2)])
+        ep = join(("(date_time_utc >= $(_pg_day(lo, true)) AND date_time_utc < $(_pg_day(hi, true)))" for (lo, hi) in fill_windows(days, 0, 0)), " OR ")
+        ic = join(("(date_time_utc >= $(_pg_day(lo, false)) AND date_time_utc < $(_pg_day(hi, false)))" for (lo, hi) in fill_windows(days, 1, 2)), " OR ")
+        # energy_prices: the run days' existing prices, so skip-existing behaves as against Postgres
+        seeds = [(table="energy_prices", where=ep),
+                 (table="input_corrections", where=ic, win=fill_windows(days, 1, 2))]
+    elseif profile in (:daily_forecast, :export)
+        days = collect((asof - Day(1)):Day(1):(asof + Day(8)))
+        # The readers' windows depend on the data (review of #472 #2/#7), so the CLI resolves them from
+        # the source first (`resolve_forecast_needs`); an unresolved call is an error, never a guess.
+        needs === nothing && error("fill profile :$profile needs `needs` from resolve_forecast_needs " *
+                                   "(map_start, history_start)")
+        # actual prices: the scorer's oldest unscored slice, the exporters' days and the naive baselines
+        # (oldest live score − 8) all lie within the forecast history: its oldest market date − 8, − 1
+        # more for the Athens window's start on the previous UTC day. Floor: the clearing readers' 31.
+        prices_back = needs.history_start === nothing ? 31 :
+                      max(31, Dates.value(days[1] - (needs.history_start - Day(9))))
+        # day-ahead load forecast: the map exporters' weights (HOURLY_LOAD_FC_SQL) over the last
+        # EXPORT_MAP_DAYS distinct forecast market dates, from map_start − 1
+        load_back = needs.map_start === nothing ? 0 : Dates.value(days[1] - (needs.map_start - Day(1)))
+        specs = FillSpec[s.table == "energy_prices" ?
+                         _fs("entsoe", "energy_prices", :window; zone_pred=s.zone_pred, ts_col=s.ts_col,
+                             back=prices_back, ahead=1, sort_by=s.sort_by) :
+                         (s.table == "day_ahead_total_load_forecast" && load_back > s.back) ?
+                         _fs(s.schema, s.table, s.kind; zone_pred=s.zone_pred, ts_col=s.ts_col, ts_tz=s.ts_tz,
+                             back=load_back, ahead=s.ahead, sort_by=s.sort_by, casts=s.casts) : s
+                         for s in FILL_SPECS]
+        append!(specs, FORECAST_EXTRA_SPECS)
+        push!(specs, _ic_spec(4, 1))   # [asof-5, asof+10), the seed's window
+        # export_prediction_inputs.jl reads INPUTS_BACK_DAYS back on these tables
+        if inputs_back_days > 0
+            ib = Set(["generation_forecasts_for_wind_and_solar", "aggregated_generation_per_type",
+                      "actual_total_load", "day_ahead_total_load_forecast"])
+            specs = FillSpec[(s.table in ib && s.kind === :window && s.back < inputs_back_days + 1) ?
+                             _fs(s.schema, s.table, s.kind; zone_pred=s.zone_pred, ts_col=s.ts_col, ts_tz=s.ts_tz,
+                                 back=inputs_back_days + 1, ahead=s.ahead, sort_by=s.sort_by, casts=s.casts) : s
+                             for s in specs]
+        end
+        seeds = [(table="forecast_prices", where=""),
+                 (table="forecast_scores", where=""),
+                 (table="input_corrections", where="date_time_utc >= $(_pg_day(asof - Day(5), false)) AND date_time_utc < $(_pg_day(asof + Day(10), false))",
+                  win=[(asof - Day(5), asof + Day(10))]),
+                 (table="transmission_flows", where="date_time_utc >= $(_pg_day(asof - Day(121), true))")]
+    elseif profile === :retro
+        # bin/daily_forecast.jl run_retro: lead 1 reconstructed for market days S..E, two UTC
+        # clears (D-1, D) per market day at D's gate. Weather comes from open-meteo / the
+        # exported vintages file (EUPHEMIA_WEATHER_DUCKDB), never Postgres.
+        (start === nothing || stop === nothing) && error("fill profile :retro needs start and stop")
+        days = collect((start - Day(1)):Day(1):stop)
+        specs = vcat(FILL_SPECS, FORECAST_EXTRA_SPECS, [_ic_spec(1, 2)])
+        md = "market_date BETWEEN $(_pg_str(string(start)))::date AND $(_pg_str(string(stop)))::date"
+        seeds = [(table="forecast_prices", where=md),
+                 (table="forecast_scores", where=md),
+                 (table="input_corrections", where="date_time_utc >= $(_pg_day(start - Day(2), false)) AND date_time_utc < $(_pg_day(stop + Day(3), false))",
+                  win=[(start - Day(2), stop + Day(3))])]
+    elseif profile === :rescore
+        # score_forecasts.jl rescore modes + forecast_scores_snapshot.jl (rescore-hourly/-q15):
+        # actual Day-ahead prices (every resolution) over the window; the scores table whole
+        # (the snapshot reads it all), the forecasts for the window's market days.
+        (start === nothing || stop === nothing) && error("fill profile :rescore needs start and stop")
+        days = collect(start:Day(1):stop)
+        specs = FillSpec[_fs("entsoe", "energy_prices", :window;
+                             zone_pred="contract_type = 'Day-ahead'",   # the scorer's actuals read every zone
+                             ts_col="date_time_utc", back=1, ahead=1, sort_by="map_code, date_time_utc")]
+        zf = "bidding_zone = ANY($(_pg_zones(zones)))"
+        md = "market_date BETWEEN $(_pg_str(string(start)))::date AND $(_pg_str(string(stop)))::date"
+        seeds = [(table="forecast_prices", where="$md AND $zf"),
+                 (table="forecast_scores", where="")]
+    else
+        error("unknown fill profile $profile (record | daily_forecast | export | retro | rescore)")
+    end
+    return (days=days, zones=zones, specs=specs, seeds=seeds)
+end
+
+"""
+    seed_run_results!(con, seeds) -> Vector{(table, rows, seconds)}
+
+Copy each results-side slice from Postgres (`pg`, already attached on `con`) into the attached
+results file (`results_db.simulations.<table>`, created beforehand by the results-side ensure
+functions). Columns = the results table's columns that Postgres also has (local-only columns
+such as `transfer_op_id` stay NULL); timestamptz arrive as naive UTC.
+"""
+function seed_run_results!(con, seeds)
+    out = NamedTuple[]
+    # results_db._fill.seeds: which read-back tables (and windows) this results DB holds; under a fill
+    # a read-back of an unseeded table, or outside a windowed seed, raises (`_readback_check`)
+    DBInterface.execute(con, "CREATE SCHEMA IF NOT EXISTS results_db._fill")
+    DBInterface.execute(con, "CREATE TABLE IF NOT EXISTS results_db._fill.seeds (table_name VARCHAR, lo DATE, hi DATE, n_rows BIGINT)")
+    for sd in seeds
+        t0 = time()
+        tgt = collect(DBInterface.execute(con,
+            "SELECT column_name FROM information_schema.columns WHERE table_catalog = 'results_db' " *
+            "AND table_schema = 'simulations' AND table_name = $(_pg_str(sd.table)) ORDER BY ordinal_position"))
+        if isempty(tgt)
+            # before the results-side DDL (ensure_run_results_tables!) is integrated, skip loudly
+            isdefined(@__MODULE__, :ensure_run_results_tables!) &&
+                error("seed: results_db.simulations.$(sd.table) does not exist (run the results ensure first)")
+            println("  seed results_db.simulations.$(sd.table): no results table yet (ensure_run_results_tables! not in this build), skipped"); flush(stdout)
+            continue
+        end
+        srccols = try
+            _pg_columns(con, "simulations", sd.table)
+        catch
+            # offline proof mode: an extract carries no results tables
+            _FILL_SOURCE[] === :duckdb || rethrow()
+            println("  seed results_db.simulations.$(sd.table): absent in the offline source, skipped"); flush(stdout)
+            continue
+        end
+        src = Dict(c => t for (c, t) in srccols)
+        cols = [String(r.column_name) for r in tgt if haskey(src, String(r.column_name))]
+        proj = join((src[c] == "timestamp with time zone" ? "\"$c\" AT TIME ZONE 'UTC' AS \"$c\"" : "\"$c\"" for c in cols), ", ")
+        where = isempty(sd.where) ? "" : " WHERE $(sd.where)"
+        sql = "SELECT $proj FROM simulations.$(sd.table)$where"
+        clist = join(("\"$c\"" for c in cols), ", ")
+        DBInterface.execute(con, "INSERT INTO results_db.simulations.$(sd.table) ($clist) SELECT * FROM $(_src_from(sql))")
+        n = collect(DBInterface.execute(con, "SELECT count(*) AS n FROM results_db.simulations.$(sd.table)"))[1].n
+        for (lo, hi) in (haskey(sd, :win) ? sd.win : [(Date(1900, 1, 1), Date(2999, 12, 31))])
+            DBInterface.execute(con, "INSERT INTO results_db._fill.seeds VALUES (?, ?, ?, ?)", Any[sd.table, lo, hi, n])
+        end
+        push!(out, (table=sd.table, rows=n, seconds=time() - t0))
+        println("  seed results_db.simulations.$(sd.table): $n rows, $(round(time() - t0, digits=1)) s"); flush(stdout)
+    end
+    return out
+end
+
+"Market dates in the map exporters' window (bin/export_forecast_json.jl, bin/export_web_parquet.jl `MAP_DAYS`)."
+const EXPORT_MAP_DAYS = 60
+
+"""
+    resolve_forecast_needs(; conn_str="", source=:postgres, source_path="") -> (map_start, history_start)
+
+The data-dependent windows of the daily-forecast/export jobs' readers, resolved inside the fill step
+through the same attach (review of #472 #2/#7): `map_start` = the oldest of the last
+`EXPORT_MAP_DAYS` distinct `forecast_prices` market dates (the map exporters' window, whose load
+weights read back from `map_start − 1`); `history_start` = the oldest market date in
+`forecast_prices` ∪ `forecast_scores` (scorer, exporters, naive baselines). `nothing` when there is no
+forecast history (an offline source without the tables counts as none)."""
+function resolve_forecast_needs(; conn_str::AbstractString="", source::Symbol=:postgres,
+                                source_path::AbstractString="")
+    db = DuckDB.DB()
+    con = DBInterface.connect(db)
+    try
+        if source === :postgres
+            attach_postgres!(con, conn_str; alias="pg", read_only=true)
+        else
+            DBInterface.execute(con, "ATTACH $(_pg_str(source_path)) AS src (READ_ONLY)")
+        end
+        _FILL_SOURCE[] = source
+        if source === :duckdb
+            has = Set(String(r.table_name) for r in DBInterface.execute(con,
+                "SELECT table_name FROM duckdb_tables() WHERE database_name = 'src' AND schema_name = 'simulations'"))
+            ("forecast_prices" in has && "forecast_scores" in has) || return (map_start=nothing, history_start=nothing)
+        end
+        m = _pg_rows(con, "SELECT MIN(market_date) AS d FROM (SELECT DISTINCT market_date FROM " *
+                          "simulations.forecast_prices ORDER BY market_date DESC LIMIT $EXPORT_MAP_DAYS) s")
+        h = _pg_rows(con, "SELECT LEAST((SELECT MIN(market_date) FROM simulations.forecast_prices), " *
+                          "(SELECT MIN(market_date) FROM simulations.forecast_scores)) AS d")
+        d(r) = (isempty(r) || ismissing(r[1].d)) ? nothing : Date(r[1].d)
+        return (map_start=d(m), history_start=d(h))
+    finally
+        _FILL_SOURCE[] = :postgres
+        DBInterface.close!(con)
+        DuckDB.close(db)
+    end
+end
+
+"""
+    resolve_rescore_start(; zones, conn_str="", source=:postgres, source_path="") -> Date
+
+`--start auto` for the rescore profile (rescore-hourly's empty start = full history): the
+first market_date of simulations.forecast_prices for `zones`, resolved inside the fill step
+through the same attach (the workflow never reads Postgres outside the fill).
+"""
+function resolve_rescore_start(; zones::Vector{String}, conn_str::AbstractString="",
+                               source::Symbol=:postgres, source_path::AbstractString="")
+    db = DuckDB.DB()
+    con = DBInterface.connect(db)
+    try
+        if source === :postgres
+            attach_postgres!(con, conn_str; alias="pg", read_only=true)
+        else
+            DBInterface.execute(con, "ATTACH $(_pg_str(source_path)) AS src (READ_ONLY)")
+        end
+        _FILL_SOURCE[] = source
+        r = _pg_rows(con, "SELECT MIN(market_date) AS d FROM simulations.forecast_prices " *
+                          "WHERE bidding_zone = ANY($(_pg_zones(zones)))")
+        (isempty(r) || ismissing(r[1].d)) && error("rescore --start auto: no forecast_prices rows for these zones")
+        return Date(r[1].d)
+    finally
+        _FILL_SOURCE[] = :postgres
+        DBInterface.close!(con)
+        DuckDB.close(db)
+    end
+end

@@ -597,6 +597,38 @@ restarts the out-of-sample clock from its adoption date.
 
 Dated reminders and scoring-policy notes that do not change `code_version`.
 
+- **2026-11-23 — DuckDB between Postgres and Julia (owner rule); prices unchanged, no `code_version` bump.**
+  Every production job runs fill → run → transfer: one Postgres read (the fill) and one Postgres write (the
+  transfer), both through DuckDB's postgres extension (`attach_postgres!`, src/db/pg_attach.jl); Julia reads no
+  Postgres row and opens no LibPQ connection in those jobs.
+  - Fill: `bin/fill_run_duckdb.jl --profile record|daily-forecast|export|retro|rescore` copies exactly the rows the
+    job's readers need into a run-local `inputs.duckdb` (manifest `FILL_SPECS`, src/db/fill_manifest.jl: per table the
+    zone filter and the readers' lookback per delivery day; the filter runs inside Postgres, timestamptz arrive as naive
+    UTC) and seeds the read-back slices (forecasts, scores, cv32 corrections, recent flows, the record's existing prices)
+    into `results.duckdb`. A strict guard makes any read outside the filled tables/windows fail loudly
+    (`FillGuardError`, which no soft fallback or outer catch swallows); a table absent in the source is recorded and
+    its reader falls back exactly as against that source; every libpq session is pinned to UTC.
+  - Results: every forecast-side and record write goes to the results DuckDB and logs one op;
+    `bin/transfer_run_results.jl` / `bin/transfer_results_to_postgres.jl` stage the rows through the extension and apply
+    them in one server-side transaction (guards and plans re-decided in Postgres, a changed plan aborts with nothing
+    written; `simulations.transfer_log` makes it exactly once; record checksums verified inside the transaction).
+  - Workflows: daily-forecast (both jobs), generate-multi-zone-prices, publish-web-data, retro-backfill, rescore-hourly,
+    rescore-q15; the nightly extract refresh also copies through the extension. `measure-duckdb-path.yml` is the guarded,
+    read-only runner measurement.
+  - Evidence (throwaway test Postgres): 31-day spot check, Postgres path vs fill path vs record #2: 29,016/29,016 bit-identical on all three (0 differing
+    cells); the transfer's
+    Postgres state as expected, replay a no-op, a stale plan refused; retro-backfill and rescore-hourly as written match
+    Postgres; pipelined record (2 book workers) fill path = extract path; a non-UTC session gives identical outage
+    inputs on both paths; on the production runner (run 45195384063, 3 days) the fill took 242 s (330 MiB, peak
+    3.4 GiB RSS) and the day clear 14–35 s on DuckDB vs 195–280 s reading Postgres (record fills: 2.2–2.75 GiB RSS at
+    10–11 days).
+  - After cv46 (2026-11-24, main 5fa39e1 merged in: #477's 15-min default and D1–D4): forecast rows carry D1's
+    `resolution_code` through the run-local results DuckDB and the transfer, which applies D1's catalog-first
+    migration when Postgres lacks the column; the record path already carried `energy_prices.resolution_code`. The
+    manifest was re-audited against the cv46 readers (Nordic water value, `native_q15_actuals`, the exporters'
+    quarter actuals, the resume check): no window change. Same 31 spot days, now 96-step quarter-hour clears,
+    Postgres path (main) vs fill path: 116,064/116,064 bit-identical, 0 differing (all rows `15M` on both sides).
+
 - **2026-11-24 — `markup_factor` deleted (inert since cv25); prices unchanged, no `code_version` bump.** The
   `generate-multi-zone-prices` input and `MARKUP_FACTOR` env, `multi_zone_main.jl`'s parse, the kwarg of every
   clearing/batch entry point and worker tuple, and `MPCC.DEFAULT_MARKUP_FACTOR` are gone (no shim: a caller passing it

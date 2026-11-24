@@ -274,7 +274,12 @@ function newconnection()
         end
     end
 
+    # Session TimeZone pinned to UTC, whatever the server default: `timestamptz::timestamp` and
+    # timestamp/timestamptz comparisons in the readers depend on it (PGTZ = the libpq startup
+    # parameter; the SET makes it explicit). Same pin as attach_postgres! (the fill's scanner).
+    ENV["PGTZ"] = "UTC"
     cnx = LibPQ.Connection(conn_str)
+    LibPQ.execute(cnx, "SET TimeZone = 'UTC'")
     !isdefined(LibPQ, :setnonblocking) && return cnx
     LibPQ.setnonblocking(cnx) && return cnx
     error("Could not set connection to nonblocking")
@@ -309,14 +314,23 @@ function withdb(f)
     end
 end
 
+"""Optional read trace for diagnostics (bin/measure_duckdb_path.jl --trace): when set, called as
+`f(sql, args, df)` after every `sql2df` on either backend, with the caller's (pre-rewrite) SQL. `nothing`
+(the default) = off: no other code path sets it."""
+const SQL_TRACE = Ref{Any}(nothing)
+
 function sql2df(sql, args=[])
-    if DATA_STORE[] == :duckdb
-        return _duckdb_sql2df(sql, args)
+    df = if DATA_STORE[] == :duckdb
+        _duckdb_sql2df(sql, args)
+    else
+        withdb() do cnx
+            result = LibPQ.async_execute(cnx, sql, args)
+            DataFrame(fetch(result))
+        end
     end
-    return withdb() do cnx
-        result = LibPQ.async_execute(cnx, sql, args)
-        return DataFrame(fetch(result))
-    end
+    tr = SQL_TRACE[]
+    tr === nothing || tr(sql, args, df)
+    return df
 end
 
 """
@@ -337,6 +351,7 @@ function sql2df_with_retry(sql, args=[]; max_retries=3, retry_delay=2.0)
         try
             return sql2df(sql, args)
         catch e
+            e isa FillGuardError && rethrow()   # a fill miss is not transient: never retried
             last_error = e
 
             if is_duckdb

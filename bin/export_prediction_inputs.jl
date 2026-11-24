@@ -98,8 +98,8 @@ const OUT_ROOT = get(ENV, "WEB_PARQUET_OUT", joinpath(dirname(@__DIR__), "data",
 const INPUTS_DIR = joinpath(OUT_ROOT, "v1", "inputs")
 # INPUTS_BACK_DAYS is the trailing window (default 30 for the full footprint);
 # INPUTS_HIST_DAYS stays honoured as the legacy alias.
-const HIST_DAYS = parse(Int, get(ENV, "INPUTS_BACK_DAYS",
-                                 get(ENV, "INPUTS_HIST_DAYS", "30")))
+# An empty value (the workflow's blank dispatch input) means unset, as in the fill step.
+const HIST_DAYS = Euphemia.env_int("INPUTS_BACK_DAYS", Euphemia.env_int("INPUTS_HIST_DAYS", 30))
 const HORIZON_DAYS = parse(Int, get(ENV, "INPUTS_HORIZON_DAYS", "2"))
 # The full open surface is the 39-zone footprint; INPUTS_ZONES overrides it.
 const EXPORT_ZONES = strip(get(ENV, "INPUTS_ZONES", "")) == "" ? FORECAST_FOOTPRINT :

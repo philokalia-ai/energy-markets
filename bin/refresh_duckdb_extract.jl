@@ -1,6 +1,12 @@
 # Incrementally refresh an EXISTING DuckDB extract in place — the "living
 # extract". Opens the file read-write and appends, per table, only rows NEWER
-# than the extract's current max timestamp:
+# than the extract's current max timestamp.
+#
+# Owner rule (2026-11-23): DuckDB sits between Postgres and Julia. The source
+# databases are ATTACHed to the extract's DuckDB connection through DuckDB's
+# postgres extension (Euphemia.attach_postgres!: energy as `pg`, weather as `wx`,
+# both READ_ONLY) and every copy runs inside DuckDB (postgres_query); rows never
+# pass through Julia, and no LibPQ connection is opened.
 #
 #   - entsoe.* / yfinance.*  from ENERGY_CONN_STR (same column handling /
 #     naive-UTC conversion as the builder — shared code in bin/extract_common.jl)
@@ -44,8 +50,13 @@
 #   MANIFEST_OUT      optional path for a JSON summary (rows/appended/max ts)
 #   SKIP_CELL_HOURLY  "true" to skip the open-meteo fetch (offline runs)
 
-# The refresher must read the LIVE Postgres, never an auto-detected extract.
-haskey(ENV, "EUPHEMIA_DATA_STORE") || (ENV["EUPHEMIA_DATA_STORE"] = "postgres")
+# The refresher reads the LIVE Postgres through DuckDB's scanner only. Euphemia is
+# loaded on the DuckDB backend (pointed at the extract, opened lazily and never used
+# here) so module init does not open the LibPQ pool.
+if haskey(ENV, "EXTRACT")
+    ENV["EUPHEMIA_DATA_STORE"] = "duckdb"
+    ENV["EUPHEMIA_DUCKDB_PATH"] = ENV["EXTRACT"]
+end
 
 using Euphemia
 using DataFrames
@@ -55,8 +66,6 @@ using Printf
 
 include(joinpath(@__DIR__, "extract_common.jl"))
 include(joinpath(@__DIR__, "weather_res.jl"))   # fetch_weather / parse / retries
-QUERY_FNS[:energy] = (sql, args=Any[]) -> Euphemia.sql2df_with_retry(sql, args)
-QUERY_FNS[:weather] = weather_query
 
 const EXTRACT = get(ENV, "EXTRACT", "")
 const HORIZON_DAYS = parse(Int, get(ENV, "HORIZON_DAYS", "17"))
@@ -148,6 +157,12 @@ function main()
     today = Dates.today()
     db = DuckDB.DB(EXTRACT)   # read-write
     con = DBInterface.connect(db)
+    conn = get(ENV, "ENERGY_CONN_STR", "")
+    isempty(conn) && (println("ERROR: set ENERGY_CONN_STR"); return 1)
+    Euphemia.attach_postgres!(con, conn; alias="pg", read_only=true)
+    haskey(ENV, "WEATHER_CONN_STR") &&
+        Euphemia.attach_postgres!(con, ENV["WEATHER_CONN_STR"]; alias="wx", read_only=true)
+    SCAN[] = (con=con, kind=:postgres)
 
     zones = extract_zones(con)
     start_date = extract_start_date(con)
@@ -208,10 +223,12 @@ function main()
         end
     end
 
+    SCAN[] = nothing
+    Euphemia.detach_postgres!(con; alias="pg")
+    Euphemia.detach_postgres!(con; alias="wx")
     DBInterface.execute(con, "CHECKPOINT")
     DBInterface.close!(con)
     close(db)
-    close_weather_connection!()
 
     total_appended = sum(t.appended for t in summary)
     println()

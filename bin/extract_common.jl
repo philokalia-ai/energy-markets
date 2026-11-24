@@ -36,9 +36,67 @@ const NOCAST = Dict{String,String}()
 const QUERY_FNS = Dict{Symbol,Function}()
 
 query_fn(source::Symbol) =
+    SCAN[] !== nothing ? ((sql, args=Any[]) -> scan_query(source, sql, args)) :
     haskey(QUERY_FNS, source) ? QUERY_FNS[source] :
     error("No query function registered for source :$source — " *
           "the including script must populate QUERY_FNS[:$source]")
+
+# ---------------------------------------------------------------------------
+# Scanner mode (owner rule, 2026-11-23: DuckDB between Postgres and Julia). When `SCAN[]`
+# is set, the source databases are ATTACHed to the extract's DuckDB connection (energy as
+# `pg`, weather as `wx`, via Euphemia.attach_postgres!) and every table copy runs inside
+# DuckDB as `... SELECT * FROM postgres_query(<alias>, <filter SQL>)`; rows never pass
+# through Julia. Metadata reads (column lists, counts) still return small frames.
+# `kind = :duckdb` is the offline proof mode: the "source" is a DuckDB file attached as `src`
+# and the same SQL runs through the backend's dialect rewrite.
+# ---------------------------------------------------------------------------
+const SCAN = Ref{Any}(nothing)   # nothing | (con=..., kind=:postgres|:duckdb)
+
+_lit(s::AbstractString) = "'" * replace(String(s), "'" => "''") * "'"
+_pg_literal(a::AbstractString) = _lit(a)
+_pg_literal(a::Date) = _lit(Dates.format(a, "yyyy-mm-dd"))
+_pg_literal(a::DateTime) = _lit(Dates.format(a, "yyyy-mm-dd HH:MM:SS.sss"))
+_pg_literal(a::Integer) = string(a)
+_pg_literal(a::AbstractFloat) = repr(Float64(a))
+_pg_literal(a::AbstractVector) = "ARRAY[" * join((_pg_literal(x) for x in a), ", ") * "]" *
+                                 (all(x -> x isa AbstractString, a) ? "::text[]" : "")
+
+"`sql` with every `\$n` placeholder replaced by the literal of `args[n]` (highest n first)."
+function pg_inline(sql::AbstractString, args)
+    s = String(sql)
+    for n in length(args):-1:1
+        s = replace(s, "\$$n" => _pg_literal(args[n]))
+    end
+    occursin(r"\$[0-9]", s) && error("pg_inline: unbound placeholder in $(first(s, 120))")
+    return s
+end
+
+_scan_alias(source::Symbol) = source === :weather ? "wx" : "pg"
+
+"The FROM-clause expression that yields `sql`'s rows from the source, inside DuckDB."
+function scan_from(source::Symbol, sql::AbstractString, args)
+    q = pg_inline(sql, args)
+    SCAN[].kind === :postgres && return "postgres_query('$(_scan_alias(source))', $(_lit(q)))"
+    q = replace(Euphemia._duckdb_rewrite(q),
+        r"(?<![\w.])(entsoe|jao|yfinance|epias|simulations|weather)\." => s"src.\1.")
+    q = replace(q, r"\binformation_schema\.columns\b" =>
+        "(SELECT * FROM information_schema.columns WHERE table_catalog = 'src')")
+    return "(" * q * ")"
+end
+
+scan_query(source::Symbol, sql, args) =
+    DataFrame(DBInterface.execute(SCAN[].con, "SELECT * FROM $(scan_from(source, sql, args))"))
+
+"Copy rows from the source into `tgt` inside DuckDB (CREATE [OR REPLACE] TABLE / INSERT). Returns rows added."
+function scan_into!(con, spec, sql, args; create::Union{Nothing,String}=nothing, order::String="")
+    tgt = duckdb_target(spec)
+    before = create === nothing ? duckdb_rowcount(con, spec) : 0
+    src = scan_from(spec.source, sql, args)
+    stmt = create === nothing ? "INSERT INTO $tgt SELECT * FROM $src$order" :
+                                "$create $tgt AS SELECT * FROM $src$order"
+    DBInterface.execute(con, stmt)
+    return duckdb_rowcount(con, spec) - before
+end
 
 # ---------------------------------------------------------------------------
 # Weather DB access (separate weather database, WEATHER_CONN_STR, read-only role)
@@ -236,9 +294,12 @@ function entsoe_table_specs(zones::Vector{String};
 
     zone_where = "area_map_code = ANY(\$1)"
     specs = NamedTuple[]
+    # Tables with an all-zone reader carry every zone (runner 45228277028, the DuckDB fill manifest's
+    # rule): the extract dropped e.g. the flows on pairs touching no footprint zone, which the
+    # net-import reader takes, so extract-based runs differed from production. Only the RES
+    # forecasts (per-zone readers only) keep the zone filter.
 
     push!(specs, mkspec(schema="entsoe", table="day_ahead_total_load_forecast",
-        base_where=zone_where, base_args=Any[zones],
         ts_col="date_time_utc", window=(aux_back, end_excl),
         sort_by="area_map_code, date_time_utc"))
 
@@ -248,7 +309,6 @@ function entsoe_table_specs(zones::Vector{String};
     # aggregate-output tables). Absent this table :v3 degrades gracefully to
     # exact :v2 (warn + calendar climatology).
     push!(specs, mkspec(schema="entsoe", table="actual_total_load",
-        base_where=zone_where, base_args=Any[zones],
         ts_col="date_time_utc", window=(back400, end_excl),
         sort_by="area_map_code, date_time_utc"))
 
@@ -258,16 +318,13 @@ function entsoe_table_specs(zones::Vector{String};
         sort_by="area_map_code, date_time_utc"))
 
     push!(specs, mkspec(schema="entsoe", table="energy_prices",
-        base_where="map_code = ANY(\$1) AND contract_type = 'Day-ahead'",
-        base_args=Any[zones],
+        base_where="contract_type = 'Day-ahead'",
         ts_col="date_time_utc", window=(aux_back, end_excl),
         sort_by="map_code, date_time_utc"))
 
     for tbl in ("offered_transfer_capacities_implicit",
                 "offered_transfer_capacities_explicit")
         push!(specs, mkspec(schema="entsoe", table=tbl,
-            base_where="(out_map_code = ANY(\$1) OR in_map_code = ANY(\$1))",
-            base_args=Any[zones],
             ts_col="date_time_utc", window=(aux_back, end_excl),
             sort_by="out_map_code, in_map_code, date_time_utc"))
     end
@@ -284,34 +341,27 @@ function entsoe_table_specs(zones::Vector{String};
         sort_by="ccr, hub, date_time_utc"))
 
     push!(specs, mkspec(schema="entsoe", table="physical_flows",
-        base_where="(regexp_replace(in_area_map_code, '_IPS\$', '') = ANY(\$1) OR regexp_replace(out_area_map_code, '_IPS\$', '') = ANY(\$1))",
-        base_args=Any[zones],
         ts_col="date_time_utc", window=(aux_back, end_excl),
         sort_by="in_area_map_code, out_area_map_code, date_time_utc"))
 
     push!(specs, mkspec(schema="entsoe", table="aggregated_generation_per_type",
-        base_where=zone_where, base_args=Any[zones],
         ts_col="date_time_utc", window=(back400, end_excl),
         sort_by="area_map_code, production_type, date_time_utc"))
 
     # Weekly + tiny; full history keeps the prior-year reservoir-dryness norm
     # exact. No time column usable for a watermark → wholesale replace.
     push!(specs, mkspec(schema="entsoe", table="aggregated_hydro_storage_filling_rate",
-        base_where=zone_where, base_args=Any[zones],
         sort_by="area_map_code, year, week", refresh=:replace))
 
     # Unit registry: validity rows get UPDATED (not appended) → replace.
     push!(specs, mkspec(schema="entsoe", table="production_and_generation_units",
-        base_where=zone_where, base_args=Any[zones],
         sort_by="area_map_code, generation_unit_code", refresh=:replace))
 
     # Outages overlapping [back400, end_date]: existing records change status /
     # end time, so append-by-watermark would go stale → replace.
-    gen_codes = "SELECT generation_unit_code FROM entsoe.production_and_generation_units WHERE area_map_code = ANY(\$1)"
-    unit_codes = "$gen_codes UNION SELECT production_unit_code FROM entsoe.production_and_generation_units WHERE area_map_code = ANY(\$1)"
     push!(specs, mkspec(schema="entsoe", table="unavailability_of_production_and_generation_units",
-        base_where="asset_code IN ($unit_codes) AND start_outage_utc IS NOT NULL AND end_outage_utc IS NOT NULL AND start_outage_utc::timestamp <= \$2::date::timestamp AND end_outage_utc::timestamp >= \$3::date::timestamp",
-        base_args=Any[zones, end_date, back400],
+        base_where="start_outage_utc IS NOT NULL AND end_outage_utc IS NOT NULL AND start_outage_utc::timestamp <= \$1::date::timestamp AND end_outage_utc::timestamp >= \$2::date::timestamp",
+        base_args=Any[end_date, back400],
         sort_by="asset_code, start_outage_utc",
         casts=Dict("start_outage_utc" => "TIMESTAMP", "end_outage_utc" => "TIMESTAMP"),
         refresh=:replace))
@@ -330,7 +380,6 @@ function entsoe_table_specs(zones::Vector{String};
         refresh=:replace))
 
     push!(specs, mkspec(schema="entsoe", table="actual_generation_output_per_generation_unit",
-        base_where="generation_unit_code IN ($gen_codes)", base_args=Any[zones],
         ts_col="date_time_utc", window=(agen_back, end_excl),
         sort_by="generation_unit_code, date_time_utc"))
 
@@ -383,7 +432,6 @@ end
 function simulations_table_specs(zones::Vector{String})
     return NamedTuple[
         mkspec(schema="simulations", table="unit_firms",
-               base_where="zone = ANY(\$1)", base_args=Any[zones],
                refresh=:replace),
     ]
 end
@@ -478,23 +526,32 @@ function build_table!(con, spec; chunk_threshold::Int, expected::Union{Nothing,I
             mwhere = where *
                      " AND $(spec.ts_col) >= $(ts_bound(spec, n + 1))" *
                      " AND $(spec.ts_col) < $(ts_bound(spec, n + 2))"
-            df = qfn(select_sql(spec, cols, mwhere), Any[args..., lo, hi])
-            view = "_stage_chunk"
-            DuckDB.register_data_frame(con, df, view)
-            if !created
-                DBInterface.execute(con, "$create $tgt AS SELECT * FROM $view$order")
+            if SCAN[] !== nothing
+                nchunk = scan_into!(con, spec, select_sql(spec, cols, mwhere), Any[args..., lo, hi];
+                                    create=created ? nothing : create, order=order)
                 created = true
             else
-                DBInterface.execute(con, "INSERT INTO $tgt SELECT * FROM $view$order")
+                df = qfn(select_sql(spec, cols, mwhere), Any[args..., lo, hi])
+                view = "_stage_chunk"
+                DuckDB.register_data_frame(con, df, view)
+                if !created
+                    DBInterface.execute(con, "$create $tgt AS SELECT * FROM $view$order")
+                    created = true
+                else
+                    DBInterface.execute(con, "INSERT INTO $tgt SELECT * FROM $view$order")
+                end
+                DuckDB.unregister_data_frame(con, view)
+                nchunk = nrow(df)
             end
-            DuckDB.unregister_data_frame(con, view)
-            total += nrow(df)
+            total += nchunk
             @printf("      chunk %2d/%2d  %s..%s  %10d rows  (cum %d)\n",
-                    i, length(ranges), lo, hi, nrow(df), total)
+                    i, length(ranges), lo, hi, nchunk, total)
             flush(stdout)
         end
         # A chunked CREATE with zero ranges never creates the table.
         if !created
+            SCAN[] !== nothing && return scan_into!(con, spec, select_sql(spec, cols, where), args;
+                                                    create=create, order=order)
             df = qfn(select_sql(spec, cols, where), args)
             view = "_stage_empty"
             DuckDB.register_data_frame(con, df, view)
@@ -504,6 +561,8 @@ function build_table!(con, spec; chunk_threshold::Int, expected::Union{Nothing,I
         end
         return total
     else
+        SCAN[] !== nothing && return scan_into!(con, spec, select_sql(spec, cols, where), args;
+                                                create=create, order=order)
         df = qfn(select_sql(spec, cols, where), args)
         view = "_stage_" * spec.schema * "_" * spec.table
         DuckDB.register_data_frame(con, df, view)
@@ -552,6 +611,10 @@ function append_incremental!(con, spec; today::Date=Dates.today(), horizon_days:
     total = 0
     for (lo, hi) in month_ranges(lo_start, hi_end)
         (where, args) = incremental_where_args(spec, watermark, lo, hi)
+        if SCAN[] !== nothing
+            total += scan_into!(con, spec, select_sql(spec, cols, where), args; order=order)
+            continue
+        end
         df = qfn(select_sql(spec, cols, where), args)
         isempty(df) && continue
         view = "_stage_append"

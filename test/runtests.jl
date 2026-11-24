@@ -237,6 +237,18 @@ println()
         include(joinpath(@__DIR__, "test_precompile_state.jl"))
     end
 
+    @testset "pg_attach helper (no network, no DB)" begin
+        include(joinpath(@__DIR__, "test_pg_attach.jl"))
+    end
+
+    @testset "Fill manifest + strict read guard (temp DuckDB)" begin
+        include(joinpath(@__DIR__, "test_fill_manifest.jl"))
+    end
+
+    @testset "Fill guard reaches the outer catches (own process: loads bin/daily_forecast.jl)" begin
+        @test success(`$(Base.julia_cmd()) --startup-file=no --project=$(dirname(Base.active_project())) $(joinpath(@__DIR__, "test_fill_guard_outer.jl"))`)
+    end
+
     @testset "Solar-regime gate: issued weather solar" begin
         include(joinpath(@__DIR__, "test_solar_gate_issued.jl"))
     end

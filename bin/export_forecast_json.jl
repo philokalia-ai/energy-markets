@@ -346,7 +346,7 @@ end
 # load-weighted WAPE % (load_weighted_err_pct — null until the day fully
 # settles, or when the denominator is degenerate); mae/corr are the day scores
 # for that zone-day at the same lead (null until scored).
-const MAP_DAYS = 60
+const MAP_DAYS = Euphemia.EXPORT_MAP_DAYS   # shared with the fill manifest (resolve_forecast_needs)
 
 map_track_expr(col) = "CASE WHEN $(col) LIKE 'weather%' THEN 'predicted' ELSE 'announced' END"
 

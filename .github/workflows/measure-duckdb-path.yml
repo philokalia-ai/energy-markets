@@ -3,6 +3,9 @@ name: Measure DuckDB path (perf-96)
 # Runner measurement for the owner rule "DuckDB between Postgres and Julia, always" (perf-96, 2026-11-23):
 # the fill time, and the day wall of the current Postgres read path vs the fill → DuckDB path, on the
 # production runner. READ-ONLY: nothing is written to Postgres (save_to_db=false, no transfer step).
+# Order (diagnostic, run 45195384063 follow-up): fill 1 → DuckDB path → Postgres path → fill 2. Both clears record
+# every source read (--trace: rows + fingerprints per read); the compare step diffs prices, the two traces (which
+# read returned different rows) and fill 1 vs fill 2 per table (did Postgres change during the run?).
 # Manual dispatch only (the lead dispatches it). It refuses to start, and stops itself, when it could
 # overlap the live forecast / publish windows or a running daily-forecast / publish-web-data job.
 on:
@@ -21,6 +24,15 @@ on:
         options:
           - forecast
           - record
+      periods:
+        description: "Periods per day: production (the code's CLEAR_RESOLUTION_MINUTES, 96 since cv46), 24 (hourly) or 96"
+        required: false
+        default: production
+        type: choice
+        options:
+          - production
+          - "24"
+          - "96"
 
 concurrency:
   group: measure-duckdb-path
@@ -34,54 +46,44 @@ env:
   JULIA_VERSION: "1.13.4"
   JULIA_NUM_THREADS: 4
   RUN_DIR: ${{ github.workspace }}/run-local
+  RUN_DIR2: ${{ github.workspace }}/run-local-2
   OUT_DIR: ${{ github.workspace }}/measure-out
-  # The job timeout; the guard refuses a start that could still be running inside a protected window.
-  MEASURE_TIMEOUT_MIN: "120"
+  PID_DIR: ${{ github.workspace }}/measure-pids
+  # The start horizon (lead, 2026-11-24): the guard refuses a start whose next 75 min reach a protected or ceres ETL
+  # window; a longer run (job timeout 120) is stopped by the watchdog when such a window starts.
+  MEASURE_TIMEOUT_MIN: "75"
 
 jobs:
   measure:
     runs-on: energy-markets-k8s
     timeout-minutes: 120
     steps:
-      - name: Guard — protected windows and running forecast/publish jobs
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Guard — protected windows, ceres ETL windows and running forecast/publish jobs
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          # Protected windows (UTC, from tasks/431-common.md): 06:00–08:30 (live forecast) and 10:30–12:15
-          # (publish). Refuse a start inside them, and a start whose MEASURE_TIMEOUT_MIN could reach them.
-          now_min=$(( 10#$(date -u +%H) * 60 + 10#$(date -u +%M) ))
-          end_min=$(( now_min + MEASURE_TIMEOUT_MIN ))
-          overlaps() {   # [now, now+timeout) intersects [a, b) on a 24 h clock (minutes)
-            local a=$1 b=$2 s=$now_min e=$end_min
-            for shift in 0 1440; do
-              if (( s < b + shift && a + shift < e )); then return 0; fi
-            done
-            return 1
-          }
-          for w in "360 510 06:00-08:30" "630 735 10:30-12:15"; do
-            set -- $w
-            if overlaps $1 $2; then
-              echo "::error::refused: now $(date -u +%H:%M) UTC + ${MEASURE_TIMEOUT_MIN} min overlaps the protected window $3 UTC"
-              exit 1
-            fi
-          done
+          # Time windows (UTC, bin/measure_windows.py): the protected live-forecast/publish windows and every scheduled
+          # ceres job that writes the energy database, each from its slot to its typical end (p90 of the ceres run
+          # history + margin). Refuse a start whose MEASURE_TIMEOUT_MIN could reach any of them: a measurement must not
+          # read Postgres while an ETL rewrites it (run 45392030610).
+          python3 bin/measure_windows.py check-start --timeout-min "$MEASURE_TIMEOUT_MIN"
           # Running jobs: any daily-forecast or publish-web-data run that is not completed (queued, waiting,
           # requested, pending or in progress) in this repository, via the Actions REST API.
           busy=0
           for wf in daily-forecast.yml publish-web-data.yml; do
             for st in in_progress queued waiting requested pending; do
-              n=$(curl -fsS -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+              n=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
                   "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/${wf}/runs?status=${st}&per_page=1" \
-                  | grep -o '"total_count": *[0-9]*' | grep -o '[0-9]*$')
-              if [ "${n:-1}" != "0" ]; then echo "::error::refused: $wf has a run with status $st"; busy=1; fi
+                  | python3 -c "import json,sys; print(json.load(sys.stdin)['total_count'])") || n=1
+              if [ "${n:-1}" != "0" ]; then echo "::error::refused: $wf has a run with status $st (or the API did not answer)"; busy=1; fi
             done
           done
           [ "$busy" = 0 ] || exit 1
           echo "guard OK at $(date -u +%H:%M) UTC"
-
-      - name: Checkout repository
-        uses: actions/checkout@v4
 
       - name: Setup Julia
         uses: julia-actions/setup-julia@v1
@@ -92,72 +94,74 @@ jobs:
         run: |
           julia --project=. -e 'using Pkg; Pkg.instantiate(); Pkg.precompile()'
 
-      - name: Watchdog — stop if a forecast/publish job starts mid-measurement
+      - name: Watchdog — stop if a forecast/publish job or a protected/ETL window starts mid-measurement
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # A background check every 60 s for the rest of the job. On a hit it writes a stop marker that the
-          # measurement steps test before each phase, and kills the running julia measurement.
-          nohup bash -c '
+          # Background check every 60 s for the rest of the job (no nohup/pkill on the runner image). On a hit it
+          # writes STOP_MEASURE (each phase refuses to start, the clears stop before their next day) and kills
+          # the running phase via the PID file it recorded ($PID_DIR/*.pid), with the shell's own kill.
+          mkdir -p "$PID_DIR"
+          (
             while true; do
+              # a protected or ceres ETL window has started (a late or longer run than the start guard allowed for)
+              if ! python3 bin/measure_windows.py check-now > "$GITHUB_WORKSPACE/window.txt" 2>&1; then
+                { echo "window at $(date -u +%H:%M:%S)"; cat "$GITHUB_WORKSPACE/window.txt"; } > "$GITHUB_WORKSPACE/STOP_MEASURE"
+                for f in "$PID_DIR"/*.pid; do [ -f "$f" ] && kill "$(cat "$f")" 2>/dev/null; done
+              fi
               for wf in daily-forecast.yml publish-web-data.yml; do
                 for st in in_progress queued; do
-                  n=$(curl -fsS -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+                  n=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
                       "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/${wf}/runs?status=${st}&per_page=1" \
-                      | grep -o "\"total_count\": *[0-9]*" | grep -o "[0-9]*$") || n=0
+                      | python3 -c "import json,sys; print(json.load(sys.stdin)['total_count'])" 2>/dev/null) || n=0
                   if [ "${n:-0}" != "0" ]; then
                     echo "$wf $st at $(date -u +%H:%M:%S)" > "$GITHUB_WORKSPACE/STOP_MEASURE"
-                    pkill -f "bin/measure_duckdb_path.jl|bin/fill_run_duckdb.jl" || true
+                    for f in "$PID_DIR"/*.pid; do [ -f "$f" ] && kill "$(cat "$f")" 2>/dev/null; done
                   fi
                 done
               done
               sleep 60
-            done' > watchdog.log 2>&1 &
-          echo "watchdog started (pid $!)"
+            done
+          ) > "$GITHUB_WORKSPACE/watchdog.log" 2>&1 &
+          disown
+          echo "watchdog started"
 
       - name: Choose days
         id: days
         run: |
-          D="${{ github.event.inputs.days }}"
-          if [ -z "$D" ]; then
-            D="$(date -u -d '5 days ago' +%F),$(date -u -d '4 days ago' +%F),$(date -u -d '3 days ago' +%F)"
-          fi
-          echo "$D" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}(,[0-9]{4}-[0-9]{2}-[0-9]{2})*$' || { echo "::error::bad days: $D"; exit 1; }
-          # consecutive, ascending, at most 7 (the fill copies every input of first..last)
-          prev=""; n=0
-          for d in $(echo "$D" | tr ',' ' '); do
-            n=$((n + 1))
-            if [ -n "$prev" ] && [ "$(date -u -d "$prev + 1 day" +%F)" != "$d" ]; then
-              echo "::error::days must be consecutive and ascending: $D"; exit 1
-            fi
-            prev=$d
-          done
-          [ "$n" -le 7 ] || { echo "::error::at most 7 days per measurement: $D"; exit 1; }
-          echo "days=$D" >> "$GITHUB_OUTPUT"
-          echo "start=$(echo "$D" | tr ',' '\n' | sort | head -1)" >> "$GITHUB_OUTPUT"
-          echo "end=$(echo "$D" | tr ',' '\n' | sort | tail -1)" >> "$GITHUB_OUTPUT"
-          mkdir -p "$OUT_DIR" "$RUN_DIR"
+          # Date handling in python3 (portable; no GNU date -d): default = the 3 days ending 3 days ago;
+          # input = consecutive ascending days, at most 7 (the fill copies every input of first..last).
+          DAYS_IN="${{ github.event.inputs.days }}" python3 - >> "$GITHUB_OUTPUT" <<'PY'
+          import datetime as dt, os, re, sys
+          raw = os.environ.get("DAYS_IN", "").strip()
+          today = dt.datetime.now(dt.timezone.utc).date()
+          days = [today - dt.timedelta(days=k) for k in (5, 4, 3)] if not raw else None
+          if days is None:
+              if not re.fullmatch(r"\d{4}-\d{2}-\d{2}(,\d{4}-\d{2}-\d{2})*", raw):
+                  sys.exit(f"::error::bad days: {raw}")
+              days = [dt.date.fromisoformat(d) for d in raw.split(",")]
+          if any(b - a != dt.timedelta(days=1) for a, b in zip(days, days[1:])):
+              sys.exit(f"::error::days must be consecutive and ascending: {raw}")
+          if len(days) > 7:
+              sys.exit(f"::error::at most 7 days per measurement: {raw}")
+          print("days=" + ",".join(d.isoformat() for d in days))
+          print("start=" + days[0].isoformat())
+          print("end=" + days[-1].isoformat())
+          PY
+          mkdir -p "$OUT_DIR"
+          cat "$GITHUB_OUTPUT"
 
-      - name: Current path — clear reading Postgres directly (baseline, read-only)
-        env:
-          ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
-          EUPHEMIA_DATA_STORE: postgres
-        run: |
-          [ ! -f STOP_MEASURE ] || { cat STOP_MEASURE; exit 1; }
-          /usr/bin/time -v julia --project=. bin/measure_duckdb_path.jl clear \
-            --days "${{ steps.days.outputs.days }}" --label pg --entry "${{ github.event.inputs.entry || 'forecast' }}" --out "$OUT_DIR" 2> "$OUT_DIR/time_pg.txt"
-          grep -E "Elapsed|Maximum resident" "$OUT_DIR/time_pg.txt"
-
-      - name: Fill — Postgres → run-local DuckDB (timed)
+      - name: Fill 1 — Postgres → run-local DuckDB (timed)
         env:
           ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
         run: |
           [ ! -f STOP_MEASURE ] || { cat STOP_MEASURE; exit 1; }
-          /usr/bin/time -v julia --project=. bin/fill_run_duckdb.jl --profile record \
-            --start "${{ steps.days.outputs.start }}" --end "${{ steps.days.outputs.end }}" \
-            --out "$RUN_DIR" 2> "$OUT_DIR/time_fill.txt"
-          grep -E "Elapsed|Maximum resident" "$OUT_DIR/time_fill.txt"
-          du -sh "$RUN_DIR"/*.duckdb | tee "$OUT_DIR/fill_size.txt"
+          julia --project=. bin/fill_run_duckdb.jl --profile record \
+            --start "${{ steps.days.outputs.start }}" --end "${{ steps.days.outputs.end }}" --out "$RUN_DIR" &
+          echo $! > "$PID_DIR/fill.pid"; wait $!
+          cp "$RUN_DIR/fill.json" "$OUT_DIR/fill.json"
+          python3 -c "import json; f=json.load(open('$OUT_DIR/fill.json')); print('fill 1: wall', f['process_wall_s'], 's, peak RSS', f['peak_rss_kb'], 'kB, inputs', f['inputs_mib'], 'MiB, results', f['results_mib'], 'MiB; TimeZone source', f.get('source_timezone'), 'pg', f.get('pg_timezone'), 'scanner', f.get('scanner_timezone'), '; absent in source', f.get('absent_in_source'))"
+          julia --project=. bin/measure_duckdb_path.jl fill-sums "$RUN_DIR/inputs.duckdb" "$OUT_DIR/fill1_sums.tsv"
 
       - name: DuckDB path — clear reading only the run-local DuckDB (no Postgres credentials)
         env:
@@ -167,18 +171,65 @@ jobs:
           EUPHEMIA_RESULTS_DB: ${{ env.RUN_DIR }}/results.duckdb
         run: |
           [ ! -f STOP_MEASURE ] || { cat STOP_MEASURE; exit 1; }
-          /usr/bin/time -v julia --project=. bin/measure_duckdb_path.jl clear \
-            --days "${{ steps.days.outputs.days }}" --label duckdb --entry "${{ github.event.inputs.entry || 'forecast' }}" --out "$OUT_DIR" 2> "$OUT_DIR/time_duckdb.txt"
-          grep -E "Elapsed|Maximum resident" "$OUT_DIR/time_duckdb.txt"
+          STOP_FILE="$GITHUB_WORKSPACE/STOP_MEASURE" julia --project=. bin/measure_duckdb_path.jl clear \
+            --days "${{ steps.days.outputs.days }}" --label duckdb --entry "${{ github.event.inputs.entry || 'forecast' }}" \
+            --steps "${{ github.event.inputs.periods || 'production' }}" --trace --out "$OUT_DIR" &
+          echo $! > "$PID_DIR/duckdb.pid"; wait $!
+          cat "$OUT_DIR/process_duckdb.csv"
+
+      - name: Current path — clear reading Postgres directly (baseline, read-only)
+        env:
+          ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
+          EUPHEMIA_DATA_STORE: postgres
+        run: |
+          [ ! -f STOP_MEASURE ] || { cat STOP_MEASURE; exit 1; }
+          STOP_FILE="$GITHUB_WORKSPACE/STOP_MEASURE" julia --project=. bin/measure_duckdb_path.jl clear \
+            --days "${{ steps.days.outputs.days }}" --label pg --entry "${{ github.event.inputs.entry || 'forecast' }}" \
+            --steps "${{ github.event.inputs.periods || 'production' }}" --trace --out "$OUT_DIR" &
+          echo $! > "$PID_DIR/pg.pid"; wait $!
+          cat "$OUT_DIR/process_pg.csv"
+
+      - name: Fill 2 — the same days again, after the Postgres path (did Postgres change during the run?)
+        env:
+          ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
+        run: |
+          [ ! -f STOP_MEASURE ] || { cat STOP_MEASURE; exit 1; }
+          julia --project=. bin/fill_run_duckdb.jl --profile record \
+            --start "${{ steps.days.outputs.start }}" --end "${{ steps.days.outputs.end }}" --out "$RUN_DIR2" &
+          echo $! > "$PID_DIR/fill2.pid"; wait $!
+          cp "$RUN_DIR2/fill.json" "$OUT_DIR/fill2.json"
+          julia --project=. bin/measure_duckdb_path.jl fill-sums "$RUN_DIR2/inputs.duckdb" "$OUT_DIR/fill2_sums.tsv"
 
       - name: Compare prices and walls
         if: ${{ !cancelled() }}
         run: |
+          # pure CSV comparison (no data store needed); fill wall/peak from fill.json
+          # no data store: prices and traces are CSV/TSV; fill-diff opens both fills read-only with DuckDB.jl.
+          # Every part runs even if an earlier one reports differences; the step fails at the end if prices differ.
+          rc=0
           julia --project=. bin/measure_duckdb_path.jl compare \
-            "$OUT_DIR/prices_pg.csv" "$OUT_DIR/prices_duckdb.csv" --out "$OUT_DIR"
-          for f in pg fill duckdb; do
-            echo "- $f: $(grep -E 'Elapsed' "$OUT_DIR/time_$f.txt" | sed 's/.*: //') wall, peak $(grep -E 'Maximum resident' "$OUT_DIR/time_$f.txt" | awk '{print $NF}') kB" >> "$GITHUB_STEP_SUMMARY"
-          done
+            "$OUT_DIR/prices_pg.csv" "$OUT_DIR/prices_duckdb.csv" --out "$OUT_DIR" || rc=$?
+          if [ -f "$OUT_DIR/trace_pg.tsv" ] && [ -f "$OUT_DIR/trace_duckdb.tsv" ]; then
+            julia --project=. bin/measure_duckdb_path.jl trace-diff "$OUT_DIR/trace_pg.tsv" "$OUT_DIR/trace_duckdb.tsv" --out "$OUT_DIR" || true
+          fi
+          if [ -f "$RUN_DIR/inputs.duckdb" ] && [ -f "$RUN_DIR2/inputs.duckdb" ]; then
+            julia --project=. bin/measure_duckdb_path.jl fill-diff "$RUN_DIR/inputs.duckdb" "$RUN_DIR2/inputs.duckdb" --out "$OUT_DIR" || true
+          fi
+          # Trace replay: every read that differed is re-run on fill 1 and on fill 2 (its SQL text + typed args, recorded
+          # by --trace). PG = fill2 and DuckDB = fill1 for a read proves Postgres changed during the run (churn); PG != fill2
+          # points at the fill (coverage). Only the differing reads: a few minutes, inside the job timeout.
+          if [ "$(wc -l < "$OUT_DIR/trace_diff.tsv" 2>/dev/null || echo 0)" -gt 1 ] && [ -f "$OUT_DIR/trace_calls_pg.jsonl" ] \
+             && [ -f "$RUN_DIR/inputs.duckdb" ] && [ -f "$RUN_DIR2/inputs.duckdb" ]; then
+            for fill in "fill1:$RUN_DIR" "fill2:$RUN_DIR2"; do
+              EUPHEMIA_DATA_STORE=duckdb EUPHEMIA_DUCKDB_PATH="${fill#*:}/inputs.duckdb" EUPHEMIA_DUCKDB_READONLY=true \
+                julia --project=. bin/measure_duckdb_path.jl trace-replay --label "${fill%%:*}" --out "$OUT_DIR" \
+                  --calls "$OUT_DIR/trace_calls_pg.jsonl,$OUT_DIR/trace_calls_duckdb.jsonl" --diff "$OUT_DIR/trace_diff.tsv" || true
+            done
+            julia --project=. bin/measure_duckdb_path.jl trace-replay-report --out "$OUT_DIR" || true
+          fi
+          [ -f "$OUT_DIR/fill.json" ] && python3 -c "import json; f=json.load(open('$OUT_DIR/fill.json')); print(f\"- fill 1: {f['process_wall_s']} s wall, peak RSS {f['peak_rss_kb']} kB, inputs {f['inputs_mib']} MiB, results {f['results_mib']} MiB; TimeZone source={f.get('source_timezone')} pg={f.get('pg_timezone')} scanner={f.get('scanner_timezone')}; absent in source: {f.get('absent_in_source')}\")" >> "$GITHUB_STEP_SUMMARY"
+          [ -f "$OUT_DIR/pg_server_timezone.txt" ] && echo "- Postgres server TimeZone default (unpinned session): $(cat "$OUT_DIR/pg_server_timezone.txt")" >> "$GITHUB_STEP_SUMMARY"
+          exit $rc
 
       - name: Upload measurement
         if: ${{ !cancelled() }}
@@ -187,6 +238,10 @@ jobs:
           name: measure-duckdb-path-${{ github.run_id }}
           path: |
             measure-out/
+            run-local/inputs.duckdb
+            run-local/fill.json
+            run-local-2/inputs.duckdb
+            run-local-2/fill.json
             watchdog.log
             STOP_MEASURE
           if-no-files-found: warn

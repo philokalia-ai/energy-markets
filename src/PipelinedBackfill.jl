@@ -693,6 +693,11 @@ function _run_pipelined_backfill_impl(days, zones::Vector{String}=String[];
                        "EUPHEMIA_DUCKDB_PATH" => extract,
                        "EUPHEMIA_DUCKDB_READONLY" => "true",
                        "ENERGY_CONN_STR" => ""]
+        # The coordinator holds the results DB read-write, so DuckDB's file lock keeps workers
+        # from attaching it: under a run-local fill their read-backs (cv32 corrections) read the
+        # fill-time copy in the inputs file. Record/backfill runs emit no corrections, so that
+        # copy equals the seed. Decided here, explicitly, not by a failed attach.
+        push!(extract_env, "EUPHEMIA_RESULTS_READBACK" => "inputs")
         # The book workers call mz_build_books directly (no run_multi_zone_
         # market_clearing wrapper), so the EU-footprint scoped :v2 default does
         # NOT apply there — the workers use the process-wide FLOW_ASOF_MODE.

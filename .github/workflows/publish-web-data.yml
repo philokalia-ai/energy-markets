@@ -48,6 +48,8 @@ jobs:
   publish:
     runs-on: energy-markets-k8s
     timeout-minutes: 150
+    env:
+      RUN_DIR: ${{ github.workspace }}/run-local
     steps:
       - name: Wait for daily-forecast (no two writers on the R2 data plane)
         id: gate
@@ -79,22 +81,37 @@ jobs:
         with:
           version: "1.13.4"   # same pin as daily-forecast.yml / transfer-record.yml
 
-      - name: Export web parquet (prices data plane)
+      # The job's only Postgres access: copy what the exporters read into the run-local DuckDB.
+      - name: Fill run-local DuckDB for the exporters
         if: ${{ steps.gate.outputs.go == 'true' }}
         env:
           ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
+          INPUTS_BACK_DAYS: ${{ inputs.inputs_back_days }}
+        run: |
+          julia --project=. -e 'using Pkg; isempty(Pkg.Registry.reachable_registries()) && Pkg.Registry.add(); Pkg.instantiate()'
+          julia --project=. bin/fill_run_duckdb.jl --profile export --out "$RUN_DIR"
+
+      - name: Export web parquet (prices data plane)
+        if: ${{ steps.gate.outputs.go == 'true' }}
+        env:
+          EUPHEMIA_DATA_STORE: duckdb   # reads the run-local DuckDB only (fill → run, owner rule 2026-11-23)
+          EUPHEMIA_DUCKDB_PATH: ${{ env.RUN_DIR }}/inputs.duckdb
+          EUPHEMIA_DUCKDB_READONLY: "true"
+          EUPHEMIA_RESULTS_DB: ${{ env.RUN_DIR }}/results.duckdb
           # naive baselines on the scoreboard (#431); repo variable EXPORT_NAIVE=0 switches them off
           EXPORT_NAIVE: ${{ vars.EXPORT_NAIVE || '1' }}
           # evaluation target (#431 C2): empty = sdac; repo variable EUPHEMIA_DA_TARGET=highest_seq = kill switch
           EUPHEMIA_DA_TARGET: ${{ vars.EUPHEMIA_DA_TARGET }}
         run: |
-          julia --project=. -e 'using Pkg; isempty(Pkg.Registry.reachable_registries()) && Pkg.Registry.add(); Pkg.instantiate()'
           julia --project=. bin/export_web_parquet.jl
 
       - name: Export prediction inputs (v1/inputs, non-fatal)
         if: ${{ steps.gate.outputs.go == 'true' && (inputs.include_inputs) }}
         env:
-          ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
+          EUPHEMIA_DATA_STORE: duckdb   # reads the run-local DuckDB only (fill → run, owner rule 2026-11-23)
+          EUPHEMIA_DUCKDB_PATH: ${{ env.RUN_DIR }}/inputs.duckdb
+          EUPHEMIA_DUCKDB_READONLY: "true"
+          EUPHEMIA_RESULTS_DB: ${{ env.RUN_DIR }}/results.duckdb
           INPUTS_BACK_DAYS: ${{ inputs.inputs_back_days }}
           EUPHEMIA_OPENMETEO_PREVRUNS_URL: "http://open-meteo.weather.svc.cluster.local/v1/forecast"
         run: |

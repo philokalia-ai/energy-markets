@@ -1,6 +1,7 @@
 module Network
 
 using JuMP, Dates, DataFrames
+import .._rethrow_fill_guard   # run-local fill: misses fail loudly (src/db/duckdb_store.jl)
 
 """
 Helper function to check if database functionality is available.
@@ -440,6 +441,7 @@ function jao_maxbex(date::Date)
             GROUP BY 1, 2, 3, 4
             """, [date])
     catch e
+        _rethrow_fill_guard(e)   # a fill miss fails loudly, never soft
         if !_JAO_WARNED[]
             @warn "jao.max_exchanges not readable — JAO maxBEX ATC disabled for this process: $(sprint(showerror, e))"
             _JAO_WARNED[] = true
@@ -504,6 +506,7 @@ function jao_net_positions(date::Date)
             GROUP BY 1, 2, 3
             """, [date])
     catch e
+        _rethrow_fill_guard(e)   # a fill miss fails loudly, never soft
         @warn "jao.hub_net_positions not readable — net-position limits disabled for $date: $(sprint(showerror, e))"
         DataFrame()
     end
@@ -630,6 +633,7 @@ function tx_outage_caps(date::Date)
             ORDER BY src, snk, s, e, ntc
             """, params)
     catch e
+        _rethrow_fill_guard(e)   # a fill miss fails loudly, never soft
         @warn "transmission-grid unavailability not readable — border caps disabled for $date: $(sprint(showerror, e))"
         DataFrame()
     end
@@ -1310,6 +1314,7 @@ function get_entsoe_transfer_capacities(date::Date, source_zone::String, sink_zo
 
         return safe_sql2df(query, [date, source_zone, sink_zone])
     catch e
+        _rethrow_fill_guard(e)   # a fill miss fails loudly, never soft
         @error "Failed to fetch transfer capacity data for $source_zone → $sink_zone on $date: $e"
         return DataFrame(hour=Int[], capacity_forward=Float64[], capacity_backward=Float64[])
     end
@@ -1409,6 +1414,7 @@ function get_zones_with_transfer_capacity(date::Date)
         return zones
 
     catch e
+        _rethrow_fill_guard(e)   # a fill miss fails loudly, never soft
         @error "Failed to discover zones from ENTSO-E data: $e"
         return String[]
     end
@@ -1543,6 +1549,7 @@ function create_network_from_entsoe(date::Date, bidding_zones::Vector{String}=St
         return build_network_from_dataframe(df)
 
     catch e
+        _rethrow_fill_guard(e)   # a fill miss fails loudly, never soft
         @error "Failed to fetch ENTSO-E transfer capacity data: $e"
         @warn "Falling back to example network"
         return create_example_network()
