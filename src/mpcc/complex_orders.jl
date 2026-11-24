@@ -89,7 +89,7 @@ _plain(o::LinkedHourlyOrder) = SimpleOrder(o.type, o.price, o.quantity, o.zone,
 function resolve_complex_orders(order_book::MPCCOrderBook;
     preferred_solver::String="highs", verbose::Bool=true,
     forced_reject::Set{String}=Set{String}(), block_time_limit::Float64=300.0,
-    fixed_accept::Union{Nothing,Set{String}}=nothing)
+    fixed_accept::Union{Nothing,Set{String}}=nothing, mar_full::Set{String}=Set{String}())
     all_linked = LinkedHourlyOrder[o for o in order_book.orders if o isa LinkedHourlyOrder]
     isempty(all_linked) && return order_book
     rest = MarketOrder[o for o in order_book.orders if !(o isa LinkedHourlyOrder)]
@@ -172,6 +172,8 @@ function resolve_complex_orders(order_book::MPCCOrderBook;
                 a.kind == :BLKX && push!(get!(groups, a.zone * ":" * a.attrs["group"], String[]), f)
                 f in forced_reject && fix(uc[f], 0.0; force=true)
                 fixed_accept === nothing || fix(uc[f], f in fixed_accept ? 1.0 : 0.0; force=true)
+                # a MAR block the search moved to its upper boundary: all-or-nothing from now on
+                (a.kind == :BLKM && f in mar_full) && @constraint(model, zc[f] >= uc[f])
             end
             for (c, p) in _cblock_parents(cblk)
                 @constraint(model, uc[c] <= uc[p])
@@ -318,15 +320,11 @@ function resolve_complex_orders(order_book::MPCCOrderBook;
                         slices=Tuple{DateTime,Float64,Int}[]))
                     sq = o.type == :supply ? o.quantity : -o.quantity
                     push!(b.slices, (o.date_time, sq, o.resolution_code))
-                    if startswith(o.family, "BLKM:") && ratio < 1.0 - 1e-6
-                        # partially accepted MAR block: the marginal order, so it re-enters the pricing at
-                        # its own price capped at ratio·q (it can set the price, as a curtailable block does)
-                        push!(out, SimpleOrder(o.type, o.price, o.quantity * ratio, o.zone, o.date_time,
-                            o.resolution_code))
-                    else
-                        k = (string(o.zone), extract_time_period(o.date_time, periods))
-                        fixed[k] = get(fixed, k, 0.0) + sq * ratio
-                    end
+                    # every accepted company block, a partially accepted MAR block included, is ONE fixed
+                    # injection at ONE ratio over all its periods (EUPHEMIA's single acceptance ratio; round 2:
+                    # replaces round 1's per-period capped re-entry, which cleared below the cap in 295/660 cells)
+                    k = (string(o.zone), extract_time_period(o.date_time, periods))
+                    fixed[k] = get(fixed, k, 0.0) + sq * ratio
                 end
                 continue
             end
@@ -500,19 +498,38 @@ end
 """One candidate: the master (with `forced_reject` or `fixed_accept`), priced by `solve`.
 `pab`: accepted blocks out of the money (a missing price counts as PAB); `prb`: rejected
 blocks in the money (surplus €). `ok = false` when the master or the pricing failed."""
+# A partially accepted MAR block (MAR ≤ r < 1) is the marginal block: its day surplus at the final prices must be ~0.
+# In the money (surplus > MAR_TOL_EUR) points to r = 1: the block is made all-or-nothing and the candidate re-priced
+# (≤ MAR_MOVE_ROUNDS rounds); out of the money is a PAB (pruned by the search as any block). Constants by design.
+const MAR_TOL_EUR = 1.0
+const MAR_MOVE_ROUNDS = 3
+
 function _block_candidate(order_book, solve, B, phase; preferred_solver, verbose,
                           C=Dict{String,Any}(), prio=Dict{String,Float64}(), kw...)
     if !isempty(C) && haskey(kw, :fixed_accept)
         kw = merge(NamedTuple(kw), (fixed_accept=_cblock_closure(kw[:fixed_accept], C, prio),))
     end
-    ob = resolve_complex_orders(order_book; preferred_solver=preferred_solver, verbose=verbose, kw...)
-    info = LAST_COMPLEX_INFO[]
+    mar_full = Set{String}(); mar_moved = 0
+    local ob, info, res, A, ok
+    for rnd in 0:(isempty(C) ? 0 : MAR_MOVE_ROUNDS)
+        kwr = isempty(mar_full) ? kw : merge(NamedTuple(kw), (mar_full=copy(mar_full),))
+        ob = resolve_complex_orders(order_book; preferred_solver=preferred_solver, verbose=verbose, kwr...)
+        info = LAST_COMPLEX_INFO[]
+        info.status == :optimal || return (ok=false, phase=phase, book=ob, res=nothing, info=info,
+                                           A=Set{String}(), W=NaN, pab=Dict{String,Float64}(),
+                                           prb=Dict{String,Float64}(), mar_moved=mar_moved, mar_partial=0)
+        res = solve(ob)
+        A = Set{String}(keys(info.blocks))
+        ok = res.status == :optimal || (res.status == :time_limit && !isempty(res.market_prices))
+        ok || break
+        move = String[f for f in A if haskey(C, f) && C[f].kind == :BLKM && !(f in mar_full) &&
+                      info.blocks[f].ratio < 1.0 - 1e-6 &&
+                      info.blocks[f].ratio * _cblock_surplus(C[f], res.market_prices) > MAR_TOL_EUR]
+        (isempty(move) || rnd == MAR_MOVE_ROUNDS) && break
+        union!(mar_full, move); mar_moved += length(move)
+    end
+    mar_partial = count(f -> haskey(C, f) && C[f].kind == :BLKM && info.blocks[f].ratio < 1.0 - 1e-6, A)
     pab = Dict{String,Float64}(); prb = Dict{String,Float64}()
-    info.status == :optimal || return (ok=false, phase=phase, book=ob, res=nothing, info=info,
-                                       A=Set{String}(), W=NaN, pab=pab, prb=prb)
-    res = solve(ob)
-    A = Set{String}(keys(info.blocks))
-    ok = res.status == :optimal || (res.status == :time_limit && !isempty(res.market_prices))
     if ok
         for (f, b) in B
             s = _block_surplus(b, res.market_prices)
@@ -525,7 +542,7 @@ function _block_candidate(order_book, solve, B, phase; preferred_solver, verbose
         _cblock_check!(pab, prb, C, A, info, res.market_prices)
     end
     return (ok=ok, phase=phase, book=ob, res=res, info=info, A=A, W=info.master_objective,
-            pab=pab, prb=prb)
+            pab=pab, prb=prb, mar_moved=mar_moved, mar_partial=mar_partial)
 end
 
 """
@@ -645,6 +662,7 @@ function solve_with_complex_orders(order_book::MPCCOrderBook, solve::Function;
     wall = time() - t0
     nprb = length(o.prb); prb_eur = sum(values(o.prb); init=0.0)
     LAST_COMPLEX_INFO[] = merge(o.info, (search=(pricings=calls[], wall=wall, UB=UB[], W=o.W,
+        mar_moved=o.mar_moved, mar_partial=o.mar_partial,
         gap=UB[] - o.W, phase=o.phase, n_prb=nprb, prb_eur=prb_eur, inserted=nins,
         seed_forced=length(forced)),))
     verbose && println("   🧱 R1 summary: path=$(o.phase), pricing solves $(calls[]), wall $(round(wall, digits=1)) s, " *

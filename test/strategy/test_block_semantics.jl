@@ -34,11 +34,39 @@ pt(c, r) = StrategyFormats.accept(c, P(r), Date(2026, 11, 4); res=60)[2]
     @test pt(c, r)["BLKM:Z:m:mar=0.5"] == 1.0
 end
 
-@testset "MAR partially accepted sets the price" begin
-    c = [blk(:supply, 70.0, 400.0, h, "BLKM:Z:m:mar=0.25") for h in 1:2]
-    r = clear(c)
-    @test acc()["BLKM:Z:m:mar=0.25"].ratio ≈ 0.5 atol = 1e-6
-    @test P(r) ≈ [70.0, 70.0]
+@testset "MAR partial acceptance: one ratio, at the money, else moved to a boundary (round 2)" begin
+    # 400 MW @70 (MAR 0.25) and 250 MW @70 (MAR 0.5) against a 200 MW residual: the master wants a partial ratio.
+    for (q, mar) in ((400.0, 0.25), (250.0, 0.5))
+        f = "BLKM:Z:m:mar=$mar"
+        c = [blk(:supply, 70.0, q, h, f) for h in 1:2]
+        r = clear(c)
+        info = MPCC.LAST_COMPLEX_INFO[]
+        @test hasproperty(info, :search) && info.search.mar_moved >= 0
+        if haskey(acc(), f)
+            ratio = acc()[f].ratio
+            S = ratio * sum((P(r)[h] - 70.0) * q for h in 1:2)
+            @test S >= -1e-3                                   # never paradoxically accepted
+            ratio < 1 - 1e-6 && @test abs(S) <= MPCC.MAR_TOL_EUR   # partial => the marginal block, at the money
+            @test ratio >= mar - 1e-9
+        else
+            @test P(r) ≈ [80.0, 100.0]                         # rejected: gas sets both prices
+        end
+    end
+end
+
+@testset "MAR single ratio: the pricing sees one uniform injection ratio·q in every period" begin
+    f = "BLKM:Z:m:mar=0.25"
+    c = [blk(:supply, 70.0, 400.0, h, f) for h in 1:2]
+    ob = MPCC.resolve_complex_orders(book(c); verbose=false)
+    b = MPCC.LAST_COMPLEX_INFO[].blocks
+    if haskey(b, f)
+        @test all(ob.fixed_injections[("Z", t)] ≈ 400.0 * b[f].ratio for t in PER)
+        @test !any(o isa SimpleOrder && o.price == 70.0 for o in ob.orders)   # no per-period capped re-entry
+    end
+    # mar_full: the block moved to its upper boundary is all-or-nothing in the master
+    MPCC.resolve_complex_orders(book(c); verbose=false, mar_full=Set([f]))
+    b2 = MPCC.LAST_COMPLEX_INFO[].blocks
+    @test !haskey(b2, f) || b2[f].ratio ≈ 1.0
 end
 
 @testset "MAR below its minimum ratio is rejected" begin
