@@ -31,9 +31,9 @@
 "bin/score_forecasts.jl" = { lines = 18, why = "score writers' LibPQ branches (results_to_duckdb() returns first)" }
 "bin/forecast_scores_snapshot.jl" = { lines = 9, why = "restore LibPQ branch (results_to_duckdb() returns first)" }
 "bin/emit_input_corrections.jl" = { lines = 2, why = "input_corrections LibPQ branch (results_to_duckdb() returns first)" }
+"bin/horizon_forecast.jl" = { lines = 7, why = "write_slice! LibPQ branch for the Postgres store (ceres until its cut-over); results_to_duckdb() returns first" }
 
 [known_gap]
-"bin/horizon_forecast.jl" = { lines = 7, why = "H: write_slice! via withdb, no DuckDB branch (ceres predict)" }
 "bin/build_duckdb_extract.jl" = { lines = 3, why = "X: manual full rebuild still on LibPQ" }
 "bin/emit_tsfm_overlay.py" = { lines = 5, why = "T: Timestral overlay reads via the scanner, writes via psycopg2" }
 "bin/emit_model_lines.py" = { lines = 4, why = "M: psycopg2 reads + model_lines writer" }

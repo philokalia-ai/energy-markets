@@ -1,4 +1,6 @@
 name: Daily ex-ante forecast
+# ceres finds the run it dispatched by this name (its dispatch_id); the scheduled 06:30 run has none.
+run-name: "Daily ex-ante forecast ${{ github.event.inputs.run_profile || (github.event_name == 'schedule' && 'pregate') || 'manual' }} ${{ github.event.inputs.dispatch_id }}"
 
 # PRE-GATE 7-LEAD RUN (Aug 2026, docs/experiments/pregate-7lead.md): a 06:30 UTC
 # cron produces the WEATHER (ex-ante) track for ALL leads D+1..D+7 BEFORE the
@@ -34,6 +36,27 @@ on:
         required: false
         default: false
         type: boolean
+      # ceres (option a, 2026-11-24): ceres keeps the ETL pulls and its lead-1 retry loop and dispatches ONE
+      # attempt of this workflow per pull, then reads the run's `presence` artifact (never Postgres).
+      #   pregate  06:30 weather track, leads 2..7 before the gate (the cron's profile)
+      #   lead1    ceres jao_pregate (08:55 / 09:55): weather lead 1 only, pre-gate, JAO-aware (require_jao)
+      #   morning  ceres 08:00: weather track, leads 1..7 + the persistence horizon
+      #   entsoe   ceres 12:30 / 17:30 / 19:30: reference (entsoe) track, leads 1..7 + the persistence horizon
+      run_profile:
+        description: "Run profile: pregate | lead1 | morning | entsoe (empty = manual, uses max_lead_days)"
+        required: false
+        default: ""
+        type: string
+      require_jao:
+        description: "lead1 only: skip the day unless JAO has published (the 08:55 slot)"
+        required: false
+        default: false
+        type: boolean
+      dispatch_id:
+        description: "Correlation id the dispatcher (ceres) uses to find this run (echoed in the run name)"
+        required: false
+        default: ""
+        type: string
 
 # The k3s 06:30 dispatch (pregate=true) and the late GitHub schedule are the same
 # job. Serialized, the second finds every slice frozen and only rescores.
@@ -127,7 +150,21 @@ jobs:
           EUPHEMIA_RESULTS_DB: ${{ env.RUN_DIR }}/results.duckdb
           EUPHEMIA_RESULTS_WRITABLE: "true"
         run: |
-          if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ github.event.inputs.pregate }}" = "true" ]; then
+          PROFILE="${{ github.event.inputs.run_profile }}"
+          case "$PROFILE" in ""|pregate|lead1|morning|entsoe) ;; *) echo "::error::unknown run_profile '$PROFILE'"; exit 1 ;; esac
+          MIN_LEAD_DAYS="1"
+          if [ "$PROFILE" = "lead1" ]; then
+            # ceres jao_pregate_forecast (08:55 / 09:55): freeze the weather lead 1 after JAO's publication;
+            # with require_jao (08:55) the day is skipped until JAO has published
+            MIN_LEAD_DAYS="1"; MAX_LEAD_DAYS="1"; FORCE_RERUN="false"
+            INPUT_MODE="weather"; EUPHEMIA_FORECAST_PREGATE="true"
+            EUPHEMIA_REQUIRE_JAO="${{ github.event.inputs.require_jao || 'false' }}"
+          elif [ "$PROFILE" = "morning" ] || [ "$PROFILE" = "entsoe" ]; then
+            # ceres update_entsoe_data predict (08:00 weather; 12:30 / 17:30 / 19:30 entsoe): leads 1..7
+            MAX_LEAD_DAYS="7"; FORCE_RERUN="false"
+            INPUT_MODE=$([ "$PROFILE" = "morning" ] && echo weather || echo entsoe)
+            EUPHEMIA_FORECAST_PREGATE="false"
+          elif [ "${{ github.event_name }}" = "schedule" ] || [ "${{ github.event.inputs.pregate }}" = "true" ] || [ "$PROFILE" = "pregate" ]; then
             # PRE-GATE 7-lead run: weather (ex-ante) track, ALL leads, before the
             # 12:00 CET auction. Day-ahead ATC for tomorrow is not yet published,
             # so degrade the network to the demonstrated-capability fallback.
@@ -156,6 +193,10 @@ jobs:
           echo "🔄 Force rerun: $FORCE_RERUN"
 
           export OPTIMIZER MAX_LEAD_DAYS MIN_LEAD_DAYS FORCE_RERUN SKIP_CLEAR INPUT_MODE EUPHEMIA_FORECAST_PREGATE
+          [ -n "${EUPHEMIA_REQUIRE_JAO:-}" ] && export EUPHEMIA_REQUIRE_JAO
+          # later steps (horizon, presence) need the resolved profile and track
+          { echo "RUN_PROFILE=${PROFILE:-$([ "${{ github.event_name }}" = "schedule" ] && echo pregate || echo manual)}"
+            echo "FORECAST_INPUT_MODE=$INPUT_MODE"; } >> "$GITHUB_ENV"
 
           # Crash-retry (issue #182: HiGHS segfaults ~3-4% of decomposed
           # day-solves). Forecast slices are no-clobber, so a retry skips
@@ -174,6 +215,22 @@ jobs:
             exit 1
           fi
 
+      # Leads 2..7 by weekly persistence of the T-7 lead-1 entsoe clear (bin/horizon_forecast.jl), for the profiles
+      # that ran it in ceres' predict job; runs even when the clear failed (its sources are older slices).
+      - name: Fill the 7-day horizon (leads 2-7, weekly persistence)
+        if: ${{ !cancelled() && (env.RUN_PROFILE == 'morning' || env.RUN_PROFILE == 'entsoe') }}
+        timeout-minutes: 10
+        env:
+          EUPHEMIA_DATA_STORE: duckdb   # fill → run → transfer: the seeded slices in, results DuckDB out
+          EUPHEMIA_DUCKDB_PATH: ${{ env.RUN_DIR }}/inputs.duckdb
+          EUPHEMIA_DUCKDB_READONLY: "true"
+          EUPHEMIA_RESULTS_DB: ${{ env.RUN_DIR }}/results.duckdb
+          EUPHEMIA_RESULTS_WRITABLE: "true"
+          MAX_LEAD_DAYS: "7"
+          FORCE_RERUN: "false"
+        run: |
+          julia --project=. bin/horizon_forecast.jl
+
       # The forecast slices (and the cv32 corrections) reach Postgres right after the clears, before scoring and
       # export: a later timeout or failure cannot lose them. Exactly once (transfer_log): the second transfer
       # below applies only the ops logged after this one (the scores).
@@ -189,12 +246,33 @@ jobs:
             echo "::warning::no run-local results DuckDB (the fill failed) — nothing to transfer"
           fi
 
+      # What this attempt left in Postgres, from the run-local results DB only (seeded slices + this run's writes
+      # whose transfer committed). ceres' lead-1 retry loop reads the `presence` artifact of the run it
+      # dispatched (by dispatch_id) instead of querying Postgres.
+      - name: Forecast presence (artifact for the dispatcher)
+        if: ${{ !cancelled() }}
+        run: |
+          if [ ! -f "$RUN_DIR/results.duckdb" ]; then echo "::warning::no results DuckDB — no presence"; exit 0; fi
+          LEAD1_DATE=$(TZ=Europe/Athens date -d tomorrow +%Y-%m-%d)
+          julia --project=. bin/forecast_presence.jl --results-db "$RUN_DIR/results.duckdb" \
+            --input-mode "${FORECAST_INPUT_MODE:-weather}" --lead1-date "$LEAD1_DATE" \
+            --profile "${RUN_PROFILE:-manual}" --dispatch-id "${{ github.event.inputs.dispatch_id }}" \
+            --out "$RUN_DIR/presence.json" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload presence artifact
+        if: ${{ !cancelled() && hashFiles('run-local/presence.json') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: presence
+          path: run-local/presence.json
+          retention-days: 7
+
       # Scoring/export/publish run even when the forecast step failed
       # (!cancelled()): whatever slices DID land — or landed in an earlier run
       # today — still get scored and pushed, so the site never goes stale
       # behind a solver crash. The job still reports failure (Slack notify).
       - name: Score realized forecasts
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && env.RUN_PROFILE != 'lead1' }}
         timeout-minutes: 15
         env:
           # fill → run → transfer (owner rule 2026-11-23): reads only the run-local DuckDB, writes only its
@@ -300,7 +378,8 @@ jobs:
   # scanner latency; the job bound is the sum of the step bounds.
   tsfm-overlay:
     needs: daily-forecast
-    if: ${{ always() && needs.daily-forecast.result == 'success' }}
+    # the pre-gate overlay belongs to the 06:30 pre-gate run only (not to ceres' lead1/morning/entsoe dispatches)
+    if: ${{ always() && needs.daily-forecast.result == 'success' && (github.event_name == 'schedule' || github.event.inputs.pregate == 'true' || github.event.inputs.run_profile == 'pregate') }}
     runs-on: energy-markets-k8s
     timeout-minutes: 150
     env:
