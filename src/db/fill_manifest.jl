@@ -41,6 +41,12 @@ days, 365); physical flows 400 (366-day demonstrated capability, 365-day boundar
 net-import lags/analogues); aggregated generation 400 (365-day hydro availability, 30-day p95,
 14-day pump profile); per-unit generation 75 (60-day recent generation from the feed bound,
 7-day stale override, 7-day feed probe) plus the stale-feed extension.
+cv46 (re-audited 2026-11-24, no window change): the Nordic water value reads physical_flows over
+[D-365, D-1) (inside 400), the weekly reservoir readings over all history (`:full`) and the
+reservoir output over D-8..D-2; `native_q15_actuals` (scorer, record eval, the exporters'
+`q15_actual_map`) reads Day-ahead prices of every zone and resolution (the energy_prices spec);
+the 15-min default clear reads the same tables at their native resolution (no resolution filter
+anywhere); the pipeline resume check reads the seeded `simulations.energy_prices`.
 """
 const FILL_SPECS = FillSpec[
     _fs("entsoe", "day_ahead_total_load_forecast", :window;   # all zones: HOURLY_LOAD_FC_SQL (map weights)

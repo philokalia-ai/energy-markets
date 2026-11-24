@@ -622,6 +622,12 @@ Dated reminders and scoring-policy notes that do not change `code_version`.
     inputs on both paths; on the production runner (run 45195384063, 3 days) the fill took 242 s (330 MiB, peak
     3.4 GiB RSS) and the day clear 14–35 s on DuckDB vs 195–280 s reading Postgres (record fills: 2.2–2.75 GiB RSS at
     10–11 days).
+  - After cv46 (2026-11-24, main 5fa39e1 merged in: #477's 15-min default and D1–D4): forecast rows carry D1's
+    `resolution_code` through the run-local results DuckDB and the transfer, which applies D1's catalog-first
+    migration when Postgres lacks the column; the record path already carried `energy_prices.resolution_code`. The
+    manifest was re-audited against the cv46 readers (Nordic water value, `native_q15_actuals`, the exporters'
+    quarter actuals, the resume check): no window change. Same 31 spot days, now 96-step quarter-hour clears,
+    Postgres path (main) vs fill path: 116,064/116,064 bit-identical, 0 differing (all rows `15M` on both sides).
 
 - **2026-11-23 — site: each market day at its own resolution (cv46 downstream D4); no `code_version` bump.**
   The record keeps hourly days next to quarter-hour days, so `web/app.js` decides per day: the zones API's
