@@ -438,6 +438,7 @@ function _create_multi_zone_order_book_merit(zones::Vector{String}, day::Date;
             endogenous_import_atc=sync_on ? endo_atc : nothing,
             anchor_prices=get(anchor_refs, zone, nothing),
             pass1_prices=get(anchor_refs, zone * "@own", nothing),
+            nwv_p1_prices=haskey(anchor_refs, zone) ? MeritOrderBook.nwv_unpack_prices(anchor_refs) : nothing,
             anchor_export_mw=anchor_export_mw,
             load_modifier=(sc === nothing ? nothing : sc.load_modifier),
             renewable_modifier=(sc === nothing ? nothing : sc.renewable_modifier),
@@ -723,6 +724,10 @@ function mz_extract_anchor_inputs(order_book::MPCC.MPCCOrderBook,
         refs[z * "@own"] = mpcc_result.market_prices[z]
         haskey(refs, z) || (refs[z] = mpcc_result.market_prices[z])
     end
+    # cv46 P1: unanchored reservoir zones join the pass-2 rebuild set with every
+    # zone's pass-1 prices (refs "@p1:<zone>"; src/merit_order/cv46_nordic_wv.jl).
+    apply_zone_profiles &&
+        MeritOrderBook.nwv_pack_refs!(refs, order_book.nodes, mpcc_result.market_prices)
     cached = Dict{String,Vector{MarketOrders.MarketOrder}}(
         z => [o for o in order_book.orders if String(o.zone) == z]
         for z in order_book.nodes)

@@ -270,33 +270,45 @@ end
     end
 end
 
-@testset "Complex orders: EUPHEMIA_PS_INTRAHOUR=flat on a 15-min book" begin
-    periods = ["20261104-0000", "20261104-0015"]
-    dt = [DateTime(2026, 11, 4, 0, 0), DateTime(2026, 11, 4, 0, 15)]
+@testset "Complex orders: flat intra-hour storage (cv46 default, no env)" begin
     Z = :Z
-    o = MarketOrder[]
-    for (q, gas) in zip(1:2, (50.0, 150.0))
-        push!(o, SimpleOrder(:demand, 3000.0, 100.0, Z, dt[q], 15))
-        push!(o, SimpleOrder(:supply, 10.0, 60.0, Z, dt[q], 15))
-        push!(o, SimpleOrder(:supply, gas, 100.0, Z, dt[q], 15))
-        push!(o, LinkedHourlyOrder(:supply, 40.0, 50.0, Z, dt[q], 15, "ESTOR:Z", 7.5))
+    function book(dt, res)
+        o = MarketOrder[]
+        for (q, gas) in zip(1:2, (50.0, 150.0))
+            push!(o, SimpleOrder(:demand, 3000.0, 100.0, Z, dt[q], res))
+            push!(o, SimpleOrder(:supply, 10.0, 60.0, Z, dt[q], res))
+            push!(o, SimpleOrder(:supply, gas, 100.0, Z, dt[q], res))
+            push!(o, LinkedHourlyOrder(:supply, 40.0, 50.0, Z, dt[q], res, "ESTOR:Z", 7.5))
+        end
+        return o
     end
     alloc() = Dict(t => a for (t, _, a) in MPCC.LAST_COMPLEX_INFO[].families["ESTOR:Z"]["all"])
-    run() = MPCC.solve_mpcc_market_clearing(MPCC.MPCCOrderBook(copy(o), ["Z"], periods, (-500.0, 3000.0), nothing);
+    run(o, periods) = MPCC.solve_mpcc_market_clearing(MPCC.MPCCOrderBook(copy(o), ["Z"], periods, (-500.0, 3000.0), nothing);
         preferred_solver="highs", decompose_periods=true, verbose=false)
-    # free (default): the 7.5 MWh budget (30 MW x 0.25 h) all goes to the expensive quarter
-    withenv("EUPHEMIA_PS_INTRAHOUR" => nothing) do
-        @test run().status == :optimal
-        a = alloc()
-        @test a[dt[1]] ≈ 0.0 atol = 1e-6
-        @test a[dt[2]] ≈ 30.0 atol = 1e-6
+    # 15-min book: the 7.5 MWh budget is spread evenly over the hour's quarters
+    # (15 MW each), not all put into the expensive quarter (30 MW, the old free LP)
+    dt = [DateTime(2026, 11, 4, 0, 0), DateTime(2026, 11, 4, 0, 15)]
+    q15 = book(dt, 15)
+    periods = ["20261104-0000", "20261104-0015"]
+    for env in (nothing, "free")   # a stale EUPHEMIA_PS_INTRAHOUR is ignored
+        withenv("EUPHEMIA_PS_INTRAHOUR" => env) do
+            @test run(q15, periods).status == :optimal
+            a = alloc()
+            @test a[dt[1]] ≈ 15.0 atol = 1e-6
+            @test a[dt[2]] ≈ 15.0 atol = 1e-6
+            @test MPCC.LAST_COMPLEX_INFO[].families["ESTOR:Z"]["used"] ≈ 7.5 atol = 1e-6
+        end
     end
-    # flat: the same MWh, spread evenly over the hour's quarters (15 MW each)
-    withenv("EUPHEMIA_PS_INTRAHOUR" => "flat") do
-        @test run().status == :optimal
-        a = alloc()
-        @test a[dt[1]] ≈ 15.0 atol = 1e-6
-        @test a[dt[2]] ≈ 15.0 atol = 1e-6
-        @test MPCC.LAST_COMPLEX_INFO[].families["ESTOR:Z"]["used"] ≈ 7.5 atol = 1e-6
-    end
+    # quarters of DIFFERENT hours are not tied: the budget goes to the expensive one
+    dtx = [DateTime(2026, 11, 4, 0, 45), DateTime(2026, 11, 4, 1, 0)]
+    @test run(book(dtx, 15), ["20261104-0045", "20261104-0100"]).status == :optimal
+    a = alloc()
+    @test a[dtx[1]] ≈ 0.0 atol = 1e-6
+    @test a[dtx[2]] ≈ 30.0 atol = 1e-6
+    # hourly book: untouched (7.5 MWh = 7.5 MW in the expensive hour)
+    dth = [DateTime(2026, 11, 4, 0, 0), DateTime(2026, 11, 4, 1, 0)]
+    @test run(book(dth, 60), ["20261104-0000", "20261104-0100"]).status == :optimal
+    a = alloc()
+    @test a[dth[1]] ≈ 0.0 atol = 1e-6
+    @test a[dth[2]] ≈ 7.5 atol = 1e-6
 end

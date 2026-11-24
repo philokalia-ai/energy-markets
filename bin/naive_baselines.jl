@@ -110,8 +110,9 @@ naive_value(loc::AbstractDict, t::DateTime, lag_days::Integer) =
     naive_zone_day(sim_t, sim_v, act, loc, market_date, lead_days)
         -> (n, model, d1, d7, epf)
 
-Paired absolute-error SUMS for one scored zone-day. A cell is a sim row whose
-UTC hour (`trunc(t, Hour)`, as the scorer pairs it) has a finite actual in `act`
+Paired absolute-error SUMS for one scored zone-day. The sim is first averaged to the
+hour (`hourly_means`: a quarter-hour slice gives one cell per hour, as the scorer
+pairs it; an hourly slice is unchanged). A cell is a sim hour that has a finite actual in `act`
 (UTC hour => price) and a value for EVERY naive available at `lead_days`.
 `model` is sum|sim - actual| on those cells; `d1`/`d7`/`epf` the naive sums, or
 `nothing` when that naive is unavailable at this lead. `n` is the cell count.
@@ -119,6 +120,7 @@ UTC hour (`trunc(t, Hour)`, as the scorer pairs it) has a finite actual in `act`
 function naive_zone_day(sim_t::AbstractVector, sim_v::AbstractVector,
                         act::AbstractDict, loc::AbstractDict,
                         market_date::Date, lead_days::Integer)
+    sim_t, sim_v = hourly_means(sim_t, sim_v)   # cv46: quarter rows → one cell per hour
     kinds = naive_kinds_at(lead_days)
     sums = Dict{String,Float64}(k => 0.0 for k in kinds)
     lags = Dict{String,Int}(k => naive_lag_days(k, market_date) for k in kinds)

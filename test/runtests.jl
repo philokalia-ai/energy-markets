@@ -163,6 +163,8 @@ println()
         # cv44 retro backfill (#431 R1): write plan, chunks, deadline, windows. Pure.
         include(joinpath(@__DIR__, "test_retro_backfill.jl"))
         include(joinpath(@__DIR__, "test_tsfm_backfill_scores.jl"))
+        # Quarter-hour (cv46) days in the exporters: per-day resolution, replication, actuals rule. Pure.
+        include(joinpath(@__DIR__, "test_quarter_exports.jl"))
     end
 
     @testset "Forecast Context (as-of contract)" begin
@@ -222,6 +224,10 @@ println()
 
     @testset "Day caches return hits (temp DuckDB)" begin
         include(joinpath(@__DIR__, "test_day_cache_hits.jl"))
+    end
+
+    @testset "Slot resolution labels from spacing (cv46 D1)" begin
+        include(joinpath(@__DIR__, "test_resolution_labels.jl"))
     end
 
     @testset "Precompile workload leaves no state (fresh process)" begin
@@ -350,6 +356,18 @@ println()
 
     @testset "cv45 knobs (DB-free)" begin
         include(joinpath(@__DIR__, "test_cv45_knobs.jl"))
+    end
+
+    @testset "cv46 P1 Nordic water value (DB-free)" begin
+        include(joinpath(@__DIR__, "test_cv46_nordic_wv.jl"))
+    end
+
+    @testset "cv46 15-minute clear resolution (DB-free)" begin
+        include(joinpath(@__DIR__, "test_clear_resolution.jl"))
+    end
+
+    @testset "cv46 fills on the series resolution (DB-free)" begin
+        include(joinpath(@__DIR__, "test_fill_resolution.jl"))
     end
 
     @testset "Code review 2026-07" begin

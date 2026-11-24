@@ -609,5 +609,31 @@ class ProductionPathTest(unittest.TestCase):
         cx.close()
 
 
+
+class SimCovariateResolutionTest(unittest.TestCase):
+    """cv46 D2: the postsim covariate is hourly; quarter-hour sim rows are averaged to the hour."""
+
+    def setUp(self):
+        self.grid = pd.date_range("2026-11-20 00:00", periods=4, freq="h")
+        self.hours = pd.date_range("2026-11-20 04:00", periods=2, freq="h")
+        self.zones = ["GR", "BG"]
+
+    def test_hourly_rows_unchanged(self):
+        t = list(self.grid) + list(self.hours)
+        rows = pd.DataFrame({"t": t * 2, "zone": ["GR"] * 6 + ["BG"] * 6,
+                             "sim": [float(i) for i in range(6)] + [10.0 + i for i in range(6)]})
+        w = ov.sim_covariate(rows, self.zones, self.grid, self.hours)
+        self.assertEqual(w.shape, (2, 1, 6))
+        np.testing.assert_array_equal(w[0, 0], np.arange(6, dtype=np.float32))
+        np.testing.assert_array_equal(w[1, 0], 10 + np.arange(6, dtype=np.float32))
+
+    def test_quarter_rows_are_hourly_means_not_the_first_quarter(self):
+        qt = pd.date_range("2026-11-20 04:00", periods=8, freq="15min")   # the two delivery hours
+        rows = pd.DataFrame({"t": qt, "zone": "GR", "sim": [1.0, 2.0, 3.0, 6.0, 10.0, 10.0, 20.0, 20.0]})
+        w = ov.sim_covariate(rows, self.zones, self.grid, self.hours)
+        np.testing.assert_allclose(w[0, 0, 4:], [3.0, 15.0])            # means, not 1.0 / 10.0
+        self.assertTrue(np.isnan(w[0, 0, :4]).all() and np.isnan(w[1, 0]).all())
+
+
 if __name__ == "__main__":
     unittest.main()

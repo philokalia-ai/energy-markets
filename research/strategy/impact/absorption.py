@@ -46,7 +46,7 @@ def curves_for(day, zone):
 
 
 def job(args):
-    day, zone, real = args
+    day, zone, real, dur = args
     cs, pbase = curves_for(day, zone)
     rr = real.get((zone, day), {})
     if cs is None or len(rr) < 24:
@@ -56,13 +56,13 @@ def job(args):
     out = []
     for S in SIZES:
         de = S / 8.0
-        u_c, _, _ = R.energy_dp(cs, 0.0, 2.0 * S, S, S, ETA, 0.0, de=de, objective="welfare")
-        u_n, _, _ = R.energy_dp(cs, 0.0, 2.0 * S, S, S, ETA, 0.0, de=de, impact=False, pt_prices=pbase)
+        u_c, _, _ = R.energy_dp(cs, 0.0, dur * S, S, S, ETA, 0.0, de=de, objective="welfare")
+        u_n, _, _ = R.energy_dp(cs, 0.0, dur * S, S, S, ETA, 0.0, de=de, impact=False, pt_prices=pbase)
         for arm, u in (("competitive", u_c), ("naive", u_n)):
             P = np.array([c.P(x) for c, x in zip(cs, u)])
             d, c = np.maximum(u, 0), np.maximum(-u, 0)
             cap = (P @ d / d.sum() - P @ c / c.sum()) if d.sum() > 1e-6 and c.sum() > 1e-6 else 0.0
-            out.append(dict(day=day, zone=zone, S=S, arm=arm, profit=float(P @ u), per_mw_day=float(P @ u) / S,
+            out.append(dict(day=day, zone=zone, S=S, dur_h=dur, arm=arm, profit=float(P @ u), per_mw_day=float(P @ u) / S,
                             capture_spread=float(cap), zone_spread_base=spread2(pbase), zone_spread=spread2(P),
                             throughput_mwh=float(d.sum()), pt_real=float(preal @ u), imp_real=float((P + e) @ u),
                             dp_mean_abs=float(np.mean(np.abs(P - pbase)))))
@@ -70,9 +70,13 @@ def job(args):
 
 
 if __name__ == "__main__":
+    # usage: python -I absorption.py [DUR_H [ZONES]]  (default 2 h, all 6 zones -> absorption.csv; else absorption_<D>h.csv)
+    dur = float(sys.argv[1]) if len(sys.argv) > 1 else 2.0
+    zones = sys.argv[2].split(",") if len(sys.argv) > 2 else ZONES
     real = ST.realised_table()
     days = (MV.ROOT / "days_cal.txt").read_text().split() + (MV.ROOT / "days_eval.txt").read_text().split()
     with Pool(6) as p:
-        rows = [r for rs in p.imap_unordered(job, [(d, z, real) for d in days for z in ZONES]) for r in rs]
-    pd.DataFrame(rows).to_csv(MV.ROOT / "runs/st-impact/strat/absorption.csv", index=False)
+        rows = [r for rs in p.imap_unordered(job, [(d, z, real, dur) for d in days for z in zones]) for r in rs]
+    name = "absorption.csv" if dur == 2.0 and len(sys.argv) <= 1 else f"absorption_{dur:g}h.csv"
+    pd.DataFrame(rows).to_csv(MV.ROOT / "runs/st-impact/strat" / name, index=False)
     print(len(rows))

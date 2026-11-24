@@ -227,7 +227,10 @@ def sim_known(sim: pd.DataFrame, delivery):
 def sim_covariate(sim_rows, zones, grid, hours):
     """(Z, 1, T+H) known-future covariate on context grid + delivery hours; NaN where absent."""
     full = grid.append(hours)
-    w = sim_rows.pivot_table(index="t", columns="zone", values="sim").reindex(index=full, columns=list(zones))
+    # The covariate is hourly: a quarter-hour sim slice (cv46) is averaged to the hour (floor, then
+    # pivot_table's mean); the reindex alone kept only each hour's :00 quarter. Hourly rows: a no-op.
+    hourly = sim_rows.assign(t=pd.to_datetime(sim_rows["t"]).dt.floor("h"))
+    w = hourly.pivot_table(index="t", columns="zone", values="sim", aggfunc="mean").reindex(index=full, columns=list(zones))
     return w.to_numpy().T[:, None, :].astype(np.float32)
 
 
