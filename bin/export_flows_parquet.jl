@@ -3,11 +3,12 @@
 # Export per-market-day COUPLED CROSS-BORDER FLOWS for the Order-book view's
 # TRADE WEDGE, from simulations.transmission_flows:
 #
-#   v1/flows/<market_date>.parquet   one row per solved border-hour:
+#   v1/flows/<market_date>.parquet   one row per solved border-slot (border-hour
+#       on hourly record days, border-quarter on cv46 quarter-hour days):
 #       date_time_utc TIMESTAMP, source_zone VARCHAR, sink_zone VARCHAR,
 #       flow_mw DOUBLE
 #
-# The SPA (web/app.js) uses these to decompose a zone-hour's coupled net trade
+# The SPA (web/app.js) uses these to decompose a zone-slot's coupled net trade
 # into per-neighbour import/export sources (the marker sits on the LOCAL supply
 # curve at the COUPLED price; the gap to the local demand curve is cross-border
 # trade decided by the 39-zone network — flow variables absent from the local
@@ -24,10 +25,12 @@
 # changes. bin/web_data_push.sh syncs v1/flows/ additively (see that script).
 #
 # Per market day D (Europe/Athens, the product's market_day_tz for every zone),
-# we export the UTC delivery-hour window [D-1 21:00, D 22:00) — 25 h, covering
-# the Athens market day in BOTH DST offsets; the SPA matches each hour by its
-# exact UTC timestamp (fday.hours[hourIdx]), so the extra hour is harmless.
-# When several code_versions wrote a border-hour, the LATEST wins (DISTINCT ON).
+# we export the UTC delivery window [D-1 21:00, D 22:00) — 25 h, covering the
+# Athens market day in BOTH DST offsets; the SPA matches each slot by its exact
+# UTC timestamp (fday.hours[i]), so the extra hour is harmless. When several
+# code_versions wrote a border-slot, the LATEST wins (DISTINCT ON) — on a day
+# re-run at quarter-hour resolution the quarter rows win at :00 and are the only
+# ones at :15/:30/:45.
 #
 # Env:
 #   WEB_PARQUET_OUT   staging root (default <repo>/data/web); files land under

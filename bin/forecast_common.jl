@@ -577,6 +577,81 @@ function load_weighted_err_pct(sim::Vector{Float64}, act::Vector{Float64},
     return 100 * sum(load .* abs.(sim .- act)) / den
 end
 
+# ---------------------------------------------------------------------------
+# Quarter-hour forecast days (cv46) in the exporters. A day's slot length is read from its own stamps:
+# mixed history is permanent (CHOSEN_SLICE_CTE keeps <=cv45 hourly days next to cv46 quarter days), so
+# every reader branches per DAY, never per dataset. Hourly series (the actuals fallback, the model lines,
+# Timestral, the load weights) are replicated onto the quarters of their hour (a step), never interpolated.
+# ---------------------------------------------------------------------------
+const RES_HOURLY = "PT60M"
+const RES_QUARTER = "PT15M"
+
+"ISO 8601 slot length of one forecast day from its UTC stamps: PT15M when two consecutive stamps are 15 minutes apart, else PT60M."
+function day_resolution(ts::AbstractVector)
+    st = sort(DateTime.(collect(ts)))
+    for i in 1:length(st)-1
+        st[i+1] - st[i] == Minute(15) && return RES_QUARTER
+    end
+    return RES_HOURLY
+end
+
+"The market days holding a quarter-hour day in a prices frame (columns z, market_date, lead_days, t, mode or track)."
+function quarter_days(prices)
+    k = hasproperty(prices, :mode) ? prices.mode : prices.track
+    days = Dict{Any,Vector{DateTime}}()
+    for i in eachindex(prices.t)
+        push!(get!(days, (prices.z[i], prices.market_date[i], prices.lead_days[i], k[i]), DateTime[]),
+              DateTime(prices.t[i]))
+    end
+    return sort!(unique(Date(key[2]) for (key, v) in days if day_resolution(v) == RES_QUARTER))
+end
+
+"True when a prices frame holds any quarter-hour day."
+any_quarter_day(prices) = !isempty(quarter_days(prices))
+
+"The stamp an hourly series is read at for one slot: the slot's hour on a quarter day (step), the stamp itself on an hourly day."
+slot_hour(t::DateTime, res::AbstractString) = res == RES_QUARTER ? floor(t, Hour) : t
+
+"""
+    slot_actuals(zone, hours, res, actmap, q15map) -> (actuals, actual_resolution)
+
+Actuals for one zone-day's slots (`nothing` where unsettled). Quarter day, slot by slot: the native PT15M
+Day-ahead actual where published, else the slot's hourly actual (replicated onto the hour's quarters; e.g.
+2025-10-01, whose first Athens hour is still PT60M, or quarters ENTSO-E dropped). `actual_resolution`: PT15M
+when the zone-day has any native quarter, else PT60M (all hourly). Hourly day: the hourly actuals, exactly as
+before (PT60M).
+"""
+function slot_actuals(zone, hours, res, actmap, q15map)
+    if res == RES_QUARTER
+        native = Any[get(q15map, (zone, h), nothing) for h in hours]
+        acts = Any[isnothing(native[i]) ? get(actmap, (zone, floor(hours[i], Hour)), nothing) : native[i]
+                   for i in eachindex(hours)]
+        return acts, any(!isnothing, native) ? RES_QUARTER : RES_HOURLY
+    end
+    return Any[get(actmap, (zone, h), nothing) for h in hours], RES_HOURLY
+end
+
+"""
+    q15_actual_map(days; reader=native_q15_actuals) -> Dict((zone, slot start) => actual)
+
+Native PT15M Day-ahead actuals (`native_q15_actuals`, the SDAC target: non-SDAC sequences dropped) over the
+market days of the export's QUARTER-HOUR days only (`days` = `quarter_days(prices)`; from the day before the
+first, as an Athens market day starts on the previous UTC day). Empty days → no read. Memoised per process on
+the window, so the zone and map passes of one exporter read it once.
+"""
+const _Q15_MAP_CACHE = Dict{Any,Dict{Tuple{String,DateTime},Float64}}()
+function q15_actual_map(days; reader=native_q15_actuals)
+    isempty(days) && return Dict{Tuple{String,DateTime},Float64}()
+    lo, hi = minimum(days) - Day(1), maximum(days)
+    get!(_Q15_MAP_CACHE, (lo, hi, objectid(reader))) do
+        m = Dict{Tuple{String,DateTime},Float64}()
+        for r in eachrow(reader(lo, hi))
+            String(r.res) == "PT15M" && (m[(String(r.z), DateTime(r.t))] = Float64(r.act))
+        end
+        m
+    end
+end
+
 """
     HOURLY_LOAD_FC_SQL
 
