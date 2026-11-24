@@ -46,7 +46,9 @@ if __name__ == "__main__":
     ap.add_argument("out"); ap.add_argument("--start", default="2026-09-01"); ap.add_argument("--end", default="2026-11-14")
     ap.add_argument("--extract", default=os.path.expanduser("~/armada/em-data/euphemia-live-20261115.duckdb"))
     ap.add_argument("--days-file", default=None, help="restrict to these market days (one per line/space)")
+    ap.add_argument("--exclude-days-file", default=None, help="drop these market days (e.g. the calibration days)")
     ap.add_argument("--title", default="")
+    ap.add_argument("--label", default="ShapeConduct(0.0) − baseline (cv46 record PR)")
     a = ap.parse_args()
     con = duckdb.connect(a.extract, read_only=True)
     fr = {"cb": S.load_tsfm(a.base_comb, "postsim"), "cc": S.load_tsfm(a.cand_comb, "postsim"),
@@ -55,8 +57,11 @@ if __name__ == "__main__":
     if a.days_file:
         keep = set(open(a.days_file).read().split())
         fr = {k: f[f.day.isin(keep)] for k, f in fr.items()}
+    if a.exclude_days_file:
+        drop = set(open(a.exclude_days_file).read().split())
+        fr = {k: f[~f.day.isin(drop)] for k, f in fr.items()}
     fr = S.attach_actuals(con, fr)
-    L = ["# Combined Timestral + physics, ShapeConduct(0.0) − baseline (cv46 record PR): paired day-block bootstrap" + a.title, "",
+    L = [f"# Combined Timestral + physics, {a.label}: paired day-block bootstrap" + a.title, "",
          f"Window {a.start}..{a.end}; cells = score_2y.py's (SDAC hourly, D-1 naive); 10,000 draws, seed 4646.", "",
          "| forecast | slice | cells | days | rMAE base → cand | MAE base → cand | ΔMAE [90 %] | bias base → cand |",
          "|---|---|---|---|---|---|---|---|"]
