@@ -6,7 +6,6 @@
                                    zones::Vector{String}=String[],
                                    order_method::Symbol=:merit_order,
                                    optimizer::String="auto",
-                                   markup_factor::Float64=1.1,
                                    silent::Bool=true,
                                    save_to_db::Bool=false,
                                    force_rerun::Bool=false,
@@ -23,7 +22,6 @@ transmission flow constraints between zones based on ENTSO-E ATC data.
 - `zones::Vector{String}`: List of bidding zones to include (default: auto-discover from DB)
 - `order_method::Symbol`: only `:merit_order` (the UC-based and alternative books were removed in cv25) (default: `:merit_order`)
 - `optimizer::String`: "highs" (default) or "auto" — HiGHS is the only solver
-- `markup_factor::Float64`: Price markup factor for supply bids (default: 1.1)
 - `silent::Bool`: Whether to suppress solver output (default: true)
 - `save_to_db::Bool`: Whether to save results to database (default: false)
 - `force_rerun::Bool`: Whether to force UC re-solve, bypassing cache (default: false)
@@ -71,7 +69,6 @@ function run_multi_zone_market_clearing(date::Date;
                                         zones::Vector{String}=String[],
                                         order_method::Symbol=:merit_order,
                                         optimizer::String="auto",
-                                        markup_factor::Float64=1.1,
                                         silent::Bool=true,
                                         save_to_db::Bool=false,
                                         force_rerun::Bool=false,
@@ -245,7 +242,7 @@ function run_multi_zone_market_clearing(date::Date;
         try
             return run_multi_zone_market_clearing(date;
                 zones=zones, order_method=order_method, optimizer=optimizer,
-                markup_factor=markup_factor, silent=silent, save_to_db=save_to_db,
+                silent=silent, save_to_db=save_to_db,
                 force_rerun=force_rerun, parallel=parallel, max_workers=max_workers,
                 clearing_mode=clearing_mode, enrich_network=enrich_network,
                 apply_zone_profiles=apply_zone_profiles, passes=passes,
