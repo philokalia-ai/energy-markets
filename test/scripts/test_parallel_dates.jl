@@ -35,7 +35,6 @@ function test_generate_energy_prices_for_date_range(start_date::Date, end_date::
     order_method = get(kwargs, :order_method, :uc_based)
     model = get(kwargs, :model, :mpcc)
     optimizer = get(kwargs, :optimizer, "highs")
-    markup_factor = get(kwargs, :markup_factor, 1.1)
     random_seed = get(kwargs, :random_seed, nothing)
     silent = get(kwargs, :silent, true)
     save_to_db = get(kwargs, :save_to_db, false)
@@ -75,7 +74,6 @@ function test_generate_energy_prices_for_date_range(start_date::Date, end_date::
                         order_method=order_method,
                         model=model,
                         optimizer=optimizer,
-                        markup_factor=markup_factor,
                         random_seed=random_seed,
                         silent=silent,
                         save_to_db=save_to_db)

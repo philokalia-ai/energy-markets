@@ -302,7 +302,7 @@ function get_marginal_cost(day::Dates.Date, fuel_type::String, bidding_zone::Str
                            cutoff::Union{Nothing,Dates.Date}=nothing)
     # Gas-fired units: use real TTF fuel prices when available.
     # marginal cost = fuel cost / efficiency + carbon cost + variable O&M
-    # No bid markup here — the bidding layer applies its own markup_factor.
+    # No bid markup.
     if fuel_type == "Fossil Gas"
         ttf = get_ttf_price(day; cutoff=cutoff)
         if ttf !== nothing
