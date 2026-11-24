@@ -32,6 +32,8 @@ fp(where="TRUE", args=Any[]) = R("SELECT * FROM results_db.simulations.forecast_
                                  "ORDER BY bidding_zone, date_time_utc", args)
 hours(md) = [DateTime(md - Day(1), Time(22)) + Hour(h) for h in 0:23]
 slice(md, zones, p) = Dict(z => Dict(h => p for h in hours(md)) for z in zones)
+qhours(md) = [DateTime(md - Day(1), Time(22)) + Minute(15 * i) for i in 0:95]
+qslice(md, zones, p) = Dict(z => Dict(h => p for h in qhours(md)) for z in zones)
 
 @testset "run-local results DuckDB writers" begin
     @test Euphemia.results_to_duckdb()
@@ -52,6 +54,7 @@ slice(md, zones, p) = Dict(z => Dict(h => p for h in hours(md)) for z in zones)
         @test sort(unique(live.bidding_zone)) == ["BG", "GR", "RO"]        # BG (not written) kept
         @test all(live[live.bidding_zone .== "GR", :price_eur_mwh] .== 120.0)
         @test all(live[live.bidding_zone .== "BG", :price_eur_mwh] .== 90.0)
+        @test all(live.resolution_code .== "PT60M")      # written hourly rows, and the seeded ones (DDL default)
         o = ops(); @test nrow(o) == 1 && o.kind[1] == "forecast_slice"
         p = JSON.parse(o.params[1])
         @test p["plan"] == "insert" && p["zones"] == ["GR", "RO"] && p["is_retro"] == false
@@ -87,6 +90,7 @@ slice(md, zones, p) = Dict(z => Dict(h => p for h in hours(md)) for z in zones)
         @test bk.n[1] == 72 && bk.s[1] == 24 * (120 + 120 + 90)
         rest = fp("market_date = \$1 AND lead_days = 2", Any[md])
         @test nrow(rest) == 24 && all(rest.is_retro) && all(rest.price_eur_mwh .== 7.0)
+        @test R("SELECT DISTINCT resolution_code AS r FROM results_db.simulations.forecast_prices_pre_reset").r == ["PT60M"]
         # the superseded live op still has its rows for the transfer (Postgres must back up the same 72)
         @test R("SELECT COUNT(*) AS n FROM results_db.simulations.transfer_forecast_rows WHERE transfer_op_id = 1").n[1] == 48
     end
@@ -97,6 +101,27 @@ slice(md, zones, p) = Dict(z => Dict(h => p for h in hours(md)) for z in zones)
         @test write_forecast!(md3, 1, pm, slice(md3, ["GR"], 8.0), "weather"; is_retro=true, reset_tag=tag) == 24
         r3 = fp("market_date = \$1", Any[md3]); @test nrow(r3) == 24 && all(r3.price_eur_mwh .== 8.0)
         @test JSON.parse(ops().params[end])["plan"] == "alongside"
+    end
+
+    @testset "resolution_code (cv46 D1): quarter slices PT15M, per zone; carried to the op rows and the backup" begin
+        md4 = md + Day(3)
+        zh = merge(qslice(md4, ["GR"], 11.0), slice(md4, ["BG"], 12.0))   # one quarter zone, one hourly zone
+        @test write_forecast!(md4, 2, pm, zh, "weather") == 96 + 24
+        r4 = fp("market_date = \$1", Any[md4])
+        @test all(r4[r4.bidding_zone .== "GR", :resolution_code] .== "PT15M") && count(==("GR"), r4.bidding_zone) == 96
+        @test all(r4[r4.bidding_zone .== "BG", :resolution_code] .== "PT60M")
+        op4 = ops().op_id[end]
+        t4 = R("SELECT bidding_zone, resolution_code, COUNT(*) AS n FROM results_db.simulations.transfer_forecast_rows " *
+               "WHERE transfer_op_id = \$1 GROUP BY ALL ORDER BY ALL", Any[op4])
+        @test t4.bidding_zone == ["BG", "GR"] && t4.resolution_code == ["PT60M", "PT15M"] && t4.n == [24, 96]
+        # a superseding retro (hourly) backs up the live quarter rows with their label
+        withenv("EUPHEMIA_RETRO_SUPERSEDE" => "1") do
+            @test write_forecast!(md4, 2, pm, slice(md4, ["GR"], 3.0), "weather"; is_retro=true, reset_tag="t4") == 24
+        end
+        bk = R("SELECT resolution_code, COUNT(*) AS n FROM results_db.simulations.forecast_prices_pre_reset " *
+               "WHERE market_date = \$1 GROUP BY ALL ORDER BY ALL", Any[md4])
+        @test bk.resolution_code == ["PT15M", "PT60M"] && bk.n == [96, 24]
+        @test all(fp("market_date = \$1", Any[md4]).resolution_code .== "PT60M")
     end
 
     @testset "input corrections: first vintage wins locally, one op" begin
@@ -159,5 +184,7 @@ end
     @test occursin("INSERT INTO simulations.forecast_prices_pre_reset", out)          # the supersede backup
     @test occursin("GET DIAGNOSTICS n_backed = ROW_COUNT", out)
     @test occursin("RAISE EXCEPTION", out) && occursin("ON CONFLICT DO NOTHING", out)
+    @test occursin("ADD COLUMN IF NOT EXISTS resolution_code TEXT NOT NULL DEFAULT ''PT60M''", out)   # D1 migration
+    @test occursin("retro_of_utc, resolution_code) SELECT", out) || occursin("retro_of_utc, resolution_code FROM", out)
     @test !occursin("ENERGY_CONN_STR is not set", out)                                # dry run needs no Postgres
 end

@@ -21,10 +21,10 @@ columns arrive as naive UTC `TIMESTAMP`, the extract convention). `transfer_op_i
 const RUN_RESULT_COLUMNS = Dict(
     "forecast_prices" => ["id", "market_date", "date_time_utc", "bidding_zone", "price_eur_mwh",
         "prediction_made_utc", "lead_days", "clearing_mode", "code_version", "input_mode",
-        "optimization_run_id", "created_at", "is_retro", "reset_tag", "retro_of_utc"],
+        "optimization_run_id", "created_at", "is_retro", "reset_tag", "retro_of_utc", "resolution_code"],
     "forecast_prices_pre_reset" => ["backup_id", "market_date", "date_time_utc", "bidding_zone",
         "price_eur_mwh", "prediction_made_utc", "lead_days", "clearing_mode", "code_version", "input_mode",
-        "is_retro", "reset_tag", "retro_of_utc", "superseded_at_utc"],
+        "is_retro", "reset_tag", "retro_of_utc", "superseded_at_utc", "resolution_code"],
     "forecast_scores" => ["market_date", "bidding_zone", "lead_days", "code_version", "input_mode",
         "n_hours", "mae", "bias", "corr", "n_collapse_actual", "n_collapse_pred", "collapse_hits",
         "collapse_false_alarms", "collapse_hit_rate", "collapse_false_alarm_rate", "is_retro", "reset_tag",
@@ -41,13 +41,13 @@ const _RUN_RESULTS_DDL = [
         price_eur_mwh DOUBLE NOT NULL, prediction_made_utc TIMESTAMP NOT NULL, lead_days INTEGER NOT NULL,
         clearing_mode VARCHAR, code_version INTEGER NOT NULL, input_mode VARCHAR NOT NULL,
         optimization_run_id BIGINT, created_at TIMESTAMP, is_retro BOOLEAN NOT NULL, reset_tag VARCHAR,
-        retro_of_utc TIMESTAMP, transfer_op_id BIGINT)""",
+        retro_of_utc TIMESTAMP, resolution_code VARCHAR NOT NULL DEFAULT 'PT60M', transfer_op_id BIGINT)""",
     """CREATE TABLE IF NOT EXISTS results_db.simulations.forecast_prices_pre_reset (
         backup_id BIGINT, market_date DATE NOT NULL, date_time_utc TIMESTAMP NOT NULL,
         bidding_zone VARCHAR NOT NULL, price_eur_mwh DOUBLE NOT NULL, prediction_made_utc TIMESTAMP NOT NULL,
         lead_days INTEGER NOT NULL, clearing_mode VARCHAR, code_version INTEGER NOT NULL,
         input_mode VARCHAR NOT NULL, is_retro BOOLEAN, reset_tag VARCHAR, retro_of_utc TIMESTAMP,
-        superseded_at_utc TIMESTAMP, transfer_op_id BIGINT)""",
+        superseded_at_utc TIMESTAMP, resolution_code VARCHAR NOT NULL DEFAULT 'PT60M', transfer_op_id BIGINT)""",
     """CREATE TABLE IF NOT EXISTS results_db.simulations.forecast_scores (
         market_date DATE NOT NULL, bidding_zone VARCHAR NOT NULL, lead_days INTEGER NOT NULL,
         code_version INTEGER NOT NULL, input_mode VARCHAR NOT NULL, n_hours INTEGER, mae DOUBLE, bias DOUBLE,
@@ -66,7 +66,8 @@ const _RUN_RESULTS_DDL = [
         transfer_op_id BIGINT NOT NULL, market_date DATE NOT NULL, date_time_utc TIMESTAMP NOT NULL,
         bidding_zone VARCHAR NOT NULL, price_eur_mwh DOUBLE NOT NULL, prediction_made_utc TIMESTAMP NOT NULL,
         lead_days INTEGER NOT NULL, clearing_mode VARCHAR, code_version INTEGER NOT NULL, input_mode VARCHAR NOT NULL,
-        is_retro BOOLEAN NOT NULL, reset_tag VARCHAR, retro_of_utc TIMESTAMP)""",
+        is_retro BOOLEAN NOT NULL, reset_tag VARCHAR, retro_of_utc TIMESTAMP,
+        resolution_code VARCHAR NOT NULL DEFAULT 'PT60M')""",
     # Rows of a score_restore op (bin/forecast_scores_snapshot.jl restore): the snapshot's hourly columns and
     # scored_at for each campaign key, plus the campaign's scored_at that the row must still carry.
     """CREATE TABLE IF NOT EXISTS results_db.simulations.transfer_score_restore (

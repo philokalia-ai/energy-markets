@@ -570,7 +570,7 @@ function write_forecast_duckdb!(market_date::Date, lead_days::Int, prediction_ma
               "AND code_version = \$5", Any[reset_tag, CV])
         elseif plan == :supersede
             cols = "market_date, date_time_utc, bidding_zone, price_eur_mwh, prediction_made_utc, lead_days, " *
-                   "clearing_mode, code_version, input_mode, is_retro, reset_tag, retro_of_utc"
+                   "clearing_mode, code_version, input_mode, is_retro, reset_tag, retro_of_utc, resolution_code"
             x("INSERT INTO $R.forecast_prices_pre_reset ($cols, superseded_at_utc, transfer_op_id) " *
               "SELECT $cols, now()::TIMESTAMP, \$4 FROM $R.forecast_prices WHERE $slice AND is_retro = false",
               Any[op])
@@ -585,11 +585,14 @@ function write_forecast_duckdb!(market_date::Date, lead_days::Int, prediction_ma
                          price_eur_mwh=Float64[], prediction_made_utc=DateTime[], lead_days=Int[],
                          clearing_mode=String[], code_version=Int[], input_mode=String[], is_retro=Bool[],
                          reset_tag=Union{Missing,String}[], retro_of_utc=Union{Missing,DateTime}[],
-                         transfer_op_id=Int64[])
-        for zone in zones, (h, price) in sort!(collect(zone_hourly[zone]); by=first)
-            push!(rows, (market_date, h, zone, price, prediction_made, lead_days, CLEARING_MODE, CV,
-                         input_mode, is_retro, something(reset_tag, missing),
-                         retro_of_utc === nothing ? missing : retro_of_utc, op))
+                         resolution_code=String[], transfer_op_id=Int64[])
+        for zone in zones
+            res = Euphemia.forecast_resolution_code(keys(zone_hourly[zone]))   # per zone, as write_forecast!
+            for (h, price) in sort!(collect(zone_hourly[zone]); by=first)
+                push!(rows, (market_date, h, zone, price, prediction_made, lead_days, CLEARING_MODE, CV,
+                             input_mode, is_retro, something(reset_tag, missing),
+                             retro_of_utc === nothing ? missing : retro_of_utc, res, op))
+            end
         end
         Euphemia._results_insert_df(rows, "transfer_forecast_rows")   # what the transfer replays for this op
         Euphemia._results_insert_df(rows, "forecast_prices")          # what later steps of the job read back

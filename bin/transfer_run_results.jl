@@ -13,7 +13,9 @@
 #                          alongside / supersede / refuse), RAISE if it differs from the plan the run applied;
 #                          then the live per-zone DELETE, the retro DELETE, or the supersede backup
 #                          (INSERT INTO forecast_prices_pre_reset SELECT …, ROW_COUNT must equal the live count)
-#                          + slice DELETE; then INSERT … SELECT from the stage.
+#                          + slice DELETE; then INSERT … SELECT from the stage. Every row carries the writer's
+#                          resolution_code (PT60M / PT15M); the column is added first when Postgres lacks it
+#                          (cv46 D1's catalog-first migration, PLPGSQL_RESOLUTION_COLUMN).
 #        input_corrections INSERT … SELECT … ON CONFLICT DO NOTHING (Postgres' own key, as the emitter did).
 #        score_upsert      INSERT … ON CONFLICT (pk) DO UPDATE of the hourly columns (as upsert_score! did), with
 #                          scored_at = the scorer's scoring-time stamp (a rescore campaign's key file matches it).
@@ -71,11 +73,11 @@ lit_text_array(v) = isempty(v) ? "ARRAY[]::text[]" : "ARRAY[" * join(lit.(String
 ident_ok(s) = occursin(r"^[a-z0-9_]+$", s) || error("bad identifier $(repr(s))")
 
 const FP_COLS = "market_date, date_time_utc, bidding_zone, price_eur_mwh, prediction_made_utc, lead_days, " *
-                "clearing_mode, code_version, input_mode, is_retro, reset_tag, retro_of_utc"
+                "clearing_mode, code_version, input_mode, is_retro, reset_tag, retro_of_utc, resolution_code"
 # naive-UTC TIMESTAMP (results DuckDB) → timestamptz (Postgres); DuckDB's TimeZone is UTC
 const FP_STAGE_SELECT = "market_date, CAST(date_time_utc AS TIMESTAMPTZ) AS date_time_utc, bidding_zone, " *
     "price_eur_mwh, CAST(prediction_made_utc AS TIMESTAMPTZ) AS prediction_made_utc, lead_days, clearing_mode, " *
-    "code_version, input_mode, is_retro, reset_tag, CAST(retro_of_utc AS TIMESTAMPTZ) AS retro_of_utc"
+    "code_version, input_mode, is_retro, reset_tag, CAST(retro_of_utc AS TIMESTAMPTZ) AS retro_of_utc, resolution_code"
 const SCORE_PK = ["market_date", "bidding_zone", "lead_days", "code_version", "input_mode", "is_retro"]
 const SCORE_HOURLY = ["n_hours", "mae", "bias", "corr", "n_collapse_actual", "n_collapse_pred", "collapse_hits",
                       "collapse_false_alarms", "collapse_hit_rate", "collapse_false_alarm_rate"]
@@ -135,6 +137,7 @@ function plpgsql_forecast_slice(op_id, p, st)
     who = "op $op_id ($md lead=$lead mode=$mode)"
     b = IOBuffer()
     println(b, "  -- $who: forecast_slice, run plan $plan")
+    print(b, PLPGSQL_RESOLUTION_COLUMN)
     if !is_retro   # LIVE: realized-day and hour guards, against Postgres now
         println(b, """
           IF horizon IS NULL THEN RAISE EXCEPTION 'entsoe.actual_total_load is empty: no realized horizon'; END IF;
@@ -177,6 +180,21 @@ function plpgsql_forecast_slice(op_id, p, st)
     end
     println(b, "  INSERT INTO simulations.forecast_prices ($FP_COLS) SELECT $FP_COLS FROM $st;")
     return String(take!(b))
+end
+
+"""cv46 D1's additive migration (`ensure_forecast_tables`), server-side before a forecast_slice op: the
+`resolution_code TEXT NOT NULL DEFAULT 'PT60M'` column on forecast_prices and its pre_reset mirror, added only
+when the catalog lacks it (catalog-only change: every existing row reads PT60M), under a 30 s lock timeout."""
+const PLPGSQL_RESOLUTION_COLUMN = let b = IOBuffer()
+    println(b, "  PERFORM set_config('lock_timeout', '30s', true);")
+    for t in ("forecast_prices", "forecast_prices_pre_reset")
+        println(b, "  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'simulations' " *
+                   "AND table_name = '$t' AND column_name = 'resolution_code') THEN " *
+                   "EXECUTE 'ALTER TABLE simulations.$t ADD COLUMN IF NOT EXISTS resolution_code TEXT NOT NULL " *
+                   "DEFAULT ''PT60M'''; END IF;")
+    end
+    println(b, "  PERFORM set_config('lock_timeout', '0', true);")
+    String(take!(b))
 end
 
 plpgsql_input_corrections(op_id, p, st) =
