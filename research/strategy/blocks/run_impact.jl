@@ -70,7 +70,11 @@ function main()
             end
             for fmt in FMTS[cls(a)]
                 only === nothing || fmt in only || continue
-                k = get(kj, "$z|$arch|$fmt|1.0|1.0", get(kj, "$z|$arch|$fmt|1.0", 1.0))   # cal key with/without the no-load cell
+                # calibrated k_su: key "zone|arch|format|su[|nl]" (score_pt.py JSON, 5 parts since 508d157, 4 before)
+                kk = ["$z|$arch|$fmt|1.0|1.0", "$z|$arch|$fmt|1.0"]
+                ik = findfirst(x -> haskey(kj, x), kk)
+                (a isa SF.Thermal && fmt != "hourly_mc" && ik === nothing) && error("no calibrated k_su for $z $arch $fmt in KMAP")
+                k = ik === nothing ? 1.0 : Float64(kj[kk[ik]])
                 company = bids(a, fmt, F, day; k_su=k)
                 t0 = time()
                 r = try
