@@ -39,8 +39,10 @@ CompanyCtx(asset, F::AbstractVector{<:Real}, day::Date, res::Int; extra::NamedTu
     CompanyCtx(asset, Vector{Float64}(F), day, res, String(asset.zone), extra)
 
 """cost_reflective(s) -> Bool: every price the strategy submits is the asset's own marginal / opportunity cost
-(incl. start-up and no-load spread over a block) under a stated ex-ante rule (owner addendum 2026-11-23 22:35Z)."""
-cost_reflective(::CompanyStrategy) = true
+(incl. start-up and no-load spread over a block) under a stated ex-ante rule (owner addendum 2026-11-23 22:35Z).
+NO default: every strategy file declares it explicitly, so a new strategy cannot pass `score`'s assert by omission
+(test/strategy/test_company_strategies.jl checks every concrete subtype has its own method)."""
+function cost_reflective end
 
 """label(s) -> String: the round-1 format id of a strategy (CSV `format` column)."""
 function label end

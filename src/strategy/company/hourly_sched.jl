@@ -3,6 +3,7 @@ the cap): the unpriced benchmark that isolates the order structure from price li
 (PV at 0 €/MWh), retailer."""
 struct HourlySched <: CompanyStrategy end
 label(::HourlySched) = "hourly_sched"
+cost_reflective(::HourlySched) = true
 function offers(s::HourlySched, c::CompanyCtx{Storage})
     a = c.asset; T = length(c.F); dt = c.res / 60; z = a.zone; o = MarketOrder[]
     cc, d, _ = storage_lp(a, c.F; dt=dt)

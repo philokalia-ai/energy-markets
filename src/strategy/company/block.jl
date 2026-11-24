@@ -7,6 +7,7 @@ struct Block <: CompanyStrategy
     Block(k_su=1.0) = new(_k_ok(k_su))
 end
 label(::Block) = "block"
+cost_reflective(::Block) = true
 function offers(s::Block, c::CompanyCtx{Thermal})
     t = _th(c); a = t.a; o = MarketOrder[]; fixc = _fixc(a, s.k_su, t.dt)
     st, L, _ = best_window((c.F .- a.srmc) .* a.pmax .* t.dt, t.Ls, L -> fixc(L) / 1.0)

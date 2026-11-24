@@ -95,3 +95,16 @@ end
     @test_throws ErrorException score(MarMin(1.0), a, base; realised=realised, impact=false)
     @test score(MarMin(1.0), a, base; realised=realised, impact=false, allow_flagged=true).impact === nothing
 end
+
+@testset "every concrete CompanyStrategy declares cost_reflective explicitly (no default)" begin
+    import InteractiveUtils
+    leaves(T) = isabstracttype(T) ? reduce(vcat, (leaves(S) for S in InteractiveUtils.subtypes(T)); init=Type[]) : Type[T]
+    concrete = leaves(SF.CompanyStrategy)
+    @test length(concrete) >= 10
+    for T in concrete
+        @test hasmethod(cost_reflective, Tuple{T})
+        @test hasmethod(label, Tuple{T})
+    end
+    @test isempty(methods(cost_reflective, Tuple{SF.CompanyStrategy})) ||
+          all(m.sig != Tuple{typeof(cost_reflective),SF.CompanyStrategy} for m in methods(cost_reflective))
+end
