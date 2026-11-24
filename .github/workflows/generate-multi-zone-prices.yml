@@ -16,16 +16,6 @@ on:
         required: true
         default: "2025-11-07"
         type: string
-      parallel:
-        description: "Use parallel UC processing"
-        required: false
-        default: true
-        type: boolean
-      max_workers:
-        description: "Maximum parallel workers (0 = auto-detect)"
-        required: false
-        default: "20"
-        type: string
       order_method:
         description: "Order generation method"
         required: false
@@ -105,9 +95,7 @@ jobs:
           if [ "${{ github.event_name }}" = "schedule" ]; then
             START_DATE=$(date -d "yesterday" +%Y-%m-%d)
             END_DATE=$START_DATE
-            PARALLEL=true
             OPTIMIZER="highs"
-            MAX_WORKERS=16
             ORDER_METHOD="merit_order"
             ZONES="GR,BG,RO,RS,HU"
             FORCE_RERUN=false
@@ -115,9 +103,7 @@ jobs:
           else
             START_DATE="${{ github.event.inputs.start_date }}"
             END_DATE="${{ github.event.inputs.end_date }}"
-            PARALLEL="${{ github.event.inputs.parallel }}"
             OPTIMIZER="highs"
-            MAX_WORKERS="${{ github.event.inputs.max_workers }}"
             ORDER_METHOD="${{ github.event.inputs.order_method }}"
             ZONES="${{ github.event.inputs.zones }}"
             FORCE_RERUN="${{ github.event.inputs.force_rerun }}"
@@ -127,14 +113,12 @@ jobs:
           echo "🌍 Multi-zone market clearing"
           echo "📅 Date range: $START_DATE to $END_DATE"
           echo "⚖️ Optimizer: $OPTIMIZER"
-          echo "⚡ Parallel UC: $PARALLEL"
-          echo "👥 Max workers: $MAX_WORKERS"
           echo "📋 Order method: $ORDER_METHOD"
           echo "🌍 Zones: ${ZONES:-auto-discover}"
           echo "🔄 Force rerun: $FORCE_RERUN"
           echo "💹 Markup factor: $MARKUP_FACTOR"
 
-          export START_DATE END_DATE PARALLEL OPTIMIZER MAX_WORKERS ORDER_METHOD ZONES FORCE_RERUN MARKUP_FACTOR
+          export START_DATE END_DATE OPTIMIZER ORDER_METHOD ZONES FORCE_RERUN MARKUP_FACTOR
 
           julia --project=. bin/multi_zone_main.jl
 
@@ -156,7 +140,6 @@ jobs:
           echo "- **Trigger**: $TRIGGER" >> $GITHUB_STEP_SUMMARY
           echo "- **Date Range**: $DATE_RANGE" >> $GITHUB_STEP_SUMMARY
           echo "- **Optimizer**: highs" >> $GITHUB_STEP_SUMMARY
-          echo "- **Parallel UC**: ${{ github.event.inputs.parallel || 'true' }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Order Method**: ${{ github.event.inputs.order_method || 'merit_order' }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Force Rerun**: ${{ github.event.inputs.force_rerun || 'false' }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Markup Factor**: ${{ github.event.inputs.markup_factor || '1.1' }}" >> $GITHUB_STEP_SUMMARY

@@ -381,6 +381,52 @@ function pipeline_solver_worker(solvework::RemoteChannel, bookwork::RemoteChanne
 end
 
 """
+    resume_slots_needed(resolution_code, min_price_periods) -> Int
+
+Distinct slots a saved UTC day needs for resume to treat it as complete, by the day's
+`energy_prices.resolution_code` (cv46 downstream D2: hourly and quarter-hour days share the record).
+An hourly day (`1H`, or unknown) needs `min_price_periods`, as before; a `15M` day a full UTC day of
+quarters (`max(min_price_periods, 96)`), a `30M` day `max(min_price_periods, 48)`."""
+function resume_slots_needed(rc, min_price_periods::Integer)
+    s = rc === missing || rc === nothing ? "1H" : strip(String(rc))
+    s == "15M" && return max(min_price_periods, 96)
+    s == "30M" && return max(min_price_periods, 48)
+    return min_price_periods
+end
+
+"""
+    resume_day_counts(clearing_mode, cv, first_day, last_day) -> DataFrame(d, nz, nh, q15, q30)
+
+Per saved UTC day of `simulations.energy_prices`: distinct zones, distinct slots, and whether ANY of
+its rows is a quarter-hour (`q15`) or half-hour (`q30`) slot. Booleans, not `MAX(resolution_code)`:
+as text "1H" sorts above "15M", so a day holding both took the hourly bar (review of #476 #4)."""
+function resume_day_counts(clearing_mode::String, cv::Int, first_day::Date, last_day::Date)
+    return sql2df("""
+        SELECT (date_time_utc AT TIME ZONE 'UTC')::date AS d,
+               COUNT(DISTINCT bidding_zone) AS nz,
+               COUNT(DISTINCT date_time_utc) AS nh,
+               bool_or(trim(resolution_code) = '15M') AS q15,
+               bool_or(trim(resolution_code) = '30M') AS q30
+        FROM simulations.energy_prices
+        WHERE clearing_mode = \$1 AND code_version = \$2
+          AND date_time_utc >= (\$3::date::timestamp AT TIME ZONE 'UTC')
+          AND date_time_utc <  (\$4::date::timestamp AT TIME ZONE 'UTC')
+        GROUP BY 1
+        """, [clearing_mode, cv, first_day, last_day + Day(1)])
+end
+
+_resume_rc(r) = coalesce(r.q15, false) ? "15M" : coalesce(r.q30, false) ? "30M" : "1H"
+
+"""
+    resume_complete_days(counts, n_zones, min_price_periods) -> Set{Date}
+
+Days of `resume_day_counts` that resume may skip: every zone present and enough distinct slots for
+the day's finest resolution (`resume_slots_needed`)."""
+resume_complete_days(df, n_zones::Integer, min_price_periods::Integer) =
+    Set(Date(r.d) for r in eachrow(df)
+        if Int(r.nz) >= n_zones && Int(r.nh) >= resume_slots_needed(_resume_rc(r), min_price_periods))
+
+"""
     pipeline_day_saved(day, clearing_mode, cv) -> Bool
 
 Resume check: has this (day, clearing_mode, code_version) already been saved to
@@ -590,28 +636,21 @@ function _run_pipelined_backfill_impl(days, zones::Vector{String}=String[];
         # skipped it forever. Zone-count completeness costs nothing extra —
         # it is the same grouped scan with one more aggregate.
         saved_days = try
-            df = sql2df("""
-                SELECT (date_time_utc AT TIME ZONE 'UTC')::date AS d,
-                       COUNT(DISTINCT bidding_zone) AS nz,
-                       COUNT(DISTINCT date_time_utc) AS nh
-                FROM simulations.energy_prices
-                WHERE clearing_mode = \$1 AND code_version = \$2
-                  AND date_time_utc >= (\$3::date::timestamp AT TIME ZONE 'UTC')
-                  AND date_time_utc <  (\$4::date::timestamp AT TIME ZONE 'UTC')
-                GROUP BY 1
-                """, [clearing_mode, cv, minimum(days), maximum(days) + Day(1)])
+            df = resume_day_counts(clearing_mode, cv, minimum(days), maximum(days))
             # BOTH dimensions. Zone count alone is not completeness: the cv24
             # record holds 65 days that carry all 39 zones and fewer than 24
             # hours (12 of them a single hour) because one zone's short book
             # collapsed the coupled period intersection. Those days passed a
             # zone-only check and were skipped forever.
-            complete = Set(Date(r.d) for r in eachrow(df)
-                           if Int(r.nz) >= length(zones) && Int(r.nh) >= min_price_periods)
+            # Per day, by the day's resolution (cv46: quarter-hour days in the same record as
+            # hourly ones): an hourly day needs min_price_periods slots as before; a 15M day a full
+            # UTC day of quarters (96), so a truncated quarter day (>= 24 quarters) is not taken
+            # as complete.
+            complete = resume_complete_days(df, length(zones), min_price_periods)
             for r in eachrow(df)
-                nz, nh = Int(r.nz), Int(r.nh)
-                (nz >= length(zones) && nh >= min_price_periods) && continue
-                @warn "resume: $(Date(r.d)) is SHORT ($nz/$(length(zones)) zones, " *
-                      "$nh/$min_price_periods hours) — re-processing"
+                Date(r.d) in complete && continue
+                @warn "resume: $(Date(r.d)) is SHORT ($(Int(r.nz))/$(length(zones)) zones, " *
+                      "$(Int(r.nh))/$(resume_slots_needed(_resume_rc(r), min_price_periods)) slots) — re-processing"
             end
             complete
         catch e
