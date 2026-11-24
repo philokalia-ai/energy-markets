@@ -145,6 +145,25 @@ end
     obf = MPCC.MPCCOrderBook(o, ["Z"], t0, (-500.0, 3000.0), nothing, Dict(("Z", t0[1]) => 80.0))
     @test MPCC.solve_mpcc_market_clearing(obf; preferred_solver="highs", verbose=false).market_prices["Z"][t0[1]] ≈ 10.0
 
+    # (4b) the complex-order master honours fixed injections too (it used to raise on an
+    # undefined `add_to_constant!` and release to the baseline book). Hour 0: 80 MW fixed
+    # supply leaves 20 MW for the 10-€ unit → 10; hour 1: the storage family is marginal → 40.
+    pf = ["20261104-0000", "20261104-0100"]
+    df = [DateTime(2026, 11, 4, 0), DateTime(2026, 11, 4, 1)]
+    of = MarketOrder[]
+    for h in 1:2
+        push!(of, SimpleOrder(:demand, 3000.0, 100.0, Z, df[h], 60))
+        push!(of, SimpleOrder(:supply, 10.0, 60.0, Z, df[h], 60))
+        push!(of, SimpleOrder(:supply, 150.0, 100.0, Z, df[h], 60))
+        push!(of, LinkedHourlyOrder(:supply, 40.0, 50.0, Z, df[h], 60, "ESTOR:Z", 1000.0))
+    end
+    bkf = MPCC.MPCCOrderBook(of, ["Z"], pf, (-500.0, 3000.0), nothing, Dict(("Z", pf[1]) => 80.0))
+    rf = MPCC.solve_with_complex_orders(bkf, b -> MPCC.solve_mpcc_market_clearing(b;
+        preferred_solver="highs", decompose_periods=true, verbose=false); verbose=false)
+    @test MPCC.LAST_COMPLEX_INFO[].status == :optimal
+    @test rf.market_prices["Z"][pf[1]] ≈ 10.0
+    @test rf.market_prices["Z"][pf[2]] ≈ 40.0
+
     # (2) a block whose acceptance is paradoxical is REJECTED (the plant does not run): its
     # original must-run offers (BLKFB) are not restored — they only come back on a master
     # failure (3). Hour 1: 50 MW from the 10-€ unit (30) and gas → 80; hour 2: gas → 100.
