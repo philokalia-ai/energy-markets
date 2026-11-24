@@ -249,6 +249,10 @@ println()
         @test success(`$(Base.julia_cmd()) --startup-file=no --project=$(dirname(Base.active_project())) $(joinpath(@__DIR__, "test_fill_guard_outer.jl"))`)
     end
 
+    @testset "Postgres guard: no LibPQ connection under the DuckDB store (own process)" begin
+        @test success(`$(Base.julia_cmd()) --startup-file=no --project=$(dirname(Base.active_project())) $(joinpath(@__DIR__, "test_pg_guard.jl"))`)
+    end
+
     @testset "Solar-regime gate: issued weather solar" begin
         include(joinpath(@__DIR__, "test_solar_gate_issued.jl"))
     end
