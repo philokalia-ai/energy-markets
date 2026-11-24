@@ -154,6 +154,31 @@ end
         end
     end
 
+    @testset "(e3) an unchanged order keeps its label: storage families survive a strategist" begin
+        fams(ob) = sort([(o.family, o.family_budget_mwh, o.price, o.quantity, o.date_time)
+                         for o in ob.orders if o isa Euphemia.LinkedHourlyOrder])
+        base_f = fams(base_result.order_book)
+        if isempty(base_f)
+            @info "no storage families on $HOOK_DAY (complex orders off?) — family check skipped"
+            @test_skip false
+        else
+            # identity strategist, (order, tag) pairs: the same book, families included
+            id = create_merit_order_book(HOOK_ZONE, HOOK_DAY; strategist=ctx -> ctx.tagged_orders)
+            @test id.success
+            @test fams(id.order_book) == base_f
+            @test order_fingerprint(id.order_book) == order_fingerprint(base_result.order_book)
+            # explicit triples: labels as stated
+            trip = create_merit_order_book(HOOK_ZONE, HOOK_DAY;
+                strategist=ctx -> [(o, t, s) for ((o, t), s) in zip(ctx.tagged_orders, ctx.strategies)])
+            @test fams(trip.order_book) == base_f
+            # relabelling everything "strategist" (triples) drops the families: the
+            # label is what selects them
+            none = create_merit_order_book(HOOK_ZONE, HOOK_DAY;
+                strategist=ctx -> [(o, t, "strategist") for (o, t) in ctx.tagged_orders])
+            @test isempty(fams(none.order_book))
+        end
+    end
+
     @testset "(f) DuckDB round-trip matches Postgres" begin
         extract = joinpath(dirname(@__DIR__), "data", "extracts", "euphemia_2026_see.duckdb")
         if !isfile(extract)
