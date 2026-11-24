@@ -215,6 +215,18 @@ jobs:
           if [ -f "$RUN_DIR/inputs.duckdb" ] && [ -f "$RUN_DIR2/inputs.duckdb" ]; then
             julia --project=. bin/measure_duckdb_path.jl fill-diff "$RUN_DIR/inputs.duckdb" "$RUN_DIR2/inputs.duckdb" --out "$OUT_DIR" || true
           fi
+          # Trace replay: every read that differed is re-run on fill 1 and on fill 2 (its SQL text + typed args, recorded
+          # by --trace). PG = fill2 and DuckDB = fill1 for a read proves Postgres changed during the run (churn); PG != fill2
+          # points at the fill (coverage). Only the differing reads: a few minutes, inside the job timeout.
+          if [ "$(wc -l < "$OUT_DIR/trace_diff.tsv" 2>/dev/null || echo 0)" -gt 1 ] && [ -f "$OUT_DIR/trace_calls_pg.jsonl" ] \
+             && [ -f "$RUN_DIR/inputs.duckdb" ] && [ -f "$RUN_DIR2/inputs.duckdb" ]; then
+            for fill in "fill1:$RUN_DIR" "fill2:$RUN_DIR2"; do
+              EUPHEMIA_DATA_STORE=duckdb EUPHEMIA_DUCKDB_PATH="${fill#*:}/inputs.duckdb" EUPHEMIA_DUCKDB_READONLY=true \
+                julia --project=. bin/measure_duckdb_path.jl trace-replay --label "${fill%%:*}" --out "$OUT_DIR" \
+                  --calls "$OUT_DIR/trace_calls_pg.jsonl,$OUT_DIR/trace_calls_duckdb.jsonl" --diff "$OUT_DIR/trace_diff.tsv" || true
+            done
+            julia --project=. bin/measure_duckdb_path.jl trace-replay-report --out "$OUT_DIR" || true
+          fi
           [ -f "$OUT_DIR/fill.json" ] && python3 -c "import json; f=json.load(open('$OUT_DIR/fill.json')); print(f\"- fill 1: {f['process_wall_s']} s wall, peak RSS {f['peak_rss_kb']} kB, inputs {f['inputs_mib']} MiB, results {f['results_mib']} MiB; TimeZone source={f.get('source_timezone')} pg={f.get('pg_timezone')} scanner={f.get('scanner_timezone')}; absent in source: {f.get('absent_in_source')}\")" >> "$GITHUB_STEP_SUMMARY"
           [ -f "$OUT_DIR/pg_server_timezone.txt" ] && echo "- Postgres server TimeZone default (unpinned session): $(cat "$OUT_DIR/pg_server_timezone.txt")" >> "$GITHUB_STEP_SUMMARY"
           exit $rc
@@ -228,6 +240,7 @@ jobs:
             measure-out/
             run-local/inputs.duckdb
             run-local/fill.json
+            run-local-2/inputs.duckdb
             run-local-2/fill.json
             watchdog.log
             STOP_MEASURE
