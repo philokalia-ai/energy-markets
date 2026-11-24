@@ -7,7 +7,8 @@
 #                [--entry forecast|record]   forecast (default) = the daily forecast's call (run_multi_zone_market_clearing,
 #                passes=2): the timing production runs every day; record = the pipelined record's stage functions
 #                (bit-identical to the record, so also comparable with it). Both backends must use the same entry.
-#                [--steps 24|96]   periods per day: 24 (hourly, default) or 96 (the quarter-hour clear, cv46:
+#                [--steps production|24|96]   periods per day: production (default: the code's CLEAR_RESOLUTION_MINUTES,
+#                96 since cv46), 24 (hourly) or 96 (the quarter-hour clear, cv46:
 #                clear_resolution_minutes = 15 on either entry; per-period decomposition as on main).
 #            The backend is whatever the environment selects: ENERGY_CONN_STR + EUPHEMIA_DATA_STORE=postgres for the
 #            current path; EUPHEMIA_DATA_STORE=duckdb + EUPHEMIA_DUCKDB_PATH=<filled inputs> for the DuckDB path.
@@ -19,6 +20,12 @@
 #   compare: julia --project=. bin/measure_duckdb_path.jl compare DIR/prices_pg.csv DIR/prices_duckdb.csv --out DIR
 #            Cell-by-cell comparison; every differing cell listed with its |Δ| and class (bit-identical / ≤2e-12
 #            tie class / beyond), plus DIR/summary.md (also appended to $GITHUB_STEP_SUMMARY when set).
+#   trace-replay: ... trace-replay --calls DIR/trace_calls_pg.jsonl --diff DIR/trace_diff.tsv --label fill2 --out DIR
+#            (store = EUPHEMIA_DATA_STORE=duckdb on a fill's inputs.duckdb): re-runs every differing read (its SQL text
+#            and typed args, recorded by --trace) and writes DIR/replay_<label>.tsv (rows + the trace's fingerprint).
+#   trace-replay-report: ... trace-replay-report --out DIR  → DIR/trace_replay.tsv: per differing read, whether the
+#            Postgres path read what fill 2 holds (PG = fill2) and the DuckDB path what fill 1 holds (DuckDB = fill1),
+#            i.e. whether the difference is Postgres changing during the run (churn) or the fill (coverage).
 #   trace-diff:  ... trace-diff DIR/trace_pg.tsv DIR/trace_duckdb.tsv --out DIR  → DIR/trace_diff.tsv (every read
 #            whose results differ, keyed by day + SQL + args) and DIR/trace_rows_diff.tsv (the differing rows).
 #   fill-sums:   ... fill-sums RUN_DIR/inputs.duckdb OUT.tsv  → per table: rows, order-free content checksum,
@@ -31,6 +38,8 @@ using Dates, Printf
 # Euphemia (and its data-store init) only for `clear`: `compare` is a pure CSV comparison and needs no store.
 const _CMD = isempty(ARGS) ? "" : ARGS[1]
 _CMD == "clear" && @eval using Euphemia, LibPQ   # LibPQ: the PG phase's server-TimeZone probe (Euphemia loads it anyway)
+_CMD == "trace-replay" && @eval using Euphemia    # replays on the DuckDB store the environment selects
+_CMD in ("clear", "trace-replay", "trace-replay-report") && @eval using JSON
 _CMD in ("fill-sums", "fill-diff") && @eval using DuckDB
 "Peak resident memory of this process (kB), from the kernel."
 peak_rss_kb() = try parse(Int, match(r"VmHWM:\s*(\d+)", read("/proc/self/status", String))[1]) catch; -1 end
@@ -104,18 +113,38 @@ function _caller()
     end
     return "?"
 end
+"The trace's canonical rows of a result (sorted) and their fingerprint: the same for a read and its replay."
+_fingerprint(df) = (rows = sort!([join((_canon(x) for x in r), "|") for r in eachrow(df)]);
+                    (rows, string(hash(join(rows, "\n")), base=16)))
+"Typed JSON of one SQL argument, so trace-replay can rebuild the exact call."
+_jarg(x) = x === nothing || x === missing ? Dict("t" => "Nothing") :
+           x isa Bool ? Dict("t" => "Bool", "v" => x) :
+           x isa Integer ? Dict("t" => "Int", "v" => Int(x)) :
+           x isa AbstractFloat ? Dict("t" => "Float64", "v" => Float64(x)) :
+           x isa DateTime ? Dict("t" => "DateTime", "v" => Dates.format(x, "yyyy-mm-ddTHH:MM:SS.sss")) :
+           x isa Date ? Dict("t" => "Date", "v" => string(x)) :
+           x isa AbstractVector ? Dict("t" => "Vector", "v" => [_jarg(y) for y in x]) :
+           Dict("t" => "String", "v" => string(x))
+_unjarg(d) = d["t"] == "Nothing" ? nothing : d["t"] == "Bool" ? Bool(d["v"]) : d["t"] == "Int" ? Int(d["v"]) :
+             d["t"] == "Float64" ? Float64(d["v"]) : d["t"] == "DateTime" ? DateTime(d["v"]) :
+             d["t"] == "Date" ? Date(d["v"]) : d["t"] == "Vector" ? [_unjarg(y) for y in d["v"]] : String(d["v"])
+const CALLS = Dict{Tuple{String,String},Tuple{String,Vector{Any}}}()   # (sqlhash, argh) => (SQL text, args)
 function _trace_record(sql, args, df)
-    rows = sort!([join((_canon(x) for x in r), "|") for r in eachrow(df)])
+    rows, fp = _fingerprint(df)
     sqlh = string(hash(replace(String(sql), r"\s+" => " ")) % 0xffffffff, base=16)
     afull = join((_argstr(x) for x in args), " | ")
     a = first(afull, 400)                                   # display only
     # key: the full args with list arguments sorted (they are `= ANY(...)` sets, often built from a Set whose
     # iteration order differs between processes)
     akey = join((x isa AbstractVector ? "[" * join(sort(string.(x)), ",") * "]" : _argstr(x) for x in args), " | ")
-    rec = (day=TRACE_DAY[], caller=_caller(), sqlhash=sqlh, args=a, argh=string(hash(akey), base=16), rows=length(rows),
-           fp=string(hash(join(rows, "\n")), base=16), body=length(rows) <= TRACE_ROWS_MAX ? rows : String[],
+    argh = string(hash(akey), base=16)
+    rec = (day=TRACE_DAY[], caller=_caller(), sqlhash=sqlh, args=a, argh=argh, rows=length(rows),
+           fp=fp, body=length(rows) <= TRACE_ROWS_MAX ? rows : String[],
            cols=join(names(df), "|"))
-    lock(() -> push!(TRACE, rec), TRACE_LOCK)
+    lock(TRACE_LOCK) do
+        push!(TRACE, rec)
+        CALLS[(sqlh, argh)] = (String(sql), collect(Any, args))
+    end
 end
 function write_trace(out, label)
     open(joinpath(out, "trace_$label.tsv"), "w") do io
@@ -130,7 +159,13 @@ function write_trace(out, label)
             println(io, join((r.day, r.sqlhash, r.argh, row), "\t"))
         end
     end
-    println("trace: $(length(TRACE)) reads → trace_$label.tsv (+ rows of reads ≤ $TRACE_ROWS_MAX rows)")
+    open(joinpath(out, "trace_calls_$label.jsonl"), "w") do io   # SQL text + typed args per (sqlhash, argh)
+        for ((h, a), (sql, args)) in CALLS
+            println(io, JSON.json(Dict("sqlhash" => h, "argh" => a, "sql" => sql, "args" => [_jarg(x) for x in args])))
+        end
+    end
+    println("trace: $(length(TRACE)) reads → trace_$label.tsv (+ rows of reads ≤ $TRACE_ROWS_MAX rows, " *
+            "$(length(CALLS)) calls → trace_calls_$label.jsonl)")
 end
 
 function clear(args)
@@ -139,8 +174,11 @@ function clear(args)
     entry = opt(args, "--entry", "forecast")
     entry in ("forecast", "record") || error("--entry must be forecast or record")
     clear1 = entry == "forecast" ? forecast_clear : record_clear
-    steps = parse(Int, opt(args, "--steps", "24"))
-    steps in (24, 96) || error("--steps must be 24 or 96")
+    # production (default): the code's own clear resolution, as the daily forecast and the record clear use it
+    # (Euphemia.CLEAR_RESOLUTION_MINUTES: 15 since cv46 → 96 periods); 24 / 96 pin it
+    st = opt(args, "--steps", "production")
+    steps = st == "production" ? 1440 ÷ Euphemia.CLEAR_RESOLUTION_MINUTES : parse(Int, st)
+    steps in (24, 96) || error("--steps must be production, 24 or 96")
     CLEAR_RES_MIN[] = steps == 96 ? 15 : 60
     trace = "--trace" in args
     trace && (Euphemia.SQL_TRACE[] = _trace_record)
@@ -392,8 +430,68 @@ function fill_diff(args)
     print(s)
 end
 
+# ---------------------------------------------------------------------------------------------------------------
+# trace-replay: was a differing read Postgres changing during the run (churn) or the fill (coverage)?
+# ---------------------------------------------------------------------------------------------------------------
+function trace_replay(args)
+    calls, diff, label = opt(args, "--calls"), opt(args, "--diff"), opt(args, "--label"); out = opt(args, "--out")
+    want = Set((r["sqlhash"], r["argh"]) for r in readtsv(diff))
+    n = 0
+    open(joinpath(out, "replay_$label.tsv"), "w") do io
+        println(io, "sqlhash\targh\trows\tfp\terror")
+        seen = Set{Tuple{String,String}}()
+        for f in split(calls, ","), l in eachline(f)   # pg calls first, then duckdb (a key only one side made)
+            c = JSON.parse(l); k = (c["sqlhash"], c["argh"])
+            (k in want && !(k in seen)) || continue
+            push!(seen, k)
+            rows, fp, err = try
+                r, f = _fingerprint(Euphemia.sql2df(c["sql"], Any[_unjarg(a) for a in c["args"]]))
+                (length(r), f, "")
+            catch e
+                (0, "", replace(first(sprint(showerror, e), 200), r"[\t\n]" => " "))
+            end
+            println(io, join((k..., rows, fp, err), "\t")); n += 1
+        end
+    end
+    println("trace-replay $label: $n of $(length(want)) differing reads replayed on $(get(ENV, "EUPHEMIA_DUCKDB_PATH", "?"))")
+end
+
+function trace_replay_report(args)
+    out = opt(args, "--out")
+    fps(f) = (d = Dict{Tuple{String,String},Set{String}}();
+              for r in readtsv(f); push!(get!(d, (r["sqlhash"], r["argh"]), Set{String}()), r["fp"]); end; d)
+    rep(f) = Dict((r["sqlhash"], r["argh"]) => r for r in readtsv(f))
+    PG, DK = fps(joinpath(out, "trace_pg.tsv")), fps(joinpath(out, "trace_duckdb.tsv"))
+    F1, F2 = rep(joinpath(out, "replay_fill1.tsv")), rep(joinpath(out, "replay_fill2.tsv"))
+    D = readtsv(joinpath(out, "trace_diff.tsv"))
+    cls = Dict{String,Int}()
+    open(joinpath(out, "trace_replay.tsv"), "w") do io
+        println(io, "day\tcaller\tsqlhash\targh\tpg_eq_fill2\tduckdb_eq_fill1\tclass\trows_fill1\trows_fill2")
+        for r in D
+            k = (r["sqlhash"], r["argh"]); f1 = get(F1, k, nothing); f2 = get(F2, k, nothing)
+            ok(x) = x !== nothing && isempty(x["error"])
+            pg2 = ok(f2) && f2["fp"] in get(PG, k, Set{String}())
+            dk1 = ok(f1) && f1["fp"] in get(DK, k, Set{String}())
+            c = !(ok(f1) && ok(f2)) ? "not replayed" : pg2 && dk1 ? "churn (proven)" : !dk1 ? "DuckDB != fill1 (check)" : "PG != fill2 (coverage?)"
+            cls[c] = get(cls, c, 0) + 1
+            println(io, join((r["day"], r["caller"], k..., pg2, dk1, c, f1 === nothing ? "" : f1["rows"],
+                              f2 === nothing ? "" : f2["rows"]), "\t"))
+        end
+    end
+    s = "\n### Trace replay (differing reads re-run on fill 1 and fill 2)\n$(length(D)) differing read(s): " *
+        join(("$v $k" for (k, v) in sort(collect(cls))), ", ") * " (trace_replay.tsv). " *
+        "churn (proven) = the Postgres path read exactly what fill 2 holds and the DuckDB path what fill 1 holds.\n"
+    open(io -> write(io, s), joinpath(out, "summary.md"), "a")
+    haskey(ENV, "GITHUB_STEP_SUMMARY") && open(io -> write(io, s), ENV["GITHUB_STEP_SUMMARY"], "a")
+    print(s)
+end
+
 if _CMD == "clear"
     clear(ARGS)
+elseif _CMD == "trace-replay"
+    trace_replay(ARGS)
+elseif _CMD == "trace-replay-report"
+    trace_replay_report(ARGS)
 elseif _CMD == "trace-diff"
     trace_diff(ARGS)
 elseif _CMD == "fill-sums"
