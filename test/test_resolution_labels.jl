@@ -46,3 +46,42 @@ end
              E.configure_data_store!(backend=prev[1], duckdb_path=prev[2], read_only=prev[3], results_writable=prev[4]); catch; end
     end
 end
+
+@testset "pipeline resume: slots a saved day needs, by its resolution (cv46 D2)" begin
+    E = Euphemia
+    @test E.resume_slots_needed("1H", 24) == 24          # hourly days: unchanged
+    @test E.resume_slots_needed(missing, 24) == 24
+    @test E.resume_slots_needed("15M", 24) == 96         # a truncated quarter day (>= 24 quarters) is not complete
+    @test E.resume_slots_needed("15M", 96) == 96         # also right if the default becomes 96
+    @test E.resume_slots_needed("30M", 24) == 48
+    @test E.resume_slots_needed(" 1H ", 20) == 20
+end
+
+@testset "pipeline resume: day counts by the finest resolution present (review of #476 #4)" begin
+    E = Euphemia
+    prev = (E.DATA_STORE[], E.DUCKDB_PATH[], E.DUCKDB_READ_ONLY[], E.DUCKDB_RESULTS_WRITABLE[], E.RESULTS_DB_PATH[])
+    dir = mktempdir(); src = joinpath(dir, "src.duckdb"); DuckDB.close(DuckDB.DB(src))
+    try
+        E.RESULTS_DB_PATH[] = joinpath(dir, "results.duckdb")
+        E.configure_data_store!(backend=:duckdb, duckdb_path=src, read_only=true, results_writable=true)
+        E._results_exec("SELECT 1")   # attach + ensure the results energy_prices table
+        ins(t, z, rc) = E._results_exec("INSERT INTO results_db.simulations.energy_prices (date_time_utc, resolution_code, bidding_zone, " *
+            "contract_type, price_eur_mwh, currency, order_method, clearing_mode, code_version) VALUES (\$1, \$2, \$3, 'Day-Ahead', 1.0, 'EUR', 'merit_order', 'multi_zone_eu', 46)", Any[t, rc, z])
+        for z in ("GR", "BG")
+            for h in 0:23; ins(DateTime(2026, 11, 1) + Hour(h), z, "1H"); end              # full hourly day
+            for k in 0:95; ins(DateTime(2026, 11, 2) + Minute(15k), z, "15M"); end         # full quarter day
+            for k in 0:39; ins(DateTime(2026, 11, 3) + Minute(15k), z, "15M"); end         # truncated quarter day
+            for h in 0:23; ins(DateTime(2026, 11, 4) + Hour(h), z, "1H"); end              # mixed: hourly rows ...
+            for k in 0:3;  ins(DateTime(2026, 11, 4) + Minute(15k + 5), z, "15M"); end     # ... plus a few quarter rows
+        end
+        df = E.resume_day_counts("multi_zone_eu", 46, Date(2026, 11, 1), Date(2026, 11, 4))
+        @test sort(collect(E.resume_complete_days(df, 2, 24))) == [Date(2026, 11, 1), Date(2026, 11, 2)]
+        # MAX(resolution_code) would have said "1H" for 11-04 (28 slots >= 24 → skipped forever)
+        r4 = only(eachrow(df[Date.(df.d) .== Date(2026, 11, 4), :]))
+        @test r4.q15 && E._resume_rc(r4) == "15M"
+        @test E.resume_complete_days(df, 3, 24) == Set{Date}()          # a missing zone
+    finally
+        try; E._duckdb_drop_connection!(); E.RESULTS_DB_PATH[] = prev[5]
+             E.configure_data_store!(backend=prev[1], duckdb_path=prev[2], read_only=prev[3], results_writable=prev[4]); catch; end
+    end
+end
