@@ -14,7 +14,7 @@ StrategyHarness.RD_CACHE[] = joinpath(ROOT, "st-blocks/rd")
 const ZONES = Dict("CCGT" => ["GR", "IT-SOUTH", "DE_LU", "FR", "NO2", "ES"], "COAL" => ["DE_LU", "GR"],
     "HYDRO" => ["NO2", "FR", "ES", "IT-SOUTH"], "PSP" => ["GR", "IT-SOUTH", "DE_LU", "FR", "NO2", "ES"],
     "BESS" => ["GR", "IT-SOUTH", "DE_LU", "FR", "NO2", "ES"])
-const FMTS = Dict(:thermal => ["hourly_mc", "block", "linked", "exclusive", "mar", "mar_full"],
+const FMTS = Dict(:thermal => ["hourly_mc", "block", "linked", "exclusive", "mar", "mar_full", "block_hac"],
                   :storage => ["hourly_oc", "hourly_sched", "block", "exclusive"],
                   :hydro => ["hourly_oc", "block", "mar"])
 
