@@ -628,6 +628,22 @@ Dated reminders and scoring-policy notes that do not change `code_version`.
     manifest was re-audited against the cv46 readers (Nordic water value, `native_q15_actuals`, the exporters'
     quarter actuals, the resume check): no window change. Same 31 spot days, now 96-step quarter-hour clears,
     Postgres path (main) vs fill path: 116,064/116,064 bit-identical, 0 differing (all rows `15M` on both sides).
+- **2026-11-24 — pluggable market conduct; `EUPHEMIA_CONDUCT_LAYER` deleted; prices unchanged, no `code_version`
+  bump.** How the simulated market prices its flexible supply is now a value (`ZoneScenario(conduct=…)`,
+  `src/merit_order/conduct.jl`): `TranchesConduct()` is the default and is the old ladder moved verbatim (record
+  pipeline, 96 steps, 2 days: bit-identical to main 8aa0a39); `CompetitiveConduct()` replaces
+  `EUPHEMIA_CONDUCT_LAYER=off` (unit test: identical offers). **`ShapeConduct(alpha)` is included, not the
+  default** — a candidate from the strategy research (round 2, experiment 2; `strategy` branch, st-impact
+  REPORT-r2): it spreads each zone-day's conduct markup evenly over the day (alpha = 0, fitted on the 12 calibration
+  days) while keeping the day's mean factor. Results vs `TranchesConduct`, 96-step, hourly mean vs SDAC, day-block
+  90 % intervals (seed 4646):
+  - physics alone, 45 held-out days: MAE −1.47 [−1.98, −1.00] (evaluation 23 d −1.84 [−2.49, −1.23]; replication
+    22 d −1.09 [−1.83, −0.39]), rMAE 1.060 → 1.016; no region significantly worse; all of it intraday shape — the
+    level error worsens (bias −10.4 → −13.1 €/MWh);
+  - combined Timestral + physics (2026-09-01..11-14, 75 days, 70,191 cells, vs the cv46 record PR's combined check):
+    **MAE −0.090 [−0.162, −0.014]**, rMAE 0.5609 → 0.5586, no region significantly worse — **but not robust across
+    day subsets: on the 13 evaluation days inside the window +0.115 [−0.114, +0.374] (n.s.), on the 12 replication
+    days −0.328 [−0.434, −0.211].** Adoption is the owner's call; a longer combined window is the next check.
 
 - **2026-11-24 — `markup_factor` deleted (inert since cv25); prices unchanged, no `code_version` bump.** The
   `generate-multi-zone-prices` input and `MARKUP_FACTOR` env, `multi_zone_main.jl`'s parse, the kwarg of every

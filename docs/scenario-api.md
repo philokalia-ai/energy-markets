@@ -28,8 +28,15 @@ Base.@kwdef struct ZoneScenario
     extra_orders       # ctx -> Vector{SimpleOrder}
     strategist         # ctx -> Vector{Tuple{SimpleOrder,String}}
     fleet_modifier     # (zone, gens::Vector{Generator}) -> Vector{Generator}
+    conduct            # ::MarketConduct — how flexible supply is priced from cost
 end
 ```
+
+`conduct` is a value, not a function: `nothing` (default) = `TranchesConduct()`, the declared conduct layer;
+`CompetitiveConduct()` = every flexible MW at SRMC (the #367 ablation arm; it replaced the deleted
+`EUPHEMIA_CONDUCT_LAYER=off`); `ShapeConduct(alpha)` = the ladder with level-neutral reshaped day factors. New
+conducts implement `conduct_day_factors` and `offers!` in `src/merit_order/` (the pipeline's Distributed book
+workers must deserialize them), see `src/merit_order/conduct.jl`.
 
 The `ctx` shapes are exactly those of the single-zone `create_merit_order_book`
 hooks (see `.claude/skills/scenarios`); `extra_orders` and

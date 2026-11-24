@@ -112,9 +112,9 @@
     bidding, including any exercise of market power, from the prices it reads; it can only agree
     with the market. The physics line is the benchmark the market is compared against. One
     qualification: its bidding form includes a declared <em>conduct layer</em> (the upper tranche
-    ladder and the scarcity/peak markups) chosen with price error in view. Switching it off
-    (<code>EUPHEMIA_CONDUCT_LAYER=off</code>) is a sensitivity check, not an identified competitive
-    price. So a persistent gap between physics and settled prices is a finding to explain, not a
+    ladder and the scarcity/peak markups) chosen with price error in view. Replacing it with the
+    competitive conduct (every tranche at cost, <code>CompetitiveConduct()</code>) is a sensitivity check, not an
+    identified competitive price. So a persistent gap between physics and settled prices is a finding to explain, not a
     measured markup.</li>
     <li><strong>It handles a regime it never saw.</strong> A fuel shock, a new interconnector or
     a large outage moves the physics on day one. A model that reads price history lags regime

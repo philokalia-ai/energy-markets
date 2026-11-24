@@ -1212,8 +1212,6 @@ multi-zone `run_multi_zone_market_clearing(...; scenario=...)` path thread these
 hooks (the latter via `ZoneScenario`). When every hook is `nothing` the built
 book is byte-identical to the no-hook book.
 """
-_conduct_layer_on() = lowercase(get(ENV, "EUPHEMIA_CONDUCT_LAYER", "")) != "off"
-
 function create_merit_order_book(
     bidding_zone::String,
     day::Date;
@@ -1244,17 +1242,18 @@ function create_merit_order_book(
     strategist::Union{Nothing,Function}=nothing,
     fleet_modifier::Union{Nothing,Function}=nothing,
     load_fill::Union{Nothing,Function}=nothing,
-    res_fill::Union{Nothing,Function}=nothing
+    res_fill::Union{Nothing,Function}=nothing,
+    conduct::Union{Nothing,MarketConduct}=nothing
 )
     # Resolve every bid parameter from the profile, letting an explicit keyword
     # override its profile field. With no overrides and the default SEE_PROFILE
     # this reproduces the pre-abstraction defaults exactly (byte-identical).
-    # Issue #367 ablation switch: EUPHEMIA_CONDUCT_LAYER=off removes the
-    # declared CONDUCT layer — the peak/scarcity tranche ladder (every tranche
-    # at 1.0 × SRMC) and the scarcity/peak markup (scarcity ≡ 1) — leaving the
-    # engineering and opportunity layers untouched. A measurement arm, never a
-    # claim about the true competitive price (the PROVENANCE layer table).
-    tranches = _conduct_layer_on() ? TRANCHES : [(1.0, 1.0)]
+    # Market conduct plug-in (conduct.jl), chosen by value: `nothing` ⇒ TranchesConduct(), the declared
+    # conduct layer (peak/scarcity tranche ladder + scarcity/peak markup). The issue #367 ablation arm — every
+    # tranche at 1.0 × SRMC, factor ≡ 1, engineering and opportunity layers untouched — is
+    # `ZoneScenario(conduct=CompetitiveConduct())` (it replaced the deleted EUPHEMIA_CONDUCT_LAYER=off switch):
+    # a measurement arm, never a claim about the true competitive price (the PROVENANCE layer table).
+    conduct_plugin = conduct === nothing ? TranchesConduct() : conduct
     must_run_price_factor = MUST_RUN_PRICE_FACTOR
     must_run_srmc_threshold = MUST_RUN_SRMC_THRESHOLD
     availability_factor = AVAILABILITY_FACTOR
@@ -1636,7 +1635,36 @@ function create_merit_order_book(
             generators, offered_pmax)
         ps_opp_changed = 0
 
-        for ts in target_timeslots
+        # Conduct day factors (conduct.jl): the margin and within-day demand position of every timeslot, computed
+        # once (the same expressions the timeslot loop used inline), then one factor per timeslot from the plug-in.
+        conduct_margin = Vector{Float64}(undef, length(target_timeslots))
+        conduct_nd = Vector{Float64}(undef, length(target_timeslots))
+        for (ti, ts) in enumerate(target_timeslots)
+            hr = Dates.hour(parse_timeslot_to_datetime(ts, day))
+            # Credit available import capacity (gated): a zone that can import
+            # GWs is not domestically scarce. Only the scarcity term is relieved;
+            # the peak strategic-bidding term is left intact.
+            import_credit = profile.scarcity_import_credit > 0.0 ?
+                profile.scarcity_import_credit *
+                get(import_atc_by_hour, hr, 0.0) : 0.0
+            # cv17: gated scarcity credit for the backstop quantity (the
+            # scarcity MARKUP cannot otherwise see the backstop supply, so
+            # restored-import days can keep a residual markup overshoot).
+            # 0 (default) = off everywhere.
+            backstop_credit = profile.backstop_scarcity_credit > 0.0 ?
+                profile.backstop_scarcity_credit *
+                get(backstop_by_hour, hr, 0.0) : 0.0
+            conduct_margin[ti] = (dispatchable_capacity + import_credit + backstop_credit) / net_demand[ts]
+            # Normalized within-day demand position (0 = trough, 1 = peak)
+            conduct_nd[ti] = (net_demand[ts] - nd_min) / nd_span
+        end
+        conduct_factors = conduct_day_factors(conduct_plugin,
+            DayCtx(String(bidding_zone), day, String.(collect(target_timeslots)), conduct_margin, conduct_nd,
+                   Float64(scarcity_threshold), Float64(scarcity_kappa), Float64(peak_kappa), Float64(peak_exponent),
+                   profile))
+        conduct_buf = Tuple{SimpleOrder,String}[]
+
+        for (conduct_ti, ts) in enumerate(target_timeslots)
             date_time = parse_timeslot_to_datetime(ts, day)
             hr = Dates.hour(date_time)   # UTC hour key for all hour-keyed lookups
 
@@ -1733,34 +1761,15 @@ function create_merit_order_book(
                 end
             end
 
-            # Normalized within-day demand position (0 = trough, 1 = peak)
-            norm_demand = (net_demand[ts] - nd_min) / nd_span
-
-            # Markup on upper supply tranches: absolute scarcity (capacity
-            # margin below threshold) plus peak-hour strategic bidding —
-            # participants know when the daily peak is and price their last
-            # tranches accordingly, even when capacity is formally adequate.
-            # The high exponent concentrates the markup in the true peak
-            # hours: at norm_demand 0.5 (e.g. summer nights, where residual
-            # demand is mid-range) the markup is ~6% of peak_kappa, not 25%.
-            # Credit available import capacity (gated): a zone that can import
-            # GWs is not domestically scarce. Only the scarcity term is relieved;
-            # the peak strategic-bidding term is left intact.
-            import_credit = profile.scarcity_import_credit > 0.0 ?
-                profile.scarcity_import_credit *
-                get(import_atc_by_hour, hr, 0.0) : 0.0
-            # cv17: gated scarcity credit for the backstop quantity (the
-            # scarcity MARKUP cannot otherwise see the backstop supply, so
-            # restored-import days can keep a residual markup overshoot).
-            # 0 (default) = off everywhere.
-            backstop_credit = profile.backstop_scarcity_credit > 0.0 ?
-                profile.backstop_scarcity_credit *
-                get(backstop_by_hour, hr, 0.0) : 0.0
-            margin = (dispatchable_capacity + import_credit + backstop_credit) / net_demand[ts]
-            scarcity = _conduct_layer_on() ?
-                       1.0 + scarcity_kappa * max(0.0, scarcity_threshold - margin)^2 +
-                             peak_kappa * norm_demand^peak_exponent :
-                       1.0
+            # Normalized within-day demand position (0 = trough, 1 = peak) and the
+            # conduct factor of this timeslot (pre-pass above; conduct.jl). For the
+            # default TranchesConduct the factor is the markup on upper supply
+            # tranches: absolute scarcity (capacity margin below threshold) plus
+            # peak-hour strategic bidding — participants know when the daily peak is
+            # and price their last tranches accordingly, even when capacity is
+            # formally adequate; the high exponent concentrates it in the true peak.
+            norm_demand = conduct_nd[conduct_ti]
+            scarcity = conduct_factors[conduct_ti]
 
             for g in generators
                 if g.fuel_type in WATER_VALUE_FUEL_TYPES
@@ -1992,26 +2001,15 @@ function create_merit_order_book(
                     # markup on the upper tranches (first tranche stays at
                     # cost so mid-merit keeps clearing)
                     flexible_capacity = max(offered_pmax(g) - must_run_qty, 0.0)
-                    for (i, (share, mult)) in enumerate(tranches)
-                        qty = flexible_capacity * share
-                        qty < 0.1 && continue
-                        K = (i == 1 || profile.tranche_grading <= 1) ? 1 :
-                            profile.tranche_grading
-                        # cv36 graded ladder: K sub-slices whose multipliers walk
-                        # linearly from the PREVIOUS tranche's multiplier to this
-                        # one's — a piecewise-linear supply curve instead of a
-                        # staircase (K=1 reproduces the classic step exactly).
-                        mult_lo = K == 1 ? mult : tranches[i-1][2]
-                        for j in 1:K
-                            m_j = K == 1 ? mult : mult_lo + (mult - mult_lo) * j / K
-                            price = min(gmc * m_j * (i == 1 ? 1.0 : scarcity), nuc_ceil)
-                            push_tagged!(SimpleOrder(:supply, price, qty / K,
-                                Symbol(bidding_zone), date_time, resolution_minutes),
-                                g.code, i == 1 ? "srmc_base" : "peak_tranche_$i")
-                            supply_orders_count += 1
-                            total_supply_capacity += qty / K
-                        end
+                    offers!(conduct_buf, conduct_plugin,
+                        UnitCtx(gmc, flexible_capacity, scarcity, nuc_ceil, Symbol(bidding_zone), date_time,
+                                resolution_minutes, profile.tranche_grading))
+                    for (o, label) in conduct_buf
+                        push_tagged!(o, g.code, label)
+                        supply_orders_count += 1
+                        total_supply_capacity += o.quantity
                     end
+                    empty!(conduct_buf)
                 end
             end
         end

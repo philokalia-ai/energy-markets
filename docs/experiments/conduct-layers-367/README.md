@@ -41,7 +41,8 @@ above the *competitive* layer is only identified once that layer is ablated.
 
 ## 2. The ablation switch
 
-`EUPHEMIA_CONDUCT_LAYER=off` (in `create_merit_order_book`): every tranche at
+`EUPHEMIA_CONDUCT_LAYER=off` (in `create_merit_order_book`; the switch was deleted 2026-11-24 — the same arm is now
+`ZoneScenario(conduct=CompetitiveConduct())`, `src/merit_order/conduct.jl`): every tranche at
 1.0 × SRMC (`tranches = [(1.0, 1.0)]`) and `scarcity ≡ 1` (no
 `scarcity_kappa`, `peak_kappa` terms). Engineering and opportunity layers
 untouched. Inert unless set (guarded: DE_LU/GR books bit-identical with the
@@ -53,7 +54,7 @@ uncertainty of every `opportunity` entry above.
 
 `scripts/ab_arm.jl`: the same 52 Wednesdays 2025-09-03..2026-08-26 and the
 same code as the #370 A/B's interval arm (`ab370_intervals`, conduct ON), with
-the conduct layer OFF → label `ab367_noconduct`. Scored with
+the conduct layer OFF → label `ab367_noconduct` (`ab_arm.jl competitive`: `ZoneScenario(conduct=CompetitiveConduct())`). Scored with
 `scripts/score_ab.py ab370_intervals ab367_noconduct`: per zone MAE / bias /
 corr against settled, and — the number the issue asks for — the **premium**:
 settled minus the no-conduct benchmark, by zone and hour, its duration and
