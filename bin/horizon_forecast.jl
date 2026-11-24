@@ -132,13 +132,15 @@ function write_slice!(T::Date, lead::Int, made::DateTime,
                 WHERE market_date = \$1 AND lead_days = \$2 AND input_mode = 'entsoe_persist'
             """, [T, lead])
             for (zone, hourly) in zone_hourly
+                res = Euphemia.forecast_resolution_code(keys(hourly))
                 for (h, price) in sort!(collect(hourly); by=first)
                     LibPQ.execute(cnx, """
                         INSERT INTO simulations.forecast_prices
                         (market_date, date_time_utc, bidding_zone, price_eur_mwh,
-                         prediction_made_utc, lead_days, clearing_mode, code_version, input_mode)
-                        VALUES (\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8, 'entsoe_persist')
-                    """, Any[T, tstz(h), zone, price, tstz(made), lead, CLEARING_MODE, CV])
+                         prediction_made_utc, lead_days, clearing_mode, code_version, input_mode,
+                         resolution_code)
+                        VALUES (\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8, 'entsoe_persist', \$9)
+                    """, Any[T, tstz(h), zone, price, tstz(made), lead, CLEARING_MODE, CV, res])
                     n += 1
                 end
             end
@@ -155,6 +157,9 @@ function main()
     println("=" ^ 70)
     println("HORIZON FORECAST (weekly-persistence leads 2..$MAX_LEAD_DAYS)  cv=$CV")
     println("=" ^ 70)
+    # the INSERT carries resolution_code (cv46 D1): run the forecast-table migration first, as
+    # daily_forecast.jl does (catalog-first, a no-op in the steady state)
+    Euphemia.ensure_forecast_tables()
     made = now(UTC)
     base = athens_date(made)   # today's Athens market day; T = base + n
 

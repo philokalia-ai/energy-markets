@@ -450,10 +450,10 @@ function write_forecast!(market_date::Date, lead_days::Int, prediction_made::Dat
                     INSERT INTO simulations.forecast_prices_pre_reset
                     (market_date, date_time_utc, bidding_zone, price_eur_mwh,
                      prediction_made_utc, lead_days, clearing_mode, code_version,
-                     input_mode, is_retro, reset_tag, retro_of_utc)
+                     input_mode, is_retro, reset_tag, retro_of_utc, resolution_code)
                     SELECT market_date, date_time_utc, bidding_zone, price_eur_mwh,
                      prediction_made_utc, lead_days, clearing_mode, code_version,
-                     input_mode, is_retro, reset_tag, retro_of_utc
+                     input_mode, is_retro, reset_tag, retro_of_utc, resolution_code
                     FROM simulations.forecast_prices
                     WHERE market_date = \$1 AND lead_days = \$2 AND input_mode = \$3
                       AND is_retro = false
@@ -487,21 +487,29 @@ function write_forecast!(market_date::Date, lead_days::Int, prediction_made::Dat
                       AND is_retro = false AND bidding_zone = ANY(\$4)
                 """, [market_date, lead_days, input_mode, collect(keys(zone_hourly))])
             end
+            # One multi-row INSERT per zone (96 slots at quarter resolution: one statement, not 96).
             for (zone, hourly) in zone_hourly
-                for (h, price) in sort!(collect(hourly); by=first)
-                    LibPQ.execute(cnx, """
-                        INSERT INTO simulations.forecast_prices
-                        (market_date, date_time_utc, bidding_zone, price_eur_mwh,
-                         prediction_made_utc, lead_days, clearing_mode, code_version,
-                         input_mode, is_retro, reset_tag, retro_of_utc)
-                        VALUES (\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8, \$9, \$10, \$11, \$12)
-                    """, Any[market_date, tstz(h), zone, price,
-                             tstz(prediction_made), lead_days, CLEARING_MODE, CV,
-                             input_mode, is_retro,
-                             reset_tag === nothing ? missing : reset_tag,
-                             retro_of_utc === nothing ? missing : tstz(retro_of_utc)])
-                    n_inserted += 1
+                res = Euphemia.forecast_resolution_code(keys(hourly))   # per zone, from the slot spacing
+                slots = sort!(collect(hourly); by=first)
+                isempty(slots) && continue
+                tuples = String[]
+                params = Any[]
+                for (i, (h, price)) in enumerate(slots)
+                    b = 13 * (i - 1)
+                    push!(tuples, "(" * join(("\$$(b + j)" for j in 1:13), ", ") * ")")
+                    append!(params, Any[market_date, tstz(h), zone, price,
+                                        tstz(prediction_made), lead_days, CLEARING_MODE, CV,
+                                        input_mode, is_retro,
+                                        reset_tag === nothing ? missing : reset_tag,
+                                        retro_of_utc === nothing ? missing : tstz(retro_of_utc), res])
                 end
+                LibPQ.execute(cnx, """
+                    INSERT INTO simulations.forecast_prices
+                    (market_date, date_time_utc, bidding_zone, price_eur_mwh,
+                     prediction_made_utc, lead_days, clearing_mode, code_version,
+                     input_mode, is_retro, reset_tag, retro_of_utc, resolution_code)
+                    VALUES """ * join(tuples, ",\n"), params)
+                n_inserted += length(slots)
             end
             LibPQ.execute(cnx, "COMMIT")
         catch e

@@ -483,9 +483,9 @@ function _duckdb_save_energy_prices(prices::Dict{String,Float64}, bidding_zone::
                                     day::Date, order_method::Symbol; clearing_mode::String,
                                     optimization_run_id::Union{Integer,Nothing})
     isempty(prices) && (@warn "No prices to save for $bidding_zone on $day"; return 0)
-    num_periods = length(prices)
-    resolution_code = num_periods == 96 ? "15M" : num_periods == 48 ? "30M" :
-                      num_periods == 24 ? "1H" : "1H"
+    # from the slots' spacing, not their count (cv46 downstream D1; same rule as the Postgres writer)
+    resolution_code = energy_prices_resolution_code(
+        DateTime(k, dateformat"yyyymmdd-HHMM") for k in keys(prices) if occursin(r"^\d{8}-\d{4}$", k))
     order_method_str = string(order_method)
     opt_run_id = optimization_run_id === nothing ? missing : Int64(optimization_run_id)
     update_time = now(UTC)
