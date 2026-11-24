@@ -257,7 +257,25 @@ function cnxisok(cnx::LibPQ.Connection)
     return LibPQ.status(cnx) == LibPQ.libpq_c.CONNECTION_OK
 end
 
+"""
+    _postgres_guard(what)
+
+The runtime half of the Postgres access guard (owner rule: DuckDB between Postgres and Julia). Under
+`EUPHEMIA_DATA_STORE=duckdb` no Julia code may open a direct Postgres connection: Julia reads Postgres only in
+the fill (`bin/fill_run_duckdb.jl`) and writes it only in the transfers, both through DuckDB's postgres
+extension (src/db/pg_attach.jl), never through this LibPQ pool. `newconnection`, `preinit_pool` and `withdb`
+call it first. It throws a `FillGuardError`, so no soft fallback or outer catch swallows it
+(`_rethrow_fill_guard`). The static half is test/test_pg_access.py.
+"""
+function _postgres_guard(what::AbstractString)
+    DATA_STORE[] === :duckdb && throw(FillGuardError(
+        "postgres guard: $what would open a direct Postgres connection under EUPHEMIA_DATA_STORE=duckdb " *
+        "(Julia reads Postgres only in bin/fill_run_duckdb.jl and writes it only in the transfers)"))
+    return nothing
+end
+
 function newconnection()
+    _postgres_guard("newconnection")
     conn_str = get(ENV, "ENERGY_CONN_STR", "")
 
     # Add PostgreSQL connection parameters to improve connection reliability
@@ -286,6 +304,7 @@ function newconnection()
 end
 
 function preinit_pool(poolsize=poolsize)
+    _postgres_guard("preinit_pool")
     cnxs = [Base.acquire(newconnection, cnxpool; isvalid=cnxisok) for i in 1:poolsize]
     # They all need to exist at the same time;
     map(cnxs) do connection
@@ -305,6 +324,7 @@ end
 # connection-error path calls `preinit_pool`, which acquires all permits at
 # once — so a single leak could hang the run inside its own retry handler.
 function withdb(f)
+    _postgres_guard("withdb")
     connection = Base.acquire(newconnection, cnxpool; isvalid=cnxisok)
     try
         return f(connection)
