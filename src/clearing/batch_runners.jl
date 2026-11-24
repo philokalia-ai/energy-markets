@@ -6,7 +6,6 @@
                                   zones::Vector{String}=String[],
                                   order_method::Symbol=:merit_order,
                                   optimizer::String="auto",
-                                  markup_factor::Float64=1.1,
                                   silent::Bool=true,
                                   save_to_db::Bool=false,
                                   skip_existing::Bool=true,
@@ -24,7 +23,6 @@ Provides comprehensive progress tracking and timing statistics.
 - `zones::Vector{String}`: List of bidding zones to include (default: auto-discover from DB)
 - `order_method::Symbol`: only `:merit_order` (the UC-based and alternative books were removed in cv25)
 - `optimizer::String`: "highs" (default) or "auto" — HiGHS is the only solver
-- `markup_factor::Float64`: Price markup factor for supply bids (default: 1.1)
 - `silent::Bool`: Whether to suppress solver output (default: true)
 - `save_to_db::Bool`: Whether to save results to database (default: false)
 - `skip_existing::Bool`: Whether to skip dates that already have data (default: true)
@@ -78,7 +76,6 @@ function run_multi_zone_for_date_range(start_date::Date, end_date::Date;
                                        zones::Vector{String}=String[],
                                        order_method::Symbol=:merit_order,
                                        optimizer::String="auto",
-                                       markup_factor::Float64=1.1,
                                        silent::Bool=true,
                                        save_to_db::Bool=false,
                                        skip_existing::Bool=true,
@@ -176,7 +173,6 @@ function run_multi_zone_for_date_range(start_date::Date, end_date::Date;
                                                     zones=zones,
                                                     order_method=order_method,
                                                     optimizer=optimizer,
-                                                    markup_factor=markup_factor,
                                                     silent=silent,
                                                     save_to_db=save_to_db,
                                                     force_rerun=force_rerun,
@@ -288,7 +284,6 @@ end
                                         order_method::Symbol=:merit_order,
                                         model::Symbol=:mpcc,
                                         optimizer::String="auto",
-                                        markup_factor::Float64=1.1,
                                         random_seed::Union{Int,Nothing}=nothing,
                                         silent::Bool=true,
                                         save_to_db::Bool=false,
@@ -313,7 +308,6 @@ progress tracking, and optional parallel processing.
 - `order_method::Symbol`: only `:merit_order` (the UC-based and alternative books were removed in cv25)
 - `model::Symbol`: Market clearing model - `:mpcc` (default, more may be added later)
 - `optimizer::String`: "highs" (default) or "auto" — HiGHS is the only solver
-- `markup_factor::Float64`: Price markup factor for UC-based orders (default: 1.1)
 - `random_seed::Union{Int,Nothing}`: Random seed for alternative order book (default: nothing)
 - `silent::Bool`: Whether to suppress solver output (default: true)
 - `save_to_db::Bool`: Whether to save results to database (default: false)
@@ -447,7 +441,6 @@ function generate_energy_prices_for_all_zones(date::Date;
     order_method::Symbol=:merit_order,
     model::Symbol=:mpcc,
     optimizer::String="auto",
-    markup_factor::Float64=1.1,
     random_seed::Union{Int,Nothing}=nothing,
     silent::Bool=true,
     save_to_db::Bool=false,
@@ -560,13 +553,13 @@ function generate_energy_prices_for_all_zones(date::Date;
     if parallel
         results = _process_zones_parallel(
             zones_to_process, date, order_method, model, optimizer,
-            markup_factor, random_seed, silent, save_to_db,
+            random_seed, silent, save_to_db,
             max_retries, retry_delay, progress_callback, chunk_size, force_rerun
         )
     else
         results = _process_zones_sequential(
             zones_to_process, date, order_method, model, optimizer,
-            markup_factor, random_seed, silent, save_to_db,
+            random_seed, silent, save_to_db,
             max_retries, retry_delay, progress_callback, start_time, force_rerun
         )
     end
@@ -648,7 +641,6 @@ end
                                           order_method::Symbol=:merit_order,
                                           model::Symbol=:mpcc,
                                           optimizer::String="auto",
-                                          markup_factor::Float64=1.1,
                                           random_seed::Union{Int,Nothing}=nothing,
                                           silent::Bool=true,
                                           save_to_db::Bool=true,
@@ -674,7 +666,6 @@ and result aggregation across the entire date range.
   - `order_method::Symbol`: only `:merit_order` (the UC-based and alternative books were removed in cv25)
   - `model::Symbol`: Market clearing model - `:mpcc` (default)
   - `optimizer::String`: "highs" (default) or "auto" — HiGHS is the only solver
-  - `markup_factor::Float64`: Price markup factor for UC-based orders (default: 1.1)
   - `random_seed::Union{Int,Nothing}`: Random seed for alternative order book (default: nothing)
   - `silent::Bool`: Whether to suppress solver output (default: true)
   - `save_to_db::Bool`: Whether to save results to database (default: true for bulk operations)
@@ -792,7 +783,6 @@ function generate_energy_prices_for_date_range(start_date::Date, end_date::Date;
     order_method::Symbol=:merit_order,
     model::Symbol=:mpcc,
     optimizer::String="auto",
-    markup_factor::Float64=1.1,
     random_seed::Union{Int,Nothing}=nothing,
     silent::Bool=true,
     save_to_db::Bool=true,  # Default true for bulk operations
@@ -854,7 +844,7 @@ function generate_energy_prices_for_date_range(start_date::Date, end_date::Date;
 
             # Process dates in parallel using pmap
             date_results = _process_dates_parallel(
-                dates, order_method, model, optimizer, markup_factor,
+                dates, order_method, model, optimizer,
                 random_seed, silent, save_to_db, max_retries, retry_delay,
                 fallback_zones, skip_existing, range_start_time, force_rerun
             )
@@ -885,7 +875,6 @@ function generate_energy_prices_for_date_range(start_date::Date, end_date::Date;
                     order_method=order_method,
                     model=model,
                     optimizer=optimizer,
-                    markup_factor=markup_factor,
                     random_seed=random_seed,
                     silent=silent,
                     save_to_db=save_to_db,

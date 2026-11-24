@@ -33,11 +33,6 @@ on:
         required: false
         default: false
         type: boolean
-      markup_factor:
-        description: "Price markup factor for supply bids"
-        required: false
-        default: "1.1"
-        type: string
 
 env:
   JULIA_VERSION: "1.13.4"
@@ -84,7 +79,6 @@ jobs:
             ORDER_METHOD="merit_order"
             ZONES="GR,BG,RO,RS,HU"
             FORCE_RERUN=false
-            MARKUP_FACTOR="1.1"
           else
             START_DATE="${{ github.event.inputs.start_date }}"
             END_DATE="${{ github.event.inputs.end_date }}"
@@ -92,12 +86,11 @@ jobs:
             ORDER_METHOD="${{ github.event.inputs.order_method }}"
             ZONES="${{ github.event.inputs.zones }}"
             FORCE_RERUN="${{ github.event.inputs.force_rerun }}"
-            MARKUP_FACTOR="${{ github.event.inputs.markup_factor }}"
           fi
           {
             echo "START_DATE=$START_DATE"; echo "END_DATE=$END_DATE"
             echo "OPTIMIZER=highs"; echo "ORDER_METHOD=$ORDER_METHOD"
-            echo "ZONES=$ZONES"; echo "FORCE_RERUN=$FORCE_RERUN"; echo "MARKUP_FACTOR=$MARKUP_FACTOR"
+            echo "ZONES=$ZONES"; echo "FORCE_RERUN=$FORCE_RERUN"
             # rows the run writes carry update_time_utc >= this instant (the transfer moves only those days)
             echo "RUN_STARTED_UTC=$(date -u +%Y-%m-%dT%H:%M:%S)"
           } >> "$GITHUB_ENV"
@@ -125,7 +118,6 @@ jobs:
           echo "📋 Order method: $ORDER_METHOD"
           echo "🌍 Zones: ${ZONES:-auto-discover}"
           echo "🔄 Force rerun: $FORCE_RERUN"
-          echo "💹 Markup factor: $MARKUP_FACTOR"
 
           julia --project=. bin/multi_zone_main.jl
 
@@ -164,7 +156,6 @@ jobs:
           echo "- **Optimizer**: highs" >> $GITHUB_STEP_SUMMARY
           echo "- **Order Method**: ${{ github.event.inputs.order_method || 'merit_order' }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Force Rerun**: ${{ github.event.inputs.force_rerun || 'false' }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Markup Factor**: ${{ github.event.inputs.markup_factor || '1.1' }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
           if [ "${{ steps.generate.outputs.status }}" = "success" ]; then

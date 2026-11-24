@@ -1167,8 +1167,12 @@ and is no longer a keyword argument.
   (a plain `Vector{SimpleOrder}` is also accepted and re-tagged `"STRATEGIST"`),
   called after `extra_orders` and before merging. `ctx` is a NamedTuple
   `(tagged_orders, zone, day, timeslots, load_by_time, renewable_by_time,
-  firm_of)` where `firm_of` is a `Dict{String,String}` unit_code→firm from
-  `simulations.unit_firms`. The returned set REPLACES the tagged order list.
+  firm_of, strategies)` where `firm_of` is a `Dict{String,String}` unit_code→firm from
+  `simulations.unit_firms` and `strategies[i]` is the strategy label of
+  `tagged_orders[i]`. The returned set REPLACES the tagged order list. An
+  `(order, tag)` returned unchanged keeps its label (so pumped storage and
+  reservoirs stay energy-limited families); new or changed orders are labelled
+  `"strategist"`, unless the strategist returns `(order, tag, strategy)` triples.
 
   Example — "what if the incumbent PPC marked up its peakers' top tranches 20%?":
   ```julia
@@ -2209,16 +2213,27 @@ function create_merit_order_book(
             firm_of = get_firm_of(bidding_zone)
             sctx = (tagged_orders=tagged, zone=bidding_zone, day=day,
                     timeslots=target_timeslots, load_by_time=load_by_time,
-                    renewable_by_time=renewable_by_time, firm_of=firm_of)
+                    renewable_by_time=renewable_by_time, firm_of=firm_of,
+                    strategies=strategies)
             result = strategist(sctx)
-            # Accept either Vector{Tuple{SimpleOrder,String}} or a plain
+            # Accept (order, tag, strategy) triples, (order, tag) pairs, or a plain
             # Vector{SimpleOrder} (re-tagged "STRATEGIST").
             tagged = Tuple{SimpleOrder,String}[
                 x isa Tuple ? (x[1], x[2]) : (x, "STRATEGIST") for x in result]
-            # The strategist REPLACES the ladder, so the source strategy labels no
-            # longer map; the whole replacement set is labelled "strategist"
-            # (scenario path — not the capture/backfill path).
-            strategies = fill("strategist", length(tagged))
+            # Strategy labels: a triple states its own; an (order, tag) the
+            # strategist returned unchanged keeps the label it came in with; a new
+            # or changed order is "strategist". The storage-family split
+            # (_split_storage_families) selects members by label, so relabelling
+            # unchanged orders would silently turn pumped storage / reservoirs into
+            # plain offers without their energy budget.
+            source_labels = Dict{Tuple{SimpleOrder,String},Vector{String}}()
+            for (t, s) in zip(sctx.tagged_orders, sctx.strategies)
+                push!(get!(source_labels, t, String[]), s)
+            end
+            strategies = String[
+                x isa Tuple && length(x) >= 3 ? String(x[3]) :
+                (q = get(source_labels, t, nothing); q === nothing || isempty(q) ? "strategist" : popfirst!(q))
+                for (x, t) in zip(result, tagged)]
             # Recount from the replacement set so summary stats stay accurate
             supply_orders_count = count(t -> t[1].type == :supply, tagged)
             demand_orders_count = count(t -> t[1].type == :demand, tagged)
