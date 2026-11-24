@@ -3572,10 +3572,11 @@
   }
 
   // "Since freeze" window (#431 G, bin/scoreboard_windows.jl): the clock restarted with
-  // cv45 on 2026-11-21 (cv44 froze the characteristics on 2026-11-15), so these days are the only out-of-sample physics
-  // record. Change FREEZE_LABEL together with FREEZE_CODE_VERSION / FREEZE_DATE there.
+  // cv46 on 2026-11-24 (cv44 froze the characteristics on 2026-11-15; cv45 restarted
+  // on 2026-11-21), so these days are the only out-of-sample physics record.
+  // Change FREEZE_LABEL together with FREEZE_CODE_VERSION / FREEZE_DATE there.
   var FREEZE_WINDOW = "since_freeze";
-  var FREEZE_LABEL = "since freeze (cv45, 2026-11-21) — the only out-of-sample physics record";
+  var FREEZE_LABEL = "since freeze (cv46, 2026-11-24) — the only out-of-sample physics record";
   var FREEZE_MIN_DAYS = 14;
   // Below FREEZE_MIN_DAYS scored days a since-freeze cohort shows "insufficient data":
   // its metrics are blanked (so it never ranks).
@@ -3614,7 +3615,7 @@
     var nd = 0;
     scores.forEach(function (s) { if (s.n_days > nd) nd = s.n_days; });
     note.hidden = false;
-    note.textContent = "Since the freeze (cv45, 2026-11-21): " + nd + " scored market day" +
+    note.textContent = "Since the freeze (cv46, 2026-11-24): " + nd + " scored market day" +
       (nd === 1 ? "" : "s") + ". The 43 characteristics (40 price-informed) have not changed since, so " +
       "these days are the only out-of-sample physics record. " +
       (nd < FREEZE_MIN_DAYS
@@ -4006,6 +4007,7 @@
     water_value_gas_anchored: { label: "water value · gas-anchored", explain: "Reservoir opportunity cost anchored to gas SRMC — a premium at peak, boosted when the reservoir is dry." },
     water_value_reservoir:    { label: "water value · reservoir", explain: "Shadow price of stored water — near-free when reservoirs are full, rising toward the thermal alternative as they empty." },
     water_value_anchored:     { label: "water value · coupled anchor", explain: "Export opportunity cost set to the pass-1 coupled reference price (two-pass anchor)." },
+    water_value_unavoidable:  { label: "water value · unavoidable release", explain: "Reservoir water that must run anyway (lagged low-output envelope or weekly overflow), offered at the spill price (cv46)." },
     res_forecast:             { label: "RES forecast", explain: "Renewable forecast offered as a price-taker (support schemes make output price-insensitive); floored negative in a solar-surplus regime." },
     res_supported:            { label: "Supported RES", explain: "An explicitly configured RES share retaining a production incentive, offered at minus that incentive." },
     res_zero_cost:            { label: "Zero-cost RES", explain: "Merchant or negative-price support-suspended RES offered at zero variable cost." },

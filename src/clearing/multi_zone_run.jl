@@ -82,15 +82,17 @@ function run_multi_zone_market_clearing(date::Date;
                                         apply_zone_profiles::Bool=true,
                                         passes::Int=1,
                                         # Temporal resolution of the coupled
-                                        # clear. Default 60 (24 hourly periods)
-                                        # is byte-identical to the pre-existing
-                                        # path. Set 15 for a 96-period 15-minute
-                                        # clear: each zone's book is built on the
-                                        # shared 15-min grid, with coarser
+                                        # clear. Default: the product resolution
+                                        # CLEAR_RESOLUTION_MINUTES (15 from cv46,
+                                        # 96 periods): each zone's book is built
+                                        # on the shared 15-min grid, with coarser
                                         # (hourly) zones replicated up per the
-                                        # replicate-not-divide rule. Merit-order
-                                        # path only.
-                                        clear_resolution_minutes::Int=60,
+                                        # replicate-not-divide rule, and pumped
+                                        # storage held flat within the hour. 60
+                                        # gives the hourly clear (24 periods).
+                                        # Used by BOTH passes. Merit-order path
+                                        # only.
+                                        clear_resolution_minutes::Int=CLEAR_RESOLUTION_MINUTES,
                                         # Ex-ante flow mode for this run.
                                         # nothing (default) resolves to:
                                         #   :v2 on the EU-footprint path
@@ -113,7 +115,9 @@ function run_multi_zone_market_clearing(date::Date;
                                         # Refuse to save a day whose coupled clear
                                         # produced fewer periods than this (see the
                                         # truncation gate at the save block).
-                                        min_price_periods::Int=24,
+                                        # `nothing` = every period of the day,
+                                        # 1440 ÷ clear_resolution_minutes.
+                                        min_price_periods::Union{Nothing,Int}=nothing,
                                         mpcc_heuristic_effort::Union{Float64,Nothing}=nothing,
                                         # Per-period decomposition of the coupled
                                         # MPCC. The clear has no inter-temporal
@@ -144,6 +148,9 @@ function run_multi_zone_market_clearing(date::Date;
                                         scenario::Union{Nothing,ZoneScenario,Dict{String,ZoneScenario}}=nothing)
 
     start_time = time()
+    (1 <= clear_resolution_minutes <= 60 && 60 % clear_resolution_minutes == 0) ||
+        error("clear_resolution_minutes must divide 60 (got $clear_resolution_minutes)")
+    min_price_periods = something(min_price_periods, 1440 ÷ clear_resolution_minutes)
     # PS opportunity-reference experiment (opt-in): snapshot + validate the forecast
     # file ONCE, before pass 1; both passes read this immutable snapshot.
     MeritOrderBook.ps_opp_snapshot!()

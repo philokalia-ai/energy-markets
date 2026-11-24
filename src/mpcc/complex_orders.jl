@@ -189,12 +189,14 @@ function resolve_complex_orders(order_book::MPCCOrderBook;
             @constraint(model, bal[(n, t)] + shed[n, t] == 0)
         end
         @constraint(model, fam[f in collect(keys(fam_rows))], fam_rows[f] <= fam_budget[f])
-        # Sub-hourly books (15-min clear): the storage LP is degenerate across the
-        # quarters of an hour wherever inputs are hourly-replicated, and otherwise
-        # swings a whole family 0 <-> Pmax between quarters on tiny price
-        # differences. EUPHEMIA_PS_INTRAHOUR=flat holds each storage family's MW
-        # constant within the hour (a coarse ramp proxy); no-op on hourly books.
-        if lowercase(get(ENV, "EUPHEMIA_PS_INTRAHOUR", "free")) == "flat"
+        # Sub-hourly books (the 15-min clear, cv46 default): the storage LP is
+        # degenerate across the quarters of an hour wherever inputs are
+        # hourly-replicated, and otherwise swings a whole family 0 <-> Pmax
+        # between quarters on tiny price differences. Each storage family's MW
+        # is held constant within the hour (a coarse ramp proxy). Only members
+        # with resolution < 60 are touched, so hourly books are unchanged.
+        # (Was the opt-in EUPHEMIA_PS_INTRAHOUR=flat; the env is gone in cv46.)
+        let
             fq = Dict{Tuple{String,String},AffExpr}()
             for (j, o) in enumerate(linked)
                 (is_block_family(o.family) || o.resolution_code >= 60) && continue

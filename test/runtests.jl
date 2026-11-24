@@ -358,6 +358,18 @@ println()
         include(joinpath(@__DIR__, "test_cv45_knobs.jl"))
     end
 
+    @testset "cv46 P1 Nordic water value (DB-free)" begin
+        include(joinpath(@__DIR__, "test_cv46_nordic_wv.jl"))
+    end
+
+    @testset "cv46 15-minute clear resolution (DB-free)" begin
+        include(joinpath(@__DIR__, "test_clear_resolution.jl"))
+    end
+
+    @testset "cv46 fills on the series resolution (DB-free)" begin
+        include(joinpath(@__DIR__, "test_fill_resolution.jl"))
+    end
+
     @testset "Code review 2026-07" begin
         println("\n" * "=" ^ 60)
         println("Running July 2026 code-review regression tests...")
