@@ -32,12 +32,24 @@ emits the exact JSON shapes `web/app.js` consumes:
 literal `.json` suffix. They 404 until explicitly published — no fixture
 fallback, the SPA paints its honest "live data unavailable" state.
 
+**Zone days and resolution** (`/api/v1/zones/:zone`, `v1/zones/<zone>.parquet`): one entry per
+(market day, lead, input mode). Each day carries `resolution` — `"PT60M"` (hourly: `hours` holds 24 UTC
+slot starts, 23/25 on DST days) or `"PT15M"` (the quarter-hour clear from cv46: 96 slot starts, 92/100 on DST
+days) — and `actual_resolution`: `"PT15M"` = native quarter-hour Day-ahead actuals, `"PT60M"` = hourly actuals
+(on a quarter-hour day replicated onto the 4 quarters of their hour, when the zone-day has no native quarters).
+History is mixed for good (hourly days before cv46, quarter days after), so read `resolution` per day.
+`sim` / `actual` are per slot; the hourly overlays (`gbm`, `stats`, `tsfm`, `tsfm_q10`, `tsfm_q90`, `p_le0`)
+are replicated onto the quarters of their hour (a step). `mae` / `bias` / `corr` are the hourly day score,
+`*_q15` the native 15-minute score. In the parquet the rows are per slot, with `resolution` and
+`actual_resolution` columns on every row. `/api/v1/map` keeps its shape: zone-day `sim` / `act` are means over
+the day's slots. Books and flows are keyed by delivery slot (`ts`), so quarter-hour record days have 96 groups.
+
 **Order-book ladder** (`/api/v1/books/:zone/:date`, `date` = `YYYY-MM-DD`):
 `shapeBook` reads the per-day book parquet (all 39 zones — columns
 `market_date, zone, ts, side, price, mw, owner, code_version`), keeps the
 requested zone, and emits
 `{zone, date, market_day_tz, code_version, owners:[…], hours:[…],
-supply:[[[price,mw,ownerIdx],…] per hour], demand:[…]}` — supply ascending in
+supply:[[[price,mw,ownerIdx],…] per delivery slot], demand:[…]}` — supply ascending in
 price (the merit order), demand descending, owners de-duplicated into an index
 table so the biggest zones (FR ≈ 660 KB, DE_LU ≈ 470 KB) stay under 1 MB.
 Clearing price and settled actual are NOT embedded; the SPA overlays them from
@@ -46,8 +58,8 @@ Clearing price and settled actual are NOT embedded; the SPA overlays them from
 Deployed at <https://api.philokalia.ai> (canonical custom domain, declared in
 `wrangler.toml`; `web/app.js` defaults to it). The legacy `*.workers.dev` alias
 stays live until `workers_dev = false`. The R2 objects themselves are the
-stable public data API (`/v1/`; breaking schema changes bump `/v2/`) — see
-"Public data API" in the repo README.
+public data API (`/v1/`, latest only: the shapes above are the current contract; the zone files carry each
+day at its native resolution, see "Zone days and resolution").
 
 Caching: the edge Cache API entry is keyed on the R2 object's ETag, so a parquet
 is decoded at most once per object version per colo; clients get

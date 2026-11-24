@@ -122,9 +122,19 @@ athens_market_day_window(d::Date) =
     (athens_day_start_utc(d), athens_day_start_utc(d + Day(1)))
 
 "Expected hourly UTC stamps of Europe/Athens market day `d` (24; 23/25 on DST days)."
-function expected_market_day_hours(d::Date)
+expected_market_day_hours(d::Date) = expected_market_day_slots(d, 60)
+
+"""
+    expected_market_day_slots(d::Date, res_minutes::Int) -> Vector{DateTime}
+
+Expected UTC slot-start stamps of Europe/Athens market day `d` at `res_minutes`
+per period: 96 quarter-hours at 15 (92/100 on DST days), 24 hours at 60.
+"""
+function expected_market_day_slots(d::Date, res_minutes::Int)
+    (1 <= res_minutes <= 60 && 60 % res_minutes == 0) ||
+        throw(ArgumentError("res_minutes must divide 60 (got $res_minutes)"))
     t0, t1 = athens_market_day_window(d)
-    return collect(t0:Hour(1):(t1 - Hour(1)))
+    return collect(t0:Minute(res_minutes):(t1 - Minute(res_minutes)))
 end
 
 """
@@ -163,32 +173,37 @@ function input_coverage_reasons(day::Date, zones,
 end
 
 """
-    stitch_market_day(d::Date, hourly_prev::Dict{DateTime,Float64},
-                      hourly_curr::Dict{DateTime,Float64})
-        -> (stitched, missing_hours, expected)
+    stitch_market_day(d::Date, prev::Dict{DateTime,Float64},
+                      curr::Dict{DateTime,Float64}; res_minutes::Int)
+        -> (stitched, missing_slots, expected)
 
-Assemble the full Europe/Athens market day `d` from two UTC-day clears:
-`hourly_prev` = hourly prices of the UTC-day d-1 clear (contributes only
-hours ≥ athens_day_start_utc(d), i.e. the late-evening UTC tail that belongs
-to market day `d`), `hourly_curr` = hourly prices of the UTC-day d clear
-(contributes only hours < athens_day_start_utc(d+1); its unpublished local
-tail is expected to be absent). `missing_hours` is empty iff the stitched
-day is complete — callers MUST refuse to persist an incomplete day.
+Assemble the full Europe/Athens market day `d` from two UTC-day clears at
+`res_minutes` per period (15 for the cv46 product; required, so a caller
+cannot check a quarter-hour day against the hourly grid): `prev` = slot
+prices of the UTC-day d-1 clear (contributes only slots ≥
+athens_day_start_utc(d), i.e. the late-evening UTC tail that belongs to market
+day `d`), `curr` = slot prices of the UTC-day d clear (contributes only slots
+< athens_day_start_utc(d+1); its unpublished local tail is expected to be
+absent). `expected` = `expected_market_day_slots(d, res_minutes)`;
+`missing_slots` is empty iff every expected slot is present — callers MUST
+refuse to persist an incomplete day. Stamps off the grid never enter
+`stitched`.
 """
-function stitch_market_day(d::Date, hourly_prev::Dict{DateTime,Float64},
-                           hourly_curr::Dict{DateTime,Float64})
+function stitch_market_day(d::Date, prev::Dict{DateTime,Float64},
+                           curr::Dict{DateTime,Float64}; res_minutes::Int)
     t0, t1 = athens_market_day_window(d)
     utc_midnight = DateTime(d)
+    expected = expected_market_day_slots(d, res_minutes)
+    grid = Set(expected)
     stitched = Dict{DateTime,Float64}()
-    for (h, p) in hourly_prev
-        (t0 <= h < utc_midnight) && (stitched[h] = p)
+    for (h, p) in prev
+        (t0 <= h < utc_midnight) && h in grid && (stitched[h] = p)
     end
-    for (h, p) in hourly_curr
-        (utc_midnight <= h < t1) && (stitched[h] = p)
+    for (h, p) in curr
+        (utc_midnight <= h < t1) && h in grid && (stitched[h] = p)
     end
-    expected = collect(t0:Hour(1):(t1 - Hour(1)))
-    missing_hours = [h for h in expected if !haskey(stitched, h)]
-    return (stitched=stitched, missing_hours=missing_hours, expected=expected)
+    missing_slots = [h for h in expected if !haskey(stitched, h)]
+    return (stitched=stitched, missing_slots=missing_slots, expected=expected)
 end
 
 """
@@ -285,21 +300,14 @@ function eligibility_verdict(zones::Vector{String},
 end
 
 """
-    hourly_prices(prices::Dict{String,Float64}) -> Dict{DateTime,Float64}
+    slot_prices(prices::Dict{String,Float64}) -> Dict{DateTime,Float64}
 
-Collapse a market-clearing price dict keyed by "yyyymmdd-HHMM" timeslots to
-hourly prices (mean of sub-hourly slots within each hour; identity for hourly
-books, which is what the merit-order clear produces).
+Parse a market-clearing price dict keyed by "yyyymmdd-HHMM" timeslots into
+slot-start UTC stamps, one entry per slot, unchanged: quarter-hour prices stay
+quarter-hour (cv46). (Replaces `hourly_prices`, which averaged the quarters.)
 """
-function hourly_prices(prices::Dict{String,Float64})
-    acc = Dict{DateTime,Vector{Float64}}()
-    for (ts, p) in prices
-        dt = DateTime(ts, dateformat"yyyymmdd-HHMM")
-        h = trunc(dt, Hour)
-        push!(get!(acc, h, Float64[]), p)
-    end
-    return Dict(h => mean(v) for (h, v) in acc)
-end
+slot_prices(prices::Dict{String,Float64}) =
+    Dict{DateTime,Float64}(DateTime(ts, dateformat"yyyymmdd-HHMM") => p for (ts, p) in prices)
 
 """
     score_series(sim::Vector{Float64}, act::Vector{Float64})
@@ -325,9 +333,78 @@ end
 # ---------------------------------------------------------------------------
 # Native 15-minute scores (phase 3, planner-p3 option (ii)): the HOURLY forecast
 # replicated x4 onto its quarters, scored against native PT15M SDAC actuals, in
-# ADDITION to the hourly score (which is unchanged). Pure; DB access lives in
-# test/scripts/eu_eval_metrics.jl (`native_q15_actuals`).
+# ADDITION to the hourly score (which is unchanged). The native actuals reader
+# `native_q15_actuals` is below (moved from test/scripts/eu_eval_metrics.jl, cv46 D2: the
+# scorer and the exporters use it in production).
 # ---------------------------------------------------------------------------
+
+"""
+Non-SDAC day-ahead `sequence`s to drop from the NATIVE 15-MIN target, per zone.
+AT and DE_LU carry two day-ahead auctions in `entsoe.energy_prices`. Sequence 2
+is the early EXAA auction, not SDAC. In the read-only 2026-11-15 extract,
+Oct 15-Nov 13, latest row per zone/time/sequence/resolution: AT sequence 1
+equals CZ in 279/2,880 quarters, sequence 2 in 0/2,876; DE_LU sequence 1 equals
+NL in 339/2,880, sequence 2 in 1/2,880. Monthly 2022-12..2026-11, sequence 1
+matches its coupled neighbour in roughly 2-48 % of MTUs, sequence 2 in at most
+about 0.2 %. Sequence 2's update stamp is about 11:10 local time (an ingestion
+stamp, not an authenticated exchange publication time), ahead of the SDAC batch.
+The #424 review confirmed this independently. DK1/DK2 sequence 2 rows are
+float-noise copies of the same SDAC price. The hourly score's
+`resolution_aware_actuals` (highest sequence) is deliberately left unchanged.
+Flip an entry to "1" to target the other auction.
+"""
+const Q15_NON_SDAC_SEQUENCE = Dict("AT" => "2", "DE_LU" => "2")
+
+"""
+    native_q15_actuals(sd, ed; contract="Day-ahead") -> DataFrame(z, t, act, res)
+
+Day-ahead actuals at their NATIVE resolution for the 15-minute score: SDAC only
+(`Q15_NON_SDAC_SEQUENCE` dropped), latest revision (`update_time_utc`) per
+(zone, interval start, resolution code), UTC interval starts over the UTC days
+sd..ed. `res` is the ENTSO-E resolution code (PT15M / PT30M / PT60M); only PT15M
+rows are scored (`score_q15`), so PT60M/PT30M zones stay out of the 15-min mask.
+"""
+function native_q15_actuals(sd::Date, ed::Date; contract::String="Day-ahead")
+    excl = join(["(map_code = '$z' AND trim(COALESCE(sequence, '')) = '$q')"
+                 for (z, q) in sort(collect(Q15_NON_SDAC_SEQUENCE))], " OR ")
+    Euphemia.sql2df("""
+        SELECT DISTINCT ON (map_code, date_time_utc, resolution_code)
+               map_code AS z, (date_time_utc AT TIME ZONE 'UTC') AS t,
+               price_currency_mwh AS act, trim(resolution_code) AS res
+        FROM entsoe.energy_prices
+        WHERE contract_type = \$1 AND area_type_code LIKE 'BZN%'
+          AND price_currency_mwh IS NOT NULL
+          AND date_time_utc >= (\$2::date::timestamp AT TIME ZONE 'UTC')
+          AND date_time_utc <  ((\$3::date + 1)::timestamp AT TIME ZONE 'UTC')
+          $(isempty(excl) ? "" : "AND NOT ($excl)")
+        ORDER BY map_code, date_time_utc, resolution_code, update_time_utc DESC
+    """, [contract, sd, ed])
+end
+
+"""
+    hourly_means(ts, vals) -> (hours::Vector{DateTime}, means::Vector{Float64})
+
+Average slots to the hour (`trunc(t, Hour)`), for readers that pair a forecast or record series
+with HOURLY actuals (cv46 downstream D2). Hours come out in first-appearance order, and an hour with
+a single slot keeps its value exactly (`x / 1 == x`), so on hourly data the pairs, their order and
+every sum over them are bit-identical to reading the rows directly. Values that are `missing`,
+`nothing` or non-finite are skipped."""
+function hourly_means(ts, vals)
+    order = DateTime[]
+    acc = Dict{DateTime,Tuple{Float64,Int}}()
+    for (t, v) in zip(ts, vals)
+        (v === missing || v === nothing) && continue
+        x = Float64(v)
+        isfinite(x) || continue
+        h = trunc(DateTime(t), Hour)
+        if haskey(acc, h)
+            s, n = acc[h]; acc[h] = (s + x, n + 1)
+        else
+            push!(order, h); acc[h] = (x, 1)
+        end
+    end
+    return order, [acc[h][1] / acc[h][2] for h in order]
+end
 
 "Minimum paired native quarters for a 15-min zone-day score (analogous to MIN_SCORE_HOURS)."
 const MIN_SCORE_Q15_DEFAULT = 48
@@ -361,6 +438,30 @@ function q15_forecast(ts::AbstractVector, vals::AbstractVector)
         end
     end
     return out, native ? "PT15M" : "PT60M"
+end
+
+"""
+    q15_forecast_by_day(ts, vals) -> (Dict{DateTime,Float64}, res::String)
+
+`q15_forecast` decided per UTC day: a window spanning the hourly → quarter-hour switch keeps its
+hourly days (replicated x4) next to its native quarter days, instead of one decision over the whole
+window dropping the hourly days (review of #476 #2). `res` is the days' common resolution, or
+"mixed". A single-day window equals `q15_forecast`.
+"""
+function q15_forecast_by_day(ts::AbstractVector, vals::AbstractVector)
+    length(ts) == length(vals) || throw(ArgumentError("ts/vals length mismatch"))
+    byday = Dict{Date,Vector{Int}}()
+    for (i, t) in enumerate(ts)
+        push!(get!(byday, Date(DateTime(t)), Int[]), i)
+    end
+    out = Dict{DateTime,Float64}()
+    res = Set{String}()
+    for d in sort!(collect(keys(byday)))
+        idx = byday[d]
+        fq, r = q15_forecast(ts[idx], vals[idx])
+        merge!(out, fq); push!(res, r)
+    end
+    return out, length(res) == 1 ? only(res) : isempty(res) ? "PT60M" : "mixed"
 end
 
 """
@@ -482,6 +583,81 @@ function load_weighted_err_pct(sim::Vector{Float64}, act::Vector{Float64},
     den = sum(load .* abs.(act))
     den / wsum < min_den_eur && return nothing   # near-zero settled prices → undefined
     return 100 * sum(load .* abs.(sim .- act)) / den
+end
+
+# ---------------------------------------------------------------------------
+# Quarter-hour forecast days (cv46) in the exporters. A day's slot length is read from its own stamps:
+# mixed history is permanent (CHOSEN_SLICE_CTE keeps <=cv45 hourly days next to cv46 quarter days), so
+# every reader branches per DAY, never per dataset. Hourly series (the actuals fallback, the model lines,
+# Timestral, the load weights) are replicated onto the quarters of their hour (a step), never interpolated.
+# ---------------------------------------------------------------------------
+const RES_HOURLY = "PT60M"
+const RES_QUARTER = "PT15M"
+
+"ISO 8601 slot length of one forecast day from its UTC stamps: PT15M when two consecutive stamps are 15 minutes apart, else PT60M."
+function day_resolution(ts::AbstractVector)
+    st = sort(DateTime.(collect(ts)))
+    for i in 1:length(st)-1
+        st[i+1] - st[i] == Minute(15) && return RES_QUARTER
+    end
+    return RES_HOURLY
+end
+
+"The market days holding a quarter-hour day in a prices frame (columns z, market_date, lead_days, t, mode or track)."
+function quarter_days(prices)
+    k = hasproperty(prices, :mode) ? prices.mode : prices.track
+    days = Dict{Any,Vector{DateTime}}()
+    for i in eachindex(prices.t)
+        push!(get!(days, (prices.z[i], prices.market_date[i], prices.lead_days[i], k[i]), DateTime[]),
+              DateTime(prices.t[i]))
+    end
+    return sort!(unique(Date(key[2]) for (key, v) in days if day_resolution(v) == RES_QUARTER))
+end
+
+"True when a prices frame holds any quarter-hour day."
+any_quarter_day(prices) = !isempty(quarter_days(prices))
+
+"The stamp an hourly series is read at for one slot: the slot's hour on a quarter day (step), the stamp itself on an hourly day."
+slot_hour(t::DateTime, res::AbstractString) = res == RES_QUARTER ? floor(t, Hour) : t
+
+"""
+    slot_actuals(zone, hours, res, actmap, q15map) -> (actuals, actual_resolution)
+
+Actuals for one zone-day's slots (`nothing` where unsettled). Quarter day, slot by slot: the native PT15M
+Day-ahead actual where published, else the slot's hourly actual (replicated onto the hour's quarters; e.g.
+2025-10-01, whose first Athens hour is still PT60M, or quarters ENTSO-E dropped). `actual_resolution`: PT15M
+when the zone-day has any native quarter, else PT60M (all hourly). Hourly day: the hourly actuals, exactly as
+before (PT60M).
+"""
+function slot_actuals(zone, hours, res, actmap, q15map)
+    if res == RES_QUARTER
+        native = Any[get(q15map, (zone, h), nothing) for h in hours]
+        acts = Any[isnothing(native[i]) ? get(actmap, (zone, floor(hours[i], Hour)), nothing) : native[i]
+                   for i in eachindex(hours)]
+        return acts, any(!isnothing, native) ? RES_QUARTER : RES_HOURLY
+    end
+    return Any[get(actmap, (zone, h), nothing) for h in hours], RES_HOURLY
+end
+
+"""
+    q15_actual_map(days; reader=native_q15_actuals) -> Dict((zone, slot start) => actual)
+
+Native PT15M Day-ahead actuals (`native_q15_actuals`, the SDAC target: non-SDAC sequences dropped) over the
+market days of the export's QUARTER-HOUR days only (`days` = `quarter_days(prices)`; from the day before the
+first, as an Athens market day starts on the previous UTC day). Empty days → no read. Memoised per process on
+the window, so the zone and map passes of one exporter read it once.
+"""
+const _Q15_MAP_CACHE = Dict{Any,Dict{Tuple{String,DateTime},Float64}}()
+function q15_actual_map(days; reader=native_q15_actuals)
+    isempty(days) && return Dict{Tuple{String,DateTime},Float64}()
+    lo, hi = minimum(days) - Day(1), maximum(days)
+    get!(_Q15_MAP_CACHE, (lo, hi, objectid(reader))) do
+        m = Dict{Tuple{String,DateTime},Float64}()
+        for r in eachrow(reader(lo, hi))
+            String(r.res) == "PT15M" && (m[(String(r.z), DateTime(r.t))] = Float64(r.act))
+        end
+        m
+    end
 end
 
 """

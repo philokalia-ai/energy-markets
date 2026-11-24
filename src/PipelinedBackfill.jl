@@ -62,6 +62,20 @@ _result_failed(day; status=:error, book_secs=0.0, waitq_secs=0.0,
 _usable(r) = r.status == :optimal ||
              (r.status == :time_limit && !isempty(r.market_prices))
 
+"""
+    truncation_min_slots(min_price_periods, clear_resolution_minutes) -> Int
+
+Distinct price periods a cleared day must have to be SAVED by the pipelined
+backfill (the truncation gate): a full UTC day at the clearing resolution
+(1440 ÷ res: 96 at 15 min, 24 hourly), never below `min_price_periods`;
+`min_price_periods = 0` disables the gate. Resume completeness is a separate
+check, decided per saved day's resolution_code.
+"""
+function truncation_min_slots(min_price_periods::Integer, clear_resolution_minutes::Integer)
+    min_price_periods == 0 && return 0
+    return max(min_price_periods, 1440 ÷ clear_resolution_minutes)
+end
+
 # ---------------------------------------------------------------------------
 # Order-book capture (opt-in via run_pipelined_backfill(books_dir=...))
 # ---------------------------------------------------------------------------
@@ -232,6 +246,7 @@ function pipeline_book_worker(bookwork::RemoteChannel, solvework::RemoteChannel,
                     mz_build_books(zones, day;
                         enrich_network=cfg.enrich_network,
                         apply_zone_profiles=cfg.apply_zone_profiles,
+                        clear_resolution_minutes=cfg.clear_resolution_minutes,
                         scenario=cfg.scenario)
                 end
                 book_secs = time() - t0
@@ -254,6 +269,9 @@ function pipeline_book_worker(bookwork::RemoteChannel, solvework::RemoteChannel,
                         transfer_capacity=network,
                         enrich_network=cfg.enrich_network,
                         apply_zone_profiles=cfg.apply_zone_profiles,
+                        # Same grid as pass 1: pass-2 anchor refs (and P1's
+                        # storable-water refs) are keyed by pass-1 slot stamps.
+                        clear_resolution_minutes=cfg.clear_resolution_minutes,
                         scenario=cfg.scenario)
                 end
                 rebuild_secs = time() - t0
@@ -363,6 +381,52 @@ function pipeline_solver_worker(solvework::RemoteChannel, bookwork::RemoteChanne
 end
 
 """
+    resume_slots_needed(resolution_code, min_price_periods) -> Int
+
+Distinct slots a saved UTC day needs for resume to treat it as complete, by the day's
+`energy_prices.resolution_code` (cv46 downstream D2: hourly and quarter-hour days share the record).
+An hourly day (`1H`, or unknown) needs `min_price_periods`, as before; a `15M` day a full UTC day of
+quarters (`max(min_price_periods, 96)`), a `30M` day `max(min_price_periods, 48)`."""
+function resume_slots_needed(rc, min_price_periods::Integer)
+    s = rc === missing || rc === nothing ? "1H" : strip(String(rc))
+    s == "15M" && return max(min_price_periods, 96)
+    s == "30M" && return max(min_price_periods, 48)
+    return min_price_periods
+end
+
+"""
+    resume_day_counts(clearing_mode, cv, first_day, last_day) -> DataFrame(d, nz, nh, q15, q30)
+
+Per saved UTC day of `simulations.energy_prices`: distinct zones, distinct slots, and whether ANY of
+its rows is a quarter-hour (`q15`) or half-hour (`q30`) slot. Booleans, not `MAX(resolution_code)`:
+as text "1H" sorts above "15M", so a day holding both took the hourly bar (review of #476 #4)."""
+function resume_day_counts(clearing_mode::String, cv::Int, first_day::Date, last_day::Date)
+    return sql2df("""
+        SELECT (date_time_utc AT TIME ZONE 'UTC')::date AS d,
+               COUNT(DISTINCT bidding_zone) AS nz,
+               COUNT(DISTINCT date_time_utc) AS nh,
+               bool_or(trim(resolution_code) = '15M') AS q15,
+               bool_or(trim(resolution_code) = '30M') AS q30
+        FROM simulations.energy_prices
+        WHERE clearing_mode = \$1 AND code_version = \$2
+          AND date_time_utc >= (\$3::date::timestamp AT TIME ZONE 'UTC')
+          AND date_time_utc <  (\$4::date::timestamp AT TIME ZONE 'UTC')
+        GROUP BY 1
+        """, [clearing_mode, cv, first_day, last_day + Day(1)])
+end
+
+_resume_rc(r) = coalesce(r.q15, false) ? "15M" : coalesce(r.q30, false) ? "30M" : "1H"
+
+"""
+    resume_complete_days(counts, n_zones, min_price_periods) -> Set{Date}
+
+Days of `resume_day_counts` that resume may skip: every zone present and enough distinct slots for
+the day's finest resolution (`resume_slots_needed`)."""
+resume_complete_days(df, n_zones::Integer, min_price_periods::Integer) =
+    Set(Date(r.d) for r in eachrow(df)
+        if Int(r.nz) >= n_zones && Int(r.nh) >= resume_slots_needed(_resume_rc(r), min_price_periods))
+
+"""
     pipeline_day_saved(day, clearing_mode, cv) -> Bool
 
 Resume check: has this (day, clearing_mode, code_version) already been saved to
@@ -404,6 +468,10 @@ sequential `run_multi_zone_market_clearing(day; passes=2, ...)` path.
 - `book_workers`    : book-builder processes (default `min(10, CPU÷8)`)
 - `in_flight`       : max days in flight / channel capacity (default 8)
 - `optimizer`       : "highs" (default; the only solver) / "auto"
+- `clear_resolution_minutes` : minutes per price period (default
+  `CLEAR_RESOLUTION_MINUTES` = 15, 96 periods; 60 = hourly). The truncation
+  gate requires a full UTC day at this resolution, `max(min_price_periods,
+  1440 ÷ clear_resolution_minutes)` periods (`min_price_periods=0` disables it).
 - `clearing_mode`   : energy_prices save key (default "multi_zone_eu")
 - `save_to_db`      : persist results (default true)
 - `resume`          : skip already-saved days (default true)
@@ -493,6 +561,13 @@ function _run_pipelined_backfill_impl(days, zones::Vector{String}=String[];
         # behaviour. This gate never changes a price — only whether a
         # truncated day is recorded as complete.
         min_price_periods::Int=24,
+        # Clearing resolution (minutes per price period), passed to BOTH book
+        # stages (mz_build_books / mz_rebuild_anchored). Default: the product
+        # resolution CLEAR_RESOLUTION_MINUTES (15 from cv46, 96 periods); 60
+        # gives the hourly clear. Config only — never read from the env. The
+        # truncation gate scales with it (`min_slots` below); resume
+        # completeness is decided per saved day's resolution_code.
+        clear_resolution_minutes::Int=CLEAR_RESOLUTION_MINUTES,
         # Same cv20 policy as run_multi_zone_market_clearing: `nothing` resolves
         # to decomposed on the enriched (EU-footprint) path — the canonical,
         # solver-invariant mode — and monolithic otherwise. Explicit wins.
@@ -533,6 +608,9 @@ function _run_pipelined_backfill_impl(days, zones::Vector{String}=String[];
     isempty(zones) && error("run_pipelined_backfill: `zones` must be non-empty")
     days = collect(Date, days)
     cv = ENERGY_PRICES_CODE_VERSION
+    (1 <= clear_resolution_minutes <= 60 && 60 % clear_resolution_minutes == 0) ||
+        error("clear_resolution_minutes must divide 60 (got $clear_resolution_minutes)")
+    min_slots = truncation_min_slots(min_price_periods, clear_resolution_minutes)
 
     # Resume: drop already-saved days up front, so the total to process is known.
     # Under the DuckDB backend the resume probe READS simulations.* which lives
@@ -558,28 +636,21 @@ function _run_pipelined_backfill_impl(days, zones::Vector{String}=String[];
         # skipped it forever. Zone-count completeness costs nothing extra —
         # it is the same grouped scan with one more aggregate.
         saved_days = try
-            df = sql2df("""
-                SELECT (date_time_utc AT TIME ZONE 'UTC')::date AS d,
-                       COUNT(DISTINCT bidding_zone) AS nz,
-                       COUNT(DISTINCT date_time_utc) AS nh
-                FROM simulations.energy_prices
-                WHERE clearing_mode = \$1 AND code_version = \$2
-                  AND date_time_utc >= (\$3::date::timestamp AT TIME ZONE 'UTC')
-                  AND date_time_utc <  (\$4::date::timestamp AT TIME ZONE 'UTC')
-                GROUP BY 1
-                """, [clearing_mode, cv, minimum(days), maximum(days) + Day(1)])
+            df = resume_day_counts(clearing_mode, cv, minimum(days), maximum(days))
             # BOTH dimensions. Zone count alone is not completeness: the cv24
             # record holds 65 days that carry all 39 zones and fewer than 24
             # hours (12 of them a single hour) because one zone's short book
             # collapsed the coupled period intersection. Those days passed a
             # zone-only check and were skipped forever.
-            complete = Set(Date(r.d) for r in eachrow(df)
-                           if Int(r.nz) >= length(zones) && Int(r.nh) >= min_price_periods)
+            # Per day, by the day's resolution (cv46: quarter-hour days in the same record as
+            # hourly ones): an hourly day needs min_price_periods slots as before; a 15M day a full
+            # UTC day of quarters (96), so a truncated quarter day (>= 24 quarters) is not taken
+            # as complete.
+            complete = resume_complete_days(df, length(zones), min_price_periods)
             for r in eachrow(df)
-                nz, nh = Int(r.nz), Int(r.nh)
-                (nz >= length(zones) && nh >= min_price_periods) && continue
-                @warn "resume: $(Date(r.d)) is SHORT ($nz/$(length(zones)) zones, " *
-                      "$nh/$min_price_periods hours) — re-processing"
+                Date(r.d) in complete && continue
+                @warn "resume: $(Date(r.d)) is SHORT ($(Int(r.nz))/$(length(zones)) zones, " *
+                      "$(Int(r.nh))/$(resume_slots_needed(_resume_rc(r), min_price_periods)) slots) — re-processing"
             end
             complete
         catch e
@@ -610,7 +681,8 @@ function _run_pipelined_backfill_impl(days, zones::Vector{String}=String[];
     println("=" ^ 70)
     println("🔀 PIPELINED BACKFILL  days=$N/$(length(days))  zones=$(length(zones))")
     println("   solver_workers=$solver_workers  book_workers=$book_workers  in_flight=$in_flight")
-    println("   optimizer=$optimizer  clearing_mode=$clearing_mode  cv=$cv  save=$save_to_db")
+    println("   optimizer=$optimizer  clearing_mode=$clearing_mode  cv=$cv  save=$save_to_db  " *
+            "resolution=$(clear_resolution_minutes)min (truncation gate ≥$min_slots periods/day)")
     println("=" ^ 70); flush(stdout)
 
     # --- spin up the worker pool -------------------------------------------
@@ -710,7 +782,8 @@ function _run_pipelined_backfill_impl(days, zones::Vector{String}=String[];
            apply_zone_profiles=apply_zone_profiles, mpcc_time_limit=mpcc_time_limit,
            mpcc_mip_gap=mpcc_mip_gap, mpcc_heuristic_effort=mpcc_heuristic_effort,
            scenario=scenario, decompose_periods=resolved_decompose,
-           books_dir=books_dir_abs, as_of=as_of)
+           books_dir=books_dir_abs, as_of=as_of,
+           clear_resolution_minutes=clear_resolution_minutes)
 
     try
         # Load Dates alongside Euphemia: scenario hooks are closures serialized
@@ -863,9 +936,9 @@ function _run_pipelined_backfill_impl(days, zones::Vector{String}=String[];
             # rather than to what the book intended.
             n_periods = r.ok && r.final !== nothing && !isempty(r.final.market_prices) ?
                 maximum(length(pd) for pd in values(r.final.market_prices)) : 0
-            if r.ok && _usable(r.final) && n_periods < min_price_periods
+            if r.ok && _usable(r.final) && n_periods < min_slots
                 @error "DAY $(r.day) TRUNCATED — only $n_periods price period(s), " *
-                       "need $min_price_periods. One zone's short book collapses the " *
+                       "need $min_slots. One zone's short book collapses the " *
                        "coupled intersection for every zone. NOT saved (rerun the day " *
                        "once its inputs are complete; min_price_periods=0 disables this)."
                 failed += 1

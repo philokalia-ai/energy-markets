@@ -70,6 +70,48 @@ sim_of(d) = (h = expected_market_day_hours(d); (h, loc_price.(h) .+ 5.0))
         @test p2.n == 24 && p2.epf ≈ 70 * 24 && p2.d1 ≈ 10 * 24
     end
 
+    @testset "cv46: hourly_means, and a quarter slice scores as its hourly means" begin
+        h0 = DateTime(2026, 10, 22, 21)
+        ht = [h0 + Hour(k) for k in 0:3]
+        hv = [1.5, 2.25, -3.0, 7.125]
+        o, m = hourly_means(ht, hv)
+        @test o == ht && m == hv && all(m .=== hv)               # hourly: identity, same order
+        qt = [h0 + Minute(15k) for k in 0:15]
+        qv = vcat(([v - 1, v + 1, v - 2, v + 2] for v in hv)...)
+        o, m = hourly_means(qt, qv)
+        @test o == ht && m ≈ hv                                   # quarters: the hour's mean
+        o, m = hourly_means(vcat(ht, [h0]), vcat([missing, NaN], hv[3:4], [9.0]))
+        @test o == [ht[3], ht[4], h0] && m == [hv[3], hv[4], 9.0] # missing/NaN skipped
+        # naive_zone_day: a quarter slice whose quarters average to the hourly sim gives the
+        # hourly slice's cells and sums (one cell per hour, not four)
+        ts, vs = panel(Date(2026, 10, 10), Date(2026, 10, 23))
+        act = actdict(ts, vs); loc = local_price_index(ts, vs)
+        st, sv = sim_of(Date(2026, 10, 23))
+        p = naive_zone_day(st, sv, act, loc, Date(2026, 10, 23), 1)
+        qst = [t + Minute(15k) for t in st for k in 0:3]
+        qsv = [v + d for v in sv for d in (-4.0, 4.0, -1.0, 1.0)]
+        pq = naive_zone_day(qst, qsv, act, loc, Date(2026, 10, 23), 1)
+        @test pq.n == p.n == 24
+        @test pq.model ≈ p.model && pq.d1 ≈ p.d1 && pq.d7 ≈ p.d7 && pq.epf ≈ p.epf
+    end
+
+    @testset "q15_forecast_by_day: native decided per UTC day (review of #476 #2)" begin
+        hd = Date(2025, 9, 30); qd = Date(2025, 10, 1)
+        ht = [DateTime(hd) + Hour(h) for h in 0:23]; hv = [10.0 + h for h in 0:23]
+        qt = [DateTime(qd) + Minute(15k) for k in 0:95]; qv = [100.0 + k for k in 0:95]
+        fq, res = q15_forecast_by_day(vcat(ht, qt), vcat(hv, qv))
+        @test res == "mixed"
+        @test length(fq) == 96 + 96                              # hourly day replicated x4, quarter day native
+        @test fq[DateTime(hd) + Hour(5) + Minute(30)] == 15.0    # hourly value on its quarter
+        @test fq[DateTime(qd) + Minute(15 * 7)] == 107.0         # native quarter kept
+        # the whole-window decision dropped the hourly day's :15/:30/:45 quarters
+        fw, rw = q15_forecast(vcat(ht, qt), vcat(hv, qv))
+        @test rw == "PT15M" && length(fw) == 24 + 96
+        # single-type windows equal q15_forecast
+        @test q15_forecast_by_day(ht, hv) == q15_forecast(ht, hv)
+        @test q15_forecast_by_day(qt, qv) == q15_forecast(qt, qv)
+    end
+
     @testset "leads 2-7: D-7 only, d1/epf absent" begin
         ts, vs = panel(Date(2026, 10, 10), Date(2026, 10, 23))
         st, sv = sim_of(Date(2026, 10, 23))
