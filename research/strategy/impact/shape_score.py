@@ -78,12 +78,14 @@ def metrics(d, x, ref):
     return dict(cells=len(d), days=int(d.day.nunique()), mae_ref=er.mean(), mae=ex.mean(), dmae=ex.mean() - er.mean(),
                 lo=lo, hi=hi, rmae_ref=er.mean() / en.mean(), rmae=ex.mean() / en.mean(),
                 bias_ref=(d[ref] - d.act).mean(), bias=(d[x] - d.act).mean(),
-                shape_ref=(dm(d[ref]) - sa).abs().mean(), shape=(dm(d[x]) - sa).abs().mean())
+                shape_ref=(dm(d[ref]) - sa).abs().mean(), shape=(dm(d[x]) - sa).abs().mean(),
+                level_ref=(lambda lv: (lv[ref] - lv.act).abs().mean())(d.groupby(g)[[ref, "act"]].mean()),
+                level=(lambda lv: (lv[x] - lv.act).abs().mean())(d.groupby(g)[[x, "act"]].mean()))
 
 
 def table(d, x, ref, title):
-    L = [f"#### {title}", "| unit | days | cells | rMAE base → cand | MAE base → cand | ΔMAE [90 %] | bias base → cand | shape base → cand |",
-         "|---|---|---|---|---|---|---|---|"]
+    L = [f"#### {title}", "| unit | days | cells | rMAE base → cand | MAE base → cand | ΔMAE [90 %] | bias base → cand | shape base → cand | level base → cand |",
+         "|---|---|---|---|---|---|---|---|---|"]
     units = [("pooled", d)] + [(r, d[d.zone.map(ZREG) == r]) for r in REGIONS]
     res = {}
     for name, g in units:
@@ -92,7 +94,7 @@ def table(d, x, ref, title):
         m = metrics(g, x, ref); res[name] = m
         L.append(f"| {name} | {m['days']} | {m['cells']} | {m['rmae_ref']:.4f} → {m['rmae']:.4f} | {m['mae_ref']:.2f} → {m['mae']:.2f} | "
                  f"{m['dmae']:+.3f} [{m['lo']:+.3f}, {m['hi']:+.3f}] | {m['bias_ref']:+.2f} → {m['bias']:+.2f} | "
-                 f"{m['shape_ref']:.2f} → {m['shape']:.2f} |")
+                 f"{m['shape_ref']:.2f} → {m['shape']:.2f} | {m['level_ref']:.2f} → {m['level']:.2f} |")
     worse = [r for r, m in res.items() if r != "pooled" and m["lo"] > 0]
     bar = res["pooled"]["hi"] < 0 and not worse
     L.append(f"\nBar (pooled interval below 0, no region significantly worse): **{'PASS' if bar else 'FAIL'}**"
