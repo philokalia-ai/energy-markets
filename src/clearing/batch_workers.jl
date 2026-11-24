@@ -8,14 +8,14 @@
 """
 Helper function for processing dates in parallel.
 """
-function _process_dates_parallel(dates, order_method, model, optimizer, markup_factor,
+function _process_dates_parallel(dates, order_method, model, optimizer,
     random_seed, silent, save_to_db, max_retries, retry_delay,
     fallback_zones, skip_existing, range_start_time, force_rerun)
 
     println("📦 Processing $(length(dates)) dates in parallel...")
 
     # Create arguments tuple for each date
-    date_args = [(date, order_method, model, optimizer, markup_factor, random_seed,
+    date_args = [(date, order_method, model, optimizer, random_seed,
         silent, save_to_db, max_retries, retry_delay, fallback_zones,
         skip_existing, range_start_time, force_rerun) for date in dates]
 
@@ -29,7 +29,7 @@ end
 Wrapper function for pmap to process a single date.
 """
 function _parallel_date_processor(args)
-    date, order_method, model, optimizer, markup_factor, random_seed,
+    date, order_method, model, optimizer, random_seed,
     silent, save_to_db, max_retries, retry_delay, fallback_zones,
     skip_existing, range_start_time, force_rerun = args
 
@@ -44,7 +44,6 @@ function _parallel_date_processor(args)
             order_method=order_method,
             model=model,
             optimizer=optimizer,
-            markup_factor=markup_factor,
             random_seed=random_seed,
             silent=silent,
             save_to_db=save_to_db,
@@ -176,7 +175,7 @@ end
 Helper function for processing zones sequentially.
 """
 function _process_zones_sequential(zones_to_process, date, order_method, model, optimizer,
-    markup_factor, random_seed, silent, save_to_db,
+    random_seed, silent, save_to_db,
     max_retries, retry_delay, progress_callback, start_time, force_rerun)
     results = NamedTuple[]
 
@@ -203,7 +202,6 @@ function _process_zones_sequential(zones_to_process, date, order_method, model, 
                     order_method=order_method,
                     model=model,
                     optimizer=optimizer,
-                    markup_factor=markup_factor,
                     random_seed=random_seed,
                     silent=silent,
                     save_to_db=save_to_db,
@@ -300,7 +298,7 @@ end
 Helper function for processing zones in parallel.
 """
 function _process_zones_parallel(zones_to_process, date, order_method, model, optimizer,
-    markup_factor, random_seed, silent, save_to_db,
+    random_seed, silent, save_to_db,
     max_retries, retry_delay, progress_callback, chunk_size, force_rerun)
 
     # Split zones into chunks for distribution
@@ -309,7 +307,7 @@ function _process_zones_parallel(zones_to_process, date, order_method, model, op
     println("📦 Split $(length(zones_to_process)) zones into $(length(zone_chunks)) chunks of size $chunk_size")
 
     # Prepare arguments for pmap
-    pmap_args = [(chunk, date, order_method, model, optimizer, markup_factor, random_seed, silent, save_to_db, max_retries, retry_delay, force_rerun) for chunk in zone_chunks]
+    pmap_args = [(chunk, date, order_method, model, optimizer, random_seed, silent, save_to_db, max_retries, retry_delay, force_rerun) for chunk in zone_chunks]
 
     # Process chunks in parallel
     chunk_start_time = time()
@@ -347,9 +345,9 @@ end
 Wrapper function for pmap to process a chunk of zones.
 """
 function _parallel_chunk_processor(args)
-    zone_chunk, date, order_method, model, optimizer, markup_factor, random_seed, silent, save_to_db, max_retries, retry_delay, force_rerun = args
+    zone_chunk, date, order_method, model, optimizer, random_seed, silent, save_to_db, max_retries, retry_delay, force_rerun = args
     return _process_zone_chunk(zone_chunk, date, order_method, model, optimizer,
-        markup_factor, random_seed, silent, save_to_db,
+        random_seed, silent, save_to_db,
         max_retries, retry_delay, force_rerun)
 end
 
@@ -357,7 +355,7 @@ end
 Process a chunk of zones on a single worker.
 """
 function _process_zone_chunk(zone_chunk, date, order_method, model, optimizer,
-    markup_factor, random_seed, silent, save_to_db,
+    random_seed, silent, save_to_db,
     max_retries, retry_delay, force_rerun)
     worker_id = myid()
     chunk_results = NamedTuple[]
@@ -378,7 +376,6 @@ function _process_zone_chunk(zone_chunk, date, order_method, model, optimizer,
                     order_method=order_method,
                     model=model,
                     optimizer=optimizer,
-                    markup_factor=markup_factor,
                     random_seed=random_seed,
                     silent=silent,
                     save_to_db=save_to_db,

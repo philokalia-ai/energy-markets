@@ -142,7 +142,6 @@ end
                           order_method::Symbol=:merit_order, 
                           model::Symbol=:mpcc,
                           optimizer::String="auto",
-                          markup_factor::Float64=1.1,
                           random_seed::Union{Int,Nothing}=nothing,
                           silent::Bool=true)
 
@@ -156,7 +155,7 @@ Supports hourly and sub-hourly temporal resolutions, following the input data.
   were removed in cv25)
 - `model::Symbol`: Market clearing model - `:mpcc` (more models may be added later)
 - `optimizer::String`: "highs" (default) or "auto" — HiGHS is the only solver
-- `markup_factor`, `random_seed`, `force_rerun`: INERT since cv25 — they served the
+- `random_seed`, `force_rerun`: INERT since cv25 — they served the
   deleted UC / alternative books and are accepted only so existing callers do not break
 - `silent::Bool`: Whether to suppress solver output (default: true)
 - `clearing_mode::String`: Label stored with saved prices (default: "single_zone").
@@ -196,7 +195,6 @@ function generate_energy_prices(bidding_zone::String, date::Date;
     order_method::Symbol=:merit_order,
     model::Symbol=:mpcc,
     optimizer::String="auto",
-    markup_factor::Float64=1.1,
     random_seed::Union{Int,Nothing}=nothing,
     silent::Bool=true,
     save_to_db::Bool=false,
