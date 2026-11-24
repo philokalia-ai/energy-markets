@@ -26,7 +26,9 @@ using JuMP, HiGHS
 using Euphemia
 import Euphemia.MarketOrders: MarketOrder, SimpleOrder, LinkedHourlyOrder
 
-export Thermal, Storage, Hydro, PVBat, Flex, archetype, srmc_gas, srmc_coal,
+export CompanyStrategy, CompanyCtx, offers, cost_reflective, strategy_of, label,
+    HourlyMC, HourlyAC, HourlyOC, HourlySched, Block, Linked, Exclusive, MarFull, MarMin, BlockHAC,
+    Thermal, Storage, Hydro, PVBat, Flex, archetype, srmc_gas, srmc_coal,
     Prices, bids, evaluate, family_kind, parse_family, FORMATS
 
 # ---------------------------------------------------------------------------------------------- archetypes
@@ -180,72 +182,6 @@ const FORMATS = Dict(
     :flex => ["hourly_oc", "hourly_sched", "block", "exclusive"],
 )
 
-"""
-    bids(asset, format, F, day; res=60, k_su=1.0, nx=5) -> Vector{MarketOrder}
-
-Build the company's orders for `day` from the FORECAST prices `F` of the asset's zone (one per period,
-period length `res` minutes). `k_su` scales the start-up cost recovered in a block's price (calibrated
-on the calibration days). Never pass realised prices of `day` as F.
-"""
-function bids(a::Thermal, fmt::String, F::Vector{Float64}, day::Date; res=60, k_su=1.0, nx=5)
-    # Cost-reflective pricing rule (ex ante, fleet data): a block's price = SRMC + (k_su·start-up + no-load × run
-    # hours) / block energy, k_su ≤ 1, so no price exceeds the unit's average cost incl. start-up and no-load over the
-    # block. `mar` prices that cost at the MINIMUM acceptance ratio (above average cost when fully accepted — flagged
-    # in the report); `mar_full` prices it at full acceptance (= average cost when fully accepted, below cost when
-    # cut back towards the MAR).
-    k_su <= 1.0 + 1e-9 || error("k_su = $k_su > 1 would price above cost incl. start-up")
-    T = length(F); dt = res / 60; z = a.zone; o = MarketOrder[]
-    hrs(h) = max(1, round(Int, h / dt))                       # hours → periods
-    Ls = hrs(a.min_up):T
-    fixc(L) = k_su * a.startup + a.noload * L * dt            # € per run of L periods
-    if fmt == "hourly_mc"         # truthful marginal: Pmax at SRMC every period
-        for i in 1:T; push!(o, _so(:supply, a.srmc, a.pmax, z, day, i, res)); end
-    elseif fmt == "hourly_ac"     # hourly at average cost: SRMC + (start-up + no-load) over the forecast run length
-        s, L, _ = best_window((F .- a.srmc) .* a.pmax .* dt, Ls, fixc)
-        p = a.srmc + fixc(L) / (a.pmax * L * dt)
-        for i in 1:T; push!(o, _so(:supply, p, a.pmax, z, day, i, res)); end
-    elseif fmt in ("block", "mar", "mar_full")
-        r = fmt == "block" ? 1.0 : a.pmin / a.pmax
-        rp = fmt == "mar" ? r : 1.0                           # ratio at which the price recovers the fixed costs
-        s, L, _ = best_window((F .- a.srmc) .* a.pmax .* dt, Ls, L -> fixc(L) / rp)
-        p = a.srmc + fixc(L) / (rp * a.pmax * L * dt)
-        fam = fmt == "block" ? "BLK:$z:$(a.id)-b" : "BLKM:$z:$(a.id)-$(fmt == "mar" ? "m" : "mf"):mar=$(round(r, digits=4))"
-        for i in s:s+L-1; push!(o, _lo(:supply, p, a.pmax, z, day, i, res, fam)); end
-    elseif fmt == "block_hac"
-        # the block on the forecast window + Pmax offered hourly at average cost (the hourly_ac price) in every
-        # other period: no capacity is left unoffered outside the window (the large-bidder remedy, REPORT §3)
-        s, L, _ = best_window((F .- a.srmc) .* a.pmax .* dt, Ls, fixc)
-        p = a.srmc + fixc(L) / (a.pmax * L * dt)
-        for i in s:s+L-1; push!(o, _lo(:supply, p, a.pmax, z, day, i, res, "BLK:$z:$(a.id)-b")); end
-        for i in 1:T
-            s <= i <= s + L - 1 && continue
-            push!(o, _so(:supply, p, a.pmax, z, day, i, res))
-        end
-    elseif fmt == "linked"
-        # parent = Pmin over the window, priced with start-up + no-load; children = (Pmax−Pmin) per period at SRMC
-        val = [(F[i] - a.srmc) * a.pmin * dt + max(0.0, F[i] - a.srmc) * (a.pmax - a.pmin) * dt for i in 1:T]
-        s, L, _ = best_window(val, Ls, fixc)
-        pp = a.srmc + fixc(L) / (a.pmin * L * dt)
-        par = "BLKL:$z:$(a.id)-p"
-        for i in s:s+L-1
-            push!(o, _lo(:supply, pp, a.pmin, z, day, i, res, par))
-            push!(o, _lo(:supply, a.srmc, a.pmax - a.pmin, z, day, i, res, "BLKL:$z:$(a.id)-c$i:parent=$(a.id)-p"))
-        end
-    elseif fmt == "exclusive"
-        # nx alternative flat blocks: the forecast-best window for nx spread lengths (min_up … T)
-        Lset = unique(round.(Int, range(first(Ls), T; length=nx)))
-        for (k, L) in enumerate(Lset)
-            s, _, _ = best_window((F .- a.srmc) .* a.pmax .* dt, L:L, fixc)
-            p = a.srmc + fixc(L) / (a.pmax * L * dt)
-            fam = "BLKX:$z:$(a.id)-x$k:group=$(a.id)"
-            for i in s:s+L-1; push!(o, _lo(:supply, p, a.pmax, z, day, i, res, fam)); end
-        end
-    else
-        error("thermal format $fmt")
-    end
-    return o
-end
-
 # storage: loop schedules as mixed-sign families (discharge = supply, charge = demand), all slices priced 0:
 # family surplus = Σ P_t·(d_t − c_t)·dt = the schedule's arbitrage value at the prices.
 function _loop!(o, sched_c, sched_d, z, day, res, fam)
@@ -262,136 +198,11 @@ _smooth(F, w) = [sum(F[max(1, i - w):min(end, i + w)]) / (min(length(F), i + w) 
 _alts(F, dt) = [F, _shift(F, round(Int, 1 / dt)), _shift(F, -round(Int, 1 / dt)), _smooth(F, round(Int, 1 / dt)),
                 _smooth(F, round(Int, 3 / dt))]
 
-function bids(a::Storage, fmt::String, F::Vector{Float64}, day::Date; res=60, nx=5, kw...)
-    T = length(F); dt = res / 60; z = a.zone; o = MarketOrder[]
-    if fmt == "hourly_oc"
-        # the forecast-optimal schedule as independent hourly orders, each price-limited at the forecast
-        # opportunity cost of stored energy (LP dual μ_t): discharge legs sell at μ_t/η_d, charge legs buy at μ_t·η_c.
-        # Legs clear independently, so the sold schedule can break the state-of-charge limits (the hourly risk).
-        c, d, μ = storage_lp(a, F; dt=dt); ec = sqrt(a.eta); ed = sqrt(a.eta)
-        for i in 1:T
-            d[i] > 1e-6 && push!(o, _so(:supply, μ[i] / ed, d[i], z, day, i, res))
-            c[i] > 1e-6 && push!(o, _so(:demand, μ[i] * ec, c[i], z, day, i, res))
-        end
-    elseif fmt == "hourly_sched"   # the forecast-optimal schedule as price-taking hourly legs (no price limits)
-        c, d, _ = storage_lp(a, F; dt=dt)
-        for i in 1:T
-            d[i] > 1e-6 && push!(o, _so(:supply, PRICE_FLOOR, d[i], z, day, i, res))
-            c[i] > 1e-6 && push!(o, _so(:demand, PRICE_CAP, c[i], z, day, i, res))
-        end
-    elseif fmt == "block"
-        c, d, _ = storage_lp(a, F; dt=dt)
-        _loop!(o, c, d, z, day, res, "BLKL:$z:$(a.id)-b")   # signed: a loop needs BLKL, not BLK
-    elseif fmt == "exclusive"
-        seen = Set{Vector{Float64}}()
-        for (k, G) in enumerate(_alts(F, dt)[1:nx])
-            c, d, _ = storage_lp(a, G; dt=dt)
-            key = round.(d .- c, digits=3); key in seen && continue; push!(seen, key)
-            _loop!(o, c, d, z, day, res, "BLKX:$z:$(a.id)-x$k:group=$(a.id)")
-        end
-    else
-        error("storage format $fmt")
-    end
-    return o
-end
-
-function bids(a::Hydro, fmt::String, F::Vector{Float64}, day::Date; res=60, nx=5, mar=0.5, kw...)
-    T = length(F); dt = res / 60; z = a.zone; o = MarketOrder[]
-    if fmt == "hourly_oc"    # Pmax every period at water value + energy-budget dual
-        _, μ = hydro_lp(a, F; dt=dt)
-        for i in 1:T; push!(o, _so(:supply, a.wv + μ, a.p, z, day, i, res)); end
-    elseif fmt == "hourly_sched"   # the forecast-optimal profile, price-taking
-        q, _ = hydro_lp(a, F; dt=dt)
-        for i in 1:T; q[i] > 1e-6 && push!(o, _so(:supply, PRICE_FLOOR, q[i], z, day, i, res)); end
-    elseif fmt in ("block", "mar")
-        q, _ = hydro_lp(a, F; dt=dt)
-        fam = fmt == "mar" ? "BLKM:$z:$(a.id)-m:mar=$mar" : "BLK:$z:$(a.id)-b"
-        for i in 1:T; q[i] > 1e-6 && push!(o, _lo(:supply, a.wv, q[i], z, day, i, res, fam)); end
-    elseif fmt == "linked"   # parent = the best half of the budget; children = each further period, budget-bounded
-        q, _ = hydro_lp(a, F; dt=dt)
-        on = sort([i for i in 1:T if q[i] > 1e-6]; by=i -> -F[i])
-        npar = max(1, cld(length(on), 2))
-        for (r, i) in enumerate(on)
-            fam = r <= npar ? "BLKL:$z:$(a.id)-p" : "BLKL:$z:$(a.id)-c$i:parent=$(a.id)-p"
-            push!(o, _lo(:supply, a.wv, q[i], z, day, i, res, fam))
-        end
-    elseif fmt == "exclusive"  # same energy spread over different numbers of periods
-        for (k, frac) in enumerate(range(0.5, 1.0; length=nx))     # spread: energy at frac·… of Pmax
-            nper = clamp(round(Int, a.e / (a.p * frac * dt)), 1, T)
-            pcap = a.e / (nper * dt)
-            q, _ = hydro_lp(a, F; dt=dt, pcap=min(a.p, pcap))
-            fam = "BLKX:$z:$(a.id)-x$k:group=$(a.id)"
-            for i in 1:T; q[i] > 1e-6 && push!(o, _lo(:supply, a.wv, q[i], z, day, i, res, fam)); end
-        end
-    else
-        error("hydro format $fmt")
-    end
-    return o
-end
-
-"""PV + battery. PV is offered at 0 €/MWh (its marginal cost) in every format; the battery follows the
-storage format. `block`/`exclusive`: one combined loop family (PV + battery schedule) — accepted whole."""
-function bids(a::PVBat, fmt::String, F::Vector{Float64}, day::Date; res=60, nx=5, kw...)
-    T = length(F); dt = res / 60; z = a.zone; o = MarketOrder[]
-    pv = length(a.pv) == T ? a.pv : repeat(a.pv; inner=T ÷ length(a.pv))
-    if fmt == "hourly_oc"
-        for i in 1:T; pv[i] > 1e-6 && push!(o, _so(:supply, 0.0, pv[i], z, day, i, res)); end
-        append!(o, bids(a.bat, "hourly_oc", F, day; res=res))
-    elseif fmt == "hourly_sched"   # PV at 0 €/MWh + the battery's forecast schedule price-taking
-        for i in 1:T; pv[i] > 1e-6 && push!(o, _so(:supply, 0.0, pv[i], z, day, i, res)); end
-        append!(o, bids(a.bat, "hourly_sched", F, day; res=res))
-    else
-        alts = fmt == "block" ? [F] : _alts(F, dt)[1:nx]
-        seen = Set{Vector{Float64}}()
-        for (k, G) in enumerate(alts)
-            c, d, _ = storage_lp(a.bat, G; dt=dt)
-            net = pv .+ d .- c
-            key = round.(net, digits=3); key in seen && continue; push!(seen, key)
-            fam = fmt == "block" ? "BLKL:$z:PVBAT-b" : "BLKX:$z:PVBAT-x$k:group=PVBAT"
-            for i in 1:T
-                net[i] > 1e-6 && push!(o, _lo(:supply, 0.0, net[i], z, day, i, res, fam))
-                net[i] < -1e-6 && push!(o, _lo(:demand, 0.0, -net[i], z, day, i, res, fam))
-            end
-        end
-    end
-    return o
-end
-
-"""Retailer. Firm part (1 − shift − curt) bid at the price cap; curtailable part at WTP; the shiftable energy
-E_s = shift·Σ load: `hourly_oc` = hourly bids up to pshift_max at the forecast opportunity price (the LP dual of
-'buy E_s at least cost'), `block` = one buy profile on the forecast-cheapest periods at limit WTP, `exclusive` =
-alternative profiles (forecast transforms), at most one bought."""
-function bids(a::Flex, fmt::String, F::Vector{Float64}, day::Date; res=60, nx=5, kw...)
-    T = length(F); dt = res / 60; z = a.zone; o = MarketOrder[]
-    L = length(a.load) == T ? a.load : repeat(a.load; inner=T ÷ length(a.load))
-    firm = 1.0 - a.shift - a.curt
-    for i in 1:T
-        push!(o, _so(:demand, PRICE_CAP, firm * L[i], z, day, i, res))
-        push!(o, _so(:demand, a.wtp, a.curt * L[i], z, day, i, res))
-    end
-    Es = a.shift * sum(L) * dt
-    function plan(G)   # least-cost purchase of Es on G, ≤ pshift_max per period
-        m = _lp(); @variable(m, 0 <= q[1:T] <= a.pshift_max); @constraint(m, en, sum(q) * dt >= Es)
-        @objective(m, Min, sum(G[t] * dt * q[t] for t in 1:T)); optimize!(m)
-        return value.(q), abs(dual(en))
-    end
-    if fmt == "hourly_oc"
-        _, μ = plan(F)
-        for i in 1:T; push!(o, _so(:demand, μ, a.pshift_max, z, day, i, res)); end
-    elseif fmt == "hourly_sched"   # the forecast least-cost purchase plan, price-taking (bid at the cap)
-        q, _ = plan(F)
-        for i in 1:T; q[i] > 1e-6 && push!(o, _so(:demand, PRICE_CAP, q[i], z, day, i, res)); end
-    else
-        alts = fmt == "block" ? [F] : _alts(F, dt)[1:nx]
-        seen = Set{Vector{Float64}}()
-        for (k, G) in enumerate(alts)
-            q, _ = plan(G)
-            key = round.(q, digits=3); key in seen && continue; push!(seen, key)
-            fam = fmt == "block" ? "BLKL:$z:FLEX-b" : "BLKX:$z:FLEX-x$k:group=FLEX"
-            for i in 1:T; q[i] > 1e-6 && push!(o, _lo(:demand, a.wtp, q[i], z, day, i, res, fam)); end
-        end
-    end
-    return o
+# ------------------------------------------------------------------------- company strategies (plug-ins)
+# One file per strategy (struct + offers methods); `bids` (round 1's entry point) is a thin wrapper in interface.jl.
+for f in ("interface", "hourly_mc", "hourly_ac", "hourly_oc", "hourly_sched", "block", "mar", "linked", "exclusive",
+          "block_hac")
+    include(joinpath(@__DIR__, "company", f * ".jl"))
 end
 
 include("pricetaker.jl")
