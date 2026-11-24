@@ -6,10 +6,11 @@ import Euphemia.MarketOrders: SimpleOrder
 _usable_mk(r) = r.status == :optimal || (r.status == :time_limit && !isempty(r.market_prices))
 
 """build_with_scenario(day, scenario; footprint) -> (prices zone => period => €/MWh, pass)"""
-function build_with_scenario(day::Date, scenario; footprint, optimizer="highs")
+function build_with_scenario(day::Date, scenario; footprint, optimizer="highs", clear_resolution_minutes::Int=60)
     ctx() = Euphemia.gate_context(day)
     ob1 = Euphemia.with_context(ctx()) do
-        mz_build_books(footprint, day; enrich_network=true, apply_zone_profiles=true, scenario=scenario)
+        mz_build_books(footprint, day; enrich_network=true, apply_zone_profiles=true, scenario=scenario,
+            clear_resolution_minutes=clear_resolution_minutes)
     end
     r1 = mz_solve_pass(ob1; optimizer=optimizer, silent=true, decompose_periods=true)
     _usable_mk(r1) || error("mk $day: pass-1 unusable ($(r1.status))")
@@ -18,7 +19,8 @@ function build_with_scenario(day::Date, scenario; footprint, optimizer="highs")
     if !isempty(ai.anchored)
         ob2 = Euphemia.with_context(ctx()) do
             mz_rebuild_anchored(footprint, day, ai.refs, ai.cached; transfer_capacity=ai.network,
-                enrich_network=true, apply_zone_profiles=true, scenario=scenario)
+                enrich_network=true, apply_zone_profiles=true, scenario=scenario,
+                clear_resolution_minutes=clear_resolution_minutes)
         end
         r2 = mz_solve_pass(ob2; optimizer=optimizer, silent=true, decompose_periods=true)
         _usable_mk(r2) && ((res, pass) = (r2, 2))
