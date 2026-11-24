@@ -141,7 +141,7 @@ function resolve_complex_orders(order_book::MPCCOrderBook;
             add_to_expression!(bal[(n, t)], o.type == :supply ? -o.quantity : o.quantity, x[i])
         end
         for ((n, t), mw) in fixed_in
-            haskey(bal, (n, t)) && add_to_constant!(bal[(n, t)], -mw)
+            haskey(bal, (n, t)) && add_to_expression!(bal[(n, t)], -mw)   # accepted supply: −
         end
         fam_rows = Dict{String,AffExpr}()
         fam_budget = Dict{String,Float64}()
