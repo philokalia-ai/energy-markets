@@ -70,7 +70,7 @@ function main()
             end
             for fmt in FMTS[cls(a)]
                 only === nothing || fmt in only || continue
-                k = get(kj, "$z|$arch|$fmt|1.0", 1.0)
+                k = get(kj, "$z|$arch|$fmt|1.0|1.0", get(kj, "$z|$arch|$fmt|1.0", 1.0))   # cal key with/without the no-load cell
                 company = bids(a, fmt, F, day; k_su=k)
                 t0 = time()
                 r = try
