@@ -30,7 +30,6 @@ try
         order_method=:alternative,
         model=:mpcc,
         optimizer="highs",
-        markup_factor=1.1,
         silent=false,  # Show solver output for debugging
         save_to_db=false,  # Don't save during test
         parallel=false,  # Sequential processing

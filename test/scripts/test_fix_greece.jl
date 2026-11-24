@@ -58,7 +58,6 @@ try
         order_method=:alternative,
         model=:mpcc,
         optimizer="highs",
-        markup_factor=1.1,
         silent=true,  # Less verbose for this test
         save_to_db=true  # KEY: Save to database
     )

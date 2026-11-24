@@ -597,6 +597,11 @@ restarts the out-of-sample clock from its adoption date.
 
 Dated reminders and scoring-policy notes that do not change `code_version`.
 
+- **2026-11-24 — `markup_factor` deleted (inert since cv25); prices unchanged, no `code_version` bump.** The
+  `generate-multi-zone-prices` input and `MARKUP_FACTOR` env, `multi_zone_main.jl`'s parse, the kwarg of every
+  clearing/batch entry point and worker tuple, and `MPCC.DEFAULT_MARKUP_FACTOR` are gone (no shim: a caller passing it
+  now fails loudly). Cell-identical to main 5fa39e1 on the 03:00 job path and the 96-step record pipeline.
+
 - **2026-11-23 — site: each market day at its own resolution (cv46 downstream D4); no `code_version` bump.**
   The record keeps hourly days next to quarter-hour days, so `web/app.js` decides per day: the zones API's
   `resolution` (`PT60M` | `PT15M`), else the stamp spacing. Quarter-hour days get slot-end labels, ticks every
