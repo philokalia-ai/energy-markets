@@ -32,6 +32,7 @@ import ..current_context, ..ctx_key, ..record_asof_status!, ..AGG_GEN_PUBLICATIO
 import ..GAS_PLANT_EFFICIENCY, ..GAS_EMISSION_FACTOR, ..GAS_VOM_COST
 import ..FLEXIBLE_FUEL_TYPES
 import ..cv45_on, .._gas_fuel_cost
+import .._rethrow_fill_guard, .._in_fill   # run-local fill: misses fail loudly
 import ..Network: tx_outage_caps, tx_outage_atc_enabled   # cv46 P1 outage-capped export capability
 import ..MarketOrders: SimpleOrder, MarketOrder, LinkedHourlyOrder
 import ..MPCC: MPCCOrderBook

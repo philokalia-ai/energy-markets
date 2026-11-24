@@ -13,6 +13,7 @@ import asyncio
 from collections import deque
 from datetime import date, datetime, timedelta, timezone
 import os
+import shutil
 import signal
 import sys
 from pathlib import Path
@@ -57,12 +58,29 @@ def parallel_config(env, workers, cpus, today=None):
     return list(day_chunks(start, end, size)), deadline
 
 
-def worker_env(env, start, end):
+def chunk_results_db(env, index):
+    """fill → run → transfer (EUPHEMIA_DATA_STORE=duckdb): two chunk processes cannot write one DuckDB file, so
+    each chunk writes its own copy of the seeded results file (results.chunk<k>.duckdb next to it); the workflow
+    scores and transfers every results*.duckdb. None on the Postgres backend (the legacy path, unchanged)."""
+    base = env.get("EUPHEMIA_RESULTS_DB", "")
+    if env.get("EUPHEMIA_DATA_STORE", "").lower() != "duckdb" or not base:
+        return None
+    stem = base[:-len(".duckdb")] if base.endswith(".duckdb") else base
+    path = f"{stem}.chunk{index}.duckdb"
+    if not os.path.exists(path):          # a resumed run keeps a chunk's earlier writes
+        shutil.copyfile(base, path)
+    return path
+
+
+def worker_env(env, start, end, index=None):
     result = dict(env)
     result.update(EUPHEMIA_FORECAST_RETRO_START=start.isoformat(),
                   EUPHEMIA_FORECAST_RETRO_ASOF=end.isoformat(),
                   JULIA_NUM_THREADS="4", EUPHEMIA_PG_POOL="2",
                   OPENBLAS_NUM_THREADS="1", OMP_NUM_THREADS="1")
+    chunk_db = chunk_results_db(env, index) if index is not None else None
+    if chunk_db is not None:
+        result["EUPHEMIA_RESULTS_DB"] = chunk_db
     return result
 
 
@@ -137,7 +155,7 @@ async def run_parallel(command, env, chunks, deadline, cpus, *, now=None):
             print(prefix + f"starting on CPUs {affinity}; PG pool 2", flush=True)
             creation = asyncio.create_task(asyncio.create_subprocess_exec(
                 "taskset", "-c", affinity, *command,
-                cwd=ROOT, env=worker_env(env, start, end),
+                cwd=ROOT, env=worker_env(env, start, end, index),
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
                 start_new_session=True,
             ))

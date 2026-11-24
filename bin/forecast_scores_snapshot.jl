@@ -23,9 +23,12 @@ const HOURLY = [:n_hours, :mae, :bias, :corr, :n_collapse_actual, :n_collapse_pr
                 :collapse_hits, :collapse_false_alarms, :collapse_hit_rate,
                 :collapse_false_alarm_rate, :reset_tag]
 
-# scored_at as text: exact (microseconds, offset), so a restore can put it back verbatim
+# scored_at as text: exact (microseconds, offset), so a restore can put it back verbatim. On the DuckDB backend
+# (fill → run → transfer: the fill seeds the whole table) the column is naive UTC, rendered with the same offset.
+_scored_at_text() = Euphemia.results_to_duckdb() ?
+    "strftime(scored_at, '%Y-%m-%d %H:%M:%S.%f') || '+00'" : "scored_at::text"
 current() = Euphemia.sql2df_with_retry("""
-    SELECT $(join(string.(vcat(KEY, HOURLY)), ", ")), scored_at::text AS scored_at
+    SELECT $(join(string.(vcat(KEY, HOURLY)), ", ")), $(_scored_at_text()) AS scored_at
     FROM simulations.forecast_scores ORDER BY market_date, bidding_zone, lead_days,
          code_version, input_mode, is_retro""")
 
@@ -80,6 +83,7 @@ function restore(path, keys_path)
     k = load_keys(keys_path)
     todo = innerjoin(k, s, on=KEY)
     created = nrow(antijoin(k, s, on=KEY))
+    Euphemia.results_to_duckdb() && return restore_duckdb(todo, k, created)
     nn(x) = x === missing ? missing : x
     cols = vcat(HOURLY, [:scored_at])
     sets = join(("$c = \$$(i)" for (i, c) in enumerate(HOURLY)), ", ") *
@@ -109,6 +113,45 @@ function restore(path, keys_path)
     end
     println("RESTORE campaign keys=$(nrow(k)): restored=$restored, skipped (rescored after the " *
             "campaign)=$skipped, created by the campaign (not in snapshot, left as is)=$created")
+    return (restored=restored, skipped=skipped, created=created)
+end
+
+"Text stamp (Postgres timestamptz text or ours, '+00' offset) → a DuckDB TIMESTAMP expression, cast in DuckDB."
+_ts_sql(p) = "CAST(regexp_replace($p, '\\+00(:00)?\$', '') AS TIMESTAMP)"
+
+"""restore under fill → run → transfer: the same conditional UPDATE on the run-local forecast_scores (the fill
+seeded the whole table), and one score_restore op whose rows (snapshot values + both stamps) the transfer replays
+with the same condition inside Postgres. Counts are against the seeded state, i.e. Postgres at fill time."""
+function restore_duckdb(todo, k, created)
+    Euphemia.ensure_run_results_tables!()
+    R = "results_db.simulations"
+    nh = length(HOURLY); nk = length(KEY)
+    sets = join(("$c = \$$(i)" for (i, c) in enumerate(HOURLY)), ", ") * ", scored_at = $(_ts_sql("\$$(nh + 1)"))"
+    wh = join(("$c = \$$(nh + 1 + i)" for (i, c) in enumerate(KEY)), " AND ") *
+         " AND scored_at = $(_ts_sql("\$$(nh + nk + 2)"))"
+    ins = "INSERT INTO $R.transfer_score_restore VALUES (" * join(("\$$i" for i in 1:(1 + nk + nh + 2)), ", ") * ")"
+    restored = skipped = 0
+    Euphemia.results_transaction() do
+        op = Euphemia.log_transfer_op!("score_restore", Dict("n" => nrow(todo)))
+        for r in eachrow(todo)
+            vals = Any[(r[c] === nothing ? missing : r[c] for c in HOURLY)...]
+            key = Any[(r[c] for c in KEY)...]
+            before = Int(Euphemia._results_exec("SELECT COUNT(*) AS n FROM $R.forecast_scores WHERE " *
+                replace(wh, r"\$(\d+)" => m -> "\$" * string(parse(Int, m[2:end]) - nh - 1)),
+                vcat(key, Any[String(r.campaign_scored_at)])).n[1])
+            if before == 1
+                Euphemia._results_exec("UPDATE $R.forecast_scores SET $sets WHERE $wh",
+                    vcat(vals, Any[String(r.scored_at)], key, Any[String(r.campaign_scored_at)]))
+                restored += 1
+            else
+                skipped += 1
+            end
+            Euphemia._results_exec(ins, vcat(Any[op], key, vals,
+                                             Any[String(r.scored_at), String(r.campaign_scored_at)]))
+        end
+    end
+    println("RESTORE (run-local; replayed by the transfer) campaign keys=$(nrow(k)): restored=$restored, " *
+            "skipped (rescored after the campaign)=$skipped, created by the campaign (left as is)=$created")
     return (restored=restored, skipped=skipped, created=created)
 end
 

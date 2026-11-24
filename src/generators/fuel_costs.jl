@@ -54,11 +54,19 @@ issuance inside a ForecastContext.
 """
 legacy_fuel_cutoff(day::Dates.Date) = day - Dates.Day(_gate_lag_days())
 
+# Single-flight: the zone books build on several threads and all ask for the same cutoff;
+# with check-then-fill outside the lock each thread that missed ran the query and recorded
+# its own as-of audit row (run-to-run varying fuel_* counts). The tiny lookup now runs under
+# the per-fuel lock, so a cutoff is read and audited once; later callers get the cached value.
 function _close_before(table::String, cutoff::Dates.Date, cache::Dict, lk::ReentrantLock,
                        source::String)
-    cached = lock(lk) do
-        get(cache, cutoff, missing)
+    return lock(lk) do
+        _close_before_locked(table, cutoff, cache, source)
     end
+end
+
+function _close_before_locked(table::String, cutoff::Dates.Date, cache::Dict, source::String)
+    cached = get(cache, cutoff, missing)
     cached !== missing && return cached
     df = try
         Euphemia.sql2df_with_retry(
@@ -72,6 +80,7 @@ function _close_before(table::String, cutoff::Dates.Date, cache::Dict, lk::Reent
             """,
             [cutoff])
     catch e
+        _rethrow_fill_guard(e)   # a fill miss fails loudly, never soft
         _FUEL_LOOKUP_FAILED[] = true
         @warn "$table lookup failed for cutoff $cutoff, falling back: $e"
         return nothing
@@ -79,9 +88,7 @@ function _close_before(table::String, cutoff::Dates.Date, cache::Dict, lk::Reent
     price = (isempty(df) || ismissing(df.close[1])) ? nothing : Float64(df.close[1])
     price === nothing && @warn "No $table close within 10 days before $cutoff; using fallback"
     record_asof_status!(source, price === nothing ? :unverifiable : :verified)
-    lock(lk) do
-        cache[cutoff] = price
-    end
+    cache[cutoff] = price
     return price
 end
 
@@ -154,6 +161,7 @@ function get_daily_eua_price(day::Dates.Date; cutoff::Union{Nothing,Dates.Date}=
             [day]
         )
     catch e
+        _rethrow_fill_guard(e)   # a fill miss fails loudly, never soft
         # Transient DB failure: warn and fall back WITHOUT caching, so the
         # next call retries instead of pinning this date to the fallback
         _FUEL_LOOKUP_FAILED[] = true
@@ -224,6 +232,7 @@ function uka_price(day::Dates.Date)
         price = (isempty(df) || ismissing(df.price_eur[1])) ? nothing : Float64(df.price_eur[1])
         structural_absence = true   # empty result = real data gap → cache it
     catch e
+        _rethrow_fill_guard(e)   # a fill miss fails loudly, never soft
         msg = sprint(showerror, e)
         # A missing table/schema (the offline extract carries no `carbon.*`) is
         # PERSISTENT — cache the EUA fallback so we never re-query it. A genuine
@@ -275,6 +284,7 @@ function get_ttf_price(day::Dates.Date; cutoff::Union{Nothing,Dates.Date}=nothin
             [day]
         )
     catch e
+        _rethrow_fill_guard(e)   # a fill miss fails loudly, never soft
         # Transient DB failure: warn and fall back WITHOUT caching, so the
         # next call retries instead of pinning this date to the fallback
         _FUEL_LOOKUP_FAILED[] = true

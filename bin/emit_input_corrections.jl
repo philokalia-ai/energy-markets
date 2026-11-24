@@ -124,6 +124,27 @@ function emit_input_corrections!(day::Date; dry_run::Bool=false)
                     "DK1_wind@fc-debias-v1"))
     end
     dry_run && return out
+    if Euphemia.results_to_duckdb() && !isempty(out)
+        # fill → run → transfer (owner rule 2026-11-23): first-vintage-wins locally (later clears of this run
+        # read the corrections back), one transfer op; the transfer inserts with ON CONFLICT DO NOTHING, as here.
+        Euphemia.results_transaction() do
+            op = Euphemia.log_transfer_op!("input_corrections", Dict("day" => string(day), "n" => length(out)))
+            R = "results_db.simulations.input_corrections"
+            n = 0
+            for (z, tgt, h, mw, tag) in out
+                have = Int(Euphemia._results_exec("SELECT COUNT(*) AS n FROM $R WHERE bidding_zone = \$1 " *
+                    "AND target = \$2 AND date_time_utc = \$3 AND model_tag IS NOT DISTINCT FROM \$4",
+                    Any[z, tgt, h, tag]).n[1])
+                have > 0 && continue
+                Euphemia._results_exec("INSERT INTO $R (bidding_zone, target, date_time_utc, corrected_mw, " *
+                    "model_tag, transfer_op_id) VALUES (\$1, \$2, \$3, \$4, \$5, \$6)", Any[z, tgt, h, mw, tag, op])
+                n += 1
+            end
+            n
+        end
+        println("  🛠️  cv32 emit: $(length(out)) correction row(s) for $day (run-local results; transfer pending)")
+        return length(out)
+    end
     isempty(out) || Euphemia.withdb() do cnx
         for (z, tgt, h, mw, tag) in out
             LibPQ.execute(cnx, """

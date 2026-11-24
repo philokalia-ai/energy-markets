@@ -67,6 +67,28 @@ class PlanTest(unittest.TestCase):
         self.assertEqual(actual["EUPHEMIA_PG_POOL"], "2")
         self.assertEqual(original["EUPHEMIA_FORECAST_RETRO_START"], "2026-09-14")
 
+    def test_duckdb_backend_gives_each_chunk_its_own_results_file(self):
+        # fill → run → transfer: two chunk processes cannot write one DuckDB file
+        with tempfile.TemporaryDirectory() as d:
+            base = os.path.join(d, "results.duckdb")
+            with open(base, "wb") as f:
+                f.write(b"seeded")
+            env = config() | {"EUPHEMIA_DATA_STORE": "duckdb", "EUPHEMIA_RESULTS_DB": base}
+            a = retro.worker_env(env, date(2026, 9, 15), date(2026, 9, 16), 1)
+            b = retro.worker_env(env, date(2026, 9, 17), date(2026, 9, 18), 2)
+            self.assertEqual(a["EUPHEMIA_RESULTS_DB"], os.path.join(d, "results.chunk1.duckdb"))
+            self.assertEqual(b["EUPHEMIA_RESULTS_DB"], os.path.join(d, "results.chunk2.duckdb"))
+            with open(a["EUPHEMIA_RESULTS_DB"], "rb") as f:
+                self.assertEqual(f.read(), b"seeded")            # a copy of the seeded file
+            with open(a["EUPHEMIA_RESULTS_DB"], "wb") as f:
+                f.write(b"chunk 1 wrote")
+            retro.worker_env(env, date(2026, 9, 15), date(2026, 9, 16), 1)   # a resumed chunk keeps its writes
+            with open(a["EUPHEMIA_RESULTS_DB"], "rb") as f:
+                self.assertEqual(f.read(), b"chunk 1 wrote")
+            self.assertEqual(env["EUPHEMIA_RESULTS_DB"], base)
+            pg = retro.worker_env(config(), date(2026, 9, 15), date(2026, 9, 16), 1)   # Postgres backend: unchanged
+            self.assertNotIn("EUPHEMIA_RESULTS_DB", pg)
+
 
 class ProcessTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):

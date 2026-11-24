@@ -257,7 +257,25 @@ function cnxisok(cnx::LibPQ.Connection)
     return LibPQ.status(cnx) == LibPQ.libpq_c.CONNECTION_OK
 end
 
+"""
+    _postgres_guard(what)
+
+The runtime half of the Postgres access guard (owner rule: DuckDB between Postgres and Julia). Under
+`EUPHEMIA_DATA_STORE=duckdb` no Julia code may open a direct Postgres connection: Julia reads Postgres only in
+the fill (`bin/fill_run_duckdb.jl`) and writes it only in the transfers, both through DuckDB's postgres
+extension (src/db/pg_attach.jl), never through this LibPQ pool. `newconnection`, `preinit_pool` and `withdb`
+call it first. It throws a `FillGuardError`, so no soft fallback or outer catch swallows it
+(`_rethrow_fill_guard`). The static half is test/test_pg_access.py.
+"""
+function _postgres_guard(what::AbstractString)
+    DATA_STORE[] === :duckdb && throw(FillGuardError(
+        "postgres guard: $what would open a direct Postgres connection under EUPHEMIA_DATA_STORE=duckdb " *
+        "(Julia reads Postgres only in bin/fill_run_duckdb.jl and writes it only in the transfers)"))
+    return nothing
+end
+
 function newconnection()
+    _postgres_guard("newconnection")
     conn_str = get(ENV, "ENERGY_CONN_STR", "")
 
     # Add PostgreSQL connection parameters to improve connection reliability
@@ -274,13 +292,19 @@ function newconnection()
         end
     end
 
+    # Session TimeZone pinned to UTC, whatever the server default: `timestamptz::timestamp` and
+    # timestamp/timestamptz comparisons in the readers depend on it (PGTZ = the libpq startup
+    # parameter; the SET makes it explicit). Same pin as attach_postgres! (the fill's scanner).
+    ENV["PGTZ"] = "UTC"
     cnx = LibPQ.Connection(conn_str)
+    LibPQ.execute(cnx, "SET TimeZone = 'UTC'")
     !isdefined(LibPQ, :setnonblocking) && return cnx
     LibPQ.setnonblocking(cnx) && return cnx
     error("Could not set connection to nonblocking")
 end
 
 function preinit_pool(poolsize=poolsize)
+    _postgres_guard("preinit_pool")
     cnxs = [Base.acquire(newconnection, cnxpool; isvalid=cnxisok) for i in 1:poolsize]
     # They all need to exist at the same time;
     map(cnxs) do connection
@@ -300,6 +324,7 @@ end
 # connection-error path calls `preinit_pool`, which acquires all permits at
 # once — so a single leak could hang the run inside its own retry handler.
 function withdb(f)
+    _postgres_guard("withdb")
     connection = Base.acquire(newconnection, cnxpool; isvalid=cnxisok)
     try
         return f(connection)
@@ -309,14 +334,23 @@ function withdb(f)
     end
 end
 
+"""Optional read trace for diagnostics (bin/measure_duckdb_path.jl --trace): when set, called as
+`f(sql, args, df)` after every `sql2df` on either backend, with the caller's (pre-rewrite) SQL. `nothing`
+(the default) = off: no other code path sets it."""
+const SQL_TRACE = Ref{Any}(nothing)
+
 function sql2df(sql, args=[])
-    if DATA_STORE[] == :duckdb
-        return _duckdb_sql2df(sql, args)
+    df = if DATA_STORE[] == :duckdb
+        _duckdb_sql2df(sql, args)
+    else
+        withdb() do cnx
+            result = LibPQ.async_execute(cnx, sql, args)
+            DataFrame(fetch(result))
+        end
     end
-    return withdb() do cnx
-        result = LibPQ.async_execute(cnx, sql, args)
-        return DataFrame(fetch(result))
-    end
+    tr = SQL_TRACE[]
+    tr === nothing || tr(sql, args, df)
+    return df
 end
 
 """
@@ -337,6 +371,7 @@ function sql2df_with_retry(sql, args=[]; max_retries=3, retry_delay=2.0)
         try
             return sql2df(sql, args)
         catch e
+            e isa FillGuardError && rethrow()   # a fill miss is not transient: never retried
             last_error = e
 
             if is_duckdb

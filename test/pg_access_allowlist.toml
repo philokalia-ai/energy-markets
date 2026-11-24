@@ -1,0 +1,54 @@
+# Postgres access allowlist for test/test_pg_access.py (owner rule: DuckDB always sits between Postgres and Julia;
+# Julia reads Postgres only in the fill and writes it only in the transfers).
+#
+# `lines` = the file's non-comment lines matching the scanner's Postgres-access patterns (python3
+# test/test_pg_access.py --print). The test fails on a file not listed here, or on a count above the listed one,
+# and asks for the listed count to come down when a file loses lines: this list only shrinks.
+# Sections: allowed (the fill, the transfers, the extract refresh, the measurement baseline and store plumbing),
+# legacy (the EUPHEMIA_DATA_STORE=postgres backend: every LibPQ branch here is guarded under the DuckDB store and
+# withdb/newconnection/preinit_pool raise there; removed with R5), known_gap (direct Postgres readers/writers still
+# to move: perf-96/cb-book/pg-inventory.md §7).
+
+[allowed]
+"src/db/pg_attach.jl" = { lines = 8, why = "attach_postgres!: the DuckDB postgres extension (fill, transfers, refresh)" }
+"src/db/fill_manifest.jl" = { lines = 4, why = "the fill: Postgres -> run-local DuckDB through the extension" }
+"bin/fill_run_duckdb.jl" = { lines = 3, why = "the fill CLI (the job's only Postgres read)" }
+"bin/transfer_run_results.jl" = { lines = 4, why = "forecast-side transfer (the job's only Postgres write)" }
+"bin/transfer_results_to_postgres.jl" = { lines = 5, why = "record transfer (transfer-record.yml, generate-multi-zone-prices)" }
+"bin/refresh_duckdb_extract.jl" = { lines = 7, why = "nightly extract refresh through the extension" }
+"bin/extract_common.jl" = { lines = 7, why = "extract specs + scanner copy (refresh/build)" }
+"bin/measure_duckdb_path.jl" = { lines = 3, why = "measure-duckdb-path: the deliberate Postgres baseline (SHOW TimeZone probe)" }
+"bin/reproduce.jl" = { lines = 1, why = "clears ENERGY_CONN_STR for DuckDB-only workers (no connection)" }
+"src/PipelinedBackfill.jl" = { lines = 1, why = "clears ENERGY_CONN_STR for DuckDB-only workers (no connection)" }
+"src/db/duckdb_store.jl" = { lines = 4, why = "store resolution (_resolve_data_store) and its messages" }
+
+[legacy]
+"src/db/postgres_core.jl" = { lines = 18, why = "LibPQ pool, withdb/newconnection/preinit_pool (raise under DuckDB)" }
+"src/db/results_store.jl" = { lines = 72, why = "ensure_*/save_* Postgres branches (each returns first under DuckDB)" }
+"src/Euphemia.jl" = { lines = 2, why = "Postgres-store init: preinit_pool in the non-DuckDB branch" }
+"src/dbutils.jl" = { lines = 2, why = "using LibPQ" }
+"bin/daily_forecast.jl" = { lines = 16, why = "write_forecast! LibPQ branch (results_to_duckdb() returns first)" }
+"bin/score_forecasts.jl" = { lines = 18, why = "score writers' LibPQ branches (results_to_duckdb() returns first)" }
+"bin/forecast_scores_snapshot.jl" = { lines = 9, why = "restore LibPQ branch (results_to_duckdb() returns first)" }
+"bin/emit_input_corrections.jl" = { lines = 2, why = "input_corrections LibPQ branch (results_to_duckdb() returns first)" }
+"bin/horizon_forecast.jl" = { lines = 7, why = "write_slice! LibPQ branch for the Postgres store (ceres until its cut-over); results_to_duckdb() returns first" }
+
+[known_gap]
+"bin/build_duckdb_extract.jl" = { lines = 3, why = "X: manual full rebuild still on LibPQ" }
+"bin/emit_tsfm_overlay.py" = { lines = 5, why = "T: Timestral overlay reads via the scanner, writes via psycopg2" }
+"bin/emit_model_lines.py" = { lines = 4, why = "M: psycopg2 reads + model_lines writer" }
+"bin/emit_model_lines.sh" = { lines = 2, why = "M: host cron; capture_book_features.jl with EUPHEMIA_DATA_STORE=postgres" }
+"bin/cv18_transfer.py" = { lines = 1, why = "manual one-off (psql \\copy), no workflow" }
+"bin/monitor_db.sh" = { lines = 3, why = "manual ops monitor (psql catalog views), no workflow" }
+
+[workflow_steps]
+# "<workflow file>::<step name>" allowed to run a non-fill/transfer script with Postgres credentials (known_gap),
+# or a Julia job script on the Postgres store (postgres_store).
+known_gap = [
+  "daily-forecast.yml::TSFM overlay (Timestral, pre-gate)",
+  "tsfm-postsim.yml::TSFM overlay (Timestral + physics, post-sim)",
+  "tsfm-backfill.yml::Timestral backfill (per day, resumable, guarded)",
+]
+postgres_store = [
+  "measure-duckdb-path.yml::Current path — clear reading Postgres directly (baseline, read-only)",
+]

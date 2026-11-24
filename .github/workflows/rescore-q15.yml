@@ -14,6 +14,14 @@ on:
         description: "Minimum paired native quarters for a 15-min zone-day score"
         required: false
         default: "48"
+      start:
+        description: "First market date to backfill (the fill copies start..end; quarter-hour SDAC began 2025-10-01)"
+        required: false
+        default: "2025-10-01"
+      end:
+        description: "Last market date (empty = today UTC)"
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -31,6 +39,8 @@ jobs:
   rescore-q15:
     runs-on: energy-markets-k8s
     timeout-minutes: 120
+    env:
+      RUN_DIR: ${{ github.workspace }}/run-local
     steps:
       - uses: actions/checkout@v4
       - name: Setup Julia
@@ -46,10 +56,41 @@ jobs:
             Pkg.instantiate()
             Pkg.precompile()
           "
+      # fill → run → transfer (owner rule): the job's only Postgres read (rescore profile: forecast_prices of the
+      # window, the whole forecast_scores, the 15-min actuals)
+      - name: Fill run-local DuckDB (the job's only Postgres read)
+        timeout-minutes: 20
+        env:
+          ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
+          START: ${{ inputs.start }}
+          END: ${{ inputs.end }}
+        run: |
+          [[ "$START" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || { echo "::error::bad start '$START'"; exit 1; }
+          [ -n "$END" ] || END=$(date -u +%F)
+          [[ "$END" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || { echo "::error::bad end '$END'"; exit 1; }
+          echo "RESCORE_START=$START" >> "$GITHUB_ENV"; echo "RESCORE_END=$END" >> "$GITHUB_ENV"
+          julia --project=. bin/fill_run_duckdb.jl --profile rescore --start "$START" --end "$END" --out "$RUN_DIR"
+
       - name: Backfill 15-min scores (hourly columns untouched)
         timeout-minutes: 80
         env:
-          ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
+          EUPHEMIA_DATA_STORE: duckdb   # reads only the run-local DuckDB, writes only its results file
+          EUPHEMIA_DUCKDB_PATH: ${{ env.RUN_DIR }}/inputs.duckdb
+          EUPHEMIA_DUCKDB_READONLY: "true"
+          EUPHEMIA_RESULTS_DB: ${{ env.RUN_DIR }}/results.duckdb
+          EUPHEMIA_RESULTS_WRITABLE: "true"
           Q15_ONLY: "true"
           MIN_SCORE_Q15: ${{ inputs.min_score_q15 }}
         run: julia --project=. bin/score_forecasts.jl
+
+      # The job's only Postgres write: the q15 UPDATEs in one server-side transaction (exactly once).
+      - name: Transfer results to Postgres
+        if: ${{ !cancelled() }}
+        env:
+          ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
+        run: |
+          if [ -f "$RUN_DIR/results.duckdb" ]; then
+            julia --project=. bin/transfer_run_results.jl --results-db "$RUN_DIR/results.duckdb"
+          else
+            echo "::warning::no run-local results (the fill failed) — nothing to transfer"
+          fi

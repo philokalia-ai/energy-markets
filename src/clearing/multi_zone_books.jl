@@ -501,6 +501,7 @@ function _create_multi_zone_order_book_merit(zones::Vector{String}, day::Date;
             end
             println("      ✅ Added $(result.supply_orders) supply + $(result.demand_orders) demand orders")
         catch e
+            _rethrow_fill_guard(e)   # a fill miss fails loudly, never soft
             e isa InterruptException && rethrow()
             (e isa TaskFailedException && e.task.exception isa InterruptException) && rethrow()
             @error "Error processing zone $zone: $e"

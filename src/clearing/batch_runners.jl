@@ -140,6 +140,7 @@ function run_multi_zone_for_date_range(start_date::Date, end_date::Date;
                 println("⏭️  Skipping $skipped_count dates with existing data")
             end
         catch e
+            _rethrow_fill_guard(e)   # a fill miss fails the job
             @warn "Failed to check existing data, processing all dates: $e"
         end
     end
@@ -211,6 +212,7 @@ function run_multi_zone_for_date_range(start_date::Date, end_date::Date;
             end
 
         catch e
+            _rethrow_fill_guard(e)   # a fill miss fails the job, never a "failed date" in a green run
             date_elapsed = time() - date_start_time
             failed_dates += 1
             error_msg = string(e)
@@ -523,6 +525,7 @@ function generate_energy_prices_for_all_zones(date::Date;
                 println("⏭️  Skipping $(length(skipped_zones)) zones with existing data: $(join(skipped_zones, ", "))")
             end
         catch e
+            _rethrow_fill_guard(e)   # a fill miss fails the job
             @warn "Failed to check existing data, processing all zones: $e"
         end
     end

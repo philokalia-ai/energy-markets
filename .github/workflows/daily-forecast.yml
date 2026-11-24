@@ -1,4 +1,6 @@
 name: Daily ex-ante forecast
+# ceres finds the run it dispatched by this name (its dispatch_id); the scheduled 06:30 run has none.
+run-name: "Daily ex-ante forecast ${{ github.event.inputs.run_profile || (github.event_name == 'schedule' && 'pregate') || 'manual' }} ${{ github.event.inputs.dispatch_id }}"
 
 # PRE-GATE 7-LEAD RUN (Aug 2026, docs/experiments/pregate-7lead.md): a 06:30 UTC
 # cron produces the WEATHER (ex-ante) track for ALL leads D+1..D+7 BEFORE the
@@ -13,10 +15,10 @@ name: Daily ex-ante forecast
 # refresh remains the reference/entsoe track's freeze; ceres-side coordination
 # may retire it once the pre-gate weather track is trusted. This workflow also
 # stays the manual/debug runner (workflow_dispatch) with the HiGHS default.
+# ONE trigger per slot (2026-11-24): the 06:30 pre-gate slot is fired only by the k3s CronJob
+# gh-energy-markets-dispatch-0630 (exact time; inputs pregate=true). The GitHub schedule that ran the same slot a
+# few minutes later (and found every slice frozen) is removed. ceres dispatches lead1/morning/entsoe.
 on:
-  schedule:
-    # 06:30 UTC daily — the pre-gate slot (before 12:00 CET / 10:00–11:00 UTC).
-    - cron: "30 6 * * *"
   workflow_dispatch:
     inputs:
       max_lead_days:
@@ -34,11 +36,38 @@ on:
         required: false
         default: false
         type: boolean
+      # ceres (option a, 2026-11-24): ceres keeps the ETL pulls and its lead-1 retry loop and dispatches ONE
+      # attempt of this workflow per pull, then reads the run's `presence` artifact (never Postgres).
+      #   pregate  06:30 weather track, leads 2..7 before the gate (the cron's profile)
+      #   lead1    ceres jao_pregate (08:55 / 09:55): weather lead 1 only, pre-gate, JAO-aware (require_jao)
+      #   morning  ceres 08:00: weather track, leads 1..7 + the persistence horizon
+      #   entsoe   ceres 12:30 / 17:30 / 19:30: reference (entsoe) track, leads 1..7 + the persistence horizon
+      run_profile:
+        description: "Run profile: pregate | lead1 | morning | entsoe (empty = manual, uses max_lead_days)"
+        required: false
+        default: ""
+        type: string
+      require_jao:
+        description: "lead1 only: skip the day unless JAO has published (the 08:55 slot)"
+        required: false
+        default: false
+        type: boolean
+      dispatch_id:
+        description: "Correlation id the dispatcher (ceres) uses to find this run (echoed in the run name)"
+        required: false
+        default: ""
+        type: string
 
-# The k3s 06:30 dispatch (pregate=true) and the late GitHub schedule are the same
-# job. Serialized, the second finds every slice frozen and only rescores.
+# One group per run profile: GitHub keeps one running + ONE pending run per group and a newer queued run cancels
+# the older pending one, so a single group would let e.g. the 09:55 lead1 dispatch cancel the 08:55 one queued
+# behind a long 08:00 morning run. Profiles run in parallel as they did as separate ceres jobs; a profile never
+# queues behind itself (ceres waits for its own run before the next attempt). Two profiles writing the same slice
+# (morning and lead1 both write the weather lead 1 of tomorrow): no-clobber is decided when a run starts, so the
+# FIRST run to freeze the slice normally wins and the other skips it; if both start before either transfers, both
+# compute it and the later transfer replaces the zones it wrote (the live plan "insert", inside one Postgres
+# transaction). That is the same race the two ceres jobs have on the Postgres path today.
 concurrency:
-  group: daily-forecast
+  group: daily-forecast-${{ github.event.inputs.run_profile || 'pregate' }}
   cancel-in-progress: false
 
 env:
@@ -70,7 +99,11 @@ env:
 jobs:
   daily-forecast:
     runs-on: energy-markets-k8s
-    timeout-minutes: 120
+    timeout-minutes: 150   # step timeouts (fill 25 + clears 75 + transfer 10 + score 15 + transfer 10) fit inside
+    env:
+      # Run-local DuckDB pair: inputs.duckdb (filled from Postgres, read-only) + results.duckdb (seeded with the
+      # forecast/score slices this job reads back; every result write lands here, then ONE transfer step).
+      RUN_DIR: ${{ github.workspace }}/run-local
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -100,39 +133,36 @@ jobs:
             println(\"✅ Dependencies installed successfully\")
           "
 
-      - name: Setup database connection
+      - name: Fill run-local DuckDB (the job's only Postgres read)
+        timeout-minutes: 25
         env:
           ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
         run: |
-          julia --project=. -e "
-            using Euphemia
-            println(\"🔗 Testing database connection...\")
-            try
-              result = Euphemia.sql2df(\"SELECT 1 as test\")
-              println(\"✅ Database connection successful\")
-            catch e
-              println(\"❌ Database connection failed: \$e\")
-              exit(1)
-            end
-          "
+          # Copies every row this job reads (inputs for the 7 UTC-day clears, the forecast/score slices the
+          # no-clobber checks, the scorer and the exporters read back) into $RUN_DIR via DuckDB's postgres
+          # extension; fails the job (no partial file) on any error. Per-table rows/seconds: $RUN_DIR/fill.json.
+          julia --project=. bin/fill_run_duckdb.jl --profile daily-forecast --out "$RUN_DIR"
 
+      # Step timeouts sum below the job's: a step that times out FAILS (it is not cancelled), so the
+      # transfer after it still runs and every slice already written reaches Postgres.
       - name: Generate daily forecasts
+        timeout-minutes: 75
         env:
-          ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
+          # fill → run → transfer (owner rule 2026-11-23): reads only the run-local DuckDB, writes only its
+          # results file; no Postgres credentials in this step.
+          EUPHEMIA_DATA_STORE: duckdb
+          EUPHEMIA_DUCKDB_PATH: ${{ env.RUN_DIR }}/inputs.duckdb
+          EUPHEMIA_DUCKDB_READONLY: "true"
+          EUPHEMIA_RESULTS_DB: ${{ env.RUN_DIR }}/results.duckdb
+          EUPHEMIA_RESULTS_WRITABLE: "true"
         run: |
-          if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ github.event.inputs.pregate }}" = "true" ]; then
-            # PRE-GATE 7-lead run: weather (ex-ante) track, ALL leads, before the
-            # 12:00 CET auction. Day-ahead ATC for tomorrow is not yet published,
-            # so degrade the network to the demonstrated-capability fallback.
-            MAX_LEAD_DAYS="7"
-            # Lead 1 is frozen by the JAO-aware runs in ceres (09:05 / 10:05
-            # UTC, after JAO's 10:30 CET publication); this run does leads 2..7.
-            MIN_LEAD_DAYS="2"
-            # a manual pregate dispatch may still ask for a rewrite (scheduled
-            # runs have no inputs -> false)
+          PROFILE="${{ github.event.inputs.run_profile }}"
+          [ -z "$PROFILE" ] && [ "${{ github.event.inputs.pregate }}" = "true" ] && PROFILE="pregate"
+          if [ -n "$PROFILE" ]; then
+            # the profile's environment (one source with measure-duckdb-path.yml); the pre-gate run degrades the
+            # network to the demonstrated-capability fallback (tomorrow's Day-ahead ATC is not published yet)
+            eval "$(bash bin/forecast_profile_env.sh "$PROFILE" "${{ github.event.inputs.require_jao || 'false' }}")" || exit 1
             FORCE_RERUN="${{ github.event.inputs.force_rerun || 'false' }}"
-            INPUT_MODE="weather"
-            EUPHEMIA_FORECAST_PREGATE="true"
           else
             MAX_LEAD_DAYS="${{ github.event.inputs.max_lead_days }}"
             FORCE_RERUN="${{ github.event.inputs.force_rerun }}"
@@ -149,6 +179,10 @@ jobs:
           echo "🔄 Force rerun: $FORCE_RERUN"
 
           export OPTIMIZER MAX_LEAD_DAYS MIN_LEAD_DAYS FORCE_RERUN SKIP_CLEAR INPUT_MODE EUPHEMIA_FORECAST_PREGATE
+          [ -n "${EUPHEMIA_REQUIRE_JAO:-}" ] && export EUPHEMIA_REQUIRE_JAO
+          # later steps (horizon, presence) need the resolved profile and track
+          { echo "RUN_PROFILE=${PROFILE:-$([ "${{ github.event_name }}" = "schedule" ] && echo pregate || echo manual)}"
+            echo "FORECAST_INPUT_MODE=$INPUT_MODE"; } >> "$GITHUB_ENV"
 
           # Crash-retry (issue #182: HiGHS segfaults ~3-4% of decomposed
           # day-solves). Forecast slices are no-clobber, so a retry skips
@@ -167,21 +201,98 @@ jobs:
             exit 1
           fi
 
+      # Leads 2..7 by weekly persistence of the T-7 lead-1 entsoe clear (bin/horizon_forecast.jl), for the profiles
+      # that ran it in ceres' predict job; runs even when the clear failed (its sources are older slices).
+      - name: Fill the 7-day horizon (leads 2-7, weekly persistence)
+        if: ${{ !cancelled() && (env.RUN_PROFILE == 'morning' || env.RUN_PROFILE == 'entsoe') }}
+        timeout-minutes: 10
+        env:
+          EUPHEMIA_DATA_STORE: duckdb   # fill → run → transfer: the seeded slices in, results DuckDB out
+          EUPHEMIA_DUCKDB_PATH: ${{ env.RUN_DIR }}/inputs.duckdb
+          EUPHEMIA_DUCKDB_READONLY: "true"
+          EUPHEMIA_RESULTS_DB: ${{ env.RUN_DIR }}/results.duckdb
+          EUPHEMIA_RESULTS_WRITABLE: "true"
+          MAX_LEAD_DAYS: "7"
+          FORCE_RERUN: "false"
+        run: |
+          julia --project=. bin/horizon_forecast.jl
+
+      # The forecast slices (and the cv32 corrections) reach Postgres right after the clears, before scoring and
+      # export: a later timeout or failure cannot lose them. Exactly once (transfer_log): the second transfer
+      # below applies only the ops logged after this one (the scores).
+      - name: Transfer forecasts to Postgres
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        env:
+          ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
+        run: |
+          if [ -f "$RUN_DIR/results.duckdb" ]; then
+            julia --project=. bin/transfer_run_results.jl --results-db "$RUN_DIR/results.duckdb"
+          else
+            echo "::warning::no run-local results DuckDB (the fill failed) — nothing to transfer"
+          fi
+
+      # What this attempt left in Postgres, from the run-local results DB only (seeded slices + this run's writes
+      # whose transfer committed). ceres' lead-1 retry loop reads the `presence` artifact of the run it
+      # dispatched (by dispatch_id) instead of querying Postgres.
+      - name: Forecast presence (artifact for the dispatcher)
+        if: ${{ !cancelled() }}
+        run: |
+          if [ ! -f "$RUN_DIR/results.duckdb" ]; then echo "::warning::no results DuckDB — no presence"; exit 0; fi
+          LEAD1_DATE=$(TZ=Europe/Athens date -d tomorrow +%Y-%m-%d)
+          julia --project=. bin/forecast_presence.jl --results-db "$RUN_DIR/results.duckdb" \
+            --input-mode "${FORECAST_INPUT_MODE:-weather}" --lead1-date "$LEAD1_DATE" \
+            --profile "${RUN_PROFILE:-manual}" --dispatch-id "${{ github.event.inputs.dispatch_id }}" \
+            --out "$RUN_DIR/presence.json" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload presence artifact
+        if: ${{ !cancelled() && hashFiles('run-local/presence.json') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: presence
+          path: run-local/presence.json
+          retention-days: 7
+
       # Scoring/export/publish run even when the forecast step failed
       # (!cancelled()): whatever slices DID land — or landed in an earlier run
       # today — still get scored and pushed, so the site never goes stale
       # behind a solver crash. The job still reports failure (Slack notify).
       - name: Score realized forecasts
+        if: ${{ !cancelled() && env.RUN_PROFILE != 'lead1' }}
+        timeout-minutes: 15
+        env:
+          # fill → run → transfer (owner rule 2026-11-23): reads only the run-local DuckDB, writes only its
+          # results file; no Postgres credentials in this step.
+          EUPHEMIA_DATA_STORE: duckdb
+          EUPHEMIA_DUCKDB_PATH: ${{ env.RUN_DIR }}/inputs.duckdb
+          EUPHEMIA_DUCKDB_READONLY: "true"
+          EUPHEMIA_RESULTS_DB: ${{ env.RUN_DIR }}/results.duckdb
+          EUPHEMIA_RESULTS_WRITABLE: "true"
+        run: |
+          julia --project=. bin/score_forecasts.jl
+
+      # The second (and last) Postgres write: the scores, plus anything the first transfer could not apply. Each
+      # transfer replays the pending ops of results.duckdb in ONE Postgres transaction (guards and the retro plan
+      # re-checked on Postgres; exactly once per op). Runs whenever anything may have landed.
+      - name: Transfer scores to Postgres
         if: ${{ !cancelled() }}
+        timeout-minutes: 10
         env:
           ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
         run: |
-          julia --project=. bin/score_forecasts.jl
+          if [ -f "$RUN_DIR/results.duckdb" ]; then
+            julia --project=. bin/transfer_run_results.jl --results-db "$RUN_DIR/results.duckdb"
+          else
+            echo "::warning::no run-local results DuckDB (the fill failed) — nothing to transfer"
+          fi
 
       - name: Export forecast JSON
         if: ${{ !cancelled() }}
         env:
-          ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
+          EUPHEMIA_DATA_STORE: duckdb   # reads the run-local DuckDB only (fill → run → transfer)
+          EUPHEMIA_DUCKDB_PATH: ${{ env.RUN_DIR }}/inputs.duckdb
+          EUPHEMIA_DUCKDB_READONLY: "true"
+          EUPHEMIA_RESULTS_DB: ${{ env.RUN_DIR }}/results.duckdb
           # naive baselines on the scoreboard (#431); repo variable EXPORT_NAIVE=0 switches them off
           EXPORT_NAIVE: ${{ vars.EXPORT_NAIVE || '1' }}
         run: |
@@ -190,7 +301,10 @@ jobs:
       - name: Publish web data plane to R2 (parquet for api.philokalia.ai)
         if: ${{ !cancelled() }}
         env:
-          ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
+          EUPHEMIA_DATA_STORE: duckdb   # reads the run-local DuckDB only (fill → run → transfer)
+          EUPHEMIA_DUCKDB_PATH: ${{ env.RUN_DIR }}/inputs.duckdb
+          EUPHEMIA_DUCKDB_READONLY: "true"
+          EUPHEMIA_RESULTS_DB: ${{ env.RUN_DIR }}/results.duckdb
           EXPORT_NAIVE: ${{ vars.EXPORT_NAIVE || '1' }}   # naive baselines (#431)
           EXTRACT_S3_ENDPOINT: ${{ secrets.EXTRACT_S3_ENDPOINT }}
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -250,7 +364,8 @@ jobs:
   # scanner latency; the job bound is the sum of the step bounds.
   tsfm-overlay:
     needs: daily-forecast
-    if: ${{ always() && needs.daily-forecast.result == 'success' }}
+    # the pre-gate overlay belongs to the 06:30 pre-gate run only (not to ceres' lead1/morning/entsoe dispatches)
+    if: ${{ always() && needs.daily-forecast.result == 'success' && (github.event_name == 'schedule' || github.event.inputs.pregate == 'true' || github.event.inputs.run_profile == 'pregate') }}
     runs-on: energy-markets-k8s
     timeout-minutes: 150
     env:
@@ -258,6 +373,7 @@ jobs:
       TSFM_ARM: timestral-209m      # pluggable: any arm registered in bin/emit_tsfm_overlay.py ARMS
       OVERLAY_MODE: pregate0630
       TSFM_THREADS: "4"
+      RUN_DIR: ${{ github.workspace }}/run-local
     steps:
       - name: Checkout repository
         timeout-minutes: 5
@@ -314,10 +430,21 @@ jobs:
             Pkg.precompile()
           "
 
-      - name: Export forecast JSON (with overlay)
+      # Fill AFTER the overlay write, so the exporters read the new vintage from DuckDB (export profile).
+      - name: Fill run-local DuckDB for the exporters
         timeout-minutes: 15
         env:
           ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
+        run: |
+          julia --project=. bin/fill_run_duckdb.jl --profile export --out "$RUN_DIR"
+
+      - name: Export forecast JSON (with overlay)
+        timeout-minutes: 15
+        env:
+          EUPHEMIA_DATA_STORE: duckdb   # reads the run-local DuckDB only (fill → run → transfer)
+          EUPHEMIA_DUCKDB_PATH: ${{ env.RUN_DIR }}/inputs.duckdb
+          EUPHEMIA_DUCKDB_READONLY: "true"
+          EUPHEMIA_RESULTS_DB: ${{ env.RUN_DIR }}/results.duckdb
           EXPORT_NAIVE: ${{ vars.EXPORT_NAIVE || '1' }}   # naive baselines (#431)
         run: |
           julia --project=. bin/export_forecast_json.jl
@@ -325,7 +452,10 @@ jobs:
       - name: Re-publish web data plane to R2 (with overlay)
         timeout-minutes: 20
         env:
-          ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
+          EUPHEMIA_DATA_STORE: duckdb   # reads the run-local DuckDB only (fill → run → transfer)
+          EUPHEMIA_DUCKDB_PATH: ${{ env.RUN_DIR }}/inputs.duckdb
+          EUPHEMIA_DUCKDB_READONLY: "true"
+          EUPHEMIA_RESULTS_DB: ${{ env.RUN_DIR }}/results.duckdb
           EXPORT_NAIVE: ${{ vars.EXPORT_NAIVE || '1' }}   # naive baselines (#431)
           EXTRACT_S3_ENDPOINT: ${{ secrets.EXTRACT_S3_ENDPOINT }}
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}

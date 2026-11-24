@@ -15,8 +15,15 @@
 # It is idempotent + resumable at the scope level: the destination slice is
 # delete-then-insert (same semantics as the normal save path), so a re-run
 # replaces the slice wholesale — an interrupted transfer is fixed by re-running.
-# Bulk inserts use Postgres COPY (streamed) so a full ~1.2M-row year transfers in
-# minutes.
+#
+# How (owner rule, CLAUDE.md: Julia never queries Postgres except the fill and this bulk transfer, and
+# never reads Postgres rows back to decide): DuckDB's postgres extension (attach_postgres!) is the only
+# path to Postgres; no LibPQ connection is opened. Per day window: the window's runs, prices and flows
+# and the source's checksums are staged engine-to-engine into Postgres tables, then ONE PL/pgSQL block
+# (one transaction) upserts the runs (RETURNING id → run-id map), replaces the price and flow slices with
+# the remapped ids, and verifies per-year counts + zone-month price checksums against the staged source
+# ones — a mismatch RAISEs and nothing is written. NUMERIC columns are cast from the source double's
+# shortest text (as the COPY of Julia's string(x) did), so stored values are the same.
 #
 # USAGE
 #   # transfer the default slice (multi_zone_eu / current cv) from data/results.duckdb
@@ -28,8 +35,15 @@
 #       --clearing-mode multi_zone_eu --code-version 23 \
 #       --start 2023-01-01 --end 2026-07-24
 #
-#   # verify only (no writes): per-year row counts + per zone-month price
-#   # checksums on both sides
+#   # fill → run → transfer jobs (perf-96, owner rule 2026-11-23): the run-local results DuckDB also holds
+#   # the energy_prices rows the fill seeded for the skip-existing check; move ONLY the days this run wrote
+#   # (rows with update_time_utc >= the given UTC instant), one day window at a time, so a skipped day's
+#   # Postgres rows are never deleted or rewritten
+#   julia --project=. bin/transfer_results_to_postgres.jl --clearing-mode multi_zone \
+#       --start 2026-11-22 --end 2026-11-22 --written-since 2026-11-23T03:00:00
+#
+#   # verify only (no slice writes): per-year row counts + per zone-month price checksums on both sides,
+#   # compared inside Postgres
 #   julia --project=. bin/transfer_results_to_postgres.jl --verify
 #
 # ENV
@@ -37,8 +51,13 @@
 #   RESULTS_DUCKDB   source results DuckDB (default data/results.duckdb, or the
 #                    --results-db flag)
 
-using Euphemia            # loads .env (ENERGY_CONN_STR) and the Postgres writers
-using DuckDB, DataFrames, LibPQ, Dates, Printf
+using DuckDB
+# Load Euphemia (ENERGY_PRICES_CODE_VERSION, .env, attach_postgres!) on an empty boot DuckDB, so its __init__
+# opens no LibPQ pool even with ENERGY_CONN_STR set (the extension is this script's only path to Postgres).
+const _BOOT = let d = mktempdir(); f = joinpath(d, "boot.duckdb"); close(DuckDB.DB(f)); f end
+ENV["EUPHEMIA_DATA_STORE"] = "duckdb"; ENV["EUPHEMIA_DUCKDB_PATH"] = _BOOT; ENV["EUPHEMIA_DUCKDB_READONLY"] = "true"
+using Euphemia            # loads .env (ENERGY_CONN_STR)
+using DataFrames, Dates, Printf
 
 # ---------------------------------------------------------------------------
 # CLI
@@ -52,6 +71,7 @@ function parse_cli(argv)
         "end"           => nothing,
         "verify"        => false,
         "flows"         => true,
+        "written_since" => nothing,
     )
     i = 1
     while i <= length(argv)
@@ -63,6 +83,7 @@ function parse_cli(argv)
         elseif a == "--end";         o["end"]   = Date(argv[i+1]); i += 1
         elseif a == "--verify";      o["verify"] = true
         elseif a == "--no-flows";    o["flows"] = false
+        elseif a == "--written-since"; o["written_since"] = DateTime(argv[i+1]); i += 1
         elseif a in ("-h", "--help")
             println("See header of $(basename(@__FILE__)) for usage."); exit(0)
         else
@@ -78,9 +99,20 @@ end
 # ---------------------------------------------------------------------------
 function open_results_duckdb(path::AbstractString)
     isfile(path) || error("results DuckDB not found: $path")
-    db = DuckDB.DB(path; readonly=true)
-    return DBInterface.connect(db), db
+    db = DuckDB.DB(":memory:")
+    con = DBInterface.connect(db)
+    try DBInterface.execute(con, "SET TimeZone = 'UTC'") catch end
+    DBInterface.execute(con, "ATTACH '$(replace(path, "'" => "''"))' AS r (READ_ONLY)")
+    DBInterface.execute(con, "USE r")      # the source queries below read r's simulations.* unqualified
+    return con, db
 end
+
+sqlstr(s) = "'" * replace(String(s), "'" => "''") * "'"
+pg_exec(con, sql) = DBInterface.execute(con, "CALL postgres_execute('pg', $(sqlstr(sql)))")
+ts_lit(d::Date) = "TIMESTAMP " * sqlstr(Dates.format(d, "yyyy-mm-dd") * " 00:00:00")
+"Postgres-side slice predicate (half-open [start, end+1) on date_time_utc)."
+pg_slice(o) = "clearing_mode = $(sqlstr(o["clearing_mode"])) AND code_version = $(o["code_version"]) AND " *
+              "date_time_utc >= $(ts_lit(o["start"])) AND date_time_utc < $(ts_lit(o["end"] + Day(1)))"
 
 # Half-open [start, end+1) day predicate, plus params. Both bounds are always
 # set by the time this is called (see `bound_window!`): an unbounded window
@@ -100,18 +132,48 @@ function day_window_clause(col::AbstractString, start, stop, p0::Int)
     return (join(parts, " AND "), params)
 end
 
+# Price rows THIS run produced. A fill → run → transfer results DB also holds the slice's existing Postgres rows,
+# seeded by the :record fill (skip-existing; with their Postgres run ids, which the results DB's optimization_runs
+# does not hold). With --written-since only the rows written since then are transferred, and the Postgres delete is
+# narrowed to their (day, zone, order_method, contract_type) groups, so a seeded row is never rewritten (or its run
+# id blanked). Without --written-since every slice row must link to a run in this results DB (asset transfers,
+# transfer-record.yml): checked inside the transaction.
+produced_clause(o, n::Int) = o["written_since"] === nothing ? ("", Any[]) :
+    (" AND update_time_utc >= \$$n", Any[o["written_since"]])
+
 function read_prices(con, o)
     win, wp = day_window_clause("date_time_utc", o["start"], o["end"], 3)
+    prod, pp = produced_clause(o, 5)
     sql = """
         SELECT date_time_utc, resolution_code, bidding_zone, contract_type,
                price_eur_mwh, currency, order_method, clearing_mode,
                optimization_run_id, code_version, update_time_utc
         FROM simulations.energy_prices
-        WHERE clearing_mode = \$1 AND code_version = \$2 AND $win
+        WHERE clearing_mode = \$1 AND code_version = \$2 AND $win$prod
         ORDER BY bidding_zone, date_time_utc
     """
     return DataFrame(DBInterface.execute(con,
-        sql, Any[o["clearing_mode"], o["code_version"], wp...]))
+        sql, Any[o["clearing_mode"], o["code_version"], wp..., pp...]))
+end
+
+"""Refuse (before any Postgres mutation) when a produced (day, zone, order_method, contract_type) group also holds
+rows written before --written-since: the narrowed delete would drop them from Postgres."""
+function check_produced_groups(con, o)
+    o["written_since"] === nothing && return nothing
+    win, wp = day_window_clause("date_time_utc", o["start"], o["end"], 3)
+    df = DataFrame(DBInterface.execute(con, """
+        WITH prod AS (SELECT DISTINCT CAST(date_time_utc AS DATE) AS d, bidding_zone, order_method, contract_type
+                      FROM simulations.energy_prices
+                      WHERE clearing_mode = \$1 AND code_version = \$2 AND $win AND update_time_utc >= \$5)
+        SELECT COUNT(*) AS n FROM simulations.energy_prices e
+        JOIN prod ON prod.d = CAST(e.date_time_utc AS DATE) AND prod.bidding_zone = e.bidding_zone
+                 AND prod.order_method = e.order_method AND prod.contract_type = e.contract_type
+        WHERE e.clearing_mode = \$1 AND e.code_version = \$2 AND e.update_time_utc < \$5""",
+        Any[o["clearing_mode"], o["code_version"], wp..., o["written_since"]]))
+    n = Int(df.n[1])
+    n == 0 || error("transfer refused: $n older row(s) share a (day, zone, order_method, contract_type) group with " *
+                    "rows written since $(o["written_since"]); the narrowed delete would drop them. Nothing was written.")
+    return nothing
 end
 
 function read_runs(con, run_ids::Vector{<:Integer})
@@ -161,227 +223,167 @@ function read_flows(con, o)
     return DataFrame(DBInterface.execute(con, sql, Any[o["code_version"], o["clearing_mode"], wp...]))
 end
 
-# ---------------------------------------------------------------------------
-# CSV helpers for Postgres COPY
-# ---------------------------------------------------------------------------
-_csv(x::Missing) = ""
-_csv(::Nothing)  = ""
-_csv(x::DateTime) = Dates.format(x, "yyyy-mm-dd HH:MM:SS")
-_csv(x::Date)     = Dates.format(x, "yyyy-mm-dd")
-_csv(x::Bool)     = x ? "t" : "f"
-_csv(x::Real)     = string(x)
-function _csv(x::AbstractString)
-    s = String(x)
-    (occursin(',', s) || occursin('"', s) || occursin('\n', s)) &&
-        return "\"" * replace(s, "\"" => "\"\"") * "\""
-    return s
-end
-_csvline(vals) = join(_csv.(vals), ",") * "\n"
+const RUN_COLS = ["bidding_zone", "optimization_date", "order_method", "model_type", "optimizer", "status",
+    "objective_value", "solve_time_seconds", "num_orders", "num_price_periods", "error_message", "code_version",
+    "created_at", "is_iterative", "total_time_seconds", "iterations", "converged", "final_price_change",
+    "final_flow_change_pct"]
+const RUN_NUMERIC = Set(["objective_value", "solve_time_seconds", "total_time_seconds", "final_price_change",
+                         "final_flow_change_pct"])
+"Source column → staged expression: NUMERIC targets travel as the double's shortest text."
+stagecol(c) = c in RUN_NUMERIC ? "CAST($c AS VARCHAR) AS $c" : c
+pgcol(c, alias) = c in RUN_NUMERIC ? "$alias.$c::numeric" : "$alias.$c"
 
-# ---------------------------------------------------------------------------
-# Postgres upserts
-# ---------------------------------------------------------------------------
-"""
-Refuse the transfer unless every optimization_run referenced by the slice's prices
-belongs to the slice: same code_version and optimization_date inside
-[start, end]. The run upsert keys on (zone, date, method, model, code_version,
-optimizer), so a price row pointing at another version's run would otherwise
-overwrite that version's run metadata (e.g. a cv39 run) even though the
-price/flow deletes are correctly scoped.
-"""
-function check_runs_in_slice(runs::DataFrame, o)
-    isempty(runs) && return nothing
-    cv = o["code_version"]; d0 = o["start"]; d1 = o["end"]
-    bad = [r.id for r in eachrow(runs) if r.code_version != cv ||
-           !(d0 <= Date(r.optimization_date) <= d1)]
-    isempty(bad) || error("transfer refused: $(length(bad)) referenced optimization_runs " *
-        "fall outside the slice (code_version=$cv, $d0..$d1), e.g. ids $(first(bad, 5)). " *
-        "Nothing was written.")
-    println("referenced optimization_runs all inside the slice (cv$cv, $d0..$d1)")
-    return nothing
-end
-
-"""Upsert optimization_runs one row at a time, returning duckdb_id → pg_id."""
-function transfer_runs!(pg, runs::DataFrame)
-    idmap = Dict{Int64,Int}()
-    isempty(runs) && return idmap
-    sql = """
-        INSERT INTO simulations.optimization_runs
-        (bidding_zone, optimization_date, order_method, model_type, optimizer, status,
-         objective_value, solve_time_seconds, num_orders, num_price_periods, error_message,
-         code_version, created_at,
-         is_iterative, total_time_seconds, iterations, converged, final_price_change, final_flow_change_pct)
-        VALUES (\$1,\$2,\$3,\$4,\$5,\$6,\$7,\$8,\$9,\$10,\$11,\$12,\$13,\$14,\$15,\$16,\$17,\$18,\$19)
-        ON CONFLICT (bidding_zone, optimization_date, order_method, model_type, code_version, optimizer)
-        DO UPDATE SET status = EXCLUDED.status, objective_value = EXCLUDED.objective_value,
-            solve_time_seconds = EXCLUDED.solve_time_seconds, num_orders = EXCLUDED.num_orders,
-            num_price_periods = EXCLUDED.num_price_periods, error_message = EXCLUDED.error_message,
-            created_at = EXCLUDED.created_at, is_iterative = EXCLUDED.is_iterative,
-            total_time_seconds = EXCLUDED.total_time_seconds, iterations = EXCLUDED.iterations,
-            converged = EXCLUDED.converged, final_price_change = EXCLUDED.final_price_change,
-            final_flow_change_pct = EXCLUDED.final_flow_change_pct
-        RETURNING id
-    """
-    m(x) = (x === missing || x === nothing) ? missing : x
-    LibPQ.execute(pg, "BEGIN")
-    try
-        for row in eachrow(runs)
-            res = LibPQ.execute(pg, sql, [
-                row.bidding_zone, row.optimization_date, row.order_method, row.model_type,
-                row.optimizer, row.status, m(row.objective_value), m(row.solve_time_seconds),
-                m(row.num_orders), m(row.num_price_periods), m(row.error_message),
-                row.code_version, m(row.created_at), m(row.is_iterative),
-                m(row.total_time_seconds), m(row.iterations), m(row.converged),
-                m(row.final_price_change), m(row.final_flow_change_pct)])
-            idmap[Int64(row.id)] = DataFrame(res).id[1]
-        end
-        LibPQ.execute(pg, "COMMIT")
-    catch e
-        LibPQ.execute(pg, "ROLLBACK"); rethrow(e)
-    end
-    return idmap
-end
-
-"""Delete-then-COPY the price slice into Postgres (with remapped run ids)."""
-function transfer_prices!(pg, prices::DataFrame, idmap::Dict{Int64,Int}, o)
+"""Stage the source's per-year counts and zone-month checksums (computed in DuckDB, as before)."""
+function stage_checks!(con, o, st)
     win, wp = day_window_clause("date_time_utc", o["start"], o["end"], 3)
-    LibPQ.execute(pg, "BEGIN")
-    try
-        LibPQ.execute(pg, """
-            DELETE FROM simulations.energy_prices
-            WHERE clearing_mode = \$1 AND code_version = \$2 AND $win
-            """, Any[o["clearing_mode"], o["code_version"], wp...])
-
-        remap(x) = (x === missing || x === nothing) ? missing : get(idmap, Int64(x), missing)
-        lines = (_csvline((
-            row.date_time_utc, row.resolution_code, row.bidding_zone, row.contract_type,
-            row.price_eur_mwh, row.currency, row.order_method, row.clearing_mode,
-            remap(row.optimization_run_id), row.code_version, row.update_time_utc))
-            for row in eachrow(prices))
-        copy = LibPQ.CopyIn("""
-            COPY simulations.energy_prices
-            (date_time_utc, resolution_code, bidding_zone, contract_type, price_eur_mwh,
-             currency, order_method, clearing_mode, optimization_run_id, code_version, update_time_utc)
-            FROM STDIN (FORMAT csv, NULL '')
-            """, lines)
-        LibPQ.execute(pg, copy)
-        LibPQ.execute(pg, "COMMIT")
-    catch e
-        LibPQ.execute(pg, "ROLLBACK"); rethrow(e)
-    end
-    return nrow(prices)
-end
-
-"""
-Delete-then-COPY the transmission-flow slice into Postgres, scoped exactly like
-the price slice: `(clearing_mode, code_version, window)` (the flows table gained
-`clearing_mode` in the 2026-08-24 bug sweep).
-"""
-function transfer_flows!(pg, flows::DataFrame, o)
-    isempty(flows) && return 0
-    win, wp = day_window_clause("date_time_utc", o["start"], o["end"], 3)
-    LibPQ.execute(pg, "BEGIN")
-    try
-        LibPQ.execute(pg, """
-            DELETE FROM simulations.transmission_flows
-            WHERE clearing_mode = \$1 AND code_version = \$2 AND $win
-            """, Any[o["clearing_mode"], o["code_version"], wp...])
-        lines = (_csvline((row.date_time_utc, row.source_zone, row.sink_zone,
-                           row.flow_mw, row.clearing_mode, row.code_version, row.update_time_utc))
-                 for row in eachrow(flows))
-        copy = LibPQ.CopyIn("""
-            COPY simulations.transmission_flows
-            (date_time_utc, source_zone, sink_zone, flow_mw, clearing_mode, code_version, update_time_utc)
-            FROM STDIN (FORMAT csv, NULL '')
-            """, lines)
-        LibPQ.execute(pg, copy)
-        LibPQ.execute(pg, "COMMIT")
-    catch e
-        LibPQ.execute(pg, "ROLLBACK"); rethrow(e)
-    end
-    return nrow(flows)
-end
-
-# ---------------------------------------------------------------------------
-# Verify
-# ---------------------------------------------------------------------------
-function per_year_counts_duckdb(con, o)
-    win, wp = day_window_clause("date_time_utc", o["start"], o["end"], 3)
-    DataFrame(DBInterface.execute(con, """
-        SELECT EXTRACT(YEAR FROM date_time_utc) AS y, COUNT(*) AS n
-        FROM simulations.energy_prices
-        WHERE clearing_mode = \$1 AND code_version = \$2 AND $win
-        GROUP BY 1 ORDER BY 1
-        """, Any[o["clearing_mode"], o["code_version"], wp...]))
-end
-
-function per_year_counts_pg(pg, o)
-    win, wp = day_window_clause("date_time_utc", o["start"], o["end"], 3)
-    DataFrame(LibPQ.execute(pg, """
-        SELECT EXTRACT(YEAR FROM date_time_utc)::int AS y, COUNT(*) AS n
-        FROM simulations.energy_prices
-        WHERE clearing_mode = \$1 AND code_version = \$2 AND $win
-        GROUP BY 1 ORDER BY 1
-        """, Any[o["clearing_mode"], o["code_version"], wp...]))
-end
-
-# Per zone-month price-sum checksums (rounded) — a strong content fingerprint.
-# The Postgres column is NUMERIC(10,2), so every stored price is quantized to
-# 2 decimals; the DuckDB side keeps full float64. Rounding PER ROW before the
-# SUM makes the two fingerprints like-for-like — summing full-precision values
-# and rounding once at the end flags spurious cent-level DIFFs whenever a
-# month's sub-cent residues fail to cancel (seen on the cv31 transfer:
-# 3/1677 Baltic zone-months, max per-row effect 0.005 €/MWh, all rows present).
-function checksums_duckdb(con, o)
-    win, wp = day_window_clause("date_time_utc", o["start"], o["end"], 3)
-    DataFrame(DBInterface.execute(con, """
+    DBInterface.execute(con, """
+        CREATE TABLE pg.$(st)_chk AS
         SELECT bidding_zone AS z, strftime(date_time_utc, '%Y-%m') AS ym,
                ROUND(SUM(ROUND(price_eur_mwh, 2)), 2) AS s, COUNT(*) AS n
         FROM simulations.energy_prices
         WHERE clearing_mode = \$1 AND code_version = \$2 AND $win
-        GROUP BY 1, 2 ORDER BY 1, 2
-        """, Any[o["clearing_mode"], o["code_version"], wp...]))
-end
-
-function checksums_pg(pg, o)
-    win, wp = day_window_clause("date_time_utc", o["start"], o["end"], 3)
-    DataFrame(LibPQ.execute(pg, """
-        SELECT bidding_zone AS z, to_char(date_time_utc, 'YYYY-MM') AS ym,
-               ROUND(SUM(ROUND(price_eur_mwh, 2)), 2)::float8 AS s, COUNT(*) AS n
+        GROUP BY 1, 2""", Any[o["clearing_mode"], o["code_version"], wp...])
+    DBInterface.execute(con, """
+        CREATE TABLE pg.$(st)_years AS
+        SELECT CAST(EXTRACT(YEAR FROM date_time_utc) AS INTEGER) AS y, COUNT(*) AS n
         FROM simulations.energy_prices
         WHERE clearing_mode = \$1 AND code_version = \$2 AND $win
-        GROUP BY 1, 2 ORDER BY 1, 2
-        """, Any[o["clearing_mode"], o["code_version"], wp...]))
+        GROUP BY 1""", Any[o["clearing_mode"], o["code_version"], wp...])
 end
 
-function run_verify(con, pg, o)
-    println("── per-year energy_prices row counts ──")
-    dcy = per_year_counts_duckdb(con, o); pgy = per_year_counts_pg(pg, o)
-    dd = Dict(Int(r.y) => Int(r.n) for r in eachrow(dcy))
-    pd = Dict(Int(r.y) => Int(r.n) for r in eachrow(pgy))
-    @printf("  %-6s %14s %14s %8s\n", "year", "duckdb", "postgres", "match")
-    for y in sort(collect(union(keys(dd), keys(pd))))
-        d = get(dd, y, 0); p = get(pd, y, 0)
-        @printf("  %-6d %14d %14d %8s\n", y, d, p, d == p ? "ok" : "DIFF")
-    end
-    println("── zone-month price checksums (SUM price rounded) ──")
-    dcs = checksums_duckdb(con, o); pcs = checksums_pg(pg, o)
-    dk = Dict((String(r.z), String(r.ym)) => (round(Float64(r.s), digits=2), Int(r.n)) for r in eachrow(dcs))
-    pk = Dict((String(r.z), String(r.ym)) => (round(Float64(r.s), digits=2), Int(r.n)) for r in eachrow(pcs))
-    keys_all = sort(collect(union(keys(dk), keys(pk))))
-    ndiff = 0
-    for k in keys_all
-        dv = get(dk, k, (NaN, 0)); pv = get(pk, k, (NaN, 0))
-        if !(isapprox(dv[1], pv[1]; atol=0.01) && dv[2] == pv[2])
-            ndiff += 1
-            ndiff <= 20 && @printf("  DIFF %-12s %s  duckdb=(%.2f,%d) pg=(%.2f,%d)\n",
-                k[1], k[2], dv[1], dv[2], pv[1], pv[2])
+"""The server-side verification (inside the caller's PL/pgSQL block): RAISE unless Postgres' slice has the same
+per-year counts and zone-month checksums (±0.01, row-rounded sums) as the staged source."""
+plpgsql_verify(o, st) = """
+  SELECT COUNT(*) INTO ndiff FROM (
+    SELECT y FROM (SELECT EXTRACT(YEAR FROM date_time_utc)::int AS y, COUNT(*) AS n FROM simulations.energy_prices
+                   WHERE $(pg_slice(o)) GROUP BY 1) p
+    FULL JOIN $(st)_years c USING (y) WHERE p.n IS DISTINCT FROM c.n) d;
+  IF ndiff > 0 THEN RAISE EXCEPTION 'verification FAILED: % year(s) with different energy_prices row counts', ndiff; END IF;
+  SELECT COUNT(*), string_agg(z || ' ' || ym, ', ') INTO ndiff, diffs FROM (
+    SELECT z, ym FROM (SELECT bidding_zone AS z, to_char(date_time_utc, 'YYYY-MM') AS ym,
+                              ROUND(SUM(ROUND(price_eur_mwh, 2)), 2)::float8 AS s, COUNT(*) AS n
+                       FROM simulations.energy_prices WHERE $(pg_slice(o)) GROUP BY 1, 2) p
+    FULL JOIN $(st)_chk c USING (z, ym)
+    WHERE p.n IS DISTINCT FROM c.n OR p.s IS NULL OR c.s IS NULL OR abs(p.s - c.s) > 0.01 LIMIT 20) d;
+  IF ndiff > 0 THEN RAISE EXCEPTION 'verification FAILED: zone-month checksums differ: %', diffs; END IF;
+"""
+
+"""Transfer one window inside Postgres (one transaction): runs upsert → run-id map, price and flow slice
+delete-then-insert with remapped ids, server-side verification. Returns the staged row counts."""
+function transfer_window_pg!(con, o, prices::DataFrame, run_ids)
+    st = "simulations._p96r_" * Dates.format(now(UTC), "yyyymmddHHMMSS") * "_" * string(getpid())
+    win, wp = day_window_clause("date_time_utc", o["start"], o["end"], 3)
+    prod, pp = produced_clause(o, 5)
+    stages = ["$(st)_runs", "$(st)_prices", "$(st)_flows", "$(st)_chk", "$(st)_years"]
+    # run linkage expected in Postgres after the transfer: the slice's NULL run ids (whole slice, seeded rows included)
+    n_null = Int(DataFrame(DBInterface.execute(con, "SELECT COUNT(*) AS n FROM simulations.energy_prices WHERE " *
+        "clearing_mode = \$1 AND code_version = \$2 AND $win AND optimization_run_id IS NULL",
+        Any[o["clearing_mode"], o["code_version"], wp...])).n[1])
+    try
+        DBInterface.execute(con, "CREATE TABLE pg.$(st)_runs AS SELECT id AS local_id, " *
+            join(stagecol.(RUN_COLS), ", ") * " FROM simulations.optimization_runs WHERE id IN (SELECT unnest(\$1))",
+            Any[collect(Int64, run_ids)])
+        DBInterface.execute(con, """
+            CREATE TABLE pg.$(st)_prices AS
+            SELECT date_time_utc, resolution_code, bidding_zone, contract_type, CAST(price_eur_mwh AS VARCHAR) AS price_t,
+                   currency, order_method, clearing_mode, optimization_run_id AS local_run_id, code_version, update_time_utc
+            FROM simulations.energy_prices WHERE clearing_mode = \$1 AND code_version = \$2 AND $win$prod""",
+            Any[o["clearing_mode"], o["code_version"], wp..., pp...])
+        nflows = 0
+        if o["flows"]
+            DBInterface.execute(con, """
+                CREATE TABLE pg.$(st)_flows AS
+                SELECT date_time_utc, source_zone, sink_zone, CAST(flow_mw AS VARCHAR) AS flow_t,
+                       COALESCE(clearing_mode, 'multi_zone') AS clearing_mode, code_version, update_time_utc
+                FROM simulations.transmission_flows
+                WHERE code_version = \$1 AND COALESCE(clearing_mode, 'multi_zone') = \$2 AND $win""",
+                Any[o["code_version"], o["clearing_mode"], wp...])
+            nflows = Int(DataFrame(DBInterface.execute(con, "SELECT COUNT(*) AS n FROM pg.$(st)_flows")).n[1])
+        end
+        stage_checks!(con, o, st)
+        cols = join(RUN_COLS, ", ")
+        upd = join(("$c = EXCLUDED.$c" for c in ("status", "objective_value", "solve_time_seconds", "num_orders",
+            "num_price_periods", "error_message", "created_at", "is_iterative", "total_time_seconds", "iterations",
+            "converged", "final_price_change", "final_flow_change_pct")), ", ")
+        flows_sql = !o["flows"] ? "" : """
+          DELETE FROM simulations.transmission_flows WHERE $(pg_slice(o));
+          INSERT INTO simulations.transmission_flows
+            (date_time_utc, source_zone, sink_zone, flow_mw, clearing_mode, code_version, update_time_utc)
+            SELECT date_time_utc, source_zone, sink_zone, flow_t::numeric, clearing_mode, code_version, update_time_utc
+            FROM $(st)_flows;"""
+        pg_exec(con, """
+DO \$p96rec\$
+DECLARE r record; new_id int; ndiff bigint; diffs text;
+BEGIN
+  IF to_regclass('simulations.energy_prices') IS NULL OR to_regclass('simulations.optimization_runs') IS NULL
+     $(o["flows"] ? "OR to_regclass('simulations.transmission_flows') IS NULL" : "") THEN
+    RAISE EXCEPTION 'destination simulations tables are missing (create them with the repo DDL first)';
+  END IF;
+  CREATE TEMP TABLE _p96_idmap (local_id bigint PRIMARY KEY, pg_id int) ON COMMIT DROP;
+  FOR r IN SELECT * FROM $(st)_runs LOOP
+    INSERT INTO simulations.optimization_runs ($cols)
+      VALUES ($(join((pgcol(c, "r") for c in RUN_COLS), ", ")))
+      ON CONFLICT (bidding_zone, optimization_date, order_method, model_type, code_version, optimizer)
+      DO UPDATE SET $upd
+      RETURNING id INTO new_id;
+    INSERT INTO _p96_idmap VALUES (r.local_id, new_id);
+  END LOOP;
+  -- every staged row must link to a run of this results DB (a seeded row carries a Postgres id that the map lacks)
+  SELECT COUNT(*) INTO ndiff FROM $(st)_prices p LEFT JOIN _p96_idmap m ON m.local_id = p.local_run_id
+    WHERE p.local_run_id IS NOT NULL AND m.pg_id IS NULL;
+  IF ndiff > 0 THEN
+    RAISE EXCEPTION 'run linkage: % staged price row(s) reference a run that is not in this results DB (seeded rows? transfer with --written-since)', ndiff;
+  END IF;
+  $(o["written_since"] === nothing ? "DELETE FROM simulations.energy_prices WHERE $(pg_slice(o));" : """DELETE FROM simulations.energy_prices e
+    USING (SELECT DISTINCT date_time_utc::date AS d, bidding_zone, order_method, contract_type FROM $(st)_prices) k
+    WHERE $(replace(pg_slice(o), r"(?<![\w.])(clearing_mode|code_version|date_time_utc)\b" => s"e.\1"))
+      AND e.bidding_zone = k.bidding_zone AND e.order_method = k.order_method AND e.contract_type = k.contract_type
+      AND (e.date_time_utc AT TIME ZONE 'UTC')::date = k.d;""")
+  INSERT INTO simulations.energy_prices
+    (date_time_utc, resolution_code, bidding_zone, contract_type, price_eur_mwh, currency, order_method,
+     clearing_mode, optimization_run_id, code_version, update_time_utc)
+    SELECT p.date_time_utc, p.resolution_code, p.bidding_zone, p.contract_type, p.price_t::numeric, p.currency,
+           p.order_method, p.clearing_mode, m.pg_id, p.code_version, p.update_time_utc
+    FROM $(st)_prices p LEFT JOIN _p96_idmap m ON m.local_id = p.local_run_id;
+  -- run linkage after the write: NULL run ids exactly as in the source slice, and every id is a real run
+  SELECT COUNT(*) INTO ndiff FROM simulations.energy_prices WHERE $(pg_slice(o)) AND optimization_run_id IS NULL;
+  IF ndiff <> $n_null THEN
+    RAISE EXCEPTION 'run linkage: % price row(s) of the slice have no run id in Postgres, the source has $n_null', ndiff;
+  END IF;
+  SELECT COUNT(*) INTO ndiff FROM simulations.energy_prices e LEFT JOIN simulations.optimization_runs orun ON orun.id = e.optimization_run_id
+    WHERE $(replace(pg_slice(o), r"(?<![\w.])(clearing_mode|code_version|date_time_utc)\b" => s"e.\1"))
+      AND e.optimization_run_id IS NOT NULL AND orun.id IS NULL;
+  IF ndiff > 0 THEN
+    RAISE EXCEPTION 'run linkage: % price row(s) of the slice reference a missing optimization run', ndiff;
+  END IF;
+$flows_sql
+$(plpgsql_verify(o, st))
+END
+\$p96rec\$;""")
+        return (runs=length(run_ids), prices=nrow(prices), flows=nflows)
+    finally
+        for t in stages
+            try pg_exec(con, "DROP TABLE IF EXISTS $t") catch e; @warn "could not drop $t" exception = e end
         end
     end
-    println(ndiff == 0 ?
-        "  ✅ all $(length(keys_all)) zone-month checksums match" :
-        "  ⚠️ $ndiff / $(length(keys_all)) zone-month checksums differ")
-    return ndiff == 0
+end
+
+"Verify only: stage the source checks and compare inside Postgres (no slice is written)."
+function run_verify(con, o)
+    st = "simulations._p96v_" * Dates.format(now(UTC), "yyyymmddHHMMSS") * "_" * string(getpid())
+    try
+        stage_checks!(con, o, st)
+        pg_exec(con, "DO \$p96v\$ DECLARE ndiff bigint; diffs text; BEGIN $(plpgsql_verify(o, st)) END \$p96v\$;")
+        println("  ✅ per-year counts and all zone-month checksums match (verified inside Postgres)")
+        return true
+    catch e
+        println("  ⚠️ ", sprint(showerror, e))
+        return false
+    finally
+        for t in ("$(st)_chk", "$(st)_years")
+            try pg_exec(con, "DROP TABLE IF EXISTS $t") catch end
+        end
+    end
 end
 
 # ---------------------------------------------------------------------------
@@ -401,62 +403,74 @@ function main()
     println("=" ^ 70)
 
     con, db = open_results_duckdb(o["results_db"])
-    pg = Euphemia.newconnection()
+    Euphemia.attach_postgres!(con, ENV["ENERGY_CONN_STR"]; read_only=false)
     try
         if o["verify"]
-            ok = run_verify(con, pg, o)
+            bound_window!(con, o)
+            ok = run_verify(con, o)
             exit(ok ? 0 : 1)
         end
 
-        bound_window!(con, o)   # never an unbounded Postgres delete
-        t0 = time()
-        prices = read_prices(con, o)
-        println("read $(nrow(prices)) price rows from results DuckDB ($(round(time()-t0, digits=1))s)")
-        isempty(prices) && (println("nothing to transfer — empty slice"); return)
-
-        run_ids = Int64[Int64(x) for x in skipmissing(prices.optimization_run_id)]
-        runs = read_runs(con, unique(run_ids))
-        println("referenced optimization_runs: $(nrow(runs))")
-        check_runs_in_slice(runs, o)   # before ANY destination mutation
-
-        # Make sure destination tables exist.
-        Euphemia.ensure_energy_prices_table()
-        o["flows"] && Euphemia.ensure_transmission_flows_table()
-
-        idmap = transfer_runs!(pg, runs)
-        println("upserted $(length(idmap)) optimization_runs into Postgres")
-
-        t1 = time()
-        n = transfer_prices!(pg, prices, idmap, o)
-        @printf("COPY'd %d energy_prices rows in %.1fs (%.0f rows/s)\n",
-                n, time()-t1, n / max(time()-t1, 1e-9))
-
-        if o["flows"]
-            flows = read_flows(con, o)
-            if !isempty(flows)
-                nf = transfer_flows!(pg, flows, o)
-                println("COPY'd $nf transmission_flows rows")
-            else
-                println("no transmission_flows in slice")
+        if o["written_since"] !== nothing
+            days = written_days(con, o)
+            println("--written-since $(o["written_since"]): $(length(days)) day(s) written by this run: " *
+                    join(days, ", "))
+            isempty(days) && (println("nothing to transfer — no rows written since then"); return)
+            for d in days
+                od = copy(o); od["start"] = d; od["end"] = d
+                transfer_window!(con, od)
             end
+            return
         end
-
-        println("── post-transfer verification ──")
-        # The verdict must reach the exit code. It was discarded here, so a
-        # transfer whose zone-month checksums DISAGREED still printed DONE and
-        # exited 0 — the one check that can catch a bad transfer could not fail
-        # the run (only --verify-only mode propagated it).
-        ok = run_verify(con, pg, o)
-        @printf("DONE in %.1fs\n", time() - t0)
-        if ok === false
-            println("❌ post-transfer verification FAILED — the Postgres slice does " *
-                    "not match the source. Investigate before publishing.")
-            exit(1)
-        end
+        transfer_window!(con, o)
     finally
-        LibPQ.close(pg)
         DBInterface.close!(con); DuckDB.close(db)
     end
+end
+
+"Distinct UTC days of the slice with rows written at or after o[\"written_since\"] (within --start/--end if given)."
+function written_days(con, o)
+    extra, ep = (o["start"] === nothing || o["end"] === nothing) ? ("", Any[]) :
+        (" AND " * first(day_window_clause("date_time_utc", o["start"], o["end"], 4)),
+         last(day_window_clause("date_time_utc", o["start"], o["end"], 4)))
+    df = DataFrame(DBInterface.execute(con, """
+        SELECT DISTINCT CAST(date_time_utc AS DATE) AS d FROM simulations.energy_prices
+        WHERE clearing_mode = \$1 AND code_version = \$2 AND update_time_utc >= \$3$extra
+        ORDER BY 1""", Any[o["clearing_mode"], o["code_version"], o["written_since"], ep...]))
+    return Date.(df.d)
+end
+
+"""Refuse (before any Postgres mutation) when a referenced optimization run lies outside the slice: another
+code version, or an optimization_date outside start..end. Local check on the results DuckDB's rows."""
+function check_runs_in_slice(runs::DataFrame, o)
+    isempty(runs) && return nothing
+    cv = o["code_version"]; d0 = o["start"]; d1 = o["end"]
+    bad = [r.id for r in eachrow(runs) if r.code_version != cv ||
+           !(d0 <= Date(r.optimization_date) <= d1)]
+    isempty(bad) || error("transfer refused: $(length(bad)) referenced optimization_runs " *
+        "fall outside the slice (code_version=$cv, $d0..$d1), e.g. ids $(first(bad, 5)). " *
+        "Nothing was written.")
+    println("referenced optimization_runs all inside the slice (cv$cv, $d0..$d1)")
+    return nothing
+end
+
+"Transfer one (clearing_mode, code_version, day window) slice inside Postgres: runs, prices, flows, verify."
+function transfer_window!(con, o)
+    bound_window!(con, o)   # never an unbounded Postgres delete
+    t0 = time()
+    prices = read_prices(con, o)
+    println("read $(nrow(prices)) price rows from results DuckDB ($(o["start"]) .. $(o["end"]))")
+    isempty(prices) && (println("nothing to transfer — empty slice"); return)
+    run_ids = unique(Int64[Int64(x) for x in skipmissing(prices.optimization_run_id)])
+    runs = read_runs(con, run_ids)
+    println("referenced optimization_runs: $(nrow(runs))")
+    check_runs_in_slice(runs, o)   # before ANY destination mutation
+    check_produced_groups(con, o)
+    n = transfer_window_pg!(con, o, prices, run_ids)
+    println("upserted $(n.runs) optimization_runs, replaced $(n.prices) energy_prices + $(n.flows) transmission_flows " *
+            "rows in one Postgres transaction; verification passed inside it (per-year counts, zone-month " *
+            "checksums) — $(round(time() - t0, digits=1))s")
+    println("DONE")
 end
 
 main()

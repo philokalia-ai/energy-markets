@@ -2,6 +2,7 @@ using LibPQ
 using ConcurrentUtilities: ConcurrentUtilities, Pools
 using Dates
 using DuckDB   # also brings DBInterface into scope
+using JSON   # run_results.jl: transfer-op params
 
 # ============================================================================
 # Data store configuration (Postgres | DuckDB)
@@ -25,6 +26,9 @@ using DuckDB   # also brings DBInterface into scope
 # so the spliced code is line-for-line the pre-split dbutils.jl.
 include("db/resolution.jl")     # slot resolution labels from timestamp spacing (energy_prices, forecast_prices)
 include("db/duckdb_store.jl")   # DuckDB backend: connection, dialect rewrite, results.duckdb writers
+include("db/run_results.jl")    # run-local results DuckDB for the forecast writers + the transfer-op log
+include("db/pg_attach.jl")      # DuckDB postgres extension: the only Julia->Postgres path (fill, transfer)
+include("db/fill_manifest.jl")  # fill manifest + fill_run_duckdb (Postgres -> run-local DuckDB via the scanner)
 include("db/postgres_core.jl")  # code-version ledger, LibPQ pool, sql2df (+retry) dispatch
 include("db/results_store.jl")  # simulations.* DDL, save_* writers, ensure_indexes
 include("db/physics_audit.jl")  # physics-consistency audit of the ingested ENTSO-E data (read-only)
