@@ -32,6 +32,20 @@ on:
         options:
           - "24"
           - "96"
+      # ceres option (a) cut-over check: a daily-forecast run profile's real code (bin/daily_forecast.jl and, for
+      # morning/entsoe, the persistence horizon) for TODAY's target days, Postgres path vs fill → DuckDB path on the
+      # same inputs, FORCE_RERUN so frozen slices are recomputed, and NOTHING written (the writers are captured;
+      # bin/measure_forecast_profile.jl). days / entry / periods are ignored when this is set.
+      run_profile:
+        description: "Verify a daily-forecast run profile instead of a record/forecast clear: lead1 | morning | entsoe | pregate (empty = off)"
+        required: false
+        default: ""
+        type: string
+      require_jao:
+        description: "run_profile=lead1 only: the 08:55 JAO requirement"
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: measure-duckdb-path
@@ -162,8 +176,12 @@ jobs:
           ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
         run: |
           [ ! -f STOP_MEASURE ] || { cat STOP_MEASURE; exit 1; }
-          julia --project=. bin/fill_run_duckdb.jl --profile record \
-            --start "${{ steps.days.outputs.start }}" --end "${{ steps.days.outputs.end }}" --out "$RUN_DIR" &
+          if [ -n "${{ github.event.inputs.run_profile }}" ]; then
+            julia --project=. bin/fill_run_duckdb.jl --profile daily-forecast --out "$RUN_DIR" &
+          else
+            julia --project=. bin/fill_run_duckdb.jl --profile record \
+              --start "${{ steps.days.outputs.start }}" --end "${{ steps.days.outputs.end }}" --out "$RUN_DIR" &
+          fi
           echo $! > "$PID_DIR/fill.pid"; wait $!
           cp "$RUN_DIR/fill.json" "$OUT_DIR/fill.json"
           python3 -c "import json; f=json.load(open('$OUT_DIR/fill.json')); print('fill 1: wall', f['process_wall_s'], 's, peak RSS', f['peak_rss_kb'], 'kB, inputs', f['inputs_mib'], 'MiB, results', f['results_mib'], 'MiB; TimeZone source', f.get('source_timezone'), 'pg', f.get('pg_timezone'), 'scanner', f.get('scanner_timezone'), '; absent in source', f.get('absent_in_source'))"
@@ -177,11 +195,23 @@ jobs:
           EUPHEMIA_RESULTS_DB: ${{ env.RUN_DIR }}/results.duckdb
         run: |
           [ ! -f STOP_MEASURE ] || { cat STOP_MEASURE; exit 1; }
-          STOP_FILE="$GITHUB_WORKSPACE/STOP_MEASURE" julia --project=. bin/measure_duckdb_path.jl clear \
-            --days "${{ steps.days.outputs.days }}" --label duckdb --entry "${{ github.event.inputs.entry || 'forecast' }}" \
-            --steps "${{ github.event.inputs.periods || '24' }}" --trace --out "$OUT_DIR" &
+          P="${{ github.event.inputs.run_profile }}"
+          if [ -n "$P" ]; then
+            # the profile's own environment (the same source as daily-forecast.yml), FORCE_RERUN, writes captured
+            eval "$(bash bin/forecast_profile_env.sh "$P" "${{ github.event.inputs.require_jao || 'false' }}")" || exit 1
+            export MIN_LEAD_DAYS MAX_LEAD_DAYS INPUT_MODE EUPHEMIA_FORECAST_PREGATE OPTIMIZER=highs
+            if [ -n "${EUPHEMIA_REQUIRE_JAO:-}" ]; then export EUPHEMIA_REQUIRE_JAO; fi
+            ( julia --project=. bin/measure_forecast_profile.jl --part clear --label duckdb --out "$OUT_DIR" &&
+              if [ "$P" = morning ] || [ "$P" = entsoe ]; then
+                julia --project=. bin/measure_forecast_profile.jl --part horizon --label duckdb --out "$OUT_DIR"
+              fi ) &
+          else
+            STOP_FILE="$GITHUB_WORKSPACE/STOP_MEASURE" julia --project=. bin/measure_duckdb_path.jl clear \
+              --days "${{ steps.days.outputs.days }}" --label duckdb --entry "${{ github.event.inputs.entry || 'forecast' }}" \
+              --steps "${{ github.event.inputs.periods || '24' }}" --trace --out "$OUT_DIR" &
+          fi
           echo $! > "$PID_DIR/duckdb.pid"; wait $!
-          cat "$OUT_DIR/process_duckdb.csv"
+          [ -f "$OUT_DIR/process_duckdb.csv" ] && cat "$OUT_DIR/process_duckdb.csv" || true
 
       - name: Current path — clear reading Postgres directly (baseline, read-only)
         env:
@@ -189,19 +219,35 @@ jobs:
           EUPHEMIA_DATA_STORE: postgres
         run: |
           [ ! -f STOP_MEASURE ] || { cat STOP_MEASURE; exit 1; }
-          STOP_FILE="$GITHUB_WORKSPACE/STOP_MEASURE" julia --project=. bin/measure_duckdb_path.jl clear \
-            --days "${{ steps.days.outputs.days }}" --label pg --entry "${{ github.event.inputs.entry || 'forecast' }}" \
-            --steps "${{ github.event.inputs.periods || '24' }}" --trace --out "$OUT_DIR" &
+          P="${{ github.event.inputs.run_profile }}"
+          if [ -n "$P" ]; then
+            # the profile's own environment (the same source as daily-forecast.yml), FORCE_RERUN, writes captured
+            eval "$(bash bin/forecast_profile_env.sh "$P" "${{ github.event.inputs.require_jao || 'false' }}")" || exit 1
+            export MIN_LEAD_DAYS MAX_LEAD_DAYS INPUT_MODE EUPHEMIA_FORECAST_PREGATE OPTIMIZER=highs
+            if [ -n "${EUPHEMIA_REQUIRE_JAO:-}" ]; then export EUPHEMIA_REQUIRE_JAO; fi
+            ( julia --project=. bin/measure_forecast_profile.jl --part clear --label pg --out "$OUT_DIR" &&
+              if [ "$P" = morning ] || [ "$P" = entsoe ]; then
+                julia --project=. bin/measure_forecast_profile.jl --part horizon --label pg --out "$OUT_DIR"
+              fi ) &
+          else
+            STOP_FILE="$GITHUB_WORKSPACE/STOP_MEASURE" julia --project=. bin/measure_duckdb_path.jl clear \
+              --days "${{ steps.days.outputs.days }}" --label pg --entry "${{ github.event.inputs.entry || 'forecast' }}" \
+              --steps "${{ github.event.inputs.periods || '24' }}" --trace --out "$OUT_DIR" &
+          fi
           echo $! > "$PID_DIR/pg.pid"; wait $!
-          cat "$OUT_DIR/process_pg.csv"
+          [ -f "$OUT_DIR/process_pg.csv" ] && cat "$OUT_DIR/process_pg.csv" || true
 
       - name: Fill 2 — the same days again, after the Postgres path (did Postgres change during the run?)
         env:
           ENERGY_CONN_STR: postgresql://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}
         run: |
           [ ! -f STOP_MEASURE ] || { cat STOP_MEASURE; exit 1; }
-          julia --project=. bin/fill_run_duckdb.jl --profile record \
-            --start "${{ steps.days.outputs.start }}" --end "${{ steps.days.outputs.end }}" --out "$RUN_DIR2" &
+          if [ -n "${{ github.event.inputs.run_profile }}" ]; then
+            julia --project=. bin/fill_run_duckdb.jl --profile daily-forecast --out "$RUN_DIR2" &
+          else
+            julia --project=. bin/fill_run_duckdb.jl --profile record \
+              --start "${{ steps.days.outputs.start }}" --end "${{ steps.days.outputs.end }}" --out "$RUN_DIR2" &
+          fi
           echo $! > "$PID_DIR/fill2.pid"; wait $!
           cp "$RUN_DIR2/fill.json" "$OUT_DIR/fill2.json"
           julia --project=. bin/measure_duckdb_path.jl fill-sums "$RUN_DIR2/inputs.duckdb" "$OUT_DIR/fill2_sums.tsv"

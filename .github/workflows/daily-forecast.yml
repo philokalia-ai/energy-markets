@@ -15,10 +15,10 @@ run-name: "Daily ex-ante forecast ${{ github.event.inputs.run_profile || (github
 # refresh remains the reference/entsoe track's freeze; ceres-side coordination
 # may retire it once the pre-gate weather track is trusted. This workflow also
 # stays the manual/debug runner (workflow_dispatch) with the HiGHS default.
+# ONE trigger per slot (2026-11-24): the 06:30 pre-gate slot is fired only by the k3s CronJob
+# gh-energy-markets-dispatch-0630 (exact time; inputs pregate=true). The GitHub schedule that ran the same slot a
+# few minutes later (and found every slice frozen) is removed. ceres dispatches lead1/morning/entsoe.
 on:
-  schedule:
-    # 06:30 UTC daily — the pre-gate slot (before 12:00 CET / 10:00–11:00 UTC).
-    - cron: "30 6 * * *"
   workflow_dispatch:
     inputs:
       max_lead_days:
@@ -58,10 +58,16 @@ on:
         default: ""
         type: string
 
-# The k3s 06:30 dispatch (pregate=true) and the late GitHub schedule are the same
-# job. Serialized, the second finds every slice frozen and only rescores.
+# One group per run profile: GitHub keeps one running + ONE pending run per group and a newer queued run cancels
+# the older pending one, so a single group would let e.g. the 09:55 lead1 dispatch cancel the 08:55 one queued
+# behind a long 08:00 morning run. Profiles run in parallel as they did as separate ceres jobs; a profile never
+# queues behind itself (ceres waits for its own run before the next attempt). Two profiles writing the same slice
+# (morning and lead1 both write the weather lead 1 of tomorrow): no-clobber is decided when a run starts, so the
+# FIRST run to freeze the slice normally wins and the other skips it; if both start before either transfers, both
+# compute it and the later transfer replaces the zones it wrote (the live plan "insert", inside one Postgres
+# transaction). That is the same race the two ceres jobs have on the Postgres path today.
 concurrency:
-  group: daily-forecast
+  group: daily-forecast-${{ github.event.inputs.run_profile || 'pregate' }}
   cancel-in-progress: false
 
 env:
@@ -151,32 +157,12 @@ jobs:
           EUPHEMIA_RESULTS_WRITABLE: "true"
         run: |
           PROFILE="${{ github.event.inputs.run_profile }}"
-          case "$PROFILE" in ""|pregate|lead1|morning|entsoe) ;; *) echo "::error::unknown run_profile '$PROFILE'"; exit 1 ;; esac
-          MIN_LEAD_DAYS="1"
-          if [ "$PROFILE" = "lead1" ]; then
-            # ceres jao_pregate_forecast (08:55 / 09:55): freeze the weather lead 1 after JAO's publication;
-            # with require_jao (08:55) the day is skipped until JAO has published
-            MIN_LEAD_DAYS="1"; MAX_LEAD_DAYS="1"; FORCE_RERUN="false"
-            INPUT_MODE="weather"; EUPHEMIA_FORECAST_PREGATE="true"
-            EUPHEMIA_REQUIRE_JAO="${{ github.event.inputs.require_jao || 'false' }}"
-          elif [ "$PROFILE" = "morning" ] || [ "$PROFILE" = "entsoe" ]; then
-            # ceres update_entsoe_data predict (08:00 weather; 12:30 / 17:30 / 19:30 entsoe): leads 1..7
-            MAX_LEAD_DAYS="7"; FORCE_RERUN="false"
-            INPUT_MODE=$([ "$PROFILE" = "morning" ] && echo weather || echo entsoe)
-            EUPHEMIA_FORECAST_PREGATE="false"
-          elif [ "${{ github.event_name }}" = "schedule" ] || [ "${{ github.event.inputs.pregate }}" = "true" ] || [ "$PROFILE" = "pregate" ]; then
-            # PRE-GATE 7-lead run: weather (ex-ante) track, ALL leads, before the
-            # 12:00 CET auction. Day-ahead ATC for tomorrow is not yet published,
-            # so degrade the network to the demonstrated-capability fallback.
-            MAX_LEAD_DAYS="7"
-            # Lead 1 is frozen by the JAO-aware runs in ceres (09:05 / 10:05
-            # UTC, after JAO's 10:30 CET publication); this run does leads 2..7.
-            MIN_LEAD_DAYS="2"
-            # a manual pregate dispatch may still ask for a rewrite (scheduled
-            # runs have no inputs -> false)
+          [ -z "$PROFILE" ] && [ "${{ github.event.inputs.pregate }}" = "true" ] && PROFILE="pregate"
+          if [ -n "$PROFILE" ]; then
+            # the profile's environment (one source with measure-duckdb-path.yml); the pre-gate run degrades the
+            # network to the demonstrated-capability fallback (tomorrow's Day-ahead ATC is not published yet)
+            eval "$(bash bin/forecast_profile_env.sh "$PROFILE" "${{ github.event.inputs.require_jao || 'false' }}")" || exit 1
             FORCE_RERUN="${{ github.event.inputs.force_rerun || 'false' }}"
-            INPUT_MODE="weather"
-            EUPHEMIA_FORECAST_PREGATE="true"
           else
             MAX_LEAD_DAYS="${{ github.event.inputs.max_lead_days }}"
             FORCE_RERUN="${{ github.event.inputs.force_rerun }}"
