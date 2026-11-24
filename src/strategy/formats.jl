@@ -173,7 +173,7 @@ end
 # ---------------------------------------------------------------------------------------------- formats
 """Bid formats per archetype class (FORMATS[class] = list of format ids)."""
 const FORMATS = Dict(
-    :thermal => ["hourly_mc", "hourly_ac", "block", "linked", "exclusive", "mar", "mar_full"],
+    :thermal => ["hourly_mc", "hourly_ac", "block", "linked", "exclusive", "mar", "mar_full", "block_hac"],
     :storage => ["hourly_oc", "hourly_sched", "block", "exclusive"],
     :hydro => ["hourly_oc", "hourly_sched", "block", "linked", "exclusive", "mar"],
     :pvbat => ["hourly_oc", "hourly_sched", "block", "exclusive"],
@@ -211,6 +211,16 @@ function bids(a::Thermal, fmt::String, F::Vector{Float64}, day::Date; res=60, k_
         p = a.srmc + fixc(L) / (rp * a.pmax * L * dt)
         fam = fmt == "block" ? "BLK:$z:$(a.id)-b" : "BLKM:$z:$(a.id)-$(fmt == "mar" ? "m" : "mf"):mar=$(round(r, digits=4))"
         for i in s:s+L-1; push!(o, _lo(:supply, p, a.pmax, z, day, i, res, fam)); end
+    elseif fmt == "block_hac"
+        # the block on the forecast window + Pmax offered hourly at average cost (the hourly_ac price) in every
+        # other period: no capacity is left unoffered outside the window (the large-bidder remedy, REPORT §3)
+        s, L, _ = best_window((F .- a.srmc) .* a.pmax .* dt, Ls, fixc)
+        p = a.srmc + fixc(L) / (a.pmax * L * dt)
+        for i in s:s+L-1; push!(o, _lo(:supply, p, a.pmax, z, day, i, res, "BLK:$z:$(a.id)-b")); end
+        for i in 1:T
+            s <= i <= s + L - 1 && continue
+            push!(o, _so(:supply, p, a.pmax, z, day, i, res))
+        end
     elseif fmt == "linked"
         # parent = Pmin over the window, priced with start-up + no-load; children = (Pmax−Pmin) per period at SRMC
         val = [(F[i] - a.srmc) * a.pmin * dt + max(0.0, F[i] - a.srmc) * (a.pmax - a.pmin) * dt for i in 1:T]

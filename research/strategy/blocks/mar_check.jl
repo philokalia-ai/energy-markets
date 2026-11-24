@@ -30,7 +30,9 @@ function main()
             [Carve(z, a.pmax, 0.5 * a.srmc, 2.0 * a.srmc * Euphemia.MPCC.DEFAULT_MARKUP_FACTOR;
                    ref=a.srmc * Euphemia.MPCC.DEFAULT_MARKUP_FACTOR)] :
             [Carve(z, a.p, 0.5 * a.wv, 2.0 * a.wv; ref=a.wv)]
-        company = bids(a, String(r[4]), F, day; k_su=get(kj, "$z|$arch|$(r[4])|1.0", 1.0))
+        kk = ["$z|$arch|$(r[4])|1.0|1.0", "$z|$arch|$(r[4])|1.0"]
+        ik = findfirst(x -> haskey(kj, x), kk); ik === nothing && error("no calibrated k_su for $z $arch $(r[4])")
+        company = bids(a, String(r[4]), F, day; k_su=Float64(kj[kk[ik]]))
         book, _ = StrategyHarness.company_book(base, company; carve=carve)
         res = mz_solve_pass(book; optimizer="highs", silent=true, decompose_periods=true)
         info = Euphemia.MPCC.LAST_COMPLEX_INFO[]

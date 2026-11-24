@@ -37,7 +37,25 @@ def calibrate(cal):
     return {(r.zone, r.arch, r.format, r.su_scale, r.nl_scale): float(r.k_su) for r in best.itertuples()}
 
 
+# Structures eligible for the headline (benchmarks and the flagged min-ratio-priced thermal `mar` excluded).
+CAND = {"CCGT": ["block", "linked", "exclusive", "mar_full", "block_hac"], "COAL": ["block", "linked", "exclusive", "mar_full", "block_hac"],
+        "HYDRO": ["block", "linked", "exclusive", "mar"], "PSP": ["block", "exclusive"], "BESS": ["block", "exclusive"],
+        "PVBAT": ["block", "exclusive"], "FLEX": ["block", "exclusive"]}
+
+
+def cal_pick(cal, kmap):
+    """The headline structure per (zone, arch, su_scale, nl_scale): the eligible format with the highest mean profit
+    on the CALIBRATION days (at its calibrated k_su, pen 0, hourly). Never looks at evaluation days."""
+    c = pick(cal[(cal.pen == 0) & (cal.res_bid == 60) & (cal.res_eval == 60)], kmap)
+    c = c[c.apply(lambda r: r.format in CAND.get(r.arch, []), axis=1)]
+    g = c.groupby(["zone", "arch", "su_scale", "nl_scale", "format"]).profit.mean().reset_index()
+    best = g.loc[g.groupby(["zone", "arch", "su_scale", "nl_scale"]).profit.idxmax()]
+    return {(r.zone, r.arch, float(r.su_scale), float(r.nl_scale)): r.format for r in best.itertuples()}
+
+
 def pick(df, kmap):
+    if "nl_scale" not in df:
+        df = df.assign(nl_scale=1.0)
     k = df.apply(lambda r: kmap.get((r.zone, r.arch, r.format, r.su_scale, r.nl_scale), 1.0), axis=1)
     return df[np.isclose(df.k_su, k)]
 
@@ -63,13 +81,19 @@ def table(ev, draws, seed, label):
                 slo, shi = boot(ds.to_numpy(), draws, seed); dsm = ds.mean()
             else:
                 dsm = slo = shi = np.nan
+            ac = g[g.format == "hourly_ac"].set_index("day")
+            if not ac.empty and f != "hourly_ac":
+                da = (h.loc[days, "profit"] - ac.loc[days, "profit"]) / cap
+                alo, ahi = boot(da.to_numpy(), draws, seed); dam = da.mean()
+            else:
+                dam = alo = ahi = np.nan
             acc = (h.loc[days, "n_fam_acc"] > 0).mean() if blk else np.nan
             missed = ((h.loc[days, "n_fam_acc"] == 0) & (b.loc[days, "profit"] > 0)).mean() if blk else np.nan
             out.append(dict(set=label, zone=z, arch=a, format=f, days=len(days),
                             k_su=float(h.k_su.iloc[0]), profit=pm.mean(), d=d.mean(), lo=lo, hi=hi,
                             acc=acc, missed=missed, unfilled_h=h.loc[days, "unfilled_h"].mean(),
                             retraded=h.loc[days, "dev_mwh"].mean(), p5=float(np.percentile(pm, 5)),
-                            bench=bf, ds=dsm, slo=slo, shi=shi))
+                            bench=bf, ds=dsm, slo=slo, shi=shi, da=dam, alo=alo, ahi=ahi))
     return pd.DataFrame(out)
 
 
@@ -94,7 +118,7 @@ def thermal_grid(E, draws, seed):
         cap = float(g.cap_mw.iloc[0])
         mc = g[g.format == "hourly_mc"].set_index("day").profit
         ac = g[g.format == "hourly_ac"].set_index("day").profit
-        for f in (["exclusive", "block"] if ar == "CCGT" else ["linked", "block"]):
+        for f in CAND[ar]:
             h = g[g.format == f].set_index("day").profit
             days = sorted(set(h.index) & set(mc.index) & set(ac.index))
             dm = (h.loc[days] - mc.loc[days]) / cap; da = (h.loc[days] - ac.loc[days]) / cap
@@ -112,7 +136,10 @@ def main():
     assert a.draws >= 10000
     cal, ev = pd.read_csv(a.cal), pd.read_csv(a.eval)
     assert not set(cal.day) & set(ev.day), "calibration and evaluation days overlap"
+    if "nl_scale" not in cal:
+        cal["nl_scale"] = 1.0
     kmap = calibrate(cal)
+    cpick = cal_pick(cal, kmap)
     E = pick(ev, kmap)
     if "nl_scale" not in E:
         E["nl_scale"] = 1.0
@@ -138,7 +165,7 @@ def main():
     show(pen_t, "SENSITIVITY: re-traded MWh cost 10 €/MWh")
     show(su_t, "SENSITIVITY: true start-up cost × 0.5 (k_su recalibrated)")
     print("\n### THERMAL SENSITIVITY: true no-load × start-up cost (k_su recalibrated per cell on CAL; ×1.5 = stress)")
-    print("Fixed structure per archetype (CCGT exclusive, COAL linked; plain block shown too). Δ €/MW-day [90%].")
+    print("All eligible structures per cell (the report picks one per cell on CAL days: cal_pick in the JSON). Δ €/MW-day [90%].")
     print("| zone | arch | format | no-load | start-up | vs hourly_mc | vs hourly_ac | hourly_mc profit | hourly_ac profit |")
     print("|---|---|---|---|---|---|---|---|---|")
     for r in grid.itertuples():
@@ -151,7 +178,8 @@ def main():
     if a.json:
         json.dump({"kmap": {"|".join(map(str, k)): v for k, v in kmap.items()},
                    "main": main_t.to_dict("records"), "pen10": pen_t.to_dict("records"),
-                   "su05": su_t.to_dict("records"), "q15": q15.to_dict("records"), "thermal_grid": grid.to_dict("records")}, open(a.json, "w"), indent=1)
+                   "su05": su_t.to_dict("records"), "q15": q15.to_dict("records"), "thermal_grid": grid.to_dict("records"),
+                   "cal_pick": {"|".join(map(str, k)): v for k, v in cpick.items()}}, open(a.json, "w"), indent=1)
 
 
 if __name__ == "__main__":
