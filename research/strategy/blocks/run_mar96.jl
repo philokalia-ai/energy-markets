@@ -7,6 +7,8 @@ include(joinpath(pkgdir(Euphemia), "src", "strategy", "StrategyHarness.jl")); us
 include(joinpath(pkgdir(Euphemia), "src", "strategy", "formats.jl")); using .StrategyFormats
 include(joinpath(pkgdir(Euphemia), "src", "strategy", "CompanyScore.jl")); using .CompanyScore
 import Euphemia.MarketOrders: MarketOrder, LinkedHourlyOrder
+# carve reference = SRMC × 1.1, used in rounds 1-2; was the (inert) DEFAULT_MARKUP_FACTOR, deleted on main by #481
+const CARVE_REF_SRMC_MULT = 1.1
 const SF = StrategyFormats
 const ROOT = joinpath(homedir(), "armada/em-team/strategy/runs")
 StrategyHarness.CACHE[] = joinpath(ROOT, "baseline96")
@@ -26,7 +28,7 @@ function main()
         inp = JSON.parsefile(joinpath(ROOT, "st-blocks/inputs/$day.json"))
         for arch in ("CCGT", "COAL"), z in ZONES[arch], s in sizes
             a = scale(archetype(arch, z; ttf=inp["ttf"], eua=inp["eua"]), s)
-            ref = a.srmc * Euphemia.MPCC.DEFAULT_MARKUP_FACTOR
+            ref = a.srmc * CARVE_REF_SRMC_MULT
             carve = [Carve(z, a.pmax, 0.5 * a.srmc, 2.0 * ref; ref=ref)]
             for fmt in ("hourly_mc", "block", "mar_full")
                 key = "$z|$arch|$fmt|1.0|1.0"

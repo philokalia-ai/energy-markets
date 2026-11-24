@@ -1,13 +1,15 @@
 # st-blocks with impact: re-clear our baseline book of D with the company's orders (formats × sizes).
 # usage: jl.sh imp research/strategy/blocks/run_impact.jl DAYS.txt OUT.csv KMAP.json [ARCHS] [SIZES]
 #   KMAP.json: the scorer's calibrated k_su (score_pt.py --json, from CAL days only).
-# Thermal / hydro assets REPLACE the same MW of baseline supply (Carve, ref = SRMC × DEFAULT_MARKUP_FACTOR, the
+# Thermal / hydro assets REPLACE the same MW of baseline supply (Carve, ref = SRMC × CARVE_REF_SRMC_MULT = 1.1, the
 # book's own bid for such a unit / the water value); storage is added on top (no carve). Others' bids are the
 # baseline book (short-run residual demand; pass-2 anchors not re-run).
 using Euphemia, Dates, JSON, Printf, Serialization
 include(joinpath(pkgdir(Euphemia), "src", "strategy", "StrategyHarness.jl")); using .StrategyHarness
 include(joinpath(pkgdir(Euphemia), "src", "strategy", "formats.jl")); using .StrategyFormats
 import Euphemia.MarketOrders: MarketOrder, SimpleOrder, LinkedHourlyOrder
+# carve reference = SRMC × 1.1, used in rounds 1-2; was the (inert) DEFAULT_MARKUP_FACTOR, deleted on main by #481
+const CARVE_REF_SRMC_MULT = 1.1
 const SF = StrategyFormats
 const ROOT = joinpath(homedir(), "armada/em-team/strategy/runs")
 StrategyHarness.RD_CACHE[] = joinpath(ROOT, "st-blocks/rd")
@@ -61,7 +63,7 @@ function main()
             a0 = archetype(String(arch), z; ttf=inp["ttf"], eua=inp["eua"], wv=sum(F) / 24)
             a = scale(a0, s)
             carve = if a isa SF.Thermal
-                ref = a.srmc * Euphemia.MPCC.DEFAULT_MARKUP_FACTOR
+                ref = a.srmc * CARVE_REF_SRMC_MULT
                 [Carve(z, a.pmax, 0.5 * a.srmc, 2.0 * ref; ref=ref)]
             elseif a isa SF.Hydro
                 [Carve(z, a.p, 0.5 * a.wv, 2.0 * a.wv; ref=a.wv)]
