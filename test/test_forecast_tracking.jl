@@ -94,8 +94,8 @@ include(joinpath(@__DIR__, "..", "bin", "forecast_common.jl"))
         prev = Dict(DateTime(2026, 7, 12, h) => 100.0 + h for h in 0:23)
         curr = Dict(DateTime(2026, 7, 13, h) => 200.0 + h for h in 0:20)
 
-        st = stitch_market_day(d, prev, curr)
-        @test isempty(st.missing_hours)
+        st = stitch_market_day(d, prev, curr; res_minutes=60)
+        @test isempty(st.missing_slots)
         @test length(st.stitched) == 24
         @test length(st.expected) == 24
         # head: last 3 hours of the prev UTC-day clear
@@ -108,23 +108,53 @@ include(joinpath(@__DIR__, "..", "bin", "forecast_common.jl"))
         @test !haskey(st.stitched, DateTime(2026, 7, 12, 20))
         @test !haskey(st.stitched, DateTime(2026, 7, 13, 21))
 
-        # a missing hour inside the window → refusal signal (missing_hours named)
+        # a missing hour inside the window → refusal signal (missing_slots named)
         curr_short = copy(curr)
         delete!(curr_short, DateTime(2026, 7, 13, 5))
-        st2 = stitch_market_day(d, prev, curr_short)
-        @test st2.missing_hours == [DateTime(2026, 7, 13, 5)]
+        st2 = stitch_market_day(d, prev, curr_short; res_minutes=60)
+        @test st2.missing_slots == [DateTime(2026, 7, 13, 5)]
         @test length(st2.stitched) == 23
 
         # missing head (prev clear truncated) is also caught
-        st3 = stitch_market_day(d, Dict{DateTime,Float64}(), curr)
-        @test length(st3.missing_hours) == 3
-        @test st3.missing_hours[1] == DateTime(2026, 7, 12, 21)
+        st3 = stitch_market_day(d, Dict{DateTime,Float64}(), curr; res_minutes=60)
+        @test length(st3.missing_slots) == 3
+        @test st3.missing_slots[1] == DateTime(2026, 7, 12, 21)
 
         # prev never contributes hours that belong to the curr UTC day, even if
         # both clears carry them (curr wins by window partition, values differ)
         prev_overlap = merge(prev, Dict(DateTime(2026, 7, 13, 0) => -1.0))
-        st4 = stitch_market_day(d, prev_overlap, curr)
+        st4 = stitch_market_day(d, prev_overlap, curr; res_minutes=60)
         @test st4.stitched[DateTime(2026, 7, 13, 0)] == 200.0
+    end
+
+    @testset "stitch_market_day at 15 min (cv46)" begin
+        @test length(expected_market_day_slots(Date(2026, 7, 13), 15)) == 96
+        @test length(expected_market_day_slots(Date(2026, 3, 29), 15)) == 92
+        @test length(expected_market_day_slots(Date(2026, 10, 25), 15)) == 100
+        @test expected_market_day_slots(Date(2026, 7, 13), 60) == expected_market_day_hours(Date(2026, 7, 13))
+        @test_throws ArgumentError expected_market_day_slots(Date(2026, 7, 13), 7)
+        d = Date(2026, 7, 13)           # window 2026-07-12T21:00 → 2026-07-13T21:00
+        q(day, lo, hi) = Dict(DateTime(day) + Minute(15k) => 1000.0 * Dates.day(day) + k for k in lo:hi)
+        prev = q(Date(2026, 7, 12), 0, 95)
+        curr = q(Date(2026, 7, 13), 0, 83)            # local tail 21:00–23:45 unpublished
+        st = stitch_market_day(d, prev, curr; res_minutes=15)
+        @test isempty(st.missing_slots)
+        @test length(st.stitched) == 96 == length(st.expected)
+        @test st.stitched[DateTime(2026, 7, 12, 21, 0)] == 12084.0   # head from prev
+        @test st.stitched[DateTime(2026, 7, 12, 23, 45)] == 12095.0
+        @test st.stitched[DateTime(2026, 7, 13, 20, 45)] == 13083.0  # body from curr
+        # one missing quarter → refused, and named
+        short = copy(curr); delete!(short, DateTime(2026, 7, 13, 5, 30))
+        st2 = stitch_market_day(d, prev, short; res_minutes=15)
+        @test st2.missing_slots == [DateTime(2026, 7, 13, 5, 30)]
+        # an HOURLY clear does not pass the quarter-hour completeness check
+        hprev = Dict(DateTime(2026, 7, 12, h) => 1.0 for h in 0:23)
+        hcurr = Dict(DateTime(2026, 7, 13, h) => 2.0 for h in 0:20)
+        st3 = stitch_market_day(d, hprev, hcurr; res_minutes=15)
+        @test length(st3.missing_slots) == 72
+        # off-grid stamps never enter the stitched day
+        st4 = stitch_market_day(d, merge(prev, Dict(DateTime(2026, 7, 12, 22, 7) => -1.0)), curr; res_minutes=15)
+        @test !haskey(st4.stitched, DateTime(2026, 7, 12, 22, 7)) && length(st4.stitched) == 96
     end
 
     @testset "hour-level write guard" begin
@@ -250,20 +280,19 @@ include(joinpath(@__DIR__, "..", "bin", "forecast_common.jl"))
         @test rr1 == rr2
     end
 
-    @testset "hourly_prices" begin
-        # hourly book → identity
+    @testset "slot_prices" begin
+        # hourly book → one entry per hour
         hourly = Dict("20260712-0000" => 50.0, "20260712-0100" => 60.0)
-        h = hourly_prices(hourly)
-        @test h[DateTime(2026, 7, 12, 0)] == 50.0
-        @test h[DateTime(2026, 7, 12, 1)] == 60.0
-        @test length(h) == 2
+        h = slot_prices(hourly)
+        @test h == Dict(DateTime(2026, 7, 12, 0) => 50.0, DateTime(2026, 7, 12, 1) => 60.0)
 
-        # 15-minute book → hourly mean
+        # 15-minute book → every quarter kept, unchanged (no hourly averaging)
         quarter = Dict("20260712-0000" => 40.0, "20260712-0015" => 50.0,
                        "20260712-0030" => 60.0, "20260712-0045" => 70.0)
-        h = hourly_prices(quarter)
-        @test length(h) == 1
-        @test h[DateTime(2026, 7, 12, 0)] ≈ 55.0
+        h = slot_prices(quarter)
+        @test length(h) == 4
+        @test h[DateTime(2026, 7, 12, 0, 15)] == 50.0
+        @test h[DateTime(2026, 7, 12, 0, 45)] == 70.0
     end
 
     @testset "scoring math on a synthetic day" begin

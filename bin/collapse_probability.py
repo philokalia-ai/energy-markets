@@ -381,9 +381,21 @@ def live_baseline(live_dir, start, end):
             for t, sim, actual in zip(day["hours"], day["sim"], day["actual"]):
                 if sim is not None and actual is not None:
                     rows.append({"zone": doc["zone"], "t": pd.Timestamp(t).tz_convert(None),
-                                 "market_date": day["date"], "sim": sim, "actual_live": round(actual, 8),
+                                 "market_date": day["date"], "sim": sim, "actual_live": actual,
                                  "issued": day.get("prediction_made_utc"), "code_version": day["code_version"]})
-    return pd.DataFrame(rows).drop_duplicates(["zone", "t"], keep="first")
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return df
+    # One row per (zone, hour): a quarter-hour day (cv46, 96 slots) is averaged to the hour, so it
+    # weighs like an hourly day instead of 4x (review of #476 #6). Hourly days: one row per group,
+    # the mean is the value itself and the order is unchanged.
+    df["t"] = df["t"].dt.floor("h")
+    df = (df.groupby(["zone", "market_date", "t"], sort=False, as_index=False)
+            .agg(sim=("sim", "mean"), actual_live=("actual_live", "mean"),
+                 issued=("issued", "first"), code_version=("code_version", "first")))
+    df["actual_live"] = df["actual_live"].round(8)
+    df = df[["zone", "t", "market_date", "sim", "actual_live", "issued", "code_version"]]
+    return df.drop_duplicates(["zone", "t"], keep="first")
 
 
 def main():

@@ -700,6 +700,10 @@ table.book-table td {
 }
 .data-table th:first-child, .data-table td:first-child { text-align: left; }
 .data-table td.null { color: var(--text-muted); }
+/* quarter-hour day table: rows grouped by hour; the hourly Timestral cell spans its quarters */
+.data-table tr.hour-start td { border-top: 1px solid var(--baseline); }
+.data-table td.hour-span { vertical-align: middle; color: var(--series-tsfm); font-weight: 600; }
+.data-table.q15 tr:not(.hour-start) td:first-child { color: var(--text-secondary); }
 
 .scoreboard th.sortable { cursor: pointer; user-select: none; }
 .scoreboard th.sortable:hover { color: var(--heading); }

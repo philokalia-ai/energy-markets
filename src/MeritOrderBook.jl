@@ -32,9 +32,10 @@ import ..current_context, ..ctx_key, ..record_asof_status!, ..AGG_GEN_PUBLICATIO
 import ..GAS_PLANT_EFFICIENCY, ..GAS_EMISSION_FACTOR, ..GAS_VOM_COST
 import ..FLEXIBLE_FUEL_TYPES
 import ..cv45_on, .._gas_fuel_cost
+import ..Network: tx_outage_caps, tx_outage_atc_enabled   # cv46 P1 outage-capped export capability
 import ..MarketOrders: SimpleOrder, MarketOrder, LinkedHourlyOrder
 import ..MPCC: MPCCOrderBook
-import ..disaggregate_temporal_data, ..replicate_to_finer_resolution
+import ..disaggregate_temporal_data, ..replicate_to_finer_resolution, ..parse_resolution_to_minutes
 import ..OrderBookResult: AdjustedOrderBookResult, parse_timeslot_to_datetime
 
 """
@@ -74,6 +75,7 @@ include("merit_order/res_offers.jl")    # default-off, ex-ante RES support offer
 # exact pre-existing behaviour (guarded byte-identical).
 const BOOK_SINK = Ref{Union{Nothing,Function}}(nothing)
 
+include("merit_order/cv46_nordic_wv.jl") # cv46 P1 Nordic water value (unanchored reservoir-opportunity zones)
 include("merit_order/book_build.jl")    # create_merit_order_book — the merit-order book construction itself
 
 
