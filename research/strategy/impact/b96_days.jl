@@ -2,7 +2,7 @@
 using Euphemia, Dates
 configure_data_store!(backend=:duckdb, duckdb_path=ENV["EUPHEMIA_DUCKDB_PATH"], read_only=true)
 include(joinpath(pkgdir(Euphemia), "src", "strategy", "StrategyHarness.jl")); using .StrategyHarness
-StrategyHarness.CACHE[] = joinpath(homedir(), "armada", "em-team", "strategy", "runs", "st-impact", "b96")
+StrategyHarness.CACHE[] = joinpath(homedir(), "armada", "em-team", "strategy", "runs", "st-impact", get(ENV, "VARIANT", "") == "" ? "b96" : ENV["VARIANT"])
 println("clear_resolution_minutes=15 CACHE=", StrategyHarness.CACHE[], " commit=", readchomp(`git -C $(pkgdir(Euphemia)) rev-parse --short HEAD`))
 for d in Date.(split(ENV["DAYS"], ","))
     isfile(baseline_path(d)) && (println("B96 $d CACHED"); continue)

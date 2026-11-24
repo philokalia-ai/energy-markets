@@ -44,6 +44,14 @@ function realised96(day)
     return out
 end
 
+# At-the-money tie-break: st-blocks' price-taker rule accepts an order exactly at the money; a clear facing a leg
+# priced exactly at the plateau price may leave it unaccepted. Every leg is moved EPS €/MWh into the money (supply
+# down, demand up) before the re-clear and the scoring alike.
+const EPS = 0.01
+nudge(o::SimpleOrder) = SimpleOrder(o.type, o.type == :supply ? o.price - EPS : o.price + EPS, o.quantity, o.zone, o.date_time, o.resolution_code)
+nudge(o::LinkedHourlyOrder) = LinkedHourlyOrder(o.type, o.type == :supply ? o.price - EPS : o.price + EPS, o.quantity, o.zone, o.date_time,
+    o.resolution_code, o.family, o.family_budget_mwh)
+
 """60-minute products on the 96-step clear. A 60-min order mapped to a 96-period book would sit in its first quarter
 only, so: a 60-min SimpleOrder becomes a divisible 60-min product = a BLKM family (MAR 0) of its 4 quarters at the same
 price and volume (one acceptance ratio for the hour, in the money on the hour's average); a 60-min block member is
@@ -88,7 +96,7 @@ for day in days
         for arch in ("BESS", "PSP"), s in (1.0, 5.0)
             a = scale(archetype(arch, z; ttf=inp["ttf"], eua=inp["eua"], wv=sum(F24) / 24), s)
             for fmt in ("hourly_oc", "exclusive"), res in (60, 15)
-                company = res == 60 ? bids(a, fmt, F24, day; res=60) : bids(a, fmt, F96, day; res=15)
+                company = nudge.(res == 60 ? bids(a, fmt, F24, day; res=60) : bids(a, fmt, F96, day; res=15))
                 t0 = time()
                 c96, famof = to96(company)
                 r = try
