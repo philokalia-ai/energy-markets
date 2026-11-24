@@ -1,9 +1,9 @@
 name: Daily ex-ante forecast
-# ceres finds the run it dispatched by this name (its dispatch_id); the scheduled 06:30 run has none.
-run-name: "Daily ex-ante forecast ${{ github.event.inputs.run_profile || (github.event_name == 'schedule' && 'pregate') || 'manual' }} ${{ github.event.inputs.dispatch_id }}"
+# ceres finds the run it dispatched by this name (its dispatch_id); the 06:30 k3s dispatch has none.
+run-name: "Daily ex-ante forecast ${{ github.event.inputs.run_profile || 'pregate' }} ${{ github.event.inputs.dispatch_id }}"
 
-# PRE-GATE 7-LEAD RUN (Aug 2026, docs/experiments/pregate-7lead.md): a 06:30 UTC
-# cron produces the WEATHER (ex-ante) track for ALL leads D+1..D+7 BEFORE the
+# PRE-GATE 7-LEAD RUN (Aug 2026, docs/experiments/pregate-7lead.md): the 06:30 UTC
+# run produces the WEATHER (ex-ante) track for ALL leads D+1..D+7 BEFORE the
 # 12:00 CET auction. Lead-1 (tomorrow) is therefore a genuine PRE-GATE forecast.
 # At 06:30 tomorrow's Day-ahead ATC has not yet published, so the run sets
 # EUPHEMIA_FORECAST_PREGATE=true (the network build degrades to the cv27
@@ -16,34 +16,24 @@ run-name: "Daily ex-ante forecast ${{ github.event.inputs.run_profile || (github
 # may retire it once the pre-gate weather track is trusted. This workflow also
 # stays the manual/debug runner (workflow_dispatch) with the HiGHS default.
 # ONE trigger per slot (2026-11-24): the 06:30 pre-gate slot is fired only by the k3s CronJob
-# gh-energy-markets-dispatch-0630 (exact time; inputs pregate=true). The GitHub schedule that ran the same slot a
+# gh-energy-markets-dispatch-0630 (exact time; run_profile=pregate). The GitHub schedule that ran the same slot a
 # few minutes later (and found every slice frozen) is removed. ceres dispatches lead1/morning/entsoe.
 on:
   workflow_dispatch:
     inputs:
-      max_lead_days:
-        description: "Furthest lead time to attempt (days ahead of today UTC)"
-        required: false
-        default: "7"
-        type: string
       force_rerun:
         description: "Rewrite existing (market_date, lead_days, code_version) slices"
         required: false
         default: false
         type: boolean
-      pregate:
-        description: "Run the PRE-GATE 7-lead weather-track profile (same as the 06:30 cron) — for manual recovery when the schedule is delayed/skipped"
-        required: false
-        default: false
-        type: boolean
       # ceres (option a, 2026-11-24): ceres keeps the ETL pulls and its lead-1 retry loop and dispatches ONE
       # attempt of this workflow per pull, then reads the run's `presence` artifact (never Postgres).
-      #   pregate  06:30 weather track, leads 2..7 before the gate (the cron's profile)
+      #   pregate  06:30 weather track, leads 2..7 before the gate (the k3s 06:30 dispatch; also the default)
       #   lead1    ceres jao_pregate (08:55 / 09:55): weather lead 1 only, pre-gate, JAO-aware (require_jao)
       #   morning  ceres 08:00: weather track, leads 1..7 + the persistence horizon
       #   entsoe   ceres 12:30 / 17:30 / 19:30: reference (entsoe) track, leads 1..7 + the persistence horizon
       run_profile:
-        description: "Run profile: pregate | lead1 | morning | entsoe (empty = manual, uses max_lead_days)"
+        description: "Run profile: pregate | lead1 | morning | entsoe (empty = pregate)"
         required: false
         default: ""
         type: string
@@ -156,19 +146,11 @@ jobs:
           EUPHEMIA_RESULTS_DB: ${{ env.RUN_DIR }}/results.duckdb
           EUPHEMIA_RESULTS_WRITABLE: "true"
         run: |
-          PROFILE="${{ github.event.inputs.run_profile }}"
-          [ -z "$PROFILE" ] && [ "${{ github.event.inputs.pregate }}" = "true" ] && PROFILE="pregate"
-          if [ -n "$PROFILE" ]; then
-            # the profile's environment (one source with measure-duckdb-path.yml); the pre-gate run degrades the
-            # network to the demonstrated-capability fallback (tomorrow's Day-ahead ATC is not published yet)
-            eval "$(bash bin/forecast_profile_env.sh "$PROFILE" "${{ github.event.inputs.require_jao || 'false' }}")" || exit 1
-            FORCE_RERUN="${{ github.event.inputs.force_rerun || 'false' }}"
-          else
-            MAX_LEAD_DAYS="${{ github.event.inputs.max_lead_days }}"
-            FORCE_RERUN="${{ github.event.inputs.force_rerun }}"
-            INPUT_MODE="${INPUT_MODE:-entsoe}"
-            EUPHEMIA_FORECAST_PREGATE="${EUPHEMIA_FORECAST_PREGATE:-false}"
-          fi
+          PROFILE="${{ github.event.inputs.run_profile || 'pregate' }}"
+          # the profile's environment (one source with measure-duckdb-path.yml); the pre-gate run degrades the
+          # network to the demonstrated-capability fallback (tomorrow's Day-ahead ATC is not published yet)
+          eval "$(bash bin/forecast_profile_env.sh "$PROFILE" "${{ github.event.inputs.require_jao || 'false' }}")" || exit 1
+          FORCE_RERUN="${{ github.event.inputs.force_rerun || 'false' }}"
 
           OPTIMIZER="$FORECAST_OPTIMIZER"
           SKIP_CLEAR="$FORECAST_SKIP_CLEAR"
@@ -181,7 +163,7 @@ jobs:
           export OPTIMIZER MAX_LEAD_DAYS MIN_LEAD_DAYS FORCE_RERUN SKIP_CLEAR INPUT_MODE EUPHEMIA_FORECAST_PREGATE
           [ -n "${EUPHEMIA_REQUIRE_JAO:-}" ] && export EUPHEMIA_REQUIRE_JAO
           # later steps (horizon, presence) need the resolved profile and track
-          { echo "RUN_PROFILE=${PROFILE:-$([ "${{ github.event_name }}" = "schedule" ] && echo pregate || echo manual)}"
+          { echo "RUN_PROFILE=$PROFILE"
             echo "FORECAST_INPUT_MODE=$INPUT_MODE"; } >> "$GITHUB_ENV"
 
           # Crash-retry (issue #182: HiGHS segfaults ~3-4% of decomposed
@@ -365,7 +347,7 @@ jobs:
   tsfm-overlay:
     needs: daily-forecast
     # the pre-gate overlay belongs to the 06:30 pre-gate run only (not to ceres' lead1/morning/entsoe dispatches)
-    if: ${{ always() && needs.daily-forecast.result == 'success' && (github.event_name == 'schedule' || github.event.inputs.pregate == 'true' || github.event.inputs.run_profile == 'pregate') }}
+    if: ${{ always() && needs.daily-forecast.result == 'success' && (github.event.inputs.run_profile || 'pregate') == 'pregate' }}
     runs-on: energy-markets-k8s
     timeout-minutes: 150
     env:
