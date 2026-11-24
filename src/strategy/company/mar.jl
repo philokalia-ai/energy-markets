@@ -7,6 +7,7 @@ struct MarFull <: CompanyStrategy
     MarFull(k_su=1.0, r=NaN) = new(_k_ok(k_su), Float64(r))
 end
 label(::MarFull) = "mar_full"
+cost_reflective(::MarFull) = true
 function offers(s::MarFull, c::CompanyCtx{Thermal})
     t = _th(c); a = t.a; o = MarketOrder[]; fixc = _fixc(a, s.k_su, t.dt)
     r = a.pmin / a.pmax

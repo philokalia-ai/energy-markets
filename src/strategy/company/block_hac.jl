@@ -5,6 +5,7 @@ struct BlockHAC <: CompanyStrategy
     BlockHAC(k_su=1.0) = new(_k_ok(k_su))
 end
 label(::BlockHAC) = "block_hac"
+cost_reflective(::BlockHAC) = true
 function offers(s::BlockHAC, c::CompanyCtx{Thermal})
     t = _th(c); a = t.a; o = MarketOrder[]; fixc = _fixc(a, s.k_su, t.dt)
     st, L, _ = best_window((c.F .- a.srmc) .* a.pmax .* t.dt, t.Ls, fixc)

@@ -6,6 +6,7 @@ struct HourlyAC <: CompanyStrategy
     HourlyAC(k_su=1.0) = new(_k_ok(k_su))
 end
 label(::HourlyAC) = "hourly_ac"
+cost_reflective(::HourlyAC) = true
 function offers(s::HourlyAC, c::CompanyCtx{Thermal})
     t = _th(c); a = t.a; o = MarketOrder[]; fixc = _fixc(a, s.k_su, t.dt)
     st, L, _ = best_window((c.F .- a.srmc) .* a.pmax .* t.dt, t.Ls, fixc)

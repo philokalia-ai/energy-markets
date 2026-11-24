@@ -8,6 +8,7 @@ struct Exclusive <: CompanyStrategy
     Exclusive(k_su=1.0, nx=5) = new(_k_ok(k_su), Int(nx))
 end
 label(::Exclusive) = "exclusive"
+cost_reflective(::Exclusive) = true
 function offers(s::Exclusive, c::CompanyCtx{Thermal})
     t = _th(c); a = t.a; o = MarketOrder[]; fixc = _fixc(a, s.k_su, t.dt)
     Lset = unique(round.(Int, range(first(t.Ls), t.T; length=s.nx)))

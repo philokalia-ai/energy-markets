@@ -3,6 +3,7 @@ LP dual μ_t (discharge μ_t/η_d, charge μ_t·η_c). Hydro: Pmax every period 
 PV+battery: PV at 0 €/MWh + the battery's legs. Retailer: shiftable energy bid hourly at the LP dual."""
 struct HourlyOC <: CompanyStrategy end
 label(::HourlyOC) = "hourly_oc"
+cost_reflective(::HourlyOC) = true
 function offers(s::HourlyOC, c::CompanyCtx{Storage})
     a = c.asset; T = length(c.F); dt = c.res / 60; z = a.zone; o = MarketOrder[]
     cc, d, μ = storage_lp(a, c.F; dt=dt); ec = sqrt(a.eta); ed = sqrt(a.eta)

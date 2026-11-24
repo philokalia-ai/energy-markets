@@ -6,6 +6,7 @@ struct Linked <: CompanyStrategy
     Linked(k_su=1.0) = new(_k_ok(k_su))
 end
 label(::Linked) = "linked"
+cost_reflective(::Linked) = true
 function offers(s::Linked, c::CompanyCtx{Thermal})
     t = _th(c); a = t.a; o = MarketOrder[]; fixc = _fixc(a, s.k_su, t.dt); dt = t.dt; F = c.F
     val = [(F[i] - a.srmc) * a.pmin * dt + max(0.0, F[i] - a.srmc) * (a.pmax - a.pmin) * dt for i in 1:t.T]
