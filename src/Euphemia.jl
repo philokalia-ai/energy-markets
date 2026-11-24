@@ -117,7 +117,9 @@ using .MeritOrderBook: create_merit_order_book, ZoneProfile, get_zone_profile,
     SWISS_PROFILE, AUSTRIA_PROFILE, BELGIUM_PROFILE,
     SLOVAKIA_PROFILE, SLOVENIA_PROFILE, DENMARK_PROFILE, SE3_PROFILE,
     ITALY_CNORTH_PROFILE, ITALY_NORTH_PROFILE,
-    with_profile, clear_net_imports_cache!, ZoneScenario, zone_scenario, is_empty_scenario
+    with_profile, clear_net_imports_cache!, ZoneScenario, zone_scenario, is_empty_scenario,
+    BiddingStrategy, MarketConduct, TranchesConduct, CompetitiveConduct, ShapeConduct, DayCtx, UnitCtx,
+    conduct_day_factors, offers!, offers
 
 # ===== EXPORTS =====
 # All module exports are centralized here following Julia best practices
@@ -173,6 +175,9 @@ export ZoneProfile, get_zone_profile, ZONE_PROFILES, SEE_PROFILE, SEE_IMPORT_BAC
 
 # Counterfactual scenario primitive for the multi-zone footprint path
 export ZoneScenario
+# pluggable market conduct (src/merit_order/conduct.jl; strategy/DESIGN-pluggable.md)
+export BiddingStrategy, MarketConduct, TranchesConduct, CompetitiveConduct, ShapeConduct, DayCtx, UnitCtx,
+    conduct_day_factors, offers!, offers
 
 # Bidding strategy functionality
 

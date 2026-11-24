@@ -1432,6 +1432,9 @@ Base.@kwdef struct ZoneScenario
     fleet_modifier::Union{Nothing,Function} = nothing
     load_fill::Union{Nothing,Function} = nothing
     res_fill::Union{Nothing,Function} = nothing
+    # Market conduct plug-in (strategy/DESIGN-pluggable.md): how this zone's flexible supply is priced from cost.
+    # `nothing` = the default `TranchesConduct()` (byte-identical to the code before the plug-in).
+    conduct::Union{Nothing,MarketConduct} = nothing
 end
 
 """
@@ -1445,7 +1448,8 @@ is_empty_scenario(::Nothing) = true
 is_empty_scenario(s::ZoneScenario) =
     s.load_modifier === nothing && s.renewable_modifier === nothing &&
     s.extra_orders === nothing && s.strategist === nothing &&
-    s.fleet_modifier === nothing && s.load_fill === nothing && s.res_fill === nothing
+    s.fleet_modifier === nothing && s.load_fill === nothing && s.res_fill === nothing &&
+    s.conduct === nothing
 
 """
     zone_scenario(scenario, zone) -> Union{Nothing,ZoneScenario}

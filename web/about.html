@@ -122,8 +122,8 @@
     we are trying to measure. One qualification: the bidding form carries a declared
     <em>conduct layer</em> (the upper tranche ladder, scarcity/peak markups) chosen with price
     error in view, so the residual is measured against a benchmark that already contains
-    declared conduct. Switching it off (<code>EUPHEMIA_CONDUCT_LAYER=off</code>) is a
-    sensitivity check, not an identified competitive price.
+    declared conduct. Replacing it with the competitive conduct (every tranche at cost,
+    <code>CompetitiveConduct()</code>) is a sensitivity check, not an identified competitive price.
   </p>
 
   <h2 id="two-layers">The two layers — what we fit, what we construct</h2>
@@ -390,7 +390,7 @@
       <g class="mm-node mm-part" tabindex="0" data-tip="&lt;b&gt;Partial.&lt;/b&gt; Pumped storage is energy-limited: each zone's fleet gets a daily energy budget from its own last 14 days of output, a full-day pass over the coupled footprint places it in the most valuable hours, and the hourly clear prices it. Batteries still offer as flexible supply. Pumping demand is not bid (see Charging), so this is not a full charge/discharge optimization.">
         <ellipse cx="370" cy="490" rx="54" ry="22"/><text x="370" y="486">Storage:</text><text x="370" y="500">Discharging</text>
       </g>
-      <g class="mm-node mm-ok" tabindex="0" data-tip="&lt;b&gt;Implemented.&lt;/b&gt; The merit-order book: SRMC bids, must-run discounts for the cheapest units, scarcity uplift when the margin over peak is thin. Strategy is a competitive cost form plus a declared, price-informed scarcity/peak markup (the conduct layer, switchable off as a sensitivity check); the gap to reality is the finding.">
+      <g class="mm-node mm-ok" tabindex="0" data-tip="&lt;b&gt;Implemented.&lt;/b&gt; The merit-order book: SRMC bids, must-run discounts for the cheapest units, scarcity uplift when the margin over peak is thin. Strategy is a competitive cost form plus a declared, price-informed scarcity/peak markup (the conduct layer, replaceable by a competitive conduct as a sensitivity check); the gap to reality is the finding.">
         <ellipse cx="400" cy="352" rx="42" ry="20"/><text x="400" y="357">Producers</text>
       </g>
       <g class="mm-node mm-no" tabindex="0" data-tip="&lt;b&gt;Not implemented — deliberately.&lt;/b&gt; Speculative (virtual) selling is excluded: the model is a competitive counterfactual, and strategic arbitrage bidding is part of what it measures, not what it assumes.">

@@ -55,6 +55,16 @@ println()
     end
 
     # -------------------------------------------------------------------------
+    # Market conduct plug-ins (src/merit_order/conduct.jl)
+    # (self-contained: hand-built contexts, no database) — TranchesConduct is
+    # bitwise the pre-plug-in ladder, CompetitiveConduct the
+    # deleted EUPHEMIA_CONDUCT_LAYER=off arm, ShapeConduct level-neutral
+    # -------------------------------------------------------------------------
+    @testset "Market Conduct" begin
+        include(joinpath(@__DIR__, "test_market_conduct.jl"))
+    end
+
+    # -------------------------------------------------------------------------
     # DuckDB query-path performance changes
     # (self-contained: synthetic flows extract, no Postgres) — proves the
     # day-level physical-flow cache is behavior-identical to the original SQL
@@ -165,6 +175,9 @@ println()
         include(joinpath(@__DIR__, "test_tsfm_backfill_scores.jl"))
         # Quarter-hour (cv46) days in the exporters: per-day resolution, replication, actuals rule. Pure.
         include(joinpath(@__DIR__, "test_quarter_exports.jl"))
+        # Weekly-persistence horizon: proxy completeness at the source's own resolution (cv46). Own process:
+        # bin/horizon_forecast.jl defines script consts.
+        @test success(`$(Base.julia_cmd()) --startup-file=no --project=$(dirname(Base.active_project())) $(joinpath(@__DIR__, "test_horizon_zone_complete.jl"))`)
     end
 
     @testset "Forecast Context (as-of contract)" begin
