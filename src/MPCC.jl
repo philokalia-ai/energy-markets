@@ -65,9 +65,6 @@ MPCCOrderBook(orders, nodes, periods, price_limits, network_topology) =
     MPCCOrderBook(orders, nodes, periods, price_limits, network_topology,
                   Dict{Tuple{String,String},Float64}())
 
-# Configuration constants
-const DEFAULT_MARKUP_FACTOR = 1.1
-
 # Timeslot id format ("20180624-0015"). A compile-time DateFormat: a format *string* is parsed into a
 # DateFormat on every call, which made this function a measurable share of the MPCC build (3 calls per
 # order per solve; ~300k calls per 96-step pass).

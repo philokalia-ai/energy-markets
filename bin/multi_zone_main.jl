@@ -14,7 +14,6 @@
 # - OPTIMIZER: Optimizer to use (highs; the only solver)
 # - ORDER_METHOD: Order generation method (uc_based/alternative)
 # - FORCE_RERUN: Force UC re-solve, bypassing cache (true/false)
-# - MARKUP_FACTOR: Price markup factor for supply bids (default: 1.1)
 
 using Euphemia, Dates
 
@@ -24,7 +23,6 @@ end_date = Date(ENV["END_DATE"])
 optimizer = ENV["OPTIMIZER"]
 order_method = Symbol(ENV["ORDER_METHOD"])
 force_rerun = parse(Bool, get(ENV, "FORCE_RERUN", "false"))
-markup_factor = parse(Float64, get(ENV, "MARKUP_FACTOR", "1.1"))
 # Comma-separated zone list; empty = auto-discover from transfer capacity
 # data. Auto-discovery misses RS (no implicit-coupling borders, so it never
 # appears in ATC data) and pulls in zones without validated order books, so
@@ -36,7 +34,6 @@ println("📅 Date range: $start_date to $end_date")
 println("⚖️ Optimizer: $optimizer")
 println("📋 Order method: $order_method")
 println("🔄 Force rerun: $force_rerun")
-println("💹 Markup factor: $markup_factor")
 println()
 
 try
@@ -49,7 +46,6 @@ try
         save_to_db=true,
         skip_existing=true,
         force_rerun=force_rerun,
-        markup_factor=markup_factor,
         silent=true
     )
 
