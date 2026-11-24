@@ -539,14 +539,15 @@ Quarter rows were averaged to the hour. Arm A = the v45 default.
   |---|---|---|
   | P1 alone (S-P1, hourly) | −0.72 [−1.01, −0.44] | passes every rule clause; Nordic north −3.87, Nordic south −0.68, Baltics −0.95, worst Italy +0.03 |
   | G alone (96 steps) | −0.21 [−0.26, −0.16] | every region improves (Iberia −0.69); shape −0.29; fails only pooled ≤ −0.50 |
-  | **P1+G (shipped)** | **−0.935 [−1.24, −0.64]** | passes all 7 rule clauses; every region better than A. The parts add up: S-P1 −0.720 + G −0.210 = −0.930, so the interaction is −0.005 |
+  | **P1+G (shipped, this code, no env)** | **−0.935 [−1.24, −0.64]** | passes all 7 rule clauses; every region better than A. The parts add up: S-P1 −0.720 + G −0.210 = −0.930, so the interaction is −0.005 |
 
 - **Fresh 44 days** (`perf-96/days.txt`, frozen 2026-11-23T09:27Z, 41,160 cells, no overlap with the 48):
 
   | arm | ΔMAE vs A [90 %] | note |
   |---|---|---|
   | G alone | −0.27 [−0.32, −0.22] | all 7 regions improve; shape −0.34; pre-MTU −0.15 |
-  | **P1+G** | **−1.11 [−1.43, −0.81]** | passes all 7 rule clauses; −0.84 beyond G alone |
+  | P1 alone (hourly S-P1 record) | −0.83 | |
+  | **P1+G (this code, no env)** | **−1.105 [−1.43, −0.81]** | passes all 7 rule clauses; −0.84 beyond G alone; better than both parts in every region (−0.827 + −0.270 = −1.096) |
 
 - **P1 diagnostics (48 days).**
   - In the 8-component stack, removing P1 costs +0.68 [+0.39, +0.99]: NO4 −6.1, SE1 −5.2, SE2 −3.8, FI −2.7
@@ -555,14 +556,21 @@ Quarter rows were averaged to the hour. Arm A = the v45 default.
   - When v46 prices below the floor, the actual is also below it 95 % of the time.
 - **Combined check** (Timestral + physics from 2026-07-01, scored 2026-09-01..11-14 vs combined A):
   - **P1 hourly:** MAE −0.151 [−0.254, −0.054], rMAE 0.5656 → 0.5616.
-  - **P1+G at 96 steps** (Timestral on the hourly mean of the quarters), together with the 96-step record backfill:
-    pending, added before merge.
-- **Identity** (10-19 and 11-13):
-  - The PR with no env equals the P1+G arm at research b85721c: 7,488/7,488 cells, same table bytes.
+  - **P1+G at 96 steps** (this code's 96-step record; Timestral on the hourly mean of the quarters; 75 days,
+    70,095 cells): MAE −0.178 [−0.291, −0.069], rMAE 0.5656 → 0.5609 (−0.83 %); Italy −0.007 [−0.076, +0.060],
+    neutral; physics alone rMAE 1.109 → 1.052.
+- **Identity.** All the numbers above for P1+G are this code's own output (no env).
+  - Against the research P1+G arm (b85721c, the joint 96-step day): identical except a tie class of 50 quarter cells
+    over 96 days (29/194,496 on the 48+4 days, 21/164,640 on the fresh 44; 9 single quarters, |Δ| ≤ 3.3), where the
+    per-period and the joint-day clear pick different optima. Scores agree to 3 decimals.
   - With P1 forced off, it equals A.
   - Warm workers equal cold ones.
   - Main's per-period path at 15 min with flat storage equals research G: 3744/3744 (cb-joint mq96).
-  - The PR's prices vs the 96-step backfill: pending, added before merge.
+  - The 96-step record backfill is this code's output: bit-identical to the scored runs on the 28 shared days.
+  - The #477 review fixes change no record price (pre-fix 0d954bc == 74d9fc3, 14,976/14,976 on the tie days).
+  - Forecast mode (offline lead-1 retro path, weather inputs, 6 days × 39 zones): every zone-day written at 96 and
+    at 60 min, no quarter spikes, P1 inputs complete. All forecast inputs are hourly today, so forecast mode at 96
+    gives flat hours (about +40 % wall).
 - **Known weak spots.**
   - P1 is flat in 2026H1 (+0.09 on NO4+SE1+SE2): with h ≈ 1, the pass-2 X inherits the pass-1 spring over-pricing
     and has no snowmelt/inflow signal. That is the follow-up.
@@ -573,7 +581,10 @@ Quarter rows were averaged to the hour. Arm A = the v45 default.
 restarts the out-of-sample clock from its adoption date.
 - The scoreboard's since-freeze window is cv ≥ 46 from `FREEZE_DATE` in `bin/scoreboard_windows.jl`, set to the merge
   day. The site label in `web/app.js` and `web/about.html` follows.
-- The record is re-backfilled at 96 steps with P1+G, 2024-05-23..2026-11-14 (pending, added before merge).
+- The record is re-backfilled at 96 steps with this code (no env), 2024-05-23..2026-11-14: 905/906 days; 2024-11-17
+  is refused for data (LT's day-ahead load forecast lacks 22:00 UTC in the extract; it is also absent from the hourly
+  v45 record). 0 refusals after 2025-10-01. The DuckDB results are kept offline (em-team `cv46-physics/runs/cp-runs/
+  bf96-PR-74d9fc3`); nothing was written to Postgres.
 
 **DuckDB rule.** v46 adds no direct-Postgres code.
 - P1's reads (`entsoe.physical_flows`, `aggregated_hydro_storage_filling_rate`, `aggregated_generation_per_type`,
