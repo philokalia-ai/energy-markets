@@ -39,11 +39,20 @@
 #    "days": [{"date","lead_days","prediction_made_utc",
 #     "hours":[ISO8601...], "sim":[...], "actual":[... or null where
 #     unrealized], "mae","bias","corr" (null when unrealized),
-#     "input_mode","code_version"}, ...]}
+#     "input_mode","code_version","resolution","actual_resolution"}, ...]}
 #   — most recent 120 market days, newest first, one entry per
 #   (date, lead_days, input_mode). "date" is the Europe/Athens market day;
-#   "hours" are the window's UTC stamps (24 normally; 23/25 on DST days).
-#   "code_version" is the provenance of that day entry's chosen slice.
+#   "hours" are the day's UTC slot starts at the day's own resolution:
+#   "resolution" "PT60M" (24 normally; 23/25 on DST days) or "PT15M" (cv46
+#   quarter-hour days: 96; 92/100 on DST days). Mixed history: both kinds
+#   coexist, so read "resolution" per day. "actual" is per slot:
+#   "actual_resolution" "PT15M" = native quarter-hour actuals, "PT60M" = the
+#   hourly actual (on a quarter day replicated onto its 4 quarters because the
+#   zone-day has no native quarters). The hourly overlays ("gbm", "stats",
+#   "tsfm*", "p_le0") are replicated onto the quarters of their hour (a step).
+#   "mae"/"bias"/"corr" are the hourly day score; the *_q15 fields the native
+#   15-minute score. "code_version" is the provenance of that day entry's
+#   chosen slice.
 #
 # web/data/map.json prefers input_mode='entsoe' rows for now (unchanged
 # behavior; no input_mode field in its shape).
@@ -270,6 +279,8 @@ function export_zone_files()
     act = da_target_actuals(sd - Day(1), ed)  # EUPHEMIA_DA_TARGET (default sdac; highest_seq = kill switch)
     actmap = Dict{Tuple{String,DateTime},Float64}(
         (String(a.z), DateTime(a.t)) => Float64(a.act) for a in eachrow(act))
+    # native quarter-hour actuals, read only when the export holds a quarter-hour (cv46) day
+    q15map = q15_actual_map(quarter_days(prices))
 
     mlmap = model_lines_map(sd)
     ovh, ovd = tsfm_overlay(sd)
@@ -287,7 +298,9 @@ function export_zone_files()
                           (zp.mode .== mode), :], :t)
             hours = [DateTime(t) for t in sub.t]
             sims = Float64.(sub.sim)
-            actuals = Any[get(actmap, (zone, h), nothing) for h in hours]
+            res = day_resolution(hours)
+            actuals, act_res = slot_actuals(zone, hours, res, actmap, q15map)
+            hk = [slot_hour(h, res) for h in hours]   # where the hourly overlays are read
             sc = get(scoremap, (zone, d, lead, mode), nothing)
             push!(days, merge(Dict{String,Any}(
                 "date" => d,
@@ -307,9 +320,11 @@ function export_zone_files()
                 "bias_q15" => sc === nothing ? nothing : nn(sc.bias_q15),
                 "corr_q15" => sc === nothing ? nothing : nn(sc.corr_q15),
                 "shape_floor_q15" => sc === nothing ? nothing : nn(sc.shape_floor_q15),
-                "gbm" => Any[get(mlmap, (zone, "hybrid_gbm", h), nothing) for h in hours],
-                "stats" => Any[get(mlmap, (zone, "stats_gbm", h), nothing) for h in hours]),
-                tsfm_fields(zone, d, hours, ovh, ovd)))
+                "gbm" => Any[get(mlmap, (zone, "hybrid_gbm", h), nothing) for h in hk],
+                "stats" => Any[get(mlmap, (zone, "stats_gbm", h), nothing) for h in hk],
+                "resolution" => res,
+                "actual_resolution" => act_res),
+                tsfm_fields(zone, d, hk, ovh, ovd)))
         end
         # newest first, then by increasing lead ('entsoe' before 'weather' within a lead)
         sort!(days; by=e -> (e["date"], -e["lead_days"],
@@ -387,6 +402,7 @@ function export_map_json()
     act = da_target_actuals(sd - Day(1), ed)  # EUPHEMIA_DA_TARGET (default sdac; highest_seq = kill switch)
     actmap = Dict{Tuple{String,DateTime},Float64}(
         (String(a.z), DateTime(a.t)) => Float64(a.act) for a in eachrow(act))
+    q15map = q15_actual_map(quarter_days(prices))
 
     mlmap = model_lines_map(sd)
     # Hourly D-1 load forecast: the weights of err_pct (load-weighted WAPE).
@@ -397,13 +413,15 @@ function export_map_json()
     zone_agg(zp, d, track) = begin
         zone = String(zp.z[1])
         hours = [DateTime(t) for t in zp.t]
-        acts = [get(actmap, (zone, h), nothing) for h in hours]
+        res = day_resolution(hours)   # slot means: equal slots, so time-weighted on either resolution
+        acts, _ = slot_actuals(zone, hours, res, actmap, q15map)
         settled = [a for a in acts if a !== nothing]
         lead = Int(zp.lead_days[1])
         sc = get(scoremap, (zone, d, lead, track), nothing)
         # err_pct: only for fully-settled days with full load coverage (the
-        # metric is undefined otherwise — never fabricated).
-        loadv = [get(loadmap, (zone, h), nothing) for h in hours]
+        # metric is undefined otherwise — never fabricated). Hourly load weights,
+        # replicated onto the quarters of a quarter-hour day.
+        loadv = [get(loadmap, (zone, slot_hour(h, res)), nothing) for h in hours]
         ep = (length(settled) == length(hours) && all(!isnothing, loadv)) ?
             load_weighted_err_pct(Float64.(zp.sim), Float64.(settled), Float64.(loadv)) :
             nothing

@@ -16,16 +16,6 @@ on:
         required: true
         default: "2025-11-07"
         type: string
-      parallel:
-        description: "Use parallel UC processing"
-        required: false
-        default: true
-        type: boolean
-      max_workers:
-        description: "Maximum parallel workers (0 = auto-detect)"
-        required: false
-        default: "20"
-        type: string
       order_method:
         description: "Order generation method"
         required: false
@@ -90,8 +80,7 @@ jobs:
           if [ "${{ github.event_name }}" = "schedule" ]; then
             START_DATE=$(date -d "yesterday" +%Y-%m-%d)
             END_DATE=$START_DATE
-            PARALLEL=true
-            MAX_WORKERS=16
+            OPTIMIZER="highs"
             ORDER_METHOD="merit_order"
             ZONES="GR,BG,RO,RS,HU"
             FORCE_RERUN=false
@@ -99,16 +88,15 @@ jobs:
           else
             START_DATE="${{ github.event.inputs.start_date }}"
             END_DATE="${{ github.event.inputs.end_date }}"
-            PARALLEL="${{ github.event.inputs.parallel }}"
-            MAX_WORKERS="${{ github.event.inputs.max_workers }}"
+            OPTIMIZER="highs"
             ORDER_METHOD="${{ github.event.inputs.order_method }}"
             ZONES="${{ github.event.inputs.zones }}"
             FORCE_RERUN="${{ github.event.inputs.force_rerun }}"
             MARKUP_FACTOR="${{ github.event.inputs.markup_factor }}"
           fi
           {
-            echo "START_DATE=$START_DATE"; echo "END_DATE=$END_DATE"; echo "PARALLEL=$PARALLEL"
-            echo "OPTIMIZER=highs"; echo "MAX_WORKERS=$MAX_WORKERS"; echo "ORDER_METHOD=$ORDER_METHOD"
+            echo "START_DATE=$START_DATE"; echo "END_DATE=$END_DATE"
+            echo "OPTIMIZER=highs"; echo "ORDER_METHOD=$ORDER_METHOD"
             echo "ZONES=$ZONES"; echo "FORCE_RERUN=$FORCE_RERUN"; echo "MARKUP_FACTOR=$MARKUP_FACTOR"
             # rows the run writes carry update_time_utc >= this instant (the transfer moves only those days)
             echo "RUN_STARTED_UTC=$(date -u +%Y-%m-%dT%H:%M:%S)"
@@ -134,8 +122,6 @@ jobs:
           echo "🌍 Multi-zone market clearing"
           echo "📅 Date range: $START_DATE to $END_DATE"
           echo "⚖️ Optimizer: $OPTIMIZER"
-          echo "⚡ Parallel UC: $PARALLEL"
-          echo "👥 Max workers: $MAX_WORKERS"
           echo "📋 Order method: $ORDER_METHOD"
           echo "🌍 Zones: ${ZONES:-auto-discover}"
           echo "🔄 Force rerun: $FORCE_RERUN"
@@ -176,7 +162,6 @@ jobs:
           echo "- **Trigger**: $TRIGGER" >> $GITHUB_STEP_SUMMARY
           echo "- **Date Range**: $DATE_RANGE" >> $GITHUB_STEP_SUMMARY
           echo "- **Optimizer**: highs" >> $GITHUB_STEP_SUMMARY
-          echo "- **Parallel UC**: ${{ github.event.inputs.parallel || 'true' }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Order Method**: ${{ github.event.inputs.order_method || 'merit_order' }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Force Rerun**: ${{ github.event.inputs.force_rerun || 'false' }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Markup Factor**: ${{ github.event.inputs.markup_factor || '1.1' }}" >> $GITHUB_STEP_SUMMARY

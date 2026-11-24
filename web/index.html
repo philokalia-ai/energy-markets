@@ -509,7 +509,7 @@
         <div id="chart-legend" class="legend"></div>
         <div id="chart-wrap" class="chart-wrap"></div>
         <details class="table-details">
-          <summary>Hourly values (table)</summary>
+          <summary id="hour-table-summary">Hourly values (table)</summary>
           <div class="table-scroll"><table id="hour-table" class="data-table"></table></div>
         </details>
       </div>
@@ -532,15 +532,16 @@
     <div class="chart-card">
       <div class="chart-head">
         <h2 id="book-title" class="chart-title"></h2>
-        <p id="book-sub" class="chart-sub">The merit-order supply ladder for one hour:
+        <p id="book-sub" class="chart-sub">The merit-order supply ladder for one delivery period
+          (an hour, or a quarter-hour on 15-minute days):
           every generator's offer stacked left&nbsp;→&nbsp;right by ascending price
           (x&nbsp;=&nbsp;cumulative MW, y&nbsp;=&nbsp;€/MWh), coloured by <strong>fuel type</strong>
           and labelled with the operator + unit. The dashed line marks where the
           <strong>clearing price</strong> landed (&ldquo;πού έκατσε η μπίλια&rdquo;) —
-          the model's simulated price for that zone-hour — with the settled actual
+          the model's simulated price for that zone and period — with the settled actual
           as a second marker. The shaded band and the <strong>cliff</strong> badge
           show how steep the book is at the clearing point: where supply runs out,
-          a small input error explodes into a large price error. In a coupled hour
+          a small input error explodes into a large price error. In a coupled period
           the marker sits on the local supply curve at the market-wide price; the
           <strong>trade wedge</strong> to the demand curve is the cross-border
           import/export decided by the 39-zone network.</p>
@@ -671,7 +672,7 @@
       <label class="filter">
         <span class="filter-label">Resolution</span>
         <select id="res-select" aria-label="Scoring resolution"
-                title="Hourly is the headline score. 15-min scores the same hourly forecast against native quarter-hour prices; the two are never ranked together.">
+                title="Hourly is the headline score (a quarter-hour clear is averaged to the hour). 15-min scores the clear at its own resolution against native quarter-hour prices; the two are never ranked together.">
           <option value="h60">Hourly MAE (all zones)</option>
           <option value="q15">15-min MAE (native PT15M zones)</option>
         </select>
@@ -693,7 +694,8 @@
         <table id="scoreboard-table" class="data-table scoreboard"></table>
       </div>
       <p class="caption">
-        Metrics are computed on hourly day-ahead prices over realized (settled) days only.
+        Metrics are computed on hourly day-ahead prices over realized (settled) days only; a
+        quarter-hour clear is averaged to the hour first.
         <strong>MAE</strong> is mean absolute error in €/MWh; <strong>bias</strong> is
         mean(simulated&nbsp;−&nbsp;actual) in €/MWh, so a negative bias means the model
         under-prices; <strong>corr</strong> is the Pearson correlation of hourly prices.
@@ -701,8 +703,9 @@
         <span class="dot dot-mid" aria-hidden="true"></span>&nbsp;0.40–0.75,
         <span class="dot dot-weak" aria-hidden="true"></span>&nbsp;weak&nbsp;&lt;&nbsp;0.40.
         Click a column header to sort (bias sorts by distance from zero); GR stays pinned first.
-        <strong>Resolution:</strong> <em>15-min</em> scores the same hourly forecast, repeated on its
-        four quarters, against native quarter-hour (PT15M) SDAC prices. It covers only zone-days
+        <strong>Resolution:</strong> <em>15-min</em> scores the physics clear at its own resolution
+        (its quarter-hour prices, or an hourly price on its four quarters) against native
+        quarter-hour (PT15M) SDAC prices. It covers only zone-days
         whose settled prices are natively quarter-hourly; other zones show “—”.
         Hover a 15-min MAE
         for its <em>shape floor</em>: how far quarter-hour prices moved around their hour's mean,

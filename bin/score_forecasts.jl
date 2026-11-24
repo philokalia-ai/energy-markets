@@ -569,11 +569,14 @@ function main()
                 score_q15_zone!(market_date, zone, lead_days, cv, input_mode, is_retro, sub, a15, qwin)
                 continue
             end
+            # The hourly score pairs HOURLY sim with hourly actuals: a quarter-hour slice (cv46) is
+            # averaged to the hour first (one pair per hour, so n and MIN_SCORE_HOURS count hours);
+            # hourly slices pass through unchanged. Per slice, so mixed history scores per day.
             sv = Float64[]; av = Float64[]
-            for row in eachrow(sub)
-                k = (zone, trunc(DateTime(row.t), Hour))
+            for (h, s) in zip(hourly_means(DateTime.(sub.t), sub.sim)...)
+                k = (zone, h)
                 haskey(actmap, k) || continue
-                push!(sv, Float64(row.sim)); push!(av, actmap[k])
+                push!(sv, s); push!(av, actmap[k])
             end
             if isempty(sv)
                 println("  $zone: no realized actual prices for this day — skipped")

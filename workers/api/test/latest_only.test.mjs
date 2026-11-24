@@ -161,7 +161,7 @@ ok(getById("window-note").hidden === true, "old JSON: no since-freeze note");
 T.state.scoreboard.scores.push(S("GR", 1, "since_freeze", 2, 40), S("DE_LU", 1, "since_freeze", 20, 30));
 const opts = optLabels();
 ok(opts[0] === "all=All days" &&
-   opts[1] === "since_freeze=since freeze (cv45, 2026-11-21) — the only out-of-sample physics record" &&
+   opts[1] === "since_freeze=since freeze (cv46, 2026-11-24) — the only out-of-sample physics record" &&
    opts[2].startsWith("2026-10="), "window options: All days, since freeze (labelled), then months");
 T.state.window = "since_freeze";
 T.renderScoreboard();

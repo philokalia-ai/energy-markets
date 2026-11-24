@@ -47,7 +47,10 @@ dimension is collapsed everywhere to the **freshest forecast per delivery day**.
   and flags collapse risk; clicking one opens the driver time series
   (temperature, GHI, cloud, pressure, 100 m wind, reservoir) aligned with the
   prediction and the actual. Recipe: [docs/predictions.md](../docs/predictions.md).
-- **Zone explorer** — per-day hourly Timestral + physics, physics and actual.
+- **Zone explorer** — per day: Timestral + physics (hourly), the physics clear and the actual at the
+  day's own resolution — hourly, or 15-minute with Timestral drawn as an hourly step and a 15-min table
+  grouped by hour. Each day carries its `resolution` (`PT60M` | `PT15M`); without it the stamp spacing
+  decides.
 - **Order book** — per zone × market day × hour, the merit-order supply ladder
   by ascending offer price (x = cumulative MW, y = €/MWh), coloured by owner,
   with dashed markers where the clearing price and the settled actual landed.

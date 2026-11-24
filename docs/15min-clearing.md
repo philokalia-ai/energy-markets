@@ -1,5 +1,15 @@
 # 15-minute-resolution coupled multi-zone clear (Increment 1)
 
+> **From cv46 the 15-minute clear is the product default.** `CLEAR_RESOLUTION_MINUTES = 15`
+> (`src/db/postgres_core.jl`) is the default of `run_multi_zone_market_clearing`,
+> `run_pipelined_backfill` (config `clear_resolution_minutes`, both book stages) and
+> `bin/daily_forecast.jl`. Each period is priced on the per-period (decomposed) path.
+> Pumped storage is held flat within the hour, always, with no env. The pipeline's
+> truncation gate requires a full UTC day at the resolution (`1440 ÷ resolution`
+> periods, 96 at 15 min). `clear_resolution_minutes=60` gives
+> the hourly clear. The sections below describe the original opt-in increment and are
+> kept as history. See the ledger, v46.
+
 The coupled multi-zone market clear historically ran at **hourly** resolution
 (24 periods/day). This increment adds an opt-in **15-minute** mode
 (96 periods/day) to `run_multi_zone_market_clearing` on the `:merit_order` path,
@@ -148,7 +158,8 @@ couples the day's periods (an MWh budget per family; each quarter's MW counts ×
 runs unchanged at 96 periods. Because the storage LP is degenerate across the four
 quarters of an hour, it can swing a whole family 0↔Pmax between quarters even when every
 input is hourly-replicated. In that case the reduces-to-hourly identity no longer holds
-for books with PS. `EUPHEMIA_PS_INTRAHOUR=flat` keeps each family's MW constant
-within the hour, a coarse ramp proxy. It is opt-in and a no-op on hourly books. The 8-day
+for books with PS. Flat intra-hour storage keeps each family's MW constant
+within the hour, a coarse ramp proxy. It was the opt-in `EUPHEMIA_PS_INTRAHOUR=flat`;
+from cv46 it is always on, with the env gone. It is a no-op on hourly books. The 8-day
 evaluation is in
 [experiments/15min-pilot-2026-11](experiments/15min-pilot-2026-11/README.md).

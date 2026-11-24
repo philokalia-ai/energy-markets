@@ -24,6 +24,7 @@ using JSON   # run_results.jl: transfer-op params
 
 # Split by concern; each file is `include`d in the original definition order,
 # so the spliced code is line-for-line the pre-split dbutils.jl.
+include("db/resolution.jl")     # slot resolution labels from timestamp spacing (energy_prices, forecast_prices)
 include("db/duckdb_store.jl")   # DuckDB backend: connection, dialect rewrite, results.duckdb writers
 include("db/run_results.jl")    # run-local results DuckDB for the forecast writers + the transfer-op log
 include("db/pg_attach.jl")      # DuckDB postgres extension: the only Julia->Postgres path (fill, transfer)

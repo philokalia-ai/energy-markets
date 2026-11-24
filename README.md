@@ -162,9 +162,10 @@ solved by an LP certificate without branch-and-bound (the MIP runs only where th
 certificate fails; docs/experiments/lp-certificate.md), so the open stack produces
 the record directly.
 
-**15-minute clearing** is opt-in (`clear_resolution_minutes=15`): hourly inputs
-are upsampled by replication, never division, and at 60-minute settings the
-path reproduces the hourly prices bit-identically. Scored against native
+**15-minute clearing** is the default from cv46 (`CLEAR_RESOLUTION_MINUTES = 15`,
+96 periods per day, pumped storage flat within the hour). Hourly inputs are
+upsampled by replication, never division, and `clear_resolution_minutes=60`
+reproduces the hourly clear. Scored against native
 15-minute actuals it is a *harder* target, not a better score
 ([docs/15min-clearing.md](docs/15min-clearing.md)).
 

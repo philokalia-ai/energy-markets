@@ -42,6 +42,7 @@ const STRATEGY_DESCRIPTIONS = Dict{String,String}(
     "water_value_reservoir"  => "hydro water value: shadow price of stored water — near-free when reservoirs are full, rising to the thermal alternative as they empty",
     "water_value_anchored"   => "hydro water value: export opportunity cost = the coupled reference price (two-pass anchor)",
     "water_value_spill"      => "hydro spill regime: reservoir at/above the prior-years' same-week maximum — the water that cannot be stored is offered at run-instead-of-spill cost",
+    "water_value_unavoidable" => "hydro unavoidable release (cv46 P1): reservoir water that must run anyway (lagged low-output envelope or weekly overflow) offered at the spill price",
     "res_forecast"           => "renewable forecast offered as price-taker (support schemes make output price-insensitive; floored negative in a solar-surplus regime)",
     "res_supported"          => "explicitly configured RES share retaining a production incentive, offered at minus that incentive",
     "res_zero_cost"          => "merchant or negative-price support-suspended RES offered at zero variable cost",
@@ -599,11 +600,7 @@ const COMPLEX_ORDERS_DEFAULT = "ps"
 function complex_order_kinds()
     raw = lowercase(strip(get(ENV, "EUPHEMIA_COMPLEX_ORDERS", COMPLEX_ORDERS_DEFAULT)))
     raw in ("", "off", "none") && return Set{String}()
-    kinds = Set(filter(k -> !isempty(k) && !(k in ("off", "none")), strip.(split(raw, ","))))
-    # cv45 EUPHEMIA_CV45_RESERVOIR: reservoir hydro energy-limited by default
-    # (the existing `reservoir` family; :reservoir_opportunity zones stay out).
-    cv45_on("EUPHEMIA_CV45_RESERVOIR") && push!(kinds, "reservoir")
-    return kinds
+    return Set(filter(k -> !isempty(k) && !(k in ("off", "none")), strip.(split(raw, ","))))
 end
 
 const _STORAGE_BUDGET_CACHE = Dict{Tuple{String,String,Date},Float64}()
@@ -801,6 +798,85 @@ function _split_storage_families(tagged, strategies, generators, zone::String,
     return keep, members, budgets
 end
 
+# ── Eligibility fills (daily forecast) on the zone's own series resolution ──
+# A fill hook returns HOURLY model values (load: "yyyymmdd-HH00" => MW; RES:
+# (ts, MW[, production_type]) entries). The TSO series it completes has ONE
+# resolution per zone-day (get_loads / get_generation_forecast_for_wind_and_solar
+# normalise it), and _demand_series → disaggregate_temporal_data reads the series
+# resolution from its first row and uses the raw slots. So a fill must be emitted
+# on that same resolution: an hourly value is REPLICATED (MW is a power level)
+# into every sub-slot of its hour, and only slots the TSO did not publish are
+# added (MERGE, never replace, now at slot granularity). Before cv46 the fill was
+# always one "60" row per hour: on a native-15-min zone only the HH:00 quarter of
+# a filled hour existed, so the coupled intersection dropped :15/:30/:45 for every
+# zone (load) or those quarters cleared with 0 MW RES (#477 review, finding 1).
+# With no TSO rows at all the fill stays hourly (PT60M) and the book's grid
+# upsampling replicates it, as for any hourly zone. Record mode never fills.
+
+"Sub-slots of `ts`'s hour at `res_min` (the hour itself at ≥ 60)."
+function _fill_subslots(ts::AbstractString, res_min::Int)
+    res_min >= 60 && return [String(ts)]
+    60 % res_min == 0 || error("fill: series resolution $res_min min does not divide the hour")
+    head = ts[1:11]
+    return [head * lpad(k * res_min, 2, '0') for k in 0:(60 ÷ res_min - 1)]
+end
+
+"(code, minutes) of a TSO series, from its first row; hourly when it is empty."
+_series_resolution(rows, code_of) = isempty(rows) ? ("PT60M", 60) :
+    (c = String(code_of(rows[1])); (c, parse_resolution_to_minutes(c)))
+
+"""
+    _merge_load_fill!(loads, filled, zone) -> Int
+
+Add the hourly `filled` model load to `loads` on the TSO series' resolution,
+only in slots the TSO did not publish. Returns the number of slots added.
+"""
+function _merge_load_fill!(loads::Vector{Load}, filled, zone::AbstractString)
+    code, res_min = _series_resolution(loads, l -> l.resolution_code)
+    covered = Set(l.timeslot for l in loads)
+    added = 0
+    for (ts, mw) in filled
+        for sub in _fill_subslots(ts, res_min)
+            sub in covered && continue
+            push!(loads, Load(sub, code, String(zone), Float64(mw)))
+            push!(covered, sub)
+            added += 1
+        end
+    end
+    return added
+end
+
+"""
+    _merge_res_fill!(renewables, rfilled, zone, issued_solar) -> Int
+
+The RES twin of `_merge_load_fill!`. A slot with ANY published TSO RES row (even
+a coalesced 0) is never overridden. Entries are (ts, mw) — tagged "WeatherFill"
+— or typed (ts, mw, production_type): the weather track passes its solar
+component as "Solar" rows so the cv31 solar-regime gate (which reads "Solar"
+rows) sees the issued solar forecast; quantity-neutral, all rows sum into
+renewable_by_time. `issued_solar` (hour => values) takes each typed "Solar"
+entry once, per hourly entry, whether or not the TSO covers its slots.
+Returns the number of rows added.
+"""
+function _merge_res_fill!(renewables::Vector{RenewablesGenerationForecast}, rfilled,
+                          zone::AbstractString, issued_solar::Dict{Int,Vector{Float64}})
+    code, res_min = _series_resolution(renewables, r -> r.resolution_code)
+    covered = Set(r.date_time for r in renewables)
+    added = 0
+    for entry in rfilled
+        ts, mw = entry[1], entry[2]
+        ptype = length(entry) >= 3 ? String(entry[3]) : "WeatherFill"
+        ptype == "Solar" && length(ts) >= 11 &&
+            push!(get!(issued_solar, parse(Int, ts[10:11]), Float64[]), Float64(mw))
+        for sub in _fill_subslots(ts, res_min)
+            sub in covered && continue
+            push!(renewables, RenewablesGenerationForecast(sub, code, String(zone), ptype, Float64(mw)))
+            added += 1
+        end
+    end
+    return added
+end
+
 """
     _check_extra_families(members, zone, formed) -> nothing
 
@@ -833,56 +909,6 @@ function _check_extra_families(members, zone::AbstractString, formed::Set{String
         b0 == b || throw(ArgumentError("extra_orders family '$f' has inconsistent member budgets ($b0 vs $b MWh)"))
     end
     return nothing
-end
-
-# ── cv45: expected pumping demand (EUPHEMIA_CV45_PUMP) ────────────────────
-const _CV45_PUMP_CACHE = Dict{Tuple{String,Date},Dict{Int,Float64}}()
-const _CV45_PUMP_LOCK = ReentrantLock()
-
-"""
-    _cv45_pump_profile(zone, day) -> Dict{Int,Float64}
-
-Expected pumped-storage CONSUMPTION (MW) per UTC hour-of-day: the mean of the
-zone's hourly `actual_consumption_mw` (`Hydro Pumped Storage`) over the same
-14 complete UTC days the PS discharge budget uses (`_storage_cutoff_day`;
-legacy D-15..D-2). Ex-ante by the same as-of rule as the budget. Added to the
-zone's load: ENTSO-E's reported load EXCLUDES pumping — regressing
-(generation + net imports − load) on pumping consumption, Oct 1–Nov 14 2026,
-gives slope ≈ 1 (AT 0.94, PL 1.01, CZ 1.00, ES 1.13, PT 0.90;
-reviews/fable-nov-bias.md §2.3), contrary to the cv34 T3 comment above.
-Empty when the zone reports no pumping (CH). Cached per (zone, effective
-cutoff); never cached on DB error.
-"""
-function _cv45_pump_profile(zone::String, day::Date)
-    cutoff = _storage_cutoff_day(day)
-    key = (zone, cutoff)
-    cached = lock(_CV45_PUMP_LOCK) do
-        get(_CV45_PUMP_CACHE, key, nothing)
-    end
-    cached === nothing || return cached
-    df = sql2df_with_retry("""
-        WITH hourly AS (
-            SELECT date_trunc('hour', date_time_utc) AS h,
-                   AVG(actual_consumption_mw) AS mw
-            FROM entsoe.aggregated_generation_per_type
-            WHERE area_map_code = \$1 AND area_type_code LIKE 'BZN%'
-              AND production_type = 'Hydro Pumped Storage'
-              AND actual_consumption_mw IS NOT NULL
-              AND date_time_utc >= (\$2::date::timestamp AT TIME ZONE 'UTC')
-              AND date_time_utc < (\$3::date::timestamp AT TIME ZONE 'UTC')
-            GROUP BY 1)
-        SELECT EXTRACT(HOUR FROM h)::int AS hh, AVG(mw) AS mw, COUNT(*) AS n
-        FROM hourly GROUP BY 1""", Any[zone, cutoff - Day(14), cutoff])
-    prof = Dict{Int,Float64}()
-    for r in eachrow(df)
-        (ismissing(r.mw) || r.n < 7) && continue
-        v = Float64(r.mw)
-        v > 1.0 && (prof[Int(r.hh)] = v)
-    end
-    lock(_CV45_PUMP_LOCK) do
-        _CV45_PUMP_CACHE[key] = prof
-    end
-    return prof
 end
 
 "Clear the cv34 pumping-capability cache (tests / long processes)."
@@ -1204,6 +1230,7 @@ function create_merit_order_book(
     anchor_share::Union{Nothing,Float64}=nothing,
     anchor_prices::Union{Nothing,Dict{String,Float64}}=nothing,
     pass1_prices::Union{Nothing,Dict{String,Float64}}=nothing,
+    nwv_p1_prices::Union{Nothing,Dict{String,Dict{String,Float64}}}=nothing,
     anchor_export_mw::Dict{Int,Float64}=Dict{Int,Float64}(),
     res_coalesce_missing::Bool=false,
     endogenous_import_atc::Union{Nothing,Dict{Int,Float64}}=nothing,
@@ -1293,15 +1320,10 @@ function create_merit_order_book(
         if load_fill !== nothing
             filled = load_fill(bidding_zone, day)
             if filled !== nothing && !isempty(filled)
-                covered = Set(l.timeslot[1:11] for l in loads)   # "yyyymmdd-HH" present in TSO
-                added = 0
-                for (ts, mw) in filled
-                    ts[1:11] in covered && continue              # TSO already covers this hour
-                    push!(loads, Load(ts, "60", bidding_zone, mw))
-                    added += 1
-                end
-                added > 0 && println("  🩹 load-fill: $bidding_zone added $added model hour(s) " *
-                                     "(TSO published $(length(covered))h; missing hours filled)")
+                n_tso = length(loads)
+                added = _merge_load_fill!(loads, filled, bidding_zone)
+                added > 0 && println("  🩹 load-fill: $bidding_zone added $added model slot(s) " *
+                                     "(TSO published $n_tso slot(s); missing slots filled)")
             end
         end
         renewables = get_generation_forecast_for_wind_and_solar(bidding_zone, day;
@@ -1324,25 +1346,10 @@ function create_merit_order_book(
         if res_fill !== nothing
             rfilled = res_fill(bidding_zone, day)
             if rfilled !== nothing && !isempty(rfilled)
-                rcovered = Set(r.date_time[1:11] for r in renewables)  # "yyyymmdd-HH" present in TSO
-                radded = 0
-                # Entries are (ts, mw) — tagged "WeatherFill" — or typed
-                # (ts, mw, production_type): the weather track passes its solar
-                # component as "Solar" rows so the cv31 solar-regime gate (which
-                # reads "Solar" rows) sees the issued solar forecast instead of
-                # nothing. Quantity-neutral: all rows sum into renewable_by_time.
-                for entry in rfilled
-                    ts, mw = entry[1], entry[2]
-                    ptype = length(entry) >= 3 ? String(entry[3]) : "WeatherFill"
-                    ptype == "Solar" && length(ts) >= 11 &&
-                        push!(get!(issued_solar, parse(Int, ts[10:11]), Float64[]), Float64(mw))
-                    ts[1:11] in rcovered && continue                   # TSO already covers this hour
-                    push!(renewables, RenewablesGenerationForecast(ts, "60", bidding_zone,
-                                                                    ptype, mw))
-                    radded += 1
-                end
-                radded > 0 && println("  🩹 res-fill: $bidding_zone added $radded model hour(s) " *
-                                      "(TSO published $(length(rcovered))h; missing hours filled)")
+                n_tso = length(Set(r.date_time for r in renewables))
+                radded = _merge_res_fill!(renewables, rfilled, bidding_zone, issued_solar)
+                radded > 0 && println("  🩹 res-fill: $bidding_zone added $radded model row(s) " *
+                                      "(TSO published $n_tso slot(s); missing slots filled)")
             end
         end
 
@@ -1409,16 +1416,8 @@ function create_merit_order_book(
 
         gross_demand = Dict{String,Float64}()
         net_demand = Dict{String,Float64}()
-        # cv45 EUPHEMIA_CV45_PUMP: expected pumping added to load (see _cv45_pump_profile).
-        pump_mw = cv45_on("EUPHEMIA_CV45_PUMP") ? _cv45_pump_profile(bidding_zone, day) :
-                  Dict{Int,Float64}()
-        if !isempty(pump_mw)
-            println("  ⛲ cv45 pumping demand: mean $(round(Int, sum(values(pump_mw)) / 24)) MW, " *
-                    "peak $(round(Int, maximum(values(pump_mw)))) MW (trailing-14d same-hour mean)")
-        end
         for ts in target_timeslots
-            load_value = get(load_by_time, ts, 0.0) +
-                         get(pump_mw, Dates.hour(parse_timeslot_to_datetime(ts, day)), 0.0)
+            load_value = get(load_by_time, ts, 0.0)
             renewable_gen = get(renewable_by_time, ts, 0.0)
             gross_demand[ts] = max(10.0, load_value)
             # Residual demand on domestic thermal: load - RES - net imports
@@ -1430,17 +1429,6 @@ function create_merit_order_book(
 
         # Gas SRMC anchors hydro water value (TTF-based when data exists)
         gas_srmc = get_marginal_cost(day, "Fossil Gas", bidding_zone)
-        # cv45 EUPHEMIA_CV45_HYDRO_CAP: the anchored water value may rise to the top
-        # tranche multiplier × gas SRMC (TRANCHES[end], 1.6) instead of stopping at
-        # gas SRMC — an opportunity cost can exceed gas SRMC in scarcity; the 1.0×
-        # clamp was a stability guard that became a cap (CH pinned at gas SRMC all
-        # evening on 2026-11-10). cv44: 1.0 × gas SRMC.
-        hydro_wv_cap = cv45_on("EUPHEMIA_CV45_HYDRO_CAP") ? TRANCHES[end][2] * gas_srmc : gas_srmc
-        # cv45 EUPHEMIA_CV45_ELASTIC: the elastic-demand block must sit above the
-        # thermal ladder, or 2% of demand curtails before the last gas tranche runs;
-        # BACKSTOP_PRICE_MULT is the declared "above every domestic tranche" multiple.
-        cv45_on("EUPHEMIA_CV45_ELASTIC") &&
-            (demand_elastic_price = max(DEMAND_ELASTIC_PRICE, BACKSTOP_PRICE_MULT * gas_srmc))
 
         # cv23 availability-scaled nuclear opportunity-cost share (FR). Computed
         # once per zone-day from ex-ante nuclear availability; used in place of
@@ -1502,6 +1490,12 @@ function create_merit_order_book(
                         "$(round(Int, 100 * spill_share))% of reservoir quantity at €$(profile.spill_gate_price)/MWh")
             end
         end
+        # cv46 P1 (src/merit_order/cv46_nordic_wv.jl): unanchored reservoir-opportunity
+        # zones only; `nothing` (anchored zones, no reservoir) ⇒ the pre-cv46 branch below.
+        nwv = (hydro_model == :reservoir_opportunity && opportunity_anchor == :none &&
+               hydro_pmax > 1.0) ?
+            _nwv_zone_setup(bidding_zone, day, generators, offered_pmax, spill_share,
+                net_import_import_only, nwv_p1_prices) : nothing
 
         # Dispatchable capacity for the scarcity margin, derated for the
         # realistic availability of the fleet (unreported outages) and for
@@ -1805,10 +1799,10 @@ function create_merit_order_book(
                             0.5 * anchor_prices[ts] + 0.5 * ps_opp_r : anchor_prices[ts]
                         wv = clamp(aref *
                               (anchor_share + water_value_dry_boost * hydro_dryness),
-                              wv_lo, hydro_wv_cap)
+                              wv_lo, gas_srmc)
                         if aref != anchor_prices[ts] && wv != clamp(anchor_prices[ts] *
                               (anchor_share + water_value_dry_boost * hydro_dryness),
-                              wv_lo, hydro_wv_cap)
+                              wv_lo, gas_srmc)
                             ps_opp_changed += 1
                         end
                         wv
@@ -1828,8 +1822,15 @@ function create_merit_order_book(
                             clamp(reservoir_drawdown + signed_dryness,
                                   max(signed_dryness, 0.0), 1.0) :
                             reservoir_drawdown
+                        if nwv !== nothing
+                            _nwv_storable!(nwv, ts, hr, gas_srmc,
+                                water_value_base + water_value_span * norm_demand,
+                                max(hydro_dryness, eff_seasonal), profile.spill_gate_price,
+                                get(load_by_time, ts, 0.0) - get(renewable_by_time, ts, 0.0))
+                        else
                         wv_frac = 0.35 + 0.65 * max(hydro_dryness, eff_seasonal)
                         gas_srmc * wv_frac * (water_value_base + water_value_span * norm_demand)
+                        end
                     else
                         gas_srmc * (1.0 + water_value_dry_boost * hydro_dryness) *
                         (water_value_base + water_value_span * norm_demand)
@@ -1864,7 +1865,18 @@ function create_merit_order_book(
                             g.code, "water_value_spill")
                         supply_orders_count += 1
                     end
-                    push_tagged!(SimpleOrder(:supply, water_value, offered_pmax(g) - spill_mw,
+                    # cv46 P1: the unavoidable-release share of this reservoir unit
+                    # at the spill price (0 ⇒ no order, the pre-cv46 book).
+                    nwv_u = (nwv !== nothing && g.fuel_type == Symbol("Hydro Water Reservoir")) ?
+                            _nwv_unit_unavoidable(nwv, hr, offered_pmax(g)) : 0.0
+                    if nwv_u > 0.0
+                        push_tagged!(SimpleOrder(:supply, profile.spill_gate_price, nwv_u,
+                            Symbol(bidding_zone), date_time, resolution_minutes),
+                            g.code, NWV_UNAVOIDABLE)
+                        supply_orders_count += 1
+                    end
+                    push_tagged!(SimpleOrder(:supply, water_value,
+                        nwv_u > 0.0 ? max(offered_pmax(g) - spill_mw - nwv_u, 0.0) : offered_pmax(g) - spill_mw,
                         Symbol(bidding_zone), date_time, resolution_minutes),
                         g.code, wv_strategy)
                     supply_orders_count += 1
@@ -2318,6 +2330,7 @@ function create_merit_order_book(
         ratio = demand_per_slot > 0 ? supply_per_slot / demand_per_slot : 0.0
 
         println("  ✅ Merit-order book: $supply_orders_count supply / $demand_orders_count demand orders")
+        nwv === nothing || _nwv_report(nwv)   # cv46 P1 summary line
         println("     ⚖️  Supply/Demand ratio: $(round(ratio, digits=2))  (gas SRMC €$(round(gas_srmc, digits=1))/MWh)")
 
         return AdjustedOrderBookResult(
