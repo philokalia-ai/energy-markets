@@ -153,14 +153,30 @@ function write_slice!(T::Date, lead::Int, made::DateTime,
     return n
 end
 
-function main()
+"""
+    zone_complete(slots, T) -> Bool
+
+A proxy zone-day is complete when it has exactly the slot count of market day `T` at the zone's own
+resolution (the spacing of its stamps): 24 hours (23/25 on DST days) for an hourly slice, as before, and
+96 quarter-hours (92/100) for a cv46 quarter-hour slice. The lead-1 sources turned PT15M with cv46's
+15-min default; counting them against the 24 hours dropped every zone, so leads 2..7 would have stopped.
+"""
+function zone_complete(slots, T::Date)
+    res = something(Euphemia.slot_resolution_minutes(keys(slots)), 60)
+    (1 <= res <= 60 && 60 % res == 0) || return false
+    return length(slots) == length(expected_market_day_slots(T, res))
+end
+
+# `asof` is the run's "now" (today's Athens market day and prediction_made_utc). The script runs main() when
+# executed; `include` (tests) only defines the functions.
+function main(; asof::DateTime=now(UTC))
     println("=" ^ 70)
     println("HORIZON FORECAST (weekly-persistence leads 2..$MAX_LEAD_DAYS)  cv=$CV")
     println("=" ^ 70)
     # the INSERT carries resolution_code (cv46 D1): run the forecast-table migration first, as
     # daily_forecast.jl does (catalog-first, a no-op in the steady state)
     Euphemia.ensure_forecast_tables()
-    made = now(UTC)
+    made = asof
     base = athens_date(made)   # today's Athens market day; T = base + n
 
     total = 0
@@ -185,7 +201,7 @@ function main()
         # is absent or incomplete (e.g. the legacy 21-hour 2026-07-12 day,
         # which would otherwise leave a permanent hole at its T+7).
         used_P = P
-        complete(s) = any(length(h) == expT for h in values(s))
+        complete(s) = any(zone_complete(h, T) for h in values(s))
         if isempty(src) || !complete(src)
             P2 = T - Day(14)
             hoursP2 = expected_market_day_hours(P2)
@@ -206,8 +222,8 @@ function main()
         shifted = Dict{String,Dict{DateTime,Float64}}()
         skipped = String[]
         for (zone, hourly) in src
-            if length(hourly) != expT
-                push!(skipped, "$zone($(length(hourly))h)")
+            if !zone_complete(hourly, T)
+                push!(skipped, "$zone($(length(hourly)) slots)")
                 continue
             end
             shifted[zone] = Dict(h + Day(7) => p for (h, p) in hourly)
@@ -225,4 +241,6 @@ function main()
     println("HORIZON COMPLETE — $total rows written")
 end
 
-main()
+if abspath(PROGRAM_FILE) == @__FILE__
+    main()
+end
