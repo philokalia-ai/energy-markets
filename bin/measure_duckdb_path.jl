@@ -7,7 +7,8 @@
 #                [--entry forecast|record]   forecast (default) = the daily forecast's call (run_multi_zone_market_clearing,
 #                passes=2): the timing production runs every day; record = the pipelined record's stage functions
 #                (bit-identical to the record, so also comparable with it). Both backends must use the same entry.
-#                [--steps 24|96]   periods per day: 24 (hourly, default) or 96 (the quarter-hour clear, cv46:
+#                [--steps production|24|96]   periods per day: production (default: the code's CLEAR_RESOLUTION_MINUTES,
+#                96 since cv46), 24 (hourly) or 96 (the quarter-hour clear, cv46:
 #                clear_resolution_minutes = 15 on either entry; per-period decomposition as on main).
 #            The backend is whatever the environment selects: ENERGY_CONN_STR + EUPHEMIA_DATA_STORE=postgres for the
 #            current path; EUPHEMIA_DATA_STORE=duckdb + EUPHEMIA_DUCKDB_PATH=<filled inputs> for the DuckDB path.
@@ -139,8 +140,11 @@ function clear(args)
     entry = opt(args, "--entry", "forecast")
     entry in ("forecast", "record") || error("--entry must be forecast or record")
     clear1 = entry == "forecast" ? forecast_clear : record_clear
-    steps = parse(Int, opt(args, "--steps", "24"))
-    steps in (24, 96) || error("--steps must be 24 or 96")
+    # production (default): the code's own clear resolution, as the daily forecast and the record clear use it
+    # (Euphemia.CLEAR_RESOLUTION_MINUTES: 15 since cv46 → 96 periods); 24 / 96 pin it
+    st = opt(args, "--steps", "production")
+    steps = st == "production" ? 1440 ÷ Euphemia.CLEAR_RESOLUTION_MINUTES : parse(Int, st)
+    steps in (24, 96) || error("--steps must be production, 24 or 96")
     CLEAR_RES_MIN[] = steps == 96 ? 15 : 60
     trace = "--trace" in args
     trace && (Euphemia.SQL_TRACE[] = _trace_record)
