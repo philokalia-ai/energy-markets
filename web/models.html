@@ -71,7 +71,9 @@
   <p>Mistral's pretrained Timestral-209M, used zero-shot. Its inputs are the settled day-ahead
   prices up to the start of the delivery day, plus our frozen lead-1 physics clear of that day as
   a known-future input (the latest vintage made by 10:00 UTC on D−1). It gives a median and a
-  q10–q90 band per hour. It is not trained on our data, but it reads settled prices: a
+  q10–q90 band per hour. It is hourly: on a day the physics clears in 15-minute periods it reads
+  the clear's hourly means, and the charts draw it as an hourly step under the 15-minute physics.
+  It is not trained on our data, but it reads settled prices: a
   prediction, never part of the counterfactual. If the physics-conditioned issue is missing for
   a day, the chart shows that day's 06:30 UTC prices-only issue.</p>
   <h3>Physics (cv45): the counterfactual</h3>

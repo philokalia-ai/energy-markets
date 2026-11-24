@@ -420,6 +420,15 @@ adoption date: the scoreboard's since-freeze window is cv ≥ 45 from 2026-11-21
 
 Dated reminders and scoring-policy notes that do not change `code_version`.
 
+- **2026-11-23 — site: each market day at its own resolution (cv46 downstream D4); no `code_version` bump.**
+  The record keeps hourly days next to quarter-hour days, so `web/app.js` decides per day: the zones API's
+  `resolution` (`PT60M` | `PT15M`), else the stamp spacing. Quarter-hour days get slot-end labels, ticks every
+  3 hours, Timestral (hourly) drawn as a step and scored against the hourly mean of the settled quarters, a
+  15-min table grouped by hour, and a time-based "recent days" x axis (equal day widths across the switch).
+  Hourly days render pixel-identical to before, with an unchanged data-driven DOM (headless, desktop and phone,
+  light and dark, with and without the new fields); copy that said "hour" where a 15-min day needs "period" was
+  reworded. `workers/api/test/q15_site.test.mjs`.
+
 - **2026-11-23 — Exporters and API carry quarter-hour days (cv46 downstream D3); hourly days unchanged, no
   `code_version` bump.** `bin/export_forecast_json.jl` and `bin/export_web_parquet.jl` read each forecast day at its
   own resolution (mixed history is permanent): per day `resolution` (`PT60M` / `PT15M`) and `actual_resolution`
