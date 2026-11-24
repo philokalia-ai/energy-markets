@@ -249,6 +249,14 @@ println()
         @test success(`$(Base.julia_cmd()) --startup-file=no --project=$(dirname(Base.active_project())) $(joinpath(@__DIR__, "test_fill_guard_outer.jl"))`)
     end
 
+    @testset "forecast presence artifact from the results DuckDB (own process)" begin
+        @test success(`$(Base.julia_cmd()) --startup-file=no --project=$(dirname(Base.active_project())) $(joinpath(@__DIR__, "test_forecast_presence.jl"))`)
+    end
+
+    @testset "horizon_forecast on the DuckDB store + slice-wide transfer delete (own process)" begin
+        @test success(`$(Base.julia_cmd()) --startup-file=no --project=$(dirname(Base.active_project())) $(joinpath(@__DIR__, "test_horizon_duckdb.jl"))`)
+    end
+
     @testset "Postgres guard: no LibPQ connection under the DuckDB store (own process)" begin
         @test success(`$(Base.julia_cmd()) --startup-file=no --project=$(dirname(Base.active_project())) $(joinpath(@__DIR__, "test_pg_guard.jl"))`)
     end

@@ -40,7 +40,8 @@ RX = {".jl": re.compile("|".join(JULIA)), ".py": re.compile("|".join(SCRIPT)), "
 # Euphemia (no data store involved).
 PG_SCRIPTS = {"bin/fill_run_duckdb.jl", "bin/transfer_run_results.jl", "bin/transfer_results_to_postgres.jl",
               "bin/refresh_duckdb_extract.jl"}
-NO_STORE = {"bin/capture_gfs_vintages.jl", "bin/export_prediction_scorecard.jl", "bin/transfer_run_results.jl"}
+NO_STORE = {"bin/capture_gfs_vintages.jl", "bin/export_prediction_scorecard.jl", "bin/transfer_run_results.jl",
+            "bin/forecast_presence.jl"}
 SCRIPT_RX = re.compile(r"\b(?:julia|python3?|\.venv[\w-]*/bin/python|bash)\b[^\n]*?\b(bin/[\w./-]+\.(?:jl|py|sh))(?:[ \t]+([a-z][\w-]*))?")
 # bin/measure_duckdb_path.jl loads Euphemia (a data store) only for `clear`; its other subcommands read files.
 STORELESS_SUBCMD = {"bin/measure_duckdb_path.jl": {"compare", "trace-diff", "fill-sums", "fill-diff"}}

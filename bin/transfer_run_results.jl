@@ -13,7 +13,9 @@
 #                          alongside / supersede / refuse), RAISE if it differs from the plan the run applied;
 #                          then the live per-zone DELETE, the retro DELETE, or the supersede backup
 #                          (INSERT INTO forecast_prices_pre_reset SELECT …, ROW_COUNT must equal the live count)
-#                          + slice DELETE; then INSERT … SELECT from the stage. Every row carries the writer's
+#                          + slice DELETE; then INSERT … SELECT from the stage. An op with delete_scope
+#                          "slice" (horizon_forecast.jl's persistence leads) clears the whole slice instead of
+#                          the written zones, as its LibPQ write did. Every row carries the writer's
 #                          resolution_code (PT60M / PT15M); the column is added first when Postgres lacks it
 #                          (cv46 D1's catalog-first migration, PLPGSQL_RESOLUTION_COLUMN).
 #        input_corrections INSERT … SELECT … ON CONFLICT DO NOTHING (Postgres' own key, as the emitter did).
@@ -174,6 +176,10 @@ function plpgsql_forecast_slice(op_id, p, st)
           DELETE FROM simulations.forecast_prices WHERE $slice;""")
     elseif is_retro
         println(b, "  DELETE FROM simulations.forecast_prices WHERE $slice AND is_retro = true;")
+    elseif get(p, "delete_scope", "zones") == "slice"
+        # bin/horizon_forecast.jl (weekly-persistence leads 2..7): its LibPQ write clears the whole
+        # (market_date, lead, input_mode) slice at any code_version, not only the zones it writes
+        println(b, "  DELETE FROM simulations.forecast_prices WHERE $slice;")
     else
         println(b, "  DELETE FROM simulations.forecast_prices WHERE $slice AND is_retro = false " *
                    "AND bidding_zone = ANY($(lit_text_array(zones)));")
