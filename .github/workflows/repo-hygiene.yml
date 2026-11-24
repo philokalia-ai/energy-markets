@@ -17,6 +17,8 @@ jobs:
         run: python3 -m unittest discover -s test -p test_repo_hygiene.py
       - name: Test bounded retro chunk launcher
         run: python3 -m unittest discover -s test -p test_retro_parallel.py
+      - name: Measurement time windows (ceres ETL + protected)
+        run: python3 -m unittest discover -s test -p test_measure_windows.py
       - name: Postgres access guard (DuckDB between Postgres and Julia)
         run: python3 -m unittest discover -s test -p test_pg_access.py
       - name: Reject personal absolute paths
