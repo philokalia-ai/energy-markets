@@ -588,12 +588,18 @@ function solve_with_complex_orders(order_book::MPCCOrderBook, solve::Function;
         preferred_solver=preferred_solver, verbose=verbose))
     t0 = time()
     calls = Ref(0); UB = Ref(NaN); best = Ref{Any}(nothing)
+    marc = Ref((cand_partial=0, moved=0, cap_hit=0))   # search-wide MAR counters (all priced candidates)
     gap() = best[] === nothing ? Inf : UB[] - best[].W
     stop() = calls[] >= max_pricings || gap() <= gap_stop
     function price(phase; master_verbose=false, kw...)
         o = _block_candidate(order_book, solve, B, phase; preferred_solver=preferred_solver,
             verbose=master_verbose, C=C, prio=(cur === nothing ? Dict{String,Float64}() : cur.prb), kw...)
         calls[] += 1
+        if hasproperty(o, :mar_moved)
+            m = marc[]
+            marc[] = (cand_partial=m.cand_partial + ((o.mar_moved > 0 || o.mar_partial > 0) ? 1 : 0),
+                      moved=m.moved + o.mar_moved, cap_hit=m.cap_hit + (o.mar_cap_hit ? 1 : 0))
+        end
         o.ok && isempty(o.pab) && (best[] === nothing || o.W > best[].W) && (best[] = o)
         verbose && o.info.status == :optimal &&
             println("   🧱 blocks [$phase] pricing $(calls[]): accepted $(length(o.A)), PAB $(length(o.pab)), " *
@@ -665,6 +671,7 @@ function solve_with_complex_orders(order_book::MPCCOrderBook, solve::Function;
     nprb = length(o.prb); prb_eur = sum(values(o.prb); init=0.0)
     LAST_COMPLEX_INFO[] = merge(o.info, (search=(pricings=calls[], wall=wall, UB=UB[], W=o.W,
         mar_moved=o.mar_moved, mar_partial=o.mar_partial, mar_cap_hit=o.mar_cap_hit,
+        mar_search_cand_partial=marc[].cand_partial, mar_search_moved=marc[].moved, mar_search_cap_hit=marc[].cap_hit,
         gap=UB[] - o.W, phase=o.phase, n_prb=nprb, prb_eur=prb_eur, inserted=nins,
         seed_forced=length(forced)),))
     verbose && println("   🧱 R1 summary: path=$(o.phase), pricing solves $(calls[]), wall $(round(wall, digits=1)) s, " *

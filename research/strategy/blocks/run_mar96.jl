@@ -19,7 +19,8 @@ function main()
     sizes = length(ARGS) >= 4 ? parse.(Float64, split(ARGS[4], ',')) : [5.0]
     newfile = !isfile(out); io = open(out, "a")
     newfile && println(io, "day,zone,arch,format,size,status,solve_s,pricings,k_su,dp_mean,dp_maxabs,profit_sim,",
-        "n_fam,n_fam_acc,prb,mar_ratio,mar_moved,mar_partial,mar_cap_hit,carve_short,cap_mw")
+        "n_fam,n_fam_acc,prb,mar_ratio,mar_moved,mar_partial,mar_cap_hit,carve_short,cap_mw,",
+        "srch_cand_partial,srch_moved,srch_cap_hit")
     for day in days
         base = load_baseline(day)
         inp = JSON.parsefile(joinpath(ROOT, "st-blocks/inputs/$day.json"))
@@ -49,11 +50,12 @@ function main()
                 prb = count(f -> fam[f] == 0 && Ssim[f] > 1e-3, keys(fam))
                 mr = [fam[f] for f in keys(fam) if SF.family_kind(f) == :BLKM]
                 g(x, d) = srch === nothing ? d : (hasproperty(srch, x) ? getproperty(srch, x) : d)
-                @printf(io, "%s,%s,%s,%s,%.0f,%s,%.1f,%d,%.2f,%.3f,%.3f,%.1f,%d,%d,%d,%s,%d,%d,%s,%.1f,%.1f\n",
+                @printf(io, "%s,%s,%s,%s,%.0f,%s,%.1f,%d,%.2f,%.3f,%.3f,%.1f,%d,%d,%d,%s,%d,%d,%s,%.1f,%.1f,%d,%d,%d\n",
                     day, z, arch, fmt, s, im.status, time() - t0, g(:pricings, 1), k, sum(im.dp) / length(im.dp),
                     maximum(abs.(im.dp)), im.result.profit, length(fam), count(>(0), values(fam)), prb,
                     isempty(mr) ? "-" : string(round(mr[1], digits=3)), g(:mar_moved, 0), g(:mar_partial, 0),
-                    string(g(:mar_cap_hit, false)), im.carve_shortfall, a.pmax)
+                    string(g(:mar_cap_hit, false)), im.carve_shortfall, a.pmax, g(:mar_search_cand_partial, 0),
+                    g(:mar_search_moved, 0), g(:mar_search_cap_hit, 0))
                 flush(io)
             end
         end
