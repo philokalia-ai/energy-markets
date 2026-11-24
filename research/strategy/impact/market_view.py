@@ -30,7 +30,7 @@ import pandas as pd
 ROOT = Path.home() / "armada/em-team/strategy"
 BASE = ROOT / "runs/baseline"
 TRANCHE1_MULT = 0.95  # zone_profiles.jl:238 TRANCHES[1] = (0.55, 0.95)
-NOMINAL_MARKUP_FACTOR = 1.1  # MPCC.jl:69, inert since cv25 (reference only)
+NOMINAL_MARKUP_FACTOR = 1.1  # was MPCC.jl:69 DEFAULT_MARKUP_FACTOR, inert since cv25; deleted on main by #481 (reference only)
 FLEX = re.compile(r"^(srmc_base|peak_tranche_\d+)$")
 
 TECH = {
