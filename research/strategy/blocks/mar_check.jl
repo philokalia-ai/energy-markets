@@ -7,6 +7,8 @@ using Euphemia, Dates, JSON, Printf
 include(joinpath(pkgdir(Euphemia), "src", "strategy", "StrategyHarness.jl")); using .StrategyHarness
 include(joinpath(pkgdir(Euphemia), "src", "strategy", "formats.jl")); using .StrategyFormats
 import Euphemia.MarketOrders: MarketOrder, SimpleOrder, LinkedHourlyOrder
+# carve reference = SRMC × 1.1, used in rounds 1-2; was the (inert) DEFAULT_MARKUP_FACTOR, deleted on main by #481
+const CARVE_REF_SRMC_MULT = 1.1
 const SF = StrategyFormats
 const ROOT = joinpath(homedir(), "armada/em-team/strategy/runs")
 const KEY_RE = r"^(.+)::order_\d+_z(.+)_h(\d+)_q(-?\d+)_p(-?\d+)$"
@@ -27,8 +29,8 @@ function main()
         F = [base.prices[z][p] for p in per]
         a = scale(archetype(arch, z; ttf=inp["ttf"], eua=inp["eua"], wv=sum(F) / 24), s)
         carve = a isa SF.Thermal ?
-            [Carve(z, a.pmax, 0.5 * a.srmc, 2.0 * a.srmc * Euphemia.MPCC.DEFAULT_MARKUP_FACTOR;
-                   ref=a.srmc * Euphemia.MPCC.DEFAULT_MARKUP_FACTOR)] :
+            [Carve(z, a.pmax, 0.5 * a.srmc, 2.0 * a.srmc * CARVE_REF_SRMC_MULT;
+                   ref=a.srmc * CARVE_REF_SRMC_MULT)] :
             [Carve(z, a.p, 0.5 * a.wv, 2.0 * a.wv; ref=a.wv)]
         kk = ["$z|$arch|$(r[4])|1.0|1.0", "$z|$arch|$(r[4])|1.0"]
         ik = findfirst(x -> haskey(kj, x), kk); ik === nothing && error("no calibrated k_su for $z $arch $(r[4])")
