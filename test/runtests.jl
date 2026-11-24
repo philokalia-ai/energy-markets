@@ -55,6 +55,16 @@ println()
     end
 
     # -------------------------------------------------------------------------
+    # Market conduct plug-ins (src/merit_order/conduct.jl)
+    # (self-contained: hand-built contexts, no database) — TranchesConduct is
+    # bitwise the pre-plug-in ladder, CompetitiveConduct the
+    # deleted EUPHEMIA_CONDUCT_LAYER=off arm, ShapeConduct level-neutral
+    # -------------------------------------------------------------------------
+    @testset "Market Conduct" begin
+        include(joinpath(@__DIR__, "test_market_conduct.jl"))
+    end
+
+    # -------------------------------------------------------------------------
     # DuckDB query-path performance changes
     # (self-contained: synthetic flows extract, no Postgres) — proves the
     # day-level physical-flow cache is behavior-identical to the original SQL
