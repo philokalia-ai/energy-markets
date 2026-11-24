@@ -38,8 +38,16 @@
 #   MAX_LEAD_DAYS  furthest lead to fill, default 7
 #   FORCE_RERUN    'true' to rewrite existing slices (default false)
 #   CLEARING_MODE  source/label clearing mode (default 'multi_zone_eu')
+#
+# `main(; asof=now(UTC))`: `asof` is the run's "now" (today's Athens market day and prediction_made_utc). The
+# script runs main() when executed; `include` (tests, proof harnesses) only defines the functions.
+#
+# Store: under EUPHEMIA_DATA_STORE=duckdb (fill → run → transfer) the reads come from the run-local fill
+# (the daily-forecast profile seeds every forecast_prices slice and fills actual_total_load) and each slice is
+# written to the results DuckDB plus one `forecast_slice` transfer op (delete_scope "slice"), which
+# bin/transfer_run_results.jl applies in Postgres with the same realized-day and hour guards.
 
-using Euphemia, Dates, LibPQ
+using Euphemia, Dates, LibPQ, DataFrames
 
 include(joinpath(@__DIR__, "forecast_common.jl"))
 
@@ -122,6 +130,7 @@ function write_slice!(T::Date, lead::Int, made::DateTime,
     for (_, hourly) in zone_hourly
         assert_hours_unrealized(keys(hourly), made)
     end
+    Euphemia.results_to_duckdb() && return write_slice_duckdb!(T, lead, made, zone_hourly)
     tstz(dt::DateTime) = Dates.format(dt, "yyyy-mm-dd HH:MM:SS") * "+00"
     n = 0
     Euphemia.withdb() do cnx
@@ -153,14 +162,66 @@ function write_slice!(T::Date, lead::Int, made::DateTime,
     return n
 end
 
-function main()
+"""
+    write_slice_duckdb!(T, lead, made, zone_hourly) -> Int
+
+`write_slice!` under the DuckDB store: the same slice-wide, cv-agnostic delete-then-insert on the run-local
+results DuckDB, in one transaction, plus one `forecast_slice` transfer op (live plan "insert", delete_scope
+"slice") whose rows bin/transfer_run_results.jl replays into Postgres.
+"""
+function write_slice_duckdb!(T::Date, lead::Int, made::DateTime,
+                             zone_hourly::Dict{String,Dict{DateTime,Float64}})
+    R = "results_db.simulations"
+    zones = sort!(collect(keys(zone_hourly)))
+    return Euphemia.results_transaction() do
+        op = Euphemia.log_transfer_op!("forecast_slice", Dict(
+            "market_date" => string(T), "lead_days" => lead, "input_mode" => PERSIST_MODE, "zones" => zones,
+            "is_retro" => false, "reset_tag" => nothing, "retro_of_utc" => nothing,
+            "prediction_made_utc" => string(made), "alongside" => false, "supersede" => false,
+            "plan" => "insert", "n_live" => 0, "code_version" => CV, "clearing_mode" => CLEARING_MODE,
+            "delete_scope" => "slice"))
+        Euphemia._results_exec("DELETE FROM $R.forecast_prices WHERE market_date = \$1 AND lead_days = \$2 " *
+                               "AND input_mode = \$3", Any[T, lead, PERSIST_MODE])
+        rows = DataFrame(market_date=Date[], date_time_utc=DateTime[], bidding_zone=String[],
+                         price_eur_mwh=Float64[], prediction_made_utc=DateTime[], lead_days=Int[],
+                         clearing_mode=String[], code_version=Int[], input_mode=String[], is_retro=Bool[],
+                         reset_tag=Union{Missing,String}[], retro_of_utc=Union{Missing,DateTime}[],
+                         resolution_code=String[], transfer_op_id=Int64[])
+        for zone in zones
+            res = Euphemia.forecast_resolution_code(keys(zone_hourly[zone]))
+            for (h, price) in sort!(collect(zone_hourly[zone]); by=first)
+                push!(rows, (T, h, zone, price, made, lead, CLEARING_MODE, CV, PERSIST_MODE, false,
+                             missing, missing, res, op))
+            end
+        end
+        Euphemia._results_insert_df(rows, "transfer_forecast_rows")   # what the transfer replays
+        Euphemia._results_insert_df(rows, "forecast_prices")          # what later steps read back
+        nrow(rows)
+    end
+end
+
+"""
+    zone_complete(slots, T) -> Bool
+
+A proxy zone-day is complete when it has exactly the slot count of market day `T` at the zone's own
+resolution (the spacing of its stamps): 24 hours (23/25 on DST days) for an hourly slice, as before, and
+96 quarter-hours (92/100) for a cv46 quarter-hour slice. The lead-1 sources turned PT15M with cv46's
+15-min default; counting them against the 24 hours dropped every zone, so leads 2..7 would have stopped.
+"""
+function zone_complete(slots, T::Date)
+    res = something(Euphemia.slot_resolution_minutes(keys(slots)), 60)
+    (1 <= res <= 60 && 60 % res == 0) || return false
+    return length(slots) == length(expected_market_day_slots(T, res))
+end
+
+function main(; asof::DateTime=now(UTC))
     println("=" ^ 70)
     println("HORIZON FORECAST (weekly-persistence leads 2..$MAX_LEAD_DAYS)  cv=$CV")
     println("=" ^ 70)
     # the INSERT carries resolution_code (cv46 D1): run the forecast-table migration first, as
     # daily_forecast.jl does (catalog-first, a no-op in the steady state)
-    Euphemia.ensure_forecast_tables()
-    made = now(UTC)
+    Euphemia.results_to_duckdb() ? Euphemia.ensure_run_results_tables!() : Euphemia.ensure_forecast_tables()
+    made = asof
     base = athens_date(made)   # today's Athens market day; T = base + n
 
     total = 0
@@ -185,7 +246,7 @@ function main()
         # is absent or incomplete (e.g. the legacy 21-hour 2026-07-12 day,
         # which would otherwise leave a permanent hole at its T+7).
         used_P = P
-        complete(s) = any(length(h) == expT for h in values(s))
+        complete(s) = any(zone_complete(h, T) for h in values(s))
         if isempty(src) || !complete(src)
             P2 = T - Day(14)
             hoursP2 = expected_market_day_hours(P2)
@@ -206,8 +267,8 @@ function main()
         shifted = Dict{String,Dict{DateTime,Float64}}()
         skipped = String[]
         for (zone, hourly) in src
-            if length(hourly) != expT
-                push!(skipped, "$zone($(length(hourly))h)")
+            if !zone_complete(hourly, T)
+                push!(skipped, "$zone($(length(hourly)) slots)")
                 continue
             end
             shifted[zone] = Dict(h + Day(7) => p for (h, p) in hourly)
@@ -225,4 +286,6 @@ function main()
     println("HORIZON COMPLETE — $total rows written")
 end
 
-main()
+if abspath(PROGRAM_FILE) == @__FILE__
+    main()
+end
