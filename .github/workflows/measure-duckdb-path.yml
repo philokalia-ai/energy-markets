@@ -49,8 +49,9 @@ env:
   RUN_DIR2: ${{ github.workspace }}/run-local-2
   OUT_DIR: ${{ github.workspace }}/measure-out
   PID_DIR: ${{ github.workspace }}/measure-pids
-  # The job timeout; the guard refuses a start that could still be running inside a protected window.
-  MEASURE_TIMEOUT_MIN: "120"
+  # The start horizon (lead, 2026-11-24): the guard refuses a start whose next 75 min reach a protected or ceres ETL
+  # window; a longer run (job timeout 120) is stopped by the watchdog when such a window starts.
+  MEASURE_TIMEOUT_MIN: "75"
 
 jobs:
   measure:

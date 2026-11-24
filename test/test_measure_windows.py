@@ -29,9 +29,11 @@ class Windows(unittest.TestCase):
     def test_the_45392030610_start_is_refused(self):      # Tue 2026-11-24 12:17 + 120 min: the 12:30 ETL
         self.assertIn("ceres update_entsoe_data 12:30", names("2026-11-24T12:17", 120))
 
-    def test_quiet_evening_is_allowed(self):
-        self.assertEqual(names("2026-11-24T21:50", 120), [])
-        self.assertEqual(names("2026-11-24T21:45", 135), [])           # ends exactly at the next window's start
+    def test_quiet_slots_are_allowed(self):   # the 75-min horizon of the workflow (MEASURE_TIMEOUT_MIN)
+        self.assertEqual(names("2026-11-24T21:45", 75), [])
+        self.assertEqual(names("2026-11-24T22:45", 75), [])            # ends exactly at 00:00
+        self.assertNotEqual(names("2026-11-24T22:46", 75), [])
+        self.assertEqual(names("2026-11-25T03:35", 75), [])            # Wed 03:35-04:50 < yfinance 05:30
 
     def test_window_edges_are_half_open(self):
         self.assertEqual(names("2026-11-24T14:35", 1), [])            # the 12:30 window ends at 14:35
@@ -40,18 +42,21 @@ class Windows(unittest.TestCase):
         self.assertEqual(names("2026-11-24T15:29", 2), ["ceres update_epias_data 15:30"])
 
     def test_weekday_sets(self):
-        # yfinance 05:30 and gb_prices 06:00 run Tue-Sat only; entsog/gie 00:00 on Mondays only
+        # yfinance 05:30 and gb_prices 06:00 run Tue-Sat only
         self.assertIn("ceres update_yfinance_data 05:30", names("2026-11-24T05:40", 1))      # Tuesday
         self.assertNotIn("ceres update_yfinance_data 05:30", names("2026-11-23T05:40", 1))   # Monday
-        self.assertIn("ceres update_gie_only_data 00:00", names("2026-11-23T02:30", 1))      # Monday
-        self.assertNotIn("ceres update_gie_only_data 00:00", names("2026-11-24T02:30", 1))   # Tuesday
-        self.assertEqual(names("2026-11-23T03:35", 25), [])            # Monday 03:35-04:00 is free
+        self.assertEqual(names("2026-11-23T03:35", 140), [])           # Monday 03:35-05:55 is free (no yfinance)
+        self.assertNotEqual(names("2026-11-24T03:35", 140), [])        # Tuesday: yfinance at 05:30
+
+    def test_jobs_writing_no_fill_table_do_not_block(self):
+        # elexon (elexon.*) and entsog/gie (entsog.*) write nothing the fill reads
+        self.assertFalse(any("elexon" in n or "entsog" in n or "gie" in n for n, *_ in W.WINDOWS))
+        self.assertEqual(names("2026-11-24T07:05", 1), ["ceres update_gb_prices_data 06:00", "ceres update_yfinance_data 05:30",
+                                                        "protected: live forecast"])
 
     def test_midnight_wrap(self):
-        # Sunday 23:00 + 120 min reaches Monday's 00:00 windows (entsoe, entsog, gie)
-        self.assertEqual(names("2026-11-22T23:00", 120), ["ceres update_entsoe_data 00:00",
-                                                          "ceres update_entsog_only_data 00:00",
-                                                          "ceres update_gie_only_data 00:00"])
+        # Sunday 23:00 + 120 min reaches Monday's 00:00 entsoe window
+        self.assertEqual(names("2026-11-22T23:00", 120), ["ceres update_entsoe_data 00:00"])
         self.assertEqual(names("2026-11-24T23:00", 120), ["ceres update_entsoe_data 00:00"])   # Tue -> Wed
 
     def test_a_window_started_the_previous_day_still_counts(self):

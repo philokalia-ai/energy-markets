@@ -4,10 +4,16 @@ its watchdog and test/test_measure_windows.py). All times UTC (the crons are UTC
 
 Two kinds of window:
   - protected: the live forecast (06:00–08:30) and publish (10:30–12:15) windows;
-  - ceres ETL: every scheduled ceres workflow that writes the energy database. A measurement that overlaps one reads
-    Postgres while it changes (run 45392030610: the 12:30 update_entsoe_data reloaded November ENTSO-E files between
-    fill 1 and fill 2). Each window runs from the slot to its typical end: the p90 of (run end − slot time) over the
-    ceres Actions history of 2026-11-24 (start lag + duration), rounded up to 5 min, plus a 15 min margin.
+  - ceres ETL: every scheduled ceres workflow that writes a table the fill manifest reads (src/db/fill_manifest.jl,
+    the record and daily-forecast profiles the measurement uses). A measurement that overlaps one reads Postgres while
+    it changes (run 45392030610: the 12:30 update_entsoe_data reloaded November ENTSO-E files between fill 1 and
+    fill 2). Each window runs from the slot to its typical end: the p90 of (run end − slot time) over the ceres
+    Actions history of 2026-11-24 (start lag + duration), rounded up to 5 min, plus a 15 min margin.
+    Kept (tables written ∩ fill tables): update_entsoe_data (entsoe.*), jao_pregate_forecast (jao.max_exchanges,
+    jao.hub_net_positions), update_yfinance_data (yfinance.ttf_f, eua_co2), update_gb_prices_data (carbon.uka_price),
+    update_epias_data (epias.mcp, load_forecast, gas_reference_price, actual_generation).
+    Dropped (no fill table): update_elexon_data (elexon.*), update_entsog_only_data / update_gie_only_data (entsog.*);
+    other databases: orchestrate_price_aggregator, backup-ifet-*.
 
 usage:  measure_windows.py check-start --timeout-min N [--now 2026-11-24T12:17]   exit 1 if [now, now+N) overlaps a window
         measure_windows.py check-now [--now ...]                                    exit 1 if now lies inside a window
@@ -19,7 +25,6 @@ import sys
 
 ALL = frozenset(range(7))            # Monday = 0
 TUE_SAT = frozenset({1, 2, 3, 4, 5})
-MON = frozenset({0})
 
 # (name, start HH:MM UTC, length in minutes, weekdays of the start, evidence)
 WINDOWS = [
@@ -34,11 +39,7 @@ WINDOWS = [
     ("ceres jao_pregate_forecast 09:55", "09:55", 65, ALL, "p90 end +47 min (n=34, max 96)"),
     ("ceres update_yfinance_data 05:30", "05:30", 100, TUE_SAT, "p90 end +80 min (n=20, max 83; late start)"),
     ("ceres update_gb_prices_data 06:00", "06:00", 100, TUE_SAT, "p90 end +83 min (n=19, max 86; late start)"),
-    ("ceres update_elexon_data 07:30", "07:30", 20, ALL, "p90 end +3 min (n=8, max 3)"),
-    ("ceres update_elexon_data 17:30", "17:30", 25, ALL, "p90 end +6 min (n=9, max 13)"),
     ("ceres update_epias_data 15:30", "15:30", 50, ALL, "p90 end +33 min (n=21, max 66)"),
-    ("ceres update_entsog_only_data 00:00", "00:00", 130, MON, "p90 end +112 min (n=30, max 181)"),
-    ("ceres update_gie_only_data 00:00", "00:00", 185, MON, "p90 end +165 min (n=25, max 178)"),
 ]
 
 
