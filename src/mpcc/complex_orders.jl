@@ -509,7 +509,7 @@ function _block_candidate(order_book, solve, B, phase; preferred_solver, verbose
     if !isempty(C) && haskey(kw, :fixed_accept)
         kw = merge(NamedTuple(kw), (fixed_accept=_cblock_closure(kw[:fixed_accept], C, prio),))
     end
-    mar_full = Set{String}(); mar_moved = 0
+    mar_full = Set{String}(); mar_moved = 0; mar_cap_hit = false
     local ob, info, res, A, ok
     for rnd in 0:(isempty(C) ? 0 : MAR_MOVE_ROUNDS)
         kwr = isempty(mar_full) ? kw : merge(NamedTuple(kw), (mar_full=copy(mar_full),))
@@ -517,7 +517,8 @@ function _block_candidate(order_book, solve, B, phase; preferred_solver, verbose
         info = LAST_COMPLEX_INFO[]
         info.status == :optimal || return (ok=false, phase=phase, book=ob, res=nothing, info=info,
                                            A=Set{String}(), W=NaN, pab=Dict{String,Float64}(),
-                                           prb=Dict{String,Float64}(), mar_moved=mar_moved, mar_partial=0)
+                                           prb=Dict{String,Float64}(), mar_moved=mar_moved, mar_partial=0,
+                                           mar_cap_hit=mar_cap_hit)
         res = solve(ob)
         A = Set{String}(keys(info.blocks))
         ok = res.status == :optimal || (res.status == :time_limit && !isempty(res.market_prices))
@@ -525,7 +526,8 @@ function _block_candidate(order_book, solve, B, phase; preferred_solver, verbose
         move = String[f for f in A if haskey(C, f) && C[f].kind == :BLKM && !(f in mar_full) &&
                       info.blocks[f].ratio < 1.0 - 1e-6 &&
                       info.blocks[f].ratio * _cblock_surplus(C[f], res.market_prices) > MAR_TOL_EUR]
-        (isempty(move) || rnd == MAR_MOVE_ROUNDS) && break
+        isempty(move) && break
+        rnd == MAR_MOVE_ROUNDS && (mar_cap_hit = true; break)   # still a partial in-the-money block after the cap
         union!(mar_full, move); mar_moved += length(move)
     end
     mar_partial = count(f -> haskey(C, f) && C[f].kind == :BLKM && info.blocks[f].ratio < 1.0 - 1e-6, A)
@@ -542,7 +544,7 @@ function _block_candidate(order_book, solve, B, phase; preferred_solver, verbose
         _cblock_check!(pab, prb, C, A, info, res.market_prices)
     end
     return (ok=ok, phase=phase, book=ob, res=res, info=info, A=A, W=info.master_objective,
-            pab=pab, prb=prb, mar_moved=mar_moved, mar_partial=mar_partial)
+            pab=pab, prb=prb, mar_moved=mar_moved, mar_partial=mar_partial, mar_cap_hit=mar_cap_hit)
 end
 
 """
@@ -662,7 +664,7 @@ function solve_with_complex_orders(order_book::MPCCOrderBook, solve::Function;
     wall = time() - t0
     nprb = length(o.prb); prb_eur = sum(values(o.prb); init=0.0)
     LAST_COMPLEX_INFO[] = merge(o.info, (search=(pricings=calls[], wall=wall, UB=UB[], W=o.W,
-        mar_moved=o.mar_moved, mar_partial=o.mar_partial,
+        mar_moved=o.mar_moved, mar_partial=o.mar_partial, mar_cap_hit=o.mar_cap_hit,
         gap=UB[] - o.W, phase=o.phase, n_prb=nprb, prb_eur=prb_eur, inserted=nins,
         seed_forced=length(forced)),))
     verbose && println("   🧱 R1 summary: path=$(o.phase), pricing solves $(calls[]), wall $(round(wall, digits=1)) s, " *
